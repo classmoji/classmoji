@@ -6,7 +6,9 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   generateDeckHtml,
+  parseDeckHtml,
   parseSlidesFragment,
+  SL_BLOCK_CSS,
   normalizeSlideHtml,
   DeckParseError,
   SlideHtmlError,
@@ -258,6 +260,24 @@ describe('generateDeckHtml specifics', () => {
     expect(
       generateDeckHtml(baseDeck({ customCss: '.reveal { color: red; }' }), { title: 'T' })
     ).toContain('<style>.reveal { color: red; }</style>');
+    expect(generateDeckHtml(baseDeck(), { title: 'T' })).not.toContain('<style');
+  });
+
+  it('standalone adds the block-positioning rules ahead of the deck CSS', () => {
+    const html = generateDeckHtml(baseDeck({ customCss: '.sl-block { top: 0; }' }), {
+      title: 'T',
+      standalone: true,
+    });
+    const blockRules = html.indexOf(`<style data-cm-standalone>${SL_BLOCK_CSS}</style>`);
+    expect(blockRules).toBeGreaterThan(-1);
+    expect(blockRules).toBeLessThan(html.indexOf('<style>.sl-block { top: 0; }</style>'));
+    expect(SL_BLOCK_CSS).toContain('.sl-block{position:absolute;');
+  });
+
+  it('a standalone document parses back to the same deck (the block rules are not customCss)', () => {
+    const deck = baseDeck({ customCss: '.x { color: red; }' });
+    const { deck: back } = parseDeckHtml(generateDeckHtml(deck, { title: 'T', standalone: true }));
+    expect(back.customCss).toBe(deck.customCss);
   });
 
   it('emits data-cm-id on every section, including stack children', () => {

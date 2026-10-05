@@ -1,0 +1,1019 @@
+{
+  "blocks": [
+    {
+      "id": "ks-h1",
+      "type": "heading",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left",
+        "level": 1,
+        "isToggleable": false
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Kitchen sink",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "ks-p-styles",
+      "type": "paragraph",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Plain, ",
+          "styles": {}
+        },
+        {
+          "type": "text",
+          "text": "bold",
+          "styles": {
+            "bold": true
+          }
+        },
+        {
+          "type": "text",
+          "text": ", ",
+          "styles": {}
+        },
+        {
+          "type": "text",
+          "text": "italic",
+          "styles": {
+            "italic": true
+          }
+        },
+        {
+          "type": "text",
+          "text": ", ",
+          "styles": {}
+        },
+        {
+          "type": "text",
+          "text": "underline",
+          "styles": {
+            "underline": true
+          }
+        },
+        {
+          "type": "text",
+          "text": ", ",
+          "styles": {}
+        },
+        {
+          "type": "text",
+          "text": "strike",
+          "styles": {
+            "strike": true
+          }
+        },
+        {
+          "type": "text",
+          "text": ", ",
+          "styles": {}
+        },
+        {
+          "type": "text",
+          "text": "code",
+          "styles": {
+            "code": true
+          }
+        },
+        {
+          "type": "text",
+          "text": ", ",
+          "styles": {}
+        },
+        {
+          "type": "text",
+          "text": "red text",
+          "styles": {
+            "textColor": "red"
+          }
+        },
+        {
+          "type": "text",
+          "text": ", ",
+          "styles": {}
+        },
+        {
+          "type": "text",
+          "text": "yellow background",
+          "styles": {
+            "backgroundColor": "yellow"
+          }
+        },
+        {
+          "type": "text",
+          "text": ", and a ",
+          "styles": {}
+        },
+        {
+          "type": "link",
+          "href": "https://example.com/docs",
+          "content": [
+            {
+              "type": "text",
+              "text": "link",
+              "styles": {}
+            },
+            {
+              "type": "text",
+              "text": " with bold",
+              "styles": {
+                "bold": true
+              }
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "text": ".",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "ks-p-aligned",
+      "type": "paragraph",
+      "props": {
+        "backgroundColor": "gray",
+        "textColor": "blue",
+        "textAlignment": "center"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Centered, blue paragraph",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "ks-h2",
+      "type": "heading",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left",
+        "level": 2,
+        "isToggleable": false
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Lists",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "ks-ul-1",
+      "type": "bulletListItem",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Bullet one",
+          "styles": {}
+        }
+      ],
+      "children": [
+        {
+          "id": "ks-ul-1-1",
+          "type": "bulletListItem",
+          "props": {
+            "backgroundColor": "default",
+            "textColor": "default",
+            "textAlignment": "left"
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "Nested bullet",
+              "styles": {}
+            }
+          ],
+          "children": [
+            {
+              "id": "ks-ul-1-1-1",
+              "type": "bulletListItem",
+              "props": {
+                "backgroundColor": "default",
+                "textColor": "default",
+                "textAlignment": "left"
+              },
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Deeper bullet",
+                  "styles": {}
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "ks-ul-1-2",
+          "type": "numberedListItem",
+          "props": {
+            "backgroundColor": "default",
+            "textColor": "default",
+            "textAlignment": "left"
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "Numbered inside a bullet",
+              "styles": {}
+            }
+          ],
+          "children": []
+        }
+      ]
+    },
+    {
+      "id": "ks-ul-2",
+      "type": "bulletListItem",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Bullet two",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "ks-ol-1",
+      "type": "numberedListItem",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left",
+        "start": 3
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Numbered from three",
+          "styles": {}
+        }
+      ],
+      "children": [
+        {
+          "id": "ks-ol-1-1",
+          "type": "numberedListItem",
+          "props": {
+            "backgroundColor": "default",
+            "textColor": "default",
+            "textAlignment": "left"
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "Nested numbered",
+              "styles": {}
+            }
+          ],
+          "children": []
+        }
+      ]
+    },
+    {
+      "id": "ks-ol-2",
+      "type": "numberedListItem",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Numbered next",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "ks-check-1",
+      "type": "checkListItem",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left",
+        "checked": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Done",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "ks-check-2",
+      "type": "checkListItem",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left",
+        "checked": false
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Not done",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "ks-toggle",
+      "type": "toggleListItem",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Toggle list",
+          "styles": {}
+        }
+      ],
+      "children": [
+        {
+          "id": "ks-toggle-child",
+          "type": "paragraph",
+          "props": {
+            "backgroundColor": "default",
+            "textColor": "default",
+            "textAlignment": "left"
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "Hidden until opened",
+              "styles": {}
+            }
+          ],
+          "children": []
+        }
+      ]
+    },
+    {
+      "id": "ks-h3-toggle",
+      "type": "heading",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left",
+        "level": 3,
+        "isToggleable": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Toggle heading",
+          "styles": {}
+        }
+      ],
+      "children": [
+        {
+          "id": "ks-h3-toggle-child",
+          "type": "paragraph",
+          "props": {
+            "backgroundColor": "default",
+            "textColor": "default",
+            "textAlignment": "left"
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "Under a toggle heading",
+              "styles": {}
+            }
+          ],
+          "children": []
+        }
+      ]
+    },
+    {
+      "id": "ks-quote",
+      "type": "quote",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "A quote, ",
+          "styles": {}
+        },
+        {
+          "type": "text",
+          "text": "emphasised",
+          "styles": {
+            "italic": true
+          }
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "ks-code",
+      "type": "codeBlock",
+      "props": {
+        "language": "javascript"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "function add(a, b) {\n  return a + b;\n}",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "ks-code-py",
+      "type": "codeBlock",
+      "props": {
+        "language": "python"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "print(\"hi\")",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "ks-table",
+      "type": "table",
+      "props": {
+        "textColor": "default"
+      },
+      "content": {
+        "type": "tableContent",
+        "columnWidths": [
+          120,
+          null,
+          null
+        ],
+        "headerRows": 1,
+        "rows": [
+          {
+            "cells": [
+              {
+                "type": "tableCell",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Name",
+                    "styles": {
+                      "bold": true
+                    }
+                  }
+                ],
+                "props": {
+                  "colspan": 1,
+                  "rowspan": 1,
+                  "backgroundColor": "default",
+                  "textColor": "default",
+                  "textAlignment": "left"
+                }
+              },
+              {
+                "type": "tableCell",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Role",
+                    "styles": {}
+                  }
+                ],
+                "props": {
+                  "colspan": 1,
+                  "rowspan": 1,
+                  "backgroundColor": "default",
+                  "textColor": "default",
+                  "textAlignment": "left"
+                }
+              },
+              {
+                "type": "tableCell",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Notes",
+                    "styles": {}
+                  }
+                ],
+                "props": {
+                  "colspan": 1,
+                  "rowspan": 1,
+                  "backgroundColor": "blue",
+                  "textColor": "default",
+                  "textAlignment": "left"
+                }
+              }
+            ]
+          },
+          {
+            "cells": [
+              {
+                "type": "tableCell",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Ada",
+                    "styles": {}
+                  }
+                ],
+                "props": {
+                  "colspan": 1,
+                  "rowspan": 1,
+                  "backgroundColor": "default",
+                  "textColor": "default",
+                  "textAlignment": "left"
+                }
+              },
+              {
+                "type": "tableCell",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Instructor",
+                    "styles": {}
+                  }
+                ],
+                "props": {
+                  "colspan": 1,
+                  "rowspan": 1,
+                  "backgroundColor": "default",
+                  "textColor": "default",
+                  "textAlignment": "center"
+                }
+              },
+              {
+                "type": "tableCell",
+                "content": [],
+                "props": {
+                  "colspan": 1,
+                  "rowspan": 1,
+                  "backgroundColor": "default",
+                  "textColor": "default",
+                  "textAlignment": "left"
+                }
+              }
+            ]
+          },
+          {
+            "cells": [
+              {
+                "type": "tableCell",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Spans two",
+                    "styles": {}
+                  }
+                ],
+                "props": {
+                  "colspan": 2,
+                  "rowspan": 1,
+                  "backgroundColor": "default",
+                  "textColor": "default",
+                  "textAlignment": "left"
+                }
+              },
+              {
+                "type": "tableCell",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Last",
+                    "styles": {}
+                  }
+                ],
+                "props": {
+                  "colspan": 1,
+                  "rowspan": 1,
+                  "backgroundColor": "default",
+                  "textColor": "default",
+                  "textAlignment": "left"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "children": []
+    },
+    {
+      "id": "ks-image",
+      "type": "image",
+      "props": {
+        "textAlignment": "center",
+        "backgroundColor": "default",
+        "name": "diagram.png",
+        "url": "assets/diagram.png",
+        "caption": "A diagram",
+        "showPreview": true,
+        "previewWidth": 480
+      },
+      "children": []
+    },
+    {
+      "id": "ks-image-empty",
+      "type": "image",
+      "props": {
+        "textAlignment": "left",
+        "backgroundColor": "default",
+        "name": "",
+        "url": "",
+        "caption": "",
+        "showPreview": true
+      },
+      "children": []
+    },
+    {
+      "id": "ks-file",
+      "type": "file",
+      "props": {
+        "backgroundColor": "default",
+        "name": "syllabus.pdf",
+        "url": "assets/syllabus.pdf",
+        "caption": "Syllabus"
+      },
+      "children": []
+    },
+    {
+      "id": "ks-audio",
+      "type": "audio",
+      "props": {
+        "backgroundColor": "default",
+        "name": "lecture.mp3",
+        "url": "media://audio-1",
+        "caption": "Lecture audio",
+        "showPreview": true
+      },
+      "children": []
+    },
+    {
+      "id": "ks-video",
+      "type": "video",
+      "props": {
+        "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        "caption": "A video"
+      },
+      "children": []
+    },
+    {
+      "id": "ks-video-media",
+      "type": "video",
+      "props": {
+        "url": "media://video-1",
+        "caption": ""
+      },
+      "children": []
+    },
+    {
+      "id": "ks-embed",
+      "type": "embed",
+      "props": {
+        "url": "https://codesandbox.io/embed/abc",
+        "type": "iframe"
+      },
+      "children": []
+    },
+    {
+      "id": "ks-divider",
+      "type": "divider",
+      "props": {},
+      "children": []
+    },
+    {
+      "id": "ks-callout",
+      "type": "callout",
+      "props": {
+        "textAlignment": "left",
+        "emoji": "🔥"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Callout with ",
+          "styles": {}
+        },
+        {
+          "type": "text",
+          "text": "bold",
+          "styles": {
+            "bold": true
+          }
+        },
+        {
+          "type": "text",
+          "text": " text",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "ks-terminal",
+      "type": "terminal",
+      "props": {
+        "code": "npm install\nnpm run dev",
+        "title": "Install"
+      },
+      "children": []
+    },
+    {
+      "id": "ks-profile",
+      "type": "profile",
+      "props": {
+        "name": "Ada Lovelace",
+        "title": "Instructor",
+        "imageUrl": "assets/ada.jpg",
+        "links": "https://example.com/ada"
+      },
+      "children": []
+    },
+    {
+      "id": "ks-pagelink",
+      "type": "pageLink",
+      "props": {
+        "pageId": "11111111-2222-3333-4444-555555555555",
+        "pageTitle": "Week 1"
+      },
+      "children": []
+    },
+    {
+      "id": "ks-navgrid",
+      "type": "navGrid",
+      "props": {
+        "entries": "[{\"kind\":\"page\",\"pageId\":\"11111111-2222-3333-4444-555555555555\",\"title\":\"Week 1\",\"emoji\":\"📘\"},{\"kind\":\"external\",\"url\":\"https://example.com\",\"label\":\"Example\"},{\"kind\":\"schedule\"}]",
+        "columns": 1
+      },
+      "children": []
+    },
+    {
+      "id": "ks-cols-2",
+      "type": "columnList",
+      "props": {},
+      "children": [
+        {
+          "id": "ks-cols-2-a",
+          "type": "column",
+          "props": {
+            "width": 1.2
+          },
+          "children": [
+            {
+              "id": "ks-cols-2-a-h",
+              "type": "heading",
+              "props": {
+                "backgroundColor": "default",
+                "textColor": "default",
+                "textAlignment": "left",
+                "level": 3,
+                "isToggleable": false
+              },
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Left column",
+                  "styles": {}
+                }
+              ],
+              "children": []
+            },
+            {
+              "id": "ks-cols-2-a-p",
+              "type": "paragraph",
+              "props": {
+                "backgroundColor": "default",
+                "textColor": "default",
+                "textAlignment": "left"
+              },
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Left text",
+                  "styles": {}
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "ks-cols-2-b",
+          "type": "column",
+          "props": {
+            "width": 0.8
+          },
+          "children": [
+            {
+              "id": "ks-cols-2-b-li",
+              "type": "bulletListItem",
+              "props": {
+                "backgroundColor": "default",
+                "textColor": "default",
+                "textAlignment": "left"
+              },
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Right bullet",
+                  "styles": {}
+                }
+              ],
+              "children": []
+            },
+            {
+              "id": "ks-cols-2-b-img",
+              "type": "image",
+              "props": {
+                "textAlignment": "left",
+                "backgroundColor": "default",
+                "name": "right.png",
+                "url": "assets/right.png",
+                "caption": "",
+                "showPreview": true
+              },
+              "children": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ks-cols-3",
+      "type": "columnList",
+      "props": {},
+      "children": [
+        {
+          "id": "ks-cols-3-a",
+          "type": "column",
+          "props": {
+            "width": 1
+          },
+          "children": [
+            {
+              "id": "ks-cols-3-a-p",
+              "type": "paragraph",
+              "props": {
+                "backgroundColor": "default",
+                "textColor": "default",
+                "textAlignment": "left"
+              },
+              "content": [
+                {
+                  "type": "text",
+                  "text": "One",
+                  "styles": {}
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "ks-cols-3-b",
+          "type": "column",
+          "props": {
+            "width": 1
+          },
+          "children": [
+            {
+              "id": "ks-cols-3-b-c",
+              "type": "callout",
+              "props": {
+                "textAlignment": "left",
+                "emoji": "💡"
+              },
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Two",
+                  "styles": {}
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "ks-cols-3-c",
+          "type": "column",
+          "props": {
+            "width": 1
+          },
+          "children": [
+            {
+              "id": "ks-cols-3-c-code",
+              "type": "codeBlock",
+              "props": {
+                "language": "bash"
+              },
+              "content": [
+                {
+                  "type": "text",
+                  "text": "ls -la",
+                  "styles": {}
+                }
+              ],
+              "children": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ks-nested-parent",
+      "type": "paragraph",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Paragraph with nested children",
+          "styles": {}
+        }
+      ],
+      "children": [
+        {
+          "id": "ks-nested-child",
+          "type": "paragraph",
+          "props": {
+            "backgroundColor": "default",
+            "textColor": "default",
+            "textAlignment": "left"
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "Indented paragraph",
+              "styles": {}
+            }
+          ],
+          "children": []
+        }
+      ]
+    },
+    {
+      "id": "ks-empty",
+      "type": "paragraph",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+      },
+      "content": [],
+      "children": []
+    }
+  ],
+  "coverImage": {
+    "url": "assets/cover.jpg",
+    "position": 35
+  }
+}

@@ -2,6 +2,9 @@ import { useState, useEffect } from 'react';
 import gitlabLogo from '~/components/ui/gitlab.svg';
 import { IconBrandGithub, IconMaximize, IconMinimize, IconDots } from '@tabler/icons-react';
 import PageOptionsMenu from '~/components/editor/PageOptionsMenu.tsx';
+import LiveHeaderControls, {
+  type LiveHeaderControlsProps,
+} from '~/components/editor/collab/LiveHeaderControls.tsx';
 
 import type { PageSummary, ClassroomSummary } from '~/types/pages.ts';
 
@@ -12,6 +15,11 @@ interface HeaderProps {
   hasUnsavedChanges?: boolean;
   canEdit?: boolean;
   onSave?: () => void;
+  /**
+   * Live editing: who is here, the sync status and "Save version", in place of
+   * the git editor's save controls.
+   */
+  live?: LiveHeaderControlsProps | null;
 }
 
 /**
@@ -24,6 +32,7 @@ const Header = ({
   hasUnsavedChanges = false,
   canEdit = false,
   onSave,
+  live = null,
 }: HeaderProps) => {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -68,8 +77,11 @@ const Header = ({
           <div className="flex items-center gap-2">
             {page && (
               <>
+                {/* Live editing: presence, sync status, Save version */}
+                {canEdit && live && <LiveHeaderControls {...live} />}
+
                 {/* Save controls (instructors only) */}
-                {canEdit && (
+                {canEdit && !live && (
                   <div className="flex items-center gap-2 text-sm">
                     {saveStatus === 'saving' && (
                       <span className="flex items-center gap-1 text-gray-600 dark:text-gray-400">

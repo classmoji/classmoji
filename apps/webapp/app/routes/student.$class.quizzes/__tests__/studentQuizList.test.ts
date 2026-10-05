@@ -20,6 +20,8 @@ const mocks = vi.hoisted(() => ({
   assertClassroomAccess: vi.fn(),
   quizFindMany: vi.fn(),
   quizzesVisibleOrThrow: vi.fn(),
+  netQuizExtensionHours: vi.fn(),
+  hasRole: vi.fn(),
 }));
 
 vi.mock('@classmoji/database', async () => ({
@@ -38,6 +40,10 @@ vi.mock('@classmoji/services', async () => {
     ClassmojiService: {
       quiz,
       user: { findById: async () => ({ id: 'stu-ada', login: 'ada' }) },
+      quizGradeItems: {
+        netQuizExtensionHours: (...a: unknown[]) => mocks.netQuizExtensionHours(...a),
+      },
+      classroomMembership: { hasRole: (...a: unknown[]) => mocks.hasRole(...a) },
     },
     QuizAccessError: quiz.QuizAccessError,
   };
@@ -74,12 +80,12 @@ vi.mock('@ant-design/icons', () => ({
 vi.mock('react-router', () => ({
   Outlet: () => null,
   useNavigate: () => vi.fn(),
-  useLocation: () => ({ pathname: '/student/cs52-26f/quizzes' }),
+  useLocation: () => ({ pathname: '/student/intro-101/quizzes' }),
 }));
 
 const route = await import('../route.tsx');
 
-const CLASS_SLUG = 'cs52-26f';
+const CLASS_SLUG = 'intro-101';
 
 const SENTINEL = {
   systemPrompt: 'SENTINEL-SYSTEM-PROMPT',
@@ -165,6 +171,10 @@ beforeEach(() => {
     membership: { role: 'STUDENT', classroom_id: 'class-1', user_id: 'stu-ada' },
   });
   mocks.quizFindMany.mockResolvedValue([QUIZ_ROW]);
+  mocks.netQuizExtensionHours.mockReset();
+  mocks.netQuizExtensionHours.mockResolvedValue(new Map());
+  mocks.hasRole.mockReset();
+  mocks.hasRole.mockResolvedValue(false);
 });
 
 describe('student quiz list payload', () => {
@@ -181,6 +191,7 @@ describe('student quiz list payload', () => {
           'focusMetrics',
           'id',
           'isCounting',
+          'lateHours',
           'partialCreditScore',
           'status',
         ].sort()
@@ -216,6 +227,7 @@ describe('student quiz list payload', () => {
         partialCreditScore: null,
         focusMetrics: null,
         isCounting: false,
+        lateHours: 0,
       },
       {
         id: 'attempt-1',
@@ -225,6 +237,7 @@ describe('student quiz list payload', () => {
         partialCreditScore: 85,
         focusMetrics: { totalMs: 1000, focusedMs: 900, percentage: 90 },
         isCounting: true,
+        lateHours: 0,
       },
     ]);
     expect(quiz.attemptStatus).toBe('in_progress');
@@ -238,6 +251,7 @@ describe('student quiz list payload', () => {
       count: 2,
       canCreateNew: true,
       currentScore: 85,
+      currentLateHours: 0,
       maxAttempts: 3,
     });
   });
@@ -269,6 +283,7 @@ describe('student quiz list — due date, closed quizzes, zero scores', () => {
         ...QUIZ_ROW,
         due_date: new Date('2026-09-30T18:00:00Z'),
         assignment: {
+          id: 'asg-1',
           is_published: true,
           release_at: null,
           student_deadline: assignmentDue,
@@ -358,6 +373,139 @@ describe('student quiz list — due date, closed quizzes, zero scores', () => {
 
     expect(quiz.score).toBe(0);
     expect(quiz.attemptsSummary.currentScore).toBe(0);
+  });
+});
+
+describe('student quiz list — late attempts and hours bought', () => {
+  const DUE = new Date('2026-03-01T10:00:00Z');
+  const HOUR = 3_600_000;
+  const done = (id: string, lateBy: number, pct: number, startedAt = lateBy) =>
+    attemptRow(id, {
+      started_at: new Date(DUE.getTime() + startedAt * HOUR - HOUR),
+      completed_at: new Date(DUE.getTime() + lateBy * HOUR + 10 * 60_000),
+      partial_credit_percentage: pct,
+    });
+  const withPenalty = (points: number) =>
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: 'stu-ada',
+      classroom: {
+        id: 'class-1',
+        slug: CLASS_SLUG,
+        status: 'ACTIVE',
+        settings: { late_penalty_points_per_hour: points },
+      },
+      membership: { role: 'STUDENT', classroom_id: 'class-1', user_id: 'stu-ada' },
+    });
+  const withAssignment = (attempts: unknown[]) => ({
+    ...QUIZ_ROW,
+    attempts,
+    assignment: {
+      id: 'asg-1',
+      is_published: true,
+      release_at: null,
+      student_deadline: DUE,
+      closes_at: null,
+      weight: 10,
+    },
+  });
+
+  it('marks each attempt late, and shows the raw score of the attempt that counts after the penalty', async () => {
+    withPenalty(5);
+    // The late 90 counts 65 after 5 h at 5 points; the on-time 70 counts.
+    mocks.quizFindMany.mockResolvedValue([
+      withAssignment([done('late', 5, 90, 5), done('early', -2, 70, -2)]),
+    ]);
+
+    const [quiz] = (await load()).quizzes;
+
+    expect(quiz.attempts.map(a => [a.id, a.lateHours, a.isCounting])).toEqual([
+      ['late', 5, false],
+      ['early', 0, true],
+    ]);
+    expect(quiz.attemptsSummary).toMatchObject({ currentScore: 70, currentLateHours: 0 });
+    expect(quiz.score).toBe(70);
+  });
+
+  it('shows the late hours beside the score when the late attempt still counts', async () => {
+    withPenalty(1);
+    mocks.quizFindMany.mockResolvedValue([
+      withAssignment([done('late', 3, 82, 3), done('early', -2, 70, -2)]),
+    ]);
+
+    const [quiz] = (await load()).quizzes;
+
+    expect(quiz.attemptsSummary).toMatchObject({ currentScore: 82, currentLateHours: 3 });
+  });
+
+  it('adds the hours bought to the due date and to every attempt', async () => {
+    mocks.netQuizExtensionHours.mockResolvedValue(new Map([['asg-1', 4]]));
+    mocks.quizFindMany.mockResolvedValue([withAssignment([done('late', 5, 90)])]);
+
+    const [quiz] = (await load()).quizzes;
+
+    expect(mocks.netQuizExtensionHours).toHaveBeenCalledWith({
+      classroomId: 'class-1',
+      studentId: 'stu-ada',
+      assignmentIds: ['asg-1'],
+    });
+    expect(quiz.dueDate).toEqual(new Date(DUE.getTime() + 4 * HOUR));
+    expect(quiz.extensionHours).toBe(4);
+    expect(quiz.attempts[0].lateHours).toBe(1);
+  });
+
+  it("never marks a staff member's preview attempts late, and reads no purchases for them", async () => {
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: 'ta-1',
+      classroom: { id: 'class-1', slug: CLASS_SLUG, status: 'ACTIVE' },
+      membership: { role: 'ASSISTANT', classroom_id: 'class-1', user_id: 'ta-1' },
+    });
+    mocks.quizFindMany.mockResolvedValue([withAssignment([done('late', 5, 90)])]);
+
+    const [quiz] = (await load()).quizzes;
+
+    expect(quiz.attempts[0].lateHours).toBe(0);
+    expect(quiz.attemptsSummary.currentLateHours).toBe(0);
+    expect(quiz.dueDate).toEqual(DUE);
+    expect(mocks.netQuizExtensionHours).not.toHaveBeenCalled();
+    expect(mocks.hasRole).toHaveBeenCalledWith('class-1', 'ta-1', 'STUDENT');
+  });
+
+  it('grades a teaching assistant who is also a student as a student', async () => {
+    // The gate hands back the highest role; the STUDENT membership is what counts.
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: 'stu-ada',
+      classroom: {
+        id: 'class-1',
+        slug: CLASS_SLUG,
+        status: 'ACTIVE',
+        settings: { late_penalty_points_per_hour: 6 },
+      },
+      membership: { role: 'ASSISTANT', classroom_id: 'class-1', user_id: 'stu-ada' },
+    });
+    mocks.hasRole.mockResolvedValue(true);
+    mocks.netQuizExtensionHours.mockResolvedValue(new Map([['asg-1', 1]]));
+    mocks.quizFindMany.mockResolvedValue([
+      withAssignment([done('late', 5, 90, 5), done('early', -2, 70, -2)]),
+    ]);
+
+    const [quiz] = (await load()).quizzes;
+
+    // Late by 4 h after the hour bought: 90 − 4 × 6 = 66, so the on-time 70 counts.
+    expect(mocks.hasRole).toHaveBeenCalledWith('class-1', 'stu-ada', 'STUDENT');
+    expect(quiz.dueDate).toEqual(new Date(DUE.getTime() + HOUR));
+    expect(quiz.attempts.map(a => [a.id, a.lateHours, a.isCounting])).toEqual([
+      ['late', 4, false],
+      ['early', 0, true],
+    ]);
+    expect(quiz.attemptsSummary).toMatchObject({ currentScore: 70, currentLateHours: 0 });
+  });
+
+  it('asks for no other membership when the gate already found a STUDENT one', async () => {
+    mocks.quizFindMany.mockResolvedValue([withAssignment([done('late', 5, 90)])]);
+
+    await load();
+
+    expect(mocks.hasRole).not.toHaveBeenCalled();
   });
 });
 

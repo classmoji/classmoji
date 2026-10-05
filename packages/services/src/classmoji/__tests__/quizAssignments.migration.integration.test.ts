@@ -433,7 +433,9 @@ describe.skipIf(!RUN)('quiz_assignments migration backfill (integration)', () =>
       weight: 5,
       is_published: true,
       student_deadline: due,
-      tokens_per_hour: 0,
+      // No price of its own: the column has no default since
+      // 20261003030000, so the classroom's rate applies.
+      tokens_per_hour: null,
       closes_at: null,
     });
     expect(out.reports.created[0].details).toMatchObject({

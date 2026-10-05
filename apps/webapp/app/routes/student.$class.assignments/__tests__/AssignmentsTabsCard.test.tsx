@@ -1,9 +1,11 @@
 /**
  * What the Assignments page's table renders for each kind of row. A REPO row
  * must keep every field the repo-only table had (the repo link is the only way
- * a student reaches their repo), keyed for regrades and extensions on the
- * GitRepoAssignment id; QUIZ and FORM rows carry their own status, score and
- * link. Rendered on the server, Current tab first.
+ * a student reaches their repo), keyed for regrades on the GitRepoAssignment
+ * id; QUIZ and FORM rows carry their own status, score and link. REPO and
+ * QUIZ rows share the late pill, the note under the date and Extend, which
+ * the row's `extend` target decides (studentCoursework). Rendered on the
+ * server, Current tab first.
  */
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter, Route, Routes } from 'react-router';
@@ -12,9 +14,13 @@ import type { StudentCourseworkRow } from '@classmoji/services';
 
 const popover = vi.hoisted(() => vi.fn());
 vi.mock('~/components/features/TokenExtensionPopover', () => ({
-  default: (props: { repositoryAssignment: { id: string } }) => {
+  default: (props: {
+    target: { kind: 'REPO'; gitRepoAssignmentId: string } | { kind: 'QUIZ'; assignmentId: string };
+  }) => {
     popover(props);
-    return <span data-extend-for={props.repositoryAssignment.id} />;
+    const id =
+      props.target.kind === 'REPO' ? props.target.gitRepoAssignmentId : props.target.assignmentId;
+    return <span data-extend-for={id} />;
   },
 }));
 vi.mock('~/components/ui/display/Emoji', () => ({
@@ -37,6 +43,14 @@ const base = {
   attemptsUsed: null,
   maxAttempts: null,
   deadline: '2099-01-01T12:00:00.000Z',
+  numLateHours: 0,
+  isLateOverride: false,
+  tokensPerHour: 0,
+  extensionHours: 0,
+  submittedAt: null,
+  missing: false,
+  suggestedExtensionHours: 0,
+  extend: null,
 } as const;
 
 const REPO_LATE: StudentCourseworkRow = {
@@ -50,6 +64,10 @@ const REPO_LATE: StudentCourseworkRow = {
   external: true,
   action: { kind: 'OPEN', href: 'https://github.com/org/lab-ada/issues/3' },
   deadline: '2020-01-01T12:00:00.000Z',
+  numLateHours: 5,
+  suggestedExtensionHours: 5,
+  tokensPerHour: 2,
+  extend: { kind: 'REPO', gitRepoAssignmentId: 'gra-1' },
   repo: {
     gitRepoAssignmentId: 'gra-1',
     repositoryTitle: 'lab-ada',
@@ -61,10 +79,6 @@ const REPO_LATE: StudentCourseworkRow = {
     grades: [],
     graders: [{ id: 'g1', name: 'Grace' }],
     gradersSummary: 'Grace',
-    numLateHours: 5,
-    isLateOverride: false,
-    tokensPerHour: 2,
-    extensionHours: 0,
     submissionMode: 'ISSUE',
     closedAt: null,
   },
@@ -79,7 +93,7 @@ const QUIZ_OPEN: StudentCourseworkRow = {
   done: false,
   attemptsUsed: 0,
   maxAttempts: 2,
-  href: '/student/cs52/quizzes?quiz=q1',
+  href: '/student/intro-101/quizzes?quiz=q1',
   external: false,
   action: { kind: 'START_QUIZ', quizId: 'q1' },
 };
@@ -93,14 +107,14 @@ const FORM_PUBLIC: StudentCourseworkRow = {
   tracked: false,
   done: false,
   isExtraCredit: true,
-  href: 'https://pages.test/cs52/forms/signup',
+  href: 'https://pages.test/intro-101/forms/signup',
   external: true,
   action: null,
 };
 
 const render = (rows: StudentCourseworkRow[], initialTab?: 'current' | 'completed' | 'all') =>
   renderToStaticMarkup(
-    <MemoryRouter initialEntries={['/student/cs52/assignments']}>
+    <MemoryRouter initialEntries={['/student/intro-101/assignments']}>
       <Routes>
         <Route
           path="/student/:class/assignments"
@@ -127,76 +141,112 @@ describe('AssignmentsTabsCard', () => {
     expect(html).toContain('data-extend-for="gra-1"');
   });
 
-  describe('Extend: extension hours sell at any time', () => {
-    const repoRow = (
-      over: Partial<StudentCourseworkRow>,
-      repo: Partial<NonNullable<StudentCourseworkRow['repo']>>
-    ): StudentCourseworkRow => ({ ...REPO_LATE, ...over, repo: { ...REPO_LATE.repo!, ...repo } });
-
-    it('offers it before the deadline, on work that is not late', () => {
-      const html = render([repoRow({ deadline: '2099-01-01T12:00:00.000Z' }, { numLateHours: 0 })]);
-
+  describe('Extend: offered where the row names a target', () => {
+    it('offers it on a repo row, with its late hours and price', () => {
+      popover.mockClear();
+      const html = render([REPO_LATE]);
       expect(html).toContain('data-extend-for="gra-1"');
-      expect(html).not.toContain('h late');
-    });
-
-    it('offers it on submitted work, on time (push mode) or late, with how late it was', () => {
-      const submitted = { status: 'SUBMITTED', done: true } as const;
-      const onTime = render(
-        [repoRow(submitted, { numLateHours: 0, submissionMode: 'REPO' })],
-        'completed'
+      expect(popover).toHaveBeenCalledWith(
+        expect.objectContaining({ suggestedHours: 5, tokensPerHour: 2, balance: 10 })
       );
-      expect(onTime).toContain('data-extend-for="gra-1"');
-
-      const late = render([repoRow(submitted, { numLateHours: 3 })], 'completed');
-      expect(late).toContain('data-extend-for="gra-1"');
-      expect(late).toContain('3h late');
-      expect(late).not.toContain('overdue');
     });
 
-    it('offers it next to Request regrade on graded work that was late', () => {
-      const html = render(
-        [repoRow({ status: 'SUBMITTED', done: true }, { gradesReleased: true, numLateHours: 2 })],
-        'completed'
-      );
-
-      expect(html).toContain('data-extend-for="gra-1"');
-      expect(html).toContain('Request regrade');
+    it('offers it on a quiz row, keyed on the assignment', () => {
+      const html = render([
+        { ...QUIZ_OPEN, tokensPerHour: 1, extend: { kind: 'QUIZ', assignmentId: 'a-quiz' } },
+      ]);
+      expect(html).toContain('data-extend-for="a-quiz"');
     });
 
-    it('offers it on push-mode work submitted on time, before grading: a later push can still count', () => {
-      const html = render(
-        [repoRow({ status: 'SUBMITTED', done: true }, { submissionMode: 'REPO', numLateHours: 0 })],
-        'completed'
-      );
-      expect(html).toContain('data-extend-for="gra-1"');
+    it('starts a missing quiz at the hours since its due date, not its late hours', () => {
+      popover.mockClear();
+      render([
+        {
+          ...QUIZ_OPEN,
+          deadline: '2020-01-01T12:00:00.000Z',
+          missing: true,
+          numLateHours: 0,
+          suggestedExtensionHours: 7,
+          tokensPerHour: 1,
+          extend: { kind: 'QUIZ', assignmentId: 'a-quiz' },
+        },
+      ]);
+      expect(popover).toHaveBeenCalledWith(expect.objectContaining({ suggestedHours: 7 }));
     });
 
-    it('does not offer it on issue-mode work submitted on time: closing the issue settled it', () => {
+    it('does not offer it where the row names no target', () => {
+      expect(render([{ ...REPO_LATE, extend: null }])).not.toContain('data-extend-for');
+      expect(render([QUIZ_OPEN])).not.toContain('data-extend-for');
+    });
+
+    it('keeps Request regrade beside it on graded work', () => {
       const html = render(
         [
-          repoRow(
-            { status: 'SUBMITTED', done: true },
-            { submissionMode: 'ISSUE', numLateHours: 0 }
-          ),
+          {
+            ...REPO_LATE,
+            status: 'SUBMITTED',
+            done: true,
+            repo: { ...REPO_LATE.repo!, gradesReleased: true },
+          },
         ],
         'completed'
       );
-      expect(html).not.toContain('data-extend-for');
+      expect(html).toContain('data-extend-for="gra-1"');
+      expect(html).toContain('Request regrade');
+    });
+  });
+
+  describe('a quiz row: late by its counting attempt, or missing', () => {
+    const QUIZ_DONE: StudentCourseworkRow = {
+      ...QUIZ_OPEN,
+      status: 'COMPLETED',
+      done: true,
+      score: 82,
+      attemptsUsed: 1,
+      action: null,
+      deadline: '2020-01-01T12:00:00.000Z',
+    };
+
+    it('shows the score and the late pill of the attempt that counts', () => {
+      const html = render([{ ...QUIZ_DONE, numLateHours: 3 }], 'completed');
+      expect(html).toContain('82%');
+      expect(html).toContain('3h late');
+      expect(html).not.toContain('Missing');
     });
 
-    it('does not offer it where hours buy nothing', () => {
-      // Graded and on time.
-      const graded = render(
-        [repoRow({ status: 'SUBMITTED', done: true }, { gradesReleased: true, numLateHours: 0 })],
+    it('reads as missing, not hours late, past the due date with no completed attempt', () => {
+      const html = render([{ ...QUIZ_OPEN, deadline: '2020-01-01T12:00:00.000Z', missing: true }]);
+      expect(html).toContain('Missing');
+      expect(html).not.toContain('h late');
+      expect(html).toContain('overdue');
+    });
+
+    it('says what the hours bought did under the date, and is not overdue inside them', () => {
+      const html = render([
+        {
+          ...QUIZ_OPEN,
+          deadline: '2020-01-01T12:00:00.000Z',
+          extensionHours: 2,
+          extend: { kind: 'QUIZ', assignmentId: 'a-quiz' },
+          tokensPerHour: 1,
+        },
+      ]);
+      expect(html).toContain('+2h applied');
+    });
+
+    it('says a late attempt was bought back', () => {
+      const html = render(
+        [
+          {
+            ...QUIZ_DONE,
+            extensionHours: 5,
+            numLateHours: 0,
+            submittedAt: '2020-01-01T15:10:00.000Z',
+          },
+        ],
         'completed'
       );
-      expect(graded).toContain('Request regrade');
-      expect(graded).not.toContain('data-extend-for');
-
-      // No price per hour, or the late penalty is already waived.
-      expect(render([repoRow({}, { tokensPerHour: 0 })])).not.toContain('data-extend-for');
-      expect(render([repoRow({}, { isLateOverride: true })])).not.toContain('data-extend-for');
+      expect(html).toContain('+5h applied · no longer late');
     });
   });
 
@@ -204,7 +254,7 @@ describe('AssignmentsTabsCard', () => {
     const html = render([QUIZ_OPEN]);
 
     expect(html).toContain('>QUIZ<');
-    expect(html).toContain('href="/student/cs52/quizzes?quiz=q1"');
+    expect(html).toContain('href="/student/intro-101/quizzes?quiz=q1"');
     expect(html).toContain('Week 1 · 0 of 2 attempts used');
     expect(html).toContain('Not started');
   });
@@ -214,7 +264,7 @@ describe('AssignmentsTabsCard', () => {
     const html = render([FORM_PUBLIC], 'all');
 
     expect(html).toContain('>FORM<');
-    expect(html).toContain('href="https://pages.test/cs52/forms/signup"');
+    expect(html).toContain('href="https://pages.test/intro-101/forms/signup"');
     expect(html).toContain('Week 1 · Extra credit');
     expect(html).not.toContain('Not submitted');
   });
@@ -262,23 +312,22 @@ describe('AssignmentsTabsCard', () => {
 
   describe('the note under the date: the deadline stays, the hours applied are said', () => {
     const DEADLINE = '2020-01-01T12:00:00.000Z';
-    const repoRow = (
-      over: Partial<StudentCourseworkRow>,
-      repo: Partial<NonNullable<StudentCourseworkRow['repo']>>
-    ): StudentCourseworkRow => ({
+    const repoRow = (over: Partial<StudentCourseworkRow>): StudentCourseworkRow => ({
       ...REPO_LATE,
       deadline: DEADLINE,
       ...over,
-      repo: { ...REPO_LATE.repo!, ...repo },
     });
 
     it('says a late submission was bought back, and keeps the date', () => {
       const html = render(
         [
-          repoRow(
-            { status: 'SUBMITTED', done: true },
-            { extensionHours: 5, numLateHours: 0, closedAt: '2020-01-01T17:10:00.000Z' }
-          ),
+          repoRow({
+            status: 'SUBMITTED',
+            done: true,
+            extensionHours: 5,
+            numLateHours: 0,
+            submittedAt: '2020-01-01T17:10:00.000Z',
+          }),
         ],
         'completed'
       );
@@ -289,10 +338,13 @@ describe('AssignmentsTabsCard', () => {
     it('says how late a submission still is when the hours did not cover it', () => {
       const html = render(
         [
-          repoRow(
-            { status: 'SUBMITTED', done: true },
-            { extensionHours: 2, numLateHours: 3, closedAt: '2020-01-01T17:10:00.000Z' }
-          ),
+          repoRow({
+            status: 'SUBMITTED',
+            done: true,
+            extensionHours: 2,
+            numLateHours: 3,
+            submittedAt: '2020-01-01T17:10:00.000Z',
+          }),
         ],
         'completed'
       );
@@ -301,7 +353,7 @@ describe('AssignmentsTabsCard', () => {
     });
 
     it('shows nothing when no hours were bought', () => {
-      expect(render([repoRow({}, { extensionHours: 0 })])).not.toContain('applied');
+      expect(render([repoRow({ extensionHours: 0 })])).not.toContain('applied');
     });
   });
 });

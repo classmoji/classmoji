@@ -2,66 +2,16 @@
 import Layout from '../layouts/Layout.astro';
 import Header from '../components/Header.astro';
 import Footer from '../components/Footer.astro';
-import Logo from '../components/Logo.astro';
-import Screenshot from '../components/Screenshot.astro';
-import heroShot from '../assets/landing-hero.png';
+import { FeaturesSection } from '../components/how-it-works/components/FeaturesSection';
 ---
 
 <Layout>
   <Header />
 
-  <!-- Hero Section -->
-  <section class="px-6 pt-32 pb-20 text-center">
-    <div class="max-w-3xl mx-auto">
-      <!-- Logo -->
-      <div class="mb-8 flex justify-center">
-        <Logo variant="icon" size={60} />
-      </div>
-
-      <!-- Tagline -->
-      <h1 class="text-4xl md:text-5xl font-bold text-gray-900 mb-6">
-        Teach where the code lives.
-      </h1>
-
-      <!-- Subtitle -->
-      <p class="text-xl text-gray-600 mb-10 max-w-2xl mx-auto">
-        An open source alternative to Github Classroom. Spin up a Github repository for every
-        assignment with automated workflows, plus built-in slides and pages.
-      </p>
-
-      <!-- CTA Buttons -->
-      <div class="flex items-center justify-center gap-4">
-        <a
-          href="https://app.classmoji.io"
-          class="inline-flex items-center px-6 py-2.5 text-base font-semibold text-white bg-primary hover:bg-primary-dark rounded-lg transition-colors"
-        >
-          Sign In
-          <svg class="ml-2 w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
-          </svg>
-        </a>
-        <a
-          href="/docs/video-tutorials"
-          class="inline-flex items-center px-6 py-2.5 text-base font-semibold text-gray-700 bg-gray-200 hover:bg-gray-300 rounded-lg transition-colors"
-        >
-          Watch demo
-        </a>
-      </div>
-    </div>
-
-    <!-- Product screenshot -->
-    <Screenshot
-      src={heroShot}
-      alt="The Classmoji repositories page showing assignments, weights, and publish status"
-      size="lg"
-      url="app.classmoji.io"
-      frame={true}
-    />
-  </section>
+  <!-- Clears the fixed header. -->
+  <main class="pt-[69px]">
+    <FeaturesSection client:load />
+  </main>
 
   <Footer />
 </Layout>

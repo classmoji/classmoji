@@ -35,6 +35,10 @@ import { flatRoutes } from '@react-router/fs-routes';
 export default [
   ...(await flatRoutes()),
 
+  // The page an agent's `page_render` screenshots: token-gated in its own
+  // loader, rendered by the root as a bare site document (see root.tsx).
+  route('_render/page/:pageId', 'render/page.tsx'),
+
   route(':classroomSlug/forms', 'forms/admin/list.tsx', [
     // The new-form drawer renders into the list's `<Outlet />`, so the table
     // stays on screen behind it.

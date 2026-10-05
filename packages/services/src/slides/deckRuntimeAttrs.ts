@@ -54,12 +54,18 @@ export const RUNTIME_SECTION_CLASSES: ReadonlySet<string> = new Set([
   'has-light-background',
 ]);
 
-/** Section attributes Reveal computes at runtime — never authored. */
+/**
+ * Section attributes painted at runtime — never authored: Reveal's computed
+ * indices, and the editing state the editor (contenteditable) or the browser
+ * and its writing extensions (spellcheck) put on a section someone edits.
+ */
 export const RUNTIME_SECTION_ATTRS: ReadonlySet<string> = new Set([
   'data-fragment',
   'data-previous-indexv',
   'data-index-h',
   'data-index-v',
+  'contenteditable',
+  'spellcheck',
 ]);
 
 /** Inline style properties Reveal computes at runtime — never authored. */
@@ -173,3 +179,6 @@ function stripSlideRuntimeAttrs(slide: DeckSlide): DeckSlide {
 export function stripDeckRuntimeAttrs(deck: DeckJson): DeckJson {
   return { ...deck, slides: deck.slides.map(stripSlideRuntimeAttrs) };
 }
+
+// svg and html slide blocks: browser-safe like this module, so published on the same subpath.
+export * from './deckBlocks.ts';

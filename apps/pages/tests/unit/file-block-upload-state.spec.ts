@@ -48,7 +48,10 @@ test.describe('file block upload state', () => {
     // shares a worker, and other specs decide client-vs-server on `window`.
     const dom = new JSDOM('<!doctype html><html><body></body></html>');
     for (const key of GLOBALS) {
-      if (key in g) continue;
+      // `!== undefined`, not `in`: ServerBlockNoteEditor restores the globals
+      // it swaps by assignment, leaving `document: undefined` behind once any
+      // spec earlier in the worker has called `blocksToFullHTML`.
+      if (g[key] !== undefined) continue;
       g[key] = key === 'window' ? dom.window : (dom.window as Record<string, unknown>)[key];
       installed.push(key);
     }

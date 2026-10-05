@@ -17,10 +17,12 @@ import {
   calculateAssignmentGrade,
   calculateLetterGrade,
   calculateStudentFinalGrade,
+  gradedItemValue,
 } from '@classmoji/utils';
 import type {
   GitRepo,
   GitRepoAssignment,
+  GradedItem,
   LetterGradeMappingEntry,
   OrganizationSettings,
 } from '@classmoji/utils';
@@ -32,13 +34,19 @@ import EmojiGrader from '~/components/features/grading/EmojiGrader';
  * loader projects the User row down to this, and the contact fields are
  * present for an OWNER only.
  */
-interface Student {
+export interface Student {
   id: string;
   name: string | null;
   login: string | null;
   /** UserThumbnailView reads `avatar_url`; the User model calls it `image`. */
   avatar_url: string | null;
   git_repos: GitRepo[];
+  /**
+   * Quiz grade items: what each quiz assignment adds to the totals. An
+   * assignment with no item (not open yet, before the deadline, or only an
+   * unscored attempt) adds nothing.
+   */
+  quiz_items: GradedItem[];
   email?: string | null;
   school_id?: string | null;
 }
@@ -61,6 +69,8 @@ export interface GradebookAssignment {
   created_at?: string | Date;
   repository_id?: string | null;
   student_deadline?: string | Date | null;
+  /** When a QUIZ or FORM opens to students; null = when published. */
+  release_at?: string | Date | null;
   submission_mode?: string;
   grades_released?: boolean;
   quiz_id?: string | null;
@@ -91,7 +101,7 @@ type Submission = GitRepoAssignment & {
 };
 
 type EmojiMappings = Record<string, number>;
-type RowFilter = 'all' | 'ungraded' | 'missing' | 'late';
+export type RowFilter = 'all' | 'ungraded' | 'missing' | 'late';
 
 interface GradesTableProps {
   emojiMappings: EmojiMappings;
@@ -133,6 +143,54 @@ const findSubmission = (student: Student, assignmentId: string): Submission | un
 const isGraded = (s: Submission | undefined) => Boolean(s && (s.grades?.length ?? 0) > 0);
 const isLate = (s: Submission | undefined) => Boolean(s?.is_late && !s.is_late_override);
 const isSubmitted = (s: Submission | undefined) => s?.status === 'CLOSED';
+
+const quizItemOf = (student: Student, assignmentId: string): GradedItem | undefined =>
+  (student.quiz_items ?? []).find(item => item.assignment_id === assignmentId);
+/** The value a quiz adds to the totals (late-penalised; 0 when counted zero), or null. */
+const quizValueOf = (student: Student, assignmentId: string): number | null => {
+  const item = quizItemOf(student, assignmentId);
+  return item ? gradedItemValue(item) : null;
+};
+/** Whether a quiz has not opened to students yet (`release_at` still ahead). */
+const opensLater = (assignment: GradebookAssignment, now = Date.now()) =>
+  assignment.release_at != null && new Date(assignment.release_at).getTime() > now;
+/**
+ * Completed attempts with no score yet and nothing counted: the score is
+ * still to come. Never a counted zero (that has an item).
+ */
+const quizPending = (activity: GradebookActivity, student: Student, assignmentId: string) => {
+  if (quizItemOf(student, assignmentId)) return false;
+  const q = activity.quiz[assignmentId]?.[student.id];
+  return Boolean(q?.completed && q.score === null);
+};
+/**
+ * Whether a student's row passes the gradebook filter, over the visible
+ * columns. "Has something to grade" includes a quiz whose score is still to
+ * come; missing and late include quiz items.
+ */
+export const matchesRowFilter = (
+  student: Student,
+  rowFilter: RowFilter,
+  columnsSpec: readonly GradebookAssignment[],
+  activity: GradebookActivity
+): boolean => {
+  if (rowFilter === 'all') return true;
+  const subs = columnsSpec.filter(a => a.type === 'REPO').map(a => findSubmission(student, a.id));
+  const quizColumns = columnsSpec.filter(a => a.type === 'QUIZ');
+  const quizItems = quizColumns.flatMap(a => quizItemOf(student, a.id) ?? []);
+  if (rowFilter === 'ungraded')
+    return (
+      subs.some(s => isSubmitted(s) && !isGraded(s)) ||
+      quizColumns.some(a => quizPending(activity, student, a.id))
+    );
+  if (rowFilter === 'missing')
+    return subs.some(s => s?.should_be_zero) || quizItems.some(i => i.counts_as_zero);
+  if (rowFilter === 'late')
+    return subs.some(s => isLate(s)) || quizItems.some(i => i.late_hours > 0);
+  return true;
+};
+const LATE_TINT = 'bg-amber-50 dark:bg-amber-950/30';
+const MISSING_TINT = 'bg-red-50 dark:bg-red-950/30';
 
 const Chip = ({
   tone,
@@ -206,18 +264,20 @@ const GradesTable = (props: GradesTableProps) => {
   }, [assignments, modules]);
   const columnsSpec = useMemo(() => groups.flatMap(g => g.items), [groups]);
 
-  const finalOf = (s: Student) => calculateStudentFinalGrade(s.git_repos, emojiMappings, settings);
+  const itemsOf = (s: Student) => s.quiz_items ?? [];
+  const finalOf = (s: Student) =>
+    calculateStudentFinalGrade(s.git_repos, emojiMappings, settings, true, true, itemsOf(s));
   // A module's total is the same weighted math as the class total, run over
-  // just that module's repo assignments (quiz and form scores are not graded
-  // into the total anywhere, so they are not here either).
-  const moduleTotalOf = (s: Student, assignmentIds: Set<string>) => {
+  // just that module's repo assignments and quiz items. Forms carry no grade.
+  const moduleTotalOf = (s: Student, moduleId: string, assignmentIds: Set<string>) => {
     const repos = s.git_repos.map(repo => ({
       ...repo,
       assignments: (repo.assignments ?? []).filter(ra =>
         assignmentIds.has(String((ra as Submission).assignment_id))
       ),
     }));
-    return calculateStudentFinalGrade(repos, emojiMappings, settings);
+    const items = itemsOf(s).filter(item => item.module_id === moduleId);
+    return calculateStudentFinalGrade(repos, emojiMappings, settings, true, true, items);
   };
   // Collapsed modules show only their total column.
   const [collapsedModules, setCollapsedModules] = useState<Set<string>>(new Set());
@@ -229,9 +289,10 @@ const GradesTable = (props: GradesTableProps) => {
       return next;
     });
   const rawOf = (s: Student) =>
-    calculateStudentFinalGrade(s.git_repos, emojiMappings, settings, false);
+    calculateStudentFinalGrade(s.git_repos, emojiMappings, settings, false, true, itemsOf(s));
+  // Quizzes are individual work, so their items always count here.
   const individualOf = (s: Student) =>
-    calculateStudentFinalGrade(s.git_repos, emojiMappings, settings, true, false);
+    calculateStudentFinalGrade(s.git_repos, emojiMappings, settings, true, false, itemsOf(s));
   const membershipOf = (s: Student) => memberships.find(m => String(m.user_id) === String(s.id));
   const gradeOf = (s: Student, assignmentId: string) => {
     const sub = findSubmission(s, assignmentId);
@@ -247,16 +308,9 @@ const GradesTable = (props: GradesTableProps) => {
           .join(' ');
         if (!hay.includes(q)) return false;
       }
-      if (rowFilter === 'all') return true;
-      const subs = columnsSpec
-        .filter(a => a.type === 'REPO')
-        .map(a => findSubmission(student, a.id));
-      if (rowFilter === 'ungraded') return subs.some(s => isSubmitted(s) && !isGraded(s));
-      if (rowFilter === 'missing') return subs.some(s => s?.should_be_zero);
-      if (rowFilter === 'late') return subs.some(s => isLate(s));
-      return true;
+      return matchesRowFilter(student, rowFilter, columnsSpec, activity);
     });
-  }, [students, searchQuery, rowFilter, columnsSpec]);
+  }, [students, searchQuery, rowFilter, columnsSpec, activity]);
 
   const toGradeCount = (assignmentId: string) =>
     students.reduce((n, s) => {
@@ -271,28 +325,64 @@ const GradesTable = (props: GradesTableProps) => {
       )
     );
 
+  /**
+   * A quiz cell. With a grade item it shows what the totals count: the
+   * late-penalised score (amber when late), or Missing (a counted 0). Without
+   * one it shows when the quiz opens, or the attempt state (before the
+   * deadline, running or unscored).
+   */
+  const renderQuizCell = (
+    student: Student,
+    assignment: GradebookAssignment
+  ): { body: React.ReactNode; tint: string } => {
+    const item = quizItemOf(student, assignment.id);
+    if (item?.counts_as_zero) {
+      // Counts 0 in the totals; a running attempt past the deadline is one too.
+      return { body: <Chip tone="red">Missing</Chip>, tint: MISSING_TINT };
+    }
+    const value = item ? gradedItemValue(item) : null;
+    if (item && value !== null) {
+      const late = item.late_hours > 0;
+      return {
+        body: (
+          <>
+            <span className="font-semibold tabular-nums">{Math.round(value * 10) / 10}</span>
+            {late && <Chip tone="amber">{item.late_hours}h late</Chip>}
+          </>
+        ),
+        tint: late ? LATE_TINT : '',
+      };
+    }
+    if (!item && opensLater(assignment)) {
+      return {
+        body: <Chip tone="grey">Opens {dayjs(assignment.release_at).format('MMM D')}</Chip>,
+        tint: '',
+      };
+    }
+    const q = activity.quiz[assignment.id]?.[student.id];
+    const body = !q ? (
+      <Chip tone="grey">Not attempted</Chip>
+    ) : !q.completed ? (
+      <Chip tone="blue">In progress</Chip>
+    ) : (
+      <span className="font-semibold tabular-nums">
+        {q.score === null ? 'Completed' : Math.round(q.score * 10) / 10}
+      </span>
+    );
+    return { body, tint: '' };
+  };
+
   const renderCell = (student: Student, assignment: GradebookAssignment) => {
     if (assignment.type === 'QUIZ') {
-      const q = activity.quiz[assignment.id]?.[student.id];
       const href = assignment.quiz_id ? `${base}/quizzes/${assignment.quiz_id}` : null;
-      const body = !q ? (
-        <Chip tone="grey">Not attempted</Chip>
-      ) : !q.completed ? (
-        <Chip tone="blue">In progress</Chip>
-      ) : (
-        <span className="font-semibold tabular-nums">
-          {q.score === null ? 'Completed' : Math.round(q.score * 10) / 10}
-        </span>
-      );
+      const { body, tint } = renderQuizCell(student, assignment);
+      const cls = `flex items-center gap-2 min-h-9 -m-2 p-2 rounded-md ${tint}`;
       return href ? (
-        <Link
-          to={href}
-          className="flex items-center min-h-9 -m-2 p-2 rounded-md text-ink-1 hover:ring-1 hover:ring-line"
-        >
+        <Link to={href} className={`${cls} text-ink-1 hover:ring-1 hover:ring-line`}>
           {body}
         </Link>
       ) : (
-        body
+        <div className={cls}>{body}</div>
       );
     }
     if (assignment.type === 'FORM') {
@@ -320,7 +410,7 @@ const GradesTable = (props: GradesTableProps) => {
           {numeric === null ? '–' : Math.round(numeric * 10) / 10}
         </span>
       );
-      if (isLate(sub)) tint = 'bg-amber-50 dark:bg-amber-950/30';
+      if (isLate(sub)) tint = LATE_TINT;
       if (sub.is_late_override)
         body = (
           <span className="inline-flex items-center gap-1.5">
@@ -334,10 +424,10 @@ const GradesTable = (props: GradesTableProps) => {
           {isLate(sub) ? 'Late · to grade' : 'To grade'}
         </Chip>
       );
-      if (isLate(sub)) tint = 'bg-amber-50 dark:bg-amber-950/30';
+      if (isLate(sub)) tint = LATE_TINT;
     } else if (sub.should_be_zero) {
       body = <Chip tone="red">Missing</Chip>;
-      tint = 'bg-red-50 dark:bg-red-950/30';
+      tint = MISSING_TINT;
     } else {
       body = <Chip tone="grey">Not submitted</Chip>;
     }
@@ -404,9 +494,8 @@ const GradesTable = (props: GradesTableProps) => {
       width: 170,
       sorter: (a: Student, b: Student) => {
         if (assignment.type === 'QUIZ') {
-          const qa = activity.quiz[assignment.id]?.[a.id]?.score ?? -1;
-          const qb = activity.quiz[assignment.id]?.[b.id]?.score ?? -1;
-          return qa - qb;
+          // The value the totals count, so the order matches the cells.
+          return (quizValueOf(a, assignment.id) ?? -1) - (quizValueOf(b, assignment.id) ?? -1);
         }
         if (assignment.type === 'FORM') {
           const fa = activity.form[assignment.id]?.[a.id]?.submitted ? 1 : 0;
@@ -454,9 +543,10 @@ const GradesTable = (props: GradesTableProps) => {
         key: `module-total-${group.id}`,
         width: 120,
         className: 'bg-stone-50/60 dark:bg-neutral-800/40',
-        sorter: (a: Student, b: Student) => moduleTotalOf(a, ids) - moduleTotalOf(b, ids),
+        sorter: (a: Student, b: Student) =>
+          moduleTotalOf(a, group.id, ids) - moduleTotalOf(b, group.id, ids),
         render: (_: unknown, student: Student) => {
-          const total = moduleTotalOf(student, ids);
+          const total = moduleTotalOf(student, group.id, ids);
           return total >= 0 ? (
             <span className="font-semibold tabular-nums">{Math.round(total * 10) / 10}</span>
           ) : (
@@ -576,13 +666,11 @@ const GradesTable = (props: GradesTableProps) => {
               a.type === 'REPO'
                 ? pageData.map(s => gradeOf(s, a.id)).filter((g): g is number => g !== null)
                 : a.type === 'QUIZ'
-                  ? pageData
-                      .map(s => activity.quiz[a.id]?.[s.id]?.score ?? null)
-                      .filter((g): g is number => g !== null)
+                  ? pageData.map(s => quizValueOf(s, a.id)).filter((g): g is number => g !== null)
                   : [];
             return { key: a.id, text: meanText(grades) };
           });
-      const totals = pageData.map(s => moduleTotalOf(s, ids)).filter(t => t >= 0);
+      const totals = pageData.map(s => moduleTotalOf(s, group.id, ids)).filter(t => t >= 0);
       return [...assignmentCells, { key: `module-total-${group.id}`, text: meanText(totals) }];
     });
     return (

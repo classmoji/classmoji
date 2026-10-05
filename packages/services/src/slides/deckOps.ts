@@ -1,6 +1,7 @@
 /**
  * deckOps.ts — the granular deck op engine (update / insert / move / delete /
- * reorder / set_theme), extracted VERBATIM from apps/mcp/src/tools/deck.ts so
+ * reorder / set_theme, and the block ops block_add / block_update /
+ * block_delete), extracted VERBATIM from apps/mcp/src/tools/deck.ts so
  * the editor save path (deckSaveMerge saveDeckFromOps) and the MCP deck_apply
  * tool share one implementation.
  *
@@ -19,18 +20,55 @@
  * engine lived inline in deck.ts.
  */
 
+import { createHash } from 'node:crypto';
+import * as cheerio from 'cheerio';
+import type { Element } from 'domhandler';
 import { z } from 'zod';
-import { BUILTIN_THEMES, mintSlideId, normalizeSlideHtml } from './deckHtml.ts';
+import {
+  BLOCK_ID_ATTR,
+  HTML_BLOCK_FRAME_STYLE,
+  blockMarkup,
+  escapeBlockAttr,
+  htmlBlockMarkup,
+  MAX_SLIDE_HTML_LENGTH,
+  mintBlockId,
+  type BlockBox,
+} from './deckBlocks.ts';
+import {
+  BUILTIN_THEMES,
+  SlideBlockError,
+  mintSlideId,
+  normalizeSlideHtml,
+  normalizeSvgBlockSource,
+  readSlideBlocks,
+  removeSlideBlock,
+  updateSlideBlock,
+  type SlideBlockEdit,
+} from './deckHtml.ts';
 import { stripRuntimeSectionAttrs } from './deckRuntimeAttrs.ts';
 import type { DeckJson, DeckSlide } from './deckTypes.ts';
 
 // Re-exported so op-engine callers can catch the SAME class instance the
-// engine's normalizeSlideHtml throws (module-identity-safe instanceof).
-export { SlideHtmlError } from './deckHtml.ts';
+// engine's normalizeSlideHtml throws (module-identity-safe instanceof), and
+// read blocks with the engine's own reader.
+export { SlideHtmlError, readSlideBlocks, type SlideBlockInfo } from './deckHtml.ts';
+
+/** The most characters a slide's html may hold (the op schemas' html cap). */
+export const MAX_SLIDE_HTML = MAX_SLIDE_HTML_LENGTH;
 
 // ─── Op schemas ──────────────────────────────────────────────────────────────
 
 const attrsSchema = z.record(z.string());
+
+/**
+ * What an agent writing slide html needs to know beyond plain HTML: the
+ * editor's draggable blocks, and vector art inside them.
+ */
+const SLIDE_HTML_DESCRIPTION =
+  'Slide HTML (no <section>). Draggable blocks: <div class="sl-block" data-block-type="text" ' +
+  'style="left:Xpx;top:Ypx;width:Wpx"><div class="sl-block-content">…</div></div> on the ' +
+  "deck's logical canvas. Inline <svg> works in slide html and inside a text block; for an " +
+  'image block use <img src="data:image/svg+xml,…"> with the SVG percent-encoded';
 
 const positionSchema = z.union([
   z.object({ after: z.string().min(1) }).strict(),
@@ -48,7 +86,7 @@ const newChildSlideSchema = z
 
 const newSlideSchema = z
   .object({
-    html: z.string().max(200_000).optional(),
+    html: z.string().max(200_000).optional().describe(SLIDE_HTML_DESCRIPTION),
     notes: z.string().max(50_000).optional(),
     hidden: z.boolean().optional(),
     attrs: attrsSchema.optional(),
@@ -69,11 +107,61 @@ const newSlideSchema = z
       'stack containers carry no html of their own',
   });
 
+// ─── Block op schemas ────────────────────────────────────────────────────────
+
+/** Which block to use — the guide agents read on block_add's `type`. */
+const BLOCK_TYPE_DESCRIPTION =
+  'html: a small self-contained interactive piece (figure, widget, one-file mini-game, demo) ' +
+  'in a sandboxed frame. It lives in the slide: co-edited live, shown in previews and ' +
+  'renders, copied with the slide. Limits: one document, slide html ≤200 KB, in-memory ' +
+  'localStorage only, no private /content fetches, loads with the deck, restarts when ' +
+  'someone edits the slide. iframe: embeds files uploaded to the deck (file_upload_start / ' +
+  'file_import_url with slide_id + folder) — multi-file games, sprites, sounds, shared ' +
+  'libraries, large code, persistent storage, private files, lazy loading, state that ' +
+  'survives co-edits; not live-editable (re-upload to change). svg: static vector art ' +
+  '(SMIL animation ok, scripts stripped)';
+
+const BLOCK_SOURCE_DESCRIPTION =
+  'html: the whole document the frame shows (<!doctype html>…; scripts run, no same-origin ' +
+  'access). svg: one <svg> element (sanitized, scaled to the box). Plain text: escaping is ' +
+  'done for you, and deck_get returns it decoded';
+
+const BLOCK_SRC_DESCRIPTION =
+  'iframe: the ref file_upload_status returned, a path in the deck folder ' +
+  '(games/x/index.html), or an https URL; loaded lazily';
+
+const blockIdSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[A-Za-z0-9_-]+$/, 'Block ids use letters, digits, - and _');
+
+const blockCoord = z.number().finite().min(-20_000).max(20_000);
+const blockExtent = z.number().finite().positive().max(20_000);
+
+const blockBoxSchema = z
+  .object({ left: blockCoord, top: blockCoord, width: blockExtent, height: blockExtent })
+  .strict()
+  .describe("px on the deck's logical canvas (960×700 unless its config sets a size)");
+
+const blockBoxPatchSchema = z
+  .object({
+    left: blockCoord.optional(),
+    top: blockCoord.optional(),
+    width: blockExtent.optional(),
+    height: blockExtent.optional(),
+  })
+  .strict()
+  .describe('The box fields to change, in px');
+
+const blockSlideSchema = z.string().min(1).describe('Id of the slide holding the block');
+const existingBlockIdSchema = blockIdSchema.describe('data-cm-block-id, from deck_outline');
+
 export const deckOpSchema = z.discriminatedUnion('op', [
   z.object({
     op: z.literal('update'),
     id: z.string().min(1),
-    html: z.string().max(200_000).optional(),
+    html: z.string().max(200_000).optional().describe(SLIDE_HTML_DESCRIPTION),
     notes: z
       .string()
       .max(50_000)
@@ -81,10 +169,18 @@ export const deckOpSchema = z.discriminatedUnion('op', [
       .optional()
       .describe('Speaker notes HTML; null or empty string removes the notes'),
     hidden: z.boolean().optional(),
-    attrs: attrsSchema
+    attrs: z
+      .record(z.string().nullable())
       .nullable()
       .optional()
-      .describe('Full replacement attrs record (null or {} clears all extra attributes)'),
+      .describe(
+        "Section attributes, MERGED into the slide's: keys you send are set, a key set to null " +
+          'is removed, keys you omit are kept. attrs: null clears them all'
+      ),
+    replace_attrs: z
+      .boolean()
+      .optional()
+      .describe('true = attrs replaces the whole record instead of merging'),
   }),
   z.object({
     op: z.literal('insert'),
@@ -115,6 +211,32 @@ export const deckOpSchema = z.discriminatedUnion('op', [
       .max(50)
       .regex(/^[\w.-]+$/)
       .optional(),
+  }),
+  z.object({
+    op: z.literal('block_add'),
+    slide: blockSlideSchema,
+    type: z.enum(['html', 'svg', 'iframe']).describe(BLOCK_TYPE_DESCRIPTION),
+    box: blockBoxSchema,
+    source: z.string().max(MAX_SLIDE_HTML).optional().describe(BLOCK_SOURCE_DESCRIPTION),
+    src: z.string().max(2_000).optional().describe(BLOCK_SRC_DESCRIPTION),
+    block_id: blockIdSchema.optional().describe('Id for the new block; minted when omitted'),
+  }),
+  z.object({
+    op: z.literal('block_update'),
+    slide: blockSlideSchema,
+    block_id: existingBlockIdSchema,
+    box: blockBoxPatchSchema.optional(),
+    source: z
+      .string()
+      .max(MAX_SLIDE_HTML)
+      .optional()
+      .describe('New source (html and svg blocks), as for block_add'),
+    src: z.string().max(2_000).optional().describe('New src (iframe blocks), as for block_add'),
+  }),
+  z.object({
+    op: z.literal('block_delete'),
+    slide: blockSlideSchema,
+    block_id: existingBlockIdSchema,
   }),
 ]);
 
@@ -211,6 +333,233 @@ function assertValidTheme(theme: string): void {
   );
 }
 
+/**
+ * An update op's attrs against the slide's current ones. By default a MERGE:
+ * keys sent are set, a null value removes its key, keys not sent are kept —
+ * so a pass that sets one attribute never drops the rest. `replace` (or
+ * `attrs: null`, which clears everything) takes the record as the whole set.
+ * Reveal's runtime paint never persists, even when an agent hands back
+ * verbatim what deck_get returned (issue #361).
+ */
+function nextSlideAttrs(
+  current: Record<string, string> | undefined,
+  incoming: Record<string, string | null> | null,
+  replace: boolean
+): Record<string, string> {
+  if (incoming === null) return {};
+  const set: Record<string, string> = {};
+  const removed: string[] = [];
+  for (const [name, value] of Object.entries(incoming)) {
+    if (value === null) removed.push(name);
+    else set[name] = value;
+  }
+  const cleaned = stripRuntimeSectionAttrs(set);
+  if (replace) return cleaned;
+  const next: Record<string, string> = { ...(current ?? {}) };
+  for (const name of removed) delete next[name];
+  return Object.assign(next, cleaned);
+}
+
+// ─── Blocks ──────────────────────────────────────────────────────────────────
+
+/** Characters a frame URL never carries: whitespace, controls, backslashes. */
+// Control characters are exactly what this refuses in a frame src.
+// eslint-disable-next-line no-control-regex
+const FRAME_SRC_BAD_CHARS = /[\s\u0000-\u001f\u007f\\]/;
+
+/**
+ * An iframe block's URL, or a DeckOpError: an https URL, a root-relative
+ * `/content/…` path, or a path relative to the deck folder — no other scheme,
+ * no `..` segment.
+ */
+export function checkBlockFrameSrc(src: string): string {
+  const value = src.trim();
+  const refuse = (why: string): never => {
+    throw new DeckOpError(
+      `Invalid iframe src '${value.slice(0, 120)}' — ${why}. Use an https URL, the ref ` +
+        'file_upload_status returned, or a path in the deck folder'
+    );
+  };
+  if (!value) refuse('it is empty');
+  if (FRAME_SRC_BAD_CHARS.test(value)) refuse('it contains spaces or backslashes');
+  const path = value.split(/[?#]/)[0];
+  // Checked as the browser will read it: `%2e%2e` is `..` once loaded.
+  if (/%(?:2f|5c)/i.test(path)) refuse('encoded slashes are not allowed');
+  let decoded = path;
+  try {
+    decoded = decodeURIComponent(path);
+  } catch {
+    refuse('it is not a valid URL path');
+  }
+  if (decoded.split('/').includes('..')) refuse("'..' is not allowed");
+  if (/^[a-z][a-z0-9+.-]*:/i.test(value)) {
+    let url: URL | null = null;
+    try {
+      url = new URL(value);
+    } catch {
+      refuse('it is not a valid URL');
+    }
+    if (url?.protocol !== 'https:') refuse('only https URLs can be embedded');
+    return value;
+  }
+  if (value.startsWith('//')) refuse('protocol-relative URLs are not allowed');
+  if (value.startsWith('/') && !value.startsWith('/content/')) {
+    refuse('root paths must be /content/… paths');
+  }
+  if (value.startsWith('?') || value.startsWith('#')) refuse('it names no file');
+  return value;
+}
+
+/** Where a deck's files live, for turning a path into a URL the deck can load. */
+export interface DeckFrameContext {
+  org: string;
+  repo: string;
+  /** The deck folder in the content repo (`slides/<slug>`). */
+  contentPath: string;
+}
+
+/**
+ * An iframe block `src` as stored: a repo path inside the deck folder (what an
+ * upload reports) or a path relative to it becomes the `/content/{org}/{repo}/…`
+ * URL deck embeds use, so a page's own relative references resolve next to
+ * it. URLs and root paths are returned as given (`checkBlockFrameSrc` judges
+ * them), and so is anything with a `..` segment.
+ */
+export function resolveDeckFrameSrc(src: string, ctx: DeckFrameContext): string {
+  const value = src.trim();
+  if (!value || /^[a-z][a-z0-9+.-]*:/i.test(value) || value.startsWith('/')) return value;
+  if (value.startsWith('?') || value.startsWith('#')) return value;
+  const cut = value.search(/[?#]/);
+  const path = cut === -1 ? value : value.slice(0, cut);
+  const tail = cut === -1 ? '' : value.slice(cut);
+  const parts = path.split('/').filter(part => part.length > 0 && part !== '.');
+  if (parts.length === 0 || parts.includes('..')) return value;
+  const deck = ctx.contentPath.split('/').filter(Boolean);
+  const inDeckRepoPath = parts.length > deck.length && deck.every((part, i) => parts[i] === part);
+  const repoPath = (inDeckRepoPath ? parts : [...deck, ...parts]).join('/');
+  return `/content/${ctx.org}/${ctx.repo}/${repoPath}${tail}`;
+}
+
+/**
+ * Ops ready to send to every place that applies them: each block_add carries a
+ * block id (minted here when the caller gave none, so a dry run, the live
+ * server and a replay all name the same block) and every iframe `src` is
+ * resolved against the deck folder. Input untouched.
+ */
+export function prepareDeckOps(ops: DeckOp[], ctx: DeckFrameContext | null): DeckOp[] {
+  return ops.map(op => {
+    if (op.op !== 'block_add' && op.op !== 'block_update') return op;
+    const next = { ...op };
+    if (next.op === 'block_add' && next.block_id === undefined) next.block_id = mintBlockId();
+    if (ctx && next.src !== undefined) next.src = resolveDeckFrameSrc(next.src, ctx);
+    return next;
+  });
+}
+
+/**
+ * A slide's html with a `data-cm-block-id` on every top-level block, each
+ * one different — blocks made before block ids (or a pasted copy repeating
+ * an earlier block's id, the first keeps it; or an id block ops cannot
+ * name) get one DERIVED from the
+ * block's markup and position (8 hex chars, unique on the slide), so the
+ * same html always yields the same ids: a read can report them
+ * (deck_outline / deck_get) and a block op that names one finds it, with the
+ * id then stored by the write. The html comes back unchanged when every
+ * block already has its own id.
+ */
+export function ensureSlideBlockIds(html: string): string {
+  if (!html.includes('sl-block')) return html;
+  const $ = cheerio.load(html, null, false);
+  const top = ($('.sl-block').toArray() as Element[]).filter(
+    el => $(el).parents('.sl-block').length === 0
+  );
+  const seen = new Set<string>();
+  const needsId = top.map(el => {
+    const id = el.attribs[BLOCK_ID_ATTR];
+    // Missing, repeated, or one a block op could not name (blockIdSchema).
+    if (!id || seen.has(id) || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) return true;
+    seen.add(id);
+    return false;
+  });
+  if (!needsId.includes(true)) return html;
+  const taken = new Set([...html.matchAll(/data-cm-block-id="([^"]*)"/g)].map(m => m[1]));
+  const derive = (seed: string) => createHash('sha1').update(seed).digest('hex').slice(0, 8);
+  top.forEach((el, index) => {
+    if (!needsId[index]) return;
+    const seed = `${index}|${$.html(el)}`;
+    let id = derive(seed);
+    for (let n = 1; taken.has(id); n++) id = derive(`${seed}|${n}`);
+    taken.add(id);
+    el.attribs[BLOCK_ID_ATTR] = id;
+  });
+  return normalizeSlideHtml($.html());
+}
+
+/** The frame inside an iframe block: today's lazy-loaded embed (attributes in name order). */
+function iframeEmbedMarkup(src: string): string {
+  return (
+    `<iframe allowfullscreen="" data-src="${escapeBlockAttr(src)}" ` +
+    `style="${HTML_BLOCK_FRAME_STYLE}"></iframe>`
+  );
+}
+
+/** The slide a block op targets; stack containers carry no html. */
+function blockSlide(deck: DeckJson, slideId: string, opName: string): DeckSlide {
+  const target = mustFindSlide(deck.slides, slideId, opName);
+  if (target.slide.children?.length) {
+    throw new DeckOpError(
+      `Slide '${slideId}' is a vertical stack container and has no html — put blocks on its children`
+    );
+  }
+  return target.slide;
+}
+
+/** Refuse a slide html over the cap, naming the way out. */
+function assertSlideHtmlFits(html: string, slideId: string): void {
+  if (html.length > MAX_SLIDE_HTML) {
+    throw new DeckOpError(
+      `Slide '${slideId}' would hold ${html.length} characters of html, over the ` +
+        `${MAX_SLIDE_HTML} limit — keep html blocks small, or upload the files and embed ` +
+        'them with an iframe block'
+    );
+  }
+}
+
+/** A block edit, its SlideBlockError as the engine's own error. */
+function blockEdit(slideId: string, edit: () => string): string {
+  try {
+    return edit();
+  } catch (error) {
+    if (error instanceof SlideBlockError) {
+      throw new DeckOpError(`${error.message.replace('this slide', `slide '${slideId}'`)}`);
+    }
+    throw error;
+  }
+}
+
+/** A new block's markup for a block_add op. */
+function newBlockMarkup(
+  op: Extract<DeckOp, { op: 'block_add' }>,
+  id: string,
+  box: BlockBox
+): string {
+  if (op.type === 'iframe') {
+    if (op.source !== undefined) {
+      throw new DeckOpError('An iframe block takes src (a URL or deck path), not source');
+    }
+    if (op.src === undefined) throw new DeckOpError('An iframe block needs src');
+    return blockMarkup('iframe', id, box, iframeEmbedMarkup(checkBlockFrameSrc(op.src)));
+  }
+  if (op.src !== undefined) {
+    throw new DeckOpError(`A ${op.type} block takes source, not src`);
+  }
+  if (op.source === undefined || op.source.trim() === '') {
+    throw new DeckOpError(`A ${op.type} block needs source`);
+  }
+  if (op.type === 'html') return htmlBlockMarkup({ id, box, source: op.source });
+  return blockMarkup('svg', id, box, normalizeSvgBlockSource(op.source));
+}
+
 // ─── applyDeckOps ────────────────────────────────────────────────────────────
 
 export interface ApplyDeckOpsOptions {
@@ -274,10 +623,11 @@ export function applyDeckOps(
           if (op.hidden) target.slide.hidden = true;
           else delete target.slide.hidden;
         }
+        if (op.replace_attrs && op.attrs === undefined) {
+          throw new DeckOpError(`update op for '${op.id}' sets replace_attrs without attrs`);
+        }
         if (op.attrs !== undefined) {
-          // Reveal's runtime paint never persists, even when an agent hands
-          // back verbatim what deck_get returned (issue #361).
-          const attrs = op.attrs == null ? {} : stripRuntimeSectionAttrs(op.attrs);
+          const attrs = nextSlideAttrs(target.slide.attrs, op.attrs, op.replace_attrs === true);
           if (Object.keys(attrs).length === 0) {
             delete target.slide.attrs;
           } else {
@@ -463,6 +813,80 @@ export function applyDeckOps(
           ...(op.theme !== undefined ? { theme: op.theme } : {}),
           ...(op.code_theme !== undefined ? { code_theme: op.code_theme } : {}),
         });
+        break;
+      }
+
+      case 'block_add': {
+        const slide = blockSlide(deck, op.slide, 'block_add');
+        const html = ensureSlideBlockIds(slide.html ?? '');
+        // Every block id on the slide, nested blocks included.
+        const taken = new Set(
+          [...html.matchAll(/data-cm-block-id="([^"]*)"/g)].map(match => match[1])
+        );
+        let blockId = op.block_id;
+        if (blockId !== undefined && taken.has(blockId)) {
+          throw new DeckOpError(`Slide '${op.slide}' already has a block '${blockId}'`);
+        }
+        if (blockId === undefined) {
+          blockId = mintBlockId();
+          while (taken.has(blockId)) blockId = mintBlockId();
+        }
+        const next = normalizeSlideHtml(html + newBlockMarkup(op, blockId, op.box));
+        assertSlideHtmlFits(next, op.slide);
+        slide.html = next;
+        applied.push({ op: 'block_add', slide: op.slide, block_id: blockId, type: op.type });
+        break;
+      }
+
+      case 'block_update': {
+        const slide = blockSlide(deck, op.slide, 'block_update');
+        const hasBox = op.box !== undefined && Object.keys(op.box).length > 0;
+        if (!hasBox && op.source === undefined && op.src === undefined) {
+          throw new DeckOpError(
+            `block_update for '${op.block_id}' must set at least one of box, source, src`
+          );
+        }
+        // Blocks from before block ids carry the id a read derived for them.
+        const html = ensureSlideBlockIds(slide.html ?? '');
+        const block = readSlideBlocks(html, { content: false }).find(b => b.id === op.block_id);
+        if (!block) {
+          throw new DeckOpError(
+            `No block '${op.block_id}' on slide '${op.slide}' — deck_outline lists block ids`
+          );
+        }
+        const edit: SlideBlockEdit = {};
+        if (hasBox) edit.box = op.box;
+        if (op.source !== undefined) {
+          if (block.type === 'html') edit.source = op.source;
+          else if (block.type === 'svg') edit.svg = op.source;
+          else {
+            throw new DeckOpError(
+              `Block '${op.block_id}' is ${block.type}; source applies to html and svg blocks` +
+                (block.type === 'iframe' ? ' (an iframe block takes src)' : '')
+            );
+          }
+        }
+        if (op.src !== undefined) {
+          if (block.type !== 'iframe') {
+            throw new DeckOpError(
+              `Block '${op.block_id}' is ${block.type}; src applies to iframe blocks`
+            );
+          }
+          edit.src = checkBlockFrameSrc(op.src);
+        }
+        const next = blockEdit(op.slide, () => updateSlideBlock(html, op.block_id, edit));
+        assertSlideHtmlFits(next, op.slide);
+        slide.html = next;
+        applied.push({ op: 'block_update', slide: op.slide, block_id: op.block_id });
+        break;
+      }
+
+      case 'block_delete': {
+        const slide = blockSlide(deck, op.slide, 'block_delete');
+        slide.html = blockEdit(op.slide, () =>
+          removeSlideBlock(ensureSlideBlockIds(slide.html ?? ''), op.block_id)
+        );
+        applied.push({ op: 'block_delete', slide: op.slide, block_id: op.block_id });
         break;
       }
     }

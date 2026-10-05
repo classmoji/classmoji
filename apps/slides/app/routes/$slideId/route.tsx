@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { gitWeb } from '@classmoji/utils';
-import { useLoaderData, useFetcher, data, redirect } from 'react-router';
+import { useLoaderData, useFetcher, useRevalidator, data, redirect } from 'react-router';
 import { Tooltip, Popconfirm } from 'antd';
 import getPrisma from '@classmoji/database';
 import { ContentService } from '@classmoji/content';
@@ -26,6 +26,7 @@ import {
   previewBranchName,
   resolveDeckPreviewConflicts,
   saveDeck,
+  splitDeckConflicts,
   saveDeckFromOps,
   saveDeckWithMerge,
   slideFileService,
@@ -78,7 +79,47 @@ import {
   slideFileUnavailable,
   slideLinkRedirect,
 } from '~/utils/slideKind';
+import {
+  DECK_CHECKPOINT_REQUEST_ID,
+  acceptDeckPreviewLive,
+  deckCollabData,
+  fetchLiveDeck,
+  liveEditingEnv,
+  notifyPreviewChanged,
+  previewChangedSlides,
+  readDeckCheckpoint,
+  readEditorName,
+  requestDeckCheckpoint,
+} from '~/utils/collab/collab.server';
+import { VERSION_NOTE_MAX } from '~/components/collab/SaveVersionPopover';
+import { CollabRequestError } from '~/utils/collab/env.server';
 import RevealSlides, { type RevealSlidesHandle } from '~/components/RevealSlides';
+import { useDeckCollab } from '~/components/collab/useDeckCollab';
+import CollabHeaderControls from '~/components/collab/CollabHeaderControls';
+import SlideCollabOverlay from '~/components/collab/SlideCollabOverlay';
+import LivePointers from '~/components/collab/LivePointers';
+import type { SlideAgentTouch } from '~/components/SlideOverview/SlideGrid';
+import { CollabRejectedBanner } from '~/components/collab/CollabNotices';
+import LiveLeaveDialog from '~/components/collab/LiveLeaveDialog';
+import LiveLeaveGuard from '~/components/collab/LiveLeaveGuard';
+import LockDescriptions from '~/components/collab/LockDescriptions';
+import SlideConflictNotice from '~/components/collab/SlideConflictNotice';
+import {
+  claimStaleReload,
+  deriveSyncStatus,
+  SAVE_VERSION_WAIT_MS,
+  isCollabMode,
+  newSaveVersionRequestId,
+  saveVersionAnswer,
+  whenLocalEditsSent,
+  liveLeaveRisk,
+  presentUrlAfterSave,
+  mayAutoReloadStale,
+  rejectionNotice,
+} from '~/utils/collab/collab';
+import { BRIDGE_ORIGIN, type DeckBridge } from '~/utils/collab/DeckBridge';
+import { PREVIEW_CHANGED_CLASS } from '~/utils/collab/previewHighlight';
+import type { CollabNotesBinding } from '~/components/SlideNotesPanel';
 import SlideToolbar from '~/components/SlideToolbar';
 import SlideNotesPanel from '~/components/SlideNotesPanel';
 import OrphanedImagesModal from '~/components/OrphanedImagesModal';
@@ -264,6 +305,17 @@ export const loader = async ({
   // Staff asked for a preview but no branch exists → render main with a notice.
   const previewMissing = Boolean(canEdit && wantsPreview && !previewStatus?.exists);
 
+  // ── Live editing ───────────────────────────────────────────────────────────
+  // A flagged classroom's editors edit the LIVE deck on the collab server
+  // instead of reading and saving deck.json. Not while showing a preview.
+  const liveEnv = canEdit && userId ? liveEditingEnv(slide.classroom) : null;
+  const collab =
+    liveEnv && userId && !previewActive
+      ? await deckCollabData({ env: liveEnv, slideId, userId })
+      : null;
+  // The header's "saved to GitHub" line until the room's own messages arrive.
+  const liveCheckpoint = collab ? await readDeckCheckpoint(slideId).catch(() => null) : null;
+
   // The deck VIEWER is the one EDITING surface, so it is the only one that can
   // mint the short-lived `edit` bucket: staff, and a staff read of the preview
   // BRANCH, get it. Every other reader here takes the DECK's own visibility —
@@ -313,7 +365,8 @@ export const loader = async ({
   let contentSha: string | null = null;
   let shaSource: DeckShaSource = 'legacy_html';
 
-  if (mode === 'edit') {
+  // Live editing renders the editor from the live deck — no edit-mode read.
+  if (mode === 'edit' && !collab) {
     // Phase 4c: deck.json-first read for edit mode. skipCache is REQUIRED —
     // this read both renders the editor and seeds the conflict token; the
     // per-process 60s cache has no cross-instance invalidation, so a cached
@@ -415,9 +468,15 @@ export const loader = async ({
   // Sandpack, layout. API-path only: the CDN serves main, so students can
   // never reach a preview through it. Notes rules below are unchanged (the
   // canViewSpeakerNotes strip applies to this content too).
+  // Live classrooms review a preview as the rendered deck with the slides it
+  // changes (against where it branched) outlined — no diff.
+  let previewChangedIds: string[] | null = null;
   if (previewActive && !contentResult) {
     try {
       const loaded = await loadDeck(slide, { ref: previewBranch, skipCache: true });
+      if (liveEnv) {
+        previewChangedIds = await previewChangedSlides({ slide, preview: loaded.deck });
+      }
       const themeUrls = await resolveDeliveryThemeUrls(loaded.deck, gitOrgLogin, repo, deliveryCtx);
       contentResult = {
         content: generateDeckHtml(loaded.deck, {
@@ -591,6 +650,11 @@ export const loader = async ({
     // Post-accept/discard notice (staff only; null otherwise)
     notice,
     noticeAutoMerged,
+    // Live editing (flagged classroom + edit access); null keeps the git editor.
+    collab,
+    liveCheckpoint,
+    // Live classrooms: slides the pending preview changes (outlined in the preview view).
+    previewChangedIds,
     // Preview state is staff-only; students/anonymous always get null.
     preview: canEdit
       ? {
@@ -726,7 +790,7 @@ export const action = async ({
   }
 
   // Authorization: require edit permission (owner/teacher/assistant with team_edit)
-  await assertSlideAccess({
+  const { userId: actorId } = await assertSlideAccess({
     request,
     slideId,
     slide,
@@ -779,6 +843,45 @@ export const action = async ({
     return data({ error: deckOnlyMessage(slide.kind, 'edit here') }, { status: 409 });
   }
 
+  // Live editing: the deck lives on the collab server and only the git worker
+  // writes deck.json. The ONE predicate the loader used to open it live.
+  const liveEnv = liveEditingEnv(slide.classroom);
+  const liveActor = async () => ({
+    userId: actorId ?? 'unknown',
+    name: actorId ? await readEditorName(actorId) : 'Teacher',
+  });
+
+  if (intent === 'collab-save-version') {
+    if (!liveEnv) return data({ error: 'This deck is not edited live.' }, { status: 409 });
+    try {
+      const rawNote = formData.get('message');
+      const note =
+        typeof rawNote === 'string' ? rawNote.trim().slice(0, VERSION_NOTE_MAX) : undefined;
+      const rawId = formData.get('requestId');
+      const requestId =
+        typeof rawId === 'string' && DECK_CHECKPOINT_REQUEST_ID.test(rawId) ? rawId : undefined;
+      const reply = await requestDeckCheckpoint(
+        liveEnv,
+        slideId,
+        await liveActor(),
+        note || undefined,
+        requestId
+      );
+      return {
+        intent: 'collab-save-version' as const,
+        success: true,
+        // Nothing was unpushed: no run, no broadcast — "Already saved." now.
+        ...(reply?.alreadySaved ? { alreadySaved: true as const } : {}),
+      };
+    } catch (error: unknown) {
+      console.error('[slides] Save version failed:', error);
+      return data(
+        { intent: 'collab-save-version' as const, error: "Couldn't save a version. Try again." },
+        { status: error instanceof CollabRequestError && error.status ? error.status : 502 }
+      );
+    }
+  }
+
   // Get git organization for GitHub API and content URLs
   const gitOrganization = slide.classroom?.git_organization;
   if (!gitOrganization?.login) {
@@ -790,6 +893,42 @@ export const action = async ({
   // Content repo is STORED and user-editable — never re-derived from the namespace.
   const repo = slide.classroom.content_repo;
   const filePath = `${slide.content_path}/index.html`;
+
+  // Live editing: images in the deck's folder that the LIVE deck no longer
+  // uses (asked after Done; git saves find them in their own response). The
+  // same list and the same delete-images intent as a git save's prompt.
+  if (intent === 'collab-orphaned-images') {
+    if (!liveEnv) return data({ error: 'This deck is not edited live.' }, { status: 409 });
+    try {
+      const snapshot = await fetchLiveDeck(liveEnv, slideId);
+      // Unused by the live deck AND by what git still serves until the next
+      // checkpoint (students, the presenter): an image just removed live is
+      // offered once git has caught up, never while git still shows it.
+      const inGit = await ContentService.getContent({
+        orgLogin: gitOrgLogin,
+        repo,
+        path: filePath,
+        skipCache: true,
+      }).catch(() => null);
+      const htmlContent =
+        generateDeckHtml(snapshot.content, { title: slide.title, includeNotes: true }) +
+        '\n' +
+        (inGit?.content ?? '');
+      const orphanedImages = (
+        await ContentService.findOrphanedImages({
+          orgLogin: gitOrgLogin,
+          repo,
+          imagesFolder: `${slide.content_path}/images`,
+          htmlContent,
+        })
+      ).map(image => ({ ...image, url: contentProxyUrl(gitOrgLogin, repo, image.path) }));
+      return { intent: 'collab-orphaned-images' as const, orphanedImages };
+    } catch (err: unknown) {
+      // Never in the way of editing: no prompt this time.
+      console.error('Failed to detect orphaned images (live):', err);
+      return { intent: 'collab-orphaned-images' as const, orphanedImages: [] };
+    }
+  }
 
   // ─────────────────────────────────────────────────────────────────────────
   // LAZY-LOAD HANDLERS: Load themes/snippets on-demand to reduce API calls
@@ -1540,6 +1679,48 @@ export const action = async ({
   // regenerates the index.html artifact from the merged deck.json; discard
   // deletes the branch without touching main.
 
+  if (intent === 'preview-accept' && liveEnv) {
+    // Live deck: the collab server merges the preview into the live document
+    // (people editing other slides keep their work); the branch goes after.
+    let liveResolutions: MergeResolution[] | null = null;
+    const rawLiveResolutions = formData.get('resolutions');
+    if (typeof rawLiveResolutions === 'string' && rawLiveResolutions) {
+      try {
+        const parsed = JSON.parse(rawLiveResolutions);
+        if (!Array.isArray(parsed) || parsed.length === 0) throw new Error('empty');
+        liveResolutions = parsed;
+      } catch {
+        return data(
+          { error: 'Malformed resolutions payload — expected [{id, choose}]' },
+          { status: 400 }
+        );
+      }
+    }
+    try {
+      const status = await getDeckPreviewStatus(slide);
+      if (!status.exists) return { error: 'No pending preview to accept' };
+      const result = await acceptDeckPreviewLive({
+        env: liveEnv,
+        slide,
+        actor: await liveActor(),
+        resolutions: liveResolutions,
+      });
+      if (!result.ok && 'conflicts' in result) {
+        // The existing chooser renders these and re-submits with resolutions.
+        const { units, orderConflict } = splitDeckConflicts(result.conflicts);
+        return data(
+          { conflict: true, units, orderConflict, unitPreviews: null, autoMerged: 0 },
+          { status: 409 }
+        );
+      }
+      if (!result.ok) return data({ error: result.error }, { status: result.status });
+      return redirect(`/${slideId}?notice=preview-accepted`);
+    } catch (error: unknown) {
+      console.error('Failed to accept preview into the live deck:', error);
+      return data({ error: "Couldn't merge the preview. Try again." }, { status: 502 });
+    }
+  }
+
   if (intent === 'preview-accept') {
     // Chooser resolutions (Phase 7): when present, this accept is a conflict
     // resolution pass — one {id, choose: 'ours'|'theirs'} per currently
@@ -1637,6 +1818,7 @@ export const action = async ({
   if (intent === 'preview-discard') {
     try {
       await discardDeckPreview(slide);
+      if (liveEnv) await notifyPreviewChanged(liveEnv, slideId);
       return redirect(`/${slideId}?notice=preview-discarded`);
     } catch (error: unknown) {
       console.error('Failed to discard preview:', error);
@@ -1645,6 +1827,16 @@ export const action = async ({
   }
 
   // ── Save paths ─────────────────────────────────────────────────────────────
+  // A live deck is never saved from here: only the git worker writes its
+  // deck.json. Every intent a live deck uses has returned above, so anything
+  // else (a stale editor tab's save, an unknown intent) stops here.
+  if (liveEnv) {
+    return data(
+      { error: 'This deck is edited live now. Reload the page to keep editing.', live: true },
+      { status: 400 }
+    );
+  }
+
   // Conflict token echoed back by the client (loader / fetch-latest / prior save).
   const expectedSha = (formData.get('content_sha') as string | null) || undefined;
   const shaSource: DeckShaSource = formData.get('sha_source') === 'deck' ? 'deck' : 'legacy_html';
@@ -2019,6 +2211,21 @@ export const action = async ({
   }
 };
 
+/** How long Edit waits for the live deck before offering to try again. */
+const LIVE_CONNECT_TIMEOUT_MS = 10_000;
+/** How long Done waits for unwritten live edits before asking. */
+const DONE_WAIT_MS = 5_000;
+/** View mode after Done re-renders remote edits at most this often. */
+const VIEW_REFRESH_MS = 2_000;
+/** How long Present and Save version wait for local live edits to reach the server. */
+const PRESENT_LOCAL_WAIT_MS = 3_000;
+/**
+ * Present goes ahead after this with no answer from the save at all: past the
+ * local wait (3 s) plus the present action's own budget
+ * (PRESENT_SAVE_TIMEOUT_MS, 20 s) plus a margin for the request itself.
+ */
+const PRESENT_GIVE_UP_MS = 30_000;
+
 export default function SlideViewer() {
   const toast = useToast();
   const {
@@ -2045,7 +2252,14 @@ export default function SlideViewer() {
     preview,
     notice,
     noticeAutoMerged,
+    collab,
+    liveCheckpoint,
+    previewChangedIds,
   } = useLoaderData<typeof loader>();
+  // Live editing: the deck is edited on the collab server, slide by slide.
+  // The git save machinery below stays exactly as it was for every other
+  // classroom; in live mode it is never reached.
+  const collabMode = isCollabMode(collab);
   // Preview mode is strictly read-only — editing chrome is suppressed while
   // rendering the pending preview branch (plan §3b).
   const previewActive = Boolean(preview?.active);
@@ -2191,6 +2405,60 @@ export default function SlideViewer() {
   const [revealInstance, setRevealInstance] = useState<RevealApi | null>(null);
   const [currentSlideTheme, setCurrentSlideTheme] = useState('white'); // For Sandpack auto-theme
 
+  // ── Live editing state ──────────────────────────────────────────────────
+  // The room opens the first time the person starts editing and stays open
+  // (presence, and view mode then shows the live deck — kept current with
+  // everyone's edits, see `collabViewContent`).
+  const [collabActive, setCollabActive] = useState(false);
+  const [wantsLiveEdit, setWantsLiveEdit] = useState(false);
+  const [collabInitialContent, setCollabInitialContent] = useState<string | null>(null);
+  const [collabViewContent, setCollabViewContent] = useState<string | null>(null);
+  const [staleReloadAttempted, setStaleReloadAttempted] = useState(false);
+  // The room never synced in time: offer to try again (never read-only for good).
+  const [liveTimedOut, setLiveTimedOut] = useState(false);
+  const versionFetcher = useFetcher<{
+    intent?: string;
+    success?: boolean;
+    error?: string;
+    alreadySaved?: boolean;
+  }>();
+  const toastRef = useRef(toast);
+  toastRef.current = toast;
+  const collabNotify = useCallback((message: string) => toastRef.current.info(message), []);
+  const {
+    session: collabSession,
+    bridge,
+    state: collabState,
+    bridgeState,
+  } = useDeckCollab({
+    collab: collabMode ? collab : null,
+    active: collabActive,
+    slideId: slide.id,
+    mediaScope: { host: mediaDeliveryHost, classroomId: slide.classroom_id },
+    notify: collabNotify,
+  });
+  const bridgeRef = useRef(bridge);
+  bridgeRef.current = bridge;
+  const sessionRef = useRef(collabSession);
+  sessionRef.current = collabSession;
+  const isEditingRef = useRef(false);
+  // The bridge whose initialDocument() the live editor was rendered from: a
+  // new room (a new bridge) while editing re-renders the editor from it.
+  const editorBridgeRef = useRef<DeckBridge | null>(null);
+  const [collabEditorGen, setCollabEditorGen] = useState(0);
+  // Done while edits still wait to be written (a claim not yet confirmed,
+  // offline): 'finishing' waits for them, 'ask' offers to leave anyway.
+  const [doneState, setDoneState] = useState<'idle' | 'finishing' | 'ask'>('idle');
+  // Something was edited this session (Done then looks for unused images).
+  const liveEditedRef = useRef(false);
+  const [orphanCheckDue, setOrphanCheckDue] = useState(false);
+  const orphanFetcher = useFetcher<{
+    intent?: string;
+    orphanedImages?: Array<{ path: string; name: string; url: string }>;
+  }>();
+  const presentFetcher = useFetcher<{ outcome?: string }>();
+  const [presentPending, setPresentPending] = useState(false);
+
   // Lazy-load themes when entering edit mode
   useEffect(() => {
     if (isEditing && !themesLoaded && themeFetcher.state === 'idle') {
@@ -2258,6 +2526,19 @@ export default function SlideViewer() {
   // and showed "No speaker notes" on every one.
   const handleRevealReady = useCallback((deck: RevealApi | null) => {
     setRevealInstance(deck);
+    // Live editing: bind the bridge to the editor Reveal just built.
+    const liveBridge = bridgeRef.current;
+    if (!liveBridge) return;
+    if (deck && isEditingRef.current) {
+      // Only the bridge this editor's document came from (its baselines are
+      // that document); a newer one re-renders the editor first.
+      if (editorBridgeRef.current !== liveBridge) return;
+      liveBridge.attach(deck, {
+        setThemes: themes => revealRef.current?.setThemes(themes),
+      });
+    } else {
+      liveBridge.detach();
+    }
   }, []);
   // Sandpack auto-theme follows the theme RevealSlides extracts on each content
   // parse — including a theme-only change that does not rebuild Reveal.
@@ -2325,11 +2606,16 @@ export default function SlideViewer() {
   useEffect(() => {
     if (autoEdit && effectiveCanEdit && !autoEditTriggered && !isEditing) {
       setAutoEditTriggered(true);
+      if (collabMode) {
+        setCollabActive(true);
+        setWantsLiveEdit(true);
+        return;
+      }
       // Trigger the same flow as clicking "Edit" button - fetch latest from API
       setIsLoadingLatest(true);
       fetcher.submit({ intent: 'fetch-latest' }, { method: 'post' });
     }
-  }, [autoEdit, effectiveCanEdit, autoEditTriggered, isEditing, fetcher]);
+  }, [autoEdit, effectiveCanEdit, autoEditTriggered, isEditing, fetcher, collabMode]);
 
   const isSaving = fetcher.state === 'submitting' && !fetcher.formData?.get('intent');
   const isFetchingLatest =
@@ -2721,7 +3007,14 @@ export default function SlideViewer() {
   // Handle content changes from the editor
   // Also triggers Reveal.js layout recalculation to maintain vertical centering
   const handleContentChange = useCallback(() => {
-    setHasChanges(true);
+    // Live editing: the bridge writes the change into the live deck; nothing
+    // is "unsaved".
+    if (bridgeRef.current && isEditingRef.current) {
+      liveEditedRef.current = true;
+      bridgeRef.current.notifyLocalChange();
+    } else {
+      setHasChanges(true);
+    }
 
     // Recalculate Reveal.js layout to update vertical centering
     // Use requestAnimationFrame to batch multiple rapid changes
@@ -2736,9 +3029,212 @@ export default function SlideViewer() {
 
   // Enter edit mode - first fetch latest content from GitHub API
   const handleStartEditing = useCallback(() => {
+    if (collabMode) {
+      setLiveTimedOut(false);
+      setCollabActive(true);
+      setWantsLiveEdit(true);
+      return;
+    }
     setIsLoadingLatest(true);
     fetcher.submit({ intent: 'fetch-latest' }, { method: 'post' });
-  }, [fetcher]);
+  }, [fetcher, collabMode]);
+
+  // Live editing: once the room has synced, render the editor from the live
+  // deck (media resolved first, so videos play on the first render).
+  useEffect(() => {
+    if (!wantsLiveEdit || !bridge || !collabState.hasSynced || isEditing) return;
+    let cancelled = false;
+    void bridge.prepare().then(() => {
+      if (cancelled) return;
+      editorBridgeRef.current = bridge;
+      setCollabInitialContent(bridge.initialDocument());
+      liveEditedRef.current = false;
+      isEditingRef.current = true;
+      setIsEditing(true);
+      setWantsLiveEdit(false);
+      setDoneState('idle');
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [wantsLiveEdit, bridge, collabState.hasSynced, isEditing]);
+
+  // Live editing: the room changed while editing (a new epoch) — a new
+  // session and bridge. Render the editor again from the new live deck, so
+  // the new bridge attaches to a document its baselines describe.
+  useEffect(() => {
+    if (!collabMode || !isEditing || !bridge || !collabState.hasSynced) return;
+    if (editorBridgeRef.current === bridge) return;
+    let cancelled = false;
+    void bridge.prepare().then(() => {
+      if (cancelled) return;
+      editorBridgeRef.current = bridge;
+      setCollabInitialContent(bridge.initialDocument());
+      setCollabEditorGen(gen => gen + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [collabMode, isEditing, bridge, collabState.hasSynced]);
+
+  // A room that connects late clears the "couldn't connect" banner.
+  useEffect(() => {
+    if (collabState.hasSynced) setLiveTimedOut(false);
+  }, [collabState.hasSynced]);
+
+  // Live editing: a room that does not sync in time is reported, not waited on.
+  useEffect(() => {
+    if (!wantsLiveEdit || collabState.hasSynced) return;
+    const timer = setTimeout(() => {
+      setWantsLiveEdit(false);
+      setLiveTimedOut(true);
+    }, LIVE_CONNECT_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [wantsLiveEdit, collabState.hasSynced]);
+
+  // Live editing: a refused room. A stale one reloads once; otherwise editing
+  // stops and the banner says why.
+  useEffect(() => {
+    const reason = collabState.rejected;
+    if (!reason) return;
+    if (rejectionNotice(reason).action === 'reload' && collab) {
+      // Only when nothing typed here is still on its way; else the banner asks.
+      const unsent =
+        !mayAutoReloadStale(collabState.unsyncedChanges) ||
+        Boolean(bridgeRef.current?.hasPendingLocal());
+      if (!unsent && claimStaleReload(window.sessionStorage, collab.room)) {
+        window.location.reload();
+        return;
+      }
+      setStaleReloadAttempted(true);
+    }
+    if (isEditingRef.current) {
+      isEditingRef.current = false;
+      setIsEditing(false);
+    }
+    setWantsLiveEdit(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per refusal
+  }, [collabState.rejected, collab]);
+
+  // A preview appeared, changed or went away (an agent, or another editor):
+  // refresh the loader so the pending-preview banner is current. No polling.
+  const revalidator = useRevalidator();
+  useEffect(() => {
+    if (collabState.previewSeq > 0) revalidator.revalidate();
+    // Once per message.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collabState.previewSeq]);
+
+  // The deck was closed under us (live editing switched off, deck deleted).
+  useEffect(() => {
+    if (collabState.reloadRequired) window.location.reload();
+  }, [collabState.reloadRequired]);
+
+  // Live editing: leaving while edits are still on their way loses them.
+  const liveRiskRef = useRef<() => boolean>(() => false);
+  liveRiskRef.current = () =>
+    collabMode &&
+    !collabState.rejected &&
+    liveLeaveRisk({
+      editing: isEditingRef.current,
+      unsyncedChanges: collabState.unsyncedChanges,
+      status: collabState.status,
+      localPending: Boolean(bridgeRef.current?.hasPendingLocal()),
+    });
+  useEffect(() => {
+    if (!collabMode) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (!liveRiskRef.current()) return;
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [collabMode]);
+  // In-app leaves: the guard is mounted only while something could be lost
+  // (see LiveLeaveGuard — a mounted blocker meets every Reveal hash change).
+  // Edits not yet written into the doc are not state; they are at most one
+  // serialize debounce (300 ms) behind `unsyncedChanges`, and the guard
+  // re-reads the full risk when a navigation is attempted.
+  const leaveAtRisk =
+    collabMode &&
+    !collabState.rejected &&
+    liveLeaveRisk({
+      editing: isEditing,
+      unsyncedChanges: collabState.unsyncedChanges,
+      status: collabState.status,
+      localPending: false,
+    });
+  const [leaveGuardBusy, setLeaveGuardBusy] = useState(false);
+  const isLeaveRisky = useCallback(() => liveRiskRef.current(), []);
+
+  // "Version saved." only once the checkpoint run that consumed THIS request
+  // answers it (its id is in the broadcast's requestIds), or at once when
+  // nothing was unpushed. The button says "Saving version…" until then; after
+  // SAVE_VERSION_WAIT_MS with no answer, the person is told to try again.
+  const versionRequestRef = useRef<string | null>(null);
+  const [versionPending, setVersionPending] = useState(false);
+  const settleVersion = useCallback((answer: 'saved' | 'already-saved' | 'error' | 'timeout') => {
+    versionRequestRef.current = null;
+    setVersionPending(false);
+    if (answer === 'error') toastRef.current.error("Couldn't save this version to GitHub.");
+    else if (answer === 'timeout') toastRef.current.error('Version not confirmed. Try again.');
+    else toastRef.current.success(answer === 'already-saved' ? 'Already saved.' : 'Version saved.');
+  }, []);
+  useEffect(() => {
+    const data = versionFetcher.data;
+    if (!data || data.intent !== 'collab-save-version' || !versionRequestRef.current) return;
+    if (data.error) {
+      versionRequestRef.current = null;
+      setVersionPending(false);
+      toastRef.current.error(data.error);
+    } else if (data.alreadySaved) {
+      settleVersion('already-saved');
+    }
+  }, [versionFetcher.data, settleVersion]);
+  useEffect(() => {
+    const checkpoint = collabState.lastCheckpoint;
+    if (!checkpoint) return;
+    const answer = saveVersionAnswer(checkpoint, versionRequestRef.current);
+    if (answer) settleVersion(answer);
+    // Once per checkpoint message (a repeat for a settled id is a no-op).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collabState.lastCheckpoint?.seq]);
+  useEffect(() => {
+    if (!versionPending) return;
+    const timer = setTimeout(() => {
+      if (versionRequestRef.current) settleVersion('timeout');
+    }, SAVE_VERSION_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [versionPending, settleVersion]);
+
+  const handleSaveVersion = useCallback(
+    (message: string) => {
+      // Registered before sending: the answer may arrive before the reply.
+      const requestId = newSaveVersionRequestId();
+      versionRequestRef.current = requestId;
+      setVersionPending(true);
+      // The version holds what was just typed: sent first, then asked for.
+      whenLocalEditsSent(bridgeRef.current, sessionRef.current, PRESENT_LOCAL_WAIT_MS, () => {
+        if (versionRequestRef.current !== requestId) return;
+        versionFetcher.submit(
+          { intent: 'collab-save-version', requestId, ...(message ? { message } : {}) },
+          { method: 'post' }
+        );
+      });
+    },
+    [versionFetcher]
+  );
+
+  // Live editing: a slide someone else holds is read-only from the first frame.
+  const handleSectionEditable = useCallback(
+    (section: Element) => bridgeRef.current?.isEditableSection(section) ?? true,
+    []
+  );
+
+  const handleTakeOver = useCallback((slideId: string) => {
+    bridgeRef.current?.takeOver(slideId);
+  }, []);
 
   // Build the save request from the current editor content. Diff-at-save:
   // when a baseline snapshot matches the conflict token, the DOM is diffed
@@ -2807,6 +3303,11 @@ export default function SlideViewer() {
   // operations — uploads / orphan cleanup). Same saving-hold, but success stays
   // in edit (exitAfterSave=false).
   const handleSaveContent = useCallback(() => {
+    // Live editing: there is no save; the change is already in the live deck.
+    if (bridgeRef.current && isEditingRef.current) {
+      bridgeRef.current.notifyLocalChange();
+      return;
+    }
     const content = revealRef.current?.getCurrentContent();
     if (!content) return;
 
@@ -2874,12 +3375,155 @@ export default function SlideViewer() {
     [fetcher, contentToken, isEditing, saveMergeReport]
   );
 
+  // Live editing: leave the editor. Everything written is in the live deck;
+  // view mode shows it (and keeps showing everyone's edits).
+  const finishLiveDone = useCallback(() => {
+    const liveBridge = bridgeRef.current;
+    if (liveBridge && isEditingRef.current) {
+      liveBridge.flushLocal();
+      // A room that has not synced yet (a new one, mid-switch) has no deck to
+      // show: view mode falls back to the loader's copy.
+      const synced = Boolean(sessionRef.current?.getState().hasSynced);
+      setCollabViewContent(synced ? liveBridge.currentDocument() : null);
+    }
+    if (liveEditedRef.current) setOrphanCheckDue(true);
+    liveEditedRef.current = false;
+    setDoneState('idle');
+    isEditingRef.current = false;
+    setIsEditing(false);
+    setHasChanges(false);
+  }, []);
+
   // Exit editing mode (discards unsaved changes)
   const handleDoneEditing = useCallback(() => {
+    if (bridgeRef.current && isEditingRef.current) {
+      // Live editing: edits not written yet (a claim the server has not
+      // confirmed, offline) live only in this editor. Done waits for them
+      // instead of dropping them; see the effect below.
+      bridgeRef.current.flushLocal();
+      if (bridgeRef.current.hasPendingLocal()) {
+        setDoneState('finishing');
+        return;
+      }
+      finishLiveDone();
+      return;
+    }
+    isEditingRef.current = false;
     setIsEditing(false);
     setHasChanges(false);
     // Keep editableContent for next edit session (it's the latest we know of)
-  }, []);
+  }, [finishLiveDone]);
+
+  // Done is waiting: finish as soon as the edits are written; after a few
+  // seconds, ask (stay, or leave and lose them). Still finishes on its own
+  // if they get written while the question is open.
+  useEffect(() => {
+    if (doneState === 'idle') return;
+    const startedAt = Date.now();
+    const timer = setInterval(() => {
+      const liveBridge = bridgeRef.current;
+      if (!liveBridge || !isEditingRef.current) {
+        setDoneState('idle');
+        return;
+      }
+      liveBridge.flushLocal();
+      if (!liveBridge.hasPendingLocal()) {
+        finishLiveDone();
+        return;
+      }
+      if (doneState === 'finishing' && Date.now() - startedAt > DONE_WAIT_MS) setDoneState('ask');
+    }, 250);
+    return () => clearInterval(timer);
+  }, [doneState, finishLiveDone]);
+
+  // After Done: images the live deck no longer uses (once this person's
+  // edits have reached the server, so the check reads them).
+  useEffect(() => {
+    if (!orphanCheckDue || !collabMode || collabState.unsyncedChanges > 0) return;
+    if (orphanFetcher.state !== 'idle') return;
+    setOrphanCheckDue(false);
+    orphanFetcher.submit({ intent: 'collab-orphaned-images' }, { method: 'post' });
+  }, [orphanCheckDue, collabMode, collabState.unsyncedChanges, orphanFetcher]);
+  useEffect(() => {
+    const found = orphanFetcher.data;
+    if (found?.intent !== 'collab-orphaned-images' || !found.orphanedImages?.length) return;
+    setOrphanedImages(found.orphanedImages);
+    setShowOrphanedModal(true);
+  }, [orphanFetcher.data]);
+
+  // View mode after Done, room still open: keep it current with everyone's
+  // edits (re-rendered at most every VIEW_REFRESH_MS; Reveal's hash keeps the
+  // slide). Only when the deck actually changed.
+  useEffect(() => {
+    if (!collabMode || isEditing || !bridge || !collabSession || collabViewContent === null) return;
+    if (!collabState.hasSynced) return;
+    const doc = collabSession.doc;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const refresh = () => {
+      timer = null;
+      const next = bridge.currentDocument();
+      setCollabViewContent(current => (current === next ? current : next));
+    };
+    const onUpdate = () => {
+      if (!timer) timer = setTimeout(refresh, VIEW_REFRESH_MS);
+    };
+    doc.on('update', onUpdate);
+    refresh(); // anything that landed between Done and now
+    return () => {
+      doc.off('update', onUpdate);
+      if (timer) clearTimeout(timer);
+    };
+    // collabViewContent only gates (null → not after a Done); not a trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    collabMode,
+    isEditing,
+    bridge,
+    collabSession,
+    collabState.hasSynced,
+    collabViewContent === null,
+  ]);
+
+  // Save before presenting (live): local edits out first, then the server
+  // checkpoints the deck and the button waits for it (bounded), then present.
+  const handlePresentClick = useCallback(
+    (event: React.MouseEvent<HTMLAnchorElement>) => {
+      if (!collabMode) return; // git decks: the plain link
+      // A new tab (⌘/Ctrl/middle click) keeps the plain link: the presenter's
+      // own load saves first (bounded) on the server.
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
+      event.preventDefault();
+      if (presentPending) return;
+      setPresentPending(true);
+      whenLocalEditsSent(bridgeRef.current, sessionRef.current, PRESENT_LOCAL_WAIT_MS, () =>
+        presentFetcher.submit({}, { method: 'post', action: `/${slide.id}/present` })
+      );
+    },
+    [collabMode, presentPending, presentFetcher, slide.id]
+  );
+  // The answer is in as soon as there is data (the revalidation of this page
+  // that follows is not waited for).
+  useEffect(() => {
+    if (!presentPending || !presentFetcher.data) return;
+    // Not saved in time: the presenter shows what git has, with a notice.
+    window.location.href = presentUrlAfterSave(slide.id, presentFetcher.data.outcome);
+  }, [presentPending, presentFetcher.data, slide.id]);
+  // Never stuck saving: no answer at all (a failed request) presents anyway;
+  // coming back to this page (back button) starts fresh.
+  useEffect(() => {
+    if (!presentPending) return;
+    const timer = setTimeout(() => {
+      window.location.href = presentUrlAfterSave(slide.id, undefined);
+    }, PRESENT_GIVE_UP_MS);
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) setPresentPending(false);
+    };
+    window.addEventListener('pageshow', onPageShow);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('pageshow', onPageShow);
+    };
+  }, [presentPending, slide.id]);
 
   // Delete selected orphaned images
   const handleDeleteOrphanedImages = useCallback(
@@ -2904,6 +3548,8 @@ export default function SlideViewer() {
 
   // Open slide overview
   const handleOpenOverview = useCallback(() => {
+    // Live editing: the overview shows every slide, so bring them all up to date.
+    bridgeRef.current?.renderDeferred();
     setShowOverview(true);
   }, []);
 
@@ -2926,12 +3572,118 @@ export default function SlideViewer() {
   //   (see `viewFromLoader`) — same document, but with its images resolved
   //   through the delivery layer. Before that, and on a page that has not
   //   saved anything, the pre-existing order stands.
-  const displayContent = displayDeckContent({
-    isEditing,
-    viewFromLoader,
-    editableContent,
-    loaderContent: slideContent,
-  });
+  const displayContent =
+    collabMode && isEditing
+      ? collabInitialContent
+      : collabMode && collabViewContent
+        ? collabViewContent
+        : displayDeckContent({
+            isEditing,
+            viewFromLoader,
+            editableContent,
+            loaderContent: slideContent,
+          });
+
+  // Live editing: notes are the slide's Y.Text, co-edited character by character.
+  const collabNotes = useMemo<CollabNotesBinding | null>(
+    () =>
+      bridge && collabMode
+        ? {
+            textFor: id => bridge.notesText(id),
+            onEmptied: id => bridge.clearNotesFlag(id),
+            origin: BRIDGE_ORIGIN,
+            ensureId: el => bridge.ensureSlideId(el),
+            history: (id, kind) => bridge.notesHistory(id, kind),
+          }
+        : null,
+    [bridge, collabMode]
+  );
+
+  const peers = collabState.peers;
+  const currentLiveSlide = bridgeState.currentSlideId;
+  const liveOverlayLock = currentLiveSlide ? (bridgeState.locks[currentLiveSlide] ?? null) : null;
+  const peersOnSlide = currentLiveSlide
+    ? peers.filter(peer => !peer.self && peer.slideId === currentLiveSlide)
+    : [];
+  // Slides an agent just changed (the latest batch per slide), while they show.
+  const agentTouchBySlide = useMemo(() => {
+    const out = new Map<string, SlideAgentTouch>();
+    for (const touch of collabState.agentTouches) {
+      out.set(touch.id, { name: touch.name, color: touch.color, batch: touch.batch });
+    }
+    return out;
+  }, [collabState.agentTouches]);
+  const liveAgentTouch = currentLiveSlide
+    ? (agentTouchBySlide.get(currentLiveSlide) ?? null)
+    : null;
+  const collabBadges = useCallback(
+    (id: string | null) => {
+      if (!id) return null;
+      const lock = bridgeState.locks[id];
+      const here = peers.filter(peer => !peer.self && peer.slideId === id);
+      const agentTouch = agentTouchBySlide.get(id) ?? null;
+      if (!lock && here.length === 0 && !agentTouch) return null;
+      return {
+        lock: lock
+          ? { name: lock.holder.name, color: lock.holder.color, mine: lock.state === 'mine' }
+          : null,
+        peers: here.map(peer => ({
+          key: peer.key,
+          name: peer.name,
+          color: peer.color,
+          agent: peer.agent,
+          ...(peer.agentTag ? { agentTag: peer.agentTag } : {}),
+        })),
+        agentTouch,
+      };
+    },
+    [bridgeState.locks, peers, agentTouchBySlide]
+  );
+  const syncStatus = deriveSyncStatus(collabState);
+
+  // Live editing: the navbar carries more (presence, status, Save version)
+  // and its toolbar can wrap, so measure it — and the pending-preview banner
+  // pinned under it in edit mode — and let the slide area, the properties
+  // panel and the banner sit below the real heights instead of a fixed 56 px.
+  const pendingBannerShown = Boolean(
+    collabMode && isEditing && preview && !preview.active && preview.exists
+  );
+  useEffect(() => {
+    if (!collabMode || typeof ResizeObserver === 'undefined') return;
+    const rootStyle = document.documentElement.style;
+    const nav = document.querySelector('.slides-navbar');
+    const banner = pendingBannerShown
+      ? document.querySelector('[data-testid="pending-preview-banner"]')
+      : null;
+    const measure = () => {
+      if (nav) rootStyle.setProperty('--slides-nav-h', `${nav.getBoundingClientRect().height}px`);
+      rootStyle.setProperty(
+        '--slides-banner-h',
+        banner ? `${banner.getBoundingClientRect().height}px` : '0px'
+      );
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    if (nav) observer.observe(nav);
+    if (banner) observer.observe(banner);
+    return () => {
+      observer.disconnect();
+      rootStyle.removeProperty('--slides-nav-h');
+      rootStyle.removeProperty('--slides-banner-h');
+    };
+  }, [collabMode, pendingBannerShown]);
+
+  // A live preview: outline the slides the pending preview changes.
+  useEffect(() => {
+    if (!revealInstance || !preview?.active || !previewChangedIds?.length) return;
+    const slidesEl = revealInstance.getSlidesElement();
+    if (!slidesEl) return;
+    for (const id of previewChangedIds) {
+      slidesEl
+        .querySelector(`section[data-cm-id="${CSS.escape(id)}"]`)
+        ?.classList.add(PREVIEW_CHANGED_CLASS);
+    }
+  }, [revealInstance, preview?.active, previewChangedIds]);
 
   // Save a new snippet
   const handleSaveSnippet = useCallback(
@@ -3025,7 +3777,7 @@ export default function SlideViewer() {
               </svg>
             </a>
             <h1 className="text-lg font-semibold text-gray-900 dark:text-white truncate">
-              {slide.title}
+              {collabState.liveTitle ?? slide.title}
             </h1>
           </div>
 
@@ -3037,14 +3789,46 @@ export default function SlideViewer() {
                 onContentChange={handleContentChange}
                 onImageUpload={handleImageUpload}
                 onOpenOverview={handleOpenOverview}
+                currentSlideHolder={
+                  collabMode && liveOverlayLock && liveOverlayLock.state !== 'mine'
+                    ? liveOverlayLock.holder.name
+                    : null
+                }
               />
             </div>
           )}
 
           {/* Right section: status + actions */}
           <div className="flex items-center gap-2 justify-end">
+            {/* Live editing: who is here, sync status, Save version */}
+            {collabMode && collabActive && (
+              <CollabHeaderControls
+                peers={peers}
+                syncStatus={syncStatus}
+                onSaveVersion={
+                  collabState.hasSynced && !collabState.rejected ? handleSaveVersion : null
+                }
+                savingVersion={versionFetcher.state !== 'idle' || versionPending}
+                checkpoint={collabState.lastCheckpoint ?? liveCheckpoint}
+                // Changed since: what this session saw, else what the loader knew.
+                editsSince={
+                  collabState.editedSinceCheckpoint ||
+                  (!collabState.lastCheckpoint && Boolean(liveCheckpoint?.editsSince))
+                }
+              />
+            )}
+            {collabMode && isEditing && (
+              <button
+                type="button"
+                onClick={handleDoneEditing}
+                disabled={doneState !== 'idle'}
+                className="px-3 py-1.5 text-sm bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-60"
+              >
+                {doneState === 'idle' ? 'Done' : 'Finishing…'}
+              </button>
+            )}
             {/* Status badges */}
-            {isEditing && (
+            {!collabMode && isEditing && (
               <span className="px-2 py-0.5 text-xs bg-yellow-100 text-yellow-800 rounded-full">
                 {savingInFlight ? 'Saving…' : hasChanges ? 'Unsaved' : 'Editing'}
               </span>
@@ -3066,6 +3850,7 @@ export default function SlideViewer() {
             {/* Action buttons */}
             {canEdit &&
               isEditing &&
+              !collabMode &&
               (hasChanges ? (
                 <Popconfirm
                   title="Discard changes?"
@@ -3110,7 +3895,7 @@ export default function SlideViewer() {
                   </button>
                 </Tooltip>
               ))}
-            {canEdit && isEditing && (
+            {canEdit && isEditing && !collabMode && (
               <Tooltip title={isSaving ? 'Saving...' : 'Save changes'}>
                 <button
                   onClick={handleSave}
@@ -3128,21 +3913,24 @@ export default function SlideViewer() {
                 </button>
               </Tooltip>
             )}
-            {effectiveCanEdit && !isEditing && (
+            {effectiveCanEdit && !isEditing && !(collabMode && collabState.rejected) && (
               <button
                 onClick={handleStartEditing}
-                disabled={isLoadingLatest || isFetchingLatest}
+                disabled={isLoadingLatest || isFetchingLatest || wantsLiveEdit}
                 className="px-3 py-1.5 text-sm bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600"
               >
-                {isLoadingLatest || isFetchingLatest ? 'Loading...' : 'Edit'}
+                {isLoadingLatest || isFetchingLatest || wantsLiveEdit ? 'Loading...' : 'Edit'}
               </button>
             )}
             {/* Present button - only shown if user can present (staff only) */}
             {canPresent && (
-              <Tooltip title="Present slideshow">
+              <Tooltip title={presentPending ? 'Saving the latest edits…' : 'Present slideshow'}>
                 <a
                   href={`/${slide.id}/present`}
-                  className="p-2 bg-black text-white rounded-md hover:bg-gray-800 flex items-center justify-center"
+                  onClick={handlePresentClick}
+                  aria-busy={presentPending || undefined}
+                  aria-disabled={presentPending || undefined}
+                  className={`p-2 bg-black text-white rounded-md hover:bg-gray-800 flex items-center justify-center ${presentPending ? 'opacity-70 cursor-progress' : ''}`}
                 >
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path
@@ -3158,10 +3946,35 @@ export default function SlideViewer() {
           </div>
         </nav>
 
+        {/* Live editing: the room was refused */}
+        {collabMode && (collabState.rejected || liveTimedOut) && (
+          <CollabRejectedBanner
+            reason={collabState.rejected ?? 'unavailable'}
+            reloadAttempted={staleReloadAttempted}
+          />
+        )}
+
+        {/* Live editing: Done while edits still wait to be written */}
+        {doneState === 'ask' && (
+          <LiveLeaveDialog onStay={() => setDoneState('idle')} onLeave={finishLiveDone} />
+        )}
+
+        {/* Live editing: in-app navigation while edits are still syncing */}
+        {(leaveAtRisk || leaveGuardBusy) && (
+          <LiveLeaveGuard isRisky={isLeaveRisky} onBusyChange={setLeaveGuardBusy} />
+        )}
+
         {/* Preview-branch chrome (staff only — `preview` is null otherwise) */}
-        {preview?.active && <PreviewBar preview={preview} />}
+        {preview?.active && (
+          <PreviewBar
+            preview={previewChangedIds ? { ...preview, diffUrl: null } : preview}
+            changedSlides={previewChangedIds?.length ?? null}
+          />
+        )}
         {preview?.missing && <NoPreviewNotice />}
-        {preview && !preview.active && preview.exists && !isEditing && (
+        {/* Live decks keep it in edit mode too: an agent's pending preview is
+            news while you edit, not only when you stop. */}
+        {preview && !preview.active && preview.exists && (!isEditing || collabMode) && (
           <PendingPreviewBanner preview={preview} />
         )}
 
@@ -3274,7 +4087,13 @@ export default function SlideViewer() {
                   This ensures Reveal.js reinitializes with the correct content source */}
               <RevealSlides
                 ref={revealRef}
-                key={isEditing ? `editing-${editorEpoch}` : 'viewing'}
+                key={
+                  collabMode && isEditing
+                    ? `collab-editing-${collabEditorGen}`
+                    : isEditing
+                      ? `editing-${editorEpoch}`
+                      : 'viewing'
+                }
                 contentUrl={contentUrl}
                 initialContent={displayContent}
                 initialError={contentError}
@@ -3282,10 +4101,42 @@ export default function SlideViewer() {
                 isEditing={isEditing}
                 onContentChange={handleContentChange}
                 onRevealReady={handleRevealReady}
+                sectionEditable={collabMode && isEditing ? handleSectionEditable : undefined}
                 onThemeChange={handleThemeChange}
                 customThemes={customThemes}
                 sharedThemes={sharedThemes}
               />
+              {/* Live editing: what screen readers hear for read-only slides */}
+              {collabMode && isEditing && <LockDescriptions locks={bridgeState.locks} />}
+              {/* Live editing: GitHub also changed the slide being edited */}
+              {collabMode &&
+                isEditing &&
+                currentLiveSlide &&
+                bridgeState.conflicts[currentLiveSlide] && (
+                  <SlideConflictNotice
+                    notice={bridgeState.conflicts[currentLiveSlide]}
+                    theme={bridgeState.theme}
+                    onDismiss={() => bridgeRef.current?.dismissConflict(currentLiveSlide)}
+                  />
+                )}
+              {/* Live editing: lock badge and who else is on this slide */}
+              {collabMode && isEditing && (
+                <SlideCollabOverlay
+                  lock={liveOverlayLock}
+                  peersHere={peersOnSlide}
+                  agentTouch={liveAgentTouch}
+                  onTakeOver={handleTakeOver}
+                />
+              )}
+              {/* Live editing: everyone's pointer over this slide (a layer, not the deck) */}
+              {collabMode && isEditing && (
+                <LivePointers
+                  session={collabSession}
+                  reveal={revealInstance}
+                  slideId={currentLiveSlide}
+                  hidden={showOverview}
+                />
+              )}
               {/* Mount Sandpack components into .sandpack-embed elements */}
               <SandpackRenderer
                 containerSelector=".reveal .slides"
@@ -3304,6 +4155,7 @@ export default function SlideViewer() {
                 onToggle={() => setNotesCollapsed(!notesCollapsed)}
                 onContentChange={isEditing ? handleContentChange : undefined}
                 readOnly={!isEditing}
+                collabNotes={collabMode && isEditing ? collabNotes : null}
               />
             )}
           </div>
@@ -3338,6 +4190,8 @@ export default function SlideViewer() {
             onClose={handleCloseOverview}
             onContentChange={handleContentChange}
             onNavigate={handleNavigateToSlide}
+            collabBadges={collabMode && isEditing ? collabBadges : undefined}
+            refreshKey={collabMode ? bridgeState.revision : undefined}
           />
         )}
       </div>

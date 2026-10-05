@@ -44,6 +44,11 @@ describe('extensionNote', () => {
     expect(note).toEqual({ text: '+24h applied · 3h still late', tone: 'info', inWindow: false });
   });
 
+  it('past the hours bought with nothing submitted to be late by (a missing quiz): the hours only', () => {
+    const note = extensionNote({ ...base, numLateHours: 0 }, dayjs('2026-10-02T20:00:00'));
+    expect(note).toEqual({ text: '+24h applied', tone: 'info', inWindow: false });
+  });
+
   it('a late submission the hours covered: no longer late', () => {
     const note = extensionNote({
       ...base,

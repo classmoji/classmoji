@@ -15,6 +15,9 @@
  *        sl-blocks, visibility toggles, …), which re-serializes the whole
  *        declaration block in the browser's canonical form.
  *
+ * The slide-block entries at the end were captured the same way on
+ * 2026-10-04 from installed Google Chrome 154.0.8037.93 (`channel: 'chrome'`).
+ *
  * Do not hand-edit the output strings — they are evidence, not style. If a
  * future Chromium changes its serialization, re-capture rather than tweak.
  *
@@ -140,6 +143,47 @@ export const BROWSER_SERIALIZATION_FIXTURES: BrowserSerializationFixture[] = [
       '<section data-cm-id="sec00001" style="background-color:#123456" data-background-color="#ff5500"><h2>Sec</h2></section>',
     cssom:
       '<section data-cm-id="sec00001" style="background-color: rgb(18, 52, 86);" data-background-color="#ff5500"><h2>Sec</h2></section>',
+  },
+  // Slide blocks (svg / html / iframe embed). Captured 2026-10-04 from installed
+  // Google Chrome 154.0.8037.93 (Playwright 1.58.2, channel 'chrome'), same script.
+  // Chromium escapes `<` and `>` inside attribute values (cheerio / parse5 7 do
+  // not), which is why an html block's srcdoc reads back with `&lt;` everywhere;
+  // normalizeSlideHtml writes this form.
+  {
+    name: 'html-block-srcdoc',
+    input:
+      '<div class="sl-block" data-block-type="html" data-cm-block-id="b1a2c3d4" style="left: 80px; top: 60px; width: 800px; height: 500px;"><div class="sl-block-content"><iframe sandbox="allow-scripts allow-pointer-lock allow-modals allow-popups" allow="fullscreen" srcdoc="<!DOCTYPE html><canvas id=&quot;c&quot;></canvas><script>const ok = 1 < 2 && 3 > 2; document.title = \'a &amp;amp; b\';</script>" style="width: 100%; height: 100%; border: 0px;"></iframe></div></div>',
+    roundtrip:
+      '<div class="sl-block" data-block-type="html" data-cm-block-id="b1a2c3d4" style="left: 80px; top: 60px; width: 800px; height: 500px;"><div class="sl-block-content"><iframe sandbox="allow-scripts allow-pointer-lock allow-modals allow-popups" allow="fullscreen" srcdoc="&lt;!DOCTYPE html&gt;&lt;canvas id=&quot;c&quot;&gt;&lt;/canvas&gt;&lt;script&gt;const ok = 1 &lt; 2 &amp;&amp; 3 &gt; 2; document.title = \'a &amp;amp; b\';&lt;/script&gt;" style="width: 100%; height: 100%; border: 0px;"></iframe></div></div>',
+    cssom:
+      '<div class="sl-block" data-block-type="html" data-cm-block-id="b1a2c3d4" style="left: 80px; top: 60px; width: 800px; height: 500px;"><div class="sl-block-content"><iframe sandbox="allow-scripts allow-pointer-lock allow-modals allow-popups" allow="fullscreen" srcdoc="&lt;!DOCTYPE html&gt;&lt;canvas id=&quot;c&quot;&gt;&lt;/canvas&gt;&lt;script&gt;const ok = 1 &lt; 2 &amp;&amp; 3 &gt; 2; document.title = \'a &amp;amp; b\';&lt;/script&gt;" style="width: 100%; height: 100%; border: 0px;"></iframe></div></div>',
+  },
+  {
+    name: 'html-block-srcdoc-escaped',
+    input:
+      '<div class="sl-block" data-block-type="html" style="left:0px;top:0px;width:400px;height:300px"><div class="sl-block-content"><iframe sandbox="allow-scripts" srcdoc="&lt;p title=&quot;x &amp;lt; y&quot;&gt;&lt;b&gt;hi&lt;/b&gt;&amp;nbsp;there&lt;/p&gt;"></iframe></div></div>',
+    roundtrip:
+      '<div class="sl-block" data-block-type="html" style="left:0px;top:0px;width:400px;height:300px"><div class="sl-block-content"><iframe sandbox="allow-scripts" srcdoc="&lt;p title=&quot;x &amp;lt; y&quot;&gt;&lt;b&gt;hi&lt;/b&gt;&amp;nbsp;there&lt;/p&gt;"></iframe></div></div>',
+    cssom:
+      '<div class="sl-block" data-block-type="html" style="left: 0px; top: 0px; width: 400px; height: 300px;"><div class="sl-block-content"><iframe sandbox="allow-scripts" srcdoc="&lt;p title=&quot;x &amp;lt; y&quot;&gt;&lt;b&gt;hi&lt;/b&gt;&amp;nbsp;there&lt;/p&gt;"></iframe></div></div>',
+  },
+  {
+    name: 'svg-block',
+    input:
+      '<div class="sl-block" data-block-type="svg" data-cm-block-id="b2c3d4e5" style="left: 100px; top: 120px; width: 300px; height: 300px;"><div class="sl-block-content"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100%" height="100%" preserveAspectRatio="xMidYMid meet"><defs><linearGradient id="g"><stop offset="0" stop-color="#e07b39"></stop></linearGradient></defs><circle cx="50" cy="50" r="40" fill="url(#g)" style="stroke:#333"></circle><use href="#g"></use><text x="10" y="20">a &lt; b</text><animate attributeName="r" values="40;30;40" dur="2s" repeatCount="indefinite"/></svg></div></div>',
+    roundtrip:
+      '<div class="sl-block" data-block-type="svg" data-cm-block-id="b2c3d4e5" style="left: 100px; top: 120px; width: 300px; height: 300px;"><div class="sl-block-content"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100%" height="100%" preserveAspectRatio="xMidYMid meet"><defs><linearGradient id="g"><stop offset="0" stop-color="#e07b39"></stop></linearGradient></defs><circle cx="50" cy="50" r="40" fill="url(#g)" style="stroke:#333"></circle><use href="#g"></use><text x="10" y="20">a &lt; b</text><animate attributeName="r" values="40;30;40" dur="2s" repeatCount="indefinite"></animate></svg></div></div>',
+    cssom:
+      '<div class="sl-block" data-block-type="svg" data-cm-block-id="b2c3d4e5" style="left: 100px; top: 120px; width: 300px; height: 300px;"><div class="sl-block-content"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100%" height="100%" preserveAspectRatio="xMidYMid meet"><defs><linearGradient id="g"><stop offset="0" stop-color="#e07b39"></stop></linearGradient></defs><circle cx="50" cy="50" r="40" fill="url(#g)" style="stroke: rgb(51, 51, 51);"></circle><use href="#g"></use><text x="10" y="20">a &lt; b</text><animate attributeName="r" values="40;30;40" dur="2s" repeatCount="indefinite"></animate></svg></div></div>',
+  },
+  {
+    name: 'iframe-embed-data-src',
+    input:
+      '<div class="sl-block" data-block-type="iframe" style="left: 100px; top: 100px; width: 560px; height: 315px; z-index: 1;"><div class="sl-block-content"><iframe data-src="/content/org/repo/games/minions/index.html?level=1&amp;mode=a" style="width: 100%; height: 100%; border: 0px;" allowfullscreen></iframe></div></div>',
+    roundtrip:
+      '<div class="sl-block" data-block-type="iframe" style="left: 100px; top: 100px; width: 560px; height: 315px; z-index: 1;"><div class="sl-block-content"><iframe data-src="/content/org/repo/games/minions/index.html?level=1&amp;mode=a" style="width: 100%; height: 100%; border: 0px;" allowfullscreen=""></iframe></div></div>',
+    cssom:
+      '<div class="sl-block" data-block-type="iframe" style="left: 100px; top: 100px; width: 560px; height: 315px; z-index: 1;"><div class="sl-block-content"><iframe data-src="/content/org/repo/games/minions/index.html?level=1&amp;mode=a" style="width: 100%; height: 100%; border: 0px;" allowfullscreen=""></iframe></div></div>',
   },
 ];
 

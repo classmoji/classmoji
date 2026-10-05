@@ -29,6 +29,63 @@ interface StatCardProps {
   color?: string;
 }
 
+/**
+ * An attempt's late hours: a pill when late, "On time" when not, a dash where
+ * lateness does not apply (a staff preview, a quiz with no due date). With the
+ * score the attempt counts for after the late penalty, when it differs.
+ */
+const LateCell = ({ hours, counted = null }: { hours: number | null; counted?: number | null }) => {
+  if (hours === null) return <span className="text-gray-400 dark:text-gray-500">—</span>;
+  if (hours === 0) return <span className="text-xs text-gray-500 dark:text-gray-400">On time</span>;
+  const pill = (
+    <span className="inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-700 dark:text-orange-300 whitespace-nowrap">
+      {hours}h late
+    </span>
+  );
+  return counted !== null ? (
+    <Tooltip title={`Counts as ${Math.round(counted * 10) / 10}% after the late penalty`}>
+      {pill}
+    </Tooltip>
+  ) : (
+    pill
+  );
+};
+
+const round = (value: number) => Math.round(value * 10) / 10;
+
+/**
+ * A student's current score: the raw score of the attempt that counts, with
+ * what it counts for after the late penalty when that differs ("90 → 60",
+ * the gradebook's value). "Missing" for a counted 0, "Not started" for a
+ * rostered student with no attempt.
+ */
+const CurrentScoreCell = ({ student }: { student: QuizStudent }) => {
+  if (student.countsAsZero) {
+    return (
+      <span className="inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded-full bg-red-500/15 text-red-700 dark:text-red-300 whitespace-nowrap">
+        Missing
+      </span>
+    );
+  }
+  if (student.attemptCount === 0) {
+    return <span className="text-gray-400 dark:text-gray-500 italic">Not started</span>;
+  }
+  if (student.currentScore === null) {
+    return <span className="text-gray-400 dark:text-gray-500 italic">No score</span>;
+  }
+  const counted = student.countedScore;
+  return (
+    <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+      <GradeBadge grade={student.currentScore} />
+      {counted !== null && counted !== student.currentScore && (
+        <span className="text-xs font-semibold tabular-nums text-orange-700 dark:text-orange-300">
+          → {round(counted)}
+        </span>
+      )}
+    </span>
+  );
+};
+
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { ClassmojiService } = await import('@classmoji/services');
   const { addAuditLog, assertClassroomAccess } = await import('~/utils/helpers');
@@ -56,7 +113,33 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     throw new Response('Quiz not found', { status: 404 });
   }
 
-  const attempts = await ClassmojiService.quizAttempt.findByQuiz(quiz.id);
+  // Lateness is measured from the quiz's due date plus the hours each student
+  // bought, for students on the roster only: anyone else's attempts are
+  // previews and are never late. A quiz with no due date is never late. Every
+  // rostered student has a row, so staff see who has not started and who
+  // counts 0.
+  const assignment = quiz.assignment;
+  const penalty: unknown = classroom.settings?.late_penalty_points_per_hour;
+  const latePenaltyPerHour = typeof penalty === 'number' ? penalty : 0;
+  const [attempts, roster, extensionHours] = await Promise.all([
+    ClassmojiService.quizAttempt.findByQuiz(quiz.id),
+    ClassmojiService.classroomMembership.findUsersByRole(classroom.id, 'STUDENT'),
+    assignment?.student_deadline
+      ? ClassmojiService.token.netQuizExtensionHoursByStudent({
+          classroomId: classroom.id,
+          assignmentId: assignment.id,
+        })
+      : null,
+  ]);
+  const late =
+    assignment?.student_deadline && extensionHours
+      ? {
+          studentDeadline: assignment.student_deadline,
+          latePenaltyPerHour,
+          extensionHours,
+          studentIds: new Set(roster.map(student => student.id)),
+        }
+      : null;
 
   addAuditLog({
     request,
@@ -73,6 +156,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     attempts,
     gradingStrategy: quiz.grading_strategy,
     viewerId: userId,
+    late,
+    roster: { students: roster, assignment: assignment ?? null, now: new Date() },
   });
 
   return {
@@ -363,16 +448,24 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
   };
 
   const StatCard = ({ value, label, icon: Icon, color = 'blue' }: StatCardProps) => {
-    const colorClasses: Record<string, string> = {
-      blue: 'bg-blue-50 text-blue-600',
-      green: 'bg-green-50 text-green-600',
-      yellow: 'bg-yellow-50 text-yellow-600',
-      purple: 'bg-purple-50 text-purple-600',
-      red: 'bg-red-50 text-red-600',
+    const colorClasses: Record<string, { bg: string; text: string }> = {
+      blue: { bg: 'bg-blue-50 dark:bg-blue-500/10', text: 'text-blue-600 dark:text-blue-300' },
+      green: { bg: 'bg-green-50 dark:bg-green-500/10', text: 'text-green-600 dark:text-green-300' },
+      yellow: {
+        bg: 'bg-yellow-50 dark:bg-yellow-500/10',
+        text: 'text-yellow-600 dark:text-yellow-300',
+      },
+      orange: {
+        bg: 'bg-orange-50 dark:bg-orange-500/10',
+        text: 'text-orange-600 dark:text-orange-300',
+      },
+      purple: {
+        bg: 'bg-purple-50 dark:bg-purple-500/10',
+        text: 'text-purple-600 dark:text-purple-300',
+      },
+      red: { bg: 'bg-red-50 dark:bg-red-500/10', text: 'text-red-600 dark:text-red-300' },
     };
-
-    const bgColor = colorClasses[color]?.split(' ')[0] || 'bg-blue-50';
-    const textColor = colorClasses[color]?.split(' ')[1] || 'text-blue-600';
+    const { bg: bgColor, text: textColor } = colorClasses[color] ?? colorClasses.blue;
 
     return (
       <div className={`${bgColor} rounded-lg p-4 text-center`}>
@@ -382,7 +475,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
           </div>
         )}
         <div className={`text-2xl font-bold ${textColor}`}>{value}</div>
-        <div className="text-sm text-gray-600">{label}</div>
+        <div className="text-sm text-gray-600 dark:text-gray-400">{label}</div>
       </div>
     );
   };
@@ -437,10 +530,16 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
       dataIndex: 'partialCreditScore',
       render: (score: number | null) => {
         if (score === null || score === undefined) {
-          return <span className="text-gray-400 italic">Pending</span>;
+          return <span className="text-gray-400 dark:text-gray-500 italic">Pending</span>;
         }
         return <GradeBadge grade={score} />;
       },
+    },
+    {
+      title: 'Late',
+      width: 90,
+      dataIndex: 'lateHours',
+      render: (lateHours: number | null) => <LateCell hours={lateHours} />,
     },
     {
       title: () => (
@@ -452,12 +551,12 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
       dataIndex: 'firstAttemptScore',
       render: (score: number | null, record: QuizAttempt) => {
         if (record.completed_at === null) {
-          return <span className="text-gray-400 italic text-xs">-</span>;
+          return <span className="text-gray-400 dark:text-gray-500 italic text-xs">-</span>;
         }
         if (score === null || score === undefined) {
-          return <span className="text-gray-400 italic text-xs">N/A</span>;
+          return <span className="text-gray-400 dark:text-gray-500 italic text-xs">N/A</span>;
         }
-        return <span className="text-gray-600 text-xs">{score}%</span>;
+        return <span className="text-gray-600 dark:text-gray-300 text-xs">{score}%</span>;
       },
     },
     {
@@ -466,14 +565,16 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
       dataIndex: 'focusMetrics',
       render: (focusMetrics: FocusMetrics | null, record: QuizAttempt) => {
         if (!record.completed_at) {
-          return <span className="text-gray-400 italic">In progress</span>;
+          return <span className="text-gray-400 dark:text-gray-500 italic">In progress</span>;
         }
         if (!focusMetrics || !focusMetrics.totalMs) {
-          return <span className="text-gray-400 italic">N/A</span>;
+          return <span className="text-gray-400 dark:text-gray-500 italic">N/A</span>;
         }
         return (
           <Tooltip title={`Focused: ${focusMetrics.percentage}%`}>
-            <span className="text-gray-600">{formatDuration(focusMetrics.totalMs)}</span>
+            <span className="text-gray-600 dark:text-gray-300">
+              {formatDuration(focusMetrics.totalMs)}
+            </span>
           </Tooltip>
         );
       },
@@ -484,11 +585,13 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
       dataIndex: 'completed_at',
       render: (completed_at: string | null) => {
         if (!completed_at) {
-          return <span className="text-gray-400 italic">Not completed</span>;
+          return <span className="text-gray-400 dark:text-gray-500 italic">Not completed</span>;
         }
         return (
           <Tooltip title={dayjs(completed_at).format('MMM D, YYYY h:mm A')}>
-            <span className="text-gray-600">{dayjs(completed_at).fromNow()}</span>
+            <span className="text-gray-600 dark:text-gray-300">
+              {dayjs(completed_at).fromNow()}
+            </span>
           </Tooltip>
         );
       },
@@ -549,7 +652,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
     {
       title: () => (
         <Tooltip
-          title={`Formative score (with partial credit) - Based on ${getStrategyLabel()} strategy`}
+          title={`Formative score (with partial credit) of the attempt that counts - ${getStrategyLabel()} strategy. When late, the arrow shows what it counts for after the late penalty.`}
         >
           <Space>
             Current Score
@@ -557,15 +660,31 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
           </Space>
         </Tooltip>
       ),
-      width: 150,
+      width: 170,
       dataIndex: 'currentScore',
-      render: (score: number | null) => {
-        if (score === null) {
-          return <span className="text-gray-400 italic">No score</span>;
-        }
-        return <GradeBadge grade={score} />;
-      },
-      sorter: (a: QuizStudent, b: QuizStudent) => (a.currentScore || 0) - (b.currentScore || 0),
+      render: (_: number | null, record: QuizStudent) => <CurrentScoreCell student={record} />,
+      // By what counts, as the gradebook does: a counted 0 is 0, no score last.
+      sorter: (a: QuizStudent, b: QuizStudent) => (a.countedScore ?? -1) - (b.countedScore ?? -1),
+    },
+    {
+      title: () => (
+        <Tooltip title="Hours the counting attempt finished past the due date, after any hours the student bought">
+          Late
+        </Tooltip>
+      ),
+      width: 110,
+      dataIndex: 'lateHours',
+      render: (lateHours: number | null, record: QuizStudent) => (
+        <LateCell
+          hours={lateHours}
+          counted={
+            lateHours && record.countedScore !== null && record.countedScore !== record.currentScore
+              ? record.countedScore
+              : null
+          }
+        />
+      ),
+      sorter: (a: QuizStudent, b: QuizStudent) => (a.lateHours ?? -1) - (b.lateHours ?? -1),
     },
     {
       title: () => (
@@ -579,9 +698,9 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
         // For now, show N/A since we don't have this data yet in the query
         // This will be populated when quiz attempts include first_attempt_percentage
         if (score === null || score === undefined) {
-          return <span className="text-gray-400 italic text-xs">N/A</span>;
+          return <span className="text-gray-400 dark:text-gray-500 italic text-xs">N/A</span>;
         }
-        return <span className="text-gray-600">{score}%</span>;
+        return <span className="text-gray-600 dark:text-gray-300">{score}%</span>;
       },
       sorter: (a: QuizStudent, b: QuizStudent) =>
         (a.firstAttemptScore || 0) - (b.firstAttemptScore || 0),
@@ -592,7 +711,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
       dataIndex: 'bestScore',
       render: (score: number | null) => {
         if (score === null) {
-          return <span className="text-gray-400 italic">N/A</span>;
+          return <span className="text-gray-400 dark:text-gray-500 italic">N/A</span>;
         }
         return <GradeBadge grade={score} />;
       },
@@ -602,13 +721,19 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
       title: 'Latest Attempt',
       width: 180,
       dataIndex: 'latestAttempt',
-      render: (latestAttempt: string) => (
-        <Tooltip title={dayjs(latestAttempt).format('MMM D, YYYY h:mm A')}>
-          <span className="text-gray-600">{dayjs(latestAttempt).fromNow()}</span>
-        </Tooltip>
-      ),
+      render: (latestAttempt: string | null) =>
+        latestAttempt ? (
+          <Tooltip title={dayjs(latestAttempt).format('MMM D, YYYY h:mm A')}>
+            <span className="text-gray-600 dark:text-gray-300">
+              {dayjs(latestAttempt).fromNow()}
+            </span>
+          </Tooltip>
+        ) : (
+          <span className="text-gray-400 dark:text-gray-500">—</span>
+        ),
       sorter: (a: QuizStudent, b: QuizStudent) =>
-        new Date(b.latestAttempt).getTime() - new Date(a.latestAttempt).getTime(),
+        (b.latestAttempt ? new Date(b.latestAttempt).getTime() : 0) -
+        (a.latestAttempt ? new Date(a.latestAttempt).getTime() : 0),
     },
   ];
 
@@ -630,7 +755,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
         okText="Start Preview"
         okButtonProps={{ disabled: !selectedRepo }}
       >
-        <p className="mb-4 text-gray-600">
+        <p className="mb-4 text-gray-600 dark:text-gray-300">
           Select a {terms.repo} to use for testing this code-aware quiz:
         </p>
         {loadingRepos ? (

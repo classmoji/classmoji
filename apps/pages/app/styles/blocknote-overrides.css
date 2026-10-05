@@ -292,7 +292,11 @@
   padding-right: 0;
 }
 
-/* Dark mode overrides for BlockNote's Mantine-based UI */
+/* Dark mode overrides for BlockNote's Mantine-based UI. Since BlockNote 0.48
+   the theme root is `.bn-root`: it wraps the editor (which also carries
+   `.bn-container`) AND the floating UI portaled to <body> (menus, toolbars),
+   which has no `.bn-container`. */
+.dark .bn-root,
 .dark .bn-container {
   color-scheme: dark;
 }

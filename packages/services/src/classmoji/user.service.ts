@@ -6,6 +6,7 @@ import getPrisma, {
   type GitUsernameScope,
 } from '@classmoji/database';
 import { claimPendingInvites } from './classroomInvite.service.ts';
+import { findClassroomGitProvider } from './classroomGitProvider.ts';
 import type { GitProvider, Prisma, GitRepo } from '@prisma/client';
 import {
   accountProviderId,
@@ -260,11 +261,16 @@ export const findRepositoriesPerStudent = async (classroom: StudentRepositoryCla
     return lastNameA.localeCompare(lastNameB);
   });
 
+  // A student's `login` here is their username on the classroom's provider:
+  // the gradebook links to the student report by it, and the report looks the
+  // student up on that provider.
+  const provider = await findClassroomGitProvider(classroom.id);
+
   // Transform data to match expected shape for grades page
   // New schema: GitRepo.repository, GitRepo.assignments (GitRepoAssignment[])
   // Expected: gitRepo.assignment_id, gitRepo.assignment, gitRepo.issues
   return combined.map(student => ({
-    ...withLogin(student),
+    ...withLogin(student, provider),
     git_repos: (student.git_repos || []).map((repo: RepositoryWithRelations) => ({
       ...repo,
       // Map repository to assignment for backward compatibility with grades UI

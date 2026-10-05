@@ -118,6 +118,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
   // Fetch repositories for linking
   const repositories = await ClassmojiService.repository.findByClassroomId(classroom.id);
+  // The classroom's price per extension hour: what an empty Tokens per hour means.
+  const classroomPrice: unknown = classroom.settings?.default_tokens_per_hour;
+  const classroomTokensPerHour = typeof classroomPrice === 'number' ? classroomPrice : 0;
   // The modules a quiz can live in, for the Assignment panel.
   const modules = (await ClassmojiService.module.findByClassroomSlug(classSlug)).map(m => ({
     id: m.id,
@@ -145,6 +148,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     dueDate: null,
     closesAt: null,
     weight: 0,
+    tokensPerHour: null,
     isPublished: false,
   };
   if (quizId) {
@@ -166,6 +170,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
           dueDate: assignment.student_deadline?.toISOString() ?? null,
           closesAt: assignment.closes_at?.toISOString() ?? null,
           weight: assignment.weight,
+          tokensPerHour: assignment.tokens_per_hour,
           isPublished: assignment.is_published,
         }
       : {
@@ -175,6 +180,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
           dueDate: found.due_date?.toISOString() ?? null,
           closesAt: found.status === 'CLOSED' ? found.updated_at.toISOString() : null,
           weight: found.weight,
+          tokensPerHour: null,
           isPublished: found.status !== 'DRAFT',
         };
 
@@ -220,6 +226,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     isOwner: membership?.role === 'OWNER',
     modules,
     assignmentPanel,
+    classroomTokensPerHour,
     chatRuntime,
     assignments: repositories, // Keep variable name for backward compat with component
     examplePrompts,
@@ -241,6 +248,7 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
     isOwner,
     modules,
     assignmentPanel,
+    classroomTokensPerHour,
   } = loaderData;
   const callout = useCallout();
   const { opened, close } = useRouteDrawer({});
@@ -612,10 +620,14 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
                         modules={modules}
                         isOwner={isOwner}
                         classSlug={org}
+                        classroomTokensPerHour={classroomTokensPerHour}
                         closesError={closesError}
                       />
                     ) : (
-                      <ReadOnlyAssignmentPanel data={assignmentPanel} />
+                      <ReadOnlyAssignmentPanel
+                        data={assignmentPanel}
+                        classroomTokensPerHour={classroomTokensPerHour}
+                      />
                     )}
                   </div>
                   <div className="min-w-0">

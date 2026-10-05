@@ -1,9 +1,27 @@
 import { useCallback, useState, useEffect, useRef } from 'react';
 import { Popconfirm, Popover, Tooltip, Dropdown } from 'antd';
 
+import {
+  blockMarkup,
+  htmlBlockMarkup,
+  mintBlockId,
+  type BlockBox,
+} from '@classmoji/services/slides/runtime-attrs';
+
 import { useToast } from '~/hooks';
+import { lockHolderOf } from '~/utils/collab/bridgeDom';
 import ImageUploadModal from './ImageUploadModal';
 import { useElementSelection } from './properties/ElementSelectionContext';
+import {
+  DEFAULT_SVG_SOURCE,
+  STARTER_HTML_SOURCE,
+  captureSlideTarget,
+  countLeafSlides,
+  removeSlideElement,
+  resolveDeleteTarget,
+  svgFromSource,
+  type SlideTarget,
+} from './blocks/slideBlocks';
 
 // ─────────────────────────────────────────────────────────────
 // Overflow Detection Hook - Progressively hides groups when toolbar overflows
@@ -168,6 +186,11 @@ interface SlideToolbarProps {
   onContentChange?: () => void;
   onImageUpload?: (file: File) => Promise<string>;
   onOpenOverview?: () => void;
+  /**
+   * Live editing: who holds the slide on screen when it is someone else
+   * (their name), else null — the slide can't be deleted from here then.
+   */
+  currentSlideHolder?: string | null;
 }
 
 export default function SlideToolbar({
@@ -175,6 +198,7 @@ export default function SlideToolbar({
   onContentChange,
   onImageUpload,
   onOpenOverview, // Callback to open slide overview
+  currentSlideHolder = null,
 }: SlideToolbarProps) {
   const toast = useToast();
   const [isImageModalOpen, setIsImageModalOpen] = useState(false);
@@ -182,7 +206,7 @@ export default function SlideToolbar({
   const toolbarRef = useRef<HTMLDivElement>(null);
 
   // Get snippets from context
-  const { snippets } = useElementSelection();
+  const { snippets, selectElement, openBlockSource } = useElementSelection();
 
   // Overflow detection - progressively hide groups when toolbar doesn't fit
   // Note: Themes moved to SlideProperties panel, Insert Content group was removed (only draggable blocks remain)
@@ -287,6 +311,13 @@ export default function SlideToolbar({
   const addSlideBelow = useCallback(() => {
     const currentSlide = getCurrentSlide();
     if (!currentSlide || !revealInstance) return;
+    // Live editing: adding below wraps the slide into a stack, which moves it
+    // — not while someone else holds it (it would only be put back).
+    const holder = currentSlideHolder ?? lockHolderOf(currentSlide);
+    if (holder !== null) {
+      toast.info(`${holder.trim() || 'Someone'} is editing this slide`);
+      return;
+    }
 
     const newSlide = createNewSlide();
     const parent = currentSlide.parentElement;
@@ -324,7 +355,7 @@ export default function SlideToolbar({
 
     revealInstance.layout(); // Recalculate slide positioning
     onContentChange?.();
-  }, [getCurrentSlide, revealInstance, onContentChange]);
+  }, [getCurrentSlide, revealInstance, onContentChange, currentSlideHolder, toast]);
 
   // ─────────────────────────────────────────────────────────────
   // Delete Current Slide
@@ -336,10 +367,46 @@ export default function SlideToolbar({
     return allSlides.length > 1;
   }, []);
 
+  // The slide the open confirm is about: captured when it opens, so the
+  // slide deleted is the one shown when Delete was clicked — even if the
+  // current slide changes (or a co-editor moves slides) before confirming.
+  const deleteTargetRef = useRef<SlideTarget | null>(null);
+  const handleDeleteOpenChange = useCallback(
+    (open: boolean) => {
+      if (open) deleteTargetRef.current = captureSlideTarget(getCurrentSlide());
+    },
+    [getCurrentSlide]
+  );
+
   // Perform the actual deletion (called by Popconfirm onConfirm)
   const performDeleteSlide = useCallback(() => {
-    const currentSlide = getCurrentSlide();
-    if (!currentSlide || !revealInstance) return;
+    const captured = deleteTargetRef.current;
+    deleteTargetRef.current = null;
+    if (!revealInstance) return;
+    const slidesEl =
+      (revealInstance.getSlidesElement?.() as HTMLElement | null | undefined) ??
+      document.querySelector('.reveal .slides');
+    // Gone since the confirm opened (deleted elsewhere): nothing to delete.
+    const currentSlide = resolveDeleteTarget(captured, slidesEl) as HTMLElement | null;
+    if (!currentSlide || !slidesEl) return;
+    // Someone else took the slide while the confirm was open.
+    if (currentSlide.classList.contains('cm-locked')) {
+      toast.info(`${currentSlideHolder?.trim() || 'Someone'} is editing this slide`);
+      return;
+    }
+    if (countLeafSlides(slidesEl) <= 1) {
+      toast.info('A presentation needs at least one slide');
+      return;
+    }
+
+    // No longer the slide on screen: take it out where it is, stay put.
+    if (currentSlide !== getCurrentSlide()) {
+      removeSlideElement(currentSlide);
+      revealInstance.sync();
+      revealInstance.layout();
+      onContentChange?.();
+      return;
+    }
 
     const parent = currentSlide.parentElement;
     if (!parent) return;
@@ -383,11 +450,20 @@ export default function SlideToolbar({
     revealInstance.sync();
     revealInstance.layout(); // Recalculate slide positioning
     onContentChange?.();
-  }, [getCurrentSlide, revealInstance, onContentChange]);
+  }, [getCurrentSlide, revealInstance, onContentChange, toast, currentSlideHolder]);
+
+  // Live editing: someone else holds the slide on screen.
+  const heldByOther = currentSlideHolder !== null;
 
   // Handle delete button click - show warning if can't delete
   const handleDeleteClick = useCallback(
     (e: React.MouseEvent) => {
+      if (heldByOther) {
+        e.preventDefault();
+        e.stopPropagation();
+        toast.info(`${currentSlideHolder?.trim() || 'Someone'} is editing this slide`);
+        return false;
+      }
       if (!canDeleteSlide()) {
         e.preventDefault();
         e.stopPropagation();
@@ -395,7 +471,7 @@ export default function SlideToolbar({
         return false;
       }
     },
-    [canDeleteSlide]
+    [canDeleteSlide, heldByOther, currentSlideHolder, toast]
   );
 
   // ─────────────────────────────────────────────────────────────
@@ -616,6 +692,43 @@ document.querySelector('h1').addEventListener('click', () => {
     });
   }, [getCurrentSection, createSlBlock, onContentChange]);
 
+  // Insert an svg or html block (built by the shared block builders, so it
+  // carries a data-cm-block-id), select it; an html block opens its source.
+  const insertSourceBlock = useCallback(
+    (kind: 'svg' | 'html') => {
+      requestAnimationFrame(() => {
+        const section = getCurrentSection();
+        if (!section) return;
+        const width = kind === 'svg' ? 400 : 640;
+        const height = kind === 'svg' ? 240 : 400;
+        const box: BlockBox = {
+          left: Math.round((960 - width) / 2),
+          top: Math.round((700 - height) / 2),
+          width,
+          height,
+        };
+        const id = mintBlockId();
+        const template = document.createElement('template');
+        if (kind === 'html') {
+          template.innerHTML = htmlBlockMarkup({ id, box, source: STARTER_HTML_SOURCE });
+        } else {
+          template.innerHTML = blockMarkup('svg', id, box, '');
+          const drawing = svgFromSource(DEFAULT_SVG_SOURCE, document);
+          if (!drawing.ok) return;
+          template.content.querySelector('.sl-block-content')?.append(drawing.svg);
+        }
+        const block = template.content.firstElementChild as HTMLElement | null;
+        if (!block) return;
+        block.querySelector('.sl-block-content')?.setAttribute('contenteditable', 'false');
+        section.appendChild(block);
+        onContentChange?.();
+        selectElement(block);
+        if (kind === 'html') openBlockSource(block);
+      });
+    },
+    [getCurrentSection, onContentChange, selectElement, openBlockSource]
+  );
+
   // Insert a snippet as an sl-block
   const insertSnippet = useCallback(
     (snippet: { id: string; name: string; content: string }) => {
@@ -739,23 +852,51 @@ document.querySelector('h1').addEventListener('click', () => {
       <ToolbarButton onClick={addSlideRight} title="Add slide to right">
         → Add
       </ToolbarButton>
-      <ToolbarButton onClick={addSlideBelow} title="Add slide below (vertical)">
-        ↓ Add
-      </ToolbarButton>
+      <Tooltip
+        title={
+          heldByOther
+            ? `${currentSlideHolder?.trim() || 'Someone'} is editing this slide`
+            : 'Add slide below (vertical)'
+        }
+        mouseEnterDelay={0.1}
+        mouseLeaveDelay={0}
+      >
+        <button
+          onClick={addSlideBelow}
+          // Focusable while held, so keyboard users reach the reason.
+          aria-disabled={heldByOther}
+          data-testid="toolbar-add-slide-below"
+          className={`px-2 py-1 text-sm font-medium rounded-sm transition-colors ${
+            heldByOther
+              ? 'text-gray-400 dark:text-gray-500 cursor-not-allowed'
+              : 'text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-600'
+          }`}
+        >
+          ↓ Add
+        </button>
+      </Tooltip>
       <Popconfirm
         title="Delete Slide"
         description="Are you sure you want to delete this slide?"
         onConfirm={performDeleteSlide}
+        onOpenChange={handleDeleteOpenChange}
         okText="Delete"
         okButtonProps={{ danger: true }}
         cancelText="Cancel"
-        disabled={!canDeleteSlide()}
+        disabled={!canDeleteSlide() || heldByOther}
       >
         <button
           onClick={handleDeleteClick}
-          title="Delete current slide"
+          // Focusable while held, so keyboard users reach the reason.
+          aria-disabled={heldByOther || !canDeleteSlide()}
+          data-testid="toolbar-delete-slide"
+          title={
+            heldByOther
+              ? `${currentSlideHolder?.trim() || 'Someone'} is editing this slide`
+              : 'Delete current slide'
+          }
           className={`px-2 py-1 text-sm font-medium rounded transition-colors ${
-            canDeleteSlide()
+            canDeleteSlide() && !heldByOther
               ? 'text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/30'
               : 'text-gray-400 dark:text-gray-500 cursor-not-allowed'
           }`}
@@ -864,6 +1005,40 @@ document.querySelector('h1').addEventListener('click', () => {
             strokeLinejoin="round"
             strokeWidth={2}
             d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+          />
+        </svg>
+        <svg className="w-3 h-3 ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"
+          />
+        </svg>
+      </ToolbarButton>
+      <ToolbarButton onClick={() => insertSourceBlock('svg')} title="Add SVG block">
+        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <circle cx="8" cy="8" r="4" strokeWidth={2} />
+          <path strokeLinejoin="round" strokeWidth={2} d="M13 20l4-7 4 7h-8z" />
+          <rect x="3" y="15" width="6" height="6" rx="1" strokeWidth={2} />
+        </svg>
+        <svg className="w-3 h-3 ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"
+          />
+        </svg>
+      </ToolbarButton>
+      <ToolbarButton onClick={() => insertSourceBlock('html')} title="Add HTML block">
+        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <rect x="3" y="4" width="18" height="16" rx="2" strokeWidth={2} />
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M3 9h18M10 13l-2 2 2 2m4-4l2 2-2 2"
           />
         </svg>
         <svg className="w-3 h-3 ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

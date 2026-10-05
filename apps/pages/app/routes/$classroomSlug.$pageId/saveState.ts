@@ -50,6 +50,10 @@ export interface SaveFetcherData {
   sha?: string;
   merged_content?: unknown;
   merged_with_concurrent?: number;
+  /** The page is now edited live: the save was refused for good (no merge). */
+  live?: boolean;
+  /** The refusal's sentence, when it has one. */
+  message?: string;
 }
 
 export interface SaveMergeReport {

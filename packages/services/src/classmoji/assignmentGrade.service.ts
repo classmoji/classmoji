@@ -8,14 +8,26 @@ import { withLogins } from '@classmoji/utils';
 import type { Prisma } from '@prisma/client';
 
 /**
+ * The functions that take an optional `tx` run inside the caller's transaction
+ * when given one (a grade and its token rows commit together), else on the
+ * shared client.
+ */
+type Db = Prisma.TransactionClient;
+
+/**
  * Add a grade to a GitRepoAssignment
  * @param {string} repositoryAssignmentId - UUID of the GitRepoAssignment
  * @param {string} graderId - UUID of the grader User
  * @param {string} emoji - Emoji grade
  * @returns {Promise<Object>}
  */
-export const addGrade = async (repositoryAssignmentId: string, graderId: string, emoji: string) => {
-  return getPrisma().assignmentGrade.create({
+export const addGrade = async (
+  repositoryAssignmentId: string,
+  graderId: string,
+  emoji: string,
+  tx?: Db
+) => {
+  return (tx ?? getPrisma()).assignmentGrade.create({
     data: {
       git_repo_assignment_id: repositoryAssignmentId,
       grader_id: graderId,
@@ -41,8 +53,8 @@ export const removeGrade = async (id: string) => {
  * @param {string} emoji - Emoji to check
  * @returns {Promise<boolean>}
  */
-export const doesGradeExist = async (repositoryAssignmentId: string, emoji: string) => {
-  const grades = await getPrisma().assignmentGrade.findMany({
+export const doesGradeExist = async (repositoryAssignmentId: string, emoji: string, tx?: Db) => {
+  const grades = await (tx ?? getPrisma()).assignmentGrade.findMany({
     where: {
       git_repo_assignment_id: repositoryAssignmentId,
       emoji: emoji,
@@ -57,8 +69,12 @@ export const doesGradeExist = async (repositoryAssignmentId: string, emoji: stri
  * @param {Object} data - Data to update
  * @returns {Promise<Object>}
  */
-export const update = async (id: string, data: Prisma.AssignmentGradeUncheckedUpdateInput) => {
-  return getPrisma().assignmentGrade.update({
+export const update = async (
+  id: string,
+  data: Prisma.AssignmentGradeUncheckedUpdateInput,
+  tx?: Db
+) => {
+  return (tx ?? getPrisma()).assignmentGrade.update({
     where: { id },
     data: data,
   });
@@ -82,9 +98,9 @@ export const removeAllGrades = async (repositoryAssignmentId: string) => {
  * @param {string} repositoryAssignmentId - UUID of the GitRepoAssignment
  * @returns {Promise<Object[]>}
  */
-export const findByAssignmentId = async (repositoryAssignmentId: string) => {
+export const findByAssignmentId = async (repositoryAssignmentId: string, tx?: Db) => {
   return withLogins(
-    await getPrisma().assignmentGrade.findMany({
+    await (tx ?? getPrisma()).assignmentGrade.findMany({
       where: {
         git_repo_assignment_id: repositoryAssignmentId,
       },

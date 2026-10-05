@@ -49,12 +49,17 @@
  *                     days in that zone.
  */
 
+import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
 import {
+  countingQuizScore,
+  effectiveDeadline,
+  effectiveTokensPerHour,
   gitUsername,
   isRealCalendarDate,
   localDayRange,
   localMonthGridRange,
+  type ScorableQuizAttempt,
   type WithGitAccounts,
 } from '@classmoji/utils';
 import { ToolError } from '../mcp/errors.ts';
@@ -317,7 +322,10 @@ interface QuizRow extends QuizPlacementSource {
   due_date?: Date | null;
   /** The quiz's assignment: it owns the module, dates, weight and publish state. */
   assignment?:
-    | (NonNullable<QuizPlacementSource['assignment']> & { tokens_per_hour?: number | null })
+    | (NonNullable<QuizPlacementSource['assignment']> & {
+        id?: string;
+        tokens_per_hour?: number | null;
+      })
     | null;
   weight: number;
   question_count: number;
@@ -342,6 +350,8 @@ interface QuizRow extends QuizPlacementSource {
   avgScore?: number | null;
   attemptsSummary?: unknown;
   attemptCount?: number;
+  /** The student list's own attempts (student branch only). */
+  attempts?: ScorableQuizAttempt[];
 }
 
 /**
@@ -364,15 +374,97 @@ interface QuizRow extends QuizPlacementSource {
  * home for a decision that must have exactly one, so it is gone.
  */
 
+/**
+ * What a student needs to buy extension hours on a quiz and to read their
+ * lateness, from the quiz's assignment: its id (what extension_purchase
+ * takes), the price of an hour (the assignment's own, else the classroom's;
+ * 0 = no extensions), the net hours this student bought, the due date those
+ * hours give, and — inside `my_attempts` — the late hours of the attempt that
+ * counts. The counting attempt is the grade engine's (`countingQuizScore`:
+ * the strategy picks among late-penalised scores), and the score shown for it
+ * stays its raw percentage, as students see quiz scores. A quiz in no module
+ * has no assignment: no price, no hours, its own due date.
+ *
+ * Two narrow reads for the whole list (prices and hours), never one per quiz.
+ */
+async function studentQuizExtensions(ctx: ToolContext, quizzes: QuizRow[]) {
+  const { classroomId } = classroomCtx(ctx);
+  const settings = sanitizedSettings(ctx);
+  const classroomPrice = Number(settings.default_tokens_per_hour ?? 0) || 0;
+  const penalty = Number(settings.late_penalty_points_per_hour ?? 0) || 0;
+  const assignmentIds = quizzes.flatMap(q => (q.assignment?.id ? [q.assignment.id] : []));
+
+  const [prices, hours] =
+    assignmentIds.length === 0
+      ? [[], new Map<string, number>()]
+      : await Promise.all([
+          getPrisma().assignment.findMany({
+            where: { id: { in: assignmentIds }, module: { classroom_id: classroomId } },
+            select: { id: true, tokens_per_hour: true },
+          }),
+          ClassmojiService.quizGradeItems.netQuizExtensionHours({
+            classroomId,
+            studentId: ctx.viewer.userId,
+            assignmentIds,
+          }),
+        ]);
+  const priceOf = new Map(prices.map(p => [p.id, p.tokens_per_hour]));
+
+  return {
+    fieldsOf(q: QuizRow) {
+      const a = q.assignment;
+      if (!a?.id) {
+        return {
+          assignment_id: null,
+          effective_tokens_per_hour: 0,
+          extension_hours: 0,
+          effective_due_date: q.due_date ?? null,
+        };
+      }
+      const bought = hours.get(a.id) ?? 0;
+      return {
+        assignment_id: a.id,
+        effective_tokens_per_hour: effectiveTokensPerHour(priceOf.get(a.id), classroomPrice),
+        extension_hours: Math.max(0, bought),
+        effective_due_date: effectiveDeadline(a.student_deadline, bought),
+      };
+    },
+    attemptsOf(q: QuizRow) {
+      const summary = (q.attemptsSummary ?? null) as Record<string, unknown> | null;
+      const a = q.assignment;
+      if (!summary || !a?.id || !Array.isArray(q.attempts)) return summary;
+      const score = countingQuizScore(q.attempts, q.grading_strategy, {
+        studentDeadline: a.student_deadline,
+        extensionHours: hours.get(a.id) ?? 0,
+        latePenaltyPerHour: penalty,
+      });
+      return {
+        ...summary,
+        // The attempt the grade counts, shown at its raw score.
+        currentScore: score.raw_percentage,
+        countingAttemptId: score.counting_attempt_id,
+        lateHours: score.late_hours,
+      };
+    },
+  };
+}
+
+/** The quizzes resource's description; list_quizzes (tools/reads.ts) carries the same text. */
+export const QUIZZES_DESCRIPTION =
+  'AI-graded quizzes with their source material (linked pages and decks, in order). Staff ' +
+  '(OWNER/TEACHER/ASSISTANT) see all quizzes incl. drafts and prompts; students see ' +
+  'published quizzes (closed ones too, as CLOSED), published material and their own attempt ' +
+  'summary. For a student each quiz also has assignment_id (what extension_purchase takes), ' +
+  'effective_tokens_per_hour (price of one extension hour; 0 = none), extension_hours ' +
+  'bought, effective_due_date (due date plus those hours) and my_attempts.lateHours (hours ' +
+  'late of the attempt that counts; currentScore is its raw score). Requires a Pro ' +
+  'subscription and quizzes_enabled.';
+
 export const quizzesResource: ResourceDefinition = {
   name: 'quizzes',
   uriTemplate: 'classmoji://{org}/{slug}/quizzes',
   title: 'Quizzes',
-  description:
-    'AI-graded quizzes with their source material (linked pages and decks, in order). Staff ' +
-    '(OWNER/TEACHER/ASSISTANT) see all quizzes incl. drafts and prompts; students see ' +
-    'published quizzes (closed ones too, as CLOSED), published material and their own attempt ' +
-    'summary. Requires a Pro subscription and quizzes_enabled.',
+  description: QUIZZES_DESCRIPTION,
   scope: 'read',
   roles: QUIZ_ROLES,
   handler: async (vars, ctx) => {
@@ -409,6 +501,12 @@ export const quizzesResource: ResourceDefinition = {
     });
 
     if (role === 'STUDENT') {
+      // A student sees quizzes where the classroom's pages show them: the same
+      // predicate extension_purchase and my_grades use (Pro, switched on, and
+      // the AI agent configured). A failed lookup fails the read.
+      if (!(await ClassmojiService.entitlement.quizzesVisibleOrThrow(classroomId))) {
+        throw new ToolError('forbidden', 'Quizzes are not available in this classroom');
+      }
       // Closed quizzes too, as the web list shows them: a student keeps the
       // quiz they finished and its score, and a closed one reads as CLOSED.
       const quizzes = (await ClassmojiService.quiz.getQuizzesForStudent(
@@ -417,12 +515,14 @@ export const quizzesResource: ResourceDefinition = {
         membership as never,
         { includeClosed: true }
       )) as QuizRow[];
+      const extensions = await studentQuizExtensions(ctx, quizzes);
       // Student allowlist (mirrors the student route's .map): NO system_prompt,
       // rubric_prompt, subject, difficulty_level, or class-wide stats.
       return {
         quizzes: quizzes.map(q => ({
           ...base(q),
-          my_attempts: q.attemptsSummary ?? null,
+          ...extensions.fieldsOf(q),
+          my_attempts: extensions.attemptsOf(q),
         })),
       };
     }

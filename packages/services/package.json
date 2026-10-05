@@ -25,6 +25,8 @@
     "./import-progress": "./src/classmoji/importProgress.ts",
     "./media/router": "./src/media/storageRouter.ts",
     "./remove-user-payload": "./src/classmoji/removeUserPayload.ts",
+    "./render-contract": "./src/render/contract.ts",
+    "./render-token": "./src/render/viewToken.ts",
     "./slides": "./src/slides/index.ts",
     "./slides/ops": "./src/slides/deckOps.ts",
     "./slides/runtime-attrs": "./src/slides/deckRuntimeAttrs.ts",

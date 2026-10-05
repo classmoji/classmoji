@@ -608,6 +608,12 @@ describe('redactRenderToken', () => {
     );
   });
 
+  it('takes the MCP view-token cookie too', () => {
+    expect(redactRenderToken(`a=1; cm_view=${RENDER_TOKEN}; b=2`)).toBe(
+      'a=1; cm_view=[redacted]; b=2'
+    );
+  });
+
   it('takes the query-string form wherever it appears', () => {
     expect(redactRenderToken(`https://x.test/a/thumbnail-source?render=${RENDER_TOKEN}`)).toBe(
       'https://x.test/a/thumbnail-source?render=[redacted]'
