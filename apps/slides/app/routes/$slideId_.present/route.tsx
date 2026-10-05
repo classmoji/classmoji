@@ -13,10 +13,15 @@ import {
 } from '~/utils/deckDelivery.server';
 import { deckOnlyRefusal } from '~/utils/slideKind';
 import {
+  PRESENT_LOAD_SAVE_TIMEOUT_MS,
+  PRESENT_SAVE_TIMEOUT_MS,
   checkpointBeforePresenting,
+  classroomCollabEnabled,
+  deckHasUnpushedEdits,
   readEditorName,
   type PresentCheckpointOutcome,
 } from '~/utils/collab/collab.server';
+import { PRESENT_SAVING_NOTICE, presentNoticeFor } from '~/utils/collab/collab';
 
 /** The slide with what the gate and the live check need. */
 async function presentableSlide(slideId: string) {
@@ -55,7 +60,9 @@ export const action = async ({
     userId: userId ?? 'unknown',
     name: userId ? await readEditorName(userId) : 'Teacher',
   };
-  return { outcome: await checkpointBeforePresenting(slide, actor, { timeoutMs: 15_000 }) };
+  return {
+    outcome: await checkpointBeforePresenting(slide, actor, { timeoutMs: PRESENT_SAVE_TIMEOUT_MS }),
+  };
 };
 
 export const loader = async ({
@@ -124,18 +131,30 @@ export const loader = async ({
   // this is quick then; a direct link — the webapp's slides list — waits here).
   // `?saved=1`: the editor's Present button has just done it (its action
   // above) — only freshness is at stake, so a hand-made one costs nothing.
-  const savedFirst = new URL(request.url).searchParams.get('saved') === '1';
-  const live =
-    isDeckSlide(slide) &&
-    !savedFirst &&
-    (await checkpointBeforePresenting(
+  // `?saving=1`: the button waited its full budget and the save was not
+  // confirmed — present what git has now (no second wait), and say so while
+  // the deck still holds edits git lacks; a refresh once they land shows none.
+  const search = new URL(request.url).searchParams;
+  const savedFirst = search.get('saved') === '1';
+  const savingFirst = !savedFirst && search.get('saving') === '1';
+  let live = savedFirst || savingFirst;
+  let notice: string | null = null;
+  if (savingFirst) {
+    if (classroomCollabEnabled(slide.classroom) && (await deckHasUnpushedEdits(slide.id))) {
+      notice = PRESENT_SAVING_NOTICE;
+    }
+  } else if (!savedFirst) {
+    const outcome = await checkpointBeforePresenting(
       slide,
       { userId: userId ?? 'unknown', name: userId ? await readEditorName(userId) : 'Teacher' },
-      { timeoutMs: 10_000 }
-    )) !== 'not-live';
+      { timeoutMs: PRESENT_LOAD_SAVE_TIMEOUT_MS }
+    );
+    live = outcome !== 'not-live';
+    notice = presentNoticeFor(outcome);
+  }
 
   const contentResult = await readDeckText(slide, gitOrgLogin, repo, filePath, 'present', {
-    skipCache: live || savedFirst,
+    skipCache: live,
   });
 
   if (contentResult) {
@@ -171,11 +190,12 @@ export const loader = async ({
     slideContent,
     contentError,
     canPresent,
+    notice,
   };
 };
 
 export default function SlidePresenter() {
-  const { slide, contentUrl, slideContent, contentError, canPresent } =
+  const { slide, contentUrl, slideContent, contentError, canPresent, notice } =
     useLoaderData<typeof loader>();
 
   // Extract theme from slideContent for Sandpack auto-theme detection
@@ -203,6 +223,7 @@ export default function SlidePresenter() {
         isPresenter={isPresenter}
         multiplexId={slide.multiplex_id ?? undefined}
         multiplexSecret={slide.multiplex_secret ?? undefined}
+        notice={notice}
       />
       {/* Mount Sandpack components into .sandpack-embed elements */}
       <SandpackRenderer

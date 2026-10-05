@@ -209,6 +209,50 @@ export function requestDeckCheckpoint(
 export type PresentCheckpointOutcome = 'saved' | 'timeout' | 'error' | 'not-live';
 
 /**
+ * How long the editor's Present button waits for the save (its action). The
+ * budget of a warm checkpoint worker (collab keeps one warm while the deck is
+ * edited live): ~1 s for collab's "now" debounce, ~3 s for the run, plus the
+ * row read. A direct link (no Present button) waits less: it is a page load
+ * with nothing on screen yet.
+ */
+export const PRESENT_SAVE_TIMEOUT_MS = 20_000;
+export const PRESENT_LOAD_SAVE_TIMEOUT_MS = 10_000;
+
+/** The deck's live row, as far as presenting cares. */
+export interface PresentRow {
+  version: number;
+  pushed_version: number;
+  last_checkpoint_at: Date | null;
+  last_checkpoint_error: string | null;
+}
+
+/** Seams for tests: the collab call, the row read, the clock, the wait. */
+export interface PresentCheckpointDeps {
+  request(slideId: string, actor: CollabActor): Promise<DeckCheckpointReply | null>;
+  /** null: no row (never live); undefined: the row could not be read. */
+  readRow(slideId: string): Promise<PresentRow | null | undefined>;
+  now(): number;
+  sleep(ms: number): Promise<void>;
+}
+
+function readPresentRow(slideId: string): Promise<PresentRow | null | undefined> {
+  return getPrisma()
+    .collabDoc.findUnique({
+      where: { kind_doc_id: { kind: 'deck', doc_id: slideId } },
+      select: {
+        version: true,
+        pushed_version: true,
+        last_checkpoint_at: true,
+        last_checkpoint_error: true,
+      },
+    })
+    .catch((error: unknown) => {
+      console.warn(`[slides] checkpoint wait for ${slideId} could not read its row:`, error);
+      return undefined;
+    });
+}
+
+/**
  * Save before presenting: the presenter, speaker view and followers read
  * git, so a live deck's latest edits are checkpointed first. Asks collab for
  * a checkpoint (it flushes the live doc first) and waits until the deck's row
@@ -218,40 +262,36 @@ export type PresentCheckpointOutcome = 'saved' | 'timeout' | 'error' | 'not-live
 export async function checkpointBeforePresenting(
   slide: { id: string; classroom: unknown },
   actor: CollabActor,
-  { timeoutMs = 20_000, pollMs = 750 }: { timeoutMs?: number; pollMs?: number } = {}
+  {
+    timeoutMs = PRESENT_SAVE_TIMEOUT_MS,
+    pollMs = 750,
+    deps,
+  }: { timeoutMs?: number; pollMs?: number; deps?: Partial<PresentCheckpointDeps> } = {}
 ): Promise<PresentCheckpointOutcome> {
   const env = liveEditingEnv(slide.classroom);
   if (!env) return 'not-live';
-  const started = Date.now();
-  let reply: DeckCheckpointReply | null;
-  try {
+  const defaults: PresentCheckpointDeps = {
     // Flush-only: presenting saves what is there, it does not make the
     // presenter a co-author of it (Save version still credits).
-    reply = await requestDeckCheckpoint(env, slide.id, actor, undefined, undefined, {
-      flushOnly: true,
-    });
+    request: (slideId, who) =>
+      requestDeckCheckpoint(env, slideId, who, undefined, undefined, { flushOnly: true }),
+    readRow: readPresentRow,
+    now: Date.now,
+    sleep: ms => new Promise<void>(resolve => setTimeout(resolve, ms)),
+  };
+  const { request, readRow, now, sleep } = { ...defaults, ...deps };
+  const started = now();
+  let reply: DeckCheckpointReply | null;
+  try {
+    reply = await request(slide.id, actor);
   } catch (error) {
     console.warn(`[slides] checkpoint before presenting ${slide.id} failed:`, error);
     return 'error';
   }
   if (reply?.alreadySaved) return 'saved';
   const target = typeof reply?.version === 'number' ? reply.version : null;
-  const prisma = getPrisma();
   for (;;) {
-    const row = await prisma.collabDoc
-      .findUnique({
-        where: { kind_doc_id: { kind: 'deck', doc_id: slide.id } },
-        select: {
-          version: true,
-          pushed_version: true,
-          last_checkpoint_at: true,
-          last_checkpoint_error: true,
-        },
-      })
-      .catch((error: unknown) => {
-        console.warn(`[slides] checkpoint wait for ${slide.id} could not read its row:`, error);
-        return undefined;
-      });
+    const row = await readRow(slide.id);
     // Never presents nothing: an unreadable row is an error, not a wait.
     if (row === undefined) return 'error';
     // Never live: git has the deck.
@@ -259,15 +299,28 @@ export async function checkpointBeforePresenting(
     if (row.pushed_version >= (target ?? row.version)) return 'saved';
     // A run that failed meanwhile may be retried (or overtaken by the next):
     // keep waiting; only at the deadline does it say why it gave up.
-    if (Date.now() + pollMs > started + timeoutMs) {
+    if (now() + pollMs > started + timeoutMs) {
       const failed =
         row.last_checkpoint_error &&
         row.last_checkpoint_at &&
         row.last_checkpoint_at.getTime() >= started;
       return failed ? 'error' : 'timeout';
     }
-    await new Promise(resolve => setTimeout(resolve, pollMs));
+    await sleep(pollMs);
   }
+}
+
+/**
+ * Whether the deck still holds live edits git does not have (the presenter's
+ * notice after a save that did not finish in time). False when the row is
+ * missing or unreadable: no notice beats a wrong one.
+ */
+export async function deckHasUnpushedEdits(
+  slideId: string,
+  readRow: PresentCheckpointDeps['readRow'] = readPresentRow
+): Promise<boolean> {
+  const row = await readRow(slideId);
+  return Boolean(row && row.version > row.pushed_version);
 }
 
 /**

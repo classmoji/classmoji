@@ -1,13 +1,6 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { gitWeb } from '@classmoji/utils';
-import {
-  useBlocker,
-  useLoaderData,
-  useFetcher,
-  useRevalidator,
-  data,
-  redirect,
-} from 'react-router';
+import { useLoaderData, useFetcher, useRevalidator, data, redirect } from 'react-router';
 import { Tooltip, Popconfirm } from 'antd';
 import getPrisma from '@classmoji/database';
 import { ContentService } from '@classmoji/content';
@@ -108,6 +101,7 @@ import LivePointers from '~/components/collab/LivePointers';
 import type { SlideAgentTouch } from '~/components/SlideOverview/SlideGrid';
 import { CollabRejectedBanner } from '~/components/collab/CollabNotices';
 import LiveLeaveDialog from '~/components/collab/LiveLeaveDialog';
+import LiveLeaveGuard from '~/components/collab/LiveLeaveGuard';
 import LockDescriptions from '~/components/collab/LockDescriptions';
 import SlideConflictNotice from '~/components/collab/SlideConflictNotice';
 import {
@@ -119,6 +113,7 @@ import {
   saveVersionAnswer,
   whenLocalEditsSent,
   liveLeaveRisk,
+  presentUrlAfterSave,
   mayAutoReloadStale,
   rejectionNotice,
 } from '~/utils/collab/collab';
@@ -2224,8 +2219,12 @@ const DONE_WAIT_MS = 5_000;
 const VIEW_REFRESH_MS = 2_000;
 /** How long Present and Save version wait for local live edits to reach the server. */
 const PRESENT_LOCAL_WAIT_MS = 3_000;
-/** Present goes ahead after this with no answer from the save at all. */
-const PRESENT_GIVE_UP_MS = 25_000;
+/**
+ * Present goes ahead after this with no answer from the save at all: past the
+ * local wait (3 s) plus the present action's own budget
+ * (PRESENT_SAVE_TIMEOUT_MS, 20 s) plus a margin for the request itself.
+ */
+const PRESENT_GIVE_UP_MS = 30_000;
 
 export default function SlideViewer() {
   const toast = useToast();
@@ -3152,10 +3151,22 @@ export default function SlideViewer() {
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [collabMode]);
-  const liveBlocker = useBlocker(
-    ({ currentLocation, nextLocation }) =>
-      collabMode && currentLocation.pathname !== nextLocation.pathname && liveRiskRef.current()
-  );
+  // In-app leaves: the guard is mounted only while something could be lost
+  // (see LiveLeaveGuard — a mounted blocker meets every Reveal hash change).
+  // Edits not yet written into the doc are not state; they are at most one
+  // serialize debounce (300 ms) behind `unsyncedChanges`, and the guard
+  // re-reads the full risk when a navigation is attempted.
+  const leaveAtRisk =
+    collabMode &&
+    !collabState.rejected &&
+    liveLeaveRisk({
+      editing: isEditing,
+      unsyncedChanges: collabState.unsyncedChanges,
+      status: collabState.status,
+      localPending: false,
+    });
+  const [leaveGuardBusy, setLeaveGuardBusy] = useState(false);
+  const isLeaveRisky = useCallback(() => liveRiskRef.current(), []);
 
   // "Version saved." only once the checkpoint run that consumed THIS request
   // answers it (its id is in the broadcast's requestIds), or at once when
@@ -3494,20 +3505,15 @@ export default function SlideViewer() {
   // that follows is not waited for).
   useEffect(() => {
     if (!presentPending || !presentFetcher.data) return;
-    const outcome = presentFetcher.data.outcome;
-    if (outcome === 'timeout' || outcome === 'error') {
-      toastRef.current.info(
-        "Couldn't save the latest edits in time. Presenting the last saved version."
-      );
-    }
-    window.location.href = `/${slide.id}/present${outcome === 'saved' ? '?saved=1' : ''}`;
+    // Not saved in time: the presenter shows what git has, with a notice.
+    window.location.href = presentUrlAfterSave(slide.id, presentFetcher.data.outcome);
   }, [presentPending, presentFetcher.data, slide.id]);
   // Never stuck saving: no answer at all (a failed request) presents anyway;
   // coming back to this page (back button) starts fresh.
   useEffect(() => {
     if (!presentPending) return;
     const timer = setTimeout(() => {
-      window.location.href = `/${slide.id}/present`;
+      window.location.href = presentUrlAfterSave(slide.id, undefined);
     }, PRESENT_GIVE_UP_MS);
     const onPageShow = (event: PageTransitionEvent) => {
       if (event.persisted) setPresentPending(false);
@@ -3954,11 +3960,8 @@ export default function SlideViewer() {
         )}
 
         {/* Live editing: in-app navigation while edits are still syncing */}
-        {liveBlocker.state === 'blocked' && (
-          <LiveLeaveDialog
-            onStay={() => liveBlocker.reset?.()}
-            onLeave={() => liveBlocker.proceed?.()}
-          />
+        {(leaveAtRisk || leaveGuardBusy) && (
+          <LiveLeaveGuard isRisky={isLeaveRisky} onBusyChange={setLeaveGuardBusy} />
         )}
 
         {/* Preview-branch chrome (staff only — `preview` is null otherwise) */}
