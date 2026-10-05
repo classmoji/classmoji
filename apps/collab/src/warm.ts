@@ -37,8 +37,10 @@ export class CheckpointWarmer {
   private readonly intervalMs: number;
   private readonly now: () => number;
   private stopped = false;
+  private readonly options: CheckpointWarmerOptions;
 
-  constructor(private readonly options: CheckpointWarmerOptions) {
+  constructor(options: CheckpointWarmerOptions) {
+    this.options = options;
     this.intervalMs = options.intervalMs ?? CHECKPOINT_WARM_INTERVAL_MS;
     this.now = options.now ?? Date.now;
   }
