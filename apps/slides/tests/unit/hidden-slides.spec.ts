@@ -17,8 +17,13 @@ import { test, expect } from '@playwright/test';
 import { JSDOM } from 'jsdom';
 import {
   domSlideTree,
+  hiddenSlideLayout,
+  remapRevealHash,
   removeHiddenSlides,
+  toFullIndices,
+  toVisibleIndices,
   withoutHiddenSlides,
+  type SlideIndices,
 } from '@classmoji/services/slides/hidden';
 import {
   parseDeckHtml,
@@ -149,6 +154,60 @@ test.describe('the hidden-slide rule, in every shape', () => {
     expect(stripped).not.toContain('<h1>B</h1>');
     expect(stripped).toContain('<title>Deck</title>');
     expect(stripped).toContain('Reveal.initialize');
+  });
+});
+
+/** Every Reveal position under `.slides`, keyed by the section's data-cm-id. */
+function positionsById(slides: Element): Map<string, SlideIndices> {
+  const out = new Map<string, SlideIndices>();
+  Array.from(slides.children).forEach((top, h) => {
+    const children = Array.from(top.children).filter(c => c.tagName === 'SECTION');
+    if (children.length === 0) out.set(top.getAttribute('data-cm-id') ?? '?', { h, v: 0 });
+    children.forEach((child, v) => out.set(child.getAttribute('data-cm-id') ?? '?', { h, v }));
+  });
+  return out;
+}
+
+test.describe('the same slide across an edit/view switch', () => {
+  for (const { name, slides } of CASES) {
+    test(name, () => {
+      const editor = new JSDOM(`<div class="slides">${slides}</div>`).window.document.querySelector(
+        '.slides'
+      ) as Element;
+      const layout = hiddenSlideLayout(editor, domSlideTree);
+      const viewer = editor.cloneNode(true) as Element;
+      removeHiddenSlides(viewer, domSlideTree);
+      const inEditor = positionsById(editor);
+      const inViewer = positionsById(viewer);
+      const viewerPositions = [...inViewer.values()];
+
+      for (const [id, full] of inEditor) {
+        const visible = toVisibleIndices(layout, full);
+        const survivor = inViewer.get(id);
+        if (survivor) {
+          // A visible slide keeps its place both ways.
+          expect(visible, `${id} edit → view`).toEqual(survivor);
+          expect(toFullIndices(layout, visible), `${id} view → edit`).toEqual(full);
+        } else if (viewerPositions.length > 0) {
+          // A hidden one lands on a slide the viewer actually has.
+          expect(viewerPositions, `${id} lands on a visible slide`).toContainEqual(visible);
+        }
+      }
+    });
+  }
+
+  test('rewrites the hash only when the numbering differs', () => {
+    const editor = new JSDOM(
+      `<div class="slides">${CASES[0].slides}</div>`
+    ).window.document.querySelector('.slides') as Element;
+    const layout = hiddenSlideLayout(editor, domSlideTree);
+    // A, [B hidden], C: the editor's #/2 is the viewer's #/1.
+    expect(remapRevealHash('#/2', layout, 'visible')).toBe('#/1');
+    expect(remapRevealHash('#/1', layout, 'full')).toBe('#/2');
+    expect(remapRevealHash('#/0', layout, 'visible')).toBeNull();
+    // Standing on the hidden slide B lands on C, the one after it — which the
+    // viewer already numbers 1, so the hash is left alone.
+    expect(remapRevealHash('#/1', layout, 'visible')).toBeNull();
   });
 });
 
@@ -325,6 +384,15 @@ test.describe('every surface goes through the one rule', () => {
       expect(source).not.toMatch(/<aside\\s\+class/);
     });
   }
+
+  test('the viewer carries the hash across the rule before dropping hidden slides', () => {
+    const source = read('components/RevealSlides.tsx');
+    const carry = source.indexOf('carryHashAcrossModes(container, isEditing);');
+    expect(carry).toBeGreaterThan(-1);
+    expect(carry).toBeLessThan(
+      source.indexOf('if (!isEditing) removeHiddenSlides(container, domSlideTree);')
+    );
+  });
 
   test('the content proxy filters a deck document by the same rule', () => {
     const source = read('routes/content.$org.$repo.$/route.tsx');
