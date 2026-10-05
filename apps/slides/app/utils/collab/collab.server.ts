@@ -174,18 +174,32 @@ export interface DeckCheckpointReply {
   alreadySaved?: boolean;
 }
 
+/** The `/checkpoint` request body (`flushOnly`: the requester is not credited). */
+export function deckCheckpointBody(
+  actor: CollabActor,
+  {
+    message,
+    requestId,
+    flushOnly = false,
+  }: { message?: string; requestId?: string; flushOnly?: boolean } = {}
+): CheckpointRequest {
+  return {
+    actor,
+    ...(message ? { message } : {}),
+    ...(requestId ? { requestId } : {}),
+    ...(flushOnly ? { flushOnly: true } : {}),
+  };
+}
+
 export function requestDeckCheckpoint(
   env: CollabEnv,
   slideId: string,
   actor: CollabActor,
   message?: string,
-  requestId?: string
+  requestId?: string,
+  { flushOnly = false }: { flushOnly?: boolean } = {}
 ): Promise<DeckCheckpointReply | null> {
-  const body: CheckpointRequest & { requestId?: string } = {
-    actor,
-    ...(message ? { message } : {}),
-    ...(requestId ? { requestId } : {}),
-  };
+  const body = deckCheckpointBody(actor, { message, requestId, flushOnly });
   return collabInternalRequest<DeckCheckpointReply | null>(
     env,
     'POST',
@@ -213,7 +227,11 @@ export async function checkpointBeforePresenting(
   const started = Date.now();
   let reply: DeckCheckpointReply | null;
   try {
-    reply = await requestDeckCheckpoint(env, slide.id, actor);
+    // Flush-only: presenting saves what is there, it does not make the
+    // presenter a co-author of it (Save version still credits).
+    reply = await requestDeckCheckpoint(env, slide.id, actor, undefined, undefined, {
+      flushOnly: true,
+    });
   } catch (error) {
     console.warn(`[slides] checkpoint before presenting ${slide.id} failed:`, error);
     return 'error';
