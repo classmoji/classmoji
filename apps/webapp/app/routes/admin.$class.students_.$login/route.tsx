@@ -19,6 +19,7 @@ import {
 } from '@classmoji/utils';
 import { LateOverrideButton } from '~/components';
 import GradeBadges from '~/components/features/grading/GradeBadges';
+import UserAvatar from '~/components/shared/UserAvatar';
 import { ASSIGNMENT_TYPE_META } from '~/components/features/assignments/AssignmentsTable';
 import { addAuditLog, addClassroomAuditLog } from '~/utils/helpers';
 import { requireClassroomStaff, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
@@ -704,15 +705,13 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
       </nav>
 
       <div className="flex items-center gap-4 mb-4 flex-wrap">
-        {student.image ? (
-          <img
-            src={student.image}
-            alt=""
-            className="h-12 w-12 rounded-full object-cover ring-1 ring-line"
-          />
-        ) : (
-          <span className="h-12 w-12 rounded-full bg-stone-200 dark:bg-neutral-700" />
-        )}
+        <UserAvatar
+          image={student.image}
+          name={student.name}
+          login={student.login}
+          size={48}
+          ringClassName="ring-1 ring-line"
+        />
         <div className="min-w-0">
           <h1 className="text-2xl font-bold text-ink-1 truncate">
             {student.name ?? student.login}

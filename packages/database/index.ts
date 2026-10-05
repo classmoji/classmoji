@@ -1,7 +1,7 @@
 import { createDecipheriv, createHash } from 'node:crypto';
 import { PrismaClient, Prisma } from '@prisma/client';
 import dayjs, { type Dayjs } from 'dayjs';
-import { createOneShotShutdown } from '@classmoji/utils';
+import { createOneShotShutdown, DEFAULT_AVATAR_URL } from '@classmoji/utils';
 
 interface TokenTransaction {
   hours_purchased?: number | null;
@@ -32,8 +32,6 @@ const extendedDeadline = (
   tokenTransactions: TokenTransaction[] | undefined
 ): Dayjs =>
   dayjs(studentDeadline).add(Math.max(calculateExtensionHours(tokenTransactions ?? []), 0), 'hour');
-
-const DEFAULT_AVATAR_URL = 'https://cdn-icons-png.flaticon.com/512/25/25231.png';
 
 export {
   GIT_IDENTITY,
@@ -179,7 +177,7 @@ function createPrismaClient() {
             // team (subgroup) gets none, and the UI shows its initial.
             if (team.provider === 'GITLAB') return null;
             if (!team.provider_id) {
-              return 'https://cdn-icons-png.flaticon.com/512/25/25231.png';
+              return DEFAULT_AVATAR_URL;
             }
             return `https://avatars.githubusercontent.com/t/${team.provider_id}?s=116&v=4`;
           },

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useGitWeb } from '~/hooks/useGitWeb';
+import { isPlaceholderAvatar } from '@classmoji/utils';
 
 const GRADIENTS = [
   'from-rose-400 to-pink-500',
@@ -21,7 +21,8 @@ const pickGradient = (seed: string) => {
 const getInitials = (name?: string | null, login?: string | null) => {
   const source = (name || login || '').trim();
   if (!source) return '?';
-  const parts = source.split(/\s+/).filter(Boolean);
+  // Words that start with a letter or digit, so "Avery (TA)" reads "A", not "A(".
+  const parts = source.split(/\s+/).filter(p => /^[\p{L}\p{N}]/u.test(p));
   const initials = parts
     .map(p => p[0])
     .slice(0, 2)
@@ -49,13 +50,17 @@ const UserAvatar = ({
   className = '',
   ringClassName = 'ring-1 ring-gray-200 dark:ring-gray-700',
 }: UserAvatarProps) => {
-  const [errored, setErrored] = useState(false);
+  // Remember which src failed, so a new image gets its own chance to load.
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const initials = getInitials(name, login);
   const gradient = pickGradient(seed || login || name || 'x');
   const style = { width: size, height: size };
   const fontSize = Math.max(10, Math.round(size * 0.38));
 
-  if (!image || errored) {
+  // No image, the generic default silhouette, or a URL that failed to load:
+  // draw initials rather than a stock icon or the browser's broken image.
+  const src = isPlaceholderAvatar(image) ? null : image;
+  if (!src || failedSrc === src) {
     return (
       <div
         style={{ ...style, fontSize }}
@@ -68,9 +73,9 @@ const UserAvatar = ({
 
   return (
     <img
-      src={image}
+      src={src}
       alt={name || login || ''}
-      onError={() => setErrored(true)}
+      onError={() => setFailedSrc(src)}
       style={style}
       className={`rounded-full ${ringClassName} flex-shrink-0 object-cover ${className}`}
     />

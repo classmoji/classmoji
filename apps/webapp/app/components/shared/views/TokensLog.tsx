@@ -1,9 +1,10 @@
-import { Table, Tag, Avatar, Button } from 'antd';
+import { Table, Tag, Button } from 'antd';
 import dayjs from 'dayjs';
 import { IconCoin } from '@tabler/icons-react';
 import { transactionAssignmentTitle } from '@classmoji/utils';
 
 import { useRole, useGlobalFetcher } from '~/hooks';
+import UserAvatar from '~/components/shared/UserAvatar';
 
 const colors: Record<string, string> = {
   PURCHASE: 'red',
@@ -100,7 +101,12 @@ const TokensLog = ({ transactions, students }: TokensLogProps) => {
       render: (student: Record<string, unknown>) => {
         return (
           <div className="flex items-center gap-2">
-            <Avatar src={student.avatar_url as string} size={24} />
+            <UserAvatar
+              image={student.avatar_url as string | null}
+              name={student.name as string | null}
+              login={student.login as string | null}
+              size={24}
+            />
             <span className="truncate">{student.name as string}</span>
           </div>
         );

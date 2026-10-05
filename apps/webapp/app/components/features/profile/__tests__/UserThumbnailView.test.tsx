@@ -11,6 +11,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { DEFAULT_AVATAR_URL } from '@classmoji/utils';
 
 const { default: UserThumbnailView } = await import('../UserThumbnailView');
 
@@ -61,5 +62,33 @@ describe('UserThumbnailView avatar fallback', () => {
 
     expect(container.querySelector('img')).toBeNull();
     expect(container.textContent).toContain('PS');
+  });
+
+  it('renders initials for a null avatar_url', async () => {
+    await act(async () => {
+      root.render(
+        <UserThumbnailView
+          user={{ avatar_url: null, name: 'Diego Costa', login: 'example-student-3' }}
+        />
+      );
+    });
+
+    expect(container.querySelector('img')).toBeNull();
+    expect(container.textContent).toContain('DC');
+  });
+
+  it('renders initials, not the stock silhouette, for the default avatar_url', async () => {
+    // A user with no image gets DEFAULT_AVATAR_URL from the database
+    // extension; that is nobody's picture, so it reads as "no image".
+    await act(async () => {
+      root.render(
+        <UserThumbnailView
+          user={{ avatar_url: DEFAULT_AVATAR_URL, name: 'Sam Rivera', login: 'example-student-1' }}
+        />
+      );
+    });
+
+    expect(container.querySelector('img')).toBeNull();
+    expect(container.textContent).toContain('SR');
   });
 });
