@@ -44,6 +44,7 @@ import {
 } from './blocks/index.tsx';
 import { editingSchema } from './blocks/editingSchema.ts';
 import { AGENT_CURSOR_LABEL_CSS, renderLiveCursor } from './collab/liveCursor.ts';
+import { reviveUndoManager, yUndoManagerOf } from './collab/yUndo.ts';
 import { ReplaceUrlItem, RemoveProfileImageItem } from './ReplaceUrlItem.tsx';
 import { AssetSrcSetContext, NO_SRC_SETS, type AssetSrcSets } from '~/hooks/useAssetSrcSets.ts';
 import {
@@ -354,6 +355,15 @@ const PageEditor = forwardRef(function PageEditor(
     onReady?.(editor.document);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once per editor instance
   }, [editor]);
+
+  // Live: undo keeps recording after BlockNote remounts the view (StrictMode,
+  // a change of `editable`), which destroys y-prosemirror's UndoManager.
+  // Runs after the child's mount ref, so it sees the final view.
+  const live = Boolean(collab);
+  useEffect(() => {
+    if (!live) return;
+    reviveUndoManager(yUndoManagerOf(editor.prosemirrorState as never));
+  }, [editor, live, editable]);
 
   // Slash menu: default + multi-column + custom blocks
   const getAllSlashMenuItems = useMemo(() => {
