@@ -276,7 +276,7 @@ test.describe('svgFromSource reads the source the way the slide will', () => {
   });
 });
 
-test.describe('svgFromSource scopes a drawing\'s styles', () => {
+test.describe("svgFromSource scopes a drawing's styles", () => {
   test('a <style> in <defs> lands under the <svg>, wrapped in @scope', () => {
     const result = svgFromSource(
       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><defs><style>.cls-1{fill:red}</style>' +
@@ -320,7 +320,11 @@ test.describe('block ids on an edited slide', () => {
     n = 0;
     const root = slides(`<section>${block('aaaa0001')}${block('aaaa0001')}</section>`);
     const [pasted, original] = Array.from(root.querySelectorAll('.sl-block'));
-    const changed = ensureBlockIds(root.querySelector('section') as Element, new Set([pasted]), mint);
+    const changed = ensureBlockIds(
+      root.querySelector('section') as Element,
+      new Set([pasted]),
+      mint
+    );
     expect(changed).toEqual([pasted]);
     expect(original.getAttribute('data-cm-block-id')).toBe('aaaa0001');
     expect(pasted.getAttribute('data-cm-block-id')).toBe('new1');

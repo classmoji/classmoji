@@ -549,7 +549,7 @@ describe('html block frames delegate fullscreen only', () => {
   });
 });
 
-describe('scopeSvgStyleText: a drawing\'s styles stay in the drawing', () => {
+describe("scopeSvgStyleText: a drawing's styles stay in the drawing", () => {
   const ILLUSTRATOR =
     '.st0{fill:#E6332A;}\n.st1{fill:none;stroke:#1D1D1B;stroke-width:2;}\n' +
     '@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}\n' +
@@ -614,7 +614,7 @@ describe('scopeSvgStyleText: a drawing\'s styles stay in the drawing', () => {
 });
 
 describe('slide html cap', () => {
-  it('the editor\'s cap is the deck ops cap', () => {
+  it("the editor's cap is the deck ops cap", () => {
     expect(MAX_SLIDE_HTML_LENGTH).toBe(MAX_SLIDE_HTML);
   });
 });

@@ -6,8 +6,7 @@ import { ensureBlockIds, topLevelBlocks } from './slideBlocks';
 const INSERTS_MARKUP = new Set(['insertFromPaste', 'insertFromDrop', 'insertFromPasteAsQuotation']);
 
 function slideOf(target: EventTarget | null): Element | null {
-  const el =
-    target instanceof Element ? target : ((target as Node | null)?.parentElement ?? null);
+  const el = target instanceof Element ? target : ((target as Node | null)?.parentElement ?? null);
   const section = el?.closest('section') ?? null;
   return section && section.closest('.reveal .slides') ? section : null;
 }

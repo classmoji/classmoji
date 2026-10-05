@@ -611,7 +611,10 @@ export function scopeSvgStyleText(css: string): string {
   const kept = chunks.filter(c => c.at !== null && UNSCOPED_AT_RULES.has(c.at));
   const scoped = chunks.filter(c => !(c.at !== null && UNSCOPED_AT_RULES.has(c.at)));
   const head = kept.map(c => c.text.trim()).join('\n');
-  const body = scoped.map(c => c.text).join('').trim();
+  const body = scoped
+    .map(c => c.text)
+    .join('')
+    .trim();
   if (!body) return head || css;
   const only = scoped.length === 1 ? scoped[0] : null;
   const already = only !== null && only.at === 'scope' && only.prelude === '' && only.block;

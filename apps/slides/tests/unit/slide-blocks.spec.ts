@@ -252,7 +252,10 @@ test.describe('one off-list filter for every display path', () => {
 
 test.describe('html block frames delegate fullscreen only (display)', () => {
   test('an allow beyond fullscreen renders inert and is stored as authored', () => {
-    const html = block(HTML_BLOCK_SANDBOX).replace('allow="fullscreen"', 'allow="camera; microphone"');
+    const html = block(HTML_BLOCK_SANDBOX).replace(
+      'allow="fullscreen"',
+      'allow="camera; microphone"'
+    );
     const root = holder(html);
     expect(neutralizeHtmlBlockFrames(root)).toBe(1);
     const frame = root.querySelector('iframe') as Element;
