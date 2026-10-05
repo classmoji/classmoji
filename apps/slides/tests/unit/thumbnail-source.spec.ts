@@ -31,10 +31,12 @@ import type { DeckJson } from '@classmoji/services/slides';
 import {
   RENDER_HEADERS,
   firstSlideOnly,
+  readinessScript,
   refusalDetail,
   renderRefusal,
   renderTokenFromCookies,
 } from '../../app/routes/$slideId_.thumbnail-source/route.tsx';
+import { THUMBNAIL_READY_ATTRIBUTE } from '@classmoji/services/deck-thumbnail-contract';
 import * as thumbnailSourceRoute from '../../app/routes/$slideId_.thumbnail-source/route.tsx';
 import { ClassmojiService } from '@classmoji/services';
 
@@ -237,6 +239,11 @@ test.describe('the resource-route invariant', () => {
     expect(typeof thumbnailSourceRoute.loader).toBe('function');
     expect(ROUTE_SOURCE).not.toContain('export default');
   });
+
+  test('renders the deck standalone, with the draggable-block rules', () => {
+    // No global.css here: a first slide built from .sl-blocks would stack.
+    expect(ROUTE_SOURCE).toMatch(/generateDeckHtml\(deck, \{[^}]*standalone: true/);
+  });
 });
 
 test.describe('the render token travels in a host-scoped cookie', () => {
@@ -395,5 +402,78 @@ test.describe('it branches on deliverability, not on the delivery flag', () => {
         git_organization: { ...classroom.git_organization, github_installation_id: null },
       })
     ).toBe(false);
+  });
+});
+
+/**
+ * The readiness flag waits for the first slide's frames — the embeds Reveal
+ * starts once it is ready, html blocks — and never past its caps. A stub
+ * Reveal that turns ready a moment after load and starts `data-src` frames as
+ * Reveal's own `startEmbeddedContent` does.
+ */
+// The page-based tests drive the installed Chrome.
+test.use({ channel: 'chrome' });
+
+test.describe('readiness waits for frames', () => {
+  const ORIGIN = 'http://cm-thumb.test';
+
+  function pageHtml(frameSrc: string): string {
+    return `<!doctype html><html><body>
+<div class="reveal"><div class="slides"><section><h1>A</h1>
+<div class="sl-block" data-block-type="iframe"><div class="sl-block-content"><iframe data-src="${frameSrc}"></iframe></div></div>
+</section></div></div>
+<script>
+  (function () {
+    var ready = false, callbacks = [];
+    window.Reveal = {
+      isReady: function () { return ready; },
+      on: function (name, cb) { if (name === 'ready') callbacks.push(cb); },
+    };
+    setTimeout(function () {
+      document.querySelectorAll('section iframe[data-src]').forEach(function (f) {
+        f.setAttribute('src', f.getAttribute('data-src'));
+      });
+      ready = true;
+      callbacks.forEach(function (cb) { cb(); });
+    }, 200);
+  })();
+</script>
+${readinessScript()}
+</body></html>`;
+  }
+
+  async function msUntilReady(
+    page: import('@playwright/test').Page,
+    frameDelayMs: number | null
+  ): Promise<number> {
+    await page.route(`${ORIGIN}/**`, async routed => {
+      const path = new URL(routed.request().url()).pathname;
+      if (path === '/render') {
+        await routed.fulfill({ contentType: 'text/html', body: pageHtml(`${ORIGIN}/game.html`) });
+        return;
+      }
+      if (frameDelayMs === null) return; // never answers
+      await new Promise(resolve => setTimeout(resolve, frameDelayMs));
+      await routed.fulfill({ contentType: 'text/html', body: '<p>game</p>' });
+    });
+    const started = Date.now();
+    await page.goto(`${ORIGIN}/render`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector(`[${THUMBNAIL_READY_ATTRIBUTE}]`, {
+      state: 'attached',
+      timeout: 12_000,
+    });
+    return Date.now() - started;
+  }
+
+  test('an embed Reveal starts after load is waited for', async ({ page }) => {
+    const ms = await msUntilReady(page, 1500);
+    expect(ms).toBeGreaterThan(1500);
+    expect(ms).toBeLessThan(5000);
+  });
+
+  test('a frame that never loads still lets the flag go up', async ({ page }) => {
+    const ms = await msUntilReady(page, null);
+    expect(ms).toBeGreaterThan(5000);
+    expect(ms).toBeLessThan(9500);
   });
 });

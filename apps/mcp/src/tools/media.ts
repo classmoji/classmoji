@@ -40,6 +40,18 @@ import {
 
 const classroomArg = z.string().describe("Classroom reference as 'org/slug'");
 
+/** A slide deck's subfolder for an upload (validated by the media service). */
+const folderArg = z
+  .string()
+  .min(1)
+  .max(160)
+  .optional()
+  .describe(
+    'Slide decks only: a folder inside the deck (e.g. games/minions, ≤4 levels, letters, ' +
+      'digits . _ -). The file is stored there under exactly its filename, replacing an older ' +
+      'copy, so files that load each other by relative path work. Omit for single images'
+  );
+
 /**
  * A media-service refusal → the ToolError an agent can act on. Codes pass
  * through so a client can switch on them; the message is the service's own
@@ -228,6 +240,7 @@ interface FileUploadStartArgs {
   classroom: string;
   page_id?: string;
   slide_id?: string;
+  folder?: string;
   filename: string;
   size: number;
 }
@@ -244,18 +257,22 @@ export const fileUploadStartTool: ToolDefinition<FileUploadStartArgs> = {
     'only accepts exactly `size` bytes), then call file_upload_finish with upload_id. Where the ' +
     'file goes is decided here: small files go into the page/deck folder in the course repo; ' +
     'on Pro, videos and files over the repo limit go to media. A file the class cannot store ' +
-    'is refused before you upload. For a file at a public https URL, use file_import_url.',
+    'is refused before you upload. For a file at a public https URL, use file_import_url. ' +
+    'A multi-file game or demo for a deck: upload each file with slide_id + the same folder, ' +
+    'then deck_apply block_add type iframe with src = the html file ref; a small one-file ' +
+    'piece fits an html block instead.',
   scope: 'write',
   roles: TEACHING_TEAM,
   inputSchema: {
     classroom: classroomArg,
     page_id: z.string().uuid().optional().describe('Page to add the file to'),
     slide_id: z.string().uuid().optional().describe('Slide deck to add the file to'),
+    folder: folderArg,
     filename: z
       .string()
       .min(1)
       .max(200)
-      .describe('File name WITH its extension (decides the type), without folders'),
+      .describe('File name WITH its extension (decides the type); folders go in folder'),
     size: z.number().int().positive().describe('Exact file size in bytes'),
   },
   handler: async (args, ctx) => {
@@ -265,6 +282,7 @@ export const fileUploadStartTool: ToolDefinition<FileUploadStartArgs> = {
         classroom,
         userId: ctx.viewer.userId,
         filename: args.filename,
+        ...(args.folder !== undefined ? { folder: args.folder } : {}),
         sizeBytes: args.size,
         target,
       })
@@ -278,6 +296,7 @@ export const fileUploadStartTool: ToolDefinition<FileUploadStartArgs> = {
         target_type: target.type,
         target_id: target.id,
         filename: args.filename,
+        ...(args.folder !== undefined ? { folder: args.folder } : {}),
         size: args.size,
         destination: started.destination,
       } as Prisma.InputJsonValue,
@@ -375,6 +394,7 @@ interface FileImportUrlArgs {
   classroom: string;
   page_id?: string;
   slide_id?: string;
+  folder?: string;
   url: string;
   filename?: string;
 }
@@ -412,6 +432,7 @@ export const fileImportUrlTool: ToolDefinition<FileImportUrlArgs> = {
     classroom: classroomArg,
     page_id: z.string().uuid().optional().describe('Page to add the file to'),
     slide_id: z.string().uuid().optional().describe('Slide deck to add the file to'),
+    folder: folderArg,
     url: z
       .string()
       .url()
@@ -432,6 +453,7 @@ export const fileImportUrlTool: ToolDefinition<FileImportUrlArgs> = {
         userId: ctx.viewer.userId,
         url: args.url,
         filename: args.filename ?? null,
+        ...(args.folder !== undefined ? { folder: args.folder } : {}),
         target,
       })
     );

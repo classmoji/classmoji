@@ -428,9 +428,12 @@ const actionButtonBase =
 export const PreviewBar = ({
   preview,
   isEmbedded = false,
+  changesSummary = null,
 }: {
   preview: PreviewInfo;
   isEmbedded?: boolean;
+  /** What the preview changes ("2 blocks edited · 1 block added"), shown in the bar. */
+  changesSummary?: string | null;
 }) => {
   const {
     busy,
@@ -460,6 +463,14 @@ export const PreviewBar = ({
               · {preview.commitsAhead} commit{preview.commitsAhead === 1 ? '' : 's'}
               {age ? ` · ${age}` : ''}
             </span>
+            {changesSummary && (
+              <span
+                data-testid="preview-changes-summary"
+                className="text-amber-700 dark:text-amber-300"
+              >
+                · {changesSummary}
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-2">

@@ -7,16 +7,16 @@ export default () => {
   return defineConfig({
     ssr: {
       // BlockNote + Mantine have CSS imports that Vite must process during SSR
-      noExternal: [
-        /^@blocknote\//,
-        /^@mantine\//,
-      ],
+      noExternal: [/^@blocknote\//, /^@mantine\//],
     },
     resolve: {
       alias: {
         '.prisma/client/index-browser': '../../node_modules/.prisma/client/index-browser.js',
       },
-      dedupe: ['react', 'react-dom', 'react-router', 'react-router-dom'],
+      // yjs too: two copies in one bundle break live editing ("Yjs was
+      // already imported") — the editor's fragment and the provider's document
+      // would come from different copies.
+      dedupe: ['react', 'react-dom', 'react-router', 'react-router-dom', 'yjs'],
     },
     optimizeDeps: {
       // Pre-bundle the heavy editor deps on startup. Without this they're
@@ -31,6 +31,11 @@ export default () => {
         '@mantine/core',
         '@tabler/icons-react',
         'use-local-storage-state',
+        // Live editing: pre-bundled together so the dev server hands every
+        // importer the same yjs instance.
+        'yjs',
+        'y-protocols/awareness',
+        '@hocuspocus/provider',
       ],
       entries: ['./app/root.jsx'],
       exclude: [

@@ -14,7 +14,7 @@ import {
   RUNTIME_SECTION_ATTRS,
   RUNTIME_SECTION_CLASSES,
 } from '../deckRuntimeAttrs.ts';
-import { applyDeckOps } from '../deckOps.ts';
+import { applyDeckOps, DeckOpError, deckOpSchema } from '../deckOps.ts';
 import type { DeckJson } from '../deckTypes.ts';
 
 describe('stripRuntimeStyleProps', () => {
@@ -73,6 +73,16 @@ describe('stripRuntimeSectionAttrs', () => {
     expect(stripRuntimeSectionAttrs(attrs)).toEqual({});
   });
 
+  it('drops the editing state a section picks up while someone edits it', () => {
+    expect(
+      stripRuntimeSectionAttrs({
+        spellcheck: 'false',
+        contenteditable: 'true',
+        'data-transition': 'slide',
+      })
+    ).toEqual({ 'data-transition': 'slide' });
+  });
+
   it('keeps the author-set neighbours of those attributes', () => {
     expect(
       stripRuntimeSectionAttrs({
@@ -104,6 +114,87 @@ describe('stripRuntimeSectionAttrs', () => {
       'data-hidden': 'true',
     });
     expect(input.style).toBe('top: 1px;');
+  });
+});
+
+describe('applyDeckOps — update attrs merge by default', () => {
+  const deck = (): DeckJson => ({
+    version: 1,
+    theme: 'white',
+    codeTheme: 'github',
+    slides: [
+      {
+        id: 'a',
+        html: '<p>a</p>',
+        attrs: { spellcheck: 'false', 'data-background-color': '#fff' },
+      },
+    ],
+  });
+
+  it('sets the keys sent and keeps the rest', () => {
+    const { deck: out } = applyDeckOps(deck(), [
+      {
+        op: 'update',
+        id: 'a',
+        attrs: { 'data-transition': 'fade', 'data-background-color': '#000' },
+      },
+    ]);
+    expect(out.slides[0].attrs).toEqual({
+      spellcheck: 'false',
+      'data-background-color': '#000',
+      'data-transition': 'fade',
+    });
+  });
+
+  it('a key set to null is removed; removing the last key drops attrs', () => {
+    const { deck: out } = applyDeckOps(deck(), [
+      { op: 'update', id: 'a', attrs: { spellcheck: null, 'data-missing': null } },
+    ]);
+    expect(out.slides[0].attrs).toEqual({ 'data-background-color': '#fff' });
+    const { deck: empty } = applyDeckOps(deck(), [
+      { op: 'update', id: 'a', attrs: { spellcheck: null, 'data-background-color': null } },
+    ]);
+    expect(empty.slides[0].attrs).toBeUndefined();
+  });
+
+  it('attrs: {} changes nothing; attrs: null clears everything', () => {
+    expect(applyDeckOps(deck(), [{ op: 'update', id: 'a', attrs: {} }]).deck).toEqual(deck());
+    const { deck: out } = applyDeckOps(deck(), [{ op: 'update', id: 'a', attrs: null }]);
+    expect(out.slides[0].attrs).toBeUndefined();
+  });
+
+  it('replace_attrs: true replaces the whole record', () => {
+    const { deck: out } = applyDeckOps(deck(), [
+      { op: 'update', id: 'a', attrs: { 'data-transition': 'fade' }, replace_attrs: true },
+    ]);
+    expect(out.slides[0].attrs).toEqual({ 'data-transition': 'fade' });
+  });
+
+  it('runtime paint in a merge is dropped and never replaces an authored value', () => {
+    const { deck: out } = applyDeckOps(deck(), [
+      { op: 'update', id: 'a', attrs: { 'data-index-h': '3', class: 'present' } },
+    ]);
+    expect(out.slides[0].attrs).toEqual(deck().slides[0].attrs);
+  });
+
+  it('replace_attrs without attrs is refused', () => {
+    expect(() =>
+      applyDeckOps(deck(), [{ op: 'update', id: 'a', hidden: true, replace_attrs: true }])
+    ).toThrow(DeckOpError);
+  });
+
+  it('the op schema accepts null values on update attrs only', () => {
+    expect(
+      deckOpSchema.safeParse({ op: 'update', id: 'a', attrs: { x: null }, replace_attrs: false })
+        .success
+    ).toBe(true);
+    expect(
+      deckOpSchema.safeParse({
+        op: 'insert',
+        position: { at: 'end' },
+        slides: [{ html: '<p/>', attrs: { x: null } }],
+      }).success
+    ).toBe(false);
   });
 });
 

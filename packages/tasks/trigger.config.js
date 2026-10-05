@@ -62,6 +62,17 @@ export default defineConfig({
   logLevel: 'log',
   machine: 'small-2x',
   maxDuration: 900,
+  // Reuse the task process between runs on a machine Trigger.dev keeps warm.
+  // Without it every run starts a fresh Node process — even on a reused
+  // machine — and re-imports its modules: `content-checkpoint` (Present, Save
+  // version) would pay its renderer imports (BlockNote server editor, jsdom)
+  // on every run, and the collab warm-ups (a no-op `content-checkpoint` run at
+  // most once a minute while a live doc is open) would keep only the machine
+  // warm, not the process. A warm machine (and so a kept-alive process) takes
+  // the next run of ANY task in this deployment with the same machine size,
+  // which is why content-checkpoint has its own preset. Recycle after
+  // Trigger.dev's documented default of 50 runs to bound any build-up.
+  processKeepAlive: { enabled: true, maxExecutionsPerProcess: 50 },
   // Safety guard: a LOCAL dev worker must never write to a remote (e.g. prod
   // Neon) database. Trigger.dev loads the `.env` next to this config
   // (packages/tasks/.env), which can silently drift to a production
@@ -118,6 +129,12 @@ export default defineConfig({
     '**/__fixtures__/**',
   ],
   build: {
+    // jsdom cannot be bundled: it reads files beside its own modules at load
+    // (`__dirname`-relative default stylesheet, `require.resolve` of the XHR
+    // sync worker), so a bundled copy throws on import. `content-checkpoint`
+    // pulls it in through @blocknote/server-util (@classmoji/page-schema/server).
+    // Kept external, the CLI installs the version the importer resolves.
+    external: ['jsdom'],
     extensions: [
       prismaExtension({
         schema: '../database/schema.prisma',

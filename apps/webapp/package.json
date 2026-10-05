@@ -23,6 +23,7 @@
     "@ai-sdk/react": "4.0.125",
     "@ant-design/v5-patch-for-react-19": "^1.0.3",
     "@classmoji/auth": "*",
+    "@classmoji/collab": "*",
     "@classmoji/content": "*",
     "@classmoji/database": "*",
     "@classmoji/services": "*",

@@ -1,5 +1,9 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
+import type * as Y from 'yjs';
+
+import { historyKey } from '~/utils/collab/bridgeLogic';
+import { applyNotesEdit, transformIndex, type TextDelta } from '~/utils/collab/textCursor';
 
 /**
  * SlideNotesPanel - Collapsible panel for editing speaker notes
@@ -47,12 +51,102 @@ function updateNotesInSlide(slideElement: HTMLElement | null, notesContent: stri
   }
 }
 
+/**
+ * Live editing: notes live in the deck document as a Y.Text per slide, edited
+ * character by character (no slide lock), instead of the slide's aside.
+ */
+export interface CollabNotesBinding {
+  textFor(slideId: string | null): Y.Text | null;
+  /** The notes were emptied: the slide has no notes any more. */
+  onEmptied(slideId: string): void;
+  /** Transaction origin for local notes edits. */
+  origin: unknown;
+  /** The id of a slide just added (it gets one on demand), or null. */
+  ensureId?(slide: HTMLElement): string | null;
+  /** Undo / redo this person's own notes edits on a slide. */
+  history?(slideId: string, kind: 'undo' | 'redo'): boolean;
+}
+
 interface SlideNotesPanelProps {
   revealInstance: RevealApi | null;
   isCollapsed: boolean;
   onToggle: () => void;
   onContentChange?: () => void;
   readOnly?: boolean;
+  collabNotes?: CollabNotesBinding | null;
+}
+
+/** Where a change ends in the new text (the caret after an undo / redo). */
+function deltaEnd(delta: TextDelta): number {
+  let pos = 0;
+  let end = 0;
+  for (const op of delta) {
+    if (op.retain !== undefined) pos += op.retain;
+    else if (op.insert !== undefined) {
+      pos += typeof op.insert === 'string' ? op.insert.length : 1;
+      end = pos;
+    } else if (op.delete !== undefined) end = pos;
+  }
+  return end;
+}
+
+/**
+ * A Y.Text as a controlled textarea value that keeps the caret through remote
+ * edits. `rendered` is what the textarea last showed and `remoteSince` the
+ * remote changes that landed after it: a keystroke is the difference from
+ * what was SHOWN, moved past those changes — never a diff against text the
+ * person did not see (which would delete it).
+ */
+function useYTextValue(
+  text: Y.Text | null,
+  textarea: React.RefObject<HTMLTextAreaElement | null>,
+  origin: unknown
+) {
+  const [value, setValue] = useState(() => text?.toString() ?? '');
+  const pendingSelection = useRef<[number, number] | null>(null);
+  const rendered = useRef(value);
+  const remoteSince = useRef<TextDelta[]>([]);
+
+  useEffect(() => {
+    const initial = text?.toString() ?? '';
+    setValue(initial);
+    rendered.current = initial;
+    remoteSince.current = [];
+    if (!text) return;
+    const onChange = (event: Y.YTextEvent) => {
+      const delta = event.delta as TextDelta;
+      const el = textarea.current;
+      if (!event.transaction.local) {
+        remoteSince.current.push(delta);
+        if (el && document.activeElement === el) {
+          pendingSelection.current = [
+            transformIndex(el.selectionStart, delta),
+            transformIndex(el.selectionEnd, delta),
+          ];
+        }
+      } else if (event.transaction.origin !== origin && el) {
+        // Undo / redo: the caret goes where the change is.
+        const at = deltaEnd(delta);
+        pendingSelection.current = [at, at];
+      }
+      setValue(text.toString());
+    };
+    text.observe(onChange);
+    return () => text.unobserve(onChange);
+  }, [text, textarea, origin]);
+
+  useLayoutEffect(() => {
+    rendered.current = value;
+    remoteSince.current = [];
+    const selection = pendingSelection.current;
+    const el = textarea.current;
+    if (selection && el) {
+      el.setSelectionRange(selection[0], selection[1]);
+      pendingSelection.current = null;
+    }
+  }, [value, textarea]);
+
+  return { value, rendered, remoteSince };
 }
 
 export default function SlideNotesPanel({
@@ -61,10 +155,48 @@ export default function SlideNotesPanel({
   onToggle,
   onContentChange,
   readOnly = false, // In read-only mode, only show markdown preview (no editing)
+  collabNotes = null,
 }: SlideNotesPanelProps) {
-  const [notes, setNotes] = useState('');
+  const [domNotes, setNotes] = useState('');
   const [currentSlide, setCurrentSlide] = useState<HTMLElement | null>(null);
   const [isEditMode, setIsEditMode] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  // A slide just added has no id until the editor writes it (debounced):
+  // re-read it once the id is stamped.
+  const [idSeq, setIdSeq] = useState(0);
+  const currentSlideId = currentSlide?.getAttribute('data-cm-id') ?? null;
+  const collabText = collabNotes ? collabNotes.textFor(currentSlideId) : null;
+  const live = useYTextValue(collabText, textareaRef, collabNotes?.origin);
+  // Notes typed before the slide had its id: kept here, written once it has one.
+  const [buffered, setBuffered] = useState<{ slide: HTMLElement; value: string } | null>(null);
+  const bufferedHere = buffered && buffered.slide === currentSlide ? buffered.value : null;
+  const notes = collabNotes ? (bufferedHere ?? live.value) : domNotes;
+  void idSeq;
+
+  useEffect(() => {
+    if (!buffered || !collabNotes) return;
+    const apply = () => {
+      const id = buffered.slide.getAttribute('data-cm-id');
+      const text = collabNotes.textFor(id);
+      if (!text || !id) return false;
+      const write = () => applyNotesEdit(text, text.toString(), buffered.value, []);
+      if (text.doc) text.doc.transact(write, collabNotes.origin);
+      else write();
+      setBuffered(null);
+      setIdSeq(n => n + 1);
+      return true;
+    };
+    if (apply()) return;
+    const timer = setInterval(() => {
+      if (!buffered.slide.isConnected) {
+        setBuffered(null);
+        return;
+      }
+      collabNotes.ensureId?.(buffered.slide);
+      if (apply()) clearInterval(timer);
+    }, 300);
+    return () => clearInterval(timer);
+  }, [buffered, collabNotes]);
 
   // Track the current slide via Reveal.js events
   // Using revealInstance (state) instead of a ref ensures this effect re-runs
@@ -94,11 +226,46 @@ export default function SlideNotesPanel({
   const handleNotesChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       const newNotes = e.target.value;
+      if (collabNotes) {
+        let text = collabText;
+        let slideId = currentSlideId;
+        if ((!text || !slideId) && currentSlide && !bufferedHere) {
+          // A slide just added: give it its id now.
+          slideId = collabNotes.ensureId?.(currentSlide) ?? null;
+          text = collabNotes.textFor(slideId);
+          if (text) setIdSeq(n => n + 1);
+        }
+        if (!text || !slideId || bufferedHere !== null) {
+          if (currentSlide) setBuffered({ slide: currentSlide, value: newNotes });
+          return;
+        }
+        const target = text;
+        const shown = text === collabText ? live.rendered.current : text.toString();
+        const remote = text === collabText ? live.remoteSince.current : [];
+        const apply = () => applyNotesEdit(target, shown, newNotes, remote);
+        if (target.doc) target.doc.transact(apply, collabNotes.origin);
+        else apply();
+        if (newNotes === '') collabNotes.onEmptied(slideId);
+        return;
+      }
       setNotes(newNotes);
       updateNotesInSlide(currentSlide, newNotes);
       onContentChange?.();
     },
-    [currentSlide, onContentChange]
+    [currentSlide, onContentChange, collabNotes, collabText, currentSlideId, bufferedHere, live]
+  );
+
+  // Live notes: ⌘Z / ⇧⌘Z undo this person's own notes edits (the textarea's
+  // native undo would replay stale values over other people's typing).
+  const handleNotesKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (!collabNotes?.history || !currentSlideId) return;
+      const kind = historyKey(e);
+      if (!kind) return;
+      e.preventDefault();
+      collabNotes.history(currentSlideId, kind);
+    },
+    [collabNotes, currentSlideId]
   );
 
   return (
@@ -147,8 +314,10 @@ export default function SlideNotesPanel({
 
           {!readOnly && isEditMode ? (
             <textarea
+              ref={textareaRef}
               value={notes}
               onChange={handleNotesChange}
+              onKeyDown={collabNotes ? handleNotesKeyDown : undefined}
               placeholder="Add speaker notes for this slide...&#10;&#10;Supports markdown:&#10;* Bullet points&#10;**bold** and _italic_&#10;`code`"
             />
           ) : (

@@ -12,6 +12,58 @@ import {
   resolveDeckDelivery,
 } from '~/utils/deckDelivery.server';
 import { deckOnlyRefusal } from '~/utils/slideKind';
+import {
+  PRESENT_LOAD_SAVE_TIMEOUT_MS,
+  PRESENT_SAVE_TIMEOUT_MS,
+  checkpointBeforePresenting,
+  classroomCollabEnabled,
+  deckHasUnpushedEdits,
+  readEditorName,
+  type PresentCheckpointOutcome,
+} from '~/utils/collab/collab.server';
+import { PRESENT_SAVING_NOTICE, presentNoticeFor } from '~/utils/collab/collab';
+
+/** The slide with what the gate and the live check need. */
+async function presentableSlide(slideId: string) {
+  const slide = await getPrisma().slide.findUnique({
+    where: { id: slideId },
+    include: { classroom: { include: { git_organization: true } } },
+  });
+  if (!slide) throw new Response('Slide not found', { status: 404 });
+  return slide;
+}
+
+/**
+ * Save before presenting (live classrooms): checkpoint the live deck and wait
+ * for it, bounded, so what is presented — and what the speaker view and
+ * followers then read from git — is the latest. The editor's Present button
+ * posts here first and shows its pending state meanwhile.
+ */
+export const action = async ({
+  params,
+  request,
+}: {
+  params: Record<string, string | undefined>;
+  request: Request;
+}): Promise<{ outcome: PresentCheckpointOutcome }> => {
+  const { slideId } = params;
+  if (!slideId) throw new Response('Missing slideId', { status: 400 });
+  const slide = await presentableSlide(slideId);
+  const { userId } = await assertSlideAccess({
+    request,
+    slideId,
+    slide,
+    accessType: 'present',
+  });
+  if (!isDeckSlide(slide)) throw deckOnlyRefusal(slide.kind, 'present');
+  const actor = {
+    userId: userId ?? 'unknown',
+    name: userId ? await readEditorName(userId) : 'Teacher',
+  };
+  return {
+    outcome: await checkpointBeforePresenting(slide, actor, { timeoutMs: PRESENT_SAVE_TIMEOUT_MS }),
+  };
+};
 
 export const loader = async ({
   params,
@@ -39,7 +91,7 @@ export const loader = async ({
   }
 
   // Authorization: require present permission (owner/teacher/assistant)
-  const { canPresent, canEdit } = await assertSlideAccess({
+  const { canPresent, canEdit, userId } = await assertSlideAccess({
     request,
     slideId,
     slide,
@@ -75,7 +127,35 @@ export const loader = async ({
   let slideContent: string | null = null;
   let contentError: string | null = null;
 
-  const contentResult = await readDeckText(slide, gitOrgLogin, repo, filePath, 'present');
+  // Live classroom: save first (the editor's Present button already did, so
+  // this is quick then; a direct link — the webapp's slides list — waits here).
+  // `?saved=1`: the editor's Present button has just done it (its action
+  // above) — only freshness is at stake, so a hand-made one costs nothing.
+  // `?saving=1`: the button waited its full budget and the save was not
+  // confirmed — present what git has now (no second wait), and say so while
+  // the deck still holds edits git lacks; a refresh once they land shows none.
+  const search = new URL(request.url).searchParams;
+  const savedFirst = search.get('saved') === '1';
+  const savingFirst = !savedFirst && search.get('saving') === '1';
+  let live = savedFirst || savingFirst;
+  let notice: string | null = null;
+  if (savingFirst) {
+    if (classroomCollabEnabled(slide.classroom) && (await deckHasUnpushedEdits(slide.id))) {
+      notice = PRESENT_SAVING_NOTICE;
+    }
+  } else if (!savedFirst) {
+    const outcome = await checkpointBeforePresenting(
+      slide,
+      { userId: userId ?? 'unknown', name: userId ? await readEditorName(userId) : 'Teacher' },
+      { timeoutMs: PRESENT_LOAD_SAVE_TIMEOUT_MS }
+    );
+    live = outcome !== 'not-live';
+    notice = presentNoticeFor(outcome);
+  }
+
+  const contentResult = await readDeckText(slide, gitOrgLogin, repo, filePath, 'present', {
+    skipCache: live,
+  });
 
   if (contentResult) {
     // Same read-side delivery pass the deck viewer runs: the stored document
@@ -110,11 +190,12 @@ export const loader = async ({
     slideContent,
     contentError,
     canPresent,
+    notice,
   };
 };
 
 export default function SlidePresenter() {
-  const { slide, contentUrl, slideContent, contentError, canPresent } =
+  const { slide, contentUrl, slideContent, contentError, canPresent, notice } =
     useLoaderData<typeof loader>();
 
   // Extract theme from slideContent for Sandpack auto-theme detection
@@ -142,6 +223,7 @@ export default function SlidePresenter() {
         isPresenter={isPresenter}
         multiplexId={slide.multiplex_id ?? undefined}
         multiplexSecret={slide.multiplex_secret ?? undefined}
+        notice={notice}
       />
       {/* Mount Sandpack components into .sandpack-embed elements */}
       <SandpackRenderer

@@ -27,6 +27,7 @@
     "@codesandbox/sandpack-themes": "^2.0.21"
   },
   "devDependencies": {
+    "@codesandbox/sandpack-client": "^2.19.8",
     "framer-motion": "^12.23.22",
     "vitest": "^4.1.5"
   }

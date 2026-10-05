@@ -1215,6 +1215,82 @@ describe('upload with a storedName — idempotent by path', () => {
   });
 });
 
+describe('upload with keepName — the name as given, replacing an older copy', () => {
+  const treeRoutes = (existingSha: string | null) =>
+    requestMock.mockImplementation(async (route: string) => {
+      switch (route) {
+        case 'GET /repos/{owner}/{repo}/contents/{path}':
+          if (existingSha === null) throw Object.assign(new Error('Not Found'), { status: 404 });
+          return { data: { sha: existingSha, size: 9 } };
+        case 'POST /repos/{owner}/{repo}/git/blobs':
+          return { data: { sha: 'blob-sha' } };
+        case 'GET /repos/{owner}/{repo}/git/ref/{ref}':
+          return { data: { object: { sha: 'head-commit' } } };
+        case 'GET /repos/{owner}/{repo}/git/commits/{commit_sha}':
+          return { data: { tree: { sha: 'base-tree' } } };
+        case 'POST /repos/{owner}/{repo}/git/trees':
+          return { data: { sha: 'new-tree' } };
+        case 'POST /repos/{owner}/{repo}/git/commits':
+          return { data: { sha: 'new-commit' } };
+        case 'PATCH /repos/{owner}/{repo}/git/refs/{ref}':
+          return { data: {} };
+        default:
+          throw new Error(`Unexpected route: ${route}`);
+      }
+    });
+
+  const upload = (repo: string, filename = 'Sprite_01.min.png') =>
+    ContentService.upload({
+      gitOrganization,
+      repo,
+      file: Buffer.from('png-bytes'),
+      filename,
+      folder: 'slides/week-1/games/minions',
+      branch: 'main',
+      fileTypes: 'any',
+      keepName: true,
+    });
+
+  it('stores under the exact name (case, dots and underscores kept)', async () => {
+    treeRoutes(null);
+    const result = await upload('upload-keep-new');
+    const [, tree] = requestMock.mock.calls.find(
+      ([route]) => route === 'POST /repos/{owner}/{repo}/git/trees'
+    ) as [string, RequestParams];
+    expect((tree.tree as Array<{ path: string }>)[0].path).toBe(
+      'slides/week-1/games/minions/Sprite_01.min.png'
+    );
+    expect(result.path).toBe('slides/week-1/games/minions/Sprite_01.min.png');
+  });
+
+  it('replaces a file with different bytes at that path', async () => {
+    treeRoutes('some-older-blob');
+    await upload('upload-keep-replace');
+    const routes = requestMock.mock.calls.map(([route]) => route);
+    expect(routes).toContain('PATCH /repos/{owner}/{repo}/git/refs/{ref}');
+    expect(routes).not.toContain('PUT /repos/{owner}/{repo}/contents/{path}');
+  });
+
+  it('writes nothing when the same bytes are already there (a retried placement)', async () => {
+    const { createHash } = await import('node:crypto');
+    const bytes = Buffer.from('png-bytes');
+    const sha = createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
+    treeRoutes(sha);
+    const result = await upload('upload-keep-same');
+    expect(requestMock.mock.calls.map(([route]) => route)).toEqual([
+      'GET /repos/{owner}/{repo}/contents/{path}',
+    ]);
+    expect(result.sha).toBe(sha);
+  });
+
+  it('refuses a name that is not one plain segment, before any request', async () => {
+    for (const name of ['.hidden.js', 'a b.js', 'ü.js']) {
+      await expect(upload('upload-keep-bad', name)).rejects.toThrow();
+    }
+    expect(requestMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('upload — one entry point, two transports', () => {
   const tooLarge = () =>
     Object.assign(new Error('Sorry, your input was too large to process.'), { status: 413 });
