@@ -111,8 +111,11 @@ type LoadedDeck = Awaited<ReturnType<typeof loadDeck>>;
 export interface DeckAdapterDeps {
   findSlide(slideId: string): Promise<DeckRecord | null>;
   findRole(userId: string, classroomId: string): Promise<Role | null>;
-  /** deck.json (or legacy index.html, parsed) on the default branch, or at `ref`. */
-  loadDeck(slide: DeckRecord, options: { ref?: string }): Promise<LoadedDeck>;
+  /**
+   * deck.json (or legacy index.html, parsed) on the default branch, or at
+   * `ref`. `idGen` names legacy sections that carry no id.
+   */
+  loadDeck(slide: DeckRecord, options: { ref?: string; idGen?: () => string }): Promise<LoadedDeck>;
   /** A blob's text by sha, null when it does not exist. */
   readBlob(slide: DeckRecord, sha: string): Promise<string | null>;
   now(): number;
@@ -128,8 +131,12 @@ export const defaultDeckAdapterDeps: DeckAdapterDeps = {
   findRole(userId, classroomId) {
     return findClassroomRole({ userId, classroomId });
   },
-  loadDeck(slide, { ref }) {
-    return loadDeck(slide as never, { skipCache: true, ...(ref ? { ref } : {}) });
+  loadDeck(slide, { ref, idGen }) {
+    return loadDeck(slide as never, {
+      skipCache: true,
+      ...(ref ? { ref } : {}),
+      ...(idGen ? { parseOptions: { idGen } } : {}),
+    });
   },
   async readBlob(slide, sha) {
     const blob = await ContentService.getBlobContent({
@@ -223,6 +230,19 @@ function touchedSlideIds(deck: DeckJson, ops: DeckOp[]): string[] {
   return [...out];
 }
 
+/**
+ * Ids for the sections of a legacy (index.html-only) deck that carry none:
+ * `s1`, `s2`, … in document order — the MCP's git path names them the same
+ * way (apps/mcp tools/deck.ts legacyIdGen). Random ids would differ on every
+ * read of the same content: each /snapshot of a deck nobody has open would
+ * name its slides anew (a pinned deck_apply then names unknown slides), and
+ * an outside merge's base and theirs would share no slide.
+ */
+export function legacyIdGen(): () => string {
+  let n = 0;
+  return () => `s${++n}`;
+}
+
 /** deck.json text, or legacy index.html text → deck; null when neither parses. */
 function parseDeckText(text: string | null): DeckJson | null {
   if (!text) return null;
@@ -233,7 +253,7 @@ function parseDeckText(text: string | null): DeckJson | null {
     // not JSON — maybe the legacy index.html the doc was seeded from
   }
   try {
-    return parseDeckHtml(text).deck;
+    return parseDeckHtml(text, { idGen: legacyIdGen() }).deck;
   } catch {
     return null;
   }
@@ -458,7 +478,7 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
     const slide = await this.mustFindSlide(docId);
     let loaded: LoadedDeck;
     try {
-      loaded = await this.deps.loadDeck(slide, {});
+      loaded = await this.deps.loadDeck(slide, { idGen: legacyIdGen() });
     } catch (err) {
       if (err instanceof DeckParseError) {
         throw new CollabHttpError(422, {
@@ -593,7 +613,7 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
     // theirs: the deck at the pushed commit.
     let theirsLoaded: LoadedDeck;
     try {
-      theirsLoaded = await this.deps.loadDeck(slide, { ref: sha });
+      theirsLoaded = await this.deps.loadDeck(slide, { ref: sha, idGen: legacyIdGen() });
     } catch (err) {
       if (err instanceof DeckParseError) {
         throw new CollabHttpError(422, { error: 'unparseable-deck', message: err.message });
@@ -614,7 +634,7 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
     let base: DeckJson | null = null;
     if (before && !/^0+$/.test(before)) {
       try {
-        base = (await this.deps.loadDeck(slide, { ref: before })).deck;
+        base = (await this.deps.loadDeck(slide, { ref: before, idGen: legacyIdGen() })).deck;
       } catch (err) {
         if (
           err instanceof Error &&
@@ -632,7 +652,9 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
     }
     if (!base && ctx.row?.pushed_commit) {
       try {
-        base = (await this.deps.loadDeck(slide, { ref: ctx.row.pushed_commit })).deck;
+        base = (
+          await this.deps.loadDeck(slide, { ref: ctx.row.pushed_commit, idGen: legacyIdGen() })
+        ).deck;
       } catch {
         base = null;
       }

@@ -19,7 +19,7 @@ import {
   roomName,
   yDocToDeck,
 } from '@classmoji/collab';
-import type { DeckJson } from '@classmoji/services/slides';
+import { parseDeckHtml, type DeckJson } from '@classmoji/services/slides';
 import { itemHash } from '@classmoji/collab/hash';
 
 import { CollabHttpError, type LiveEditContext } from '../src/adapters/types.ts';
@@ -989,3 +989,31 @@ describe('mergeExternal: held slides the push deleted, empty bases', () => {
     expect(readSlideConflicts(document).has('aaaa0001')).toBe(false);
   });
 });
+
+describe('legacy decks (index.html only, sections without ids)', () => {
+  const LEGACY = `<!DOCTYPE html><html><body><div class="reveal"><div class="slides">
+<section><h1>One</h1></section>
+<section data-cm-id="keep0001"><h2>Two</h2></section>
+<section><h2>Three</h2></section>
+</div></div></body></html>`;
+
+  it('names id-less sections the same way on every read (s1, s2, … like the MCP)', async () => {
+    const deps = makeDeps({
+      loadDeck: async (_slide, { idGen }) => ({
+        deck: parseDeckHtml(LEGACY, idGen ? { idGen } : {}).deck,
+        sha: 'legacy-sha',
+        sha_source: 'legacy_html' as const,
+      }),
+    });
+    const adapter = createDeckAdapter(deps);
+    const ids = async () =>
+      flatIds(adapter.snapshot((await adapter.seed({ docId: SLIDE.id })).doc));
+    const first = await ids();
+    expect(first).toEqual(['s1', 'keep0001', 's2']);
+    expect(await ids()).toEqual(first);
+  });
+});
+
+function flatIds(deck: DeckJson): string[] {
+  return deck.slides.flatMap(s => [s.id, ...(s.children ?? []).map(c => c.id)]);
+}
