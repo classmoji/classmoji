@@ -32,7 +32,11 @@
  * which have no visibility of their own, and not for the document behind a FILE
  * slide, which does — so a path that is a file slide's `source_path` is handed
  * to that slide's own view gate and, on success, redirected to `/{slideId}`
- * rather than served from here. See `~/utils/slideDocumentAccess`.
+ * rather than served from here. A deck's own documents (`index.html`,
+ * `deck.json`) likewise go through the deck row's view gate: refused when no
+ * deck owning the folder admits the caller (a draft, to a student), and
+ * otherwise filtered to what that caller may see. See
+ * `~/utils/slideDocumentAccess`.
  *
  * PERFORMANCE: Classroom memberships are cached for 8 hours to avoid
  * hitting the database on every asset request (CSS, fonts, images, etc.).
@@ -47,19 +51,13 @@
 import { fetchContent, getMimeType, isBinaryFile } from '~/utils/contentProxy';
 import { contentProxySafetyHeaders, withNosniff } from '~/utils/contentProxyHeaders';
 import {
-  deckDocumentRights,
-  deckFolderOfDocument,
+  deckDocumentDecision,
   isWithinContentPath,
   slideDocumentDecision,
 } from '~/utils/slideDocumentAccess';
 import { assertSlideAccess, getAuthSession } from '@classmoji/auth/server';
 import { ClassmojiService } from '@classmoji/services';
-import {
-  SLIDE_FILE_EXTENSIONS,
-  deckHtmlForViewer,
-  mayHaveHiddenSlides,
-  mayHaveSpeakerNotes,
-} from '@classmoji/services/slides';
+import { SLIDE_FILE_EXTENSIONS, deckHtmlForViewer } from '@classmoji/services/slides';
 import { getContentRepoName } from '@classmoji/utils';
 import getPrisma from '@classmoji/database';
 
@@ -97,6 +95,24 @@ type MatchedClassroom = NonNullable<ContentRouteMembership['classroom']>;
  */
 function forbidden(): Response {
   return new Response('Forbidden - no access to this content', { status: 403 });
+}
+
+/**
+ * The content repo a classroom reads from: its STORED `content_repo`
+ * (user-editable, never re-derived), or for a legacy classroom without one the
+ * ORG-level repo (organization.settings.content_repo_name).
+ */
+function expectedContentRepo(classroom: {
+  content_repo?: string | null;
+  git_organization?: { login: string; settings?: unknown } | null;
+}): string | null {
+  if (classroom.content_repo) return classroom.content_repo;
+  const gitOrg = classroom.git_organization;
+  if (!gitOrg) return null;
+  return getContentRepoName({
+    login: gitOrg.login,
+    settings: gitOrg.settings as { content_repo_name?: string } | undefined,
+  });
 }
 
 // In-memory cache for user classroom memberships
@@ -233,15 +249,7 @@ async function serveContent({ params, request }: ContentLoaderArgs): Promise<Res
       const gitOrg = m.classroom?.git_organization;
       if (!gitOrg || gitOrg.login !== org) return false;
 
-      // Get the expected content repo name for this classroom
-      const expectedRepo = m.classroom?.content_repo
-        ? m.classroom.content_repo
-        : getContentRepoName({
-            login: gitOrg.login,
-            settings: gitOrg.settings as { content_repo_name?: string } | undefined,
-          });
-
-      return repo === expectedRepo; // EXACT match only
+      return repo === expectedContentRepo(m.classroom!); // EXACT match only
     });
     hasAccess = matches.length > 0;
     authorizedClassroomIds = matches
@@ -350,7 +358,47 @@ async function serveContent({ params, request }: ContentLoaderArgs): Promise<Res
   if (documentDecision.outcome === 'redirect') return documentDecision.response;
   if (documentDecision.outcome === 'refuse') throw forbidden();
 
-  // 4. Proceed with fetch.
+  // 4. A deck's stored documents (`index.html`, `deck.json`) are not assets
+  // either. The branches above prove membership of SOME classroom on this
+  // repo; the deck row says who may read it — a draft only the teaching team,
+  // hidden slides only its editors, notes only those allowed them. So every
+  // deck row on this org and repo that owns the folder is asked, through the
+  // same `assertSlideAccess` VIEW check `/{slideId}` makes, and a caller none
+  // of them admits gets the ordinary refusal. Decided before the read, so a
+  // refused path and a missing one look the same. Images and themes under the
+  // folder stay on the membership rule above: one lookup per asset is the cost
+  // this route's membership cache exists to avoid, and the deck's text is all
+  // in the document.
+  const deckDecision = await deckDocumentDecision({
+    path,
+    findDecks: async contentPath => {
+      const decks = await getPrisma().slide.findMany({
+        where: {
+          kind: 'DECK',
+          content_path: contentPath,
+          classroom: { git_organization: { login: org } },
+        },
+        include: { classroom: { include: { git_organization: true } } },
+      });
+      // Same file only: a classroom on another repo of this org has its own.
+      return decks.filter(deck => expectedContentRepo(deck.classroom) === repo);
+    },
+    rightsFor: async deck => {
+      const access = await assertSlideAccess({
+        request,
+        slideId: deck.id,
+        slide: deck,
+        accessType: 'view',
+      });
+      return {
+        canEdit: Boolean(access.canEdit),
+        canViewSpeakerNotes: Boolean(access.canViewSpeakerNotes),
+      };
+    },
+  });
+  if (deckDecision.outcome === 'refuse') throw forbidden();
+
+  // 5. Proceed with fetch.
   //
   // Text goes through the asset map like every other read now, so an old
   // `/content/...` link serves the same bytes the loaders do rather than
@@ -413,39 +461,13 @@ async function serveContent({ params, request }: ContentLoaderArgs): Promise<Res
     return new Response(binaryContent.buffer, { headers });
   }
 
-  // 5. A deck's stored document carries its hidden slides and its speaker
-  // notes. Only the deck's editors get the hidden slides and only callers
-  // allowed the notes get those (#436) — the `/{slideId}` loader's rule, via
-  // the same `deckHtmlForViewer`, with both flags read in one pass. The answer
-  // now depends on who asked, so no shared cache may keep it.
+  // 6. A deck document goes out as this caller may see it: hidden slides for
+  // its editors only, speaker notes for those allowed them (#436) — the
+  // `/{slideId}` loader's rule, via the same `deckHtmlForViewer`. The answer
+  // depends on who asked, so no shared cache may keep it.
   let text = result.content as string;
-  if (deckFolderOfDocument(path) && (mayHaveHiddenSlides(text) || mayHaveSpeakerNotes(text))) {
-    const rights = await deckDocumentRights({
-      path,
-      classroomIds: authorizedClassroomIds,
-      findDecks: (classroomIds, contentPath) =>
-        getPrisma().slide.findMany({
-          where: {
-            classroom_id: { in: [...classroomIds] },
-            kind: 'DECK',
-            content_path: contentPath,
-          },
-          include: { classroom: { include: { git_organization: true } } },
-        }),
-      rightsFor: async deck => {
-        const access = await assertSlideAccess({
-          request,
-          slideId: deck.id,
-          slide: deck,
-          accessType: 'view',
-        });
-        return {
-          canEdit: Boolean(access.canEdit),
-          canViewSpeakerNotes: Boolean(access.canViewSpeakerNotes),
-        };
-      },
-    });
-    text = deckHtmlForViewer(text, rights);
+  if (deckDecision.outcome === 'serve') {
+    text = deckHtmlForViewer(text, deckDecision.rights);
     headers['Cache-Control'] = 'private, max-age=60';
   }
 

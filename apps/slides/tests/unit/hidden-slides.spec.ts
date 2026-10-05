@@ -26,7 +26,11 @@ import {
   type DeckJson,
 } from '@classmoji/services/slides';
 import { firstSlideOnly } from '../../app/routes/$slideId_.thumbnail-source/route.tsx';
-import { deckDocumentRights, deckFolderOfDocument } from '../../app/utils/slideDocumentAccess.ts';
+import {
+  deckDocumentDecision,
+  deckDocumentOf,
+  deckFolderOfDocument,
+} from '../../app/utils/slideDocumentAccess.ts';
 
 /** A slide is its id; a stack is the list of its children's ids. */
 type Outline = Array<string | string[]>;
@@ -187,66 +191,102 @@ test.describe('the stored document through /content/...', () => {
   const EDITOR = { canEdit: true, canViewSpeakerNotes: true };
   const STUDENT = { canEdit: false, canViewSpeakerNotes: false };
   const STUDENT_WITH_NOTES = { canEdit: false, canViewSpeakerNotes: true };
+  const refuse = async (): Promise<never> => {
+    throw new Response('Forbidden', { status: 403 });
+  };
+
+  test('deck.json is the other deck document; assets are neither', () => {
+    expect(deckDocumentOf(PATH)).toEqual({ folder: 'slides/week-1', kind: 'index' });
+    expect(deckDocumentOf('slides/week-1/deck.json')).toEqual({
+      folder: 'slides/week-1',
+      kind: 'deck-json',
+    });
+    expect(deckDocumentOf('slides/week-1/hero.png')).toBeNull();
+    expect(deckFolderOfDocument('slides/week-1/deck.json')).toBeNull();
+  });
+
+  test('an asset passes without a lookup', async () => {
+    let looked = false;
+    const decision = await deckDocumentDecision({
+      path: 'slides/week-1/hero.png',
+      findDecks: async () => {
+        looked = true;
+        return [];
+      },
+      rightsFor: async () => EDITOR,
+    });
+    expect(decision).toEqual({ outcome: 'pass' });
+    expect(looked).toBe(false);
+  });
 
   test('an editor of the deck gets it whole', async () => {
     const asked: string[] = [];
-    const rights = await deckDocumentRights({
+    const decision = await deckDocumentDecision({
       path: PATH,
-      classroomIds: ['c1'],
-      findDecks: async (_ids, folder) => {
+      findDecks: async folder => {
         asked.push(folder);
         return [{ id: 'deck-1' }];
       },
       rightsFor: async () => EDITOR,
     });
-    expect(rights).toEqual(EDITOR);
+    expect(decision).toEqual({ outcome: 'serve', rights: EDITOR });
     expect(asked).toEqual(['slides/week-1']);
   });
 
   test('a viewer gets the flags its deck row gives it', async () => {
     for (const given of [STUDENT, STUDENT_WITH_NOTES]) {
-      const rights = await deckDocumentRights({
+      const decision = await deckDocumentDecision({
         path: PATH,
-        classroomIds: ['c1'],
         findDecks: async () => [{ id: 'deck-1' }],
         rightsFor: async () => given,
       });
-      expect(rights).toEqual(given);
+      expect(decision).toEqual({ outcome: 'serve', rights: given });
     }
   });
 
-  test('any doubt grants nothing: refused check, unknown folder, no classroom', async () => {
-    const refused = await deckDocumentRights({
+  test('a deck no row admits the caller to (a draft, to a student) is refused', async () => {
+    const decision = await deckDocumentDecision({
       path: PATH,
-      classroomIds: ['c1'],
-      findDecks: async () => [{ id: 'deck-1' }],
-      rightsFor: async () => {
-        throw new Response('Forbidden', { status: 403 });
+      findDecks: async () => [{ id: 'draft' }],
+      rightsFor: refuse,
+    });
+    expect(decision).toEqual({ outcome: 'refuse' });
+  });
+
+  test('a second deck row that admits the caller still wins, flag by flag', async () => {
+    const decision = await deckDocumentDecision({
+      path: PATH,
+      findDecks: async () => [{ id: 'draft-elsewhere' }, { id: 'published' }, { id: 'notes' }],
+      rightsFor: async deck => {
+        if (deck.id === 'draft-elsewhere') return refuse();
+        return deck.id === 'notes' ? STUDENT_WITH_NOTES : STUDENT;
       },
     });
-    const unknown = await deckDocumentRights({
+    expect(decision).toEqual({ outcome: 'serve', rights: STUDENT_WITH_NOTES });
+  });
+
+  test('an index.html no deck claims is served as a viewer sees it', async () => {
+    const decision = await deckDocumentDecision({
       path: PATH,
-      classroomIds: ['c1'],
       findDecks: async () => [],
       rightsFor: async () => EDITOR,
     });
-    const noClassroom = await deckDocumentRights({
-      path: PATH,
-      classroomIds: [],
-      findDecks: async () => [{ id: 'deck-1' }],
-      rightsFor: async () => EDITOR,
-    });
-    expect([refused, unknown, noClassroom]).toEqual([STUDENT, STUDENT, STUDENT]);
+    expect(decision).toEqual({ outcome: 'serve', rights: STUDENT });
   });
 
-  test('a second deck row that grants a flag still wins', async () => {
-    const rights = await deckDocumentRights({
-      path: PATH,
-      classroomIds: ['c1', 'c2'],
-      findDecks: async () => [{ id: 'other-classroom' }, { id: 'mine' }],
-      rightsFor: async deck => (deck.id === 'mine' ? EDITOR : STUDENT),
-    });
-    expect(rights).toEqual(EDITOR);
+  test('deck.json goes to editors only', async () => {
+    const path = 'slides/week-1/deck.json';
+    const forRights = (rights: typeof EDITOR) =>
+      deckDocumentDecision({
+        path,
+        findDecks: async () => [{ id: 'd' }],
+        rightsFor: async () => rights,
+      });
+    expect(await forRights(EDITOR)).toEqual({ outcome: 'serve', rights: EDITOR });
+    expect(await forRights(STUDENT_WITH_NOTES)).toEqual({ outcome: 'refuse' });
+    expect(
+      await deckDocumentDecision({ path, findDecks: async () => [], rightsFor: async () => EDITOR })
+    ).toEqual({ outcome: 'refuse' });
   });
 });
 
@@ -288,7 +328,12 @@ test.describe('every surface goes through the one rule', () => {
 
   test('the content proxy filters a deck document by the same rule', () => {
     const source = read('routes/content.$org.$repo.$/route.tsx');
-    expect(source).toContain('deckDocumentRights(');
-    expect(source).toContain('deckHtmlForViewer(text, rights)');
+    expect(source).toContain('deckDocumentDecision(');
+    expect(source).toContain("if (deckDecision.outcome === 'refuse') throw forbidden();");
+    expect(source).toContain('deckHtmlForViewer(text, deckDecision.rights)');
+    // Decided before the read, so a refused path and a missing one match.
+    expect(source.indexOf('deckDocumentDecision(')).toBeLessThan(
+      source.indexOf('fetchProxyText(matched')
+    );
   });
 });
