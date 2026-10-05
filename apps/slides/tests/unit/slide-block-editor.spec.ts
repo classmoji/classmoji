@@ -14,7 +14,10 @@ import {
   captureSlideTarget,
   countLeafSlides,
   createSlideKeyer,
+  ensureBlockIds,
   removeSlideElement,
+  slideHtmlLengthWith,
+  slideHtmlOverCap,
   resolveDeleteTarget,
   svgFitOf,
   svgFromSource,
@@ -270,5 +273,72 @@ test.describe('svgFromSource reads the source the way the slide will', () => {
       doc
     );
     expect(result.ok).toBe(true);
+  });
+});
+
+test.describe('svgFromSource scopes a drawing\'s styles', () => {
+  test('a <style> in <defs> lands under the <svg>, wrapped in @scope', () => {
+    const result = svgFromSource(
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><defs><style>.cls-1{fill:red}</style>' +
+        '</defs><rect class="cls-1" width="10" height="10"/></svg>',
+      doc
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const first = result.svg.firstElementChild;
+    expect(first?.localName).toBe('style');
+    expect(first?.textContent).toBe('@scope {\n.cls-1{fill:red}\n}');
+  });
+});
+
+test.describe('slide html size before a block edit', () => {
+  test('measures the slide with one part swapped, escaping included', () => {
+    const root = slides(
+      '<section><h2>t</h2><div class="sl-block"><div class="sl-block-content"><b>old</b></div></div></section>'
+    );
+    const block = root.querySelector('.sl-block') as HTMLElement;
+    const section = root.querySelector('section') as HTMLElement;
+    const before = section.innerHTML.length;
+    expect(slideHtmlLengthWith(block, '<b>old</b>', '<i>new!</i>')).toBe(before + 1);
+  });
+
+  test('over the cap says by how much, in KB; at or under the cap is fine', () => {
+    expect(slideHtmlOverCap(200_000)).toBeNull();
+    expect(slideHtmlOverCap(230_400)).toBe(
+      'This slide would hold 231 KB of HTML; the limit is 200 KB.'
+    );
+  });
+});
+
+test.describe('block ids on an edited slide', () => {
+  const block = (id: string | null) =>
+    `<div class="sl-block"${id ? ` data-cm-block-id="${id}"` : ''}><div class="sl-block-content">x</div></div>`;
+  let n = 0;
+  const mint = () => `new${++n}`;
+
+  test('a pasted copy gets a new id even when it lands first; the original keeps its own', () => {
+    n = 0;
+    const root = slides(`<section>${block('aaaa0001')}${block('aaaa0001')}</section>`);
+    const [pasted, original] = Array.from(root.querySelectorAll('.sl-block'));
+    const changed = ensureBlockIds(root.querySelector('section') as Element, new Set([pasted]), mint);
+    expect(changed).toEqual([pasted]);
+    expect(original.getAttribute('data-cm-block-id')).toBe('aaaa0001');
+    expect(pasted.getAttribute('data-cm-block-id')).toBe('new1');
+  });
+
+  test('blocks without an id get one; duplicates among old blocks: the first keeps it', () => {
+    n = 0;
+    const root = slides(`<section>${block('b1')}${block(null)}${block('b1')}</section>`);
+    const els = Array.from(root.querySelectorAll('.sl-block'));
+    ensureBlockIds(root.querySelector('section') as Element, new Set(), mint);
+    expect(els.map(el => el.getAttribute('data-cm-block-id'))).toEqual(['b1', 'new1', 'new2']);
+  });
+
+  test('blocks inside blocks are left alone; a slide in order is untouched', () => {
+    n = 0;
+    const html = `<section><div class="sl-block" data-cm-block-id="o1"><div class="sl-block">in</div></div>${block('o2')}</section>`;
+    const root = slides(html);
+    expect(ensureBlockIds(root.querySelector('section') as Element, new Set(), mint)).toEqual([]);
+    expect(root.innerHTML).toBe(html);
   });
 });

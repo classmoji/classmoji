@@ -794,6 +794,45 @@
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 
+/* html block play mode: the indicator carries a Stop button (keys typed in
+   the frame never reach the page, so Escape alone cannot end play). */
+.block-play-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 4px 2px 12px;
+  pointer-events: auto;
+}
+
+.block-play-stop {
+  padding: 1px 8px;
+  border-radius: 3px;
+  background-color: rgba(255, 255, 255, 0.9);
+  color: #065f46;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  cursor: pointer;
+}
+
+.block-play-stop:hover {
+  background-color: #ffffff;
+}
+
+.block-play-stop:focus-visible {
+  outline: 2px solid #ffffff;
+  outline-offset: 1px;
+}
+
+.dark .block-play-stop {
+  background-color: rgba(6, 78, 59, 0.95);
+  color: #d1fae5;
+}
+
+.dark .block-play-stop:hover {
+  background-color: #064e3b;
+}
+
 /* Green border when in code editing mode */
 .block-resize-overlay.editing-code-mode .block-resize-border {
   border-color: #10b981 !important;

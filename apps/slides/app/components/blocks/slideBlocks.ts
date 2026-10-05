@@ -7,9 +7,12 @@
  * (deckBlocks.ts); this module only applies them in the editor.
  */
 import {
+  BLOCK_ID_ATTR,
   HTML_BLOCK_SELECTOR,
   INERT_ATTR_PREFIX,
+  MAX_SLIDE_HTML_LENGTH,
   isAllowedSvgAttr,
+  mintBlockId,
   sanitizeSvgTree,
 } from '@classmoji/services/slides/runtime-attrs';
 
@@ -129,6 +132,67 @@ export function frameOfBlock(block: Element): HTMLIFrameElement | null {
  */
 export function storedSrcdoc(frame: Element): string {
   return frame.getAttribute('srcdoc') ?? frame.getAttribute(`${INERT_ATTR_PREFIX}srcdoc`) ?? '';
+}
+
+// ─── Slide html size ────────────────────────────────────────────────────────
+
+/**
+ * How long the html of the slide holding `block` would be, in characters,
+ * with markup `removed` (part of the block) swapped for `added`. Measured on
+ * the editor's own serialization, so escaping (an html block's srcdoc) counts.
+ */
+export function slideHtmlLengthWith(block: Element, removed: string, added: string): number {
+  const holder = block.closest('section') ?? block;
+  return holder.innerHTML.length - removed.length + added.length;
+}
+
+/** Why a block edit cannot be written, or null when the slide stays under the cap. */
+export function slideHtmlOverCap(length: number, cap = MAX_SLIDE_HTML_LENGTH): string | null {
+  if (length <= cap) return null;
+  const kb = (n: number) => `${Math.ceil(n / 1000)} KB`;
+  return `This slide would hold ${kb(length)} of HTML; the limit is ${kb(cap)}.`;
+}
+
+// ─── Block ids ──────────────────────────────────────────────────────────────
+
+/** A slide's top-level blocks (blocks inside blocks are part of their block). */
+export function topLevelBlocks(section: Element): HTMLElement[] {
+  return (Array.from(section.querySelectorAll('.sl-block')) as HTMLElement[]).filter(el => {
+    const outer = el.parentElement?.closest('.sl-block');
+    return !outer || !section.contains(outer);
+  });
+}
+
+/**
+ * Give every top-level block of `section` its own `data-cm-block-id`, so a
+ * block edit by id (MCP) reaches exactly one block: a block without an id
+ * gets one; of blocks sharing an id, the ones in `fresh` (just pasted or
+ * dropped) get new ones, and among the rest the first keeps it. Returns the
+ * blocks given an id.
+ */
+export function ensureBlockIds(
+  section: Element,
+  fresh: ReadonlySet<Element> = new Set(),
+  mint: () => string = mintBlockId
+): HTMLElement[] {
+  const blocks = topLevelBlocks(section);
+  const taken = new Set<string>();
+  const changed: HTMLElement[] = [];
+  // Blocks that were already here claim their ids first.
+  const order = [...blocks.filter(b => !fresh.has(b)), ...blocks.filter(b => fresh.has(b))];
+  for (const block of order) {
+    const id = block.getAttribute(BLOCK_ID_ATTR);
+    if (id && !taken.has(id)) {
+      taken.add(id);
+      continue;
+    }
+    let next = mint();
+    while (taken.has(next)) next = mint();
+    block.setAttribute(BLOCK_ID_ATTR, next);
+    taken.add(next);
+    changed.push(block);
+  }
+  return changed;
 }
 
 // ─── Overview thumbnails ────────────────────────────────────────────────────

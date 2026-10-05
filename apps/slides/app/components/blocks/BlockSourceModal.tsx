@@ -10,7 +10,14 @@ import {
 
 import { useIsDarkMode } from '~/hooks/useIsDarkMode';
 import CodeSourceEditor from './CodeSourceEditor';
-import { frameOfBlock, storedSrcdoc, svgFromSource, svgOfBlock } from './slideBlocks';
+import {
+  frameOfBlock,
+  slideHtmlLengthWith,
+  slideHtmlOverCap,
+  storedSrcdoc,
+  svgFromSource,
+  svgOfBlock,
+} from './slideBlocks';
 
 /**
  * BlockSourceModal — edit an html or svg block's source with a live preview.
@@ -22,6 +29,10 @@ import { frameOfBlock, storedSrcdoc, svgFromSource, svgOfBlock } from './slideBl
  * While open, the block carries `editing-code`, so a live deck holds remote
  * changes to its slide until the modal closes (DeckBridge.busyIn); the
  * bridge applies them on its next tick.
+ *
+ * Apply refuses a change that would take the slide over the slide html cap
+ * (the same cap deck ops hold agents to). Closing with changes not applied
+ * asks first.
  */
 
 export type SourceBlockKind = 'html' | 'svg';
@@ -69,12 +80,25 @@ export default function BlockSourceModal({ block, onClose, onApplied }: BlockSou
   const isDark = useIsDarkMode();
   const kind = sourceBlockKind(block);
   const open = block !== null && kind !== null;
+  // Changes typed but not applied, and the "discard them?" question.
+  const [dirty, setDirty] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+
+  useEffect(() => {
+    setDirty(false);
+    setConfirming(false);
+  }, [block]);
+
+  const requestClose = useCallback(() => {
+    if (dirty) setConfirming(true);
+    else onClose();
+  }, [dirty, onClose]);
 
   return (
     <ConfigProvider theme={{ algorithm: isDark ? theme.darkAlgorithm : theme.defaultAlgorithm }}>
       <Modal
         open={open}
-        onCancel={onClose}
+        onCancel={requestClose}
         // Escape belongs to the editor (closing a completion list), never
         // to discarding the source.
         keyboard={false}
@@ -92,9 +116,37 @@ export default function BlockSourceModal({ block, onClose, onApplied }: BlockSou
             kind={kind}
             dark={isDark}
             onClose={onClose}
+            onCancel={requestClose}
+            onDirtyChange={setDirty}
             onApplied={onApplied}
           />
         )}
+      </Modal>
+      <Modal
+        open={open && confirming}
+        title="Discard changes?"
+        onCancel={() => setConfirming(false)}
+        width={400}
+        centered
+        footer={[
+          <Button key="keep" onClick={() => setConfirming(false)}>
+            Keep editing
+          </Button>,
+          <Button
+            key="discard"
+            danger
+            type="primary"
+            data-testid="block-source-discard"
+            onClick={() => {
+              setConfirming(false);
+              onClose();
+            }}
+          >
+            Discard
+          </Button>,
+        ]}
+      >
+        The changes to this source have not been applied.
       </Modal>
     </ConfigProvider>
   );
@@ -105,16 +157,23 @@ function SourceEditorBody({
   kind,
   dark,
   onClose,
+  onCancel,
+  onDirtyChange,
   onApplied,
 }: {
   block: HTMLElement;
   kind: SourceBlockKind;
   dark: boolean;
   onClose: () => void;
+  /** Cancel: the parent asks first when there are changes. */
+  onCancel: () => void;
+  onDirtyChange: (dirty: boolean) => void;
   onApplied?: () => void;
 }) {
   const initial = useMemo(() => initialSource(block, kind), [block, kind]);
   const [source, setSource] = useState(initial);
+  const dirty = source !== initial;
+  useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
   const [previewSource, setPreviewSource] = useState(initial);
   const [error, setError] = useState<string | null>(null);
   const locked = block.closest('section')?.classList.contains('cm-locked') ?? false;
@@ -163,6 +222,13 @@ function SourceEditorBody({
     }
     if (kind === 'html') {
       const frame = frameOfBlock(block);
+      const tooLong = slideHtmlOverCap(
+        slideHtmlLengthWith(block, content.innerHTML, htmlBlockFrameMarkup(source))
+      );
+      if (tooLong) {
+        setError(tooLong);
+        return;
+      }
       const loads =
         frame !== null &&
         frame.hasAttribute('srcdoc') &&
@@ -181,12 +247,20 @@ function SourceEditorBody({
         return;
       }
       const current = svgOfBlock(block);
+      const tooLong = slideHtmlOverCap(
+        slideHtmlLengthWith(block, current?.outerHTML ?? '', result.svg.outerHTML)
+      );
+      if (tooLong) {
+        setError(tooLong);
+        return;
+      }
       if (current) current.replaceWith(result.svg);
       else content.append(result.svg);
     }
+    onDirtyChange(false);
     onApplied?.();
     onClose();
-  }, [block, kind, source, onApplied, onClose]);
+  }, [block, kind, source, onApplied, onClose, onDirtyChange]);
 
   return (
     <div className="flex flex-col gap-3">
@@ -216,11 +290,15 @@ function SourceEditorBody({
         </ScaledPreview>
       </div>
       <div className="flex items-center justify-between gap-3">
-        <div className="min-h-[1.25rem] text-sm text-red-600 dark:text-red-400" role="alert">
+        <div
+          className="min-h-[1.25rem] text-sm text-red-600 dark:text-red-400"
+          role="alert"
+          data-testid="block-source-error"
+        >
           {error}
         </div>
         <div className="flex gap-2">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onCancel}>Cancel</Button>
           <Button type="primary" onClick={apply} disabled={locked}>
             Apply
           </Button>

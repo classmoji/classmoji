@@ -6,6 +6,8 @@ import PropertySection, { PropertyLabel } from '../PropertySection';
 import { useElementSelection } from '../ElementSelectionContext';
 import {
   SVG_FIT_VALUES,
+  slideHtmlLengthWith,
+  slideHtmlOverCap,
   svgFitOf,
   svgFromSource,
   svgOfBlock,
@@ -53,6 +55,13 @@ export default function SvgProperties({ block }: { block: HTMLElement }) {
         return;
       }
       const current = svgOfBlock(block);
+      const tooLong = slideHtmlOverCap(
+        slideHtmlLengthWith(block, current?.outerHTML ?? '', result.svg.outerHTML)
+      );
+      if (tooLong) {
+        toast.error(`${file.name}: ${tooLong}`);
+        return;
+      }
       if (current) current.replaceWith(result.svg);
       else content.append(result.svg);
       bump();

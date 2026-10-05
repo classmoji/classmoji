@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useElementSelection } from './properties/ElementSelectionContext';
+import { ensureBlockIds } from './blocks/slideBlocks';
+import { useBlockIdGuard } from './blocks/useBlockIdGuard';
 
 /**
  * BlockHandles - Renders resize/move handles around a selected sl-block
@@ -10,7 +12,10 @@ import { useElementSelection } from './properties/ElementSelectionContext';
  * - Position/size indicators during operations
  * - Code editing mode for Sandpack blocks (double-click to enter)
  * - Play mode for html blocks (double-click: the frame takes the pointer until
- *   the block is deselected, Escape, or a click outside)
+ *   Stop, the block is deselected, Escape, a click outside, or focus coming
+ *   back to the page from the frame)
+ * - Every block on an edited slide keeps its own data-cm-block-id
+ *   (useBlockIdGuard; a moved or resized block gets one if it has none)
  *
  * Key implementation details:
  * - Screen pixels are converted to slide coordinates (960×700 space) using CSS transform scale
@@ -36,6 +41,7 @@ const HANDLES = [
 
 export default function BlockHandles() {
   const { selectedElement, elementType, blockElement, onContentChange } = useElementSelection();
+  useBlockIdGuard();
   interface ElementBounds {
     left: number;
     top: number;
@@ -339,6 +345,10 @@ export default function BlockHandles() {
       const slide = targetElement.closest('section.present');
       const slideTopBefore = slide ? parsePixels(getComputedStyle(slide).top) : 0;
 
+      // A block moved or resized can be reached by id from now on.
+      const section = targetElement.closest('section');
+      if (section) ensureBlockIds(section);
+
       // Notify parent of content change (triggers Reveal.layout() via RAF)
       onContentChange?.();
 
@@ -462,26 +472,38 @@ export default function BlockHandles() {
   );
 
   // html block play mode: `.editing` on the block for as long as it lasts —
-  // removed however it ends (deselect, Escape, click outside, unmount), since
-  // a live deck holds remote changes to a slide with an open block.
+  // removed however it ends (Stop, deselect, Escape, click outside, focus
+  // back on the page, unmount), since a live deck holds remote changes to a
+  // slide with an open block. Keys typed in the frame never reach this
+  // document, so Escape works only once focus has left it; Stop always does.
   useEffect(() => {
     if (!isPlaying || !targetElement) return;
     targetElement.classList.add('editing');
+    const frame = targetElement.querySelector('iframe');
     const stop = () => setIsPlaying(false);
     // A click inside the frame never reaches this document.
     const onMouseDown = (e: MouseEvent) => {
-      if (!targetElement.contains(e.target as Node)) stop();
+      const target = e.target as Element | null;
+      if (target?.closest?.('[data-play-stop]')) return;
+      if (!targetElement.contains(target)) stop();
     };
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') stop();
     };
+    // Focus coming back to this page (Tab out of the frame, the window
+    // refocused on the page): play is over.
+    const onWindowFocus = () => {
+      if (document.activeElement !== frame) stop();
+    };
     document.addEventListener('mousedown', onMouseDown);
     document.addEventListener('keydown', onKeyDown);
-    targetElement.querySelector('iframe')?.focus();
+    window.addEventListener('focus', onWindowFocus);
+    frame?.focus();
     return () => {
       targetElement.classList.remove('editing');
       document.removeEventListener('mousedown', onMouseDown);
       document.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('focus', onWindowFocus);
     };
   }, [isPlaying, targetElement]);
 
@@ -613,7 +635,20 @@ export default function BlockHandles() {
       {isEditingCode && (
         <div className="block-editing-indicator">Editing Code • Click outside to finish</div>
       )}
-      {isPlaying && <div className="block-editing-indicator">Playing • Click outside to stop</div>}
+      {isPlaying && (
+        <div className="block-editing-indicator block-play-indicator" data-testid="block-playing">
+          Playing
+          <button
+            type="button"
+            data-play-stop
+            data-testid="block-play-stop"
+            className="block-play-stop"
+            onClick={() => setIsPlaying(false)}
+          >
+            Stop
+          </button>
+        </div>
+      )}
 
       {/* Position indicator during move */}
       {isMoving && (
