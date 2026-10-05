@@ -70,6 +70,8 @@ export interface DirtyRowMeta {
   pushed_commit: string | null;
   /** `{ userId, name }[]` accumulated by the collab store hook since the last push. */
   editors: unknown;
+  /** Collab's last outside-push conflict `{ at, sha, ids, reason? }` (dirty-row filter only). */
+  last_conflict?: unknown;
 }
 
 /** The snapshot: state plus the counters read in the same statement. */
@@ -206,6 +208,12 @@ export interface CheckpointResultDoc {
   commit?: string;
   at: string;
   error?: string;
+  /** Save-version requests (payload `requests`) this run answers for the doc. */
+  requestIds?: string[];
+  /** With `requestIds`: nothing of this doc needed pushing. */
+  alreadySaved?: true;
+  /** The buffer still holds edits this run did not push. */
+  editsSince?: boolean;
 }
 
 export interface CheckpointAuditEntry {
@@ -580,7 +588,7 @@ async function checkpointDocs(
   // 1. The dirty rows, filtered in SQL: metadata only, no state.
   const dirty = await prisma.$queryRaw<DirtyRowMeta[]>`
     SELECT kind, doc_id, epoch, version, pushed_version, schema_version, source_sha,
-           pushed_commit, editors
+           pushed_commit, editors, last_conflict
     FROM collab_docs
     WHERE classroom_id = ${classroomId}
       AND version > pushed_version
@@ -626,6 +634,7 @@ async function checkpointDocs(
       : [],
   ]);
   const pageById = new Map(pages.map(p => [p.id, p]));
+  const lastConflictOf = new Map(dirty.map(r => [docKey(r.kind, r.doc_id), r.last_conflict]));
   const slideById = new Map(slides.map(s => [s.id, s]));
 
   // 2–4. Snapshot, render, guard, prepare — one row at a time.
@@ -919,19 +928,31 @@ async function checkpointDocs(
   for (const c of ok) {
     const e = excluded.get(docKey(c.row.kind, c.row.doc_id));
     if (!e) continue;
+    // Collab already answered this very commit "cannot merge" (no merge
+    // base): asking again gets the same answer. Stay dirty and reported (the
+    // sweeper alerts); a person has to settle it.
+    const conflict = lastConflictOf.get(docKey(c.row.kind, c.row.doc_id)) as
+      | { sha?: unknown; reason?: unknown }
+      | null
+      | undefined;
+    const unmergeable = conflict?.reason === 'no-merge-base' && conflict.sha === e.headCommit;
     log.warn('content-checkpoint: outside edit waiting for collab', {
       classroomId,
       kind: c.row.kind,
       docId: c.row.doc_id,
       path: e.path,
       head: e.headCommit,
+      unmergeable,
     });
     report.docs.push({
       ...c.report,
       status: 'refused',
       code: 'outside-edit-pending',
-      reason: `${e.path} changed outside the live document (at ${e.headCommit.slice(0, 12)}); waiting for collab to merge it`,
+      reason: unmergeable
+        ? `${e.path} changed outside the live document (at ${e.headCommit.slice(0, 12)}) and collab could not merge it (no merge base); needs a person`
+        : `${e.path} changed outside the live document (at ${e.headCommit.slice(0, 12)}); waiting for collab to merge it`,
     });
+    if (unmergeable) continue;
     try {
       await deps.notifyOutsideEdit({
         classroomId,
@@ -1005,7 +1026,9 @@ async function checkpointDocs(
           .concat((rowEditors.get(key) ?? []).map(a => a.userId))
       ),
     ];
-    if (credited.length && result.pushed) {
+    // Also when nothing new was committed: the head already holds what they
+    // wrote, so crediting them on some later commit would be wrong.
+    if (credited.length) {
       try {
         await trimEditors(prisma, c.row, credited, c.row.version);
       } catch (error) {
@@ -1073,7 +1096,7 @@ async function checkpointDocs(
  * lock re-evaluates its SET against the committed row — a store that landed
  * first has re-stamped its editors past `pushedVersion`, so they stay.
  */
-async function trimEditors(
+export async function trimEditors(
   prisma: CheckpointPrisma,
   row: CheckpointRow,
   userIds: string[],
@@ -1107,7 +1130,12 @@ export function checkpointErrorText(doc: DocReport): string | null {
  */
 export async function runContentCheckpoint(
   payload: CheckpointPayload,
-  ctx: { runId: string },
+  /**
+   * `finalAttempt`: no Trigger.dev retry follows this attempt. Until then a
+   * retryable failure does not answer Save-version requests (the retry may
+   * still save them).
+   */
+  ctx: { runId: string; finalAttempt?: boolean },
   deps: CheckpointDeps
 ): Promise<CheckpointReport> {
   const { log } = deps;
@@ -1145,39 +1173,6 @@ export async function runContentCheckpoint(
     }
   }
 
-  if (report.docs.length) {
-    try {
-      await deps.notifyCheckpointResult({
-        classroomId: payload.classroomId,
-        docs: report.docs.map(d => {
-          const error = checkpointErrorText(d);
-          return {
-            kind: d.kind,
-            id: d.docId,
-            at: at.toISOString(),
-            ...(d.commit && !error ? { commit: d.commit } : {}),
-            ...(error ? { error } : {}),
-          };
-        }),
-      });
-    } catch (e) {
-      log.warn('content-checkpoint: checkpoint-result not delivered', { error: errMessage(e) });
-    }
-  }
-
-  if (report.commit || report.docs.length) {
-    const classroom = await deps.prisma.classroom
-      .findUnique({ where: { id: payload.classroomId }, include: { git_organization: true } })
-      .catch(() => null);
-    if (classroom) {
-      report.repoSizeKb = await deps.repoSizeKb(classroom).catch(() => null);
-      log.info('content-checkpoint: content repo size', {
-        classroomId: payload.classroomId,
-        sizeKb: report.repoSizeKb,
-      });
-    }
-  }
-
   if (!report.failure) {
     const refused = report.docs.filter(
       d => d.status === 'refused' && d.code !== 'outside-edit-pending'
@@ -1197,5 +1192,100 @@ export async function runContentCheckpoint(
       };
     }
   }
+
+  // Save-version requests this run answers, per doc. Every request gets an
+  // entry: its doc's outcome, else "already saved" (nothing of it needed
+  // pushing — an earlier run pushed it), else the run's failure. A failure
+  // Trigger.dev will retry answers nothing yet: the retry may still save it.
+  const answerFailures = report.failure?.kind !== 'retry' || ctx.finalAttempt === true;
+  const requestsByDoc = new Map<string, string[]>();
+  for (const r of payload.requests ?? []) {
+    if (!r || typeof r.id !== 'string' || (r.kind !== 'page' && r.kind !== 'deck')) continue;
+    const key = docKey(r.kind, r.docId);
+    requestsByDoc.set(key, [...(requestsByDoc.get(key) ?? []), r.id]);
+  }
+  const entries: CheckpointResultDoc[] = report.docs.map(d => {
+    const error = checkpointErrorText(d);
+    const requestIds =
+      error && !answerFailures ? undefined : requestsByDoc.get(docKey(d.kind, d.docId));
+    return {
+      kind: d.kind,
+      id: d.docId,
+      at: at.toISOString(),
+      ...(d.commit && !error ? { commit: d.commit } : {}),
+      ...(error ? { error } : {}),
+      ...(requestIds ? { requestIds } : {}),
+      ...(requestIds && d.status === 'unchanged' ? { alreadySaved: true as const } : {}),
+      // Edits the run did not push are still in the buffer (stored while it
+      // ran, or the doc was not saved at all).
+      editsSince: d.status === 'pushed' || d.status === 'unchanged' ? d.clean === false : true,
+    };
+  });
+  const reported = new Set(report.docs.map(d => docKey(d.kind, d.docId)));
+  for (const [key, requestIds] of requestsByDoc) {
+    if (reported.has(key)) continue;
+    const [kind, ...rest] = key.split(':');
+    const docId = rest.join(':');
+    if (report.failure) {
+      if (!answerFailures) continue;
+      entries.push({
+        kind,
+        id: docId,
+        at: at.toISOString(),
+        error: `failed: ${report.failure.message}`.slice(0, 500),
+        requestIds,
+        editsSince: true,
+      });
+      continue;
+    }
+    const current = await deps.prisma.collabDoc
+      .findUnique({
+        where: { kind_doc_id: { kind, doc_id: docId } },
+        select: {
+          kind: true,
+          doc_id: true,
+          epoch: true,
+          version: true,
+          pushed_version: true,
+          schema_version: true,
+          source_sha: true,
+          pushed_commit: true,
+          editors: true,
+          state: true,
+        },
+      })
+      .catch(() => null);
+    entries.push({
+      kind,
+      id: docId,
+      at: at.toISOString(),
+      ...(current?.pushed_commit ? { commit: current.pushed_commit } : {}),
+      requestIds,
+      alreadySaved: true,
+      editsSince: !!current && current.version > current.pushed_version,
+    });
+  }
+
+  if (entries.length) {
+    try {
+      await deps.notifyCheckpointResult({ classroomId: payload.classroomId, docs: entries });
+    } catch (e) {
+      log.warn('content-checkpoint: checkpoint-result not delivered', { error: errMessage(e) });
+    }
+  }
+
+  if (report.commit || report.docs.length) {
+    const classroom = await deps.prisma.classroom
+      .findUnique({ where: { id: payload.classroomId }, include: { git_organization: true } })
+      .catch(() => null);
+    if (classroom) {
+      report.repoSizeKb = await deps.repoSizeKb(classroom).catch(() => null);
+      log.info('content-checkpoint: content repo size', {
+        classroomId: payload.classroomId,
+        sizeKb: report.repoSizeKb,
+      });
+    }
+  }
+
   return report;
 }

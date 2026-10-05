@@ -130,7 +130,11 @@ export const collabExternal = task({
       if (err instanceof CollabExternalRefused) {
         // Error level with the doc ids: an outside edit that did not reach the
         // live doc is an alert. For `no-merge-base` collab kept the live doc
-        // and records the conflict on it; this run just stops.
+        // and recorded the conflict on its row (`last_conflict`, reason
+        // no-merge-base): the checkpoint worker stops re-notifying that
+        // commit and the sweeper fails its run until a person settles it.
+        // (A doc with no file before the push merges against an empty base
+        // and never lands here.)
         logger.error(
           err.code === 'no-merge-base'
             ? 'collab external: outside edit NOT merged (no merge base)'

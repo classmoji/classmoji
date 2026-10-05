@@ -32,14 +32,42 @@ export function sqlSweeperDb(prisma: RawClient): CollabSweeperDb {
       return rows.map(r => r.classroom_id);
     },
 
-    async erroringRows(dirtyBefore) {
+    async clearedRefusals({ page, deck }) {
+      return prisma.$queryRaw<SweepDocRef[]>`
+        SELECT kind, doc_id, classroom_id FROM collab_docs
+        WHERE version > pushed_version
+          AND octet_length(state) > 0
+          AND last_checkpoint_error LIKE 'schema-mismatch:%'
+          AND ((kind = 'page' AND schema_version = ${page})
+               OR (kind = 'deck' AND schema_version = ${deck}))
+        LIMIT 500`;
+    },
+
+    async orphanRows(limit) {
+      return prisma.$queryRaw<SweepDocRef[]>`
+        SELECT d.kind, d.doc_id, d.classroom_id FROM collab_docs d
+        WHERE (d.kind = 'page' AND NOT EXISTS (SELECT 1 FROM pages p WHERE p.id = d.doc_id))
+           OR (d.kind = 'deck' AND NOT EXISTS (SELECT 1 FROM slides s WHERE s.id = d.doc_id))
+        LIMIT ${limit}`;
+    },
+
+    async deleteRow(ref) {
+      await prisma.$queryRaw`
+        DELETE FROM collab_docs WHERE kind = ${ref.kind} AND doc_id = ${ref.doc_id}
+        RETURNING kind`;
+    },
+
+    async erroringRows(dirtyBefore, outsideBefore) {
       const cutoff = dirtyBefore.toISOString();
+      const outsideCutoff = (outsideBefore ?? dirtyBefore).toISOString();
       return prisma.$queryRaw<SweepErrorRow[]>`
         SELECT kind, doc_id, classroom_id, last_checkpoint_error, dirty_since
         FROM collab_docs
         WHERE version > pushed_version
           AND last_checkpoint_error IS NOT NULL
-          AND dirty_since < (${cutoff}::timestamptz AT TIME ZONE 'UTC')
+          AND (dirty_since < (${cutoff}::timestamptz AT TIME ZONE 'UTC')
+               OR (last_checkpoint_error LIKE 'outside-edit-pending:%'
+                   AND dirty_since < (${outsideCutoff}::timestamptz AT TIME ZONE 'UTC')))
         ORDER BY dirty_since
         LIMIT 500`;
     },

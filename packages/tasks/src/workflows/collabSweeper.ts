@@ -1,8 +1,10 @@
 /**
- * collab-sweeper — every 30 minutes: re-trigger checkpoints nobody ran, alert
- * on live docs stuck unsaved for over an hour, and turn week-idle clean
- * buffers into reseed markers so git is the only copy at rest. Policy in
- * `helpers/collabSweeperCore.ts`, SQL in `helpers/collabSweeperDb.ts`.
+ * collab-sweeper — every 30 minutes: re-trigger checkpoints nobody ran (and
+ * refusals a retry now fixes), drop rows of deleted docs, turn week-idle
+ * clean buffers into reseed markers so git is the only copy at rest, and
+ * FAIL the run when live docs are stuck unsaved (so Trigger.dev's run-failure
+ * alert fires). Policy in `helpers/collabSweeperCore.ts`, SQL in
+ * `helpers/collabSweeperDb.ts`.
  *
  * Not in `src/index.ts`, like content-checkpoint: Trigger.dev finds it
  * through `dirs`, and nothing triggers it by hand.
@@ -41,6 +43,43 @@ async function isLive(ref: SweepDocRef): Promise<boolean | null> {
   }
 }
 
+/** Collab `/close {reason: 'deleted'}`: closes the room and drops the row. */
+async function closeDeleted(ref: SweepDocRef): Promise<boolean> {
+  const env = resolveCollabEnv();
+  if (!env) return false;
+  try {
+    const response = await fetch(
+      `${env.httpUrl}/internal/${encodeURIComponent(ref.kind)}/${encodeURIComponent(ref.doc_id)}/close`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-collab-secret': env.secret },
+        body: JSON.stringify({ reason: 'deleted' }),
+        signal: AbortSignal.timeout(5000),
+      }
+    );
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** The worker's schema versions, loaded inside the run (not at index time). */
+async function schemaVersions(): Promise<{ page: number; deck: number } | undefined> {
+  try {
+    const [{ SCHEMA_VERSION }, collab] = await Promise.all([
+      import('@classmoji/page-schema/constants'), // eslint-disable-line import/no-unresolved
+      import('@classmoji/collab'), // eslint-disable-line import/no-unresolved
+    ]);
+    const deck = (collab as Record<string, unknown>).DECK_SCHEMA_VERSION;
+    return typeof deck === 'number' ? { page: SCHEMA_VERSION, deck } : undefined;
+  } catch (error) {
+    logger.warn('collab-sweeper: schema versions unavailable; refusals not retried', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
+  }
+}
+
 export const collabSweeper = schedules.task({
   id: 'collab-sweeper',
   // Every 30 minutes. The cadence only bounds how late each pass notices:
@@ -54,24 +93,19 @@ export const collabSweeper = schedules.task({
     return runCollabSweep({
       db: sqlSweeperDb(getPrisma()),
       delays,
-      // The collab server's own debounce key and options, so a re-trigger
-      // folds into any checkpoint already waiting for this classroom.
+      // A PLAIN run, no debounce key: the trigger this replaces may be a
+      // debounced run Trigger.dev left DELAYED, which would absorb another
+      // trigger on its key. Runs are idempotent; an extra one finds nothing.
       triggerCheckpoint: async classroomId => {
         await tasks.trigger(
           CHECKPOINT_TASK_ID,
           { classroomId, reason: 'store' },
-          {
-            concurrencyKey: classroomId,
-            debounce: {
-              key: `checkpoint:${classroomId}`,
-              delay: delays.delay,
-              maxDelay: delays.maxDelay,
-              mode: 'trailing',
-            },
-          }
+          { concurrencyKey: classroomId }
         );
       },
       isLive,
+      closeDeleted,
+      schemaVersions: await schemaVersions(),
       log: {
         info: (m, d) => logger.info(m, d),
         warn: (m, d) => logger.warn(m, d),

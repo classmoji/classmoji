@@ -63,6 +63,8 @@ export const CHECKPOINT_QUEUE_NAME = 'content-checkpoint';
 /** The outside-edit notification task (packages/tasks/src/workflows/collabExternal.ts). */
 export const COLLAB_EXTERNAL_TASK_ID = 'collab-external';
 
+const CHECKPOINT_MAX_ATTEMPTS = 3;
+
 type PageContentTarget = Parameters<typeof ClassmojiService.pageContent.preparePageContent>[0];
 
 async function loadPageRenderer(): Promise<PageRenderer> {
@@ -200,7 +202,8 @@ export function realCheckpointDeps(): CheckpointDeps {
         user_id: userId,
         role: membership.role,
         action: 'COLLAB_CHECKPOINT',
-        resource_type: kind === 'deck' ? 'slide' : 'page',
+        // = COLLAB_AUDIT_RESOURCE in @classmoji/collab (what joins and the MCP tools write).
+        resource_type: kind === 'deck' ? 'SLIDES' : 'PAGES',
         resource_id: docId,
         data: { commit, version, runId },
       });
@@ -238,9 +241,20 @@ export const contentCheckpoint = task({
    * unpushed. A transient GitHub failure therefore retries rather than waiting
    * for the next edit to trigger another run.
    */
-  retry: { maxAttempts: 3, minTimeoutInMs: 2000, maxTimeoutInMs: 20000, factor: 2 },
+  retry: {
+    maxAttempts: CHECKPOINT_MAX_ATTEMPTS,
+    minTimeoutInMs: 2000,
+    maxTimeoutInMs: 20000,
+    factor: 2,
+  },
   run: async (payload: CheckpointPayload, { ctx }) => {
-    const report = await runContentCheckpoint(payload, { runId: ctx.run.id }, realCheckpointDeps());
+    const report = await runContentCheckpoint(
+      payload,
+      // Save-version requests are answered with a retryable failure only on
+      // the last attempt (`retry.maxAttempts` below).
+      { runId: ctx.run.id, finalAttempt: ctx.attempt.number >= CHECKPOINT_MAX_ATTEMPTS },
+      realCheckpointDeps()
+    );
     // Everything that succeeded is committed and recorded by now; a refused
     // or failed doc still marks the run failed, so dashboards and alerts see
     // it. A refusal is deterministic (no retry); a failure may be transient.

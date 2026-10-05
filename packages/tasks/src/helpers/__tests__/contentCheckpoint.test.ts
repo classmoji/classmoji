@@ -154,6 +154,7 @@ describe('commit message', () => {
 
 type Row = CheckpointRow & {
   classroom_id: string;
+  last_conflict?: unknown;
   dirty_since: Date | null;
   last_checkpoint_at?: Date | null;
   last_checkpoint_error?: string | null;
@@ -194,6 +195,7 @@ function makePrisma(rows: Row[]) {
     source_sha: r.source_sha,
     pushed_commit: r.pushed_commit,
     editors: r.editors,
+    ...(r.last_conflict !== undefined ? { last_conflict: r.last_conflict } : {}),
   });
   return {
     rows,
@@ -612,8 +614,39 @@ describe('runContentCheckpoint', () => {
           id: 'page-a',
           at: NOW.toISOString(),
           error: expect.stringMatching(/Permission denied/),
+          editsSince: true,
         },
       ],
+    });
+  });
+
+  it('a retryable failure answers Save-version requests only on the last attempt', async () => {
+    const failing = () =>
+      makeDeps(makePrisma([row('page', 'page-a', blocksToYDoc([para('a1', 'x')]), 1)]), {
+        commitFiles: async () => {
+          throw new GitCommandError(['push'], 1, 'remote: Permission denied');
+        },
+      });
+    const payload = {
+      classroomId: 'class-1',
+      reason: 'save-version' as const,
+      requests: [{ id: 'req-retry-01', kind: 'page' as const, docId: 'page-a' }],
+    };
+    const early = failing();
+    await runContentCheckpoint(payload, { runId: 'r', finalAttempt: false }, early.deps);
+    const earlyDocs = (early.notifyCheckpointResult.mock.calls[0] as unknown[])[0] as {
+      docs: Array<Record<string, unknown>>;
+    };
+    expect(earlyDocs.docs[0]).not.toHaveProperty('requestIds');
+
+    const last = failing();
+    await runContentCheckpoint(payload, { runId: 'r', finalAttempt: true }, last.deps);
+    const lastDocs = (last.notifyCheckpointResult.mock.calls[0] as unknown[])[0] as {
+      docs: Array<Record<string, unknown>>;
+    };
+    expect(lastDocs.docs[0]).toMatchObject({
+      requestIds: ['req-retry-01'],
+      error: expect.stringMatching(/Permission denied/),
     });
   });
 
@@ -1011,12 +1044,13 @@ describe('runContentCheckpoint bookkeeping round 2', () => {
     expect(notifyCheckpointResult).toHaveBeenCalledWith({
       classroomId: 'class-1',
       docs: expect.arrayContaining([
-        { kind: 'page', id: 'page-a', at: NOW.toISOString(), commit: head },
+        { kind: 'page', id: 'page-a', at: NOW.toISOString(), commit: head, editsSince: false },
         {
           kind: 'page',
           id: 'page-b',
           at: NOW.toISOString(),
           error: expect.stringMatching(/^schema-mismatch/),
+          editsSince: true,
         },
       ]),
     });
@@ -1137,5 +1171,104 @@ describe('runContentCheckpoint bookkeeping round 2', () => {
     await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r' }, deps);
     expect(prisma.rows[0].pushed_version).toBe(3);
     expect(prisma.rows[0].editors).toEqual([{ userId: 'u-bob', name: 'Bob', version: 4 }]);
+  });
+});
+
+describe('Save-version requests and the remaining gaps', () => {
+  it('answers a request when there was nothing to push (alreadySaved, with the commit)', async () => {
+    const prisma = makePrisma([
+      row('page', 'page-a', blocksToYDoc([para('a', 'a')]), 1, {
+        pushed_version: 1,
+        pushed_commit: 'c'.repeat(40),
+      }),
+    ]);
+    const { deps, notifyCheckpointResult } = makeDeps(prisma);
+    const report = await runContentCheckpoint(
+      {
+        classroomId: 'class-1',
+        reason: 'save-version',
+        requests: [{ id: 'req-00000001', kind: 'page', docId: 'page-a' }],
+      },
+      { runId: 'r' },
+      deps
+    );
+    expect(report.docs).toEqual([]);
+    expect(notifyCheckpointResult).toHaveBeenCalledWith({
+      classroomId: 'class-1',
+      docs: [
+        {
+          kind: 'page',
+          id: 'page-a',
+          at: NOW.toISOString(),
+          commit: 'c'.repeat(40),
+          requestIds: ['req-00000001'],
+          alreadySaved: true,
+          editsSince: false,
+        },
+      ],
+    });
+  });
+
+  it("puts the request ids on the pushed doc's entry; other docs' entries carry none", async () => {
+    const prisma = makePrisma([
+      row('page', 'page-a', blocksToYDoc([para('a1', 'A')]), 1),
+      row('page', 'page-b', blocksToYDoc([para('b1', 'B')]), 1),
+    ]);
+    const { deps, notifyCheckpointResult } = makeDeps(prisma);
+    await runContentCheckpoint(
+      {
+        classroomId: 'class-1',
+        reason: 'save-version',
+        requests: [{ id: 'req-00000002', kind: 'page', docId: 'page-b' }],
+      },
+      { runId: 'r' },
+      deps
+    );
+    const head = sh(['--git-dir', remote, 'rev-parse', 'main']);
+    const sent = (notifyCheckpointResult.mock.calls[0] as unknown[])[0] as {
+      docs: Array<Record<string, unknown>>;
+    };
+    expect(sent.docs.find(d => d.id === 'page-b')).toEqual({
+      kind: 'page',
+      id: 'page-b',
+      at: NOW.toISOString(),
+      commit: head,
+      requestIds: ['req-00000002'],
+      editsSince: false,
+    });
+    expect(sent.docs.find(d => d.id === 'page-a')).not.toHaveProperty('requestIds');
+  });
+
+  it('a no-change push clears the editors it covers too (no credit on a later commit)', async () => {
+    const doc = blocksToYDoc([para('a1', 'same')]);
+    const prisma = makePrisma([row('page', 'page-a', doc, 1)]);
+    const { deps } = makeDeps(prisma);
+    await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r1' }, deps);
+    // An edit and its undo: version moves, bytes do not; Ada is an editor.
+    Object.assign(prisma.rows[0], {
+      version: 2,
+      dirty_since: new Date(),
+      editors: [{ userId: 'u-ada', name: 'Ada', version: 2 }],
+    });
+    const report = await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r2' }, deps);
+    expect(report.docs[0].status).toBe('unchanged');
+    expect(prisma.rows[0].editors).toBeNull();
+  });
+
+  it('does not re-notify collab of an outside commit it already could not merge', async () => {
+    const head = sh(['--git-dir', remote, 'rev-parse', 'main']);
+    const prisma = makePrisma([
+      row('page', 'page-a', blocksToYDoc([para('a1', 'ours')]), 3, {
+        source_sha: 'f'.repeat(40),
+        last_conflict: { at: 'x', sha: head, ids: [], reason: 'no-merge-base' },
+      }),
+    ]);
+    const { deps, notifyOutsideEdit } = makeDeps(prisma);
+    const report = await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r' }, deps);
+    expect(notifyOutsideEdit).not.toHaveBeenCalled();
+    expect(report.docs[0]).toMatchObject({ status: 'refused', code: 'outside-edit-pending' });
+    expect(report.docs[0].reason).toMatch(/could not merge it/);
+    // Still unsaved and recorded: the sweeper alerts on it.
+    expect(prisma.rows[0].last_checkpoint_error).toMatch(/^outside-edit-pending: /);
   });
 });
