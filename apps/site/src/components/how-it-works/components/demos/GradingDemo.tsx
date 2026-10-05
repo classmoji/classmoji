@@ -1,12 +1,18 @@
 import React from 'react';
-import { Checkbox, ConfigProvider, Input, Table, Tag } from 'antd';
+import { Checkbox, Table, Tag } from 'antd';
 import type { TableColumnsType } from 'antd';
-import { IconBrandGithub, IconSearch } from '@tabler/icons-react';
+import { IconBrandGithub } from '@tabler/icons-react';
 import { demoUsers } from '../../data/appNav';
 import { useDemoTimeline } from '../../hooks/useDemoTimeline';
 import type { DemoBase, Step } from '../../types/demo';
 import { clickAnd, moveTo } from '../../utils/timeline';
-import { AppAntd } from '../demo-kit/AppAntd';
+import {
+  AssignmentCompact,
+  AssignmentFacts,
+  AssignmentToolbar,
+  Stat,
+  assignmentLink as link,
+} from '../demo-kit/AssignmentPage';
 import { AppShell } from '../demo-kit/AppShell';
 import { DemoFrame } from '../demo-kit/DemoFrame';
 
@@ -92,35 +98,6 @@ const ROWS: Row[] = [
 ];
 
 const TOTAL = 42;
-
-/** The app's antd theme at the demo's scale: the stage is smaller than a real page. */
-function Compact({ children }: { children: React.ReactNode }) {
-  return (
-    <AppAntd>
-      <ConfigProvider
-        theme={{
-          token: { fontSize: 12, controlHeight: 28 },
-          components: { Table: { cellPaddingBlock: 8, cellPaddingInline: 8 } },
-        }}
-      >
-        {children}
-      </ConfigProvider>
-    </AppAntd>
-  );
-}
-
-/** The webapp's quiet text link (Change, Grade, View). */
-const link = 'text-[12px] font-medium text-ink-2';
-
-/** A Stat tile from the assignment page. */
-function Stat({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex flex-col gap-0.5 rounded-xl bg-panel px-3 py-2 ring-1 ring-line">
-      <span className="text-[11px] font-medium text-ink-3">{label}</span>
-      <span className="text-[16px] font-bold tabular-nums text-ink-1">{children}</span>
-    </div>
-  );
-}
 
 /** A floating antd-style popover card; the demo positions it by hand. */
 function Popover({ className, children }: { className: string; children: React.ReactNode }) {
@@ -287,29 +264,6 @@ export function GradingDemo() {
     },
   ];
 
-  const facts = (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-ink-3">
-      <span>
-        Repo · <span className="font-medium text-ink-1">issue</span>
-      </span>
-      <span>
-        Repository <span className="font-medium text-[#21883d]">hw3-hashing</span>
-      </span>
-      <span>
-        Due <span className="font-medium text-ink-1">Fri Oct 9, 11:59 PM</span>
-      </span>
-      <span>
-        Weight <span className="font-medium text-ink-1">10%</span>
-      </span>
-      <span>
-        Student repos{' '}
-        <span className="font-medium text-ink-1">
-          {TOTAL} of {TOTAL}
-        </span>
-      </span>
-    </div>
-  );
-
   return (
     <DemoFrame
       controller={demo}
@@ -318,9 +272,9 @@ export function GradingDemo() {
       rest={{ x: 0.9, y: 0.45 }}
     >
       <AppShell active="modules" role="staff" user={demoUsers.teacher} title="HW3: Hashing">
-        <Compact>
+        <AssignmentCompact>
           <div className="flex h-full flex-col gap-2.5">
-            {facts}
+            <AssignmentFacts mode="issue" repository="hw3-hashing" total={TOTAL} />
             <div className="grid grid-cols-4 gap-2">
               <Stat label="Submitted">
                 {TOTAL} <span className="text-[11px] font-medium text-ink-3">of {TOTAL}</span>
@@ -333,26 +287,7 @@ export function GradingDemo() {
               </Stat>
               <Stat label="Ungraded">{ungraded}</Stat>
             </div>
-            <div className="flex items-center gap-2">
-              <Input
-                prefix={<IconSearch size={14} className="text-gray-400" />}
-                placeholder="Search students"
-                className="w-36"
-                readOnly
-              />
-              <div className="flex gap-1 rounded-lg bg-stone-100 p-1">
-                {['All', 'Ungraded', 'Late', 'Not submitted'].map((f, i) => (
-                  <span
-                    key={f}
-                    className={`flex h-6 items-center whitespace-nowrap rounded-md px-2 text-[11px] font-medium ${
-                      i === 0 ? 'bg-white text-ink-1 ring-1 ring-line' : 'text-ink-2'
-                    }`}
-                  >
-                    {f}
-                  </span>
-                ))}
-              </div>
-            </div>
+            <AssignmentToolbar />
             <div className="min-h-0 flex-1 overflow-visible rounded-2xl bg-panel p-2 ring-1 ring-line [&_th]:whitespace-nowrap">
               <Table<Row>
                 columns={columns}
@@ -364,7 +299,7 @@ export function GradingDemo() {
               />
             </div>
           </div>
-        </Compact>
+        </AssignmentCompact>
       </AppShell>
     </DemoFrame>
   );
