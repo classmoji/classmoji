@@ -13,10 +13,48 @@ import type { CollabRuntime } from './server.ts';
  * see internal.ts).
  */
 export async function handleRequest(
+  payload: Pick<onRequestPayload, 'request' | 'response'>,
+  runtime: CollabRuntime
+): Promise<void> {
+  try {
+    await routeRequest(payload, runtime);
+  } catch (error) {
+    // `throw null` is the "handled" signal for Hocuspocus; pass it through.
+    if (error === null) throw null;
+    // Anything else must never escape: an unhandled rejection here would end
+    // the only collab process and every open room with it.
+    console.error('[collab] request failed:', error);
+    const { response } = payload;
+    if (!response.headersSent) {
+      response.writeHead(500, { 'Content-Type': 'text/plain' });
+      response.end('internal error');
+    } else if (!response.writableEnded) {
+      response.end();
+    }
+    throw null;
+  }
+}
+
+/**
+ * The request path and query, read without `new URL(raw, base)`: a raw target
+ * such as `//%2e%2e%2f.env` is taken as a host there and throws.
+ */
+export function parseRequestTarget(raw: string | undefined): {
+  pathname: string;
+  searchParams: URLSearchParams;
+} {
+  const target = raw && raw.startsWith('/') ? raw : '/';
+  const queryAt = target.indexOf('?');
+  const pathname = queryAt === -1 ? target : target.slice(0, queryAt);
+  const search = queryAt === -1 ? '' : target.slice(queryAt + 1);
+  return { pathname, searchParams: new URLSearchParams(search) };
+}
+
+async function routeRequest(
   { request, response }: Pick<onRequestPayload, 'request' | 'response'>,
   runtime: CollabRuntime
 ): Promise<void> {
-  const url = new URL(request.url ?? '/', 'http://collab.local');
+  const url = parseRequestTarget(request.url);
 
   // `/health` (Fly's check): always 200 while the process serves — a DB blip
   // must not unroute the only instance and drop every open editor — with the
