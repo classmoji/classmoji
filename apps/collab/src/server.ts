@@ -641,6 +641,7 @@ export class CollabRuntime {
       durationMs(
         now ? this.deps.config.checkpointNowMaxDelay : this.deps.config.checkpointMaxDelay
       ),
+      now,
       at
     );
   }
@@ -733,8 +734,15 @@ export class CollabRuntime {
    * `checkpointWatchdogRetries` losses in a row the sweeper takes over.
    * In-memory: a restart forgets the watches (the sweeper is the backstop).
    */
-  private watchCheckpoint(classroomId: string, windowMs: number, at = Date.now()): void {
-    const olderThanMs = windowMs + this.deps.config.checkpointWatchdogMarginMs;
+  private watchCheckpoint(
+    classroomId: string,
+    windowMs: number,
+    now: boolean,
+    at = Date.now()
+  ): void {
+    const { checkpointWatchdogMarginMs, checkpointWatchdogNowMarginMs } = this.deps.config;
+    const olderThanMs =
+      windowMs + (now ? checkpointWatchdogNowMarginMs : checkpointWatchdogMarginMs);
     this.addWatch(classroomId, at + olderThanMs, olderThanMs);
   }
 
@@ -794,7 +802,7 @@ export class CollabRuntime {
           { now: true, plain: true }
         );
         // A plain run starts at once: due after the margin alone.
-        this.watchCheckpoint(classroomId, 0);
+        this.watchCheckpoint(classroomId, 0, true);
       }
     } else if (!lost) {
       this.lostStreak.delete(classroomId);

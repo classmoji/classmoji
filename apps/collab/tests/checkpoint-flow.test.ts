@@ -138,6 +138,7 @@ describe('lost-trigger watchdog', () => {
         checkpointMaxDelay: '1s',
         checkpointNowMaxDelay: '1s',
         checkpointWatchdogMarginMs: 100,
+        checkpointWatchdogNowMarginMs: 100,
         checkpointWatchdogRetries: 2,
       },
     });

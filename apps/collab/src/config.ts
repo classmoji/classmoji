@@ -46,6 +46,12 @@ export interface CollabConfig {
    * counts as lost and is re-sent (ms). Covers queueing and the run itself.
    */
   checkpointWatchdogMarginMs: number;
+  /**
+   * The same for a "now" checkpoint (Save version, last leave), which runs
+   * within seconds: short, so a lost one is re-sent while the person who
+   * pressed Save version is still waiting (pages give up after 60 s).
+   */
+  checkpointWatchdogNowMarginMs: number;
   /** Consecutive lost triggers re-sent per classroom before giving up to the sweeper. */
   checkpointWatchdogRetries: number;
 }
@@ -119,6 +125,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CollabConfig {
     agentRenewMs: 10_000,
     agentTouchMs: AGENT_TOUCH_EXPIRE_MS,
     checkpointWatchdogMarginMs: 120_000,
+    checkpointWatchdogNowMarginMs: 30_000,
     checkpointWatchdogRetries: 3,
   };
 }
