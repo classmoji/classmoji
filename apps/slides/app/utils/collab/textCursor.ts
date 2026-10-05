@@ -2,6 +2,9 @@
  * Keep a textarea's caret where the person left it when someone else's edit
  * lands in the same Y.Text: map an index through a Yjs text delta.
  */
+import type * as Y from 'yjs';
+import { textSplice } from '@classmoji/collab';
+
 export type TextDelta = Array<{ retain?: number; insert?: unknown; delete?: number }>;
 
 /** `index` after `delta` was applied to the text it pointed into. */
@@ -24,4 +27,30 @@ export function transformIndex(index: number, delta: TextDelta): number {
     }
   }
   return Math.max(0, index + shift);
+}
+
+/**
+ * Apply what the person typed (`shown` → `next`) to the live text, moved past
+ * the remote changes that landed since `shown` was rendered — never a diff
+ * against text they did not see (which would delete it).
+ */
+export function applyNotesEdit(
+  text: Y.Text,
+  shown: string,
+  next: string,
+  remoteSince: readonly TextDelta[]
+): void {
+  const splice = textSplice(shown, next);
+  if (!splice) return;
+  let start = splice.index;
+  let end = splice.index + splice.remove;
+  for (const delta of remoteSince) {
+    start = transformIndex(start, delta);
+    end = transformIndex(end, delta);
+  }
+  const length = text.length;
+  start = Math.min(start, length);
+  end = Math.min(Math.max(end, start), length);
+  if (end > start) text.delete(start, end - start);
+  if (splice.insert) text.insert(start, splice.insert);
 }
