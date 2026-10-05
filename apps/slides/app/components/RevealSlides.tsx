@@ -4,6 +4,7 @@ import {
   neutralizeHtmlBlockFrames,
   sanitizeSvgBlocks,
 } from '@classmoji/services/slides/runtime-attrs';
+import { domSlideTree, removeHiddenSlides } from '@classmoji/services/slides/hidden';
 import { stripMediaRefs } from '~/utils/mediaRefs';
 import { cleanupEditorContainer } from '~/utils/editorCleanup';
 import { lockSourceBlockContent } from '~/utils/collab/bridgeDom';
@@ -297,24 +298,13 @@ const RevealSlides = forwardRef(function RevealSlides(
 
       const container = slidesContent || doc.body;
 
-      // Hidden slides are how a deck retires content without deleting it, and
-      // RevealPresenter already strips them for presentation mode. This is the
-      // other viewer every non-editor lands on (the plain /{slideId} view,
-      // including students) — without the same filter, a hidden slide shows
-      // up as a perfectly normal, navigable one (#436). Editing mode keeps
-      // them in the DOM, marked via .slide-hidden below, so the teaching team
-      // can still find and restore them.
-      if (!isEditing) {
-        container.querySelectorAll('section[data-hidden="true"]').forEach(el => el.remove());
-        // Clean up empty vertical stacks (parent sections left with only
-        // hidden children), same as RevealPresenter.
-        container.querySelectorAll(':scope > section').forEach(section => {
-          const nestedSections = section.querySelectorAll(':scope > section');
-          if (nestedSections.length === 0 && !section.innerHTML.trim()) {
-            section.remove();
-          }
-        });
-      }
+      // Hidden slides are how a deck retires content without deleting it. This
+      // is the viewer every non-editor lands on (the plain /{slideId} view,
+      // students included), so it applies the same rule as the presenter
+      // (hiddenSlides.ts, #436). Editing keeps them in the DOM, marked via
+      // .slide-hidden below, so the teaching team can find and restore them,
+      // and a save (which reads the editor's DOM) keeps them.
+      if (!isEditing) removeHiddenSlides(container, domSlideTree);
 
       // Clean up any contenteditable attributes that may have been saved
       // (these are only added at runtime during edit mode)
