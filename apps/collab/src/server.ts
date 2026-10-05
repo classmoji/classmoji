@@ -127,14 +127,26 @@ const NOW_MERGE_WINDOW_MS = 10_000;
 const SAVE_REQUEST_TTL_MS = 10 * 60_000;
 
 /** A pending checkpoint watch: check the classroom at `due`. */
-interface CheckpointWatch {
+/** One pending check: at `due`, "lost" = a row dirty and unvisited for `olderThanMs`. */
+interface WatchItem {
   due: number;
-  /** "Lost" = a row dirty and unvisited for at least this long at `due`. */
   olderThanMs: number;
-  timer: NodeJS.Timeout;
-  /** A later trigger's watch, scheduled when this one has fired. */
-  next?: { due: number; olderThanMs: number };
 }
+
+/**
+ * A classroom's pending checks, soonest first, and the one timer armed for
+ * the soonest. Every due time is kept (a later trigger never displaces an
+ * earlier Save version's); routine checks of the same window that fall
+ * within WATCH_COALESCE_MS of one another share the earliest.
+ */
+interface CheckpointWatch {
+  items: WatchItem[];
+  timer: NodeJS.Timeout | null;
+  timerDue: number;
+}
+
+/** Routine (long-window) checks this close together are one check. */
+const WATCH_COALESCE_MS = 30_000;
 
 const REASON_RANK: Record<CheckpointReason, number> = {
   store: 0,
@@ -333,7 +345,7 @@ export class CollabRuntime {
   async destroy(): Promise<void> {
     this.destroyed = true;
     this.rechecker.stop();
-    for (const watch of this.watches.values()) clearTimeout(watch.timer);
+    for (const watch of this.watches.values()) if (watch.timer) clearTimeout(watch.timer);
     this.watches.clear();
     for (const presence of [...this.agents.values()]) this.dropAgent(presence, false);
     await this.server.destroy();
@@ -781,29 +793,59 @@ export class CollabRuntime {
 
   private addWatch(classroomId: string, due: number, olderThanMs: number): void {
     if (this.destroyed) return;
-    const watch = this.watches.get(classroomId);
-    if (watch && watch.due <= due) {
-      // Already watched sooner: remember the latest due for afterwards.
-      if (due > watch.due && (!watch.next || due > watch.next.due)) {
-        watch.next = { due, olderThanMs };
-      }
+    let watch = this.watches.get(classroomId);
+    if (!watch) {
+      watch = { items: [], timer: null, timerDue: Infinity };
+      this.watches.set(classroomId, watch);
+    }
+    // A check of the same window within the coalesce span of one already
+    // queued is covered by it: the earlier one also sees this trigger's rows
+    // (dirty_since keeps the first dirt) and the run this trigger awaits.
+    // Short windows (Save version, last leave) are never merged.
+    const span = olderThanMs >= 60_000 ? WATCH_COALESCE_MS : 0;
+    const covered = watch.items.some(
+      item => item.olderThanMs === olderThanMs && item.due <= due && due - item.due <= span
+    );
+    if (!covered) {
+      watch.items.push({ due, olderThanMs });
+      watch.items.sort((a, b) => a.due - b.due);
+    }
+    this.armWatch(classroomId, watch);
+  }
+
+  /** (Re)arm the classroom's timer for its soonest check; drop an empty queue. */
+  private armWatch(classroomId: string, watch: CheckpointWatch): void {
+    const head = watch.items[0];
+    if (!head || this.destroyed) {
+      if (watch.timer) clearTimeout(watch.timer);
+      if (this.watches.get(classroomId) === watch) this.watches.delete(classroomId);
       return;
     }
-    let next = watch ? { due: watch.due, olderThanMs: watch.olderThanMs } : undefined;
-    if (watch?.next && (!next || watch.next.due > next.due)) next = watch.next;
-    if (watch) clearTimeout(watch.timer);
-    const timer = setTimeout(
+    if (watch.timer && watch.timerDue === head.due) return;
+    if (watch.timer) clearTimeout(watch.timer);
+    watch.timerDue = head.due;
+    watch.timer = setTimeout(
       () => void this.checkWatch(classroomId),
-      Math.max(0, due - Date.now())
+      Math.max(0, head.due - Date.now())
     );
-    timer.unref();
-    this.watches.set(classroomId, { due, olderThanMs, timer, ...(next ? { next } : {}) });
+    watch.timer.unref();
   }
 
   private async checkWatch(classroomId: string): Promise<void> {
-    const watch = this.watches.get(classroomId);
-    if (!watch || this.destroyed) return;
-    this.watches.delete(classroomId);
+    const queue = this.watches.get(classroomId);
+    if (!queue || this.destroyed) return;
+    queue.timer = null;
+    queue.timerDue = Infinity;
+    // Every check due by now runs as one; the shortest window decides (its
+    // trigger's run was due soonest).
+    const nowAt = Date.now();
+    const due = queue.items.filter(item => item.due <= nowAt);
+    queue.items = queue.items.filter(item => item.due > nowAt);
+    if (due.length === 0) {
+      this.armWatch(classroomId, queue);
+      return;
+    }
+    const watch = { olderThanMs: Math.min(...due.map(item => item.olderThanMs)) };
     let lost = false;
     try {
       lost = await this.deps.store.lostCheckpoint(classroomId, watch.olderThanMs);
@@ -852,9 +894,8 @@ export class CollabRuntime {
     } else if (!lost) {
       this.lostStreak.delete(classroomId);
     }
-    if (watch.next && !this.destroyed) {
-      this.addWatch(classroomId, watch.next.due, watch.next.olderThanMs);
-    }
+    const current = this.watches.get(classroomId);
+    if (current) this.armWatch(classroomId, current);
   }
 
   /**

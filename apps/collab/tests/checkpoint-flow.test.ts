@@ -481,3 +481,57 @@ describe('flush-only checkpoints', () => {
     ]);
   });
 });
+
+describe('watchdog: every due time is kept', () => {
+  it('a later routine trigger does not push back an earlier Save version check', async () => {
+    await server.close();
+    await setup({
+      config: {
+        checkpointMaxDelay: '4s',
+        checkpointWatchdogMarginMs: 100, // routine checks: 4.1 s after their trigger
+        checkpointNowMaxDelay: '1s',
+        checkpointWatchdogNowMarginMs: 1_000, // Save version: 2 s after the request
+      },
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      // t0: a routine trigger (check at t0 + 4.1 s).
+      await internal(server, 'POST', `/page/${PAGE}/ops`, {
+        ops: [insertOp('n1', 'A')],
+        actor: agent,
+      });
+      await new Promise(resolve => setTimeout(resolve, 2_500));
+      // t0 + 2.5 s: Save version (its check: t0 + 4.5 s, after the routine one).
+      await internal(server, 'POST', `/page/${PAGE}/checkpoint`, {
+        actor,
+        requestId: 'req-keep-0001',
+      });
+      const asked = Date.now();
+      // A routine run pushed the row; the run carrying the request never ran.
+      const row = server.store.rows.get(`page:${PAGE}`)!;
+      Object.assign(row, {
+        pushed_version: row.version,
+        dirty_since: null,
+        last_checkpoint_at: new Date(),
+      });
+      await new Promise(resolve => setTimeout(resolve, 200));
+      // t0 + 2.7 s: another routine trigger (check at t0 + 6.8 s).
+      await internal(server, 'POST', `/page/${PAGE}/ops`, {
+        ops: [insertOp('n2', 'B')],
+        actor: agent,
+      });
+      await waitFor(
+        () =>
+          server.checkpoints.calls.some(
+            c => c.plain && c.payload.requests?.some(r => r.id === 'req-keep-0001')
+          ),
+        6_000,
+        'request re-sent'
+      );
+      // At its own due time (2 s), not the later routine one (4.3 s after it).
+      expect(Date.now() - asked).toBeLessThan(3_300);
+    } finally {
+      warn.mockRestore();
+    }
+  }, 15_000);
+});
