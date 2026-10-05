@@ -502,11 +502,10 @@ export function sanitizeSvgBlocks(root: Element | Document | DocumentFragment): 
 
 /**
  * At-rules a scoped sheet keeps outside its `@scope` block: they define
- * names or load things, select nothing, and are not valid inside `@scope`.
+ * names, select nothing, and are not valid inside `@scope`.
  */
 const UNSCOPED_AT_RULES: ReadonlySet<string> = new Set([
   'charset',
-  'import',
   'namespace',
   'font-face',
   'keyframes',
@@ -519,37 +518,97 @@ const UNSCOPED_AT_RULES: ReadonlySet<string> = new Set([
   'page',
 ]);
 
+/** At-rules a scoped sheet drops: an imported sheet could not be scoped. */
+const DROPPED_AT_RULES: ReadonlySet<string> = new Set(['import']);
+
+/** Conditional group rules whose style rules are scoped like top-level ones. */
+const GROUP_AT_RULES: ReadonlySet<string> = new Set([
+  'media',
+  'supports',
+  'layer',
+  'container',
+  'starting-style',
+]);
+
+/**
+ * Appended to every selector in a drawing's sheet: the rule applies to the
+ * drawing's `<svg>` itself and what is inside it, wherever the rest of the
+ * selector matches. Within `@scope` a selector without `:scope` is matched
+ * below the root only, so `svg rect` or `#diagram-id .node` (as diagram
+ * tools write them) would no longer reach the drawing; one naming `:scope`
+ * is taken as written. `:where` adds no specificity.
+ */
+export const SVG_SCOPE_SUFFIX = ':where(:scope, :scope *)';
+
 interface CssChunk {
   text: string;
   /** Lower-case at-rule name (`keyframes`), or null for a style rule. */
   at: string | null;
-  /** The text between the at-rule's name and its block, trimmed. */
+  /** The text between the at-rule's name (or the start) and its block, trimmed. */
   prelude: string;
+  /** Where the chunk's block opens in `text`, or -1 for a statement. */
+  open: number;
   /** True when it ended in a closed block. */
   block: boolean;
 }
 
+const IDENT_CHAR_RE = /[\w-]|[^\x00-\x7f]/;
+
+/** The decoded name of the ident at `at` (escapes read), and where it ends. */
+function readIdent(css: string, at: number): { name: string; end: number } {
+  let name = '';
+  let i = at;
+  while (i < css.length) {
+    const c = css[i];
+    if (c === '\\' && i + 1 < css.length && css[i + 1] !== '\n') {
+      const hex = /^[0-9a-fA-F]{1,6}/.exec(css.slice(i + 1, i + 7));
+      if (hex) {
+        name += String.fromCodePoint(Math.min(parseInt(hex[0], 16), 0x10ffff) || 0xfffd);
+        i += 1 + hex[0].length;
+        if (/\s/.test(css[i] ?? '')) i++;
+      } else {
+        name += css[i + 1];
+        i += 2;
+      }
+    } else if (IDENT_CHAR_RE.test(c)) {
+      name += c;
+      i++;
+    } else {
+      break;
+    }
+  }
+  return { name, end: i };
+}
+
 /**
- * A sheet's top-level rules, in order (comments, strings and escapes read the
- * way CSS reads them). A `}` with no block open is dropped; a rule cut off at
- * the end is closed (comment, string and blocks), so the result is balanced.
+ * A sheet's rules at one level, in order, read the way CSS tokenizes them
+ * (comments, strings, escapes, and an unquoted `url(…)` as one token). A `}`
+ * with no block open is dropped; a rule cut off at the end is closed
+ * (comment, string and blocks), so the result is balanced.
  */
-function topLevelCss(css: string): CssChunk[] {
+function cssChunks(css: string): CssChunk[] {
   const chunks: CssChunk[] = [];
   let start = 0;
   let depth = 0;
   let text = '';
+  let open = -1;
   const push = (end: number, block: boolean, tail = '') => {
     const piece = text + css.slice(start, end) + tail;
+    const at = open;
     text = '';
+    open = -1;
     if (!piece.trim()) return;
-    const head = piece.replace(/^(?:\s|\/\*[\s\S]*?\*\/)*/, '');
-    const name = /^@(-?[a-zA-Z][\w-]*)/.exec(head);
-    const brace = head.indexOf('{');
-    const prelude = name
-      ? head.slice(name[0].length, brace === -1 ? head.length : brace).trim()
-      : '';
-    chunks.push({ text: piece, at: name ? name[1].toLowerCase() : null, prelude, block });
+    const lead = /^(?:\s|\/\*[\s\S]*?\*\/)*/.exec(piece)?.[0].length ?? 0;
+    const name = piece[lead] === '@' ? readIdent(piece, lead + 1) : null;
+    const preludeFrom = name ? name.end : lead;
+    const prelude = piece.slice(preludeFrom, at === -1 ? piece.length : at).trim();
+    chunks.push({
+      text: piece,
+      at: name ? name.name.toLowerCase() : null,
+      prelude,
+      open: at,
+      block,
+    });
   };
   let i = 0;
   while (i < css.length) {
@@ -569,15 +628,36 @@ function topLevelCss(css: string): CssChunk[] {
         return chunks;
       }
       i = j + 1;
-    } else if (c === '\\') {
-      i += 2;
+    } else if (c === '\\' || IDENT_CHAR_RE.test(c)) {
+      const ident = readIdent(css, i);
+      if (ident.end === i) {
+        i++; // a lone backslash before a newline
+        continue;
+      }
+      i = ident.end;
+      if (ident.name.toLowerCase() === 'url' && css[i] === '(') {
+        let j = i + 1;
+        while (j < css.length && /\s/.test(css[j])) j++;
+        if (css[j] !== '"' && css[j] !== "'") {
+          // An unquoted url runs to its `)`: nothing inside it is structure.
+          while (j < css.length && css[j] !== ')') j += css[j] === '\\' ? 2 : 1;
+          if (j >= css.length) {
+            push(css.length, false, ')' + '}'.repeat(depth));
+            return chunks;
+          }
+          i = j + 1;
+        }
+      }
     } else if (c === '{') {
+      if (depth === 0) open = text.length + (i - start);
       depth++;
       i++;
     } else if (c === '}') {
       if (depth === 0) {
-        // A stray close: dropped, or it would end the scope early.
-        text += css.slice(start, i);
+        // A stray close: dropped, or it would end the scope early. An empty
+        // comment takes its place, keeping the tokens on either side apart
+        // (a space could be read as part of an escape before it).
+        text += css.slice(start, i) + '/**/';
         start = i + 1;
       } else if (--depth === 0) {
         push(i + 1, true);
@@ -592,41 +672,210 @@ function topLevelCss(css: string): CssChunk[] {
       i++;
     }
   }
-  push(Math.min(i, css.length), depth > 0, '}'.repeat(depth));
+  push(css.length, depth > 0, '}'.repeat(depth));
   return chunks;
+}
+
+/** `list` split at its top-level commas (strings, comments, brackets and parens read). */
+function splitSelectorList(list: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let from = 0;
+  for (let i = 0; i < list.length; i++) {
+    const c = list[i];
+    if (c === '\\') i++;
+    else if (c === '"' || c === "'") {
+      for (i++; i < list.length && list[i] !== c; i++) if (list[i] === '\\') i++;
+    } else if (c === '/' && list[i + 1] === '*') {
+      const close = list.indexOf('*/', i + 2);
+      i = close === -1 ? list.length : close + 1;
+    } else if (c === '(' || c === '[') depth++;
+    else if ((c === ')' || c === ']') && depth > 0) depth--;
+    else if (c === ',' && depth === 0) {
+      out.push(list.slice(from, i));
+      from = i + 1;
+    }
+  }
+  out.push(list.slice(from));
+  return out;
+}
+
+/** Whether every string and comment in `text` closes (on its line, for a string). */
+function closesItsTokens(text: string): boolean {
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '\\') i++;
+    else if (c === '"' || c === "'") {
+      for (i++; i < text.length && text[i] !== c; i++) {
+        if (text[i] === '\n') return false;
+        if (text[i] === '\\') i++;
+      }
+      if (i >= text.length) return false;
+    } else if (c === '/' && text[i + 1] === '*') {
+      const close = text.indexOf('*/', i + 2);
+      if (close === -1) return false;
+      i = close + 1;
+    }
+  }
+  return true;
+}
+
+const LEGACY_PSEUDO_ELEMENT_RE = /:(?:before|after|first-line|first-letter)$/i;
+
+/**
+ * One selector with {@link SVG_SCOPE_SUFFIX} on its subject: after its last
+ * token (comments and space after it stay after it), before a pseudo-element.
+ * A selector naming `:scope` or `&` is taken as written; one that ends in a
+ * combinator or a bare colon is left alone (it matches nothing either way).
+ */
+function scopeSelector(selector: string): string {
+  if (/:scope\b/i.test(selector) || selector.includes('&')) return selector.trim();
+  let end = -1;
+  let pseudo = -1;
+  let depth = 0;
+  for (let i = 0; i < selector.length; i++) {
+    const c = selector[i];
+    if (c === '/' && selector[i + 1] === '*') {
+      const close = selector.indexOf('*/', i + 2);
+      i = close === -1 ? selector.length : close + 1;
+      continue;
+    }
+    if (/\s/.test(c)) continue;
+    if (c === '\\') {
+      i++;
+    } else if (c === '"' || c === "'") {
+      for (i++; i < selector.length && selector[i] !== c; i++) if (selector[i] === '\\') i++;
+    } else if (c === '(' || c === '[') {
+      depth++;
+    } else if ((c === ')' || c === ']') && depth > 0) {
+      depth--;
+    } else if (c === ':' && selector[i + 1] === ':' && depth === 0 && pseudo === -1) {
+      pseudo = i;
+    }
+    end = Math.min(i + 1, selector.length);
+  }
+  if (end === -1) return selector.trim();
+  let cut = pseudo !== -1 ? pseudo : end;
+  if (pseudo === -1) {
+    const legacy = LEGACY_PSEUDO_ELEMENT_RE.exec(selector.slice(0, end));
+    if (legacy) cut = legacy.index;
+  }
+  if (/[:>+~([,]$/.test(selector.slice(0, cut).trimEnd())) return selector.trim();
+  return (selector.slice(0, cut) + SVG_SCOPE_SUFFIX + selector.slice(cut)).trim();
+}
+
+/** A rule list with every style rule's selectors scoped (group rules entered, others kept). */
+function scopeRuleList(css: string): string {
+  return cssChunks(css)
+    .map(chunk => {
+      if (chunk.open === -1) return chunk.text;
+      const head = chunk.text.slice(0, chunk.open);
+      const body = chunk.text.slice(chunk.open + 1, chunk.block ? -1 : undefined);
+      const close = chunk.block ? '}' : '';
+      if (chunk.at === null) {
+        const lead = /^\s*/.exec(head)?.[0] ?? '';
+        const trail = /\s*$/.exec(head.slice(lead.length))?.[0] ?? '';
+        const core = head.slice(lead.length, head.length - trail.length);
+        // Nothing to name in an empty prelude; one whose strings or comments
+        // run on is left exactly as written (still inside the scope).
+        if (!core || !closesItsTokens(core)) return chunk.text;
+        const selectors = splitSelectorList(core).map(scopeSelector);
+        return `${lead}${selectors.join(', ')}${trail}{${body}${close}`;
+      }
+      if (GROUP_AT_RULES.has(chunk.at)) return `${head}{${scopeRuleList(body)}${close}`;
+      return chunk.text;
+    })
+    .join('');
+}
+
+/** `css` trimmed, keeping one space after a final backslash (it would escape what follows). */
+function trimCss(css: string): string {
+  const trimmed = css.trim();
+  const slashes = /\\+$/.exec(trimmed)?.[0].length ?? 0;
+  return slashes % 2 === 1 ? `${trimmed} ` : trimmed;
 }
 
 /**
  * An svg `<style>` sheet scoped to its drawing: its rules wrapped in a
  * prelude-less `@scope { … }`, which applies them only inside the `<style>`
- * element's parent (the drawing's `<svg>`, see {@link scopeSvgStyles}), so
- * the `.st0` / `.cls-1` classes drawing tools export never reach another
- * drawing or the page. At-rules that cannot be scoped ({@link
- * UNSCOPED_AT_RULES}: `@keyframes`, `@font-face`, `@import`, …) go first,
- * outside the scope. Idempotent: a sheet already in this form comes back
- * byte for byte; an empty sheet is left as it is.
+ * element's parent (the drawing's `<svg>`, see {@link scopeSvgStyles}), each
+ * selector carrying {@link SVG_SCOPE_SUFFIX} so it can still name that
+ * `<svg>`. The `.st0` / `.cls-1` classes drawing tools export never reach
+ * another drawing or the page. At-rules that cannot be scoped
+ * ({@link UNSCOPED_AT_RULES}: `@keyframes`, `@font-face`, …) go first,
+ * outside the scope; `@import` is dropped. Idempotent: a sheet already in
+ * this form comes back byte for byte; an empty sheet is left as it is.
  */
 export function scopeSvgStyleText(css: string): string {
-  const chunks = topLevelCss(css);
-  const kept = chunks.filter(c => c.at !== null && UNSCOPED_AT_RULES.has(c.at));
-  const scoped = chunks.filter(c => !(c.at !== null && UNSCOPED_AT_RULES.has(c.at)));
-  const head = kept.map(c => c.text.trim()).join('\n');
-  const body = scoped
-    .map(c => c.text)
-    .join('')
-    .trim();
-  if (!body) return head || css;
+  // As CSS reads it: one kind of newline; a backslash at the very end escapes nothing.
+  let src = css.replace(/\r\n?|\f/g, '\n');
+  const trailing = /\\+$/.exec(src)?.[0].length ?? 0;
+  if (trailing % 2 === 1) src = src.slice(0, -1);
+
+  const chunks = cssChunks(src).filter(c => c.at === null || !DROPPED_AT_RULES.has(c.at));
+  const unscoped = (c: CssChunk) => c.at !== null && UNSCOPED_AT_RULES.has(c.at);
+  const kept = chunks.filter(unscoped);
+  const scoped = chunks.filter(c => !unscoped(c));
+  // Each kept rule ends in its own `;` or `}`, so what follows it can never
+  // be read as part of it; its end is kept as is (a newline can end a string).
+  const head = kept
+    .map(c => {
+      const text = c.text.replace(/^\s+/, '');
+      return c.open === -1 && !text.endsWith(';') ? `${text};` : text;
+    })
+    .join('\n');
   const only = scoped.length === 1 ? scoped[0] : null;
   const already = only !== null && only.at === 'scope' && only.prelude === '' && only.block;
-  const wrapped = already ? body : `@scope {\n${body}\n}`;
+  const inner = already
+    ? only.text.trim().slice(only.text.trim().indexOf('{') + 1, -1)
+    : scoped.map(c => c.text).join('');
+  const body = trimCss(scopeRuleList(trimCss(inner)));
+  if (!body) return head || (chunks.length === 0 && !src.trim() ? css : '');
+  const wrapped = `@scope {\n${body}\n}`;
   return head ? `${head}\n${wrapped}` : wrapped;
+}
+
+/** Top-level rules a scoped sheet may hold (CSSOM names), whatever their content. */
+const SCOPED_SHEET_RULES = new Set([
+  'CSSScopeRule',
+  'CSSNamespaceRule',
+  'CSSFontFaceRule',
+  'CSSKeyframesRule',
+  'CSSPropertyRule',
+  'CSSCounterStyleRule',
+  'CSSFontFeatureValuesRule',
+  'CSSFontPaletteValuesRule',
+  'CSSPageRule',
+]);
+
+/**
+ * In a browser that has `@scope`: whether the browser itself reads `css`
+ * as a scoped sheet (every top-level rule an `@scope` or an unscoped
+ * at-rule) — the check behind the text transform. True where it can't tell.
+ */
+function browserReadsAsScoped(css: string): boolean {
+  const g = globalThis as unknown as {
+    CSSScopeRule?: unknown;
+    CSSStyleSheet?: new () => { replaceSync(text: string): void; cssRules: ArrayLike<object> };
+  };
+  if (typeof g.CSSScopeRule !== 'function' || typeof g.CSSStyleSheet !== 'function') return true;
+  try {
+    const sheet = new g.CSSStyleSheet();
+    sheet.replaceSync(css);
+    return Array.from(sheet.cssRules).every(rule =>
+      SCOPED_SHEET_RULES.has((rule as { constructor: { name: string } }).constructor.name)
+    );
+  } catch {
+    return true;
+  }
 }
 
 /**
  * Every svg `<style>` under `root` scoped to its drawing: moved, when nested
  * (drawing tools put it in `<defs>`), to be a child of the outermost `<svg>`
  * holding it — just before the branch it sat in, so sheets keep their order
- * — and its text scoped ({@link scopeSvgStyleText}). Idempotent.
+ * — and its text scoped ({@link scopeSvgStyleText}). A sheet the browser
+ * would not read as scoped is emptied. Idempotent.
  */
 export function scopeSvgStyles(root: Element): void {
   for (const style of Array.from(root.getElementsByTagNameNS(SVG_NS, 'style'))) {
@@ -641,7 +890,8 @@ export function scopeSvgStyles(root: Element): void {
       top.insertBefore(style, branch);
     }
     const css = style.textContent ?? '';
-    const next = scopeSvgStyleText(css);
+    let next = scopeSvgStyleText(css);
+    if (next && !browserReadsAsScoped(next)) next = '';
     if (next !== css) style.textContent = next;
   }
 }

@@ -7,7 +7,11 @@
 import { test, expect } from '@playwright/test';
 // @ts-expect-error -- jsdom ships no type declarations; only the constructor is used.
 import { JSDOM } from 'jsdom';
-import { htmlBlockMarkup, HTML_BLOCK_SANDBOX } from '@classmoji/services/slides/runtime-attrs';
+import {
+  htmlBlockMarkup,
+  HTML_BLOCK_SANDBOX,
+  SVG_SCOPE_SUFFIX,
+} from '@classmoji/services/slides/runtime-attrs';
 
 import {
   DEFAULT_SVG_SOURCE,
@@ -287,7 +291,7 @@ test.describe("svgFromSource scopes a drawing's styles", () => {
     if (!result.ok) return;
     const first = result.svg.firstElementChild;
     expect(first?.localName).toBe('style');
-    expect(first?.textContent).toBe('@scope {\n.cls-1{fill:red}\n}');
+    expect(first?.textContent).toBe(`@scope {\n.cls-1${SVG_SCOPE_SUFFIX}{fill:red}\n}`);
   });
 });
 
@@ -310,7 +314,7 @@ test.describe('slide html size before a block edit', () => {
   });
 });
 
-test.describe('block ids on an edited slide', () => {
+test.describe('block ids for pasted copies', () => {
   const block = (id: string | null) =>
     `<div class="sl-block"${id ? ` data-cm-block-id="${id}"` : ''}><div class="sl-block-content">x</div></div>`;
   let n = 0;
@@ -330,19 +334,29 @@ test.describe('block ids on an edited slide', () => {
     expect(pasted.getAttribute('data-cm-block-id')).toBe('new1');
   });
 
-  test('blocks without an id get one; duplicates among old blocks: the first keeps it', () => {
+  test('two pasted copies of one block get two ids; a unique pasted id stays', () => {
     n = 0;
-    const root = slides(`<section>${block('b1')}${block(null)}${block('b1')}</section>`);
-    const els = Array.from(root.querySelectorAll('.sl-block'));
-    ensureBlockIds(root.querySelector('section') as Element, new Set(), mint);
-    expect(els.map(el => el.getAttribute('data-cm-block-id'))).toEqual(['b1', 'new1', 'new2']);
+    const root = slides(
+      `<section>${block('b1')}${block('b1')}${block('b1')}${block('c9')}</section>`
+    );
+    const [original, p1, p2, other] = Array.from(root.querySelectorAll('.sl-block'));
+    ensureBlockIds(root.querySelector('section') as Element, new Set([p1, p2, other]), mint);
+    expect([original, p1, p2, other].map(el => el.getAttribute('data-cm-block-id'))).toEqual([
+      'b1',
+      'new1',
+      'new2',
+      'c9',
+    ]);
   });
 
-  test('blocks inside blocks are left alone; a slide in order is untouched', () => {
+  test('blocks without an id, and blocks that were already there, are left to the server', () => {
     n = 0;
-    const html = `<section><div class="sl-block" data-cm-block-id="o1"><div class="sl-block">in</div></div>${block('o2')}</section>`;
+    const html = `<section>${block('b1')}${block(null)}${block('b1')}<div class="sl-block" data-cm-block-id="o1"><div class="sl-block">in</div></div></section>`;
     const root = slides(html);
-    expect(ensureBlockIds(root.querySelector('section') as Element, new Set(), mint)).toEqual([]);
+    const idless = root.querySelectorAll('.sl-block')[1];
+    expect(
+      ensureBlockIds(root.querySelector('section') as Element, new Set([idless]), mint)
+    ).toEqual([]);
     expect(root.innerHTML).toBe(html);
   });
 });

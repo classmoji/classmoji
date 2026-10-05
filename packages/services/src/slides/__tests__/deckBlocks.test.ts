@@ -41,6 +41,7 @@ import {
   MAX_SLIDE_HTML_LENGTH,
   mintBlockId,
   scopeSvgStyleText,
+  SVG_SCOPE_SUFFIX,
 } from '../deckBlocks.ts';
 import { MAX_SLIDE_HTML } from '../deckOps.ts';
 import { browserFixture } from './fixtures/browserSerialization.ts';
@@ -550,17 +551,35 @@ describe('html block frames delegate fullscreen only', () => {
 });
 
 describe("scopeSvgStyleText: a drawing's styles stay in the drawing", () => {
+  const S = SVG_SCOPE_SUFFIX;
   const ILLUSTRATOR =
     '.st0{fill:#E6332A;}\n.st1{fill:none;stroke:#1D1D1B;stroke-width:2;}\n' +
     '@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}\n' +
     'g > .st0{opacity:.5}';
 
-  it('wraps rules in a prelude-less @scope and keeps unscopable at-rules outside, first', () => {
-    const out = scopeSvgStyleText(ILLUSTRATOR);
-    expect(out).toBe(
+  it('wraps rules in a prelude-less @scope, suffixes selectors, keeps unscopable at-rules first', () => {
+    expect(scopeSvgStyleText(ILLUSTRATOR)).toBe(
       '@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}\n' +
-        '@scope {\n.st0{fill:#E6332A;}\n.st1{fill:none;stroke:#1D1D1B;stroke-width:2;}\n' +
-        'g > .st0{opacity:.5}\n}'
+        `@scope {\n.st0${S}{fill:#E6332A;}\n.st1${S}{fill:none;stroke:#1D1D1B;stroke-width:2;}\n` +
+        `g > .st0${S}{opacity:.5}\n}`
+    );
+  });
+
+  it('selectors that name the drawing itself (diagram tools) still reach it', () => {
+    expect(scopeSvgStyleText('#mermaid-1 .node rect, svg text{fill:red}svg{color:blue}')).toBe(
+      `@scope {\n#mermaid-1 .node rect${S}, svg text${S}{fill:red}svg${S}{color:blue}\n}`
+    );
+  });
+
+  it('the suffix goes before a pseudo-element and before trailing comments', () => {
+    expect(scopeSvgStyleText('a::before , b:after, c /* note */ {x:y}')).toBe(
+      `@scope {\na${S}::before, b${S}:after, c${S} /* note */ {x:y}\n}`
+    );
+  });
+
+  it('selectors naming :scope or & are taken as written; group rules are entered', () => {
+    expect(scopeSvgStyleText(':scope rect{}@media (min-width:1px){.a{fill:red}}.p{ .q{} }')).toBe(
+      `@scope {\n:scope rect{}@media (min-width:1px){.a${S}{fill:red}}.p${S}{ .q{} }\n}`
     );
   });
 
@@ -578,29 +597,50 @@ describe("scopeSvgStyleText: a drawing's styles stay in the drawing", () => {
     '@scope (svg) { .a{} }',
     '@scope {.a{}} .b{}',
     '.a\\{fill:red}',
+    '.a{fill:red\\',
+    'a{b:url({)}}.evil{fill:red}',
+    'a{b:u\\72l({)}}.evil{fill:red}',
+    'a{b:"x\f}}.evil{fill:red}"}',
+    '@keyframes k\\ \r',
+    '"(\\ \r',
   ])('is idempotent for %j', css => {
     const once = scopeSvgStyleText(css);
     expect(scopeSvgStyleText(once)).toBe(once);
-    expect(once.startsWith('@scope') || /^@(import|keyframes)/.test(once)).toBe(true);
   });
 
   it('a stray close brace cannot end the scope early', () => {
-    const out = scopeSvgStyleText('.a{fill:red}}.leak{fill:blue}');
-    expect(out).toBe('@scope {\n.a{fill:red}.leak{fill:blue}\n}');
+    expect(scopeSvgStyleText('.a{fill:red}}.leak{fill:blue}')).toBe(
+      `@scope {\n.a${S}{fill:red}/**/.leak${S}{fill:blue}\n}`
+    );
   });
 
-  it('braces inside strings and comments are not structure', () => {
+  it('braces inside strings, comments and an unquoted url() are not structure', () => {
     expect(scopeSvgStyleText('.a{content:"}"}/* } */.b{fill:blue}')).toBe(
-      '@scope {\n.a{content:"}"}/* } */.b{fill:blue}\n}'
+      `@scope {\n.a${S}{content:"}"}/* } */.b${S}{fill:blue}\n}`
+    );
+    expect(scopeSvgStyleText('a{b:url({)}}.evil{fill:red}')).toBe(
+      `@scope {\na${S}{b:url({)}/**/.evil${S}{fill:red}\n}`
+    );
+    expect(scopeSvgStyleText('a{b:u\\72l({)}}.evil{fill:red}')).toBe(
+      `@scope {\na${S}{b:u\\72l({)}/**/.evil${S}{fill:red}\n}`
+    );
+  });
+
+  it('newlines read as CSS reads them (\\r, \\f end a string)', () => {
+    expect(scopeSvgStyleText('a{b:"x\f}}.evil{fill:red}"}')).toBe(
+      `@scope {\na${S}{b:"x\n}/**/.evil${S}{fill:red}"}"\n}`
     );
   });
 
   it('a cut-off sheet is closed inside the scope', () => {
-    expect(scopeSvgStyleText('.a{fill:red')).toBe('@scope {\n.a{fill:red}\n}');
-    expect(scopeSvgStyleText('.a{fill:red}/* x')).toBe('@scope {\n.a{fill:red}/* x*/\n}');
+    expect(scopeSvgStyleText('.a{fill:red')).toBe(`@scope {\n.a${S}{fill:red}\n}`);
+    expect(scopeSvgStyleText('.a{fill:red}/* x')).toBe(`@scope {\n.a${S}{fill:red}/* x*/\n}`);
+    expect(scopeSvgStyleText('.a{fill:red\\')).toBe(`@scope {\n.a${S}{fill:red}\n}`);
   });
 
-  it('an empty or comment-only sheet is left alone; a sheet of only @font-face stays unwrapped', () => {
+  it('@import is dropped; an empty sheet is left alone; only @font-face stays unwrapped', () => {
+    expect(scopeSvgStyleText('@import url(x.css);.a{}')).toBe(`@scope {\n.a${S}{}\n}`);
+    expect(scopeSvgStyleText('@import url(x.css);')).toBe('');
     expect(scopeSvgStyleText('')).toBe('');
     expect(scopeSvgStyleText('  \n ')).toBe('  \n ');
     expect(scopeSvgStyleText('@font-face{font-family:x;src:url(a.woff)}')).toBe(
@@ -608,7 +648,7 @@ describe("scopeSvgStyleText: a drawing's styles stay in the drawing", () => {
     );
   });
 
-  it('a scope with a prelude is nested inside the drawing scope', () => {
+  it('a scope with a prelude is nested inside the drawing scope, as written', () => {
     expect(scopeSvgStyleText('@scope (.x) { .a{} }')).toBe('@scope {\n@scope (.x) { .a{} }\n}');
   });
 });

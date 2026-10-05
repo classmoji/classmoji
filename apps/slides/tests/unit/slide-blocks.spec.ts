@@ -15,6 +15,7 @@ import {
   offListSvgBlockNodes,
   sanitizeSvgBlocks,
   scopeSvgStyles,
+  SVG_SCOPE_SUFFIX,
 } from '@classmoji/services/slides/runtime-attrs';
 
 import {
@@ -200,7 +201,9 @@ test.describe('svg block styles stay in their drawing (DOM)', () => {
     sanitizeSvgBlocks(root);
     const svg = root.querySelector('svg') as Element;
     expect(svg.firstElementChild?.localName).toBe('style');
-    expect(svg.firstElementChild?.textContent).toBe('@scope {\n.st0{fill:red}\n}');
+    expect(svg.firstElementChild?.textContent).toBe(
+      `@scope {\n.st0${SVG_SCOPE_SUFFIX}{fill:red}\n}`
+    );
     expect(svg.querySelector('defs style')).toBeNull();
     expect(svg.querySelector('defs linearGradient')).not.toBeNull();
   });
@@ -216,8 +219,8 @@ test.describe('svg block styles stay in their drawing (DOM)', () => {
     const outer = root.querySelector('.sl-block-content > svg') as Element;
     const styles = Array.from(outer.children).filter(el => el.localName === 'style');
     expect(styles.map(s => s.textContent)).toEqual([
-      '@scope {\n.a{fill:red}\n}',
-      '@scope {\n.b{fill:blue}\n}',
+      `@scope {\n.a${SVG_SCOPE_SUFFIX}{fill:red}\n}`,
+      `@scope {\n.b${SVG_SCOPE_SUFFIX}{fill:blue}\n}`,
     ]);
     sanitizeSvgBlocks(root);
     expect(root.innerHTML).toBe(once);

@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useElementSelection } from './properties/ElementSelectionContext';
-import { ensureBlockIds } from './blocks/slideBlocks';
 import { useBlockIdGuard } from './blocks/useBlockIdGuard';
 
 /**
@@ -14,8 +13,8 @@ import { useBlockIdGuard } from './blocks/useBlockIdGuard';
  * - Play mode for html blocks (double-click: the frame takes the pointer until
  *   Stop, the block is deselected, Escape, a click outside, or focus coming
  *   back to the page from the frame)
- * - Every block on an edited slide keeps its own data-cm-block-id
- *   (useBlockIdGuard; a moved or resized block gets one if it has none)
+ * - A pasted or dropped copy of a block gets its own data-cm-block-id
+ *   (useBlockIdGuard)
  *
  * Key implementation details:
  * - Screen pixels are converted to slide coordinates (960×700 space) using CSS transform scale
@@ -344,10 +343,6 @@ export default function BlockHandles() {
       // Capture the slide's vertical position BEFORE triggering layout recalculation
       const slide = targetElement.closest('section.present');
       const slideTopBefore = slide ? parsePixels(getComputedStyle(slide).top) : 0;
-
-      // A block moved or resized can be reached by id from now on.
-      const section = targetElement.closest('section');
-      if (section) ensureBlockIds(section);
 
       // Notify parent of content change (triggers Reveal.layout() via RAF)
       onContentChange?.();

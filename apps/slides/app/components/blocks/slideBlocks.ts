@@ -164,25 +164,30 @@ export function topLevelBlocks(section: Element): HTMLElement[] {
 }
 
 /**
- * Give every top-level block of `section` its own `data-cm-block-id`, so a
- * block edit by id (MCP) reaches exactly one block: a block without an id
- * gets one; of blocks sharing an id, the ones in `fresh` (just pasted or
- * dropped) get new ones, and among the rest the first keeps it. Returns the
- * blocks given an id.
+ * Fresh copies of blocks (just pasted or dropped onto `section`) that carry
+ * an id another block on the slide already has get a new `data-cm-block-id`,
+ * so a block edit by id (MCP) reaches exactly one block and the original
+ * keeps its own — even when the copy lands before it. Blocks without an id
+ * are left to the server, which names them from their place and markup.
+ * Returns the blocks given an id.
  */
 export function ensureBlockIds(
   section: Element,
-  fresh: ReadonlySet<Element> = new Set(),
+  fresh: ReadonlySet<Element>,
   mint: () => string = mintBlockId
 ): HTMLElement[] {
   const blocks = topLevelBlocks(section);
   const taken = new Set<string>();
-  const changed: HTMLElement[] = [];
-  // Blocks that were already here claim their ids first.
-  const order = [...blocks.filter(b => !fresh.has(b)), ...blocks.filter(b => fresh.has(b))];
-  for (const block of order) {
+  for (const block of blocks) {
     const id = block.getAttribute(BLOCK_ID_ATTR);
-    if (id && !taken.has(id)) {
+    if (id && !fresh.has(block)) taken.add(id);
+  }
+  const changed: HTMLElement[] = [];
+  for (const block of blocks) {
+    if (!fresh.has(block)) continue;
+    const id = block.getAttribute(BLOCK_ID_ATTR);
+    if (!id) continue;
+    if (!taken.has(id)) {
       taken.add(id);
       continue;
     }
