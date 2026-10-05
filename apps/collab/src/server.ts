@@ -873,7 +873,13 @@ export class CollabRuntime {
     // The next store is a last leave — one pending (dirty), or one already
     // running (it cleared `dirty`; its row write may not be visible yet).
     doc.humanLeft = true;
-    if (doc.dirty || payload.document.saveMutex.isLocked()) return;
+    if (doc.dirty) return;
+    if (payload.document.saveMutex.isLocked()) {
+      // Wait for the running save; if its store already ran (it did not
+      // consume the flag), this leave is answered here.
+      await payload.document.saveMutex.runExclusive(async () => {});
+      if (!doc.humanLeft || doc.dirty) return;
+    }
     doc.humanLeft = false;
     const row = await this.deps.store.get(doc.room.kind, doc.room.id);
     if (row && row.version > row.pushed_version) {
