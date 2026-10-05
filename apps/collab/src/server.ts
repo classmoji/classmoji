@@ -513,13 +513,16 @@ export class CollabRuntime {
     if (shouldSkipStoreHooks(payload.transactionOrigin)) return;
     const doc = this.loaded.get(payload.documentName);
     if (!doc) return;
-    // Lock claims / heartbeats are not edits: no version, no worker, no co-author.
-    if (doc.lastTxEphemeral) return;
-    doc.dirty = true;
-
     const context = payload.context as
       | (Partial<CollabConnectionContext> & Partial<DirectEditContext> & { repair?: boolean })
       | undefined;
+    // Lock claims / heartbeats / notice dismissals are not edits: no version,
+    // no worker, no co-author. An outside-push merge that only recorded a
+    // conflict notice IS one: the live doc kept its html against the push,
+    // so it must be pushed back (as it was before notices were presence).
+    if (doc.lastTxEphemeral && !context?.external) return;
+    doc.dirty = true;
+
     if (!context?.userId || context.repair || context.external) return;
     doc.pendingEditors.set(context.userId, context.name ?? 'Someone');
     // A person's structural edit (agents' ops are audited by the MCP tool).

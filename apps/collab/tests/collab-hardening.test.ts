@@ -586,3 +586,31 @@ describe('ephemeral changes (deck locks)', () => {
     expect(editors.map(e => e.docId)).toEqual(['deck-1']);
   });
 });
+
+describe('ephemeral changes (deck conflict notices)', () => {
+  it('a dismissal alone is not an edit; an outside merge that only records a notice is', async () => {
+    const adapter = fakeDeckAdapter();
+    adapter.mergeExternal = async ctx => {
+      ctx.transact(doc => doc.getMap('conflicts').set('s1', { at: 1, sha: 'c9', html: 'x' }));
+      return { sourceSha: 'blob-c9', conflicts: 1, conflictIds: ['s1'] } as never;
+    };
+    await server.close();
+    await setup({ deck: adapter });
+    const a = open(roomName('deck', 'deck-1', 1), { schemaVersion: 1 });
+    await a.synced;
+
+    const res = await internal(server, 'POST', '/deck/deck-1/external', { sha: 'c9' });
+    expect(res.status).toBe(200);
+    // The live doc kept its own version against the push: stored, and pushed back.
+    await waitFor(() => server.store.storeCalls === 1, 3000, 'merge stored');
+    await waitFor(() => server.checkpoints.calls.length > 0, 3000, 'trigger');
+
+    const stores = server.store.storeCalls;
+    const triggers = server.checkpoints.calls.length;
+    await waitFor(() => a.doc.getMap('conflicts').has('s1'), 3000, 'notice synced');
+    a.doc.transact(() => a.doc.getMap('conflicts').delete('s1'));
+    await new Promise(resolve => setTimeout(resolve, 150));
+    expect(server.store.storeCalls).toBe(stores);
+    expect(server.checkpoints.calls).toHaveLength(triggers);
+  });
+});
