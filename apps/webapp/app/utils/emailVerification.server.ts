@@ -7,11 +7,21 @@
 
 import getPrisma from '@classmoji/database';
 import Tasks from '@classmoji/tasks';
+import { isValidEmail } from './email';
 
 const CODE_TTL_MS = 10 * 60 * 1000;
 
-/** Issue a fresh 6-digit code for `email`, replacing any earlier one, and mail it. */
+/**
+ * Issue a fresh 6-digit code for `email`, replacing any earlier one, and mail it.
+ * `email` must already be normalized (see normalizeEmail in ~/utils/email);
+ * callers validate first and show their own error. This throws rather than
+ * enqueue an address the email task can never deliver to, which would only
+ * burn its retry budget (#396).
+ */
 export const sendEmailVerificationCode = async (email: string): Promise<void> => {
+  if (!isValidEmail(email)) {
+    throw new Error('sendEmailVerificationCode: refusing to mail an invalid address');
+  }
   const code = String(Math.floor(100000 + Math.random() * 900000));
   await getPrisma().verification.deleteMany({ where: { identifier: email } });
   await getPrisma().verification.create({
