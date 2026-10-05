@@ -233,8 +233,13 @@ test.describe('svg and html slide blocks', () => {
             );
             if (at < 0) return null;
             await viewer.evaluate(at => (window.location.hash = `#/${at}`), at);
-            await expect.poll(() => probeOf(viewer), { timeout: 15_000 }).not.toBeNull();
-            return probeOf(viewer);
+            // Not found yet is a null for the outer poll, never a throw.
+            for (let i = 0; i < 30; i++) {
+              const probe = await probeOf(viewer);
+              if (probe) return probe;
+              await viewer.waitForTimeout(500);
+            }
+            return null;
           },
           { timeout: 150_000, intervals: [5_000] }
         )
