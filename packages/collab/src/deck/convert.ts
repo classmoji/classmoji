@@ -12,6 +12,9 @@
  */
 import * as Y from 'yjs';
 import type { DeckJson, DeckSlide } from '@classmoji/services/slides';
+// The package export subpath resolves at build and type-check time; this
+// package's eslint import resolver doesn't read `exports` subpaths.
+// eslint-disable-next-line import/no-unresolved
 import { stripRuntimeSectionAttrs } from '@classmoji/services/slides/runtime-attrs';
 
 import { compareKeys, keysBetween } from '../fractionalIndex.ts';

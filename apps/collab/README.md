@@ -97,15 +97,15 @@ from the `sta` environment, `classmoji-collab` from `prod`. Staging's
 `COOKIE_PREFIX` is `classmoji-staging` (the webapp's staging prefix), which
 is what lets collab read the staging session cookie.
 
-| Secret | Why |
-|---|---|
-| `DATABASE_URL` | `collab_docs`, memberships, sessions |
-| `BETTER_AUTH_SECRET`, `COOKIE_PREFIX` (staging: `classmoji-staging`), `COOKIE_DOMAIN` (only if set elsewhere) | read the browser's session cookie exactly as the webapp does |
-| `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY_BASE64` | installation token to read content at a sha (outside-push merges, reseeds) |
-| `WEBAPP_URL`, `PAGES_URL`, `SLIDES_URL` | origin allowlist (plus `COLLAB_ALLOWED_ORIGINS`) |
-| `TRIGGER_SECRET_KEY` | triggers `content-checkpoint`; startup refuses without it |
-| `COLLAB_INTERNAL_SECRET` | the `x-collab-secret` it accepts; startup refuses without it (or with the dev value) |
-| `COLLAB_CHECKPOINT_DELAY`, `COLLAB_CHECKPOINT_MAX_DELAY` | optional, default `1m` / `4m` |
+| Secret                                                                                                        | Why                                                                                  |
+| ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `DATABASE_URL`                                                                                                | `collab_docs`, memberships, sessions                                                 |
+| `BETTER_AUTH_SECRET`, `COOKIE_PREFIX` (staging: `classmoji-staging`), `COOKIE_DOMAIN` (only if set elsewhere) | read the browser's session cookie exactly as the webapp does                         |
+| `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY_BASE64`                                                                  | installation token to read content at a sha (outside-push merges, reseeds)           |
+| `WEBAPP_URL`, `PAGES_URL`, `SLIDES_URL`                                                                       | origin allowlist (plus `COLLAB_ALLOWED_ORIGINS`)                                     |
+| `TRIGGER_SECRET_KEY`                                                                                          | triggers `content-checkpoint`; startup refuses without it                            |
+| `COLLAB_INTERNAL_SECRET`                                                                                      | the `x-collab-secret` it accepts; startup refuses without it (or with the dev value) |
+| `COLLAB_CHECKPOINT_DELAY`, `COLLAB_CHECKPOINT_MAX_DELAY`                                                      | optional, default `1m` / `4m`                                                        |
 
 `COLLAB_PORT` and `NODE_ENV` are set in `fly.toml`. Collab also imports
 `@classmoji/services`; give it the same service secrets the pages app has
