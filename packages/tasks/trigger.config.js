@@ -68,9 +68,11 @@ export default defineConfig({
   // version) would pay its renderer imports (BlockNote server editor, jsdom)
   // on every run, and the collab warm-ups (a no-op `content-checkpoint` run at
   // most once a minute while a live doc is open) would keep only the machine
-  // warm, not the process. A process is replaced after 100 runs in deployed
-  // environments (the runner's default), 50 under `trigger dev`.
-  processKeepAlive: true,
+  // warm, not the process. A warm machine (and so a kept-alive process) takes
+  // the next run of ANY task in this deployment with the same machine size,
+  // which is why content-checkpoint has its own preset. Recycle after
+  // Trigger.dev's documented default of 50 runs to bound any build-up.
+  processKeepAlive: { enabled: true, maxExecutionsPerProcess: 50 },
   // Safety guard: a LOCAL dev worker must never write to a remote (e.g. prod
   // Neon) database. Trigger.dev loads the `.env` next to this config
   // (packages/tasks/.env), which can silently drift to a production
