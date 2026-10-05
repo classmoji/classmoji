@@ -10,6 +10,13 @@ import { AGENT_TOUCH_EXPIRE_MS, type AgentTouch, type CollabLoaderData } from '@
 
 import { agentTouchCss, cssString } from '../../app/components/editor/collab/agentTouch.ts';
 import {
+  AGENT_CURSOR_LABEL_CSS,
+  isAgentCursorUser,
+  renderLiveCursor,
+} from '../../app/components/editor/collab/liveCursor.ts';
+// @ts-expect-error -- jsdom ships no type declarations; only the constructor is used.
+import { JSDOM } from 'jsdom';
+import {
   CollabSession,
   type CollabProviderArgs,
   type CollabProviderLike,
@@ -198,5 +205,34 @@ test.describe('agent names in presence', () => {
       'Grace (agent 2)',
     ]);
     expect(peers.find(p => p.agentTag === 'agent 2')?.name).toBe('Grace');
+  });
+});
+
+test.describe('remote carets', () => {
+  test('an agent is recognised by its flag or its "(agent…)" name', () => {
+    expect(isAgentCursorUser({ name: 'Ada', agent: true })).toBe(true);
+    expect(isAgentCursorUser({ name: 'Ada (agent 2)' })).toBe(true);
+    expect(isAgentCursorUser({ name: 'Ada Lovelace' })).toBe(false);
+  });
+
+  test("BlockNote's caret, with an agent's marked so its name tag stays", () => {
+    const { document } = new JSDOM('<!doctype html><body></body>').window;
+    const agent = renderLiveCursor(
+      { name: 'Ada (agent)', color: '#0090ff', agent: true },
+      document
+    );
+    expect(agent.classList.contains('bn-collaboration-cursor__base')).toBe(true);
+    expect(agent.hasAttribute('data-agent')).toBe(true);
+    const label = agent.querySelector(
+      '.bn-collaboration-cursor__caret > .bn-collaboration-cursor__label'
+    );
+    expect(label?.textContent).toBe('Ada (agent)');
+    expect(label?.getAttribute('style')).toContain('background-color: #0090ff');
+
+    const person = renderLiveCursor({ name: 'Grace', color: '#e54666' }, document);
+    expect(person.hasAttribute('data-agent')).toBe(false);
+    expect(AGENT_CURSOR_LABEL_CSS).toContain(
+      '.bn-collaboration-cursor__base[data-agent] .bn-collaboration-cursor__label'
+    );
   });
 });

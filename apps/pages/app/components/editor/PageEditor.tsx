@@ -43,6 +43,7 @@ import {
   type PageBlockInsertions,
 } from './blocks/index.tsx';
 import { editingSchema } from './blocks/editingSchema.ts';
+import { AGENT_CURSOR_LABEL_CSS, renderLiveCursor } from './collab/liveCursor.ts';
 import { ReplaceUrlItem, RemoveProfileImageItem } from './ReplaceUrlItem.tsx';
 import { AssetSrcSetContext, NO_SRC_SETS, type AssetSrcSets } from '~/hooks/useAssetSrcSets.ts';
 import {
@@ -322,7 +323,10 @@ const PageEditor = forwardRef(function PageEditor(
             provider: collab.provider as { awareness?: Awareness },
             fragment: collab.doc.getXmlFragment(FRAGMENT),
             user: { id: collab.user.id, name: collab.user.name, color: collab.user.color },
+            // A person's name tag shows while they move or type; an agent's
+            // stays for as long as it is present (liveCursor.ts).
             showCursorLabels: 'activity',
+            renderCursor: user => renderLiveCursor(user),
           },
         })
       : { ...baseOptions, initialContent: typedInitialContent },
@@ -444,6 +448,7 @@ const PageEditor = forwardRef(function PageEditor(
           top: 0;
           left: 0;
         }
+        ${AGENT_CURSOR_LABEL_CSS}
         .page-editor h1,
         .page-editor h2,
         .page-editor h3 {
