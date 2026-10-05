@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { expect, type BrowserContext } from '@playwright/test';
+import { expect, type BrowserContext, type Page } from '@playwright/test';
 // Type-only: both packages build their Prisma client at import time, so the
 // runtime imports below happen only after DATABASE_URL is settled.
 import type getPrismaType from '@classmoji/database';
@@ -69,4 +69,27 @@ export async function signIn(context: BrowserContext, login: string): Promise<vo
   expect(response.status(), `test-login as ${login}`).toBe(302);
   const cookies = await context.cookies(WEBAPP_URL);
   expect(cookies.some(c => c.name.endsWith('.session_token'))).toBe(true);
+}
+
+/**
+ * Open a live page or deck and wait until it reports `synced`. A dev-server
+ * load can stall or fail to hydrate (seen when the browser reaches the stack
+ * through this machine's own Tailscale address), so a stuck load is retried
+ * with a reload rather than failing the test.
+ */
+export async function openLive(page: Page, url: string, attempts = 4): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      if (attempt === 1) await page.goto(url, { waitUntil: 'domcontentloaded' });
+      else await page.reload({ waitUntil: 'domcontentloaded' });
+      await expect(page.getByTestId('live-sync-status').first()).toHaveAttribute(
+        'data-status',
+        'synced',
+        { timeout: 40_000 }
+      );
+      return;
+    } catch (error) {
+      if (attempt >= attempts) throw error;
+    }
+  }
 }

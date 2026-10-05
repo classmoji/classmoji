@@ -25,7 +25,7 @@ import {
   KITCHEN_SINK_PAGE_TITLE,
   PAGE_TARGET_TEXT,
 } from '../../scripts/collab-dev/constants.ts';
-import { PAGES_URL, SLIDES_URL, WEBAPP_URL, db, services, signIn } from './helpers.ts';
+import { PAGES_URL, SLIDES_URL, WEBAPP_URL, db, openLive, services, signIn } from './helpers.ts';
 
 const [TEACHER_1, TEACHER_2] = COLLAB_USERS;
 const RUN = Date.now().toString(36);
@@ -124,7 +124,7 @@ test.describe('live editing', () => {
     const p1 = await one.newPage();
     const p2 = await two.newPage();
     const url = `${PAGES_URL}/${CLASSROOM_SLUG}/${pageId}`;
-    await Promise.all([p1.goto(url), p2.goto(url)]);
+    await Promise.all([openLive(p1, url), openLive(p2, url)]);
 
     for (const p of [p1, p2]) {
       await expect(p.getByTestId('live-sync-status')).toHaveAttribute('data-status', 'synced', {
@@ -179,7 +179,7 @@ test.describe('live editing', () => {
       await expect(present(p)).toContainText(index === 1 ? 'Editable slide A' : 'Editable slide B');
     };
 
-    await Promise.all([p1.goto(`${deckUrl}#/1`), p2.goto(`${deckUrl}#/1`)]);
+    await Promise.all([openLive(p1, `${deckUrl}#/1`), openLive(p2, `${deckUrl}#/1`)]);
     for (const p of [p1, p2]) {
       await expect(p.getByTestId('live-sync-status')).toHaveAttribute('data-status', 'synced', {
         timeout: 30_000,
