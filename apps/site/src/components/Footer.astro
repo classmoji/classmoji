@@ -1,31 +1,45 @@
 ---
-
+const externalLink =
+  'font-medium text-gray-600 underline decoration-gray-300 underline-offset-4 transition-colors duration-150 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent';
+const footerLink =
+  'font-medium transition-colors duration-150 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent';
 ---
 
-<footer class="py-8 px-6 border-t border-gray-100">
-  <div class="max-w-6xl mx-auto text-center text-gray-500 text-sm space-y-2">
-    <p>
-      Made with ❤️ with support from
-      <a
-        href="https://dali.dartmouth.edu"
-        target="_blank"
-        rel="noopener noreferrer"
-        class="underline underline-offset-2 hover:text-gray-900">DALI</a
-      >
-      and the
-      <a
-        href="https://web.cs.dartmouth.edu"
-        target="_blank"
-        rel="noopener noreferrer"
-        class="underline underline-offset-2 hover:text-gray-900"
-        >Computer Science Department</a
-      >
-      at Dartmouth College.
-    </p>
-    <p>&copy; {new Date().getFullYear()} Classmoji. All rights reserved.</p>
-    <p class="space-x-4">
-      <a href="/privacy" class="hover:text-gray-900">Privacy Policy</a>
-      <a href="/terms" class="hover:text-gray-900">Terms of Service</a>
-    </p>
+<footer class="border-t border-gray-100 bg-panel px-6 py-10 text-sm text-gray-500">
+  <div class="mx-auto max-w-7xl">
+    <div class="flex flex-col items-center justify-between gap-8 text-center md:flex-row md:items-start md:text-left">
+      <div class="max-w-2xl">
+        <a
+          href="/"
+          aria-label="Classmoji home"
+          class="inline-flex items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        >
+          <span class="text-[25px] leading-none" aria-hidden="true">🍎</span>
+          <span class="text-[20px] font-extrabold leading-none tracking-[-0.035em] text-[#1A1A1A]">classmoji</span>
+        </a>
+        <p class="mt-4 leading-relaxed">
+          Made with ❤️ with support from <a
+            href="https://dali.dartmouth.edu"
+            target="_blank"
+            rel="noopener noreferrer"
+            class={externalLink}>DALI</a
+          > and the <a
+            href="https://web.cs.dartmouth.edu"
+            target="_blank"
+            rel="noopener noreferrer"
+            class={externalLink}>Computer Science Department</a
+          > at Dartmouth College.
+        </p>
+      </div>
+
+      <nav aria-label="Legal" class="flex shrink-0 items-center gap-6 pt-1">
+        <a href="/privacy" class={footerLink}>Privacy Policy</a>
+        <a href="/terms" class={footerLink}>Terms of Service</a>
+      </nav>
+    </div>
+
+    <div class="mt-8 border-t border-gray-100 pt-5 text-center text-xs text-gray-400 md:text-left">
+      &copy; {new Date().getFullYear()} Classmoji. All rights reserved.
+    </div>
   </div>
 </footer>

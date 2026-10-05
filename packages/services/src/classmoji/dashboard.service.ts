@@ -18,7 +18,11 @@
  */
 
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
-import { DEFAULT_EMOJI_GRADE_MAPPINGS, displayUsername } from '@classmoji/utils';
+import {
+  DEFAULT_EMOJI_GRADE_MAPPINGS,
+  displayUsername,
+  extendedDeadlineMs,
+} from '@classmoji/utils';
 
 // Pure helpers (unit-tested)
 
@@ -175,14 +179,24 @@ export async function cohortOverview(classroomId: string): Promise<CohortOvervie
   const medianGrade = computeGradeMedian(numeric);
 
   // At-risk: students with >= 2 past-due GitRepoAssignments with no grades.
-  const missed = await prisma.gitRepoAssignment.findMany({
+  // Past due means past the deadline plus the extension hours the student
+  // bought; the query's plain-deadline filter only narrows the rows to read.
+  const missedCandidates = await prisma.gitRepoAssignment.findMany({
     where: {
       git_repo: { classroom_id: classroomId, student_id: { in: studentIds } },
       assignment: { student_deadline: { lt: now } },
       status: 'OPEN',
       grades: { none: {} },
     },
-    select: { git_repo: { select: { student_id: true } } },
+    select: {
+      git_repo: { select: { student_id: true } },
+      assignment: { select: { student_deadline: true } },
+      token_transactions: { select: { hours_purchased: true } },
+    },
+  });
+  const missed = missedCandidates.filter(m => {
+    const cutoff = extendedDeadlineMs(m.assignment.student_deadline, m.token_transactions);
+    return cutoff !== null && cutoff < now.getTime();
   });
   const missedCountByStudent = new Map<string, number>();
   for (const m of missed) {
@@ -282,6 +296,7 @@ export async function cohortOverview(classroomId: string): Promise<CohortOvervie
         select: {
           git_repo: { select: { student_id: true } },
           assignment: { select: { student_deadline: true } },
+          token_transactions: { select: { hours_purchased: true } },
         },
       }),
     ]);
@@ -326,14 +341,15 @@ export async function cohortOverview(classroomId: string): Promise<CohortOvervie
   });
 
   // At-risk series approximation: for each week-end, count students with >=2
-  // past-due assignments (deadline <= weekEnd) that remain OPEN/ungraded today.
+  // past-due assignments (deadline plus purchased hours <= weekEnd, and
+  // already passed) that remain OPEN/ungraded today.
   const atRiskSeries = bins.map(bin => {
     const byStudent = new Map<string, number>();
     for (const r of pastDueOpen) {
       const sid = r.git_repo.student_id;
-      const dl = r.assignment.student_deadline;
-      if (!sid || !dl) continue;
-      if (dl.getTime() <= bin.end.getTime()) {
+      const cutoff = extendedDeadlineMs(r.assignment.student_deadline, r.token_transactions);
+      if (!sid || cutoff === null || cutoff >= now.getTime()) continue;
+      if (cutoff <= bin.end.getTime()) {
         byStudent.set(sid, (byStudent.get(sid) ?? 0) + 1);
       }
     }

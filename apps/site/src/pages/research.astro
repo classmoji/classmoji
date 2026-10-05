@@ -1,22 +1,25 @@
 ---
+import { ArrowUpRightIcon } from 'lucide-react';
 import Layout from '../layouts/Layout.astro';
 import Header from '../components/Header.astro';
 import Footer from '../components/Footer.astro';
 
-const venue = 'Proc. 57th ACM Technical Symposium on Computer Science Education (SIGCSE TS 2026), V.2';
+const proceedings = 'Proc. 57th ACM Technical Symposium on Computer Science Education (SIGCSE TS 2026), V.2';
 
 // Keep paper titles verbatim (they are citations).
 const publications = [
   {
     title: 'Classmoji: A GitHub-Native LMS for Flexible CS Education',
     authors: 'Pape Sow Traore, Tim Tregubov',
-    venueShort: 'SIGCSE TS 2026',
+    venue: 'SIGCSE TS 2026',
+    proceedings,
     url: 'https://dl.acm.org/doi/abs/10.1145/3770761.3777264',
   },
   {
     title: 'AI-Driven Oral Examinations for Code Assessment: Evaluating Understanding Beyond the Commit',
     authors: 'Tim Tregubov, Pape Sow Traore',
-    venueShort: 'SIGCSE TS 2026',
+    venue: 'SIGCSE TS 2026',
+    proceedings,
     url: 'https://dl.acm.org/doi/abs/10.1145/3770761.3777032',
   },
 ];
@@ -25,41 +28,42 @@ const publications = [
 <Layout title="Research - Classmoji" description="Peer-reviewed research behind Classmoji.">
   <Header />
 
-  <section class="px-6 pt-32 pb-20">
-    <div class="max-w-3xl mx-auto">
-      <h1 class="text-4xl md:text-5xl font-bold text-gray-900 mb-10">Research</h1>
+  <main class="bg-page px-6 pb-24 pt-32 sm:pt-36">
+    <div class="mx-auto max-w-7xl">
+      <header class="max-w-3xl">
+        <h1 class="text-[2.25rem] font-bold leading-[1.1] tracking-tight text-ink-0 sm:text-[2.75rem]">Research</h1>
+        <p class="mt-5 max-w-2xl text-pretty text-[1.0625rem] leading-relaxed text-ink-2">
+          Papers on Classmoji and the teaching ideas behind it, written by the team.
+        </p>
+      </header>
 
-      <ul class="space-y-4">
+      <ol class="mt-14 border-t border-line sm:mt-16">
         {
           publications.map(pub => (
-            <li>
-              <a
-                href={pub.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                class="block group rounded-2xl ring-1 ring-gray-200 hover:ring-gray-300 hover:shadow-sm transition-all p-6"
-              >
-                <div class="text-xs font-semibold uppercase tracking-wide text-primary mb-2">
-                  {pub.venueShort}
-                </div>
-                <h2 class="text-lg font-semibold text-gray-900 group-hover:text-primary transition-colors">
+            <li class="grid gap-3 border-b border-line py-10 lg:grid-cols-12 lg:gap-10">
+              <p class="text-[0.875rem] font-semibold text-accent lg:col-span-3 lg:pt-1.5">{pub.venue}</p>
+              <article class="lg:col-span-9">
+                <h2 class="max-w-3xl text-balance text-[1.5rem] font-bold leading-[1.25] tracking-tight text-ink-0">
                   {pub.title}
                 </h2>
-                <p class="text-sm text-gray-600 mt-1">{pub.authors}</p>
-                <p class="text-sm text-gray-500 mt-2">{venue}</p>
-                <span class="inline-flex items-center gap-1 text-sm font-medium text-primary mt-3">
+                <p class="mt-3 text-[0.9375rem] font-medium text-ink-1">{pub.authors}</p>
+                <p class="mt-1 max-w-2xl text-[0.875rem] leading-relaxed text-ink-3">{pub.proceedings}</p>
+                <a
+                  href={pub.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="mt-5 inline-flex items-center gap-1.5 rounded-md text-[0.9375rem] font-medium text-ink-0 underline decoration-line-2 underline-offset-4 transition-colors duration-150 hover:decoration-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                >
                   View on ACM
-                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                  </svg>
-                </span>
-              </a>
+                  <ArrowUpRightIcon className="h-4 w-4" aria-hidden />
+                </a>
+              </article>
             </li>
           ))
         }
-      </ul>
+      </ol>
     </div>
-  </section>
+  </main>
 
   <Footer />
 </Layout>

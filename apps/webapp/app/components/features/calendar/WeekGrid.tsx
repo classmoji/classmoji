@@ -16,10 +16,12 @@ import {
   DEFAULT_END_HOUR,
   DEFAULT_START_HOUR,
   WEEK_GRID_COLUMNS,
+  blockLanes,
   formatHourLabel,
   heightForBlock,
   hoursInWindow,
   isOutsideWindow,
+  laneInset,
   monthDropId,
   remForHours,
   topForHour,
@@ -189,6 +191,8 @@ const WeekGrid = ({
           {dates.map((date, dayIdx) => {
             const dayEvents = eventsFor(date);
             const timed = dayEvents.filter(event => !isOutsideWindow(event, startHour, endHour));
+            // Events at the same time sit side by side, not on top of each other.
+            const lanes = blockLanes(timed, endHour);
             // Deadlines are in the strip too — this is the line, not a move.
             const deadlines = deadlineGroups(dayEvents, startHour, endHour, hourFloat =>
               topForHour(hourFloat, startHour)
@@ -243,8 +247,9 @@ const WeekGrid = ({
                           // events do not touch. The gap lives here rather than
                           // in `heightForBlock`, which is the geometry the drop
                           // targets are measured against.
-                          className: 'absolute left-1 right-1 pb-1 pointer-events-auto',
+                          className: 'absolute pb-1 pointer-events-auto',
                           style: {
+                            ...laneInset(lanes[idx]),
                             top: topForHour(eventHour, startHour),
                             height: heightForBlock(eventHour, durationHours, endHour),
                           },

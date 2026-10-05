@@ -51,6 +51,9 @@ export const notificationLink = (
   n: Pick<BellNotification, 'type' | 'resource_type' | 'resource_id' | 'classroom' | 'metadata'>,
   roles: Role[] | null | undefined
 ): string | null => {
+  // Feedback posts belong to no classroom: anyone following one can open it.
+  if (n.resource_type === 'feedback_post') return `/feedback/p/${n.resource_id}`;
+
   const role = roleForNotification(n.type, roles ?? []);
   if (!n.classroom || !role) return null;
   const prefix = rolePrefix(role);

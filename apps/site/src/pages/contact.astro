@@ -1,0 +1,185 @@
+---
+import Layout from '../layouts/Layout.astro';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+
+const EMAIL = 'hello@classmoji.io';
+
+const field =
+  'mt-1.5 h-11 w-full rounded-lg border border-line-2 bg-panel px-3.5 text-[0.9375rem] text-ink-0 placeholder:text-ink-4 transition-colors duration-150 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25';
+const label = 'text-[0.875rem] font-medium text-ink-1';
+---
+
+<Layout title="Contact - Classmoji" description="Questions about Classmoji, a demo for your course, or anything else.">
+  <Header />
+
+  <main class="bg-page px-6 pb-24 pt-32 sm:pt-36">
+    <div class="mx-auto max-w-7xl">
+      <header class="max-w-3xl">
+        <h1 class="text-[2.25rem] font-bold leading-[1.1] tracking-tight text-ink-0 sm:text-[2.75rem]">Get in touch</h1>
+        <p class="mt-5 max-w-2xl text-pretty text-[1.0625rem] leading-relaxed text-ink-2">
+          Questions about using Classmoji in your course, a demo, or anything else. We read every message.
+        </p>
+      </header>
+
+      <section
+        id="form"
+        aria-labelledby="write-heading"
+        class="mt-14 grid scroll-mt-28 sm:mt-16 gap-8 rounded-xl bg-[#F2F1EE] p-3 sm:p-4 lg:grid-cols-12 lg:gap-12 lg:p-5"
+      >
+        <div class="flex flex-col justify-end px-3 pt-6 sm:px-4 lg:col-span-4 lg:pb-10 lg:pl-8">
+          <h2 id="write-heading" class="text-pretty text-[1.5rem] leading-[1.3] tracking-tight">
+            <span class="font-semibold text-ink-0">Write to us.</span>{' '}
+            <span class="text-ink-3">Tell us about your course and we'll get back to you, usually within a few days.</span>
+          </h2>
+          <p class="mt-6 text-[0.9375rem] text-ink-3">
+            Prefer email?{' '}
+            <a href={`mailto:${EMAIL}`} class="font-medium text-accent hover:text-accent-hover">{EMAIL}</a>
+          </p>
+        </div>
+
+        <div class="rounded-lg bg-panel p-6 shadow-card ring-1 ring-edge sm:p-8 lg:col-span-8">
+          <div id="contact-status" role="status" aria-live="polite" class="hidden"></div>
+
+          <form id="contact-form" action="/api/contact" method="post" class="grid gap-5 sm:grid-cols-2">
+            <div>
+              <label for="contact-name" class={label}>Name</label>
+              <input id="contact-name" name="name" autocomplete="name" required maxlength="120" class={field} />
+            </div>
+            <div>
+              <label for="contact-email" class={label}>Email</label>
+              <input
+                id="contact-email"
+                name="email"
+                type="email"
+                autocomplete="email"
+                placeholder="you@school.edu"
+                required
+                maxlength="254"
+                class={field}
+              />
+            </div>
+            <div class="sm:col-span-2">
+              <label for="contact-school" class={label}>
+                School or course <span class="font-normal text-ink-4">(optional)</span>
+              </label>
+              <input id="contact-school" name="school" autocomplete="organization" maxlength="160" class={field} />
+            </div>
+            <div class="sm:col-span-2">
+              <label for="contact-message" class={label}>Message</label>
+              <textarea
+                id="contact-message"
+                name="message"
+                rows="6"
+                required
+                maxlength="5000"
+                class={`${field} h-auto py-3 leading-relaxed`}></textarea>
+            </div>
+
+            {/* Honeypot: hidden from people, filled in by bots. */}
+            <div class="absolute -left-[9999px]" aria-hidden="true">
+              <label for="contact-website">Website</label>
+              <input id="contact-website" name="website" tabindex="-1" autocomplete="off" />
+            </div>
+
+            <div class="flex items-center gap-4 sm:col-span-2">
+              <button
+                type="submit"
+                class="inline-flex h-11 items-center justify-center rounded-lg bg-accent px-6 text-[0.9375rem] font-semibold text-white transition-colors duration-150 hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 disabled:opacity-70"
+              >
+                Send message
+              </button>
+            </div>
+          </form>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <Footer />
+</Layout>
+
+<script>
+  const form = document.getElementById('contact-form') as HTMLFormElement | null;
+  const status = document.getElementById('contact-status');
+
+  const show = (ok: boolean, text: string) => {
+    if (!status) return;
+    status.textContent = text;
+    status.className = ok
+      ? 'mb-6 rounded-lg border border-mint-line bg-mint-bg px-4 py-3 text-[0.9375rem] text-mint-ink'
+      : 'mb-6 rounded-lg border border-rose-line bg-rose-bg px-4 py-3 text-[0.9375rem] text-rose-ink';
+  };
+
+  const SENT = "Thanks, your message is on its way. We'll reply to the email you gave us.";
+
+  /** A short burst of 🍎 and ✨ from the button: the thank-you for writing in. */
+  const celebrate = (from: HTMLElement) => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const box = from.getBoundingClientRect();
+    const originX = box.left + box.width / 2;
+    const originY = box.top + box.height / 2;
+    for (let i = 0; i < 22; i++) {
+      const piece = document.createElement('span');
+      piece.textContent = i % 3 === 0 ? '✨' : '🍎';
+      piece.setAttribute('aria-hidden', 'true');
+      Object.assign(piece.style, {
+        position: 'fixed',
+        left: `${originX}px`,
+        top: `${originY}px`,
+        fontSize: `${14 + Math.random() * 12}px`,
+        pointerEvents: 'none',
+        zIndex: '60',
+      });
+      document.body.appendChild(piece);
+      // Up and outward, then falling back down as it fades.
+      const angle = -Math.PI / 2 + (Math.random() - 0.5) * Math.PI * 1.1;
+      const distance = 90 + Math.random() * 130;
+      const dx = Math.cos(angle) * distance;
+      const dy = Math.sin(angle) * distance;
+      const spin = (Math.random() - 0.5) * 540;
+      piece
+        .animate(
+          [
+            { transform: 'translate(-50%, -50%) scale(0.6)', opacity: 1 },
+            { transform: `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px)) rotate(${spin / 2}deg) scale(1)`, opacity: 1, offset: 0.55 },
+            { transform: `translate(calc(-50% + ${dx * 1.15}px), calc(-50% + ${dy + 120}px)) rotate(${spin}deg) scale(0.9)`, opacity: 0 },
+          ],
+          { duration: 900 + Math.random() * 400, easing: 'cubic-bezier(0.2, 0.7, 0.3, 1)' }
+        )
+        .finished.finally(() => piece.remove());
+    }
+  };
+
+  // Without JavaScript the form posts and the server redirects back here.
+  const params = new URLSearchParams(window.location.search);
+  if (params.has('sent')) show(true, SENT);
+  else if (params.has('error')) show(false, 'Could not send your message. Check the fields and try again.');
+
+  form?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const button = form.querySelector('button[type=submit]') as HTMLButtonElement;
+    button.disabled = true;
+    button.textContent = 'Sending…';
+    try {
+      const response = await fetch(form.action, {
+        method: 'POST',
+        body: new FormData(form),
+        headers: { Accept: 'application/json' },
+      });
+      const body = (await response.json().catch(() => null)) as { ok: boolean; error?: string } | null;
+      if (body?.ok) {
+        show(true, SENT);
+        celebrate(button);
+        form.reset();
+      } else {
+        show(false, body?.error ?? 'Could not send your message. Try again.');
+      }
+    } catch {
+      show(false, 'Could not send your message. Check your connection and try again.');
+    } finally {
+      button.disabled = false;
+      button.textContent = 'Send message';
+    }
+  });
+</script>

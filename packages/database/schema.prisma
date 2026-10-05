@@ -35,6 +35,7 @@ enum NotificationType {
   ASSIGNMENT_GRADED
   TA_GRADING_ASSIGNED
   TA_REGRADE_ASSIGNED
+  FEEDBACK_STATUS_CHANGED
 }
 
 // How a Repository is provisioned: one git repo per student, or one per team.
@@ -369,6 +370,11 @@ model User {
   team_set_runs_created         TeamSetRun[]
   gitlab_connection             GitLabConnection?
   gitlab_instances_created      GitLabInstance[]
+  feedback_posts                FeedbackPost[]
+  feedback_votes                FeedbackVote[]
+  feedback_comments             FeedbackComment[]
+  feedback_comment_votes        FeedbackCommentVote[]
+  feedback_follows              FeedbackFollow[]
 
   @@map("users")
 }
@@ -1372,6 +1378,7 @@ model TokenTransaction {
 
   @@index([classroom_id])
   @@index([student_id])
+  @@index([git_repo_assignment_id])
   @@index([assignment_id, student_id])
   @@map("token_transactions")
 }
@@ -1927,6 +1934,7 @@ model NotificationPreference {
   email_assignment_graded           Boolean  @default(true)
   email_ta_grading_assigned         Boolean  @default(true)
   email_ta_regrade_assigned         Boolean  @default(true)
+  email_feedback_status_changed     Boolean  @default(true)
   created_at                        DateTime @default(now())
   updated_at                        DateTime @default(now()) @updatedAt
 
@@ -2636,27 +2644,27 @@ model MediaObject {
 /// the row must outlive a racing delete long enough for a final checkpoint.
 model CollabDoc {
   /// 'page' | 'deck'
-  kind           String
+  kind                  String
   /// Page.id or Slide.id (a DECK slide)
-  doc_id         String
-  classroom_id   String
+  doc_id                String
+  classroom_id          String
   /// Part of the room name; bumped when the doc is reseeded from git so a
   /// stale browser reloads instead of syncing old content into the new doc.
-  epoch          Int       @default(1)
+  epoch                 Int       @default(1)
   /// Full Y.encodeStateAsUpdate of the document.
-  state          Bytes
+  state                 Bytes
   /// SCHEMA_VERSION the state was written with.
-  schema_version Int
+  schema_version        Int
   /// Bumped on each store.
-  version        Int       @default(0)
+  version               Int       @default(0)
   /// The version included in the last successful push.
-  pushed_version Int       @default(0)
+  pushed_version        Int       @default(0)
   /// Blob sha of the content file last seeded from / pushed.
-  source_sha     String?
+  source_sha            String?
   /// Commit sha of the last checkpoint.
-  pushed_commit  String?
+  pushed_commit         String?
   /// When unsaved changes began (null when clean).
-  dirty_since    DateTime?
+  dirty_since           DateTime?
   /// Co-authors since the last push: `{ userId, name }[]`. Merged by the
   /// collab store hook; cleared/trimmed by the worker after a push.
   editors               Json?
@@ -2666,11 +2674,130 @@ model CollabDoc {
   last_checkpoint_error String?
   /// Last outside-push conflict: `{ at, sha, ids[] }`.
   last_conflict         Json?
-  created_at     DateTime  @default(now())
-  updated_at     DateTime  @updatedAt
+  created_at            DateTime  @default(now())
+  updated_at            DateTime  @updatedAt
 
   @@id([kind, doc_id])
   /// The worker gathers a classroom's dirty docs (one content repo, one commit).
   @@index([classroom_id])
   @@map("collab_docs")
+}
+
+// ============================================================================
+// FEEDBACK
+// ============================================================================
+// The public feedback board at /feedback: anyone can read, signed-in users post
+// requests, vote, comment, and follow; platform admins move posts through a
+// status, which places them on the roadmap.
+
+/// Where a post sits on the roadmap. Null on the post means it has not been
+/// triaged yet and stays off the roadmap.
+enum FeedbackStatus {
+  IN_REVIEW
+  PLANNED
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum FeedbackCategory {
+  FEATURE
+  BUG
+  INTEGRATION
+}
+
+model FeedbackPost {
+  id                String           @id @default(uuid())
+  title             String
+  body              String
+  category          FeedbackCategory @default(FEATURE)
+  status            FeedbackStatus?
+  /// Null once the author's account is deleted; the request itself stays.
+  author_id         String?
+  /// Shown as "Anonymous" on the board. The author is still recorded, so they
+  /// can delete it and hear about status changes; it is never shown.
+  is_anonymous      Boolean          @default(false)
+  /// Kept in step with feedback_votes / feedback_comments by the service, so the
+  /// board can sort without counting.
+  vote_count        Int              @default(0)
+  comment_count     Int              @default(0)
+  /// When the status last changed; orders "Recently shipped".
+  status_changed_at DateTime?
+  created_at        DateTime         @default(now())
+  updated_at        DateTime         @default(now()) @updatedAt
+
+  author   User?             @relation(fields: [author_id], references: [id], onDelete: SetNull)
+  votes    FeedbackVote[]
+  comments FeedbackComment[]
+  follows  FeedbackFollow[]
+
+  @@index([status])
+  @@index([vote_count])
+  @@index([created_at])
+  @@index([status, status_changed_at])
+  @@map("feedback_posts")
+}
+
+model FeedbackVote {
+  id         String   @id @default(uuid())
+  post_id    String
+  user_id    String
+  created_at DateTime @default(now())
+
+  post FeedbackPost @relation(fields: [post_id], references: [id], onDelete: Cascade)
+  user User         @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([post_id, user_id])
+  @@index([user_id])
+  @@map("feedback_votes")
+}
+
+/// A comment, or a reply when `parent_id` is set. Replies are one level deep:
+/// a reply's parent is always a top-level comment on the same post.
+model FeedbackComment {
+  id         String   @id @default(uuid())
+  post_id    String
+  author_id  String?
+  parent_id  String?
+  body       String
+  vote_count Int      @default(0)
+  created_at DateTime @default(now())
+  updated_at DateTime @default(now()) @updatedAt
+
+  post    FeedbackPost          @relation(fields: [post_id], references: [id], onDelete: Cascade)
+  author  User?                 @relation(fields: [author_id], references: [id], onDelete: SetNull)
+  parent  FeedbackComment?      @relation("FeedbackCommentReplies", fields: [parent_id], references: [id], onDelete: Cascade)
+  replies FeedbackComment[]     @relation("FeedbackCommentReplies")
+  votes   FeedbackCommentVote[]
+
+  @@index([post_id])
+  @@map("feedback_comments")
+}
+
+model FeedbackCommentVote {
+  id         String   @id @default(uuid())
+  comment_id String
+  user_id    String
+  created_at DateTime @default(now())
+
+  comment FeedbackComment @relation(fields: [comment_id], references: [id], onDelete: Cascade)
+  user    User            @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([comment_id, user_id])
+  @@map("feedback_comment_votes")
+}
+
+/// Who hears about a post's status changes. The author and every voter follow
+/// automatically; anyone can unfollow.
+model FeedbackFollow {
+  id         String   @id @default(uuid())
+  post_id    String
+  user_id    String
+  created_at DateTime @default(now())
+
+  post FeedbackPost @relation(fields: [post_id], references: [id], onDelete: Cascade)
+  user User         @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([post_id, user_id])
+  @@index([user_id])
+  @@map("feedback_follows")
 }
