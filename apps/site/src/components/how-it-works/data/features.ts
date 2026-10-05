@@ -22,14 +22,14 @@ export const features: Feature[] = [
     kicker: 'AI quizzes',
     title: 'Quizzes that check understanding, not memorization.',
     description:
-      'An AI tutor reads each student’s own submission and talks it through with them, so you see who really understands their code.',
+      'Turn on code review and an AI tutor reads each student’s own repository, asks about their code, and gives feedback on every answer, so you see who really understands it.',
   },
   {
     id: 'grading',
     kicker: 'Grading',
-    title: 'Grade with emoji or scores.',
+    title: 'Grade with emoji.',
     description:
-      'React with emoji or enter a score, and the average, letter grade, and gradebook stay in sync as you go.',
+      'Every grade is an emoji: pick one from your scale, or a number badge from 0 to 100. Split submissions across your graders, and the counts and gradebook stay in sync as you go.',
     link: { label: 'Learn about grading', href: '/docs/instructors/grading' },
   },
 ];

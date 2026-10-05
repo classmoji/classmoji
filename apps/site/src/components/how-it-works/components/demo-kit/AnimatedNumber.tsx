@@ -21,7 +21,7 @@ export function AnimatedNumber({ value, className }: AnimatedNumberProps) {
     const controls = animate(from.current, value, {
       duration: 0.5,
       ease: EASE_OUT,
-      onUpdate: (v) => {
+      onUpdate: v => {
         from.current = v;
         setDisplay(Math.round(v));
       },

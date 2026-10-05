@@ -1,302 +1,370 @@
 import React from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
-import { SmilePlusIcon } from 'lucide-react';
+import { Checkbox, ConfigProvider, Input, Table, Tag } from 'antd';
+import type { TableColumnsType } from 'antd';
+import { IconBrandGithub, IconSearch } from '@tabler/icons-react';
 import { demoUsers } from '../../data/appNav';
 import { useDemoTimeline } from '../../hooks/useDemoTimeline';
 import type { DemoBase, Step } from '../../types/demo';
-import { button, chip, segmentItem, ui } from '../../utils/classes';
-import { average, letterGrade } from '../../utils/grades';
-import { EASE_OUT, clickAnd, moveTo } from '../../utils/timeline';
-import { AnimatedNumber } from '../demo-kit/AnimatedNumber';
+import { clickAnd, moveTo } from '../../utils/timeline';
+import { AppAntd } from '../demo-kit/AppAntd';
 import { AppShell } from '../demo-kit/AppShell';
-import { Avatar } from '../demo-kit/Avatar';
 import { DemoFrame } from '../demo-kit/DemoFrame';
 
-type Reaction = { emoji: string; by: string };
+/*
+ * A copy of the webapp's assignment grading page
+ * (routes/admin.$class.assignments_.$id: header facts, Stat tiles, search and
+ * filter toolbar, SubmissionsTable). Grading goes through EmojiGrader's hover
+ * picker; graders through the Change popover of checkboxes.
+ */
 
 type State = DemoBase & {
-  reactions: Reaction[];
+  /** Bob's grades, the row being graded. */
+  bobGrades: string[];
   pickerOpen: boolean;
-  numeric: boolean;
-  flash: boolean;
+  /** The emoji that just popped in the picker. */
+  popped: string | null;
+  gradersOpen: boolean;
+  /** Alice's graders, the row being reassigned. */
+  aliceGraders: string[];
 };
 
-const PICKER = [
-  { id: 'star', emoji: '🌟', value: 96 },
-  { id: 'fire', emoji: '🔥', value: 88 },
-  { id: 'thumbs', emoji: '👍', value: 80 },
-  { id: 'think', emoji: '🤔', value: 70 },
-];
-
-const VALUE: Record<string, number> = Object.fromEntries(PICKER.map((p) => [p.emoji, p.value]));
-
-const GRADEBOOK: { name: string; initials: string; cells: string[][]; live?: boolean }[] = [
-  { name: 'Alice Wong', initials: 'AW', cells: [['🌟', '🌟'], ['🔥', '🌟'], ['🔥', '👍']] },
-  { name: 'Bob Kim', initials: 'BK', cells: [['🔥', '🔥'], ['🌟', '👍']], live: true },
-  { name: 'Chen Li', initials: 'CL', cells: [['👍', '🔥'], ['🤔', '👍'], ['🌟', '🔥']] },
-  { name: 'Dana Ortiz', initials: 'DO', cells: [['🌟', '🔥'], ['🔥', '🔥'], ['👍', '👍']] },
-];
+const STAFF = ['Ava', 'Diego', 'Mina', 'Theo', 'Sam'];
+const SCALE = ['🌟', '🔥', '👍', '🤔', '😬'];
 
 const initial: State = {
   cursor: null,
   click: 0,
-  reactions: [
-    { emoji: '🌟', by: 'Sam' },
-    { emoji: '🔥', by: 'Priya' },
-  ],
+  bobGrades: [],
   pickerOpen: false,
-  numeric: false,
-  flash: false,
+  popped: null,
+  gradersOpen: false,
+  aliceGraders: ['Ava'],
 };
 
-const addReaction =
-  (emoji: string) =>
-  (s: State): State => ({
-    ...s,
-    reactions: [...s.reactions, { emoji, by: 'You' }],
-    pickerOpen: false,
-    flash: true,
-  });
-
-const openPicker = (s: State): State => ({ ...s, pickerOpen: true });
-const clearFlash = (s: State): State => ({ ...s, flash: false });
-
 const steps: Step<State>[] = [
-  { at: 600, action: moveTo<State>('add') },
-  { at: 1250, action: clickAnd<State>(openPicker) },
-  { at: 1800, action: moveTo<State>('emoji-fire') },
-  { at: 2400, action: clickAnd<State>(addReaction('🔥')) },
-  { at: 3300, action: clearFlash },
-  { at: 3400, action: moveTo<State>('add') },
-  { at: 4000, action: clickAnd<State>(openPicker) },
-  { at: 4500, action: moveTo<State>('emoji-thumbs') },
-  { at: 5100, action: clickAnd<State>(addReaction('👍')) },
-  { at: 6000, action: clearFlash },
-  { at: 6200, action: moveTo<State>('toggle') },
-  { at: 6800, action: clickAnd<State>((s) => ({ ...s, numeric: true })) },
-  { at: 8400, action: clickAnd<State>((s) => ({ ...s, numeric: false })) },
-  { at: 9000, action: moveTo<State>(null) },
+  { at: 600, action: moveTo<State>('grade-bob') },
+  { at: 1200, action: s => ({ ...s, pickerOpen: true }) },
+  { at: 1700, action: moveTo<State>('emoji-🔥') },
+  {
+    at: 2300,
+    action: clickAnd<State>(s => ({ ...s, bobGrades: ['🔥'], popped: '🔥' })),
+  },
+  { at: 2800, action: s => ({ ...s, popped: null }) },
+  { at: 3200, action: s => ({ ...s, pickerOpen: false }) },
+  { at: 3600, action: moveTo<State>('change-alice') },
+  { at: 4200, action: clickAnd<State>(s => ({ ...s, gradersOpen: true })) },
+  { at: 4800, action: moveTo<State>('grader-Sam') },
+  {
+    at: 5400,
+    action: clickAnd<State>(s => ({ ...s, aliceGraders: ['Ava', 'Sam'] })),
+  },
+  { at: 6400, action: s => ({ ...s, gradersOpen: false }) },
+  { at: 6600, action: moveTo<State>(null) },
 ];
 
-const cellScore = (emojis: string[]) => average(emojis.map((e) => VALUE[e]));
+type Row = {
+  key: string;
+  name: string;
+  login: string;
+  graders: string[];
+  grades: string[];
+  late?: boolean;
+};
+
+const ROWS: Row[] = [
+  { key: 'alice', name: 'Alice Wong', login: 'alicewong', graders: ['Ava'], grades: ['🌟'] },
+  {
+    key: 'bob',
+    name: 'Bob Kim',
+    login: 'bobkim',
+    graders: ['Sam'],
+    grades: [],
+  },
+  { key: 'chen', name: 'Chen Li', login: 'chenli', graders: ['Theo'], grades: ['👍'] },
+  { key: 'dana', name: 'Dana Ortiz', login: 'dortiz', graders: ['Mina'], grades: ['🔥'] },
+  {
+    key: 'eli',
+    name: 'Eli Brooks',
+    login: 'elibrooks',
+    graders: ['Diego'],
+    grades: ['🌟'],
+  },
+];
+
+const TOTAL = 42;
+
+/** The app's antd theme at the demo's scale: the stage is smaller than a real page. */
+function Compact({ children }: { children: React.ReactNode }) {
+  return (
+    <AppAntd>
+      <ConfigProvider
+        theme={{
+          token: { fontSize: 12, controlHeight: 28 },
+          components: { Table: { cellPaddingBlock: 8, cellPaddingInline: 8 } },
+        }}
+      >
+        {children}
+      </ConfigProvider>
+    </AppAntd>
+  );
+}
+
+/** The webapp's quiet text link (Change, Grade, View). */
+const link = 'text-[12px] font-medium text-ink-2';
+
+/** A Stat tile from the assignment page. */
+function Stat({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-0.5 rounded-xl bg-panel px-3 py-2 ring-1 ring-line">
+      <span className="text-[11px] font-medium text-ink-3">{label}</span>
+      <span className="text-[16px] font-bold tabular-nums text-ink-1">{children}</span>
+    </div>
+  );
+}
+
+/** A floating antd-style popover card; the demo positions it by hand. */
+function Popover({ className, children }: { className: string; children: React.ReactNode }) {
+  return (
+    <div
+      className={`absolute z-20 rounded-lg bg-white shadow-[0_6px_16px_0_rgba(0,0,0,0.08),0_3px_6px_-4px_rgba(0,0,0,0.12),0_9px_28px_8px_rgba(0,0,0,0.05)] ${className}`}
+    >
+      {children}
+    </div>
+  );
+}
 
 export function GradingDemo() {
-  const demo = useDemoTimeline({ initial, steps, duration: 9800 });
-  const { state: s, act, sequence } = demo;
+  const demo = useDemoTimeline({ initial, steps, duration: 7400 });
+  const { state: s } = demo;
 
-  const score = cellScore(s.reactions.map((r) => r.emoji));
-  const letter = letterGrade(score);
+  const rows = ROWS.map(r =>
+    r.key === 'bob'
+      ? { ...r, grades: s.bobGrades }
+      : r.key === 'alice'
+        ? { ...r, graders: s.aliceGraders }
+        : r
+  );
+  const graded = 40 + rows.filter(r => r.grades.length > 0).length - 4;
+  const ungraded = TOTAL - graded;
 
-  const togglePicker = () => act((st) => ({ ...st, pickerOpen: !st.pickerOpen }));
-  const pick = (emoji: string) => {
-    if (s.reactions.length >= 6) {
-      act((st) => ({ ...st, pickerOpen: false }));
-      return;
-    }
-    sequence([
-      { at: 0, action: addReaction(emoji) },
-      { at: 900, action: clearFlash },
-    ]);
-  };
-  const removeReaction = (index: number) =>
-    act((st) => ({ ...st, reactions: st.reactions.filter((_, i) => i !== index) }));
-  const toggleScale = () => act((st) => ({ ...st, numeric: !st.numeric }));
-
-  const scaleToggle = (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={s.numeric}
-      aria-label="Show numeric scores"
-      data-cursor="toggle"
-      onClick={toggleScale}
-      className={`${ui.segment} ${ui.focus}`}
-    >
-      {(['Emoji', '0–100'] as const).map((label, i) => (
-        <span key={label} className={segmentItem((i === 1) === s.numeric)}>
-          {label}
+  const columns: TableColumnsType<Row> = [
+    {
+      title: 'Student',
+      key: 'student',
+      width: 116,
+      render: (_, r) => (
+        <div className="flex min-w-0 items-center gap-2">
+          <div
+            aria-hidden
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-stone-100 text-[11px] font-semibold text-stone-600 ring-1 ring-stone-200"
+          >
+            {r.name.charAt(0)}
+          </div>
+          <div className="flex min-w-0 flex-col gap-[2px]">
+            <div className="truncate text-[11px] font-bold text-ink-1">{r.name}</div>
+            <div className="truncate text-[11px] text-ink-3">@{r.login}</div>
+          </div>
+        </div>
+      ),
+    },
+    {
+      title: 'Repository',
+      key: 'repo',
+      width: 100,
+      render: (_, r) => (
+        <span className="inline-flex min-w-0 max-w-full items-center gap-1.5 text-[#21883d]">
+          <IconBrandGithub size={13} className="shrink-0 text-gray-900" />
+          <span className="truncate">hw3-hashing-{r.login}</span>
         </span>
-      ))}
-    </button>
+      ),
+    },
+    {
+      title: 'Submission',
+      key: 'submission',
+      width: 78,
+      className: 'border-l border-line',
+      render: (_, r) => (
+        <div className="flex flex-wrap gap-1">
+          <Tag color="green" bordered={false} className="m-0">
+            Submitted
+          </Tag>
+          {r.late && (
+            <Tag color="orange" bordered={false} className="m-0">
+              Late
+            </Tag>
+          )}
+        </div>
+      ),
+    },
+    {
+      title: 'Graders',
+      key: 'graders',
+      width: 128,
+      render: (_, r) => (
+        <div className="relative flex items-center gap-2 whitespace-nowrap">
+          {r.graders.length > 0 && (
+            <span className="max-w-[76px] truncate text-[12px] text-ink-1">
+              {r.graders.join(', ')}
+            </span>
+          )}
+          <span
+            data-cursor={r.key === 'alice' ? 'change-alice' : undefined}
+            className={`${link} ${r.key === 'alice' && s.gradersOpen ? 'underline underline-offset-2' : ''}`}
+          >
+            {r.graders.length ? 'Change' : 'Assign'}
+          </span>
+          {r.key === 'alice' && s.gradersOpen && (
+            <Popover className="left-0 top-full mt-1 px-3 py-2">
+              <div className="flex min-w-32 flex-col gap-1.5">
+                {STAFF.map(name => (
+                  <span key={name} data-cursor={`grader-${name}`}>
+                    <Checkbox checked={s.aliceGraders.includes(name)}>
+                      <span className="text-[12px]">{name}</span>
+                    </Checkbox>
+                  </span>
+                ))}
+              </div>
+            </Popover>
+          )}
+        </div>
+      ),
+    },
+    {
+      title: 'Grade',
+      key: 'grade',
+      width: 96,
+      render: (_, r) =>
+        r.grades.length > 0 ? (
+          <div className="flex items-center gap-2">
+            {r.grades.map((e, i) => (
+              <span key={i} className="p-0.5 text-[16px] leading-none">
+                {e}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <span className="whitespace-nowrap text-[10.5px] italic text-gray-400">
+            No grades yet
+          </span>
+        ),
+    },
+    {
+      title: 'Actions',
+      key: 'actions',
+      className: 'border-l border-line',
+      render: (_, r) => (
+        <div className="relative flex items-center gap-3 whitespace-nowrap">
+          <span
+            data-cursor={r.key === 'bob' ? 'grade-bob' : undefined}
+            className={`${link} ${r.key === 'bob' && s.pickerOpen ? 'text-ink-1 underline underline-offset-2' : ''}`}
+          >
+            Grade
+          </span>
+          <span className={link}>View</span>
+          {r.key === 'bob' && s.pickerOpen && (
+            <Popover className="bottom-full right-0 mb-2 px-3 py-2.5">
+              <div className="flex gap-2">
+                {SCALE.map(e => {
+                  const selected = s.bobGrades.includes(e);
+                  return (
+                    <span
+                      key={e}
+                      data-cursor={`emoji-${e}`}
+                      className={`rounded-md px-2 py-1 text-[16px] leading-none transition-transform duration-300 ${
+                        s.popped === e ? 'scale-125' : ''
+                      }`}
+                      style={{ backgroundColor: selected ? '#ffebc2' : 'transparent' }}
+                    >
+                      {e}
+                    </span>
+                  );
+                })}
+              </div>
+            </Popover>
+          )}
+        </div>
+      ),
+    },
+  ];
+
+  const facts = (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-ink-3">
+      <span>
+        Repo · <span className="font-medium text-ink-1">issue</span>
+      </span>
+      <span>
+        Repository <span className="font-medium text-[#21883d]">hw3-hashing</span>
+      </span>
+      <span>
+        Due <span className="font-medium text-ink-1">Fri Oct 9, 11:59 PM</span>
+      </span>
+      <span>
+        Weight <span className="font-medium text-ink-1">10%</span>
+      </span>
+      <span>
+        Student repos{' '}
+        <span className="font-medium text-ink-1">
+          {TOTAL} of {TOTAL}
+        </span>
+      </span>
+    </div>
   );
 
   return (
     <DemoFrame
       controller={demo}
-      address="classmoji.app/cs52-26f/grades"
-      label="Demo: a TA adds fire and thumbs-up reactions to Bob's submission; his average drops from 92 to 88 and his letter grade changes from A- to B+."
+      address="app.classmoji.io/admin/cs52-26f/assignments/hw3"
+      label="Demo: on the HW3 grading page, a TA hovers Grade on Bob's row and picks the fire emoji, then adds Sam as a grader on Alice's row; the Graded and Ungraded tiles update."
       rest={{ x: 0.9, y: 0.45 }}
     >
-      <AppShell active="grades" role="staff" user={demoUsers.ta} title="Grades" actions={scaleToggle}>
-        <section className={`flex h-full flex-col p-5 ${ui.card}`}>
-          <div className="relative z-10">
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <Avatar initials="BK" />
-                <div>
-                  <p className="text-[14px] font-semibold">Bob Kim · HW3: Hash Maps</p>
-                  <p className={`text-[12px] ${ui.ink3}`}>bob-hw3 · Submitted Thu 9:42pm</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-3">
-                <div className="text-right">
-                  <div className="text-[26px] font-bold leading-none tracking-tight">
-                    <AnimatedNumber value={score} />
-                  </div>
-                  <div className={`mt-1 text-[11px] ${ui.ink3}`}>avg of {s.reactions.length}</div>
-                </div>
-                <div
-                  className="relative grid h-9 w-11 place-items-center overflow-hidden rounded-md border border-line-2 text-[14px] font-bold dark:border-line-2-dark"
-                  aria-label={`Letter grade ${letter}`}
-                >
-                  <AnimatePresence mode="popLayout" initial={false}>
-                    <motion.span
-                      key={letter}
-                      initial={{ opacity: 0, y: 8 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: -8 }}
-                      transition={{ duration: 0.22, ease: EASE_OUT }}
-                    >
-                      {letter}
-                    </motion.span>
-                  </AnimatePresence>
-                </div>
+      <AppShell active="modules" role="staff" user={demoUsers.teacher} title="HW3: Hashing">
+        <Compact>
+          <div className="flex h-full flex-col gap-2.5">
+            {facts}
+            <div className="grid grid-cols-4 gap-2">
+              <Stat label="Submitted">
+                {TOTAL} <span className="text-[11px] font-medium text-ink-3">of {TOTAL}</span>
+              </Stat>
+              <Stat label="Late">
+                <span className="text-amber-600">3</span>
+              </Stat>
+              <Stat label="Graded">
+                {graded} <span className="text-[11px] font-medium text-ink-3">of {TOTAL}</span>
+              </Stat>
+              <Stat label="Ungraded">{ungraded}</Stat>
+            </div>
+            <div className="flex items-center gap-2">
+              <Input
+                prefix={<IconSearch size={14} className="text-gray-400" />}
+                placeholder="Search students"
+                className="w-36"
+                readOnly
+              />
+              <div className="flex gap-1 rounded-lg bg-stone-100 p-1">
+                {['All', 'Ungraded', 'Late', 'Not submitted'].map((f, i) => (
+                  <span
+                    key={f}
+                    className={`flex h-6 items-center whitespace-nowrap rounded-md px-2 text-[11px] font-medium ${
+                      i === 0 ? 'bg-white text-ink-1 ring-1 ring-line' : 'text-ink-2'
+                    }`}
+                  >
+                    {f}
+                  </span>
+                ))}
               </div>
             </div>
-
-            <div className="mt-4 flex items-center gap-1.5">
-              <AnimatePresence initial={false}>
-                {s.reactions.map((r, i) => {
-                  const mine = r.by === 'You';
-                  return (
-                    <motion.button
-                      key={`${r.emoji}-${r.by}-${i}`}
-                      type="button"
-                      layout
-                      initial={{ opacity: 0, scale: 0.96 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      exit={{ opacity: 0, scale: 0.96 }}
-                      transition={{ duration: 0.2, ease: EASE_OUT }}
-                      onClick={() => mine && removeReaction(i)}
-                      aria-label={`${r.emoji} by ${r.by}${mine ? ', click to remove' : ''}`}
-                      className={`inline-flex h-7 items-center gap-1.5 rounded-md border px-2 text-[12px] font-medium ${
-                        mine
-                          ? `border-accent/30 ${ui.selected} ${ui.selectedInk}`
-                          : `cursor-default border-line-2 bg-panel dark:border-line-2-dark dark:bg-panel-dark ${ui.ink2}`
-                      } ${ui.focus}`}
-                    >
-                      <span className="text-[14px] leading-none">{r.emoji}</span>
-                      {r.by}
-                    </motion.button>
-                  );
-                })}
-              </AnimatePresence>
-              <div className="relative">
-                <button
-                  type="button"
-                  data-cursor="add"
-                  onClick={togglePicker}
-                  aria-label="Add reaction"
-                  aria-expanded={s.pickerOpen}
-                  className={`${button('default', 'sm')} !h-7 !w-7 !px-0`}
-                >
-                  <SmilePlusIcon className="h-3.5 w-3.5" aria-hidden />
-                </button>
-                <AnimatePresence>
-                  {s.pickerOpen && (
-                    <motion.div
-                      role="menu"
-                      initial={{ opacity: 0, scale: 0.96, y: -4 }}
-                      animate={{ opacity: 1, scale: 1, y: 0 }}
-                      exit={{ opacity: 0, scale: 0.96, y: -4 }}
-                      transition={{ duration: 0.16, ease: EASE_OUT }}
-                      style={{ originX: 0, originY: 0 }}
-                      className={`absolute left-0 top-full z-20 mt-2 flex gap-1 p-1.5 ${ui.floating}`}
-                    >
-                      {PICKER.map((p) => (
-                        <button
-                          key={p.id}
-                          type="button"
-                          role="menuitem"
-                          data-cursor={`emoji-${p.id}`}
-                          onClick={() => pick(p.emoji)}
-                          className={`flex w-12 flex-col items-center gap-0.5 rounded-md py-1.5 ${ui.rowHover} ${ui.focus}`}
-                        >
-                          <span className="text-[18px] leading-none">{p.emoji}</span>
-                          <span className={`text-[10.5px] tabular-nums ${ui.ink3}`}>{p.value}</span>
-                        </button>
-                      ))}
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
+            <div className="min-h-0 flex-1 overflow-visible rounded-2xl bg-panel p-2 ring-1 ring-line [&_th]:whitespace-nowrap">
+              <Table<Row>
+                columns={columns}
+                dataSource={rows}
+                rowKey="key"
+                rowHoverable={false}
+                tableLayout="fixed"
+                pagination={false}
+              />
             </div>
           </div>
-
-          <div className={`mt-5 border-t pt-4 ${ui.divider}`}>
-            <h5 className="text-[14px] font-semibold">Gradebook</h5>
-            <table className="mt-2 w-full text-[13px]">
-              <thead>
-                <tr className={`border-b text-left ${ui.divider} ${ui.tableHead}`}>
-                  <th scope="col" className="py-2 font-semibold">
-                    Student
-                  </th>
-                  {['HW1', 'HW2', 'HW3'].map((h) => (
-                    <th key={h} scope="col" className="w-[96px] px-2 py-2 font-semibold">
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {GRADEBOOK.map((row) => {
-                  const cells = row.live ? [...row.cells, s.reactions.map((r) => r.emoji)] : row.cells;
-                  return (
-                    <tr key={row.name} className={`border-b ${ui.divider} ${row.live ? ui.selected : ui.rowHover}`}>
-                      <th scope="row" className="py-2 pl-1 text-left font-medium">
-                        <span className="flex items-center gap-2">
-                          <Avatar initials={row.initials} size="sm" />
-                          {row.name}
-                        </span>
-                      </th>
-                      {cells.map((emojis, ci) => {
-                        const live = row.live && ci === 2;
-                        const value = s.numeric ? String(cellScore(emojis)) : emojis.join('');
-                        return (
-                          <td key={ci} className="relative px-2 py-2">
-                            {live && (
-                              <motion.span
-                                aria-hidden
-                                className="absolute inset-x-0.5 inset-y-1 rounded-md bg-panel ring-1 ring-accent/50 dark:bg-panel-dark"
-                                initial={false}
-                                animate={{ opacity: s.flash ? 1 : 0 }}
-                                transition={{ duration: 0.2, ease: EASE_OUT }}
-                              />
-                            )}
-                            <AnimatePresence mode="popLayout" initial={false}>
-                              <motion.span
-                                key={value}
-                                initial={{ opacity: 0, y: 4 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                exit={{ opacity: 0, y: -4 }}
-                                transition={{ duration: 0.18, ease: EASE_OUT }}
-                                className={`relative block px-1.5 ${
-                                  s.numeric ? 'font-semibold tabular-nums' : 'text-[13px] tracking-[0.06em]'
-                                }`}
-                              >
-                                {value}
-                              </motion.span>
-                            </AnimatePresence>
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </section>
+        </Compact>
       </AppShell>
     </DemoFrame>
   );

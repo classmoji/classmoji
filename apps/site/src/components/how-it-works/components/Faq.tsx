@@ -2,7 +2,8 @@ import React from 'react';
 import type { ReactNode } from 'react';
 import { PlusIcon } from 'lucide-react';
 
-const link = 'font-medium text-accent underline decoration-accent/30 underline-offset-4 hover:decoration-accent';
+const link =
+  'font-medium text-accent underline decoration-accent/30 underline-offset-4 hover:decoration-accent';
 
 // Facts only: no prices are published, so none are quoted here.
 const QUESTIONS: { q: string; a: ReactNode }[] = [
@@ -10,8 +11,8 @@ const QUESTIONS: { q: string; a: ReactNode }[] = [
     q: 'Is Classmoji free?',
     a: (
       <>
-        Yes. Classrooms are free, including teams, assistants, and tokens. Pro adds the AI features (AI
-        quizzes and the syllabus bot) and a custom domain for your class website.
+        Yes. Classrooms are free, including teams, assistants, and tokens. Pro adds the AI features
+        (AI quizzes and the syllabus bot) and a custom domain for your class website.
       </>
     ),
   },
@@ -19,7 +20,8 @@ const QUESTIONS: { q: string; a: ReactNode }[] = [
     q: 'Can I self-host it?',
     a: (
       <>
-        Yes. Classmoji is open source under the AGPL-3.0 license, and you can run it yourself with Docker.{' '}
+        Yes. Classmoji is open source under the AGPL-3.0 license, and you can run it yourself with
+        Docker.{' '}
         <a href="/docs/self-hosting/docker" className={link}>
           Self-hosting guide
         </a>
@@ -30,8 +32,8 @@ const QUESTIONS: { q: string; a: ReactNode }[] = [
     q: 'Who owns the student repositories?',
     a: (
       <>
-        You do. Classmoji creates them in your class&rsquo;s own Github organization or Gitlab group, not
-        in an account of ours.{' '}
+        You do. Classmoji creates them in your class&rsquo;s own Github organization or Gitlab
+        group, not in an account of ours.{' '}
         <a href="/docs/instructors/repositories" className={link}>
           Repositories
         </a>
@@ -42,8 +44,8 @@ const QUESTIONS: { q: string; a: ReactNode }[] = [
     q: 'Can my TAs help grade?',
     a: (
       <>
-        Yes. Add assistants to your class, assign graders to each assignment, and everyone works from their
-        own grading queue.{' '}
+        Yes. Add assistants to your class, assign graders to each assignment, and everyone works
+        from their own grading queue.{' '}
         <a href="/docs/instructors/grading" className={link}>
           Grading
         </a>
@@ -54,8 +56,8 @@ const QUESTIONS: { q: string; a: ReactNode }[] = [
     q: 'What happens with late work?',
     a: (
       <>
-        The last push before the deadline is the submission. Students can spend tokens on extra hours, and
-        you can override a late submission when it makes sense.{' '}
+        The last push before the deadline is the submission. Students can spend tokens on extra
+        hours, and you can override a late submission when it makes sense.{' '}
         <a href="/docs/instructors/tokens" className={link}>
           Tokens and extensions
         </a>

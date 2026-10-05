@@ -27,13 +27,22 @@ export function FeaturesSection() {
     >
       <div className="mx-auto max-w-[1440px]">
         <header className="mx-auto max-w-2xl text-center">
-          <p className="text-[0.875rem] font-semibold text-[#21883D] dark:text-[#6BE39B]">Open source · Built at Dartmouth College</p>
+          <p className="text-[0.875rem] font-semibold text-[#21883D] dark:text-[#6BE39B]">
+            Open source · Built at Dartmouth College
+          </p>
           <h2
             id="how-it-works-heading"
             className="mt-3 text-balance text-[2.25rem] font-bold leading-[1.1] tracking-tight text-ink-0 dark:text-inkd-0 sm:text-[2.75rem]"
           >
-            Teaching on <DoodleHighlight tone="github" delay={0.35}>Github</DoodleHighlight> and{' '}
-            <DoodleHighlight tone="gitlab" delay={0.8}>Gitlab</DoodleHighlight> should feel this good. <span aria-hidden>😌</span>
+            Teaching on{' '}
+            <DoodleHighlight tone="github" delay={0.35}>
+              Github
+            </DoodleHighlight>{' '}
+            and{' '}
+            <DoodleHighlight tone="gitlab" delay={0.8}>
+              Gitlab
+            </DoodleHighlight>{' '}
+            should feel this good. <span aria-hidden>😌</span>
           </h2>
         </header>
 

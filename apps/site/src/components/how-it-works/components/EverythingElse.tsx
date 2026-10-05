@@ -24,13 +24,15 @@ const ITEMS: Item[] = [
   {
     icon: FileTextIcon,
     title: 'Pages',
-    description: 'Write syllabi, guides, and notes as course pages your students read in the class.',
+    description:
+      'Write syllabi, guides, and notes as course pages your students read in the class.',
     href: '/docs/instructors/pages',
   },
   {
     icon: FlaskConicalIcon,
     title: 'Autograding',
-    description: 'Run your tests on Github Actions or Gitlab CI and see results on each submission.',
+    description:
+      'Run your tests on Github Actions or Gitlab CI and see results on each submission.',
     href: '/docs/instructors/autograding',
   },
   {
@@ -59,7 +61,8 @@ const ITEMS: Item[] = [
   {
     icon: PresentationIcon,
     title: 'Slides',
-    description: 'Build decks in the browser and present them, with speaker notes and students following along live.',
+    description:
+      'Build decks in the browser and present them, with speaker notes and students following along live.',
   },
 ];
 

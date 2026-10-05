@@ -36,6 +36,7 @@ import * as subscriptionService from './subscription.service.ts';
 import * as entitlementService from './entitlement.service.ts';
 import * as instructorAudienceService from './instructorAudience.service.ts';
 import * as surveyService from './survey.service.ts';
+import * as feedbackService from './feedback.service.ts';
 export {
   ClassroomSettingsEntitlementError,
   ClassroomSettingsValidationError,
@@ -156,6 +157,7 @@ const ClassmojiService = {
   entitlement: entitlementService,
   instructorAudience: instructorAudienceService,
   survey: surveyService,
+  feedback: feedbackService,
   teamMembership: teamMembershipService,
   team: teamService,
   teamAdmin: teamAdminService,

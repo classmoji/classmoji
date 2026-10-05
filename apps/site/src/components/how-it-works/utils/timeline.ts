@@ -21,7 +21,7 @@ export function typeSteps<S>(
   text: string,
   every: number,
   apply: (s: S, typed: string) => S,
-  by: 'char' | 'word' = 'char',
+  by: 'char' | 'word' = 'char'
 ): Step<S>[] {
   if (by === 'word') {
     const words = text.split(' ');
@@ -37,5 +37,5 @@ export function typeSteps<S>(
 }
 
 export function offset<S>(steps: Step<S>[], by: number): Step<S>[] {
-  return steps.map((st) => ({ at: st.at + by, action: st.action }));
+  return steps.map(st => ({ at: st.at + by, action: st.action }));
 }
