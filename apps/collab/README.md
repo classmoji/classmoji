@@ -11,7 +11,12 @@ Trigger.dev task (`content-checkpoint`) pushes the buffered documents to git.
   `COLLAB_PORT` (7700 + devport id × 10). Alone: `npm run collab:dev`.
 - Prod: `npm run collab:start` (`NODE_ENV=production`); the image runs the
   same command with node as PID 1. Required settings: see "Deploy" below.
-- `GET /health` is public. Settings and defaults: `src/config.ts`.
+- `GET /health` is public (always 200 while serving, with `db: ok|down`);
+  `GET /health/db` answers 503 when the database does not. Settings and
+  defaults: `src/config.ts`.
+- Manual epoch reset (drop a doc's live room, reseed from git):
+  `POST /internal/:kind/:id/reset { actor, discard? }` with the internal
+  secret; unpushed edits refuse it (409) unless `discard: true`.
 
 ## ONE INSTANCE ONLY
 
@@ -24,6 +29,13 @@ makes a room consistent lives in this process's memory:
   other's stores in `collab_docs`);
 - the editors since the last push (co-author trailers), agent presence and
   the merged "Save version" payloads.
+
+Enforced at runtime: before `listen()` the process takes a Postgres session
+advisory lock on a dedicated connection to the DIRECT host (Neon's
+`-pooler` host stripped, as the webapp's migrations do). A second process
+retries for 20 s, then exits 1 with `FATAL: another collab server holds the
+instance lock` — a second machine crash-loops visibly. The holder re-checks
+every 30 s and exits if another process took the lock.
 
 A restart is safe — `stopOnSignals` flushes pending stores on SIGTERM
 (raise the platform's kill timeout to cover it) and clients reconnect — but
@@ -114,7 +126,7 @@ Add to Infisical **prod**, **sta** (and **dev** if the dev apps are used):
   browsers; defaults to `COLLAB_URL` with the ws scheme).
 - Optional: `COLLAB_ALLOWED_ORIGINS`, `COLLAB_CHECKPOINT_DELAY`,
   `COLLAB_CHECKPOINT_MAX_DELAY` (keep collab's and the worker's equal: the
-  sweeper re-triggers with the same debounce).
+  sweeper counts a trigger lost after 2 × the max delay).
 
 Then make sure each consumer actually receives them: the Fly apps
 (collab, webapp, pages, slides, MCP; the Infisical free plan caps native
@@ -127,10 +139,16 @@ cannot reach collab, and the sweeper cannot check whether a doc is live.
 
 **Trigger.dev plan:** `collab-sweeper` runs every 30 minutes, so a
 checkpoint whose trigger was lost is re-run up to about 40 minutes after the
-doc went dirty, and a doc stuck unsaved is alerted after 1 to 1.5 hours. On a free
+doc went dirty, and a doc stuck unsaved is alerted after 1 to 1.5 hours
+(an outside edit collab has not merged: after 15 minutes). The alert is the
+sweeper RUN FAILING with the stuck docs in its error, so point a Trigger.dev
+run-failure alert at `collab-sweeper`. Collab itself also re-sends a
+checkpoint trigger that went missing (a debounced run Trigger.dev left in
+DELAYED) within about 40 s for Save version / last leave and about 6 minutes
+for routine edits. On a free
 Trigger.dev plan a cron more frequent than hourly is rejected when the
 schedule is deployed (all environments, including Development); it needs a
 paid plan.
 
-Monitoring: add an uptime monitor on `https://<collab host>/health` (Better
+Monitoring: add an uptime monitor on `https://<collab host>/health/db` (Better
 Stack, alongside the other five services).
