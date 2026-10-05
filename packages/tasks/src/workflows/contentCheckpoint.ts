@@ -290,8 +290,14 @@ export const contentCheckpoint = task({
    * warm-up never holds a classroom's slot, and warm-ups run one at a time.
    */
   queue: { name: CHECKPOINT_QUEUE_NAME, concurrencyLimit: 1 },
-  /** Git plus a BlockNote server editor (jsdom) holding every dirty doc of a classroom. */
-  machine: 'small-2x',
+  /**
+   * Git plus a BlockNote server editor (jsdom) holding every dirty doc of a
+   * classroom. Its own size (the project default is small-2x) so its warm
+   * machines only take checkpoint runs: a collab warm-up keeps a machine warm
+   * for the next Present/Save version instead of for an unrelated task, and
+   * the renderers never sit in other tasks' kept-alive processes.
+   */
+  machine: 'medium-1x',
   maxDuration: 300,
   /**
    * Safe to repeat: a run re-reads the rows and pushes whatever is still
