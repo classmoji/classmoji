@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from 'react';
 import type { UploadCapability } from '~/utils/mediaUpload';
+import BlockSourceModal from '../blocks/BlockSourceModal';
 import { reHighlightCode } from './utils/codeBlockUtils';
 
 /**
@@ -152,6 +153,8 @@ export interface ElementSelectionContextValue {
   classroomId: string | null;
   slideId: string | null;
   onUploadAsset?: (file: File, first?: 'repo' | 'media') => Promise<string>;
+  /** Open the source editor for an svg or html block. */
+  openBlockSource: (block: HTMLElement) => void;
 }
 
 const ElementSelectionContext = createContext<ElementSelectionContextValue | null>(null);
@@ -216,7 +219,8 @@ function detectElementType(element: HTMLElement, editorContainer: Element | null
   let checkEl: HTMLElement | null = element;
   while (checkEl && checkEl !== editorContainer && checkEl !== document.body) {
     if (checkEl.classList?.contains('sl-block')) {
-      // Check block type for specialized handling
+      // Check block type for specialized handling. svg and html blocks are
+      // plain blocks here (BlockProperties branches on data-block-type).
       const blockType = checkEl.dataset?.blockType;
       if (blockType === 'sandpack') {
         // Return the sandpack-embed element inside for properties editing
@@ -307,6 +311,9 @@ export function ElementSelectionProvider({
   const [elementType, setElementType] = useState<SlideElementType>(null);
   const [blockElement, setBlockElement] = useState<HTMLElement | null>(null); // For sl-block wrapper when element is inside a block
   const [activeColumn, setActiveColumn] = useState<HTMLElement | null>(null);
+  // The svg/html block whose source is open (kept apart from the selection,
+  // which Escape or a click may clear while the editor is open).
+  const [sourceBlock, setSourceBlock] = useState<HTMLElement | null>(null);
   const previousSelectionRef = useRef<{ element: HTMLElement | null; type: SlideElementType }>({
     element: null,
     type: null,
@@ -393,6 +400,12 @@ export function ElementSelectionProvider({
   const handleKeyDown = useCallback(
     (event: KeyboardEvent) => {
       if (!isEditing) return;
+
+      // Keys typed in a dialog's editor (a block's source) are the editor's.
+      const keyTarget = event.target as HTMLElement | null;
+      if (keyTarget?.closest?.('.ant-modal, .cm-editor')) return;
+      const focused = document.activeElement as HTMLElement | null;
+      if (focused?.isContentEditable && !focused.closest('.reveal .slides')) return;
 
       // ==========================================
       // DELETE/BACKSPACE - Remove selected element
@@ -625,6 +638,14 @@ export function ElementSelectionProvider({
     [editorRef]
   );
 
+  const openBlockSource = useCallback((block: HTMLElement) => setSourceBlock(block), []);
+  const closeBlockSource = useCallback(() => setSourceBlock(null), []);
+
+  // Leaving edit mode closes the source editor without applying.
+  useEffect(() => {
+    if (!isEditing) setSourceBlock(null);
+  }, [isEditing]);
+
   const value = {
     selectedElement,
     elementType,
@@ -657,10 +678,18 @@ export function ElementSelectionProvider({
     classroomId,
     slideId,
     onUploadAsset,
+    openBlockSource,
   };
 
   return (
-    <ElementSelectionContext.Provider value={value}>{children}</ElementSelectionContext.Provider>
+    <ElementSelectionContext.Provider value={value}>
+      {children}
+      <BlockSourceModal
+        block={sourceBlock}
+        onClose={closeBlockSource}
+        onApplied={onContentChange}
+      />
+    </ElementSelectionContext.Provider>
   );
 }
 

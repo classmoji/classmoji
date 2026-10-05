@@ -168,7 +168,21 @@ function lisIndices(seq: number[]): number[] {
  * An empty array means the documents are canonically identical — nothing to
  * save.
  */
-export function diffBlockOps(baseline: unknown, current: unknown): BlockOp[] | null {
+export function diffBlockOps(
+  baseline: unknown,
+  current: unknown,
+  {
+    maxMoves = MAX_MOVES,
+  }: {
+    /**
+     * Reorders moving more blocks than this return null. The editor's save
+     * keeps the default (a whole-document save beats a long move script);
+     * a live-document apply, which has no whole-document fallback, passes
+     * `Infinity`.
+     */
+    maxMoves?: number;
+  } = {}
+): BlockOp[] | null {
   if (!Array.isArray(baseline) || !Array.isArray(current)) return null;
 
   const base = analyzeDoc(baseline);
@@ -211,7 +225,7 @@ export function diffBlockOps(baseline: unknown, current: unknown): BlockOp[] | n
   const seq = commonCur.map(id => basePos.get(id)!);
   const stable = new Set(lisIndices(seq).map(index => commonCur[index]));
   const movedCount = commonCur.length - stable.size;
-  if (movedCount > MAX_MOVES) return null;
+  if (movedCount > maxMoves) return null;
   commonCur.forEach((id, index) => {
     if (stable.has(id)) return;
     ops.push({

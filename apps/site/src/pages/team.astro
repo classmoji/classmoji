@@ -2,10 +2,12 @@
 import Layout from '../layouts/Layout.astro';
 import Header from '../components/Header.astro';
 import Footer from '../components/Footer.astro';
-import TeamMember from '../components/TeamMember.astro';
+import { Image } from 'astro:assets';
+import { GithubMark } from '../components/how-it-works/components/demo-kit/GithubMark';
 import brigidPhoto from '../assets/team/brigid-odonnell.jpg';
 import ericPhoto from '../assets/team/eric-lu.jpg';
 import joycePhoto from '../assets/team/joyce-zou.jpg';
+import joyPhoto from '../assets/team/joy-maina.jpg';
 import timPhoto from '../assets/team/tim-tregubov.jpg';
 import moizPhoto from '../assets/team/muhammad-moiz.png';
 import papePhoto from '../assets/team/pape-sow-traore.png';
@@ -41,6 +43,7 @@ const active: Member[] = [
   { name: 'Sophie Park', github: 'sophp516', role: 'Developer', years: '2026-present', emoji: '💀', photo: sophiePhoto },
   { name: 'Joyce Zou', github: 'floodywaves', role: 'Developer', years: '2026-present', emoji: '🥚', photo: joycePhoto },
   { name: 'Muhammad Moiz', github: 'MuhammadMoiz20', role: 'Developer', years: '2026-present', emoji: '🔥', photo: moizPhoto },
+  { name: 'Joy Maina', github: 'Joywambui-maina', role: 'Developer', years: '2026-present', emoji: '🥰', photo: joyPhoto },
 ];
 
 // People who are no longer on the project. The section hides itself while this
@@ -51,6 +54,16 @@ const past: Member[] = [
   { name: 'Yaying Yu', role: 'Designer', years: '2026', emoji: '☃️', photo: yayingPhoto },
   { name: 'Eric Lu', github: 'eric-lu-VT', role: 'Developer', years: '2025', emoji: '🍛', photo: ericPhoto },
 ];
+
+const initials = (name: string) =>
+  name
+    .split(' ')
+    .map(part => part[0])
+    .slice(0, 2)
+    .join('');
+
+const handleLink =
+  'inline-flex items-center gap-1.5 rounded-md text-[0.8125rem] text-ink-3 transition-colors duration-150 hover:text-ink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent';
 ---
 
 <Layout
@@ -59,78 +72,161 @@ const past: Member[] = [
 >
   <Header />
 
-  <section class="px-6 pt-32 pb-20">
-    <div class="max-w-5xl mx-auto">
-      <h1 class="text-4xl lg:whitespace-nowrap font-bold text-gray-900 tracking-tight mb-5">
-        Classmoji is built by the faculty and students who use it.
-      </h1>
-      <p class="text-lg text-gray-600">
-        It has evolved with every group that has come through the DALI Lab at Dartmouth College.
-      </p>
+  <main class="bg-page px-6 pb-24 pt-32 sm:pt-36">
+    <div class="mx-auto max-w-7xl">
+      <header class="max-w-3xl">
+        <h1 class="text-balance text-[2.25rem] font-bold leading-[1.1] tracking-tight text-ink-0 sm:text-[2.75rem]">
+          Classmoji is built by the faculty and students who use it.
+        </h1>
+        <p class="mt-5 max-w-2xl text-pretty text-[1.0625rem] leading-relaxed text-ink-2">
+          It has evolved with every group that has come through the{' '}
+          <a
+            href="https://dali.dartmouth.edu"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="font-medium text-ink-0 underline decoration-line-2 underline-offset-4 transition-colors duration-150 hover:decoration-accent"
+            >DALI Lab</a
+          >{' '}
+          at Dartmouth College.
+        </p>
+      </header>
 
-      <div class="border-t border-gray-200 mt-12 mb-10"></div>
-
-      <h2 class="text-xl font-semibold text-gray-900 mb-8">Active team</h2>
-
-      <ul class="flex flex-wrap gap-x-6 gap-y-9">
-        {
-          active.map(member => (
-            <li>
-              <TeamMember
-                name={member.name}
-                github={member.github}
-                role={member.role}
-                years={member.years}
-                emoji={member.emoji}
-                photo={member.photo}
-              />
-            </li>
-          ))
-        }
-      </ul>
+      <section aria-labelledby="active-team-heading" class="mt-16 sm:mt-20">
+        <div class="flex items-baseline justify-between gap-4 border-b border-line pb-4">
+          <h2 id="active-team-heading" class="text-[1.25rem] font-bold tracking-tight text-ink-0">Active team</h2>
+          <span class="text-[0.875rem] text-ink-3">{active.length} people</span>
+        </div>
+        <ul class="mt-10 grid grid-cols-2 gap-x-6 gap-y-12 sm:grid-cols-3 lg:grid-cols-5">
+          {
+            active.map(member => (
+              <li class="flex flex-col items-center text-center">
+                <span class="relative inline-block shrink-0">
+                  {member.photo ? (
+                    <Image
+                      src={member.photo}
+                      alt=""
+                      width={288}
+                      height={288}
+                      class="h-36 w-36 rounded-full bg-stone-100 object-cover ring-1 ring-edge"
+                    />
+                  ) : (
+                    <span
+                      aria-hidden="true"
+                      class="grid h-36 w-36 place-items-center rounded-full bg-stone-100 text-[1.875rem] font-semibold text-stone-600 ring-1 ring-edge"
+                    >
+                      {initials(member.name)}
+                    </span>
+                  )}
+                  {/* Flair, not identity: the name already says who this is. */}
+                  {member.emoji && (
+                    <span
+                      aria-hidden="true"
+                      class="absolute bottom-0 right-0 grid h-11 w-11 place-items-center rounded-full bg-panel text-[1.375rem] leading-none shadow-card ring-1 ring-edge"
+                    >
+                      {member.emoji}
+                    </span>
+                  )}
+                </span>
+                <p class="mt-5 text-[1rem] font-semibold text-ink-0">{member.name}</p>
+                {member.role && <p class="mt-1 text-[0.875rem] text-ink-2">{member.role}</p>}
+                {member.years && <p class="mt-0.5 text-[0.8125rem] tabular-nums text-ink-4">{member.years}</p>}
+                {member.github && (
+                  <a
+                    href={`https://github.com/${member.github}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class:list={['mt-3', handleLink]}
+                  >
+                    <GithubMark className="h-3.5 w-3.5" />
+                    {member.github}
+                  </a>
+                )}
+              </li>
+            ))
+          }
+        </ul>
+      </section>
 
       {
         past.length > 0 && (
-          <>
-            <div class="border-t border-gray-200 mt-14 mb-10" />
-
-            <h2 class="text-xl font-semibold text-gray-900 mb-8">Past members</h2>
-
-            <ul class="flex flex-wrap gap-x-6 gap-y-9">
+          <section aria-labelledby="past-members-heading" class="mt-20 sm:mt-24">
+            <div class="border-b border-line pb-4">
+              <h2 id="past-members-heading" class="text-[1.25rem] font-bold tracking-tight text-ink-0">
+                Past members
+              </h2>
+            </div>
+            <ul class="grid sm:grid-cols-2">
               {past.map(member => (
-                <li>
-                  <TeamMember
-                    name={member.name}
-                    github={member.github}
-                    role={member.role}
-                    years={member.years}
-                    emoji={member.emoji}
-                    photo={member.photo}
-                    muted
-                  />
+                <li class="flex items-center gap-5 border-b border-line py-5 sm:odd:pr-8 sm:even:pl-8">
+                  <span class="relative inline-block shrink-0">
+                    {member.photo ? (
+                      <Image
+                        src={member.photo}
+                        alt=""
+                        width={192}
+                        height={192}
+                        class="h-24 w-24 rounded-full bg-stone-100 object-cover ring-1 ring-edge"
+                      />
+                    ) : (
+                      <span
+                        aria-hidden="true"
+                        class="grid h-24 w-24 place-items-center rounded-full bg-stone-100 text-[1.5rem] font-semibold text-stone-600 ring-1 ring-edge"
+                      >
+                        {initials(member.name)}
+                      </span>
+                    )}
+                    {member.emoji && (
+                      <span
+                        aria-hidden="true"
+                        class="absolute -bottom-0.5 -right-0.5 grid h-8 w-8 place-items-center rounded-full bg-panel text-[1.0625rem] leading-none shadow-card ring-1 ring-edge"
+                      >
+                        {member.emoji}
+                      </span>
+                    )}
+                  </span>
+                  <div class="min-w-0 flex-1">
+                    <p class="truncate text-[0.9375rem] font-semibold text-ink-0">{member.name}</p>
+                    <p class="truncate text-[0.8125rem] text-ink-3">
+                      {[member.role, member.years].filter(Boolean).join(' · ')}
+                    </p>
+                  </div>
+                  {member.github && (
+                    <a
+                      href={`https://github.com/${member.github}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label={`${member.name} on Github`}
+                      class={handleLink}
+                    >
+                      <GithubMark className="h-4 w-4" />
+                    </a>
+                  )}
                 </li>
               ))}
             </ul>
-          </>
+          </section>
         )
       }
 
-      <p class="text-sm text-gray-500 mt-14">
-        Made with support from <a
-          href="https://dali.dartmouth.edu"
+      <section
+        class="mt-20 flex flex-col items-start justify-between gap-5 border-t border-line pt-10 sm:flex-row sm:items-center"
+      >
+        <div>
+          <h2 class="text-[1.25rem] font-bold tracking-tight text-ink-0">Classmoji is open source.</h2>
+          <p class="mt-1.5 text-[0.9375rem] text-ink-2">Issues, ideas, and pull requests are welcome on Github.</p>
+        </div>
+        <a
+          href="https://github.com/classmoji/classmoji"
           target="_blank"
           rel="noopener noreferrer"
-          class="text-gray-600 hover:text-gray-900 underline underline-offset-2">DALI</a
-        > and the <a
-          href="https://web.cs.dartmouth.edu"
-          target="_blank"
-          rel="noopener noreferrer"
-          class="text-gray-600 hover:text-gray-900 underline underline-offset-2"
-          >Computer Science Department at Dartmouth College</a
-        >.
-      </p>
+          class="inline-flex h-10 shrink-0 items-center gap-2 rounded-lg border border-line-2 bg-panel px-4 text-[0.875rem] font-medium text-ink-0 transition-colors duration-150 hover:border-line-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        >
+          <GithubMark className="h-4 w-4" />
+          View the repository
+        </a>
+      </section>
     </div>
-  </section>
+  </main>
 
   <Footer />
 </Layout>

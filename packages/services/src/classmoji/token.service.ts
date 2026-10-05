@@ -1,13 +1,35 @@
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
-import { effectiveTokensPerHour, withLogins } from '@classmoji/utils';
+import {
+  effectiveTokensPerHour,
+  openToStudents,
+  quizExtensionDescription,
+  titleFromQuizExtensionDescription,
+  withLogins,
+} from '@classmoji/utils';
 import { Prisma } from '@prisma/client';
 import type { TokenTransactionType } from '@prisma/client';
+import { quizzesVisibleOrThrow } from './entitlement.service.ts';
+import { recordPushAfterExtension } from './gitRepoAssignment.service.ts';
 
+/**
+ * One extension row. A row names at most one thing it was bought for: a
+ * repository submission (`git_repo_assignment_id`) or a quiz assignment
+ * (`assignment_id`); the database refuses both at once.
+ */
 interface UpdateExtensionInput {
   classroom_id: string;
   student_id: string;
   amount: number;
-  [key: string]: unknown;
+  /**
+   * A TokenTransactionType. Typed wider only because the legacy
+   * `request_extension` task (packages/tasks workflows/extension.ts) still
+   * passes 'EXTENSION', which the column does not accept.
+   */
+  type: TokenTransactionType | (string & {});
+  hours_purchased?: number | null;
+  description?: string | null;
+  git_repo_assignment_id?: string | null;
+  assignment_id?: string | null;
 }
 
 interface AssignToStudentInput {
@@ -30,9 +52,9 @@ const LATEST_FIRST: Prisma.TokenTransactionOrderByWithRelationInput[] = [
   { id: 'desc' },
 ];
 
-type LedgerTx = Prisma.TransactionClient;
+export type LedgerTx = Prisma.TransactionClient;
 
-const LEDGER_TX = { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted };
+export const LEDGER_TX = { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted };
 
 /**
  * Serialize writes to one student's ledger in one classroom, so each new row
@@ -51,6 +73,31 @@ const LEDGER_TX = { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitt
  */
 const lockLedger = async (tx: LedgerTx, classroomId: string, studentId: string) => {
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${classroomId}::text || ':' || ${studentId}::text, 0))`;
+};
+
+/**
+ * Lock several students' ledgers in one classroom, for a transaction that
+ * writes to all of them (a team's grade). Each id is locked once, in sorted
+ * order, so two transactions over overlapping sets of students always take
+ * their locks in the same order and cannot wait on each other in a cycle.
+ */
+export const lockLedgers = async (tx: LedgerTx, classroomId: string, studentIds: string[]) => {
+  for (const studentId of [...new Set(studentIds)].sort()) {
+    await lockLedger(tx, classroomId, studentId);
+  }
+};
+
+/**
+ * Serialize grade changes on one submission (GitRepoAssignment). Grade
+ * transactions take this first, before any ledger lock, so two grade changes
+ * on the same submission run one after the other even when it pays nobody (a
+ * repo with no owner, or a team with no members) and so takes no ledger lock.
+ * Purchases and cancels take only ledger locks, so the order of locks stays
+ * the same everywhere. An advisory lock, not a row lock on the submission:
+ * ledger inserts already take key-share locks on that row.
+ */
+export const lockSubmission = async (tx: LedgerTx, gitRepoAssignmentId: string) => {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended('gra:' || ${gitRepoAssignmentId}::text, 0))`;
 };
 
 /** The latest row of a student's ledger. Call only after `lockLedger`. */
@@ -105,12 +152,18 @@ export const updateExtension = async (data: UpdateExtensionInput) => {
 
     return tx.tokenTransaction.create({
       data: {
-        ...(data as Prisma.TokenTransactionUncheckedCreateInput),
+        classroom_id: data.classroom_id,
+        student_id: data.student_id,
+        amount: data.amount,
+        type: data.type as TokenTransactionType,
+        hours_purchased: data.hours_purchased ?? null,
+        git_repo_assignment_id: data.git_repo_assignment_id ?? null,
+        assignment_id: data.assignment_id ?? null,
         balance_after: newBalance,
-        // `description` is non-nullable (@default('')); coalesce a possibly-null value from
-        // the spread so it can't trigger Prisma's misleading "Argument `classroom` is
-        // missing" error (same guard as assignToStudent).
-        description: (data.description as string | null | undefined) ?? '',
+        // `description` is non-nullable (@default('')); coalesce a null so it
+        // can't trigger Prisma's misleading "Argument `classroom` is missing"
+        // error (same guard as assignToStudent).
+        description: data.description ?? '',
         created_at: nextCreatedAt(transaction),
       },
     });
@@ -118,11 +171,12 @@ export const updateExtension = async (data: UpdateExtensionInput) => {
 };
 
 /**
- * Student purchase of extension hours (plan §5.2 gap 6, extract-first —
- * moved from the student.$class.assignments purchaseExtensionHours action).
+ * Student purchase of extension hours on a repository submission (the
+ * student.$class.assignments purchaseExtensionHours action and MCP
+ * extension_purchase call it).
  *
  * Price and eligibility are recomputed HERE from the DB — callers must never
- * trust a client-supplied price (S9). Re-enforces the popover's gates: no late
+ * trust a client-supplied price. Re-enforces the popover's gates: no late
  * override, a price per hour (the assignment's own tokens_per_hour, else the
  * classroom's default_tokens_per_hour) and a deadline to extend. The balance
  * check runs inside updateExtension's transaction.
@@ -134,6 +188,9 @@ export const updateExtension = async (data: UpdateExtensionInput) => {
  *
  * The submission must be the paying student's own: their repo, or a repo of a
  * team they are on. Anything else reads as not found.
+ *
+ * On a push-mode (REPO) submission, a push the old cutoff left out is
+ * re-read once the purchase has committed (`recordPushAfterExtension`).
  *
  * NOTE: callers are responsible for authorizing `studentId` (self-access or
  * teaching-team).
@@ -192,7 +249,7 @@ export const purchaseExtensionHours = async ({
   }
 
   // Recompute the price; the balance check still runs inside updateExtension.
-  return updateExtension({
+  const transaction = await updateExtension({
     classroom_id: classroomId,
     student_id: studentId,
     git_repo_assignment_id: repoAssignment.id,
@@ -201,6 +258,142 @@ export const purchaseExtensionHours = async ({
     type: 'PURCHASE',
     description: `Purchase of ${hours} hour(s).`,
   });
+
+  // Push mode: a push the old cutoff left out may count now. The purchase has
+  // committed, so a failure here is logged, never thrown; the next push
+  // stamps the submission as usual.
+  if (repoAssignment.assignment.submission_mode === 'REPO') {
+    try {
+      await recordPushAfterExtension(repoAssignment.id);
+    } catch (error) {
+      console.error('[token] could not re-read the submission after an extension purchase', {
+        gitRepoAssignmentId: repoAssignment.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return transaction;
+};
+
+/**
+ * Student purchase of extension hours on a QUIZ assignment. The hours move
+ * that student's due date on the quiz: every attempt's lateness, and whether
+ * a missing attempt counts 0, is measured from `student_deadline` plus the
+ * net hours bought (`effectiveDeadline` in @classmoji/utils).
+ *
+ * Eligibility and price are decided here from the database, never by the
+ * caller:
+ *   - the assignment is a QUIZ in a module of `classroomId`, and students can
+ *     see it (published, opened, quizzes shown in the classroom). Anything
+ *     else reads as not found;
+ *   - the payer is a STUDENT of the classroom;
+ *   - it has a due date;
+ *   - the price per hour (the assignment's own, else the classroom's
+ *     default) is above 0.
+ * Hours can be bought at any time, before the due date or after a late
+ * completion; the close date plays no part. There is no cap but the
+ * balance, which `updateExtension` checks under the student's ledger lock.
+ *
+ * NOTE: callers authorize `studentId`. Quiz hours are bought by the student
+ * for themselves: the web action and MCP pass the signed-in student's id.
+ */
+export const purchaseQuizExtensionHours = async ({
+  classroomId,
+  studentId,
+  assignmentId,
+  hours,
+  now = new Date(),
+}: {
+  classroomId: string;
+  studentId: string;
+  assignmentId: string;
+  hours: number;
+  now?: Date;
+}) => {
+  if (!Number.isInteger(hours) || hours <= 0) {
+    throw new Error('Invalid hours: Must be a positive whole number.');
+  }
+  if (typeof studentId !== 'string' || !studentId) {
+    throw new Error('Invalid student ID.');
+  }
+
+  const prisma = getPrisma();
+  const assignment = await prisma.assignment.findUnique({
+    where: { id: assignmentId },
+    select: {
+      id: true,
+      type: true,
+      title: true,
+      is_published: true,
+      release_at: true,
+      student_deadline: true,
+      tokens_per_hour: true,
+      module: { select: { classroom_id: true } },
+    },
+  });
+  if (!assignment || assignment.module.classroom_id !== classroomId || assignment.type !== 'QUIZ') {
+    throw new Error('Quiz assignment not found.');
+  }
+  const quizzesVisible = await quizzesVisibleOrThrow(classroomId);
+  if (!openToStudents(assignment, now, { quizzesVisible })) {
+    throw new Error('Quiz assignment not found.');
+  }
+
+  const [membership, settings] = await Promise.all([
+    prisma.classroomMembership.findFirst({
+      where: { classroom_id: classroomId, user_id: studentId, role: 'STUDENT' },
+      select: { id: true },
+    }),
+    prisma.classroomSettings.findUnique({
+      where: { classroom_id: classroomId },
+      select: { default_tokens_per_hour: true },
+    }),
+  ]);
+  if (!membership) {
+    throw new Error('Extensions are unavailable: only students buy extension hours.');
+  }
+  if (!assignment.student_deadline) {
+    throw new Error('Extensions are unavailable: this assignment has no deadline.');
+  }
+
+  const tokensPerHour = effectiveTokensPerHour(
+    assignment.tokens_per_hour,
+    settings?.default_tokens_per_hour
+  );
+  if (tokensPerHour <= 0) {
+    throw new Error('Token cost not configured for this assignment.');
+  }
+
+  return updateExtension({
+    classroom_id: classroomId,
+    student_id: studentId,
+    assignment_id: assignment.id,
+    amount: -(tokensPerHour * hours),
+    hours_purchased: hours,
+    type: 'PURCHASE',
+    description: quizExtensionDescription(assignment.title, hours),
+  });
+};
+
+/**
+ * student id → the net extension hours each student has bought on one quiz
+ * assignment (purchases minus refunds; read through `effectiveDeadline` /
+ * `lateHours`, which floor it at 0). A student with no purchase has no key.
+ */
+export const netQuizExtensionHoursByStudent = async ({
+  classroomId,
+  assignmentId,
+}: {
+  classroomId: string;
+  assignmentId: string;
+}): Promise<Map<string, number>> => {
+  const rows = await getPrisma().tokenTransaction.groupBy({
+    by: ['student_id'],
+    where: { classroom_id: classroomId, assignment_id: assignmentId },
+    _sum: { hours_purchased: true },
+  });
+  return new Map(rows.map(row => [row.student_id, row._sum.hours_purchased ?? 0]));
 };
 
 /**
@@ -232,21 +425,37 @@ export const cancelPurchase = async (transactionId: string) => {
       throw new Error('Only a purchase that is not already cancelled can be cancelled.');
     }
 
-    const purchase = await tx.tokenTransaction.findUniqueOrThrow({ where: { id: transactionId } });
+    const purchase = await tx.tokenTransaction.findUniqueOrThrow({
+      where: { id: transactionId },
+      include: { assignment: { select: { title: true } } },
+    });
     const latest = await findLatest(tx, purchase.classroom_id, purchase.student_id);
     const refund = Math.abs(purchase.amount);
     const hours = purchase.hours_purchased ?? 0;
+
+    // A quiz refund keeps a readable title like its purchase: the live title
+    // while the assignment exists, else the one the purchase was written with.
+    const quizTitle =
+      purchase.assignment?.title ??
+      (purchase.git_repo_assignment_id
+        ? null
+        : titleFromQuizExtensionDescription(purchase.description));
+    const description =
+      quizTitle !== null
+        ? quizExtensionDescription(quizTitle, -hours)
+        : `Refund of ${hours} hours.`;
 
     return tx.tokenTransaction.create({
       data: {
         classroom_id: purchase.classroom_id,
         student_id: purchase.student_id,
         git_repo_assignment_id: purchase.git_repo_assignment_id,
+        assignment_id: purchase.assignment_id,
         amount: refund,
         hours_purchased: 0 - hours,
         type: 'REFUND',
         balance_after: (latest?.balance_after ?? 0) + refund,
-        description: `Refund of ${hours} hours.`,
+        description,
         created_at: nextCreatedAt(latest),
       },
     });
@@ -264,6 +473,8 @@ export const findTransactions = async (query: Prisma.TokenTransactionWhereInput)
             assignment: true,
           },
         },
+        // A quiz extension's assignment: the tokens log names it.
+        assignment: { select: { id: true, title: true, type: true } },
         assignment_grade: true,
       },
       orderBy: LATEST_FIRST,
@@ -271,29 +482,42 @@ export const findTransactions = async (query: Prisma.TokenTransactionWhereInput)
   );
 };
 
-export const assignToStudent = async (data: AssignToStudentInput) => {
-  return getPrisma().$transaction(async tx => {
-    await lockLedger(tx, data.classroomId, data.studentId);
-    const transaction = await findLatest(tx, data.classroomId, data.studentId);
+/** The write behind assignToStudent. Call only after `lockLedger`. */
+const appendToLedger = async (tx: LedgerTx, data: AssignToStudentInput) => {
+  const transaction = await findLatest(tx, data.classroomId, data.studentId);
 
-    const studentBalance = transaction?.balance_after || 0;
-    const newBalance = studentBalance + data.amount;
+  const studentBalance = transaction?.balance_after || 0;
+  const newBalance = studentBalance + data.amount;
 
-    return tx.tokenTransaction.create({
-      data: {
-        type: (data.type as TokenTransactionType) || 'GAIN',
-        amount: data.amount,
-        balance_after: newBalance,
-        student_id: data.studentId,
-        classroom_id: data.classroomId,
-        // `description` is a non-nullable column (@default('')). A null here makes
-        // Prisma's create validation fail with a misleading "Argument `classroom`
-        // is missing", so coalesce null/undefined to an empty string.
-        description: data.description ?? '',
-        git_repo_assignment_id: data.repositoryAssignmentId,
-        created_at: nextCreatedAt(transaction),
-      },
-    });
+  return tx.tokenTransaction.create({
+    data: {
+      type: (data.type as TokenTransactionType) || 'GAIN',
+      amount: data.amount,
+      balance_after: newBalance,
+      student_id: data.studentId,
+      classroom_id: data.classroomId,
+      // `description` is a non-nullable column (@default('')). A null here makes
+      // Prisma's create validation fail with a misleading "Argument `classroom`
+      // is missing", so coalesce null/undefined to an empty string.
+      description: data.description ?? '',
+      git_repo_assignment_id: data.repositoryAssignmentId,
+      created_at: nextCreatedAt(transaction),
+    },
+  });
+};
+
+/**
+ * Append a row to a student's ledger. Without `tx` it runs in its own
+ * transaction and takes the student's ledger lock. With `tx` it writes inside
+ * the caller's transaction, so the row commits or rolls back with the rest of
+ * the caller's work; the caller must already hold the lock (`lockLedgers`)
+ * and run at read committed.
+ */
+export const assignToStudent = async (data: AssignToStudentInput, tx?: LedgerTx) => {
+  if (tx) return appendToLedger(tx, data);
+  return getPrisma().$transaction(async ownTx => {
+    await lockLedger(ownTx, data.classroomId, data.studentId);
+    return appendToLedger(ownTx, data);
   }, LEDGER_TX);
 };
 

@@ -37,6 +37,13 @@ export interface Viewer {
    * passes the student's browser zone; the Claude.ai connector sends none).
    */
   timezoneHint?: string | null;
+  /**
+   * The MCP session this request belongs to (`Mcp-Session-Id`, issued on
+   * initialize; see routes/mcp.ts), when the client sent a well-formed one.
+   * Only tells a person's agent sessions apart in live editing — never part
+   * of an authorization decision.
+   */
+  agentSession?: string | null;
 }
 
 /** Shape of the oauth_access_tokens row `getMcpSession` returns (better-auth 1.4.18). */

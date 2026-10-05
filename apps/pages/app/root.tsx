@@ -62,6 +62,14 @@ const isSitePath = (pathname: string): boolean =>
   pathname === SITE_PATH_PREFIX || pathname.startsWith(`${SITE_PATH_PREFIX}/`);
 
 /**
+ * The MCP's page renders (`/_render/page/:pageId`, exactly). Rendered like a site page —
+ * bare, script-less, no login redirect — because the caller is a headless
+ * browser holding a view token, which the route's own loader verifies.
+ */
+const RENDER_PATH = /^\/_render\/page\/[^/]+(?:\.data)?$/;
+const isRenderPath = (pathname: string): boolean => RENDER_PATH.test(pathname);
+
+/**
  * The user the root loader returns: each membership as the client reads it,
  * its id, role and classroom.
  */
@@ -83,7 +91,7 @@ export const loader = async ({ request }: { request: Request }) => {
   // any auth work: the redirect below would otherwise bounce every visitor to
   // the webapp login. These paths are only reachable via the host middleware's
   // internal rewrite, never from the canonical host.
-  if (isSitePath(url.pathname)) {
+  if (isSitePath(url.pathname) || isRenderPath(url.pathname)) {
     return { user: null, isSite: true };
   }
 

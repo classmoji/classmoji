@@ -17,6 +17,7 @@ jobs:
       webapp: ${{ steps.filter.outputs.webapp == 'true' || github.event_name == 'workflow_dispatch' }}
       ai-agent: ${{ steps.filter.outputs.ai-agent == 'true' || github.event_name == 'workflow_dispatch' }}
       hook-station: ${{ steps.filter.outputs.hook-station == 'true' || github.event_name == 'workflow_dispatch' }}
+      collab: ${{ steps.filter.outputs.collab == 'true' || github.event_name == 'workflow_dispatch' }}
       mcp: ${{ steps.filter.outputs.mcp == 'true' || github.event_name == 'workflow_dispatch' }}
       site: ${{ steps.filter.outputs.site == 'true' || github.event_name == 'workflow_dispatch' }}
       slides: ${{ steps.filter.outputs.slides == 'true' || github.event_name == 'workflow_dispatch' }}
@@ -38,6 +39,9 @@ jobs:
               - 'packages/**'
             hook-station:
               - 'apps/hook-station/**'
+              - 'packages/**'
+            collab:
+              - 'apps/collab/**'
               - 'packages/**'
             mcp:
               - 'apps/mcp/**'
@@ -61,6 +65,9 @@ jobs:
               # The worker bundles services, which signs media and content
               # URLs with this package.
               - 'packages/content-signing/**'
+              # content-checkpoint renders live docs with these.
+              - 'packages/collab/**'
+              - 'packages/page-schema/**'
 
   deploy-webapp:
     needs: changes
@@ -127,6 +134,35 @@ jobs:
         run: |
           CONFIG=$(scripts/fly-autostop-config.sh apps/hook-station/fly.toml stop)
           flyctl deploy --config "$CONFIG" --dockerfile apps/hook-station/Dockerfile --remote-only --app classmoji-hook-station-dev
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+  deploy-collab:
+    needs: [changes, deploy-webapp]
+    if: always() && needs.changes.outputs.collab == 'true' && (needs.deploy-webapp.result == 'success' || needs.deploy-webapp.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Heal package-lock.json against submodule workspaces
+        run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Deploy collab
+        run: |
+          # No scale-to-zero wrapper (unlike the other dev apps): open rooms
+          # and their unsaved edits live in the one machine's memory, same as
+          # staging and production. --ha=false: the first deploy of a
+          # machine-less app creates one machine, not two.
+          if flyctl status --app classmoji-collab-dev >/dev/null 2>&1; then
+            flyctl deploy --config apps/collab/fly.toml --dockerfile apps/collab/Dockerfile --remote-only --app classmoji-collab-dev --ha=false
+          else
+            echo "::notice::Skipping collab deploy because Fly app classmoji-collab-dev is not provisioned."
+          fi
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 

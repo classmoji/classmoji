@@ -18,7 +18,7 @@ interface ExtensionNoteInput {
   extensionHours: number;
   numLateHours: number;
   isLateOverride: boolean;
-  /** When the work was submitted (ISO), if it was. */
+  /** When the work was submitted (ISO), if it was: the repo's submission, the quiz's counting attempt. */
   closedAt: string | null;
 }
 
@@ -45,6 +45,9 @@ export const extensionNote = (
         inWindow: now.isAfter(due),
       };
     }
+    // Past the hours bought with nothing to be late by yet (a quiz with no
+    // completed attempt reads as missing on its row): the hours only.
+    if (numLateHours <= 0) return { text: applied, tone: 'info', inWindow: false };
     return { text: `${applied} · ${numLateHours}h still late`, tone: 'info', inWindow: false };
   }
 

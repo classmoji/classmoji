@@ -142,6 +142,7 @@ const UUID_FIELDS: Array<[AnyTool, string]> = [
   [listSubmissionsTool, 'assignment_id'],
   [listSubmissionsTool, 'grader_id'],
   [regradeResolveTool, 'regrade_request_id'],
+  [extensionPurchaseTool, 'assignment_id'],
 ].map(([tool, key]) => [tool as unknown as AnyTool, key as string]);
 
 describe('ids of other records', () => {

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 /**
  * The syllabus bot's tier decision.
@@ -197,5 +197,75 @@ describe('quizzesVisible', () => {
       where: { classroom_id: CLASSROOM_ID },
       select: { quizzes_enabled: true },
     });
+  });
+});
+
+describe('quizzesVisibleOrThrow', () => {
+  const env = { ...process.env };
+  const configure = (on: boolean) => {
+    if (on) {
+      process.env.AI_AGENT_URL = 'http://localhost:6000';
+      process.env.AI_AGENT_SHARED_SECRET = 'test-secret';
+    } else {
+      delete process.env.AI_AGENT_URL;
+      delete process.env.AI_AGENT_SHARED_SECRET;
+    }
+  };
+
+  afterEach(() => {
+    process.env = { ...env };
+  });
+
+  it('is false without asking the database when the AI agent is not configured', async () => {
+    configure(false);
+    getProStateForClassroomIdMock.mockResolvedValue({ isPro: true });
+    findUniqueSettingsMock.mockResolvedValue({ quizzes_enabled: true });
+    const { quizzesVisibleOrThrow } = await import('../entitlement.service.ts');
+
+    expect(await quizzesVisibleOrThrow(CLASSROOM_ID)).toBe(false);
+    expect(getProStateForClassroomIdMock).not.toHaveBeenCalled();
+    expect(findUniqueSettingsMock).not.toHaveBeenCalled();
+  });
+
+  it('needs both AI agent variables', async () => {
+    configure(true);
+    delete process.env.AI_AGENT_SHARED_SECRET;
+    getProStateForClassroomIdMock.mockResolvedValue({ isPro: true });
+    const { quizzesVisibleOrThrow } = await import('../entitlement.service.ts');
+
+    expect(await quizzesVisibleOrThrow(CLASSROOM_ID)).toBe(false);
+  });
+
+  it.each([
+    [true, true, true],
+    [true, false, false],
+    [false, true, false],
+  ])('with the agent configured, Pro=%s and switch=%s answer %s', async (isPro, on, expected) => {
+    configure(true);
+    getProStateForClassroomIdMock.mockResolvedValue({ isPro });
+    findUniqueSettingsMock.mockResolvedValue({ quizzes_enabled: on });
+    const { quizzesVisibleOrThrow } = await import('../entitlement.service.ts');
+
+    expect(await quizzesVisibleOrThrow(CLASSROOM_ID)).toBe(expected);
+  });
+
+  it('throws when the Pro lookup fails, never answers false', async () => {
+    configure(true);
+    const failure = new Error("Can't reach database server");
+    getProStateForClassroomIdMock.mockRejectedValue(failure);
+    findUniqueSettingsMock.mockResolvedValue({ quizzes_enabled: true });
+    const { quizzesVisibleOrThrow } = await import('../entitlement.service.ts');
+
+    await expect(quizzesVisibleOrThrow(CLASSROOM_ID)).rejects.toBe(failure);
+  });
+
+  it('throws when the settings lookup fails', async () => {
+    configure(true);
+    const failure = new Error('settings read failed');
+    getProStateForClassroomIdMock.mockResolvedValue({ isPro: true });
+    findUniqueSettingsMock.mockRejectedValue(failure);
+    const { quizzesVisibleOrThrow } = await import('../entitlement.service.ts');
+
+    await expect(quizzesVisibleOrThrow(CLASSROOM_ID)).rejects.toBe(failure);
   });
 });

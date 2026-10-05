@@ -31,7 +31,7 @@ vi.mock('@classmoji/database', () => {
 
 const LONG_AGO = new Date('2026-01-01T00:00:00Z');
 
-const { assignToStudent } = await import('../token.service.ts');
+const { assignToStudent, lockLedgers, lockSubmission } = await import('../token.service.ts');
 
 describe('token.assignToStudent', () => {
   beforeEach(() => {
@@ -109,5 +109,76 @@ describe('token.assignToStudent', () => {
     const createArg = createMock.mock.calls[0][0] as { data: Record<string, unknown> };
     expect((createArg.data.created_at as Date).getTime()).toBeGreaterThanOrEqual(before);
     expect(createArg.data.balance_after).toBe(5);
+  });
+
+  it("writes inside the caller's transaction without opening or locking its own", async () => {
+    const callerCreate = vi.fn((args: { data: Record<string, unknown> }) => ({
+      id: 'tx-caller',
+      ...args.data,
+    }));
+    const callerFindFirst = vi.fn().mockResolvedValue({ balance_after: 20, created_at: LONG_AGO });
+    const callerExecuteRaw = vi.fn();
+    const callerTx = {
+      tokenTransaction: { create: callerCreate, findFirst: callerFindFirst },
+      $executeRaw: callerExecuteRaw,
+    };
+
+    const row = await assignToStudent(
+      { classroomId: 'class-1', studentId: 'student-1', amount: -5, type: 'REMOVAL' },
+      callerTx as never
+    );
+
+    expect(row.id).toBe('tx-caller');
+    expect(transactionOptionsMock).not.toHaveBeenCalled();
+    expect(executeRawMock).not.toHaveBeenCalled();
+    expect(callerExecuteRaw).not.toHaveBeenCalled();
+    expect(createMock).not.toHaveBeenCalled();
+    const createArg = callerCreate.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(createArg.data).toMatchObject({ type: 'REMOVAL', amount: -5, balance_after: 15 });
+  });
+});
+
+describe('token.lockLedgers', () => {
+  it('locks each student once, in sorted order', async () => {
+    const callerExecuteRaw = vi.fn();
+
+    await lockLedgers({ $executeRaw: callerExecuteRaw } as never, 'class-1', [
+      'student-c',
+      'student-a',
+      'student-c',
+      'student-b',
+    ]);
+
+    const locked = callerExecuteRaw.mock.calls.map(call => (call as unknown[]).slice(1));
+    expect(locked).toEqual([
+      ['class-1', 'student-a'],
+      ['class-1', 'student-b'],
+      ['class-1', 'student-c'],
+    ]);
+    for (const call of callerExecuteRaw.mock.calls) {
+      expect((call[0] as string[]).join('?')).toContain('pg_advisory_xact_lock');
+    }
+  });
+
+  it('takes no lock for an empty list', async () => {
+    const callerExecuteRaw = vi.fn();
+
+    await lockLedgers({ $executeRaw: callerExecuteRaw } as never, 'class-1', []);
+
+    expect(callerExecuteRaw).not.toHaveBeenCalled();
+  });
+});
+
+describe('token.lockSubmission', () => {
+  it('takes one advisory lock keyed by the submission id, bound as a parameter', async () => {
+    const callerExecuteRaw = vi.fn();
+
+    await lockSubmission({ $executeRaw: callerExecuteRaw } as never, 'gra-1');
+
+    expect(callerExecuteRaw).toHaveBeenCalledTimes(1);
+    const [strings, ...values] = callerExecuteRaw.mock.calls[0] as [string[], ...unknown[]];
+    expect(strings.join('?')).toContain('pg_advisory_xact_lock');
+    expect(strings.join('?')).toContain("'gra:'");
+    expect(values).toEqual(['gra-1']);
   });
 });

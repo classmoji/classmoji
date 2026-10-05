@@ -35,6 +35,7 @@ enum NotificationType {
   ASSIGNMENT_GRADED
   TA_GRADING_ASSIGNED
   TA_REGRADE_ASSIGNED
+  FEEDBACK_STATUS_CHANGED
 }
 
 // How a Repository is provisioned: one git repo per student, or one per team.
@@ -109,6 +110,9 @@ enum AuditLogAction {
   DELETE
   ACCESS_DENIED
   VIEW
+  COLLAB_JOIN
+  COLLAB_LEAVE
+  COLLAB_CHECKPOINT
 }
 
 enum AIConversationType {
@@ -366,6 +370,11 @@ model User {
   team_set_runs_created         TeamSetRun[]
   gitlab_connection             GitLabConnection?
   gitlab_instances_created      GitLabInstance[]
+  feedback_posts                FeedbackPost[]
+  feedback_votes                FeedbackVote[]
+  feedback_comments             FeedbackComment[]
+  feedback_comment_votes        FeedbackCommentVote[]
+  feedback_follows              FeedbackFollow[]
 
   @@map("users")
 }
@@ -541,6 +550,10 @@ model Classroom {
   // through). Defaults true: new classrooms get the delivery layer, and an env
   // without the signing secrets still behaves exactly as it did before.
   content_delivery_enabled     Boolean         @default(true)
+  // Live collaborative editing (pages and slides through the collab service).
+  // Off by default: a classroom without it keeps today's editors and save
+  // paths untouched. Turning it off checkpoints and closes the open rooms.
+  collab_enabled               Boolean         @default(false)
   // When the asset map was last rebuilt FROM THE REPO'S TREE — a full sync, and
   // only a full sync. This is what `ensureContentAssets` measures its 24h
   // refresh against, deliberately NOT the newest `content_assets.synced_at`:
@@ -997,6 +1010,8 @@ model Assignment {
   pages                PageLink[]
   slides               SlideLink[]
   calendarEventLinks   CalendarEventAssignmentLink[]
+  // Quiz extension hours bought on this assignment (QUIZ only).
+  token_transactions   TokenTransaction[]
 
   @@unique([repository_id, title])
   @@index([repository_id])
@@ -1340,6 +1355,12 @@ model TokenTransaction {
   classroom_id           String
   student_id             String
   git_repo_assignment_id String?
+  // A quiz extension: the QUIZ assignment the hours were bought on. At most
+  // one of git_repo_assignment_id / assignment_id is set (CHECK
+  // token_transactions_one_target in the migration). SetNull keeps the row,
+  // and so the balance chain, when the assignment is deleted; the row's
+  // description keeps a readable snapshot of the title.
+  assignment_id          String?
   amount                 Int
   type                   TokenTransactionType
   hours_purchased        Int?
@@ -1352,10 +1373,13 @@ model TokenTransaction {
   classroom           Classroom          @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
   student             User               @relation(fields: [student_id], references: [id], onDelete: Cascade)
   git_repo_assignment GitRepoAssignment? @relation(fields: [git_repo_assignment_id], references: [id], onDelete: Cascade)
+  assignment          Assignment?        @relation(fields: [assignment_id], references: [id], onDelete: SetNull)
   assignment_grade    AssignmentGrade?
 
   @@index([classroom_id])
   @@index([student_id])
+  @@index([git_repo_assignment_id])
+  @@index([assignment_id, student_id])
   @@map("token_transactions")
 }
 
@@ -1910,6 +1934,7 @@ model NotificationPreference {
   email_assignment_graded           Boolean  @default(true)
   email_ta_grading_assigned         Boolean  @default(true)
   email_ta_regrade_assigned         Boolean  @default(true)
+  email_feedback_status_changed     Boolean  @default(true)
   created_at                        DateTime @default(now())
   updated_at                        DateTime @default(now()) @updatedAt
 
@@ -2606,4 +2631,173 @@ model MediaObject {
   /// media list, and the resolver's own lookup.
   @@index([classroom_id, status])
   @@map("media_objects")
+}
+
+/// The live document of a page or deck being edited collaboratively — the
+/// buffer between the collab service and git. The collab service stores the
+/// full Yjs state here on every (debounced) change and bumps `version`; the
+/// content-checkpoint worker renders it, pushes one commit, and records the
+/// version it pushed. `version == pushed_version` means clean: git holds
+/// everything. At rest git is the only copy; a clean row may be dropped.
+///
+/// No foreign keys: `doc_id` names a Page or a Slide depending on `kind`, and
+/// the row must outlive a racing delete long enough for a final checkpoint.
+model CollabDoc {
+  /// 'page' | 'deck'
+  kind                  String
+  /// Page.id or Slide.id (a DECK slide)
+  doc_id                String
+  classroom_id          String
+  /// Part of the room name; bumped when the doc is reseeded from git so a
+  /// stale browser reloads instead of syncing old content into the new doc.
+  epoch                 Int       @default(1)
+  /// Full Y.encodeStateAsUpdate of the document.
+  state                 Bytes
+  /// SCHEMA_VERSION the state was written with.
+  schema_version        Int
+  /// Bumped on each store.
+  version               Int       @default(0)
+  /// The version included in the last successful push.
+  pushed_version        Int       @default(0)
+  /// Blob sha of the content file last seeded from / pushed.
+  source_sha            String?
+  /// Commit sha of the last checkpoint.
+  pushed_commit         String?
+  /// When unsaved changes began (null when clean).
+  dirty_since           DateTime?
+  /// Co-authors since the last push: `{ userId, name }[]`. Merged by the
+  /// collab store hook; cleared/trimmed by the worker after a push.
+  editors               Json?
+  /// When the last checkpoint run for this doc finished.
+  last_checkpoint_at    DateTime?
+  /// Refusal/failure code + message of the last run; null when it succeeded.
+  last_checkpoint_error String?
+  /// Last outside-push conflict: `{ at, sha, ids[] }`.
+  last_conflict         Json?
+  created_at            DateTime  @default(now())
+  updated_at            DateTime  @updatedAt
+
+  @@id([kind, doc_id])
+  /// The worker gathers a classroom's dirty docs (one content repo, one commit).
+  @@index([classroom_id])
+  @@map("collab_docs")
+}
+
+// ============================================================================
+// FEEDBACK
+// ============================================================================
+// The public feedback board at /feedback: anyone can read, signed-in users post
+// requests, vote, comment, and follow; platform admins move posts through a
+// status, which places them on the roadmap.
+
+/// Where a post sits on the roadmap. Null on the post means it has not been
+/// triaged yet and stays off the roadmap.
+enum FeedbackStatus {
+  IN_REVIEW
+  PLANNED
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum FeedbackCategory {
+  FEATURE
+  BUG
+  INTEGRATION
+}
+
+model FeedbackPost {
+  id                String           @id @default(uuid())
+  title             String
+  body              String
+  category          FeedbackCategory @default(FEATURE)
+  status            FeedbackStatus?
+  /// Null once the author's account is deleted; the request itself stays.
+  author_id         String?
+  /// Shown as "Anonymous" on the board. The author is still recorded, so they
+  /// can delete it and hear about status changes; it is never shown.
+  is_anonymous      Boolean          @default(false)
+  /// Kept in step with feedback_votes / feedback_comments by the service, so the
+  /// board can sort without counting.
+  vote_count        Int              @default(0)
+  comment_count     Int              @default(0)
+  /// When the status last changed; orders "Recently shipped".
+  status_changed_at DateTime?
+  created_at        DateTime         @default(now())
+  updated_at        DateTime         @default(now()) @updatedAt
+
+  author   User?             @relation(fields: [author_id], references: [id], onDelete: SetNull)
+  votes    FeedbackVote[]
+  comments FeedbackComment[]
+  follows  FeedbackFollow[]
+
+  @@index([status])
+  @@index([vote_count])
+  @@index([created_at])
+  @@index([status, status_changed_at])
+  @@map("feedback_posts")
+}
+
+model FeedbackVote {
+  id         String   @id @default(uuid())
+  post_id    String
+  user_id    String
+  created_at DateTime @default(now())
+
+  post FeedbackPost @relation(fields: [post_id], references: [id], onDelete: Cascade)
+  user User         @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([post_id, user_id])
+  @@index([user_id])
+  @@map("feedback_votes")
+}
+
+/// A comment, or a reply when `parent_id` is set. Replies are one level deep:
+/// a reply's parent is always a top-level comment on the same post.
+model FeedbackComment {
+  id         String   @id @default(uuid())
+  post_id    String
+  author_id  String?
+  parent_id  String?
+  body       String
+  vote_count Int      @default(0)
+  created_at DateTime @default(now())
+  updated_at DateTime @default(now()) @updatedAt
+
+  post    FeedbackPost          @relation(fields: [post_id], references: [id], onDelete: Cascade)
+  author  User?                 @relation(fields: [author_id], references: [id], onDelete: SetNull)
+  parent  FeedbackComment?      @relation("FeedbackCommentReplies", fields: [parent_id], references: [id], onDelete: Cascade)
+  replies FeedbackComment[]     @relation("FeedbackCommentReplies")
+  votes   FeedbackCommentVote[]
+
+  @@index([post_id])
+  @@map("feedback_comments")
+}
+
+model FeedbackCommentVote {
+  id         String   @id @default(uuid())
+  comment_id String
+  user_id    String
+  created_at DateTime @default(now())
+
+  comment FeedbackComment @relation(fields: [comment_id], references: [id], onDelete: Cascade)
+  user    User            @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([comment_id, user_id])
+  @@map("feedback_comment_votes")
+}
+
+/// Who hears about a post's status changes. The author and every voter follow
+/// automatically; anyone can unfollow.
+model FeedbackFollow {
+  id         String   @id @default(uuid())
+  post_id    String
+  user_id    String
+  created_at DateTime @default(now())
+
+  post FeedbackPost @relation(fields: [post_id], references: [id], onDelete: Cascade)
+  user User         @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([post_id, user_id])
+  @@index([user_id])
+  @@map("feedback_follows")
 }

@@ -1105,3 +1105,173 @@ describe('placeIntoMedia: an optimisable video gets its job (onMediaReady)', () 
     expect(videoJob()).toHaveLength(0);
   });
 });
+
+describe('deck folder uploads (folder + filename, slide decks only)', () => {
+  const SLIDE_ID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  const slideTarget = { type: 'slide' as const, id: SLIDE_ID };
+
+  it('stores the relative path on the row and routes to the repository', async () => {
+    const started = await staging.startStagedUpload({
+      classroom,
+      userId: USER,
+      filename: 'Sprite_01.png',
+      folder: 'games/minions/',
+      sizeBytes: 4096,
+      target: slideTarget,
+    });
+    expect(started.destination).toBe('repo');
+    expect(prisma.mediaObject.create.mock.calls[0][0].data).toMatchObject({
+      filename: 'games/minions/Sprite_01.png',
+      ext: 'png',
+      destination: 'repo',
+      stage_target_type: 'slide',
+    });
+  });
+
+  it('keeps a Pro video in a folder in the repository rather than media', async () => {
+    const started = await staging.startStagedUpload({
+      classroom,
+      userId: USER,
+      filename: 'intro.mp4',
+      folder: 'games/minions',
+      sizeBytes: 4096,
+      target: slideTarget,
+    });
+    expect(started.destination).toBe('repo');
+  });
+
+  it('refuses a folder file the repository cannot take, naming why', async () => {
+    await expect(
+      staging.startStagedUpload({
+        classroom,
+        userId: USER,
+        filename: 'big.bin',
+        folder: 'games/minions',
+        sizeBytes: 200 * MB,
+        target: slideTarget,
+      })
+    ).rejects.toMatchObject({
+      code: 'STORAGE_REFUSED',
+      message: expect.stringMatching(/deck folder.*35 MB/),
+    });
+    capability.mockResolvedValue({ ...FREE_CAP, repoFileTypes: 'allowlist' });
+    await expect(
+      staging.startStagedUpload({
+        classroom,
+        userId: USER,
+        filename: 'game.js',
+        folder: 'games/minions',
+        sizeBytes: 10,
+        target: slideTarget,
+      })
+    ).rejects.toMatchObject({ code: 'STORAGE_REFUSED', message: expect.stringMatching(/Allowed/) });
+    expect(prisma.mediaObject.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a folder for a page, and a path in filename anywhere', async () => {
+    await expect(
+      staging.startStagedUpload({
+        classroom,
+        userId: USER,
+        filename: 'a.png',
+        folder: 'x',
+        sizeBytes: 10,
+        target,
+      })
+    ).rejects.toMatchObject({
+      code: 'STORAGE_REFUSED',
+      message: expect.stringMatching(/slide decks/),
+    });
+    for (const filename of ['games/a.png', '..\\a.png']) {
+      await expect(
+        staging.startStagedUpload({
+          classroom,
+          userId: USER,
+          filename,
+          sizeBytes: 10,
+          target: slideTarget,
+        })
+      ).rejects.toMatchObject({ code: 'STORAGE_REFUSED' });
+    }
+    expect(prisma.mediaObject.create).not.toHaveBeenCalled();
+  });
+
+  it('a URL import takes the folder and defaults the name from the URL', async () => {
+    const started = await staging.startUrlImport({
+      classroom,
+      userId: USER,
+      url: 'https://example.com/assets/game.js',
+      folder: 'games/minions',
+      target: slideTarget,
+    });
+    expect(started.filename).toBe('games/minions/game.js');
+    expect(prisma.mediaObject.create.mock.calls[0][0].data).toMatchObject({
+      filename: 'games/minions/game.js',
+      destination: 'repo',
+    });
+  });
+
+  it('a settled folder import stays bound for the repository', async () => {
+    prisma.mediaObject.findUnique.mockResolvedValue(
+      stagedRow({
+        filename: 'games/minions/intro.mp4',
+        kind: 'VIDEO',
+        stage_target_type: 'slide',
+        stage_target_id: SLIDE_ID,
+        size_bytes: BigInt(0),
+      })
+    );
+    const row = await staging.settleStagedImport(MEDIA_ID, 4096);
+    expect(row.destination).toBe('repo');
+  });
+
+  it('places the file at exactly folder/name in the deck folder, replacing an older copy', async () => {
+    prisma.mediaObject.findUnique.mockResolvedValue(
+      stagedRow({
+        filename: 'games/minions/Sprite_01.png',
+        stage_target_type: 'slide',
+        stage_target_id: SLIDE_ID,
+      })
+    );
+    prisma.slide.findUnique.mockResolvedValue({
+      id: SLIDE_ID,
+      classroom_id: CLASSROOM_ID,
+      title: 'Week 1',
+      content_path: 'slides/week-1',
+      classroom: {
+        id: CLASSROOM_ID,
+        content_repo: 'content-repo',
+        git_organization: { login: 'org', provider: 'GITHUB' },
+      },
+    });
+    sendImpl.mockImplementation(async (name: string) =>
+      name === 'GetObject'
+        ? { Body: { transformToByteArray: async () => new Uint8Array(4096) } }
+        : {}
+    );
+    contentUpload.mockResolvedValue({
+      path: 'slides/week-1/games/minions/Sprite_01.png',
+      sha: 'abc',
+    });
+
+    await expect(staging.placeStagedObject(MEDIA_ID)).resolves.toEqual({
+      status: 'placed',
+      ref: 'slides/week-1/games/minions/Sprite_01.png',
+    });
+    const call = contentUpload.mock.calls[0][0];
+    expect(call).toMatchObject({
+      repo: 'content-repo',
+      folder: 'slides/week-1/games/minions',
+      filename: 'Sprite_01.png',
+      keepName: true,
+    });
+    expect(call).not.toHaveProperty('storedName');
+    // Routed at stage time; the Pro "videos go to media" rule is not re-run.
+    expect(assertRepoTarget).not.toHaveBeenCalled();
+    expect(recordContentAsset).toHaveBeenCalledWith(CLASSROOM_ID, {
+      path: 'slides/week-1/games/minions/Sprite_01.png',
+      sha: 'abc',
+      size: 4096,
+    });
+  });
+});

@@ -25,6 +25,7 @@
 import { ClassmojiService } from '@classmoji/services';
 import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
+import { closeLiveDocBeforeDelete, notifyLiveMetaChanged } from '../collab/lifecycle.ts';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
 import {
@@ -186,6 +187,11 @@ export const pageUpdateTool: ToolDefinition<PageUpdateArgs> = {
         action: 'UPDATE',
         data: { tool: 'page_update', fields },
       });
+      // Open live editors show the new title / width at once.
+      await notifyLiveMetaChanged('page', page.id, page.classroom_id, {
+        ...(args.title !== undefined ? { title: updated.title } : {}),
+        ...(args.width !== undefined ? { width: updated.width ?? args.width } : {}),
+      });
 
       return ok({
         success: true,
@@ -232,6 +238,9 @@ export const pageDeleteTool: ToolDefinition<PageDeleteArgs> = {
   },
   handler: async (args, ctx) => {
     const page = await loadPageInClassroom(args.page_id, ctx);
+
+    // A live-edited page: checkpoint it and close its editors first.
+    await closeLiveDocBeforeDelete('page', page.id, page.classroom_id);
 
     // Orchestrated delete: GitHub content-repo folder (failure tolerated —
     // logged and skipped inside the service) + DB row + manifest refresh.

@@ -2,7 +2,9 @@
   "name": "@classmoji/tasks",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./browser-run": "./src/helpers/browserRun.ts",
+    "./safe-url": "./src/helpers/safeUrlFetch.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -23,8 +25,10 @@
     "@anthropic-ai/sdk": "^0.39.0",
     "@aws-sdk/client-s3": "^3.1136.0",
     "@classmoji/auth": "*",
+    "@classmoji/collab": "*",
     "@classmoji/content-signing": "*",
     "@classmoji/database": "*",
+    "@classmoji/page-schema": "*",
     "@classmoji/services": "*",
     "@infisical/sdk": "^5.0.2",
     "@trigger.dev/build": "4.6.4",
@@ -38,6 +42,7 @@
     "resend": "^6.20.0",
     "simple-git": "^3.36.0",
     "undici": "^7.19.0",
+    "yjs": "^13.6.33",
     "zod": "^3.25.76"
   },
   "trigger.dev": {

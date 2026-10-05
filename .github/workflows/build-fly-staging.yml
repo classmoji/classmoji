@@ -40,12 +40,12 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
           case "$SERVICE" in
-            webapp|ai-agent|hook-station|mcp|pages|slides|admin) ;;
+            webapp|ai-agent|hook-station|collab|mcp|pages|slides|admin) ;;
             *) echo "Unsupported staging service: $SERVICE" >&2; exit 1 ;;
           esac
           APP="classmoji-${SERVICE}-staging"
-          if [ "$SERVICE" = mcp ] && ! flyctl status --app "$APP" >/dev/null 2>&1; then
-            echo "::notice::Skipping mcp build because its staging app is not provisioned."
+          if { [ "$SERVICE" = mcp ] || [ "$SERVICE" = collab ]; } && ! flyctl status --app "$APP" >/dev/null 2>&1; then
+            echo "::notice::Skipping $SERVICE build because its staging app is not provisioned."
             exit 0
           fi
           DOCKERFILE="apps/${SERVICE}/Dockerfile"

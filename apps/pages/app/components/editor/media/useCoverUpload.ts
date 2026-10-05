@@ -3,6 +3,8 @@ import type { useFetcher } from 'react-router';
 import { toast } from 'react-toastify';
 import { kindOfFilename, type UploadCapability } from '@classmoji/services/media/router';
 
+import { COVER_IMAGE_EXTENSION, type CollabCoverImage } from '~/utils/collab.ts';
+
 import { sendToMedia } from './mediaUpload.ts';
 import { usePageMedia } from './PageMedia.tsx';
 import {
@@ -24,6 +26,21 @@ const COVER_NOWHERE = 'This image could not be stored. Reload the page and try a
 
 const GENERIC_FAILURE = 'The upload could not finish. Check your connection and try again.';
 
+/** The repository's half of the cover rule (the page action's own sentence). */
+const COVER_NOT_AN_IMAGE_REPO = 'A cover must be an image (PNG, JPG, GIF, WebP or SVG).';
+
+/**
+ * A live-edited page: the cover is a field of the live document, not a write
+ * to content.json. The file is uploaded the way a block's file is
+ * (`/api/upload`, or media), then the reference goes into the document.
+ */
+export interface LiveCoverTarget {
+  pageId: string;
+  setCover: (cover: CollabCoverImage | null) => void;
+  /** Remember a just-uploaded file's display URL against its stored reference. */
+  remember: (ref: string, displayUrl: string | null) => void;
+}
+
 /**
  * Upload a page cover through the storage router, and report its failures.
  *
@@ -40,25 +57,81 @@ const GENERIC_FAILURE = 'The upload could not finish. Check your connection and 
  */
 export function useCoverUpload(
   fetcher: CoverFetcher,
-  capability: UploadCapability | null | undefined
+  capability: UploadCapability | null | undefined,
+  live: LiveCoverTarget | null = null
 ) {
   const media = usePageMedia();
   // The file behind a repository submission in flight, kept for the one
   // redirect to media its answer may ask for.
   const repoFileRef = useRef<File | null>(null);
   const [sendingToMedia, setSendingToMedia] = useState(false);
+  const [sendingLive, setSendingLive] = useState(false);
   const capabilityRef = useRef(capability);
   capabilityRef.current = capability;
+  const liveRef = useRef(live);
+  liveRef.current = live;
+  // Set below; the live repository upload hands a file the server sends to
+  // media over to it, as the action's answer does for the git editor.
+  const submitToMediaRef = useRef<(file: File, redirected: boolean) => Promise<void>>(
+    async () => {}
+  );
+
+  /** Live page: upload like a block's file, then set the document's cover. */
+  const submitToRepoLive = useCallback(
+    async (file: File, target: LiveCoverTarget, redirected: boolean) => {
+      if (!COVER_IMAGE_EXTENSION.test(file.name)) {
+        toast.error(COVER_NOT_AN_IMAGE_REPO);
+        return;
+      }
+      setSendingLive(true);
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+        const response = await fetch(`/api/upload?pageId=${encodeURIComponent(target.pageId)}`, {
+          method: 'POST',
+          body: formData,
+        });
+        const body = (await response.json().catch(() => null)) as
+          | (ActionFailure & { url?: unknown; displayUrl?: unknown })
+          | null;
+        if (!response.ok) {
+          if (response.status === 409 && body?.error === 'USE_MEDIA') {
+            if (redirected) toast.error(COVER_NOWHERE);
+            else void submitToMediaRef.current(file, true);
+            return;
+          }
+          toast.error(actionFailureMessage(body) ?? GENERIC_FAILURE);
+          return;
+        }
+        if (typeof body?.url !== 'string' || !body.url) {
+          toast.error(GENERIC_FAILURE);
+          return;
+        }
+        target.remember(body.url, typeof body.displayUrl === 'string' ? body.displayUrl : null);
+        target.setCover({ url: body.url, position: 50 });
+      } catch {
+        toast.error(GENERIC_FAILURE);
+      } finally {
+        setSendingLive(false);
+      }
+    },
+    []
+  );
 
   const submitToRepo = useCallback(
-    (file: File) => {
+    (file: File, redirected = false) => {
+      const target = liveRef.current;
+      if (target) {
+        void submitToRepoLive(file, target, redirected);
+        return;
+      }
       repoFileRef.current = file;
       const formData = new FormData();
       formData.append('intent', 'upload-header-image');
       formData.append('file', file);
       fetcher.submit(formData, { method: 'POST', encType: 'multipart/form-data' });
     },
-    [fetcher]
+    [fetcher, submitToRepoLive]
   );
 
   const submitToMedia = useCallback(
@@ -77,15 +150,20 @@ export function useCoverUpload(
         });
         // The display URL first, so the cover paints the moment it is set.
         await media.place(ref);
-        fetcher.submit(
-          { intent: 'set-header-image', url: ref, position: 50 },
-          { method: 'POST', encType: 'application/json' }
-        );
+        const target = liveRef.current;
+        if (target) {
+          target.setCover({ url: ref, position: 50 });
+        } else {
+          fetcher.submit(
+            { intent: 'set-header-image', url: ref, position: 50 },
+            { method: 'POST', encType: 'application/json' }
+          );
+        }
       } catch (error) {
         if (error instanceof UploadCancelled) return;
         if (error instanceof UploadReroute && error.to === 'repo') {
           if (redirected) toast.error(COVER_NOWHERE);
-          else submitToRepo(file);
+          else submitToRepo(file, true);
           return;
         }
         toast.error(error instanceof UploadRefused ? error.message : GENERIC_FAILURE);
@@ -95,6 +173,7 @@ export function useCoverUpload(
     },
     [fetcher, media, submitToRepo]
   );
+  submitToMediaRef.current = submitToMedia;
 
   const upload = useCallback(
     (file: File) => {
@@ -134,5 +213,5 @@ export function useCoverUpload(
   const uploadingToRepo =
     fetcher.state !== 'idle' && fetcher.formData?.get('intent') === 'upload-header-image';
 
-  return { upload, uploading: sendingToMedia || uploadingToRepo };
+  return { upload, uploading: sendingToMedia || uploadingToRepo || sendingLive };
 }

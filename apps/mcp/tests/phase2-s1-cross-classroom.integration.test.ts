@@ -403,6 +403,52 @@ describe('S1 cross-classroom rejection per write family', () => {
     expect(after.status).toBe('IN_REVIEW');
   });
 
+  it('extension_purchase family: student aims assignment_id at a foreign quiz', async () => {
+    // A published QUIZ assignment with a deadline and a price in the FOREIGN
+    // classroom: everything a purchase needs, except that it is not ours.
+    const quiz = await prisma.quiz.create({
+      data: {
+        classroom_id: fx.foreign.id,
+        name: 'MCP-S1 Foreign Quiz',
+        rubric_prompt: 'MCP-S1 rubric',
+        status: 'PUBLISHED',
+      },
+    });
+    cleanup.add('foreign quiz', () => prisma.quiz.deleteMany({ where: { id: quiz.id } }));
+    const foreignQuizAssignment = await prisma.assignment.create({
+      data: {
+        module_id: foreignModuleId,
+        type: 'QUIZ',
+        quiz_id: quiz.id,
+        title: 'MCP-S1 Foreign Quiz',
+        weight: 0,
+        is_published: true,
+        student_deadline: new Date(Date.now() + 7 * 24 * 3_600_000),
+        tokens_per_hour: 1,
+      },
+    });
+    cleanup.add('foreign quiz assignment', () =>
+      prisma.assignment.deleteMany({ where: { id: foreignQuizAssignment.id } })
+    );
+
+    const foreign = await callTool(student, 'extension_purchase', {
+      classroom: DEV_REF,
+      assignment_id: foreignQuizAssignment.id,
+      hours: 1,
+    });
+    const random = await callTool(student, 'extension_purchase', {
+      classroom: DEV_REF,
+      assignment_id: randomUUID(),
+      hours: 1,
+    });
+    expectScopedNotFound(foreign, 'extension_purchase foreign quiz');
+    expectScopedNotFound(random, 'extension_purchase random uuid');
+    expect(foreign.payload).toEqual(random.payload);
+    expect(
+      await prisma.tokenTransaction.count({ where: { assignment_id: foreignQuizAssignment.id } })
+    ).toBe(0);
+  });
+
   it('token_grant family: OWNER aims at a non-member target', async () => {
     expectScopedNotFound(
       await callTool(owner, 'token_grant', {

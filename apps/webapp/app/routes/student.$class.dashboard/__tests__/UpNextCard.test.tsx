@@ -31,16 +31,24 @@ const row = (over: Partial<StudentCourseworkRow>): StudentCourseworkRow => ({
   scoredAt: null,
   attemptsUsed: 0,
   maxAttempts: 1,
-  href: '/student/cs52/quizzes?quiz=q1',
+  href: '/student/intro-101/quizzes?quiz=q1',
   external: false,
   action: { kind: 'START_QUIZ', quizId: 'q1' },
+  numLateHours: 0,
+  isLateOverride: false,
+  tokensPerHour: 0,
+  extensionHours: 0,
+  submittedAt: null,
+  missing: false,
+  suggestedExtensionHours: 0,
+  extend: null,
   ...over,
 });
 
 const render = (rows: StudentCourseworkRow[], viewerIsStudent = true) =>
   renderToStaticMarkup(
     <MemoryRouter>
-      <UpNextCard rows={rows} classSlug="cs52" viewerIsStudent={viewerIsStudent} />
+      <UpNextCard rows={rows} classSlug="intro-101" viewerIsStudent={viewerIsStudent} />
     </MemoryRouter>
   );
 
@@ -68,9 +76,9 @@ describe('UpNextCard', () => {
         type: 'FORM',
         title: 'Team sign-up',
         status: 'NOT_SUBMITTED',
-        href: 'https://pages.test/cs52/forms/signup',
+        href: 'https://pages.test/intro-101/forms/signup',
         external: true,
-        action: { kind: 'FILL_OUT', href: 'https://pages.test/cs52/forms/signup' },
+        action: { kind: 'FILL_OUT', href: 'https://pages.test/intro-101/forms/signup' },
       }),
     ]);
 
@@ -84,15 +92,15 @@ describe('UpNextCard', () => {
     expect(html).toContain('>Resume<');
     expect(html).toContain('href="https://github.com/org/lab-2/issues/1"');
     expect(html).toContain('>Open<');
-    expect(html).toContain('href="https://pages.test/cs52/forms/signup"');
+    expect(html).toContain('href="https://pages.test/intro-101/forms/signup"');
     expect(html).toContain('>Fill out<');
-    expect(html).toContain('href="/student/cs52/assignments"');
+    expect(html).toContain('href="/student/intro-101/assignments"');
   });
 
   it('sends staff to the quiz list to start a quiz', () => {
     const html = render([row({})], false);
 
-    expect(html).toContain('href="/student/cs52/quizzes?quiz=q1"');
+    expect(html).toContain('href="/student/intro-101/quizzes?quiz=q1"');
     expect(html).toContain('>Start quiz<');
   });
 
@@ -100,7 +108,7 @@ describe('UpNextCard', () => {
     const html = render([]);
 
     expect(html).toContain('Nothing due');
-    expect(html).toContain('href="/student/cs52/assignments"');
+    expect(html).toContain('href="/student/intro-101/assignments"');
   });
 });
 

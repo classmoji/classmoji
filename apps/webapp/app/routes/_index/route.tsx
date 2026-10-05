@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { data, redirect } from 'react-router';
 
 import { Alert } from 'antd';
@@ -87,20 +86,12 @@ const Index = ({ loaderData }: Route.ComponentProps) => {
   const handleGitHubLogin = async () => {
     await authClient.signIn.social({ provider: 'github', callbackURL, errorCallbackURL: '/' });
   };
-  // Sits under "Continue with Github", in the same shape.
-  const gitlabButtonClass =
-    'w-full flex items-center justify-center gap-2 bg-white hover:bg-stone-50 dark:bg-neutral-900 dark:hover:bg-neutral-800 text-gray-900 dark:text-white ring-1 ring-stone-200 dark:ring-neutral-700 font-medium rounded-lg px-4 py-2.5 transition-colors cursor-pointer';
-  // While the Gitlab chooser is open it takes the whole column: no Github button.
-  const [gitlabChoosing, setGitlabChoosing] = useState(false);
-  const gitlabSignIn = (buttonClassName: string) =>
-    gitlab.enabled ? (
-      <GitLabSignIn
-        options={gitlab}
-        callbackURL={callbackURL}
-        buttonClassName={buttonClassName}
-        onChoosingChange={setGitlabChoosing}
-      />
-    ) : null;
+  const gitlabSignIn = gitlab.enabled ? (
+    <GitLabSignIn options={gitlab} callbackURL={callbackURL} />
+  ) : null;
+
+  // A plain visit (not an invite or a school's Gitlab link) gets the site behind the card.
+  const backdrop = !gitlab.preselected && !redirectPath?.includes('invite=');
 
   const setupBanner = setupComplete && (
     <Alert
@@ -119,8 +110,8 @@ const Index = ({ loaderData }: Route.ComponentProps) => {
           handleGitHubLogin={handleGitHubLogin}
           callbackURL={callbackURL}
           oauthError={oauthError}
-          gitlabChoosing={gitlabChoosing}
-          gitlabSignIn={gitlabSignIn(gitlabButtonClass)}
+          gitlabSignIn={gitlabSignIn}
+          backdrop={backdrop}
         >
           <div className="mb-8 flex flex-col items-center">
             <div className="text-ink-3 text-sm mb-2">Development Login</div>
@@ -172,8 +163,8 @@ const Index = ({ loaderData }: Route.ComponentProps) => {
         handleGitHubLogin={handleGitHubLogin}
         callbackURL={callbackURL}
         oauthError={oauthError}
-        gitlabChoosing={gitlabChoosing}
-        gitlabSignIn={gitlabSignIn(gitlabButtonClass)}
+        gitlabSignIn={gitlabSignIn}
+        backdrop={backdrop}
       />
     </>
   );

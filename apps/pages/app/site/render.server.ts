@@ -4,6 +4,8 @@ import { ServerBlockNoteEditor } from '@blocknote/server-util';
 // module actually uses, so everything downstream of it is fully typed.
 import { JSDOM as UntypedJSDOM } from 'jsdom';
 
+import { normalizeCodeBlockContent } from '@classmoji/page-schema';
+
 import { redactDocumentForViewer } from './redact.server.ts';
 import {
   createViewerSchema,
@@ -207,7 +209,9 @@ export async function renderSitePage({
   // Redact BEFORE serializing: BlockNote writes block props onto the wrapper
   // as data-* attributes, so a hidden page's title would ship in the HTML even
   // though its block renders as nothing. See redact.server.ts.
-  const redacted = redactDocumentForViewer(blocks, resolveLink);
+  // Code blocks as plain text: BlockNote 0.55 will not load a stored link
+  // inside one (see normalizeCodeBlockContent).
+  const redacted = redactDocumentForViewer(normalizeCodeBlockContent(blocks), resolveLink);
   const document = redacted.length > 0 ? redacted : EMPTY_DOCUMENT;
 
   let html: string;

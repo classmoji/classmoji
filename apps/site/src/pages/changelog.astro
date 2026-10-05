@@ -1,4 +1,5 @@
 ---
+import { ArrowRightIcon } from 'lucide-react';
 import Layout from '../layouts/Layout.astro';
 import Header from '../components/Header.astro';
 import Footer from '../components/Footer.astro';
@@ -23,6 +24,25 @@ type Era = {
 
 // Newest first.
 const entries: Release[] = [
+  {
+    month: 'September 2026',
+    items: [
+      {
+        text: 'Quizzes are now a conversation. Link pages and slides as source material, let students end early, and choose the model and effort in the new AI settings tab.',
+      },
+      {
+        text: 'A media library for each class. Upload videos and files once, use them across pages and slides, and videos are optimized with a poster frame on Pro.',
+      },
+      {
+        text: 'Build teams from form responses. Set the size and rules, and Classmoji solves the team set for you.',
+      },
+      { text: 'Sign in with an email and password, alongside Github.' },
+      {
+        text: 'A course time zone setting, and removing a grader now offers to reassign their ungraded submissions.',
+        link: { label: 'Removing staff', href: '/docs/instructors/roster' },
+      },
+    ],
+  },
   {
     month: 'August 2026',
     items: [
@@ -159,161 +179,87 @@ const eras: Era[] = [
 ];
 
 const slugify = (value: string) => value.toLowerCase().replace(/\s+/g, '-');
-
-// Header is fixed, so anchors need to clear it. Keep in sync with `scroll-mt-28` below.
-const navItems = [
-  ...entries.map(entry => ({ id: slugify(entry.month), label: entry.month })),
-  { id: 'how-we-got-here', label: 'How we got here' },
-];
 ---
 
 <Layout title="Changelog - Classmoji" description="What's new in Classmoji: features, improvements, and fixes.">
   <Header />
 
-  <section class="px-6 pt-32 pb-20">
-    <div class="max-w-5xl mx-auto lg:grid lg:grid-cols-[minmax(0,1fr)_11rem] lg:gap-16">
-      <div>
-      <h1 class="text-4xl md:text-5xl font-bold text-gray-900 mb-3">Changelog</h1>
-      <p class="text-lg text-gray-600 mb-12">New features, improvements, and fixes.</p>
+  <main class="bg-page px-6 pb-24 pt-32 sm:pt-36">
+    <div class="mx-auto max-w-7xl">
+      <header class="max-w-3xl">
+        <h1 class="text-[2.25rem] font-bold leading-[1.1] tracking-tight text-ink-0 sm:text-[2.75rem]">Changelog</h1>
+        <p class="mt-5 text-[1.0625rem] leading-relaxed text-ink-2">New features, improvements, and fixes.</p>
+      </header>
 
-      {
-        entries.length === 0 ? (
-          <div class="rounded-2xl ring-1 ring-gray-200 p-10 text-center">
-            <p class="text-base font-medium text-gray-700">Nothing here yet</p>
-            <p class="text-sm text-gray-500 mt-1">Check back soon for the latest updates.</p>
-          </div>
-        ) : (
-          <div class="space-y-12">
-            {entries.map(entry => (
-              <article>
-                <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1 mb-4">
-                  <h2 id={slugify(entry.month)} class="scroll-mt-28 text-xl font-semibold text-gray-900">
+      <div class="mt-14 border-t border-line sm:mt-16">
+        {
+          entries.map(entry => (
+            <section
+              aria-labelledby={slugify(entry.month)}
+              class="grid gap-4 border-b border-line py-10 lg:grid-cols-12 lg:gap-10"
+            >
+              <div class="lg:col-span-3">
+                {/* The month stays in view while its entries scroll past. */}
+                <div class="lg:sticky lg:top-28">
+                  <h2 id={slugify(entry.month)} class="scroll-mt-28 text-[1rem] font-semibold text-ink-0">
                     {entry.month}
                   </h2>
-                  {entry.title && <span class="text-sm text-gray-500">{entry.title}</span>}
                 </div>
-                <ul class="space-y-3">
+              </div>
+              <div class="lg:col-span-9">
+                {entry.title && (
+                  <p class="mb-5 text-[1.5rem] font-bold leading-tight tracking-tight text-ink-0">{entry.title}</p>
+                )}
+                <ul class="flex flex-col gap-5">
                   {entry.items.map(item => (
-                    <li class="flex gap-3 text-base text-gray-700 leading-relaxed">
-                      <span class="text-gray-400 select-none shrink-0" aria-hidden="true">
-                        &bull;
-                      </span>
-                      <span>
-                        {item.text}
+                    <li class="flex gap-3.5">
+                      <span aria-hidden="true" class="mt-[0.6rem] h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
+                      <div class="max-w-2xl">
+                        <p class="text-[1rem] leading-relaxed text-ink-1">{item.text}</p>
                         {item.link && (
-                          <>
-                            {' '}
-                            <a
-                              href={item.link.href}
-                              class="font-medium text-primary underline underline-offset-2 hover:no-underline"
-                            >
-                              {item.link.label}
-                            </a>
-                          </>
+                          <a
+                            href={item.link.href}
+                            class="mt-1.5 inline-flex items-center gap-1 rounded-md text-[0.875rem] font-medium text-accent transition-colors duration-150 hover:text-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                          >
+                            {item.link.label}
+                            <ArrowRightIcon className="h-3.5 w-3.5" aria-hidden />
+                          </a>
                         )}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </article>
-            ))}
-          </div>
-        )
-      }
-
-      <div class="border-t border-gray-200 mt-16 pt-12">
-        <h2 id="how-we-got-here" class="scroll-mt-28 text-xl font-semibold text-gray-900 mb-2">
-          How we got here
-        </h2>
-        <p class="text-sm text-gray-500 mb-8">
-          Classmoji before it was Classmoji. Everything above is v3.
-        </p>
-
-        <div class="space-y-12">
-          {
-            eras.map(era => (
-              <div>
-                <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1 mb-4">
-                  <span class="text-xs font-semibold uppercase tracking-wide text-primary">
-                    {era.version}
-                  </span>
-                  <h3 class="text-lg font-semibold text-gray-900">{era.title}</h3>
-                  {era.when && <span class="text-sm text-gray-500">{era.when}</span>}
-                </div>
-                <ul class="space-y-3">
-                  {era.items.map(item => (
-                    <li class="flex gap-3 text-base text-gray-700 leading-relaxed">
-                      <span class="text-gray-400 select-none shrink-0" aria-hidden="true">
-                        &bull;
-                      </span>
-                      <span>{item}</span>
+                      </div>
                     </li>
                   ))}
                 </ul>
               </div>
+            </section>
+          ))
+        }
+      </div>
+
+      <section aria-labelledby="how-we-got-here" class="mt-20 sm:mt-24">
+        <h2 id="how-we-got-here" class="scroll-mt-28 text-[1.75rem] font-bold tracking-tight text-ink-0">
+          How we got here
+        </h2>
+        <p class="mt-2 text-[1rem] text-ink-2">Classmoji before it was Classmoji. Everything above is v3.</p>
+        <ol class="mt-10 grid gap-10 md:grid-cols-3 md:gap-8">
+          {
+            eras.map(era => (
+              <li class="border-t-2 border-ink-0 pt-5">
+                <p class="text-[0.875rem] font-semibold tabular-nums text-ink-3">
+                  {[era.version, era.when].filter(Boolean).join(' · ')}
+                </p>
+                <h3 class="mt-1 text-[1.125rem] font-bold tracking-tight text-ink-0">{era.title}</h3>
+                <ul class="mt-4 flex flex-col gap-2.5">
+                  {era.items.map(item => (
+                    <li class="text-[0.9375rem] leading-relaxed text-ink-2">{item}</li>
+                  ))}
+                </ul>
+              </li>
             ))
           }
-        </div>
-      </div>
-      </div>
-
-      <nav class="hidden lg:block lg:row-start-1 lg:col-start-2" aria-label="On this page" data-changelog-nav>
-        <div class="sticky top-28">
-          <p class="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-3">On this page</p>
-          <ul class="border-l border-gray-200">
-            {
-              navItems.map(item => (
-                <li>
-                  <a
-                    href={`#${item.id}`}
-                    class="block -ml-px border-l-2 border-transparent pl-4 py-1.5 text-sm text-gray-500 hover:text-gray-900 transition-colors"
-                  >
-                    {item.label}
-                  </a>
-                </li>
-              ))
-            }
-          </ul>
-        </div>
-      </nav>
+        </ol>
+      </section>
     </div>
-  </section>
-
-  <script>
-    const nav = document.querySelector('[data-changelog-nav]');
-    if (nav) {
-      const links = [...nav.querySelectorAll<HTMLAnchorElement>('a[href^="#"]')];
-
-      const headings = links
-        .map(link => document.querySelector(link.hash))
-        .filter((el): el is Element => el !== null);
-
-      const setActive = (id: string) => {
-        for (const link of links) {
-          const on = link.hash === `#${id}`;
-          link.classList.toggle('border-primary', on);
-          link.classList.toggle('text-gray-900', on);
-          link.classList.toggle('font-medium', on);
-          link.classList.toggle('text-gray-500', !on);
-        }
-      };
-
-      // Highlight the topmost heading that has scrolled into the upper band of
-      // the viewport. Without the bottom margin, short trailing sections never win.
-      const observer = new IntersectionObserver(
-        () => {
-          const current = headings
-            .map(el => ({ el, top: el.getBoundingClientRect().top }))
-            .filter(({ top }) => top < 160)
-            .pop();
-          if (current) setActive(current.el.id);
-        },
-        { rootMargin: '-120px 0px -60% 0px', threshold: [0, 1] }
-      );
-
-      for (const heading of headings) observer.observe(heading);
-    }
-  </script>
+  </main>
 
   <style>
     html {

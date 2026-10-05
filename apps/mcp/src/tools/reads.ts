@@ -48,7 +48,7 @@ import { orgGit, orgProvider, type SubmissionLike } from '../resources/shape.ts'
 import { meResource } from '../resources/me.ts';
 import { classroomInfoResource } from '../resources/classroomInfo.ts';
 import { rosterResource, teamsResource } from '../resources/roster.ts';
-import { reposResource, gradesMineResource } from '../resources/repos.ts';
+import { reposResource, gradesMineResource, GRADES_MINE_DESCRIPTION } from '../resources/repos.ts';
 import {
   loadGradingQueueData,
   queueRow,
@@ -63,6 +63,7 @@ import {
   modulesResource,
   calendarResource,
   calendarRangeResource,
+  QUIZZES_DESCRIPTION,
 } from '../resources/content.ts';
 import { tokensResource } from '../resources/tokens.ts';
 
@@ -187,10 +188,8 @@ export const listReposTool = mirrorResourceTool({
 export const myGradesTool = mirrorResourceTool({
   resource: gradesMineResource,
   name: 'my_grades',
-  title: 'My released grades',
-  description:
-    'Your own graded submissions in this classroom — only assignments whose grades have been ' +
-    'released (Assignment.grades_released). Students only.',
+  title: 'My grades',
+  description: GRADES_MINE_DESCRIPTION,
 });
 
 export const getSubmissionTool = mirrorResourceTool({
@@ -198,7 +197,9 @@ export const getSubmissionTool = mirrorResourceTool({
   name: 'get_submission',
   title: 'Get submission detail',
   description:
-    'One submission (a GitRepoAssignment) with its grades, graders, and analytics snapshot if ' +
+    'One submission (a GitRepoAssignment) with its grades, graders, extension_hours (net of ' +
+    'refunds), is_late (past student_deadline plus extension_hours, submitted or not, unlike ' +
+    'the dashboard late count, which counts submitted work only) and analytics snapshot if ' +
     'present. Teaching team only. `submission_id` comes from list_submissions; it is also the ' +
     'id that grade_add, grade_remove, grader_assign, and submission_late_override consume.',
   extraInput: {
@@ -238,11 +239,7 @@ export const listQuizzesTool = mirrorResourceTool({
   resource: quizzesResource,
   name: 'list_quizzes',
   title: 'List quizzes',
-  description:
-    'AI-graded quizzes with their source material (linked pages and decks, in order). Staff ' +
-    '(OWNER/TEACHER/ASSISTANT) see all quizzes incl. drafts and prompts; students see published ' +
-    'quizzes (closed ones too, as CLOSED), published material and their own attempt summary. ' +
-    'Requires a Pro subscription and quizzes_enabled.',
+  description: QUIZZES_DESCRIPTION,
 });
 
 export const listPagesTool = mirrorResourceTool({
@@ -308,7 +305,8 @@ export const myTokensTool = mirrorResourceTool({
   title: 'My token ledger',
   description:
     'Your token balance and transaction history in this classroom (grants, purchases, refunds, ' +
-    'removals). Students only.',
+    'removals). Each row names the assignment it is about (assignment_id, assignment_title), ' +
+    'quiz extensions included. Students only.',
 });
 
 // ─── list_submissions (grading-queue data + server-side filters) ────────────
@@ -331,7 +329,11 @@ export const listSubmissionsTool: ToolDefinition<ListSubmissionsArgs> = {
   description:
     'All submissions (GitRepoAssignments) in the classroom with grade emojis, grader assignments, ' +
     'student/team, and the classroom emoji scale — the same per-submission shape as the ' +
-    'grading-queue. Optional filters: repository_id, assignment_id, grader_id, status (OPEN|CLOSED). ' +
+    'grading-queue. Each row has extension_hours (hours the student bought with tokens, net of ' +
+    'refunds) and is_late (past student_deadline plus extension_hours; false when ' +
+    'is_late_override). is_late includes unsubmitted rows past that time, unlike the dashboard ' +
+    'late count, which counts submitted work only. ' +
+    'Optional filters: repository_id, assignment_id, grader_id, status (OPEN|CLOSED). ' +
     'The returned `id` is the submission id that grade_add, grade_remove, grader_assign, and ' +
     'submission_late_override consume. Teaching team only.',
   scope: 'read',

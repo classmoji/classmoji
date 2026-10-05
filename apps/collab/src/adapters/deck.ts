@@ -1,0 +1,946 @@
+/**
+ * The DECK adapter: reveal.js decks (`slides/<slug>/deck.json`, legacy
+ * `index.html` through the existing parser).
+ *
+ * Edit rule: today's `assertSlideAccess` edit semantics — OWNER or TEACHER on
+ * any deck, an ASSISTANT on decks they created or decks with
+ * `allow_team_edit` (highest role wins) — plus the classroom mutation gate
+ * (`canMutateClassroom`) and `classroom.collab_enabled`.
+ *
+ * Doc shape and conversion: `@classmoji/collab` deck module. Ops: the
+ * `deckOps.ts` vocabulary, validated and applied by `applyDeckOps` on the
+ * live deck, then written back id-aware (`syncDeckIntoYDoc`: only the slides
+ * that changed, order keys only for slides that moved).
+ *
+ * Locks are arbitrated here, server-side, once the adapter has seen a live
+ * document (`attach`): the lowest-clientID rule for simultaneous claims, the
+ * locks of a client that disconnected released, and locks idle past
+ * LOCK_EXPIRE_IDLE_MS cleared. Those writes skip the store hooks — a lock is
+ * presence, not content, and never worth a checkpoint.
+ */
+import type * as Y from 'yjs';
+import type { Role } from '@prisma/client';
+import getPrisma from '@classmoji/database';
+import { ContentService } from '@classmoji/services';
+import { canMutateClassroom } from '@classmoji/auth/predicates';
+import { findClassroomRole } from '@classmoji/auth/classroom-role';
+import {
+  DeckOpError,
+  DeckParseError,
+  SlideHtmlError,
+  applyDeckOps,
+  deckOpsPayloadSchema,
+  indexResolutions,
+  isDeckSlide,
+  PreviewResolutionError,
+  loadDeck,
+  merge3Units,
+  parseDeckHtml,
+  slideService,
+  type DeckJson,
+  type DeckMergeConflict,
+  type DeckOp,
+  type DeckSlide,
+  type MergeChoice,
+  type MergeResolution,
+} from '@classmoji/services/slides';
+import {
+  AGENT_TOUCHED_MAX,
+  DECK_SCHEMA_VERSION,
+  LOCK_EXPIRE_IDLE_MS,
+  LockActivity,
+  allLocks,
+  cloneYDoc,
+  deckSlides,
+  deckToYDoc,
+  expireLocks,
+  installLockArbiter,
+  installLockGuard,
+  expireGoneLocks,
+  goneLockExpired,
+  mergeSlideFields,
+  pruneSlideConflicts,
+  recordSlideConflict,
+  LOCK_DISCONNECT_GRACE_MS,
+  markDisconnected,
+  markReconnected,
+  lockState,
+  syncDeckIntoYDoc,
+  yDocToDeck,
+  type DeckSnapshotContent,
+  type SlideLock,
+  type StampedLock,
+} from '@classmoji/collab';
+import { LOCK_TAKEOVER_IDLE_MS } from '@classmoji/collab';
+
+import { deckView, itemHash, type ItemView } from '@classmoji/collab/hash';
+
+import {
+  CollabHttpError,
+  type ApplyOpsResult,
+  type AuthorizeResult,
+  type CollabAdapter,
+  type ExternalMergeResult,
+  type LiveEditContext,
+  type SeedResult,
+} from './types.ts';
+
+/** The slide row the adapter needs (with its classroom and git organization). */
+export interface DeckRecord {
+  id: string;
+  title: string;
+  kind?: string | null;
+  content_path: string;
+  classroom_id: string;
+  created_by?: string | null;
+  allow_team_edit?: boolean | null;
+  classroom: {
+    id: string;
+    status: string;
+    collab_enabled: boolean;
+    content_repo: string;
+    git_organization?: { login: string; [key: string]: unknown } | null;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+type LoadedDeck = Awaited<ReturnType<typeof loadDeck>>;
+
+/** I/O the adapter does; swapped out in tests. */
+export interface DeckAdapterDeps {
+  findSlide(slideId: string): Promise<DeckRecord | null>;
+  findRole(userId: string, classroomId: string): Promise<Role | null>;
+  /**
+   * deck.json (or legacy index.html, parsed) on the default branch, or at
+   * `ref`. `idGen` names legacy sections that carry no id.
+   */
+  loadDeck(slide: DeckRecord, options: { ref?: string; idGen?: () => string }): Promise<LoadedDeck>;
+  /** A blob's text by sha, null when it does not exist. */
+  readBlob(slide: DeckRecord, sha: string): Promise<string | null>;
+  now(): number;
+}
+
+export const defaultDeckAdapterDeps: DeckAdapterDeps = {
+  async findSlide(slideId) {
+    return (await getPrisma().slide.findUnique({
+      where: { id: slideId },
+      include: { classroom: { include: { git_organization: true } } },
+    })) as unknown as DeckRecord | null;
+  },
+  findRole(userId, classroomId) {
+    return findClassroomRole({ userId, classroomId });
+  },
+  loadDeck(slide, { ref, idGen }) {
+    return loadDeck(slide as never, {
+      skipCache: true,
+      ...(ref ? { ref } : {}),
+      ...(idGen ? { parseOptions: { idGen } } : {}),
+    });
+  },
+  async readBlob(slide, sha) {
+    const blob = await ContentService.getBlobContent({
+      gitOrganization: slide.classroom.git_organization as never,
+      repo: slide.classroom.content_repo,
+      sha,
+    });
+    return blob?.content ?? null;
+  },
+  now: () => Date.now(),
+};
+
+/**
+ * `assertSlideAccess`'s edit rule (packages/auth/src/server.ts), for a user id
+ * instead of a request: OWNER/TEACHER on any deck; ASSISTANT on decks they
+ * created or decks with allow_team_edit.
+ */
+export function canEditDeck(
+  role: Role | null,
+  slide: Pick<DeckRecord, 'created_by' | 'allow_team_edit'>,
+  userId: string
+): boolean {
+  if (role === 'OWNER' || role === 'TEACHER') return true;
+  if (role === 'ASSISTANT') return slide.created_by === userId || slide.allow_team_edit === true;
+  return false;
+}
+
+/** Store-skipping origin for the server's own lock bookkeeping. */
+export const LOCK_ORIGIN = { source: 'local', skipStoreHooks: true, context: { locks: true } };
+
+/** Origin of the guard's corrections of edits to held slides (stored like any edit). */
+export const GUARD_ORIGIN = { source: 'local', context: { lockGuard: true } };
+
+/**
+ * The Yjs clientIDs behind a transaction from a browser connection (its
+ * awareness clients and whoever inserted structs), or null for the server's
+ * own writes (agents, merges, locks), which are checked where they are made.
+ */
+export function writersOf(document: Y.Doc, tr: Y.Transaction): Set<number> | null {
+  const origin = tr.origin as { source?: string; connection?: unknown } | null;
+  if (!origin || origin.source !== 'connection') return null;
+  const out = new Set<number>();
+  const clients = (
+    document as Y.Doc & { getClients?: (connection: unknown) => Set<number> }
+  ).getClients?.(origin.connection);
+  for (const id of clients ?? []) out.add(id);
+  for (const [client, clock] of tr.afterState) {
+    if (clock > (tr.beforeState.get(client) ?? 0)) out.add(client);
+  }
+  return out;
+}
+
+/** How often the server sweeps a live deck's locks. */
+export const LOCK_SWEEP_MS = 15_000;
+
+/** The arbiter's tolerance when judging a takeover (receive-time differences). */
+export const TAKEOVER_SLACK_MS = 2_000;
+
+/** Hocuspocus documents carry their awareness. */
+type WithAwareness = Y.Doc & {
+  awareness?: {
+    getStates(): Map<number, unknown>;
+    on(event: 'update', cb: (change: { added?: number[]; removed: number[] }) => void): void;
+    off(event: 'update', cb: (change: { added?: number[]; removed: number[] }) => void): void;
+  };
+};
+
+function connectedClients(doc: Y.Doc): Set<number> | undefined {
+  const awareness = (doc as WithAwareness).awareness;
+  return awareness ? new Set(awareness.getStates().keys()) : undefined;
+}
+
+/**
+ * Ids an op writes content of, or moves (a delete of a stack takes its
+ * children; a block op writes the html of the slide holding the block,
+ * exactly like an update). A slide someone holds is not an agent's to move.
+ */
+function touchedSlideIds(deck: DeckJson, ops: DeckOp[]): string[] {
+  const out = new Set<string>();
+  for (const op of ops) {
+    if (op.op === 'update' || op.op === 'move') out.add(op.id);
+    if (op.op === 'block_add' || op.op === 'block_update' || op.op === 'block_delete') {
+      out.add(op.slide);
+    }
+    if (op.op === 'delete') {
+      out.add(op.id);
+      const slide = deck.slides.find(s => s.id === op.id);
+      for (const child of slide?.children ?? []) out.add(child.id);
+    }
+  }
+  return [...out];
+}
+
+/**
+ * Ids for the sections of a legacy (index.html-only) deck that carry none:
+ * `s1`, `s2`, … in document order — the MCP's git path names them the same
+ * way (apps/mcp tools/deck.ts legacyIdGen). Random ids would differ on every
+ * read of the same content: each /snapshot of a deck nobody has open would
+ * name its slides anew (a pinned deck_apply then names unknown slides), and
+ * an outside merge's base and theirs would share no slide.
+ */
+export function legacyIdGen(): () => string {
+  let n = 0;
+  return () => `s${++n}`;
+}
+
+/** deck.json text, or legacy index.html text → deck; null when neither parses. */
+function parseDeckText(text: string | null): DeckJson | null {
+  if (!text) return null;
+  try {
+    const parsed = JSON.parse(text) as DeckJson;
+    if (parsed?.version === 1 && Array.isArray(parsed.slides)) return parsed;
+  } catch {
+    // not JSON — maybe the legacy index.html the doc was seeded from
+  }
+  try {
+    return parseDeckHtml(text, { idGen: legacyIdGen() }).deck;
+  } catch {
+    return null;
+  }
+}
+
+function flattenSlides(deck: DeckJson): Map<string, DeckSlide> {
+  const out = new Map<string, DeckSlide>();
+  for (const slide of deck.slides) {
+    out.set(slide.id, slide);
+    for (const child of slide.children ?? []) out.set(child.id, child);
+  }
+  return out;
+}
+
+/** What a lock protects: the slide's html (moves and attributes are free). */
+function contentKey(slide: DeckSlide): string {
+  return JSON.stringify(slide.html ?? null);
+}
+
+/**
+ * Put a copy of `slide` (from `ours`) back into `merged` where it sat in
+ * `ours`: inside its stack when the stack survived, else at the top level,
+ * after the nearest earlier sibling `merged` still has (else first).
+ */
+function restoreSlide(ours: DeckJson, merged: DeckJson, slide: DeckSlide): void {
+  const copy = JSON.parse(JSON.stringify(slide)) as DeckSlide;
+  let parent: DeckSlide | null = null;
+  let earlier: string[] = [];
+  const top = ours.slides;
+  const at = top.findIndex(s => s.id === slide.id);
+  if (at !== -1) {
+    earlier = top
+      .slice(0, at)
+      .map(s => s.id)
+      .reverse();
+  } else {
+    for (const s of top) {
+      const i = (s.children ?? []).findIndex(c => c.id === slide.id);
+      if (i === -1) continue;
+      parent = s;
+      earlier = (s.children ?? [])
+        .slice(0, i)
+        .map(c => c.id)
+        .reverse()
+        .concat(s.id);
+      break;
+    }
+  }
+  const stack = parent ? merged.slides.find(s => s.id === parent.id && s.children) : undefined;
+  const list = stack?.children ?? merged.slides;
+  const anchor = earlier.map(id => list.findIndex(s => s.id === id)).find(i => i !== -1);
+  list.splice(anchor === undefined ? 0 : anchor + 1, 0, copy);
+}
+
+/**
+ * In `merged`, give every slide a person holds its live (`ours`) html back —
+ * and the slide itself when the push deleted it. Returns the slides that
+ * kept their html against a different pushed one (or against a deletion).
+ */
+function keepHeldHtml(
+  ours: DeckJson,
+  merged: DeckJson,
+  locks: Map<string, unknown>,
+  theirs: DeckJson
+): Array<{ id: string; theirsHtml: string; deleted?: true }> {
+  const live = flattenSlides(ours);
+  let next = flattenSlides(merged);
+  const pushed = flattenSlides(theirs);
+  const kept: Array<{ id: string; theirsHtml: string; deleted?: true }> = [];
+  for (const slideId of locks.keys()) {
+    const mine = live.get(slideId);
+    if (!mine || mine.children) continue;
+    if (!next.has(slideId)) {
+      // The push deleted a slide someone is editing: keep it (like
+      // merge-preview refuses to), and tell them.
+      restoreSlide(ours, merged, mine);
+      next = flattenSlides(merged);
+      kept.push({ id: slideId, theirsHtml: '', deleted: true });
+      continue;
+    }
+    const target = next.get(slideId);
+    if (!target || target.children) continue;
+    const theirsHtml = pushed.get(slideId)?.html;
+    if (theirsHtml !== undefined && theirsHtml !== (mine.html ?? '')) {
+      kept.push({ id: slideId, theirsHtml });
+    }
+    if ((target.html ?? '') !== (mine.html ?? '')) target.html = mine.html;
+  }
+  return kept;
+}
+
+/** Put `slide` in place of the slide with its id (top level or in a stack). */
+function replaceSlide(deck: DeckJson, slide: DeckSlide): void {
+  const list = (slides: DeckSlide[]): boolean => {
+    const at = slides.findIndex(s => s.id === slide.id);
+    if (at !== -1) {
+      slides[at] = slide;
+      return true;
+    }
+    return slides.some(s => (s.children ? list(s.children) : false));
+  };
+  list(deck.slides);
+}
+
+/**
+ * From applyDeckOps' report: the ids minted for inserts, in op order (a new
+ * stack followed by its children), the last slide the ops wrote (the agent's
+ * presence shows there), and every slide they inserted, updated or moved and
+ * did not delete afterwards (`touchedIds`, at most AGENT_TOUCHED_MAX — the
+ * last ones). Deletes are left out of both: there is no slide to show.
+ */
+export function opsOutcome(applied: Array<Record<string, unknown>>): ApplyOpsResult {
+  const insertedIds: string[] = [];
+  const touched: string[] = [];
+  const touch = (id: string) => {
+    const at = touched.indexOf(id);
+    if (at !== -1) touched.splice(at, 1);
+    touched.push(id);
+  };
+  let touchedId: string | undefined;
+  for (const entry of applied) {
+    if (entry.op === 'insert' && Array.isArray(entry.ids)) {
+      const children = (entry.children ?? {}) as Record<string, string[]>;
+      for (const id of entry.ids as string[]) {
+        insertedIds.push(id);
+        touch(id);
+        for (const child of children[id] ?? []) {
+          insertedIds.push(child);
+          touch(child);
+        }
+        touchedId = id;
+      }
+    } else if (entry.op === 'delete' && typeof entry.id === 'string') {
+      const at = touched.indexOf(entry.id);
+      if (at !== -1) touched.splice(at, 1);
+      if (touchedId === entry.id) touchedId = touched.at(-1);
+    } else if (typeof entry.id === 'string') {
+      touch(entry.id);
+      touchedId = entry.id;
+    } else if (typeof entry.slide === 'string') {
+      // A block op: the slide holding the block.
+      touch(entry.slide);
+      touchedId = entry.slide;
+    }
+  }
+  const touchedIds = touched.slice(-AGENT_TOUCHED_MAX);
+  return {
+    ...(insertedIds.length ? { insertedIds } : {}),
+    ...(touchedId ? { touchedId } : {}),
+    ...(touchedIds.length ? { touchedIds } : {}),
+  };
+}
+
+function docName(document: Y.Doc): string {
+  return (document as Y.Doc & { name?: string }).name ?? 'deck';
+}
+
+/** The server dropping someone's slide lock, with why (debug level). */
+function logLockDrop(document: Y.Doc, slideIds: string[], reason: string): void {
+  console.debug(
+    `[collab] ${docName(document)}: dropped lock(s) ${slideIds.join(', ')} — ${reason}`
+  );
+}
+
+function asHttpError(err: unknown): never {
+  if (err instanceof DeckOpError || err instanceof SlideHtmlError) {
+    throw new CollabHttpError(422, { error: 'invalid-op', message: err.message });
+  }
+  throw err;
+}
+
+export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
+  readonly kind = 'deck' as const;
+  readonly schemaVersion = DECK_SCHEMA_VERSION;
+  private readonly deps: DeckAdapterDeps;
+  private readonly attached = new WeakMap<Y.Doc, { activity: LockActivity }>();
+
+  /**
+   * When this server process started serving decks. A gone holder's grace is
+   * never counted from before it: right after a restart (a deploy) nobody's
+   * presence is known yet and the lock-only writes that would have marked
+   * them were never stored, so every holder gets the full grace to
+   * reconnect. Process start, not doc load: short visits must not extend it.
+   */
+  private readonly startedAt: number;
+
+  constructor(deps: DeckAdapterDeps = defaultDeckAdapterDeps) {
+    this.deps = deps;
+    this.startedAt = deps.now();
+  }
+
+  private async mustFindSlide(slideId: string): Promise<DeckRecord> {
+    const slide = await this.deps.findSlide(slideId);
+    if (!slide || !isDeckSlide(slide)) throw new CollabHttpError(404, { error: 'not-found' });
+    return slide;
+  }
+
+  async authorize({ userId, docId }: { userId: string; docId: string }): Promise<AuthorizeResult> {
+    const slide = await this.deps.findSlide(docId);
+    if (!slide || !isDeckSlide(slide)) return { ok: false, reason: 'not-found' };
+    const role = await this.deps.findRole(userId, slide.classroom_id);
+    // A member's refusal is audited (ACCESS_DENIED needs their role).
+    const member = role ? { classroomId: slide.classroom_id, role } : {};
+    if (!slide.classroom?.collab_enabled) {
+      return { ok: false, reason: 'collab-disabled', ...member };
+    }
+    if (!canEditDeck(role, slide, userId)) return { ok: false, reason: 'forbidden', ...member };
+    if (!canMutateClassroom({ status: slide.classroom.status as never, role: role as Role })) {
+      return { ok: false, reason: 'classroom-locked', ...member };
+    }
+    return { ok: true, classroomId: slide.classroom_id, role: role as string };
+  }
+
+  async locate(docId: string) {
+    const slide = await this.deps.findSlide(docId);
+    return slide && isDeckSlide(slide)
+      ? { classroomId: slide.classroom_id, collabEnabled: slide.classroom?.collab_enabled === true }
+      : null;
+  }
+
+  async seed({ docId }: { docId: string }): Promise<SeedResult> {
+    const slide = await this.mustFindSlide(docId);
+    let loaded: LoadedDeck;
+    try {
+      loaded = await this.deps.loadDeck(slide, { idGen: legacyIdGen() });
+    } catch (err) {
+      if (err instanceof DeckParseError) {
+        throw new CollabHttpError(422, {
+          error: 'unparseable-deck',
+          message: `deck ${docId} cannot be read: ${err.message}`,
+        });
+      }
+      if (err instanceof Error && err.message.startsWith('Slide content not found')) {
+        throw new CollabHttpError(409, { error: 'content-missing', message: err.message });
+      }
+      throw err;
+    }
+    return {
+      doc: deckToYDoc(loaded.deck),
+      sourceSha: loaded.sha,
+      classroomId: slide.classroom_id,
+    };
+  }
+
+  snapshot(doc: Y.Doc): DeckSnapshotContent {
+    return yDocToDeck(cloneYDoc(doc));
+  }
+
+  parseOps(raw: unknown): DeckOp[] {
+    const parsed = deckOpsPayloadSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new CollabHttpError(400, { error: 'invalid-ops', issues: parsed.error.issues });
+    }
+    return parsed.data;
+  }
+
+  /** The live slide locks that block a server-side write. */
+  liveLocks(doc: Y.Doc): Map<string, SlideLock> {
+    const connected = connectedClients(doc);
+    const activity = this.attached.get(doc)?.activity;
+    const now = this.deps.now();
+    const out = new Map<string, SlideLock>();
+    for (const [slideId, lock] of allLocks(doc)) {
+      // A gone holder keeps the slide until the grace from when they went —
+      // never counted from before this process started (see goneSince).
+      if (connected && !connected.has(lock.clientId)) {
+        const observedAt = activity?.holderActiveAt(slideId);
+        if (!goneLockExpired(lock, { now, notBefore: this.startedAt, observedAt })) {
+          out.set(slideId, lock);
+        }
+        continue;
+      }
+      const state = lockState(lock, -1, { now, connected, idleMs: activity?.idleMs(slideId, now) });
+      if (state === 'held') out.set(slideId, lock);
+    }
+    return out;
+  }
+
+  /** Drop locks whose holder left more than the grace period ago (stored times). */
+  clearGoneLocks(document: Y.Doc): { expired: string[]; nextInMs: number | null } {
+    const connected = connectedClients(document);
+    if (!connected) return { expired: [], nextInMs: null };
+    const activity = this.attached.get(document)?.activity;
+    const result = expireGoneLocks(
+      document,
+      {
+        now: this.deps.now(),
+        connected,
+        notBefore: this.startedAt,
+        observedAt: slideId => activity?.holderActiveAt(slideId),
+      },
+      LOCK_ORIGIN
+    );
+    if (result.expired.length > 0) {
+      logLockDrop(document, result.expired, 'holder gone past the grace');
+    }
+    return result;
+  }
+
+  /**
+   * Guarded ops: the slide ids whose current entry (as `/snapshot` returns it,
+   * a stack with its children) no longer hashes to what the caller read.
+   */
+  checkExpect(doc: Y.Doc, expect: Record<string, string>): string[] {
+    const slides = flattenSlides(yDocToDeck(doc));
+    return Object.entries(expect)
+      .filter(([id, hash]) => {
+        const slide = slides.get(id);
+        return !slide || itemHash(slide) !== hash;
+      })
+      .map(([id]) => id);
+  }
+
+  /** Guarded ops (`expect_since`): the deck as hashes, as `/snapshot` would show it. */
+  itemView(doc: Y.Doc): ItemView {
+    return deckView(yDocToDeck(doc) as unknown as Record<string, unknown>);
+  }
+
+  hasItem(doc: Y.Doc, id: string): boolean {
+    return flattenSlides(yDocToDeck(doc)).has(id);
+  }
+
+  applyOps(ctx: LiveEditContext, ops: DeckOp[]): ApplyOpsResult {
+    this.attach(ctx.document);
+    this.clearGoneLocks(ctx.document);
+    const result: ApplyOpsResult = {};
+    ctx.transact(doc => {
+      const current = yDocToDeck(doc);
+      const locks = this.liveLocks(doc);
+      for (const slideId of touchedSlideIds(current, ops)) {
+        const holder = locks.get(slideId);
+        if (holder) {
+          throw new CollabHttpError(409, { error: 'slide-locked', slideId, holder });
+        }
+      }
+      let applied: ReturnType<typeof applyDeckOps>;
+      try {
+        applied = applyDeckOps(current, ops, {
+          starterCustomCss: slideService.STARTER_CUSTOM_CSS,
+        });
+      } catch (err) {
+        asHttpError(err);
+      }
+      syncDeckIntoYDoc(doc, applied.deck);
+      Object.assign(result, opsOutcome(applied.applied));
+    });
+    return result;
+  }
+
+  async mergeExternal(
+    ctx: LiveEditContext,
+    { sha, before }: { sha: string; before?: string | null }
+  ): Promise<ExternalMergeResult> {
+    this.attach(ctx.document);
+    const slide = await this.mustFindSlide(ctx.ref.docId);
+
+    // theirs: the deck at the pushed commit.
+    let theirsLoaded: LoadedDeck;
+    try {
+      theirsLoaded = await this.deps.loadDeck(slide, { ref: sha, idGen: legacyIdGen() });
+    } catch (err) {
+      if (err instanceof DeckParseError) {
+        throw new CollabHttpError(422, { error: 'unparseable-deck', message: err.message });
+      }
+      throw err;
+    }
+    // What the live doc already descends from (our own push, a replay, an
+    // older push): nothing to merge.
+    if (ctx.row?.source_sha && theirsLoaded.sha === ctx.row.source_sha) {
+      return { sourceSha: ctx.row.source_sha, conflicts: 0, noop: true };
+    }
+
+    // base: the deck at the push's `before` (exactly the outside change),
+    // else what the live doc descends from (seeded from, or last pushed).
+    // No deck file before the push: the true base is an empty deck (every
+    // slide on both sides is an addition, none a deletion).
+    const emptyBase = (): DeckJson => ({ ...theirsLoaded.deck, slides: [] });
+    let base: DeckJson | null = null;
+    if (before && !/^0+$/.test(before)) {
+      try {
+        base = (await this.deps.loadDeck(slide, { ref: before, idGen: legacyIdGen() })).deck;
+      } catch (err) {
+        if (
+          err instanceof Error &&
+          err.message.startsWith('Slide content not found') &&
+          !ctx.row?.source_sha
+        ) {
+          base = emptyBase();
+        } else {
+          base = null;
+        }
+      }
+    }
+    if (!base && ctx.row?.source_sha) {
+      base = parseDeckText(await this.deps.readBlob(slide, ctx.row.source_sha));
+    }
+    if (!base && ctx.row?.pushed_commit) {
+      try {
+        base = (
+          await this.deps.loadDeck(slide, { ref: ctx.row.pushed_commit, idGen: legacyIdGen() })
+        ).deck;
+      } catch {
+        base = null;
+      }
+    }
+    if (!base && ctx.row && !ctx.row.source_sha && !ctx.row.pushed_commit) base = emptyBase();
+    if (!base) {
+      // Merging against a made-up base would read every live-only change as
+      // "the push deleted it". Refuse and keep the live doc.
+      throw new CollabHttpError(409, {
+        error: 'no-merge-base',
+        message: `deck ${ctx.ref.docId}: no readable base for the outside push`,
+      });
+    }
+    const mergeBase = base;
+    let conflicts = 0;
+    const conflictIds = new Set<string>();
+    ctx.transact(doc => {
+      const ours = yDocToDeck(doc);
+      const locks = this.liveLocks(doc);
+      const theirs = theirsLoaded.deck;
+      const first = merge3Units(mergeBase, ours, theirs);
+      conflicts = first.conflicts.length;
+      let merged = first.merged;
+      if (conflicts > 0) {
+        // Conflicted slides someone is editing keep the live side; the rest
+        // take the push (provisional theirs), then merge per field below.
+        const resolutions: Record<string, MergeChoice> = {};
+        for (const conflict of first.conflicts) {
+          resolutions[conflict.id] = locks.has(conflict.id) ? 'ours' : 'theirs';
+          conflictIds.add(conflict.id);
+        }
+        merged = merge3Units(mergeBase, ours, theirs, { resolutions }).merged;
+        // Both sides changed an unlocked slide: keep what each side changed
+        // (html, notes, visibility, each attribute); the push wins a field
+        // both changed.
+        const b = flattenSlides(mergeBase);
+        const o = flattenSlides(ours);
+        const t = flattenSlides(theirs);
+        for (const conflict of first.conflicts) {
+          if (locks.has(conflict.id)) continue;
+          const mine = o.get(conflict.id);
+          const pushed = t.get(conflict.id);
+          if (!mine || !pushed || mine.children || pushed.children) continue;
+          replaceSlide(merged, mergeSlideFields(b.get(conflict.id), mine, pushed, 'theirs'));
+        }
+      }
+      // A slide a person holds keeps its live html even when only the push
+      // changed it; they are told, and can look at the pushed version.
+      if (locks.size > 0) {
+        const kept = keepHeldHtml(ours, merged, locks, theirs);
+        conflicts += kept.filter(k => !conflictIds.has(k.id)).length;
+        for (const k of kept) {
+          conflictIds.add(k.id);
+          recordSlideConflict(doc, k.id, {
+            at: this.deps.now(),
+            sha,
+            html: k.theirsHtml,
+            holderUserId: (locks.get(k.id) as SlideLock).userId,
+            ...(k.deleted ? { deleted: true as const } : {}),
+          });
+        }
+      }
+      syncDeckIntoYDoc(doc, merged);
+    });
+    const result: ExternalMergeResult & { conflictIds?: string[] } = {
+      sourceSha: theirsLoaded.sha,
+      conflicts,
+      ...(conflictIds.size > 0 ? { conflictIds: [...conflictIds] } : {}),
+    };
+    return result;
+  }
+
+  async currentSourceSha(docId: string): Promise<string | null> {
+    const slide = await this.mustFindSlide(docId);
+    try {
+      return (await this.deps.loadDeck(slide, {})).sha;
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith('Slide content not found')) return null;
+      throw err;
+    }
+  }
+
+  /**
+   * `POST /internal/deck/:id/merge-preview`: 3-way merge INSIDE the live
+   * transaction — base = where the preview branched, ours = the live deck,
+   * theirs = the preview — so nothing typed between a read and the write is
+   * lost. Conflicts left after `resolutions` (the chooser's `{id, choose}`
+   * list) are returned and nothing is applied; otherwise the merged deck is
+   * written id-aware. A slide whose content the merge would change while a
+   * person holds it is refused with 409 slide-locked, like an op.
+   */
+  mergePreview(
+    ctx: LiveEditContext,
+    {
+      base,
+      theirs,
+      resolutions,
+    }: { base: DeckJson; theirs: DeckJson; resolutions?: MergeResolution[] | null }
+  ): { conflicts: DeckMergeConflict[] } {
+    this.attach(ctx.document);
+    let chosen: Record<string, MergeChoice> = {};
+    if (resolutions && resolutions.length > 0) {
+      try {
+        chosen = indexResolutions(resolutions);
+      } catch (err) {
+        if (err instanceof PreviewResolutionError) {
+          throw new CollabHttpError(400, { error: 'invalid-resolutions', message: err.message });
+        }
+        throw err;
+      }
+    }
+    let conflicts: DeckMergeConflict[] = [];
+    ctx.transact(doc => {
+      const ours = yDocToDeck(doc);
+      const merge = merge3Units(base, ours, theirs, { resolutions: chosen });
+      if (merge.conflicts.length > 0) {
+        conflicts = merge.conflicts;
+        return;
+      }
+      const locks = this.liveLocks(doc);
+      if (locks.size > 0) {
+        const before = flattenSlides(ours);
+        const after = flattenSlides(merge.merged);
+        for (const [slideId, holder] of locks) {
+          const prev = before.get(slideId);
+          if (!prev) continue;
+          const next = after.get(slideId);
+          if (!next || contentKey(prev) !== contentKey(next)) {
+            throw new CollabHttpError(409, { error: 'slide-locked', slideId, holder });
+          }
+        }
+      }
+      syncDeckIntoYDoc(doc, merge.merged);
+    });
+    return { conflicts };
+  }
+
+  /**
+   * Nothing structural to repair in a deck; used as the "a live document
+   * exists" signal to start lock arbitration on it.
+   */
+  repair(document: Y.Doc): boolean {
+    this.attach(document);
+    return false;
+  }
+
+  /**
+   * The arbiter's judgement of a claim on a slide someone else held: the
+   * server's own view, never the claimant's.
+   *  - The same person picking their slide up again from a new tab (the old
+   *    one gone or marked disconnected): allowed at once.
+   *  - Otherwise once the holder is past the disconnect grace (marked, or
+   *    gone from awareness), or idle LOCK_TAKEOVER_IDLE_MS by the holder's
+   *    own activity as the server saw it (never the server's writes or
+   *    other people's refused claims). After a restart, with nothing seen
+   *    yet, from the holder's `lastActive` but not before the process start.
+   * A little slack covers the claimant measuring from a later receive time.
+   */
+  mayTakeOver(
+    document: Y.Doc,
+    activity: LockActivity,
+    slideId: string,
+    previous: StampedLock,
+    claim: StampedLock
+  ): boolean {
+    const now = this.deps.now();
+    const connected = connectedClients(document);
+    const marked = typeof previous.disconnectedAt === 'number';
+    const absent = !!connected && !connected.has(previous.clientId);
+    if (claim.userId === previous.userId && (marked || absent)) return true;
+    if (marked) {
+      return (
+        now - (previous.disconnectedAt as number) >= LOCK_DISCONNECT_GRACE_MS - TAKEOVER_SLACK_MS
+      );
+    }
+    if (absent) {
+      return goneLockExpired(previous, {
+        now: now + TAKEOVER_SLACK_MS,
+        notBefore: this.startedAt,
+        observedAt: activity.holderActiveAt(slideId),
+      });
+    }
+    const activeAt =
+      activity.holderActiveAt(slideId) ??
+      Math.max(Math.min(previous.lastActive, now), this.startedAt);
+    return now - activeAt >= LOCK_TAKEOVER_IDLE_MS - TAKEOVER_SLACK_MS;
+  }
+
+  /**
+   * Start lock bookkeeping on a live document (idempotent): the arbiter, the
+   * release of a disconnected client's locks, and a periodic sweep that also
+   * clears locks left in a stored state by clients long gone. Stops when the
+   * document is destroyed (Hocuspocus unloads it).
+   */
+  attach(document: Y.Doc): void {
+    if (this.attached.has(document)) return;
+    const activity = new LockActivity(document, this.deps.now, { serverOrigin: LOCK_ORIGIN });
+    this.attached.set(document, { activity });
+    const uninstall = installLockArbiter(document, LOCK_ORIGIN, (slideId, previous, claim) =>
+      this.mayTakeOver(document, activity, slideId, previous, claim)
+    );
+    // Outside-push notices for slides that are gone (deleted since): pruned
+    // now and whenever slides are deleted. Presence, not content.
+    const slidesMap = deckSlides(document);
+    pruneSlideConflicts(document, slidesMap, LOCK_ORIGIN);
+    const onSlides = (event: Y.YMapEvent<Y.Map<unknown>>) => {
+      if ([...event.keysChanged].some(key => !slidesMap.has(key))) {
+        pruneSlideConflicts(document, slidesMap, LOCK_ORIGIN);
+      }
+    };
+    slidesMap.observe(onSlides);
+    // Peers that skip the client checks: an edit to a slide someone else holds
+    // is undone here, in the same tick.
+    const uninstallGuard = installLockGuard(document, {
+      origin: GUARD_ORIGIN,
+      writersOf: tr => writersOf(document, tr),
+      onRevert: (ids, writers) =>
+        console.warn(
+          `[collab] undid a change to held slide(s) ${ids.join(', ')} by client(s) ${[...writers].join(', ')}`
+        ),
+    });
+
+    const awareness = (document as WithAwareness).awareness;
+    const graceTimers = new Set<ReturnType<typeof setTimeout>>();
+    const onAwareness = ({ added, removed }: { added?: number[]; removed: number[] }) => {
+      // Back within the grace: the lock is theirs again.
+      if (added && added.length > 0) markReconnected(document, added, LOCK_ORIGIN);
+      if (removed.length > 0) {
+        // Gone: keep their slide for the grace period, then sweep it.
+        const marked = markDisconnected(document, removed, this.deps.now(), LOCK_ORIGIN);
+        if (marked.length > 0) {
+          console.debug(
+            `[collab] ${docName(document)}: holder(s) ${removed.join(', ')} left; grace for ${marked.join(', ')}`
+          );
+        }
+        const timer = setTimeout(() => {
+          graceTimers.delete(timer);
+          clearGone();
+        }, LOCK_DISCONNECT_GRACE_MS + 250);
+        (timer as { unref?: () => void }).unref?.();
+        graceTimers.add(timer);
+      }
+    };
+    awareness?.on('update', onAwareness);
+
+    // Gone holders by their stored times (a lock left by a session that ended
+    // while the doc was unloaded gets no fresh grace period); when one is
+    // still within its grace, look again when it ends.
+    let goneTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearGone = () => {
+      const { nextInMs } = this.clearGoneLocks(document);
+      if (goneTimer) clearTimeout(goneTimer);
+      goneTimer = null;
+      if (nextInMs !== null) {
+        goneTimer = setTimeout(clearGone, nextInMs + 250);
+        (goneTimer as { unref?: () => void }).unref?.();
+      }
+    };
+    const sweep = () => {
+      clearGone();
+      // Idle holders (a frozen tab still connected).
+      const idle = expireLocks(
+        document,
+        { now: this.deps.now(), activity, maxIdleMs: LOCK_EXPIRE_IDLE_MS },
+        LOCK_ORIGIN
+      );
+      if (idle.length > 0) logLockDrop(document, idle, 'idle or past a disconnect grace');
+    };
+    sweep();
+    const timer = setInterval(sweep, LOCK_SWEEP_MS);
+    (timer as { unref?: () => void }).unref?.();
+
+    document.once('destroy', () => {
+      clearInterval(timer);
+      if (goneTimer) clearTimeout(goneTimer);
+      for (const grace of graceTimers) clearTimeout(grace);
+      uninstall();
+      uninstallGuard();
+      slidesMap.unobserve(onSlides);
+      awareness?.off('update', onAwareness);
+      activity.destroy();
+      this.attached.delete(document);
+    });
+  }
+}
+
+export function createDeckAdapter(deps: DeckAdapterDeps = defaultDeckAdapterDeps): DeckAdapter {
+  return new DeckAdapter(deps);
+}

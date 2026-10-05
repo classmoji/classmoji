@@ -1518,6 +1518,122 @@ describe('resource tiers', () => {
   });
 });
 
+// ─── extension_purchase on a quiz (STUDENT only, self) ──────────────────────
+
+describe('extension_purchase with assignment_id (quiz)', () => {
+  const QUIZ_TITLE = 'MCP-S4 Extension Quiz';
+
+  it('STUDENT only: teaching team refused at the role gate; a student buys hours on the quiz', async () => {
+    // Fixture: a published QUIZ assignment with a deadline and a price, in a
+    // module of the dev classroom (Pro, quizzes on). Created directly, so no
+    // notification goes out.
+    await prisma.quiz.deleteMany({ where: { classroom_id: fx.dev.id, name: QUIZ_TITLE } });
+    const quiz = await prisma.quiz.create({
+      data: {
+        classroom_id: fx.dev.id,
+        name: QUIZ_TITLE,
+        rubric_prompt: 'MCP-S4 rubric',
+        status: 'PUBLISHED',
+      },
+    });
+    cleanup.add('extension quiz', () => prisma.quiz.deleteMany({ where: { id: quiz.id } }));
+    const assignment = await prisma.assignment.create({
+      data: {
+        module_id: fx.releasedAssignment.module_id,
+        type: 'QUIZ',
+        quiz_id: quiz.id,
+        title: QUIZ_TITLE,
+        weight: 0,
+        is_published: true,
+        student_deadline: new Date(Date.now() + 7 * 24 * 3_600_000),
+        tokens_per_hour: 1,
+      },
+    });
+    cleanup.add('extension quiz assignment', () =>
+      prisma.assignment.deleteMany({ where: { id: assignment.id } })
+    );
+    // Registered last, so it runs first: the ledger rows go before the
+    // assignment (SetNull would otherwise keep them, orphaned).
+    cleanup.add('extension quiz ledger rows', () =>
+      prisma.tokenTransaction.deleteMany({
+        where: {
+          OR: [{ assignment_id: assignment.id }, { description: 'MCP-S4 quiz extension grant' }],
+        },
+      })
+    );
+
+    const args = { classroom: DEV_REF, assignment_id: assignment.id, hours: 2 };
+    // timofei7 also holds STUDENT, so the role denials use single-role users.
+    expectForbidden(
+      await callTool(teacher, 'extension_purchase', args),
+      'extension_purchase as teacher',
+      'INSUFFICIENT_ROLE'
+    );
+    expectForbidden(
+      await callTool(ta, 'extension_purchase', args),
+      'extension_purchase as assistant',
+      'INSUFFICIENT_ROLE'
+    );
+
+    // Give the student something to spend (deleted again in cleanup, which
+    // restores the previous head of their ledger).
+    const studentId = fx.users['fake-student-2'].id;
+    const head = await prisma.tokenTransaction.findFirst({
+      where: { classroom_id: fx.dev.id, student_id: studentId },
+      orderBy: { created_at: 'desc' },
+    });
+    const balanceBefore = head?.balance_after ?? 0;
+    await prisma.tokenTransaction.create({
+      data: {
+        classroom_id: fx.dev.id,
+        student_id: studentId,
+        amount: 5,
+        type: 'GAIN',
+        balance_after: balanceBefore + 5,
+        description: 'MCP-S4 quiz extension grant',
+        created_at: new Date(Math.max(Date.now(), (head?.created_at.getTime() ?? 0) + 1)),
+      },
+    });
+
+    // The service shows quizzes only where the AI agent is configured in the
+    // server's own env (AI_AGENT_URL + AI_AGENT_SHARED_SECRET, read from the
+    // repo .env). A not_found here in this Pro classroom means those are
+    // missing, not a scoping fault.
+    const bought = await callTool(student2, 'extension_purchase', args);
+    expect(bought.isError, JSON.stringify(bought.payload)).toBe(false);
+    expect(bought.payload.assignment_id).toBe(assignment.id);
+    const txn = bought.payload.transaction as {
+      id: string;
+      amount: number;
+      hours_purchased: number;
+      balance_after: number;
+    };
+    expect(txn).toMatchObject({ amount: -2, hours_purchased: 2, balance_after: balanceBefore + 3 });
+
+    const row = await prisma.tokenTransaction.findUniqueOrThrow({ where: { id: txn.id } });
+    expect(row).toMatchObject({
+      student_id: studentId,
+      assignment_id: assignment.id,
+      git_repo_assignment_id: null,
+      type: 'PURCHASE',
+    });
+    await expectAuditRow({
+      userId: student2Mint.user_id,
+      classroomId: fx.dev.id,
+      role: 'STUDENT',
+      resourceType: 'TOKEN_PURCHASE',
+      action: 'CREATE',
+      resourceId: txn.id,
+      tool: 'extension_purchase',
+      since: suiteStart,
+    });
+    const audit = await prisma.auditLog.findFirstOrThrow({
+      where: { resource_type: 'TOKEN_PURCHASE', resource_id: txn.id },
+    });
+    expect((audit.data as { assignment_id?: string }).assignment_id).toBe(assignment.id);
+  });
+});
+
 // ─── S2 — revocation under load, extended to a WRITE tool ───────────────────
 
 describe('S2 revocation on the write path', () => {

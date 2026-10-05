@@ -26,8 +26,15 @@ vi.mock('../../content/ContentService.ts', () => ({
   },
 }));
 
-const { loadDeck, saveDeck, DeckConflictError, previewBranchName, PREVIEW_BRANCH_PREFIX } =
-  await import('../slideContent.service.ts');
+const {
+  loadDeck,
+  saveDeck,
+  prepareDeckForSave,
+  recordDeckCommit,
+  DeckConflictError,
+  previewBranchName,
+  PREVIEW_BRANCH_PREFIX,
+} = await import('../slideContent.service.ts');
 const { SlideKindError } = await import('../slideSource.ts');
 const { DeckParseError } = await import('../deckHtml.ts');
 
@@ -476,5 +483,44 @@ describe('saveDeck — the kind gate', () => {
     await expect(saveDeck({ slide, deck, message: 'ok' })).resolves.toMatchObject({
       commit: 'commit-1',
     });
+  });
+});
+
+describe('prepareDeckForSave / recordDeckCommit (the checkpoint worker split)', () => {
+  it('prepare yields exactly the two files saveDeck commits, and writes nothing', async () => {
+    const painted: DeckJson = {
+      ...deck,
+      slides: [{ id: 'aaaa1111', html: '<h1>Hi</h1>', attrs: { style: 'top: 350px;' } }],
+    };
+    const prepared = await prepareDeckForSave(slide, painted);
+    expect(uploadBatchMock).not.toHaveBeenCalled();
+    expect(slideUpdateMock).not.toHaveBeenCalled();
+    expect(prepared.deckPath).toBe(DECK_PATH);
+    expect(prepared.htmlPath).toBe(HTML_PATH);
+    // Runtime paint stripped, as on every save.
+    expect(prepared.deck.slides[0].attrs?.style).toBeUndefined();
+
+    await saveDeck({ slide, deck: painted, message: 'm' });
+    const files = uploadBatchMock.mock.calls[0][0].files;
+    expect(files[0].content).toBe(prepared.deckJson);
+    expect(files[1].content).toBe(prepared.html);
+  });
+
+  it('prepare refuses a FILE slide (the kind gate) before anything else', async () => {
+    await expect(prepareDeckForSave({ ...slide, kind: 'FILE' }, deck)).rejects.toThrow(
+      SlideKindError
+    );
+  });
+
+  it('record bumps updated_at (what saveDeck does after a main-branch commit)', async () => {
+    await recordDeckCommit(
+      slide,
+      [{ path: DECK_PATH, sha: 'd' }],
+      [{ path: DECK_PATH, content: '{}' }],
+      { awaitTail: true }
+    );
+    expect(slideUpdateMock).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'slide-1' } })
+    );
   });
 });

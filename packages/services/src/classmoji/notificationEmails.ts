@@ -39,6 +39,8 @@ const subjectFor = (ctx: EmailContext): string => {
       return `${SUBJECT_PREFIX}${scope} - New grading assignment`;
     case 'TA_REGRADE_ASSIGNED':
       return `${SUBJECT_PREFIX}${scope} - New regrade request`;
+    case 'FEEDBACK_STATUS_CHANGED':
+      return `${SUBJECT_PREFIX} Update on: ${ctx.title}`;
     default:
       // QUIZ_PUBLISHED, PAGE_(UN)PUBLISHED, REPOSITORY_(UN)PUBLISHED — the verb
       // is carried in `title` by the caller. A default also means a new enum
@@ -46,6 +48,16 @@ const subjectFor = (ctx: EmailContext): string => {
       return `${SUBJECT_PREFIX}${scope} - ${ctx.title}`;
   }
 };
+
+/** The status a feedback post moved to, as shown on the board ("In progress"). */
+const statusLabel = (ctx: EmailContext): string =>
+  typeof ctx.metadata?.status_label === 'string' ? ctx.metadata.status_label : 'updated';
+
+/** Where the email's button goes: the post itself for feedback, else the app. */
+const actionUrlFor = (ctx: EmailContext): string =>
+  ctx.type === 'FEEDBACK_STATUS_CHANGED'
+    ? `${appUrl()}/feedback/p/${encodeURIComponent(ctx.resourceId)}`
+    : `${appUrl()}/select-organization`;
 
 const formatDate = (value: unknown): string | null => {
   if (!value) return null;
@@ -76,6 +88,8 @@ const sentenceFor = (ctx: EmailContext): string => {
       return `You have been assigned to grade ${ctx.title} in ${cls}.`;
     case 'TA_REGRADE_ASSIGNED':
       return `A regrade request for ${ctx.title} in ${cls} has been assigned to you.`;
+    case 'FEEDBACK_STATUS_CHANGED':
+      return `"${ctx.title}", a post you follow on the Classmoji feedback board, is now ${statusLabel(ctx)}.`;
     default:
       return `${ctx.title} in ${cls}.`;
   }
@@ -104,6 +118,8 @@ const bodyFor = (ctx: EmailContext): string => {
       return `<p style="margin-top:0; margin-bottom:0;">You've been assigned to grade <strong>${title}</strong> in <strong>${cls}</strong>.</p>`;
     case 'TA_REGRADE_ASSIGNED':
       return `<p style="margin-top:0; margin-bottom:0;">A regrade request for <strong>${title}</strong> in <strong>${cls}</strong> has been assigned to you.</p>`;
+    case 'FEEDBACK_STATUS_CHANGED':
+      return `<p style="margin-top:0; margin-bottom:0;"><strong>${title}</strong>, a post you follow on the Classmoji feedback board, is now <strong>${escapeHtml(statusLabel(ctx))}</strong>.</p>`;
     default:
       return `<p style="margin-top:0; margin-bottom:0;"><strong>${title}</strong> in <strong>${cls}</strong>.</p>`;
   }
@@ -130,7 +146,7 @@ export const renderEmail = (ctx: EmailContext): NotificationEmail => {
         // Resend derives text from the HTML before substitution and leaks raw
         // <p> tags into the plain part.
         MESSAGE_TEXT: `${greetingText}${sentence}`,
-        ACTION_URL: `${appUrl()}/select-organization`,
+        ACTION_URL: actionUrlFor(ctx),
         PREFS_URL: `${appUrl()}/settings/notifications`,
       },
     },
