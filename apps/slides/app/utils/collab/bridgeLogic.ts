@@ -112,3 +112,18 @@ export function editingLabel(name: string): string {
   const full = name.trim().replace(/\s+/g, ' ');
   return `${full || 'Someone'} is editing`;
 }
+
+/** ⌘Z / Ctrl+Z → undo; ⇧⌘Z / Ctrl+Shift+Z / Ctrl+Y → redo; anything else → null. */
+export function historyKey(event: {
+  key: string;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  shiftKey: boolean;
+  altKey: boolean;
+}): 'undo' | 'redo' | null {
+  if (event.altKey || !(event.metaKey || event.ctrlKey)) return null;
+  const key = event.key.toLowerCase();
+  if (key === 'z') return event.shiftKey ? 'redo' : 'undo';
+  if (key === 'y' && event.ctrlKey && !event.metaKey && !event.shiftKey) return 'redo';
+  return null;
+}

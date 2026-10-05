@@ -34,6 +34,7 @@ import {
 } from '@classmoji/collab';
 import type { DeckJson } from '@classmoji/services/slides';
 
+import { lockHolderOf } from '../../app/utils/collab/bridgeDom.ts';
 import {
   BRIDGE_ORIGIN,
   DeckBridge,
@@ -939,6 +940,353 @@ test.describe('live deck bridge', () => {
     expect(getLock(t.remote, 'aaaa0002')).toBeNull();
     expect(t.remoteHtml('aaaa0002')).toBe('<h2>bye</h2>');
     expect(t.bridge.currentDocument()).toContain('<h2>bye</h2>');
+    t.bridge.destroy();
+  });
+
+  // ─── Fix round: lost updates, Done, per-key attrs, undo ───────────────────
+
+  const GRACE = { userId: 'other', name: 'Grace Hopper', color: '#e5484d' };
+  const graceHolds = (t: ReturnType<typeof setup>, id: string) =>
+    acquireLock(t.remote, id, { ...GRACE, clientId: t.remote.clientID }, { now: Date.now() });
+  const caretIn = (t: ReturnType<typeof setup>, id: string, offset = 1) => {
+    t.setCurrent(id);
+    const text = t.section(id).querySelector('h2')?.firstChild as Text;
+    window.getSelection()?.setBaseAndExtent(text, offset, text, offset);
+    return text;
+  };
+  const setRemote = (t: ReturnType<typeof setup>, id: string, html: string) =>
+    (deckSlides(t.remote).get(id) as Y.Map<unknown>).set('html', html);
+  const remoteAttrs = (t: ReturnType<typeof setup>, id: string) =>
+    yDocToDeck(t.remote).slides.find(s => s.id === id)?.attrs ?? {};
+
+  test("someone else's edits show at once even with my caret resting in their slide", async () => {
+    const t = setup();
+    graceHolds(t, 'aaaa0002');
+    await tick();
+    caretIn(t, 'aaaa0002');
+    setRemote(t, 'aaaa0002', '<h2>Grace typed</h2>');
+    await tick();
+    expect(t.section('aaaa0002').innerHTML).toBe('<h2>Grace typed</h2>');
+    t.bridge.destroy();
+  });
+
+  test('html that waited behind the caret is shown before the slide is claimed; typing never overwrites it', async () => {
+    const t = setup();
+    caretIn(t, 'aaaa0002');
+    // Grace's last edit and her release arrive together: the slide is free
+    // when it renders, and the caret is in it, so the html waits.
+    t.remote.transact(() => {
+      setRemote(t, 'aaaa0002', '<h2>Grace last</h2>');
+    });
+    await tick();
+    expect(t.section('aaaa0002').innerHTML).toBe('<h2>Two</h2>');
+    // This person types on the old version: the claim shows Grace's html first.
+    t.section('aaaa0002').querySelector('h2')!.textContent = 'Two, stale typing';
+    t.bridge.flushLocal();
+    expect(t.section('aaaa0002').innerHTML).toBe('<h2>Grace last</h2>');
+    expect(t.notices.at(-1)).toBe('This slide just changed. It now shows the latest version.');
+    t.session.ack();
+    t.session.ack();
+    expect(t.remoteHtml('aaaa0002')).toBe('<h2>Grace last</h2>');
+    // The next keystroke builds on Grace's version.
+    t.section('aaaa0002').querySelector('h2')!.textContent = 'Grace last, mine';
+    t.bridge.flushLocal();
+    t.session.ack();
+    expect(t.remoteHtml('aaaa0002')).toBe('<h2>Grace last, mine</h2>');
+    t.bridge.destroy();
+  });
+
+  test('taking over renders what the last holder left first', async () => {
+    const t = setup();
+    acquireLock(t.remote, 'aaaa0003', { ...GRACE, clientId: 999 }, { now: Date.now() });
+    markDisconnected(t.remote, [999], Date.now());
+    // Off screen, so their last edit waits to be rendered.
+    t.bridge.deferOffscreen = true;
+    t.setCurrent('aaaa0001');
+    setRemote(t, 'aaaa0003', '<h2>Grace left this</h2>');
+    await tick();
+    expect(t.section('aaaa0003').innerHTML).toBe('<h2>Three</h2>');
+    fakeNow = Date.now() + LOCK_DISCONNECT_GRACE_MS + 1;
+    expect(t.bridge.takeOver('aaaa0003')).toBe(true);
+    expect(t.section('aaaa0003').innerHTML).toBe('<h2>Grace left this</h2>');
+    // Typing goes on top of it.
+    t.section('aaaa0003').querySelector('h2')!.textContent = 'Grace left this, mine';
+    t.bridge.flushLocal();
+    t.session.ack();
+    t.session.ack();
+    expect(t.remoteHtml('aaaa0003')).toBe('<h2>Grace left this, mine</h2>');
+    t.bridge.destroy();
+  });
+
+  test('a write never lands over doc html this editor has not rendered', () => {
+    const t = setup();
+    t.section('aaaa0002').innerHTML = '<h2>mine</h2>';
+    t.bridge.flushLocal();
+    t.session.ack();
+    t.session.ack();
+    expect(t.remoteHtml('aaaa0002')).toBe('<h2>mine</h2>');
+    // The doc moves under the held slide (e.g. the server put a version back).
+    setRemote(t, 'aaaa0002', '<h2>server version</h2>');
+    t.section('aaaa0002').innerHTML = '<h2>mine, more</h2>';
+    t.bridge.flushLocal();
+    t.session.ack();
+    expect(t.remoteHtml('aaaa0002')).toBe('<h2>server version</h2>');
+    expect(t.section('aaaa0002').innerHTML).toBe('<h2>server version</h2>');
+    t.bridge.destroy();
+  });
+
+  test('attributes are written key by key: a remote key or visibility set meanwhile survives', async () => {
+    const t = setup();
+    // Local change still in the debounce…
+    t.section('aaaa0003').setAttribute('data-transition', 'zoom');
+    // …while someone else changes another key and hides the slide.
+    const map = deckSlides(t.remote).get('aaaa0003') as Y.Map<unknown>;
+    t.remote.transact(() => {
+      (map.get('attrs') as Y.Map<string>).set('data-background-color', '#000');
+      map.set('hidden', true);
+    });
+    t.bridge.flushLocal();
+    t.session.ack();
+    expect(remoteAttrs(t, 'aaaa0003')).toEqual({
+      'data-background-color': '#000',
+      'data-transition': 'zoom',
+    });
+    expect(yDocToDeck(t.remote).slides[2].hidden).toBe(true);
+    await tick();
+    expect(t.section('aaaa0003').getAttribute('data-background-color')).toBe('#000');
+    expect(t.section('aaaa0003').getAttribute('data-hidden')).toBe('true');
+    // A local removal removes only that key.
+    t.section('aaaa0003').removeAttribute('data-transition');
+    t.bridge.flushLocal();
+    t.session.ack();
+    expect(remoteAttrs(t, 'aaaa0003')).toEqual({ 'data-background-color': '#000' });
+    t.bridge.destroy();
+  });
+
+  test('a theme switch writes only the theme this person changed', async () => {
+    const t = setup();
+    t.revealEl.setAttribute('data-theme', 'moon');
+    setDeckThemes(t.remote, { codeTheme: 'monokai' }); // arrives before the flush
+    t.bridge.flushLocal();
+    t.session.ack();
+    expect(t.remote.getMap('meta').get('theme')).toBe('moon');
+    expect(t.remote.getMap('meta').get('codeTheme')).toBe('monokai');
+    t.bridge.destroy();
+  });
+
+  test('leaving the page writes what is on screen before the lock goes', () => {
+    const t = setup();
+    t.section('aaaa0002').innerHTML = '<h2>first</h2>';
+    t.bridge.flushLocal();
+    t.session.ack();
+    t.session.ack();
+    t.section('aaaa0002').innerHTML = '<h2>typed just before closing</h2>';
+    window.dispatchEvent(new jsdom.window.Event('pagehide'));
+    t.session.ack();
+    expect(t.remoteHtml('aaaa0002')).toBe('<h2>typed just before closing</h2>');
+    expect(getLock(t.remote, 'aaaa0002')).toBeNull();
+    t.bridge.destroy();
+  });
+
+  test('an edit waiting on its claim is still pending (Done must wait for it)', () => {
+    const t = setup();
+    t.session.setReady(false);
+    t.section('aaaa0002').innerHTML = '<h2>offline</h2>';
+    t.bridge.flushLocal();
+    expect(t.bridge.hasPendingLocal()).toBe(true);
+    t.session.setReady(true);
+    t.session.ack();
+    t.session.ack();
+    expect(t.bridge.hasPendingLocal()).toBe(false);
+    expect(t.remoteHtml('aaaa0002')).toBe('<h2>offline</h2>');
+    t.bridge.destroy();
+  });
+
+  test('the overview rebuild is read-only for a held slide before any flush', async () => {
+    const t = setup();
+    graceHolds(t, 'aaaa0003');
+    await tick();
+    const clones = Array.from(t.slidesEl.children).map(el => {
+      const clone = el.cloneNode(true) as HTMLElement;
+      clone.setAttribute('contenteditable', 'true');
+      return clone;
+    });
+    t.slidesEl.innerHTML = '';
+    for (const clone of clones) t.slidesEl.appendChild(clone);
+    await Promise.resolve(); // the mutation observer's microtask, no debounce
+    await Promise.resolve();
+    expect(t.section('aaaa0003').getAttribute('contenteditable')).toBe('false');
+    t.bridge.destroy();
+  });
+
+  test('a held slide names its holder for editor tools, and the name is never stored', async () => {
+    const t = setup();
+    graceHolds(t, 'aaaa0003');
+    await tick();
+    expect(lockHolderOf(t.section('aaaa0003'))).toBe('Grace Hopper');
+    expect(lockHolderOf(t.section('aaaa0002'))).toBeNull();
+    t.section('aaaa0003').setAttribute('data-transition', 'fade');
+    t.bridge.flushLocal();
+    t.session.ack();
+    expect(remoteAttrs(t, 'aaaa0003')).toEqual({
+      'data-background-color': '#fff',
+      'data-transition': 'fade',
+    });
+    t.bridge.destroy();
+  });
+
+  test('a slide just added gets its id (and notes text) on demand', () => {
+    const t = setup();
+    const added = document.createElement('section');
+    added.innerHTML = '<h2>New</h2>';
+    t.section('aaaa0001').after(added);
+    const id = t.bridge.ensureSlideId(added);
+    expect(id).toMatch(/^[0-9a-f]{8}$/);
+    expect(t.bridge.notesText(id)).not.toBeNull();
+    t.session.ack();
+    expect(yDocToDeck(t.remote).slides[1].id).toBe(id);
+    t.bridge.destroy();
+  });
+
+  test('undo / redo: my own html edits, one step per flush', () => {
+    const t = setup();
+    t.section('aaaa0002').innerHTML = '<h2>one</h2>';
+    t.bridge.flushLocal();
+    t.session.ack();
+    t.session.ack();
+    t.section('aaaa0002').innerHTML = '<h2>two</h2>';
+    t.bridge.flushLocal();
+    t.session.ack();
+    expect(t.bridge.history('undo')).toBe(true);
+    t.session.ack();
+    expect(t.remoteHtml('aaaa0002')).toBe('<h2>one</h2>');
+    expect(t.section('aaaa0002').innerHTML).toBe('<h2>one</h2>');
+    expect(t.bridge.history('undo')).toBe(true);
+    t.session.ack();
+    expect(t.remoteHtml('aaaa0002')).toBe('<h2>Two</h2>');
+    expect(t.bridge.history('redo')).toBe(true);
+    t.session.ack();
+    expect(t.remoteHtml('aaaa0002')).toBe('<h2>one</h2>');
+    expect(t.section('aaaa0002').innerHTML).toBe('<h2>one</h2>');
+    // Typing again is still written on top.
+    t.section('aaaa0002').innerHTML = '<h2>three</h2>';
+    t.bridge.flushLocal();
+    t.session.ack();
+    expect(t.remoteHtml('aaaa0002')).toBe('<h2>three</h2>');
+    t.bridge.destroy();
+  });
+
+  test('undo never touches a slide someone else now holds, nor their edit', async () => {
+    const t = setup();
+    t.section('aaaa0002').innerHTML = '<h2>mine</h2>';
+    t.bridge.flushLocal();
+    t.session.ack();
+    t.session.ack();
+    t.bridge.detach(); // Done: our lock goes
+    t.session.ack();
+    t.bridge.attach(t.reveal, { setThemes: () => {} });
+    // Re-attaching starts a new history; make a step again, then lose the slide.
+    t.section('aaaa0002').innerHTML = '<h2>mine again</h2>';
+    t.bridge.flushLocal();
+    t.session.ack();
+    t.session.ack();
+    t.section('aaaa0003').querySelector('h2')!.textContent = 'elsewhere';
+    t.bridge.flushLocal(); // claims slide 3, releasing slide 2
+    t.session.ack();
+    t.session.ack();
+    graceHolds(t, 'aaaa0002');
+    setRemote(t, 'aaaa0002', '<h2>Grace</h2>');
+    await tick();
+    // Undo slide 3's step first (ours), then slide 2's is refused.
+    expect(t.bridge.history('undo')).toBe(true);
+    t.session.ack();
+    expect(t.remoteHtml('aaaa0003')).toBe('<h2>Three</h2>');
+    expect(t.bridge.history('undo')).toBe(false);
+    expect(t.notices.at(-1)).toBe('Grace Hopper is editing that slide, so that change stays.');
+    t.session.ack();
+    expect(t.remoteHtml('aaaa0002')).toBe('<h2>Grace</h2>');
+    t.bridge.destroy();
+  });
+
+  test('undo on a free slide claims it first and runs once the claim is confirmed', async () => {
+    const t = setup();
+    t.section('aaaa0002').innerHTML = '<h2>mine</h2>';
+    t.bridge.flushLocal();
+    t.session.ack();
+    t.session.ack();
+    t.section('aaaa0003').querySelector('h2')!.textContent = 'elsewhere';
+    t.bridge.flushLocal(); // releases slide 2
+    t.session.ack();
+    t.session.ack();
+    // Undo slide 3 (held), then slide 2 (free → claim).
+    expect(t.bridge.history('undo')).toBe(true);
+    t.session.ack();
+    expect(t.bridge.history('undo')).toBe(true);
+    expect(t.remoteHtml('aaaa0002')).toBe('<h2>mine</h2>'); // not yet: claim pending
+    t.session.ack(); // claim confirmed → the undo runs
+    t.session.ack();
+    expect(t.remoteHtml('aaaa0002')).toBe('<h2>Two</h2>');
+    expect(t.section('aaaa0002').innerHTML).toBe('<h2>Two</h2>');
+    t.bridge.destroy();
+  });
+
+  test('undo restores my attribute change but not a key someone else set since', () => {
+    const t = setup();
+    t.section('aaaa0002').setAttribute('data-transition', 'zoom');
+    t.bridge.flushLocal();
+    t.session.ack();
+    const attrs = () =>
+      (deckSlides(t.remote).get('aaaa0002') as Y.Map<unknown>).get('attrs') as Y.Map<string>;
+    attrs().set('data-background-color', '#abc');
+    expect(t.bridge.history('undo')).toBe(true);
+    t.session.ack();
+    expect(remoteAttrs(t, 'aaaa0002')).toEqual({ 'data-background-color': '#abc' });
+    t.bridge.destroy();
+  });
+
+  test('⌘Z in a slide is the live undo (the native one is prevented)', () => {
+    const t = setup();
+    t.section('aaaa0002').innerHTML = '<h2>typed</h2>';
+    t.bridge.flushLocal();
+    t.session.ack();
+    t.session.ack();
+    const key = new jsdom.window.KeyboardEvent('keydown', {
+      key: 'z',
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    t.section('aaaa0002').querySelector('h2')!.dispatchEvent(key);
+    expect(key.defaultPrevented).toBe(true);
+    t.session.ack();
+    expect(t.remoteHtml('aaaa0002')).toBe('<h2>Two</h2>');
+    // Not in a code editor inside a slide.
+    t.section('aaaa0001').insertAdjacentHTML('beforeend', '<div class="cm-editor"><p>x</p></div>');
+    const inCode = new jsdom.window.KeyboardEvent('keydown', {
+      key: 'z',
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    t.section('aaaa0001').querySelector('.cm-editor p')!.dispatchEvent(inCode);
+    expect(inCode.defaultPrevented).toBe(false);
+    t.bridge.destroy();
+  });
+
+  test("notes undo: only my typing, someone else's stays", () => {
+    const t = setup();
+    const text = t.bridge.notesText('aaaa0001') as Y.Text;
+    t.session.doc.transact(() => text.insert(text.length, ' mine'), BRIDGE_ORIGIN);
+    t.session.ack();
+    const remoteText = (deckSlides(t.remote).get('aaaa0001') as Y.Map<unknown>).get(
+      'notes'
+    ) as Y.Text;
+    remoteText.insert(0, 'THEIRS ');
+    expect(text.toString()).toBe('THEIRS first notes mine');
+    expect(t.bridge.notesHistory('aaaa0001', 'undo')).toBe(true);
+    expect(text.toString()).toBe('THEIRS first notes');
+    expect(t.bridge.notesHistory('aaaa0001', 'redo')).toBe(true);
+    expect(text.toString()).toBe('THEIRS first notes mine');
     t.bridge.destroy();
   });
 });

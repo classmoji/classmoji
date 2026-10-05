@@ -71,8 +71,11 @@ import type { DeckSlide } from '@classmoji/services/slides';
 
 import { canonicalMediaUrls } from '../mediaRefs.ts';
 import {
+  LOCKED_BY_ATTR,
   applySectionAttrs,
   arrangeChildren,
+  caretTextOffset,
+  placeCaretAtTextOffset,
   prepareEditorSection,
   safeInnerHtml,
   scanDeckDom,
@@ -86,6 +89,7 @@ import {
   decideLocalEdit,
   editingLabel,
   heartbeatDue,
+  historyKey,
   lockView,
   shouldRelease,
   shouldRenderRemoteHtml,
@@ -111,6 +115,12 @@ function debugLock(what: string, slideId: string, tr: Y.Transaction | null, acti
 
 /** Origin of every transaction the bridge writes (observers skip their own). */
 export const BRIDGE_ORIGIN = 'deck-editor';
+/**
+ * Origin of the bridge's slide edits that go on this person's undo stack
+ * (html, attributes, visibility). A transaction's origin, not a flag: a
+ * write made inside an observer is committed after the call returns.
+ */
+export const BRIDGE_EDIT_ORIGIN = 'deck-editor-edit';
 
 const MEDIA_REF_RE = /media:\/\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 
@@ -174,6 +184,30 @@ interface Held {
 
 const json = (value: unknown) => JSON.stringify(value);
 
+/** A baseline's attribute JSON back as a record. */
+function parseAttrs(value: string): Record<string, string> {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Keys whose value differs between two attribute sets (added, changed or removed). */
+export function changedAttrKeys(
+  before: Readonly<Record<string, string>>,
+  after: Readonly<Record<string, string>>
+): string[] {
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  return [...keys].filter(key => before[key] !== after[key]);
+}
+
+type HistoryKind = 'undo' | 'redo';
+/** Slides an undo step touched: id → whether it changed the slide's html. */
+type HistorySlides = Map<string, boolean>;
+const HISTORY_SLIDES = 'slides';
+
 export class DeckBridge {
   private readonly session: BridgeSession;
   private readonly doc: Y.Doc;
@@ -213,6 +247,22 @@ export class DeckBridge {
   /** Defer off-screen remote renders (false in tests that inspect the DOM). */
   deferOffscreen = true;
   private flushAgain = false;
+  /** A media render skipped because the slide was being worked on: retried on tick. */
+  private mediaRetry = false;
+  /** The deck themes last rendered or written (a root attribute that differs is a local change). */
+  private baseThemes: { theme: string; codeTheme: string } | null = null;
+
+  /**
+   * Undo of this person's own slide edits (html, attributes, visibility):
+   * only what the bridge wrote as BRIDGE_EDIT_ORIGIN, never anyone
+   * else's change (Yjs never restores a value someone else has replaced
+   * since). Structure, locks and notes are not on this stack.
+   */
+  private readonly undoManager: Y.UndoManager;
+  /** An undo/redo waiting for our claim on its slide to be confirmed. */
+  private pendingHistory: { kind: 'undo' | 'redo'; slideId: string } | null = null;
+  /** Per notes text: its own undo (the notes panel's ⌘Z). */
+  private readonly notesUndo = new Map<Y.Text, Y.UndoManager>();
 
   constructor(opts: DeckBridgeOptions) {
     this.opts = opts;
@@ -222,7 +272,7 @@ export class DeckBridge {
     this.activity = new LockActivity(this.doc, this.clock);
 
     const onDocChange = (_events: unknown, tr: Y.Transaction) => {
-      if (tr.origin === BRIDGE_ORIGIN) return;
+      if (tr.origin === BRIDGE_ORIGIN || tr.origin === BRIDGE_EDIT_ORIGIN) return;
       this.queueRender();
     };
     const slides = deckSlides(this.doc);
@@ -231,6 +281,22 @@ export class DeckBridge {
     meta.observe(onDocChange as never);
     this.cleanups.push(() => slides.unobserveDeep(onDocChange));
     this.cleanups.push(() => meta.unobserve(onDocChange as never));
+
+    this.undoManager = new Y.UndoManager(slides, {
+      trackedOrigins: new Set([BRIDGE_EDIT_ORIGIN]),
+      captureTimeout: 500,
+    });
+    const tagItem = (event: {
+      stackItem: { meta: Map<unknown, unknown> };
+      changedParentTypes: Map<Y.AbstractType<unknown>, Array<Y.YEvent<Y.AbstractType<unknown>>>>;
+    }) => this.tagHistoryItem(event.stackItem, event.changedParentTypes);
+    this.undoManager.on('stack-item-added', tagItem as never);
+    this.undoManager.on('stack-item-updated', tagItem as never);
+    this.cleanups.push(() => this.undoManager.destroy());
+    this.cleanups.push(() => {
+      for (const um of this.notesUndo.values()) um.destroy();
+      this.notesUndo.clear();
+    });
 
     const conflictsMap = deckConflicts(this.doc);
     const onConflicts = () => this.emit();
@@ -397,6 +463,10 @@ export class DeckBridge {
     }
     this.baselineStructure = scan.structure;
     this.dirtyAll = false;
+    this.baseThemes = readDeckThemes(this.doc);
+    // A new editing session starts a new history.
+    this.undoManager.clear();
+    this.pendingHistory = null;
 
     this.observer = new MutationObserver(records => this.onMutations(records));
     this.observer.observe(root, {
@@ -417,8 +487,29 @@ export class DeckBridge {
     root.addEventListener('input', onKey);
     const onSlideChanged = () => this.onSlideChanged();
     reveal.on('slidechanged', onSlideChanged);
-    const onPageHide = () => this.releaseAll();
+    // Leaving the page: write what is on screen, then let the slide go.
+    const onPageHide = () => {
+      this.flushLocal();
+      this.releaseAll();
+    };
     window.addEventListener('pagehide', onPageHide);
+    // ⌘Z / ⇧⌘Z (and the Edit menu) in a slide: this person's own slide edits.
+    const onHistoryKey = (event: KeyboardEvent) => {
+      const kind = historyKey(event);
+      if (!kind || !this.isSlideEditingTarget(event.target)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.history(kind);
+    };
+    const onBeforeInput = (event: Event) => {
+      const type = (event as InputEvent).inputType;
+      if (type !== 'historyUndo' && type !== 'historyRedo') return;
+      if (!this.isSlideEditingTarget(event.target)) return;
+      event.preventDefault();
+      this.history(type === 'historyUndo' ? 'undo' : 'redo');
+    };
+    root.addEventListener('keydown', onHistoryKey, true);
+    root.addEventListener('beforeinput', onBeforeInput, true);
 
     this.detachers = [
       () => root.removeEventListener('focusin', onFocus),
@@ -427,6 +518,8 @@ export class DeckBridge {
       () => root.removeEventListener('input', onKey),
       () => reveal.off('slidechanged', onSlideChanged),
       () => window.removeEventListener('pagehide', onPageHide),
+      () => root.removeEventListener('keydown', onHistoryKey, true),
+      () => root.removeEventListener('beforeinput', onBeforeInput, true),
     ];
 
     this.ticker = setInterval(() => this.tick(), 1000);
@@ -491,6 +584,8 @@ export class DeckBridge {
     );
     if (!result.ok) return false;
     this.releaseOthers(slideId);
+    // Show what the last holder left before this person types into it.
+    this.catchUp(slideId);
     this.held = this.newHeld(slideId);
     this.applyLockChrome();
     this.emit();
@@ -502,7 +597,44 @@ export class DeckBridge {
     if (!slideId) return null;
     const map = deckSlides(this.doc).get(slideId);
     const notes = map instanceof Y.Map ? map.get('notes') : null;
-    return notes instanceof Y.Text ? notes : null;
+    if (!(notes instanceof Y.Text)) return null;
+    // Its undo starts recording as soon as the panel shows it.
+    if (!this.notesUndo.has(notes) && !this.destroyed) {
+      this.notesUndo.set(
+        notes,
+        new Y.UndoManager(notes, { trackedOrigins: new Set([BRIDGE_ORIGIN]) })
+      );
+    }
+    return notes;
+  }
+
+  /** Undo / redo this person's own notes edits on a slide (others' typing stays). */
+  notesHistory(slideId: string | null, kind: 'undo' | 'redo'): boolean {
+    const text = this.notesText(slideId);
+    const um = text ? this.notesUndo.get(text) : undefined;
+    if (!um) return false;
+    const item = kind === 'undo' ? um.undo() : um.redo();
+    if (item && slideId && text && text.length === 0) this.clearNotesFlag(slideId);
+    return item !== null;
+  }
+
+  /**
+   * The id of a section the editor just added (stamped now, and the slide
+   * written into the deck), so its notes can be typed before the debounce.
+   */
+  ensureSlideId(section: Element | null): string | null {
+    if (!section || !this.slidesEl || !this.slidesEl.contains(section)) {
+      return section?.getAttribute('data-cm-id') ?? null;
+    }
+    if (
+      !section.getAttribute('data-cm-id') ||
+      !deckSlides(this.doc).has(section.getAttribute('data-cm-id') as string)
+    ) {
+      this.dirtyStructure = true;
+      this.flushLocal();
+    }
+    const id = section.getAttribute('data-cm-id');
+    return id && deckSlides(this.doc).has(id) ? id : null;
   }
 
   /** Empty notes are no notes (no empty aside on the slide). */
@@ -561,6 +693,10 @@ export class DeckBridge {
     const root = this.root;
     if (!slidesEl || !root) return;
     let touched = false;
+    // Sections put in (the overview rebuilds stacks from editable copies) or
+    // made editable: someone else's slide must be read-only at once, not
+    // after the next flush.
+    let sectionsAdded = false;
     for (const record of records) {
       const target = record.target as Node;
       if (target === root) {
@@ -580,6 +716,13 @@ export class DeckBridge {
           node => node.nodeType === 1 && (node as Element).tagName.toLowerCase() === 'section'
         );
         if (sectionsMoved || target === slidesEl) this.dirtyStructure = true;
+        if (sectionsMoved) sectionsAdded = true;
+      } else if (
+        record.type === 'attributes' &&
+        record.attributeName === 'contenteditable' &&
+        (target as Element).tagName?.toLowerCase() === 'section'
+      ) {
+        sectionsAdded = true;
       }
       const el = (target.nodeType === 1 ? target : target.parentElement) as Element | null;
       const section = el?.closest('section');
@@ -587,6 +730,7 @@ export class DeckBridge {
       if (id) this.dirtySlides.add(id);
       else if (section) this.dirtyStructure = true;
     }
+    if (sectionsAdded) this.applyLockChrome();
     if (touched) this.scheduleFlush();
   }
 
@@ -625,6 +769,8 @@ export class DeckBridge {
       this.flushTimer = null;
     }
     if (this.observer) this.onMutations(this.observer.takeRecords());
+    // One flush, one undo step.
+    this.undoManager.stopCapturing();
 
     const scan = scanDeckDom(slidesEl, taken => this.mintId(taken));
     const created = new Set<string>();
@@ -684,18 +830,30 @@ export class DeckBridge {
 
       const domAttrs = json(ser.attrs);
       if (domAttrs !== base.domAttrs || ser.hidden !== base.hidden) {
+        // Only what this person changed, key by key: a key someone else set
+        // meanwhile (not rendered here yet) is neither reverted nor deleted.
+        const changed = changedAttrKeys(parseAttrs(base.domAttrs), ser.attrs);
+        const hiddenChanged = ser.hidden !== base.hidden;
         this.doc.transact(() => {
-          let attrs = map.get('attrs');
-          if (!(attrs instanceof Y.Map)) {
-            attrs = new Y.Map<unknown>();
-            map.set('attrs', attrs);
+          if (changed.length > 0) {
+            let attrs = map.get('attrs');
+            if (!(attrs instanceof Y.Map)) {
+              attrs = new Y.Map<unknown>();
+              map.set('attrs', attrs);
+            }
+            const next = { ...readSlideAttrs(map) };
+            const canon = this.canonAttrs(ser.attrs);
+            for (const key of changed) {
+              if (key in canon) next[key] = canon[key];
+              else delete next[key];
+            }
+            writeAttrs(map, attrs as Y.Map<unknown>, next);
           }
-          if (domAttrs !== base.domAttrs) {
-            writeAttrs(map, attrs as Y.Map<unknown>, this.canonAttrs(ser.attrs));
-          }
-          if (map.get('hidden') !== ser.hidden) map.set('hidden', ser.hidden);
-        }, BRIDGE_ORIGIN);
+          if (hiddenChanged && map.get('hidden') !== ser.hidden) map.set('hidden', ser.hidden);
+        }, BRIDGE_EDIT_ORIGIN);
         base.domAttrs = domAttrs;
+        // The DOM side: a remote-only key still differs from the doc, so the
+        // next render puts it on the section.
         base.yAttrs = json(this.canonAttrs(ser.attrs));
         base.hidden = ser.hidden;
       }
@@ -706,9 +864,16 @@ export class DeckBridge {
         decideLocalEdit(this.lockStateOf(id), this.held?.slideId === id && this.held.confirmed)
       ) {
         case 'write': {
+          // Never write over html this person has not seen: if the doc moved
+          // since this slide was last rendered or written (another holder's
+          // last edit, put back by the server, …), show it instead.
+          if (readSlideHtml(map) !== base.yHtml) {
+            this.catchUp(id);
+            break;
+          }
           const yHtml = canonicalMediaUrls(ser.html, this.opts.mediaScope);
           if (map.get('html') !== yHtml) {
-            this.doc.transact(() => map.set('html', yHtml), BRIDGE_ORIGIN);
+            this.doc.transact(() => map.set('html', yHtml), BRIDGE_EDIT_ORIGIN);
           }
           base.domHtml = ser.html;
           base.yHtml = yHtml;
@@ -731,14 +896,18 @@ export class DeckBridge {
 
     if (this.dirtyTheme && this.root) {
       this.dirtyTheme = false;
-      setDeckThemes(
-        this.doc,
-        {
-          theme: this.root.getAttribute('data-theme') ?? undefined,
-          codeTheme: this.root.getAttribute('data-code-theme') ?? undefined,
-        },
-        BRIDGE_ORIGIN
-      );
+      // Only the theme this person switched: the other may have changed
+      // remotely and not be on screen yet.
+      const base = this.baseThemes ?? readDeckThemes(this.doc);
+      const theme = this.root.getAttribute('data-theme') ?? undefined;
+      const codeTheme = this.root.getAttribute('data-code-theme') ?? undefined;
+      const next: { theme?: string; codeTheme?: string } = {};
+      if (theme !== undefined && theme !== base.theme) next.theme = theme;
+      if (codeTheme !== undefined && codeTheme !== base.codeTheme) next.codeTheme = codeTheme;
+      if (next.theme !== undefined || next.codeTheme !== undefined) {
+        setDeckThemes(this.doc, next, BRIDGE_ORIGIN);
+        this.baseThemes = { ...base, ...next } as { theme: string; codeTheme: string };
+      }
     }
 
     // Structural edits elsewhere (the overview rebuilds the stack from clones,
@@ -888,11 +1057,13 @@ export class DeckBridge {
         ) {
           // Off-screen slides wait until they are shown: re-rendering a slide
           // nobody is looking at restarts its Sandpack and iframes for nothing.
-          // Nor is html rendered into a slide someone here is working on (the
-          // caret, an open block editor): it waits until they are done.
+          // Nor is html rendered into a free slide someone here is working on
+          // (the caret, an open block editor): it waits until they are done.
+          // A slide someone ELSE holds is read-only here, so their edits show
+          // at once — a caret resting in it never holds them back.
           const now =
             (entry.id === this.currentSlideId() || !this.deferOffscreen) &&
-            !this.busyIn(entry.id, el);
+            (this.lockedByOther(entry.id) || !this.busyIn(entry.id, el));
           if (now) {
             this.renderHtml(entry.id, el, yHtml);
             this.deferred.delete(entry.id);
@@ -921,6 +1092,7 @@ export class DeckBridge {
     ) {
       this.handle?.setThemes(themes);
     }
+    this.baseThemes = themes;
 
     this.baselineStructure = target;
     if (structural) this.revision++;
@@ -971,9 +1143,12 @@ export class DeckBridge {
 
   private renderHtml(id: string, el: HTMLElement, yHtml: string | undefined): void {
     this.revision++;
+    // The caret stays at the same place in the text (it would land at the start).
+    const caret = caretTextOffset(el);
     this.mutateDom(() => {
       el.replaceChildren(safeInnerHtml(el.ownerDocument, this.mapMedia(yHtml ?? '')));
       prepareEditorSection(el, !this.lockedByOther(id));
+      if (caret !== null) placeCaretAtTextOffset(el, caret);
     });
     const base = this.baseline.get(id);
     const ser = serializeSection(el);
@@ -1123,7 +1298,20 @@ export class DeckBridge {
       if (![...html.matchAll(MEDIA_REF_RE)].some(m => this.mediaUrls.has(m[0].toLowerCase()))) {
         continue;
       }
+      // Never over work in progress here: an edit not written yet (or
+      // waiting on a claim), or someone working in the slide. Retried later.
+      const base = this.baseline.get(entry.id);
+      if (
+        this.pendingEdits.has(entry.id) ||
+        this.dirtySlides.has(entry.id) ||
+        (!this.lockedByOther(entry.id) && this.busyIn(entry.id, el)) ||
+        (base && serializeSection(el).html !== base.domHtml)
+      ) {
+        this.mediaRetry = true;
+        continue;
+      }
       this.renderHtml(entry.id, el, html);
+      this.deferred.delete(entry.id);
     }
   }
 
@@ -1217,10 +1405,40 @@ export class DeckBridge {
     );
     if (!result.ok) return;
     this.releaseOthers(slideId);
+    // Show what the last holder left before this person types into it.
+    this.catchUp(slideId);
     this.held = this.newHeld(slideId);
     this.applyLockChrome();
     this.checkClaim();
     this.emit();
+  }
+
+  /**
+   * Render the doc's html into a slide when it moved since this editor last
+   * rendered or wrote it (remote html that waited behind the caret, or that
+   * arrived with the release). Anything typed here on top of the old version
+   * is replaced — said once, by notice.
+   */
+  private catchUp(slideId: string): boolean {
+    const el = this.sectionEl(slideId);
+    const map = deckSlides(this.doc).get(slideId);
+    const base = this.baseline.get(slideId);
+    if (!el || !(map instanceof Y.Map) || !base || sectionChildren(el).length > 0) return false;
+    const yHtml = readSlideHtml(map);
+    if (yHtml === base.yHtml) return false;
+    if (this.observer) this.onMutations(this.observer.takeRecords());
+    const unsent = serializeSection(el).html !== base.domHtml;
+    this.renderHtml(slideId, el, yHtml);
+    this.deferred.delete(slideId);
+    this.dirtySlides.delete(slideId);
+    this.pendingEdits.delete(slideId);
+    if (unsent) this.opts.notify('This slide just changed. It now shows the latest version.');
+    return true;
+  }
+
+  private sectionEl(slideId: string): HTMLElement | null {
+    return (this.slidesEl?.querySelector(`section[data-cm-id="${CSS.escape(slideId)}"]`) ??
+      null) as HTMLElement | null;
   }
 
   private releaseOthers(keep: string): void {
@@ -1252,6 +1470,11 @@ export class DeckBridge {
     if (!isConfirmedFor(getLock(this.doc, held.slideId), this.doc.clientID)) return;
     held.confirmed = true;
     if (this.pendingEdits.size > 0) this.flushLocal();
+    const waiting = this.pendingHistory;
+    if (waiting && waiting.slideId === held.slideId) {
+      this.pendingHistory = null;
+      this.history(waiting.kind);
+    }
   }
 
   private onLocksChanged(tr: Y.Transaction | null): void {
@@ -1290,6 +1513,7 @@ export class DeckBridge {
         // we idled or dropped. The doc's html wins; this slide shows as theirs.
         debugLock(`lock taken by ${lock.name}`, held.slideId, tr, 'revert');
         this.held = null;
+        if (this.pendingHistory?.slideId === held.slideId) this.pendingHistory = null;
         const el = this.slidesEl?.querySelector(
           `section[data-cm-id="${CSS.escape(held.slideId)}"]`
         ) as HTMLElement | null;
@@ -1326,9 +1550,16 @@ export class DeckBridge {
         if (other) {
           section.setAttribute('aria-readonly', 'true');
           section.setAttribute('aria-describedby', `cm-lock-desc-${id}`);
-        } else if (section.hasAttribute('aria-readonly')) {
-          section.removeAttribute('aria-readonly');
-          section.removeAttribute('aria-describedby');
+          const name = getLock(this.doc, id)?.name?.trim() || 'Someone';
+          if (section.getAttribute(LOCKED_BY_ATTR) !== name) {
+            section.setAttribute(LOCKED_BY_ATTR, name);
+          }
+        } else {
+          if (section.hasAttribute('aria-readonly')) {
+            section.removeAttribute('aria-readonly');
+            section.removeAttribute('aria-describedby');
+          }
+          if (section.hasAttribute(LOCKED_BY_ATTR)) section.removeAttribute(LOCKED_BY_ATTR);
         }
       }
     });
@@ -1400,6 +1631,10 @@ export class DeckBridge {
       }
     }
     if (this.pendingEdits.size > 0) this.flushLocal();
+    if (this.mediaRetry) {
+      this.mediaRetry = false;
+      this.queueMediaRender();
+    }
     this.emit();
   }
 
@@ -1415,6 +1650,139 @@ export class DeckBridge {
   private mintId(taken: Set<string>): string {
     const slides = deckSlides(this.doc);
     return mintUniqueSlideId({ has: id => taken.has(id) || slides.has(id) });
+  }
+
+  // ─── Undo ────────────────────────────────────────────────────────────────
+
+  /** Remember which slides (and whether their html) an undo step touched. */
+  private tagHistoryItem(
+    item: { meta: Map<unknown, unknown> },
+    changed: Map<Y.AbstractType<unknown>, Array<Y.YEvent<Y.AbstractType<unknown>>>>
+  ): void {
+    const slides: HistorySlides =
+      (item.meta.get(HISTORY_SLIDES) as HistorySlides | undefined) ?? new Map();
+    for (const [type, events] of changed) {
+      const id = this.slideIdOfType(type);
+      if (!id) continue;
+      const html = events.some(
+        event =>
+          event.target === deckSlides(this.doc).get(id) &&
+          (event as Y.YMapEvent<unknown>).keysChanged?.has('html')
+      );
+      slides.set(id, (slides.get(id) ?? false) || html);
+    }
+    item.meta.set(HISTORY_SLIDES, slides);
+  }
+
+  /** The slide a shared type belongs to (the slide map, or anything inside it). */
+  private slideIdOfType(type: Y.AbstractType<unknown>): string | null {
+    const slides = deckSlides(this.doc) as unknown as Y.AbstractType<unknown>;
+    let current: Y.AbstractType<unknown> | null = type;
+    while (current && current._item) {
+      const parent = current._item.parent as Y.AbstractType<unknown> | null;
+      if (parent === slides) {
+        const key = current._item.parentSub;
+        return typeof key === 'string' ? key : null;
+      }
+      current = parent;
+    }
+    return null;
+  }
+
+  /** A keystroke target where ⌘Z means the slide (not a code editor or a field in it). */
+  private isSlideEditingTarget(target: EventTarget | null): boolean {
+    const el = target as Element | null;
+    if (!el || typeof el.closest !== 'function' || !this.slidesEl?.contains(el)) return false;
+    if (el.closest('input, textarea, select, .cm-editor, .sp-wrapper, .sandpack-embed')) {
+      return false;
+    }
+    return sectionOf(el, this.slidesEl) !== null;
+  }
+
+  /** Whether there is a step to undo / redo. */
+  canHistory(kind: HistoryKind): boolean {
+    return (kind === 'undo' ? this.undoManager.undoStack : this.undoManager.redoStack).length > 0;
+  }
+
+  /**
+   * Undo (or redo) this person's last own slide edit. Never on a slide
+   * someone else holds (that step is dropped, with a notice); a free slide is
+   * claimed first and the step runs once the claim is confirmed.
+   */
+  history(kind: HistoryKind): boolean {
+    if (!this.slidesEl || this.destroyed) return false;
+    this.flushLocal();
+    const um = this.undoManager;
+    const prop = kind === 'undo' ? 'undoStack' : 'redoStack';
+    while (um[prop].length > 0) {
+      const stack = um[prop];
+      const top = stack[stack.length - 1];
+      const slides: HistorySlides =
+        (top.meta.get(HISTORY_SLIDES) as HistorySlides | undefined) ?? new Map();
+      const blocked = [...slides.keys()].find(id => this.lockedByOther(id));
+      if (blocked) {
+        stack.pop();
+        const holder = this.otherHolder(blocked);
+        this.opts.notify(
+          `${holder ? editingLabel(holder.name) : 'Someone is editing'} that slide, so that change stays.`
+        );
+        return false;
+      }
+      const htmlSlide: string | null = [...slides].find(([, html]) => html)?.[0] ?? null;
+      if (htmlSlide) {
+        // Typing there still waits on a claim: let it land first.
+        if (this.pendingEdits.has(htmlSlide)) return false;
+        const current = this.held as Held | null;
+        if (!(current?.slideId === htmlSlide && current.confirmed)) {
+          if (current?.slideId !== htmlSlide) {
+            if (this.isOwnGoneLock(getLock(this.doc, htmlSlide))) this.takeOver(htmlSlide);
+            else if (this.lockStateOf(htmlSlide) === 'free') this.claim(htmlSlide);
+          }
+          const held = this.held as Held | null;
+          if (!held || held.slideId !== htmlSlide) return false;
+          if (!held.confirmed) {
+            this.pendingHistory = { kind, slideId: htmlSlide };
+            return true;
+          }
+        }
+      }
+      // This one step alone: Yjs would fall through to the next on a no-op,
+      // past the lock checks above.
+      const rest = stack.slice(0, -1);
+      um[prop] = [top];
+      let done: unknown = null;
+      try {
+        done = kind === 'undo' ? um.undo() : um.redo();
+      } finally {
+        um[prop] = [...rest, ...um[prop]];
+      }
+      if (!done) continue; // replaced by someone since: nothing to undo there
+      this.showHistory(slides);
+      return true;
+    }
+    return false;
+  }
+
+  /** Put an undone / redone step on screen (held slides included). */
+  private showHistory(slides: HistorySlides): void {
+    for (const id of slides.keys()) {
+      const el = this.sectionEl(id);
+      const map = deckSlides(this.doc).get(id);
+      const base = this.baseline.get(id);
+      if (!el || !(map instanceof Y.Map) || !base) continue;
+      const yHtml = readSlideHtml(map);
+      if (sectionChildren(el).length === 0 && yHtml !== base.yHtml) this.renderHtml(id, el, yHtml);
+      this.deferred.delete(id);
+      this.markEdit(id);
+    }
+    this.render(); // attributes and visibility
+    // Show the slide the step changed.
+    const shown = [...slides].find(([, html]) => html)?.[0] ?? [...slides.keys()][0];
+    if (shown && shown !== this.currentSlideId()) {
+      const bookmark = this.saveSelection();
+      this.goTo(shown);
+      this.restoreSelection(bookmark);
+    }
   }
 
   // ─── UI state ────────────────────────────────────────────────────────────

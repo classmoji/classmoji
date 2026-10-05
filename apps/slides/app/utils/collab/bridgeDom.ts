@@ -27,6 +27,18 @@ import { cleanupEditorContainer, undoRevealLazyLoad } from '../editorCleanup.ts'
 export const COLLAB_SECTION_CLASSES = ['cm-locked', 'cm-held'] as const;
 const COLLAB_CLASS_SET: ReadonlySet<string> = new Set(COLLAB_SECTION_CLASSES);
 
+/**
+ * On a slide someone else holds: the holder's display name (lock chrome, never
+ * saved). Editor tools read it through `lockHolderOf` to refuse up front.
+ */
+export const LOCKED_BY_ATTR = 'data-cm-locked-by';
+
+/** Who holds this slide, when it is someone else (null: free, or yours). */
+export function lockHolderOf(section: Element | null | undefined): string | null {
+  if (!section || !section.classList.contains('cm-locked')) return null;
+  return section.getAttribute(LOCKED_BY_ATTR) || 'Someone';
+}
+
 const isSection = (node: Element): boolean => node.tagName.toLowerCase() === 'section';
 
 /** Direct `<section>` children. */
@@ -132,6 +144,7 @@ export function serializeSection(el: HTMLElement): SerializedSection {
     clone.removeAttribute('aria-readonly');
     clone.removeAttribute('aria-describedby');
   }
+  clone.removeAttribute(LOCKED_BY_ATTR);
   for (const cls of COLLAB_SECTION_CLASSES) clone.classList.remove(cls);
   // An open block editor (BlockHandles) is editor state, never content.
   for (const block of Array.from(clone.querySelectorAll('.sl-block'))) {
@@ -167,6 +180,7 @@ export function applySectionAttrs(
     // lock chrome, managed by the bridge
     'aria-readonly',
     'aria-describedby',
+    LOCKED_BY_ATTR,
   ]);
   for (const attr of Array.from(el.attributes)) {
     const name = attr.name.toLowerCase();
@@ -357,4 +371,43 @@ export function arrangeChildren(
 
 function firstSectionOrNull(parent: Element): ChildNode | null {
   return (sectionChildren(parent)[0] as ChildNode | undefined) ?? parent.firstChild;
+}
+
+/**
+ * Where the caret is inside `el`, as a character offset into its text (null
+ * when the selection is elsewhere) — survives a re-render of the same text.
+ */
+export function caretTextOffset(el: Element): number | null {
+  const doc = el.ownerDocument;
+  const selection = doc.defaultView?.getSelection?.();
+  const node = selection?.focusNode ?? null;
+  if (!selection || !node || !el.contains(node)) return null;
+  const range = doc.createRange();
+  range.selectNodeContents(el);
+  try {
+    range.setEnd(node, selection.focusOffset);
+  } catch {
+    return null;
+  }
+  return range.toString().length;
+}
+
+/** Put the caret `offset` characters into `el`'s text (clamped to its end). */
+export function placeCaretAtTextOffset(el: Element, offset: number): void {
+  const doc = el.ownerDocument;
+  const selection = doc.defaultView?.getSelection?.();
+  if (!selection) return;
+  const walker = doc.createTreeWalker(el, 4 /* NodeFilter.SHOW_TEXT */);
+  let remaining = offset;
+  let last: Text | null = null;
+  for (let node = walker.nextNode() as Text | null; node; node = walker.nextNode() as Text | null) {
+    last = node;
+    if (remaining <= node.length) {
+      selection.collapse(node, remaining);
+      return;
+    }
+    remaining -= node.length;
+  }
+  if (last) selection.collapse(last, last.length);
+  else selection.collapse(el, el.childNodes.length);
 }
