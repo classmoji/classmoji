@@ -1277,14 +1277,19 @@ export async function runContentCheckpoint(
         },
       })
       .catch(() => null);
+    // Not in this run's report: what was there when the request was made is
+    // in git (this run's filter came after the request, so a doc dirty then
+    // would be in the report). "Already saved" only if nothing is pending
+    // now; edits stored since are `editsSince`, for the next run.
+    const pending = !!current && current.version > current.pushed_version;
     entries.push({
       kind,
       id: docId,
       at: at.toISOString(),
       ...(current?.pushed_commit ? { commit: current.pushed_commit } : {}),
       requestIds,
-      alreadySaved: true,
-      editsSince: !!current && current.version > current.pushed_version,
+      ...(pending ? {} : { alreadySaved: true as const }),
+      editsSince: pending,
     });
   }
 

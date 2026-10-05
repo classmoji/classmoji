@@ -6,8 +6,8 @@
  *
  * A view is recorded when `/snapshot` is called with a viewer (an agent's
  * read; renders and the MCP's own pre-apply read pass none) and after each
- * `/ops` or `/cover` call (the agent's view of the version its write left:
- * see `viewAfterWrite`). Keyed by viewer (user id + agent session) + kind +
+ * `/ops` call (the agent's view of the version its write left: see
+ * `viewAfterWrite`). A `/cover` set records none (it shows the caller no block). Keyed by viewer (user id + agent session) + kind +
  * doc + epoch + version, so one agent's view never stands in for another's
  * read. Rules, as the MCP's cache had them: between two reads of one version
  * the FIRST is kept (a later read can never weaken a pin), a read replaces a

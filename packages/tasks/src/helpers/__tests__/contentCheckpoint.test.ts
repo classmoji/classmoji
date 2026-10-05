@@ -1329,3 +1329,35 @@ describe("whole-run failures and other docs' refusals", () => {
     expect(sent.docs.find(d => d.id === 'page-a')).not.toHaveProperty('error');
   });
 });
+
+describe('requests for docs this run did not report', () => {
+  it('are not "already saved" while the row still holds unpushed edits', async () => {
+    const prisma = makePrisma([
+      // Not picked up by this run (a reseed marker), yet ahead of what was pushed.
+      row('page', 'page-a', blocksToYDoc([para('a', 'a')]), 3, {
+        pushed_version: 2,
+        pushed_commit: 'e'.repeat(40),
+        state: new Uint8Array(),
+      }),
+    ]);
+    const { deps, notifyCheckpointResult } = makeDeps(prisma);
+    await runContentCheckpoint(
+      {
+        classroomId: 'class-1',
+        reason: 'save-version',
+        requests: [{ id: 'req-dirty-0003', kind: 'page', docId: 'page-a' }],
+      },
+      { runId: 'r' },
+      deps
+    );
+    const sent = (notifyCheckpointResult.mock.calls[0] as unknown[])[0] as {
+      docs: Array<Record<string, unknown>>;
+    };
+    expect(sent.docs[0]).toMatchObject({
+      requestIds: ['req-dirty-0003'],
+      commit: 'e'.repeat(40),
+      editsSince: true,
+    });
+    expect(sent.docs[0]).not.toHaveProperty('alreadySaved');
+  });
+});
