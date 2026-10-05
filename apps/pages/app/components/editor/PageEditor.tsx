@@ -357,13 +357,18 @@ const PageEditor = forwardRef(function PageEditor(
   }, [editor]);
 
   // Live: undo keeps recording after BlockNote remounts the view (StrictMode,
-  // a change of `editable`), which destroys y-prosemirror's UndoManager.
-  // Runs after the child's mount ref, so it sees the final view.
+  // a change of `editable`, a plugin reconfigure), which destroys
+  // y-prosemirror's UndoManager. Revived now (this effect runs after the
+  // child's mount ref) and after every later mount.
   const live = Boolean(collab);
   useEffect(() => {
     if (!live) return;
-    reviveUndoManager(yUndoManagerOf(editor.prosemirrorState as never));
-  }, [editor, live, editable]);
+    const revive = () => {
+      reviveUndoManager(yUndoManagerOf(editor.prosemirrorState as never));
+    };
+    revive();
+    return editor.onMount(revive);
+  }, [editor, live]);
 
   // Slash menu: default + multi-column + custom blocks
   const getAllSlashMenuItems = useMemo(() => {

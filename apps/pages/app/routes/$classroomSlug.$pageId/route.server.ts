@@ -661,8 +661,8 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
         versionNote(data.message),
         requestId
       );
-      // The id comes back only from a server that answers by it; without it
-      // the page falls back to matching the checkpoint message by time.
+      // Only the id this browser sent is echoed: the page settles the request
+      // on the checkpoint message naming it.
       const echoed = requestId && answer?.requestId === requestId ? requestId : undefined;
       return Response.json({
         success: true,

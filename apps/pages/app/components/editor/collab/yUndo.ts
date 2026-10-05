@@ -4,10 +4,12 @@
  * In live mode BlockNote swaps ProseMirror's history for y-prosemirror's undo
  * plugin, whose Yjs UndoManager lives in the plugin's state but is DESTROYED
  * by the plugin view's `destroy` (it stops listening to the document). The
- * state outlives the view: BlockNote unmounts and remounts the same editor
- * view whenever its mount ref changes (React's StrictMode double mount in
- * development, any change of `editable`), and the new view never brings the
- * listener back — so after the first remount undo silently does nothing.
+ * plugin state outlives the view: whenever BlockNote remounts the editor
+ * (its mount ref changes: React's StrictMode double mount in development, any
+ * change of `editable`), Tiptap builds a new view from the saved state and
+ * reconfigures it, which destroys the old plugin views — and the shared
+ * manager with them. The new view never brings the listener back, so after
+ * the first remount undo silently does nothing.
  *
  * `reviveUndoManager` re-attaches what `UndoManager.destroy()` detached (the
  * document listener and its own tracked origin). It is idempotent: on an
