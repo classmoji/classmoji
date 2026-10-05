@@ -25,7 +25,16 @@ import {
   KITCHEN_SINK_PAGE_TITLE,
   PAGE_TARGET_TEXT,
 } from '../../scripts/collab-dev/constants.ts';
-import { PAGES_URL, SLIDES_URL, WEBAPP_URL, db, openLive, services, signIn } from './helpers.ts';
+import {
+  caretToBlockEnd,
+  db,
+  openLive,
+  PAGES_URL,
+  services,
+  signIn,
+  SLIDES_URL,
+  WEBAPP_URL,
+} from './helpers.ts';
 
 const [TEACHER_1, TEACHER_2] = COLLAB_USERS;
 const RUN = Date.now().toString(36);
@@ -42,9 +51,7 @@ const TOKEN_2 = `p2-${RUN}`;
 async function docText(locator: import('@playwright/test').Locator): Promise<string> {
   return locator.evaluate(el => {
     const copy = el.cloneNode(true) as HTMLElement;
-    copy
-      .querySelectorAll('[class*="collaboration-cursor"]')
-      .forEach(node => node.remove());
+    copy.querySelectorAll('[class*="collaboration-cursor"]').forEach(node => node.remove());
     return (copy.textContent ?? '').replace(/\u2060/g, '');
   });
 }
@@ -133,19 +140,23 @@ test.describe('live editing', () => {
     }
 
     // Both people show up in each other's header (self included).
-    await expect(p1.getByTestId('live-peers').getByLabel(TEACHER_2.name)).toBeVisible();
-    await expect(p2.getByTestId('live-peers').getByLabel(TEACHER_1.name)).toBeVisible();
+    // Exact names (not their agents), and a person open twice shows once.
+    await expect(
+      p1.getByTestId('live-peers').getByLabel(TEACHER_2.name, { exact: true }).first()
+    ).toBeVisible();
+    await expect(
+      p2.getByTestId('live-peers').getByLabel(TEACHER_1.name, { exact: true }).first()
+    ).toBeVisible();
 
     const target = (p: Page) =>
       p.locator('[data-content-type="paragraph"]', { hasText: PAGE_TARGET_TEXT }).first();
 
-    await target(p1).click();
-    await p1.keyboard.press('End');
+    await caretToBlockEnd(target(p1));
     await p1.keyboard.type(PAGE_EDIT_1, { delay: 20 });
     await expect.poll(() => docText(target(p2))).toContain(TOKEN_1);
 
-    await target(p2).click();
-    await p2.keyboard.press('End');
+    // Teacher 1's caret sits at the end of this line now.
+    await caretToBlockEnd(target(p2));
     await p2.keyboard.type(PAGE_EDIT_2, { delay: 20 });
 
     // Both edits are in both views, and the two views are identical.

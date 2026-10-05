@@ -23,7 +23,7 @@ import {
   COLLAB_USERS,
   KITCHEN_SINK_PAGE_TITLE,
 } from '../../scripts/collab-dev/constants.ts';
-import { PAGES_URL, db, signIn } from './helpers.ts';
+import { caretToBlockEnd, db, PAGES_URL, signIn } from './helpers.ts';
 
 const [TEACHER_1, TEACHER_2] = COLLAB_USERS;
 const RUN = Date.now().toString(36);
@@ -91,11 +91,6 @@ function columnCounts(page: Page): Promise<number[]> {
       list => list.querySelectorAll(':scope > .bn-block-column').length
     )
   );
-}
-
-/** The caret to the end of its line (End does not do that in Chrome on macOS). */
-function toLineEnd(page: Page): Promise<void> {
-  return page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowRight' : 'End');
 }
 
 /** Delete a block through its side menu (drag handle → Delete), as a person does. */
@@ -316,7 +311,7 @@ test.describe('two editors, one page', () => {
     // The caret must be in that block before typing (it was just moved there).
     await expect
       .poll(async () => {
-        await target.click();
+        await caretToBlockEnd(target);
         return p1.evaluate(
           () =>
             window.getSelection()?.anchorNode?.parentElement?.closest('.bn-inline-content')
@@ -324,7 +319,6 @@ test.describe('two editors, one page', () => {
         );
       })
       .toContain(text.b);
-    await toLineEnd(p1);
     await p1.keyboard.type(marker, { delay: 20 });
     await expect.poll(() => blocksWithText(p2, `${text.b}${marker}`)).toBe(1);
   }
@@ -411,14 +405,12 @@ test.describe('two editors, one page', () => {
       const mine = ` mine-${RUN}`;
       const theirs = ` theirs-${RUN}`;
 
-      await target(p1).click();
-      await toLineEnd(p1);
+      await caretToBlockEnd(target(p1));
       await p1.keyboard.type(mine, { delay: 20 });
       await expect.poll(() => blockText(p2, id)).toBe(`${base}${mine}`);
 
       // The other teacher writes after that, in the same paragraph.
-      await target(p2).click();
-      await toLineEnd(p2);
+      await caretToBlockEnd(target(p2));
       await p2.keyboard.type(theirs, { delay: 20 });
       await expect.poll(() => blockText(p1, id)).toBe(`${base}${mine}${theirs}`);
 

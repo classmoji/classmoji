@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { expect, type BrowserContext, type Page } from '@playwright/test';
+import { expect, type BrowserContext, type Page, type Locator } from '@playwright/test';
 // Type-only: both packages build their Prisma client at import time, so the
 // runtime imports below happen only after DATABASE_URL is settled.
 import type getPrismaType from '@classmoji/database';
@@ -92,4 +92,34 @@ export async function openLive(page: Page, url: string, attempts = 4): Promise<v
       if (attempt >= attempts) throw error;
     }
   }
+}
+
+/**
+ * Put the caret at the end of a live page block's text, before typing there.
+ *
+ * Not End or Cmd-Right: when another person's caret sits at the end of the
+ * same line, Chrome's line-end movement stops short of y-prosemirror's caret
+ * widget (End sometimes, Cmd-Right almost always — measured over 50 runs),
+ * and typing lands wherever the click put the caret. Sets the DOM selection
+ * after the block's last text that is not part of a remote caret; ProseMirror
+ * takes it from the selectionchange that follows.
+ */
+export async function caretToBlockEnd(block: Locator): Promise<void> {
+  await block.click();
+  await block.evaluate(el => {
+    const inline = el.querySelector('.bn-inline-content') ?? el;
+    const walker = document.createTreeWalker(inline, NodeFilter.SHOW_TEXT, {
+      acceptNode: node =>
+        node.parentElement?.closest('[class*="collaboration-cursor"]')
+          ? NodeFilter.FILTER_REJECT
+          : NodeFilter.FILTER_ACCEPT,
+    });
+    let last: Text | null = null;
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) last = node as Text;
+    const selection = window.getSelection();
+    if (last) selection?.collapse(last, last.length);
+    else selection?.collapse(inline, inline.childNodes.length);
+  });
+  // One frame for ProseMirror to read the new selection.
+  await block.page().evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
 }
