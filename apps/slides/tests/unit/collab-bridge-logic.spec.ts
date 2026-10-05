@@ -344,6 +344,10 @@ test.describe('sync status', () => {
     );
     expect(deriveSyncStatus({ ...base, status: 'disconnected', hasSynced: true })).toBe('offline');
     expect(deriveSyncStatus({ ...base, status: 'disconnected' })).toBe('offline');
+    // A refused room: no connection is coming.
+    expect(
+      deriveSyncStatus({ ...base, status: 'disconnected', hasSynced: false, rejected: 'forbidden' })
+    ).toBe('offline');
     expect(deriveSyncStatus({ status: 'connected', synced: true, unsyncedChanges: 0 })).toBe(
       'synced'
     );

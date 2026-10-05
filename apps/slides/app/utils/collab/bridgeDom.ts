@@ -249,9 +249,9 @@ export function applySectionAttrs(
  * under (and including) `root`, for display: each is renamed in place to
  * `data-cm-inert-<name>`. So are the sources of a frame inside an html block
  * whose sandbox would let it out, and svg-block attributes off the svg lists
- * (deckBlocks.ts). Nothing stored changes —
- * `restoreInertMarkup` (run by serialization) puts the authored attributes
- * back.
+ * (deckBlocks.ts); svg-block nodes off the lists are hidden in an inert
+ * <template>. `restoreInertMarkup` (run by serialization) puts the authored
+ * attributes and nodes back. Only svg <style> scoping is kept (see below).
  */
 export function stripUnsafeMarkup(root: Element | DocumentFragment): void {
   for (const el of elementsUnder(root)) {
@@ -272,7 +272,9 @@ export function stripUnsafeMarkup(root: Element | DocumentFragment): void {
   // lists (a foreignObject, a script, …) cannot be renamed inert like an
   // attribute: it is put inside an inert <template> instead — not rendered,
   // and `restoreInertMarkup` puts it back, so the markup written is still
-  // the authored one. Their <style> sheets are scoped to the drawing.
+  // the authored one. Their <style> sheets are scoped to the drawing, and
+  // that IS written back: the scoping is idempotent and the server stores
+  // the same scoped form, so the doc converges to it.
   for (const node of offListSvgBlockNodes(root)) {
     if (!node.parentNode || !root.contains(node)) continue; // inside one already hidden
     const doc = node.ownerDocument as Document;

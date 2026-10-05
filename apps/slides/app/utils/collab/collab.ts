@@ -44,7 +44,8 @@ export const SYNC_STATUS_LABEL: Record<SyncStatus, string> = {
 
 /**
  * The header's sync status from the provider's state: connecting until the
- * socket first opens and syncs, offline when it is not open after that,
+ * socket first opens and syncs (offline at once if the room was refused),
+ * offline when it is not open after that,
  * syncing until the handshake finished and while local changes wait for the
  * server's acknowledgement, synced otherwise.
  */
@@ -53,13 +54,17 @@ export function deriveSyncStatus({
   synced,
   unsyncedChanges,
   hasSynced,
+  rejected,
 }: {
   status: ProviderStatus;
   synced: boolean;
   unsyncedChanges: number;
   /** Synced at least once this session (absent: assume so). */
   hasSynced?: boolean;
+  /** The server refused the room: no connection is coming. */
+  rejected?: unknown;
 }): SyncStatus {
+  if (rejected) return 'offline';
   if (status !== 'connected') return hasSynced === false ? 'connecting' : 'offline';
   if (!synced || unsyncedChanges > 0) return 'syncing';
   return 'synced';
