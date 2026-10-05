@@ -298,3 +298,28 @@ export function buildResolutions(
 ): MergeResolution[] {
   return ids.map(id => ({ id, choose: choices[id] }));
 }
+
+const TITLE_CAP = 80;
+
+/**
+ * A slide's title as the deck on screen shows it — its first heading, else
+ * its first text (speaker notes aside) — for an ordering listed without
+ * previews. '' when the slide is not on screen or has no text.
+ */
+export function slideTitleFromDom(root: ParentNode, id: string): string {
+  const section = Array.from(root.querySelectorAll('section[data-cm-id]')).find(
+    el => el.getAttribute('data-cm-id') === id
+  );
+  if (!section) return '';
+  const clean = (text: string | null | undefined) => (text ?? '').replace(/\s+/g, ' ').trim();
+  const heading = Array.from(section.querySelectorAll('h1, h2, h3, h4, h5, h6')).find(
+    el => !el.closest('aside.notes') && clean(el.textContent)
+  );
+  let title = clean(heading?.textContent);
+  if (!title) {
+    const copy = section.cloneNode(true) as Element;
+    copy.querySelectorAll('aside.notes, section, script, style').forEach(el => el.remove());
+    title = clean(copy.textContent);
+  }
+  return title.length > TITLE_CAP ? `${title.slice(0, TITLE_CAP - 1)}…` : title;
+}

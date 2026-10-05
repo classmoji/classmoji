@@ -27,9 +27,13 @@ function initials(name: string): string {
   ).toUpperCase();
 }
 
+/** Top-left: the delete button sits top-right, the slide number bottom-left. */
 function CollabBadge({ badge }: { badge: SlideCollabBadge }) {
   return (
-    <div className="pointer-events-none absolute top-1 right-1 z-10 flex items-center gap-1">
+    <div
+      className="pointer-events-none absolute top-1 left-1 z-10 flex max-w-[calc(100%-2.5rem)] flex-wrap items-center gap-1"
+      data-testid="overview-collab-badge"
+    >
       {badge.lock && !badge.lock.mine && (
         <span
           className="flex items-center gap-1 rounded-full bg-white/95 py-0.5 pl-0.5 pr-1.5 text-[10px] font-semibold text-amber-900 ring-1 ring-amber-300 dark:bg-gray-800/95 dark:text-amber-100 dark:ring-amber-600"

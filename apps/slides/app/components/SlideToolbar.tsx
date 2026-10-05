@@ -185,6 +185,11 @@ interface SlideToolbarProps {
   onContentChange?: () => void;
   onImageUpload?: (file: File) => Promise<string>;
   onOpenOverview?: () => void;
+  /**
+   * Live editing: who holds the slide on screen when it is someone else
+   * (their name), else null — the slide can't be deleted from here then.
+   */
+  currentSlideHolder?: string | null;
 }
 
 export default function SlideToolbar({
@@ -192,6 +197,7 @@ export default function SlideToolbar({
   onContentChange,
   onImageUpload,
   onOpenOverview, // Callback to open slide overview
+  currentSlideHolder = null,
 }: SlideToolbarProps) {
   const toast = useToast();
   const [isImageModalOpen, setIsImageModalOpen] = useState(false);
@@ -375,6 +381,11 @@ export default function SlideToolbar({
     // Gone since the confirm opened (deleted elsewhere): nothing to delete.
     const currentSlide = resolveDeleteTarget(captured, slidesEl) as HTMLElement | null;
     if (!currentSlide || !slidesEl) return;
+    // Someone else took the slide while the confirm was open.
+    if (currentSlide.classList.contains('cm-locked')) {
+      toast.info(`${currentSlideHolder?.trim() || 'Someone'} is editing this slide`);
+      return;
+    }
     if (countLeafSlides(slidesEl) <= 1) {
       toast.info('A presentation needs at least one slide');
       return;
@@ -431,7 +442,10 @@ export default function SlideToolbar({
     revealInstance.sync();
     revealInstance.layout(); // Recalculate slide positioning
     onContentChange?.();
-  }, [getCurrentSlide, revealInstance, onContentChange, toast]);
+  }, [getCurrentSlide, revealInstance, onContentChange, toast, currentSlideHolder]);
+
+  // Live editing: someone else holds the slide on screen.
+  const heldByOther = currentSlideHolder !== null;
 
   // Handle delete button click - show warning if can't delete
   const handleDeleteClick = useCallback(
@@ -835,13 +849,20 @@ document.querySelector('h1').addEventListener('click', () => {
         okText="Delete"
         okButtonProps={{ danger: true }}
         cancelText="Cancel"
-        disabled={!canDeleteSlide()}
+        disabled={!canDeleteSlide() || heldByOther}
       >
         <button
           onClick={handleDeleteClick}
-          title="Delete current slide"
+          disabled={heldByOther}
+          aria-disabled={heldByOther || !canDeleteSlide()}
+          data-testid="toolbar-delete-slide"
+          title={
+            heldByOther
+              ? `${currentSlideHolder?.trim() || 'Someone'} is editing this slide`
+              : 'Delete current slide'
+          }
           className={`px-2 py-1 text-sm font-medium rounded transition-colors ${
-            canDeleteSlide()
+            canDeleteSlide() && !heldByOther
               ? 'text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/30'
               : 'text-gray-400 dark:text-gray-500 cursor-not-allowed'
           }`}

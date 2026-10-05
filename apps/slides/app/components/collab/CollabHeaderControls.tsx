@@ -1,13 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   IconBrandGithub,
   IconCloudCheck,
   IconCloudOff,
+  IconLoader2,
   IconRefresh,
   IconSparkles,
 } from '@tabler/icons-react';
 
 import SaveVersionPopover from './SaveVersionPopover';
+import { checkpointErrorReason } from './checkpointReason';
 
 import {
   SYNC_STATUS_LABEL,
@@ -23,15 +25,27 @@ import { useDisplayedSyncStatus } from '~/hooks/useDisplayedSyncStatus';
 /** Avatars shown before the rest collapse into "+N". */
 const MAX_AVATARS = 4;
 
-const statusStyle: Record<SyncStatus, string> = {
+/** What the header can show: the sync status, or that the first connection is still being made. */
+type ShownStatus = SyncStatus | 'connecting';
+
+const STATUS_LABEL: Record<ShownStatus, string> = {
+  ...SYNC_STATUS_LABEL,
+  connecting: 'Connecting',
+} as Record<ShownStatus, string>;
+
+const statusStyle: Record<ShownStatus, string> = {
   synced: 'text-green-600 dark:text-green-400',
   syncing: 'text-gray-500 dark:text-gray-400',
+  connecting: 'text-gray-500 dark:text-gray-400',
   offline: 'text-amber-600 dark:text-amber-400',
 };
 
-function StatusIcon({ status }: { status: SyncStatus }) {
+function StatusIcon({ status }: { status: ShownStatus }) {
   if (status === 'synced') return <IconCloudCheck size={16} aria-hidden />;
   if (status === 'offline') return <IconCloudOff size={16} aria-hidden />;
+  if (status === 'connecting') {
+    return <IconLoader2 size={16} className="motion-safe:animate-spin" aria-hidden />;
+  }
   return <IconRefresh size={16} className="motion-safe:animate-spin" aria-hidden />;
 }
 
@@ -83,6 +97,32 @@ export function PeerAvatar({
 }
 
 /**
+ * What the saved line announces: only a new checkpoint outcome (saved, or
+ * not saved), never the relative time re-rendering, and nothing on load.
+ */
+function useSavedAnnouncement(
+  checkpoint: LiveCheckpoint | null,
+  tone: 'saved' | 'unsaved' | null
+): string {
+  const key = checkpoint
+    ? `${checkpoint.at}|${checkpoint.commit ?? ''}|${checkpoint.error ?? ''}`
+    : '';
+  const [announcement, setAnnouncement] = useState('');
+  const lastKey = useRef<string | null>(null);
+  useEffect(() => {
+    if (!tone) return;
+    if (lastKey.current === null) {
+      lastKey.current = key;
+      return;
+    }
+    if (lastKey.current === key) return;
+    lastKey.current = key;
+    setAnnouncement(tone === 'saved' ? 'Saved to GitHub' : 'Not saved to GitHub yet');
+  }, [key, tone]);
+  return announcement;
+}
+
+/**
  * The live deck's header controls: who is in the deck, whether this
  * browser's edits have reached the server, and "Save version".
  */
@@ -94,7 +134,8 @@ export default function CollabHeaderControls({
   savingVersion,
 }: {
   peers: CollabPeer[];
-  syncStatus: SyncStatus;
+  /** `connecting` while the first connection is being made (nothing is wrong yet). */
+  syncStatus: ShownStatus;
   /** The last checkpoint covering this deck (null before anything is known). */
   checkpoint?: LiveCheckpoint | null;
   /** Null while a version cannot be asked for (refused, not synced). */
@@ -103,8 +144,12 @@ export default function CollabHeaderControls({
 }) {
   const now = useNow(30_000);
   const saved = savedToGitHubStatus(checkpoint, now);
+  const savedTitle = checkpoint?.error ? checkpointErrorReason(checkpoint.error) : saved?.title;
+  const savedAnnouncement = useSavedAnnouncement(checkpoint, saved?.tone ?? null);
   // Debounced for display only: a keystroke's round trip never flashes it.
-  const shownStatus = useDisplayedSyncStatus(syncStatus);
+  // The first connection shows as it is, never as offline.
+  const debounced = useDisplayedSyncStatus(syncStatus === 'connecting' ? 'syncing' : syncStatus);
+  const shownStatus: ShownStatus = syncStatus === 'connecting' ? 'connecting' : debounced;
   const shown = peers.slice(0, MAX_AVATARS);
   const hidden = peers.slice(MAX_AVATARS);
 
@@ -136,26 +181,31 @@ export default function CollabHeaderControls({
         data-status={shownStatus}
       >
         <StatusIcon status={shownStatus} />
-        {SYNC_STATUS_LABEL[shownStatus]}
+        {STATUS_LABEL[shownStatus]}
       </span>
 
       {saved && (
+        // Below md the line is its icon (the label stays for screen readers
+        // and in the tooltip); its relative time is never a live region.
         <span
-          role="status"
-          aria-live="polite"
-          title={saved.title}
+          title={savedTitle ? `${saved.label} · ${savedTitle}` : saved.label}
+          tabIndex={0}
           data-testid="live-saved-status"
           data-tone={saved.tone}
-          className={`hidden md:flex items-center gap-1 ${
+          className={`flex items-center gap-1 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-400 ${
             saved.tone === 'saved'
               ? 'text-gray-500 dark:text-gray-400'
               : 'text-amber-600 dark:text-amber-400'
           }`}
         >
           <IconBrandGithub size={14} aria-hidden />
-          {saved.label}
+          <span className="sr-only md:not-sr-only">{saved.label}</span>
+          {savedTitle && <span className="sr-only">{`: ${savedTitle}`}</span>}
         </span>
       )}
+      <span className="sr-only" role="status" aria-live="polite" data-testid="live-saved-announce">
+        {savedAnnouncement}
+      </span>
 
       {onSaveVersion && <SaveVersionPopover onSave={onSaveVersion} saving={savingVersion} />}
     </div>
