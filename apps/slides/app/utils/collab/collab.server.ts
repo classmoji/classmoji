@@ -234,14 +234,15 @@ export async function checkpointBeforePresenting(
     // Never live: git has the deck.
     if (!row) return 'saved';
     if (row.pushed_version >= (target ?? row.version)) return 'saved';
-    if (
-      row.last_checkpoint_error &&
-      row.last_checkpoint_at &&
-      row.last_checkpoint_at.getTime() >= started
-    ) {
-      return 'error';
+    // A run that failed meanwhile may be retried (or overtaken by the next):
+    // keep waiting; only at the deadline does it say why it gave up.
+    if (Date.now() + pollMs > started + timeoutMs) {
+      const failed =
+        row.last_checkpoint_error &&
+        row.last_checkpoint_at &&
+        row.last_checkpoint_at.getTime() >= started;
+      return failed ? 'error' : 'timeout';
     }
-    if (Date.now() + pollMs > started + timeoutMs) return 'timeout';
     await new Promise(resolve => setTimeout(resolve, pollMs));
   }
 }

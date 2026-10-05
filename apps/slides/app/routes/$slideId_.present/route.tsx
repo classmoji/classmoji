@@ -122,15 +122,17 @@ export const loader = async ({
 
   // Live classroom: save first (the editor's Present button already did, so
   // this is quick then; a direct link — the webapp's slides list — waits here).
-  if (isDeckSlide(slide)) {
-    await checkpointBeforePresenting(
+  const live =
+    isDeckSlide(slide) &&
+    (await checkpointBeforePresenting(
       slide,
       { userId: userId ?? 'unknown', name: userId ? await readEditorName(userId) : 'Teacher' },
       { timeoutMs: 10_000 }
-    );
-  }
+    )) !== 'not-live';
 
-  const contentResult = await readDeckText(slide, gitOrgLogin, repo, filePath, 'present');
+  const contentResult = await readDeckText(slide, gitOrgLogin, repo, filePath, 'present', {
+    skipCache: live,
+  });
 
   if (contentResult) {
     // Same read-side delivery pass the deck viewer runs: the stored document

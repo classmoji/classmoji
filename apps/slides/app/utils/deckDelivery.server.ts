@@ -201,14 +201,18 @@ export type DeliveryContext = ReturnType<typeof deckDeliveryContext>;
  */
 export function deckTextReadOptions(
   label: string,
-  opts: { fallback?: 'api-then-cdn' | 'cdn-only' } = {}
+  opts: { fallback?: 'api-then-cdn' | 'cdn-only'; skipCache?: boolean } = {}
 ): {
   label: string;
   fallback?: 'api-then-cdn' | 'cdn-only';
+  skipCache?: boolean;
 } {
   return {
     label,
     ...(opts.fallback ? { fallback: opts.fallback } : {}),
+    // A read right after a live deck's checkpoint: the contents API's
+    // per-process cache could still hold the version before it.
+    ...(opts.skipCache ? { skipCache: true } : {}),
   };
 }
 
@@ -220,6 +224,7 @@ export async function readDeckText(
   label: string,
   opts: {
     fallback?: 'api-then-cdn' | 'cdn-only';
+    skipCache?: boolean;
   } = {}
 ): Promise<{ content: string; source: 'worker' | 'api' | 'cdn'; sha: string | null } | null> {
   const classroom = slide.classroom;

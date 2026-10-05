@@ -80,15 +80,18 @@ export const loader = async ({
 
   // Live classroom, opened by someone who edits the deck: save first, as
   // presenting does (bounded; then what git has). Never on a student's load.
-  if (canEdit && userId) {
-    await checkpointBeforePresenting(
+  const live =
+    canEdit &&
+    Boolean(userId) &&
+    (await checkpointBeforePresenting(
       slide,
-      { userId, name: await readEditorName(userId) },
+      { userId: userId as string, name: await readEditorName(userId as string) },
       { timeoutMs: 10_000 }
-    );
-  }
+    )) !== 'not-live';
 
-  const contentResult = await readDeckText(slide, gitOrgLogin, repo, filePath, 'speaker');
+  const contentResult = await readDeckText(slide, gitOrgLogin, repo, filePath, 'speaker', {
+    skipCache: live,
+  });
 
   if (contentResult) {
     // Sign the deck's references BEFORE the fragment is cut out: the speaker
