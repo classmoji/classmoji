@@ -195,6 +195,8 @@ export interface SubmissionLike {
   closed_at?: Date | string | null;
   is_late_override?: boolean;
   provider_issue_number?: number | null;
+  /** Extension hours bought with tokens; refunds carry negative hours. */
+  token_transactions?: Array<{ hours_purchased?: number | null }> | null;
   assignment?: {
     id: string;
     title: string;

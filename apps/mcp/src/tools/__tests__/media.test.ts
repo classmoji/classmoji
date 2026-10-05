@@ -194,6 +194,17 @@ describe('file_upload_start', () => {
     });
   });
 
+  it('passes a deck folder through to the service and the audit row', async () => {
+    mocks.slideFindById.mockResolvedValue({ ...SLIDE, created_by: 'user-1' });
+    await start({ slide_id: SLIDE_ID, folder: 'games/minions', filename: 'game.js' });
+    expect(mocks.startStagedUpload.mock.calls[0][0]).toMatchObject({
+      filename: 'game.js',
+      folder: 'games/minions',
+      target: { type: 'slide', id: SLIDE_ID },
+    });
+    expect(JSON.stringify(mocks.auditCreate.mock.calls.at(-1)?.[0])).toContain('games/minions');
+  });
+
   it('answers a page in another classroom as not found (S1)', async () => {
     mocks.pageFindById.mockResolvedValue({ ...PAGE, classroom_id: 'other' });
     await expect(start({ page_id: PAGE_ID })).rejects.toMatchObject({ kind: 'not_found' });
@@ -301,6 +312,28 @@ describe('file_import_url', () => {
     });
     expect(payload).toMatchObject({ upload_id: UPLOAD_ID, status: 'placing' });
     expect(mocks.auditCreate).toHaveBeenCalledWith(expect.objectContaining({ action: 'CREATE' }));
+  });
+
+  it('passes a deck folder through to the service', async () => {
+    mocks.startUrlImport.mockResolvedValue({
+      uploadId: UPLOAD_ID,
+      filename: 'games/minions/game.js',
+      maxBytes: 1,
+    });
+    mocks.slideFindById.mockResolvedValue({ ...SLIDE, created_by: 'user-1' });
+    await fileImportUrlTool.handler(
+      {
+        classroom: 'org/cs',
+        slide_id: SLIDE_ID,
+        folder: 'games/minions',
+        url: 'https://example.com/game.js',
+      },
+      TEACHER
+    );
+    expect(mocks.startUrlImport.mock.calls[0][0]).toMatchObject({
+      folder: 'games/minions',
+      target: { type: 'slide', id: SLIDE_ID },
+    });
   });
 });
 

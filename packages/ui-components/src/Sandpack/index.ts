@@ -16,6 +16,9 @@ export {
   parseFromHtml,
   serializeToHtml,
   updateFilesInElement,
+  mergeEditedFiles,
+  syncEditedFiles,
+  SandpackEditTracker,
   createSandpackElement,
 } from './utils.ts';
 export {

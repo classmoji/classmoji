@@ -21,15 +21,23 @@ if [ -f ".devport" ]; then
   export PAGES_PORT=$((7100 + DEVPORT_ID * 10))
   export ADMIN_PORT=$((7500 + DEVPORT_ID * 10))
   export MCP_PORT=$((8100 + DEVPORT_ID * 10))
+  export COLLAB_PORT=$((7700 + DEVPORT_ID * 10))
 
-  # Export service URLs (these override .env values if needed)
+  # Export service URLs (these override .env values if needed).
+  # DEVPORT_PUBLIC_HOST (default localhost) is the host browsers use, e.g. a
+  # Tailscale IP to test from another device; server-only URLs stay on localhost.
+  PUBLIC_HOST="${DEVPORT_PUBLIC_HOST:-localhost}"
   export QUIZ_AGENT_URL="http://localhost:$QUIZ_AGENT_PORT"
   export AI_AGENT_URL="http://localhost:$QUIZ_AGENT_PORT"  # Alias for new name
-  export WEBAPP_URL="http://localhost:$WEBAPP_PORT"
-  export SLIDES_URL="http://localhost:$SLIDES_PORT"
-  export PAGES_URL="http://localhost:$PAGES_PORT"
-  export ADMIN_URL="http://localhost:$ADMIN_PORT"
-  export MCP_PUBLIC_URL="http://localhost:$MCP_PORT"
+  export WEBAPP_URL="http://$PUBLIC_HOST:$WEBAPP_PORT"
+  export SLIDES_URL="http://$PUBLIC_HOST:$SLIDES_PORT"
+  export PAGES_URL="http://$PUBLIC_HOST:$PAGES_PORT"
+  export ADMIN_URL="http://$PUBLIC_HOST:$ADMIN_PORT"
+  export MCP_PUBLIC_URL="http://$PUBLIC_HOST:$MCP_PORT"
+  export COLLAB_URL="http://localhost:$COLLAB_PORT"
+  export COLLAB_WS_URL="ws://$PUBLIC_HOST:$COLLAB_PORT"
+  # Dev-only shared secret for collab's internal API (see @classmoji/collab/env).
+  export COLLAB_INTERNAL_SECRET="${COLLAB_INTERNAL_SECRET:-classmoji-collab-dev-secret}"
 
   # Override DATABASE_URL with feature-specific DB
   DB_NAME="classmoji_${DEVPORT_NAME//-/_}"
@@ -37,7 +45,7 @@ if [ -f ".devport" ]; then
 
   echo "🔌 Devport $DEVPORT_ID ($DEVPORT_NAME) active"
   echo "   Webapp: $WEBAPP_PORT | Hook: $HOOK_PORT"
-  echo "   Quiz: $QUIZ_AGENT_PORT | Slides: $SLIDES_PORT | Pages: $PAGES_PORT | MCP: $MCP_PORT | Admin: $ADMIN_PORT | DB: $DB_NAME"
+  echo "   Quiz: $QUIZ_AGENT_PORT | Slides: $SLIDES_PORT | Pages: $PAGES_PORT | MCP: $MCP_PORT | Collab: $COLLAB_PORT | Admin: $ADMIN_PORT | DB: $DB_NAME"
 else
   # Default ports for main repo (ID=0)
   export WEBAPP_PORT=3000
@@ -47,6 +55,7 @@ else
   export PAGES_PORT=7100
   export ADMIN_PORT=7500
   export MCP_PORT=8100
+  export COLLAB_PORT=7700
 
   # Service URLs use defaults from .env
   export QUIZ_AGENT_URL="http://localhost:6000"
@@ -56,4 +65,7 @@ else
   export PAGES_URL="http://localhost:7100"
   export ADMIN_URL="http://localhost:7500"
   export MCP_PUBLIC_URL="http://localhost:8100"
+  export COLLAB_URL="http://localhost:7700"
+  export COLLAB_WS_URL="ws://localhost:7700"
+  export COLLAB_INTERNAL_SECRET="${COLLAB_INTERNAL_SECRET:-classmoji-collab-dev-secret}"
 fi

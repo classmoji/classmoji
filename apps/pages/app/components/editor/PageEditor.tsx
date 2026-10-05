@@ -20,6 +20,7 @@ import {
   BlockColorsItem,
 } from '@blocknote/react';
 import { BlockNoteView } from '@blocknote/mantine';
+import { syntaxHighlighter } from '@blocknote/code-block';
 import { filterSuggestionItems } from '@blocknote/core/extensions';
 import { en as defaultLocale } from '@blocknote/core/locales';
 import {
@@ -28,6 +29,12 @@ import {
   locales as multiColumnLocales,
 } from '@blocknote/xl-multi-column';
 import { toast } from 'react-toastify';
+import { withCollaboration } from '@blocknote/core/yjs';
+import type * as Y from 'yjs';
+import type { Awareness } from 'y-protocols/awareness';
+import { FRAGMENT } from '@classmoji/page-schema/constants';
+import { normalizeCodeBlockContent } from '@classmoji/page-schema';
+import type { CollabUser } from '@classmoji/collab';
 import { kindOfFilename, type UploadCapability } from '@classmoji/services/media/router';
 
 import {
@@ -36,6 +43,8 @@ import {
   type PageBlockInsertions,
 } from './blocks/index.tsx';
 import { editingSchema } from './blocks/editingSchema.ts';
+import { AGENT_CURSOR_LABEL_CSS, renderLiveCursor } from './collab/liveCursor.ts';
+import { reviveUndoManager, yUndoManagerOf } from './collab/yUndo.ts';
 import { ReplaceUrlItem, RemoveProfileImageItem } from './ReplaceUrlItem.tsx';
 import { AssetSrcSetContext, NO_SRC_SETS, type AssetSrcSets } from '~/hooks/useAssetSrcSets.ts';
 import {
@@ -69,6 +78,22 @@ const CustomDragHandleMenu = () => (
     <RemoveProfileImageItem>Remove Image</RemoveProfileImageItem>
   </DragHandleMenu>
 );
+
+/** What the page route can ask of a mounted editor. */
+export interface PageEditorHandle {
+  getContent: () => unknown;
+  getMarkdown?: () => string;
+}
+
+/**
+ * The live document an editor binds to, in a classroom that edits pages live.
+ * Made once per room by `useCollabSession` and handed in already synced.
+ */
+export interface PageEditorCollab {
+  doc: Y.Doc;
+  provider: { awareness: Awareness | null };
+  user: CollabUser;
+}
 
 /**
  * PageEditor — the main BlockNote-powered page editor.
@@ -120,6 +145,13 @@ interface PageEditorProps {
    * cap, and the server still redirects a file that belongs in media.
    */
   uploadCapability?: UploadCapability | null;
+  /**
+   * Live editing: bind to this document instead of `initialContent`. The
+   * blocks live in the doc's `FRAGMENT`, peers' cursors come through the
+   * provider's awareness, and undo/redo is Yjs's, per user. Must not change
+   * for a mounted editor — the parent keys the editor on the room.
+   */
+  collab?: PageEditorCollab | null;
 }
 
 const PageEditor = forwardRef(function PageEditor(
@@ -135,8 +167,9 @@ const PageEditor = forwardRef(function PageEditor(
     displayUrl,
     onAssetUploaded,
     uploadCapability = null,
+    collab = null,
   }: PageEditorProps,
-  ref: React.Ref<{ getContent: () => unknown }>
+  ref: React.Ref<PageEditorHandle>
 ) {
   const media = usePageMedia();
   const classroomId = media.classroomId;
@@ -252,26 +285,53 @@ const PageEditor = forwardRef(function PageEditor(
     },
     [pageId, onAssetUploaded, classroomId]
   );
+  // Code blocks as plain text: BlockNote 0.55 will not load a stored link
+  // inside one (see normalizeCodeBlockContent).
   const typedInitialContent =
     Array.isArray(initialContent) && initialContent.length > 0
-      ? (initialContent as PageBlockInsertions)
+      ? (normalizeCodeBlockContent(initialContent) as PageBlockInsertions)
       : undefined;
 
-  // Create the BlockNote editor with multi-column drop cursor + dictionary
+  // The options both modes share.
+  const baseOptions = {
+    // The shared schema with BlockNote's React file and audio blocks, whose
+    // "Loading..." ends when a refused upload does (see editingSchema.ts).
+    schema: editingSchema,
+    uploadFile,
+    // The one place a stored reference becomes a signed URL. BlockNote calls
+    // it per file block at render; the document it saves back is untouched.
+    ...(resolveFileUrl ? { resolveFileUrl } : {}),
+    dropCursor: multiColumnDropCursor,
+    dictionary: { ...defaultLocale, multi_column: multiColumnLocales.en },
+    // Shiki highlighting for code blocks (github-light/github-dark). Up to
+    // BlockNote 0.46 it came with the code block's options; 0.55 makes it an
+    // editor extension.
+    extensions: [syntaxHighlighter],
+  };
+
+  // Create the BlockNote editor with multi-column drop cursor + dictionary.
+  //
+  // Live: the document is the room's — never `initialContent` (the provider
+  // has already synced it into `collab.doc`). `withCollaboration` swaps
+  // ProseMirror's history for Yjs's undo manager, so undo only undoes this
+  // user's edits. Rebuilt only for a new document: anything else (a new
+  // `onChange` identity) would bind a second editor to the same fragment.
   const editor = useCreateBlockNote(
-    {
-      // The shared schema with BlockNote's React file and audio blocks, whose
-      // "Loading..." ends when a refused upload does (see editingSchema.ts).
-      schema: editingSchema,
-      initialContent: typedInitialContent,
-      uploadFile,
-      // The one place a stored reference becomes a signed URL. BlockNote calls
-      // it per file block at render; the document it saves back is untouched.
-      ...(resolveFileUrl ? { resolveFileUrl } : {}),
-      dropCursor: multiColumnDropCursor,
-      dictionary: { ...defaultLocale, multi_column: multiColumnLocales.en },
-    },
-    [onChange]
+    collab
+      ? withCollaboration({
+          ...baseOptions,
+          collaboration: {
+            provider: collab.provider as { awareness?: Awareness },
+            fragment: collab.doc.getXmlFragment(FRAGMENT),
+            user: { id: collab.user.id, name: collab.user.name, color: collab.user.color },
+            // A person's name tag shows while they move or type; an agent's
+            // stays for as long as it is present (liveCursor.ts).
+            showCursorLabels: 'activity',
+            renderCursor: user => renderLiveCursor(user),
+          },
+        })
+      : { ...baseOptions, initialContent: typedInitialContent },
+    collab ? [collab.doc] : [onChange]
   );
 
   editorRef.current = editor;
@@ -281,6 +341,8 @@ const PageEditor = forwardRef(function PageEditor(
     ref,
     () => ({
       getContent: () => editor.document,
+      // Plain text a person can paste anywhere (lossy by design).
+      getMarkdown: () => editor.blocksToMarkdownLossy(editor.document),
     }),
     [editor]
   );
@@ -293,6 +355,20 @@ const PageEditor = forwardRef(function PageEditor(
     onReady?.(editor.document);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once per editor instance
   }, [editor]);
+
+  // Live: undo keeps recording after BlockNote remounts the view (StrictMode,
+  // a change of `editable`, a plugin reconfigure), which destroys
+  // y-prosemirror's UndoManager. Revived now (this effect runs after the
+  // child's mount ref) and after every later mount.
+  const live = Boolean(collab);
+  useEffect(() => {
+    if (!live) return;
+    const revive = () => {
+      reviveUndoManager(yUndoManagerOf(editor.prosemirrorState as never));
+    };
+    revive();
+    return editor.onMount(revive);
+  }, [editor, live]);
 
   // Slash menu: default + multi-column + custom blocks
   const getAllSlashMenuItems = useMemo(() => {
@@ -376,6 +452,18 @@ const PageEditor = forwardRef(function PageEditor(
           font-size: 16px !important;
           line-height: 1.6 !important;
         }
+        /* A live caret beside a block with no text (an image, a divider):
+           it marks the block's top-left corner instead of adding a line
+           under it. */
+        .page-editor .bn-block:has(> .bn-collaboration-cursor__base) {
+          position: relative;
+        }
+        .page-editor .bn-block > .bn-collaboration-cursor__base {
+          position: absolute;
+          top: 0;
+          left: 0;
+        }
+        ${AGENT_CURSOR_LABEL_CSS}
         .page-editor h1,
         .page-editor h2,
         .page-editor h3 {

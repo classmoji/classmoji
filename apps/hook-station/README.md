@@ -12,6 +12,7 @@ Handlers are keyed `${X-GitHub-Event}.${action}` because GitHub reuses action wo
 |-------|--------------|
 | `push` on a student repo | Default branch only; bots and branch deletions ignored. Triggers `webhook-git_repo_push_handler` → `ClassmojiService.gitRepoAssignment.recordPush`, which stamps `closed_at` on every published `REPO`-mode submission for that repo (before the deadline plus purchased extensions; frozen once graded). |
 | `push` on a classroom content repo | Triggers `content-assets-sync` to refresh the classroom's path → SHA map (pages, slides). |
+| `push` on a classroom content repo with live editing (`collab_enabled`, or `collab_docs` rows left) | Also, fire-and-forget: each changed `<content_path>/content.json` (page) or `<content_path>/deck.json` (deck) not written by the checkpoint worker (Bot sender + `Classmoji-Collab:` trailer in the final paragraph; or `collab_docs.pushed_commit` equals the push head, unless forced) triggers the `collab-external` task (by id; `concurrencyKey` = classroom), which POSTs collab `/internal/:kind/:id/external { sha, before }` with retries. Truncated (2048+ commits) or forced pushes take their files from GitHub's compare API; if that is unavailable, every `collab_docs` row of the classroom is notified. See `src/collabExternal.ts`. |
 | `issues.closed` | `ISSUE`-mode submission: records the submission time. |
 | `issues.reopened` | Un-submits (clears `closed_at`). |
 | `issues.deleted` | Marks the submission's issue as deleted. |

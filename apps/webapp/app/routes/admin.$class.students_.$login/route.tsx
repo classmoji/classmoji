@@ -10,7 +10,10 @@ import {
   calculateAssignmentGrade,
   calculateGrades,
   calculateLetterGrade,
+  gradedItemValue,
+  isReleased,
   quizStanding,
+  type GradedItem,
   type LetterGradeMappingEntry,
   type OrganizationSettings,
 } from '@classmoji/utils';
@@ -19,9 +22,9 @@ import GradeBadges from '~/components/features/grading/GradeBadges';
 import { ASSIGNMENT_TYPE_META } from '~/components/features/assignments/AssignmentsTable';
 import { addAuditLog, addClassroomAuditLog } from '~/utils/helpers';
 import { requireClassroomStaff, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
-import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import { normalizeSchoolId } from '~/utils/schoolId';
 import { useGitWeb } from '~/hooks/useGitWeb';
+import { latePillText, quizPointsLost, quizScoreNote, repoPointsLost } from './reportLateness';
 import type { Route } from './+types/route';
 
 /**
@@ -65,7 +68,10 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id),
     ClassmojiService.letterGradeMapping.findByClassroomId(classroom.id),
     ClassmojiService.token.getBalance(classroom.id, studentId),
-    loadQuizzesVisible(classroom.id),
+    // The predicate the gradebook and the leaderboard use, so this report's
+    // total agrees with theirs. A failed lookup errors the page rather than
+    // silently dropping quizzes from the total.
+    ClassmojiService.entitlement.quizzesVisibleOrThrow(classroom.id),
   ]);
 
   // Where quizzes are hidden their assignments are no row here, and no attempt
@@ -73,18 +79,44 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const assignments = quizzesVisible
     ? publishedAssignments
     : publishedAssignments.filter(a => a.type !== 'QUIZ');
+  // Quizzes whose release date is still ahead: listed with when they open,
+  // and not yet counted among the assignments to grade.
+  const now = new Date();
+  const unopenedQuizIds = assignments
+    .filter(a => a.type === 'QUIZ' && !isReleased(a.release_at, now))
+    .map(a => a.id);
 
   // Quiz attempts for this student in one lookup, scored by each quiz's
   // grading strategy through the shared selector (the gradebook's rule), and
   // form responses one lookup each.
   const quizIds = assignments.flatMap(a => (a.type === 'QUIZ' && a.quiz ? [a.quiz.id] : []));
   const hasQuizzes = quizIds.length > 0;
-  const [quizAttempts, gradingStrategies] = await Promise.all([
+  const [quizAttempts, gradingStrategies, quizItemsByUser] = await Promise.all([
     hasQuizzes ? ClassmojiService.quizAttempt.findForUserByQuizIds(studentId, quizIds) : [],
     hasQuizzes
       ? ClassmojiService.quiz.findGradingStrategies(quizIds)
       : ({} as Record<string, string>),
+    // This student's quiz grade items: what each quiz adds to the total (the
+    // late-penalised score, a counted zero, the late hours).
+    hasQuizzes
+      ? ClassmojiService.quizGradeItems.loadQuizGradeItems({
+          classroomId: classroom.id,
+          quizzesVisible,
+          userIds: [studentId],
+        })
+      : new Map<string, GradedItem[]>(),
   ]);
+  const quizItems: GradedItem[] = (quizItemsByUser.get(studentId) ?? []).map(item => ({
+    assignment_id: item.assignment_id,
+    module_id: item.module_id,
+    weight: item.weight,
+    is_extra_credit: item.is_extra_credit,
+    grade: item.grade,
+    raw_grade: item.raw_grade,
+    counts_as_zero: item.counts_as_zero,
+    late_hours: item.late_hours,
+    counting_raw_percentage: item.counting_raw_percentage,
+  }));
   const quizStatus: Record<
     string,
     { attempted: boolean; completed: boolean; score: number | null }
@@ -144,6 +176,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     assignments,
     repoAssignments,
     quizStatus,
+    quizItems,
+    unopenedQuizIds,
     formStatus,
     emojiMappings,
     settings: { late_penalty_points_per_hour: settingsRow?.late_penalty_points_per_hour ?? 0 },
@@ -357,6 +391,8 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
     assignments,
     repoAssignments: repoAssignmentRows,
     quizStatus,
+    quizItems,
+    unopenedQuizIds,
     formStatus,
     emojiMappings,
     settings,
@@ -394,17 +430,44 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
       Object.values(repos) as Parameters<typeof calculateGrades>[0],
       mappings,
       orgSettings,
-      letters
+      letters,
+      quizItems
     );
-  }, [repoAssignments, mappings, orgSettings, letters]);
+  }, [repoAssignments, mappings, orgSettings, letters, quizItems]);
 
-  const gradedWeight = repoAssignments
-    .filter(ra => (ra.grades?.length ?? 0) > 0 && !ra.assignment.is_extra_credit)
-    .reduce((sum, ra) => sum + ra.assignment.weight, 0);
-  const gradedCount = repoAssignments.filter(ra => (ra.grades?.length ?? 0) > 0).length;
+  const quizItemByAssignment = useMemo(
+    () => new Map(quizItems.map(item => [item.assignment_id, item])),
+    [quizItems]
+  );
+  // A quiz is graded once it has a value in the total: a score or a counted 0.
+  const gradedQuizItems = quizItems.filter(item => gradedItemValue(item) !== null);
+  const gradedWeight =
+    repoAssignments
+      .filter(ra => (ra.grades?.length ?? 0) > 0 && !ra.assignment.is_extra_credit)
+      .reduce((sum, ra) => sum + ra.assignment.weight, 0) +
+    gradedQuizItems
+      .filter(item => !item.is_extra_credit)
+      .reduce((sum, item) => sum + item.weight, 0);
+  const gradedCount =
+    repoAssignments.filter(ra => (ra.grades?.length ?? 0) > 0).length + gradedQuizItems.length;
+  // A quiz that has not opened yet is nothing to grade so far.
+  const unopened = new Set(unopenedQuizIds);
+  const gradableCount = assignments.filter(
+    a => a.type === 'REPO' || (a.type === 'QUIZ' && !unopened.has(a.id))
+  ).length;
   const lateRows = repoAssignments.filter(ra => ra.is_late && !ra.is_late_override);
-  const lateHours = lateRows.reduce((sum, ra) => sum + (ra.num_late_hours ?? 0), 0);
-  const latePenalty = lateHours * orgSettings.late_penalty_points_per_hour;
+  const lateQuizItems = quizItems.filter(item => item.late_hours > 0);
+  const lateCount = lateRows.length + lateQuizItems.length;
+  const lateHours =
+    lateRows.reduce((sum, ra) => sum + (ra.num_late_hours ?? 0), 0) +
+    lateQuizItems.reduce((sum, item) => sum + item.late_hours, 0);
+  // The points the penalty actually took, as the rows show them.
+  const latePointsLost =
+    Math.round(
+      (lateRows.reduce((sum, ra) => sum + repoPointsLost(ra, mappings, orgSettings), 0) +
+        lateQuizItems.reduce((sum, item) => sum + quizPointsLost(item), 0)) *
+        10
+    ) / 10;
 
   const computedLetter =
     totals.finalNumericGrade >= 0 ? calculateLetterGrade(totals.finalNumericGrade, letters) : null;
@@ -480,8 +543,7 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
         else if (late)
           status = (
             <Pill tone="amber">
-              Late {ra.num_late_hours}h · −
-              {(ra.num_late_hours ?? 0) * orgSettings.late_penalty_points_per_hour} pts
+              {latePillText(ra.num_late_hours ?? 0, repoPointsLost(ra, mappings, orgSettings))}
             </Pill>
           );
         else if (ra.is_late_override) status = <Pill tone="grey">Late waived</Pill>;
@@ -553,16 +615,38 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
       }
     } else if (a.type === 'QUIZ') {
       const q = quizStatus[a.id];
+      const item = quizItemByAssignment.get(a.id);
+      const value = item ? gradedItemValue(item) : null;
       href = a.quiz ? `${base}/quizzes/${a.quiz.id}` : href;
-      status = !q?.attempted ? (
-        <Pill tone="grey">Not attempted</Pill>
-      ) : q.completed ? (
-        <Pill tone="green">Completed</Pill>
-      ) : (
-        <Pill tone="blue">In progress</Pill>
-      );
-      if (q?.score !== null && q?.score !== undefined)
+      if (item?.counts_as_zero) {
+        // Counts 0, whether or not an attempt is still running.
+        status = <Pill tone="red">Missing</Pill>;
+      } else if (item && item.late_hours > 0) {
+        status = <Pill tone="amber">{latePillText(item.late_hours, quizPointsLost(item))}</Pill>;
+      } else if (!item && unopened.has(a.id)) {
+        status = <Pill tone="grey">Opens {fmt(a.release_at) ?? ''}</Pill>;
+      } else {
+        status = !q?.attempted ? (
+          <Pill tone="grey">Not attempted</Pill>
+        ) : q.completed ? (
+          <Pill tone="green">Completed</Pill>
+        ) : (
+          <Pill tone="blue">In progress</Pill>
+        );
+      }
+      if (item && value !== null) {
+        // What the total counts: the late-penalised score, or the counted 0.
+        // The note quotes the counting attempt's own score before the penalty.
+        grade = (
+          <Tooltip title={quizScoreNote(item, value)}>
+            <span className="inline-flex items-center justify-center min-w-9 h-8 px-2 rounded-lg bg-[#6c8fae] text-white text-sm font-bold tabular-nums">
+              {Math.round(value * 10) / 10}
+            </span>
+          </Tooltip>
+        );
+      } else if (q?.score !== null && q?.score !== undefined) {
         grade = <span className="text-sm font-semibold tabular-nums">{q.score}</span>;
+      }
     } else if (a.type === 'FORM') {
       const f = formStatus[a.id];
       href = `${base}/forms${a.form?.slug ? `/${encodeURIComponent(a.form.slug)}` : ''}`;
@@ -669,15 +753,16 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
         <Tile label="Graded so far">
           {gradedCount}{' '}
           <span className="text-sm font-medium text-ink-3">
-            of {assignments.filter(a => a.type === 'REPO').length} · {Math.round(gradedWeight)}%
-            weight
+            of {gradableCount} · {Math.round(gradedWeight)}% weight
           </span>
         </Tile>
         <Tile label="Late">
-          <span className={lateRows.length ? 'text-amber-600' : undefined}>{lateRows.length}</span>{' '}
-          {lateRows.length > 0 && (
+          <span className={lateCount ? 'text-amber-600 dark:text-amber-400' : undefined}>
+            {lateCount}
+          </span>{' '}
+          {lateCount > 0 && (
             <span className="text-sm font-medium text-ink-3">
-              · {lateHours}h, −{latePenalty} pts
+              · {lateHours}h{latePointsLost > 0 ? `, −${latePointsLost} pts` : ''}
             </span>
           )}
         </Tile>

@@ -70,6 +70,20 @@ export { clearKeyCache, deriveKey, signCanonical, verifyCanonical } from './deri
 export type { RenderTokenFields, RenderVerification } from './render.ts';
 export { RENDER_TOKEN_TTL_SECONDS, signRenderToken, verifyRenderToken } from './render.ts';
 
+export type {
+  ViewCanonicalFields,
+  ViewDocKind,
+  ViewTokenFields,
+  ViewVerification,
+} from './view.ts';
+export {
+  VIEW_TOKEN_TTL_SECONDS,
+  isViewTarget,
+  signViewToken,
+  verifyViewToken,
+  viewCanonicalString,
+} from './view.ts';
+
 export type { BlobRef, MediaRef, SrcSet, SrcSetRef, ThemeRef } from './urls.ts';
 export { signBlobUrl, signMediaUrl, signSrcSet, signThemeBase } from './urls.ts';
 

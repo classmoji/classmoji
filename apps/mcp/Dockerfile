@@ -6,11 +6,13 @@ FROM node:22-alpine AS build
 
 WORKDIR /app
 
+# Build host only (4 GB): this stage's ENV does not reach the runtime image.
 ENV NODE_OPTIONS="--max-old-space-size=2048"
 
 # Manifests only, so the npm ci layer stays cached until deps actually change.
 COPY package.json package-lock.json .npmrc ./
 COPY apps/admin/package.json apps/admin/
+COPY apps/collab/package.json apps/collab/
 COPY apps/ai-agent/package.jso[n] apps/ai-agent/
 COPY apps/content/package.json apps/content/
 COPY apps/hook-station/package.json apps/hook-station/
@@ -20,10 +22,12 @@ COPY apps/site/package.json apps/site/
 COPY apps/slides/package.json apps/slides/
 COPY apps/webapp/package.json apps/webapp/
 COPY packages/auth/package.json packages/auth/
+COPY packages/collab/package.json packages/collab/
 COPY packages/content/package.json packages/content/
 COPY packages/content-signing/package.json packages/content-signing/
 COPY packages/database/package.json packages/database/
 COPY packages/eslint-config/package.json packages/eslint-config/
+COPY packages/page-schema/package.json packages/page-schema/
 COPY packages/services/package.json packages/services/
 COPY packages/tasks/package.json packages/tasks/
 COPY packages/ui-components/package.json packages/ui-components/
@@ -63,5 +67,9 @@ COPY --from=build /app/apps/mcp ./apps/mcp
 # ENABLE_TEST_LOGIN=true, and CI (mcp-devmint-guard) enforces its absence here.
 ENV MCP_PORT=8100
 ENV NODE_ENV=production
+# The VM has 512 MB (fly.toml): keep the heap well inside it, leaving room
+# for buffers and the rest of the process. The render caches are byte-capped
+# (≤ 64 MB of images) to fit.
+ENV NODE_OPTIONS="--max-old-space-size=384"
 
 CMD ["node", "--experimental-strip-types", "apps/mcp/src/index.ts"]

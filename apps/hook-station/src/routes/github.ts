@@ -3,6 +3,14 @@ import type { WebhookEvent } from '@octokit/webhooks-types';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import Tasks from '@classmoji/tasks';
 import getPrisma from '@classmoji/database';
+import {
+  createCollabExternalTrigger,
+  createGithubCompare,
+  notifyCollabOfPush,
+  type CollabPrisma,
+} from '../collabExternal.ts';
+
+const triggerCollabExternal = createCollabExternalTrigger();
 
 const githubWebhookSecret = process.env.GITHUB_WEBHOOK_SECRET;
 if (!githubWebhookSecret) {
@@ -138,16 +146,25 @@ const githubWebhookHandlers: Record<string, (data: WebhookEvent) => Promise<void
 };
 
 /**
- * GitHub caps a push payload's `commits[]` at 20, silently.
- *
- * A push of 20 or more commits therefore has a diff we cannot see the whole
- * of, and applying the visible part would leave the map holding rows for paths
- * the invisible commits changed or deleted. That case escalates to a full
- * re-read on the task side; `complete` is how it gets told.
+ * GitHub's push payload holds at most 2048 commits in `commits[]` (webhook
+ * docs, "push"); a push with more has a diff we cannot see the whole of.
  */
-const GITHUB_COMMIT_CAP = 20;
+const GITHUB_PUSH_COMMIT_CAP = 2048;
+
+/**
+ * The asset sync applies a push incrementally only below this many commits;
+ * at or above it, it re-reads the whole tree (`complete: false`).
+ *
+ * This used to be documented as GitHub's cap. It isn't (see above), but the
+ * threshold stays: a full re-read is always correct, only slower, and moving
+ * the line to 2048 changes the asset sync's behaviour, which deserves its own
+ * change and its own verification.
+ */
+const ASSET_SYNC_INCREMENTAL_BELOW = 20;
 
 interface PushCommit {
+  id?: string;
+  message?: string;
   added?: string[];
   modified?: string[];
   removed?: string[];
@@ -168,7 +185,7 @@ interface PushEventPayload {
     id?: number | string;
     name?: string;
     default_branch?: string;
-    owner?: { login?: string; name?: string };
+    owner?: { id?: number | string; login?: string; name?: string };
     /** When GitHub's servers received the push (epoch seconds). Server-set. */
     pushed_at?: number | string;
   };
@@ -234,8 +251,9 @@ function aggregateChanges(commits: PushCommit[]): {
  * own autograde workflow commits to every student repo whenever tests change,
  * and those must not count as anyone submitting.
  *
- * To a classroom's CONTENT repo it refreshes that classroom's asset map. No
- * classroom simply means "not ours to care about", never an error.
+ * To a classroom's CONTENT repo it refreshes that classroom's asset map and,
+ * for a live-editing classroom, hands changed pages/decks to the collab
+ * service. No classroom simply means "not ours to care about", never an error.
  *
  * Only the repo's DEFAULT branch counts for either: pages render from it, and
  * a feature branch is not a submission until it lands.
@@ -244,6 +262,7 @@ async function handlePush(data: PushEventPayload): Promise<void> {
   const repo = data.repository?.name;
   const owner = data.repository?.owner?.login;
   const defaultBranch = data.repository?.default_branch;
+  const ownerId = data.repository?.owner?.id;
 
   if (!repo || !owner || !defaultBranch) return;
   if (data.ref !== `refs/heads/${defaultBranch}`) return;
@@ -267,13 +286,49 @@ async function handlePush(data: PushEventPayload): Promise<void> {
   }
 
   const classroom = await getPrisma().classroom.findFirst({
-    where: { content_repo: repo, git_organization: { login: owner } },
-    select: { id: true },
+    where: {
+      content_repo: repo,
+      // The org by GitHub's immutable id when the payload has it (a renamed
+      // org keeps it; its login changes), else by login.
+      git_organization:
+        ownerId != null ? { provider: 'GITHUB', provider_id: String(ownerId) } : { login: owner },
+    },
+    select: {
+      id: true,
+      collab_enabled: true,
+      git_organization: {
+        select: { provider: true, github_installation_id: true, login: true },
+      },
+    },
   });
 
   if (!classroom) return;
 
   const commits = data.commits ?? [];
+
+  // Live editing: tell the collab service about an outside push so the live
+  // doc merges it in (see collabExternal.ts). Runs for a flagged classroom and
+  // for one with leftover collab_docs rows (notify checks). Fire-and-forget
+  // and started first, so neither side can hold up or break the other.
+  if (!data.deleted && data.after) {
+    void notifyCollabOfPush(
+      {
+        classroomId: classroom.id,
+        collabEnabled: classroom.collab_enabled,
+        after: data.after,
+        before: data.before ?? null,
+        commits,
+        complete: commits.length < GITHUB_PUSH_COMMIT_CAP,
+        forced: Boolean(data.forced),
+        sender: data.sender,
+      },
+      {
+        prisma: getPrisma() satisfies CollabPrisma,
+        trigger: triggerCollabExternal,
+        compare: createGithubCompare(classroom.git_organization, owner, repo),
+      }
+    );
+  }
 
   await Tasks.contentAssetsSyncTask.trigger(
     {
@@ -283,7 +338,7 @@ async function handlePush(data: PushEventPayload): Promise<void> {
       // A force-push rewrites history, so the commits listed are not a diff
       // against what we last synced and cannot be applied incrementally.
       forced: Boolean(data.forced),
-      complete: commits.length < GITHUB_COMMIT_CAP,
+      complete: commits.length < ASSET_SYNC_INCREMENTAL_BELOW,
       // The commits this push spans. `before` is the only way the sync can tell
       // that an EARLIER delivery went missing: a push whose parent is not the
       // commit the map is level with proves the repo moved unseen, and that run

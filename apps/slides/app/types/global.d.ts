@@ -15,10 +15,11 @@ interface RevealApi {
   on(event: string, callback: Function): void;
   // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type -- Reveal.js event callbacks have varying signatures per event
   off(event: string, callback: Function): void;
-  getIndices(): { h: number; v: number; f?: number };
+  getIndices(slide?: HTMLElement): { h: number; v: number; f?: number };
   getSlide(h: number, v: number): HTMLElement | null;
   getCurrentSlide(): HTMLElement;
   getSlidesElement(): HTMLElement | null;
+  getRevealElement?(): HTMLElement | null;
   getScale(): number;
   configure(options: Record<string, unknown>): void;
 }

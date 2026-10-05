@@ -226,10 +226,12 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       // A plain date, which dayjs parses as local midnight on either side.
       weekStart: weekStart.format('YYYY-MM-DD'),
       weekEvents,
-      // The card shows no repo details, so none are sent.
+      // The card shows no repo details, so none are sent. Every row keeps the
+      // hours its student bought (repo or quiz), so a row inside them is not
+      // overdue.
       upNext: ClassmojiService.studentCoursework
         .upNext(coursework)
-        .map(({ repo, ...row }) => ({ ...row, extensionHours: repo?.extensionHours ?? 0 })),
+        .map(({ repo: _repo, ...row }): UpNextRow => row),
       viewerIsStudent: membership?.role === 'STUDENT',
       feedback,
       team,

@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle } from 'react';
 import { handleCodeBlockTab, handleCodeBlockEnter } from './properties/utils/codeBlockUtils';
+import {
+  neutralizeHtmlBlockFrames,
+  sanitizeSvgBlocks,
+} from '@classmoji/services/slides/runtime-attrs';
 import { stripMediaRefs } from '~/utils/mediaRefs';
+import { cleanupEditorContainer } from '~/utils/editorCleanup';
+import { lockSourceBlockContent } from '~/utils/collab/bridgeDom';
 
 // Built-in Reveal.js themes (exported for use in SlideToolbar)
 export const BUILTIN_THEMES = [
@@ -59,6 +65,8 @@ interface RevealSlidesProps {
   onRevealReady?: (deck: RevealApi | null) => void;
   customThemes?: CustomTheme[];
   sharedThemes?: SharedTheme[];
+  /** Live editing: whether a section may be made editable (false = someone else holds it). */
+  sectionEditable?: (section: Element) => boolean;
 }
 
 export interface RevealSlidesHandle {
@@ -115,6 +123,7 @@ const RevealSlides = forwardRef(function RevealSlides(
     onRevealReady,
     customThemes = [], // Custom themes with cssUrl for loading
     sharedThemes = [], // Shared themes from slides.com imports (with lib/ folder)
+    sectionEditable,
   }: RevealSlidesProps,
   ref: React.Ref<RevealSlidesHandle>
 ) {
@@ -124,6 +133,8 @@ const RevealSlides = forwardRef(function RevealSlides(
   // below (which would destroy and rebuild the deck).
   const onRevealReadyRef = useRef(onRevealReady);
   onRevealReadyRef.current = onRevealReady;
+  const sectionEditableRef = useRef(sectionEditable);
+  sectionEditableRef.current = sectionEditable;
   const [loading, setLoading] = useState(!initialContent && !initialError);
   const [error, setError] = useState(initialError);
   const [htmlContent, setHtmlContent] = useState<string | null>(null);
@@ -292,6 +303,11 @@ const RevealSlides = forwardRef(function RevealSlides(
         el.removeAttribute('contenteditable');
       });
 
+      // An html block's frame loads only in its sandbox; svg blocks are held to
+      // their lists (deckBlocks.ts).
+      neutralizeHtmlBlockFrames(container);
+      sanitizeSvgBlocks(container);
+
       // When editing, strip highlight.js spans from code blocks
       // This allows clean editing - highlighting will be re-applied on save/view
       if (isEditing) {
@@ -447,7 +463,8 @@ const RevealSlides = forwardRef(function RevealSlides(
 
         const slides = deckRef.current.querySelectorAll('section');
         slides.forEach((slide: Element) => {
-          slide.setAttribute('contenteditable', 'true');
+          const editable = sectionEditableRef.current?.(slide) ?? true;
+          slide.setAttribute('contenteditable', editable ? 'true' : 'false');
           // Add editing-mode class for sl-block visual feedback
           slide.classList.add('editing-mode');
           // Add visual indicator for hidden slides
@@ -458,6 +475,8 @@ const RevealSlides = forwardRef(function RevealSlides(
             onContentChange?.();
           });
         });
+        // svg and html blocks are edited from the inspector, not typed into.
+        lockSourceBlockContent(deckRef.current);
 
         // Handle Tab and Enter in code blocks
         // We attach to the deck because contenteditable is on <section>, not <code>
@@ -544,82 +563,10 @@ const RevealSlides = forwardRef(function RevealSlides(
     // Clone the slides to clean up without affecting the live DOM
     const slidesClone = slidesDiv.cloneNode(true) as HTMLElement;
 
-    // Remove contenteditable attributes added during editing
-    // These shouldn't be persisted to the saved HTML
-    slidesClone.querySelectorAll('[contenteditable]').forEach((el: Element) => {
-      el.removeAttribute('contenteditable');
-    });
-
-    // Strip highlight.js spans from code blocks - save plain text only
-    // This ensures clean HTML that can be re-highlighted on view
-    slidesClone.querySelectorAll('pre code').forEach((codeEl: Element) => {
-      const plainText = codeEl.textContent || '';
-      // Escape HTML to preserve code content correctly
-      // (textContent returns decoded chars like <, setting innerHTML would interpret them)
-      const escaped = plainText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      codeEl.innerHTML = escaped;
-      codeEl.classList.remove('hljs');
-    });
-
-    // Clean up Sandpack sl-blocks - the entire sl-block-content needs to be rebuilt
-    // When Sandpack renders, it can create text nodes and other content throughout the block
-    // We rebuild the entire structure to ensure only clean HTML is saved
-    slidesClone
-      .querySelectorAll('.sl-block[data-block-type="sandpack"]')
-      .forEach((block: Element) => {
-        const embed = block.querySelector('.sandpack-embed') as HTMLElement | null;
-        const scriptTag = embed?.querySelector('script[data-sandpack-files]');
-
-        // Remove invalid blocks (no sandpack-embed or no script tag)
-        // These can be created by corrupted save/load cycles
-        if (!embed || !scriptTag) {
-          block.remove();
-          return;
-        }
-
-        // Extract the JSON content and all data attributes
-        const filesJson = scriptTag.textContent;
-        const template = embed.dataset.template || 'vanilla';
-        const theme = embed.dataset.theme || 'auto';
-        const layout = embed.dataset.layout || 'preview-right';
-        const showTabs = embed.dataset.showTabs;
-        const showLineNumbers = embed.dataset.showLineNumbers;
-        const showConsole = embed.dataset.showConsole;
-        const readOnly = embed.dataset.readOnly;
-        const editorWidth = embed.dataset.editorWidth;
-
-        // Rebuild sl-block-content with clean sandpack-embed
-        const contentDiv = block.querySelector('.sl-block-content');
-        if (contentDiv) {
-          // Build data attributes string
-          let dataAttrs = `data-template="${template}" data-theme="${theme}" data-layout="${layout}"`;
-          if (showTabs === 'false') dataAttrs += ' data-show-tabs="false"';
-          if (showLineNumbers === 'false') dataAttrs += ' data-show-line-numbers="false"';
-          if (showConsole === 'true') dataAttrs += ' data-show-console="true"';
-          if (readOnly === 'true') dataAttrs += ' data-read-only="true"';
-          if (editorWidth && editorWidth !== '50')
-            dataAttrs += ` data-editor-width="${editorWidth}"`;
-
-          // Escape </script> in JSON to prevent innerHTML parsing issues
-          // The JSON may contain </script> tags (e.g., in HTML file content)
-          // which would prematurely close our script tag when parsed
-          const safeJson = filesJson.replace(/<\/script>/gi, '<\\/script>');
-
-          // Replace entire content with clean HTML
-          contentDiv.innerHTML = `<div class="sandpack-embed" ${dataAttrs}><script type="application/json" data-sandpack-files>${safeJson}</script></div>`;
-        }
-      });
-
-    // Remove any Reveal.js runtime classes/attributes that shouldn't be saved
-    slidesClone.querySelectorAll('.present, .past, .future').forEach((el: Element) => {
-      el.classList.remove('present', 'past', 'future');
-    });
-
-    // Reveal paints `visible` / `current-fragment` on fragments as the presenter
-    // steps through them — runtime paint that must never persist (keep `fragment`).
-    slidesClone.querySelectorAll('.fragment').forEach((el: Element) => {
-      el.classList.remove('visible', 'current-fragment');
-    });
+    // Strip editor/runtime additions (contenteditable, hljs spans, the live
+    // Sandpack mounts, Reveal paint). The same cleanup the diff-at-save
+    // snapshot runs on both sides (deckOpsDiff), so the two always agree.
+    cleanupEditorContainer(slidesClone);
 
     // Build data attributes for theme settings (single theme)
     const revealDiv = deckRef.current;

@@ -40,43 +40,22 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   }
 
   const prisma = getPrisma();
-  const totalRepoAssignmentsPromise = prisma.gitRepoAssignment.count({
-    where: { git_repo: { classroom: { slug: classSlug! } } },
-  });
   const submittedRepoAssignmentsPromise = prisma.gitRepoAssignment.count({
     where: {
       git_repo: { classroom: { slug: classSlug! } },
       status: 'CLOSED',
     },
   });
-  const lateRepoAssignmentsPromise = prisma.gitRepoAssignment
-    .findMany({
-      where: { git_repo: { classroom: { slug: classSlug! } } },
-      select: {
-        closed_at: true,
-        is_late_override: true,
-        assignment: { select: { student_deadline: true } },
-      },
-    })
-    .then(
-      list =>
-        list.filter(
-          r =>
-            r.is_late_override ||
-            Boolean(
-              r.closed_at &&
-              r.assignment.student_deadline &&
-              r.closed_at > r.assignment.student_deadline
-            )
-        ).length
-    );
+  // One read for the late tile, the late percentage and the total: late is
+  // after the deadline plus any extension hours the student bought.
+  const lateCountPromise = ClassmojiService.gitRepoAssignment.getLateCount(classSlug!);
 
   const dataPromise = Promise.all([
     ClassmojiService.classroomMembership.findUsersByRole(classroom.id, 'STUDENT'),
     ClassmojiService.helper.calculateClassLeaderboard(classSlug!),
     ClassmojiService.gitRepoAssignment.getGradingProgress(classSlug!),
     ClassmojiService.gitRepoAssignment.getCompletionProgress(classSlug!),
-    ClassmojiService.gitRepoAssignment.getLatePercentage(classSlug!),
+    lateCountPromise.then(ClassmojiService.gitRepoAssignment.latePercentage),
     ClassmojiService.gitRepoAssignment.findRecentlyClosed(
       classSlug!,
       dayjs().subtract(10, 'day').toDate(),
@@ -84,9 +63,9 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     ),
     ClassmojiService.helper.findClassroomGradingProgressPerAssignment(classroom.id),
     ClassmojiService.gitRepoAssignmentGrader.findGradersProgress(classroom.id),
-    totalRepoAssignmentsPromise,
+    lateCountPromise.then(({ total }) => total),
     submittedRepoAssignmentsPromise,
-    lateRepoAssignmentsPromise,
+    lateCountPromise.then(({ late }) => late),
   ] as const);
 
   const analyticsPromise = Promise.all([
@@ -321,10 +300,7 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
 
             return (
               <>
-                <div
-                  data-tour="dashboard-stats"
-                  className="grid grid-cols-2 lg:grid-cols-4 gap-4"
-                >
+                <div data-tour="dashboard-stats" className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                   <StatItem
                     statKey="students"
                     label="Students"

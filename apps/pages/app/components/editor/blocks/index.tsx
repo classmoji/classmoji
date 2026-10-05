@@ -1,11 +1,6 @@
-import {
-  BlockNoteSchema,
-  defaultBlockSpecs,
-  createCodeBlockSpec,
-  type BlockNoteEditor,
-} from '@blocknote/core';
+import { BlockNoteSchema, type BlockNoteEditor } from '@blocknote/core';
 import { multiColumnSchema } from '@blocknote/xl-multi-column';
-import { codeBlockOptions } from '@blocknote/code-block';
+import { createPageCodeBlockSpec, pageDefaultBlockSpecs } from '@classmoji/page-schema';
 import {
   IconBulb,
   IconTerminal,
@@ -38,6 +33,13 @@ import { ResponsiveImage } from './ImageBlock.tsx';
  *
  * Custom blocks (8): callout, terminal, profile, divider, embed, video, pageLink,
  * navGrid
+ *
+ * Every block's CONFIG (type, propSchema, content) comes from
+ * @classmoji/page-schema; this file attaches the React renderers. The collab
+ * server and the git worker build the same schema without React from the same
+ * configs (`createPageSchema()`), and tests/unit/page-schema-parity.spec.ts
+ * pins the two ProseMirror schemas to each other. A config change there means
+ * a SCHEMA_VERSION bump.
  */
 // Remove video, codeBlock and image from default blocks. The first two are
 // replaced; `image` is replaced by the same block with responsive candidates
@@ -48,18 +50,13 @@ import { ResponsiveImage } from './ImageBlock.tsx';
 // as every file block, so a large recording on a Pro classroom lands in media
 // and a small one stays in the repository, and it plays through
 // `resolveFileUrl` like the image block's picture does.
-const {
-  video: _defaultVideo,
-  codeBlock: _defaultCodeBlock,
-  image: _defaultImage,
-  ...filteredDefaultBlockSpecs
-} = defaultBlockSpecs;
+const filteredDefaultBlockSpecs = pageDefaultBlockSpecs();
 
 export const schema = BlockNoteSchema.create({
   blockSpecs: {
     ...filteredDefaultBlockSpecs,
     // Override default code block with syntax highlighting
-    codeBlock: createCodeBlockSpec(codeBlockOptions),
+    codeBlock: createPageCodeBlockSpec(),
     // Same block, same wrapper, same parse — plus srcset/sizes at render time.
     image: ResponsiveImage(),
     ...multiColumnSchema.blockSpecs,

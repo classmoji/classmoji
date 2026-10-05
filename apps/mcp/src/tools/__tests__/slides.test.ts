@@ -13,6 +13,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ToolContext } from '../../mcp/registry.ts';
 
+// slide_delete asks whether the deck is edited live (classroom flag or a
+// collab_docs row) before deleting; here it never is.
+vi.mock('@classmoji/database', () => ({
+  default: () => ({
+    classroom: { findUnique: async () => ({ collab_enabled: false }) },
+    collabDoc: { findUnique: async () => null },
+  }),
+}));
+
 const mocks = vi.hoisted(() => ({
   slideFindById: vi.fn(),
   findByClassroomId: vi.fn(),

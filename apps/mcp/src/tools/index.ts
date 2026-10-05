@@ -50,6 +50,9 @@ import {
   deckPreviewAcceptTool,
   deckPreviewDiscardTool,
 } from './deck.ts';
+import { pageCursorSetTool, deckCursorSetTool } from './liveCursor.ts';
+import { deckRenderTool } from './render.ts';
+import { pageRenderTool } from './pageRender.ts';
 import { contentSearchTool, contentListTool, contentGetTool } from './contentSearch.ts';
 import { tokenGrantTool } from './tokens.ts';
 import { extensionPurchaseTool } from './extensions.ts';
@@ -173,6 +176,9 @@ export function registerAllTools(): void {
   // branch — the same boundary the web editor draws around cover changes.
   registerToolDefinition(pageAssetUploadTool);
   registerToolDefinition(pageCoverSetTool);
+  registerToolDefinition(pageCursorSetTool);
+  // Renders: the page as images, changed blocks located (read gate, like page_content_get)
+  registerToolDefinition(pageRenderTool);
 
   // Media + agent file uploads (TEACHING_TEAM — the web media routes' gate —
   // with the target page's or deck's own edit gate in-handler). Bytes never
@@ -199,8 +205,11 @@ export function registerAllTools(): void {
   registerToolDefinition(deckOutlineTool);
   registerToolDefinition(deckGetTool);
   registerToolDefinition(deckApplyTool);
+  registerToolDefinition(deckCursorSetTool);
   registerToolDefinition(deckPreviewAcceptTool);
   registerToolDefinition(deckPreviewDiscardTool);
+  // Renders: the deck as images + an overflow report (read gate, like deck_get)
+  registerToolDefinition(deckRenderTool);
 
   // Quizzes (OWNER+TEACHER+ASSISTANT; each tool also re-checks Pro tier +
   // quizzes_enabled in-handler)

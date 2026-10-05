@@ -91,6 +91,7 @@ import {
   resolveDeckAssetsPublic,
   resolveDeliveryThemeUrls,
 } from '~/utils/deckDelivery.server';
+import { FRAME_SETTLE_JS } from '~/utils/frameSettle';
 
 /**
  * Never cached, never indexed, never framed. The SAME headers on the refusal
@@ -204,12 +205,13 @@ export function firstSlideOnly(deck: DeckJson): DeckJson {
  * the shared generator and must stay byte-identical to what a save writes.
  *
  * The readiness signal is a HARD-CAPPED settle, not a promise chain that can
- * hang: images and fonts get their chance, then the flag goes up no matter
- * what. Browser Run's `waitForSelector` is the outer bound, and a deck with one
+ * hang: images, fonts and frames (html blocks, and the embeds Reveal starts on
+ * the first slide once it is ready) get their chance, then the flag goes up no
+ * matter what. Browser Run's `waitForSelector` is the outer bound, and a deck with one
  * unreachable image must produce a slightly incomplete thumbnail rather than
  * burning the whole render budget and producing none.
  */
-function readinessScript(): string {
+export function readinessScript(): string {
   return [
     '<style>',
     '  .reveal .controls, .reveal .progress, .reveal .slide-number { display: none !important; }',
@@ -225,6 +227,14 @@ function readinessScript(): string {
     '    }',
     '    // Outer cap: whatever else happens, the page declares itself ready.',
     '    setTimeout(mark, 8000);',
+    FRAME_SETTLE_JS,
+    '    function revealReady() {',
+    '      return new Promise(function (resolve) {',
+    '        var R = window.Reveal;',
+    '        if (!R || !R.on || (R.isReady && R.isReady())) return resolve();',
+    "        R.on('ready', function () { resolve(); });",
+    '      });',
+    '    }',
     '    function settle() {',
     '      var pending = [];',
     '      var images = document.images || [];',
@@ -241,6 +251,12 @@ function readinessScript(): string {
     '      if (document.fonts && document.fonts.ready) {',
     '        pending.push(document.fonts.ready.catch(function () {}));',
     '      }',
+    '      // Frames: once Reveal has shown the slide, so its lazy embeds have a src.',
+    '      pending.push(',
+    '        revealReady().then(function () {',
+    '          return new Promise(function (resolve) { requestAnimationFrame(resolve); });',
+    '        }).then(function () { return settleFrames(document, 6000); })',
+    '      );',
     '      Promise.all(pending).then(function () {',
     '        requestAnimationFrame(function () { requestAnimationFrame(mark); });',
     '      }, mark);',
@@ -397,6 +413,9 @@ export const loader = async ({
     // Speaker notes never reach the screenshot service. Not stripped after the
     // fact — never emitted.
     includeNotes: false,
+    // Opened on its own, outside the slides app's global.css: carry the
+    // draggable-block rules, or a first slide built from blocks stacks.
+    standalone: true,
   });
 
   const html =

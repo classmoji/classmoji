@@ -83,6 +83,31 @@ export const quizzesVisible = async (classroomId: string): Promise<boolean> => {
 };
 
 /**
+ * Whether the AI agent service is configured in THIS process: both
+ * `AI_AGENT_URL` and `AI_AGENT_SHARED_SECRET` set. Same rule as the webapp's
+ * `isAIAgentConfigured` (`~/utils/aiFeatures.server`).
+ */
+export const isAIAgentConfigured = (): boolean =>
+  Boolean(process.env.AI_AGENT_URL && process.env.AI_AGENT_SHARED_SECRET);
+
+/**
+ * Whether quizzes are shown in this classroom, as its pages show them: the AI
+ * agent is configured AND `quizzesVisible` holds (Pro, not switched off). The
+ * one answer every grade total (gradebook, student report, leaderboard, MCP
+ * grade reads) passes to the quiz grade loader, so a total never counts a quiz
+ * its pages hide.
+ *
+ * A failed lookup THROWS, never answers false: a database blip must not drop
+ * every quiz out of a student's total. Same meaning as the webapp's
+ * `quizzesVisibleOrThrow` (`~/utils/classroomProFlag.server`). Takes a
+ * classroom id the caller has already authorized.
+ */
+export const quizzesVisibleOrThrow = async (classroomId: string): Promise<boolean> => {
+  if (!isAIAgentConfigured()) return false;
+  return quizzesVisible(classroomId);
+};
+
+/**
  * Same check, addressed by conversation — for the SSE stream route, which only
  * knows a conversation id.
  *

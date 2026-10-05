@@ -3,6 +3,10 @@ import { marked } from 'marked';
 import { io } from 'socket.io-client';
 import { IconUsers } from '@tabler/icons-react';
 import QRCodeOverlay from './QRCodeOverlay';
+import {
+  neutralizeHtmlBlockFrames,
+  sanitizeSvgBlocks,
+} from '@classmoji/services/slides/runtime-attrs';
 import { stripMediaRefs } from '~/utils/mediaRefs';
 
 /**
@@ -52,6 +56,8 @@ interface RevealPresenterProps {
   previewMode?: boolean;
   multiplexId?: string;
   multiplexSecret?: string;
+  /** One line for the presenter (from the loader), dismissible. */
+  notice?: string | null;
 }
 
 function getThemeUrl(theme: string) {
@@ -85,7 +91,9 @@ export default function RevealPresenter({
   previewMode = false, // Preview mode: no socket, no controls (for speaker view previews)
   multiplexId,
   multiplexSecret: _multiplexSecret,
+  notice = null,
 }: RevealPresenterProps) {
+  const [noticeDismissed, setNoticeDismissed] = useState(false);
   const deckRef = useRef<HTMLDivElement>(null);
   const revealRef = useRef<RevealApi | null>(null);
   const socketRef = useRef<ReturnType<typeof io> | null>(null);
@@ -276,6 +284,11 @@ export default function RevealPresenter({
         // Remove hidden sections
         tempContainer.querySelectorAll('section[data-hidden="true"]').forEach(el => el.remove());
 
+        // An html block's frame loads only in its sandbox; svg blocks are held to
+        // their lists (deckBlocks.ts).
+        neutralizeHtmlBlockFrames(tempContainer);
+        sanitizeSvgBlocks(tempContainer);
+
         // Clean up empty vertical stacks (parent sections that only contained hidden slides)
         tempContainer.querySelectorAll(':scope > section').forEach(section => {
           const nestedSections = section.querySelectorAll(':scope > section');
@@ -296,6 +309,8 @@ export default function RevealPresenter({
 
         setHtmlContent(content);
       } else {
+        neutralizeHtmlBlockFrames(doc.body);
+        sanitizeSvgBlocks(doc.body);
         setHtmlContent(doc.body.innerHTML);
       }
       setLoading(false);
@@ -627,6 +642,23 @@ export default function RevealPresenter({
 
   return (
     <>
+      {notice && !noticeDismissed && (
+        <div
+          role="status"
+          className="fixed top-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 max-w-[90vw] rounded-lg px-4 py-2 text-sm shadow-lg ring-1 bg-amber-50 text-amber-900 ring-amber-200 dark:bg-amber-950 dark:text-amber-100 dark:ring-amber-800"
+        >
+          <span>{notice}</span>
+          <button
+            type="button"
+            onClick={() => setNoticeDismissed(true)}
+            aria-label="Dismiss"
+            className="shrink-0 rounded px-1 text-amber-700 hover:text-amber-900 dark:text-amber-300 dark:hover:text-amber-100"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Keyboard hints - uses theme's main color variable for visibility on any theme */}
       <div
         className="fixed top-4 right-4 z-50 text-sm pointer-events-none opacity-40"

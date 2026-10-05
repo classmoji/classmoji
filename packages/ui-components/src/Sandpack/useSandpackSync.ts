@@ -6,7 +6,7 @@
  */
 
 import { useCallback, useRef } from 'react';
-import { updateFilesInElement } from './utils.ts';
+import { syncEditedFiles } from './utils.ts';
 
 /**
  * Hook to create a file sync callback for a Sandpack embed element
@@ -18,17 +18,16 @@ import { updateFilesInElement } from './utils.ts';
 export default function useSandpackSync(
   element: HTMLElement | null,
   onContentChange?: () => void
-): (files: Record<string, string>) => void {
+): (files: Record<string, string>, baseline?: Record<string, string>) => void {
   const elementRef = useRef(element);
   elementRef.current = element;
 
   const syncFiles = useCallback(
-    (files: Record<string, string>) => {
+    (files: Record<string, string>, baseline?: Record<string, string>) => {
       const el = elementRef.current;
       if (!el) return;
 
-      updateFilesInElement(el, files);
-      onContentChange?.();
+      if (syncEditedFiles(el, files, baseline)) onContentChange?.();
     },
     [onContentChange]
   );

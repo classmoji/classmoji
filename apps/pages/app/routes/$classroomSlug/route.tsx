@@ -12,6 +12,7 @@ import {
 
 import { ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
 import { findClassroomRole } from '~/utils/classroomRole.server.ts';
+import { closeLivePageForDelete } from '~/utils/collab.server.ts';
 import { assetResolveContext } from '~/utils/assetRefs.server.ts';
 import { headerImageRefs, withResolvedHeaderImages } from '~/utils/headerImages.ts';
 
@@ -290,6 +291,18 @@ export const action = async ({
 
   if (intent === 'delete') {
     try {
+      // A live-edited page's room is closed first: the collab server saves
+      // what it holds and disconnects its editors before the page goes.
+      const page = await ClassmojiService.page.findById(data.pageId, { includeClassroom: true });
+      if (page) {
+        const closed = await closeLivePageForDelete(page);
+        if (!closed.ok) {
+          return Response.json(
+            { error: 'This page could not be deleted right now. Try again.' },
+            { status: 503 }
+          );
+        }
+      }
       await ClassmojiService.page.deletePage(data.pageId);
       // Return redirect instead of JSON response
       return redirect(`/${classroomSlug}`);

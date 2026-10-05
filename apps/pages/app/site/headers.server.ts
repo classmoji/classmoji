@@ -71,7 +71,7 @@ export function hasSessionCookie(request: Request): boolean {
  * attributes (image widths, column ratios) and Google Fonts' stylesheet is
  * loaded from `fonts.googleapis.com` by the shared document head.
  */
-function contentSecurityPolicy(): string {
+export function contentSecurityPolicy(): string {
   const frameAncestors = frameAncestorOrigins();
   return [
     "default-src 'none'",

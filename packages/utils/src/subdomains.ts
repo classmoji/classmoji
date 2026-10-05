@@ -117,7 +117,7 @@ export function isPlatformDomain(domain: string | null | undefined): boolean {
  * whichever kind gets claimed — a request that should have reached the platform
  * reaches a course site instead:
  *   - live or planned Classmoji hosts (app, www, slides, pages, mcp, api, docs,
- *     demo, staging, dev, site, sites, test)
+ *     demo, staging, dev, site, sites, test, hooks, collab)
  *   - infrastructure conventions attackers and mail providers assume exist
  *     (mail, admin, auth, login, assets, cdn, static, status)
  *   - the brand and its support surfaces (classmoji, help, support, blog, about)
@@ -154,6 +154,10 @@ export const RESERVED_SUBDOMAINS: ReadonlySet<string> = new Set([
   'site',
   'sites',
   'test',
+  // The GitHub/Stripe webhook listener (apps/hook-station).
+  'hooks',
+  // The live-collaboration socket server (apps/collab).
+  'collab',
 ]);
 
 /**

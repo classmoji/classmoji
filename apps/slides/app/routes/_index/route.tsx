@@ -12,6 +12,7 @@ import { isDeckSlide, slideService } from '@classmoji/services/slides';
 import { resolveDeckThumbnailUrls } from '~/utils/deckDelivery.server';
 import { enqueueDeckThumbnail } from '~/utils/deckThumbnailEnqueue.server';
 import { deckOnlyMessage, isDeckKind } from '~/utils/slideKind';
+import { liveEditingEnv, notifyDeckMeta } from '~/utils/collab/collab.server';
 
 /**
  * What ONE card is built from — the whole of what this page sends the browser.
@@ -277,14 +278,25 @@ export const action = async ({ request }: { request: Request }) => {
     }
 
     try {
-      const slide = await getPrisma().slide.update({
+      const updated = await getPrisma().slide.update({
         where: { id: slideId },
         data: { title: newTitle.trim() },
-        select: { id: true, title: true, classroom_id: true },
+        select: {
+          id: true,
+          title: true,
+          classroom_id: true,
+          kind: true,
+          classroom: { select: { collab_enabled: true } },
+        },
       });
+      const { classroom, kind, ...slide } = updated;
 
       // Update the content manifest
       await ClassmojiService.contentManifest.saveManifest(slide.classroom_id);
+
+      // A deck open live shows its new title without a reload (best effort).
+      const liveEnv = isDeckKind(kind) ? liveEditingEnv(classroom) : null;
+      if (liveEnv) await notifyDeckMeta(liveEnv, slide.id, { title: slide.title });
 
       return { success: true, intent: 'rename', slide };
     } catch (error: unknown) {
