@@ -17,21 +17,34 @@
  *   POST /internal/:kind/:id/preview-changed {} → { broadcast }  (stateless { type: 'preview-changed' })
  *   POST /internal/:kind/:id/cursor         { actor, page? | slide, x?, y? } → { shown }  (agent caret/arrow; no edit)
  *   POST /internal/classroom/:id/flag       { enabled } → { closed, reseeded }
+ *   POST /internal/:kind/:id/reset          { actor, discard? } → { epoch, closed, discarded }
+ *        (manual epoch reset: drop the live room, reseed from git; 409 unpushed-edits
+ *        unless discard)
+ *
+ * /checkpoint ("Save version") answers `{ version, requestId, alreadySaved? }`:
+ * `alreadySaved` when the doc has nothing unpushed (nothing is triggered);
+ * otherwise the run that consumes the request lists `requestId` in its
+ * `checkpoint` broadcast (`requestIds`).
  *
  * /external: `sha` is the COMMIT the outside push landed as (theirs is read
  * at that ref), `before` the commit before it. Base = the file at `before`
- * when readable, else the row's `source_sha` blob; with neither, the live
- * doc is kept and the call answers 409 `no-merge-base` (the caller retries /
- * alerts). A `sha` equal to the row's `pushed_commit`, or whose file is the
- * blob the doc already descends from, is a no-op.
+ * when readable, else the row's `source_sha` blob; an EMPTY base when there
+ * was no file to descend from (seeded blank, or no file at `before`). With
+ * a base that existed but cannot be read, the live doc is kept, the row's
+ * `last_conflict` records it (reason `no-merge-base`) and the call answers
+ * 409 `no-merge-base` (final: the worker stops re-notifying that commit; the
+ * sweeper alerts). A `sha` equal to the row's `pushed_commit`, or whose file
+ * is the blob the doc already descends from, is a no-op.
  */
-import { timingSafeEqual } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import * as Y from 'yjs';
 import {
+  CHECKPOINT_REQUEST_ID,
   COLLAB_SECRET_HEADER,
   isCollabKind,
   normalizeAgentSession,
+  type CheckpointResponse,
   type CollabActor,
   type CollabKind,
   type CursorRequest,
@@ -55,6 +68,8 @@ import type { CollabRuntime } from './server.ts';
 import { currentEpoch, isReseedMarker, type CollabDocRow } from './store/types.ts';
 
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
+/** merge-preview carries two whole decks (base and theirs). */
+const MAX_MERGE_BODY_BYTES = 40 * 1024 * 1024;
 
 /** The trusted actor for an outside push being merged in. */
 const EXTERNAL_ACTOR: CollabActor = { userId: 'external', name: 'Outside push' };
@@ -71,12 +86,15 @@ function secretMatches(given: string | string[] | undefined, expected: string): 
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
+async function readJson(
+  request: IncomingMessage,
+  maxBytes = MAX_BODY_BYTES
+): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
     size += (chunk as Buffer).length;
-    if (size > MAX_BODY_BYTES) throw new CollabHttpError(413, { error: 'body-too-large' });
+    if (size > maxBytes) throw new CollabHttpError(413, { error: 'body-too-large' });
     chunks.push(chunk as Buffer);
   }
   if (size === 0) return {};
@@ -196,6 +214,7 @@ const DOC_ACTIONS: Record<string, 'GET' | 'POST'> = {
   external: 'POST',
   checkpoint: 'POST',
   close: 'POST',
+  reset: 'POST',
   'meta-changed': 'POST',
   'preview-changed': 'POST',
   cursor: 'POST',
@@ -266,7 +285,13 @@ export async function handleInternal(
       return send(response, 405, { error: 'method-not-allowed' });
     }
 
-    const body = method === 'POST' ? await readJson(request) : {};
+    const body =
+      method === 'POST'
+        ? await readJson(
+            request,
+            route.action === 'merge-preview' ? MAX_MERGE_BODY_BYTES : MAX_BODY_BYTES
+          )
+        : {};
     const result =
       route.scope === 'doc'
         ? await dispatch(route, body, runtime, url.searchParams)
@@ -470,17 +495,43 @@ async function dispatch(
 
     case 'checkpoint': {
       const actor = requireActor(body.actor);
+      const requestId = requireRequestId(body.requestId);
       const adapter = await runtime.adapter(kind);
       const located = await adapter.locate(id);
       if (!located) throw new CollabHttpError(404, { error: 'not-found' });
       await runtime.flush(kind, id);
+      const row = await runtime.deps.store.get(kind, id);
+      // Nothing unpushed for THIS doc: answer now, trigger nothing (the note
+      // has nothing to go with).
+      if (
+        (!row || isReseedMarker(row) || row.version <= row.pushed_version) &&
+        !runtime.hasUnstoredChanges(kind, id)
+      ) {
+        const answer: CheckpointResponse = {
+          version: row?.version ?? 0,
+          requestId,
+          alreadySaved: true,
+        };
+        return answer;
+      }
       // Whoever saves the version co-authors it.
       await runtime.deps.store.addEditors(kind, id, [actor]);
       const message =
         typeof body.message === 'string' && body.message.trim() ? body.message.trim() : undefined;
-      await runtime.triggerCheckpoint(located.classroomId, 'save-version', true, message);
-      const row = await runtime.deps.store.get(kind, id);
-      return { version: row?.version ?? 0 };
+      await runtime.triggerCheckpoint(located.classroomId, 'save-version', true, message, {
+        id: requestId,
+        kind,
+        docId: id,
+      });
+      const answer: CheckpointResponse = { version: row?.version ?? 0, requestId };
+      return answer;
+    }
+
+    case 'reset': {
+      const actor = requireActor(body.actor);
+      const adapter = await runtime.adapter(kind);
+      if (!(await adapter.locate(id))) throw new CollabHttpError(404, { error: 'not-found' });
+      return runtime.resetDoc(kind, id, actor, { discard: body.discard === true });
     }
 
     case 'close': {
@@ -614,11 +665,30 @@ async function external(
     };
   };
 
+  // No readable merge base: the outside edit is NOT in the live doc. Record
+  // it on the row (the editor shows it; the worker stops re-notifying this
+  // commit) and answer 409 — retrying cannot find a base that is not there.
+  const mergeOrRecord = async () => {
+    try {
+      return await merge();
+    } catch (err) {
+      if (err instanceof CollabHttpError && err.body.error === 'no-merge-base') {
+        await runtime.deps.store.setLastConflict(kind, id, {
+          at: new Date().toISOString(),
+          sha,
+          ids: [],
+          reason: 'no-merge-base',
+        });
+      }
+      throw err;
+    }
+  };
+
   const loaded = !!runtime.loadedDocument(kind, id);
   const dirty =
     (!!row && !isReseedMarker(row) && row.version > row.pushed_version) ||
     runtime.hasUnstoredChanges(kind, id);
-  if (loaded || dirty) return merge();
+  if (loaded || dirty) return mergeOrRecord();
 
   if (!row || isReseedMarker(row)) {
     // Nothing buffered: the next open seeds from git anyway.
@@ -627,7 +697,7 @@ async function external(
   // Clean and closed: reseed on next open. markReseed refuses a row that
   // turned dirty meanwhile — then merge instead.
   const marked = await runtime.deps.store.markReseed(kind, id);
-  if (!marked) return merge();
+  if (!marked) return mergeOrRecord();
   return { action: 'reseeded', epoch: marked.epoch };
 }
 
@@ -636,6 +706,18 @@ function checkpointFields(row: CollabDocRow | null) {
     lastCheckpointAt: row?.last_checkpoint_at ? row.last_checkpoint_at.toISOString() : null,
     lastCheckpointError: row?.last_checkpoint_error ?? null,
   };
+}
+
+/** A Save-version request id: the client's (validated), else a fresh one. */
+function requireRequestId(value: unknown): string {
+  if (value === undefined || value === null) return randomBytes(12).toString('base64url');
+  if (typeof value !== 'string' || !CHECKPOINT_REQUEST_ID.test(value)) {
+    throw new CollabHttpError(400, {
+      error: 'invalid-request-id',
+      message: 'requestId must be 8–64 characters of A-Z a-z 0-9 _ -',
+    });
+  }
+  return value;
 }
 
 function requireExpect(value: unknown): Record<string, string> | null {
@@ -745,15 +827,26 @@ async function checkpointResult(body: Record<string, unknown>, runtime: CollabRu
     throw new CollabHttpError(400, { error: 'invalid-docs', message: 'docs must be an array' });
   }
   let broadcast = 0;
+  const answered: string[] = [];
   for (const entry of body.docs as Record<string, unknown>[]) {
     if (!entry || !isCollabKind(entry.kind) || typeof entry.id !== 'string') continue;
     const at = typeof entry.at === 'string' ? entry.at : new Date().toISOString();
+    const requestIds = Array.isArray(entry.requestIds)
+      ? entry.requestIds.filter(
+          (r): r is string => typeof r === 'string' && CHECKPOINT_REQUEST_ID.test(r)
+        )
+      : [];
+    answered.push(...requestIds);
     broadcast += runtime.broadcast(entry.kind, entry.id, {
       type: 'checkpoint',
       at,
       ...(typeof entry.commit === 'string' ? { commit: entry.commit } : {}),
       ...(typeof entry.error === 'string' ? { error: entry.error } : {}),
+      ...(requestIds.length ? { requestIds } : {}),
+      ...(requestIds.length && entry.alreadySaved === true ? { alreadySaved: true as const } : {}),
+      ...(typeof entry.editsSince === 'boolean' ? { editsSince: entry.editsSince } : {}),
     });
   }
+  runtime.requestsAnswered(answered);
   return { broadcast };
 }

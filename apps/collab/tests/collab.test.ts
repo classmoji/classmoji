@@ -490,10 +490,24 @@ describe('checkpoint trigger options', () => {
       debounce: { key: 'checkpoint:c1', delay: '10s', maxDelay: '30s', mode: 'trailing' },
     });
   });
-  it('runs save-version / last-leave on its own 1-s key', () => {
+  it('runs save-version / last-leave on its own 1-s key, bounded by a maxDelay', () => {
+    // Without maxDelay Trigger.dev pushes a debounced run back on every
+    // trigger of its key, without limit.
     expect(checkpointTriggerOptions('c1', true, config)).toEqual({
       concurrencyKey: 'c1',
-      debounce: { key: 'checkpoint-now:c1', delay: '1s', mode: 'trailing' },
+      debounce: { key: 'checkpoint-now:c1', delay: '1s', maxDelay: '10s', mode: 'trailing' },
+    });
+  });
+  it('moves to a new key generation after a lost trigger; the watchdog runs plain', () => {
+    expect(checkpointTriggerOptions('c1', false, config, { generation: 2 }).debounce?.key).toBe(
+      'checkpoint:c1:2'
+    );
+    expect(checkpointTriggerOptions('c1', true, config, { generation: 2 }).debounce?.key).toBe(
+      'checkpoint-now:c1:2'
+    );
+    // No debounce key at all: a stuck DELAYED run cannot absorb it.
+    expect(checkpointTriggerOptions('c1', true, config, { plain: true })).toEqual({
+      concurrencyKey: 'c1',
     });
   });
 });

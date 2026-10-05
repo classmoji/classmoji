@@ -17,7 +17,7 @@ import { createPageAdapter, type PageRecord } from '../src/adapters/page.ts';
 import type { CollabAdapter } from '../src/adapters/types.ts';
 import type { CollabSession, SessionResolver } from '../src/auth.ts';
 import type { AuditEntry, AuditSink } from '../src/audit.ts';
-import type { CheckpointTrigger } from '../src/checkpoint.ts';
+import type { CheckpointTrigger, CheckpointTriggerOptions } from '../src/checkpoint.ts';
 import { loadConfig, type CollabConfig } from '../src/config.ts';
 import { createCollabServer, type CollabRuntime } from '../src/server.ts';
 import type {
@@ -177,6 +177,30 @@ export class MemoryStore implements CollabDocStore {
     const row = this.rows.get(this.key(kind, docId));
     if (row) row.source_sha = sourceSha;
   }
+
+  async lostCheckpoint(classroomId: string, olderThanMs: number) {
+    const cutoff = Date.now() - olderThanMs;
+    return [...this.rows.values()].some(
+      r =>
+        r.classroom_id === classroomId &&
+        r.version > r.pushed_version &&
+        r.state.byteLength > 0 &&
+        !!r.dirty_since &&
+        r.dirty_since.getTime() <= cutoff &&
+        (!r.last_checkpoint_at || r.last_checkpoint_at.getTime() < cutoff)
+    );
+  }
+
+  async forceReseed(kind: CollabKind, docId: string) {
+    const row = this.rows.get(this.key(kind, docId));
+    if (!row) return null;
+    row.epoch += 1;
+    row.state = new Uint8Array();
+    row.pushed_version = row.version;
+    row.dirty_since = null;
+    row.editors = [];
+    return { epoch: row.epoch };
+  }
 }
 
 // ─── Sessions: cookie `session=<userId>` ───────────────────────────────────
@@ -287,9 +311,14 @@ export class RecordingAudit implements AuditSink {
 }
 
 export class RecordingCheckpoints implements CheckpointTrigger {
-  calls: { payload: ContentCheckpointPayload; now: boolean }[] = [];
-  async trigger(payload: ContentCheckpointPayload, options: { now: boolean }) {
-    this.calls.push({ payload, now: options.now });
+  calls: {
+    payload: ContentCheckpointPayload;
+    now: boolean;
+    plain?: boolean;
+    generation?: number;
+  }[] = [];
+  async trigger(payload: ContentCheckpointPayload, options: CheckpointTriggerOptions) {
+    this.calls.push({ payload, ...options });
   }
 }
 

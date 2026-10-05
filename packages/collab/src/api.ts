@@ -124,7 +124,25 @@ export interface BlockChangedError {
  *   discarded (`POST /internal/:kind/:id/preview-changed`) — refresh the banner.
  */
 export type CollabStatelessMessage =
-  | { type: 'checkpoint'; commit?: string; at: string; error?: string }
+  | {
+      type: 'checkpoint';
+      commit?: string;
+      at: string;
+      error?: string;
+      /**
+       * The Save-version requests (`CheckpointRequest.requestId`) this run
+       * consumed for this doc. Only the run that consumed a request lists
+       * it; routine debounced runs never carry any.
+       */
+      requestIds?: string[];
+      /** With `requestIds`: the run found nothing to push for this doc. */
+      alreadySaved?: true;
+      /**
+       * The buffer still holds edits this run did not push (typed while it
+       * committed, or the doc was not saved). Absent = false.
+       */
+      editsSince?: boolean;
+    }
   | { type: 'page-meta'; title?: string; width?: number }
   | { type: 'deck-meta'; title?: string }
   | { type: 'preview-changed' };
@@ -132,7 +150,17 @@ export type CollabStatelessMessage =
 /** `POST /internal/checkpoint-result` (from the worker; best effort). */
 export interface CheckpointResultRequest {
   classroomId: string;
-  docs: { kind: CollabKind; id: string; commit?: string; at: string; error?: string }[];
+  docs: {
+    kind: CollabKind;
+    id: string;
+    commit?: string;
+    at: string;
+    error?: string;
+    /** Save-version requests this run consumed for this doc. */
+    requestIds?: string[];
+    alreadySaved?: true;
+    editsSince?: boolean;
+  }[];
 }
 
 /** `POST /internal/:kind/:id/meta-changed`. */
@@ -196,7 +224,47 @@ export interface FlagRequest {
 export interface CheckpointRequest {
   message?: string;
   actor: CollabActor;
+  /**
+   * Client-generated id (`CHECKPOINT_REQUEST_ID`), echoed in the reply and in
+   * the `checkpoint` broadcast of the run that consumed it. Absent: collab
+   * mints one.
+   */
+  requestId?: string;
 }
+
+/** A Save-version request id: 8–64 of `[A-Za-z0-9_-]`. */
+export const CHECKPOINT_REQUEST_ID = /^[A-Za-z0-9_-]{8,64}$/;
+
+/**
+ * The `/checkpoint` reply. `alreadySaved`: the doc had nothing unpushed —
+ * nothing was triggered and no broadcast follows. Otherwise the answer is
+ * the `checkpoint` broadcast whose `requestIds` holds `requestId`.
+ */
+export interface CheckpointResponse {
+  version: number;
+  requestId: string;
+  alreadySaved?: true;
+}
+
+/** A Save-version request riding a checkpoint payload. */
+export interface CheckpointRequestRef {
+  id: string;
+  kind: CollabKind;
+  docId: string;
+}
+
+/** `POST /internal/:kind/:id/reset` — drop the live room and reseed from git. */
+export interface ResetRequest {
+  actor: CollabActor;
+  /** Required when the doc holds unpushed edits: they are discarded. */
+  discard?: boolean;
+}
+
+/** Audit `resource_type` of a doc kind (the same as the MCP tools write). */
+export const COLLAB_AUDIT_RESOURCE: Record<CollabKind, 'PAGES' | 'SLIDES'> = {
+  page: 'PAGES',
+  deck: 'SLIDES',
+};
 
 /** `POST /internal/:kind/:id/close` — checkpoint now, then close every connection. */
 export interface CloseRequest {
@@ -330,6 +398,11 @@ export interface ContentCheckpointPayload {
   editors?: CheckpointDocEditors[];
   /** "Save version" message from `POST /internal/:kind/:id/checkpoint`, if any. */
   message?: string;
+  /**
+   * Save-version requests this run answers (checkpoint-now payloads only):
+   * the run reports each on its doc's checkpoint-result entry.
+   */
+  requests?: CheckpointRequestRef[];
 }
 
 /** Commit trailer marking a push as ours (hook-station skips these). */

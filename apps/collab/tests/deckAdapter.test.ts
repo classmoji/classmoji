@@ -7,7 +7,8 @@ import { describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import type { Role } from '@prisma/client';
 import {
-  LOCK_EXPIRE_IDLE_MS,
+  LOCK_DISCONNECT_GRACE_MS,
+  LOCK_TAKEOVER_IDLE_MS,
   acquireLock,
   cloneYDoc,
   deckSlides,
@@ -317,8 +318,14 @@ describe('applyOps', () => {
     expect(yDocToDeck(document).slides[2].children?.[0].html).toBe('<p>child</p>');
     // Other slides are fine.
     expect(attempt([{ op: 'update', id: 'aaaa0001', html: '<h1>ok</h1>' }])).toBeNull();
-    // Moving the held slide is structural: allowed.
-    expect(attempt([{ op: 'move', id: 'aaaa0004', position: { at: 'end' } }])).toBeNull();
+    // Moving the held slide: refused too (an agent does not move a slide a
+    // person is editing).
+    expect(attempt([{ op: 'move', id: 'aaaa0004', position: { at: 'end' } }])).toMatchObject({
+      status: 409,
+      body: { error: 'slide-locked', slideId: 'aaaa0004' },
+    });
+    // Moving another slide is fine.
+    expect(attempt([{ op: 'move', id: 'aaaa0001', position: { at: 'end' } }])).toBeNull();
   });
 
   it('409 slide-locked on a block op on a held slide, exactly like an update', () => {
@@ -810,5 +817,155 @@ describe('mergeExternal: conflict notices and per-field merges', () => {
     const slide = yDocToDeck(document).slides[1];
     expect(slide.html).toBe('<h2>From GitHub</h2>');
     expect(slide.notes).toBe('say hi loudly');
+  });
+});
+
+describe('lock arbitration judged by the server', () => {
+  /** A live doc whose browser connection `connection` carries clientID 8. */
+  function setupTakeover(connectedIds: number[] = [5, 8]) {
+    const deps = makeDeps();
+    const adapter = createDeckAdapter(deps);
+    const document = liveDoc(DECK, connectedIds) as ReturnType<typeof liveDoc> & {
+      getClients?: (c: unknown) => Set<number>;
+    };
+    const connection = {};
+    document.getClients = c => (c === connection ? new Set([8]) : new Set());
+    adapter.attach(document);
+    // Holder 5 claims after attach: the arbiter confirms it.
+    acquireLock(document, 'aaaa0001', holder(5), { now: deps.now() });
+    expect(getLock(document, 'aaaa0001')).toHaveProperty('confirmed');
+    const takeover = (html?: string) => {
+      const peer = cloneYDoc(document);
+      peer.clientID = 8;
+      acquireLock(peer, 'aaaa0001', holder(8), {
+        now: deps.now(),
+        idleMs: LOCK_TAKEOVER_IDLE_MS,
+        takeover: true,
+      });
+      if (html) (deckSlides(peer).get('aaaa0001') as Y.Map<unknown>).set('html', html);
+      Y.applyUpdate(document, Y.encodeStateAsUpdate(peer, Y.encodeStateVector(document)), {
+        source: 'connection',
+        connection,
+      });
+    };
+    return { deps, document, takeover };
+  }
+
+  it('reverts a takeover of an active holder, and the guard undoes its html', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { deps, document, takeover } = setupTakeover();
+    deps.tick(10_000); // the holder was active 10 s ago
+    takeover('<h1>stolen</h1>');
+    warn.mockRestore();
+    expect(getLock(document, 'aaaa0001')).toMatchObject({ clientId: 5 });
+    expect(yDocToDeck(document).slides[0].html).toBe('<h1>One</h1>');
+    document.destroy();
+  });
+
+  it('lets a takeover stand once the holder has been idle past the threshold', () => {
+    const { deps, document, takeover } = setupTakeover();
+    deps.tick(LOCK_TAKEOVER_IDLE_MS + 1_000);
+    takeover();
+    expect(getLock(document, 'aaaa0001')).toMatchObject({ clientId: 8 });
+    expect(getLock(document, 'aaaa0001')).toHaveProperty('confirmed');
+    document.destroy();
+  });
+
+  it('lets a takeover stand once a disconnected holder is past the grace', () => {
+    const { deps, document, takeover } = setupTakeover();
+    document.awareness.disconnect(5);
+    deps.tick(LOCK_DISCONNECT_GRACE_MS + 1_000);
+    takeover();
+    expect(getLock(document, 'aaaa0001')).toMatchObject({ clientId: 8 });
+    document.destroy();
+  });
+
+  it('reverts a takeover of a disconnected holder still within the grace', () => {
+    const { deps, document, takeover } = setupTakeover();
+    document.awareness.disconnect(5);
+    deps.tick(5_000);
+    takeover();
+    expect(getLock(document, 'aaaa0001')).toMatchObject({ clientId: 5 });
+    document.destroy();
+  });
+});
+
+describe('mergeExternal: held slides the push deleted, empty bases', () => {
+  it('a push that deletes a slide someone is editing keeps the slide and tells them', async () => {
+    const deps = makeDeps();
+    deps.decks.set('push-sha', {
+      ...DECK,
+      slides: DECK.slides.filter(s => s.id !== 'aaaa0002'),
+    });
+    const adapter = createDeckAdapter(deps);
+    const document = liveDoc(DECK, [7]);
+    adapter.attach(document);
+    acquireLock(document, 'aaaa0002', holder(7), { now: deps.now() });
+    const result = (await adapter.mergeExternal(context(document, { source_sha: 'base-sha' }), {
+      sha: 'push-sha',
+    })) as { conflictIds?: string[]; conflicts: number };
+    expect(yDocToDeck(document).slides.map(s => s.id)).toEqual([
+      'aaaa0001',
+      'aaaa0002',
+      'aaaa0003',
+    ]);
+    expect(result.conflictIds).toContain('aaaa0002');
+    expect(readSlideConflicts(document).get('aaaa0002')).toMatchObject({
+      deleted: true,
+      html: '',
+      holderUserId: 'u7',
+    });
+  });
+
+  it('a held slide inside a stack goes back into its stack', async () => {
+    const deps = makeDeps();
+    deps.decks.set('push-sha', {
+      ...DECK,
+      slides: [
+        ...DECK.slides.slice(0, 2),
+        { id: 'aaaa0003', children: [{ id: 'aaaa0005', html: '<p>child 2</p>' }] },
+      ],
+    });
+    const adapter = createDeckAdapter(deps);
+    const document = liveDoc(DECK, [7]);
+    adapter.attach(document);
+    acquireLock(document, 'aaaa0004', holder(7), { now: deps.now() });
+    await adapter.mergeExternal(context(document, { source_sha: 'base-sha' }), { sha: 'push-sha' });
+    expect(yDocToDeck(document).slides[2].children?.map(c => c.id)).toEqual([
+      'aaaa0004',
+      'aaaa0005',
+    ]);
+  });
+
+  it('no deck file before the push (never seeded from one): merges against an empty base', async () => {
+    const deps = makeDeps();
+    deps.decks.set('push-sha', { ...DECK, slides: [{ id: 'bbbb0001', html: '<p>outside</p>' }] });
+    const adapter = createDeckAdapter(deps);
+    const document = liveDoc();
+    // `before-sha` has no deck file (loadDeck throws "Slide content not found").
+    const result = await adapter.mergeExternal(
+      context(document, { source_sha: null, pushed_commit: null }),
+      { sha: 'push-sha', before: 'before-sha' }
+    );
+    expect(result.conflicts).toBe(0);
+    const ids = yDocToDeck(document).slides.map(s => s.id);
+    expect(ids).toContain('bbbb0001');
+    expect(ids).toContain('aaaa0001');
+  });
+
+  it('notices for slides deleted later are pruned (presence, not content)', async () => {
+    const deps = makeDeps();
+    deps.decks.set('push-sha', {
+      ...DECK,
+      slides: [{ id: 'aaaa0001', html: '<h1>From GitHub</h1>' }, ...DECK.slides.slice(1)],
+    });
+    const adapter = createDeckAdapter(deps);
+    const document = liveDoc(DECK, [7]);
+    adapter.attach(document);
+    acquireLock(document, 'aaaa0001', holder(7), { now: deps.now() });
+    await adapter.mergeExternal(context(document, { source_sha: 'base-sha' }), { sha: 'push-sha' });
+    expect(readSlideConflicts(document).has('aaaa0001')).toBe(true);
+    document.transact(() => deckSlides(document).delete('aaaa0001'));
+    expect(readSlideConflicts(document).has('aaaa0001')).toBe(false);
   });
 });

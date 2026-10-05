@@ -21,6 +21,7 @@ import {
 import { Database } from '@hocuspocus/extension-database';
 import {
   AGENT_TOUCHED_MAX,
+  COLLAB_AUDIT_RESOURCE,
   COLLAB_CLOSE_RELOAD,
   agentColor,
   agentDisplayName,
@@ -33,6 +34,7 @@ import {
   type AgentCursor,
   type AgentTouched,
   type CheckpointReason,
+  type CheckpointRequestRef,
   type CollabActor,
   type CollabConnectionContext,
   type CollabKind,
@@ -58,7 +60,7 @@ import {
   type CollabAdapter,
   type LiveEditContext,
 } from './adapters/types.ts';
-import type { CheckpointTrigger } from './checkpoint.ts';
+import { durationMs, type CheckpointTrigger } from './checkpoint.ts';
 import type { CollabConfig } from './config.ts';
 import { handleRequest } from './http.ts';
 import { recordAudit, type AuditSink } from './audit.ts';
@@ -121,6 +123,19 @@ const REPAIR_CONTEXT = { repair: true } as const;
  */
 const NOW_MERGE_WINDOW_MS = 10_000;
 
+/** An unanswered Save-version request is carried this long (then dropped). */
+const SAVE_REQUEST_TTL_MS = 10 * 60_000;
+
+/** A pending checkpoint watch: check the classroom at `due`. */
+interface CheckpointWatch {
+  due: number;
+  /** "Lost" = a row dirty and unvisited for at least this long at `due`. */
+  olderThanMs: number;
+  timer: NodeJS.Timeout;
+  /** A later trigger's watch, scheduled when this one has fired. */
+  next?: { due: number; olderThanMs: number };
+}
+
 const REASON_RANK: Record<CheckpointReason, number> = {
   store: 0,
   'last-leave': 1,
@@ -131,7 +146,9 @@ const REASON_RANK: Record<CheckpointReason, number> = {
 /** Default ephemeral root types per kind (see CollabAdapter.ephemeralRoots). */
 const DEFAULT_EPHEMERAL_ROOTS: Record<CollabKind, readonly string[]> = {
   page: [],
-  deck: ['locks'],
+  // `conflicts`: outside-push notices. Recorded inside a merge (which also
+  // changes slides, so it stores); a dismissal alone is not an edit.
+  deck: ['locks', 'conflicts'],
 };
 
 interface LoadedDoc {
@@ -143,6 +160,13 @@ interface LoadedDoc {
   deleted?: boolean;
   /** The last transaction touched only ephemeral roots (deck locks). */
   lastTxEphemeral: boolean;
+  /**
+   * A browser connection was the last to leave while changes were still
+   * unstored: the store that follows is a last leave (checkpoint now). An
+   * agent's direct connection closing never sets it — its edits take the
+   * normal debounce.
+   */
+  humanLeft?: boolean;
   /** Slides the last transaction inserted, deleted or moved (decks). */
   lastTxStructure?: StructuralOp[];
   /**
@@ -215,6 +239,18 @@ export class CollabRuntime {
     string,
     { reason: CheckpointReason; message?: string; at: number }
   >();
+  /** Per classroom: the checkpoint watchdog (see `watchCheckpoint`). */
+  private readonly watches = new Map<string, CheckpointWatch>();
+  /** Per classroom: debounce key generation, bumped when a trigger was lost. */
+  private readonly keyGeneration = new Map<string, number>();
+  /** Per classroom: lost triggers re-sent in a row. */
+  private readonly lostStreak = new Map<string, number>();
+  /** Per classroom: Save-version requests no run has answered yet. */
+  private readonly pendingSaves = new Map<
+    string,
+    { requests: Map<string, CheckpointRequestRef & { at: number }>; message?: string }
+  >();
+  private destroyed = false;
 
   constructor(options: CollabServerOptions) {
     this.deps = options.deps;
@@ -244,6 +280,8 @@ export class CollabRuntime {
           extensionName: 'classmoji-collab',
           afterLoadDocument: async payload => this.afterLoad(payload),
           connected: async ({ connection, requestHeaders, context, documentName }) => {
+            const entry = this.loaded.get(documentName);
+            if (entry) entry.humanLeft = false;
             this.rechecker.track(
               connection as Connection<CollabConnectionContext>,
               requestHeaders.get('cookie') ?? ''
@@ -282,9 +320,44 @@ export class CollabRuntime {
   }
 
   async destroy(): Promise<void> {
+    this.destroyed = true;
     this.rechecker.stop();
+    for (const watch of this.watches.values()) clearTimeout(watch.timer);
+    this.watches.clear();
     for (const presence of [...this.agents.values()]) this.dropAgent(presence, false);
     await this.server.destroy();
+  }
+
+  private dbCheck: { at: number; result: Promise<'ok' | 'down' | 'unknown'> } | null = null;
+
+  /**
+   * The database's state for `/health`: one `SELECT 1` (2-s timeout), shared
+   * by every caller for 5 s. 'unknown' when the store cannot be pinged.
+   */
+  dbHealth(): Promise<'ok' | 'down' | 'unknown'> {
+    const ping = this.deps.store.ping?.bind(this.deps.store);
+    if (!ping) return Promise.resolve('unknown');
+    const now = Date.now();
+    if (this.dbCheck && now - this.dbCheck.at < 5_000) return this.dbCheck.result;
+    const result = (async (): Promise<'ok' | 'down'> => {
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        await Promise.race([
+          ping(),
+          new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error('timeout')), 2_000);
+            timer.unref();
+          }),
+        ]);
+        return 'ok';
+      } catch {
+        return 'down';
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    })();
+    this.dbCheck = { at: now, result };
+    return result;
   }
 
   async adapter(kind: CollabKind): Promise<CollabAdapter> {
@@ -486,7 +559,7 @@ export class CollabRuntime {
       classroomId: ctx.classroomId,
       role: ctx.role,
       action,
-      resourceType: `collab_${ctx.kind}`,
+      resourceType: COLLAB_AUDIT_RESOURCE[ctx.kind],
       resourceId: ctx.docId,
     });
   }
@@ -529,7 +602,11 @@ export class CollabRuntime {
       return;
     }
 
-    const lastLeave = payload.document.getConnectionsCount() === 0;
+    // Only a PERSON leaving makes the checkpoint immediate (`humanLeft`, set
+    // by onLastLeave). An agent's direct connection closes after every op;
+    // treating that as a last leave would push one commit per op.
+    const lastLeave = payload.document.getConnectionsCount() === 0 && doc.humanLeft === true;
+    if (payload.document.getConnectionsCount() === 0) doc.humanLeft = false;
     await this.triggerCheckpoint(doc.classroomId, lastLeave ? 'last-leave' : 'store', lastLeave);
   }
 
@@ -537,12 +614,13 @@ export class CollabRuntime {
     classroomId: string,
     reason: CheckpointReason,
     now: boolean,
-    message?: string
+    message?: string,
+    request?: CheckpointRequestRef
   ): Promise<void> {
+    const at = Date.now();
     if (now) {
       // The 1-s "now" debounce runs with the LAST payload: carry an earlier
       // Save-version message (and the strongest reason) into this one.
-      const at = Date.now();
       const prev = this.lastNow.get(classroomId);
       if (prev && at - prev.at < NOW_MERGE_WINDOW_MS) {
         message ??= prev.message;
@@ -550,6 +628,38 @@ export class CollabRuntime {
       }
       this.lastNow.set(classroomId, { reason, ...(message ? { message } : {}), at });
     }
+    if (request) this.addPendingSave(classroomId, request, message, at);
+    // Save-version requests ride "now" payloads only: the run that consumes
+    // them answers them (a routine debounced run never lists them).
+    const requests = now ? this.pendingRequests(classroomId, at) : [];
+    await this.sendCheckpoint(
+      { classroomId, reason, ...(message ? { message } : {}), requests },
+      { now }
+    );
+    this.watchCheckpoint(
+      classroomId,
+      durationMs(
+        now ? this.deps.config.checkpointNowMaxDelay : this.deps.config.checkpointMaxDelay
+      ),
+      at
+    );
+  }
+
+  /** One trigger: editors read fresh, the classroom's key generation applied. */
+  private async sendCheckpoint(
+    {
+      classroomId,
+      reason,
+      message,
+      requests,
+    }: {
+      classroomId: string;
+      reason: CheckpointReason;
+      message?: string;
+      requests: CheckpointRequestRef[];
+    },
+    { now, plain = false }: { now: boolean; plain?: boolean }
+  ): Promise<void> {
     // Co-authors come from collab_docs.editors (persisted by every store).
     let editors: Awaited<ReturnType<CollabDocStore['editorsForClassroom']>> = [];
     try {
@@ -557,15 +667,141 @@ export class CollabRuntime {
     } catch (err) {
       console.error(`[collab] could not read editors for classroom ${classroomId}:`, err);
     }
+    const generation = this.keyGeneration.get(classroomId) ?? 0;
     await this.deps.checkpoints.trigger(
       {
         classroomId,
         reason,
         ...(editors.length ? { editors } : {}),
         ...(message ? { message } : {}),
+        ...(requests.length ? { requests } : {}),
       },
-      { now }
+      { now, ...(plain ? { plain } : {}), ...(generation ? { generation } : {}) }
     );
+  }
+
+  // ─── Save-version requests ──────────────────────────────────────────────
+
+  private addPendingSave(
+    classroomId: string,
+    request: CheckpointRequestRef,
+    message: string | undefined,
+    at: number
+  ): void {
+    let pending = this.pendingSaves.get(classroomId);
+    if (!pending) {
+      pending = { requests: new Map() };
+      this.pendingSaves.set(classroomId, pending);
+    }
+    pending.requests.set(request.id, { ...request, at });
+    if (message) pending.message = message;
+  }
+
+  /** The classroom's unanswered requests (expired ones dropped). */
+  private pendingRequests(classroomId: string, now = Date.now()): CheckpointRequestRef[] {
+    const pending = this.pendingSaves.get(classroomId);
+    if (!pending) return [];
+    for (const [id, entry] of pending.requests) {
+      if (now - entry.at > SAVE_REQUEST_TTL_MS) pending.requests.delete(id);
+    }
+    if (pending.requests.size === 0) {
+      this.pendingSaves.delete(classroomId);
+      return [];
+    }
+    return [...pending.requests.values()].map(({ id, kind, docId }) => ({ id, kind, docId }));
+  }
+
+  /** A run reported these requests: they are answered. */
+  requestsAnswered(ids: Iterable<string>): void {
+    const answered = new Set(ids);
+    if (answered.size === 0) return;
+    for (const [classroomId, pending] of this.pendingSaves) {
+      for (const id of answered) pending.requests.delete(id);
+      if (pending.requests.size === 0) this.pendingSaves.delete(classroomId);
+    }
+  }
+
+  // ─── Checkpoint watchdog ────────────────────────────────────────────────
+
+  /**
+   * Watch a trigger: once it is past due (`windowMs`, its debounce
+   * maxDelay, plus the margin), a classroom row that has been dirty and
+   * unvisited by any run all that time means the trigger went missing —
+   * Trigger.dev has been seen to leave a debounced run DELAYED forever. The
+   * re-trigger is a plain run (no debounce key, which a stuck run would
+   * absorb), the classroom's keys move to a new generation, and after
+   * `checkpointWatchdogRetries` losses in a row the sweeper takes over.
+   * In-memory: a restart forgets the watches (the sweeper is the backstop).
+   */
+  private watchCheckpoint(classroomId: string, windowMs: number, at = Date.now()): void {
+    const olderThanMs = windowMs + this.deps.config.checkpointWatchdogMarginMs;
+    this.addWatch(classroomId, at + olderThanMs, olderThanMs);
+  }
+
+  private addWatch(classroomId: string, due: number, olderThanMs: number): void {
+    if (this.destroyed) return;
+    const watch = this.watches.get(classroomId);
+    if (watch && watch.due <= due) {
+      // Already watched sooner: remember the latest due for afterwards.
+      if (due > watch.due && (!watch.next || due > watch.next.due)) {
+        watch.next = { due, olderThanMs };
+      }
+      return;
+    }
+    let next = watch ? { due: watch.due, olderThanMs: watch.olderThanMs } : undefined;
+    if (watch?.next && (!next || watch.next.due > next.due)) next = watch.next;
+    if (watch) clearTimeout(watch.timer);
+    const timer = setTimeout(
+      () => void this.checkWatch(classroomId),
+      Math.max(0, due - Date.now())
+    );
+    timer.unref();
+    this.watches.set(classroomId, { due, olderThanMs, timer, ...(next ? { next } : {}) });
+  }
+
+  private async checkWatch(classroomId: string): Promise<void> {
+    const watch = this.watches.get(classroomId);
+    if (!watch || this.destroyed) return;
+    this.watches.delete(classroomId);
+    let lost = false;
+    try {
+      lost = await this.deps.store.lostCheckpoint(classroomId, watch.olderThanMs);
+    } catch (err) {
+      console.error(`[collab] checkpoint watchdog for classroom ${classroomId} failed:`, err);
+    }
+    if (lost && !this.destroyed) {
+      const streak = (this.lostStreak.get(classroomId) ?? 0) + 1;
+      this.lostStreak.set(classroomId, streak);
+      if (streak > this.deps.config.checkpointWatchdogRetries) {
+        console.error(
+          `[collab] checkpoint for classroom ${classroomId} still missing after ${streak - 1} re-trigger(s); leaving it to the sweeper`
+        );
+      } else {
+        const generation = (this.keyGeneration.get(classroomId) ?? 0) + 1;
+        this.keyGeneration.set(classroomId, generation);
+        console.warn(
+          `[collab] checkpoint trigger for classroom ${classroomId} went missing (dirty and unvisited for ${Math.round(watch.olderThanMs / 1000)} s); re-triggering (keys now generation ${generation})`
+        );
+        const pending = this.pendingSaves.get(classroomId);
+        const requests = this.pendingRequests(classroomId);
+        await this.sendCheckpoint(
+          {
+            classroomId,
+            reason: requests.length ? 'save-version' : 'store',
+            ...(requests.length && pending?.message ? { message: pending.message } : {}),
+            requests,
+          },
+          { now: true, plain: true }
+        );
+        // A plain run starts at once: due after the margin alone.
+        this.watchCheckpoint(classroomId, 0);
+      }
+    } else if (!lost) {
+      this.lostStreak.delete(classroomId);
+    }
+    if (watch.next && !this.destroyed) {
+      this.addWatch(classroomId, watch.next.due, watch.next.olderThanMs);
+    }
   }
 
   /**
@@ -575,8 +811,16 @@ export class CollabRuntime {
    */
   private async onLastLeave(payload: onDisconnectPayload): Promise<void> {
     if (payload.document.getConnectionsCount() > 0) return;
+    // An agent's direct connection closing is not a person leaving: its
+    // edits wait for the normal debounce (see store()).
+    if ((payload.context as Partial<DirectEditContext> | undefined)?.agent) return;
     const doc = this.loaded.get(payload.documentName);
-    if (!doc || doc.dirty) return;
+    if (!doc) return;
+    if (doc.dirty) {
+      // The store about to run on this leave triggers the immediate checkpoint.
+      doc.humanLeft = true;
+      return;
+    }
     const row = await this.deps.store.get(doc.room.kind, doc.room.id);
     if (row && row.version > row.pushed_version) {
       await this.triggerCheckpoint(doc.classroomId, 'last-leave', true);
@@ -598,13 +842,22 @@ export class CollabRuntime {
 
   // ─── Helpers for the internal API ───────────────────────────────────────
 
-  /** The loaded document for a doc (any epoch), if any. */
+  /**
+   * The loaded document for a doc: the newest epoch's when a reseed left the
+   * old room loaded for a moment (its sockets are being closed), so reads,
+   * broadcasts and flushes go to the room people are moving to.
+   */
   loadedDocument(kind: CollabKind, docId: string): Document | null {
+    let best: Document | null = null;
+    let bestEpoch = -Infinity;
     for (const [name, document] of this.hocuspocus.documents) {
       const room = parseRoom(name);
-      if (room && room.kind === kind && room.id === docId) return document;
+      if (room && room.kind === kind && room.id === docId && room.epoch > bestEpoch) {
+        best = document;
+        bestEpoch = room.epoch;
+      }
     }
-    return null;
+    return best;
   }
 
   /** True when a browser has the doc open (direct connections don't count). */
@@ -641,6 +894,59 @@ export class CollabRuntime {
     const document = this.loadedDocument(kind, docId);
     const entry = document ? this.loaded.get(document.name) : undefined;
     if (entry) entry.deleted = true;
+  }
+
+  /**
+   * Manual epoch reset (`POST /internal/:kind/:id/reset`): drop the live
+   * room and make the next open seed from git. Unpushed edits refuse it
+   * (409 `unpushed-edits`) unless `discard`. The old room is never stored
+   * again; its sockets close with 4409 (reload into the new epoch).
+   */
+  async resetDoc(
+    kind: CollabKind,
+    docId: string,
+    actor: CollabActor,
+    { discard }: { discard: boolean }
+  ): Promise<{ epoch: number; closed: number; discarded: boolean }> {
+    await this.flush(kind, docId);
+    const row = await this.deps.store.get(kind, docId);
+    if (!row) return { epoch: 1, closed: this.closeSockets(kind, docId), discarded: false };
+    const dirty =
+      (!isReseedMarker(row) && row.version > row.pushed_version) ||
+      this.hasUnstoredChanges(kind, docId);
+    if (dirty && !discard) {
+      throw new CollabHttpError(409, {
+        error: 'unpushed-edits',
+        message: 'the live doc holds edits not in git yet; pass discard: true to drop them',
+        version: row.version,
+        pushedVersion: row.pushed_version,
+      });
+    }
+    let marked = dirty ? null : await this.deps.store.markReseed(kind, docId);
+    // markReseed refuses a row that turned dirty meanwhile: only `discard` drops it.
+    let discarded = false;
+    if (!marked && (dirty || discard)) {
+      marked = await this.deps.store.forceReseed(kind, docId);
+      discarded = true;
+    }
+    if (!marked) {
+      throw new CollabHttpError(409, {
+        error: 'unpushed-edits',
+        message: 'the live doc was edited meanwhile; pass discard: true to drop the edits',
+      });
+    }
+    // Whatever is loaded (any epoch) is never stored again: a store would be
+    // refused for the bumped epoch anyway; this keeps it from trying.
+    for (const [name] of this.hocuspocus.documents) {
+      const room = parseRoom(name);
+      const entry = this.loaded.get(name);
+      if (room && room.kind === kind && room.id === docId && entry) entry.deleted = true;
+    }
+    const closed = this.closeSockets(kind, docId);
+    console.warn(
+      `[collab] ${kind}:${docId} reset to epoch ${marked.epoch} by ${actor.name} (${actor.userId})${discarded ? ', unpushed edits discarded' : ''}`
+    );
+    return { epoch: marked.epoch, closed, discarded };
   }
 
   /** A stateless JSON message to every socket on the doc; the count reached. */
@@ -702,6 +1008,14 @@ export class CollabRuntime {
     const adapter = await this.adapter(kind);
     const located = await adapter.locate(docId);
     if (!located) throw new CollabHttpError(404, { error: 'not-found' });
+    // Live edits only where the classroom edits live. An outside push is
+    // still merged into a buffered doc (its unpushed edits must reach git).
+    if (located.collabEnabled === false && !options.external) {
+      throw new CollabHttpError(409, {
+        error: 'collab-disabled',
+        message: 'live editing is off for this classroom',
+      });
+    }
 
     const context: DirectEditContext = {
       userId: actor.userId,

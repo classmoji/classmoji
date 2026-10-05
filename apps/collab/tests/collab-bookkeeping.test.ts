@@ -222,7 +222,8 @@ describe('audit', () => {
       userId: 'teacher-1',
       classroomId: CLASSROOM_ID,
       role: 'TEACHER',
-      resourceType: 'collab_page',
+      // The same resource type the MCP page tools and checkpoints write.
+      resourceType: 'PAGES',
       resourceId: PAGE,
     });
     a.destroy();

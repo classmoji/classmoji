@@ -9,7 +9,8 @@ import type { CollabRuntime } from './server.ts';
  * non-upgrade request and answers "Welcome to Hocuspocus!" unless a hook
  * rejects; rejecting with no error (`throw null`) means "handled, stop".
  *
- * `GET /health` (public) and `/internal/*` (shared secret, see internal.ts).
+ * `GET /health`, `GET /health/db` (public) and `/internal/*` (shared secret,
+ * see internal.ts).
  */
 export async function handleRequest(
   { request, response }: Pick<onRequestPayload, 'request' | 'response'>,
@@ -17,14 +18,25 @@ export async function handleRequest(
 ): Promise<void> {
   const url = new URL(request.url ?? '/', 'http://collab.local');
 
-  if (url.pathname === '/health') {
+  // `/health` (Fly's check): always 200 while the process serves — a DB blip
+  // must not unroute the only instance and drop every open editor — with the
+  // database's state in the body. `/health/db` (uptime monitors): 503 when
+  // the database does not answer.
+  if (url.pathname === '/health' || url.pathname === '/health/db') {
     if (request.method !== 'GET' && request.method !== 'HEAD') {
       response.writeHead(405, { Allow: 'GET, HEAD' });
       response.end();
-    } else {
-      response.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-      response.end(request.method === 'HEAD' ? undefined : JSON.stringify({ status: 'ok' }));
+      throw null;
     }
+    const db = await runtime.dbHealth();
+    const strict = url.pathname === '/health/db';
+    const status = strict && db === 'down' ? 503 : 200;
+    response.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    response.end(
+      request.method === 'HEAD'
+        ? undefined
+        : JSON.stringify({ status: db === 'down' ? 'degraded' : 'ok', db })
+    );
     throw null;
   }
 

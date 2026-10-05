@@ -256,7 +256,9 @@ export function createPageAdapter(
 
     async locate(docId) {
       const page = await deps.findPage(docId);
-      return page ? { classroomId: page.classroom_id } : null;
+      return page
+        ? { classroomId: page.classroom_id, collabEnabled: page.classroom?.collab_enabled === true }
+        : null;
     },
 
     async seed({ docId }): Promise<SeedResult> {
@@ -401,11 +403,17 @@ export function createPageAdapter(
       // base: the file at `before` (exactly the outside change), else the
       // blob the live doc descends from.
       let baseRaw: { blocks: PageBlock[]; cover: PageCoverImage | null } | null = null;
+      // No content file before the push (a page created outside after a
+      // blank start, or the live doc was seeded blank): the true merge base
+      // is EMPTY — both sides' blocks are additions, nothing is a deletion.
+      const empty = { blocks: [] as PageBlock[], cover: null };
       if (before && !/^0+$/.test(before)) {
         try {
           const loaded = await deps.loadContent(page, { ref: before });
           if (loaded.format === 'json') {
             baseRaw = { blocks: loaded.blocks as PageBlock[], cover: loaded.coverImage ?? null };
+          } else if (loaded.format === 'none' && !ctx.row?.source_sha) {
+            baseRaw = empty;
           }
         } catch (err) {
           console.warn(`[collab] page ${page.id}: base at ${before} unreadable:`, err);
@@ -419,6 +427,8 @@ export function createPageAdapter(
           baseRaw = { blocks: parsed.blocks as PageBlock[], cover: parsed.coverImage ?? null };
         }
       }
+      // Seeded blank (no source file ever) and nothing readable at `before`.
+      if (!baseRaw && ctx.row && !baseSha && !ctx.row.pushed_commit) baseRaw = empty;
       if (!baseRaw) {
         // Taking theirs wholesale would revert every live edit. Keep the live
         // doc and refuse; the caller retries / alerts.

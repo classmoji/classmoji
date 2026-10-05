@@ -1,7 +1,13 @@
 import getPrisma from '@classmoji/database';
 import type { CheckpointDocEditors, CollabActor, CollabKind } from '@classmoji/collab';
 
-import type { CollabDocRow, CollabDocStore, NewCollabDoc, StoredVersion } from './types.ts';
+import type {
+  CollabConflict,
+  CollabDocRow,
+  CollabDocStore,
+  NewCollabDoc,
+  StoredVersion,
+} from './types.ts';
 
 /**
  * `collab_docs` through Prisma. Writes that need SQL Prisma's query API
@@ -92,9 +98,30 @@ function toRow(row: {
   };
 }
 
+/**
+ * What the store needs of a Prisma client: the app's client, or a
+ * transaction client (`$transaction(tx => …)`), so a DB test can run every
+ * statement inside a transaction it rolls back.
+ */
+export type CollabDocDb = Pick<
+  ReturnType<typeof getPrisma>,
+  '$executeRawUnsafe' | '$queryRawUnsafe' | 'collabDoc'
+>;
+
 export class PrismaCollabDocStore implements CollabDocStore {
+  private readonly client: CollabDocDb | null;
+
+  /** No client: the app's shared one (`getPrisma()`), resolved per call. */
+  constructor(client?: CollabDocDb) {
+    this.client = client ?? null;
+  }
+
+  private db(): CollabDocDb {
+    return this.client ?? getPrisma();
+  }
+
   async get(kind: CollabKind, docId: string): Promise<CollabDocRow | null> {
-    const row = await getPrisma().collabDoc.findUnique({
+    const row = await this.db().collabDoc.findUnique({
       where: { kind_doc_id: { kind, doc_id: docId } },
     });
     return row ? toRow(row) : null;
@@ -103,7 +130,7 @@ export class PrismaCollabDocStore implements CollabDocStore {
   async insertSeed(seed: NewCollabDoc): Promise<CollabDocRow> {
     // ON CONFLICT DO NOTHING — except over a reseed marker (empty state),
     // which the seed fills in place under the marker's (bumped) epoch.
-    await getPrisma().$executeRawUnsafe(
+    await this.db().$executeRawUnsafe(
       `INSERT INTO "collab_docs"
          ("kind", "doc_id", "classroom_id", "state", "schema_version", "source_sha", "updated_at")
        VALUES ($1, $2, $3, $4, $5, $6, ${NOW_UTC})
@@ -136,7 +163,7 @@ export class PrismaCollabDocStore implements CollabDocStore {
     state: Uint8Array;
     editors?: CollabActor[];
   }): Promise<StoredVersion | null> {
-    const rows = await getPrisma().$queryRawUnsafe<StoredVersion[]>(
+    const rows = await this.db().$queryRawUnsafe<StoredVersion[]>(
       `INSERT INTO "collab_docs"
          ("kind", "doc_id", "classroom_id", "epoch", "state", "schema_version",
           "version", "dirty_since", "updated_at", "editors")
@@ -164,7 +191,7 @@ export class PrismaCollabDocStore implements CollabDocStore {
 
   async addEditors(kind: CollabKind, docId: string, editors: CollabActor[]): Promise<void> {
     if (editors.length === 0) return;
-    await getPrisma().$executeRawUnsafe(
+    await this.db().$executeRawUnsafe(
       // No new state: the entry is stamped with the row's current version.
       `UPDATE "collab_docs" SET "editors" = ${mergeEditorsSql(stampEditorsSql('$3', '"collab_docs"."version"'))}
        WHERE "kind" = $1 AND "doc_id" = $2`,
@@ -175,7 +202,7 @@ export class PrismaCollabDocStore implements CollabDocStore {
   }
 
   async editorsForClassroom(classroomId: string): Promise<CheckpointDocEditors[]> {
-    const rows = await getPrisma().$queryRawUnsafe<
+    const rows = await this.db().$queryRawUnsafe<
       { kind: CollabKind; doc_id: string; editors: unknown }[]
     >(
       `SELECT "kind", "doc_id", "editors" FROM "collab_docs"
@@ -186,23 +213,19 @@ export class PrismaCollabDocStore implements CollabDocStore {
     return rows.map(r => ({ kind: r.kind, docId: r.doc_id, editors: actorsOf(r.editors) }));
   }
 
-  async setLastConflict(
-    kind: CollabKind,
-    docId: string,
-    conflict: { at: string; sha: string; ids: string[] }
-  ): Promise<void> {
-    await getPrisma().collabDoc.updateMany({
+  async setLastConflict(kind: CollabKind, docId: string, conflict: CollabConflict): Promise<void> {
+    await this.db().collabDoc.updateMany({
       where: { kind, doc_id: docId },
-      data: { last_conflict: conflict },
+      data: { last_conflict: { ...conflict } },
     });
   }
 
   async delete(kind: CollabKind, docId: string): Promise<void> {
-    await getPrisma().collabDoc.deleteMany({ where: { kind, doc_id: docId } });
+    await this.db().collabDoc.deleteMany({ where: { kind, doc_id: docId } });
   }
 
   async markReseed(kind: CollabKind, docId: string): Promise<{ epoch: number } | null> {
-    const rows = await getPrisma().$queryRawUnsafe<{ epoch: number }[]>(
+    const rows = await this.db().$queryRawUnsafe<{ epoch: number }[]>(
       `UPDATE "collab_docs" SET
          "epoch" = "epoch" + 1,
          "state" = ''::bytea,
@@ -219,7 +242,7 @@ export class PrismaCollabDocStore implements CollabDocStore {
   async markReseedClassroom(
     classroomId: string
   ): Promise<{ kind: CollabKind; doc_id: string; epoch: number }[]> {
-    return getPrisma().$queryRawUnsafe<{ kind: CollabKind; doc_id: string; epoch: number }[]>(
+    return this.db().$queryRawUnsafe<{ kind: CollabKind; doc_id: string; epoch: number }[]>(
       `UPDATE "collab_docs" SET
          "epoch" = "epoch" + 1,
          "state" = ''::bytea,
@@ -234,9 +257,48 @@ export class PrismaCollabDocStore implements CollabDocStore {
   }
 
   async setSourceSha(kind: CollabKind, docId: string, sourceSha: string | null): Promise<void> {
-    await getPrisma().collabDoc.updateMany({
+    await this.db().collabDoc.updateMany({
       where: { kind, doc_id: docId },
       data: { source_sha: sourceSha },
     });
+  }
+
+  async lostCheckpoint(classroomId: string, olderThanMs: number): Promise<boolean> {
+    const seconds = Math.max(0, olderThanMs) / 1000;
+    const rows = await this.db().$queryRawUnsafe<{ lost: boolean }[]>(
+      `SELECT EXISTS (
+         SELECT 1 FROM "collab_docs"
+         WHERE "classroom_id" = $1
+           AND "version" > "pushed_version"
+           AND octet_length("state") > 0
+           AND "dirty_since" <= ${NOW_UTC} - make_interval(secs => $2)
+           AND ("last_checkpoint_at" IS NULL
+                OR "last_checkpoint_at" < ${NOW_UTC} - make_interval(secs => $2))
+       ) AS "lost"`,
+      classroomId,
+      seconds
+    );
+    return rows[0]?.lost === true;
+  }
+
+  async forceReseed(kind: CollabKind, docId: string): Promise<{ epoch: number } | null> {
+    const rows = await this.db().$queryRawUnsafe<{ epoch: number }[]>(
+      `UPDATE "collab_docs" SET
+         "epoch" = "epoch" + 1,
+         "state" = ''::bytea,
+         "pushed_version" = "version",
+         "dirty_since" = NULL,
+         "editors" = NULL,
+         "updated_at" = ${NOW_UTC}
+       WHERE "kind" = $1 AND "doc_id" = $2
+       RETURNING "epoch"`,
+      kind,
+      docId
+    );
+    return rows[0] ?? null;
+  }
+
+  async ping(): Promise<void> {
+    await this.db().$queryRawUnsafe('SELECT 1');
   }
 }

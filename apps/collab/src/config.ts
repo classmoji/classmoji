@@ -12,6 +12,9 @@
  */
 
 import { AGENT_TOUCH_EXPIRE_MS } from '@classmoji/collab';
+
+/** = checkpoint.ts CHECKPOINT_NOW_MAX_DELAY (kept here: checkpoint.ts imports this file's types). */
+const CHECKPOINT_NOW_MAX_DELAY = '10s';
 import { resolveCollabInternalSecret } from '@classmoji/collab/env';
 
 export interface CollabConfig {
@@ -21,6 +24,8 @@ export interface CollabConfig {
   allowedOrigins: Set<string>;
   checkpointDelay: string;
   checkpointMaxDelay: string;
+  /** The "now" key's maxDelay (CHECKPOINT_NOW_MAX_DELAY; tests shorten it). */
+  checkpointNowMaxDelay: string;
   /** Hocuspocus store debounce (ms) and its ceiling. */
   storeDebounceMs: number;
   storeMaxDebounceMs: number;
@@ -35,6 +40,14 @@ export interface CollabConfig {
   agentRenewMs: number;
   /** How long a batch's `touched` list stays in the agent's state (ms). */
   agentTouchMs: number;
+  /**
+   * Checkpoint watchdog: how long past a trigger's latest due time (its
+   * debounce maxDelay) a row may stay dirty and unvisited before the trigger
+   * counts as lost and is re-sent (ms). Covers queueing and the run itself.
+   */
+  checkpointWatchdogMarginMs: number;
+  /** Consecutive lost triggers re-sent per classroom before giving up to the sweeper. */
+  checkpointWatchdogRetries: number;
 }
 
 const DURATION = /^\d+[smhdw]$/;
@@ -98,11 +111,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CollabConfig {
       production ? '4m' : '30s',
       'COLLAB_CHECKPOINT_MAX_DELAY'
     ),
+    checkpointNowMaxDelay: CHECKPOINT_NOW_MAX_DELAY,
     storeDebounceMs: 2_000,
     storeMaxDebounceMs: 10_000,
     recheckIntervalMs: 60_000,
     agentPresenceMs: 60_000,
     agentRenewMs: 10_000,
     agentTouchMs: AGENT_TOUCH_EXPIRE_MS,
+    checkpointWatchdogMarginMs: 120_000,
+    checkpointWatchdogRetries: 3,
   };
 }

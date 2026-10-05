@@ -14,10 +14,26 @@ describe('collab server HTTP', () => {
     await server.close();
   });
 
-  it('answers GET /health with 200', async () => {
+  it('answers GET /health with 200 (db unknown: the test store has no ping)', async () => {
     const res = await fetch(`${server.httpUrl}/health`);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ status: 'ok' });
+    expect(await res.json()).toEqual({ status: 'ok', db: 'unknown' });
+  });
+
+  it('reports a database that does not answer: /health stays 200, /health/db is 503', async () => {
+    const store = server.store as typeof server.store & { ping?: () => Promise<void> };
+    store.ping = async () => {
+      throw new Error('db down');
+    };
+    try {
+      const health = await fetch(`${server.httpUrl}/health`);
+      expect(health.status).toBe(200);
+      expect(await health.json()).toEqual({ status: 'degraded', db: 'down' });
+      const db = await fetch(`${server.httpUrl}/health/db`);
+      expect(db.status).toBe(503);
+    } finally {
+      delete store.ping;
+    }
   });
 
   it('answers anything else with 404, not the Hocuspocus banner', async () => {

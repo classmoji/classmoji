@@ -26,8 +26,19 @@ export interface CollabDocRow {
   editors: CollabActor[];
   last_checkpoint_at: Date | null;
   last_checkpoint_error: string | null;
-  /** Last outside-push conflict: `{ at, sha, ids }` (null: none). */
-  last_conflict: { at: string; sha: string; ids: string[] } | null;
+  /**
+   * Last outside-push conflict: `{ at, sha, ids }` (null: none). `reason:
+   * 'no-merge-base'` = that push could not be merged at all (nothing of it
+   * is in the live doc; the worker stops re-notifying that commit).
+   */
+  last_conflict: CollabConflict | null;
+}
+
+export interface CollabConflict {
+  at: string;
+  sha: string;
+  ids: string[];
+  reason?: 'no-merge-base';
 }
 
 export interface NewCollabDoc {
@@ -94,11 +105,7 @@ export interface CollabDocStore {
   editorsForClassroom(classroomId: string): Promise<CheckpointDocEditors[]>;
 
   /** Record the last outside-push conflict summary (`last_conflict`). */
-  setLastConflict(
-    kind: CollabKind,
-    docId: string,
-    conflict: { at: string; sha: string; ids: string[] }
-  ): Promise<void>;
+  setLastConflict(kind: CollabKind, docId: string, conflict: CollabConflict): Promise<void>;
 
   /** Delete the row (the doc itself was deleted). */
   delete(kind: CollabKind, docId: string): Promise<void>;
@@ -117,6 +124,23 @@ export interface CollabDocStore {
 
   /** Record the content-file blob sha the live doc now descends from. */
   setSourceSha(kind: CollabKind, docId: string, sourceSha: string | null): Promise<void>;
+
+  /**
+   * A checkpoint trigger for this classroom went missing: some row has been
+   * dirty for at least `olderThanMs` and no worker run has looked at it in
+   * that time (`last_checkpoint_at` null or older). Measured on the DB clock.
+   */
+  lostCheckpoint(classroomId: string, olderThanMs: number): Promise<boolean>;
+
+  /**
+   * `markReseed` that also discards unpushed edits (manual reset): epoch + 1,
+   * empty state, `pushed_version = version`, editors cleared. Null when there
+   * is no row.
+   */
+  forceReseed(kind: CollabKind, docId: string): Promise<{ epoch: number } | null>;
+
+  /** A cheap round trip to the database (health). */
+  ping?(): Promise<void>;
 }
 
 /** Epoch for a doc: the row's, or 1 when there is no row. */

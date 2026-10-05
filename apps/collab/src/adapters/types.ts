@@ -201,8 +201,11 @@ export interface CollabAdapter<K extends CollabKind = CollabKind, Op = unknown> 
    */
   authorize(args: { userId: string; docId: string }): Promise<AuthorizeResult>;
 
-  /** The doc's classroom, with no user check (internal API callers are trusted). */
-  locate(docId: string): Promise<{ classroomId: string } | null>;
+  /**
+   * The doc's classroom, with no user check (internal API callers are
+   * trusted), and whether that classroom edits live (`collab_enabled`).
+   */
+  locate(docId: string): Promise<{ classroomId: string; collabEnabled?: boolean } | null>;
 
   /**
    * Build a NEW Y.Doc from git (page: content.json; deck: deck.json, legacy
