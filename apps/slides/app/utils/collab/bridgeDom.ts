@@ -14,6 +14,8 @@ import {
   INERT_ATTR_PREFIX,
   RUNTIME_SECTION_ATTRS,
   RUNTIME_SECTION_CLASSES,
+  HTML_BLOCK_SELECTOR,
+  isBlockedFrameAttr,
   isBlockedHtmlBlockAttr,
   isBlockedSvgBlockAttr,
   offListSvgBlockNodes,
@@ -297,6 +299,11 @@ const INERT_NODE_ATTR = 'data-cm-inert-node';
  * Undo `stripUnsafeMarkup`: every `data-cm-inert-*` attribute gets its
  * original name back, in place. Serialization runs this first, so what the
  * editor writes is the authored markup — never the display-time version.
+ *
+ * Except an html-block frame attribute the frame rule blocks (an `allow`
+ * beyond fullscreen, a source under an unsafe sandbox): the stored form
+ * keeps those inert too (the server's normalize renames them), so writing
+ * them back live would only differ from what is stored and be renamed again.
  */
 export function restoreInertMarkup(root: Element | DocumentFragment): void {
   for (const holder of Array.from(root.querySelectorAll(`template[${INERT_NODE_ATTR}]`))) {
@@ -305,9 +312,20 @@ export function restoreInertMarkup(root: Element | DocumentFragment): void {
   for (const el of elementsUnder(root)) {
     const attrs = Array.from(el.attributes);
     if (!attrs.some(attr => attr.name.startsWith(INERT_PREFIX))) continue;
-    rebuildAttributes(el, attrs, name =>
-      name.startsWith(INERT_PREFIX) ? name.slice(INERT_PREFIX.length) : name
-    );
+    const inBlock = el.closest(HTML_BLOCK_SELECTOR) !== null;
+    rebuildAttributes(el, attrs, name => {
+      if (!name.startsWith(INERT_PREFIX)) return name;
+      const original = name.slice(INERT_PREFIX.length);
+      const value = el.getAttribute(name);
+      const blocked = isBlockedFrameAttr(
+        el.localName,
+        original,
+        el.getAttribute('sandbox'),
+        inBlock,
+        value
+      );
+      return blocked ? name : original;
+    });
   }
 }
 

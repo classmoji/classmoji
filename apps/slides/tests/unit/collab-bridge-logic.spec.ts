@@ -419,3 +419,37 @@ test.describe('waiting for local edits before a checkpoint', () => {
     expect(ran).toBe(true);
   });
 });
+
+test.describe('html-block frames in the live editor', () => {
+  // The reviewer's fixture (an html block whose frame asks for more than
+  // fullscreen) in its authored form and in the form the server stores.
+  const block = (allowAttr: string) =>
+    '<div class="sl-block" data-block-type="html" data-cm-block-id="h1" style="left: 80px; top: 140px; width: 640px; height: 360px;">' +
+    '<div class="sl-block-content"><iframe sandbox="allow-scripts allow-pointer-lock allow-modals allow-popups" ' +
+    `${allowAttr} style="width: 100%; height: 100%; border: 0px;" srcdoc="&lt;p&gt;hi &amp;amp; x&lt;/p&gt;"></iframe></div></div>`;
+  const AUTHORED = block('allow="camera; fullscreen"');
+  const STORED = block('data-cm-inert-allow="camera; fullscreen"');
+
+  test('a blocked frame attribute is written in the stored (inert) form, from either form', () => {
+    const doc = dom('<!DOCTYPE html><html><body></body></html>');
+    // As this DOM serializes it (jsdom and browsers escape attribute text differently).
+    const serialized = (html: string) => {
+      const holder = doc.createElement('div');
+      holder.innerHTML = html;
+      return holder.innerHTML;
+    };
+    for (const html of [AUTHORED, STORED]) {
+      const section = sectionFromMarkup(doc, `<section data-cm-id="s1">${html}</section>`);
+      expect(serializeSection(section).html).toBe(serialized(STORED));
+    }
+  });
+
+  test('a frame allowed to load is written as authored', () => {
+    const doc = dom('<!DOCTYPE html><html><body></body></html>');
+    const ok = block('allow="fullscreen"');
+    const section = sectionFromMarkup(doc, `<section data-cm-id="s1">${ok}</section>`);
+    const holder = doc.createElement('div');
+    holder.innerHTML = ok;
+    expect(serializeSection(section).html).toBe(holder.innerHTML);
+  });
+});

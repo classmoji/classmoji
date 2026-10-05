@@ -63,15 +63,18 @@ test.describe('html block isolation rule (display)', () => {
       expect(frame.hasAttribute('data-cm-inert-srcdoc')).toBe(true);
     });
 
-    test(`sandbox ${JSON.stringify(sandbox)}: the live bridge renders it inert and stores it as authored`, () => {
+    test(`sandbox ${JSON.stringify(sandbox)}: the live bridge renders it inert and stores it inert`, () => {
       const html = block(sandbox);
       const fragment = safeInnerHtml(doc, html);
       const frame = fragment.querySelector('iframe') as HTMLIFrameElement;
       expect(frame.hasAttribute('srcdoc')).toBe(false);
-      // Serialization restores the authored attribute in place.
+      // Written in the form the server stores (its normalize renames it the
+      // same way), so an edit never differs from the stored slide there.
       const section = sectionFromMarkup(doc, `<section data-cm-id="s1">${html}</section>`);
       expect(section.querySelector('iframe')?.hasAttribute('srcdoc')).toBe(false);
-      expect(serializeSection(section).html).toBe(holder(html).innerHTML);
+      const inert = holder(html);
+      neutralizeHtmlBlockFrames(inert);
+      expect(serializeSection(section).html).toBe(inert.innerHTML);
     });
   }
 
@@ -101,14 +104,19 @@ test.describe('html block isolation rule (display)', () => {
     expect(embed.getAttribute('data-src')).toBe('/content/game/index.html');
   });
 
-  test('the inert round trip is byte-identical, attribute order included', () => {
+  test('the round trip keeps what the frame rule blocks inert, attribute order included', () => {
     const html = block('allow-same-origin allow-scripts');
     const root = holder(html);
     const before = root.innerHTML;
     stripUnsafeMarkup(root);
-    expect(root.innerHTML).not.toBe(before);
+    const shown = root.innerHTML;
+    expect(shown).not.toBe(before);
     restoreInertMarkup(root);
-    expect(root.innerHTML).toBe(before);
+    // The stored form: the blocked source stays inert, in place.
+    expect(root.innerHTML).toBe(shown);
+    stripUnsafeMarkup(root);
+    restoreInertMarkup(root);
+    expect(root.innerHTML).toBe(shown);
   });
 
   test('frame contents never serialize; editor block classes do not either', () => {
@@ -261,7 +269,7 @@ test.describe('one off-list filter for every display path', () => {
 });
 
 test.describe('html block frames delegate fullscreen only (display)', () => {
-  test('an allow beyond fullscreen renders inert and is stored as authored', () => {
+  test('an allow beyond fullscreen renders inert and is stored inert', () => {
     const html = block(HTML_BLOCK_SANDBOX).replace(
       'allow="fullscreen"',
       'allow="camera; microphone"'
@@ -276,7 +284,7 @@ test.describe('html block frames delegate fullscreen only (display)', () => {
     const fragment = safeInnerHtml(doc, html);
     expect(fragment.querySelector('iframe')?.hasAttribute('allow')).toBe(false);
     const section = sectionFromMarkup(doc, `<section data-cm-id="s1">${html}</section>`);
-    expect(serializeSection(section).html).toBe(holder(html).innerHTML);
+    expect(serializeSection(section).html).toBe(root.innerHTML);
   });
 
   test('the standard frame is left byte for byte', () => {
