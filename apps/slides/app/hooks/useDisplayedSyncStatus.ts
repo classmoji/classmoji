@@ -9,7 +9,9 @@ import type { SyncStatus } from '~/utils/collab/collab';
  * briefly once shown; `offline` at once. The exact status keeps driving the
  * leave-page warning and Save version — only the display is debounced.
  */
-export function useDisplayedSyncStatus(raw: SyncStatus): SyncStatus {
+export function useDisplayedSyncStatus(
+  raw: Exclude<SyncStatus, 'connecting'>
+): Exclude<SyncStatus, 'connecting'> {
   const [state, dispatch] = useReducer(syncDisplayReducer, raw, initialSyncDisplay);
 
   useEffect(() => {

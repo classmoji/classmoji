@@ -17,13 +17,23 @@ import {
   shouldRelease,
   shouldRenderRemoteHtml,
 } from '../../app/utils/collab/bridgeLogic.ts';
-import { transformIndex } from '../../app/utils/collab/textCursor.ts';
+import { applyNotesEdit, transformIndex } from '../../app/utils/collab/textCursor.ts';
+import { historyKey } from '../../app/utils/collab/bridgeLogic.ts';
+import * as Y from 'yjs';
 import {
   applySectionAttrs,
   arrangeChildren,
+  safeInnerHtml,
   scanDeckDom,
+  sectionFromMarkup,
   serializeSection,
 } from '../../app/utils/collab/bridgeDom.ts';
+import {
+  deriveSyncStatus,
+  newSaveVersionRequestId,
+  parseStatelessMessage,
+  saveVersionAnswer,
+} from '../../app/utils/collab/collab.ts';
 import { changedSlideIds } from '../../app/utils/collab/previewHighlight.ts';
 
 const dom = (html: string): Document => new JSDOM(html).window.document;
@@ -269,5 +279,104 @@ test.describe('editor state is not content', () => {
     const html = serializeSection(doc.querySelector('section') as HTMLElement).html ?? '';
     expect(html).not.toMatch(/editing|contenteditable/);
     expect(html).toContain('<div class="sl-block" data-block-type="text">');
+  });
+});
+
+test.describe('live notes typing and history keys', () => {
+  test('a keystroke is applied against what was shown, past remote edits since', () => {
+    const doc = new Y.Doc();
+    const text = doc.getText('notes');
+    text.insert(0, 'hello world');
+    const shown = text.toString();
+    // Someone else's edit lands before React re-renders the textarea.
+    const deltas: Array<Array<{ retain?: number; insert?: unknown; delete?: number }>> = [];
+    text.observe(event => deltas.push(event.delta as never));
+    text.insert(0, 'THEIRS ');
+    // The person typed "!" at the end of what they saw.
+    applyNotesEdit(text, shown, 'hello world!', deltas);
+    expect(text.toString()).toBe('THEIRS hello world!');
+    // A deletion of what they saw keeps a remote insert that landed meanwhile.
+    const shown2 = text.toString();
+    deltas.length = 0;
+    text.insert(0, 'X');
+    applyNotesEdit(text, shown2, 'THEIRS hello!', deltas);
+    expect(text.toString()).toBe('XTHEIRS hello!');
+  });
+
+  test('history keys', () => {
+    const k = (
+      key: string,
+      mods: Partial<Record<'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey', boolean>> = {}
+    ) =>
+      historyKey({ key, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, ...mods });
+    expect(k('z', { metaKey: true })).toBe('undo');
+    expect(k('Z', { metaKey: true, shiftKey: true })).toBe('redo');
+    expect(k('z', { ctrlKey: true })).toBe('undo');
+    expect(k('y', { ctrlKey: true })).toBe('redo');
+    expect(k('z')).toBeNull();
+    expect(k('z', { metaKey: true, altKey: true })).toBeNull();
+    expect(k('y', { metaKey: true })).toBeNull();
+  });
+});
+
+test.describe('svg blocks in the live editor', () => {
+  test('a node off the svg lists is not displayed, and is written back as authored', () => {
+    const doc = dom('<!DOCTYPE html><html><body></body></html>');
+    const html =
+      '<div class="sl-block" data-block-type="svg"><div class="sl-block-content">' +
+      '<svg viewBox="0 0 1 1"><foreignObject><p>hidden</p></foreignObject>' +
+      '<rect width="1" height="1"></rect></svg></div></div>';
+    const fragment = safeInnerHtml(doc, html);
+    expect(fragment.querySelector('foreignObject')).toBeNull();
+    expect(fragment.querySelector('rect')).not.toBeNull();
+    const section = sectionFromMarkup(doc, `<section data-cm-id="s1">${html}</section>`);
+    const holder = doc.createElement('div');
+    holder.innerHTML = html;
+    expect(serializeSection(section).html).toBe(holder.innerHTML);
+  });
+});
+
+test.describe('sync status', () => {
+  test('connecting before the first sync, offline after a drop', () => {
+    const base = { synced: false, unsyncedChanges: 0 };
+    expect(deriveSyncStatus({ ...base, status: 'connecting', hasSynced: false })).toBe(
+      'connecting'
+    );
+    expect(deriveSyncStatus({ ...base, status: 'disconnected', hasSynced: true })).toBe('offline');
+    expect(deriveSyncStatus({ ...base, status: 'disconnected' })).toBe('offline');
+    expect(deriveSyncStatus({ status: 'connected', synced: true, unsyncedChanges: 0 })).toBe(
+      'synced'
+    );
+  });
+});
+
+test.describe('Save version answers', () => {
+  test('only the run that consumed the request answers it', () => {
+    const id = newSaveVersionRequestId();
+    expect(id).toMatch(/^[A-Za-z0-9_-]{8,64}$/);
+    const routine = parseStatelessMessage(
+      JSON.stringify({ type: 'checkpoint', at: '2026-10-04T03:00:00Z' })
+    );
+    expect(routine && routine.type === 'checkpoint' && saveVersionAnswer(routine, id)).toBeNull();
+    const mine = parseStatelessMessage(
+      JSON.stringify({
+        type: 'checkpoint',
+        at: '2026-10-04T03:00:00Z',
+        requestIds: [id],
+        commit: 'abc',
+      })
+    );
+    expect(mine && mine.type === 'checkpoint' && saveVersionAnswer(mine, id)).toBe('saved');
+    const already = parseStatelessMessage(
+      JSON.stringify({ type: 'checkpoint', at: 'x', requestIds: [id], alreadySaved: true })
+    );
+    expect(already && already.type === 'checkpoint' && saveVersionAnswer(already, id)).toBe(
+      'already-saved'
+    );
+    const failed = parseStatelessMessage(
+      JSON.stringify({ type: 'checkpoint', at: 'x', requestIds: [id], error: 'push failed' })
+    );
+    expect(failed && failed.type === 'checkpoint' && saveVersionAnswer(failed, id)).toBe('error');
+    expect(mine && mine.type === 'checkpoint' && saveVersionAnswer(mine, null)).toBeNull();
   });
 });

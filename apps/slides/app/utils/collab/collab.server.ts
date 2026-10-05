@@ -161,14 +161,112 @@ export function closeLiveDeck(env: CollabEnv, slideId: string) {
   return collabInternalRequest<unknown>(env, 'POST', deckInternalPath(slideId, 'close'), body);
 }
 
+/** A Save-version request id (the collab contract's `CHECKPOINT_REQUEST_ID`). */
+export const DECK_CHECKPOINT_REQUEST_ID = /^[A-Za-z0-9_-]{8,64}$/;
+
+/**
+ * The `/checkpoint` reply: the doc's version after the flush; `alreadySaved`
+ * when nothing was unpushed (no run, no broadcast follows).
+ */
+export interface DeckCheckpointReply {
+  version?: number;
+  requestId?: string;
+  alreadySaved?: boolean;
+}
+
 export function requestDeckCheckpoint(
   env: CollabEnv,
   slideId: string,
   actor: CollabActor,
-  message?: string
-) {
-  const body: CheckpointRequest = { actor, ...(message ? { message } : {}) };
-  return collabInternalRequest<unknown>(env, 'POST', deckInternalPath(slideId, 'checkpoint'), body);
+  message?: string,
+  requestId?: string
+): Promise<DeckCheckpointReply | null> {
+  const body: CheckpointRequest & { requestId?: string } = {
+    actor,
+    ...(message ? { message } : {}),
+    ...(requestId ? { requestId } : {}),
+  };
+  return collabInternalRequest<DeckCheckpointReply | null>(
+    env,
+    'POST',
+    deckInternalPath(slideId, 'checkpoint'),
+    body
+  );
+}
+
+export type PresentCheckpointOutcome = 'saved' | 'timeout' | 'error' | 'not-live';
+
+/**
+ * Save before presenting: the presenter, speaker view and followers read
+ * git, so a live deck's latest edits are checkpointed first. Asks collab for
+ * a checkpoint (it flushes the live doc first) and waits until the deck's row
+ * says that version is pushed — bounded; on `timeout` / `error` the caller
+ * presents what git has. `not-live` for a classroom that does not edit live.
+ */
+export async function checkpointBeforePresenting(
+  slide: { id: string; classroom: unknown },
+  actor: CollabActor,
+  { timeoutMs = 20_000, pollMs = 750 }: { timeoutMs?: number; pollMs?: number } = {}
+): Promise<PresentCheckpointOutcome> {
+  const env = liveEditingEnv(slide.classroom);
+  if (!env) return 'not-live';
+  const started = Date.now();
+  let reply: DeckCheckpointReply | null;
+  try {
+    reply = await requestDeckCheckpoint(env, slide.id, actor);
+  } catch (error) {
+    console.warn(`[slides] checkpoint before presenting ${slide.id} failed:`, error);
+    return 'error';
+  }
+  if (reply?.alreadySaved) return 'saved';
+  const target = typeof reply?.version === 'number' ? reply.version : null;
+  const prisma = getPrisma();
+  for (;;) {
+    const row = await prisma.collabDoc.findUnique({
+      where: { kind_doc_id: { kind: 'deck', doc_id: slide.id } },
+      select: {
+        version: true,
+        pushed_version: true,
+        last_checkpoint_at: true,
+        last_checkpoint_error: true,
+      },
+    });
+    // Never live: git has the deck.
+    if (!row) return 'saved';
+    if (row.pushed_version >= (target ?? row.version)) return 'saved';
+    if (
+      row.last_checkpoint_error &&
+      row.last_checkpoint_at &&
+      row.last_checkpoint_at.getTime() >= started
+    ) {
+      return 'error';
+    }
+    if (Date.now() + pollMs > started + timeoutMs) return 'timeout';
+    await new Promise(resolve => setTimeout(resolve, pollMs));
+  }
+}
+
+/**
+ * Tell the deck's room its title changed (best effort): open editors show
+ * it without reloading. A failure is logged, never surfaced — the rename
+ * itself is saved.
+ */
+export async function notifyDeckMeta(
+  env: CollabEnv,
+  slideId: string,
+  meta: { title?: string }
+): Promise<void> {
+  try {
+    await collabInternalRequest<unknown>(
+      env,
+      'POST',
+      deckInternalPath(slideId, 'meta-changed'),
+      meta,
+      { timeoutMs: 3000 }
+    );
+  } catch (error) {
+    console.warn('[slides] Could not tell the live room about a title change:', error);
+  }
 }
 
 // ─── Preview accept, live ────────────────────────────────────────────────────

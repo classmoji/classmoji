@@ -87,8 +87,10 @@ import {
   slideLinkRedirect,
 } from '~/utils/slideKind';
 import {
+  DECK_CHECKPOINT_REQUEST_ID,
   acceptDeckPreviewLive,
   deckCollabData,
+  fetchLiveDeck,
   liveEditingEnv,
   notifyPreviewChanged,
   previewChangedSlides,
@@ -112,13 +114,14 @@ import {
   claimStaleReload,
   deriveSyncStatus,
   SAVE_VERSION_WAIT_MS,
-  checkpointAnswersSaveVersion,
   isCollabMode,
+  newSaveVersionRequestId,
+  saveVersionAnswer,
   liveLeaveRisk,
   mayAutoReloadStale,
   rejectionNotice,
 } from '~/utils/collab/collab';
-import { BRIDGE_ORIGIN } from '~/utils/collab/DeckBridge';
+import { BRIDGE_ORIGIN, type DeckBridge } from '~/utils/collab/DeckBridge';
 import { PREVIEW_CHANGED_CLASS } from '~/utils/collab/previewHighlight';
 import type { CollabNotesBinding } from '~/components/SlideNotesPanel';
 import SlideToolbar from '~/components/SlideToolbar';
@@ -858,8 +861,22 @@ export const action = async ({
       const rawNote = formData.get('message');
       const note =
         typeof rawNote === 'string' ? rawNote.trim().slice(0, VERSION_NOTE_MAX) : undefined;
-      await requestDeckCheckpoint(liveEnv, slideId, await liveActor(), note || undefined);
-      return { intent: 'collab-save-version' as const, success: true };
+      const rawId = formData.get('requestId');
+      const requestId =
+        typeof rawId === 'string' && DECK_CHECKPOINT_REQUEST_ID.test(rawId) ? rawId : undefined;
+      const reply = await requestDeckCheckpoint(
+        liveEnv,
+        slideId,
+        await liveActor(),
+        note || undefined,
+        requestId
+      );
+      return {
+        intent: 'collab-save-version' as const,
+        success: true,
+        // Nothing was unpushed: no run, no broadcast — "Already saved." now.
+        ...(reply?.alreadySaved ? { alreadySaved: true as const } : {}),
+      };
     } catch (error: unknown) {
       console.error('[slides] Save version failed:', error);
       return data(
@@ -880,6 +897,33 @@ export const action = async ({
   // Content repo is STORED and user-editable — never re-derived from the namespace.
   const repo = slide.classroom.content_repo;
   const filePath = `${slide.content_path}/index.html`;
+
+  // Live editing: images in the deck's folder that the LIVE deck no longer
+  // uses (asked after Done; git saves find them in their own response). The
+  // same list and the same delete-images intent as a git save's prompt.
+  if (intent === 'collab-orphaned-images') {
+    if (!liveEnv) return data({ error: 'This deck is not edited live.' }, { status: 409 });
+    try {
+      const snapshot = await fetchLiveDeck(liveEnv, slideId);
+      const htmlContent = generateDeckHtml(snapshot.content, {
+        title: slide.title,
+        includeNotes: true,
+      });
+      const orphanedImages = (
+        await ContentService.findOrphanedImages({
+          orgLogin: gitOrgLogin,
+          repo,
+          imagesFolder: `${slide.content_path}/images`,
+          htmlContent,
+        })
+      ).map(image => ({ ...image, url: contentProxyUrl(gitOrgLogin, repo, image.path) }));
+      return { intent: 'collab-orphaned-images' as const, orphanedImages };
+    } catch (err: unknown) {
+      // Never in the way of editing: no prompt this time.
+      console.error('Failed to detect orphaned images (live):', err);
+      return { intent: 'collab-orphaned-images' as const, orphanedImages: [] };
+    }
+  }
 
   // ─────────────────────────────────────────────────────────────────────────
   // LAZY-LOAD HANDLERS: Load themes/snippets on-demand to reduce API calls
@@ -2164,6 +2208,12 @@ export const action = async ({
 
 /** How long Edit waits for the live deck before offering to try again. */
 const LIVE_CONNECT_TIMEOUT_MS = 10_000;
+/** How long Done waits for unwritten live edits before asking. */
+const DONE_WAIT_MS = 5_000;
+/** View mode after Done re-renders remote edits at most this often. */
+const VIEW_REFRESH_MS = 2_000;
+/** How long Present waits for local live edits to reach the server. */
+const PRESENT_LOCAL_WAIT_MS = 3_000;
 
 export default function SlideViewer() {
   const toast = useToast();
@@ -2346,7 +2396,8 @@ export default function SlideViewer() {
 
   // ── Live editing state ──────────────────────────────────────────────────
   // The room opens the first time the person starts editing and stays open
-  // (presence, and view mode then shows the live deck).
+  // (presence, and view mode then shows the live deck — kept current with
+  // everyone's edits, see `collabViewContent`).
   const [collabActive, setCollabActive] = useState(false);
   const [wantsLiveEdit, setWantsLiveEdit] = useState(false);
   const [collabInitialContent, setCollabInitialContent] = useState<string | null>(null);
@@ -2354,7 +2405,12 @@ export default function SlideViewer() {
   const [staleReloadAttempted, setStaleReloadAttempted] = useState(false);
   // The room never synced in time: offer to try again (never read-only for good).
   const [liveTimedOut, setLiveTimedOut] = useState(false);
-  const versionFetcher = useFetcher<{ intent?: string; success?: boolean; error?: string }>();
+  const versionFetcher = useFetcher<{
+    intent?: string;
+    success?: boolean;
+    error?: string;
+    alreadySaved?: boolean;
+  }>();
   const toastRef = useRef(toast);
   toastRef.current = toast;
   const collabNotify = useCallback((message: string) => toastRef.current.info(message), []);
@@ -2372,7 +2428,25 @@ export default function SlideViewer() {
   });
   const bridgeRef = useRef(bridge);
   bridgeRef.current = bridge;
+  const sessionRef = useRef(collabSession);
+  sessionRef.current = collabSession;
   const isEditingRef = useRef(false);
+  // The bridge whose initialDocument() the live editor was rendered from: a
+  // new room (a new bridge) while editing re-renders the editor from it.
+  const editorBridgeRef = useRef<DeckBridge | null>(null);
+  const [collabEditorGen, setCollabEditorGen] = useState(0);
+  // Done while edits still wait to be written (a claim not yet confirmed,
+  // offline): 'finishing' waits for them, 'ask' offers to leave anyway.
+  const [doneState, setDoneState] = useState<'idle' | 'finishing' | 'ask'>('idle');
+  // Something was edited this session (Done then looks for unused images).
+  const liveEditedRef = useRef(false);
+  const [orphanCheckDue, setOrphanCheckDue] = useState(false);
+  const orphanFetcher = useFetcher<{
+    intent?: string;
+    orphanedImages?: Array<{ path: string; name: string; url: string }>;
+  }>();
+  const presentFetcher = useFetcher<{ outcome?: string }>();
+  const [presentPending, setPresentPending] = useState(false);
 
   // Lazy-load themes when entering edit mode
   useEffect(() => {
@@ -2445,6 +2519,9 @@ export default function SlideViewer() {
     const liveBridge = bridgeRef.current;
     if (!liveBridge) return;
     if (deck && isEditingRef.current) {
+      // Only the bridge this editor's document came from (its baselines are
+      // that document); a newer one re-renders the editor first.
+      if (editorBridgeRef.current !== liveBridge) return;
       liveBridge.attach(deck, {
         setThemes: themes => revealRef.current?.setThemes(themes),
       });
@@ -2922,6 +2999,7 @@ export default function SlideViewer() {
     // Live editing: the bridge writes the change into the live deck; nothing
     // is "unsaved".
     if (bridgeRef.current && isEditingRef.current) {
+      liveEditedRef.current = true;
       bridgeRef.current.notifyLocalChange();
     } else {
       setHasChanges(true);
@@ -2957,15 +3035,41 @@ export default function SlideViewer() {
     let cancelled = false;
     void bridge.prepare().then(() => {
       if (cancelled) return;
+      editorBridgeRef.current = bridge;
       setCollabInitialContent(bridge.initialDocument());
+      liveEditedRef.current = false;
       isEditingRef.current = true;
       setIsEditing(true);
       setWantsLiveEdit(false);
+      setDoneState('idle');
     });
     return () => {
       cancelled = true;
     };
   }, [wantsLiveEdit, bridge, collabState.hasSynced, isEditing]);
+
+  // Live editing: the room changed while editing (a new epoch) — a new
+  // session and bridge. Render the editor again from the new live deck, so
+  // the new bridge attaches to a document its baselines describe.
+  useEffect(() => {
+    if (!collabMode || !isEditing || !bridge || !collabState.hasSynced) return;
+    if (editorBridgeRef.current === bridge) return;
+    let cancelled = false;
+    void bridge.prepare().then(() => {
+      if (cancelled) return;
+      editorBridgeRef.current = bridge;
+      setCollabInitialContent(bridge.initialDocument());
+      setCollabEditorGen(gen => gen + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [collabMode, isEditing, bridge, collabState.hasSynced]);
+
+  // A room that connects late clears the "couldn't connect" banner.
+  useEffect(() => {
+    if (collabState.hasSynced) setLiveTimedOut(false);
+  }, [collabState.hasSynced]);
 
   // Live editing: a room that does not sync in time is reported, not waited on.
   useEffect(() => {
@@ -3041,36 +3145,55 @@ export default function SlideViewer() {
       collabMode && currentLocation.pathname !== nextLocation.pathname && liveRiskRef.current()
   );
 
-  // "Version saved." only once the checkpoint that answers it arrives (or
-  // its failure); the button says "Saving version…" until then, at most
-  // SAVE_VERSION_WAIT_MS.
-  const [versionPendingSince, setVersionPendingSince] = useState<number | null>(null);
+  // "Version saved." only once the checkpoint run that consumed THIS request
+  // answers it (its id is in the broadcast's requestIds), or at once when
+  // nothing was unpushed. The button says "Saving version…" until then; after
+  // SAVE_VERSION_WAIT_MS with no answer, the person is told to try again.
+  const versionRequestRef = useRef<string | null>(null);
+  const [versionPending, setVersionPending] = useState(false);
+  const settleVersion = useCallback((answer: 'saved' | 'already-saved' | 'error' | 'timeout') => {
+    versionRequestRef.current = null;
+    setVersionPending(false);
+    if (answer === 'error') toastRef.current.error("Couldn't save this version to GitHub.");
+    else if (answer === 'timeout') toastRef.current.error('Version not confirmed. Try again.');
+    else toastRef.current.success(answer === 'already-saved' ? 'Already saved.' : 'Version saved.');
+  }, []);
   useEffect(() => {
     const data = versionFetcher.data;
-    if (!data || data.intent !== 'collab-save-version') return;
-    if (data.success) setVersionPendingSince(Date.now());
-    else if (data.error) toastRef.current.error(data.error);
-  }, [versionFetcher.data]);
+    if (!data || data.intent !== 'collab-save-version' || !versionRequestRef.current) return;
+    if (data.error) {
+      versionRequestRef.current = null;
+      setVersionPending(false);
+      toastRef.current.error(data.error);
+    } else if (data.alreadySaved) {
+      settleVersion('already-saved');
+    }
+  }, [versionFetcher.data, settleVersion]);
   useEffect(() => {
     const checkpoint = collabState.lastCheckpoint;
-    if (!checkpoint || !checkpointAnswersSaveVersion(checkpoint, versionPendingSince)) return;
-    setVersionPendingSince(null);
-    if (checkpoint.error) toastRef.current.error("Couldn't save this version to GitHub.");
-    else toastRef.current.success('Version saved.');
-    // Once per checkpoint message.
+    if (!checkpoint) return;
+    const answer = saveVersionAnswer(checkpoint, versionRequestRef.current);
+    if (answer) settleVersion(answer);
+    // Once per checkpoint message (a repeat for a settled id is a no-op).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [collabState.lastCheckpoint?.seq]);
   useEffect(() => {
-    if (versionPendingSince === null) return;
-    const timer = setTimeout(() => setVersionPendingSince(null), SAVE_VERSION_WAIT_MS);
+    if (!versionPending) return;
+    const timer = setTimeout(() => {
+      if (versionRequestRef.current) settleVersion('timeout');
+    }, SAVE_VERSION_WAIT_MS);
     return () => clearTimeout(timer);
-  }, [versionPendingSince]);
+  }, [versionPending, settleVersion]);
 
   const handleSaveVersion = useCallback(
     (message: string) => {
       bridgeRef.current?.flushLocal();
+      // Registered before sending: the answer may arrive before the reply.
+      const requestId = newSaveVersionRequestId();
+      versionRequestRef.current = requestId;
+      setVersionPending(true);
       versionFetcher.submit(
-        { intent: 'collab-save-version', ...(message ? { message } : {}) },
+        { intent: 'collab-save-version', requestId, ...(message ? { message } : {}) },
         { method: 'post' }
       );
     },
@@ -3226,18 +3349,139 @@ export default function SlideViewer() {
     [fetcher, contentToken, isEditing, saveMergeReport]
   );
 
+  // Live editing: leave the editor. Everything written is in the live deck;
+  // view mode shows it (and keeps showing everyone's edits).
+  const finishLiveDone = useCallback(() => {
+    const liveBridge = bridgeRef.current;
+    if (liveBridge && isEditingRef.current) {
+      liveBridge.flushLocal();
+      setCollabViewContent(liveBridge.currentDocument());
+    }
+    if (liveEditedRef.current) setOrphanCheckDue(true);
+    liveEditedRef.current = false;
+    setDoneState('idle');
+    isEditingRef.current = false;
+    setIsEditing(false);
+    setHasChanges(false);
+  }, []);
+
   // Exit editing mode (discards unsaved changes)
   const handleDoneEditing = useCallback(() => {
     if (bridgeRef.current && isEditingRef.current) {
-      // Live editing: everything is already in the live deck; show it.
+      // Live editing: edits not written yet (a claim the server has not
+      // confirmed, offline) live only in this editor. Done waits for them
+      // instead of dropping them; see the effect below.
       bridgeRef.current.flushLocal();
-      setCollabViewContent(bridgeRef.current.currentDocument());
+      if (bridgeRef.current.hasPendingLocal()) {
+        setDoneState('finishing');
+        return;
+      }
+      finishLiveDone();
+      return;
     }
     isEditingRef.current = false;
     setIsEditing(false);
     setHasChanges(false);
     // Keep editableContent for next edit session (it's the latest we know of)
-  }, []);
+  }, [finishLiveDone]);
+
+  // Done is waiting: finish as soon as the edits are written; after a few
+  // seconds, ask (stay, or leave and lose them). Still finishes on its own
+  // if they get written while the question is open.
+  useEffect(() => {
+    if (doneState === 'idle') return;
+    const startedAt = Date.now();
+    const timer = setInterval(() => {
+      const liveBridge = bridgeRef.current;
+      if (!liveBridge || !isEditingRef.current) {
+        setDoneState('idle');
+        return;
+      }
+      liveBridge.flushLocal();
+      if (!liveBridge.hasPendingLocal()) {
+        finishLiveDone();
+        return;
+      }
+      if (doneState === 'finishing' && Date.now() - startedAt > DONE_WAIT_MS) setDoneState('ask');
+    }, 250);
+    return () => clearInterval(timer);
+  }, [doneState, finishLiveDone]);
+
+  // After Done: images the live deck no longer uses (once this person's
+  // edits have reached the server, so the check reads them).
+  useEffect(() => {
+    if (!orphanCheckDue || !collabMode || collabState.unsyncedChanges > 0) return;
+    if (orphanFetcher.state !== 'idle') return;
+    setOrphanCheckDue(false);
+    orphanFetcher.submit({ intent: 'collab-orphaned-images' }, { method: 'post' });
+  }, [orphanCheckDue, collabMode, collabState.unsyncedChanges, orphanFetcher]);
+  useEffect(() => {
+    const found = orphanFetcher.data;
+    if (found?.intent !== 'collab-orphaned-images' || !found.orphanedImages?.length) return;
+    setOrphanedImages(found.orphanedImages);
+    setShowOrphanedModal(true);
+  }, [orphanFetcher.data]);
+
+  // View mode after Done, room still open: keep it current with everyone's
+  // edits (re-rendered at most every VIEW_REFRESH_MS; Reveal's hash keeps the
+  // slide). Only when the deck actually changed.
+  useEffect(() => {
+    if (!collabMode || isEditing || !bridge || !collabSession || collabViewContent === null) return;
+    const doc = collabSession.doc;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const refresh = () => {
+      timer = null;
+      const next = bridge.currentDocument();
+      setCollabViewContent(current => (current === next ? current : next));
+    };
+    const onUpdate = () => {
+      if (!timer) timer = setTimeout(refresh, VIEW_REFRESH_MS);
+    };
+    doc.on('update', onUpdate);
+    refresh(); // anything that landed between Done and now
+    return () => {
+      doc.off('update', onUpdate);
+      if (timer) clearTimeout(timer);
+    };
+    // collabViewContent only gates (null → not after a Done); not a trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collabMode, isEditing, bridge, collabSession, collabViewContent === null]);
+
+  // Save before presenting (live): local edits out first, then the server
+  // checkpoints the deck and the button waits for it (bounded), then present.
+  const handlePresentClick = useCallback(
+    (event: React.MouseEvent<HTMLAnchorElement>) => {
+      if (!collabMode) return; // git decks: the plain link
+      event.preventDefault();
+      if (presentPending) return;
+      setPresentPending(true);
+      const liveBridge = bridgeRef.current;
+      liveBridge?.flushLocal();
+      const startedAt = Date.now();
+      const waitForLocal = () => {
+        const pending =
+          Boolean(liveBridge?.hasPendingLocal()) ||
+          (sessionRef.current?.getState().unsyncedChanges ?? 0) > 0;
+        if (pending && Date.now() - startedAt < PRESENT_LOCAL_WAIT_MS) {
+          setTimeout(waitForLocal, 150);
+          return;
+        }
+        presentFetcher.submit({}, { method: 'post', action: `/${slide.id}/present` });
+      };
+      waitForLocal();
+    },
+    [collabMode, presentPending, presentFetcher, slide.id]
+  );
+  useEffect(() => {
+    if (!presentPending || presentFetcher.state !== 'idle' || !presentFetcher.data) return;
+    const outcome = presentFetcher.data.outcome;
+    if (outcome === 'timeout' || outcome === 'error') {
+      toastRef.current.info(
+        "Couldn't save the latest edits in time. Presenting the last saved version."
+      );
+    }
+    window.location.href = `/${slide.id}/present`;
+  }, [presentPending, presentFetcher.state, presentFetcher.data, slide.id]);
 
   // Delete selected orphaned images
   const handleDeleteOrphanedImages = useCallback(
@@ -3306,6 +3550,8 @@ export default function SlideViewer() {
             textFor: id => bridge.notesText(id),
             onEmptied: id => bridge.clearNotesFlag(id),
             origin: BRIDGE_ORIGIN,
+            ensureId: el => bridge.ensureSlideId(el),
+            history: (id, kind) => bridge.notesHistory(id, kind),
           }
         : null,
     [bridge, collabMode]
@@ -3501,6 +3747,11 @@ export default function SlideViewer() {
                 onContentChange={handleContentChange}
                 onImageUpload={handleImageUpload}
                 onOpenOverview={handleOpenOverview}
+                currentSlideHolder={
+                  collabMode && liveOverlayLock && liveOverlayLock.state !== 'mine'
+                    ? liveOverlayLock.holder.name
+                    : null
+                }
               />
             </div>
           )}
@@ -3515,7 +3766,7 @@ export default function SlideViewer() {
                 onSaveVersion={
                   collabState.hasSynced && !collabState.rejected ? handleSaveVersion : null
                 }
-                savingVersion={versionFetcher.state !== 'idle' || versionPendingSince !== null}
+                savingVersion={versionFetcher.state !== 'idle' || versionPending}
                 checkpoint={collabState.lastCheckpoint ?? liveCheckpoint}
               />
             )}
@@ -3523,9 +3774,10 @@ export default function SlideViewer() {
               <button
                 type="button"
                 onClick={handleDoneEditing}
-                className="px-3 py-1.5 text-sm bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600"
+                disabled={doneState !== 'idle'}
+                className="px-3 py-1.5 text-sm bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-60"
               >
-                Done
+                {doneState === 'idle' ? 'Done' : 'Finishing…'}
               </button>
             )}
             {/* Status badges */}
@@ -3625,10 +3877,13 @@ export default function SlideViewer() {
             )}
             {/* Present button - only shown if user can present (staff only) */}
             {canPresent && (
-              <Tooltip title="Present slideshow">
+              <Tooltip title={presentPending ? 'Saving the latest edits…' : 'Present slideshow'}>
                 <a
                   href={`/${slide.id}/present`}
-                  className="p-2 bg-black text-white rounded-md hover:bg-gray-800 flex items-center justify-center"
+                  onClick={handlePresentClick}
+                  aria-busy={presentPending || undefined}
+                  aria-disabled={presentPending || undefined}
+                  className={`p-2 bg-black text-white rounded-md hover:bg-gray-800 flex items-center justify-center ${presentPending ? 'opacity-70 cursor-progress' : ''}`}
                 >
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path
@@ -3650,6 +3905,11 @@ export default function SlideViewer() {
             reason={collabState.rejected ?? 'unavailable'}
             reloadAttempted={staleReloadAttempted}
           />
+        )}
+
+        {/* Live editing: Done while edits still wait to be written */}
+        {doneState === 'ask' && (
+          <LiveLeaveDialog onStay={() => setDoneState('idle')} onLeave={finishLiveDone} />
         )}
 
         {/* Live editing: in-app navigation while edits are still syncing */}
@@ -3785,7 +4045,7 @@ export default function SlideViewer() {
                 ref={revealRef}
                 key={
                   collabMode && isEditing
-                    ? 'collab-editing'
+                    ? `collab-editing-${collabEditorGen}`
                     : isEditing
                       ? `editing-${editorEpoch}`
                       : 'viewing'

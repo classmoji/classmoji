@@ -10,6 +10,7 @@ import {
   resolveDeckAssets,
 } from '~/utils/deckDelivery.server';
 import { deckOnlyRefusal } from '~/utils/slideKind';
+import { checkpointBeforePresenting, readEditorName } from '~/utils/collab/collab.server';
 
 /**
  * Speaker route - Remote speaker notes view
@@ -46,7 +47,7 @@ export const loader = async ({
   }
 
   // Authorization: require speakerNotes access (staff, or viewers when show_speaker_notes=true)
-  const { canEdit } = await assertSlideAccess({
+  const { canEdit, userId } = await assertSlideAccess({
     request,
     slideId,
     slide,
@@ -76,6 +77,16 @@ export const loader = async ({
   // live presentation, where showing the pre-save deck is worse than useless.
   let slideContent: string | null = null;
   let contentError: string | null = null;
+
+  // Live classroom, opened by someone who edits the deck: save first, as
+  // presenting does (bounded; then what git has). Never on a student's load.
+  if (canEdit && userId) {
+    await checkpointBeforePresenting(
+      slide,
+      { userId, name: await readEditorName(userId) },
+      { timeoutMs: 10_000 }
+    );
+  }
 
   const contentResult = await readDeckText(slide, gitOrgLogin, repo, filePath, 'speaker');
 

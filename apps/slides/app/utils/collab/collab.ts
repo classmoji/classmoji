@@ -32,30 +32,35 @@ export function isCollabMode(
 /** The provider's WebSocket status (`WebSocketStatus` values). */
 export type ProviderStatus = 'connecting' | 'connected' | 'disconnected';
 
-/** What the header shows. */
-export type SyncStatus = 'synced' | 'syncing' | 'offline';
+/** What the header shows (`connecting`: not synced even once yet — not a drop). */
+export type SyncStatus = 'synced' | 'syncing' | 'offline' | 'connecting';
 
 export const SYNC_STATUS_LABEL: Record<SyncStatus, string> = {
   synced: 'Synced',
   syncing: 'Syncing',
   offline: 'Offline',
+  connecting: 'Connecting',
 };
 
 /**
- * The header's sync status from the provider's state: offline while the
- * socket is not open, syncing until the first handshake finished and while
- * local changes wait for the server's acknowledgement, synced otherwise.
+ * The header's sync status from the provider's state: connecting until the
+ * socket first opens and syncs, offline when it is not open after that,
+ * syncing until the handshake finished and while local changes wait for the
+ * server's acknowledgement, synced otherwise.
  */
 export function deriveSyncStatus({
   status,
   synced,
   unsyncedChanges,
+  hasSynced,
 }: {
   status: ProviderStatus;
   synced: boolean;
   unsyncedChanges: number;
+  /** Synced at least once this session (absent: assume so). */
+  hasSynced?: boolean;
 }): SyncStatus {
-  if (status !== 'connected') return 'offline';
+  if (status !== 'connected') return hasSynced === false ? 'connecting' : 'offline';
   if (!synced || unsyncedChanges > 0) return 'syncing';
   return 'synced';
 }
@@ -198,6 +203,10 @@ export interface LiveCheckpoint {
   commit?: string;
   /** Why the run did not save this deck (absent when it did). */
   error?: string;
+  /** The Save-version requests this run answered (only the run that consumed them). */
+  requestIds?: string[];
+  /** With `requestIds`: there was nothing to push for this deck. */
+  alreadySaved?: true;
 }
 
 /** Stateless messages the collab server broadcasts to a deck's room. */
@@ -220,11 +229,16 @@ export function parseStatelessMessage(payload: unknown): LiveStatelessMessage | 
   const message = value as Record<string, unknown>;
   if (message.type === 'checkpoint') {
     if (typeof message.at !== 'string' || !message.at) return null;
+    const requestIds = Array.isArray(message.requestIds)
+      ? message.requestIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
+      : [];
     return {
       type: 'checkpoint',
       at: message.at,
       ...(typeof message.commit === 'string' && message.commit ? { commit: message.commit } : {}),
       ...(typeof message.error === 'string' && message.error ? { error: message.error } : {}),
+      ...(requestIds.length > 0 ? { requestIds } : {}),
+      ...(message.alreadySaved === true ? { alreadySaved: true as const } : {}),
     };
   }
   if (message.type === 'preview-changed') return { type: 'preview-changed' };
@@ -297,9 +311,27 @@ export function checkpointFromRow(
   }
   return row.version === row.pushed_version ? { at: '', ...commit } : null;
 }
-/** How long "Saving version…" waits
- for the checkpoint that answers it. */
+/** How long "Saving version…" waits for the checkpoint that answers it. */
 export const SAVE_VERSION_WAIT_MS = 60_000;
+
+/** A fresh Save-version request id (the collab contract: 8–64 of `[A-Za-z0-9_-]`). */
+export function newSaveVersionRequestId(): string {
+  const uuid =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return `sv-${uuid}`;
+}
+
+/** What a checkpoint message says about one Save-version request (null: not about it). */
+export function saveVersionAnswer(
+  checkpoint: LiveCheckpoint,
+  requestId: string | null
+): 'saved' | 'already-saved' | 'error' | null {
+  if (!requestId || !checkpoint.requestIds?.includes(requestId)) return null;
+  if (checkpoint.error) return 'error';
+  return checkpoint.alreadySaved ? 'already-saved' : 'saved';
+}
 
 /** A checkpoint message that arrived after "Save version" was accepted (clock skew allowed). */
 export function checkpointAnswersSaveVersion(

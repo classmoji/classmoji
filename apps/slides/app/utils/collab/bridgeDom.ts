@@ -16,6 +16,8 @@ import {
   RUNTIME_SECTION_CLASSES,
   isBlockedHtmlBlockAttr,
   isBlockedSvgBlockAttr,
+  offListSvgBlockNodes,
+  scopeSvgStyles,
   splitStyleDeclarations,
 } from '@classmoji/services/slides/runtime-attrs';
 import { EDITOR_BLOCK_CLASSES, isRenderableAttr, type DeckStructure } from '@classmoji/collab';
@@ -266,7 +268,28 @@ export function stripUnsafeMarkup(root: Element | DocumentFragment): void {
       return renders(attr) ? name : `${INERT_PREFIX}${name}`;
     });
   }
+  // svg blocks show what the viewer and presenter show. A node off the svg
+  // lists (a foreignObject, a script, …) cannot be renamed inert like an
+  // attribute: it is put inside an inert <template> instead — not rendered,
+  // and `restoreInertMarkup` puts it back, so the markup written is still
+  // the authored one. Their <style> sheets are scoped to the drawing.
+  for (const node of offListSvgBlockNodes(root)) {
+    if (!node.parentNode || !root.contains(node)) continue; // inside one already hidden
+    const doc = node.ownerDocument as Document;
+    const holder = doc.createElement('template');
+    holder.setAttribute(INERT_NODE_ATTR, '');
+    node.parentNode.replaceChild(holder, node);
+    holder.content.appendChild(node);
+  }
+  for (const content of Array.from(
+    root.querySelectorAll('.sl-block[data-block-type="svg"] > .sl-block-content')
+  )) {
+    scopeSvgStyles(content);
+  }
 }
+
+/** Marks a <template> holding an svg-block node hidden for display. */
+const INERT_NODE_ATTR = 'data-cm-inert-node';
 
 /**
  * Undo `stripUnsafeMarkup`: every `data-cm-inert-*` attribute gets its
@@ -274,6 +297,9 @@ export function stripUnsafeMarkup(root: Element | DocumentFragment): void {
  * editor writes is the authored markup — never the display-time version.
  */
 export function restoreInertMarkup(root: Element | DocumentFragment): void {
+  for (const holder of Array.from(root.querySelectorAll(`template[${INERT_NODE_ATTR}]`))) {
+    holder.replaceWith(...Array.from((holder as HTMLTemplateElement).content.childNodes));
+  }
   for (const el of elementsUnder(root)) {
     const attrs = Array.from(el.attributes);
     if (!attrs.some(attr => attr.name.startsWith(INERT_PREFIX))) continue;
