@@ -1,8 +1,4 @@
 import { AbortTaskRunError, task, logger } from '@trigger.dev/sdk';
-import dayjs from 'dayjs';
-import isSameOrBefore from 'dayjs/plugin/isSameOrBefore.js';
-dayjs.extend(isSameOrBefore);
-
 import {
   ClassmojiService,
   HelperService,
@@ -12,6 +8,7 @@ import {
 } from '@classmoji/services';
 import {
   gitTerms,
+  releasedToRepos,
   titleToIdentifier,
   resolveTemplateRef,
   repoNamespace,
@@ -476,10 +473,11 @@ export const createRepositoryTask = task({
       // published; releasing on their behalf is not theirs to do. Without the
       // extra predicate a joiner would accelerate the nightly cron and release
       // any draft whose release_at has passed. Instructor-driven runs keep the
-      // release semantics the daily cron and Publish depend on.
+      // release semantics the daily cron and Publish depend on. An assignment
+      // with no release date goes out once published (releasedToRepos).
       const filteredAssignments = normalizedPayload.repository.assignments.filter(
         assignment =>
-          dayjs(assignment.release_at).isSameOrBefore(dayjs()) &&
+          releasedToRepos(assignment, new Date()) &&
           (!normalizedPayload.provisionOnly || assignment.is_published === true)
       );
 

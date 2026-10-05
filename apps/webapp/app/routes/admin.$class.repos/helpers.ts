@@ -2,9 +2,9 @@ import _ from 'lodash';
 import invariant from 'tiny-invariant';
 import { auth } from '@trigger.dev/sdk';
 import { nanoid } from 'nanoid';
-import dayjs from 'dayjs';
 
 import { ClassmojiService } from '@classmoji/services';
+import { releasedToRepos } from '@classmoji/utils';
 import Tasks from '@classmoji/tasks';
 import { gitTerms } from '~/utils/gitWeb';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
@@ -125,9 +125,8 @@ export const publishAssignment = async (
 
       numReposToCreate = studentList.length;
       numIssuesToCreate =
-        repository.assignments.filter(
-          assignment => dayjs(assignment.release_at).isBefore(dayjs())
-        ).length * studentList.length;
+        repository.assignments.filter(assignment => releasedToRepos(assignment, new Date()))
+          .length * studentList.length;
       _numStudents = studentList.length;
 
       Tasks.createRepositoriesTask.trigger(
@@ -178,9 +177,8 @@ export const publishAssignment = async (
 
       numReposToCreate = teams.length;
       numIssuesToCreate =
-        repository.assignments.filter(
-          assignment => dayjs(assignment.release_at).isBefore(dayjs())
-        ).length * teams.length;
+        repository.assignments.filter(assignment => releasedToRepos(assignment, new Date()))
+          .length * teams.length;
       _numStudents = teams.length;
 
       Tasks.createRepositoriesTask.trigger(
@@ -571,10 +569,13 @@ const findMissingAssignments = (
   const moduleAssignments = keyed as unknown as Record<string, MissingAssignmentEntry>;
   _.forEach(moduleAssignments, assignment => (assignment.repos = []));
 
-  // remove assignments where release_at is in the future
+  // remove assignments not out yet: a future release_at, or an undated draft
   for (const assignment of Object.values(moduleAssignments)) {
-    const releaseAt = (assignment as unknown as { release_at: Date | null }).release_at;
-    if (!releaseAt || dayjs(releaseAt).isAfter(dayjs())) {
+    const release = assignment as unknown as {
+      release_at: Date | null;
+      is_published: boolean;
+    };
+    if (!releasedToRepos(release, new Date())) {
       delete moduleAssignments[assignment.id];
     }
   }

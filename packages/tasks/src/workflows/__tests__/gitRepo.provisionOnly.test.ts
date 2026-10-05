@@ -68,6 +68,14 @@ vi.mock('@classmoji/services', () => ({
 }));
 
 vi.mock('@classmoji/utils', () => ({
+  // The real rule: which assignments a new repo gets is what these tests pin.
+  releasedToRepos: (
+    a: { release_at?: Date | string | null; is_published?: boolean | null },
+    now: Date
+  ) =>
+    a.release_at == null
+      ? a.is_published === true
+      : new Date(a.release_at).getTime() <= now.getTime(),
   repoNamespace: (c: {
     git_namespace?: string | null;
     git_organization: { login: string | null };
@@ -262,19 +270,30 @@ describe('gh-create_git_repo — assignment release side effect', () => {
     expect(mocks.addAssignment).not.toHaveBeenCalled();
   });
 
-  it('excludes an assignment with no release_at at all', async () => {
-    await runCreateRepository([assignment('a-1', true, null)], true);
+  it('keeps an undated draft off the repo', async () => {
+    await runCreateRepository([assignment('a-1', false, null)], false);
 
     expect(mocks.addAssignment).not.toHaveBeenCalled();
+    expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
+  });
+
+  it('adds a published assignment with no release_at (team formed after publish)', async () => {
+    await runCreateRepository([assignment('a-1', true, null)], false);
+
+    expect(mocks.addAssignment).toHaveBeenCalledTimes(1);
+  });
+
+  it('adds a published undated assignment for a joiner too', async () => {
+    await runCreateRepository([assignment('a-1', true, null)], true);
+
+    expect(mocks.addAssignment).toHaveBeenCalledTimes(1);
   });
 });
 
 describe('gh-create_git_repo — step failures are not swallowed', () => {
   it('fails the run when adding collaborators failed', async () => {
     mocks.addCollaborator.mockRejectedValueOnce(new Error('no access'));
-    await expect(runCreateRepository([assignment('a-1', true)], true)).rejects.toThrow(
-      'no access'
-    );
+    await expect(runCreateRepository([assignment('a-1', true)], true)).rejects.toThrow('no access');
   });
 
   it('fails the run when creating an assignment row failed', async () => {
