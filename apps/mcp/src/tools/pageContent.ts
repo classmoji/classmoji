@@ -919,18 +919,20 @@ async function applyPageEdits(args: PageContentApplyArgs, ctx: ToolContext): Pro
     createdPreviewBranch = ensured.created;
   }
 
-  // On a create (no content file yet), there is no sha to lock on — passing
-  // one would 409 every first write (put treats expectedSha + missing file
-  // as deleted-since-read). GitHub's sha-less create still rejects an
-  // existence race with a 422, mapped to CONTENT_CONFLICT below.
-  const isCreate = content.sha === null;
+  // On a create (no content.json read), there is no content.json sha to lock
+  // the write on — passing one would 409 every first write (put treats
+  // expectedSha + missing file as deleted-since-read). That covers a legacy
+  // HTML page too: its sha is index.html's, which the caller's precondition was
+  // checked against above, but the write creates content.json beside it.
+  // A conflict the write does report (409, or 422 on a sha-less create) maps
+  // to CONTENT_CONFLICT below.
+  const isCreate = content.format !== 'json';
 
   let saved: { sha: string; commit: string };
   try {
     saved = await ClassmojiService.pageContent.savePageContent(page, newBlocks, {
       // Also enforced GitHub-side at write time: catches a racing writer
-      // between our read and this commit (and a content.json materialized
-      // out-of-band under a legacy page).
+      // between our read and this commit.
       ...(isCreate ? {} : { expectedSha: expectedSha ?? args.expected_sha }),
       ...(committedTo === 'preview'
         ? { branch: ClassmojiService.pageContent.previewBranchName(page.content_path) }
