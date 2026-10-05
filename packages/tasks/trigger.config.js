@@ -62,6 +62,15 @@ export default defineConfig({
   logLevel: 'log',
   machine: 'small-2x',
   maxDuration: 900,
+  // Reuse the task process between runs on a machine Trigger.dev keeps warm.
+  // Without it every run starts a fresh Node process — even on a reused
+  // machine — and re-imports its modules: `content-checkpoint` (Present, Save
+  // version) would pay its renderer imports (BlockNote server editor, jsdom)
+  // on every run, and the collab warm-ups (a no-op `content-checkpoint` run at
+  // most once a minute while a live doc is open) would keep only the machine
+  // warm, not the process. A process is replaced after 100 runs in deployed
+  // environments (the runner's default), 50 under `trigger dev`.
+  processKeepAlive: true,
   // Safety guard: a LOCAL dev worker must never write to a remote (e.g. prod
   // Neon) database. Trigger.dev loads the `.env` next to this config
   // (packages/tasks/.env), which can silently drift to a production

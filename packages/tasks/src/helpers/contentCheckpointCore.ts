@@ -1129,6 +1129,78 @@ export function checkpointErrorText(doc: DocReport): string | null {
  * each doc's outcome, tell collab (Saved-to-GitHub signal), and work out
  * whether the run must be marked failed (`report.failure`; the task throws).
  */
+// ─── Warm-up runs ────────────────────────────────────────────────────────────
+
+/** What a warm-up run did (its run output). */
+export interface CheckpointWarmReport {
+  warm: true;
+  classroomId: string;
+  /** The page renderer loaded and rendered an empty page. */
+  pageRenderer: boolean;
+  /** The deck converter loaded (and rendered an empty deck, when it could). */
+  deckRenderer: boolean;
+  ms: number;
+}
+
+/**
+ * A warm-up run (`payload.warm`): load the renderers a checkpoint needs and
+ * push an empty Y.Doc through each, so BlockNote's server editor, jsdom and
+ * the deck converter are imported and initialised in this process. Nothing
+ * else: no Prisma, no git, no rows — the watchdog and the sweeper read "a run
+ * visited this classroom" from the rows, and a warm-up must never look like
+ * one. Never throws: a failed warm-up is only a slower next checkpoint, and
+ * the task's retries must not repeat it.
+ */
+export async function warmCheckpointWorker(
+  payload: Pick<CheckpointPayload, 'classroomId'>,
+  deps: Pick<CheckpointDeps, 'loadPageRenderer' | 'loadDeckRenderer' | 'log'>,
+  clock: () => number = Date.now
+): Promise<CheckpointWarmReport> {
+  const started = clock();
+  const empty = () => new Y.Doc();
+  let pageRenderer = false;
+  try {
+    const renderer = await deps.loadPageRenderer();
+    const doc = empty();
+    try {
+      renderer.render(doc);
+    } finally {
+      doc.destroy();
+    }
+    pageRenderer = true;
+  } catch (error) {
+    deps.log.warn('content-checkpoint: warm-up could not load the page renderer', {
+      error: errMessage(error),
+    });
+  }
+  let deckRenderer = false;
+  try {
+    const renderer = await deps.loadDeckRenderer();
+    if (renderer) {
+      deckRenderer = true;
+      const doc = empty();
+      try {
+        renderer.render(doc);
+      } catch {
+        // An empty deck may not convert; the module is loaded, which is the point.
+      } finally {
+        doc.destroy();
+      }
+    }
+  } catch (error) {
+    deps.log.warn('content-checkpoint: warm-up could not load the deck converter', {
+      error: errMessage(error),
+    });
+  }
+  return {
+    warm: true,
+    classroomId: payload.classroomId,
+    pageRenderer,
+    deckRenderer,
+    ms: clock() - started,
+  };
+}
+
 export async function runContentCheckpoint(
   payload: CheckpointPayload,
   /**

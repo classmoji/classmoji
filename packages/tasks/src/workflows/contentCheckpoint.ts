@@ -8,6 +8,10 @@
  *     debounce: { key: 'checkpoint:' + classroomId, delay, maxDelay, mode: 'trailing' },
  *   })
  *
+ * and, while someone has a live doc of the classroom open, a warm-up at most
+ * once a minute: `{ classroomId, warm: true }` with NO concurrencyKey and no
+ * debounce (see `run` below and apps/collab/src/warm.ts).
+ *
  * The body lives in `helpers/contentCheckpointCore.ts`; this file wires the
  * real Prisma, services, renderers and git.
  *
@@ -51,10 +55,13 @@ import {
   type CheckpointResultDoc,
   type CheckpointPayload,
   type CheckpointPrisma,
+  type CheckpointReport,
+  type CheckpointWarmReport,
   type DeckLike,
   type DeckRenderer,
   type PageRenderer,
   type PageTarget,
+  warmCheckpointWorker,
 } from '../helpers/contentCheckpointCore.ts';
 
 /** = CONTENT_CHECKPOINT_TASK / CONTENT_CHECKPOINT_QUEUE in @classmoji/collab. */
@@ -217,12 +224,59 @@ export function realCheckpointDeps(): CheckpointDeps {
       return (await provider.getRepositorySizeKb?.(org.login, classroom.content_repo)) ?? null;
     },
     author: { name: 'Classmoji Bot', email: CLASSMOJI_BOT_EMAIL },
-    log: {
-      info: (m, d) => logger.info(m, d),
-      warn: (m, d) => logger.warn(m, d),
-      error: (m, d) => logger.error(m, d),
-    },
+    log: taskLog,
   };
+}
+
+const taskLog: CheckpointDeps['log'] = {
+  info: (m, d) => logger.info(m, d),
+  warn: (m, d) => logger.warn(m, d),
+  error: (m, d) => logger.error(m, d),
+};
+
+/**
+ * The task's body. A warm-up (`payload.warm`: collab, at most once a minute
+ * per classroom while someone has a live doc open) branches off before the
+ * real deps exist, so it never reaches Prisma or git. It is this same task on
+ * purpose: same deployment and machine preset as the checkpoint it prepares
+ * for, so the machine Trigger.dev keeps warm after it is one a checkpoint can
+ * start on, and — with `processKeepAlive` (trigger.config.js) — a process
+ * that already has the renderers loaded. `makeDeps` / `warmLoaders` are seams
+ * for tests.
+ */
+export async function contentCheckpointRun(
+  payload: CheckpointPayload,
+  ctx: { runId: string; attemptNumber: number },
+  {
+    makeDeps = realCheckpointDeps,
+    warmLoaders = { loadPageRenderer, loadDeckRenderer },
+  }: {
+    makeDeps?: () => CheckpointDeps;
+    warmLoaders?: Pick<CheckpointDeps, 'loadPageRenderer' | 'loadDeckRenderer'>;
+  } = {}
+): Promise<CheckpointReport | CheckpointWarmReport> {
+  if (payload.warm === true) {
+    const report = await warmCheckpointWorker(payload, { ...warmLoaders, log: taskLog });
+    taskLog.info('content-checkpoint: warm', { ...report });
+    return report;
+  }
+  const report = await runContentCheckpoint(
+    payload,
+    // Save-version requests are answered with a retryable failure only on
+    // the last attempt (`retry.maxAttempts` below).
+    { runId: ctx.runId, finalAttempt: ctx.attemptNumber >= CHECKPOINT_MAX_ATTEMPTS },
+    makeDeps()
+  );
+  // Everything that succeeded is committed and recorded by now; a refused
+  // or failed doc still marks the run failed, so dashboards and alerts see
+  // it. A refusal is deterministic (no retry); a failure may be transient.
+  if (report.failure) {
+    const { failure, ...rest } = report;
+    logger.error('content-checkpoint: run failed', { ...rest, failure: failure.message });
+    if (failure.kind === 'abort') throw new AbortTaskRunError(failure.message);
+    throw failure.error instanceof Error ? failure.error : new Error(failure.message);
+  }
+  return report;
 }
 
 export const contentCheckpoint = task({
@@ -231,6 +285,9 @@ export const contentCheckpoint = task({
    * One run at a time per classroom (the trigger passes
    * `concurrencyKey: classroomId`): two runs on one classroom would race each
    * other's pushes and rows. Different classrooms run side by side.
+   * Warm-ups carry no key: on this queue model the limit applies per key to
+   * keyed runs and to the un-keyed runs as one pool of their own, so a
+   * warm-up never holds a classroom's slot, and warm-ups run one at a time.
    */
   queue: { name: CHECKPOINT_QUEUE_NAME, concurrencyLimit: 1 },
   /** Git plus a BlockNote server editor (jsdom) holding every dirty doc of a classroom. */
@@ -247,23 +304,9 @@ export const contentCheckpoint = task({
     maxTimeoutInMs: 20000,
     factor: 2,
   },
-  run: async (payload: CheckpointPayload, { ctx }) => {
-    const report = await runContentCheckpoint(
-      payload,
-      // Save-version requests are answered with a retryable failure only on
-      // the last attempt (`retry.maxAttempts` below).
-      { runId: ctx.run.id, finalAttempt: ctx.attempt.number >= CHECKPOINT_MAX_ATTEMPTS },
-      realCheckpointDeps()
-    );
-    // Everything that succeeded is committed and recorded by now; a refused
-    // or failed doc still marks the run failed, so dashboards and alerts see
-    // it. A refusal is deterministic (no retry); a failure may be transient.
-    if (report.failure) {
-      const { failure, ...rest } = report;
-      logger.error('content-checkpoint: run failed', { ...rest, failure: failure.message });
-      if (failure.kind === 'abort') throw new AbortTaskRunError(failure.message);
-      throw failure.error instanceof Error ? failure.error : new Error(failure.message);
-    }
-    return report;
-  },
+  run: async (payload: CheckpointPayload, { ctx }) =>
+    contentCheckpointRun(payload, {
+      runId: ctx.run.id,
+      attemptNumber: ctx.attempt.number,
+    }),
 });
