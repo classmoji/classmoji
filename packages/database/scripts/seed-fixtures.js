@@ -24,7 +24,7 @@
  *
  * @param {import('@prisma/client').PrismaClient} prisma
  * @param {{ login: string, githubId: string, name?: string, email?: string,
- *   image?: string, school_id?: string, accessToken?: string,
+ *   image?: string | null, school_id?: string, accessToken?: string,
  *   keepImage?: boolean }} identity `keepImage` leaves an existing user's avatar alone.
  */
 export async function upsertGithubUser(
@@ -236,7 +236,8 @@ export async function seedForeignClassroom(prisma, { org }) {
       githubId: '10000007',
       role: 'STUDENT',
     },
-  ].map(u => ({ ...u, image: `https://github.com/identicons/${u.login}.png` }));
+    // No image: fake logins have no Github picture; the UI draws initials.
+  ].map(u => ({ ...u, image: null }));
 
   let ownerUser = null;
   let studentUser = null;
