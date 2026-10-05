@@ -10,6 +10,10 @@ export default [
   {
     rules: {
       'no-console': 'off',
+      // The import resolver can't follow package-exports-only packages
+      // (@classmoji/collab, @classmoji/collab/env) — same accommodation as
+      // apps/mcp and apps/webapp; tsc typechecks the real paths.
+      'import/no-unresolved': 'off',
     },
   },
   {

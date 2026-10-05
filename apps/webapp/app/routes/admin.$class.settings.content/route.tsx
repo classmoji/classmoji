@@ -5,12 +5,19 @@ import { IconExternalLink } from '@tabler/icons-react';
 import { namedAction } from 'remix-utils/named-action';
 
 import { ClassmojiService, ClassroomSettingsEntitlementError } from '@classmoji/services';
+import getPrisma from '@classmoji/database';
 import { getContentRepoName } from '@classmoji/utils';
 import { SettingSection } from '~/components';
 import { ActionTypes } from '~/constants';
 import { useGlobalFetcher } from '~/hooks';
 import { useGitWeb } from '~/hooks/useGitWeb';
-import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
+import {
+  addClassroomAuditLog,
+  assertClassroomAccess,
+  assertClassroomMutationAllowed,
+} from '~/utils/helpers';
+import { collabServerEnv, notifyCollabFlag } from '~/utils/collab.server';
+import { setLiveEditing } from './liveEditing.server';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -28,11 +35,14 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   // Return classroom with settings for display (API keys stripped by assertClassroomAccess)
   return {
     organization: classroom,
+    // Whether this deployment has a live editing server at all; without one
+    // the switch can only be turned off.
+    liveEditingAvailable: collabServerEnv() !== null,
   };
 };
 
 const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
-  const { organization } = loaderData;
+  const { organization, liveEditingAvailable } = loaderData;
   const { class: classSlug } = useParams();
 
   const { fetcher } = useGlobalFetcher();
@@ -69,6 +79,18 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
         _action: 'saveContentSettings',
         slides_enabled: checked,
       },
+      {
+        method: 'POST',
+        encType: 'application/json',
+        action: `/admin/${classSlug}/settings/content`,
+      }
+    );
+  };
+
+  const liveEditingOn = organization.collab_enabled === true;
+  const handleLiveEditingToggle = (checked: boolean) => {
+    fetcher!.submit(
+      { _action: 'saveLiveEditing', enabled: checked },
       {
         method: 'POST',
         encType: 'application/json',
@@ -190,6 +212,27 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
         </Form>
       </SettingSection> */}
 
+      {/* Live editing (Classroom.collab_enabled) */}
+      <SettingSection
+        title="Live editing"
+        description="Edit pages and slides together with your teaching team and see each other's changes as they happen."
+      >
+        <Form layout="vertical" className="w-3/4">
+          <Form.Item
+            label="Enable live editing"
+            extra={
+              !liveEditingAvailable && !liveEditingOn ? 'Not available on this server.' : undefined
+            }
+          >
+            <Switch
+              checked={liveEditingOn}
+              disabled={!liveEditingAvailable && !liveEditingOn}
+              onChange={handleLiveEditingToggle}
+            />
+          </Form.Item>
+        </Form>
+      </SettingSection>
+
       {/* Slides Section */}
       <SettingSection
         title="Slides"
@@ -209,7 +252,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
   // Authorize: only OWNER can modify content settings
-  const { classroom, membership } = await assertClassroomAccess({
+  const { userId, classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER'],
@@ -252,6 +295,26 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         content_key_version,
         action: ActionTypes.RESET_CONTENT_CACHE,
       };
+    },
+
+    // Live collaborative editing for pages and slides. Same OWNER +
+    // open-classroom gate as the rest of this action; the write, the collab
+    // server call and the audit row are in liveEditing.server.ts.
+    async saveLiveEditing() {
+      return setLiveEditing(
+        { classroom, userId, role: membership?.role, enabled: data.enabled },
+        {
+          collabAvailable: () => collabServerEnv() !== null,
+          writeFlag: (classroomId, enabled) =>
+            getPrisma().classroom.update({
+              where: { id: classroomId },
+              data: { collab_enabled: enabled },
+              select: { id: true },
+            }),
+          notifyCollab: (classroomId, enabled) => notifyCollabFlag(classroomId, enabled),
+          audit: entry => addClassroomAuditLog(entry),
+        }
+      );
     },
 
     async saveContentSettings() {

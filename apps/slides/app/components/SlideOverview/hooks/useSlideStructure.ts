@@ -1,6 +1,13 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
+import {
+  countLeafSlides,
+  createSlideKeyer,
+  removeSlideElement,
+  type SlideKeyer,
+} from '../../blocks/slideBlocks';
 
 export interface SlideData {
+  /** Stable key: the slide's data-cm-id, else one per element (never its position). */
   id: string;
   element: Element;
   hIndex: number;
@@ -34,11 +41,19 @@ interface MoveDestination {
  * - stacks: Array of stack objects, each containing slides
  * - Every top-level item is a "stack" (even single slides)
  */
-export function useSlideStructure(revealInstance: RevealApi | null, onContentChange?: () => void) {
+export function useSlideStructure(
+  revealInstance: RevealApi | null,
+  onContentChange?: () => void,
+  /** Re-read the DOM when this changes (live editing: someone else changed the deck). */
+  refreshKey?: unknown
+) {
   const [stacks, setStacks] = useState<StackData[]>([]);
   const [error, setError] = useState<string | null>(null);
   // Track if we need to sync changes to DOM (set after user actions, not initial load)
   const pendingSyncRef = useRef(false);
+  // Keys that follow the slide, not its position (see parseSlideStructure).
+  const keyerRef = useRef<SlideKeyer | null>(null);
+  if (!keyerRef.current) keyerRef.current = createSlideKeyer();
 
   // Parse the DOM structure when Reveal.js instance becomes available
   // Using revealInstance (state) instead of a ref ensures this effect re-runs
@@ -54,12 +69,12 @@ export function useSlideStructure(revealInstance: RevealApi | null, onContentCha
     }
 
     // Successfully got the slides container - parse it
-    const parsed = parseSlideStructure(slidesContainer);
+    const parsed = parseSlideStructure(slidesContainer, keyerRef.current as SlideKeyer);
     if (parsed.length === 0) {
       console.error('[SlideOverview] No stacks found! Check slide structure.');
     }
     setStacks(parsed);
-  }, [revealInstance]);
+  }, [revealInstance, refreshKey]);
 
   // Find a slide by ID
   const findSlideById = useCallback(
@@ -143,22 +158,32 @@ export function useSlideStructure(revealInstance: RevealApi | null, onContentCha
     });
   }, []);
 
-  // Delete a slide
-  const deleteSlide = useCallback((slideId: string) => {
-    setStacks(prevStacks => {
-      // Count total slides to prevent deleting the last one
-      const totalSlides = prevStacks.reduce((sum, stack) => sum + stack.slides.length, 0);
-      if (totalSlides <= 1) return prevStacks;
+  /**
+   * Delete a slide by its key, found again in the deck as it is NOW (a
+   * co-editor may have added, moved or deleted slides since the overview was
+   * drawn): nothing happens when it is gone. The one section is taken out in
+   * place — the rest of the deck is not rebuilt.
+   */
+  const deleteSlide = useCallback(
+    (slideId: string) => {
+      if (!revealInstance) return;
+      const slidesContainer = revealInstance.getSlidesElement();
+      if (!slidesContainer) return;
+      const keyer = keyerRef.current as SlideKeyer;
+      const leaves = leafSections(slidesContainer);
+      const keys = keyer.keysFor(leaves).map(key => `slide:${key}`);
+      const target = leaves[keys.indexOf(slideId)];
+      if (!target) return;
+      if (countLeafSlides(slidesContainer) <= 1) return;
 
-      const newStacks = prevStacks.map(stack => ({
-        ...stack,
-        slides: stack.slides.filter(s => s.id !== slideId),
-      }));
-
-      // Remove empty stacks
-      return newStacks.filter(stack => stack.slides.length > 0);
-    });
-  }, []);
+      removeSlideElement(target);
+      revealInstance.sync();
+      revealInstance.layout();
+      onContentChange?.();
+      setStacks(parseSlideStructure(slidesContainer, keyer));
+    },
+    [revealInstance, onContentChange]
+  );
 
   // Create a new stack from a slide (for new-stack-zone drops)
   const createStack = useCallback((slideId: string) => {
@@ -251,8 +276,14 @@ export function useSlideStructure(revealInstance: RevealApi | null, onContentCha
       syncToDOM();
       onContentChange?.();
       pendingSyncRef.current = false;
+      // syncToDOM put copies in the deck: read it again so every key and
+      // element refers to what is on the page now.
+      const slidesContainer = revealInstance?.getSlidesElement();
+      if (slidesContainer) {
+        setStacks(parseSlideStructure(slidesContainer, keyerRef.current as SlideKeyer));
+      }
     }
-  }, [stacks, syncToDOM, onContentChange]);
+  }, [stacks, syncToDOM, onContentChange, revealInstance]);
 
   // Wrapper functions that mark changes as pending sync
   const moveSlideAndSync = useCallback(
@@ -269,14 +300,6 @@ export function useSlideStructure(revealInstance: RevealApi | null, onContentCha
       moveStack(stackId, newIndex);
     },
     [moveStack]
-  );
-
-  const deleteSlideAndSync = useCallback(
-    (slideId: string) => {
-      pendingSyncRef.current = true;
-      deleteSlide(slideId);
-    },
-    [deleteSlide]
   );
 
   const createStackAndSync = useCallback(
@@ -296,15 +319,28 @@ export function useSlideStructure(revealInstance: RevealApi | null, onContentCha
     // Export the auto-syncing wrapper functions
     moveSlide: moveSlideAndSync,
     moveStack: moveStackAndSync,
-    deleteSlide: deleteSlideAndSync,
+    deleteSlide,
     createStack: createStackAndSync,
   };
 }
 
+/** The leaf slides (stack children, or top-level slides without any), in order. */
+function leafSections(slidesContainer: HTMLElement): Element[] {
+  const out: Element[] = [];
+  for (const top of Array.from(slidesContainer.querySelectorAll(':scope > section'))) {
+    const kids = Array.from(top.querySelectorAll(':scope > section'));
+    out.push(...(kids.length > 0 ? kids : [top]));
+  }
+  return out;
+}
+
 /**
- * Parse the Reveal.js DOM structure into a normalized data model
+ * Parse the Reveal.js DOM structure into a normalized data model.
+ *
+ * Slides and stacks are keyed by `keyer` (data-cm-id, else per element), so
+ * the keys stay with their slides when the deck changes under the overview.
  */
-function parseSlideStructure(slidesContainer: HTMLElement): StackData[] {
+function parseSlideStructure(slidesContainer: HTMLElement, keyer: SlideKeyer): StackData[] {
   const stacks: StackData[] = [];
 
   // First try direct children
@@ -327,19 +363,28 @@ function parseSlideStructure(slidesContainer: HTMLElement): StackData[] {
     ) as unknown as NodeListOf<Element>;
   }
 
-  topLevelSections.forEach((section: Element, hIndex: number) => {
+  const tops = Array.from(topLevelSections);
+  const leaves = tops.flatMap(section => {
+    const kids = Array.from(section.querySelectorAll(':scope > section'));
+    return kids.length > 0 ? kids : [section];
+  });
+  const leafKeys = new Map<Element, string>();
+  keyer.keysFor(leaves).forEach((key, i) => leafKeys.set(leaves[i], `slide:${key}`));
+  const stackKeys = keyer.keysFor(tops).map(key => `stack:${key}`);
+
+  tops.forEach((section: Element, hIndex: number) => {
     const nestedSections = section.querySelectorAll(':scope > section');
 
     if (nestedSections.length > 0) {
       // This is a vertical stack
       const slides: SlideData[] = Array.from(nestedSections).map((nested, vIndex) => ({
-        id: `slide-${hIndex}-${vIndex}`,
+        id: leafKeys.get(nested) as string,
         element: nested,
         hIndex,
         vIndex,
       }));
       stacks.push({
-        id: `stack-${hIndex}`,
+        id: stackKeys[hIndex],
         slides,
         // Carry the original wrapper element so syncToDOM can rebuild the
         // stack with its attributes intact (see StackData.wrapperElement).
@@ -348,10 +393,10 @@ function parseSlideStructure(slidesContainer: HTMLElement): StackData[] {
     } else {
       // Single slide (still treat as a stack with one slide)
       stacks.push({
-        id: `stack-${hIndex}`,
+        id: stackKeys[hIndex],
         slides: [
           {
-            id: `slide-${hIndex}-0`,
+            id: leafKeys.get(section) as string,
             element: section,
             hIndex,
             vIndex: 0,

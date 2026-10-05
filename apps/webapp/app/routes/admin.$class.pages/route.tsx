@@ -18,6 +18,7 @@ import { ClassmojiService } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
 import getPrisma from '@classmoji/database';
 import { TableActionButtons, RecentViewers } from '~/components';
+import { closeLivePageForDelete } from '~/utils/collab.server';
 import { useGitWeb } from '~/hooks';
 import { adminLoader } from './loader.server';
 import type { Route } from './+types/route';
@@ -83,6 +84,15 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     const page = await ClassmojiService.page.findById(pageId, { includeClassroom: false });
     if (!page || page.classroom_id !== classroom.id) {
       return { error: 'Page not found' };
+    }
+
+    // A live-edited page's room is closed first: the collab server saves what
+    // it holds and disconnects its editors before the page goes. If that
+    // cannot happen (collab unreachable) the delete waits — same rule as the
+    // pages app. The gate's classroom is the page's (checked just above).
+    const closed = await closeLivePageForDelete({ pageId, classroom });
+    if (!closed.ok) {
+      return { error: 'This page could not be deleted right now. Try again.' };
     }
 
     await ClassmojiService.page.deletePage(pageId);

@@ -12,6 +12,51 @@ import {
   resolveDeckDelivery,
 } from '~/utils/deckDelivery.server';
 import { deckOnlyRefusal } from '~/utils/slideKind';
+import {
+  checkpointBeforePresenting,
+  readEditorName,
+  type PresentCheckpointOutcome,
+} from '~/utils/collab/collab.server';
+
+/** The slide with what the gate and the live check need. */
+async function presentableSlide(slideId: string) {
+  const slide = await getPrisma().slide.findUnique({
+    where: { id: slideId },
+    include: { classroom: { include: { git_organization: true } } },
+  });
+  if (!slide) throw new Response('Slide not found', { status: 404 });
+  return slide;
+}
+
+/**
+ * Save before presenting (live classrooms): checkpoint the live deck and wait
+ * for it, bounded, so what is presented — and what the speaker view and
+ * followers then read from git — is the latest. The editor's Present button
+ * posts here first and shows its pending state meanwhile.
+ */
+export const action = async ({
+  params,
+  request,
+}: {
+  params: Record<string, string | undefined>;
+  request: Request;
+}): Promise<{ outcome: PresentCheckpointOutcome }> => {
+  const { slideId } = params;
+  if (!slideId) throw new Response('Missing slideId', { status: 400 });
+  const slide = await presentableSlide(slideId);
+  const { userId } = await assertSlideAccess({
+    request,
+    slideId,
+    slide,
+    accessType: 'present',
+  });
+  if (!isDeckSlide(slide)) throw deckOnlyRefusal(slide.kind, 'present');
+  const actor = {
+    userId: userId ?? 'unknown',
+    name: userId ? await readEditorName(userId) : 'Teacher',
+  };
+  return { outcome: await checkpointBeforePresenting(slide, actor, { timeoutMs: 15_000 }) };
+};
 
 export const loader = async ({
   params,
@@ -39,7 +84,7 @@ export const loader = async ({
   }
 
   // Authorization: require present permission (owner/teacher/assistant)
-  const { canPresent, canEdit } = await assertSlideAccess({
+  const { canPresent, canEdit, userId } = await assertSlideAccess({
     request,
     slideId,
     slide,
@@ -75,7 +120,23 @@ export const loader = async ({
   let slideContent: string | null = null;
   let contentError: string | null = null;
 
-  const contentResult = await readDeckText(slide, gitOrgLogin, repo, filePath, 'present');
+  // Live classroom: save first (the editor's Present button already did, so
+  // this is quick then; a direct link — the webapp's slides list — waits here).
+  // `?saved=1`: the editor's Present button has just done it (its action
+  // above) — only freshness is at stake, so a hand-made one costs nothing.
+  const savedFirst = new URL(request.url).searchParams.get('saved') === '1';
+  const live =
+    isDeckSlide(slide) &&
+    !savedFirst &&
+    (await checkpointBeforePresenting(
+      slide,
+      { userId: userId ?? 'unknown', name: userId ? await readEditorName(userId) : 'Teacher' },
+      { timeoutMs: 10_000 }
+    )) !== 'not-live';
+
+  const contentResult = await readDeckText(slide, gitOrgLogin, repo, filePath, 'present', {
+    skipCache: live || savedFirst,
+  });
 
   if (contentResult) {
     // Same read-side delivery pass the deck viewer runs: the stored document

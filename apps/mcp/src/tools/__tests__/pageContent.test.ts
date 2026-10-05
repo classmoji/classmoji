@@ -523,6 +523,7 @@ describe('page_content_apply', () => {
     expect(mocks.ensurePreviewBranch).toHaveBeenCalledTimes(1);
     const saveOpts = mocks.savePageContent.mock.calls[0][2] as Record<string, unknown>;
     expect(saveOpts).toMatchObject({ expectedSha: 'sha-1', branch: PREVIEW_BRANCH });
+    expect(saveOpts.createOnly).toBeUndefined(); // an existing content.json is updated under its sha
 
     // The updated block landed (id preserved through the update op).
     const savedBlocks = mocks.savePageContent.mock.calls[0][1] as Array<{
@@ -662,6 +663,7 @@ describe('page_content_apply', () => {
     // A sha-less create: put() would 409 any expectedSha against a missing
     // file, so the lock is GitHub's own create semantics (422 on existence).
     expect(saveOpts.expectedSha).toBeUndefined();
+    expect(saveOpts.createOnly).toBe(true);
   });
 
   it('create race: a 422 from the sha-less create maps to CONTENT_CONFLICT', async () => {
@@ -827,6 +829,96 @@ describe('page_content_apply', () => {
       )
     ).rejects.toMatchObject({ code: 'CONTENT_CONFLICT' });
     expect(mocks.savePageContent).not.toHaveBeenCalled();
+  });
+
+  describe('legacy HTML page + replace_all creates content.json', () => {
+    const LEGACY = {
+      format: 'html',
+      blocks: '<h1>Legacy</h1><p>Old body</p>',
+      coverImage: null,
+      sha: 'html-sha',
+    };
+    const REPLACE_ARGS = {
+      ...APPLY_ARGS,
+      expected_sha: 'html-sha',
+      ops: [
+        {
+          op: 'replace_all' as const,
+          blocks: [
+            { type: 'heading', content: [{ type: 'text', text: 'Converted' }] },
+            { type: 'paragraph', content: [{ type: 'text', text: 'Body' }] },
+          ],
+        },
+      ],
+    };
+
+    beforeEach(() => {
+      mocks.loadPageContent.mockResolvedValue(LEGACY);
+    });
+
+    it('draft, direct: writes content.json on main WITHOUT index.html’s sha as the lock', async () => {
+      mocks.pageFindById.mockResolvedValue(DRAFT_PAGE);
+
+      const payload = parse(await pageContentApplyTool.handler(REPLACE_ARGS, CTX));
+
+      expect(payload).toMatchObject({ success: true, committed_to: 'main', block_count: 2 });
+      expect(mocks.ensurePreviewBranch).not.toHaveBeenCalled();
+      const saveOpts = mocks.savePageContent.mock.calls[0][2] as Record<string, unknown>;
+      // index.html's sha names a different file: as content.json's expectedSha
+      // it would 409 every first write (GitHub sees a missing file + a sha).
+      expect(saveOpts.expectedSha).toBeUndefined();
+      // Create-only: a content.json made since the read is refused, not overwritten.
+      expect(saveOpts.createOnly).toBe(true);
+      expect(saveOpts.branch).toBeUndefined();
+    });
+
+    it('published, preview: content.json is created on the preview branch, then accept merges it', async () => {
+      const payload = parse(await pageContentApplyTool.handler(REPLACE_ARGS, CTX));
+
+      expect(payload).toMatchObject({ success: true, committed_to: 'preview', block_count: 2 });
+      // No preview yet → read from main (the legacy page), branch cut, then saved on it.
+      expect(mocks.loadPageContent.mock.calls[0][1]).toEqual({ skipCache: true });
+      expect(mocks.ensurePreviewBranch).toHaveBeenCalledTimes(1);
+      const saveOpts = mocks.savePageContent.mock.calls[0][2] as Record<string, unknown>;
+      expect(saveOpts.expectedSha).toBeUndefined();
+      expect(saveOpts.createOnly).toBe(true);
+      expect(saveOpts.branch).toBe(PREVIEW_BRANCH);
+
+      mocks.getPreviewStatus.mockResolvedValue({ exists: true, commits_ahead: 1 });
+      mocks.acceptPreview.mockResolvedValue({ merged: true, sha: 'content-json-sha' });
+      const accepted = parse(
+        await pagePreviewAcceptTool.handler({ classroom: 'org/x', page_id: PAGE_ID }, CTX)
+      );
+      expect(accepted).toEqual({ success: true, merged: true, new_sha: 'content-json-sha' });
+      expect(mocks.acceptPreview).toHaveBeenCalledTimes(1);
+    });
+
+    it('a stale legacy sha is still refused, on both paths, before any branch or write', async () => {
+      for (const page of [DRAFT_PAGE, PAGE]) {
+        mocks.pageFindById.mockResolvedValue(page);
+        await expect(
+          pageContentApplyTool.handler({ ...REPLACE_ARGS, expected_sha: 'stale-html-sha' }, CTX)
+        ).rejects.toMatchObject({ code: 'CONTENT_CONFLICT' });
+      }
+      expect(mocks.ensurePreviewBranch).not.toHaveBeenCalled();
+      expect(mocks.savePageContent).not.toHaveBeenCalled();
+      expect(mocks.auditCreate).not.toHaveBeenCalled();
+    });
+
+    it('a conflict reported by the content.json create is CONTENT_CONFLICT, fresh branch cleaned up', async () => {
+      for (const status of [409, 422]) {
+        mocks.discardPreview.mockClear();
+        mocks.savePageContent.mockRejectedValue(
+          Object.assign(new Error('content.json write refused'), { status })
+        );
+
+        await expect(pageContentApplyTool.handler(REPLACE_ARGS, CTX)).rejects.toMatchObject({
+          code: 'CONTENT_CONFLICT',
+        });
+        expect(mocks.discardPreview).toHaveBeenCalledTimes(1);
+      }
+      expect(mocks.auditCreate).not.toHaveBeenCalled();
+    });
   });
 
   it('writes ONE enriched audit row per apply', async () => {

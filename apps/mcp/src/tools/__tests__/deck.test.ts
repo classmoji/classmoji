@@ -697,6 +697,31 @@ describe('deck_apply op semantics', () => {
     expect(deck.slides[1].attrs).toEqual({ 'data-transition': 'fade' });
   });
 
+  it('update attrs merge into the slide (null removes a key); replace_attrs replaces', async () => {
+    const withAttrs = DECK();
+    withAttrs.slides[1].attrs = { spellcheck: 'false', 'data-background-color': '#fff' };
+    mocks.loadDeck.mockResolvedValue(loadedDeck(withAttrs));
+
+    // A theme pass that only names its own keys keeps the rest.
+    await run([
+      {
+        op: 'update',
+        id: 'bbb',
+        attrs: { 'data-background-color': '#000', 'data-transition': 'fade', spellcheck: null },
+      },
+    ]);
+    expect(savedDeck().slides[1].attrs).toEqual({
+      'data-background-color': '#000',
+      'data-transition': 'fade',
+    });
+
+    mocks.saveDeck.mockClear();
+    await run([
+      { op: 'update', id: 'bbb', attrs: { 'data-transition': 'zoom' }, replace_attrs: true },
+    ]);
+    expect(savedDeck().slides[1].attrs).toEqual({ 'data-transition': 'zoom' });
+  });
+
   it('insert mints fresh non-colliding ids and normalizes html', async () => {
     const payload = parse(
       await run([

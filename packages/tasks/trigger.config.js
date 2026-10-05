@@ -118,6 +118,12 @@ export default defineConfig({
     '**/__fixtures__/**',
   ],
   build: {
+    // jsdom cannot be bundled: it reads files beside its own modules at load
+    // (`__dirname`-relative default stylesheet, `require.resolve` of the XHR
+    // sync worker), so a bundled copy throws on import. `content-checkpoint`
+    // pulls it in through @blocknote/server-util (@classmoji/page-schema/server).
+    // Kept external, the CLI installs the version the importer resolves.
+    external: ['jsdom'],
     extensions: [
       prismaExtension({
         schema: '../database/schema.prisma',

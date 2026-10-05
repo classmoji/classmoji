@@ -36,7 +36,9 @@ test.describe('highestRole', () => {
 test.describe('every reader of a member’s role asks the same helper', () => {
   const PAGE_ROUTE = source('../../app/routes/$classroomSlug.$pageId/route.server.ts');
   const AUTH = source('../../app/utils/auth.server.ts');
-  const HELPER = source('../../app/utils/classroomRole.server.ts');
+  // The app's helper re-exports the shared one; the rule lives there.
+  const APP_HELPER = source('../../app/utils/classroomRole.server.ts');
+  const HELPER = source('../../../../packages/auth/src/classroomRole.ts');
   const TENANT = source('../../app/site/tenant.server.ts');
 
   test('the page loader and its save action', () => {
@@ -53,7 +55,8 @@ test.describe('every reader of a member’s role asks the same helper', () => {
   });
 
   test('the helper reads every row and picks the highest; the class site does too', () => {
-    expect(HELPER).toContain('prisma.classroomMembership.findMany({');
+    expect(APP_HELPER).toContain("from '@classmoji/auth/classroom-role'");
+    expect(HELPER).toContain('getPrisma().classroomMembership.findMany({');
     expect(HELPER).toContain('return highestRole(rows.map(row => row.role));');
     expect(HELPER).toContain('...(acceptedOnly ? { has_accepted_invite: true } : {}),');
     expect(TENANT).toContain('highestRole(memberships.map(membership => membership.role))');

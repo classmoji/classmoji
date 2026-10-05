@@ -53,8 +53,10 @@ export const NAV_GRID_SCHEDULE_PATH = '/schedule';
 export const NAV_GRID_SCHEDULE_LABEL = 'Schedule';
 export const NAV_GRID_SCHEDULE_EMOJI = '📅';
 
-/** Empty serialized value — also the block prop default. */
-export const NAV_GRID_EMPTY_ENTRIES = '[]';
+/** Empty serialized value — also the block prop default (declared with the
+ *  block's config in @classmoji/page-schema; the `/constants` entry has no
+ *  BlockNote import, so this module stays light). */
+export { NAV_GRID_EMPTY_ENTRIES } from '@classmoji/page-schema/constants';
 
 /** Emoji fields are decorative; cap them so a paste can't smuggle a paragraph in. */
 const MAX_EMOJI_CODEPOINTS = 4;

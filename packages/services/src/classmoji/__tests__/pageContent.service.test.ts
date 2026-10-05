@@ -120,6 +120,9 @@ vi.mock('../../media/uploadCapability.ts', () => ({
 const {
   loadPageContent,
   savePageContent,
+  preparePageContent,
+  writePageContent,
+  recordPageFile,
   uploadPageAsset,
   resolvePageAssetUrl,
   canonicalizePageCoverRef,
@@ -391,6 +394,34 @@ describe('pageContent.savePageContent', () => {
     }).catch((e: Error) => e);
 
     expect(callArg(putMock).expectedSha).toBe('stale-sha');
+    expect((failure as Error & { status?: number }).status).toBe(409);
+  });
+
+  it('a plain save is an update: no createOnly reaches put', async () => {
+    await savePageContent(page, blocks, { coverImage: null, expectedSha: 'sha-1' });
+
+    expect(callArg(putMock).expectedSha).toBe('sha-1');
+    expect('createOnly' in callArg(putMock)).toBe(false);
+  });
+
+  it('createOnly reaches put (no sha), and an existing content.json is refused with 409', async () => {
+    // The caller read no content.json (a legacy index.html page): a file that
+    // exists at write time — made since that read, or too corrupt to load — is
+    // put's 409, never an overwrite.
+    getContentMock.mockResolvedValueOnce(null); // cover re-read: no content.json on the branch
+    putMock.mockRejectedValueOnce(
+      Object.assign(new Error('File already exists (create-only write refused)'), { status: 409 })
+    );
+
+    const failure = await savePageContent(page, blocks, {
+      createOnly: true,
+      branch: 'preview/pages/syllabus',
+    }).catch((e: Error) => e);
+
+    const arg = callArg(putMock);
+    expect(arg.createOnly).toBe(true);
+    expect(arg.expectedSha).toBeUndefined();
+    expect(arg.branch).toBe('preview/pages/syllabus');
     expect((failure as Error & { status?: number }).status).toBe(409);
   });
 
@@ -2293,3 +2324,101 @@ describe('pageContent.discardPreview', () => {
 // raw-string comparison diverged from the shipping engine. The authoritative
 // 3-way conflict reporting is exercised through merge3Blocks (see
 // pageContent.merge.test.ts) and the accept/save merge suites.
+
+// ─── prepare / write / record (the split the checkpoint worker uses) ────────
+
+describe('pageContent prepare / write / record', () => {
+  const blocks = [
+    { id: 'b1', type: 'paragraph', content: [] },
+    // A one-column layout: normalizeBlockStructure unwraps it, in both paths.
+    {
+      id: 'cl',
+      type: 'columnList',
+      children: [{ id: 'c1', type: 'column', children: [{ id: 'p2', type: 'paragraph' }] }],
+    },
+  ];
+  const keyedPage = {
+    ...page,
+    id: 'page-1',
+    classroom: {
+      ...page.classroom,
+      id: 'class-1',
+      content_key_version: 3,
+      content_delivery_enabled: true,
+    },
+  };
+
+  beforeEach(() => {
+    recordContentAssetMock.mockResolvedValue(true);
+  });
+
+  it('prepare produces exactly the bytes savePageContent commits, and writes nothing', async () => {
+    const prepared = await preparePageContent(keyedPage, blocks, { coverImage: cover });
+    expect(putMock).not.toHaveBeenCalled();
+    expect(recordContentAssetMock).not.toHaveBeenCalled();
+    expect(prepared.path).toBe('pages/syllabus/content.json');
+    expect(prepared.coverImage).toEqual(cover);
+
+    await savePageContent(keyedPage, blocks, { coverImage: cover });
+    expect(callArg(putMock).content).toBe(prepared.content);
+  });
+
+  it('prepare with an explicit null cover makes no re-read and writes no key', async () => {
+    const prepared = await preparePageContent(keyedPage, blocks, { coverImage: null });
+    expect(getContentMock).not.toHaveBeenCalled();
+    expect(JSON.parse(prepared.content)).not.toHaveProperty('coverImage');
+    expect(prepared.coverImage).toBeNull();
+  });
+
+  it('prepare re-reads the stored cover when it is omitted (on the given branch)', async () => {
+    getContentMock.mockResolvedValueOnce({
+      content: JSON.stringify({ blocks: [], coverImage: cover }),
+      sha: 's',
+    });
+    const prepared = await preparePageContent(keyedPage, blocks, { branch: 'preview/x' });
+    expect(callArg(getContentMock)).toMatchObject({ ref: 'preview/x', skipCache: true });
+    expect(prepared.coverImage).toEqual(cover);
+  });
+
+  it('write commits the prepared bytes with the default message', async () => {
+    const result = await writePageContent(keyedPage, {
+      path: 'pages/syllabus/content.json',
+      content: 'X',
+    });
+    expect(result).toEqual({ sha: 'new-sha', commit: 'commit-1' });
+    expect(callArg(putMock)).toMatchObject({
+      path: 'pages/syllabus/content.json',
+      content: 'X',
+      message: 'Update page: Syllabus',
+      repo: 'content-test-org-cs101',
+    });
+    expect(callArg(putMock)).not.toHaveProperty('expectedSha');
+  });
+
+  it('record writes the map row, warms and returns at once by default', async () => {
+    let release!: () => void;
+    warmContentTextMock.mockImplementationOnce(
+      () => new Promise<void>(resolve => (release = resolve))
+    );
+    await recordPageFile(keyedPage, 'pages/syllabus/content.json', 'sha-9', 'body');
+    expect(recordContentAssetMock).toHaveBeenCalledWith('class-1', {
+      path: 'pages/syllabus/content.json',
+      sha: 'sha-9',
+      size: 4,
+    });
+    release();
+  });
+
+  it('record with awaitTail waits for the warm before returning, and swallows its failure', async () => {
+    let settled = false;
+    warmContentTextMock.mockImplementationOnce(async () => {
+      await new Promise(r => setTimeout(r, 20));
+      settled = true;
+      throw new Error('warm failed');
+    });
+    await recordPageFile(keyedPage, 'pages/syllabus/content.json', 'sha-9', 'body', {
+      awaitTail: true,
+    });
+    expect(settled).toBe(true);
+  });
+});

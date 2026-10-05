@@ -50,11 +50,14 @@ test.describe('a failed cover action is shown as a sentence', () => {
 
 test.describe('the cover uploaders', () => {
   test('both surfaces upload through the routing hook, not a raw form post', () => {
-    expect(HEADER_SOURCE).toContain('useCoverUpload(fetcher, uploadCapability)');
+    // The third argument is the live-editing target (null for the git editor).
+    expect(HEADER_SOURCE).toContain(
+      'useCoverUpload(fetcher, uploadCapability, live?.target ?? null)'
+    );
     expect(HEADER_SOURCE).toContain('cover.upload(file)');
     expect(HEADER_SOURCE).not.toContain("formData.append('intent', 'upload-header-image')");
 
-    expect(ROUTE_SOURCE).toContain('useCoverUpload(fetcher, capability)');
+    expect(ROUTE_SOURCE).toContain('useCoverUpload(fetcher, capability, live)');
     expect(ROUTE_SOURCE).toContain('cover.upload(file)');
     expect(ROUTE_SOURCE).not.toContain("formData.append('intent', 'upload-header-image')");
   });

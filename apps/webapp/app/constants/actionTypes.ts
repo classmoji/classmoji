@@ -8,6 +8,7 @@ export const ActionTypes = {
   SAVE_SLIDES_SETTINGS: 'save-slides-settings',
   SAVE_CONTENT_SETTINGS: 'save-content-settings',
   RESET_CONTENT_CACHE: 'reset-content-cache',
+  SAVE_LIVE_EDITING: 'save-live-editing',
 
   SAVE_ASSIGNMENT: 'save-assignment',
   DELETE_ASSIGNMENT: 'delete-assignment',

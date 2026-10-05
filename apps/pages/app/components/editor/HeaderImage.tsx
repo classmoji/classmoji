@@ -3,7 +3,7 @@ import { useFetcher } from 'react-router';
 import type { UploadCapability } from '@classmoji/services/media/router';
 import useHeaderImageDrag from '~/hooks/useHeaderImageDrag.ts';
 import { usePageMedia } from './media/PageMedia.tsx';
-import { useCoverUpload } from './media/useCoverUpload.ts';
+import { useCoverUpload, type LiveCoverTarget } from './media/useCoverUpload.ts';
 
 /**
  * Header/banner image with Notion-style drag-to-reposition.
@@ -18,6 +18,14 @@ interface HeaderImageProps {
   pageId: string;
   /** Where a new cover goes (`storageTargetFor`); null routes it to the repository. */
   uploadCapability?: UploadCapability | null;
+  /**
+   * Live editing: every change is a write to the live document's cover
+   * (`target.setCover`), and `storedUrl` is the reference it stores —
+   * `imageUrl` is only the URL it is displayed with.
+   */
+  live?: { storedUrl: string | null; target: LiveCoverTarget } | null;
+  /** A rendered preview marks the cover it changes (never a diff). */
+  highlighted?: boolean;
 }
 
 const HeaderImage = ({
@@ -26,6 +34,8 @@ const HeaderImage = ({
   editMode,
   pageId: _pageId,
   uploadCapability = null,
+  live = null,
+  highlighted = false,
 }: HeaderImageProps) => {
   const [isHovering, setIsHovering] = useState(false);
   const [isRepositioning, setIsRepositioning] = useState(false);
@@ -37,7 +47,7 @@ const HeaderImage = ({
   const media = usePageMedia();
   // Uploads through the storage router, and owns this fetcher's failure toast
   // (the 409 "page changed — try again" from the cover CAS write included).
-  const cover = useCoverUpload(fetcher, uploadCapability);
+  const cover = useCoverUpload(fetcher, uploadCapability, live?.target ?? null);
   const positionBeforeReposition = useRef(position);
 
   // Sync localPosition when prop changes (e.g. after save + revalidation)
@@ -72,11 +82,15 @@ const HeaderImage = ({
 
   const handleSavePosition = useCallback(() => {
     setIsRepositioning(false);
+    if (live) {
+      if (live.storedUrl) live.target.setCover({ url: live.storedUrl, position: localPosition });
+      return;
+    }
     fetcher.submit(
       { intent: 'set-header-image', url: imageUrl, position: localPosition },
       { method: 'POST', encType: 'application/json' }
     );
-  }, [fetcher, imageUrl, localPosition]);
+  }, [fetcher, imageUrl, localPosition, live]);
 
   const handleCancelReposition = useCallback(() => {
     setLocalPosition(positionBeforeReposition.current);
@@ -84,11 +98,15 @@ const HeaderImage = ({
   }, []);
 
   const handleRemove = useCallback(() => {
+    if (live) {
+      live.target.setCover(null);
+      return;
+    }
     fetcher.submit(
       { intent: 'set-header-image', url: null, position: 50 },
       { method: 'POST', encType: 'application/json' }
     );
-  }, [fetcher]);
+  }, [fetcher, live]);
 
   const handleAddCover = useCallback(() => {
     fileInputRef.current?.click();
@@ -103,11 +121,16 @@ const HeaderImage = ({
   const handleChooseFromMedia = useCallback(async () => {
     const item = await media.choose('IMAGE');
     if (!item) return;
+    if (live) {
+      // `choose` has already fetched the display URL for the reference.
+      live.target.setCover({ url: item.ref, position: 50 });
+      return;
+    }
     fetcher.submit(
       { intent: 'set-header-image', url: item.ref, position: 50 },
       { method: 'POST', encType: 'application/json' }
     );
-  }, [fetcher, media]);
+  }, [fetcher, media, live]);
 
   // Hidden file input (shared by add + change)
   const fileInput = (
@@ -169,6 +192,17 @@ const HeaderImage = ({
       onTouchStart={isRepositioning ? handleTouchStart : undefined}
     >
       {fileInput}
+
+      {highlighted && (
+        <div
+          data-testid="preview-cover-changed"
+          className="pointer-events-none absolute inset-0 z-10 shadow-[inset_0_0_0_3px_rgb(245,158,11)] dark:shadow-[inset_0_0_0_3px_rgb(251,191,36)]"
+        >
+          <span className="absolute left-3 top-3 rounded-full bg-amber-500 px-2 py-0.5 text-xs font-semibold text-white dark:bg-amber-400 dark:text-amber-950">
+            Cover changed
+          </span>
+        </div>
+      )}
 
       {/* Uploading spinner overlay */}
       {isBusy && (
