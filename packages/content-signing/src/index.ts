@@ -70,7 +70,12 @@ export { clearKeyCache, deriveKey, signCanonical, verifyCanonical } from './deri
 export type { RenderTokenFields, RenderVerification } from './render.ts';
 export { RENDER_TOKEN_TTL_SECONDS, signRenderToken, verifyRenderToken } from './render.ts';
 
-export type { ViewCanonicalFields, ViewDocKind, ViewTokenFields, ViewVerification } from './view.ts';
+export type {
+  ViewCanonicalFields,
+  ViewDocKind,
+  ViewTokenFields,
+  ViewVerification,
+} from './view.ts';
 export {
   VIEW_TOKEN_TTL_SECONDS,
   isViewTarget,

@@ -584,6 +584,8 @@ interface CssChunk {
   block: boolean;
 }
 
+// Any non-ASCII code point is an identifier character in CSS.
+// eslint-disable-next-line no-control-regex
 const IDENT_CHAR_RE = /[\w-]|[^\x00-\x7f]/;
 
 /** The decoded name of the ident at `at` (escapes read), and where it ends. */

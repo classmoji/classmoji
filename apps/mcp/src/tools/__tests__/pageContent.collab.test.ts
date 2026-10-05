@@ -669,7 +669,6 @@ describe('guarded ops, inserted ids and save status', () => {
       },
       CTX
     );
-  const lastPost = () => calls.filter(call => call.method === 'POST').at(-1);
 
   it("maps the server's 409 block-changed to BLOCK_CHANGED with its ids", async () => {
     route('POST', 'ops', () => ({

@@ -190,7 +190,7 @@ ${FRAME_SETTLE_JS}
     }
     var REPLACED = /^(img|svg|video|canvas|iframe|object|embed|input|textarea|select|button|hr|picture|math)$/i;
     function transparent(color) {
-      return !color || color === 'transparent' || /rgba?\([^)]*,\s*0(\.0+)?\)$/.test(color);
+      return !color || color === 'transparent' || /rgba?\\([^)]*,\\s*0(\\.0+)?\\)$/.test(color);
     }
     // Does this element's OWN box draw anything? A wrapper with no
     // background, border or shadow paints nothing, so its box running past

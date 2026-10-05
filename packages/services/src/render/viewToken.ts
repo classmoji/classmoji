@@ -32,9 +32,7 @@ export function viewSigningSecret(env: Env = process.env): string | null {
   if (secret) {
     return env.NODE_ENV === 'production' && secret === DEV_VIEW_SIGNING_SECRET ? null : secret;
   }
-  return env.NODE_ENV === 'development' || env.NODE_ENV === 'test'
-    ? DEV_VIEW_SIGNING_SECRET
-    : null;
+  return env.NODE_ENV === 'development' || env.NODE_ENV === 'test' ? DEV_VIEW_SIGNING_SECRET : null;
 }
 
 export interface ViewTokenTarget {

@@ -363,6 +363,8 @@ function nextSlideAttrs(
 // ─── Blocks ──────────────────────────────────────────────────────────────────
 
 /** Characters a frame URL never carries: whitespace, controls, backslashes. */
+// Control characters are exactly what this refuses in a frame src.
+// eslint-disable-next-line no-control-regex
 const FRAME_SRC_BAD_CHARS = /[\s\u0000-\u001f\u007f\\]/;
 
 /**

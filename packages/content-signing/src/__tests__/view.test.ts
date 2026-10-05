@@ -9,7 +9,16 @@ import {
   viewCanonicalString,
   type ViewTokenFields,
 } from '../view.ts';
-import { CLASSROOM_A, CLASSROOM_B, HOST, MASTER, NOW, ORIGIN, OTHER_MASTER, OTHER_ORIGIN } from './fixtures.ts';
+import {
+  CLASSROOM_A,
+  CLASSROOM_B,
+  HOST,
+  MASTER,
+  NOW,
+  ORIGIN,
+  OTHER_MASTER,
+  OTHER_ORIGIN,
+} from './fixtures.ts';
 
 const DOC_A = '22222222-3333-4444-8555-666666666666';
 const DOC_B = '77777777-8888-4999-8aaa-bbbbbbbbbbbb';

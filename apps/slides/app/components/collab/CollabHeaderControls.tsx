@@ -199,7 +199,9 @@ export default function CollabHeaderControls({
           title={savedTitle ? `${saved.label} · ${savedTitle}` : saved.label}
           trigger={['hover', 'focus', 'click']}
         >
+          {/* Focusable so keyboard users can open the tooltip with the commit details. */}
           <span
+            // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
             tabIndex={0}
             data-testid="live-saved-status"
             data-tone={saved.tone}
