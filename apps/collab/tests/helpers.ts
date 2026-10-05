@@ -317,8 +317,13 @@ export class RecordingCheckpoints implements CheckpointTrigger {
     plain?: boolean;
     generation?: number;
   }[] = [];
+  /** Warm-up runs sent, by classroom, in order. */
+  warms: string[] = [];
   async trigger(payload: ContentCheckpointPayload, options: CheckpointTriggerOptions) {
     this.calls.push({ payload, ...options });
+  }
+  async warm(classroomId: string) {
+    this.warms.push(classroomId);
   }
 }
 

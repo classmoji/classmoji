@@ -384,6 +384,30 @@ export function mayAutoReloadStale(unsyncedChanges: number): boolean {
   return unsyncedChanges === 0;
 }
 
+// ─── Presenting ──────────────────────────────────────────────────────────────
+
+/** The presenter's notice when the latest live edits were not in git yet. */
+export const PRESENT_SAVING_NOTICE =
+  'Your latest edits are still saving. Refresh in a moment to see them.';
+
+/**
+ * Where the editor's Present button goes once its save answered (`outcome`,
+ * or undefined when no answer came at all). `?saved=1`: saved, present at
+ * once. `?saving=1`: the wait is over but the save is not confirmed — present
+ * what git has at once, with the notice while the deck still holds edits git
+ * lacks. Plain: not a live deck after all (the presenter checks itself).
+ */
+export function presentUrlAfterSave(slideId: string, outcome: string | undefined): string {
+  if (outcome === 'saved') return `/${slideId}/present?saved=1`;
+  if (outcome === 'not-live') return `/${slideId}/present`;
+  return `/${slideId}/present?saving=1`;
+}
+
+/** The notice for a save the presenter's own load waited for. */
+export function presentNoticeFor(outcome: string | null | undefined): string | null {
+  return outcome === 'timeout' || outcome === 'error' ? PRESENT_SAVING_NOTICE : null;
+}
+
 /**
  * Leaving the page loses edits the server has not acknowledged yet: warn
  * (beforeunload, in-app navigation) while editing live and not in sync.
@@ -402,6 +426,21 @@ export function liveLeaveRisk({
   // After Done too: until the server has every update, leaving loses them.
   if (localPending || unsyncedChanges > 0) return true;
   return editing && status !== 'connected';
+}
+
+/**
+ * Whether an in-app navigation leaves this editor (the live leave guard asks
+ * only then). Leaving = another pathname. A hash-only change (Reveal moving
+ * between slides: same pathname and search) and a search-only change (the
+ * "View preview" link) keep this page and its live session, so they are never
+ * blocked — and Reveal's hash changes, which the router did not create, could
+ * not be blocked anyway.
+ */
+export function leavesLiveEditor(
+  currentLocation: { pathname: string; search: string; hash: string },
+  nextLocation: { pathname: string; search: string; hash: string }
+): boolean {
+  return currentLocation.pathname !== nextLocation.pathname;
 }
 
 /**

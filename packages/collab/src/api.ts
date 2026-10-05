@@ -409,6 +409,13 @@ export interface ContentCheckpointPayload {
    * the run reports each on its doc's checkpoint-result entry.
    */
   requests?: CheckpointRequestRef[];
+  /**
+   * A warm-up run: no git, no rows. It loads what a checkpoint needs and
+   * returns, so the worker's machine and process are ready when a real
+   * checkpoint (Present, Save version) follows. Sent by collab, at most once
+   * a minute per classroom, while someone has a live doc of it open.
+   */
+  warm?: true;
 }
 
 /** Commit trailer marking a push as ours (hook-station skips these). */

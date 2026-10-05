@@ -262,9 +262,11 @@ jobs:
           IMAGE: ${{ needs.build-hook-station.outputs.image }}
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
+  # Trigger tasks deploy first: collab triggers task payloads (e.g. warm
+  # runs) that the previous task version would not understand.
   deploy-collab:
-    needs: [changes, deploy-webapp, build-collab]
-    if: always() && !cancelled() && needs.build-collab.result == 'success' && needs.build-collab.outputs.image != '' && (needs.deploy-webapp.result == 'success' || (needs.changes.outputs.webapp != 'true' && needs.deploy-webapp.result == 'skipped'))
+    needs: [changes, deploy-webapp, build-collab, deploy-trigger]
+    if: always() && !cancelled() && needs.build-collab.result == 'success' && needs.build-collab.outputs.image != '' && (needs.deploy-webapp.result == 'success' || (needs.changes.outputs.webapp != 'true' && needs.deploy-webapp.result == 'skipped')) && (needs.deploy-trigger.result == 'success' || needs.deploy-trigger.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

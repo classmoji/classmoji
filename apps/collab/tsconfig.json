@@ -1,4 +1,9 @@
 {
   "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // The service runs its .ts sources through Node's type stripping: syntax
+    // that needs emitting (parameter properties, enums) crashes it at start.
+    "erasableSyntaxOnly": true
+  },
   "include": ["src", "tests", "vitest.config.ts"]
 }
