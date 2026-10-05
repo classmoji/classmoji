@@ -56,6 +56,6 @@ test.describe('slide titles from the deck on screen', () => {
     expect(slideTitleFromDom(doc, 'b')).toBe('First words here');
     expect(slideTitleFromDom(doc, 'c')).toBe('');
     expect(slideTitleFromDom(doc, 'd')).toHaveLength(80);
-    expect(slideTitleFromDom(doc, 'missing')).toBe('');
+    expect(slideTitleFromDom(doc, 'missing')).toBeNull();
   });
 });

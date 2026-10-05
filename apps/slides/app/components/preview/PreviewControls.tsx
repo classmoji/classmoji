@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, useFetcher } from 'react-router';
 import { Button, ConfigProvider, Modal, theme } from 'antd';
 import dayjs from 'dayjs';
@@ -311,33 +311,40 @@ const OrderList = ({ ids }: { ids: string[] }) => {
   const titles = useSlideTitles(ids);
   return (
     <ol className="space-y-0.5 text-xs text-gray-700 dark:text-gray-300 max-h-36 overflow-y-auto">
-      {ids.map((id, position) => (
-        <li key={`${id}-${position}`} className="flex gap-1.5" data-slide-id={id}>
-          <span className="w-5 shrink-0 text-right tabular-nums text-gray-400 dark:text-gray-500">
-            {position + 1}.
-          </span>
-          {titles[id] ? (
-            <span className="truncate">{titles[id]}</span>
-          ) : (
-            <span className="truncate italic text-gray-500 dark:text-gray-400">Untitled slide</span>
-          )}
-        </li>
-      ))}
+      {ids.map((id, position) => {
+        const title = titles[id];
+        return (
+          <li key={`${id}-${position}`} className="flex gap-1.5" data-slide-id={id}>
+            <span className="w-5 shrink-0 text-right tabular-nums text-gray-400 dark:text-gray-500">
+              {position + 1}.
+            </span>
+            {title ? (
+              <span className="truncate">{title}</span>
+            ) : (
+              <span className="truncate italic text-gray-500 dark:text-gray-400" title={id}>
+                {title === '' ? 'Untitled slide' : 'Slide not on screen'}
+              </span>
+            )}
+          </li>
+        );
+      })}
     </ol>
   );
 };
 
-/** Titles of the slides on screen, read after render (the deck is outside React). */
-function useSlideTitles(ids: string[]): Record<string, string> {
-  const [titles, setTitles] = useState<Record<string, string>>({});
+/**
+ * Titles of the slides in the deck on screen (outside React, read as the
+ * list renders): '' for a slide with no text, null for one not on screen.
+ */
+function useSlideTitles(ids: string[]): Record<string, string | null> {
   const key = ids.join('|');
-  useEffect(() => {
+  return useMemo(() => {
+    if (typeof document === 'undefined') return {};
     const root = document.querySelector('.reveal .slides') ?? document;
-    setTitles(Object.fromEntries(ids.map(id => [id, slideTitleFromDom(root, id)])));
+    return Object.fromEntries(ids.map(id => [id, slideTitleFromDom(root, id)]));
     // `key` stands for `ids`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
-  return titles;
 }
 
 /** Filmstrip layout: a horizontal row (top-level slide order) or a vertical

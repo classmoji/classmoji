@@ -450,6 +450,12 @@ export default function SlideToolbar({
   // Handle delete button click - show warning if can't delete
   const handleDeleteClick = useCallback(
     (e: React.MouseEvent) => {
+      if (heldByOther) {
+        e.preventDefault();
+        e.stopPropagation();
+        toast.info(`${currentSlideHolder?.trim() || 'Someone'} is editing this slide`);
+        return false;
+      }
       if (!canDeleteSlide()) {
         e.preventDefault();
         e.stopPropagation();
@@ -457,7 +463,7 @@ export default function SlideToolbar({
         return false;
       }
     },
-    [canDeleteSlide]
+    [canDeleteSlide, heldByOther, currentSlideHolder, toast]
   );
 
   // ─────────────────────────────────────────────────────────────
@@ -853,7 +859,7 @@ document.querySelector('h1').addEventListener('click', () => {
       >
         <button
           onClick={handleDeleteClick}
-          disabled={heldByOther}
+          // Focusable while held, so keyboard users reach the reason.
           aria-disabled={heldByOther || !canDeleteSlide()}
           data-testid="toolbar-delete-slide"
           title={

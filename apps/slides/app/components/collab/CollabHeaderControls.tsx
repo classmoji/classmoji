@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Tooltip } from 'antd';
 import {
   IconBrandGithub,
   IconCloudCheck,
@@ -107,7 +108,9 @@ function useSavedAnnouncement(
   const key = checkpoint
     ? `${checkpoint.at}|${checkpoint.commit ?? ''}|${checkpoint.error ?? ''}`
     : '';
-  const [announcement, setAnnouncement] = useState('');
+  // `count` alternates a trailing no-break space, so the same outcome twice
+  // in a row is still a change the live region announces.
+  const [announcement, setAnnouncement] = useState({ text: '', count: 0 });
   const lastKey = useRef<string | null>(null);
   useEffect(() => {
     if (!tone) return;
@@ -117,9 +120,10 @@ function useSavedAnnouncement(
     }
     if (lastKey.current === key) return;
     lastKey.current = key;
-    setAnnouncement(tone === 'saved' ? 'Saved to GitHub' : 'Not saved to GitHub yet');
+    const text = tone === 'saved' ? 'Saved to GitHub' : 'Not saved to GitHub yet';
+    setAnnouncement(current => ({ text, count: current.count + 1 }));
   }, [key, tone]);
-  return announcement;
+  return announcement.text + (announcement.count % 2 === 1 ? '\u00a0' : '');
 }
 
 /**
@@ -186,22 +190,27 @@ export default function CollabHeaderControls({
 
       {saved && (
         // Below md the line is its icon (the label stays for screen readers
-        // and in the tooltip); its relative time is never a live region.
-        <span
+        // and in the tooltip, which focus and a tap open too); its relative
+        // time is never a live region.
+        <Tooltip
           title={savedTitle ? `${saved.label} · ${savedTitle}` : saved.label}
-          tabIndex={0}
-          data-testid="live-saved-status"
-          data-tone={saved.tone}
-          className={`flex items-center gap-1 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-400 ${
-            saved.tone === 'saved'
-              ? 'text-gray-500 dark:text-gray-400'
-              : 'text-amber-600 dark:text-amber-400'
-          }`}
+          trigger={['hover', 'focus', 'click']}
         >
-          <IconBrandGithub size={14} aria-hidden />
-          <span className="sr-only md:not-sr-only">{saved.label}</span>
-          {savedTitle && <span className="sr-only">{`: ${savedTitle}`}</span>}
-        </span>
+          <span
+            tabIndex={0}
+            data-testid="live-saved-status"
+            data-tone={saved.tone}
+            className={`flex items-center gap-1 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-400 ${
+              saved.tone === 'saved'
+                ? 'text-gray-500 dark:text-gray-400'
+                : 'text-amber-600 dark:text-amber-400'
+            }`}
+          >
+            <IconBrandGithub size={14} aria-hidden />
+            <span className="sr-only md:not-sr-only">{saved.label}</span>
+            {savedTitle && <span className="sr-only">{`: ${savedTitle}`}</span>}
+          </span>
+        </Tooltip>
       )}
       <span className="sr-only" role="status" aria-live="polite" data-testid="live-saved-announce">
         {savedAnnouncement}

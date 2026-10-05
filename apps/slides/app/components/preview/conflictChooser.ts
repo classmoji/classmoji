@@ -304,13 +304,13 @@ const TITLE_CAP = 80;
 /**
  * A slide's title as the deck on screen shows it — its first heading, else
  * its first text (speaker notes aside) — for an ordering listed without
- * previews. '' when the slide is not on screen or has no text.
+ * previews: '' when it has no text, null when it is not on screen.
  */
-export function slideTitleFromDom(root: ParentNode, id: string): string {
+export function slideTitleFromDom(root: ParentNode, id: string): string | null {
   const section = Array.from(root.querySelectorAll('section[data-cm-id]')).find(
     el => el.getAttribute('data-cm-id') === id
   );
-  if (!section) return '';
+  if (!section) return null;
   const clean = (text: string | null | undefined) => (text ?? '').replace(/\s+/g, ' ').trim();
   const heading = Array.from(section.querySelectorAll('h1, h2, h3, h4, h5, h6')).find(
     el => !el.closest('aside.notes') && clean(el.textContent)
