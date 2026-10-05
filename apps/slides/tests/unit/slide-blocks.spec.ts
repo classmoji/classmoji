@@ -12,7 +12,9 @@ import {
   HTML_BLOCK_SANDBOX,
   htmlBlockMarkup,
   neutralizeHtmlBlockFrames,
+  offListSvgBlockNodes,
   sanitizeSvgBlocks,
+  scopeSvgStyles,
 } from '@classmoji/services/slides/runtime-attrs';
 
 import {
@@ -180,5 +182,94 @@ test.describe('harder inputs on display', () => {
     expect(neutralizeHtmlBlockFrames(root)).toBe(2);
     expect(root.querySelector('iframe')?.getAttribute('data-cm-inert-srcdoc')).toBe('x');
     expect(root.querySelector('template')?.hasAttribute('shadowrootmode')).toBe(false);
+  });
+});
+
+test.describe('svg block styles stay in their drawing (DOM)', () => {
+  const svgBlock = (inner: string) =>
+    '<div class="sl-block" data-block-type="svg" data-cm-block-id="b1">' +
+    `<div class="sl-block-content">${inner}</div></div>`;
+
+  test('a <style> in <defs> moves to the drawing root, before its branch, scoped', () => {
+    const root = holder(
+      svgBlock(
+        '<svg viewBox="0 0 10 10"><defs><linearGradient id="g"></linearGradient>' +
+          '<style>.st0{fill:red}</style></defs><rect class="st0"></rect></svg>'
+      )
+    );
+    sanitizeSvgBlocks(root);
+    const svg = root.querySelector('svg') as Element;
+    expect(svg.firstElementChild?.localName).toBe('style');
+    expect(svg.firstElementChild?.textContent).toBe('@scope {\n.st0{fill:red}\n}');
+    expect(svg.querySelector('defs style')).toBeNull();
+    expect(svg.querySelector('defs linearGradient')).not.toBeNull();
+  });
+
+  test('sheets keep their order; a nested <svg> scopes to the outermost one; idempotent', () => {
+    const root = holder(
+      svgBlock(
+        '<svg><style>.a{fill:red}</style><g><svg><style>.b{fill:blue}</style></svg></g></svg>'
+      )
+    );
+    sanitizeSvgBlocks(root);
+    const once = root.innerHTML;
+    const outer = root.querySelector('.sl-block-content > svg') as Element;
+    const styles = Array.from(outer.children).filter(el => el.localName === 'style');
+    expect(styles.map(s => s.textContent)).toEqual([
+      '@scope {\n.a{fill:red}\n}',
+      '@scope {\n.b{fill:blue}\n}',
+    ]);
+    sanitizeSvgBlocks(root);
+    expect(root.innerHTML).toBe(once);
+    scopeSvgStyles(root.querySelector('.sl-block-content') as Element);
+    expect(root.innerHTML).toBe(once);
+  });
+
+  test('styles outside svg blocks are not touched', () => {
+    const html = '<svg><defs><style>.x{fill:red}</style></defs></svg>';
+    const root = holder(html);
+    sanitizeSvgBlocks(root);
+    expect(root.innerHTML).toBe(html);
+  });
+});
+
+test.describe('one off-list filter for every display path', () => {
+  test('lists off-list elements (outermost only), comments and stray block children', () => {
+    const root = holder(
+      '<div class="sl-block" data-block-type="svg"><div class="sl-block-content"><svg>' +
+        '<foreignObject><iframe src="https://example.com"></iframe></foreignObject>' +
+        '<circle r="1"></circle><!-- c --><script>1</script></svg></div><img src="x.png"></div>'
+    );
+    const nodes = offListSvgBlockNodes(root);
+    expect(nodes.map(n => (n.nodeType === 1 ? (n as Element).localName : n.nodeType))).toEqual([
+      'foreignObject',
+      8,
+      'script',
+      'img',
+    ]);
+  });
+});
+
+test.describe('html block frames delegate fullscreen only (display)', () => {
+  test('an allow beyond fullscreen renders inert and is stored as authored', () => {
+    const html = block(HTML_BLOCK_SANDBOX).replace('allow="fullscreen"', 'allow="camera; microphone"');
+    const root = holder(html);
+    expect(neutralizeHtmlBlockFrames(root)).toBe(1);
+    const frame = root.querySelector('iframe') as Element;
+    expect(frame.hasAttribute('allow')).toBe(false);
+    expect(frame.getAttribute('data-cm-inert-allow')).toBe('camera; microphone');
+    expect(frame.hasAttribute('srcdoc')).toBe(true);
+
+    const fragment = safeInnerHtml(doc, html);
+    expect(fragment.querySelector('iframe')?.hasAttribute('allow')).toBe(false);
+    const section = sectionFromMarkup(doc, `<section data-cm-id="s1">${html}</section>`);
+    expect(serializeSection(section).html).toBe(holder(html).innerHTML);
+  });
+
+  test('the standard frame is left byte for byte', () => {
+    const html = block(HTML_BLOCK_SANDBOX);
+    const root = holder(html);
+    expect(neutralizeHtmlBlockFrames(root)).toBe(0);
+    expect(root.innerHTML).toBe(holder(html).innerHTML);
   });
 });

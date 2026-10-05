@@ -36,9 +36,13 @@ import {
   isAllowedSvgAttr,
   isAllowedSvgLink,
   isBlockedFrameAttr,
+  isPinnedHtmlBlockAllow,
   isSafeHtmlBlockSandbox,
+  MAX_SLIDE_HTML_LENGTH,
   mintBlockId,
+  scopeSvgStyleText,
 } from '../deckBlocks.ts';
+import { MAX_SLIDE_HTML } from '../deckOps.ts';
 import { browserFixture } from './fixtures/browserSerialization.ts';
 import type { DeckJson } from '../deckTypes.ts';
 
@@ -517,5 +521,100 @@ describe('block rules: harder inputs', () => {
       '<div class="sl-block-content"><div class="sl-block" data-block-type="svg" data-cm-block-id="dup00001">' +
       '<div class="sl-block-content"></div></div></div></div>';
     expect(() => removeSlideBlock(nested, 'dup00001')).toThrow(SlideBlockError);
+  });
+});
+
+describe('html block frames delegate fullscreen only', () => {
+  it.each([
+    ['fullscreen', true],
+    ['  FullScreen ; ', true],
+    ['', true],
+    ['fullscreen; camera', false],
+    ['camera *', false],
+    ['microphone', false],
+    ['fullscreen *', false],
+  ])('allow=%j pinned: %s', (value, ok) => {
+    expect(isPinnedHtmlBlockAllow(value)).toBe(ok);
+    expect(isBlockedFrameAttr('iframe', 'allow', HTML_BLOCK_SANDBOX, true, value)).toBe(!ok);
+  });
+
+  it('allow is judged only inside html blocks, and only with its value', () => {
+    expect(isBlockedFrameAttr('iframe', 'allow', HTML_BLOCK_SANDBOX, false, 'camera')).toBe(false);
+    expect(isBlockedFrameAttr('iframe', 'ALLOW', HTML_BLOCK_SANDBOX, true, 'camera')).toBe(true);
+    expect(isBlockedFrameAttr('iframe', 'allow', HTML_BLOCK_SANDBOX, true)).toBe(false);
+  });
+
+  it('the block builder writes the pinned value', () => {
+    expect(htmlBlockMarkup({ id: 'b1', box: BOX, source: 'x' })).toContain('allow="fullscreen"');
+  });
+});
+
+describe('scopeSvgStyleText: a drawing\'s styles stay in the drawing', () => {
+  const ILLUSTRATOR =
+    '.st0{fill:#E6332A;}\n.st1{fill:none;stroke:#1D1D1B;stroke-width:2;}\n' +
+    '@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}\n' +
+    'g > .st0{opacity:.5}';
+
+  it('wraps rules in a prelude-less @scope and keeps unscopable at-rules outside, first', () => {
+    const out = scopeSvgStyleText(ILLUSTRATOR);
+    expect(out).toBe(
+      '@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}\n' +
+        '@scope {\n.st0{fill:#E6332A;}\n.st1{fill:none;stroke:#1D1D1B;stroke-width:2;}\n' +
+        'g > .st0{opacity:.5}\n}'
+    );
+  });
+
+  it.each([
+    ILLUSTRATOR,
+    '.cls-1{fill:red}',
+    '@import url(x.css);.a{fill:red}',
+    '@media (min-width: 10px){.a{fill:red}}',
+    '.a{content:"}"}.b{fill:blue}',
+    '.a{fill:red}}.leak{fill:blue}',
+    '.a{fill:red',
+    '.a{fill:red}/* open',
+    '.a{content:"open',
+    '@scope { .a{} }',
+    '@scope (svg) { .a{} }',
+    '@scope {.a{}} .b{}',
+    '.a\\{fill:red}',
+  ])('is idempotent for %j', css => {
+    const once = scopeSvgStyleText(css);
+    expect(scopeSvgStyleText(once)).toBe(once);
+    expect(once.startsWith('@scope') || /^@(import|keyframes)/.test(once)).toBe(true);
+  });
+
+  it('a stray close brace cannot end the scope early', () => {
+    const out = scopeSvgStyleText('.a{fill:red}}.leak{fill:blue}');
+    expect(out).toBe('@scope {\n.a{fill:red}.leak{fill:blue}\n}');
+  });
+
+  it('braces inside strings and comments are not structure', () => {
+    expect(scopeSvgStyleText('.a{content:"}"}/* } */.b{fill:blue}')).toBe(
+      '@scope {\n.a{content:"}"}/* } */.b{fill:blue}\n}'
+    );
+  });
+
+  it('a cut-off sheet is closed inside the scope', () => {
+    expect(scopeSvgStyleText('.a{fill:red')).toBe('@scope {\n.a{fill:red}\n}');
+    expect(scopeSvgStyleText('.a{fill:red}/* x')).toBe('@scope {\n.a{fill:red}/* x*/\n}');
+  });
+
+  it('an empty or comment-only sheet is left alone; a sheet of only @font-face stays unwrapped', () => {
+    expect(scopeSvgStyleText('')).toBe('');
+    expect(scopeSvgStyleText('  \n ')).toBe('  \n ');
+    expect(scopeSvgStyleText('@font-face{font-family:x;src:url(a.woff)}')).toBe(
+      '@font-face{font-family:x;src:url(a.woff)}'
+    );
+  });
+
+  it('a scope with a prelude is nested inside the drawing scope', () => {
+    expect(scopeSvgStyleText('@scope (.x) { .a{} }')).toBe('@scope {\n@scope (.x) { .a{} }\n}');
+  });
+});
+
+describe('slide html cap', () => {
+  it('the editor\'s cap is the deck ops cap', () => {
+    expect(MAX_SLIDE_HTML_LENGTH).toBe(MAX_SLIDE_HTML);
   });
 });

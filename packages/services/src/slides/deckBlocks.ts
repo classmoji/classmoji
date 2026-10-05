@@ -88,21 +88,42 @@ export const HTML_BLOCK_FRAME_SELECTOR = Array.from(FRAME_SOURCE_ATTRS.keys())
   .flatMap(tag => [`${HTML_BLOCK_SELECTOR} ${tag}`, `${tag}${HTML_BLOCK_SELECTOR}`])
   .join(', ');
 
+/** The permissions an html block's frame may delegate: fullscreen, nothing else. */
+export const HTML_BLOCK_FRAME_ALLOW = 'fullscreen';
+
+/**
+ * Whether an `allow` value is the one an html block's frame may carry:
+ * `fullscreen` (case, surrounding space and a trailing `;` aside) or empty.
+ */
+export function isPinnedHtmlBlockAllow(value: string): boolean {
+  const v = value.trim().replace(/;\s*$/, '').trim().toLowerCase();
+  return v === '' || v === HTML_BLOCK_FRAME_ALLOW;
+}
+
 /**
  * Whether attribute `name` of an element named `tagName` must not render,
  * given the element's `sandbox` and whether it sits inside an html block.
  * Shared by the DOM pass below and the cheerio pass in deckHtml.ts.
+ *
+ * `value` is the attribute's value; it decides `allow` on a frame (anything
+ * beyond {@link HTML_BLOCK_FRAME_ALLOW} does not render). Without it, `allow`
+ * is left as it is.
  */
 export function isBlockedFrameAttr(
   tagName: string,
   name: string,
   sandbox: string | null | undefined,
-  insideHtmlBlock: boolean
+  insideHtmlBlock: boolean,
+  value?: string | null
 ): boolean {
   if (!insideHtmlBlock) return false;
   const tag = tagName.toLowerCase();
+  const attr = name.toLowerCase();
+  if (tag === 'iframe' && attr === 'allow') {
+    return value != null && !isPinnedHtmlBlockAllow(value);
+  }
   const sources = FRAME_SOURCE_ATTRS.get(tag);
-  if (!sources || !sources.has(name.toLowerCase())) return false;
+  if (!sources || !sources.has(attr)) return false;
   return tag !== 'iframe' || !isSafeHtmlBlockSandbox(sandbox);
 }
 
@@ -114,7 +135,8 @@ export function isBlockedHtmlBlockAttr(el: Element, name: string): boolean {
     tag,
     name,
     el.getAttribute('sandbox'),
-    el.closest(HTML_BLOCK_SELECTOR) !== null
+    el.closest(HTML_BLOCK_SELECTOR) !== null,
+    el.getAttribute(name)
   );
 }
 
@@ -364,63 +386,271 @@ function hasCaseTwins(el: Element): boolean {
 }
 
 /**
- * Hold every descendant of `root` to the svg-block lists (DOM): elements off
- * the list are removed with everything inside them, as are comments and
- * processing instructions; attributes off the list are dropped. `root` itself
- * keeps its element and loses only event handlers (it is the block content
- * wrapper, or an `<svg>`).
+ * Whether an element inside an svg block may stay there (DOM): on the
+ * element list, no two attribute names that differ only in case, and an
+ * animation only of what may be animated.
  */
-export function sanitizeSvgTree(root: Element): void {
-  for (const attr of Array.from(root.attributes)) {
-    if (attr.name.toLowerCase().startsWith('on')) root.removeAttribute(attr.name);
-  }
+export function isKeptSvgElement(el: Element): boolean {
+  return (
+    isAllowedSvgElement(el.localName, el.namespaceURI) &&
+    !hasCaseTwins(el) &&
+    isAllowedSvgAnimation(el.localName, attrPairs(el))
+  );
+}
+
+/**
+ * The nodes under `root` (not `root` itself) the svg-block lists keep out,
+ * outermost first: elements off the list (everything inside them goes with
+ * them, and nothing inside one is listed), comments, CDATA and processing
+ * instructions.
+ */
+export function offListSvgNodes(root: Element): ChildNode[] {
+  const out: ChildNode[] = [];
   const visit = (parent: Element): void => {
     for (const node of Array.from(parent.childNodes)) {
       if (node.nodeType === 1) {
-        const el = node as Element;
-        if (
-          !isAllowedSvgElement(el.localName, el.namespaceURI) ||
-          hasCaseTwins(el) ||
-          !isAllowedSvgAnimation(el.localName, attrPairs(el))
-        ) {
-          el.remove();
-          continue;
-        }
-        for (const attr of Array.from(el.attributes)) {
-          if (!isAllowedSvgAttr(attr.name, attr.value)) el.removeAttribute(attr.name);
-        }
-        visit(el);
+        if (isKeptSvgElement(node as Element)) visit(node as Element);
+        else out.push(node);
       } else if (node.nodeType !== 3) {
-        // Comments, CDATA, processing instructions: nothing an svg block needs.
-        node.parentNode?.removeChild(node);
+        out.push(node);
       }
     }
   };
   visit(root);
+  return out;
+}
+
+function svgBlocksUnder(root: Element | Document | DocumentFragment): Element[] {
+  const blocks = Array.from(root.querySelectorAll(SVG_BLOCK_SELECTOR));
+  if ((root as Element).matches?.(SVG_BLOCK_SELECTOR)) blocks.unshift(root as Element);
+  return blocks;
+}
+
+function isBlockContent(node: ChildNode): boolean {
+  return node.nodeType === 1 && (node as Element).classList.contains('sl-block-content');
 }
 
 /**
- * Every svg block under `root` held to the lists (DOM). The block and its
- * `.sl-block-content` keep their own attributes (minus handlers); any other
- * child of the block is removed.
+ * Every node the svg-block lists keep out of the svg blocks under `root`,
+ * outermost first: what {@link offListSvgNodes} lists inside each block's
+ * `.sl-block-content`, and any child of a block other than its content (text
+ * aside). The one list every display path acts on — the viewer and presenter
+ * remove these ({@link sanitizeSvgBlocks}); attributes are judged by
+ * {@link isBlockedSvgBlockAttr}.
  */
-export function sanitizeSvgBlocks(root: Element | Document | DocumentFragment): void {
-  const blocks = Array.from(root.querySelectorAll(SVG_BLOCK_SELECTOR));
-  if ((root as Element).matches?.(SVG_BLOCK_SELECTOR)) blocks.unshift(root as Element);
-  for (const block of blocks) {
-    for (const attr of Array.from(block.attributes)) {
-      if (attr.name.toLowerCase().startsWith('on')) block.removeAttribute(attr.name);
-    }
+export function offListSvgBlockNodes(root: Element | Document | DocumentFragment): ChildNode[] {
+  const out: ChildNode[] = [];
+  for (const block of svgBlocksUnder(root)) {
     for (const child of Array.from(block.childNodes)) {
-      const isContent =
-        child.nodeType === 1 && (child as Element).classList.contains('sl-block-content');
-      if (isContent) sanitizeSvgTree(child as Element);
-      else if (child.nodeType !== 3) child.parentNode?.removeChild(child);
+      if (isBlockContent(child)) out.push(...offListSvgNodes(child as Element));
+      else if (child.nodeType !== 3) out.push(child);
+    }
+  }
+  return out;
+}
+
+function dropHandlers(el: Element): void {
+  for (const attr of Array.from(el.attributes)) {
+    if (attr.name.toLowerCase().startsWith('on')) el.removeAttribute(attr.name);
+  }
+}
+
+/** Every attribute off the list dropped, on each element under `root`. */
+function dropOffListAttrs(root: Element): void {
+  for (const el of Array.from(root.querySelectorAll('*'))) {
+    for (const attr of Array.from(el.attributes)) {
+      if (!isAllowedSvgAttr(attr.name, attr.value)) el.removeAttribute(attr.name);
     }
   }
 }
 
+/**
+ * Hold every descendant of `root` to the svg-block lists (DOM): elements off
+ * the list are removed with everything inside them, as are comments and
+ * processing instructions; attributes off the list are dropped; `<style>`
+ * sheets are scoped to their drawing ({@link scopeSvgStyles}). `root` itself
+ * keeps its element and loses only event handlers (it is the block content
+ * wrapper, or an `<svg>`).
+ */
+export function sanitizeSvgTree(root: Element): void {
+  dropHandlers(root);
+  for (const node of offListSvgNodes(root)) node.parentNode?.removeChild(node);
+  dropOffListAttrs(root);
+  scopeSvgStyles(root);
+}
+
+/**
+ * Every svg block under `root` held to the lists (DOM): the nodes
+ * {@link offListSvgBlockNodes} lists are removed, attributes off the list
+ * dropped, styles scoped. The block and its `.sl-block-content` keep their
+ * own attributes (minus handlers).
+ */
+export function sanitizeSvgBlocks(root: Element | Document | DocumentFragment): void {
+  for (const node of offListSvgBlockNodes(root)) node.parentNode?.removeChild(node);
+  for (const block of svgBlocksUnder(root)) {
+    dropHandlers(block);
+    for (const child of Array.from(block.children)) {
+      if (!isBlockContent(child)) continue;
+      dropHandlers(child);
+      dropOffListAttrs(child);
+      scopeSvgStyles(child);
+    }
+  }
+}
+
+// ─── svg blocks: styles stay in their drawing ───────────────────────────────
+
+/**
+ * At-rules a scoped sheet keeps outside its `@scope` block: they define
+ * names or load things, select nothing, and are not valid inside `@scope`.
+ */
+const UNSCOPED_AT_RULES: ReadonlySet<string> = new Set([
+  'charset',
+  'import',
+  'namespace',
+  'font-face',
+  'keyframes',
+  '-webkit-keyframes',
+  '-moz-keyframes',
+  'property',
+  'counter-style',
+  'font-feature-values',
+  'font-palette-values',
+  'page',
+]);
+
+interface CssChunk {
+  text: string;
+  /** Lower-case at-rule name (`keyframes`), or null for a style rule. */
+  at: string | null;
+  /** The text between the at-rule's name and its block, trimmed. */
+  prelude: string;
+  /** True when it ended in a closed block. */
+  block: boolean;
+}
+
+/**
+ * A sheet's top-level rules, in order (comments, strings and escapes read the
+ * way CSS reads them). A `}` with no block open is dropped; a rule cut off at
+ * the end is closed (comment, string and blocks), so the result is balanced.
+ */
+function topLevelCss(css: string): CssChunk[] {
+  const chunks: CssChunk[] = [];
+  let start = 0;
+  let depth = 0;
+  let text = '';
+  const push = (end: number, block: boolean, tail = '') => {
+    const piece = text + css.slice(start, end) + tail;
+    text = '';
+    if (!piece.trim()) return;
+    const head = piece.replace(/^(?:\s|\/\*[\s\S]*?\*\/)*/, '');
+    const name = /^@(-?[a-zA-Z][\w-]*)/.exec(head);
+    const brace = head.indexOf('{');
+    const prelude = name
+      ? head.slice(name[0].length, brace === -1 ? head.length : brace).trim()
+      : '';
+    chunks.push({ text: piece, at: name ? name[1].toLowerCase() : null, prelude, block });
+  };
+  let i = 0;
+  while (i < css.length) {
+    const c = css[i];
+    if (c === '/' && css[i + 1] === '*') {
+      const close = css.indexOf('*/', i + 2);
+      if (close === -1) {
+        push(css.length, false, '*/' + '}'.repeat(depth));
+        return chunks;
+      }
+      i = close + 2;
+    } else if (c === '"' || c === "'") {
+      let j = i + 1;
+      while (j < css.length && css[j] !== c && css[j] !== '\n') j += css[j] === '\\' ? 2 : 1;
+      if (j >= css.length) {
+        push(css.length, false, c + '}'.repeat(depth));
+        return chunks;
+      }
+      i = j + 1;
+    } else if (c === '\\') {
+      i += 2;
+    } else if (c === '{') {
+      depth++;
+      i++;
+    } else if (c === '}') {
+      if (depth === 0) {
+        // A stray close: dropped, or it would end the scope early.
+        text += css.slice(start, i);
+        start = i + 1;
+      } else if (--depth === 0) {
+        push(i + 1, true);
+        start = i + 1;
+      }
+      i++;
+    } else if (c === ';' && depth === 0) {
+      push(i + 1, false);
+      start = i + 1;
+      i++;
+    } else {
+      i++;
+    }
+  }
+  push(Math.min(i, css.length), depth > 0, '}'.repeat(depth));
+  return chunks;
+}
+
+/**
+ * An svg `<style>` sheet scoped to its drawing: its rules wrapped in a
+ * prelude-less `@scope { … }`, which applies them only inside the `<style>`
+ * element's parent (the drawing's `<svg>`, see {@link scopeSvgStyles}), so
+ * the `.st0` / `.cls-1` classes drawing tools export never reach another
+ * drawing or the page. At-rules that cannot be scoped ({@link
+ * UNSCOPED_AT_RULES}: `@keyframes`, `@font-face`, `@import`, …) go first,
+ * outside the scope. Idempotent: a sheet already in this form comes back
+ * byte for byte; an empty sheet is left as it is.
+ */
+export function scopeSvgStyleText(css: string): string {
+  const chunks = topLevelCss(css);
+  const kept = chunks.filter(c => c.at !== null && UNSCOPED_AT_RULES.has(c.at));
+  const scoped = chunks.filter(c => !(c.at !== null && UNSCOPED_AT_RULES.has(c.at)));
+  const head = kept.map(c => c.text.trim()).join('\n');
+  const body = scoped.map(c => c.text).join('').trim();
+  if (!body) return head || css;
+  const only = scoped.length === 1 ? scoped[0] : null;
+  const already = only !== null && only.at === 'scope' && only.prelude === '' && only.block;
+  const wrapped = already ? body : `@scope {\n${body}\n}`;
+  return head ? `${head}\n${wrapped}` : wrapped;
+}
+
+/**
+ * Every svg `<style>` under `root` scoped to its drawing: moved, when nested
+ * (drawing tools put it in `<defs>`), to be a child of the outermost `<svg>`
+ * holding it — just before the branch it sat in, so sheets keep their order
+ * — and its text scoped ({@link scopeSvgStyleText}). Idempotent.
+ */
+export function scopeSvgStyles(root: Element): void {
+  for (const style of Array.from(root.getElementsByTagNameNS(SVG_NS, 'style'))) {
+    let top: Element | null = null;
+    for (let el = style.parentElement; el; el = el.parentElement) {
+      if (el.namespaceURI === SVG_NS && el.localName === 'svg') top = el;
+      if (el === root) break;
+    }
+    if (top && style.parentElement !== top) {
+      let branch: Element = style;
+      while (branch.parentElement && branch.parentElement !== top) branch = branch.parentElement;
+      top.insertBefore(style, branch);
+    }
+    const css = style.textContent ?? '';
+    const next = scopeSvgStyleText(css);
+    if (next !== css) style.textContent = next;
+  }
+}
+
 // ─── Markup builders ─────────────────────────────────────────────────────────
+
+/**
+ * The most html one slide may hold, in characters. Deck ops refuse a slide
+ * over it (deckOps.ts `MAX_SLIDE_HTML`, pinned equal in the tests); the
+ * editor checks before a block edit would cross it.
+ */
+export const MAX_SLIDE_HTML_LENGTH = 200_000;
 
 /** A block's box on the deck's logical canvas, in px. */
 export interface BlockBox {
@@ -479,7 +709,7 @@ export function blockMarkup(type: DeckBlockType, id: string, box: BlockBox, inne
 /** The frame inside an html block, for `source`. */
 export function htmlBlockFrameMarkup(source: string): string {
   return (
-    `<iframe sandbox="${HTML_BLOCK_SANDBOX}" allow="fullscreen" ` +
+    `<iframe sandbox="${HTML_BLOCK_SANDBOX}" allow="${HTML_BLOCK_FRAME_ALLOW}" ` +
     `style="${HTML_BLOCK_FRAME_STYLE}" srcdoc="${escapeBlockAttr(htmlBlockSrcdoc(source))}"></iframe>`
   );
 }
