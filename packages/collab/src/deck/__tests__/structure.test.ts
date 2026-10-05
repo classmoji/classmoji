@@ -82,6 +82,21 @@ describe('direct structural helpers', () => {
     insertSlide(a, 'xc', { html: 'c' }, { parent: null, after: 'xb' });
     expect(ids(a).slice(0, 4)).toEqual(['s1', 'xa', 'xb', 'xc']);
   });
+
+  it('an insert after the FIRST of two tied slides lands right after it (the tie is re-keyed)', () => {
+    const a = deckToYDoc(deck());
+    const b = cloneYDoc(a);
+    insertSlide(a, 'xa', { html: 'a' }, { parent: null, after: 's1' });
+    insertSlide(b, 'xb', { html: 'b' }, { parent: null, after: 's1' });
+    Y.applyUpdate(a, Y.encodeStateAsUpdate(b));
+    const orderOf = (id: string) => (deckSlides(a).get(id) as Y.Map<unknown>).get('order');
+    expect(orderOf('xa')).toBe(orderOf('xb')); // a real tie
+    insertSlide(a, 'xn', { html: 'n' }, { parent: null, after: 'xa' });
+    expect(ids(a).slice(0, 5)).toEqual(['s1', 'xa', 'xn', 'xb', 's2']);
+    // Moving onto the tie works the same way.
+    moveSlide(a, 's3', { parent: null, after: 'xa' });
+    expect(ids(a).slice(0, 4)).toEqual(['s1', 'xa', 's3', 'xn']);
+  });
 });
 
 describe('planLocalStructure', () => {

@@ -244,22 +244,39 @@ export function markReconnected(
 }
 
 /**
- * When a gone holder's grace started: the server's disconnect mark, else the
- * holder's last activity — but never before `notBefore` (the server process's
- * start): after a restart nobody's presence is known yet, and every holder
- * gets the full grace to reconnect. Without a restart, `notBefore` is long
- * past and the stored time decides, so short visits never extend a grace.
+ * When a gone holder's grace started: the server's disconnect mark, else
+ * when the server itself last saw the lock entry change (`observedAt`, for
+ * entries changed while this process held the doc), else the holder's
+ * `lastActive` — a CLIENT clock: one later than `now` is bogus (a clock
+ * running ahead must not stretch the grace) and counts as long ago, so only
+ * `notBefore` stands. Never before `notBefore` (the server
+ * process's start): after a restart nobody's presence is known yet, and
+ * every holder gets the full grace to reconnect. Without a restart,
+ * `notBefore` is long past and the stored time decides, so short visits
+ * never extend a grace.
  */
-export function goneSince(lock: SlideLock, notBefore = -Infinity): number {
-  return Math.max((lock as StampedLock).disconnectedAt ?? lock.lastActive, notBefore);
+export function goneSince(
+  lock: SlideLock,
+  notBefore = -Infinity,
+  { observedAt, now }: { observedAt?: number; now?: number } = {}
+): number {
+  const stored =
+    (lock as StampedLock).disconnectedAt ??
+    observedAt ??
+    (now !== undefined && lock.lastActive > now ? -Infinity : lock.lastActive);
+  return Math.max(stored, notBefore);
 }
 
 /** A gone holder's lock past its grace (see `goneSince`). */
 export function goneLockExpired(
   lock: SlideLock,
-  ctx: { now: number; notBefore?: number; graceMs?: number }
+  ctx: { now: number; notBefore?: number; graceMs?: number; observedAt?: number }
 ): boolean {
-  return goneSince(lock, ctx.notBefore) + (ctx.graceMs ?? LOCK_DISCONNECT_GRACE_MS) <= ctx.now;
+  return (
+    goneSince(lock, ctx.notBefore, { observedAt: ctx.observedAt, now: ctx.now }) +
+      (ctx.graceMs ?? LOCK_DISCONNECT_GRACE_MS) <=
+    ctx.now
+  );
 }
 
 /**
@@ -272,7 +289,14 @@ export function goneLockExpired(
  */
 export function expireGoneLocks(
   doc: Y.Doc,
-  ctx: { now: number; connected: ReadonlySet<number>; graceMs?: number; notBefore?: number },
+  ctx: {
+    now: number;
+    connected: ReadonlySet<number>;
+    graceMs?: number;
+    notBefore?: number;
+    /** Server receive time of the entry's last change (LockActivity.changedAt). */
+    observedAt?: (slideId: string) => number | undefined;
+  },
   origin: unknown = null
 ): { expired: string[]; nextInMs: number | null } {
   const grace = ctx.graceMs ?? LOCK_DISCONNECT_GRACE_MS;
@@ -280,7 +304,11 @@ export function expireGoneLocks(
   let nextInMs: number | null = null;
   for (const [slideId, lock] of allLocks(doc)) {
     if (ctx.connected.has(lock.clientId)) continue;
-    const left = goneSince(lock, ctx.notBefore) + grace - ctx.now;
+    const since = goneSince(lock, ctx.notBefore, {
+      observedAt: ctx.observedAt?.(slideId),
+      now: ctx.now,
+    });
+    const left = since + grace - ctx.now;
     if (left <= 0) expired.push(slideId);
     else nextInMs = nextInMs === null ? left : Math.min(nextInMs, left);
   }
@@ -354,6 +382,10 @@ export function expireLocks(
  */
 export class LockActivity {
   private readonly seen = new Map<string, number>();
+  /** When the entry changed BEFORE its latest change (the arbiter's view of a claim). */
+  private readonly prior = new Map<string, number>();
+  /** Entries this observer saw change (not merely found when it started). */
+  private readonly observed = new Set<string>();
   private readonly map: Y.Map<unknown>;
   private readonly clock: () => number;
   private readonly handler: (event: Y.YMapEvent<unknown>) => void;
@@ -366,8 +398,17 @@ export class LockActivity {
     this.handler = event => {
       const now = this.clock();
       for (const key of event.keysChanged) {
-        if (this.map.has(key)) this.seen.set(key, now);
-        else this.seen.delete(key);
+        if (this.map.has(key)) {
+          const was = this.seen.get(key);
+          if (was === undefined) this.prior.delete(key);
+          else this.prior.set(key, was);
+          this.seen.set(key, now);
+          this.observed.add(key);
+        } else {
+          this.seen.delete(key);
+          this.prior.delete(key);
+          this.observed.delete(key);
+        }
       }
     };
     this.map.observe(this.handler);
@@ -377,6 +418,26 @@ export class LockActivity {
   idleMs(slideId: string, now: number = this.clock()): number {
     const at = this.seen.get(slideId);
     return at === undefined ? 0 : Math.max(0, now - at);
+  }
+
+  /**
+   * ms the entry had been idle when its LATEST change arrived — for judging
+   * a claim after the observer has already stamped it (Yjs runs observers
+   * before `afterTransaction`). 0 when the entry is new.
+   */
+  idleBeforeLastChangeMs(slideId: string, now: number = this.clock()): number {
+    const at = this.prior.get(slideId);
+    return at === undefined ? 0 : Math.max(0, now - at);
+  }
+
+  /** When this observer last saw the entry change; undefined if it never did. */
+  changedAt(slideId: string): number | undefined {
+    return this.observed.has(slideId) ? this.seen.get(slideId) : undefined;
+  }
+
+  /** `changedAt` for the change before the latest one. */
+  priorChangeAt(slideId: string): number | undefined {
+    return this.observed.has(slideId) ? this.prior.get(slideId) : undefined;
   }
 
   destroy(): void {
@@ -410,8 +471,11 @@ function lockOf(item: ItemLike): StampedLock | null {
  *
  *  - A lock that was current BEFORE the transaction beats any claim made
  *    without seeing it (a sibling: same left origin). First come, first served.
- *  - A claim made ON TOP of the current lock (its origin is that lock: the
- *    holder's own heartbeat, or a takeover after idle/disconnect) stands.
+ *  - A claim made ON TOP of the current lock (its origin is that lock) stands
+ *    when it is the holder's own (a heartbeat, a refresh) or when the
+ *    server's own view says the holder may be taken over (`mayTakeOver`:
+ *    idle past LOCK_TAKEOVER_IDLE_MS, or gone past the grace). A takeover
+ *    of an active holder is reverted: the previous lock is put back.
  *  - Claims arriving in the same transaction on a free slide: the lowest
  *    clientID wins.
  *
@@ -428,7 +492,12 @@ function lockOf(item: ItemLike): StampedLock | null {
 export function lockArbitration(
   doc: Y.Doc,
   transaction: Y.Transaction,
-  stamp: () => number = () => Date.now()
+  stamp: () => number = () => Date.now(),
+  /**
+   * Whether the previous holder of `slideId` may be taken over now, judged
+   * from the server's state. Omitted: every informed claim stands.
+   */
+  mayTakeOver?: (slideId: string, previous: StampedLock) => boolean
 ): Array<{ slideId: string; lock: StampedLock }> {
   const locks = deckLocks(doc);
   const lockMap = (locks as unknown as { _map: Map<string, ItemLike> })._map;
@@ -445,8 +514,19 @@ export function lockArbitration(
         store: { clients: Map<number, Array<ItemLike & { length: number; parent: unknown }>> };
       }
     ).store;
-    for (const struct of store.clients.get(client) ?? []) {
-      if (struct.id.clock + struct.length <= beforeClock) continue;
+    // Structs are sorted by clock: start at the first one this transaction
+    // wrote (binary search), not at the client's first struct ever — notes
+    // typing piles up thousands of them.
+    const structs = store.clients.get(client) ?? [];
+    let lo = 0;
+    let hi = structs.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (structs[mid].id.clock + structs[mid].length <= beforeClock) lo = mid + 1;
+      else hi = mid;
+    }
+    for (let i = lo; i < structs.length; i++) {
+      const struct = structs[i];
       if (struct.parent === locks && typeof struct.parentSub === 'string') {
         touched.add(struct.parentSub);
       }
@@ -494,11 +574,13 @@ export function lockArbitration(
           informed.add(claim);
         }
       }
-      if (informed.size === 0) {
-        winner = previous;
-      } else {
-        winner = pickLowest([...informed]);
-      }
+      // The holder's own writes always stand; anyone else's only when the
+      // server agrees the holder may be taken over.
+      const takeoverOk = mayTakeOver ? mayTakeOver(slideId, previousLock) : true;
+      const legit = [...informed].filter(
+        claim => lockOf(claim)?.clientId === previousLock.clientId || takeoverOk
+      );
+      winner = legit.length === 0 ? previous : pickLowest(legit);
     } else {
       winner = pickLowest(claims);
     }
@@ -535,12 +617,16 @@ function pickLowest(items: ItemLike[]): ItemLike {
  * Server: enforce `lockArbitration` after every transaction, stamping the
  * winning lock. Returns an uninstall function.
  */
-export function installLockArbiter(doc: Y.Doc, origin: unknown = 'lock-arbiter'): () => void {
+export function installLockArbiter(
+  doc: Y.Doc,
+  origin: unknown = 'lock-arbiter',
+  mayTakeOver?: (slideId: string, previous: StampedLock) => boolean
+): () => void {
   let applying = false;
   let seq = 0;
   const handler = (transaction: Y.Transaction): void => {
     if (applying || transaction.origin === origin) return;
-    const fixes = lockArbitration(doc, transaction, () => ++seq);
+    const fixes = lockArbitration(doc, transaction, () => ++seq, mayTakeOver);
     if (fixes.length === 0) return;
     applying = true;
     try {

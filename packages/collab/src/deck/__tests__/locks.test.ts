@@ -2,12 +2,13 @@ import { describe, expect, it } from 'vitest';
 import type { SlideLock } from '../../api.ts';
 import * as Y from 'yjs';
 
-import { cloneYDoc, deckLocks, deckToYDoc } from '../convert.ts';
+import { cloneYDoc, deckLocks, deckSlides as deckSlidesOf, deckToYDoc } from '../convert.ts';
 import {
   LOCK_DISCONNECT_GRACE_MS,
   LOCK_TAKEOVER_IDLE_MS,
   expireGoneLocks,
   goneLockExpired,
+  goneSince,
   markDisconnected,
   markReconnected,
   LockActivity,
@@ -207,9 +208,13 @@ describe('arbiter', () => {
     expect(isConfirmedFor(getLock(server, 's1'), 10)).toBe(true);
   });
 
-  it('never undoes a takeover (a claim made on top of the previous lock)', () => {
+  it('a takeover (a claim made on top of the previous lock) stands when the server agrees', () => {
     const server = peer(1);
-    installLockArbiter(server);
+    const judged: string[] = [];
+    installLockArbiter(server, 'lock-arbiter', (slideId, previous) => {
+      judged.push(`${slideId}:${previous.clientId}`);
+      return true; // the holder is idle / gone, by the server's own view
+    });
     const low = peer(10, server);
     acquireLock(low, 's1', holder(low, 'Low'), { now: 0 });
     Y.applyUpdate(server, Y.encodeStateAsUpdate(low));
@@ -222,6 +227,54 @@ describe('arbiter', () => {
     Y.applyUpdate(server, Y.encodeStateAsUpdate(high));
     expect(getLock(server, 's1')?.name).toBe('High');
     expect(isConfirmedFor(getLock(server, 's1'), 20)).toBe(true);
+    expect(judged).toEqual(['s1:10']);
+  });
+
+  it('reverts a takeover of a holder the server sees as active (the client lied about idleness)', () => {
+    const server = peer(1);
+    installLockArbiter(server, 'lock-arbiter', () => false);
+    const low = peer(10, server);
+    acquireLock(low, 's1', holder(low, 'Low'), { now: 0 });
+    Y.applyUpdate(server, Y.encodeStateAsUpdate(low));
+    const high = peer(20, server);
+    // A peer skipping the client checks: claims on top of the active lock.
+    acquireLock(high, 's1', holder(high, 'High'), {
+      now: 1_000,
+      idleMs: LOCK_TAKEOVER_IDLE_MS,
+      takeover: true,
+    });
+    Y.applyUpdate(server, Y.encodeStateAsUpdate(high));
+    expect(getLock(server, 's1')?.name).toBe('Low');
+    expect(isConfirmedFor(getLock(server, 's1'), 10)).toBe(true);
+    sync(server, high);
+    expect(isConfirmedFor(getLock(high, 's1'), 20)).toBe(false);
+  });
+
+  it("the holder's own heartbeat on top of its lock always stands", () => {
+    const server = peer(1);
+    installLockArbiter(server, 'lock-arbiter', () => false);
+    const a = peer(10, server);
+    acquireLock(a, 's1', holder(a, 'A'), { now: 0 });
+    Y.applyUpdate(server, Y.encodeStateAsUpdate(a));
+    sync(server, a);
+    touchLock(a, 's1', a.clientID, 5_000);
+    Y.applyUpdate(server, Y.encodeStateAsUpdate(a));
+    expect(getLock(server, 's1')).toMatchObject({ clientId: 10, lastActive: 5_000 });
+    expect(isConfirmedFor(getLock(server, 's1'), 10)).toBe(true);
+  });
+
+  it('still sees a claim after a long run of notes typing (struct scan starts at the new ones)', () => {
+    const server = peer(1);
+    installLockArbiter(server);
+    const a = peer(10, server);
+    const notes = (deckSlidesOf(a).get('s2') as Y.Map<unknown>).get('notes') as Y.Text;
+    for (let i = 0; i < 500; i++) {
+      notes.insert(notes.length, 'x');
+      Y.applyUpdate(server, Y.encodeStateAsUpdate(a, Y.encodeStateVector(server)));
+    }
+    acquireLock(a, 's1', holder(a, 'A'), { now: 0 });
+    Y.applyUpdate(server, Y.encodeStateAsUpdate(a, Y.encodeStateVector(server)));
+    expect(isConfirmedFor(getLock(server, 's1'), 10)).toBe(true);
   });
 
   it('a heartbeat keeps the stamp; a single claim is stamped once', () => {
@@ -237,5 +290,40 @@ describe('arbiter', () => {
       { slideId: 's1', lock: expect.objectContaining({ clientId: 10, confirmed: 7 }) },
     ]);
     expect(deckLocks(server).size).toBe(1);
+  });
+});
+
+describe('server-observed times', () => {
+  it('LockActivity: idle before the latest change, and when it changed while observed', () => {
+    let now = 1_000;
+    const doc = peer(1);
+    const activity = new LockActivity(doc, () => now);
+    expect(activity.changedAt('s1')).toBeUndefined();
+    acquireLock(doc, 's1', holder(doc, 'A'), { now: 0 });
+    expect(activity.changedAt('s1')).toBe(1_000);
+    expect(activity.idleBeforeLastChangeMs('s1', 1_000)).toBe(0); // new entry
+    now = 70_000;
+    touchLock(doc, 's1', doc.clientID, 999);
+    // Judged as the claim/heartbeat arrives: idle since the previous change.
+    expect(activity.idleBeforeLastChangeMs('s1', 70_000)).toBe(69_000);
+    expect(activity.priorChangeAt('s1')).toBe(1_000);
+    expect(activity.changedAt('s1')).toBe(70_000);
+  });
+
+  it('goneSince never trusts a client clock that runs ahead of the server', () => {
+    const lock: SlideLock = {
+      userId: 'u',
+      name: 'U',
+      color: '#000',
+      clientId: 5,
+      since: 0,
+      lastActive: 10_000_000, // far in the future
+    };
+    // A bogus future time counts as long ago: only the server start (notBefore) stands.
+    expect(goneSince(lock, 20_000, { now: 50_000 })).toBe(20_000);
+    expect(goneLockExpired(lock, { now: 50_000, notBefore: 20_000 })).toBe(true);
+    expect(goneLockExpired(lock, { now: 40_000, notBefore: 20_000 })).toBe(false);
+    // A server-observed time wins over lastActive.
+    expect(goneSince(lock, -Infinity, { observedAt: 40_000, now: 50_000 })).toBe(40_000);
   });
 });

@@ -4,7 +4,9 @@
  * (and an EMPTY notes aside), code, image, iframe with data-src, srcdoc
  * iframe, Sandpack with data-visible-files and a hidden /package.json,
  * background colour/image/iframe, slides.com-style absolute .sl-block layout,
- * attributes in non-alphabetical order, quotes and ampersands in attributes.
+ * attributes in non-alphabetical order, quotes and ampersands in attributes,
+ * an svg block (gradient, text with entities, SMIL animation) and an html
+ * block (sandboxed srcdoc frame with doubly-escaped markup).
  */
 import { SANDPACK_JSON } from '../../../../services/src/slides/__tests__/fixtures.ts';
 
@@ -49,6 +51,8 @@ console.log(a);</code></pre></section>
 <section data-cm-id="ks000014" style="color: red;" data-z="last" data-a="first"><div class="sl-block" data-block-type="text" style="width: 600px; left: 80px; top: 120px; height: auto;"><div class="sl-block-content" data-animation-type="fade-in"><h2>Absolute</h2></div></div><div class="sl-block" data-block-type="image" style="width: 300px; height: 200px; left: 500px; top: 300px;"><div class="sl-block-content"><img src="media://0b6c9b7e-1c2d-4e5f-8a9b-0c1d2e3f4a5b" alt=""></div></div></section>
 <section data-cm-id="ks000015" data-caption='He said "hi" &amp; left'><h2>Quotes</h2><ul><li class="fragment">a</li><li class="fragment">b</li></ul></section>
 <section data-cm-id="ks000016"><h2>Video</h2><video controls src="media://0b6c9b7e-1c2d-4e5f-8a9b-0c1d2e3f4a5c"></video></section>
+<section data-cm-id="ks000017"><h2>SVG block</h2><div class="sl-block" data-block-type="svg" data-cm-block-id="b5a1c2d3" style="left: 120px; top: 160px; width: 320px; height: 240px;"><div class="sl-block-content"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 240" width="100%" height="100%"><defs><linearGradient id="g1"><stop offset="0" stop-color="#f60"/><stop offset="1" stop-color="#06f"/></linearGradient></defs><rect x="10" y="10" width="300" height="220" rx="12" fill="url(#g1)"/><text x="160" y="130" text-anchor="middle" font-size="28">A &amp; B &lt;svg&gt;</text><circle cx="40" cy="40" r="12"><animate attributeName="r" values="12;18;12" dur="2s" repeatCount="indefinite"/></circle></svg></div></div></section>
+<section data-cm-id="ks000018"><h2>HTML block</h2><div class="sl-block" data-block-type="html" data-cm-block-id="c7e8f9a0" style="left: 80px; top: 140px; width: 640px; height: 360px;"><div class="sl-block-content"><iframe sandbox="allow-scripts allow-pointer-lock allow-modals allow-popups" allow="fullscreen" style="width: 100%; height: 100%; border: 0px;" srcdoc="&lt;!DOCTYPE html&gt;&lt;p class=&quot;hi&quot;&gt;Hello &amp;amp; welcome&lt;/p&gt;&lt;script&gt;document.body.dataset.x = '1 &amp;lt; 2';&lt;/script&gt;"></iframe></div></div></section>
     </div>
   </div>
   <script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.js"></script>

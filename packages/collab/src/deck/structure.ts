@@ -12,7 +12,7 @@
  */
 import * as Y from 'yjs';
 
-import { compareKeys, keyBetween } from '../fractionalIndex.ts';
+import { compareKeys, keyBetween, keysBetween } from '../fractionalIndex.ts';
 import {
   deckLocks,
   deckSlideList,
@@ -97,6 +97,13 @@ function siblings(doc: Y.Doc, parent: string | null, exclude?: string): DeckSlid
 /**
  * An order key placing a slide in `parent` right after the first of `after`
  * that is a sibling there (null / none found = first in the scope).
+ *
+ * Equal keys (two peers inserted at one spot) sort by id. When the anchor
+ * shares its key with siblings sorted after it, no key fits between them:
+ * those tied followers get fresh keys above the new one (their order among
+ * themselves kept), so the slide lands right after the anchor rather than
+ * after the whole tie. That write happens in the caller's transaction —
+ * call this inside one.
  */
 export function orderKeyAfter(
   doc: Y.Doc,
@@ -112,14 +119,20 @@ export function orderKeyAfter(
     if (index !== -1) break;
   }
   const lower = index >= 0 ? list[index].order || null : null;
-  // Equal keys (two peers inserted at one spot) sort by id; the new key must be
-  // strictly above `lower`, so skip any tied neighbours.
+  // The new key must be strictly above `lower`: find the first sibling
+  // strictly above it.
   let upperAt = index + 1;
   while (upperAt < list.length && lower != null && compareKeys(list[upperAt].order, lower) <= 0) {
     upperAt++;
   }
   const upper = upperAt < list.length ? list[upperAt].order || null : null;
-  return keyBetween(lower, upper);
+  const key = keyBetween(lower, upper);
+  const tied = list.slice(index + 1, upperAt);
+  if (tied.length > 0) {
+    const keys = keysBetween(key, upper, tied.length);
+    tied.forEach((entry, i) => entry.map.set(F.order, keys[i]));
+  }
+  return key;
 }
 
 export interface NewSlideFields {
