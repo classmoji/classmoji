@@ -207,6 +207,8 @@ type HistoryKind = 'undo' | 'redo';
 /** Slides an undo step touched: id → whether it changed the slide's html. */
 type HistorySlides = Map<string, boolean>;
 const HISTORY_SLIDES = 'slides';
+/** An undo waiting on its slide's claim runs only if confirmed within this. */
+const PENDING_HISTORY_MS = 5000;
 
 export class DeckBridge {
   private readonly session: BridgeSession;
@@ -260,7 +262,7 @@ export class DeckBridge {
    */
   private readonly undoManager: Y.UndoManager;
   /** An undo/redo waiting for our claim on its slide to be confirmed. */
-  private pendingHistory: { kind: 'undo' | 'redo'; slideId: string } | null = null;
+  private pendingHistory: { kind: 'undo' | 'redo'; slideId: string; at: number } | null = null;
   /** Per notes text: its own undo (the notes panel's ⌘Z). */
   private readonly notesUndo = new Map<Y.Text, Y.UndoManager>();
 
@@ -1286,10 +1288,18 @@ export class DeckBridge {
       const yAttrs = readSlideAttrs(entry.map);
       if (el0 && Object.values(yAttrs).some(v => v.includes('media://'))) {
         const base = this.baseline.get(entry.id);
-        this.mutateDom(() =>
-          applySectionAttrs(el0, this.mapAttrs(yAttrs), entry.map.get('hidden') === true)
-        );
-        if (base) base.domAttrs = json(serializeSection(el0).attrs);
+        // Not over an attribute edit that is not written yet (retried later).
+        if (
+          this.dirtySlides.has(entry.id) ||
+          (base && json(serializeSection(el0).attrs) !== base.domAttrs)
+        ) {
+          this.mediaRetry = true;
+        } else {
+          this.mutateDom(() =>
+            applySectionAttrs(el0, this.mapAttrs(yAttrs), entry.map.get('hidden') === true)
+          );
+          if (base) base.domAttrs = json(serializeSection(el0).attrs);
+        }
       }
       const html = readSlideHtml(entry.map);
       if (!html || entry.container || this.held?.slideId === entry.id) continue;
@@ -1382,6 +1392,8 @@ export class DeckBridge {
   }
 
   private newHeld(slideId: string): Held {
+    // A waiting undo is for the slide it claimed, and only that one.
+    if (this.pendingHistory && this.pendingHistory.slideId !== slideId) this.pendingHistory = null;
     const now = this.clock();
     return {
       slideId,
@@ -1473,7 +1485,11 @@ export class DeckBridge {
     const waiting = this.pendingHistory;
     if (waiting && waiting.slideId === held.slideId) {
       this.pendingHistory = null;
-      this.history(waiting.kind);
+      // Only while it still means what was asked: no typing since, and soon.
+      if (this.pendingEdits.size > 0 || this.clock() - waiting.at > PENDING_HISTORY_MS) return;
+      // Outside the observer this may run in: a write made inside one is
+      // committed after it returns, past the undo manager's undo/redo marker.
+      queueMicrotask(() => this.history(waiting.kind));
     }
   }
 
@@ -1623,6 +1639,7 @@ export class DeckBridge {
         this.flushLocal();
         if (this.held === held) {
           this.held = null;
+          if (this.pendingHistory?.slideId === held.slideId) this.pendingHistory = null;
           releaseLock(this.doc, held.slideId, this.doc.clientID, BRIDGE_ORIGIN);
           this.applyLockChrome();
         }
@@ -1639,6 +1656,7 @@ export class DeckBridge {
   }
 
   private releaseAll(): void {
+    this.pendingHistory = null;
     if (this.held) {
       const slideId = this.held.slideId;
       this.held = null;
@@ -1741,7 +1759,7 @@ export class DeckBridge {
           const held = this.held as Held | null;
           if (!held || held.slideId !== htmlSlide) return false;
           if (!held.confirmed) {
-            this.pendingHistory = { kind, slideId: htmlSlide };
+            this.pendingHistory = { kind, slideId: htmlSlide, at: this.clock() };
             return true;
           }
         }
@@ -1811,7 +1829,7 @@ export class DeckBridge {
       if (!el || !(map instanceof Y.Map) || !base) continue;
       const yHtml = readSlideHtml(map);
       if (yHtml === base.yHtml || this.held?.slideId === id || this.pendingEdits.has(id)) continue;
-      if (this.busyIn(id, el)) {
+      if (!this.lockedByOther(id) && this.busyIn(id, el)) {
         this.deferred.add(id); // still being worked on here: later
         continue;
       }

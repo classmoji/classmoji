@@ -905,10 +905,19 @@ export const action = async ({
     if (!liveEnv) return data({ error: 'This deck is not edited live.' }, { status: 409 });
     try {
       const snapshot = await fetchLiveDeck(liveEnv, slideId);
-      const htmlContent = generateDeckHtml(snapshot.content, {
-        title: slide.title,
-        includeNotes: true,
-      });
+      // Unused by the live deck AND by what git still serves until the next
+      // checkpoint (students, the presenter): an image just removed live is
+      // offered once git has caught up, never while git still shows it.
+      const inGit = await ContentService.getContent({
+        orgLogin: gitOrgLogin,
+        repo,
+        path: filePath,
+        skipCache: true,
+      }).catch(() => null);
+      const htmlContent =
+        generateDeckHtml(snapshot.content, { title: slide.title, includeNotes: true }) +
+        '\n' +
+        (inGit?.content ?? '');
       const orphanedImages = (
         await ContentService.findOrphanedImages({
           orgLogin: gitOrgLogin,
@@ -2214,6 +2223,8 @@ const DONE_WAIT_MS = 5_000;
 const VIEW_REFRESH_MS = 2_000;
 /** How long Present waits for local live edits to reach the server. */
 const PRESENT_LOCAL_WAIT_MS = 3_000;
+/** Present goes ahead after this with no answer from the save at all. */
+const PRESENT_GIVE_UP_MS = 25_000;
 
 export default function SlideViewer() {
   const toast = useToast();
@@ -3355,7 +3366,10 @@ export default function SlideViewer() {
     const liveBridge = bridgeRef.current;
     if (liveBridge && isEditingRef.current) {
       liveBridge.flushLocal();
-      setCollabViewContent(liveBridge.currentDocument());
+      // A room that has not synced yet (a new one, mid-switch) has no deck to
+      // show: view mode falls back to the loader's copy.
+      const synced = Boolean(sessionRef.current?.getState().hasSynced);
+      setCollabViewContent(synced ? liveBridge.currentDocument() : null);
     }
     if (liveEditedRef.current) setOrphanCheckDue(true);
     liveEditedRef.current = false;
@@ -3427,6 +3441,7 @@ export default function SlideViewer() {
   // slide). Only when the deck actually changed.
   useEffect(() => {
     if (!collabMode || isEditing || !bridge || !collabSession || collabViewContent === null) return;
+    if (!collabState.hasSynced) return;
     const doc = collabSession.doc;
     let timer: ReturnType<typeof setTimeout> | null = null;
     const refresh = () => {
@@ -3445,7 +3460,14 @@ export default function SlideViewer() {
     };
     // collabViewContent only gates (null → not after a Done); not a trigger.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [collabMode, isEditing, bridge, collabSession, collabViewContent === null]);
+  }, [
+    collabMode,
+    isEditing,
+    bridge,
+    collabSession,
+    collabState.hasSynced,
+    collabViewContent === null,
+  ]);
 
   // Save before presenting (live): local edits out first, then the server
   // checkpoints the deck and the button waits for it (bounded), then present.
@@ -3472,16 +3494,34 @@ export default function SlideViewer() {
     },
     [collabMode, presentPending, presentFetcher, slide.id]
   );
+  // The answer is in as soon as there is data (the revalidation of this page
+  // that follows is not waited for).
   useEffect(() => {
-    if (!presentPending || presentFetcher.state !== 'idle' || !presentFetcher.data) return;
+    if (!presentPending || !presentFetcher.data) return;
     const outcome = presentFetcher.data.outcome;
     if (outcome === 'timeout' || outcome === 'error') {
       toastRef.current.info(
         "Couldn't save the latest edits in time. Presenting the last saved version."
       );
     }
-    window.location.href = `/${slide.id}/present`;
-  }, [presentPending, presentFetcher.state, presentFetcher.data, slide.id]);
+    window.location.href = `/${slide.id}/present${outcome === 'saved' ? '?saved=1' : ''}`;
+  }, [presentPending, presentFetcher.data, slide.id]);
+  // Never stuck saving: no answer at all (a failed request) presents anyway;
+  // coming back to this page (back button) starts fresh.
+  useEffect(() => {
+    if (!presentPending) return;
+    const timer = setTimeout(() => {
+      window.location.href = `/${slide.id}/present`;
+    }, PRESENT_GIVE_UP_MS);
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) setPresentPending(false);
+    };
+    window.addEventListener('pageshow', onPageShow);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('pageshow', onPageShow);
+    };
+  }, [presentPending, slide.id]);
 
   // Delete selected orphaned images
   const handleDeleteOrphanedImages = useCallback(

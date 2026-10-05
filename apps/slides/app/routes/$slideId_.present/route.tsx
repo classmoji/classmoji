@@ -55,7 +55,7 @@ export const action = async ({
     userId: userId ?? 'unknown',
     name: userId ? await readEditorName(userId) : 'Teacher',
   };
-  return { outcome: await checkpointBeforePresenting(slide, actor) };
+  return { outcome: await checkpointBeforePresenting(slide, actor, { timeoutMs: 15_000 }) };
 };
 
 export const loader = async ({
@@ -122,8 +122,12 @@ export const loader = async ({
 
   // Live classroom: save first (the editor's Present button already did, so
   // this is quick then; a direct link — the webapp's slides list — waits here).
+  // `?saved=1`: the editor's Present button has just done it (its action
+  // above) — only freshness is at stake, so a hand-made one costs nothing.
+  const savedFirst = new URL(request.url).searchParams.get('saved') === '1';
   const live =
     isDeckSlide(slide) &&
+    !savedFirst &&
     (await checkpointBeforePresenting(
       slide,
       { userId: userId ?? 'unknown', name: userId ? await readEditorName(userId) : 'Teacher' },
@@ -131,7 +135,7 @@ export const loader = async ({
     )) !== 'not-live';
 
   const contentResult = await readDeckText(slide, gitOrgLogin, repo, filePath, 'present', {
-    skipCache: live,
+    skipCache: live || savedFirst,
   });
 
   if (contentResult) {

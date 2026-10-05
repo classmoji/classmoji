@@ -222,15 +222,22 @@ export async function checkpointBeforePresenting(
   const target = typeof reply?.version === 'number' ? reply.version : null;
   const prisma = getPrisma();
   for (;;) {
-    const row = await prisma.collabDoc.findUnique({
-      where: { kind_doc_id: { kind: 'deck', doc_id: slide.id } },
-      select: {
-        version: true,
-        pushed_version: true,
-        last_checkpoint_at: true,
-        last_checkpoint_error: true,
-      },
-    });
+    const row = await prisma.collabDoc
+      .findUnique({
+        where: { kind_doc_id: { kind: 'deck', doc_id: slide.id } },
+        select: {
+          version: true,
+          pushed_version: true,
+          last_checkpoint_at: true,
+          last_checkpoint_error: true,
+        },
+      })
+      .catch((error: unknown) => {
+        console.warn(`[slides] checkpoint wait for ${slide.id} could not read its row:`, error);
+        return undefined;
+      });
+    // Never presents nothing: an unreadable row is an error, not a wait.
+    if (row === undefined) return 'error';
     // Never live: git has the deck.
     if (!row) return 'saved';
     if (row.pushed_version >= (target ?? row.version)) return 'saved';

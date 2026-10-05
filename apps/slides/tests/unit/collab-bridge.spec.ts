@@ -1223,10 +1223,17 @@ test.describe('live deck bridge', () => {
     t.session.ack();
     expect(t.bridge.history('undo')).toBe(true);
     expect(t.remoteHtml('aaaa0002')).toBe('<h2>mine</h2>'); // not yet: claim pending
-    t.session.ack(); // claim confirmed → the undo runs
+    t.session.ack(); // claim confirmed → the undo runs (after the observer)
+    await Promise.resolve();
     t.session.ack();
     expect(t.remoteHtml('aaaa0002')).toBe('<h2>Two</h2>');
     expect(t.section('aaaa0002').innerHTML).toBe('<h2>Two</h2>');
+    // The stacks stayed right: redo brings it back, and nothing more to undo.
+    expect(t.bridge.canHistory('redo')).toBe(true);
+    expect(t.bridge.canHistory('undo')).toBe(false);
+    expect(t.bridge.history('redo')).toBe(true);
+    t.session.ack();
+    expect(t.remoteHtml('aaaa0002')).toBe('<h2>mine</h2>');
     t.bridge.destroy();
   });
 
