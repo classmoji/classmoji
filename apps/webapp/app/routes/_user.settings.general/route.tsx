@@ -84,7 +84,9 @@ export const action = async ({ request }: Route.ActionArgs) => {
   }
 
   if (body.intent === 'send-code') {
-    await sendEmailVerificationCode(email);
+    const sent = await sendEmailVerificationCode(email, userId);
+    // Throttled: say why, and keep the code step open while a code is live.
+    if (!sent.sent) return { error: sent.error, ...(sent.codePending && { codeSent: true }) };
     return { codeSent: true };
   }
 

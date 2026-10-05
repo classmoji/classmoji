@@ -73,6 +73,7 @@ beforeEach(() => {
   mocks.userFindFirst.mockResolvedValue(null);
   mocks.userUpdate.mockResolvedValue({ id: 'me' });
   mocks.subscriptionCount.mockResolvedValue(1);
+  mocks.sendCode.mockResolvedValue({ sent: true });
 });
 
 describe('registration action: send-code', () => {
@@ -100,16 +101,43 @@ describe('registration action: send-code', () => {
     expect(await post({ intent: 'send-code', email: '  Student@School.EDU \n' })).toEqual({
       codeSent: true,
     });
-    expect(mocks.sendCode).toHaveBeenCalledWith('student@school.edu');
+    expect(mocks.sendCode).toHaveBeenCalledWith('student@school.edu', 'me');
   });
 
   it.each(['student+cs52@school.edu', 'jane@mail.dartmouth.edu', 'j.doe@cs.ox.ac.uk'])(
     'accepts %s',
     async email => {
       expect(await post({ intent: 'send-code', email })).toEqual({ codeSent: true });
-      expect(mocks.sendCode).toHaveBeenCalledWith(email);
+      expect(mocks.sendCode).toHaveBeenCalledWith(email, 'me');
     }
   );
+});
+
+describe('registration action: send-code throttling', () => {
+  it('turns a cooldown into the friendly error and keeps the code step open', async () => {
+    mocks.sendCode.mockResolvedValue({
+      sent: false,
+      reason: 'cooldown',
+      error: 'Please wait a minute before requesting another code.',
+      codePending: true,
+    });
+    expect(await post({ intent: 'send-code', email: 'student@school.edu' })).toEqual({
+      error: 'Please wait a minute before requesting another code.',
+      codeSent: true,
+    });
+  });
+
+  it('turns the per-user cap into an error, without codeSent when no code is live', async () => {
+    mocks.sendCode.mockResolvedValue({
+      sent: false,
+      reason: 'user-cap',
+      error: 'Too many verification codes requested. Please try again in an hour.',
+      codePending: false,
+    });
+    expect(await post({ intent: 'send-code', email: 'student@school.edu' })).toEqual({
+      error: 'Too many verification codes requested. Please try again in an hour.',
+    });
+  });
 });
 
 describe('registration action: verify-code and register use the same normalized address', () => {

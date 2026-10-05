@@ -538,7 +538,9 @@ export const action = async ({ request }: Route.ActionArgs) => {
   // ── Send verification code ──────────────────────────────────────────────
   if (intent === 'send-code') {
     if (!email) return { error: INVALID_EMAIL_MESSAGE };
-    await sendEmailVerificationCode(email);
+    const sent = await sendEmailVerificationCode(email, authData.userId);
+    // Throttled: say why, and keep the code step open while a code is live.
+    if (!sent.sent) return { error: sent.error, ...(sent.codePending && { codeSent: true }) };
     return { codeSent: true };
   }
 
