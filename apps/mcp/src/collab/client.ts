@@ -108,23 +108,24 @@ const readTool = (kind: 'page' | 'deck') =>
   kind === 'page' ? 'page_content_get/outline' : 'deck_get/deck_outline';
 
 /**
- * CONTENT_CONFLICT for a pin this MCP has no snapshot for (not returned to
- * this caller by a read or apply here, expired, or served by another
- * instance): without it only the exact current version can be accepted.
+ * CONTENT_CONFLICT for a pin the live service holds no read of for this
+ * agent (never read by it, expired, or the service restarted): it cannot
+ * tell which items changed since, so the agent re-reads.
  */
 export function livePinUnknown(
-  expected: string,
-  current: { epoch: number; version: number },
+  expected: string | null,
+  current: { epoch: number; version: number } | null,
   kind: 'page' | 'deck'
 ): ToolError {
-  const now = liveSha(current.epoch, current.version);
+  const now = current ? liveSha(current.epoch, current.version) : null;
   return new ToolError(
     'invalid_params',
-    `'${expected}' is not a version this server still holds your read of (it is now ` +
-      `'${now}'), so it cannot tell which ${kind === 'page' ? 'blocks' : 'slides'} changed ` +
-      `since; nothing was applied. Re-read with ${readTool(kind)} and retry with its sha.`,
+    `${expected ? `'${expected}'` : 'That version'} is not a version the live service still ` +
+      `holds your read of${now ? ` (it is now '${now}')` : ''}, so it cannot tell which ` +
+      `${kind === 'page' ? 'blocks' : 'slides'} changed since; nothing was applied. Re-read ` +
+      `with ${readTool(kind)} and retry with its sha.`,
     'CONTENT_CONFLICT',
-    { reason: 'unknown-pin', current_sha: now }
+    { reason: 'unknown-pin', ...(now ? { current_sha: now } : {}) }
   );
 }
 
@@ -276,21 +277,38 @@ async function collabRequest<T>(
 const docPath = (kind: CollabKind, id: string, action: string) =>
   `/${kind}/${encodeURIComponent(id)}/${action}`;
 
-/** The live document (from a clone on the server), with its version. */
+/** Whose read a snapshot is: the MCP caller and its agent session. */
+export interface SnapshotViewer {
+  userId: string;
+  agentSession?: string | null;
+}
+
+/**
+ * The live document (from a clone on the server), with its version. With
+ * `viewer` the server remembers what this agent was shown, so its pin can
+ * be judged per block later (an AGENT'S read: outline/get). Without one
+ * nothing is remembered — renders and the apply's own pre-read pass none.
+ */
 export function fetchSnapshot<K extends CollabKind>(
   env: CollabEnv,
   kind: K,
-  id: string
+  id: string,
+  viewer: SnapshotViewer | null = null
 ): Promise<SnapshotResponse<K>> {
-  return collabRequest<SnapshotResponse<K>>(env, 'GET', docPath(kind, id, 'snapshot'));
+  const query = viewer
+    ? `?viewer=${encodeURIComponent(viewer.userId)}` +
+      (viewer.agentSession ? `&session=${encodeURIComponent(viewer.agentSession)}` : '')
+    : '';
+  return collabRequest<SnapshotResponse<K>>(env, 'GET', docPath(kind, id, 'snapshot') + query);
 }
 
-/** Apply id-aware ops to the live document as `actor`. */
 /**
- * Apply id-aware ops to the live document as `actor`. `expect` maps each id
- * the ops depend on to `itemHash` of that item as the agent read it; the
- * server recomputes them inside the live transaction and refuses with 409
- * `block-changed` (nothing applied) on any mismatch.
+ * Apply id-aware ops to the live document as `actor`. `since` is the
+ * agent's pin: the server judges the ops against what this agent was shown
+ * at that version, inside the live transaction (409 block-changed /
+ * unknown-version / stale-epoch, nothing applied). Either way the server
+ * remembers the agent's view of the version the write leaves, so the
+ * returned version is a pin too.
  */
 export function postOps(
   env: CollabEnv,
@@ -298,12 +316,12 @@ export function postOps(
   id: string,
   ops: unknown[],
   actor: CollabActor,
-  expect?: Record<string, string>
+  since: { epoch: number; version: number } | null
 ): Promise<OpsResponse> {
   return collabRequest<OpsResponse>(env, 'POST', docPath(kind, id, 'ops'), {
     ops,
     actor,
-    ...(expect && Object.keys(expect).length > 0 ? { expect } : {}),
+    ...(since ? { expect_since: since } : { remember: true }),
   });
 }
 
@@ -317,6 +335,8 @@ export function postCover(
   return collabRequest<OpsResponse>(env, 'POST', docPath('page', pageId, 'cover'), {
     coverImage,
     actor,
+    // The agent's view of the new version: its pin is judged per block.
+    remember: true,
   });
 }
 
@@ -418,6 +438,30 @@ export async function notifyPreviewChanged(
   }
 }
 
+/**
+ * Tell open editors this doc's title (or page width) changed outside the
+ * document (`POST /internal/:kind/:id/meta-changed`), so their header
+ * updates live. Live classrooms with the collab env only; best effort.
+ */
+export async function notifyMetaChanged(
+  classroom: unknown,
+  kind: CollabKind,
+  id: string,
+  meta: { title?: string; width?: number }
+): Promise<void> {
+  if (meta.title === undefined && meta.width === undefined) return;
+  const env = liveStateFor(classroom)?.env;
+  if (!env) return;
+  try {
+    await collabRequest<unknown>(env, 'POST', docPath(kind, id, 'meta-changed'), meta);
+  } catch (error) {
+    console.warn(
+      `[mcp] Could not tell live editors the ${kind} title changed:`,
+      error instanceof Error ? error.message : String(error)
+    );
+  }
+}
+
 // ─── Actor ───────────────────────────────────────────────────────────────────
 
 /**
@@ -451,7 +495,7 @@ export async function actorFor(ctx: ToolContext): Promise<CollabActor> {
 export function liveWriteError(
   error: unknown,
   what: 'page' | 'deck',
-  options: { previewHint?: boolean } = {}
+  options: { previewHint?: boolean; expectedSha?: string } = {}
 ): Error {
   if (!(error instanceof CollabRequestError)) {
     return error instanceof Error ? error : new Error(String(error));
@@ -505,6 +549,14 @@ export function liveWriteError(
   if (error.status === 409 && error.code === 'stale-epoch') {
     return liveEpochConflict(what);
   }
+  if (error.status === 409 && error.code === 'unknown-version') {
+    const current = (error.body as { current?: { epoch?: unknown; version?: unknown } }).current;
+    const valid =
+      current && typeof current.epoch === 'number' && typeof current.version === 'number'
+        ? { epoch: current.epoch, version: current.version }
+        : null;
+    return livePinUnknown(options.expectedSha ?? null, valid, what);
+  }
   if (error.status === 409 && error.code === 'unreadable-live-doc') {
     // A server-side read fault, not the agent's pin: re-reading won't help.
     return new ToolError(
@@ -524,6 +576,38 @@ export function liveWriteError(
     );
   }
   return new ToolError('internal', `${error.message} (HTTP ${error.status})`);
+}
+
+/**
+ * A live READ the service refused for a reason the read path does not fall
+ * back on (not down, not legacy content, not 404), as the agent should read
+ * it — never a bare internal error.
+ */
+export function liveReadError(error: CollabRequestError, what: 'page' | 'deck'): ToolError {
+  if (error.status === 409 && error.code === 'unreadable-live-doc') {
+    return new ToolError(
+      'internal',
+      `The live ${what} holds content the live editing service cannot read. Ask someone to ` +
+        'open it in the web editor, or retry shortly.',
+      'LIVE_UNREADABLE',
+      { reason: error.code }
+    );
+  }
+  if (error.status === 409 && error.code === 'stale-epoch') {
+    return new ToolError(
+      'internal',
+      `The live ${what} was being reloaded from git; read it again.`,
+      'LIVE_UNAVAILABLE',
+      { reason: error.code }
+    );
+  }
+  return new ToolError(
+    'internal',
+    `The live editing service refused to read this ${what} ` +
+      `(${error.detail ?? error.code ?? `HTTP ${error.status}`}). Retry, or read at: 'preview'.`,
+    'LIVE_READ_FAILED',
+    { reason: error.code ?? String(error.status) }
+  );
 }
 
 /** The 409 slide-locked body as an agent-facing error. */

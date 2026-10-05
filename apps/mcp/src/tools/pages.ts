@@ -25,7 +25,7 @@
 import { ClassmojiService } from '@classmoji/services';
 import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
-import { closeLiveDocBeforeDelete } from '../collab/lifecycle.ts';
+import { closeLiveDocBeforeDelete, notifyLiveMetaChanged } from '../collab/lifecycle.ts';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
 import {
@@ -186,6 +186,11 @@ export const pageUpdateTool: ToolDefinition<PageUpdateArgs> = {
         resource_id: page.id,
         action: 'UPDATE',
         data: { tool: 'page_update', fields },
+      });
+      // Open live editors show the new title / width at once.
+      await notifyLiveMetaChanged('page', page.id, page.classroom_id, {
+        ...(args.title !== undefined ? { title: updated.title } : {}),
+        ...(args.width !== undefined ? { width: updated.width ?? args.width } : {}),
       });
 
       return ok({

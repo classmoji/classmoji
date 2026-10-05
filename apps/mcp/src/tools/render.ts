@@ -38,11 +38,14 @@ import { loadSlideInClassroom, TEACHING_TEAM, type SlideWithRepoRecord } from '.
 /** Renders are heavier than reads: a smaller bucket than the default. */
 export const RENDER_RATE_LIMIT = { capacity: 12, refillPerSecond: 0.2 };
 
-/** Which copy, and the deck as read there, with its version. */
+/**
+ * Which copy, and the deck as read there, with its version. A render is not
+ * a read: the live service is asked with no viewer, so it remembers nothing
+ * (an agent's pin stays judged against what it last READ or wrote).
+ */
 export async function readDeckForRender(
   slide: SlideWithRepoRecord,
-  at: ViewAt,
-  viewerId: string
+  at: ViewAt
 ): Promise<{ deck: DeckJson; version: string | null; note?: string }> {
   let ref: string | undefined;
   if (at === 'preview') {
@@ -51,7 +54,7 @@ export async function readDeckForRender(
   let note: string | undefined;
   const liveState = liveStateFor(slide.classroom);
   if (liveState && !ref) {
-    const live = await readLiveDeck(liveState.env, slide, viewerId);
+    const live = await readLiveDeck(liveState.env, slide, null);
     if ('snapshot' in live) {
       return {
         deck: live.snapshot.content,
@@ -224,7 +227,7 @@ export async function renderAfterDeckApply(
   try {
     const slide = await loadSlideInClassroom(slideId, ctx);
     const at: ViewAt = payload.committed_to === 'preview' ? 'preview' : 'main';
-    const read = await readDeckForRender(slide, at, ctx.viewer.userId);
+    const read = await readDeckForRender(slide, at);
     const known = deckIdSet(read.deck);
     const present = changed.filter(id => known.has(id));
     const shown = present.slice(0, APPLY_RENDER_MAX);
@@ -254,6 +257,8 @@ export async function renderAfterDeckApply(
 export const deckRenderTool: ToolDefinition<DeckRenderArgs> = {
   name: 'deck_render',
   title: 'Render deck slides',
+  // Drives a browser service that loads the deck and every URL it names.
+  annotations: { openWorld: true },
   rateLimit: RENDER_RATE_LIMIT,
   description:
     'Renders a deck so you can SEE it: the real reveal.js slides (theme, custom CSS, every ' +
@@ -298,7 +303,7 @@ export const deckRenderTool: ToolDefinition<DeckRenderArgs> = {
     // No assertSlideEditable: rendering is a read, gated like deck_get.
     const slide = await loadSlideInClassroom(args.slide_id, ctx);
     const at: ViewAt = args.at === 'preview' ? 'preview' : 'main';
-    const read = await readDeckForRender(slide, at, ctx.viewer.userId);
+    const read = await readDeckForRender(slide, at);
 
     const known = deckIdSet(read.deck);
     let selected: string[];

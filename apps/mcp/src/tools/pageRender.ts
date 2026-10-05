@@ -20,7 +20,7 @@ import { ToolError } from '../mcp/errors.ts';
 import { tryConsume } from '../mcp/rateLimit.ts';
 import type { ToolContext, ToolDefinition, ToolResult } from '../mcp/registry.ts';
 import { RenderError } from '../render/browser.ts';
-import { LruCache } from '../render/cache.ts';
+import { LruCache, stringBytes } from '../render/cache.ts';
 import { imageBlocks } from '../render/deckAgent.ts';
 import {
   PAGE_CHUNK_HEIGHT,
@@ -41,7 +41,14 @@ interface CachedPage {
   result: Omit<PageRenderResult, 'images' | 'backend'>;
   images: Map<number, string>;
 }
-const pageCache = new LruCache<CachedPage>(80);
+/** Bounded by bytes (small VMs): each entry is up to MAX_CHUNKS JPEGs. */
+const pageCache = new LruCache<CachedPage>({
+  maxEntries: 80,
+  maxBytes: 16 * 1024 * 1024,
+  sizeOf: entry =>
+    JSON.stringify(entry.result).length * 2 +
+    [...entry.images.values()].reduce((n, img) => n + stringBytes(img), 0),
+});
 
 export function clearPageRenderCache(): void {
   pageCache.clear();
@@ -73,17 +80,21 @@ export function blockIdSet(blocks: unknown): Set<string> {
   return out;
 }
 
-/** Which copy, the page's blocks there, and their version. */
+/**
+ * Which copy, the page's blocks there, and their version. A render is not a
+ * read: the live service is asked with no viewer, so it remembers nothing
+ * (an agent's pin stays judged against what it last READ or wrote, never
+ * against a page it only saw as a picture).
+ */
 export async function readPageForRender(
   page: PageWithRepoRecord,
-  at: ViewAt,
-  viewerId: string
+  at: ViewAt
 ): Promise<{ blocks: unknown; version: string | null; note?: string }> {
   const ref = await resolveReadRef(page, at);
   let note: string | undefined;
   const liveState = liveStateFor(page.classroom);
   if (liveState && !ref) {
-    const live = await readLivePage(liveState.env, page, viewerId);
+    const live = await readLivePage(liveState.env, page, null);
     if ('snapshot' in live) {
       return {
         blocks: live.snapshot.content.blocks,
@@ -263,6 +274,8 @@ interface PageRenderArgs {
 export const pageRenderTool: ToolDefinition<PageRenderArgs> = {
   name: 'page_render',
   title: 'Render a page',
+  // Drives a browser service that loads the page and every URL it names.
+  annotations: { openWorld: true },
   rateLimit: RENDER_RATE_LIMIT,
   description:
     'Renders a page so you can SEE it: the page as readers see it (cover, title, every block, ' +
@@ -300,7 +313,7 @@ export const pageRenderTool: ToolDefinition<PageRenderArgs> = {
   handler: async (args, ctx) => {
     const page = await loadPageWithRepoInClassroom(args.page_id, ctx);
     const at: ViewAt = args.at === 'preview' ? 'preview' : 'main';
-    const read = await readPageForRender(page, at, ctx.viewer.userId);
+    const read = await readPageForRender(page, at);
     const known = blockIdSet(read.blocks);
     for (const id of args.block_ids ?? []) {
       if (!known.has(id)) {
@@ -367,7 +380,7 @@ export async function renderAfterPageApply(
   try {
     const page = await loadPageWithRepoInClassroom(pageId, ctx);
     const at: ViewAt = payload.committed_to === 'preview' ? 'preview' : 'main';
-    const read = await readPageForRender(page, at, ctx.viewer.userId);
+    const read = await readPageForRender(page, at);
     const known = blockIdSet(read.blocks);
     const changed = changedBlockIds(payload)
       .filter(id => known.has(id))

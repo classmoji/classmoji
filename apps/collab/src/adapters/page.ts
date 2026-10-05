@@ -14,7 +14,7 @@ import { canEditPages, findClassroomRole } from '@classmoji/auth/classroom-role'
 import { SCHEMA_VERSION, parsePageContent, type PageCoverImage } from '@classmoji/page-schema';
 import { pageContentToYDoc, yDocToBlocks } from '@classmoji/page-schema/server';
 import type { PageSnapshotContent } from '@classmoji/collab';
-import { itemHash } from '@classmoji/collab/hash';
+import { itemHash, pageView } from '@classmoji/collab/hash';
 import { AGENT_TOUCHED_MAX } from '@classmoji/collab';
 
 import {
@@ -325,6 +325,10 @@ export function createPageAdapter(
           return !block || itemHash(block) !== hash;
         })
         .map(([id]) => id);
+    },
+
+    itemView(doc) {
+      return pageView({ blocks: blocksOf(doc) });
     },
 
     applyOps(ctx: LiveEditContext, rawOps): ApplyOpsResult {

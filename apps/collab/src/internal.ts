@@ -4,7 +4,9 @@
  * (COLLAB_INTERNAL_SECRET; see @classmoji/collab/env).
  *
  *   GET  /internal/:kind/:id/snapshot       → { epoch, version, live, content }
- *   POST /internal/:kind/:id/ops            { ops, actor } → { version }
+ *   GET  /internal/:kind/:id/snapshot?viewer=<userId>&session=<s>  (an agent's read: remembered)
+ *   POST /internal/:kind/:id/ops            { ops, actor, expect?, expect_since?, remember? }
+ *        → { epoch, version, insertedIds? }  (expect_since: see judgeSince)
  *   POST /internal/page/:id/cover           { coverImage, actor } → { version }
  *   POST /internal/:kind/:id/merge-preview  { base, theirs, resolutions?, actor }
  *        → { applied: true, version } | 409 { error: 'conflicts', conflicts, autoMerged? }
@@ -37,8 +39,18 @@ import {
   type PageCursorPoint,
 } from '@classmoji/collab';
 
+import {
+  changedTargets,
+  opTargets,
+  viewAfterWrite,
+  viewOf,
+  type ItemView,
+  type TargetOp,
+} from '@classmoji/collab/hash';
+
 import { CollabAuthError } from './auth.ts';
-import { CollabHttpError } from './adapters/types.ts';
+import { agentViewsFor, type AgentViews } from './agentViews.ts';
+import { CollabHttpError, type LiveEditContext } from './adapters/types.ts';
 import type { CollabRuntime } from './server.ts';
 import { currentEpoch, isReseedMarker, type CollabDocRow } from './store/types.ts';
 
@@ -257,7 +269,7 @@ export async function handleInternal(
     const body = method === 'POST' ? await readJson(request) : {};
     const result =
       route.scope === 'doc'
-        ? await dispatch(route, body, runtime)
+        ? await dispatch(route, body, runtime, url.searchParams)
         : route.scope === 'classroom'
           ? await dispatchClassroom(route, body, runtime)
           : await checkpointResult(body, runtime);
@@ -293,41 +305,80 @@ async function dispatchClassroom(
 async function dispatch(
   { kind, id, action }: Extract<Route, { scope: 'doc' }>,
   body: Record<string, unknown>,
-  runtime: CollabRuntime
+  runtime: CollabRuntime,
+  query: URLSearchParams
 ): Promise<unknown> {
   switch (action) {
-    case 'snapshot':
-      return snapshot(kind, id, runtime);
+    case 'snapshot': {
+      const snap = await snapshot(kind, id, runtime);
+      // An agent's read (`?viewer=<userId>&session=<agentSession>`): remember
+      // what it was shown, for its pin (`expect_since`). Renders and other
+      // callers pass no viewer and leave nothing behind.
+      const viewer = viewerFrom(query);
+      if (viewer) {
+        agentViewsFor(runtime).remember(
+          { ...viewer, kind, docId: id, epoch: snap.epoch, version: snap.version },
+          viewOf(kind, snap.content),
+          'read'
+        );
+      }
+      return snap;
+    }
 
     case 'ops': {
       const actor = requireActor(body.actor);
       const adapter = await runtime.adapter(kind);
       const ops = adapter.parseOps(body.ops);
       const expect = requireExpect(body.expect);
+      const since = requireExpectSince(body.expect_since);
+      // Track the caller's view of the version this write leaves (an agent's
+      // next pin), whenever it pins one or asks.
+      const remember = since !== null || body.remember === true;
       if (expect && !adapter.checkExpect) {
         throw new CollabHttpError(501, { error: 'expect-unsupported', kind });
       }
+      if (remember && !adapter.itemView) {
+        throw new CollabHttpError(501, { error: 'expect-unsupported', kind });
+      }
+      const views = agentViewsFor(runtime);
+      let after: ItemView | null = null;
       const { result, version, epoch } = await runtime.withLiveEdit(kind, id, actor, ctx => {
-        if (!expect) return adapter.applyOps(ctx, ops);
-        // The guard runs INSIDE the transaction the ops run in, before any
+        if (!expect && !remember) return adapter.applyOps(ctx, ops);
+        // The guards run INSIDE the transaction the ops run in, before any
         // write: a changed item means 409 with nothing applied.
         let checked = false;
+        let pre: ItemView | null = null;
+        let base: ItemView | null = null;
         const guarded = {
           ...ctx,
           transact: (write: (doc: Y.Doc) => void) =>
             ctx.transact(doc => {
               if (!checked) {
                 checked = true;
-                const changedIds = adapter.checkExpect!(doc, expect);
-                if (changedIds.length > 0) {
-                  throw new CollabHttpError(409, { error: 'block-changed', changedIds });
+                if (expect) {
+                  const changedIds = adapter.checkExpect!(doc, expect);
+                  if (changedIds.length > 0) {
+                    throw new CollabHttpError(409, { error: 'block-changed', changedIds });
+                  }
+                }
+                if (remember) pre = adapter.itemView!(doc);
+                if (since && pre) {
+                  base = judgeSince(views, { kind, id, actor, ctx, since, now: pre, ops });
                 }
               }
               write(doc);
+              if (pre) after = viewAfterWrite(base ?? pre, pre, adapter.itemView!(doc));
             }),
         };
         return adapter.applyOps(guarded, ops);
       });
+      if (after) {
+        views.remember(
+          { userId: actor.userId, session: actor.agentSession, kind, docId: id, epoch, version },
+          after,
+          'apply'
+        );
+      }
       const insertedIds = result && 'insertedIds' in result ? result.insertedIds : undefined;
       return { epoch, version, ...(insertedIds ? { insertedIds } : {}) };
     }
@@ -360,9 +411,22 @@ async function dispatch(
       const coverImage = requireCover(body.coverImage);
       const adapter = await runtime.adapter(kind);
       if (!adapter.setCover) throw new CollabHttpError(404, { error: 'not-found' });
-      const { version } = await runtime.withLiveEdit(kind, id, actor, ctx =>
-        adapter.setCover!(ctx, coverImage)
-      );
+      // `remember`: the caller's view of the new version is the doc as the
+      // cover set found it (a cover changes no block), so its new pin is
+      // judged per block like a read's.
+      let after: ItemView | null = null;
+      const { version, epoch } = await runtime.withLiveEdit(kind, id, actor, async ctx => {
+        const result = await adapter.setCover!(ctx, coverImage);
+        if (body.remember === true && adapter.itemView) after = adapter.itemView(ctx.document);
+        return result;
+      });
+      if (after) {
+        agentViewsFor(runtime).remember(
+          { userId: actor.userId, session: actor.agentSession, kind, docId: id, epoch, version },
+          after,
+          'apply'
+        );
+      }
       return { version };
     }
 
@@ -588,6 +652,87 @@ function requireExpect(value: unknown): Record<string, string> | null {
   }
   const entries = Object.entries(value as Record<string, string>);
   return entries.length > 0 ? Object.fromEntries(entries) : null;
+}
+
+interface ExpectSince {
+  epoch: number;
+  version: number;
+}
+
+function requireExpectSince(value: unknown): ExpectSince | null {
+  if (value == null) return null;
+  const raw = value as Partial<ExpectSince>;
+  const whole = (n: unknown): n is number =>
+    typeof n === 'number' && Number.isSafeInteger(n) && n >= 0;
+  if (
+    typeof value !== 'object' ||
+    Array.isArray(value) ||
+    !whole(raw.epoch) ||
+    !whole(raw.version)
+  ) {
+    throw new CollabHttpError(400, {
+      error: 'invalid-expect-since',
+      message: 'expect_since is { epoch, version } (the pin the caller read)',
+    });
+  }
+  return { epoch: raw.epoch, version: raw.version };
+}
+
+/** `?viewer=<userId>&session=<agentSession>` on `/snapshot`: whose read this is. */
+function viewerFrom(query: URLSearchParams): { userId: string; session: string | null } | null {
+  const userId = query.get('viewer');
+  if (!userId || userId.length > MAX_ID_LENGTH) return null;
+  return { userId, session: normalizeAgentSession(query.get('session')) };
+}
+
+/**
+ * `expect_since`: judge the ops against what THIS caller was shown at the
+ * pinned version (its read, or the view its last write left), not against
+ * the version alone — typing elsewhere since is fine, a change to anything
+ * the ops depend on is not. Runs inside the ops transaction with `now` the
+ * live doc's view; returns the caller's view (the base for its next one).
+ *   - pin from another epoch (reloaded from git) → 409 stale-epoch
+ *   - no view for the pin (never read here, expired, collab restarted) →
+ *     409 unknown-version (re-read)
+ *   - a target changed → 409 block-changed { changedIds }
+ */
+function judgeSince(
+  views: AgentViews,
+  args: {
+    kind: CollabKind;
+    id: string;
+    actor: CollabActor;
+    ctx: LiveEditContext;
+    since: ExpectSince;
+    now: ItemView;
+    ops: unknown[];
+  }
+): ItemView {
+  const { kind, id, actor, ctx, since, now, ops } = args;
+  const epoch = ctx.ref.epoch;
+  if (since.epoch !== epoch) {
+    throw new CollabHttpError(409, { error: 'stale-epoch', epoch });
+  }
+  const view = views.recall({
+    userId: actor.userId,
+    session: actor.agentSession,
+    kind,
+    docId: id,
+    epoch,
+    version: since.version,
+  });
+  if (!view) {
+    throw new CollabHttpError(409, {
+      error: 'unknown-version',
+      message: 'The live service no longer holds your read of that version; re-read and retry.',
+      current: { epoch, version: ctx.row?.version ?? 0 },
+    });
+  }
+  const changedIds = changedTargets(view, now, opTargets(ops as TargetOp[]));
+  if (changedIds.length > 0) {
+    throw new CollabHttpError(409, { error: 'block-changed', changedIds });
+  }
+  return view;
 }
 
 /**

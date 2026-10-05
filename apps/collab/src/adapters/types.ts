@@ -25,6 +25,7 @@ import type {
   PageCursorPoint,
   SnapshotContent,
 } from '@classmoji/collab';
+import type { ItemView } from '@classmoji/collab/hash';
 
 import type { CollabDocRow } from '../store/types.ts';
 
@@ -228,6 +229,15 @@ export interface CollabAdapter<K extends CollabKind = CollabKind, Op = unknown> 
    * entry). An adapter without it refuses guarded ops (501).
    */
   checkExpect?(doc: Y.Doc, expect: Record<string, string>): string[];
+
+  /**
+   * Guarded ops (`expect_since`): the doc as hashes (`viewOf` in
+   * `@classmoji/collab/hash`), computed from the same normalized form
+   * `/snapshot` returns, so it compares with a view recorded from a read.
+   * Called inside the ops transaction, before and after the write. An
+   * adapter without it refuses `expect_since` (501).
+   */
+  itemView?(doc: Y.Doc): ItemView;
 
   /**
    * Apply ops id-aware through `ctx.transact`. Deck: an op on a slide a human

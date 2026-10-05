@@ -37,6 +37,7 @@ import {
   liveStateFor,
   requireLiveEnv,
   liveSha,
+  liveReadError,
   liveWriteError,
   notifyPreviewChanged,
   parseLiveVersion,
@@ -44,15 +45,9 @@ import {
   postMergePreview,
   postOps,
   type CollabEnv,
+  type SnapshotViewer,
 } from '../collab/client.ts';
-import {
-  assertLivePin,
-  checkLivePin,
-  expectFor,
-  rememberSnapshot,
-  splitInsertedIds,
-} from '../collab/liveCheck.ts';
-import { normalizePageBlocks } from '../collab/pageSchema.ts';
+import { assertLivePin, expectSinceFor, splitInsertedIds } from '../collab/liveCheck.ts';
 import {
   REPO_REST_MAX_BYTES,
   formatMegabytes,
@@ -288,20 +283,13 @@ const LIVE_FALLBACK_NOTE =
 export async function readLivePage(
   env: CollabEnv | null,
   page: PageWithRepoRecord,
-  viewer: string
+  viewer: SnapshotViewer | null
 ): Promise<{ snapshot: SnapshotResponse<'page'> } | { fallbackNote: string | null }> {
   if (!env) return { fallbackNote: LIVE_UNCONFIGURED_NOTE };
   try {
-    const snapshot = await fetchSnapshot(env, 'page', page.id);
-    rememberSnapshot(
-      viewer,
-      'page',
-      page.id,
-      snapshot.epoch,
-      snapshot.version,
-      snapshot.content,
-      'read'
-    );
+    // An agent's read (viewer) is remembered by the live service for its pin;
+    // a render passes null, so a picture never stands in for a read.
+    const snapshot = await fetchSnapshot(env, 'page', page.id, viewer);
     return { snapshot };
   } catch (error) {
     if (error instanceof CollabRequestError) {
@@ -314,6 +302,7 @@ export async function readLivePage(
       }
       if (error.status === 404)
         throw new ToolError('not_found', 'Page not found in this classroom');
+      throw liveReadError(error, 'page');
     }
     throw error;
   }
@@ -379,7 +368,7 @@ export const pageContentOutlineTool: ToolDefinition<PageContentOutlineArgs> = {
     const liveState = liveStateFor(page.classroom);
     let fallback: Record<string, unknown> = {};
     if (liveState && at === 'main') {
-      const live = await readLivePage(liveState.env, page, ctx.viewer.userId);
+      const live = await readLivePage(liveState.env, page, ctx.viewer);
       if ('snapshot' in live) {
         const outline = flattenOutline(live.snapshot.content.blocks as BlockNode[]);
         const cover = live.snapshot.content.coverImage;
@@ -488,7 +477,7 @@ export const pageContentGetTool: ToolDefinition<PageContentGetArgs> = {
     const liveState = liveStateFor(page.classroom);
     let fallback: Record<string, unknown> = {};
     if (liveState && !ref) {
-      const live = await readLivePage(liveState.env, page, ctx.viewer.userId);
+      const live = await readLivePage(liveState.env, page, ctx.viewer);
       if ('snapshot' in live) {
         return ok(
           selectBlocks(
@@ -637,87 +626,13 @@ function pagePreviewUrl(page: PageWithRepoRecord): string | null {
   return `${base.replace(/\/+$/, '')}/${encodeURIComponent(slug)}/${encodeURIComponent(page.id)}?preview=1`;
 }
 
-/** Every block in the tree carries a string id. */
-function allIdsPresent(blocks: unknown): boolean {
-  if (!Array.isArray(blocks)) return true;
-  return blocks.every(
-    block =>
-      !!block &&
-      typeof block === 'object' &&
-      typeof (block as BlockNode).id === 'string' &&
-      allIdsPresent((block as BlockNode).children)
-  );
-}
-
-/**
- * Cache the agent's view of the version its apply produced — the snapshot it
- * READ (or, with no remembered read, the live page as the apply found it)
- * plus its own ops, normalized through the page schema — so a follow-up
- * apply pinned to `new_sha` is checked per block, and an edit a person made
- * after the agent's read is still caught. Skipped (the follow-up then gets
- * the strict check, logged) when ids would be minted: those depend on
- * positions in the live document, not in the view.
- */
-async function rememberAgentView(
-  viewer: string,
-  pageId: string,
-  epoch: number,
-  version: number,
-  agentView: unknown,
-  ops: PageContentOp[],
-  insertedIds: string[][] | null
-): Promise<void> {
-  const skip = (why: string) =>
-    console.warn(`[mcp] live page ${pageId}: not caching live:${epoch}.${version} (${why})`);
-  const view = agentView as { blocks: unknown[]; coverImage: unknown };
-  // Give inserted blocks the ids the live page gave them, so the view and
-  // the live page name them alike.
-  if (ops.some(op => op.op === 'insert')) {
-    if (!insertedIds) return skip('inserted ids unknown');
-    ops = ops.map((op, i) =>
-      op.op === 'insert'
-        ? {
-            ...op,
-            // The server fills missing ids from the op's own blocks first (so
-            // nested ids match), then reports the top-level ids it kept.
-            blocks: ClassmojiService.pageContent
-              .ensureBlockIds(op.blocks)
-              .map((block, j) => ({ ...block, id: insertedIds[i][j] })),
-          }
-        : op
-    );
-  }
-  let reminted = false;
-  let next: unknown[];
-  try {
-    next = ClassmojiService.pageContent.applyBlockOps(
-      view.blocks as BlockNode[],
-      ops as Parameters<typeof ClassmojiService.pageContent.applyBlockOps>[1],
-      { onIdRemint: () => (reminted = true) }
-    );
-  } catch {
-    return skip('ops do not replay on the view');
-  }
-  if (reminted || !allIdsPresent(next)) return skip('ids would be minted');
-  const normalized = await normalizePageBlocks(next);
-  if (!normalized) return skip('view does not normalize');
-  rememberSnapshot(
-    viewer,
-    'page',
-    pageId,
-    epoch,
-    version,
-    { blocks: normalized, coverImage: view.coverImage },
-    'apply'
-  );
-}
-
 /**
  * page_content_apply in live mode: the ops go into the live document through
  * the collab server, as the caller (peers see them as `<name> (agent)`).
- * `expected_sha` is the live version a read returned; a stale one is refused.
- * The ops are first replayed on the snapshot here, so a bad id or position is
- * reported plainly before anything is sent.
+ * `expected_sha` is the live version a read returned; the server judges it
+ * per block (see liveCheck.ts). The ops are first replayed on the current
+ * page here, so a bad id or position is reported plainly before anything is
+ * sent.
  */
 async function applyLive(
   env: CollabEnv,
@@ -728,20 +643,12 @@ async function applyLive(
   assertLivePin('page', args.expected_sha, args.ops);
   let snapshot: SnapshotResponse<'page'>;
   try {
+    // The dry run's base, not an agent read: nothing is remembered.
     snapshot = await fetchSnapshot(env, 'page', page.id);
   } catch (error) {
     throw liveWriteError(error, 'page');
   }
-  // Only what the ops depend on must still be as the agent read it.
-  const viewer = ctx.viewer.userId;
-  const { agentView } = checkLivePin(
-    viewer,
-    'page',
-    page.id,
-    args.expected_sha,
-    snapshot,
-    args.ops
-  );
+  const since = expectSinceFor('page', args.expected_sha, snapshot);
 
   const priorBlocks = snapshot.content.blocks as BlockNode[];
   const idRemints: Array<{ op_index: number; from: string; to: string }> = [];
@@ -763,35 +670,19 @@ async function applyLive(
     throw error;
   }
 
-  // The server re-checks the targeted blocks inside the live transaction
-  // against what the agent read (authoritative; the check above is early).
-  const expect = expectFor(
-    'page',
-    agentView ?? (args.expected_sha ? snapshot.content : null),
-    args.ops
-  );
+  // Only what the ops depend on must still be as the agent was shown it:
+  // the server judges that inside the live transaction.
   const actor = await actorFor(ctx);
   let response: Awaited<ReturnType<typeof postOps>>;
   try {
-    response = await postOps(env, 'page', page.id, args.ops, actor, expect);
+    response = await postOps(env, 'page', page.id, args.ops, actor, since);
   } catch (error) {
-    throw liveWriteError(error, 'page');
+    throw liveWriteError(error, 'page', { expectedSha: args.expected_sha });
   }
   const { version } = response;
   const epoch = response.epoch ?? snapshot.epoch;
   const insertedIds = splitInsertedIds(args.ops, response.insertedIds);
   const after = ClassmojiService.pageContent.ensureBlockIds(newBlocks) as BlockNode[];
-  // No remembered read (pure insert, strict pass): the base is the page as
-  // this apply found it, so new_sha stays checkable per block.
-  await rememberAgentView(
-    viewer,
-    page.id,
-    epoch,
-    version,
-    agentView ?? snapshot.content,
-    args.ops,
-    insertedIds
-  );
 
   // Ids come from the live page: the server's insertedIds (re-mints
   // included), not this process's dry run.
@@ -821,6 +712,8 @@ async function applyLive(
       ops: applied,
       ...(args.expected_sha ? { expected_sha: args.expected_sha } : {}),
       new_sha: liveSha(epoch, version),
+      // Distinct per write: two applies inside the audit's 5 s window both stay.
+      value: liveSha(epoch, version),
       committed_to: 'live',
       ...(hasDestructiveOps ? { prior_block_count: countBlocks(priorBlocks) } : {}),
       ...(structureRepairs.length > 0 ? { structure_repairs: structureRepairs } : {}),
@@ -1087,6 +980,8 @@ async function applyPageEdits(args: PageContentApplyArgs, ctx: ToolContext): Pro
       ops: applied,
       expected_sha: args.expected_sha,
       new_sha: saved.sha,
+      // Distinct per write: two applies inside the audit's 5 s window both stay.
+      value: saved.commit ?? saved.sha,
       commit_sha: saved.commit,
       committed_to: committedTo,
       ...(hasDestructiveOps ? { prior_block_count: priorCount } : {}),
@@ -1827,16 +1722,8 @@ async function setCoverLive(
   } catch (error) {
     throw liveWriteError(error, 'page', { previewHint: false });
   }
-  // The cover changes no block: new_sha is checkable per block like a read.
-  rememberSnapshot(
-    ctx.viewer.userId,
-    'page',
-    page.id,
-    snapshot.epoch,
-    version,
-    { ...snapshot.content, coverImage: nextCover },
-    'apply'
-  );
+  // The cover changes no block: the live service remembers the page as the
+  // cover set found it, so new_sha is checkable per block like a read.
 
   await writeAudit(ctx, {
     resource_type: 'PAGES',
@@ -1847,6 +1734,8 @@ async function setCoverLive(
       ...(nextCover ? { url: nextCover.url, position: nextCover.position } : { removed: true }),
       ...(current ? { prior_url: current.url, prior_position: current.position } : {}),
       new_sha: liveSha(snapshot.epoch, version),
+      // Distinct per write: two cover sets inside the audit's 5 s window both stay.
+      value: liveSha(snapshot.epoch, version),
       committed_to: 'live',
     } as Prisma.InputJsonValue,
   });
@@ -1985,6 +1874,8 @@ export const pageCoverSetTool: ToolDefinition<PageCoverSetArgs> = {
           : { removed: true }),
         ...(current ? { prior_url: current.url, prior_position: current.position } : {}),
         new_sha: saved.sha,
+        // Distinct per write: two cover sets inside the audit's 5 s window both stay.
+        value: saved.commit ?? saved.sha,
         commit_sha: saved.commit,
       } as Prisma.InputJsonValue,
     });

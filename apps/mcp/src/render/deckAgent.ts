@@ -12,7 +12,7 @@ import type { DeckJson, DeckSlide } from '@classmoji/services/slides';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolResult } from '../mcp/registry.ts';
 import { RenderError } from './browser.ts';
-import { LruCache } from './cache.ts';
+import { LruCache, stringBytes } from './cache.ts';
 import { renderDeck, type DeckRenderResult } from './deckRender.ts';
 
 /** Single-image width (px): ~480×350 for the default deck. */
@@ -24,9 +24,23 @@ export const SHEET_SIZE = 24;
 /** Single images per call. */
 export const MAX_SINGLE_IMAGES = 12;
 
-const measureCache = new LruCache<SlideMeasure>(4000);
-const imageCache = new LruCache<string>(400);
-const sheetCache = new LruCache<string>(60);
+// Bounded by bytes: the MCP's VMs are small. Images and sheets are JPEG data
+// (base64); 32 + 16 MB at most, with the page renders' 16 MB ≤ 64 MB of renders.
+const measureCache = new LruCache<SlideMeasure>({
+  maxEntries: 4000,
+  maxBytes: 4 * 1024 * 1024,
+  sizeOf: m => JSON.stringify(m).length * 2 + 64,
+});
+const imageCache = new LruCache<string>({
+  maxEntries: 400,
+  maxBytes: 32 * 1024 * 1024,
+  sizeOf: stringBytes,
+});
+const sheetCache = new LruCache<string>({
+  maxEntries: 60,
+  maxBytes: 16 * 1024 * 1024,
+  sizeOf: stringBytes,
+});
 
 /** For tests. */
 export function clearRenderCaches(): void {

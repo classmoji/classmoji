@@ -69,7 +69,7 @@ import {
   type SlideLock,
 } from '@classmoji/collab';
 
-import { itemHash } from '@classmoji/collab/hash';
+import { deckView, itemHash, type ItemView } from '@classmoji/collab/hash';
 
 import {
   CollabHttpError,
@@ -481,6 +481,11 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
         return !slide || itemHash(slide) !== hash;
       })
       .map(([id]) => id);
+  }
+
+  /** Guarded ops (`expect_since`): the deck as hashes, as `/snapshot` would show it. */
+  itemView(doc: Y.Doc): ItemView {
+    return deckView(yDocToDeck(doc) as unknown as Record<string, unknown>);
   }
 
   hasItem(doc: Y.Doc, id: string): boolean {

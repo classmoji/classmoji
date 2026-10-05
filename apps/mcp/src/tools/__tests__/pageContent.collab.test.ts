@@ -11,7 +11,6 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { itemHash } from '@classmoji/collab/hash';
 import type { ToolContext } from '../../mcp/registry.ts';
 
 const mocks = vi.hoisted(() => ({
@@ -99,8 +98,6 @@ vi.mock('@classmoji/services', async () => {
   };
 });
 
-const { clearSnapshotCache } = await import('../../collab/liveCheck.ts');
-
 const {
   pageContentOutlineTool,
   pageContentGetTool,
@@ -159,6 +156,8 @@ const COVER = { url: 'pages/syllabus/assets/hero.png', position: 40 };
 interface CollabCall {
   method: string;
   path: string;
+  /** The query string (`?viewer=…` on an agent's read). */
+  search: string;
   secret: string | null;
   body: Record<string, unknown> | null;
 }
@@ -185,6 +184,7 @@ const fakeFetch = vi.fn(async (url: string | URL, init?: RequestInit) => {
   const call: CollabCall = {
     method: init?.method ?? 'GET',
     path: parsed.pathname,
+    search: parsed.search,
     secret: headers['x-collab-secret'] ?? null,
     body: init?.body ? JSON.parse(String(init.body)) : null,
   };
@@ -208,7 +208,6 @@ beforeEach(() => {
   mocks.collabEnvMissing.value = false;
   calls = [];
   routes = {};
-  clearSnapshotCache();
   fakeFetch.mockClear();
   vi.stubGlobal('fetch', fakeFetch);
   mocks.pageFindById.mockResolvedValue(LIVE_DRAFT);
@@ -362,8 +361,36 @@ describe('live reads', () => {
     expect(calls[0]).toMatchObject({
       method: 'GET',
       path: `/internal/page/${PAGE_ID}/snapshot`,
+      // An agent's read: the live service remembers it for the agent's pin.
+      search: '?viewer=teacher-1',
       secret: expect.any(String),
     });
+  });
+
+  it("a render reads with no viewer, so a picture never counts as the agent's read", async () => {
+    const { readPageForRender } = await import('../pageRender.ts');
+    const read = await readPageForRender(LIVE_DRAFT as never, 'main');
+    expect(read.version).toBe('live:1.7');
+    expect(calls.map(call => call.search)).toEqual(['']);
+  });
+
+  it("names the agent session on a read, so each session's pin is its own", async () => {
+    const SESSION_CTX = {
+      ...CTX,
+      viewer: { ...CTX.viewer, agentSession: 'sess-1' },
+    } as typeof CTX;
+    await pageContentGetTool.handler({ classroom: 'org/x', page_id: PAGE_ID }, SESSION_CTX);
+    expect(calls[0].search).toBe('?viewer=teacher-1&session=sess-1');
+  });
+
+  it.each([
+    [409, 'unreadable-live-doc', 'LIVE_UNREADABLE'],
+    [400, 'something-new', 'LIVE_READ_FAILED'],
+  ])('maps a %s %s on a read to a clear agent error', async (status, error, code) => {
+    route('GET', 'snapshot', () => ({ status, body: { error } }));
+    await expect(
+      pageContentOutlineTool.handler({ classroom: 'org/x', page_id: PAGE_ID }, CTX)
+    ).rejects.toMatchObject({ code });
   });
 
   it('get returns selected live blocks with the version', async () => {
@@ -423,6 +450,8 @@ describe('live apply', () => {
     expect(mocks.auditCreate.mock.calls[0][0].data).toMatchObject({
       committed_to: 'live',
       new_sha: 'live:1.8',
+      // Distinct per write, so the audit's 5 s dedupe never merges two applies.
+      value: 'live:1.8',
     });
   });
 
@@ -436,19 +465,14 @@ describe('live apply', () => {
     expect(result.committed_to).toBe('live');
   });
 
-  it('an older version-only pin gets the strict check', async () => {
+  it('an older version-only pin is judged in the current epoch', async () => {
     route('GET', 'snapshot', snapshotResponder(12));
-    await expect(
-      pageContentApplyTool.handler(
-        { classroom: 'org/x', page_id: PAGE_ID, expected_sha: 'live:7', ops: [UPDATE_OP] },
-        CTX
-      )
-    ).rejects.toMatchObject({
-      code: 'CONTENT_CONFLICT',
-      data: { reason: 'unknown-pin', current_sha: 'live:1.12' },
-      message: expect.stringMatching(/'live:7'.*it is now 'live:1.12'.*Re-read/),
-    });
-    expect(calls.some(call => call.method === 'POST')).toBe(false);
+    await pageContentApplyTool.handler(
+      { classroom: 'org/x', page_id: PAGE_ID, expected_sha: 'live:7', ops: [UPDATE_OP] },
+      CTX
+    );
+    const post = calls.find(call => call.method === 'POST');
+    expect(post?.body?.expect_since).toEqual({ epoch: 1, version: 7 });
   });
 
   it('refuses a git sha in live mode, naming the read that gives a version', async () => {
@@ -541,56 +565,48 @@ describe('pinned live applies (live:<epoch>.<version>)', () => {
     expect(outline).toMatchObject({ sha: 'live:3.7', epoch: 3, version: 7 });
   });
 
-  it('applies when the targeted block is unchanged though others were edited since', async () => {
-    serve(7, LIVE_BLOCKS());
-    await readOutline();
-    const typed = LIVE_BLOCKS();
-    typed[0].content = [{ type: 'text', text: 'Week 1 (someone is typing here)' }];
-    serve(15, typed);
+  it('sends the pin as expect_since: the live service judges it per block', async () => {
+    serve(15, LIVE_BLOCKS());
     const result = parse(await apply([UPDATE_OP], 'live:1.7'));
-    expect(result).toMatchObject({ success: true, committed_to: 'live', new_sha: 'live:1.8' });
-    expect(posted()).toHaveLength(1);
+    expect(result).toMatchObject({ success: true, new_sha: 'live:1.8' });
+    const [post] = posted();
+    expect(post.body).toMatchObject({ expect_since: { epoch: 1, version: 7 } });
+    expect(post.body).not.toHaveProperty('expect');
+    expect(post.body).not.toHaveProperty('remember');
+    // The apply's own pre-read is not an agent read: no viewer, nothing remembered.
+    const pre = calls.find(call => call.method === 'GET');
+    expect(pre?.search).toBe('');
   });
 
-  it('refuses with BLOCK_CHANGED, naming the block, when the target was edited', async () => {
-    serve(7, LIVE_BLOCKS());
-    await readOutline();
-    const edited = LIVE_BLOCKS();
-    edited[1].content = [{ type: 'text', text: 'Read chapter 1 and 2' }];
-    serve(15, edited);
-    const error = await apply([UPDATE_OP], 'live:1.7').catch((e: unknown) => e);
-    expect(error).toMatchObject({ code: 'BLOCK_CHANGED', data: { changed_ids: ['p1'] } });
-    expect((error as Error).message).toMatch(/'p1'.*Re-read.*mode: 'preview'/);
-    expect(posted()).toHaveLength(0);
+  it('keeps no state: a read on another MCP machine and an apply here work alike', async () => {
+    // No read through this process at all; the version moved on since.
+    serve(42, LIVE_BLOCKS());
+    route('POST', 'ops', () => ({ status: 200, body: { epoch: 1, version: 43 } }));
+    expect(parse(await apply([UPDATE_OP], 'live:1.7')).new_sha).toBe('live:1.43');
+    expect(posted()[0].body?.expect_since).toEqual({ epoch: 1, version: 7 });
   });
 
-  it('refuses at an EQUAL version when the targeted block changed (unstored typing)', async () => {
-    serve(7, LIVE_BLOCKS());
-    await readOutline();
-    const edited = LIVE_BLOCKS();
-    edited[1].content = [{ type: 'text', text: 'Read chapter 1 twice' }];
-    serve(7, edited);
+  it("maps the server's unknown-version to CONTENT_CONFLICT unknown-pin (re-read)", async () => {
+    route('POST', 'ops', () => ({
+      status: 409,
+      body: { error: 'unknown-version', current: { epoch: 1, version: 15 } },
+    }));
     await expect(apply([UPDATE_OP], 'live:1.7')).rejects.toMatchObject({
-      code: 'BLOCK_CHANGED',
-    });
-    expect(posted()).toHaveLength(0);
-  });
-
-  it('refuses when a person made the whole targeted block bold', async () => {
-    serve(7, LIVE_BLOCKS());
-    await readOutline();
-    const bold = LIVE_BLOCKS();
-    bold[1].content = [{ type: 'text', text: 'Read chapter 1', styles: { bold: true } }] as never;
-    serve(9, bold);
-    await expect(apply([UPDATE_OP], 'live:1.7')).rejects.toMatchObject({
-      code: 'BLOCK_CHANGED',
-      data: { changed_ids: ['p1'] },
+      code: 'CONTENT_CONFLICT',
+      data: { reason: 'unknown-pin', current_sha: 'live:1.15' },
+      message: expect.stringMatching(/'live:1.7'.*it is now 'live:1.15'.*Re-read/),
     });
   });
 
-  it('refuses a pin from before the page was reloaded from git (epoch bump)', async () => {
-    serve(7, LIVE_BLOCKS());
-    await readOutline();
+  it("maps the server's stale-epoch to CONTENT_CONFLICT reloaded", async () => {
+    route('POST', 'ops', () => ({ status: 409, body: { error: 'stale-epoch' } }));
+    await expect(apply([UPDATE_OP], 'live:1.7')).rejects.toMatchObject({
+      code: 'CONTENT_CONFLICT',
+      data: { reason: 'reloaded' },
+    });
+  });
+
+  it('refuses a pin from before the page was reloaded from git before sending anything', async () => {
     serve(7, LIVE_BLOCKS(), 2);
     await expect(apply([UPDATE_OP], 'live:1.7')).rejects.toMatchObject({
       code: 'CONTENT_CONFLICT',
@@ -599,68 +615,7 @@ describe('pinned live applies (live:<epoch>.<version>)', () => {
     expect(posted()).toHaveLength(0);
   });
 
-  it('refuses an insert whose anchor was deleted since the read', async () => {
-    serve(7, LIVE_BLOCKS());
-    await readOutline();
-    serve(15, [LIVE_BLOCKS()[0]]);
-    const insert = { ...INSERT_OP, position: { after: 'p1' } };
-    await expect(apply([insert], 'live:1.7')).rejects.toMatchObject({ code: 'BLOCK_CHANGED' });
-    expect(posted()).toHaveLength(0);
-  });
-
-  it('falls back to the strict check for a pin it never served (cache miss)', async () => {
-    serve(15, LIVE_BLOCKS());
-    await expect(apply([UPDATE_OP], 'live:1.7')).rejects.toMatchObject({
-      code: 'CONTENT_CONFLICT',
-      data: { reason: 'unknown-pin', current_sha: 'live:1.15' },
-    });
-    expect(posted()).toHaveLength(0);
-  });
-
-  it('replace_all needs the whole page unchanged since the read', async () => {
-    serve(7, LIVE_BLOCKS());
-    await readOutline();
-    const typed = LIVE_BLOCKS();
-    typed[0].content = [{ type: 'text', text: 'Week one' }];
-    serve(8, typed);
-    await expect(
-      apply([{ op: 'replace_all', blocks: LIVE_BLOCKS() }], 'live:1.7')
-    ).rejects.toMatchObject({ code: 'BLOCK_CHANGED', data: { changed_ids: ['h1'] } });
-    expect(posted()).toHaveLength(0);
-  });
-
-  it('a follow-up against new_sha catches a person editing that block after the read', async () => {
-    serve(7, LIVE_BLOCKS());
-    await readOutline();
-    // Between the agent's read and its first apply, someone edits the heading.
-    const typed = LIVE_BLOCKS();
-    typed[0].content = [{ type: 'text', text: 'Week one' }];
-    serve(9, typed);
-    const first = parse(await apply([UPDATE_OP], 'live:1.7'));
-    expect(first.new_sha).toBe('live:1.8');
-    // The follow-up touches p1 again (fine) and the heading (changed since the read).
-    serve(12, [
-      typed[0],
-      { ...UPDATE_OP.block, id: 'p1', props: { textColor: 'default' }, children: [] },
-    ]);
-    const p1Again = parse(
-      await apply([{ ...UPDATE_OP, block: { type: 'paragraph', content: [] } }], 'live:1.8')
-    );
-    expect(p1Again.success).toBe(true);
-    await expect(
-      apply([{ op: 'update', id: 'h1', block: { type: 'heading', content: [] } }], 'live:1.8')
-    ).rejects.toMatchObject({ code: 'BLOCK_CHANGED', data: { changed_ids: ['h1'] } });
-  });
-
-  /** Blocks as the page schema round trip leaves them (the mock's default props). */
-  const normalized = (blocks: Array<Record<string, unknown>>) =>
-    blocks.map(b => ({
-      ...b,
-      props: { textColor: 'default', ...((b.props as object) ?? {}) },
-      children: [],
-    }));
-
-  it("a pure insert's new_sha is checked per block: typing elsewhere does not refuse", async () => {
+  it('a pure insert without a pin asks the server to remember the new view', async () => {
     serve(15, LIVE_BLOCKS());
     route('POST', 'ops', () => ({
       status: 200,
@@ -668,74 +623,8 @@ describe('pinned live applies (live:<epoch>.<version>)', () => {
     }));
     const inserted = parse(await apply([INSERT_OP]));
     expect(inserted.new_sha).toBe('live:1.16');
-    const typed = LIVE_BLOCKS();
-    typed[0].content = [{ type: 'text', text: 'Week 1 (someone is typing here)' }];
-    // Snapshots come normalized through the page schema, as the server sends them.
-    const live = normalized([...typed, { id: 'new1', type: 'paragraph', content: [] }]);
-    serve(18, live);
-    route('POST', 'ops', () => ({ status: 200, body: { epoch: 1, version: 19 } }));
-    expect(parse(await apply([UPDATE_OP], 'live:1.16')).success).toBe(true);
-    // …and a block someone changed after the insert is still refused.
-    serve(20, live);
-    await expect(
-      apply([{ op: 'update', id: 'h1', block: { type: 'heading', content: [] } }], 'live:1.16')
-    ).rejects.toMatchObject({ code: 'BLOCK_CHANGED', data: { changed_ids: ['h1'] } });
-  });
-
-  it('a strict-check pass caches its new_sha for the follow-up', async () => {
-    serve(15, LIVE_BLOCKS());
-    route('POST', 'ops', () => ({ status: 200, body: { epoch: 1, version: 16 } }));
-    // A pin this process never served, at the current version: strict passes.
-    expect(parse(await apply([UPDATE_OP], 'live:1.15')).new_sha).toBe('live:1.16');
-    const typed = LIVE_BLOCKS();
-    typed[0].content = [{ type: 'text', text: 'Week one' }];
-    serve(19, normalized([typed[0], { ...LIVE_BLOCKS()[1], ...UPDATE_OP.block }]));
-    route('POST', 'ops', () => ({ status: 200, body: { epoch: 1, version: 20 } }));
-    expect(
-      parse(await apply([{ op: 'move', id: 'p1', position: { at: 'start' } }], 'live:1.16')).success
-    ).toBe(true);
-  });
-
-  it("one agent's view never stands in for another agent's read", async () => {
-    const OTHER = { ...CTX, viewer: { ...CTX.viewer, userId: 'teacher-2' } } as typeof CTX;
-    serve(10, LIVE_BLOCKS());
-    await readOutline();
-    const typed = LIVE_BLOCKS();
-    typed[0].content = [{ type: 'text', text: 'Week one' }];
-    serve(11, typed);
-    route('POST', 'ops', () => ({ status: 200, body: { epoch: 1, version: 12 } }));
-    await apply([UPDATE_OP], 'live:1.10'); // caches teacher-1's view at 12 (old heading)
-    serve(12, typed);
-    await pageContentOutlineTool.handler({ classroom: 'org/x', page_id: PAGE_ID }, OTHER);
-    serve(13, typed);
-    const result = await pageContentApplyTool.handler(
-      {
-        classroom: 'org/x',
-        page_id: PAGE_ID,
-        expected_sha: 'live:1.12',
-        ops: [{ op: 'update', id: 'h1', block: { type: 'heading', content: [] } }] as never,
-      },
-      OTHER
-    );
-    expect(parse(result).success).toBe(true);
-  });
-
-  it('a re-read replaces the view an apply left, so it clears a refusal that view caused', async () => {
-    serve(10, LIVE_BLOCKS());
-    await readOutline();
-    route('POST', 'ops', () => ({ status: 200, body: { epoch: 1, version: 12 } }));
-    await apply([UPDATE_OP], 'live:1.10'); // the view cached at 12 has the old heading
-    // …but someone's heading edit was stored into the same version 12.
-    const typed = normalized([
-      { ...LIVE_BLOCKS()[0], content: [{ type: 'text', text: 'Week one' }] },
-      { ...LIVE_BLOCKS()[1], ...UPDATE_OP.block },
-    ]);
-    serve(12, typed);
-    const H1_OP = { op: 'update', id: 'h1', block: { type: 'heading', content: [] } };
-    await expect(apply([H1_OP], 'live:1.12')).rejects.toMatchObject({ code: 'BLOCK_CHANGED' });
-    await readOutline();
-    route('POST', 'ops', () => ({ status: 200, body: { epoch: 1, version: 13 } }));
-    expect(parse(await apply([H1_OP], 'live:1.12')).success).toBe(true);
+    expect(posted()[0].body).toMatchObject({ remember: true });
+    expect(posted()[0].body).not.toHaveProperty('expect_since');
   });
 
   it('pure inserts may omit expected_sha', async () => {
@@ -782,14 +671,6 @@ describe('guarded ops, inserted ids and save status', () => {
     );
   const lastPost = () => calls.filter(call => call.method === 'POST').at(-1);
 
-  it('sends itemHash of each targeted block as the agent read it', async () => {
-    serve(7, LIVE_BLOCKS());
-    await readOutline();
-    serve(9, LIVE_BLOCKS());
-    await apply([UPDATE_OP], 'live:1.7');
-    expect(lastPost()?.body?.expect).toEqual({ p1: itemHash(LIVE_BLOCKS()[1]) });
-  });
-
   it("maps the server's 409 block-changed to BLOCK_CHANGED with its ids", async () => {
     route('POST', 'ops', () => ({
       status: 409,
@@ -801,7 +682,7 @@ describe('guarded ops, inserted ids and save status', () => {
     });
   });
 
-  it("reports the live page's ids for inserted blocks and caches them for follow-ups", async () => {
+  it("reports the live page's ids for inserted blocks", async () => {
     serve(7, LIVE_BLOCKS());
     await readOutline();
     route('POST', 'ops', () => ({
@@ -815,25 +696,7 @@ describe('guarded ops, inserted ids and save status', () => {
     };
     const first = parse(await apply([insert], 'live:1.7'));
     expect(first.applied[0]).toMatchObject({ op: 'insert', count: 1, ids: ['srv1'] });
-    // Someone types in the heading; the agent edits its new block.
-    const typed = LIVE_BLOCKS();
-    typed[0].content = [{ type: 'text', text: 'Week one' }];
-    const srv1 = {
-      id: 'srv1',
-      type: 'paragraph',
-      content: [],
-      props: { textColor: 'default' },
-      children: [],
-    };
-    serve(11, [...typed, srv1]);
-    route('POST', 'ops', () => ({ status: 200, body: { epoch: 1, version: 12 } }));
-    const second = parse(
-      await apply(
-        [{ op: 'update', id: 'srv1', block: { type: 'paragraph', content: [] } }],
-        'live:1.8'
-      )
-    );
-    expect(second.success).toBe(true);
+    expect(first.new_sha).toBe('live:1.8');
   });
 
   it('live reads say when the page last reached GitHub and why it did not', async () => {
@@ -978,10 +841,16 @@ describe('live cover', () => {
       body: {
         coverImage: { url: 'pages/syllabus/assets/new.png', position: 40 },
         actor: { userId: 'teacher-1', name: 'Ada Lovelace' },
+        // The live service remembers the agent's view: new_sha is a per-block pin.
+        remember: true,
       },
     });
     expect(mocks.savePageContent).not.toHaveBeenCalled();
     expect(mocks.pageQuickUpdate).toHaveBeenCalledTimes(1);
+    expect(mocks.auditCreate.mock.calls[0][0].data).toMatchObject({
+      tool: 'page_cover_set',
+      value: 'live:1.9',
+    });
   });
 
   it('an unchanged cover sends nothing', async () => {

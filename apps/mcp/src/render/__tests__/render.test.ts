@@ -105,7 +105,7 @@ describe('changedSlideIds', () => {
 
 describe('LruCache', () => {
   it('evicts the least recently used entry', () => {
-    const cache = new LruCache<number>(2);
+    const cache = new LruCache<number>({ maxEntries: 2 });
     cache.set('a', 1);
     cache.set('b', 2);
     expect(cache.get('a')).toBe(1);
@@ -113,6 +113,29 @@ describe('LruCache', () => {
     expect(cache.get('b')).toBeUndefined();
     expect(cache.get('a')).toBe(1);
     expect(cache.size).toBe(2);
+  });
+
+  it('stays under its byte cap, and never keeps an entry bigger than it', () => {
+    const cache = new LruCache<string>({ maxEntries: 100, maxBytes: 1000, sizeOf: v => v.length });
+    for (let i = 0; i < 10; i++) cache.set(`k${i}`, 'x'.repeat(300));
+    expect(cache.bytes).toBeLessThanOrEqual(1000);
+    expect(cache.size).toBe(3);
+    expect(cache.get('k9')).toBeDefined();
+    expect(cache.get('k0')).toBeUndefined();
+    cache.set('huge', 'x'.repeat(1001));
+    expect(cache.get('huge')).toBeUndefined();
+    expect(cache.size).toBe(3);
+  });
+
+  it('expires entries after its TTL, so outside changes (theme files, assets) show', () => {
+    let now = 0;
+    const cache = new LruCache<number>({ maxEntries: 10, ttlMs: 1000, now: () => now });
+    cache.set('a', 1);
+    now = 999;
+    expect(cache.get('a')).toBe(1);
+    now = 1001;
+    expect(cache.get('a')).toBeUndefined();
+    expect(cache.size).toBe(0);
   });
 });
 

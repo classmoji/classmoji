@@ -63,6 +63,7 @@ import {
   SlideHtmlError,
   applyDeckOps,
   deckOpSchema,
+  ensureSlideBlockIds,
   findSlide,
   prepareDeckOps,
   readSlideBlocks,
@@ -81,20 +82,16 @@ import {
   liveStateFor,
   requireLiveEnv,
   liveSha,
+  liveReadError,
   liveWriteError,
   notifyPreviewChanged,
   parseLiveVersion,
   postMergePreview,
   postOps,
   type CollabEnv,
+  type SnapshotViewer,
 } from '../collab/client.ts';
-import {
-  assertLivePin,
-  checkLivePin,
-  expectFor,
-  rememberSnapshot,
-  splitInsertedIds,
-} from '../collab/liveCheck.ts';
+import { assertLivePin, expectSinceFor, splitInsertedIds } from '../collab/liveCheck.ts';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition, ToolResult } from '../mcp/registry.ts';
 import { renderAfterDeckApply } from './render.ts';
@@ -234,20 +231,13 @@ const LIVE_FALLBACK_NOTE =
 export async function readLiveDeck(
   env: CollabEnv | null,
   slide: SlideWithRepoRecord,
-  viewer: string
+  viewer: SnapshotViewer | null
 ): Promise<{ snapshot: SnapshotResponse<'deck'> } | { fallbackNote: string | null }> {
   if (!env) return { fallbackNote: LIVE_UNCONFIGURED_NOTE };
   try {
-    const snapshot = await fetchSnapshot(env, 'deck', slide.id);
-    rememberSnapshot(
-      viewer,
-      'deck',
-      slide.id,
-      snapshot.epoch,
-      snapshot.version,
-      snapshot.content,
-      'read'
-    );
+    // An agent's read (viewer) is remembered by the live service for its pin;
+    // a render passes null, so a picture never stands in for a read.
+    const snapshot = await fetchSnapshot(env, 'deck', slide.id, viewer);
     return { snapshot };
   } catch (error) {
     if (error instanceof CollabRequestError) {
@@ -260,6 +250,7 @@ export async function readLiveDeck(
       }
       if (error.status === 404)
         throw new ToolError('not_found', 'Slide not found in this classroom');
+      throw liveReadError(error, 'deck');
     }
     throw error;
   }
@@ -318,11 +309,22 @@ const AGENT_BLOCK_TYPES = new Set(['html', 'svg', 'iframe']);
 /**
  * A slide's blocks as agents see them: html, svg and iframe blocks, and any
  * block with an id. `content` adds each one's decoded source / svg / src.
+ * A block made before block ids is listed under the id the op engine derives
+ * for it (ensureSlideBlockIds), so block_update / block_delete can name it;
+ * the write then stores that id.
  */
 function agentBlocks(html: string | undefined, content: boolean): SlideBlockInfo[] {
   if (!html || !html.includes('sl-block')) return [];
-  return readSlideBlocks(html, { content }).filter(
-    block => block.id !== null || AGENT_BLOCK_TYPES.has(block.type)
+  const stored = readSlideBlocks(html, { content: false });
+  const withIds = readSlideBlocks(ensureSlideBlockIds(html), { content });
+  // Same blocks, same order: only the missing ids differ.
+  if (withIds.length !== stored.length) {
+    return readSlideBlocks(html, { content }).filter(
+      block => block.id !== null || AGENT_BLOCK_TYPES.has(block.type)
+    );
+  }
+  return withIds.filter(
+    (_block, i) => stored[i].id !== null || AGENT_BLOCK_TYPES.has(stored[i].type)
   );
 }
 
@@ -423,7 +425,7 @@ export const deckOutlineTool: ToolDefinition<DeckOutlineArgs> = {
     const liveState = liveStateFor(slide.classroom);
     let fallback: Record<string, unknown> = {};
     if (liveState && !ref) {
-      const live = await readLiveDeck(liveState.env, slide, ctx.viewer.userId);
+      const live = await readLiveDeck(liveState.env, slide, ctx.viewer);
       if ('snapshot' in live) {
         const { slide_id, ...head } = liveDeckHead(slide, live.snapshot);
         return ok({
@@ -522,7 +524,7 @@ export const deckGetTool: ToolDefinition<DeckGetArgs> = {
     const liveState = liveStateFor(slide.classroom);
     let fallback: Record<string, unknown> = {};
     if (liveState && !ref) {
-      const live = await readLiveDeck(liveState.env, slide, ctx.viewer.userId);
+      const live = await readLiveDeck(liveState.env, slide, ctx.viewer);
       if ('snapshot' in live) {
         return ok(
           selectSlides(liveDeckHead(slide, live.snapshot), live.snapshot.content, args.slide_ids)
@@ -651,20 +653,12 @@ async function applyDeckLive(
   assertLivePin('deck', args.expected_sha, args.ops);
   let snapshot: SnapshotResponse<'deck'>;
   try {
+    // The dry run's base, not an agent read: nothing is remembered.
     snapshot = await fetchSnapshot(env, 'deck', slide.id);
   } catch (error) {
     throw liveWriteError(error, 'deck');
   }
-  // Only what the ops depend on must still be as the agent read it.
-  const viewer = ctx.viewer.userId;
-  const { agentView } = checkLivePin(
-    viewer,
-    'deck',
-    slide.id,
-    args.expected_sha,
-    snapshot,
-    args.ops
-  );
+  const since = expectSinceFor('deck', args.expected_sha, snapshot);
 
   let newDeck: DeckJson;
   let applied: Array<Record<string, unknown>>;
@@ -680,19 +674,15 @@ async function applyDeckLive(
   }
   const hasInsert = applied.some(entry => entry.op === 'insert');
 
-  // The server re-checks the targeted slides inside the live transaction
-  // against what the agent read (authoritative; the check above is early).
-  const expect = expectFor(
-    'deck',
-    agentView ?? (args.expected_sha ? snapshot.content : null),
-    args.ops
-  );
+  // Only what the ops depend on must still be as the agent was shown it
+  // (slide order for a reorder, the theme for set_theme): the server judges
+  // that inside the live transaction.
   const actor = await actorFor(ctx);
   let response: Awaited<ReturnType<typeof postOps>>;
   try {
-    response = await postOps(env, 'deck', slide.id, args.ops, actor, expect);
+    response = await postOps(env, 'deck', slide.id, args.ops, actor, since);
   } catch (error) {
-    throw liveWriteError(error, 'deck');
+    throw liveWriteError(error, 'deck', { expectedSha: args.expected_sha });
   }
   const { version } = response;
   const epoch = response.epoch ?? snapshot.epoch;
@@ -711,40 +701,6 @@ async function applyDeckLive(
       ...(Object.keys(live.children).length > 0 ? { children: live.children } : {}),
     };
   });
-
-  // Cache the agent's view of the new version — the snapshot it READ (or,
-  // with no remembered read — a pure insert, a strict pass — the deck as this
-  // apply found it) plus its own ops, inserted slides renamed to the live
-  // ids — so a follow-up pinned to `new_sha` is checked per slide and a
-  // person's edit since the read is still caught. Skipped when inserted ids
-  // are unknown (no insertedIds, or they do not line up): the follow-up then
-  // gets the strict check.
-  const base = (agentView ?? snapshot.content) as DeckJson;
-  if (!hasInsert || insertedIds) {
-    try {
-      const replay = applyDeckOps(base, args.ops, {
-        starterCustomCss: slideService.STARTER_CUSTOM_CSS,
-      });
-      const rename = new Map<string, string>();
-      replay.applied.forEach((entry, i) => {
-        if (entry.op !== 'insert' || !insertedIds) return;
-        const live = liveInsertIds(entry, insertedIds[i]);
-        if (!live) throw new Error('inserted ids do not line up');
-        for (const [local, id] of live.rename) rename.set(local, id);
-      });
-      const view = replay.deck;
-      for (const top of view.slides) {
-        top.id = rename.get(top.id) ?? top.id;
-        for (const child of top.children ?? []) child.id = rename.get(child.id) ?? child.id;
-      }
-      rememberSnapshot(viewer, 'deck', slide.id, epoch, version, view, 'apply');
-    } catch {
-      // The ops do not replay on the read snapshot: nothing to cache.
-      console.warn(`[mcp] live deck ${slide.id}: not caching live:${epoch}.${version} (no replay)`);
-    }
-  } else {
-    console.warn(`[mcp] live deck ${slide.id}: not caching live:${epoch}.${version} (ids unknown)`);
-  }
 
   const hasDestructiveOps = args.ops.some(op => op.op === 'delete');
   await writeAudit(ctx, {
@@ -815,7 +771,7 @@ export const deckApplyTool: ToolDefinition<DeckApplyArgs> = {
     "(main's sha will conflict). Slide html/notes must not contain <section> tags (slide " +
     'structure is managed via ops). To create a vertical stack, insert a slide with ' +
     "children (child slides, one nesting level) instead of html; the response's applied " +
-    "entry reports the new ids (in live mode, a new stack's child ids come from deck_outline). " +
+    "entry reports the new ids, a new stack's child ids included. " +
     'render: true also returns images + the overflow report of the slides changed (see deck_render).',
   scope: 'write',
   roles: TEACHING_TEAM,

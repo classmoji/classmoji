@@ -11,7 +11,7 @@ import getPrisma from '@classmoji/database';
 import type { CollabKind } from '@classmoji/collab';
 import { resolveCollabEnv } from '@classmoji/collab/env';
 import { ToolError } from '../mcp/errors.ts';
-import { CollabRequestError, postClose } from './client.ts';
+import { CollabRequestError, notifyMetaChanged, postClose } from './client.ts';
 
 export async function closeLiveDocBeforeDelete(
   kind: CollabKind,
@@ -54,5 +54,31 @@ export async function closeLiveDocBeforeDelete(
       );
     }
     throw error;
+  }
+}
+
+/**
+ * A page's title/width or a deck's title changed (page_update, slide_update):
+ * tell editors who have it open live, so their header updates at once. Only
+ * for classrooms that edit live; best effort (never fails the update).
+ */
+export async function notifyLiveMetaChanged(
+  kind: CollabKind,
+  docId: string,
+  classroomId: string,
+  meta: { title?: string; width?: number }
+): Promise<void> {
+  if (meta.title === undefined && meta.width === undefined) return;
+  try {
+    const classroom = await getPrisma().classroom.findUnique({
+      where: { id: classroomId },
+      select: { collab_enabled: true },
+    });
+    await notifyMetaChanged(classroom, kind, docId, meta);
+  } catch (error) {
+    console.warn(
+      `[mcp] Could not tell live editors the ${kind} changed:`,
+      error instanceof Error ? error.message : String(error)
+    );
   }
 }

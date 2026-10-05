@@ -200,6 +200,8 @@ describe('deck_cursor_set', () => {
   });
 
   it('places the pointer arrow at x, y when given (only what was given is sent)', async () => {
+    const cursorBodies = () =>
+      calls.filter(call => call.path.endsWith('/cursor')).map(call => call.body);
     await deckCursorSetTool.handler(
       { classroom: 'org/x', slide_id: DECK_ID, slide: 'aaa', x: 120, y: 340.5 },
       ctx()
@@ -208,23 +210,44 @@ describe('deck_cursor_set', () => {
       { classroom: 'org/x', slide_id: DECK_ID, slide: 'aaa', y: 0 },
       ctx()
     );
-    expect(calls.map(call => call.body)).toEqual([
+    expect(cursorBodies()).toEqual([
       expect.objectContaining({ slide: 'aaa', x: 120, y: 340.5 }),
       expect.not.objectContaining({ x: expect.anything() }),
     ]);
-    expect(calls[1].body.y).toBe(0);
+    expect(cursorBodies()[1].y).toBe(0);
   });
 
-  it('documents and enforces the slide coordinate range', () => {
+  it("takes x, y in the deck's own size and sends them in the editors' 960×700 space", async () => {
+    respond = call =>
+      call.path.endsWith('/snapshot')
+        ? {
+            status: 200,
+            body: {
+              epoch: 1,
+              version: 3,
+              live: true,
+              content: { slides: [], config: { width: 1920, height: 1080 } },
+            },
+          }
+        : { status: 200, body: { shown: true } };
+    await deckCursorSetTool.handler(
+      { classroom: 'org/x', slide_id: DECK_ID, slide: 'aaa', x: 1920, y: 540 },
+      ctx()
+    );
+    const sent = calls.find(call => call.path.endsWith('/cursor'))?.body;
+    expect(sent).toMatchObject({ x: 960, y: 350 });
+    // The size read is not an agent read: nothing is remembered for a pin.
+    expect(calls.find(call => call.path.endsWith('/snapshot'))).toBeDefined();
+  });
+
+  it('documents the slide coordinate range', () => {
     const schema = z.object(deckCursorSetTool.inputSchema);
     const base = { classroom: 'org/x', slide_id: DECK_ID, slide: 'aaa' };
     expect(schema.safeParse({ ...base, x: 0, y: 0 }).success).toBe(true);
-    expect(schema.safeParse({ ...base, x: 960, y: 700 }).success).toBe(true);
-    expect(schema.safeParse({ ...base, x: 961 }).success).toBe(false);
-    expect(schema.safeParse({ ...base, y: 701 }).success).toBe(false);
+    expect(schema.safeParse({ ...base, x: 1920, y: 1080 }).success).toBe(true);
     expect(schema.safeParse({ ...base, x: -1 }).success).toBe(false);
-    expect(deckCursorSetTool.description).toContain('x 0 (left edge) to 960 (right)');
-    expect(deckCursorSetTool.description).toContain('y 0 (top) to 700 (bottom)');
+    expect(deckCursorSetTool.description).toContain("0 to the deck's width");
+    expect(deckCursorSetTool.description).toContain('960×700 unless the deck sets its own size');
   });
 
   it('an assistant may only point in decks they may edit', async () => {

@@ -11,7 +11,6 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { itemHash } from '@classmoji/collab/hash';
 import type { ToolContext } from '../../mcp/registry.ts';
 import type { DeckJson } from '../../../../../packages/services/src/slides/deckTypes.ts';
 
@@ -71,7 +70,6 @@ vi.mock('@classmoji/services', () => ({
   },
 }));
 
-const { clearSnapshotCache } = await import('../../collab/liveCheck.ts');
 const { applyDeckOps } = await import('@classmoji/services/slides/ops');
 
 const {
@@ -135,6 +133,8 @@ const DECK = (): DeckJson => ({
 interface CollabCall {
   method: string;
   path: string;
+  /** The query string (`?viewer=…` on an agent's read). */
+  search: string;
   body: Record<string, unknown> | null;
 }
 
@@ -156,6 +156,7 @@ const fakeFetch = vi.fn(async (url: string | URL, init?: RequestInit) => {
   const call: CollabCall = {
     method: init?.method ?? 'GET',
     path: parsed.pathname,
+    search: parsed.search,
     body: init?.body ? JSON.parse(String(init.body)) : null,
   };
   calls.push(call);
@@ -173,7 +174,6 @@ beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
   calls = [];
   routes = {};
-  clearSnapshotCache();
   fakeFetch.mockClear();
   vi.stubGlobal('fetch', fakeFetch);
   mocks.slideFindById.mockResolvedValue(LIVE_DRAFT);
@@ -234,6 +234,22 @@ describe('live reads', () => {
     );
     expect(got).toMatchObject({ sha: 'live:1.4', slides: [{ id: 'bbb' }] });
     expect(mocks.loadDeck).not.toHaveBeenCalled();
+    // Agent reads: the live service remembers them for the agent's pin.
+    expect(calls.map(call => call.search)).toEqual(['?viewer=teacher-1', '?viewer=teacher-1']);
+  });
+
+  it("a render reads with no viewer, so a picture never counts as the agent's read", async () => {
+    const { readDeckForRender } = await import('../render.ts');
+    const read = await readDeckForRender(LIVE_DRAFT as never, 'main');
+    expect(read.version).toBe('live:1.4');
+    expect(calls.map(call => call.search)).toEqual(['']);
+  });
+
+  it('maps an unexpected refusal on a read to a clear agent error', async () => {
+    route('GET', 'snapshot', () => ({ status: 409, body: { error: 'unreadable-live-doc' } }));
+    await expect(
+      deckGetTool.handler({ classroom: 'org/x', slide_id: SLIDE_ID }, CTX)
+    ).rejects.toMatchObject({ code: 'LIVE_UNREADABLE' });
   });
 
   it('falls back to git and says so when the collab server is unreachable', async () => {
@@ -287,15 +303,20 @@ describe('live apply', () => {
     expect(result.note).toMatch(/deck_outline/);
   });
 
-  it('refuses a stale version with CONTENT_CONFLICT and sends nothing', async () => {
-    route('GET', 'snapshot', snapshotResponder(9));
+  it('a version the live service holds no read of is CONTENT_CONFLICT unknown-pin', async () => {
+    route('POST', 'ops', () => ({
+      status: 409,
+      body: { error: 'unknown-version', current: { epoch: 1, version: 9 } },
+    }));
     await expect(
       deckApplyTool.handler(
         { classroom: 'org/x', slide_id: SLIDE_ID, expected_sha: 'live:1.4', ops: [UPDATE_OP] },
         CTX
       )
-    ).rejects.toMatchObject({ code: 'CONTENT_CONFLICT' });
-    expect(calls.some(call => call.method === 'POST')).toBe(false);
+    ).rejects.toMatchObject({
+      code: 'CONTENT_CONFLICT',
+      data: { reason: 'unknown-pin', current_sha: 'live:1.9' },
+    });
   });
 
   it('a slide someone is editing names the slide and the holder, and suggests preview', async () => {
@@ -357,13 +378,12 @@ describe('live apply', () => {
   });
 });
 
-describe('per-slide staleness check', () => {
-  const serve = (version: number, deck: DeckJson) =>
+describe('per-slide staleness check (judged by the live service)', () => {
+  const serve = (version: number, deck: DeckJson, epoch = 1) =>
     route('GET', 'snapshot', () => ({
       status: 200,
-      body: { epoch: 1, version, live: true, content: deck },
+      body: { epoch, version, live: true, content: deck },
     }));
-  const read = () => deckOutlineTool.handler({ classroom: 'org/x', slide_id: SLIDE_ID }, CTX);
   const apply = (ops: unknown[], expected_sha = 'live:1.4') =>
     deckApplyTool.handler(
       { classroom: 'org/x', slide_id: SLIDE_ID, expected_sha, ops: ops as never },
@@ -371,66 +391,47 @@ describe('per-slide staleness check', () => {
     );
   const posted = () => calls.filter(call => call.method === 'POST');
 
-  it('applies when the targeted slide is unchanged though another slide was edited', async () => {
-    serve(4, DECK());
-    await read();
-    serve(9, { ...DECK(), slides: [{ id: 'aaa', html: '<h1>Hi all</h1>' }, DECK().slides[1]] });
+  it('sends the pin as expect_since, with no hashes and no state of its own', async () => {
+    // Read on another MCP machine (nothing here), the version moved on since.
+    serve(9, DECK());
     const result = parse(await apply([UPDATE_OP]));
     expect(result).toMatchObject({ success: true, committed_to: 'live' });
-    expect(posted()).toHaveLength(1);
+    expect(posted()[0].body).toMatchObject({ expect_since: { epoch: 1, version: 4 } });
+    expect(posted()[0].body).not.toHaveProperty('expect');
+    // The apply's own pre-read is not an agent read.
+    expect(calls.find(call => call.method === 'GET')?.search).toBe('');
   });
 
-  it('refuses with BLOCK_CHANGED when the targeted slide was edited', async () => {
-    serve(4, DECK());
-    await read();
-    serve(9, { ...DECK(), slides: [DECK().slides[0], { id: 'bbb', html: '<p>Edited</p>' }] });
-    await expect(apply([UPDATE_OP])).rejects.toMatchObject({
-      code: 'BLOCK_CHANGED',
-      data: { changed_ids: ['bbb'] },
-    });
-    expect(posted()).toHaveLength(0);
-  });
-
-  it("an attrs merge is refused when the slide's attrs changed since the read", async () => {
-    serve(4, DECK());
-    await read();
-    serve(9, {
-      ...DECK(),
-      slides: [
-        DECK().slides[0],
-        { ...DECK().slides[1], attrs: { 'data-background-color': '#f00' } },
-      ],
-    });
-    await expect(
-      apply([{ op: 'update', id: 'bbb', attrs: { 'data-transition': 'fade' } }])
-    ).rejects.toMatchObject({ code: 'BLOCK_CHANGED', data: { changed_ids: ['bbb'] } });
-    expect(posted()).toHaveLength(0);
-  });
-
-  it('an attrs merge goes to the live deck as sent, guarded by the slide as read', async () => {
-    serve(4, DECK());
-    await read();
-    const op = { op: 'update', id: 'bbb', attrs: { 'data-transition': 'fade', spellcheck: null } };
-    expect(parse(await apply([op]))).toMatchObject({ success: true, committed_to: 'live' });
-    // The collab server applies the merge against the live slide inside its
-    // transaction, after checking it still hashes to what the agent read.
-    expect(posted()[0]?.body).toMatchObject({
-      ops: [op],
-      expect: { bbb: itemHash(DECK().slides[1]) },
-    });
-  });
-
-  it('a reorder is refused when the slide order changed since the read', async () => {
-    serve(4, DECK());
-    await read();
-    serve(9, { ...DECK(), slides: [DECK().slides[1], DECK().slides[0]] });
+  it("maps the server's block-changed (slide order included) to BLOCK_CHANGED", async () => {
+    route('POST', 'ops', () => ({
+      status: 409,
+      body: { error: 'block-changed', changedIds: ['__order__'] },
+    }));
     await expect(apply([{ op: 'reorder', order: ['bbb', 'aaa'] }])).rejects.toMatchObject({
       code: 'BLOCK_CHANGED',
       data: { changed_ids: ['__order__'] },
     });
   });
 
-  it('a pure insert may omit expected_sha; an update may not', async () => {
+  it('refuses a pin from another epoch before sending anything', async () => {
+    serve(4, DECK(), 2);
+    await expect(apply([UPDATE_OP])).rejects.toMatchObject({
+      code: 'CONTENT_CONFLICT',
+      data: { reason: 'reloaded' },
+    });
+    expect(posted()).toHaveLength(0);
+  });
+
+  it('an attrs merge goes to the live deck as sent, guarded by the pin', async () => {
+    const op = { op: 'update', id: 'bbb', attrs: { 'data-transition': 'fade', spellcheck: null } };
+    expect(parse(await apply([op]))).toMatchObject({ success: true, committed_to: 'live' });
+    expect(posted()[0]?.body).toMatchObject({
+      ops: [op],
+      expect_since: { epoch: 1, version: 4 },
+    });
+  });
+
+  it('a pure insert may omit expected_sha (the server remembers its view); an update may not', async () => {
     const insert = { op: 'insert', slides: [{ html: '<p>New</p>' }], position: { at: 'end' } };
     const ok1 = parse(
       await deckApplyTool.handler(
@@ -439,45 +440,13 @@ describe('per-slide staleness check', () => {
       )
     );
     expect(ok1.committed_to).toBe('live');
+    expect(posted()[0].body).toMatchObject({ remember: true });
     await expect(
       deckApplyTool.handler({ classroom: 'org/x', slide_id: SLIDE_ID, ops: [UPDATE_OP] }, CTX)
     ).rejects.toMatchObject({ code: 'EXPECTED_SHA_REQUIRED' });
   });
 
-  it('after an insert the dry-run view is not cached: a follow-up gets the strict check', async () => {
-    serve(4, DECK());
-    await read();
-    const insert = { op: 'insert', slides: [{ html: '<p>New</p>' }], position: { at: 'end' } };
-    const first = parse(await apply([insert]));
-    expect(first.new_sha).toBe('live:1.5');
-    serve(7, DECK());
-    await expect(apply([UPDATE_OP], 'live:1.5')).rejects.toMatchObject({
-      code: 'CONTENT_CONFLICT',
-    });
-  });
-
-  it("a pure insert's new_sha is checked per slide, not by version", async () => {
-    serve(4, DECK());
-    route('POST', 'ops', () => ({
-      status: 200,
-      body: { epoch: 1, version: 5, insertedIds: ['ccc'] },
-    }));
-    const insert = { op: 'insert', slides: [{ html: '<p>New</p>' }], position: { at: 'end' } };
-    const inserted = await deckApplyTool.handler(
-      { classroom: 'org/x', slide_id: SLIDE_ID, ops: [insert] as never },
-      CTX
-    );
-    expect(parse(inserted).new_sha).toBe('live:1.5');
-    const after = { ...DECK(), slides: [...DECK().slides, { id: 'ccc', html: '<p>New</p>' }] };
-    after.slides[0] = { ...after.slides[0], html: '<h1>Typed</h1>' };
-    serve(7, after);
-    route('POST', 'ops', () => ({ status: 200, body: { epoch: 1, version: 8 } }));
-    expect(parse(await apply([UPDATE_OP], 'live:1.5')).success).toBe(true);
-  });
-
-  it("a new stack's child ids come from the live deck and are cached for the follow-up", async () => {
-    serve(4, DECK());
-    await read();
+  it("a new stack's child ids come from the live deck", async () => {
     route('POST', 'ops', () => ({
       status: 200,
       body: { epoch: 1, version: 5, insertedIds: ['stk', 'k1', 'k2'] },
@@ -490,48 +459,6 @@ describe('per-slide staleness check', () => {
     const first = parse(await apply([insert]));
     expect(first.applied[0]).toMatchObject({ ids: ['stk'], children: { stk: ['k1', 'k2'] } });
     expect(first).not.toHaveProperty('note');
-    const after = {
-      ...DECK(),
-      slides: [
-        { ...DECK().slides[0], html: '<h1>Typed</h1>' },
-        DECK().slides[1],
-        {
-          id: 'stk',
-          children: [
-            { id: 'k1', html: '<p>One</p>' },
-            { id: 'k2', html: '<p>Two</p>' },
-          ],
-        },
-      ],
-    } as DeckJson;
-    serve(7, after);
-    route('POST', 'ops', () => ({ status: 200, body: { epoch: 1, version: 8 } }));
-    const second = parse(
-      await apply([{ op: 'update', id: 'k2', html: '<p>Two, edited</p>' }], 'live:1.5')
-    );
-    expect(second.success).toBe(true);
-  });
-
-  it('without an insert the agent view is cached for the follow-up', async () => {
-    serve(4, DECK());
-    await read();
-    const first = parse(await apply([UPDATE_OP]));
-    expect(first.new_sha).toBe('live:1.5');
-    serve(7, {
-      ...DECK(),
-      slides: [
-        { id: 'aaa', html: '<h1>Hi all</h1>' },
-        { id: 'bbb', html: UPDATE_OP.html },
-      ],
-    });
-    const second = parse(await apply([{ ...UPDATE_OP, html: '<p>Again</p>' }], 'live:1.5'));
-    expect(second.success).toBe(true);
-  });
-
-  it('falls back to the strict check on a cache miss', async () => {
-    serve(9, DECK());
-    await expect(apply([UPDATE_OP])).rejects.toMatchObject({ code: 'CONTENT_CONFLICT' });
-    expect(posted()).toHaveLength(0);
   });
 });
 
@@ -549,14 +476,7 @@ describe('guarded deck ops and inserted ids', () => {
     );
   const lastPost = () => calls.filter(call => call.method === 'POST').at(-1);
 
-  it('sends itemHash of each targeted slide as the agent read it', async () => {
-    serve(4, DECK());
-    await read();
-    await apply([UPDATE_OP]);
-    expect(lastPost()?.body?.expect).toEqual({ bbb: itemHash(DECK().slides[1]) });
-  });
-
-  it("returns the live deck's ids for inserted slides and caches them", async () => {
+  it("returns the live deck's ids for inserted slides", async () => {
     serve(4, DECK());
     await read();
     route('POST', 'ops', () => ({
@@ -567,19 +487,7 @@ describe('guarded deck ops and inserted ids', () => {
     const first = parse(await apply([insert]));
     expect(first.applied[0]).toEqual({ op: 'insert', count: 1, ids: ['srv-slide'] });
     expect(first).not.toHaveProperty('note');
-    serve(8, {
-      ...DECK(),
-      slides: [
-        { id: 'aaa', html: '<h1>Edited by someone</h1>' },
-        DECK().slides[1],
-        { id: 'srv-slide', html: '<p>New</p>' },
-      ],
-    });
-    route('POST', 'ops', () => ({ status: 200, body: { epoch: 1, version: 9 } }));
-    const second = parse(
-      await apply([{ op: 'update', id: 'srv-slide', html: '<p>Newer</p>' }], 'live:1.5')
-    );
-    expect(second.success).toBe(true);
+    expect(lastPost()?.body?.expect_since).toEqual({ epoch: 1, version: 4 });
   });
 
   it('a held slide refuses any change, and the message says notes and attributes too', async () => {
@@ -749,26 +657,18 @@ describe('block ops', () => {
     expect(result.applied).toEqual([
       { op: 'block_add', slide: 'bbb', block_id: sent[0].block_id, type: 'html' },
     ]);
-    // Guarded like an update of the slide holding the block.
-    expect(posts()[0]?.body?.expect).toEqual({ bbb: itemHash(DECK().slides[1]) });
+    // Guarded by the pin, like an update of the slide holding the block.
+    expect(posts()[0]?.body?.expect_since).toEqual({ epoch: 1, version: 4 });
     const audit = mocks.auditCreate.mock.calls.at(-1)?.[0];
     expect(JSON.stringify(audit)).toContain(String(sent[0].block_id));
   });
 
-  it('a block op on a slide edited since the read is BLOCK_CHANGED; elsewhere is fine', async () => {
-    serve(4, DECK());
-    await read();
-    serve(9, { ...DECK(), slides: [{ id: 'aaa', html: '<h1>Edited</h1>' }, DECK().slides[1]] });
-    expect(
-      parse(
-        await apply([{ op: 'block_add', slide: 'bbb', type: 'svg', box: BOX, source: '<svg/>' }])
-      ).success
-    ).toBe(true);
-
-    clearSnapshotCache();
-    serve(4, DECK());
-    await read();
-    serve(9, { ...DECK(), slides: [DECK().slides[0], { id: 'bbb', html: '<p>Edited</p>' }] });
+  it('a block op the live service refuses (its slide changed) is BLOCK_CHANGED', async () => {
+    serve(4, deckWithBlock());
+    route('POST', 'ops', () => ({
+      status: 409,
+      body: { error: 'block-changed', changedIds: ['bbb'] },
+    }));
     await expect(
       apply([{ op: 'block_delete', slide: 'bbb', block_id: 'b1' }])
     ).rejects.toMatchObject({ code: 'BLOCK_CHANGED', data: { changed_ids: ['bbb'] } });
@@ -834,6 +734,21 @@ describe('block ops', () => {
     expect(got.slides[0].blocks).toEqual([{ id: 'b1', type: 'html', box: BOX, source: SOURCE }]);
     const whole = parse(await deckGetTool.handler({ classroom: 'org/x', slide_id: SLIDE_ID }, CTX));
     expect(whole.slides[1].blocks[0].source).toBe(SOURCE);
+  });
+
+  it('a block made before block ids is listed under a derived id that block_update reaches', async () => {
+    const old =
+      '<div class="sl-block" data-block-type="iframe" style="left: 10px; top: 10px; width: 200px; height: 100px;">' +
+      '<div class="sl-block-content"><iframe data-src="https://example.com/a"></iframe></div></div>';
+    serve(4, { ...DECK(), slides: [DECK().slides[0], { id: 'bbb', html: old }] });
+    const outline = parse(await read());
+    const [block] = outline.slides[1].blocks;
+    expect(block.id).toMatch(/^[0-9a-f]{8}$/);
+    const result = parse(
+      await apply([{ op: 'block_update', slide: 'bbb', block_id: block.id, box: { left: 50 } }])
+    );
+    expect(result.applied).toEqual([{ op: 'block_update', slide: 'bbb', block_id: block.id }]);
+    expect(posts()).toHaveLength(1);
   });
 
   it('the decoded blocks never leak into the remembered read (a pinned apply still passes)', async () => {
