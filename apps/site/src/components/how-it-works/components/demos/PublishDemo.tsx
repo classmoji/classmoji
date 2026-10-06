@@ -3,12 +3,16 @@ import { Button, Card, ConfigProvider, Input, Select, Table, Tag } from 'antd';
 import type { TableColumnsType } from 'antd';
 import {
   IconAlertCircleFilled,
+  IconBrandGithub,
   IconChevronDown,
   IconChevronLeft,
+  IconDots,
   IconFileText,
   IconFolder,
+  IconGitCommit,
   IconLoader2,
   IconPlus,
+  IconRobot,
   IconSearch,
 } from '@tabler/icons-react';
 import { demoUsers } from '../../data/appNav';
@@ -26,13 +30,15 @@ import { DemoFrame } from '../demo-kit/DemoFrame';
  *   open by default, a repository with no assignment tagged "No assignment";
  * - the New repository page (routes/admin.$class.repos_.form/FormModule.tsx);
  * - Publish's confirm (useRepositoryActions.confirmPublish), then the row's
- *   "Publishing" and the progress callout (OperationProgress).
+ *   "Publishing" and the progress callout (OperationProgress);
+ * - View, the repository's page (routes/admin.$class.repos_.$title): one row per
+ *   student repo just created.
  * Publishing a repository does not publish its assignments; they keep their own
  * status.
  */
 
 type State = DemoBase & {
-  scene: 'list' | 'form';
+  scene: 'list' | 'form' | 'repo';
   title: string;
   templateQuery: string;
   templateOpen: boolean;
@@ -103,7 +109,21 @@ const steps: Step<State>[] = [
   { at: 8300, action: moveTo<State>('confirm') },
   { at: PUBLISH_AT, action: clickAnd<State>() },
   ...offset(publishStory, PUBLISH_AT),
-  { at: 13500, action: moveTo<State>(null) },
+  // Once the repos exist, open the repository to see them.
+  { at: 12100, action: moveTo<State>('view') },
+  { at: 12700, action: clickAnd<State>(s => ({ ...s, scene: 'repo' })) },
+  { at: 13300, action: moveTo<State>(null) },
+];
+
+/** The first few of the class, as the repository's page lists them. */
+const STUDENT_REPOS = [
+  { name: 'Alice Wong', login: 'alicewong' },
+  { name: 'Bob Kim', login: 'bobkim' },
+  { name: 'Chen Li', login: 'chenli' },
+  { name: 'Dana Ortiz', login: 'dortiz' },
+  { name: 'Eli Brooks', login: 'elibrooks' },
+  { name: 'Fatima Noor', login: 'fnoor' },
+  { name: 'Gabe Silva', login: 'gsilva' },
 ];
 
 type Row = {
@@ -176,6 +196,109 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 const popoverShadow =
   'shadow-[0_6px_16px_0_rgba(0,0,0,0.08),0_3px_6px_-4px_rgba(0,0,0,0.12),0_9px_28px_8px_rgba(0,0,0,0.05)]';
+
+type StudentRepo = (typeof STUDENT_REPOS)[number];
+
+/**
+ * The repository's page: the meta line and the student repos.
+ */
+function RepositoryPage() {
+  const columns: TableColumnsType<StudentRepo> = [
+    {
+      title: 'Student',
+      key: 'student',
+      width: 150,
+      render: (_, r) => (
+        <div className="flex min-w-0 items-center gap-2">
+          <div
+            aria-hidden
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-stone-100 text-[11px] font-semibold text-stone-600 ring-1 ring-stone-200"
+          >
+            {r.name.charAt(0)}
+          </div>
+          <div className="flex min-w-0 flex-col gap-[2px]">
+            <div className="truncate text-[11px] font-bold text-ink-1">{r.name}</div>
+            <div className="truncate text-[11px] text-ink-3">@{r.login}</div>
+          </div>
+        </div>
+      ),
+    },
+    {
+      title: 'Repository',
+      key: 'repo',
+      render: (_, r) => (
+        <span className="inline-flex min-w-0 max-w-full items-center gap-1.5 text-ink-1">
+          <IconBrandGithub size={13} className="shrink-0 text-gray-900" />
+          <span className="truncate">
+            {NEW_REPO}-{r.login}
+          </span>
+        </span>
+      ),
+    },
+    {
+      title: 'Last push',
+      key: 'lastPush',
+      width: 80,
+      render: () => <span className="text-ink-3">—</span>,
+    },
+    {
+      // CommitCount at size lg. Fresh from the template, each repo has the one
+      // commit it was created with.
+      title: 'Commits',
+      key: 'commits',
+      width: 80,
+      align: 'right',
+      render: () => (
+        <span className="inline-flex items-center gap-1 tabular-nums text-[12px] text-ink-1">
+          <IconGitCommit size={15} className="shrink-0 text-ink-3" />1
+        </span>
+      ),
+    },
+    {
+      title: 'Actions',
+      key: 'actions',
+      width: 96,
+      className: 'border-l border-line',
+      render: () => (
+        <div className="flex items-center gap-3 whitespace-nowrap">
+          <span className="text-[12px] font-medium text-ink-2">View</span>
+          <span className="text-[12px] font-medium text-rose-600">Delete</span>
+        </div>
+      ),
+    },
+  ];
+
+  return (
+    <div className="flex h-full flex-col gap-2.5 overflow-hidden">
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-[11.5px] text-ink-3">
+        <span>
+          Template <span className="font-medium text-ink-1">{TEMPLATE}</span>
+        </span>
+        <span>
+          Type <span className="font-medium text-ink-1">Individual</span>
+        </span>
+        <span>
+          Student repos{' '}
+          <span className="font-medium text-ink-1">
+            {STUDENTS} of {STUDENTS}
+          </span>
+        </span>
+      </div>
+
+      <div className="rounded-2xl bg-panel p-2 ring-1 ring-line [&_th]:whitespace-nowrap">
+        <Table<StudentRepo>
+          columns={columns}
+          dataSource={STUDENT_REPOS}
+          rowKey="login"
+          rowHoverable={false}
+          tableLayout="fixed"
+          size="middle"
+          pagination={false}
+        />
+      </div>
+    </div>
+  );
+}
 
 function RepositoryForm({ s }: { s: State }) {
   return (
@@ -398,7 +521,7 @@ export function PublishDemo() {
           <ActionLink>Edit</ActionLink>
         ) : (
           <div className="flex items-center gap-x-3 whitespace-nowrap">
-            <ActionLink>View</ActionLink>
+            <ActionLink cursor={r.key === 'new' ? 'view' : undefined}>View</ActionLink>
             <ActionLink>Edit</ActionLink>
             {r.key === 'new' && s.publishing ? (
               <span className="inline-flex items-center gap-1.5 text-[12px] text-ink-3">
@@ -438,6 +561,33 @@ export function PublishDemo() {
     </div>
   );
 
+  const repoBreadcrumb = (
+    <div className="flex items-center gap-2 text-[13px] text-ink-2">
+      <IconChevronLeft size={16} />
+      <IconFolder size={16} className="text-gray-400" />
+      <span>Repositories</span>
+      <span className="text-ink-3">/</span>
+      <span className="font-semibold text-ink-1">{NEW_REPO}</span>
+      <Compact>
+        <Tag color="green" className="m-0 ml-1 font-medium">
+          Published
+        </Tag>
+      </Compact>
+    </div>
+  );
+
+  const repoActions = (
+    <Compact>
+      <div className="flex items-center gap-2">
+        {/* No autograding tests on this repository, so Autograde waits. */}
+        <Button icon={<IconRobot size={14} />} disabled>
+          Autograde
+        </Button>
+        <Button icon={<IconDots size={14} />} />
+      </div>
+    </Compact>
+  );
+
   const listActions = (
     <Compact>
       <div className="flex items-center gap-3">
@@ -462,22 +612,26 @@ export function PublishDemo() {
       address={
         s.scene === 'form'
           ? 'app.classmoji.io/admin/cs52-26f/repos/form'
-          : 'app.classmoji.io/admin/cs52-26f/repos'
+          : s.scene === 'repo'
+            ? `app.classmoji.io/admin/cs52-26f/repos/${NEW_REPO}`
+            : 'app.classmoji.io/admin/cs52-26f/repos'
       }
-      label="Demo: an instructor creates the hw3-heaps repository from a template, then publishes it; Classmoji creates a private repository for each of 42 students."
+      label="Demo: an instructor creates the hw3-heaps repository from a template, then publishes it; Classmoji creates a private repository for each of 42 students, listed on the repository's page."
       rest={{ x: 0.5, y: 0.92 }}
     >
       <AppShell
         active="repositories"
         role="staff"
         user={demoUsers.teacher}
-        title={s.scene === 'form' ? '' : 'Repositories'}
-        titleExtra={s.scene === 'form' ? breadcrumb : legend}
-        actions={s.scene === 'list' ? listActions : undefined}
+        title={s.scene === 'list' ? 'Repositories' : ''}
+        titleExtra={s.scene === 'form' ? breadcrumb : s.scene === 'repo' ? repoBreadcrumb : legend}
+        actions={s.scene === 'list' ? listActions : s.scene === 'repo' ? repoActions : undefined}
       >
         <Compact>
           {s.scene === 'form' ? (
             <RepositoryForm s={s} />
+          ) : s.scene === 'repo' ? (
+            <RepositoryPage />
           ) : (
             <div className="h-full overflow-hidden rounded-2xl bg-panel p-3 ring-1 ring-line [&_th]:whitespace-nowrap">
               <Table<Row>

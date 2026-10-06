@@ -15,9 +15,9 @@ import {
   consumeEmailVerificationCode,
 } from '~/utils/emailVerification.server';
 import { normalizeSchoolId, SCHOOL_ID_MAX_LENGTH } from '~/utils/schoolId';
+import { normalizeEmail, INVALID_EMAIL_MESSAGE } from '~/utils/email';
 import type { Route } from './+types/route';
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MIN_PASSWORD_LENGTH = 8;
 
 /**
@@ -67,10 +67,9 @@ export const action = async ({ request }: Route.ActionArgs) => {
     return { schoolIdSaved: true };
   }
 
-  const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
-
-  if (!EMAIL_RE.test(email)) {
-    return { error: 'Please enter a valid email address.' };
+  const email = normalizeEmail(body.email);
+  if (!email) {
+    return { error: INVALID_EMAIL_MESSAGE };
   }
 
   // Refuse an address another account already holds, before spending a code
@@ -85,7 +84,9 @@ export const action = async ({ request }: Route.ActionArgs) => {
   }
 
   if (body.intent === 'send-code') {
-    await sendEmailVerificationCode(email);
+    const sent = await sendEmailVerificationCode(email, userId);
+    // Throttled: say why, and keep the code step open while a code is live.
+    if (!sent.sent) return { error: sent.error, ...(sent.codePending && { codeSent: true }) };
     return { codeSent: true };
   }
 

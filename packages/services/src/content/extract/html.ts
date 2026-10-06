@@ -20,12 +20,14 @@
  * unsafe subtrees are detached from the DOM, and the text is read off what is
  * left.
  *
- * This module imports cheerio and nothing else. No `@classmoji/services`, no
- * `apps/*` — it must be able to sit below services in the package graph.
+ * This module imports cheerio and, for the hidden-slide rule, the import-free
+ * `slides/hiddenSlides.ts`. No `@classmoji/services` barrel, no `apps/*` — it
+ * must be able to sit below services in the package graph.
  */
 
 import * as cheerio from 'cheerio';
 import type { AnyNode, Element } from 'domhandler';
+import { domhandlerSlideTree, removeHiddenSlides } from '../../slides/hiddenSlides.ts';
 
 /**
  * Tags that end a line of prose.
@@ -157,8 +159,23 @@ type Loaded = cheerio.CheerioAPI;
  * hand-rolled regex at `apps/slides/app/routes/$slideId/route.tsx:385` —
  * case-sensitive, double-quote-bound, last-aside-only — is not.
  */
-function loadSanitized(html: string): { $: Loaded; notes: string } {
+function loadSanitized(
+  html: string,
+  opts: { dropHiddenSlides?: boolean } = {}
+): { $: Loaded; notes: string; hiddenRemoved: number } {
   const $ = cheerio.load(html);
+
+  // A hidden slide is retired content: no viewer is shown it (#436), so it
+  // must not be found by search either — its notes included, which is why
+  // this runs before they are read.
+  let hiddenRemoved = 0;
+  if (opts.dropHiddenSlides) {
+    const container = $('div.reveal div.slides').first();
+    hiddenRemoved = removeHiddenSlides<AnyNode>(
+      container.length ? container[0] : $('body')[0],
+      domhandlerSlideTree
+    );
+  }
 
   const notes: string[] = [];
   $('aside.notes').each((_, el) => {
@@ -169,7 +186,7 @@ function loadSanitized(html: string): { $: Loaded; notes: string } {
 
   $('script, style, noscript, template').remove();
 
-  return { $, notes: notes.join('\n') };
+  return { $, notes: notes.join('\n'), hiddenRemoved };
 }
 
 /** Legacy `pages/<slug>/index.html` → plain text. */
@@ -206,7 +223,7 @@ export interface DeckText {
 export function extractDeckHtmlText(html: string | null | undefined): DeckText {
   if (!html) return { text: '', notes: '' };
 
-  const { $, notes } = loadSanitized(html);
+  const { $, notes, hiddenRemoved } = loadSanitized(html, { dropHiddenSlides: true });
 
   const container = $('div.reveal div.slides').first();
   const root = container.length ? container : $('body').first();
@@ -220,6 +237,8 @@ export function extractDeckHtmlText(html: string | null | undefined): DeckText {
   });
 
   if (lines.length) return { text: lines.join('\n'), notes };
+  // Every slide hidden: an empty deck, not a parse failure.
+  if (hiddenRemoved > 0) return { text: '', notes };
 
   // No parseable sections. The body is already notes-free and script-free.
   const fallback = textOf($('body')[0]);

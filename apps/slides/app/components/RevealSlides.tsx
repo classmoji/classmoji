@@ -4,6 +4,13 @@ import {
   neutralizeHtmlBlockFrames,
   sanitizeSvgBlocks,
 } from '@classmoji/services/slides/runtime-attrs';
+import {
+  domSlideTree,
+  hiddenSlideLayout,
+  remapRevealHash,
+  removeHiddenSlides,
+  slideIndicesWhere,
+} from '@classmoji/services/slides/hidden';
 import { stripMediaRefs } from '~/utils/mediaRefs';
 import { cleanupEditorContainer } from '~/utils/editorCleanup';
 import { lockSourceBlockContent } from '~/utils/collab/bridgeDom';
@@ -100,6 +107,38 @@ function getThemeUrl(
   }
   // Fallback: treat as relative path or return as-is
   return theme;
+}
+
+/**
+ * Which numbering the location hash is in: the editor's (hidden slides kept)
+ * or the viewer's (hidden slides gone). Module state because switching modes
+ * remounts this component, and the new mount has to know what the old one
+ * wrote. A page that has not mounted a deck yet reads as the viewer's, which
+ * is the numbering a shared link carries.
+ */
+let hashNumbering: { path: string; editing: boolean } | null = null;
+
+/**
+ * Keep the viewer on the same slide across an edit/view switch (#436): the
+ * editor's `#/h/v` counts hidden slides and the viewer's does not, so the hash
+ * the previous mode left is rewritten into this mode's numbering before Reveal
+ * reads it. `container` is the deck as loaded, hidden slides still in it.
+ */
+function carryHashAcrossModes(container: ParentNode, editing: boolean) {
+  if (typeof window === 'undefined') return;
+  const { pathname, search, hash } = window.location;
+  const wasEditing = hashNumbering?.path === pathname ? hashNumbering.editing : false;
+  hashNumbering = { path: pathname, editing };
+  if (wasEditing === editing) return;
+
+  const next = remapRevealHash(
+    hash,
+    hiddenSlideLayout(container, domSlideTree),
+    editing ? 'full' : 'visible',
+    id => slideIndicesWhere(container, domSlideTree, section => (section as Element).id === id)
+  );
+  if (next === null) return;
+  window.history.replaceState(window.history.state, '', `${pathname}${search}${next}`);
 }
 
 /**
@@ -296,6 +335,15 @@ const RevealSlides = forwardRef(function RevealSlides(
       }
 
       const container = slidesContent || doc.body;
+
+      // Hidden slides are how a deck retires content without deleting it. This
+      // is the viewer every non-editor lands on (the plain /{slideId} view,
+      // students included), so it applies the same rule as the presenter
+      // (hiddenSlides.ts, #436). Editing keeps them in the DOM, marked via
+      // .slide-hidden below, so the teaching team can find and restore them,
+      // and a save (which reads the editor's DOM) keeps them.
+      carryHashAcrossModes(container, isEditing);
+      if (!isEditing) removeHiddenSlides(container, domSlideTree);
 
       // Clean up any contenteditable attributes that may have been saved
       // (these are only added at runtime during edit mode)

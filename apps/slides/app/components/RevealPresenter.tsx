@@ -7,6 +7,7 @@ import {
   neutralizeHtmlBlockFrames,
   sanitizeSvgBlocks,
 } from '@classmoji/services/slides/runtime-attrs';
+import { domSlideTree, removeHiddenSlides } from '@classmoji/services/slides/hidden';
 import { stripMediaRefs } from '~/utils/mediaRefs';
 
 /**
@@ -273,32 +274,19 @@ export default function RevealPresenter({
       sharedThemeLinksRef.current = sharedLinks;
 
       if (slidesContent) {
-        // Filter out hidden slides (data-hidden="true") for presentation
-        // Hidden slides are only visible in edit mode
-        let content = slidesContent.innerHTML;
-
         // Create a temp container to manipulate the DOM
         const tempContainer = document.createElement('div');
-        tempContainer.innerHTML = content;
+        tempContainer.innerHTML = slidesContent.innerHTML;
 
-        // Remove hidden sections
-        tempContainer.querySelectorAll('section[data-hidden="true"]').forEach(el => el.remove());
+        // Hidden slides are only visible in edit mode (hiddenSlides.ts, #436).
+        removeHiddenSlides(tempContainer, domSlideTree);
 
         // An html block's frame loads only in its sandbox; svg blocks are held to
         // their lists (deckBlocks.ts).
         neutralizeHtmlBlockFrames(tempContainer);
         sanitizeSvgBlocks(tempContainer);
 
-        // Clean up empty vertical stacks (parent sections that only contained hidden slides)
-        tempContainer.querySelectorAll(':scope > section').forEach(section => {
-          const nestedSections = section.querySelectorAll(':scope > section');
-          // If this was a vertical stack and all children were removed, remove the parent too
-          if (nestedSections.length === 0 && !section.innerHTML.trim()) {
-            section.remove();
-          }
-        });
-
-        content = tempContainer.innerHTML;
+        const content = tempContainer.innerHTML;
 
         // Check if any slides remain
         if (!content.trim() || !tempContainer.querySelector('section')) {

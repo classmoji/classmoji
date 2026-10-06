@@ -46,6 +46,20 @@ export const isReleased = (releaseAt: Date | string | null | undefined, now: Dat
   releaseAt == null || toTime(releaseAt) <= toTime(now);
 
 /**
+ * Whether a REPO assignment belongs on student repos now, i.e. gets its
+ * submission row (and issue) when a repo is created or synced. A scheduled one
+ * goes out once `release_at` passes. One with no `release_at` has no schedule:
+ * it goes out once published, and a draft without a date stays a draft.
+ */
+export const releasedToRepos = (
+  assignment: { release_at?: Date | string | null; is_published?: boolean | null },
+  now: Date | number
+) =>
+  assignment.release_at == null
+    ? assignment.is_published === true
+    : isReleased(assignment.release_at, now);
+
+/**
  * Whether a close date has passed: from `closes_at` on, no new attempt can
  * start. An empty one means "never closes".
  */

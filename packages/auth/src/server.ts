@@ -1104,9 +1104,18 @@ export const assertClassroomAccess = async ({
   const hasAccess = resourceOwnerId ? accessGrantedVia !== null : hasAllowedRole;
 
   if (!membership || !hasAccess) {
+    // `membership` above was resolved only among the allowed (+ self-access)
+    // roles, so a real member whose role isn't in that set comes back exactly
+    // like no membership at all — misreporting "Not a member of this
+    // classroom" to someone who IS a member, just not in an admitted role
+    // (#403). Re-resolve unfiltered, only for this denial's wording/audit
+    // data; it decides nothing above, so no access decision changes.
+    const actualMembership =
+      membership ?? (await resolveHighestMembership(classroom.id, authData.userId, null));
+
     // Build detailed denial reasons
     const denialReasons = [];
-    if (!membership) {
+    if (!actualMembership) {
       denialReasons.push('not_classroom_member');
     } else {
       if (!hasAllowedRole && rolesArray.length > 0) {
@@ -1124,14 +1133,14 @@ export const assertClassroomAccess = async ({
       await ClassmojiService.audit.create({
         classroom_id: classroom.id,
         user_id: authData.userId,
-        role: membership?.role || 'NONE',
+        role: actualMembership?.role || 'NONE',
         resource_id: resourceOwnerId ? String(resourceOwnerId) : classroom.id,
         resource_type: resourceType,
         action: 'ACCESS_DENIED',
         data: {
           attempted_action: attemptedAction,
           required_roles: rolesArray,
-          has_membership: Boolean(membership),
+          has_membership: Boolean(actualMembership),
           denial_reasons: denialReasons,
           is_resource_owner: isResourceOwner,
           self_access_attempted: Boolean(resourceOwnerId),
@@ -1144,7 +1153,7 @@ export const assertClassroomAccess = async ({
 
     // Provide specific error messages
     let errorMessage = 'Forbidden';
-    if (!membership) {
+    if (!actualMembership) {
       errorMessage = 'Not a member of this classroom';
     } else if (resourceOwnerId && !isResourceOwner && !hasAllowedRole) {
       errorMessage = 'You can only access your own resources';

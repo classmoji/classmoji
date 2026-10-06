@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { io } from 'socket.io-client';
 import { marked } from 'marked';
+import { domSlideTree, removeHiddenSlides } from '@classmoji/services/slides/hidden';
 import {
   IconChevronDown,
   IconChevronLeft,
@@ -52,8 +53,12 @@ function formatTime(ms: number) {
 }
 
 /**
- * Parse slides HTML to extract slide data (content, notes)
- * Filters out hidden slides (data-hidden="true") from the list
+ * Parse slides HTML to extract slide data (content, notes).
+ *
+ * Hidden slides are removed FIRST, by the rule the presenter applies
+ * (hiddenSlides.ts), so `h`/`v` are the presenter's Reveal indices — the ones
+ * it broadcasts. Indexing the unfiltered deck put every slide after a hidden
+ * one out of step with the presenter.
  */
 function parseSlides(htmlContent: string): ParsedSlide[] {
   if (!htmlContent) return [];
@@ -62,23 +67,17 @@ function parseSlides(htmlContent: string): ParsedSlide[] {
   const doc = parser.parseFromString(`<div class="slides">${htmlContent}</div>`, 'text/html');
   const slidesContainer = doc.querySelector('.slides');
   if (!slidesContainer) return [];
+  removeHiddenSlides(slidesContainer, domSlideTree);
 
   const slides: ParsedSlide[] = [];
   const sections = slidesContainer.querySelectorAll(':scope > section');
 
   sections.forEach((section, h) => {
-    // Skip hidden top-level sections
-    if ((section as HTMLElement).dataset?.hidden === 'true') return;
-
-    // Check for vertical slides
     const verticalSections = section.querySelectorAll(':scope > section');
 
     if (verticalSections.length > 0) {
       // Horizontal slide with vertical children
       verticalSections.forEach((vSection, v) => {
-        // Skip hidden vertical sections
-        if ((vSection as HTMLElement).dataset?.hidden === 'true') return;
-
         const notes = vSection.querySelector('aside.notes');
         slides.push({
           h,

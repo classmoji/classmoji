@@ -7,6 +7,7 @@ import { useRouteDrawer, useDarkMode } from '~/hooks';
 import { ClassmojiService } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
 import { RequireRole, StatsCard, Emoji } from '~/components';
+import UserAvatar from '~/components/shared/UserAvatar';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import { resolveHighestMembership } from '@classmoji/auth/server';
 import { addAuditLog } from '~/utils/helpers';
@@ -271,10 +272,12 @@ const AdminStaffDrawer = ({ loaderData }: Route.ComponentProps) => {
         <Card className="mb-4">
           <div className="flex items-start justify-between">
             <div className="flex items-center gap-4">
-              <img
-                src={staffMember.avatar_url ?? undefined}
-                alt={staffMember.name!}
-                className="w-16 h-16 rounded-full ring-2 ring-gray-200 dark:ring-neutral-700"
+              <UserAvatar
+                image={staffMember.avatar_url}
+                name={staffMember.name}
+                login={staffMember.login}
+                size={64}
+                ringClassName="ring-2 ring-gray-200 dark:ring-neutral-700"
               />
               <div>
                 <h3 className="text-lg font-semibold">{staffMember.name}</h3>

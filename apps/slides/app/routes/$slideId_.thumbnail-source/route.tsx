@@ -36,11 +36,12 @@
  * request presenting one is refused exactly like a request presenting nothing.
  *
  * ── What it is allowed to see ──────────────────────────────────────────────
- * The FIRST slide, with NO speaker notes. Notes are dropped structurally —
- * `includeNotes: false` means the generator never emits an `<aside
- * class="notes">` at all, rather than the view path's after-the-fact regex
- * strip — because this image is later served to everyone who can see the deck's
- * card, and a private note baked into it could not be taken back.
+ * The first VISIBLE slide (hidden ones skipped), with NO speaker notes. Notes
+ * are dropped structurally — `includeNotes: false` means the generator never
+ * emits an `<aside class="notes">` at all, rather than the view path's
+ * after-the-fact regex strip — because this image is later served to everyone
+ * who can see the deck's card, and a private note baked into it could not be
+ * taken back.
  *
  * Asset URLs are signed at the deck's own visibility tier (`month` public,
  * `week` otherwise), never `edit`: the delivery pass here is a READ like any
@@ -63,6 +64,7 @@ import {
   generateDeckHtml,
   isDeckSlide,
   loadDeck,
+  withoutHiddenSlides,
   type DeckJson,
   type DeckSlide,
 } from '@classmoji/services/slides';
@@ -179,7 +181,11 @@ export function refusalDetail(
 }
 
 /**
- * The deck reduced to its first slide.
+ * The deck reduced to its first VISIBLE slide.
+ *
+ * Hidden slides go first (`withoutHiddenSlides`, the rule every viewer
+ * applies): the card is seen by everyone who can see the deck, so it must be
+ * what they get when they open it, not a retired slide (#436).
  *
  * A top-level section may be a vertical STACK, in which case Reveal's first
  * slide is that stack's first child — so the stack is kept and everything after
@@ -187,7 +193,7 @@ export function refusalDetail(
  * not stripped here; the generator is told not to emit them.
  */
 export function firstSlideOnly(deck: DeckJson): DeckJson {
-  const first: DeckSlide | undefined = deck.slides[0];
+  const first: DeckSlide | undefined = withoutHiddenSlides(deck).slides[0];
   if (!first) return { ...deck, slides: [] };
   const trimmed: DeckSlide =
     first.children && first.children.length > 0

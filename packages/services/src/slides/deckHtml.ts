@@ -27,6 +27,7 @@ import { randomBytes } from 'node:crypto';
 // issue #361). The list lives in deckRuntimeAttrs.ts, the browser-safe module
 // the slides client imports so the two strippers can never drift.
 import { splitStyleDeclarations, stripRuntimeSectionAttrs } from './deckRuntimeAttrs.ts';
+import { domhandlerSlideTree, mayHaveHiddenSlides, removeHiddenSlides } from './hiddenSlides.ts';
 import {
   BLOCK_ID_ATTR,
   HTML_BLOCK_FRAME_SELECTOR,
@@ -907,6 +908,61 @@ export function secureSlideBlocksInHtml(html: string): string {
   const $ = cheerio.load(html, null, false);
   const changed = sanitizeSvgBlocksIn($) + neutralizeHtmlBlocksIn($);
   return changed === 0 ? html : serializeBrowserForm($);
+}
+
+/**
+ * A deck document (or `.slides` fragment) without its hidden slides — what
+ * every non-editor is sent (issue #436, rule in hiddenSlides.ts). Html with no
+ * hidden slide comes back byte for byte.
+ */
+export function stripHiddenSlidesFromHtml(html: string): string {
+  return deckHtmlForViewer(html, { canEdit: false, canViewSpeakerNotes: true });
+}
+
+/** Cheap pre-check: can this html carry a speaker-notes aside at all? */
+export function mayHaveSpeakerNotes(html: string): boolean {
+  return /<aside\b/i.test(html);
+}
+
+/** What `assertSlideAccess` says this caller may see of a deck. */
+export interface DeckViewerRights {
+  /** Editors get hidden slides (#436). */
+  canEdit: boolean;
+  /** Staff always; everyone who can view when the deck sets `show_speaker_notes`. */
+  canViewSpeakerNotes: boolean;
+}
+
+/**
+ * A deck document (or `.slides` fragment) as this caller may read it: speaker
+ * notes (`<aside class="notes">`) gone unless `canViewSpeakerNotes`, hidden
+ * slides gone unless `canEdit`. The one rule the `/{slideId}` and follow
+ * loaders and the `/content` proxy all apply, so none of them can hand out
+ * what the others withhold. Html with nothing to remove comes back byte for
+ * byte.
+ *
+ * Hidden slides go first, judged on the document as stored: a stack whose own
+ * content is only its notes stays a slide for every caller, so the slide
+ * positions a presenter broadcasts (it sees the notes) match every follower's.
+ */
+export function deckHtmlForViewer(html: string, rights: DeckViewerRights): string {
+  const notes = !rights.canViewSpeakerNotes && mayHaveSpeakerNotes(html);
+  const hidden = !rights.canEdit && mayHaveHiddenSlides(html);
+  if (!notes && !hidden) return html;
+  // Fragment mode would drop <html>/<head>/<body> from a whole document.
+  const isDocument = /<(?:!doctype|html|body)[\s>]/i.test(html);
+  const $ = isDocument ? cheerio.load(html) : cheerio.load(html, null, false);
+  let removed = 0;
+  if (hidden) {
+    const container = $('.slides').first();
+    const root = container.length ? container[0] : $.root()[0];
+    removed += removeHiddenSlides<AnyNode>(root, domhandlerSlideTree);
+  }
+  if (notes) {
+    const asides = $('aside').filter((_i, el) => hasNotesClass(el as Element));
+    removed += asides.length;
+    asides.remove();
+  }
+  return removed === 0 ? html : serializeBrowserForm($);
 }
 
 /** cheerio's local name and namespace for an element (svg names keep their case). */

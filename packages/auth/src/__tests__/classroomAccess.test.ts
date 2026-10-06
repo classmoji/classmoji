@@ -71,6 +71,17 @@ const CLASSROOM = { id: 'class-1', slug: CLASS_SLUG, status: 'ACTIVE', settings:
 
 const request = () => new Request(`http://localhost/admin/${CLASS_SLUG}/students`);
 
+/** The 403 `Response` a denied gate throws, typed — or a rethrow if it resolved instead. */
+const rejection = async (promise: Promise<unknown>): Promise<Response> => {
+  try {
+    await promise;
+  } catch (error) {
+    if (error instanceof Response) return error;
+    throw error;
+  }
+  throw new Error('expected the gate to reject');
+};
+
 /**
  * Sign the caller in holding `roles`. The gate probes one role per lookup, so
  * the mock answers per requested role — the arbitrary ordering an unfiltered
@@ -187,6 +198,49 @@ describe('assertClassroomAccess — the allowed-role filter still applies', () =
     signedInHolding(['STUDENT']);
 
     await expect(accessAs(['OWNER'])).rejects.toMatchObject({ status: 403 });
+  });
+});
+
+// ─── #403: a real member denied for role must not be told they aren't one ──
+
+describe('assertClassroomAccess — denial wording and audit data for a real member', () => {
+  it('tells an OWNER refused by a student-only route their role, not that they are not a member', async () => {
+    signedInHolding(['OWNER']);
+
+    const error = await rejection(accessAs(['STUDENT']));
+
+    expect(error.status).toBe(403);
+    await expect(error.text()).resolves.toBe('Required role: STUDENT');
+  });
+
+  it('records that denied OWNER as a member, with their real role, in the audit log', async () => {
+    signedInHolding(['OWNER']);
+
+    await accessAs(['STUDENT']).catch(() => {});
+
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    const [entry] = mocks.auditCreate.mock.calls[0];
+    expect(entry.role).toBe('OWNER');
+    expect(entry.data).toMatchObject({
+      has_membership: true,
+      denial_reasons: ['insufficient_role'],
+    });
+  });
+
+  it('still reports no membership, and NONE/false in the audit log, for a true non-member', async () => {
+    signedInHolding([]);
+
+    const error = await rejection(accessAs(['STUDENT']));
+
+    expect(error.status).toBe(403);
+    await expect(error.text()).resolves.toBe('Not a member of this classroom');
+
+    const [entry] = mocks.auditCreate.mock.calls[0];
+    expect(entry.role).toBe('NONE');
+    expect(entry.data).toMatchObject({
+      has_membership: false,
+      denial_reasons: ['not_classroom_member'],
+    });
   });
 });
 

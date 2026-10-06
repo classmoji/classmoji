@@ -31,6 +31,7 @@ import {
   saveDeckWithMerge,
   slideFileService,
   slideService,
+  deckHtmlForViewer,
   type DeckJson,
   type DeckShaSource,
   type DeckThemeUrls,
@@ -543,12 +544,13 @@ export const loader = async ({
       slideContent = await resolveDeckMedia(slideContent, deliveryCtx);
     }
 
-    // Strip speaker notes from content if user doesn't have permission to view them
-    // Notes are in <aside class="notes"> elements within each slide section
-    if (!canViewSpeakerNotes && slideContent) {
-      // Remove all <aside class="notes">...</aside> blocks
-      // Using regex since we're dealing with simple HTML structure
-      slideContent = slideContent.replace(/<aside\s+class="notes"[^>]*>[\s\S]*?<\/aside>/gi, '');
+    // Speaker notes (`<aside class="notes">`) only for callers allowed them,
+    // hidden slides only for the deck's editors (#436). The client hides
+    // hidden slides in view mode as well, but a payload a student can read
+    // must not carry them; the editor's copy keeps them so a save cannot drop
+    // them. The `/content` proxy applies the same rule to the stored document.
+    if (slideContent) {
+      slideContent = deckHtmlForViewer(slideContent, { canEdit, canViewSpeakerNotes });
     }
   } else {
     contentError = 'Failed to load slide content';

@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { useLoaderData } from 'react-router';
 import getPrisma from '@classmoji/database';
 import { assertSlideAccess } from '@classmoji/auth/server';
-import { isDeckSlide } from '@classmoji/services/slides';
+import { deckHtmlForViewer, isDeckSlide } from '@classmoji/services/slides';
 import { SandpackRenderer } from '@classmoji/ui-components/sandpack';
 import RevealPresenter from '~/components/RevealPresenter';
 import {
@@ -111,10 +111,12 @@ export const loader = async ({
     );
     slideContent = html;
 
-    // Strip speaker notes from content if user doesn't have permission to view them
-    // Followers are typically students/public who shouldn't see notes unless show_speaker_notes is enabled
-    if (!canViewSpeakerNotes && slideContent) {
-      slideContent = slideContent.replace(/<aside\s+class="notes"[^>]*>[\s\S]*?<\/aside>/gi, '');
+    // Followers are typically students/public: speaker notes only when
+    // show_speaker_notes allows them, hidden slides only for the deck's editors
+    // (#436). The presenter skips hidden slides too, so the indices it
+    // broadcasts still line up.
+    if (slideContent) {
+      slideContent = deckHtmlForViewer(slideContent, { canEdit, canViewSpeakerNotes });
     }
   } else {
     contentError = 'Failed to load slide content';

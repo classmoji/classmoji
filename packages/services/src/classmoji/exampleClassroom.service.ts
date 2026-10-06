@@ -209,13 +209,30 @@ function buildExampleSandbox(args: {
       let taUser: { id: string } | null = null;
       const studentUsers: { id: string; login: string }[] = [];
       for (const p of DEMO_PEOPLE) {
-        const image = `https://github.com/identicons/${p.login}.png`;
+        // Personas are made up: no GitHub account, so no picture to show.
+        // They carry no image at all and the UI draws their initials. A URL
+        // here would be a guess at someone else's service (GitHub's
+        // github.com/identicons/<login>.png 404s for logins that don't exist,
+        // which is how they came to show a broken-image icon, issue #374).
+        // Re-seeding also clears a stale image on an existing persona row.
+        const image = null;
         const account = await tx.account.findUnique({
           where: { provider_id_account_id: { provider_id: 'github', account_id: p.provider_id } },
           select: { user_id: true },
         });
         const user = account
-          ? await tx.user.update({ where: { id: account.user_id }, data: { image } })
+          ? await tx.user.update({
+              where: { id: account.user_id },
+              data: {
+                image,
+                accounts: {
+                  updateMany: {
+                    where: { provider_id: 'github', account_id: p.provider_id },
+                    data: { image },
+                  },
+                },
+              },
+            })
           : await tx.user.create({
               data: {
                 name: p.name,

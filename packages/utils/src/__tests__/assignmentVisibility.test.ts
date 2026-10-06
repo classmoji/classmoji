@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   isClosed,
   openToStudents,
+  releasedToRepos,
   type AssignmentVisibilityInput,
 } from '../assignmentVisibility.ts';
 
@@ -33,9 +34,9 @@ describe('openToStudents — QUIZ', () => {
         it(`${expected ? 'shows' : 'hides'} a quiz, assignment ${
           assignmentPublished ? 'published' : 'unpublished'
         }, ${label}, quizzes ${quizzesVisible ? 'on' : 'off'}`, () => {
-          expect(openToStudents(quiz(assignmentPublished, releaseAt), NOW, { quizzesVisible })).toBe(
-            expected
-          );
+          expect(
+            openToStudents(quiz(assignmentPublished, releaseAt), NOW, { quizzesVisible })
+          ).toBe(expected);
         });
       }
     }
@@ -124,5 +125,24 @@ describe('openToStudents — REPO', () => {
     expect(
       openToStudents({ ...repo(true), is_published: false }, NOW, { quizzesVisible: true })
     ).toBe(false);
+  });
+});
+
+describe('releasedToRepos', () => {
+  it('releases a published assignment with no release date (issue: no submission rows)', () => {
+    expect(releasedToRepos({ release_at: null, is_published: true }, NOW)).toBe(true);
+  });
+
+  it('keeps an undated draft off student repos', () => {
+    expect(releasedToRepos({ release_at: null, is_published: false }, NOW)).toBe(false);
+  });
+
+  it('releases a scheduled assignment once its date has passed', () => {
+    expect(releasedToRepos({ release_at: PAST, is_published: false }, NOW)).toBe(true);
+    expect(releasedToRepos({ release_at: NOW.toISOString() }, NOW)).toBe(true);
+  });
+
+  it('holds a scheduled assignment until its date', () => {
+    expect(releasedToRepos({ release_at: FUTURE, is_published: true }, NOW)).toBe(false);
   });
 });
