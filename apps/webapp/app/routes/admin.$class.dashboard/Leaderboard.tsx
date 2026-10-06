@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { IconChevronLeft, IconChevronRight } from '@tabler/icons-react';
+import { isPlaceholderAvatar } from '@classmoji/utils';
 import { initialsFor, avatarTintFor } from './leaderboardHelpers';
 
 interface LeaderboardStudent {
@@ -15,6 +16,32 @@ interface LeaderboardProps {
 }
 
 const PAGE_SIZE = 5;
+
+/**
+ * The student's picture, or their initials on a tinted square when there is no
+ * picture, only the generic default one, or the picture fails to load.
+ */
+const StudentAvatar = ({ student, index }: { student: LeaderboardStudent; index: number }) => {
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const src = isPlaceholderAvatar(student.avatar_url) ? null : student.avatar_url;
+  if (src && failedSrc !== src) {
+    return (
+      <img
+        src={src}
+        alt=""
+        onError={() => setFailedSrc(src)}
+        className="w-8 h-8 rounded-lg shrink-0 object-cover"
+      />
+    );
+  }
+  return (
+    <span
+      className={`inline-flex items-center justify-center w-8 h-8 rounded-lg shrink-0 text-xs font-semibold ${avatarTintFor(index)}`}
+    >
+      {initialsFor(student)}
+    </span>
+  );
+};
 
 const Leaderboard = ({ students }: LeaderboardProps) => {
   const ranked = [...students].filter(s => s.grade >= 0).sort((a, b) => b.grade - a.grade);
@@ -51,35 +78,17 @@ const Leaderboard = ({ students }: LeaderboardProps) => {
                   <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-nav-hover text-xs font-semibold text-ink-3 shrink-0">
                     {rank}
                   </span>
-                  {s.avatar_url ? (
-                    <img
-                      src={s.avatar_url}
-                      alt=""
-                      className="w-8 h-8 rounded-lg shrink-0 object-cover"
-                    />
-                  ) : (
-                    <span
-                      className={`inline-flex items-center justify-center w-8 h-8 rounded-lg shrink-0 text-xs font-semibold ${avatarTintFor(rank - 1)}`}
-                    >
-                      {initialsFor(s)}
-                    </span>
-                  )}
+                  <StudentAvatar student={s} index={rank - 1} />
                   <div className="min-w-0 flex-1">
                     <div className="text-sm font-medium text-ink-0 truncate">
                       {s.name || s.login}
                     </div>
-                    {s.login && (
-                      <div className="text-xs text-ink-3 truncate">
-                        @{s.login}
-                      </div>
-                    )}
+                    {s.login && <div className="text-xs text-ink-3 truncate">@{s.login}</div>}
                   </div>
                   <div className="shrink-0 text-right min-w-[70px]">
                     <div className="text-sm font-semibold text-ink-1 tabular-nums">
                       {s.grade.toFixed(0)}{' '}
-                      <span className="text-xs font-medium text-ink-4">
-                        pts
-                      </span>
+                      <span className="text-xs font-medium text-ink-4">pts</span>
                     </div>
                     <div className="mt-1 h-1 rounded-full bg-nav-hover overflow-hidden">
                       <div

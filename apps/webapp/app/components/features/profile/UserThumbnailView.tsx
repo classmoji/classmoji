@@ -1,3 +1,5 @@
+import UserAvatar from '~/components/shared/UserAvatar';
+
 interface UserThumbnailViewProps {
   user?: {
     avatar_url?: string | null;
@@ -11,22 +13,12 @@ interface UserThumbnailViewProps {
 const UserThumbnailView = ({ user, truncate = false }: UserThumbnailViewProps) => {
   return (
     <div className={`flex gap-3 ${truncate ? 'min-w-0 flex-1' : 'w-full'}`}>
-      {user?.avatar_url ? (
-        <img
-          className="w-[40px] h-[40px] rounded-full flex-shrink-0"
-          src={user.avatar_url}
-          alt={user.name ?? user.login ?? 'User avatar'}
-        />
-      ) : (
-        // No picture (an invitation, or an account without one): their
-        // initial, the same round mark team cards use.
-        <div
-          aria-hidden
-          className="w-[40px] h-[40px] rounded-full flex-shrink-0 flex items-center justify-center bg-stone-100 text-stone-600 ring-1 ring-stone-200 dark:bg-neutral-800 dark:text-neutral-300 dark:ring-neutral-700 text-sm font-semibold"
-        >
-          {(user?.name || user?.login || user?.slug || '?').trim().charAt(0).toUpperCase()}
-        </div>
-      )}
+      <UserAvatar
+        image={user?.avatar_url}
+        name={user?.name}
+        login={user?.login || user?.slug}
+        size={40}
+      />
 
       <div className={`flex flex-col gap-[2px] ${truncate ? 'min-w-0 flex-1' : ''}`}>
         <div

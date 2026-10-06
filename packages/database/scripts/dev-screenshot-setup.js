@@ -26,7 +26,7 @@ async function main() {
     githubId: '10000000',
     name: 'Dev Owner',
     email: 'owner@dev.local',
-    image: 'https://github.com/identicons/dev-owner.png',
+    image: null,
     keepImage: true,
   });
   await prisma.classroomMembership.upsert({

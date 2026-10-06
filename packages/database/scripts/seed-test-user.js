@@ -86,7 +86,7 @@ async function main() {
       githubId: r.githubId,
       name: r.name,
       email: r.email,
-      image: `https://github.com/identicons/${r.login}.png`,
+      image: null,
       accessToken: r.token,
       keepImage: true,
     });

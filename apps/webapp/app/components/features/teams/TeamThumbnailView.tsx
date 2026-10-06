@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import _ from 'lodash';
+import { isPlaceholderAvatar } from '@classmoji/utils';
 
 interface TeamThumbnailViewProps {
   team: {
@@ -13,6 +15,9 @@ const SHOWN_MEMBERS = 2;
 
 const TeamThumbnailView = ({ team }: TeamThumbnailViewProps) => {
   const { avatar_url, name, memberships } = team;
+  // The team's initial stands in for a missing, generic or unloadable picture.
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const src = isPlaceholderAvatar(avatar_url) ? null : avatar_url;
   const members = memberships?.map(m => m.user.name || m.user.login).filter(Boolean) ?? [];
   // Two names and a count, the full list on hover: a team of eight would
   // otherwise stretch the table column it sits in.
@@ -20,8 +25,13 @@ const TeamThumbnailView = ({ team }: TeamThumbnailViewProps) => {
   const more = members.length - SHOWN_MEMBERS;
   return (
     <div className="flex gap-3 min-w-0 max-w-[18rem]">
-      {avatar_url ? (
-        <img className="w-[37px] h-[37px] rounded-full shrink-0" src={avatar_url} alt="" />
+      {src && failedSrc !== src ? (
+        <img
+          className="w-[37px] h-[37px] rounded-full shrink-0"
+          src={src}
+          alt=""
+          onError={() => setFailedSrc(src)}
+        />
       ) : (
         <div
           aria-hidden

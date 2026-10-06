@@ -100,7 +100,8 @@ async function main() {
       githubId: '10000004',
       role: 'STUDENT',
     },
-  ].map(u => ({ ...u, image: `https://github.com/identicons/${u.login}.png` }));
+    // No image: fake logins have no Github picture; the UI draws initials.
+  ].map(u => ({ ...u, image: null }));
 
   let taUser = null;
   const studentUsers = [];
