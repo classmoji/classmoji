@@ -24,6 +24,7 @@ import * as Y from 'yjs';
 import { blockToNode } from '@blocknote/core';
 import { updateYFragment } from 'y-prosemirror';
 import { COVER_IMAGE_KEY, FRAGMENT, META_MAP, type PageCoverImage } from '@classmoji/page-schema';
+import { ClassmojiService } from '@classmoji/services';
 import {
   blocksToYDoc,
   getServerEditor,
@@ -403,6 +404,30 @@ export function assertReadable(doc: Y.Doc, current: PageBlock[]): void {
       error: 'unreadable-live-doc',
       message: 'The live page holds blocks the server cannot read; nothing was changed',
       ids: missing.slice(0, 20),
+    });
+  }
+}
+
+/**
+ * Refuse a write that would give the live page a column layout it does not
+ * already have (`newColumnListIds`): two people deleting different columns of
+ * one layout at once lose content the server cannot get back, so live pages
+ * keep their layouts and gain none. Editing inside a layout, re-filling it by
+ * id and deleting it are all fine. 422 `columns-not-allowed-live`, nothing
+ * written. Not for content from git (a seed, an outside push): that layout
+ * already exists.
+ */
+export function assertNoNewColumnLists(
+  current: PageBlock[],
+  next: PageBlock[],
+  message = ClassmojiService.pageContent.LIVE_COLUMNS_REFUSED_MESSAGE
+): void {
+  const ids = ClassmojiService.pageContent.newColumnListIds(current, next);
+  if (ids.length > 0) {
+    throw new CollabHttpError(422, {
+      error: 'columns-not-allowed-live',
+      message,
+      ids: ids.slice(0, 20),
     });
   }
 }

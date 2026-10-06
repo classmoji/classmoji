@@ -755,7 +755,8 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
     'live for drafts, preview for published pages. Use preview for big edits: many blocks, ' +
     'restructuring, rewrites. When a preview already exists, preview applies STACK onto it ' +
     "and expected_sha must come from a read at: 'preview' (main's sha will conflict). " +
-    'render: true also returns images of the page around the changed blocks (see page_render).',
+    "With live editing on, a page can't gain a new column layout; existing ones stay " +
+    'editable. render: true also returns images of the page around the changed blocks (see page_render).',
   scope: 'write',
   roles: OWNER_TEACHER,
   inputSchema: {
@@ -910,6 +911,20 @@ async function applyPageEdits(args: PageContentApplyArgs, ctx: ToolContext): Pro
   // Client-supplied blocks (insert/replace_all payloads) may lack ids —
   // fill them deterministically so this apply PERSISTS stable ids.
   newBlocks = ClassmojiService.pageContent.ensureBlockIds(newBlocks as BlockNode[]);
+
+  // A preview of a live page is accepted into the live page, which refuses a
+  // column layout it does not already have: say so now, not at the accept.
+  const newLayouts = liveState
+    ? ClassmojiService.pageContent.newColumnListIds(priorBlocks, newBlocks)
+    : [];
+  if (newLayouts.length > 0) {
+    throw new ToolError(
+      'invalid_params',
+      `${ClassmojiService.pageContent.LIVE_COLUMNS_REFUSED_MESSAGE} Nothing was changed.`,
+      'COLUMNS_NOT_ALLOWED_LIVE',
+      { ids: newLayouts }
+    );
+  }
 
   let createdPreviewBranch = false;
   if (committedTo === 'preview') {

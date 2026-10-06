@@ -69,6 +69,16 @@ export function mergePreviewFailure(error: unknown): MergePreviewFailure {
       ),
     };
   }
+  // Live pages take no new column layouts (see the collab page adapter).
+  if (body?.error === 'columns-not-allowed-live') {
+    return {
+      kind: 'failed',
+      status: 422,
+      message:
+        'This would add a column layout, which a page with live editing can’t take. Choose ' +
+        'the live version for the column blocks, or discard the preview.',
+    };
+  }
   if (error.status === 0) {
     return {
       kind: 'failed',

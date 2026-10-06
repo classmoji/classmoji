@@ -8,14 +8,18 @@
  *   column's content, with no broken list left in the document.
  * - Undo: undo takes back only your own edits, never someone else's.
  *
- * The three-column list is placed by an in-process agent (the MCP's collab
- * client, as agent-activity.spec.ts does) and removed afterwards. Opt-in:
+ * A live page takes no NEW column layout, from an agent or from the editor,
+ * so the three-column list comes the one way a live page still gains one: a
+ * commit to the page's content.json in git, merged in as an outside push (a
+ * room that is not open seeds from it instead). It is removed afterwards by
+ * an in-process agent (the MCP's collab client, as agent-activity.spec.ts
+ * does) — deleting an existing layout is allowed. Opt-in:
  *
  *   COLLAB_E2E=1 npx dotenv -e .env -- ./scripts/devport.sh run \
  *     npx playwright test -c tests/collab page-columns-undo
  */
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
-import type { CollabActor } from '@classmoji/collab';
+import { COLLAB_INTERNAL_PREFIX, COLLAB_SECRET_HEADER, type CollabActor } from '@classmoji/collab';
 
 import {
   CLASSROOM_ID,
@@ -23,7 +27,7 @@ import {
   COLLAB_USERS,
   KITCHEN_SINK_PAGE_TITLE,
 } from '../../scripts/collab-dev/constants.ts';
-import { caretToBlockEnd, db, PAGES_URL, signIn } from './helpers.ts';
+import { caretToBlockEnd, db, PAGES_URL, services, signIn } from './helpers.ts';
 
 const [TEACHER_1, TEACHER_2] = COLLAB_USERS;
 const RUN = Date.now().toString(36);
@@ -211,7 +215,45 @@ test.describe('two editors, one page', () => {
     return { contexts: [one, two], p1, p2, s1, s2 };
   }
 
-  /** A three-column list at the end of the page, placed by the agent. */
+  /**
+   * Commit `blocks` to the end of the page's content.json in git and tell the
+   * live service, as hook-station does for a push from outside.
+   */
+  async function pushToGit(blocks: Block[]) {
+    const prisma = await db();
+    const { ClassmojiService, getGitProvider } = await services();
+    const page = await prisma.page.findUniqueOrThrow({
+      where: { id: pageId },
+      include: { classroom: { include: { git_organization: true } } },
+    });
+    const { git_organization: org, content_repo: repo } = page.classroom;
+    expect(org && repo, 'the page has a content repo').toBeTruthy();
+    const provider = getGitProvider(org!);
+    const before = await provider.getLatestCommitSHA(
+      org!.login,
+      repo!,
+      await provider.getDefaultBranch(org!.login, repo!)
+    );
+    const pageContent = ClassmojiService.pageContent;
+    const current = await pageContent.loadPageContent(page as never, { skipCache: true });
+    expect(current.format).toBe('json');
+    const saved = await pageContent.savePageContent(
+      page as never,
+      [...((current.blocks as Block[]) ?? []), ...blocks],
+      { expectedSha: current.sha!, message: `e2e: column layout ${RUN}` }
+    );
+    const response = await fetch(
+      `${env.httpUrl}${COLLAB_INTERNAL_PREFIX}/page/${pageId}/external`,
+      {
+        method: 'POST',
+        headers: { [COLLAB_SECRET_HEADER]: env.secret, 'content-type': 'application/json' },
+        body: JSON.stringify({ sha: saved.commit, before }),
+      }
+    );
+    expect(response.status, await response.clone().text()).toBe(200);
+  }
+
+  /** A three-column list at the end of the page, pushed to git from outside. */
   async function placeColumns(tag: string) {
     const ids = {
       list: `cols-${tag}-${RUN}`,
@@ -224,31 +266,18 @@ test.describe('two editors, one page', () => {
       b: `Column B ${tag} ${RUN}`,
       c: `Column C ${tag} ${RUN}`,
     };
-    await client.postOps(
-      env,
-      'page',
-      pageId,
-      [
-        {
-          op: 'insert',
-          blocks: [
-            {
-              id: ids.list,
-              type: 'columnList',
-              props: {},
-              children: [
-                column(`col-a-${tag}-${RUN}`, para(ids.pa, text.a)),
-                column(`col-b-${tag}-${RUN}`, para(ids.pb, text.b)),
-                column(`col-c-${tag}-${RUN}`, para(ids.pc, text.c)),
-              ],
-            },
-          ],
-          position: { at: 'end' },
-        },
-      ],
-      agent,
-      null
-    );
+    await pushToGit([
+      {
+        id: ids.list,
+        type: 'columnList',
+        props: {},
+        children: [
+          column(`col-a-${tag}-${RUN}`, para(ids.pa, text.a)),
+          column(`col-b-${tag}-${RUN}`, para(ids.pb, text.b)),
+          column(`col-c-${tag}-${RUN}`, para(ids.pc, text.c)),
+        ],
+      } as Block,
+    ]);
     placed.push(ids.list, ids.pa, ids.pb, ids.pc);
     return { ids, text };
   }
@@ -322,6 +351,40 @@ test.describe('two editors, one page', () => {
     await p1.keyboard.type(marker, { delay: 20 });
     await expect.poll(() => blocksWithText(p2, `${text.b}${marker}`)).toBe(1);
   }
+
+  test('an agent cannot add a column layout to the live page', async () => {
+    const id = `cols-agent-${RUN}`;
+    const error = await client
+      .postOps(
+        env,
+        'page',
+        pageId,
+        [
+          {
+            op: 'insert',
+            blocks: [
+              {
+                id,
+                type: 'columnList',
+                props: {},
+                children: [
+                  column(`col-x-${RUN}`, para(`colp-x-${RUN}`, 'X')),
+                  column(`col-y-${RUN}`, para(`colp-y-${RUN}`, 'Y')),
+                ],
+              },
+            ],
+            position: { at: 'end' },
+          },
+        ],
+        agent,
+        null
+      )
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(client.CollabRequestError);
+    expect(error).toMatchObject({ status: 422, code: 'columns-not-allowed-live' });
+    const snapshot = await client.fetchSnapshot(env, 'page', pageId);
+    expect(JSON.stringify(snapshot.content.blocks)).not.toContain(id);
+  });
 
   test('deleting two columns one after the other keeps the last column', async ({ browser }) => {
     test.setTimeout(180_000);

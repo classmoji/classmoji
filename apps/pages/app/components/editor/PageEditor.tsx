@@ -44,6 +44,7 @@ import {
 } from './blocks/index.tsx';
 import { editingSchema } from './blocks/editingSchema.ts';
 import { AGENT_CURSOR_LABEL_CSS, renderLiveCursor } from './collab/liveCursor.ts';
+import { LiveNoNewColumns, MULTI_COLUMN_DROP_HANDLER } from './collab/noNewColumns.ts';
 import { reviveUndoManager, yUndoManagerOf } from './collab/yUndo.ts';
 import { ReplaceUrlItem, RemoveProfileImageItem } from './ReplaceUrlItem.tsx';
 import { AssetSrcSetContext, NO_SRC_SETS, type AssetSrcSets } from '~/hooks/useAssetSrcSets.ts';
@@ -301,25 +302,28 @@ const PageEditor = forwardRef(function PageEditor(
     // The one place a stored reference becomes a signed URL. BlockNote calls
     // it per file block at render; the document it saves back is untouched.
     ...(resolveFileUrl ? { resolveFileUrl } : {}),
-    dropCursor: multiColumnDropCursor,
     dictionary: { ...defaultLocale, multi_column: multiColumnLocales.en },
-    // Shiki highlighting for code blocks (github-light/github-dark). Up to
-    // BlockNote 0.46 it came with the code block's options; 0.55 makes it an
-    // editor extension.
-    extensions: [syntaxHighlighter],
   };
+  // Shiki highlighting for code blocks (github-light/github-dark). Up to
+  // BlockNote 0.46 it came with the code block's options; 0.55 makes it an
+  // editor extension.
+  const extensions = [syntaxHighlighter];
 
-  // Create the BlockNote editor with multi-column drop cursor + dictionary.
+  // Create the BlockNote editor.
   //
   // Live: the document is the room's — never `initialContent` (the provider
   // has already synced it into `collab.doc`). `withCollaboration` swaps
   // ProseMirror's history for Yjs's undo manager, so undo only undoes this
   // user's edits. Rebuilt only for a new document: anything else (a new
   // `onChange` identity) would bind a second editor to the same fragment.
+  // A live page also takes no new column layouts (noNewColumns.ts): no drop
+  // beside a block, and pasted layouts unwrapped.
   const editor = useCreateBlockNote(
     collab
       ? withCollaboration({
           ...baseOptions,
+          extensions: [...extensions, LiveNoNewColumns()],
+          disableExtensions: [MULTI_COLUMN_DROP_HANDLER],
           collaboration: {
             provider: collab.provider as { awareness?: Awareness },
             fragment: collab.doc.getXmlFragment(FRAGMENT),
@@ -330,7 +334,12 @@ const PageEditor = forwardRef(function PageEditor(
             renderCursor: user => renderLiveCursor(user),
           },
         })
-      : { ...baseOptions, initialContent: typedInitialContent },
+      : {
+          ...baseOptions,
+          extensions,
+          dropCursor: multiColumnDropCursor,
+          initialContent: typedInitialContent,
+        },
     collab ? [collab.doc] : [onChange]
   );
 
@@ -370,14 +379,16 @@ const PageEditor = forwardRef(function PageEditor(
     return editor.onMount(revive);
   }, [editor, live]);
 
-  // Slash menu: default + multi-column + custom blocks
+  // Slash menu: default + multi-column (not on a live page) + custom blocks
   const getAllSlashMenuItems = useMemo(() => {
     return (editor: PageBlockEditor) => {
       const items = [...getDefaultReactSlashMenuItems(editor)];
-      try {
-        items.push(...getMultiColumnSlashMenuItems(editor));
-      } catch (e) {
-        console.error('[PageEditor] getMultiColumnSlashMenuItems failed:', e);
+      if (!live) {
+        try {
+          items.push(...getMultiColumnSlashMenuItems(editor));
+        } catch (e) {
+          console.error('[PageEditor] getMultiColumnSlashMenuItems failed:', e);
+        }
       }
 
       // Remove default blocks that we're replacing with custom versions
@@ -442,7 +453,7 @@ const PageEditor = forwardRef(function PageEditor(
 
       return filteredItems;
     };
-  }, []);
+  }, [live]);
 
   return (
     <div className="page-editor">

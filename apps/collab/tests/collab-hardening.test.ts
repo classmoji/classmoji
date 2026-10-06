@@ -223,6 +223,209 @@ describe('write guards', () => {
   });
 });
 
+describe('no new column layouts (P-4)', () => {
+  const twoColumns = (id: string) =>
+    columns(id, [`${id}-a`, [paragraph(`${id}-l`, 'L')]], [`${id}-b`, [paragraph(`${id}-r`, 'R')]]);
+
+  async function refused(ops: unknown[]) {
+    const a = open();
+    await a.synced;
+    const before = await snapshotBlocks();
+    const res = await internal(server, 'POST', `/page/${PAGE}/ops`, { actor, ops });
+    expect(res.status).toBe(422);
+    expect(res.body.error).toBe('columns-not-allowed-live');
+    expect(res.body.message).toBe(pc.LIVE_COLUMNS_REFUSED_MESSAGE);
+    expect(await snapshotBlocks()).toEqual(before);
+    expect(server.store.storeCalls).toBe(0);
+    return res.body;
+  }
+
+  it('refuses inserting a column layout, naming it', async () => {
+    const body = await refused([
+      { op: 'insert', blocks: [twoColumns('new')], position: { at: 'end' } },
+    ]);
+    expect(body.ids).toEqual(['new']);
+  });
+
+  it('refuses turning a block into a column layout', async () => {
+    const { id: _id, ...layout } = twoColumns('p1');
+    await refused([{ op: 'update', id: 'p1', block: layout }]);
+  });
+
+  it('refuses a replace_all that brings a layout the page does not have', async () => {
+    await refused([{ op: 'replace_all', blocks: [paragraph('p1', 'One'), twoColumns('fresh')] }]);
+  });
+
+  it('refuses a new layout even when the batch also deletes the existing one', async () => {
+    await refused([
+      { op: 'delete', id: 'cols' },
+      { op: 'insert', blocks: [twoColumns('other')], position: { at: 'end' } },
+    ]);
+  });
+
+  it('refuses re-inserting a copy of an existing layout (its ids are re-minted)', async () => {
+    await refused([
+      {
+        op: 'insert',
+        blocks: [
+          columns('cols', ['c1', [paragraph('in1', 'Left')]], ['c2', [paragraph('in2', 'R')]]),
+        ],
+        position: { at: 'end' },
+      },
+    ]);
+  });
+
+  it('allows editing inside an existing layout and re-filling it by id', async () => {
+    const ops = [
+      { op: 'update', id: 'in1', block: { type: 'paragraph', content: 'Left, edited' } },
+      {
+        op: 'update',
+        id: 'cols',
+        block: {
+          type: 'columnList',
+          props: {},
+          children: [
+            { id: 'c1', type: 'column', props: { width: 1 }, children: [paragraph('in1', 'L')] },
+            { id: 'c2', type: 'column', props: { width: 1 }, children: [paragraph('in2', 'R')] },
+            { id: 'c3', type: 'column', props: { width: 1 }, children: [paragraph('in3', '3')] },
+          ],
+        },
+      },
+      { op: 'move', id: 'cols', position: { at: 'start' } },
+    ];
+    const before = await snapshotBlocks();
+    const res = await internal(server, 'POST', `/page/${PAGE}/ops`, { actor, ops });
+    expect(res.status).toBe(200);
+    const after = await snapshotBlocks();
+    expect(after).toEqual(rendered(pc.ensureBlockIds(pc.applyBlockOps(before, ops as never))));
+    expect((after[0] as unknown as { children: unknown[] }).children).toHaveLength(3);
+  });
+
+  it('allows a replace_all that keeps the existing layout', async () => {
+    const res = await internal(server, 'POST', `/page/${PAGE}/ops`, {
+      actor,
+      ops: [{ op: 'replace_all', blocks: [structuredClone(INITIAL[2]), paragraph('n', 'New')] }],
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it('allows deleting a column, and the whole layout', async () => {
+    const one = await internal(server, 'POST', `/page/${PAGE}/ops`, {
+      actor,
+      ops: [{ op: 'delete', id: 'c2' }],
+    });
+    expect(one.status).toBe(200);
+    await server.close();
+    await setup();
+    const all = await internal(server, 'POST', `/page/${PAGE}/ops`, {
+      actor,
+      ops: [{ op: 'delete', id: 'cols' }],
+    });
+    expect(all.status).toBe(200);
+    expect((await snapshotBlocks()).some(b => b.id === 'cols')).toBe(false);
+  });
+
+  it('refuses a preview accept that adds a layout, writing nothing', async () => {
+    const a = open();
+    await a.synced;
+    const before = await snapshotBlocks();
+    const res = await internal(server, 'POST', `/page/${PAGE}/merge-preview`, {
+      base: { blocks: structuredClone(INITIAL), coverImage: null },
+      theirs: { blocks: [...structuredClone(INITIAL), twoColumns('added')], coverImage: null },
+      actor,
+    });
+    expect(res.status).toBe(422);
+    expect(res.body).toMatchObject({
+      error: 'columns-not-allowed-live',
+      ids: ['added'],
+      message: pc.LIVE_COLUMNS_ACCEPT_REFUSED_MESSAGE,
+    });
+    expect(await snapshotBlocks()).toEqual(before);
+  });
+
+  it('a layout the live page deleted, kept by a resolution for the preview, is refused', async () => {
+    const del = await internal(server, 'POST', `/page/${PAGE}/ops`, {
+      actor,
+      ops: [{ op: 'delete', id: 'cols' }],
+    });
+    expect(del.status).toBe(200);
+    const base = { blocks: structuredClone(INITIAL), coverImage: null };
+    const theirs = {
+      blocks: structuredClone(INITIAL).map(b =>
+        b.id === 'cols'
+          ? columns(
+              'cols',
+              ['c1', [paragraph('in1', 'Left, preview')]],
+              ['c2', [paragraph('in2', 'Right')]]
+            )
+          : b
+      ),
+      coverImage: null,
+    };
+    const conflict = await internal(server, 'POST', `/page/${PAGE}/merge-preview`, {
+      base,
+      theirs,
+      actor,
+    });
+    expect(conflict.status).toBe(409);
+    expect((conflict.body.conflicts as { id: string }[]).map(c => c.id)).toEqual(['cols']);
+
+    const kept = await internal(server, 'POST', `/page/${PAGE}/merge-preview`, {
+      base,
+      theirs,
+      resolutions: [{ id: 'cols', choose: 'theirs' }],
+      actor,
+    });
+    expect(kept.status).toBe(422);
+    expect(kept.body).toMatchObject({
+      error: 'columns-not-allowed-live',
+      ids: ['cols'],
+      message: pc.LIVE_COLUMNS_ACCEPT_REFUSED_MESSAGE,
+    });
+
+    const live = await internal(server, 'POST', `/page/${PAGE}/merge-preview`, {
+      base,
+      theirs,
+      resolutions: [{ id: 'cols', choose: 'ours' }],
+      actor,
+    });
+    expect(live.status).toBe(200);
+    expect((await snapshotBlocks()).some(b => b.id === 'cols')).toBe(false);
+  });
+
+  it('a preview accept may still edit inside an existing layout', async () => {
+    const res = await internal(server, 'POST', `/page/${PAGE}/merge-preview`, {
+      base: { blocks: structuredClone(INITIAL), coverImage: null },
+      theirs: {
+        blocks: structuredClone(INITIAL).map(b =>
+          b.id === 'cols'
+            ? columns('cols', ['c1', [paragraph('in1', 'Left, preview')]], ['c2', []])
+            : b
+        ),
+        coverImage: null,
+      },
+      actor,
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it('an outside push may bring a layout: it is already in git', async () => {
+    server.world.contentAt.set(`${PAGE}@b1`, { blocks: structuredClone(INITIAL) });
+    server.world.contentAt.set(`${PAGE}@c2`, {
+      blocks: [...structuredClone(INITIAL), twoColumns('pushed')],
+    });
+    const a = open();
+    await a.synced;
+    const res = await internal(server, 'POST', `/page/${PAGE}/external`, {
+      sha: 'c2',
+      before: 'b1',
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ action: 'merged', conflicts: 0 });
+    expect((await snapshotBlocks()).some(b => b.id === 'pushed')).toBe(true);
+  });
+});
+
 describe('reseeds and close codes', () => {
   it('H2: a clean row whose git file moved is reseeded and refused with stale-epoch', async () => {
     const a = open();

@@ -130,6 +130,7 @@ const {
   ensureBlockIds,
   applyBlockOps,
   normalizeBlockStructure,
+  newColumnListIds,
   blankPageBlocks,
   blankPageContentJson,
   BlockOpError,
@@ -1879,6 +1880,41 @@ describe('pageContent.applyBlockOps — column invariants', () => {
     ) as Array<{ id: string }>;
 
     expect(result.map(b => b.id)).toEqual(['p']);
+  });
+});
+
+// ─── newColumnListIds (live pages keep their layouts) ───────────────────────
+
+describe('pageContent.newColumnListIds', () => {
+  const para = (id: string) => ({ id, type: 'paragraph', content: [] });
+  const row = (id: string, ...kids: unknown[]) => ({
+    id,
+    type: 'columnList',
+    props: {},
+    children: kids.map((kid, i) => ({ id: `${id}-c${i}`, type: 'column', children: [kid] })),
+  });
+  const prior = [para('p1'), row('cols', para('l'), para('r'))];
+
+  it('names a layout the prior document does not have, at any depth', () => {
+    const nested = { ...para('p2'), children: [row('deep', para('a'), para('b'))] };
+    expect(newColumnListIds(prior, [...prior, row('fresh', para('x'), para('y')), nested])).toEqual(
+      ['fresh', 'deep']
+    );
+  });
+
+  it('counts a block turned into a layout as new: matched by type, not id alone', () => {
+    expect(newColumnListIds(prior, [row('p1', para('x'), para('y')), prior[1]])).toEqual(['p1']);
+  });
+
+  it('an existing layout moved, re-filled or given a column is not new', () => {
+    const regrown = row('cols', para('l'), para('r'), para('third'));
+    expect(newColumnListIds(prior, [regrown, para('p1')])).toEqual([]);
+  });
+
+  it('deleting layouts adds none; an id-less layout counts as new', () => {
+    expect(newColumnListIds(prior, [para('p1')])).toEqual([]);
+    const { id: _id, ...idless } = row('gone', para('x'), para('y'));
+    expect(newColumnListIds(prior, [idless])).toEqual(['']);
   });
 });
 

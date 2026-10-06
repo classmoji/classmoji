@@ -84,6 +84,8 @@ vi.mock('@classmoji/services', async () => {
         previewBranchName: pure.previewBranchName,
         ensureBlockIds: pure.ensureBlockIds,
         applyBlockOps: pure.applyBlockOps,
+        newColumnListIds: pure.newColumnListIds,
+        LIVE_COLUMNS_REFUSED_MESSAGE: pure.LIVE_COLUMNS_REFUSED_MESSAGE,
         loadPageContent: (...a: unknown[]) => mocks.loadPageContent(...a),
         savePageContent: (...a: unknown[]) => mocks.savePageContent(...a),
         getPreviewStatus: (...a: unknown[]) => mocks.getPreviewStatus(...a),
@@ -808,6 +810,85 @@ describe('live write refusals', () => {
   });
 });
 
+describe('new column layouts on a live page', () => {
+  const COLUMNS_OP = {
+    op: 'insert' as const,
+    blocks: [
+      {
+        id: 'cols',
+        type: 'columnList',
+        children: [
+          { id: 'c1', type: 'column', children: [{ id: 'l', type: 'paragraph' }] },
+          { id: 'c2', type: 'column', children: [{ id: 'r', type: 'paragraph' }] },
+        ],
+      },
+    ],
+    position: { at: 'end' as const },
+  };
+
+  it("maps the server's columns-not-allowed-live to COLUMNS_NOT_ALLOWED_LIVE", async () => {
+    route('POST', 'ops', () => ({
+      status: 422,
+      body: {
+        error: 'columns-not-allowed-live',
+        message: "Column layouts can't be added to a page with live editing on.",
+        ids: ['cols'],
+      },
+    }));
+    await expect(
+      pageContentApplyTool.handler(
+        { classroom: 'org/x', page_id: PAGE_ID, expected_sha: 'live:1.7', ops: [COLUMNS_OP] },
+        CTX
+      )
+    ).rejects.toMatchObject({
+      kind: 'invalid_params',
+      code: 'COLUMNS_NOT_ALLOWED_LIVE',
+      message: expect.stringMatching(/live editing on.*Nothing was changed/),
+      data: { ids: ['cols'] },
+    });
+  });
+
+  it('a preview accept refused for a new layout says so, without a retry hint', async () => {
+    mocks.pageFindById.mockResolvedValue(LIVE_PAGE);
+    mocks.getPreviewStatus.mockResolvedValue({ exists: true });
+    mocks.compareBranches.mockResolvedValue({ merge_base_sha: 'base-commit', head_sha: 'h1' });
+    route('POST', 'merge-preview', () => ({
+      status: 422,
+      body: { error: 'columns-not-allowed-live', message: 'No new column layouts.', ids: ['x'] },
+    }));
+    const error = await pagePreviewAcceptTool
+      .handler({ classroom: 'org/x', page_id: PAGE_ID }, CTX)
+      .catch((e: unknown) => e);
+    expect(error).toMatchObject({ code: 'COLUMNS_NOT_ALLOWED_LIVE' });
+    expect((error as Error).message).not.toMatch(/Retry/);
+    expect(mocks.discardPreview).not.toHaveBeenCalled();
+  });
+
+  it('a preview of a live page refuses a new layout before writing anything', async () => {
+    mocks.pageFindById.mockResolvedValue(LIVE_PAGE);
+    await expect(
+      pageContentApplyTool.handler(
+        { classroom: 'org/x', page_id: PAGE_ID, expected_sha: 'live:1.7', ops: [COLUMNS_OP] },
+        CTX
+      )
+    ).rejects.toMatchObject({ code: 'COLUMNS_NOT_ALLOWED_LIVE', data: { ids: ['cols'] } });
+    expect(mocks.ensurePreviewBranch).not.toHaveBeenCalled();
+    expect(mocks.savePageContent).not.toHaveBeenCalled();
+  });
+
+  it('a page without live editing takes a new layout as before', async () => {
+    mocks.pageFindById.mockResolvedValue(PLAIN_PAGE);
+    const result = parse(
+      await pageContentApplyTool.handler(
+        { classroom: 'org/x', page_id: PAGE_ID, expected_sha: 'git-sha-1', ops: [COLUMNS_OP] },
+        CTX
+      )
+    );
+    expect(result.success).toBe(true);
+    expect(mocks.savePageContent).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('preview mode with live editing', () => {
   it('a published page defaults to preview, cut from main, taking the live version', async () => {
     vi.stubEnv('PAGES_URL', 'https://pages.example.test/');
@@ -1042,5 +1123,6 @@ describe('tool descriptions', () => {
     expect(pageContentApplyTool.description).toMatch(/mode: 'live'/);
     expect(pageContentApplyTool.description).toMatch(/rendered page/);
     expect(pageContentApplyTool.description).toMatch(/big edits/);
+    expect(pageContentApplyTool.description).toMatch(/can't gain a new column layout/);
   });
 });

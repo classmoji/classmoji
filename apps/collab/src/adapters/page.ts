@@ -29,6 +29,7 @@ import {
 } from './types.ts';
 import {
   assertConvertible,
+  assertNoNewColumnLists,
   assertReadable,
   brokenColumnLists,
   nonEmpty,
@@ -366,6 +367,7 @@ export function createPageAdapter(
         Object.assign(result, touchedBlocks(ops, remints, next));
         // Presence shows at the block written last (a delete leaves it where it was).
         if (result.cursorBlockId) result.touchedId = result.cursorBlockId;
+        assertNoNewColumnLists(current, next);
         // Every node is built once BEFORE the first write: a bad block is a
         // 422 with nothing written, never half a reconcile.
         assertConvertible(next, 'ops');
@@ -455,6 +457,7 @@ export function createPageAdapter(
         conflicts = result.conflicts.length;
         conflictIds = result.conflicts.map(c => c.id);
         const merged = nonEmpty(normalize(result.merged) as PageBlock[]);
+        // No column guard: a layout pushed to git is already the page's.
         assertConvertible(merged, 'merged content');
         reconcileBlocks(doc, ours, merged);
         if (JSON.stringify(theirsRaw.cover) !== JSON.stringify(baseRaw.cover)) {
@@ -488,6 +491,9 @@ export function createPageAdapter(
           return; // nothing written
         }
         const merged = nonEmpty(normalize(merge.merged) as PageBlock[]);
+        // Checked only once nothing is in conflict: until then a conflicted
+        // unit carries the preview's side provisionally.
+        assertNoNewColumnLists(ours, merged, pageContent.LIVE_COLUMNS_ACCEPT_REFUSED_MESSAGE);
         assertConvertible(merged, 'merged content');
         reconcileBlocks(doc, ours, merged);
         // Cover: today's accept rule — a preview-side change wins, anything

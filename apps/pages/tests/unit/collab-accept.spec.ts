@@ -57,6 +57,17 @@ test.describe('mergePreviewFailure', () => {
     });
   });
 
+  test('a preview that adds a column layout is refused with what to do', () => {
+    const failure = mergePreviewFailure(
+      new CollabRequestError('refused', 422, { error: 'columns-not-allowed-live', ids: ['c'] })
+    );
+    expect(failure).toMatchObject({ kind: 'failed', status: 422 });
+    if (failure.kind === 'failed') {
+      expect(failure.message).toMatch(/column layout.*live version.*discard the preview/);
+      expect(failure.message).not.toMatch(/Try again/);
+    }
+  });
+
   test('any other refusal is a failed merge with a sentence', () => {
     for (const [status, body] of [
       [409, { error: 'something-else' }],

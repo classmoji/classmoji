@@ -553,6 +553,18 @@ export function liveWriteError(
       'LIVE_UNSUPPORTED'
     );
   }
+  if (error.code === 'columns-not-allowed-live') {
+    // A preview accept is refused the same way, so no preview hint.
+    const ids = (error.body as { ids?: unknown }).ids;
+    return new ToolError(
+      'invalid_params',
+      `${error.detail ?? ClassmojiService.pageContent.LIVE_COLUMNS_REFUSED_MESSAGE} Nothing was changed.`,
+      'COLUMNS_NOT_ALLOWED_LIVE',
+      Array.isArray(ids)
+        ? { ids: ids.filter((x): x is string => typeof x === 'string') }
+        : undefined
+    );
+  }
   if (error.status === 400 || error.status === 422) {
     return new ToolError(
       'invalid_params',

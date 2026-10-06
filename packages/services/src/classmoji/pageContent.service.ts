@@ -1585,6 +1585,55 @@ export function normalizeBlockStructure<T = unknown>(
   return (repaired ? ensureBlockIds(copy) : copy) as unknown as T[];
 }
 
+// ─── Live pages keep the column layouts they have ────────────────────────────
+
+/**
+ * Why a live page refuses a column layout it does not already have: two
+ * people each deleting a different column of one layout while offline merge
+ * into a one-column layout, which every editor drops — with the remaining
+ * column's content — before the server can repair it.
+ */
+export const LIVE_COLUMNS_REFUSED_MESSAGE =
+  "Column layouts can't be added to a page with live editing on; use a single column. " +
+  'Column layouts the page already has can still be edited or deleted.';
+
+/**
+ * The same refusal for a preview accept, which can add a layout without the
+ * preview making one: a conflict on a layout the live page deleted, resolved
+ * to the preview's side, puts it back.
+ */
+export const LIVE_COLUMNS_ACCEPT_REFUSED_MESSAGE =
+  "This would add a column layout, which a page with live editing can't take. Choose the " +
+  "live version (choose: 'ours') for the column blocks, or discard the preview.";
+
+/**
+ * The ids of the `columnList` blocks in `next` that `prior` has no
+ * `columnList` with — the layouts a write would ADD. An existing layout keeps
+ * its id when it is moved, re-filled or given another column; a block turned
+ * into a layout, or a layout put back after a delete, is new. Blocks are
+ * expected to carry ids (`ensureBlockIds`); an id-less layout counts as new.
+ */
+export function newColumnListIds(prior: unknown[], next: unknown[]): string[] {
+  const existing = new Set<string>();
+  const added: string[] = [];
+  const walk = (blocks: unknown[], visit: (block: BlockNode) => void) => {
+    for (const block of blocks as BlockNode[]) {
+      if (!block || typeof block !== 'object') continue;
+      visit(block);
+      if (Array.isArray(block.children)) walk(block.children, visit);
+    }
+  };
+  walk(prior, block => {
+    if (block.type === COLUMN_LIST_TYPE && block.id) existing.add(block.id);
+  });
+  walk(next, block => {
+    if (block.type === COLUMN_LIST_TYPE && !(block.id && existing.has(block.id))) {
+      added.push(block.id ?? '');
+    }
+  });
+  return added;
+}
+
 /**
  * Apply a sequence of block operations to a document. Pure — returns a new
  * blocks array, input untouched. Ops are applied sequentially, so later ops
