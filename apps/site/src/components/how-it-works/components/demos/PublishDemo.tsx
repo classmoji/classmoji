@@ -27,7 +27,8 @@ import { DemoFrame } from '../demo-kit/DemoFrame';
 /*
  * A copy of the webapp's Repositories flow:
  * - the list (components/features/repositories/RepositoriesTable.tsx): folders
- *   open by default, a repository with no assignment tagged "No assignment";
+ *   open by default (the app's "No assignment" tag is left out: on a
+ *   marketing page it reads as something missing);
  * - the New repository page (routes/admin.$class.repos_.form/FormModule.tsx);
  * - Publish's confirm (useRepositoryActions.confirmPublish), then the row's
  *   "Publishing" and the progress callout (OperationProgress);
@@ -480,9 +481,6 @@ export function PublishDemo() {
               >
                 {r.mode}
               </Tag>
-            )}
-            {!r.children?.length && (
-              <Tag className="m-0 shrink-0 font-medium text-gray-600!">No assignment</Tag>
             )}
           </span>
         ),
