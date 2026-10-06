@@ -51,6 +51,7 @@ beforeEach(() => {
   mocks.requireAuth.mockResolvedValue({ userId: 'me' });
   mocks.userFindFirst.mockResolvedValue(null);
   mocks.consumeCode.mockResolvedValue(true);
+  mocks.sendCode.mockResolvedValue({ sent: true });
 });
 
 describe('settings.general action: change email', () => {
@@ -78,7 +79,31 @@ describe('settings.general action: change email', () => {
     expect(await post({ intent: 'send-code', email: '  new@school.edu ' })).toEqual({
       codeSent: true,
     });
-    expect(mocks.sendCode).toHaveBeenCalledWith('new@school.edu');
+    expect(mocks.sendCode).toHaveBeenCalledWith('new@school.edu', 'me');
+  });
+
+  it('turns a throttled send into the friendly error, keeping the code step when one is live', async () => {
+    mocks.sendCode.mockResolvedValue({
+      sent: false,
+      reason: 'cooldown',
+      error: 'Please wait a minute before requesting another code.',
+      codePending: true,
+    });
+    expect(await post({ intent: 'send-code', email: 'new@school.edu' })).toEqual({
+      error: 'Please wait a minute before requesting another code.',
+      codeSent: true,
+    });
+
+    mocks.sendCode.mockResolvedValue({
+      sent: false,
+      reason: 'user-cap',
+      error: 'Too many verification codes requested. Please try again in an hour.',
+      codePending: false,
+    });
+    expect(await post({ intent: 'send-code', email: 'other@school.edu' })).toEqual({
+      error: 'Too many verification codes requested. Please try again in an hour.',
+    });
+    expect(mocks.userUpdate).not.toHaveBeenCalled();
   });
 
   it('does not write without a valid code', async () => {

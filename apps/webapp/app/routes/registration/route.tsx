@@ -17,6 +17,7 @@ import {
   consumeEmailVerificationCode,
 } from '~/utils/emailVerification.server';
 import { verifyInviteToken, inviteTokenMatchesEmail } from '@classmoji/auth/invite-token';
+import { normalizeEmail, INVALID_EMAIL_MESSAGE } from '~/utils/email';
 
 /** Where to go once registered: a same-site path from `?next=`, else the picker. */
 const safeNext = (value: string | null | undefined): string =>
@@ -226,6 +227,7 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
   const codeSent = codeFetcher.data?.codeSent === true;
   const emailVerified = verifyFetcher.data?.verified === true || verifiedEmail !== null;
   const verifyError = verifyFetcher.data?.verifyError;
+  const codeError = codeFetcher.data?.error;
 
   const useDifferentEmail = () => {
     setUseInvite(false);
@@ -354,6 +356,11 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
                   </Button>
                 )}
               </Space.Compact>
+              {codeError && (
+                <div className="text-red-500 text-xs mt-1" role="alert">
+                  {codeError}
+                </div>
+              )}
             </Form.Item>
 
             {useInvite && emailVerified && (
@@ -512,34 +519,47 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
 };
 
 export const action = async ({ request }: Route.ActionArgs) => {
+  // The loader only renders this page to a signed-in user, so every intent
+  // requires the session. Checked first so an anonymous POST cannot mail codes
+  // to arbitrary addresses or probe/burn them.
   const authData = await getAuthSession(request);
+  if (!authData?.userId) return redirect('/');
+
   const formData = await request.json();
   const { intent } = formData;
 
+  // Normalized once (trimmed, lower-cased) and used for every step, so the
+  // address a code is sent to is the one it is verified, consumed and stored
+  // under (#396).
+  const email = normalizeEmail(formData.email);
+  // Always a string: an absent code must never reach the lookup as undefined.
+  const code = typeof formData.code === 'string' ? formData.code.trim() : '';
+
   // ── Send verification code ──────────────────────────────────────────────
   if (intent === 'send-code') {
-    await sendEmailVerificationCode(formData.email);
+    if (!email) return { error: INVALID_EMAIL_MESSAGE };
+    const sent = await sendEmailVerificationCode(email, authData.userId);
+    // Throttled: say why, and keep the code step open while a code is live.
+    if (!sent.sent) return { error: sent.error, ...(sent.codePending && { codeSent: true }) };
     return { codeSent: true };
   }
 
   // ── Verify code inline ──────────────────────────────────────────────────
   if (intent === 'verify-code') {
-    if (!(await isEmailVerificationCodeValid(formData.email, formData.code))) {
+    if (!email || !(await isEmailVerificationCodeValid(email, code))) {
       return { verifyError: 'Invalid or expired code. Try resending.' };
     }
     return { verified: true };
   }
 
   // ── Register (re-validate + create user) ────────────────────────────────
+  if (!email) return { error: INVALID_EMAIL_MESSAGE };
   // Either a signed invite token for exactly this address, or a code.
   const invite = formData.invite_token ? verifyInviteToken(formData.invite_token) : null;
-  const provenByInvite = invite !== null && inviteTokenMatchesEmail(invite, formData.email);
-  if (!provenByInvite && !(await consumeEmailVerificationCode(formData.email, formData.code))) {
+  const provenByInvite = invite !== null && inviteTokenMatchesEmail(invite, email);
+  if (!provenByInvite && !(await consumeEmailVerificationCode(email, code))) {
     return { error: 'Verification code is invalid or expired. Please verify your email again.' };
   }
-
-  if (!authData?.userId) return redirect('/');
-  const email = String(formData.email).trim().toLowerCase();
 
   // Check if email is already in use by another user
   const existingUserWithEmail = await getPrisma().user.findFirst({
