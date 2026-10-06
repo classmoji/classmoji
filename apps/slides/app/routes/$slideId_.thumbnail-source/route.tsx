@@ -64,10 +64,13 @@ import {
   generateDeckHtml,
   isDeckSlide,
   loadDeck,
-  withoutHiddenSlides,
   type DeckJson,
   type DeckSlide,
 } from '@classmoji/services/slides';
+// From the browser-safe entry, not the package root: `firstSlideOnly` is a
+// route export, so it ships to the client, and the root would drag
+// `deckHtml.ts` (node:crypto) into the client bundle.
+import { withoutHiddenSlides } from '@classmoji/services/slides/hidden';
 /**
  * Geometry and the readiness attribute come from the shared contract, not from a
  * constant here: the render task waits for exactly this attribute and renders at
