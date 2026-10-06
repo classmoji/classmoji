@@ -51,12 +51,39 @@ describe('extractText — deck-html', () => {
     const lines = text.split('\n');
 
     expect(lines).toContain('Painted');
-    expect(lines).toContain('Hidden slide');
     expect(lines).toContain('child one');
     expect(lines).toContain('child two');
     // The stack container has no text of its own, so it contributes no line,
     // and its children are not counted twice.
     expect(lines.filter(line => line === 'child one')).toHaveLength(1);
+  });
+
+  it('leaves hidden slides out of text and notes (#436)', () => {
+    // A hidden slide is shown to no viewer, so a search must not find it —
+    // and its notes go with it.
+    const html = (slides: string) =>
+      `<html><body><div class="reveal"><div class="slides">${slides}</div></div></body></html>`;
+    const { ok, text, notes } = deck(
+      html(`
+<section><h2>Shown</h2><aside class="notes">shown note</aside></section>
+<section data-hidden="true"><h2>Retired</h2><aside class="notes">retired note</aside></section>
+<section><section><p>kept child</p></section><section data-hidden="true"><p>hidden child</p></section></section>
+<section data-hidden="true"><section><p>inside hidden stack</p></section></section>`)
+    );
+
+    expect(ok).toBe(true);
+    expect(text.split('\n')).toEqual(['Shown', 'kept child']);
+    expect(notes).toBe('shown note');
+
+    // The stored fixture's hidden slide (data-hidden plus editor paint) too.
+    expect(deck(CRUFT_FIXTURE).text).not.toContain('Hidden slide');
+  });
+
+  it('reads a deck whose every slide is hidden as empty, not unparseable', () => {
+    const result = deck(
+      `<html><body><div class="reveal"><div class="slides"><section data-hidden="true"><h2>Gone</h2></section></div></div></body></html>`
+    );
+    expect(result).toMatchObject({ ok: true, text: '' });
   });
 
   it("catches an <ASIDE class='notes extra'> that a naive regex misses", () => {

@@ -1,5 +1,5 @@
 /**
- * slideDocumentAccess.ts — the two path rules the legacy content proxy needs
+ * slideDocumentAccess.ts — the path rules the legacy content proxy needs
  * now that a slide can BE a document.
  *
  * `/content/{org}/{repo}/{path}` authorizes a PATH against a REPO: prove the
@@ -125,4 +125,126 @@ export function slideDocumentRedirect(slideId: string): Response {
     status: 302,
     headers: nonDeckHeaders({ Location: `/${encodeURIComponent(slideId)}` }),
   });
+}
+
+/** Which of a deck's two stored documents a path is. */
+export interface DeckDocument {
+  /** The deck's `content_path`. */
+  folder: string;
+  /** `index.html` (the generated deck) or `deck.json` (its source). */
+  kind: 'index' | 'deck-json';
+}
+
+/**
+ * The deck document `path` is, or null.
+ *
+ * A deck stores two documents at `<content_path>/`: the generated `index.html`
+ * and its source `deck.json`. Both hold every slide — hidden ones and speaker
+ * notes included (#436) — and both belong to a deck row with its own
+ * draft / private / public setting, so the proxy cannot hand either out as
+ * just another asset of the folder.
+ */
+export function deckDocumentOf(path: string): DeckDocument | null {
+  for (const [suffix, kind] of [
+    ['/index.html', 'index'],
+    ['/deck.json', 'deck-json'],
+  ] as const) {
+    if (!path.endsWith(suffix)) continue;
+    const folder = path.slice(0, -suffix.length);
+    return folder ? { folder, kind } : null;
+  }
+  return null;
+}
+
+/** The deck folder whose generated `index.html` `path` is, or null. */
+export function deckFolderOfDocument(path: string): string | null {
+  const doc = deckDocumentOf(path);
+  return doc?.kind === 'index' ? doc.folder : null;
+}
+
+/** The least a deck row has to carry for the rule below to act on it. */
+export interface DeckSlideRef {
+  id: string;
+}
+
+/** What one deck row lets this caller see — `assertSlideAccess`'s two flags. */
+export interface DeckDocumentRights {
+  canEdit: boolean;
+  canViewSpeakerNotes: boolean;
+}
+
+/** Nothing beyond the slides a viewer is shown. */
+export const VIEWER_ONLY_RIGHTS: DeckDocumentRights = {
+  canEdit: false,
+  canViewSpeakerNotes: false,
+};
+
+/**
+ * What the proxy should do about a deck document.
+ *
+ * `pass` is "not a deck document" — every image, font and stylesheet. `serve`
+ * carries what this caller may see of it (for `deckHtmlForViewer`); `refuse`
+ * is the route's ordinary 403.
+ */
+export type DeckDocumentDecision =
+  | { outcome: 'pass' }
+  | { outcome: 'serve'; rights: DeckDocumentRights }
+  | { outcome: 'refuse' };
+
+/**
+ * Apply a deck's own view gate to a request for one of its stored documents.
+ *
+ * The route's own check only proves the caller belongs to SOME classroom on
+ * this content repo. That is enough for a deck's images, and not for its
+ * document: a draft deck's `index.html` would be readable by every student in
+ * the classroom, and a sibling classroom's by every student on a shared repo.
+ * So the deck rows that own this folder decide, through `rightsFor` (the
+ * route's `assertSlideAccess` at the VIEW tier, which throws on refusal):
+ *
+ *   - rows exist and none admits the caller → refuse;
+ *   - otherwise each flag is granted by any row that grants it (every row is
+ *     checked, for the reason `slideDocumentDecision` gives), and the caller
+ *     is served with them — hidden slides for editors, notes for those allowed;
+ *   - `deck.json` has no filtered form and nothing but the editor reads it,
+ *     so it goes to editors only;
+ *   - an `index.html` no deck row claims (a page's document, a deleted deck's
+ *     leftovers) is served as before, with nothing beyond what a viewer sees.
+ */
+export async function deckDocumentDecision<T extends DeckSlideRef>({
+  path,
+  findDecks,
+  rightsFor,
+}: {
+  path: string;
+  findDecks: (contentPath: string) => Promise<T[]>;
+  rightsFor: (slide: T) => Promise<DeckDocumentRights>;
+}): Promise<DeckDocumentDecision> {
+  const doc = deckDocumentOf(path);
+  if (!doc) return { outcome: 'pass' };
+
+  const decks = await findDecks(doc.folder);
+  if (decks.length === 0) {
+    return doc.kind === 'index'
+      ? { outcome: 'serve', rights: VIEWER_ONLY_RIGHTS }
+      : { outcome: 'refuse' };
+  }
+
+  let viewable = false;
+  const rights = { ...VIEWER_ONLY_RIGHTS };
+  for (const slide of decks) {
+    let granted: DeckDocumentRights;
+    try {
+      granted = await rightsFor(slide);
+    } catch {
+      continue;
+    }
+    viewable = true;
+    rights.canEdit ||= granted.canEdit;
+    rights.canViewSpeakerNotes ||= granted.canViewSpeakerNotes;
+    if (rights.canEdit && rights.canViewSpeakerNotes) break;
+  }
+
+  if (!viewable) return { outcome: 'refuse' };
+  if (doc.kind === 'deck-json' && !rights.canEdit) return { outcome: 'refuse' };
+  return { outcome: 'serve', rights };
 }
