@@ -52,9 +52,10 @@ export const STAFF_TWINS: Readonly<Record<string, Partial<Record<StaffRole, stri
   // Only the owner section has an assignments list or a token ledger.
   assignments: { OWNER: 'assignments' },
   tokens: { OWNER: 'tokens' },
-  // Member settings (a redirect to account settings). /teacher and /assistant
-  // re-export it; /admin/:class/settings is the CLASSROOM's settings, a
-  // different screen, so the owner goes home.
+  // Member settings, which itself redirects everyone to /settings/appearance,
+  // and that redirect wins over this map's, so every role ends up there.
+  // /teacher and /assistant re-export it; /admin/:class/settings is the
+  // CLASSROOM's settings, a different screen, so no OWNER twin.
   settings: { TEACHER: 'settings', ASSISTANT: 'settings' },
 };
 
