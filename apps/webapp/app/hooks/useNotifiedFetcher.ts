@@ -75,17 +75,12 @@ export const useNotifiedFetcher = () => {
       callout.show({ variant: 'info', title: fetcher.data.info });
       fetcher.reset();
     } else if (fetcher.data?.triggerSession && !operation) {
-      // The action queued work rather than finishing it. Open a callout for the
-      // batch and reset the fetcher straight away, so the next action is free
-      // to run while this one is still going.
+      // The action queued work rather than finishing it. OperationProgress
+      // reports on the batch in its own panel; reset the fetcher straight away,
+      // so the next action is free to run while this one is still going.
       const session = fetcher.data.triggerSession as TriggerSession;
-      const calloutId = callout.show({
-        variant: 'progress',
-        title: 'Starting',
-        persistent: true,
-      });
       park(session);
-      setOperation({ session, calloutId });
+      setOperation({ session });
       // A queued batch can carry a note about what it left out (e.g. students
       // skipped for having no GitLab account connected).
       if (typeof fetcher.data.info === 'string') {
@@ -118,13 +113,7 @@ export const useNotifiedFetcher = () => {
     // work is long finished either way.
     if (Date.now() - (parked.startedAt ?? 0) > OPERATION_MAX_AGE_MS) return unpark();
 
-    const session = parked.session;
-    setOperation({
-      session,
-      calloutId: callout.show({ variant: 'progress', title: 'Starting', persistent: true }),
-    });
-    // `callout` is stable per provider; this runs once, on mount.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    setOperation({ session: parked.session });
   }, []);
 
   const dismissNotify = useCallback(

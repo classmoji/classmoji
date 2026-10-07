@@ -6,9 +6,20 @@ import { DEFAULT_CALLOUT_SLOT_ID, useCalloutSlotInternal } from './CalloutProvid
 export interface CalloutSlotProps {
   id?: string;
   className?: string;
+  /**
+   * Where callouts appear. `top` (the default) centres them under the top of
+   * the viewport. `bottom-right` docks them in the corner, sitting above
+   * anything that sets `--callout-bottom` there (the webapp's background-work
+   * panel does), so all feedback comes from one place.
+   */
+  placement?: 'top' | 'bottom-right';
 }
 
-export function CalloutSlot({ id = DEFAULT_CALLOUT_SLOT_ID, className }: CalloutSlotProps) {
+export function CalloutSlot({
+  id = DEFAULT_CALLOUT_SLOT_ID,
+  className,
+  placement = 'top',
+}: CalloutSlotProps) {
   const { active, registerSlot, unregisterSlot, dismiss } = useCalloutSlotInternal(id);
   const reducedMotion = useReducedMotion();
 
@@ -19,11 +30,16 @@ export function CalloutSlot({ id = DEFAULT_CALLOUT_SLOT_ID, className }: Callout
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const bottom = placement === 'bottom-right';
+  // Enter from the edge the slot is docked to.
+  const from = bottom ? 1 : -1;
   const initial = reducedMotion
     ? { opacity: 0, y: 0, scale: 1 }
-    : { opacity: 0, y: -24, scale: 0.96 };
+    : { opacity: 0, y: 24 * from, scale: 0.96 };
   const animate = { opacity: 1, y: 0, scale: 1 };
-  const exit = reducedMotion ? { opacity: 0, y: 0, scale: 1 } : { opacity: 0, y: -16, scale: 0.98 };
+  const exit = reducedMotion
+    ? { opacity: 0, y: 0, scale: 1 }
+    : { opacity: 0, y: 16 * from, scale: 0.98 };
 
   const enterTransition = reducedMotion
     ? { duration: 0.15, ease: 'easeOut' as const }
@@ -39,8 +55,20 @@ export function CalloutSlot({ id = DEFAULT_CALLOUT_SLOT_ID, className }: Callout
     ease: [0.4, 0, 1, 1] as [number, number, number, number],
   };
 
-  const baseClass = 'pointer-events-none fixed left-1/2 w-full -translate-x-1/2 px-4';
+  const baseClass = bottom
+    ? 'pointer-events-none fixed'
+    : 'pointer-events-none fixed left-1/2 w-full -translate-x-1/2 px-4';
   const wrapperClass = className ? `${baseClass} ${className}` : baseClass;
+  // Inline for the same reason as `top` below: this package's classes are not
+  // in any app's Tailwind scan. 16px from the corner, as wide as the panel.
+  const position = bottom
+    ? {
+        right: 16,
+        bottom: 'var(--callout-bottom, 16px)',
+        width: 'min(360px, calc(100vw - 32px))',
+        zIndex: 60,
+      }
+    : { top: 'var(--callout-top, 24px)', zIndex: 60 };
 
   return (
     // top and zIndex are set inline (not via Tailwind classes) so they apply even
@@ -58,7 +86,7 @@ export function CalloutSlot({ id = DEFAULT_CALLOUT_SLOT_ID, className }: Callout
       // this only has to span the viewport and keep a gutter at phone width.
       // `px-4` is a rem, which is 17px in the webapp, so pinning the wrapper
       // instead would make the card 418 in one app and 420 in another.
-      style={{ top: 'var(--callout-top, 24px)', zIndex: 60 }}
+      style={position}
     >
       <AnimatePresence mode="popLayout">
         {active ? (
@@ -68,7 +96,10 @@ export function CalloutSlot({ id = DEFAULT_CALLOUT_SLOT_ID, className }: Callout
             animate={animate}
             exit={{ ...exit, transition: exitTransition }}
             transition={enterTransition}
-            style={{ transformOrigin: 'top center', willChange: 'transform, opacity' }}
+            style={{
+              transformOrigin: bottom ? 'bottom right' : 'top center',
+              willChange: 'transform, opacity',
+            }}
             className="pointer-events-auto"
           >
             <CalloutCard payload={active} onDismiss={() => dismiss(active.id)} />

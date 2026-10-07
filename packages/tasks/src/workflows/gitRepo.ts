@@ -19,10 +19,16 @@ import { addAssignmentToRepo } from './gitRepoAssignment.ts';
 import { updateRepository, type UpdateRepositoryPayload } from '../helpers/updateRepository.ts';
 import { createRepository, type CreateRepositoryPayload } from '../helpers/createRepository.ts';
 import { provisionAutogradeWorkflowForRepo } from './autograde.ts';
-import { reportStatus } from '../helpers/progress.ts';
+import { reportFailureReason, reportStatus } from '../helpers/progress.ts';
 import { ensureGitInstallation, GitAppNotInstalledError } from '../helpers/gitInstallation.ts';
 import { withDatabaseRetry } from '../helpers/databaseRetry.ts';
-import { retryOnGitBlip } from '../helpers/gitRetry.ts';
+import { isTransientGitError, retryOnGitBlip } from '../helpers/gitRetry.ts';
+import {
+  appPermissionDeniedMessage,
+  isAppPermissionDenied,
+  isRepoNotFound,
+  templateNotFoundMessage,
+} from '../helpers/gitErrors.ts';
 
 type GitOrganizationLike = Parameters<typeof getGitProvider>[0] & { login: string | null };
 type StrictGitOrganizationLike = Parameters<typeof getGitProvider>[0] & { login: string };
@@ -527,6 +533,15 @@ export const createRepositoryTask = task({
       }
     } catch (error: unknown) {
       logger.error('Error creating gitRepo', { error });
+      // The template is gone or unreadable: the instructor's to fix, and no
+      // retry changes it.
+      if (isRepoNotFound(error)) {
+        await reportFailureReason('template_not_found');
+        throw new AbortTaskRunError(
+          templateNotFoundMessage(`${payload.templateOwner}/${payload.templateRepo}`)
+        );
+      }
+      if (isTransientGitError(error)) await reportFailureReason('github_unreachable');
       throw error;
     }
   },
@@ -590,6 +605,13 @@ export const addCollaboratorsToRepo = async (payload: AddCollaboratorsToRepoTask
     await gitProvider.addTeamToRepo(gitOrgLogin, repoName, team.slug, 'maintain');
   } catch (error: unknown) {
     console.error('Error adding collaborator to repo', error);
+    // Github said the app may not do this in the org: only an org owner can
+    // fix it, so stop with what they need to do instead of Github's words.
+    if (isAppPermissionDenied(error)) {
+      await reportFailureReason('permission_denied');
+      const org = payload.classroom.git_organization.login ?? 'the organization';
+      throw new AbortTaskRunError(appPermissionDeniedMessage(org, payload.repoName));
+    }
     throw error;
   }
 };

@@ -16,10 +16,9 @@ export interface TriggerSession {
   accessToken: string;
 }
 
-/** A running operation, with the callout that is reporting on it. */
+/** A running operation; OperationProgress reports on it in its panel. */
 export interface ActiveOperation {
   session: TriggerSession;
-  calloutId: string;
 }
 
 export interface FetcherContextValue {
@@ -27,7 +26,7 @@ export interface FetcherContextValue {
   notify: (action: string, message?: string) => void;
   /** Set while a batch of background work is in flight; null otherwise. */
   operation: ActiveOperation | null;
-  /** The operation has resolved: release the callout and stop watching. */
+  /** The operation has resolved: stop watching it. */
   endOperation: () => void;
   /** Drop the placeholder callout a caller opened before the work started. */
   dismissNotify: (action: string) => void;

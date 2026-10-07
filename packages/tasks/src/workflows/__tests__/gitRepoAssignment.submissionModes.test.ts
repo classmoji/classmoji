@@ -257,6 +257,42 @@ describe('cf-create_git_repo_assignment', () => {
     });
   });
 
+  it('ends cleanly when the assignment was deleted while the run was queued', async () => {
+    mocks.createGitRepoAssignment.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          'Foreign key constraint violated on the constraint: `git_repo_assignments_assignment_id_fkey`'
+        ),
+        { code: 'P2003' }
+      )
+    );
+
+    await expect(
+      runTask(workflows.createDatabaseRepositoryAssignmentTask, {
+        assignment: { id: 'a-gone', title: 'Lab 1', submission_mode: 'REPO' },
+        studentRepo: STUDENT_REPO,
+      })
+    ).resolves.toBeNull();
+  });
+
+  it('still fails on any other foreign-key refusal', async () => {
+    mocks.createGitRepoAssignment.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          'Foreign key constraint violated on the constraint: `git_repo_assignments_git_repo_id_fkey`'
+        ),
+        { code: 'P2003' }
+      )
+    );
+
+    await expect(
+      runTask(workflows.createDatabaseRepositoryAssignmentTask, {
+        assignment: { id: 'a-1', title: 'Lab 1', submission_mode: 'REPO' },
+        studentRepo: STUDENT_REPO,
+      })
+    ).rejects.toThrow('git_repo_id_fkey');
+  });
+
   it('keys an ISSUE-mode row on the issue id as before', async () => {
     await runTask(workflows.createDatabaseRepositoryAssignmentTask, {
       assignment: { id: 'a-1', title: 'Lab 1' },

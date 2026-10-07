@@ -325,11 +325,13 @@ export const addAssignmentToRepo = async (payload: CreateGithubRepositoryAssignm
   if (assignment.submission_mode === 'REPO') {
     // Without the row the assignment reads "not released" for this student,
     // so a failed write fails this run, never passes silently.
-    await createDatabaseRepositoryAssignment({
+    const created = await createDatabaseRepositoryAssignment({
       assignment,
       studentRepo,
       provider: organization.provider as 'GITHUB' | 'GITLAB',
     });
+    // The assignment was deleted meanwhile: nothing to stamp a push against.
+    if (created === null) return;
     // The repo may already hold work: an assignment added to a repository
     // students have been pushing to for weeks. The webhook only sees pushes
     // from now on, so the latest commit stands in for the missed push.
@@ -525,7 +527,33 @@ export const createDatabaseRepositoryAssignment = async (
     provider_issue_number: issueNumber ?? null,
   };
 
-  return ClassmojiService.gitRepoAssignment.create(data);
+  try {
+    return await ClassmojiService.gitRepoAssignment.create(data);
+  } catch (error: unknown) {
+    // A foreign-key refusal on the assignment means it was deleted while this
+    // run was queued (a teacher deleting it right after publishing, to redo
+    // it). The repo and the student's access are done; there is nothing left
+    // to record against, so end cleanly rather than fail.
+    if (isAssignmentGone(error)) {
+      logger.warn('Assignment deleted before its submission row was written; skipping', {
+        assignmentId: assignment.id,
+        gitRepoId: studentRepo.id,
+      });
+      return null;
+    }
+    throw error;
+  }
+};
+
+/** Prisma's foreign-key refusal (P2003) on the submission row's assignment. */
+const isAssignmentGone = (error: unknown): boolean => {
+  if (!error || typeof error !== 'object') return false;
+  const e = error as { code?: unknown; meta?: { field_name?: unknown }; message?: unknown };
+  if (e.code !== 'P2003') return false;
+  const where = `${typeof e.meta?.field_name === 'string' ? e.meta.field_name : ''} ${
+    typeof e.message === 'string' ? e.message : ''
+  }`;
+  return where.includes('assignment_id');
 };
 
 export const createDatabaseRepositoryAssignmentTask = task({

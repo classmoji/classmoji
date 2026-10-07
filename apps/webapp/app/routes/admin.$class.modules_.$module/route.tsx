@@ -1,3 +1,7 @@
+import {
+  useOrphanedRepositoryPrompt,
+  type OrphanedRepository,
+} from '~/components/features/assignments/useOrphanedRepositoryPrompt';
 import { useEffect, useState } from 'react';
 import { data, useFetcher, useNavigate, useParams } from 'react-router';
 import { Button, Tag, Popconfirm, Switch, Tooltip } from 'antd';
@@ -84,7 +88,15 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
   // Navigates away after delete; item ops revalidate in place.
   const deleteFetcher = useFetcher<{ success?: string; error?: string }>();
   const itemFetcher = useFetcher<{ success?: string; error?: string }>();
-  const assignmentFetcher = useFetcher<{ success?: string; error?: string }>();
+  const assignmentFetcher = useFetcher<{
+    success?: string;
+    error?: string;
+    orphanedRepository?: OrphanedRepository | null;
+  }>();
+  useOrphanedRepositoryPrompt(
+    assignmentFetcher.state === 'idle' ? assignmentFetcher.data : undefined,
+    classSlug
+  );
 
   const [editOpen, setEditOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
