@@ -8,11 +8,11 @@ export interface CalloutSlotProps {
   className?: string;
   /**
    * Where callouts appear. `top` (the default) centres them under the top of
-   * the viewport. `bottom-right` docks them in the corner, sitting above
-   * anything that sets `--callout-bottom` there (the webapp's background-work
-   * panel does), so all feedback comes from one place.
+   * the viewport. `top-right` docks them in that corner, below anything that
+   * sets `--callout-stack-offset` there (the webapp's background-work panel
+   * does), so all feedback comes from one place.
    */
-  placement?: 'top' | 'bottom-right';
+  placement?: 'top' | 'top-right';
 }
 
 export function CalloutSlot({
@@ -30,9 +30,9 @@ export function CalloutSlot({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const bottom = placement === 'bottom-right';
-  // Enter from the edge the slot is docked to.
-  const from = bottom ? 1 : -1;
+  const corner = placement === 'top-right';
+  // Both placements hang from the top edge, so both enter from above.
+  const from = -1;
   const initial = reducedMotion
     ? { opacity: 0, y: 0, scale: 1 }
     : { opacity: 0, y: 24 * from, scale: 0.96 };
@@ -55,16 +55,17 @@ export function CalloutSlot({
     ease: [0.4, 0, 1, 1] as [number, number, number, number],
   };
 
-  const baseClass = bottom
+  const baseClass = corner
     ? 'pointer-events-none fixed'
     : 'pointer-events-none fixed left-1/2 w-full -translate-x-1/2 px-4';
   const wrapperClass = className ? `${baseClass} ${className}` : baseClass;
   // Inline for the same reason as `top` below: this package's classes are not
-  // in any app's Tailwind scan. 16px from the corner, as wide as the panel.
-  const position = bottom
+  // in any app's Tailwind scan. 16px from the right edge, as wide as the panel,
+  // under the header offset and anything stacked in the corner above it.
+  const position = corner
     ? {
         right: 16,
-        bottom: 'var(--callout-bottom, 16px)',
+        top: 'calc(var(--callout-top, 16px) + var(--callout-stack-offset, 0px))',
         width: 'min(360px, calc(100vw - 32px))',
         zIndex: 60,
       }
@@ -97,7 +98,7 @@ export function CalloutSlot({
             exit={{ ...exit, transition: exitTransition }}
             transition={enterTransition}
             style={{
-              transformOrigin: bottom ? 'bottom right' : 'top center',
+              transformOrigin: corner ? 'top right' : 'top center',
               willChange: 'transform, opacity',
             }}
             className="pointer-events-auto"

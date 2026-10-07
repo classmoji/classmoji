@@ -8,7 +8,7 @@ import {
 } from '@tabler/icons-react';
 
 /**
- * The background-work panel, docked bottom right: progress while a batch runs,
+ * The background-work panel, docked top right: progress while a batch runs,
  * the outcome when it ends, and what did not finish grouped by reason. It
  * replaces the progress callout for batches, so the outcome stays on screen
  * until the instructor closes it instead of scrolling away with the page.
@@ -51,19 +51,22 @@ export const OperationPanel = ({ state, onClose, onRetry }: OperationPanelProps)
   const ref = useRef<HTMLElement>(null);
 
   // Quick callouts dock in the same corner (CalloutSlot placement
-  // "bottom-right"): keep them stacked just above this panel, at its height.
+  // "top-right"): keep them stacked just below this panel, at its height.
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     const root = document.documentElement;
     const sync = () =>
-      root.style.setProperty('--callout-bottom', `${el.getBoundingClientRect().height + 24}px`);
+      root.style.setProperty(
+        '--callout-stack-offset',
+        `${el.getBoundingClientRect().height + 8}px`
+      );
     sync();
     const observer = new ResizeObserver(sync);
     observer.observe(el);
     return () => {
       observer.disconnect();
-      root.style.removeProperty('--callout-bottom');
+      root.style.removeProperty('--callout-stack-offset');
     };
   }, []);
   const [open, setOpen] = useState<Record<string, boolean>>({});
@@ -75,7 +78,8 @@ export const OperationPanel = ({ state, onClose, onRetry }: OperationPanelProps)
       ref={ref}
       aria-label="Background work"
       data-testid="operation-panel"
-      className="fixed bottom-4 right-4 z-[60] flex max-h-[min(70vh,560px)] w-[calc(100vw-2rem)] max-w-[360px] flex-col overflow-hidden rounded-xl bg-panel shadow-[var(--shadow-float)] ring-1 ring-line"
+      style={{ top: 'var(--callout-top, 16px)' }}
+      className="fixed right-4 z-[60] flex max-h-[min(70vh,560px)] w-[calc(100vw-2rem)] max-w-[360px] flex-col overflow-hidden rounded-xl bg-panel shadow-[var(--shadow-float)] ring-1 ring-line"
     >
       <header
         className={`flex items-center gap-2 py-2.5 pl-3.5 pr-2 ${minimized ? '' : 'border-b border-line'}`}
