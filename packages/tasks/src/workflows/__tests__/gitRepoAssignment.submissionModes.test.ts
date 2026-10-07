@@ -295,7 +295,10 @@ describe('webhook-git_repo_push_handler', () => {
     expect(mocks.tasksTrigger).toHaveBeenCalledWith(
       'refresh-repo-analytics-repo',
       { gitRepoId: 'gitrepo-1' },
-      { concurrencyKey: 'gitrepo-1' }
+      {
+        concurrencyKey: 'gitrepo-1',
+        debounce: { key: 'gitrepo-1', delay: '5m', maxDelay: '30m' },
+      }
     );
     expect(result).toEqual({ touched: 2 });
   });
@@ -312,7 +315,10 @@ describe('webhook-git_repo_push_handler', () => {
     expect(mocks.tasksTrigger).toHaveBeenCalledWith(
       'refresh-repo-analytics-repo',
       { gitRepoId: 'gitrepo-1' },
-      { concurrencyKey: 'gitrepo-1' }
+      {
+        concurrencyKey: 'gitrepo-1',
+        debounce: { key: 'gitrepo-1', delay: '5m', maxDelay: '30m' },
+      }
     );
     expect(result).toEqual({ touched: 0 });
   });

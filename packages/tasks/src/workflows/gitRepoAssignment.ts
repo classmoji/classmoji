@@ -676,10 +676,18 @@ export const repositoryPushHandlerTask = task({
     // languages and PRs a snapshot holds are facts about the repo and identical
     // across its rows, so fanning out per row re-read the same four GitHub
     // endpoints once per row to write N identical snapshots.
+    //
+    // Debounced per repo: students push in bursts, and each push used to start
+    // its own run. Every push inside the window moves the one pending run back,
+    // so a burst costs a single read once it settles; `maxDelay` keeps a steady
+    // stream of pushes from holding it off for good.
     await tasks.trigger(
       'refresh-repo-analytics-repo',
       { gitRepoId: payload.gitRepoId },
-      { concurrencyKey: payload.gitRepoId }
+      {
+        concurrencyKey: payload.gitRepoId,
+        debounce: { key: payload.gitRepoId, delay: '5m', maxDelay: '30m' },
+      }
     );
     return { touched: touched.length };
   },
