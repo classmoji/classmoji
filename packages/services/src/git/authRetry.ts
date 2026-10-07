@@ -1,16 +1,23 @@
 /**
- * Retry a request GitHub rejected as unauthorized, for an installation client.
+ * Retry a GitHub request that failed for a reason on GitHub's side, for an
+ * installation client.
  *
- * An installation token is minted on the client's first request. GitHub can
- * reject a token it has only just issued for a little while (it has not reached
- * every server yet), and does so more often when many tokens are minted at once:
- * a batch of repo-creation runs starting together. @octokit/auth-app retries
- * that case for only ~15s; past that the run failed with a bare `HttpError`.
+ * Two failures this covers, both seen in production:
+ * - A token GitHub has only just minted can be rejected (401) for a little
+ *   while, more often when many runs start together. @octokit/auth-app retries
+ *   that for ~15s only.
+ * - GitHub returns empty 500s on writes for a minute or two at a time (CS52
+ *   team creation lost 4 teams to a ~90s spell). The octokit retry plugin's
+ *   three quick tries are over long before it ends.
  *
- * A 401 means GitHub did nothing with the request, so retrying is safe for any
- * method, writes included. A request that failed with no status at all (the
- * connection dropped) is retried only when it is a read, since a write may have
- * landed. Anything else is passed through untouched.
+ * Retrying is safe only where a repeat cannot do the work twice:
+ * - 401: GitHub did nothing, so any method.
+ * - 5xx, or no status (the connection dropped): GET, HEAD, PUT, PATCH and
+ *   DELETE, which are idempotent; and the two POSTs whose duplicate GitHub
+ *   refuses with 422 "already exists", which their callers treat as success
+ *   (create a repository, create a team). Any other POST (an issue, a pull
+ *   request) is never retried: a repeat could open a second one.
+ * Everything else (403, 404, 422, ...) passes straight through.
  */
 
 interface WrappableHook {
@@ -28,21 +35,31 @@ interface RequestOptions {
   url?: string;
 }
 
-/** Waits before each retry: about 37s in all, on top of auth-app's own ~15s. */
-export const AUTH_RETRY_DELAYS_MS = [2_000, 5_000, 10_000, 20_000];
+/** Waits before each retry: a little over 2 minutes in all, longer than the spells seen. */
+export const AUTH_RETRY_DELAYS_MS = [2_000, 5_000, 10_000, 20_000, 40_000, 60_000];
 
-const READ_METHODS = new Set(['GET', 'HEAD']);
+const IDEMPOTENT_METHODS = new Set(['GET', 'HEAD', 'PUT', 'PATCH', 'DELETE']);
+
+/** POSTs whose repeat GitHub refuses as "already exists" (422), handled by their callers. */
+const SAFE_TO_REPEAT_POSTS = new Set(['/orgs/{org}/repos', '/orgs/{org}/teams']);
 
 const statusOf = (error: unknown): number | null => {
   const status = (error as { status?: unknown } | null)?.status;
   return typeof status === 'number' && status > 0 ? status : null;
 };
 
-/** Whether this failure is worth another try, given the request's method. */
-export function isRetryableAuthFailure(error: unknown, method: string | undefined): boolean {
+/** Whether this failure is worth another try, given the request it came from. */
+export function isRetryableAuthFailure(
+  error: unknown,
+  method: string | undefined,
+  url?: string
+): boolean {
   const status = statusOf(error);
   if (status === 401) return true;
-  return status === null && READ_METHODS.has((method ?? 'GET').toUpperCase());
+  if (status !== null && status < 500) return false;
+  const verb = (method ?? 'GET').toUpperCase();
+  if (IDEMPOTENT_METHODS.has(verb)) return true;
+  return verb === 'POST' && url !== undefined && SAFE_TO_REPEAT_POSTS.has(url);
 }
 
 /** Status, GitHub request id, endpoint and message: what a bare HttpError leaves out. */
@@ -76,7 +93,8 @@ export function retryRejectedAuth(
       try {
         return await request(options);
       } catch (error: unknown) {
-        const retry = attempt < delays.length && isRetryableAuthFailure(error, options.method);
+        const retry =
+          attempt < delays.length && isRetryableAuthFailure(error, options.method, options.url);
         console.warn(
           `[GitHubProvider] ${label}: ${describeGithubError(error, options)}` +
             (retry ? ` (retrying in ${delays[attempt] / 1000}s)` : '')
