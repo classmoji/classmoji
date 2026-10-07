@@ -22,7 +22,12 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     classroom.id
   );
 
-  const settings = await ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id);
+  const row = await ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id);
+  // Only what the grading form shows.
+  const settings = {
+    late_penalty_points_per_hour: row?.late_penalty_points_per_hour ?? 0,
+    show_grades_to_students: row?.show_grades_to_students === true,
+  };
 
   return { emojiMappings, letterGradeMappings, orphanedEmojis, settings };
 };
@@ -32,11 +37,7 @@ const SettingsGrading = ({ loaderData }: Route.ComponentProps) => {
 
   return (
     <div className="divide-y divide-line">
-      <GradingSettingsOptions
-        settings={
-          settings as unknown as React.ComponentProps<typeof GradingSettingsOptions>['settings']
-        }
-      />
+      <GradingSettingsOptions settings={settings} />
       <EmojiMapping
         emojiMappings={
           emojiMappings as unknown as Array<{

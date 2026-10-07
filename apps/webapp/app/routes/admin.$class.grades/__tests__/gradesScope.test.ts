@@ -24,6 +24,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   requireClassroomStaff: vi.fn(),
+  requireClassroomAdmin: vi.fn(),
+  updateSettings: vi.fn(),
   assertClassroomMutationAllowed: vi.fn(),
   addAuditLog: vi.fn(),
   addClassroomAuditLog: vi.fn(),
@@ -44,6 +46,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('~/utils/routeAuth.server', () => ({
   requireClassroomStaff: (...a: unknown[]) => mocks.requireClassroomStaff(...a),
+  requireClassroomAdmin: (...a: unknown[]) => mocks.requireClassroomAdmin(...a),
   assertClassroomMutationAllowed: (...a: unknown[]) => mocks.assertClassroomMutationAllowed(...a),
 }));
 
@@ -75,6 +78,7 @@ vi.mock('@classmoji/services', () => ({
     },
     classroom: {
       getClassroomSettingsForServer: (...a: unknown[]) => mocks.getClassroomSettingsForServer(...a),
+      updateSettings: (...a: unknown[]) => mocks.updateSettings(...a),
     },
     letterGradeMapping: {
       findByClassroomId: (...a: unknown[]) => mocks.findLetterGradeMappings(...a),
@@ -645,4 +649,128 @@ describe('grades action — body validation', () => {
     expect(result).toEqual({ error: 'Invalid request.' });
     expect(mocks.updateInClassroom).not.toHaveBeenCalled();
   });
+});
+
+// ─── Final grades: release and hide, OWNER only ──────────────────────────────
+
+describe('grades loader — final-grade release state', () => {
+  it.each([
+    ['OWNER', true],
+    ['TEACHER', false],
+  ] as const)('tells a %s whether they may release (%s)', async (role, canRelease) => {
+    grantLoader(role);
+
+    const data = await route.loader(loaderArgs());
+
+    expect(data.canReleaseFinalGrades).toBe(canRelease);
+    expect(data.finalGradesReleased).toBe(false);
+  });
+
+  it('reports released final grades from the classroom settings', async () => {
+    mocks.requireClassroomStaff.mockResolvedValue({
+      userId: 'teacher-1',
+      classroom: { ...CLASSROOM, settings: { final_grades_released: true } },
+      membership: { id: 'm-1', role: 'TEACHER' },
+    });
+
+    const data = await route.loader(loaderArgs());
+
+    expect(data.finalGradesReleased).toBe(true);
+    expect(data.canReleaseFinalGrades).toBe(false);
+  });
+});
+
+describe('grades action — releasing final grades', () => {
+  const RELEASE = { intent: 'set-final-grades-released', final_grades_released: true };
+  const HIDE = { intent: 'set-final-grades-released', final_grades_released: false };
+
+  const grantOwner = () => {
+    const owner = {
+      userId: 'owner-1',
+      classroom: CLASSROOM,
+      membership: { id: 'm-owner', role: 'OWNER' },
+    };
+    mocks.requireClassroomStaff.mockResolvedValue(owner);
+    mocks.requireClassroomAdmin.mockResolvedValue(owner);
+  };
+
+  it('lets the owner release them, for the whole class, and audits it', async () => {
+    grantOwner();
+
+    const result = await route.action(actionArgs(RELEASE));
+
+    expect(result).toEqual({ success: true, final_grades_released: true });
+    expect(mocks.requireClassroomAdmin).toHaveBeenCalledWith(
+      expect.anything(),
+      CLASS_SLUG,
+      expect.objectContaining({ resourceType: 'GRADES', action: 'release_final_grades' })
+    );
+    expect(mocks.updateSettings).toHaveBeenCalledExactlyOnceWith('class-1', {
+      final_grades_released: true,
+    });
+    expect(mocks.addClassroomAuditLog).toHaveBeenCalledExactlyOnceWith({
+      classroomId: 'class-1',
+      userId: 'owner-1',
+      role: 'OWNER',
+      action: 'UPDATE',
+      resourceType: 'GRADES',
+      resourceId: 'class-1',
+      metadata: { tool: 'web:grades.release_final_grades', final_grades_released: true },
+    });
+    // No letter grade is touched.
+    expect(mocks.updateInClassroom).not.toHaveBeenCalled();
+  });
+
+  it('lets the owner hide them again, and audits that too', async () => {
+    grantOwner();
+
+    const result = await route.action(actionArgs(HIDE));
+
+    expect(result).toEqual({ success: true, final_grades_released: false });
+    expect(mocks.updateSettings).toHaveBeenCalledExactlyOnceWith('class-1', {
+      final_grades_released: false,
+    });
+    expect(mocks.addClassroomAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: { tool: 'web:grades.hide_final_grades', final_grades_released: false },
+      })
+    );
+  });
+
+  it.each([['TEACHER'], ['ASSISTANT']])('refuses a %s: nothing written or audited', async role => {
+    mocks.requireClassroomStaff.mockResolvedValue({
+      userId: 'staff-1',
+      classroom: CLASSROOM,
+      membership: { id: 'm-1', role },
+    });
+    mocks.requireClassroomAdmin.mockRejectedValue(new Response('Forbidden', { status: 403 }));
+
+    await expect(route.action(actionArgs(RELEASE))).rejects.toBeInstanceOf(Response);
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('refuses an assistant at the gradebook gate before the owner gate', async () => {
+    // requireClassroomStaff admits OWNER and TEACHER only.
+    mocks.requireClassroomStaff.mockRejectedValue(new Response('Forbidden', { status: 403 }));
+
+    await expect(route.action(actionArgs(RELEASE))).rejects.toBeInstanceOf(Response);
+    expect(mocks.requireClassroomAdmin).not.toHaveBeenCalled();
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it.each([['true'], [1], [null], [undefined]])(
+    'refuses a value that is not a boolean (%s)',
+    async value => {
+      grantOwner();
+
+      const result = await route.action(
+        actionArgs({ intent: 'set-final-grades-released', final_grades_released: value })
+      );
+
+      expect(result).toEqual({ error: 'Invalid request.' });
+      expect(mocks.updateSettings).not.toHaveBeenCalled();
+      expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+    }
+  );
 });

@@ -41,6 +41,18 @@
  *   entitlement.quizzesVisibleOrThrow, the predicate the totals use: where
  *   quizzes are hidden the key is absent, and a failed lookup fails the read
  *   rather than dropping the quizzes.
+ *
+ *   final_grade / estimated_grade: the STUDENT caller gets the grade line the
+ *   student dashboard shows, from the same entry point
+ *   (`helper.gradeSummaryForStudent` over the submissions read above, which
+ *   go through the same `findForUser` include as the dashboard's
+ *   `findAllAssignmentsForStudent`). Where the owner released final grades
+ *   and the student has one: `final_grade: {letter}` (the gradebook's Letter
+ *   column, override included) and no estimated_grade. Otherwise, where the
+ *   owner turned on `show_grades_to_students`: `estimated_grade`, over
+ *   released grades only and never the override; null when there is nothing
+ *   to estimate or the read failed (logged), as on the dashboard. Both keys
+ *   are absent where neither setting is on, with nothing read for them.
  */
 
 import getPrisma from '@classmoji/database';
@@ -101,7 +113,10 @@ export const GRADES_MINE_DESCRIPTION =
   'are released (Assignment.grades_released). Quiz scores (quiz_grades) appear as soon as an ' +
   'attempt is scored: the raw percentage of the attempt that counts, with how many hours late ' +
   'it was (after any hours you bought), or 0 with counts_as_zero when the deadline passed ' +
-  'with no attempt. Students only.';
+  'with no attempt. final_grade {letter}, present once the instructor releases final grades, ' +
+  'is your final course grade. Otherwise estimated_grade, present only where the instructor ' +
+  'shows it, is the estimate on your dashboard from released grades: {kind:"letter",letter,' +
+  'count} or {kind:"emoji",emoji,count}; null when there is none. Students only.';
 
 /** The viewer's own GitRepoAssignments in this classroom (individual + team). */
 async function findMySubmissions(ctx: ToolContext): Promise<SubmissionLike[]> {
@@ -335,6 +350,58 @@ async function myQuizGrades(ctx: ToolContext) {
   });
 }
 
+type SummaryInput = Parameters<typeof ClassmojiService.helper.gradeSummaryForStudent>[0];
+
+/** Whether the caller is shown a grade line: the student dashboard's predicate. */
+function showsGradeSummary(ctx: ToolContext): boolean {
+  return ClassmojiService.helper.showsGradeSummary(
+    classroomCtx(ctx).role,
+    sanitizedSettings(ctx) as SummaryInput['settings']
+  );
+}
+
+/**
+ * The caller's grade line, from the same entry point and inputs as the
+ * student dashboard. Fails soft as the dashboard does: a failed read is
+ * logged and gives null, never a failed my_grades.
+ */
+async function myGradeSummary(ctx: ToolContext, submissions: SubmissionLike[]) {
+  const { classroomId, membership, role } = classroomCtx(ctx);
+  const userId = ctx.viewer.userId;
+  try {
+    return await ClassmojiService.helper.gradeSummaryForStudent({
+      role,
+      classroomId,
+      userId,
+      // findForUser rows: the assignment, grades and the computed lateness
+      // fields the grade reads are all loaded (SubmissionLike narrows them).
+      submissions: submissions as unknown as SummaryInput['submissions'],
+      letterOverride: membership.letter_grade,
+      settings: sanitizedSettings(ctx) as SummaryInput['settings'],
+    });
+  } catch (error: unknown) {
+    console.error('[mcp grades-mine] grade summary failed', { classroomId, userId }, error);
+    return null;
+  }
+}
+
+/**
+ * The payload keys for a grade line: `final_grade` when the student has a
+ * released final grade; else `estimated_grade` (null allowed) where the
+ * estimate is on; else none.
+ */
+function gradeSummaryKeys(
+  ctx: ToolContext,
+  summary: Awaited<ReturnType<typeof myGradeSummary>> | undefined
+) {
+  if (summary === undefined) return {};
+  if (summary?.kind === 'final') return { final_grade: { letter: summary.letter } };
+  if (sanitizedSettings(ctx).show_grades_to_students === true) {
+    return { estimated_grade: summary };
+  }
+  return {};
+}
+
 export const gradesMineResource: ResourceDefinition = {
   name: 'grades-mine',
   uriTemplate: 'classmoji://{org}/{slug}/grades-mine',
@@ -343,9 +410,14 @@ export const gradesMineResource: ResourceDefinition = {
   scope: 'read',
   roles: STUDENT_ONLY,
   handler: async (_vars, ctx) => {
-    const [submissions, quizGrades] = await Promise.all([
-      findMySubmissions(ctx),
+    const submissionsPromise = findMySubmissions(ctx);
+    const [submissions, quizGrades, gradeSummary] = await Promise.all([
+      submissionsPromise,
       myQuizGrades(ctx),
+      // Started as soon as the submissions arrive; nothing is read when off.
+      showsGradeSummary(ctx)
+        ? submissionsPromise.then(rows => myGradeSummary(ctx, rows))
+        : Promise.resolve(undefined),
     ]);
     const git = orgGit(ctx);
 
@@ -369,6 +441,8 @@ export const gradesMineResource: ResourceDefinition = {
       })),
       // Absent where the classroom hides quizzes: no trace of them.
       ...(quizGrades ? { quiz_grades: quizGrades } : {}),
+      // Absent where the classroom shows students neither a final grade nor an estimate.
+      ...gradeSummaryKeys(ctx, gradeSummary),
     };
   },
 };

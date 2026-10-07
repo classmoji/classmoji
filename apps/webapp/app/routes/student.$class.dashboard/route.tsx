@@ -9,6 +9,7 @@ import {
   type CourseworkAssignment,
   type StudentCourseworkRow,
 } from '@classmoji/services';
+import type { StudentGradeSummary } from '@classmoji/utils';
 import type { Route } from './+types/route';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
@@ -33,6 +34,8 @@ interface DashboardData {
   team: TeamSummary | null;
   needsTeam: SelfFormedNeedsTeam | null;
   resubmits: ResubmitItem[];
+  /** The student's final or estimated grade; null when the classroom shows neither. */
+  gradeSummary: StudentGradeSummary | null;
 }
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -55,13 +58,20 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const fetchWindow = eventFetchWindow(serverNow);
   const gitOrgLogin = classroom.git_organization?.login ?? null;
   const web = gitWeb(gitContextFor(classroom));
+  // Students only, and only where the owner released final grades or turned
+  // the estimate on: staff previewing the dashboard get none, and nothing is
+  // read for it otherwise.
+  const showGradeSummary = ClassmojiService.helper.showsGradeSummary(
+    membership?.role,
+    classroom.settings
+  );
 
   const dataPromise = (async (): Promise<DashboardData> => {
     // Started alongside the reads below. It never rejects: a failed lookup
     // answers false.
     const quizzesVisiblePromise = loadQuizzesVisible(classroom.id);
     const courseworkContext = { classroomId: classroom.id, userId };
-    const [weekEventsRaw, repositories, regradeRequests, allRepoAssignments, assignmentListing] =
+    const [weekEventsRaw, repositories, regradeRequests, repoAssignmentsRead, assignmentListing] =
       await Promise.all([
         ClassmojiService.calendar
           .getClassroomCalendar(
@@ -82,12 +92,9 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
           student_id: userId,
           classroom_id: classroom.id,
         }),
-        ClassmojiService.helper
-          .findAllAssignmentsForStudent(userId, classSlug)
-          .catch(
-            () =>
-              [] as Awaited<ReturnType<typeof ClassmojiService.helper.findAllAssignmentsForStudent>>
-          ),
+        // Null on failure, so the grade line below is skipped rather than
+        // computed without the student's repo grades.
+        ClassmojiService.helper.findAllAssignmentsForStudent(userId, classSlug).catch(() => null),
         // The classroom's published assignments, for the coursework rows below.
         ClassmojiService.studentCoursework
           .listPublishedAssignments(classroom.id)
@@ -100,7 +107,28 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
             return null;
           }),
       ]);
+    const allRepoAssignments = repoAssignmentsRead ?? [];
     const quizzesVisible = await quizzesVisiblePromise;
+
+    // The grade line: the released final grade, else the estimate over
+    // released work (the shared entry point MCP my_grades calls too). Only the
+    // result is sent; the letter override never is before release.
+    const gradeSummaryPromise: Promise<StudentGradeSummary | null> =
+      showGradeSummary && repoAssignmentsRead
+        ? ClassmojiService.helper
+            .gradeSummaryForStudent({
+              role: membership?.role,
+              classroomId: classroom.id,
+              userId,
+              submissions: repoAssignmentsRead,
+              letterOverride: membership?.letter_grade,
+              settings: classroom.settings,
+            })
+            .catch((error): null => {
+              console.error('[student dashboard] grade summary failed', courseworkContext, error);
+              return null;
+            })
+        : Promise.resolve(null);
 
     // Every assignment the student can see, every type, the same rows the
     // Assignments page lists (the submission rows and the listing read above
@@ -237,6 +265,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       team,
       needsTeam,
       resubmits,
+      gradeSummary: await gradeSummaryPromise,
     };
   })();
 
@@ -269,6 +298,7 @@ const StudentDashboard = ({ loaderData }: Route.ComponentProps) => {
                 team={d.team}
                 needsTeam={d.needsTeam}
                 resubmits={d.resubmits}
+                gradeSummary={d.gradeSummary}
                 classSlug={slug}
               />
             </div>

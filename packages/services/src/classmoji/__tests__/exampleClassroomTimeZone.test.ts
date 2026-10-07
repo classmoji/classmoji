@@ -36,7 +36,6 @@ const settingsFor = async (timezone: string | null | undefined) => {
 describe('provisionExampleClassroom time zone', () => {
   it("seeds the creator's browser zone, canonicalized", async () => {
     expect(await settingsFor('america/new_york')).toEqual({
-      show_grades_to_students: true,
       quizzes_enabled: true,
       timezone: 'America/New_York',
     });

@@ -350,7 +350,7 @@ export async function resolveImportedClassroom(
       content_namespace: candidateSlug,
       content_repo: defaultContentRepoName(candidateSlug),
       github_classroom_id: githubClassroomId,
-      settings: { create: { show_grades_to_students: true, quizzes_enabled: true } },
+      settings: { create: { quizzes_enabled: true } },
     },
     include: { settings: true },
   });
@@ -428,7 +428,6 @@ async function importClassroomAttempt(args: {
         await tx.classroomSettings.create({
           data: {
             classroom_id: classroom.id,
-            show_grades_to_students: true,
             quizzes_enabled: true,
           },
         });

@@ -69,7 +69,8 @@ export interface ConfigImportSummary {
  * calendar are intentionally NOT here — they map to separate tables, not to
  * columns on classroom_settings.
  *
- * NEVER included: content_repo_name, classroom_id (PK), created_at, updated_at.
+ * NEVER included: content_repo_name, classroom_id (PK), created_at, updated_at,
+ * final_grades_released (a new term starts with final grades unreleased).
  */
 export const SETTINGS_FIELD_GROUPS: Record<
   'grading' | 'tokens' | 'features' | 'aiConfig' | 'apiKeys',

@@ -8,10 +8,20 @@ import * as gitRepoAssignmentService from './gitRepoAssignment.service.ts';
 import * as gitRepoAssignmentGraderService from './gitRepoAssignmentGrader.service.ts';
 import { quizzesVisibleOrThrow } from './entitlement.service.ts';
 import { loadQuizGradeItems } from './quizGradeItems.service.ts';
+import { findByClassroomId as findLetterGradeMappingsByClassroomId } from './letterGradeMapping.service.ts';
 
 import getPrisma from '@classmoji/database';
-import { calculateStudentFinalGrade } from '@classmoji/utils';
-import type { OrganizationSettings, GitRepo } from '@classmoji/utils';
+import {
+  calculateStudentFinalGrade,
+  estimateStudentGrade,
+  finalStudentGrade,
+} from '@classmoji/utils';
+import type {
+  OrganizationSettings,
+  GitRepo,
+  ReleasableGitRepoAssignment,
+  StudentGradeSummary,
+} from '@classmoji/utils';
 
 // Re-export grader progress function for convenience
 export const findAssignmentGradersProgress = gitRepoAssignmentGraderService.findGradersProgress;
@@ -206,4 +216,82 @@ export const calculateClassLeaderboard = async (classroomSlug: string) => {
   grades.sort((a, b) => a.grade - b.grade);
 
   return grades;
+};
+
+/** The classroom settings that decide which grade line a student is shown. */
+export interface GradeSummarySettings {
+  show_grades_to_students?: boolean | null;
+  final_grades_released?: boolean | null;
+  late_penalty_points_per_hour?: number | null;
+}
+
+/**
+ * Whether a viewer is shown a grade line at all: a STUDENT, in a classroom
+ * whose owner released final grades or turned on the estimate. The student
+ * dashboard and MCP `my_grades` both ask this before reading anything.
+ */
+export const showsGradeSummary = (
+  role: string | null | undefined,
+  settings: GradeSummarySettings | null | undefined
+): boolean =>
+  role === 'STUDENT' &&
+  (settings?.final_grades_released === true || settings?.show_grades_to_students === true);
+
+/**
+ * The one grade line a student is shown, for the dashboard and MCP alike:
+ *
+ *   - final grades released and the student has one: their final grade,
+ *     exactly the gradebook's Letter column (`finalStudentGrade`: the letter
+ *     override, else the letter over all graded work);
+ *   - else, where the estimate is on: the estimate over released work only,
+ *     which never reads the override (`estimateStudentGrade`);
+ *   - else null.
+ *
+ * Nothing is read unless `showsGradeSummary` holds. The inputs are the
+ * gradebook's: the classroom's scales and this student's quiz grade items
+ * under the same quiz visibility. `submissions` is the caller's
+ * `findAllAssignmentsForStudent` read (individual and team repos in this
+ * classroom), released or not.
+ *
+ * A failed read throws: a grade that silently dropped its quizzes would be a
+ * wrong grade, not a missing one.
+ */
+export const gradeSummaryForStudent = async ({
+  role,
+  classroomId,
+  userId,
+  submissions,
+  letterOverride,
+  settings,
+}: {
+  role: string | null | undefined;
+  classroomId: string;
+  userId: string;
+  submissions: readonly ReleasableGitRepoAssignment[];
+  letterOverride: string | null | undefined;
+  settings: GradeSummarySettings | null | undefined;
+}): Promise<StudentGradeSummary | null> => {
+  if (!showsGradeSummary(role, settings)) return null;
+
+  const [emojiMappings, letterGradeMappings, quizItems] = await Promise.all([
+    findEmojiMappingsByClassroomId(classroomId) as Promise<Record<string, number>>,
+    findLetterGradeMappingsByClassroomId(classroomId),
+    quizzesVisibleOrThrow(classroomId).then(quizzesVisible =>
+      loadQuizGradeItems({ classroomId, quizzesVisible, userIds: [userId] })
+    ),
+  ]);
+  const inputs = {
+    submissions,
+    items: quizItems.get(userId) ?? [],
+    emojiMappings,
+    settings: { late_penalty_points_per_hour: Number(settings?.late_penalty_points_per_hour ?? 0) },
+    letterGradeMappings,
+  };
+
+  if (settings?.final_grades_released === true) {
+    const final = finalStudentGrade({ ...inputs, letterOverride });
+    if (final) return final;
+  }
+  if (settings?.show_grades_to_students === true) return estimateStudentGrade(inputs);
+  return null;
 };

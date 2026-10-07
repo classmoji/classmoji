@@ -74,6 +74,7 @@ vi.mock('@classmoji/services', () => ({
 
 const { classroomSettingsUpdateTool, classroomStatusUpdateTool, orgRepoSettingsUpdateTool } =
   await import('../settings.ts');
+const { requireRole } = await import('../../authz/pure.ts');
 
 const CTX: ToolContext = {
   viewer: { userId: 'owner-1', clientId: 'c', scopes: new Set(['read', 'write']) },
@@ -239,9 +240,103 @@ describe('classroom_settings_update', () => {
   it('exposes no API-key or llm_* fields in its schema', () => {
     const keys = Object.keys(classroomSettingsUpdateTool.inputSchema);
     expect(keys.filter(k => k.includes('api_key') || k.startsWith('llm_'))).toEqual([]);
-    // Dead / legacy columns stay out too.
-    expect(keys).not.toContain('show_grades_to_students');
+    // content_repo_name is a legacy column and stays out.
     expect(keys).not.toContain('content_repo_name');
+  });
+
+  it('exposes show_grades_to_students as a boolean in its schema', () => {
+    const keys = Object.keys(classroomSettingsUpdateTool.inputSchema);
+    expect(keys).toContain('show_grades_to_students');
+    const schema = z.object(classroomSettingsUpdateTool.inputSchema);
+    const base = { classroom: 'org/w26' };
+    expect(schema.safeParse({ ...base, show_grades_to_students: true }).success).toBe(true);
+    expect(schema.safeParse({ ...base, show_grades_to_students: false }).success).toBe(true);
+    expect(schema.safeParse({ ...base, show_grades_to_students: 'true' }).success).toBe(false);
+    expect(schema.safeParse({ ...base, show_grades_to_students: 1 }).success).toBe(false);
+  });
+
+  it('persists show_grades_to_students as a boolean, off included', async () => {
+    const result = await classroomSettingsUpdateTool.handler(
+      { classroom: 'org/w26', show_grades_to_students: false },
+      CTX
+    );
+    expect(mocks.updateSettings).toHaveBeenCalledWith('class-1', {
+      show_grades_to_students: false,
+    });
+    expect(parse(result)).toMatchObject({
+      updated_fields: ['show_grades_to_students'],
+      settings: { show_grades_to_students: false },
+    });
+
+    await classroomSettingsUpdateTool.handler(
+      { classroom: 'org/w26', show_grades_to_students: true },
+      CTX
+    );
+    expect(mocks.updateSettings).toHaveBeenLastCalledWith('class-1', {
+      show_grades_to_students: true,
+    });
+  });
+
+  it('persists final_grades_released, release and hide, and audits the field', async () => {
+    const schema = z.object(classroomSettingsUpdateTool.inputSchema);
+    const base = { classroom: 'org/w26' };
+    expect(schema.safeParse({ ...base, final_grades_released: true }).success).toBe(true);
+    expect(schema.safeParse({ ...base, final_grades_released: 'true' }).success).toBe(false);
+
+    for (const released of [true, false]) {
+      const result = await classroomSettingsUpdateTool.handler(
+        { classroom: 'org/w26', final_grades_released: released },
+        CTX
+      );
+      expect(mocks.updateSettings).toHaveBeenLastCalledWith('class-1', {
+        final_grades_released: released,
+      });
+      expect(parse(result)).toMatchObject({
+        updated_fields: ['final_grades_released'],
+        settings: { final_grades_released: released },
+      });
+      expect(mocks.auditCreate).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          classroom_id: 'class-1',
+          resource_type: 'SETTINGS',
+          action: 'UPDATE',
+          data: { tool: 'classroom_settings_update', fields: ['final_grades_released'] },
+        })
+      );
+    }
+  });
+
+  it('is an owner-only, non-destructive write, as the web Settings page is', () => {
+    // admin.$class.settings.grades gates its action on requireClassroomAdmin
+    // (OWNER). The registry applies the tool's roles through requireRole before
+    // the handler runs, so every field here, the estimate switch included, is
+    // written by the OWNER only.
+    expect(classroomSettingsUpdateTool.scope).toBe('write');
+    expect(classroomSettingsUpdateTool.roles).toEqual(['OWNER']);
+    expect(classroomSettingsUpdateTool.annotations).toEqual({
+      destructive: false,
+      openWorld: false,
+    });
+    for (const role of ['TEACHER', 'ASSISTANT', 'STUDENT'] as const) {
+      let refusal: unknown;
+      try {
+        requireRole([{ role }], classroomSettingsUpdateTool.roles);
+      } catch (error) {
+        refusal = error;
+      }
+      expect(refusal, role).toMatchObject({ kind: 'forbidden', code: 'INSUFFICIENT_ROLE' });
+    }
+    expect(requireRole([{ role: 'OWNER' }], classroomSettingsUpdateTool.roles)).toEqual({
+      role: 'OWNER',
+    });
+  });
+
+  it('keeps its description under the 1,500-byte cut', () => {
+    expect(Buffer.byteLength(classroomSettingsUpdateTool.description, 'utf8')).toBeLessThan(1500);
+    expect(classroomSettingsUpdateTool.description).toContain('show_grades_to_students');
+    expect(classroomSettingsUpdateTool.description).toContain('final_grades_released');
+    // The estimate never shows the override; only the released final grade does.
+    expect(classroomSettingsUpdateTool.description).not.toContain('(or their letter override)');
   });
 
   it('rejects negative numeric settings in the schema', () => {

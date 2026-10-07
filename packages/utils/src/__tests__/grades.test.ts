@@ -9,12 +9,15 @@ import {
   calculateStudentFinalGrade,
   calculateGrades,
   gradedItemValue,
+  estimateStudentGrade,
+  finalStudentGrade,
   type GradedItem,
+  type ReleasableGitRepoAssignment,
   type GitRepoAssignment,
   type GitRepo,
   type OrganizationSettings,
 } from '../grades.ts';
-import type { LetterGradeMappingEntry } from '../emojis.ts';
+import { SCORE_EMOJI_MAPPINGS, type LetterGradeMappingEntry } from '../emojis.ts';
 
 const LETTER_GRADES: LetterGradeMappingEntry[] = [
   { letter_grade: 'A', min_grade: 90 },
@@ -579,5 +582,292 @@ describe('golden: flattened weights reproduce the legacy two-level grade', () =>
     expect(calculateStudentFinalGrade(legacy.map(flattenWeights), EMOJI_MAP, NO_PENALTY)).toBe(
       91.4
     );
+  });
+});
+
+describe('estimateStudentGrade', () => {
+  /** A submission whose assignment's grades are (or are not) released. */
+  const released = (sub: GitRepoAssignment, isReleased = true): ReleasableGitRepoAssignment => ({
+    ...sub,
+    assignment: { ...sub.assignment, grades_released: isReleased },
+  });
+
+  const base = {
+    emojiMappings: EMOJI_MAP,
+    settings: NO_PENALTY,
+    letterGradeMappings: LETTER_GRADES,
+  };
+
+  it('counts released submissions only: unreleased grades and zeros are left out', () => {
+    const estimate = estimateStudentGrade({
+      ...base,
+      submissions: [
+        released(graded('eyes', { weight: 50 })),
+        released(graded('heart', { weight: 50 }), false),
+        released(ra({ weight: 50, should_be_zero: true }), false),
+      ],
+    });
+    expect(estimate).toEqual({ kind: 'letter', letter: 'B', count: 1 });
+  });
+
+  it('treats a missing grades_released flag as unreleased', () => {
+    expect(estimateStudentGrade({ ...base, submissions: [graded('heart')] })).toBeNull();
+  });
+
+  it('counts a released missing-work zero', () => {
+    const estimate = estimateStudentGrade({
+      ...base,
+      submissions: [
+        released(graded('heart', { weight: 50 })),
+        released(ra({ weight: 50, should_be_zero: true })),
+      ],
+    });
+    expect(estimate).toEqual({ kind: 'letter', letter: 'F', count: 2 });
+  });
+
+  it('counts quiz items beside released submissions, as the gradebook does', () => {
+    const submissions = [released(graded('eyes', { weight: 50 }))];
+    const items = [item({ weight: 50, grade: 100, raw_grade: 100 })];
+    const estimate = estimateStudentGrade({ ...base, submissions, items });
+    expect(estimate).toEqual({ kind: 'letter', letter: 'A', count: 2 });
+    expect(
+      calculateStudentFinalGrade([repo(submissions)], EMOJI_MAP, NO_PENALTY, true, true, items)
+    ).toBe(90);
+  });
+
+  it('applies the late penalty, like the gradebook final', () => {
+    const estimate = estimateStudentGrade({
+      ...base,
+      settings: PENALTY_5,
+      submissions: [released(graded('heart', { num_late_hours: 2, is_late_override: false }))],
+    });
+    expect(estimate).toEqual({ kind: 'letter', letter: 'A', count: 1 });
+  });
+
+  it('counts extra credit, and leaves weight-0 and unscored items out of the count', () => {
+    const estimate = estimateStudentGrade({
+      ...base,
+      submissions: [
+        released(graded('eyes', { weight: 100 })),
+        released(graded('heart', { weight: 5, ec: true })),
+        released(graded('heart', { weight: 0 })),
+      ],
+      items: [
+        item({ assignment_id: 'q1', weight: 0, counts_as_zero: true }),
+        item({ assignment_id: 'q2', weight: 10 }),
+      ],
+    });
+    // 80 over weight 100 (the weight-0 rows add nothing), plus 100 × 5 / 100 extra credit.
+    expect(estimate).toEqual({ kind: 'letter', letter: 'B', count: 2 });
+  });
+
+  it('counts a counted-zero quiz item', () => {
+    const estimate = estimateStudentGrade({
+      ...base,
+      submissions: [released(graded('heart', { weight: 50 }))],
+      items: [item({ weight: 50, counts_as_zero: true })],
+    });
+    expect(estimate).toEqual({ kind: 'letter', letter: 'F', count: 2 });
+  });
+
+  it('never shows the letter override, which stays with staff until release', () => {
+    // EstimateStudentGradeInput has no override: an extra key cannot reach it.
+    const input = {
+      ...base,
+      submissions: [released(graded('sob'))],
+      letterOverride: 'A-',
+    } as Parameters<typeof estimateStudentGrade>[0];
+    expect(estimateStudentGrade(input)).toEqual({ kind: 'letter', letter: 'F', count: 1 });
+    expect(
+      estimateStudentGrade({ ...base, submissions: [], letterOverride: 'A-' } as Parameters<
+        typeof estimateStudentGrade
+      >[0])
+    ).toBeNull();
+  });
+
+  it('shows the letter only, with no percentage', () => {
+    const estimate = estimateStudentGrade({
+      ...base,
+      submissions: [
+        released(graded('eyes', { weight: 100 })),
+        released(graded('heart', { weight: 1, ec: true })),
+      ],
+    });
+    expect(estimate).toEqual({ kind: 'letter', letter: 'B', count: 2 });
+    expect(estimate).not.toHaveProperty('percent');
+  });
+
+  it('reads letter bands in descending order whatever order they arrive in', () => {
+    const estimate = estimateStudentGrade({
+      ...base,
+      letterGradeMappings: [...LETTER_GRADES].reverse(),
+      submissions: [released(graded('heart'))],
+    });
+    expect(estimate).toMatchObject({ kind: 'letter', letter: 'A' });
+  });
+
+  it('falls back to the nearest emoji without a letter scale', () => {
+    const estimate = estimateStudentGrade({
+      ...base,
+      letterGradeMappings: [],
+      submissions: [
+        released(graded('heart', { weight: 50 })),
+        released(graded('eyes', { weight: 50 })),
+      ],
+    });
+    expect(estimate).toEqual({ kind: 'emoji', emoji: '+1', count: 2 });
+  });
+
+  it('uses the score emoji of a numeric scale the same way', () => {
+    const scale = Object.fromEntries(SCORE_EMOJI_MAPPINGS.map(m => [m.emoji, m.grade]));
+    const estimate = estimateStudentGrade({
+      ...base,
+      emojiMappings: scale,
+      letterGradeMappings: [],
+      submissions: [
+        released(graded('score-70', { weight: 50 })),
+        released(graded('score-90', { weight: 50 })),
+      ],
+      items: [item({ weight: 100, grade: 84, raw_grade: 84 })],
+    });
+    // (70·50 + 90·50 + 84·100) / 200 = 82 → 80
+    expect(estimate).toEqual({ kind: 'emoji', emoji: 'score-80', count: 3 });
+  });
+
+  it('is null when nothing released has a grade', () => {
+    expect(estimateStudentGrade({ ...base, submissions: [] })).toBeNull();
+    expect(
+      estimateStudentGrade({
+        ...base,
+        submissions: [released(ra()), released(graded('heart'), false)],
+        items: [item()],
+      })
+    ).toBeNull();
+  });
+
+  it('is null with no scale at all to show it on', () => {
+    expect(
+      estimateStudentGrade({
+        ...base,
+        emojiMappings: {},
+        letterGradeMappings: [],
+        submissions: [released(ra({ should_be_zero: true }))],
+      })
+    ).toBeNull();
+  });
+});
+
+describe('finalStudentGrade', () => {
+  /** A submission whose assignment's grades are (or are not) released. */
+  const released = (sub: GitRepoAssignment, isReleased = true): ReleasableGitRepoAssignment => ({
+    ...sub,
+    assignment: { ...sub.assignment, grades_released: isReleased },
+  });
+
+  // Released and unreleased work, an individual and a team repo, a late
+  // submission, extra credit, a missing-work zero and quiz items.
+  const individual = [
+    released(graded('heart', { weight: 30 })),
+    released(graded('eyes', { weight: 30, num_late_hours: 3, is_late_override: false }), false),
+    released(ra({ weight: 10, should_be_zero: true }), false),
+    released(graded('+1', { weight: 5, ec: true })),
+  ];
+  const team = [released(graded('-1', { weight: 20 }), false)];
+  const items = [
+    item({ assignment_id: 'q1', weight: 10, grade: 72, raw_grade: 80, late_hours: 2 }),
+    item({ assignment_id: 'q2', weight: 10, counts_as_zero: true }),
+  ];
+
+  // The gradebook's Letter column calls finalStudentGrade itself
+  // (GradesTable.tsx), so these pin the semantics both share.
+  it('is the letter of the final grade over all graded work, released or not', () => {
+    for (const [settings, letter] of [
+      [NO_PENALTY, 'C'],
+      [PENALTY_5, 'D'],
+    ] as const) {
+      // The gradebook's total over the same work: team repo, late penalty,
+      // missing-work zero, extra credit and quiz items all counted.
+      const total = calculateStudentFinalGrade(
+        [repo(individual), repo(team, 'GROUP')],
+        EMOJI_MAP,
+        settings,
+        true,
+        true,
+        items
+      );
+      expect(calculateLetterGrade(total, LETTER_GRADES)).toBe(letter);
+      expect(
+        finalStudentGrade({
+          submissions: [...individual, ...team],
+          items,
+          emojiMappings: EMOJI_MAP,
+          settings,
+          letterGradeMappings: LETTER_GRADES,
+        })
+      ).toEqual({ kind: 'final', letter });
+    }
+    // Unreleased work counts: the released-only estimate differs here.
+    expect(
+      finalStudentGrade({
+        submissions: [released(graded('heart')), released(ra({ should_be_zero: true }), false)],
+        emojiMappings: EMOJI_MAP,
+        settings: NO_PENALTY,
+        letterGradeMappings: LETTER_GRADES,
+      })
+    ).toEqual({ kind: 'final', letter: 'F' });
+  });
+
+  it('takes the override over the computed letter', () => {
+    const input = {
+      submissions: individual,
+      items,
+      emojiMappings: EMOJI_MAP,
+      settings: NO_PENALTY,
+      letterGradeMappings: LETTER_GRADES,
+    };
+    expect(finalStudentGrade(input)).not.toEqual({ kind: 'final', letter: 'A-' });
+    expect(finalStudentGrade({ ...input, letterOverride: 'A-' })).toEqual({
+      kind: 'final',
+      letter: 'A-',
+    });
+    // Even with nothing graded or no letter scale.
+    expect(
+      finalStudentGrade({ ...input, submissions: [], items: [], letterOverride: 'C+' })
+    ).toEqual({ kind: 'final', letter: 'C+' });
+    expect(finalStudentGrade({ ...input, letterGradeMappings: [], letterOverride: 'B' })).toEqual({
+      kind: 'final',
+      letter: 'B',
+    });
+  });
+
+  it('is null where the Letter column shows none: no letter scale, or nothing graded', () => {
+    const input = { emojiMappings: EMOJI_MAP, settings: NO_PENALTY };
+    expect(
+      finalStudentGrade({
+        ...input,
+        submissions: [released(graded('heart'))],
+        letterGradeMappings: [],
+      })
+    ).toBeNull();
+    expect(
+      finalStudentGrade({
+        ...input,
+        submissions: [released(ra())],
+        items: [item()],
+        letterGradeMappings: LETTER_GRADES,
+        letterOverride: null,
+      })
+    ).toBeNull();
+  });
+
+  it('reads letter bands in descending order whatever order they arrive in', () => {
+    expect(
+      finalStudentGrade({
+        submissions: [graded('eyes')],
+        emojiMappings: EMOJI_MAP,
+        settings: NO_PENALTY,
+        letterGradeMappings: [...LETTER_GRADES].reverse(),
+      })
+    ).toEqual({ kind: 'final', letter: 'B' });
   });
 });

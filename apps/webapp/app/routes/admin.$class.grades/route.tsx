@@ -7,7 +7,11 @@ import { ClassmojiService } from '@classmoji/services';
 import { quizStanding, type GradedItem } from '@classmoji/utils';
 import { addAuditLog, addClassroomAuditLog } from '~/utils/helpers';
 import { pickOwnerOnlyContactFields } from '~/utils/studentFields.server';
-import { requireClassroomStaff, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
+import {
+  requireClassroomAdmin,
+  requireClassroomStaff,
+  assertClassroomMutationAllowed,
+} from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
 /** A grade item as the table reads it, and nothing more. */
@@ -195,11 +199,15 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
   return {
     allData: Promise.all([...Object.values(promises), activity]),
+    // Whether students see their final grade, and whether this viewer may
+    // release or hide it (the action holds the owner gate itself).
+    finalGradesReleased: classroom.settings?.final_grades_released === true,
+    canReleaseFinalGrades: isRealOwner,
   };
 };
 
 const Grades = ({ loaderData }: Route.ComponentProps) => {
-  const { allData } = loaderData;
+  const { allData, finalGradesReleased, canReleaseFinalGrades } = loaderData;
 
   return (
     <>
@@ -240,6 +248,8 @@ const Grades = ({ loaderData }: Route.ComponentProps) => {
               }
               memberships={resolvedMemberships as Parameters<typeof GradesTable>[0]['memberships']}
               activity={resolvedActivity as Parameters<typeof GradesTable>[0]['activity']}
+              finalGradesReleased={finalGradesReleased}
+              canReleaseFinalGrades={canReleaseFinalGrades}
             />
           )}
         </Await>
@@ -261,6 +271,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
+  if (data?.intent === 'set-final-grades-released') {
+    return setFinalGradesReleased(request, classSlug!, data.final_grades_released);
+  }
+
   const membershipId = typeof data?.membership_id === 'string' ? data.membership_id : null;
   const rawLetterGrade = data?.letter_grade;
   const letterGradeIsValid =
@@ -305,6 +319,41 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   return {
     success: true,
   };
+};
+
+/**
+ * Release (or hide) every student's final grade at once: the gradebook's
+ * Letter column, letter overrides included, which students otherwise never
+ * see. OWNER only: the gradebook admits teachers, so this intent carries its
+ * own owner gate (a refused attempt is audited by the gate).
+ */
+const setFinalGradesReleased = async (request: Request, classSlug: string, released: unknown) => {
+  const { userId, classroom, membership } = await requireClassroomAdmin(request, classSlug, {
+    resourceType: 'GRADES',
+    action: 'release_final_grades',
+  });
+  if (typeof released !== 'boolean') {
+    return { error: 'Invalid request.' };
+  }
+
+  await ClassmojiService.classroom.updateSettings(classroom.id, {
+    final_grades_released: released,
+  });
+
+  await addClassroomAuditLog({
+    classroomId: classroom.id,
+    userId,
+    role: membership!.role,
+    action: 'UPDATE',
+    resourceType: 'GRADES',
+    resourceId: classroom.id,
+    metadata: {
+      tool: released ? 'web:grades.release_final_grades' : 'web:grades.hide_final_grades',
+      final_grades_released: released,
+    },
+  });
+
+  return { success: true, final_grades_released: released };
 };
 
 export default Grades;

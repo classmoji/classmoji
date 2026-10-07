@@ -22,7 +22,17 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
   return namedAction(request, {
     async saveGradingSettings() {
-      await ClassmojiService.classroom.updateSettings(classroom.id, data);
+      // Only this form's two fields, the switch stored as a real boolean.
+      await ClassmojiService.classroom.updateSettings(classroom.id, {
+        // A cleared number box sends null; keep the stored value then.
+        ...(typeof data.late_penalty_points_per_hour === 'number' &&
+          Number.isFinite(data.late_penalty_points_per_hour) && {
+            late_penalty_points_per_hour: data.late_penalty_points_per_hour,
+          }),
+        ...(data.show_grades_to_students !== undefined && {
+          show_grades_to_students: data.show_grades_to_students === true,
+        }),
+      });
       return {
         action: 'SAVE_GRADING_SETTINGS',
         success: 'Saved grading settings successfully.',
