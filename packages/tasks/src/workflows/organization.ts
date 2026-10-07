@@ -1,4 +1,4 @@
-import { task } from '@trigger.dev/sdk';
+import { logger, task } from '@trigger.dev/sdk';
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import { GITLAB_PROJECTS_SUBGROUP, gitUsername } from '@classmoji/utils';
 import {
@@ -123,11 +123,22 @@ async function activateMembership({
       repository => repository.is_published === true && repository.type === 'INDIVIDUAL'
     );
 
+    // A repository with no template cannot be copied for anyone; trying would
+    // fail once for every student who joins. Leave it out and say so once.
+    const unusable = publishedIndividualRepositories.filter(r => !r.template?.trim());
+    if (unusable.length > 0) {
+      logger.warn('Skipping published repositories with no template for a joining student', {
+        classroomSlug: membership.classroom.slug,
+        repositories: unusable.map(r => r.title),
+      });
+    }
+    const provisionable = publishedIndividualRepositories.filter(r => r.template?.trim());
+
     // Skip repositories whose student repo already exists so re-runs (webhook
     // redelivery, retries, re-joins, users already in the org) don't re-create
     // repos they already have.
     const missingRepositories = [];
-    for (const repository of publishedIndividualRepositories) {
+    for (const repository of provisionable) {
       const existingRepos = await ClassmojiService.gitRepo.findByRepository(
         membership.classroom.slug,
         repository.id

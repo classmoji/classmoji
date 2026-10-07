@@ -17,6 +17,7 @@ import {
   assertClassroomMutationAllowed,
 } from '~/utils/helpers';
 import { collabServerEnv, notifyCollabFlag } from '~/utils/collab.server';
+import { pickSettings } from '~/utils/pickSettings';
 import { setLiveEditing } from './liveEditing.server';
 import type { Route } from './+types/route';
 
@@ -248,6 +249,9 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
   );
 };
 
+/** The only settings `saveContentSettings` is sent (the switches above); see pickSettings. */
+const CONTENT_SETTINGS_FIELDS = ['slides_enabled', 'show_modules', 'show_pages'] as const;
+
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
@@ -318,7 +322,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
 
     async saveContentSettings() {
-      const { _action, ...updateData } = data;
+      const updateData = pickSettings(data, CONTENT_SETTINGS_FIELDS);
       // updateSettings is the hard gate; catching here only turns the refusal
       // into a readable message instead of a 500.
       try {

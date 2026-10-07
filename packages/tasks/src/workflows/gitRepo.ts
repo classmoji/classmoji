@@ -19,9 +19,16 @@ import { addAssignmentToRepo } from './gitRepoAssignment.ts';
 import { updateRepository, type UpdateRepositoryPayload } from '../helpers/updateRepository.ts';
 import { createRepository, type CreateRepositoryPayload } from '../helpers/createRepository.ts';
 import { provisionAutogradeWorkflowForRepo } from './autograde.ts';
-import { reportStatus } from '../helpers/progress.ts';
+import { reportFailureReason, reportStatus } from '../helpers/progress.ts';
 import { ensureGitInstallation, GitAppNotInstalledError } from '../helpers/gitInstallation.ts';
 import { withDatabaseRetry } from '../helpers/databaseRetry.ts';
+import { isTransientGitError, retryOnGitBlip } from '../helpers/gitRetry.ts';
+import {
+  appPermissionDeniedMessage,
+  isAppPermissionDenied,
+  isRepoNotFound,
+  templateNotFoundMessage,
+} from '../helpers/gitErrors.ts';
 
 type GitOrganizationLike = Parameters<typeof getGitProvider>[0] & { login: string | null };
 type StrictGitOrganizationLike = Parameters<typeof getGitProvider>[0] & { login: string };
@@ -70,6 +77,18 @@ interface ClassroomRecord {
   git_namespace?: string | null;
   git_organization: GitOrganizationLike;
 }
+
+/**
+ * The classroom a per-repo run is handed: only the fields those runs read. The
+ * full record carries its settings, including any API keys the instructor
+ * saved, and a run's payload is stored and shown in the Trigger dashboard.
+ */
+const toTaskClassroom = (classroom: ClassroomRecord): ClassroomRecord => ({
+  id: classroom.id,
+  slug: classroom.slug,
+  git_namespace: classroom.git_namespace,
+  git_organization: classroom.git_organization,
+});
 
 interface RepositoryTaskContext {
   ctx: {
@@ -209,6 +228,7 @@ export const createRepositoriesTask = task({
       throw error;
     }
     const classroom = { ...loadedClassroom, git_organization: gitOrganization };
+    const payloadClassroom = toTaskClassroom(classroom);
 
     // A template stored without an owner belongs to the classroom's own org,
     // which is where templates live. Splitting blindly used to leave the repo
@@ -274,7 +294,7 @@ export const createRepositoriesTask = task({
       }
       const data: StandardCreateRepositoryTaskPayload = {
         repoName,
-        classroom,
+        classroom: payloadClassroom,
         repository,
         templateOwner,
         templateRepo,
@@ -346,6 +366,10 @@ export const createRepositoryTask = task({
   // download plus an upload in several parts; the project-wide 15 minutes is
   // not enough for it. Normal templates finish in seconds either way.
   maxDuration: 3600,
+  // A Github or network blip (a push dropped, github.com unreachable, a 5xx)
+  // retries with backoff; anything else still fails once. Safe to repeat:
+  // createRepository resumes a half-made repository.
+  ...retryOnGitBlip,
   run: async (payload: CreateRepositoryTaskPayload, { ctx }: RepositoryTaskContext) => {
     try {
       // NOTE: this branch rebuilds the standard payload field-by-field and so
@@ -509,6 +533,15 @@ export const createRepositoryTask = task({
       }
     } catch (error: unknown) {
       logger.error('Error creating gitRepo', { error });
+      // The template is gone or unreadable: the instructor's to fix, and no
+      // retry changes it.
+      if (isRepoNotFound(error)) {
+        await reportFailureReason('template_not_found');
+        throw new AbortTaskRunError(
+          templateNotFoundMessage(`${payload.templateOwner}/${payload.templateRepo}`)
+        );
+      }
+      if (isTransientGitError(error)) await reportFailureReason('github_unreachable');
       throw error;
     }
   },
@@ -572,6 +605,13 @@ export const addCollaboratorsToRepo = async (payload: AddCollaboratorsToRepoTask
     await gitProvider.addTeamToRepo(gitOrgLogin, repoName, team.slug, 'maintain');
   } catch (error: unknown) {
     console.error('Error adding collaborator to repo', error);
+    // Github said the app may not do this in the org: only an org owner can
+    // fix it, so stop with what they need to do instead of Github's words.
+    if (isAppPermissionDenied(error)) {
+      await reportFailureReason('permission_denied');
+      const org = payload.classroom.git_organization.login ?? 'the organization';
+      throw new AbortTaskRunError(appPermissionDeniedMessage(org, payload.repoName));
+    }
     throw error;
   }
 };
@@ -743,9 +783,10 @@ export const createProjectsForModuleTask = task({
 
     logger.info(`Creating projects for ${reposWithoutProjects.length} repos`);
 
+    const taskClassroom = toTaskClassroom(classroom);
     const payloads = reposWithoutProjects.map(repo => ({
       payload: {
-        classroom,
+        classroom: taskClassroom,
         repository,
         repoName: repo.name,
         repoId: repo.id,

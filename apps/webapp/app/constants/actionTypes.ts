@@ -3,6 +3,7 @@ export const ActionTypes = {
   SAVE_EXTENSION_SETTINGS: 'save-extension-settings',
   SAVE_DEFAULT_PAGE: 'save-default-page',
   SAVE_TIME_ZONE: 'save-time-zone',
+  SAVE_RECENT_VIEWERS: 'save-recent-viewers',
   SAVE_THEME: 'save-theme',
   SAVE_QUIZ_SETTINGS: 'save-quiz-settings',
   SAVE_SLIDES_SETTINGS: 'save-slides-settings',

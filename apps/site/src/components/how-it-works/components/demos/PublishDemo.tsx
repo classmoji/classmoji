@@ -20,7 +20,7 @@ import { useDemoTimeline } from '../../hooks/useDemoTimeline';
 import type { DemoBase, Step } from '../../types/demo';
 import { clickAnd, moveTo, offset, typeSteps } from '../../utils/timeline';
 import { AppAntd } from '../demo-kit/AppAntd';
-import { AppCallout } from '../demo-kit/AppCallout';
+import { AppOperationPanel } from '../demo-kit/AppOperationPanel';
 import { AppShell } from '../demo-kit/AppShell';
 import { DemoFrame } from '../demo-kit/DemoFrame';
 
@@ -31,7 +31,7 @@ import { DemoFrame } from '../demo-kit/DemoFrame';
  *   marketing page it reads as something missing);
  * - the New repository page (routes/admin.$class.repos_.form/FormModule.tsx);
  * - Publish's confirm (useRepositoryActions.confirmPublish), then the row's
- *   "Publishing" and the progress callout (OperationProgress);
+ *   "Publishing" and the background-work panel (OperationPanel);
  * - View, the repository's page (routes/admin.$class.repos_.$title): one row per
  *   student repo just created.
  * Publishing a repository does not publish its assignments; they keep their own
@@ -75,7 +75,7 @@ const initial: State = {
   done: false,
 };
 
-/** Publishing, as the webapp reports it: the row busy, the callout counting. */
+/** Publishing, as the webapp reports it: the row busy, the panel counting. */
 const publishStory: Step<State>[] = [
   { at: 0, action: s => ({ ...s, confirmOpen: false, publishing: true }) },
   ...[5, 11, 18, 24, 31, 37, STUDENTS].map((count, i) => ({
@@ -683,21 +683,14 @@ export function PublishDemo() {
       )}
 
       {(s.publishing || s.done) && (
-        <div className="absolute inset-x-0 top-3 z-10">
-          {s.publishing ? (
-            <AppCallout
-              variant="progress"
-              title="Creating student repositories"
-              message={`${s.count} of ${STUDENTS} repositories`}
-              progress={s.count / STUDENTS}
-            />
-          ) : (
-            <AppCallout
-              variant="success"
-              title="Student repositories created"
-              message={`${STUDENTS} repositories`}
-            />
-          )}
+        <div className="absolute right-3 top-3 z-10">
+          <AppOperationPanel
+            title={s.publishing ? 'Creating student repositories' : 'Student repositories created'}
+            done={s.publishing ? s.count : STUDENTS}
+            total={STUDENTS}
+            noun="repositories"
+            running={s.publishing}
+          />
         </div>
       )}
     </DemoFrame>

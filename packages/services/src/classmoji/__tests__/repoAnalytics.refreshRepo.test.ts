@@ -13,6 +13,7 @@ const snapshotCount = vi.fn();
 const membershipFindMany = vi.fn().mockResolvedValue([]);
 const contributorLinkFindMany = vi.fn().mockResolvedValue([]);
 
+const snapshotFindFirst = vi.fn();
 const listCommits = vi.fn();
 const getContributorStats = vi.fn();
 const getLanguages = vi.fn();
@@ -28,6 +29,7 @@ vi.mock('@classmoji/database', async () => ({
     gitRepoAnalyticsSnapshot: {
       upsert: (...a: unknown[]) => snapshotUpsert(...a),
       count: (...a: unknown[]) => snapshotCount(...a),
+      findFirst: (...a: unknown[]) => snapshotFindFirst(...a),
     },
     classroomMembership: { findMany: (...a: unknown[]) => membershipFindMany(...a) },
     gitRepoContributorLink: { findMany: (...a: unknown[]) => contributorLinkFindMany(...a) },
@@ -66,6 +68,7 @@ beforeEach(() => {
   getLanguages.mockResolvedValue({});
   listPulls.mockResolvedValue([]);
   snapshotUpsert.mockResolvedValue({});
+  snapshotFindFirst.mockResolvedValue(null);
   // Default: nothing fresh on record, so the TTL never short-circuits.
   snapshotCount.mockResolvedValue(0);
 });
@@ -84,6 +87,18 @@ describe('refreshRepo', () => {
     expect(result).toEqual({ stale: false, rows: 3 });
   });
 
+  it('hands the provider the line counts it already read, by sha', async () => {
+    gitRepoFindUnique.mockResolvedValue(repoWith(['ra-1']));
+    snapshotFindFirst.mockResolvedValue({
+      commits: [{ sha: 'old', additions: 4, deletions: 2 }],
+    });
+
+    await refreshRepo('gitrepo-1');
+
+    const opts = listCommits.mock.calls[0][2] as { knownStats: Map<string, unknown> };
+    expect(opts.knownStats.get('old')).toEqual({ additions: 4, deletions: 2 });
+  });
+
   it('spends no provider calls on a repo with no submission rows', async () => {
     gitRepoFindUnique.mockResolvedValue(repoWith([]));
 
@@ -94,18 +109,40 @@ describe('refreshRepo', () => {
     expect(result).toEqual({ stale: false, rows: 0 });
   });
 
-  it('marks every row stale while GitHub warms its contributor-stats cache', async () => {
-    gitRepoFindUnique.mockResolvedValue(repoWith(['ra-1', 'ra-2']));
-    // A 202 surfaces as a non-array response from the provider.
-    getContributorStats.mockResolvedValue({ pending: true });
+  it('builds contributors from the commits when the provider has no endpoint for them', async () => {
+    gitRepoFindUnique.mockResolvedValue(repoWith(['ra-1']));
+    getContributorStats.mockResolvedValue(null);
+    listCommits.mockResolvedValue([
+      {
+        sha: 'a',
+        author_login: 'alice',
+        author_email: null,
+        ts: '2026-10-01T00:00:00Z',
+        message: '',
+        additions: 5,
+        deletions: 1,
+        parents: [],
+      },
+      {
+        sha: 'b',
+        author_login: 'alice',
+        author_email: null,
+        ts: '2026-10-02T00:00:00Z',
+        message: '',
+        additions: 2,
+        deletions: 0,
+        parents: [],
+      },
+    ]);
 
     const result = await refreshRepo('gitrepo-1');
 
-    expect(result).toEqual({ stale: true, rows: 2 });
-    expect(snapshotUpsert).toHaveBeenCalledTimes(2);
-    for (const call of snapshotUpsert.mock.calls) {
-      expect((call[0] as { create: { stale: boolean } }).create.stale).toBe(true);
-    }
+    expect(result).toEqual({ stale: false, rows: 1 });
+    const written = (snapshotUpsert.mock.calls[0][0] as { create: { contributors: unknown } })
+      .create.contributors;
+    expect(written).toEqual([
+      { login: 'alice', email: null, user_id: null, commits: 2, additions: 7, deletions: 1 },
+    ]);
   });
 
   it('persists the failure on every row so a dead repo surfaces on each submission', async () => {

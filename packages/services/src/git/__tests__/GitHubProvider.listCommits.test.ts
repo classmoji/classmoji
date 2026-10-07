@@ -210,4 +210,46 @@ describe('GitHubProvider.listCommits', () => {
     expect(fakeOctokit._calls.getCommitRefs).toEqual(['aaa111']);
     expect(fakeOctokit._calls.pagesYielded).toBe(1);
   });
+
+  it('reads line counts only for commits it has not seen', async () => {
+    const fakeOctokit = makeFakeOctokit(
+      [
+        [
+          {
+            sha: 'new111',
+            author: { login: 'alice' },
+            commit: {
+              author: { email: 'alice@example.com', date: '2026-01-02T12:00:00Z' },
+              message: 'new commit',
+            },
+            parents: [{ sha: 'old000' }],
+          },
+          {
+            sha: 'old000',
+            author: { login: 'alice' },
+            commit: {
+              author: { email: 'alice@example.com', date: '2026-01-01T12:00:00Z' },
+              message: 'old commit',
+            },
+            parents: [],
+          },
+        ],
+      ],
+      { new111: { stats: { additions: 9, deletions: 1 } } }
+    );
+
+    const provider = new GitHubProvider('1');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (provider as unknown as { _octokit: unknown })._octokit = fakeOctokit as any;
+
+    const commits = await provider.listCommits('org', 'repo', {
+      knownStats: new Map([['old000', { additions: 4, deletions: 2 }]]),
+    });
+
+    expect(fakeOctokit._calls.getCommitRefs).toEqual(['new111']);
+    expect(commits.map(c => [c.sha, c.additions, c.deletions])).toEqual([
+      ['new111', 9, 1],
+      ['old000', 4, 2],
+    ]);
+  });
 });

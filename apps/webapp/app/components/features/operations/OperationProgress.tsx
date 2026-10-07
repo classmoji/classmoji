@@ -1,19 +1,20 @@
 import { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useRevalidator } from 'react-router';
-import { Modal, Tag } from 'antd';
 import { TriggerAuthContext, useApiClient } from '@trigger.dev/react-hooks';
 
 import { FetcherContext, type ActiveOperation } from '~/contexts';
-import { useCallout } from '@classmoji/ui-components';
 import { useGitWeb } from '~/hooks/useGitWeb';
 import { watchSessionRuns, type RunSource } from './sessionRuns';
+import { OperationPanel, type FailureGroup, type PanelState } from './OperationPanel';
 
 /**
- * Progress for background work, reported in the callout instead of a modal.
+ * Progress for background work, reported in a panel docked top right
+ * (OperationPanel): progress while it runs, then the outcome, with what did not
+ * finish grouped by reason. The panel stays until closed when something failed.
  *
  * An action that queues Trigger.dev work hands back a `triggerSession`; the
  * global fetcher picks it up and this component, mounted once at the app root,
- * watches the batch and keeps one callout current. Nothing blocks, and because
+ * watches the batch and keeps the panel current. Nothing blocks, and because
  * it lives above the router the counts keep ticking while the instructor moves
  * around the app.
  *
@@ -219,6 +220,8 @@ interface RunPayload {
   name?: string | null;
   assignment?: { title?: string } | null;
   issue?: { title?: string } | null;
+  /** The repository a publish or sync run was for (Retry runs Sync on it). */
+  repository?: { id?: string | null } | null;
 }
 
 /**
@@ -226,6 +229,8 @@ interface RunPayload {
  */
 interface RunStatus {
   current?: string;
+  /** Why the run failed, when it knew (packages/tasks helpers/progress). */
+  reason?: string;
 }
 
 export interface OperationRun {
@@ -260,28 +265,99 @@ const subjectOf = (run: OperationRun): string => {
   );
 };
 
-/** Why it did not finish, said plainly. */
-const REASONS: Record<string, string> = {
-  FAILED: 'Failed',
-  CRASHED: 'Crashed',
-  'SYSTEM FAILURE': 'Github did not respond',
-  SYSTEM_FAILURE: 'Github did not respond',
-  'TIMED OUT': 'Timed out',
-  TIMED_OUT: 'Timed out',
-  INTERRUPTED: 'Interrupted',
-  EXPIRED: 'Gave up waiting',
-  CANCELED: 'Canceled',
+/**
+ * Why a unit did not finish, from what its run reported (packages/tasks
+ * helpers/progress reportFailureReason), or from its status when it said
+ * nothing. A few words each: the panel is small.
+ */
+const reasonOf = (run: OperationRun): string =>
+  run.metadata?.reason ??
+  (run.status === 'TIMED_OUT' || run.status === 'TIMED OUT' ? 'timed_out' : 'unknown');
+
+const REASON_COPY = (label: string): Record<string, { title: string; fix?: string }> => ({
+  permission_denied: {
+    title: `${label} refused access`,
+    fix: 'An org owner must let the Classmoji app add collaborators.',
+  },
+  template_not_found: { title: 'Template not found', fix: 'Check the repository’s template.' },
+  github_unreachable: { title: `${label} unreachable`, fix: 'Retry in a few minutes.' },
+  timed_out: { title: 'Took too long' },
+  unknown: { title: 'Something went wrong' },
+});
+
+/** Failed units grouped by reason, the largest group first. */
+const groupFailures = (failed: OperationRun[], label: string): FailureGroup[] => {
+  const copy = REASON_COPY(label);
+  const groups = new Map<string, FailureGroup>();
+  for (const run of failed) {
+    const key = reasonOf(run);
+    const group = groups.get(key) ?? { key, ...(copy[key] ?? copy.unknown), names: [] };
+    group.names.push(subjectOf(run));
+    groups.set(key, group);
+  }
+  return [...groups.values()].sort((a, b) => b.names.length - a.names.length);
 };
 
+/** The repository a publish or sync was for, so Retry can run Sync on it. */
+interface RetryTarget {
+  classSlug: string;
+  repositoryId: string;
+}
+
+const retryTargetOf = (runs: OperationRun[]): RetryTarget | null => {
+  for (const run of runs) {
+    const tag = run.tags?.find(t => t.startsWith('classroom_'));
+    const repositoryId = run.payload?.repository?.id;
+    if (tag && repositoryId) return { classSlug: tag.slice('classroom_'.length), repositoryId };
+  }
+  return null;
+};
+
+/** A batch with nothing left over closes itself after this long. */
+const CLEAN_FINISH_CLOSE_MS = 6_000;
+
 /**
- * Mounted once, at the app root. Holds the failure list itself so the details
- * survive the operation ending, which is what releases the slot for the next
- * one.
+ * Mounted once, at the app root. Holds the panel itself so the outcome stays
+ * on screen after the operation ends, which is what releases the slot for the
+ * next one.
  */
 export const OperationProgress = () => {
-  const { operation } = useContext(FetcherContext);
-  const [failures, setFailures] = useState<OperationRun[] | null>(null);
-  const web = useGitWeb();
+  const { operation, fetcher } = useContext(FetcherContext);
+  const [panel, setPanel] = useState<PanelState | null>(null);
+  const [retry, setRetry] = useState<RetryTarget | null>(null);
+
+  // A new batch takes the panel over from the last one's outcome.
+  useEffect(() => {
+    if (operation) {
+      setRetry(null);
+      setPanel({ title: 'Starting', status: 'running', done: 0, total: 0, noun: '', failures: [] });
+    }
+    // Keyed on the session id alone: the same operation re-rendering must not
+    // reset the panel it is filling.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [operation?.session.id]);
+
+  // A clean finish says so, then gets out of the way.
+  useEffect(() => {
+    if (panel?.status !== 'done' || panel.failures.length > 0) return;
+    const timer = setTimeout(() => setPanel(null), CLEAN_FINISH_CLOSE_MS);
+    return () => clearTimeout(timer);
+  }, [panel]);
+
+  // Sync retries only what is still missing, so Retry is Sync on the
+  // repository. The action is owner-only, so it is offered on /admin pages.
+  const canRetry =
+    retry !== null &&
+    typeof window !== 'undefined' &&
+    window.location.pathname.startsWith('/admin/');
+  const onRetry = () => {
+    if (!retry) return;
+    fetcher?.submit(JSON.stringify({ assignment_id: retry.repositoryId }), {
+      method: 'post',
+      action: `/admin/${retry.classSlug}/repos?/sync`,
+      encType: 'application/json',
+    });
+  };
 
   return (
     <>
@@ -290,77 +366,46 @@ export const OperationProgress = () => {
         <OperationWatcher
           key={operation.session.id}
           operation={operation}
-          onFailures={setFailures}
+          onPanel={setPanel}
+          onRetryTarget={setRetry}
         />
       ) : null}
-
-      <Modal
-        open={failures !== null}
-        title="What did not finish"
-        onCancel={() => setFailures(null)}
-        onOk={() => setFailures(null)}
-        okText="Close"
-        cancelButtonProps={{ style: { display: 'none' } }}
-        width={520}
-      >
-        <p className="text-ink-2 mb-3">
-          Running the operation again retries only what is still missing.
-        </p>
-        <ul className="flex flex-col divide-y divide-line max-h-80 overflow-y-auto">
-          {(failures ?? []).map(run => (
-            <li key={run.id} className="flex items-center justify-between gap-3 py-2">
-              <span className="min-w-0">
-                <span className="block truncate text-ink-1">{subjectOf(run)}</span>
-                {/* The task and status are what a bug report needs, so they
-                    stay, one step quieter than the name. */}
-                <span className="block truncate font-mono text-xs text-ink-3">
-                  {run.taskIdentifier}
-                </span>
-              </span>
-              <Tag color="red" className="m-0 shrink-0 font-medium">
-                {run.status === 'SYSTEM FAILURE' || run.status === 'SYSTEM_FAILURE'
-                  ? `${web.label} did not respond`
-                  : (REASONS[run.status] ?? run.status)}
-              </Tag>
-            </li>
-          ))}
-        </ul>
-      </Modal>
+      {panel && (
+        <OperationPanel
+          state={panel}
+          onClose={() => setPanel(null)}
+          onRetry={canRetry && panel.status === 'done' ? onRetry : undefined}
+        />
+      )}
     </>
   );
 };
 
-const OperationWatcher = ({
-  operation,
-  onFailures,
-}: {
+interface WatcherProps {
   operation: ActiveOperation;
-  onFailures: (runs: OperationRun[]) => void;
-}) => (
+  onPanel: (panel: PanelState | null) => void;
+  onRetryTarget: (target: RetryTarget | null) => void;
+}
+
+const OperationWatcher = ({ operation, ...rest }: WatcherProps) => (
   <TriggerAuthContext.Provider value={{ accessToken: operation.session.accessToken }}>
-    <OperationRuns operation={operation} onFailures={onFailures} />
+    <OperationRuns operation={operation} {...rest} />
   </TriggerAuthContext.Provider>
 );
 
-const OperationRuns = ({
-  operation,
-  onFailures,
-}: {
-  operation: ActiveOperation;
-  onFailures: (runs: OperationRun[]) => void;
-}) => {
+const OperationRuns = ({ operation, onPanel, onRetryTarget }: WatcherProps) => {
   const { endOperation, dismissNotify } = useContext(FetcherContext);
-  const callout = useCallout();
-  const { terms } = useGitWeb();
+  const web = useGitWeb();
+  const { terms } = web;
   const { revalidate } = useRevalidator();
   const settled = useRef(false);
   const [over, setOver] = useState(false);
   const { runs, error } = useSessionRuns(`session_${operation.session.id}`, over);
 
-  const finish = (payload: Parameters<typeof callout.update>[1]) => {
+  const finish = (panel: PanelState | null) => {
     settled.current = true;
     setOver(true);
-    callout.update(operation.calloutId, payload);
+    onPanel(panel);
     endOperation();
   };
 
@@ -385,32 +430,26 @@ const OperationRuns = ({
 
     const unitRuns = all.filter(r => isUnitRun(unit, r));
     let done = 0;
-    let unitsFailed = 0;
-    for (const run of unitRuns) {
-      const result = outcome(run.status);
-      if (result === 'done') done += 1;
-      else if (result === 'failed') unitsFailed += 1;
-    }
+    for (const run of unitRuns) if (outcome(run.status) === 'done') done += 1;
     // Failures are counted across the WHOLE batch, not just the runs that count
     // as a unit. Every repository can exist and the job still be wrong: an
     // invite that never landed leaves a student locked out of their own repo.
     const failed = all.filter(r => outcome(r.status) === 'failed');
-    // For the same reason, the job is not finished until every run has settled.
-    const complete = settledAll;
     // A unit can sit a while between being counted, so the status line says
     // what is happening now: the unit that reported most recently.
     const current = unitRuns
       .filter(r => outcome(r.status) === 'pending' && r.metadata?.current)
       .sort((a, b) => updatedAtOf(b) - updatedAtOf(a))[0]?.metadata?.current;
     return {
+      key,
       spec,
       unit,
       total: unitRuns.length,
       done,
-      unitsFailed,
       failed,
-      complete,
+      complete: settledAll,
       current,
+      retryTarget: key === 'PUBLISH' ? retryTargetOf(all) : null,
     };
   }, [runs]);
 
@@ -424,9 +463,7 @@ const OperationRuns = ({
   useEffect(() => {
     const timer = setTimeout(() => {
       if (settled.current || runCount.current > 0) return;
-      settled.current = true;
-      callout.dismiss(operation.calloutId);
-      endOperation();
+      finish(null);
     }, FIRST_RUN_TIMEOUT_MS);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -437,75 +474,52 @@ const OperationRuns = ({
 
     if (error) {
       finish({
-        variant: 'error',
-        title: 'Lost track of this operation',
-        message: 'It may still be running. Reload to check.',
-        persistent: true,
-        progress: undefined,
+        title: 'Background work',
+        status: 'lost',
+        done: 0,
+        total: 0,
+        noun: '',
+        failures: [],
       });
       return;
     }
     if (!progress) return;
 
-    const { spec, total, done, unitsFailed, failed, complete, current } = progress;
+    const { spec, total, done, failed, complete, current, retryTarget } = progress;
     const unit = localizeUnit(progress.unit, terms.repos);
 
     // Whatever the caller put up before the work started is redundant now.
     if (spec.notifyKey) dismissNotify(spec.notifyKey);
+    onRetryTarget(retryTarget);
+
+    const running: PanelState = {
+      title: unit.running,
+      status: 'running',
+      done,
+      total,
+      current,
+      noun: unit.noun,
+      failures: groupFailures(failed, web.label),
+    };
 
     if (!complete) {
-      callout.update(operation.calloutId, {
-        variant: 'progress',
-        title: unit.running,
-        message: `${done} of ${total} ${unit.noun}${current ? ` · ${current}` : ''}`,
-        progress: total > 0 ? done / total : 0,
-        persistent: true,
-      });
+      onPanel(running);
       return;
     }
 
     // Looks over: fill the bar first, whatever the count, so even a batch of one
-    // is seen to finish rather than vanishing from an empty bar. It stays full
-    // until the ending below, and ends only if nothing new arrives for a moment
-    // (SETTLE_MS). Any update re-runs this effect, which cancels the ending.
-    callout.update(operation.calloutId, {
-      variant: 'progress',
-      title: unit.running,
-      message: `${done} of ${total} ${unit.noun}`,
-      progress: 1,
-      persistent: true,
-    });
+    // is seen to finish rather than vanishing from an empty bar. It ends only if
+    // nothing new arrives for a moment (SETTLE_MS). Any update re-runs this
+    // effect, which cancels the ending.
+    onPanel({ ...running, done: total, current: undefined });
     const timer = setTimeout(() => {
       if (settled.current) return;
       // The work changed what the page is showing: repositories, graders, tokens.
       revalidate();
-
-      if (failed.length > 0) {
-        finish({
-          variant: 'error',
-          // Every unit can be done and the batch still have failures in the steps
-          // around them, so the title says which of the two happened.
-          title: unitsFailed > 0 ? `${done} of ${total} ${unit.noun} finished` : unit.done,
-          message:
-            `${failed.length} step${failed.length === 1 ? '' : 's'} did not finish` +
-            (spec.failureHint ? `. ${spec.failureHint}` : ''),
-          persistent: true,
-          progress: undefined,
-          action: { label: 'Details', onClick: () => onFailures(failed) },
-        });
-      } else {
-        finish({
-          variant: 'success',
-          title: unit.done,
-          message: `${total} ${unit.noun}`,
-          persistent: false,
-          progress: undefined,
-          autoDismissMs: 4000,
-        });
-      }
+      finish({ ...running, title: unit.done, status: 'done', current: undefined });
     }, SETTLE_MS);
     return () => clearTimeout(timer);
-    // `callout` is stable per provider; the rest are refs and setters.
+    // `onPanel` and `onRetryTarget` are state setters; the rest are refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [progress, error]);
 

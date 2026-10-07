@@ -507,7 +507,7 @@ const App = ({ loaderData }: Route.ComponentProps) => {
                         slot must be too. Without this, callouts fired outside a
                         classroom layout (landing, registration, select-organization)
                         are buffered then silently dropped. */}
-                    <CalloutSlot />
+                    <CalloutSlot placement="top-right" />
                     {/* Background Trigger.dev work reports into the callout from
                         here, above the router, so progress survives navigation
                         and no route has to host a modal for it. */}

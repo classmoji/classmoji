@@ -10,6 +10,8 @@ export type CommitRecord = {
   parents: string[];
 };
 
+export type CommitStats = { additions: number; deletions: number };
+
 export type ContributorRecord = {
   login: string;
   /** Gitlab reports authors by name + email; the email helps match them. */
