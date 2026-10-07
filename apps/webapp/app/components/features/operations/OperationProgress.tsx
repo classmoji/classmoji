@@ -8,7 +8,7 @@ import { watchSessionRuns, type RunSource } from './sessionRuns';
 import { OperationPanel, type FailureGroup, type PanelState } from './OperationPanel';
 
 /**
- * Progress for background work, reported in a panel docked bottom right
+ * Progress for background work, reported in a panel docked top right
  * (OperationPanel): progress while it runs, then the outcome, with what did not
  * finish grouped by reason. The panel stays until closed when something failed.
  *

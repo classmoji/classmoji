@@ -683,7 +683,7 @@ export function PublishDemo() {
       )}
 
       {(s.publishing || s.done) && (
-        <div className="absolute bottom-3 right-3 z-10">
+        <div className="absolute right-3 top-3 z-10">
           <AppOperationPanel
             title={s.publishing ? 'Creating student repositories' : 'Student repositories created'}
             done={s.publishing ? s.count : STUDENTS}
