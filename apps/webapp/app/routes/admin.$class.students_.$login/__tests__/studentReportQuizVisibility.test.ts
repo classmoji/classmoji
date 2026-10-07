@@ -16,6 +16,8 @@ const mocks = vi.hoisted(() => ({
   findOwnResponse: vi.fn(),
   quizzesVisibleOrThrow: vi.fn(),
   loadQuizGradeItems: vi.fn(),
+  // No settings row unless a test sets one.
+  getClassroomSettingsForServer: vi.fn(),
 }));
 
 vi.mock('~/utils/routeAuth.server', () => ({
@@ -38,7 +40,9 @@ vi.mock('@classmoji/services', () => ({
       findAllAssignmentsForStudent: (...a: unknown[]) => mocks.findAllAssignmentsForStudent(...a),
     },
     emojiMapping: { findByClassroomId: vi.fn().mockResolvedValue({}) },
-    classroom: { getClassroomSettingsForServer: vi.fn().mockResolvedValue(null) },
+    classroom: {
+      getClassroomSettingsForServer: (...a: unknown[]) => mocks.getClassroomSettingsForServer(...a),
+    },
     letterGradeMapping: { findByClassroomId: vi.fn().mockResolvedValue([]) },
     token: { getBalance: vi.fn().mockResolvedValue(0) },
     quizAttempt: {
@@ -253,5 +257,38 @@ describe('student report loader — quiz grade items', () => {
 
     await expect(load()).rejects.toThrow('lookup failed');
     expect(mocks.loadQuizGradeItems).not.toHaveBeenCalled();
+  });
+});
+
+describe('student report loader — final-grade release state', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.requireClassroomStaff.mockResolvedValue({
+      userId: 'staff-1',
+      classroom: { id: 'c-1', slug: 'cs101', status: 'ACTIVE', git_organization: null },
+      membership: { role: 'OWNER' },
+    });
+    mocks.findStudentByLoginInClassroom.mockResolvedValue({
+      id: 'm-1',
+      comment: null,
+      letter_grade: 'B+',
+      user: { id: 'u-1', name: 'Alice', login: 'alice', school_id: null, image: null },
+    });
+    mocks.listForClassroom.mockResolvedValue([]);
+    mocks.findAllAssignmentsForStudent.mockResolvedValue([]);
+    mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
+    mocks.loadQuizGradeItems.mockResolvedValue(new Map());
+  });
+
+  it.each([
+    [null, false],
+    [{ final_grades_released: false }, false],
+    [{ final_grades_released: true }, true],
+  ])('with settings %j, tells the override hint released = %s', async (settings, released) => {
+    mocks.getClassroomSettingsForServer.mockResolvedValue(settings);
+
+    const data = await load();
+
+    expect(data.finalGradesReleased).toBe(released);
   });
 });

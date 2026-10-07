@@ -333,7 +333,7 @@ describe('webhook-git_repo_push_handler', () => {
       { gitRepoId: 'gitrepo-1' },
       {
         concurrencyKey: 'gitrepo-1',
-        debounce: { key: 'gitrepo-1', delay: '5m', maxDelay: '30m' },
+        debounce: { key: 'gitrepo-1', delay: '1m', maxDelay: '30m' },
       }
     );
     expect(result).toEqual({ touched: 2 });
@@ -353,7 +353,7 @@ describe('webhook-git_repo_push_handler', () => {
       { gitRepoId: 'gitrepo-1' },
       {
         concurrencyKey: 'gitrepo-1',
-        debounce: { key: 'gitrepo-1', delay: '5m', maxDelay: '30m' },
+        debounce: { key: 'gitrepo-1', delay: '1m', maxDelay: '30m' },
       }
     );
     expect(result).toEqual({ touched: 0 });

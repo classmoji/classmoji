@@ -54,6 +54,8 @@ interface SafeSettingsUpdate {
   recent_viewers_enabled?: boolean;
   default_tokens_per_hour?: number;
   late_penalty_points_per_hour?: number;
+  show_grades_to_students?: boolean;
+  final_grades_released?: boolean;
   default_student_page?: string;
   theme?: string;
   timezone?: string | null;
@@ -71,6 +73,8 @@ interface ClassroomSettingsUpdateArgs {
   recent_viewers_enabled?: boolean;
   default_tokens_per_hour?: number;
   late_penalty_points_per_hour?: number;
+  show_grades_to_students?: boolean;
+  final_grades_released?: boolean;
   default_student_page?: string;
   theme?: (typeof THEME_KEYS)[number];
   timezone?: string | null;
@@ -85,6 +89,9 @@ export const classroomSettingsUpdateTool: ToolDefinition<ClassroomSettingsUpdate
     'repos, slides, Ask Moji, quizzes, recent viewers), token and late-penalty defaults, the ' +
     'student landing page, and the theme. Owner only. Provide at least one field; omitted fields ' +
     'are left alone. Turning a feature off hides it from students but deletes nothing. ' +
+    'show_grades_to_students shows each student an estimated grade from released grades on ' +
+    'their dashboard and in my_grades. final_grades_released shows every student their final ' +
+    'grade there instead (the gradebook letter, overrides included); false hides it. ' +
     'default_student_page takes "dashboard", "repositories", or "page:{pageId}" for a specific ' +
     'page (it must be a page in this classroom, published and shown in the student menu, or ' +
     'students fall back to the dashboard). timezone is the course IANA zone (e.g. ' +
@@ -126,6 +133,14 @@ export const classroomSettingsUpdateTool: ToolDefinition<ClassroomSettingsUpdate
       .min(0)
       .optional()
       .describe('Grade points deducted per late hour'),
+    show_grades_to_students: z
+      .boolean()
+      .optional()
+      .describe('Show students their estimated course grade (released grades only)'),
+    final_grades_released: z
+      .boolean()
+      .optional()
+      .describe("Release (true) or hide (false) every student's final letter grade"),
     default_student_page: z
       .string()
       .optional()
@@ -160,6 +175,8 @@ export const classroomSettingsUpdateTool: ToolDefinition<ClassroomSettingsUpdate
     set('recent_viewers_enabled', args.recent_viewers_enabled);
     set('default_tokens_per_hour', args.default_tokens_per_hour);
     set('late_penalty_points_per_hour', args.late_penalty_points_per_hour);
+    set('show_grades_to_students', args.show_grades_to_students);
+    set('final_grades_released', args.final_grades_released);
     set('theme', args.theme);
 
     // Validated (and canonicalized) up front with the service's own rule, so a

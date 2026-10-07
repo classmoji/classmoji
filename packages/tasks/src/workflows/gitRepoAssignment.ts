@@ -714,7 +714,7 @@ export const repositoryPushHandlerTask = task({
       { gitRepoId: payload.gitRepoId },
       {
         concurrencyKey: payload.gitRepoId,
-        debounce: { key: payload.gitRepoId, delay: '5m', maxDelay: '30m' },
+        debounce: { key: payload.gitRepoId, delay: '1m', maxDelay: '30m' },
       }
     );
     return { touched: touched.length };

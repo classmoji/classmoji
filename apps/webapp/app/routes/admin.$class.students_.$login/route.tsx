@@ -182,6 +182,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     formStatus,
     emojiMappings,
     settings: { late_penalty_points_per_hour: settingsRow?.late_penalty_points_per_hour ?? 0 },
+    // Whether students see the letter below as their final grade.
+    finalGradesReleased: settingsRow?.final_grades_released === true,
     letterGradeMappings,
     tokenBalance,
   };
@@ -397,6 +399,7 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
     formStatus,
     emojiMappings,
     settings,
+    finalGradesReleased,
     letterGradeMappings,
     tokenBalance,
   } = loaderData;
@@ -786,6 +789,11 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
               ...letters.map(l => ({ value: l.letter_grade, label: l.letter_grade })),
             ]}
           />
+          <span className="text-[11px] text-ink-3">
+            {finalGradesReleased
+              ? 'Students see this as their final grade'
+              : 'Hidden from students until final grades are released'}
+          </span>
         </div>
       </div>
 

@@ -41,6 +41,21 @@ describe('selectedSettingsFields', () => {
     ]);
   });
 
+  it('never copies final_grades_released: a new term starts unreleased', () => {
+    for (const fields of Object.values(SETTINGS_FIELD_GROUPS)) {
+      expect(fields).not.toContain('final_grades_released');
+    }
+    expect(
+      selectedSettingsFields({
+        grading: true,
+        tokens: true,
+        features: true,
+        aiConfig: true,
+        apiKeys: true,
+      })
+    ).not.toContain('final_grades_released');
+  });
+
   it('returns exactly the tokens group when only tokens is selected', () => {
     expect(selectedSettingsFields({ tokens: true })).toEqual(['default_tokens_per_hour']);
   });

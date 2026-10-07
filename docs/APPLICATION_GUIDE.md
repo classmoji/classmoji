@@ -169,7 +169,14 @@ assignments page, and via the `my_grades` MCP tool. The **gradebook** row above
 is the staff-facing overview: every student's row at once, one column per
 published assignment. The letter-grade override and the private staff note live
 on the **student report** (`admin.$class.students_.$login`, re-exported for
-teachers). Those two fields are what a student never sees, not their marks.
+teachers). A student never sees the staff note, nor the letter override until
+the owner clicks **Release final grades** on the gradebook
+(`final_grades_released`; the same button hides them again): from then on each
+student sees the gradebook's Letter column, override included, as their final
+grade on their dashboard and in `my_grades`. Before that, where the owner turns
+on **Show students an estimated grade** (Settings → Grades,
+`show_grades_to_students`), a student sees an estimate computed from released
+grades only, a letter (or the nearest emoji without a letter scale).
 
 ---
 
@@ -277,6 +284,8 @@ A classroom grades on one of two scales. Either way every grade is stored as a n
 - Instructors can customize emoji-grade mappings
 - Set letter grade thresholds (A+, A, B+, etc.)
 - Configure late penalty points per hour
+- Show students an estimated grade (off by default; released grades only)
+- Release final grades from the gradebook (owner only; off by default, for a new term too)
 
 #### Grading Workflow
 

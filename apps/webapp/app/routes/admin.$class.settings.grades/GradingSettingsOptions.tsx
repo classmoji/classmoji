@@ -1,10 +1,11 @@
-import { Form, InputNumber, Button } from 'antd';
+import { Form, InputNumber, Button, Switch } from 'antd';
 
 import { useGlobalFetcher } from '~/hooks';
 import { SettingSection } from '~/components';
 
 interface GradingSettings {
   late_penalty_points_per_hour: number;
+  show_grades_to_students: boolean;
 }
 
 interface GradingSettingsOptionsProps {
@@ -14,10 +15,11 @@ interface GradingSettingsOptionsProps {
 const GradingSettingsOptions = ({ settings }: GradingSettingsOptionsProps) => {
   const { fetcher } = useGlobalFetcher();
 
-  const onFinish = (values: { late_penalty_points_per_hour: number }) => {
+  const onFinish = (values: GradingSettings) => {
     fetcher!.submit(
       {
         late_penalty_points_per_hour: values.late_penalty_points_per_hour,
+        show_grades_to_students: values.show_grades_to_students === true,
       },
       {
         action: '?/saveGradingSettings',
@@ -38,10 +40,20 @@ const GradingSettingsOptions = ({ settings }: GradingSettingsOptionsProps) => {
         onFinish={onFinish}
         initialValues={{
           late_penalty_points_per_hour: settings.late_penalty_points_per_hour,
+          show_grades_to_students: settings.show_grades_to_students === true,
         }}
       >
         <Form.Item label="Late penalty points per hour" name="late_penalty_points_per_hour">
           <InputNumber className="w-full" min={0} />
+        </Form.Item>
+
+        <Form.Item
+          label="Show students an estimated grade"
+          name="show_grades_to_students"
+          valuePropName="checked"
+          extra="Computed from released grades only."
+        >
+          <Switch />
         </Form.Item>
 
         <Form.Item label={null}>

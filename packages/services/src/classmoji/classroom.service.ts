@@ -64,6 +64,7 @@ const SAFE_SETTINGS_FIELDS = [
   'default_tokens_per_hour',
   'late_penalty_points_per_hour',
   'show_grades_to_students',
+  'final_grades_released',
   'show_modules',
   'show_pages',
   'show_repos',
