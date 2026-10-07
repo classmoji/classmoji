@@ -27,6 +27,8 @@ const mocks = vi.hoisted(() => ({
   findRegisteredEmails: vi.fn(),
   taskTrigger: vi.fn(),
   waitForRunCompletion: vi.fn(),
+  findByClassroomAndUser: vi.fn(),
+  userFindUnique: vi.fn(),
 }));
 
 vi.mock('~/utils/routeAuth.server', () => ({
@@ -35,15 +37,32 @@ vi.mock('~/utils/routeAuth.server', () => ({
   assertClassroomMutationAllowed: (...a: unknown[]) => mocks.assertClassroomMutationAllowed(...a),
 }));
 
-vi.mock('@classmoji/services', () => ({
+vi.mock('@classmoji/services', async () => ({
   ClassmojiService: {
-    classroomMembership: { findUsersByRole: (...a: unknown[]) => mocks.findUsersByRole(...a) },
+    classroomMembership: {
+      findUsersByRole: (...a: unknown[]) => mocks.findUsersByRole(...a),
+      findByClassroomAndUser: (...a: unknown[]) => mocks.findByClassroomAndUser(...a),
+    },
     classroomInvite: {
       findInvitesByClassroomId: (...a: unknown[]) => mocks.findInvitesByClassroomId(...a),
       deleteInvite: (...a: unknown[]) => mocks.deleteInvite(...a),
     },
     user: { findRegisteredEmails: (...a: unknown[]) => mocks.findRegisteredEmails(...a) },
   },
+  // The real builder: the payload's shape is part of what these tests pin.
+  buildRemoveUserPayload: (
+    await import('../../../../../../packages/services/src/classmoji/removeUserPayload.ts')
+  ).buildRemoveUserPayload,
+}));
+
+vi.mock('@classmoji/database', () => ({
+  default: () => ({ user: { findUnique: (...a: unknown[]) => mocks.userFindUnique(...a) } }),
+  GIT_IDENTITY: {},
+}));
+
+vi.mock('@classmoji/utils', async importOriginal => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  gitUsername: (user: { login?: string | null } | null) => user?.login ?? null,
 }));
 
 vi.mock('@trigger.dev/sdk', () => ({
@@ -124,6 +143,11 @@ const actionArgs = (body: unknown, intent: string) =>
 
 beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
+  mocks.findByClassroomAndUser.mockResolvedValue({
+    user: { id: 'student-1' },
+    has_accepted_invite: true,
+  });
+  mocks.userFindUnique.mockResolvedValue({ login: 'ada' });
   mocks.findUsersByRole.mockResolvedValue([STUDENT_ROW]);
   mocks.findInvitesByClassroomId.mockResolvedValue([INVITE_ROW]);
   mocks.taskTrigger.mockResolvedValue({ id: 'run-1' });
@@ -426,5 +450,55 @@ describe('students action — mutations stay owner-only', () => {
 
     expect(mocks.deleteInvite).toHaveBeenCalledWith('invite-1');
     expect(result).toMatchObject({ action: 'REVOKE_INVITE' });
+  });
+});
+
+// ─── Action: the removal payload ─────────────────────────────────────────────
+
+describe('students action — removal payload', () => {
+  const ownerWithSecrets = () =>
+    mocks.requireClassroomAdmin.mockResolvedValue({
+      userId: 'owner-1',
+      classroom: {
+        ...CLASSROOM,
+        settings: { anthropic_api_key: 'sk-test' },
+        git_organization: { id: 'org-1', login: 'dev-org', provider: 'GITHUB' },
+      },
+      membership: { id: 'm-1', role: 'OWNER' },
+    });
+
+  it('builds the payload from the database, without settings or the client user', async () => {
+    ownerWithSecrets();
+
+    await action(
+      actionArgs(
+        { user: { id: 'student-1', login: 'spoofed', email: 'ada@school.test' } },
+        'removeStudent'
+      )
+    );
+
+    expect(mocks.findByClassroomAndUser).toHaveBeenCalledWith('class-1', 'student-1', 'STUDENT');
+    const [, { payload }] = mocks.taskTrigger.mock.calls[0] as [
+      string,
+      { payload: Record<string, unknown> },
+    ];
+    expect(payload).toEqual({
+      user: { id: 'student-1', login: 'ada', has_accepted_invite: true },
+      classroom: { id: 'class-1', slug: CLASS_SLUG },
+      gitOrganization: expect.objectContaining({ id: 'org-1', login: 'dev-org' }),
+      role: 'STUDENT',
+    });
+    expect(JSON.stringify(payload)).not.toContain('sk-test');
+    expect(JSON.stringify(payload)).not.toContain('ada@school.test');
+  });
+
+  it('refuses a user who is not a student in this classroom', async () => {
+    ownerWithSecrets();
+    mocks.findByClassroomAndUser.mockResolvedValue(null);
+
+    const result = await action(actionArgs({ user: { id: 'someone-else' } }, 'removeStudent'));
+
+    expect(mocks.taskTrigger).not.toHaveBeenCalled();
+    expect(result).toEqual(expect.objectContaining({ error: expect.any(String) }));
   });
 });

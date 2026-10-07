@@ -6,7 +6,9 @@ import { useState, useMemo } from 'react';
 import { Button } from 'antd';
 import { PlusCircleOutlined } from '@ant-design/icons';
 
-import { ClassmojiService } from '@classmoji/services';
+import { buildRemoveUserPayload, ClassmojiService } from '@classmoji/services';
+import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
+import { gitUsername } from '@classmoji/utils';
 import StudentsTable from './StudentsTable';
 import { ActionTypes } from '~/constants';
 import { waitForRunCompletion } from '~/utils/helpers';
@@ -236,12 +238,32 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   return namedAction(request, {
     async removeStudent() {
       try {
+        // The student is resolved here, never taken from the request: they must
+        // be a STUDENT in this classroom. The payload is built field by field
+        // (buildRemoveUserPayload) so the classroom's settings and the
+        // student's contact details stay out of the stored run.
+        const membership = await ClassmojiService.classroomMembership.findByClassroomAndUser(
+          classroom.id,
+          String(data.user?.id ?? ''),
+          'STUDENT'
+        );
+        if (!membership?.user) {
+          return { error: 'Student not found in this classroom', action: ActionTypes.REMOVE_USER };
+        }
+        const identity = await getPrisma().user.findUnique({
+          where: { id: membership.user.id },
+          select: GIT_IDENTITY,
+        });
         const run = await tasks.trigger('remove_user_from_organization', {
-          payload: {
-            user: data.user,
-            organization: classroom,
+          payload: buildRemoveUserPayload({
+            user: {
+              id: membership.user.id,
+              login: gitUsername(identity, classroom.git_organization?.provider),
+              has_accepted_invite: membership.has_accepted_invite,
+            },
+            classroom,
             role: 'STUDENT',
-          },
+          }),
         });
 
         await waitForRunCompletion(run.id);

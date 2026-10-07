@@ -72,6 +72,18 @@ interface ClassroomRecord {
   git_organization: GitOrganizationLike;
 }
 
+/**
+ * The classroom a per-repo run is handed: only the fields those runs read. The
+ * full record carries its settings, including any API keys the instructor
+ * saved, and a run's payload is stored and shown in the Trigger dashboard.
+ */
+const toTaskClassroom = (classroom: ClassroomRecord): ClassroomRecord => ({
+  id: classroom.id,
+  slug: classroom.slug,
+  git_namespace: classroom.git_namespace,
+  git_organization: classroom.git_organization,
+});
+
 interface RepositoryTaskContext {
   ctx: {
     run: {
@@ -210,15 +222,7 @@ export const createRepositoriesTask = task({
       throw error;
     }
     const classroom = { ...loadedClassroom, git_organization: gitOrganization };
-    // What each repo-creation run is handed: only the fields it reads. The full
-    // classroom carries its settings, including any API keys the instructor
-    // saved, and a run's payload is stored and shown in the Trigger dashboard.
-    const payloadClassroom: ClassroomRecord = {
-      id: classroom.id,
-      slug: classroom.slug,
-      git_namespace: classroom.git_namespace,
-      git_organization: gitOrganization,
-    };
+    const payloadClassroom = toTaskClassroom(classroom);
 
     // A template stored without an owner belongs to the classroom's own org,
     // which is where templates live. Splitting blindly used to leave the repo
@@ -757,9 +761,10 @@ export const createProjectsForModuleTask = task({
 
     logger.info(`Creating projects for ${reposWithoutProjects.length} repos`);
 
+    const taskClassroom = toTaskClassroom(classroom);
     const payloads = reposWithoutProjects.map(repo => ({
       payload: {
-        classroom,
+        classroom: taskClassroom,
         repository,
         repoName: repo.name,
         repoId: repo.id,
