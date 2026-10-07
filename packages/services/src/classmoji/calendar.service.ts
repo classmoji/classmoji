@@ -459,6 +459,19 @@ const getRecurrenceRule = (
   };
 };
 
+/**
+ * The last instant a recurrence may produce. A date-only `until` ("2026-11-16")
+ * is inclusive: "until Nov 16" means through Nov 16, so it runs to the end of
+ * that day (UTC, the zone occurrences are expanded in). Anything else is a
+ * full instant and used as is. Null when unparseable.
+ */
+const recurrenceUntilLimit = (until: string): Date | null => {
+  const limit = /^\d{4}-\d{2}-\d{2}$/.test(until)
+    ? new Date(`${until}T23:59:59.999Z`)
+    : new Date(until);
+  return isNaN(limit.getTime()) ? null : limit;
+};
+
 const toInputJsonObject = (value: Prisma.JsonValue | null | undefined): Prisma.InputJsonObject => {
   if (!isJsonObject(value)) {
     return {};
@@ -791,7 +804,7 @@ const expandRecurringEvent = (
 
   const currentDate = new Date(event.start_time);
   // Handle missing or invalid 'until' date - default to rangeEnd if not set
-  const endDateLimit = until ? new Date(until) : null;
+  const endDateLimit = until ? recurrenceUntilLimit(until) : null;
   const rangeStart = new Date(startDate);
   const rangeEnd = new Date(endDate);
 
@@ -1616,7 +1629,7 @@ export const updateEventWithScope = async (
           data: {
             recurrence_rule: {
               ...toInputJsonObject(event.recurrence_rule),
-              until: dayBeforeOccurrence.toISOString(),
+              until: dayBeforeOccurrence.toISOString().slice(0, 10),
             },
           },
         });
@@ -1789,7 +1802,7 @@ export const deleteEventWithScope = async (
           data: {
             recurrence_rule: {
               ...toInputJsonObject(event.recurrence_rule),
-              until: dayBeforeOccurrence.toISOString(),
+              until: dayBeforeOccurrence.toISOString().slice(0, 10),
             },
           },
         });
