@@ -210,6 +210,15 @@ export const createRepositoriesTask = task({
       throw error;
     }
     const classroom = { ...loadedClassroom, git_organization: gitOrganization };
+    // What each repo-creation run is handed: only the fields it reads. The full
+    // classroom carries its settings, including any API keys the instructor
+    // saved, and a run's payload is stored and shown in the Trigger dashboard.
+    const payloadClassroom: ClassroomRecord = {
+      id: classroom.id,
+      slug: classroom.slug,
+      git_namespace: classroom.git_namespace,
+      git_organization: gitOrganization,
+    };
 
     // A template stored without an owner belongs to the classroom's own org,
     // which is where templates live. Splitting blindly used to leave the repo
@@ -275,7 +284,7 @@ export const createRepositoriesTask = task({
       }
       const data: StandardCreateRepositoryTaskPayload = {
         repoName,
-        classroom,
+        classroom: payloadClassroom,
         repository,
         templateOwner,
         templateRepo,
