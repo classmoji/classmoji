@@ -4,6 +4,7 @@ import { createHmac, timingSafeEqual } from 'crypto';
 import jwt from 'jsonwebtoken';
 import { GitProvider, type RepoPagesInfo } from './GitProvider.ts';
 import { watchRateLimits } from './rateLimitWatch.ts';
+import { retryRejectedAuth } from './authRetry.ts';
 import type {
   CommitRecord,
   CommitStats,
@@ -230,6 +231,9 @@ export class GitHubProvider extends GitProvider {
       // Visibility only: warns when the installation's quota runs low and logs
       // every secondary-limit refusal. Never changes a request.
       watchRateLimits(octokit, `installation ${this.installationId}`);
+      // GitHub can reject a token it has just minted for a moment; retry those
+      // instead of failing the run (see authRetry.ts).
+      retryRejectedAuth(octokit, `installation ${this.installationId}`);
 
       GitHubProvider.#installationCache.set(cacheKey, {
         octokit,
