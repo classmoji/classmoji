@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 import { Avatar, Tooltip } from 'antd';
 import dayjs from 'dayjs';
 import { IconArrowRight, IconBrandGithub } from '@tabler/icons-react';
+import type { StudentGradeSummary } from '@classmoji/utils';
 import Emoji from '~/components/ui/display/Emoji';
 import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
 import { useGitWeb } from '~/hooks/useGitWeb';
@@ -59,6 +60,7 @@ interface RetroTabsCardProps {
   team: TeamSummary | null;
   needsTeam: SelfFormedNeedsTeam | null;
   resubmits: ResubmitItem[];
+  gradeSummary: StudentGradeSummary | null;
   classSlug: string;
 }
 
@@ -130,11 +132,43 @@ const PanelShell = ({
 const viewLinkClass =
   'text-xs font-medium text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 px-2 py-1 rounded ring-1 ring-line hover:bg-nav-hover transition-colors';
 
-const FeedbackPanel = ({ items }: { items: FeedbackItem[] }) => {
+/** The student's final or estimated grade, as one summary line under the feedback list. */
+const GradeSummaryFooter = ({ summary }: { summary: StudentGradeSummary }) => {
+  if (summary.kind === 'final') {
+    return (
+      <>
+        <span className="text-xs text-ink-3">Final grade</span>
+        <span className="text-base font-bold text-accent-ink">{summary.letter}</span>
+      </>
+    );
+  }
+  const label = `Estimated grade · ${summary.count} released ${
+    summary.count === 1 ? 'grade' : 'grades'
+  }`;
+  return (
+    <>
+      <span className="text-xs text-ink-3">{label}</span>
+      {summary.kind === 'letter' ? (
+        <span className="text-base font-bold text-accent-ink">{summary.letter}</span>
+      ) : (
+        <Emoji emoji={summary.emoji} fontSize={18} />
+      )}
+    </>
+  );
+};
+
+const FeedbackPanel = ({
+  items,
+  summary,
+}: {
+  items: FeedbackItem[];
+  summary: StudentGradeSummary | null;
+}) => {
   const subtitle = 'Released grades and quiz scores';
+  const footer = summary ? <GradeSummaryFooter summary={summary} /> : undefined;
   if (items.length === 0) {
     return (
-      <PanelShell title="Recent feedback" subtitle={subtitle}>
+      <PanelShell title="Recent feedback" subtitle={subtitle} footer={footer}>
         <div className="h-full flex flex-col items-center justify-center text-center">
           <p className="text-sm text-ink-3">No graded feedback yet</p>
         </div>
@@ -142,7 +176,7 @@ const FeedbackPanel = ({ items }: { items: FeedbackItem[] }) => {
     );
   }
   return (
-    <PanelShell title="Recent feedback" subtitle={subtitle}>
+    <PanelShell title="Recent feedback" subtitle={subtitle} footer={footer}>
       <Eyebrow>RECENT GRADES</Eyebrow>
       <ul className="flex flex-col">
         {items.map(item => {
@@ -340,7 +374,14 @@ const ResubmitsPanel = ({ items, classSlug }: { items: ResubmitItem[]; classSlug
   );
 };
 
-const RetroTabsCard = ({ feedback, team, needsTeam, resubmits, classSlug }: RetroTabsCardProps) => {
+const RetroTabsCard = ({
+  feedback,
+  team,
+  needsTeam,
+  resubmits,
+  gradeSummary,
+  classSlug,
+}: RetroTabsCardProps) => {
   const [active, setActive] = useState<TabKey>('feedback');
 
   return (
@@ -374,7 +415,7 @@ const RetroTabsCard = ({ feedback, team, needsTeam, resubmits, classSlug }: Retr
       </div>
       <section className="flex-1 rounded-2xl rounded-tl-none bg-panel border border-line min-h-[400px] flex flex-col">
         <div className="flex-1 p-5 sm:p-6">
-          {active === 'feedback' && <FeedbackPanel items={feedback} />}
+          {active === 'feedback' && <FeedbackPanel items={feedback} summary={gradeSummary} />}
           {active === 'team' && (
             <TeamPanel team={team} needsTeam={needsTeam} classSlug={classSlug} />
           )}

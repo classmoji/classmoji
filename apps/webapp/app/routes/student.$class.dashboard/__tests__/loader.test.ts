@@ -9,11 +9,23 @@ const loadQuizzesVisibleMock = vi.fn();
 const listForStudentMock = vi.fn();
 const listPublishedAssignmentsMock = vi.fn();
 const upNextMock = vi.fn();
+const summaryMock = vi.fn();
+const emojiMappingFindManyMock = vi.fn();
+const letterGradeMappingFindManyMock = vi.fn();
 
 vi.mock('@classmoji/database', () => ({
   default: () => ({
     repository: { findMany: (...a: unknown[]) => repositoryFindManyMock(...a) },
+    // The grade line's reads, for the test that runs the real entry point.
+    emojiMapping: { findMany: (...a: unknown[]) => emojiMappingFindManyMock(...a) },
+    letterGradeMapping: { findMany: (...a: unknown[]) => letterGradeMappingFindManyMock(...a) },
   }),
+}));
+
+// The real grade-line entry point, below the mocked barrel. Its quiz gate is a
+// read too: answered here, so no quiz items are loaded.
+vi.mock('../../../../../../packages/services/src/classmoji/entitlement.service.ts', () => ({
+  quizzesVisibleOrThrow: async () => false,
 }));
 
 vi.mock('@classmoji/services', () => ({
@@ -23,6 +35,13 @@ vi.mock('@classmoji/services', () => ({
     },
     helper: {
       findAllAssignmentsForStudent: (...a: unknown[]) => findAllAssignmentsMock(...a),
+      gradeSummaryForStudent: (...a: unknown[]) => summaryMock(...a),
+      showsGradeSummary: (
+        role: string | undefined,
+        settings: Record<string, unknown> | null | undefined
+      ) =>
+        role === 'STUDENT' &&
+        (settings?.final_grades_released === true || settings?.show_grades_to_students === true),
     },
     regradeRequest: {
       findMany: (...a: unknown[]) => regradeRequestsMock(...a),
@@ -58,6 +77,8 @@ vi.mock('../UpNextCard', () => ({ default: () => null }));
 vi.mock('../RetroTabsCard', () => ({ default: () => null }));
 
 const { loader } = await import('../route.tsx');
+const { gradeSummaryForStudent } =
+  await import('../../../../../../packages/services/src/classmoji/helper.service.ts');
 
 const loaderArgs = () =>
   ({
@@ -78,15 +99,20 @@ const courseworkRow = (over: Record<string, unknown>) => ({
   ...over,
 });
 
-const grant = (role = 'STUDENT') =>
+const grant = (
+  role = 'STUDENT',
+  settings: Record<string, unknown> | null = null,
+  letterGrade: string | null = null
+) =>
   assertAccessMock.mockResolvedValue({
     userId: 'student-1',
     classroom: {
       id: 'class-1',
       name: 'Test Class',
       git_organization: { login: 'test-org' },
+      settings,
     },
-    membership: { role },
+    membership: { role, letter_grade: letterGrade },
   });
 
 beforeEach(() => {
@@ -100,6 +126,7 @@ beforeEach(() => {
   listForStudentMock.mockResolvedValue([]);
   listPublishedAssignmentsMock.mockResolvedValue([{ id: 'listed' }]);
   upNextMock.mockImplementation((rows: Array<{ done: boolean }>) => rows.filter(r => !r.done));
+  summaryMock.mockResolvedValue({ kind: 'letter', letter: 'B', count: 3 });
 });
 
 describe('student dashboard loader — assignment lookup guard', () => {
@@ -343,5 +370,130 @@ describe('student dashboard loader — team card', () => {
       select: { id: true, slug: true, title: true, type: true, team_formation_mode: true },
       orderBy: { created_at: 'asc' },
     });
+  });
+});
+
+describe('student dashboard loader — grade line', () => {
+  const ON = { show_grades_to_students: true, late_penalty_points_per_hour: 2 };
+  const RELEASED = { final_grades_released: true, late_penalty_points_per_hour: 2 };
+
+  it('reads nothing for it and sends none when both settings are off', async () => {
+    grant('STUDENT', { show_grades_to_students: false, final_grades_released: false });
+
+    const data = await (await loader(loaderArgs())).data;
+
+    expect(data.gradeSummary).toBeNull();
+    expect(summaryMock).not.toHaveBeenCalled();
+  });
+
+  it('reads nothing for it when the classroom has no settings row', async () => {
+    grant('STUDENT', null);
+
+    const data = await (await loader(loaderArgs())).data;
+
+    expect(data.gradeSummary).toBeNull();
+    expect(summaryMock).not.toHaveBeenCalled();
+  });
+
+  it('sends staff previewing the dashboard none', async () => {
+    grant('TEACHER', { ...ON, ...RELEASED });
+
+    const data = await (await loader(loaderArgs())).data;
+
+    expect(data.gradeSummary).toBeNull();
+    expect(summaryMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['the estimate is on', ON],
+    ['final grades are released', RELEASED],
+  ])(
+    'asks the shared entry point when %s, with the submissions already read',
+    async (_, settings) => {
+      grant('STUDENT', settings, 'A-');
+      const submissions = [{ id: 'ra-1', assignment: { grades_released: true } }];
+      findAllAssignmentsMock.mockResolvedValue(submissions);
+
+      const data = await (await loader(loaderArgs())).data;
+
+      expect(summaryMock).toHaveBeenCalledWith({
+        role: 'STUDENT',
+        classroomId: 'class-1',
+        userId: 'student-1',
+        submissions,
+        letterOverride: 'A-',
+        settings,
+      });
+      expect(data.gradeSummary).toEqual({ kind: 'letter', letter: 'B', count: 3 });
+      expect(findAllAssignmentsMock).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('sends the final grade the entry point returns', async () => {
+    grant('STUDENT', RELEASED, 'A-');
+    summaryMock.mockResolvedValue({ kind: 'final', letter: 'A-' });
+
+    const data = await (await loader(loaderArgs())).data;
+
+    expect(data.gradeSummary).toEqual({ kind: 'final', letter: 'A-' });
+  });
+
+  it('never sends the letter override before release (real entry point, reads stubbed)', async () => {
+    grant('STUDENT', { show_grades_to_students: true, final_grades_released: false }, 'C+');
+    summaryMock.mockImplementation(gradeSummaryForStudent);
+    emojiMappingFindManyMock.mockResolvedValue([
+      { emoji: 'heart', grade: 100 },
+      { emoji: 'eyes', grade: 80 },
+    ]);
+    letterGradeMappingFindManyMock.mockResolvedValue([
+      { letter_grade: 'A', min_grade: 90 },
+      { letter_grade: 'B', min_grade: 80 },
+      { letter_grade: 'C', min_grade: 70 },
+    ]);
+    const submission = (id: string, emoji: string, released: boolean) => ({
+      id,
+      grades: [{ emoji }],
+      num_late_hours: 0,
+      is_late_override: false,
+      assignment: { weight: 50, is_extra_credit: false, type: 'REPO', grades_released: released },
+    });
+    findAllAssignmentsMock.mockResolvedValue([
+      submission('ra-1', 'eyes', true),
+      submission('ra-2', 'heart', false),
+    ]);
+
+    const data = await (await loader(loaderArgs())).data;
+
+    // The estimate over released work, computed, not the override.
+    expect(data.gradeSummary).toEqual({ kind: 'letter', letter: 'B', count: 1 });
+    expect(emojiMappingFindManyMock).toHaveBeenCalled();
+    expect(JSON.stringify(data)).not.toContain('C+');
+  });
+
+  it('sends none when the submissions read failed, rather than a quiz-only grade', async () => {
+    grant('STUDENT', ON);
+    findAllAssignmentsMock.mockRejectedValue(new Error('timeout'));
+
+    const data = await (await loader(loaderArgs())).data;
+
+    expect(data.gradeSummary).toBeNull();
+    expect(summaryMock).not.toHaveBeenCalled();
+  });
+
+  it('sends none, and logs, when the grade read fails', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    grant('STUDENT', ON);
+    summaryMock.mockRejectedValue(new Error('connection timeout'));
+
+    const data = await (await loader(loaderArgs())).data;
+
+    expect(data.gradeSummary).toBeNull();
+    expect(data.feedback).toEqual([]);
+    expect(logged).toHaveBeenCalledWith(
+      '[student dashboard] grade summary failed',
+      { classroomId: 'class-1', userId: 'student-1' },
+      expect.any(Error)
+    );
+    logged.mockRestore();
   });
 });

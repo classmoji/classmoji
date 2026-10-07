@@ -252,7 +252,7 @@ const StepImportModules = ({
                         {
                           key: 'grading',
                           label: 'Grading & late penalty',
-                          sublabel: 'late penalty rate, grade visibility',
+                          sublabel: 'late penalty rate, estimated grade for students',
                         },
                         {
                           key: 'gradeScales',

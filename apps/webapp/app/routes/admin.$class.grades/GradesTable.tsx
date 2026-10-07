@@ -13,10 +13,11 @@ import { mean, median } from 'simple-statistics';
 
 import { UserThumbnailView } from '~/components';
 import GradeSettings from './GradeSettings';
+import FinalGradesControl from './FinalGradesControl';
 import {
   calculateAssignmentGrade,
-  calculateLetterGrade,
   calculateStudentFinalGrade,
+  finalStudentGrade,
   gradedItemValue,
 } from '@classmoji/utils';
 import type {
@@ -112,6 +113,10 @@ interface GradesTableProps {
   letterGradeMappings: LetterGradeMappingEntry[];
   memberships: Membership[];
   activity?: GradebookActivity;
+  /** Whether students see their final grade (the Letter column). */
+  finalGradesReleased?: boolean;
+  /** Owner only: may release or hide final grades. */
+  canReleaseFinalGrades?: boolean;
 }
 
 /** The student's submission row for an assignment, wherever its git repo sits. */
@@ -189,6 +194,22 @@ export const matchesRowFilter = (
     return subs.some(s => isLate(s)) || quizItems.some(i => i.late_hours > 0);
   return true;
 };
+/**
+ * Whether the breakpoints in the popover differ from the saved ones. Edits
+ * there are never saved, while students' final grades read the saved cutoffs,
+ * so the Letter column then shows letters students would not get.
+ */
+export const breakpointsEdited = (
+  saved: readonly LetterGradeMappingEntry[],
+  local: readonly LetterGradeMappingEntry[]
+): boolean => {
+  const savedMin = new Map(saved.map(m => [m.letter_grade, m.min_grade]));
+  return (
+    saved.length !== local.length ||
+    local.some(m => !savedMin.has(m.letter_grade) || savedMin.get(m.letter_grade) !== m.min_grade)
+  );
+};
+
 const LATE_TINT = 'bg-amber-50 dark:bg-amber-950/30';
 const MISSING_TINT = 'bg-red-50 dark:bg-red-950/30';
 
@@ -225,6 +246,8 @@ const GradesTable = (props: GradesTableProps) => {
     letterGradeMappings: initialLetterGradeMappings,
     memberships,
     activity = { quiz: {}, form: {} },
+    finalGradesReleased = false,
+    canReleaseFinalGrades = false,
   } = props;
   const [letterGradeMappings, setLetterGradeMappings] = useState(initialLetterGradeMappings);
   const [rowFilter, setRowFilter] = useState<RowFilter>('all');
@@ -620,14 +643,19 @@ const GradesTable = (props: GradesTableProps) => {
       fixed: 'right',
       width: 100,
       render: (_: unknown, student) => {
-        const final = finalOf(student);
+        // The student's final grade, by the same function students are shown
+        // it with, over the breakpoints as edited here.
         const override = membershipOf(student)?.letter_grade ?? null;
-        const computed =
-          final >= 0 && letterGradeMappings.length > 0
-            ? calculateLetterGrade(final, letterGradeMappings)
-            : null;
-        const letter = override ?? computed;
+        const input = {
+          submissions: student.git_repos.flatMap(repo => repo.assignments ?? []),
+          items: itemsOf(student),
+          emojiMappings,
+          settings,
+          letterGradeMappings,
+        };
+        const letter = finalStudentGrade({ ...input, letterOverride: override })?.letter;
         if (!letter) return <span className="text-ink-4">–</span>;
+        const computed = override ? finalStudentGrade(input)?.letter : letter;
         return (
           <Tooltip
             title={
@@ -730,6 +758,14 @@ const GradesTable = (props: GradesTableProps) => {
             ]}
           />
           <div className="h-6 w-px bg-line" />
+          {(canReleaseFinalGrades || finalGradesReleased) && (
+            <FinalGradesControl
+              released={finalGradesReleased}
+              canRelease={canReleaseFinalGrades}
+              breakpointsEdited={breakpointsEdited(initialLetterGradeMappings, letterGradeMappings)}
+              actionPath={`${base}/grades`}
+            />
+          )}
           <div className="flex items-center gap-1.5">
             <Popover
               trigger="click"

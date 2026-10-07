@@ -7,6 +7,7 @@ import {
   SCORE_EMOJI_MAPPINGS,
 } from '@classmoji/utils';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
+import { pickSettings } from '~/utils/pickSettings';
 import type { Route } from './+types/route';
 
 export const action = async ({ request, params }: Route.ActionArgs) => {
@@ -22,7 +23,15 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
   return namedAction(request, {
     async saveGradingSettings() {
-      await ClassmojiService.classroom.updateSettings(classroom.id, data);
+      const { late_penalty_points_per_hour: penalty, show_grades_to_students: showEstimate } =
+        pickSettings(data, ['late_penalty_points_per_hour', 'show_grades_to_students']);
+      await ClassmojiService.classroom.updateSettings(classroom.id, {
+        // A cleared number box sends null; keep the stored value then.
+        ...(typeof penalty === 'number' &&
+          Number.isFinite(penalty) && { late_penalty_points_per_hour: penalty }),
+        // Stored as a real boolean whatever the body sent.
+        ...(showEstimate !== undefined && { show_grades_to_students: showEstimate === true }),
+      });
       return {
         action: 'SAVE_GRADING_SETTINGS',
         success: 'Saved grading settings successfully.',

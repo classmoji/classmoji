@@ -256,3 +256,39 @@ describe('gradebook totals with quiz items', () => {
     expect(text(html)).toContain('mean 45.0');
   });
 });
+
+describe('gradebook Letter column', () => {
+  const LETTERS = [
+    { letter_grade: 'A', min_grade: 90 },
+    { letter_grade: 'B', min_grade: 80 },
+    { letter_grade: 'C', min_grade: 70 },
+  ];
+  const graded = [item('a-quiz', { grade: 85, raw_grade: 85, late_hours: 0 })];
+  const props = {
+    assignments: [quizColumn('a-quiz', 'Recursion')],
+    students: [student('s-1', 'Ada', graded)],
+    letterGradeMappings: LETTERS,
+  };
+  /** The Letter cell's chip: its colour classes, then the letter. */
+  const chip = (colour: string, letter: string) =>
+    new RegExp(`bg-${colour}-50 text-${colour}-700 [^"]*"[^>]*>${letter}<`);
+  const GREEN_B = chip('green', 'B');
+
+  it('shows the letter for the final grade, green', () => {
+    expect(render(props)).toMatch(GREEN_B);
+  });
+
+  it('shows the override instead, amber', () => {
+    const html = render({
+      ...props,
+      memberships: [{ id: 'm-1', user_id: 's-1', letter_grade: 'A-' }],
+    });
+
+    expect(html).toMatch(chip('amber', 'A-'));
+    expect(html).not.toMatch(GREEN_B);
+  });
+
+  it('reads bands in descending order whatever order they arrive in', () => {
+    expect(render({ ...props, letterGradeMappings: [...LETTERS].reverse() })).toMatch(GREEN_B);
+  });
+});

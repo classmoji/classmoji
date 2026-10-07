@@ -179,7 +179,7 @@ function buildExampleSandbox(args: {
           content_repo: defaultContentRepoName(slug),
           is_example: true,
           settings: {
-            create: { show_grades_to_students: true, quizzes_enabled: true, timezone },
+            create: { quizzes_enabled: true, timezone },
           },
         },
       });

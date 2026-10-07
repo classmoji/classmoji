@@ -323,3 +323,143 @@ export const calculateGrades = (
     rawLetterGrade,
   };
 };
+
+/**
+ * A submission as the estimate reads it: the engine's row plus whether its
+ * assignment's grades have been released to students.
+ */
+export interface ReleasableGitRepoAssignment extends GitRepoAssignment {
+  assignment: AssignmentWeighting & { grades_released?: boolean | null };
+}
+
+/**
+ * The estimated grade a student is shown before final grades are released:
+ * a letter where the classroom has a letter scale, else the nearest emoji.
+ * `count` is the number of graded items the computation used (repo
+ * submissions and quiz items, counted zeros and extra credit included).
+ */
+export type GradeEstimate =
+  | { kind: 'letter'; letter: string; count: number }
+  | { kind: 'emoji'; emoji: string; count: number };
+
+/** A released final grade: the gradebook's Letter column for the student. */
+export interface FinalGrade {
+  kind: 'final';
+  letter: string;
+}
+
+/** The one grade line a student is shown: their final grade, or an estimate. */
+export type StudentGradeSummary = FinalGrade | GradeEstimate;
+
+export interface EstimateStudentGradeInput {
+  /** Every submission of the student's, released or not: the filter is applied here. */
+  submissions: readonly ReleasableGitRepoAssignment[];
+  /** Quiz grade items (`loadQuizGradeItems`): counted as soon as scored. */
+  items?: readonly GradedItem[];
+  emojiMappings: Record<string, number>;
+  settings: OrganizationSettings;
+  letterGradeMappings: readonly LetterGradeMappingEntry[];
+}
+
+/** Letter bands highest first, as `calculateLetterGrade` reads them. */
+const bandsDescending = (mappings: readonly LetterGradeMappingEntry[]) =>
+  [...mappings].sort((a, b) => b.min_grade - a.min_grade);
+
+/**
+ * A student's estimated course grade: the gradebook's final grade (late
+ * penalty on, group work included) over released work only. A repo
+ * submission counts only when its assignment has `grades_released`, so an
+ * unreleased grade and an unreleased missing-work zero are both left out.
+ * Quiz items count as they are. The instructor's letter override is never
+ * read: it stays with staff until final grades are released.
+ *
+ * A letter where the classroom has a letter scale, else the nearest emoji on
+ * its own scale. Null when nothing released has a grade, or when the
+ * classroom has no scale to show it on.
+ */
+export const estimateStudentGrade = ({
+  submissions,
+  items = [],
+  emojiMappings,
+  settings,
+  letterGradeMappings,
+}: EstimateStudentGradeInput): GradeEstimate | null => {
+  const released = submissions.filter(
+    submission => submission.assignment?.grades_released === true
+  );
+
+  const final = calculateStudentFinalGrade(
+    [{ repository: {}, assignments: released }],
+    emojiMappings,
+    settings,
+    true,
+    true,
+    items
+  );
+  if (final < 0) return null;
+
+  // The same walk the engine makes: every submission and item with a value
+  // that can move the grade (a weight-0 one cannot).
+  const count =
+    released.filter(
+      submission =>
+        isGradable(submission) &&
+        (submission.assignment.weight ?? 0) > 0 &&
+        calculateAssignmentGrade(submission, emojiMappings, settings) !== null
+    ).length +
+    items.filter(item => (item.weight ?? 0) > 0 && gradedItemValue(item) !== null).length;
+
+  if (letterGradeMappings.length > 0) {
+    return {
+      kind: 'letter',
+      letter: calculateLetterGrade(final, bandsDescending(letterGradeMappings)),
+      count,
+    };
+  }
+
+  if (Object.keys(emojiMappings).length === 0) return null;
+  return { kind: 'emoji', emoji: gradeToEmoji(final, emojiMappings), count };
+};
+
+export interface FinalStudentGradeInput {
+  /** Every submission of the student's, released or not: all graded work counts. */
+  submissions: readonly GitRepoAssignment[];
+  /** Quiz grade items (`loadQuizGradeItems`). */
+  items?: readonly GradedItem[];
+  emojiMappings: Record<string, number>;
+  settings: OrganizationSettings;
+  letterGradeMappings: readonly LetterGradeMappingEntry[];
+  /** The letter an instructor set on the student report; wins when set. */
+  letterOverride?: string | null;
+}
+
+/**
+ * A student's final grade, exactly as the gradebook's Letter column shows it
+ * (`admin.$class.grades/GradesTable.tsx`): the letter override when set, else
+ * the letter for the final grade over ALL graded work (late penalty on, group
+ * work included, quiz items), released or not. Null where the column shows
+ * none: no override and no letter scale, or nothing graded.
+ */
+export const finalStudentGrade = ({
+  submissions,
+  items = [],
+  emojiMappings,
+  settings,
+  letterGradeMappings,
+  letterOverride,
+}: FinalStudentGradeInput): FinalGrade | null => {
+  const final = calculateStudentFinalGrade(
+    [{ repository: {}, assignments: [...submissions] }],
+    emojiMappings,
+    settings,
+    true,
+    true,
+    items
+  );
+  const computed =
+    final >= 0 && letterGradeMappings.length > 0
+      ? calculateLetterGrade(final, bandsDescending(letterGradeMappings))
+      : null;
+  const letter = letterOverride ?? computed;
+  return letter ? { kind: 'final', letter } : null;
+};

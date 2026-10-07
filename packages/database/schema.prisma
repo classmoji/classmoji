@@ -621,6 +621,7 @@ model ClassroomSettings {
   default_tokens_per_hour      Int      @default(0)
   late_penalty_points_per_hour Float    @default(0)
   show_grades_to_students      Boolean  @default(false)
+  final_grades_released        Boolean  @default(false)
   quizzes_enabled              Boolean  @default(true)
   slides_enabled               Boolean  @default(false)
   syllabus_bot_enabled         Boolean  @default(false)
