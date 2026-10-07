@@ -22,6 +22,7 @@ import { provisionAutogradeWorkflowForRepo } from './autograde.ts';
 import { reportStatus } from '../helpers/progress.ts';
 import { ensureGitInstallation, GitAppNotInstalledError } from '../helpers/gitInstallation.ts';
 import { withDatabaseRetry } from '../helpers/databaseRetry.ts';
+import { retryOnGitBlip } from '../helpers/gitRetry.ts';
 
 type GitOrganizationLike = Parameters<typeof getGitProvider>[0] & { login: string | null };
 type StrictGitOrganizationLike = Parameters<typeof getGitProvider>[0] & { login: string };
@@ -346,6 +347,10 @@ export const createRepositoryTask = task({
   // download plus an upload in several parts; the project-wide 15 minutes is
   // not enough for it. Normal templates finish in seconds either way.
   maxDuration: 3600,
+  // A Github or network blip (a push dropped, github.com unreachable, a 5xx)
+  // retries with backoff; anything else still fails once. Safe to repeat:
+  // createRepository resumes a half-made repository.
+  ...retryOnGitBlip,
   run: async (payload: CreateRepositoryTaskPayload, { ctx }: RepositoryTaskContext) => {
     try {
       // NOTE: this branch rebuilds the standard payload field-by-field and so
