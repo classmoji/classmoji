@@ -3,7 +3,7 @@ import { IconCheck, IconChevronDown, IconX } from '@tabler/icons-react';
 
 /**
  * The webapp's background-work panel (apps/webapp/app/components/features/
- * operations/OperationPanel.tsx), docked bottom right: progress while a batch
+ * operations/OperationPanel.tsx), docked top right: progress while a batch
  * runs, then the outcome. The demo only ever shows a clean run.
  */
 export function AppOperationPanel({
