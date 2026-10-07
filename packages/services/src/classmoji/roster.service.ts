@@ -158,7 +158,8 @@ export const addStudents = async ({
     const invites = toInvite.map(student => ({
       school_email: student.email,
       classroom_id: classroomId,
-      student_name: student.name,
+      // `name` is optional for the MCP caller but the column is NOT NULL.
+      student_name: student.name ?? '',
     }));
     await classroomInviteService.createManyInvites(invites);
 

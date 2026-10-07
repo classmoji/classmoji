@@ -3,16 +3,19 @@ import type { Prisma } from '@prisma/client';
 
 /**
  * Create multiple invites (bulk) - used when instructor uploads roster
- * @param {Object[]} invites - Array of { school_email, student_id, classroom_id }
+ * @param {Object[]} invites - Array of { school_email, student_name, student_id, classroom_id }
  * @returns {Promise<{count: number}>}
  */
 export const createManyInvites = async (
-  invites: { school_email: string; student_id?: string; classroom_id: string }[]
+  invites: {
+    school_email: string;
+    student_name: string;
+    student_id?: string;
+    classroom_id: string;
+  }[]
 ): Promise<{ count: number }> => {
-  const inviteData: unknown = invites;
-  // TODO: narrow further once classroom invite input shape is aligned with the generated Prisma schema.
   return getPrisma().classroomInvite.createMany({
-    data: inviteData as Prisma.ClassroomInviteCreateManyInput[],
+    data: invites,
     skipDuplicates: true,
   });
 };
