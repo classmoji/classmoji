@@ -1,5 +1,9 @@
 import { forwardRef, useEffect, useState } from 'react';
 import { useFetcher, useLocation, useNavigate } from 'react-router';
+import {
+  useOrphanedRepositoryPrompt,
+  type OrphanedRepository,
+} from '~/components/features/assignments/useOrphanedRepositoryPrompt';
 import { App, Dropdown, Switch, Tag, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
 import {
@@ -68,7 +72,12 @@ export interface ModuleCardData {
 }
 
 /** What a write from the card, or a drag into it, came back with. */
-type WriteResult = { success?: string; error?: string };
+type WriteResult = {
+  success?: string;
+  error?: string;
+  /** Set by the assignments delete when it left a published repository empty. */
+  orphanedRepository?: OrphanedRepository | null;
+};
 
 interface ModuleCardProps {
   module: ModuleCardData;
@@ -348,6 +357,7 @@ const ModuleCard = ({
   useEffect(() => {
     if (assignmentResult) setError(assignmentResult.error ?? null);
   }, [assignmentResult]);
+  useOrphanedRepositoryPrompt(assignmentResult, classSlug);
   useEffect(() => {
     if (moveResult) setError(moveResult.error ?? null);
   }, [moveResult]);

@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import type { Octokit } from 'octokit';
+import type { CommitStats } from '../classmoji/repoAnalytics.types.ts';
 /**
  * Abstract base class for git providers.
  * Each method throws an error if not implemented by subclass.
@@ -135,21 +136,33 @@ export class GitProvider {
     throw new Error('getTree() must be implemented by subclass');
   }
 
+  /**
+   * `knownStats` holds line counts already read, by sha. A commit's counts
+   * never change, so a provider that fetches them per commit can skip these.
+   */
   async listCommits(
     _org: string,
     _repo: string,
-    _opts?: { since?: string; branch?: string; maxCommits?: number }
+    _opts?: {
+      since?: string;
+      branch?: string;
+      maxCommits?: number;
+      knownStats?: Map<string, CommitStats>;
+    }
   ): Promise<import('../classmoji/repoAnalytics.types.ts').CommitRecord[]> {
     throw new Error('listCommits() must be implemented by subclass');
   }
 
+  /**
+   * Per-author totals, for a provider with a cheap endpoint for them. `null`
+   * (the default) means the snapshot builds them from the commits it already
+   * read.
+   */
   async getContributorStats(
     _org: string,
     _repo: string
-  ): Promise<
-    { pending: true } | import('../classmoji/repoAnalytics.types.ts').ContributorRecord[]
-  > {
-    throw new Error('getContributorStats() must be implemented by subclass');
+  ): Promise<import('../classmoji/repoAnalytics.types.ts').ContributorRecord[] | null> {
+    return null;
   }
 
   async getLanguages(

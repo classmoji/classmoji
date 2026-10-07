@@ -27,6 +27,8 @@ const mocks = vi.hoisted(() => ({
   createInClassroom: vi.fn(),
   updateInClassroom: vi.fn(),
   deleteInClassroom: vi.fn(),
+  addClassroomAuditLog: vi.fn(),
+  findRepositoryById: vi.fn(),
 }));
 
 vi.mock('~/utils/routeAuth.server', () => ({
@@ -48,6 +50,7 @@ vi.mock('@classmoji/services', () => ({
       updateInClassroom: (...a: unknown[]) => mocks.updateInClassroom(...a),
       deleteInClassroom: (...a: unknown[]) => mocks.deleteInClassroom(...a),
     },
+    repository: { findById: (...a: unknown[]) => mocks.findRepositoryById(...a) },
     module: {
       findByClassroomSlug: (...a: unknown[]) => mocks.findModules(...a),
       getCandidateContent: (...a: unknown[]) => mocks.getCandidateContent(...a),
@@ -59,6 +62,9 @@ vi.mock('@classmoji/services', () => ({
 
 // The loader and action are what is under test; the view layer only needs to
 // be importable.
+vi.mock('~/utils/helpers', () => ({
+  addClassroomAuditLog: (...a: unknown[]) => mocks.addClassroomAuditLog(...a),
+}));
 vi.mock('~/components', () => ({ SearchInput: () => null }));
 vi.mock('~/components/features/assignments/AssignmentsTable', () => ({ default: () => null }));
 vi.mock('~/components/features/assignments/AssignmentFormModal', () => ({ default: () => null }));
@@ -167,16 +173,19 @@ describe('assignments action — create refuses a quiz assignment', () => {
   it.each([
     ['visible', true],
     ['hidden', false],
-  ])('refuses it where quizzes are %s, says where quizzes are added, and writes nothing', async (_label, visible) => {
-    mocks.loadQuizzesVisible.mockResolvedValue(visible);
+  ])(
+    'refuses it where quizzes are %s, says where quizzes are added, and writes nothing',
+    async (_label, visible) => {
+      mocks.loadQuizzesVisible.mockResolvedValue(visible);
 
-    const result = await create(QUIZ_BODY);
+      const result = await create(QUIZ_BODY);
 
-    expect(result).toEqual({ error: 'Add a quiz from the quiz form.' });
-    expect(mocks.createInClassroom).not.toHaveBeenCalled();
-    // The refusal does not depend on the classroom's quiz setting.
-    expect(mocks.loadQuizzesVisible).not.toHaveBeenCalled();
-  });
+      expect(result).toEqual({ error: 'Add a quiz from the quiz form.' });
+      expect(mocks.createInClassroom).not.toHaveBeenCalled();
+      // The refusal does not depend on the classroom's quiz setting.
+      expect(mocks.loadQuizzesVisible).not.toHaveBeenCalled();
+    }
+  );
 
   it('still creates a form assignment, without asking about quizzes', async () => {
     mocks.loadQuizzesVisible.mockResolvedValue(false);

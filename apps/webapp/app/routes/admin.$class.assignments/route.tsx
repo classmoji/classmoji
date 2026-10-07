@@ -12,6 +12,11 @@ import AssignmentsTable, {
 import AssignmentFormModal from '~/components/features/assignments/AssignmentFormModal';
 import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
+import { addClassroomAuditLog } from '~/utils/helpers';
+import {
+  useOrphanedRepositoryPrompt,
+  type OrphanedRepository,
+} from '~/components/features/assignments/useOrphanedRepositoryPrompt';
 import { gitTerms } from '~/utils/gitWeb';
 import { loadQuizzesVisible, quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import type { Route } from './+types/route';
@@ -54,10 +59,18 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   };
 };
 
+/** A published repository with no assignments left, or null. */
+const findOrphanedRepository = async (repositoryId: string, classroomId: string) => {
+  const repository = await ClassmojiService.repository.findById(repositoryId);
+  if (!repository || repository.classroom_id !== classroomId) return null;
+  if (!repository.is_published || repository.assignments.length > 0) return null;
+  return { id: repository.id, title: repository.title };
+};
+
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
-  const { classroom, membership } = await requireClassroomAdmin(request, classSlug!, {
+  const { classroom, membership, userId } = await requireClassroomAdmin(request, classSlug!, {
     resourceType: 'ASSIGNMENTS',
     action: 'manage_assignments',
   });
@@ -194,8 +207,31 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
     async delete() {
       try {
+        const target = await ClassmojiService.assignment.findByIdInClassroom(data.id, classroom.id);
         await ClassmojiService.assignment.deleteInClassroom(data.id, classroom.id);
-        return { success: 'Assignment deleted' };
+        await addClassroomAuditLog({
+          classroomId: classroom.id,
+          userId,
+          role: membership!.role,
+          action: 'DELETE',
+          resourceType: 'ASSIGNMENTS',
+          resourceId: data.id,
+          metadata: {
+            tool: 'web:assignments.delete',
+            title: target?.title ?? null,
+            repository_id: target?.repository_id ?? null,
+          },
+        });
+        // The last assignment gone from a published repository leaves students
+        // a repository with nothing to hand in. Say so, so the page can offer
+        // to unpublish it (useOrphanedRepositoryPrompt).
+        const orphanedRepository = target?.repository_id
+          ? await findOrphanedRepository(target.repository_id, classroom.id)
+          : null;
+        return {
+          success: 'Assignment deleted',
+          ...(orphanedRepository ? { orphanedRepository } : {}),
+        };
       } catch (error: unknown) {
         // A quiz's assignment goes with the quiz; the refusal says what to do.
         if ((error as { name?: unknown } | null)?.name === 'QuizAssignmentError') {
@@ -209,19 +245,19 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 };
 
 const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
-  const {
-    assignments,
-    modules,
-    repositories,
-    forms,
-    pages,
-    slides,
-    tags,
-    quizzesVisible,
-  } = loaderData;
+  const { assignments, modules, repositories, forms, pages, slides, tags, quizzesVisible } =
+    loaderData;
   const { class: classSlug } = useParams();
   const navigate = useNavigate();
-  const deleteFetcher = useFetcher<{ success?: string; error?: string }>();
+  const deleteFetcher = useFetcher<{
+    success?: string;
+    error?: string;
+    orphanedRepository?: OrphanedRepository | null;
+  }>();
+  useOrphanedRepositoryPrompt(
+    deleteFetcher.state === 'idle' ? deleteFetcher.data : undefined,
+    classSlug
+  );
 
   const [query, setQuery] = useState('');
   const [moduleFilter, setModuleFilter] = useState<string | undefined>();

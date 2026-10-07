@@ -3,33 +3,17 @@ import { ClassmojiService } from '@classmoji/services';
 
 interface RefreshRepoAnalyticsPayload {
   repositoryAssignmentId: string;
-  /** Number of times this run has already self-rescheduled (loop guard). */
-  attempt?: number;
 }
 
 interface RefreshRepoAnalyticsForRepoPayload {
   gitRepoId: string;
-  /** Number of times this run has already self-rescheduled (loop guard). */
-  attempt?: number;
 }
-
-/**
- * Cap on self-reschedules for the transient "still warming" case. GitHub's
- * contributor-stats cache normally warms within a couple of minutes, so ~10
- * minutes of 60s retries is plenty. This bound exists because an uncapped
- * self-reschedule previously turned every permanently-stale assignment (e.g. a
- * deleted or fake/test repo) into a forever 1-per-minute loop, producing
- * hundreds of thousands of runs.
- */
-const MAX_PENDING_RESCHEDULES = 10;
 
 /**
  * Refresh analytics for a single gitRepo assignment.
  *
- * Only self-reschedules for a *transient* pending state (GitHub contributor-stats
- * returned 202 while warming its cache) — never for a hard error such as a
- * missing/unreachable repo, which would never resolve — and only up to
- * MAX_PENDING_RESCHEDULES times, so a stuck assignment can't loop indefinitely.
+ * A failure (a missing or unreachable repo) is persisted on the row and not
+ * rescheduled: it would never resolve on its own.
  */
 export const refreshRepoAnalytics = task({
   id: 'refresh-repo-analytics',
@@ -37,28 +21,13 @@ export const refreshRepoAnalytics = task({
     maxAttempts: 3,
   },
   run: async (payload: RefreshRepoAnalyticsPayload) => {
-    const { repositoryAssignmentId, attempt = 0 } = payload;
+    const { repositoryAssignmentId } = payload;
 
     const result = await ClassmojiService.repoAnalytics.refreshOne(repositoryAssignmentId);
 
-    // `stale` covers both a transient 202 (no error) and a persisted hard error.
-    // Reschedule only for the transient case, and only within the retry budget.
-    const transientlyPending = result.stale && !result.error;
-
-    if (transientlyPending && attempt < MAX_PENDING_RESCHEDULES) {
-      logger.info('Repo analytics still warming, rescheduling in 60s', {
+    if (result.stale) {
+      logger.warn('Repo analytics refresh failed', {
         repositoryAssignmentId,
-        attempt: attempt + 1,
-      });
-      await refreshRepoAnalytics.trigger(
-        { repositoryAssignmentId, attempt: attempt + 1 },
-        { delay: '60s' }
-      );
-    } else if (result.stale) {
-      logger.warn('Repo analytics still stale; not rescheduling', {
-        repositoryAssignmentId,
-        attempt,
-        gaveUp: transientlyPending,
         error: result.error ?? null,
       });
     }
@@ -105,10 +74,6 @@ export const refreshRepoAnalytics = task({
  * out across a repo's rows re-read the same four GitHub endpoints once per row
  * to write N identical snapshots, so a repo carrying N assignments cost N times
  * the GitHub budget for a single push.
- *
- * Self-reschedules on the same terms as the per-row task: only for a transient
- * 202 from GitHub's contributor-stats cache, never a hard error, and only
- * within MAX_PENDING_RESCHEDULES.
  */
 export const refreshRepoAnalyticsForRepo = task({
   id: 'refresh-repo-analytics-repo',
@@ -116,7 +81,7 @@ export const refreshRepoAnalyticsForRepo = task({
     maxAttempts: 3,
   },
   run: async (payload: RefreshRepoAnalyticsForRepoPayload) => {
-    const { gitRepoId, attempt = 0 } = payload;
+    const { gitRepoId } = payload;
 
     const result = await ClassmojiService.repoAnalytics.refreshRepo(gitRepoId);
 
@@ -128,24 +93,10 @@ export const refreshRepoAnalyticsForRepo = task({
       return result;
     }
 
-    const transientlyPending = result.stale && !result.error;
-
-    if (transientlyPending && attempt < MAX_PENDING_RESCHEDULES) {
-      logger.info('Repo analytics still warming, rescheduling in 60s', {
+    if (result.stale) {
+      logger.warn('Repo analytics refresh failed', {
         gitRepoId,
         rows: result.rows,
-        attempt: attempt + 1,
-      });
-      await refreshRepoAnalyticsForRepo.trigger(
-        { gitRepoId, attempt: attempt + 1 },
-        { delay: '60s', concurrencyKey: gitRepoId }
-      );
-    } else if (result.stale) {
-      logger.warn('Repo analytics still stale; not rescheduling', {
-        gitRepoId,
-        rows: result.rows,
-        attempt,
-        gaveUp: transientlyPending,
         error: result.error ?? null,
       });
     }

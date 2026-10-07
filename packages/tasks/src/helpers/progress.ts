@@ -20,3 +20,21 @@ export const reportStatus = async (current: string) => {
     });
   }
 };
+
+/**
+ * Why a unit of work failed, in a word the instructor's panel can group by
+ * and say plainly. Set just before the run throws; a later attempt that
+ * succeeds makes it moot, since the panel reads it only from failed runs.
+ */
+export type FailureReason = 'permission_denied' | 'template_not_found' | 'github_unreachable';
+
+export const reportFailureReason = async (reason: FailureReason) => {
+  try {
+    metadata.set('reason', reason);
+    await metadata.flush();
+  } catch (error: unknown) {
+    logger.warn('Could not report failure reason', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+};

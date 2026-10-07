@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
   createInClassroom: vi.fn(),
   updateInClassroom: vi.fn(),
   deleteInClassroom: vi.fn(),
+  addClassroomAuditLog: vi.fn(),
+  findRepositoryById: vi.fn(),
 }));
 
 vi.mock('~/utils/routeAuth.server', () => ({
@@ -35,10 +37,14 @@ vi.mock('@classmoji/services', () => ({
       updateInClassroom: (...a: unknown[]) => mocks.updateInClassroom(...a),
       deleteInClassroom: (...a: unknown[]) => mocks.deleteInClassroom(...a),
     },
+    repository: { findById: (...a: unknown[]) => mocks.findRepositoryById(...a) },
   },
 }));
 
 // The action is what is under test; the view layer only needs to be importable.
+vi.mock('~/utils/helpers', () => ({
+  addClassroomAuditLog: (...a: unknown[]) => mocks.addClassroomAuditLog(...a),
+}));
 vi.mock('~/components', () => ({ SearchInput: () => null }));
 vi.mock('~/components/features/assignments/AssignmentsTable', () => ({ default: () => null }));
 vi.mock('~/components/features/assignments/AssignmentFormModal', () => ({ default: () => null }));
@@ -127,5 +133,74 @@ describe('assignments action — writes that go through', () => {
     expect(await post('delete', { id: 'a-1' })).toEqual({ success: 'Assignment deleted' });
     expect(mocks.deleteInClassroom).toHaveBeenCalledWith('a-1', 'class-1');
     expect(consoleError).not.toHaveBeenCalled();
+  });
+});
+
+describe('assignments action — deleting an assignment', () => {
+  it('records the delete in the audit log', async () => {
+    mocks.findByIdInClassroom.mockResolvedValue({ id: 'a-1', title: 'Lab 1', repository_id: null });
+    mocks.deleteInClassroom.mockResolvedValue({ id: 'a-1' });
+
+    await post('delete', { id: 'a-1' });
+
+    expect(mocks.addClassroomAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        classroomId: 'class-1',
+        userId: 'owner-1',
+        role: 'OWNER',
+        action: 'DELETE',
+        resourceType: 'ASSIGNMENTS',
+        resourceId: 'a-1',
+        metadata: expect.objectContaining({ tool: 'web:assignments.delete', title: 'Lab 1' }),
+      })
+    );
+  });
+
+  it('reports a published repository left with no assignments', async () => {
+    mocks.findByIdInClassroom.mockResolvedValue({
+      id: 'a-1',
+      title: 'Lab 1',
+      repository_id: 'r-1',
+    });
+    mocks.deleteInClassroom.mockResolvedValue({ id: 'a-1' });
+    mocks.findRepositoryById.mockResolvedValue({
+      id: 'r-1',
+      title: 'hw3-heaps',
+      classroom_id: 'class-1',
+      is_published: true,
+      assignments: [],
+    });
+
+    expect(await post('delete', { id: 'a-1' })).toEqual({
+      success: 'Assignment deleted',
+      orphanedRepository: { id: 'r-1', title: 'hw3-heaps' },
+    });
+  });
+
+  it('says nothing when the repository keeps other assignments or is unpublished', async () => {
+    mocks.findByIdInClassroom.mockResolvedValue({
+      id: 'a-1',
+      title: 'Lab 1',
+      repository_id: 'r-1',
+    });
+    mocks.deleteInClassroom.mockResolvedValue({ id: 'a-1' });
+
+    mocks.findRepositoryById.mockResolvedValue({
+      id: 'r-1',
+      title: 'hw3-heaps',
+      classroom_id: 'class-1',
+      is_published: true,
+      assignments: [{ id: 'a-2' }],
+    });
+    expect(await post('delete', { id: 'a-1' })).toEqual({ success: 'Assignment deleted' });
+
+    mocks.findRepositoryById.mockResolvedValue({
+      id: 'r-1',
+      title: 'hw3-heaps',
+      classroom_id: 'class-1',
+      is_published: false,
+      assignments: [],
+    });
+    expect(await post('delete', { id: 'a-1' })).toEqual({ success: 'Assignment deleted' });
   });
 });

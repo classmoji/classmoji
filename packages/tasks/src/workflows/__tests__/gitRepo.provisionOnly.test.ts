@@ -339,3 +339,30 @@ describe('installation token', () => {
     expect(JSON.stringify(mocks.gitRepoCreate.mock.calls)).not.toContain('"tok"');
   });
 });
+
+/**
+ * A run's payload is stored and shown in the Trigger dashboard, so the
+ * classroom handed to each repo-creation run must not carry its settings
+ * (an instructor's saved API keys live there).
+ */
+describe('classroom in the payload', () => {
+  it('create_git_repos hands each run only the classroom fields it reads', async () => {
+    mocks.findClassroomBySlug.mockResolvedValue({
+      ...classroomRow,
+      name: 'CS52',
+      settings: { anthropic_api_key: 'sk-test', openai_api_key: 'sk-test' },
+    });
+
+    await runCreateRepositories();
+
+    const [reposData] = mocks.batchTriggerCreateRepo.mock.calls[0] as [
+      Array<{ payload: { classroom: Record<string, unknown> } }>,
+    ];
+    const { classroom } = reposData[0].payload;
+    expect(Object.keys(classroom).sort()).toEqual(
+      ['git_namespace', 'git_organization', 'id', 'slug'].sort()
+    );
+    expect(classroom).not.toHaveProperty('settings');
+    expect(classroom.slug).toBe('cs52-26f');
+  });
+});
