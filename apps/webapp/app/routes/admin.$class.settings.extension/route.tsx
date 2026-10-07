@@ -8,6 +8,7 @@ import { SettingSection } from '~/components';
 import { ActionTypes } from '~/constants';
 import { useGlobalFetcher } from '~/hooks';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
+import { pickSettings } from '~/utils/pickSettings';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -78,6 +79,9 @@ const SettingsExtensions = ({ loaderData }: Route.ComponentProps) => {
   );
 };
 
+/** The only settings this tab's form sends; see pickSettings. */
+const EXTENSION_SETTINGS_FIELDS = ['default_tokens_per_hour'] as const;
+
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
@@ -95,7 +99,10 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
   return namedAction(request, {
     async saveExtensionSettings() {
-      await ClassmojiService.classroom.updateSettings(classroom.id, data);
+      await ClassmojiService.classroom.updateSettings(
+        classroom.id,
+        pickSettings(data, EXTENSION_SETTINGS_FIELDS)
+      );
       return {
         success: 'Extension settings updated',
         action: ActionTypes.SAVE_EXTENSION_SETTINGS,

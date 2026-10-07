@@ -11,6 +11,7 @@ import StatusSection from './StatusSection';
 import DefaultPageSection from './DefaultPageSection';
 import TimeZoneSection from './TimeZoneSection';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
+import { pickSettings } from '~/utils/pickSettings';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -44,7 +45,7 @@ const SettingsGeneral = ({ loaderData }: Route.ComponentProps) => {
   const handleRecentViewersToggle = (checked: boolean) => {
     fetcher!.submit(
       { recent_viewers_enabled: checked },
-      { action: '?/saveExtensionSettings', method: 'POST', encType: 'application/json' }
+      { action: '?/saveRecentViewers', method: 'POST', encType: 'application/json' }
     );
   };
 
@@ -103,6 +104,9 @@ const pickProfileFields = (data: Record<string, unknown>) =>
     PROFILE_FIELDS.filter(field => data[field] !== undefined).map(field => [field, data[field]])
   );
 
+/** The only settings the "Recent Viewers" switch sends; see pickSettings. */
+const RECENT_VIEWERS_FIELDS = ['recent_viewers_enabled'] as const;
+
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
@@ -131,11 +135,14 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       };
     },
 
-    async saveExtensionSettings() {
-      await ClassmojiService.classroom.updateSettings(classroom.id, data);
+    async saveRecentViewers() {
+      await ClassmojiService.classroom.updateSettings(
+        classroom.id,
+        pickSettings(data, RECENT_VIEWERS_FIELDS)
+      );
       return {
-        success: 'Extension settings updated',
-        action: ActionTypes.SAVE_EXTENSION_SETTINGS,
+        success: 'Recent viewers updated',
+        action: ActionTypes.SAVE_RECENT_VIEWERS,
       };
     },
 
