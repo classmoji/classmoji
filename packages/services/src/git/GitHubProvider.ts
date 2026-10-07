@@ -6,7 +6,7 @@ import { GitProvider, type RepoPagesInfo } from './GitProvider.ts';
 import { watchRateLimits } from './rateLimitWatch.ts';
 import type {
   CommitRecord,
-  ContributorRecord,
+  CommitStats,
   LanguagesMap,
   PRSummary,
 } from '../classmoji/repoAnalytics.types.ts';
@@ -804,7 +804,12 @@ export class GitHubProvider extends GitProvider {
   async listCommits(
     org: string,
     repo: string,
-    opts: { since?: string; branch?: string; maxCommits?: number } = {}
+    opts: {
+      since?: string;
+      branch?: string;
+      maxCommits?: number;
+      knownStats?: Map<string, CommitStats>;
+    } = {}
   ): Promise<CommitRecord[]> {
     const octokit = await this.#getOctokit();
     const commits: CommitRecord[] = [];
@@ -824,7 +829,17 @@ export class GitHubProvider extends GitProvider {
       if (remaining <= 0) break;
 
       for (const c of data.slice(0, remaining)) {
-        const { data: full } = await octokit.rest.repos.getCommit({ owner: org, repo, ref: c.sha });
+        // The list carries no line counts; only a commit we have never read
+        // costs a call of its own.
+        let stats = opts.knownStats?.get(c.sha);
+        if (!stats) {
+          const { data: full } = await octokit.rest.repos.getCommit({
+            owner: org,
+            repo,
+            ref: c.sha,
+          });
+          stats = { additions: full.stats?.additions ?? 0, deletions: full.stats?.deletions ?? 0 };
+        }
         commits.push({
           sha: c.sha,
           author_login: c.author?.login ?? null,
@@ -832,8 +847,8 @@ export class GitHubProvider extends GitProvider {
           author_user_id: null,
           ts: c.commit.author?.date ?? new Date().toISOString(),
           message: c.commit.message ?? '',
-          additions: full.stats?.additions ?? 0,
-          deletions: full.stats?.deletions ?? 0,
+          additions: stats.additions,
+          deletions: stats.deletions,
           parents: (c.parents ?? []).map((p: { sha: string }) => p.sha),
         });
       }
@@ -841,28 +856,6 @@ export class GitHubProvider extends GitProvider {
       if (commits.length >= maxCommits) break;
     }
     return commits;
-  }
-
-  async getContributorStats(
-    org: string,
-    repo: string
-  ): Promise<{ pending: true } | ContributorRecord[]> {
-    const octokit = await this.#getOctokit();
-    const res = await octokit.request('GET /repos/{owner}/{repo}/stats/contributors', {
-      owner: org,
-      repo,
-    });
-    if (res.status === 202) return { pending: true };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return ((res.data as any[]) ?? []).map((row: any) => ({
-      login: row.author?.login ?? 'unknown',
-      user_id: null,
-      commits: row.total,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      additions: (row.weeks ?? []).reduce((s: number, w: any) => s + (w.a ?? 0), 0),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      deletions: (row.weeks ?? []).reduce((s: number, w: any) => s + (w.d ?? 0), 0),
-    }));
   }
 
   async getLanguages(org: string, repo: string): Promise<LanguagesMap> {

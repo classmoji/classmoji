@@ -10,9 +10,6 @@
  *   1. Load the GitRepoAssignment → GitRepo → Classroom → GitOrganization.
  *   2. Build a GitProvider from the org's installation/credentials.
  *   3. Call `buildSnapshot` to fetch commits / contributors / languages / PR summary.
- *      GitHub's contributor-stats endpoint returns 202 while warming its cache; we
- *      surface that as `pending: true` and still write the row but mark it `stale`
- *      so the Trigger.dev task retries.
  *   4. Resolve GitHub logins → classroom User ids via the members' git usernames,
  *      with `GitRepoContributorLink` rows taking precedence as manual overrides.
  *   5. Upsert the snapshot row (JSON columns + aggregate totals + stale/error flags).
@@ -23,6 +20,7 @@ import type { GitProvider } from '../git/GitProvider.ts';
 import { getGitProvider } from '../git/index.ts';
 import type {
   CommitRecord,
+  CommitStats,
   ContributorRecord,
   LanguagesMap,
   PRSummary,
@@ -40,11 +38,8 @@ const MAX_ANALYTICS_COMMITS = 250;
  *
  * Students push in bursts — 2.67 pushes per repo per day in production, far
  * more on a deadline night — and every one of them re-read the same four GitHub
- * endpoints to move a commit count by one. The number was never live anyway:
- * GitHub's contributor-stats endpoint is its own cached aggregate (that is what
- * the 202 is), so this adds a few minutes on top of a figure GitHub already
- * recomputes on its own schedule. The on-demand refresh ignores it, so a TA who
- * doubts a count is one click from a real fetch.
+ * endpoints to move a commit count by one. The on-demand refresh ignores it, so
+ * a TA who doubts a count is one click from a real fetch.
  */
 const SNAPSHOT_TTL_MS = 5 * 60 * 1000;
 
@@ -119,41 +114,64 @@ export function linkContributorsToUsers(
   }));
 }
 
+/**
+ * Per-author totals summed from a commit list, most commits first. Keyed by
+ * login, else email, so an author Github could not tie to an account still
+ * gets a row. Pure.
+ */
+export function contributorsFromCommits(commits: CommitRecord[]): ContributorRecord[] {
+  const byAuthor = new Map<string, ContributorRecord>();
+  for (const c of commits) {
+    const login = c.author_login || c.author_email || 'unknown';
+    const row = byAuthor.get(login);
+    if (row) {
+      row.commits += 1;
+      row.additions += c.additions ?? 0;
+      row.deletions += c.deletions ?? 0;
+    } else {
+      byAuthor.set(login, {
+        login,
+        email: c.author_email,
+        user_id: null,
+        commits: 1,
+        additions: c.additions ?? 0,
+        deletions: c.deletions ?? 0,
+      });
+    }
+  }
+  return [...byAuthor.values()].sort((a, b) => b.commits - a.commits);
+}
+
 // Snapshot building
 
 /**
- * Fetch the four provider endpoints that compose a snapshot and normalize them
- * into `SnapshotPayload`. Returns `pending: true` when GitHub's
- * contributor-stats cache is still warming; callers should mark the row stale.
+ * Fetch the provider endpoints that compose a snapshot and normalize them into
+ * `SnapshotPayload`.
+ *
+ * Contributors come from the commits on Github. Its contributor-stats endpoint
+ * answered 202 while it computed them, right after every push, which cost a
+ * minute-by-minute retry for most refreshes; the commits we already read carry
+ * the same per-author counts (within MAX_ANALYTICS_COMMITS).
  */
 export async function buildSnapshot(
   provider: GitProvider,
   orgLogin: string,
-  repoName: string
-): Promise<{ payload: SnapshotPayload; pending: boolean }> {
-  const [commits, contributorsRes, languages, prSummary] = await Promise.all([
-    provider.listCommits(orgLogin, repoName, { maxCommits: MAX_ANALYTICS_COMMITS }),
+  repoName: string,
+  knownStats?: Map<string, CommitStats>
+): Promise<SnapshotPayload> {
+  const [commits, contributors, languages, prSummary] = await Promise.all([
+    provider.listCommits(orgLogin, repoName, { maxCommits: MAX_ANALYTICS_COMMITS, knownStats }),
     provider.getContributorStats(orgLogin, repoName),
     provider.getLanguages(orgLogin, repoName),
     provider.listPulls(orgLogin, repoName),
   ]);
 
-  let contributors: ContributorRecord[] = [];
-  let pending = false;
-  if (Array.isArray(contributorsRes)) {
-    contributors = contributorsRes;
-  } else if ((contributorsRes as { pending?: boolean })?.pending) {
-    pending = true;
-  }
-
-  const payload: SnapshotPayload = {
+  return {
     commits,
-    contributors,
+    contributors: contributors ?? contributorsFromCommits(commits),
     languages: (languages ?? {}) as LanguagesMap,
     pr_summary: (prSummary ?? { open: 0, merged: 0, closed: 0 }) as PRSummary,
   };
-
-  return { payload, pending };
 }
 
 // Upsert
@@ -269,6 +287,24 @@ async function buildLoginToUserIdMap(
 // Orchestrator
 
 /**
+ * Line counts from the repo's latest snapshot, by sha. Github lists commits
+ * without them and reading them is one call per commit, so a refresh that
+ * reuses these only pays for the commits pushed since.
+ */
+async function loadKnownCommitStats(gitRepoId: string): Promise<Map<string, CommitStats>> {
+  const latest = await getPrisma().gitRepoAnalyticsSnapshot.findFirst({
+    where: { git_repo_assignment: { git_repo_id: gitRepoId }, error: null },
+    orderBy: { fetched_at: 'desc' },
+    select: { commits: true },
+  });
+  const known = new Map<string, CommitStats>();
+  for (const c of (latest?.commits ?? []) as unknown as CommitRecord[]) {
+    if (c?.sha) known.set(c.sha, { additions: c.additions ?? 0, deletions: c.deletions ?? 0 });
+  }
+  return known;
+}
+
+/**
  * Read one git repo from the provider and attribute its authors to classroom
  * users.
  *
@@ -282,22 +318,20 @@ async function fetchLinkedSnapshot(
   repoName: string,
   /** Where the repo lives: the class subgroup on GitLab, else the org. */
   owner?: string | null
-): Promise<{ payload: SnapshotPayload; pending: boolean }> {
+): Promise<SnapshotPayload> {
   if (!gitOrg.login) throw new Error('GitOrganization.login is required');
 
   const provider = getGitProvider(gitOrg);
-  const [{ payload, pending }, loginToUserId] = await Promise.all([
-    buildSnapshot(provider, owner || gitOrg.login, repoName),
+  const [knownStats, loginToUserId] = await Promise.all([
+    loadKnownCommitStats(gitRepoId),
     buildLoginToUserIdMap(classroomId, gitRepoId),
   ]);
+  const payload = await buildSnapshot(provider, owner || gitOrg.login, repoName, knownStats);
 
   return {
-    payload: {
-      ...payload,
-      commits: linkAuthorsToUsers(payload.commits, loginToUserId),
-      contributors: linkContributorsToUsers(payload.contributors, loginToUserId),
-    },
-    pending,
+    ...payload,
+    commits: linkAuthorsToUsers(payload.commits, loginToUserId),
+    contributors: linkContributorsToUsers(payload.contributors, loginToUserId),
   };
 }
 
@@ -307,7 +341,7 @@ async function fetchLinkedSnapshot(
  * the whole repo instead — see `refreshRepo`.
  *
  * Never throws — errors are persisted on the snapshot row and returned via
- * `{ stale: true, error }` so the task can decide whether to retry.
+ * `{ stale: true, error }`.
  */
 export async function refreshOne(
   repositoryAssignmentId: string
@@ -335,7 +369,7 @@ export async function refreshOne(
     const gitOrg = classroom.git_organization;
     if (!gitOrg) throw new Error('GitOrganization not attached to Classroom');
 
-    const { payload, pending } = await fetchLinkedSnapshot(
+    const payload = await fetchLinkedSnapshot(
       gitOrg,
       classroom.id,
       repo.id,
@@ -343,9 +377,9 @@ export async function refreshOne(
       repoNamespace(classroom)
     );
 
-    await upsertSnapshot(repositoryAssignmentId, payload, { stale: pending });
+    await upsertSnapshot(repositoryAssignmentId, payload);
 
-    return { stale: pending };
+    return { stale: false };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     try {
@@ -396,8 +430,7 @@ export async function refreshRepo(
 
     // Every row already holds a good, recent snapshot, so this push has nothing
     // to learn from the provider. `stale` and `error` rows deliberately fail
-    // this test: a row left warming by a 202 must keep retrying, and a dead repo
-    // must not be frozen behind the window.
+    // this test: a dead repo must not be frozen behind the window.
     const fresh = await prisma.gitRepoAnalyticsSnapshot.count({
       where: {
         git_repo_assignment_id: { in: rowIds },
@@ -415,7 +448,7 @@ export async function refreshRepo(
     const gitOrg = classroom.git_organization;
     if (!gitOrg) throw new Error('GitOrganization not attached to Classroom');
 
-    const { payload, pending } = await fetchLinkedSnapshot(
+    const payload = await fetchLinkedSnapshot(
       gitOrg,
       classroom.id,
       repo.id,
@@ -424,10 +457,10 @@ export async function refreshRepo(
     );
 
     for (const id of rowIds) {
-      await upsertSnapshot(id, payload, { stale: pending });
+      await upsertSnapshot(id, payload);
     }
 
-    return { stale: pending, rows: rowIds.length };
+    return { stale: false, rows: rowIds.length };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     for (const id of rowIds) {

@@ -214,6 +214,23 @@ describe('activate_membership — join after publish', () => {
     expect(titles).toEqual(['Lab 1', 'Lab 2']);
   });
 
+  it('skips a published repository with no template instead of failing for every joiner', async () => {
+    mocks.findRepositoriesByClassroomSlug.mockResolvedValue([
+      repository({ id: 'repo-1', title: 'Lab 1' }),
+      repository({ id: 'repo-2', title: 'CT6024', template: '' }),
+      repository({ id: 'repo-3', title: 'CT5108', template: '   ' }),
+    ]);
+
+    await run();
+
+    expect(mocks.createRepositoriesTrigger).toHaveBeenCalledTimes(1);
+    expect(mocks.createRepositoriesTrigger.mock.calls[0][0]).toMatchObject({
+      assignmentTitle: 'Lab 1',
+    });
+    // The skipped ones are not even looked up.
+    expect(mocks.findGitReposByRepository).toHaveBeenCalledTimes(1);
+  });
+
   it('marks the membership accepted even when there is nothing to provision', async () => {
     await run();
 

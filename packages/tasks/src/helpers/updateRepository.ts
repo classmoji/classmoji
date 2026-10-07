@@ -1,10 +1,29 @@
-import { simpleGit } from 'simple-git';
+import { simpleGit, type SimpleGit } from 'simple-git';
 import fs from 'fs';
-import { logger } from '@trigger.dev/sdk';
+import { AbortTaskRunError, logger } from '@trigger.dev/sdk';
 import path from 'path';
+import { isRepoNotFound, templateNotFoundMessage } from './gitErrors.ts';
+import { reportFailureReason } from './progress.ts';
 import { ClassmojiService, getGitProvider, type GitLabProvider } from '@classmoji/services';
 
 type GitOrganizationLike = Parameters<typeof getGitProvider>[0] & { login: string | null };
+
+/**
+ * The template's HEAD, read through the `template` remote. A template that is
+ * gone or unreadable is the instructor's to fix (it was renamed, deleted or made
+ * private), so the run stops with that, not git's "repository not found".
+ */
+const readTemplateHead = async (studentGit: SimpleGit, template: string): Promise<string> => {
+  try {
+    return await studentGit.listRemote(['--symref', 'template', 'HEAD']);
+  } catch (error: unknown) {
+    if (isRepoNotFound(error)) {
+      await reportFailureReason('template_not_found');
+      throw new AbortTaskRunError(templateNotFoundMessage(template));
+    }
+    throw error;
+  }
+};
 
 export interface UpdateRepositoryPayload {
   gitOrganization: GitOrganizationLike;
@@ -86,7 +105,7 @@ export const updateRepository = async (
     // HEAD points at instead of assuming `main`. Student repos are normalized to
     // `main` at creation; pulling template/<master> into the student's `updates`
     // branch is a normal cross-name merge.
-    const templateSymref = await studentGit.listRemote(['--symref', 'template', 'HEAD']);
+    const templateSymref = await readTemplateHead(studentGit, `${templateOwner}/${templateRepo}`);
     const templateDefaultBranch = templateSymref.match(/^ref:\s+refs\/heads\/(\S+)\s+HEAD/m)?.[1];
 
     // An *empty* template (no commits at all — e.g. a freshly created
@@ -199,7 +218,7 @@ async function updateGitLabRepository(
     else await studentGit.checkoutLocalBranch('updates');
 
     await studentGit.addRemote('template', remote(`${templateOwner}/${templateRepo}`));
-    const templateSymref = await studentGit.listRemote(['--symref', 'template', 'HEAD']);
+    const templateSymref = await readTemplateHead(studentGit, `${templateOwner}/${templateRepo}`);
     const templateDefaultBranch = templateSymref.match(/^ref:\s+refs\/heads\/(\S+)\s+HEAD/m)?.[1];
     if (!templateDefaultBranch) {
       return { message: 'Template is empty — nothing to sync', prUrl: '', hasChanges: false };

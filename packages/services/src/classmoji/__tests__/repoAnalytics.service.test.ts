@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   identityKeys,
   buildSnapshot,
+  contributorsFromCommits,
   linkAuthorsToUsers,
   linkContributorsToUsers,
 } from '../repoAnalytics.service.ts';
@@ -46,6 +47,46 @@ describe('linkContributorsToUsers', () => {
     const out = linkContributorsToUsers(contributors, new Map([['alice', 'user-1']]));
     expect(out[0].user_id).toBe('user-1');
     expect(out[1].user_id).toBeNull();
+  });
+});
+
+describe('contributorsFromCommits', () => {
+  const commit = (author_login: string | null, author_email: string | null, additions = 1) => ({
+    sha: Math.random().toString(36),
+    author_login,
+    author_email,
+    author_user_id: null,
+    ts: '2026-10-01T00:00:00Z',
+    message: '',
+    additions,
+    deletions: 0,
+    parents: [],
+  });
+
+  it('sums per author, falls back to email, and sorts by commits', () => {
+    const out = contributorsFromCommits([
+      commit(null, 'bob@example.com', 3),
+      commit('alice', 'a@example.com', 1),
+      commit('alice', 'a@example.com', 2),
+    ]);
+    expect(out).toEqual([
+      {
+        login: 'alice',
+        email: 'a@example.com',
+        user_id: null,
+        commits: 2,
+        additions: 3,
+        deletions: 0,
+      },
+      {
+        login: 'bob@example.com',
+        email: 'bob@example.com',
+        user_id: null,
+        commits: 1,
+        additions: 3,
+        deletions: 0,
+      },
+    ]);
   });
 });
 
