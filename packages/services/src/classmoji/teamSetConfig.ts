@@ -1470,6 +1470,8 @@ const AVOID_LABEL = new RegExp(
     '\\b(rather|prefer) not (to )?(work|be paired|pair|be teamed|team up) with\\b',
     "\\b(do not|don['’]?t|would not|wouldn['’]?t|not) (want|like) to (work|be paired|pair|be teamed|team up) with\\b",
     '\\bwould not (work|pair|team up) with\\b',
+    '\\b(rather|prefer) not (to )?be (on|in) (a|the same|my|one) team with\\b',
+    "\\b(do not|don['’]?t|would not|wouldn['’]?t|not) (want|like) to be (on|in) (a|the same|my|one) team with\\b",
     "\\b(don['’]?t you|do you not) want to (work|be paired|pair|be teamed|team up) with\\b",
   ].join('|'),
   'i'
