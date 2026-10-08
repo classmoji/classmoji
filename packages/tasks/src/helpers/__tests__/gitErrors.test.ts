@@ -54,6 +54,32 @@ describe('isRepoNotFound', () => {
     ).toBe(false);
     expect(isRepoNotFound(new Error('boom'))).toBe(false);
   });
+
+  // prod, Oct 2026: the student repository, just created, was "not found", and
+  // the run told the instructor their (fine) template was missing.
+  const NEW_REPO_NOT_YET_VISIBLE = gitError(
+    "remote: Repository not found.\nfatal: repository 'https://github.com/UCSE-Programacion-2/ejercitacion-eventos-y-formularios-en-react-AlvaroLucas778.git/' not found\n"
+  );
+
+  it('with a repository, only when git named that one', () => {
+    expect(isRepoNotFound(TEMPLATE_GONE, 'acme/tp3-template')).toBe(true);
+    expect(isRepoNotFound(TEMPLATE_GONE, 'ACME/TP3-Template')).toBe(true);
+    expect(isRepoNotFound(TEMPLATE_GONE, 'acme/tp3')).toBe(false);
+    expect(
+      isRepoNotFound(
+        NEW_REPO_NOT_YET_VISIBLE,
+        'UCSE-Programacion-2/Ejercitacion-Eventos-y-Formularios-en-React'
+      )
+    ).toBe(false);
+    expect(
+      isRepoNotFound(
+        gitError(
+          "remote: Repository not found.\nfatal: repository 'https://gitlab.example.edu/cs/2026/lab-1' not found"
+        ),
+        'cs/2026/lab-1'
+      )
+    ).toBe(true);
+  });
 });
 
 describe('messages', () => {

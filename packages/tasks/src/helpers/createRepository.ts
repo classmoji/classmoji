@@ -19,6 +19,7 @@ import {
   pushLfsObjects,
   usesLfs,
 } from './templatePush.ts';
+import { readNewRepo } from './gitRetry.ts';
 
 // Public fallback template used when an instructor's configured template repo has
 // no commits. An empty repo can't seed a student/team repo (the clone lands on an
@@ -300,7 +301,8 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
     // `feedback` alone: a run that stopped after pushing both is finished,
     // without rewriting `main`. Read before the template is cloned, which a
     // repository that is skipped or finished does not need.
-    const remoteHeads = await git.listRemote(['--heads', studentRepoUrl]);
+    // The repository was only just created: git may not see it for a moment.
+    const remoteHeads = await readNewRepo(() => git.listRemote(['--heads', studentRepoUrl]));
     const heads = parseRemoteHeads(remoteHeads);
     if (isHalfInitialised(heads)) {
       await finishHalfInitialisedRepo(setupTarget, { studentRepoUrl, localPath, heads });

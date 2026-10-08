@@ -557,8 +557,9 @@ export const createRepositoryTask = task({
     } catch (error: unknown) {
       logger.error('Error creating gitRepo', { error });
       // The template is gone or unreadable: the instructor's to fix, and no
-      // retry changes it.
-      if (isRepoNotFound(error)) {
+      // retry changes it. Only when git named the template: the student
+      // repository can be "not found" too, just after it was created.
+      if (isRepoNotFound(error, `${payload.templateOwner}/${payload.templateRepo}`)) {
         await reportFailureReason('template_not_found');
         throw new AbortTaskRunError(
           templateNotFoundMessage(`${payload.templateOwner}/${payload.templateRepo}`)
