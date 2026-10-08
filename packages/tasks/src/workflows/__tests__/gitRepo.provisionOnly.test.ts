@@ -25,6 +25,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   findBySlugAndTitle: vi.fn(),
+  findRepositoryById: vi.fn(),
   findClassroomBySlug: vi.fn(),
   findUsersByRole: vi.fn(),
   findTeamsByClassroomId: vi.fn(),
@@ -40,15 +41,26 @@ const mocks = vi.hoisted(() => ({
   gitRepoCreate: vi.fn(),
 }));
 
-vi.mock('@trigger.dev/sdk', () => ({
-  task: (config: unknown) => config,
-  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-}));
+vi.mock('@trigger.dev/sdk', () => {
+  class AbortTaskRunError extends Error {
+    constructor(message: string) {
+      super(message);
+      this.name = 'AbortTaskRunError';
+    }
+  }
+  return {
+    AbortTaskRunError,
+    task: (config: unknown) => config,
+    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    metadata: { set: vi.fn(), flush: vi.fn() },
+  };
+});
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     repository: {
       findBySlugAndTitle: (...a: unknown[]) => mocks.findBySlugAndTitle(...a),
+      findById: (...a: unknown[]) => mocks.findRepositoryById(...a),
       setPublished: (...a: unknown[]) => mocks.setPublished(...a),
     },
     classroom: { findBySlug: (...a: unknown[]) => mocks.findClassroomBySlug(...a) },
@@ -189,6 +201,7 @@ beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
 
   mocks.findBySlugAndTitle.mockResolvedValue(repositoryRow());
+  mocks.findRepositoryById.mockResolvedValue(repositoryRow());
   mocks.findClassroomBySlug.mockResolvedValue(classroomRow);
   mocks.findUsersByRole.mockResolvedValue([{ id: 'u-1', login: 'student-a' }]);
   mocks.findTeamsByClassroomId.mockResolvedValue([]);
@@ -309,6 +322,43 @@ describe('gh-create_git_repo — step failures are not swallowed', () => {
       runCreateRepository([assignment('a-1', true), assignment('a-2', true)], true)
     ).rejects.toThrow('row write failed');
     expect(mocks.addAssignment).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
+ * An instructor can delete the repository while its per-student runs are still
+ * queued. The run then has nothing to save its repo against (prod, Oct 2026: a
+ * foreign-key violation on git_repos_repository_id_fkey after the Github repo
+ * was already made), so it stops with what happened instead.
+ */
+describe('gh-create_git_repo — repository deleted meanwhile', () => {
+  it('stops before creating anything when the repository row is gone', async () => {
+    mocks.findRepositoryById.mockResolvedValueOnce(null);
+    await expect(runCreateRepository([assignment('a-1', true)], true)).rejects.toMatchObject({
+      name: 'AbortTaskRunError',
+      message: expect.stringContaining('was deleted in Classmoji'),
+    });
+    expect(mocks.createRepository).not.toHaveBeenCalled();
+    expect(mocks.addCollaborator).not.toHaveBeenCalled();
+    expect(mocks.gitRepoCreate).not.toHaveBeenCalled();
+  });
+
+  it('stops on the foreign-key violation when the row goes during the run', async () => {
+    mocks.gitRepoCreate.mockRejectedValueOnce(
+      Object.assign(new Error('Foreign key constraint violated'), { code: 'P2003' })
+    );
+    await expect(runCreateRepository([assignment('a-1', true)], true)).rejects.toMatchObject({
+      name: 'AbortTaskRunError',
+      message: expect.stringContaining('lab-1-student-a'),
+    });
+    expect(mocks.addAssignment).not.toHaveBeenCalled();
+  });
+
+  it('still throws any other database error as it was', async () => {
+    mocks.gitRepoCreate.mockRejectedValueOnce(new Error('unique constraint'));
+    await expect(runCreateRepository([assignment('a-1', true)], true)).rejects.toThrow(
+      'unique constraint'
+    );
   });
 });
 

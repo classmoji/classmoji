@@ -33,6 +33,13 @@ describe('isTransientGitError', () => {
         )
       )
     ).toBe(true);
+    expect(
+      isTransientGitError(
+        gitError(
+          "To https://github.com/acme/hw1-alice.git\n!\trefs/heads/main:refs/heads/main\t[remote rejected] (failure)\nDone\nPushing to https://github.com/acme/hw1-alice.git\nPOST git-receive-pack (376 bytes)\nremote: fatal error in commit_refs        \nerror: failed to push some refs to 'https://github.com/acme/hw1-alice.git'\n"
+        )
+      )
+    ).toBe(true);
   });
 
   it('counts Github API 5xx, rate limits, and a request that died with no status', () => {

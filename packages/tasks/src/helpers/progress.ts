@@ -26,7 +26,11 @@ export const reportStatus = async (current: string) => {
  * and say plainly. Set just before the run throws; a later attempt that
  * succeeds makes it moot, since the panel reads it only from failed runs.
  */
-export type FailureReason = 'permission_denied' | 'template_not_found' | 'github_unreachable';
+export type FailureReason =
+  | 'permission_denied'
+  | 'template_not_found'
+  | 'github_unreachable'
+  | 'repository_deleted';
 
 export const reportFailureReason = async (reason: FailureReason) => {
   try {

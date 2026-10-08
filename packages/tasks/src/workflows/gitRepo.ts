@@ -26,7 +26,9 @@ import { isTransientGitError, retryOnGitBlip } from '../helpers/gitRetry.ts';
 import {
   appPermissionDeniedMessage,
   isAppPermissionDenied,
+  isForeignKeyViolation,
   isRepoNotFound,
+  repositoryDeletedMessage,
   templateNotFoundMessage,
 } from '../helpers/gitErrors.ts';
 
@@ -411,6 +413,19 @@ export const createRepositoryTask = task({
         normalizedPayload.team?.slug ||
         normalizedPayload.repoName;
 
+      // The run was queued from a repository row that may have been deleted
+      // since (an instructor removing it while repos are still being made).
+      // Stop before creating anything on Github or GitLab for it.
+      const stillExists = await withDatabaseRetry(() =>
+        ClassmojiService.repository.findById(normalizedPayload.repository.id)
+      );
+      if (!stillExists) {
+        await reportFailureReason('repository_deleted');
+        throw new AbortTaskRunError(
+          repositoryDeletedMessage(normalizedPayload.repository.title, normalizedPayload.repoName)
+        );
+      }
+
       await reportStatus(`Creating ${normalizedPayload.repoName}`);
 
       // A self-managed GitLab's project ids are stored instance-scoped.
@@ -472,9 +487,17 @@ export const createRepositoryTask = task({
 
       await reportStatus(`Saving ${normalizedPayload.repoName}`);
       // Retried on a database blip, as its own task (cf-create_git_repo) was.
+      // The repository row can still go away between the check above and here;
+      // its foreign key then refuses the write, and no retry changes that.
       const studentRepo = await withDatabaseRetry(() =>
         createRepoInDatabase({ ...normalizedPayload, repoId })
-      );
+      ).catch(async (error: unknown) => {
+        if (!isForeignKeyViolation(error)) throw error;
+        await reportFailureReason('repository_deleted');
+        throw new AbortTaskRunError(
+          repositoryDeletedMessage(normalizedPayload.repository.title, normalizedPayload.repoName)
+        );
+      });
 
       if (
         normalizedPayload.repository.type === 'GROUP' &&
