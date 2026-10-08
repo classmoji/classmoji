@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { GIT_BLIP_RETRY, isTransientGitError, retryOnGitBlip } from '../gitRetry.ts';
+import { describe, expect, it, vi } from 'vitest';
+import { GIT_BLIP_RETRY, isTransientGitError, readNewRepo, retryOnGitBlip } from '../gitRetry.ts';
 
 // Shaped like simple-git's GitError (git's stderr is the message) and Octokit's
 // RequestError, without importing either. Messages are from failed prod runs.
@@ -115,5 +115,39 @@ describe('retryOnGitBlip', () => {
     expect(await retryOnGitBlip.catchError({ error: httpError(404, 'Not Found') })).toEqual({
       skipRetrying: true,
     });
+  });
+});
+
+describe('readNewRepo', () => {
+  const notFound = () =>
+    gitError(
+      "remote: Repository not found.\nfatal: repository 'https://github.com/acme/hw1-alice.git/' not found"
+    );
+  const noWait = (_ms: number) => Promise.resolve();
+
+  it('waits out a repository git does not see yet', async () => {
+    const read = vi
+      .fn()
+      .mockRejectedValueOnce(notFound())
+      .mockRejectedValueOnce(notFound())
+      .mockResolvedValueOnce('');
+    const wait = vi.fn(noWait);
+    await expect(readNewRepo(read, [1, 2, 3], wait)).resolves.toBe('');
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(wait.mock.calls.map(([ms]) => ms)).toEqual([1, 2]);
+  });
+
+  it("gives up after the last wait with git's error", async () => {
+    const read = vi.fn().mockRejectedValue(notFound());
+    await expect(readNewRepo(read, [1, 2], noWait)).rejects.toThrow('Repository not found');
+    expect(read).toHaveBeenCalledTimes(3);
+  });
+
+  it('throws any other error at once', async () => {
+    const read = vi.fn().mockRejectedValue(gitError('fatal: Authentication failed'));
+    const wait = vi.fn(noWait);
+    await expect(readNewRepo(read, [1, 2], wait)).rejects.toThrow('Authentication failed');
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(wait).not.toHaveBeenCalled();
   });
 });
