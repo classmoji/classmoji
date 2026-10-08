@@ -38,6 +38,15 @@ export const appPermissionDeniedMessage = (org: string, repoName: string): strin
   `request for the Classmoji app (Settings, then Github Apps) and allow outside ` +
   `collaborators, then run Sync on the repository.`;
 
+/** A Prisma foreign-key violation (P2003), matched by code (the client class isn't imported here). */
+export const isForeignKeyViolation = (error: unknown): boolean =>
+  typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'P2003';
+
+/** What to tell the instructor when the repository was deleted while its repos were being made. */
+export const repositoryDeletedMessage = (title: string, repoName: string): string =>
+  `The repository "${title}" was deleted in Classmoji while ${repoName} was being created, ` +
+  `so it was not saved. If ${repoName} exists in the Git organization, it can be deleted there.`;
+
 /** What to tell the instructor when a repository's template cannot be read. */
 export const templateNotFoundMessage = (template: string): string =>
   `The template repository ${template} was not found, or the Classmoji app cannot read it. ` +

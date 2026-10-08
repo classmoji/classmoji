@@ -27,6 +27,8 @@ const TRANSIENT_GIT_MESSAGE = new RegExp(
     String.raw`the remote end hung up unexpectedly`,
     String.raw`unexpected disconnect`,
     String.raw`early eof`,
+    // Github took the pack but failed to move the branch on its side.
+    String.raw`fatal error in commit_refs`,
     String.raw`internal server error`,
     String.raw`returned error: 5\d\d`,
     String.raw`\bhttp 5\d\d\b`,
