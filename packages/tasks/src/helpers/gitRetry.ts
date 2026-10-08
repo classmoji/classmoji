@@ -14,6 +14,7 @@
  * or a deleted assignment is not a blip and still fails at its first attempt.
  */
 import { isTransientDatabaseError } from './databaseRetry.ts';
+import { isRepoNotFound } from './gitErrors.ts';
 
 /** git's own words (simple-git puts git's stderr in the message) for a lost connection or a Github 5xx. */
 const TRANSIENT_GIT_MESSAGE = new RegExp(
@@ -103,3 +104,30 @@ export const retryOnGitBlip = {
       ? undefined
       : { skipRetrying: true },
 };
+
+/** Waits between reads of a repository Github has only just created: about 30s in all. */
+export const NEW_REPO_VISIBLE_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 15_000];
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * Read a repository Github has only just created. The API answers the create
+ * before Github's git servers know the repository, so git can say "Repository
+ * not found" for a few seconds, more often when a batch creates many at once
+ * (prod, Oct 2026: 10 of 21 repos in one batch). Retries that answer alone;
+ * anything else is thrown at once.
+ */
+export async function readNewRepo<T>(
+  read: () => Promise<T>,
+  delays: readonly number[] = NEW_REPO_VISIBLE_DELAYS_MS,
+  wait: (ms: number) => Promise<unknown> = sleep
+): Promise<T> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await read();
+    } catch (error: unknown) {
+      if (attempt >= delays.length || !isRepoNotFound(error)) throw error;
+      await wait(delays[attempt]);
+    }
+  }
+}

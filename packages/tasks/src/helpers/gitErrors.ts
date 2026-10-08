@@ -21,14 +21,24 @@ export function isAppPermissionDenied(error: unknown): boolean {
   );
 }
 
-/** git's answer when a remote repository does not exist or cannot be read. */
-export function isRepoNotFound(error: unknown): boolean {
+/**
+ * git's answer when a remote repository does not exist or cannot be read. With
+ * `repo` (owner/name), only when git names that repository: a run that reads
+ * several (the template, the student repository it just created) must not blame
+ * the template for the other one.
+ */
+export function isRepoNotFound(error: unknown, repo?: string): boolean {
   if (!error || typeof error !== 'object') return false;
   const message = (error as { message?: unknown }).message;
-  return (
-    typeof message === 'string' &&
-    /remote: repository not found|repository '[^']*' not found/i.test(message)
-  );
+  if (
+    typeof message !== 'string' ||
+    !/remote: repository not found|repository '[^']*' not found/i.test(message)
+  ) {
+    return false;
+  }
+  if (!repo) return true;
+  const escaped = repo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`/${escaped}(?:\\.git)?/?'`, 'i').test(message);
 }
 
 /** What to tell the instructor when Github refused to give a student or team access. */
