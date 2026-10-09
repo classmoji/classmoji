@@ -15,7 +15,7 @@ import { codeBlockOptions } from '@blocknote/code-block';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { normalizeCodeBlockContent } from '../codeContent.ts';
-import { codeBlockDisplayLanguage, createPageSchema } from '../schema.ts';
+import { codeBlockDisplayLanguage, codeBlockLanguageName, createPageSchema } from '../schema.ts';
 import {
   CODE_LANGUAGES as LANGUAGES,
   RICH_CODE_TEXT,
@@ -47,6 +47,32 @@ describe('codeBlockDisplayLanguage', () => {
     expect(codeBlockDisplayLanguage(undefined)).toBe('text');
     expect(codeBlockDisplayLanguage(null)).toBe('text');
     expect(codeBlockDisplayLanguage(42)).toBe('text');
+  });
+});
+
+describe('codeBlockLanguageName', () => {
+  it.each([
+    ['javascript', 'JavaScript'],
+    ['js', 'JavaScript'],
+    ['bash', 'Shell'],
+    ['Python', 'Python'],
+    ['brainfuck', 'Plain Text'],
+    ['', 'Plain Text'],
+    ['toString', 'Plain Text'],
+  ])('%j is named %j', (stored, name) => {
+    expect(codeBlockLanguageName(stored)).toBe(name);
+  });
+
+  it('non-strings are named Plain Text', () => {
+    expect(codeBlockLanguageName(undefined)).toBe('Plain Text');
+    expect(codeBlockLanguageName(42)).toBe('Plain Text');
+  });
+
+  it('names every stored language the way the select does', () => {
+    const supported: Record<string, { name: string }> = codeBlockOptions.supportedLanguages;
+    for (const [stored, shown] of LANGUAGES) {
+      expect(codeBlockLanguageName(stored)).toBe(supported[shown].name);
+    }
   });
 });
 
