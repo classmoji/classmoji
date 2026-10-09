@@ -31,6 +31,7 @@ export {
   pageDefaultBlockSpecs,
   createPageCodeBlockSpec,
   codeBlockDisplayLanguage,
+  codeBlockLanguageName,
   createPageSchema,
   type PageSchema,
 } from './schema.ts';

@@ -366,6 +366,92 @@
   padding: 1rem;
 }
 
+/* Code blocks dress like terminal blocks: a title bar naming the language.
+   The bar is drawn under BlockNote's language select (disabled in read-only
+   views) or, on the class site, a plain-text label in the same slot
+   (`.bn-code-language`, site/viewerSchema.server.ts). The `.bn-container`
+   prefix makes the rules that tie BlockNote's own win whichever stylesheet
+   loads last. */
+.bn-container .bn-block-content[data-content-type="codeBlock"] {
+  /* Clips the bar to the rounded corners. Long lines scroll inside the <pre>. */
+  overflow: hidden;
+}
+
+/* Absolute: the block content is a flex row, so an in-flow bar would sit
+   beside the code. */
+.bn-container .bn-block-content[data-content-type="codeBlock"]::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 34px;
+  background-color: #2d2d2d;
+  border-bottom: 1px solid #1a1a1a;
+  pointer-events: none;
+  transition: none;
+}
+
+.bn-container .bn-block-content[data-content-type="codeBlock"] > pre {
+  padding: calc(34px + 1rem) 1rem 1rem;
+}
+
+/* A selected block makes its children `position: relative` to anchor the
+   highlight, which would move the name 3px down inside its wrapper. Keep the
+   wrapper static (the name stays placed against the block) and let the <pre>
+   draw the highlight alone. */
+.bn-container .bn-block-content[data-content-type="codeBlock"] > div {
+  position: static;
+}
+
+.bn-container .bn-block-content[data-content-type="codeBlock"] > div::after {
+  content: none;
+}
+
+/* One box for both so the editor and the site place the name identically
+   (a select's own text placement varies by browser). */
+.bn-container .bn-block-content[data-content-type="codeBlock"] > div > select,
+.bn-container .bn-block-content[data-content-type="codeBlock"] > div > .bn-code-language {
+  position: absolute;
+  top: 5px;
+  left: 14px;
+  z-index: 1;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  line-height: 24px;
+  color: #8e8e8e;
+  font-size: 13px !important;
+  /* BlockNote shows the select only on hover; the bar always names it. */
+  opacity: 1 !important;
+  transition: none;
+  user-select: none;
+}
+
+.bn-container .bn-block-content[data-content-type="codeBlock"] > div > select:disabled {
+  cursor: default;
+}
+
+/* BlockNote paints options #000, unreadable on the popup a dark color-scheme
+   gives the select. */
+.bn-container .bn-block-content[data-content-type="codeBlock"] > div > select > option {
+  color: CanvasText;
+}
+
+/* Dark mode: the body and outline of a dark terminal block. */
+.dark .bn-block-content[data-content-type="codeBlock"] {
+  background-color: #141414;
+  border: 1px solid #333333;
+}
+
+/* Dark mode: BlockNote paints the editor column #1f1f1f on the #191919 page,
+   a lighter band down the middle. Transparent makes it flush, as on the class
+   site (site/styles.ts). `[data-color-scheme]` beats BlockNote's
+   `.bn-root[data-color-scheme="dark"]` whatever the stylesheet order. */
+.dark .bn-container[data-color-scheme] {
+  --bn-colors-editor-background: transparent;
+}
+
 /* Divider block */
 .divider-block hr {
   border: none;
