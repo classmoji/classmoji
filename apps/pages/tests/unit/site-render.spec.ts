@@ -167,6 +167,15 @@ test.describe('editor affordances are stripped', () => {
     expect(html).toContain('const a = 1;');
   });
 
+  test('code blocks name their language as text, outside the code', async () => {
+    // The sample is saved as `js`: the label is the select's name for it.
+    const { html } = await renderSitePage({ blocks: [SAMPLES.codeBlock], resolveLink });
+    expect(html).toContain('<span class="bn-code-language">JavaScript</span>');
+    expect(html).not.toContain('<select');
+    const code = html.match(/<code[^>]*>([\s\S]*?)<\/code>/)?.[1];
+    expect(code).toBe('const a = 1;');
+  });
+
   test('profile blocks ship no text inputs or upload control', async () => {
     const { html } = await renderSitePage({ blocks: [SAMPLES.profile], resolveLink });
     expect(html).not.toContain('<input');

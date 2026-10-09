@@ -1,6 +1,7 @@
 import React from 'react';
 import { BlockNoteSchema } from '@blocknote/core';
 import { createReactBlockSpec } from '@blocknote/react';
+import { codeBlockLanguageName } from '@classmoji/page-schema';
 
 import { schema as editorSchema } from '~/components/editor/blocks/index.tsx';
 import { AVATAR_SIZES, imageSizesFor, responsiveImageAttrs } from '~/utils/imageSizes.ts';
@@ -607,13 +608,23 @@ function makeStaticNavGrid(resolve: PageLinkResolver, showSchedule: boolean) {
 
 function StaticCodeBlock(props: RenderProps) {
   // BlockNote's own code block renders a language `<select>` above the code —
-  // an editor control that is inert (and confusing) on a static page.
+  // an editor control that is inert (and confusing) on a static page. The
+  // language name goes in its place as plain text, in the same `div` slot, so
+  // the title bar in blocknote-overrides.css styles both alike. It stays
+  // outside `contentRef`, which is the block's content.
   const language = String(props.block.props.language || '');
-  return h(
-    'pre',
-    { 'data-language': language || undefined },
-    h('code', { className: 'bn-inline-content', ref: props.contentRef })
-  );
+  return h(React.Fragment, null, [
+    h(
+      'div',
+      { key: 'l' },
+      h('span', { className: 'bn-code-language' }, codeBlockLanguageName(language))
+    ),
+    h(
+      'pre',
+      { key: 'c', 'data-language': language || undefined },
+      h('code', { className: 'bn-inline-content', ref: props.contentRef })
+    ),
+  ]);
 }
 
 function StaticToggleListItem(props: RenderProps) {
