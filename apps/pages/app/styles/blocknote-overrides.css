@@ -318,6 +318,14 @@
   width: 100%;
 }
 
+/* In dark mode #1e1e1e is the page itself (BlockNote's editor is #1f1f1f, the
+   class site #191919), so only the header showed and the next blocks read as
+   inside the terminal. A darker body and an outline make it end. */
+.dark .terminal-block {
+  background-color: #141414;
+  border: 1px solid #333333;
+}
+
 /* Header bar */
 .terminal-header {
   background-color: #2d2d2d;
