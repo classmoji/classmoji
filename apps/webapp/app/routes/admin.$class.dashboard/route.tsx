@@ -274,7 +274,18 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
         </div>
       )}
 
-      <Suspense fallback={<Skeleton active />}>
+      {/* One boundary for both, so the dashboard appears in its final layout:
+          analytics usually resolves first, and in a boundary of its own it
+          rendered under the short stats skeleton, then got shoved down when
+          the much taller stats section arrived. */}
+      <Suspense
+        fallback={
+          <>
+            <Skeleton active />
+            <Skeleton active paragraph={{ rows: 6 }} />
+          </>
+        }
+      >
         <Await resolve={data} errorElement={null}>
           {([
             students,
@@ -365,9 +376,7 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
             );
           }}
         </Await>
-      </Suspense>
 
-      <Suspense fallback={<Skeleton active paragraph={{ rows: 6 }} />}>
         <Await resolve={analytics} errorElement={null}>
           {result => {
             if (!result) return null;
