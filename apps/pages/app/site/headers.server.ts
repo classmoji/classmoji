@@ -1,5 +1,8 @@
+import { createHash } from 'node:crypto';
+
 import { COOKIE_PREFIX, sessionCookieRegexFor } from '@classmoji/auth/secret';
 
+import { SITE_COPY_SCRIPT } from './copyScript.ts';
 import { frameAncestorOrigins } from './env.server.ts';
 
 /**
@@ -26,7 +29,8 @@ import { frameAncestorOrigins } from './env.server.ts';
 
 /**
  * SHA-256 of the flash-free dark-mode script inlined by `SiteDocument` in
- * `app/root.tsx` — the ONLY script a class-site document contains.
+ * `app/root.tsx` — one of the two scripts a class-site document contains
+ * (the other is `SITE_COPY_SCRIPT`, below).
  *
  * Hardcoded because root.tsx does not export the string (and is owned by
  * another workstream). `tests/unit/site-headers.spec.ts` re-derives this hash
@@ -34,6 +38,15 @@ import { frameAncestorOrigins } from './env.server.ts';
  * updating this constant breaks a test rather than the site's CSP.
  */
 export const DARK_MODE_SCRIPT_HASH = "'sha256-zE9lMCBH7j47LO0x2JTz3HAviU8juJhY/nTgMO3guIQ='";
+
+/**
+ * SHA-256 of `SITE_COPY_SCRIPT` (Copy buttons + copy guard), which
+ * `SiteDocument` inlines at the end of the body. Derived from the string
+ * itself: both live in this app, so there is nothing to drift.
+ */
+export const SITE_COPY_SCRIPT_HASH = `'sha256-${createHash('sha256')
+  .update(SITE_COPY_SCRIPT, 'utf8')
+  .digest('base64')}'`;
 
 /**
  * Match the session cookie better-auth sets for a given `cookiePrefix`.
@@ -64,9 +77,10 @@ export function hasSessionCookie(request: Request): boolean {
 /**
  * Content-Security-Policy for every class-site response.
  *
- * `script-src` allows exactly one hash and nothing else — class sites ship no
- * bundle, no hydration and no third-party tags, so anything that executes on
- * one is by definition something we did not put there. `style-src` needs
+ * `script-src` allows exactly two hashes and nothing else (the dark-mode and
+ * copy scripts) — class sites ship no bundle, no hydration and no third-party
+ * tags, so anything that executes on one is by definition something we did
+ * not put there. `style-src` needs
  * `'unsafe-inline'` because BlockNote's serializer emits inline `style`
  * attributes (image widths, column ratios) and Google Fonts' stylesheet is
  * loaded from `fonts.googleapis.com` by the shared document head.
@@ -75,7 +89,7 @@ export function contentSecurityPolicy(): string {
   const frameAncestors = frameAncestorOrigins();
   return [
     "default-src 'none'",
-    `script-src ${DARK_MODE_SCRIPT_HASH}`,
+    `script-src ${DARK_MODE_SCRIPT_HASH} ${SITE_COPY_SCRIPT_HASH}`,
     // Author content routinely embeds images from anywhere; `https:` + `data:`
     // is the narrowest policy that does not break existing pages.
     "img-src 'self' https: data:",

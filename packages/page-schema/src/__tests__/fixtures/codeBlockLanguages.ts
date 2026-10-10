@@ -25,7 +25,7 @@ export function codeBlocks() {
   return CODE_LANGUAGES.map(([language], i) => ({
     id: `code-${i}`,
     type: 'codeBlock',
-    props: { language },
+    props: { language, copyable: true },
     content: [{ type: 'text', text: `echo ${i}`, styles: {} }],
     children: [],
   }));

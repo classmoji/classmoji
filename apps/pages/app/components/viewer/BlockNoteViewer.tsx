@@ -14,6 +14,7 @@ import {
 } from '~/hooks/useAssetDisplayUrl.ts';
 import { MediaDownloadContext, mediaDownloadLookup } from '~/hooks/useMediaDownloads.ts';
 import type { MediaDownloads } from '~/utils/mediaDownloads.ts';
+import { installCopyGuard } from '~/utils/copyGuard.ts';
 
 import '@blocknote/mantine/style.css';
 import '@blocknote/core/fonts/inter.css';
@@ -84,6 +85,11 @@ const BlockNoteViewer = ({
   useEffect(() => {
     setIsMounted(true);
   }, []);
+
+  // Code and terminal blocks with copying off: CSS makes them unselectable,
+  // this keeps a selection that spans one from copying it (copyGuard.ts).
+  // BlockNote copies from its own selection, so the guard reads that one.
+  useEffect(() => installCopyGuard(document, () => editor.prosemirrorView), [editor]);
 
   // Prevent SSR - BlockNote requires browser APIs
   if (!isMounted) {

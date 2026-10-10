@@ -17,8 +17,10 @@ import * as crypto from 'crypto';
 import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 
+import { SITE_COPY_SCRIPT } from '~/site/copyScript.ts';
 import {
   DARK_MODE_SCRIPT_HASH,
+  SITE_COPY_SCRIPT_HASH,
   hasSessionCookie,
   routeSiteHeaders,
   sessionCookieRegexFor,
@@ -155,10 +157,11 @@ test.describe('security headers', () => {
     expect(headers.get('Permissions-Policy')).toBe('camera=(), microphone=(), geolocation=()');
   });
 
-  test('CSP locks the page down to exactly one hashed script', () => {
+  test('CSP locks the page down to exactly two hashed scripts', () => {
     const csp = siteHeaders({ request: anonymous() }).get('Content-Security-Policy') ?? '';
     expect(csp).toContain("default-src 'none'");
-    expect(csp).toContain(`script-src ${DARK_MODE_SCRIPT_HASH}`);
+    const scriptSrc = csp.split('; ').find(part => part.startsWith('script-src'));
+    expect(scriptSrc).toBe(`script-src ${DARK_MODE_SCRIPT_HASH} ${SITE_COPY_SCRIPT_HASH}`);
     expect(csp).not.toContain("'unsafe-eval'");
     expect(csp).not.toContain("script-src 'self'");
     expect(csp).toContain("base-uri 'none'");
@@ -225,7 +228,12 @@ test.describe('the CSP script hash tracks root.tsx', () => {
     expect(`'sha256-${derived}'`).toBe(DARK_MODE_SCRIPT_HASH);
   });
 
-  test('root.tsx still inlines exactly one script in the site document', () => {
+  test('the copy script hash is the hash of the copy script', () => {
+    const derived = crypto.createHash('sha256').update(SITE_COPY_SCRIPT, 'utf8').digest('base64');
+    expect(SITE_COPY_SCRIPT_HASH).toBe(`'sha256-${derived}'`);
+  });
+
+  test('root.tsx inlines exactly the two hashed scripts in the site document', () => {
     const rootPath = path.join(__dirname, '../../app/root.tsx');
     const source = fs.readFileSync(rootPath, 'utf-8');
 
@@ -237,8 +245,16 @@ test.describe('the CSP script hash tracks root.tsx', () => {
     expect(end, 'Root not found after SiteDocument').toBeGreaterThan(start);
     const siteDocument = source.slice(start, end);
 
-    const inlineScripts = siteDocument.match(/dangerouslySetInnerHTML/g) ?? [];
-    expect(inlineScripts.length, 'site document must inline exactly one script').toBe(1);
+    const inlineScripts =
+      siteDocument.match(/dangerouslySetInnerHTML=\{\{ __html: (\w+) \}\}/g) ?? [];
+    expect(
+      inlineScripts,
+      'site document must inline exactly the dark-mode and copy scripts'
+    ).toEqual([
+      'dangerouslySetInnerHTML={{ __html: DARK_MODE_SCRIPT }}',
+      'dangerouslySetInnerHTML={{ __html: SITE_COPY_SCRIPT }}',
+    ]);
+    expect(siteDocument.match(/dangerouslySetInnerHTML/g)).toHaveLength(2);
     // A script bundle on a site page would defeat the whole design.
     expect(siteDocument).not.toContain('<Scripts');
     expect(siteDocument).not.toContain('<ScrollRestoration');

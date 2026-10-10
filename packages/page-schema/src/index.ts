@@ -37,6 +37,19 @@ export {
 } from './schema.ts';
 export { normalizeCodeBlockContent } from './codeContent.ts';
 export {
+  COPY_BUTTON_CLASS,
+  COPY_TOGGLE_CLASS,
+  COPY_BUTTON_ICONS,
+  COPY_TOGGLE_ICONS,
+  COPY_LABEL,
+  COPY_TOGGLE_LABEL,
+  copyToggleTitle,
+  guardControlEvents,
+  isCopyable,
+  flashCopied,
+  writeClipboardText,
+} from './copyControl.ts';
+export {
   serializePageContent,
   parsePageContent,
   type PageContent,

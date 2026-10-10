@@ -1,7 +1,7 @@
 /**
  * `/_render/page/:pageId` — the page the MCP's `page_render` screenshots.
  *
- * The root treats `/_render/` like a class-site path: the bare, script-less
+ * The root treats `/_render/` like a class-site path: the bare, bundle-less
  * `SiteDocument`, no login redirect. The loader (pageView.server.ts) is the
  * only gate — a short-lived view token in the `cm_view` cookie.
  *
@@ -20,7 +20,8 @@ import { pageViewLoader } from '~/utils/pageView.server.ts';
 export const loader = (args: LoaderFunctionArgs) => pageViewLoader(args);
 
 // The class site's own CSP too: whatever markup the static renderer let
-// through, no script runs here but the site's one hashed dark-mode script.
+// through, no script runs here but the site's two hashed scripts (dark mode,
+// and the code blocks' Copy buttons and copy guard).
 export const headers: HeadersFunction = () => ({
   ...VIEW_HEADERS,
   'Content-Security-Policy': contentSecurityPolicy(),

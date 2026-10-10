@@ -18,6 +18,7 @@ import { MantineProvider } from '@mantine/core';
 import { withLogin } from '@classmoji/utils';
 import { prisma, getAuthSession, GIT_IDENTITY } from '~/utils/db.server.ts';
 import { classifyFormsPath } from '~/utils/formsPaths.ts';
+import { SITE_COPY_SCRIPT } from '~/site/copyScript.ts';
 import useStore from '~/store';
 
 /**
@@ -200,7 +201,7 @@ export const loader = async ({ request }: { request: Request }) => {
  * CSP COUPLING — DO NOT EDIT THIS STRING. `SiteDocument` inlines it on every
  * class-site page, and its exact bytes are sha256-hashed in the site CSP
  * (`app/site/headers.server.ts`, `DARK_MODE_SCRIPT_HASH`). Change one character
- * and the browser blocks the site's only script. `tests/unit/site-headers.spec`
+ * and the browser blocks the site's dark-mode script. `tests/unit/site-headers.spec`
  * re-derives the hash from this literal and fails on drift. The embed/canonical
  * `App` document uses `APP_DARK_MODE_SCRIPT` below instead — which is NOT under
  * the CSP — so its theme-param behavior lives there, leaving this untouched.
@@ -350,9 +351,9 @@ const App = () => {
 /**
  * Document shell for class websites (/_site/*).
  *
- * Deliberately script-less: no <Scripts/>, no <ScrollRestoration/>, no
- * hydration, no Mantine/Toast providers, no dev-only preamble. Whatever ships
- * here is the whole page. <Links/> stays because it carries the app's CSS
+ * Deliberately bundle-less: no <Scripts/>, no <ScrollRestoration/>, no
+ * hydration, no Mantine/Toast providers, no dev-only preamble — only the two
+ * inline scripts the CSP hashes. Whatever ships here is the whole page. <Links/> stays because it carries the app's CSS
  * bundle (Tailwind + BlockNote/Mantine styles) that renders page content.
  */
 const SiteDocument = () => {
@@ -377,6 +378,9 @@ const SiteDocument = () => {
       </head>
       <body className="bg-white dark:bg-[#191919]" suppressHydrationWarning>
         <Outlet />
+        {/* Copy buttons and the copy guard for code and terminal blocks. Its
+            hash is the CSP's other `script-src` entry (site/headers.server.ts). */}
+        <script dangerouslySetInnerHTML={{ __html: SITE_COPY_SCRIPT }} />
       </body>
     </html>
   );
@@ -428,8 +432,8 @@ export function ErrorBoundary() {
           {/* `dark:` is class-driven (styles/tailwind.css), so a document that
               never sets the class is stuck in light mode however dark the OS
               is. DARK_MODE_SCRIPT and not the App twin: a class site's
-              `script-src` allows exactly one hash (site/headers.server.ts), and
-              this is it. */}
+              `script-src` allows only its own two hashes
+              (site/headers.server.ts), and this is one of them. */}
           <script dangerouslySetInnerHTML={{ __html: DARK_MODE_SCRIPT }} />
         </head>
         <body className="bg-gray-50 dark:bg-[#191919]">

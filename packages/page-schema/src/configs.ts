@@ -30,6 +30,8 @@ export const calloutConfig = {
 const terminalPropSchema = {
   code: { default: '' },
   title: { default: '' },
+  /** Readers may copy the commands (a Copy button; select and copy). */
+  copyable: { default: true },
 };
 
 export const terminalConfig = {
