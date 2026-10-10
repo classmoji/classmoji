@@ -11,6 +11,7 @@ import { codeBlockOptions } from '@blocknote/code-block';
 import { multiColumnSchema } from '@blocknote/xl-multi-column';
 
 import { customBlockConfigs, type CustomBlockType } from './configs.ts';
+import { createCopyButton, createCopyToggle, isCopyable } from './copyControl.ts';
 
 /**
  * Default BlockNote blocks the pages app REPLACES with its own spec of the
@@ -62,16 +63,17 @@ export function codeBlockLanguageName(language: unknown): string {
 
 /**
  * The code block every page schema uses: BlockNote's, with the language
- * select tolerant of any stored language.
+ * select tolerant of any stored language and a `copyable` prop.
  *
  * BlockNote 0.55's render throws `Language <x> is not supported.` when a
  * block's language is not a KEY of `supportedLanguages` — and saved pages hold
  * aliases (`bash`, `js`, `py`, `yml`), names BlockNote never knew, and `''`.
- * 0.46 just left the select blank. This is BlockNote's spec with one change:
+ * 0.46 just left the select blank. This is BlockNote's spec with two changes:
  * the select is told `codeBlockDisplayLanguage(language)` instead of the raw
- * value. Config, parse, input rule, keyboard shortcuts, highlight language,
- * the block's `data-language` and `toExternalHTML` are BlockNote's, unchanged,
- * so documents read and write exactly as before; picking a language in the
+ * value, and the title bar gets the copy control (copyControl.ts). Parse,
+ * input rule, keyboard shortcuts, highlight language, the block's
+ * `data-language` and `toExternalHTML` are BlockNote's, unchanged, so
+ * documents read and write exactly as before; picking a language in the
  * select writes its canonical id.
  */
 export function createPageCodeBlockSpec() {
@@ -83,15 +85,44 @@ export function createPageCodeBlockSpec() {
     toExternalHTML: _toExternalHTML,
     ...implementation
   } = base.implementation;
-  return createBlockSpec(
-    base.config,
+  const config = {
+    ...base.config,
+    propSchema: {
+      ...base.config.propSchema,
+      /** Readers may copy the code (a Copy button; select and copy). */
+      copyable: { default: true },
+    },
+  };
+  return createBlockSpec<typeof config.type, typeof config.propSchema, typeof config.content>(
+    config,
     {
       ...implementation,
-      render: (block, editor) =>
-        createCodeBlock(block, editor, {
+      render: (block, editor) => {
+        const rendered = createCodeBlock(block, editor, {
           selectedLanguage: codeBlockDisplayLanguage(block.props.language),
           supportedLanguages: CODE_LANGUAGES,
-        }),
+        });
+        // The select's wrapper is already outside the editable content
+        // (contenteditable=false); the control goes in beside it.
+        // (No `instanceof HTMLElement`: a server render has a document but
+        // not always the DOM globals.)
+        const bar = rendered.dom.firstChild as HTMLElement | null;
+        if (bar?.nodeName === 'DIV') {
+          const control = editor.isEditable
+            ? createCopyToggle(isCopyable(block.props), () => {
+                // The node view is rebuilt on every prop change, but read the
+                // live value anyway: a peer may have flipped it.
+                const current = editor.getBlock(block.id);
+                const copyable = current ? isCopyable(current.props) : true;
+                editor.updateBlock(block.id, { props: { copyable: !copyable } });
+              })
+            : isCopyable(block.props)
+              ? createCopyButton(() => rendered.contentDOM.textContent ?? '')
+              : null;
+          if (control) bar.appendChild(control);
+        }
+        return rendered;
+      },
       toExternalHTML: block => createPreCode(block),
     },
     base.extensions

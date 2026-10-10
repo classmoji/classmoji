@@ -231,6 +231,8 @@ const PageViewPanel = ({
             ref={frameRef}
             src={src}
             title={title || 'Page'}
+            // Cross-origin frames need this for the code blocks' Copy buttons.
+            allow="clipboard-write"
             onLoad={() => setLoaded(true)}
             className="h-full w-full border-0 bg-white dark:bg-neutral-900"
           />

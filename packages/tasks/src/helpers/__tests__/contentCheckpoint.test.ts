@@ -807,7 +807,7 @@ describe('runContentCheckpoint review fixes', () => {
     expect(CHECKPOINT_QUEUE_NAME).toBe(CONTENT_CHECKPOINT_QUEUE);
   });
 
-  it('refuses rows written with another schema version, without loading their state', async () => {
+  it('refuses rows written with a newer schema version, without loading their state', async () => {
     const prisma = makePrisma([
       row('page', 'page-a', blocksToYDoc([para('a1', 'x')]), 1, {
         schema_version: SCHEMA_VERSION + 1,
@@ -823,6 +823,18 @@ describe('runContentCheckpoint review fixes', () => {
     expect(prisma.collabDoc.findUnique).toHaveBeenCalledTimes(1);
     expect(prisma.rows[0]).toMatchObject({ pushed_version: 0 });
     expect(prisma.rows[1]).toMatchObject({ pushed_version: 1 });
+  });
+
+  it('renders a page row from an older schema (collab not yet redeployed)', async () => {
+    const prisma = makePrisma([
+      row('page', 'page-a', blocksToYDoc([para('a1', 'older')]), 1, {
+        schema_version: SCHEMA_VERSION - 1,
+      }),
+    ]);
+    const { deps } = makeDeps(prisma);
+    const report = await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r' }, deps);
+    expect(report.docs[0]).not.toMatchObject({ status: 'refused' });
+    expect(prisma.rows[0]).toMatchObject({ pushed_version: 1 });
   });
 
   it('refuses a deck row from another deck schema', async () => {

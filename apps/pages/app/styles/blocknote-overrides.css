@@ -450,6 +450,91 @@
   color: CanvasText;
 }
 
+/* The copy control at the right end of the title bar (page-schema
+   copyControl.ts): readers' Copy button, editors' copying toggle. Both bars
+   are #2d2d2d in either theme, so one color serves both. */
+.bn-copy-button,
+.bn-copy-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #8e8e8e;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.bn-copy-button:hover,
+.bn-copy-toggle:hover,
+.bn-copy-button:focus-visible,
+.bn-copy-toggle:focus-visible {
+  color: #d4d4d4;
+}
+
+.bn-copy-button:focus-visible,
+.bn-copy-toggle:focus-visible {
+  outline: 1px solid #8e8e8e;
+  outline-offset: 0;
+}
+
+.bn-copy-button svg,
+.bn-copy-toggle svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+/* Both icons are drawn; the state picks one. */
+.bn-copy-button .bn-copy-icon-check,
+.bn-copy-button[data-copied] .bn-copy-icon-copy,
+.bn-copy-toggle .bn-copy-icon-off,
+.bn-copy-toggle[aria-pressed="false"] .bn-copy-icon-copy {
+  display: none;
+}
+
+.bn-copy-button[data-copied] .bn-copy-icon-check,
+.bn-copy-toggle[aria-pressed="false"] .bn-copy-icon-off {
+  display: block;
+}
+
+/* Code block: against the block, like the language name on the left. */
+.bn-container .bn-block-content[data-content-type="codeBlock"] > div > .bn-copy-button,
+.bn-container .bn-block-content[data-content-type="codeBlock"] > div > .bn-copy-toggle {
+  position: absolute;
+  top: 5px;
+  right: 8px;
+  z-index: 1;
+}
+
+/* Terminal: the header is a flex row; push it to the far end. */
+.terminal-header > .bn-copy-button,
+.terminal-header > .bn-copy-toggle {
+  margin-left: auto;
+  margin-right: -0.5rem;
+}
+
+/* Copying turned off: readers cannot select the block's text (the copy guard,
+   app/utils/copyGuard.ts and site/copyScript.ts, covers selections that span
+   it). Never in an editable editor: editors copy everything. */
+.bn-editor[contenteditable="false"] .bn-block-content[data-copyable="false"],
+.bn-editor[contenteditable="false"] .bn-block-content[data-copyable="false"] *,
+.site-article .bn-block-content[data-copyable="false"],
+.site-article .bn-block-content[data-copyable="false"] * {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+}
+
+.bn-editor[contenteditable="false"] .bn-block-content[data-copyable="false"] .terminal-content div {
+  cursor: default !important;
+}
+
 /* Dark mode: the body and outline of a dark terminal block. */
 .dark .bn-block-content[data-content-type="codeBlock"] {
   background-color: #141414;

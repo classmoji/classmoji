@@ -189,6 +189,51 @@ test.describe('editor affordances are stripped', () => {
     expect(html).toContain('npm run dev');
   });
 
+  test('copyable code and terminal blocks get a Copy button in the title bar', async () => {
+    const { html } = await renderSitePage({
+      blocks: [SAMPLES.codeBlock, SAMPLES.terminal],
+      resolveLink,
+    });
+    const doc = parse(html);
+    const code = doc.querySelector('[data-content-type="codeBlock"]')!;
+    const terminal = doc.querySelector('[data-content-type="terminal"]')!;
+    expect(code.hasAttribute('data-copyable')).toBe(false);
+    expect(terminal.hasAttribute('data-copyable')).toBe(false);
+    // Beside the language name, and at the end of the terminal header.
+    const codeButton = code.querySelector(':scope > div > button.bn-copy-button')!;
+    const terminalButton = terminal.querySelector('.terminal-header > button.bn-copy-button')!;
+    for (const button of [codeButton, terminalButton]) {
+      expect(button).not.toBeNull();
+      expect(button.getAttribute('type')).toBe('button');
+      expect(button.getAttribute('aria-label')).toBe('Copy');
+      expect(button.getAttribute('title')).toBe('Copy');
+      // Icon only.
+      expect(button.textContent).toBe('');
+      expect(button.querySelectorAll('svg')).toHaveLength(2);
+    }
+    // Not part of the code the reader copies or selects.
+    expect(code.querySelector('pre')!.textContent).toBe('const a = 1;');
+  });
+
+  test('blocks with copying off carry data-copyable="false" and no button', async () => {
+    const { html } = await renderSitePage({
+      blocks: [
+        { ...(SAMPLES.codeBlock as object), props: { language: 'js', copyable: false } },
+        { ...(SAMPLES.terminal as object), props: { code: 'npm run dev', copyable: false } },
+      ],
+      resolveLink,
+    });
+    const doc = parse(html);
+    for (const type of ['codeBlock', 'terminal']) {
+      const block = doc.querySelector(`[data-content-type="${type}"]`)!;
+      expect(block.getAttribute('data-copyable'), type).toBe('false');
+      expect(block.querySelector('button'), type).toBeNull();
+    }
+    // Nothing in place of the button: no lock, no text.
+    expect(html).not.toContain('bn-copy');
+    expect(html).toContain('npm run dev');
+  });
+
   test('the only inputs anywhere are disabled checkboxes', async () => {
     const blocks = Object.values(SAMPLES).filter(Boolean);
     const { html } = await renderSitePage({ blocks, resolveLink });

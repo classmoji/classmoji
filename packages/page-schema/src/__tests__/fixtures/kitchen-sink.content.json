@@ -454,7 +454,8 @@
       "id": "ks-code",
       "type": "codeBlock",
       "props": {
-        "language": "javascript"
+        "language": "javascript",
+        "copyable": true
       },
       "content": [
         {
@@ -469,7 +470,8 @@
       "id": "ks-code-py",
       "type": "codeBlock",
       "props": {
-        "language": "python"
+        "language": "python",
+        "copyable": false
       },
       "content": [
         {
@@ -759,7 +761,8 @@
       "type": "terminal",
       "props": {
         "code": "npm install\nnpm run dev",
-        "title": "Install"
+        "title": "Install",
+        "copyable": true
       },
       "children": []
     },
@@ -950,7 +953,8 @@
               "id": "ks-cols-3-c-code",
               "type": "codeBlock",
               "props": {
-                "language": "bash"
+                "language": "bash",
+                "copyable": true
               },
               "content": [
                 {

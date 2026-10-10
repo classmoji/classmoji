@@ -1,7 +1,13 @@
 import React from 'react';
 import { BlockNoteSchema } from '@blocknote/core';
 import { createReactBlockSpec } from '@blocknote/react';
-import { codeBlockLanguageName } from '@classmoji/page-schema';
+import {
+  COPY_BUTTON_CLASS,
+  COPY_BUTTON_ICONS,
+  COPY_LABEL,
+  codeBlockLanguageName,
+  isCopyable,
+} from '@classmoji/page-schema';
 
 import { schema as editorSchema } from '~/components/editor/blocks/index.tsx';
 import { AVATAR_SIZES, imageSizesFor, responsiveImageAttrs } from '~/utils/imageSizes.ts';
@@ -200,6 +206,22 @@ function StaticCallout(props: RenderProps) {
   ]);
 }
 
+/**
+ * The reader's Copy button (site/copyScript.ts handles the click), or nothing
+ * for a block whose author turned copying off.
+ */
+function copyButton(props: RenderProps) {
+  if (!isCopyable(props.block.props)) return null;
+  return h('button', {
+    key: 'copy',
+    type: 'button',
+    className: COPY_BUTTON_CLASS,
+    'aria-label': COPY_LABEL,
+    title: COPY_LABEL,
+    dangerouslySetInnerHTML: { __html: COPY_BUTTON_ICONS },
+  });
+}
+
 function StaticTerminal(props: RenderProps) {
   const code = String(props.block.props.code || '');
   const title = String(props.block.props.title || '');
@@ -211,6 +233,7 @@ function StaticTerminal(props: RenderProps) {
         h('span', { key: 'g', className: 'dot dot-green' }),
       ]),
       h('span', { key: 't', className: 'terminal-title' }, title || 'Terminal'),
+      copyButton(props),
     ]),
     // No Shiki on the server in v1: the highlighter is an async browser-side
     // effect, and pre-rendering it would mean shipping a theme stylesheet for
@@ -614,11 +637,10 @@ function StaticCodeBlock(props: RenderProps) {
   // outside `contentRef`, which is the block's content.
   const language = String(props.block.props.language || '');
   return h(React.Fragment, null, [
-    h(
-      'div',
-      { key: 'l' },
-      h('span', { className: 'bn-code-language' }, codeBlockLanguageName(language))
-    ),
+    h('div', { key: 'l' }, [
+      h('span', { key: 'n', className: 'bn-code-language' }, codeBlockLanguageName(language)),
+      copyButton(props),
+    ]),
     h(
       'pre',
       { key: 'c', 'data-language': language || undefined },
