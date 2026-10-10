@@ -149,8 +149,20 @@
 }
 
 /* Apply background colors from data-background-color attribute */
-/* BlockNote sets this attribute to a color name (e.g. "blue", "red") */
-.bn-block-content[data-content-type="heading"][data-background-color] {
+/* BlockNote paints only its nine color names. Pages also hold raw values
+   (e.g. "rgb(251, 243, 219)" from pasted HTML) that paint nothing, so padding
+   those would just push the heading 4px right of the text. */
+.bn-block-content[data-content-type="heading"]:is(
+    [data-background-color="blue"],
+    [data-background-color="red"],
+    [data-background-color="yellow"],
+    [data-background-color="orange"],
+    [data-background-color="green"],
+    [data-background-color="purple"],
+    [data-background-color="pink"],
+    [data-background-color="brown"],
+    [data-background-color="gray"]
+  ) {
   padding: 3px 4px !important;
   border-radius: 0 !important;
 }
