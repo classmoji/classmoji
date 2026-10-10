@@ -109,7 +109,18 @@ const AssistantDashboard = ({ loaderData }: Route.ComponentProps) => {
         />
       )}
 
-      <Suspense fallback={<Skeleton active />}>
+      {/* One boundary for both, so the dashboard appears in its final layout:
+          the cockpit queries usually finish first, and in a boundary of their
+          own they rendered under the short stats skeleton, then got shoved down
+          when the taller stats section arrived. */}
+      <Suspense
+        fallback={
+          <>
+            <Skeleton active />
+            <Skeleton active paragraph={{ rows: 4 }} />
+          </>
+        }
+      >
         <Await resolve={data} errorElement={null}>
           {(resolved: unknown) => {
             const [assignments, repoAssignments, gradingProgress, assistantsProgress] =
@@ -165,9 +176,7 @@ const AssistantDashboard = ({ loaderData }: Route.ComponentProps) => {
             );
           }}
         </Await>
-      </Suspense>
 
-      <Suspense fallback={<Skeleton active paragraph={{ rows: 4 }} />}>
         <Await resolve={cockpit} errorElement={null}>
           {result => {
             if (!result) return null;
