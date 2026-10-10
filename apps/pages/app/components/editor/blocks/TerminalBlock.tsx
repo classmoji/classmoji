@@ -1,12 +1,73 @@
 import { createReactBlockSpec, type ReactCustomBlockRenderProps } from '@blocknote/react';
-import { terminalConfig } from '@classmoji/page-schema';
-import { useEffect, useRef, useState } from 'react';
+import {
+  COPY_BUTTON_CLASS,
+  COPY_BUTTON_ICONS,
+  COPY_LABEL,
+  COPY_TOGGLE_CLASS,
+  COPY_TOGGLE_ICONS,
+  COPY_TOGGLE_LABEL,
+  copyToggleTitle,
+  flashCopied,
+  guardControlEvents,
+  isCopyable,
+  terminalConfig,
+  writeClipboardText,
+} from '@classmoji/page-schema';
+import { useEffect, useRef, useState, type ButtonHTMLAttributes } from 'react';
 import { createHighlighterCore } from '@shikijs/core';
 import { createJavaScriptRegexEngine } from '@shikijs/engine-javascript';
 import bash from '@shikijs/langs/bash';
 import oneDarkPro from '@shikijs/themes/one-dark-pro';
 
 type TerminalRenderProps = ReactCustomBlockRenderProps<typeof terminalConfig>;
+
+/**
+ * A title-bar button that keeps the editor out of its events, exactly like the
+ * code block's (`guardControlEvents`). Attached natively: React's synthetic
+ * onMouseDown runs after ProseMirror's native listener has already moved the
+ * selection.
+ */
+function TitleBarButton(props: ButtonHTMLAttributes<HTMLButtonElement> & { icons: string }) {
+  const { icons, ...rest } = props;
+  const ref = useRef<HTMLButtonElement>(null);
+  useEffect(() => (ref.current ? guardControlEvents(ref.current) : undefined), []);
+  return <button ref={ref} type="button" {...rest} dangerouslySetInnerHTML={{ __html: icons }} />;
+}
+
+/**
+ * The title bar's copy control (page-schema copyControl.ts): editors toggle
+ * the block's `copyable`, readers get a Copy button when it is on.
+ */
+function TerminalCopyControl({ editor, block }: Pick<TerminalRenderProps, 'editor' | 'block'>) {
+  const copyable = isCopyable(block.props);
+  if (editor.isEditable) {
+    return (
+      <TitleBarButton
+        className={COPY_TOGGLE_CLASS}
+        aria-label={COPY_TOGGLE_LABEL}
+        aria-pressed={copyable}
+        title={copyToggleTitle(copyable)}
+        onClick={() => editor.updateBlock(block, { props: { copyable: !copyable } })}
+        icons={COPY_TOGGLE_ICONS}
+      />
+    );
+  }
+  if (!copyable) return null;
+  return (
+    <TitleBarButton
+      className={COPY_BUTTON_CLASS}
+      aria-label={COPY_LABEL}
+      title={COPY_LABEL}
+      onClick={event => {
+        const button = event.currentTarget;
+        void writeClipboardText(block.props.code).then(ok => {
+          if (ok) flashCopied(button);
+        });
+      }}
+      icons={COPY_BUTTON_ICONS}
+    />
+  );
+}
 
 export const Terminal = createReactBlockSpec(terminalConfig, {
   toExternalHTML: function TerminalExternalHTML(props: TerminalRenderProps) {
@@ -65,6 +126,7 @@ export const Terminal = createReactBlockSpec(terminalConfig, {
             <span className="dot dot-green"></span>
           </div>
           <span className="terminal-title">Terminal</span>
+          <TerminalCopyControl editor={props.editor} block={props.block} />
         </div>
 
         {/* Content area */}
@@ -74,6 +136,9 @@ export const Terminal = createReactBlockSpec(terminalConfig, {
             <div
               ref={codeRef}
               onClick={() => {
+                // A reader of a block with copying off never gets the
+                // textarea: its value would be selectable whatever the CSS.
+                if (!props.editor.isEditable && !isCopyable(props.block.props)) return;
                 setIsFocused(true);
                 // Focus textarea after state updates
                 setTimeout(() => textareaRef.current?.focus(), 0);

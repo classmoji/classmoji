@@ -4,7 +4,7 @@
  * whose schema version differs: a participant with a different schema deletes
  * the blocks it does not know, for everyone in the room.
  */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 /**
  * The Y.XmlFragment the page's blocks live in. BlockNote's server-util and

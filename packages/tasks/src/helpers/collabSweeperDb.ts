@@ -32,13 +32,16 @@ export function sqlSweeperDb(prisma: RawClient): CollabSweeperDb {
       return rows.map(r => r.classroom_id);
     },
 
+    // Pages: the checkpoint renders any row at or below its schema (only a
+    // newer one is refused), so an older refused row is retryable too. Decks
+    // still refuse on any difference.
     async clearedRefusals({ page, deck }) {
       return prisma.$queryRaw<SweepDocRef[]>`
         SELECT kind, doc_id, classroom_id FROM collab_docs
         WHERE version > pushed_version
           AND octet_length(state) > 0
           AND last_checkpoint_error LIKE 'schema-mismatch:%'
-          AND ((kind = 'page' AND schema_version = ${page})
+          AND ((kind = 'page' AND schema_version <= ${page})
                OR (kind = 'deck' AND schema_version = ${deck}))
         LIMIT 500`;
     },

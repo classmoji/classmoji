@@ -12,6 +12,7 @@ import {
   type CollabSweeperDb,
   type CollabSweeperDeps,
 } from '../collabSweeperCore.ts';
+import { sqlSweeperDb } from '../collabSweeperDb.ts';
 
 const NOW = new Date('2026-10-04T12:00:00Z');
 
@@ -240,5 +241,23 @@ describe('runCollabSweep', () => {
       markReseed: async () => null,
     });
     expect((await runCollabSweep(deps)).reseeded).toEqual([]);
+  });
+});
+
+describe('sqlSweeperDb.clearedRefusals', () => {
+  it('retries page refusals at or below the worker schema, deck refusals only at it', async () => {
+    let sql = '';
+    let values: unknown[] = [];
+    const db = sqlSweeperDb({
+      async $queryRaw<T>(strings: TemplateStringsArray, ...args: unknown[]) {
+        sql = strings.join('?').replace(/\s+/g, ' ');
+        values = args;
+        return [] as T;
+      },
+    });
+    await db.clearedRefusals({ page: 2, deck: 1 });
+    expect(sql).toContain("(kind = 'page' AND schema_version <= ?)");
+    expect(sql).toContain("(kind = 'deck' AND schema_version = ?)");
+    expect(values).toEqual([2, 1]);
   });
 });

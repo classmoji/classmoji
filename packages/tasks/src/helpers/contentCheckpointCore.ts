@@ -676,7 +676,15 @@ async function checkpointDocs(
       }
       base.title = target.title;
 
-      // H1: a row written by a different schema than this worker's.
+      // H1: a row written by a different schema than this worker's. Pages:
+      // only a NEWER row is refused (it may hold blocks or props this worker
+      // would drop). An older one renders through the current schema, the way
+      // collab's own load serves it (it warns, it does not refuse): a schema
+      // bump that only adds props or blocks leaves every older document
+      // readable, and during a deploy collab may still tag rows with the
+      // previous version while this worker already runs the new one. A bump
+      // that REMOVES a block type or prop must revisit this (and the sweeper's
+      // `clearedRefusals`), or older rows would render without that content.
       if (meta.kind === 'page') {
         if (!pageRenderer) {
           report.docs.push({
@@ -686,7 +694,7 @@ async function checkpointDocs(
           });
           continue;
         }
-        if (meta.schema_version !== pageRenderer.schemaVersion) {
+        if (meta.schema_version > pageRenderer.schemaVersion) {
           refuse(
             base,
             'schema-mismatch',
