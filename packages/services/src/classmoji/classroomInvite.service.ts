@@ -116,7 +116,8 @@ export const claimPendingInvites = async (
     select: {
       email: true,
       emailVerified: true,
-      accounts: { where: { provider_id: 'github' }, select: { email: true } },
+      name: true,
+      accounts: { where: { provider_id: 'github' }, select: { email: true, username: true } },
     },
   });
   if (!user) return { claimed: 0, classroomIds: [] };
@@ -134,7 +135,17 @@ export const claimPendingInvites = async (
   // stored as typed and its unique key is case-sensitive.
   const classroomIds = Array.from(new Set(invites.map(invite => invite.classroom_id)));
 
+  // The name the instructor typed on the roster, for an account that has only
+  // the login sign-in fell back to. A name the person has of their own is
+  // theirs and stays.
+  const rosterName = invites.map(invite => invite.student_name.trim()).find(Boolean);
+  const hasOwnName =
+    !!user.name?.trim() && !user.accounts.some(account => account.username === user.name);
+
   await prisma.$transaction([
+    ...(rosterName && !hasOwnName
+      ? [prisma.user.update({ where: { id: userId }, data: { name: rosterName } })]
+      : []),
     prisma.classroomMembership.createMany({
       data: classroomIds.map(classroom_id => ({
         classroom_id,
