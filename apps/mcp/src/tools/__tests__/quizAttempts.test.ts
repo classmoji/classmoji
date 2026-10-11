@@ -423,7 +423,7 @@ describe('gates', () => {
     expect(missing.kind).toBe('not_found');
     expect(missing.message).toBe('Attempt not found in this classroom');
     expect([otherQuiz.kind, otherQuiz.message]).toEqual([missing.kind, missing.message]);
-    expect(mocks.findForReview).toHaveBeenCalledWith(ATTEMPT_ID);
+    expect(mocks.findForReview).toHaveBeenCalledWith(ATTEMPT_ID, 'GITLAB');
     for (const read of [
       mocks.findWithMessages,
       mocks.loadTranscriptForViewer,
@@ -471,7 +471,7 @@ describe('list_quiz_attempts', () => {
 
   it('makes the results page’s reads for this quiz and classroom', async () => {
     await listQuizAttemptsTool.handler(ARGS, CTX);
-    expect(mocks.findByQuiz).toHaveBeenCalledWith(QUIZ_ID);
+    expect(mocks.findByQuiz).toHaveBeenCalledWith(QUIZ_ID, 'GITLAB');
     expect(mocks.findUsersByRole).toHaveBeenCalledWith('class-1', 'STUDENT');
     expect(mocks.findUsersByRoles).toHaveBeenCalledWith('class-1', [
       'OWNER',
@@ -812,7 +812,7 @@ describe('get_quiz_attempt', () => {
   it("gives a completed attempt's scores, results and evaluation, reading no messages unasked", async () => {
     const payload = parse(await getQuizAttemptTool.handler(ARGS, CTX));
 
-    expect(mocks.findForReview).toHaveBeenCalledWith(ATTEMPT_ID);
+    expect(mocks.findForReview).toHaveBeenCalledWith(ATTEMPT_ID, 'GITLAB');
     expect(mocks.findUsersByRole).toHaveBeenCalledWith('class-1', 'STUDENT', { user_id: 'stu-1' });
     expect(mocks.findUsersByRoles).toHaveBeenCalledWith(
       'class-1',

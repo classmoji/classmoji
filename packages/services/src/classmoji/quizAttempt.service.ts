@@ -338,9 +338,10 @@ export const findById = async (attemptId: string) => {
  * its identity, runtime, timing, scores and stored results, the quiz's
  * question count and the user's name and git accounts. No prompts, no
  * settings, no messages: `findWithMessages` is the read for those. Null when
- * the id names no attempt.
+ * the id names no attempt. `provider` picks which username `login` is (the
+ * classroom's); without it, Github first.
  */
-export const findForReview = async (attemptId: string) => {
+export const findForReview = async (attemptId: string, provider?: string | null) => {
   const attempt = await getPrisma().quizAttempt.findUnique({
     where: { id: attemptId },
     select: {
@@ -363,7 +364,7 @@ export const findForReview = async (attemptId: string) => {
       user: { select: { id: true, name: true, ...GIT_IDENTITY } },
     },
   });
-  return attempt ? withLogins(attempt) : null;
+  return attempt ? withLogins(attempt, provider) : null;
 };
 
 // Bridge function: saves messages to AIConversation (which ai-agent also uses)
@@ -807,7 +808,8 @@ export const calculateAndApplyModalGap = async (attemptId: string) => {
   });
 };
 
-export const findByQuiz = async (quizId: string) => {
+/** `provider` picks which username each user's `login` is; without it, Github first. */
+export const findByQuiz = async (quizId: string, provider?: string | null) => {
   const attempts = await getPrisma().quizAttempt.findMany({
     where: { quiz_id: quizId },
     include: {
@@ -816,7 +818,7 @@ export const findByQuiz = async (quizId: string) => {
     orderBy: { started_at: 'desc' },
   });
 
-  return withLogins(attempts);
+  return withLogins(attempts, provider);
 };
 
 /**

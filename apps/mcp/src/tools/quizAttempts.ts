@@ -66,7 +66,7 @@ import {
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
-import { sanitizedSettings } from '../resources/shape.ts';
+import { orgProvider, sanitizedSettings } from '../resources/shape.ts';
 import { assertQuizSurfaceEnabled } from './quizzes.ts';
 import {
   loadQuizInClassroom,
@@ -239,7 +239,7 @@ export const listQuizAttemptsTool: ToolDefinition<ListQuizAttemptsArgs> = {
     const setting: unknown = sanitizedSettings(ctx).late_penalty_points_per_hour;
     const penalty = typeof setting === 'number' ? setting : 0;
     const [attempts, roster, staff, extensionHours] = await Promise.all([
-      ClassmojiService.quizAttempt.findByQuiz(quiz.id),
+      ClassmojiService.quizAttempt.findByQuiz(quiz.id, orgProvider(ctx)),
       ClassmojiService.classroomMembership.findUsersByRole(classroomId, 'STUDENT'),
       ClassmojiService.classroomMembership.findUsersByRoles(classroomId, [...QUIZ_STAFF]),
       assignment?.student_deadline
@@ -279,8 +279,8 @@ export const listQuizAttemptsTool: ToolDefinition<ListQuizAttemptsArgs> = {
     );
     const limits = await ClassmojiService.quizChat.messageLimitsOf(chatIds);
 
-    // The memberships name a person by the classroom's git provider; the
-    // attempt join by their Github username first. A membership's wins.
+    // A member's login comes from their membership; a former member's from
+    // the attempt join. Both are the classroom's git provider's username.
     const memberLogin = new Map(
       [...staff, ...roster].map(member => [String(member.id), member.login])
     );
@@ -586,7 +586,7 @@ export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
     'One attempt at a quiz (ids from list_quiz_attempts): the student, on_roster, ' +
     'is_staff_preview, timing and focus, ended_by, and for a completed attempt its score, ' +
     'first_attempt_score, per-question results (credit_earned, tries, first_attempt_correct, ' +
-    'hints_used: hints shown before the last answer, as graded; null where not recorded, ' +
+    'hints_used: most hints shown before any answer to it; null where not recorded, ' +
     'emoji, brief_feedback) and the evaluation (band, summary, strengths, improvements). An ' +
     'open attempt carries last_activity and messages_left. include_transcript:true adds the ' +
     'whole conversation, each turn with its time (at): questions, answers, feedback, files ' +
@@ -609,7 +609,10 @@ export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
     // The attempt's own columns first, no messages: an attempt naming nothing
     // and one of another quiz (in this classroom or any other) are the same
     // not_found, and nothing more is read for either.
-    const attempt = await ClassmojiService.quizAttempt.findForReview(args.attempt_id);
+    const attempt = await ClassmojiService.quizAttempt.findForReview(
+      args.attempt_id,
+      orgProvider(ctx)
+    );
     if (!attempt || String(attempt.quiz_id) !== String(quiz.id)) {
       throw scopedNotFound('Attempt');
     }
