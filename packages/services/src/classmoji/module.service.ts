@@ -739,14 +739,19 @@ export const reorderModules = async (classroomId: string, orderedModuleIds: stri
     'Ordered module ids must match the classroom modules'
   );
 
-  await prisma.$transaction(
-    orderedModuleIds.map((id, index) =>
-      prisma.module.update({
+  await prisma.$transaction(async tx => {
+    // Lock in id order, as an assignment move and module.deleteById do, so a
+    // reorder and a move running together cannot deadlock.
+    for (const id of [...orderedModuleIds].sort()) {
+      await tx.$queryRaw`SELECT id FROM modules WHERE id = ${id} FOR UPDATE`;
+    }
+    for (const [index, id] of orderedModuleIds.entries()) {
+      await tx.module.update({
         where: { id, classroom_id: classroomId },
         data: { position: index },
-      })
-    )
-  );
+      });
+    }
+  });
 };
 
 // The content item types callers (routes/UI) may add, without importing Prisma.
