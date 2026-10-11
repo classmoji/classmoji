@@ -568,7 +568,30 @@ const SignInPage = ({
         </div>
       </main>
 
-      <footer className="text-xs text-ink-4">© {new Date().getFullYear()} Classmoji</footer>
+      <footer className="flex flex-col items-center gap-1.5 text-center text-xs text-ink-4">
+        <p>
+          By continuing, you agree to our{' '}
+          <a
+            href="https://classmoji.io/terms"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2 transition-colors duration-150 hover:text-ink-2"
+          >
+            Terms of Service
+          </a>{' '}
+          and{' '}
+          <a
+            href="https://classmoji.io/privacy"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2 transition-colors duration-150 hover:text-ink-2"
+          >
+            Privacy Policy
+          </a>
+          .
+        </p>
+        <p>© {new Date().getFullYear()} Classmoji</p>
+      </footer>
     </div>
   );
 };
