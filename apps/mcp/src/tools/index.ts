@@ -24,6 +24,8 @@ import {
   moduleUpdateTool,
   modulePublishTool,
   moduleItemAddTool,
+  moduleItemRemoveTool,
+  moduleItemMoveTool,
   moduleDeleteTool,
   moduleReorderTool,
 } from './modules.ts';
@@ -151,6 +153,8 @@ export function registerAllTools(): void {
   registerToolDefinition(moduleUpdateTool);
   registerToolDefinition(modulePublishTool);
   registerToolDefinition(moduleItemAddTool);
+  registerToolDefinition(moduleItemRemoveTool);
+  registerToolDefinition(moduleItemMoveTool);
   registerToolDefinition(moduleDeleteTool);
   registerToolDefinition(moduleReorderTool);
 
