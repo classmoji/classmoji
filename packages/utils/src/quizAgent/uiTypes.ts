@@ -138,6 +138,44 @@ export function replyShowsHint(parts: readonly unknown[]): boolean {
   );
 }
 
+/**
+ * Whether a reply moves the quiz on: it brings buttons of its own (an
+ * accepted offer), the card of a later question, a question result or the
+ * evaluation. The current question's card shown again (`currentQuestion` is
+ * the highest card number before this reply) does not count: it brings no
+ * buttons, so the clicked set is decided as for any other reply (the server
+ * refuses the card again in a Try again turn; a saved Try again reply that is
+ * only that card shows no hint, and gives the set back). A refused call
+ * counts for nothing: the server refuses offer_next_step in a Try again turn,
+ * so a hint often carries a refused offer ahead of its text.
+ *
+ * A Try again reply that moves the quiz on is not a hint, whatever its text
+ * (`buttonSetsOf` in QuizChat; the MCP transcript labels hints the same way).
+ * Takes stored parts (JSON) or a message's visible parts.
+ */
+export function replyMovesOn(parts: readonly unknown[], currentQuestion: number): boolean {
+  return parts.some(raw => {
+    if (typeof raw !== 'object' || raw === null) return false;
+    const part = raw as { type?: unknown; state?: unknown; output?: unknown };
+    if (typeof part.type !== 'string') return false;
+    if (
+      (part.type.startsWith('tool-') || part.type === 'dynamic-tool') &&
+      (part.state === 'output-error' || part.state === 'output-denied')
+    ) {
+      return false;
+    }
+    const accepted = part.state === 'output-available';
+    if (part.type === 'tool-offer_next_step') return accepted;
+    if (part.type === 'tool-present_question') {
+      const number = (part.output as { question_number?: unknown } | null | undefined)
+        ?.question_number;
+      return accepted && typeof number === 'number' && number > currentQuestion;
+    }
+    if (part.type === 'tool-submit_quiz_evaluation') return accepted;
+    return part.type === 'data-question-result' || part.type === 'data-evaluation';
+  });
+}
+
 /** The fixed line shown with the buttons (the previous runtime's wording). */
 export const NEXT_STEP_LEAD_IN = {
   /** Next only, with another question to come. */

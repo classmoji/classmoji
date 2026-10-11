@@ -13,6 +13,7 @@ import { formatDuration } from '~/utils/quizUtils';
 import {
   buildQuizResultRows,
   quizResultsQuizView,
+  quizResultsStats,
   type QuizFocusMetrics as FocusMetrics,
   type QuizResultAttempt as QuizAttempt,
   type QuizResultStudent as QuizStudent,
@@ -423,29 +424,10 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
     });
   };
 
-  // Calculate stats from all attempts across all students
+  // The cards count roster students' attempts only, as the quiz list does;
+  // the table (and its subtitle) lists every row, previews included.
   const allAttempts = students.flatMap((s: QuizStudent) => s.attempts);
-  const completedAttempts = allAttempts.filter((a: QuizAttempt) => a.completed_at !== null);
-  const inProgressAttempts = allAttempts.filter((a: QuizAttempt) => a.completed_at === null);
-  const scores = completedAttempts
-    .map((a: QuizAttempt) => a.partialCreditScore)
-    .filter((score: number | null): score is number => score !== null && score !== undefined);
-
-  const stats = {
-    totalAttempts: allAttempts.length,
-    completedAttempts: completedAttempts.length,
-    inProgressAttempts: inProgressAttempts.length,
-    averageScore:
-      scores.length > 0
-        ? (scores.reduce((a: number, b: number) => a + b, 0) / scores.length).toFixed(1)
-        : 0,
-    highestScore: scores.length > 0 ? Math.max(...scores).toFixed(1) : 0,
-    lowestScore: scores.length > 0 ? Math.min(...scores).toFixed(1) : 0,
-    completionRate:
-      allAttempts.length > 0
-        ? ((completedAttempts.length / allAttempts.length) * 100).toFixed(1)
-        : 0,
-  };
+  const stats = quizResultsStats(students);
 
   const StatCard = ({ value, label, icon: Icon, color = 'blue' }: StatCardProps) => {
     const colorClasses: Record<string, { bg: string; text: string }> = {

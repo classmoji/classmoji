@@ -116,7 +116,7 @@ const staffAttemptRoute =
   await import('../admin.$class.quizzes_.$quizId.attempt.$attemptId/route.tsx');
 const studentAttemptRoute =
   await import('../student.$class.quizzes.$quizId.attempt.$attemptId/route.tsx');
-const { buildQuizResultRows } = await import('~/utils/quizPayloads');
+const { buildQuizResultRows, quizResultsStats } = await import('~/utils/quizPayloads');
 
 // ─── Fixtures shaped like the real joins ────────────────────────────────────
 
@@ -661,6 +661,7 @@ describe('quiz results page: lateness', () => {
         login: 'lovelace',
         avatar_url: LOVELACE.image,
       },
+      onRoster: true,
       attempts: [],
       attemptCount: 0,
       currentScore: null,
@@ -723,6 +724,64 @@ describe('quiz results page: lateness', () => {
     const payload = await detailRoute.loader(detailArgs());
 
     expect(payload.students.find(s => s.userId === LOVELACE.id)!.countsAsZero).toBe(false);
+  });
+});
+
+describe('quiz results page: the headline cards', () => {
+  it("count roster students' attempts only, as the quiz list does; the table keeps every row", async () => {
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: TA.id,
+      classroom: CLASSROOM,
+      membership: { role: 'ASSISTANT' },
+    });
+    mocks.findUsersByRole.mockResolvedValue([{ id: ADA.id }, { id: BABBAGE.id }]);
+    // A finished staff preview scoring 100: not a result.
+    const preview = attemptRow('a-ta-done', TA, {
+      started_at: new Date('2026-03-02T12:00:00Z'),
+      completed_at: new Date('2026-03-02T12:10:00Z'),
+      partial_credit_percentage: 100,
+    });
+    mocks.findByQuiz.mockResolvedValue([ADA_SECOND, preview, BABBAGE_OPEN, ADA_FIRST]);
+    const payload = await detailRoute.loader(detailArgs());
+
+    expect(payload.students.map(s => [s.userId, s.onRoster])).toEqual([
+      [ADA.id, true],
+      [TA.id, false],
+      [BABBAGE.id, true],
+    ]);
+    // Ada's 60 and 80, and Babbage's open attempt; never the preview.
+    expect(quizResultsStats(payload.students)).toEqual({
+      totalAttempts: 3,
+      completedAttempts: 2,
+      inProgressAttempts: 1,
+      averageScore: '70.0',
+      highestScore: '80.0',
+      lowestScore: '60.0',
+      completionRate: '66.7',
+    });
+  });
+
+  it('show zeros where no roster student has an attempt', () => {
+    expect(
+      quizResultsStats([
+        {
+          onRoster: false,
+          attempts: buildQuizResultRows({
+            attempts: [TA_PREVIEW],
+            gradingStrategy: 'HIGHEST',
+            viewerId: TA.id,
+          }).students[0].attempts,
+        },
+      ])
+    ).toEqual({
+      totalAttempts: 0,
+      completedAttempts: 0,
+      inProgressAttempts: 0,
+      averageScore: 0,
+      highestScore: 0,
+      lowestScore: 0,
+      completionRate: 0,
+    });
   });
 });
 

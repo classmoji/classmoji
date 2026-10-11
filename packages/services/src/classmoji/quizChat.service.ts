@@ -357,6 +357,18 @@ const revalidate = async (
   return attempt;
 };
 
+/** The journal rows of an admitted student message (`admittedStudentMessages`). */
+const ADMITTED_MESSAGE = {
+  type: 'input_admitted',
+  payload: { path: ['kind'], equals: 'message' },
+} satisfies Prisma.QuizAttemptEventWhereInput;
+
+/** The journal row saying the server submitted an attempt at its message limit. */
+const ENDED_AT_LIMIT = {
+  type: 'evaluation_completed',
+  payload: { path: ['ended_by'], equals: 'turn_limit' },
+} satisfies Prisma.QuizAttemptEventWhereInput;
+
 /**
  * The student messages the attempt has admitted, read from the journal
  * (`input_admitted` rows of kind `message`; the begin action is not one, a
@@ -368,11 +380,7 @@ const admittedStudentMessages = (
   attemptId: string
 ): Promise<number> =>
   db.quizAttemptEvent.count({
-    where: {
-      attempt_id: attemptId,
-      type: 'input_admitted',
-      payload: { path: ['kind'], equals: 'message' },
-    },
+    where: { attempt_id: attemptId, ...ADMITTED_MESSAGE },
   });
 
 /** The messages an attempt that has admitted `admitted` can still take, never below 0. */
@@ -927,6 +935,27 @@ export const loadTranscriptForViewer = async (
   ) as QuizUIMessage[];
 
 /**
+ * When each of the attempt's UIMessages was saved, by message id (the id
+ * `loadCanonicalMessages` and the projection keep): the rows that loader
+ * reads, in one query. The transcript itself carries no times, so what the
+ * drawer and the browser receive is unchanged; a reader that wants them (the
+ * MCP get_quiz_attempt) joins them by id.
+ */
+export const messageTimesOf = async (attemptId: string): Promise<Map<string, Date>> => {
+  const rows = await getPrisma().aIConversationMessage.findMany({
+    where: {
+      conversation: { quiz_attempt: { id: attemptId } },
+      format: 'ui_message_v1',
+      ui_message_id: { not: null },
+    },
+    select: { ui_message_id: true, created_at: true },
+  });
+  return new Map(
+    rows.flatMap(r => (r.ui_message_id ? [[r.ui_message_id, r.created_at] as const] : []))
+  );
+};
+
+/**
  * What the attempt drawer states about the message limit. An open attempt:
  * the messages it still admits (`MAX_STUDENT_TURNS` less the admitted ones,
  * never below 0), `endedBy: null`. A completed one admits none
@@ -949,14 +978,54 @@ export const messageLimitOf = async (
     };
   }
   const endedAtLimit = await prisma.quizAttemptEvent.findFirst({
-    where: {
-      attempt_id: attemptId,
-      type: 'evaluation_completed',
-      payload: { path: ['ended_by'], equals: 'turn_limit' },
-    },
+    where: { attempt_id: attemptId, ...ENDED_AT_LIMIT },
     select: { id: true },
   });
   return { messagesLeft: 0, endedBy: endedAtLimit ? 'turn_limit' : null };
+};
+
+/**
+ * `messageLimitOf` for many attempts at once (a quiz's results), in three
+ * reads whatever their number: the attempts' completion, the admitted
+ * messages of the open ones, and the limit submissions of the completed ones.
+ * Same answer per attempt; an id naming no attempt is absent from the map.
+ */
+export const messageLimitsOf = async (
+  attemptIds: readonly string[]
+): Promise<Map<string, { messagesLeft: number; endedBy: 'turn_limit' | null }>> => {
+  const limits = new Map<string, { messagesLeft: number; endedBy: 'turn_limit' | null }>();
+  if (attemptIds.length === 0) return limits;
+  const prisma = getPrisma();
+  const attempts = await prisma.quizAttempt.findMany({
+    where: { id: { in: [...attemptIds] } },
+    select: { id: true, completed_at: true },
+  });
+  const openIds = attempts.filter(a => !a.completed_at).map(a => a.id);
+  const completedIds = attempts.filter(a => a.completed_at).map(a => a.id);
+  const [admitted, endedAtLimit] = await Promise.all([
+    openIds.length === 0
+      ? []
+      : prisma.quizAttemptEvent.groupBy({
+          by: ['attempt_id'],
+          where: { attempt_id: { in: openIds }, ...ADMITTED_MESSAGE },
+          _count: { _all: true },
+        }),
+    completedIds.length === 0
+      ? []
+      : prisma.quizAttemptEvent.findMany({
+          where: { attempt_id: { in: completedIds }, ...ENDED_AT_LIMIT },
+          select: { attempt_id: true },
+        }),
+  ]);
+  const admittedBy = new Map(admitted.map(row => [row.attempt_id, row._count._all]));
+  const atLimit = new Set(endedAtLimit.map(row => row.attempt_id));
+  for (const id of openIds) {
+    limits.set(id, { messagesLeft: messagesLeftAfter(admittedBy.get(id) ?? 0), endedBy: null });
+  }
+  for (const id of completedIds) {
+    limits.set(id, { messagesLeft: 0, endedBy: atLimit.has(id) ? 'turn_limit' : null });
+  }
+  return limits;
 };
 
 /** `ai_conversations.context.runtime`, or null before the first save. */
