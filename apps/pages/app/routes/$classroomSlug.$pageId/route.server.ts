@@ -41,11 +41,11 @@ import {
   documentForReader,
   isImpersonatedSession,
   readerSectionsFor,
+  sectionStatsFor,
   signInUrlFor,
   type SectionReaderState,
 } from '~/utils/pageSections.server.ts';
 import { downloadMapRole, type MediaDownloads } from '~/utils/mediaDownloads.ts';
-import { lockedSectionIds } from '@classmoji/page-schema/sections';
 import {
   assetResolveContext,
   canonicalizeAssetRef,
@@ -394,13 +394,16 @@ export const loader = async ({
   });
 
   // Staff chip counts: accepted OWNER/TEACHER (`canSeeActivity`, the people
-  // the unlock list answers), current students only, and only when the
-  // document has a locked section to count. The page row is already verified,
-  // so the service does not re-read it. Started here, awaited with the payload.
+  // the staff lists answer), current students only: unlocks when the document
+  // has a locked section, ticks when it has a checkable heading (each read
+  // only when needed, in parallel). The page row is already verified, so the
+  // service does not re-read it. Started here, awaited with the payload.
+  const statsPage = { id: page.id, classroom_id: page.classroom_id };
   const sectionStatsPending =
-    sectionViewer.canSeeActivity && classroomOpen && lockedSectionIds(viewerContent).length > 0
-      ? ClassmojiService.pageSections.unlockCounts({
-          page: { id: page.id, classroom_id: page.classroom_id },
+    sectionViewer.canSeeActivity && classroomOpen
+      ? sectionStatsFor(viewerContent, {
+          unlockCounts: () => ClassmojiService.pageSections.unlockCounts({ page: statsPage }),
+          checkCounts: () => ClassmojiService.pageSections.checkCounts({ page: statsPage }),
         })
       : null;
   // Its failure surfaces where it is awaited, never as an unhandled rejection
@@ -582,8 +585,10 @@ export const loader = async ({
     readerSections,
     // A signed-out reader's way in: each locked section links here.
     signInUrl: authData?.userId ? null : signInUrlFor(request.url),
-    // `{ students, unlocks: { blockId: count } }` for the staff chip; accepted
-    // OWNER/TEACHER only (the same readers the unlock list answers).
+    // `{ students, unlocks: { blockId: count }, checks: { blockId: count } }`
+    // for the staff chips; accepted OWNER/TEACHER only (the same readers the
+    // staff lists answer). Null for everyone else, and for a page with no
+    // locked section and no checkable heading.
     sectionStats: sectionStatsPending ? await sectionStatsPending : null,
     userRole,
     canEdit,

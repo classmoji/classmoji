@@ -49,6 +49,7 @@ import { AGENT_CURSOR_LABEL_CSS, renderLiveCursor } from './collab/liveCursor.ts
 import { reviveUndoManager, yUndoManagerOf } from './collab/yUndo.ts';
 import { ReplaceUrlItem, RemoveProfileImageItem } from './ReplaceUrlItem.tsx';
 import { CheckableBadgeYield, CheckableSectionItem } from './CheckableSectionItem.tsx';
+import { DoneChips } from './DoneChips.tsx';
 import { AddBlockButton } from './AddBlockButton.tsx';
 import { SectionStatsContext } from '~/hooks/useSectionStats.ts';
 import type { SectionStats } from '~/hooks/useReaderSections.tsx';
@@ -162,8 +163,8 @@ interface PageEditorProps {
    */
   collab?: PageEditorCollab | null;
   /**
-   * Unlock counts for the locked sections' chips (`sectionStats` from the
-   * loader, OWNER/TEACHER only). Null: no chips.
+   * Counts for the locked sections' and checkable headings' chips
+   * (`sectionStats` from the loader, OWNER/TEACHER only). Null: no chips.
    */
   sectionStats?: SectionStats | null;
 }
@@ -571,6 +572,7 @@ const PageEditor = forwardRef(function PageEditor(
                 getItems={async query => filterSuggestionItems(getAllSlashMenuItems(editor), query)}
               />
               <CheckableBadgeYield />
+              <DoneChips editor={editor} />
             </BlockNoteView>
           </SectionStatsContext.Provider>
         </AssetDisplayUrlContext.Provider>

@@ -26,13 +26,16 @@
  *     an UNPUBLISHED one (the MCP registry's `readerState` tools do the same).
  *   - A write names a block that must exist in the writer's OWN redacted tree,
  *     so a body this user cannot see cannot be probed for its block ids.
- *   - Staff unlock list: `canSeeActivity` (accepted OWNER/TEACHER of the
- *     page's classroom).
+ *   - Staff lists (who unlocked a locked section, who ticked a checkable
+ *     heading) and the editor's chip counts: `canSeeActivity` (accepted
+ *     OWNER/TEACHER of the page's classroom).
  */
 import {
+  checkableHeadingIds,
   findBlock,
   isCheckableHeading,
   isLockedSection,
+  lockedSectionIds,
   redactLockedSections,
 } from '@classmoji/page-schema/sections';
 
@@ -217,6 +220,45 @@ export function readerSectionsFor({
   };
 }
 
+/** `sectionStats` in the page loader's payload: the editor's chip counts. */
+export interface SectionStatsPayload {
+  /** Current students of the classroom. */
+  students: number;
+  /** Locked-section id → how many current students unlocked it. */
+  unlocks: Record<string, number>;
+  /** Checkable-heading id → how many current students ticked it. */
+  checks: Record<string, number>;
+}
+
+/**
+ * The editor's chip counts for one page: unlock counts when the document has
+ * a locked section, tick counts when it has a checkable heading (each read
+ * only when needed, both at once). Null when the document has neither, or a
+ * count could not be scoped to the page (the service answers null for a page
+ * outside its classroom). The caller decides who gets this (`canSeeActivity`).
+ */
+export async function sectionStatsFor(
+  blocks: unknown,
+  counts: {
+    unlockCounts(): Promise<{ students: number; unlocks: Record<string, number> } | null>;
+    checkCounts(): Promise<{ students: number; checks: Record<string, number> } | null>;
+  }
+): Promise<SectionStatsPayload | null> {
+  const wantUnlocks = lockedSectionIds(blocks).length > 0;
+  const wantChecks = checkableHeadingIds(blocks).length > 0;
+  if (!wantUnlocks && !wantChecks) return null;
+  const [unlocks, checks] = await Promise.all([
+    wantUnlocks ? counts.unlockCounts() : null,
+    wantChecks ? counts.checkCounts() : null,
+  ]);
+  if ((wantUnlocks && !unlocks) || (wantChecks && !checks)) return null;
+  return {
+    students: unlocks?.students ?? checks?.students ?? 0,
+    unlocks: unlocks ? { ...unlocks.unlocks } : {},
+    checks: checks ? { ...checks.checks } : {},
+  };
+}
+
 /**
  * Where a signed-out reader of a public page goes to sign in: the webapp's
  * sign-in page with `?redirect=` naming this page, the same URL the root
@@ -269,6 +311,18 @@ export interface SectionsSession {
   impersonatedBy: string | null;
 }
 
+/** Which staff list: who unlocked a locked section, or who ticked a checkable heading. */
+export type SectionActivityKind = 'unlocks' | 'checks';
+
+/** One student in a staff list (`at`: when they unlocked or ticked). */
+export interface SectionActivityRow {
+  userId: string;
+  name: string | null;
+  login: string | null;
+  avatarUrl: string | null;
+  at: Date;
+}
+
 export interface PageSectionsDeps<P extends SectionsPage = SectionsPage> {
   /** The signed-in user, or null when there is no session. Throws on a real failure. */
   getSession(request: Request): Promise<SectionsSession | null>;
@@ -290,20 +344,19 @@ export interface PageSectionsDeps<P extends SectionsPage = SectionsPage> {
     userId: string;
     blockId: string;
   }): Promise<{ unlockedAt: Date; created: boolean }>;
-  /** Unlocks only, for the page row this handler already loaded and authorized. */
+  /**
+   * One list (`only`) for one block, for the page row this handler already
+   * loaded and authorized; current students only, newest first. The other
+   * list comes back empty.
+   */
   sectionActivity(args: {
     page: { id: string; classroom_id: string };
     blockId: string;
-    only: 'unlocks';
+    only: SectionActivityKind;
   }): Promise<{
     students: number;
-    unlocks: Array<{
-      userId: string;
-      name: string | null;
-      login: string | null;
-      avatarUrl: string | null;
-      at: Date;
-    }>;
+    unlocks: SectionActivityRow[];
+    checks: SectionActivityRow[];
   } | null>;
   /** One audit row (`resource_type: 'PAGES'`, `resource_id: page.id`). */
   audit(entry: SectionAuditEntry): Promise<unknown>;
@@ -320,9 +373,10 @@ export interface PageSectionsDeps<P extends SectionsPage = SectionsPage> {
  *     `{ tool: 'page_section_check', via: 'web', page_id, block_id, checked }`
  *     (only when the state actually changed, and with `dedupe: false`: each
  *     row is a distinct event, so check → uncheck → check in 5 s is 3 rows);
- *   - the staff list → VIEW
- *     `{ tool: 'page_section_unlocks', via: 'web', page_id, block_id }`, plus
- *     `impersonated_by` when an admin is viewing as the staff member.
+ *   - the staff lists → VIEW
+ *     `{ tool: 'page_section_unlocks' | 'page_section_checks', via: 'web',
+ *     page_id, block_id }`, plus `impersonated_by` when an admin is viewing as
+ *     the staff member.
  * `role` is the actor's highest ACCEPTED role (the audit service skips rows
  * without a valid one).
  */
@@ -524,11 +578,28 @@ async function sectionsPost<P extends SectionsPage>(
 }
 
 /**
- * GET `?pageId&blockId`: who among the classroom's current students unlocked
- * one locked section. `canSeeActivity` readers only (accepted OWNER/TEACHER of
- * the page's classroom, the people who see the chip); everyone else gets the
- * same 404 as a page that does not exist. Audited as a VIEW, except for a HEAD
- * request (nothing is shown).
+ * What a GET asks for: `kind=unlock` (the default, so a request without
+ * `kind` keeps its old answer) or `kind=check`; null for anything else.
+ */
+export function parseSectionListKind(raw: string | null): 'unlock' | 'check' | null {
+  if (raw === null || raw === 'unlock') return 'unlock';
+  if (raw === 'check') return 'check';
+  return null;
+}
+
+/**
+ * GET `?pageId&blockId[&kind=unlock|check]`: who among the classroom's
+ * current students unlocked one locked section (`unlock`, the default) or
+ * ticked one checkable heading (`check`). `canSeeActivity` readers only
+ * (accepted OWNER/TEACHER of the page's classroom, the people who see the
+ * chips); everyone else gets the same 404 as a page that does not exist.
+ * Audited as a VIEW, except for a HEAD request (nothing is shown).
+ *
+ * `check` names a block that must be a checkable heading in the page's
+ * current document (as the reader rule hands it to this viewer); anything
+ * else is a 400 with `code: 'NO_SUCH_SECTION'`. A heading the author has
+ * only just made checkable in the editor is not in that document yet, and
+ * no student can have ticked it: the editor reads that code as "no one yet".
  */
 export function handleSectionsGet<P extends SectionsPage>(
   request: Request,
@@ -560,11 +631,28 @@ async function sectionsGet<P extends SectionsPage>(
   if (!viewer.canSeeActivity || actingRole === null) return notFound();
   if (!classroomOpenFor({ status: page.classroom?.status, viewer })) return classroomClosed();
   if (!isSectionBlockId(blockId)) return fail(400, 'Invalid request');
+  const kind = parseSectionListKind(url.searchParams.get('kind'));
+  if (!kind) return fail(400, 'Invalid request');
 
+  if (kind === 'check') {
+    // The heading must be checkable in the document this viewer is handed
+    // (the whole one for a reveal-all reader, as the editor's).
+    const { revealAll } = viewer;
+    const blocks = await deps.loadReaderBlocks(page);
+    const unlocked = revealAll
+      ? {}
+      : (await deps.readerState({ pageId: page.id, userId: session.userId })).unlocked;
+    const tree = documentForReader(blocks, { revealAll, unlocked });
+    if (!sectionTargetValid(tree, blockId, 'check')) {
+      return json({ error: 'No such section on this page', code: 'NO_SUCH_SECTION' }, 400);
+    }
+  }
+
+  const only: SectionActivityKind = kind === 'check' ? 'checks' : 'unlocks';
   const activity = await deps.sectionActivity({
     page: { id: page.id, classroom_id: page.classroom_id },
     blockId,
-    only: 'unlocks',
+    only,
   });
   if (!activity) return notFound();
 
@@ -579,7 +667,7 @@ async function sectionsGet<P extends SectionsPage>(
       pageId: page.id,
       action: 'VIEW',
       data: {
-        tool: 'page_section_unlocks',
+        tool: kind === 'check' ? 'page_section_checks' : 'page_section_unlocks',
         via: 'web',
         page_id: page.id,
         block_id: blockId,
@@ -588,13 +676,25 @@ async function sectionsGet<P extends SectionsPage>(
     });
   }
 
+  const person = (entry: SectionActivityRow) => ({
+    userId: entry.userId,
+    name: entry.name,
+    login: entry.login,
+    avatarUrl: entry.avatarUrl,
+  });
+  if (kind === 'check') {
+    return json({
+      students: activity.students,
+      checks: activity.checks.map(entry => ({
+        ...person(entry),
+        checkedAt: entry.at.toISOString(),
+      })),
+    });
+  }
   return json({
     students: activity.students,
     unlocks: activity.unlocks.map(entry => ({
-      userId: entry.userId,
-      name: entry.name,
-      login: entry.login,
-      avatarUrl: entry.avatarUrl,
+      ...person(entry),
       unlockedAt: entry.at.toISOString(),
     })),
   });

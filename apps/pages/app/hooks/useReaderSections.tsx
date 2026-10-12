@@ -39,10 +39,15 @@ export interface ReaderSections {
   unlocked: Record<string, string>;
 }
 
-/** Unlock counts for the editor's chip (`sectionStats`, OWNER/TEACHER only). */
+/**
+ * Counts for the editor's chips (`sectionStats`, OWNER/TEACHER only): how
+ * many current students unlocked each locked section and ticked each
+ * checkable heading.
+ */
 export interface SectionStats {
   students: number;
   unlocks: Record<string, number>;
+  checks: Record<string, number>;
 }
 
 /**

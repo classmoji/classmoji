@@ -14,9 +14,12 @@ import type { PageForContent } from '~/types/pages.ts';
  *
  * POST /api/page-sections  `{ pageId, blockId, intent: 'check'|'uncheck'|'unlock' }`
  *   → `{ ok: true, checked }` / `{ ok: true, unlockedAt }`.
- * GET  /api/page-sections?pageId=&blockId=
+ * GET  /api/page-sections?pageId=&blockId=[&kind=unlock]
  *   → `{ students, unlocks: [{ userId, name, login, avatarUrl, unlockedAt }] }`
- *   (accepted OWNER/TEACHER of the page's classroom; a HEAD is not audited).
+ * GET  /api/page-sections?pageId=&blockId=&kind=check
+ *   → `{ students, checks: [{ userId, name, login, avatarUrl, checkedAt }] }`
+ *   (both: accepted OWNER/TEACHER of the page's classroom, current students
+ *   only, newest first; a HEAD is not audited).
  *
  * A resource route (no component), so the root's sign-in redirect never runs
  * here: an anonymous call is a 401, not a 302. Every rule lives in
