@@ -1,0 +1,1195 @@
+---
+// Rendered examples of the blocks a page can hold, for the Pages docs. The
+// markup and colours follow the pages app (apps/pages/app/styles/
+// blocknote-overrides.css and the class-site renders in
+// apps/pages/app/site/viewerSchema.server.ts). Static samples: the only
+// interactions are the Copy buttons and the toggles. No external requests.
+import { getImage } from 'astro:assets';
+import modulesImg from '../content/docs/docs/instructors/img-modules.png';
+import posterImg from '../content/docs/docs/instructors/img-create-classroom-intro.png';
+
+interface Props {
+  group: 'text' | 'lists' | 'code' | 'media' | 'layout';
+}
+
+const { group } = Astro.props;
+
+const image = await getImage({ src: modulesImg, width: 960, format: 'webp' });
+const poster = await getImage({ src: posterImg, width: 960, format: 'webp' });
+
+const copyIcons =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="pbx-copy-icon"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>' +
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="pbx-check-icon"><path d="M20 6 9 17l-5-5"/></svg>';
+const toggleIcon =
+  '<svg viewBox="0 -960 960 960" fill="currentColor" aria-hidden="true"><path d="M320-200v-560l440 280-440 280Z"/></svg>';
+const fileIcon =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 8L9.00319 2H19.9978C20.5513 2 21 2.45531 21 2.9918V21.0082C21 21.556 20.5551 22 20.0066 22H3.9934C3.44476 22 3 21.5501 3 20.9932V8ZM10 4V9H5V20H19V4H10Z"/></svg>';
+const pageIcon =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21h-10a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2z"/><path d="M9 9l1 0"/><path d="M9 13l6 0"/><path d="M9 17l6 0"/></svg>';
+const lockIcon =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
+
+const codeText = `def average(scores):
+    """Return the mean of a list of scores."""
+    if not scores:
+        return 0
+    return sum(scores) / len(scores)`;
+// Hand-highlighted with the code block's dark theme colours.
+const codeHtml = `<span class="k">def</span> <span class="f">average</span>(scores):
+    <span class="s">"""Return the mean of a list of scores."""</span>
+    <span class="k">if</span> <span class="k">not</span> scores:
+        <span class="k">return</span> <span class="n">0</span>
+    <span class="k">return</span> <span class="f">sum</span>(scores) / <span class="f">len</span>(scores)`;
+
+const terminalText = `git clone https://github.com/your-org/starter.git
+cd starter
+npm install
+npm run dev`;
+---
+
+<div class="pbx-grid not-content">
+  {group === 'text' && (
+    <>
+      <figure class="pbx-item">
+        <figcaption class="pbx-meta">
+          <span class="pbx-name">Headings</span>
+          <span class="pbx-cmds"><code>/h1</code> to <code>/h6</code>, or <code>#</code> to <code>######</code></span>
+          <span class="pbx-what">Structure the page. Headings 1–3 can also be checkable.</span>
+        </figcaption>
+        <div class="pbx-sample" data-pagefind-ignore>
+          <div class="pbx-h pbx-h1">Week overview</div>
+          <div class="pbx-h pbx-h2">Readings</div>
+          <div class="pbx-h pbx-h3">Before class</div>
+        </div>
+      </figure>
+
+      <figure class="pbx-item">
+        <figcaption class="pbx-meta">
+          <span class="pbx-name">Toggle heading</span>
+          <span class="pbx-cmds"><code>/toggle heading</code></span>
+          <span class="pbx-what">A heading 1–3 that folds away the blocks nested under it. Readers open it with the arrow.</span>
+        </figcaption>
+        <div class="pbx-sample" data-pagefind-ignore>
+          <div class="pbx-toggle">
+            <button type="button" class="pbx-toggle-btn" aria-expanded="false" aria-label="Show 'Extra practice'" data-pbx-toggle set:html={toggleIcon} />
+            <div class="pbx-h pbx-h3 pbx-toggle-label">Extra practice</div>
+          </div>
+          <div class="pbx-toggle-body" hidden>
+            <p class="pbx-p">Three more problems for anyone who wants them. They aren't graded.</p>
+          </div>
+        </div>
+      </figure>
+
+      <figure class="pbx-item pbx-wide">
+        <figcaption class="pbx-meta">
+          <span class="pbx-name">Text</span>
+          <span class="pbx-cmds">just type, or <code>/paragraph</code></span>
+          <span class="pbx-what">Select text for bold, italic, underline, strikethrough, colour, highlight and links. Wrap words in backticks for inline code; <code>/emoji</code> inserts an emoji.</span>
+        </figcaption>
+        <div class="pbx-sample" data-pagefind-ignore>
+          <p class="pbx-p">
+            Read <strong>chapter 4</strong> before <em>Tuesday</em>, and <u>bring your laptop</u>.
+            Office hours are <s>Monday</s> Wednesday at 3pm.
+            <span class="pbx-red">Late work loses points</span> unless you
+            <mark class="pbx-mark">ask before the deadline</mark>. Start from the
+            <a href="#blocks-you-can-use" class="pbx-link">setup guide</a> and run
+            <code class="pbx-code">npm test</code> before you push. 🎉
+          </p>
+        </div>
+      </figure>
+
+      <figure class="pbx-item">
+        <figcaption class="pbx-meta">
+          <span class="pbx-name">Quote</span>
+          <span class="pbx-cmds"><code>/quote</code> or <code>&gt;</code></span>
+          <span class="pbx-what">Set off a quotation or a passage from a reading.</span>
+        </figcaption>
+        <div class="pbx-sample" data-pagefind-ignore>
+          <blockquote class="pbx-quote">Programs must be written for people to read, and only incidentally for machines to execute.</blockquote>
+        </div>
+      </figure>
+
+      <figure class="pbx-item">
+        <figcaption class="pbx-meta">
+          <span class="pbx-name">Callout</span>
+          <span class="pbx-cmds"><code>/callout</code></span>
+          <span class="pbx-what">A highlighted note. In the editor, click the emoji to change it.</span>
+        </figcaption>
+        <div class="pbx-sample" data-pagefind-ignore>
+          <div class="pbx-callout">
+            <span class="pbx-callout-emoji" aria-hidden="true">💡</span>
+            <span>Office hours move to Thursday this week.</span>
+          </div>
+        </div>
+      </figure>
+    </>
+  )}
+
+  {group === 'lists' && (
+    <>
+      <figure class="pbx-item">
+        <figcaption class="pbx-meta">
+          <span class="pbx-name">Bullet list</span>
+          <span class="pbx-cmds"><code>/bullet</code> or <code>-</code></span>
+          <span class="pbx-what">Items in no particular order. Press Tab to nest.</span>
+        </figcaption>
+        <div class="pbx-sample" data-pagefind-ignore>
+          <ul class="pbx-ul">
+            <li>Laptop with a code editor</li>
+            <li>A Github account
+              <ul class="pbx-ul"><li>with two-factor sign-in</li></ul>
+            </li>
+            <li>Notebook</li>
+          </ul>
+        </div>
+      </figure>
+
+      <figure class="pbx-item">
+        <figcaption class="pbx-meta">
+          <span class="pbx-name">Numbered list</span>
+          <span class="pbx-cmds"><code>/numbered</code> or <code>1.</code></span>
+          <span class="pbx-what">Steps that happen in order.</span>
+        </figcaption>
+        <div class="pbx-sample" data-pagefind-ignore>
+          <ol class="pbx-ol">
+            <li>Fork the starter repository</li>
+            <li>Make your changes on a branch</li>
+            <li>Push and open a pull request</li>
+          </ol>
+        </div>
+      </figure>
+
+      <figure class="pbx-item">
+        <figcaption class="pbx-meta">
+          <span class="pbx-name">Check list</span>
+          <span class="pbx-cmds"><code>/check list</code> or <code>[]</code></span>
+          <span class="pbx-what">A list with boxes. Readers see them as you left them, unless you make it a <a href="#checkable-and-locked-sections">student check list</a> (<code>/student check list</code>, or <strong>Students tick their own</strong> in its block menu), where each student ticks their own.</span>
+        </figcaption>
+        <div class="pbx-sample" data-pagefind-ignore>
+          <div class="pbx-check-row"><input type="checkbox" checked disabled aria-label="Install Node.js" /><span class="pbx-done">Install Node.js</span></div>
+          <div class="pbx-check-row"><input type="checkbox" disabled aria-label="Clone the repository" /><span>Clone the repository</span></div>
+          <div class="pbx-check-row"><input type="checkbox" disabled aria-label="Run the tests" /><span>Run the tests</span></div>
+        </div>
+      </figure>
+
+      <figure class="pbx-item">
+        <figcaption class="pbx-meta">
+          <span class="pbx-name">Toggle list</span>
+          <span class="pbx-cmds"><code>/toggle list</code></span>
+          <span class="pbx-what">An item that folds its nested blocks away. Readers open it with the arrow.</span>
+        </figcaption>
+        <div class="pbx-sample" data-pagefind-ignore>
+          <div class="pbx-toggle">
+            <button type="button" class="pbx-toggle-btn" aria-expanded="false" aria-label="Show 'Why does the test fail on Windows?'" data-pbx-toggle set:html={toggleIcon} />
+            <span class="pbx-toggle-label">Why does the test fail on Windows?</span>
+          </div>
+          <div class="pbx-toggle-body" hidden>
+            <p class="pbx-p">Line endings. Set <code class="pbx-code">core.autocrlf</code> to <code class="pbx-code">input</code> and clone again.</p>
+          </div>
+        </div>
+      </figure>
+    </>
+  )}
+
+  {group === 'code' && (
+    <>
+      <figure class="pbx-item pbx-wide">
+        <figcaption class="pbx-meta">
+          <span class="pbx-name">Code block</span>
+          <span class="pbx-cmds"><code>/code</code> or <code>```</code></span>
+          <span class="pbx-what">Code with syntax highlighting. Pick the language from the bar; readers get a Copy button, which you can turn off per block.</span>
+        </figcaption>
+        <div class="pbx-sample" data-pagefind-ignore>
+          <div class="pbx-codeblock">
+            <div class="pbx-bar">
+              <span class="pbx-bar-label">Python</span>
+              <button type="button" class="pbx-copy" aria-label="Copy" title="Copy" data-pbx-copy={codeText} set:html={copyIcons} />
+            </div>
+            <pre class="pbx-pre"><code set:html={codeHtml} /></pre>
+          </div>
+        </div>
+      </figure>
+
+      <figure class="pbx-item pbx-wide">
+        <figcaption class="pbx-meta">
+          <span class="pbx-name">Terminal</span>
+          <span class="pbx-cmds"><code>/terminal</code></span>
+          <span class="pbx-what">Commands to run, in a terminal window with its own title. Readers get a Copy button, which you can turn off per block.</span>
+        </figcaption>
+        <div class="pbx-sample" data-pagefind-ignore>
+          <div class="pbx-terminal">
+            <div class="pbx-terminal-header">
+              <span class="pbx-dots" aria-hidden="true"><i class="r"></i><i class="y"></i><i class="g"></i></span>
+              <span class="pbx-terminal-title">Setup</span>
+              <button type="button" class="pbx-copy" aria-label="Copy" title="Copy" data-pbx-copy={terminalText} set:html={copyIcons} />
+            </div>
+            <pre class="pbx-terminal-content"><code>{terminalText}</code></pre>
+          </div>
+        </div>
+      </figure>
+    </>
+  )}
+
+  {group === 'media' && (
+    <>
+      <figure class="pbx-item">
+        <figcaption class="pbx-meta">
+          <span class="pbx-name">Image</span>
+          <span class="pbx-cmds"><code>/image</code></span>
+          <span class="pbx-what">Upload a picture or paste its link. Drag the edges to resize it and add a caption underneath.</span>
+        </figcaption>
+        <div class="pbx-sample" data-pagefind-ignore>
+          <img class="pbx-img" src={image.src} width="960" height="569" alt="Example image: the Modules page" loading="lazy" decoding="async" />
+          <p class="pbx-caption">The Modules page, with this week's module open</p>
+        </div>
+      </figure>
+
+      <figure class="pbx-item">
+        <figcaption class="pbx-meta">
+          <span class="pbx-name">Video</span>
+          <span class="pbx-cmds"><code>/video</code></span>
+          <span class="pbx-what">Paste a YouTube or Vimeo link, or upload a video file. It plays on the page, with an optional caption.</span>
+        </figcaption>
+        <div class="pbx-sample" data-pagefind-ignore>
+          <div class="pbx-frame">
+            <img src={poster.src} alt="" loading="lazy" decoding="async" />
+            <span class="pbx-play" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>
+          </div>
+          <p class="pbx-caption">Walkthrough: setting up the project</p>
+        </div>
+      </figure>
+
+      <figure class="pbx-item">
+        <figcaption class="pbx-meta">
+          <span class="pbx-name">Embed</span>
+          <span class="pbx-cmds"><code>/embed</code></span>
+          <span class="pbx-what">Show another site in a frame on the page: a CodePen, a Google Doc or Map, a slide deck.</span>
+        </figcaption>
+        <div class="pbx-sample" data-pagefind-ignore>
+          <div class="pbx-frame pbx-embed" role="img" aria-label="Placeholder for an embedded web page">
+            <div class="pbx-embed-bar"><i></i><i></i><i></i><span>example.com/interactive-demo</span></div>
+            <div class="pbx-embed-body">
+              <div class="pbx-embed-lines"><b></b><i></i><i></i><i class="short"></i></div>
+              <div class="pbx-embed-box"></div>
+            </div>
+          </div>
+        </div>
+      </figure>
+
+      <figure class="pbx-item">
+        <figcaption class="pbx-meta">
+          <span class="pbx-name">File</span>
+          <span class="pbx-cmds"><code>/file</code></span>
+          <span class="pbx-what">Attach a file. Signed-in members get a Download button.</span>
+        </figcaption>
+        <div class="pbx-sample" data-pagefind-ignore>
+          <div class="pbx-file">
+            <span class="pbx-file-icon" set:html={fileIcon} />
+            <span class="pbx-file-name">starter-code.zip</span>
+          </div>
+          <p class="pbx-file-caption">Everything you need for part 1</p>
+          <span class="pbx-download">Download</span>
+        </div>
+      </figure>
+
+      <figure class="pbx-item">
+        <figcaption class="pbx-meta">
+          <span class="pbx-name">Audio</span>
+          <span class="pbx-cmds"><code>/audio</code></span>
+          <span class="pbx-what">Upload or link a recording; it plays on the page. Signed-in members get a Download button.</span>
+        </figcaption>
+        <div class="pbx-sample" data-pagefind-ignore>
+          <div class="pbx-audio" role="img" aria-label="Audio player">
+            <svg class="pbx-audio-play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+            <span class="pbx-audio-time">0:00 / 3:12</span>
+            <span class="pbx-audio-track"><span></span></span>
+            <svg class="pbx-audio-vol" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4z"/></svg>
+          </div>
+          <p class="pbx-file-caption">Interview with a guest speaker</p>
+          <span class="pbx-download">Download</span>
+        </div>
+      </figure>
+    </>
+  )}
+
+  {group === 'layout' && (
+    <>
+      <figure class="pbx-item pbx-wide">
+        <figcaption class="pbx-meta">
+          <span class="pbx-name">Table</span>
+          <span class="pbx-cmds"><code>/table</code></span>
+          <span class="pbx-what">Rows and columns of text. Add rows and columns from the table's edges; the first row can be a header.</span>
+        </figcaption>
+        <div class="pbx-sample" data-pagefind-ignore>
+          <table class="pbx-table">
+            <thead><tr><th>Week</th><th>Topic</th><th>Due</th></tr></thead>
+            <tbody>
+              <tr><td>1</td><td>Tools and setup</td><td>Lab 0</td></tr>
+              <tr><td>2</td><td>Functions and testing</td><td>Lab 1</td></tr>
+              <tr><td>3</td><td>Working with data</td><td>Project proposal</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </figure>
+
+      <figure class="pbx-item pbx-wide">
+        <figcaption class="pbx-meta">
+          <span class="pbx-name">Columns</span>
+          <span class="pbx-cmds"><code>/columns</code> (two or three)</span>
+          <span class="pbx-what">Put blocks side by side. Each column holds any blocks; drag a block next to another to make columns too.</span>
+        </figcaption>
+        <div class="pbx-sample" data-pagefind-ignore>
+          <div class="pbx-columns">
+            <div>
+              <div class="pbx-h pbx-h3">Before class</div>
+              <p class="pbx-p">Read the chapter and try the warm-up problems.</p>
+            </div>
+            <div>
+              <div class="pbx-h pbx-h3">After class</div>
+              <p class="pbx-p">Finish the lab and push your work by Friday.</p>
+            </div>
+          </div>
+        </div>
+      </figure>
+
+      <figure class="pbx-item">
+        <figcaption class="pbx-meta">
+          <span class="pbx-name">Link to page</span>
+          <span class="pbx-cmds"><code>/link</code></span>
+          <span class="pbx-what">Link to another page in the classroom: start typing and pick it by name.</span>
+        </figcaption>
+        <div class="pbx-sample" data-pagefind-ignore>
+          <span class="pbx-pagelink"><span class="pbx-pagelink-icon" set:html={pageIcon} /><span>Project brief</span></span>
+        </div>
+      </figure>
+
+      <figure class="pbx-item">
+        <figcaption class="pbx-meta">
+          <span class="pbx-name">Divider</span>
+          <span class="pbx-cmds"><code>/divider</code></span>
+          <span class="pbx-what">A horizontal line between parts of a page.</span>
+        </figcaption>
+        <div class="pbx-sample" data-pagefind-ignore>
+          <p class="pbx-p">Part one ends here.</p>
+          <hr class="pbx-hr" />
+          <p class="pbx-p">Part two starts here.</p>
+        </div>
+      </figure>
+
+      <figure class="pbx-item pbx-wide">
+        <figcaption class="pbx-meta">
+          <span class="pbx-name">Page directory</span>
+          <span class="pbx-cmds"><code>/directory</code></span>
+          <span class="pbx-what">A grid of tiles linking to pages, the course schedule or outside sites, in one or two columns. Handy at the top of a home page.</span>
+        </figcaption>
+        <div class="pbx-sample" data-pagefind-ignore>
+          <div class="pbx-nav">
+            <span class="pbx-nav-item"><span class="pbx-nav-emoji">📘</span><span>Syllabus</span></span>
+            <span class="pbx-nav-item"><span class="pbx-nav-emoji">📅</span><span>Schedule</span></span>
+            <span class="pbx-nav-item"><span class="pbx-nav-emoji">🧪</span><span>Labs</span></span>
+            <span class="pbx-nav-item"><span class="pbx-nav-emoji">💬</span><span>Discussion forum</span><span class="pbx-nav-ext">↗</span></span>
+          </div>
+        </div>
+      </figure>
+
+      <figure class="pbx-item">
+        <figcaption class="pbx-meta">
+          <span class="pbx-name">Profile card</span>
+          <span class="pbx-cmds"><code>/profile</code></span>
+          <span class="pbx-what">A person with a photo, name and role, such as the teaching staff on a syllabus. Put several in columns.</span>
+        </figcaption>
+        <div class="pbx-sample" data-pagefind-ignore>
+          <div class="pbx-profile">
+            <span class="pbx-avatar" aria-hidden="true">👤</span>
+            <span><span class="pbx-profile-name">Alex Rivera</span><span class="pbx-profile-title">Instructor · Office hours Wed 3–5pm</span></span>
+          </div>
+        </div>
+      </figure>
+
+      <figure class="pbx-item">
+        <figcaption class="pbx-meta">
+          <span class="pbx-name">Locked section</span>
+          <span class="pbx-cmds"><code>/lock</code></span>
+          <span class="pbx-what">A title that students hold to unlock. <a href="#checkable-and-locked-sections">Try it below</a>.</span>
+        </figcaption>
+        <div class="pbx-sample" data-pagefind-ignore>
+          <a class="pbx-locked" href="#checkable-and-locked-sections">
+            <span class="pbx-locked-icon" set:html={lockIcon} />
+            <span class="pbx-locked-title">Stuck on parsing the response?</span>
+          </a>
+        </div>
+      </figure>
+    </>
+  )}
+</div>
+
+<style is:global>
+  /* Starlight's default theme is dark; light mode is [data-theme='light'].
+     Colours are the pages app's (dark first, then the light twin). */
+  .pbx-grid {
+    --pbx-text: #cfcfcf;
+    --pbx-strong: #ececec;
+    --pbx-subtle: #9ca3af;
+    --pbx-border: rgba(255, 255, 255, 0.12);
+    --pbx-rule: rgba(255, 255, 255, 0.16);
+    --pbx-surface: #191919;
+    --pbx-callout: rgba(255, 255, 255, 0.05);
+    --pbx-code-bg: rgba(255, 255, 255, 0.1);
+    --pbx-code-fg: #ff6b6b;
+    --pbx-link: #60a5fa;
+    --pbx-quote: rgb(125, 121, 122);
+    --pbx-table: #3f3f3f;
+    --pbx-tile-bg: #2d2d2d;
+    --pbx-tile-border: rgba(255, 255, 255, 0.1);
+    --pbx-avatar: #374151;
+    --pbx-block-dark: #141414;
+    --pbx-block-dark-border: 1px solid #333333;
+    --pbx-audio: #2d2d2d;
+    --pbx-mark: rgba(223, 171, 1, 0.3);
+    --pbx-red: #ec4040;
+    --pbx-focus: #60a5fa;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 19rem), 1fr));
+    gap: 1rem;
+    margin-block: 1.25rem 1.75rem;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+
+  :root[data-theme='light'] .pbx-grid {
+    --pbx-text: #3f3f3f;
+    --pbx-strong: #1f2937;
+    --pbx-subtle: #6b7280;
+    --pbx-border: rgba(55, 53, 47, 0.14);
+    --pbx-rule: rgba(55, 53, 47, 0.16);
+    --pbx-surface: #ffffff;
+    --pbx-callout: rgba(0, 0, 0, 0.03);
+    --pbx-code-bg: #f1f1ef;
+    --pbx-code-fg: #eb5757;
+    --pbx-link: #2563eb;
+    --pbx-table: #dddddd;
+    --pbx-tile-bg: #ffffff;
+    --pbx-tile-border: rgba(0, 0, 0, 0.09);
+    --pbx-avatar: #e5e7eb;
+    --pbx-block-dark: rgb(22, 22, 22);
+    --pbx-block-dark-border: 0 solid transparent;
+    --pbx-audio: #f1f3f4;
+    --pbx-mark: rgba(251, 243, 219, 1);
+    --pbx-red: #e03e3e;
+    --pbx-focus: #2563eb;
+  }
+
+  .pbx-item {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    margin: 0;
+    border: 1px solid var(--pbx-border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .pbx-wide {
+    grid-column: 1 / -1;
+  }
+
+  .pbx-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.25rem 0.5rem;
+    padding: 0.625rem 0.875rem;
+    border-bottom: 1px solid var(--pbx-border);
+    font-family: var(--sl-font);
+    font-size: var(--sl-text-sm, 0.875rem);
+    line-height: 1.45;
+    color: var(--sl-color-text);
+  }
+
+  .pbx-name {
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+
+  .pbx-cmds {
+    color: var(--sl-color-gray-3);
+  }
+
+  .pbx-meta code {
+    font-family: var(--sl-font-mono);
+    font-size: 0.85em;
+    padding: 0.05em 0.3em;
+    border-radius: 4px;
+    background: var(--sl-color-bg-inline-code);
+    color: var(--sl-color-white);
+  }
+
+  .pbx-what {
+    flex-basis: 100%;
+    color: var(--sl-color-gray-2);
+  }
+
+  :root[data-theme='light'] .pbx-what {
+    color: var(--sl-color-gray-3);
+  }
+
+  .pbx-meta a {
+    color: var(--sl-color-text-accent);
+  }
+
+  .pbx-sample {
+    flex: 1;
+    padding: 1rem 1.125rem;
+    background: var(--pbx-surface);
+    color: var(--pbx-text);
+    font-size: 16px;
+    font-weight: 500;
+    line-height: 1.5;
+    overflow-x: auto;
+  }
+
+  .pbx-sample button:focus-visible,
+  .pbx-sample a:focus-visible {
+    outline: 2px solid var(--pbx-focus);
+    outline-offset: 2px;
+  }
+
+  .pbx-p {
+    margin: 0.25rem 0;
+  }
+
+  /* Headings: the app's scale (H1 30px, H2 24px, H3 20px). */
+  .pbx-h {
+    margin: 0.5rem 0 0.25rem;
+    font-weight: 700;
+    line-height: 1.3;
+    color: var(--pbx-strong);
+  }
+
+  .pbx-h:first-child {
+    margin-top: 0;
+  }
+
+  .pbx-h1 { font-size: 30px; }
+  .pbx-h2 { font-size: 24px; }
+  .pbx-h3 { font-size: 20px; }
+
+  /* Toggles */
+  .pbx-toggle {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .pbx-toggle .pbx-h {
+    margin: 0;
+  }
+
+  .pbx-toggle-btn {
+    flex: none;
+    display: flex;
+    padding: 3px;
+    border: 0;
+    border-radius: 4px;
+    background: none;
+    color: var(--pbx-text);
+    cursor: pointer;
+    transition: transform 120ms ease;
+  }
+
+  .pbx-toggle-btn:hover {
+    background: var(--pbx-callout);
+  }
+
+  .pbx-toggle-btn svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .pbx-toggle-btn[aria-expanded='true'] {
+    transform: rotate(90deg);
+  }
+
+  .pbx-toggle-body {
+    padding-left: 28px;
+  }
+
+  .pbx-sample [hidden] {
+    display: none !important;
+  }
+
+  /* Inline styles */
+  .pbx-sample strong { font-weight: 700; }
+  .pbx-red { color: var(--pbx-red); }
+  .pbx-mark { background: var(--pbx-mark); color: inherit; padding: 0 1px; }
+
+  .pbx-link,
+  .pbx-link:hover {
+    color: var(--pbx-link);
+    text-decoration: underline;
+  }
+
+  .pbx-code {
+    padding: 0.2em 0.4em;
+    border-radius: 3px;
+    font-family: var(--sl-font-mono);
+    font-size: 0.9em;
+    background: var(--pbx-code-bg);
+    color: var(--pbx-code-fg);
+  }
+
+  .pbx-quote {
+    margin: 0;
+    padding-left: 1em;
+    border-left: 2px solid var(--pbx-quote);
+    color: var(--pbx-quote);
+  }
+
+  .pbx-callout {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    border-radius: 10px;
+    background: var(--pbx-callout);
+  }
+
+  .pbx-callout-emoji {
+    font-size: 1.5rem;
+    line-height: 1;
+  }
+
+  /* Lists */
+  .pbx-ul,
+  .pbx-ol {
+    margin: 0;
+    padding-left: 1.5rem;
+  }
+
+  .pbx-ul .pbx-ul {
+    list-style-type: circle;
+  }
+
+  .pbx-sample li {
+    margin: 0.125rem 0;
+  }
+
+  .pbx-check-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 28px;
+  }
+
+  .pbx-check-row input {
+    width: 12px;
+    margin: 0 0 0 4px;
+    accent-color: #2563eb;
+  }
+
+  .pbx-done {
+    text-decoration: line-through;
+  }
+
+  /* Code block and terminal: dark in both themes, as in the app. */
+  .pbx-codeblock,
+  .pbx-terminal {
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--pbx-block-dark);
+    border: var(--pbx-block-dark-border);
+    color: #ffffff;
+    font-weight: 400;
+  }
+
+  .pbx-terminal {
+    background: #1e1e1e;
+    color: #d4d4d4;
+  }
+
+  :root:not([data-theme='light']) .pbx-terminal {
+    background: #141414;
+  }
+
+  .pbx-bar,
+  .pbx-terminal-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    background: #2d2d2d;
+    border-bottom: 1px solid #1a1a1a;
+  }
+
+  .pbx-bar {
+    height: 34px;
+    padding: 0 8px 0 14px;
+  }
+
+  .pbx-terminal-header {
+    height: 36px;
+    padding: 0 0.5rem 0 1rem;
+  }
+
+  .pbx-bar-label,
+  .pbx-terminal-title {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 13px;
+    font-weight: 500;
+    color: #8e8e8e;
+  }
+
+  .pbx-dots {
+    display: flex;
+    gap: 8px;
+  }
+
+  .pbx-dots i {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+  }
+
+  .pbx-dots .r { background: #ff5f56; }
+  .pbx-dots .y { background: #ffbd2e; }
+  .pbx-dots .g { background: #27c93f; }
+
+  .pbx-copy {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    margin-left: auto;
+    padding: 0;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: #8e8e8e;
+    cursor: pointer;
+  }
+
+  .pbx-copy:hover,
+  .pbx-copy:focus-visible {
+    color: #d4d4d4;
+  }
+
+  .pbx-sample .pbx-copy:focus-visible {
+    outline: 1px solid #8e8e8e;
+    outline-offset: 0;
+  }
+
+  .pbx-copy svg {
+    display: block;
+    width: 14px;
+    height: 14px;
+  }
+
+  .pbx-copy .pbx-check-icon,
+  .pbx-copy[data-copied] .pbx-copy-icon {
+    display: none;
+  }
+
+  .pbx-copy[data-copied] .pbx-check-icon {
+    display: block;
+  }
+
+  .pbx-pre,
+  .pbx-terminal-content {
+    margin: 0;
+    padding: 1rem;
+    overflow-x: auto;
+    background: transparent;
+    font-family: var(--sl-font-mono);
+    font-size: 14px;
+    line-height: 1.5;
+    white-space: pre;
+    tab-size: 2;
+  }
+
+  .pbx-pre code,
+  .pbx-terminal-content code {
+    font: inherit;
+    color: inherit;
+    background: none;
+    padding: 0;
+  }
+
+  .pbx-pre .k { color: #ff7b72; }
+  .pbx-pre .f { color: #d2a8ff; }
+  .pbx-pre .s { color: #a5d6ff; }
+  .pbx-pre .n { color: #79c0ff; }
+
+  /* Media */
+  .pbx-img {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: 4px;
+  }
+
+  .pbx-caption {
+    margin: 0.5rem 0 0;
+    text-align: center;
+    font-size: 0.875rem;
+    font-weight: 400;
+    color: var(--pbx-subtle);
+  }
+
+  .pbx-frame {
+    position: relative;
+    aspect-ratio: 16 / 9;
+    border-radius: 0.5rem;
+    overflow: hidden;
+    background: #000;
+  }
+
+  .pbx-frame > img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    opacity: 0.85;
+  }
+
+  .pbx-play {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    display: grid;
+    place-items: center;
+    width: 64px;
+    height: 44px;
+    border-radius: 12px;
+    background: rgba(0, 0, 0, 0.72);
+    color: #fff;
+    transform: translate(-50%, -50%);
+  }
+
+  .pbx-play svg {
+    width: 26px;
+    height: 26px;
+  }
+
+  .pbx-embed {
+    display: flex;
+    flex-direction: column;
+    background: var(--pbx-callout);
+    border: 1px solid var(--pbx-border);
+  }
+
+  .pbx-embed-bar {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--pbx-border);
+    font-family: var(--sl-font-mono);
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--pbx-subtle);
+  }
+
+  .pbx-embed-bar i {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--pbx-rule);
+  }
+
+  .pbx-embed-bar span {
+    margin-left: 6px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .pbx-embed-body {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 1fr 0.8fr;
+    gap: 14px;
+    padding: 14px;
+  }
+
+  .pbx-embed-lines {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .pbx-embed-lines b,
+  .pbx-embed-lines i {
+    display: block;
+    height: 8px;
+    border-radius: 4px;
+    background: var(--pbx-rule);
+  }
+
+  .pbx-embed-lines b {
+    width: 60%;
+    height: 12px;
+    margin-bottom: 4px;
+  }
+
+  .pbx-embed-lines .short {
+    width: 50%;
+  }
+
+  .pbx-embed-box {
+    border-radius: 6px;
+    background: linear-gradient(135deg, rgba(37, 99, 235, 0.35), rgba(31, 136, 61, 0.35));
+  }
+
+  .pbx-file {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 0;
+  }
+
+  .pbx-file-icon svg {
+    display: block;
+    width: 18px;
+    height: 18px;
+    color: var(--pbx-subtle);
+  }
+
+  .pbx-file-name {
+    font-size: 15px;
+  }
+
+  .pbx-file-caption {
+    margin: 0.25rem 0 0;
+    font-size: 0.8125rem;
+    font-weight: 400;
+    color: var(--pbx-subtle);
+  }
+
+  .pbx-download {
+    display: inline-flex;
+    margin-top: 0.5rem;
+    padding: 0.25rem 0.625rem;
+    border: 1px solid var(--pbx-rule);
+    border-radius: 0.375rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    line-height: 1.25rem;
+  }
+
+  .pbx-audio {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 44px;
+    padding: 0 16px;
+    border-radius: 22px;
+    background: var(--pbx-audio);
+    font-size: 13px;
+    font-weight: 400;
+  }
+
+  .pbx-audio svg {
+    flex: none;
+    width: 20px;
+    height: 20px;
+  }
+
+  .pbx-audio-time {
+    flex: none;
+    white-space: nowrap;
+  }
+
+  .pbx-audio-track {
+    flex: 1;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--pbx-rule);
+  }
+
+  /* Layout and links */
+  .pbx-table {
+    border-collapse: collapse;
+    font-size: 15px;
+  }
+
+  .pbx-table th,
+  .pbx-table td {
+    padding: 5px 10px;
+    border: 1px solid var(--pbx-table);
+    text-align: left;
+  }
+
+  .pbx-table th {
+    font-weight: 700;
+  }
+
+  .pbx-columns {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1.5rem;
+  }
+
+  .pbx-hr {
+    margin: 1rem 0;
+    border: 0;
+    border-top: 1px solid var(--pbx-rule);
+  }
+
+  .pbx-pagelink {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 0;
+    border-bottom: 1px solid var(--pbx-rule);
+  }
+
+  .pbx-pagelink-icon svg {
+    display: block;
+    width: 18px;
+    height: 18px;
+    color: var(--pbx-subtle);
+  }
+
+  .pbx-nav {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 14px;
+  }
+
+  .pbx-nav-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    padding: 9px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--pbx-tile-border);
+    background: var(--pbx-tile-bg);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--pbx-strong);
+  }
+
+  .pbx-nav-emoji {
+    width: 1.25em;
+    font-size: 15px;
+    line-height: 1;
+    text-align: center;
+  }
+
+  .pbx-nav-ext {
+    margin-left: auto;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--pbx-subtle);
+  }
+
+  .pbx-profile {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem;
+    border: 1px solid var(--pbx-border);
+    border-radius: 8px;
+    background: var(--pbx-callout);
+  }
+
+  .pbx-avatar {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    background: var(--pbx-avatar);
+    font-size: 1.5rem;
+  }
+
+  .pbx-profile-name {
+    display: block;
+    font-weight: 600;
+    color: var(--pbx-strong);
+  }
+
+  .pbx-profile-title {
+    display: block;
+    font-size: 0.875rem;
+    font-weight: 400;
+    color: var(--pbx-subtle);
+  }
+
+  .pbx-locked,
+  .pbx-locked:hover {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 14px;
+    border: 1px solid var(--pbx-rule);
+    border-radius: 8px;
+    background: var(--pbx-callout);
+    color: var(--pbx-strong);
+    font-weight: 600;
+    text-decoration: none;
+  }
+
+  .pbx-locked-icon svg {
+    display: block;
+    width: 16px;
+    height: 16px;
+    color: var(--pbx-subtle);
+  }
+
+  @media (max-width: 560px) {
+    .pbx-columns,
+    .pbx-nav {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .pbx-toggle-btn {
+      transition: none;
+    }
+  }
+</style>
+
+<script>
+  for (const button of document.querySelectorAll<HTMLButtonElement>('[data-pbx-toggle]')) {
+    const body = button.closest('.pbx-sample')?.querySelector<HTMLElement>('.pbx-toggle-body');
+    const label = button.parentElement?.querySelector('.pbx-toggle-label')?.textContent?.trim() ?? '';
+    button.addEventListener('click', () => {
+      const open = button.getAttribute('aria-expanded') !== 'true';
+      button.setAttribute('aria-expanded', String(open));
+      button.setAttribute('aria-label', `${open ? 'Hide' : 'Show'} '${label}'`);
+      if (body) body.hidden = !open;
+    });
+  }
+
+  for (const button of document.querySelectorAll<HTMLButtonElement>('[data-pbx-copy]')) {
+    let timer = 0;
+    button.addEventListener('click', async () => {
+      const text = button.dataset.pbxCopy ?? '';
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch {
+        // No async clipboard (an http preview, an old browser): the old way.
+        const area = document.createElement('textarea');
+        area.value = text;
+        area.setAttribute('readonly', '');
+        area.style.cssText = 'position:fixed;top:0;left:0;opacity:0;';
+        document.body.appendChild(area);
+        area.select();
+        const ok = document.execCommand('copy');
+        area.remove();
+        button.focus({ preventScroll: true });
+        if (!ok) return;
+      }
+      button.setAttribute('data-copied', '');
+      button.setAttribute('aria-label', 'Copied');
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        button.removeAttribute('data-copied');
+        button.setAttribute('aria-label', 'Copy');
+      }, 1500);
+    });
+  }
+</script>

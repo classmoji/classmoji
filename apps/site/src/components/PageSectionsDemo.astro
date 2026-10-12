@@ -1,0 +1,1133 @@
+---
+// Live, client-only demos of a page's checkable and locked sections, for the
+// Pages docs. They look and behave like the reader view in the pages app
+// (apps/pages/app/components/viewer/sections/ and styles/page-sections.css):
+// the same tick box and fade, the same hold-to-unlock card with its cracks and
+// shatter. Nothing leaves the browser and nothing is stored; Reset puts the
+// demo back as it was.
+interface Props {
+  kind: 'checkable' | 'locked';
+}
+
+const { kind } = Astro.props;
+const uid = `psd-${Math.random().toString(36).slice(2, 8)}`;
+const lockTitle = 'Stuck on parsing the response?';
+const checkSvg =
+  '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" pathLength="1"/></svg>';
+const sections = [
+  {
+    title: 'Set up the project',
+    body: 'Clone the starter repository and run <code>npm install</code>. Start the dev server with <code>npm run dev</code> and open the address it prints.',
+  },
+  {
+    title: 'Fetch the data',
+    body: 'Request the list from the API and show each item on the page. Handle the case where the request fails.',
+  },
+];
+---
+
+{kind === 'checkable' ? (
+  <div class="psd psd-checkable not-content" data-psd="checkable" data-pagefind-ignore>
+    {sections.map(section => (
+      <div class="psd-section" data-psd-section>
+        <div class="psd-heading">
+          <button
+            type="button"
+            class="psd-check"
+            role="checkbox"
+            aria-checked="false"
+            aria-label={`Mark '${section.title}' done`}
+            data-tooltip="Mark done"
+          >
+            <span class="psd-check-box" set:html={checkSvg} />
+          </button>
+          <span class="psd-fade">{section.title}</span>
+        </div>
+        <p class="psd-fade psd-text" set:html={section.body} />
+      </div>
+    ))}
+    <div class="psd-footer">
+      <span>Live demo: tick a section to mark it done.</span>
+      <button type="button" class="psd-reset" data-psd-reset>Reset</button>
+    </div>
+  </div>
+) : (
+  <div class="psd psd-lock not-content" data-psd="locked" data-pagefind-ignore data-psd-id={uid} data-psd-title={lockTitle}>
+    <div class="psd-lock-slot" data-psd-slot>
+      <div class="psd-locked psd-locked-card" data-mode="hold">
+        <div class="psd-locked-row">
+          <button
+            type="button"
+            class="psd-locked-toggle"
+            aria-expanded="true"
+            aria-label={`Collapse '${lockTitle}'`}
+            hidden
+            data-psd-toggle
+          >
+            <svg viewBox="0 -960 960 960" fill="currentColor" aria-hidden="true">
+              <path d="M320-200v-560l440 280-440 280Z" />
+            </svg>
+          </button>
+          <svg class="psd-locked-icon" data-psd-icon viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3" y="11" width="18" height="11" rx="2" />
+            <path data-psd-icon-shackle d="M7 11V7a5 5 0 0 1 10 0v4" />
+          </svg>
+          <span class="psd-locked-title">{lockTitle}</span>
+          <span class="psd-locked-meta" hidden data-psd-meta></span>
+        </div>
+        <div class="psd-locked-stage" data-psd-stage>
+          <div class="psd-locked-skeleton" aria-hidden="true">
+            {[92, 78, 86, 44, 70].map(width => <i style={`width: ${width}%`} />)}
+          </div>
+          <div class="psd-locked-pane" data-psd-pane>
+            <div class="psd-locked-glass psd-locked-fade" data-psd-glass />
+            <svg class="psd-locked-cracks psd-locked-fade" aria-hidden="true" data-psd-cracks />
+            <div class="psd-locked-ctrl psd-locked-fade" data-psd-ctrl>
+              <div class="psd-hold" data-psd-anchor>
+                <div
+                  class="psd-hold-progress"
+                  role="progressbar"
+                  aria-label="Unlock progress"
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                  aria-valuenow="0"
+                  data-psd-progress
+                >
+                  <svg class="psd-hold-ring" viewBox="0 0 64 64" aria-hidden="true">
+                    <circle class="psd-ring-track" cx="32" cy="32" r="30" />
+                    <circle class="psd-ring-fill" cx="32" cy="32" r="30" pathLength="1" data-psd-ring />
+                  </svg>
+                </div>
+                <button
+                  type="button"
+                  class="psd-hold-btn"
+                  aria-label={`Hold to unlock '${lockTitle}'`}
+                  aria-describedby={`${uid}-note`}
+                  data-psd-hold
+                >
+                  <svg class="psd-pad" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path class="psd-pad-shackle" d="M7 11V7a5 5 0 0 1 10 0v4" />
+                    <rect x="3" y="11" width="18" height="11" rx="2" />
+                    <circle cx="12" cy="16.5" r="1.2" fill="currentColor" stroke="none" />
+                  </svg>
+                </button>
+              </div>
+              <span class="psd-hold-label" aria-hidden="true">Hold to unlock</span>
+            </div>
+          </div>
+        </div>
+        <p class="psd-locked-note" id={`${uid}-note`} data-psd-note>Staff can see when you unlock this.</p>
+        <span class="psd-sr-only" aria-live="polite" data-psd-live></span>
+      </div>
+      <div class="psd-locked-body" hidden data-psd-body></div>
+    </div>
+    <template data-psd-template>
+      <p class="psd-text">
+        <code>response.json()</code> returns a promise, so <code>await</code> it before you read
+        any fields. Check <code>response.ok</code> first: an error page is not JSON.
+      </p>
+      <pre class="psd-code"><code>{`const response = await fetch(url);
+if (!response.ok) throw new Error(response.statusText);
+const items = await response.json();`}</code></pre>
+    </template>
+    <div class="psd-footer">
+      <span>Live demo: press and hold the lock.</span>
+      <button type="button" class="psd-reset" data-psd-reset>Reset</button>
+    </div>
+  </div>
+)}
+
+<style is:global>
+  /* Tokens: the page-sections palette, on Starlight's colours. Starlight's
+     default theme is dark; light mode is [data-theme='light']. */
+  .psd {
+    --psd-primary: #1f883d;
+    --psd-text: var(--sl-color-text);
+    --psd-strong: var(--sl-color-white);
+    --psd-subtle: var(--sl-color-gray-3);
+    --psd-bg: var(--sl-color-bg);
+    --psd-bg-subtle: rgba(255, 255, 255, 0.04);
+    --psd-border: var(--sl-color-gray-5);
+    --psd-border-soft: var(--sl-color-hairline);
+    --psd-skel: rgba(255, 255, 255, 0.17);
+    --psd-skel-hi: rgba(255, 255, 255, 0.04);
+    --psd-glass-a: rgba(38, 38, 38, 0.62);
+    --psd-glass-b: rgba(25, 25, 25, 0.5);
+    --psd-glass-edge: rgba(255, 255, 255, 0.1);
+    --psd-glass-line: rgba(0, 0, 0, 0.4);
+    --psd-sheen: rgba(255, 255, 255, 0.07);
+    --psd-crack: rgba(255, 255, 255, 0.5);
+    --psd-crack-hi: rgba(0, 0, 0, 0.55);
+    --psd-ring-track: rgba(255, 255, 255, 0.14);
+    --psd-on-glass: rgba(255, 255, 255, 0.72);
+    --psd-check-border: #7f7f7f;
+    --psd-check-border-hover: rgba(255, 255, 255, 0.55);
+    --psd-tip-bg: #2d2d2d;
+    --psd-tip-fg: #cfcfcf;
+    --psd-btn-bg: #2a2a2a;
+    --psd-focus: #60a5fa;
+    --psd-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  }
+
+  :root[data-theme='light'] .psd {
+    --psd-bg-subtle: var(--sl-color-gray-7, #f7f7f5);
+    --psd-border: var(--sl-color-gray-5);
+    --psd-border-soft: var(--sl-color-gray-6);
+    --psd-skel: rgba(55, 53, 47, 0.2);
+    --psd-skel-hi: rgba(55, 53, 47, 0.05);
+    --psd-glass-a: rgba(255, 255, 255, 0.5);
+    --psd-glass-b: rgba(247, 247, 245, 0.3);
+    --psd-glass-edge: rgba(255, 255, 255, 0.85);
+    --psd-glass-line: rgba(0, 0, 0, 0.06);
+    --psd-sheen: rgba(255, 255, 255, 0.75);
+    --psd-crack: rgba(55, 53, 47, 0.42);
+    --psd-crack-hi: rgba(255, 255, 255, 0.9);
+    --psd-ring-track: rgba(55, 53, 47, 0.12);
+    --psd-on-glass: rgba(55, 53, 47, 0.7);
+    --psd-check-border: #cfcfcf;
+    --psd-check-border-hover: rgba(55, 53, 47, 0.55);
+    --psd-tip-bg: #efefef;
+    --psd-tip-fg: #3f3f3f;
+    --psd-btn-bg: #fff;
+    --psd-focus: #2563eb;
+    --psd-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+  }
+
+  .psd {
+    margin-block: 1.25rem;
+    color: var(--psd-text);
+  }
+
+  .psd code {
+    font-family: var(--sl-font-mono);
+    font-size: 0.875em;
+    padding: 0.1em 0.3em;
+    border-radius: 4px;
+    background: var(--sl-color-bg-inline-code);
+  }
+
+  .psd-text {
+    margin: 0.25rem 0 0;
+    line-height: var(--sl-line-height, 1.75);
+  }
+
+  .psd-sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .psd [hidden] {
+    display: none !important;
+  }
+
+  .psd button:focus-visible {
+    outline: 2px solid var(--psd-focus);
+    outline-offset: 2px;
+  }
+
+  .psd-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 0.75rem;
+    font-size: var(--sl-text-xs, 0.8125rem);
+    color: var(--psd-subtle);
+  }
+
+  .psd-reset {
+    padding: 2px 10px;
+    border: 1px solid var(--psd-border-soft);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--psd-subtle);
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .psd-reset:hover {
+    color: var(--psd-strong);
+    border-color: var(--psd-border);
+  }
+
+  /* ---- Checkable sections ---- */
+
+  .psd-section + .psd-section {
+    margin-top: 1rem;
+  }
+
+  .psd-heading {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: var(--sl-text-h5, 1.125rem);
+    font-weight: 600;
+    line-height: 1.4;
+    color: var(--psd-strong);
+  }
+
+  .psd-check {
+    position: relative;
+    flex: none;
+    width: 24px;
+    height: 24px;
+    margin-left: -3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .psd-check-box {
+    width: 18px;
+    height: 18px;
+    border-radius: 5px;
+    display: grid;
+    place-items: center;
+    border: 1.5px solid var(--psd-check-border);
+    background: var(--psd-bg);
+    transition:
+      background-color 160ms ease,
+      border-color 160ms ease,
+      transform 120ms ease;
+    pointer-events: none;
+  }
+
+  .psd-heading:hover .psd-check-box,
+  .psd-check:focus-visible .psd-check-box {
+    border-color: var(--psd-check-border-hover);
+  }
+
+  .psd-check:active .psd-check-box {
+    transform: scale(0.9);
+  }
+
+  .psd-check svg {
+    width: 14px;
+    height: 14px;
+    overflow: visible;
+  }
+
+  .psd-check path {
+    fill: none;
+    stroke: #fff;
+    stroke-width: 2.2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+    transition: stroke-dashoffset 220ms cubic-bezier(0.65, 0, 0.35, 1) 40ms;
+  }
+
+  .psd-check[aria-checked='true'] .psd-check-box {
+    background: var(--psd-primary);
+    border-color: var(--psd-primary);
+  }
+
+  .psd-check[aria-checked='true'] path {
+    stroke-dashoffset: 0;
+  }
+
+  .psd-check::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 0;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font: 500 12px/1.3 var(--sl-font-system, sans-serif);
+    white-space: nowrap;
+    background: var(--psd-tip-bg);
+    color: var(--psd-tip-fg);
+    box-shadow: var(--psd-shadow);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 100ms;
+    z-index: 5;
+  }
+
+  .psd-check:hover::after,
+  .psd-check:focus-visible::after {
+    opacity: 1;
+  }
+
+  /* A ticked section fades; pointing at it (not at its tick box) or focusing
+     inside it brings it most of the way back. */
+  .psd-fade {
+    transition: opacity 250ms ease;
+  }
+
+  .psd-section[data-checked] .psd-fade {
+    opacity: 0.45;
+  }
+
+  .psd-section[data-checked]:hover:not(:has(.psd-check:hover)) .psd-fade,
+  .psd-section[data-checked]:focus-within:not(:has(.psd-check:focus)) .psd-fade {
+    opacity: 0.8;
+  }
+
+  /* ---- Locked section ---- */
+
+  .psd-locked-icon {
+    width: 16px;
+    height: 16px;
+    flex: none;
+    color: var(--psd-subtle);
+  }
+
+  .psd-locked-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 30px;
+    font-weight: 600;
+    color: var(--psd-strong);
+  }
+
+  .psd-locked[data-mode='unlocked'] .psd-locked-row {
+    gap: 4px;
+  }
+
+  .psd-locked[data-mode='unlocked'] .psd-locked-title {
+    margin-left: 4px;
+  }
+
+  .psd-locked-title {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .psd-locked-toggle {
+    flex: none;
+    width: 24px;
+    height: 24px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--psd-subtle);
+    cursor: pointer;
+    transition: transform 120ms ease;
+  }
+
+  .psd-locked-toggle:hover {
+    background: var(--psd-bg-subtle);
+  }
+
+  .psd-locked-toggle > svg {
+    width: 18px;
+    height: 18px;
+    pointer-events: none;
+  }
+
+  .psd-locked-toggle[aria-expanded='true'] {
+    transform: rotate(90deg);
+  }
+
+  .psd-locked-meta {
+    flex: none;
+    padding-left: 12px;
+    font-size: 12.5px;
+    font-weight: 400;
+    color: var(--psd-subtle);
+    white-space: nowrap;
+  }
+
+  .psd-locked-card {
+    padding: 12px 14px 10px;
+    border: 1px solid var(--psd-border-soft);
+    border-radius: 8px;
+    background: var(--psd-bg-subtle);
+  }
+
+  .psd-locked-stage {
+    position: relative;
+    height: 140px;
+    margin-top: 10px;
+    border-radius: 6px;
+    overflow: hidden;
+    background: var(--psd-bg);
+    box-shadow: inset 0 0 0 1px var(--psd-border-soft);
+    font-weight: 400;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  .psd-locked-skeleton {
+    position: absolute;
+    inset: 0;
+    padding: 18px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .psd-locked-skeleton i {
+    display: block;
+    height: 10px;
+    border-radius: 5px;
+    background: var(--psd-skel);
+  }
+
+  .psd-locked-pane {
+    position: absolute;
+    inset: 0;
+    will-change: transform;
+  }
+
+  .psd-locked-glass {
+    position: absolute;
+    inset: 0;
+    border-radius: 6px;
+    background:
+      linear-gradient(115deg, transparent 28%, var(--psd-sheen) 44%, transparent 58%),
+      linear-gradient(180deg, var(--psd-glass-a), var(--psd-glass-b));
+    -webkit-backdrop-filter: blur(5px) saturate(1.15);
+    backdrop-filter: blur(5px) saturate(1.15);
+    box-shadow:
+      inset 0 1px 0 var(--psd-glass-edge),
+      inset 0 0 0 1px var(--psd-glass-line);
+  }
+
+  .psd-locked-cracks {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    overflow: visible;
+  }
+
+  .psd-locked-cracks path {
+    fill: none;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+  }
+
+  .psd-crack-hi {
+    stroke: var(--psd-crack-hi);
+    stroke-width: 1.6;
+    opacity: 0.6;
+    transform: translate(0.6px, 0.6px);
+  }
+
+  .psd-crack-lo {
+    stroke: var(--psd-crack);
+    stroke-width: 1;
+  }
+
+  .psd-locked-ctrl {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+  }
+
+  .psd-locked-fade {
+    transition: opacity 200ms ease;
+  }
+
+  .psd-locked-ctrl.psd-locked-fade {
+    transition:
+      opacity 200ms ease,
+      transform 160ms ease;
+  }
+
+  .psd-gone {
+    opacity: 0 !important;
+  }
+
+  .psd-locked-note {
+    margin: 8px 0 0;
+    font-size: 12.5px;
+    font-weight: 400;
+    line-height: 1.4;
+    color: var(--psd-subtle);
+  }
+
+  .psd-hold {
+    position: relative;
+    width: 64px;
+    height: 64px;
+  }
+
+  .psd-hold-progress {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+
+  .psd-hold-ring {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    transform: rotate(-90deg);
+  }
+
+  .psd-hold-ring circle {
+    fill: none;
+    stroke-width: 3;
+  }
+
+  .psd-ring-track {
+    stroke: var(--psd-ring-track);
+  }
+
+  .psd-ring-fill {
+    stroke: var(--psd-primary);
+    stroke-linecap: round;
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+    stroke-opacity: 0;
+  }
+
+  .psd-hold-btn {
+    position: absolute;
+    inset: 6px;
+    border-radius: 50%;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+    display: grid;
+    place-items: center;
+    background: var(--psd-btn-bg);
+    color: var(--psd-strong);
+    box-shadow:
+      var(--psd-shadow),
+      inset 0 0 0 1px var(--psd-border-soft);
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    transition:
+      transform 120ms ease,
+      box-shadow 120ms ease;
+  }
+
+  .psd-hold-btn[data-holding] {
+    transform: scale(0.95);
+  }
+
+  .psd-hold-btn:disabled {
+    cursor: default;
+  }
+
+  .psd-hold-btn svg {
+    width: 22px;
+    height: 22px;
+    overflow: visible;
+    pointer-events: none;
+  }
+
+  .psd-hold-label {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--psd-on-glass);
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  .psd-pad .psd-pad-shackle {
+    transform-box: view-box;
+    transform-origin: 7px 11px;
+    transition: transform 220ms cubic-bezier(0.3, 1.6, 0.5, 1);
+  }
+
+  .psd-pad.psd-pad-open .psd-pad-shackle {
+    transform: translateY(-3px) rotate(-24deg);
+  }
+
+  /* The body, once unlocked: under the title, like the section's children. */
+  .psd-locked-body {
+    padding-left: 30px;
+  }
+
+  .psd-locked-body[data-collapsed] {
+    display: none;
+  }
+
+  .psd-code {
+    margin: 0.75rem 0 0;
+    padding: 0.75rem 1rem;
+    border-radius: 6px;
+    border: 1px solid var(--psd-border-soft);
+    background: var(--psd-bg-subtle);
+    overflow-x: auto;
+    font-size: var(--sl-text-code-sm, 0.8125rem);
+    line-height: 1.6;
+  }
+
+  .psd-code code {
+    padding: 0;
+    background: none;
+    font-size: inherit;
+  }
+
+  /* Shards: a layer on <body>, so the card can change under it. */
+  .psd-shard-layer {
+    position: absolute;
+    pointer-events: none;
+    z-index: 40;
+  }
+
+  .psd-shard {
+    position: absolute;
+    inset: 0;
+    will-change: transform, opacity;
+    background:
+      linear-gradient(var(--psd-shard-angle, 125deg), transparent 30%, var(--psd-sheen) 48%, transparent 64%),
+      linear-gradient(180deg, var(--psd-shard-a), var(--psd-shard-b));
+    --psd-sheen: rgba(255, 255, 255, 0.07);
+    --psd-shard-a: rgba(52, 52, 52, 0.92);
+    --psd-shard-b: rgba(34, 34, 34, 0.88);
+  }
+
+  :root[data-theme='light'] .psd-shard {
+    --psd-sheen: rgba(255, 255, 255, 0.75);
+    --psd-shard-a: rgba(252, 252, 251, 0.93);
+    --psd-shard-b: rgba(240, 240, 237, 0.86);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .psd-fade,
+    .psd-check path,
+    .psd-check-box,
+    .psd-pad .psd-pad-shackle,
+    .psd-locked-toggle {
+      transition: none;
+    }
+  }
+</style>
+
+<script>
+  const HOLD_MS = 1200;
+  const DRAIN_MS = 300;
+  const SHATTER_DELAY_MS = 170;
+  const MIN_BREAK_MS = SHATTER_DELAY_MS + 280;
+  const MIN_BREAK_REDUCED_MS = 200;
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+
+  const reducedMotion = () =>
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* ---- Checkable sections ---- */
+
+  function initCheckable(root: HTMLElement) {
+    const boxes = [...root.querySelectorAll<HTMLButtonElement>('.psd-check')];
+    const set = (box: HTMLButtonElement, on: boolean) => {
+      box.setAttribute('aria-checked', on ? 'true' : 'false');
+      box.dataset.tooltip = on ? 'Mark not done' : 'Mark done';
+      box.closest('[data-psd-section]')?.toggleAttribute('data-checked', on);
+    };
+    for (const box of boxes) {
+      box.addEventListener('click', () => set(box, box.getAttribute('aria-checked') !== 'true'));
+    }
+    root.querySelector('[data-psd-reset]')?.addEventListener('click', () => {
+      for (const box of boxes) set(box, false);
+    });
+  }
+
+  /* ---- Locked section: cracks and shatter (unlockEffects.ts) ---- */
+
+  function seededRandom(seed: string): () => number {
+    let a =
+      [...seed].reduce((h, ch) => Math.imul(h ^ ch.charCodeAt(0), 16777619), 2166136261) >>> 0;
+    return () => {
+      a |= 0;
+      a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  type Crack = { d: string; start: number };
+
+  function buildCracks(seed: string, W: number, H: number, ox: number, oy: number): Crack[] {
+    const r = seededRandom(seed);
+    const rad = 34;
+    const out: Crack[] = [];
+    const ray = (x: number, y: number, ang: number, len: number, segs: number, start: number) => {
+      let d = `M${x.toFixed(1)} ${y.toFixed(1)}`;
+      let px = x;
+      let py = y;
+      const pts: Array<[number, number, number]> = [];
+      for (let s = 0; s < segs; s++) {
+        ang += (r() - 0.5) * 0.7;
+        const L = (len / segs) * (0.7 + r() * 0.6);
+        px += Math.cos(ang) * L;
+        py += Math.sin(ang) * L;
+        d += ` L${px.toFixed(1)} ${py.toFixed(1)}`;
+        pts.push([px, py, ang]);
+      }
+      out.push({ d, start });
+      return pts;
+    };
+    const N = 10;
+    const angs: number[] = [];
+    for (let i = 0; i < N; i++) {
+      const ang = (i / N) * Math.PI * 2 + (r() - 0.5) * 0.5;
+      angs.push(ang);
+      const reach = Math.hypot(Math.max(ox, W - ox), Math.max(oy, H - oy)) * (0.55 + r() * 0.5);
+      const pts = ray(ox + Math.cos(ang) * rad, oy + Math.sin(ang) * rad, ang, reach, 4 + Math.floor(r() * 2), r() * 0.35);
+      if (r() < 0.55) {
+        const p = pts[1 + Math.floor(r() * (pts.length - 2))];
+        ray(p[0], p[1], p[2] + (r() < 0.5 ? -1 : 1) * (0.6 + r() * 0.5), reach * 0.35, 3, 0.45 + r() * 0.3);
+      }
+    }
+    [1.55, 2.4].forEach((k, ring) =>
+      angs.forEach((a, i) => {
+        if (r() < 0.3) return;
+        const b = angs[(i + 1) % N];
+        const R = rad * k * (0.9 + r() * 0.2);
+        const p0 = [ox + Math.cos(a) * R, oy + Math.sin(a) * R];
+        const p1 = [ox + Math.cos(b) * R, oy + Math.sin(b) * R];
+        const mx = (p0[0] + p1[0]) / 2 + (r() - 0.5) * 6;
+        const my = (p0[1] + p1[1]) / 2 + (r() - 0.5) * 6;
+        out.push({
+          d: `M${p0[0].toFixed(1)} ${p0[1].toFixed(1)} L${mx.toFixed(1)} ${my.toFixed(1)} L${p1[0].toFixed(1)} ${p1[1].toFixed(1)}`,
+          start: 0.5 + ring * 0.15 + r() * 0.15,
+        });
+      })
+    );
+    return out;
+  }
+
+  const crackProgress = (p: number, start: number) =>
+    Math.max(0, Math.min(1, ((p - start) / (1 - start)) * 1.15));
+
+  function shatterGlass(stage: HTMLElement, seed: string, ox: number, oy: number) {
+    const rect = stage.getBoundingClientRect();
+    const W = rect.width;
+    const H = rect.height;
+    const layer = document.createElement('div');
+    layer.className = 'psd-shard-layer';
+    layer.setAttribute('aria-hidden', 'true');
+    Object.assign(layer.style, {
+      left: `${rect.left + window.scrollX}px`,
+      top: `${rect.top + window.scrollY}px`,
+      width: `${W}px`,
+      height: `${H}px`,
+    });
+    const cols = 4;
+    const rows = 3;
+    const rnd = seededRandom(`${seed}shards`);
+    const P: Array<[number, number]> = [];
+    for (let y = 0; y <= rows; y++) {
+      for (let x = 0; x <= cols; x++) {
+        const jx = x > 0 && x < cols ? (rnd() - 0.5) * (W / cols) * 0.55 : 0;
+        const jy = y > 0 && y < rows ? (rnd() - 0.5) * (H / rows) * 0.55 : 0;
+        P.push([(x * W) / cols + jx, (y * H) / rows + jy]);
+      }
+    }
+    const at = (x: number, y: number) => P[y * (cols + 1) + x];
+    const polys: Array<Array<[number, number]>> = [];
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        const q = [at(x, y), at(x + 1, y), at(x + 1, y + 1), at(x, y + 1)];
+        if ((x + y * 3) % 6 === 1) polys.push([q[0], q[1], q[2]], [q[0], q[2], q[3]]);
+        else polys.push(q);
+      }
+    }
+    const maxD = Math.hypot(W, H) / 2;
+    let longest = 0;
+    for (const poly of polys) {
+      const cx = poly.reduce((s, p) => s + p[0], 0) / poly.length;
+      const cy = poly.reduce((s, p) => s + p[1], 0) / poly.length;
+      const shard = document.createElement('div');
+      shard.className = 'psd-shard';
+      shard.style.clipPath = `polygon(${poly.map(p => `${p[0].toFixed(1)}px ${p[1].toFixed(1)}px`).join(',')})`;
+      shard.style.transformOrigin = `${cx}px ${cy}px`;
+      shard.style.setProperty('--psd-shard-angle', `${100 + rnd() * 50}deg`);
+      layer.appendChild(shard);
+      const dx = ((cx - ox) / W) * 90 + (rnd() - 0.5) * 30;
+      const dirY = (cy - oy) / H;
+      const dy = 110 + rnd() * 90 + cy * 0.3;
+      const rot = (rnd() - 0.5) * 50;
+      const delay = (Math.hypot(cx - ox, cy - oy) / maxD) * 90;
+      const duration = 640 + rnd() * 120;
+      longest = Math.max(longest, delay + duration);
+      shard.animate(
+        [
+          { transform: 'translate(0,0) rotate(0deg)', opacity: 1 },
+          {
+            offset: 0.18,
+            transform: `translate(${dx * 0.18}px, ${dirY * 14 - 8}px) rotate(${rot * 0.15}deg)`,
+            opacity: 1,
+          },
+          { transform: `translate(${dx}px, ${dy}px) rotate(${rot}deg)`, opacity: 0 },
+        ],
+        { duration, delay, easing: 'cubic-bezier(.5,0,.85,.55)', fill: 'both' }
+      );
+    }
+    document.body.appendChild(layer);
+    window.setTimeout(() => layer.remove(), Math.ceil(longest) + 60);
+  }
+
+  const unlockedFormat = new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+
+  /* ---- Locked section: one demo ---- */
+
+  function initLocked(root: HTMLElement) {
+    const slot = root.querySelector<HTMLElement>('[data-psd-slot]')!;
+    const template = root.querySelector<HTMLTemplateElement>('[data-psd-template]')!;
+    const initial = slot.innerHTML;
+    const seed = root.dataset.psdId || 'psd';
+    const title = root.dataset.psdTitle || 'Locked section';
+    let teardown = () => {};
+
+    const mount = () => {
+      teardown();
+      const q = <T extends Element>(sel: string) => slot.querySelector<T>(sel)!;
+      const card = q<HTMLElement>('.psd-locked');
+      const stage = q<HTMLElement>('[data-psd-stage]');
+      const pane = q<HTMLElement>('[data-psd-pane]');
+      const glass = q<HTMLElement>('[data-psd-glass]');
+      const cracksSvg = q<SVGSVGElement>('[data-psd-cracks]');
+      const ctrl = q<HTMLElement>('[data-psd-ctrl]');
+      const anchor = q<HTMLElement>('[data-psd-anchor]');
+      const ring = q<SVGCircleElement>('[data-psd-ring]');
+      const progress = q<HTMLElement>('[data-psd-progress]');
+      const button = q<HTMLButtonElement>('[data-psd-hold]');
+      const pad = q<SVGSVGElement>('.psd-pad');
+      const toggle = q<HTMLButtonElement>('[data-psd-toggle]');
+      const icon = q<SVGPathElement>('[data-psd-icon-shackle]');
+      const meta = q<HTMLElement>('[data-psd-meta]');
+      const note = q<HTMLElement>('[data-psd-note]');
+      const live = q<HTMLElement>('[data-psd-live]');
+      const body = q<HTMLElement>('[data-psd-body]');
+
+      const s = { p: 0, holding: false, raf: 0, last: 0, done: false, dead: false };
+      let crackEls: Array<[SVGPathElement, SVGPathElement, number]> = [];
+      let size = { w: 0, h: 0 };
+      const timers: number[] = [];
+      const later = (fn: () => void, ms: number) => timers.push(window.setTimeout(fn, ms));
+
+      const measure = () => {
+        if (s.p > 0 || s.done) return;
+        const sr = stage.getBoundingClientRect();
+        const ar = anchor.getBoundingClientRect();
+        if (!sr.width || !sr.height) return;
+        if (Math.abs(size.w - sr.width) < 1 && Math.abs(size.h - sr.height) < 1) return;
+        size = { w: sr.width, h: sr.height };
+        const ox = ar.left + ar.width / 2 - sr.left;
+        const oy = ar.top + ar.height / 2 - sr.top;
+        cracksSvg.setAttribute('viewBox', `0 0 ${sr.width} ${sr.height}`);
+        cracksSvg.replaceChildren();
+        crackEls = buildCracks(seed, sr.width, sr.height, ox, oy).map(crack => {
+          const make = (cls: string) => {
+            const path = document.createElementNS(SVG_NS, 'path');
+            path.setAttribute('class', cls);
+            path.setAttribute('pathLength', '1');
+            path.setAttribute('d', crack.d);
+            cracksSvg.appendChild(path);
+            return path;
+          };
+          return [make('psd-crack-hi'), make('psd-crack-lo'), crack.start];
+        });
+      };
+      measure();
+      const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+      observer?.observe(stage);
+
+      const apply = () => {
+        const p = s.p;
+        ring.style.strokeDashoffset = String(1 - p);
+        ring.style.strokeOpacity = p > 0.005 ? '1' : '0';
+        progress.setAttribute('aria-valuenow', String(Math.round(p * 100)));
+        for (const [hi, lo, start] of crackEls) {
+          const offset = String(1 - crackProgress(p, start));
+          hi.style.strokeDashoffset = offset;
+          lo.style.strokeDashoffset = offset;
+        }
+        if (!reducedMotion() && s.holding && p > 0.72) {
+          const a = ((p - 0.72) / 0.28) * 2.4;
+          pane.style.transform = `translate(${((Math.random() - 0.5) * 2 * a).toFixed(2)}px, ${((Math.random() - 0.5) * a).toFixed(2)}px)`;
+        } else {
+          pane.style.transform = '';
+        }
+      };
+
+      // The section opens: the card becomes the unlocked row and the body
+      // slides in under it.
+      const open = (focused: boolean) => {
+        if (s.dead) return;
+        root.style.minHeight = `${root.offsetHeight}px`;
+        card.classList.remove('psd-locked-card');
+        card.dataset.mode = 'unlocked';
+        stage.remove();
+        note.remove();
+        icon.setAttribute('d', 'M7 11V7a5 5 0 0 1 9.9-1');
+        toggle.hidden = false;
+        meta.textContent = `Unlocked ${unlockedFormat.format(new Date())}`;
+        meta.hidden = false;
+        body.replaceChildren(template.content.cloneNode(true));
+        body.hidden = false;
+        live.textContent = `Unlocked: ${title}`;
+        if (focused) toggle.focus({ preventScroll: true });
+        if (typeof body.animate !== 'function') return;
+        if (reducedMotion()) {
+          body.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 200, easing: 'ease-out' });
+          return;
+        }
+        const height = body.scrollHeight;
+        body.animate(
+          [
+            { height: '0px', opacity: 0, overflow: 'hidden' },
+            { height: `${height}px`, opacity: 1, overflow: 'hidden' },
+          ],
+          { duration: 340, easing: 'cubic-bezier(.2,.8,.2,1)' }
+        );
+      };
+
+      const complete = () => {
+        if (s.done) return;
+        s.done = true;
+        s.holding = false;
+        s.p = 1;
+        apply();
+        pane.style.transform = '';
+        button.removeAttribute('data-holding');
+        pad.classList.add('psd-pad-open');
+        const focused = button === document.activeElement;
+        try {
+          navigator.vibrate?.(15);
+        } catch {
+          // Not allowed here: the animation says it anyway.
+        }
+        if (reducedMotion()) {
+          // Reduced motion: the glass fades out, nothing flies.
+          for (const el of [glass, cracksSvg, ctrl]) el.classList.add('psd-gone');
+          button.disabled = true;
+          later(() => open(focused), MIN_BREAK_REDUCED_MS);
+          return;
+        }
+        later(() => {
+          const sr = stage.getBoundingClientRect();
+          const ar = anchor.getBoundingClientRect();
+          shatterGlass(stage, seed, ar.left + ar.width / 2 - sr.left, ar.top + ar.height / 2 - sr.top);
+          glass.style.visibility = 'hidden';
+          cracksSvg.style.visibility = 'hidden';
+          ctrl.classList.add('psd-gone');
+          ctrl.style.transform = 'scale(.85)';
+          button.disabled = true;
+        }, SHATTER_DELAY_MS);
+        later(() => open(focused), MIN_BREAK_MS);
+      };
+
+      const run = () => {
+        if (s.raf || s.dead) return;
+        s.last = performance.now();
+        const tick = (now: number) => {
+          const dt = Math.min(48, now - s.last);
+          s.last = now;
+          s.p = Math.max(0, Math.min(1, s.holding ? s.p + dt / HOLD_MS : s.p - dt / DRAIN_MS));
+          apply();
+          if (s.p >= 1 && s.holding) {
+            s.raf = 0;
+            complete();
+            return;
+          }
+          s.raf = s.holding || s.p > 0 ? requestAnimationFrame(tick) : 0;
+        };
+        s.raf = requestAnimationFrame(tick);
+      };
+
+      const start = () => {
+        if (s.done) return;
+        s.holding = true;
+        button.setAttribute('data-holding', '');
+        run();
+      };
+
+      const release = () => {
+        if (s.done || !s.holding) return;
+        s.holding = false;
+        button.removeAttribute('data-holding');
+        run();
+      };
+
+      button.addEventListener('pointerdown', event => {
+        if (event.button !== 0 || s.done) return;
+        event.preventDefault();
+        try {
+          button.setPointerCapture(event.pointerId);
+        } catch {
+          // Pointer already gone: the hold simply drains.
+        }
+        start();
+      });
+      button.addEventListener('pointerup', release);
+      button.addEventListener('pointercancel', release);
+      button.addEventListener('lostpointercapture', release);
+      button.addEventListener('contextmenu', event => event.preventDefault());
+      button.addEventListener('keydown', event => {
+        if (event.key !== ' ' && event.key !== 'Enter') return;
+        event.preventDefault();
+        if (!event.repeat) start();
+      });
+      button.addEventListener('keyup', event => {
+        if (event.key !== ' ' && event.key !== 'Enter') return;
+        event.preventDefault();
+        release();
+      });
+      button.addEventListener('blur', release);
+      window.addEventListener('blur', release);
+
+      toggle.addEventListener('mousedown', event => event.preventDefault());
+      toggle.addEventListener('click', () => {
+        const expanded = toggle.getAttribute('aria-expanded') !== 'true';
+        toggle.setAttribute('aria-expanded', String(expanded));
+        toggle.setAttribute('aria-label', `${expanded ? 'Collapse' : 'Expand'} '${title}'`);
+        body.toggleAttribute('data-collapsed', !expanded);
+      });
+
+      teardown = () => {
+        s.dead = true;
+        cancelAnimationFrame(s.raf);
+        for (const id of timers) window.clearTimeout(id);
+        observer?.disconnect();
+        window.removeEventListener('blur', release);
+      };
+    };
+
+    mount();
+    root.querySelector('[data-psd-reset]')?.addEventListener('click', () => {
+      slot.innerHTML = initial;
+      root.style.minHeight = '';
+      mount();
+    });
+  }
+
+  for (const root of document.querySelectorAll<HTMLElement>('[data-psd="checkable"]')) {
+    initCheckable(root);
+  }
+  for (const root of document.querySelectorAll<HTMLElement>('[data-psd="locked"]')) {
+    initLocked(root);
+  }
+</script>
