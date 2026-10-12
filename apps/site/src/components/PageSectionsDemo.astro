@@ -1,12 +1,13 @@
 ---
-// Live, client-only demos of a page's checkable and locked sections, for the
-// Pages docs. They look and behave like the reader view in the pages app
-// (apps/pages/app/components/viewer/sections/ and styles/page-sections.css):
+// Live, client-only demos of a page's checkable headings, student check lists
+// and locked sections, shown inside the block cards of the Pages docs
+// (PageBlockGallery). They look and behave like the reader view in the pages
+// app (apps/pages/app/components/viewer/sections/ and styles/page-sections.css):
 // the same tick box and fade, the same hold-to-unlock card with its cracks and
 // shatter. Nothing leaves the browser and nothing is stored; Reset puts the
 // demo back as it was.
 interface Props {
-  kind: 'checkable' | 'locked';
+  kind: 'checkable' | 'checklist' | 'locked';
 }
 
 const { kind } = Astro.props;
@@ -17,13 +18,16 @@ const checkSvg =
 const sections = [
   {
     title: 'Set up the project',
-    body: 'Clone the starter repository and run <code>npm install</code>. Start the dev server with <code>npm run dev</code> and open the address it prints.',
+    body: 'Clone the starter repository and run <code>npm install</code>.',
   },
   {
     title: 'Fetch the data',
-    body: 'Request the list from the API and show each item on the page. Handle the case where the request fails.',
+    body: 'Request the list from the API and show each item on the page.',
   },
 ];
+const listItems = ['Read the brief', 'Set up the project', 'Push your first commit'];
+const resetButton = (label: string) =>
+  `<button type="button" class="psd-reset" data-psd-reset aria-label="${label}">Reset</button>`;
 ---
 
 {kind === 'checkable' ? (
@@ -46,10 +50,17 @@ const sections = [
         <p class="psd-fade psd-text" set:html={section.body} />
       </div>
     ))}
-    <div class="psd-footer">
-      <span>Live demo: tick a section to mark it done.</span>
-      <button type="button" class="psd-reset" data-psd-reset>Reset</button>
-    </div>
+    <div class="psd-footer" set:html={resetButton('Reset the checkable headings')} />
+  </div>
+) : kind === 'checklist' ? (
+  <div class="psd psd-checklist not-content" data-psd="checklist" data-pagefind-ignore>
+    {listItems.map(item => (
+      <div class="psd-li">
+        <input type="checkbox" aria-label={item} />
+        <span>{item}</span>
+      </div>
+    ))}
+    <div class="psd-footer" set:html={resetButton('Reset the student check list')} />
   </div>
 ) : (
   <div class="psd psd-lock not-content" data-psd="locked" data-pagefind-ignore data-psd-id={uid} data-psd-title={lockTitle}>
@@ -122,18 +133,11 @@ const sections = [
       <div class="psd-locked-body" hidden data-psd-body></div>
     </div>
     <template data-psd-template>
-      <p class="psd-text">
-        <code>response.json()</code> returns a promise, so <code>await</code> it before you read
-        any fields. Check <code>response.ok</code> first: an error page is not JSON.
-      </p>
-      <pre class="psd-code"><code>{`const response = await fetch(url);
-if (!response.ok) throw new Error(response.statusText);
-const items = await response.json();`}</code></pre>
+      <p class="psd-text"><code>res.json()</code> returns a promise: <code>await</code> it.</p>
+      <pre class="psd-code"><code>{`const res = await fetch(url);
+const items = await res.json();`}</code></pre>
     </template>
-    <div class="psd-footer">
-      <span>Live demo: press and hold the lock.</span>
-      <button type="button" class="psd-reset" data-psd-reset>Reset</button>
-    </div>
+    <div class="psd-footer" set:html={resetButton('Reset the locked section')} />
   </div>
 )}
 
@@ -194,7 +198,7 @@ const items = await response.json();`}</code></pre>
   }
 
   .psd {
-    margin-block: 1.25rem;
+    margin: 0;
     color: var(--psd-text);
   }
 
@@ -232,29 +236,49 @@ const items = await response.json();`}</code></pre>
     outline-offset: 2px;
   }
 
+  /* Reset: a small text button under the demo, on the right. */
   .psd-footer {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    margin-top: 0.75rem;
-    font-size: var(--sl-text-xs, 0.8125rem);
-    color: var(--psd-subtle);
+    justify-content: flex-end;
+    margin-top: 0.5rem;
   }
 
   .psd-reset {
-    padding: 2px 10px;
-    border: 1px solid var(--psd-border-soft);
-    border-radius: 999px;
+    padding: 0 2px;
+    border: 0;
+    border-radius: 4px;
     background: transparent;
     color: var(--psd-subtle);
-    font: inherit;
+    font: 400 12px/1.6 var(--sl-font-system, sans-serif);
+    text-decoration: underline;
+    text-decoration-color: transparent;
+    text-underline-offset: 2px;
     cursor: pointer;
   }
 
   .psd-reset:hover {
     color: var(--psd-strong);
-    border-color: var(--psd-border);
+    text-decoration-color: currentColor;
+  }
+
+  /* ---- Student check list (BlockNote's check list item) ---- */
+
+  .psd-li {
+    display: flex;
+    align-items: center;
+    min-height: 28px;
+  }
+
+  .psd-li input {
+    width: 12px;
+    height: 24px;
+    margin: 0 8px 0 4px;
+    accent-color: #2563eb;
+    cursor: pointer;
+  }
+
+  .psd-li:has(input:checked) span {
+    text-decoration: line-through;
   }
 
   /* ---- Checkable sections ---- */
@@ -444,6 +468,23 @@ const items = await response.json();`}</code></pre>
     font-weight: 400;
     color: var(--psd-subtle);
     white-space: nowrap;
+  }
+
+  /* A narrow card (half a docs row, or a phone): the unlocked time goes under
+     the title, as the app does on small screens. */
+  .psd-lock {
+    container-type: inline-size;
+  }
+
+  @container (max-width: 480px) {
+    .psd-locked[data-mode='unlocked'] .psd-locked-row {
+      flex-wrap: wrap;
+    }
+
+    .psd-locked[data-mode='unlocked'] .psd-locked-meta {
+      flex-basis: 100%;
+      padding-left: 50px;
+    }
   }
 
   .psd-locked-card {
@@ -977,7 +1018,7 @@ const items = await response.json();`}</code></pre>
       // slides in under it.
       const open = (focused: boolean) => {
         if (s.dead) return;
-        root.style.minHeight = `${root.offsetHeight}px`;
+        root.style.minHeight = `${root.getBoundingClientRect().height}px`;
         card.classList.remove('psd-locked-card');
         card.dataset.mode = 'unlocked';
         stage.remove();
@@ -1126,6 +1167,12 @@ const items = await response.json();`}</code></pre>
 
   for (const root of document.querySelectorAll<HTMLElement>('[data-psd="checkable"]')) {
     initCheckable(root);
+  }
+  for (const root of document.querySelectorAll<HTMLElement>('[data-psd="checklist"]')) {
+    const boxes = [...root.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
+    root.querySelector('[data-psd-reset]')?.addEventListener('click', () => {
+      for (const box of boxes) box.checked = false;
+    });
   }
   for (const root of document.querySelectorAll<HTMLElement>('[data-psd="locked"]')) {
     initLocked(root);

@@ -4,7 +4,6 @@ description: How to create and manage content pages in your classroom
 ---
 
 import PageBlockGallery from '~/components/PageBlockGallery.astro';
-import PageSectionsDemo from '~/components/PageSectionsDemo.astro';
 
 ### What is a page?
 
@@ -42,7 +41,7 @@ Click a page title (or the edit button) from the Pages list. This opens the page
 
 ### Blocks you can use
 
-A page is a stack of blocks. Type `/` on an empty line to open the block menu, then keep typing to filter it (`/code`, `/image`). Markdown shortcuts work too: `#` for a heading, `-` or `1.` for a list, `>` for a quote, and three backticks for code. The examples below show each block as students see it.
+A page is a stack of blocks. Type `/` on an empty line to open the block menu, then keep typing to filter it (`/code`, `/image`). Markdown shortcuts work too: `#` for a heading, `-` or `1.` for a list, `>` for a quote, and three backticks for code. The examples below show each block as students see it; the Headings, Check list and Locked section examples work, so you can try them as a student would.
 
 **Text**
 
@@ -72,23 +71,19 @@ Two kinds of section help students work through a page at their own pace: checka
 
 Any heading 1, 2 or 3 can be checkable. Type `/` and pick **Checkable heading 1**, **2** or **3** (`/check` lists all three), or click a heading's drag handle and turn on **Checkable section**. A small tick-box mark beside the heading shows it is checkable while you edit.
 
-A section runs from its heading to the next heading of the same or a higher level. Students get a tick box next to the heading. Ticking it marks the section done and fades it; pointing at the section brings it back, and ticking again marks it not done. Ticks are saved per student, so they are still there the next time the student opens the page.
-
-<PageSectionsDemo kind="checkable" />
+A section runs from its heading to the next heading of the same or a higher level. Students get a tick box next to the heading (try it in the [Headings example](#block-headings)). Ticking it marks the section done and fades it; pointing at the section brings it back, and ticking again marks it not done. Ticks are saved per student, so they are still there the next time the student opens the page.
 
 In the editor, each checkable heading shows **Done by** and how many of your current students have ticked it. Click it to see who and when. Owners and teachers can also ask Claude (or another AI tool) connected through the [MCP server](/docs/instructors/mcp-server) for the page's section status.
 
 **Student check lists**
 
-A check list can work the same way: type `/` and pick **Student check list**, or click an item's drag handle in an existing list and turn on **Students tick their own** (it applies to the whole list). Each signed-in student ticks their own boxes, and their ticks are saved like checkable headings. Signed-out visitors and the [class website](/docs/instructors/class-sites) see the list as you left it. The editor shows no counts for list items; owners and teachers can see who ticked what through the [MCP server](/docs/instructors/mcp-server).
+A check list can work the same way: type `/` and pick **Student check list**, or click an item's drag handle in an existing list and turn on **Students tick their own** (it applies to the whole list). Each signed-in student ticks their own boxes (try it in the [Check list example](#block-check-list)), and their ticks are saved like checkable headings. Signed-out visitors and the [class website](/docs/instructors/class-sites) see the list as you left it. The editor shows no counts for list items; owners and teachers can see who ticked what through the [MCP server](/docs/instructors/mcp-server).
 
 **Locked sections**
 
 Type `/` and pick **Locked section**. Give it a title, then write the body underneath it; the body can hold any blocks. Use it for anything students should try on their own first, such as a worked solution.
 
-Students see the title on a card with the body hidden. To open it they press and hold the lock for about a second (on a keyboard, hold Space or Enter); letting go early cancels. The card tells them staff can see when they unlock it. Unlocking is recorded and can't be undone: from then on the section is open for that student, with the time they unlocked it.
-
-<PageSectionsDemo kind="locked" />
+Students see the title on a card with the body hidden. To open it they press and hold the lock for about a second (on a keyboard, hold Space or Enter); letting go early cancels. Try it in the [Locked section example](#block-locked-section). The card tells them staff can see when they unlock it. Unlocking is recorded and can't be undone: from then on the section is open for that student, with the time they unlocked it.
 
 In the editor, each locked section shows **Unlocked by** and how many of your current students have opened it. Click it to see who and when.
 
