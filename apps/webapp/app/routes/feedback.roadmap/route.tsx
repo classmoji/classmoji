@@ -120,7 +120,7 @@ export default function Roadmap() {
                   </h2>
                   <p className="mt-0.5 text-[13px] text-ink-3">{STATUS_META[status].description}</p>
                 </div>
-                <ul className="mt-4 flex flex-col gap-3 xl:-mx-1 xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:px-1 xl:pb-8 xl:pt-0.5">
+                <ul className="mt-4 flex flex-col gap-3 xl:-mx-1 xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:px-1 xl:pb-8 xl:pt-0.5 no-scrollbar">
                   {posts.map(post => (
                     <RoadmapCard key={post.id} post={post} signedIn={signedIn} />
                   ))}
