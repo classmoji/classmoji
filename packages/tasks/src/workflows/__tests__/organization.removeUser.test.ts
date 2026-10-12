@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   removeMembership: vi.fn(),
   removeTeamMember: vi.fn(),
   removeFromOrganization: vi.fn(),
+  currentGithubLogin: vi.fn(),
 }));
 
 // `task()` normally returns a trigger handle; return the config so the test can
@@ -41,6 +42,7 @@ vi.mock('@classmoji/services', () => ({
       shouldRemoveFromGitOrg: (...a: unknown[]) => mocks.shouldRemoveFromGitOrg(...a),
       remove: (...a: unknown[]) => mocks.removeMembership(...a),
     },
+    user: { currentGithubLogin: (...a: unknown[]) => mocks.currentGithubLogin(...a) },
   },
   getGitProvider: () => ({
     removeTeamMember: (...a: unknown[]) => mocks.removeTeamMember(...a),
@@ -108,6 +110,7 @@ beforeEach(() => {
   mocks.removeMembership.mockResolvedValue({ count: 1 });
   mocks.removeTeamMember.mockResolvedValue(undefined);
   mocks.removeFromOrganization.mockResolvedValue(undefined);
+  mocks.currentGithubLogin.mockResolvedValue('ada');
 });
 
 describe('remove_user_from_organization — the shared staff team', () => {
@@ -197,5 +200,47 @@ describe('remove_user_from_organization — the shared staff team', () => {
 
     expect(mocks.removeFromOrganization).toHaveBeenCalledWith('dev-org', 'ada');
     expect(mocks.removeMembership).toHaveBeenCalledWith('class-1', 'user-1', 'ASSISTANT');
+  });
+});
+
+describe('remove_user_from_organization — a stale Github login', () => {
+  const cannotFind = () => Object.assign(new Error('Cannot find ada'), { status: 404 });
+
+  it('makes no lookup when the stored login works', async () => {
+    await run({ role: 'STUDENT' });
+
+    expect(mocks.currentGithubLogin).not.toHaveBeenCalled();
+    expect(mocks.removeFromOrganization).toHaveBeenCalledWith('dev-org', 'ada');
+  });
+
+  it('removes them under their current login when the stored one is gone', async () => {
+    mocks.removeFromOrganization.mockRejectedValueOnce(cannotFind());
+    mocks.currentGithubLogin.mockResolvedValue('ada-renamed');
+
+    await run({ role: 'STUDENT' });
+
+    expect(mocks.currentGithubLogin).toHaveBeenCalledWith(expect.anything(), 'user-1', 'ada');
+    expect(mocks.removeFromOrganization).toHaveBeenLastCalledWith('dev-org', 'ada-renamed');
+    expect(mocks.removeMembership).toHaveBeenCalledWith('class-1', 'user-1', 'STUDENT');
+  });
+
+  it('still removes the membership when Github no longer has the account', async () => {
+    mocks.removeFromOrganization.mockRejectedValue(cannotFind());
+    mocks.currentGithubLogin.mockResolvedValue(null);
+
+    await run({ role: 'STUDENT' });
+
+    expect(mocks.removeFromOrganization).toHaveBeenCalledTimes(1);
+    expect(mocks.removeMembership).toHaveBeenCalledWith('class-1', 'user-1', 'STUDENT');
+  });
+
+  it('still fails on any other Github error', async () => {
+    mocks.removeFromOrganization.mockRejectedValue(
+      Object.assign(new Error('Server Error'), { status: 500 })
+    );
+
+    await expect(run({ role: 'STUDENT' })).rejects.toThrow('Server Error');
+    expect(mocks.currentGithubLogin).not.toHaveBeenCalled();
+    expect(mocks.removeMembership).not.toHaveBeenCalled();
   });
 });

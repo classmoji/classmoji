@@ -1195,6 +1195,25 @@ export class GitHubProvider extends GitProvider {
     return data;
   }
 
+  /**
+   * A user's current login, looked up by their numeric Github id, or `null` when
+   * Github no longer has that account (deleted or suspended). Logins change on
+   * rename and a released one can be claimed by someone else; the id never does.
+   * @param {string} id - Github user id (`Account.account_id`)
+   */
+  async getLoginById(id: string): Promise<string | null> {
+    const octokit = await this.#getOctokit();
+    try {
+      const { data } = await octokit.request('GET /user/{account_id}', {
+        account_id: Number(id),
+      });
+      return data.login;
+    } catch (error: unknown) {
+      if (isNotFound(error)) return null;
+      throw error;
+    }
+  }
+
   // ─── Teams ─────────────────────────────────────────────────────────────────
 
   /**
@@ -1434,19 +1453,31 @@ export class GitHubProvider extends GitProvider {
    * @param {string} repo - Repository name
    * @param {string} username - GitHub username
    * @param {string} permission - Permission level (default: maintain)
+   * @returns The invitation Github sent (who it went to, by id), or null when
+   *   the user already had access (an org member, an existing collaborator).
    */
   async addCollaborator(
     org: string,
     repo: string,
     username: string,
     permission: string = 'maintain'
-  ): Promise<void> {
+  ): Promise<{ id: number; inviteeId: number | null } | null> {
     const octokit = await this.#getOctokit();
-    await octokit.request('PUT /repos/{owner}/{repo}/collaborators/{username}', {
+    const { status, data } = await octokit.request(
+      'PUT /repos/{owner}/{repo}/collaborators/{username}',
+      { owner: org, repo, username, permission }
+    );
+    if (status !== 201 || !data) return null;
+    return { id: data.id, inviteeId: data.invitee?.id ?? null };
+  }
+
+  /** Withdraw a pending invitation to a repository. */
+  async deleteRepoInvitation(org: string, repo: string, invitationId: number): Promise<void> {
+    const octokit = await this.#getOctokit();
+    await octokit.request('DELETE /repos/{owner}/{repo}/invitations/{invitation_id}', {
       owner: org,
       repo,
-      username,
-      permission,
+      invitation_id: invitationId,
     });
   }
 

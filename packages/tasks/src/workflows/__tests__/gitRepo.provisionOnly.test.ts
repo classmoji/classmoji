@@ -68,6 +68,8 @@ vi.mock('@classmoji/services', () => ({
     team: { findByClassroomId: (...a: unknown[]) => mocks.findTeamsByClassroomId(...a) },
     assignment: { update: (...a: unknown[]) => mocks.assignmentUpdate(...a) },
     gitRepo: { create: (...a: unknown[]) => mocks.gitRepoCreate(...a) },
+    // No stored Github id: the add is not cross-checked.
+    user: { githubAccountId: async () => null },
   },
   HelperService: {},
   ensureClassroomTeam: vi.fn(async () => ({ slug: 'assistants' })),

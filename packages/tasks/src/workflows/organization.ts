@@ -5,6 +5,7 @@ import {
   ClassmojiService,
   getGitProvider,
   getTeamNameForClassroom,
+  type GitHubProvider,
   type GitLabProvider,
 } from '@classmoji/services';
 import { nanoid } from 'nanoid';
@@ -422,7 +423,26 @@ export const removeUserFromOrganizationTask = task({
 
       // Step 3: Only remove from GitHub org if no other classroom memberships
       if (shouldRemoveFromOrg) {
-        await gitProvider.removeFromOrganization(orgLogin, username);
+        try {
+          await gitProvider.removeFromOrganization(orgLogin, username);
+        } catch (error: unknown) {
+          if ((error as { status?: unknown })?.status !== 404) throw error;
+          // Github cannot find the stored login: the user renamed or deleted
+          // their account. Remove them under their current login, if any;
+          // either way the membership below must still go.
+          const current = await ClassmojiService.user.currentGithubLogin(
+            gitProvider as GitHubProvider,
+            user.id,
+            username
+          );
+          if (current && current !== username) {
+            await gitProvider.removeFromOrganization(orgLogin, current);
+          } else {
+            console.log(
+              `[remove_user] Github cannot find ${username}, nothing to remove from ${orgLogin}`
+            );
+          }
+        }
       } else {
         console.log(
           `[remove_user] User ${username} has other classroom memberships in ${orgLogin}, keeping in org`

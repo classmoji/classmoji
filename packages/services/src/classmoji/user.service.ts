@@ -368,6 +368,57 @@ export const findProviderUsernames = async (
   return new Map(accounts.map(a => [a.user_id, a.username as string]));
 };
 
+/** The user's numeric Github id (`Account.account_id`), or null without a Github account. */
+export const githubAccountId = async (userId: string): Promise<string | null> => {
+  const account = await getPrisma().account.findFirst({
+    where: { user_id: userId, provider_id: 'github' },
+    select: { account_id: true },
+  });
+  return account?.account_id ?? null;
+};
+
+/**
+ * A user's Github login as Github knows it now, read by their account id rather
+ * than trusted from `Account.username`: a stored login goes stale when the user
+ * renames, and once released it may belong to someone else.
+ *
+ * Returns `null` when Github no longer has the account (deleted or suspended).
+ * Without a stored Github account, returns `fallback` unchanged. A renamed login
+ * is written back to the account so later repo names and lookups use it.
+ */
+export const currentGithubLogin = async (
+  provider: { getLoginById(id: string): Promise<string | null> },
+  userId: string,
+  fallback: string | null | undefined
+): Promise<string | null> => {
+  const account = await getPrisma().account.findFirst({
+    where: { user_id: userId, provider_id: 'github' },
+    select: { id: true, account_id: true, username: true },
+  });
+  if (!account?.account_id) return fallback ?? null;
+
+  const login = await provider.getLoginById(account.account_id);
+  if (login === null) {
+    console.warn(
+      `[user] Github account ${account.account_id} (stored as ${account.username}) no longer exists`
+    );
+    return null;
+  }
+
+  if (login !== account.username) {
+    try {
+      await getPrisma().account.update({ where: { id: account.id }, data: { username: login } });
+    } catch (error: unknown) {
+      // Another account still holds the new login (its own stale row): keep
+      // going with the right login; that row is released when its owner signs in.
+      console.warn(
+        `[user] Could not store renamed Github login ${login}: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+  return login;
+};
+
 const findByGitIdentity = async (where: Prisma.UserWhereInput, provider: GitProvider) => {
   const found = await getPrisma().user.findFirst({
     where,
