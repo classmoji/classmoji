@@ -33,8 +33,10 @@ import {
   handleSectionsPost,
   impersonatorOf,
   isImpersonatedSession,
+  parseSectionListKind,
   parseSectionRequest,
   readerSectionsFor,
+  sectionStatsFor,
   sectionTargetValid,
   signInUrlFor,
   type PageSectionsDeps,
@@ -48,6 +50,14 @@ import {
   sectionCheckLayout,
 } from '~/components/viewer/sections/useSectionCheckGutter.ts';
 import { collectMediaDownloadRefs } from '~/utils/mediaDownloads.ts';
+import {
+  ACTIVITY_COPY,
+  activityCount,
+  activityLabel,
+  activityListUrl,
+  isNoSuchSection,
+  parseActivityList,
+} from '~/components/editor/sectionActivity.ts';
 import { renderSitePage } from '~/site/render.server.ts';
 
 const JSDOM = UntypedJSDOM as new (html?: string) => { window: { document: Document } };
@@ -593,17 +603,41 @@ function makeDeps(overrides: Partial<PageSectionsDeps<Page>> = {}) {
     async sectionActivity(args) {
       calls.sectionActivity.push(args);
       if (args.page.classroom_id !== PAGES[args.page.id]?.classroom_id) return null;
+      // Like the service: the list not asked for comes back empty. Each list
+      // has its own student, so a response carrying the wrong one shows.
       return {
         students: 2,
-        unlocks: [
-          {
-            userId: 'student-1',
-            name: 'Student One',
-            login: 'fake-student-1',
-            avatarUrl: null,
-            at: new Date('2026-10-12T15:00:00.000Z'),
-          },
-        ],
+        unlocks:
+          args.only === 'unlocks'
+            ? [
+                {
+                  userId: 'student-1',
+                  name: 'Student One',
+                  login: 'fake-student-1',
+                  avatarUrl: null,
+                  at: new Date('2026-10-12T15:00:00.000Z'),
+                },
+              ]
+            : [],
+        checks:
+          args.only === 'checks'
+            ? [
+                {
+                  userId: 'student-2',
+                  name: 'Student Two',
+                  login: 'fake-student-2',
+                  avatarUrl: 'https://avatars.test/2.png',
+                  at: new Date('2026-10-12T16:30:00.000Z'),
+                },
+                {
+                  userId: 'student-1',
+                  name: null,
+                  login: 'fake-student-1',
+                  avatarUrl: null,
+                  at: new Date('2026-10-12T14:00:00.000Z'),
+                },
+              ]
+            : [],
       };
     },
     async audit(args) {
@@ -1344,6 +1378,296 @@ test.describe('GET /api/page-sections', () => {
   });
 });
 
+test.describe('GET /api/page-sections?kind=check', () => {
+  const CHECKS_BODY = {
+    students: 2,
+    checks: [
+      {
+        userId: 'student-2',
+        name: 'Student Two',
+        login: 'fake-student-2',
+        avatarUrl: 'https://avatars.test/2.png',
+        checkedAt: '2026-10-12T16:30:00.000Z',
+      },
+      {
+        userId: 'student-1',
+        name: null,
+        login: 'fake-student-1',
+        avatarUrl: null,
+        checkedAt: '2026-10-12T14:00:00.000Z',
+      },
+    ],
+  };
+
+  test('owner and teacher get who ticked the heading, newest first, audited as page_section_checks', async () => {
+    for (const user of ['owner-1', 'teacher-1']) {
+      const { deps, calls } = makeDeps();
+      const res = await call(
+        handleSectionsGet(get('pageId=page-a&blockId=h-top&kind=check', user), deps)
+      );
+      expect(res.status, user).toBe(200);
+      // The checks list only: no `unlocks` key, and none of its rows.
+      expect(res.body).toEqual(CHECKS_BODY);
+      expect(res.headers.get('cache-control')).toBe('private, no-store');
+      expect(res.headers.get('vary')).toBe('Cookie');
+      expect(calls.sectionActivity).toEqual([
+        { page: { id: 'page-a', classroom_id: CLASS_A }, blockId: 'h-top', only: 'checks' },
+      ]);
+      expect(calls.audit).toEqual([
+        {
+          userId: user,
+          classroomId: CLASS_A,
+          role: user === 'owner-1' ? 'OWNER' : 'TEACHER',
+          pageId: 'page-a',
+          action: 'VIEW',
+          data: { tool: 'page_section_checks', via: 'web', page_id: 'page-a', block_id: 'h-top' },
+        },
+      ]);
+    }
+  });
+
+  test('current students only: the count and rows are the service’s current-student list, passed through', async () => {
+    // The current-student filter is the service's (`sectionActivity`, unit and
+    // integration tested in packages/services); this route must ask for the
+    // checks of this page row and add nothing of its own.
+    const { deps, calls } = makeDeps({
+      async sectionActivity(args) {
+        calls.sectionActivity.push(args);
+        return { students: 0, unlocks: [], checks: [] };
+      },
+    });
+    const res = await call(
+      handleSectionsGet(get('pageId=page-a&blockId=h-top&kind=check', 'teacher-1'), deps)
+    );
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ students: 0, checks: [] });
+    expect(calls.sectionActivity).toEqual([
+      { page: { id: 'page-a', classroom_id: CLASS_A }, blockId: 'h-top', only: 'checks' },
+    ]);
+  });
+
+  test('staff validate against the whole document: a heading inside a locked body is found', async () => {
+    const { deps } = makeDeps();
+    const res = await call(
+      handleSectionsGet(get('pageId=page-a&blockId=h-in-outer&kind=check', 'owner-1'), deps)
+    );
+    expect(res.status).toBe(200);
+  });
+
+  test('student, assistant, pending invites, other classroom’s owner, unknown page: identical 404', async () => {
+    const { deps, calls } = makeDeps();
+    const answers = [];
+    for (const [query, user] of [
+      ['pageId=page-a&blockId=h-top&kind=check', 'student-1'],
+      ['pageId=page-a&blockId=h-top&kind=check', 'ta-1'],
+      ['pageId=page-a&blockId=h-top&kind=check', 'pending-1'],
+      ['pageId=page-a&blockId=h-top&kind=check', 'pending-teacher'],
+      ['pageId=page-a&blockId=h-top&kind=check', 'student-pending-teacher'],
+      ['pageId=page-a&blockId=h-top&kind=check', 'owner-b'],
+      ['pageId=page-b&blockId=h-top&kind=check', 'owner-1'],
+      ['pageId=nope&blockId=h-top&kind=check', 'owner-1'],
+      ['blockId=h-top&kind=check', 'owner-1'],
+    ] as const) {
+      answers.push(await call(handleSectionsGet(get(query, user), deps)));
+    }
+    for (const answer of answers) {
+      expect(answer.status).toBe(404);
+      expect(answer.body).toEqual(answers[0]!.body);
+    }
+    // Refused before the document or the list is read, and nothing is logged.
+    expect(calls.loadReaderBlocks).toBe(0);
+    expect(calls.sectionActivity).toEqual([]);
+    expect(calls.audit).toEqual([]);
+  });
+
+  test('a block that is not a checkable heading in the page is 400 NO_SUCH_SECTION, nothing read or logged', async () => {
+    const { deps, calls } = makeDeps();
+    for (const blockId of ['h-plain', 'solo', 'p-outer', 'nope']) {
+      const res = await call(
+        handleSectionsGet(get(`pageId=page-a&blockId=${blockId}&kind=check`, 'owner-1'), deps)
+      );
+      expect(res.status, blockId).toBe(400);
+      expect(res.body).toEqual({ error: 'No such section on this page', code: 'NO_SUCH_SECTION' });
+      expect(res.headers.get('cache-control')).toBe('private, no-store');
+    }
+    expect(calls.sectionActivity).toEqual([]);
+    expect(calls.audit).toEqual([]);
+  });
+
+  test('a malformed block id or an unknown kind is 400 before the document is read', async () => {
+    const { deps, calls } = makeDeps();
+    for (const query of [
+      'pageId=page-a&blockId=bad%20id&kind=check',
+      'pageId=page-a&blockId=h-top&kind=checks',
+      'pageId=page-a&blockId=h-top&kind=',
+    ]) {
+      const res = await call(handleSectionsGet(get(query, 'owner-1'), deps));
+      expect(res.status, query).toBe(400);
+      expect(res.body).toEqual({ error: 'Invalid request' });
+    }
+    expect(calls.loadReaderBlocks).toBe(0);
+    expect(calls.sectionActivity).toEqual([]);
+  });
+
+  test('kind=unlock is the default list, unchanged', async () => {
+    const { deps } = makeDeps();
+    const plain = await call(handleSectionsGet(get('pageId=page-a&blockId=solo', 'owner-1'), deps));
+    const named = await call(
+      handleSectionsGet(get('pageId=page-a&blockId=solo&kind=unlock', 'owner-1'), deps)
+    );
+    expect(named.status).toBe(200);
+    expect(named.body).toEqual(plain.body);
+    expect(named.body).not.toHaveProperty('checks');
+  });
+
+  test('anonymous → 401', async () => {
+    const { deps } = makeDeps();
+    const res = await call(handleSectionsGet(get('pageId=page-a&blockId=h-top&kind=check'), deps));
+    expect(res.status).toBe(401);
+  });
+
+  test('a HEAD request answers the same and writes no VIEW row', async () => {
+    const { deps, calls } = makeDeps();
+    const res = await handleSectionsGet(
+      get('pageId=page-a&blockId=h-top&kind=check', 'teacher-1', { method: 'HEAD' }),
+      deps
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
+    expect(calls.audit).toEqual([]);
+  });
+
+  test('an impersonated view records who was viewing as the staff member', async () => {
+    const { deps, calls } = makeDeps();
+    await handleSectionsGet(
+      get('pageId=page-a&blockId=h-top&kind=check', 'teacher-1', { impersonatedBy: 'admin-9' }),
+      deps
+    );
+    expect(calls.audit).toHaveLength(1);
+    expect((calls.audit[0] as { data: Record<string, unknown> }).data).toEqual({
+      tool: 'page_section_checks',
+      via: 'web',
+      page_id: 'page-a',
+      block_id: 'h-top',
+      impersonated_by: 'admin-9',
+    });
+  });
+
+  test('UNPUBLISHED classroom: the list is the owner’s only', async () => {
+    const { deps } = makeDeps();
+    const teacher = await call(
+      handleSectionsGet(get('pageId=page-unpublished&blockId=h-top&kind=check', 'teacher-1'), deps)
+    );
+    expect(teacher.status).toBe(403);
+    expect(teacher.body).toMatchObject({ code: 'CLASSROOM_UNPUBLISHED' });
+    const owner = await call(
+      handleSectionsGet(get('pageId=page-unpublished&blockId=h-top&kind=check', 'owner-1'), deps)
+    );
+    expect(owner.status).toBe(200);
+  });
+
+  test('parseSectionListKind: unlock by default, check, nothing else', () => {
+    expect(parseSectionListKind(null)).toBe('unlock');
+    expect(parseSectionListKind('unlock')).toBe('unlock');
+    expect(parseSectionListKind('check')).toBe('check');
+    for (const raw of ['', 'checks', 'unlocks', 'CHECK', 'check ']) {
+      expect(parseSectionListKind(raw), raw).toBeNull();
+    }
+  });
+});
+
+test.describe('sectionStatsFor (the loader’s chip counts)', () => {
+  const counter = <T>(value: T) => {
+    const fn = async () => {
+      fn.calls++;
+      return value;
+    };
+    fn.calls = 0;
+    return fn;
+  };
+  const UNLOCKS = { students: 3, unlocks: { solo: 2 } };
+  const CHECKS = { students: 3, checks: { 'h-top': 1 } };
+
+  test('both kinds on the page: both counts, one shape', async () => {
+    const unlockCounts = counter(UNLOCKS);
+    const checkCounts = counter(CHECKS);
+    expect(await sectionStatsFor(fixture(), { unlockCounts, checkCounts })).toEqual({
+      students: 3,
+      unlocks: { solo: 2 },
+      checks: { 'h-top': 1 },
+    });
+    expect(unlockCounts.calls).toBe(1);
+    expect(checkCounts.calls).toBe(1);
+  });
+
+  test('both are asked for at once', async () => {
+    const started: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => (release = resolve));
+    const pending = sectionStatsFor(fixture(), {
+      unlockCounts: async () => {
+        started.push('unlocks');
+        await gate;
+        return UNLOCKS;
+      },
+      checkCounts: async () => {
+        started.push('checks');
+        await gate;
+        return CHECKS;
+      },
+    });
+    await Promise.resolve();
+    expect(started.sort()).toEqual(['checks', 'unlocks']);
+    release();
+    expect(await pending).not.toBeNull();
+  });
+
+  test('only checkable headings: tick counts only, unlocks never read', async () => {
+    const unlockCounts = counter(UNLOCKS);
+    const checkCounts = counter(CHECKS);
+    const blocks = [fixture()[0], fixture()[1]];
+    expect(await sectionStatsFor(blocks, { unlockCounts, checkCounts })).toEqual({
+      students: 3,
+      unlocks: {},
+      checks: { 'h-top': 1 },
+    });
+    expect(unlockCounts.calls).toBe(0);
+  });
+
+  test('only locked sections: unlock counts only, checks never read', async () => {
+    const unlockCounts = counter(UNLOCKS);
+    const checkCounts = counter(CHECKS);
+    const blocks = [
+      { id: 'solo', type: 'lockedSection', props: { title: 'T' }, children: [] },
+      { id: 'h-plain', type: 'heading', props: { level: 2 }, content: text('x'), children: [] },
+    ];
+    expect(await sectionStatsFor(blocks, { unlockCounts, checkCounts })).toEqual({
+      students: 3,
+      unlocks: { solo: 2 },
+      checks: {},
+    });
+    expect(checkCounts.calls).toBe(0);
+  });
+
+  test('neither: null, nothing read', async () => {
+    const unlockCounts = counter(UNLOCKS);
+    const checkCounts = counter(CHECKS);
+    const blocks = [{ id: 'p', type: 'paragraph', content: text('x'), children: [] }];
+    expect(await sectionStatsFor(blocks, { unlockCounts, checkCounts })).toBeNull();
+    expect(await sectionStatsFor('<p>html</p>', { unlockCounts, checkCounts })).toBeNull();
+    expect(unlockCounts.calls + checkCounts.calls).toBe(0);
+  });
+
+  test('a count the service could not scope to the page: null', async () => {
+    expect(
+      await sectionStatsFor(fixture(), {
+        unlockCounts: async () => UNLOCKS,
+        checkCounts: async () => null,
+      })
+    ).toBeNull();
+  });
+});
+
 // ── Loader and site: where the redaction sits ──────────────────────────────
 
 test.describe('the page loader', () => {
@@ -1365,6 +1689,7 @@ test.describe('the page loader', () => {
       'await resolveDocumentAssets(',
       'await loadMediaDownloads(page.classroom.id, viewerContent',
       'previewBlockChanges(',
+      'sectionStatsFor(viewerContent',
       '    content: viewerContent,',
     ]) {
       const at = loaderBody.indexOf(consumer);
@@ -1384,12 +1709,22 @@ test.describe('the page loader', () => {
       /await Promise\.all\(\[\s*ClassmojiService\.pageSections\.sectionViewer/
     );
     expect(loaderBody).toContain('pageId: page.id,\n          userId: authData.userId,');
+    // Counts for activity viewers only, from the redacted document.
     expect(loaderBody).toMatch(
-      /sectionViewer\.canSeeActivity && classroomOpen && lockedSectionIds\(viewerContent\)\.length > 0/
+      /sectionViewer\.canSeeActivity && classroomOpen\s*\?\s*sectionStatsFor\(viewerContent, \{/
     );
     // The verified page row, so the service skips the page re-query.
     expect(loaderBody).toContain(
-      'unlockCounts({\n          page: { id: page.id, classroom_id: page.classroom_id },'
+      'const statsPage = { id: page.id, classroom_id: page.classroom_id };'
+    );
+    expect(loaderBody).toContain(
+      'unlockCounts: () => ClassmojiService.pageSections.unlockCounts({ page: statsPage }),'
+    );
+    expect(loaderBody).toContain(
+      'checkCounts: () => ClassmojiService.pageSections.checkCounts({ page: statsPage }),'
+    );
+    expect(loaderBody).toContain(
+      'sectionStats: sectionStatsPending ? await sectionStatsPending : null,'
     );
   });
 
@@ -1613,6 +1948,119 @@ test.describe('the editor schema', () => {
       expect(off.dom.querySelector('.pg-checkable-badge')).toBeNull();
     });
 
+    test('a checkable heading node view carries one chip slot, outside the text and ignored by the editor', async () => {
+      const { editingSchema } = await import('~/components/editor/blocks/editingSchema.ts');
+      const { createEditorHeadingSpec } =
+        await import('~/components/editor/blocks/checkableBadge.ts');
+      const { doneChipSlots } = await import('~/components/editor/blocks/doneChipSlots.ts');
+      type View = {
+        dom: HTMLElement;
+        contentDOM?: HTMLElement;
+        ignoreMutation?: (m: { type: string; target: Node }) => boolean;
+        stopEvent?: (event: Event) => boolean;
+        destroy?: () => void;
+      };
+      // The wrapped render itself, as BlockNote's node view calls it (the
+      // schema's `implementation.render` is its serializer entry, always "dom").
+      const spec = createEditorHeadingSpec() as unknown as {
+        implementation: { render: (this: unknown, block: unknown, editor: unknown) => View };
+      };
+      const heading = (id: string, checkable?: boolean) => ({
+        id,
+        type: 'heading',
+        props: {
+          level: 2,
+          isToggleable: false,
+          textColor: 'default',
+          backgroundColor: 'default',
+          textAlignment: 'left',
+          ...(checkable ? { checkable } : {}),
+        },
+        content: [],
+        children: [],
+      });
+      const editor = { isEditable: true, schema: editingSchema };
+      const asNodeView = {
+        renderType: 'nodeView',
+        blockContentDOMAttributes: {},
+        props: undefined,
+      };
+      const asDom = { renderType: 'dom', blockContentDOMAttributes: {}, props: undefined };
+      const render = spec.implementation.render;
+
+      const view = render.call(asNodeView, heading('h-1', true), editor);
+      const slots = view.dom.querySelectorAll<HTMLElement>('.pg-done-chip-slot');
+      expect(slots).toHaveLength(1);
+      const slot = slots[0]!;
+      expect(slot.getAttribute('contenteditable')).toBe('false');
+      expect(slot.dataset.blockId).toBe('h-1');
+      expect(slot.childNodes).toHaveLength(0);
+      expect(view.contentDOM?.contains(slot)).toBe(false);
+      expect(doneChipSlots(editor).map(entry => [entry.blockId, entry.element])).toEqual([
+        ['h-1', slot],
+      ]);
+
+      // What React draws inside the slot is not the editor's to watch or handle.
+      const chip = document.createElement('button');
+      slot.appendChild(chip);
+      expect(view.ignoreMutation?.({ type: 'childList', target: slot })).toBe(true);
+      expect(view.ignoreMutation?.({ type: 'attributes', target: chip })).toBe(true);
+      expect(view.ignoreMutation?.({ type: 'characterData', target: view.contentDOM! })).toBe(
+        false
+      );
+      const event = (target: Node) => ({ type: 'mousedown', target }) as unknown as Event;
+      expect(view.stopEvent?.(event(chip))).toBe(true);
+      expect(view.stopEvent?.({ type: 'drop', target: chip } as unknown as Event)).toBe(false);
+      expect(view.stopEvent?.({ type: 'dragover', target: chip } as unknown as Event)).toBe(false);
+      expect(view.stopEvent?.(event(view.contentDOM!))).toBe(false);
+
+      view.destroy?.();
+      expect(doneChipSlots(editor)).toEqual([]);
+      expect(slot.isConnected).toBe(false);
+
+      // The serializer's render ("dom", also the schema's own entry) and a
+      // plain heading get no slot and register nothing.
+      const serialized = render.call(asDom, heading('h-2', true), editor);
+      expect(serialized.dom.querySelector('.pg-done-chip-slot')).toBeNull();
+      const schemaSpec = editingSchema.blockSpecs.heading as unknown as {
+        implementation: { render: (block: unknown, editor: unknown) => View };
+      };
+      const viaSchema = schemaSpec.implementation.render(heading('h-4', true), editor);
+      expect(viaSchema.dom.querySelector('.pg-checkable-badge')).not.toBeNull();
+      expect(viaSchema.dom.querySelector('.pg-done-chip-slot')).toBeNull();
+      const plain = render.call(asNodeView, heading('h-3'), editor);
+      expect(plain.dom.querySelector('.pg-done-chip-slot')).toBeNull();
+      expect(doneChipSlots(editor)).toEqual([]);
+    });
+
+    test('chip slots are per editor, and listeners hear once per batch', async () => {
+      const { doneChipSlots, registerDoneChipSlot, subscribeDoneChipSlots } =
+        await import('~/components/editor/blocks/doneChipSlots.ts');
+      const a = {};
+      const b = {};
+      let heard = 0;
+      const unsubscribe = subscribeDoneChipSlots(a, () => heard++);
+      const one = registerDoneChipSlot(a, 'x', document.createElement('span'));
+      const two = registerDoneChipSlot(a, 'x', document.createElement('span'));
+      registerDoneChipSlot(b, 'y', document.createElement('span'));
+      const snapshot = doneChipSlots(a);
+      expect(snapshot.map(slot => slot.blockId)).toEqual(['x', 'x']);
+      // One block, two node views for a moment: distinct keys.
+      expect(new Set(snapshot.map(slot => slot.key)).size).toBe(2);
+      expect(doneChipSlots(a)).toBe(snapshot);
+      expect(heard).toBe(0);
+      await Promise.resolve();
+      expect(heard).toBe(1);
+      one();
+      one();
+      two();
+      await Promise.resolve();
+      expect(heard).toBe(2);
+      expect(doneChipSlots(a)).toEqual([]);
+      expect(doneChipSlots(b).map(slot => slot.blockId)).toEqual(['y']);
+      unsubscribe();
+    });
+
     test('the title field: Enter goes into the body, Backspace/Delete stay in the field', async () => {
       const { titleKeyAction, enterLockedSectionBody } =
         await import('~/components/editor/blocks/LockedSectionBlock.tsx');
@@ -1647,6 +2095,69 @@ test.describe('the editor schema', () => {
       enterLockedSectionBody(editor, 'L');
       expect(calls).toEqual([['focus'], ['cursor', 'new-p', 'start']]);
     });
+  });
+});
+
+test.describe('the staff chips', () => {
+  const stats = {
+    students: 12,
+    unlocks: { solo: 4 },
+    checks: { 'h-top': 7, 'h-zero': 0 },
+  };
+
+  test('counts per kind, own keys only, 0 when absent', () => {
+    expect(activityCount(stats, 'check', 'h-top')).toBe(7);
+    expect(activityCount(stats, 'check', 'h-zero')).toBe(0);
+    expect(activityCount(stats, 'check', 'h-new')).toBe(0);
+    expect(activityCount(stats, 'check', 'solo')).toBe(0);
+    expect(activityCount(stats, 'unlock', 'solo')).toBe(4);
+    expect(activityCount(stats, 'unlock', 'h-top')).toBe(0);
+    expect(activityCount(stats, 'check', 'constructor')).toBe(0);
+    expect(activityCount(stats, 'check', '__proto__')).toBe(0);
+  });
+
+  test('labels and the list URL', () => {
+    expect(activityLabel('check', 7, 12)).toBe('Done by 7 of 12');
+    expect(activityLabel('unlock', 0, 12)).toBe('Unlocked by 0 of 12');
+    expect(ACTIVITY_COPY.check.emptyTitle).toBe('No one yet');
+    expect(ACTIVITY_COPY.check.emptyText).toBe('Students who mark this section done appear here.');
+    expect(ACTIVITY_COPY.unlock.emptyTitle).toBe('No unlocks yet');
+    expect(activityListUrl('page-a', 'h-top', 'check')).toBe(
+      '/api/page-sections?pageId=page-a&blockId=h-top&kind=check'
+    );
+    expect(activityListUrl('page-a', 'solo', 'unlock')).toBe(
+      '/api/page-sections?pageId=page-a&blockId=solo&kind=unlock'
+    );
+  });
+
+  test('the list reads its own kind, newest first, and drops malformed rows', () => {
+    const body = {
+      students: 12,
+      checks: [
+        { userId: 'u1', name: 'A', login: 'a', avatarUrl: null, checkedAt: '2026-10-12T10:00:00Z' },
+        { userId: 'u2', name: null, login: 'b', avatarUrl: 'x', checkedAt: '2026-10-12T12:00:00Z' },
+        { userId: 'u3', name: 'C', checkedAt: null },
+        { name: 'no id', checkedAt: '2026-10-12T12:00:00Z' },
+        'junk',
+      ],
+      unlocks: [{ userId: 'u9', unlockedAt: '2026-10-12T13:00:00Z' }],
+    };
+    expect(parseActivityList('check', body)).toEqual({
+      students: 12,
+      people: [
+        { userId: 'u2', name: null, login: 'b', avatarUrl: 'x', at: '2026-10-12T12:00:00Z' },
+        { userId: 'u1', name: 'A', login: 'a', avatarUrl: null, at: '2026-10-12T10:00:00Z' },
+      ],
+    });
+    expect(parseActivityList('unlock', body).people.map(p => p.userId)).toEqual(['u9']);
+    expect(parseActivityList('check', null)).toEqual({ students: 0, people: [] });
+  });
+
+  test('"not a section in the saved page" is an empty list, any other failure is not', () => {
+    expect(isNoSuchSection(400, { error: 'x', code: 'NO_SUCH_SECTION' })).toBe(true);
+    expect(isNoSuchSection(400, { error: 'Invalid request' })).toBe(false);
+    expect(isNoSuchSection(404, { code: 'NO_SUCH_SECTION' })).toBe(false);
+    expect(isNoSuchSection(400, null)).toBe(false);
   });
 });
 
