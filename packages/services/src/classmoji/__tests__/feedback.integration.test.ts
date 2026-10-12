@@ -159,8 +159,20 @@ describe.skipIf(!RUN)('feedback.service (integration)', () => {
     expect(shipped.find(p => p.id === postId)?.status_changed_at).toBeInstanceOf(Date);
   });
 
+  it('leaves a completed post off the board unless asked for by status', async () => {
+    const open = await feedback.listPosts({ query: suite });
+    expect(open.map(p => p.id)).not.toContain(postId);
+    // Other open posts in the suite still list.
+    expect(open.length).toBeGreaterThan(0);
+  });
+
   it('lists by top and finds by search', async () => {
-    const found = await feedback.listPosts({ sort: 'top', query: suite, viewerId: voter });
+    const found = await feedback.listPosts({
+      sort: 'top',
+      status: 'COMPLETED',
+      query: suite,
+      viewerId: voter,
+    });
     expect(found[0]?.id).toBe(postId);
     expect(found[0]?.viewerVoted).toBe(true);
     expect(found[0]?.author).not.toHaveProperty('email');

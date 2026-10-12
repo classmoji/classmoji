@@ -113,7 +113,7 @@ export default function FeedbackBoard() {
                 onChange={e => setParam('status', e.target.value || null)}
                 className="h-[32px] cursor-pointer appearance-none rounded-lg border border-line-2 bg-panel pl-3 pr-8 text-[13px] text-ink-1 transition-colors duration-150 hover:border-line-strong focus:border-accent focus:outline-none"
               >
-                <option value="">All statuses</option>
+                <option value="">All open</option>
                 {STATUS_ORDER.map(s => (
                   <option key={s} value={s}>
                     {STATUS_META[s].label}

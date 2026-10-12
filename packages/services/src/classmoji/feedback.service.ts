@@ -89,6 +89,8 @@ const isUniqueViolation = (error: unknown) =>
 /**
  * Posts for the board. `trending` weighs votes by age (newer rises), the rest
  * sort in the database. `viewerVoted` is filled in when a viewer is signed in.
+ * Completed posts show only when asked for by status: unfiltered, the board
+ * lists what is still open, and shipped work lives on the roadmap.
  */
 export const listPosts = async ({
   sort = 'top',
@@ -104,13 +106,16 @@ export const listPosts = async ({
   const q = query?.trim();
   const posts = await getPrisma().feedbackPost.findMany({
     where: {
-      ...(status ? { status } : {}),
+      // `not` alone would drop untriaged posts (status null) too.
+      ...(status ? { status } : { OR: [{ status: null }, { status: { not: 'COMPLETED' } }] }),
       ...(q
         ? {
-            OR: [
-              { title: { contains: q, mode: 'insensitive' } },
-              { body: { contains: q, mode: 'insensitive' } },
-            ],
+            AND: {
+              OR: [
+                { title: { contains: q, mode: 'insensitive' } },
+                { body: { contains: q, mode: 'insensitive' } },
+              ],
+            },
           }
         : {}),
     },
