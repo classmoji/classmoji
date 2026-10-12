@@ -28,7 +28,7 @@ export function FeaturesSection() {
       <div className="mx-auto max-w-[1440px]">
         <header className="mx-auto max-w-2xl text-center">
           <p className="text-[0.875rem] font-semibold text-[#21883D] dark:text-[#6BE39B]">
-            Open source · Built at Dartmouth College
+            Open source · Built by DALI &amp; Dartmouth CS
           </p>
           <h2
             id="how-it-works-heading"
