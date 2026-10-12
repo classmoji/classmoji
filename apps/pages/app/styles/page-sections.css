@@ -161,33 +161,28 @@
   stroke-dashoffset: 0;
 }
 
-/* Phones: the page's side padding is narrower than the gutter, so the box
-   moves inside the heading's own box, before its text. */
-@media (max-width: 640px) {
-  .pg-reader-sections
-    .bn-block-content[data-content-type='heading'][data-checkable='true']:has(
-      > .pg-section-check:not([hidden])
-    ) {
-    padding-left: 32px;
-  }
-
-  .pg-section-check {
-    left: -2px;
-  }
-
-  .pg-section-check::after {
-    left: 0;
-    transform: none;
-  }
+/* No room for the gutter (phones, the webapp's side panel, a narrow pane):
+   the box moves inside the heading's own box, before its text. The viewer
+   measures the room and sets the attribute (useSectionCheckGutter.ts). */
+.pg-reader-sections[data-section-checks='inline']
+  .bn-block-content[data-content-type='heading'][data-checkable='true']:has(
+    > .pg-section-check:not([hidden])
+  ) {
+  padding-left: 32px;
 }
 
-/* Tooltip: BlockNote's tooltip colours, above the box. */
+.pg-reader-sections[data-section-checks='inline'] .pg-section-check {
+  left: -2px;
+}
+
+/* Tooltip: BlockNote's tooltip colours, above the box. It starts at the box's
+   left edge and runs right, so it never reaches past the box into the
+   gutter's clipping edge. */
 .pg-section-check::after {
   content: attr(data-tooltip);
   position: absolute;
   bottom: calc(100% + 6px);
-  left: 50%;
-  transform: translateX(-50%);
+  left: 0;
   padding: 4px 8px;
   border-radius: 6px;
   font:

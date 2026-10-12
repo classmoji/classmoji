@@ -23,6 +23,7 @@ import {
 } from '~/hooks/useReaderSections.tsx';
 import { openLockedSections, sectionStoreFor } from './sections/sectionCheckbox.ts';
 import { useSectionFade } from './sections/useSectionFade.ts';
+import { useSectionCheckGutter } from './sections/useSectionCheckGutter.ts';
 
 import '@blocknote/mantine/style.css';
 import '@blocknote/core/fonts/inter.css';
@@ -170,6 +171,16 @@ const BlockNoteViewer = ({
   }, [content, editor, isMounted, publishFilled, unlockStatus, settleOpen]);
 
   const fade = useSectionFade(content, checked, readerSections.canCheck);
+  // Tick boxes in the gutter, or inline where the gutter has no room.
+  const gutterRef = useSectionCheckGutter(readerSections.canCheck);
+  const fadeRef = fade.containerRef;
+  const containerRef = useCallback(
+    (element: HTMLElement | null) => {
+      fadeRef(element);
+      gutterRef(element);
+    },
+    [fadeRef, gutterRef]
+  );
 
   // Prevent SSR - BlockNote requires browser APIs
   if (!isMounted) {
@@ -188,7 +199,7 @@ const BlockNoteViewer = ({
           'JetBrains Mono, SFMono-Regular, Consolas, Liberation Mono, Menlo, monospace',
       }}
     >
-      <div className="page-editor pg-reader-sections" ref={fade.containerRef}>
+      <div className="page-editor pg-reader-sections" ref={containerRef}>
         {fade.css ? <style data-testid="section-fade-styles">{fade.css}</style> : null}
         <AssetSrcSetContext.Provider value={srcSets ?? NO_SRC_SETS}>
           <AssetDisplayUrlContext.Provider value={displayUrl ?? IDENTITY_DISPLAY_URL}>
