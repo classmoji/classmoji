@@ -109,6 +109,11 @@ const SAMPLES: Record<string, unknown> = {
       columns: 2,
     },
   },
+  lockedSection: {
+    type: 'lockedSection',
+    content: text('Solution'),
+    children: [{ type: 'paragraph', content: text('locked body') }],
+  },
 };
 
 test.describe('block coverage', () => {

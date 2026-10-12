@@ -1,10 +1,13 @@
 import {
   BlockNoteSchema,
+  addDefaultPropsExternalHTML,
   createBlockSpec,
   createCodeBlock,
   createCodeBlockSpec,
+  createHeadingBlockSpec,
   createImageBlockSpec,
   createPreCode,
+  createToggleWrapper,
   defaultBlockSpecs,
 } from '@blocknote/core';
 import { codeBlockOptions } from '@blocknote/code-block';
@@ -20,10 +23,87 @@ import { createCopyButton, createCopyToggle, isCopyable } from './copyControl.ts
  */
 export const REPLACED_DEFAULT_BLOCKS = ['video', 'codeBlock', 'image'] as const;
 
-/** BlockNote's default block specs minus the ones the app replaces. */
+/**
+ * BlockNote's default block specs minus the ones the app replaces, with the
+ * heading swapped for the page heading (`checkable` prop). Every page schema
+ * (editor, in-app viewer, class site, server) starts from this, so they all
+ * get the same heading.
+ */
 export function pageDefaultBlockSpecs() {
-  const { video: _video, codeBlock: _codeBlock, image: _image, ...rest } = defaultBlockSpecs;
-  return rest;
+  const {
+    video: _video,
+    codeBlock: _codeBlock,
+    image: _image,
+    heading: _heading,
+    ...rest
+  } = defaultBlockSpecs;
+  return { ...rest, heading: createPageHeadingBlockSpec() };
+}
+
+/**
+ * The heading every page schema uses: BlockNote's, plus a `checkable` prop
+ * (a "checkable section": readers tick the heading and its section fades).
+ *
+ * `checkable` has NO default (`default: undefined`, like BlockNote's own
+ * `numberedListItem.start`): a heading that never had it stays without it
+ * through every conversion (blocks, ProseMirror, Yjs), so stored documents
+ * are not rewritten. A filled default would add `"checkable": false` to every
+ * heading on the next save. When set, the block carries
+ * `data-checkable="true"` (props that differ from the default become
+ * `data-*` attributes).
+ *
+ * Config, parse rules (incl. toggle headings from `<details>`), meta,
+ * `runsBefore`, the input rules and keyboard shortcuts are BlockNote's,
+ * unchanged. `render` and `toExternalHTML` are rebuilt only because a built
+ * spec's are already wrapped in the block structure (see
+ * `createPageCodeBlockSpec`); they are copies of BlockNote 0.55's
+ * (`blocks/Heading/block.ts`, toggle headings on).
+ *
+ * Splitting: BlockNote's Enter handler copies every attribute when the cursor
+ * is at the start of the heading and none otherwise (the new block is a
+ * paragraph); there is no per-prop control, so `checkable` follows `level`
+ * and `isToggleable`.
+ */
+export function createPageHeadingBlockSpec() {
+  const base = createHeadingBlockSpec();
+  const {
+    render: _render,
+    toExternalHTML: _toExternalHTML,
+    ...implementation
+  } = base.implementation;
+  const config = {
+    ...base.config,
+    propSchema: {
+      ...base.config.propSchema,
+      /** Readers can tick this heading's section (set from the block menu). */
+      checkable: { default: undefined, type: 'boolean' as const },
+    },
+  };
+  return createBlockSpec<typeof config.type, typeof config.propSchema, typeof config.content>(
+    config,
+    {
+      ...implementation,
+      render: (block, editor) => {
+        const dom = document.createElement(`h${block.props.level}`);
+        const toggleWrapper = createToggleWrapper(block as never, editor as never, dom);
+        return { ...toggleWrapper, contentDOM: dom };
+      },
+      toExternalHTML: block => {
+        const dom = document.createElement(`h${block.props.level}`);
+        addDefaultPropsExternalHTML(block.props, dom);
+        if (block.props.isToggleable) {
+          const details = document.createElement('details');
+          details.setAttribute('open', '');
+          const summary = document.createElement('summary');
+          summary.appendChild(dom);
+          details.appendChild(summary);
+          return { dom: details, contentDOM: dom, childrenDOM: details };
+        }
+        return { dom, contentDOM: dom };
+      },
+    },
+    base.extensions
+  )();
 }
 
 /** The languages the code block's select offers, keyed by canonical id. */
@@ -170,6 +250,7 @@ export function createPageSchema() {
       video: serverSpec('video'),
       pageLink: serverSpec('pageLink'),
       navGrid: serverSpec('navGrid'),
+      lockedSection: serverSpec('lockedSection'),
     },
   });
 }

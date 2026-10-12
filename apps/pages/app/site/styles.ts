@@ -58,6 +58,32 @@ export const SITE_STYLES = `
 /* Embedded frames keep their 16:9 box. */
 .bn-site-frame { border-radius: 0.5rem; }
 
+/* A locked section is always closed on a class site: a card with a padlock,
+   the section's title and a link to the page in Classmoji, where a student
+   unlocks it. Its body never reaches this HTML (redacted before rendering),
+   so there is nothing under the card to hide. */
+.site-article .bn-site-locked {
+  width: 100%;
+  margin: 0.25rem 0;
+  padding: 0.75rem 0.875rem 0.625rem;
+  border: 1px solid rgba(55, 53, 47, 0.16);
+  border-radius: 10px;
+  background: rgba(55, 53, 47, 0.035);
+}
+.site-article .bn-site-locked-row { display: flex; align-items: center; gap: 0.5rem; }
+.site-article .bn-site-locked-icon { flex: none; width: 16px; height: 16px; opacity: 0.6; }
+.site-article .bn-site-locked-title { flex: 1; min-width: 0; margin: 0; font-weight: 600; }
+.site-article .bn-site-locked-link {
+  display: inline-block;
+  margin: 0.375rem 0 0 1.5rem;
+  font-size: 0.875em;
+  color: inherit;
+  opacity: 0.75;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.site-article .bn-site-locked-link:hover { opacity: 1; }
+
 /* Cover images: the same fixed band the editor uses, restated so a site page
    does not depend on a stylesheet that exists for the editor's benefit.
 
@@ -289,4 +315,8 @@ html.dark .site-article .bn-container {
 html.dark .site-article blockquote { border-color: #3f3f3f; }
 html.dark .site-article hr { border-color: #3f3f3f; }
 html.dark .site-article .bn-file-name { color: #cfcfcf; }
+html.dark .site-article .bn-site-locked {
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.03);
+}
 `;

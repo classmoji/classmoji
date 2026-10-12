@@ -1,4 +1,5 @@
 import { BlockNoteSchema, type BlockNoteEditor } from '@blocknote/core';
+import { insertOrUpdateBlockForSlashMenu } from '@blocknote/core/extensions';
 import { multiColumnSchema } from '@blocknote/xl-multi-column';
 import { createPageCodeBlockSpec, pageDefaultBlockSpecs } from '@classmoji/page-schema';
 import {
@@ -10,6 +11,8 @@ import {
   IconPlayerPlay,
   IconFileText,
   IconLayoutGrid,
+  IconLock,
+  IconSquareCheck,
 } from '@tabler/icons-react';
 
 import { Callout } from './CalloutBlock.tsx';
@@ -21,6 +24,7 @@ import { Video } from './VideoBlock.tsx';
 import { PageLink } from './PageLinkBlock.tsx';
 import { NavGrid } from './NavGridBlock.tsx';
 import { ResponsiveImage } from './ImageBlock.tsx';
+import { LockedSection } from './LockedSectionBlock.tsx';
 
 /**
  * BlockNote schema with all built-in + custom block specs.
@@ -31,8 +35,11 @@ import { ResponsiveImage } from './ImageBlock.tsx';
  *
  * XL package (2): column, columnList
  *
- * Custom blocks (8): callout, terminal, profile, divider, embed, video, pageLink,
- * navGrid
+ * Custom blocks (9): callout, terminal, profile, divider, embed, video, pageLink,
+ * navGrid, lockedSection
+ *
+ * `heading` is the shared page heading (BlockNote's plus `checkable`), from
+ * `pageDefaultBlockSpecs()`.
  *
  * Every block's CONFIG (type, propSchema, content) comes from
  * @classmoji/page-schema; this file attaches the React renderers. The collab
@@ -68,6 +75,7 @@ export const schema = BlockNoteSchema.create({
     video: Video(), // Custom video block
     pageLink: PageLink(), // Page link block (fetches pages via API)
     navGrid: NavGrid(), // Page directory — authored navigation hub (class sites)
+    lockedSection: LockedSection(), // Body hidden from a student until they unlock it
   },
 });
 
@@ -175,6 +183,34 @@ export const customSlashMenuItems = [
     icon: <IconTerminal size={18} />,
     onItemClick: (editor: PageBlockEditor) => {
       editor.insertBlocks([{ type: 'terminal' }], editor.getTextCursorPosition().block, 'after');
+    },
+  },
+  {
+    title: 'Checkable heading',
+    subtext: 'Students can mark the section done',
+    aliases: ['checkable', 'check', 'done', 'step', 'section'],
+    group: 'Headings',
+    icon: <IconSquareCheck size={18} />,
+    onItemClick: (editor: PageBlockEditor) => {
+      insertOrUpdateBlockForSlashMenu(editor, {
+        type: 'heading',
+        props: { level: 2, checkable: true },
+      });
+    },
+  },
+  {
+    title: 'Locked section',
+    subtext: 'Body opens with a hold',
+    aliases: ['locked', 'lock', 'hint', 'spoiler', 'solution', 'reveal', 'section'],
+    group: 'Advanced',
+    icon: <IconLock size={18} />,
+    onItemClick: (editor: PageBlockEditor) => {
+      // The title is the block's own text, so the cursor lands in it.
+      insertOrUpdateBlockForSlashMenu(editor, {
+        type: 'lockedSection',
+        content: '',
+        children: [{ type: 'paragraph' }],
+      });
     },
   },
   {

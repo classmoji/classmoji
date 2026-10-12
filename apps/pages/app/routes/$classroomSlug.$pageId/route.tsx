@@ -7,6 +7,7 @@ import {
 } from 'react-router';
 import { useAssetMap, useAssetRetry } from '~/hooks/useAssetMap.ts';
 import type { AssetSrcSets } from '~/hooks/useAssetSrcSets.ts';
+import { useReaderSectionsState } from '~/hooks/useReaderSections.tsx';
 import { useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense } from 'react';
 import { IconPhoto } from '@tabler/icons-react';
 import { toast } from 'react-toastify';
@@ -75,7 +76,7 @@ const PageEditor = lazy(() => import('~/components/editor/PageEditor.tsx'));
 const BlockNoteViewer = lazy(() => import('~/components/viewer/BlockNoteViewer.tsx'));
 
 // Import server-only code from co-located .server.ts file
-export { loader, action } from './route.server.ts';
+export { loader, action, headers } from './route.server.ts';
 
 // Width class mapping
 const widthClasses: Record<number, string> = {
@@ -198,7 +199,12 @@ const PageRoute = () => {
     liveCheckpoint,
     liveUnavailable,
     previewChanges,
+    readerSections,
+    sectionStats,
   } = useLoaderData<typeof import('./route.server.ts').loader>();
+  // This reader's ticks and unlocks. Kept here, not in the viewer, so a
+  // viewer rebuild (asset retry) never drops an unlock in flight.
+  const sections = useReaderSectionsState(page.id, readerSections);
   // Stored refs stay in the document; these are the URLs to display them with.
   const assets = useAssetMap(resolvedAssets, page.id);
   // An expired `edit` signature on a stale tab re-resolves once instead of
@@ -1323,6 +1329,7 @@ const PageRoute = () => {
                   uploadCapability={uploadCapability}
                   editable={liveEditable}
                   collab={{ doc: session.doc, provider: session.provider, user: collab.user }}
+                  sectionStats={sectionStats ?? null}
                 />
               </Suspense>
             ) : (
@@ -1373,6 +1380,7 @@ const PageRoute = () => {
                 // edits are silently discarded when the resolved merge remounts
                 // the editor. The chooser is the way forward (Apply / Reload).
                 editable={!saveMergeReport}
+                sectionStats={sectionStats ?? null}
               />
             </Suspense>
           ) : (
@@ -1399,6 +1407,7 @@ const PageRoute = () => {
                   displayUrl={assets.displayUrl}
                   pageId={page.id}
                   mediaDownloads={mediaDownloads}
+                  readerSections={sections}
                 />
               </div>
             </Suspense>

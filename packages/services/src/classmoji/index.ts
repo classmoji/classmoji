@@ -25,6 +25,7 @@ import * as formIdentityService from './formIdentity.service.ts';
 import * as formTeamResolverService from './formTeamResolver.ts';
 import * as pageService from './page.service.ts';
 import * as pageContentService from './pageContent.service.ts';
+import * as pageSectionsService from './pageSections.service.ts';
 import * as siteService from './site.service.ts';
 import * as emojiMappingService from './emojiMapping.service.ts';
 import * as helperService from './helper.service.ts';
@@ -146,6 +147,9 @@ const ClassmojiService = {
   formTeam: formTeamResolverService,
   page: pageService,
   pageContent: pageContentService,
+  // Per-student page state: checked headings and opened locked sections, with
+  // the current-student counts and lists staff see.
+  pageSections: pageSectionsService,
   site: siteService,
   emojiMapping: emojiMappingService,
   helper: helperService,
@@ -253,6 +257,7 @@ export {
   formTeamResolverService,
   pageService,
   pageContentService,
+  pageSectionsService,
   siteService,
   emojiMappingService,
   helperService,

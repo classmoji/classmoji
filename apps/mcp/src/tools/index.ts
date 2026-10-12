@@ -54,6 +54,11 @@ import { pageCursorSetTool, deckCursorSetTool } from './liveCursor.ts';
 import { deckRenderTool } from './render.ts';
 import { pageRenderTool } from './pageRender.ts';
 import { contentSearchTool, contentListTool, contentGetTool } from './contentSearch.ts';
+import {
+  pageSectionCheckTool,
+  pageSectionsStatusTool,
+  pageSectionUnlockTool,
+} from './pageSections.ts';
 import { tokenGrantTool } from './tokens.ts';
 import { extensionPurchaseTool } from './extensions.ts';
 import {
@@ -228,6 +233,17 @@ export function registerAllTools(): void {
   registerToolDefinition(contentSearchTool);
   registerToolDefinition(contentListTool);
   registerToolDefinition(contentGetTool);
+
+  // Page sections: checkable headings + locked sections. Status is OWNER+TEACHER
+  // (who checked/unlocked what, current students of this classroom only);
+  // unlock is STUDENT-only, recorded and staff-visible, so it is annotated
+  // destructive for the client to confirm with the student first. content_get
+  // serves each viewer only the locked bodies they may read.
+  registerToolDefinition(pageSectionsStatusTool);
+  registerToolDefinition(pageSectionUnlockTool);
+  // Check/uncheck a checkable heading: the caller's own progress mark (any
+  // accepted member, like the page's checkbox), reversible, audited.
+  registerToolDefinition(pageSectionCheckTool);
 
   // Tokens (OWNER)
   registerToolDefinition(tokenGrantTool);

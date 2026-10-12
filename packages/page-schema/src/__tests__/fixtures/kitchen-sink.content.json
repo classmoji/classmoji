@@ -970,6 +970,132 @@
       ]
     },
     {
+      "id": "ks-h2-checkable",
+      "type": "heading",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left",
+        "level": 2,
+        "isToggleable": false,
+        "checkable": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Step 1: a checkable section",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "ks-h2-checkable-p",
+      "type": "paragraph",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Ticking the heading above fades this paragraph.",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "ks-locked",
+      "type": "lockedSection",
+      "props": {},
+      "content": [
+        {
+          "type": "text",
+          "text": "Solution",
+          "styles": {
+            "bold": true
+          }
+        },
+        {
+          "type": "text",
+          "text": " (unlock when stuck)",
+          "styles": {}
+        }
+      ],
+      "children": [
+        {
+          "id": "ks-locked-p",
+          "type": "paragraph",
+          "props": {
+            "backgroundColor": "default",
+            "textColor": "default",
+            "textAlignment": "left"
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "The locked body: only readers who unlocked it receive this.",
+              "styles": {}
+            }
+          ],
+          "children": []
+        },
+        {
+          "id": "ks-locked-h",
+          "type": "heading",
+          "props": {
+            "backgroundColor": "default",
+            "textColor": "default",
+            "textAlignment": "left",
+            "level": 3,
+            "isToggleable": false,
+            "checkable": true
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "A checkable heading inside the lock",
+              "styles": {}
+            }
+          ],
+          "children": []
+        },
+        {
+          "id": "ks-locked-nested",
+          "type": "lockedSection",
+          "props": {},
+          "content": [
+            {
+              "type": "text",
+              "text": "Hint inside the solution",
+              "styles": {}
+            }
+          ],
+          "children": [
+            {
+              "id": "ks-locked-nested-p",
+              "type": "paragraph",
+              "props": {
+                "backgroundColor": "default",
+                "textColor": "default",
+                "textAlignment": "left"
+              },
+              "content": [
+                {
+                  "type": "text",
+                  "text": "A nested locked body.",
+                  "styles": {}
+                }
+              ],
+              "children": []
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "ks-nested-parent",
       "type": "paragraph",
       "props": {

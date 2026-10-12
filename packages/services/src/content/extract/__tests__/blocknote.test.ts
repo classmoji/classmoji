@@ -53,7 +53,7 @@ describe('extractText — blocknote', () => {
     for (const type of KNOWN_BLOCK_TYPES) {
       expect(present, `fixture is missing a ${type} block`).toContain(type);
     }
-    expect(KNOWN_BLOCK_TYPES).toHaveLength(22);
+    expect(KNOWN_BLOCK_TYPES).toHaveLength(23);
   });
 
   it('carries the text out of every block type that has its own words', () => {
@@ -95,6 +95,62 @@ describe('extractText — blocknote', () => {
     expect(text).not.toContain('HEADING_TEXTPARAGRAPH_TEXT');
     // Table rows are lines too.
     expect(text).toContain('TABLE_HEAD_A TABLE_HEAD_B\nTABLE_CELL_A TABLE_CELL_B');
+  });
+
+  it('a locked section gives its title and nothing below it, references included', () => {
+    const { text, references } = blocknote(ALL_BLOCKS);
+    expect(text).toContain('LOCKED_TITLE_TEXT');
+    expect(text).not.toContain('LOCKED_BODY_TEXT');
+    expect(text).not.toContain('LOCKED_NESTED');
+    expect(text).not.toContain('LOCKED_TERMINAL');
+    expect(references).not.toContainEqual({ kind: 'page', id: 'LOCKED_PAGELINK_TARGET_ID' });
+
+    // Alone, nested in a column, and with a styled title.
+    const page = [
+      {
+        id: 'cols',
+        type: 'columnList',
+        children: [
+          {
+            id: 'col',
+            type: 'column',
+            children: [
+              {
+                id: 'L',
+                type: 'lockedSection',
+                props: {},
+                content: [
+                  { type: 'text', text: 'Solution ', styles: { bold: true } },
+                  { type: 'text', text: 'part 1', styles: {} },
+                ],
+                children: [
+                  {
+                    id: 'L-p',
+                    type: 'paragraph',
+                    content: [{ type: 'text', text: 'the answer is 42', styles: {} }],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ];
+    expect(blocknote(page).text).toBe('Solution part 1');
+  });
+
+  it('a checkable heading extracts like any heading', () => {
+    const heading = (props: Record<string, unknown>) => [
+      {
+        id: 'h',
+        type: 'heading',
+        props: { level: 2, ...props },
+        content: [{ type: 'text', text: 'Step 1', styles: {} }],
+        children: [],
+      },
+    ];
+    expect(blocknote(heading({ checkable: true }))).toEqual(blocknote(heading({})));
+    expect(blocknote(heading({ checkable: true })).text).toBe('Step 1');
   });
 
   it('prepends the title when one is given', () => {

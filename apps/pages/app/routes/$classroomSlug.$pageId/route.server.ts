@@ -34,6 +34,15 @@ import { schema } from '~/components/editor/blocks/index.tsx';
 import type { PageForContent } from '~/types/pages.ts';
 import type { UploadCapability } from '@classmoji/services/media/router';
 import { loadMediaDownloads } from '~/utils/mediaDownloads.server.ts';
+import {
+  NO_READER_ACCESS,
+  SECTION_NO_STORE_HEADERS,
+  documentForReader,
+  isImpersonatedSession,
+  readerSectionsFor,
+  revealsAllSections,
+  type SectionReaderState,
+} from '~/utils/pageSections.server.ts';
 import { downloadMapRole, type MediaDownloads } from '~/utils/mediaDownloads.ts';
 import {
   assetResolveContext,
@@ -123,6 +132,18 @@ async function loadUploadCapability(page: {
   }
 }
 
+/**
+ * `Cache-Control: private, no-store` and `Vary: Cookie` on every response of
+ * the page route, document and `.data` alike: the payload is per reader
+ * (which locked bodies it holds, what they checked) behind a URL the whole
+ * course shares. The action's own headers (a 503's `Retry-After`) are kept.
+ */
+export const headers = ({ actionHeaders }: { actionHeaders: Headers }) => {
+  const merged = new Headers(actionHeaders);
+  for (const [key, value] of Object.entries(SECTION_NO_STORE_HEADERS)) merged.set(key, value);
+  return merged;
+};
+
 /** Extensions a page cover may have — the image half of the upload allowlist. */
 const COVER_IMAGE_EXTENSION = /\.(png|jpe?g|gif|webp|svg)$/i;
 
@@ -180,6 +201,41 @@ export const loader = async ({
   if (!page.is_public && !userRole) {
     throw new Response('Page is not public', { status: 403 });
   }
+
+  // ── Page sections (checkable headings, locked sections) ───────────────────
+  // ONE accepted-only role read decides what this reader may see and do. A
+  // reader who edits (canEdit) or is on the teaching team sees every locked
+  // body — an editor must never receive a redacted document, or saving it
+  // would delete the bodies. Everyone else gets each body removed unless they
+  // unlocked it themselves, and only their own rows are read.
+  const sectionAccess = authData?.userId
+    ? await ClassmojiService.pageSections.readerAccess({
+        userId: authData.userId,
+        classroomId: page.classroom.id,
+      })
+    : NO_READER_ACCESS;
+  const revealAll = revealsAllSections({ canEdit, access: sectionAccess });
+  const sectionState: SectionReaderState | null =
+    authData?.userId && sectionAccess.acceptedRole !== null
+      ? await ClassmojiService.pageSections.readerState({
+          pageId: page.id,
+          userId: authData.userId,
+        })
+      : null;
+  const readerSections = readerSectionsFor({
+    signedIn: Boolean(authData?.userId),
+    access: sectionAccess,
+    impersonated: isImpersonatedSession(authData),
+    revealAll,
+    state: sectionState,
+  });
+  // Staff chip counts: the people who edit the page (current students only).
+  const sectionStats = canEdit
+    ? await ClassmojiService.pageSections.unlockCounts({
+        pageId: page.id,
+        classroomId: page.classroom_id,
+      })
+    : null;
 
   const pageForContent = page as unknown as PageForContent;
 
@@ -332,6 +388,17 @@ export const loader = async ({
     viewerContent = [{ type: 'paragraph', content: [] }];
   }
 
+  // Locked bodies this reader may not see leave the document HERE, before
+  // anything is derived from it: the asset and srcset maps, the download map
+  // and the payload all read `viewerContent` from now on, so a body's text,
+  // its image refs and its media ids never reach them. Non-mutating (the
+  // content read may be a shared cache entry). Editors (canEdit: live, git and
+  // preview paths alike) and the teaching team keep the whole document.
+  viewerContent = documentForReader(viewerContent, {
+    revealAll,
+    unlocked: readerSections.unlocked,
+  });
+
   // Which blocks the pending preview adds or edits — the changes the preview
   // makes, against the page as it was when the preview started (its
   // merge-base). The rendered preview highlights them; there is no diff view.
@@ -472,15 +539,18 @@ export const loader = async ({
             repo: repoName,
             avatar_url: gitOrg.avatar_url,
             provider: gitOrg.provider ?? 'GITHUB',
-            source_url: repoName
-              ? gitWeb({
-                  provider: gitOrg.provider,
-                  login: gitOrg.login,
-                  base_url: gitOrg.base_url,
-                  git_namespace: (page.classroom as { git_namespace?: string | null })
-                    .git_namespace,
-                }).contentFile(repoName, 'main', `${page.content_path}/content.json`)
-              : null,
+            // The raw content.json holds every locked body: only for readers
+            // who see them all anyway.
+            source_url:
+              revealAll && repoName
+                ? gitWeb({
+                    provider: gitOrg.provider,
+                    login: gitOrg.login,
+                    base_url: gitOrg.base_url,
+                    git_namespace: (page.classroom as { git_namespace?: string | null })
+                      .git_namespace,
+                  }).contentFile(repoName, 'main', `${page.content_path}/content.json`)
+                : null,
           }
         : null,
     },
@@ -506,6 +576,11 @@ export const loader = async ({
     resolvedSrcSets,
     // `{ storedRef: downloadable }` for the media files a member may download.
     mediaDownloads,
+    // This reader's own checks and unlocks, and what they may do (see
+    // `readerSectionsFor`). Never anyone else's rows.
+    readerSections,
+    // `{ students, unlocks: { blockId: count } }` for the staff chip; editors only.
+    sectionStats,
     userRole,
     canEdit,
     uploadCapability,

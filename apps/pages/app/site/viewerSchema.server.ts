@@ -354,6 +354,63 @@ function makeStaticImage(srcSets: SiteSrcSets) {
   };
 }
 
+/** A padlock, drawn inline (the site ships no icon font and no JavaScript). */
+function lockIcon() {
+  return h(
+    'svg',
+    {
+      key: 'i',
+      className: 'bn-site-locked-icon',
+      viewBox: '0 0 24 24',
+      width: 18,
+      height: 18,
+      fill: 'none',
+      stroke: 'currentColor',
+      strokeWidth: 2,
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
+      'aria-hidden': 'true',
+      focusable: 'false',
+    },
+    [
+      h('rect', { key: 'b', x: 4, y: 11, width: 16, height: 10, rx: 2 }),
+      h('path', { key: 's', d: 'M8 11V7a4 4 0 0 1 8 0v4' }),
+    ]
+  );
+}
+
+/**
+ * A locked section, closed: padlock, title and — on the class site — a link
+ * to the page in Classmoji, where a signed-in student can unlock it.
+ *
+ * This render draws the title only. The BODY is the block's children, which
+ * BlockNote serializes on its own after this element; keeping it off the site
+ * is `documentForSite`'s job in `renderPageForViewer`, before the serializer
+ * (and the asset resolver) ever sees the document. The staff `_render/page`
+ * path passes no `unlockHref` and renders the children as authored.
+ */
+function makeStaticLockedSection(unlockHref: string | null) {
+  return function StaticLockedSection(props: RenderProps) {
+    return h('div', { className: 'bn-site-locked' }, [
+      h('div', { key: 'r', className: 'bn-site-locked-row' }, [
+        lockIcon(),
+        h('p', {
+          key: 't',
+          className: 'bn-inline-content bn-site-locked-title',
+          ref: props.contentRef,
+        }),
+      ]),
+      unlockHref
+        ? h(
+            'a',
+            { key: 'a', className: 'bn-site-locked-link', href: unlockHref },
+            'Open in Classmoji to unlock'
+          )
+        : null,
+    ]);
+  };
+}
+
 function StaticDivider() {
   return h('div', { className: 'divider-block' }, h('hr', null));
 }
@@ -685,6 +742,7 @@ export const OVERRIDDEN_BLOCK_TYPES = [
   'navGrid',
   'codeBlock',
   'toggleListItem',
+  'lockedSection',
 ] as const;
 
 type OverriddenBlockType =
@@ -728,7 +786,13 @@ function staticSpec(type: OverriddenBlockType, render: (props: never) => React.R
  */
 export function createViewerSchema(
   resolveLink: PageLinkResolver,
-  options: { showSchedule?: boolean; srcSets?: SiteSrcSets; downloads?: SiteDownloads } = {}
+  options: {
+    showSchedule?: boolean;
+    srcSets?: SiteSrcSets;
+    downloads?: SiteDownloads;
+    /** Where a locked section's "Open in Classmoji to unlock" goes; none → no link. */
+    lockedSectionHref?: string | null;
+  } = {}
 ) {
   const showSchedule = options.showSchedule === true;
   const srcSets = options.srcSets ?? {};
@@ -754,6 +818,10 @@ export function createViewerSchema(
     navGrid: staticSpec('navGrid', makeStaticNavGrid(resolveLink, showSchedule)),
     codeBlock: staticSpec('codeBlock', StaticCodeBlock),
     toggleListItem: staticSpec('toggleListItem', StaticToggleListItem),
+    lockedSection: staticSpec(
+      'lockedSection',
+      makeStaticLockedSection(options.lockedSectionHref ?? null)
+    ),
   };
 
   // The override map is heterogeneous by construction — each replaced spec is

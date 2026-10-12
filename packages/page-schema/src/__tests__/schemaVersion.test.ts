@@ -24,6 +24,8 @@ const RECORDED_FINGERPRINTS: Record<number, string> = {
   1: '9aff087863c0d2b8965274f910b414d4d257262587e15a554442f18d97148c69',
   // codeBlock and terminal gain `copyable`.
   2: '420e57ee296553cc3f3359bef13005739f9156da9f1406d2bf81a7457e8b665f',
+  // heading gains `checkable` (no default); new `lockedSection` block.
+  3: '2154baa0056acefbed86cd9d46d49d394430cf883c2544f0978d86be931ddbaf',
 };
 
 /** Sorted-key JSON; functions and undefined are left out (they are not shape). */

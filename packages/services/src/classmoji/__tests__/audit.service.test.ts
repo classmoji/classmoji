@@ -274,6 +274,57 @@ describe('audit.create dedup key', () => {
   });
 });
 
+describe('audit.create dedup: the targeted page block joins the key', () => {
+  const sectionRow = (block_id: unknown) => ({
+    ...baseEntry,
+    resource_type: 'PAGES',
+    resource_id: 'page-1',
+    action: 'CREATE' as const,
+    data: { tool: 'page_section_check', block_id, checked: true },
+  });
+
+  it('keys on data.block_id, so two blocks of one page get two rows', async () => {
+    await audit.create(sectionRow('block-a'));
+    await audit.create(sectionRow('block-b'));
+
+    const first = (findFirstMock.mock.calls[0][0] as WhereArg).where.AND;
+    const second = (findFirstMock.mock.calls[1][0] as WhereArg).where.AND;
+    expect(first).toEqual([{ data: { path: ['block_id'], equals: 'block-a' } }]);
+    expect(second).toEqual([{ data: { path: ['block_id'], equals: 'block-b' } }]);
+    expect(createMock).toHaveBeenCalledTimes(2);
+    expect(createMock.mock.calls.map(c => (c[0] as { data: { data: unknown } }).data.data)).toEqual(
+      [
+        { tool: 'page_section_check', block_id: 'block-a', checked: true },
+        { tool: 'page_section_check', block_id: 'block-b', checked: true },
+      ]
+    );
+  });
+
+  it('two rows differing only in block_id both get created when the lookup is keyed on it', async () => {
+    // Emulate the database: a recent row exists for block-a only.
+    findFirstMock.mockImplementation(async ({ where }: WhereArg) => {
+      const filters = (where.AND ?? []) as Array<{ data: { path: string[]; equals: unknown } }>;
+      const blockFilter = filters.find(f => f.data.path[0] === 'block_id');
+      return blockFilter?.data.equals === 'block-a' ? { id: 'recent-a' } : null;
+    });
+
+    expect(await audit.create(sectionRow('block-a'))).toBeNull(); // same block: deduped
+    expect(await audit.create(sectionRow('block-b'))).not.toBeNull(); // other block: written
+    expect(createMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('still dedups a repeat on the same block', async () => {
+    findFirstMock.mockResolvedValue({ id: 'existing-row' });
+    expect(await audit.create(sectionRow('block-a'))).toBeNull();
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it('a non-string block_id does not join the key', async () => {
+    await audit.create(sectionRow(42));
+    expect((findFirstMock.mock.calls[0][0] as WhereArg).where).not.toHaveProperty('AND');
+  });
+});
+
 describe('audit.service live-editing actions', () => {
   it.each(['COLLAB_JOIN', 'COLLAB_LEAVE', 'COLLAB_CHECKPOINT'] as const)(
     'records %s (not skipped as an unknown action)',

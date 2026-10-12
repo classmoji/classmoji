@@ -107,6 +107,11 @@ export const create = async (data: AuditLogData) => {
   // The same state twice still dedups.
   const payloadIdentityAnswers = payload?.identity_answers;
 
+  // The block of a page the action targeted (data.block_id — page sections).
+  // Unlocking or checking two different sections of one page inside the window
+  // are two records, so the block joins the key.
+  const payloadBlockId = payload?.block_id;
+
   // Each extra JSON-path filter needs its own `data` clause, and two cannot sit
   // beside each other in one object — they go under `AND`, which Prisma
   // combines conjunctively with the rest.
@@ -115,6 +120,9 @@ export const create = async (data: AuditLogData) => {
     ...(isScalar(payloadValue) ? [{ data: { path: ['value'], equals: payloadValue } }] : []),
     ...(typeof payloadIdentityAnswers === 'boolean'
       ? [{ data: { path: ['identity_answers'], equals: payloadIdentityAnswers } }]
+      : []),
+    ...(typeof payloadBlockId === 'string'
+      ? [{ data: { path: ['block_id'], equals: payloadBlockId } }]
       : []),
   ];
 

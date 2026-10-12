@@ -46,6 +46,9 @@ import { editingSchema } from './blocks/editingSchema.ts';
 import { AGENT_CURSOR_LABEL_CSS, renderLiveCursor } from './collab/liveCursor.ts';
 import { reviveUndoManager, yUndoManagerOf } from './collab/yUndo.ts';
 import { ReplaceUrlItem, RemoveProfileImageItem } from './ReplaceUrlItem.tsx';
+import { CheckableBadgeYield, CheckableSectionItem } from './CheckableSectionItem.tsx';
+import { SectionStatsContext } from '~/hooks/useSectionStats.ts';
+import type { SectionStats } from '~/hooks/useReaderSections.tsx';
 import { AssetSrcSetContext, NO_SRC_SETS, type AssetSrcSets } from '~/hooks/useAssetSrcSets.ts';
 import {
   AssetDisplayUrlContext,
@@ -66,6 +69,8 @@ import {
   type UploadPorts,
 } from './media/uploadRouting.ts';
 
+import '~/styles/page-sections.css';
+
 /** A repository upload refused with nothing more specific to say. */
 const UPLOAD_FAILED = 'The upload could not finish. Try again.';
 
@@ -76,6 +81,7 @@ const CustomDragHandleMenu = () => (
     <BlockColorsItem>Colors</BlockColorsItem>
     <ReplaceUrlItem>Replace URL</ReplaceUrlItem>
     <RemoveProfileImageItem>Remove Image</RemoveProfileImageItem>
+    <CheckableSectionItem />
   </DragHandleMenu>
 );
 
@@ -152,6 +158,11 @@ interface PageEditorProps {
    * for a mounted editor — the parent keys the editor on the room.
    */
   collab?: PageEditorCollab | null;
+  /**
+   * Unlock counts for the locked sections' chips (`sectionStats` from the
+   * loader, OWNER/TEACHER only). Null: no chips.
+   */
+  sectionStats?: SectionStats | null;
 }
 
 const PageEditor = forwardRef(function PageEditor(
@@ -168,6 +179,7 @@ const PageEditor = forwardRef(function PageEditor(
     onAssetUploaded,
     uploadCapability = null,
     collab = null,
+    sectionStats = null,
   }: PageEditorProps,
   ref: React.Ref<PageEditorHandle>
 ) {
@@ -370,6 +382,11 @@ const PageEditor = forwardRef(function PageEditor(
     return editor.onMount(revive);
   }, [editor, live]);
 
+  const sectionStatsValue = useMemo(
+    () => ({ pageId, stats: sectionStats }),
+    [pageId, sectionStats]
+  );
+
   // Slash menu: default + multi-column + custom blocks
   const getAllSlashMenuItems = useMemo(() => {
     return (editor: PageBlockEditor) => {
@@ -538,27 +555,30 @@ const PageEditor = forwardRef(function PageEditor(
           way), so a provider here is what the image and profile blocks see. */}
       <AssetSrcSetContext.Provider value={srcSets ?? NO_SRC_SETS}>
         <AssetDisplayUrlContext.Provider value={displayUrl ?? IDENTITY_DISPLAY_URL}>
-          <BlockNoteView
-            editor={editor}
-            editable={editable}
-            theme={darkMode ? 'dark' : 'light'}
-            slashMenu={false}
-            formattingToolbar={false}
-            sideMenu={false}
-            filePanel={false}
-            onChange={() => onChange?.(editor.document)}
-          >
-            <SideMenuController
-              sideMenu={props => <SideMenu {...props} dragHandleMenu={CustomDragHandleMenu} />}
-            />
-            <FormattingToolbarController formattingToolbar={() => <FormattingToolbar />} />
-            {/* BlockNote's file panel plus a Media tab for file and audio blocks. */}
-            <FilePanelController filePanel={MediaFilePanel} />
-            <SuggestionMenuController
-              triggerCharacter="/"
-              getItems={async query => filterSuggestionItems(getAllSlashMenuItems(editor), query)}
-            />
-          </BlockNoteView>
+          <SectionStatsContext.Provider value={sectionStatsValue}>
+            <BlockNoteView
+              editor={editor}
+              editable={editable}
+              theme={darkMode ? 'dark' : 'light'}
+              slashMenu={false}
+              formattingToolbar={false}
+              sideMenu={false}
+              filePanel={false}
+              onChange={() => onChange?.(editor.document)}
+            >
+              <SideMenuController
+                sideMenu={props => <SideMenu {...props} dragHandleMenu={CustomDragHandleMenu} />}
+              />
+              <FormattingToolbarController formattingToolbar={() => <FormattingToolbar />} />
+              {/* BlockNote's file panel plus a Media tab for file and audio blocks. */}
+              <FilePanelController filePanel={MediaFilePanel} />
+              <SuggestionMenuController
+                triggerCharacter="/"
+                getItems={async query => filterSuggestionItems(getAllSlashMenuItems(editor), query)}
+              />
+              <CheckableBadgeYield />
+            </BlockNoteView>
+          </SectionStatsContext.Provider>
         </AssetDisplayUrlContext.Provider>
       </AssetSrcSetContext.Provider>
     </div>

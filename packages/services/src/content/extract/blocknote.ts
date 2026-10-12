@@ -22,10 +22,15 @@
  *   3. blocks are newline-separated, so a heading and the paragraph after it
  *      do not run together.
  *
- * Schema: `apps/pages/app/components/editor/blocks/index.tsx:54-71`
- * (BlockNote 0.46.2 defaults minus audio/video/codeBlock/image, plus
- * `multiColumnSchema.blockSpecs`, plus nine overrides, plus BlockNote's audio
- * block again) — 22 distinct types.
+ * Schema: `apps/pages/app/components/editor/blocks/index.tsx`
+ * (BlockNote defaults minus video/codeBlock/image, plus
+ * `multiColumnSchema.blockSpecs`, plus the app's overrides and custom blocks)
+ * — 23 distinct types.
+ *
+ * `lockedSection` contributes its TITLE only: its body (children) is shown to
+ * a student only after they unlock it, so neither its text nor its references
+ * may enter the index, which content search, Ask Moji and quiz material read
+ * for every role.
  *
  * Imports nothing. Takes JSON in, returns text out.
  */
@@ -136,7 +141,8 @@ function parseNavGridReferences(value: unknown): ContentReference[] {
  *
  * Types absent from this table carry no extractable prop text:
  *   inline content, no text props — paragraph, heading, bulletListItem,
- *     numberedListItem, checkListItem, toggleListItem, quote, codeBlock, callout
+ *     numberedListItem, checkListItem, toggleListItem, quote, codeBlock, callout,
+ *     lockedSection (title only; its children are never read, see collectBlock)
  *   table content                 — table (text lives in content.rows[].cells[])
  *   no content, no text props     — divider, embed (url/type only),
  *                                   columnList, column (all text is in children)
@@ -193,6 +199,7 @@ export const KNOWN_BLOCK_TYPES = [
   'profile',
   'pageLink',
   'navGrid',
+  'lockedSection',
 ] as const;
 
 // ─── The walker ──────────────────────────────────────────────────────────────
@@ -289,6 +296,10 @@ function collectBlock(block: unknown, sink: Sink): void {
     const trimmed = inline.trim();
     if (trimmed) sink.text.push(trimmed);
   }
+
+  // A locked section's body is per-reader (unlocked or not): its title is
+  // indexed, nothing below it is — no children, no references, no props.
+  if (type === 'lockedSection') return;
 
   // 2. prop-carried text — the whole point; `collectText` never even received
   //    `props`, because its only caller passed `block.content`.
