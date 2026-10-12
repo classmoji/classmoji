@@ -24,6 +24,11 @@ const RECORDED_FINGERPRINTS: Record<number, string> = {
   1: '9aff087863c0d2b8965274f910b414d4d257262587e15a554442f18d97148c69',
   // codeBlock and terminal gain `copyable`.
   2: '420e57ee296553cc3f3359bef13005739f9156da9f1406d2bf81a7457e8b665f',
+  // heading gains `checkable` (no default); new `lockedSection` block.
+  // Re-recorded before v3 was released: lockedSection's title moved from inline
+  // content to a `title` prop (`content: 'none'`). No v3 document or client
+  // exists with the earlier shape.
+  3: '59cdf539e308941e85052887eb15d24648f2f6b12e31a594ea42253e5f9f3ba5',
 };
 
 /** Sorted-key JSON; functions and undefined are left out (they are not shape). */

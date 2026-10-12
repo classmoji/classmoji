@@ -109,6 +109,11 @@ const SAMPLES: Record<string, unknown> = {
       columns: 2,
     },
   },
+  lockedSection: {
+    type: 'lockedSection',
+    props: { title: 'Solution' },
+    children: [{ type: 'paragraph', content: text('locked body') }],
+  },
 };
 
 test.describe('block coverage', () => {
@@ -989,7 +994,11 @@ test.describe('class-site images', () => {
   });
 
   test('showPreview:false still renders the filename rather than a picture', async () => {
-    const { html } = await renderImage({ url: SITE_SIGNED, name: 'diagram.png', showPreview: false });
+    const { html } = await renderImage({
+      url: SITE_SIGNED,
+      name: 'diagram.png',
+      showPreview: false,
+    });
 
     expect(html).toContain('diagram.png');
     expect(html).not.toContain('bn-visual-media');

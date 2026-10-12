@@ -10,6 +10,7 @@ import {
   resolveDeckAssets,
 } from '~/utils/deckDelivery.server';
 import { deckOnlyRefusal } from '~/utils/slideKind';
+import { canonicalStoredPath } from '~/utils/slideDocumentAccess';
 import { checkpointBeforePresenting, readEditorName } from '~/utils/collab/collab.server';
 
 /**
@@ -70,7 +71,8 @@ export const loader = async ({
 
   // Content repo is STORED and user-editable — never re-derived from the namespace.
   const repo = slide.classroom.content_repo;
-  const filePath = `${slide.content_path}/index.html`;
+  // The stored folder in canonical form (a stray `/` in the row is dropped).
+  const filePath = `${canonicalStoredPath(slide.content_path)}/index.html`;
 
   // Read the deck by SHA through the delivery layer — the same read the
   // presenter makes, and for the same reason: this view is opened alongside a

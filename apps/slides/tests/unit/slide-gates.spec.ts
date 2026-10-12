@@ -228,6 +228,21 @@ test.describe('a public slide’s folder', () => {
     // in the repo the way a bare `startsWith('')` would.
     expect(isWithinContentPath('slides/week-1/notes.png', '')).toBe(false);
     expect(isWithinContentPath('slides/week-1/notes.png', null)).toBe(false);
+    expect(isWithinContentPath('slides/week-1/notes.png', '/')).toBe(false);
+    expect(isWithinContentPath('slides/week-1/notes.png', '//')).toBe(false);
+  });
+
+  test('is matched with a stray `/` in the stored content path', () => {
+    for (const stored of [
+      '/slides/week-1',
+      'slides/week-1/',
+      '/slides/week-1/',
+      'slides//week-1',
+    ]) {
+      expect(isWithinContentPath('slides/week-1/notes.png', stored), stored).toBe(true);
+      expect(isWithinContentPath('slides/week-1', stored), stored).toBe(true);
+      expect(isWithinContentPath('slides/week-10/notes.png', stored), stored).toBe(false);
+    }
   });
 });
 
@@ -400,7 +415,9 @@ test.describe('the content proxy route', () => {
     // this path" and the answer for "you may not have this document" start to
     // differ — and the difference is an oracle for which documents exist.
     expect(PROXY_SOURCE.match(/status: 403/g)).toHaveLength(1);
-    expect(PROXY_SOURCE.match(/throw forbidden\(\);/g)).toHaveLength(3);
+    // The path spelling, access, the file-slide rule, the page-document rule,
+    // the deck rule.
+    expect(PROXY_SOURCE.match(/throw forbidden\(\);/g)).toHaveLength(5);
   });
 });
 

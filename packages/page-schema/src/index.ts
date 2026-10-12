@@ -21,6 +21,7 @@ export {
   videoConfig,
   pageLinkConfig,
   navGridConfig,
+  lockedSectionConfig,
   imageConfig,
   imageMeta,
   customBlockConfigs,
@@ -30,12 +31,18 @@ export {
   REPLACED_DEFAULT_BLOCKS,
   pageDefaultBlockSpecs,
   createPageCodeBlockSpec,
+  createPageHeadingBlockSpec,
   codeBlockDisplayLanguage,
   codeBlockLanguageName,
   createPageSchema,
   type PageSchema,
 } from './schema.ts';
 export { normalizeCodeBlockContent } from './codeContent.ts';
+export {
+  lockedSectionGuard,
+  lockedSectionGuardPlugin,
+  movesBlockOutOfLock,
+} from './lockedSectionGuard.ts';
 export {
   COPY_BUTTON_CLASS,
   COPY_TOGGLE_CLASS,

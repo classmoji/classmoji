@@ -15,10 +15,15 @@ import {
 } from '@blocknote/react';
 
 import { schema } from './index.tsx';
+import { createEditorHeadingSpec } from './checkableBadge.ts';
+import { EditorLockedSection } from './LockedSectionBlock.tsx';
 
 /**
  * The schema the page EDITOR runs with: the shared one, with the `file` and
- * `audio` blocks drawn by BlockNote's React wrapper instead of its DOM one.
+ * `audio` blocks drawn by BlockNote's React wrapper instead of its DOM one,
+ * the heading carrying the author's "Checkable section" badge
+ * (`checkableBadge.ts`), and the locked section carrying
+ * `lockedSectionGuard` (its body stays under the lock while editing).
  *
  * ## Why
  *
@@ -93,5 +98,7 @@ export const editingSchema = BlockNoteSchema.create({
     ...schema.blockSpecs,
     file: EditorFileBlock(),
     audio: EditorAudioBlock(),
+    heading: createEditorHeadingSpec(),
+    lockedSection: EditorLockedSection(),
   } as SchemaOptions['blockSpecs'],
 }) as unknown as typeof schema;

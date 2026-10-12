@@ -105,6 +105,29 @@ export const navGridConfig = {
 };
 
 /**
+ * A section whose body the reader unlocks (pages "locked section").
+ *
+ * The title is the `title` prop and the body is the block's children; the
+ * block has no inline content. The title is public (everyone sees it, it is
+ * written onto the block as `data-title`), so it may be a prop; the body must
+ * never be one: BlockNote's HTML serializer writes every prop onto the block
+ * as a `data-*` attribute. Readers who have not unlocked the section get the
+ * block with its children removed (`@classmoji/page-schema/sections`
+ * `redactLockedSections`).
+ *
+ * Contentless on purpose: with an inline title, ordinary editing keys (Enter
+ * in the title, Backspace at its start, Delete at the end of the block before)
+ * split, convert or merge the block and carry its body out from under it.
+ */
+export const lockedSectionConfig = {
+  type: 'lockedSection' as const,
+  propSchema: {
+    title: { default: '' },
+  },
+  content: 'none' as const,
+};
+
+/**
  * The image block keeps BlockNote's own config (the app overrides only its
  * render, to add srcset/sizes). Re-exported so the app takes it from here too.
  */
@@ -126,6 +149,7 @@ export const customBlockConfigs = {
   video: videoConfig,
   pageLink: pageLinkConfig,
   navGrid: navGridConfig,
+  lockedSection: lockedSectionConfig,
 } as const;
 
 export type CustomBlockType = keyof typeof customBlockConfigs;

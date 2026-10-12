@@ -43,9 +43,14 @@ test.describe('every reader of a member’s role asks the same helper', () => {
 
   test('the page loader and its save action', () => {
     expect(PAGE_ROUTE).not.toContain('findByClassroomAndUser');
-    // The loader's role, its save action's, and the download map's (accepted only).
-    expect(PAGE_ROUTE.match(/await findClassroomRole\(\{/g)).toHaveLength(3);
-    expect(PAGE_ROUTE.match(/acceptedOnly: true,/g)).toHaveLength(1);
+    // The save action's role.
+    expect(PAGE_ROUTE.match(/await findClassroomRole\(\{/g)).toHaveLength(1);
+    // The loader's roles (highest in any invite state, and highest accepted for
+    // the download map) come from ONE read of the shared page-sections reader
+    // rule, which picks the highest the same way (packages/services tests).
+    expect(PAGE_ROUTE.match(/pageSections\.sectionViewer\(\{/g)).toHaveLength(1);
+    expect(PAGE_ROUTE).toContain('const userRole: string | null = sectionViewer.role;');
+    expect(PAGE_ROUTE).not.toContain('acceptedOnly: true,');
   });
 
   test('assertPageAccess, which the download route reads its role from', () => {

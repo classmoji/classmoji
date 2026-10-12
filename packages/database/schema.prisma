@@ -375,6 +375,8 @@ model User {
   feedback_comments             FeedbackComment[]
   feedback_comment_votes        FeedbackCommentVote[]
   feedback_follows              FeedbackFollow[]
+  page_section_checks           PageSectionCheck[]
+  page_section_unlocks          PageSectionUnlock[]
 
   @@map("users")
 }
@@ -600,6 +602,7 @@ model Classroom {
   content_index         ContentIndex[]
   media_objects         MediaObject[]
   team_sets             TeamSet[]
+  page_section_unlocks  PageSectionUnlock[]
 
   // Logically redundant now that slug is globally unique, but retained: it is
   // the compound key live upserts select on (githubClassroomImport, example
@@ -1640,6 +1643,8 @@ model Page {
   // row can point here: classroom_id is unique on ClassroomSite and the home
   // page must belong to that classroom.
   site_home_for      ClassroomSite[]         @relation("SiteHomePage")
+  section_checks     PageSectionCheck[]
+  section_unlocks    PageSectionUnlock[]
 
   @@unique([classroom_id, title])
   // The page's address on the public course site ({subdomain}/{slug}) and the
@@ -1674,6 +1679,47 @@ model PageLink {
   @@index([assignment_id])
   @@index([quiz_id])
   @@map("page_links")
+}
+
+/// A checkable heading a student has ticked on a page: per student, per page,
+/// per heading block (the BlockNote block id in the page's content.json).
+/// Reader state only; the page document never changes.
+model PageSectionCheck {
+  id         String   @id @default(uuid())
+  page_id    String
+  user_id    String
+  block_id   String
+  checked_at DateTime @default(now())
+
+  page Page @relation(fields: [page_id], references: [id], onDelete: Cascade)
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([page_id, user_id, block_id])
+  @@index([user_id])
+  @@map("page_section_checks")
+}
+
+/// A locked section a student has opened on a page. The first unlock time is
+/// kept (a second unlock of the same block is a no-op). `classroom_id` is the
+/// page's classroom, copied from the page row, so staff views read one
+/// classroom's unlocks by index. Rows outlive the student's membership; staff
+/// views count only current students.
+model PageSectionUnlock {
+  id           String   @id @default(uuid())
+  page_id      String
+  user_id      String
+  classroom_id String
+  block_id     String
+  unlocked_at  DateTime @default(now())
+
+  page      Page      @relation(fields: [page_id], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  classroom Classroom @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+
+  @@unique([page_id, user_id, block_id])
+  @@index([classroom_id, page_id])
+  @@index([user_id])
+  @@map("page_section_unlocks")
 }
 
 model SlideLink {

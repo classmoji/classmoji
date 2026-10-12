@@ -82,6 +82,11 @@ vi.mock('@classmoji/services', async () => {
   const index = await vi.importActual<
     typeof import('../../../../../packages/services/src/classmoji/contentIndex.service.ts')
   >('../../../../../packages/services/src/classmoji/contentIndex.service.ts');
+  // The REAL page-sections reader rule: a draft page answers only readers who
+  // reveal all (pageSections.test.ts covers the invite-state cases).
+  const sections = await vi.importActual<
+    typeof import('../../../../../packages/services/src/classmoji/pageSections.service.ts')
+  >('../../../../../packages/services/src/classmoji/pageSections.service.ts');
   return {
     ...real,
     ...docs,
@@ -90,6 +95,7 @@ vi.mock('@classmoji/services', async () => {
         fetchContentText: (...args: unknown[]) => mocks.fetchContentText(...args),
       },
       contentIndex: { slideMetadataText: index.slideMetadataText },
+      pageSections: sections,
     },
   };
 });
@@ -239,6 +245,17 @@ let loggedLines: string[] = [];
 
 beforeEach(() => {
   resetPrismaStub();
+  // Each ctx's user (`user-<ROLE>`) holds that role, accepted.
+  setPrismaRows({
+    classroomMembership: {
+      findMany: (args: { where?: { user_id?: string } }) => {
+        const role = String(args.where?.user_id ?? '').replace(/^user-/, '');
+        return ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'].includes(role)
+          ? [{ role, has_accepted_invite: true }]
+          : [];
+      },
+    },
+  });
   rawStatements = [];
   rawRows = [];
   setPrismaRaw((parts: unknown[]) => {
@@ -601,8 +618,27 @@ describe('content_get', () => {
     expect(payload.chunk_count).toBe(2);
     expect(payload.text).toContain('14 November');
     expect(Object.keys(payload)).not.toContain('isDraft');
-    // Served from the index — no live read needed.
-    expect(mocks.fetchContentText).not.toHaveBeenCalled();
+    expect(Object.keys(payload)).not.toContain('locked_sections');
+  });
+
+  it("serves a page's index text, reading content.json only to look for locked sections", async () => {
+    // A page whose content.json holds locked sections is answered per viewer
+    // (pageSections.test.ts). This one holds none, so the text stays the index's.
+    rawRows = [GET_ROW];
+    setPrismaRows({ page: { findFirst: () => pageRecord({ is_draft: false }) } });
+    mocks.fetchContentText.mockResolvedValue({ text: BLOCKNOTE_BODY, sha: 'abc', source: 'api' });
+
+    const payload = await call(
+      contentGetTool,
+      { classroom: 'org/slug', kind: 'page', id: PAGE_ID },
+      STUDENT
+    );
+
+    expect(payload.text).toBe(GET_ROW.text);
+    expect(Object.keys(payload)).not.toContain('locked_sections');
+    expect(mocks.fetchContentText.mock.calls.map(c => c[1])).toEqual([
+      'pages/unreleased-final-project/content.json',
+    ]);
   });
 
   it('refuses a draft to a student with the SAME error a nonexistent id returns', async () => {

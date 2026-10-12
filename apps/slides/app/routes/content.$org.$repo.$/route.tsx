@@ -35,8 +35,9 @@
  * rather than served from here. A deck's own documents (`index.html`,
  * `deck.json`) likewise go through the deck row's view gate: refused when no
  * deck owning the folder admits the caller (a draft, to a student), and
- * otherwise filtered to what that caller may see. See
- * `~/utils/slideDocumentAccess`.
+ * otherwise filtered to what that caller may see. A page's stored document
+ * (`content.json`, legacy `index.html`) is not served here at all: pages are
+ * read through the pages app. See `~/utils/slideDocumentAccess`.
  *
  * PERFORMANCE: Classroom memberships are cached for 8 hours to avoid
  * hitting the database on every asset request (CSS, fonts, images, etc.).
@@ -51,9 +52,12 @@
 import { fetchContent, getMimeType, isBinaryFile } from '~/utils/contentProxy';
 import { contentProxySafetyHeaders, withNosniff } from '~/utils/contentProxyHeaders';
 import {
+  canonicalProxyPath,
   deckDocumentDecision,
   isWithinContentPath,
+  pageDocumentDecision,
   slideDocumentDecision,
+  storedContentPathForms,
 } from '~/utils/slideDocumentAccess';
 import { assertSlideAccess, getAuthSession } from '@classmoji/auth/server';
 import { ClassmojiService } from '@classmoji/services';
@@ -217,13 +221,21 @@ export const loader = async (args: ContentLoaderArgs) => {
 
 async function serveContent({ params, request }: ContentLoaderArgs): Promise<Response> {
   const { org, repo } = params;
-  const path = params['*']; // Catch-all segment
+  const rawPath = params['*']; // Catch-all segment, as React Router decoded it
   const url = new URL(request.url);
   const slideId = url.searchParams.get('slideId');
 
-  if (!org || !repo || !path) {
+  if (!org || !repo || !rawPath) {
     throw new Response('Invalid request', { status: 400 });
   }
+
+  // Every rule below decides on this string, and the reads normalize the path
+  // they are given. So only the repo-root form of a path is answered
+  // (`normalizeRepoRelative`'s form, no `..`): another spelling of the same
+  // path (`a//b`, `a/./b`, a trailing `/`) gets the route's ordinary refusal
+  // instead of being read. Decided before anything else, on the string alone.
+  const path = canonicalProxyPath(rawPath, ClassmojiService.contentDelivery.normalizeRepoRelative);
+  if (!path) throw forbidden();
 
   // Try authentication first
   const authData = await getAuthSession(request);
@@ -358,7 +370,43 @@ async function serveContent({ params, request }: ContentLoaderArgs): Promise<Res
   if (documentDecision.outcome === 'redirect') return documentDecision.response;
   if (documentDecision.outcome === 'refuse') throw forbidden();
 
-  // 4. A deck's stored documents (`index.html`, `deck.json`) are not assets
+  // 4. A page's stored document (`<content_path>/content.json`, legacy
+  // `<content_path>/index.html`) is read through the pages app, which shows
+  // each reader what that reader may see of the page. This route serves the
+  // page folder's assets (images, SVG, downloads) and not those two files.
+  // The page rows are looked up the way the deck rows below are: classrooms
+  // on this org whose content repo is this one, plus the classrooms this
+  // request was authorized against, matching a stored `content_path` with or
+  // without a leading or trailing `/` (`storedContentPathForms`; the deck
+  // lookup does the same). Decided before the read, so a refused path and a
+  // missing one look the same.
+  const pageDecision = await pageDocumentDecision({
+    path,
+    findPages: async contentPath => {
+      const pages = await getPrisma().page.findMany({
+        where: {
+          content_path: { in: storedContentPathForms(contentPath) },
+          OR: [
+            { classroom_id: { in: authorizedClassroomIds } },
+            { classroom: { git_organization: { login: org } } },
+          ],
+        },
+        select: {
+          id: true,
+          classroom_id: true,
+          classroom: { include: { git_organization: true } },
+        },
+      });
+      return pages.filter(
+        page =>
+          authorizedClassroomIds.includes(page.classroom_id) ||
+          expectedContentRepo(page.classroom) === repo
+      );
+    },
+  });
+  if (pageDecision.outcome === 'refuse') throw forbidden();
+
+  // 5. A deck's stored documents (`index.html`, `deck.json`) are not assets
   // either. The branches above prove membership of SOME classroom on this
   // repo; the deck row says who may read it — a draft only the teaching team,
   // hidden slides only its editors, notes only those allowed them. So every
@@ -375,7 +423,7 @@ async function serveContent({ params, request }: ContentLoaderArgs): Promise<Res
       const decks = await getPrisma().slide.findMany({
         where: {
           kind: 'DECK',
-          content_path: contentPath,
+          content_path: { in: storedContentPathForms(contentPath) },
           classroom: { git_organization: { login: org } },
         },
         include: { classroom: { include: { git_organization: true } } },
@@ -398,7 +446,7 @@ async function serveContent({ params, request }: ContentLoaderArgs): Promise<Res
   });
   if (deckDecision.outcome === 'refuse') throw forbidden();
 
-  // 5. Proceed with fetch.
+  // 6. Proceed with fetch.
   //
   // Text goes through the asset map like every other read now, so an old
   // `/content/...` link serves the same bytes the loaders do rather than
@@ -461,7 +509,7 @@ async function serveContent({ params, request }: ContentLoaderArgs): Promise<Res
     return new Response(binaryContent.buffer, { headers });
   }
 
-  // 6. A deck document goes out as this caller may see it: hidden slides for
+  // 7. A deck document goes out as this caller may see it: hidden slides for
   // its editors only, speaker notes for those allowed them (#436) — the
   // `/{slideId}` loader's rule, via the same `deckHtmlForViewer`. The answer
   // depends on who asked, so no shared cache may keep it.

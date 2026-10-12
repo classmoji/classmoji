@@ -4,7 +4,7 @@
  *
  * The whole-page fixtures beside this one (the `sample-*.json` / `sample-*.html`
  * files) prove the extractor works on production-shaped documents, but no
- * single authored page uses all 21 types — so this fixture exists to hold the
+ * single authored page uses all 23 types — so this fixture exists to hold the
  * block table to its word.
  *
  * Two families of sentinel:
@@ -263,6 +263,55 @@ export const ALL_BLOCKS: unknown[] = [
     props: { entries: NAV_GRID_ENTRIES, columns: 2 },
     children: [],
   },
+  {
+    id: 'b-heading-checkable',
+    type: 'heading',
+    props: { ...inlineProps, level: 3, isToggleable: false, checkable: true },
+    content: [text('CHECKABLE_HEADING_TEXT')],
+    children: [],
+  },
+  {
+    // The title is indexed; the body (children) is per-reader and never is,
+    // nor is anything it points at.
+    id: 'b-locked',
+    type: 'lockedSection',
+    props: { title: 'LOCKED_TITLE_TEXT' },
+    children: [
+      {
+        id: 'b-locked-body',
+        type: 'paragraph',
+        props: inlineProps,
+        content: [text('LOCKED_BODY_TEXT')],
+        children: [],
+      },
+      {
+        id: 'b-locked-pagelink',
+        type: 'pageLink',
+        props: { pageId: 'LOCKED_PAGELINK_TARGET_ID', pageTitle: 'LOCKED_PAGELINK_TITLE' },
+        children: [],
+      },
+      {
+        id: 'b-locked-terminal',
+        type: 'terminal',
+        props: { code: 'LOCKED_TERMINAL_CODE', title: 'LOCKED_TERMINAL_TITLE' },
+        children: [],
+      },
+      {
+        id: 'b-locked-nested',
+        type: 'lockedSection',
+        props: { title: 'LOCKED_NESTED_TITLE' },
+        children: [
+          {
+            id: 'b-locked-nested-body',
+            type: 'paragraph',
+            props: inlineProps,
+            content: [text('LOCKED_NESTED_BODY_TEXT')],
+            children: [],
+          },
+        ],
+      },
+    ],
+  },
 ];
 
 /** Every sentinel that MUST survive extraction. */
@@ -296,6 +345,8 @@ export const EXPECTED_TEXT = [
   'PROFILE_NAME',
   'PROFILE_TITLE',
   'PROFILE_LINKS',
+  'CHECKABLE_HEADING_TEXT',
+  'LOCKED_TITLE_TEXT',
 ];
 
 /**
@@ -326,6 +377,14 @@ export const EXPECTED_ABSENT = [
   'NOISE_EMBED_TYPE',
   'NOISE_PROFILE_IMAGE',
   'NOISE_BLOCKED_ENTRY',
+  // A locked section's body: titles of nested locks included.
+  'LOCKED_BODY_TEXT',
+  'LOCKED_PAGELINK_TARGET_ID',
+  'LOCKED_PAGELINK_TITLE',
+  'LOCKED_TERMINAL_CODE',
+  'LOCKED_TERMINAL_TITLE',
+  'LOCKED_NESTED_TITLE',
+  'LOCKED_NESTED_BODY_TEXT',
 ];
 
 /** The outbound references this document declares, in order, deduped. */

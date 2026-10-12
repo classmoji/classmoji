@@ -12,6 +12,7 @@ import {
   resolveDeckDelivery,
 } from '~/utils/deckDelivery.server';
 import { deckOnlyRefusal } from '~/utils/slideKind';
+import { canonicalStoredPath } from '~/utils/slideDocumentAccess';
 import {
   PRESENT_LOAD_SAVE_TIMEOUT_MS,
   PRESENT_SAVE_TIMEOUT_MS,
@@ -114,7 +115,9 @@ export const loader = async ({
 
   // Content repo is STORED and user-editable — never re-derived from the namespace.
   const repo = slide.classroom.content_repo;
-  const filePath = `${slide.content_path}/index.html`;
+  // The stored folder in canonical form, so the read and the `/content/` URL
+  // below are the one spelling the proxy serves.
+  const filePath = `${canonicalStoredPath(slide.content_path)}/index.html`;
 
   // Legacy proxy URL, kept as the client-side fallback when the server-side
   // read below fails entirely.
