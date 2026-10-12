@@ -108,6 +108,15 @@ export function EverythingElse() {
           );
         })}
       </ul>
+      <p className="mt-10 text-center text-[0.9375rem] text-ink-2 dark:text-inkd-2">
+        <span className="font-semibold text-ink-0 dark:text-inkd-0">Missing something?</span>{' '}
+        <a
+          href="https://app.classmoji.io/feedback"
+          className="inline-flex items-center gap-1 rounded font-medium text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        >
+          Tell us what your class needs <span aria-hidden>→</span>
+        </a>
+      </p>
     </section>
   );
 }

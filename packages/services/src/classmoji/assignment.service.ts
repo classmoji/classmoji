@@ -443,6 +443,7 @@ export const update = async (id: string, updates: Prisma.AssignmentUpdateInput) 
       include: {
         module: true,
         repository: true,
+        form: true,
       },
     });
     if (updated.type === 'QUIZ') await mirrorQuizFromAssignment(tx, updated);
@@ -459,7 +460,7 @@ type AssignmentNotificationSnapshot = {
   student_deadline: Date | null;
   grades_released: boolean;
   is_published: boolean;
-  /** Read for a QUIZ row's previous state; absent counts as "open when published". */
+  /** Read for the previous state; absent counts as "open when published". */
   release_at?: Date | null;
 };
 
@@ -468,15 +469,17 @@ type AssignmentNotificationSnapshot = {
  * The classroom comes from the module, which every assignment has; the
  * repository is null for quiz/form assignments.
  *
- * A quiz assignment's due date change notifies nobody where the classroom's
- * quizzes are hidden (`entitlement.quizzesVisible`): no bell row, and so no
- * email, names a quiz there. Nor unless the quiz was open to students both
- * before and after the write (published, past its Opens date): the notice
- * names the quiz to every student, and a quiz that opens with this write
- * (a draft saved as published with a new Due) is announced by its publish
- * notice alone. Asked for QUIZ rows only; a failed lookup is caught by
- * `runSafely` and sends nothing. The graded branch needs no check: its
- * recipients are graded repository submissions, which a quiz never has.
+ * A due date change notifies nobody unless the assignment was open to
+ * students both before and after the write (`openToStudents`: published, its
+ * repository published, its quiz or form open): the notice names it to every
+ * student, and a draft is not theirs to see yet. One that opens with this
+ * write (a draft saved as published with a new Due) is announced by its
+ * publish notice, if any, alone. A quiz's notice also needs the classroom's
+ * quizzes shown (`entitlement.quizzesVisible`): no bell row, and so no email,
+ * names a quiz where they are hidden. Asked for QUIZ rows only; a failed
+ * lookup is caught by `runSafely` and sends nothing. The graded branch needs
+ * no check: its recipients are graded repository submissions, which a quiz
+ * never has.
  *
  * A QUIZ row that goes from unpublished to published tells the class through
  * the quiz publish notice (`notifyQuizPublished`), whichever path published it.
@@ -499,6 +502,8 @@ export const notifyAfterUpdate = async (
     weight: number;
     tokens_per_hour: number | null;
     module: { classroom_id: string };
+    repository?: { is_published: boolean } | null;
+    form?: { status: string } | null;
   }
 ) => {
   const now = new Date();
@@ -511,21 +516,21 @@ export const notifyAfterUpdate = async (
       const newDeadline = updated.student_deadline?.toISOString() ?? null;
       const oldDeadline = previous?.student_deadline?.toISOString() ?? null;
       if (newDeadline === oldDeadline) return;
-      if (updated.type === 'QUIZ') {
-        const wasOpen =
-          previous != null &&
-          openToStudents(
-            { type: 'QUIZ', is_published: previous.is_published, release_at: previous.release_at },
-            now,
-            { quizzesVisible: true }
-          );
-        if (
-          !wasOpen ||
-          !openToStudents(updated, now, { quizzesVisible: true }) ||
-          !(await entitlementService.quizzesVisible(updated.module.classroom_id))
-        ) {
-          return;
-        }
+      // The repository and form are not written here: their state now is
+      // their state before.
+      const wasOpen =
+        previous != null &&
+        openToStudents(
+          { ...updated, is_published: previous.is_published, release_at: previous.release_at },
+          now,
+          { quizzesVisible: true }
+        );
+      if (!wasOpen || !openToStudents(updated, now, { quizzesVisible: true })) return;
+      if (
+        updated.type === 'QUIZ' &&
+        !(await entitlementService.quizzesVisible(updated.module.classroom_id))
+      ) {
+        return;
       }
       const { studentIds, classroomId } = await notificationService.getStudentsForAssignment(id);
       if (studentIds.length > 0) {

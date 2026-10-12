@@ -1,6 +1,8 @@
 /**
- * The due-date-changed notification (bell row, and the email it sends) on a
- * quiz assignment follows the classroom's quiz visibility
+ * The due-date-changed notification (bell row, and the email it sends) goes
+ * out only for an assignment open to students before and after the write: a
+ * draft, or a repository assignment whose repository is unpublished, notifies
+ * nobody. On a quiz assignment it also follows the classroom's quiz visibility
  * (`entitlement.quizzesVisible`): where quizzes are hidden, moving a quiz's
  * deadline notifies nobody. Nor does it while the quiz is not open to
  * students (unpublished, or before its Opens date): the notice names the quiz
@@ -66,7 +68,11 @@ const FUTURE = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 /** The updated row as Prisma hands it back: scalars, `type` included. */
 const updatedRow = (
   type: 'REPO' | 'QUIZ',
-  over: Partial<{ is_published: boolean; release_at: Date | null }> = {}
+  over: Partial<{
+    is_published: boolean;
+    release_at: Date | null;
+    repository: { is_published: boolean } | null;
+  }> = {}
 ) => ({
   id: 'asg-1',
   type,
@@ -81,7 +87,7 @@ const updatedRow = (
   is_published: true,
   grades_released: false,
   module: { classroom_id: 'class-1' },
-  repository: null,
+  repository: type === 'REPO' ? { is_published: true } : null,
   ...over,
 });
 
@@ -234,6 +240,42 @@ describe('update — any other kind of assignment', () => {
     expect(mocks.quizzesVisible).not.toHaveBeenCalled();
     expect(mocks.createNotifications).toHaveBeenCalledOnce();
     expect(mocks.quizUpdate).not.toHaveBeenCalled();
+  });
+
+  it('notifies nobody while the assignment is a draft', async () => {
+    mocks.assignmentFindUnique.mockResolvedValue({
+      student_deadline: OLD,
+      grades_released: false,
+      is_published: false,
+    });
+    mocks.assignmentUpdate.mockResolvedValue(updatedRow('REPO', { is_published: false }));
+
+    await update('asg-1', { student_deadline: NEW });
+
+    expect(mocks.createNotifications).not.toHaveBeenCalled();
+  });
+
+  it('notifies nobody while its repository is unpublished', async () => {
+    mocks.assignmentUpdate.mockResolvedValue(
+      updatedRow('REPO', { repository: { is_published: false } })
+    );
+
+    await update('asg-1', { student_deadline: NEW });
+
+    expect(mocks.createNotifications).not.toHaveBeenCalled();
+  });
+
+  it('sends no due-date notice for a draft published in the same write', async () => {
+    mocks.assignmentFindUnique.mockResolvedValue({
+      student_deadline: OLD,
+      grades_released: false,
+      is_published: false,
+    });
+    mocks.assignmentUpdate.mockResolvedValue(updatedRow('REPO'));
+
+    await update('asg-1', { student_deadline: NEW, is_published: true });
+
+    expect(mocks.createNotifications).not.toHaveBeenCalled();
   });
 });
 
