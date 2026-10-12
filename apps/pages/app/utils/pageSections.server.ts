@@ -18,7 +18,9 @@
  *   - Anyone else gets each locked section's body removed unless THEY unlocked
  *     it, before anything is derived from the document (asset maps, download
  *     maps, the loader payload).
- *   - Check/uncheck: any accepted member, not while impersonated.
+ *   - Check/uncheck: any accepted member, not while impersonated. A check
+ *     target is a checkable heading or a student (personal) check list item
+ *     (`isCheckTarget`); both keep their rows in the same table.
  *   - Unlock: `canUnlock` (an accepted student who does not reveal all), not
  *     impersonated.
  *   - Reader-state writes follow the classroom ENTRY rule, not the mutation
@@ -33,6 +35,8 @@
 import {
   checkableHeadingIds,
   findBlock,
+  isCheckListItem,
+  isCheckTarget,
   isCheckableHeading,
   isLockedSection,
   lockedSectionIds,
@@ -226,7 +230,10 @@ export interface SectionStatsPayload {
   students: number;
   /** Locked-section id → how many current students unlocked it. */
   unlocks: Record<string, number>;
-  /** Checkable-heading id → how many current students ticked it. */
+  /**
+   * Checkable-heading id → how many current students ticked it. Headings
+   * only: student check list items have no chip (their counts are MCP-only).
+   */
   checks: Record<string, number>;
 }
 
@@ -255,8 +262,34 @@ export async function sectionStatsFor(
   return {
     students: unlocks?.students ?? checks?.students ?? 0,
     unlocks: unlocks ? { ...unlocks.unlocks } : {},
-    checks: checks ? { ...checks.checks } : {},
+    checks: checks ? withoutCheckListItems(checks.checks, blocks) : {},
   };
+}
+
+/**
+ * The tick counts without the page's check list items. The service counts
+ * every row on the page, and a student check list item's rows live in the
+ * same table; they have no chip, so they are left out by block type (a
+ * heading's count is kept exactly as the service gave it).
+ */
+function withoutCheckListItems(
+  counts: Record<string, number>,
+  blocks: unknown
+): Record<string, number> {
+  const listItems = new Set<string>();
+  const visit = (list: unknown) => {
+    if (!Array.isArray(list)) return;
+    for (const block of list) {
+      if (isCheckListItem(block) && typeof block.id === 'string') listItems.add(block.id);
+      visit((block as { children?: unknown } | null)?.children);
+    }
+  };
+  visit(blocks);
+  const out: Record<string, number> = {};
+  for (const [id, count] of Object.entries(counts)) {
+    if (!listItems.has(id)) out[id] = count;
+  }
+  return out;
 }
 
 /**
@@ -275,12 +308,22 @@ export function signInUrlFor(pageUrl: string): string {
 
 /**
  * Does `blockId` name a block this intent may target, in THIS reader's tree?
- * check/uncheck: a heading with `checkable: true`; unlock: a `lockedSection`.
+ * check/uncheck: a check target (a heading with `checkable: true` or a check
+ * list item with `personal: true`); unlock: a `lockedSection`.
  */
 export function sectionTargetValid(tree: unknown, blockId: string, intent: SectionIntent): boolean {
   const block = findBlock(tree, blockId);
   if (!block) return false;
-  return intent === 'unlock' ? isLockedSection(block) : isCheckableHeading(block);
+  return intent === 'unlock' ? isLockedSection(block) : isCheckTarget(block);
+}
+
+/**
+ * Does `blockId` name a checkable HEADING in this tree? The staff tick list
+ * (GET `kind=check`) is for headings only: a student check list item has no
+ * chip, and answers like any other block that is not a checkable heading.
+ */
+export function checkableHeadingTargetValid(tree: unknown, blockId: string): boolean {
+  return isCheckableHeading(findBlock(tree, blockId));
 }
 
 /** The POST body, or null when it is not `{ pageId, blockId, intent }`. */
@@ -595,8 +638,8 @@ export function parseSectionListKind(raw: string | null): 'unlock' | 'check' | n
  * chips); everyone else gets the same 404 as a page that does not exist.
  * Audited as a VIEW, except for a HEAD request (nothing is shown).
  *
- * `check` names a block that must be a checkable heading in the page's
- * current document (as the reader rule hands it to this viewer); anything
+ * `check` names a block that must be a checkable heading (not a student
+ * check list item) in the page's current document (as the reader rule hands it to this viewer); anything
  * else is a 400 with `code: 'NO_SUCH_SECTION'`. A heading the author has
  * only just made checkable in the editor is not in that document yet, and
  * no student can have ticked it: the editor reads that code as "no one yet".
@@ -643,7 +686,7 @@ async function sectionsGet<P extends SectionsPage>(
       ? {}
       : (await deps.readerState({ pageId: page.id, userId: session.userId })).unlocked;
     const tree = documentForReader(blocks, { revealAll, unlocked });
-    if (!sectionTargetValid(tree, blockId, 'check')) {
+    if (!checkableHeadingTargetValid(tree, blockId)) {
       return json({ error: 'No such section on this page', code: 'NO_SUCH_SECTION' }, 400);
     }
   }

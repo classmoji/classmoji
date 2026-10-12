@@ -596,7 +596,7 @@ interface ContentGetArgs {
   id: string;
 }
 
-/** The per-viewer side fields (`locked_sections`, `checkable_headings`), without the text. */
+/** The per-viewer side fields (`locked_sections`, `checkable_headings`, `check_list_items`), without the text. */
 const sectionFieldsOf = ({
   text: _text,
   ...fields
@@ -780,8 +780,9 @@ export const contentGetTool: ToolDefinition<ContentGetArgs> = {
     'id and kind from a search or listing result can be passed straight back in. ' +
     "For `kind: 'page' | 'slide' | 'file'` that is this classroom's own material (deck speaker " +
     'notes are never included; a locked page section the caller has not unlocked appears only ' +
-    'as a "[Locked section ...]" line, and a checkable heading ends with the caller\'s own ' +
-    '"[done]" or "[not done]" state). ' +
+    'as a "[Locked section ...]" line, a checkable heading ends with the caller\'s own ' +
+    '"[done]" or "[not done]" state, and a student check list item starts with their own ' +
+    '"[x]" or "[ ]"). ' +
     "For `kind: 'doc'` it is a Classmoji product documentation page from classmoji.io: pass the " +
     'page slug as `id`, and the response carries the canonical `url` you may cite. ' +
     'Use it after content_search or content_list to read a document a snippet only hinted at.',

@@ -32,6 +32,7 @@ export {
   pageDefaultBlockSpecs,
   createPageCodeBlockSpec,
   createPageHeadingBlockSpec,
+  createPageCheckListItemBlockSpec,
   codeBlockDisplayLanguage,
   codeBlockLanguageName,
   createPageSchema,

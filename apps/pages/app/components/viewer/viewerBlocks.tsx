@@ -14,19 +14,25 @@ import {
   createReactBlockSpec,
 } from '@blocknote/react';
 
-import { createPageHeadingBlockSpec, lockedSectionConfig } from '@classmoji/page-schema';
+import {
+  createPageCheckListItemBlockSpec,
+  createPageHeadingBlockSpec,
+  lockedSectionConfig,
+} from '@classmoji/page-schema';
 
 import { schema as editorSchema } from '~/components/editor/blocks/index.tsx';
 import { useMediaDownloadHref } from '~/hooks/useMediaDownloads.ts';
 import { MediaDownloadLink } from './MediaDownloadLink.tsx';
 import { LockedSectionView, type LockedSectionViewProps } from './sections/LockedSectionView.tsx';
 import { withSectionCheckbox } from './sections/sectionCheckbox.ts';
+import { withPersonalCheckbox } from './sections/personalCheckListItem.ts';
 
 /**
  * The schema the read-only page viewer renders with: the editor's, with the
  * `file` and `audio` blocks able to show a reader's download button, the
- * heading able to carry a reader's tick box (checkable sections), and the
- * locked section drawn for a reader (`sections/LockedSectionView.tsx`).
+ * heading able to carry a reader's tick box (checkable sections), a student
+ * check list item's box handed to the reader (`sections/personalCheckListItem.ts`),
+ * and the locked section drawn for a reader (`sections/LockedSectionView.tsx`).
  *
  * Viewer-only on purpose. The editor keeps BlockNote's own blocks (it shows no
  * download buttons), and the class site builds its static schema from the
@@ -130,6 +136,29 @@ function createViewerHeadingSpec() {
   } as typeof base;
 }
 
+/**
+ * The shared page check list item with its render wrapped: a personal item's
+ * box shows the reader's own state and ticks for them (`withPersonalCheckbox`).
+ * Built from a FRESH spec, as the heading above; everything else is the
+ * shared item's (BlockNote's).
+ */
+function createViewerCheckListItemSpec() {
+  const base = createPageCheckListItemBlockSpec();
+  const render = base.implementation.render;
+  return {
+    ...base,
+    implementation: {
+      ...base.implementation,
+      render(this: unknown, ...args: Parameters<typeof render>) {
+        const view = render.apply(this as never, args);
+        const [block, editor] = args;
+        if ((block.props as { personal?: unknown }).personal !== true) return view;
+        return withPersonalCheckbox(view as never, block as never, editor as object);
+      },
+    },
+  } as typeof base;
+}
+
 /** The locked section for a reader: same config, the reader's render. */
 const ReaderLockedSection = createReactBlockSpec(lockedSectionConfig, {
   render: props => (
@@ -146,6 +175,7 @@ export const viewerSchema = BlockNoteSchema.create({
   blockSpecs: {
     ...editorSchema.blockSpecs,
     heading: createViewerHeadingSpec(),
+    checkListItem: createViewerCheckListItemSpec(),
     file: DownloadableFile(),
     audio: DownloadableAudio(),
     lockedSection: ReaderLockedSection(),

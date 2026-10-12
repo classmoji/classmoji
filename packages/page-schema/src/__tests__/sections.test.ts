@@ -3,10 +3,16 @@ import { describe, expect, it } from 'vitest';
 
 import { parsePageContent } from '../content.ts';
 import {
+  checkListRun,
+  checkTargetIds,
   checkableHeadingIds,
   checkableSectionRanges,
   findBlock,
+  isCheckListItem,
+  isCheckTarget,
   isCheckableHeading,
+  isPersonalCheckListItem,
+  personalCheckListItemIds,
   isLockedSection,
   lockedSectionIds,
   headingText,
@@ -375,6 +381,100 @@ describe('lockedSectionTitle', () => {
   });
 });
 
+const item = (id: string, personal?: unknown, children: unknown[] = []) => ({
+  id,
+  type: 'checkListItem',
+  props: { checked: false, ...(personal === undefined ? {} : { personal }) },
+  content: text(id),
+  children,
+});
+
+describe('check targets: checkable headings and personal check list items', () => {
+  it('a personal check list item is one with personal === true, nothing looser', () => {
+    expect(isPersonalCheckListItem(item('a', true))).toBe(true);
+    for (const personal of [undefined, false, 'true', 1, null]) {
+      expect(isPersonalCheckListItem(item('a', personal))).toBe(false);
+    }
+    expect(isPersonalCheckListItem({ type: 'bulletListItem', props: { personal: true } })).toBe(
+      false
+    );
+    expect(isPersonalCheckListItem({ type: 'checkListItem', props: 'personal' })).toBe(false);
+    expect(isPersonalCheckListItem(null)).toBe(false);
+    expect(isCheckListItem(item('a'))).toBe(true);
+  });
+
+  it('isCheckTarget: checkable headings and personal items only', () => {
+    expect(isCheckTarget(h('h', 2, true))).toBe(true);
+    expect(isCheckTarget(item('i', true))).toBe(true);
+    expect(isCheckTarget(h('h', 2))).toBe(false);
+    expect(isCheckTarget(item('i'))).toBe(false);
+    expect(isCheckTarget(locked('l', 'L', []))).toBe(false);
+    // `checkable` on a list item, or `personal` on a heading, is not a target.
+    expect(isCheckTarget({ type: 'checkListItem', props: { checkable: true } })).toBe(false);
+    expect(isCheckTarget({ type: 'heading', props: { personal: true } })).toBe(false);
+  });
+
+  it('lists ids at any depth, in document order, skipping blocks without ids', () => {
+    const doc = [
+      h('h1', 2, true),
+      item('i1', true),
+      item('plain'),
+      locked('L', 'Lock', [item('i-in-lock', true), h('h-in-lock', 3, true)]),
+      { type: 'checkListItem', props: { personal: true } },
+      p('para', [item('i-nested', true)]),
+    ];
+    expect(personalCheckListItemIds(doc)).toEqual(['i1', 'i-in-lock', 'i-nested']);
+    expect(checkTargetIds(doc)).toEqual(['h1', 'i1', 'i-in-lock', 'h-in-lock', 'i-nested']);
+    expect(checkableHeadingIds(doc)).toEqual(['h1', 'h-in-lock']);
+    // A redacted reader's tree has no targets inside the lock.
+    expect(checkTargetIds(redactLockedSections(doc, () => false))).toEqual([
+      'h1',
+      'i1',
+      'i-nested',
+    ]);
+  });
+
+  it('personal items have no section and are never in a heading range as a heading', () => {
+    const doc = [h('h1', 2, true), item('i1', true), item('i2', true), h('h2', 2, true)];
+    const ranges = checkableSectionRanges(doc);
+    expect([...ranges.keys()]).toEqual(['h1', 'h2']);
+    expect(ranges.get('h1')).toEqual(['h1', 'i1', 'i2']);
+  });
+});
+
+describe('checkListRun', () => {
+  const doc = [
+    p('before'),
+    item('a1', true),
+    item('a2', true, [item('a2-child'), item('a2-child-2')]),
+    item('a3'),
+    p('between'),
+    item('b1'),
+    {
+      id: 'cols',
+      type: 'columnList',
+      children: [{ id: 'col', type: 'column', children: [item('c1'), item('c2')] }],
+    },
+  ];
+
+  it('is the run of adjacent sibling check list items, personal or not', () => {
+    for (const id of ['a1', 'a2', 'a3']) expect(checkListRun(doc, id)).toEqual(['a1', 'a2', 'a3']);
+    expect(checkListRun(doc, 'b1')).toEqual(['b1']);
+  });
+
+  it('nested items are their own list; items in columns are found', () => {
+    expect(checkListRun(doc, 'a2-child')).toEqual(['a2-child', 'a2-child-2']);
+    expect(checkListRun(doc, 'c2')).toEqual(['c1', 'c2']);
+  });
+
+  it('is empty for a block that is not a check list item, or no block', () => {
+    expect(checkListRun(doc, 'between')).toEqual([]);
+    expect(checkListRun(doc, 'nope')).toEqual([]);
+    expect(checkListRun(doc, '')).toEqual([]);
+    expect(checkListRun(null, 'a1')).toEqual([]);
+  });
+});
+
 describe('the kitchen-sink fixture', () => {
   const kitchen = parsePageContent(
     readFileSync(new URL('./fixtures/kitchen-sink.content.json', import.meta.url), 'utf8')
@@ -383,6 +483,17 @@ describe('the kitchen-sink fixture', () => {
   it('has a checkable heading and nested locked sections', () => {
     expect(checkableHeadingIds(kitchen.blocks)).toEqual(['ks-h2-checkable', 'ks-locked-h']);
     expect(lockedSectionIds(kitchen.blocks)).toEqual(['ks-locked', 'ks-locked-nested']);
+    expect(personalCheckListItemIds(kitchen.blocks)).toEqual([
+      'ks-personal-1',
+      'ks-personal-2',
+      'ks-locked-personal',
+    ]);
+    expect(checkListRun(kitchen.blocks, 'ks-personal-1')).toEqual([
+      'ks-check-1',
+      'ks-check-2',
+      'ks-personal-1',
+      'ks-personal-2',
+    ]);
     expect(checkableSectionRanges(kitchen.blocks).get('ks-h2-checkable')).toEqual([
       'ks-h2-checkable',
       'ks-h2-checkable-p',
@@ -396,6 +507,8 @@ describe('the kitchen-sink fixture', () => {
     const out = redactLockedSections(kitchen.blocks, () => false);
     expect(allText(out)).not.toContain('The locked body');
     expect(allText(out)).not.toContain('Hint inside the solution');
+    expect(allText(out)).not.toContain('A student check list item inside the lock');
+    expect(personalCheckListItemIds(out)).toEqual(['ks-personal-1', 'ks-personal-2']);
     expect(lockedSectionTitle(findBlock(out, 'ks-locked'))).toBe('Solution (unlock when stuck)');
   });
 });

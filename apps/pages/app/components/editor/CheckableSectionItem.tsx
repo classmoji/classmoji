@@ -1,6 +1,9 @@
 import { SideMenuExtension } from '@blocknote/core/extensions';
 import { useBlockNoteEditor, useComponentsContext, useExtensionState } from '@blocknote/react';
-import { IconSquareCheck } from '@tabler/icons-react';
+import { IconSquareCheck, IconUserCheck } from '@tabler/icons-react';
+
+import { PERSONAL_LIST_LABEL } from './blocks/checkableBadge.ts';
+import { setCheckListPersonal, type PersonalListEditor } from './personalCheckList.ts';
 
 /**
  * Drag-handle menu item for headings: "Checkable section", with a switch.
@@ -40,9 +43,44 @@ export function CheckableSectionItem() {
 }
 
 /**
- * The checkable badge sits in the heading's gutter, where BlockNote's side
- * menu (add + drag handle) appears for the block under the pointer. While the
- * side menu is on a block, that block's badge steps aside.
+ * Drag-handle menu item for check list items: "Students tick their own", with
+ * a switch. On, the whole list (the run of adjacent check list items) becomes
+ * a student check list: each reader ticks their own copy, and the author's
+ * ticks are what signed-out readers and the class site show. Off clears
+ * `personal` on the whole list.
+ */
+export function PersonalCheckListItem() {
+  const editor = useBlockNoteEditor();
+  const Components = useComponentsContext();
+  const block = useExtensionState(SideMenuExtension, {
+    selector: state => state?.block,
+  });
+
+  if (!block || block.type !== 'checkListItem' || !Components) return null;
+  const on = (block.props as { personal?: unknown }).personal === true;
+
+  return (
+    <Components.Generic.Menu.Item
+      {...({ role: 'menuitemcheckbox', 'aria-checked': on } as object)}
+      className="pg-checkable-item"
+      onClick={() => {
+        setCheckListPersonal(editor as unknown as PersonalListEditor, block.id, !on);
+      }}
+      icon={<IconUserCheck size={16} />}
+    >
+      <span className="pg-checkable-item-row">
+        {PERSONAL_LIST_LABEL}
+        <span className="pg-switch" data-on={on ? 'true' : 'false'} aria-hidden="true" />
+      </span>
+    </Components.Generic.Menu.Item>
+  );
+}
+
+/**
+ * The checkable badge sits in the heading's gutter (and the student check
+ * list badge in its item's), where BlockNote's side menu (add + drag handle)
+ * appears for the block under the pointer. While the side menu is on a block,
+ * that block's badge steps aside.
  */
 export function CheckableBadgeYield() {
   const blockId = useExtensionState(SideMenuExtension, {
@@ -50,6 +88,6 @@ export function CheckableBadgeYield() {
   });
   if (!blockId || typeof CSS === 'undefined' || typeof CSS.escape !== 'function') return null;
   return (
-    <style>{`.bn-block-outer[data-id="${CSS.escape(blockId)}"] > .bn-block > .bn-block-content[data-content-type="heading"][data-checkable="true"] .pg-checkable-badge { opacity: 0; pointer-events: none; }`}</style>
+    <style>{`.bn-block-outer[data-id="${CSS.escape(blockId)}"] > .bn-block > .bn-block-content[data-content-type="heading"][data-checkable="true"] .pg-checkable-badge, .bn-block-outer[data-id="${CSS.escape(blockId)}"] > .bn-block > .bn-block-content[data-content-type="checkListItem"][data-personal="true"] > .pg-personal-badge { opacity: 0; pointer-events: none; }`}</style>
   );
 }

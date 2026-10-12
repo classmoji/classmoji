@@ -1,6 +1,6 @@
 /**
- * Page sections that remember the reader: checkable headings and locked
- * sections, read off a page's block JSON.
+ * Page sections that remember the reader: checkable headings, student check
+ * lists and locked sections, read off a page's block JSON.
  *
  * `@classmoji/page-schema/sections`. Pure and DOM-free, no BlockNote imports:
  * the pages loader, the class site, the API route, MCP and the browser all
@@ -9,6 +9,10 @@
  * - A checkable section is a `heading` with `props.checkable === true`; its
  *   section is the heading plus the siblings that follow it up to the next
  *   heading of the same or a higher level (`checkableSectionRanges`).
+ * - A student check list item is a `checkListItem` with
+ *   `props.personal === true`: each reader ticks their own copy. It has no
+ *   section (nothing fades). Checkable headings and student check list items
+ *   are the two "check targets" (`isCheckTarget`): what a reader may tick.
  * - A `lockedSection` holds its title in `props.title` (public) and its body
  *   as children. A reader who has not unlocked it gets the block with no
  *   children (`redactLockedSections`).
@@ -54,6 +58,33 @@ export function isCheckableHeading(block: unknown): block is SectionBlock {
     isObject(block.props) &&
     (block.props as Record<string, unknown>).checkable === true
   );
+}
+
+export const CHECK_LIST_ITEM_TYPE = 'checkListItem';
+
+/** A `checkListItem` block, personal or not. */
+export function isCheckListItem(block: unknown): block is SectionBlock {
+  return isObject(block) && block.type === CHECK_LIST_ITEM_TYPE;
+}
+
+/**
+ * A check list item the author made personal (`props.personal === true`):
+ * each reader ticks their own copy.
+ */
+export function isPersonalCheckListItem(block: unknown): block is SectionBlock {
+  return (
+    isCheckListItem(block) &&
+    isObject(block.props) &&
+    (block.props as Record<string, unknown>).personal === true
+  );
+}
+
+/**
+ * Something a reader may tick for themselves: a checkable heading or a
+ * personal check list item. Every check/uncheck validation reads this.
+ */
+export function isCheckTarget(block: unknown): block is SectionBlock {
+  return isCheckableHeading(block) || isPersonalCheckListItem(block);
 }
 
 /** A heading's level, 1 (BlockNote's default) when missing or unreadable. */
@@ -150,6 +181,56 @@ export function checkableHeadingIds(blocks: unknown): string[] {
   return ids;
 }
 
+/** Ids of every personal check list item at any depth, in document order. */
+export function personalCheckListItemIds(blocks: unknown): string[] {
+  const ids: string[] = [];
+  walk(blocks, block => {
+    const id = isPersonalCheckListItem(block) ? blockId(block) : null;
+    if (id) ids.push(id);
+  });
+  return ids;
+}
+
+/** Ids of every check target (checkable heading or personal check list item), in document order. */
+export function checkTargetIds(blocks: unknown): string[] {
+  const ids: string[] = [];
+  walk(blocks, block => {
+    const id = isCheckTarget(block) ? blockId(block) : null;
+    if (id) ids.push(id);
+  });
+  return ids;
+}
+
+/**
+ * The check list `id` belongs to: the ids of the run of ADJACENT
+ * `checkListItem` siblings around it, in order (a block of another type ends
+ * the run). Items nested under a member (Tab-indented) are their own list and
+ * are not included. Empty when `id` is not a check list item.
+ */
+export function checkListRun(blocks: unknown, id: string): string[] {
+  if (typeof id !== 'string' || !id) return [];
+  let run: string[] = [];
+  const visitList = (list: unknown): boolean => {
+    if (!Array.isArray(list)) return false;
+    const index = list.findIndex(block => isObject(block) && block.id === id);
+    if (index !== -1) {
+      if (!isCheckListItem(list[index])) return true;
+      let start = index;
+      while (start > 0 && isCheckListItem(list[start - 1])) start--;
+      let end = index;
+      while (end < list.length - 1 && isCheckListItem(list[end + 1])) end++;
+      run = list
+        .slice(start, end + 1)
+        .map(block => blockId(block as SectionBlock))
+        .filter((value): value is string => value !== null);
+      return true;
+    }
+    return list.some(block => isObject(block) && visitList(block.children));
+  };
+  visitList(blocks);
+  return run;
+}
+
 /**
  * Every checkable heading's section: heading id -> the ids of the heading and
  * of the siblings that follow it in the SAME list, up to (not including) the
@@ -193,7 +274,10 @@ function inlineText(node: unknown): string {
   return node.content === undefined ? '' : inlineText(node.content);
 }
 
-/** A heading's text: the plain text of its inline content, trimmed. */
+/**
+ * A heading's (or any inline block's, e.g. a check list item's) text: the
+ * plain text of its inline content, trimmed.
+ */
 export function headingText(block: unknown): string {
   if (!isObject(block)) return '';
   return inlineText(block.content).trim();

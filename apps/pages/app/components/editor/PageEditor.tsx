@@ -48,7 +48,11 @@ import { arrangeSlashMenuItems } from './slashMenuOrder.ts';
 import { AGENT_CURSOR_LABEL_CSS, renderLiveCursor } from './collab/liveCursor.ts';
 import { reviveUndoManager, yUndoManagerOf } from './collab/yUndo.ts';
 import { ReplaceUrlItem, RemoveProfileImageItem } from './ReplaceUrlItem.tsx';
-import { CheckableBadgeYield, CheckableSectionItem } from './CheckableSectionItem.tsx';
+import {
+  CheckableBadgeYield,
+  CheckableSectionItem,
+  PersonalCheckListItem,
+} from './CheckableSectionItem.tsx';
 import { DoneChips } from './DoneChips.tsx';
 import { AddBlockButton } from './AddBlockButton.tsx';
 import { SectionStatsContext } from '~/hooks/useSectionStats.ts';
@@ -86,6 +90,7 @@ const CustomDragHandleMenu = () => (
     <ReplaceUrlItem>Replace URL</ReplaceUrlItem>
     <RemoveProfileImageItem>Remove Image</RemoveProfileImageItem>
     <CheckableSectionItem />
+    <PersonalCheckListItem />
   </DragHandleMenu>
 );
 

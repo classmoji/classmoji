@@ -1,7 +1,8 @@
 /**
  * The editor's slash menu: which page-specific items it offers and where they
  * are listed. The checkable headings sit right after the plain heading of the
- * same level; `/check` lists all three, `/h1` both kinds of Heading 1.
+ * same level; `/check` lists all three, `/h1` both kinds of Heading 1. The
+ * student check list sits right after BlockNote's check list.
  */
 import { test, expect } from '@playwright/test';
 import { filterSuggestionItems } from '@blocknote/core/extensions';
@@ -15,7 +16,9 @@ const defaults = [
   { key: 'heading_2', title: 'Heading 2', aliases: ['h2', 'heading2'], group: 'Headings' },
   { key: 'heading_3', title: 'Heading 3', aliases: ['h3', 'heading3'], group: 'Headings' },
   { key: 'quote', title: 'Quote', aliases: ['quotation'], group: 'Basic blocks' },
+  { key: 'bullet_list', title: 'Bullet List', aliases: ['ul'], group: 'Lists' },
   { key: 'check_list', title: 'Check List', aliases: ['checkbox'], group: 'Lists' },
+  { key: 'numbered_list', title: 'Numbered List', aliases: ['ol'], group: 'Lists' },
   { key: 'paragraph', title: 'Paragraph', aliases: ['p'], group: 'Basic blocks' },
   {
     key: 'toggle_heading',
@@ -94,6 +97,25 @@ test.describe('slash menu', () => {
     expect(h1).toContain('Heading 1');
     expect(h1).toContain('Checkable heading 1');
     expect(h1).not.toContain('Checkable heading 2');
+  });
+
+  test('"Student check list" sits right after "Check List"; /check lists both', () => {
+    const student = customSlashMenuItems.find(item => item.title === 'Student check list');
+    expect(student).toMatchObject({
+      group: 'Lists',
+      placeAfter: 'check_list',
+      subtext: 'Each student ticks their own',
+    });
+    const lists = items().filter(item => item.group === 'Lists');
+    expect(titles(lists)).toEqual([
+      'Bullet List',
+      'Check List',
+      'Student check list',
+      'Numbered List',
+    ]);
+    const found = titles(filterSuggestionItems(items(), 'check'));
+    expect(found).toContain('Check List');
+    expect(found).toContain('Student check list');
   });
 
   test('locked sections are not called hints', () => {
