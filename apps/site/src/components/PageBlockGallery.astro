@@ -2,9 +2,11 @@
 // Rendered examples of the blocks a page can hold, for the Pages docs. The
 // markup and colours follow the pages app (apps/pages/app/styles/
 // blocknote-overrides.css and the class-site renders in
-// apps/pages/app/site/viewerSchema.server.ts). Static samples: the only
-// interactions are the Copy buttons and the toggles. No external requests.
+// apps/pages/app/site/viewerSchema.server.ts). The Headings, Check list and
+// Locked section cards carry live demos (PageSectionsDemo); everything else is
+// static apart from the Copy buttons and the toggles. No external requests.
 import { getImage } from 'astro:assets';
+import PageSectionsDemo from './PageSectionsDemo.astro';
 import modulesImg from '../content/docs/docs/instructors/img-modules.png';
 import posterImg from '../content/docs/docs/instructors/img-create-classroom-intro.png';
 
@@ -26,8 +28,6 @@ const fileIcon =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 8L9.00319 2H19.9978C20.5513 2 21 2.45531 21 2.9918V21.0082C21 21.556 20.5551 22 20.0066 22H3.9934C3.44476 22 3 21.5501 3 20.9932V8ZM10 4V9H5V20H19V4H10Z"/></svg>';
 const pageIcon =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21h-10a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2z"/><path d="M9 9l1 0"/><path d="M9 13l6 0"/><path d="M9 17l6 0"/></svg>';
-const lockIcon =
-  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
 
 const codeText = `def average(scores):
     """Return the mean of a list of scores."""
@@ -50,16 +50,18 @@ npm run dev`;
 <div class="pbx-grid not-content">
   {group === 'text' && (
     <>
-      <figure class="pbx-item">
+      <figure class="pbx-item" id="block-headings">
         <figcaption class="pbx-meta">
           <span class="pbx-name">Headings</span>
           <span class="pbx-cmds"><code>/h1</code> to <code>/h6</code>, or <code>#</code> to <code>######</code></span>
-          <span class="pbx-what">Structure the page. Headings 1–3 can also be checkable.</span>
+          <span class="pbx-what">Structure the page. <strong>Checkable heading 1</strong>, <strong>2</strong> or <strong>3</strong> (<code>/check</code>) adds a tick box students use to mark that section done. Try it below.</span>
         </figcaption>
         <div class="pbx-sample" data-pagefind-ignore>
           <div class="pbx-h pbx-h1">Week overview</div>
           <div class="pbx-h pbx-h2">Readings</div>
           <div class="pbx-h pbx-h3">Before class</div>
+          <p class="pbx-sub">Checkable headings</p>
+          <PageSectionsDemo kind="checkable" />
         </div>
       </figure>
 
@@ -159,16 +161,18 @@ npm run dev`;
         </div>
       </figure>
 
-      <figure class="pbx-item">
+      <figure class="pbx-item" id="block-check-list">
         <figcaption class="pbx-meta">
           <span class="pbx-name">Check list</span>
           <span class="pbx-cmds"><code>/check list</code> or <code>[]</code></span>
-          <span class="pbx-what">A list with boxes. Readers see them as you left them, unless you make it a <a href="#checkable-and-locked-sections">student check list</a> (<code>/student check list</code>, or <strong>Students tick their own</strong> in its block menu), where each student ticks their own.</span>
+          <span class="pbx-what">A list with boxes you tick in the editor; readers see them as you left them. In a <strong>Student check list</strong> (<code>/student check list</code>, or <strong>Students tick their own</strong> in an item's block menu) each signed-in student ticks their own. Try it below.</span>
         </figcaption>
         <div class="pbx-sample" data-pagefind-ignore>
+          <p class="pbx-sub pbx-sub-first">Check list</p>
           <div class="pbx-check-row"><input type="checkbox" checked disabled aria-label="Install Node.js" /><span class="pbx-done">Install Node.js</span></div>
           <div class="pbx-check-row"><input type="checkbox" disabled aria-label="Clone the repository" /><span>Clone the repository</span></div>
-          <div class="pbx-check-row"><input type="checkbox" disabled aria-label="Run the tests" /><span>Run the tests</span></div>
+          <p class="pbx-sub">Student check list</p>
+          <PageSectionsDemo kind="checklist" />
         </div>
       </figure>
 
@@ -406,17 +410,14 @@ npm run dev`;
         </div>
       </figure>
 
-      <figure class="pbx-item">
+      <figure class="pbx-item" id="block-locked-section">
         <figcaption class="pbx-meta">
           <span class="pbx-name">Locked section</span>
           <span class="pbx-cmds"><code>/lock</code></span>
-          <span class="pbx-what">A title that students hold to unlock. <a href="#checkable-and-locked-sections">Try it below</a>.</span>
+          <span class="pbx-what">A title with a hidden body. Students press and hold the lock for about a second (or hold Space or Enter) to open it. Try it below.</span>
         </figcaption>
         <div class="pbx-sample" data-pagefind-ignore>
-          <a class="pbx-locked" href="#checkable-and-locked-sections">
-            <span class="pbx-locked-icon" set:html={lockIcon} />
-            <span class="pbx-locked-title">Stuck on parsing the response?</span>
-          </a>
+          <PageSectionsDemo kind="locked" />
         </div>
       </figure>
     </>
@@ -1117,25 +1118,51 @@ npm run dev`;
     color: var(--pbx-subtle);
   }
 
-  .pbx-locked,
-  .pbx-locked:hover {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 12px 14px;
-    border: 1px solid var(--pbx-rule);
-    border-radius: 8px;
-    background: var(--pbx-callout);
-    color: var(--pbx-strong);
-    font-weight: 600;
-    text-decoration: none;
+  /* A small label over each half of a card that shows two variants. */
+  .pbx-sub {
+    margin: 1rem 0 0.375rem;
+    font-family: var(--sl-font);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    color: var(--pbx-subtle);
   }
 
-  .pbx-locked-icon svg {
-    display: block;
-    width: 16px;
-    height: 16px;
-    color: var(--pbx-subtle);
+  .pbx-sub-first {
+    margin-top: 0;
+  }
+
+  /* The live demos (PageSectionsDemo) take the card's page colours and the
+     app's heading scale (checkable headings at H3 size). */
+  .pbx-sample .psd {
+    --psd-text: var(--pbx-text);
+    --psd-strong: var(--pbx-strong);
+    --psd-subtle: var(--pbx-subtle);
+    --psd-bg: var(--pbx-surface);
+  }
+
+  .pbx-sample .psd-heading {
+    font-size: 20px;
+    font-weight: 700;
+    line-height: 1.3;
+  }
+
+  .pbx-sample .psd-text {
+    line-height: 1.5;
+  }
+
+  .pbx-sample .psd code {
+    padding: 0.2em 0.4em;
+    border-radius: 3px;
+    font-size: 0.9em;
+    background: var(--pbx-code-bg);
+    color: var(--pbx-code-fg);
+  }
+
+  .pbx-sample .psd-code code {
+    padding: 0;
+    background: none;
+    color: inherit;
   }
 
   @media (max-width: 560px) {
