@@ -2755,14 +2755,17 @@ model FeedbackVote {
 /// A comment, or a reply when `parent_id` is set. Replies are one level deep:
 /// a reply's parent is always a top-level comment on the same post.
 model FeedbackComment {
-  id         String   @id @default(uuid())
-  post_id    String
-  author_id  String?
-  parent_id  String?
-  body       String
-  vote_count Int      @default(0)
-  created_at DateTime @default(now())
-  updated_at DateTime @default(now()) @updatedAt
+  id           String   @id @default(uuid())
+  post_id      String
+  author_id    String?
+  parent_id    String?
+  body         String
+  /// Shown as "Anonymous", like an anonymous post: the author is recorded (so
+  /// they can delete it) but never shown.
+  is_anonymous Boolean  @default(false)
+  vote_count   Int      @default(0)
+  created_at   DateTime @default(now())
+  updated_at   DateTime @default(now()) @updatedAt
 
   post    FeedbackPost          @relation(fields: [post_id], references: [id], onDelete: Cascade)
   author  User?                 @relation(fields: [author_id], references: [id], onDelete: SetNull)

@@ -26,6 +26,7 @@ export function CommentComposer({
   onPosted,
 }: CommentComposerProps) {
   const [body, setBody] = useState('');
+  const [anonymous, setAnonymous] = useState(false);
   const location = useLocation();
   const { fetcher, submit, pending } = useFeedbackAction(signedIn);
   const sent = useRef(false);
@@ -37,6 +38,7 @@ export function CommentComposer({
     sent.current = false;
     if (fetcher.data?.ok) {
       setBody('');
+      setAnonymous(false);
       onPosted?.();
     }
   }, [fetcher.state, fetcher.data, onPosted]);
@@ -45,7 +47,13 @@ export function CommentComposer({
     e?.preventDefault();
     if (empty || pending) return;
     sent.current = true;
-    submit({ intent: 'comment', postId, body: body.trim(), ...(parentId ? { parentId } : {}) });
+    submit({
+      intent: 'comment',
+      postId,
+      body: body.trim(),
+      anonymous: String(anonymous),
+      ...(parentId ? { parentId } : {}),
+    });
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -82,6 +90,15 @@ export function CommentComposer({
           className="block w-full resize-none appearance-none border-0! bg-transparent px-4 pt-3 text-[13px] text-ink-0 shadow-none! outline-none! ring-0! placeholder:text-ink-4 focus:border-0! focus:shadow-none! focus:outline-none! focus:ring-0!"
         />
         <div className="flex items-center justify-end gap-2 px-3 pb-3">
+          <label className="mr-auto inline-flex cursor-pointer items-center gap-2 text-[12px] text-ink-3">
+            <input
+              type="checkbox"
+              checked={anonymous}
+              onChange={e => setAnonymous(e.target.checked)}
+              className="h-3.5 w-3.5 cursor-pointer accent-[var(--color-accent)]"
+            />
+            {parentId ? 'Reply anonymously' : 'Comment anonymously'}
+          </label>
           {onCancel && (
             <button
               type="button"

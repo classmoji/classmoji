@@ -66,6 +66,21 @@ const publicPost = <P extends { author_id: string | null; is_anonymous: boolean;
   };
 };
 
+/** A comment as the public sees it, under the same rule as `publicPost`. */
+const publicComment = <
+  C extends { author_id: string | null; is_anonymous: boolean; author: unknown },
+>(
+  comment: C,
+  viewerId: string | null | undefined
+) => {
+  const { author_id, ...rest } = comment;
+  return {
+    ...rest,
+    author: comment.is_anonymous ? null : comment.author,
+    viewerIsAuthor: Boolean(viewerId && author_id === viewerId),
+  };
+};
+
 const isUniqueViolation = (error: unknown) =>
   error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
 
@@ -200,8 +215,12 @@ export const getPost = async (postId: string, viewerId?: string | null) => {
     : [null, null, []];
 
   const votedComments = new Set(commentVotes.map(v => v.comment_id));
-  const withVote = <T extends { id: string }>(c: T) => ({
-    ...c,
+  const withVote = <
+    T extends { id: string; author_id: string | null; is_anonymous: boolean; author: unknown },
+  >(
+    c: T
+  ) => ({
+    ...publicComment(c, viewerId),
     viewerVoted: votedComments.has(c.id),
   });
 
@@ -306,17 +325,22 @@ export const togglePostVote = async (postId: string, userId: string) => {
   });
 };
 
-/** A comment, or a reply to a top-level comment on the same post. */
+/**
+ * A comment, or a reply to a top-level comment on the same post. An anonymous
+ * one still records its author, as an anonymous post does, but never shows it.
+ */
 export const addComment = async ({
   postId,
   authorId,
   body,
   parentId,
+  isAnonymous = false,
 }: {
   postId: string;
   authorId: string;
   body: string;
   parentId?: string | null;
+  isAnonymous?: boolean;
 }) => {
   const text = cleanBody(body, LIMITS.comment, true, 'comment');
   const prisma = getPrisma();
@@ -333,7 +357,13 @@ export const addComment = async ({
       }
     }
     const comment = await tx.feedbackComment.create({
-      data: { post_id: postId, author_id: authorId, parent_id: parentId ?? null, body: text },
+      data: {
+        post_id: postId,
+        author_id: authorId,
+        parent_id: parentId ?? null,
+        body: text,
+        is_anonymous: isAnonymous,
+      },
       select: { id: true },
     });
     await tx.feedbackPost.update({

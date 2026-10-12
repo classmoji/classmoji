@@ -64,6 +64,7 @@ export const action = async ({ request }: Route.ActionArgs) => {
           authorId: userId,
           body: field('body'),
           parentId: field('parentId') || null,
+          isAnonymous: field('anonymous') === 'true',
         });
         return { ok: true };
       }
