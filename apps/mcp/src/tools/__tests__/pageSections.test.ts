@@ -73,6 +73,7 @@ const DRAFT = '22222222-2222-4222-8222-222222222222'; // draft, classroom A
 const FOREIGN = '33333333-3333-4333-8333-333333333333'; // published, classroom B
 const PLAIN = '44444444-4444-4444-8444-444444444444'; // no locked sections, classroom A
 const CHECKLIST = '55555555-5555-4555-8555-555555555555'; // a checkable heading only, classroom A
+const STUDENT_LIST = '66666666-6666-4666-8666-666666666666'; // student check lists, classroom A
 
 const STUDENT_A = 'user-student-a';
 const STUDENT_B = 'user-student-b';
@@ -149,6 +150,40 @@ const CHECKLIST_DOC = JSON.stringify({
 });
 const SECRETS = ['SECRET-ONE', 'SECRET-TWO', 'SECRET-THREE'];
 
+const listItem = (id: string, value: string, props: Record<string, unknown> = {}) => ({
+  id,
+  type: 'checkListItem',
+  props: { checked: false, ...props },
+  content: text(value),
+  children: [],
+});
+
+/**
+ * Student check lists: two personal items (the author ticked the first), a
+ * plain item the author ticked, a personal item inside a locked section, and
+ * a checkable heading.
+ */
+const STUDENT_LIST_DOC = JSON.stringify({
+  blocks: [
+    listItem('item1', 'Install Node', { personal: true, checked: true }),
+    listItem('item2', 'Clone the repo', { personal: true }),
+    listItem('plain1', 'Plain item', { checked: true }),
+    {
+      id: 'lockP',
+      type: 'lockedSection',
+      props: { title: 'Extras' },
+      children: [listItem('item3', 'Bonus step', { personal: true })],
+    },
+    {
+      id: 'hP',
+      type: 'heading',
+      props: { level: 2, checkable: true },
+      content: text('Wrap up'),
+      children: [],
+    },
+  ],
+});
+
 const classroomOf = (id: string) => ({
   id,
   content_key_version: 1,
@@ -194,6 +229,15 @@ const PAGES = [
     is_public: false,
   },
   {
+    id: STUDENT_LIST,
+    classroom_id: CLASS_A,
+    title: 'Setup',
+    slug: 'setup',
+    content_path: 'pages/setup',
+    is_draft: false,
+    is_public: false,
+  },
+  {
     id: CHECKLIST,
     classroom_id: CLASS_A,
     title: 'Checklist',
@@ -210,6 +254,7 @@ const CONTENT_BY_PATH: Record<string, string> = {
   'pages/other/content.json': DOC,
   'pages/plain/content.json': PLAIN_DOC,
   'pages/checklist/content.json': CHECKLIST_DOC,
+  'pages/setup/content.json': STUDENT_LIST_DOC,
 };
 
 type Row = Record<string, unknown>;
@@ -1358,5 +1403,229 @@ describe('parity with the page: the shared reader rule', () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+// ─── Student check lists (personal check list items) ────────────────────────
+
+describe('student check lists', () => {
+  const setupIndex = () => [
+    {
+      ...indexRow(STUDENT_LIST, 'Setup', 'pages/setup/content.json'),
+      text: 'Setup\nInstall Node\nClone the repo\nPlain item\nExtras\nWrap up',
+    },
+  ];
+  const check = (ctx: ToolContext, block_id: string, checked: boolean) =>
+    call(
+      pageSectionCheckTool,
+      { classroom: 'org/a', page_id: STUDENT_LIST, block_id, checked },
+      ctx
+    );
+  const refuse = (ctx: ToolContext, block_id: string) =>
+    refusalOf(() =>
+      pageSectionCheckTool.handler(
+        { classroom: 'org/a', page_id: STUDENT_LIST, block_id, checked: true },
+        ctx
+      )
+    );
+
+  it("content_get shows each student their own ticks, never the author's or another student's", async () => {
+    checks = [checkRow(STUDENT_A, 'item2', STUDENT_LIST)];
+    rawRows = setupIndex();
+
+    const forA = await getPage(ctxFor(STUDENT_A, 'STUDENT'), STUDENT_LIST);
+    const forB = await getPage(ctxFor(STUDENT_B, 'STUDENT'), STUDENT_LIST);
+
+    // The author ticked item1; that is not A's or B's tick.
+    expect(forA.text).toContain('[ ] Install Node (id item1)');
+    expect(forA.text).toContain('[x] Clone the repo (id item2)');
+    expect(forB.text).toContain('[ ] Install Node (id item1)');
+    expect(forB.text).toContain('[ ] Clone the repo (id item2)');
+    expect(forB.text).not.toContain('[x]');
+    expect(forA.check_list_items).toEqual([
+      { id: 'item1', title: 'Install Node', checked: false },
+      { id: 'item2', title: 'Clone the repo', checked: true },
+    ]);
+    expect(forB.check_list_items).toEqual([
+      { id: 'item1', title: 'Install Node', checked: false },
+      { id: 'item2', title: 'Clone the repo', checked: false },
+    ]);
+    // A plain item is plain text: no marker, no id.
+    expect(forA.text).toMatch(/(^|\n)Plain item(\n|$)/);
+    expect(forA.text).not.toContain('plain1');
+    // An item inside a closed locked section is not there for a student.
+    expect(JSON.stringify(forA)).not.toContain('item3');
+    expect(JSON.stringify(forA)).not.toContain('Bonus step');
+    // The heading keeps its own marker.
+    expect(forA.text).toContain('Wrap up [not done] (id hP)');
+    expect(forA.checkable_headings).toEqual([{ id: 'hP', title: 'Wrap up', checked: false }]);
+  });
+
+  it('content_get gives a pending invitee the items as plain text, no state, no ids', async () => {
+    checks = [checkRow(PENDING, 'item1', STUDENT_LIST)];
+    rawRows = setupIndex();
+    const payload = await getPage(ctxFor(PENDING, 'STUDENT'), STUDENT_LIST);
+    expect(payload.text).toContain('Install Node');
+    expect(payload.text).not.toMatch(/\[x\]|\[ \]/);
+    expect(payload.text).not.toContain('item1');
+    expect(payload).not.toHaveProperty('check_list_items');
+  });
+
+  it('content_get shows staff their own state on every item, the locked one included', async () => {
+    checks = [checkRow(STUDENT_A, 'item1', STUDENT_LIST), checkRow(TEACHER, 'item3', STUDENT_LIST)];
+    rawRows = setupIndex();
+    const payload = await getPage(ctxFor(TEACHER, 'TEACHER'), STUDENT_LIST);
+    expect(payload.text).toContain('[ ] Install Node (id item1)');
+    expect(payload.text).toContain('[x] Bonus step (id item3)');
+  });
+
+  it("page_section_check ticks the caller's own item only, audited like a heading", async () => {
+    checks = [checkRow(STUDENT_B, 'item1', STUDENT_LIST)];
+    const ctx = ctxFor(STUDENT_A, 'STUDENT');
+
+    const on = await check(ctx, 'item1', true);
+    expect(on).toMatchObject({
+      block_id: 'item1',
+      title: 'Install Node',
+      checked: true,
+      changed: true,
+    });
+    expect(mocks.auditCreate).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        user_id: STUDENT_A,
+        classroom_id: CLASS_A,
+        resource_type: 'PAGES',
+        resource_id: STUDENT_LIST,
+        action: 'CREATE',
+        data: expect.objectContaining({
+          tool: 'page_section_check',
+          via: 'mcp',
+          block_id: 'item1',
+          checked: true,
+        }),
+      }),
+      { dedupe: false }
+    );
+
+    // A's read shows A's tick; B's own tick is still B's alone.
+    rawRows = setupIndex();
+    const forA = await getPage(ctx, STUDENT_LIST);
+    expect(forA.text).toContain('[x] Install Node (id item1)');
+    const off = await check(ctx, 'item1', false);
+    expect(off).toMatchObject({ checked: false, changed: true });
+    expect(checks).toEqual([
+      expect.objectContaining({ user_id: STUDENT_B, block_id: 'item1', page_id: STUDENT_LIST }),
+    ]);
+  });
+
+  it('refuses a plain item and an item inside a closed locked section like an id that does not exist', async () => {
+    const ctx = ctxFor(STUDENT_A, 'STUDENT');
+    const bogus = await refuse(ctx, 'nope');
+    expect(await refuse(ctx, 'plain1')).toEqual(bogus);
+    expect(await refuse(ctx, 'item3')).toEqual(bogus);
+    expect(bogus.error).toBe('invalid_params');
+    expect(checks).toHaveLength(0);
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+
+    // Another student's unlock does not open it for A.
+    unlocks = [unlockRow(STUDENT_B, 'lockP', CLASS_A, STUDENT_LIST)];
+    expect(await refuse(ctx, 'item3')).toEqual(bogus);
+
+    // A's own unlock does.
+    await call(
+      pageSectionUnlockTool,
+      { classroom: 'org/a', page_id: STUDENT_LIST, block_id: 'lockP' },
+      ctx
+    );
+    expect((await check(ctx, 'item3', true)).changed).toBe(true);
+  });
+
+  it('page_section_unlock lists the opened body’s items with the caller’s state', async () => {
+    checks = [checkRow(STUDENT_A, 'item3', STUDENT_LIST)];
+    const payload = await call(
+      pageSectionUnlockTool,
+      { classroom: 'org/a', page_id: STUDENT_LIST, block_id: 'lockP' },
+      ctxFor(STUDENT_A, 'STUDENT')
+    );
+    expect(payload.text).toContain('[x] Bonus step (id item3)');
+    expect(payload.check_list_items).toEqual([{ id: 'item3', title: 'Bonus step', checked: true }]);
+  });
+
+  it('page_sections_status lists each item with who ticked it and when, current students only', async () => {
+    checks = [
+      {
+        ...checkRow(STUDENT_A, 'item1', STUDENT_LIST),
+        checked_at: new Date('2026-10-11T10:00:00Z'),
+      },
+      {
+        ...checkRow(STUDENT_B, 'item1', STUDENT_LIST),
+        checked_at: new Date('2026-10-11T12:00:00Z'),
+      },
+      checkRow(REMOVED, 'item2', STUDENT_LIST),
+      checkRow(STAFF_STUDENT, 'item2', STUDENT_LIST),
+      // Classroom B's page with the same block id stays out.
+      checkRow(STUDENT_OTHER_CLASS, 'item1', FOREIGN),
+    ];
+    const payload = await call(
+      pageSectionsStatusTool,
+      { classroom: 'org/a', page_id: STUDENT_LIST },
+      ctxFor(TEACHER, 'TEACHER')
+    );
+    expect(payload.check_list_items).toEqual([
+      {
+        id: 'item1',
+        title: 'Install Node',
+        checked: 2,
+        students: [
+          {
+            name: `Name ${STUDENT_B}`,
+            login: `login-${STUDENT_B}`,
+            at: '2026-10-11T12:00:00.000Z',
+          },
+          {
+            name: `Name ${STUDENT_A}`,
+            login: `login-${STUDENT_A}`,
+            at: '2026-10-11T10:00:00.000Z',
+          },
+        ],
+      },
+      { id: 'item2', title: 'Clone the repo', checked: 0, students: [] },
+      { id: 'item3', title: 'Bonus step', checked: 0, students: [] },
+    ]);
+    // Headings stay headings; items are not "not in the current content".
+    expect(payload.checkable_headings).toEqual([
+      { id: 'hP', title: 'Wrap up', checked: 0, students: [] },
+    ]);
+    expect(payload).not.toHaveProperty('not_in_current_content');
+    const serialized = JSON.stringify(payload);
+    for (const outsider of [STUDENT_OTHER_CLASS, REMOVED, STAFF_STUDENT]) {
+      expect(serialized).not.toContain(outsider);
+    }
+  });
+
+  it('page_sections_status leaves the field out for a page without student check lists', async () => {
+    const payload = await call(
+      pageSectionsStatusTool,
+      { classroom: 'org/a', page_id: PAGE },
+      ctxFor(TEACHER, 'TEACHER')
+    );
+    expect(payload).not.toHaveProperty('check_list_items');
+  });
+
+  it('viewerPageBlocks leaves items untouched for a viewer who cannot check', () => {
+    const blocks = JSON.parse(STUDENT_LIST_DOC).blocks;
+    const view = viewerPageBlocks(blocks, {
+      revealAll: false,
+      unlocked: new Set(),
+      canUnlock: false,
+      canCheck: false,
+      checked: new Set(['item1']),
+      hasWriteTools: true,
+    });
+    expect(view.items).toEqual([]);
+    expect(view.blocks[0]).toBe(blocks[0]);
+    expect(extractText({ kind: 'blocknote', json: view.blocks }, {}).text).toContain(
+      'Install Node'
+    );
   });
 });

@@ -2,16 +2,24 @@ import {
   BlockNoteSchema,
   addDefaultPropsExternalHTML,
   createBlockSpec,
+  createCheckListItemBlockSpec,
   createCodeBlock,
+  createExtension,
   createCodeBlockSpec,
   createHeadingBlockSpec,
   createImageBlockSpec,
   createPreCode,
   createToggleWrapper,
   defaultBlockSpecs,
+  getBlockInfoFromSelection,
+  getNearestBlockPos,
+  getBlockInfo,
+  updateBlockTr,
+  type BlockNoteEditor,
 } from '@blocknote/core';
 import { codeBlockOptions } from '@blocknote/code-block';
 import { multiColumnSchema } from '@blocknote/xl-multi-column';
+import type { EditorState } from 'prosemirror-state';
 
 import { customBlockConfigs, type CustomBlockType } from './configs.ts';
 import { createCopyButton, createCopyToggle, isCopyable } from './copyControl.ts';
@@ -25,9 +33,10 @@ export const REPLACED_DEFAULT_BLOCKS = ['video', 'codeBlock', 'image'] as const;
 
 /**
  * BlockNote's default block specs minus the ones the app replaces, with the
- * heading swapped for the page heading (`checkable` prop). Every page schema
+ * heading swapped for the page heading (`checkable` prop) and the check list
+ * item for the page check list item (`personal` prop). Every page schema
  * (editor, in-app viewer, class site, server) starts from this, so they all
- * get the same heading.
+ * get the same two blocks.
  */
 export function pageDefaultBlockSpecs() {
   const {
@@ -35,9 +44,14 @@ export function pageDefaultBlockSpecs() {
     codeBlock: _codeBlock,
     image: _image,
     heading: _heading,
+    checkListItem: _checkListItem,
     ...rest
   } = defaultBlockSpecs;
-  return { ...rest, heading: createPageHeadingBlockSpec() };
+  return {
+    ...rest,
+    heading: createPageHeadingBlockSpec(),
+    checkListItem: createPageCheckListItemBlockSpec(),
+  };
 }
 
 /**
@@ -59,10 +73,11 @@ export function pageDefaultBlockSpecs() {
  * `createPageCodeBlockSpec`); they are copies of BlockNote 0.55's
  * (`blocks/Heading/block.ts`, toggle headings on).
  *
- * Splitting: BlockNote's Enter handler copies every attribute when the cursor
- * is at the start of the heading and none otherwise (the new block is a
- * paragraph); there is no per-prop control, so `checkable` follows `level`
- * and `isToggleable`.
+ * Enter is BlockNote's (the text after the cursor moves to a new paragraph
+ * below), except at the very start of a non-empty checkable heading
+ * (`checkableHeadingEnter`): BlockNote would leave the heading's id on an
+ * empty copy above and move the text to a new block, and readers' ticks are
+ * keyed by that id.
  */
 export function createPageHeadingBlockSpec() {
   const base = createHeadingBlockSpec();
@@ -102,7 +117,241 @@ export function createPageHeadingBlockSpec() {
         return { dom, contentDOM: dom };
       },
     },
-    base.extensions
+    [...(base.extensions ?? []), checkableHeadingEnterExtension]
+  )();
+}
+
+/** The check list item's extension key in BlockNote 0.55 (replaced, never doubled). */
+const CHECK_LIST_SHORTCUTS_KEY = 'check-list-item-shortcuts';
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyEditor = BlockNoteEditor<any, any, any>;
+
+/** BlockNote's check list item extension, as its object-form factory hands it out. */
+interface CheckListShortcuts {
+  key: string;
+  keyboardShortcuts?: Record<string, (ctx: { editor: never }) => boolean>;
+  inputRules?: ReadonlyArray<unknown>;
+}
+
+function baseCheckListShortcuts(
+  extensions: ReadonlyArray<unknown> | undefined
+): CheckListShortcuts | null {
+  for (const factory of extensions ?? []) {
+    if (typeof factory !== 'function') continue;
+    // Object-form extensions ignore the context they are built with.
+    const extension = (factory as (ctx: { editor: unknown }) => CheckListShortcuts)({
+      editor: undefined,
+    });
+    if (extension?.key === CHECK_LIST_SHORTCUTS_KEY) return extension;
+  }
+  return null;
+}
+
+type PMNode = EditorState['doc'];
+
+/**
+ * Enter with the cursor at the very start of a non-empty block whose id
+ * keys readers' own state (a checkable heading's ticks, a student check list
+ * item's): adds `line(content)`, an empty block, above it and leaves the
+ * block where it is, so its id stays with its text. The cursor stays at the
+ * start of the text, which now sits one line lower: what the user sees is
+ * what a split would show. A split (BlockNote's Enter) keeps the id on the
+ * empty first half and gives the text a new id.
+ *
+ * Returns false, changing nothing, unless the selection is empty, at offset
+ * 0 of the block's inline content, the block has content, and `line` returns
+ * a block for it. One local transaction: one undo step; Yjs sends it as an
+ * insertion before the block.
+ */
+function enterAtStartAddsLineAbove(
+  editor: AnyEditor,
+  line: (content: PMNode) => { type: string; attrs: Record<string, unknown> } | null
+): boolean {
+  return editor.transact(tr => {
+    const { selection } = tr;
+    if (!selection.empty || selection.$from.parentOffset !== 0) return false;
+    const info = getBlockInfoFromSelection(tr);
+    if (!info.isBlockContainer) return false;
+    const { bnBlock, blockContent } = info;
+    if (selection.$from.parent !== blockContent.node || blockContent.node.childCount === 0) {
+      return false;
+    }
+    const wanted = line(blockContent.node);
+    if (!wanted) return false;
+    const { schema } = tr.doc.type;
+    // A container without an id: BlockNote's UniqueID plugin gives it one.
+    const container = bnBlock.node.type.create(
+      null,
+      schema.nodes[wanted.type].create(wanted.attrs)
+    );
+    // The selection maps past the insertion: it stays at the text's start.
+    tr.insert(bnBlock.beforePos, container);
+    tr.scrollIntoView();
+    return true;
+  });
+}
+
+/**
+ * Enter at the start of a non-empty checkable heading: an empty heading
+ * above (`enterAtStartAddsLineAbove`), the heading keeps its id and text.
+ * The new line is what BlockNote's split leaves above today, the same type
+ * and props (level, toggle, colours, alignment), minus `checkable`: it is a
+ * blank line the author is about to write into, and a blank heading with a
+ * reader tick box would be a section with nothing to tick.
+ */
+function checkableHeadingEnter(editor: AnyEditor): boolean {
+  return enterAtStartAddsLineAbove(editor, content => {
+    if (content.type.name !== 'heading' || content.attrs.checkable !== true) return null;
+    const { checkable: _checkable, ...attrs } = content.attrs;
+    return { type: 'heading', attrs };
+  });
+}
+
+const checkableHeadingEnterExtension = createExtension({
+  key: 'checkable-heading-enter',
+  keyboardShortcuts: {
+    Enter: ({ editor }: { editor: AnyEditor }) => checkableHeadingEnter(editor),
+  },
+});
+
+/**
+ * Enter at the start of a non-empty student check list item: an empty,
+ * unticked student item above (`enterAtStartAddsLineAbove`), the item keeps
+ * its id, text and `checked`.
+ */
+function personalCheckListItemEnterAtStart(editor: AnyEditor): boolean {
+  return enterAtStartAddsLineAbove(editor, content =>
+    content.type.name === 'checkListItem' && content.attrs.personal === true
+      ? { type: 'checkListItem', attrs: { personal: true } }
+      : null
+  );
+}
+
+/**
+ * Enter in a check list item, as BlockNote 0.55's (`handleEnter`): an empty
+ * item becomes a paragraph; otherwise the item is split and the text after
+ * the cursor moves to a new item below. Two differences: the new item keeps
+ * `personal` (a student check list stays one when the author adds a line),
+ * and at the very start of a student item the new line goes above instead
+ * (`personalCheckListItemEnterAtStart`, so readers' ticks stay with the
+ * text). Every other prop starts fresh, as in BlockNote (`checked` is not
+ * carried).
+ */
+function checkListItemEnter(editor: AnyEditor): boolean {
+  const { blockInfo, selectionEmpty } = editor.transact(tr => ({
+    blockInfo: getBlockInfoFromSelection(tr),
+    selectionEmpty: tr.selection.anchor === tr.selection.head,
+  }));
+  if (!blockInfo.isBlockContainer) return false;
+  const { bnBlock: blockContainer, blockContent } = blockInfo;
+  if (blockContent.node.type.name !== 'checkListItem' || !selectionEmpty) return false;
+
+  if (blockContent.node.childCount === 0) {
+    editor.transact(tr => {
+      updateBlockTr(tr, blockContainer.beforePos, { type: 'paragraph', props: {} });
+    });
+    return true;
+  }
+
+  const personal = blockContent.node.attrs.personal === true;
+  return editor.transact(tr => {
+    tr.deleteSelection();
+    tr.scrollIntoView();
+    // BlockNote's `splitBlockTr(tr, pos, keepType)`, with `personal` kept.
+    const at = tr.selection.from;
+    const info = getBlockInfo(getNearestBlockPos(tr.doc, at));
+    if (!info.isBlockContainer) return false;
+    tr.split(at, 2, [
+      { type: info.bnBlock.node.type, attrs: {} },
+      { type: info.blockContent.node.type, attrs: personal ? { personal: true } : {} },
+    ]);
+    return true;
+  });
+}
+
+/**
+ * The check list item every page schema uses: BlockNote's, plus a `personal`
+ * prop (a "student check list": each reader ticks their own copy; the stored
+ * `checked` is the author's and is what readers who cannot tick see).
+ *
+ * `personal` has NO default (`default: undefined`, like the heading's
+ * `checkable`): an item that never had it stays without it through every
+ * conversion, so stored documents are not rewritten. Turning it off sets it
+ * back to `undefined`, never `false`. When set, the block carries
+ * `data-personal="true"`.
+ *
+ * Config (apart from the prop), parse rules, `parseContent`, meta,
+ * `runsBefore`, the `[ ]`/`[x]` input rules and Mod-Shift-9 are BlockNote's,
+ * unchanged. `render` and `toExternalHTML` are copies of BlockNote 0.55's
+ * (`blocks/ListItem/CheckListItem/block.ts`), rebuilt only because a built
+ * spec's are already wrapped in the block structure. Enter is BlockNote's,
+ * except that the new item keeps `personal` and, at the start of a student
+ * item, goes above it (`checkListItemEnter`).
+ */
+export function createPageCheckListItemBlockSpec() {
+  const base = createCheckListItemBlockSpec();
+  const {
+    render: _render,
+    toExternalHTML: _toExternalHTML,
+    ...implementation
+  } = base.implementation;
+  const config = {
+    ...base.config,
+    propSchema: {
+      ...base.config.propSchema,
+      /** Each reader ticks their own copy (set from the block menu). */
+      personal: { default: undefined, type: 'boolean' as const },
+    },
+  };
+  const shortcuts = baseCheckListShortcuts(base.extensions as ReadonlyArray<unknown> | undefined);
+  const extension = createExtension({
+    key: CHECK_LIST_SHORTCUTS_KEY,
+    keyboardShortcuts: {
+      ...(shortcuts?.keyboardShortcuts ?? {}),
+      Enter: ({ editor }: { editor: AnyEditor }) =>
+        personalCheckListItemEnterAtStart(editor) || checkListItemEnter(editor),
+    },
+    ...(shortcuts?.inputRules ? { inputRules: shortcuts.inputRules as never } : {}),
+  });
+  return createBlockSpec<typeof config.type, typeof config.propSchema, typeof config.content>(
+    config,
+    {
+      ...implementation,
+      render: (block, editor) => {
+        const dom = document.createDocumentFragment();
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = block.props.checked;
+        if (block.props.checked) checkbox.setAttribute('checked', '');
+        checkbox.disabled = !editor.isEditable;
+        checkbox.addEventListener('change', () => {
+          if (!editor.isEditable) return;
+          editor.updateBlock(block, { props: { checked: !block.props.checked } } as never);
+        });
+        // A <p>, not an <li>: an <li> would need a <ul> the schema cannot have.
+        const paragraph = document.createElement('p');
+        const div = document.createElement('div');
+        div.contentEditable = 'false';
+        div.appendChild(checkbox);
+        dom.appendChild(div);
+        dom.appendChild(paragraph);
+        return { dom, contentDOM: paragraph } as never;
+      },
+      toExternalHTML: block => {
+        const dom = document.createElement('li');
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = block.props.checked;
+        if (block.props.checked) checkbox.setAttribute('checked', '');
+        const paragraph = document.createElement('p');
+        addDefaultPropsExternalHTML(block.props, dom);
+        dom.appendChild(checkbox);
+        dom.appendChild(paragraph);
+        return { dom, contentDOM: paragraph };
+      },
+    },
+    [extension]
   )();
 }
 

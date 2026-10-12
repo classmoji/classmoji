@@ -1,12 +1,15 @@
 /**
- * Page sections over MCP: checkable headings and locked sections.
+ * Page sections over MCP: checkable headings, student check lists and locked
+ * sections.
  *
  *   - `page_sections_status` (OWNER/TEACHER, read): who checked each checkable
- *     heading and who unlocked each locked section on one page.
+ *     heading and each student check list item, and who unlocked each locked
+ *     section on one page.
  *   - `page_section_unlock` (STUDENT, write): open one locked section for the
  *     calling student, the same act as holding the lock on the page.
  *   - `page_section_check` (any accepted member, write): check or uncheck one
- *     checkable heading for the caller, the same act as its checkbox.
+ *     checkable heading or student check list item (`personal: true`) for the
+ *     caller, the same act as its checkbox.
  *   Every write audits (PAGES; unlock CREATE on the first unlock, check
  *   CREATE/DELETE on a real change, never coalesced); the status read audits
  *   VIEW per call. Rows carry the caller's ACCEPTED role, and a failed audit
@@ -61,13 +64,17 @@ import { z } from 'zod';
 import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
 import {
+  checkTargetIds,
   checkableHeadingIds,
   findBlock,
   headingText,
+  isCheckTarget,
   isCheckableHeading,
   isLockedSection,
+  isPersonalCheckListItem,
   lockedSectionIds,
   lockedSectionTitle,
+  personalCheckListItemIds,
   redactLockedSections,
 } from '@classmoji/page-schema/sections';
 import type { Role } from '@prisma/client';
@@ -165,9 +172,9 @@ export interface SectionViewer {
   unlocked: ReadonlySet<string>;
   /** An accepted student (not staff), who may unlock. */
   canUnlock: boolean;
-  /** Any accepted member, who may check headings (their own progress). */
+  /** Any accepted member, who may check headings and student check list items (their own progress). */
   canCheck: boolean;
-  /** This user's own checked heading ids on this page. */
+  /** This user's own checked heading and check list item ids on this page. */
   checked: ReadonlySet<string>;
   /** The caller's token has `write`: page_section_unlock / _check are listed. */
   hasWriteTools: boolean;
@@ -288,6 +295,17 @@ export function checkableHeadingSuffix(id: string, checked: boolean): string {
   return checked ? ` [done] (id ${id})` : ` [not done] (id ${id})`;
 }
 
+/**
+ * How a student check list item's line starts and ends, for a viewer who can
+ * check: their own state, then the item's id.
+ */
+export function personalItemMarkers(
+  id: string,
+  checked: boolean
+): { prefix: string; suffix: string } {
+  return { prefix: checked ? '[x] ' : '[ ] ', suffix: ` (id ${id})` };
+}
+
 const markerBlock = (text: string) => ({
   type: 'paragraph',
   content: [{ type: 'text', text }],
@@ -307,24 +325,36 @@ export interface ViewerHeading {
   checked: boolean;
 }
 
+/** A student check list item as one viewer sees it (title = the item's text). */
+export type ViewerCheckListItem = ViewerHeading;
+
 /**
  * The page's blocks as this viewer may read them, with every locked section
  * turned into marker paragraphs the extractor prints: a closed one becomes its
  * marker line; an open one becomes an opening line, its (still redacted) body,
  * and a closing line. A viewer who can check sees their own state at the end
- * of every checkable heading they can reach. Also lists the locked sections
- * and checkable headings the viewer can see, in document order (anything
- * inside a closed section is not listed: it is not there for them).
+ * of every checkable heading they can reach, and on every student check list
+ * item (`[x]`/`[ ]` before the text, the id after it; the author's stored
+ * `checked` is never shown in its place). Also lists the locked sections,
+ * checkable headings and student check list items the viewer can see, in
+ * document order (anything inside a closed section is not listed: it is not
+ * there for them). A viewer who cannot check gets the items as plain text.
  */
 export function viewerPageBlocks(
   blocks: unknown[],
   viewer: SectionViewer
-): { blocks: unknown[]; sections: ViewerSection[]; headings: ViewerHeading[] } {
+): {
+  blocks: unknown[];
+  sections: ViewerSection[];
+  headings: ViewerHeading[];
+  items: ViewerCheckListItem[];
+} {
   const reveal = (id: string) => viewer.revealAll || viewer.unlocked.has(id);
   const visible = visibleBlocks(blocks, viewer);
   const showIds = viewer.revealAll || viewer.canUnlock;
   const sections: ViewerSection[] = [];
   const headings: ViewerHeading[] = [];
+  const items: ViewerCheckListItem[] = [];
 
   const mapList = (list: unknown[]): unknown[] => {
     const out: unknown[] = [];
@@ -364,6 +394,20 @@ export function viewerPageBlocks(
           ...block,
           content: [...content, { type: 'text', text: checkableHeadingSuffix(block.id, checked) }],
         };
+      } else if (
+        viewer.canCheck &&
+        isPersonalCheckListItem(block) &&
+        typeof block.id === 'string' &&
+        block.id
+      ) {
+        const checked = viewer.checked.has(block.id);
+        items.push({ id: block.id, title: headingText(block), checked });
+        const content = Array.isArray(block.content) ? block.content : [];
+        const { prefix, suffix } = personalItemMarkers(block.id, checked);
+        next = {
+          ...block,
+          content: [{ type: 'text', text: prefix }, ...content, { type: 'text', text: suffix }],
+        };
       }
       const children = (next as { children?: unknown } | null)?.children;
       if (Array.isArray(children) && children.length > 0) {
@@ -375,7 +419,7 @@ export function viewerPageBlocks(
     return out;
   };
 
-  return { blocks: mapList(Array.isArray(visible) ? visible : []), sections, headings };
+  return { blocks: mapList(Array.isArray(visible) ? visible : []), sections, headings, items };
 }
 
 /** Blocks → plain text through the indexer's own extractor. */
@@ -394,12 +438,15 @@ export interface ViewerPageText {
   locked_sections?: ViewerSection[];
   /** Present when the viewer can check and the page has checkable headings. */
   checkable_headings?: ViewerHeading[];
+  /** Present when the viewer can check and the page has student check list items. */
+  check_list_items?: ViewerCheckListItem[];
 }
 
 /**
  * This viewer's text of a page's `content.json` body, or null when nothing in
- * it depends on who reads it (no locked section, and no checkable heading the
- * viewer can check): the shared text is then already right.
+ * it depends on who reads it (no locked section, and no checkable heading or
+ * student check list item the viewer can check): the shared text is then
+ * already right.
  */
 export async function viewerPageText(
   page: Pick<SectionPageRecord, 'id' | 'title'>,
@@ -410,7 +457,7 @@ export async function viewerPageText(
   if (!blocks) return null;
   // Any lockedSection counts, with or without an id.
   const hasLocked = containsLockedSection(blocks);
-  const hasCheckable = checkableHeadingIds(blocks).length > 0;
+  const hasCheckable = checkTargetIds(blocks).length > 0;
   if (!hasLocked && !hasCheckable) return null;
   const viewer = await sectionViewerFor(page.id, ctx);
   if (!hasLocked && !viewer.canCheck) return null;
@@ -421,6 +468,7 @@ export async function viewerPageText(
     text,
     ...(hasLocked ? { locked_sections: view.sections } : {}),
     ...(viewer.canCheck && view.headings.length ? { checkable_headings: view.headings } : {}),
+    ...(viewer.canCheck && view.items.length ? { check_list_items: view.items } : {}),
   };
 }
 
@@ -486,9 +534,9 @@ export const pageSectionsStatusTool: ToolDefinition<StatusArgs> = {
   name: 'page_sections_status',
   title: 'Page sections: checks and unlocks',
   description:
-    "Shows students' progress on one page: for every checkable heading, how many current " +
-    'students checked it, and who and when; for every locked section, how many unlocked it, and ' +
-    'who and when. `students` is the number of current students in the class. Counts only ' +
+    "Shows students' progress on one page: for every checkable heading and student check list " +
+    'item, how many current students checked it, and who and when; for every locked section, how ' +
+    'many unlocked it, and who and when. `students` is the number of current students in the class. Counts only ' +
     'current students of this classroom (removed students and staff are left out).',
   scope: 'read',
   roles: OWNER_TEACHER,
@@ -525,9 +573,20 @@ export const pageSectionsStatusTool: ToolDefinition<StatusArgs> = {
     const lockTitle = (id: string) => (blocks ? lockedSectionTitle(findBlock(blocks, id)) : '');
 
     const headingIds = blocks ? checkableHeadingIds(blocks) : [];
+    const itemIds = blocks ? personalCheckListItemIds(blocks) : [];
     const lockedIds = blocks ? lockedSectionIds(blocks) : [];
 
     const checkable_headings = headingIds.map(id => {
+      const rows = checks.get(id) ?? [];
+      return {
+        id,
+        title: headingTitle(id),
+        checked: rows.length,
+        students: rows.map(presentStudent),
+      };
+    });
+    // Student check lists: the same rows as the headings' (title = the item's text).
+    const check_list_items = itemIds.map(id => {
       const rows = checks.get(id) ?? [];
       return {
         id,
@@ -548,7 +607,7 @@ export const pageSectionsStatusTool: ToolDefinition<StatusArgs> = {
 
     // Rows on blocks the current content no longer has (deleted or retyped),
     // or every row when the content could not be read.
-    const known = new Set([...headingIds, ...lockedIds]);
+    const known = new Set([...headingIds, ...itemIds, ...lockedIds]);
     const orphaned = [
       ...[...checks]
         .filter(([id]) => !known.has(id))
@@ -578,6 +637,7 @@ export const pageSectionsStatusTool: ToolDefinition<StatusArgs> = {
       title: page.title,
       students: activity.students,
       checkable_headings,
+      ...(check_list_items.length ? { check_list_items } : {}),
       locked_sections,
       ...(orphaned.length ? { not_in_current_content: orphaned } : {}),
       ...(blocks
@@ -701,6 +761,7 @@ export const pageSectionUnlockTool: ToolDefinition<UnlockArgs> = {
       text,
       ...(view.sections.length ? { locked_sections: view.sections } : {}),
       ...(view.headings.length ? { checkable_headings: view.headings } : {}),
+      ...(view.items.length ? { check_list_items: view.items } : {}),
     });
   },
 };
@@ -720,9 +781,10 @@ export const pageSectionCheckTool: ToolDefinition<CheckArgs> = {
   // The reader's own progress mark, reversible by calling again.
   annotations: { destructive: false, idempotent: true, openWorld: false },
   description:
-    'Marks a checkable heading of a page done (checked: true) or not done (checked: false) for ' +
-    'YOU, the same as its checkbox on the page. block_id is the id in a "[done]" or ' +
-    '"[not done]" heading line of content_get. Staff can see who checked what.',
+    'Marks a checkable heading or a student check list item of a page done (checked: true) or ' +
+    'not done (checked: false) for YOU, the same as its checkbox on the page. block_id is the ' +
+    'id in a "[done]"/"[not done]" heading line or a "[x]"/"[ ]" item line of content_get. ' +
+    'Staff can see who checked what.',
   scope: 'write',
   roles: MEMBER,
   // The caller's own progress, not the classroom's content (archived: allowed).
@@ -730,7 +792,7 @@ export const pageSectionCheckTool: ToolDefinition<CheckArgs> = {
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     page_id: pageIdArg,
-    block_id: blockIdArg('The checkable heading id, from content_get'),
+    block_id: blockIdArg('The checkable heading or student check list item id, from content_get'),
     checked: z.boolean().describe('true = done, false = not done'),
   },
   handler: async (args, ctx) => {
@@ -753,11 +815,15 @@ export const pageSectionCheckTool: ToolDefinition<CheckArgs> = {
       );
     }
 
-    // In THIS user's tree: a heading inside a locked section they have not
-    // opened is not there for them, and answers like an id that does not exist.
+    // In THIS user's tree: a heading or item inside a locked section they have
+    // not opened is not there for them, and answers like an id that does not
+    // exist (as does a plain, non-personal check list item).
     const target = findBlock(visibleBlocks(blocks, viewer), args.block_id);
-    if (!target || !isCheckableHeading(target)) {
-      throw new ToolError('invalid_params', 'No checkable heading with that id on this page');
+    if (!target || !isCheckTarget(target)) {
+      throw new ToolError(
+        'invalid_params',
+        'No checkable heading or student check list item with that id on this page'
+      );
     }
 
     // The service says whether the row actually changed (race-safe), so a

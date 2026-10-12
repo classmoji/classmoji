@@ -356,6 +356,44 @@
       "children": []
     },
     {
+      "id": "ks-personal-1",
+      "type": "checkListItem",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left",
+        "checked": false,
+        "personal": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Install Node (each student ticks their own)",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "ks-personal-2",
+      "type": "checkListItem",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left",
+        "checked": true,
+        "personal": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Clone the starter repository",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
       "id": "ks-toggle",
       "type": "toggleListItem",
       "props": {
@@ -1045,6 +1083,25 @@
             {
               "type": "text",
               "text": "A checkable heading inside the lock",
+              "styles": {}
+            }
+          ],
+          "children": []
+        },
+        {
+          "id": "ks-locked-personal",
+          "type": "checkListItem",
+          "props": {
+            "backgroundColor": "default",
+            "textColor": "default",
+            "textAlignment": "left",
+            "checked": false,
+            "personal": true
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "A student check list item inside the lock",
               "styles": {}
             }
           ],

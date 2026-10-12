@@ -239,6 +239,40 @@
 }
 
 /* =====================================================================
+   Student check lists: the author's badge (editor)
+   ===================================================================== */
+
+.bn-editor[contenteditable='true']
+  .bn-block-content[data-content-type='checkListItem'][data-personal='true'] {
+  position: relative;
+}
+
+/* A person glyph in the item's gutter: "Students tick their own". */
+.bn-editor .pg-personal-badge {
+  position: absolute;
+  left: -30px;
+  top: 4px;
+  width: 16px;
+  height: 16px;
+  background-color: #9ca3af;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='8' cy='5' r='2.75'/%3E%3Cpath d='M2.75 14.25c0-2.9 2.35-4.75 5.25-4.75s5.25 1.85 5.25 4.75'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='8' cy='5' r='2.75'/%3E%3Cpath d='M2.75 14.25c0-2.9 2.35-4.75 5.25-4.75s5.25 1.85 5.25 4.75'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  user-select: none;
+  transition: opacity 120ms;
+}
+
+/* Not editable (preview): no badge. */
+.bn-editor[contenteditable='false'] .pg-personal-badge {
+  display: none;
+}
+
+.dark .bn-editor .pg-personal-badge {
+  background-color: #6b7280;
+}
+
+/* =====================================================================
    Checkable headings: the staff's "Done by X of Y" chip (editor)
    ===================================================================== */
 

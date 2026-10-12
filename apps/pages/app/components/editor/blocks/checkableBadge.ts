@@ -1,4 +1,7 @@
-import { createPageHeadingBlockSpec } from '@classmoji/page-schema';
+import {
+  createPageCheckListItemBlockSpec,
+  createPageHeadingBlockSpec,
+} from '@classmoji/page-schema';
 
 import { registerDoneChipSlot } from './doneChipSlots.ts';
 
@@ -115,6 +118,61 @@ export function createEditorHeadingSpec() {
             ? { editor: editor as object, blockId: block.id }
             : null;
         return withCheckableBadge(view as never, slotOwner);
+      },
+    },
+  } as typeof base;
+}
+
+/** The student check list badge's accessible name and tooltip. */
+export const PERSONAL_LIST_LABEL = 'Students tick their own';
+
+/**
+ * The author's badge on a student check list item (`personal: true`), in the
+ * EDITOR: a small person glyph in the item's gutter (page-sections.css), named
+ * and with a tooltip. Node-view DOM outside the item's inline content, like
+ * the checkable heading's badge; not part of the document.
+ */
+function withPersonalBadge<T extends HeadingNodeView>(view: T): T {
+  const badge = document.createElement('span');
+  badge.className = 'pg-personal-badge';
+  badge.contentEditable = 'false';
+  badge.setAttribute('role', 'img');
+  badge.setAttribute('aria-label', PERSONAL_LIST_LABEL);
+  badge.title = PERSONAL_LIST_LABEL;
+  view.dom.appendChild(badge);
+
+  const ignoreMutation = view.ignoreMutation;
+  const destroy = view.destroy;
+  return {
+    ...view,
+    ignoreMutation: mutation =>
+      badge.contains(mutation.target as Node) ||
+      (ignoreMutation ? ignoreMutation(mutation) : false),
+    destroy: () => {
+      badge.remove();
+      destroy?.();
+    },
+  };
+}
+
+/**
+ * The shared page check list item with its render wrapped: a personal item
+ * gets the badge. Built from a FRESH spec (see viewerBlocks.tsx's heading for
+ * why); everything else is the shared item's (BlockNote's, with `personal`
+ * kept on Enter).
+ */
+export function createEditorCheckListItemSpec() {
+  const base = createPageCheckListItemBlockSpec();
+  const render = base.implementation.render;
+  return {
+    ...base,
+    implementation: {
+      ...base.implementation,
+      render(this: unknown, ...args: Parameters<typeof render>) {
+        const view = render.apply(this as never, args);
+        const [block] = args;
+        if ((block.props as { personal?: unknown }).personal !== true) return view;
+        return withPersonalBadge(view as never);
       },
     },
   } as typeof base;

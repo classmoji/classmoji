@@ -36,6 +36,7 @@ import {
   parseSectionListKind,
   parseSectionRequest,
   readerSectionsFor,
+  checkableHeadingTargetValid,
   sectionStatsFor,
   sectionTargetValid,
   signInUrlFor,
@@ -2218,5 +2219,359 @@ test.describe('the tick box gutter', () => {
     const css = source('../../app/styles/page-sections.css');
     expect(css).not.toMatch(/@media \(max-width: 640px\)/);
     expect(css).toContain(".pg-reader-sections[data-section-checks='inline'] .pg-section-check {");
+  });
+});
+
+// ── Student check lists (personal check list items) ────────────────────────
+//
+// The fixture plus a student check list at the top level (two personal items
+// and a plain one) and a personal item inside the outer locked section.
+
+const listItem = (id: string, value: string, props: Record<string, unknown> = {}) => ({
+  id,
+  type: 'checkListItem',
+  props: { checked: false, ...props },
+  content: text(value),
+  children: [],
+});
+
+function listFixture() {
+  const doc = fixture() as Array<Record<string, unknown>>;
+  doc.splice(
+    2,
+    0,
+    listItem('item-1', 'Install Node', { personal: true, checked: true }),
+    listItem('item-2', 'Clone the repo', { personal: true }),
+    listItem('item-plain', 'Plain item', { checked: true })
+  );
+  const outer = (
+    (doc.find(block => block.id === 'cols')!.children as Array<{ children: unknown[] }>)[0]
+      .children as Array<{ id: string; children: unknown[] }>
+  ).find(block => block.id === 'outer')!;
+  outer.children.push(listItem('item-in-outer', 'Hidden step', { personal: true }));
+  return doc;
+}
+
+test.describe('student check lists: targets', () => {
+  test('check/uncheck accept personal items; unlock and the staff list do not', () => {
+    const doc = listFixture();
+    expect(sectionTargetValid(doc, 'item-1', 'check')).toBe(true);
+    expect(sectionTargetValid(doc, 'item-2', 'uncheck')).toBe(true);
+    expect(sectionTargetValid(doc, 'item-plain', 'check')).toBe(false);
+    expect(sectionTargetValid(doc, 'item-1', 'unlock')).toBe(false);
+    expect(checkableHeadingTargetValid(doc, 'h-top')).toBe(true);
+    expect(checkableHeadingTargetValid(doc, 'item-1')).toBe(false);
+    expect(checkableHeadingTargetValid(doc, 'nope')).toBe(false);
+  });
+});
+
+test.describe('student check lists: POST /api/page-sections', () => {
+  const send = (deps: PageSectionsDeps<Page>, blockId: string, user: string, intent = 'check') =>
+    call(handleSectionsPost(post({ pageId: 'page-a', blockId, intent }, { user }), deps));
+
+  test('a personal item is ticked and unticked like a checkable heading, audited the same way', async () => {
+    const { deps, calls } = makeDeps({ loadReaderBlocks: async () => listFixture() });
+    const on = await send(deps, 'item-1', 'student-1');
+    expect(on.status).toBe(200);
+    expect(on.body).toEqual({ ok: true, checked: true });
+    const off = await send(deps, 'item-1', 'student-1', 'uncheck');
+    expect(off.body).toEqual({ ok: true, checked: false });
+    expect(calls.setChecked).toEqual([
+      { pageId: 'page-a', userId: 'student-1', blockId: 'item-1', checked: true },
+      { pageId: 'page-a', userId: 'student-1', blockId: 'item-1', checked: false },
+    ]);
+    expect(calls.audit).toEqual([
+      expect.objectContaining({
+        userId: 'student-1',
+        classroomId: CLASS_A,
+        action: 'CREATE',
+        data: {
+          tool: 'page_section_check',
+          via: 'web',
+          page_id: 'page-a',
+          block_id: 'item-1',
+          checked: true,
+        },
+        dedupe: false,
+      }),
+      expect.objectContaining({ action: 'DELETE', dedupe: false }),
+    ]);
+  });
+
+  test('a plain item and an item in a body the student has not unlocked answer like no block at all', async () => {
+    const { deps, calls } = makeDeps({ loadReaderBlocks: async () => listFixture() });
+    const bogus = await send(deps, 'nope', 'student-1');
+    for (const blockId of ['item-plain', 'item-in-outer']) {
+      const res = await send(deps, blockId, 'student-1');
+      expect(res.status, blockId).toBe(400);
+      expect(res.body, blockId).toEqual(bogus.body);
+    }
+    expect(calls.setChecked).toEqual([]);
+    expect(calls.audit).toEqual([]);
+
+    // Unlocked by this student: reachable for them, still not for another.
+    expect((await send(deps, 'outer', 'student-1', 'unlock')).status).toBe(200);
+    expect((await send(deps, 'item-in-outer', 'student-1')).status).toBe(200);
+    expect((await send(deps, 'item-in-outer', 'student-2')).status).toBe(400);
+  });
+
+  test('the teaching team reaches an item inside a locked body (whole document)', async () => {
+    const { deps } = makeDeps({ loadReaderBlocks: async () => listFixture() });
+    expect((await send(deps, 'item-in-outer', 'ta-1')).status).toBe(200);
+  });
+
+  test('student A’s tick is written as A’s row only', async () => {
+    const { deps, calls } = makeDeps({ loadReaderBlocks: async () => listFixture() });
+    await send(deps, 'item-2', 'student-1');
+    await send(deps, 'item-2', 'student-2');
+    expect(calls.setChecked.map(c => (c as { userId: string }).userId)).toEqual([
+      'student-1',
+      'student-2',
+    ]);
+  });
+});
+
+test.describe('student check lists: the staff list and the chip counts', () => {
+  test('GET kind=check refuses a personal item exactly like any other non-heading', async () => {
+    const { deps, calls } = makeDeps({ loadReaderBlocks: async () => listFixture() });
+    for (const blockId of ['item-1', 'item-plain', 'item-in-outer']) {
+      const res = await call(
+        handleSectionsGet(get(`pageId=page-a&blockId=${blockId}&kind=check`, 'owner-1'), deps)
+      );
+      expect(res.status, blockId).toBe(400);
+      expect(res.body).toEqual({ error: 'No such section on this page', code: 'NO_SUCH_SECTION' });
+    }
+    expect(calls.sectionActivity).toEqual([]);
+    expect(calls.audit).toEqual([]);
+  });
+
+  test('sectionStatsFor leaves check list items out of the heading counts', async () => {
+    const stats = await sectionStatsFor(listFixture(), {
+      unlockCounts: async () => ({ students: 3, unlocks: {} }),
+      checkCounts: async () => ({
+        students: 3,
+        checks: { 'h-top': 2, 'item-1': 3, 'item-plain': 1, 'item-in-outer': 1, gone: 1 },
+      }),
+    });
+    expect(stats?.checks).toEqual({ 'h-top': 2, gone: 1 });
+  });
+
+  test('a page with only a student check list asks for no counts', async () => {
+    let asked = 0;
+    const stats = await sectionStatsFor([listItem('i', 'x', { personal: true })], {
+      unlockCounts: async () => (asked++, { students: 1, unlocks: {} }),
+      checkCounts: async () => (asked++, { students: 1, checks: { i: 1 } }),
+    });
+    expect(stats).toBeNull();
+    expect(asked).toBe(0);
+  });
+});
+
+test.describe('student check lists: viewer, editor, slash menu', () => {
+  const g = globalThis as Record<string, unknown>;
+  const installed: string[] = [];
+  test.beforeAll(() => {
+    const dom = new UntypedJSDOM('<!doctype html><html><body></body></html>');
+    for (const key of [
+      'window',
+      'document',
+      'navigator',
+      'Node',
+      'HTMLElement',
+      'Element',
+      'MutationObserver',
+      'getComputedStyle',
+      'DocumentFragment',
+      'Text',
+      'Event',
+    ]) {
+      if (g[key] !== undefined) continue;
+      g[key] = key === 'window' ? dom.window : (dom.window as Record<string, unknown>)[key];
+      installed.push(key);
+    }
+  });
+  test.afterAll(() => {
+    for (const key of installed) delete g[key];
+  });
+
+  type View = {
+    dom: HTMLElement;
+    contentDOM?: HTMLElement;
+    ignoreMutation?: (m: { type: string; target: Node; attributeName?: string }) => boolean;
+    stopEvent?: (event: Event) => boolean;
+    destroy?: () => void;
+  };
+  const item = (personal?: boolean, checked = false) => ({
+    id: 'item-1',
+    type: 'checkListItem',
+    props: {
+      textColor: 'default',
+      backgroundColor: 'default',
+      textAlignment: 'left',
+      checked,
+      ...(personal ? { personal } : {}),
+    },
+    content: text('Install Node'),
+    children: [],
+  });
+
+  test('personalItemState: the reader’s own state when they can tick, else the author’s', async () => {
+    const { personalItemState } =
+      await import('~/components/viewer/sections/personalCheckListItem.ts');
+    const mine = new Set(['a']);
+    expect(
+      personalItemState({ canCheck: true, checked: mine, blockId: 'a', authorChecked: false })
+    ).toEqual({ checked: true, interactive: true });
+    expect(
+      personalItemState({ canCheck: true, checked: mine, blockId: 'b', authorChecked: true })
+    ).toEqual({ checked: false, interactive: true });
+    expect(
+      personalItemState({ canCheck: false, checked: mine, blockId: 'a', authorChecked: false })
+    ).toEqual({ checked: false, interactive: false });
+    expect(
+      personalItemState({ canCheck: false, checked: new Set(), blockId: 'b', authorChecked: true })
+    ).toEqual({ checked: true, interactive: false });
+  });
+
+  test('the viewer hands a personal item’s box to a reader who can tick', async () => {
+    const { createPageCheckListItemBlockSpec } = await import('@classmoji/page-schema');
+    const { withPersonalCheckbox } =
+      await import('~/components/viewer/sections/personalCheckListItem.ts');
+    const { sectionStoreFor } = await import('~/components/viewer/sections/sectionCheckbox.ts');
+    const spec = createPageCheckListItemBlockSpec() as unknown as {
+      implementation: { render: (block: unknown, editor: unknown) => View };
+    };
+    const editor = { isEditable: false };
+    const store = sectionStoreFor(editor);
+    const toggled: string[] = [];
+    store.set({ canCheck: false, checked: new Set(), toggleCheck: id => toggled.push(id) });
+
+    // The author ticked it; a reader who cannot tick sees that, disabled.
+    const view = withPersonalCheckbox(
+      spec.implementation.render(item(true, true), editor) as never,
+      item(true, true) as never,
+      editor
+    ) as View;
+    const input = view.dom.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    expect(input.getAttribute('aria-label')).toBe('Install Node');
+    expect(input.disabled).toBe(true);
+    expect(input.checked).toBe(true);
+    expect(view.dom.getAttribute('data-checked')).toBe('true');
+
+    // A reader who can tick: their own (empty) state, enabled.
+    store.set({ canCheck: true });
+    expect(input.disabled).toBe(false);
+    expect(input.checked).toBe(false);
+    expect(view.dom.hasAttribute('data-checked')).toBe(false);
+
+    // Ticking toggles their own state through the store.
+    input.checked = true;
+    input.dispatchEvent(new (g.window as { Event: typeof Event }).Event('change'));
+    expect(toggled).toEqual(['item-1']);
+    store.set({ checked: new Set(['item-1']) });
+    expect(input.checked).toBe(true);
+    expect(view.dom.getAttribute('data-checked')).toBe('true');
+
+    // The reader's state is not a document change; the item's text is.
+    expect(
+      view.ignoreMutation?.({ type: 'attributes', target: view.dom, attributeName: 'data-checked' })
+    ).toBe(true);
+    expect(view.ignoreMutation?.({ type: 'attributes', target: input })).toBe(true);
+    expect(view.ignoreMutation?.({ type: 'characterData', target: view.contentDOM! })).toBe(false);
+    expect(view.stopEvent?.({ type: 'keydown', target: input } as unknown as Event)).toBe(true);
+    expect(view.stopEvent?.({ type: 'keydown', target: view.contentDOM } as unknown as Event)).toBe(
+      false
+    );
+
+    view.destroy?.();
+    store.set({ checked: new Set() });
+    expect(input.checked).toBe(true); // unsubscribed
+  });
+
+  test('the shared item in a read-only editor is BlockNote’s: the author’s state, disabled', async () => {
+    // What a plain item, the class site and a reader who cannot tick start from.
+    const { createPageCheckListItemBlockSpec } = await import('@classmoji/page-schema');
+    const spec = createPageCheckListItemBlockSpec() as unknown as {
+      implementation: { render: (block: unknown, editor: unknown) => View };
+    };
+    const view = spec.implementation.render(item(false, true), { isEditable: false });
+    const input = view.dom.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    expect(input.disabled).toBe(true);
+    expect(input.checked).toBe(true);
+    expect(input.classList.contains('pg-personal-check')).toBe(false);
+    expect(view.dom.getAttribute('data-checked')).toBe('true');
+  });
+
+  test('the editor badges a personal item, named, outside its text; a plain item gets none', async () => {
+    const { editingSchema } = await import('~/components/editor/blocks/editingSchema.ts');
+    const spec = editingSchema.blockSpecs.checkListItem as unknown as {
+      implementation: { render: (block: unknown, editor: unknown) => View };
+    };
+    const editor = { isEditable: true, schema: editingSchema };
+    const on = spec.implementation.render(item(true), editor);
+    const badge = on.dom.querySelector('.pg-personal-badge');
+    expect(badge?.getAttribute('role')).toBe('img');
+    expect(badge?.getAttribute('aria-label')).toBe('Students tick their own');
+    expect(badge?.getAttribute('title')).toBe('Students tick their own');
+    expect(on.contentDOM?.contains(badge as Node)).toBe(false);
+    expect(on.dom.getAttribute('data-personal')).toBe('true');
+    const off = spec.implementation.render(item(false), editor);
+    expect(off.dom.querySelector('.pg-personal-badge')).toBeNull();
+  });
+
+  test('the switch sets or clears `personal` on the whole list, in one transaction, never false', async () => {
+    const { setCheckListPersonal } = await import('~/components/editor/personalCheckList.ts');
+    const doc = [
+      { id: 'p', type: 'paragraph', children: [] },
+      listItem('a', 'A'),
+      { ...listItem('b', 'B'), children: [listItem('b-child', 'Sub')] },
+      listItem('c', 'C', { personal: true }),
+      { id: 'q', type: 'paragraph', children: [] },
+      listItem('d', 'D'),
+    ];
+    const log: unknown[] = [];
+    let depth = 0;
+    const editor = {
+      document: doc,
+      transact<T>(fn: () => T): T {
+        log.push('begin');
+        depth++;
+        try {
+          return fn();
+        } finally {
+          depth--;
+          log.push('end');
+        }
+      },
+      updateBlock(id: string, update: unknown) {
+        log.push([depth, id, update]);
+      },
+    };
+    expect(setCheckListPersonal(editor, 'b', true)).toEqual(['a', 'b', 'c']);
+    expect(log).toEqual([
+      'begin',
+      [1, 'a', { props: { personal: true } }],
+      [1, 'b', { props: { personal: true } }],
+      [1, 'c', { props: { personal: true } }],
+      'end',
+    ]);
+    log.length = 0;
+    expect(setCheckListPersonal(editor, 'c', false)).toEqual(['a', 'b', 'c']);
+    for (const entry of log.slice(1, -1)) {
+      const update = (entry as [number, string, { props: Record<string, unknown> }])[2];
+      expect('personal' in update.props).toBe(true);
+      expect(update.props.personal).toBeUndefined();
+    }
+    log.length = 0;
+    expect(setCheckListPersonal(editor, 'q', true)).toEqual([]);
+    expect(log).toEqual([]);
+  });
+
+  test('the slash item inserts a check list item with personal: true', async () => {
+    const { customSlashMenuItems } = await import('~/components/editor/blocks/index.tsx');
+    const student = customSlashMenuItems.find(entry => entry.title === 'Student check list')!;
+    const source = student.onItemClick.toString();
+    expect(source).toContain("type: 'checkListItem'");
+    expect(source).toContain('personal: true');
   });
 });

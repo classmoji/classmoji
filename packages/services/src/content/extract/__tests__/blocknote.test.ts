@@ -161,6 +161,20 @@ describe('extractText — blocknote', () => {
     expect(blocknote(heading({ checkable: true })).text).toBe('Step 1');
   });
 
+  it('a student check list item extracts like any check list item (no per-reader state)', () => {
+    const item = (props: Record<string, unknown>) => [
+      {
+        id: 'i',
+        type: 'checkListItem',
+        props: { checked: true, ...props },
+        content: [{ type: 'text', text: 'Install Node', styles: {} }],
+        children: [],
+      },
+    ];
+    expect(blocknote(item({ personal: true }))).toEqual(blocknote(item({})));
+    expect(blocknote(item({ personal: true })).text).toBe('Install Node');
+  });
+
   it('prepends the title when one is given', () => {
     const { text } = blocknote(ALL_BLOCKS, 'Assessment Schedule');
     expect(text.split('\n')[0]).toBe('Assessment Schedule');

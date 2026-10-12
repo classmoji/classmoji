@@ -14,6 +14,7 @@ import {
   IconLayoutGrid,
   IconLock,
   IconSquareCheck,
+  IconUserCheck,
 } from '@tabler/icons-react';
 
 import { Callout } from './CalloutBlock.tsx';
@@ -225,6 +226,22 @@ export const customSlashMenuItems: Array<{
       });
     },
   })),
+  {
+    title: 'Student check list',
+    subtext: 'Each student ticks their own',
+    // `check`/`checklist`/`todo` list it next to BlockNote's "Check List".
+    aliases: ['check', 'checklist', 'check list', 'student', 'personal', 'tick', 'todo', 'task'],
+    group: 'Lists',
+    // Directly after BlockNote's "Check List" (its dictionary key).
+    placeAfter: 'check_list',
+    icon: <IconUserCheck size={18} />,
+    onItemClick: (editor: PageBlockEditor) => {
+      insertOrUpdateBlockForSlashMenu(editor, {
+        type: 'checkListItem',
+        props: { personal: true },
+      });
+    },
+  },
   {
     title: 'Locked section',
     subtext: 'Body opens with a hold',
