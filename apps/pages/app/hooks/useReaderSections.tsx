@@ -66,15 +66,24 @@ export interface ReaderSectionsValue {
   /** Ticked headings, with ticks in flight applied. */
   checked: ReadonlySet<string>;
   toggleCheck: (blockId: string) => void;
+  /** This reader's unlocks: the loader's, plus the ones answered in this visit. */
   unlocked: Readonly<Record<string, string>>;
+  /**
+   * The loader's unlocks alone: the ones the current `content` was built
+   * with. The loader keeps a locked section's body exactly for these ids, so
+   * an id here whose block in `content` has no children is a section with no
+   * body, not one withheld from this reader.
+   */
+  contentUnlocked: Readonly<Record<string, string>>;
   /** Unlocks under way (the card stays, glass broken, until settled). */
   status: Readonly<Record<string, UnlockStatus>>;
   /** Record an unlock (POST on completion of the hold, never before). */
   unlock: (blockId: string) => void;
   /**
    * The viewer, once the reloaded page is in (`status` `arrived`): `true` when
-   * the section's body is in the editor now, `false` when the page came back
-   * without it (the reader is told; the card stays).
+   * the section is open now (its body is in the editor, or it has none),
+   * `false` when the page came back without it (the reader is told; the card
+   * stays).
    */
   settleOpen: (blockId: string, opened: boolean) => void;
   /** True once per block unlocked in this visit, so its body animates in once. */
@@ -82,6 +91,7 @@ export interface ReaderSectionsValue {
 }
 
 const NOTHING: ReadonlySet<string> = new Set();
+const NO_UNLOCKS: Readonly<Record<string, string>> = Object.freeze({});
 
 export const NO_READER_SECTIONS: ReaderSectionsValue = {
   known: false,
@@ -92,7 +102,8 @@ export const NO_READER_SECTIONS: ReaderSectionsValue = {
   canUnlock: false,
   checked: NOTHING,
   toggleCheck: () => {},
-  unlocked: {},
+  unlocked: NO_UNLOCKS,
+  contentUnlocked: NO_UNLOCKS,
   status: {},
   unlock: () => {},
   settleOpen: () => {},
@@ -209,6 +220,7 @@ export function useReaderSectionsState(
 
   // Unlocks: the loader's, plus the ones answered in this visit.
   const loaderUnlocked = readerSections?.unlocked;
+  const contentUnlocked = loaderUnlocked ?? NO_UNLOCKS;
   const [answered, setAnswered] = useState<Record<string, string>>({});
   const unlocked = useMemo(
     () => ({ ...(loaderUnlocked ?? {}), ...answered }),
@@ -333,6 +345,7 @@ export function useReaderSectionsState(
       checked,
       toggleCheck,
       unlocked,
+      contentUnlocked,
       status,
       unlock,
       settleOpen,
@@ -348,6 +361,7 @@ export function useReaderSectionsState(
       checked,
       toggleCheck,
       unlocked,
+      contentUnlocked,
       status,
       unlock,
       settleOpen,

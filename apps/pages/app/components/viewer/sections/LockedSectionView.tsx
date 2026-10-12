@@ -32,9 +32,10 @@ import {
  *   out only when the hold completes. Readers who may not unlock get the card
  *   without the control; only a signed-out reader is asked to sign in.
  *
- * "Unlocked" is shown only once the body is in this editor (the viewer
- * publishes which sections have one, `filled` in the section store): after a
- * hold, the card stays broken open until the reloaded page's body is in.
+ * "Unlocked" is shown only once the section is open in this editor: its body
+ * is in, or it has none (the viewer publishes which, `filled` in the section
+ * store). After a hold, the card stays broken open until the reloaded page's
+ * body is in, or the reloaded page shows the section has no body.
  *
  * The title is the block's `title` prop (public).
  */
@@ -51,7 +52,7 @@ const SHIMMER_AFTER_MS = 700;
 
 export interface LockedSectionViewProps {
   block: { id: string; props?: unknown; children: unknown[] };
-  /** The viewer's editor (its section store says whether the body is in). */
+  /** The viewer's editor (its section store says whether the section is open). */
   editor: object;
 }
 
@@ -92,7 +93,8 @@ export function LockedSectionView({ block, editor }: LockedSectionViewProps) {
   else mode = 'closed';
 
   // A failed unlock: the POST came back without recording anything, or the
-  // reloaded page came back without the body. The card comes back whole.
+  // reloaded page came back with the section still withheld. The card comes
+  // back whole.
   const wasPending = useRef(pending);
   useEffect(() => {
     if (wasPending.current && !pending && !filled) {

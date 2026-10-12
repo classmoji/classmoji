@@ -228,6 +228,21 @@ test.describe('a public slide’s folder', () => {
     // in the repo the way a bare `startsWith('')` would.
     expect(isWithinContentPath('slides/week-1/notes.png', '')).toBe(false);
     expect(isWithinContentPath('slides/week-1/notes.png', null)).toBe(false);
+    expect(isWithinContentPath('slides/week-1/notes.png', '/')).toBe(false);
+    expect(isWithinContentPath('slides/week-1/notes.png', '//')).toBe(false);
+  });
+
+  test('is matched with a stray `/` in the stored content path', () => {
+    for (const stored of [
+      '/slides/week-1',
+      'slides/week-1/',
+      '/slides/week-1/',
+      'slides//week-1',
+    ]) {
+      expect(isWithinContentPath('slides/week-1/notes.png', stored), stored).toBe(true);
+      expect(isWithinContentPath('slides/week-1', stored), stored).toBe(true);
+      expect(isWithinContentPath('slides/week-10/notes.png', stored), stored).toBe(false);
+    }
   });
 });
 

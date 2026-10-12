@@ -691,9 +691,10 @@ async function readLiveDocument(
   // THE predicate — the same function the search and list statements are built
   // from, applied to the row we just loaded. Not a second implementation of it.
   if (!contentVisibility(classroom.role).allows(record)) return null;
-  // A draft PAGE also follows the page-sections reader rule, as the page
-  // itself does: a pending assistant invite passes the predicate above (it
-  // reads the registry's any-state role) but does not open the page.
+  // A draft PAGE also follows the page-sections reader rule (`canViewDrafts`),
+  // as the page itself does. It gives the same answer as the predicate above
+  // (both read the any-state role against OWNER/TEACHER/ASSISTANT); kept so the
+  // pages app's rule is the one this path states.
   if (kind === 'page' && (await draftHiddenFromCaller(record, ctx))) return null;
 
   // A FILE or LINK slide has no `index.html` to read: its content is an
@@ -840,8 +841,8 @@ export const contentGetTool: ToolDefinition<ContentGetArgs> = {
         docKind: args.kind,
         docId: args.id,
       });
-      // A draft page: only for readers who see every locked body, as on the
-      // page (the index row may not say whether it is a draft: ask the row).
+      // A draft page: only with `canViewDrafts`, as on the page (the index row
+      // may not say whether it is a draft: ask the row).
       if (
         args.kind === 'page' &&
         document.isDraft !== false &&

@@ -1,3 +1,4 @@
+import { findBlock, lockedSectionIds } from '@classmoji/page-schema/sections';
 import type { ReaderSectionsValue } from '~/hooks/useReaderSections.tsx';
 
 /**
@@ -13,12 +14,16 @@ import type { ReaderSectionsValue } from '~/hooks/useReaderSections.tsx';
  * Node views are plain DOM, so the reader's state reaches them through a small
  * store per editor (`sectionStoreFor`), which the viewer fills from
  * `ReaderSectionsContext` and the boxes subscribe to. The same store carries
- * which locked sections have their body in this editor (`filled`), which the
- * viewer publishes and the locked sections read.
+ * which locked sections are open in this editor (`filled`, see
+ * `openLockedSections`), which the viewer publishes and the locked sections
+ * read.
  */
 
 type StoreState = Pick<ReaderSectionsValue, 'canCheck' | 'checked' | 'toggleCheck'> & {
-  /** Locked sections whose body (children) is in this editor now. */
+  /**
+   * Locked sections open in this editor now: the body (children) is in, or
+   * the section has no body (`openLockedSections`).
+   */
   filled: ReadonlySet<string>;
 };
 
@@ -50,6 +55,46 @@ function createStore(): SectionStore {
       return () => listeners.delete(listener);
     },
   };
+}
+
+type LooseBlock = { id?: unknown; type?: unknown; children?: unknown };
+
+/**
+ * The locked sections a reader sees as open:
+ * - every `lockedSection` in `editorBlocks` (the editor's document) with
+ *   children: its body is in;
+ * - every `lockedSection` in `content` (the loader's document) with no
+ *   children whose id is in `contentUnlocked` (the loader's unlocks): the
+ *   loader keeps the body of exactly those ids, so an empty one has no body.
+ *
+ * An empty section whose id is not in `contentUnlocked` is still withheld, and
+ * a section absent from `content` (inside a body not sent) is not open.
+ * `contentUnlocked` is read as own keys only.
+ */
+export function openLockedSections(
+  editorBlocks: unknown,
+  content: unknown,
+  contentUnlocked: Readonly<Record<string, string>>
+): Set<string> {
+  const open = new Set<string>();
+  const visit = (blocks: unknown) => {
+    if (!Array.isArray(blocks)) return;
+    for (const block of blocks as LooseBlock[]) {
+      if (!block || typeof block !== 'object') continue;
+      const children = Array.isArray(block.children) ? block.children : [];
+      if (block.type === 'lockedSection' && typeof block.id === 'string' && children.length > 0) {
+        open.add(block.id);
+      }
+      visit(children);
+    }
+  };
+  visit(editorBlocks);
+  for (const id of lockedSectionIds(content)) {
+    if (open.has(id) || !Object.prototype.hasOwnProperty.call(contentUnlocked, id)) continue;
+    const children = findBlock(content, id)?.children;
+    if (!Array.isArray(children) || children.length === 0) open.add(id);
+  }
+  return open;
 }
 
 /** The store for one editor (created on first ask). */

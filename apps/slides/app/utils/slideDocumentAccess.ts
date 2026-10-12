@@ -60,6 +60,23 @@ export function canonicalProxyPath(
 }
 
 /**
+ * A stored repo path (`content_path`, `thumbnail_path`) in the form
+ * `canonicalProxyPath` accepts: empty and `.` segments dropped, so a stray
+ * leading, trailing or doubled `/` does not change the folder it names.
+ * Anything else (a `..` segment, an unserved character) is kept as stored,
+ * and the proxy refuses it. Empty or missing in, empty out.
+ *
+ * Every URL or read path built from a stored path goes through this first.
+ */
+export function canonicalStoredPath(stored: string | null | undefined): string {
+  if (!stored) return '';
+  return stored
+    .split('/')
+    .filter(part => part.length > 0 && part !== '.')
+    .join('/');
+}
+
+/**
  * The stored spellings of a content folder a row lookup should match.
  *
  * Content paths are written as `pages/<slug>` / `slides/<slug>`, but a stored
@@ -79,8 +96,11 @@ export function storedContentPathForms(folder: string): string[] {
  * instructors, who number weeks and lectures exactly that way.
  */
 export function isWithinContentPath(path: string, contentPath: string | null | undefined): boolean {
-  if (!contentPath) return false;
-  return path === contentPath || path.startsWith(`${contentPath}/`);
+  // The stored folder in the requested path's form (a stray `/` in the row
+  // would otherwise match nothing).
+  const folder = canonicalStoredPath(contentPath);
+  if (!folder) return false;
+  return path === folder || path.startsWith(`${folder}/`);
 }
 
 /**

@@ -36,6 +36,7 @@ import {
 } from '@classmoji/services/slides';
 import { getThemeUrls } from '~/utils/themeService.server';
 import { NO_MEDIA_URL, stripMediaRefs } from '~/utils/mediaRefs';
+import { canonicalStoredPath } from '~/utils/slideDocumentAccess';
 
 /** Where shared slide themes live in a content repo. Mirrors contentDelivery. */
 const THEMES_FOLDER = '.slidesthemes';
@@ -856,9 +857,12 @@ export async function resolveDeckThumbnailUrls(
   return out;
 }
 
-/** `/content/{org}/{repo}/{path}` — the slides app's own session-gated proxy. */
+/**
+ * `/content/{org}/{repo}/{path}` — the slides app's own session-gated proxy.
+ * `path` is a stored column, put in the one spelling the proxy serves.
+ */
 function legacyContentUrl(gitOrgLogin: string, repo: string, path: string): string {
-  return `/content/${gitOrgLogin}/${repo}/${path}`;
+  return `/content/${gitOrgLogin}/${repo}/${canonicalStoredPath(path)}`;
 }
 
 /**

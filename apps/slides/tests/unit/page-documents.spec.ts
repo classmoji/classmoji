@@ -16,6 +16,7 @@ import { matchRoutes } from 'react-router';
 import { ClassmojiService } from '@classmoji/services';
 import {
   canonicalProxyPath,
+  canonicalStoredPath,
   deckDocumentDecision,
   pageDocumentDecision,
   pageDocumentFolderOf,
@@ -275,5 +276,51 @@ test.describe('the content proxy applies it', () => {
     expect(block).toContain('authorizedClassroomIds');
     expect(block).toContain('git_organization: { login: org }');
     expect(block).toContain('expectedContentRepo(page.classroom) === repo');
+  });
+});
+
+test.describe('a stored path builds a URL the proxy answers', () => {
+  test('a stray, leading, trailing or doubled `/` in the row still builds the canonical path', () => {
+    for (const stored of [
+      'slides/week-1',
+      '/slides/week-1',
+      'slides/week-1/',
+      '/slides/week-1/',
+      'slides//week-1',
+      './slides/week-1',
+      'slides/./week-1//',
+    ]) {
+      const built = `${canonicalStoredPath(stored)}/index.html`;
+      expect(built, stored).toBe('slides/week-1/index.html');
+      expect(canonicalProxyPath(built, normalize), stored).toBe(built);
+    }
+  });
+
+  test('empty or missing in, empty out; `..` is left for the proxy to refuse', () => {
+    expect(canonicalStoredPath('')).toBe('');
+    expect(canonicalStoredPath(null)).toBe('');
+    expect(canonicalStoredPath(undefined)).toBe('');
+    expect(canonicalStoredPath('/')).toBe('');
+    const built = `${canonicalStoredPath('slides/../pages/lab-1')}/index.html`;
+    expect(canonicalProxyPath(built, normalize)).toBeNull();
+  });
+
+  test('every `/content/` URL built from a stored path goes through it', () => {
+    const read = (relative: string) =>
+      readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8');
+    for (const route of [
+      '../../app/routes/$slideId/route.tsx',
+      '../../app/routes/$slideId_.follow/route.tsx',
+      '../../app/routes/$slideId_.present/route.tsx',
+      '../../app/routes/$slideId_.speaker/route.tsx',
+    ]) {
+      const source = read(route);
+      expect(source, route).toContain(
+        'const filePath = `${canonicalStoredPath(slide.content_path)}/index.html`;'
+      );
+    }
+    expect(read('../../app/utils/deckDelivery.server.ts')).toContain(
+      'return `/content/${gitOrgLogin}/${repo}/${canonicalStoredPath(path)}`;'
+    );
   });
 });

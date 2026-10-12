@@ -40,6 +40,7 @@ import {
   type SectionViewerAccess,
   type SectionsPage,
 } from '~/utils/pageSections.server.ts';
+import { openLockedSections } from '~/components/viewer/sections/sectionCheckbox.ts';
 import { collectMediaDownloadRefs } from '~/utils/mediaDownloads.ts';
 import { renderSitePage } from '~/site/render.server.ts';
 
@@ -274,6 +275,61 @@ test.describe('who sees locked bodies', () => {
     ];
     const serialized = JSON.stringify(documentForReader(doc, { revealAll: false, unlocked: {} }));
     expect(serialized).not.toContain('PROTO-SECRET');
+  });
+});
+
+test.describe('which locked sections the viewer shows open', () => {
+  // The fixture with an extra, empty locked section ("empty") at the top level.
+  const withEmpty = () => [
+    ...fixture(),
+    { id: 'empty', type: 'lockedSection', props: { title: 'Empty title' }, children: [] },
+  ];
+  const AT = '2026-10-12T00:00:00.000Z';
+
+  test('a body in the editor is open', () => {
+    const doc = withEmpty();
+    expect(openLockedSections(doc, [], {})).toEqual(new Set(['outer', 'inner', 'solo']));
+  });
+
+  test('an unlocked section with no body is open; one withheld from the reader is not', () => {
+    const unlocked = { empty: AT };
+    const content = documentForReader(withEmpty(), { revealAll: false, unlocked });
+    // The editor holds the redacted document: no body anywhere.
+    const open = openLockedSections(content, content, unlocked);
+    expect(open).toEqual(new Set(['empty']));
+  });
+
+  test('an unlock this visit that the loaded page does not carry is not open', () => {
+    // Recorded locally, but the loader's unlocks (and so its content) predate it.
+    const content = documentForReader(withEmpty(), { revealAll: false, unlocked: {} });
+    expect(openLockedSections(content, content, {}).has('empty')).toBe(false);
+    expect(openLockedSections(content, content, {}).has('solo')).toBe(false);
+  });
+
+  test('a body redacted for this reader is not taken for an empty one', () => {
+    const content = documentForReader(withEmpty(), { revealAll: false, unlocked: {} });
+    // `solo` is in the loader's unlocks only if its body was sent: with an
+    // unlocks map that lacks it, its empty children mean withheld.
+    expect(openLockedSections(content, content, { empty: AT }).has('solo')).toBe(false);
+  });
+
+  test('a nested section inside a body not sent is not open, even if unlocked', () => {
+    const unlocked = { inner: AT };
+    const content = documentForReader(withEmpty(), { revealAll: false, unlocked });
+    expect(openLockedSections(content, content, unlocked).has('inner')).toBe(false);
+  });
+
+  test('the loaded unlocks are read as own keys only', () => {
+    const content = [
+      { id: 'constructor', type: 'lockedSection', props: { title: '' }, children: [] },
+      { id: '__proto__', type: 'lockedSection', props: { title: '' }, children: [] },
+    ];
+    expect(openLockedSections(content, content, {}).size).toBe(0);
+  });
+
+  test('malformed input opens nothing and does not throw', () => {
+    expect(openLockedSections(null, undefined, {}).size).toBe(0);
+    expect(openLockedSections([null, 1, 'x'], [{ type: 'lockedSection' }], {}).size).toBe(0);
   });
 });
 

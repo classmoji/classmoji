@@ -20,11 +20,15 @@
  * `ctx.classroom.role`: the registry's membership lookup does not filter on
  * `has_accepted_invite`, so a pending invitee passes the registry.
  *   - `revealAll` (OWNER/TEACHER in any invite state — the page editor's rule —
- *     or the accepted teaching team): every body. A draft page is "not found"
- *     to everyone else, on every tool here and in `content_get`.
+ *     or the accepted teaching team): every body.
  *   - an accepted student: the bodies THEY unlocked (`readerState`, scoped
  *     page + user).
  *   - anyone else: no body.
+ * A draft page is a separate rule, `canViewDrafts` (OWNER/TEACHER/ASSISTANT in
+ * any invite state, the pages app's draft rule): "not found" to everyone else,
+ * on every tool here and in `content_get`. A caller who may open a draft
+ * without `revealAll` (a pending assistant invite) gets it with the bodies
+ * redacted as above.
  * `page_sections_status` needs `canSeeActivity` (accepted OWNER/TEACHER): a
  * pending teacher invite passes the registry's role gate and still gets "not
  * found", as on the page.
@@ -34,10 +38,10 @@
  *
  * ── Unlock rules (same as POST /api/page-sections in apps/pages) ──────────
  * `canUnlock` (an accepted student who does not reveal all); a draft is "not
- * found"; the block must be a lockedSection in THIS student's redacted tree,
- * so a locked section nested inside one they have not opened is "not found",
- * exactly like an id that does not exist. The unlock row's classroom is the
- * page row's.
+ * found" without `canViewDrafts`; the block must be a lockedSection in THIS
+ * student's redacted tree, so a locked section nested inside one they have not
+ * opened is "not found", exactly like an id that does not exist. The unlock
+ * row's classroom is the page row's.
  *
  * ── Classroom status ──────────────────────────────────────────────────────
  * Check and unlock are `readerState` tools: the registry skips its mutation
@@ -216,8 +220,10 @@ export function pageHiddenFrom(
 
 /**
  * `content_get`'s draft rule for one page of the bound classroom: true when
- * the page is a draft this caller does not reveal all on. Reads the caller's
- * rule only for a draft.
+ * the page is a draft and the caller lacks `canViewDrafts`. Reads the caller's
+ * rule only for a draft. Today this gives the same answer as `contentVisibility`
+ * on the registry's role (the same three roles, any invite state); it restates
+ * the pages app's rule so the two cannot drift.
  */
 export async function draftHiddenFromCaller(
   page: { is_draft: boolean },
@@ -733,7 +739,7 @@ export const pageSectionCheckTool: ToolDefinition<CheckArgs> = {
       readerRuleFor(ctx),
     ]);
     // Accepted members only (a pending invite reads the page but keeps no
-    // state); a draft only for readers who see every body.
+    // state); a draft only with `canViewDrafts`.
     const actingRole = rule.acceptedRole;
     if (!page || !actingRole || pageHiddenFrom(page, rule)) throw scopedNotFound('Page');
 

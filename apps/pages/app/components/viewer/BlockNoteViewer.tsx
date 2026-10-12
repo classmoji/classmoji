@@ -21,7 +21,7 @@ import {
   ReaderSectionsContext,
   type ReaderSectionsValue,
 } from '~/hooks/useReaderSections.tsx';
-import { sectionStoreFor } from './sections/sectionCheckbox.ts';
+import { openLockedSections, sectionStoreFor } from './sections/sectionCheckbox.ts';
 import { useSectionFade } from './sections/useSectionFade.ts';
 
 import '@blocknote/mantine/style.css';
@@ -117,25 +117,20 @@ const BlockNoteViewer = ({
     sectionStore.set({ canCheck, checked, toggleCheck });
   }, [sectionStore, canCheck, checked, toggleCheck]);
 
-  // Which locked sections have their body in this editor. Published through
-  // the section store: a locked section shows as unlocked only once its body
-  // is here (BlockNote does not re-render a block's own view when only its
-  // children change, so the block cannot tell by itself).
+  // Which locked sections are open in this editor: the body is in, or the
+  // section has none (`openLockedSections`). Published through the section
+  // store: a locked section shows as unlocked only once it is open here
+  // (BlockNote does not re-render a block's own view when only its children
+  // change, so the block cannot tell by itself).
+  const { contentUnlocked } = readerSections;
   const publishFilled = useCallback(() => {
-    const filled = new Set<string>();
-    const visit = (blocks: ReadonlyArray<{ id: string; type: string; children: unknown[] }>) => {
-      for (const block of blocks) {
-        if (block.type === 'lockedSection' && block.children.length > 0) filled.add(block.id);
-        visit(block.children as typeof blocks);
-      }
-    };
-    visit(editor.document as never);
+    const filled = openLockedSections(editor.document, content, contentUnlocked);
     const previous = sectionStore.get().filled;
     if (previous.size !== filled.size || [...filled].some(id => !previous.has(id))) {
       sectionStore.set({ filled });
     }
     return filled;
-  }, [editor, sectionStore]);
+  }, [editor, sectionStore, content, contentUnlocked]);
 
   // Before the view (and its blocks) first render: the bodies built in.
   useLayoutEffect(() => {
@@ -149,7 +144,8 @@ const BlockNoteViewer = ({
   // unlock animation), so the children are put into it here — for any
   // section whose body is in `content` and not yet in the editor, however
   // it got there. Then every unlock whose reloaded page has arrived is
-  // settled: opened if its body is in the editor now, failed if not.
+  // settled: opened if the section is open now (body in the editor, or none
+  // to send), failed if not.
   const { status: unlockStatus, settleOpen } = readerSections;
   useEffect(() => {
     if (!isMounted || !Array.isArray(content)) return;
