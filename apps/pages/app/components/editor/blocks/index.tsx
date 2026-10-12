@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import { BlockNoteSchema, type BlockNoteEditor } from '@blocknote/core';
 import { insertOrUpdateBlockForSlashMenu } from '@blocknote/core/extensions';
 import { multiColumnSchema } from '@blocknote/xl-multi-column';
@@ -90,11 +91,23 @@ export type PageBlock = PageBlockInsertions[number];
 // Alias for compatibility
 export const createSchemaWithPages = () => schema;
 
+/** The heading levels the slash menu offers a checkable version of. */
+const CHECKABLE_HEADING_LEVELS = [1, 2, 3] as const;
+
 /**
  * Slash menu items for custom blocks.
  * These appear when the user types "/" in the editor.
  */
-export const customSlashMenuItems = [
+export const customSlashMenuItems: Array<{
+  title: string;
+  subtext: string;
+  aliases: string[];
+  group: string;
+  /** Key of the item this one is listed directly after (slashMenuOrder.ts). */
+  placeAfter?: string;
+  icon: JSX.Element;
+  onItemClick: (editor: PageBlockEditor) => void;
+}> = [
   {
     title: 'Callout',
     subtext: 'Highlighted box with emoji',
@@ -185,23 +198,37 @@ export const customSlashMenuItems = [
       editor.insertBlocks([{ type: 'terminal' }], editor.getTextCursorPosition().block, 'after');
     },
   },
-  {
-    title: 'Checkable heading',
+  ...CHECKABLE_HEADING_LEVELS.map(level => ({
+    title: `Checkable heading ${level}`,
     subtext: 'Students can mark the section done',
-    aliases: ['checkable', 'check', 'done', 'step', 'section'],
+    // `h1`/`heading1` list it next to "Heading 1"; `check`/`checkable` list
+    // all three.
+    aliases: [
+      'checkable',
+      'check',
+      'done',
+      'step',
+      'section',
+      `h${level}`,
+      `heading${level}`,
+      `checkable${level}`,
+    ],
     group: 'Headings',
+    // Listed directly after the plain heading of the same level (BlockNote's
+    // dictionary key for it), see slashMenuOrder.ts.
+    placeAfter: level === 1 ? 'heading' : `heading_${level}`,
     icon: <IconSquareCheck size={18} />,
     onItemClick: (editor: PageBlockEditor) => {
       insertOrUpdateBlockForSlashMenu(editor, {
         type: 'heading',
-        props: { level: 2, checkable: true },
+        props: { level, checkable: true },
       });
     },
-  },
+  })),
   {
     title: 'Locked section',
     subtext: 'Body opens with a hold',
-    aliases: ['locked', 'lock', 'hint', 'spoiler', 'solution', 'reveal', 'section'],
+    aliases: ['locked', 'lock', 'spoiler', 'solution', 'reveal', 'section'],
     group: 'Advanced',
     icon: <IconLock size={18} />,
     onItemClick: (editor: PageBlockEditor) => {

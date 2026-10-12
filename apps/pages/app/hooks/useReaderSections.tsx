@@ -26,7 +26,7 @@ export interface ReaderSections {
   staff: boolean;
   /**
    * Signed in. Optional: a loader that does not send it is read as
-   * `!canCheck` (only then is "Sign in to unlock" shown to someone signed out).
+   * `canCheck` (only a reader known to be signed out gets the sign-in link).
    */
   signedIn?: boolean;
   /** Signed in, accepted member, not impersonated: may tick headings. */
@@ -59,8 +59,10 @@ export interface ReaderSectionsValue {
   known: boolean;
   pageId: string;
   staff: boolean;
-  /** Signed in (decides whether a closed card asks the reader to sign in). */
+  /** Signed in (a signed-out reader sees each locked section as a sign-in link). */
   signedIn: boolean;
+  /** Where a signed-out reader signs in (`signInUrl` from the loader), else null. */
+  signInUrl: string | null;
   canCheck: boolean;
   canUnlock: boolean;
   /** Ticked headings, with ticks in flight applied. */
@@ -98,6 +100,7 @@ export const NO_READER_SECTIONS: ReaderSectionsValue = {
   pageId: '',
   staff: false,
   signedIn: false,
+  signInUrl: null,
   canCheck: false,
   canUnlock: false,
   checked: NOTHING,
@@ -141,7 +144,8 @@ interface SectionsResponse {
  */
 export function useReaderSectionsState(
   pageId: string,
-  readerSections: ReaderSections | null | undefined
+  readerSections: ReaderSections | null | undefined,
+  signInUrl: string | null = null
 ): ReaderSectionsValue {
   const known = Boolean(readerSections);
   const staff = readerSections?.staff === true;
@@ -340,6 +344,7 @@ export function useReaderSectionsState(
       pageId,
       staff,
       signedIn,
+      signInUrl,
       canCheck,
       canUnlock,
       checked,
@@ -356,6 +361,7 @@ export function useReaderSectionsState(
       pageId,
       staff,
       signedIn,
+      signInUrl,
       canCheck,
       canUnlock,
       checked,

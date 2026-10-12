@@ -510,10 +510,79 @@
   color: var(--color-text-subtle);
 }
 
-.pg-locked-signin {
-  font-size: 13px;
+/* Signed-out reader: the padlock and the title as one link to sign in, with
+   a "Sign in to unlock" label shown on hover and keyboard focus. */
+.pg-locked-gate {
+  margin: 2px 0;
+}
+
+.pg-locked-gate-link {
+  margin: 0 -8px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+/* Not a text link: outranks the editor's `.bn-editor a` colour and underline
+   (light and dark, hover included). */
+.pg-locked.pg-locked-gate a.pg-locked-gate-link,
+.pg-locked.pg-locked-gate a.pg-locked-gate-link:hover {
+  color: inherit !important;
+  text-decoration: none !important;
+}
+
+.pg-locked-gate-link .pg-locked-title {
+  flex: 0 1 auto;
+}
+
+.pg-locked-gate-link:hover,
+.pg-locked-gate-link:focus-visible {
+  background: var(--color-bg-subtle);
+}
+
+.pg-locked-gate-link:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 1px;
+}
+
+.dark .pg-locked-gate-link:focus-visible {
+  outline-color: #60a5fa;
+}
+
+.pg-locked-gate-tip {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
   font-weight: 500;
-  color: var(--pg-on-glass);
+  line-height: 18px;
+  white-space: nowrap;
+  color: #fff;
+  background: #37352f;
+  opacity: 0;
+  transform: translateX(-4px);
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+  pointer-events: none;
+}
+
+.dark .pg-locked-gate-tip {
+  color: #191919;
+  background: #e5e5e5;
+}
+
+.pg-locked-gate-link:hover .pg-locked-gate-tip,
+.pg-locked-gate-link:focus-visible .pg-locked-gate-tip {
+  opacity: 1;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pg-locked-gate-tip {
+    transition: none;
+  }
 }
 
 /* Hold to unlock */

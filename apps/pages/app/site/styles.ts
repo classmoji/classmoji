@@ -83,6 +83,50 @@ export const SITE_STYLES = `
   text-underline-offset: 2px;
 }
 .site-article .bn-site-locked-link:hover { opacity: 1; }
+/* Signed-out visitor: no card, one row (padlock + title) linking to sign in,
+   with a "Sign in to unlock" label on hover and keyboard focus. The colour and
+   underline rules outrank blocknote-overrides.css's \`.bn-editor a\`. */
+.site-article .bn-site-locked-gate {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: calc(100% + 1rem);
+  margin: 0.125rem -0.5rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+.site-article .bn-editor a.bn-site-locked-gate,
+.site-article .bn-editor a.bn-site-locked-gate:hover {
+  color: inherit !important;
+  text-decoration: none !important;
+}
+.site-article .bn-site-locked-gate .bn-site-locked-title { flex: 0 1 auto; }
+.site-article .bn-site-locked-gate:hover,
+.site-article .bn-site-locked-gate:focus-visible { background: rgba(55, 53, 47, 0.06); }
+.site-article .bn-site-locked-gate:focus-visible { outline: 2px solid #2563eb; outline-offset: 1px; }
+.site-article .bn-site-locked-tip {
+  flex: none;
+  padding: 0.125rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.125rem;
+  white-space: nowrap;
+  color: #fff;
+  background: #37352f;
+  opacity: 0;
+  transition: opacity 120ms ease;
+  pointer-events: none;
+}
+.site-article .bn-site-locked-gate:hover .bn-site-locked-tip,
+.site-article .bn-site-locked-gate:focus-visible .bn-site-locked-tip { opacity: 1; }
+@media (prefers-reduced-motion: reduce) {
+  .site-article .bn-site-locked-gate,
+  .site-article .bn-site-locked-tip { transition: none; }
+}
 
 /* Cover images: the same fixed band the editor uses, restated so a site page
    does not depend on a stylesheet that exists for the editor's benefit.
@@ -319,4 +363,8 @@ html.dark .site-article .bn-site-locked {
   border-color: rgba(255, 255, 255, 0.16);
   background: rgba(255, 255, 255, 0.03);
 }
+html.dark .site-article .bn-site-locked-gate:hover,
+html.dark .site-article .bn-site-locked-gate:focus-visible { background: rgba(255, 255, 255, 0.06); }
+html.dark .site-article .bn-site-locked-gate:focus-visible { outline-color: #60a5fa; }
+html.dark .site-article .bn-site-locked-tip { color: #191919; background: #e5e5e5; }
 `;

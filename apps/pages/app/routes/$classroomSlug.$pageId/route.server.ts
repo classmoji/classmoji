@@ -41,6 +41,7 @@ import {
   documentForReader,
   isImpersonatedSession,
   readerSectionsFor,
+  signInUrlFor,
   type SectionReaderState,
 } from '~/utils/pageSections.server.ts';
 import { downloadMapRole, type MediaDownloads } from '~/utils/mediaDownloads.ts';
@@ -579,6 +580,8 @@ export const loader = async ({
     // This reader's own checks and unlocks, and what they may do (see
     // `readerSectionsFor`). Never anyone else's rows.
     readerSections,
+    // A signed-out reader's way in: each locked section links here.
+    signInUrl: authData?.userId ? null : signInUrlFor(request.url),
     // `{ students, unlocks: { blockId: count } }` for the staff chip; accepted
     // OWNER/TEACHER only (the same readers the unlock list answers).
     sectionStats: sectionStatsPending ? await sectionStatsPending : null,

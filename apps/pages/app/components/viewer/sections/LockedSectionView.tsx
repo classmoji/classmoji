@@ -29,8 +29,12 @@ import {
  *   and when they opened it.
  * - locked: a card whose body is frosted glass over placeholder lines (the
  *   real body was never sent), with a hold-to-unlock control. The POST goes
- *   out only when the hold completes. Readers who may not unlock get the card
- *   without the control; only a signed-out reader is asked to sign in.
+ *   out only when the hold completes. Signed-in readers who may not unlock
+ *   (not an accepted member, impersonated, classroom closed to them) get the
+ *   card without the control.
+ * - signed out (a public page): one compact row, the padlock and the title,
+ *   that links to sign-in; hovering or focusing it says "Sign in to unlock".
+ *   No card, no glass, no hold.
  *
  * "Unlocked" is shown only once the section is open in this editor: its body
  * is in, or it has none (the viewer publishes which, `filled` in the section
@@ -58,7 +62,7 @@ export interface LockedSectionViewProps {
 
 const NO_FILLED: ReadonlySet<string> = new Set();
 
-type Mode = 'staff' | 'unlocked' | 'hold' | 'closed';
+type Mode = 'staff' | 'unlocked' | 'hold' | 'closed' | 'signin';
 
 export function LockedSectionView({ block, editor }: LockedSectionViewProps) {
   const sections = useReaderSections();
@@ -90,6 +94,7 @@ export function LockedSectionView({ block, editor }: LockedSectionViewProps) {
   else if (sections.staff) mode = 'staff';
   else if (unlockedAt && !pending && filled && (!breaking || breakDone)) mode = 'unlocked';
   else if (sections.canUnlock || pending || breaking) mode = 'hold';
+  else if (!sections.signedIn) mode = 'signin';
   else mode = 'closed';
 
   // A failed unlock: the POST came back without recording anything, or the
@@ -151,6 +156,10 @@ export function LockedSectionView({ block, editor }: LockedSectionViewProps) {
   const metaText = mode === 'unlocked' ? formatUnlockedAt(unlockedAt) : '';
   const card = mode === 'hold' || mode === 'closed';
 
+  if (mode === 'signin') {
+    return <SignInToUnlock title={title} href={sections.signInUrl} />;
+  }
+
   return (
     <div
       ref={rootRef}
@@ -189,7 +198,6 @@ export function LockedSectionView({ block, editor }: LockedSectionViewProps) {
           title={title}
           canUnlock={mode === 'hold'}
           waiting={pending}
-          signedOut={mode === 'closed' && sections.known && !sections.signedIn}
           onComplete={onComplete}
         />
       ) : null}
@@ -213,7 +221,6 @@ function HoldStage({
   title,
   canUnlock,
   waiting,
-  signedOut,
   onComplete,
 }: {
   blockId: string;
@@ -221,7 +228,6 @@ function HoldStage({
   canUnlock: boolean;
   /** The POST is out (also true for a card rebuilt mid-unlock). */
   waiting: boolean;
-  signedOut: boolean;
   onComplete: (focused: boolean) => void;
 }) {
   const stageRef = useRef<HTMLDivElement | null>(null);
@@ -503,12 +509,43 @@ function HoldStage({
               </span>
             </>
           ) : (
-            <div ref={anchorRef} className="pg-locked-signin">
-              {signedOut ? 'Sign in to unlock this section.' : null}
-            </div>
+            <div ref={anchorRef} className="pg-locked-anchor" />
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * A locked section for a signed-out reader: the padlock and the title, as a
+ * link to sign in. The label shows on hover and on keyboard focus; the link's
+ * accessible name says the same.
+ */
+function SignInToUnlock({ title, href }: { title: string; href: string | null }) {
+  const label = `Sign in to unlock: ${title}`;
+  const content = (
+    <>
+      <LockIcon />
+      <span className="pg-locked-title">{title}</span>
+      <span className="pg-locked-gate-tip" aria-hidden="true">
+        Sign in to unlock
+      </span>
+    </>
+  );
+  return (
+    <div className="pg-locked pg-locked-gate" data-mode="signin" contentEditable={false}>
+      {href ? (
+        <a className="pg-locked-row pg-locked-gate-link" href={href} aria-label={label}>
+          {content}
+        </a>
+      ) : (
+        // No sign-in URL from the loader (not expected for a signed-out
+        // reader): the same row, not a link.
+        <span className="pg-locked-row" title="Sign in to unlock">
+          {content}
+        </span>
+      )}
     </div>
   );
 }

@@ -16,6 +16,34 @@
   align-self: flex-start !important;
 }
 
+/* Side menu hit areas. The add (+) and drag-handle buttons are drawn at 24px;
+   each takes clicks (and the handle drags) from a larger invisible area around
+   it, so the pointer does not have to land on the glyph. The areas do not
+   overlap each other: the handle's reaches up, down and right into the gap
+   before the text, the add button's up, down and left. The drawn size, and so
+   the side menu's layout and its centering on the block's first line, is
+   unchanged. */
+.bn-side-menu > .mantine-ActionIcon-root {
+  overflow: visible;
+}
+
+.bn-side-menu > .mantine-ActionIcon-root::before {
+  content: '';
+  position: absolute;
+  top: -5px;
+  bottom: -5px;
+  left: 0;
+  right: 0;
+}
+
+.bn-side-menu > .mantine-ActionIcon-root[draggable='true']::before {
+  right: -10px;
+}
+
+.bn-side-menu > .mantine-ActionIcon-root:not([draggable='true'])::before {
+  left: -6px;
+}
+
 /* Link styling - make links blue and distinguishable */
 .bn-editor a,
 .bn-editor [data-content-type="link"] {
