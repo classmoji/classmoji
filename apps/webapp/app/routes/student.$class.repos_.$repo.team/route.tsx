@@ -225,13 +225,19 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         // Team was created, but user wasn't added - still return success
       }
 
-      // Trigger repository creation workflow
-      await tasks.trigger('create_git_repos', {
-        logins: [teamSlug],
-        assignmentTitle: repository.title,
-        org: classSlug,
-        sessionId: Date.now().toString(),
-      });
+      // Trigger repository creation workflow. Keyed by classroom like every
+      // other caller: without a key, team creations from every classroom
+      // share one run at a time.
+      await tasks.trigger(
+        'create_git_repos',
+        {
+          logins: [teamSlug],
+          assignmentTitle: repository.title,
+          org: classSlug,
+          sessionId: Date.now().toString(),
+        },
+        { concurrencyKey: classSlug }
+      );
 
       return { success: `Team "${teamName}" created! ${terms.Repo} is being set up.` };
     },

@@ -48,6 +48,12 @@ export const appPermissionDeniedMessage = (org: string, repoName: string): strin
   `request for the Classmoji app (Settings, then Github Apps) and allow outside ` +
   `collaborators, then run Sync on the repository.`;
 
+/** What to tell the instructor when the student's Github account no longer exists. */
+export const githubAccountGoneMessage = (login: string | null, repoName: string): string =>
+  `Github no longer has the account ${login ? `${login} ` : ''}that this student signed in ` +
+  `with, so they could not be given access to ${repoName}. The student should sign in to ` +
+  `Classmoji with the Github account they use now, then run Sync on the repository.`;
+
 /** A Prisma foreign-key violation (P2003), matched by code (the client class isn't imported here). */
 export const isForeignKeyViolation = (error: unknown): boolean =>
   typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'P2003';

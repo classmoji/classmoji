@@ -36,6 +36,7 @@ import { withLogin } from '@classmoji/utils';
 import type { GitProvider as GitProviderEnum } from '@prisma/client';
 
 import { getGitProvider } from '../git/index.ts';
+import type { GitHubProvider } from '../git/GitHubProvider.ts';
 import { sleep } from './sleep.ts';
 import { repoNamespace, scopeGitlabId, teamsNamespace } from '@classmoji/utils';
 import * as classroomService from './classroom.service.ts';
@@ -287,14 +288,22 @@ const loadClassroomOrg = async (classroomId: string) => {
 /**
  * The provider-side username to add to a team: the GitLab username on a GitLab
  * classroom (a user's Classmoji login may differ from it, e.g. "alice-2"),
- * the Github login otherwise.
+ * the Github login otherwise, or null when Github no longer has the account.
  */
 const providerUsername = async (
-  gitOrganization: { provider: string },
+  gitOrganization: Parameters<typeof getGitProvider>[0],
   user: { id: string; login: string | null },
   fallback: string
-): Promise<string> => {
-  if (gitOrganization.provider !== 'GITLAB') return user.login ?? fallback;
+): Promise<string | null> => {
+  if (gitOrganization.provider !== 'GITLAB') {
+    // The stored login may be stale (renamed, or since claimed by someone
+    // else): use whoever holds the user's Github account id now.
+    return userService.currentGithubLogin(
+      getGitProvider(gitOrganization) as GitHubProvider,
+      user.id,
+      user.login ?? fallback
+    );
+  }
   const usernames = await userService.findProviderUsernames([user.id], 'GITLAB');
   const username = usernames.get(user.id);
   if (!username) {
@@ -817,6 +826,10 @@ export const addTeamMembers = async ({
         return;
       }
       const canonicalLogin = await providerUsername(gitOrganization, user, login);
+      if (!canonicalLogin) {
+        failed.push({ login, error: 'not_found' });
+        return;
+      }
       await gitProvider.addTeamMember(orgLogin, team.slug, canonicalLogin);
       await teamMembershipService.addMemberToTeam(team.id, user.id);
       succeeded.push({ login: canonicalLogin });
@@ -863,12 +876,15 @@ export const removeTeamMember = async ({
   }
   const canonicalLogin = await providerUsername(gitOrganization, user, login);
 
-  const gitProvider = getGitProvider(gitOrganization);
-  await gitProvider.removeTeamMember(orgLogin, team.slug, canonicalLogin);
+  // Github no longer has the account: nothing to remove there, only here.
+  if (canonicalLogin) {
+    const gitProvider = getGitProvider(gitOrganization);
+    await gitProvider.removeTeamMember(orgLogin, team.slug, canonicalLogin);
+  }
 
   const { count } = await teamMembershipService.removeMemberFromTeam(team.id, user.id);
 
-  return { teamId: team.id, login: canonicalLogin, removed: count > 0 };
+  return { teamId: team.id, login: canonicalLogin ?? login, removed: count > 0 };
 };
 
 /**
