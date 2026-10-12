@@ -206,3 +206,24 @@ describe('release_git_repo_assignments_now — normal roster (no regression)', (
     expect(mocks.updateAssignment).toHaveBeenCalledWith('a-1', { is_published: true });
   });
 });
+
+describe('release_git_repo_assignments_now — a student renamed on Github', () => {
+  beforeEach(() => {
+    // The repo was made under the old login; the stored login is the new one.
+    mocks.findUsersByRole.mockResolvedValue([{ id: 'u-1', login: 'student-a-new' }]);
+    mocks.findGitReposByRepository.mockResolvedValue([
+      { id: 'gitrepo-1', name: 'lab-1-student-a', student_id: 'u-1' },
+    ]);
+  });
+
+  it('finds their existing repo by owner and makes no second one', async () => {
+    await run();
+
+    expect(mocks.createRepositoriesTriggerAndWait).not.toHaveBeenCalled();
+    const [payloads] = mocks.batchTriggerAndWait.mock.calls[0] as [Array<{ payload: unknown }>];
+    expect(payloads[0].payload).toMatchObject({
+      repoName: 'lab-1-student-a',
+      studentRepo: { id: 'gitrepo-1' },
+    });
+  });
+});
