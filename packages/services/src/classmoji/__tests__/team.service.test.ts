@@ -19,6 +19,8 @@ const teamTagFindFirst = vi.fn();
 const teamTagCount = vi.fn();
 const teamTagRowDelete = vi.fn();
 const userFindFirst = vi.fn();
+const accountFindFirst = vi.fn();
+const accountUpdate = vi.fn();
 const queryRaw = vi.fn();
 const transaction = vi.fn((fn: (tx: unknown) => unknown) => fn(client));
 
@@ -37,6 +39,10 @@ const client = {
     delete: (...a: unknown[]) => teamTagRowDelete(...a),
   },
   user: { findFirst: (...a: unknown[]) => userFindFirst(...a) },
+  account: {
+    findFirst: (...a: unknown[]) => accountFindFirst(...a),
+    update: (...a: unknown[]) => accountUpdate(...a),
+  },
   $queryRaw: (...a: unknown[]) => queryRaw(...a),
   $transaction: (fn: (tx: unknown) => unknown) => transaction(fn),
 };
@@ -55,6 +61,7 @@ const updateTeam = vi.fn();
 const updateRepo = vi.fn();
 const addTeamMember = vi.fn();
 const removeTeamMember = vi.fn();
+const getLoginById = vi.fn();
 vi.mock('../../git/index.ts', () => ({
   getGitProvider: () => ({
     getTeam: (...a: unknown[]) => getTeam(...a),
@@ -64,6 +71,7 @@ vi.mock('../../git/index.ts', () => ({
     updateRepo: (...a: unknown[]) => updateRepo(...a),
     addTeamMember: (...a: unknown[]) => addTeamMember(...a),
     removeTeamMember: (...a: unknown[]) => removeTeamMember(...a),
+    getLoginById: (...a: unknown[]) => getLoginById(...a),
   }),
 }));
 
@@ -129,6 +137,9 @@ beforeEach(() => {
   // the tests assert the reason code, so the log itself is silenced.
   vi.spyOn(console, 'error').mockImplementation(() => {});
   classroomFindById.mockResolvedValue(CLASSROOM);
+  // No stored Github account by default: the stored login is used as is.
+  accountFindFirst.mockResolvedValue(null);
+  accountUpdate.mockResolvedValue({});
   teamFindFirst.mockResolvedValue(TEAM);
   teamFindBySlug.mockResolvedValue(null);
   teamFindByIdWithRepositories.mockResolvedValue({ git_repos: [] });
@@ -837,5 +848,56 @@ describe('isReservedSlug', () => {
     expect(teamAdmin.isReservedSlug('cs1-25f-assistants')).toBe(true);
     expect(teamAdmin.isReservedSlug('blue-team')).toBe(false);
     expect(teamAdmin.isReservedSlug('cs1-25f-students-2')).toBe(false);
+  });
+});
+
+describe('teamAdmin — a stale Github login', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    userFindFirst.mockResolvedValue({ id: 'u-1', login: 'ada' });
+    accountFindFirst.mockResolvedValue({ id: 'acct-1', account_id: '42', username: 'ada' });
+  });
+
+  it('adds whoever holds the account id now after a rename', async () => {
+    getLoginById.mockResolvedValue('ada-renamed');
+
+    const result = await teamAdmin.addTeamMembers({
+      classroomId: 'class-1',
+      slugOrId: 'blue-team',
+      logins: ['ada'],
+    });
+
+    expect(getLoginById).toHaveBeenCalledWith('42');
+    expect(addTeamMember).toHaveBeenCalledWith('cs1-org', 'blue-team', 'ada-renamed');
+    expect(result.succeeded).toEqual([{ login: 'ada-renamed' }]);
+  });
+
+  it('adds nobody when Github no longer has the account', async () => {
+    getLoginById.mockResolvedValue(null);
+
+    const result = await teamAdmin.addTeamMembers({
+      classroomId: 'class-1',
+      slugOrId: 'blue-team',
+      logins: ['ada'],
+    });
+
+    expect(addTeamMember).not.toHaveBeenCalled();
+    expect(addMemberToTeam).not.toHaveBeenCalled();
+    expect(result.failed).toEqual([{ login: 'ada', error: 'not_found' }]);
+  });
+
+  it('still removes the local membership when Github no longer has the account', async () => {
+    getLoginById.mockResolvedValue(null);
+    removeMemberFromTeam.mockResolvedValue({ count: 1 });
+
+    const result = await teamAdmin.removeTeamMember({
+      classroomId: 'class-1',
+      slugOrId: 'blue-team',
+      login: 'ada',
+    });
+
+    expect(removeTeamMember).not.toHaveBeenCalled();
+    expect(removeMemberFromTeam).toHaveBeenCalledWith('team-1', 'u-1');
+    expect(result).toEqual({ teamId: 'team-1', login: 'ada', removed: true });
   });
 });

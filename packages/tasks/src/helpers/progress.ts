@@ -30,7 +30,8 @@ export type FailureReason =
   | 'permission_denied'
   | 'template_not_found'
   | 'github_unreachable'
-  | 'repository_deleted';
+  | 'repository_deleted'
+  | 'github_account_gone';
 
 export const reportFailureReason = async (reason: FailureReason) => {
   try {

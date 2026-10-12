@@ -282,6 +282,10 @@ const REASON_COPY = (label: string): Record<string, { title: string; fix?: strin
   template_not_found: { title: 'Template not found', fix: 'Check the repository’s template.' },
   github_unreachable: { title: `${label} unreachable`, fix: 'Retry in a few minutes.' },
   repository_deleted: { title: 'Repository was deleted', fix: 'Nothing to retry.' },
+  github_account_gone: {
+    title: 'Student account gone',
+    fix: 'The student must sign in with their current account, then Sync.',
+  },
   timed_out: { title: 'Took too long' },
   unknown: { title: 'Something went wrong' },
 });

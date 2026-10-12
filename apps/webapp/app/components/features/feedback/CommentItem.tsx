@@ -35,15 +35,20 @@ export function CommentItem({
     signedIn
   );
   const remove = useFeedbackAction(signedIn);
-  const canDelete = isAdmin || (viewerId !== null && comment.author?.id === viewerId);
-  const name = authorName(comment.author);
+  const canDelete = isAdmin || comment.viewerIsAuthor;
+  const name = authorName(comment.author, comment.is_anonymous);
 
   if (remove.pending) return null;
 
   return (
     <li>
       <div className="flex items-center gap-2.5">
-        <FeedbackAvatar name={name} image={comment.author?.image} size={isReply ? 24 : 32} />
+        <FeedbackAvatar
+          name={name}
+          image={comment.author?.image}
+          anonymous={comment.is_anonymous}
+          size={isReply ? 24 : 32}
+        />
         <span className="text-[13px] font-semibold text-ink-0">{name}</span>
         <span className="text-[12px] text-ink-4">{formatDate(comment.created_at)}</span>
       </div>

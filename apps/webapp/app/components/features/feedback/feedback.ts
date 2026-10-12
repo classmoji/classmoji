@@ -27,6 +27,9 @@ export interface FeedbackCommentView {
   vote_count: number;
   created_at: string | Date;
   author: FeedbackAuthor | null;
+  is_anonymous: boolean;
+  /** The viewer wrote it (an anonymous comment has no author to compare). */
+  viewerIsAuthor: boolean;
   viewerVoted: boolean;
   replies?: FeedbackCommentView[];
 }

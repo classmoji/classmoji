@@ -185,6 +185,8 @@ interface TeamRecord {
 
 interface ExistingGitRepoRecord extends StudentRepositoryRecord {
   name: string;
+  student_id?: string | null;
+  team?: { slug: string } | null;
 }
 
 const getErrorMessage = (error: unknown): string =>
@@ -239,6 +241,37 @@ const repoNamerFor = async (
   };
 };
 
+/**
+ * login (a student's, or a team slug) -> their existing repo for this
+ * repository. Matched by owner first: a repo keeps the name it was made with,
+ * and a student who renames on Github gets a new login, so matching by name
+ * would miss their repo and make them a second one. The name is the fallback.
+ */
+const repoFinderFor = async (
+  classroom: ClassroomRecord,
+  repositorySlug: string,
+  repos: ExistingGitRepoRecord[]
+): Promise<(login: string) => ExistingGitRepoRecord | undefined> => {
+  const students: Array<{ id: string; login: string | null }> =
+    await ClassmojiService.classroomMembership.findUsersByRole(classroom.id, 'STUDENT');
+  const studentIdByLogin = new Map(
+    students.filter(s => s.login).map(s => [s.login as string, s.id])
+  );
+  const byStudent = new Map(repos.filter(r => r.student_id).map(r => [r.student_id, r]));
+  const byTeam = new Map(repos.filter(r => r.team?.slug).map(r => [r.team?.slug, r]));
+  const byName = new Map(repos.map(r => [r.name, r]));
+  const nameFor = await repoNamerFor(classroom, repositorySlug);
+
+  return login => {
+    const studentId = studentIdByLogin.get(login);
+    return (
+      (studentId ? byStudent.get(studentId) : undefined) ??
+      byTeam.get(login) ??
+      byName.get(nameFor(login))
+    );
+  };
+};
+
 const ensureReposForLogins = async (
   classroom: ClassroomRecord,
   repository: ReleaseModuleRecord,
@@ -254,9 +287,8 @@ const ensureReposForLogins = async (
     repository.id
   )) as ExistingGitRepoRecord[];
 
-  const existingNames = new Set(existingRepos.map(repo => repo.name));
-  const nameFor = await repoNamerFor(classroom, repositorySlug);
-  const missingLogins = recipients.filter(login => !existingNames.has(nameFor(login)));
+  const findRepo = await repoFinderFor(classroom, repositorySlug, existingRepos);
+  const missingLogins = recipients.filter(login => !findRepo(login));
 
   if (missingLogins.length > 0) {
     logger.info('Creating missing repos before assignment release', {
@@ -846,21 +878,20 @@ export const dailyRepositoryAssignmentsReleaseTask = schedules.task({
             recipients,
             nanoid()
           );
-          const reposByName = new Map(repos.map(repo => [repo.name, repo]));
-          const nameFor = await repoNamerFor(classroom, repositorySlug);
+          const findRepo = await repoFinderFor(classroom, repositorySlug, repos);
 
           for await (const assignment of moduleAssignments) {
             logger.info('Processing assignment', { title: assignment.title });
 
             const payloads = recipients.map(login => {
-              const repoName = nameFor(login);
-              const studentRepo = reposByName.get(repoName);
+              const studentRepo = findRepo(login);
 
               if (!studentRepo) {
                 throw new Error(
-                  `GitRepo not found after provisioning for ${repoName} in classroom ${classroom.slug}`
+                  `GitRepo not found after provisioning for ${login} in classroom ${classroom.slug}`
                 );
               }
+              const repoName = studentRepo.name;
 
               return {
                 payload: {
@@ -956,8 +987,7 @@ export const releaseAssignmentsNowTask = task({
       recipients,
       nanoid()
     );
-    const reposByName = new Map(repos.map(repo => [repo.name, repo]));
-    const nameFor = await repoNamerFor(classroom, repositorySlug);
+    const findRepo = await repoFinderFor(classroom, repositorySlug, repos);
 
     for await (const assignment of assignments) {
       logger.info('Releasing assignment now', { title: assignment.title });
@@ -965,14 +995,14 @@ export const releaseAssignmentsNowTask = task({
       const payloads = (
         await Promise.all(
           recipients.map(async login => {
-            const repoName = nameFor(login);
-            const studentRepo = reposByName.get(repoName);
+            const studentRepo = findRepo(login);
 
             if (!studentRepo) {
               throw new Error(
-                `GitRepo not found after provisioning for ${repoName} in classroom ${classroom.slug}`
+                `GitRepo not found after provisioning for ${login} in classroom ${classroom.slug}`
               );
             }
+            const repoName = studentRepo.name;
 
             // Skip repos that already have this assignment so a re-run (or a
             // retry after a partial failure) doesn't create duplicate issues.

@@ -142,7 +142,10 @@ describe('sendEmailTask', () => {
   it('sends via a hosted template and never alongside html', async () => {
     mocks.send.mockResolvedValue({ data: { id: 'email-6' }, error: null });
 
-    await run({ to: 'student@school.edu', template: { id: 'verify-email', variables: { CODE: '123456' } } });
+    await run({
+      to: 'student@school.edu',
+      template: { id: 'verify-email', variables: { CODE: '123456' } },
+    });
 
     const [body] = mocks.send.mock.calls[0];
     expect(body.template).toEqual({ id: 'verify-email', variables: { CODE: '123456' } });
@@ -170,9 +173,9 @@ describe('sendEmailTask', () => {
   it('throws when a template send errors, same as the html path', async () => {
     mocks.send.mockResolvedValue({ data: null, error: { message: 'template not found' } });
 
-    await expect(
-      run({ to: 'student@school.edu', template: { id: 'nope' } })
-    ).rejects.toThrow('template not found');
+    await expect(run({ to: 'student@school.edu', template: { id: 'nope' } })).rejects.toThrow(
+      'template not found'
+    );
   });
 
   it('still sends html without a template field when given html', async () => {
@@ -336,7 +339,11 @@ describe('sendBatchEmailTask', () => {
     mocks.batchSend.mockResolvedValue({ data: [], error: null });
 
     await runBatch({
-      emails: Array.from({ length: 150 }, (_, i) => ({ to: `s${i}@x.edu`, html: 'h', subject: 's' })),
+      emails: Array.from({ length: 150 }, (_, i) => ({
+        to: `s${i}@x.edu`,
+        html: 'h',
+        subject: 's',
+      })),
     });
 
     const keys = mocks.batchSend.mock.calls.map(c => c[1].idempotencyKey);

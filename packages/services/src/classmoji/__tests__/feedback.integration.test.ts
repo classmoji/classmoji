@@ -88,6 +88,25 @@ describe.skipIf(!RUN)('feedback.service (integration)', () => {
     expect(listed[0]).not.toHaveProperty('author_id');
   });
 
+  it('hides the author of an anonymous comment but lets them manage it', async () => {
+    const { id: anonPostId } = await feedback.createPost({
+      authorId: author,
+      title: `Anonymous comment ${suite}`,
+      body: 'Thread',
+    });
+    await feedback.addComment({
+      postId: anonPostId,
+      authorId: voter,
+      body: 'Quietly agree',
+      isAnonymous: true,
+    });
+    const asOther = await feedback.getPost(anonPostId, author);
+    expect(asOther?.comments[0]?.author).toBeNull();
+    expect(asOther?.comments[0]).not.toHaveProperty('author_id');
+    expect(asOther?.comments[0]?.viewerIsAuthor).toBe(false);
+    expect((await feedback.getPost(anonPostId, voter))?.comments[0]?.viewerIsAuthor).toBe(true);
+  });
+
   it('keeps vote_count in step and follows on vote', async () => {
     expect(await feedback.togglePostVote(postId, voter)).toEqual({ voted: true, voteCount: 2 });
     expect((await feedback.getPost(postId, voter))?.viewerFollows).toBe(true);

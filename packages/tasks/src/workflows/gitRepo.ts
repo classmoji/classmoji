@@ -4,6 +4,7 @@ import {
   HelperService,
   getGitProvider,
   ensureClassroomTeam,
+  type GitHubProvider,
   type GitLabProvider,
 } from '@classmoji/services';
 import {
@@ -25,6 +26,7 @@ import { withDatabaseRetry } from '../helpers/databaseRetry.ts';
 import { isTransientGitError, retryOnGitBlip } from '../helpers/gitRetry.ts';
 import {
   appPermissionDeniedMessage,
+  githubAccountGoneMessage,
   isAppPermissionDenied,
   isForeignKeyViolation,
   isRepoNotFound,
@@ -571,6 +573,50 @@ export const createRepositoryTask = task({
   },
 });
 
+/**
+ * Adds a student to their Github repo by their stored login, without trusting
+ * it: a login goes stale when its owner renames, and a released one can be
+ * claimed by someone else. Github's reply names who it invited, by id, so the
+ * usual add costs no extra call. Only when the add fails, or invites someone
+ * other than the student, is the student's current login looked up by id.
+ *
+ * Returns false when Github no longer has the student's account.
+ */
+const addStudentToGithubRepo = async (
+  provider: GitHubProvider,
+  org: string,
+  repo: string,
+  student: { id: string; login: string }
+): Promise<boolean> => {
+  const accountId = await ClassmojiService.user.githubAccountId(student.id);
+  let failure: unknown = null;
+  try {
+    const invite = await provider.addCollaborator(org, repo, student.login, 'maintain');
+    // No invitation (they already had access) or no id to compare: nothing to check.
+    if (!accountId || !invite?.inviteeId || String(invite.inviteeId) === accountId) return true;
+    // The stored login now belongs to someone else: withdraw their invitation.
+    await provider.deleteRepoInvitation(org, repo, invite.id);
+    logger.warn('Stored Github login belongs to another account; invitation withdrawn', {
+      repo: `${org}/${repo}`,
+      userId: student.id,
+    });
+  } catch (error: unknown) {
+    // A login Github cannot add (renamed or deleted) answers 403 or 404.
+    const status = (error as { status?: unknown })?.status;
+    if (!accountId || (status !== 404 && !isAppPermissionDenied(error))) throw error;
+    failure = error;
+  }
+
+  const login = await ClassmojiService.user.currentGithubLogin(provider, student.id, student.login);
+  if (!login) return false;
+  if (login === student.login) {
+    // Still the student's login, so the refusal was about something else.
+    throw failure ?? new Error(`Github invited someone other than ${login} to ${org}/${repo}`);
+  }
+  await provider.addCollaborator(org, repo, login, 'maintain');
+  return true;
+};
+
 /** Gives the student (or team) and the assistants access to the repo. */
 export const addCollaboratorsToRepo = async (payload: AddCollaboratorsToRepoTaskPayload) => {
   try {
@@ -616,7 +662,16 @@ export const addCollaboratorsToRepo = async (payload: AddCollaboratorsToRepoTask
         throw new Error(`Missing student login for repo ${repoName}`);
       }
 
-      await gitProvider.addCollaborator(gitOrgLogin, repoName, payload.student.login, 'maintain');
+      const added = await addStudentToGithubRepo(
+        gitProvider as GitHubProvider,
+        gitOrgLogin,
+        repoName,
+        { id: payload.student.id, login: payload.student.login }
+      );
+      if (!added) {
+        await reportFailureReason('github_account_gone');
+        throw new AbortTaskRunError(githubAccountGoneMessage(payload.student.login, repoName));
+      }
     } else {
       if (!payload.team?.slug) {
         throw new Error(`Missing team slug for repo ${repoName}`);

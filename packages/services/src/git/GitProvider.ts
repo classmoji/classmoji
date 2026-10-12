@@ -288,12 +288,13 @@ export class GitProvider {
   }
 
   // ─── Collaborators ─────────────────────────────────────────────────────────
+  /** Github returns the invitation it sent (null when none was needed); GitLab returns nothing. */
   async addCollaborator(
     org: string,
     repo: string,
     username: string,
     permission = 'maintain'
-  ): Promise<void> {
+  ): Promise<{ id: number; inviteeId: number | null } | null | void> {
     throw new Error('addCollaborator() must be implemented by subclass');
   }
 
