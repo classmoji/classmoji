@@ -42,6 +42,11 @@ import {
   type SectionsPage,
 } from '~/utils/pageSections.server.ts';
 import { openLockedSections } from '~/components/viewer/sections/sectionCheckbox.ts';
+import {
+  SECTION_CHECK_GUTTER,
+  clipLeftOf,
+  sectionCheckLayout,
+} from '~/components/viewer/sections/useSectionCheckGutter.ts';
 import { collectMediaDownloadRefs } from '~/utils/mediaDownloads.ts';
 import { renderSitePage } from '~/site/render.server.ts';
 
@@ -1642,5 +1647,65 @@ test.describe('the editor schema', () => {
       enterLockedSectionBody(editor, 'L');
       expect(calls).toEqual([['focus'], ['cursor', 'new-p', 'start']]);
     });
+  });
+});
+
+test.describe('the tick box gutter', () => {
+  // JSDOM has no layout: each element's left edge is given by `data-left`.
+  const page = (html: string) => {
+    const doc = parse(html);
+    for (const el of Array.from(doc.querySelectorAll<HTMLElement>('*'))) {
+      const left = Number(el.dataset.left ?? 0);
+      const size = el.dataset.collapsed === 'true' ? 0 : 100;
+      el.getBoundingClientRect = () =>
+        ({ left, top: 0, right: left + size, bottom: size, width: size, height: size }) as DOMRect;
+    }
+    return doc;
+  };
+  const heading = (left: number, extra = '') =>
+    `<div class="bn-block-content" data-content-type="heading" data-checkable="true" data-left="${left}" ${extra}>` +
+    `<h2>Title</h2><button class="pg-section-check"></button></div>`;
+
+  test('the clip edge is the right-most clipping ancestor, or the window edge', () => {
+    const doc = page(
+      `<div style="overflow-x: hidden" data-left="40"><div data-left="300">` +
+        `<div style="overflow-x: auto" data-left="240"><div id="viewer" data-left="250">${heading(264)}</div></div>` +
+        `</div></div>`
+    );
+    const content = doc.querySelector('.bn-block-content')!;
+    expect(clipLeftOf(content)).toBe(240);
+    // No clipping ancestor (the page alone in a frame): the window's edge.
+    expect(clipLeftOf(page(heading(24)).querySelector('.bn-block-content')!)).toBe(0);
+  });
+
+  test('inline when a shown box has less room than the gutter needs', () => {
+    expect(sectionCheckLayout(page(`<div>${heading(24)}</div>`).body)).toBe('inline');
+    expect(sectionCheckLayout(page(`<div>${heading(SECTION_CHECK_GUTTER)}</div>`).body)).toBe(
+      'gutter'
+    );
+    // The room is counted from the clipping pane, not the window.
+    const pane = (left: number) =>
+      page(`<div style="overflow-x: auto" data-left="240">${heading(left)}</div>`).body;
+    expect(sectionCheckLayout(pane(264))).toBe('inline');
+    expect(sectionCheckLayout(pane(354))).toBe('gutter');
+    // One tight heading puts every box inline.
+    expect(sectionCheckLayout(page(heading(300) + heading(20)).body)).toBe('inline');
+  });
+
+  test('hidden boxes and collapsed headings are not measured', () => {
+    expect(sectionCheckLayout(page(heading(20).replace('<button ', '<button hidden ')).body)).toBe(
+      null
+    );
+    expect(sectionCheckLayout(page(heading(20, 'data-collapsed="true"')).body)).toBe(null);
+    expect(sectionCheckLayout(page(heading(300) + heading(20, 'data-collapsed="true"')).body)).toBe(
+      'gutter'
+    );
+    expect(sectionCheckLayout(page('<p>No checkable headings</p>').body)).toBe(null);
+  });
+
+  test('the inline layout is keyed on the measured attribute, not the viewport width', () => {
+    const css = source('../../app/styles/page-sections.css');
+    expect(css).not.toMatch(/@media \(max-width: 640px\)/);
+    expect(css).toContain(".pg-reader-sections[data-section-checks='inline'] .pg-section-check {");
   });
 });
