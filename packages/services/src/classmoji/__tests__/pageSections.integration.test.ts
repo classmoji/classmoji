@@ -21,6 +21,7 @@ import type { Role } from '@prisma/client';
 
 import getPrisma from '@classmoji/database';
 import * as sections from '../pageSections.service.ts';
+import * as audit from '../audit.service.ts';
 
 const DATABASE_URL = process.env.DATABASE_URL ?? '';
 const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(DATABASE_URL);
@@ -128,28 +129,122 @@ describe.skipIf(!RUN)('pageSections.service (integration)', () => {
     await prisma.user.deleteMany({ where: { id: { in: userIds } } }).catch(() => {});
   });
 
-  it('reads access from accepted memberships, highest role first', async () => {
-    expect(await sections.readerAccess({ userId: X.studentA, classroomId: X.classroomId })).toEqual(
-      { acceptedRole: 'STUDENT', teachingTeam: false, student: true }
-    );
-    expect(
-      await sections.readerAccess({ userId: X.staffStudent, classroomId: X.classroomId })
-    ).toEqual({ acceptedRole: 'ASSISTANT', teachingTeam: true, student: false });
+  it('reads the section viewer from memberships, highest role first', async () => {
+    const viewer = (userId: string, classroomId = X.classroomId) =>
+      sections.sectionViewer({ userId, classroomId });
+
+    expect(await viewer(X.studentA)).toMatchObject({
+      role: 'STUDENT',
+      acceptedRole: 'STUDENT',
+      student: true,
+      revealAll: false,
+      canUnlock: true,
+      canSeeActivity: false,
+    });
+    expect(await viewer(X.staffStudent)).toMatchObject({
+      acceptedRole: 'ASSISTANT',
+      teachingTeam: true,
+      student: false,
+      revealAll: true,
+      canUnlock: false,
+    });
+    expect(await viewer(X.ownerId)).toMatchObject({
+      acceptedRole: 'OWNER',
+      canEditAnyState: true,
+      canSeeActivity: true,
+    });
     // A student of X is nothing in Y.
-    expect(await sections.readerAccess({ userId: X.studentA, classroomId: Y.classroomId })).toEqual(
-      { acceptedRole: null, teachingTeam: false, student: false }
-    );
+    expect(await viewer(X.studentA, Y.classroomId)).toEqual(sections.NO_SECTION_VIEWER);
 
     // A student with a PENDING assistant invite stays a student.
     const pending = await makeUser('x-pending');
     await join(X.classroomId, pending, 'STUDENT');
     await join(X.classroomId, pending, 'ASSISTANT', false);
-    expect(await sections.readerAccess({ userId: pending, classroomId: X.classroomId })).toEqual({
+    expect(await viewer(pending)).toMatchObject({
+      role: 'ASSISTANT',
       acceptedRole: 'STUDENT',
-      teachingTeam: false,
       student: true,
+      revealAll: false,
+      canUnlock: true,
     });
-    await prisma.classroomMembership.deleteMany({ where: { user_id: pending } });
+
+    // A student with a PENDING teacher invite edits, so reveals all and never unlocks.
+    const pendingTeacher = await makeUser('x-pending-teacher');
+    await join(X.classroomId, pendingTeacher, 'STUDENT');
+    await join(X.classroomId, pendingTeacher, 'TEACHER', false);
+    expect(await viewer(pendingTeacher)).toMatchObject({
+      role: 'TEACHER',
+      acceptedRole: 'STUDENT',
+      canEditAnyState: true,
+      revealAll: true,
+      canUnlock: false,
+      canSeeActivity: false,
+    });
+    await prisma.classroomMembership.deleteMany({
+      where: { user_id: { in: [pending, pendingTeacher] } },
+    });
+  });
+
+  it('logs every check toggle when dedupe is off (check, uncheck, check within 5s)', async () => {
+    const blockId = `audit-toggle-${suite}`;
+    try {
+      for (const checked of [true, false, true]) {
+        await audit.create(
+          {
+            user_id: X.studentA,
+            classroom_id: X.classroomId,
+            role: 'STUDENT',
+            resource_type: 'PAGES',
+            resource_id: X.pageId,
+            action: checked ? 'CREATE' : 'DELETE',
+            data: {
+              tool: 'page_section_check',
+              via: 'web',
+              page_id: X.pageId,
+              block_id: blockId,
+              checked,
+            },
+          },
+          { dedupe: false }
+        );
+      }
+      const rows = await prisma.auditLog.findMany({
+        where: { user_id: X.studentA, data: { path: ['block_id'], equals: blockId } },
+        orderBy: { timestamp: 'asc' },
+      });
+      expect(rows.map(row => row.action)).toEqual(['CREATE', 'DELETE', 'CREATE']);
+
+      // The default window still coalesces a genuine double-submit.
+      const repeat = {
+        user_id: X.studentA,
+        classroom_id: X.classroomId,
+        role: 'STUDENT',
+        resource_type: 'PAGES',
+        resource_id: X.pageId,
+        action: 'VIEW' as const,
+        data: { tool: 'page_section_unlocks', page_id: X.pageId, block_id: blockId },
+      };
+      expect(await audit.create(repeat)).not.toBeNull();
+      expect(await audit.create(repeat)).toBeNull();
+    } finally {
+      await prisma.auditLog.deleteMany({
+        where: { user_id: X.studentA, data: { path: ['block_id'], equals: blockId } },
+      });
+    }
+  });
+
+  it('counts by a page row without re-reading the page, and reads only what is asked', async () => {
+    await sections.recordUnlock({ page: X.page, userId: X.studentB, blockId: 'lock-row' });
+    const counts = await sections.unlockCounts({ page: X.page });
+    expect(counts!.unlocks['lock-row']).toBe(1);
+    const only = await sections.sectionActivity({
+      page: X.page,
+      blockId: 'lock-row',
+      only: 'unlocks',
+    });
+    expect(only!.unlocks.map(entry => entry.userId)).toEqual([X.studentB]);
+    expect(only!.checks).toEqual([]);
+    await prisma.pageSectionUnlock.deleteMany({ where: { block_id: 'lock-row' } });
   });
 
   it("keeps each student's checks and unlocks to that student", async () => {

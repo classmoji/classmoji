@@ -1009,21 +1009,9 @@
     {
       "id": "ks-locked",
       "type": "lockedSection",
-      "props": {},
-      "content": [
-        {
-          "type": "text",
-          "text": "Solution",
-          "styles": {
-            "bold": true
-          }
-        },
-        {
-          "type": "text",
-          "text": " (unlock when stuck)",
-          "styles": {}
-        }
-      ],
+      "props": {
+        "title": "Solution (unlock when stuck)"
+      },
       "children": [
         {
           "id": "ks-locked-p",
@@ -1065,14 +1053,9 @@
         {
           "id": "ks-locked-nested",
           "type": "lockedSection",
-          "props": {},
-          "content": [
-            {
-              "type": "text",
-              "text": "Hint inside the solution",
-              "styles": {}
-            }
-          ],
+          "props": {
+            "title": "Hint inside the solution"
+          },
           "children": [
             {
               "id": "ks-locked-nested-p",

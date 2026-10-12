@@ -1,7 +1,15 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import { lockedSectionTitle } from '@classmoji/page-schema/sections';
 
 import { useReaderSections } from '~/hooks/useReaderSections.tsx';
+import { sectionStoreFor } from './sectionCheckbox.ts';
 import {
   buildCracks,
   crackProgress,
@@ -21,12 +29,14 @@ import {
  *   and when they opened it.
  * - locked: a card whose body is frosted glass over placeholder lines (the
  *   real body was never sent), with a hold-to-unlock control. The POST goes
- *   out only when the hold completes. Readers who may not unlock (signed out,
- *   not an accepted member) get the card without the control.
+ *   out only when the hold completes. Readers who may not unlock get the card
+ *   without the control; only a signed-out reader is asked to sign in.
  *
- * The title element stays the same DOM node in every state: it holds the
- * block's inline content (BlockNote's `contentRef`), and moving it between
- * nodes would be a needless detach/attach of ProseMirror's content DOM.
+ * "Unlocked" is shown only once the body is in this editor (the viewer
+ * publishes which sections have one, `filled` in the section store): after a
+ * hold, the card stays broken open until the reloaded page's body is in.
+ *
+ * The title is the block's `title` prop (public).
  */
 
 const HOLD_MS = 1200;
@@ -40,19 +50,28 @@ const MIN_BREAK_REDUCED_MS = 200;
 const SHIMMER_AFTER_MS = 700;
 
 export interface LockedSectionViewProps {
-  block: { id: string; content?: unknown; children: unknown[] };
-  contentRef: (element: HTMLElement | null) => void;
+  block: { id: string; props?: unknown; children: unknown[] };
+  /** The viewer's editor (its section store says whether the body is in). */
+  editor: object;
 }
+
+const NO_FILLED: ReadonlySet<string> = new Set();
 
 type Mode = 'staff' | 'unlocked' | 'hold' | 'closed';
 
-export function LockedSectionView({ block, contentRef }: LockedSectionViewProps) {
+export function LockedSectionView({ block, editor }: LockedSectionViewProps) {
   const sections = useReaderSections();
   const id = block.id;
   const title = lockedSectionTitle(block) || 'Locked section';
-  const hasBody = block.children.length > 0;
+  const store = sectionStoreFor(editor);
+  const filled = useSyncExternalStore(
+    store.subscribe,
+    () => store.get().filled,
+    () => NO_FILLED
+  ).has(id);
   const unlockedAt = sections.unlocked[id];
-  const pending = sections.status[id] === 'pending';
+  // The POST is out, or the page is being reloaded for the body.
+  const pending = Boolean(sections.status[id]);
 
   // Local only: the hold completed here and the shards are still flying.
   const [breaking, setBreaking] = useState(false);
@@ -66,22 +85,23 @@ export function LockedSectionView({ block, contentRef }: LockedSectionViewProps)
   const toggleRef = useRef<HTMLButtonElement | null>(null);
 
   let mode: Mode;
-  if (!sections.known) mode = hasBody ? 'staff' : 'closed';
+  if (!sections.known) mode = filled ? 'staff' : 'closed';
   else if (sections.staff) mode = 'staff';
-  else if (unlockedAt && !pending && (!breaking || breakDone)) mode = 'unlocked';
+  else if (unlockedAt && !pending && filled && (!breaking || breakDone)) mode = 'unlocked';
   else if (sections.canUnlock || pending || breaking) mode = 'hold';
   else mode = 'closed';
 
-  // A failed unlock: the POST came back without recording anything.
+  // A failed unlock: the POST came back without recording anything, or the
+  // reloaded page came back without the body. The card comes back whole.
   const wasPending = useRef(pending);
   useEffect(() => {
-    if (wasPending.current && !pending && !unlockedAt) {
+    if (wasPending.current && !pending && !filled) {
       setBreaking(false);
       setBreakDone(false);
       setAttempt(a => a + 1);
     }
     wasPending.current = pending;
-  }, [pending, unlockedAt]);
+  }, [pending, filled]);
 
   const onComplete = useCallback(
     (focused: boolean) => {
@@ -106,7 +126,7 @@ export function LockedSectionView({ block, contentRef }: LockedSectionViewProps)
   // live region says so.
   useLayoutEffect(() => {
     if (mode !== 'unlocked' || !sections.takeJustUnlocked(id)) return;
-    setAnnouncement('Unlocked');
+    setAnnouncement(`Unlocked: ${title}`);
     if (hadFocus.current) toggleRef.current?.focus({ preventScroll: true });
     const group = rootRef.current
       ?.closest('.bn-block')
@@ -124,7 +144,7 @@ export function LockedSectionView({ block, contentRef }: LockedSectionViewProps)
       ],
       { duration: 340, easing: 'cubic-bezier(.2,.8,.2,1)' }
     );
-  }, [mode, id, sections]);
+  }, [mode, id, sections, title]);
 
   const metaText = mode === 'unlocked' ? formatUnlockedAt(unlockedAt) : '';
   const card = mode === 'hold' || mode === 'closed';
@@ -153,7 +173,7 @@ export function LockedSectionView({ block, contentRef }: LockedSectionViewProps)
           </button>
         ) : null}
         {card ? <LockIcon /> : <LockOpenIcon />}
-        <span className="pg-locked-title" ref={contentRef} />
+        <span className="pg-locked-title">{title}</span>
         {metaText ? (
           <span className="pg-locked-meta" contentEditable={false}>
             Unlocked {metaText}
@@ -167,7 +187,7 @@ export function LockedSectionView({ block, contentRef }: LockedSectionViewProps)
           title={title}
           canUnlock={mode === 'hold'}
           waiting={pending}
-          signedOut={mode === 'closed' && sections.known}
+          signedOut={mode === 'closed' && sections.known && !sections.signedIn}
           onComplete={onComplete}
         />
       ) : null}

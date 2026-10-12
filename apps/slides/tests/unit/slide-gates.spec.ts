@@ -400,8 +400,9 @@ test.describe('the content proxy route', () => {
     // this path" and the answer for "you may not have this document" start to
     // differ — and the difference is an oracle for which documents exist.
     expect(PROXY_SOURCE.match(/status: 403/g)).toHaveLength(1);
-    // Access, the file-slide rule, the page-document rule, the deck rule.
-    expect(PROXY_SOURCE.match(/throw forbidden\(\);/g)).toHaveLength(4);
+    // The path spelling, access, the file-slide rule, the page-document rule,
+    // the deck rule.
+    expect(PROXY_SOURCE.match(/throw forbidden\(\);/g)).toHaveLength(5);
   });
 });
 

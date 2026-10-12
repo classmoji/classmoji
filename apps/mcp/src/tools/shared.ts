@@ -23,7 +23,7 @@
 
 import { ClassmojiService } from '@classmoji/services';
 import { slideService } from '@classmoji/services/slides';
-import type { AuditLogAction, Prisma } from '@prisma/client';
+import type { AuditLogAction, Prisma, Role } from '@prisma/client';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolResult } from '../mcp/registry.ts';
@@ -154,25 +154,37 @@ export interface AuditEntry {
   resource_id?: string | null;
   action: AuditLogAction;
   data?: Prisma.InputJsonValue;
+  /**
+   * The actor's role for this row when the tool decided it from something
+   * stricter than the registry's membership (e.g. the ACCEPTED role a page
+   * sections tool acts as). Defaults to the enforcing membership's role.
+   */
+  role?: Role;
+  /** false: skip the audit service's 5-second dedup window (every call is an event). */
+  dedupe?: boolean;
 }
 
 /**
  * Write an audit-log row for a mutation. The audit service console.warns and
  * SKIPS on malformed input, so the payload is built strictly from validated
- * context: `role` is the enforcing membership's Role enum and `action` is a
- * literal from the AuditLogAction enum — rows cannot be silently dropped.
+ * context: `role` is the enforcing membership's Role enum (or the tool's own
+ * validated override) and `action` is a literal from the AuditLogAction enum —
+ * rows cannot be silently dropped.
  */
 export async function writeAudit(ctx: ToolContext, entry: AuditEntry): Promise<void> {
   const classroom = requireClassroomCtx(ctx);
-  await ClassmojiService.audit.create({
-    user_id: ctx.viewer.userId,
-    classroom_id: classroom.classroomId,
-    role: classroom.role,
-    resource_type: entry.resource_type,
-    resource_id: entry.resource_id ?? null,
-    action: entry.action,
-    ...(entry.data !== undefined ? { data: entry.data } : {}),
-  });
+  await ClassmojiService.audit.create(
+    {
+      user_id: ctx.viewer.userId,
+      classroom_id: classroom.classroomId,
+      role: entry.role ?? classroom.role,
+      resource_type: entry.resource_type,
+      resource_id: entry.resource_id ?? null,
+      action: entry.action,
+      ...(entry.data !== undefined ? { data: entry.data } : {}),
+    },
+    ...(entry.dedupe === false ? [{ dedupe: false }] : [])
+  );
 }
 
 // ─── S1 loaders (fetch target WITH classroom chain, compare ids) ────────────

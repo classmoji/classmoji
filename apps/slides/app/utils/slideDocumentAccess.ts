@@ -29,6 +29,48 @@
 import { nonDeckHeaders } from './slideKind';
 
 /**
+ * Characters a served path never contains.
+ *
+ * React Router hands the route a fully decoded splat (`%2F` → `/`, `%2e` → `.`,
+ * `%5C` → `\`, `%3F` → `?`), and the legacy read builds a URL from it, where a
+ * URL parser gives these characters meaning: `\` is a separator, `%2e` is a dot
+ * segment, `?` and `#` end the path, tab and newline are dropped. Stored files
+ * are named in lowercase ASCII (`sanitizeFilename`), so none of them is needed.
+ */
+const UNSERVED_PATH_CHARACTERS = /[%\\?#\u0000-\u001f\u007f]/;
+
+/**
+ * The one spelling of a requested repo path this route answers, or null.
+ *
+ * The rules below decide on the path string, and the reads normalize it
+ * (`normalize` is the delivery layer's `normalizeRepoRelative`: empty and `.`
+ * segments dropped, `..` refused). So the path is held to the normalized form
+ * itself: any other spelling of a path (`a//b`, `a/./b`, a leading or trailing
+ * `/`) is refused rather than rewritten, as is any `..` segment or a character
+ * from `UNSERVED_PATH_CHARACTERS`. Every URL this app builds is already in this
+ * form.
+ */
+export function canonicalProxyPath(
+  raw: string,
+  normalize: (path: string) => string | null
+): string | null {
+  if (UNSERVED_PATH_CHARACTERS.test(raw)) return null;
+  const normalized = normalize(raw);
+  return normalized !== null && normalized === raw ? normalized : null;
+}
+
+/**
+ * The stored spellings of a content folder a row lookup should match.
+ *
+ * Content paths are written as `pages/<slug>` / `slides/<slug>`, but a stored
+ * value with a leading or trailing `/` names the same folder, and a lookup by
+ * exact value would miss it.
+ */
+export function storedContentPathForms(folder: string): string[] {
+  return [folder, `${folder}/`, `/${folder}`, `/${folder}/`];
+}
+
+/**
  * Is `path` INSIDE `contentPath` (or is it that path itself)?
  *
  * The separator is the whole point. A bare `startsWith` on `slides/week-1`

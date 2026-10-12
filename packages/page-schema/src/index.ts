@@ -39,6 +39,11 @@ export {
 } from './schema.ts';
 export { normalizeCodeBlockContent } from './codeContent.ts';
 export {
+  lockedSectionGuard,
+  lockedSectionGuardPlugin,
+  movesBlockOutOfLock,
+} from './lockedSectionGuard.ts';
+export {
   COPY_BUTTON_CLASS,
   COPY_TOGGLE_CLASS,
   COPY_BUTTON_ICONS,

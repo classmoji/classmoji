@@ -9,6 +9,7 @@ import {
   isCheckableHeading,
   isLockedSection,
   lockedSectionIds,
+  headingText,
   lockedSectionTitle,
   redactLockedSections,
   type SectionBlock,
@@ -35,8 +36,7 @@ const h = (id: string, level: number, checkable?: boolean, children: unknown[] =
 const locked = (id: string, title: string, children: unknown[]) => ({
   id,
   type: 'lockedSection',
-  props: {},
-  content: text(title),
+  props: { title },
   children,
 });
 
@@ -110,12 +110,12 @@ describe('redactLockedSections', () => {
     for (const secret of ['L1-body', 'L1-inner', 'L-col-body', 'L-toggle-body', 'L-list-body']) {
       expect(body, secret).not.toContain(secret);
     }
-    // Titles stay; the stub keeps type, id, props and content.
+    // Titles stay; the stub keeps type, id and props (the title).
     for (const id of ['L1', 'L-col', 'L-toggle', 'L-list']) {
       const block = findBlock(out, id);
       expect(block?.type).toBe('lockedSection');
       expect(block?.children).toEqual([]);
-      expect(block?.props).toEqual({});
+      expect(typeof (block?.props as { title?: unknown }).title).toBe('string');
     }
     expect(lockedSectionTitle(findBlock(out, 'L1'))).toBe('Solution');
     expect(body).toContain('outro');
@@ -172,9 +172,9 @@ describe('redactLockedSections', () => {
 
   it('fails closed: a locked section without a usable id is never revealed', () => {
     const doc = deepFreeze([
-      { type: 'lockedSection', content: text('no id'), children: [p('secret-a')] },
-      { id: 42, type: 'lockedSection', content: text('numeric id'), children: [p('secret-b')] },
-      { id: '', type: 'lockedSection', content: text('empty id'), children: [p('secret-c')] },
+      { type: 'lockedSection', props: { title: 'no id' }, children: [p('secret-a')] },
+      { id: 42, type: 'lockedSection', props: { title: 'numeric id' }, children: [p('secret-b')] },
+      { id: '', type: 'lockedSection', props: { title: 'empty id' }, children: [p('secret-c')] },
     ]);
     const calls: string[] = [];
     const out = redactLockedSections(doc, id => {
@@ -187,8 +187,8 @@ describe('redactLockedSections', () => {
 
   it('stubs a locked section whose children are malformed', () => {
     const doc = deepFreeze([
-      { id: 'L', type: 'lockedSection', content: text('t'), children: { secret: 'x' } },
-      { id: 'M', type: 'lockedSection', content: text('t') },
+      { id: 'L', type: 'lockedSection', props: { title: 't' }, children: { secret: 'x' } },
+      { id: 'M', type: 'lockedSection', props: { title: 't' } },
     ]);
     const out = redactLockedSections(doc, () => false) as SectionBlock[];
     expect(out[0].children).toEqual([]);
@@ -333,11 +333,11 @@ describe('checkableSectionRanges', () => {
   });
 });
 
-describe('lockedSectionTitle', () => {
+describe('headingText', () => {
   it('is the plain text of the inline content, links and styles included', () => {
     expect(
-      lockedSectionTitle({
-        type: 'lockedSection',
+      headingText({
+        type: 'heading',
         content: [
           { type: 'text', text: 'Part ', styles: { bold: true } },
           { type: 'link', href: 'https://x', content: [{ type: 'text', text: 'two', styles: {} }] },
@@ -345,13 +345,33 @@ describe('lockedSectionTitle', () => {
         ],
       })
     ).toBe('Part two');
+    expect(headingText({ content: 'plain' })).toBe('plain');
+    expect(headingText({ content: [null, 3, {}] })).toBe('');
+    expect(headingText(null)).toBe('');
+  });
+});
+
+describe('lockedSectionTitle', () => {
+  it('is props.title, trimmed', () => {
+    expect(lockedSectionTitle(locked('L', '  Part two ', []))).toBe('Part two');
   });
 
-  it('is empty for missing or odd content', () => {
+  it('never reads the body or inline content', () => {
+    expect(
+      lockedSectionTitle({
+        type: 'lockedSection',
+        props: {},
+        content: text('not the title'),
+        children: [p('secret')],
+      })
+    ).toBe('');
+  });
+
+  it('is empty for a missing or odd title', () => {
     expect(lockedSectionTitle({ type: 'lockedSection' })).toBe('');
     expect(lockedSectionTitle(null)).toBe('');
-    expect(lockedSectionTitle({ content: 'plain' })).toBe('plain');
-    expect(lockedSectionTitle({ content: [null, 3, {}] })).toBe('');
+    expect(lockedSectionTitle({ props: { title: 3 } })).toBe('');
+    expect(lockedSectionTitle({ props: 'title' })).toBe('');
   });
 });
 

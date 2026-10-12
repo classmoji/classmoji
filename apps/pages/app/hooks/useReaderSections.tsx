@@ -24,6 +24,11 @@ import { toast } from 'react-toastify';
 export interface ReaderSections {
   /** Reveal-all reader (teaching team): bodies present, no lock UI, nothing recorded. */
   staff: boolean;
+  /**
+   * Signed in. Optional: a loader that does not send it is read as
+   * `!canCheck` (only then is "Sign in to unlock" shown to someone signed out).
+   */
+  signedIn?: boolean;
   /** Signed in, accepted member, not impersonated: may tick headings. */
   canCheck: boolean;
   /** `canCheck && !staff`: may unlock. */
@@ -40,24 +45,38 @@ export interface SectionStats {
   unlocks: Record<string, number>;
 }
 
-/** An unlock in flight, or recorded and waiting for the revalidated page. */
-export type UnlockStatus = 'pending';
+/**
+ * An unlock under way:
+ * - `pending`: the POST is out;
+ * - `reloading`: recorded; the page is being loaded again for the body;
+ * - `arrived`: the page came back; the viewer puts the body in and settles it
+ *   (`settleOpen`).
+ */
+export type UnlockStatus = 'pending' | 'reloading' | 'arrived';
 
 export interface ReaderSectionsValue {
   /** False until the loader sends `readerSections` (then: no checkboxes, bodies as sent). */
   known: boolean;
   pageId: string;
   staff: boolean;
+  /** Signed in (decides whether a closed card asks the reader to sign in). */
+  signedIn: boolean;
   canCheck: boolean;
   canUnlock: boolean;
   /** Ticked headings, with ticks in flight applied. */
   checked: ReadonlySet<string>;
   toggleCheck: (blockId: string) => void;
   unlocked: Readonly<Record<string, string>>;
-  /** Unlocks waiting for the server (the card keeps its glass off meanwhile). */
+  /** Unlocks under way (the card stays, glass broken, until settled). */
   status: Readonly<Record<string, UnlockStatus>>;
   /** Record an unlock (POST on completion of the hold, never before). */
   unlock: (blockId: string) => void;
+  /**
+   * The viewer, once the reloaded page is in (`status` `arrived`): `true` when
+   * the section's body is in the editor now, `false` when the page came back
+   * without it (the reader is told; the card stays).
+   */
+  settleOpen: (blockId: string, opened: boolean) => void;
   /** True once per block unlocked in this visit, so its body animates in once. */
   takeJustUnlocked: (blockId: string) => boolean;
 }
@@ -68,6 +87,7 @@ export const NO_READER_SECTIONS: ReaderSectionsValue = {
   known: false,
   pageId: '',
   staff: false,
+  signedIn: false,
   canCheck: false,
   canUnlock: false,
   checked: NOTHING,
@@ -75,6 +95,7 @@ export const NO_READER_SECTIONS: ReaderSectionsValue = {
   unlocked: {},
   status: {},
   unlock: () => {},
+  settleOpen: () => {},
   takeJustUnlocked: () => false,
 };
 
@@ -87,6 +108,7 @@ export function useReaderSections(): ReaderSectionsValue {
 const API = '/api/page-sections';
 const CHECK_FAILED = 'Couldn’t save that. Try again.';
 const UNLOCK_FAILED = 'Couldn’t unlock this section. Try again.';
+const OPEN_FAILED = 'Couldn’t open this section. Reload the page.';
 
 /** The POST answer (`{ ok, checked?, unlockedAt? }` or `{ error }`). */
 interface SectionsResponse {
@@ -103,7 +125,8 @@ interface SectionsResponse {
  * error stays here (a toast, the glass back) and never reaches the route's
  * error page. A tick changes nothing else the page shows, so it stops there.
  * A recorded unlock then revalidates the route: the loader's `content` comes
- * back with the section's body in it, and the viewer inserts it.
+ * back with the section's body in it, the viewer inserts it and settles the
+ * unlock (`settleOpen`), and only then does the section show as unlocked.
  */
 export function useReaderSectionsState(
   pageId: string,
@@ -112,6 +135,8 @@ export function useReaderSectionsState(
   const known = Boolean(readerSections);
   const staff = readerSections?.staff === true;
   const canCheck = readerSections?.canCheck === true;
+  const signedIn =
+    typeof readerSections?.signedIn === 'boolean' ? readerSections.signedIn : canCheck;
   const canUnlock = readerSections?.canUnlock === true;
 
   // Ticks: the loader's set, plus confirmed ticks it has not reloaded yet,
@@ -189,7 +214,18 @@ export function useReaderSectionsState(
     () => ({ ...(loaderUnlocked ?? {}), ...answered }),
     [loaderUnlocked, answered]
   );
-  const [status, setStatus] = useState<Record<string, UnlockStatus>>({});
+  // POSTs out, and recorded unlocks waiting for the reloaded page (with the
+  // loader payload they were recorded against: a different one is the reload).
+  const [posting, setPosting] = useState<Record<string, true>>({});
+  const [reloading, setReloading] = useState<Record<string, ReaderSections | null | undefined>>({});
+  const status = useMemo(() => {
+    const out: Record<string, UnlockStatus> = {};
+    for (const id of Object.keys(posting)) out[id] = 'pending';
+    for (const [id, base] of Object.entries(reloading)) {
+      out[id] = base === readerSections ? 'reloading' : 'arrived';
+    }
+    return out;
+  }, [posting, reloading, readerSections]);
   const justUnlocked = useRef(new Set<string>());
 
   // A different page: nothing of the last one's local state carries over.
@@ -198,7 +234,8 @@ export function useReaderSectionsState(
     setSeenPage(pageId);
     setInFlight(new Map());
     setAnswered({});
-    setStatus({});
+    setPosting({});
+    setReloading({});
   }
   useEffect(() => {
     justUnlocked.current.clear();
@@ -211,25 +248,35 @@ export function useReaderSectionsState(
   revalidateRef.current = revalidator.revalidate;
   const statusRef = useRef(status);
   statusRef.current = status;
+  const readerSectionsRef = useRef(readerSections);
+  readerSectionsRef.current = readerSections;
+
+  const settleOpen = useCallback((blockId: string, opened: boolean) => {
+    if (!statusRef.current[blockId] || statusRef.current[blockId] === 'pending') return;
+    statusRef.current = { ...statusRef.current };
+    delete statusRef.current[blockId];
+    setReloading(prev => {
+      if (!(blockId in prev)) return prev;
+      const { [blockId]: _done, ...rest } = prev;
+      return rest;
+    });
+    if (!opened) {
+      justUnlocked.current.delete(blockId);
+      toast.error(OPEN_FAILED);
+    }
+  }, []);
 
   const unlock = useCallback(
     (blockId: string) => {
       if (!canUnlock || !pageId || statusRef.current[blockId]) return;
-      setStatus(prev => ({ ...prev, [blockId]: 'pending' }));
-
-      const finish = (unlockedAt: string | null) => {
-        if (unlockedAt) {
-          justUnlocked.current.add(blockId);
-          setAnswered(prev => ({ ...prev, [blockId]: unlockedAt }));
-        } else {
-          toast.error(UNLOCK_FAILED);
-        }
-        setStatus(prev => {
+      statusRef.current = { ...statusRef.current, [blockId]: 'pending' };
+      setPosting(prev => ({ ...prev, [blockId]: true }));
+      const posted = () =>
+        setPosting(prev => {
           if (!prev[blockId]) return prev;
           const { [blockId]: _done, ...rest } = prev;
           return rest;
         });
-      };
 
       fetch(API, {
         method: 'POST',
@@ -239,24 +286,34 @@ export function useReaderSectionsState(
       })
         .then(async response => {
           const body = (await response.json().catch(() => null)) as SectionsResponse | null;
-          if (!response.ok || body?.ok !== true) return finish(null);
+          if (!response.ok || body?.ok !== true) {
+            posted();
+            toast.error(UNLOCK_FAILED);
+            return;
+          }
           const at =
             typeof body.unlockedAt === 'string' ? body.unlockedAt : new Date().toISOString();
-          // Recorded. The card stays broken open (placeholder lines) until the
-          // page has the body: the loader re-runs, the viewer inserts the
-          // children, then the section opens.
-          // A failed revalidation still leaves the unlock recorded; the body
-          // arrives with the next load.
+          // Recorded. The body reaches the reader only through the page
+          // loader: reload the route, and the section stays a (broken) card
+          // until the viewer has put the body in and calls `settleOpen`.
+          justUnlocked.current.add(blockId);
+          setAnswered(prev => ({ ...prev, [blockId]: at }));
+          setReloading(prev => ({ ...prev, [blockId]: readerSectionsRef.current }));
+          statusRef.current = { ...statusRef.current, [blockId]: 'reloading' };
+          posted();
           try {
             await revalidateRef.current();
           } catch {
-            // Nothing to undo.
+            // The unlock is recorded, but this page did not get the body.
+            settleOpen(blockId, false);
           }
-          finish(at);
         })
-        .catch(() => finish(null));
+        .catch(() => {
+          posted();
+          toast.error(UNLOCK_FAILED);
+        });
     },
-    [canUnlock, pageId]
+    [canUnlock, pageId, settleOpen]
   );
 
   const takeJustUnlocked = useCallback((blockId: string) => {
@@ -270,6 +327,7 @@ export function useReaderSectionsState(
       known,
       pageId,
       staff,
+      signedIn,
       canCheck,
       canUnlock,
       checked,
@@ -277,12 +335,14 @@ export function useReaderSectionsState(
       unlocked,
       status,
       unlock,
+      settleOpen,
       takeJustUnlocked,
     }),
     [
       known,
       pageId,
       staff,
+      signedIn,
       canCheck,
       canUnlock,
       checked,
@@ -290,6 +350,7 @@ export function useReaderSectionsState(
       unlocked,
       status,
       unlock,
+      settleOpen,
       takeJustUnlocked,
     ]
   );

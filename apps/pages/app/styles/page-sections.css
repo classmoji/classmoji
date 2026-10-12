@@ -161,6 +161,26 @@
   stroke-dashoffset: 0;
 }
 
+/* Phones: the page's side padding is narrower than the gutter, so the box
+   moves inside the heading's own box, before its text. */
+@media (max-width: 640px) {
+  .pg-reader-sections
+    .bn-block-content[data-content-type='heading'][data-checkable='true']:has(
+      > .pg-section-check:not([hidden])
+    ) {
+    padding-left: 32px;
+  }
+
+  .pg-section-check {
+    left: -2px;
+  }
+
+  .pg-section-check::after {
+    left: 0;
+    transform: none;
+  }
+}
+
 /* Tooltip: BlockNote's tooltip colours, above the box. */
 .pg-section-check::after {
   content: attr(data-tooltip);
@@ -199,9 +219,7 @@
   position: relative;
 }
 
-.bn-editor[contenteditable='true']
-  .bn-block-content[data-content-type='heading'][data-checkable='true']::before {
-  content: '';
+.bn-editor .pg-checkable-badge {
   position: absolute;
   left: -30px;
   top: calc(18px + (var(--level, 24px) * 1.3 - 16px) / 2);
@@ -212,13 +230,16 @@
     center / contain no-repeat;
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='1.75' y='1.75' width='12.5' height='12.5' rx='3'/%3E%3Cpath d='M4.8 8.2l2.2 2.2 4.2-4.8'/%3E%3C/svg%3E")
     center / contain no-repeat;
-  pointer-events: none;
+  user-select: none;
   transition: opacity 120ms;
 }
 
-.dark
-  .bn-editor[contenteditable='true']
-  .bn-block-content[data-content-type='heading'][data-checkable='true']::before {
+/* Not editable (preview): no badge. */
+.bn-editor[contenteditable='false'] .pg-checkable-badge {
+  display: none;
+}
+
+.dark .bn-editor .pg-checkable-badge {
   background-color: #6b7280;
 }
 
@@ -271,7 +292,7 @@
    ===================================================================== */
 
 /* BlockNote's placeholder is an ::after on the block content, which would
-   land after the chip; the title has its own (below). */
+   land after the chip; the title field has its own (below). */
 .bn-block-content[data-content-type='lockedSection']::after {
   content: none !important;
 }
@@ -674,20 +695,26 @@
 }
 
 .pg-locked-editor-title {
-  position: relative;
   flex: 1;
   min-width: 0;
+  padding: 2px 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
   font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* An empty title: say what goes here. */
-.pg-locked-editor-title:has(> .ProseMirror-trailingBreak:only-child)::before {
-  content: 'Section title';
-  position: absolute;
+.pg-locked-editor-title::placeholder {
   color: var(--color-text-subtle);
   font-style: italic;
   font-weight: 400;
-  pointer-events: none;
+  opacity: 1;
 }
 
 .pg-unlock-chip {

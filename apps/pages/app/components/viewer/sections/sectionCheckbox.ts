@@ -12,26 +12,37 @@ import type { ReaderSectionsValue } from '~/hooks/useReaderSections.tsx';
  *
  * Node views are plain DOM, so the reader's state reaches them through a small
  * store per editor (`sectionStoreFor`), which the viewer fills from
- * `ReaderSectionsContext` and the boxes subscribe to.
+ * `ReaderSectionsContext` and the boxes subscribe to. The same store carries
+ * which locked sections have their body in this editor (`filled`), which the
+ * viewer publishes and the locked sections read.
  */
 
-type StoreState = Pick<ReaderSectionsValue, 'canCheck' | 'checked' | 'toggleCheck'>;
+type StoreState = Pick<ReaderSectionsValue, 'canCheck' | 'checked' | 'toggleCheck'> & {
+  /** Locked sections whose body (children) is in this editor now. */
+  filled: ReadonlySet<string>;
+};
 
 export interface SectionStore {
   get: () => StoreState;
-  set: (state: StoreState) => void;
+  /** Merge `patch` into the state and notify. */
+  set: (patch: Partial<StoreState>) => void;
   subscribe: (listener: () => void) => () => void;
 }
 
 const stores = new WeakMap<object, SectionStore>();
 
 function createStore(): SectionStore {
-  let state: StoreState = { canCheck: false, checked: new Set(), toggleCheck: () => {} };
+  let state: StoreState = {
+    canCheck: false,
+    checked: new Set(),
+    toggleCheck: () => {},
+    filled: new Set(),
+  };
   const listeners = new Set<() => void>();
   return {
     get: () => state,
-    set: next => {
-      state = next;
+    set: patch => {
+      state = { ...state, ...patch };
       for (const listener of listeners) listener();
     },
     subscribe: listener => {

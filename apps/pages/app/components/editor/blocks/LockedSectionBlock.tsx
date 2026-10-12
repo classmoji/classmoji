@@ -1,16 +1,16 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { createReactBlockSpec } from '@blocknote/react';
-import { lockedSectionConfig } from '@classmoji/page-schema';
+import { lockedSectionConfig, lockedSectionGuard } from '@classmoji/page-schema';
 
 import { useSectionStats } from '~/hooks/useSectionStats.ts';
 
 /**
- * A locked section in the EDITOR: the title is the block's inline content,
- * the body is its children (BlockNote draws those below, in the block group;
- * page-sections.css tints them and rules them off so the author sees what
- * readers find locked). The config is the shared one from
- * @classmoji/page-schema (no props: nothing secret may be a prop).
+ * A locked section in the EDITOR: the title is the block's `title` prop,
+ * edited in a plain text field; the body is its children (BlockNote draws
+ * those below, in the block group; page-sections.css tints them and rules
+ * them off so the author sees what readers find locked). The config is the
+ * shared one from @classmoji/page-schema.
  *
  * With unlock counts in context (OWNER/TEACHER), a chip on the right says how
  * many current students opened it; clicking it lists who and when.
@@ -18,39 +18,133 @@ import { useSectionStats } from '~/hooks/useSectionStats.ts';
  * Readers never see this render: the in-app viewer draws its own
  * (viewer/sections/LockedSectionView.tsx) and the class site a static one.
  */
-export const LockedSection = createReactBlockSpec(lockedSectionConfig, {
-  render: props => <LockedSectionEditor blockId={props.block.id} contentRef={props.contentRef} />,
-});
+const lockedSectionImplementation = {
+  render: (props: {
+    block: { id: string; props: { title: string } };
+    editor: LockedSectionEditorApi;
+  }) => <LockedSectionEditor block={props.block} editor={props.editor} />,
+};
+
+/** The spec in the shared schema (the class site and the viewer start from it). */
+export const LockedSection = createReactBlockSpec(
+  lockedSectionConfig,
+  lockedSectionImplementation as never
+);
+
+/**
+ * The spec the page EDITOR runs (`editingSchema.ts`): the same block plus
+ * `lockedSectionGuard`, which keeps the body under the lock while the author
+ * edits (no key, block-type change or merge carries it out).
+ */
+export const EditorLockedSection = createReactBlockSpec(
+  lockedSectionConfig,
+  lockedSectionImplementation as never,
+  [lockedSectionGuard()]
+);
+
+/** What the title field needs of the editor. */
+export interface LockedSectionEditorApi {
+  isEditable: boolean;
+  updateBlock: (id: string, update: unknown) => unknown;
+  getBlock: (id: string) => { id: string; children: Array<{ id: string }> } | undefined;
+  setTextCursorPosition: (id: string, placement?: 'start' | 'end') => void;
+  focus: () => void;
+}
+
+/**
+ * Locked sections just inserted from the slash menu: their title field takes
+ * focus when it mounts (the insert happens before React renders the block).
+ */
+const focusTitleOnMount = new Set<string>();
+
+/** Mark a just-inserted locked section so its title field takes focus. */
+export function focusLockedSectionTitle(blockId: string) {
+  focusTitleOnMount.add(blockId);
+}
+
+/**
+ * What a key in the title field does: Enter moves on into the body;
+ * Backspace and Delete only ever edit the title (in an empty field they would
+ * otherwise reach the editor's handlers, which delete or merge the block).
+ * Neither reaches the editor. Any other key: the field's own behaviour.
+ */
+export function titleKeyAction(key: string): 'enter-body' | 'keep' | null {
+  if (key === 'Enter') return 'enter-body';
+  if (key === 'Backspace' || key === 'Delete') return 'keep';
+  return null;
+}
+
+/** Put the cursor at the start of the body, adding an empty first line if there is none. */
+export function enterLockedSectionBody(editor: LockedSectionEditorApi, blockId: string) {
+  const current = editor.getBlock(blockId);
+  if (!current) return;
+  if (current.children.length === 0) {
+    editor.updateBlock(blockId, { children: [{ type: 'paragraph' }] });
+  }
+  const first = editor.getBlock(blockId)?.children[0];
+  if (!first) return;
+  editor.focus();
+  try {
+    editor.setTextCursorPosition(first.id, 'start');
+  } catch {
+    // A first child without text (an image, a divider): focus is enough.
+  }
+}
 
 function LockedSectionEditor({
-  blockId,
-  contentRef,
+  block,
+  editor,
 }: {
-  blockId: string;
-  contentRef: (element: HTMLElement | null) => void;
+  block: { id: string; props: { title: string } };
+  editor: LockedSectionEditorApi;
 }) {
+  const blockId = block.id;
+  const title = typeof block.props.title === 'string' ? block.props.title : '';
   const { pageId, stats } = useSectionStats();
   const [open, setOpen] = useState(false);
   const chipRef = useRef<HTMLButtonElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const count = stats ? (stats.unlocks[blockId] ?? 0) : 0;
+  const editable = editor.isEditable;
+
+  useEffect(() => {
+    if (!focusTitleOnMount.delete(blockId)) return;
+    inputRef.current?.focus({ preventScroll: true });
+  }, [blockId]);
 
   return (
-    <div className="pg-locked-editor" data-locked-section="">
-      <span
-        className="pg-lock-badge"
-        contentEditable={false}
-        role="img"
-        aria-label="Locked section"
-      >
+    <div className="pg-locked-editor" data-locked-section="" contentEditable={false}>
+      <span className="pg-lock-badge" role="img" aria-label="Locked section" title="Locked section">
         <LockGlyph />
       </span>
-      <div className="pg-locked-editor-title" ref={contentRef} />
+      {editable ? (
+        <input
+          ref={inputRef}
+          className="pg-locked-editor-title"
+          type="text"
+          value={title}
+          placeholder="Section title"
+          aria-label="Locked section title"
+          onChange={event => editor.updateBlock(blockId, { props: { title: event.target.value } })}
+          onKeyDown={event => {
+            if (event.nativeEvent.isComposing) return;
+            const action = titleKeyAction(event.key);
+            if (!action) return;
+            event.stopPropagation();
+            if (action === 'enter-body') {
+              event.preventDefault();
+              enterLockedSectionBody(editor, blockId);
+            }
+          }}
+        />
+      ) : (
+        <span className="pg-locked-editor-title">{title}</span>
+      )}
       {stats ? (
         <button
           ref={chipRef}
           type="button"
           className="pg-unlock-chip"
-          contentEditable={false}
           aria-haspopup="dialog"
           aria-expanded={open}
           onMouseDown={event => event.preventDefault()}

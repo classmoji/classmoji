@@ -4,7 +4,7 @@ import { syntaxHighlighter } from '@blocknote/code-block';
 import { MantineProvider } from '@mantine/core';
 import { normalizeCodeBlockContent } from '@classmoji/page-schema';
 import { findBlock, lockedSectionIds } from '@classmoji/page-schema/sections';
-import { useState, useEffect, useLayoutEffect, useMemo } from 'react';
+import { useState, useEffect, useLayoutEffect, useMemo, useCallback } from 'react';
 import type { PageBlockInsertions } from '~/components/editor/blocks/index.tsx';
 import { viewerSchema } from './viewerBlocks.tsx';
 import { AssetSrcSetContext, NO_SRC_SETS, type AssetSrcSets } from '~/hooks/useAssetSrcSets.ts';
@@ -117,13 +117,40 @@ const BlockNoteViewer = ({
     sectionStore.set({ canCheck, checked, toggleCheck });
   }, [sectionStore, canCheck, checked, toggleCheck]);
 
+  // Which locked sections have their body in this editor. Published through
+  // the section store: a locked section shows as unlocked only once its body
+  // is here (BlockNote does not re-render a block's own view when only its
+  // children change, so the block cannot tell by itself).
+  const publishFilled = useCallback(() => {
+    const filled = new Set<string>();
+    const visit = (blocks: ReadonlyArray<{ id: string; type: string; children: unknown[] }>) => {
+      for (const block of blocks) {
+        if (block.type === 'lockedSection' && block.children.length > 0) filled.add(block.id);
+        visit(block.children as typeof blocks);
+      }
+    };
+    visit(editor.document as never);
+    const previous = sectionStore.get().filled;
+    if (previous.size !== filled.size || [...filled].some(id => !previous.has(id))) {
+      sectionStore.set({ filled });
+    }
+    return filled;
+  }, [editor, sectionStore]);
+
+  // Before the view (and its blocks) first render: the bodies built in.
+  useLayoutEffect(() => {
+    publishFilled();
+  }, [publishFilled]);
+
   // A locked section's body reaches the reader only through the page loader:
   // after an unlock the route revalidates and `content` comes back with the
   // section's children. The read-only editor was built from the first
   // `content` and is not rebuilt (that would drop scroll, toggles and the
   // unlock animation), so the children are put into it here — for any
   // section whose body is in `content` and not yet in the editor, however
-  // it got there.
+  // it got there. Then every unlock whose reloaded page has arrived is
+  // settled: opened if its body is in the editor now, failed if not.
+  const { status: unlockStatus, settleOpen } = readerSections;
   useEffect(() => {
     if (!isMounted || !Array.isArray(content)) return;
     for (const id of lockedSectionIds(content)) {
@@ -140,7 +167,11 @@ const BlockNoteViewer = ({
         console.error('[BlockNoteViewer] could not insert a locked section body:', error);
       }
     }
-  }, [content, editor, isMounted]);
+    const filled = publishFilled();
+    for (const [id, state] of Object.entries(unlockStatus)) {
+      if (state === 'arrived') settleOpen(id, filled.has(id));
+    }
+  }, [content, editor, isMounted, publishFilled, unlockStatus, settleOpen]);
 
   const fade = useSectionFade(content, checked, readerSections.canCheck);
 

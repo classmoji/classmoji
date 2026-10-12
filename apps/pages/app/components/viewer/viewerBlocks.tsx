@@ -135,7 +135,7 @@ const ReaderLockedSection = createReactBlockSpec(lockedSectionConfig, {
   render: props => (
     <LockedSectionView
       block={props.block as unknown as LockedSectionViewProps['block']}
-      contentRef={props.contentRef}
+      editor={props.editor}
     />
   ),
 });

@@ -80,42 +80,108 @@ describe('id validation', () => {
   });
 });
 
-describe('readerAccess', () => {
-  it('reads accepted memberships only and lets the highest role win', async () => {
-    db.membershipFindMany.mockResolvedValue([{ role: 'STUDENT' }, { role: 'ASSISTANT' }]);
+describe('sectionViewer (the one reader rule)', () => {
+  const row = (role: string, accepted = true) => ({ role, has_accepted_invite: accepted });
+  const viewerOf = async (rows: unknown[]) => {
+    db.membershipFindMany.mockResolvedValue(rows);
+    return sections.sectionViewer({ userId: 'u-1', classroomId: 'c-1' });
+  };
 
-    expect(await sections.readerAccess({ userId: 'u-1', classroomId: 'c-1' })).toEqual({
-      acceptedRole: 'ASSISTANT',
-      teachingTeam: true,
-      student: false,
-    });
+  it('reads every invite state of this user in this classroom, in one query', async () => {
+    await viewerOf([]);
+    expect(db.membershipFindMany).toHaveBeenCalledTimes(1);
     expect(db.membershipFindMany).toHaveBeenCalledWith({
-      where: { user_id: 'u-1', classroom_id: 'c-1', has_accepted_invite: true },
-      select: { role: true },
+      where: { user_id: 'u-1', classroom_id: 'c-1' },
+      select: { role: true, has_accepted_invite: true },
     });
   });
 
-  it('is a student only when STUDENT is the highest accepted role', async () => {
-    db.membershipFindMany.mockResolvedValue([{ role: 'STUDENT' }]);
-    expect(await sections.readerAccess({ userId: 'u-1', classroomId: 'c-1' })).toEqual({
+  it('accepted student: unlocks, reveals nothing, sees no activity', async () => {
+    expect(await viewerOf([row('STUDENT')])).toEqual({
+      role: 'STUDENT',
       acceptedRole: 'STUDENT',
       teachingTeam: false,
       student: true,
+      canEditAnyState: false,
+      revealAll: false,
+      canUnlock: true,
+      canSeeActivity: false,
+      canViewDrafts: false,
     });
   });
 
-  it('is nothing without an accepted membership or with unusable ids', async () => {
-    db.membershipFindMany.mockResolvedValue([]);
-    const none = { acceptedRole: null, teachingTeam: false, student: false };
-    expect(await sections.readerAccess({ userId: 'u-1', classroomId: 'c-1' })).toEqual(none);
+  it('staff who are also students are staff (highest accepted role wins)', async () => {
+    expect(await viewerOf([row('STUDENT'), row('ASSISTANT')])).toMatchObject({
+      acceptedRole: 'ASSISTANT',
+      teachingTeam: true,
+      student: false,
+      revealAll: true,
+      canUnlock: false,
+      canSeeActivity: false,
+    });
+  });
+
+  it('accepted owner and teacher: edit, reveal all, see activity', async () => {
+    for (const role of ['OWNER', 'TEACHER']) {
+      expect(await viewerOf([row(role)])).toMatchObject({
+        role,
+        acceptedRole: role,
+        canEditAnyState: true,
+        revealAll: true,
+        canUnlock: false,
+        canSeeActivity: true,
+      });
+    }
+  });
+
+  it('a pending TEACHER edits (so reveals all) but sees no activity', async () => {
+    expect(await viewerOf([row('TEACHER', false)])).toEqual({
+      role: 'TEACHER',
+      acceptedRole: null,
+      teachingTeam: false,
+      student: false,
+      canEditAnyState: true,
+      revealAll: true,
+      canUnlock: false,
+      canSeeActivity: false,
+      canViewDrafts: true,
+    });
+  });
+
+  it('an accepted student with a pending TEACHER invite reveals all and cannot unlock', async () => {
+    expect(await viewerOf([row('STUDENT'), row('TEACHER', false)])).toMatchObject({
+      role: 'TEACHER',
+      acceptedRole: 'STUDENT',
+      student: true,
+      canEditAnyState: true,
+      revealAll: true,
+      canUnlock: false,
+      canSeeActivity: false,
+    });
+  });
+
+  it('a pending ASSISTANT neither edits nor reveals, but may open drafts', async () => {
+    expect(await viewerOf([row('ASSISTANT', false)])).toMatchObject({
+      role: 'ASSISTANT',
+      acceptedRole: null,
+      canEditAnyState: false,
+      revealAll: false,
+      canViewDrafts: true,
+      canUnlock: false,
+      canSeeActivity: false,
+    });
+  });
+
+  it('is nothing without a membership or with unusable ids (no query)', async () => {
+    expect(await viewerOf([])).toEqual(sections.NO_SECTION_VIEWER);
 
     db.membershipFindMany.mockClear();
     for (const id of UNUSABLE_IDS) {
-      expect(await sections.readerAccess({ userId: id as string, classroomId: 'c-1' })).toEqual(
-        none
+      expect(await sections.sectionViewer({ userId: id as string, classroomId: 'c-1' })).toEqual(
+        sections.NO_SECTION_VIEWER
       );
-      expect(await sections.readerAccess({ userId: 'u-1', classroomId: id as string })).toEqual(
-        none
+      expect(await sections.sectionViewer({ userId: 'u-1', classroomId: id as string })).toEqual(
+        sections.NO_SECTION_VIEWER
       );
     }
     expect(db.membershipFindMany).not.toHaveBeenCalled();
@@ -443,6 +509,68 @@ describe('staff views', () => {
       checks: [],
     });
     expect(db.unlockGroupBy).not.toHaveBeenCalled();
+    expect(db.unlockFindMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('staff views handed the page row', () => {
+  const MEMBERS = [
+    { user_id: 'student-a', role: 'STUDENT' },
+    { user_id: 'owner', role: 'OWNER' },
+  ];
+  const page = { id: 'p-1', classroom_id: 'c-1' };
+
+  it("reads the row's own classroom and never re-queries the page", async () => {
+    db.membershipFindMany.mockResolvedValue(MEMBERS);
+    db.unlockGroupBy.mockResolvedValue([{ block_id: 'l-1', _count: { _all: 1 } }]);
+    db.checkGroupBy.mockResolvedValue([]);
+    db.unlockFindMany.mockResolvedValue([]);
+    db.checkFindMany.mockResolvedValue([]);
+
+    expect(await sections.unlockCounts({ page })).toEqual({
+      students: 1,
+      unlocks: { 'l-1': 1 },
+    });
+    expect(await sections.checkCounts({ page })).toEqual({ students: 1, checks: {} });
+    expect(await sections.sectionActivity({ page })).toEqual({
+      students: 1,
+      unlocks: [],
+      checks: [],
+    });
+    expect(db.pageFindFirst).not.toHaveBeenCalled();
+    expect(db.unlockGroupBy.mock.calls[0][0].where).toEqual({
+      page_id: 'p-1',
+      classroom_id: 'c-1',
+      user_id: { in: ['student-a'] },
+    });
+    expect(db.membershipFindMany.mock.calls[0][0].where).toEqual({
+      classroom_id: 'c-1',
+      has_accepted_invite: true,
+    });
+  });
+
+  it('answers null for a malformed row without querying', async () => {
+    for (const bad of [{ id: '', classroom_id: 'c-1' }, { id: 'p-1', classroom_id: 42 }, null]) {
+      const ref = { page: bad as unknown as { id: string; classroom_id: string } };
+      expect(await sections.unlockCounts(ref)).toBeNull();
+      expect(await sections.sectionActivity(ref)).toBeNull();
+    }
+    expect(db.membershipFindMany).not.toHaveBeenCalled();
+    expect(db.pageFindFirst).not.toHaveBeenCalled();
+  });
+
+  it("`only: 'unlocks'` never queries checks, and `only: 'checks'` never queries unlocks", async () => {
+    db.membershipFindMany.mockResolvedValue(MEMBERS);
+    db.unlockFindMany.mockResolvedValue([]);
+    db.checkFindMany.mockResolvedValue([]);
+
+    await sections.sectionActivity({ page, blockId: 'l-1', only: 'unlocks' });
+    expect(db.unlockFindMany).toHaveBeenCalledTimes(1);
+    expect(db.checkFindMany).not.toHaveBeenCalled();
+
+    db.unlockFindMany.mockClear();
+    await sections.sectionActivity({ page, only: 'checks' });
+    expect(db.checkFindMany).toHaveBeenCalledTimes(1);
     expect(db.unlockFindMany).not.toHaveBeenCalled();
   });
 });

@@ -87,17 +87,17 @@ describe('heading.checkable', () => {
 });
 
 describe('lockedSection', () => {
-  it('is in the server schema with the shared config: inline title, no props', () => {
+  it('is in the server schema with the shared config: a title prop, no inline content', () => {
     const schema = createPageSchema();
     const block = (
       schema.blockSchema as unknown as Record<string, { content: string; propSchema: object }>
     ).lockedSection;
-    expect(block.content).toBe('inline');
-    expect(block.propSchema).toEqual({});
+    expect(block.content).toBe('none');
+    expect(block.propSchema).toEqual({ title: { default: '' } });
     expect(lockedSectionConfig).toEqual({
       type: 'lockedSection',
-      propSchema: {},
-      content: 'inline',
+      propSchema: { title: { default: '' } },
+      content: 'none',
     });
   });
 
@@ -106,25 +106,38 @@ describe('lockedSection', () => {
       {
         id: 'L',
         type: 'lockedSection',
-        props: {},
-        content: text('Solution'),
+        props: { title: 'Solution' },
         children: [
           { id: 'L-p', type: 'paragraph', content: text('body') },
           {
             id: 'L-inner',
             type: 'lockedSection',
-            props: {},
-            content: text('Inner'),
+            props: { title: 'Inner' },
             children: [{ id: 'L-inner-p', type: 'paragraph', content: text('inner body') }],
           },
         ],
       },
     ];
     const [trip] = yjsTrip(blocks);
-    expect(trip.props).toEqual({});
+    expect(trip.props).toEqual({ title: 'Solution' });
+    expect((trip as { content?: unknown }).content).toBeUndefined();
     const json = JSON.stringify(trip);
-    expect(json).toContain('Solution');
     expect(json).toContain('inner body');
     expect(trip.children).toHaveLength(2);
+    expect((trip.children[1] as { props: unknown }).props).toEqual({ title: 'Inner' });
+  });
+
+  it('writes the title, never the body, onto the block element', async () => {
+    const html = await getServerEditor().blocksToFullHTML([
+      {
+        id: 'L',
+        type: 'lockedSection',
+        props: { title: 'Solution' },
+        children: [{ id: 'L-p', type: 'paragraph', content: text('body') }],
+      },
+    ] as never);
+    const blockContent = html.match(/<div[^>]*data-content-type="lockedSection"[^>]*>/)?.[0];
+    expect(blockContent).toContain('data-title="Solution"');
+    expect(blockContent).not.toContain('body');
   });
 });

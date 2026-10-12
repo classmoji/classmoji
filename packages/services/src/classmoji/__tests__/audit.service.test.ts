@@ -275,7 +275,7 @@ describe('audit.create dedup key', () => {
 });
 
 describe('audit.create dedup: the targeted page block joins the key', () => {
-  const sectionRow = (block_id: unknown) => ({
+  const sectionRow = (block_id: string | number) => ({
     ...baseEntry,
     resource_type: 'PAGES',
     resource_id: 'page-1',
@@ -337,4 +337,42 @@ describe('audit.service live-editing actions', () => {
       );
     }
   );
+});
+
+describe('audit.create with dedupe: false', () => {
+  const toggle = (checked: boolean) => ({
+    ...baseEntry,
+    resource_type: 'PAGES',
+    resource_id: 'page-1',
+    action: checked ? ('CREATE' as const) : ('DELETE' as const),
+    data: { tool: 'page_section_check', via: 'web', page_id: 'page-1', block_id: 'h', checked },
+  });
+
+  it('never looks for a recent row and always writes', async () => {
+    // A recent identical row exists: with the window on this would be skipped.
+    findFirstMock.mockResolvedValue({ id: 'existing-row' });
+
+    for (const checked of [true, false, true]) {
+      expect(await audit.create(toggle(checked), { dedupe: false })).not.toBeNull();
+    }
+    expect(findFirstMock).not.toHaveBeenCalled();
+    expect(createMock).toHaveBeenCalledTimes(3);
+    expect(
+      createMock.mock.calls.map(c => (c[0] as { data: { action: string } }).data.action)
+    ).toEqual(['CREATE', 'DELETE', 'CREATE']);
+  });
+
+  it('still skips rows without a valid role, action or ids', async () => {
+    expect(await audit.create({ ...toggle(true), role: 'NONE' }, { dedupe: false })).toBeNull();
+    expect(await audit.create({ ...toggle(true), user_id: '' }, { dedupe: false })).toBeNull();
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps the window by default', async () => {
+    findFirstMock.mockResolvedValue({ id: 'existing-row' });
+    expect(await audit.create(toggle(true))).toBeNull();
+    expect(await audit.create(toggle(true), {})).toBeNull();
+    expect(findFirstMock).toHaveBeenCalledTimes(2);
+    expect(createMock).not.toHaveBeenCalled();
+  });
 });

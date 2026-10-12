@@ -27,7 +27,7 @@
  * `multiColumnSchema.blockSpecs`, plus the app's overrides and custom blocks)
  * — 23 distinct types.
  *
- * `lockedSection` contributes its TITLE only: its body (children) is shown to
+ * `lockedSection` contributes its TITLE (`props.title`) only: its body (children) is shown to
  * a student only after they unlock it, so neither its text nor its references
  * may enter the index, which content search, Ask Moji and quiz material read
  * for every role.
@@ -141,8 +141,9 @@ function parseNavGridReferences(value: unknown): ContentReference[] {
  *
  * Types absent from this table carry no extractable prop text:
  *   inline content, no text props — paragraph, heading, bulletListItem,
- *     numberedListItem, checkListItem, toggleListItem, quote, codeBlock, callout,
- *     lockedSection (title only; its children are never read, see collectBlock)
+ *     numberedListItem, checkListItem, toggleListItem, quote, codeBlock, callout
+ *   title prop only               — lockedSection (`props.title`; nothing else of
+ *                                   it, children included, is read: collectBlock)
  *   table content                 — table (text lives in content.rows[].cells[])
  *   no content, no text props     — divider, embed (url/type only),
  *                                   columnList, column (all text is in children)
@@ -283,6 +284,15 @@ function collectBlock(block: unknown, sink: Sink): void {
   const node = block as BlockNode;
   const type = typeof node.type === 'string' ? node.type : '';
 
+  // A locked section's body is per-reader (unlocked or not): its title
+  // (`props.title`) is indexed, nothing else of it is — no children, no
+  // references, no other props.
+  if (type === 'lockedSection') {
+    const title = propText(node.props, 'title');
+    if (title) sink.text.push(title);
+    return;
+  }
+
   // 1. inline content (or a table's rows)
   if (node.content !== undefined && node.content !== null) {
     let inline: string;
@@ -296,10 +306,6 @@ function collectBlock(block: unknown, sink: Sink): void {
     const trimmed = inline.trim();
     if (trimmed) sink.text.push(trimmed);
   }
-
-  // A locked section's body is per-reader (unlocked or not): its title is
-  // indexed, nothing below it is — no children, no references, no props.
-  if (type === 'lockedSection') return;
 
   // 2. prop-carried text — the whole point; `collectText` never even received
   //    `props`, because its only caller passed `block.content`.

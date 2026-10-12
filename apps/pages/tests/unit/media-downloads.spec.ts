@@ -253,9 +253,8 @@ test.describe('the page loader', () => {
 
   test('draws it for the accepted-only role the download route reads', () => {
     const map = LOADER_SOURCE.slice(LOADER_SOURCE.indexOf('const downloadRole ='));
-    expect(map).toMatch(
-      /downloadMapRole\(\s+await findClassroomRole\(\{\s+userId: authData\.userId,\s+classroomId: page\.classroom\.id,\s+acceptedOnly: true,\s+\}\),\s+page\.is_draft\s+\)/
-    );
+    // The highest ACCEPTED role, from the loader's one shared reader-rule read.
+    expect(map).toMatch(/downloadMapRole\(sectionViewer\.acceptedRole, page\.is_draft\)/);
     // Never the role that opened the page.
     expect(LOADER_SOURCE).not.toContain(
       'loadMediaDownloads(page.classroom.id, viewerContent, userRole)'

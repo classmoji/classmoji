@@ -174,9 +174,16 @@ test.describe('file block upload state', () => {
     }
 
     // Every other block type is still there, with the shared schema's config.
+    // The heading (author's badge) and the locked section (edit guard) are
+    // rebuilt for the editor from the same shared config, so theirs are equal
+    // rather than the same object.
     expect(Object.keys(editing).sort()).toEqual(Object.keys(shared).sort());
     for (const type of Object.keys(shared)) {
       if (type === 'file' || type === 'audio') continue;
+      if (type === 'heading' || type === 'lockedSection') {
+        expect(editing[type].config, type).toEqual(shared[type].config);
+        continue;
+      }
       expect(editing[type].config, type).toBe(shared[type].config);
     }
   });

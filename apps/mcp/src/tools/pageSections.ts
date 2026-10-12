@@ -8,28 +8,42 @@
  *   - `page_section_check` (any accepted member, write): check or uncheck one
  *     checkable heading for the caller, the same act as its checkbox.
  *   Every write audits (PAGES; unlock CREATE on the first unlock, check
- *   CREATE/DELETE on a real change); the status read audits VIEW per call.
+ *   CREATE/DELETE on a real change, never coalesced); the status read audits
+ *   VIEW per call. Rows carry the caller's ACCEPTED role, and a failed audit
+ *   write after a successful act is logged, never turned into a tool error.
  *   - `pageTextForViewer` / `viewerPageText`: the per-viewer page text
  *     `content_get` serves for a page that holds locked sections.
  *
  * ── Who sees a locked body ────────────────────────────────────────────────
- * Decided from ACCEPTED memberships only (`ClassmojiService.pageSections.
- * readerAccess`), never from `ctx.classroom.role`: the registry's membership
- * lookup does not filter on `has_accepted_invite`, so a pending invitee passes
- * the registry. Highest accepted role wins.
- *   - teaching team (OWNER/TEACHER/ASSISTANT): every body.
- *   - student: the bodies THEY unlocked (`readerState`, scoped page + user).
+ * Decided by the ONE reader rule the pages app also reads
+ * (`ClassmojiService.pageSections.sectionViewer`), never from
+ * `ctx.classroom.role`: the registry's membership lookup does not filter on
+ * `has_accepted_invite`, so a pending invitee passes the registry.
+ *   - `revealAll` (OWNER/TEACHER in any invite state — the page editor's rule —
+ *     or the accepted teaching team): every body. A draft page is "not found"
+ *     to everyone else, on every tool here and in `content_get`.
+ *   - an accepted student: the bodies THEY unlocked (`readerState`, scoped
+ *     page + user).
  *   - anyone else: no body.
+ * `page_sections_status` needs `canSeeActivity` (accepted OWNER/TEACHER): a
+ * pending teacher invite passes the registry's role gate and still gets "not
+ * found", as on the page.
  * The text is built per call and never stored or cached. The search index
  * never holds a locked body (the extractor stops at a lockedSection's title),
  * so `content_search` and the index text of `content_get` cannot leak one.
  *
  * ── Unlock rules (same as POST /api/page-sections in apps/pages) ──────────
- * Accepted student who is not on the teaching team; page visible to them (the
- * one content predicate, `contentVisibility`, so a draft is "not found"); the
- * block must be a lockedSection in THIS student's redacted tree, so a locked
- * section nested inside one they have not opened is "not found", exactly like
- * an id that does not exist. The unlock row's classroom is the page row's.
+ * `canUnlock` (an accepted student who does not reveal all); a draft is "not
+ * found"; the block must be a lockedSection in THIS student's redacted tree,
+ * so a locked section nested inside one they have not opened is "not found",
+ * exactly like an id that does not exist. The unlock row's classroom is the
+ * page row's.
+ *
+ * ── Classroom status ──────────────────────────────────────────────────────
+ * Check and unlock are `readerState` tools: the registry skips its mutation
+ * gate for them, so they work in an archived (LOCKED) classroom, and keeps
+ * its entry gate, so an UNPUBLISHED classroom refuses non-owners — the same
+ * as the page.
  *
  * Impersonation: the MCP has no session to inspect, and needs none. A write
  * tool needs an OAuth token with the `write` scope, and better-auth refuses to
@@ -41,20 +55,29 @@
 
 import { z } from 'zod';
 import getPrisma from '@classmoji/database';
-import { ClassmojiService, contentVisibility } from '@classmoji/services';
+import { ClassmojiService } from '@classmoji/services';
 import {
   checkableHeadingIds,
   findBlock,
+  headingText,
   isCheckableHeading,
   isLockedSection,
   lockedSectionIds,
   lockedSectionTitle,
   redactLockedSections,
 } from '@classmoji/page-schema/sections';
+import type { Role } from '@prisma/client';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
 import { MEMBER } from '../resources/shape.ts';
-import { OWNER_TEACHER, ok, requireClassroomCtx, scopedNotFound, writeAudit } from './shared.ts';
+import {
+  OWNER_TEACHER,
+  ok,
+  requireClassroomCtx,
+  scopedNotFound,
+  writeAudit,
+  type AuditEntry,
+} from './shared.ts';
 
 // ─── Loading a page's blocks ────────────────────────────────────────────────
 
@@ -146,34 +169,89 @@ export interface SectionViewer {
   hasWriteTools: boolean;
 }
 
-const NO_VIEWER: SectionViewer = {
-  revealAll: false,
-  unlocked: new Set(),
-  canUnlock: false,
-  canCheck: false,
-  checked: new Set(),
-  hasWriteTools: false,
-};
+/** What the shared reader rule answers (`ClassmojiService.pageSections.sectionViewer`). */
+export type SectionReaderRule = Awaited<
+  ReturnType<typeof ClassmojiService.pageSections.sectionViewer>
+>;
+
+/** The caller's reader rule in the bound classroom (one membership read). */
+async function readerRuleFor(ctx: ToolContext): Promise<SectionReaderRule> {
+  const { classroomId } = requireClassroomCtx(ctx);
+  return ClassmojiService.pageSections.sectionViewer({ userId: ctx.viewer.userId, classroomId });
+}
 
 /**
- * What the calling user is on this page, from accepted memberships only, with
- * THEIR OWN reader state (page + user scoped). Nobody else's rows are read.
+ * What the calling user is on this page (the shared reader rule), with THEIR
+ * OWN reader state (page + user scoped) when they are an accepted member.
+ * Nobody else's rows are read.
  */
-async function sectionViewerFor(pageId: string, ctx: ToolContext): Promise<SectionViewer> {
-  const { classroomId } = requireClassroomCtx(ctx);
-  const userId = ctx.viewer.userId;
-  const access = await ClassmojiService.pageSections.readerAccess({ userId, classroomId });
-  if (!access.acceptedRole) return NO_VIEWER;
-  const state = await ClassmojiService.pageSections.readerState({ pageId, userId });
+async function sectionViewerFor(
+  pageId: string,
+  ctx: ToolContext,
+  rule?: SectionReaderRule
+): Promise<SectionViewer> {
+  const access = rule ?? (await readerRuleFor(ctx));
+  const member = access.acceptedRole !== null;
+  const state = member
+    ? await ClassmojiService.pageSections.readerState({ pageId, userId: ctx.viewer.userId })
+    : { checked: [], unlocked: {} };
   return {
-    revealAll: access.teachingTeam,
-    // Staff never unlock; their reveal is `revealAll`.
-    unlocked: access.student ? new Set(Object.keys(state.unlocked)) : new Set(),
-    canUnlock: access.student,
-    canCheck: true,
+    revealAll: access.revealAll,
+    // A reveal-all reader never unlocks; their reveal is `revealAll`.
+    unlocked: access.revealAll ? new Set() : new Set(Object.keys(state.unlocked)),
+    canUnlock: access.canUnlock,
+    canCheck: member,
     checked: new Set(state.checked),
     hasWriteTools: ctx.viewer.scopes.has('write'),
   };
+}
+
+/** A draft page exists only for the teaching team in any invite state (as on the page). */
+export function pageHiddenFrom(
+  page: { is_draft: boolean },
+  rule: Pick<SectionReaderRule, 'canViewDrafts'>
+): boolean {
+  return page.is_draft && !rule.canViewDrafts;
+}
+
+/**
+ * `content_get`'s draft rule for one page of the bound classroom: true when
+ * the page is a draft this caller does not reveal all on. Reads the caller's
+ * rule only for a draft.
+ */
+export async function draftHiddenFromCaller(
+  page: { is_draft: boolean },
+  ctx: ToolContext
+): Promise<boolean> {
+  if (!page.is_draft) return false;
+  return pageHiddenFrom(page, await readerRuleFor(ctx));
+}
+
+/** As `draftHiddenFromCaller`, by page id (a page of another classroom is not hidden here: it is not found elsewhere). */
+export async function pageDraftHiddenFromCaller(
+  pageId: string,
+  ctx: ToolContext
+): Promise<boolean> {
+  const page = await findPageInClassroom(pageId, ctx);
+  return page ? draftHiddenFromCaller(page, ctx) : false;
+}
+
+/**
+ * The audit row for an act that already happened, as the caller's ACCEPTED
+ * role. A failed write is logged and the tool's answer stands (the HTTP
+ * surface does the same).
+ */
+async function auditQuietly(
+  ctx: ToolContext,
+  role: Role,
+  entry: Omit<AuditEntry, 'role'>
+): Promise<void> {
+  try {
+    await writeAudit(ctx, { ...entry, role });
+  } catch (error) {
+    const tool = (entry.data as { tool?: unknown } | undefined)?.tool;
+    console.warn(`[mcp] page sections audit (${String(tool)}) failed:`, error);
+  }
 }
 
 /** The tree this viewer may see: staff everything, others with closed sections emptied. */
@@ -274,7 +352,7 @@ export function viewerPageBlocks(
         block.id
       ) {
         const checked = viewer.checked.has(block.id);
-        headings.push({ id: block.id, title: lockedSectionTitle(block), checked });
+        headings.push({ id: block.id, title: headingText(block), checked });
         const content = Array.isArray(block.content) ? block.content : [];
         next = {
           ...block,
@@ -413,13 +491,18 @@ export const pageSectionsStatusTool: ToolDefinition<StatusArgs> = {
     page_id: pageIdArg,
   },
   handler: async (args, ctx) => {
-    const { classroomId } = requireClassroomCtx(ctx);
-    const page = await findPageInClassroom(args.page_id, ctx);
-    if (!page) throw scopedNotFound('Page');
+    const [page, rule] = await Promise.all([
+      findPageInClassroom(args.page_id, ctx),
+      readerRuleFor(ctx),
+    ]);
+    // Accepted OWNER/TEACHER only, as the page's unlock list: a pending
+    // teacher invite passes the registry and still finds nothing here.
+    const actingRole = rule.acceptedRole;
+    if (!page || !rule.canSeeActivity || !actingRole) throw scopedNotFound('Page');
 
+    // The page row was just found by a query naming the bound classroom.
     const activity = await ClassmojiService.pageSections.sectionActivity({
-      pageId: page.id,
-      classroomId,
+      page: { id: page.id, classroom_id: page.classroom_id },
     });
     if (!activity) throw scopedNotFound('Page');
 
@@ -432,20 +515,26 @@ export const pageSectionsStatusTool: ToolDefinition<StatusArgs> = {
     };
     const checks = byBlock(activity.checks);
     const unlocks = byBlock(activity.unlocks);
-    const titleOf = (id: string) => (blocks ? lockedSectionTitle(findBlock(blocks, id)) : '');
+    const headingTitle = (id: string) => (blocks ? headingText(findBlock(blocks, id)) : '');
+    const lockTitle = (id: string) => (blocks ? lockedSectionTitle(findBlock(blocks, id)) : '');
 
     const headingIds = blocks ? checkableHeadingIds(blocks) : [];
     const lockedIds = blocks ? lockedSectionIds(blocks) : [];
 
     const checkable_headings = headingIds.map(id => {
       const rows = checks.get(id) ?? [];
-      return { id, title: titleOf(id), checked: rows.length, students: rows.map(presentStudent) };
+      return {
+        id,
+        title: headingTitle(id),
+        checked: rows.length,
+        students: rows.map(presentStudent),
+      };
     });
     const locked_sections = lockedIds.map(id => {
       const rows = unlocks.get(id) ?? [];
       return {
         id,
-        title: titleOf(id) || 'Untitled',
+        title: lockTitle(id) || 'Untitled',
         unlocked: rows.length,
         students: rows.map(presentStudent),
       };
@@ -471,7 +560,7 @@ export const pageSectionsStatusTool: ToolDefinition<StatusArgs> = {
         })),
     ];
 
-    await writeAudit(ctx, {
+    await auditQuietly(ctx, actingRole, {
       resource_type: 'PAGES',
       resource_id: page.id,
       action: 'VIEW',
@@ -517,17 +606,21 @@ export const pageSectionUnlockTool: ToolDefinition<UnlockArgs> = {
     'content_get.',
   scope: 'write',
   roles: ['STUDENT'],
+  // The caller's own record, not the classroom's content (archived: allowed).
+  readerState: true,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     page_id: pageIdArg,
     block_id: blockIdArg('The locked section id, from content_get'),
   },
   handler: async (args, ctx) => {
-    const { classroomId, role } = requireClassroomCtx(ctx);
     const userId = ctx.viewer.userId;
 
-    const access = await ClassmojiService.pageSections.readerAccess({ userId, classroomId });
-    if (access.teachingTeam) {
+    const rule = await readerRuleFor(ctx);
+    // Reveal-all readers (the teaching team, and anyone holding an OWNER or
+    // TEACHER invite, accepted or not) already see every body: the page
+    // answers them 409, this answers the same refusal.
+    if (rule.revealAll) {
       throw new ToolError(
         'forbidden',
         'Teaching staff already see every locked section; nothing is recorded for staff',
@@ -535,10 +628,11 @@ export const pageSectionUnlockTool: ToolDefinition<UnlockArgs> = {
       );
     }
     // Not an accepted student (a pending invite): the page is not theirs to unlock.
-    if (!access.student) throw scopedNotFound('Page');
+    const actingRole = rule.acceptedRole;
+    if (!rule.canUnlock || !actingRole) throw scopedNotFound('Page');
 
     const page = await findPageInClassroom(args.page_id, ctx);
-    if (!page || !contentVisibility(role).allows(page)) throw scopedNotFound('Page');
+    if (!page || pageHiddenFrom(page, rule)) throw scopedNotFound('Page');
 
     const blocks = await loadPageBlocks(page, 'page_section_unlock');
     if (!blocks) {
@@ -561,7 +655,7 @@ export const pageSectionUnlockTool: ToolDefinition<UnlockArgs> = {
     });
 
     if (created) {
-      await writeAudit(ctx, {
+      await auditQuietly(ctx, actingRole, {
         resource_type: 'PAGES',
         resource_id: page.id,
         action: 'CREATE',
@@ -625,6 +719,8 @@ export const pageSectionCheckTool: ToolDefinition<CheckArgs> = {
     '"[not done]" heading line of content_get. Staff can see who checked what.',
   scope: 'write',
   roles: MEMBER,
+  // The caller's own progress, not the classroom's content (archived: allowed).
+  readerState: true,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     page_id: pageIdArg,
@@ -632,13 +728,16 @@ export const pageSectionCheckTool: ToolDefinition<CheckArgs> = {
     checked: z.boolean().describe('true = done, false = not done'),
   },
   handler: async (args, ctx) => {
-    const { role } = requireClassroomCtx(ctx);
-    const page = await findPageInClassroom(args.page_id, ctx);
-    if (!page || !contentVisibility(role).allows(page)) throw scopedNotFound('Page');
+    const [page, rule] = await Promise.all([
+      findPageInClassroom(args.page_id, ctx),
+      readerRuleFor(ctx),
+    ]);
+    // Accepted members only (a pending invite reads the page but keeps no
+    // state); a draft only for readers who see every body.
+    const actingRole = rule.acceptedRole;
+    if (!page || !actingRole || pageHiddenFrom(page, rule)) throw scopedNotFound('Page');
 
-    // Accepted members only (a pending invite reads the page but keeps no state).
-    const viewer = await sectionViewerFor(page.id, ctx);
-    if (!viewer.canCheck) throw scopedNotFound('Page');
+    const viewer = await sectionViewerFor(page.id, ctx, rule);
 
     const blocks = await loadPageBlocks(page, 'page_section_check');
     if (!blocks) {
@@ -663,8 +762,10 @@ export const pageSectionCheckTool: ToolDefinition<CheckArgs> = {
       blockId: args.block_id,
       checked: args.checked,
     });
+    // Never coalesced: check → uncheck → check is three events.
     if (changed) {
-      await writeAudit(ctx, {
+      await auditQuietly(ctx, actingRole, {
+        dedupe: false,
         resource_type: 'PAGES',
         resource_id: page.id,
         action: args.checked ? 'CREATE' : 'DELETE',
@@ -681,7 +782,7 @@ export const pageSectionCheckTool: ToolDefinition<CheckArgs> = {
     return ok({
       page_id: page.id,
       block_id: args.block_id,
-      title: lockedSectionTitle(target),
+      title: headingText(target),
       checked: args.checked,
       changed,
     });

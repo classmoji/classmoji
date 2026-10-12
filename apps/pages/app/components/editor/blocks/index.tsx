@@ -24,7 +24,7 @@ import { Video } from './VideoBlock.tsx';
 import { PageLink } from './PageLinkBlock.tsx';
 import { NavGrid } from './NavGridBlock.tsx';
 import { ResponsiveImage } from './ImageBlock.tsx';
-import { LockedSection } from './LockedSectionBlock.tsx';
+import { LockedSection, focusLockedSectionTitle } from './LockedSectionBlock.tsx';
 
 /**
  * BlockNote schema with all built-in + custom block specs.
@@ -205,12 +205,21 @@ export const customSlashMenuItems = [
     group: 'Advanced',
     icon: <IconLock size={18} />,
     onItemClick: (editor: PageBlockEditor) => {
-      // The title is the block's own text, so the cursor lands in it.
-      insertOrUpdateBlockForSlashMenu(editor, {
-        type: 'lockedSection',
-        content: '',
-        children: [{ type: 'paragraph' }],
-      });
+      const block = {
+        type: 'lockedSection' as const,
+        props: { title: '' },
+        children: [{ type: 'paragraph' as const }],
+      };
+      // The slash menu replaces the line it was typed on when that line is
+      // empty, children included; a line with children keeps them and the
+      // section goes after it.
+      const current = editor.getTextCursorPosition().block;
+      const inserted =
+        current.children.length > 0
+          ? editor.insertBlocks([block], current, 'after')[0]
+          : insertOrUpdateBlockForSlashMenu(editor, block);
+      // The title is a field on the block: it takes the focus once drawn.
+      if (inserted) focusLockedSectionTitle(inserted.id);
     },
   },
   {

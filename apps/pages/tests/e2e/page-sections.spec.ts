@@ -92,8 +92,7 @@ function documentA() {
               {
                 id: ID.outer,
                 type: 'lockedSection',
-                props: {},
-                content: text('Outer hint'),
+                props: { title: 'Outer hint' },
                 children: [
                   {
                     id: randomUUID(),
@@ -111,8 +110,7 @@ function documentA() {
                   {
                     id: ID.inner,
                     type: 'lockedSection',
-                    props: {},
-                    content: text('Inner hint'),
+                    props: { title: 'Inner hint' },
                     children: [
                       {
                         id: randomUUID(),
@@ -134,8 +132,7 @@ function documentA() {
               {
                 id: ID.solo,
                 type: 'lockedSection',
-                props: {},
-                content: text('Solo hint'),
+                props: { title: 'Solo hint' },
                 children: [
                   { id: randomUUID(), type: 'paragraph', content: text(SOLO_SECRET), children: [] },
                 ],
@@ -161,8 +158,7 @@ function documentB() {
       {
         id: ID.bLock,
         type: 'lockedSection',
-        props: {},
-        content: text('B hint'),
+        props: { title: 'B hint' },
         children: [{ id: randomUUID(), type: 'paragraph', content: text(B_SECRET), children: [] }],
       },
     ],
@@ -456,6 +452,7 @@ test.describe('page sections: what a reader receives', () => {
     expect(data.text).not.toContain('content.json');
     expect(readerSectionsOf(data.text)).toEqual({
       staff: false,
+      signedIn: true,
       canCheck: true,
       canUnlock: true,
       checked: [],
@@ -472,6 +469,7 @@ test.describe('page sections: what a reader receives', () => {
     }
     expect(readerSectionsOf(data.text)).toEqual({
       staff: false,
+      signedIn: false,
       canCheck: false,
       canUnlock: false,
       checked: [],
@@ -561,6 +559,7 @@ test.describe('page sections: writes and isolation', () => {
     const after = readerSectionsOf((await loaderData(page, pageA)).text);
     expect(after).toEqual({
       staff: false,
+      signedIn: true,
       canCheck: true,
       canUnlock: true,
       checked: [ID.heading],
@@ -578,6 +577,7 @@ test.describe('page sections: writes and isolation', () => {
     expect(data.text).not.toContain(unlockedAt);
     expect(readerSectionsOf(data.text)).toEqual({
       staff: false,
+      signedIn: true,
       canCheck: true,
       canUnlock: true,
       checked: [],
@@ -706,13 +706,15 @@ test.describe('page sections: the staff unlock list', () => {
       },
       select: { data: true, role: true },
     });
-    // The first read (outer). The second (solo, within the audit service's
-    // 5-second dedup window) is coalesced into it: block_id is not part of
-    // that window's key. Reported, not asserted either way here.
-    expect(views).toContainEqual({
+    // One row per section read: block_id is part of the audit service's
+    // 5-second dedup key, so the second read (solo, inside the window) is its
+    // own row rather than coalesced into the first.
+    const view = (blockId: string) => ({
       role: 'TEACHER',
-      data: { tool: 'page_section_unlocks', page_id: pageA.pageId, block_id: ID.outer },
+      data: { tool: 'page_section_unlocks', via: 'web', page_id: pageA.pageId, block_id: blockId },
     });
+    expect(views).toContainEqual(view(ID.outer));
+    expect(views).toContainEqual(view(ID.solo));
   });
 });
 
@@ -735,14 +737,25 @@ test.describe('page sections: audit rows', () => {
         role: 'STUDENT',
         action: 'CREATE',
         classroom_id: pageA.classroomId,
-        data: { tool: 'page_section_unlock', block_id: ID.outer },
+        data: {
+          tool: 'page_section_unlock',
+          via: 'web',
+          page_id: pageA.pageId,
+          block_id: ID.outer,
+        },
       },
       {
         user_id: student1,
         role: 'STUDENT',
         action: 'CREATE',
         classroom_id: pageA.classroomId,
-        data: { tool: 'page_section_check', block_id: ID.heading, checked: true },
+        data: {
+          tool: 'page_section_check',
+          via: 'web',
+          page_id: pageA.pageId,
+          block_id: ID.heading,
+          checked: true,
+        },
       },
     ]);
     // The impersonated student and the 409'd assistant wrote nothing, so logged nothing.

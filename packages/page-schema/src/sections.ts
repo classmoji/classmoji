@@ -9,8 +9,8 @@
  * - A checkable section is a `heading` with `props.checkable === true`; its
  *   section is the heading plus the siblings that follow it up to the next
  *   heading of the same or a higher level (`checkableSectionRanges`).
- * - A `lockedSection` holds its title as inline content and its body as
- *   children. A reader who has not unlocked it gets the block with no
+ * - A `lockedSection` holds its title in `props.title` (public) and its body
+ *   as children. A reader who has not unlocked it gets the block with no
  *   children (`redactLockedSections`).
  *
  * Every function tolerates malformed input (non-arrays, non-objects, missing
@@ -193,8 +193,15 @@ function inlineText(node: unknown): string {
   return node.content === undefined ? '' : inlineText(node.content);
 }
 
-/** A locked section's title: the plain text of its inline content, trimmed. */
-export function lockedSectionTitle(block: unknown): string {
+/** A heading's text: the plain text of its inline content, trimmed. */
+export function headingText(block: unknown): string {
   if (!isObject(block)) return '';
   return inlineText(block.content).trim();
+}
+
+/** A locked section's title (`props.title`), trimmed; '' when missing. */
+export function lockedSectionTitle(block: unknown): string {
+  if (!isObject(block) || !isObject(block.props)) return '';
+  const title = (block.props as Record<string, unknown>).title;
+  return typeof title === 'string' ? title.trim() : '';
 }

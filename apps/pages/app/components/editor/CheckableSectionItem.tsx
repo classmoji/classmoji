@@ -50,6 +50,6 @@ export function CheckableBadgeYield() {
   });
   if (!blockId || typeof CSS === 'undefined' || typeof CSS.escape !== 'function') return null;
   return (
-    <style>{`.bn-block-outer[data-id="${CSS.escape(blockId)}"] > .bn-block > .bn-block-content[data-content-type="heading"][data-checkable="true"]::before { opacity: 0; }`}</style>
+    <style>{`.bn-block-outer[data-id="${CSS.escape(blockId)}"] > .bn-block > .bn-block-content[data-content-type="heading"][data-checkable="true"] .pg-checkable-badge { opacity: 0; pointer-events: none; }`}</style>
   );
 }

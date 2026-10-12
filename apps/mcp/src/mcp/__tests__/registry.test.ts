@@ -51,6 +51,7 @@ function annotationsOf(
 
 const throwingHandlerError = new Error('secret internal detail: db password is hunter2');
 let writeHandlerCalls = 0;
+let readerStateCalls = 0;
 
 beforeAll(() => {
   registerToolDefinition({
@@ -103,6 +104,20 @@ beforeAll(() => {
     handler: async () => {
       writeHandlerCalls += 1;
       return { content: [{ type: 'text', text: 'mutated' }] };
+    },
+  });
+
+  registerToolDefinition<{ classroom: string }>({
+    name: 't_reader_state',
+    title: 'Reader state',
+    description: "write-scope, the caller's own reader state",
+    scope: 'write',
+    roles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
+    readerState: true,
+    inputSchema: { classroom: z.string() },
+    handler: async () => {
+      readerStateCalls += 1;
+      return { content: [{ type: 'text', text: 'noted' }] };
     },
   });
 
@@ -270,6 +285,7 @@ beforeEach(() => {
   getClassroomTimeZone.mockReset();
   getClassroomTimeZone.mockResolvedValue(null);
   writeHandlerCalls = 0;
+  readerStateCalls = 0;
 });
 
 // ─── Registration validation ────────────────────────────────────────────────
@@ -301,6 +317,26 @@ describe('registerToolDefinition validation', () => {
         handler: async () => ({ content: [] }),
       })
     ).toThrow(/no 'classroom' argument/);
+  });
+
+  it('rejects readerState on anything but a classroom-bound write', () => {
+    for (const [name, scope, roles] of [
+      ['t_bad_reader_read', 'read', ['STUDENT']],
+      ['t_bad_reader_unbound', 'write', null],
+    ] as const) {
+      expect(() =>
+        registerToolDefinition({
+          name,
+          title: 'bad',
+          description: 'readerState misuse',
+          scope,
+          roles,
+          readerState: true,
+          inputSchema: roles ? { classroom: z.string() } : {},
+          handler: async () => ({ content: [] }),
+        })
+      ).toThrow(/readerState/);
+    }
   });
 });
 
@@ -572,6 +608,31 @@ describe('mutation gate on write tools', () => {
     const result = await callTool(client, 't_write_classroom', { classroom: REF });
     expect(result.isError).toBeFalsy();
     expect(writeHandlerCalls).toBe(1);
+  });
+
+  it("lets a non-owner's reader-state write run on a LOCKED classroom", async () => {
+    mockClassroom({ status: 'LOCKED', memberRole: 'STUDENT' });
+    const client = await connectClient(makeViewer(['read', 'write']));
+
+    const result = await callTool(client, 't_reader_state', { classroom: REF });
+    expect(result.isError).toBeFalsy();
+    expect(readerStateCalls).toBe(1);
+  });
+
+  it('still refuses a non-owner reader-state write on an UNPUBLISHED classroom (entry gate)', async () => {
+    for (const memberRole of ['STUDENT', 'TEACHER'] as const) {
+      mockClassroom({ status: 'UNPUBLISHED', memberRole });
+      const client = await connectClient(makeViewer(['read', 'write']));
+      const denied = parseErrorResult(await callTool(client, 't_reader_state', { classroom: REF }));
+      expect(denied.error).toBe('forbidden');
+      expect(denied.code).toBe('CLASSROOM_UNPUBLISHED');
+    }
+    expect(readerStateCalls).toBe(0);
+
+    mockClassroom({ status: 'UNPUBLISHED', memberRole: 'OWNER' });
+    const owner = await connectClient(makeViewer(['read', 'write']));
+    expect((await callTool(owner, 't_reader_state', { classroom: REF })).isError).toBeFalsy();
+    expect(readerStateCalls).toBe(1);
   });
 
   it('allows a non-owner write on an ACTIVE classroom', async () => {

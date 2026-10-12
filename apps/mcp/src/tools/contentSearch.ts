@@ -93,7 +93,13 @@ import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
 import { MEMBER } from '../resources/shape.ts';
 import { ok, requireClassroomCtx, scopedNotFound } from './shared.ts';
-import { pageTextForViewer, viewerPageText, type ViewerPageText } from './pageSections.ts';
+import {
+  draftHiddenFromCaller,
+  pageDraftHiddenFromCaller,
+  pageTextForViewer,
+  viewerPageText,
+  type ViewerPageText,
+} from './pageSections.ts';
 
 // ─── Shared input pieces ────────────────────────────────────────────────────
 
@@ -685,6 +691,10 @@ async function readLiveDocument(
   // THE predicate — the same function the search and list statements are built
   // from, applied to the row we just loaded. Not a second implementation of it.
   if (!contentVisibility(classroom.role).allows(record)) return null;
+  // A draft PAGE also follows the page-sections reader rule, as the page
+  // itself does: a pending assistant invite passes the predicate above (it
+  // reads the registry's any-state role) but does not open the page.
+  if (kind === 'page' && (await draftHiddenFromCaller(record, ctx))) return null;
 
   // A FILE or LINK slide has no `index.html` to read: its content is an
   // uploaded document (a PDF, whose bytes are not text anyone should be handed)
@@ -830,6 +840,15 @@ export const contentGetTool: ToolDefinition<ContentGetArgs> = {
         docKind: args.kind,
         docId: args.id,
       });
+      // A draft page: only for readers who see every locked body, as on the
+      // page (the index row may not say whether it is a draft: ask the row).
+      if (
+        args.kind === 'page' &&
+        document.isDraft !== false &&
+        (await pageDraftHiddenFromCaller(args.id, ctx))
+      ) {
+        throw contentNotFound();
+      }
       // The index holds one text for everyone, and never a locked section's
       // body. A page whose content.json holds locked sections or checkable
       // headings is answered with this viewer's own text instead

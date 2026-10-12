@@ -35,15 +35,16 @@ import type { PageForContent } from '~/types/pages.ts';
 import type { UploadCapability } from '@classmoji/services/media/router';
 import { loadMediaDownloads } from '~/utils/mediaDownloads.server.ts';
 import {
-  NO_READER_ACCESS,
+  NO_SECTION_VIEWER,
   SECTION_NO_STORE_HEADERS,
+  classroomOpenFor,
   documentForReader,
   isImpersonatedSession,
   readerSectionsFor,
-  revealsAllSections,
   type SectionReaderState,
 } from '~/utils/pageSections.server.ts';
 import { downloadMapRole, type MediaDownloads } from '~/utils/mediaDownloads.ts';
+import { lockedSectionIds } from '@classmoji/page-schema/sections';
 import {
   assetResolveContext,
   canonicalizeAssetRef,
@@ -178,22 +179,38 @@ export const loader = async ({
 
   // Check user auth and membership
   const authData = await getAuthSession(request).catch(() => null);
-  let userRole: string | null = null;
-  let canEdit = false;
 
-  if (authData?.userId) {
-    // The highest of their roles here: an owner also enrolled as a student
-    // edits. (The download map reads the accepted-only role, below.)
-    userRole = await findClassroomRole({
-      userId: authData.userId,
-      classroomId: page.classroom.id,
-    });
-    canEdit = userRole !== null && ['OWNER', 'TEACHER'].includes(userRole);
-  }
+  // ── Who this reader is (page sections included) ──────────────────────────
+  // ONE membership read, the reader rule every surface shares
+  // (`pageSections.sectionViewer`; the MCP tools read the same one), run
+  // alongside this reader's OWN section state (page + user scoped; dropped
+  // below unless they are an accepted member).
+  //   - `role`: the highest of their roles here in any invite state, so an
+  //     owner also enrolled as a student edits;
+  //   - `canEditAnyState` (OWNER/TEACHER, any invite state) is `canEdit`, and
+  //     with the accepted teaching team it is `revealAll`: every locked body.
+  //     An editor must never receive a redacted document, or saving it would
+  //     delete the bodies. Everyone else gets each body removed unless they
+  //     unlocked it themselves.
+  const [sectionViewer, sectionState] = authData?.userId
+    ? await Promise.all([
+        ClassmojiService.pageSections.sectionViewer({
+          userId: authData.userId,
+          classroomId: page.classroom.id,
+        }),
+        ClassmojiService.pageSections.readerState({
+          pageId: page.id,
+          userId: authData.userId,
+        }) as Promise<SectionReaderState | null>,
+      ])
+    : [NO_SECTION_VIEWER, null];
+  const userRole: string | null = sectionViewer.role;
+  const canEdit = sectionViewer.canEditAnyState;
+  const revealAll = sectionViewer.revealAll;
 
-  // Block access to draft pages (teaching team can view drafts)
-  const canViewDrafts = ['OWNER', 'TEACHER', 'ASSISTANT'].includes(userRole as string);
-  if (page.is_draft && !canViewDrafts) {
+  // Draft pages: the teaching team in any invite state (the same rule as
+  // `/api/page-sections` and the MCP tools). Locked bodies still follow revealAll.
+  if (page.is_draft && !sectionViewer.canViewDrafts) {
     throw new Response('This page is not yet published', { status: 403 });
   }
 
@@ -202,40 +219,16 @@ export const loader = async ({
     throw new Response('Page is not public', { status: 403 });
   }
 
-  // ── Page sections (checkable headings, locked sections) ───────────────────
-  // ONE accepted-only role read decides what this reader may see and do. A
-  // reader who edits (canEdit) or is on the teaching team sees every locked
-  // body — an editor must never receive a redacted document, or saving it
-  // would delete the bodies. Everyone else gets each body removed unless they
-  // unlocked it themselves, and only their own rows are read.
-  const sectionAccess = authData?.userId
-    ? await ClassmojiService.pageSections.readerAccess({
-        userId: authData.userId,
-        classroomId: page.classroom.id,
-      })
-    : NO_READER_ACCESS;
-  const revealAll = revealsAllSections({ canEdit, access: sectionAccess });
-  const sectionState: SectionReaderState | null =
-    authData?.userId && sectionAccess.acceptedRole !== null
-      ? await ClassmojiService.pageSections.readerState({
-          pageId: page.id,
-          userId: authData.userId,
-        })
-      : null;
+  // Reader state follows the classroom ENTRY rule (archived keeps it, an
+  // UNPUBLISHED classroom keeps it for its owner only), like the POST.
+  const classroomOpen = classroomOpenFor({ status: page.classroom.status, viewer: sectionViewer });
   const readerSections = readerSectionsFor({
     signedIn: Boolean(authData?.userId),
-    access: sectionAccess,
+    viewer: sectionViewer,
     impersonated: isImpersonatedSession(authData),
-    revealAll,
+    classroomOpen,
     state: sectionState,
   });
-  // Staff chip counts: the people who edit the page (current students only).
-  const sectionStats = canEdit
-    ? await ClassmojiService.pageSections.unlockCounts({
-        pageId: page.id,
-        classroomId: page.classroom_id,
-      })
-    : null;
 
   const pageForContent = page as unknown as PageForContent;
 
@@ -399,6 +392,20 @@ export const loader = async ({
     unlocked: readerSections.unlocked,
   });
 
+  // Staff chip counts: accepted OWNER/TEACHER (`canSeeActivity`, the people
+  // the unlock list answers), current students only, and only when the
+  // document has a locked section to count. The page row is already verified,
+  // so the service does not re-read it. Started here, awaited with the payload.
+  const sectionStatsPending =
+    sectionViewer.canSeeActivity && classroomOpen && lockedSectionIds(viewerContent).length > 0
+      ? ClassmojiService.pageSections.unlockCounts({
+          page: { id: page.id, classroom_id: page.classroom_id },
+        })
+      : null;
+  // Its failure surfaces where it is awaited, never as an unhandled rejection
+  // if something in between throws first.
+  sectionStatsPending?.catch(() => {});
+
   // Which blocks the pending preview adds or edits — the changes the preview
   // makes, against the page as it was when the preview started (its
   // merge-base). The rendered preview highlights them; there is no diff view.
@@ -473,14 +480,7 @@ export const loader = async ({
   const viewerShown = !canEdit || previewActive;
   const downloadRole =
     authData?.userId && userRole && viewerShown && assetCtx
-      ? downloadMapRole(
-          await findClassroomRole({
-            userId: authData.userId,
-            classroomId: page.classroom.id,
-            acceptedOnly: true,
-          }),
-          page.is_draft
-        )
+      ? downloadMapRole(sectionViewer.acceptedRole, page.is_draft)
       : null;
   const mediaDownloads: MediaDownloads = downloadRole
     ? await loadMediaDownloads(page.classroom.id, viewerContent, downloadRole)
@@ -579,8 +579,9 @@ export const loader = async ({
     // This reader's own checks and unlocks, and what they may do (see
     // `readerSectionsFor`). Never anyone else's rows.
     readerSections,
-    // `{ students, unlocks: { blockId: count } }` for the staff chip; editors only.
-    sectionStats,
+    // `{ students, unlocks: { blockId: count } }` for the staff chip; accepted
+    // OWNER/TEACHER only (the same readers the unlock list answers).
+    sectionStats: sectionStatsPending ? await sectionStatsPending : null,
     userRole,
     canEdit,
     uploadCapability,

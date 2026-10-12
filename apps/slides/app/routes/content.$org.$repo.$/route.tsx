@@ -52,10 +52,12 @@
 import { fetchContent, getMimeType, isBinaryFile } from '~/utils/contentProxy';
 import { contentProxySafetyHeaders, withNosniff } from '~/utils/contentProxyHeaders';
 import {
+  canonicalProxyPath,
   deckDocumentDecision,
   isWithinContentPath,
   pageDocumentDecision,
   slideDocumentDecision,
+  storedContentPathForms,
 } from '~/utils/slideDocumentAccess';
 import { assertSlideAccess, getAuthSession } from '@classmoji/auth/server';
 import { ClassmojiService } from '@classmoji/services';
@@ -219,13 +221,21 @@ export const loader = async (args: ContentLoaderArgs) => {
 
 async function serveContent({ params, request }: ContentLoaderArgs): Promise<Response> {
   const { org, repo } = params;
-  const path = params['*']; // Catch-all segment
+  const rawPath = params['*']; // Catch-all segment, as React Router decoded it
   const url = new URL(request.url);
   const slideId = url.searchParams.get('slideId');
 
-  if (!org || !repo || !path) {
+  if (!org || !repo || !rawPath) {
     throw new Response('Invalid request', { status: 400 });
   }
+
+  // Every rule below decides on this string, and the reads normalize the path
+  // they are given. So only the repo-root form of a path is answered
+  // (`normalizeRepoRelative`'s form, no `..`): another spelling of the same
+  // path (`a//b`, `a/./b`, a trailing `/`) gets the route's ordinary refusal
+  // instead of being read. Decided before anything else, on the string alone.
+  const path = canonicalProxyPath(rawPath, ClassmojiService.contentDelivery.normalizeRepoRelative);
+  if (!path) throw forbidden();
 
   // Try authentication first
   const authData = await getAuthSession(request);
@@ -366,14 +376,16 @@ async function serveContent({ params, request }: ContentLoaderArgs): Promise<Res
   // page folder's assets (images, SVG, downloads) and not those two files.
   // The page rows are looked up the way the deck rows below are: classrooms
   // on this org whose content repo is this one, plus the classrooms this
-  // request was authorized against. Decided before the read, so a refused path
-  // and a missing one look the same.
+  // request was authorized against, matching a stored `content_path` with or
+  // without a leading or trailing `/` (`storedContentPathForms`; the deck
+  // lookup does the same). Decided before the read, so a refused path and a
+  // missing one look the same.
   const pageDecision = await pageDocumentDecision({
     path,
     findPages: async contentPath => {
       const pages = await getPrisma().page.findMany({
         where: {
-          content_path: contentPath,
+          content_path: { in: storedContentPathForms(contentPath) },
           OR: [
             { classroom_id: { in: authorizedClassroomIds } },
             { classroom: { git_organization: { login: org } } },
@@ -411,7 +423,7 @@ async function serveContent({ params, request }: ContentLoaderArgs): Promise<Res
       const decks = await getPrisma().slide.findMany({
         where: {
           kind: 'DECK',
-          content_path: contentPath,
+          content_path: { in: storedContentPathForms(contentPath) },
           classroom: { git_organization: { login: org } },
         },
         include: { classroom: { include: { git_organization: true } } },

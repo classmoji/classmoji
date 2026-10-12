@@ -13,8 +13,8 @@ import { checkableSectionRanges } from '@classmoji/page-schema/sections';
  * BlockNote's blocks are flat siblings, so "hovering the section" cannot be a
  * selector on a wrapper. The container carries the ids of the sections the
  * pointer (or keyboard focus) is in, `data-active-sections`, and the rules
- * restore those. Pointing at the tick box itself does not count, so ticking
- * shows the fade at once. Reduced motion: the fade still happens, without
+ * restore those. Pointing at (or focusing) the tick box itself does not
+ * count, so ticking shows the fade at once. Reduced motion: the fade still happens, without
  * the transition.
  */
 export function useSectionFade(
@@ -113,7 +113,9 @@ export function useSectionFade(
       } catch {
         visible = false;
       }
-      focused.current = visible ? sectionsAt(target) : [];
+      // As with the pointer: focus on a tick box leaves its section faded.
+      focused.current =
+        visible && !target?.closest?.('.pg-section-check') ? sectionsAt(target) : [];
       write(el);
     };
     const onFocusOut = () => {

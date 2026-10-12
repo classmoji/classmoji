@@ -21,7 +21,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Role } from '@prisma/client';
 import { ToolError } from '../../mcp/errors.ts';
 import { toolAnnotations, type ToolContext, type ToolDefinition } from '../../mcp/registry.ts';
@@ -82,6 +82,10 @@ const ASSISTANT = 'user-assistant';
 const PENDING = 'user-pending'; // invited STUDENT, not accepted
 const STAFF_STUDENT = 'user-staff-student'; // TEACHER and STUDENT in A
 const REMOVED = 'user-removed'; // no membership any more
+const PENDING_TEACHER = 'user-pending-teacher'; // invited TEACHER, not accepted
+const STUDENT_PENDING_TEACHER = 'user-student-pending-teacher'; // accepted STUDENT + pending TEACHER
+const STUDENT_PENDING_TA = 'user-student-pending-ta'; // accepted STUDENT + pending ASSISTANT
+const TEACHER_PENDING_OWNER = 'user-teacher-pending-owner'; // accepted TEACHER + pending OWNER
 
 const text = (value: string) => [{ type: 'text', text: value, styles: {} }];
 
@@ -98,15 +102,13 @@ const DOC_BLOCKS = [
   {
     id: 'lock1',
     type: 'lockedSection',
-    props: {},
-    content: text('Hint one'),
+    props: { title: 'Hint one' },
     children: [
       { id: 'b1', type: 'paragraph', props: {}, content: text('SECRET-ONE'), children: [] },
       {
         id: 'lock2',
         type: 'lockedSection',
-        props: {},
-        content: text('Deeper hint'),
+        props: { title: 'Deeper hint' },
         children: [
           { id: 'b2', type: 'paragraph', props: {}, content: text('SECRET-TWO'), children: [] },
         ],
@@ -116,8 +118,7 @@ const DOC_BLOCKS = [
   {
     id: 'lock3',
     type: 'lockedSection',
-    props: {},
-    content: text('Answer'),
+    props: { title: 'Answer' },
     children: [
       { id: 'b3', type: 'paragraph', props: {}, content: text('SECRET-THREE'), children: [] },
       // A checkable heading inside a locked body: only there for whoever opened it.
@@ -722,7 +723,7 @@ describe('viewerPageBlocks', () => {
     const blocks = [
       {
         type: 'lockedSection',
-        content: text('No id'),
+        props: { title: 'No id' },
         children: [{ type: 'paragraph', content: text('BODY') }],
       },
     ];
@@ -902,7 +903,9 @@ describe('page_section_check', () => {
           block_id: 'h1',
           checked: true,
         }),
-      })
+      }),
+      // Every real change is its own row (never coalesced by the 5 s window).
+      { dedupe: false }
     );
 
     const off = await check(ctx, 'h1', false);
@@ -915,7 +918,8 @@ describe('page_section_check', () => {
           block_id: 'h1',
           checked: false,
         }),
-      })
+      }),
+      { dedupe: false }
     );
     // Only A's row went; B's check on the same heading is untouched.
     expect(checks).toEqual([expect.objectContaining({ user_id: STUDENT_B, block_id: 'h1' })]);
@@ -1127,5 +1131,232 @@ describe('page_sections_status', () => {
     const payload = await status(ctxFor(TEACHER, 'TEACHER'));
     expect(payload.content_unavailable).toBe(true);
     expect(payload.not_in_current_content).toEqual([{ id: 'lock1', kind: 'unlock', count: 1 }]);
+  });
+});
+
+// ─── Parity with the page (one shared reader rule) ──────────────────────────
+//
+// The registry resolves the caller's role in ANY invite state; these tools
+// answer from `pageSections.sectionViewer` instead, the rule the page loader
+// and POST /api/page-sections read, so both surfaces give the same answer.
+
+describe('parity with the page: the shared reader rule', () => {
+  // Mixed invite states, present only in this block (they would change the
+  // current-student counts the tests above assert).
+  const PARITY_MEMBERSHIPS: Row[] = [
+    membership(PENDING_TEACHER, CLASS_A, 'TEACHER', false),
+    membership(STUDENT_PENDING_TEACHER, CLASS_A, 'STUDENT'),
+    membership(STUDENT_PENDING_TEACHER, CLASS_A, 'TEACHER', false),
+    membership(STUDENT_PENDING_TA, CLASS_A, 'STUDENT'),
+    membership(STUDENT_PENDING_TA, CLASS_A, 'ASSISTANT', false),
+    membership(TEACHER_PENDING_OWNER, CLASS_A, 'TEACHER'),
+    membership(TEACHER_PENDING_OWNER, CLASS_A, 'OWNER', false),
+  ];
+  beforeEach(() => {
+    MEMBERSHIPS.push(...PARITY_MEMBERSHIPS);
+  });
+  afterEach(() => {
+    MEMBERSHIPS.splice(MEMBERSHIPS.length - PARITY_MEMBERSHIPS.length);
+  });
+
+  it('check and unlock are reader-state writes (archived classrooms keep them); status is a read', () => {
+    expect(pageSectionCheckTool.readerState).toBe(true);
+    expect(pageSectionUnlockTool.readerState).toBe(true);
+    expect(pageSectionsStatusTool.readerState).toBeUndefined();
+  });
+
+  it('page_sections_status: a pending TEACHER invite passes the registry and finds nothing', async () => {
+    unlocks = [unlockRow(STUDENT_A, 'lock1')];
+    const refusal = await refusalOf(() =>
+      pageSectionsStatusTool.handler(
+        { classroom: 'org/a', page_id: PAGE },
+        ctxFor(PENDING_TEACHER, 'TEACHER')
+      )
+    );
+    expect(refusal.error).toBe('not_found');
+    expect(prismaCallsFor('pageSectionUnlock')).toHaveLength(0);
+    expect(prismaCallsFor('pageSectionCheck')).toHaveLength(0);
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it("page_sections_status audits as the caller's ACCEPTED role", async () => {
+    // Registry role OWNER (a pending owner invite), accepted role TEACHER.
+    await call(
+      pageSectionsStatusTool,
+      { classroom: 'org/a', page_id: PAGE },
+      ctxFor(TEACHER_PENDING_OWNER, 'OWNER')
+    );
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.auditCreate.mock.calls[0]?.[0]).toMatchObject({
+      user_id: TEACHER_PENDING_OWNER,
+      role: 'TEACHER',
+      action: 'VIEW',
+      data: { tool: 'page_sections_status', via: 'mcp', page_id: PAGE },
+    });
+  });
+
+  it('a student with a pending TEACHER invite reads every body and cannot unlock (as on the page)', async () => {
+    rawRows = [indexRow(PAGE, 'Lab 3', 'pages/lab-3/content.json')];
+    // content_get: the registry resolves TEACHER (any state) for a MEMBER tool.
+    const payload = await getPage(ctxFor(STUDENT_PENDING_TEACHER, 'TEACHER'));
+    for (const secret of SECRETS) expect(payload.text).toContain(secret);
+    expect(payload.text).not.toContain('page_section_unlock');
+
+    // page_section_unlock: the registry resolves STUDENT (its only role).
+    const refusal = await refusalOf(() =>
+      pageSectionUnlockTool.handler(
+        { classroom: 'org/a', page_id: PAGE, block_id: 'lock1' },
+        ctxFor(STUDENT_PENDING_TEACHER, 'STUDENT')
+      )
+    );
+    expect(refusal).toMatchObject({ error: 'forbidden', code: 'TEACHING_TEAM' });
+    expect(unlocks).toHaveLength(0);
+  });
+
+  it('a pending TEACHER (no accepted row) reads every body but keeps no state', async () => {
+    rawRows = [indexRow(PAGE, 'Lab 3', 'pages/lab-3/content.json')];
+    const ctx = ctxFor(PENDING_TEACHER, 'TEACHER');
+    const payload = await getPage(ctx);
+    for (const secret of SECRETS) expect(payload.text).toContain(secret);
+    expect(payload.checkable_headings).toBeUndefined();
+    const refusal = await refusalOf(() =>
+      pageSectionCheckTool.handler(
+        { classroom: 'org/a', page_id: PAGE, block_id: 'h1', checked: true },
+        ctx
+      )
+    );
+    expect(refusal.error).toBe('not_found');
+    expect(checks).toHaveLength(0);
+  });
+
+  describe('draft pages: OWNER/TEACHER/ASSISTANT in any invite state', () => {
+    it('content_get serves a draft to a student whose ASSISTANT invite is pending, locked bodies still redacted (indexed and live)', async () => {
+      // The registry resolves ASSISTANT (any state): the pages app's existing
+      // draft rule lets them open the draft, but they do not reveal all.
+      const ctx = ctxFor(STUDENT_PENDING_TA, 'ASSISTANT');
+      rawRows = [{ ...indexRow(DRAFT, 'Draft lab', 'pages/draft/content.json'), isDraft: true }];
+      const indexed = await getPage(ctx, DRAFT);
+      rawRows = [];
+      const live = await getPage(ctx, DRAFT);
+      for (const payload of [indexed, live]) {
+        expect(payload.id).toBe(DRAFT);
+        for (const secret of SECRETS) expect(payload.text).not.toContain(secret);
+      }
+    });
+
+    it('content_get refuses a draft to a plain student (indexed and live)', async () => {
+      const ctx = ctxFor(STUDENT_A, 'STUDENT');
+      rawRows = [{ ...indexRow(DRAFT, 'Draft lab', 'pages/draft/content.json'), isDraft: true }];
+      const indexed = await refusalOf(() =>
+        contentGetTool.handler({ classroom: 'org/a', kind: 'page', id: DRAFT }, ctx)
+      );
+      rawRows = [];
+      const live = await refusalOf(() =>
+        contentGetTool.handler({ classroom: 'org/a', kind: 'page', id: DRAFT }, ctx)
+      );
+      for (const refusal of [indexed, live]) expect(refusal.error).toBe('not_found');
+      // The live path refused before reading the draft's content.
+      expect(mocks.fetchContentText.mock.calls.map(c => c[1])).not.toContain(
+        'pages/draft/content.json'
+      );
+    });
+
+    it('content_get still serves a draft to the accepted teaching team and to a pending teacher', async () => {
+      for (const [userId, role] of [
+        [ASSISTANT, 'ASSISTANT'],
+        [TEACHER, 'TEACHER'],
+        [PENDING_TEACHER, 'TEACHER'],
+      ] as const) {
+        rawRows = [{ ...indexRow(DRAFT, 'Draft lab', 'pages/draft/content.json'), isDraft: true }];
+        const payload = await getPage(ctxFor(userId, role), DRAFT);
+        expect(payload.id, userId).toBe(DRAFT);
+      }
+    });
+
+    it('page_section_check: a draft is not found unless the caller can view drafts', async () => {
+      const refusal = await refusalOf(() =>
+        pageSectionCheckTool.handler(
+          { classroom: 'org/a', page_id: DRAFT, block_id: 'h1', checked: true },
+          ctxFor(STUDENT_A, 'STUDENT')
+        )
+      );
+      expect(refusal.error).toBe('not_found');
+      expect(checks).toHaveLength(0);
+
+      // An accepted student with a pending ASSISTANT invite can view drafts (existing rule).
+      const okTa = await call(
+        pageSectionCheckTool,
+        { classroom: 'org/a', page_id: DRAFT, block_id: 'h1', checked: true },
+        ctxFor(STUDENT_PENDING_TA, 'ASSISTANT')
+      );
+      expect(okTa).toMatchObject({ checked: true });
+
+      // An accepted student with a pending TEACHER invite edits, so the draft opens.
+      const ok = await call(
+        pageSectionCheckTool,
+        { classroom: 'org/a', page_id: DRAFT, block_id: 'h1', checked: true },
+        ctxFor(STUDENT_PENDING_TEACHER, 'TEACHER')
+      );
+      expect(ok).toMatchObject({ checked: true, changed: true });
+    });
+  });
+
+  it("audits check and unlock as the caller's ACCEPTED role", async () => {
+    await call(
+      pageSectionCheckTool,
+      { classroom: 'org/a', page_id: PAGE, block_id: 'h1', checked: true },
+      ctxFor(STUDENT_PENDING_TA, 'ASSISTANT')
+    );
+    await unlock(ctxFor(STUDENT_PENDING_TA, 'STUDENT'), 'lock1');
+    expect(mocks.auditCreate.mock.calls.map(c => (c[0] as { role: string }).role)).toEqual([
+      'STUDENT',
+      'STUDENT',
+    ]);
+  });
+
+  it('check → uncheck → check writes three audit rows, none coalesced', async () => {
+    const ctx = ctxFor(STUDENT_A, 'STUDENT');
+    for (const checked of [true, false, true]) {
+      await call(
+        pageSectionCheckTool,
+        { classroom: 'org/a', page_id: PAGE, block_id: 'h1', checked },
+        ctx
+      );
+    }
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(3);
+    expect(mocks.auditCreate.mock.calls.map(c => (c[0] as { action: string }).action)).toEqual([
+      'CREATE',
+      'DELETE',
+      'CREATE',
+    ]);
+    for (const c of mocks.auditCreate.mock.calls) expect(c[1]).toEqual({ dedupe: false });
+  });
+
+  it('a failed audit write after the act is not a tool error (check, unlock, status)', async () => {
+    mocks.auditCreate.mockRejectedValue(new Error('audit down'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const checked = await call(
+        pageSectionCheckTool,
+        { classroom: 'org/a', page_id: PAGE, block_id: 'h1', checked: true },
+        ctxFor(STUDENT_A, 'STUDENT')
+      );
+      expect(checked).toMatchObject({ checked: true, changed: true });
+
+      const opened = await unlock(ctxFor(STUDENT_A, 'STUDENT'), 'lock1');
+      expect(opened.text).toContain('SECRET-ONE');
+      expect(unlocks).toHaveLength(1);
+
+      const report = await call(
+        pageSectionsStatusTool,
+        { classroom: 'org/a', page_id: PAGE },
+        ctxFor(TEACHER, 'TEACHER')
+      );
+      expect(report.page_id).toBe(PAGE);
+      expect(mocks.auditCreate).toHaveBeenCalledTimes(3);
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

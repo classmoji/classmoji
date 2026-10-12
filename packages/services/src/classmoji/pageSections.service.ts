@@ -11,8 +11,10 @@
  * the unlock's classroom is copied from the page row the caller already loaded.
  *
  * Reads scope every query by page AND user (a reader's own state) or by page
- * AND classroom (staff views), and the staff views first confirm the page is in
- * that classroom, so a page id from another classroom yields nothing.
+ * AND classroom (staff views). A staff view handed ids first confirms the page
+ * is in that classroom, so a page id from another classroom yields nothing; one
+ * handed the page row its caller already loaded and authorized against reads
+ * that row's own classroom and skips the re-query.
  *
  * Staff views count CURRENT students only: accepted STUDENT members of the
  * classroom holding no accepted teaching-team role there. A removed student's
@@ -86,40 +88,96 @@ function highestRole(roles: readonly Role[]): Role | null {
 
 // ── Reader ─────────────────────────────────────────────────────────────────
 
-export interface ReaderAccess {
+/**
+ * What a user is on a classroom's pages: the ONE rule every surface (the pages
+ * loader, `/api/page-sections`, the MCP tools and `content_get`) reads, so the
+ * UI and the MCP answer the same question the same way.
+ */
+export interface SectionViewer {
+  /** Highest role in ANY invite state (what the classroom status gates read), or null. */
+  role: Role | null;
   /** Highest role among the user's ACCEPTED memberships, or null. */
   acceptedRole: Role | null;
   /** Highest accepted role is OWNER, TEACHER or ASSISTANT. */
   teachingTeam: boolean;
   /** Highest accepted role is STUDENT. */
   student: boolean;
+  /**
+   * OWNER or TEACHER in any invite state: the page editor's rule. Such a user
+   * opens the editor, so they must never receive a redacted document (saving
+   * it would drop the locked bodies).
+   */
+  canEditAnyState: boolean;
+  /** Receives every locked body and records no unlock: canEditAnyState or accepted teaching team. */
+  revealAll: boolean;
+  /** An accepted student who does not reveal all. */
+  canUnlock: boolean;
+  /** Accepted OWNER or TEACHER: may see other readers' checks and unlocks. */
+  canSeeActivity: boolean;
+  /**
+   * OWNER, TEACHER or ASSISTANT in any invite state: may open draft pages.
+   * The pages app's existing draft rule, unchanged by page sections; a reader
+   * who opens a draft without revealAll still gets it redacted.
+   */
+  canViewDrafts: boolean;
 }
 
-const NO_ACCESS: ReaderAccess = { acceptedRole: null, teachingTeam: false, student: false };
+export const NO_SECTION_VIEWER: Readonly<SectionViewer> = Object.freeze({
+  role: null,
+  acceptedRole: null,
+  teachingTeam: false,
+  student: false,
+  canEditAnyState: false,
+  revealAll: false,
+  canUnlock: false,
+  canSeeActivity: false,
+  canViewDrafts: false,
+});
+
+/** The rule itself, from a user's membership rows in one classroom. */
+export function sectionViewerFromMemberships(
+  rows: ReadonlyArray<{ role: Role; has_accepted_invite: boolean }>
+): SectionViewer {
+  const role = highestRole(rows.map(row => row.role));
+  const acceptedRole = highestRole(
+    rows.filter(row => row.has_accepted_invite).map(row => row.role)
+  );
+  const teachingTeam = acceptedRole !== null && TEACHING_TEAM_ROLES.includes(acceptedRole);
+  const student = acceptedRole === 'STUDENT';
+  const canEditAnyState = role === 'OWNER' || role === 'TEACHER';
+  const revealAll = canEditAnyState || teachingTeam;
+  return {
+    role,
+    acceptedRole,
+    teachingTeam,
+    student,
+    canEditAnyState,
+    revealAll,
+    canUnlock: student && !revealAll,
+    canSeeActivity: acceptedRole === 'OWNER' || acceptedRole === 'TEACHER',
+    canViewDrafts: role !== null && TEACHING_TEAM_ROLES.includes(role),
+  };
+}
 
 /**
- * What a user is on a classroom's pages, from accepted memberships only.
- * The highest role wins: a member who is both staff and student is staff.
+ * The calling user's `SectionViewer` in one classroom (one membership read,
+ * every invite state; acceptance is applied per field). The highest role wins:
+ * a member who is both staff and student is staff.
  */
-export const readerAccess = async ({
+export const sectionViewer = async ({
   userId,
   classroomId,
 }: {
   userId: string;
   classroomId: string;
-}): Promise<ReaderAccess> => {
-  if (!isSectionId(userId) || !isSectionId(classroomId)) return { ...NO_ACCESS };
+}): Promise<SectionViewer> => {
+  if (!isSectionId(userId) || !isSectionId(classroomId)) return { ...NO_SECTION_VIEWER };
 
   const rows = await getPrisma().classroomMembership.findMany({
-    where: { user_id: userId, classroom_id: classroomId, has_accepted_invite: true },
-    select: { role: true },
+    where: { user_id: userId, classroom_id: classroomId },
+    select: { role: true, has_accepted_invite: true },
   });
-  const acceptedRole = highestRole(rows.map(row => row.role));
-  return {
-    acceptedRole,
-    teachingTeam: acceptedRole !== null && TEACHING_TEAM_ROLES.includes(acceptedRole),
-    student: acceptedRole === 'STUDENT',
-  };
+  return sectionViewerFromMemberships(rows);
 };
 
 export interface ReaderState {
@@ -270,14 +328,34 @@ const pageIsInClassroom = async (pageId: string, classroomId: string): Promise<b
 };
 
 /**
+ * Which page a staff view is about:
+ *   - `{ pageId, classroomId }`: ids; the page must be in that classroom (one query);
+ *   - `{ page }`: the page row the caller already loaded and authorized the
+ *     viewer against; its own `classroom_id` is the scope, nothing is re-read.
+ */
+export type StaffPageRef =
+  | { pageId: string; classroomId: string; page?: undefined }
+  | { page: { id: string; classroom_id: string }; pageId?: undefined; classroomId?: undefined };
+
+/**
  * The page's scope for a staff view, or null when the ids are unusable or the
  * page is not in the classroom. Carries the current-student set it was
  * computed with, so every view reads one filter.
  */
 const staffScope = async (
-  pageId: unknown,
-  classroomId: unknown
+  ref: StaffPageRef
 ): Promise<{ pageId: string; classroomId: string; studentIds: string[] } | null> => {
+  if (ref.page !== undefined) {
+    // Checked like any id: a caller's row may still be malformed.
+    const { id, classroom_id } = (ref.page ?? {}) as { id?: unknown; classroom_id?: unknown };
+    if (!isSectionId(id) || !isSectionId(classroom_id)) return null;
+    return {
+      pageId: id,
+      classroomId: classroom_id,
+      studentIds: await currentStudentIds(classroom_id),
+    };
+  }
+  const { pageId, classroomId } = ref;
   if (!isSectionId(pageId) || !isSectionId(classroomId)) return null;
   if (!(await pageIsInClassroom(pageId, classroomId))) return null;
   return { pageId, classroomId, studentIds: await currentStudentIds(classroomId) };
@@ -287,14 +365,10 @@ const staffScope = async (
  * How many current students unlocked each locked section of a page. Null when
  * the page is not in the classroom.
  */
-export const unlockCounts = async ({
-  pageId,
-  classroomId,
-}: {
-  pageId: string;
-  classroomId: string;
-}): Promise<{ students: number; unlocks: Record<string, number> } | null> => {
-  const scope = await staffScope(pageId, classroomId);
+export const unlockCounts = async (
+  ref: StaffPageRef
+): Promise<{ students: number; unlocks: Record<string, number> } | null> => {
+  const scope = await staffScope(ref);
   if (!scope) return null;
 
   const groups = scope.studentIds.length
@@ -317,16 +391,12 @@ export const unlockCounts = async ({
 /**
  * How many current students checked each checkable heading of a page. Null
  * when the page is not in the classroom. (Checks carry no classroom column:
- * the page assertion and the student set are the scope.)
+ * the page scope and the student set are the scope.)
  */
-export const checkCounts = async ({
-  pageId,
-  classroomId,
-}: {
-  pageId: string;
-  classroomId: string;
-}): Promise<{ students: number; checks: Record<string, number> } | null> => {
-  const scope = await staffScope(pageId, classroomId);
+export const checkCounts = async (
+  ref: StaffPageRef
+): Promise<{ students: number; checks: Record<string, number> } | null> => {
+  const scope = await staffScope(ref);
   if (!scope) return null;
 
   const groups = scope.studentIds.length
@@ -370,20 +440,16 @@ const ACTIVITY_USER_SELECT = {
 
 /**
  * Who unlocked and who checked what on a page, current students only, newest
- * first. `blockId` narrows both lists to one block. Null when the page is not
- * in the classroom or an id is unusable.
+ * first. `blockId` narrows both lists to one block; `only` reads one of the two
+ * lists (the other comes back empty and is never queried). Null when the page
+ * is not in the classroom or an id is unusable.
  */
-export const sectionActivity = async ({
-  pageId,
-  classroomId,
-  blockId,
-}: {
-  pageId: string;
-  classroomId: string;
-  blockId?: string;
-}): Promise<SectionActivity | null> => {
+export const sectionActivity = async (
+  args: StaffPageRef & { blockId?: string; only?: 'unlocks' | 'checks' }
+): Promise<SectionActivity | null> => {
+  const { blockId, only } = args;
   if (blockId !== undefined && !isBlockId(blockId)) return null;
-  const scope = await staffScope(pageId, classroomId);
+  const scope = await staffScope(args);
   if (!scope) return null;
   if (scope.studentIds.length === 0) return { students: 0, unlocks: [], checks: [] };
 
@@ -391,21 +457,25 @@ export const sectionActivity = async ({
   const block = blockId !== undefined ? { block_id: blockId } : {};
   const [provider, unlockRows, checkRows] = await Promise.all([
     findClassroomGitProvider(scope.classroomId),
-    prisma.pageSectionUnlock.findMany({
-      where: {
-        page_id: scope.pageId,
-        classroom_id: scope.classroomId,
-        user_id: { in: scope.studentIds },
-        ...block,
-      },
-      orderBy: [{ unlocked_at: 'desc' }, { id: 'asc' }],
-      select: { block_id: true, unlocked_at: true, user: { select: ACTIVITY_USER_SELECT } },
-    }),
-    prisma.pageSectionCheck.findMany({
-      where: { page_id: scope.pageId, user_id: { in: scope.studentIds }, ...block },
-      orderBy: [{ checked_at: 'desc' }, { id: 'asc' }],
-      select: { block_id: true, checked_at: true, user: { select: ACTIVITY_USER_SELECT } },
-    }),
+    only === 'checks'
+      ? []
+      : prisma.pageSectionUnlock.findMany({
+          where: {
+            page_id: scope.pageId,
+            classroom_id: scope.classroomId,
+            user_id: { in: scope.studentIds },
+            ...block,
+          },
+          orderBy: [{ unlocked_at: 'desc' }, { id: 'asc' }],
+          select: { block_id: true, unlocked_at: true, user: { select: ACTIVITY_USER_SELECT } },
+        }),
+    only === 'unlocks'
+      ? []
+      : prisma.pageSectionCheck.findMany({
+          where: { page_id: scope.pageId, user_id: { in: scope.studentIds }, ...block },
+          orderBy: [{ checked_at: 'desc' }, { id: 'asc' }],
+          select: { block_id: true, checked_at: true, user: { select: ACTIVITY_USER_SELECT } },
+        }),
   ]);
 
   const entry = (

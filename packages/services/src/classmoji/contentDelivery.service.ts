@@ -837,8 +837,11 @@ function toRepoPath(ctx: ResolveContext, ref: string): string | null {
  * (`pages/lab-1/assets/x.png` — see `uploadPageAsset`, which uploads into
  * `${content_path}/assets`), so a bare `assets/x.png` is already the exception
  * rather than the rule.
+ *
+ * Exported because the slides content proxy decides access on the same form it
+ * reads: a requested path whose spelling differs from this is refused there.
  */
-function normalizeRepoRelative(ref: string): string | null {
+export function normalizeRepoRelative(ref: string): string | null {
   const parts = ref.split('/').filter(part => part.length > 0 && part !== '.');
   if (parts.length === 0 || parts.includes('..')) return null;
   return parts.join('/');

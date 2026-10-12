@@ -275,8 +275,7 @@ export const ALL_BLOCKS: unknown[] = [
     // nor is anything it points at.
     id: 'b-locked',
     type: 'lockedSection',
-    props: {},
-    content: [text('LOCKED_TITLE_TEXT')],
+    props: { title: 'LOCKED_TITLE_TEXT' },
     children: [
       {
         id: 'b-locked-body',
@@ -300,8 +299,7 @@ export const ALL_BLOCKS: unknown[] = [
       {
         id: 'b-locked-nested',
         type: 'lockedSection',
-        props: {},
-        content: [text('LOCKED_NESTED_TITLE')],
+        props: { title: 'LOCKED_NESTED_TITLE' },
         children: [
           {
             id: 'b-locked-nested-body',

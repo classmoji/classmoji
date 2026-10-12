@@ -24,19 +24,20 @@ import { JSDOM as UntypedJSDOM } from 'jsdom';
 import { collectBlockAssetRefs } from '@classmoji/utils';
 
 import {
-  NO_READER_ACCESS,
+  NO_SECTION_VIEWER,
   SECTION_NO_STORE_HEADERS,
+  classroomOpenFor,
   documentForReader,
   documentForSite,
   handleSectionsGet,
   handleSectionsPost,
+  impersonatorOf,
   isImpersonatedSession,
   parseSectionRequest,
   readerSectionsFor,
-  revealsAllSections,
   sectionTargetValid,
   type PageSectionsDeps,
-  type SectionReaderAccess,
+  type SectionViewerAccess,
   type SectionsPage,
 } from '~/utils/pageSections.server.ts';
 import { collectMediaDownloadRefs } from '~/utils/mediaDownloads.ts';
@@ -82,8 +83,7 @@ function fixture() {
             {
               id: 'outer',
               type: 'lockedSection',
-              props: {},
-              content: text('Outer title'),
+              props: { title: 'Outer title' },
               children: [
                 {
                   id: 'p-outer',
@@ -113,8 +113,7 @@ function fixture() {
                 {
                   id: 'inner',
                   type: 'lockedSection',
-                  props: {},
-                  content: text('Inner title'),
+                  props: { title: 'Inner title' },
                   children: [
                     {
                       id: 'p-inner',
@@ -142,8 +141,7 @@ function fixture() {
             {
               id: 'solo',
               type: 'lockedSection',
-              props: {},
-              content: text('Solo title'),
+              props: { title: 'Solo title' },
               children: [
                 {
                   id: 'p-solo',
@@ -171,19 +169,53 @@ const SECRET_REFS = ['outer-secret.png', 'inner-secret.png', MEDIA_ID];
 
 // ── Rules ──────────────────────────────────────────────────────────────────
 
-test.describe('who sees locked bodies', () => {
-  const student: SectionReaderAccess = {
-    acceptedRole: 'STUDENT',
-    teachingTeam: false,
-    student: true,
+/**
+ * The reader rule, as `ClassmojiService.pageSections.sectionViewer` computes
+ * it from a user's membership rows (the rule itself is unit- and
+ * integration-tested in packages/services; this mirror only feeds the fakes).
+ */
+function viewerFrom(rows: Array<{ role: string; accepted: boolean }>): SectionViewerAccess {
+  const rank: Record<string, number> = { OWNER: 4, TEACHER: 3, ASSISTANT: 2, STUDENT: 1 };
+  const highest = (roles: string[]) =>
+    roles.reduce<string | null>((best, r) => (!best || rank[r]! > rank[best]! ? r : best), null);
+  const role = highest(rows.map(r => r.role));
+  const acceptedRole = highest(rows.filter(r => r.accepted).map(r => r.role));
+  const teachingTeam = acceptedRole !== null && acceptedRole !== 'STUDENT';
+  const student = acceptedRole === 'STUDENT';
+  const canEditAnyState = role === 'OWNER' || role === 'TEACHER';
+  const revealAll = canEditAnyState || teachingTeam;
+  return {
+    role,
+    acceptedRole,
+    teachingTeam,
+    student,
+    canEditAnyState,
+    revealAll,
+    canUnlock: student && !revealAll,
+    canSeeActivity: acceptedRole === 'OWNER' || acceptedRole === 'TEACHER',
+    canViewDrafts: role !== null && role !== 'STUDENT',
   };
-  const ta: SectionReaderAccess = { acceptedRole: 'ASSISTANT', teachingTeam: true, student: false };
+}
 
-  test('editors and the accepted teaching team reveal all; a student does not', () => {
-    expect(revealsAllSections({ canEdit: true, access: NO_READER_ACCESS })).toBe(true);
-    expect(revealsAllSections({ canEdit: false, access: ta })).toBe(true);
-    expect(revealsAllSections({ canEdit: false, access: student })).toBe(false);
-    expect(revealsAllSections({ canEdit: false, access: NO_READER_ACCESS })).toBe(false);
+const STUDENT_VIEWER = viewerFrom([{ role: 'STUDENT', accepted: true }]);
+const TA_VIEWER = viewerFrom([{ role: 'ASSISTANT', accepted: true }]);
+
+test.describe('who sees locked bodies', () => {
+  test('the classroom entry rule: LOCKED stays open, UNPUBLISHED only for its owner', () => {
+    const owner = viewerFrom([{ role: 'OWNER', accepted: true }]);
+    const teacher = viewerFrom([{ role: 'TEACHER', accepted: true }]);
+    for (const viewer of [owner, teacher, TA_VIEWER, STUDENT_VIEWER]) {
+      expect(classroomOpenFor({ status: 'ACTIVE', viewer })).toBe(true);
+      expect(classroomOpenFor({ status: 'LOCKED', viewer })).toBe(true);
+    }
+    expect(classroomOpenFor({ status: 'UNPUBLISHED', viewer: owner })).toBe(true);
+    for (const viewer of [teacher, TA_VIEWER, STUDENT_VIEWER, NO_SECTION_VIEWER]) {
+      expect(classroomOpenFor({ status: 'UNPUBLISHED', viewer })).toBe(false);
+    }
+    // A pending owner invite is the owner's role for the entry gate (as MCP reads it).
+    const pendingOwner = viewerFrom([{ role: 'OWNER', accepted: false }]);
+    expect(classroomOpenFor({ status: 'UNPUBLISHED', viewer: pendingOwner })).toBe(true);
+    expect(classroomOpenFor({ status: undefined, viewer: owner })).toBe(false);
   });
 
   test('a reveal-all reader gets the document untouched (same object)', () => {
@@ -236,8 +268,7 @@ test.describe('who sees locked bodies', () => {
       {
         id: 'constructor',
         type: 'lockedSection',
-        props: {},
-        content: [],
+        props: { title: '' },
         children: [{ id: 'x', type: 'paragraph', content: text('PROTO-SECRET') }],
       },
     ];
@@ -248,75 +279,84 @@ test.describe('who sees locked bodies', () => {
 
 test.describe('readerSections (the loader contract)', () => {
   const state = { checked: ['h-top'], unlocked: { solo: '2026-10-12T10:00:00.000Z' } };
+  const base = { impersonated: false, classroomOpen: true };
 
   test('anonymous: all false and empty', () => {
     expect(
-      readerSectionsFor({
-        signedIn: false,
-        access: NO_READER_ACCESS,
-        impersonated: false,
-        revealAll: false,
-        state: null,
-      })
-    ).toEqual({ staff: false, canCheck: false, canUnlock: false, checked: [], unlocked: {} });
+      readerSectionsFor({ ...base, signedIn: false, viewer: NO_SECTION_VIEWER, state: null })
+    ).toEqual({
+      staff: false,
+      signedIn: false,
+      canCheck: false,
+      canUnlock: false,
+      checked: [],
+      unlocked: {},
+    });
   });
 
   test('accepted student: can check and unlock, sees own state', () => {
-    expect(
-      readerSectionsFor({
-        signedIn: true,
-        access: { acceptedRole: 'STUDENT', teachingTeam: false, student: true },
-        impersonated: false,
-        revealAll: false,
-        state,
-      })
-    ).toEqual({ staff: false, canCheck: true, canUnlock: true, ...state });
+    expect(readerSectionsFor({ ...base, signedIn: true, viewer: STUDENT_VIEWER, state })).toEqual({
+      staff: false,
+      signedIn: true,
+      canCheck: true,
+      canUnlock: true,
+      ...state,
+    });
   });
 
   test('impersonated student: sees the state, can do nothing', () => {
     const out = readerSectionsFor({
+      ...base,
       signedIn: true,
-      access: { acceptedRole: 'STUDENT', teachingTeam: false, student: true },
+      viewer: STUDENT_VIEWER,
       impersonated: true,
-      revealAll: false,
       state,
     });
     expect(out.canCheck).toBe(false);
     expect(out.canUnlock).toBe(false);
+    expect(out.checked).toEqual(state.checked);
+  });
+
+  test('a classroom closed to the reader (UNPUBLISHED): state shown, nothing writable', () => {
+    const out = readerSectionsFor({
+      ...base,
+      signedIn: true,
+      viewer: STUDENT_VIEWER,
+      classroomOpen: false,
+      state,
+    });
+    expect(out).toMatchObject({ signedIn: true, canCheck: false, canUnlock: false });
+    expect(out.unlocked).toEqual(state.unlocked);
   });
 
   test('teaching team: staff, may check, never unlock', () => {
     const out = readerSectionsFor({
+      ...base,
       signedIn: true,
-      access: { acceptedRole: 'ASSISTANT', teachingTeam: true, student: false },
-      impersonated: false,
-      revealAll: true,
+      viewer: TA_VIEWER,
       state: { checked: [], unlocked: {} },
     });
     expect(out).toMatchObject({ staff: true, canCheck: true, canUnlock: false });
   });
 
-  test('student who also edits (canEdit via a pending staff invite): staff, no unlock', () => {
+  test('student with a pending TEACHER invite (edits): staff, no unlock', () => {
     const out = readerSectionsFor({
+      ...base,
       signedIn: true,
-      access: { acceptedRole: 'STUDENT', teachingTeam: false, student: true },
-      impersonated: false,
-      revealAll: true,
+      viewer: viewerFrom([
+        { role: 'STUDENT', accepted: true },
+        { role: 'TEACHER', accepted: false },
+      ]),
       state: { checked: [], unlocked: {} },
     });
     expect(out).toMatchObject({ staff: true, canCheck: true, canUnlock: false });
   });
 
   test('signed in without an accepted membership: no state even if handed one', () => {
-    const out = readerSectionsFor({
-      signedIn: true,
-      access: NO_READER_ACCESS,
-      impersonated: false,
-      revealAll: false,
-      state,
-    });
+    const out = readerSectionsFor({ ...base, signedIn: true, viewer: NO_SECTION_VIEWER, state });
     expect(out).toEqual({
       staff: false,
+      signedIn: true,
       canCheck: false,
       canUnlock: false,
       checked: [],
@@ -331,6 +371,11 @@ test.describe('readerSections (the loader contract)', () => {
     expect(isImpersonatedSession({ session: { session: { impersonatedBy: null } } })).toBe(false);
     expect(isImpersonatedSession({ session: { session: {} } })).toBe(false);
     expect(isImpersonatedSession(null)).toBe(false);
+    expect(impersonatorOf({ session: { session: { impersonatedBy: 'admin-id' } } })).toBe(
+      'admin-id'
+    );
+    expect(impersonatorOf({ session: { session: { impersonatedBy: '' } } })).toBeNull();
+    expect(impersonatorOf(null)).toBeNull();
   });
 });
 
@@ -375,22 +420,60 @@ const ORIGIN = 'http://pages.test';
 const CLASS_A = 'class-a';
 const CLASS_B = 'class-b';
 
-/** Users and their accepted roles, per classroom. */
-const MEMBERS: Record<string, Record<string, string>> = {
-  'student-1': { [CLASS_A]: 'STUDENT' },
-  'student-2': { [CLASS_A]: 'STUDENT' },
-  'ta-1': { [CLASS_A]: 'ASSISTANT' },
-  'teacher-1': { [CLASS_A]: 'TEACHER' },
-  'owner-1': { [CLASS_A]: 'OWNER' },
-  'owner-b': { [CLASS_B]: 'OWNER' },
-  'student-b': { [CLASS_B]: 'STUDENT' },
-  'pending-1': {},
+const CLASS_LOCKED = 'class-locked';
+const CLASS_UNPUBLISHED = 'class-unpublished';
+
+type MemberRow = { role: string; accepted: boolean };
+const accepted = (role: string): MemberRow => ({ role, accepted: true });
+const pending = (role: string): MemberRow => ({ role, accepted: false });
+
+/** Users and their membership rows (role + invite state), per classroom. */
+const MEMBERS: Record<string, Record<string, MemberRow[]>> = {
+  'student-1': {
+    [CLASS_A]: [accepted('STUDENT')],
+    [CLASS_LOCKED]: [accepted('STUDENT')],
+    [CLASS_UNPUBLISHED]: [accepted('STUDENT')],
+  },
+  'student-2': { [CLASS_A]: [accepted('STUDENT')] },
+  'ta-1': { [CLASS_A]: [accepted('ASSISTANT')] },
+  'teacher-1': { [CLASS_A]: [accepted('TEACHER')], [CLASS_UNPUBLISHED]: [accepted('TEACHER')] },
+  'owner-1': {
+    [CLASS_A]: [accepted('OWNER')],
+    [CLASS_LOCKED]: [accepted('OWNER')],
+    [CLASS_UNPUBLISHED]: [accepted('OWNER')],
+  },
+  'owner-b': { [CLASS_B]: [accepted('OWNER')] },
+  'student-b': { [CLASS_B]: [accepted('STUDENT')] },
+  'pending-1': { [CLASS_A]: [pending('STUDENT')] },
+  // An accepted student whose TEACHER invite is still pending: edits, so reveals all.
+  'student-pending-teacher': { [CLASS_A]: [accepted('STUDENT'), pending('TEACHER')] },
+  // A pending TEACHER (no accepted row): edits, but is no accepted member.
+  'pending-teacher': { [CLASS_A]: [pending('TEACHER')] },
+  // An accepted student with a pending ASSISTANT invite: still a student.
+  'student-pending-ta': { [CLASS_A]: [accepted('STUDENT'), pending('ASSISTANT')] },
 };
 
+const inClass = (classroomId: string, status = 'ACTIVE') => ({
+  classroom_id: classroomId,
+  classroom: { status },
+});
+
 const PAGES: Record<string, Page> = {
-  'page-a': { id: 'page-a', classroom_id: CLASS_A, is_draft: false, title: 'A' },
-  'draft-a': { id: 'draft-a', classroom_id: CLASS_A, is_draft: true, title: 'Draft' },
-  'page-b': { id: 'page-b', classroom_id: CLASS_B, is_draft: false, title: 'B' },
+  'page-a': { id: 'page-a', ...inClass(CLASS_A), is_draft: false, title: 'A' },
+  'draft-a': { id: 'draft-a', ...inClass(CLASS_A), is_draft: true, title: 'Draft' },
+  'page-b': { id: 'page-b', ...inClass(CLASS_B), is_draft: false, title: 'B' },
+  'page-locked': {
+    id: 'page-locked',
+    ...inClass(CLASS_LOCKED, 'LOCKED'),
+    is_draft: false,
+    title: 'Archived',
+  },
+  'page-unpublished': {
+    id: 'page-unpublished',
+    ...inClass(CLASS_UNPUBLISHED, 'UNPUBLISHED'),
+    is_draft: false,
+    title: 'Unpublished',
+  },
 };
 
 function makeDeps(overrides: Partial<PageSectionsDeps<Page>> = {}) {
@@ -398,6 +481,7 @@ function makeDeps(overrides: Partial<PageSectionsDeps<Page>> = {}) {
     setChecked: [] as unknown[],
     recordUnlock: [] as unknown[],
     sectionActivity: [] as unknown[],
+    sectionViewer: [] as unknown[],
     audit: [] as unknown[],
     loadReaderBlocks: 0,
   };
@@ -407,22 +491,19 @@ function makeDeps(overrides: Partial<PageSectionsDeps<Page>> = {}) {
     async getSession(request) {
       const user = request.headers.get('x-user');
       if (!user) return null;
-      return { userId: user, impersonated: request.headers.get('x-impersonated') === '1' };
+      const by = request.headers.get('x-impersonated-by');
+      return {
+        userId: user,
+        impersonated: request.headers.get('x-impersonated') === '1' || Boolean(by),
+        impersonatedBy: by,
+      };
     },
     async findPage(id) {
       return PAGES[id] ?? null;
     },
-    async readerAccess({ userId, classroomId }) {
-      const role = MEMBERS[userId]?.[classroomId] ?? null;
-      return {
-        acceptedRole: role,
-        teachingTeam: role !== null && role !== 'STUDENT',
-        student: role === 'STUDENT',
-      };
-    },
-    async canEdit({ userId, classroomId }) {
-      const role = MEMBERS[userId]?.[classroomId];
-      return role === 'OWNER' || role === 'TEACHER';
+    async sectionViewer({ userId, classroomId }) {
+      calls.sectionViewer.push({ userId, classroomId });
+      return viewerFrom(MEMBERS[userId]?.[classroomId] ?? []);
     },
     async readerState({ userId }) {
       return { checked: [], unlocked: { ...(unlocks[userId] ?? {}) } };
@@ -449,7 +530,7 @@ function makeDeps(overrides: Partial<PageSectionsDeps<Page>> = {}) {
     },
     async sectionActivity(args) {
       calls.sectionActivity.push(args);
-      if (args.classroomId !== PAGES[args.pageId]?.classroom_id) return null;
+      if (args.page.classroom_id !== PAGES[args.page.id]?.classroom_id) return null;
       return {
         students: 2,
         unlocks: [
@@ -491,10 +572,15 @@ function post(
   });
 }
 
-function get(query: string, user?: string) {
-  return new Request(`${ORIGIN}/api/page-sections?${query}`, {
-    headers: user ? { 'x-user': user } : {},
-  });
+function get(
+  query: string,
+  user?: string,
+  { method = 'GET', impersonatedBy }: { method?: string; impersonatedBy?: string } = {}
+) {
+  const headers: Record<string, string> = {};
+  if (user) headers['x-user'] = user;
+  if (impersonatedBy) headers['x-impersonated-by'] = impersonatedBy;
+  return new Request(`${ORIGIN}/api/page-sections?${query}`, { method, headers });
 }
 
 async function call(response: Promise<Response>) {
@@ -589,7 +675,7 @@ test.describe('POST /api/page-sections', () => {
     expect(calls.setChecked).toEqual([]);
   });
 
-  test('a draft is 404 for a student, open to the teaching team', async () => {
+  test('a draft is 404 for a student, open to OWNER/TEACHER/ASSISTANT', async () => {
     const { deps } = makeDeps();
     expect(
       (
@@ -784,20 +870,21 @@ test.describe('POST /api/page-sections', () => {
       );
       expect(res.status, user).toBe(409);
     }
-    // An accepted student whose pending staff invite makes them an editor.
-    const { deps: editorDeps, calls: editorCalls } = makeDeps({ canEdit: async () => true });
+    // An accepted student whose pending TEACHER invite makes them an editor.
     expect(
       (
         await call(
           handleSectionsPost(
-            post({ pageId: 'page-a', blockId: 'solo', intent: 'unlock' }, { user: 'student-1' }),
-            editorDeps
+            post(
+              { pageId: 'page-a', blockId: 'solo', intent: 'unlock' },
+              { user: 'student-pending-teacher' }
+            ),
+            deps
           )
         )
       ).status
     ).toBe(409);
     expect(calls.recordUnlock).toEqual([]);
-    expect(editorCalls.recordUnlock).toEqual([]);
   });
 
   test('a service validation error is a 400, anything else propagates', async () => {
@@ -825,12 +912,86 @@ test.describe('POST /api/page-sections', () => {
         throw new Error('db down');
       },
     });
-    await expect(
+    const failed = await call(
       handleSectionsPost(
         post({ pageId: 'page-a', blockId: 'h-top', intent: 'check' }, { user: 'student-1' }),
         broken
       )
-    ).rejects.toThrow('db down');
+    );
+    expect(failed.status).toBe(500);
+    expect(JSON.stringify(failed.body)).not.toContain('db down');
+    for (const [key, value] of Object.entries(SECTION_NO_STORE_HEADERS)) {
+      expect(failed.headers.get(key)).toBe(value);
+    }
+  });
+
+  test('a failing session lookup is a no-store 500, not a sign-in prompt', async () => {
+    const { deps } = makeDeps({
+      getSession: async () => {
+        throw new Error('session store down');
+      },
+    });
+    for (const res of [
+      await call(
+        handleSectionsPost(
+          post({ pageId: 'page-a', blockId: 'h-top', intent: 'check' }, { user: 'student-1' }),
+          deps
+        )
+      ),
+      await call(handleSectionsGet(get('pageId=page-a&blockId=solo', 'owner-1'), deps)),
+    ]) {
+      expect(res.status).toBe(500);
+      expect(res.headers.get('cache-control')).toBe('private, no-store');
+    }
+  });
+
+  test('drafts follow the reader rule: pending teacher yes, pending assistant yes (bodies still redacted), plain student no', async () => {
+    const { deps } = makeDeps();
+    const draftCheck = (user: string, blockId = 'h-top') =>
+      call(
+        handleSectionsPost(post({ pageId: 'draft-a', blockId, intent: 'check' }, { user }), deps)
+      );
+    // Accepted student + pending TEACHER: edits, so the draft opens (as in the loader).
+    expect((await draftCheck('student-pending-teacher')).status).toBe(200);
+    // Accepted student + pending ASSISTANT: OWNER/TEACHER/ASSISTANT in any invite
+    // state may open drafts (the pages app's existing rule)...
+    expect((await draftCheck('student-pending-ta')).status).toBe(200);
+    // ...but they do not reveal all: a heading inside a locked body is still
+    // not there for them, while a revealing teacher reaches it.
+    expect((await draftCheck('student-pending-ta', 'h-in-outer')).status).toBe(400);
+    expect((await draftCheck('student-pending-teacher', 'h-in-outer')).status).toBe(200);
+    // A plain accepted student still gets the draft as not found.
+    expect((await draftCheck('student-2')).status).toBe(404);
+  });
+
+  test('archived (LOCKED) classrooms keep reader state; UNPUBLISHED keeps it for the owner only', async () => {
+    const { deps, calls } = makeDeps();
+    const send = (pageId: string, user: string, blockId = 'h-top', intent = 'check') =>
+      call(handleSectionsPost(post({ pageId, blockId, intent }, { user }), deps));
+
+    expect((await send('page-locked', 'student-1')).status).toBe(200);
+    expect((await send('page-locked', 'student-1', 'solo', 'unlock')).status).toBe(200);
+    expect((await send('page-locked', 'owner-1')).status).toBe(200);
+
+    const refused = [
+      await send('page-unpublished', 'student-1'),
+      await send('page-unpublished', 'student-1', 'solo', 'unlock'),
+      await send('page-unpublished', 'teacher-1'),
+    ];
+    for (const res of refused) {
+      expect(res.status).toBe(403);
+      expect(res.body).toMatchObject({ code: 'CLASSROOM_UNPUBLISHED' });
+      expect(res.headers.get('cache-control')).toBe('private, no-store');
+    }
+    expect((await send('page-unpublished', 'owner-1')).status).toBe(200);
+
+    // Exactly the allowed writes reached the service.
+    expect(calls.setChecked.map(c => (c as { userId: string }).userId)).toEqual([
+      'student-1',
+      'owner-1',
+      'owner-1',
+    ]);
+    expect(calls.recordUnlock).toHaveLength(1);
   });
 
   test('audit: a first unlock is a CREATE, a repeat logs nothing', async () => {
@@ -845,7 +1006,7 @@ test.describe('POST /api/page-sections', () => {
         role: 'STUDENT',
         pageId: 'page-a',
         action: 'CREATE',
-        data: { tool: 'page_section_unlock', block_id: 'solo' },
+        data: { tool: 'page_section_unlock', via: 'web', page_id: 'page-a', block_id: 'solo' },
       },
     ]);
   });
@@ -864,6 +1025,14 @@ test.describe('POST /api/page-sections', () => {
       post({ pageId: 'page-a', blockId: 'h-top', intent: 'uncheck' }, { user: 'ta-1' }),
       deps
     );
+    const checkRow = (checked: boolean) => ({
+      tool: 'page_section_check',
+      via: 'web',
+      page_id: 'page-a',
+      block_id: 'h-top',
+      checked,
+    });
+    // Check rows skip the dedup window: each one is a real change.
     expect(calls.audit).toEqual([
       {
         userId: 'student-1',
@@ -871,7 +1040,8 @@ test.describe('POST /api/page-sections', () => {
         role: 'STUDENT',
         pageId: 'page-a',
         action: 'CREATE',
-        data: { tool: 'page_section_check', block_id: 'h-top', checked: true },
+        data: checkRow(true),
+        dedupe: false,
       },
       {
         userId: 'ta-1',
@@ -879,7 +1049,8 @@ test.describe('POST /api/page-sections', () => {
         role: 'ASSISTANT',
         pageId: 'page-a',
         action: 'CREATE',
-        data: { tool: 'page_section_check', block_id: 'h-top', checked: true },
+        data: checkRow(true),
+        dedupe: false,
       },
       {
         userId: 'ta-1',
@@ -887,9 +1058,39 @@ test.describe('POST /api/page-sections', () => {
         role: 'ASSISTANT',
         pageId: 'page-a',
         action: 'DELETE',
-        data: { tool: 'page_section_check', block_id: 'h-top', checked: false },
+        data: checkRow(false),
+        dedupe: false,
       },
     ]);
+  });
+
+  test('audit: the actor role is the ACCEPTED one (a pending teacher invite is not it)', async () => {
+    const { deps, calls } = makeDeps();
+    await handleSectionsPost(
+      post(
+        { pageId: 'page-a', blockId: 'h-top', intent: 'check' },
+        { user: 'student-pending-teacher' }
+      ),
+      deps
+    );
+    expect(calls.audit).toHaveLength(1);
+    expect(calls.audit[0]).toMatchObject({ role: 'STUDENT' });
+  });
+
+  test('audit: check → uncheck → check is three rows', async () => {
+    const { deps, calls } = makeDeps();
+    for (const intent of ['check', 'uncheck', 'check']) {
+      await handleSectionsPost(
+        post({ pageId: 'page-a', blockId: 'h-top', intent }, { user: 'student-1' }),
+        deps
+      );
+    }
+    expect(calls.audit.map(row => (row as { action: string }).action)).toEqual([
+      'CREATE',
+      'DELETE',
+      'CREATE',
+    ]);
+    expect(calls.audit.every(row => (row as { dedupe?: boolean }).dedupe === false)).toBe(true);
   });
 
   test('audit: a repeat check or a repeat uncheck writes no audit row', async () => {
@@ -971,8 +1172,9 @@ test.describe('GET /api/page-sections', () => {
         ],
       });
       expect(res.headers.get('cache-control')).toBe('private, no-store');
+      // The page row already loaded is the scope, and only unlocks are read.
       expect(calls.sectionActivity).toEqual([
-        { pageId: 'page-a', classroomId: CLASS_A, blockId: 'solo' },
+        { page: { id: 'page-a', classroom_id: CLASS_A }, blockId: 'solo', only: 'unlocks' },
       ]);
       expect(calls.audit).toHaveLength(1);
       expect(calls.audit[0]).toEqual({
@@ -981,7 +1183,7 @@ test.describe('GET /api/page-sections', () => {
         role: user === 'owner-1' ? 'OWNER' : 'TEACHER',
         pageId: 'page-a',
         action: 'VIEW',
-        data: { tool: 'page_section_unlocks', page_id: 'page-a', block_id: 'solo' },
+        data: { tool: 'page_section_unlocks', via: 'web', page_id: 'page-a', block_id: 'solo' },
       });
     }
   });
@@ -993,6 +1195,9 @@ test.describe('GET /api/page-sections', () => {
       ['pageId=page-a&blockId=solo', 'student-1'],
       ['pageId=page-a&blockId=solo', 'ta-1'],
       ['pageId=page-a&blockId=solo', 'pending-1'],
+      // A pending TEACHER edits the page but sees no one's activity (MCP agrees).
+      ['pageId=page-a&blockId=solo', 'pending-teacher'],
+      ['pageId=page-a&blockId=solo', 'student-pending-teacher'],
       ['pageId=page-a&blockId=solo', 'owner-b'], // staff of ANOTHER classroom
       ['pageId=nope&blockId=solo', 'owner-1'],
       ['blockId=solo', 'owner-1'],
@@ -1022,6 +1227,47 @@ test.describe('GET /api/page-sections', () => {
     expect(
       (await call(handleSectionsGet(get('pageId=page-a&blockId=bad%20id', 'owner-1'), deps))).status
     ).toBe(400);
+  });
+
+  test('a HEAD request answers the same and writes no VIEW row', async () => {
+    const { deps, calls } = makeDeps();
+    const res = await handleSectionsGet(
+      get('pageId=page-a&blockId=solo', 'teacher-1', { method: 'HEAD' }),
+      deps
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
+    expect(calls.audit).toEqual([]);
+  });
+
+  test('an impersonated view records who was viewing as the staff member', async () => {
+    const { deps, calls } = makeDeps();
+    await handleSectionsGet(
+      get('pageId=page-a&blockId=solo', 'teacher-1', { impersonatedBy: 'admin-9' }),
+      deps
+    );
+    expect(calls.audit).toHaveLength(1);
+    expect((calls.audit[0] as { data: Record<string, unknown> }).data).toEqual({
+      tool: 'page_section_unlocks',
+      via: 'web',
+      page_id: 'page-a',
+      block_id: 'solo',
+      impersonated_by: 'admin-9',
+    });
+  });
+
+  test('UNPUBLISHED classroom: the list is the owner’s only (as the MCP entry gate)', async () => {
+    const { deps, calls } = makeDeps();
+    const teacher = await call(
+      handleSectionsGet(get('pageId=page-unpublished&blockId=solo', 'teacher-1'), deps)
+    );
+    expect(teacher.status).toBe(403);
+    expect(teacher.body).toMatchObject({ code: 'CLASSROOM_UNPUBLISHED' });
+    const owner = await call(
+      handleSectionsGet(get('pageId=page-unpublished&blockId=solo', 'owner-1'), deps)
+    );
+    expect(owner.status).toBe(200);
+    expect(calls.sectionActivity).toHaveLength(1);
   });
 
   test('a failed audit does not fail the list', async () => {
@@ -1062,14 +1308,27 @@ test.describe('the page loader', () => {
       const at = loaderBody.indexOf(consumer);
       expect(at, consumer).toBeGreaterThan(redact);
     }
-    // Reveal-all is the editor's rule OR the accepted teaching team.
-    expect(loaderBody).toContain('revealsAllSections({ canEdit, access: sectionAccess })');
+    // Reveal-all and edit come from the one shared reader rule.
+    expect(loaderBody).toContain('const canEdit = sectionViewer.canEditAnyState;');
+    expect(loaderBody).toContain('const revealAll = sectionViewer.revealAll;');
+    // Drafts: OWNER/TEACHER/ASSISTANT in any invite state (locked bodies still follow revealAll).
+    expect(loaderBody).toContain('if (page.is_draft && !sectionViewer.canViewDrafts) {');
   });
 
-  test('reads only this reader’s state, and stats only for editors', () => {
-    expect(loaderBody.match(/pageSections\.readerAccess\(/g)).toHaveLength(1);
+  test('one membership read, run with this reader’s own state; stats for activity viewers', () => {
+    expect(loaderBody.match(/pageSections\.sectionViewer\(/g)).toHaveLength(1);
+    expect(loaderBody).not.toContain('findClassroomRole(');
+    expect(loaderBody).toMatch(
+      /await Promise\.all\(\[\s*ClassmojiService\.pageSections\.sectionViewer/
+    );
     expect(loaderBody).toContain('pageId: page.id,\n          userId: authData.userId,');
-    expect(loaderBody).toMatch(/const sectionStats = canEdit\s*\?/);
+    expect(loaderBody).toMatch(
+      /sectionViewer\.canSeeActivity && classroomOpen && lockedSectionIds\(viewerContent\)\.length > 0/
+    );
+    // The verified page row, so the service skips the page re-query.
+    expect(loaderBody).toContain(
+      'unlockCounts({\n          page: { id: page.id, classroom_id: page.classroom_id },'
+    );
   });
 
   test('the raw source link is only for reveal-all readers', () => {
@@ -1161,5 +1420,119 @@ test.describe('the class site', () => {
     expect(doc.querySelectorAll('a.bn-site-locked-link')).toHaveLength(0);
     expect(html).toContain('OUTER-SECRET-BODY');
     expect(html).toContain('INNER-SECRET-BODY');
+  });
+});
+
+test.describe('the editor schema', () => {
+  type SpecWithExtensions = { extensions?: Array<(ctx: { editor: unknown }) => { key?: string }> };
+  const extensionKeys = (spec: SpecWithExtensions | undefined) =>
+    (spec?.extensions ?? []).map(factory => factory({ editor: null })?.key);
+
+  test('the editor’s locked section carries the edit guard; the shared one does not', async () => {
+    const { schema } = await import('~/components/editor/blocks/index.tsx');
+    const { editingSchema } = await import('~/components/editor/blocks/editingSchema.ts');
+    const editing = editingSchema.blockSpecs as unknown as Record<string, SpecWithExtensions>;
+    const shared = schema.blockSpecs as unknown as Record<string, SpecWithExtensions>;
+    expect(extensionKeys(editing.lockedSection)).toContain('lockedSectionGuard');
+    expect(extensionKeys(shared.lockedSection)).not.toContain('lockedSectionGuard');
+  });
+
+  test.describe('in a DOM', () => {
+    const g = globalThis as Record<string, unknown>;
+    const installed: string[] = [];
+    test.beforeAll(() => {
+      // Installed for this block only (other specs decide client-vs-server
+      // on `window`); see file-block-upload-state.spec.ts.
+      const dom = new UntypedJSDOM('<!doctype html><html><body></body></html>');
+      for (const key of [
+        'window',
+        'document',
+        'navigator',
+        'Node',
+        'HTMLElement',
+        'Element',
+        'MutationObserver',
+        'getComputedStyle',
+        'DocumentFragment',
+        'Text',
+      ]) {
+        if (g[key] !== undefined) continue;
+        g[key] = key === 'window' ? dom.window : (dom.window as Record<string, unknown>)[key];
+        installed.push(key);
+      }
+    });
+    test.afterAll(() => {
+      for (const key of installed) delete g[key];
+    });
+
+    test('a checkable heading gets the author’s badge, named, outside the heading text', async () => {
+      const { editingSchema } = await import('~/components/editor/blocks/editingSchema.ts');
+      const spec = editingSchema.blockSpecs.heading as unknown as {
+        implementation: {
+          render: (
+            block: unknown,
+            editor: unknown
+          ) => { dom: HTMLElement; contentDOM?: HTMLElement };
+        };
+      };
+      const heading = (checkable?: boolean) => ({
+        id: 'h',
+        type: 'heading',
+        props: {
+          level: 2,
+          isToggleable: false,
+          textColor: 'default',
+          backgroundColor: 'default',
+          textAlignment: 'left',
+          ...(checkable ? { checkable } : {}),
+        },
+        content: [],
+        children: [],
+      });
+      const editor = { isEditable: true, schema: editingSchema };
+      const on = spec.implementation.render(heading(true), editor);
+      const badge = on.dom.querySelector('.pg-checkable-badge');
+      expect(badge?.getAttribute('role')).toBe('img');
+      expect(badge?.getAttribute('aria-label')).toBe('Checkable section');
+      expect(badge?.getAttribute('title')).toBe('Checkable section');
+      expect(on.contentDOM?.contains(badge as Node)).toBe(false);
+      const off = spec.implementation.render(heading(), editor);
+      expect(off.dom.querySelector('.pg-checkable-badge')).toBeNull();
+    });
+
+    test('the title field: Enter goes into the body, Backspace/Delete stay in the field', async () => {
+      const { titleKeyAction, enterLockedSectionBody } =
+        await import('~/components/editor/blocks/LockedSectionBlock.tsx');
+      expect(titleKeyAction('Enter')).toBe('enter-body');
+      expect(titleKeyAction('Backspace')).toBe('keep');
+      expect(titleKeyAction('Delete')).toBe('keep');
+      expect(titleKeyAction('a')).toBeNull();
+      expect(titleKeyAction('ArrowDown')).toBeNull();
+
+      const calls: unknown[][] = [];
+      let children: Array<{ id: string }> = [];
+      const editor = {
+        isEditable: true,
+        updateBlock: (id: string, update: unknown) => {
+          calls.push(['updateBlock', id, update]);
+          children = [{ id: 'new-p' }];
+        },
+        getBlock: (id: string) => ({ id, children }),
+        setTextCursorPosition: (id: string, placement?: 'start' | 'end') =>
+          calls.push(['cursor', id, placement]),
+        focus: () => calls.push(['focus']),
+      };
+      // No body yet: an empty first line is added and the cursor goes there.
+      enterLockedSectionBody(editor, 'L');
+      expect(calls).toEqual([
+        ['updateBlock', 'L', { children: [{ type: 'paragraph' }] }],
+        ['focus'],
+        ['cursor', 'new-p', 'start'],
+      ]);
+      // A body: straight to its first block, nothing added.
+      calls.length = 0;
+      enterLockedSectionBody(editor, 'L');
+      expect(calls).toEqual([['focus'], ['cursor', 'new-p', 'start']]);
+    });
   });
 });

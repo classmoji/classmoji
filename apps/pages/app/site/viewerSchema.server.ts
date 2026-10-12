@@ -8,6 +8,7 @@ import {
   codeBlockLanguageName,
   isCopyable,
 } from '@classmoji/page-schema';
+import { lockedSectionTitle } from '@classmoji/page-schema/sections';
 
 import { schema as editorSchema } from '~/components/editor/blocks/index.tsx';
 import { AVATAR_SIZES, imageSizesFor, responsiveImageAttrs } from '~/utils/imageSizes.ts';
@@ -383,7 +384,7 @@ function lockIcon() {
  * A locked section, closed: padlock, title and — on the class site — a link
  * to the page in Classmoji, where a signed-in student can unlock it.
  *
- * This render draws the title only. The BODY is the block's children, which
+ * This render draws the title (`props.title`) only. The BODY is the block's children, which
  * BlockNote serializes on its own after this element; keeping it off the site
  * is `documentForSite`'s job in `renderPageForViewer`, before the serializer
  * (and the asset resolver) ever sees the document. The staff `_render/page`
@@ -394,11 +395,11 @@ function makeStaticLockedSection(unlockHref: string | null) {
     return h('div', { className: 'bn-site-locked' }, [
       h('div', { key: 'r', className: 'bn-site-locked-row' }, [
         lockIcon(),
-        h('p', {
-          key: 't',
-          className: 'bn-inline-content bn-site-locked-title',
-          ref: props.contentRef,
-        }),
+        h(
+          'p',
+          { key: 't', className: 'bn-inline-content bn-site-locked-title' },
+          lockedSectionTitle(props.block) || 'Locked section'
+        ),
       ]),
       unlockHref
         ? h(

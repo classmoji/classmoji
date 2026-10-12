@@ -26,7 +26,17 @@ interface AuditLogData {
   data?: Prisma.InputJsonValue | null;
 }
 
-export const create = async (data: AuditLogData) => {
+export interface AuditCreateOptions {
+  /**
+   * `false` skips the 5-second dedup window below and always writes the row.
+   * For callers that already write only on a real state change (e.g. a page
+   * section checked, unchecked and checked again within seconds), where every
+   * call is a distinct event and coalescing would hide one.
+   */
+  dedupe?: boolean;
+}
+
+export const create = async (data: AuditLogData, { dedupe = true }: AuditCreateOptions = {}) => {
   const { user_id, classroom_id, role, resource_type, resource_id, action } = data;
 
   // Skip audit log creation if required fields are missing
@@ -69,6 +79,8 @@ export const create = async (data: AuditLogData) => {
   if (data.data !== undefined) {
     auditData.data = data.data === null ? Prisma.JsonNull : data.data;
   }
+
+  if (!dedupe) return getPrisma().auditLog.create({ data: auditData });
 
   const deduplicationWindowMs = 5 * 1000; // 5-second deduplication window
 

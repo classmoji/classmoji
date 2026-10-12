@@ -105,7 +105,7 @@ describe('extractText — blocknote', () => {
     expect(text).not.toContain('LOCKED_TERMINAL');
     expect(references).not.toContainEqual({ kind: 'page', id: 'LOCKED_PAGELINK_TARGET_ID' });
 
-    // Alone, nested in a column, and with a styled title.
+    // Nested in a column; the title is trimmed and no other prop is read.
     const page = [
       {
         id: 'cols',
@@ -118,11 +118,7 @@ describe('extractText — blocknote', () => {
               {
                 id: 'L',
                 type: 'lockedSection',
-                props: {},
-                content: [
-                  { type: 'text', text: 'Solution ', styles: { bold: true } },
-                  { type: 'text', text: 'part 1', styles: {} },
-                ],
+                props: { title: ' Solution part 1 ', textColor: 'red' },
                 children: [
                   {
                     id: 'L-p',
@@ -137,6 +133,18 @@ describe('extractText — blocknote', () => {
       },
     ];
     expect(blocknote(page).text).toBe('Solution part 1');
+
+    // Only the title prop: inline content on a locked section is not read.
+    const odd = [
+      {
+        id: 'L2',
+        type: 'lockedSection',
+        props: {},
+        content: [{ type: 'text', text: 'NOT_A_TITLE', styles: {} }],
+        children: [],
+      },
+    ];
+    expect(blocknote(odd).text).toBe('');
   });
 
   it('a checkable heading extracts like any heading', () => {
