@@ -412,6 +412,35 @@ function makeStaticLockedSection(unlockHref: string | null) {
   };
 }
 
+/**
+ * A locked section for a signed-out visitor: one row, padlock and title, that
+ * links to sign in. "Sign in to unlock" shows on hover and on keyboard focus
+ * (CSS only: the site ships no JavaScript), and is the link's accessible name
+ * with the title. The body never reaches this HTML, as for the card.
+ */
+function makeStaticSignInLockedSection(signInHref: string) {
+  return function StaticSignInLockedSection(props: RenderProps) {
+    const title = lockedSectionTitle(props.block) || 'Locked section';
+    return h(
+      'a',
+      {
+        className: 'bn-site-locked-gate',
+        href: signInHref,
+        'aria-label': `Sign in to unlock: ${title}`,
+      },
+      [
+        lockIcon(),
+        h('span', { key: 't', className: 'bn-site-locked-title' }, title),
+        h(
+          'span',
+          { key: 'l', className: 'bn-site-locked-tip', 'aria-hidden': 'true' },
+          'Sign in to unlock'
+        ),
+      ]
+    );
+  };
+}
+
 function StaticDivider() {
   return h('div', { className: 'divider-block' }, h('hr', null));
 }
@@ -793,6 +822,8 @@ export function createViewerSchema(
     downloads?: SiteDownloads;
     /** Where a locked section's "Open in Classmoji to unlock" goes; none → no link. */
     lockedSectionHref?: string | null;
+    /** A signed-out visitor's sign-in link: locked sections become sign-in rows. */
+    lockedSectionSignInHref?: string | null;
   } = {}
 ) {
   const showSchedule = options.showSchedule === true;
@@ -821,7 +852,9 @@ export function createViewerSchema(
     toggleListItem: staticSpec('toggleListItem', StaticToggleListItem),
     lockedSection: staticSpec(
       'lockedSection',
-      makeStaticLockedSection(options.lockedSectionHref ?? null)
+      options.lockedSectionSignInHref
+        ? makeStaticSignInLockedSection(options.lockedSectionSignInHref)
+        : makeStaticLockedSection(options.lockedSectionHref ?? null)
     ),
   };
 

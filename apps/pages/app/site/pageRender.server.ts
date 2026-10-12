@@ -13,7 +13,8 @@ import type { PageLinkResolver } from './viewerSchema.server.ts';
 import { collectBlockAssetRefs, mapBlockAssetRefs } from '@classmoji/utils';
 import { assetResolveContext } from '~/utils/assetRefs.server.ts';
 import { coverWithoutUnresolvedMediaRef, withoutUnresolvedMediaRefs } from './siteMedia.server.ts';
-import { isMember } from './tenant.server.ts';
+import { isMember, publicPathOf } from './tenant.server.ts';
+import { signInPathFor } from './returnTo.ts';
 import { pagesUrl } from './env.server.ts';
 import { loadMediaDownloads } from '~/utils/mediaDownloads.server.ts';
 import { siteDownloadsFor } from '~/utils/mediaDownloads.ts';
@@ -174,6 +175,16 @@ export async function renderPageForViewer(
       downloads,
       // "Open in Classmoji to unlock": the page in the pages app.
       lockedSectionHref: `${pagesUrl()}/${context.site.classroom.slug}/${page.id}`,
+      // A signed-out visitor signs in through the site's interstitial and is
+      // brought back to this page signed in (the same link `page.tsx` sends
+      // them to for a members-only page); from there the section's link opens
+      // the page in Classmoji. The same for every anonymous visitor of this
+      // URL, so the anonymous render stays shareable by a cache.
+      lockedSectionSignInHref: context.viewer.userId
+        ? null
+        : `${context.memberLinkOrigin}${signInPathFor(
+            publicPathOf(new URL(request.url).pathname, args.params.subdomain ?? '')
+          )}`,
     });
   } catch (error) {
     if (error instanceof SiteRenderError) {

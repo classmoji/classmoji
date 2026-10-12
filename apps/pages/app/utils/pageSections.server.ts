@@ -218,6 +218,20 @@ export function readerSectionsFor({
 }
 
 /**
+ * Where a signed-out reader of a public page goes to sign in: the webapp's
+ * sign-in page with `?redirect=` naming this page, the same URL the root
+ * loader sends a signed-out reader of a members-only page to.
+ *
+ * The webapp honours `redirect` for relative paths only, so a reader coming
+ * from this app's host lands on their dashboard after signing in, not back on
+ * the page (true of the root loader's redirect too).
+ */
+export function signInUrlFor(pageUrl: string): string {
+  const webappUrl = process.env.WEBAPP_URL || 'http://localhost:3000';
+  return `${webappUrl}?redirect=${encodeURIComponent(pageUrl)}`;
+}
+
+/**
  * Does `blockId` name a block this intent may target, in THIS reader's tree?
  * check/uncheck: a heading with `checkable: true`; unlock: a `lockedSection`.
  */

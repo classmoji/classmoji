@@ -36,6 +36,7 @@ import {
   parseSectionRequest,
   readerSectionsFor,
   sectionTargetValid,
+  signInUrlFor,
   type PageSectionsDeps,
   type SectionViewerAccess,
   type SectionsPage,
@@ -1395,6 +1396,25 @@ test.describe('the page loader', () => {
     expect(LOADER).toMatch(/export const headers = /);
     expect(LOADER).toContain('SECTION_NO_STORE_HEADERS');
   });
+
+  test('a sign-in link goes only to a signed-out reader', () => {
+    expect(loaderBody).toContain('signInUrl: authData?.userId ? null : signInUrlFor(request.url),');
+  });
+});
+
+test.describe('signInUrlFor', () => {
+  test('the webapp sign-in page, redirect naming the page', () => {
+    const previous = process.env.WEBAPP_URL;
+    process.env.WEBAPP_URL = 'https://app.example';
+    try {
+      expect(signInUrlFor('https://pages.example/cs52/page-a?theme=dark')).toBe(
+        'https://app.example?redirect=https%3A%2F%2Fpages.example%2Fcs52%2Fpage-a%3Ftheme%3Ddark'
+      );
+    } finally {
+      if (previous === undefined) delete process.env.WEBAPP_URL;
+      else process.env.WEBAPP_URL = previous;
+    }
+  });
 });
 
 test.describe('the class site', () => {
@@ -1468,6 +1488,38 @@ test.describe('the class site', () => {
       0
     );
     expect(html).toContain('Part 1');
+  });
+
+  test('a signed-out visitor gets one sign-in row per section, no card and no body', async () => {
+    const signIn = '/sign-in?returnTo=%2Fweather';
+    const { html } = await renderSitePage({
+      blocks: documentForSite(fixture()),
+      resolveLink: () => null,
+      lockedSectionHref: 'https://pages.example/cs52/page-a',
+      lockedSectionSignInHref: signIn,
+    });
+    for (const secret of [...SECRETS, 'Hidden step', 'outer-secret.png', MEDIA_ID]) {
+      expect(html).not.toContain(secret);
+    }
+    const doc = parse(html);
+    expect(doc.querySelectorAll('.bn-site-locked')).toHaveLength(0);
+    expect(doc.querySelectorAll('a.bn-site-locked-link')).toHaveLength(0);
+    const rows = [...doc.querySelectorAll('a.bn-site-locked-gate')];
+    expect(rows.map(row => row.querySelector('.bn-site-locked-title')?.textContent)).toEqual([
+      'Outer title',
+      'Solo title',
+    ]);
+    for (const row of rows) {
+      expect(row.getAttribute('href')).toBe(signIn);
+      expect(row.getAttribute('aria-label')).toMatch(/^Sign in to unlock: /);
+      expect(row.querySelector('svg.bn-site-locked-icon')).not.toBeNull();
+      expect(row.querySelector('.bn-site-locked-tip')?.textContent).toBe('Sign in to unlock');
+    }
+  });
+
+  test('the sign-in row is for anonymous renders only, through the site interstitial', () => {
+    expect(body).toMatch(/lockedSectionSignInHref: context\.viewer\.userId\s*\? null/);
+    expect(body).toContain('`${context.memberLinkOrigin}${signInPathFor(');
   });
 
   test('without an href (the staff view) there is no link, and the body renders as authored', async () => {

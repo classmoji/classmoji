@@ -200,11 +200,12 @@ const PageRoute = () => {
     liveUnavailable,
     previewChanges,
     readerSections,
+    signInUrl,
     sectionStats,
   } = useLoaderData<typeof import('./route.server.ts').loader>();
   // This reader's ticks and unlocks. Kept here, not in the viewer, so a
   // viewer rebuild (asset retry) never drops an unlock in flight.
-  const sections = useReaderSectionsState(page.id, readerSections);
+  const sections = useReaderSectionsState(page.id, readerSections, signInUrl);
   // Stored refs stay in the document; these are the URLs to display them with.
   const assets = useAssetMap(resolvedAssets, page.id);
   // An expired `edit` signature on a stale tab re-resolves once instead of
