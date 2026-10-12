@@ -8,7 +8,7 @@ import {
   type GitLabProvider,
 } from '@classmoji/services';
 import { nanoid } from 'nanoid';
-import { createRepositoriesTask } from './gitRepo.ts';
+import { addCollaboratorsToRepoTask, createRepositoriesTask } from './gitRepo.ts';
 import invariant from 'tiny-invariant';
 
 interface MemberAddedPayload {
@@ -45,12 +45,14 @@ interface RemoveUserPayload {
 }
 
 /**
- * Flip `has_accepted_invite` to true and provision any missing student repos for
- * every membership this user holds in the given git organization.
+ * Flip `has_accepted_invite` to true, provision any missing student repos and
+ * restore the student's access to the ones they already have, for every
+ * membership this user holds in the given git organization.
  *
  * This is the single source of truth for "the user is confirmed in the org, so
- * activate them." It is idempotent: repos that already exist are skipped, so it is
- * safe to call more than once (webhook redelivery, retries, re-joins).
+ * activate them." It is idempotent: repos that already exist are not re-created
+ * and re-adding a collaborator changes nothing, so it is safe to call more than
+ * once (webhook redelivery, retries, re-joins).
  *
  * Called from:
  *  - memberAddedHandlerTask — GitHub `member_added` webhook (brand-new org members)
@@ -138,14 +140,51 @@ async function activateMembership({
     // redelivery, retries, re-joins, users already in the org) don't re-create
     // repos they already have.
     const missingRepositories = [];
+    const ownedRepos = [];
     for (const repository of provisionable) {
       const existingRepos = await ClassmojiService.gitRepo.findByRepository(
         membership.classroom.slug,
         repository.id
       );
-      if (!existingRepos.some(repo => repo.student_id === user.id)) {
+      const own = existingRepos.find(repo => repo.student_id === user.id);
+      if (own) {
+        ownedRepos.push({ repository, repoName: own.name });
+      } else {
         missingRepositories.push(repository);
       }
+    }
+
+    // A repo created before the student joined the org was shared through a
+    // repository invitation, and Github expires those after 7 days. Joining the
+    // org does not bring the invitation back, so a late joiner would have the
+    // repo in Classmoji and a 404 on Github. Add them again: as an org member
+    // the add takes effect at once, and re-adding a collaborator changes nothing.
+    // Gitlab adds students to their project directly, with no invitation.
+    if (gitOrganization.provider === 'GITHUB') {
+      const classroom = {
+        id: membership.classroom.id,
+        slug: membership.classroom.slug,
+        git_namespace: membership.classroom.git_namespace,
+        git_organization: membership.classroom.git_organization,
+      };
+      await Promise.all(
+        ownedRepos.map(({ repository, repoName }) =>
+          addCollaboratorsToRepoTask.trigger({
+            repoName,
+            classroom,
+            repository: {
+              id: repository.id,
+              title: repository.title,
+              slug: repository.slug,
+              type: repository.type,
+              template: repository.template,
+              project_template_id: repository.project_template_id,
+              assignments: [],
+            },
+            student: { id: user.id, login: username },
+          })
+        )
+      );
     }
 
     // Reuse the same provisioning pipeline that publish and Sync drive, scoped to
