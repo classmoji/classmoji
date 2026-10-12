@@ -5,6 +5,8 @@ const DISCUSSIONS_URL = 'https://github.com/classmoji/classmoji/discussions';
 // Opens the guided bug form (.github/ISSUE_TEMPLATE/bug_report.yml) rather than
 // a blank issue, so reports arrive with repro steps and the `bug` label.
 const ISSUES_URL = 'https://github.com/classmoji/classmoji/issues/new?template=bug_report.yml';
+// The public feedback board, opened in a new tab so the classroom stays open.
+const FEEDBACK_URL = '/feedback';
 export const SUPPORT_EMAIL = 'hello@classmoji.io';
 
 interface SupportModalProps {
@@ -23,14 +25,20 @@ interface SupportOption {
 const OPTIONS: SupportOption[] = [
   {
     title: 'Ask a question',
-    description: 'Get help from the community.',
+    description: 'Get answers from the community on Github.',
     href: DISCUSSIONS_URL,
     external: true,
   },
   {
     title: 'Report a bug',
-    description: 'Found a bug or have a feature request?',
+    description: 'Tell us what broke and how to make it happen.',
     href: ISSUES_URL,
+    external: true,
+  },
+  {
+    title: 'Request a feature',
+    description: 'Suggest an idea or upvote one you want.',
+    href: FEEDBACK_URL,
     external: true,
   },
   {
@@ -42,16 +50,16 @@ const OPTIONS: SupportOption[] = [
 ];
 
 /**
- * Support entry point from the sidebar. Three ways to reach us: community
- * discussions, a Github issue, or plain email. Nothing is sent from here.
+ * Support entry point from the sidebar. Four ways to reach us: community
+ * discussions, a Github issue, the feedback board, or plain email. Nothing is sent from here.
  */
 const SupportModal = ({ open, onClose }: SupportModalProps) => {
   return (
     <Modal open={open} onCancel={onClose} footer={null} width={520}>
       <div className="pr-6">
-        <h2 className="text-lg font-semibold text-ink-0 mb-1">Help &amp; Feedback</h2>
+        <h2 className="text-lg font-semibold text-ink-0 mb-1">How can we help?</h2>
         <p className="text-sm text-ink-3 mb-5">
-          Questions, bugs, or anything else. Pick whichever is easiest.
+          Ask a question, report a bug, or tell us what to build next.
         </p>
       </div>
 
