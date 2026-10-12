@@ -81,8 +81,10 @@ export default function Roadmap() {
   const [query, setQuery] = useState('');
   const q = query.trim().toLowerCase();
 
+  // With the four columns side by side, the page fits the window and each
+  // column scrolls on its own (the shell's header is 3rem plus its 1px border).
   return (
-    <div>
+    <div className="xl:flex xl:h-[calc(100dvh-3rem-1px)] xl:flex-col xl:overflow-hidden">
       {/* A full-width search strip under the header, like the board's own. */}
       <div className="border-b border-line bg-stone-100/70 dark:bg-neutral-900">
         <div className="relative mx-auto max-w-[1396px] px-6">
@@ -101,12 +103,16 @@ export default function Roadmap() {
         </div>
       </div>
 
-      <div className="mx-auto max-w-[1396px] px-6 pb-24 pt-8">
-        <div className="grid gap-8 md:grid-cols-2 md:gap-10 xl:grid-cols-[repeat(4,307px)] xl:justify-between xl:gap-10">
+      <div className="mx-auto w-full max-w-[1396px] px-6 pb-24 pt-8 xl:min-h-0 xl:flex-1 xl:pb-0">
+        <div className="grid gap-8 md:grid-cols-2 md:gap-10 xl:h-full xl:grid-cols-[repeat(4,307px)] xl:justify-between xl:gap-10">
           {STATUS_ORDER.map(status => {
             const posts = columns[status].filter(p => !q || p.title.toLowerCase().includes(q));
             return (
-              <section key={status} aria-labelledby={`col-${status}`} className="min-w-0">
+              <section
+                key={status}
+                aria-labelledby={`col-${status}`}
+                className="min-w-0 xl:flex xl:min-h-0 xl:flex-col"
+              >
                 <div className="px-1">
                   <h2 id={`col-${status}`} className="flex items-center gap-2">
                     <StatusLabel status={status} size="md" />
@@ -114,7 +120,7 @@ export default function Roadmap() {
                   </h2>
                   <p className="mt-0.5 text-[13px] text-ink-3">{STATUS_META[status].description}</p>
                 </div>
-                <ul className="mt-4 flex flex-col gap-3">
+                <ul className="mt-4 flex flex-col gap-3 xl:-mx-1 xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:px-1 xl:pb-8 xl:pt-0.5">
                   {posts.map(post => (
                     <RoadmapCard key={post.id} post={post} signedIn={signedIn} />
                   ))}
