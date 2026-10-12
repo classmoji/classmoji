@@ -23,9 +23,10 @@ export function CheckableSectionItem() {
 
   return (
     <Components.Generic.Menu.Item
-      // BlockNote's item passes extra props through to Mantine's: the item is
-      // a checkbox in the menu, not a plain command.
-      {...({ role: 'menuitemcheckbox', 'aria-checked': on } as object)}
+      // BlockNote's item passes extra props through to Mantine's, which sets
+      // role="menuitem" after them (so aria-checked would be invalid there):
+      // the switch's state is in the item's accessible name instead.
+      {...({ 'aria-label': `Checkable section, ${on ? 'on' : 'off'}` } as object)}
       className="pg-checkable-item"
       onClick={() => {
         editor.updateBlock(block, {
@@ -61,7 +62,8 @@ export function PersonalCheckListItem() {
 
   return (
     <Components.Generic.Menu.Item
-      {...({ role: 'menuitemcheckbox', 'aria-checked': on } as object)}
+      // The switch's state is in the accessible name (see CheckableSectionItem).
+      {...({ 'aria-label': `${PERSONAL_LIST_LABEL}, ${on ? 'on' : 'off'}` } as object)}
       className="pg-checkable-item"
       onClick={() => {
         setCheckListPersonal(editor as unknown as PersonalListEditor, block.id, !on);

@@ -168,14 +168,15 @@ describe('Enter in a check list item', () => {
     expect(second.props.checked).toBe(false);
   });
 
-  it('at the start: the emptied item and the moved text are both personal', () => {
+  it('at the start: a new personal item above, the text keeps its id (enterAtStart.test.ts)', () => {
     const editor = mount([item('a', 'first', { personal: true })]);
     cursorIn(editor, 'a', 0);
     pressEnter(editor);
     const [first, second] = blocks(editor);
     expect(textOf(first)).toBe('');
+    expect(first.id).not.toBe('a');
     expect(first.props.personal).toBe(true);
-    expect(textOf(second)).toBe('first');
+    expect([second.id, textOf(second)]).toEqual(['a', 'first']);
     expect(second.props.personal).toBe(true);
   });
 
