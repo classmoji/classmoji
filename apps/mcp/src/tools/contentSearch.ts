@@ -93,6 +93,13 @@ import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
 import { MEMBER } from '../resources/shape.ts';
 import { ok, requireClassroomCtx, scopedNotFound } from './shared.ts';
+import {
+  draftHiddenFromCaller,
+  pageDraftHiddenFromCaller,
+  pageTextForViewer,
+  viewerPageText,
+  type ViewerPageText,
+} from './pageSections.ts';
 
 // ─── Shared input pieces ────────────────────────────────────────────────────
 
@@ -589,10 +596,21 @@ interface ContentGetArgs {
   id: string;
 }
 
+/** The per-viewer side fields (`locked_sections`, `checkable_headings`, `check_list_items`), without the text. */
+const sectionFieldsOf = ({
+  text: _text,
+  ...fields
+}: ViewerPageText): Omit<ViewerPageText, 'text'> => fields;
+
 interface LiveDocument {
   title: string;
   sourcePath: string;
   text: string;
+  /**
+   * Present when the text depends on the viewer (locked sections, or their own
+   * checked headings): `text` is this viewer's own, these are its side fields.
+   */
+  sectionFields?: Omit<ViewerPageText, 'text'>;
 }
 
 /**
@@ -673,6 +691,11 @@ async function readLiveDocument(
   // THE predicate — the same function the search and list statements are built
   // from, applied to the row we just loaded. Not a second implementation of it.
   if (!contentVisibility(classroom.role).allows(record)) return null;
+  // A draft PAGE also follows the page-sections reader rule (`canViewDrafts`),
+  // as the page itself does. It gives the same answer as the predicate above
+  // (both read the any-state role against OWNER/TEACHER/ASSISTANT); kept so the
+  // pages app's rule is the one this path states.
+  if (kind === 'page' && (await draftHiddenFromCaller(record, ctx))) return null;
 
   // A FILE or LINK slide has no `index.html` to read: its content is an
   // uploaded document (a PDF, whose bytes are not text anyone should be handed)
@@ -722,6 +745,21 @@ async function readLiveDocument(
     // as though it were the document.
     if (!extracted.ok) continue;
 
+    // A page with locked sections or checkable headings: the text is this
+    // viewer's own (bodies they may read, a marker line for the rest, their
+    // own checked state), built from the same bytes.
+    if (kind === 'page' && path.endsWith('.json')) {
+      const personal = await viewerPageText(record, body.text, ctx);
+      if (personal) {
+        return {
+          title: record.title,
+          sourcePath: path,
+          text: personal.text,
+          sectionFields: sectionFieldsOf(personal),
+        };
+      }
+    }
+
     // `.text` only — never `.notes` (instructor-facing speaker notes) and never
     // `.references` (labels copied from other documents, whose own draft state
     // this one says nothing about).
@@ -741,7 +779,10 @@ export const contentGetTool: ToolDefinition<ContentGetArgs> = {
     'Returns the full plain text of one document — the same text content_search ranks, so an ' +
     'id and kind from a search or listing result can be passed straight back in. ' +
     "For `kind: 'page' | 'slide' | 'file'` that is this classroom's own material (deck speaker " +
-    'notes are never included). ' +
+    'notes are never included; a locked page section the caller has not unlocked appears only ' +
+    'as a "[Locked section ...]" line, a checkable heading ends with the caller\'s own ' +
+    '"[done]" or "[not done]" state, and a student check list item starts with their own ' +
+    '"[x]" or "[ ]"). ' +
     "For `kind: 'doc'` it is a Classmoji product documentation page from classmoji.io: pass the " +
     'page slug as `id`, and the response carries the canonical `url` you may cite. ' +
     'Use it after content_search or content_list to read a document a snippet only hinted at.',
@@ -801,6 +842,23 @@ export const contentGetTool: ToolDefinition<ContentGetArgs> = {
         docKind: args.kind,
         docId: args.id,
       });
+      // A draft page: only with `canViewDrafts`, as on the page (the index row
+      // may not say whether it is a draft: ask the row).
+      if (
+        args.kind === 'page' &&
+        document.isDraft !== false &&
+        (await pageDraftHiddenFromCaller(args.id, ctx))
+      ) {
+        throw contentNotFound();
+      }
+      // The index holds one text for everyone, and never a locked section's
+      // body. A page whose content.json holds locked sections or checkable
+      // headings is answered with this viewer's own text instead
+      // (pageSections.ts); legacy HTML pages cannot hold either.
+      const personal =
+        args.kind === 'page' && document.sourcePath.endsWith('content.json')
+          ? await pageTextForViewer(args.id, ctx)
+          : null;
       return ok({
         kind: document.docKind,
         id: document.docId,
@@ -808,7 +866,8 @@ export const contentGetTool: ToolDefinition<ContentGetArgs> = {
         source_path: document.sourcePath,
         indexed: true,
         chunk_count: document.chunkCount,
-        text: document.text,
+        text: personal ? personal.text : document.text,
+        ...(personal ? sectionFieldsOf(personal) : {}),
         ...(typeof document.isDraft === 'boolean' ? { isDraft: document.isDraft } : {}),
       });
     } catch (error) {
@@ -827,6 +886,7 @@ export const contentGetTool: ToolDefinition<ContentGetArgs> = {
         /** Read live from the content repo: search cannot reach it yet. */
         indexed: false,
         text: live.text,
+        ...(live.sectionFields ?? {}),
       });
     }
   },

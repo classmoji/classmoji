@@ -53,7 +53,7 @@ describe('extractText — blocknote', () => {
     for (const type of KNOWN_BLOCK_TYPES) {
       expect(present, `fixture is missing a ${type} block`).toContain(type);
     }
-    expect(KNOWN_BLOCK_TYPES).toHaveLength(22);
+    expect(KNOWN_BLOCK_TYPES).toHaveLength(23);
   });
 
   it('carries the text out of every block type that has its own words', () => {
@@ -95,6 +95,84 @@ describe('extractText — blocknote', () => {
     expect(text).not.toContain('HEADING_TEXTPARAGRAPH_TEXT');
     // Table rows are lines too.
     expect(text).toContain('TABLE_HEAD_A TABLE_HEAD_B\nTABLE_CELL_A TABLE_CELL_B');
+  });
+
+  it('a locked section gives its title and nothing below it, references included', () => {
+    const { text, references } = blocknote(ALL_BLOCKS);
+    expect(text).toContain('LOCKED_TITLE_TEXT');
+    expect(text).not.toContain('LOCKED_BODY_TEXT');
+    expect(text).not.toContain('LOCKED_NESTED');
+    expect(text).not.toContain('LOCKED_TERMINAL');
+    expect(references).not.toContainEqual({ kind: 'page', id: 'LOCKED_PAGELINK_TARGET_ID' });
+
+    // Nested in a column; the title is trimmed and no other prop is read.
+    const page = [
+      {
+        id: 'cols',
+        type: 'columnList',
+        children: [
+          {
+            id: 'col',
+            type: 'column',
+            children: [
+              {
+                id: 'L',
+                type: 'lockedSection',
+                props: { title: ' Solution part 1 ', textColor: 'red' },
+                children: [
+                  {
+                    id: 'L-p',
+                    type: 'paragraph',
+                    content: [{ type: 'text', text: 'the answer is 42', styles: {} }],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ];
+    expect(blocknote(page).text).toBe('Solution part 1');
+
+    // Only the title prop: inline content on a locked section is not read.
+    const odd = [
+      {
+        id: 'L2',
+        type: 'lockedSection',
+        props: {},
+        content: [{ type: 'text', text: 'NOT_A_TITLE', styles: {} }],
+        children: [],
+      },
+    ];
+    expect(blocknote(odd).text).toBe('');
+  });
+
+  it('a checkable heading extracts like any heading', () => {
+    const heading = (props: Record<string, unknown>) => [
+      {
+        id: 'h',
+        type: 'heading',
+        props: { level: 2, ...props },
+        content: [{ type: 'text', text: 'Step 1', styles: {} }],
+        children: [],
+      },
+    ];
+    expect(blocknote(heading({ checkable: true }))).toEqual(blocknote(heading({})));
+    expect(blocknote(heading({ checkable: true })).text).toBe('Step 1');
+  });
+
+  it('a student check list item extracts like any check list item (no per-reader state)', () => {
+    const item = (props: Record<string, unknown>) => [
+      {
+        id: 'i',
+        type: 'checkListItem',
+        props: { checked: true, ...props },
+        content: [{ type: 'text', text: 'Install Node', styles: {} }],
+        children: [],
+      },
+    ];
+    expect(blocknote(item({ personal: true }))).toEqual(blocknote(item({})));
+    expect(blocknote(item({ personal: true })).text).toBe('Install Node');
   });
 
   it('prepends the title when one is given', () => {

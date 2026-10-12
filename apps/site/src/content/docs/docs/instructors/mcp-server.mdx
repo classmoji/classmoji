@@ -6,7 +6,7 @@ description: Let Claude (and other AI assistants) act on your classroom through 
 The Classmoji **MCP server** lets an AI assistant — Claude, or any Model Context Protocol client — work with your classroom on your behalf: read your roster, grades, assignments, and calendar, and take actions like grading submissions, resolving regrades, and managing pages, modules, and tokens.
 
 :::note
-The assistant acts **as you**, with **exactly your permissions** in each classroom — the same role rules the web app enforces. It can't see or do anything you couldn't already do yourself, and you can disconnect at any time.
+The AI acts **as you**, with **exactly your permissions** in each classroom — the same role rules the web app enforces. It can't see or do anything you couldn't already do yourself, and you can disconnect at any time.
 :::
 
 You sign in once with your normal Classmoji (GitHub) account and approve a consent screen; no API keys to copy or manage.
@@ -99,13 +99,13 @@ For any other MCP client: point it at `https://mcp.classmoji.io/mcp`. A spec-com
 
 ## What you can do
 
-Once connected, the assistant has two kinds of capabilities, each limited to your role in each classroom:
+Once connected, the AI has two kinds of capabilities, each limited to your role in each classroom:
 
-- **Read** — your classrooms, roster, teams and team tags, repositories, assignments and submissions (each with its submission mode and repo URL), the grading queue, leaderboard, regrade requests, calendar, pages, modules (each with the assignments in it), quizzes, forms and their responses, and your token ledger.
+- **Read** — your classrooms, roster, teams and team tags, repositories, assignments and submissions (each with its submission mode and repo URL), the grading queue, leaderboard, regrade requests, calendar, pages, modules (each with the assignments in it), quizzes, forms and their responses, who has checked off or unlocked a page's sections, and your token ledger.
 - **Act** — add and remove grades, assign graders, resolve regrade requests, create and update assignments in a module (`assignment_create` takes the module, the type, the repository, quiz or form it targets, and for repositories a submission mode, push by default) and move one to another module (`assignment_update` with `module_id`; owners only), create, edit and delete repositories (their type, team setup and template lock once student repos exist), create team tags, create, publish and reorder modules (and the assignments and items inside one) and delete one that holds no assignments, create and edit pages — including uploading images into a page and setting one as its cover — manage calendar events, and grant tokens. You can also create and publish forms, label responses as you work through them, and add responses you collected elsewhere — a spreadsheet, a previous term's list — as if the person had filled the form in.
 
-Staff-only surfaces (rosters, grading, the leaderboard) require the corresponding teaching-team or owner role, exactly as in the web app; students connecting the same server get only their own view.
+Staff-only surfaces (rosters, grading, the leaderboard) require the corresponding teaching-team or owner role, exactly as in the web app; students connecting the same server get only their own view, and can tick off and unlock [page sections](/docs/instructors/pages#checkable-and-locked-sections) themselves.
 
 ## Managing access
 
-Every action the assistant takes is recorded in your classroom's audit log, just like an action in the web app. To revoke access, remove the connector (in Claude, **Settings → Connectors**; in Claude Code, `claude mcp logout classmoji` or **Clear authentication** in the `/mcp` menu) — the access is cut off immediately.
+Every action the AI takes is recorded in your classroom's audit log, just like an action in the web app. To revoke access, remove the connector (in Claude, **Settings → Connectors**; in Claude Code, `claude mcp logout classmoji` or **Clear authentication** in the `/mcp` menu) — the access is cut off immediately.

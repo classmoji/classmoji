@@ -181,6 +181,19 @@ export type RenderSitePageOptions = {
    * none and its markup is unchanged.
    */
   downloads?: SiteDownloads;
+  /**
+   * Where a locked section's "Open in Classmoji to unlock" link points (the
+   * page in the pages app). The class site passes it; the staff `_render/page`
+   * view does not, and draws no link.
+   */
+  lockedSectionHref?: string | null;
+  /**
+   * A signed-out visitor's sign-in link (the site's own interstitial, which
+   * returns them to this page). When set, each locked section is drawn as one
+   * row, padlock and title, linking there with a "Sign in to unlock" label,
+   * instead of the card with its "Open in Classmoji to unlock" link.
+   */
+  lockedSectionSignInHref?: string | null;
 };
 
 /** BlockNote's own wrappers, in the order the client viewer nests them. */
@@ -205,6 +218,8 @@ export async function renderSitePage({
   showSchedule,
   srcSets,
   downloads,
+  lockedSectionHref,
+  lockedSectionSignInHref,
 }: RenderSitePageOptions): Promise<RenderedPage> {
   // Redact BEFORE serializing: BlockNote writes block props onto the wrapper
   // as data-* attributes, so a hidden page's title would ship in the HTML even
@@ -223,6 +238,8 @@ export async function renderSitePage({
           showSchedule,
           ...(srcSets ? { srcSets } : {}),
           ...(downloads ? { downloads } : {}),
+          ...(lockedSectionHref ? { lockedSectionHref } : {}),
+          ...(lockedSectionSignInHref ? { lockedSectionSignInHref } : {}),
         }),
       });
 

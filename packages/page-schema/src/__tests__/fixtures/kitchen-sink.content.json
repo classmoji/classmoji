@@ -356,6 +356,44 @@
       "children": []
     },
     {
+      "id": "ks-personal-1",
+      "type": "checkListItem",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left",
+        "checked": false,
+        "personal": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Install Node (each student ticks their own)",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "ks-personal-2",
+      "type": "checkListItem",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left",
+        "checked": true,
+        "personal": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Clone the starter repository",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
       "id": "ks-toggle",
       "type": "toggleListItem",
       "props": {
@@ -960,6 +998,134 @@
                 {
                   "type": "text",
                   "text": "ls -la",
+                  "styles": {}
+                }
+              ],
+              "children": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ks-h2-checkable",
+      "type": "heading",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left",
+        "level": 2,
+        "isToggleable": false,
+        "checkable": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Step 1: a checkable section",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "ks-h2-checkable-p",
+      "type": "paragraph",
+      "props": {
+        "backgroundColor": "default",
+        "textColor": "default",
+        "textAlignment": "left"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Ticking the heading above fades this paragraph.",
+          "styles": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "ks-locked",
+      "type": "lockedSection",
+      "props": {
+        "title": "Solution (unlock when stuck)"
+      },
+      "children": [
+        {
+          "id": "ks-locked-p",
+          "type": "paragraph",
+          "props": {
+            "backgroundColor": "default",
+            "textColor": "default",
+            "textAlignment": "left"
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "The locked body: only readers who unlocked it receive this.",
+              "styles": {}
+            }
+          ],
+          "children": []
+        },
+        {
+          "id": "ks-locked-h",
+          "type": "heading",
+          "props": {
+            "backgroundColor": "default",
+            "textColor": "default",
+            "textAlignment": "left",
+            "level": 3,
+            "isToggleable": false,
+            "checkable": true
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "A checkable heading inside the lock",
+              "styles": {}
+            }
+          ],
+          "children": []
+        },
+        {
+          "id": "ks-locked-personal",
+          "type": "checkListItem",
+          "props": {
+            "backgroundColor": "default",
+            "textColor": "default",
+            "textAlignment": "left",
+            "checked": false,
+            "personal": true
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "A student check list item inside the lock",
+              "styles": {}
+            }
+          ],
+          "children": []
+        },
+        {
+          "id": "ks-locked-nested",
+          "type": "lockedSection",
+          "props": {
+            "title": "Hint inside the solution"
+          },
+          "children": [
+            {
+              "id": "ks-locked-nested-p",
+              "type": "paragraph",
+              "props": {
+                "backgroundColor": "default",
+                "textColor": "default",
+                "textAlignment": "left"
+              },
+              "content": [
+                {
+                  "type": "text",
+                  "text": "A nested locked body.",
                   "styles": {}
                 }
               ],

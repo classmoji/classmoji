@@ -15,6 +15,7 @@ import {
   SideMenu,
   SideMenuController,
   FilePanelController,
+  DragHandleButton,
   DragHandleMenu,
   RemoveBlockItem,
   BlockColorsItem,
@@ -43,9 +44,19 @@ import {
   type PageBlockInsertions,
 } from './blocks/index.tsx';
 import { editingSchema } from './blocks/editingSchema.ts';
+import { arrangeSlashMenuItems } from './slashMenuOrder.ts';
 import { AGENT_CURSOR_LABEL_CSS, renderLiveCursor } from './collab/liveCursor.ts';
 import { reviveUndoManager, yUndoManagerOf } from './collab/yUndo.ts';
 import { ReplaceUrlItem, RemoveProfileImageItem } from './ReplaceUrlItem.tsx';
+import {
+  CheckableBadgeYield,
+  CheckableSectionItem,
+  PersonalCheckListItem,
+} from './CheckableSectionItem.tsx';
+import { DoneChips } from './DoneChips.tsx';
+import { AddBlockButton } from './AddBlockButton.tsx';
+import { SectionStatsContext } from '~/hooks/useSectionStats.ts';
+import type { SectionStats } from '~/hooks/useReaderSections.tsx';
 import { AssetSrcSetContext, NO_SRC_SETS, type AssetSrcSets } from '~/hooks/useAssetSrcSets.ts';
 import {
   AssetDisplayUrlContext,
@@ -66,6 +77,8 @@ import {
   type UploadPorts,
 } from './media/uploadRouting.ts';
 
+import '~/styles/page-sections.css';
+
 /** A repository upload refused with nothing more specific to say. */
 const UPLOAD_FAILED = 'The upload could not finish. Try again.';
 
@@ -76,6 +89,8 @@ const CustomDragHandleMenu = () => (
     <BlockColorsItem>Colors</BlockColorsItem>
     <ReplaceUrlItem>Replace URL</ReplaceUrlItem>
     <RemoveProfileImageItem>Remove Image</RemoveProfileImageItem>
+    <CheckableSectionItem />
+    <PersonalCheckListItem />
   </DragHandleMenu>
 );
 
@@ -152,6 +167,11 @@ interface PageEditorProps {
    * for a mounted editor — the parent keys the editor on the room.
    */
   collab?: PageEditorCollab | null;
+  /**
+   * Counts for the locked sections' and checkable headings' chips
+   * (`sectionStats` from the loader, OWNER/TEACHER only). Null: no chips.
+   */
+  sectionStats?: SectionStats | null;
 }
 
 const PageEditor = forwardRef(function PageEditor(
@@ -168,6 +188,7 @@ const PageEditor = forwardRef(function PageEditor(
     onAssetUploaded,
     uploadCapability = null,
     collab = null,
+    sectionStats = null,
   }: PageEditorProps,
   ref: React.Ref<PageEditorHandle>
 ) {
@@ -370,6 +391,11 @@ const PageEditor = forwardRef(function PageEditor(
     return editor.onMount(revive);
   }, [editor, live]);
 
+  const sectionStatsValue = useMemo(
+    () => ({ pageId, stats: sectionStats }),
+    [pageId, sectionStats]
+  );
+
   // Slash menu: default + multi-column + custom blocks
   const getAllSlashMenuItems = useMemo(() => {
     return (editor: PageBlockEditor) => {
@@ -401,51 +427,36 @@ const PageEditor = forwardRef(function PageEditor(
       });
 
       // Add custom blocks
-      filteredItems.push(
+      const allItems: Array<(typeof filteredItems)[number] & { placeAfter?: string }> = [
+        ...filteredItems,
         ...customSlashMenuItems.map(item => ({
           title: item.title,
           subtext: item.subtext,
           aliases: item.aliases,
           group: item.group,
+          placeAfter: item.placeAfter,
           icon: item.icon,
           onItemClick: () => item.onItemClick(editor),
-        }))
-      );
-
-      // Sort items by group to ensure blocks with same group appear together
-      const groupOrder = [
-        'Headings',
-        'Basic blocks',
-        'Code',
-        'Lists',
-        'Media',
-        'Advanced',
-        'Subheadings',
-        'Others',
+        })),
       ];
-      filteredItems.sort((a, b) => {
-        const groupA = a.group || 'Others';
-        const groupB = b.group || 'Others';
-        const indexA = groupOrder.indexOf(groupA);
-        const indexB = groupOrder.indexOf(groupB);
 
-        // If both groups are in our order, sort by index
-        if (indexA !== -1 && indexB !== -1) {
-          return indexA - indexB;
-        }
-        // If only one is in our order, it comes first
-        if (indexA !== -1) return -1;
-        if (indexB !== -1) return 1;
-        // If neither is in our order, sort alphabetically by group
-        return groupA.localeCompare(groupB);
-      });
-
-      return filteredItems;
+      // Groups kept together in a fixed order; the checkable headings right
+      // after their plain counterparts.
+      return arrangeSlashMenuItems(allItems);
     };
   }, []);
 
   return (
-    <div className="page-editor">
+    // `position: relative` makes this wrapper the containing block of
+    // BlockNote's floating UI (side menu, drag-handle menu, slash menu,
+    // toolbars), which portals into the editor's container and is positioned
+    // absolutely. Without it their containing block is the page itself, so the
+    // scrolling content column is not one of their clipping ancestors and
+    // floating-ui measures room against the whole window: the drag-handle menu
+    // opened to the left of the handle, under the fixed sidebar. With it the
+    // column bounds them, and a menu with no room on one side flips to the
+    // other (the drag-handle menu opens to the right).
+    <div className="page-editor" style={{ position: 'relative' }}>
       <style>{`
         .page-editor .bn-block-content,
         .page-editor .bn-inline-content {
@@ -538,27 +549,37 @@ const PageEditor = forwardRef(function PageEditor(
           way), so a provider here is what the image and profile blocks see. */}
       <AssetSrcSetContext.Provider value={srcSets ?? NO_SRC_SETS}>
         <AssetDisplayUrlContext.Provider value={displayUrl ?? IDENTITY_DISPLAY_URL}>
-          <BlockNoteView
-            editor={editor}
-            editable={editable}
-            theme={darkMode ? 'dark' : 'light'}
-            slashMenu={false}
-            formattingToolbar={false}
-            sideMenu={false}
-            filePanel={false}
-            onChange={() => onChange?.(editor.document)}
-          >
-            <SideMenuController
-              sideMenu={props => <SideMenu {...props} dragHandleMenu={CustomDragHandleMenu} />}
-            />
-            <FormattingToolbarController formattingToolbar={() => <FormattingToolbar />} />
-            {/* BlockNote's file panel plus a Media tab for file and audio blocks. */}
-            <FilePanelController filePanel={MediaFilePanel} />
-            <SuggestionMenuController
-              triggerCharacter="/"
-              getItems={async query => filterSuggestionItems(getAllSlashMenuItems(editor), query)}
-            />
-          </BlockNoteView>
+          <SectionStatsContext.Provider value={sectionStatsValue}>
+            <BlockNoteView
+              editor={editor}
+              editable={editable}
+              theme={darkMode ? 'dark' : 'light'}
+              slashMenu={false}
+              formattingToolbar={false}
+              sideMenu={false}
+              filePanel={false}
+              onChange={() => onChange?.(editor.document)}
+            >
+              <SideMenuController
+                sideMenu={props => (
+                  <SideMenu {...props}>
+                    {/* Ours: the click is the button's, not only the icon's. */}
+                    <AddBlockButton />
+                    <DragHandleButton {...props} dragHandleMenu={CustomDragHandleMenu} />
+                  </SideMenu>
+                )}
+              />
+              <FormattingToolbarController formattingToolbar={() => <FormattingToolbar />} />
+              {/* BlockNote's file panel plus a Media tab for file and audio blocks. */}
+              <FilePanelController filePanel={MediaFilePanel} />
+              <SuggestionMenuController
+                triggerCharacter="/"
+                getItems={async query => filterSuggestionItems(getAllSlashMenuItems(editor), query)}
+              />
+              <CheckableBadgeYield />
+              <DoneChips editor={editor} />
+            </BlockNoteView>
+          </SectionStatsContext.Provider>
         </AssetDisplayUrlContext.Provider>
       </AssetSrcSetContext.Provider>
     </div>

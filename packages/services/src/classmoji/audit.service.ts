@@ -26,7 +26,17 @@ interface AuditLogData {
   data?: Prisma.InputJsonValue | null;
 }
 
-export const create = async (data: AuditLogData) => {
+export interface AuditCreateOptions {
+  /**
+   * `false` skips the 5-second dedup window below and always writes the row.
+   * For callers that already write only on a real state change (e.g. a page
+   * section checked, unchecked and checked again within seconds), where every
+   * call is a distinct event and coalescing would hide one.
+   */
+  dedupe?: boolean;
+}
+
+export const create = async (data: AuditLogData, { dedupe = true }: AuditCreateOptions = {}) => {
   const { user_id, classroom_id, role, resource_type, resource_id, action } = data;
 
   // Skip audit log creation if required fields are missing
@@ -70,6 +80,8 @@ export const create = async (data: AuditLogData) => {
     auditData.data = data.data === null ? Prisma.JsonNull : data.data;
   }
 
+  if (!dedupe) return getPrisma().auditLog.create({ data: auditData });
+
   const deduplicationWindowMs = 5 * 1000; // 5-second deduplication window
 
   // Distinct tools acting on the same resource within the window must never
@@ -107,6 +119,11 @@ export const create = async (data: AuditLogData) => {
   // The same state twice still dedups.
   const payloadIdentityAnswers = payload?.identity_answers;
 
+  // The block of a page the action targeted (data.block_id — page sections).
+  // Unlocking or checking two different sections of one page inside the window
+  // are two records, so the block joins the key.
+  const payloadBlockId = payload?.block_id;
+
   // Each extra JSON-path filter needs its own `data` clause, and two cannot sit
   // beside each other in one object — they go under `AND`, which Prisma
   // combines conjunctively with the rest.
@@ -115,6 +132,9 @@ export const create = async (data: AuditLogData) => {
     ...(isScalar(payloadValue) ? [{ data: { path: ['value'], equals: payloadValue } }] : []),
     ...(typeof payloadIdentityAnswers === 'boolean'
       ? [{ data: { path: ['identity_answers'], equals: payloadIdentityAnswers } }]
+      : []),
+    ...(typeof payloadBlockId === 'string'
+      ? [{ data: { path: ['block_id'], equals: payloadBlockId } }]
       : []),
   ];
 

@@ -3,6 +3,9 @@ title: Pages
 description: How to create and manage content pages in your classroom
 ---
 
+import PageBlockGallery from '~/components/PageBlockGallery.astro';
+import PageSectionsDemo from '~/components/PageSectionsDemo.astro';
+
 ### What is a page?
 
 A page is a piece of course content you write and host for your students. Think lecture notes, project specs, reference guides, or any structured material you want to share alongside assignments.
@@ -37,6 +40,69 @@ Pages are uploaded sequentially with a progress bar. Failed pages are reported a
 
 Click a page title (or the edit button) from the Pages list. This opens the pages editor where you can write and format content visually. Changes are saved back to Github automatically.
 
+### Blocks you can use
+
+A page is a stack of blocks. Type `/` on an empty line to open the block menu, then keep typing to filter it (`/code`, `/image`). Markdown shortcuts work too: `#` for a heading, `-` or `1.` for a list, `>` for a quote, and three backticks for code. The examples below show each block as students see it.
+
+**Text**
+
+<PageBlockGallery group="text" />
+
+**Lists**
+
+<PageBlockGallery group="lists" />
+
+**Code**
+
+<PageBlockGallery group="code" />
+
+**Media**
+
+<PageBlockGallery group="media" />
+
+**Layout and links**
+
+<PageBlockGallery group="layout" />
+
+### Checkable and locked sections
+
+Two kinds of section help students work through a page at their own pace: checkable sections they tick off as they go, and locked sections that stay closed until a student chooses to open them.
+
+**Checkable sections**
+
+Any heading 1, 2 or 3 can be checkable. Type `/` and pick **Checkable heading 1**, **2** or **3** (`/check` lists all three), or click a heading's drag handle and turn on **Checkable section**. A small tick-box mark beside the heading shows it is checkable while you edit.
+
+A section runs from its heading to the next heading of the same or a higher level. Students get a tick box next to the heading. Ticking it marks the section done and fades it; pointing at the section brings it back, and ticking again marks it not done. Ticks are saved per student, so they are still there the next time the student opens the page.
+
+<PageSectionsDemo kind="checkable" />
+
+In the editor, each checkable heading shows **Done by** and how many of your current students have ticked it. Click it to see who and when. Owners and teachers can also ask Claude (or another AI tool) connected through the [MCP server](/docs/instructors/mcp-server) for the page's section status.
+
+**Student check lists**
+
+A check list can work the same way: type `/` and pick **Student check list**, or click an item's drag handle in an existing list and turn on **Students tick their own** (it applies to the whole list). Each signed-in student ticks their own boxes, and their ticks are saved like checkable headings. Signed-out visitors and the [class website](/docs/instructors/class-sites) see the list as you left it. The editor shows no counts for list items; owners and teachers can see who ticked what through the [MCP server](/docs/instructors/mcp-server).
+
+**Locked sections**
+
+Type `/` and pick **Locked section**. Give it a title, then write the body underneath it; the body can hold any blocks. Use it for anything students should try on their own first, such as a worked solution.
+
+Students see the title on a card with the body hidden. To open it they press and hold the lock for about a second (on a keyboard, hold Space or Enter); letting go early cancels. The card tells them staff can see when they unlock it. Unlocking is recorded and can't be undone: from then on the section is open for that student, with the time they unlocked it.
+
+<PageSectionsDemo kind="locked" />
+
+In the editor, each locked section shows **Unlocked by** and how many of your current students have opened it. Click it to see who and when.
+
+| Reader | What they see |
+|--------|---------------|
+| **Owners, teachers, assistants** | The whole section, always. Nothing is recorded. |
+| **Students** | The title, until they unlock it |
+| **Signed-out visitors** (public pages) | The title, with **Sign in to unlock** |
+| **[Class website](/docs/instructors/class-sites) visitors**, staff included | The title, with **Open in Classmoji to unlock** (or **Sign in to unlock** when signed out) |
+
+A locked body is never sent to a student who hasn't unlocked it, so it can't be read from the page source. Search finds a locked section by its title only, for everyone. An AI tool working for a student, such as Ask Moji or their own [MCP](/docs/instructors/mcp-server) connection, sees only the sections that student has unlocked; staff's AI tools see every body, as staff do on the page. Students who use the MCP server can tick and unlock sections from there too, and their AI tool asks them to confirm before unlocking.
+
+On the class website, checkable headings show as plain headings.
+
 ### Page status
 
 Each page has a status that controls who can see it.
@@ -55,7 +121,7 @@ The **Menu** toggle controls whether a page appears in the student sidebar navig
 
 ### What students see
 
-Students navigate to a page via the classroom menu or a direct link. The page renders as a clean, styled document. Public pages work without a login, so you can share them with anyone.
+Students navigate to a page via the classroom menu or a direct link. The page renders as a clean, styled document. Public pages work without a login, so you can share them with anyone. Checkable headings carry a tick box, and locked sections show only their title until the student opens them (see [Checkable and locked sections](#checkable-and-locked-sections)).
 
 ### Viewer tracking
 

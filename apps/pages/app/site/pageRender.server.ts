@@ -13,10 +13,12 @@ import type { PageLinkResolver } from './viewerSchema.server.ts';
 import { collectBlockAssetRefs, mapBlockAssetRefs } from '@classmoji/utils';
 import { assetResolveContext } from '~/utils/assetRefs.server.ts';
 import { coverWithoutUnresolvedMediaRef, withoutUnresolvedMediaRefs } from './siteMedia.server.ts';
-import { isMember } from './tenant.server.ts';
+import { isMember, publicPathOf } from './tenant.server.ts';
+import { signInPathFor } from './returnTo.ts';
 import { pagesUrl } from './env.server.ts';
 import { loadMediaDownloads } from '~/utils/mediaDownloads.server.ts';
 import { siteDownloadsFor } from '~/utils/mediaDownloads.ts';
+import { documentForSite } from '~/utils/pageSections.server.ts';
 
 /**
  * The shared "render one page of this site" path.
@@ -119,6 +121,15 @@ export async function renderPageForViewer(
     throw error;
   }
 
+  // Locked sections are closed on the class site for EVERY viewer: their
+  // bodies (children) leave the document here, before the asset resolver, the
+  // download map and the serializer see it, so a body's text, image refs and
+  // media ids reach none of them. Unlocking happens in the pages app, per
+  // student; the site has no per-viewer state, which is what keeps this render
+  // shareable by a cache. Non-mutating: `loadSitePageContent` caches its blocks.
+  // (The staff `_render/page` view reads the document itself and keeps them.)
+  const blocks = documentForSite(content.blocks);
+
   // Render-time URL resolution. The lifetime comes from the PAGE's visibility,
   // through the same `tierFor` the pages app calls — not from the fact that
   // this is the class site. A public page is `month` here and `month` in the
@@ -133,11 +144,7 @@ export async function renderPageForViewer(
     context.site.classroom as unknown as Parameters<typeof assetResolveContext>[0],
     ClassmojiService.contentDelivery.tierFor({ canEdit: false, isPublic: page.is_public })
   );
-  const {
-    blocks: resolvedBlocks,
-    srcSets,
-    urlFor,
-  } = await resolveSiteAssets(assetCtx, content.blocks);
+  const { blocks: resolvedBlocks, srcSets, urlFor } = await resolveSiteAssets(assetCtx, blocks);
 
   // A signed-in member's Download buttons, for the media files they may
   // download. None for anyone else, so an anonymous render — the one a shared
@@ -146,7 +153,7 @@ export async function renderPageForViewer(
   const downloads =
     assetCtx && role && isMember(context.viewer)
       ? siteDownloadsFor(
-          await loadMediaDownloads(context.site.classroom_id, content.blocks, role),
+          await loadMediaDownloads(context.site.classroom_id, blocks, role),
           urlFor,
           page.id,
           pagesUrl()
@@ -166,6 +173,18 @@ export async function renderPageForViewer(
       // when it is off, so a directory tile pointing at it is dropped.
       showSchedule: context.site.show_schedule === true,
       downloads,
+      // "Open in Classmoji to unlock": the page in the pages app.
+      lockedSectionHref: `${pagesUrl()}/${context.site.classroom.slug}/${page.id}`,
+      // A signed-out visitor signs in through the site's interstitial and is
+      // brought back to this page signed in (the same link `page.tsx` sends
+      // them to for a members-only page); from there the section's link opens
+      // the page in Classmoji. The same for every anonymous visitor of this
+      // URL, so the anonymous render stays shareable by a cache.
+      lockedSectionSignInHref: context.viewer.userId
+        ? null
+        : `${context.memberLinkOrigin}${signInPathFor(
+            publicPathOf(new URL(request.url).pathname, args.params.subdomain ?? '')
+          )}`,
     });
   } catch (error) {
     if (error instanceof SiteRenderError) {

@@ -14,6 +14,10 @@
  * / public setting — the same one `/{slideId}` enforces. So the proxy has to
  * ask the slide, not the repo, and that question is answered here.
  *
+ * A page's stored document (`content.json`, legacy `index.html`) is read
+ * through the pages app, never through this route; `pageDocumentDecision`
+ * refuses it here.
+ *
  * ## Pure, and deliberately so
  *
  * Nothing in this file imports Prisma or `@classmoji/services`. The lookup and
@@ -25,6 +29,65 @@
 import { nonDeckHeaders } from './slideKind';
 
 /**
+ * Characters a served path never contains.
+ *
+ * React Router hands the route a fully decoded splat (`%2F` → `/`, `%2e` → `.`,
+ * `%5C` → `\`, `%3F` → `?`), and the legacy read builds a URL from it, where a
+ * URL parser gives these characters meaning: `\` is a separator, `%2e` is a dot
+ * segment, `?` and `#` end the path, tab and newline are dropped. Stored files
+ * are named in lowercase ASCII (`sanitizeFilename`), so none of them is needed.
+ */
+const UNSERVED_PATH_CHARACTERS = /[%\\?#\u0000-\u001f\u007f]/;
+
+/**
+ * The one spelling of a requested repo path this route answers, or null.
+ *
+ * The rules below decide on the path string, and the reads normalize it
+ * (`normalize` is the delivery layer's `normalizeRepoRelative`: empty and `.`
+ * segments dropped, `..` refused). So the path is held to the normalized form
+ * itself: any other spelling of a path (`a//b`, `a/./b`, a leading or trailing
+ * `/`) is refused rather than rewritten, as is any `..` segment or a character
+ * from `UNSERVED_PATH_CHARACTERS`. Every URL this app builds is already in this
+ * form.
+ */
+export function canonicalProxyPath(
+  raw: string,
+  normalize: (path: string) => string | null
+): string | null {
+  if (UNSERVED_PATH_CHARACTERS.test(raw)) return null;
+  const normalized = normalize(raw);
+  return normalized !== null && normalized === raw ? normalized : null;
+}
+
+/**
+ * A stored repo path (`content_path`, `thumbnail_path`) in the form
+ * `canonicalProxyPath` accepts: empty and `.` segments dropped, so a stray
+ * leading, trailing or doubled `/` does not change the folder it names.
+ * Anything else (a `..` segment, an unserved character) is kept as stored,
+ * and the proxy refuses it. Empty or missing in, empty out.
+ *
+ * Every URL or read path built from a stored path goes through this first.
+ */
+export function canonicalStoredPath(stored: string | null | undefined): string {
+  if (!stored) return '';
+  return stored
+    .split('/')
+    .filter(part => part.length > 0 && part !== '.')
+    .join('/');
+}
+
+/**
+ * The stored spellings of a content folder a row lookup should match.
+ *
+ * Content paths are written as `pages/<slug>` / `slides/<slug>`, but a stored
+ * value with a leading or trailing `/` names the same folder, and a lookup by
+ * exact value would miss it.
+ */
+export function storedContentPathForms(folder: string): string[] {
+  return [folder, `${folder}/`, `/${folder}`, `/${folder}/`];
+}
+
+/**
  * Is `path` INSIDE `contentPath` (or is it that path itself)?
  *
  * The separator is the whole point. A bare `startsWith` on `slides/week-1`
@@ -33,8 +96,11 @@ import { nonDeckHeaders } from './slideKind';
  * instructors, who number weeks and lectures exactly that way.
  */
 export function isWithinContentPath(path: string, contentPath: string | null | undefined): boolean {
-  if (!contentPath) return false;
-  return path === contentPath || path.startsWith(`${contentPath}/`);
+  // The stored folder in the requested path's form (a stray `/` in the row
+  // would otherwise match nothing).
+  const folder = canonicalStoredPath(contentPath);
+  if (!folder) return false;
+  return path === folder || path.startsWith(`${folder}/`);
 }
 
 /**
@@ -207,8 +273,9 @@ export type DeckDocumentDecision =
  *     is served with them — hidden slides for editors, notes for those allowed;
  *   - `deck.json` has no filtered form and nothing but the editor reads it,
  *     so it goes to editors only;
- *   - an `index.html` no deck row claims (a page's document, a deleted deck's
- *     leftovers) is served as before, with nothing beyond what a viewer sees.
+ *   - an `index.html` no deck row claims (a deleted deck's leftovers) is
+ *     served as before, with nothing beyond what a viewer sees. A page's
+ *     `index.html` never gets here: `pageDocumentDecision` answers it first.
  */
 export async function deckDocumentDecision<T extends DeckSlideRef>({
   path,
@@ -247,4 +314,55 @@ export async function deckDocumentDecision<T extends DeckSlideRef>({
   if (!viewable) return { outcome: 'refuse' };
   if (doc.kind === 'deck-json' && !rights.canEdit) return { outcome: 'refuse' };
   return { outcome: 'serve', rights };
+}
+
+/**
+ * The page folder whose stored document `path` is, or null.
+ *
+ * A page stores its document at `<content_path>/content.json` (and, for older
+ * pages, `<content_path>/index.html`). Pages are read through the pages app,
+ * which shows each reader what that reader may see of the page; neither file is
+ * an asset of the folder. Everything else under a page folder (images, SVG,
+ * downloads) is.
+ *
+ * This is the filter that keeps the rule below off the hot path: every font,
+ * stylesheet and image fails it before a query is made.
+ */
+export function pageDocumentFolderOf(path: string): string | null {
+  for (const suffix of ['/content.json', '/index.html']) {
+    if (!path.endsWith(suffix)) continue;
+    const folder = path.slice(0, -suffix.length);
+    return folder ? folder : null;
+  }
+  return null;
+}
+
+/**
+ * What the proxy should do about a page document: `pass` for anything that
+ * is not one (and for a `content.json`/`index.html` no page row claims),
+ * `refuse` for a page's own document, whoever asks.
+ */
+export type PageDocumentDecision = { outcome: 'pass' } | { outcome: 'refuse' };
+
+/**
+ * Refuse a page's stored document.
+ *
+ * `findPages` returns the page rows whose `content_path` is the folder, in the
+ * classrooms that read this org and repo (the same set a deck document is
+ * looked up in, so a classroom sharing the repo is covered too). Any row means
+ * the path is a page's document, and the answer is the route's ordinary
+ * refusal, decided before the read so an existing path and a missing one look
+ * the same.
+ */
+export async function pageDocumentDecision<T>({
+  path,
+  findPages,
+}: {
+  path: string;
+  findPages: (contentPath: string) => Promise<T[]>;
+}): Promise<PageDocumentDecision> {
+  const folder = pageDocumentFolderOf(path);
+  if (!folder) return { outcome: 'pass' };
+  const pages = await findPages(folder);
+  return pages.length > 0 ? { outcome: 'refuse' } : { outcome: 'pass' };
 }

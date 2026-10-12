@@ -80,6 +80,7 @@ import {
   slideFileUnavailable,
   slideLinkRedirect,
 } from '~/utils/slideKind';
+import { canonicalStoredPath } from '~/utils/slideDocumentAccess';
 import {
   DECK_CHECKPOINT_REQUEST_ID,
   acceptDeckPreviewLive,
@@ -253,7 +254,9 @@ export const loader = async ({
 
   // Content repo is STORED and user-editable — never re-derived from the namespace.
   const repo = slide.classroom.content_repo;
-  const filePath = `${slide.content_path}/index.html`;
+  // The stored folder in canonical form, so the read and the `/content/` URL
+  // below are the one spelling the proxy serves.
+  const filePath = `${canonicalStoredPath(slide.content_path)}/index.html`;
 
   // Build the content URL using content proxy (CDN-first + API fallback)
   // Used as client-side fallback if server-side fetch fails

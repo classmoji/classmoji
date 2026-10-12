@@ -14,7 +14,8 @@
  *      applies the role set and the UNPUBLISHED entry gate, and hands the
  *      handler a ready ClassroomContext)
  *   4. mutation gate (write-scope tools on a classroom: non-owners mutate
- *      only when the classroom is ACTIVE)
+ *      only when the classroom is ACTIVE; `readerState` tools skip it and keep
+ *      only the entry gate of step 3)
  *
  * and AFTER it, for classroom-bound surfaces, adds a `<field>_local` rendering
  * in the classroom's time zone next to every timestamp (see localTimes.ts).
@@ -99,6 +100,15 @@ export interface ToolDefinition<Args = Record<string, unknown>> {
   };
   /** Optional per-tool override of the default rate limit (S6). */
   rateLimit?: RateLimitConfig;
+  /**
+   * A write that changes only the CALLER's own reader state (a page section
+   * checked or unlocked), not the classroom's content. Such a tool follows the
+   * classroom ENTRY rule instead of the mutation rule, like the same act on
+   * the page: allowed in a LOCKED (archived) classroom, still refused to
+   * non-owners in an UNPUBLISHED one (the entry gate in step 3 is kept). Only
+   * for classroom-bound write tools.
+   */
+  readerState?: boolean;
   handler: (args: Args, ctx: ToolContext) => Promise<ToolResult>;
 }
 
@@ -157,6 +167,12 @@ export function registerToolDefinition<Args>(def: ToolDefinition<Args>): void {
     // classroom argument has nothing to gate against.
     throw new Error(
       `[mcp] tool '${def.name}' declares roles but its inputSchema has no 'classroom' argument`
+    );
+  }
+  if (def.readerState && (def.scope !== 'write' || !def.roles)) {
+    // The flag only ever relaxes the mutation gate of a classroom-bound write.
+    throw new Error(
+      `[mcp] tool '${def.name}' declares readerState but is not a classroom-bound write`
     );
   }
   toolDefinitions.set(def.name, def as ToolDefinition<never>);
@@ -307,7 +323,8 @@ function wrapHandler(def: ToolDefinition<never>, viewer: Viewer) {
         });
 
         // 4. Mutation gate for writes (non-owners mutate only when ACTIVE).
-        if (def.scope === 'write') {
+        //    Reader-state writes keep only the entry gate above.
+        if (def.scope === 'write' && !def.readerState) {
           assertMutationAllowed({ status: ctx.classroom.status, role: ctx.classroom.role });
         }
       }
