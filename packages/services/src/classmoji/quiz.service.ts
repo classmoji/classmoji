@@ -741,41 +741,51 @@ export const getQuizzesByOrganization = async (
     throw new QuizAccessError('classroom_mismatch', 'Membership does not match classroom');
   }
 
-  const quizzes = await getPrisma().quiz.findMany({
-    where: { classroom_id: classroomId },
-    include: {
-      repository: true,
-      // The quiz's assignment owns its module, schedule, weight and publish
-      // state; a quiz with none is in no module.
-      assignment: {
-        select: {
-          id: true,
-          module_id: true,
-          module: { select: { id: true, title: true } },
-          release_at: true,
-          student_deadline: true,
-          closes_at: true,
-          weight: true,
-          tokens_per_hour: true,
-          is_published: true,
+  // The statistics count students' attempts only: those of users on the
+  // classroom's STUDENT roster, the rule the quiz results page uses. Anyone
+  // else's attempt (a staff member's preview) is not a result. `attempts`
+  // itself keeps every attempt: the staff list finds the viewer's own preview
+  // in it.
+  const [quizzes, students] = await Promise.all([
+    getPrisma().quiz.findMany({
+      where: { classroom_id: classroomId },
+      include: {
+        repository: true,
+        // The quiz's assignment owns its module, schedule, weight and publish
+        // state; a quiz with none is in no module.
+        assignment: {
+          select: {
+            id: true,
+            module_id: true,
+            module: { select: { id: true, title: true } },
+            release_at: true,
+            student_deadline: true,
+            closes_at: true,
+            weight: true,
+            tokens_per_hour: true,
+            is_published: true,
+          },
         },
-      },
-      attempts: {
-        include: {
-          user: { include: GIT_IDENTITY },
+        attempts: {
+          include: {
+            user: { include: GIT_IDENTITY },
+          },
         },
+        ...SOURCE_MATERIAL_INCLUDE,
       },
-      _count: {
-        select: { attempts: true },
-      },
-      ...SOURCE_MATERIAL_INCLUDE,
-    },
-    orderBy: { created_at: 'desc' },
-  });
+      orderBy: { created_at: 'desc' },
+    }),
+    getPrisma().classroomMembership.findMany({
+      where: { classroom_id: classroomId, role: 'STUDENT' },
+      select: { user_id: true },
+    }),
+  ]);
+  const studentIds = new Set(students.map(s => s.user_id));
 
   // Calculate statistics for each quiz
   return withLogins(quizzes).map(({ page_links, slide_links, ...quiz }) => {
-    const completedAttempts = quiz.attempts.filter(
+    const studentAttempts = quiz.attempts.filter(a => studentIds.has(a.user_id));
+    const completedAttempts = studentAttempts.filter(
       a => a.completed_at !== null && a.partial_credit_percentage !== null
     );
     const avgScore =
@@ -792,7 +802,7 @@ export const getQuizzesByOrganization = async (
         page_links,
         slide_links,
       }),
-      attemptsCount: quiz._count.attempts,
+      attemptsCount: studentAttempts.length,
       avgScore: avgScore !== null ? Math.round(avgScore) : null,
     };
   });

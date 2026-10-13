@@ -75,9 +75,10 @@ import {
  * Pro subscription, then the classroom's quizzes_enabled flag. Settings come
  * from the context the registry already resolved (getClassroomForUI's
  * SAFE_SETTINGS_FIELDS whitelist, which includes quizzes_enabled) — the same
- * values the quizzes read resource gates on, with no extra query.
+ * values the quizzes read resource gates on, with no extra query. The attempt
+ * read tools (quizAttempts.ts) apply it too.
  */
-async function assertQuizSurfaceEnabled(ctx: ToolContext): Promise<void> {
+export async function assertQuizSurfaceEnabled(ctx: ToolContext): Promise<void> {
   await assertProTier(ctx);
   if (sanitizedSettings(ctx).quizzes_enabled === false) {
     throw new ToolError('forbidden', 'Quizzes are disabled for this classroom');

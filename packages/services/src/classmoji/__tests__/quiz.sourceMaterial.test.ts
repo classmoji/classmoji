@@ -34,6 +34,8 @@ const tx = {
 const transaction = vi.fn(async (fn: (client: typeof tx) => unknown) => fn(tx));
 const quizFindUnique = vi.fn();
 const quizFindMany = vi.fn();
+// The classroom's STUDENT memberships, which the staff list's statistics count.
+const membershipFindMany = vi.fn(async (..._args: unknown[]): Promise<unknown[]> => []);
 
 vi.mock('@classmoji/database', async () => ({
   ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
@@ -48,6 +50,7 @@ vi.mock('@classmoji/database', async () => ({
       // The row create hands back, read once the transaction has committed.
       findUniqueOrThrow: (...a: unknown[]) => tx.quiz.findUniqueOrThrow(...a),
     },
+    classroomMembership: { findMany: (...a: unknown[]) => membershipFindMany(...a) },
   }),
 }));
 
@@ -128,7 +131,12 @@ describe('quiz.create', () => {
   });
 
   it('defaults course search off and leaves material alone when none is given', async () => {
-    await quizService.create({ name: 'Q', classroomId: CLASSROOM, rubricPrompt: 'r', ...IN_MODULE });
+    await quizService.create({
+      name: 'Q',
+      classroomId: CLASSROOM,
+      rubricPrompt: 'r',
+      ...IN_MODULE,
+    });
 
     expect(tx.quiz.create.mock.calls[0][0].data.course_search_enabled).toBe(false);
     expect(tx.pageLink.deleteMany).not.toHaveBeenCalled();
@@ -270,7 +278,12 @@ describe('quiz excluded paths', () => {
   });
 
   it('create leaves them to the column default when none are given', async () => {
-    await quizService.create({ name: 'Q', classroomId: CLASSROOM, rubricPrompt: 'r', ...IN_MODULE });
+    await quizService.create({
+      name: 'Q',
+      classroomId: CLASSROOM,
+      rubricPrompt: 'r',
+      ...IN_MODULE,
+    });
     expect(tx.quiz.create.mock.calls[0][0].data).not.toHaveProperty('excluded_paths');
   });
 
@@ -593,9 +606,7 @@ describe('quiz.update — closing a quiz', () => {
   });
 
   it('refuses new-shape assignment fields on a quiz in no module, writing nothing', async () => {
-    const refusal = await quizService
-      .update('quiz-1', { assignment: { weight: 5 } })
-      .catch(e => e);
+    const refusal = await quizService.update('quiz-1', { assignment: { weight: 5 } }).catch(e => e);
 
     expect(refusal).toMatchObject({ name: 'QuizAssignmentError', code: 'module_required' });
     expect(tx.quiz.update).not.toHaveBeenCalled();
@@ -615,6 +626,71 @@ describe('quiz.findByClassroom — due date source', () => {
       weight: true,
       is_published: true,
     });
+  });
+});
+
+describe('quiz.findByClassroom — attempt statistics', () => {
+  const attempt = (id: string, userId: string, pct: number | null, done = true) => ({
+    id,
+    user_id: userId,
+    started_at: T0,
+    completed_at: done ? T0 : null,
+    partial_credit_percentage: pct,
+    user: { id: userId, name: userId, accounts: [] },
+  });
+
+  it("counts students' attempts only, and keeps every attempt on the row", async () => {
+    membershipFindMany.mockResolvedValueOnce([{ user_id: 'stu-1' }, { user_id: 'stu-2' }]);
+    quizFindMany.mockResolvedValue([
+      {
+        id: 'quiz-1',
+        classroom_id: CLASSROOM,
+        page_links: [],
+        slide_links: [],
+        attempts: [
+          attempt('a-1', 'stu-1', 80),
+          attempt('a-2', 'stu-2', 61),
+          attempt('a-3', 'stu-2', null, false),
+          // A staff member's preview: not a result.
+          attempt('a-4', 'owner-1', 0),
+        ],
+      },
+    ]);
+
+    const [quiz] = await quizService.findByClassroom(CLASSROOM, {
+      role: 'OWNER',
+      classroom_id: CLASSROOM,
+    });
+
+    expect(membershipFindMany).toHaveBeenCalledWith({
+      where: { classroom_id: CLASSROOM, role: 'STUDENT' },
+      select: { user_id: true },
+    });
+    expect(quiz.attemptsCount).toBe(3);
+    // Over the students' completed, scored attempts: (80 + 61) / 2, rounded.
+    expect(quiz.avgScore).toBe(71);
+    // The staff list still finds the viewer's own preview on the row.
+    expect(quiz.attempts.map(a => a.id)).toEqual(['a-1', 'a-2', 'a-3', 'a-4']);
+  });
+
+  it('counts nothing for a quiz only staff have taken', async () => {
+    quizFindMany.mockResolvedValue([
+      {
+        id: 'quiz-1',
+        classroom_id: CLASSROOM,
+        page_links: [],
+        slide_links: [],
+        attempts: [attempt('a-4', 'owner-1', 90)],
+      },
+    ]);
+
+    const [quiz] = await quizService.findByClassroom(CLASSROOM, {
+      role: 'OWNER',
+      classroom_id: CLASSROOM,
+    });
+
+    expect(quiz.attemptsCount).toBe(0);
+    expect(quiz.avgScore).toBeNull();
   });
 });
 

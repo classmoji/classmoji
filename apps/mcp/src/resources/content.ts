@@ -454,7 +454,9 @@ export const QUIZZES_DESCRIPTION =
   'AI-graded quizzes with their source material (linked pages and decks, in order). Staff ' +
   '(OWNER/TEACHER/ASSISTANT) see all quizzes incl. drafts and prompts; students see ' +
   'published quizzes (closed ones too, as CLOSED), published material and their own attempt ' +
-  'summary. For a student each quiz also has assignment_id (what extension_purchase takes), ' +
+  'summary. Staff also get attempts_count and avg_score, which count students on the roster ' +
+  'only; list_quiz_attempts gives the per-student results. For a student each quiz also has ' +
+  'assignment_id (what extension_purchase takes), ' +
   'effective_tokens_per_hour (price of one extension hour; 0 = none), extension_hours ' +
   'bought, effective_due_date (due date plus those hours) and my_attempts.lateHours (hours ' +
   'late of the attempt that counts; currentScore is its raw score). Requires a Pro ' +
@@ -542,6 +544,7 @@ export const quizzesResource: ResourceDefinition = {
         excluded_paths: q.excluded_paths ?? [],
         // Null = the classroom's default_tokens_per_hour.
         tokens_per_hour: q.assignment?.tokens_per_hour ?? null,
+        // Roster students' attempts only (quiz.findByClassroom).
         attempts_count: q.attemptsCount ?? 0,
         avg_score: q.avgScore ?? null,
       })),

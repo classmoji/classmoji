@@ -333,6 +333,40 @@ export const findById = async (attemptId: string) => {
   );
 };
 
+/**
+ * One attempt as a staff review of it reads it (the MCP get_quiz_attempt):
+ * its identity, runtime, timing, scores and stored results, the quiz's
+ * question count and the user's name and git accounts. No prompts, no
+ * settings, no messages: `findWithMessages` is the read for those. Null when
+ * the id names no attempt. `provider` picks which username `login` is (the
+ * classroom's); without it, Github first.
+ */
+export const findForReview = async (attemptId: string, provider?: string | null) => {
+  const attempt = await getPrisma().quizAttempt.findUnique({
+    where: { id: attemptId },
+    select: {
+      id: true,
+      quiz_id: true,
+      user_id: true,
+      attempt_number: true,
+      agent_runtime: true,
+      started_at: true,
+      completed_at: true,
+      last_activity: true,
+      total_duration_ms: true,
+      unfocused_duration_ms: true,
+      partial_credit_percentage: true,
+      first_attempt_percentage: true,
+      question_results_json: true,
+      evaluation_json: true,
+      agent_config: true,
+      quiz: { select: { question_count: true } },
+      user: { select: { id: true, name: true, ...GIT_IDENTITY } },
+    },
+  });
+  return attempt ? withLogins(attempt, provider) : null;
+};
+
 // Bridge function: saves messages to AIConversation (which ai-agent also uses)
 // This allows webapp to save initial messages before ai-agent SSE connects
 export const addMessage = async (
@@ -774,7 +808,8 @@ export const calculateAndApplyModalGap = async (attemptId: string) => {
   });
 };
 
-export const findByQuiz = async (quizId: string) => {
+/** `provider` picks which username each user's `login` is; without it, Github first. */
+export const findByQuiz = async (quizId: string, provider?: string | null) => {
   const attempts = await getPrisma().quizAttempt.findMany({
     where: { quiz_id: quizId },
     include: {
@@ -783,7 +818,7 @@ export const findByQuiz = async (quizId: string) => {
     orderBy: { started_at: 'desc' },
   });
 
-  return withLogins(attempts);
+  return withLogins(attempts, provider);
 };
 
 /**

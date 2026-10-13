@@ -763,6 +763,35 @@ export const finalizeQuestion = (
     }
   );
 
+/**
+ * The hints each recorded question was answered with, from the attempt's
+ * journal in one read: per question, the result that stands (the latest
+ * `result_finalized` / `result_revised` row, the one `question_results_json`
+ * holds), and in it the most `hints_before` any answer had. `hints_before`
+ * already counts every hint shown before that answer (Try again clicks that
+ * showed one floor it, `floorHintsAtTryAgain`), so the highest is the hints
+ * the question was graded with; a hint after the last answer is not counted,
+ * as grading does not count it. A question skipped (no answers) used 0. A
+ * question with no result row is absent, as is every question of an attempt
+ * with no journal (the legacy runtime).
+ */
+export const recordedHintsOf = async (attemptId: string): Promise<Map<number, number>> => {
+  const rows = await getPrisma().quizAttemptEvent.findMany({
+    where: { attempt_id: attemptId, type: { in: ['result_finalized', 'result_revised'] } },
+    orderBy: { seq: 'asc' },
+    select: { payload: true },
+  });
+  const hints = new Map<number, number>();
+  for (const { payload } of rows) {
+    if (!isObject(payload) || typeof payload.question_num !== 'number') continue;
+    const counts = (Array.isArray(payload.answers) ? payload.answers : []).flatMap(a =>
+      isObject(a) && typeof a.hints_before === 'number' ? [a.hints_before] : []
+    );
+    hints.set(payload.question_num, Math.max(0, ...counts));
+  }
+  return hints;
+};
+
 // ─── submit_quiz_evaluation / server completion ─────────────────────────────
 
 type CompletionInput =

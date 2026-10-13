@@ -16,6 +16,7 @@ import {
   QUIZ_REFUSAL_COPY,
   QUIZ_REFUSAL_COPY_BY_KIND,
   buttonActionFor,
+  replyMovesOn,
   replyShowsHint,
   type NextStepAction,
   type QuizEvaluationRecordV2,
@@ -703,28 +704,9 @@ const buttonActionOf = (message: QuizUIMessage) =>
 /** The buttons a hint ends with: Next alone, so the student answers or moves on. */
 export const HINT_ACTIONS: readonly NextStepAction[] = ['next'];
 
-/**
- * Whether a reply moves the quiz on: it brings buttons of its own (an
- * accepted offer), the card of a later question, a question result or the
- * evaluation. The current question's card shown again (`currentQuestion` is
- * the highest card number before this reply) does not count: it brings no
- * buttons, so the clicked set is decided as for any other reply (the server
- * refuses the card again in a Try again turn; a saved Try again reply that is
- * only that card shows no hint, and gives the set back). A refused call
- * counts for nothing: the server refuses offer_next_step in a Try again turn,
- * so a hint often carries a refused offer ahead of its text.
- */
+/** Whether a reply moves the quiz on (`replyMovesOn`), from what this viewer sees of it. */
 const movesOn = (message: QuizUIMessage, currentQuestion: number) =>
-  visibleParts(message).some(
-    part =>
-      !isFailedToolPart(part) &&
-      ((part.type === 'tool-offer_next_step' && part.state === 'output-available') ||
-        (part.type === 'tool-present_question' &&
-          part.state === 'output-available' &&
-          part.output.question_number > currentQuestion) ||
-        part.type === 'data-question-result' ||
-        isEvaluationPart(part))
-  );
+  replyMovesOn(visibleParts(message), currentQuestion);
 
 /**
  * Whether the reply to a Next click did not get through: it carries a notice

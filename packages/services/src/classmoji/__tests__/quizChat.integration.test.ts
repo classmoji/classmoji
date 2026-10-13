@@ -1860,6 +1860,10 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
       );
     expect(await messages()).toHaveLength(21);
     expect(await chat.messageLimitOf(attemptId)).toEqual({ messagesLeft: 179, endedBy: null });
+    // The batch read (the MCP results list) agrees, and skips an id naming nothing.
+    expect(await chat.messageLimitsOf([attemptId, randomUUID()])).toEqual(
+      new Map([[attemptId, { messagesLeft: 179, endedBy: null }]])
+    );
     // The journal as 199 admitted messages would leave it (the begin action
     // does not count), then the 200th through admission.
     const seeded = 199 - 21;
@@ -1911,6 +1915,10 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     });
     // What the drawer reads: none left, and submitted at the limit.
     expect(await chat.messageLimitOf(attemptId)).toEqual({
+      messagesLeft: 0,
+      endedBy: 'turn_limit',
+    });
+    expect((await chat.messageLimitsOf([attemptId])).get(attemptId)).toEqual({
       messagesLeft: 0,
       endedBy: 'turn_limit',
     });
@@ -2714,6 +2722,65 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     });
     const after = await prisma.aIConversation.findUniqueOrThrow({ where: { id: conv.id } });
     expect(after.context).toMatchObject({ keep: 1 });
+  });
+
+  // ─── a staff review of an attempt (MCP get_quiz_attempt) ──────────────────
+
+  it("gives a staff review the attempt's row, each message's time and the hints graded", async () => {
+    const attemptId = await newAttempt();
+    const turn = await begin(attemptId);
+    await grading.presentQuestion(call(turn), question(1));
+    // Two answers, the second after a hint: graded with 1.
+    const answer = await say(attemptId, 'answer 1');
+    await grading.finalizeQuestion(
+      call(answer),
+      result(1, [
+        { level: 'minimal', hints_before: 0 },
+        { level: 'correct', hints_before: 1 },
+      ])
+    );
+    const replyId = await replyWith(attemptId, [{ type: 'text', text: 'Noted.' }]);
+    const next = await say(attemptId, BUTTON_TEXT.next);
+    await completeQuestion(attemptId, next, 2, [{ level: 'correct', hints_before: 0 }]);
+
+    // One time per message, keyed by the id the transcript carries.
+    const times = await chat.messageTimesOf(attemptId);
+    const transcript = await chat.loadTranscriptForViewer(attemptId, 'staff');
+    expect(transcript.map(m => m.id)).toContain(replyId);
+    for (const message of transcript) expect(times.get(message.id)).toBeInstanceOf(Date);
+    expect([...times.keys()].sort()).toEqual(
+      (await chat.loadCanonicalMessages(attemptId)).map(m => m.id).sort()
+    );
+    expect((await chat.messageTimesOf(randomUUID())).size).toBe(0);
+
+    // Question 3 has no result yet: absent.
+    expect(await grading.recordedHintsOf(attemptId)).toEqual(
+      new Map([
+        [1, 1],
+        [2, 0],
+      ])
+    );
+    expect(
+      (await grading.recordedHintsOf(await newAttempt({ agent_runtime: 'ai_agent' }))).size
+    ).toBe(0);
+
+    const { findForReview } = await import('../quizAttempt.service.ts');
+    const row = await findForReview(attemptId);
+    expect(row).toMatchObject({
+      id: attemptId,
+      quiz_id: quizId,
+      user_id: studentId,
+      agent_runtime: 'trigger_chat',
+      completed_at: null,
+      quiz: { question_count: 3 },
+      user: { id: studentId, name: 'Quiz Chat student' },
+    });
+    expect((row!.question_results_json as unknown[]).length).toBe(2);
+    // Nothing else of the attempt or the user: no session, no contact.
+    expect(row).not.toHaveProperty('session_token');
+    expect(row).not.toHaveProperty('chat_grant');
+    expect(row!.user).not.toHaveProperty('email');
+    expect(await findForReview(randomUUID())).toBeNull();
   });
 
   // ─── a quiz in a module: its assignment decides ───────────────────────────
