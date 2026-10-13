@@ -62,6 +62,7 @@ const S1_TITLES = {
   foreignModule: 'MCP-S1 Foreign Module',
   foreignPage: 'MCP-S1 Foreign Page',
   foreignEvent: 'MCP-S1 Foreign Event',
+  devEvent: 'MCP-S1 Dev Event',
   devModule: 'MCP-S1 Dev Module',
 } as const;
 
@@ -73,7 +74,9 @@ beforeAll(async () => {
     where: { title: { in: [S1_TITLES.foreignModule, S1_TITLES.devModule] } },
   });
   await prisma.page.deleteMany({ where: { title: S1_TITLES.foreignPage } });
-  await prisma.calendarEvent.deleteMany({ where: { title: S1_TITLES.foreignEvent } });
+  await prisma.calendarEvent.deleteMany({
+    where: { title: { in: [S1_TITLES.foreignEvent, S1_TITLES.devEvent] } },
+  });
 
   server = await startServer();
 
@@ -345,8 +348,51 @@ describe('S1 cross-classroom rejection per write family', () => {
       }),
       'calendar_event_delete'
     );
+    expectScopedNotFound(
+      await callTool(ta, 'calendar_event_links_set', {
+        classroom: DEV_REF,
+        event_id: foreignEventId,
+        page_ids: [],
+      }),
+      'calendar_event_links_set (foreign event)'
+    );
     const after = await prisma.calendarEvent.findUnique({ where: { id: foreignEventId } });
     expect(after?.title).toBe(S1_TITLES.foreignEvent);
+  });
+
+  it('calendar_event_links_set: a dev event cannot link a foreign page', async () => {
+    const devEvent = await prisma.calendarEvent.create({
+      data: {
+        classroom_id: fx.dev.id,
+        created_by: fx.users['fake-teacher'].id,
+        event_type: 'LECTURE',
+        title: S1_TITLES.devEvent,
+        start_time: new Date('2026-07-21T14:00:00Z'),
+        end_time: new Date('2026-07-21T15:00:00Z'),
+      },
+    });
+    cleanup.add('dev calendar event', () =>
+      prisma.calendarEvent.deleteMany({ where: { id: devEvent.id } })
+    );
+
+    // The foreign page answers exactly like a page that does not exist.
+    const foreign = await callTool(teacher, 'calendar_event_links_set', {
+      classroom: DEV_REF,
+      event_id: devEvent.id,
+      page_ids: [foreignPageId],
+      featured: { kind: 'page', id: foreignPageId },
+    });
+    expectScopedNotFound(foreign, 'calendar_event_links_set (foreign page)');
+    const missing = await callTool(teacher, 'calendar_event_links_set', {
+      classroom: DEV_REF,
+      event_id: devEvent.id,
+      page_ids: [randomUUID()],
+    });
+    expectScopedNotFound(missing, 'calendar_event_links_set (nonexistent page)');
+    expect(foreign.payload.message).toBe(missing.payload.message);
+
+    expect(await prisma.calendarEventPageLink.count({ where: { event_id: devEvent.id } })).toBe(0);
+    expect(await prisma.calendarEventPageLink.count({ where: { page_id: foreignPageId } })).toBe(0);
   });
 
   it('page family: page_update / page_delete', async () => {

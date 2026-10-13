@@ -1,6 +1,6 @@
 /**
  * Calendar tools — calendar_event_create / calendar_event_update /
- * calendar_event_delete.
+ * calendar_event_delete / calendar_event_links_set.
  *
  * Mirrors apps/webapp/app/routes/admin.$class.calendar (and the assistant
  * variant): teaching-team (['OWNER','TEACHER','ASSISTANT']), with the same
@@ -17,8 +17,17 @@
  * series (plan §5.1). This tool REQUIRES edit_scope + occurrence_date for
  * recurring events and rejects them for non-recurring ones.
  *
+ * Linked content: calendar_event_links_set attaches pages, decks and
+ * assignments to ONE date of an event and picks its starred (`featured`) link —
+ * the web modal's link pickers. Links are stored per (event, occurrence date):
+ * a recurring event's occurrences each read their own dated bucket, a
+ * non-recurring event reads the undated one. So the tool needs the occurrence
+ * date for a recurring event, refuses one for a single event, and checks the
+ * date really is an occurrence before writing (see the tool's own comments).
+ *
  * S1: the target event is loaded and its classroom_id compared to the
  * authorized classroom before any mutation (same check the web action does).
+ * Every resource id being linked is checked against the same classroom.
  */
 
 import { ClassmojiService } from '@classmoji/services';
@@ -28,6 +37,9 @@ import {
   ASSISTANT_EVENT_TYPE_MESSAGE,
   assistantMayChangeEventType,
   assistantMayCreateEventType,
+  FEATURED_LINK_KINDS,
+  type FeaturedLinkKind,
+  type FeaturedLinkRef,
   isMeetingLinkUrl,
   MEETING_LINK_MESSAGE,
 } from '@classmoji/services/calendar-policy';
@@ -38,8 +50,12 @@ import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
 import {
   holdsRole,
   loadCalendarEventInClassroom,
+  loadCourseworkAssignmentInClassroom,
+  loadPageInClassroom,
+  loadSlideInClassroom,
   ok,
   requireClassroomCtx,
+  scopedNotFound,
   TEACHING_TEAM,
   writeAudit,
 } from './shared.ts';
@@ -401,5 +417,347 @@ export const calendarEventDeleteTool: ToolDefinition<CalendarEventDeleteArgs> = 
     });
 
     return ok({ success: true, event_id: event.id, ...(scoped ? { scope: scoped.scope } : {}) });
+  },
+};
+
+// ─── calendar_event_links_set ────────────────────────────────────────────────
+
+/** Ids per kind in one call. The web pickers have no cap; this keeps one call's
+ * validation work bounded. */
+const MAX_LINKS_PER_KIND = 50;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** The UTC calendar day of an instant: the key link rows are stored and read under. */
+const utcDay = (d: Date | string): string => new Date(d).toISOString().slice(0, 10);
+
+type LinkLists = Record<FeaturedLinkKind, string[]>;
+
+interface RawLink {
+  occurrence_date: Date | string | null;
+  featured: boolean;
+}
+
+/**
+ * The parts of one getClassroomCalendar row this tool reads. Declared
+ * structurally (as content.ts does for the calendar reads) because the service
+ * does not export its row type.
+ */
+interface OccurrenceRow {
+  id: string;
+  occurrence_date?: Date | string | null;
+  pages?: Array<{ page?: { id: string; title: string | null } | null }>;
+  slides?: Array<{ slide?: { id: string; title: string | null } | null }>;
+  assignments?: Array<{ assignment?: { id: string; title: string | null } | null }>;
+  _rawPageLinks?: Array<RawLink & { page_id: string }>;
+  _rawSlideLinks?: Array<RawLink & { slide_id: string }>;
+  _rawAssignmentLinks?: Array<RawLink & { assignment_id: string }>;
+}
+
+/**
+ * Whether the calendar expands this event into dated occurrences: flagged
+ * recurring AND a rule object carrying a `days` array. The service's own test
+ * (expandRecurringEvent / getRecurrenceRule, not exported), restated here. An
+ * event flagged recurring whose rule names no days — calendar_event_create
+ * accepts `{"until": "…"}` — is shown as ONE undated occurrence reading the
+ * undated bucket, exactly like a single event, so it is treated as one. The
+ * web decides the same thing from the expanded row (`isExpandedOccurrence`).
+ */
+function expandsIntoOccurrences(event: {
+  is_recurring: boolean;
+  recurrence_rule: unknown;
+}): boolean {
+  const rule = event.recurrence_rule;
+  return (
+    event.is_recurring &&
+    typeof rule === 'object' &&
+    rule !== null &&
+    !Array.isArray(rule) &&
+    Array.isArray((rule as { days?: unknown }).days)
+  );
+}
+
+/** Order-preserving dedupe; undefined stays undefined (= "keep this kind"). */
+const dedupeIds = (ids: string[] | undefined): string[] | undefined =>
+  ids === undefined ? undefined : [...new Set(ids)];
+
+const linkIdsSchema = (noun: string) =>
+  z
+    .array(z.string().uuid())
+    .max(MAX_LINKS_PER_KIND)
+    .optional()
+    .describe(
+      `${noun} ids for this date, in display order. Replaces this date's ${noun} links; ` +
+        'omit to keep them, [] to clear them.'
+    );
+
+interface CalendarEventLinksSetArgs {
+  classroom: string;
+  event_id: string;
+  occurrence_date?: string;
+  page_ids?: string[];
+  slide_ids?: string[];
+  assignment_ids?: string[];
+  featured?: { kind: FeaturedLinkKind; id: string } | null;
+}
+
+export const calendarEventLinksSetTool: ToolDefinition<CalendarEventLinksSetArgs> = {
+  name: 'calendar_event_links_set',
+  // Replaces one date's links, which the next call can put back: reversible,
+  // and repeating the same call leaves the same state.
+  annotations: { destructive: false, idempotent: true },
+  title: 'Set the pages, decks and assignments linked to a calendar event',
+  description:
+    'Sets the pages, slide decks and assignments linked to one date of a calendar event, and ' +
+    'which one is starred (`featured`, the link the month view shows under the event). Each of ' +
+    "page_ids / slide_ids / assignment_ids you pass replaces that date's links of that kind, in " +
+    'the order given; [] clears the kind; an omitted kind keeps its current links. featured: ' +
+    'omitted keeps the current star while its resource stays linked; null removes it; ' +
+    '{kind, id} stars a resource that must be in the resulting list of its kind. When ' +
+    'list_calendar gives the event an occurrence_date (a recurring event), occurrence_date is ' +
+    'required, pass it unchanged, and the links belong to that date only; otherwise omit it. ' +
+    'Each call reads then replaces the date, so make calls for the same date one at a time. ' +
+    'Ids come from list_pages, list_slides and list_modules. Assistants can only change events ' +
+    'they created.',
+  scope: 'write',
+  roles: TEACHING_TEAM,
+  inputSchema: {
+    classroom: z.string().describe("Classroom reference as 'org/slug'"),
+    event_id: z.string().uuid().describe('CalendarEvent id'),
+    occurrence_date: z
+      .string()
+      .datetime({ offset: true })
+      .optional()
+      .describe(
+        'Required when list_calendar gives the event an occurrence_date (a recurring event): that value, unchanged'
+      ),
+    page_ids: linkIdsSchema('Page'),
+    slide_ids: linkIdsSchema('Slide deck'),
+    assignment_ids: linkIdsSchema('Assignment'),
+    featured: z
+      .object({
+        kind: z.enum(FEATURED_LINK_KINDS),
+        id: z.string().uuid(),
+      })
+      .nullable()
+      .optional()
+      .describe('The starred link: omit to keep, null for none'),
+  },
+  handler: async (args, ctx) => {
+    const { classroomId } = requireClassroomCtx(ctx);
+    const event = await loadCalendarEventInClassroom(args.event_id, ctx);
+    await assertCanModifyEvent(ctx, event.created_by);
+
+    const requested: Record<FeaturedLinkKind, string[] | undefined> = {
+      page: dedupeIds(args.page_ids),
+      slide: dedupeIds(args.slide_ids),
+      assignment: dedupeIds(args.assignment_ids),
+    };
+    if (
+      requested.page === undefined &&
+      requested.slide === undefined &&
+      requested.assignment === undefined &&
+      args.featured === undefined
+    ) {
+      throw new ToolError(
+        'invalid_params',
+        'Provide at least one of page_ids, slide_ids, assignment_ids or featured'
+      );
+    }
+
+    // Which bucket the links live in. A recurring event's occurrences each read
+    // their own dated bucket and never the undated one, so a link write without
+    // a date would land where no occurrence looks. A single event (and a
+    // "recurring" one whose rule names no days, which shows as a single event)
+    // reads the undated bucket, which is where the web writes its links too.
+    const recurring = expandsIntoOccurrences(event);
+    if (recurring && !args.occurrence_date) {
+      throw new ToolError(
+        'invalid_params',
+        'This is a recurring event — provide occurrence_date (the occurrence whose links you ' +
+          'are setting, exactly as list_calendar returns it)'
+      );
+    }
+    if (!recurring && args.occurrence_date) {
+      throw new ToolError(
+        'invalid_params',
+        'This event has no dated occurrences (list_calendar shows its occurrence_date as null) ' +
+          '— omit occurrence_date'
+      );
+    }
+
+    // Find the occurrence through the same expansion the calendar reads use,
+    // matching its occurrence_date to the INSTANT. list_calendar's value comes
+    // from this same loop, so a copied value always matches (in any offset
+    // spelling). Matching by day would not be safe: Tuesday local midnight in
+    // Berlin is Monday 22:00Z and would land on Monday's links. Anything else
+    // — a wrong weekday, a cancelled or out-of-series date, a hand-built
+    // midnight — is refused rather than written to a bucket no occurrence
+    // shows, which would look like saving and behave like discarding. The
+    // ±2 day window comfortably holds the one row asked about.
+    const anchor = recurring ? new Date(args.occurrence_date as string) : event.start_time;
+    const rows = (await ClassmojiService.calendar.getClassroomCalendar(
+      classroomId,
+      new Date(anchor.getTime() - 2 * DAY_MS),
+      new Date(anchor.getTime() + 2 * DAY_MS),
+      null,
+      true, // raw link rows: which bucket each link sits in, and its star
+      true,
+      { canSeeDrafts: true }
+    )) as OccurrenceRow[];
+    const row = rows.find(
+      r =>
+        r.id === event.id &&
+        (!recurring ||
+          (r.occurrence_date != null && new Date(r.occurrence_date).getTime() === anchor.getTime()))
+    );
+    if (!row) {
+      throw new ToolError(
+        'invalid_params',
+        'That date is not an occurrence of this event — use the occurrence_date list_calendar ' +
+          'returns for that date, unchanged'
+      );
+    }
+    const occurrence = recurring && row.occurrence_date ? new Date(row.occurrence_date) : null;
+
+    // This date's current links, read from the raw rows of the bucket being
+    // written. The display arrays are not used for this: for a single event
+    // they also show dated links that fall on its day (a series flattened back
+    // to one event), which live in another bucket, and carrying them over
+    // would copy them into this one. Links to quizzes where the classroom shows
+    // none are absent here; the service keeps those itself.
+    const inBucket = (d: Date | string | null) =>
+      occurrence ? d != null && utcDay(d) === utcDay(occurrence) : d == null;
+    const rawPages = (row._rawPageLinks ?? []).filter(l => inBucket(l.occurrence_date));
+    const rawSlides = (row._rawSlideLinks ?? []).filter(l => inBucket(l.occurrence_date));
+    const rawAssignments = (row._rawAssignmentLinks ?? []).filter(l => inBucket(l.occurrence_date));
+    const current: LinkLists = {
+      page: rawPages.map(l => l.page_id),
+      slide: rawSlides.map(l => l.slide_id),
+      assignment: rawAssignments.map(l => l.assignment_id),
+    };
+    const currentStar: FeaturedLinkRef | null =
+      [
+        ...rawPages.filter(l => l.featured).map(l => ({ kind: 'page' as const, id: l.page_id })),
+        ...rawSlides.filter(l => l.featured).map(l => ({ kind: 'slide' as const, id: l.slide_id })),
+        ...rawAssignments
+          .filter(l => l.featured)
+          .map(l => ({ kind: 'assignment' as const, id: l.assignment_id })),
+      ][0] ?? null;
+
+    const final: LinkLists = {
+      page: requested.page ?? current.page,
+      slide: requested.slide ?? current.slide,
+      assignment: requested.assignment ?? current.assignment,
+    };
+
+    // The star. The service drops a star naming something not being linked
+    // without a word, which suits a stale form field; a caller here named it
+    // on purpose, so it is told instead. Omitted means "leave it": kept while
+    // the starred resource is still linked, gone with it otherwise.
+    let featured: FeaturedLinkRef | null;
+    if (args.featured === undefined) {
+      featured =
+        currentStar && final[currentStar.kind].includes(currentStar.id) ? currentStar : null;
+    } else if (args.featured === null) {
+      featured = null;
+    } else {
+      const { kind, id } = args.featured;
+      if (!final[kind].includes(id)) {
+        throw new ToolError(
+          'invalid_params',
+          `featured names a ${kind} that is not linked to this date after this call — include ` +
+            `it in ${kind}_ids`
+        );
+      }
+      featured = { kind, id };
+    }
+
+    // Titles for the response: the current ones from the display rows, new
+    // ones from their records.
+    const titles: Record<FeaturedLinkKind, Map<string, string | null>> = {
+      page: new Map((row.pages ?? []).flatMap(l => (l.page ? [[l.page.id, l.page.title]] : []))),
+      slide: new Map(
+        (row.slides ?? []).flatMap(l => (l.slide ? [[l.slide.id, l.slide.title]] : []))
+      ),
+      assignment: new Map(
+        (row.assignments ?? []).flatMap(l =>
+          l.assignment ? [[l.assignment.id, l.assignment.title]] : []
+        )
+      ),
+    };
+
+    // Every id NEW to this date must be in this classroom. The service would
+    // drop a foreign one silently; here it is the uniform not_found, the same
+    // for an id that names nothing, before anything is written. The assignment
+    // rule is the service's (classroom through the module, so quiz and form
+    // assignments count), and a quiz where quizzes are hidden is not_found, as
+    // on every other tool. Ids already linked here were checked when linked.
+    const added = (kind: FeaturedLinkKind) =>
+      (requested[kind] ?? []).filter(id => !current[kind].includes(id));
+    await Promise.all([
+      ...added('page').map(async id => {
+        const page = await loadPageInClassroom(id, ctx);
+        titles.page.set(id, page.title);
+      }),
+      ...added('slide').map(async id => {
+        const slide = await loadSlideInClassroom(id, ctx);
+        titles.slide.set(id, slide.title);
+      }),
+      ...added('assignment').map(async id => {
+        const assignment = await loadCourseworkAssignmentInClassroom(id, ctx);
+        titles.assignment.set(id, assignment.title);
+      }),
+    ]);
+
+    let saved: Awaited<ReturnType<typeof ClassmojiService.calendar.updateEventLinks>>;
+    try {
+      saved = await ClassmojiService.calendar.updateEventLinks(
+        event.id,
+        classroomId,
+        { pageIds: final.page, slideIds: final.slide, assignmentIds: final.assignment },
+        occurrence,
+        featured
+      );
+    } catch (error) {
+      // Deleted (or moved) since it was loaded above.
+      if (
+        error instanceof Error &&
+        error.message === 'Calendar event not found in this classroom'
+      ) {
+        throw scopedNotFound('Calendar event');
+      }
+      throw error;
+    }
+
+    const occurrenceIso = occurrence ? occurrence.toISOString() : null;
+    await writeAudit(ctx, {
+      resource_type: 'CALENDAR',
+      resource_id: event.id,
+      action: 'UPDATE',
+      data: {
+        tool: 'calendar_event_links_set',
+        occurrence_date: occurrenceIso,
+        // What the service saved, per kind.
+        linked: saved.linked,
+        featured: featured ? { kind: featured.kind, id: featured.id } : null,
+      },
+      // The dedup window keys on the event and the tool, not the date or the
+      // lists, and filling in a term's lectures is many calls on one event a
+      // second or two apart: deduped, only the first date would be on record.
+      dedupe: false,
+    });
+
+    const listed = (kind: FeaturedLinkKind) =>
+      final[kind].map(id => ({ id, title: titles[kind].get(id) ?? null }));
+    return ok({
+      success: true,
+      event_id: event.id,
+      occurrence_date: occurrenceIso,
+      pages: listed('page'),
+      slides: listed('slide'),
+      assignments: listed('assignment'),
+      featured,
+    });
   },
 };
