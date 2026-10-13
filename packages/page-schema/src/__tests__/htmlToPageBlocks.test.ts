@@ -795,3 +795,122 @@ describe('htmlToPageBlocks: media', () => {
     ]);
   });
 });
+
+describe('htmlToPageBlocks: review fixes', () => {
+  const b64 = (text: string) => Buffer.from(text, 'utf8').toString('base64');
+
+  it('an image the old editor put in a <p> keeps the old 512px width; <figure>/bare images do not get one', async () => {
+    const blocks = await htmlToPageBlocks(
+      '<p><img src="alone.png"></p>' +
+        '<ul><li><p><img src="in-list.png"></p></li></ul>' +
+        '<figure><img src="figure.png"></figure>' +
+        '<img src="bare.png">'
+    );
+    expect(blocks.map(b => [b.type, b.props?.url, b.props?.previewWidth])).toEqual([
+      ['image', 'alone.png', 512],
+      ['image', 'in-list.png', 512],
+      ['image', 'figure.png', undefined],
+      ['image', 'bare.png', undefined],
+    ]);
+  });
+
+  it('a linked label before code is content, not a code header', async () => {
+    const blocks = await htmlToPageBlocks(
+      '<p><a href="https://example.com/file.js">Download</a></p>' +
+        '<pre><code class="language-js">run()</code></pre>'
+    );
+    expect(blocks.map(b => [b.type, text(b)])).toEqual([
+      ['paragraph', 'Download'],
+      ['codeBlock', 'run()'],
+    ]);
+  });
+
+  it('a linked "terminal" in a sentence does not make the next code a terminal', async () => {
+    const blocks = await htmlToPageBlocks(
+      '<p>Open a <a href="https://example.com/t">terminal</a> window.</p>' +
+        '<pre><code class="language-python">print(1)</code></pre>'
+    );
+    expect(blocks.map(b => [b.type, b.props?.language, text(b)])).toEqual([
+      ['paragraph', undefined, 'Open a terminal window.'],
+      ['codeBlock', 'python', 'print(1)'],
+    ]);
+  });
+
+  it('a diff block with unreadable base64 data falls back to its <pre> text', async () => {
+    const escaped = (data: string) =>
+      `<p>&lt;div class="diff-block" data-content="${data}"&gt;&lt;pre&gt;- old +new&lt;/pre&gt;&lt;/div&gt;</p>`;
+    const [valid, invalid, notUtf8] = await Promise.all([
+      htmlToPageBlocks(escaped(b64('- a\n+ b'))),
+      htmlToPageBlocks(escaped('not*base64!')),
+      htmlToPageBlocks(escaped(Buffer.from([0xff, 0xfe, 0xfd]).toString('base64'))),
+    ]);
+    expect(valid.map(b => [b.type, text(b)])).toEqual([['codeBlock', '- a\n+ b']]);
+    for (const blocks of [invalid, notUtf8]) {
+      expect(blocks.map(b => [b.type, text(b)])).toEqual([['codeBlock', '- old +new']]);
+    }
+  });
+
+  it('a terminal named by its author keeps the name as its title, no stray paragraph', async () => {
+    const blocks = await htmlToPageBlocks(
+      '<div class="terminal-block"><div class="terminal-header"><div class="terminal-dots">' +
+        '<span></span><span></span><span></span></div>' +
+        '<span class="terminal-title">Start the server</span></div>' +
+        '<pre><code class="language-bash">npm start</code></pre></div>'
+    );
+    expect(blocks.map(b => [b.type, b.props?.title, b.props?.code])).toEqual([
+      ['terminal', 'Start the server', 'npm start'],
+    ]);
+  });
+
+  it('a terminal wrapped around an old code-block widget is one terminal', async () => {
+    const blocks = await htmlToPageBlocks(
+      '<div class="terminal-block"><div class="terminal-header"><span class="terminal-title">Terminal</span></div>' +
+        '<div class="code-block"><div class="code-header"><span class="code-lang">bash</span></div>' +
+        '<div class="code-body"><div class="line-numbers"><span class="line-number">1</span></div>' +
+        '<pre><code class="language-bash">ls</code></pre></div></div></div>'
+    );
+    expect(blocks.map(b => [b.type, b.props?.title, b.props?.code])).toEqual([
+      ['terminal', 'Terminal', 'ls'],
+    ]);
+  });
+
+  it('a Notion toggle’s base64 body (the markdown importer’s data-encoded) becomes its children', async () => {
+    const body = '<p>Hidden answer</p><pre><code class="language-python">x = 1</code></pre>';
+    const blocks = await htmlToPageBlocks(
+      `<details><summary>❓ Question</summary><div data-encoded="${b64(body)}"></div></details>`
+    );
+    const toggle = blocks.find(b => b.type === 'heading');
+    expect(toggle?.props).toMatchObject({ isToggleable: true });
+    expect(text(toggle)).toBe('❓ Question');
+    expect(toggle?.children?.map(b => [b.type, text(b)])).toEqual([
+      ['paragraph', 'Hidden answer'],
+      ['codeBlock', 'x = 1'],
+    ]);
+  });
+
+  it('an image inside a paragraph of text is kept, in reading order, formatting intact', async () => {
+    const blocks = await htmlToPageBlocks(
+      '<p>Intro with <img src="mid.png" alt="m"> <b>bold</b> image.</p>' +
+        '<p><img src="lead.png"> trailing text</p>'
+    );
+    expect(blocks.map(b => [b.type, b.props?.url ?? text(b)])).toEqual([
+      ['paragraph', 'Intro with '],
+      ['image', 'mid.png'],
+      ['paragraph', ' bold image.'],
+      ['image', 'lead.png'],
+      ['paragraph', ' trailing text'],
+    ]);
+    const bold = (
+      blocks[2].content as Array<{ text: string; styles: Record<string, unknown> }>
+    ).find(run => run.text === 'bold');
+    expect(bold?.styles).toEqual({ bold: true });
+  });
+
+  it('an image in a table cell is left to the parser (dropped from the cell)', async () => {
+    const blocks = await htmlToPageBlocks(
+      '<table><tr><td>cell <img src="t.png"> x</td></tr></table>'
+    );
+    expect(blocks.map(b => b.type)).toEqual(['table']);
+    expect(JSON.stringify(blocks)).not.toContain('t.png');
+  });
+});

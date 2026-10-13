@@ -15,16 +15,18 @@ import { getServerEditor, type PageServerEditor } from './serverEditor.ts';
  * Three passes:
  *
  * 1. A DOM pass over the whole document: drops the title `<h1>` and the
- *    subtitle (they live on the page row), gives terminal code without a
+ *    subtitle (they live on the page row), decodes the markdown importer's
+ *    base64 toggle bodies, gives terminal code without a
  *    language class `language-bash`, writes each heading's colour as a
  *    BlockNote colour name and each aligned image's alignment onto the
  *    element (BlockNote's parser reads `data-background-color` and
  *    `data-text-alignment`), and rewrites old `/<slug>/pages/<id>` links.
  * 2. Per fragment: the old editor's widgets (callout, alert, check list item,
- *    file tree, `<details>`, columns, page link) are lifted out into marker
- *    paragraphs, BlockNote's HTML parser reads the rest, `postProcessBlocks`
- *    maps the patterns the parser leaves behind (terminal headers, video
- *    embeds, images in list items), and each marker is replaced by the
+ *    file tree, `<details>`, columns, page link, terminal) are lifted out
+ *    into marker paragraphs, paragraphs are split around images inside their
+ *    text, BlockNote's HTML parser reads the rest, `postProcessBlocks` maps
+ *    the patterns the parser leaves behind (terminal headers, video embeds,
+ *    images in paragraphs and list items), and each marker is replaced by the
  *    widget's blocks. Widget bodies (`<details>`, columns) are fragments in
  *    their own right and go through this pass again.
  * 3. The editor's normalisation: canonical code languages, plain-text code,
@@ -97,6 +99,7 @@ const WIDGET_SELECTOR = [
   'details',
   '.columns',
   `.page-link-block[${PAGE_LINK_ATTR}]`,
+  '.terminal-block',
 ].join(', ');
 
 const ALERT_EMOJI: Record<string, string> = {
@@ -212,12 +215,6 @@ async function prepareDocument(
   if (!body) return '';
 
   const cssColors = cssHeadingColors(doc);
-  for (const el of body.querySelectorAll('style, script')) el.remove();
-  // Only this pass may mark a resolved page link.
-  for (const el of body.querySelectorAll(`[${PAGE_LINK_ATTR}]`)) {
-    el.removeAttribute(PAGE_LINK_ATTR);
-    el.removeAttribute(PAGE_LINK_TITLE_ATTR);
-  }
 
   // The title and subtitle live on the page row. A full document's first
   // <h1> was always dropped; with the title known, only when it IS the title.
@@ -231,6 +228,24 @@ async function prepareDocument(
     if (isTitle) firstH1.remove();
   }
   if (fullDocument) body.querySelector('p.subtitle')?.remove();
+
+  // The markdown importer's Notion toggles keep their body base64-encoded in
+  // `<details><summary>…</summary><div data-encoded="…"></div></details>`:
+  // the body is that HTML, and goes through this pass like the rest.
+  for (const holder of body.querySelectorAll('details [data-encoded]')) {
+    if (holder.closest(CODE_SELECTOR)) continue;
+    const decoded = decodeBase64Utf8(holder.getAttribute('data-encoded') ?? '');
+    if (decoded === null) continue;
+    const decodedBody = doc.createElement('div');
+    decodedBody.innerHTML = decoded;
+    holder.replaceWith(...decodedBody.childNodes);
+  }
+  for (const el of body.querySelectorAll('style, script')) el.remove();
+  // Only this pass may mark a resolved page link.
+  for (const el of body.querySelectorAll(`[${PAGE_LINK_ATTR}]`)) {
+    el.removeAttribute(PAGE_LINK_ATTR);
+    el.removeAttribute(PAGE_LINK_TITLE_ATTR);
+  }
 
   // Terminal code without a language class: bash, as the old editor's other
   // terminal blocks carry, so it becomes a terminal block below.
@@ -353,13 +368,15 @@ type Widget =
   | { kind: 'filetree'; text: string }
   | { kind: 'details'; summary: string; inner: string }
   | { kind: 'columns'; columns: string[] }
-  | { kind: 'pageLink'; pageId: string; pageTitle: string };
+  | { kind: 'pageLink'; pageId: string; pageTitle: string }
+  | { kind: 'terminal'; title: string; pre: string };
 
 /** Blocks for a body fragment (no title handling), widgets included. */
 async function convertFragment(html: string, ctx: Context): Promise<PageBlock[]> {
   if (!html.trim()) return [];
   const doc = ctx.parser.parseFromString(`<body>${html}</body>`, 'text/html');
   const widgets = liftWidgets(doc);
+  splitInlineImages(doc);
   const bodyHtml = placeholderMedia(doc.body.innerHTML.trim());
   if (!bodyHtml) return [];
 
@@ -425,6 +442,20 @@ function readWidget(el: Element): Widget | null {
     const cells = columns.length ? [...columns] : [...el.children];
     return { kind: 'columns', columns: cells.map(c => c.innerHTML) };
   }
+  if (el.matches('.terminal-block')) {
+    // The title the old editor showed in the header ("Terminal" unless the
+    // author named it); the code is the block's <pre>, wherever it sits (an
+    // imported terminal may hold a whole code-block widget).
+    const pre = el.querySelector('pre');
+    const language = [...(pre?.querySelector('code')?.classList ?? [])]
+      .find(c => c.startsWith('language-'))
+      ?.slice('language-'.length)
+      .toLowerCase();
+    const title =
+      squash(el.querySelector('.terminal-title')?.textContent) ||
+      (language === 'powershell' ? 'powershell' : 'Terminal');
+    return { kind: 'terminal', title, pre: pre?.outerHTML ?? '' };
+  }
   if (el.matches(`.page-link-block[${PAGE_LINK_ATTR}]`)) {
     return {
       kind: 'pageLink',
@@ -452,6 +483,48 @@ function widgetInner(el: Element, sep: string, skip: (child: Element) => boolean
   );
   if (looseText || clone.children.length === 0) return clone.innerHTML;
   return [...clone.children].map(c => c.innerHTML).join(sep);
+}
+
+/**
+ * An image inside a paragraph of text, which BlockNote's parser drops: the
+ * paragraph is split around it, text before, the image as `<p><img></p>`
+ * (an image of its own, `placeholderMedia`), text after, in reading order.
+ * Inline formatting on either side is kept (the split clones the open
+ * elements). Images in table cells are left to the parser, and so is a
+ * paragraph with no text (an image alone, or a linked image, parses as is).
+ */
+function splitInlineImages(doc: Document): void {
+  /** The next image to split out: its paragraph, and its src. */
+  const next = () => {
+    for (const img of doc.body.querySelectorAll('img')) {
+      const p = img.closest('p');
+      const src = img.getAttribute('src')?.trim();
+      if (!p || !src || img.closest(CODE_SELECTOR) || img.closest('td, th')) continue;
+      if ((p.textContent ?? '').trim()) return { img, p, src };
+    }
+    return null;
+  };
+  const hasContent = (el: Element) => !!(el.textContent ?? '').trim() || !!el.querySelector('img');
+
+  for (let found = next(); found; found = next()) {
+    const { img, p, src } = found;
+    const range = doc.createRange();
+    range.setStart(p, 0);
+    range.setEndBefore(img);
+    const before = p.cloneNode(false) as Element;
+    before.append(range.cloneContents());
+    range.setStartAfter(img);
+    range.setEnd(p, p.childNodes.length);
+    const after = p.cloneNode(false) as Element;
+    after.append(range.cloneContents());
+
+    const image = doc.createElement('p');
+    const bare = doc.createElement('img');
+    bare.setAttribute('src', src);
+    image.append(bare);
+
+    p.replaceWith(...[before, image, after].filter(el => el === image || hasContent(el)));
+  }
 }
 
 /**
@@ -618,6 +691,17 @@ async function buildWidget(widget: Widget | undefined, ctx: Context): Promise<Pa
     }
     case 'pageLink':
       return [{ type: 'pageLink', props: { pageId: widget.pageId, pageTitle: widget.pageTitle } }];
+    case 'terminal': {
+      // The code as BlockNote's parser reads the <pre> (what a code block
+      // before the terminal rule would hold).
+      const parsed = widget.pre
+        ? ((await ctx.editor.tryParseHTMLToBlocks(widget.pre)) as unknown as PageBlock[])
+        : [];
+      const code = parsed.find(b => b.type === 'codeBlock');
+      return [
+        { type: 'terminal', props: { title: widget.title, code: code ? blockText(code) : '' } },
+      ];
+    }
   }
 }
 
@@ -666,9 +750,9 @@ function postProcessBlocks(blocks: PageBlock[]): PageBlock[] {
       const next = blocks[i + 1];
       const afterNext = i + 2 < blocks.length ? blocks[i + 2] : null;
       const nextIsLabel =
-        next.type === 'paragraph' && CODE_HEADER_LABEL.test(blockText(next).trim());
+        next.type === 'paragraph' && CODE_HEADER_LABEL.test(plainText(next).trim());
       if (
-        CODE_HEADER_LABEL.test(blockText(block).trim()) &&
+        CODE_HEADER_LABEL.test(plainText(block).trim()) &&
         (isCode(next) || (nextIsLabel && afterNext && isCode(afterNext)))
       ) {
         continue;
@@ -701,11 +785,11 @@ function postProcessBlocks(blocks: PageBlock[]): PageBlock[] {
     if (block.type !== 'paragraph') {
       // A list item holding only an image placeholder is the image.
       if (isListItem(block.type)) {
-        const text = blockText(block);
+        const text = plainText(block);
         if (text.startsWith('IMAGE_EMBED:::')) {
           const url = text.slice('IMAGE_EMBED:::'.length).trim();
           if (url) {
-            result.push({ type: 'image', props: { url, caption: '' } });
+            result.push(placeholderImage(url));
             if (block.children?.length) result.push(...postProcessBlocks(block.children));
             continue;
           }
@@ -716,7 +800,9 @@ function postProcessBlocks(blocks: PageBlock[]): PageBlock[] {
       continue;
     }
 
-    const text = blockText(block);
+    // Plain text runs only, links left out (the old converter's rule): a
+    // linked label is content, never a code header or a terminal title.
+    const text = plainText(block);
 
     if (text.startsWith('VIDEO_EMBED:::')) {
       const url = text.slice('VIDEO_EMBED:::'.length).trim();
@@ -729,7 +815,7 @@ function postProcessBlocks(blocks: PageBlock[]): PageBlock[] {
     if (text.startsWith('IMAGE_EMBED:::')) {
       const url = text.slice('IMAGE_EMBED:::'.length).trim();
       if (url) {
-        result.push({ type: 'image', props: { url, caption: '' } });
+        result.push(placeholderImage(url));
         continue;
       }
     }
@@ -821,8 +907,9 @@ function escapedWidget(content: InlineItem[]): PageBlock | null {
     }
 
     if (html.includes('class="diff-block"')) {
+      // The base64 copy, else (none, unreadable, empty) the <pre> text.
       const data = html.match(/data-content="([^"]*)"/)?.[1];
-      let code = data ? Buffer.from(data, 'base64').toString('utf8') : '';
+      let code = data ? (decodeBase64Utf8(data) ?? '') : '';
       if (!code) code = html.match(/<pre>([\s\S]*?)<\/pre>/)?.[1] ?? '';
       return {
         type: 'codeBlock',
@@ -969,7 +1056,16 @@ function parseColor(value: string): { rgb: [number, number, number]; alpha: numb
  * Helpers
  * ------------------------------------------------------------------ */
 
-/** Text of a block's inline content, links included. */
+/**
+ * An image the old editor wrote inside a `<p>` (alone, in a list item, or
+ * mid-paragraph): shown at the old viewer's 512px, as the previous converter
+ * stored it. Images from `<figure>` / a bare `<img>` keep BlockNote's width.
+ */
+function placeholderImage(url: string): PageBlock {
+  return { type: 'image', props: { url, caption: '', previewWidth: 512 } };
+}
+
+/** Text of a block's inline content, links included (blank and marker checks). */
 function blockText(block: PageBlock): string {
   return Array.isArray(block.content) ? inlineText(block.content as InlineItem[]) : '';
 }
@@ -983,6 +1079,18 @@ function inlineText(items: InlineItem[]): string {
           ? inlineText(item.content)
           : ''
     )
+    .join('');
+}
+
+/**
+ * The block's own plain text runs, links left out: what the cleanup rules
+ * (code header labels, terminal titles, media placeholders) read.
+ */
+function plainText(block: PageBlock): string {
+  if (!Array.isArray(block.content)) return '';
+  return (block.content as InlineItem[])
+    .filter(item => item.type === 'text')
+    .map(item => item.text ?? '')
     .join('');
 }
 
@@ -1006,6 +1114,24 @@ function squash(text: string | null | undefined): string {
 /** `squash`ed and lower case: how two titles are compared. */
 function collapse(text: string | null | undefined): string {
   return squash(text).toLowerCase();
+}
+
+/**
+ * Strict base64 of UTF-8 text -> the text, or null when it is not: bad
+ * characters or length, or bytes that are not UTF-8 (what `atob` and
+ * `decodeURIComponent` refused in the old converter). `Buffer.from(…,
+ * 'base64')` alone never fails, it skips what it cannot read.
+ */
+function decodeBase64Utf8(data: string): string | null {
+  // `atob`'s forgiving-base64 rules: whitespace ignored, padding optional.
+  let clean = data.replace(/[\t\n\f\r ]+/g, '');
+  if (clean.length % 4 === 0) clean = clean.replace(/={1,2}$/, '');
+  if (clean.length % 4 === 1 || !/^[A-Za-z0-9+/]*$/.test(clean)) return null;
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(Buffer.from(clean, 'base64'));
+  } catch {
+    return null;
+  }
 }
 
 /** `&lt;` `&gt;` `&amp;` `&quot;` `&#39;`; other entities are left as they are. */

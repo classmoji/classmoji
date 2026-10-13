@@ -14,6 +14,7 @@
  */
 import type * as Y from 'yjs';
 import type { Role } from '@prisma/client';
+import getPrisma from '@classmoji/database';
 import { ClassmojiService, ContentService } from '@classmoji/services';
 import { canMutateClassroom } from '@classmoji/auth/predicates';
 import { canEditPages, findClassroomRole } from '@classmoji/auth/classroom-role';
@@ -136,6 +137,11 @@ export interface PageAdapterDeps {
   loadContent(page: PageRecord, options: { ref?: string }): Promise<LoadedContent>;
   /** A blob's text by sha, null when it does not exist. */
   readBlob(page: PageRecord, sha: string): Promise<string | null>;
+  /**
+   * Which of `ids` are pages of `classroomId`: ONE query, for the old page
+   * links in a legacy page. Throws when the database cannot answer.
+   */
+  pageIdsInClassroom(classroomId: string, ids: string[]): Promise<Set<string>>;
   /** Legacy index.html -> blocks. Default `htmlToPageBlocks`; swapped out in tests. */
   convertHtml?(html: string, options: HtmlToPageBlocksOptions): Promise<unknown[]>;
 }
@@ -159,6 +165,13 @@ export const defaultPageAdapterDeps: PageAdapterDeps = {
       sha,
     });
     return blob?.content ?? null;
+  },
+  async pageIdsInClassroom(classroomId, ids) {
+    const rows = await getPrisma().page.findMany({
+      where: { classroom_id: classroomId, id: { in: ids } },
+      select: { id: true },
+    });
+    return new Set(rows.map(row => row.id));
   },
 };
 
@@ -223,6 +236,8 @@ function asHttpError(err: unknown): never {
 type PageContentRaw = { blocks: PageBlock[]; cover: PageCoverImage | null };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Every uuid-shaped string in a page's HTML: the page ids its old links could name. */
+const UUID_ANYWHERE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 
 function withoutIds(blocks: unknown[]): PageBlock[] {
   return blocks.map(raw => {
@@ -257,13 +272,30 @@ export function createPageAdapter(
    * merge's base shares its blocks with the live doc seeded from that HTML.
    * The deck adapter names legacy slides the same way (`legacyIdGen`).
    *
-   * Throws `legacy-html` (422) when the converter itself fails.
+   * The pages a link may point at are read first, in ONE query scoped by the
+   * row's classroom_id. When that read fails the conversion fails too, as
+   * `unavailable` (503, transient: the caller retries): converting with the
+   * links left unresolved would give different blocks, and so different ids,
+   * than the next conversion of the same HTML. Throws `legacy-html` (422)
+   * when the converter itself fails.
    */
   async function convertLegacy(page: PageRecord, html: string, what: string): Promise<PageBlock[]> {
-    const resolvePageLink = async (linkSlug: string, pageId: string) => {
-      if (!UUID.test(pageId)) return null;
-      const target = await deps.findPage(pageId);
-      if (!target || target.classroom_id !== page.classroom_id) return null;
+    const linkedIds = [...new Set((html.match(UUID_ANYWHERE) ?? []).map(id => id.toLowerCase()))];
+    let pagesHere = new Set<string>();
+    if (linkedIds.length > 0) {
+      try {
+        pagesHere = await deps.pageIdsInClassroom(page.classroom_id, linkedIds);
+      } catch (err) {
+        console.error(`[collab] ${what}: the pages its links name could not be read:`, err);
+        throw new CollabHttpError(503, {
+          error: 'unavailable',
+          message: `${what} could not be converted for live editing right now; retry shortly`,
+        });
+      }
+    }
+    const resolvePageLink = (linkSlug: string, pageId: string) => {
+      const id = pageId.toLowerCase();
+      if (!UUID.test(id) || !pagesHere.has(id)) return null;
       return `/${page.classroom.slug ?? linkSlug}/${pageId}`;
     };
     try {
@@ -315,7 +347,9 @@ export function createPageAdapter(
         { format: 'html', blocks: text, coverImage: null, sha: null },
         `page ${page.id} base`
       );
-    } catch {
+    } catch (err) {
+      // A transient failure is the caller's to retry, not "no merge base".
+      if (err instanceof CollabHttpError && err.status === 503) throw err;
       return null;
     }
   }
@@ -509,6 +543,8 @@ export function createPageAdapter(
             baseRaw = empty;
           }
         } catch (err) {
+          // A transient failure (the link lookup) is retried, not read as no base.
+          if (err instanceof CollabHttpError && err.status === 503) throw err;
           console.warn(`[collab] page ${page.id}: base at ${before} unreadable:`, err);
         }
       }

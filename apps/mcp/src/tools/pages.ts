@@ -72,8 +72,9 @@ export const pageCreateTool: ToolDefinition<PageCreateArgs> = {
     'refresh. Edit its content with page_content_apply (start from page_content_outline); ' +
     'publish it with page_update (is_draft: false). The optional html param seeds the page: it ' +
     'is converted to blocks and committed as content.json (no index.html is written). It ' +
-    'uploads no files: point images at files uploaded with page_asset_upload or at external ' +
-    'URLs. Prefer a blank page and the block tools.',
+    'uploads no files: its images may use external URLs or media:// refs (media_list). For an ' +
+    'image file in the course repo, create the page, upload the file with page_asset_upload, ' +
+    'then add the image with page_content_apply. Prefer a blank page and the block tools.',
   scope: 'write',
   roles: OWNER_TEACHER,
   inputSchema: {

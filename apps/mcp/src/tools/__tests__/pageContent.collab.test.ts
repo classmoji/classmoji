@@ -151,6 +151,14 @@ const LIVE_BLOCKS = () => [
 
 const COVER = { url: 'pages/syllabus/assets/hero.png', position: 40 };
 
+/** Git's copy of a page that is still legacy HTML (index.html only). */
+const LEGACY_HTML = {
+  format: 'html',
+  blocks: '<h2>Old</h2><p>Body</p>',
+  coverImage: null,
+  sha: 'html-sha',
+};
+
 // ─── Stubbed collab internal API ─────────────────────────────────────────────
 
 interface CollabCall {
@@ -855,6 +863,76 @@ describe('preview mode with live editing', () => {
     });
     expect(mocks.savePageContent).not.toHaveBeenCalled();
   });
+
+  it('refuses a NEW preview of a page git still holds as legacy HTML, pointing at live', async () => {
+    mocks.pageFindById.mockResolvedValue(LIVE_PAGE);
+    mocks.loadPageContent.mockResolvedValue(LEGACY_HTML);
+    for (const ops of [[UPDATE_OP], [{ op: 'replace_all' as const, blocks: LIVE_BLOCKS() }]]) {
+      const error = await pageContentApplyTool
+        .handler(
+          { classroom: 'org/x', page_id: PAGE_ID, mode: 'preview', expected_sha: 'live:1.7', ops },
+          CTX
+        )
+        .catch((e: unknown) => e);
+      expect(error).toMatchObject({ kind: 'invalid_params', code: 'LIVE_ONLY' });
+      expect((error as Error).message).toMatch(/mode: 'live'/);
+    }
+    expect(mocks.ensurePreviewBranch).not.toHaveBeenCalled();
+    expect(mocks.savePageContent).not.toHaveBeenCalled();
+  });
+
+  it('without live editing, a legacy page still takes a replace_all preview', async () => {
+    mocks.pageFindById.mockResolvedValue(PLAIN_PAGE);
+    mocks.loadPageContent.mockResolvedValue(LEGACY_HTML);
+    const result = parse(
+      await pageContentApplyTool.handler(
+        {
+          classroom: 'org/x',
+          page_id: PAGE_ID,
+          mode: 'preview',
+          expected_sha: 'html-sha',
+          ops: [{ op: 'replace_all', blocks: LIVE_BLOCKS() }],
+        },
+        CTX
+      )
+    );
+    expect(result.committed_to).toBe('preview');
+  });
+});
+
+describe('legacy HTML read guidance', () => {
+  beforeEach(() => {
+    mocks.loadPageContent.mockResolvedValue(LEGACY_HTML);
+  });
+
+  it('live classroom, conversion failed: says editing is unavailable until fixed', async () => {
+    route('GET', 'snapshot', () => ({ status: 422, body: { error: 'legacy-html' } }));
+    for (const tool of [pageContentOutlineTool, pageContentGetTool]) {
+      const result = parse(await tool.handler({ classroom: 'org/x', page_id: PAGE_ID }, CTX));
+      expect(result.format).toBe('html');
+      expect(result.message).toMatch(/could not be converted for live editing/);
+      expect(result.message).not.toMatch(/mode: 'live'|replace_all/);
+    }
+  });
+
+  it('live classroom, service down: says live editing converts it when the service is back', async () => {
+    route('GET', 'snapshot', () => 'network-error');
+    const result = parse(
+      await pageContentOutlineTool.handler({ classroom: 'org/x', page_id: PAGE_ID }, CTX)
+    );
+    expect(result.live_unavailable).toBe(true);
+    expect(result.message).toMatch(/mode: 'live'/);
+    expect(result.message).not.toMatch(/could not be converted/);
+  });
+
+  it('no live editing: a replace_all writes content.json', async () => {
+    mocks.pageFindById.mockResolvedValue(PLAIN_DRAFT);
+    const result = parse(
+      await pageContentGetTool.handler({ classroom: 'org/x', page_id: PAGE_ID }, CTX)
+    );
+    expect(result.message).toMatch(/replace_all/);
+    expect(result.message).not.toMatch(/live/);
+  });
 });
 
 // ─── page_cover_set ──────────────────────────────────────────────────────────
@@ -1047,6 +1125,18 @@ describe('tool descriptions', () => {
     for (const tool of tools) {
       expect(new TextEncoder().encode(tool.description).length, tool.name).toBeLessThan(1500);
     }
+  });
+
+  it('page_create: under the limit, annotated, and no image advice that cannot work yet', async () => {
+    const { pageCreateTool } = await import('../pages.ts');
+    expect(new TextEncoder().encode(pageCreateTool.description).length).toBeLessThan(1500);
+    expect(pageCreateTool.annotations).toEqual({ destructive: false, openWorld: true });
+    // The page does not exist during page_create: repo files come after it.
+    expect(pageCreateTool.description).toMatch(/media:\/\//);
+    expect(pageCreateTool.description).toMatch(
+      /create the page, upload the file with page_asset_upload, then add the image with page_content_apply/
+    );
+    expect(pageCreateTool.description).not.toMatch(/point images at files uploaded/);
   });
 
   it('explain live vs preview and steer big edits to preview', () => {

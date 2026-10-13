@@ -361,8 +361,8 @@ describe('page_content_outline', () => {
     });
     expect(payload.message).toMatch(/legacy HTML/);
     expect(payload.message).toMatch(/replace_all/);
-    // Live editing converts a legacy page on open; there is no web-editor step.
-    expect(payload.message).toMatch(/mode: 'live'/);
+    // Not a live classroom: nothing about live editing, no web-editor step.
+    expect(payload.message).not.toMatch(/live/);
     expect(payload.message).not.toMatch(/web editor/);
   });
 

@@ -295,6 +295,43 @@ describe('old page links', () => {
       gone: `/oldslug/pages/${MISSING}`,
     });
   });
+
+  it('are looked up in ONE query, scoped by the page row’s own classroom', async () => {
+    await snapshotBlocks();
+    expect(server.world.pageIdQueries).toEqual([
+      { classroomId: CLASSROOM_ID, ids: expect.arrayContaining([SAME, OTHER, MISSING]) },
+    ]);
+    expect(server.world.pageIdQueries[0].ids).toHaveLength(3);
+  });
+
+  it('a page without uuid-shaped links asks nothing', async () => {
+    server.world.content.set(PAGE, { html: '<p>No links here</p>' });
+    await snapshotBlocks();
+    expect(server.world.pageIdQueries).toEqual([]);
+  });
+
+  it('a failed lookup fails the conversion as unavailable (retried), never links left unresolved', async () => {
+    server.world.fail.pageIds = true;
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await snapshot();
+    expect(res.status).toBe(503);
+    expect(res.body.error).toBe('unavailable');
+
+    const a = open();
+    await waitFor(() => a.authFailures.length > 0, 3000, 'refusal');
+    expect(a.authFailures[0]).toBe('unavailable');
+    expect(await server.store.get('page', PAGE)).toBeNull();
+    a.destroy();
+
+    // Back up: the same HTML converts to the blocks (and ids) a clean read gives.
+    server.world.fail.pageIds = false;
+    const blocks = await snapshotBlocks();
+    const link = blocks
+      .flatMap(b => b.content ?? [])
+      .find(c => c.type === 'link' && (c.content ?? []).some(x => x.text === 'same'));
+    expect(link?.href).toBe(`/cs52-26f/${SAME}`);
+    error.mockRestore();
+  });
 });
 
 describe('conversion failures and concurrency', () => {

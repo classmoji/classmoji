@@ -61,6 +61,11 @@ export async function convertPageHtml(html: string, { title }: { title?: string 
  * `committedPaths`, whose map row the create writes. Everything else is left
  * exactly as the HTML had it, which is what the legacy viewer resolved anyway:
  * external images, files committed elsewhere, other repos.
+ *
+ * A Gitlab import points at the slides app's content proxy by its absolute
+ * address (`${SLIDES_URL}/content/{org}/{repo}/…`); that origin is dropped
+ * before matching, so those are read as the relative proxy form
+ * `extractOwnRepoPath` knows.
  */
 export function storeCommittedAssetPaths<T>(
   blocks: T,
@@ -69,16 +74,22 @@ export function storeCommittedAssetPaths<T>(
     repo,
     committedPaths,
     storeRepoPaths,
+    slidesOrigin = process.env.SLIDES_URL ?? '',
   }: {
     login: string;
     repo: string;
     committedPaths: ReadonlySet<string>;
     storeRepoPaths: boolean;
+    /** The slides app's origin (default `SLIDES_URL`). */
+    slidesOrigin?: string;
   }
 ): T {
   if (!storeRepoPaths || committedPaths.size === 0) return blocks;
+  const origin = slidesOrigin.replace(/\/+$/, '');
+  const proxyPrefix = `${origin}/content/`;
   return mapBlockAssetRefs(blocks, ref => {
-    const path = extractOwnRepoPath(ref, login, repo);
+    const local = origin && ref.startsWith(proxyPrefix) ? ref.slice(origin.length) : ref;
+    const path = extractOwnRepoPath(local, login, repo);
     return path && committedPaths.has(path) ? path : ref;
   });
 }
