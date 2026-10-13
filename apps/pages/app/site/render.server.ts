@@ -6,6 +6,7 @@ import { JSDOM as UntypedJSDOM } from 'jsdom';
 
 import { normalizeCodeBlockContent } from '@classmoji/page-schema';
 
+import { prepareSiteCodeHighlighter, type SiteShikiSources } from './codeHighlight.server.ts';
 import { redactDocumentForViewer } from './redact.server.ts';
 import {
   createViewerSchema,
@@ -194,6 +195,11 @@ export type RenderSitePageOptions = {
    * instead of the card with its "Open in Classmoji to unlock" link.
    */
   lockedSectionSignInHref?: string | null;
+  /**
+   * The Shiki highlighters code and terminal blocks are coloured with
+   * (codeHighlight.server.ts). For tests; the site always uses the process's.
+   */
+  codeHighlighters?: SiteShikiSources;
 };
 
 /** BlockNote's own wrappers, in the order the client viewer nests them. */
@@ -220,6 +226,7 @@ export async function renderSitePage({
   downloads,
   lockedSectionHref,
   lockedSectionSignInHref,
+  codeHighlighters,
 }: RenderSitePageOptions): Promise<RenderedPage> {
   // Redact BEFORE serializing: BlockNote writes block props onto the wrapper
   // as data-* attributes, so a hidden page's title would ship in the HTML even
@@ -228,6 +235,13 @@ export async function renderSitePage({
   // inside one (see normalizeCodeBlockContent).
   const redacted = redactDocumentForViewer(normalizeCodeBlockContent(blocks), resolveLink);
   const document = redacted.length > 0 ? redacted : EMPTY_DOCUMENT;
+
+  // Syntax colouring, from the redacted document (nothing removed above is
+  // ever highlighted). Grammars load here, outside the lock. No highlighter
+  // means plain code, never a failed page.
+  const codeHighlighter = await prepareSiteCodeHighlighter(document, codeHighlighters).catch(
+    () => null
+  );
 
   let html: string;
   try {
@@ -240,6 +254,7 @@ export async function renderSitePage({
           ...(downloads ? { downloads } : {}),
           ...(lockedSectionHref ? { lockedSectionHref } : {}),
           ...(lockedSectionSignInHref ? { lockedSectionSignInHref } : {}),
+          codeHighlighter,
         }),
       });
 
@@ -271,7 +286,8 @@ export async function renderSitePage({
   }
 
   const { html: withAnchors, headings } = addHeadingAnchors(html);
-  return { html: withAnchors, headings };
+  // The coloured code goes in last, into the slots its blocks rendered.
+  return { html: codeHighlighter ? codeHighlighter.fill(withAnchors) : withAnchors, headings };
 }
 
 /* ------------------------------------------------------------------ *

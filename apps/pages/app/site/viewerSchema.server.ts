@@ -26,6 +26,8 @@ import {
   NAV_GRID_SCHEDULE_PATH,
 } from '~/components/editor/blocks/navGridShared.ts';
 
+import type { SiteCodeHighlighter } from './codeHighlight.server.ts';
+
 /**
  * The BlockNote schema class websites render with.
  *
@@ -223,29 +225,46 @@ function copyButton(props: RenderProps) {
   });
 }
 
-function StaticTerminal(props: RenderProps) {
-  const code = String(props.block.props.code || '');
-  const title = String(props.block.props.title || '');
-  return h('div', { className: 'terminal-block' }, [
-    h('div', { key: 'h', className: 'terminal-header' }, [
-      h('div', { key: 'd', className: 'terminal-dots' }, [
-        h('span', { key: 'r', className: 'dot dot-red' }),
-        h('span', { key: 'y', className: 'dot dot-yellow' }),
-        h('span', { key: 'g', className: 'dot dot-green' }),
+function makeStaticTerminal(highlighter: SiteCodeHighlighter | null) {
+  return function StaticTerminal(props: RenderProps) {
+    const code = String(props.block.props.code || '');
+    const title = String(props.block.props.title || '');
+    // Coloured as the app colours it (TerminalBlock.tsx): Shiki's <pre> in a
+    // box with the same inline styles, filled into the slot after the render
+    // (codeHighlight.server.ts). Plain <pre><code> when there is nothing to
+    // colour or the highlighter could not.
+    const slot = highlighter?.terminal(code) ?? null;
+    return h('div', { className: 'terminal-block' }, [
+      h('div', { key: 'h', className: 'terminal-header' }, [
+        h('div', { key: 'd', className: 'terminal-dots' }, [
+          h('span', { key: 'r', className: 'dot dot-red' }),
+          h('span', { key: 'y', className: 'dot dot-yellow' }),
+          h('span', { key: 'g', className: 'dot dot-green' }),
+        ]),
+        h('span', { key: 't', className: 'terminal-title' }, title || 'Terminal'),
+        copyButton(props),
       ]),
-      h('span', { key: 't', className: 'terminal-title' }, title || 'Terminal'),
-      copyButton(props),
-    ]),
-    // No Shiki on the server in v1: the highlighter is an async browser-side
-    // effect, and pre-rendering it would mean shipping a theme stylesheet for
-    // a purely decorative win. Plain <pre><code> reads correctly either way.
-    h(
-      'div',
-      { key: 'c', className: 'terminal-content' },
-      h('pre', null, h('code', { className: 'language-bash' }, code))
-    ),
-  ]);
+      h(
+        'div',
+        { key: 'c', className: 'terminal-content' },
+        slot
+          ? h('div', { style: TERMINAL_CODE_STYLE }, slot)
+          : h('pre', null, h('code', { className: 'language-bash' }, code))
+      ),
+    ]);
+  };
 }
+
+/** The inline styles TerminalBlock.tsx puts on the box holding Shiki's <pre>. */
+const TERMINAL_CODE_STYLE: React.CSSProperties = {
+  margin: 0,
+  background: 'transparent',
+  fontFamily: 'inherit',
+  fontSize: 'inherit',
+  lineHeight: 'inherit',
+  padding: 0,
+  overflow: 'auto',
+};
 
 /**
  * Responsive candidates for one already-rewritten reference.
@@ -716,24 +735,41 @@ function makeStaticNavGrid(resolve: PageLinkResolver, showSchedule: boolean) {
   };
 }
 
-function StaticCodeBlock(props: RenderProps) {
-  // BlockNote's own code block renders a language `<select>` above the code —
-  // an editor control that is inert (and confusing) on a static page. The
-  // language name goes in its place as plain text, in the same `div` slot, so
-  // the title bar in blocknote-overrides.css styles both alike. It stays
-  // outside `contentRef`, which is the block's content.
-  const language = String(props.block.props.language || '');
-  return h(React.Fragment, null, [
-    h('div', { key: 'l' }, [
-      h('span', { key: 'n', className: 'bn-code-language' }, codeBlockLanguageName(language)),
-      copyButton(props),
-    ]),
-    h(
-      'pre',
-      { key: 'c', 'data-language': language || undefined },
-      h('code', { className: 'bn-inline-content', ref: props.contentRef })
-    ),
-  ]);
+/** A code block's text: its plain runs (normalizeCodeBlockContent), or a string. */
+function codeText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content.map(run => (typeof run?.text === 'string' ? run.text : '')).join('');
+}
+
+function makeStaticCodeBlock(highlighter: SiteCodeHighlighter | null) {
+  return function StaticCodeBlock(props: RenderProps) {
+    // BlockNote's own code block renders a language `<select>` above the code —
+    // an editor control that is inert (and confusing) on a static page. The
+    // language name goes in its place as plain text, in the same `div` slot, so
+    // the title bar in blocknote-overrides.css styles both alike. It stays
+    // outside `contentRef`, which is the block's content.
+    const language = String(props.block.props.language || '');
+    // Coloured, the code is the app's token spans, filled into a slot in place
+    // of the block's content after the render (codeHighlight.server.ts; no
+    // `contentRef`, so BlockNote adds no second copy). Otherwise it is the
+    // block's content, plain.
+    const slot =
+      highlighter?.codeBlock(codeText(props.block.content), props.block.props.language) ?? null;
+    return h(React.Fragment, null, [
+      h('div', { key: 'l' }, [
+        h('span', { key: 'n', className: 'bn-code-language' }, codeBlockLanguageName(language)),
+        copyButton(props),
+      ]),
+      h(
+        'pre',
+        { key: 'c', 'data-language': language || undefined },
+        slot
+          ? h('code', { className: 'bn-inline-content' }, slot)
+          : h('code', { className: 'bn-inline-content', ref: props.contentRef })
+      ),
+    ]);
+  };
 }
 
 function StaticToggleListItem(props: RenderProps) {
@@ -824,9 +860,12 @@ export function createViewerSchema(
     lockedSectionHref?: string | null;
     /** A signed-out visitor's sign-in link: locked sections become sign-in rows. */
     lockedSectionSignInHref?: string | null;
+    /** Colours code and terminal blocks (codeHighlight.server.ts); none → plain. */
+    codeHighlighter?: SiteCodeHighlighter | null;
   } = {}
 ) {
   const showSchedule = options.showSchedule === true;
+  const codeHighlighter = options.codeHighlighter ?? null;
   const srcSets = options.srcSets ?? {};
   const downloads = options.downloads ?? {};
   const hasDownloads = Object.keys(downloads).length > 0;
@@ -835,7 +874,7 @@ export function createViewerSchema(
     ...editorSchema.blockSpecs,
     image: staticSpec('image', makeStaticImage(srcSets)),
     callout: staticSpec('callout', StaticCallout),
-    terminal: staticSpec('terminal', StaticTerminal),
+    terminal: staticSpec('terminal', makeStaticTerminal(codeHighlighter)),
     profile: staticSpec('profile', makeStaticProfile(srcSets)),
     divider: staticSpec('divider', StaticDivider),
     embed: staticSpec('embed', StaticEmbed),
@@ -848,7 +887,7 @@ export function createViewerSchema(
       : {}),
     pageLink: staticSpec('pageLink', makeStaticPageLink(resolveLink)),
     navGrid: staticSpec('navGrid', makeStaticNavGrid(resolveLink, showSchedule)),
-    codeBlock: staticSpec('codeBlock', StaticCodeBlock),
+    codeBlock: staticSpec('codeBlock', makeStaticCodeBlock(codeHighlighter)),
     toggleListItem: staticSpec('toggleListItem', StaticToggleListItem),
     lockedSection: staticSpec(
       'lockedSection',
