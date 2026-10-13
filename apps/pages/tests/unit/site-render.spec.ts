@@ -951,6 +951,94 @@ test.describe('editor parity', () => {
     expect(blockRules(SITE_STYLES), 'SITE_STYLES block styling').toEqual([]);
   });
 
+  test('inline code is a chip in table cells on every surface, never inside <pre>', async () => {
+    // The chip rule was `.bn-inline-content code`. The editor and the in-app
+    // viewer render a table cell as a bare `<p>` (only the site's serialized
+    // `<table>` carries `.bn-inline-content`), so `code` in a cell was plain
+    // text for authors and students and a chip on the class site.
+
+    /** A selector list split on top-level commas (not the ones inside `:not(…)`). */
+    const splitList = (list: string): string[] => {
+      const out: string[] = [];
+      let depth = 0;
+      let start = 0;
+      for (let i = 0; i < list.length; i++) {
+        if (list[i] === '(') depth++;
+        else if (list[i] === ')') depth--;
+        else if (list[i] === ',' && depth === 0) {
+          out.push(list.slice(start, i).trim());
+          start = i + 1;
+        }
+      }
+      out.push(list.slice(start).trim());
+      return out;
+    };
+    /** Selectors of every rule that paints a background on a `code` element. */
+    const chipSelectors = rules(overridesCss())
+      .filter(([, body]) => /background-color:/.test(body))
+      .flatMap(([selector]) => splitList(selector))
+      .filter(selector => /(?:^|[\s>~+(])code(?=$|[\s:.[)])/.test(selector));
+    const light = chipSelectors.filter(selector => !selector.startsWith('.dark '));
+    const dark = chipSelectors.filter(selector => selector.startsWith('.dark '));
+    expect(light, 'light inline-code rule').not.toHaveLength(0);
+    expect(dark, 'dark inline-code rule').not.toHaveLength(0);
+
+    const codeText = (value: string) => [{ type: 'text', text: value, styles: { code: true } }];
+    const site = await renderSitePage({
+      blocks: [
+        {
+          type: 'table',
+          content: { type: 'tableContent', rows: [{ cells: [codeText('PERMISSION_DENIED')] }] },
+        },
+        { type: 'paragraph', content: codeText('npm run dev') },
+        SAMPLES.codeBlock,
+        SAMPLES.terminal,
+      ],
+      resolveLink,
+    });
+    // The live editor's and BlockNoteViewer's DOM, as Chrome reports it. The
+    // server editor's blocksToFullHTML puts the class on <table> like the site
+    // does, so it cannot stand in for this.
+    const live = `
+      <div class="bn-block-content" data-content-type="table"><div class="tableWrapper">
+        <div class="tableWrapper-inner"><table><tbody><tr><td><p><code id="live-cell">PERMISSION_DENIED</code></p></td></tr></tbody></table></div>
+      </div></div>
+      <div class="bn-block-content" data-content-type="paragraph"><p class="bn-inline-content"><code id="live-para">x</code></p></div>
+      <div class="bn-block-content" data-content-type="codeBlock"><pre><code class="bn-inline-content" id="live-codeblock">const a = 1;</code></pre></div>
+      <div class="bn-block-content" data-content-type="terminal"><div class="terminal-block"><pre><code class="language-bash" id="live-terminal">npm run dev</code></pre></div></div>`;
+
+    for (const [theme, wrap, selectors] of [
+      ['light', (html: string) => html, light],
+      ['dark', (html: string) => `<div class="dark">${html}</div>`, dark],
+    ] as const) {
+      const doc = parse(wrap(`<div id="site">${site.html}</div><div id="live">${live}</div>`));
+      const isChip = (el: Element) => selectors.some(selector => el.matches(selector));
+      const isAnyChip = (el: Element) => chipSelectors.some(selector => el.matches(selector));
+
+      const siteCell = doc.querySelector('#site [data-content-type="table"] td code');
+      const sitePara = doc.querySelector('#site [data-content-type="paragraph"] code');
+      for (const [name, el] of [
+        ['editor/viewer table cell', doc.getElementById('live-cell')],
+        ['editor/viewer paragraph', doc.getElementById('live-para')],
+        ['site table cell', siteCell],
+        ['site paragraph', sitePara],
+      ] as const) {
+        expect(el, `${name} fixture`).not.toBeNull();
+        expect(isChip(el!), `${theme}: ${name} inline code is a chip`).toBe(true);
+      }
+
+      const pres = [
+        doc.getElementById('live-codeblock'),
+        doc.getElementById('live-terminal'),
+        ...doc.querySelectorAll('#site pre code'),
+      ];
+      expect(pres.filter(Boolean)).toHaveLength(4);
+      for (const el of pres) {
+        expect(isAnyChip(el!), `${theme}: <pre><code> is not a chip`).toBe(false);
+      }
+    }
+  });
+
   test("a heading changing level animates from the shared scale's size", () => {
     // BlockNote holds the old size for one tick through `--prev-level`, from
     // its own 3em/2em/1.3em ladder. Without these an H1 turned into an H2 grows

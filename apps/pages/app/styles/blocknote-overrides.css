@@ -67,20 +67,28 @@
   color: #93c5fd !important;
 }
 
-/* Inline code styling - Notion-style (inline only, not code blocks) */
+/* Inline code styling - Notion-style (inline only, not code blocks).
+   Scoped to `.bn-block-content`, not `.bn-inline-content`: the editor and the
+   in-app viewer render a table cell as a bare `<p>` (only the site's serialized
+   `<table>` carries the class), so `code` in a cell was plain text there and a
+   chip on the site. `:not(pre code)` keeps code blocks (whose `<code>` is the
+   `.bn-inline-content`) and terminals (a bare `<pre><code>`) out. */
 .bn-inline-content[data-code="true"],
-.bn-inline-content code {
+.bn-block-content code:not(pre code) {
   background-color: #f1f1ef !important;
   color: #eb5757 !important;
   padding: 0.2em 0.4em;
   border-radius: 3px;
   font-size: 0.9em;
   font-family: var(--font-mono) !important;
+  /* A chip that wraps keeps its padding and rounded ends on every line. */
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 
 /* Dark mode inline code */
 .dark .bn-inline-content[data-code="true"],
-.dark .bn-inline-content code {
+.dark .bn-block-content code:not(pre code) {
   background-color: rgba(255, 255, 255, 0.1) !important;
   color: #ff6b6b !important;
 }
