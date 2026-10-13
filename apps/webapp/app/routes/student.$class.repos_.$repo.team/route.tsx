@@ -1,6 +1,6 @@
 import { Button, Card, Input, List, Avatar, Tag, Empty } from 'antd';
 import { IconUsers, IconUserPlus, IconLogout, IconPlus } from '@tabler/icons-react';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useContext } from 'react';
 import { useFetcher, Link } from 'react-router';
 import { namedAction } from 'remix-utils/named-action';
 import type { Route } from './+types/route';
@@ -10,6 +10,9 @@ import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/h
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import { gitUsername, scopeGitlabId, teamsNamespace, titleToIdentifier } from '@classmoji/utils';
 import { tasks } from '@trigger.dev/sdk/v3';
+import { auth } from '@trigger.dev/sdk';
+import { nanoid } from 'nanoid';
+import { FetcherContext } from '~/contexts';
 import { useClassroomStatusModals } from '~/utils/classroomStatusModals';
 import { gitTerms } from '~/utils/gitWeb';
 
@@ -228,18 +231,27 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       // Trigger repository creation workflow. Keyed by classroom like every
       // other caller: without a key, team creations from every classroom
       // share one run at a time.
+      const sessionId = nanoid();
       await tasks.trigger(
         'create_git_repos',
         {
           logins: [teamSlug],
           assignmentTitle: repository.title,
           org: classSlug,
-          sessionId: Date.now().toString(),
+          sessionId,
         },
         { concurrencyKey: classSlug }
       );
+      // Read-only and scoped to this one batch's tag, so the progress panel can
+      // show the repository being created and nothing else.
+      const accessToken = await auth.createPublicToken({
+        scopes: { read: { tags: [`session_${sessionId}`] } },
+      });
 
-      return { success: `Team "${teamName}" created! ${terms.Repo} is being set up.` };
+      return {
+        success: `Team "${teamName}" created.`,
+        triggerSession: { id: sessionId, accessToken },
+      };
     },
 
     async join() {
@@ -326,6 +338,7 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
   const [showCreateForm, setShowCreateForm] = useState(false);
   const callout = useCallout();
   const { showStatusErrorFromResponse } = useClassroomStatusModals();
+  const { startOperation } = useContext(FetcherContext);
 
   const isSubmitting = fetcher.state !== 'idle';
 
@@ -334,7 +347,16 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
     showStatusErrorFromResponse(fetcher.data as { error?: string } | undefined);
     if (fetcher.data?.success) {
       callout.show({ variant: 'success', title: fetcher.data.success, autoDismissMs: 3000 });
+      // Closed only once the team exists: closing on submit took the
+      // spinning Create button away while the provider team was created.
+      setTeamName('');
+      setShowCreateForm(false);
     }
+    // The repository is created in the background; the progress panel shows it
+    // being made, then that it is there.
+    const session = (fetcher.data as { triggerSession?: { id: string; accessToken: string } })
+      ?.triggerSession;
+    if (session) startOperation({ session, kind: 'TEAM_REPO' });
     if (fetcher.data?.error) {
       callout.show({ variant: 'error', title: fetcher.data.error, autoDismissMs: 3000 });
     }
@@ -346,8 +368,6 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
       return;
     }
     fetcher.submit({ teamName }, { method: 'post', action: '?/create' });
-    setTeamName('');
-    setShowCreateForm(false);
   };
 
   const handleJoinTeam = (teamId: string) => {
@@ -462,7 +482,9 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
                 <Button type="primary" onClick={handleCreateTeam} loading={isSubmitting}>
                   Create
                 </Button>
-                <Button onClick={() => setShowCreateForm(false)}>Cancel</Button>
+                <Button onClick={() => setShowCreateForm(false)} disabled={isSubmitting}>
+                  Cancel
+                </Button>
               </div>
             ) : (
               <Button

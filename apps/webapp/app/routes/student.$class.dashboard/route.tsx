@@ -3,7 +3,6 @@ import { gitContextFor, gitWeb } from '~/utils/gitWeb';
 import { Await, useParams } from 'react-router';
 import { Skeleton } from 'antd';
 import dayjs from 'dayjs';
-import getPrisma from '@classmoji/database';
 import {
   ClassmojiService,
   type CourseworkAssignment,
@@ -71,7 +70,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     // answers false.
     const quizzesVisiblePromise = loadQuizzesVisible(classroom.id);
     const courseworkContext = { classroomId: classroom.id, userId };
-    const [weekEventsRaw, repositories, regradeRequests, repoAssignmentsRead, assignmentListing] =
+    const [weekEventsRaw, selfFormed, regradeRequests, repoAssignmentsRead, assignmentListing] =
       await Promise.all([
         ClassmojiService.calendar
           .getClassroomCalendar(
@@ -81,13 +80,9 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
             userId
           )
           .catch(() => [] as unknown[]),
-        // The published repositories, for the team card: a self-formed group
-        // repository is where a student forms their team.
-        getPrisma().repository.findMany({
-          where: { classroom_id: classroom.id, is_published: true },
-          select: { id: true, slug: true, title: true, type: true, team_formation_mode: true },
-          orderBy: { created_at: 'asc' },
-        }),
+        // The published self-formed group repositories and the student's team
+        // for each, for the team card.
+        ClassmojiService.team.findSelfFormedForStudent(classroom.id, userId),
         ClassmojiService.regradeRequest.findMany({
           student_id: userId,
           classroom_id: classroom.id,
@@ -198,47 +193,31 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       })
       .slice(0, 8);
 
-    // Team: first SELF_FORMED repository where student is on a team, otherwise prompt
-    let team: TeamSummary | null = null;
-    let needsTeam: SelfFormedNeedsTeam | null = null;
-    // Both halves of the gate, matching the team route, which 400s on a repo
-    // that is SELF_FORMED but not GROUP.
-    const selfFormedModules = repositories.filter(
-      m => m.type === 'GROUP' && m.team_formation_mode === 'SELF_FORMED'
-    );
-    for (const m of selfFormedModules) {
-      if (!m.slug) continue;
-      // The tag is created lazily by the first team someone forms, so a
-      // published self-formed repo with no teams yet has no tag: that student
-      // still needs a team, and used to be told there were no group repos.
-      const tag = await ClassmojiService.organizationTag.findByClassroomIdAndName(
-        classroom.id,
-        m.slug
-      );
-      const userTeam = tag
-        ? await ClassmojiService.team.findUserTeamByTag(classroom.id, tag.id, userId)
-        : null;
-      if (userTeam) {
-        const teamRepoName = allRepoAssignments.find(ra => ra.git_repo?.repository_id === m.id)
-          ?.git_repo?.name;
-        team = {
-          moduleTitle: m.title,
-          moduleSlug: m.slug,
-          teamName: userTeam.name,
-          members: (userTeam.memberships ?? []).map(mb => ({
+    // Team card: the newest self-formed repository the student still has to
+    // form a team for wins, since that is the one thing they must act on;
+    // otherwise their newest team. Every published self-formed repository
+    // counts, with or without a module or assignment.
+    const withTeam = selfFormed.filter(s => s.team);
+    const latestTeam = withTeam[withTeam.length - 1];
+    const team: TeamSummary | null = latestTeam?.team
+      ? {
+          moduleTitle: latestTeam.repository.title,
+          moduleSlug: latestTeam.repository.slug,
+          teamName: latestTeam.team.name,
+          members: latestTeam.team.memberships.map(mb => ({
             id: mb.user.id,
             name: mb.user.name,
             login: mb.user.login,
             image: mb.user.image ?? null,
           })),
-          repoUrl: gitOrgLogin && teamRepoName ? web.repo(teamRepoName) : null,
-        };
-        break;
-      }
-      if (!needsTeam) {
-        needsTeam = { moduleTitle: m.title, moduleSlug: m.slug };
-      }
-    }
+          repoUrl: gitOrgLogin && latestTeam.gitRepoName ? web.repo(latestTeam.gitRepoName) : null,
+        }
+      : null;
+    const missing = selfFormed.filter(s => !s.team && s.formationOpen);
+    const latestMissing = missing[missing.length - 1];
+    const needsTeam: SelfFormedNeedsTeam | null = latestMissing
+      ? { moduleTitle: latestMissing.repository.title, moduleSlug: latestMissing.repository.slug }
+      : null;
 
     const resubmits: ResubmitItem[] = (regradeRequests as Array<Record<string, unknown>>).map(r => {
       const ra = r.git_repo_assignment as { assignment?: { title?: string } } | undefined;
