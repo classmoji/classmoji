@@ -553,9 +553,9 @@ model Classroom {
   // without the signing secrets still behaves exactly as it did before.
   content_delivery_enabled     Boolean         @default(true)
   // Live collaborative editing (pages and slides through the collab service).
-  // Off by default: a classroom without it keeps today's editors and save
-  // paths untouched. Turning it off checkpoints and closes the open rooms.
-  collab_enabled               Boolean         @default(false)
+  // On by default: every classroom edits live. Turning it off checkpoints and
+  // closes the open rooms, and the classroom goes back to the git save paths.
+  collab_enabled               Boolean         @default(true)
   // When the asset map was last rebuilt FROM THE REPO'S TREE — a full sync, and
   // only a full sync. This is what `ensureContentAssets` measures its 24h
   // refresh against, deliberately NOT the newest `content_assets.synced_at`:
