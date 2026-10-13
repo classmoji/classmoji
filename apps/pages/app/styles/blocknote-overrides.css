@@ -587,11 +587,59 @@
   --bn-colors-editor-background: transparent;
 }
 
-/* Divider block */
+/* Callout block: emoji beside the text on a tinted card.
+   These rules lived only in PageEditor's inline <style>, under `.page-editor`,
+   so students (the read-only viewer) and the class site got the emoji stacked
+   above bare text. Unscoped, every surface draws the same card. No
+   `!important`: nothing in BlockNote or Mantine targets these classes. */
+.callout-block {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  background-color: rgba(0, 0, 0, 0.03);
+  border-radius: 10px;
+}
+
+.dark .callout-block {
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+/* One body line tall (16px × BlockNote's 1.5), pinned to the top: the emoji
+   sits centred on the first line of text however many lines follow. Its
+   glyph is larger than the line and overflows the box evenly. */
+.callout-block .callout-emoji {
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  align-self: flex-start;
+}
+
+/* `min-width: 0` lets a long unbroken word wrap instead of widening the card. */
+.callout-block .inline-content {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Divider block. `.divider-block` is a flex item of BlockNote's block box, so
+   without a width it shrank to nothing and the rule vanished for readers. */
+.divider-block {
+  width: 100%;
+  margin: 1rem 0;
+}
+
 .divider-block hr {
   border: none;
-  border-top: 1px solid var(--color-border-default);
-  margin: 1rem 0;
+  border-top: 2px solid rgba(0, 0, 0, 0.1);
+  margin: 0;
+  width: 100%;
+}
+
+.dark .divider-block hr {
+  border-top-color: rgba(255, 255, 255, 0.15);
 }
 
 /* Profile card styling */

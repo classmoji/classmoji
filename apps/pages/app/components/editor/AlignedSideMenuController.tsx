@@ -26,7 +26,7 @@ type Middleware = NonNullable<
  * constants put the handle well below an H1 and a little off on every other
  * level. This controller measures the first line of whatever block is hovered
  * instead, so the menu follows the page's own type scale, including custom
- * blocks with padding (callouts, alerts) and any future change to it.
+ * blocks with padding (callouts) and any future change to it.
  *
  * Passing a middleware REPLACES BlockNote's (its options are spread over the
  * controller's own), so the blocks without inline content keep BlockNote's

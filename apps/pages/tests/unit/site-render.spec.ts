@@ -35,6 +35,7 @@ import { redactDocumentForViewer } from '~/site/redact.server.ts';
 import { allBlockTypes, OVERRIDDEN_BLOCK_TYPES } from '~/site/viewerSchema.server.ts';
 import { migrateHtmlToBlockNote } from '~/utils/migration.server.ts';
 import { schema } from '~/components/editor/blocks/index.tsx';
+import { AGENT_CURSOR_LABEL_CSS } from '~/components/editor/collab/liveCursor.ts';
 
 const JSDOM = UntypedJSDOM as new (html?: string) => { window: { document: Document } };
 
@@ -902,6 +903,52 @@ test.describe('editor parity', () => {
       blockSizing(overridesCss()).filter(selector => selector.includes('.page-editor')),
       'blocknote-overrides.css sizing scoped to .page-editor'
     ).toEqual([]);
+  });
+
+  /** Editing chrome: live carets and their labels, which only the editor draws. */
+  const EDITOR_CHROME = /\.bn-collaboration-cursor__/;
+
+  /** Every selector in `css` that styles something other than editing chrome.
+   *  `${…}` interpolations are dropped first; the one PageEditor uses is
+   *  checked on its own below. */
+  const nonChromeSelectors = (css: string): string[] =>
+    rules(css.replace(/\$\{[^}]*\}/g, ''))
+      .flatMap(([selector]) => selector.split(','))
+      .map(selector => selector.trim())
+      .filter(selector => !EDITOR_CHROME.test(selector));
+
+  test('PageEditor styles editing chrome only, never a block', () => {
+    // The callout card, the divider rule and the diff / file-tree widths lived
+    // in PageEditor's inline <style> under `.page-editor`, a wrapper only the
+    // editor has. Students (the read-only viewer) and the class site never got
+    // them: the emoji stacked above bare text and dividers drew nothing. How a
+    // block looks belongs in blocknote-overrides.css, which all three load.
+    const inline = pageEditorInlineCss();
+    expect(rules(inline.replace(/\$\{[^}]*\}/g, '')).length).toBeGreaterThan(0);
+    expect(nonChromeSelectors(inline), 'PageEditor inline <style>').toEqual([]);
+    expect(nonChromeSelectors(AGENT_CURSOR_LABEL_CSS), 'AGENT_CURSOR_LABEL_CSS').toEqual([]);
+
+    // The check is not vacuous: a block rule is caught.
+    expect(
+      nonChromeSelectors(`.page-editor .bn-block:has(> .bn-collaboration-cursor__base) { top: 0; }
+        .page-editor .callout-block, .page-editor .divider-block hr { padding: 0; }`)
+    ).toEqual(['.page-editor .callout-block', '.page-editor .divider-block hr']);
+  });
+
+  test('callout and divider styling is shared, not scoped to one surface', () => {
+    const blockRules = (css: string) =>
+      rules(css).filter(([selector]) => /callout|divider|\bhr\b/.test(selector));
+
+    const shared = blockRules(overridesCss()).map(([selector]) => selector.trim());
+    expect(shared).toEqual(expect.arrayContaining(['.callout-block', '.divider-block hr']));
+    for (const selector of shared) {
+      expect(selector, 'block styling scoped to one surface').not.toMatch(
+        /\.page-editor|\.site-article|\.page-viewer/
+      );
+    }
+
+    // A site-only `hr` rule outranked the shared dark divider colour.
+    expect(blockRules(SITE_STYLES), 'SITE_STYLES block styling').toEqual([]);
   });
 
   test("a heading changing level animates from the shared scale's size", () => {

@@ -458,10 +458,12 @@ const PageEditor = forwardRef(function PageEditor(
     // other (the drag-handle menu opens to the right).
     <div className="page-editor" style={{ position: 'relative' }}>
       <style>{`
-        /* No font-size or line-height for blocks here: those come from
-           blocknote-overrides.css, which the read-only viewer and the class
-           site load too, so the editor shows what students see. A pin here
-           once held every block at 16px / 1.6 and drew the editor apart. */
+        /* Editing chrome only. How a block looks (its size, line height,
+           callout card, divider rule) lives in blocknote-overrides.css, which
+           the read-only viewer and the class site load too, so the editor
+           shows what students see. Block rules kept here reached the editor
+           alone: it once drew text at 1.6 to the readers' 1.5, and only it
+           had the callout card and a visible divider. */
         /* A live caret beside a block with no text (an image, a divider):
            it marks the block's top-left corner instead of adding a line
            under it. */
@@ -474,69 +476,6 @@ const PageEditor = forwardRef(function PageEditor(
           left: 0;
         }
         ${AGENT_CURSOR_LABEL_CSS}
-        .page-editor .callout-block {
-          width: 100% !important;
-          display: flex !important;
-          align-items: center !important;
-          gap: 0.5rem !important;
-          border: none !important;
-          padding: 0.75rem 1rem !important;
-          background-color: rgba(0, 0, 0, 0.03) !important;
-          border-radius: 10px !important;
-        }
-        .page-editor .callout-block .callout-emoji {
-          height: 1.6em !important;
-          line-height: 1.6 !important;
-          display: flex !important;
-          align-items: center !important;
-          justify-content: center !important;
-          flex-shrink: 0 !important;
-          align-self: flex-start !important;
-        }
-        .dark .page-editor .callout-block {
-          background-color: rgba(255, 255, 255, 0.05) !important;
-        }
-        .page-editor .callout-block .inline-content {
-          flex: 1 !important;
-          min-width: 0 !important;
-        }
-        .page-editor .alert {
-          border: none !important;
-          border-radius: 10px !important;
-        }
-        .page-editor .alert .alert-icon-wrapper {
-          height: 1.6em !important;
-          line-height: 1.6 !important;
-          display: flex !important;
-          align-items: center !important;
-          justify-content: center !important;
-          flex-shrink: 0 !important;
-          align-self: flex-start !important;
-        }
-        .page-editor .divider-block {
-          width: 100% !important;
-          margin: 1rem 0 !important;
-        }
-        .page-editor .divider-block hr {
-          border: none !important;
-          border-top: 2px solid rgba(0, 0, 0, 0.1) !important;
-          margin: 0 !important;
-          width: 100% !important;
-        }
-        .dark .page-editor .divider-block hr {
-          border-top-color: rgba(255, 255, 255, 0.15) !important;
-        }
-        .page-editor .bn-block-content[data-content-type="diff"],
-        .page-editor .bn-block-content[data-content-type="fileTree"] {
-          width: 100% !important;
-          max-width: 100% !important;
-        }
-        .page-editor .bn-block-content[data-content-type="diff"] > div,
-        .page-editor .file-tree-block {
-          width: 100% !important;
-          max-width: 100% !important;
-          box-sizing: border-box !important;
-        }
       `}</style>
       {/* Above the view, not inside it: BlockNote portals every block render
           into this tree (its own file blocks read their dictionary the same

@@ -357,7 +357,8 @@ html.dark .site-article .bn-container {
   --bn-colors-highlights-pink-background: #ad1a72;
 }
 html.dark .site-article blockquote { border-color: #3f3f3f; }
-html.dark .site-article hr { border-color: #3f3f3f; }
+/* No hr rule: the only hr is the divider block's, coloured in both themes by
+   blocknote-overrides.css as in the editor. One here outranked it. */
 html.dark .site-article .bn-file-name { color: #cfcfcf; }
 html.dark .site-article .bn-site-locked {
   border-color: rgba(255, 255, 255, 0.16);
