@@ -59,15 +59,22 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       });
     }
 
+    const [hasModules, hasAssignments] = await Promise.all([
+      // Students only see published modules — hide the tab when there are none.
+      ClassmojiService.module.hasModulesForClassroom(classSlug),
+      // Likewise Assignments, for a class run on repositories alone.
+      ClassmojiService.studentCoursework.hasPublishedAssignments(classroom.id),
+    ]);
+
     return {
       recentViewers,
       pagesUrl,
       pagesNav,
       navVisibility: {
         ...navVisibilityFromSettings(classroom.settings),
-        // Students only see published modules — hide the tab when there are none.
-        hasModules: await ClassmojiService.module.hasModulesForClassroom(classSlug),
+        hasModules,
         hasPages: pagesNav.hasPages,
+        hasAssignments,
       },
     };
   } catch {

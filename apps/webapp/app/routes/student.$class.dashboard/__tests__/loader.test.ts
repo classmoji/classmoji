@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const selfFormedMock = vi.fn();
+const findForStudentMock = vi.fn();
 const calendarMock = vi.fn();
 const findAllAssignmentsMock = vi.fn();
 const regradeRequestsMock = vi.fn();
@@ -50,6 +51,9 @@ vi.mock('@classmoji/services', () => ({
     },
     team: {
       findSelfFormedForStudent: (...a: unknown[]) => selfFormedMock(...a),
+    },
+    gitRepo: {
+      findForStudent: (...a: unknown[]) => findForStudentMock(...a),
     },
     token: {
       updateExtension: vi.fn(),
@@ -119,6 +123,7 @@ beforeEach(() => {
   grant();
   calendarMock.mockResolvedValue([]);
   selfFormedMock.mockResolvedValue([]);
+  findForStudentMock.mockResolvedValue([]);
   regradeRequestsMock.mockResolvedValue([]);
   findAllAssignmentsMock.mockResolvedValue([]);
   loadQuizzesVisibleMock.mockResolvedValue(true);
@@ -530,5 +535,63 @@ describe('student dashboard loader — grade line', () => {
       expect.any(Error)
     );
     logged.mockRestore();
+  });
+});
+
+describe('student dashboard loader — assignments link', () => {
+  it('hides it when the class has no published assignment', async () => {
+    listPublishedAssignmentsMock.mockResolvedValue([]);
+
+    const data = await (await loader(loaderArgs())).data;
+
+    expect(data.hasAssignments).toBe(false);
+  });
+
+  it('keeps it when the class has one, and when the listing failed', async () => {
+    expect((await (await loader(loaderArgs())).data).hasAssignments).toBe(true);
+
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    listPublishedAssignmentsMock.mockRejectedValue(new Error('down'));
+    expect((await (await loader(loaderArgs())).data).hasAssignments).toBe(true);
+    logged.mockRestore();
+  });
+});
+
+describe('student dashboard loader — repositories in place of Up next', () => {
+  const owned = (title: string, name: string, created: string) => ({
+    id: `g-${name}`,
+    name,
+    last_push_at: null,
+    repository: { id: `r-${title}`, title, type: 'INDIVIDUAL', created_at: new Date(created) },
+  });
+
+  it('lists the student’s repositories and teams to join, newest repository first', async () => {
+    listPublishedAssignmentsMock.mockResolvedValue([]);
+    findForStudentMock.mockResolvedValue([
+      owned('hw0', 'hw0-ada', '2026-08-24'),
+      owned('hw2', 'hw2-pair', '2026-09-23'),
+    ]);
+    selfFormedMock.mockResolvedValue([
+      {
+        repository: { id: 'r-hw3', slug: 'hw3', title: 'hw3', created_at: new Date('2026-10-07') },
+        team: null,
+        gitRepoName: null,
+        formationOpen: true,
+      },
+    ]);
+
+    const data = await (await loader(loaderArgs())).data;
+
+    expect(data.repositories?.map(r => r.title)).toEqual(['hw3', 'hw2', 'hw0']);
+    expect(data.repositories?.[0].joinHref).toBe('/student/test-class/repos/hw3/team');
+    expect(data.repositories?.[1].url).toContain('hw2-pair');
+    expect(findForStudentMock).toHaveBeenCalledWith('class-1', 'student-1');
+  });
+
+  it('keeps Up next, and reads no repositories, when the class has assignments', async () => {
+    const data = await (await loader(loaderArgs())).data;
+
+    expect(data.repositories).toBeNull();
+    expect(findForStudentMock).not.toHaveBeenCalled();
   });
 });

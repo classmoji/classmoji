@@ -203,6 +203,7 @@ export const findSelfFormedForStudent = async (classroomId: string, userId: stri
       title: true,
       team_formation_deadline: true,
       max_team_size: true,
+      created_at: true,
     },
     orderBy: { created_at: 'asc' },
   });

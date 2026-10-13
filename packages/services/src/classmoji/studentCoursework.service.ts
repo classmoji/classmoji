@@ -357,6 +357,16 @@ export const listPublishedAssignments = (classroomId: string) =>
 export type CourseworkAssignment = Awaited<ReturnType<typeof listPublishedAssignments>>[number];
 
 /**
+ * Whether the classroom has any assignment the student Assignments page would
+ * list (same filter as listPublishedAssignments). The nav hides the entry when
+ * it has none, so a class run on repositories alone shows no empty tab.
+ */
+export const hasPublishedAssignments = async (classroomId: string) =>
+  (await getPrisma().assignment.count({
+    where: { module: { classroom_id: classroomId }, is_published: true },
+  })) > 0;
+
+/**
  * A join that failed: logged with what it was for, and read as empty, so the
  * rows of the other types still show.
  */

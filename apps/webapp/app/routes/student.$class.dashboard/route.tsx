@@ -13,7 +13,7 @@ import type { Route } from './+types/route';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import WeeklyCalendarCard, { type WeekEvent } from './WeeklyCalendarCard';
-import UpNextCard, { type UpNextRow } from './UpNextCard';
+import UpNextCard, { type DashboardRepoRow, type UpNextRow } from './UpNextCard';
 import { eventFetchWindow, startOfWeek } from './week';
 import RetroTabsCard, {
   type FeedbackItem,
@@ -29,6 +29,13 @@ interface DashboardData {
   upNext: UpNextRow[];
   /** Staff previewing the dashboard start a quiz from the quiz list instead. */
   viewerIsStudent: boolean;
+  /** Whether the class has any published assignment; the Assignments link hides otherwise. */
+  hasAssignments: boolean;
+  /**
+   * For a class with no published assignment, the student's repositories in
+   * the Up next card instead, newest first; null when the class has some.
+   */
+  repositories: DashboardRepoRow[] | null;
   feedback: FeedbackItem[];
   team: TeamSummary | null;
   needsTeam: SelfFormedNeedsTeam | null;
@@ -146,6 +153,43 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
           })
       : [];
 
+    // A class run on repositories alone has nothing for Up next: list the
+    // student's repositories there, newest first, with the self-formed ones
+    // they still have to join a team for.
+    let repositories: DashboardRepoRow[] | null = null;
+    if (assignmentListing && assignmentListing.length === 0) {
+      const owned = await ClassmojiService.gitRepo
+        .findForStudent(classroom.id, userId)
+        .catch((error): Awaited<ReturnType<typeof ClassmojiService.gitRepo.findForStudent>> => {
+          console.error('[student dashboard] repositories read failed', courseworkContext, error);
+          return [];
+        });
+      repositories = [
+        ...owned.map(repo => ({
+          id: repo.id,
+          title: repo.repository.title,
+          name: repo.name,
+          url: web.repo(repo.name),
+          lastPushAt: repo.last_push_at?.toISOString() ?? null,
+          joinHref: null,
+          createdAt: repo.repository.created_at.toISOString(),
+        })),
+        ...selfFormed
+          .filter(s => !s.team && s.formationOpen)
+          .map(s => ({
+            id: s.repository.id,
+            title: s.repository.title,
+            name: null,
+            url: null,
+            lastPushAt: null,
+            joinHref: `/student/${classSlug}/repos/${s.repository.slug}/team`,
+            createdAt: s.repository.created_at.toISOString(),
+          })),
+      ]
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .slice(0, 5);
+    }
+
     const weekEvents: WeekEvent[] = (weekEventsRaw as Array<Record<string, unknown>>).map(e => ({
       id: String(e.id),
       title: String(e.title),
@@ -243,6 +287,9 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       feedback,
       team,
       needsTeam,
+      // A failed listing keeps the link rather than hide it on a guess.
+      hasAssignments: assignmentListing === null || assignmentListing.length > 0,
+      repositories,
       resubmits,
       gradeSummary: await gradeSummaryPromise,
     };
@@ -271,7 +318,13 @@ const StudentDashboard = ({ loaderData }: Route.ComponentProps) => {
                   classSlug={slug}
                 />
               </div>
-              <UpNextCard rows={d.upNext} classSlug={slug} viewerIsStudent={d.viewerIsStudent} />
+              <UpNextCard
+                rows={d.upNext}
+                classSlug={slug}
+                viewerIsStudent={d.viewerIsStudent}
+                hasAssignments={d.hasAssignments}
+                repositories={d.repositories}
+              />
               <RetroTabsCard
                 feedback={d.feedback}
                 team={d.team}

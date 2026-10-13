@@ -174,7 +174,7 @@ export const findForStudent = async (classroomId: string, userId: string) =>
       name: true,
       last_push_at: true,
       created_at: true,
-      repository: { select: { id: true, title: true, type: true } },
+      repository: { select: { id: true, title: true, type: true, created_at: true } },
       team: { select: { name: true } },
     },
     orderBy: { created_at: 'desc' },
