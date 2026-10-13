@@ -35,6 +35,7 @@ import { redactDocumentForViewer } from '~/site/redact.server.ts';
 import { allBlockTypes, OVERRIDDEN_BLOCK_TYPES } from '~/site/viewerSchema.server.ts';
 import { migrateHtmlToBlockNote } from '~/utils/migration.server.ts';
 import { schema } from '~/components/editor/blocks/index.tsx';
+import { AGENT_CURSOR_LABEL_CSS } from '~/components/editor/collab/liveCursor.ts';
 
 const JSDOM = UntypedJSDOM as new (html?: string) => { window: { document: Document } };
 
@@ -834,18 +835,39 @@ test.describe('editor parity', () => {
     return scale;
   };
 
-  /** The editor's surviving tag-level copy: `.page-editor … hN { font-size }`. */
-  const editorHeadingSizes = (css: string): Record<string, string> => {
-    const sizes: Record<string, string> = {};
+  /** BlockNote's one-tick "old size" during a type or level change, keyed by level. */
+  const prevScale = (css: string): Record<string, string> => {
+    const scale: Record<string, string> = {};
     for (const [selector, body] of rules(css)) {
-      if (!selector.includes('.page-editor')) continue;
-      const size = body.match(/font-size:\s*([^;!]+)/);
-      if (!size) continue;
-      for (const [, level] of selector.matchAll(/(?:^|[\s>+~,])h([1-6])\b/g)) {
-        sizes[level] = size[1].trim();
+      const prev = body.match(/--prev-level:\s*([^;]+)/);
+      if (!prev) continue;
+      for (const [, n] of selector.matchAll(/\[data-prev-level="([1-6])"\]/g)) {
+        scale[n] = prev[1].trim();
       }
     }
-    return sizes;
+    return scale;
+  };
+
+  /** The block sizing in a stylesheet: rules that set font-size or line-height
+   *  on the block box, its inline content or a heading tag. */
+  const blockSizing = (css: string): string[] =>
+    rules(css)
+      .filter(
+        ([selector, body]) =>
+          /\.bn-block-content|\.bn-inline-content|(?:^|[\s>+~,])h[1-6]\b/.test(selector) &&
+          /(?:^|[;\s])(?:font-size|line-height):/.test(body)
+      )
+      .map(([selector]) => selector.trim());
+
+  /** The `<style>` PageEditor renders around the editor. */
+  const pageEditorInlineCss = (): string => {
+    const source = fs.readFileSync(
+      new URL('../../app/components/editor/PageEditor.tsx', import.meta.url),
+      'utf-8'
+    );
+    const style = source.match(/<style>\{`([\s\S]*?)`\}<\/style>/);
+    expect(style, 'PageEditor should still render an inline <style>').not.toBeNull();
+    return style![1];
   };
 
   const overridesCss = (): string =>
@@ -869,21 +891,160 @@ test.describe('editor parity', () => {
     }
   });
 
-  test("the editor's own heading rules agree with the shared scale", () => {
-    // PageEditor's inline `16px !important` pin defeats `font-size: var(--level)`
-    // in the editor, so these tag-level rules are what it actually renders. Two
-    // live copies of one scale: this is the assertion that keeps them equal.
-    const scale = sharedScale(overridesCss());
-    const editor = editorHeadingSizes(overridesCss());
+  test('the editor is sized by the shared scale, not a copy of it', () => {
+    // PageEditor's inline <style> used to pin every block to 16px / 1.6 with
+    // `!important`, which defeated `--level`, so the editor kept its own
+    // tag-level copy of the heading sizes and drew body text, headings and code
+    // differently from the viewer students read. The editor now reads the same
+    // rules as the viewer and the site; a size here would fork it again.
+    expect(blockSizing(pageEditorInlineCss()), 'PageEditor inline <style>').toEqual([]);
 
     expect(
-      Object.keys(editor),
-      'blocknote-overrides.css should still size .page-editor headings'
-    ).not.toHaveLength(0);
+      blockSizing(overridesCss()).filter(selector => selector.includes('.page-editor')),
+      'blocknote-overrides.css sizing scoped to .page-editor'
+    ).toEqual([]);
+  });
 
-    for (const [level, size] of Object.entries(editor)) {
-      expect(size, `editor h${level} should match the shared --level`).toBe(scale[level]);
+  /** Editing chrome: live carets and their labels, which only the editor draws. */
+  const EDITOR_CHROME = /\.bn-collaboration-cursor__/;
+
+  /** Every selector in `css` that styles something other than editing chrome.
+   *  `${…}` interpolations are dropped first; the one PageEditor uses is
+   *  checked on its own below. */
+  const nonChromeSelectors = (css: string): string[] =>
+    rules(css.replace(/\$\{[^}]*\}/g, ''))
+      .flatMap(([selector]) => selector.split(','))
+      .map(selector => selector.trim())
+      .filter(selector => !EDITOR_CHROME.test(selector));
+
+  test('PageEditor styles editing chrome only, never a block', () => {
+    // The callout card, the divider rule and the diff / file-tree widths lived
+    // in PageEditor's inline <style> under `.page-editor`, a wrapper only the
+    // editor has. Students (the read-only viewer) and the class site never got
+    // them: the emoji stacked above bare text and dividers drew nothing. How a
+    // block looks belongs in blocknote-overrides.css, which all three load.
+    const inline = pageEditorInlineCss();
+    expect(rules(inline.replace(/\$\{[^}]*\}/g, '')).length).toBeGreaterThan(0);
+    expect(nonChromeSelectors(inline), 'PageEditor inline <style>').toEqual([]);
+    expect(nonChromeSelectors(AGENT_CURSOR_LABEL_CSS), 'AGENT_CURSOR_LABEL_CSS').toEqual([]);
+
+    // The check is not vacuous: a block rule is caught.
+    expect(
+      nonChromeSelectors(`.page-editor .bn-block:has(> .bn-collaboration-cursor__base) { top: 0; }
+        .page-editor .callout-block, .page-editor .divider-block hr { padding: 0; }`)
+    ).toEqual(['.page-editor .callout-block', '.page-editor .divider-block hr']);
+  });
+
+  test('callout and divider styling is shared, not scoped to one surface', () => {
+    const blockRules = (css: string) =>
+      rules(css).filter(([selector]) => /callout|divider|\bhr\b/.test(selector));
+
+    const shared = blockRules(overridesCss()).map(([selector]) => selector.trim());
+    expect(shared).toEqual(expect.arrayContaining(['.callout-block', '.divider-block hr']));
+    for (const selector of shared) {
+      expect(selector, 'block styling scoped to one surface').not.toMatch(
+        /\.page-editor|\.site-article|\.page-viewer/
+      );
     }
+
+    // A site-only `hr` rule outranked the shared dark divider colour.
+    expect(blockRules(SITE_STYLES), 'SITE_STYLES block styling').toEqual([]);
+  });
+
+  test('inline code is a chip in table cells on every surface, never inside <pre>', async () => {
+    // The chip rule was `.bn-inline-content code`. The editor and the in-app
+    // viewer render a table cell as a bare `<p>` (only the site's serialized
+    // `<table>` carries `.bn-inline-content`), so `code` in a cell was plain
+    // text for authors and students and a chip on the class site.
+
+    /** A selector list split on top-level commas (not the ones inside `:not(…)`). */
+    const splitList = (list: string): string[] => {
+      const out: string[] = [];
+      let depth = 0;
+      let start = 0;
+      for (let i = 0; i < list.length; i++) {
+        if (list[i] === '(') depth++;
+        else if (list[i] === ')') depth--;
+        else if (list[i] === ',' && depth === 0) {
+          out.push(list.slice(start, i).trim());
+          start = i + 1;
+        }
+      }
+      out.push(list.slice(start).trim());
+      return out;
+    };
+    /** Selectors of every rule that paints a background on a `code` element. */
+    const chipSelectors = rules(overridesCss())
+      .filter(([, body]) => /background-color:/.test(body))
+      .flatMap(([selector]) => splitList(selector))
+      .filter(selector => /(?:^|[\s>~+(])code(?=$|[\s:.[)])/.test(selector));
+    const light = chipSelectors.filter(selector => !selector.startsWith('.dark '));
+    const dark = chipSelectors.filter(selector => selector.startsWith('.dark '));
+    expect(light, 'light inline-code rule').not.toHaveLength(0);
+    expect(dark, 'dark inline-code rule').not.toHaveLength(0);
+
+    const codeText = (value: string) => [{ type: 'text', text: value, styles: { code: true } }];
+    const site = await renderSitePage({
+      blocks: [
+        {
+          type: 'table',
+          content: { type: 'tableContent', rows: [{ cells: [codeText('PERMISSION_DENIED')] }] },
+        },
+        { type: 'paragraph', content: codeText('npm run dev') },
+        SAMPLES.codeBlock,
+        SAMPLES.terminal,
+      ],
+      resolveLink,
+    });
+    // The live editor's and BlockNoteViewer's DOM, as Chrome reports it. The
+    // server editor's blocksToFullHTML puts the class on <table> like the site
+    // does, so it cannot stand in for this.
+    const live = `
+      <div class="bn-block-content" data-content-type="table"><div class="tableWrapper">
+        <div class="tableWrapper-inner"><table><tbody><tr><td><p><code id="live-cell">PERMISSION_DENIED</code></p></td></tr></tbody></table></div>
+      </div></div>
+      <div class="bn-block-content" data-content-type="paragraph"><p class="bn-inline-content"><code id="live-para">x</code></p></div>
+      <div class="bn-block-content" data-content-type="codeBlock"><pre><code class="bn-inline-content" id="live-codeblock">const a = 1;</code></pre></div>
+      <div class="bn-block-content" data-content-type="terminal"><div class="terminal-block"><pre><code class="language-bash" id="live-terminal">npm run dev</code></pre></div></div>`;
+
+    for (const [theme, wrap, selectors] of [
+      ['light', (html: string) => html, light],
+      ['dark', (html: string) => `<div class="dark">${html}</div>`, dark],
+    ] as const) {
+      const doc = parse(wrap(`<div id="site">${site.html}</div><div id="live">${live}</div>`));
+      const isChip = (el: Element) => selectors.some(selector => el.matches(selector));
+      const isAnyChip = (el: Element) => chipSelectors.some(selector => el.matches(selector));
+
+      const siteCell = doc.querySelector('#site [data-content-type="table"] td code');
+      const sitePara = doc.querySelector('#site [data-content-type="paragraph"] code');
+      for (const [name, el] of [
+        ['editor/viewer table cell', doc.getElementById('live-cell')],
+        ['editor/viewer paragraph', doc.getElementById('live-para')],
+        ['site table cell', siteCell],
+        ['site paragraph', sitePara],
+      ] as const) {
+        expect(el, `${name} fixture`).not.toBeNull();
+        expect(isChip(el!), `${theme}: ${name} inline code is a chip`).toBe(true);
+      }
+
+      const pres = [
+        doc.getElementById('live-codeblock'),
+        doc.getElementById('live-terminal'),
+        ...doc.querySelectorAll('#site pre code'),
+      ];
+      expect(pres.filter(Boolean)).toHaveLength(4);
+      for (const el of pres) {
+        expect(isAnyChip(el!), `${theme}: <pre><code> is not a chip`).toBe(false);
+      }
+    }
+  });
+
+  test("a heading changing level animates from the shared scale's size", () => {
+    // BlockNote holds the old size for one tick through `--prev-level`, from
+    // its own 3em/2em/1.3em ladder. Without these an H1 turned into an H2 grows
+    // to 48px before shrinking to 24. They are the one copy of the scale that
+    // has to exist, so this keeps it equal to `--level`.
+    expect(prevScale(overridesCss())).toEqual(sharedScale(overridesCss()));
   });
 
   test('the site stylesheet does not fork the heading scale', () => {
