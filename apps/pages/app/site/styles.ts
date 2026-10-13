@@ -41,6 +41,26 @@ export const SITE_STYLES = `
    page can be dragged, so the article owns its full width. */
 .site-article .bn-editor { padding-inline: 0; }
 
+/* Two of the rules Tiptap injects wherever an editor runs (@tiptap/core's
+   style.ts, on .ProseMirror), which a site page, having no editor, never got.
+   The article wrapper carries .ProseMirror too (siteArticleWrapper), so they
+   apply to the same element as in the app.
+
+   Ligatures off: JetBrains Mono turned != into one glyph in code that reads
+   != in the app.
+
+   A terminal's long lines wrap, as in the app, instead of running out of the
+   block. :where() keeps Tiptap's specificity, so BlockNote's own rule that a
+   code block does not wrap still wins here as it does there. */
+.site-article .ProseMirror {
+  -webkit-font-variant-ligatures: none;
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0;
+}
+:where(.site-article) .ProseMirror pre {
+  white-space: pre-wrap;
+}
+
 /* --- site-only block markup ------------------------------------------ */
 
 /* A block this viewer may not see renders as an empty placeholder; hiding it
@@ -357,7 +377,8 @@ html.dark .site-article .bn-container {
   --bn-colors-highlights-pink-background: #ad1a72;
 }
 html.dark .site-article blockquote { border-color: #3f3f3f; }
-html.dark .site-article hr { border-color: #3f3f3f; }
+/* No hr rule: the only hr is the divider block's, coloured in both themes by
+   blocknote-overrides.css as in the editor. One here outranked it. */
 html.dark .site-article .bn-file-name { color: #cfcfcf; }
 html.dark .site-article .bn-site-locked {
   border-color: rgba(255, 255, 255, 0.16);
