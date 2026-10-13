@@ -28,11 +28,11 @@ export function FeaturesSection() {
       <div className="mx-auto max-w-[1440px]">
         <header className="mx-auto max-w-2xl text-center">
           <p className="text-[0.875rem] font-semibold text-[#21883D] dark:text-[#6BE39B]">
-            Open source · Built by DALI &amp; Dartmouth CS
+            Open source · Built by students and faculty at Dartmouth
           </p>
           <h2
             id="how-it-works-heading"
-            className="mt-3 text-balance text-[2.25rem] font-bold leading-[1.1] tracking-tight text-ink-0 dark:text-inkd-0 sm:text-[2.75rem]"
+            className="mt-5 text-balance text-[2.25rem] font-bold leading-[1.1] tracking-tight text-ink-0 dark:text-inkd-0 sm:text-[2.75rem]"
           >
             Teaching on{' '}
             <DoodleHighlight tone="github" delay={0.35}>
@@ -46,7 +46,7 @@ export function FeaturesSection() {
           </h2>
         </header>
 
-        <div className="mt-7 flex justify-center">
+        <div className="mt-10 flex justify-center">
           <div className="inline-flex max-w-full items-center gap-2.5 rounded-full bg-panel px-4 py-2.5 text-[0.9375rem] text-ink-2 shadow-card ring-1 ring-edge dark:bg-panel-dark dark:text-inkd-2 dark:ring-neutral-800">
             <span className="flex shrink-0 items-center gap-1.5" aria-hidden>
               <GithubMark className="h-[18px] w-[18px] text-ink-0 dark:text-inkd-0" />

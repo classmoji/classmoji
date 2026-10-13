@@ -2,6 +2,7 @@
 import Layout from '../layouts/Layout.astro';
 import Header from '../components/Header.astro';
 import Footer from '../components/Footer.astro';
+import Sponsors from '../components/Sponsors.astro';
 import { FeaturesSection } from '../components/how-it-works/components/FeaturesSection';
 ---
 
@@ -11,6 +12,7 @@ import { FeaturesSection } from '../components/how-it-works/components/FeaturesS
   <!-- Clears the fixed header. -->
   <main class="pt-[69px]">
     <FeaturesSection client:load />
+    <Sponsors />
   </main>
 
   <Footer />
