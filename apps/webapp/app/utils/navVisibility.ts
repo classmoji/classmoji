@@ -20,6 +20,12 @@ export interface NavVisibility {
    * group: hidden from non-owners when false, defaulting to shown.
    */
   hasPages?: boolean;
+  /**
+   * Whether the classroom has any published assignment. Students only have an
+   * Assignments entry, and it hides when there is nothing to list. Same
+   * default-to-shown contract as hasModules.
+   */
+  hasAssignments?: boolean;
 }
 
 export const DEFAULT_NAV_VISIBILITY: NavVisibility = {
@@ -27,6 +33,7 @@ export const DEFAULT_NAV_VISIBILITY: NavVisibility = {
   showPages: true,
   hasModules: true,
   hasPages: true,
+  hasAssignments: true,
 };
 
 // Settings arrive loosely typed (sanitized to Record<string, unknown>), so the
