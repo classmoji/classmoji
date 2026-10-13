@@ -723,6 +723,30 @@ interface ControlProps {
   invalid: boolean;
 }
 
+/** The selection limits of a list question, as the person filling it reads them. */
+function selectionLimitsOf(field: FormField): { min?: number; max?: number } {
+  const min = field.min_selections;
+  const max = field.max_selections;
+  return {
+    min: typeof min === 'number' ? min : undefined,
+    max: typeof max === 'number' ? max : undefined,
+  };
+}
+
+function selectionHint({ min, max }: { min?: number; max?: number }): string | null {
+  if (min !== undefined && max !== undefined) {
+    return min === max ? `Pick ${max}` : `Pick ${min} to ${max}`;
+  }
+  if (max !== undefined) return `Pick up to ${max}`;
+  if (min !== undefined) return `Pick at least ${min}`;
+  return null;
+}
+
+function SelectionHint({ field }: { field: FormField }) {
+  const hint = selectionHint(selectionLimitsOf(field));
+  return hint ? <p className="text-xs text-gray-500 dark:text-gray-400">{hint}</p> : null;
+}
+
 /** How many matches the roster list shows before it asks for a narrower query. */
 const ROSTER_VISIBLE_MATCHES = 40;
 
@@ -789,6 +813,10 @@ function RosterSelect({ field, name, watch, setValue, invalid }: ControlProps) {
   const byId = new Map(options.map(option => [option.id, option]));
   const selected = selectedIds.map(id => byId.get(id)).filter(Boolean) as FormOption[];
   const chosen = new Set(selectedIds);
+  const { max } = selectionLimitsOf(field);
+  // A multi-pick list that has reached its cap takes no more names: the chips
+  // stay (each can be removed) and the search goes away until one is.
+  const atLimit = multiple && max !== undefined && selectedIds.length >= max;
 
   const needle = query.trim().toLowerCase();
   const matches = options.filter(
@@ -868,7 +896,7 @@ function RosterSelect({ field, name, watch, setValue, invalid }: ControlProps) {
 
       {/* Single-pick: once someone is chosen the search box goes away, so the
           control reads as an answer rather than as an unfinished search. */}
-      {multiple || selected.length === 0 ? (
+      {(multiple && !atLimit) || selected.length === 0 ? (
         <>
           <input
             type="text"
@@ -926,6 +954,11 @@ function RosterSelect({ field, name, watch, setValue, invalid }: ControlProps) {
             ) : null}
           </ul>
         </>
+      ) : null}
+      {multiple ? (
+        <div className="px-3 pb-2 pt-1">
+          <SelectionHint field={field} />
+        </div>
       ) : null}
     </div>
   );
@@ -1068,8 +1101,15 @@ function Control({ field, name, register, watch, setValue, invalid }: ControlPro
           }
           return registration.onChange(event);
         };
+        const { max } = selectionLimitsOf(field);
+        const watched = watch(name) as unknown;
+        const picked = new Set(Array.isArray(watched) ? (watched as string[]) : []);
+        // Once the cap is reached the unticked boxes are disabled, so the
+        // answer cannot go past it; untick one to choose another.
+        const atLimit = max !== undefined && picked.size >= max;
         return (
           <fieldset {...labelled} aria-describedby={described} className="flex flex-col gap-2">
+            <SelectionHint field={field} />
             {options.map(option => (
               <label
                 key={option.id}
@@ -1080,6 +1120,7 @@ function Control({ field, name, register, watch, setValue, invalid }: ControlPro
                   value={option.id}
                   {...registration}
                   onChange={onChange}
+                  disabled={atLimit && !picked.has(option.id)}
                   className="mt-1 h-4 w-4 shrink-0"
                 />
                 <span>

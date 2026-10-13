@@ -942,6 +942,84 @@ describe('formContract — exclusive options', () => {
   });
 });
 
+describe('formContract — selection limits', () => {
+  const multiselect = (extra: Record<string, unknown> = {}) => ({
+    type: 'multiselect',
+    label: 'Tools',
+    options: ['A', 'B', 'C', 'D'],
+    ...extra,
+  });
+  const roster = (extra: Record<string, unknown> = {}) => ({
+    type: 'roster_select',
+    label: 'Avoid',
+    optionSource: 'roster',
+    multiple: true,
+    options: [{ label: 'Ada' }, { label: 'Bo' }, { label: 'Cy' }, { label: 'Di' }],
+    ...extra,
+  });
+
+  describe('definition', () => {
+    it('keeps the limits on a multiselect and on a multiple roster_select', () => {
+      expect(parseOne(multiselect({ min_selections: 1, max_selections: 2 }))).toMatchObject({
+        min_selections: 1,
+        max_selections: 2,
+      });
+      expect(parseOne(roster({ max_selections: 3 }))).toMatchObject({ max_selections: 3 });
+    });
+
+    it.each([
+      ['min above max', multiselect({ min_selections: 3, max_selections: 2 })],
+      ['max above the options', multiselect({ max_selections: 5 })],
+      ['min above the options', multiselect({ min_selections: 5 })],
+      ['zero', multiselect({ max_selections: 0 })],
+      ['a roster min above its max', roster({ min_selections: 3, max_selections: 2 })],
+      ['a limit on a single-pick roster_select', roster({ multiple: false, max_selections: 2 })],
+    ])('refuses %s', (_name, raw) => {
+      expect(codeOf(() => parseFormDefinition([raw]))).toBe(FORM_DEFINITION_INVALID);
+    });
+  });
+
+  describe.each([
+    ['multiselect', multiselect],
+    ['roster_select', roster],
+  ])('answers on a %s', (_type, make) => {
+    const ids = (field: FormField) => (field.options as FormOption[]).map(option => option.id);
+
+    it('refuses more picks than max_selections', () => {
+      const fields = parseFormDefinition([make({ max_selections: 2 })]).fields;
+      const [a, b, c] = ids(fields[0]);
+      expect(() => parseAnswers(fields, { [fields[0].id]: [a, b] })).not.toThrow();
+      expect(codeOf(() => parseAnswers(fields, { [fields[0].id]: [a, b, c] }))).toBe(
+        FORM_ANSWERS_INVALID
+      );
+    });
+
+    it('refuses fewer picks than min_selections once the person answers', () => {
+      const fields = parseFormDefinition([make({ min_selections: 2 })]).fields;
+      const [a, b] = ids(fields[0]);
+      expect(codeOf(() => parseAnswers(fields, { [fields[0].id]: [a] }))).toBe(
+        FORM_ANSWERS_INVALID
+      );
+      expect(() => parseAnswers(fields, { [fields[0].id]: [a, b] })).not.toThrow();
+    });
+
+    it('lets an optional question stay blank whatever its minimum', () => {
+      const fields = parseFormDefinition([make({ min_selections: 2 })]).fields;
+      expect(() => parseAnswers(fields, { [fields[0].id]: [] })).not.toThrow();
+    });
+
+    it('still needs a required question answered, to its minimum', () => {
+      const fields = parseFormDefinition([make({ required: true, min_selections: 2 })]).fields;
+      const [a, b] = ids(fields[0]);
+      expect(codeOf(() => parseAnswers(fields, { [fields[0].id]: [] }))).toBe(FORM_ANSWERS_INVALID);
+      expect(codeOf(() => parseAnswers(fields, { [fields[0].id]: [a] }))).toBe(
+        FORM_ANSWERS_INVALID
+      );
+      expect(() => parseAnswers(fields, { [fields[0].id]: [a, b] })).not.toThrow();
+    });
+  });
+});
+
 describe('formContract — options_from', () => {
   const rankedId = '66666666-6666-4666-8666-666666666666';
   const dropdownId = '77777777-7777-4777-8777-777777777777';
