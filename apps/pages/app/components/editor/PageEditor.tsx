@@ -13,7 +13,6 @@ import {
   FormattingToolbarController,
   FormattingToolbar,
   SideMenu,
-  SideMenuController,
   FilePanelController,
   DragHandleButton,
   DragHandleMenu,
@@ -55,6 +54,7 @@ import {
 } from './CheckableSectionItem.tsx';
 import { DoneChips } from './DoneChips.tsx';
 import { AddBlockButton } from './AddBlockButton.tsx';
+import { AlignedSideMenuController } from './AlignedSideMenuController.tsx';
 import { SectionStatsContext } from '~/hooks/useSectionStats.ts';
 import type { SectionStats } from '~/hooks/useReaderSections.tsx';
 import { AssetSrcSetContext, NO_SRC_SETS, type AssetSrcSets } from '~/hooks/useAssetSrcSets.ts';
@@ -458,11 +458,10 @@ const PageEditor = forwardRef(function PageEditor(
     // other (the drag-handle menu opens to the right).
     <div className="page-editor" style={{ position: 'relative' }}>
       <style>{`
-        .page-editor .bn-block-content,
-        .page-editor .bn-inline-content {
-          font-size: 16px !important;
-          line-height: 1.6 !important;
-        }
+        /* No font-size or line-height for blocks here: those come from
+           blocknote-overrides.css, which the read-only viewer and the class
+           site load too, so the editor shows what students see. A pin here
+           once held every block at 16px / 1.6 and drew the editor apart. */
         /* A live caret beside a block with no text (an image, a divider):
            it marks the block's top-left corner instead of adding a line
            under it. */
@@ -475,11 +474,6 @@ const PageEditor = forwardRef(function PageEditor(
           left: 0;
         }
         ${AGENT_CURSOR_LABEL_CSS}
-        .page-editor h1,
-        .page-editor h2,
-        .page-editor h3 {
-          line-height: 1.3 !important;
-        }
         .page-editor .callout-block {
           width: 100% !important;
           display: flex !important;
@@ -560,7 +554,7 @@ const PageEditor = forwardRef(function PageEditor(
               filePanel={false}
               onChange={() => onChange?.(editor.document)}
             >
-              <SideMenuController
+              <AlignedSideMenuController
                 sideMenu={props => (
                   <SideMenu {...props}>
                     {/* Ours: the click is the button's, not only the icon's. */}

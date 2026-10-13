@@ -88,8 +88,8 @@
 /* Heading scale — ONE definition, every surface.
    Notion style: H1 30px, H2 24px, H3 20px, H4-H6 16px.
 
-   These sizes used to exist only under `.page-editor` (below), the class the
-   editor and the in-app viewer wrap content in. A server-rendered class-site
+   These sizes used to exist only under `.page-editor`, the class the editor
+   and the in-app viewer wrap content in. A server-rendered class-site
    page has no `.page-editor` — it serves BlockNote's markup under
    `.site-article` — so the overrides never matched and the site fell through to
    BlockNote's own em ladder off a 16px base: 3em/2em/1.3em, or 48/32/20.8px.
@@ -103,7 +103,9 @@
    so there are no side channels, and because `.bn-default-styles h1..h6` is
    `font-size: inherit`, one declaration sizes both the block box and the
    heading tag. Sizing the tag instead would leave a phantom 48px on the
-   wrapper for the next `em`-based rule to trip over.
+   wrapper for the next `em`-based rule to trip over. The editor, the in-app
+   viewer and the class site are all sized by this and nothing else: no
+   surface pins `.bn-block-content` or the heading tag on top of it.
 
    No `!important` anywhere: we supply the input rather than compete with the
    output. Every rule here is (0,3,0) against BlockNote's (0,1,0)/(0,2,0), so it
@@ -139,41 +141,49 @@
   --level: 16px;
 }
 
+/* While a block changes type or level, BlockNote keeps the OLD size for one
+   tick through `--prev-level` (`[data-prev-level] { --prev-level: 3em… }`,
+   read by `.bn-block-outer[data-prev-type=heading] > .bn-block >
+   .bn-block-content`), then lets `transition: font-size` run to the new one.
+   Left on its ladder, turning our 30px H1 into an H2 would start the
+   animation from 48px. Same values as `--level` above; the decoration sits
+   on `.bn-block-outer`, and an H1 does get `data-prev-level="1"` (it comes
+   from the node's attrs, which keep the default). (0,2,0) against
+   BlockNote's (0,1,0), so no `!important`. */
+.bn-block-outer[data-prev-level="1"] {
+  --prev-level: 30px;
+}
+
+.bn-block-outer[data-prev-level="2"] {
+  --prev-level: 24px;
+}
+
+.bn-block-outer[data-prev-level="3"] {
+  --prev-level: 20px;
+}
+
+.bn-block-outer[data-prev-level="4"] {
+  --prev-level: 16px;
+}
+
+.bn-block-outer[data-prev-level="5"] {
+  --prev-level: 16px;
+}
+
+.bn-block-outer[data-prev-level="6"] {
+  --prev-level: 16px;
+}
+
 /* Stated rather than left to BlockNote's own heading rule, which is gated on
    `.bn-block-outer:not([data-prev-type])` and so drops out for the frame a
-   block is changing type. The 1.3 was editor-only, living in PageEditor's
-   inline <style>, which is why site and in-app-viewer headings inherited
-   BlockNote's 1.5 instead. */
+   block is changing type. BlockNote's default is the 1.5 every other block
+   inherits from `.bn-block-outer`.
+
+   Body text is not restated anywhere: its 16px is `.bn-editor` (top of this
+   file) and its line height is BlockNote's own 1.5, on every surface. */
 .bn-block-content[data-content-type="heading"] {
   font-weight: 700;
   line-height: 1.3;
-}
-
-/* The editor's own copy of the scale above. It is still load-bearing HERE:
-   PageEditor's inline `<style>` pins `.page-editor .bn-block-content` to
-   `16px !important`, which defeats `font-size: var(--level)` on the wrapper, so
-   the editor is sized by these tag-level rules rather than by `--level`. They
-   must agree with the `--level` values above — site-render.spec.ts fails until
-   they do. Removing the pin so `--level` governs the editor too is a separate,
-   riskier change: `.bn-inline-content` IS the heading tag, so a broadened
-   selector that forgets to exclude headings collapses every one of them to
-   16px, silently. */
-.page-editor .bn-editor h1,
-.page-editor .bn-block-content h1 {
-  font-size: 30px !important;
-  font-weight: 700 !important;
-}
-
-.page-editor .bn-editor h2,
-.page-editor .bn-block-content h2 {
-  font-size: 24px !important;
-  font-weight: 700 !important;
-}
-
-.page-editor .bn-editor h3,
-.page-editor .bn-block-content h3 {
-  font-size: 20px !important;
-  font-weight: 700 !important;
 }
 
 /* Apply background colors from data-background-color attribute */

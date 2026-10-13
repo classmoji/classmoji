@@ -834,18 +834,39 @@ test.describe('editor parity', () => {
     return scale;
   };
 
-  /** The editor's surviving tag-level copy: `.page-editor … hN { font-size }`. */
-  const editorHeadingSizes = (css: string): Record<string, string> => {
-    const sizes: Record<string, string> = {};
+  /** BlockNote's one-tick "old size" during a type or level change, keyed by level. */
+  const prevScale = (css: string): Record<string, string> => {
+    const scale: Record<string, string> = {};
     for (const [selector, body] of rules(css)) {
-      if (!selector.includes('.page-editor')) continue;
-      const size = body.match(/font-size:\s*([^;!]+)/);
-      if (!size) continue;
-      for (const [, level] of selector.matchAll(/(?:^|[\s>+~,])h([1-6])\b/g)) {
-        sizes[level] = size[1].trim();
+      const prev = body.match(/--prev-level:\s*([^;]+)/);
+      if (!prev) continue;
+      for (const [, n] of selector.matchAll(/\[data-prev-level="([1-6])"\]/g)) {
+        scale[n] = prev[1].trim();
       }
     }
-    return sizes;
+    return scale;
+  };
+
+  /** The block sizing in a stylesheet: rules that set font-size or line-height
+   *  on the block box, its inline content or a heading tag. */
+  const blockSizing = (css: string): string[] =>
+    rules(css)
+      .filter(
+        ([selector, body]) =>
+          /\.bn-block-content|\.bn-inline-content|(?:^|[\s>+~,])h[1-6]\b/.test(selector) &&
+          /(?:^|[;\s])(?:font-size|line-height):/.test(body)
+      )
+      .map(([selector]) => selector.trim());
+
+  /** The `<style>` PageEditor renders around the editor. */
+  const pageEditorInlineCss = (): string => {
+    const source = fs.readFileSync(
+      new URL('../../app/components/editor/PageEditor.tsx', import.meta.url),
+      'utf-8'
+    );
+    const style = source.match(/<style>\{`([\s\S]*?)`\}<\/style>/);
+    expect(style, 'PageEditor should still render an inline <style>').not.toBeNull();
+    return style![1];
   };
 
   const overridesCss = (): string =>
@@ -869,21 +890,26 @@ test.describe('editor parity', () => {
     }
   });
 
-  test("the editor's own heading rules agree with the shared scale", () => {
-    // PageEditor's inline `16px !important` pin defeats `font-size: var(--level)`
-    // in the editor, so these tag-level rules are what it actually renders. Two
-    // live copies of one scale: this is the assertion that keeps them equal.
-    const scale = sharedScale(overridesCss());
-    const editor = editorHeadingSizes(overridesCss());
+  test('the editor is sized by the shared scale, not a copy of it', () => {
+    // PageEditor's inline <style> used to pin every block to 16px / 1.6 with
+    // `!important`, which defeated `--level`, so the editor kept its own
+    // tag-level copy of the heading sizes and drew body text, headings and code
+    // differently from the viewer students read. The editor now reads the same
+    // rules as the viewer and the site; a size here would fork it again.
+    expect(blockSizing(pageEditorInlineCss()), 'PageEditor inline <style>').toEqual([]);
 
     expect(
-      Object.keys(editor),
-      'blocknote-overrides.css should still size .page-editor headings'
-    ).not.toHaveLength(0);
+      blockSizing(overridesCss()).filter(selector => selector.includes('.page-editor')),
+      'blocknote-overrides.css sizing scoped to .page-editor'
+    ).toEqual([]);
+  });
 
-    for (const [level, size] of Object.entries(editor)) {
-      expect(size, `editor h${level} should match the shared --level`).toBe(scale[level]);
-    }
+  test("a heading changing level animates from the shared scale's size", () => {
+    // BlockNote holds the old size for one tick through `--prev-level`, from
+    // its own 3em/2em/1.3em ladder. Without these an H1 turned into an H2 grows
+    // to 48px before shrinking to 24. They are the one copy of the scale that
+    // has to exist, so this keeps it equal to `--level`.
+    expect(prevScale(overridesCss())).toEqual(sharedScale(overridesCss()));
   });
 
   test('the site stylesheet does not fork the heading scale', () => {
