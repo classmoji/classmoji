@@ -60,6 +60,11 @@ interface TreeNode {
   assignment?: AssignmentRow;
   /** Say push or issue on this row, because its folder carries both. */
   showMode?: boolean;
+  /**
+   * The repository's one assignment, folded into its row: a push assignment
+   * alone in its repository has nothing to show apart from it.
+   */
+  folded?: AssignmentRow;
   children?: TreeNode[];
 }
 
@@ -162,7 +167,11 @@ const RepositoriesTable = ({
   // The primary action (Publish / Sync) is surfaced as an inline button; the
   // overflow menu holds everything else about the repo. There is no detail
   // page any more: grading happens on each assignment's own page.
-  const repoMenuItems = (r: RepositoryRow): MenuProps['items'] => [
+  const repoMenuItems = (r: RepositoryRow, folded?: AssignmentRow): MenuProps['items'] => [
+    // The folded assignment's own editor: weight, deadline, module.
+    ...(folded
+      ? [{ key: 'edit-assignment', label: 'Edit assignment', icon: <IconFileText size={15} /> }]
+      : []),
     ...(r.is_published
       ? [
           { key: 'autograde', label: 'Autograde', icon: <IconRobot size={15} /> },
@@ -186,8 +195,10 @@ const RepositoriesTable = ({
     { key: 'delete', label: 'Delete', danger: true, icon: <IconTrash size={15} /> },
   ];
 
-  const onRepoMenuClick = (r: RepositoryRow, key: string) => {
+  const onRepoMenuClick = (r: RepositoryRow, key: string, folded?: AssignmentRow) => {
     switch (key) {
+      case 'edit-assignment':
+        return folded && editAssignment(folded.id);
       case 'autograde':
         return autograde(r);
       case 'update':
@@ -213,6 +224,13 @@ const RepositoriesTable = ({
         const mixedModes =
           assignments.some(a => a.submission_mode === 'REPO') &&
           assignments.some(a => a.submission_mode !== 'REPO');
+        // One push assignment: no issue to list under the folder, so the
+        // child row would only repeat the repository. Its weight shows on the
+        // folder and it is edited from the menu.
+        const folded =
+          assignments.length === 1 && assignments[0].submission_mode === 'REPO'
+            ? assignments[0]
+            : undefined;
         return {
           key: `repository-${r.id}`,
           kind: 'repository' as const,
@@ -224,22 +242,26 @@ const RepositoriesTable = ({
           teamFormationMode: r.team_formation_mode ?? null,
           is_published: r.is_published,
           repository: r,
-          children: assignments.length
-            ? assignments.map(a => ({
-                key: `assignment-${a.id}`,
-                kind: 'assignment' as const,
-                name: a.title,
-                repositoryTitle: r.title,
-                // The folder's type applies to everything inside it.
-                repositoryType: r.type,
-                teamFormationMode: r.team_formation_mode ?? null,
-                weight: a.weight,
-                is_published: a.is_published,
-                is_extra_credit: a.is_extra_credit,
-                showMode: mixedModes,
-                assignment: a,
-              }))
-            : undefined,
+          folded,
+          weight: folded?.weight,
+          is_extra_credit: folded?.is_extra_credit,
+          children:
+            assignments.length && !folded
+              ? assignments.map(a => ({
+                  key: `assignment-${a.id}`,
+                  kind: 'assignment' as const,
+                  name: a.title,
+                  repositoryTitle: r.title,
+                  // The folder's type applies to everything inside it.
+                  repositoryType: r.type,
+                  teamFormationMode: r.team_formation_mode ?? null,
+                  weight: a.weight,
+                  is_published: a.is_published,
+                  is_extra_credit: a.is_extra_credit,
+                  showMode: mixedModes,
+                  assignment: a,
+                }))
+              : undefined,
         };
       }),
     [repositories]
@@ -298,6 +320,18 @@ const RepositoriesTable = ({
                 push
               </Tag>
             )}
+            {/* Status is the repository's; a folded assignment still in draft
+                would otherwise go unseen. */}
+            {record.folded && !record.folded.is_published && (
+              <Tag color="orange" className="m-0 shrink-0 font-medium">
+                Assignment draft
+              </Tag>
+            )}
+            {record.folded?.is_extra_credit && (
+              <Tag color="green" className="m-0 shrink-0 font-medium">
+                Extra credit
+              </Tag>
+            )}
             {issues.length > 0 && (
               <Tag color="purple" className="m-0 shrink-0 font-medium">
                 issue
@@ -341,7 +375,7 @@ const RepositoriesTable = ({
       // A repository has no weight of its own; the assignments that submit
       // through it carry the whole grade.
       render: (_: unknown, record: TreeNode) =>
-        record.kind === 'assignment' ? (
+        record.kind === 'assignment' || record.folded ? (
           <span className="text-ink-2 tabular-nums">{record.weight} %</span>
         ) : null,
     },
@@ -392,10 +426,10 @@ const RepositoriesTable = ({
                   trigger={['click']}
                   placement="bottomRight"
                   menu={{
-                    items: repoMenuItems(r),
+                    items: repoMenuItems(r, record.folded),
                     onClick: ({ key, domEvent }) => {
                       domEvent.stopPropagation();
-                      onRepoMenuClick(r, key);
+                      onRepoMenuClick(r, key, record.folded);
                     },
                   }}
                 >

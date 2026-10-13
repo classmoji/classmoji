@@ -42,6 +42,8 @@ interface NavVisibility {
   hasModules?: boolean;
   /** Whether the class has any published page; hides the empty Pages tab likewise. */
   hasPages?: boolean;
+  /** Whether the class has any published assignment; hides the student Assignments tab. */
+  hasAssignments?: boolean;
 }
 
 interface CommonLayoutProps {
@@ -138,6 +140,8 @@ const CommonLayout = ({
   // so on a class with nothing published it would otherwise be a nav item that
   // opens an empty reader.
   const hasPages = navVisibility?.hasPages ?? true;
+  // And for Assignments (a student-only entry): no published assignment, no tab.
+  const hasAssignments = navVisibility?.hasAssignments ?? true;
 
   const themeColors = getThemeByKey(classroom?.settings?.theme);
   const themeBackground = isDarkMode ? themeColors.darkBackground : themeColors.background;
@@ -232,6 +236,7 @@ const CommonLayout = ({
     // `show_pages` used to gate the group of per-page links; it now gates the
     // one Pages entry that replaced them.
     if (item.link === '/pages' && role !== 'OWNER' && (!showPages || !hasPages)) return null;
+    if (item.link === '/assignments' && role === 'STUDENT' && !hasAssignments) return null;
 
     // Gitlab calls repositories projects.
     const displayLabel =
@@ -294,6 +299,7 @@ const CommonLayout = ({
     // Student navigation visibility toggles (OWNER always retains access).
     if (item.link === '/modules' && role !== 'OWNER' && (!showModules || !hasModules)) return false;
     if (item.link === '/pages' && role !== 'OWNER' && (!showPages || !hasPages)) return false;
+    if (item.link === '/assignments' && role === 'STUDENT' && !hasAssignments) return false;
 
     return true;
   };
