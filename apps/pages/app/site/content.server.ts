@@ -1,7 +1,6 @@
 import { ClassmojiService, ContentService } from '@classmoji/services';
 
 import { migrateHtmlToBlockNote } from '~/utils/migration.server.ts';
-import { schema } from '~/components/editor/blocks/index.tsx';
 import { withServerBlockNoteLock } from './render.server.ts';
 
 /**
@@ -58,6 +57,8 @@ export type SitePageContent = {
 /** The page fields a content read needs. */
 export type SiteContentPage = {
   content_path: string;
+  /** Tells a legacy page's title `<h1>` from a content heading. */
+  title?: string | null;
 };
 
 /**
@@ -210,7 +211,7 @@ export async function loadSitePageContent(
     // the same process-global JSDOM as a render — same lock, or the two
     // corrupt each other under concurrency.
     const blocks = await withServerBlockNoteLock(() =>
-      migrateHtmlToBlockNote(htmlFile.content, schema)
+      migrateHtmlToBlockNote(htmlFile.content, { title: page.title ?? undefined })
     );
     return { format: 'html', blocks: blocks as unknown[], coverImage: null };
   }

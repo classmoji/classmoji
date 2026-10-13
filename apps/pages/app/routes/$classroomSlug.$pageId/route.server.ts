@@ -30,7 +30,6 @@ import {
   acquireUploadSlot,
   releaseUploadSlot,
 } from '@classmoji/utils/upload-concurrency';
-import { schema } from '~/components/editor/blocks/index.tsx';
 import type { PageForContent } from '~/types/pages.ts';
 import type { UploadCapability } from '@classmoji/services/media/router';
 import { loadMediaDownloads } from '~/utils/mediaDownloads.server.ts';
@@ -374,7 +373,7 @@ export const loader = async ({
     viewerContent = content;
   } else if (format === 'html') {
     // Migrate HTML to BlockNote JSON for viewing
-    viewerContent = await migrateHtmlToBlockNote(content as string, schema);
+    viewerContent = await migrateHtmlToBlockNote(content as string, { title: page.title });
   } else {
     // Empty page — and only that: 'none' now means both files 404'd, so an
     // unreadable content repo rejects out of the loader to the error boundary

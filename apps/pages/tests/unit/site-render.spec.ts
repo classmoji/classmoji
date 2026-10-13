@@ -717,7 +717,7 @@ test.describe('resilience', () => {
     const legacy =
       '<html><body><h1>Old Title</h1><p>Legacy body text.</p>' +
       '<ul><li>one</li><li>two</li></ul></body></html>';
-    const blocks = await migrateHtmlToBlockNote(legacy, schema);
+    const blocks = await migrateHtmlToBlockNote(legacy);
     const { html } = await renderSitePage({ blocks, resolveLink });
     expect(html).toContain('Legacy body text.');
     expect(html).toContain('data-content-type="bulletListItem"');
@@ -764,7 +764,7 @@ test.describe('resilience', () => {
             blocks: [{ type: 'paragraph', content: text(`direct-${i}`) }],
             resolveLink,
           }).then(r => r.html)
-        : migrateHtmlToBlockNote(`<body><p>migrated-${i}</p></body>`, schema)
+        : migrateHtmlToBlockNote(`<body><p>migrated-${i}</p></body>`)
             .then(blocks => renderSitePage({ blocks, resolveLink }))
             .then(r => r.html)
     );

@@ -6,10 +6,10 @@ import type { PageForContent } from '~/types/pages.ts';
  * (packages/services/src/classmoji/pageContent.service.ts).
  *
  * What stays app-local here:
- * - the migrateHtmlToBlockNote fallback in savePageCoverImage (needs the
- *   React editor schema, which must not leak into packages/services),
- * - the Web API File → Buffer adapter for uploads,
- * - extractBodyContent (used by the HTML→BlockNote migration).
+ * - the migrateHtmlToBlockNote fallback in savePageCoverImage (the legacy
+ *   HTML converter runs BlockNote's server editor, kept out of
+ *   packages/services),
+ * - the Web API File → Buffer adapter for uploads.
  */
 
 interface CoverImage {
@@ -100,8 +100,7 @@ export async function savePageCoverImage(
   } else if (format === 'html') {
     // Migrate HTML content so we don't lose it when creating content.json
     const { migrateHtmlToBlockNote } = await import('./migration.server.ts');
-    const { schema } = await import('~/components/editor/blocks/index.tsx');
-    currentBlocks = await migrateHtmlToBlockNote(content as string, schema);
+    currentBlocks = await migrateHtmlToBlockNote(content as string, { title: page.title });
   } else {
     currentBlocks = [{ type: 'paragraph', content: [] }];
   }
@@ -132,23 +131,4 @@ export async function uploadPageAsset(
 ): Promise<{ url: string; path: string; displayUrl: string | null }> {
   const buffer = Buffer.from(await file.arrayBuffer());
   return ClassmojiService.pageContent.uploadPageAsset(page, buffer, file.name);
-}
-
-/**
- * Extract body content from a full HTML document.
- * Strips html/head/body tags and any title/subtitle.
- */
-export function extractBodyContent(html: string): string {
-  if (!html) return '';
-
-  const bodyMatch = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
-  if (!bodyMatch) return html;
-
-  let content = bodyMatch[1].trim();
-
-  // Remove title and subtitle (first h1 and p.subtitle) — these are in the page DB model
-  content = content.replace(/<h1[^>]*>.*?<\/h1>/i, '');
-  content = content.replace(/<p class="subtitle"[^>]*>.*?<\/p>/i, '');
-
-  return content.trim();
 }

@@ -64,8 +64,9 @@ describe('extractText — page-html', () => {
   });
 
   it('keeps the authored first <h1> and subtitle, which the page renderer drops', () => {
-    // `extractBodyContent` (apps/pages/app/utils/content.server.ts:136-149)
-    // deletes both because the renderer draws them from the DB row. An index
+    // The page renderer's legacy converter (`htmlToPageBlocks`,
+    // packages/page-schema/src/html.ts) deletes both because it draws them
+    // from the DB row. An index
     // must not lose authored text that way.
     const { text } = page(wrapHtmlContent(body));
     expect(text).toContain('Wordle API');
