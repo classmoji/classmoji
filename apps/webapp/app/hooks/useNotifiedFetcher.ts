@@ -15,9 +15,9 @@ const OPERATION_KEY = 'classmoji.operation';
 /** Trigger's public tokens last 15 minutes, so a parked one outlives that. */
 const OPERATION_MAX_AGE_MS = 15 * 60_000;
 
-const park = (session: TriggerSession) => {
+const park = (operation: ActiveOperation) => {
   try {
-    sessionStorage.setItem(OPERATION_KEY, JSON.stringify({ session, startedAt: Date.now() }));
+    sessionStorage.setItem(OPERATION_KEY, JSON.stringify({ ...operation, startedAt: Date.now() }));
   } catch {
     /* Private mode, or storage is blocked. The callout still works, it just
        will not survive a reload. */
@@ -79,7 +79,7 @@ export const useNotifiedFetcher = () => {
       // reports on the batch in its own panel; reset the fetcher straight away,
       // so the next action is free to run while this one is still going.
       const session = fetcher.data.triggerSession as TriggerSession;
-      park(session);
+      park({ session });
       setOperation({ session });
       // A queued batch can carry a note about what it left out (e.g. students
       // skipped for having no GitLab account connected).
@@ -93,6 +93,11 @@ export const useNotifiedFetcher = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetcher.state, fetcher.data]);
 
+  const startOperation = useCallback((next: ActiveOperation) => {
+    park(next);
+    setOperation(next);
+  }, []);
+
   const endOperation = useCallback(() => {
     unpark();
     setOperation(null);
@@ -101,7 +106,7 @@ export const useNotifiedFetcher = () => {
   // A reload drops the subscription but not the work: the batch is still
   // running on Trigger's side, so pick it up again and keep reporting.
   useEffect(() => {
-    let parked: { session?: TriggerSession; startedAt?: number } | null = null;
+    let parked: { session?: TriggerSession; kind?: string; startedAt?: number } | null = null;
     try {
       const raw = sessionStorage.getItem(OPERATION_KEY);
       parked = raw ? JSON.parse(raw) : null;
@@ -113,7 +118,7 @@ export const useNotifiedFetcher = () => {
     // work is long finished either way.
     if (Date.now() - (parked.startedAt ?? 0) > OPERATION_MAX_AGE_MS) return unpark();
 
-    setOperation({ session: parked.session });
+    setOperation({ session: parked.session, kind: parked.kind });
   }, []);
 
   const dismissNotify = useCallback(
@@ -152,5 +157,5 @@ export const useNotifiedFetcher = () => {
 
   fetcher.reset = reset;
 
-  return { fetcher, notify, operation, endOperation, dismissNotify };
+  return { fetcher, notify, operation, endOperation, dismissNotify, startOperation };
 };

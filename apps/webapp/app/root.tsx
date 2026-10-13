@@ -307,9 +307,12 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 // Provides FetcherContext; must live inside CalloutProvider since
 // useNotifiedFetcher reads useCallout().
 const FetcherProvider = ({ children }: { children: React.ReactNode }) => {
-  const { fetcher, notify, operation, endOperation, dismissNotify } = useNotifiedFetcher();
+  const { fetcher, notify, operation, endOperation, dismissNotify, startOperation } =
+    useNotifiedFetcher();
   return (
-    <FetcherContext.Provider value={{ fetcher, notify, operation, endOperation, dismissNotify }}>
+    <FetcherContext.Provider
+      value={{ fetcher, notify, operation, endOperation, dismissNotify, startOperation }}
+    >
       {children}
     </FetcherContext.Provider>
   );

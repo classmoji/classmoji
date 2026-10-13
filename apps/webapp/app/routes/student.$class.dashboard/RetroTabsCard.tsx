@@ -238,7 +238,9 @@ const TeamPanel = ({
   classSlug: string;
 }) => {
   const web = useGitWeb();
-  if (team) {
+  // A team still to form outranks one already formed: it is what the student
+  // has to act on.
+  if (team && !needsTeam) {
     const footer = (
       <>
         <Link
@@ -382,7 +384,9 @@ const RetroTabsCard = ({
   gradeSummary,
   classSlug,
 }: RetroTabsCardProps) => {
-  const [active, setActive] = useState<TabKey>('feedback');
+  // A team still to form opens on the Team tab: otherwise the prompt sits
+  // behind a tab nobody has reason to click.
+  const [active, setActive] = useState<TabKey>(needsTeam ? 'team' : 'feedback');
 
   return (
     <div className="h-full flex flex-col">
