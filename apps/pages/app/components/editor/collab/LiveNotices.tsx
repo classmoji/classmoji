@@ -1,6 +1,6 @@
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react';
 
-import { rejectionNotice, type LiveRefusal } from '~/utils/collab.ts';
+import { refusalOffersReload, rejectionNotice, type LiveRefusal } from '~/utils/collab.ts';
 import { LIVE_UNAVAILABLE_MESSAGE } from '~/utils/liveGates.ts';
 
 const reload = () => window.location.reload();
@@ -38,9 +38,10 @@ function Bar({
 }
 
 /**
- * The banner for a live session that ended. Every case offers Reload — a
- * refused session is never a dead end. Nothing is shown while the route is
- * reloading by itself.
+ * The banner for a live session that ended. Every case a reload can change
+ * offers Reload; a legacy page collab could not convert does not (a reload
+ * meets the same refusal). Nothing is shown while the route is reloading by
+ * itself.
  */
 export function LiveRejectedBanner({
   reason,
@@ -69,9 +70,11 @@ export function LiveRejectedBanner({
             Copy my unsaved changes
           </button>
         )}
-        <button type="button" onClick={reload} className={primaryButton} data-reason={reason}>
-          Reload
-        </button>
+        {refusalOffersReload(reason) && (
+          <button type="button" onClick={reload} className={primaryButton} data-reason={reason}>
+            Reload
+          </button>
+        )}
       </div>
     </Bar>
   );
