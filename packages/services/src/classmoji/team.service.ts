@@ -179,6 +179,72 @@ export const findByTagId = async (classroomId: string, tagId: string) => {
   );
 };
 
+/**
+ * Every published self-formed group repository of a classroom, oldest first,
+ * each with the student's team for it (null when they have none) and whether
+ * a team can still be formed. Self-formed teams carry the tag named after the
+ * repository's slug, created by the first team formed. This is what tells a
+ * student where to form a team, so it must not depend on modules or
+ * assignments: a repository can be handed out without either.
+ */
+export const findSelfFormedForStudent = async (classroomId: string, userId: string) => {
+  const prisma = getPrisma();
+  const repositories = await prisma.repository.findMany({
+    where: {
+      classroom_id: classroomId,
+      is_published: true,
+      type: 'GROUP',
+      team_formation_mode: 'SELF_FORMED',
+      slug: { not: null },
+    },
+    select: {
+      id: true,
+      slug: true,
+      title: true,
+      team_formation_deadline: true,
+      max_team_size: true,
+    },
+    orderBy: { created_at: 'asc' },
+  });
+  if (repositories.length === 0) return [];
+
+  const slugs = repositories.map(r => r.slug!);
+  const teams = withLogins(
+    await prisma.team.findMany({
+      where: {
+        classroom_id: classroomId,
+        memberships: { some: { user_id: userId } },
+        tags: { some: { tag: { classroom_id: classroomId, name: { in: slugs } } } },
+      },
+      include: {
+        tags: { include: { tag: { select: { name: true } } } },
+        git_repos: {
+          where: { repository_id: { in: repositories.map(r => r.id) } },
+          select: { name: true, repository_id: true },
+        },
+        memberships: {
+          include: {
+            user: { select: { id: true, name: true, image: true, ...GIT_IDENTITY } },
+          },
+        },
+      },
+    })
+  );
+
+  const now = new Date();
+  return repositories.map(repository => {
+    const team = teams.find(t => t.tags.some(tt => tt.tag.name === repository.slug)) ?? null;
+    return {
+      repository,
+      team,
+      // The team's copy of this repository, once it has been created.
+      gitRepoName: team?.git_repos.find(g => g.repository_id === repository.id)?.name ?? null,
+      formationOpen:
+        !repository.team_formation_deadline || now <= repository.team_formation_deadline,
+    };
+  });
+};
+
 export const findUserTeamByTag = async (classroomId: string, tagId: string, userId: string) => {
   return withLogins(
     await getPrisma().team.findFirst({

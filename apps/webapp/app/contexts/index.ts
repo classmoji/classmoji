@@ -19,6 +19,12 @@ export interface TriggerSession {
 /** A running operation; OperationProgress reports on it in its panel. */
 export interface ActiveOperation {
   session: TriggerSession;
+  /**
+   * Which OperationProgress copy to use. Unset, it is read from the tasks the
+   * runs belong to; set it when the same tasks need other words (a student
+   * creating their team's repository is not an instructor publishing).
+   */
+  kind?: string;
 }
 
 export interface FetcherContextValue {
@@ -30,6 +36,11 @@ export interface FetcherContextValue {
   endOperation: () => void;
   /** Drop the placeholder callout a caller opened before the work started. */
   dismissNotify: (action: string) => void;
+  /**
+   * Watch work a route's own fetcher queued (the global fetcher starts its
+   * operations by itself).
+   */
+  startOperation: (operation: ActiveOperation) => void;
 }
 
 export const FetcherContext = createContext<FetcherContextValue>({
@@ -38,4 +49,5 @@ export const FetcherContext = createContext<FetcherContextValue>({
   operation: null,
   endOperation: () => {},
   dismissNotify: () => {},
+  startOperation: () => {},
 });

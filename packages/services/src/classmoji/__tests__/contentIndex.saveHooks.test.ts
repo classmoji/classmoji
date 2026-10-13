@@ -262,19 +262,23 @@ describe('a page create', () => {
     });
   });
 
-  it('indexes the legacy index.html when the create wrote no content.json', async () => {
+  it('indexes the content.json a create from HTML converted it into', async () => {
     await createPage({
       classroomId: CLASSROOM_ID,
       title: 'Imported Page',
       createdBy: 'user-1',
-      html: '<h1>Imported</h1>',
+      html: '<h2>Week one</h2><p>Read chapter two.</p>',
     });
     await settle();
 
-    expect(indexOneFileMock.mock.calls[0][0]).toMatchObject({
-      path: 'pages/imported-page/index.html',
-      body: '<h1>Imported</h1>',
-    });
+    expect(indexOneFileMock).toHaveBeenCalledTimes(1);
+    const call = indexOneFileMock.mock.calls[0][0] as { path: string; body: string };
+    expect(call.path).toBe('pages/imported-page/content.json');
+    // The bytes committed, not the HTML handed in.
+    expect(putMock).toHaveBeenCalledTimes(1);
+    expect(call.body).toBe(putMock.mock.calls[0][0].content);
+    expect(call.body).toContain('Read chapter two.');
+    expect(call.body).not.toContain('<p>');
   });
 });
 

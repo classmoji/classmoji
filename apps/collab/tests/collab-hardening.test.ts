@@ -302,11 +302,14 @@ describe('refusal reasons', () => {
     error.mockRestore();
   });
 
-  it("a legacy HTML page is refused with 'legacy-html'", async () => {
+  it("a legacy HTML page the converter cannot read is refused with 'legacy-html'", async () => {
     server.world.content.set(PAGE, 'html');
+    server.world.fail.convert = true;
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     const a = open();
     await waitFor(() => a.authFailures.length > 0, 3000, 'refusal');
     expect(a.authFailures[0]).toBe('legacy-html');
+    error.mockRestore();
   });
 });
 

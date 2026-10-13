@@ -73,6 +73,17 @@ const OPERATIONS: Record<string, OperationSpec> = {
       },
     ],
   },
+  // A student who just created a team: the one repository it gets.
+  TEAM_REPO: {
+    units: [
+      {
+        tasks: ['gh-create_git_repo'],
+        running: 'Creating your team repository',
+        done: 'Team repository created',
+        noun: 'repositories',
+      },
+    ],
+  },
   UPDATE_REPOS: {
     units: [
       {
@@ -418,7 +429,7 @@ const OperationRuns = ({ operation, onPanel, onRetryTarget }: WatcherProps) => {
     const all = runs;
     if (all.length === 0) return null;
 
-    const key = all.map(r => OPERATION_BY_TASK[r.taskIdentifier]).find(Boolean);
+    const key = operation.kind ?? all.map(r => OPERATION_BY_TASK[r.taskIdentifier]).find(Boolean);
     const spec = key ? OPERATIONS[key] : undefined;
     if (!spec) return null;
 
@@ -456,7 +467,7 @@ const OperationRuns = ({ operation, onPanel, onRetryTarget }: WatcherProps) => {
       current,
       retryTarget: key === 'PUBLISH' ? retryTargetOf(all) : null,
     };
-  }, [runs]);
+  }, [runs, operation.kind]);
 
   // Read through a ref: the timer below is set once, and `runs` in its
   // closure would always be the empty first render, which dismissed every

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const repositoryFindManyMock = vi.fn();
+const selfFormedMock = vi.fn();
 const calendarMock = vi.fn();
 const findAllAssignmentsMock = vi.fn();
 const regradeRequestsMock = vi.fn();
@@ -15,7 +15,6 @@ const letterGradeMappingFindManyMock = vi.fn();
 
 vi.mock('@classmoji/database', () => ({
   default: () => ({
-    repository: { findMany: (...a: unknown[]) => repositoryFindManyMock(...a) },
     // The grade line's reads, for the test that runs the real entry point.
     emojiMapping: { findMany: (...a: unknown[]) => emojiMappingFindManyMock(...a) },
     letterGradeMapping: { findMany: (...a: unknown[]) => letterGradeMappingFindManyMock(...a) },
@@ -50,7 +49,7 @@ vi.mock('@classmoji/services', () => ({
       findByClassroomIdAndName: vi.fn(),
     },
     team: {
-      findUserTeamByTag: vi.fn(),
+      findSelfFormedForStudent: (...a: unknown[]) => selfFormedMock(...a),
     },
     token: {
       updateExtension: vi.fn(),
@@ -119,7 +118,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   grant();
   calendarMock.mockResolvedValue([]);
-  repositoryFindManyMock.mockResolvedValue([]);
+  selfFormedMock.mockResolvedValue([]);
   regradeRequestsMock.mockResolvedValue([]);
   findAllAssignmentsMock.mockResolvedValue([]);
   loadQuizzesVisibleMock.mockResolvedValue(true);
@@ -360,16 +359,52 @@ describe('student dashboard loader — recent grades', () => {
 });
 
 describe('student dashboard loader — team card', () => {
-  it('reads the published repositories for the team card only', async () => {
+  /** A row as team.findSelfFormedForStudent returns it. */
+  const selfFormed = (slug: string, team: string | null, over: Record<string, unknown> = {}) => ({
+    repository: { id: `r-${slug}`, slug, title: slug, team_formation_deadline: null },
+    team: team
+      ? {
+          name: team,
+          memberships: [{ user: { id: 'student-1', name: 'Ada', login: 'ada', image: null } }],
+        }
+      : null,
+    gitRepoName: team ? `${slug}-${team}` : null,
+    formationOpen: true,
+    ...over,
+  });
+
+  it('reads the self-formed repositories for this student and classroom', async () => {
     await (
       await loader(loaderArgs())
     ).data;
 
-    expect(repositoryFindManyMock).toHaveBeenCalledWith({
-      where: { classroom_id: 'class-1', is_published: true },
-      select: { id: true, slug: true, title: true, type: true, team_formation_mode: true },
-      orderBy: { created_at: 'asc' },
-    });
+    expect(selfFormedMock).toHaveBeenCalledWith('class-1', 'student-1');
+  });
+
+  it('prompts for a later repository even when the student has a team for an earlier one', async () => {
+    selfFormedMock.mockResolvedValue([selfFormed('hw1', 'pair'), selfFormed('hw3', null)]);
+
+    const data = await (await loader(loaderArgs())).data;
+
+    expect(data.needsTeam).toEqual({ moduleTitle: 'hw3', moduleSlug: 'hw3' });
+    expect(data.team?.teamName).toBe('pair');
+  });
+
+  it('links the team repo from the repository itself, with no assignment needed', async () => {
+    selfFormedMock.mockResolvedValue([selfFormed('hw3', 'pair')]);
+
+    const data = await (await loader(loaderArgs())).data;
+
+    expect(data.needsTeam).toBeNull();
+    expect(data.team?.repoUrl).toContain('hw3-pair');
+  });
+
+  it('does not prompt once team formation has closed', async () => {
+    selfFormedMock.mockResolvedValue([selfFormed('hw3', null, { formationOpen: false })]);
+
+    const data = await (await loader(loaderArgs())).data;
+
+    expect(data.needsTeam).toBeNull();
   });
 });
 

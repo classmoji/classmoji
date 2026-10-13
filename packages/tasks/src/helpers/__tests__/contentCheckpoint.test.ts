@@ -1019,6 +1019,59 @@ describe('runContentCheckpoint bookkeeping round 2', () => {
     });
   });
 
+  describe('a legacy page (index.html only) seeded from its HTML', () => {
+    /** pages/lab-1 holds only the legacy index.html, as a page the old editor wrote. */
+    function legacyLab() {
+      const work = path.join(root, 'work');
+      sh(['pull', '--ff-only', 'origin', 'main'], work);
+      mkdirSync(path.join(work, 'pages', 'lab-1'), { recursive: true });
+      writeFileSync(path.join(work, 'pages', 'lab-1', 'index.html'), '<h1>Lab 1</h1><p>old</p>');
+      sh(['add', '-A'], work);
+      sh(['commit', '-m', 'legacy page'], work);
+      sh(['push', 'origin', 'main'], work);
+      return blobAt('pages/lab-1/index.html');
+    }
+
+    it('the first checkpoint creates content.json beside index.html and records its blob', async () => {
+      const htmlSha = legacyLab();
+      // What collab seeds a converted legacy page with: index.html's blob.
+      const prisma = makePrisma([
+        row('page', 'page-b', blocksToYDoc([para('b1', 'converted, then edited')]), 2, {
+          source_sha: htmlSha,
+        }),
+      ]);
+      const { deps, notifyOutsideEdit } = makeDeps(prisma);
+      const report = await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r' }, deps);
+
+      expect(notifyOutsideEdit).not.toHaveBeenCalled();
+      expect(report.docs[0]).toMatchObject({
+        status: 'pushed',
+        clean: true,
+        paths: ['pages/lab-1/content.json'],
+      });
+      expect(JSON.parse(remoteFile('pages/lab-1/content.json')).blocks[0].id).toBe('b1');
+      // index.html stays where it was (savePageContent never deletes it either).
+      expect(blobAt('pages/lab-1/index.html')).toBe(htmlSha);
+      // From here on source_sha tracks content.json.
+      expect(prisma.rows[0]).toMatchObject({
+        pushed_version: 2,
+        source_sha: blobAt('pages/lab-1/content.json'),
+        dirty_since: null,
+      });
+    });
+
+    it('a null source_sha would read the legacy index.html as an outside edit', async () => {
+      legacyLab();
+      const prisma = makePrisma([
+        row('page', 'page-b', blocksToYDoc([para('b1', 'x')]), 1, { source_sha: null }),
+      ]);
+      const { deps } = makeDeps(prisma);
+      const report = await runContentCheckpoint({ classroomId: 'class-1' }, { runId: 'r' }, deps);
+      expect(report.docs[0]).toMatchObject({ status: 'refused', code: 'outside-edit-pending' });
+      expect(blobOrNull('pages/lab-1/content.json')).toBeNull();
+    });
+  });
+
   it('records outcomes per doc, credits row editors, trims them, audits and signals collab', async () => {
     const prisma = makePrisma([
       row('page', 'page-a', blocksToYDoc([para('a1', 'a')]), 1, {

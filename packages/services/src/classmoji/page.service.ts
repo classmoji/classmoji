@@ -4,11 +4,19 @@ import { ContentService } from '../content/ContentService.ts';
 import { getGitProvider } from '../git/index.ts';
 import type { GitLabProvider } from '../git/GitLabProvider.ts';
 import { recordContentAssets, removeContentAssetFolder } from './contentAssets.service.ts';
-import { shouldCreatePrivateContentRepo } from './contentDelivery.service.ts';
+import {
+  canServeSignedContent,
+  shouldCreatePrivateContentRepo,
+} from './contentDelivery.service.ts';
 import { indexOneFile } from './contentIndex.service.ts';
 import * as contentManifestService from './contentManifest.service.ts';
 import * as notificationService from './notification.service.ts';
-import { blankPageContentJson, previewBranchName } from './pageContent.service.ts';
+import {
+  blankPageContentJson,
+  preparePageContent,
+  previewBranchName,
+} from './pageContent.service.ts';
+import { convertPageHtml, storeCommittedAssetPaths } from './pageHtmlBlocks.ts';
 import type { Prisma } from '@prisma/client';
 import * as gitlabInstanceService from './gitlabInstance.service.ts';
 
@@ -191,8 +199,8 @@ export async function create(values: Prisma.PageUncheckedCreateInput) {
 
 // ─── Create-page choreography (extract-first, plan §5.2 gap 2) ──────────────
 // The full "create a page" operation is: ensure the shared per-classroom
-// content repo exists on GitHub → upload the page folder's files (always an
-// index.html, plus any imported assets) → create the DB row → optionally link
+// content repo exists on GitHub → upload the page folder's files (always a
+// content.json, plus any imported assets) → create the DB row → optionally link
 // it to a repository → refresh the content manifest. This used to be
 // duplicated in admin.$class.pages.new/route.tsx and api.pages.batch/route.ts;
 // both now call createPage()/ensureContentRepo() below.
@@ -215,7 +223,7 @@ export function generatePageTemplate(_title: string): string {
   return `Add your content here...\n`;
 }
 
-/** A file to commit alongside the page's index.html (import-flow assets). */
+/** A file to commit alongside the page's content.json (import-flow assets). */
 export interface PageFileUpload {
   path: string;
   content: string;
@@ -351,10 +359,67 @@ export async function ensureContentRepo(classroomId: string) {
 }
 
 /**
- * Orchestrated page creation: content-repo folder + index.html (+ any extra
+ * The `content.json` a page created from HTML is committed with.
+ *
+ * Converted with the legacy-page converter, then written in exactly the bytes a
+ * save would produce (`preparePageContent`): every signed URL of ours turned
+ * back into the reference behind it — `html` from an agent can carry the
+ * display URLs it was shown — and the block structure normalized. No cover:
+ * `coverImage: null` also skips the save path's re-read of a file that does not
+ * exist yet.
+ *
+ * Image references follow `uploadPageAsset`: an absolute URL into this repo
+ * that names one of `files` is stored as its bare repo path when the classroom
+ * is served signed, and as it came otherwise (see `storeCommittedAssetPaths`).
+ */
+async function contentJsonFromHtml({
+  ctx,
+  title,
+  contentPath,
+  html,
+  files,
+}: {
+  ctx: ContentRepoContext;
+  title: string;
+  contentPath: string;
+  html: string;
+  files: PageFileUpload[];
+}): Promise<string> {
+  const converted = await convertPageHtml(html, { title });
+  const blocks = storeCommittedAssetPaths(converted, {
+    login: ctx.gitOrgLogin,
+    repo: ctx.repoName,
+    committedPaths: new Set(files.map(file => file.path)),
+    storeRepoPaths: canServeSignedContent(ctx.classroom),
+  });
+  const prepared = await preparePageContent(
+    {
+      title,
+      content_path: contentPath,
+      classroom: {
+        ...ctx.classroom,
+        content_repo: ctx.repoName,
+        content_delivery_enabled: ctx.classroom.content_delivery_enabled === true,
+      },
+    },
+    blocks,
+    { coverImage: null }
+  );
+  return prepared.content;
+}
+
+/**
+ * Orchestrated page creation: content-repo folder + content.json (+ any extra
  * files) on GitHub, DB row, optional repository link, manifest refresh.
  *
- * @param html   index.html content; defaults to the blank-page template.
+ * Every page is created with a `content.json`. Live editing, the granular
+ * content tools and the block editor all need one, and a page created as bare
+ * `index.html` stays a legacy page until someone converts it.
+ *
+ * @param html   Initial content as HTML (a markdown import, MCP `page_create`).
+ *               Converted to blocks (`htmlToPageBlocks`, the converter the
+ *               viewer runs on a legacy page) and committed as content.json
+ *               ONLY — no index.html. Omitted: a blank page.
  * @param files  Extra files to commit in the same batch (full repo paths,
  *               e.g. `pages/{slug}/assets/foo.png`) — the import flow's images.
  * @param ensureRepo  Skip the exists/create check when the caller already ran
@@ -409,6 +474,13 @@ export async function createPage({
     await assertLinkTargetsInClassroom(classroomId, { repositoryId: linkRepositoryId });
   }
 
+  const jsonPath = `${contentPath}/content.json`;
+
+  // HTML becomes content.json, converted HERE — before anything is written, so
+  // a conversion that fails leaves no commit and no row behind.
+  const htmlContentJson =
+    html != null ? await contentJsonFromHtml({ ctx, title, contentPath, html, files }) : null;
+
   if (ensureRepo) {
     await ensureContentRepoExists(ctx);
   }
@@ -436,21 +508,22 @@ export async function createPage({
    * The TEXT bodies this create committed, by path.
    *
    * Kept so the search index can be fed from the bytes rather than fetched back
-   * out of GitHub a second later. Only the two text files go in — `files` on the
-   * import branch carries base64 for binary uploads, and those are not
-   * documents. See the index enqueue after the DB row below.
+   * out of GitHub a second later. Only the page's own text files go in —
+   * `files` on the import branch carries base64 for binary uploads, and those
+   * are not documents. See the index enqueue after the DB row below.
    */
   const bodies = new Map<string, string>();
 
   if (files.length > 0) {
-    // Import flow: assets + index.html in a single batch commit.
+    // Import flow: assets + content.json in a single batch commit. No HTML
+    // here means a blank page that still carries files.
     try {
-      const indexHtml = html ?? generatePageTemplate(title);
-      bodies.set(htmlPath, indexHtml);
+      const pageJson = htmlContentJson ?? blankPageContentJson();
+      bodies.set(jsonPath, pageJson);
       const result = await ContentService.uploadBatch({
         gitOrganization: ctx.classroom.git_organization!,
         repo: ctx.repoName,
-        files: [...files, { path: htmlPath, content: indexHtml, encoding: 'utf-8' }],
+        files: [...files, { path: jsonPath, content: pageJson, encoding: 'utf-8' }],
         branch: 'main',
         message: commitMessage ?? `Import page: ${title}`,
       });
@@ -462,18 +535,18 @@ export async function createPage({
         { cause: uploadError }
       );
     }
-  } else if (html != null) {
+  } else if (htmlContentJson != null) {
     // Import/markdown flow without extra assets: single-file commit.
     try {
-      bodies.set(htmlPath, html);
+      bodies.set(jsonPath, htmlContentJson);
       const result = await ContentService.put({
         gitOrganization: ctx.classroom.git_organization!,
         repo: ctx.repoName,
-        path: htmlPath,
-        content: html,
+        path: jsonPath,
+        content: htmlContentJson,
         message: commitMessage ?? `Create page: ${title}`,
       });
-      written = [{ path: htmlPath, sha: result.sha }];
+      written = [{ path: jsonPath, sha: result.sha }];
     } catch (uploadError) {
       console.error('Failed to upload file to GitHub:', uploadError);
       throw new Error(
@@ -489,13 +562,13 @@ export async function createPage({
       const indexHtml = generatePageTemplate(title);
       const blankJson = blankPageContentJson();
       bodies.set(htmlPath, indexHtml);
-      bodies.set(`${contentPath}/content.json`, blankJson);
+      bodies.set(jsonPath, blankJson);
       const result = await ContentService.uploadBatch({
         gitOrganization: ctx.classroom.git_organization!,
         repo: ctx.repoName,
         files: [
           { path: htmlPath, content: indexHtml, encoding: 'utf-8' },
-          { path: `${contentPath}/content.json`, content: blankJson, encoding: 'utf-8' },
+          { path: jsonPath, content: blankJson, encoding: 'utf-8' },
         ],
         branch: 'main',
         message: commitMessage ?? `Create page: ${title}`,
@@ -546,10 +619,9 @@ export async function createPage({
     // the asset recorder it would resolve nothing and index nothing, on the one
     // path where a brand-new document most needs to become findable.
     //
-    // `content.json` when the branch wrote one (every blank create does), the
-    // legacy `index.html` otherwise — the same precedence the reader uses.
+    // `content.json` — every branch writes one now — with the legacy
+    // `index.html` kept as the fallback, the same precedence the reader uses.
     // Not awaited; `indexOneFile` never rejects.
-    const jsonPath = `${contentPath}/content.json`;
     const canonicalPath = bodies.has(jsonPath) ? jsonPath : htmlPath;
     const canonicalSha = written.find(file => file.path === canonicalPath)?.sha;
     const canonicalBody = bodies.get(canonicalPath);

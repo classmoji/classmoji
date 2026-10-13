@@ -11,6 +11,7 @@ import type { Role } from '@prisma/client';
 import { HocuspocusProvider, HocuspocusProviderWebsocket } from '@hocuspocus/provider';
 import type { CollabActor, CollabKind, ContentCheckpointPayload } from '@classmoji/collab';
 import { SCHEMA_VERSION } from '@classmoji/page-schema';
+import { htmlToPageBlocks } from '@classmoji/page-schema/server';
 
 import { createAdapterRegistry } from '../src/adapters/registry.ts';
 import { createPageAdapter, type PageRecord } from '../src/adapters/page.ts';
@@ -223,15 +224,28 @@ export class FakeSessions implements SessionResolver {
 export interface FakeWorld {
   pages: Map<string, PageRecord>;
   roles: Map<string, Role>; // `${userId}:${classroomId}`
-  /** content.json per page id (blocks + cover), or 'html' / 'none'. */
-  content: Map<string, { blocks: unknown[]; coverImage?: unknown } | 'html' | 'none'>;
+  /**
+   * content.json per page id (blocks + cover), legacy index.html only
+   * (`{ html }`, or 'html' for `<p>old</p>`), or 'none'.
+   */
+  content: Map<
+    string,
+    { blocks: unknown[]; coverImage?: unknown } | { html: string } | 'html' | 'none'
+  >;
   /** Content at a ref (commit sha) per page: `${pageId}@${ref}`. */
-  contentAt: Map<string, { blocks: unknown[]; coverImage?: unknown }>;
+  contentAt: Map<string, { blocks: unknown[]; coverImage?: unknown } | { html: string }>;
   blobs: Map<string, string>;
-  /** Blob sha of a page's content.json at the default branch (default 'seed-sha'). */
+  /**
+   * Blob sha of a page's file at the default branch (default 'seed-sha' for
+   * content.json, 'html-sha' for index.html).
+   */
   headSha: Map<string, string>;
+  /** Legacy HTML conversions run (the real converter), in order. */
+  conversions: string[];
+  /** `pageIdsInClassroom` calls: the classroom and the ids asked about. */
+  pageIdQueries: Array<{ classroomId: string; ids: string[] }>;
   /** Make a lookup throw (an unexpected error, e.g. a DB blip). */
-  fail: { role?: boolean; content?: boolean };
+  fail: { role?: boolean; content?: boolean; convert?: boolean; pageIds?: boolean };
 }
 
 export function makePage(id: string, overrides: Partial<PageRecord['classroom']> = {}): PageRecord {
@@ -259,6 +273,8 @@ export function createWorld(): FakeWorld {
     contentAt: new Map(),
     blobs: new Map(),
     headSha: new Map(),
+    conversions: [],
+    pageIdQueries: [],
     fail: {},
   };
 }
@@ -277,6 +293,8 @@ export function pageAdapterFor(world: FakeWorld) {
       if (ref) {
         const at = world.contentAt.get(`${page.id}@${ref}`);
         if (!at) return { format: 'none', blocks: null, coverImage: null, sha: null };
+        if ('html' in at)
+          return { format: 'html', blocks: at.html, coverImage: null, sha: `blob-${ref}` };
         return {
           format: 'json',
           blocks: at.blocks,
@@ -286,8 +304,13 @@ export function pageAdapterFor(world: FakeWorld) {
       }
       const c = world.content.get(page.id) ?? 'none';
       if (c === 'none') return { format: 'none', blocks: null, coverImage: null, sha: null };
-      if (c === 'html')
-        return { format: 'html', blocks: '<p>old</p>', coverImage: null, sha: 'html-sha' };
+      if (c === 'html' || 'html' in c)
+        return {
+          format: 'html',
+          blocks: c === 'html' ? '<p>old</p>' : c.html,
+          coverImage: null,
+          sha: world.headSha.get(page.id) ?? 'html-sha',
+        };
       return {
         format: 'json',
         blocks: c.blocks,
@@ -297,6 +320,16 @@ export function pageAdapterFor(world: FakeWorld) {
     },
     async readBlob(_page, sha) {
       return world.blobs.get(sha) ?? null;
+    },
+    async pageIdsInClassroom(classroomId, ids) {
+      world.pageIdQueries.push({ classroomId, ids });
+      if (world.fail.pageIds) throw new Error('database unavailable');
+      return new Set(ids.filter(id => world.pages.get(id)?.classroom_id === classroomId));
+    },
+    async convertHtml(html, options) {
+      world.conversions.push(html);
+      if (world.fail.convert) throw new Error('converter blew up');
+      return htmlToPageBlocks(html, options);
     },
   });
 }

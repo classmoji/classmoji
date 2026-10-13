@@ -47,6 +47,7 @@ import {
   peerLabel,
   peersFromAwareness,
   readCoverValue,
+  refusalOffersReload,
   rejectionNotice,
   saveMachineryEnabled,
   type CollabLoaderData,
@@ -367,6 +368,30 @@ test.describe('refusals', () => {
     ] as const) {
       expect(rejectionNotice(reason).message).toBeTruthy();
     }
+  });
+
+  test('the refusal banner offers Reload unless a reload cannot help (legacy-html)', () => {
+    expect(refusalOffersReload('legacy-html')).toBe(false);
+    for (const reason of [
+      'reload',
+      'stale-epoch',
+      'schema-mismatch',
+      'unavailable',
+      'forbidden',
+    ] as const) {
+      expect(refusalOffersReload(reason)).toBe(true);
+    }
+    // The banner's Reload button is behind that rule (a .tsx component is
+    // pinned from source here, like the route's wiring).
+    const notices = source('../../app/components/editor/collab/LiveNotices.tsx');
+    const banner = notices.slice(
+      notices.indexOf('export function LiveRejectedBanner'),
+      notices.indexOf('export function LiveUnreachableNotice')
+    );
+    expect(banner).toMatch(
+      /\{refusalOffersReload\(reason\) && \(\s*<button[^>]*onClick=\{reload\}/
+    );
+    expect(banner.match(/onClick=\{reload\}/g)).toHaveLength(1);
   });
 
   test('a stale or closed room reloads by itself only with nothing unsynced', () => {

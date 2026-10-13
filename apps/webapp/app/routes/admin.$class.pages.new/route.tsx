@@ -113,9 +113,9 @@ async function createPage({ request, params }: Route.ActionArgs, slot: { held: b
   const contentPath = ClassmojiService.page.pageContentPath(title);
 
   try {
-    // index.html content; undefined = blank-page template (service default)
+    // Page HTML, converted to content.json by the service; undefined = blank page
     let pageHtml: string | undefined;
-    // Extra files (import-flow images) committed alongside index.html
+    // Extra files (import-flow images) committed alongside content.json
     const files: Array<{ path: string; content: string; encoding: 'utf-8' | 'base64' }> = [];
     const assetsFolder = `${contentPath}/assets`;
 
@@ -202,7 +202,7 @@ async function createPage({ request, params }: Route.ActionArgs, slot: { held: b
       pageHtml = wrapHtmlContent(html, 2); // Default width
     }
 
-    // Orchestrated create: content-repo ensure + upload (index.html + assets)
+    // Orchestrated create: content-repo ensure + upload (content.json + assets)
     // + DB row + manifest refresh (packages/services page.createPage).
     const page = await ClassmojiService.page.createPage({
       classroomId: classroom.id,

@@ -1,4 +1,5 @@
 import dayjs from 'dayjs';
+import { Link } from 'react-router';
 import { IconExternalLink } from '@tabler/icons-react';
 import { IconGithub } from '@classmoji/ui-components';
 
@@ -11,7 +12,10 @@ import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
 /**
  * The student's own repositories: theirs and their teams'. A repository can be
  * handed out without an assignment, and then this is the only place in
- * Classmoji that shows it.
+ * Classmoji that shows it. The same holds for a self-formed group repository
+ * the student has no team for yet: it has no copy to list until they form one,
+ * so it is listed with a link to its team page ("Repository published" links
+ * here).
  */
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { userId, classroom } = await requireStudentAccess(request, params.class!, {
@@ -20,7 +24,10 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   });
 
   const web = gitWeb(gitContextFor(classroom));
-  const repos = await ClassmojiService.gitRepo.findForStudent(classroom.id, userId);
+  const [repos, selfFormed] = await Promise.all([
+    ClassmojiService.gitRepo.findForStudent(classroom.id, userId),
+    ClassmojiService.team.findSelfFormedForStudent(classroom.id, userId),
+  ]);
 
   return {
     platform: web.label,
@@ -32,11 +39,19 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
       title: repo.repository.title,
       lastPushAt: repo.last_push_at?.toISOString() ?? null,
     })),
+    needsTeam: selfFormed
+      .filter(s => !s.team && s.formationOpen)
+      .map(s => ({
+        id: s.repository.id,
+        title: s.repository.title,
+        slug: s.repository.slug!,
+        deadline: s.repository.team_formation_deadline?.toISOString() ?? null,
+      })),
   };
 };
 
-const StudentRepositories = ({ loaderData }: Route.ComponentProps) => {
-  const { repos, platform, isGitLab } = loaderData;
+const StudentRepositories = ({ loaderData, params }: Route.ComponentProps) => {
+  const { repos, needsTeam, platform, isGitLab } = loaderData;
 
   return (
     <div className="min-h-full relative">
@@ -45,7 +60,7 @@ const StudentRepositories = ({ loaderData }: Route.ComponentProps) => {
       </div>
 
       <div className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-5 sm:p-6 min-h-[calc(100vh-10rem)]">
-        {repos.length === 0 ? (
+        {repos.length === 0 && needsTeam.length === 0 ? (
           <div className="text-center py-12 text-gray-500">
             <div className="font-medium">No repositories yet</div>
             <div className="text-sm">
@@ -85,6 +100,24 @@ const StudentRepositories = ({ loaderData }: Route.ComponentProps) => {
                   </td>
                   <td className="py-3 text-gray-600 dark:text-gray-300 hidden md:table-cell">
                     {repo.lastPushAt ? dayjs(repo.lastPushAt).fromNow() : 'No push yet'}
+                  </td>
+                </tr>
+              ))}
+              {needsTeam.map(item => (
+                <tr key={item.id} className="border-b border-line/60 last:border-0">
+                  <td className="py-3 pr-4 font-medium text-ink-0">{item.title}</td>
+                  <td className="py-3 pr-4">
+                    <Link
+                      to={`/student/${params.class}/repos/${item.slug}/team`}
+                      className="btn btn-sm btn-primary text-white! hover:text-white!"
+                    >
+                      Join a team
+                    </Link>
+                  </td>
+                  <td className="py-3 text-gray-600 dark:text-gray-300 hidden md:table-cell">
+                    {item.deadline
+                      ? `Teams close ${dayjs(item.deadline).format('MMM D, h:mm A')}`
+                      : 'No team yet'}
                   </td>
                 </tr>
               ))}

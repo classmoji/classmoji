@@ -508,8 +508,11 @@ export function convertMarkdownToHtml(markdown: string): string {
     return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   };
 
+  // Terminal languages are left alone: the terminal blocks above already
+  // hold them (as language-bash), and wrapping those again would nest a
+  // code-block widget inside each terminal.
   html = html.replace(
-    /<pre><code class="language-(\w+)">([\s\S]*?)<\/code><\/pre>/g,
+    /<pre><code class="language-(?!(?:bash|shell|sh)")(\w+)">([\s\S]*?)<\/code><\/pre>/g,
     (match, lang, content) => {
       // Decode HTML entities back to get actual content for line counting
       let decodedContent = content

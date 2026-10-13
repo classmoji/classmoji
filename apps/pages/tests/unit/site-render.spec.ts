@@ -29,6 +29,7 @@ import {
   siteArticleWidthClass,
   siteArticleWrapper,
   slugifyHeading,
+  withServerBlockNoteLock,
 } from '~/site/render.server.ts';
 import { SITE_STYLES } from '~/site/styles.ts';
 import { redactDocumentForViewer } from '~/site/redact.server.ts';
@@ -717,7 +718,7 @@ test.describe('resilience', () => {
     const legacy =
       '<html><body><h1>Old Title</h1><p>Legacy body text.</p>' +
       '<ul><li>one</li><li>two</li></ul></body></html>';
-    const blocks = await migrateHtmlToBlockNote(legacy, schema);
+    const blocks = await migrateHtmlToBlockNote(legacy);
     const { html } = await renderSitePage({ blocks, resolveLink });
     expect(html).toContain('Legacy body text.');
     expect(html).toContain('data-content-type="bulletListItem"');
@@ -764,7 +765,7 @@ test.describe('resilience', () => {
             blocks: [{ type: 'paragraph', content: text(`direct-${i}`) }],
             resolveLink,
           }).then(r => r.html)
-        : migrateHtmlToBlockNote(`<body><p>migrated-${i}</p></body>`, schema)
+        : migrateHtmlToBlockNote(`<body><p>migrated-${i}</p></body>`)
             .then(blocks => renderSitePage({ blocks, resolveLink }))
             .then(r => r.html)
     );
@@ -773,6 +774,24 @@ test.describe('resilience', () => {
     results.forEach((html, i) => {
       expect(html).toContain(i % 2 === 0 ? `direct-${i}` : `migrated-${i}`);
     });
+  });
+
+  test('a legacy migration takes the render lock itself (viewer loader, cover save)', async () => {
+    let release!: () => void;
+    const held = withServerBlockNoteLock(() => new Promise<void>(resolve => (release = resolve)));
+    let migrated = false;
+    const migration = migrateHtmlToBlockNote('<body><p>after the render</p></body>').then(
+      blocks => {
+        migrated = true;
+        return blocks;
+      }
+    );
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(migrated, 'migration ran while another render held the lock').toBe(false);
+    release();
+    await held;
+    const [first] = (await migration) as Array<{ content?: Array<{ text?: string }> }>;
+    expect(first.content?.[0]?.text).toBe('after the render');
   });
 });
 
