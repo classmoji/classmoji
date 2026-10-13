@@ -31,6 +31,7 @@ import {
   calendarEventCreateTool,
   calendarEventUpdateTool,
   calendarEventDeleteTool,
+  calendarEventLinksSetTool,
 } from './calendar.ts';
 import { pageCreateTool, pageUpdateTool, pageDeleteTool } from './pages.ts';
 import {
@@ -163,6 +164,7 @@ export function registerAllTools(): void {
   registerToolDefinition(calendarEventCreateTool);
   registerToolDefinition(calendarEventUpdateTool);
   registerToolDefinition(calendarEventDeleteTool);
+  registerToolDefinition(calendarEventLinksSetTool);
 
   // Pages (OWNER+TEACHER)
   registerToolDefinition(pageCreateTool);

@@ -277,7 +277,8 @@ export const listCalendarTool = mirrorResourceTool({
     'Any member; ' +
     'staff reads also include ' +
     'linked draft pages/decks and links to unpublished assignments, flagged as such. ' +
-    '`featured_resource` is the one link the month view shows under an event, or null.',
+    '`featured_resource` is the one link the month view shows under an event, or null. Staff ' +
+    "set an occurrence's links and star with calendar_event_links_set.",
 });
 
 export const listCalendarRangeTool = mirrorResourceTool({
@@ -291,7 +292,8 @@ export const listCalendarRangeTool = mirrorResourceTool({
     'deadlines have a `<field>_local` rendering in that zone. Any member; staff reads also include linked draft ' +
     'pages/decks and links ' +
     'to unpublished assignments, flagged as such. `featured_resource` is the one link the month ' +
-    'view shows under an event, or null.',
+    "view shows under an event, or null. Staff set an occurrence's links and star with " +
+    'calendar_event_links_set.',
   extraInput: {
     start: z.string().describe('Range start, ISO date YYYY-MM-DD'),
     end: z.string().describe('Range end, ISO date YYYY-MM-DD (must be after start)'),

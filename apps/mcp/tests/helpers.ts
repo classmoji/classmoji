@@ -458,6 +458,7 @@ export const MCP_TOOL_NAMES = new Set([
   'calendar_event_create',
   'calendar_event_update',
   'calendar_event_delete',
+  'calendar_event_links_set',
   'page_update',
   'page_delete',
   'token_grant',

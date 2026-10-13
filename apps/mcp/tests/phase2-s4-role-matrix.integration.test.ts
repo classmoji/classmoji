@@ -1175,6 +1175,67 @@ describe('calendar tools', () => {
     });
     expect(teacherUpdate.isError).toBe(false);
 
+    // calendar_event_links_set follows the same tiers: students refused, an
+    // assistant only on their own event, OWNER/TEACHER on any.
+    expectForbidden(
+      await callTool(student1, 'calendar_event_links_set', {
+        classroom: DEV_REF,
+        event_id: taEventId,
+        page_ids: [tierPageId],
+      }),
+      'calendar_event_links_set as student',
+      'INSUFFICIENT_ROLE'
+    );
+    expectForbidden(
+      await callTool(ta, 'calendar_event_links_set', {
+        classroom: DEV_REF,
+        event_id: ownerEventId,
+        page_ids: [tierPageId],
+      }),
+      'assistant linking content to another creator’s event',
+      'INSUFFICIENT_ROLE'
+    );
+    expect(await prisma.calendarEventPageLink.count({ where: { event_id: ownerEventId } })).toBe(0);
+
+    const ownLinks = await callTool(ta, 'calendar_event_links_set', {
+      classroom: DEV_REF,
+      event_id: taEventId,
+      page_ids: [tierPageId],
+      featured: { kind: 'page', id: tierPageId },
+    });
+    expect(ownLinks.isError).toBe(false);
+    expect(ownLinks.payload.featured).toEqual({ kind: 'page', id: tierPageId });
+    // A single event's links live in the undated bucket.
+    const linkRows = await prisma.calendarEventPageLink.findMany({
+      where: { event_id: taEventId },
+    });
+    expect(linkRows).toHaveLength(1);
+    expect(linkRows[0]).toMatchObject({
+      page_id: tierPageId,
+      occurrence_date: null,
+      featured: true,
+    });
+    await expectAuditRow({
+      userId: taMint.user_id,
+      classroomId: fx.dev.id,
+      role: 'ASSISTANT',
+      resourceType: 'CALENDAR',
+      action: 'UPDATE',
+      resourceId: taEventId,
+      tool: 'calendar_event_links_set',
+      since: suiteStart,
+    });
+
+    // TEACHER may change anyone's links: clearing the pages takes the star too.
+    const teacherLinks = await callTool(teacher, 'calendar_event_links_set', {
+      classroom: DEV_REF,
+      event_id: taEventId,
+      page_ids: [],
+    });
+    expect(teacherLinks.isError).toBe(false);
+    expect(teacherLinks.payload.featured).toBeNull();
+    expect(await prisma.calendarEventPageLink.count({ where: { event_id: taEventId } })).toBe(0);
+
     // ALLOW: OWNER deletes both events (also the cleanup path).
     for (const eventId of [taEventId, ownerEventId]) {
       const deleted = await callTool(owner, 'calendar_event_delete', {
