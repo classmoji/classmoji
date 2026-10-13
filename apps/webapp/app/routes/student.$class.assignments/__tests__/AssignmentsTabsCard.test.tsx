@@ -51,6 +51,7 @@ const base = {
   missing: false,
   suggestedExtensionHours: 0,
   extend: null,
+  page: null,
 } as const;
 
 const REPO_LATE: StudentCourseworkRow = {
@@ -125,6 +126,18 @@ const render = (rows: StudentCourseworkRow[], initialTab?: 'current' | 'complete
   );
 
 describe('AssignmentsTabsCard', () => {
+  it('links the page that describes an assignment, beside its issue link', () => {
+    const html = render([{ ...REPO_LATE, page: { id: 'page-1', title: 'Landing page spec' } }]);
+
+    expect(html).toContain('href="/student/intro-101/pages/page-1"');
+    expect(html).toContain('Landing page spec');
+    expect(html).toContain('href="https://github.com/org/lab-ada/issues/3"');
+  });
+
+  it('shows no page link for an assignment without a published page', () => {
+    expect(render([REPO_LATE])).not.toContain('/pages/');
+  });
+
   it('keeps every field of a repo row, keyed on the submission id', () => {
     const html = render([REPO_LATE]);
 

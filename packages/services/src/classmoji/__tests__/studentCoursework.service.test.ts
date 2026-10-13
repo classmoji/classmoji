@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   formFindMany: vi.fn(),
   settingsFindUnique: vi.fn(),
   netQuizExtensionHours: vi.fn(),
+  findFirstLinkedByAssignmentIds: vi.fn(),
 }));
 
 vi.mock('@classmoji/database', () => ({
@@ -39,6 +40,9 @@ vi.mock('../quizGradeItems.service.ts', () => ({
 }));
 vi.mock('../formResponse.service.ts', () => ({
   findSubmittedForUserByFormIds: (...a: unknown[]) => mocks.findSubmittedForUserByFormIds(...a),
+}));
+vi.mock('../page.service.ts', () => ({
+  findFirstLinkedByAssignmentIds: (...a: unknown[]) => mocks.findFirstLinkedByAssignmentIds(...a),
 }));
 vi.mock('../../emails/escape.ts', () => ({ pagesUrl: () => 'https://pages.test' }));
 
@@ -151,6 +155,7 @@ beforeEach(() => {
   mocks.quizFindMany.mockResolvedValue([]);
   mocks.formFindMany.mockResolvedValue([]);
   mocks.netQuizExtensionHours.mockResolvedValue(new Map());
+  mocks.findFirstLinkedByAssignmentIds.mockResolvedValue({});
 });
 
 describe('listForStudent — which assignments appear', () => {
@@ -303,6 +308,42 @@ describe('listForStudent — which assignments appear', () => {
     const rows = await list();
 
     expect(rows.map(r => r.assignmentId).sort()).toEqual(['q-1', 'r-1']);
+  });
+});
+
+describe('listForStudent — the page that describes an assignment', () => {
+  it('attaches the published page linked to each assignment, asking only for published ones', async () => {
+    mocks.listForClassroom.mockResolvedValue([
+      assignment('f-1', 'FORM'),
+      assignment('f-2', 'FORM'),
+    ]);
+    mocks.formFindMany.mockResolvedValue([form('form-f-1'), form('form-f-2')]);
+    mocks.findFirstLinkedByAssignmentIds.mockResolvedValue({
+      'f-1': { id: 'page-1', title: 'Spec' },
+    });
+
+    const rows = await list();
+
+    expect(mocks.findFirstLinkedByAssignmentIds).toHaveBeenCalledWith(['f-1', 'f-2'], {
+      publishedOnly: true,
+    });
+    expect(rows.find(row => row.assignmentId === 'f-1')!.page).toEqual({
+      id: 'page-1',
+      title: 'Spec',
+    });
+    expect(rows.find(row => row.assignmentId === 'f-2')!.page).toBeNull();
+  });
+
+  it('still lists the rows when the linked-page read fails', async () => {
+    mocks.listForClassroom.mockResolvedValue([assignment('f-1', 'FORM')]);
+    mocks.formFindMany.mockResolvedValue([form('form-f-1')]);
+    mocks.findFirstLinkedByAssignmentIds.mockRejectedValue(new Error('db down'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const rows = await list();
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].page).toBeNull();
   });
 });
 

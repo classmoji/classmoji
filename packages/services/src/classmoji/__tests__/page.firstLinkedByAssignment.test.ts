@@ -47,4 +47,16 @@ describe('page.findFirstLinkedByAssignmentIds', () => {
       })
     );
   });
+
+  it('leaves out draft pages when asked for published ones only', async () => {
+    pageLinkFindManyMock.mockResolvedValue([]);
+
+    await findFirstLinkedByAssignmentIds(['a1'], { publishedOnly: true });
+
+    expect(pageLinkFindManyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { assignment_id: { in: ['a1'] }, page: { is_draft: false } },
+      })
+    );
+  });
 });

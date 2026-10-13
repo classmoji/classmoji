@@ -42,6 +42,7 @@ const row = (over: Partial<StudentCourseworkRow>): StudentCourseworkRow => ({
   missing: false,
   suggestedExtensionHours: 0,
   extend: null,
+  page: null,
   ...over,
 });
 

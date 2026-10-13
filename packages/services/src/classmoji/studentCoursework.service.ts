@@ -46,6 +46,7 @@ import {
 import { pagesUrl } from '../emails/escape.ts';
 import * as formResponseService from './formResponse.service.ts';
 import * as helperService from './helper.service.ts';
+import * as pageService from './page.service.ts';
 import * as quizAttemptService from './quizAttempt.service.ts';
 import { netQuizExtensionHours } from './quizGradeItems.service.ts';
 
@@ -161,6 +162,12 @@ export interface StudentCourseworkRow {
   /** QUIZ: attempts used, and the cap (0 = unlimited). */
   attemptsUsed: number | null;
   maxAttempts: number | null;
+  /**
+   * The published page linked to the assignment (its first, when several): the
+   * description a student reads beside the work. Null when none is linked or
+   * the linked page is still a draft.
+   */
+  page: { id: string; title: string } | null;
   /** Where the row goes. */
   href: string | null;
   /** Whether `href` leaves the app (GitHub, the pages app). */
@@ -389,7 +396,7 @@ export const listForStudent = async ({
 
   // One read per type for this student. A type whose read fails shows no rows
   // (its statuses would be guesses); the other types still show.
-  const [repoSubmissions, quizJoin, formJoin, settings] = await Promise.all([
+  const [repoSubmissions, quizJoin, formJoin, settings, pageByAssignment] = await Promise.all([
     givenSubmissions ??
       (hasRepos
         ? helperService
@@ -437,6 +444,14 @@ export const listForStudent = async ({
             select: { default_tokens_per_hour: true, late_penalty_points_per_hour: true },
           }))().catch(degraded('classroom settings', context, null))
       : null,
+    // A draft page is staff-only, so a student is only ever pointed at a
+    // published one.
+    pageService
+      .findFirstLinkedByAssignmentIds(
+        assignments.map(a => a.id),
+        { publishedOnly: true }
+      )
+      .catch(degraded('linked page', context, {} as Record<string, { id: string; title: string }>)),
   ]);
   const classroomTokensPerHour = settings?.default_tokens_per_hour ?? 0;
   const latePenaltyPerHour = settings?.late_penalty_points_per_hour ?? 0;
@@ -467,6 +482,7 @@ export const listForStudent = async ({
       scoredAt: null,
       attemptsUsed: null,
       maxAttempts: null,
+      page: pageByAssignment[a.id] ?? null,
     };
 
     if (a.type === 'REPO') {
