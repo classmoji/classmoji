@@ -699,13 +699,20 @@ export async function findByAssignment(assignmentId: string) {
 /**
  * The first linked page of each assignment (lowest link order), in one query.
  * Keyed by assignment id; assignments with no linked page are absent.
+ * `publishedOnly` leaves out draft pages, for a reader who may not open one.
  */
-export async function findFirstLinkedByAssignmentIds(assignmentIds: string[]) {
+export async function findFirstLinkedByAssignmentIds(
+  assignmentIds: string[],
+  { publishedOnly = false }: { publishedOnly?: boolean } = {}
+) {
   const result: Record<string, { id: string; title: string }> = {};
   if (assignmentIds.length === 0) return result;
 
   const pageLinks = await getPrisma().pageLink.findMany({
-    where: { assignment_id: { in: assignmentIds } },
+    where: {
+      assignment_id: { in: assignmentIds },
+      ...(publishedOnly ? { page: { is_draft: false } } : {}),
+    },
     select: { assignment_id: true, page: { select: { id: true, title: true } } },
     orderBy: [{ order: 'asc' }, { created_at: 'asc' }],
   });

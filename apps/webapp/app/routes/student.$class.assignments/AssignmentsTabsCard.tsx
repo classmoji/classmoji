@@ -2,7 +2,7 @@ import { useState } from 'react';
 import dayjs from 'dayjs';
 import { Link, useParams } from 'react-router';
 import { motion, useReducedMotion } from 'framer-motion';
-import { IconExternalLink } from '@tabler/icons-react';
+import { IconExternalLink, IconFileText } from '@tabler/icons-react';
 import type { StudentCourseworkRow } from '@classmoji/services';
 import Emoji from '~/components/ui/display/Emoji';
 import TokenExtensionPopover from '~/components/features/TokenExtensionPopover';
@@ -215,6 +215,18 @@ const AssignmentsTabsCard = ({
                         <div className="flex flex-col gap-0.5 min-w-0">
                           <TitleLink row={row} />
                           <span className="text-xs text-ink-3">{meta.join(' · ')}</span>
+                          {row.page && (
+                            // The page that describes the assignment, which
+                            // can be named differently from it.
+                            <Link
+                              to={`/student/${classSlug}/pages/${row.page.id}`}
+                              title="Read the assignment description"
+                              className="inline-flex items-center gap-1 max-w-[14rem] text-xs text-gray-700! dark:text-gray-200! hover:text-ink-0! hover:underline underline-offset-2 transition-colors"
+                            >
+                              <IconFileText size={12} className="shrink-0 text-ink-3" />
+                              <span className="truncate">{row.page.title}</span>
+                            </Link>
+                          )}
                           {repo && (
                             // The student's own repository: the only place they
                             // reach it, with its commits and the kind of repo.
