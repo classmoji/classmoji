@@ -1,36 +1,20 @@
-import { ServerBlockNoteEditor } from '@blocknote/server-util';
 import * as Y from 'yjs';
 
 import { normalizeCodeBlockContent } from './codeContent.ts';
 import { COVER_IMAGE_KEY, FRAGMENT, META_MAP } from './constants.ts';
 import type { PageContent, PageCoverImage } from './content.ts';
-import { createPageSchema } from './schema.ts';
+import { getServerEditor, type PageServerEditor } from './serverEditor.ts';
 
 /**
  * Server-only helpers (Node): the BlockNote server editor for the page
- * schema, and the Y.Doc <-> page content conversions the collab server and
- * the git worker use. Pulls in @blocknote/server-util (jsdom), so keep it
+ * schema, the Y.Doc <-> page content conversions the collab server and the
+ * git worker use, and the legacy `index.html` -> blocks converter
+ * (`htmlToPageBlocks`). Pulls in @blocknote/server-util (jsdom), so keep it
  * out of browser bundles — the browser entry is `@classmoji/page-schema`.
  */
 
-function buildServerEditor() {
-  return ServerBlockNoteEditor.create({ schema: createPageSchema() });
-}
-
-export type PageServerEditor = ReturnType<typeof buildServerEditor>;
-
-/** A new ServerBlockNoteEditor running the page schema. */
-export function createServerEditor(): PageServerEditor {
-  return buildServerEditor();
-}
-
-let shared: PageServerEditor | undefined;
-
-/** One lazily created server editor per process (it holds no document). */
-export function getServerEditor(): PageServerEditor {
-  shared ??= createServerEditor();
-  return shared;
-}
+export { createServerEditor, getServerEditor, type PageServerEditor } from './serverEditor.ts';
+export { htmlToPageBlocks, type HtmlToPageBlocksOptions, type PageBlock } from './html.ts';
 
 /** A detached copy of `doc`: read from this, never from a live document. */
 export function cloneDoc(doc: Y.Doc): Y.Doc {

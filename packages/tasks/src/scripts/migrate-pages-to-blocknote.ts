@@ -1,35 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 import { ContentService } from '@classmoji/content';
 import { ClassmojiService } from '@classmoji/services';
-import { migrateHtmlToBlockNote } from '../../../../apps/pages/app/utils/migration.server.ts';
-import { BlockNoteSchema, defaultBlockSpecs, createCodeBlockSpec } from '@blocknote/core';
-import { multiColumnSchema } from '@blocknote/xl-multi-column';
-import { codeBlockOptions } from '@blocknote/code-block';
-import { Callout } from '../../../../apps/pages/app/components/editor/blocks/CalloutBlock.tsx';
-import { Terminal } from '../../../../apps/pages/app/components/editor/blocks/TerminalBlock.tsx';
-import { Profile } from '../../../../apps/pages/app/components/editor/blocks/ProfileBlock.tsx';
-import { PageLink } from '../../../../apps/pages/app/components/editor/blocks/PageLinkBlock.tsx';
-import { Divider } from '../../../../apps/pages/app/components/editor/blocks/DividerBlock.tsx';
-import { Embed } from '../../../../apps/pages/app/components/editor/blocks/EmbedBlock.tsx';
-import { Video } from '../../../../apps/pages/app/components/editor/blocks/VideoBlock.tsx';
-
-// Create the schema inline (same as in index.jsx but without React imports)
-const { audio, video: defaultVideo, ...filteredDefaultBlockSpecs } = defaultBlockSpecs;
-
-const schema = BlockNoteSchema.create({
-  blockSpecs: {
-    ...filteredDefaultBlockSpecs,
-    codeBlock: createCodeBlockSpec(codeBlockOptions),
-    ...multiColumnSchema.blockSpecs,
-    callout: Callout(),
-    terminal: Terminal(),
-    profile: Profile(),
-    pageLink: PageLink(),
-    divider: Divider(),
-    embed: Embed(),
-    video: Video(),
-  },
-});
+import { htmlToPageBlocks } from '@classmoji/page-schema/server';
 
 async function migratePagesToBlockNote(): Promise<void> {
   const prisma = new PrismaClient();
@@ -165,7 +137,7 @@ async function migratePagesToBlockNote(): Promise<void> {
         }
 
         // Convert to BlockNote JSON
-        const blockNoteContent = await migrateHtmlToBlockNote(htmlContent, schema);
+        const blockNoteContent = await htmlToPageBlocks(htmlContent, { title: page.title });
 
         // Save as content.json to GitHub
         const contentJson = JSON.stringify(blockNoteContent, null, 2);

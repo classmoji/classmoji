@@ -170,7 +170,7 @@ async function batchAction({ request }: Route.ActionArgs, slot: { held: boolean 
       // Wrap HTML content
       const wrappedHtml = wrapHtmlContent(html, 2);
 
-      // Orchestrated create: upload (index.html + assets) + DB row + optional
+      // Orchestrated create: upload (content.json + assets) + DB row + optional
       // repository link + manifest refresh (packages/services page.createPage).
       // ensureRepo: false — batch-init already created the content repo.
       const page = await ClassmojiService.page.createPage({

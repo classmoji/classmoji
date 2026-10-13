@@ -147,6 +147,16 @@ export function rejectionNotice(reason: LiveRefusal): RejectionNotice {
 }
 
 /**
+ * Whether the refusal banner offers Reload. Not for `legacy-html`: collab
+ * converts a legacy page on its first live open and refuses one only when the
+ * conversion itself failed, which a reload does not change (the slides
+ * banner, CollabNotices, hides it the same way).
+ */
+export function refusalOffersReload(reason: LiveRefusal): boolean {
+  return reason !== 'legacy-html';
+}
+
+/**
  * Whether a refusal may reload the page by itself: a closed or stale room,
  * and only when this browser holds no edits the server has not acknowledged —
  * reloading would throw them away (the banner then offers to copy them). A

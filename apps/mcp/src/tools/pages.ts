@@ -7,7 +7,7 @@
  *
  * Backbone (plan §5.2 gap 2, extract-first — Phase 3): page.createPage is the
  * choreography extracted from admin.$class.pages.new + api.pages.batch
- * (content-repo ensure → index.html upload → DB row → manifest refresh); both
+ * (content-repo ensure → content.json upload → DB row → manifest refresh); both
  * webapp paths and this tool now share it. page.quickUpdate (metadata-only DB
  * update; fires PAGE_PUBLISHED/PAGE_UNPUBLISHED notifications on an is_draft
  * flip) and page.deletePage (orchestrated: removes the page's folder from the
@@ -67,11 +67,14 @@ export const pageCreateTool: ToolDefinition<PageCreateArgs> = {
   annotations: { destructive: false, openWorld: true },
   title: 'Create a page',
   description:
-    "Creates a new course page in the classroom's shared content repo on Github or Gitlab (a blank " +
-    'block-based content.json plus index.html), the database record (created as a draft), and ' +
-    'a content-manifest refresh. Edit its content with page_content_apply (start from ' +
-    'page_content_outline); publish it with page_update (is_draft: false). The optional html ' +
-    'param seeds legacy index.html content instead — prefer the block tools.',
+    "Creates a new course page in the classroom's shared content repo on Github or Gitlab (a " +
+    'block-based content.json), the database record (created as a draft), and a content-manifest ' +
+    'refresh. Edit its content with page_content_apply (start from page_content_outline); ' +
+    'publish it with page_update (is_draft: false). The optional html param seeds the page: it ' +
+    'is converted to blocks and committed as content.json (no index.html is written). It ' +
+    'uploads no files: its images may use external URLs or media:// refs (media_list). For an ' +
+    'image file in the course repo, create the page, upload the file with page_asset_upload, ' +
+    'then add the image with page_content_apply. Prefer a blank page and the block tools.',
   scope: 'write',
   roles: OWNER_TEACHER,
   inputSchema: {
@@ -81,14 +84,14 @@ export const pageCreateTool: ToolDefinition<PageCreateArgs> = {
       .string()
       .max(500_000)
       .optional()
-      .describe('Initial index.html content (defaults to a blank-page template)'),
+      .describe('Initial content as HTML, converted to blocks (defaults to a blank page)'),
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
 
     try {
       // Orchestrated create (shared with both webapp create-page paths):
-      // ensure content repo → upload index.html → DB row → manifest refresh.
+      // ensure content repo → upload content.json → DB row → manifest refresh.
       const page = await ClassmojiService.page.createPage({
         classroomId: classroom.classroomId,
         title: args.title,

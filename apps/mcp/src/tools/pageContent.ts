@@ -70,10 +70,49 @@ import {
 
 // ─── Shared helpers ──────────────────────────────────────────────────────────
 
+/**
+ * Git still holds the page as index.html, in a classroom WITHOUT live
+ * editing: block ops have nothing to work on, and a replace_all writes
+ * content.json.
+ */
 const LEGACY_GUIDANCE =
-  'This page still stores legacy HTML (index.html), so granular block ops are unavailable. ' +
-  'Either open the page once in the web editor to migrate it to BlockNote, or overwrite it ' +
-  'with a single replace_all op carrying fresh BlockNote blocks.';
+  'This page still stores legacy HTML (index.html), so block ops on it are unavailable. ' +
+  'One replace_all op with BlockNote blocks writes content.json.';
+
+/**
+ * A live classroom's read of a legacy page reached git while the live
+ * service answered: the collab server converts a legacy page when its room
+ * opens, so this is that conversion failing. Nothing edits it until fixed.
+ */
+const LEGACY_LIVE_FAILED_GUIDANCE =
+  "This page's legacy HTML (index.html, returned here as it is in git) could not be " +
+  'converted for live editing, so it cannot be edited live or through a preview until that ' +
+  'is fixed.';
+
+/**
+ * A live classroom's read of a legacy page reached git because the live
+ * service did not answer (the note says so): live editing converts the page
+ * when the service is back.
+ */
+const LEGACY_LIVE_DOWN_GUIDANCE =
+  'Git still holds this page as legacy HTML (index.html). Live editing converts it to blocks ' +
+  "when the live service is back: retry then and edit it with mode: 'live'.";
+
+/** What a read of a legacy page tells the agent, by where the read came from. */
+function legacyReadGuidance(live: boolean, fallbackNote: boolean): string {
+  if (!live) return LEGACY_GUIDANCE;
+  return fallbackNote ? LEGACY_LIVE_DOWN_GUIDANCE : LEGACY_LIVE_FAILED_GUIDANCE;
+}
+
+/**
+ * A preview cut from a legacy page in a live classroom: the live page is the
+ * converted HTML, and a preview of it could never be accepted (there is no
+ * block version of the page in git to merge it from).
+ */
+const LEGACY_LIVE_PREVIEW_REFUSAL =
+  'This page is still legacy HTML in git, so a preview of it could never be merged into the ' +
+  "live page and nothing was changed. Edit it with mode: 'live' (the live page is already " +
+  'converted to blocks); its first checkpoint writes content.json, and previews work after that.';
 
 /**
  * CONTENT_CONFLICT naming the ref that was compared: when a preview exists,
@@ -406,7 +445,7 @@ export const pageContentOutlineTool: ToolDefinition<PageContentOutlineArgs> = {
         blocks: [],
         message:
           content.format === 'html'
-            ? LEGACY_GUIDANCE
+            ? legacyReadGuidance(liveState !== null && at === 'main', 'note' in fallback)
             : 'This page has no content file yet — create one with a page_content_apply replace_all op.',
         ...fallback,
       });
@@ -509,7 +548,7 @@ export const pageContentGetTool: ToolDefinition<PageContentGetArgs> = {
         ...(content.format === 'html' ? { sha_source: 'legacy_html', html: content.blocks } : {}),
         message:
           content.format === 'html'
-            ? LEGACY_GUIDANCE
+            ? legacyReadGuidance(liveState !== null && !ref, 'note' in fallback)
             : 'This page has no content file yet — create one with a page_content_apply replace_all op.',
         ...fallback,
       });
@@ -841,6 +880,13 @@ async function applyPageEdits(args: PageContentApplyArgs, ctx: ToolContext): Pro
     skipCache: true,
     ...(loadRef ? { ref: loadRef } : {}),
   });
+
+  // A new preview of a legacy page in a live classroom could never be
+  // accepted (the accept merges from main's blocks, and main has none): the
+  // live page is the converted HTML, so the edit belongs there.
+  if (liveState && committedTo === 'preview' && !loadRef && content.format === 'html') {
+    throw new ToolError('invalid_params', LEGACY_LIVE_PREVIEW_REFUSAL, 'LIVE_ONLY');
+  }
 
   // Legacy HTML (or missing) content: granular ops are meaningless — only a
   // fresh replace_all is allowed (it writes a brand-new content.json).
@@ -1596,9 +1642,10 @@ const COVER_NO_CONTENT_GUIDANCE =
   'first with a page_content_apply replace_all op, then set the cover.';
 
 const COVER_LEGACY_GUIDANCE =
-  'This page still stores legacy HTML (index.html), which has nowhere to record a cover image. ' +
-  'Either open it once in the web editor to migrate it to BlockNote losslessly, or replace it ' +
-  'in place with a page_content_apply replace_all op carrying fresh BlockNote blocks.';
+  'This page is still legacy HTML (index.html), which has nowhere to record a cover image. ' +
+  'Write its content as BlockNote blocks with a page_content_apply replace_all op (that ' +
+  'creates content.json), then set the cover; or set the cover in the web editor, which ' +
+  'converts the page.';
 
 /**
  * CONTENT_CONFLICT for a tool that takes no sha. page_content_apply's version
@@ -1829,9 +1876,9 @@ export const pageCoverSetTool: ToolDefinition<PageCoverSetArgs> = {
 
     const content = await ClassmojiService.pageContent.loadPageContent(page, { skipCache: true });
 
-    // The web's savePageCoverImage migrates a legacy page through the React
-    // editor schema on the way past; that schema cannot be imported here, and
-    // writing content.json without it would silently drop the page's HTML.
+    // The web's savePageCoverImage converts a legacy page on the way past;
+    // the MCP does not run the converter (BlockNote's server editor, jsdom),
+    // and writing content.json without it would silently drop the page's HTML.
     if (content.format === 'html') {
       throw new ToolError('invalid_params', COVER_LEGACY_GUIDANCE);
     }

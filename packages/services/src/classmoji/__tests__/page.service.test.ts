@@ -1,9 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // page.createPage is the create-page choreography extracted from the two
 // webapp routes (admin.$class.pages.new and api.pages.batch — plan §5.2 gap 2,
 // extract-first): ensure the shared content repo exists → upload the page's
-// index.html (+ any imported assets) → create the DB row → optionally link →
+// content.json (+ any imported assets) → create the DB row → optionally link →
 // refresh the content manifest. ContentService / the git provider / Prisma are
 // all mocked so we can assert the exact choreography without touching GitHub.
 
@@ -72,10 +72,31 @@ vi.mock('../contentManifest.service.ts', () => ({
 // that renders empty until the push webhook lands.
 const recordContentAssetsMock = vi.fn();
 const removeContentAssetFolderMock = vi.fn();
-vi.mock('../contentAssets.service.ts', () => ({
+vi.mock('../contentAssets.service.ts', async () => ({
+  // The real "can this classroom be delivered" rule: a create from HTML asks
+  // it to decide whether imported images are stored as bare repo paths.
+  isDeliverableClassroom: (
+    await vi.importActual<typeof import('../contentAssets.service.ts')>(
+      '../contentAssets.service.ts'
+    )
+  ).isDeliverableClassroom,
   recordContentAssets: (...args: unknown[]) => recordContentAssetsMock(...args),
   removeContentAssetFolder: (...args: unknown[]) => removeContentAssetFolderMock(...args),
 }));
+
+// The real converter (BlockNote's server editor on synthetic HTML), behind a
+// spy so a test can make it fail.
+const convertPageHtmlMock = vi.fn();
+vi.mock('../pageHtmlBlocks.ts', async () => {
+  const actual =
+    await vi.importActual<typeof import('../pageHtmlBlocks.ts')>('../pageHtmlBlocks.ts');
+  convertPageHtmlMock.mockImplementation(actual.convertPageHtml);
+  return {
+    ...actual,
+    convertPageHtml: (...args: Parameters<typeof actual.convertPageHtml>) =>
+      convertPageHtmlMock(...args),
+  };
+});
 
 vi.mock('../notification.service.ts', () => ({
   runSafely: vi.fn(),
@@ -95,6 +116,14 @@ const {
   PAGE_SLUG_MAX_SUFFIX,
   PAGE_SLUG_UNAVAILABLE,
 } = await import('../page.service.ts');
+
+/** A stored block, as far as these assertions read one. */
+type Block = {
+  id?: string;
+  type: string;
+  props?: Record<string, unknown>;
+  content?: unknown;
+};
 
 const gitOrganization = { id: 'org-1', login: 'test-org', provider: 'GITHUB' };
 const classroom = {
@@ -188,31 +217,101 @@ describe('page.createPage', () => {
     expect(page.id).toBe('page-1');
   });
 
-  it('html-without-assets flow: single-file put of the given html (unchanged)', async () => {
+  it('html-without-assets flow: single-file put of content.json converted from the html', async () => {
     await createPage({
       classroomId: 'class-1',
       title: 'Md Import',
-      html: '<p>from markdown</p>',
+      html: '<h2>Setup</h2><p>from <strong>markdown</strong></p><ul><li>one</li></ul>',
       createdBy: 'user-1',
       commitMessage: 'Import page: Md Import',
     });
 
-    // Import/markdown flows stay index.html-only — migration to content.json
-    // happens web-side, on first edit.
+    // content.json ONLY: a page created from HTML is a block page from birth,
+    // so live editing and the block tools can open it. No index.html.
     expect(uploadBatchMock).not.toHaveBeenCalled();
     expect(putMock).toHaveBeenCalledTimes(1);
     const putArg = putMock.mock.calls[0][0] as Record<string, unknown>;
     expect(putArg.repo).toBe('content-test-org-cs101');
-    expect(putArg.path).toBe('pages/md-import/index.html');
-    expect(putArg.content).toBe('<p>from markdown</p>');
+    expect(putArg.path).toBe('pages/md-import/content.json');
     expect(putArg.message).toBe('Import page: Md Import');
+
+    const stored = JSON.parse(putArg.content as string) as { blocks: Block[] };
+    expect(Object.keys(stored)).toEqual(['blocks']); // no cover key
+    // The converter's own output, spacing paragraphs included (its suite pins
+    // those); what matters here is that the content arrives as blocks.
+    const written = stored.blocks.filter(
+      b => !(b.type === 'paragraph' && Array.isArray(b.content) && b.content.length === 0)
+    );
+    expect(written.map(b => b.type)).toEqual(['heading', 'paragraph', 'bulletListItem']);
+    expect(written[0].props).toMatchObject({ level: 2 });
+    expect(written[1].content).toEqual([
+      { type: 'text', text: 'from ', styles: {} },
+      { type: 'text', text: 'markdown', styles: { bold: true } },
+    ]);
+    // Every block carries an id, as the editor's own saves do.
+    for (const block of stored.blocks) expect(typeof block.id).toBe('string');
+    expect(convertPageHtmlMock).toHaveBeenCalledWith(expect.any(String), { title: 'Md Import' });
   });
 
-  it('import flow: batches assets + index.html in one commit with the import message', async () => {
+  it('reads the full document the markdown import wraps its HTML in', async () => {
+    await createPage({
+      classroomId: 'class-1',
+      title: 'Wrapped',
+      html:
+        '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">' +
+        '<style>body { margin: 0 auto; }</style></head><body><p>Only this</p></body></html>',
+      createdBy: 'user-1',
+    });
+
+    const content = putMock.mock.calls[0][0].content as string;
+    const stored = JSON.parse(content) as { blocks: Block[] };
+    expect(stored.blocks.map(b => b.type)).toEqual(['paragraph']);
+    expect(content).toContain('Only this');
+    expect(content).not.toContain('margin');
+  });
+
+  // A signed URL (or a `/missing/` placeholder) of ours must never reach
+  // content.json — and HTML from an agent can carry the display URLs it was
+  // shown. The create writes through the save path's canonicalization.
+  it('stores the reference behind a placeholder URL of ours, never the URL', async () => {
+    const classroomId = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+    classroomFindUniqueMock.mockResolvedValue({ ...classroom, id: classroomId });
+    const placeholder = `https://content.example.test/c/${classroomId}/missing/${encodeURIComponent(
+      'pages/other/assets/b.png'
+    )}`;
+
+    await createPage({
+      classroomId,
+      title: 'From An Agent',
+      html: `<p><img src="${placeholder}"></p>`,
+      createdBy: 'user-1',
+    });
+
+    const stored = JSON.parse(putMock.mock.calls[0][0].content as string) as { blocks: Block[] };
+    expect(stored.blocks.find(b => b.type === 'image')?.props?.url).toBe(
+      'pages/other/assets/b.png'
+    );
+  });
+
+  it('drops the leading <h1> that repeats the page title', async () => {
+    await createPage({
+      classroomId: 'class-1',
+      title: 'Week 1',
+      html: '<!DOCTYPE html><html><body><h1>Week 1</h1><p>Body text</p></body></html>',
+      createdBy: 'user-1',
+    });
+
+    const stored = JSON.parse(putMock.mock.calls[0][0].content as string) as { blocks: Block[] };
+    expect(stored.blocks.map(b => b.type)).toEqual(['paragraph']);
+  });
+
+  it('import flow: batches assets + content.json in one commit with the import message', async () => {
+    const rawUrl =
+      'https://raw.githubusercontent.com/test-org/content-test-org-cs101/main/pages/imported/assets/a.png';
     await createPage({
       classroomId: 'class-1',
       title: 'Imported',
-      html: '<p>hi</p>',
+      html: `<p>hi</p><p><img src="${rawUrl}" alt="a"></p>`,
       files: [{ path: 'pages/imported/assets/a.png', content: 'AAAA', encoding: 'base64' }],
       createdBy: 'user-1',
       ensureRepo: false,
@@ -228,14 +327,108 @@ describe('page.createPage', () => {
     };
     expect(batchArg.message).toBe('Import page: Imported');
     expect(batchArg.branch).toBe('main');
-    expect(batchArg.files).toHaveLength(2);
-    expect(batchArg.files[1]).toEqual({
-      path: 'pages/imported/index.html',
-      content: '<p>hi</p>',
-      encoding: 'utf-8',
-    });
+    expect(batchArg.files.map(f => [f.path, f.encoding])).toEqual([
+      ['pages/imported/assets/a.png', 'base64'],
+      ['pages/imported/content.json', 'utf-8'],
+    ]);
+    const stored = JSON.parse(batchArg.files[1].content) as { blocks: Block[] };
+    const image = stored.blocks.find(b => b.type === 'image');
+    // Delivery layer off (the default fixture): the URL the import wrote is the
+    // only form anything can load, exactly as an editor upload stores it.
+    expect(image?.props?.url).toBe(rawUrl);
     // ensureRepo: false skips the exists/create check entirely
     expect(repositoryExistsMock).not.toHaveBeenCalled();
+    // Both the asset and content.json land in the asset map at once.
+    expect(recordContentAssetsMock).toHaveBeenCalledWith('class-1', [
+      { path: 'pages/imported/assets/a.png', sha: 'sha-0' },
+      { path: 'pages/imported/content.json', sha: 'sha-1' },
+    ]);
+  });
+
+  describe('with the delivery layer serving the classroom', () => {
+    const deliveredClassroom = {
+      ...classroom,
+      content_delivery_enabled: true,
+      content_key_version: 1,
+      git_organization: { ...gitOrganization, github_installation_id: 'inst-1' },
+    };
+    const raw = (path: string) =>
+      `https://raw.githubusercontent.com/test-org/content-test-org-cs101/main/${path}`;
+
+    beforeEach(() => {
+      classroomFindUniqueMock.mockResolvedValue(deliveredClassroom);
+      vi.stubEnv('CONTENT_SIGNING_SECRET', 'test-secret');
+      vi.stubEnv('CONTENT_DELIVERY_ORIGIN', 'https://content.example.test');
+    });
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it('stores the images this create committed as bare repo paths, and nothing else', async () => {
+      await createPage({
+        classroomId: 'class-1',
+        title: 'Imported',
+        html: [
+          `<p><img src="${raw('pages/imported/assets/a.png')}"></p>`,
+          // Ours, but not committed by this create: left as written.
+          `<p><img src="${raw('pages/other/assets/b.png')}"></p>`,
+          // Not ours at all.
+          '<p><img src="https://example.com/c.png"></p>',
+        ].join(''),
+        files: [{ path: 'pages/imported/assets/a.png', content: 'AAAA', encoding: 'base64' }],
+        createdBy: 'user-1',
+      });
+
+      const batchArg = uploadBatchMock.mock.calls[0][0] as {
+        files: Array<{ path: string; content: string }>;
+      };
+      const stored = JSON.parse(batchArg.files[1].content) as { blocks: Block[] };
+      expect(stored.blocks.filter(b => b.type === 'image').map(b => b.props?.url)).toEqual([
+        'pages/imported/assets/a.png',
+        raw('pages/other/assets/b.png'),
+        'https://example.com/c.png',
+      ]);
+    });
+
+    it('keeps the absolute URL when the deployment cannot sign', async () => {
+      vi.stubEnv('CONTENT_SIGNING_SECRET', '');
+      await createPage({
+        classroomId: 'class-1',
+        title: 'Imported',
+        html: `<p><img src="${raw('pages/imported/assets/a.png')}"></p>`,
+        files: [{ path: 'pages/imported/assets/a.png', content: 'AAAA', encoding: 'base64' }],
+        createdBy: 'user-1',
+      });
+
+      const batchArg = uploadBatchMock.mock.calls[0][0] as {
+        files: Array<{ path: string; content: string }>;
+      };
+      const stored = JSON.parse(batchArg.files[1].content) as { blocks: Block[] };
+      expect(stored.blocks.find(b => b.type === 'image')?.props?.url).toBe(
+        raw('pages/imported/assets/a.png')
+      );
+    });
+  });
+
+  it('a conversion that fails writes nothing: no commit, no row', async () => {
+    convertPageHtmlMock.mockRejectedValueOnce(new Error('converter unavailable'));
+
+    await expect(
+      createPage({
+        classroomId: 'class-1',
+        title: 'Imported',
+        html: '<p>hi</p>',
+        files: [{ path: 'pages/imported/assets/a.png', content: 'AAAA', encoding: 'base64' }],
+        createdBy: 'user-1',
+      })
+    ).rejects.toThrow('converter unavailable');
+
+    expect(repositoryExistsMock).not.toHaveBeenCalled();
+    expect(deleteBranchMock).not.toHaveBeenCalled();
+    expect(uploadBatchMock).not.toHaveBeenCalled();
+    expect(putMock).not.toHaveBeenCalled();
+    expect(recordContentAssetsMock).not.toHaveBeenCalled();
+    expect(pageCreateMock).not.toHaveBeenCalled();
   });
 
   it('creates the content repo when missing, and nothing beyond it', async () => {
@@ -460,7 +653,7 @@ describe('page.createPage', () => {
     });
 
     expect(recordContentAssetsMock).toHaveBeenCalledWith('class-1', [
-      { path: 'pages/imported/index.html', sha: 'abc' },
+      { path: 'pages/imported/content.json', sha: 'abc' },
     ]);
   });
 });
