@@ -101,7 +101,8 @@ test.describe('code blocks saved with a link or styles', () => {
 
   test('the class site renders them as plain text', async () => {
     const { html } = await renderSitePage({ blocks: richBlocks, resolveLink: () => null });
-    expect(html).toContain('curl https://example.com\necho done');
+    // The site colours the code into token spans; the text between the tags is the code.
+    expect(html.replace(/<[^>]*>/g, '')).toContain('curl https://example.com\necho done');
     expect(html).not.toContain('href="https://example.com"');
   });
 });

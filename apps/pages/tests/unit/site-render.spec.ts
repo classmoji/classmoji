@@ -169,7 +169,7 @@ test.describe('editor affordances are stripped', () => {
     const { html } = await renderSitePage({ blocks: [SAMPLES.codeBlock], resolveLink });
     expect(html).not.toContain('<select');
     expect(html).toContain('<pre');
-    expect(html).toContain('const a = 1;');
+    expect(parse(html).querySelector('pre > code')?.textContent).toBe('const a = 1;');
   });
 
   test('code blocks name their language as text, outside the code', async () => {
@@ -177,8 +177,8 @@ test.describe('editor affordances are stripped', () => {
     const { html } = await renderSitePage({ blocks: [SAMPLES.codeBlock], resolveLink });
     expect(html).toContain('<span class="bn-code-language">JavaScript</span>');
     expect(html).not.toContain('<select');
-    const code = html.match(/<code[^>]*>([\s\S]*?)<\/code>/)?.[1];
-    expect(code).toBe('const a = 1;');
+    // Coloured into token spans (site-code-highlight.spec.ts); its text is the code.
+    expect(parse(html).querySelector('pre > code')?.textContent).toBe('const a = 1;');
   });
 
   test('profile blocks ship no text inputs or upload control', async () => {
@@ -645,8 +645,9 @@ test.describe('heading anchors', () => {
 
     // The attribute survives intact, as one attribute holding the whole value.
     expect(doc.querySelector('[data-code]')?.getAttribute('data-code')).toBe(XSS_PROP);
-    // And the code is still displayed to the reader, escaped.
-    expect(html).toContain('&lt;h1 a&gt;b&lt;/h1&gt;');
+    // And the code is still displayed to the reader, as text (coloured into
+    // spans, site-code-highlight.spec.ts).
+    expect(doc.querySelector('.terminal-content pre')?.textContent).toBe(XSS_PROP);
   });
 
   test('the same payload in a navGrid entry title is inert too', async () => {
