@@ -1,7 +1,6 @@
 import { ClassmojiService, ContentService } from '@classmoji/services';
 
 import { migrateHtmlToBlockNote } from '~/utils/migration.server.ts';
-import { withServerBlockNoteLock } from './render.server.ts';
 
 /**
  * Content loading for class websites.
@@ -207,12 +206,10 @@ export async function loadSitePageContent(
   );
 
   if (htmlFile?.content) {
-    // The migration builds its own ServerBlockNoteEditor, so it contends for
-    // the same process-global JSDOM as a render — same lock, or the two
-    // corrupt each other under concurrency.
-    const blocks = await withServerBlockNoteLock(() =>
-      migrateHtmlToBlockNote(htmlFile.content, { title: page.title ?? undefined })
-    );
+    // Takes the render lock itself (it swaps the same JSDOM globals).
+    const blocks = await migrateHtmlToBlockNote(htmlFile.content, {
+      title: page.title ?? undefined,
+    });
     return { format: 'html', blocks: blocks as unknown[], coverImage: null };
   }
 

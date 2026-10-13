@@ -70,10 +70,18 @@ import {
 
 // ─── Shared helpers ──────────────────────────────────────────────────────────
 
+/**
+ * Git still holds the page as index.html. With live editing on, the live page
+ * is that HTML converted to blocks (the collab server converts it when the
+ * room opens), but a preview starts from git, and a preview cut from HTML
+ * cannot be merged back; with live editing on, a READ lands here only when
+ * the conversion failed (the live apply then says so). Without live editing,
+ * a replace_all writes content.json.
+ */
 const LEGACY_GUIDANCE =
-  'This page still stores legacy HTML (index.html), so granular block ops are unavailable. ' +
-  'Either open the page once in the web editor to migrate it to BlockNote, or overwrite it ' +
-  'with a single replace_all op carrying fresh BlockNote blocks.';
+  'Git still holds this page as legacy HTML (index.html), so block ops on it are unavailable. ' +
+  "With live editing on, edit it with mode: 'live'; otherwise one replace_all op with " +
+  'BlockNote blocks writes content.json.';
 
 /**
  * CONTENT_CONFLICT naming the ref that was compared: when a preview exists,
@@ -1596,9 +1604,10 @@ const COVER_NO_CONTENT_GUIDANCE =
   'first with a page_content_apply replace_all op, then set the cover.';
 
 const COVER_LEGACY_GUIDANCE =
-  'This page still stores legacy HTML (index.html), which has nowhere to record a cover image. ' +
-  'Either open it once in the web editor to migrate it to BlockNote losslessly, or replace it ' +
-  'in place with a page_content_apply replace_all op carrying fresh BlockNote blocks.';
+  'This page is still legacy HTML (index.html), which has nowhere to record a cover image. ' +
+  'Write its content as BlockNote blocks with a page_content_apply replace_all op (that ' +
+  'creates content.json), then set the cover; or set the cover in the web editor, which ' +
+  'converts the page.';
 
 /**
  * CONTENT_CONFLICT for a tool that takes no sha. page_content_apply's version
@@ -1829,9 +1838,9 @@ export const pageCoverSetTool: ToolDefinition<PageCoverSetArgs> = {
 
     const content = await ClassmojiService.pageContent.loadPageContent(page, { skipCache: true });
 
-    // The web's savePageCoverImage migrates a legacy page through the React
-    // editor schema on the way past; that schema cannot be imported here, and
-    // writing content.json without it would silently drop the page's HTML.
+    // The web's savePageCoverImage converts a legacy page on the way past;
+    // the MCP does not run the converter (BlockNote's server editor, jsdom),
+    // and writing content.json without it would silently drop the page's HTML.
     if (content.format === 'html') {
       throw new ToolError('invalid_params', COVER_LEGACY_GUIDANCE);
     }

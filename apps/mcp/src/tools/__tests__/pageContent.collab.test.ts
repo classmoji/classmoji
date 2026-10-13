@@ -792,11 +792,8 @@ describe('live write refusals', () => {
     ).toThrow(/pass the pin/);
   });
 
-  it.each([
-    [409, 'content-missing'],
-    [422, 'legacy-html'],
-  ])('%s %s points the agent at preview mode', async (status, code) => {
-    route('POST', 'ops', () => ({ status, body: { error: code } }));
+  it('409 content-missing points the agent at preview mode', async () => {
+    route('POST', 'ops', () => ({ status: 409, body: { error: 'content-missing' } }));
     const error = await pageContentApplyTool
       .handler(
         { classroom: 'org/x', page_id: PAGE_ID, expected_sha: 'live:1.7', ops: [UPDATE_OP] },
@@ -805,6 +802,20 @@ describe('live write refusals', () => {
       .catch((e: unknown) => e);
     expect(error).toMatchObject({ code: 'LIVE_UNSUPPORTED' });
     expect((error as Error).message).toMatch(/mode: 'preview'/);
+  });
+
+  it('422 legacy-html says the conversion failed, with no dead-end advice', async () => {
+    route('POST', 'ops', () => ({ status: 422, body: { error: 'legacy-html' } }));
+    const error = await pageContentApplyTool
+      .handler(
+        { classroom: 'org/x', page_id: PAGE_ID, expected_sha: 'live:1.7', ops: [UPDATE_OP] },
+        CTX
+      )
+      .catch((e: unknown) => e);
+    expect(error).toMatchObject({ code: 'LIVE_UNSUPPORTED' });
+    const message = (error as Error).message;
+    expect(message).toMatch(/could not be converted/);
+    expect(message).not.toMatch(/mode: 'preview'|web editor/);
   });
 });
 

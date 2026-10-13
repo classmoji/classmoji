@@ -38,31 +38,14 @@ function loadPageSchemaServer(): Promise<PageSchemaServer> {
 }
 
 /**
- * Tail of the conversion queue.
- *
- * BlockNote's server editor swaps the process's `window` and `document` for a
- * JSDOM pair while it parses, and two conversions interleaved across an
- * `await` restore each other's globals (`htmlToPageBlocks`' own warning; the
- * pages app serializes with `withServerBlockNoteLock` for the same reason).
- * A batch import and an MCP create can land on one process at once, so every
- * conversion here runs one at a time.
+ * Legacy page HTML -> page blocks. The converter runs one conversion at a
+ * time per process itself (BlockNote's server editor swaps the process's
+ * `window`/`document` while it parses), so concurrent creates need no queue
+ * here.
  */
-let queue: Promise<unknown> = Promise.resolve();
-
-/** Legacy page HTML -> page blocks, one conversion at a time per process. */
-export function convertPageHtml(html: string, { title }: { title?: string } = {}) {
-  const work = async () => {
-    const { htmlToPageBlocks } = await loadPageSchemaServer();
-    return htmlToPageBlocks(html, title ? { title } : {});
-  };
-  // Chained past the predecessor's rejection, so one failure does not fail
-  // every conversion queued behind it.
-  const result = queue.then(work, work);
-  queue = result.then(
-    () => undefined,
-    () => undefined
-  );
-  return result;
+export async function convertPageHtml(html: string, { title }: { title?: string } = {}) {
+  const { htmlToPageBlocks } = await loadPageSchemaServer();
+  return htmlToPageBlocks(html, title ? { title } : {});
 }
 
 /**

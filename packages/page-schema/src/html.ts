@@ -31,7 +31,9 @@ import { getServerEditor, type PageServerEditor } from './serverEditor.ts';
  *    BlockNote colour names only, then blocks -> ProseMirror -> blocks, which
  *    fills every prop and gives every block a fresh uuid, exactly as
  *    `editor.document` would. No trailing empty paragraph: BlockNote 0.55
- *    draws the trailing block as a decoration and never saves one.
+ *    draws the trailing block as a decoration and never saves one. No
+ *    leading one either: a document that opens with a heading starts with
+ *    the heading, not the spacer the old viewer put above it.
  *
  * Lossy by design (the original HTML stays in git), but it never throws on
  * odd input and its output always loads in the page schema: a `columnList`
@@ -119,21 +121,58 @@ const MARKER_ANY = /LEGACY_EMBED:::(\d+)/g;
  * blocks. Never returns an empty array: an empty or unreadable page is one
  * empty paragraph.
  *
- * Runs BlockNote's server editor, which swaps the process's `window` and
- * `document` for JSDOM while it works: callers that render with
- * ServerBlockNoteEditor concurrently must serialize (apps/pages
- * `withServerBlockNoteLock`).
+ * One conversion at a time per process, whoever calls: BlockNote's server
+ * editor swaps the process's `window` and `document` for JSDOM while it
+ * parses, and two conversions interleaved across an `await` restore each
+ * other's globals. Calls queue here in call order; a failed one does not
+ * block the next. `resolvePageLink` runs inside the queue, so it must never
+ * call `htmlToPageBlocks` itself (it would wait on its own conversion).
+ * Other server-editor work that swaps the same globals (apps/pages' site
+ * renders) is serialized by its own caller, outside this queue.
  */
-export async function htmlToPageBlocks(
+export function htmlToPageBlocks(
   html: string,
   options: HtmlToPageBlocksOptions = {}
+): Promise<PageBlock[]> {
+  const run = () => convertDocument(html, options);
+  const result = conversionQueue.then(run, run);
+  conversionQueue = result.then(
+    () => undefined,
+    () => undefined
+  );
+  return result;
+}
+
+/** Tail of the conversion queue: every conversion chains onto it. */
+let conversionQueue: Promise<unknown> = Promise.resolve();
+
+async function convertDocument(
+  html: string,
+  options: HtmlToPageBlocksOptions
 ): Promise<PageBlock[]> {
   const editor = getServerEditor();
   const ctx: Context = { editor, parser: await domParser(editor), inColumn: false };
   const body =
     typeof html === 'string' && html.trim() ? await prepareDocument(html, options, ctx) : '';
   const blocks = body ? await convertFragment(body, ctx) : [];
+  // The spacer above a heading that opens the document would be a blank
+  // line at the top of the page: dropped.
+  if ((blocks[0] as Block | undefined)?.[SPACER] && blocks[1]?.type === 'heading') blocks.shift();
   return normalizeBlocks(blocks, editor);
+}
+
+/**
+ * Marks the empty paragraph the converter puts above a heading (the old
+ * viewer's spacing), so the one opening a document can be told from an empty
+ * paragraph the HTML itself had. A symbol key survives the copies
+ * `placeWidgets` makes; `cleanBlock` drops it.
+ */
+const SPACER: unique symbol = Symbol('heading spacer');
+
+type Block = PageBlock & { [SPACER]?: true };
+
+function spacer(): Block {
+  return { type: 'paragraph', content: [], [SPACER]: true };
 }
 
 interface Context {
@@ -553,7 +592,7 @@ async function buildWidget(widget: Widget | undefined, ctx: Context): Promise<Pa
       ];
     case 'details':
       return [
-        { type: 'paragraph', content: [] },
+        spacer(),
         {
           type: 'heading',
           props: { level: 3, isToggleable: true },
@@ -612,7 +651,8 @@ function isBlank(blocks: PageBlock[]): boolean {
  * code-block header labels (dropped), bash/powershell code (terminal),
  * placeholders for videos and list-item images, terminal titles before code,
  * and old widget markup that reached the parser as escaped text. Adds the
- * empty paragraph the old editor showed above every heading.
+ * empty paragraph the old editor showed above every heading (`spacer`; the
+ * one above a heading that opens the document is dropped later).
  */
 function postProcessBlocks(blocks: PageBlock[]): PageBlock[] {
   const result: PageBlock[] = [];
@@ -636,7 +676,7 @@ function postProcessBlocks(blocks: PageBlock[]): PageBlock[] {
     }
 
     if (block.type === 'heading') {
-      result.push({ type: 'paragraph', content: [] });
+      result.push(spacer());
       if (block.children?.length) block.children = postProcessBlocks(block.children);
       result.push(block);
       continue;
@@ -812,8 +852,8 @@ function normalizeBlocks(blocks: PageBlock[], editor: PageServerEditor): PageBlo
 }
 
 /** A copy without ids, with canonical languages and colour names. */
-function cleanBlock(block: PageBlock): PageBlock {
-  const { id: _id, children, props, content, ...rest } = block;
+function cleanBlock(block: Block): PageBlock {
+  const { id: _id, [SPACER]: _spacer, children, props, content, ...rest } = block;
   const out: PageBlock = { ...rest };
   if (props) {
     const next: Record<string, unknown> = { ...props };

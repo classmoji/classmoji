@@ -222,23 +222,6 @@ function asHttpError(err: unknown): never {
 
 type PageContentRaw = { blocks: PageBlock[]; cover: PageCoverImage | null };
 
-/**
- * One conversion at a time in this process: BlockNote's server editor swaps
- * the process's `window`/`document` for JSDOM while it parses HTML, and two
- * interleaved swaps restore each other's globals (apps/pages serialises the
- * same way, `withServerBlockNoteLock`). A failed conversion does not block
- * the next.
- */
-let conversionQueue: Promise<unknown> = Promise.resolve();
-function serialized<T>(work: () => Promise<T>): Promise<T> {
-  const result = conversionQueue.then(work, work);
-  conversionQueue = result.then(
-    () => undefined,
-    () => undefined
-  );
-  return result;
-}
-
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function withoutIds(blocks: unknown[]): PageBlock[] {
@@ -284,7 +267,8 @@ export function createPageAdapter(
       return `/${page.classroom.slug ?? linkSlug}/${pageId}`;
     };
     try {
-      const blocks = await serialized(() => convert(html, { title: page.title, resolvePageLink }));
+      // One conversion at a time per process: the converter queues itself.
+      const blocks = await convert(html, { title: page.title, resolvePageLink });
       return pageContent.ensureBlockIds(withoutIds(blocks)) as PageBlock[];
     } catch (err) {
       console.error(`[collab] ${what}: legacy HTML could not be converted:`, err);

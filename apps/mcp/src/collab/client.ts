@@ -535,17 +535,22 @@ export function liveWriteError(
       Array.isArray(ids) ? ids.filter((x): x is string => typeof x === 'string') : []
     );
   }
-  if (
-    error.code === 'legacy-html' ||
-    error.code === 'unparseable-deck' ||
-    error.code === 'content-missing'
-  ) {
+  if (error.code === 'legacy-html') {
+    // The collab server converts a legacy page when its room opens; this is
+    // that conversion failing. A preview cannot help: one cut from the HTML
+    // in git cannot be merged into the live page.
+    return new ToolError(
+      'invalid_params',
+      "This page's legacy HTML could not be converted for live editing, so nothing was " +
+        "changed. It can't be edited live or through a preview until that is fixed.",
+      'LIVE_UNSUPPORTED'
+    );
+  }
+  if (error.code === 'unparseable-deck' || error.code === 'content-missing') {
     const why =
       error.code === 'content-missing'
         ? `This ${what} has no content file yet`
-        : error.code === 'legacy-html'
-          ? 'This page still stores legacy HTML'
-          : "This deck's HTML cannot be parsed into a structured deck";
+        : "This deck's HTML cannot be parsed into a structured deck";
     return new ToolError(
       'invalid_params',
       `${why}, so it cannot be edited live and nothing was changed. Use mode: 'preview' ` +

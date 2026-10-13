@@ -361,6 +361,9 @@ describe('page_content_outline', () => {
     });
     expect(payload.message).toMatch(/legacy HTML/);
     expect(payload.message).toMatch(/replace_all/);
+    // Live editing converts a legacy page on open; there is no web-editor step.
+    expect(payload.message).toMatch(/mode: 'live'/);
+    expect(payload.message).not.toMatch(/web editor/);
   });
 
   it('reports a pending preview with commits_ahead and age', async () => {
@@ -1663,7 +1666,7 @@ describe('page_cover_set', () => {
     expect(mocks.savePageContent).not.toHaveBeenCalled();
   });
 
-  it('names the in-band fix in the legacy refusal, not only the web editor', async () => {
+  it('names the in-band fix in the legacy refusal, and the web editor’s cover control', async () => {
     mocks.loadPageContent.mockResolvedValue({
       format: 'html',
       blocks: '<h1>Legacy</h1>',
@@ -1674,7 +1677,8 @@ describe('page_cover_set', () => {
     const error = await setCover({ url: STORED_COVER.url }).catch((e: unknown) => e);
 
     expect((error as Error).message).toContain('page_content_apply replace_all');
-    expect((error as Error).message).toContain('web editor');
+    expect((error as Error).message).toContain('set the cover in the web editor');
+    expect((error as Error).message).not.toContain('open it once');
   });
 
   it('refuses a legacy HTML page instead of dropping its content', async () => {

@@ -7,7 +7,7 @@
  * holds a `columnList` only with two or more columns.
  */
 import * as Y from 'yjs';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   blocksToYDoc,
@@ -564,6 +564,138 @@ describe('htmlToPageBlocks: colours and alignment', () => {
       ['heading', 'Section'],
       ['paragraph', 'Body'],
     ]);
+  });
+});
+
+describe('htmlToPageBlocks: a document that opens with a heading', () => {
+  const shape = (blocks: PageBlock[]) => blocks.map(b => [b.type, text(b)]);
+
+  it('starts with the heading, no blank line above it; later headings keep theirs', async () => {
+    const blocks = await htmlToPageBlocks('<h2>First</h2><p>Body</p><h2>Second</h2>');
+    expect(shape(blocks)).toEqual([
+      ['heading', 'First'],
+      ['paragraph', 'Body'],
+      ['paragraph', ''],
+      ['heading', 'Second'],
+    ]);
+  });
+
+  it('the same once the title <h1> is dropped', async () => {
+    const blocks = await htmlToPageBlocks(doc('<h2>Overview</h2><p>Body</p>'), {
+      title: 'Sample Page',
+    });
+    expect(shape(blocks)).toEqual([
+      ['heading', 'Overview'],
+      ['paragraph', 'Body'],
+    ]);
+  });
+
+  it('the same for a <details> toggle heading, and with widgets elsewhere', async () => {
+    const blocks = await htmlToPageBlocks(
+      '<details><summary>More</summary><p>Hidden</p></details>' +
+        '<div class="callout"><span class="callout-emoji">🔥</span><span>Tip</span></div>'
+    );
+    expect(shape(blocks)).toEqual([
+      ['heading', 'More'],
+      ['callout', 'Tip'],
+    ]);
+  });
+
+  it('a page opening with a blank line of its own keeps it and the spacer', async () => {
+    const blocks = await htmlToPageBlocks('<p><br></p><h2>Section</h2>');
+    expect(shape(blocks)).toEqual([
+      ['paragraph', '\n'],
+      ['paragraph', ''],
+      ['heading', 'Section'],
+    ]);
+  });
+
+  it('a heading opening a column or a toggle body keeps its spacer', async () => {
+    const blocks = await htmlToPageBlocks(
+      '<p>Intro</p><div class="columns"><div class="column"><h3>Left</h3></div>' +
+        '<div class="column"><p>Right</p></div></div>' +
+        '<details><summary>More</summary><h4>Inner</h4></details>'
+    );
+    const [row] = ofType(blocks, 'columnList');
+    expect(shape(row.children?.[0].children ?? [])).toEqual([
+      ['paragraph', ''],
+      ['heading', 'Left'],
+    ]);
+    const toggle = ofType(blocks, 'heading').find(h => text(h) === 'More');
+    expect(shape(toggle?.children ?? [])).toEqual([
+      ['paragraph', ''],
+      ['heading', 'Inner'],
+    ]);
+  });
+
+  it('a heading alone is the whole document', async () => {
+    expect(shape(await htmlToPageBlocks('<h2>Only</h2>'))).toEqual([['heading', 'Only']]);
+  });
+});
+
+describe('htmlToPageBlocks: one conversion at a time', () => {
+  it('never overlaps, whoever calls: results in call order, globals restored', async () => {
+    const editor = getServerEditor();
+    const original = editor._withJSDOM.bind(editor);
+    let inJsdom = 0;
+    let maxInJsdom = 0;
+    const spy = vi.spyOn(editor, '_withJSDOM').mockImplementation(async work => {
+      inJsdom++;
+      maxInJsdom = Math.max(maxInJsdom, inJsdom);
+      try {
+        return await original(work);
+      } finally {
+        inJsdom--;
+      }
+    });
+
+    // A resolver that yields mid-conversion: without the queue the pages'
+    // lookups (and their JSDOM sections) interleave.
+    const events: string[] = [];
+    const resolvePageLink = async (slug: string, id: string) => {
+      events.push(`start:${slug}`);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      events.push(`end:${slug}`);
+      return `/${slug}/${id}`;
+    };
+    const pages = ['a', 'b', 'c', 'd'];
+    try {
+      const results = await Promise.all(
+        pages.map(p =>
+          htmlToPageBlocks(
+            `<p>Body ${p}</p><p><a href="${LINK(p, PAGE_A)}">one</a></p>` +
+              `<div class="callout"><span>Note ${p}</span></div>`,
+            { resolvePageLink }
+          )
+        )
+      );
+
+      expect(maxInJsdom).toBe(1);
+      expect(events).toEqual(pages.flatMap(p => [`start:${p}`, `end:${p}`]));
+      expect(results.map(blocks => text(blocks[0]))).toEqual(pages.map(p => `Body ${p}`));
+      expect(results.map(blocks => text(ofType(blocks, 'callout')[0]))).toEqual(
+        pages.map(p => `Note ${p}`)
+      );
+      expect(globalThis.window).toBeUndefined();
+      expect(globalThis.document).toBeUndefined();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('a failed conversion does not fail the ones queued behind it', async () => {
+    const editor = getServerEditor();
+    const spy = vi
+      .spyOn(editor, 'tryParseHTMLToBlocks')
+      .mockRejectedValueOnce(new Error('parser blew up'));
+    try {
+      const failed = htmlToPageBlocks('<p>first</p>');
+      const next = htmlToPageBlocks('<p>second</p>');
+      await expect(failed).rejects.toThrow('parser blew up');
+      expect(text((await next)[0])).toBe('second');
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 
