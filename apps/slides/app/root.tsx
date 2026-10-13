@@ -11,8 +11,14 @@ import {
 import React, { useEffect } from 'react';
 
 import { CalloutProvider, CalloutSlot } from '@classmoji/ui-components';
+import {
+  SENTRY_CONFIG_ELEMENT_ID,
+  serializeSentryConfig,
+  type SentryBrowserConfig,
+} from '@classmoji/utils/sentry';
 import useStore from '~/store';
 import type { SlideUser } from '~/store';
+import { captureRouteError, setSentryUser } from '~/utils/sentry.client';
 import type { loader } from './root.server';
 
 /**
@@ -32,8 +38,24 @@ export const meta = () => {
   return [{ title: 'Slides - Classmoji' }];
 };
 
+/**
+ * The browser's Sentry settings as a JSON data block, read by entry.client.tsx
+ * before hydration. Rendered by both documents (App and the ErrorBoundary).
+ */
+const SentryConfigScript = ({ config }: { config: SentryBrowserConfig | null | undefined }) =>
+  config ? (
+    <script
+      type="application/json"
+      id={SENTRY_CONFIG_ELEMENT_ID}
+      dangerouslySetInnerHTML={{ __html: serializeSentryConfig(config) }}
+    />
+  ) : null;
+
 const App = () => {
-  const { user } = useLoaderData<typeof loader>() as { user: SlideUser | null };
+  const { user, sentry } = useLoaderData<typeof loader>() as {
+    user: SlideUser | null;
+    sentry?: SentryBrowserConfig | null;
+  };
   const setUser = useStore(state => state.setUser);
 
   // Populate Zustand store with user from loader
@@ -42,6 +64,11 @@ const App = () => {
     setUser(user);
   }, [user, setUser]);
 
+  const userId = user?.id;
+  useEffect(() => {
+    setSentryUser(userId);
+  }, [userId]);
+
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
@@ -49,6 +76,7 @@ const App = () => {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <Meta />
         <Links />
+        <SentryConfigScript config={sentry} />
         {/* Flash-free dark mode: add 'dark' class before first paint based on system preference */}
         <script
           dangerouslySetInnerHTML={{
@@ -92,8 +120,19 @@ const App = () => {
 
 // Error boundary
 export function ErrorBoundary() {
-  const error = useRouteError() as { message?: string; stack?: string } | undefined;
+  const routeError = useRouteError();
+  const error = routeError as { message?: string; stack?: string } | undefined;
+  // Present unless the root loader itself threw; carries the Sentry settings.
+  const rootData = useRouteLoaderData<typeof loader>('root') as
+    | { user?: { id?: string } | null; sentry?: SentryBrowserConfig | null }
+    | undefined;
   const isDevelopment = import.meta.env.MODE === 'development';
+
+  const userId = rootData?.user?.id;
+  useEffect(() => {
+    setSentryUser(userId);
+    captureRouteError(routeError);
+  }, [routeError, userId]);
 
   return (
     <html lang="en">
@@ -102,6 +141,7 @@ export function ErrorBoundary() {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <Meta />
         <Links />
+        <SentryConfigScript config={rootData?.sentry} />
       </head>
       <body className="bg-gray-50 dark:bg-gray-900">
         <div className="min-h-screen flex flex-col items-center justify-center px-4">

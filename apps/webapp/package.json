@@ -42,6 +42,7 @@
     "@octokit/rest": "^20.0.2",
     "@react-router/node": "^7.9.2",
     "@react-router/serve": "^7.9.2",
+    "@sentry/react-router": "^10.76.2",
     "@tabler/icons-react": "^2.47.0",
     "@tiptap/extension-blockquote": "^3.6.1",
     "@tiptap/extension-code": "^3.6.1",

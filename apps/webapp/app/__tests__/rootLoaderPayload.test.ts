@@ -176,6 +176,7 @@ vi.mock('~/components/features/admin/ImpersonationBanner', () => ({ default: () 
 vi.mock('~/components/layout/NavigationProgress', () => ({ default: () => null }));
 vi.mock('~/hooks', () => ({ useNotifiedFetcher: vi.fn(), useDarkMode: vi.fn() }));
 vi.mock('~/store', () => ({ default: vi.fn() }));
+vi.mock('~/utils/sentry.client', () => ({ captureRouteError: vi.fn(), setSentryUser: vi.fn() }));
 
 const { loader } = await import('../root.tsx');
 
@@ -186,6 +187,8 @@ const load = async (path: string) =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.unstubAllEnvs();
+  vi.stubEnv('SENTRY_DSN', '');
   findUniqueMock.mockImplementation(async (query: { include?: Row; select?: Row }) =>
     project(USER_ROW, query)
   );
@@ -286,6 +289,7 @@ describe('root loader payload', () => {
         'impersonationReturnUrl',
         'memberships',
         'organizations',
+        'sentry',
         'session',
         'user',
       ].sort()
@@ -294,8 +298,28 @@ describe('root loader payload', () => {
     getAuthSessionMock.mockResolvedValue(null);
     getSessionMock.mockResolvedValue(null);
     const signedOut = await load('/');
-    expect(Object.keys(signedOut).sort()).toEqual(['memberships', 'organizations', 'user']);
+    expect(Object.keys(signedOut).sort()).toEqual([
+      'memberships',
+      'organizations',
+      'sentry',
+      'user',
+    ]);
 
-    expect(await load('/test-class/pages/page-1')).toEqual({ user: null });
+    expect(await load('/test-class/pages/page-1')).toEqual({ user: null, sentry: null });
+  });
+
+  it('hands the browser the Sentry DSN and environment only, and nothing without a DSN', async () => {
+    expect((await load('/student/test-class/dashboard')).sentry).toBeNull();
+
+    vi.stubEnv('SENTRY_DSN', 'https://public@o0.ingest.sentry.io/0');
+    vi.stubEnv('FLY_APP_NAME', 'classmoji-webapp-staging');
+    expect((await load('/student/test-class/dashboard')).sentry).toEqual({
+      dsn: 'https://public@o0.ingest.sentry.io/0',
+      environment: 'staging',
+    });
+    // A redirect stays a redirect.
+    getAuthSessionMock.mockResolvedValue(null);
+    getSessionMock.mockResolvedValue(null);
+    expect(await load('/student/test-class/dashboard')).toBeInstanceOf(Response);
   });
 });
