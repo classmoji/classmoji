@@ -30,10 +30,15 @@ function page(editable?: 'true' | 'false') {
       '<div class="bn-block-content" data-content-type="codeBlock" data-copyable="false">' +
       '<div><span class="bn-code-language">Python</span></div>' +
       '<pre><code id="secret">secret()</code></pre></div>' +
-      '<div class="bn-block-content" data-content-type="codeBlock">' +
+      // A collapsible block, drawn collapsed: its bar is chrome too.
+      '<div class="bn-block-content" data-content-type="codeBlock" data-collapsible="true">' +
       '<div><span class="bn-code-language">JavaScript</span>' +
-      '<button type="button" class="bn-copy-button" aria-label="Copy"><svg></svg></button></div>' +
-      '<pre><code id="open">open()\n  next()</code></pre></div>' +
+      '<button type="button" class="bn-copy-button" aria-label="Copy"><svg></svg></button>' +
+      '<button type="button" class="bn-code-expand" aria-expanded="false"><svg></svg>' +
+      '<span class="bn-code-expand-more">Show all 16 lines</span>' +
+      '<span class="bn-code-expand-less">Show less</span></button>' +
+      '<div class="bn-code-fade" aria-hidden="true"></div></div>' +
+      '<pre data-collapse="collapsed"><code id="open">open()\n  next()</code></pre></div>' +
       '<div class="bn-block-content" data-content-type="terminal" data-copyable="false">' +
       '<div class="terminal-block"><div class="terminal-header"><span class="terminal-title">Terminal</span></div>' +
       '<div class="terminal-content"><pre><code id="term">rm -rf</code></pre></div></div></div>' +
@@ -96,8 +101,10 @@ test.describe('copyableSelectionContent (read-only view)', () => {
       expect(content.text).not.toContain(leaked);
       expect(content.html).not.toContain(leaked);
     }
-    // Title-bar chrome is not text the reader picked.
+    // Title-bar chrome is not text the reader picked, nor is the collapse bar.
     expect(content.text).not.toContain('JavaScript');
+    expect(content.text).not.toContain('Show');
+    expect(content.html).not.toContain('Show');
     expect(content.html).not.toContain('<button');
     expect(content.html).toContain('open()');
   });
@@ -316,5 +323,41 @@ test.describe('the class site script', () => {
     await expect.poll(() => button.hasAttribute('data-copied')).toBe(true);
     expect(commanded).toBe('copy');
     expect(win.document.querySelector('textarea')).toBeNull();
+  });
+
+  test('the collapse bar opens and closes its block; Copy still copies it all', async () => {
+    const win = sitePage();
+    const bar = win.document.querySelector('.bn-code-expand')!;
+    const pre = win.document.querySelector('pre[data-collapse]')!;
+    // The click lands on the label, inside the bar.
+    bar.querySelector('span')!.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+    expect(pre.getAttribute('data-collapse')).toBe('expanded');
+    expect(bar.getAttribute('aria-expanded')).toBe('true');
+    (bar as HTMLElement).click();
+    expect(pre.getAttribute('data-collapse')).toBe('collapsed');
+    expect(bar.getAttribute('aria-expanded')).toBe('false');
+
+    const written: string[] = [];
+    Object.defineProperty(win.navigator, 'clipboard', {
+      value: { writeText: async (text: string) => void written.push(text) },
+      configurable: true,
+    });
+    (win.document.querySelector('.bn-copy-button') as HTMLElement).click();
+    await expect.poll(() => written).toEqual(['open()\n  next()']);
+  });
+
+  test('a collapsed block the browser scrolls (find-in-page) opens', () => {
+    const win = sitePage();
+    const pre = win.document.querySelector('pre[data-collapse]') as HTMLElement;
+    // Scrolled sideways only: nothing to reveal.
+    pre.dispatchEvent(new win.Event('scroll'));
+    expect(pre.getAttribute('data-collapse')).toBe('collapsed');
+    pre.scrollTop = 40;
+    pre.dispatchEvent(new win.Event('scroll'));
+    expect(pre.getAttribute('data-collapse')).toBe('expanded');
+    expect(win.document.querySelector('.bn-code-expand')!.getAttribute('aria-expanded')).toBe(
+      'true'
+    );
+    expect(pre.scrollTop).toBe(0);
   });
 });

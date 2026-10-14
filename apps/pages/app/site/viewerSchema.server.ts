@@ -2,10 +2,19 @@ import React from 'react';
 import { BlockNoteSchema } from '@blocknote/core';
 import { createReactBlockSpec } from '@blocknote/react';
 import {
+  CODE_EXPAND_CLASS,
+  CODE_FADE_CLASS,
+  COLLAPSE_ATTR,
   COPY_BUTTON_CLASS,
   COPY_BUTTON_ICONS,
   COPY_LABEL,
   codeBlockLanguageName,
+  codeBlockText,
+  codeExpandBarHTML,
+  codeLineCount,
+  codePreId,
+  collapsesAt,
+  isCollapsible,
   isCopyable,
 } from '@classmoji/page-schema';
 import { lockedSectionTitle } from '@classmoji/page-schema/sections';
@@ -735,11 +744,24 @@ function makeStaticNavGrid(resolve: PageLinkResolver, showSchedule: boolean) {
   };
 }
 
-/** A code block's text: its plain runs (normalizeCodeBlockContent), or a string. */
-function codeText(content: unknown): string {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content.map(run => (typeof run?.text === 'string' ? run.text : '')).join('');
+/**
+ * A collapsible code block's bar and fade, drawn collapsed (the same markup
+ * page-schema's codeCollapse.ts draws in the app; site/copyScript.ts opens
+ * and closes it), or nothing for a block that does not collapse.
+ */
+function collapseBar(lines: number, preId: string | null) {
+  if (!preId) return [];
+  return [
+    h('button', {
+      key: 'x',
+      type: 'button',
+      className: CODE_EXPAND_CLASS,
+      'aria-expanded': 'false',
+      'aria-controls': preId,
+      dangerouslySetInnerHTML: { __html: codeExpandBarHTML(lines) },
+    }),
+    h('div', { key: 'f', className: CODE_FADE_CLASS, 'aria-hidden': 'true' }),
+  ];
 }
 
 function makeStaticCodeBlock(highlighter: SiteCodeHighlighter | null) {
@@ -754,16 +776,28 @@ function makeStaticCodeBlock(highlighter: SiteCodeHighlighter | null) {
     // of the block's content after the render (codeHighlight.server.ts; no
     // `contentRef`, so BlockNote adds no second copy). Otherwise it is the
     // block's content, plain.
-    const slot =
-      highlighter?.codeBlock(codeText(props.block.content), props.block.props.language) ?? null;
+    const text = codeBlockText(props.block.content);
+    const slot = highlighter?.codeBlock(text, props.block.props.language) ?? null;
+    // A long collapsible block is drawn collapsed: CSS clips the <pre>, so
+    // the page does not move when the script runs (or when there is none).
+    const lines = codeLineCount(text);
+    const preId =
+      isCollapsible(props.block.props) && collapsesAt(lines)
+        ? codePreId(String(props.block.id ?? ''))
+        : null;
     return h(React.Fragment, null, [
       h('div', { key: 'l' }, [
         h('span', { key: 'n', className: 'bn-code-language' }, codeBlockLanguageName(language)),
         copyButton(props),
+        ...collapseBar(lines, preId),
       ]),
       h(
         'pre',
-        { key: 'c', 'data-language': language || undefined },
+        {
+          key: 'c',
+          'data-language': language || undefined,
+          ...(preId ? { id: preId, [COLLAPSE_ATTR]: 'collapsed' } : {}),
+        },
         slot
           ? h('code', { className: 'bn-inline-content' }, slot)
           : h('code', { className: 'bn-inline-content', ref: props.contentRef })
