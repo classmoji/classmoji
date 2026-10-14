@@ -1,6 +1,7 @@
 /**
  * What a code sandbox ran, as a submission reports it: the student's files,
- * the console's lines and the error Sandpack shows, read from the running
+ * the console's lines and the error Sandpack shows (kept from the bundler's
+ * messages by the same rule, `errorAfterMessage`), read from the running
  * sandbox (`useSandboxCapture`) and cleaned here. Pure functions, no React:
  * the rules are tested on their own (`__tests__/sandboxCapture.test.ts`).
  *
@@ -174,6 +175,62 @@ export function capturedErrorsOf(
       column: wholeAtLeast(error.column, 0),
     },
   ];
+}
+
+/** A bundler message, as far as the error it carries goes. */
+export interface SandpackMessageLike {
+  type: string;
+  action?: string;
+  notificationType?: string;
+  /** Sandpack's own spelling: a `done` whose build failed. */
+  compilatonError?: boolean;
+  title?: string;
+  message?: string;
+  path?: string;
+  line?: number;
+  column?: number;
+  payload?: {
+    frames?: ReadonlyArray<{
+      _originalFileName?: string;
+      _originalLineNumber?: number;
+      _originalColumnNumber?: number;
+    }>;
+  };
+}
+
+/**
+ * The error Sandpack holds after `message` (`undefined`: the message leaves
+ * it as it was). The same rule as
+ * sandpack-react's provider (`handleMessage`, `extractErrorDetails`), so a
+ * capture can keep the error itself: the provider only follows the first
+ * bundler it ever started, and a sandbox whose preview remounts gets a new
+ * one (`useSandboxCapture`). The message keeps the provider's
+ * "/path: message (line:col)" form without the code frame below it, which
+ * `cleanErrorMessage` drops anyway.
+ */
+export function errorAfterMessage(
+  message: SandpackMessageLike
+): SandpackErrorLike | null | undefined {
+  if (message.type === 'start' || message.type === 'connected') return null;
+  if (message.type === 'done') return message.compilatonError ? undefined : null;
+  if (message.type !== 'action') return undefined;
+  if (message.action === 'notification') {
+    return message.notificationType === 'error' ? { message: message.title } : undefined;
+  }
+  if (message.action !== 'show-error') return undefined;
+  if (message.title === 'SyntaxError') {
+    const { title, path, message: text, line, column } = message;
+    return { title, path, message: text, line, column };
+  }
+  const frame = message.payload?.frames?.find(f => Boolean(f._originalFileName));
+  if (!frame) return { message: message.message };
+  return {
+    title: message.title,
+    message: `${frame._originalFileName}: ${message.message} (${frame._originalLineNumber}:${frame._originalColumnNumber})`,
+    path: frame._originalFileName,
+    line: frame._originalLineNumber,
+    column: frame._originalColumnNumber,
+  };
 }
 
 /** The code of each of `paths` in Sandpack's file map (path → `{ code }`), skipping any it lacks. */

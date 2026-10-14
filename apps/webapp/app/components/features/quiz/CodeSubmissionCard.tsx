@@ -166,6 +166,20 @@ const FileDiff = memo(function FileDiff({
 const BADGE =
   'inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1.5 text-[11px] font-semibold';
 
+/** "1 error", "3 log lines": what a console badge's count is, for a screen reader. */
+export const consoleCountLabel = (n: number, one: string, many: string) =>
+  `${n} ${n === 1 ? one : many}`;
+
+/** A console count: the number on screen, the words for a screen reader. */
+function CountBadge({ n, label, className }: { n: number; label: string; className: string }) {
+  return (
+    <span className={`${BADGE} ${className}`} data-testid="quiz-submission-console-count">
+      <span aria-hidden="true">{n}</span>
+      <span className="sr-only">{label}</span>
+    </span>
+  );
+}
+
 function ConsoleSummary({ lines }: { lines: CodeSubmissionData['console'] }) {
   const errors = lines.filter(l => l.method === 'error').length;
   const warns = lines.filter(l => l.method === 'warn').length;
@@ -179,25 +193,25 @@ function ConsoleSummary({ lines }: { lines: CodeSubmissionData['console'] }) {
         <span className="text-gray-700 dark:text-gray-300">Console</span>
         <span className="flex gap-1.5">
           {errors > 0 && (
-            <span
-              className={`${BADGE} bg-[#fee2e2] text-[#dc2626] dark:bg-[rgba(220,38,38,0.18)] dark:text-[#f87171]`}
-            >
-              {errors}
-            </span>
+            <CountBadge
+              n={errors}
+              label={consoleCountLabel(errors, 'error', 'errors')}
+              className="bg-[#fee2e2] text-[#dc2626] dark:bg-[rgba(220,38,38,0.18)] dark:text-[#f87171]"
+            />
           )}
           {warns > 0 && (
-            <span
-              className={`${BADGE} bg-[#fef3c7] text-[#d97706] dark:bg-[rgba(217,119,6,0.2)] dark:text-[#fbbf24]`}
-            >
-              {warns}
-            </span>
+            <CountBadge
+              n={warns}
+              label={consoleCountLabel(warns, 'warning', 'warnings')}
+              className="bg-[#fef3c7] text-[#d97706] dark:bg-[rgba(217,119,6,0.2)] dark:text-[#fbbf24]"
+            />
           )}
           {logs > 0 && (
-            <span
-              className={`${BADGE} bg-[#e0e7ff] text-[#4f46e5] dark:bg-[rgba(99,102,241,0.2)] dark:text-[#a5b4fc]`}
-            >
-              {logs}
-            </span>
+            <CountBadge
+              n={logs}
+              label={consoleCountLabel(logs, 'log line', 'log lines')}
+              className="bg-[#e0e7ff] text-[#4f46e5] dark:bg-[rgba(99,102,241,0.2)] dark:text-[#a5b4fc]"
+            />
           )}
           {lines.length === 0 && (
             <span className={`${BADGE} font-normal text-gray-400 dark:text-gray-500`}>

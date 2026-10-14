@@ -475,6 +475,9 @@ describe('the live sandbox in the question card', () => {
     expect(one('quiz-sandbox-load-failed')?.textContent).toBe(
       "The code runner didn't load. You can answer in a message instead."
     );
+    // Read out, though the sandbox around it is aria-live="off".
+    const status = one('quiz-sandbox-load-failed')!.closest('[role="status"]');
+    expect(status?.getAttribute('aria-live')).toBe('polite');
     expect(submitButton().disabled).toBe(true);
     expect((one('quiz-send') as HTMLButtonElement).disabled).toBe(false);
   });
@@ -548,6 +551,7 @@ describe('the live sandbox in the question card', () => {
     expect(one('quiz-sandbox-line')?.textContent).toBe(
       'This code is too long to submit. Shorten it and try again.'
     );
+    expect(one('quiz-sandbox-line')!.closest('[role="status"]')).not.toBeNull();
     expect(sandboxes()[0].dataset.state).toBe('live');
   });
 

@@ -30,7 +30,9 @@ import {
  * - `locked`: read-only, controls disabled (a reply is running, a typed side
  *   question's included, or a capture is);
  * - `frozen`: read-only; the preview is unmounted, with a Run button in its
- *   place, so no bundler runs until Run (which only mounts the preview).
+ *   place, so no bundler runs until Run (which only mounts the preview; a
+ *   sandbox frozen in this session gets its bundler started again by
+ *   useSandboxCapture).
  * Its files are built once, at mount (the caller keys it by sandbox id): the
  * standing submission's files when it was answered by then, else its seed,
  * plus the template's hidden support file. Frozen with a submission, it
@@ -44,7 +46,9 @@ import {
  * that the student can answer in a message instead.
  *
  * The wrapper is `aria-live="off"`: the transcript is a polite live region,
- * and typing in the editor must not be read out.
+ * and typing in the editor must not be read out. The footer's lines (the
+ * runner didn't load; what Submit reported) sit in their own always-mounted
+ * `role="status"` region, which is read.
  */
 
 export type SandboxMode = 'live' | 'locked' | 'frozen';
@@ -159,8 +163,11 @@ export default function QuizSandbox({
         // iframe. It keeps the one whose status never reaches `done`, so edits
         // and refreshes are silently dropped (no recompile, every capture
         // times out on the first run's console). 'lazy' only registers the
-        // iframe and creates one client after the mounts settle; no layout
-        // here sets Sandpack's lazy anchor, so it still boots straight away.
+        // iframe on mount; SandpackLayout is Sandpack's lazy anchor, so the
+        // bundler starts once, with one client, when the sandbox first comes
+        // within Sandpack's default margin (1000 px above or below) of the
+        // viewport. A preview mounted again after its bundler went away is
+        // started by useSandboxCapture.
         initMode="lazy"
         // The editor itself must not be lazy: a sandbox that mounts locked
         // (a reply still streaming) renders a static <pre>, and a lazy editor
@@ -177,7 +184,10 @@ export default function QuizSandbox({
         previewPlaceholder={placeholder}
         height={height}
         consoleProps={{ defaultExpanded: true, maxHeight: narrow ? 110 : 100 }}
-        className={`sandpack-embed-auto-height sandpack-follows-page-theme${narrow ? ' sandpack-embed-column' : ''}`}
+        // Run is ours (the placeholder's): Sandpack's own pill would show
+        // over the editor whenever its bundler is idle.
+        showRunButton={false}
+        className={`sandpack-embed-auto-height sandpack-embed-wrap-read-only sandpack-follows-page-theme${narrow ? ' sandpack-embed-column' : ''}`}
       >
         <SandboxFooter
           sandboxId={sandboxId}
@@ -315,22 +325,27 @@ function SandboxFooter({
 
   return (
     <>
-      {loadFailed ? (
-        <p
-          className="mt-2 mb-0 text-sm text-gray-600 dark:text-gray-400"
-          data-testid="quiz-sandbox-load-failed"
-        >
-          {LOAD_FAILED_LINE}
-        </p>
-      ) : null}
-      {line ? (
-        <p
-          className="mt-2 mb-0 text-sm text-gray-600 dark:text-gray-400"
-          data-testid="quiz-sandbox-line"
-        >
-          {line}
-        </p>
-      ) : null}
+      {/* Mounted while the sandbox is live or locked, so a line that appears
+          is announced: the wrapper above is aria-live="off", and the nearest
+          aria-live decides. */}
+      <div role="status" aria-live="polite" data-testid="quiz-sandbox-status">
+        {loadFailed ? (
+          <p
+            className="mt-2 mb-0 text-sm text-gray-600 dark:text-gray-400"
+            data-testid="quiz-sandbox-load-failed"
+          >
+            {LOAD_FAILED_LINE}
+          </p>
+        ) : null}
+        {line ? (
+          <p
+            className="mt-2 mb-0 text-sm text-gray-600 dark:text-gray-400"
+            data-testid="quiz-sandbox-line"
+          >
+            {line}
+          </p>
+        ) : null}
+      </div>
       <div
         className="mt-3 flex flex-wrap items-center justify-between gap-2"
         data-testid="quiz-sandbox-actions"

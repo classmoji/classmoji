@@ -433,6 +433,18 @@
   flex: 1 1 42% !important;
 }
 
+/* Long lines wrap in the read-only view too. A read-only editor is not
+   CodeMirror but Sandpack's static <pre class="sp-cm"><code
+   class="sp-pre-placeholder">, which ignores `wrapContent`; the editable
+   editor's placeholder before CodeMirror builds is the same <pre>. These
+   mirror CodeMirror's own line wrapping. */
+.sandpack-embed-wrap-read-only .sp-code-editor pre.sp-cm,
+.sandpack-embed-wrap-read-only .sp-code-editor .sp-pre-placeholder {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
 /* The page's dark mode (a `.dark` ancestor, Tailwind's class strategy): the
    console body follows it. The slides keep their light console body under a
    dark Sandpack theme; a page in dark mode does not. */

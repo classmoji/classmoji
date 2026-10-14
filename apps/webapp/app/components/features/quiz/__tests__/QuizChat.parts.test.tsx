@@ -6,6 +6,7 @@
 
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { consoleCountLabel } from '~/components/features/quiz/CodeSubmissionCard';
 import {
   projectMessage,
   quizStaffVisibility,
@@ -1430,6 +1431,10 @@ describe('QuizTranscript — a code submission (a parts-only student message)', 
           expect(html).toContain('data-diff="-"');
           expect(html).toContain('const passed = [1, 2];');
           expect(html).toContain('data-testid="quiz-submission-console"');
+          // The console's count says what it counts to a screen reader.
+          expect(html).toContain('<span aria-hidden="true">1</span>');
+          expect(html).toContain('<span class="sr-only">1 log line</span>');
+          expect(consoleCountLabel(2, 'error', 'errors')).toBe('2 errors');
           expect(html).toContain('data-testid="quiz-submission-error"');
           expect(html).toContain('TypeError · index.js:2');
           expect(html).toContain('dark:bg-[#0d1117]');

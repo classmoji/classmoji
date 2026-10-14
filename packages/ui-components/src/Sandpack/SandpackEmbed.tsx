@@ -7,9 +7,9 @@
  *
  * The slides mount it with files, options and a theme only. The quiz's code
  * sandboxes also pass children (hooks that read the running sandbox), an
- * explicit active file and init mode, a read-only flag and a preview that is
- * mounted only on request; every one of those props defaults to what the
- * slides have always got.
+ * explicit active file and init mode, a read-only flag, a preview that is
+ * mounted only on request and no Run pill; every one of those props defaults
+ * to what the slides have always got.
  */
 
 import { useEffect, useMemo, useRef, type CSSProperties, type ReactNode } from 'react';
@@ -197,6 +197,11 @@ export interface SandpackEmbedProps {
   height?: CSSProperties['height'];
   /** The console's own settings, when `options.showConsole` is on. */
   consoleProps?: SandpackEmbedConsoleProps;
+  /**
+   * Sandpack's own Run pill in the editor, shown while its bundler is idle.
+   * Default true. A caller that starts the bundler itself turns it off.
+   */
+  showRunButton?: boolean;
 }
 
 /**
@@ -221,6 +226,7 @@ export default function SandpackEmbed({
   readOnly: readOnlyProp,
   height,
   consoleProps,
+  showRunButton = true,
 }: SandpackEmbedProps) {
   const {
     showTabs = true,
@@ -299,6 +305,7 @@ export default function SandpackEmbed({
               showTabs={showTabs}
               showLineNumbers={showLineNumbers}
               showInlineErrors
+              showRunButton={showRunButton}
               wrapContent
               closableTabs={false}
               readOnly={readOnly}
