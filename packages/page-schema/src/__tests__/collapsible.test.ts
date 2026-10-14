@@ -131,7 +131,10 @@ describe('helpers', () => {
   it('counts source lines and collapses above 15', () => {
     expect(codeLineCount('')).toBe(1);
     expect(codeLineCount('a\nb')).toBe(2);
-    expect(codeLineCount('a\nb\n')).toBe(3);
+    // One trailing newline ends the last line; a second is an empty line.
+    expect(codeLineCount('a\nb\n')).toBe(2);
+    expect(codeLineCount('a\nb\n\n')).toBe(3);
+    expect(codeLineCount('\n')).toBe(1);
     expect(collapsesAt(15)).toBe(false);
     expect(collapsesAt(16)).toBe(true);
     expect(codeBlockText([{ text: 'a\n' }, { text: 'b' }, { nope: 1 }])).toBe('a\nb');
@@ -269,5 +272,72 @@ describe('the node view', () => {
     editor.updateBlock('c', { props: { language: 'python' } });
     expect(blockEl('c').querySelector('pre')!.getAttribute('data-collapse')).toBe('expanded');
     expect(JSON.stringify(editor.document)).not.toContain('expanded');
+  });
+
+  it('the caret landing on a hidden line opens it without moving that line', () => {
+    const editor = mount([
+      code('c', lines(30), { collapsible: true }),
+      { id: 'p', type: 'paragraph', content: [], children: [] },
+    ]);
+    cursorIn(editor, 'p', 0);
+    const pre = blockEl('c').querySelector('pre')!;
+    // The pane the editor scrolls in (jsdom lays nothing out: sizes stubbed).
+    const scroller = document.body.firstElementChild as HTMLElement;
+    scroller.style.overflowY = 'auto';
+    Object.defineProperty(scroller, 'scrollHeight', { value: 5000 });
+    Object.defineProperty(scroller, 'clientHeight', { value: 500 });
+    scroller.scrollTop = 0;
+    // What the editor does first for ArrowUp from below: scrolls the clipped
+    // <pre> to show the caret's line.
+    pre.scrollTop = 120;
+    cursorIn(editor, 'c', lines(29).length + 2);
+    expect(pre.getAttribute('data-collapse')).toBe('expanded');
+    expect(pre.scrollTop).toBe(0);
+    expect(scroller.scrollTop).toBe(120);
+    expect(pre.hasAttribute('data-animating')).toBe(false);
+  });
+
+  it('grown past 15 lines while being written, it stays open through a rebuild', () => {
+    const editor = mount([
+      { id: 'p', type: 'paragraph', content: [], children: [] },
+      code('c', lines(10), { collapsible: true }),
+    ]);
+    cursorIn(editor, 'c', lines(10).length);
+    const view = editor.prosemirrorView!;
+    view.dispatch(view.state.tr.insertText('\nmore'.repeat(8)));
+    expect(blockEl('c').querySelector('pre')!.getAttribute('data-collapse')).toBe('expanded');
+    editor.updateBlock('c', { props: { language: 'python' } });
+    expect(blockEl('c').querySelector('pre')!.getAttribute('data-collapse')).toBe('expanded');
+  });
+
+  it('a rebuilt block lets go of the old one: no selection reaches it', () => {
+    const editor = mount([
+      { id: 'p', type: 'paragraph', content: [], children: [] },
+      code('c', lines(30), { collapsible: true }),
+    ]);
+    cursorIn(editor, 'p', 0);
+    const old = blockEl('c').querySelector('pre')!;
+    editor.updateBlock('c', { props: { language: 'python' } });
+    const rebuilt = blockEl('c').querySelector('pre')!;
+    expect(rebuilt).not.toBe(old);
+    cursorIn(editor, 'c', 3);
+    expect(rebuilt.getAttribute('data-collapse')).toBe('expanded');
+    expect(old.getAttribute('data-collapse')).toBe('collapsed');
+  });
+
+  it("the viewer's Copy button copies every line while collapsed", async () => {
+    const written: string[] = [];
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: async (text: string) => void written.push(text) },
+      configurable: true,
+    });
+    try {
+      mount([code('c', lines(30), { collapsible: true })], false);
+      expect(blockEl('c').querySelector('pre')!.getAttribute('data-collapse')).toBe('collapsed');
+      (blockEl('c').querySelector('button.bn-copy-button') as HTMLButtonElement).click();
+      await vi.waitFor(() => expect(written).toEqual([lines(30)]));
+    } finally {
+      Reflect.deleteProperty(navigator, 'clipboard');
+    }
   });
 });

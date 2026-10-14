@@ -71,9 +71,14 @@ export function isCollapsible(props: { collapsible?: unknown }): boolean {
   return props.collapsible === true || props.collapsible === 'true';
 }
 
-/** Source lines in a block's text: its `\n`-separated lines, wrapped or not. */
+/**
+ * Source lines in a block's text: its `\n`-separated lines, wrapped or not.
+ * One trailing newline ends the last line rather than starting another: a
+ * static `<pre>` (the class site) draws no empty line after it, so counting
+ * one would put the label and the threshold one off there.
+ */
 export function codeLineCount(text: string): number {
-  return text.split('\n').length;
+  return (text.endsWith('\n') ? text.slice(0, -1) : text).split('\n').length;
 }
 
 /** Whether a collapsible block of `lines` lines collapses (draws the bar). */
@@ -292,10 +297,22 @@ export function createCodeCollapse({
     if (next === expanded || !collapsesAt(lines)) return;
     const from = pre.getBoundingClientRect();
     const barTop = bar.getBoundingClientRect().top;
+    // Scrolled while clipped: find-in-page showing a hidden line, or the
+    // editor bringing a caret there into view (ArrowUp from below lands on
+    // the last line). Read before opening, which clears it.
+    const shift = next ? pre.scrollTop : 0;
     expanded = next;
     if (next) opened.add(blockId);
     else opened.delete(blockId);
     paint();
+    // Open without moving what was being shown: the code goes back to its
+    // top and the page scrolls by as much, so the line stays where it was.
+    if (shift > 0) {
+      pre.scrollTop = 0;
+      const scroller = scrollerOf(pre);
+      if (scroller) scroller.scrollTop += shift;
+      return;
+    }
     // Shut from far down: snap, and keep the bar where the pointer is.
     if (!next && from.top < 0) {
       const scroller = scrollerOf(pre);
@@ -310,12 +327,7 @@ export function createCodeCollapse({
   bar.addEventListener('click', onBar);
 
   const onScroll = () => {
-    if (expanded || !collapsesAt(lines) || pre.scrollTop <= 0) return;
-    const shift = pre.scrollTop;
-    setExpanded(true, false);
-    pre.scrollTop = 0;
-    const scroller = scrollerOf(pre);
-    if (scroller) scroller.scrollTop += shift;
+    if (pre.scrollTop > 0) setExpanded(true, false);
   };
   pre.addEventListener('scroll', onScroll);
 
@@ -352,7 +364,12 @@ export function createCodeCollapse({
         lines = count;
         // Grown past the threshold while being written: open if the author
         // is in it (or had it open), collapsed if the change came from away.
-        if (!was && collapsesAt(lines)) expanded = opened.has(blockId) || caretInside();
+        if (!was && collapsesAt(lines)) {
+          expanded = opened.has(blockId) || caretInside();
+          // Remembered, so a rebuild mid-edit (a language change, a peer's
+          // prop flip) does not snap it shut.
+          if (expanded) opened.add(blockId);
+        }
         paint();
       }
       return true;

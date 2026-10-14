@@ -580,9 +580,9 @@
 }
 
 .bn-container .bn-block-content[data-content-type="codeBlock"] > pre[data-collapse="collapsed"] {
-  /* 10 rows of 14px code at BlockNote's 1.5 line height, for browsers
-     without the `lh` unit (before Safari 16.4, Firefox 120). */
-  max-height: calc(34px + 2rem + 210px);
+  /* For browsers without the `lh` unit (before Safari 16.4, Firefox 120):
+     10 rows of the 21.7px line the built stylesheet gives 14px code. */
+  max-height: calc(34px + 2rem + 217px);
   max-height: calc(34px + 2rem + 10lh);
   overflow-y: hidden;
 }
