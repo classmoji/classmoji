@@ -7,6 +7,7 @@ import { assertClassroomAccess } from '~/utils/helpers';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { attemptDrawerView, chatActivityView, quizDrawerView } from '~/utils/quizPayloads';
 import { isTriggerChatAttempt } from '~/utils/quizRuntime.server';
+import { closeIfExpired } from '~/utils/quizAttemptExpiry.server';
 import type { Route } from './+types/route';
 
 export async function loader({ params, request }: Route.LoaderArgs) {
@@ -16,7 +17,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const attemptId = params.attemptId!;
 
   // 1. Authenticate and authorize (instructors only)
-  const { userId, classroom } = await assertClassroomAccess({
+  const { userId, classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
@@ -40,7 +41,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   // land on the same 404 — checked before ownership, so a foreign id is never
   // confirmed to exist. Only that one error becomes a 404; anything else the
   // query raises still surfaces.
-  const attemptData = await ClassmojiService.quizAttempt
+  let attemptData = await ClassmojiService.quizAttempt
     .findWithMessages(attemptId)
     .catch((error: unknown) => {
       if (error instanceof QuizAttemptNotFoundError) return null;
@@ -53,6 +54,21 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   // 4. Verify this is the admin's own attempt (admins preview as themselves)
   if (attemptData.attempt.user_id.toString() !== userId.toString()) {
     throw new Response('Unauthorized - This is not your preview attempt', { status: 403 });
+  }
+
+  // A chat attempt past its session deadline takes no more turns: it is
+  // closed now with the results recorded so far, and read again, so it shows
+  // as completed rather than as a chat that can never continue. Only after
+  // step 4: the caller owns it.
+  if (
+    membership &&
+    (await closeIfExpired(attemptData.attempt, {
+      userId: String(userId),
+      role: membership.role,
+      surface: 'preview_attempt_view',
+    }))
+  ) {
+    attemptData = await ClassmojiService.quizAttempt.findWithMessages(attemptId);
   }
 
   // 5. Calculate focus metrics for completed attempts

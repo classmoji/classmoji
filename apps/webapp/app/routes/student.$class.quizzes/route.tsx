@@ -53,6 +53,8 @@ interface StudentQuiz {
   assignmentTitle: string;
   repository_id: string | null;
   include_code_context: boolean;
+  /** The quiz may ask questions answered in a code sandbox (as MCP list_quizzes says). */
+  code_sandbox_enabled: boolean;
   /** The due date plus the hours the student bought on it. */
   dueDate: string | Date | null;
   /** Hours the student bought on this quiz (net of refunds, never below 0). */
@@ -177,6 +179,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       assignmentTitle: quiz.repository?.title || 'Unlinked',
       repository_id: quiz.repository_id,
       include_code_context: quiz.include_code_context,
+      code_sandbox_enabled: quiz.code_sandbox_enabled ?? false,
       // The quiz's assignment owns its due date, close date and weight where it
       // has one, so this list shows what the Assignments page and the calendar
       // show. A quiz in no module keeps its own (the service's `closed` reads

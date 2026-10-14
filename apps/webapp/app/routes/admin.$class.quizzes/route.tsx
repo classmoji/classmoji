@@ -388,6 +388,8 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         name: newQuiz.name,
         repository_id: newQuiz.repository_id ?? null,
         module_id: newQuiz.assignment?.module_id ?? null,
+        // As the row was saved: a create without the switch saves it off.
+        code_sandbox_enabled: newQuiz.code_sandbox_enabled === true,
       });
       const warning = newQuiz.assignment?.is_published
         ? await publishedDraftWarning(newQuiz.id)
@@ -429,6 +431,12 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         // Field NAMES only. The body carries system and rubric prompts, which
         // are long free text and do not belong in an audit payload.
         fields: Object.keys(data).filter(key => key !== '_action' && key !== 'id'),
+        // A short boolean, so its value too, as the service stores it. The form
+        // sends it only while its switch is shown, so `fields` naming it does
+        // not mean it changed.
+        ...(data.codeSandboxEnabled !== undefined
+          ? { code_sandbox_enabled: data.codeSandboxEnabled === true }
+          : {}),
       });
       const warning =
         data.assignment?.isPublished === true ? await publishedDraftWarning(data.id) : {};

@@ -19,6 +19,7 @@ import {
   needsEvaluation,
   PERSIST_RETRY_DELAY_MS,
   runQuizTurn,
+  sandboxPartId,
   STEP_CEILING,
   stepCeilingFor,
   watchModelText,
@@ -1823,6 +1824,100 @@ describe('an offer that carries its feedback', () => {
     expect(
       saved.filter(p => p.type === 'tool-offer_next_step' && p.state === 'output-available')
     ).toHaveLength(0);
+  });
+});
+
+describe('runQuizTurn: the hint sandbox of a Try again turn', () => {
+  const HINT = {
+    id: 'q1-2',
+    question_number: 1,
+    attempt: 2,
+    seeded_from: 1,
+    template: 'vanilla' as const,
+    files: { '/index.js': 'console.log(1);\n' },
+    active_file: '/index.js',
+  };
+  const HINT_TEXT = 'Look at the loop bound. What do you think?';
+
+  const turn = async (
+    over: Partial<AttemptContext>,
+    steps: Part[][] = [text('t', HINT_TEXT)],
+    project = true
+  ) => {
+    const a = fakeAttempt(2, { presented: 1 });
+    const chunks = await collect(
+      runQuizTurn({
+        ctx: ctxFor(a.progress(), { lastAction: 'try_again', sandboxHint: HINT, ...over }),
+        messages: history,
+        signal: new AbortController().signal,
+        deps: a.deps,
+        model: scriptedModel(steps),
+        project,
+      })
+    );
+    return { chunks, saved: a.persisted.at(-1)?.message.parts ?? [] };
+  };
+
+  const sandboxChunks = (chunks: UIMessageChunk[]) =>
+    chunks.filter(c => c.type === 'data-sandbox') as Array<{ id?: string; data: unknown }>;
+
+  it('writes one data-sandbox with a stable id just before the first text, and saves it', async () => {
+    const { chunks, saved } = await turn({});
+    expect(sandboxChunks(chunks)).toEqual([
+      { type: 'data-sandbox', id: sandboxPartId('q1-2'), data: HINT },
+    ]);
+    const at = chunks.findIndex(c => c.type === 'data-sandbox');
+    expect(chunks[at + 1]).toMatchObject({ type: 'text-delta', delta: HINT_TEXT });
+    expect(saved.filter(p => p.type === 'data-sandbox')).toEqual([
+      { type: 'data-sandbox', id: 'sandbox-q1-2', data: HINT },
+    ]);
+    expect(saved.some(p => p.type === 'text' && p.text === HINT_TEXT)).toBe(true);
+    // Saved after its text part: the text part opens at text-start, before
+    // the first delta the sandbox goes out ahead of.
+    const types = saved.map(p => p.type);
+    expect(types.indexOf('text')).toBeLessThan(types.indexOf('data-sandbox'));
+    // The same turn run again writes the same part.
+    expect(sandboxChunks((await turn({})).chunks)[0].id).toBe('sandbox-q1-2');
+  });
+
+  it('waits for text that is not blank, in whichever step it comes', async () => {
+    const { chunks } = await turn({}, [
+      [
+        { type: 'text-start', id: 't' },
+        { type: 'text-delta', id: 't', delta: '  \n' },
+        { type: 'text-delta', id: 't', delta: 'Look again.' },
+        { type: 'text-delta', id: 't', delta: ' What do you think?' },
+        { type: 'text-end', id: 't' },
+      ],
+    ]);
+    const deltas = chunks.filter(c => c.type === 'text-delta' || c.type === 'data-sandbox');
+    expect(deltas.map(c => (c.type === 'text-delta' ? c.delta : c.type))).toEqual([
+      '  \n',
+      'data-sandbox',
+      'Look again.',
+      ' What do you think?',
+    ]);
+  });
+
+  it('writes none in a reply that shows no text', async () => {
+    const { chunks, saved } = await turn({}, [text('t', '   ')]);
+    expect(sandboxChunks(chunks)).toEqual([]);
+    expect(saved.some(p => p.type === 'data-sandbox')).toBe(false);
+  });
+
+  it('writes none while a sandbox is unanswered, or for a card without one (no hint to give)', async () => {
+    for (const sandboxHint of [null, undefined]) {
+      const { chunks } = await turn({ sandboxHint });
+      expect(sandboxChunks(chunks)).toEqual([]);
+    }
+  });
+
+  it('writes none on any other turn', async () => {
+    for (const lastAction of ['next', undefined] as const) {
+      const { chunks, saved } = await turn({ lastAction });
+      expect(sandboxChunks(chunks)).toEqual([]);
+      expect(saved.some(p => p.type === 'data-sandbox')).toBe(false);
+    }
   });
 });
 

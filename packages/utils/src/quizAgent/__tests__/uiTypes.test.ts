@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { BUTTON_TEXT, buttonActionFor, replyShowsHint } from '../uiTypes.ts';
+import { BUTTON_TEXT, buttonActionFor, quizDataPartSchemas, replyShowsHint } from '../uiTypes.ts';
+import { CodeSubmissionDataSchema, SandboxDataSchema } from '../sandbox.ts';
+import { quizStaffVisibility, quizVisibility } from '../visibility.ts';
 
 describe('buttonActionFor', () => {
   it('names each button by its own text, trimmed and in any case', () => {
@@ -75,5 +77,21 @@ describe('replyShowsHint', () => {
     expect(replyShowsHint([{ type: 'step-start' }, refused])).toBe(false);
     expect(replyShowsHint([{ type: 'reasoning', text: 'thinking' }])).toBe(false);
     expect(replyShowsHint([null, 'text', { type: 'text', text: 3 }])).toBe(false);
+  });
+});
+
+describe('code sandbox parts', () => {
+  it('registers the hint sandbox and the code submission in both registries', () => {
+    expect(quizDataPartSchemas.sandbox).toBe(SandboxDataSchema);
+    expect(quizDataPartSchemas['code-submission']).toBe(CodeSubmissionDataSchema);
+    for (const reg of [quizVisibility, quizStaffVisibility]) {
+      expect(reg.dataParts.sandbox).toBe(SandboxDataSchema);
+      expect(reg.dataParts['code-submission']).toBe(CodeSubmissionDataSchema);
+    }
+  });
+
+  it("hides present_question's sandbox input from every viewer, beside code_quote", () => {
+    expect(quizVisibility.hiddenInputKeys.present_question).toEqual(['code_quote', 'sandbox']);
+    expect(quizStaffVisibility.hiddenInputKeys.present_question).toEqual(['code_quote', 'sandbox']);
   });
 });

@@ -20,16 +20,17 @@ import {
   PresentQuestionOutputSchema,
   QuestionResultOutputSchema,
   QuizEvaluationFeedbackSchema,
-  CodeAwareQuizQuestionSchema,
+  CodeAwareSandboxQuizQuestionSchema,
   RecordQuestionResultSchema,
 } from './schemas.ts';
 import { TOOL_DESCRIPTIONS } from './toolDescriptions.ts';
 
-// The code-aware input (with the optional `code_quote`), so the typed parts
-// cover both modes; a standard attempt's tool takes the card fields only.
+// The widest input (the optional `code_quote` and `sandbox`), so the typed
+// parts cover every mode; each attempt's own tool takes only the fields its
+// mode has (packages/tasks, agents/quiz/tools).
 const present_question = tool({
   description: TOOL_DESCRIPTIONS.present_question,
-  inputSchema: CodeAwareQuizQuestionSchema,
+  inputSchema: CodeAwareSandboxQuizQuestionSchema,
   outputSchema: PresentQuestionOutputSchema,
 });
 

@@ -135,6 +135,7 @@ beforeEach(() => {
     id: 'quiz-new',
     name: 'Week 1',
     repository_id: 'repo-1',
+    code_sandbox_enabled: false,
     // quiz.create writes the quiz's assignment in the same transaction.
     assignment: { module_id: 'mod-1', is_published: false },
   });
@@ -164,6 +165,7 @@ describe('admin quizzes action — audit rows', () => {
         name: 'Week 1',
         repository_id: 'repo-1',
         module_id: 'mod-1',
+        code_sandbox_enabled: false,
       },
     });
   });
@@ -178,6 +180,71 @@ describe('admin quizzes action — audit rows', () => {
       name: 'Week 1',
       repository_id: null,
       module_id: null,
+      code_sandbox_enabled: false,
+    });
+  });
+
+  it('records the code sandbox switch on a created quiz as the row was saved', async () => {
+    mocks.create.mockResolvedValue({
+      id: 'quiz-new',
+      name: 'Week 1',
+      repository_id: null,
+      code_sandbox_enabled: true,
+      assignment: { module_id: 'mod-1', is_published: false },
+    });
+
+    await submit({
+      _action: 'createQuiz',
+      name: 'Week 1',
+      codeSandboxEnabled: true,
+      assignment: { moduleId: 'mod-1' },
+    });
+
+    // The body reaches the service as is.
+    expect(mocks.create.mock.calls[0][0]).toMatchObject({ codeSandboxEnabled: true });
+    expect(auditEntry().metadata).toMatchObject({
+      tool: 'web:quizzes.create',
+      code_sandbox_enabled: true,
+    });
+  });
+
+  it.each([true, false])(
+    'records the code sandbox switch (%s) on an update, beside the field names',
+    async value => {
+      await submit({ _action: 'updateQuiz', id: 'quiz-1', name: 'R', codeSandboxEnabled: value });
+
+      expect(mocks.update).toHaveBeenCalledWith('quiz-1', {
+        _action: 'updateQuiz',
+        id: 'quiz-1',
+        name: 'R',
+        codeSandboxEnabled: value,
+      });
+      expect(auditEntry().metadata).toEqual({
+        tool: 'web:quizzes.update',
+        fields: ['name', 'codeSandboxEnabled'],
+        code_sandbox_enabled: value,
+      });
+    }
+  );
+
+  it('lets an assistant change the code sandbox switch, as a content setting', async () => {
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: 'ta-1',
+      classroom: CLASSROOM,
+      membership: { id: 'm-2', role: 'ASSISTANT' },
+    });
+
+    const response = (await submit({
+      _action: 'updateQuiz',
+      id: 'quiz-1',
+      codeSandboxEnabled: true,
+    })) as Response;
+
+    expect(response.status).toBe(200);
+    expect(mocks.update).toHaveBeenCalled();
+    expect(auditEntry()).toMatchObject({
+      role: 'ASSISTANT',
+      metadata: { code_sandbox_enabled: true },
     });
   });
 

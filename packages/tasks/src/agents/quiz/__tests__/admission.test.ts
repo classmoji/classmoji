@@ -223,3 +223,89 @@ describe('admitTurn', () => {
     await expect(admitTurn('attempt-1', event, 'run_1', d)).resolves.toBeDefined();
   });
 });
+
+describe('classifyIncoming: a code submission', () => {
+  const SUBMISSION = {
+    sandbox_id: 'q1-1',
+    files: { '/index.js': "console.log('done');\n" },
+    console: [{ method: 'log', text: 'done' }],
+    errors: [],
+  };
+  const codePart = (data: unknown = SUBMISSION) => ({ type: 'data-code-submission', data });
+  const classify = (parts: unknown[]) =>
+    classifyIncoming({
+      trigger: 'submit-message',
+      incomingMessages: [userMessage({ parts: parts as never })],
+    });
+
+  it('admits one data-code-submission part as the submission', () => {
+    expect(classify([codePart()])).toEqual({
+      kind: 'message',
+      message: { id: 'msg_1', submission: SUBMISSION },
+    });
+  });
+
+  it('refuses a code part next to text, two code parts, and an unknown data part', () => {
+    for (const parts of [
+      [codePart(), { type: 'text', text: 'my answer' }],
+      [{ type: 'text', text: 'my answer' }, codePart()],
+      [codePart(), codePart()],
+      [{ type: 'data-sandbox', data: {} }],
+      [{ type: 'data-notice', data: { code: 'reply_failed' } }],
+      [],
+    ]) {
+      expect(classify(parts)).toEqual({ kind: 'refuse', code: 'invalid_input' });
+    }
+  });
+
+  it("refuses a code part that is not a submission's shape as invalid_submission", () => {
+    for (const data of [
+      { ...SUBMISSION, question_number: 1 },
+      { ...SUBMISSION, console: 'done' },
+      { ...SUBMISSION, files: { '/index.js': 'x'.repeat(10_001) } },
+      { ...SUBMISSION, files: { 'index.js': 'no leading slash' } },
+      null,
+    ]) {
+      expect(classify([codePart(data)])).toEqual({ kind: 'refuse', code: 'invalid_submission' });
+    }
+  });
+
+  it('hands the submission to the services and keeps its admission for run()', async () => {
+    const d = deps();
+    await admitTurn(
+      'attempt-1',
+      {
+        trigger: 'submit-message',
+        incomingMessages: [userMessage({ parts: [codePart()] as never })],
+      },
+      'run_1',
+      d
+    );
+    expect(d.admitStudentMessage).toHaveBeenCalledWith({
+      attemptId: 'attempt-1',
+      message: { id: 'msg_1', submission: SUBMISSION },
+      runId: 'run_1',
+    });
+    expect(currentAdmission('attempt-1')).toEqual({
+      fence: 'fence-1',
+      inputMessageId: 'msg_1',
+      runId: 'run_1',
+    });
+  });
+
+  it('records a malformed submission as refused without calling the services', async () => {
+    const d = deps();
+    const thrown = await admitTurn(
+      'attempt-1',
+      {
+        trigger: 'submit-message',
+        incomingMessages: [userMessage({ parts: [codePart({ sandbox_id: 'q1-1' })] as never })],
+      },
+      'run_1',
+      d
+    ).catch(e => e);
+    expect(thrown).toBeInstanceOf(QuizTurnError);
+    expect(d.admitStudentMessage).not.toHaveBeenCalled();
+    expect(d.recordTurnRefused).toHaveBeenCalledWith('attempt-1', 'invalid_submission', 'run_1');
+  });
+});

@@ -201,6 +201,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       // In material order, as picker values.
       sourceMaterial: toPickerValues(found.source_material),
       courseSearchEnabled: found.course_search_enabled,
+      codeSandboxEnabled: found.code_sandbox_enabled,
       // The textarea's text: one pattern per line.
       excludedPaths: (found.excluded_paths ?? []).join('\n'),
     };
@@ -428,7 +429,8 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
     form.validateFields().then(
       allValues => {
         // Absent while the quiz is not code-aware (the field is not shown): the
-        // saved list is left as it is.
+        // saved list is left as it is. So is codeSandboxEnabled, carried in
+        // `values` only while its switch is shown.
         const { excludedPaths: excludedPathsText, assignment, ...values } = allValues;
         // An assistant sees the number of questions, max attempts and grading
         // strategy read-only, and its save never carries them.
@@ -598,6 +600,7 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
                     excludedPaths: '',
                     sourceMaterial: [],
                     courseSearchEnabled: false,
+                    codeSandboxEnabled: false,
                   }),
                   ...(canAuthor ? { assignment: panelFormValues(assignmentPanel) } : {}),
                 }}
@@ -675,6 +678,36 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
                       extra="Lets the quiz look beyond the linked material to check whether the course covers something a student mentions."
                     >
                       <Switch checkedChildren="On" unCheckedChildren="Off" />
+                    </Form.Item>
+
+                    {/* Code sandbox questions, for a quiz whose new attempts run on
+                    the chat runtime (the only runtime that offers them), by the
+                    message limit's rule. A content setting: an assistant may
+                    change it. Hidden, it is not saved, so the stored value
+                    stays. Read from the form's store, so it is right on the
+                    first render of an edit. */}
+                    <Form.Item
+                      noStyle
+                      shouldUpdate={(prev, next) =>
+                        prev.includeCodeContext !== next.includeCodeContext ||
+                        prev.repositoryId !== next.repositoryId
+                      }
+                    >
+                      {({ getFieldValue }) =>
+                        runsOnChatRuntime(chatRuntime, {
+                          repositoryId: getFieldValue('repositoryId'),
+                          includeCodeContext: getFieldValue('includeCodeContext'),
+                        }) ? (
+                          <Form.Item
+                            name="codeSandboxEnabled"
+                            label="Code sandbox questions"
+                            valuePropName="checked"
+                            extra="Lets the quiz ask questions the student answers in an editable code sandbox (HTML/CSS/JS, TypeScript or React)."
+                          >
+                            <Switch checkedChildren="On" unCheckedChildren="Off" />
+                          </Form.Item>
+                        ) : null
+                      }
                     </Form.Item>
 
                     {/* Example Solution Repo (optional - for AI assistant code exploration) */}

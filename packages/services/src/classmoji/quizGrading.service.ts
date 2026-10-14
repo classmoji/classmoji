@@ -22,7 +22,7 @@
 
 import { randomUUID } from 'node:crypto';
 import getPrisma from '@classmoji/database';
-import type { Prisma } from '@prisma/client';
+import type { Prisma, Role } from '@prisma/client';
 import { DEFAULT_EMOJI_GRADE_MAPPINGS, gradeToEmoji } from '@classmoji/utils';
 import {
   QuizEvaluationFeedbackSchema,
@@ -42,6 +42,7 @@ import {
   type QuizEvaluationRecordV2,
   type QuestionCard,
   type RecordQuestionResult,
+  type SandboxSpec,
   type StoredQuestionResult,
 } from '@classmoji/utils/quiz-agent';
 import { resolveAttemptQuestionCount } from './quizAttempt.service.ts';
@@ -58,6 +59,16 @@ export type Fenced = {
   /** The admitted student message this turn answers; null for the begin action. */
   inputMessageId: string | null;
   runId: string;
+};
+
+/**
+ * What a completion's journal rows carry. The server's own completions may run
+ * outside any turn: no tool call, and no run when nothing ran (an expired
+ * attempt closed where it is met, `closeExpiredAttempt`).
+ */
+type CompletionCall = Omit<Fenced, 'toolCallId' | 'runId'> & {
+  toolCallId?: string;
+  runId: string | null;
 };
 
 export type { PresentQuestionOutput, QuestionResultOutput, StoredQuestionResult };
@@ -142,6 +153,8 @@ const LOCKED_ATTEMPT_SELECT = {
       classroom_id: true,
       question_count: true,
       status: true,
+      // Pinned into `agent_config.codeSandbox` at the first admission (quizChat.service).
+      code_sandbox_enabled: true,
       classroom: { select: { status: true } },
       // Turn admission reads whether the quiz is still open to a student.
       assignment: { select: { is_published: true, release_at: true } },
@@ -165,8 +178,11 @@ export const lockAttempt = async (tx: Tx, attemptId: string): Promise<LockedAtte
 };
 
 /** How many questions the attempt asks (the count pinned at first admission, else the quiz's). */
-export const attemptQuestionCount = (attempt: Pick<LockedAttempt, 'agent_config' | 'quiz'>) =>
-  resolveAttemptQuestionCount(attempt.agent_config, attempt.quiz?.question_count);
+export const attemptQuestionCount = (
+  attempt: Pick<LockedAttempt, 'agent_config'> & {
+    quiz: Pick<LockedAttempt['quiz'], 'question_count'> | null;
+  }
+) => resolveAttemptQuestionCount(attempt.agent_config, attempt.quiz?.question_count);
 
 export const findEvent = (tx: Tx, attemptId: string, operationId: string) =>
   tx.quizAttemptEvent.findUnique({
@@ -382,11 +398,23 @@ const inLockedTx = <T>(
 
 // ─── present_question ───────────────────────────────────────────────────────
 
+/** Whether two sandbox specs are the same: template, opening file and every file. */
+const sameSandbox = (a: SandboxSpec, b: SandboxSpec | undefined): boolean =>
+  b !== undefined &&
+  a.template === b.template &&
+  a.active_file === b.active_file &&
+  Object.keys(a.files).length === Object.keys(b.files).length &&
+  Object.entries(a.files).every(
+    ([path, code]) => Object.prototype.hasOwnProperty.call(b.files, path) && b.files[path] === code
+  );
+
 /**
  * Accept question `n = presented + 1` once question `n - 1` has a result, with
  * `n <= questionCount`; `total_questions` is set to the attempt's count. A
  * re-run of the question already presented (`n = presented`) returns the
- * ORIGINAL stored question and writes nothing.
+ * ORIGINAL stored question and writes nothing; one that carries a sandbox
+ * other than the stored card's (or a sandbox where it had none) is refused
+ * (`invalid_input`), since the student would see only the stored one.
  *
  * `q` is the card as the tool built it: a code quote is already resolved into
  * `code_snippet` and `source`, which are stored with the rest of the card.
@@ -417,7 +445,20 @@ export const presentQuestion = (f: Fenced, q: QuestionCard): Promise<PresentQues
         },
         orderBy: { seq: 'desc' },
       });
-      if (original) return storedOutput<PresentQuestionOutput>(original);
+      if (original) {
+        const stored = storedOutput<PresentQuestionOutput>(original);
+        // The card shown again is the stored one, sandbox included: a
+        // different sandbox would never reach the student, so the model is
+        // told rather than handed the old card as if it had taken the new.
+        if (question.sandbox && !sameSandbox(question.sandbox, stored?.card?.sandbox)) {
+          throw new QuizGradingError(
+            'invalid_input',
+            `Question ${n} is already out${stored?.card?.sandbox ? ' with its sandbox' : ' without a sandbox'}, and showing it again cannot change that. ` +
+              `To show it again, call present_question for question ${n} without sandbox.`
+          );
+        }
+        return stored;
+      }
     }
 
     if (presented >= questionCount) {
@@ -770,9 +811,11 @@ type CompletionInput =
   /**
    * `endedBy: 'turn_limit'`: the server ends the attempt at the per-attempt
    * message limit (quizChat.service), every question without a result
-   * counted as skipped, the open one included.
+   * counted as skipped, the open one included. `endedBy: 'expired'`: the same,
+   * for an attempt past its session deadline (`closeExpiredAttempt`), with
+   * `completedAt` the deadline itself rather than the moment the close ran.
    */
-  | { source: 'server'; endedBy?: 'turn_limit' };
+  | { source: 'server'; endedBy?: 'turn_limit' | 'expired'; completedAt?: Date };
 
 const readEvaluation = (json: Prisma.JsonValue): QuizEvaluationRecordV2 =>
   QuizEvaluationRecordV2Schema.parse(json);
@@ -802,9 +845,10 @@ const readEvaluation = (json: Prisma.JsonValue): QuizEvaluationRecordV2 =>
  *
  * `source: 'server'` (Q17) records no feedback text, so no acknowledgment;
  * `toolCallId` is then optional and the journal row uses a fixed operation id.
- * With `endedBy: 'turn_limit'` (`completeAtTurnLimit`) it fills every
- * question without a result as skipped, the open one included, with no
- * student confirmation: the server ends the attempt, not the student.
+ * With `endedBy: 'turn_limit'` (`completeAtTurnLimit`) or `'expired'`
+ * (`closeExpiredAttempt`) it fills every question without a result as
+ * skipped, the open one included, with no student confirmation: the server
+ * ends the attempt, not the student.
  */
 export const completeWithEvaluation = (
   f: Omit<Fenced, 'toolCallId'> & { toolCallId?: string },
@@ -821,7 +865,7 @@ export const completeWithEvaluation = (
 export const completeLocked = async (
   tx: Tx,
   attempt: LockedAttempt,
-  f: Omit<Fenced, 'toolCallId'> & { toolCallId?: string },
+  f: CompletionCall,
   o: CompletionInput
 ): Promise<QuizEvaluationRecordV2> => {
   if (attempt.completed_at) {
@@ -925,16 +969,18 @@ export const completeLocked = async (
     question_results: results.map(({ recorded_at: _at, ...rest }) => rest),
   });
 
-  const now = new Date();
+  // Completed now, unless the server names the instant (an expired attempt
+  // ends at its deadline, whenever the close runs: the late penalty reads it).
+  const completedAt = (o.source === 'server' && o.completedAt) || new Date();
   await tx.quizAttempt.update({
     where: { id: attempt.id },
     data: {
       evaluation_json: toJson(record),
       partial_credit_percentage: percentages.partial_credit_percentage,
       first_attempt_percentage: percentages.first_attempt_percentage,
-      completed_at: now,
+      completed_at: completedAt,
       session_status: 'completed',
-      last_activity: now,
+      last_activity: completedAt,
     },
   });
   const operationId = f.toolCallId ?? SERVER_COMPLETION_OPERATION_ID;
@@ -981,9 +1027,121 @@ export const completeAtTurnLimit = async (
   );
 };
 
+/** Where an expired attempt was met and closed: the audit row's `data.surface`. */
+export type ExpiredCloseSurface =
+  | 'create_new'
+  | 'session'
+  | 'own_attempt_view'
+  | 'staff_attempt_view'
+  | 'preview_attempt_view';
+
+/** Who met the expired attempt: the signed-in caller, from their session and membership. */
+export type ExpiredCloseActor = {
+  userId: string;
+  role: Role;
+  surface: ExpiredCloseSurface;
+};
+
+/**
+ * Whether the classroom's status lets this role write to it: the webapp's
+ * mutation gate, `canMutateClassroom` in packages/auth/src/predicates.ts (the
+ * source of truth), restated here because @classmoji/auth depends on this
+ * package. The owner always may; anyone else only while the classroom is
+ * ACTIVE (LOCKED and UNPUBLISHED are read-only). Turn admission
+ * (quizChat.service `classroomAllowsTurn`, held to the predicate by a parity
+ * test in packages/tasks) and the expired close both read it.
+ */
+export const classroomAllowsMutation = ({ status, role }: { status: string; role: string }) =>
+  role === 'OWNER' || status === 'ACTIVE';
+
+/**
+ * Whether a chat attempt is past its session deadline and still open: the
+ * turn admission's rule (quizChat.service `revalidate`). No deadline stamped
+ * (every `ai_agent` attempt): never expired.
+ */
+export const isExpiredOpenAttempt = (
+  attempt: {
+    agent_runtime?: string | null;
+    completed_at?: Date | string | null;
+    session_expires_at?: Date | string | null;
+  },
+  now: Date = new Date()
+): boolean => {
+  if (attempt.agent_runtime !== TRIGGER_CHAT_RUNTIME || attempt.completed_at) return false;
+  if (!attempt.session_expires_at) return false;
+  const deadline = new Date(attempt.session_expires_at).getTime();
+  return Number.isFinite(deadline) && deadline <= now.getTime();
+};
+
+/**
+ * Close a chat attempt past its session deadline (Q19: it takes no more
+ * turns, and nothing else would ever complete it), where it is met: a new
+ * attempt (`quizAttempt.createNew`), the session route, the attempt drawers.
+ * The same completion as the message limit (`completeAtTurnLimit`): a fresh
+ * fence first, so no earlier turn can write after it, then `completeLocked`
+ * with `endedBy: 'expired'`: the results recorded so far, every other
+ * question skipped, the open one included. `completed_at` is the deadline.
+ *
+ * Everything is read from the locked row, never from the caller: an attempt
+ * that is gone, on another runtime, complete or not yet expired is left as it
+ * is (null). So is one whose classroom's status does not let `actor` write
+ * (`classroomAllowsMutation`, the mutation gate's rule): closing writes a
+ * grade, and the drawers meet it with read access only, which a LOCKED or
+ * UNPUBLISHED classroom still grants. It closes once the classroom is ACTIVE
+ * again, or when its owner meets it. Racing closes serialize on the row lock; the loser finds it
+ * complete and writes nothing. The winner writes one audit row in the same
+ * transaction (`data.tool: 'quiz_chat.expired_close'`), naming `actor`, the
+ * signed-in caller whose request met it (the attempt's owner, or staff
+ * reading it), and the attempt's owner. Returns the evaluation record.
+ */
+export const closeExpiredAttempt = (
+  attemptId: string,
+  actor: ExpiredCloseActor
+): Promise<QuizEvaluationRecordV2 | null> =>
+  getPrisma().$transaction(async (tx): Promise<QuizEvaluationRecordV2 | null> => {
+    const attempt = await lockAttempt(tx, attemptId);
+    if (!attempt || !isExpiredOpenAttempt(attempt)) return null;
+    if (!classroomAllowsMutation({ status: attempt.quiz.classroom.status, role: actor.role })) {
+      return null;
+    }
+
+    const fence = newFence();
+    await tx.quizAttempt.update({ where: { id: attempt.id }, data: { turn_fence: fence } });
+    attempt.turn_fence = fence;
+    const record = await completeLocked(
+      tx,
+      attempt,
+      { attemptId: attempt.id, fence, inputMessageId: null, runId: null },
+      { source: 'server', endedBy: 'expired', completedAt: attempt.session_expires_at! }
+    );
+    await tx.auditLog.create({
+      data: {
+        user_id: actor.userId,
+        classroom_id: attempt.quiz.classroom_id,
+        role: actor.role,
+        action: 'UPDATE',
+        resource_type: 'QUIZ_ATTEMPT',
+        resource_id: attempt.id,
+        data: toJson({
+          tool: 'quiz_chat.expired_close',
+          surface: actor.surface,
+          quiz_id: attempt.quiz_id,
+          owner_user_id: attempt.user_id,
+          session_expires_at: attempt.session_expires_at!.toISOString(),
+          partial_credit_percentage: record.partial_credit_percentage,
+          skipped_by_end: record.question_results
+            .filter(r => r.skipped_by_end === true)
+            .map(r => r.question_num),
+        }),
+      },
+    });
+    return record;
+  }, LOCKED_TX_OPTIONS);
+
 /**
  * Record each of `missing` as skipped because the quiz ended early (the
- * student confirmed it, or the server ended it at the message limit): the
+ * student confirmed it, or the server ended it at the message limit or its
+ * session deadline): the
  * result of a skip (`deriveResult([])`, the classroom's emoji for it), no
  * feedback line, and `skipped_by_end` on the entry and its
  * `result_finalized` journal row. The caller holds the row lock and completes
@@ -992,7 +1150,7 @@ export const completeAtTurnLimit = async (
 const fillSkippedByEnd = async (
   tx: Tx,
   attempt: LockedAttempt,
-  f: Omit<Fenced, 'toolCallId'> & { toolCallId?: string },
+  f: CompletionCall,
   questionCount: number,
   missing: number[]
 ): Promise<Prisma.InputJsonArray> => {

@@ -12,6 +12,7 @@ const fakes = vi.hoisted(() => ({
   loadMaterial: vi.fn(),
   findFirst: vi.fn(),
   hostForOrganization: vi.fn(),
+  sandboxStateOf: vi.fn(),
 }));
 
 vi.mock('@classmoji/database', () => ({
@@ -26,6 +27,7 @@ vi.mock('@classmoji/services', () => ({
     gitRepo: { findByStudent: fakes.findByStudent },
     quizSourceMaterial: { load: fakes.loadMaterial },
     gitlabInstance: { hostForOrganization: fakes.hostForOrganization },
+    quizChat: { sandboxStateOf: fakes.sandboxStateOf },
   },
 }));
 
@@ -327,5 +329,69 @@ describe('loadAttemptContext: where a code-aware attempt explores', () => {
     const ctx = await loadAttemptContext('attempt-1', admission, { log: vi.fn(), env });
     expect(ctx.exploration).toBeNull();
     expect(ctx.codeUnavailable).toBe(true);
+  });
+});
+
+describe('loadAttemptContext: code sandbox questions', () => {
+  const HINT = {
+    id: 'q2-2',
+    question_number: 2,
+    attempt: 2,
+    seeded_from: 1,
+    template: 'vanilla',
+    files: { '/index.js': 'console.log(1);\n' },
+    active_file: '/index.js',
+  };
+  const pinned = (codeSandbox: unknown) => ({
+    ...attempt({ include_code_context: false }),
+    agent_config: { questionCount: 8, codeSandbox },
+  });
+
+  beforeEach(() => fakes.sandboxStateOf.mockResolvedValue({ nextHint: HINT }));
+
+  it('reads the pin from the attempt, and gives the prompt the sandbox section only when pinned', async () => {
+    fakes.findById.mockResolvedValue(pinned(true));
+    const on = await loadAttemptContext('attempt-1', admission, { log: vi.fn(), env });
+    expect(on.codeSandbox).toBe(true);
+    expect(on.prompt.staticPrompt).toContain('CODE SANDBOX QUESTIONS');
+
+    clearAttemptContextCache();
+    for (const config of [pinned(false), pinned('yes'), attempt({ include_code_context: false })]) {
+      clearAttemptContextCache();
+      fakes.findById.mockResolvedValue(config);
+      const off = await loadAttemptContext('attempt-1', admission, { log: vi.fn(), env });
+      expect(off.codeSandbox).toBe(false);
+      expect(off.prompt.staticPrompt).not.toContain('CODE SANDBOX QUESTIONS');
+    }
+  });
+
+  it('loads the hint sandbox on a Try again turn of a pinned attempt only', async () => {
+    fakes.findById.mockResolvedValue(pinned(true));
+    const tryAgain = await loadAttemptContext(
+      'attempt-1',
+      { ...admission, action: 'try_again' },
+      { log: vi.fn(), env }
+    );
+    expect(fakes.sandboxStateOf).toHaveBeenCalledWith('attempt-1');
+    expect(tryAgain.sandboxHint).toEqual(HINT);
+
+    fakes.sandboxStateOf.mockClear();
+    for (const action of [undefined, 'next'] as const) {
+      const other = await loadAttemptContext(
+        'attempt-1',
+        { ...admission, ...(action ? { action } : {}) },
+        { log: vi.fn(), env }
+      );
+      expect(other.sandboxHint).toBeNull();
+    }
+    clearAttemptContextCache();
+    fakes.findById.mockResolvedValue(pinned(false));
+    const unpinned = await loadAttemptContext(
+      'attempt-1',
+      { ...admission, action: 'try_again' },
+      { log: vi.fn(), env }
+    );
+    expect(unpinned.sandboxHint).toBeNull();
+    expect(fakes.sandboxStateOf).not.toHaveBeenCalled();
   });
 });

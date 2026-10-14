@@ -81,6 +81,11 @@ interface QuizCreateInput {
    * `normalizeExcludedPaths` (a bad list throws `QuizExcludedPathsError`).
    */
   excludedPaths?: string[];
+  /**
+   * Let the quiz agent attach an editable code sandbox to a question. Absent
+   * saves it off. Each attempt pins it at its first turn.
+   */
+  codeSandboxEnabled?: boolean;
 }
 
 interface QuizUpdateInput {
@@ -108,6 +113,8 @@ interface QuizUpdateInput {
   courseSearchEnabled?: boolean;
   /** As on QuizCreateInput: absent = unchanged, a list replaces them (empty clears). */
   excludedPaths?: string[];
+  /** As on QuizCreateInput: absent = unchanged. Attempts already started keep their pin. */
+  codeSandboxEnabled?: boolean;
 }
 
 interface QuizMembership {
@@ -386,6 +393,7 @@ const createQuizRow = (
       max_attempts: data.maxAttempts !== undefined ? parseInt(String(data.maxAttempts), 10) : 1,
       grading_strategy: data.gradingStrategy || 'HIGHEST',
       course_search_enabled: data.courseSearchEnabled === true,
+      code_sandbox_enabled: data.codeSandboxEnabled === true,
       ...(data.excludedPaths !== undefined ? { excluded_paths: data.excludedPaths } : {}),
     },
   });
@@ -460,6 +468,8 @@ export const update = async (quizId: string, data: QuizUpdateInput) => {
     updateData.course_search_enabled = data.courseSearchEnabled === true;
   if (data.excludedPaths !== undefined)
     updateData.excluded_paths = excludedPathsToStore(data.excludedPaths);
+  if (data.codeSandboxEnabled !== undefined)
+    updateData.code_sandbox_enabled = data.codeSandboxEnabled === true;
 
   // One transaction, as in create: the material is validated against the
   // quiz's own classroom (read back from the row, not taken from the caller),

@@ -17,7 +17,8 @@
  * across attempts) states the marker as its SERVER MARKER line, and admission
  * refuses student text framed as the server's: a line opening with SYSTEM
  * NOTICE, SERVER NOTICE or CURRENT STATUS, or "[[server-notice"
- * (quizChat.service `containsReservedText`).
+ * (`containsReservedText`, @classmoji/utils/quiz-agent; for a code submission
+ * on the text the model reads for it).
  */
 import { createHmac, randomBytes } from 'node:crypto';
 import type { ModelMessage } from 'ai';
@@ -62,8 +63,9 @@ export function markServerText(attemptId: string, text: string): string {
  * The history with every stored status part opened by the attempt's marker.
  * A status part is a text part after the first one of a user message that
  * starts with CURRENT STATUS: admission stores a student message as its text
- * followed by the status, and admits only a single text part from the
- * student, so a later text part is always the server's. Messages without one
+ * (a code submission as the text the model reads for it, after the
+ * submission's data part) followed by the status, and admits only a single
+ * part from the student, so a later text part is always the server's. Messages without one
  * come back as they are.
  */
 export function markStatusParts(attemptId: string, messages: ModelMessage[]): ModelMessage[] {

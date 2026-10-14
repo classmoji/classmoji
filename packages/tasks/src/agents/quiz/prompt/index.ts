@@ -1,9 +1,11 @@
 import { baseSystemPrompt } from './base.ts';
 import { codeAwareAgentPrompt } from './codeAware.ts';
 import { buildMaterialPrompt, type MaterialDoc } from './material.ts';
+import { sandboxAgentPrompt } from './sandbox.ts';
 
 export { baseSystemPrompt } from './base.ts';
 export { codeAwareAgentPrompt } from './codeAware.ts';
+export { sandboxAgentPrompt } from './sandbox.ts';
 export { buildMaterialPrompt, usableMaterial, type MaterialDoc } from './material.ts';
 
 const RULE = '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━';
@@ -26,6 +28,11 @@ export type QuizPromptInput = {
   /** content_get and content_search are registered for this attempt (tools/content.ts). */
   contentToolsAvailable?: boolean;
   /**
+   * The attempt is pinned with code sandbox questions (`agent_config.codeSandbox`):
+   * the fleet-wide block gains CODE SANDBOX QUESTIONS (`sandboxAgentPrompt`).
+   */
+  codeSandbox?: boolean;
+  /**
    * The attempt's marker line (`serverNoticeMarker`), which opens every text
    * the server puts in the user role. Only the dynamic block states it.
    */
@@ -37,8 +44,9 @@ export type QuizPromptInput = {
  * blocks the loop sends (each with its own cache breakpoint).
  *
  *   staticPrompt  - the fleet-wide instructions, byte-identical for every quiz
- *                   of the same mode, plus this quiz's SOURCE MATERIAL block
- *                   when it has one: one cache entry per quiz.
+ *                   of the same mode (standard or code-aware, with or without
+ *                   code sandbox questions), plus this quiz's SOURCE MATERIAL
+ *                   block when it has one: one cache entry per quiz.
  *   dynamicPrompt - QUIZ PARAMETERS, the attempt's SERVER MARKER, the
  *                   instructor's override, the rubric. Fixed for the
  *                   attempt's life; nothing per turn.
@@ -58,11 +66,15 @@ export function buildQuizPrompt({
   classroomRef = null,
   courseSearchEnabled = false,
   contentToolsAvailable = false,
+  codeSandbox = false,
   noticeMarker,
 }: QuizPromptInput): { staticPrompt: string; dynamicPrompt: string } {
-  const fleetStatic = isCodeAware
+  const modeStatic = isCodeAware
     ? `${baseSystemPrompt}\n\n${codeAwareAgentPrompt}`
     : baseSystemPrompt;
+  // Only an attempt pinned with sandboxes gets the section: every other quiz
+  // keeps the fleet-wide block it had, byte for byte.
+  const fleetStatic = codeSandbox ? `${modeStatic}\n\n${sandboxAgentPrompt}` : modeStatic;
 
   const materialPrompt = buildMaterialPrompt({
     sourceMaterial,
