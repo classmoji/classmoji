@@ -1043,6 +1043,18 @@ export type ExpiredCloseActor = {
 };
 
 /**
+ * Whether the classroom's status lets this role write to it: the webapp's
+ * mutation gate, `canMutateClassroom` in packages/auth/src/predicates.ts (the
+ * source of truth), restated here because @classmoji/auth depends on this
+ * package. The owner always may; anyone else only while the classroom is
+ * ACTIVE (LOCKED and UNPUBLISHED are read-only). Turn admission
+ * (quizChat.service `classroomAllowsTurn`, held to the predicate by a parity
+ * test in packages/tasks) and the expired close both read it.
+ */
+export const classroomAllowsMutation = ({ status, role }: { status: string; role: string }) =>
+  role === 'OWNER' || status === 'ACTIVE';
+
+/**
  * Whether a chat attempt is past its session deadline and still open: the
  * turn admission's rule (quizChat.service `revalidate`). No deadline stamped
  * (every `ai_agent` attempt): never expired.
@@ -1072,7 +1084,11 @@ export const isExpiredOpenAttempt = (
  *
  * Everything is read from the locked row, never from the caller: an attempt
  * that is gone, on another runtime, complete or not yet expired is left as it
- * is (null). Racing closes serialize on the row lock; the loser finds it
+ * is (null). So is one whose classroom's status does not let `actor` write
+ * (`classroomAllowsMutation`, the mutation gate's rule): closing writes a
+ * grade, and the drawers meet it with read access only, which a LOCKED or
+ * UNPUBLISHED classroom still grants. It closes once the classroom is ACTIVE
+ * again, or when its owner meets it. Racing closes serialize on the row lock; the loser finds it
  * complete and writes nothing. The winner writes one audit row in the same
  * transaction (`data.tool: 'quiz_chat.expired_close'`), naming `actor`, the
  * signed-in caller whose request met it (the attempt's owner, or staff
@@ -1085,6 +1101,9 @@ export const closeExpiredAttempt = (
   getPrisma().$transaction(async (tx): Promise<QuizEvaluationRecordV2 | null> => {
     const attempt = await lockAttempt(tx, attemptId);
     if (!attempt || !isExpiredOpenAttempt(attempt)) return null;
+    if (!classroomAllowsMutation({ status: attempt.quiz.classroom.status, role: actor.role })) {
+      return null;
+    }
 
     const fence = newFence();
     await tx.quizAttempt.update({ where: { id: attempt.id }, data: { turn_fence: fence } });

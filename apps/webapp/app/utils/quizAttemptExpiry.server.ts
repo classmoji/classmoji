@@ -43,8 +43,11 @@ export const isExpiredOpenChatAttempt = (
 };
 
 /**
- * Close the attempt if it is open and past its deadline. True when it was
- * (by this call or a racing one): the caller then reads the attempt again.
+ * Close the attempt if it is open and past its deadline. True when a close
+ * was tried: the caller then reads the attempt again, which shows it closed
+ * by this call or a racing one, or still open where the classroom's status
+ * does not let the actor write (LOCKED or UNPUBLISHED, for anyone but the
+ * owner: `closeExpiredAttempt` leaves it).
  */
 export const closeIfExpired = async (
   attempt: ExpirableAttempt,

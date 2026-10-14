@@ -4,7 +4,7 @@ import { Drawer, ConfigProvider, theme, Modal } from 'antd';
 import type { Route } from './+types/route';
 import { useRouteDrawer, useDarkMode } from '~/hooks';
 import { QuizAttemptInterface } from '~/components';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { addClassroomAuditLog, assertClassroomAccess } from '~/utils/helpers';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { attemptDrawerView, chatActivityView, quizDrawerView } from '~/utils/quizPayloads';
 import { isTriggerChatAttempt } from '~/utils/quizRuntime.server';
@@ -112,6 +112,31 @@ export async function loader({ params, request }: Route.LoaderArgs) {
         isInstructor && !viewerOwnsAttempt ? 'staff' : 'student'
       )
     : null;
+
+  // Staff reading someone else's attempt here (step 1 admits them; the staff
+  // prefixes have their own route, but this URL is open to them too) is a read
+  // of another person's data, so it is audited exactly as the staff attempt
+  // route (admin.$class.quizzes_.$quizId.attempt.$attemptId) audits it: one VIEW
+  // row, on either runtime, naming the classroom the gate authorized and the
+  // role it enforced. Steps 2 and 3 bind the attempt to that classroom. A
+  // student or staff member reading their own attempt is not logged; a
+  // refused or 404 read never gets here. Repeated loads within the audit
+  // service's dedup window fold into one row.
+  if (isInstructor && !viewerOwnsAttempt) {
+    await addClassroomAuditLog({
+      classroomId: classroom.id,
+      userId: String(userId),
+      role: membership?.role,
+      action: 'VIEW',
+      resourceType: 'QUIZ_ATTEMPT',
+      resourceId: attemptData.attempt.id.toString(),
+      metadata: {
+        tool: 'web:quiz_attempt.view',
+        quiz_id: quiz.id.toString(),
+        student_id: attemptData.attempt.user_id.toString(),
+      },
+    });
+  }
 
   // A chat attempt's message limit: the messages it still admits (the chat's
   // countdown) and whether the server submitted it at the limit (the results

@@ -17,6 +17,7 @@ const messageLimitMock = vi.fn();
 const assertAccessMock = vi.fn();
 const quizzesVisibleMock = vi.fn();
 const closeExpiredMock = vi.fn();
+const auditMock = vi.fn();
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
@@ -33,6 +34,7 @@ vi.mock('@classmoji/services', () => ({
 
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: (...a: unknown[]) => assertAccessMock(...a),
+  addClassroomAuditLog: (...a: unknown[]) => auditMock(...a),
 }));
 
 vi.mock('~/utils/classroomProFlag.server', () => ({
@@ -107,10 +109,10 @@ const load = () =>
     request: new Request('http://localhost/x'),
   } as unknown as Parameters<typeof route.loader>[0]);
 
-const signInAs = (userId: string, role: string) =>
+const signInAs = (userId: string, role: string, classroomId = 'class-1') =>
   assertAccessMock.mockResolvedValue({
     userId,
-    classroom: { id: 'class-1', slug: 'cs52-26f', status: 'ACTIVE' },
+    classroom: { id: classroomId, slug: 'cs52-26f', status: 'ACTIVE' },
     membership: { role },
   });
 
@@ -331,5 +333,104 @@ describe('attempt loader — a chat attempt past its session deadline', () => {
     }
     expect(closeExpiredMock).not.toHaveBeenCalled();
     expect(findWithMessagesMock).toHaveBeenCalledTimes(4);
+  });
+});
+
+/**
+ * Staff reach this route too (its gate admits OWNER/TEACHER/ASSISTANT), so a
+ * staff member reading another person's attempt here writes the same VIEW row
+ * the staff attempt route writes (AGENTS.md, "every read of other people's
+ * data"). The attempt's owner, student or staff, writes none, and neither
+ * does a read that is refused or lands on a 404.
+ */
+describe('attempt loader — the VIEW audit row', () => {
+  it.each([
+    ['trigger_chat', 'TEACHER'],
+    ['trigger_chat', 'ASSISTANT'],
+    [undefined, 'OWNER'],
+  ] as const)(
+    "writes one VIEW row when staff read a student's attempt (%s, %s)",
+    async (runtime, role) => {
+      signInAs('staff-1', role);
+      findWithMessagesMock.mockResolvedValue({
+        attempt: attemptOf('student-1', runtime),
+        messages: RAW_ROWS,
+      });
+
+      await load();
+
+      expect(auditMock).toHaveBeenCalledExactlyOnceWith({
+        classroomId: 'class-1',
+        userId: 'staff-1',
+        // The role the gate enforced.
+        role,
+        action: 'VIEW',
+        resourceType: 'QUIZ_ATTEMPT',
+        resourceId: 'attempt-1',
+        metadata: {
+          tool: 'web:quiz_attempt.view',
+          quiz_id: QUIZ_ID,
+          student_id: 'student-1',
+        },
+      });
+    }
+  );
+
+  it('writes none when a student reads their own attempt', async () => {
+    signInAs('student-1', 'STUDENT');
+    findWithMessagesMock.mockResolvedValue({
+      attempt: attemptOf('student-1', 'trigger_chat'),
+      messages: RAW_ROWS,
+    });
+
+    const data = await load();
+
+    expect(data.viewerOwnsAttempt).toBe(true);
+    expect(auditMock).not.toHaveBeenCalled();
+  });
+
+  it('writes none when staff read their own attempt', async () => {
+    signInAs('teacher-1', 'TEACHER');
+    findWithMessagesMock.mockResolvedValue({
+      attempt: attemptOf('teacher-1', 'trigger_chat'),
+      messages: RAW_ROWS,
+    });
+
+    const data = await load();
+
+    expect(data.viewerOwnsAttempt).toBe(true);
+    expect(auditMock).not.toHaveBeenCalled();
+  });
+
+  it("writes none when a student is refused another student's attempt", async () => {
+    signInAs('student-2', 'STUDENT');
+    findWithMessagesMock.mockResolvedValue({
+      attempt: attemptOf('student-1', 'trigger_chat'),
+      messages: RAW_ROWS,
+    });
+
+    await expect(load()).rejects.toMatchObject({ status: 403 });
+    expect(auditMock).not.toHaveBeenCalled();
+  });
+
+  it("gives classroom Y's staff a 404 for classroom X's attempt, and writes no row", async () => {
+    // Authorized for class-2; the quiz and its attempt are class-1's.
+    signInAs('teacher-y', 'TEACHER', 'class-2');
+    findWithMessagesMock.mockResolvedValue({
+      attempt: attemptOf('student-1', 'trigger_chat'),
+      messages: RAW_ROWS,
+    });
+
+    await expect(load()).rejects.toMatchObject({ status: 404 });
+    expect(findWithMessagesMock).not.toHaveBeenCalled();
+    expect(loadTranscriptMock).not.toHaveBeenCalled();
+    expect(auditMock).not.toHaveBeenCalled();
+  });
+
+  it('writes no row when the gate refuses', async () => {
+    assertAccessMock.mockRejectedValue(new Response('Forbidden', { status: 403 }));
+
+    await expect(load()).rejects.toBeInstanceOf(Response);
+    expect(auditMock).not.toHaveBeenCalled();
   });
 });

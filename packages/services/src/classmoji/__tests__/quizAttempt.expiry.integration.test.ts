@@ -417,6 +417,78 @@ describe.skipIf(!RUN)('expired chat attempts (integration)', () => {
     expect(await auditRows(attemptId)).toHaveLength(1);
   });
 
+  // ─── the classroom's status ───────────────────────────────────────────────
+
+  /**
+   * Closing writes a grade, and the attempt drawers meet an expired attempt
+   * with read access only, which a LOCKED or UNPUBLISHED classroom still
+   * grants. So the close follows the mutation gate (`canMutateClassroom`):
+   * nobody but the owner closes it there, and it closes once the classroom is
+   * ACTIVE again.
+   */
+  it('leaves an expired attempt open while its classroom is LOCKED or UNPUBLISHED, and closes it once ACTIVE', async () => {
+    const teacherId = await makeUser(`teacher-${randomUUID().slice(0, 4)}`);
+    await prisma.classroomMembership.create({
+      data: {
+        classroom_id: classroomId,
+        user_id: teacherId,
+        role: 'TEACHER',
+        has_accepted_invite: true,
+      },
+    });
+    const asTeacher = {
+      userId: teacherId,
+      role: 'TEACHER' as const,
+      surface: 'staff_attempt_view' as const,
+    };
+    const attemptId = await newAttempt();
+    await halfway(attemptId);
+    await expire(attemptId);
+    const before = await attemptRow(attemptId);
+    const eventsBefore = await events(attemptId);
+
+    try {
+      for (const status of ['LOCKED', 'UNPUBLISHED'] as const) {
+        await prisma.classroom.update({ where: { id: classroomId }, data: { status } });
+        expect(
+          await grading.closeExpiredAttempt(attemptId, asStudent(studentA, 'own_attempt_view'))
+        ).toBeNull();
+        expect(await grading.closeExpiredAttempt(attemptId, asTeacher)).toBeNull();
+      }
+      // Nothing written: no fence, no grade, no journal row, no audit row.
+      expect(await attemptRow(attemptId)).toEqual(before);
+      expect(await events(attemptId)).toEqual(eventsBefore);
+      expect(await auditRows(attemptId)).toHaveLength(0);
+
+      await prisma.classroom.update({ where: { id: classroomId }, data: { status: 'ACTIVE' } });
+      const record = await grading.closeExpiredAttempt(attemptId, asTeacher);
+      expect(record).toMatchObject({ v: 2, source: 'server' });
+      expect((await attemptRow(attemptId)).completed_at).not.toBeNull();
+      const audits = await auditRows(attemptId);
+      expect(audits).toHaveLength(1);
+      expect(audits[0]).toMatchObject({ user_id: teacherId, role: 'TEACHER' });
+    } finally {
+      await prisma.classroom.update({ where: { id: classroomId }, data: { status: 'ACTIVE' } });
+    }
+  });
+
+  it('closes an expired attempt in a LOCKED classroom for its owner, who may always write', async () => {
+    const attemptId = await newAttempt({ expiresAt: new Date(Date.now() - HOUR) });
+    try {
+      await prisma.classroom.update({ where: { id: classroomId }, data: { status: 'LOCKED' } });
+      expect(
+        await grading.closeExpiredAttempt(attemptId, {
+          userId: ownerId,
+          role: 'OWNER',
+          surface: 'staff_attempt_view',
+        })
+      ).toMatchObject({ source: 'server' });
+      expect((await attemptRow(attemptId)).completed_at).not.toBeNull();
+    } finally {
+      await prisma.classroom.update({ where: { id: classroomId }, data: { status: 'ACTIVE' } });
+    }
+  });
+
   // ─── createNew ────────────────────────────────────────────────────────────
 
   it('createNew closes the expired attempt, starts a new one, and still counts it toward max_attempts', async () => {
