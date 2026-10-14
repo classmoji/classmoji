@@ -566,6 +566,187 @@
   margin-right: -0.5rem;
 }
 
+/* Collapsible code blocks (page-schema codeCollapse.ts). The block's <code> is
+   its editable content, so lines cannot be taken out: the <pre> is clipped to
+   its first 10 lines (title bar and padding included, so 34px + 1rem above
+   and 1rem below) and the rest stays in place for find-in-page and Copy. The
+   clip is `hidden`, not `clip`: the browser may still scroll the <pre> to show
+   a match, and that scroll is what opens the block. `data-collapse` is only
+   on the <pre> of a block that collapses; every other code block is
+   untouched. */
+.bn-container .bn-block-content[data-content-type="codeBlock"] > pre[data-collapse] {
+  /* Room for the bar, which is absolute (the block content is a flex row). */
+  margin-bottom: 34px;
+}
+
+.bn-container .bn-block-content[data-content-type="codeBlock"] > pre[data-collapse="collapsed"] {
+  /* 10 rows of 14px code at BlockNote's 1.5 line height, for browsers
+     without the `lh` unit (before Safari 16.4, Firefox 120). */
+  max-height: calc(34px + 2rem + 210px);
+  max-height: calc(34px + 2rem + 10lh);
+  overflow-y: hidden;
+}
+
+/* While the height animates (an inline max-height, removed when it lands). */
+.bn-container .bn-block-content[data-content-type="codeBlock"] > pre[data-animating] {
+  overflow-y: hidden;
+  transition: max-height 250ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* The bar along the bottom mirrors the title bar: same height and colours,
+   the label in the code's font, rounded with the block (its overflow clips). */
+.bn-container .bn-block-content[data-content-type="codeBlock"] > div > .bn-code-expand {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 34px;
+  margin: 0;
+  padding: 0 14px;
+  border: 0;
+  border-top: 1px solid #1a1a1a;
+  border-radius: 0;
+  background-color: #2d2d2d;
+  color: #8e8e8e;
+  font-size: 13px !important;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+
+.bn-container .bn-block-content[data-content-type="codeBlock"] > div > .bn-code-expand:hover {
+  color: #d4d4d4;
+  background-color: #333333;
+}
+
+.bn-container .bn-block-content[data-content-type="codeBlock"] > div > .bn-code-expand:focus-visible {
+  outline: 2px solid #60a5fa;
+  outline-offset: -2px;
+  color: #d4d4d4;
+}
+
+.bn-code-expand svg {
+  display: block;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  transition: transform 250ms ease;
+}
+
+.bn-code-expand[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+/* Both labels are drawn; the state picks one. */
+.bn-code-expand[aria-expanded="true"] .bn-code-expand-more,
+.bn-code-expand[aria-expanded="false"] .bn-code-expand-less {
+  display: none;
+}
+
+/* From the last shown line into the bar, in the block's own colour. */
+.bn-container .bn-block-content[data-content-type="codeBlock"] > div > .bn-code-fade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 34px;
+  z-index: 1;
+  height: 44px;
+  background: linear-gradient(to bottom, rgb(22 22 22 / 0), rgb(22 22 22) 88%);
+  pointer-events: none;
+  transition: opacity 200ms ease;
+}
+
+.dark .bn-container .bn-block-content[data-content-type="codeBlock"] > div > .bn-code-fade {
+  background: linear-gradient(to bottom, rgb(20 20 20 / 0), rgb(20 20 20) 88%);
+}
+
+.bn-code-expand[aria-expanded="true"] ~ .bn-code-fade {
+  opacity: 0;
+}
+
+/* A block that does not collapse (short, or shortened in the editor). */
+.bn-code-expand[hidden],
+.bn-code-fade[hidden] {
+  display: none !important;
+}
+
+/* The editor's "Collapse long code" toggle, left of the copy toggle: the same
+   24px icon button, lit on a faint chip while on. */
+.bn-collapse-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #8e8e8e;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.bn-collapse-toggle:hover,
+.bn-collapse-toggle:focus-visible {
+  color: #d4d4d4;
+}
+
+.bn-collapse-toggle:focus-visible {
+  outline: 1px solid #8e8e8e;
+  outline-offset: 0;
+}
+
+.bn-collapse-toggle[aria-pressed="true"] {
+  color: #e5e5e5;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.bn-collapse-toggle svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+.bn-container .bn-block-content[data-content-type="codeBlock"] > div > .bn-collapse-toggle {
+  position: absolute;
+  top: 5px;
+  right: 36px;
+  z-index: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bn-container .bn-block-content[data-content-type="codeBlock"] > pre[data-animating],
+  .bn-code-expand,
+  .bn-code-expand svg,
+  .bn-code-fade {
+    transition: none !important;
+  }
+}
+
+/* Print: every line, no bar, no fade. */
+@media print {
+  .bn-container .bn-block-content[data-content-type="codeBlock"] > pre[data-collapse] {
+    max-height: none !important;
+    margin-bottom: 0;
+  }
+
+  .bn-code-expand,
+  .bn-code-fade,
+  .bn-collapse-toggle {
+    display: none !important;
+  }
+}
+
 /* Copying turned off: readers cannot select the block's text (the copy guard,
    app/utils/copyGuard.ts and site/copyScript.ts, covers selections that span
    it). Never in an editable editor: editors copy everything. */
