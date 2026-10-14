@@ -24,11 +24,13 @@ const recordTriggerSessionMock = vi.fn();
 const startSessionMock = vi.fn();
 const isTriggerConfiguredMock = vi.fn();
 const readRuntimeStateMock = vi.fn();
+const closeExpiredMock = vi.fn();
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     quizAttempt: { findById: (...a: unknown[]) => attemptFindByIdMock(...a) },
     quizChat: { readRuntimeState: (...a: unknown[]) => readRuntimeStateMock(...a) },
+    quizGrading: { closeExpiredAttempt: (...a: unknown[]) => closeExpiredMock(...a) },
     audit: { create: (...a: unknown[]) => auditCreateMock(...a) },
   },
 }));
@@ -127,6 +129,7 @@ beforeEach(() => {
   startSessionMock.mockResolvedValue({ publicAccessToken: 'pat-1', sessionId: 'session_1' });
   readRuntimeStateMock.mockResolvedValue(null);
   auditCreateMock.mockResolvedValue(undefined);
+  closeExpiredMock.mockResolvedValue({ v: 2, source: 'server' });
   signInAs(STUDENT);
 });
 
@@ -430,7 +433,7 @@ describe('api.quiz-chat.session — refusals', () => {
     expectNothingStarted();
   });
 
-  it('answers 409 once the session deadline has passed', async () => {
+  it('answers 409 once the session deadline has passed, closing the attempt first', async () => {
     attemptFindByIdMock.mockResolvedValue(
       attemptRow({ session_expires_at: new Date(Date.now() - 1000) })
     );
@@ -439,7 +442,39 @@ describe('api.quiz-chat.session — refusals', () => {
 
     expect(response.status).toBe(409);
     expect((await response.json()).code).toBe('QUIZ_ATTEMPT_EXPIRED');
+    // Closed with the results recorded so far, by id only: the service reads
+    // everything else from the locked row. The actor is the signed-in owner.
+    expect(closeExpiredMock).toHaveBeenCalledOnce();
+    expect(closeExpiredMock).toHaveBeenCalledWith(ATTEMPT_ID, {
+      userId: STUDENT,
+      role: 'STUDENT',
+      surface: 'session',
+    });
     expectNothingStarted();
+  });
+
+  it("never closes another member's expired attempt, nor one within its deadline", async () => {
+    // Another student's expired attempt: refused at ownership, untouched.
+    attemptFindByIdMock.mockResolvedValue(
+      attemptRow({ user_id: OTHER, session_expires_at: new Date(Date.now() - 1000) })
+    );
+    expect((await post({ attemptId: ATTEMPT_ID })).status).toBe(403);
+    // Staff too: they read the transcript, they don't drive the session.
+    signInAs(STUDENT, { role: 'OWNER' });
+    expect((await post({ attemptId: ATTEMPT_ID })).status).toBe(403);
+    // An attempt on the ai-agent runtime or already complete, whatever its stamp.
+    signInAs(STUDENT);
+    for (const over of [{ agent_runtime: 'ai_agent' }, { completed_at: new Date() }]) {
+      attemptFindByIdMock.mockResolvedValue(
+        attemptRow({ ...over, session_expires_at: new Date(Date.now() - 1000) })
+      );
+      expect((await post({ attemptId: ATTEMPT_ID })).status).toBe(409);
+    }
+    // The caller's own attempt, within its deadline.
+    attemptFindByIdMock.mockResolvedValue(attemptRow());
+    expect((await post({ attemptId: ATTEMPT_ID })).status).toBe(200);
+
+    expect(closeExpiredMock).not.toHaveBeenCalled();
   });
 
   it('answers fixed copy when the session cannot be started', async () => {

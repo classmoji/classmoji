@@ -16,11 +16,13 @@ const loadTranscriptMock = vi.fn();
 const messageLimitMock = vi.fn();
 const assertAccessMock = vi.fn();
 const quizzesVisibleMock = vi.fn();
+const closeExpiredMock = vi.fn();
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     quiz: { findById: (...a: unknown[]) => quizFindByIdMock(...a) },
     quizAttempt: { findWithMessages: (...a: unknown[]) => findWithMessagesMock(...a) },
+    quizGrading: { closeExpiredAttempt: (...a: unknown[]) => closeExpiredMock(...a) },
     quizChat: {
       loadTranscriptForViewer: (...a: unknown[]) => loadTranscriptMock(...a),
       messageLimitOf: (...a: unknown[]) => messageLimitMock(...a),
@@ -78,6 +80,27 @@ const RAW_ROWS = [
 
 const PROJECTED = [{ id: 'ui-1', role: 'assistant', parts: [{ type: 'text', text: 'Hello' }] }];
 
+const DEADLINE_PASSED = () => new Date(Date.now() - 60_000);
+
+/** An open chat attempt past its deadline, and the same attempt once closed. */
+const expiredOf = (userId: string, agentRuntime = 'trigger_chat') => ({
+  ...attemptOf(userId, agentRuntime),
+  session_expires_at: DEADLINE_PASSED(),
+});
+const closedOf = (userId: string) => ({
+  ...expiredOf(userId),
+  completed_at: new Date(),
+  partial_credit_percentage: 40,
+  first_attempt_percentage: 40,
+  evaluation_json: {
+    v: 2,
+    source: 'server',
+    partial_credit_percentage: 40,
+    first_attempt_percentage: 40,
+    question_results: [],
+  },
+});
+
 const load = () =>
   route.loader({
     params: { class: 'cs52-26f', quizId: QUIZ_ID, attemptId: 'attempt-1' },
@@ -97,6 +120,7 @@ beforeEach(() => {
   quizFindByIdMock.mockResolvedValue(QUIZ);
   loadTranscriptMock.mockResolvedValue(PROJECTED);
   messageLimitMock.mockResolvedValue({ messagesLeft: 200, endedBy: null });
+  closeExpiredMock.mockResolvedValue({ v: 2, source: 'server' });
 });
 
 describe('staff attempt loader — chat-runtime attempts', () => {
@@ -158,5 +182,51 @@ describe('staff attempt loader — chat-runtime attempts', () => {
     expect(messageLimitMock).toHaveBeenCalledWith('attempt-1');
     expect(data.attempt.ended_by).toBe('turn_limit');
     expect(data.messagesLeft).toBeNull();
+  });
+});
+
+describe('staff attempt loader — a chat attempt past its session deadline', () => {
+  it("closes a student's expired attempt and serves it completed, naming the staff reader", async () => {
+    signInAs('teacher-1', 'TEACHER');
+    findWithMessagesMock
+      .mockResolvedValueOnce({ attempt: expiredOf('student-1'), messages: RAW_ROWS })
+      .mockResolvedValueOnce({ attempt: closedOf('student-1'), messages: RAW_ROWS });
+
+    const data = await load();
+
+    expect(closeExpiredMock).toHaveBeenCalledWith('attempt-1', {
+      userId: 'teacher-1',
+      role: 'TEACHER',
+      surface: 'staff_attempt_view',
+    });
+    expect(findWithMessagesMock).toHaveBeenCalledTimes(2);
+    expect(data.readOnly).toBe(true);
+    expect(data.attempt.evaluation_json).toMatchObject({ source: 'server' });
+  });
+
+  it("never closes another quiz's attempt: it is a 404 first", async () => {
+    signInAs('teacher-1', 'TEACHER');
+    findWithMessagesMock.mockResolvedValue({
+      attempt: { ...expiredOf('student-1'), quiz_id: 'quiz-elsewhere' },
+      messages: [],
+    });
+
+    await expect(load()).rejects.toMatchObject({ status: 404 });
+    expect(closeExpiredMock).not.toHaveBeenCalled();
+  });
+
+  it('leaves an attempt within its deadline and an ai-agent one alone', async () => {
+    signInAs('teacher-1', 'TEACHER');
+    for (const attempt of [
+      {
+        ...attemptOf('student-1', 'trigger_chat'),
+        session_expires_at: new Date(Date.now() + 60_000),
+      },
+      expiredOf('student-1', 'ai_agent'),
+    ]) {
+      findWithMessagesMock.mockResolvedValue({ attempt, messages: RAW_ROWS });
+      await load();
+    }
+    expect(closeExpiredMock).not.toHaveBeenCalled();
   });
 });

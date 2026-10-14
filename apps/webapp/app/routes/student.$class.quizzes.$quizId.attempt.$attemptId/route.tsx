@@ -8,6 +8,7 @@ import { assertClassroomAccess } from '~/utils/helpers';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { attemptDrawerView, chatActivityView, quizDrawerView } from '~/utils/quizPayloads';
 import { isTriggerChatAttempt } from '~/utils/quizRuntime.server';
+import { closeIfExpired } from '~/utils/quizAttemptExpiry.server';
 
 export async function loader({ params, request }: Route.LoaderArgs) {
   const { ClassmojiService, QuizAttemptNotFoundError } = await import('@classmoji/services');
@@ -44,7 +45,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   // confirmed to exist by a 403. Only that one error becomes a 404; anything
   // else the query raises still surfaces, rather than telling a student their
   // attempt is gone because the database was briefly unreachable.
-  const attemptData = await ClassmojiService.quizAttempt
+  let attemptData = await ClassmojiService.quizAttempt
     .findWithMessages(attemptId)
     .catch((error: unknown) => {
       if (error instanceof QuizAttemptNotFoundError) return null;
@@ -63,6 +64,24 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     : false;
   if (!isInstructor && attemptData.attempt.user_id.toString() !== userId.toString()) {
     throw new Response('Unauthorized', { status: 403 });
+  }
+
+  // A chat attempt past its session deadline takes no more turns: it is
+  // closed now with the results recorded so far, and read again, so it shows
+  // as completed rather than as a chat that can never continue. Only after
+  // step 4: the caller owns it, or is staff of its quiz.
+  if (
+    membership &&
+    (await closeIfExpired(attemptData.attempt, {
+      userId: String(userId),
+      role: membership.role,
+      surface:
+        attemptData.attempt.user_id.toString() === userId.toString()
+          ? 'own_attempt_view'
+          : 'staff_attempt_view',
+    }))
+  ) {
+    attemptData = await ClassmojiService.quizAttempt.findWithMessages(attemptId);
   }
 
   // 5. Calculate focus metrics for completed attempts

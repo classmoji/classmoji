@@ -1,5 +1,5 @@
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
-import type { MessageRole, Prisma } from '@prisma/client';
+import type { MessageRole, Prisma, Role } from '@prisma/client';
 import { DEFAULT_EMOJI_GRADE_MAPPINGS, isClosed, isReleased, withLogins } from '@classmoji/utils';
 import { CONTRACT_VERSION } from '@classmoji/utils/quiz-agent';
 
@@ -1152,6 +1152,13 @@ export const createNew = async (
   // - Exhaust database connections
   // - Create orphaned quiz-agent sessions
   // - Bypass max_attempts limits by leaving attempts incomplete
+  //
+  // A chat attempt past its session deadline takes no more turns and nothing
+  // else completes it, so it is closed here first, with the results recorded
+  // so far (quizGrading `closeExpiredAttempt`, which re-reads it under its row
+  // lock): it no longer blocks a new attempt, and still counts toward
+  // max_attempts below. Imported here, not at the top: quizGrading imports
+  // this module.
   if (!isInstructor) {
     const incompleteAttempts = await getPrisma().quizAttempt.findMany({
       where: {
@@ -1162,20 +1169,38 @@ export const createNew = async (
       select: {
         id: true,
         started_at: true,
+        agent_runtime: true,
+        completed_at: true,
+        session_expires_at: true,
       },
       orderBy: {
         started_at: 'desc',
       },
-      take: 1,
     });
 
+    const open: typeof incompleteAttempts = [];
     if (incompleteAttempts.length > 0) {
+      const grading = await import('./quizGrading.service.ts');
+      for (const attempt of incompleteAttempts) {
+        if (!grading.isExpiredOpenAttempt(attempt)) {
+          open.push(attempt);
+          continue;
+        }
+        await grading.closeExpiredAttempt(attempt.id, {
+          userId: userId.toString(),
+          role: membership.role as Role,
+          surface: 'create_new',
+        });
+      }
+    }
+
+    if (open.length > 0) {
       return {
         success: false,
         message:
           'You have an incomplete attempt for this quiz. Please complete or abandon it before starting a new attempt.',
         reason: 'incomplete_attempt_exists',
-        existingAttemptId: incompleteAttempts[0].id,
+        existingAttemptId: open[0].id,
         canResume: true,
       };
     }
