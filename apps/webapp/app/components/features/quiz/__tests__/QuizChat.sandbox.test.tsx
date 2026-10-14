@@ -805,7 +805,7 @@ describe('Expand', () => {
     expect(toggle(sandbox).querySelector('.anticon-expand-alt')).not.toBeNull();
 
     await act(async () => toggle(sandbox).click());
-    expect(height(sandbox)).toBe('640');
+    expect(height(sandbox)).toBe('min(640px, 70vh)');
     expect(toggle(sandbox).textContent).toBe('Collapse');
     expect(toggle(sandbox).querySelector('.anticon-shrink')).not.toBeNull();
     // Nothing remounted: the edits and the running preview are as they were.
@@ -827,7 +827,7 @@ describe('Expand', () => {
     expect(height(sandbox)).toBe('230');
     await act(async () => one('quiz-sandbox-run', sandbox)!.click());
     await act(async () => toggle(sandbox).click());
-    expect(height(sandbox)).toBe('640');
+    expect(height(sandbox)).toBe('min(640px, 70vh)');
     expect(one('fake-preview', sandbox)).not.toBeNull();
     expect(sandpack.mounts).toBe(1);
   });
@@ -838,7 +838,7 @@ describe('Expand', () => {
     const [sandbox] = sandboxes();
     expect(height(sandbox)).toBe('460');
     await act(async () => toggle(sandbox).click());
-    expect(height(sandbox)).toBe('920');
+    expect(height(sandbox)).toBe('min(920px, 70vh)');
   });
 
   it('stays usable while the sandbox is locked', async () => {
@@ -847,7 +847,7 @@ describe('Expand', () => {
     expect(sandbox.dataset.state).toBe('locked');
     expect(toggle(sandbox).disabled).toBe(false);
     await act(async () => toggle(sandbox).click());
-    expect(height(sandbox)).toBe('640');
+    expect(height(sandbox)).toBe('min(640px, 70vh)');
   });
 });
 

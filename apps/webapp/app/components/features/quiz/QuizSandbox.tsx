@@ -93,7 +93,8 @@ export const COLLAPSE_LABEL = 'Collapse';
  * The layout's height in px: live (or locked) 320 beside the preview, 460 in
  * the narrow column (editor above preview); frozen, shorter. Expanded, one
  * tall height for every state: 640, and 920 in the narrow column (the same
- * 2× of the live height).
+ * 2× of the live height), each capped at 70% of the viewport so the footer
+ * and console under the layout stay on a phone or short laptop screen.
  */
 export function sandboxHeight({
   mode,
@@ -103,8 +104,8 @@ export function sandboxHeight({
   mode: SandboxMode;
   narrow: boolean;
   expanded: boolean;
-}): number {
-  if (expanded) return narrow ? 920 : 640;
+}): number | string {
+  if (expanded) return narrow ? 'min(920px, 70vh)' : 'min(640px, 70vh)';
   if (narrow) return mode === 'frozen' ? 330 : 460;
   return mode === 'frozen' ? 230 : 320;
 }
