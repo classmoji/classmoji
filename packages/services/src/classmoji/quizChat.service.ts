@@ -52,7 +52,6 @@ import {
   TRIGGER_CHAT_RUNTIME,
   appendEvent,
   attemptQuestionCount,
-  classroomAllowsMutation,
   completeAtTurnLimit,
   findEvent,
   readStoredResults,
@@ -151,13 +150,13 @@ type AllowedRole = (typeof ALLOWED_ROLES)[number];
 
 /**
  * Whether the classroom's status lets this role take a turn: the webapp's
- * mutation gate, `canMutateClassroom` in packages/auth/src/predicates.ts, as
- * quizGrading.service restates it (`classroomAllowsMutation`; @classmoji/auth
- * depends on this package, and a parity test holds the two together). The
- * owner always may; anyone else only while the classroom is ACTIVE (LOCKED
- * and UNPUBLISHED are read-only).
+ * mutation gate, `canMutateClassroom` in packages/auth/src/predicates.ts,
+ * restated here because @classmoji/auth depends on this package (a parity
+ * test holds the two together). The owner always may; anyone else only while
+ * the classroom is ACTIVE (LOCKED and UNPUBLISHED are read-only).
  */
-export const classroomAllowsTurn = classroomAllowsMutation;
+export const classroomAllowsTurn = ({ status, role }: { status: string; role: string }) =>
+  role === 'OWNER' || status === 'ACTIVE';
 
 /**
  * Whether a student's message imitates the server's framing (a line opening
