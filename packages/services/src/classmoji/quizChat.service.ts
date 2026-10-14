@@ -18,19 +18,33 @@
  * copy the student sees.
  */
 
+import { createHash } from 'node:crypto';
 import getPrisma from '@classmoji/database';
 import { isReleased } from '@classmoji/utils';
 import type { Prisma } from '@prisma/client';
 import {
+  CodeSubmissionInputSchema,
+  CodeSubmissionPartSchema,
+  MAX_MESSAGE_CHARS,
   MAX_STUDENT_TURNS,
   buildTurnStatus,
   buttonActionFor,
+  containsReservedText,
   projectTranscript,
   quizStaffVisibility,
   quizVisibility,
+  renderSubmissionForModel,
+  replyShowsHint,
+  reservedCheckText,
+  sandboxProgressOf,
   type AttemptProgress,
+  type CodeSubmissionInput,
+  type CodeSubmissionPart,
   type QuizEvaluationRecordV2,
   type QuizUIMessage,
+  type SandboxData,
+  type SandboxMessage,
+  type SandboxProgress,
 } from '@classmoji/utils/quiz-agent';
 import { quizzesVisible } from './entitlement.service.ts';
 import {
@@ -40,6 +54,7 @@ import {
   attemptQuestionCount,
   completeAtTurnLimit,
   findEvent,
+  readStoredResults,
   lockAttempt,
   newFence,
   progressOf,
@@ -66,7 +81,14 @@ export type QuizChatRefusalCode =
   | 'session_ended'
   | 'reserved_text'
   | 'turn_limit'
-  | 'too_fast';
+  | 'too_fast'
+  // A code submission (sandbox questions): no open sandbox, or not the one it
+  // names (`sandbox_closed`); not a submission this attempt takes
+  // (`invalid_submission`); text reserved for the server in its rendering
+  // (`reserved_code`).
+  | 'sandbox_closed'
+  | 'invalid_submission'
+  | 'reserved_code';
 
 /** A refused turn. The caller picks the copy; `message` is for logs only. */
 export class QuizChatRefusal extends Error {
@@ -89,8 +111,11 @@ export const isQuizChatRefusal = (error: unknown): error is QuizChatRefusal =>
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-/** Longest student message admitted, in characters. */
-export const MAX_STUDENT_MESSAGE_CHARS = 10_000;
+/**
+ * Longest student message admitted, in characters: the one copy the task's
+ * `classifyIncoming` reads too (@classmoji/utils/quiz-agent `MAX_MESSAGE_CHARS`).
+ */
+export const MAX_STUDENT_MESSAGE_CHARS = MAX_MESSAGE_CHARS;
 
 /**
  * The most student messages (button clicks included) one attempt admits
@@ -134,40 +159,13 @@ export const classroomAllowsTurn = ({ status, role }: { status: string; role: st
   role === 'OWNER' || status === 'ACTIVE';
 
 /**
- * The framing only the server writes into the model's context (see the quiz
- * agent's `serverNotice.ts`): a line that opens with SYSTEM NOTICE, SERVER
- * NOTICE or CURRENT STATUS (any case, words apart by spaces or tabs) and goes
- * on with ":" or "(" or nothing, and the marker's opening "[[server-notice"
- * anywhere. The words inside a sentence ("the operating system notices…",
- * `setCurrentStatus(`) are ordinary text. The per-attempt marker, not this
- * check, is what tells the model which text is the server's.
+ * Whether a student's message imitates the server's framing (a line opening
+ * with SYSTEM NOTICE, SERVER NOTICE or CURRENT STATUS, or the marker's
+ * "[[server-notice"). One copy of the rule, in @classmoji/utils/quiz-agent
+ * (`reserved.ts`): admission runs it on a typed message and on a code
+ * submission's rendering, the task on a sandbox's starter files.
  */
-const SERVER_HEADING = /^\s*(?:(?:system|server)\s+notice|current\s+status)\s*(?:[:(]|$)/i;
-const SERVER_MARKER_OPENING = /\[\[\s*server[\s_-]*notice/i;
-
-/** Line breaks a reader (or the model) may take as the start of a new line. */
-const LINE_BREAK = /\r\n|[\n\r\v\f\u0085\u2028\u2029]/;
-
-/** Invisible characters: format characters, joiners, variation selectors and fillers. */
-const INVISIBLE = /[\p{Cf}\u034F\u115F\u1160\u17B4\u17B5\u180B-\u180F\u3164\uFE00-\uFE0F\uFFA0]/gu;
-
-const framesAsServer = (text: string): boolean =>
-  SERVER_MARKER_OPENING.test(text) ||
-  text.split(LINE_BREAK).some(line => SERVER_HEADING.test(line));
-
-/**
- * Whether a student's message imitates the server's framing. The text is read
- * in NFKC form, twice: with invisible characters removed (one inside a word)
- * and with each replaced by a space (one standing in for the space between
- * the words).
- */
-export const containsReservedText = (text: string): boolean => {
-  const normalized = text.normalize('NFKC');
-  return (
-    framesAsServer(normalized.replace(INVISIBLE, '')) ||
-    framesAsServer(normalized.replace(INVISIBLE, ' '))
-  );
-};
+export { containsReservedText };
 
 /** `ai_conversations.context.runtime`: the transport's cursors and opaque state. */
 export type QuizChatRuntimeState = { cursors: unknown; state: unknown };
@@ -248,6 +246,12 @@ const ensureConversation = async (tx: Tx, attempt: LockedAttempt): Promise<strin
  * time a turn is admitted, so an edit to the quiz mid-attempt does not change
  * how many questions this attempt asks. Merges with what is there (staff
  * previews keep `instructorRepoName`).
+ *
+ * The same first admission pins `agent_config.codeSandbox` from the quiz's
+ * switch (`code_sandbox_enabled`): whether the agent may attach a code
+ * sandbox and the student may submit code, fixed for the attempt's life like
+ * its tool schema. An attempt pinned before the switch existed never gets the
+ * key, so it never takes a code submission.
  */
 const pinnedAgentConfig = (
   attempt: LockedAttempt,
@@ -256,8 +260,16 @@ const pinnedAgentConfig = (
   const config = isObject(attempt.agent_config) ? attempt.agent_config : {};
   const pinned = config.questionCount;
   if (typeof pinned === 'number' && Number.isInteger(pinned) && pinned > 0) return undefined;
-  return toJson({ ...config, questionCount });
+  return toJson({
+    ...config,
+    questionCount,
+    codeSandbox: attempt.quiz.code_sandbox_enabled === true,
+  });
 };
+
+/** Whether an attempt's pinned config (or the one this admission pins) takes code submissions. */
+const pinsCodeSandbox = (config: unknown): boolean =>
+  isObject(config) && config.codeSandbox === true;
 
 /** Entitlement read before the row lock: it uses its own connection. */
 const preflight = async (attemptId: string) => {
@@ -404,11 +416,152 @@ const checkTurnPace = async (tx: Tx, attemptId: string, now: Date): Promise<void
  */
 const actionFor = buttonActionFor;
 
+// ─── Code sandboxes ─────────────────────────────────────────────────────────
+
+/** JSON with every object's keys sorted, at every level: the same bytes for the same value. */
+const canonicalJson = (value: unknown): string =>
+  JSON.stringify(value, (_key, v: unknown) =>
+    isObject(v)
+      ? Object.fromEntries(
+          Object.keys(v)
+            .sort()
+            .map(k => [k, v[k]])
+        )
+      : v
+  );
+
+/** sha256 of a submission's canonical JSON: what a re-delivery is matched by. */
+const submissionDigest = (input: CodeSubmissionInput): string =>
+  createHash('sha256').update(canonicalJson(input)).digest('hex');
+
+type SandboxReader = Pick<Tx, 'quizAttemptEvent' | 'aIConversationMessage'>;
+
+type SandboxAttempt = Pick<
+  LockedAttempt,
+  'id' | 'conversation_id' | 'questions_asked' | 'question_results_json' | 'agent_config'
+> & { quiz: Pick<LockedAttempt['quiz'], 'question_count'> };
+
+/** Whether a stored part is question n's card, as present_question returned it. */
+const isCardPart = (p: unknown, n: number) =>
+  isObject(p) &&
+  p.type === 'tool-present_question' &&
+  p.state === 'output-available' &&
+  isObject(p.output) &&
+  p.output.question_number === n;
+
+/**
+ * The open question's sandboxes (`sandboxProgressOf`, the one rule the chat
+ * runs too), worked out from the attempt's own rows, or null when no
+ * question is open. Read through `db`: admission passes its transaction, so
+ * the rows are read under the attempt lock.
+ *
+ * The open question is the last one presented (`questions_asked`); its
+ * result in the stored projection closes it, whatever the rows say. Only the
+ * rows from the turn that presented it on are read, oldest first: the student
+ * message that turn answered (its journal row's `input_message_id`, the
+ * hidden opening for the begin turn) and every row after it, the way the
+ * model sees them (a partial reply as `partialParts` keeps it). A card the
+ * rows lost (a turn whose reply was never saved) is taken from the journal,
+ * as `presentQuestion` stored it, right after that student message.
+ */
+const sandboxProgressFor = async (
+  db: SandboxReader,
+  attempt: SandboxAttempt
+): Promise<SandboxProgress | null> => {
+  const n = attempt.questions_asked ?? 0;
+  if (n < 1 || !attempt.conversation_id) return null;
+  const finalized = readStoredResults(attempt.question_results_json, attemptQuestionCount(attempt));
+  if (finalized.some(r => r.question_num === n)) return null;
+
+  const card = await db.quizAttemptEvent.findFirst({
+    where: {
+      attempt_id: attempt.id,
+      type: 'question_presented',
+      payload: { path: ['question_number'], equals: n },
+    },
+    orderBy: { seq: 'asc' },
+    select: { input_message_id: true, payload: true },
+  });
+  const from = card
+    ? await db.aIConversationMessage.findUnique({
+        where: {
+          conversation_id_ui_message_id: {
+            conversation_id: attempt.conversation_id,
+            ui_message_id: card.input_message_id ?? OPENING_MESSAGE_ID,
+          },
+        },
+        select: { created_at: true },
+      })
+    : null;
+  const rows = await db.aIConversationMessage.findMany({
+    where: {
+      conversation_id: attempt.conversation_id,
+      format: 'ui_message_v1',
+      ui_message_id: { not: null },
+      ...(from ? { created_at: { gte: from.created_at } } : {}),
+    },
+    orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
+    select: { role: true, parts: true, final: true },
+  });
+  const messages: SandboxMessage[] = [];
+  for (const row of rows) {
+    if (row.role === 'ASSISTANT' && !row.final) {
+      const parts = partialParts(row.parts, stoppedByStudent(row.parts));
+      if (parts.length > 0) messages.push({ role: row.role, parts });
+      continue;
+    }
+    messages.push({ role: row.role, parts: Array.isArray(row.parts) ? row.parts : [] });
+  }
+  const output = isObject(card?.payload) ? card.payload.output : undefined;
+  if (isObject(output) && !messages.some(m => (m.parts ?? []).some(p => isCardPart(p, n)))) {
+    messages.splice(from ? 1 : 0, 0, {
+      role: 'ASSISTANT',
+      parts: [{ type: 'tool-present_question', state: 'output-available', output }],
+    });
+  }
+  const progress = sandboxProgressOf(messages);
+  return progress?.question_number === n ? progress : null;
+};
+
+/**
+ * The sandbox a hint reply carries if it is written now (`nextHint`, a
+ * `data-sandbox` part's data): the card's template and opening file, seeded
+ * from the student's last standing submission for the open question, with
+ * the next attempt's id. The task's loop writes it under the hint of a Try
+ * again turn (packages/tasks, agents/quiz/loop.ts). Null when no question is
+ * open, when its card has no sandbox, when a sandbox of it is still open (one
+ * not yet answered by a standing submission), and for an attempt not pinned
+ * with code sandboxes or already complete. A read only; no lock.
+ */
+export const sandboxStateOf = async (
+  attemptId: string
+): Promise<{ nextHint: SandboxData | null }> => {
+  const prisma = getPrisma();
+  const attempt = await prisma.quizAttempt.findUnique({
+    where: { id: attemptId },
+    select: {
+      id: true,
+      conversation_id: true,
+      questions_asked: true,
+      question_results_json: true,
+      agent_config: true,
+      completed_at: true,
+      quiz: { select: { question_count: true } },
+    },
+  });
+  if (!attempt || attempt.completed_at || !pinsCodeSandbox(attempt.agent_config)) {
+    return { nextHint: null };
+  }
+  const progress = await sandboxProgressFor(prisma, attempt);
+  return { nextHint: progress?.next_hint ?? null };
+};
+
 // ─── Admission ──────────────────────────────────────────────────────────────
 
 /**
  * An admitted (or re-delivered) student message: the turn's fence and input
- * id, and how many more messages the attempt admits after it.
+ * id, and how many more messages the attempt admits after it. A code
+ * submission also carries the text the model reads for it (`rendered`).
  */
 type AdmittedMessage = {
   status: 'admitted' | 'redelivered';
@@ -416,23 +569,120 @@ type AdmittedMessage = {
   inputMessageId: string;
   action?: 'next' | 'try_again';
   messagesLeft: number;
+  rendered?: string;
 };
 
 /** What admission's transaction decided: a message, or the turn limit (the attempt completed). */
 type AdmissionOutcome = AdmittedMessage | { status: 'turn_limit' };
 
 /**
+ * A student message as admission takes it: typed text, or a code submission
+ * (`data-code-submission`), which the task passes as it came from the
+ * browser and admission validates.
+ */
+export type StudentMessageInput =
+  | { id: string; text: string }
+  | { id: string; submission: unknown };
+
+/**
+ * The checks a message passes before admission looks for an earlier
+ * admission of its id: a well-formed id, then for text a non-empty message
+ * within the length cap and no text reserved for the server; for a code
+ * submission its shape and caps (`CodeSubmissionInputSchema`, else
+ * `invalid_submission`), no reserved text in its rendering (every file,
+ * console line and error rendered as the model would read it, prefixes
+ * included: `reservedCheckText`, else `reserved_code`), and its digest.
+ */
+const checkedMessage = (
+  message: StudentMessageInput | undefined
+):
+  | { kind: 'text'; id: string; text: string }
+  | { kind: 'code'; id: string; input: CodeSubmissionInput; digest: string } => {
+  const { id } = message ?? ({} as { id?: unknown });
+  if (typeof id !== 'string' || !CLIENT_MESSAGE_ID_PATTERN.test(id)) {
+    throw new QuizChatRefusal('temporary', 'invalid_message');
+  }
+  if (message && 'submission' in message) {
+    const parsed = CodeSubmissionInputSchema.safeParse(message.submission);
+    if (!parsed.success) throw new QuizChatRefusal('temporary', 'invalid_submission');
+    if (containsReservedText(reservedCheckText(parsed.data))) {
+      throw new QuizChatRefusal('temporary', 'reserved_code');
+    }
+    return { kind: 'code', id, input: parsed.data, digest: submissionDigest(parsed.data) };
+  }
+  const text = (message as { text?: unknown } | undefined)?.text;
+  if (
+    typeof text !== 'string' ||
+    text.trim().length === 0 ||
+    text.length > MAX_STUDENT_MESSAGE_CHARS
+  ) {
+    throw new QuizChatRefusal('temporary', 'invalid_message');
+  }
+  if (containsReservedText(text)) throw new QuizChatRefusal('temporary', 'reserved_text');
+  return { kind: 'text', id, text };
+};
+
+/**
+ * A new code submission as the server stores it, checked against the
+ * attempt's own rows under the lock: the attempt is pinned with code
+ * sandboxes (else `invalid_submission`); the sandbox it names is the open
+ * one (`sandboxProgressFor`; else `sandbox_closed`); its files are exactly
+ * that sandbox's paths and at least one differs from its seed (else
+ * `invalid_submission`). The server sets the question, the attempt, the base
+ * it was compared with, the template and the changed files; of the browser's
+ * input only the files, console, errors, `timed_out` and the checked id are
+ * kept.
+ */
+const admittedSubmission = async (
+  tx: Tx,
+  attempt: LockedAttempt,
+  input: CodeSubmissionInput,
+  pinnedConfig: unknown
+): Promise<CodeSubmissionPart> => {
+  if (!pinsCodeSandbox(pinnedConfig)) throw new QuizChatRefusal('temporary', 'invalid_submission');
+  const sandboxes = await sandboxProgressFor(tx, attempt);
+  const open = sandboxes?.open;
+  if (!sandboxes || !open || open.id !== input.sandbox_id) {
+    throw new QuizChatRefusal('temporary', 'sandbox_closed');
+  }
+  const paths = Object.keys(open.files).sort();
+  const sent = Object.keys(input.files).sort();
+  if (paths.length !== sent.length || paths.some((p, i) => p !== sent[i])) {
+    throw new QuizChatRefusal('temporary', 'invalid_submission');
+  }
+  // Byte for byte, as the chat's `filesDiffer` compares (a sandbox carries no
+  // /package.json, the one file it reads loosely).
+  const changed = paths.filter(p => input.files[p] !== open.files[p]);
+  if (changed.length === 0) throw new QuizChatRefusal('temporary', 'invalid_submission');
+  const part = CodeSubmissionPartSchema.safeParse({
+    ...input,
+    question_number: sandboxes.question_number,
+    attempt: sandboxes.next_attempt,
+    base_attempt: open.seeded_from,
+    template: open.template,
+    changed_files: changed,
+  });
+  if (!part.success) throw new QuizChatRefusal('temporary', 'invalid_submission');
+  return part.data;
+};
+
+/**
  * Admit one student message, in one transaction under the attempt row lock:
- * revalidation, then the message checks (well-formed id, non-empty text within
- * the length cap), then:
+ * revalidation, then the message's own checks (`checkedMessage`: a
+ * well-formed id; non-empty text within the length cap and no text reserved
+ * for the server, `reserved_text`; or a code submission of the right shape
+ * whose rendering holds no reserved text, `invalid_submission` /
+ * `reserved_code`), then:
  *
- * - text reserved for the server (`containsReservedText`) is refused
- *   (`reserved_text`);
- * - the latest admitted id with the same text is a re-delivery: a fresh
- *   fence, no new row (`status: 'redelivered'`), unless its turn already
- *   saved a partial reply (stopped or failed), which is refused;
- * - an id already used with different text, or an older admitted id, is
- *   refused (`message_conflict`);
+ * - the latest admitted id with the same text, or the same submission (its
+ *   digest in the journal), is a re-delivery: a fresh fence, no new row
+ *   (`status: 'redelivered'`), unless its turn already saved a partial reply
+ *   (stopped or failed), which is refused. A submission's open sandbox is
+ *   never checked again, so a message admitted once is never refused
+ *   `sandbox_closed`;
+ * - an id already used with different text or code, text on a code id or
+ *   code on a text id, or an older admitted id, is refused
+ *   (`message_conflict`);
  * - a new message once the attempt has admitted `MAX_STUDENT_TURNS` is refused
  *   for good (`turn_limit`). The turn that answered the last admitted message
  *   has normally submitted the attempt already (`submitAtMessageLimit`); if it
@@ -441,33 +691,32 @@ type AdmissionOutcome = AdmittedMessage | { status: 'turn_limit' };
  *   refusal is thrown;
  * - a new message within `MIN_TURN_INTERVAL_MS` of the previous admission is
  *   refused for now (`too_fast`);
+ * - a new code submission is checked against the attempt's rows
+ *   (`admittedSubmission`: the pin, the open sandbox, its files);
  * - otherwise the user row is written with parts `[student text, turn status]`
  *   (`metadata.hiddenPartIndexes: [1]`, and `action` when the text is a
- *   button's), an `input_admitted` journal row, and a fresh fence.
+ *   button's), or for a code submission `[the submission, its rendering for
+ *   the model, turn status]` (`hiddenPartIndexes: [1, 2]`: the viewer sees
+ *   the submission alone, the model reads the two texts; every stored user
+ *   row keeps a text part, as a user message with none reaches the model
+ *   empty), an `input_admitted` journal row (a submission's carries its
+ *   sandbox id and digest, no action: it is an answer), and a fresh fence.
  *
  * Either way it returns `messagesLeft`: the messages the attempt admits after
- * this one, from the journal count (a re-delivery adds nothing to it).
+ * this one, from the journal count (a re-delivery adds nothing to it), and
+ * for a code submission the stored rendering (`rendered`).
  */
 export const admitStudentMessage = async (i: {
   attemptId: string;
-  message: { id: string; text: string };
+  message: StudentMessageInput;
   runId: string;
 }): Promise<AdmittedMessage> => {
   const { visible } = await preflight(i.attemptId);
   const outcome = await getPrisma().$transaction(async (tx): Promise<AdmissionOutcome> => {
     const attempt = await revalidate(tx, await lockAttempt(tx, i.attemptId), visible);
 
-    const { id, text } = i.message ?? ({} as { id?: unknown; text?: unknown });
-    if (
-      typeof id !== 'string' ||
-      !CLIENT_MESSAGE_ID_PATTERN.test(id) ||
-      typeof text !== 'string' ||
-      text.trim().length === 0 ||
-      text.length > MAX_STUDENT_MESSAGE_CHARS
-    ) {
-      throw new QuizChatRefusal('temporary', 'invalid_message');
-    }
-    if (containsReservedText(text)) throw new QuizChatRefusal('temporary', 'reserved_text');
+    const message = checkedMessage(i.message);
+    const { id } = message;
 
     const questionCount = attemptQuestionCount(attempt);
     const fence = newFence();
@@ -499,14 +748,17 @@ export const admitStudentMessage = async (i: {
         },
         select: { parts: true, role: true, created_at: true },
       });
-      const stored = Array.isArray(row?.parts) ? row.parts[0] : undefined;
-      if (
-        !row ||
-        row.role !== 'USER' ||
-        !isObject(stored) ||
-        stored.type !== 'text' ||
-        stored.text !== text
-      ) {
+      const parts = Array.isArray(row?.parts) ? row.parts : [];
+      const stored = parts[0];
+      const payload = isObject(existing.payload) ? existing.payload : {};
+      const sameMessage =
+        message.kind === 'text'
+          ? isObject(stored) && stored.type === 'text' && stored.text === message.text
+          : isObject(stored) &&
+            stored.type === 'data-code-submission' &&
+            isObject(payload.code) &&
+            payload.code.digest === message.digest;
+      if (!row || row.role !== 'USER' || !sameMessage) {
         throw new QuizChatRefusal('temporary', 'message_conflict');
       }
       // A turn that was stopped or failed after it began its reply (a partial
@@ -531,15 +783,16 @@ export const admitStudentMessage = async (i: {
           ...(agentConfig ? { agent_config: agentConfig } : {}),
         },
       });
-      const payload = isObject(existing.payload) ? existing.payload : {};
       const action =
         payload.action === 'next' || payload.action === 'try_again' ? payload.action : undefined;
+      const rendered = isObject(parts[1]) ? parts[1].text : undefined;
       return {
         status: 'redelivered' as const,
         fence,
         inputMessageId: id,
         ...(action ? { action } : {}),
         messagesLeft: messagesLeftAfter(await admittedStudentMessages(tx, attempt.id)),
+        ...(message.kind === 'code' && typeof rendered === 'string' ? { rendered } : {}),
       };
     }
 
@@ -558,22 +811,47 @@ export const admitStudentMessage = async (i: {
     }
     await checkTurnPace(tx, attempt.id, now);
 
+    const submission =
+      message.kind === 'code'
+        ? await admittedSubmission(tx, attempt, message.input, agentConfig ?? attempt.agent_config)
+        : null;
+
     // The status the model reads with this message: progress as of now, with
     // this message's own action (not the previous turn's) as the last action.
-    const action = actionFor(text);
+    // A code submission is an answer, never a button.
+    const action = message.kind === 'text' ? actionFor(message.text) : undefined;
     const { lastAction: _previous, ...current } = await progressOf(tx, attempt);
     const progress: AttemptProgress = { ...current, ...(action ? { lastAction: action } : {}) };
+    const status = buildTurnStatus(progress);
+
+    const rendered = submission ? renderSubmissionForModel(submission) : null;
+    const stored =
+      message.kind === 'text'
+        ? {
+            content: message.text,
+            parts: [
+              { type: 'text', text: message.text },
+              { type: 'text', text: status },
+            ],
+            metadata: { hiddenPartIndexes: [1], ...(action ? { action } : {}) },
+          }
+        : {
+            content: rendered as string,
+            parts: [
+              { type: 'data-code-submission', data: submission },
+              { type: 'text', text: rendered },
+              { type: 'text', text: status },
+            ],
+            metadata: { hiddenPartIndexes: [1, 2] },
+          };
 
     await tx.aIConversationMessage.create({
       data: {
         conversation_id: conversationId,
         role: 'USER',
-        content: text,
-        parts: toJson([
-          { type: 'text', text },
-          { type: 'text', text: buildTurnStatus(progress) },
-        ]),
-        metadata: toJson({ hiddenPartIndexes: [1], ...(action ? { action } : {}) }),
+        content: stored.content,
+        parts: toJson(stored.parts),
+        metadata: toJson(stored.metadata),
         format: 'ui_message_v1',
         ui_message_id: id,
         final: true,
@@ -588,7 +866,13 @@ export const admitStudentMessage = async (i: {
       fence,
       inputMessageId: id,
       runId: i.runId,
-      payload: toJson({ kind: 'message', ...(action ? { action } : {}) }),
+      payload: toJson({
+        kind: 'message',
+        ...(action ? { action } : {}),
+        ...(message.kind === 'code'
+          ? { code: { sandbox_id: message.input.sandbox_id, digest: message.digest } }
+          : {}),
+      }),
     });
     await tx.quizAttempt.update({
       where: { id: attempt.id },
@@ -605,6 +889,7 @@ export const admitStudentMessage = async (i: {
       inputMessageId: id,
       ...(action ? { action } : {}),
       messagesLeft: messagesLeftAfter(admittedBefore + 1),
+      ...(rendered !== null ? { rendered } : {}),
     };
   }, LOCKED_TX_OPTIONS);
   // Thrown only now, so the completion it follows is committed.
@@ -847,6 +1132,11 @@ const stoppedByStudent = (parts: unknown) =>
  * reply had text counts as a hint (`replyShowsHint`). Without it (a failed
  * turn) the text is dropped. Other reasoning, failed or unfinished calls and
  * notices are dropped either way.
+ *
+ * A hint sandbox (`data-sandbox`, written just before the hint's first text)
+ * stays exactly when what is kept shows a hint (`replyShowsHint`), the rule
+ * the chat and the open-sandbox rule (`sandboxProgressOf`) read it by: with
+ * the hint's text, never without it.
  */
 const partialParts = (parts: unknown, keepText: boolean): unknown[] => {
   const steps: Record<string, unknown>[][] = [];
@@ -855,18 +1145,24 @@ const partialParts = (parts: unknown, keepText: boolean): unknown[] => {
     if (p.type === 'step-start' || steps.length === 0) steps.push([]);
     steps[steps.length - 1].push(p);
   }
-  return steps.flatMap(step => {
-    const callKept = step.some(isCommittedCall);
-    const textKept = keepText && step.some(isShownText);
-    return step.filter(
-      p =>
-        isCommittedCall(p) ||
-        (typeof p.type === 'string' && COMMITTED_DATA_PARTS.has(p.type)) ||
-        (textKept && isShownText(p)) ||
-        ((callKept || textKept) && p.type === 'step-start') ||
-        (callKept && p.type === 'reasoning' && p.state !== 'streaming')
-    );
-  });
+  const keep = (keepSandbox: boolean) =>
+    steps.flatMap(step => {
+      const callKept = step.some(isCommittedCall);
+      const textKept = keepText && step.some(isShownText);
+      return step.filter(
+        p =>
+          isCommittedCall(p) ||
+          (typeof p.type === 'string' && COMMITTED_DATA_PARTS.has(p.type)) ||
+          (textKept && isShownText(p)) ||
+          ((callKept || textKept) && p.type === 'step-start') ||
+          (callKept && p.type === 'reasoning' && p.state !== 'streaming') ||
+          (keepSandbox && p.type === 'data-sandbox')
+      );
+    });
+  const kept = keep(false);
+  return replyShowsHint(kept) && steps.some(step => step.some(p => p.type === 'data-sandbox'))
+    ? keep(true)
+    : kept;
 };
 
 /**

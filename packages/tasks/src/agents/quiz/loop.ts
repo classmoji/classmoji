@@ -19,6 +19,12 @@
  * - The reply to a student message opens with a transient
  *   `data-messages-left` part: the messages the attempt still admits, as
  *   admission counted them (`ctx.messagesLeft`). Never saved.
+ * - A Try again turn of a sandbox attempt with a hint sandbox to give
+ *   (`ctx.sandboxHint`) writes it as one `data-sandbox` part (a stable id,
+ *   `sandboxPartId`) just before the reply's first text that is not blank, so
+ *   a reply that shows no text carries none. Saved with the reply; the model
+ *   never reads it (data parts do not reach it), and the chat renders it
+ *   under the hint.
  * - `prepareStep` rebuilds each step's messages and moves one cache
  *   breakpoint to the last message, so an older breakpoint never piles up.
  * - Tool calls that failed in EARLIER turns are left out of the history
@@ -206,6 +212,12 @@ export function watchModelText(model: ModelObject, onText: () => void): ModelObj
     },
   });
 }
+
+/**
+ * The `data-sandbox` part id of a hint sandbox: one per sandbox id, so a
+ * re-run of the same turn writes the same part.
+ */
+export const sandboxPartId = (sandboxId: string) => `sandbox-${sandboxId}`;
 
 /** The turn is in the evaluation phase once the last question is out. */
 export function phaseFor(p: AttemptProgress): Phase {
@@ -556,6 +568,12 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
           },
         });
 
+      // The hint sandbox of a Try again turn (`ctx.sandboxHint`), written once
+      // just before the hint's first text that is not blank, in whichever call
+      // of the turn it comes: a reply that shows no text never carries it, as
+      // `replyShowsHint` reads it.
+      let hintSandbox = ctx.lastAction === 'try_again' ? (ctx.sandboxHint ?? null) : null;
+
       const pump = async (result: ReturnType<typeof call>) => {
         const ui = toUIMessageStream({
           stream: result.stream,
@@ -565,6 +583,14 @@ export function runQuizTurn(input: QuizTurnInput): ReadableStream<UIMessageChunk
         });
         for await (const chunk of ui as unknown as AsyncIterable<UIMessageChunk>) {
           if (chunk.type === 'error') sawStreamError = true;
+          if (hintSandbox && chunk.type === 'text-delta' && chunk.delta.trim() !== '') {
+            writer.write({
+              type: 'data-sandbox',
+              id: sandboxPartId(hintSandbox.id),
+              data: hintSandbox,
+            });
+            hintSandbox = null;
+          }
           writer.write(chunk as never);
         }
       };

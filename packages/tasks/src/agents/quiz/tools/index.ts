@@ -74,6 +74,8 @@ import { tool, type ToolSet, type UIMessageStreamWriter } from 'ai';
 import type Anthropic from '@anthropic-ai/sdk';
 import {
   CodeAwareQuizQuestionSchema,
+  CodeAwareSandboxQuizQuestionSchema,
+  containsReservedText,
   nextStepLeadIn,
   OfferNextStepOutputSchema,
   OfferNextStepSchema,
@@ -83,8 +85,10 @@ import {
   QuizEvaluationRecordV2Schema,
   QuizQuestionSchema,
   RecordQuestionResultSchema,
+  reservedCheckText,
+  SandboxQuizQuestionSchema,
   TOOL_DESCRIPTIONS,
-  type CodeAwareQuizQuestion,
+  type CodeAwareSandboxQuizQuestion,
   type OfferNextStepOutput,
   type PresentQuestionOutput,
   type QuestionCard,
@@ -123,6 +127,8 @@ import {
   reshowAfterText,
   RECORD_BEFORE_NEXT_TEXT,
   recordBeforePresentText,
+  SANDBOX_RESERVED_TEXT,
+  SANDBOX_WITH_CODE_TEXT,
   toolFailure,
   TURN_STOPPED_TEXT,
 } from './errors.ts';
@@ -277,12 +283,27 @@ export function quizTools(ctx: AttemptContext, d: QuizToolDeps): ToolSet {
    * The card to store: the input without `code_quote`, and, when there is a
    * quote, its exact code and source in place of any typed code. A refused
    * quote throws its message for the model; nothing has been written.
+   *
+   * A sandbox (only a pinned attempt's schema has the key) is passed through
+   * on the card. Refused before anything is read or written: a sandbox with
+   * `code_snippet` or `code_quote` (its code is in the sandbox), and starter
+   * files framed as the server's (`reservedCheckText`, the rendering a
+   * submission is checked on), so no later rendering of them can be. A card
+   * shown again whose sandbox is not the stored one is the service's to
+   * refuse: it holds the stored card.
    */
   const cardFor = async (
-    input: CodeAwareQuizQuestion,
+    input: CodeAwareSandboxQuizQuestion,
     abortSignal?: AbortSignal
   ): Promise<QuestionCard> => {
     const { code_quote: quote, ...card } = input;
+    if (card.sandbox) {
+      if (quote || card.code_snippet) throw new Error(SANDBOX_WITH_CODE_TEXT);
+      if (containsReservedText(reservedCheckText({ files: card.sandbox.files }))) {
+        d.log?.('[quiz-agent] sandbox refused', { ...ids, reason: 'reserved_text' });
+        throw new Error(SANDBOX_RESERVED_TEXT);
+      }
+    }
     // The question already out comes back from the service as stored (or is
     // refused), whatever this call says, so there is nothing to read for it.
     if (!quote || !quoteRepo || input.question_number <= lastPresented) return card;
@@ -335,11 +356,18 @@ export function quizTools(ctx: AttemptContext, d: QuizToolDeps): ToolSet {
   const present_question = tool({
     description: TOOL_DESCRIPTIONS.present_question,
     // Fixed for the attempt: only a code-aware attempt's schema has
-    // `code_quote`. A standard attempt's input never carries one (the schema
-    // drops unknown keys), so both are typed as the code-aware input.
+    // `code_quote`, and only an attempt pinned with code sandboxes
+    // (`ctx.codeSandbox`) has `sandbox`. An input never carries a key its
+    // schema lacks (the schema drops unknown keys), so all four are typed as
+    // the widest input. One of four fixed schemas, never built per turn: an
+    // attempt without the pin sends the model the same bytes as before.
     inputSchema: (quoteRepo
-      ? CodeAwareQuizQuestionSchema
-      : QuizQuestionSchema) as typeof CodeAwareQuizQuestionSchema,
+      ? ctx.codeSandbox
+        ? CodeAwareSandboxQuizQuestionSchema
+        : CodeAwareQuizQuestionSchema
+      : ctx.codeSandbox
+        ? SandboxQuizQuestionSchema
+        : QuizQuestionSchema) as typeof CodeAwareSandboxQuizQuestionSchema,
     outputSchema: PresentQuestionOutputSchema,
     execute: (input, { toolCallId, abortSignal }): Promise<PresentQuestionOutput> =>
       d.queue(async () => {

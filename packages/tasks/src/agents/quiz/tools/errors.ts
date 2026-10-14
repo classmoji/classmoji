@@ -86,6 +86,19 @@ export const editLimitText = (n: number) =>
 export const recordBeforePresentText = (n: number) =>
   `Question ${n} has no result. If the student moved on from it (Next, or asked to skip), record it first, then present; otherwise reply without presenting.`;
 
+/** present_question refused: a sandbox question came with code_snippet or code_quote too. */
+export const SANDBOX_WITH_CODE_TEXT =
+  'A sandbox question carries its code in the sandbox: leave code_snippet and code_quote out.';
+
+/**
+ * present_question refused: a sandbox's starter files hold text reserved for
+ * the server, as a submission of them would render (`reservedCheckText`).
+ * Every line of a file renders behind its "N| " number, so only the marker's
+ * opening ("[[server-notice") can be there.
+ */
+export const SANDBOX_RESERVED_TEXT =
+  'The sandbox starter files contain "[[server-notice", which the server reserves for itself. Remove it and call present_question again.';
+
 /** present_question refused because the file a code quote names could not be read. */
 export const QUOTE_READ_FAILED_TEXT =
   'The file could not be read just now. Call present_question again; if that fails too, put the lines in code_snippet instead, copied exactly from your exploration output without their "N| " prefixes, and name the file and the rule or element in context.';

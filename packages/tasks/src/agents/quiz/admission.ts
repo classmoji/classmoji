@@ -7,13 +7,17 @@
  *    message, or a `submit-message` with exactly one incoming message.
  *    Everything else (regenerate, an empty submit, unknown triggers) is
  *    refused.
- * 2. The message must be the student's: role `user`, exactly one non-empty
- *    text part and nothing else, length-capped, with a well-formed id.
+ * 2. The message must be the student's: role `user`, with a well-formed id,
+ *    and exactly one part and nothing else: a non-empty, length-capped text
+ *    part, or a code submission (`data-code-submission`, sandbox questions)
+ *    whose data is a submission's shape and nothing more
+ *    (`CodeSubmissionInputSchema`).
  * 3. The services revalidate the attempt and its owner under a row lock,
- *    insert the user row (with the hidden per-turn status part), append
+ *    insert the user row (with the hidden per-turn status part; a submission
+ *    also with the hidden text the model reads for it), append
  *    `input_admitted` and set a fresh turn fence, in one transaction. A
- *    re-delivered message (same id, same text) gets a fresh fence and no new
- *    row; the same id with other text is refused.
+ *    re-delivered message (same id, same text or the same submission) gets a
+ *    fresh fence and no new row; the same id with other content is refused.
  * 4. The canonical history is returned from Neon, the admitted message
  *    included; the runtime uses it as the conversation.
  *
@@ -25,18 +29,31 @@
  * run can never pick up a newer run's fence.
  */
 import type { UIMessage } from 'ai';
-import type { QuizUIMessage } from '@classmoji/utils/quiz-agent';
+import {
+  CodeSubmissionInputSchema,
+  MAX_MESSAGE_CHARS,
+  type CodeSubmissionInput,
+  type QuizUIMessage,
+} from '@classmoji/utils/quiz-agent';
 import type { TurnAdmission } from './context.ts';
 import { QuizTurnError, isRefusal, logDiagnostic, refusalError, type DiagnosticLog } from '../shared/sanitize.ts';
 
-/** The same limits the services apply (quizChat.service.ts). */
-export const MAX_MESSAGE_CHARS = 10_000;
+/**
+ * The longest typed message: the one copy the services read too
+ * (@classmoji/utils/quiz-agent, `MAX_STUDENT_MESSAGE_CHARS` in quizChat.service).
+ */
+export { MAX_MESSAGE_CHARS };
 const MESSAGE_ID = /^[A-Za-z0-9_-]{1,128}$/;
+
+/** A student message admission passes on: typed text, or a code submission. */
+export type IncomingMessage =
+  | { id: string; text: string }
+  | { id: string; submission: CodeSubmissionInput };
 
 export type Classified =
   | { kind: 'action' }
-  | { kind: 'message'; message: { id: string; text: string } }
-  | { kind: 'refuse'; code: 'invalid_trigger' | 'invalid_input' };
+  | { kind: 'message'; message: IncomingMessage }
+  | { kind: 'refuse'; code: 'invalid_trigger' | 'invalid_input' | 'invalid_submission' };
 
 /** Step 1 and 2: decide what an incoming record is, from its raw values only. */
 export function classifyIncoming(event: {
@@ -57,7 +74,16 @@ export function classifyIncoming(event: {
   }
   const parts = Array.isArray(message.parts) ? message.parts : [];
   if (parts.length !== 1) return { kind: 'refuse', code: 'invalid_input' };
-  const part = parts[0] as { type?: unknown; text?: unknown };
+  const part = parts[0] as { type?: unknown; text?: unknown; data?: unknown };
+  // A code submission: its own refusal (`invalid_submission`, the copy the
+  // chat shows for code it could not submit) when it is not a submission's
+  // shape. The services check it again, with everything else it must be.
+  if (part.type === 'data-code-submission') {
+    const parsed = CodeSubmissionInputSchema.safeParse(part.data);
+    return parsed.success
+      ? { kind: 'message', message: { id: message.id, submission: parsed.data } }
+      : { kind: 'refuse', code: 'invalid_submission' };
+  }
   if (part.type !== 'text' || typeof part.text !== 'string') {
     return { kind: 'refuse', code: 'invalid_input' };
   }
@@ -72,7 +98,7 @@ export function classifyIncoming(event: {
 export type AdmissionDeps = {
   admitStudentMessage: (i: {
     attemptId: string;
-    message: { id: string; text: string };
+    message: IncomingMessage;
     runId: string;
   }) => Promise<{
     status: 'admitted' | 'redelivered';

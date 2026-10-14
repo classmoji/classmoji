@@ -42,6 +42,7 @@ import {
   type QuizEvaluationRecordV2,
   type QuestionCard,
   type RecordQuestionResult,
+  type SandboxSpec,
   type StoredQuestionResult,
 } from '@classmoji/utils/quiz-agent';
 import { resolveAttemptQuestionCount } from './quizAttempt.service.ts';
@@ -152,6 +153,8 @@ const LOCKED_ATTEMPT_SELECT = {
       classroom_id: true,
       question_count: true,
       status: true,
+      // Pinned into `agent_config.codeSandbox` at the first admission (quizChat.service).
+      code_sandbox_enabled: true,
       classroom: { select: { status: true } },
       // Turn admission reads whether the quiz is still open to a student.
       assignment: { select: { is_published: true, release_at: true } },
@@ -175,8 +178,11 @@ export const lockAttempt = async (tx: Tx, attemptId: string): Promise<LockedAtte
 };
 
 /** How many questions the attempt asks (the count pinned at first admission, else the quiz's). */
-export const attemptQuestionCount = (attempt: Pick<LockedAttempt, 'agent_config' | 'quiz'>) =>
-  resolveAttemptQuestionCount(attempt.agent_config, attempt.quiz?.question_count);
+export const attemptQuestionCount = (
+  attempt: Pick<LockedAttempt, 'agent_config'> & {
+    quiz: Pick<LockedAttempt['quiz'], 'question_count'> | null;
+  }
+) => resolveAttemptQuestionCount(attempt.agent_config, attempt.quiz?.question_count);
 
 export const findEvent = (tx: Tx, attemptId: string, operationId: string) =>
   tx.quizAttemptEvent.findUnique({
@@ -392,11 +398,23 @@ const inLockedTx = <T>(
 
 // ─── present_question ───────────────────────────────────────────────────────
 
+/** Whether two sandbox specs are the same: template, opening file and every file. */
+const sameSandbox = (a: SandboxSpec, b: SandboxSpec | undefined): boolean =>
+  b !== undefined &&
+  a.template === b.template &&
+  a.active_file === b.active_file &&
+  Object.keys(a.files).length === Object.keys(b.files).length &&
+  Object.entries(a.files).every(
+    ([path, code]) => Object.prototype.hasOwnProperty.call(b.files, path) && b.files[path] === code
+  );
+
 /**
  * Accept question `n = presented + 1` once question `n - 1` has a result, with
  * `n <= questionCount`; `total_questions` is set to the attempt's count. A
  * re-run of the question already presented (`n = presented`) returns the
- * ORIGINAL stored question and writes nothing.
+ * ORIGINAL stored question and writes nothing; one that carries a sandbox
+ * other than the stored card's (or a sandbox where it had none) is refused
+ * (`invalid_input`), since the student would see only the stored one.
  *
  * `q` is the card as the tool built it: a code quote is already resolved into
  * `code_snippet` and `source`, which are stored with the rest of the card.
@@ -427,7 +445,20 @@ export const presentQuestion = (f: Fenced, q: QuestionCard): Promise<PresentQues
         },
         orderBy: { seq: 'desc' },
       });
-      if (original) return storedOutput<PresentQuestionOutput>(original);
+      if (original) {
+        const stored = storedOutput<PresentQuestionOutput>(original);
+        // The card shown again is the stored one, sandbox included: a
+        // different sandbox would never reach the student, so the model is
+        // told rather than handed the old card as if it had taken the new.
+        if (question.sandbox && !sameSandbox(question.sandbox, stored?.card?.sandbox)) {
+          throw new QuizGradingError(
+            'invalid_input',
+            `Question ${n} is already out${stored?.card?.sandbox ? ' with its sandbox' : ' without a sandbox'}, and showing it again cannot change that. ` +
+              `To show it again, call present_question for question ${n} without sandbox.`
+          );
+        }
+        return stored;
+      }
     }
 
     if (presented >= questionCount) {

@@ -10,10 +10,13 @@ import { SANDBOX_FIELD_DESCRIPTION, SandboxSpecSchema } from './sandbox.ts';
 /**
  * Tool-schema, prompt and grading-policy bundle an attempt is stamped with.
  * 2: offer_next_step carries the feedback and a private expected answer, and
- * admission refuses server-reserved text. Stamped only: nothing compares it,
- * so version-1 attempts keep taking turns under the current code.
+ * admission refuses server-reserved text.
+ * 3: present_question may carry a sandbox; a student message may be a code
+ * submission.
+ * Stamped only: nothing compares it, so attempts of earlier versions keep
+ * taking turns under the current code.
  */
-export const CONTRACT_VERSION = 2;
+export const CONTRACT_VERSION = 3;
 
 export const QuizQuestionSchema = z.object({
   preamble: z
