@@ -173,6 +173,14 @@ export interface SandpackEmbedProps {
    * `lazy`). Read once, at mount: changing it later rebuilds the client.
    */
   initMode?: SandpackInitMode;
+  /**
+   * When the code editor builds its CodeMirror view (default: `initMode`).
+   * In `lazy` the editor waits for an IntersectionObserver on its wrapper,
+   * which a read-only editor (a static `<pre>`) never renders, so an editor
+   * that mounts read-only and is unlocked later stays static. An editor that
+   * can change from read-only to editable needs `immediate`.
+   */
+  editorInitMode?: SandpackInitMode;
   /** The file the editor opens on. Default: the first visible file, else the first file. */
   activeFile?: string;
   /**
@@ -206,6 +214,7 @@ export default function SandpackEmbed({
   editorWidthPercentage = 50,
   children,
   initMode,
+  editorInitMode,
   activeFile,
   showPreview: previewWanted = true,
   previewPlaceholder = null,
@@ -293,6 +302,7 @@ export default function SandpackEmbed({
               wrapContent
               closableTabs={false}
               readOnly={readOnly}
+              {...(editorInitMode ? { initMode: editorInitMode } : {})}
               style={{
                 flex: 1,
                 minHeight: 0, // Allow flex shrinking

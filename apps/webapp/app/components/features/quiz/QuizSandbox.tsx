@@ -162,6 +162,10 @@ export default function QuizSandbox({
         // iframe and creates one client after the mounts settle; no layout
         // here sets Sandpack's lazy anchor, so it still boots straight away.
         initMode="lazy"
+        // The editor itself must not be lazy: a sandbox that mounts locked
+        // (a reply still streaming) renders a static <pre>, and a lazy editor
+        // then never builds CodeMirror once it unlocks.
+        editorInitMode="immediate"
         options={{
           visibleFiles: paths,
           showTabs: true,

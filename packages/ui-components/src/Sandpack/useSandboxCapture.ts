@@ -88,6 +88,10 @@ export default function useSandboxCapture({
     error: sandpack.error,
     logs,
   };
+  // The bundler clients and the files to hand them, for a capture that must
+  // run what the editor holds (see `capture`).
+  const runtime = useRef({ clients: sandpack.clients, environment: sandpack.environment });
+  runtime.current = { clients: sandpack.clients, environment: sandpack.environment };
   const listenRef = useRef(listen);
   listenRef.current = listen;
   const dispatchRef = useRef(dispatch);
@@ -142,9 +146,26 @@ export default function useSandboxCapture({
       if (r.timer) clearTimeout(r.timer);
       r.timer = null;
 
+      // `refresh` reloads the preview and replays the files the client last
+      // received, and Sandpack only sends an edit to a client whose status is
+      // `done`: an edit made while a run was still going (the display re-run,
+      // or a recompile) never reaches the bundler, and a bare refresh would
+      // re-run the old code under the new files. So every client's stored
+      // setup takes the current files first: the reload's `initialized`
+      // (seen by the client, not by `listen`) recompiles from that setup, so
+      // the refresh runs exactly what the editor holds, once.
+      const { clients, environment } = runtime.current;
+      const current = latest.current.files as Record<string, { code: string }>;
+      for (const client of Object.values(clients)) {
+        client.sandboxSetup = { ...client.sandboxSetup, files: current, template: environment };
+      }
+
       const outcome = await new Promise<'done' | 'timeout'>(resolve => {
         let settled = false;
         let unsubscribe: (() => void) | null = null;
+        // Only a `done` after a `start` seen here is this run's: a `done`
+        // already in flight belongs to an earlier one.
+        let started = false;
         const finish = (how: 'done' | 'timeout') => {
           if (settled) return;
           settled = true;
@@ -154,7 +175,8 @@ export default function useSandboxCapture({
         };
         const timer = setTimeout(() => finish('timeout'), runTimeoutMs);
         unsubscribe = listenRef.current(message => {
-          if (message.type === 'done') finish('done');
+          if (message.type === 'start') started = true;
+          else if (message.type === 'done' && started) finish('done');
         });
         dispatchRef.current({ type: 'refresh' });
       });
