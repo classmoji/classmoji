@@ -3,7 +3,7 @@ import { useLocation, useNavigate, useParams } from 'react-router';
 import { Drawer, ConfigProvider, theme, Modal } from 'antd';
 import { useRouteDrawer, useDarkMode } from '~/hooks';
 import { QuizAttemptInterface } from '~/components';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { addClassroomAuditLog, assertClassroomAccess } from '~/utils/helpers';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { attemptDrawerView, chatActivityView, quizDrawerView } from '~/utils/quizPayloads';
 import { isTriggerChatAttempt } from '~/utils/quizRuntime.server';
@@ -104,6 +104,29 @@ export async function loader({ params, request }: Route.LoaderArgs) {
         viewerOwnsAttempt ? 'student' : 'staff'
       )
     : null;
+
+  // Staff reading someone else's attempt (its transcript, answers and scores)
+  // is a read of another person's data, so it is audited, on either runtime,
+  // the same way the quiz results page audits its VIEW. The attempt is bound to
+  // this classroom by steps 2 and 3, so the row names the classroom the gate
+  // authorized and the role it enforced. Reading one's own attempt is not
+  // logged. Repeated loads within the audit service's dedup window fold into
+  // one row.
+  if (!viewerOwnsAttempt) {
+    await addClassroomAuditLog({
+      classroomId: classroom.id,
+      userId: String(userId),
+      role: membership?.role,
+      action: 'VIEW',
+      resourceType: 'QUIZ_ATTEMPT',
+      resourceId: attemptData.attempt.id.toString(),
+      metadata: {
+        tool: 'web:quiz_attempt.view',
+        quiz_id: quiz.id.toString(),
+        student_id: attemptData.attempt.user_id.toString(),
+      },
+    });
+  }
 
   // A chat attempt's message limit: the messages it still admits (the chat's
   // countdown) and whether the server submitted it at the limit (the results

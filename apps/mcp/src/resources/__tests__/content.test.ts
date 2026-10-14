@@ -270,6 +270,46 @@ describe('quizzes resource source_material (quiz source material)', () => {
     expect(student.quizzes[0]).not.toHaveProperty('excluded_paths');
   });
 
+  it('staff and students both get code_sandbox_enabled, false when the row has none', async () => {
+    findByClassroom.mockResolvedValue([
+      {
+        id: 'q1',
+        name: 'Quiz 1',
+        status: 'DRAFT',
+        weight: 0,
+        question_count: 3,
+        code_sandbox_enabled: true,
+      },
+      { id: 'q2', name: 'Quiz 2', status: 'DRAFT', weight: 0, question_count: 3 },
+    ]);
+    const staff = (await quizzesResource.handler(
+      VARS,
+      ownerCtx({ quizzes_enabled: true }),
+      new URL('classmoji://x')
+    )) as { quizzes: Array<Record<string, unknown>> };
+    expect(staff.quizzes[0].code_sandbox_enabled).toBe(true);
+    expect(staff.quizzes[1].code_sandbox_enabled).toBe(false);
+
+    // As on the student web quiz list.
+    getQuizzesForStudent.mockResolvedValue([
+      {
+        id: 'q1',
+        name: 'Quiz 1',
+        status: 'PUBLISHED',
+        weight: 0,
+        question_count: 3,
+        code_sandbox_enabled: true,
+      },
+    ]);
+    const ctx = studentCtx();
+    (ctx.classroom as unknown as { classroom: { slug: string } }).classroom.slug =
+      'authorized-slug';
+    const student = (await quizzesResource.handler(VARS, ctx, new URL('classmoji://x'))) as {
+      quizzes: Array<Record<string, unknown>>;
+    };
+    expect(student.quizzes[0].code_sandbox_enabled).toBe(true);
+  });
+
   it('an unlinked quiz reports an empty list', async () => {
     findByClassroom.mockResolvedValue([
       { id: 'q1', name: 'Quiz 1', status: 'DRAFT', weight: 0, question_count: 3 },
