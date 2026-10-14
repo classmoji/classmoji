@@ -4,10 +4,11 @@
  * A `trigger_chat` attempt takes no turns after `session_expires_at` (30 days
  * after it was created), and nothing else ever completes it. Wherever the
  * webapp meets one still open (the attempt drawers, the session route), it is
- * closed there with the results recorded so far
- * (`quizGrading.closeExpiredAttempt`, which re-reads the row under its lock
- * and does nothing unless it is still open and expired), so it is shown, and
- * graded, as a completed attempt rather than a chat that can never continue.
+ * closed there with the results recorded so far, completed at the student's
+ * last activity (`quizGrading.closeExpiredAttempt`, which re-reads the row
+ * under its lock and does nothing unless it is still open and expired), so it
+ * is shown, and graded, as a completed attempt rather than a chat that can
+ * never continue.
  *
  * Callers close only after their own gates have bound the attempt to the
  * caller (their own attempt, or staff of its quiz's classroom). The actor is
@@ -45,9 +46,9 @@ export const isExpiredOpenChatAttempt = (
 /**
  * Close the attempt if it is open and past its deadline. True when a close
  * was tried: the caller then reads the attempt again, which shows it closed
- * by this call or a racing one, or still open where the classroom's status
- * does not let the actor write (LOCKED or UNPUBLISHED, for anyone but the
- * owner: `closeExpiredAttempt` leaves it).
+ * by this call or a racing one, or still open while the classroom is not
+ * ACTIVE (LOCKED or UNPUBLISHED, for everyone, the owner included:
+ * `closeExpiredAttempt` leaves it).
  */
 export const closeIfExpired = async (
   attempt: ExpirableAttempt,

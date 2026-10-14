@@ -15,6 +15,10 @@
  * - Which sandbox is live is the shared rule's (`openSandboxOf`); the hint's
  *   sandbox renders wherever that rule counts it; the saved transcript shows
  *   every sandbox frozen, each with Run.
+ * - A card shown again: its new instance is live and starts from the
+ *   student's unsubmitted edits in the one before it, which stays frozen as
+ *   it was; Submit still compares with the starter, Reset still writes it.
+ * - Expand / Collapse switches only the layout's height, never the provider.
  *
  * Sandpack itself is faked (`@classmoji/ui-components/sandpack`): the fake
  * provider counts its mounts, holds editable files and answers the capture
@@ -71,9 +75,11 @@ function FakeSandpackEmbed({
   readOnly,
   showPreview = true,
   previewPlaceholder,
+  height,
   children,
 }: {
   files: Record<string, string | { code: string }>;
+  height?: number | string;
   options?: { visibleFiles?: string[] | null };
   readOnly?: boolean;
   showPreview?: boolean;
@@ -95,7 +101,11 @@ function FakeSandpackEmbed({
   }, []);
   const visible = options?.visibleFiles ?? Object.keys(state);
   return (
-    <div data-testid="fake-sandpack" data-has-package-json={'/package.json' in state}>
+    <div
+      data-testid="fake-sandpack"
+      data-has-package-json={'/package.json' in state}
+      data-height={String(height)}
+    >
       {visible.map(path => (
         <textarea
           key={path}
@@ -687,6 +697,157 @@ describe('the saved transcript', () => {
     expect(one('fake-preview', sandboxes()[0])).not.toBeNull();
     expect(one('fake-preview', sandboxes()[1])).toBeNull();
     expect(sandpack.mounts).toBe(mounts);
+  });
+});
+
+describe('a card shown again', () => {
+  /** The agent shows question 1's card again, in a reply to a typed message. */
+  const RESHOWN = [
+    ...QUESTION,
+    msg('u1', 'user', [text('Can you show the question again?')]),
+    msg('a2', 'assistant', [{ ...card(1), toolCallId: 'call-q1-again' }]),
+  ];
+
+  it('starts the new live instance from the edits, the older copy frozen as it was', async () => {
+    await renderTranscript(QUESTION);
+    await type(editor(), EDITED_JS);
+    expect(sandpack.mounts).toBe(1);
+
+    await renderTranscript(RESHOWN);
+    const [older, newer] = sandboxes();
+    expect(sandboxes().map(s => s.dataset.sandboxId)).toEqual(['q1-1', 'q1-1']);
+    expect(sandpack.mounts).toBe(2);
+    expect(sandpack.unmounts).toBe(0);
+
+    // The older copy: frozen, showing what it showed, with the way down.
+    expect(older.dataset.state).toBe('frozen');
+    expect(editor('/index.js', older).value).toBe(EDITED_JS);
+    expect(one('quiz-sandbox-frozen', older)?.textContent).toContain('Not submitted');
+    expect(one('quiz-sandbox-go-live', older)?.textContent).toBe('Continue in the sandbox below');
+
+    // The new one: live, from the edits, every other file from its seed.
+    expect(newer.dataset.state).toBe('live');
+    expect(editor('/index.js', newer).value).toBe(EDITED_JS);
+    expect(editor('/index.html', newer).value).toBe(STARTER['/index.html']);
+    expect(editor('/index.js', newer).readOnly).toBe(false);
+    // Still an edit against the starter: Submit is on without typing.
+    expect(submitButton(newer).disabled).toBe(false);
+    // Reset writes the starter, and then there is nothing to submit.
+    await act(async () => one('quiz-sandbox-reset', newer)!.click());
+    expect(editor('/index.js', newer).value).toBe(STARTER['/index.js']);
+    expect(submitButton(newer).disabled).toBe(true);
+    // The older copy did not follow.
+    expect(editor('/index.js', older).value).toBe(EDITED_JS);
+  });
+
+  it('carries the latest edits again when the card is shown a third time', async () => {
+    await renderTranscript(QUESTION);
+    await type(editor(), EDITED_JS);
+    await renderTranscript(RESHOWN);
+    await type(editor('/index.js', sandboxes()[1]), `${EDITED_JS}\n// second`);
+
+    await renderTranscript([
+      ...RESHOWN,
+      msg('u2', 'user', [text('Once more?')]),
+      msg('a3', 'assistant', [{ ...card(1), toolCallId: 'call-q1-third' }]),
+    ]);
+    const states = sandboxes().map(s => s.dataset.state);
+    expect(states).toEqual(['frozen', 'frozen', 'live']);
+    expect(editor('/index.js', sandboxes()[0]).value).toBe(EDITED_JS);
+    expect(editor('/index.js', sandboxes()[1]).value).toBe(`${EDITED_JS}\n// second`);
+    expect(editor('/index.js', sandboxes()[2]).value).toBe(`${EDITED_JS}\n// second`);
+  });
+
+  it('starts from the starter after a reload (nothing carries across one)', async () => {
+    await renderTranscript(RESHOWN);
+    const [older, newer] = sandboxes();
+    expect(older.dataset.state).toBe('frozen');
+    expect(newer.dataset.state).toBe('live');
+    expect(editor('/index.js', newer).value).toBe(STARTER['/index.js']);
+    expect(submitButton(newer).disabled).toBe(true);
+  });
+
+  it('carries nothing in a read-only view', async () => {
+    await renderTranscript(QUESTION, { sandboxControls: null });
+    await renderTranscript(RESHOWN, { sandboxControls: null });
+    expect(sandboxes().map(s => s.dataset.state)).toEqual(['frozen', 'frozen']);
+    expect(editor('/index.js', sandboxes()[1]).value).toBe(STARTER['/index.js']);
+  });
+
+  it("never seeds a hint sandbox from the card's edits (another id)", async () => {
+    await renderTranscript(QUESTION);
+    await type(editor(), `${EDITED_JS}\n// unsent`);
+    await renderTranscript([
+      ...QUESTION,
+      storedSubmission('u1', 'q1-1', ATTEMPT1),
+      msg('a2', 'assistant', [offer('o1')]),
+      msg('u2', 'user', [text(BUTTON_TEXT.try_again)], { action: 'try_again' }),
+      msg('a3', 'assistant', [hintSandbox(2), text('Look again.')]),
+    ]);
+    const hint = sandboxes()[1];
+    expect(hint.dataset.sandboxId).toBe('q1-2');
+    expect(editor('/index.js', hint).value).toBe(EDITED_JS);
+  });
+});
+
+describe('Expand', () => {
+  const height = (sandbox: HTMLElement) => one('fake-sandpack', sandbox)?.dataset.height;
+  const toggle = (sandbox: HTMLElement) => one('quiz-sandbox-expand', sandbox) as HTMLButtonElement;
+
+  it('switches the live sandbox between its height and a tall one, same provider', async () => {
+    await renderChat(QUESTION);
+    const [sandbox] = sandboxes();
+    await type(editor(), EDITED_JS);
+    expect(height(sandbox)).toBe('320');
+    expect(toggle(sandbox).textContent).toBe('Expand');
+    expect(toggle(sandbox).dataset.expanded).toBe('false');
+    // Its icon and visible text: the text is the accessible name.
+    expect(toggle(sandbox).querySelector('.anticon-expand-alt')).not.toBeNull();
+
+    await act(async () => toggle(sandbox).click());
+    expect(height(sandbox)).toBe('min(640px, 70vh)');
+    expect(toggle(sandbox).textContent).toBe('Collapse');
+    expect(toggle(sandbox).querySelector('.anticon-shrink')).not.toBeNull();
+    // Nothing remounted: the edits and the running preview are as they were.
+    expect(sandpack.mounts).toBe(1);
+    expect(sandpack.unmounts).toBe(0);
+    expect(editor().value).toBe(EDITED_JS);
+    expect(one('fake-preview', sandbox)).not.toBeNull();
+    expect(submitButton().disabled).toBe(false);
+
+    await act(async () => toggle(sandbox).click());
+    expect(height(sandbox)).toBe('320');
+    expect(sandpack.mounts).toBe(1);
+  });
+
+  it('is there on a frozen sandbox, with Run, and keeps a running preview', async () => {
+    await renderChat([...QUESTION, storedSubmission('u1', 'q1-1', ATTEMPT1)], false);
+    const [sandbox] = sandboxes();
+    expect(sandbox.dataset.state).toBe('frozen');
+    expect(height(sandbox)).toBe('230');
+    await act(async () => one('quiz-sandbox-run', sandbox)!.click());
+    await act(async () => toggle(sandbox).click());
+    expect(height(sandbox)).toBe('min(640px, 70vh)');
+    expect(one('fake-preview', sandbox)).not.toBeNull();
+    expect(sandpack.mounts).toBe(1);
+  });
+
+  it('scales in the narrow column', async () => {
+    narrowScreen = true;
+    await renderChat(QUESTION);
+    const [sandbox] = sandboxes();
+    expect(height(sandbox)).toBe('460');
+    await act(async () => toggle(sandbox).click());
+    expect(height(sandbox)).toBe('min(920px, 70vh)');
+  });
+
+  it('stays usable while the sandbox is locked', async () => {
+    await renderTranscript(QUESTION, { busy: true });
+    const [sandbox] = sandboxes();
+    expect(sandbox.dataset.state).toBe('locked');
+    expect(toggle(sandbox).disabled).toBe(false);
+    await act(async () => toggle(sandbox).click());
+    expect(height(sandbox)).toBe('min(640px, 70vh)');
   });
 });
 
