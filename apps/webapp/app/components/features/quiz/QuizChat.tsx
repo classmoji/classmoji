@@ -37,7 +37,12 @@ import NextStepButtons from './NextStepButtons';
 import QuizResults, { type ResultsFocusMetrics } from './QuizResults';
 import StepList, { onlyCourseSteps, type QuizStep } from './StepList';
 import { useQuizFocusMetrics } from './useQuizFocusMetrics';
-import QuizSandbox, { useNarrowLayout, type SandboxMode, type SandboxSubmit } from './QuizSandbox';
+import QuizSandbox, {
+  useNarrowLayout,
+  type SandboxEdits,
+  type SandboxMode,
+  type SandboxSubmit,
+} from './QuizSandbox';
 import CodeSubmissionCard from './CodeSubmissionCard';
 import {
   cardSandboxOf,
@@ -93,7 +98,11 @@ const { Text } = Typography;
  * its bubble at the column's full width (`useNarrowLayout`). Which one is live
  * is the shared rule's (`openSandboxOf`, the one admission runs): its last
  * instance, while this viewer drives the chat. Every other sandbox, and every
- * sandbox in the saved transcript, is frozen (QuizSandbox). A student message
+ * sandbox in the saved transcript, is frozen (QuizSandbox). When the agent
+ * shows a card again, its sandbox's new instance is the live one and starts
+ * from the student's unsubmitted edits in the instance before it (the
+ * transcript's `sandboxEdits`, kept per sandbox id for the transcript's life,
+ * never across a reload); the older copy stays frozen as it was. A student message
  * that is a code submission (`data-code-submission`, its rendering for the
  * model hidden) shows as a CodeSubmissionCard.
  *
@@ -1552,6 +1561,10 @@ export function QuizTranscript({
   const sandboxes: SandboxView = sandboxViewOf(
     shown.map(m => ({ role: m.role, parts: visibleParts(m) }))
   );
+  // Each sandbox id's latest files while live, for a new instance of the same
+  // id (a card shown again) to start from. One map for the transcript's life:
+  // written from effects, read once at a sandbox's mount (QuizSandbox).
+  const [sandboxEdits] = useState<SandboxEdits>(() => new Map<string, Record<string, string>>());
   /**
    * One sandbox, at its place in the transcript: live (or locked) only at the
    * shared rule's last instance of the open sandbox, while this viewer drives
@@ -1588,6 +1601,7 @@ export function QuizTranscript({
         liveElsewhere={controls !== null && !liveHere && sandboxes.progress?.open?.id === inst.id}
         isDarkMode={isDarkMode}
         narrow={narrow}
+        edits={controls ? sandboxEdits : null}
       />
     );
   };

@@ -7,9 +7,11 @@
  *
  * The close is the message-limit completion: the results recorded so far,
  * every other question skipped (the open one included), `ended_by: 'expired'`
- * in the journal, `completed_at` the deadline itself. It never touches an
- * attempt that is open and within its deadline, complete, or on the ai-agent
- * runtime.
+ * in the journal, `completed_at` the student's last activity (their last
+ * admitted turn, else the attempt's start), so the late penalty counts only
+ * activity after the due date; `last_activity` is left as it was. It never
+ * touches an attempt that is open and within its deadline, complete, on the
+ * ai-agent runtime, or in a classroom that is not ACTIVE.
  *
  * SAFETY: every fixture is namespaced with a fresh uuid and torn down in
  * afterAll by deleting the git organizations (cascades classroom → quiz →
@@ -32,6 +34,7 @@ const grading = await import('../quizGrading.service.ts');
 const chat = await import('../quizChat.service.ts');
 const { createNew } = await import('../quizAttempt.service.ts');
 const { CONTRACT_VERSION, deriveResult } = await import('@classmoji/utils/quiz-agent');
+const { countingQuizScore, lateHours } = await import('@classmoji/utils');
 
 const HOUR = 60 * 60 * 1000;
 const SKIP_CREDIT = deriveResult([]).credit_earned;
@@ -200,6 +203,21 @@ describe.skipIf(!RUN)('expired chat attempts (integration)', () => {
   const expire = (attemptId: string, at = new Date(Date.now() - HOUR)) =>
     prisma.quizAttempt.update({ where: { id: attemptId }, data: { session_expires_at: at } });
 
+  /**
+   * Back-date the attempt's admitted turns so the last one was at `at` (the
+   * student's last activity), as for an attempt that then sat idle past its
+   * deadline. Earlier turns keep their order: each is a minute before the next.
+   */
+  const lastActiveAt = async (attemptId: string, at: Date) => {
+    const admitted = await events(attemptId, 'input_admitted');
+    for (const [i, e] of admitted.entries()) {
+      await prisma.quizAttemptEvent.update({
+        where: { id: e.id },
+        data: { created_at: new Date(at.getTime() - (admitted.length - 1 - i) * 60_000) },
+      });
+    }
+  };
+
   const runId = 'run_test';
   const msgId = () => `m${randomUUID().replace(/-/g, '').slice(0, 20)}`;
   type Turn = { attemptId: string; fence: string; inputMessageId: string | null; runId: string };
@@ -284,15 +302,20 @@ describe.skipIf(!RUN)('expired chat attempts (integration)', () => {
     const attemptId = await newAttempt();
     const lastTurn = await halfway(attemptId);
     const deadline = new Date(Date.now() - 2 * HOUR);
+    const lastActive = new Date(deadline.getTime() - 5 * HOUR);
+    await lastActiveAt(attemptId, lastActive);
     await expire(attemptId, deadline);
+    const before = await attemptRow(attemptId);
 
     const record = await grading.closeExpiredAttempt(attemptId, asStudent(studentA));
     expect(record).toMatchObject({ v: 2, source: 'server' });
     expect(record).not.toHaveProperty('feedback');
 
     const row = await attemptRow(attemptId);
-    // Completed at its deadline, not whenever the close ran.
-    expect(row.completed_at).toEqual(deadline);
+    // Completed at the student's last turn, not at the deadline nor whenever
+    // the close ran; the close is no activity of theirs.
+    expect(row.completed_at).toEqual(lastActive);
+    expect(row.last_activity).toEqual(before.last_activity);
     expect(row.session_status).toBe('completed');
     expect(row.evaluation_json).toEqual(record);
     expect(await resultsOf(attemptId)).toEqual([
@@ -338,6 +361,7 @@ describe.skipIf(!RUN)('expired chat attempts (integration)', () => {
       quiz_id: quizId,
       owner_user_id: studentA,
       session_expires_at: deadline.toISOString(),
+      completed_at: lastActive.toISOString(),
       skipped_by_end: [2, 3],
     });
 
@@ -356,8 +380,9 @@ describe.skipIf(!RUN)('expired chat attempts (integration)', () => {
     expect(await auditRows(attemptId)).toHaveLength(1);
   });
 
-  it('closes an expired attempt that never began: every question skipped', async () => {
+  it('closes an expired attempt that never began: every question skipped, completed at its start', async () => {
     const attemptId = await newAttempt({ expiresAt: new Date(Date.now() - HOUR) });
+    const before = await attemptRow(attemptId);
     const record = await grading.closeExpiredAttempt(attemptId, asStudent(studentA));
     expect(record?.question_results.map(r => r.question_num)).toEqual([1, 2, 3]);
     expect(await resultsOf(attemptId)).toEqual([
@@ -365,7 +390,68 @@ describe.skipIf(!RUN)('expired chat attempts (integration)', () => {
       [2, true, SKIP_CREDIT],
       [3, true, SKIP_CREDIT],
     ]);
-    expect((await attemptRow(attemptId)).completed_at).not.toBeNull();
+    const row = await attemptRow(attemptId);
+    expect(row.completed_at).toEqual(before.started_at);
+    expect(row.last_activity).toEqual(before.last_activity);
+  });
+
+  // ─── lateness ─────────────────────────────────────────────────────────────
+
+  /**
+   * The late penalty reads `completed_at`. An expired attempt is completed at
+   * the student's last activity, so it is late only if that activity came
+   * after the due date: never for the days the session stood open after it.
+   */
+  describe('the late penalty, by the last activity', () => {
+    const PENALTY_PER_HOUR = 10;
+
+    /** An attempt last active at `activeAt`, expired since, then closed. */
+    const closedAfterIdling = async (activeAt: Date) => {
+      const attemptId = await newAttempt();
+      await halfway(attemptId);
+      await lastActiveAt(attemptId, activeAt);
+      // A stamp of its own, so its being left alone is visible.
+      const lastActivity = new Date(activeAt.getTime() + 30_000);
+      await prisma.quizAttempt.update({
+        where: { id: attemptId },
+        data: { last_activity: lastActivity },
+      });
+      await expire(attemptId, new Date(Date.now() - HOUR));
+      expect(
+        await grading.closeExpiredAttempt(attemptId, asStudent(studentA, 'own_attempt_view'))
+      ).toMatchObject({ source: 'server' });
+      const row = await attemptRow(attemptId);
+      expect(row.completed_at).toEqual(activeAt);
+      expect(row.last_activity).toEqual(lastActivity);
+      return row;
+    };
+
+    const scoreAgainst = (row: Awaited<ReturnType<typeof attemptRow>>, due: Date) =>
+      countingQuizScore([row], 'HIGHEST', {
+        studentDeadline: due,
+        latePenaltyPerHour: PENALTY_PER_HOUR,
+      });
+
+    it('is not late when the student was last active before the due date', async () => {
+      const due = new Date(Date.now() - 10 * HOUR);
+      const row = await closedAfterIdling(new Date(due.getTime() - HOUR));
+      expect(lateHours(row.completed_at, due)).toBe(0);
+      const score = scoreAgainst(row, due);
+      expect(score.late_hours).toBe(0);
+      expect(score.grade).toBe(row.partial_credit_percentage);
+    });
+
+    it('is late by the hours the student was last active past the due date', async () => {
+      const due = new Date(Date.now() - 10 * HOUR);
+      const row = await closedAfterIdling(new Date(due.getTime() + 3 * HOUR + 5 * 60_000));
+      expect(lateHours(row.completed_at, due)).toBe(3);
+      const score = scoreAgainst(row, due);
+      expect(score.late_hours).toBe(3);
+      expect(score.grade).toBeCloseTo(
+        Math.max(0, row.partial_credit_percentage! - 3 * PENALTY_PER_HOUR),
+        5
+      );
+    });
   });
 
   it('leaves an attempt within its deadline, a completed one, and an ai-agent one untouched', async () => {
@@ -420,13 +506,12 @@ describe.skipIf(!RUN)('expired chat attempts (integration)', () => {
   // ─── the classroom's status ───────────────────────────────────────────────
 
   /**
-   * Closing writes a grade, and the attempt drawers meet an expired attempt
-   * with read access only, which a LOCKED or UNPUBLISHED classroom still
-   * grants. So the close follows the mutation gate (`canMutateClassroom`):
-   * nobody but the owner closes it there, and it closes once the classroom is
-   * ACTIVE again.
+   * Closing writes a grade, and a LOCKED or UNPUBLISHED classroom is
+   * read-only to its grades. So the close runs only while the classroom is
+   * ACTIVE, whoever meets the attempt, the owner included, and it closes once
+   * the classroom is ACTIVE again.
    */
-  it('leaves an expired attempt open while its classroom is LOCKED or UNPUBLISHED, and closes it once ACTIVE', async () => {
+  it('leaves an expired attempt open while its classroom is LOCKED or UNPUBLISHED, for every role, and closes it once ACTIVE', async () => {
     const teacherId = await makeUser(`teacher-${randomUUID().slice(0, 4)}`);
     await prisma.classroomMembership.create({
       data: {
@@ -439,6 +524,11 @@ describe.skipIf(!RUN)('expired chat attempts (integration)', () => {
     const asTeacher = {
       userId: teacherId,
       role: 'TEACHER' as const,
+      surface: 'staff_attempt_view' as const,
+    };
+    const asOwner = {
+      userId: ownerId,
+      role: 'OWNER' as const,
       surface: 'staff_attempt_view' as const,
     };
     const attemptId = await newAttempt();
@@ -454,6 +544,7 @@ describe.skipIf(!RUN)('expired chat attempts (integration)', () => {
           await grading.closeExpiredAttempt(attemptId, asStudent(studentA, 'own_attempt_view'))
         ).toBeNull();
         expect(await grading.closeExpiredAttempt(attemptId, asTeacher)).toBeNull();
+        expect(await grading.closeExpiredAttempt(attemptId, asOwner)).toBeNull();
       }
       // Nothing written: no fence, no grade, no journal row, no audit row.
       expect(await attemptRow(attemptId)).toEqual(before);
@@ -467,23 +558,6 @@ describe.skipIf(!RUN)('expired chat attempts (integration)', () => {
       const audits = await auditRows(attemptId);
       expect(audits).toHaveLength(1);
       expect(audits[0]).toMatchObject({ user_id: teacherId, role: 'TEACHER' });
-    } finally {
-      await prisma.classroom.update({ where: { id: classroomId }, data: { status: 'ACTIVE' } });
-    }
-  });
-
-  it('closes an expired attempt in a LOCKED classroom for its owner, who may always write', async () => {
-    const attemptId = await newAttempt({ expiresAt: new Date(Date.now() - HOUR) });
-    try {
-      await prisma.classroom.update({ where: { id: classroomId }, data: { status: 'LOCKED' } });
-      expect(
-        await grading.closeExpiredAttempt(attemptId, {
-          userId: ownerId,
-          role: 'OWNER',
-          surface: 'staff_attempt_view',
-        })
-      ).toMatchObject({ source: 'server' });
-      expect((await attemptRow(attemptId)).completed_at).not.toBeNull();
     } finally {
       await prisma.classroom.update({ where: { id: classroomId }, data: { status: 'ACTIVE' } });
     }
