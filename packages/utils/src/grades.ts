@@ -274,12 +274,16 @@ export const applyLatePenalty = (
   return numericGrade;
 };
 
-// convert a numeric grade to an emoji
+// convert a numeric grade to an emoji. A score exactly between two emojis gets
+// the higher one, and emojis sharing a grade go by name: mappings come from the
+// database in no fixed order, so "first one reached" would pick either.
 export const gradeToEmoji = (score: number, emojiGrades: Record<string, number>): string => {
   return Object.entries(emojiGrades).reduce((closest, [emoji, value]) => {
     const currentDiff = Math.abs(score - value);
     const closestDiff = Math.abs(score - emojiGrades[closest]);
-    return currentDiff < closestDiff ? emoji : closest;
+    if (currentDiff !== closestDiff) return currentDiff < closestDiff ? emoji : closest;
+    if (value !== emojiGrades[closest]) return value > emojiGrades[closest] ? emoji : closest;
+    return emoji < closest ? emoji : closest;
   }, Object.keys(emojiGrades)[0]);
 };
 
