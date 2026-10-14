@@ -879,3 +879,136 @@ describe('projectMessage', () => {
     expect(t[0].parts).toEqual([{ type: 'text', text: 'Hello' }]);
   });
 });
+
+describe('code sandbox parts', () => {
+  const files = { '/index.js': 'console.log(1);\n', '/index.html': '<div id="app"></div>\n' };
+  const submission = {
+    sandbox_id: 'q3-1',
+    files: { ...files, '/index.js': 'console.log(2);\n' },
+    console: [{ method: 'log', text: '2' }],
+    errors: [],
+    question_number: 3,
+    attempt: 1,
+    base_attempt: null,
+    template: 'vanilla',
+    changed_files: ['/index.js'],
+  } as const;
+  const submissionRow = {
+    id: 'u3',
+    role: 'user',
+    metadata: { hiddenPartIndexes: [1, 2] },
+    parts: [
+      { type: 'data-code-submission', data: submission },
+      { type: 'text', text: 'Code submission: question 3, attempt 1 ...' },
+      { type: 'text', text: 'CURRENT STATUS ...' },
+    ],
+  } as unknown as QuizUIMessage;
+
+  it.each([
+    ['student', quizVisibility],
+    ['staff', quizStaffVisibility],
+  ])('projects a stored submission to the part alone (%s)', (_who, reg) => {
+    expect(projectMessage(submissionRow, reg)).toEqual({
+      id: 'u3',
+      role: 'user',
+      metadata: {},
+      parts: [{ type: 'data-code-submission', data: submission }],
+    });
+  });
+
+  it("keeps the browser's optimistic submission, which has no server fields", () => {
+    const {
+      question_number: _n,
+      attempt: _a,
+      base_attempt: _b,
+      template: _t,
+      changed_files: _c,
+      ...input
+    } = submission;
+    const m = {
+      id: 'u4',
+      role: 'user',
+      parts: [{ type: 'data-code-submission', data: input }],
+    } as unknown as QuizUIMessage;
+    expect(projectMessage(m, quizVisibility)!.parts).toEqual([
+      { type: 'data-code-submission', data: input },
+    ]);
+  });
+
+  it('passes the hint sandbox, live and stored, with its schema fields only', () => {
+    const data = {
+      id: 'q3-2',
+      question_number: 3,
+      attempt: 2,
+      seeded_from: 1,
+      template: 'vanilla',
+      files,
+      active_file: '/index.js',
+    };
+    const p = createChunkProjector<Chunk>(quizVisibility);
+    expect(p({ type: 'data-sandbox', id: 'sb', data: { ...data, extra: 1 } } as Chunk)).toEqual({
+      type: 'data-sandbox',
+      id: 'sb',
+      data,
+    });
+    const m = {
+      id: 'a3',
+      role: 'assistant',
+      parts: [
+        { type: 'data-sandbox', id: 'sb', data },
+        { type: 'text', text: 'A hint.' },
+      ],
+    } as unknown as QuizUIMessage;
+    expect(projectMessage(m, quizStaffVisibility)!.parts[0]).toEqual({
+      type: 'data-sandbox',
+      id: 'sb',
+      data,
+    });
+  });
+
+  it("cuts present_question's sandbox from the input and keeps the card's", () => {
+    const sandbox = { template: 'vanilla', files, active_file: '/index.js' };
+    const input = { ...cardFields, sandbox };
+    const output = {
+      card: { ...cardFields, sandbox },
+      question_number: 2,
+      total_questions: 8,
+    };
+    for (const reg of [quizVisibility, quizStaffVisibility]) {
+      const p = createChunkProjector<Chunk>(reg);
+      expect(
+        p({ type: 'tool-input-start', toolCallId: 'c1', toolName: 'present_question' } as Chunk)
+      ).not.toBeNull();
+      expect(
+        p({ type: 'tool-input-delta', toolCallId: 'c1', inputTextDelta: '{"s' } as Chunk)
+      ).toBeNull();
+      expect(
+        p({
+          type: 'tool-input-available',
+          toolCallId: 'c1',
+          toolName: 'present_question',
+          input,
+        } as Chunk)
+      ).toMatchObject({ input: cardFields });
+      const stored = projectMessage(
+        {
+          id: 'a4',
+          role: 'assistant',
+          parts: [
+            {
+              type: 'tool-present_question',
+              toolCallId: 'c1',
+              state: 'output-available',
+              input,
+              output,
+            },
+          ],
+        } as unknown as QuizUIMessage,
+        reg
+      )!;
+      const part = stored.parts[0] as { input: Record<string, unknown>; output: typeof output };
+      expect(part.input).toEqual(cardFields);
+      expect(part.output.card.sandbox).toEqual(sandbox);
+    }
+  });
+});

@@ -5,6 +5,7 @@
 import type { InferUITools, UIMessage, UIMessageChunk } from 'ai';
 import { z } from 'zod';
 import { QuizEvaluationRecordV2Schema } from './records.ts';
+import { CodeSubmissionDataSchema, SandboxDataSchema } from './sandbox.ts';
 import type { quizToolDefs } from './tools.ts';
 
 export const QuestionResultDataSchema = z.object({
@@ -66,6 +67,10 @@ export const quizDataPartSchemas = {
   'messages-left': MessagesLeftDataSchema,
   /** Written only when the server completes the attempt from the recorded results. */
   evaluation: QuizEvaluationRecordV2Schema,
+  /** The hint sandbox after a Try again click, written by the server, never the model. */
+  sandbox: SandboxDataSchema,
+  /** A student's code submission: the only data part a student message carries. */
+  'code-submission': CodeSubmissionDataSchema,
 };
 
 export type QuizDataParts = {
@@ -74,6 +79,8 @@ export type QuizDataParts = {
   notice: z.infer<typeof NoticeDataSchema>;
   'messages-left': z.infer<typeof MessagesLeftDataSchema>;
   evaluation: z.infer<typeof QuizEvaluationRecordV2Schema>;
+  sandbox: z.infer<typeof SandboxDataSchema>;
+  'code-submission': z.infer<typeof CodeSubmissionDataSchema>;
 };
 
 export type QuizMessageMetadata = {

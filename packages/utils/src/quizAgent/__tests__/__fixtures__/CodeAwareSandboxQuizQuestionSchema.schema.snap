@@ -1,0 +1,146 @@
+{
+  "type": "object",
+  "properties": {
+    "preamble": {
+      "type": "string",
+      "description": "One or two neutral lead-in sentences, e.g. \"I'd like to ask you about your error handling.\" Not the question itself."
+    },
+    "question_number": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The number CURRENT STATUS names as next (or the current one, to re-show it)."
+    },
+    "total_questions": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "NUM_QUESTIONS from QUIZ PARAMETERS, as a number; the server sets it anyway."
+    },
+    "question_text": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The question itself, without code: the card shows any code above it."
+    },
+    "code_snippet": {
+      "type": "string",
+      "description": "Code shown above question_text; never repeat it there. In a code-aware quiz never the student's code: use code_quote. The one exception: if code_quote fails twice because the file cannot be read, the lines copied exactly from your exploration output without their \"N| \" prefixes, with the file and the rule or element named in context."
+    },
+    "code_language": {
+      "type": "string",
+      "description": "Programming language for syntax highlighting (e.g., \"javascript\", \"python\", \"tsx\")"
+    },
+    "context": {
+      "type": "string",
+      "description": "One line: the file and the rule, element or function (\"style.css — .grid\", \"auth.js — login()\"), or the concept. Always send it with code_quote."
+    },
+    "code_quote": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "description": "The file's path in the repository, exactly as your exploration results name it."
+        },
+        "ranges": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "minItems": 2,
+            "maxItems": 2,
+            "description": "[first line, last line], both included"
+          },
+          "minItems": 1,
+          "maxItems": 8,
+          "description": "Line ranges to show, as [start, end] pairs of the line numbers in your exploration results: ascending, not overlapping, at most 40 lines shown in all. Quote whole CSS rules and HTML elements where you can. A \"...\" line marks each gap between ranges, and a quote that starts or stops inside a rule or element."
+        },
+        "omit": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "maxItems": 40,
+          "description": "Line numbers inside a range to leave out (never its first or last line). Each run of left-out lines shows as one \"...\" line."
+        },
+        "anchor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 400,
+          "description": "The text of the first quoted line (the first line of the first range), without its line number. Never a blank line. It is checked against the file."
+        },
+        "edit": {
+          "type": "object",
+          "properties": {
+            "line": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "A quoted line number"
+            },
+            "replace": {
+              "type": "string",
+              "maxLength": 400,
+              "description": "The new text of that one line"
+            }
+          },
+          "required": [
+            "line",
+            "replace"
+          ],
+          "additionalProperties": false,
+          "description": "Only for the one question that asks the student to find a change you made to their code: one quoted line replaced with new text. At most one question per quiz; a second is refused. For any other \"what if\" question, quote the real code and describe the change in words."
+        }
+      },
+      "required": [
+        "path",
+        "ranges",
+        "anchor"
+      ],
+      "additionalProperties": false,
+      "description": "The student's lines, filled exactly by the server (with \"...\" for each gap). Send it on every code-aware question (unless exploration failed), with code_snippet left out. The one exception: if it fails twice because the file cannot be read, use code_snippet instead: the lines copied exactly from your exploration output without their \"N| \" prefixes, with the file and the rule or element named in context."
+    },
+    "sandbox": {
+      "type": "object",
+      "properties": {
+        "template": {
+          "type": "string",
+          "enum": [
+            "vanilla",
+            "vanilla-ts",
+            "react",
+            "react-ts"
+          ]
+        },
+        "files": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "The starter files: path → file content."
+        },
+        "active_file": {
+          "type": "string",
+          "description": "The path of the file the editor opens on."
+        }
+      },
+      "required": [
+        "template",
+        "files",
+        "active_file"
+      ],
+      "additionalProperties": false,
+      "description": "Only for a question the student answers by writing or fixing code: an editable sandbox in the card. template \"vanilla\" (/index.js, /index.html, /styles.css; index.js runs as a strict-mode ES module, so import CSS from it), \"vanilla-ts\" (the same with /index.ts), \"react\" (/App.js default export) or \"react-ts\" (/App.tsx). TypeScript is transpiled, never type-checked. Paths start with \"/\". Starter code only, never the answer. Leave code_snippet out."
+    }
+  },
+  "required": [
+    "preamble",
+    "question_number",
+    "total_questions",
+    "question_text"
+  ],
+  "additionalProperties": false,
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

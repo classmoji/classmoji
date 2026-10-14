@@ -1,0 +1,44 @@
+{
+  "type": "object",
+  "properties": {
+    "preamble": {
+      "type": "string",
+      "description": "One or two neutral lead-in sentences, e.g. \"I'd like to ask you about your error handling.\" Not the question itself."
+    },
+    "question_number": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The number CURRENT STATUS names as next (or the current one, to re-show it)."
+    },
+    "total_questions": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "NUM_QUESTIONS from QUIZ PARAMETERS, as a number; the server sets it anyway."
+    },
+    "question_text": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The question itself, without code: the card shows any code above it."
+    },
+    "code_snippet": {
+      "type": "string",
+      "description": "Code shown above question_text; never repeat it there. In a code-aware quiz never the student's code: use code_quote. The one exception: if code_quote fails twice because the file cannot be read, the lines copied exactly from your exploration output without their \"N| \" prefixes, with the file and the rule or element named in context."
+    },
+    "code_language": {
+      "type": "string",
+      "description": "Programming language for syntax highlighting (e.g., \"javascript\", \"python\", \"tsx\")"
+    },
+    "context": {
+      "type": "string",
+      "description": "One line: the file and the rule, element or function (\"style.css — .grid\", \"auth.js — login()\"), or the concept. Always send it with code_quote."
+    }
+  },
+  "required": [
+    "preamble",
+    "question_number",
+    "total_questions",
+    "question_text"
+  ],
+  "additionalProperties": false,
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

@@ -5,6 +5,7 @@
  */
 import { z } from 'zod';
 import { ANSWER_LEVELS } from './grading.ts';
+import { SANDBOX_FIELD_DESCRIPTION, SandboxSpecSchema } from './sandbox.ts';
 
 /**
  * Tool-schema, prompt and grading-policy bundle an attempt is stamped with.
@@ -115,6 +116,20 @@ export const CodeAwareQuizQuestionSchema = QuizQuestionSchema.extend({
 });
 export type CodeAwareQuizQuestion = z.infer<typeof CodeAwareQuizQuestionSchema>;
 
+/**
+ * present_question's input for an attempt pinned with code sandbox questions
+ * (`agent_config.codeSandbox`): each schema above plus `sandbox`. New names
+ * only: the two above stay exactly as they are, so an attempt without the
+ * pin sends the model the same tool schema, byte for byte, as before.
+ */
+const sandboxField = {
+  sandbox: SandboxSpecSchema.optional().describe(SANDBOX_FIELD_DESCRIPTION),
+};
+export const SandboxQuizQuestionSchema = QuizQuestionSchema.extend(sandboxField);
+export type SandboxQuizQuestion = z.infer<typeof SandboxQuizQuestionSchema>;
+export const CodeAwareSandboxQuizQuestionSchema = CodeAwareQuizQuestionSchema.extend(sandboxField);
+export type CodeAwareSandboxQuizQuestion = z.infer<typeof CodeAwareSandboxQuizQuestionSchema>;
+
 /** Where a card's code came from, when the server filled it from a code quote. */
 export const QuoteSourceSchema = z.object({
   path: z.string(),
@@ -125,9 +140,14 @@ export const QuoteSourceSchema = z.object({
 });
 export type QuoteSource = z.infer<typeof QuoteSourceSchema>;
 
-/** The card as stored and shown: the question, plus `source` for a quoted card. */
+/**
+ * The card as stored and shown: the question, plus `source` for a quoted card
+ * and `sandbox` for a sandbox question. Every presented card is validated
+ * against it, so the sandbox's rules and caps hold for stored cards too.
+ */
 export const QuestionCardSchema = QuizQuestionSchema.extend({
   source: QuoteSourceSchema.optional(),
+  sandbox: SandboxSpecSchema.optional(),
 });
 export type QuestionCard = z.infer<typeof QuestionCardSchema>;
 

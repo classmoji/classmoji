@@ -1439,6 +1439,11 @@ model Quiz {
   /// exploration lists, never read, never quoted. Empty by default. (No glob
   /// examples: they would end this comment in the generated client.)
   excluded_paths        String[]            @default([])
+  /// Lets the quiz agent attach an editable code sandbox to a question, which
+  /// the student answers by editing, running and submitting the code. Read
+  /// when an attempt starts and pinned on it (agent_config), so a change
+  /// affects only attempts that start afterwards. Off by default.
+  code_sandbox_enabled  Boolean             @default(false)
   created_at            DateTime            @default(now())
   updated_at            DateTime            @default(now()) @updatedAt
 
