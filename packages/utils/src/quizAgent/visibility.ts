@@ -9,7 +9,7 @@
  * except that it keeps offer_next_step's `expected_answer`.
  */
 import type { Registry } from '../agents/projection.ts';
-import type { CodeAwareQuizQuestion, OfferNextStep } from './schemas.ts';
+import type { CodeAwareSandboxQuizQuestion, OfferNextStep } from './schemas.ts';
 import type { QuizToolName } from './tools.ts';
 import { quizDataPartSchemas, type QuizDataParts } from './uiTypes.ts';
 
@@ -26,14 +26,19 @@ const tools = {
 } as const;
 
 // The card renders from present_question's output, which the server fills
-// from `code_quote`; the quote's own terms stay with the server.
-const codeQuote = ['code_quote'] as const satisfies readonly (keyof CodeAwareQuizQuestion)[];
+// from `code_quote`; the quote's own terms stay with the server. The output's
+// card carries the sandbox too, so its input copy is cut: the starter files
+// are not sent twice, nor streamed as raw input.
+const cardInputKeys = [
+  'code_quote',
+  'sandbox',
+] as const satisfies readonly (keyof CodeAwareSandboxQuizQuestion)[];
 
 export const quizVisibility = {
   tools,
   dataParts: quizDataPartSchemas,
   hiddenInputKeys: {
-    present_question: codeQuote,
+    present_question: cardInputKeys,
     // The correct answer, for staff only. A call with a hidden key sends no
     // streamed input, so the feedback appears once the call is complete.
     offer_next_step: ['expected_answer'] satisfies (keyof OfferNextStep)[],
@@ -43,5 +48,5 @@ export const quizVisibility = {
 export const quizStaffVisibility = {
   tools,
   dataParts: quizDataPartSchemas,
-  hiddenInputKeys: { present_question: codeQuote },
+  hiddenInputKeys: { present_question: cardInputKeys },
 } as const satisfies Registry<QuizToolName, keyof QuizDataParts & string>;

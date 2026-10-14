@@ -264,6 +264,18 @@ describe('student quiz list payload', () => {
     expect('systemPrompt' in quiz).toBe(false);
     expect('rubricPrompt' in quiz).toBe(false);
   });
+
+  it('says whether the quiz asks code sandbox questions, as MCP list_quizzes does', async () => {
+    mocks.quizFindMany.mockResolvedValue([
+      { ...QUIZ_ROW, code_sandbox_enabled: true },
+      { ...QUIZ_ROW, id: 'quiz-2' },
+    ]);
+
+    const [on, unset] = (await load()).quizzes;
+
+    expect(on.code_sandbox_enabled).toBe(true);
+    expect(unset.code_sandbox_enabled).toBe(false);
+  });
 });
 
 describe('student quiz list — due date, closed quizzes, zero scores', () => {

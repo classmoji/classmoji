@@ -50,12 +50,14 @@ vi.mock('@classmoji/services', () => ({
       updateInClassroom: (...a: unknown[]) => mocks.updateInClassroom(...a),
       deleteInClassroom: (...a: unknown[]) => mocks.deleteInClassroom(...a),
     },
-    repository: { findById: (...a: unknown[]) => mocks.findRepositoryById(...a) },
+    repository: {
+      findById: (...a: unknown[]) => mocks.findRepositoryById(...a),
+      findByClassroomSlug: (...a: unknown[]) => mocks.findRepositories(...a),
+    },
     module: {
       findByClassroomSlug: (...a: unknown[]) => mocks.findModules(...a),
       getCandidateContent: (...a: unknown[]) => mocks.getCandidateContent(...a),
     },
-    repository: { findByClassroomSlug: (...a: unknown[]) => mocks.findRepositories(...a) },
     organizationTag: { findByClassroomId: (...a: unknown[]) => mocks.findTags(...a) },
   },
 }));

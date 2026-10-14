@@ -32,6 +32,8 @@ vi.mock('@classmoji/services', () => ({
 
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: (...a: unknown[]) => assertAccessMock(...a),
+  // Staff reading a student's attempt write a VIEW row (chatTranscript.test.ts).
+  addClassroomAuditLog: async () => {},
 }));
 
 vi.mock('~/utils/classroomProFlag.server', () => ({

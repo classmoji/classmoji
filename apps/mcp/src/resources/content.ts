@@ -334,6 +334,7 @@ interface QuizRow extends QuizPlacementSource {
   include_code_context: boolean;
   course_search_enabled?: boolean;
   excluded_paths?: string[];
+  code_sandbox_enabled?: boolean;
   repository_id?: string | null;
   source_material?: Array<{
     kind: string;
@@ -489,6 +490,9 @@ export const quizzesResource: ResourceDefinition = {
       grading_strategy: q.grading_strategy,
       include_code_context: q.include_code_context,
       course_search_enabled: q.course_search_enabled ?? false,
+      // Students too, as on the web quiz list: the quiz may ask questions
+      // answered in a code sandbox.
+      code_sandbox_enabled: q.code_sandbox_enabled ?? false,
       repository_id: q.repository_id ?? null,
       // Field by field. The service already dropped drafts for the student list.
       source_material: (q.source_material ?? []).map(doc => ({

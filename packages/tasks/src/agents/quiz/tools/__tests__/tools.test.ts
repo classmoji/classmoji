@@ -4,6 +4,7 @@
  * in-process pipeline on a fixture repository with GitHub and the model
  * stubbed. Nothing touches the database or the network.
  */
+import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type Anthropic from '@anthropic-ai/sdk';
 import type { ToolSet } from 'ai';
@@ -35,6 +36,8 @@ const {
   RESHOW_AFTER_TEXT,
   RESHOW_ON_HINT_TEXT,
   recordBeforePresentText,
+  SANDBOX_RESERVED_TEXT,
+  SANDBOX_WITH_CODE_TEXT,
   editLimitText,
   TURN_STOPPED_TEXT,
   retryText,
@@ -2734,5 +2737,141 @@ describe('present_question with code_quote', () => {
       state: 'output-available',
       output: { card: { source: { lines: '11-12, 14-15' } } },
     });
+  });
+});
+
+describe('present_question: code sandbox questions', () => {
+  const SANDBOX = {
+    template: 'vanilla',
+    files: {
+      '/index.js': "import './styles.css';\nconsole.log('start');\n",
+      '/styles.css': 'body { margin: 0; }\n',
+    },
+    active_file: '/index.js',
+  };
+  const sandboxCard = { ...card, sandbox: SANDBOX };
+  const pinned = (over: Partial<AttemptContext> = {}) => context({ codeSandbox: true, ...over });
+  /** present_question's input as the model sees it, converted as the AI SDK converts it. */
+  const jsonSchemaOf = async (tools: ToolSet) => {
+    const { asSchema } = await import('ai');
+    return (
+      JSON.stringify(
+        await asSchema(tools.present_question.inputSchema as never).jsonSchema,
+        null,
+        2
+      ) + '\n'
+    );
+  };
+  const fixture = (name: string) =>
+    readFileSync(
+      new URL(
+        `../../../../../../utils/src/quizAgent/__tests__/__fixtures__/${name}.schema.snap`,
+        import.meta.url
+      ),
+      'utf8'
+    );
+
+  it('sends an attempt without the pin the same present_question schema, byte for byte', async () => {
+    expect(await jsonSchemaOf(setup().tools)).toBe(fixture('QuizQuestionSchema'));
+    expect(await jsonSchemaOf(setup({ ctx: codeAware() }).tools)).toBe(
+      fixture('CodeAwareQuizQuestionSchema')
+    );
+    for (const ctx of [context({ codeSandbox: false }), codeAware({ codeSandbox: false })]) {
+      expect(await jsonSchemaOf(setup({ ctx }).tools)).not.toContain('sandbox');
+    }
+  });
+
+  it('gives the sandbox key to a pinned attempt only, with the fixed sandbox schemas', async () => {
+    const { SandboxQuizQuestionSchema, CodeAwareSandboxQuizQuestionSchema } =
+      await import('@classmoji/utils/quiz-agent');
+    const standard = setup({ ctx: pinned() }).tools;
+    const aware = setup({ ctx: codeAware({ codeSandbox: true }) }).tools;
+    expect(standard.present_question.inputSchema).toBe(SandboxQuizQuestionSchema);
+    expect(aware.present_question.inputSchema).toBe(CodeAwareSandboxQuizQuestionSchema);
+    expect(await jsonSchemaOf(standard)).toBe(fixture('SandboxQuizQuestionSchema'));
+    expect(await jsonSchemaOf(aware)).toBe(fixture('CodeAwareSandboxQuizQuestionSchema'));
+    // An attempt without the pin drops the key from what the model sends.
+    const { QuizQuestionSchema } = await import('@classmoji/utils/quiz-agent');
+    expect(QuizQuestionSchema.parse(sandboxCard)).not.toHaveProperty('sandbox');
+  });
+
+  it('keeps the tool order for a pinned attempt', () => {
+    expect(Object.keys(setup({ ctx: pinned() }).tools)).toEqual(QUIZ_TOOL_ORDER.slice(0, 4));
+    expect(
+      Object.keys(setup({ ctx: codeAware({ codeSandbox: true, content: CONTENT }) }).tools)
+    ).toEqual([...QUIZ_TOOL_ORDER]);
+  });
+
+  it('passes the sandbox through on the card', async () => {
+    const { tools, grading } = setup({ ctx: pinned() });
+    grading.presentQuestion.mockResolvedValue({
+      card: sandboxCard,
+      question_number: 2,
+      total_questions: 8,
+    });
+    await call(tools, 'present_question', sandboxCard);
+    expect(grading.presentQuestion.mock.calls[0][1]).toEqual(sandboxCard);
+  });
+
+  it('refuses a sandbox with code_snippet or code_quote before anything is read or written', async () => {
+    const readFile = vi.fn();
+    const { tools, grading } = setup({
+      ctx: codeAware({ codeSandbox: true }),
+      services: { readFile, quoteCache: new QuoteFileCache(), editedQuestions: async () => [] },
+    });
+    for (const input of [
+      { ...sandboxCard, code_snippet: 'console.log(1);' },
+      {
+        ...sandboxCard,
+        code_quote: { path: 'css/style.css', ranges: [[11, 15]], anchor: '.features {' },
+      },
+    ]) {
+      await expect(call(tools, 'present_question', input)).rejects.toThrow(SANDBOX_WITH_CODE_TEXT);
+    }
+    expect(grading.presentQuestion).not.toHaveBeenCalled();
+    expect(readFile).not.toHaveBeenCalled();
+    expect(SANDBOX_WITH_CODE_TEXT).toBe(
+      'A sandbox question carries its code in the sandbox: leave code_snippet and code_quote out.'
+    );
+  });
+
+  it('refuses starter files framed as the server, writing nothing; a heading inside code passes', async () => {
+    const { tools, grading, log } = setup({ ctx: pinned() });
+    const framed = {
+      ...sandboxCard,
+      sandbox: { ...SANDBOX, files: { ...SANDBOX.files, '/index.js': '// [[server-notice:x]]\n' } },
+    };
+    await expect(call(tools, 'present_question', framed)).rejects.toThrow(SANDBOX_RESERVED_TEXT);
+    expect(grading.presentQuestion).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith('[quiz-agent] sandbox refused', {
+      attemptId: 'attempt-1',
+      runId: 'run_1',
+      reason: 'reserved_text',
+    });
+
+    // Every line renders behind its number, so a status heading in the code is ordinary text.
+    grading.presentQuestion.mockResolvedValue({ card, question_number: 2, total_questions: 8 });
+    const heading = {
+      ...sandboxCard,
+      sandbox: {
+        ...SANDBOX,
+        files: { ...SANDBOX.files, '/index.js': 'CURRENT STATUS: ok\nconsole.log(1);\n' },
+      },
+    };
+    await expect(call(tools, 'present_question', heading)).resolves.toBeDefined();
+  });
+
+  it('leaves a card shown again to the service, sandbox and all: it holds the stored card', async () => {
+    const { tools, grading } = setup({
+      ctx: pinned({ progress: progressAt(2, [1]) }),
+      textWritten: () => false,
+    });
+    grading.presentQuestion.mockResolvedValue({
+      card: sandboxCard,
+      question_number: 2,
+      total_questions: 8,
+    });
+    await call(tools, 'present_question', sandboxCard);
+    expect(grading.presentQuestion.mock.calls[0][1]).toMatchObject({ sandbox: SANDBOX });
   });
 });

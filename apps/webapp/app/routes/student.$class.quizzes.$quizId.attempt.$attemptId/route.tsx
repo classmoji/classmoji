@@ -4,10 +4,11 @@ import { Drawer, ConfigProvider, theme, Modal } from 'antd';
 import type { Route } from './+types/route';
 import { useRouteDrawer, useDarkMode } from '~/hooks';
 import { QuizAttemptInterface } from '~/components';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { addClassroomAuditLog, assertClassroomAccess } from '~/utils/helpers';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { attemptDrawerView, chatActivityView, quizDrawerView } from '~/utils/quizPayloads';
 import { isTriggerChatAttempt } from '~/utils/quizRuntime.server';
+import { closeIfExpired } from '~/utils/quizAttemptExpiry.server';
 
 export async function loader({ params, request }: Route.LoaderArgs) {
   const { ClassmojiService, QuizAttemptNotFoundError } = await import('@classmoji/services');
@@ -44,7 +45,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   // confirmed to exist by a 403. Only that one error becomes a 404; anything
   // else the query raises still surfaces, rather than telling a student their
   // attempt is gone because the database was briefly unreachable.
-  const attemptData = await ClassmojiService.quizAttempt
+  let attemptData = await ClassmojiService.quizAttempt
     .findWithMessages(attemptId)
     .catch((error: unknown) => {
       if (error instanceof QuizAttemptNotFoundError) return null;
@@ -63,6 +64,24 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     : false;
   if (!isInstructor && attemptData.attempt.user_id.toString() !== userId.toString()) {
     throw new Response('Unauthorized', { status: 403 });
+  }
+
+  // A chat attempt past its session deadline takes no more turns: it is
+  // closed now with the results recorded so far, and read again, so it shows
+  // as completed rather than as a chat that can never continue. Only after
+  // step 4: the caller owns it, or is staff of its quiz.
+  if (
+    membership &&
+    (await closeIfExpired(attemptData.attempt, {
+      userId: String(userId),
+      role: membership.role,
+      surface:
+        attemptData.attempt.user_id.toString() === userId.toString()
+          ? 'own_attempt_view'
+          : 'staff_attempt_view',
+    }))
+  ) {
+    attemptData = await ClassmojiService.quizAttempt.findWithMessages(attemptId);
   }
 
   // 5. Calculate focus metrics for completed attempts
@@ -93,6 +112,31 @@ export async function loader({ params, request }: Route.LoaderArgs) {
         isInstructor && !viewerOwnsAttempt ? 'staff' : 'student'
       )
     : null;
+
+  // Staff reading someone else's attempt here (step 1 admits them; the staff
+  // prefixes have their own route, but this URL is open to them too) is a read
+  // of another person's data, so it is audited exactly as the staff attempt
+  // route (admin.$class.quizzes_.$quizId.attempt.$attemptId) audits it: one VIEW
+  // row, on either runtime, naming the classroom the gate authorized and the
+  // role it enforced. Steps 2 and 3 bind the attempt to that classroom. A
+  // student or staff member reading their own attempt is not logged; a
+  // refused or 404 read never gets here. Repeated loads within the audit
+  // service's dedup window fold into one row.
+  if (isInstructor && !viewerOwnsAttempt) {
+    await addClassroomAuditLog({
+      classroomId: classroom.id,
+      userId: String(userId),
+      role: membership?.role,
+      action: 'VIEW',
+      resourceType: 'QUIZ_ATTEMPT',
+      resourceId: attemptData.attempt.id.toString(),
+      metadata: {
+        tool: 'web:quiz_attempt.view',
+        quiz_id: quiz.id.toString(),
+        student_id: attemptData.attempt.user_id.toString(),
+      },
+    });
+  }
 
   // A chat attempt's message limit: the messages it still admits (the chat's
   // countdown) and whether the server submitted it at the limit (the results

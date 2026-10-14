@@ -8,7 +8,7 @@
 import getPrisma from '@classmoji/database';
 import { ClassmojiService, getGitProvider } from '@classmoji/services';
 import { gitlabQuizProject } from '@classmoji/utils';
-import type { AttemptProgress } from '@classmoji/utils/quiz-agent';
+import type { AttemptProgress, SandboxData } from '@classmoji/utils/quiz-agent';
 import { buildQuizPrompt, quizWelcome, usableMaterial } from './prompt/index.ts';
 import { serverNoticeMarker } from './serverNotice.ts';
 import { resolveQuizRunSettings, type Effort } from './settings.ts';
@@ -106,6 +106,21 @@ export type AttemptContext = {
    * turn only: the `begin` action's turn, before any question.
    */
   welcome?: string;
+  /**
+   * Code sandbox questions, as pinned at the attempt's first admission
+   * (`agent_config.codeSandbox`, from the quiz's switch): present_question
+   * takes a `sandbox`, the prompt says how to use one, and the student may
+   * submit code. Fixed for the attempt's life, like its tool schema. Absent
+   * (off) for an attempt pinned before the switch existed.
+   */
+  codeSandbox?: boolean;
+  /**
+   * The hint sandbox this turn's reply carries under the hint
+   * (`sandboxStateOf`'s `nextHint`): read only on a Try again turn of a
+   * sandbox attempt; null or absent otherwise, and when the open card has no
+   * sandbox or one is still open. The loop writes it, never the model.
+   */
+  sandboxHint?: SandboxData | null;
 };
 
 const PREVIEW_ROLES = ['OWNER', 'TEACHER', 'ASSISTANT'] as const;
@@ -121,6 +136,7 @@ type LoadedAttempt = NonNullable<Awaited<ReturnType<typeof ClassmojiService.quiz
  */
 type StableParts = {
   prompt: { staticPrompt: string; dynamicPrompt: string };
+  codeSandbox: boolean;
   sourceMaterialUnavailable: boolean;
   content: ContentScope | null;
   exploration: AttemptContext['exploration'];
@@ -164,6 +180,15 @@ export function contentScopeFor(o: {
       title: typeof doc.title === 'string' ? doc.title : '',
     })),
   };
+}
+
+/** Whether the attempt is pinned with code sandbox questions (`agent_config.codeSandbox`). */
+export function pinnedCodeSandbox(agentConfig: unknown): boolean {
+  return (
+    typeof agentConfig === 'object' &&
+    agentConfig !== null &&
+    (agentConfig as { codeSandbox?: unknown }).codeSandbox === true
+  );
 }
 
 /** The quiz's stored excluded paths, strings only (the column is `String[]`). */
@@ -307,6 +332,7 @@ async function loadStableParts(
     });
   }
 
+  const codeSandbox = pinnedCodeSandbox(attempt.agent_config);
   const prompt = buildQuizPrompt({
     quizSystemPrompt: quiz.system_prompt ?? null,
     rubricPrompt: quiz.rubric_prompt ?? null,
@@ -318,11 +344,13 @@ async function loadStableParts(
     classroomRef,
     courseSearchEnabled,
     contentToolsAvailable: content !== null,
+    codeSandbox,
     noticeMarker: serverNoticeMarker(attempt.id),
   });
 
   const parts: StableParts = {
     prompt,
+    codeSandbox,
     sourceMaterialUnavailable,
     content,
     exploration,
@@ -369,6 +397,13 @@ export async function loadAttemptContext(
   const questionCount = progress.questionCount;
   const stable = await loadStableParts(attempt, questionCount, log, opts.env ?? process.env);
 
+  // A Try again turn's hint carries a fresh sandbox when the open question's
+  // card has one and none of its sandboxes is still open.
+  const sandboxHint =
+    stable.codeSandbox && admission.action === 'try_again'
+      ? (await ClassmojiService.quizChat.sandboxStateOf(chatId)).nextHint
+      : null;
+
   const settings = resolveQuizRunSettings(
     attempt.quiz.classroom?.settings ?? null,
     { isCodeAware: stable.isCodeAware },
@@ -412,6 +447,8 @@ export async function loadAttemptContext(
     sourceMaterialUnavailable: stable.sourceMaterialUnavailable,
     content: stable.content,
     codeUnavailable: stable.codeUnavailable,
+    codeSandbox: stable.codeSandbox,
+    sandboxHint,
     welcome: quizWelcome({
       subject: attempt.quiz.subject ?? null,
       quizName: attempt.quiz.name ?? null,
