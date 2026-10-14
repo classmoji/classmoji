@@ -154,7 +154,14 @@ export default function QuizSandbox({
         layout={narrow ? 'preview-bottom' : 'preview-right'}
         files={files}
         activeFile={activeFile}
-        initMode="immediate"
+        // Not 'immediate': under StrictMode the preview mounts twice, and an
+        // immediate provider creates a client on each mount for the same
+        // iframe. It keeps the one whose status never reaches `done`, so edits
+        // and refreshes are silently dropped (no recompile, every capture
+        // times out on the first run's console). 'lazy' only registers the
+        // iframe and creates one client after the mounts settle; no layout
+        // here sets Sandpack's lazy anchor, so it still boots straight away.
+        initMode="lazy"
         options={{
           visibleFiles: paths,
           showTabs: true,
