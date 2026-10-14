@@ -32,6 +32,8 @@ type ConsoleData = ConsoleLogEntry[];
 interface CollapsibleConsoleProps {
   defaultExpanded?: boolean;
   maxHeight?: number;
+  /** Clears the lines when the preview restarts (Sandpack's own option). Default true. */
+  resetOnPreviewRestart?: boolean;
 }
 
 /**
@@ -40,6 +42,7 @@ interface CollapsibleConsoleProps {
 export default function CollapsibleConsole({
   defaultExpanded = false,
   maxHeight = 150,
+  resetOnPreviewRestart = true,
 }: CollapsibleConsoleProps) {
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
   const [logs, setLogs] = useState<ConsoleData>([]);
@@ -99,7 +102,7 @@ export default function CollapsibleConsole({
         <SandpackConsole
           showHeader={false}
           onLogsChange={handleLogsChange}
-          resetOnPreviewRestart
+          resetOnPreviewRestart={resetOnPreviewRestart}
           style={{ height: maxHeight }}
         />
       </div>

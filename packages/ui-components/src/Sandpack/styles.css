@@ -400,3 +400,66 @@
 .sp-wrapper[data-theme="dark"] .collapsible-console-header:hover {
   background: var(--sp-colors-surface3, #3a3a3a);
 }
+
+/* ==========================================================================
+   Opt-in modifiers (the quiz's code sandboxes). The slides use neither.
+   ========================================================================== */
+
+/* An auto-height embed: the layout's own height (SandpackEmbed `height`)
+   sizes it, instead of the parent's. */
+.sandpack-embed-wrapper.sandpack-embed-auto-height {
+  height: auto;
+}
+
+/* Editor above preview (layout "preview-bottom") at narrow widths: the rule
+   above pins both panes to the layout's full height, which only works side
+   by side. */
+.sandpack-embed-column .sp-layout {
+  flex-direction: column !important;
+}
+.sandpack-embed-column .sp-editor,
+.sandpack-embed-column .sp-preview,
+.sandpack-embed-column .sandpack-embed-preview-placeholder {
+  min-height: 0 !important;
+  height: auto !important;
+  border-right: none !important;
+}
+.sandpack-embed-column .sp-editor {
+  flex: 1 1 58% !important;
+  border-bottom: 1px solid var(--sp-colors-surface2, #e4e7eb);
+}
+.sandpack-embed-column .sp-preview,
+.sandpack-embed-column .sandpack-embed-preview-placeholder {
+  flex: 1 1 42% !important;
+}
+
+/* The page's dark mode (a `.dark` ancestor, Tailwind's class strategy): the
+   console body follows it. The slides keep their light console body under a
+   dark Sandpack theme; a page in dark mode does not. */
+.dark .sandpack-follows-page-theme.sandpack-embed-wrapper {
+  color: #e5e7eb !important;
+}
+.dark .sandpack-follows-page-theme .collapsible-console-content,
+.dark .sandpack-follows-page-theme .collapsible-console .sp-console-list,
+.dark .sandpack-follows-page-theme .collapsible-console .sp-console,
+.dark .sandpack-follows-page-theme .collapsible-console [class*='sp-console'],
+.dark .sandpack-follows-page-theme .collapsible-console .sp-console-item,
+.dark .sandpack-follows-page-theme .collapsible-console .sp-console-item * {
+  background-color: #151515 !important;
+}
+.dark .sandpack-follows-page-theme .console-badge-error {
+  background: rgba(220, 38, 38, 0.18);
+  color: #f87171;
+}
+.dark .sandpack-follows-page-theme .console-badge-warn {
+  background: rgba(217, 119, 6, 0.2);
+  color: #fbbf24;
+}
+.dark .sandpack-follows-page-theme .console-badge-log {
+  background: rgba(99, 102, 241, 0.2);
+  color: #a5b4fc;
+}
+.dark .sandpack-follows-page-theme .collapsible-console [class*='error'],
+.dark .sandpack-follows-page-theme .collapsible-console [class*='error'] * {
+  color: #f87171 !important;
+}

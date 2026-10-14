@@ -4,9 +4,15 @@
  * A configurable interactive code playground using CodeSandbox's Sandpack.
  * Can be used directly as a React component or mounted by SandpackRenderer
  * into innerHTML-based contexts.
+ *
+ * The slides mount it with files, options and a theme only. The quiz's code
+ * sandboxes also pass children (hooks that read the running sandbox), an
+ * explicit active file and init mode, a read-only flag and a preview that is
+ * mounted only on request; every one of those props defaults to what the
+ * slides have always got.
  */
 
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, type CSSProperties, type ReactNode } from 'react';
 import {
   SandpackProvider,
   SandpackLayout,
@@ -14,7 +20,12 @@ import {
   SandpackPreview,
   useSandpack,
 } from '@codesandbox/sandpack-react';
-import type { SandpackThemeProp, SandpackPredefinedTemplate } from '@codesandbox/sandpack-react';
+import type {
+  SandpackFile,
+  SandpackInitMode,
+  SandpackThemeProp,
+  SandpackPredefinedTemplate,
+} from '@codesandbox/sandpack-react';
 import {
   githubLight,
   nightOwl,
@@ -115,7 +126,7 @@ function FileSyncListener({ onFilesChange, sourceFiles }: FileSyncListenerProps)
   return null;
 }
 
-interface SandpackEmbedOptions {
+export interface SandpackEmbedOptions {
   showTabs?: boolean;
   showLineNumbers?: boolean;
   showConsole?: boolean;
@@ -123,16 +134,61 @@ interface SandpackEmbedOptions {
   visibleFiles?: string[] | null;
 }
 
-interface SandpackEmbedProps {
+/**
+ * A file handed to Sandpack: its contents, or Sandpack's object form
+ * (`{ code, hidden, readOnly, … }`) for a file the editor must not show, such
+ * as a support file the template needs.
+ */
+export type SandpackEmbedFile = string | SandpackFile;
+
+/** The console under the layout (`options.showConsole`). */
+export interface SandpackEmbedConsoleProps {
+  /** Opens expanded. Default false. */
+  defaultExpanded?: boolean;
+  /** Its height when expanded, in pixels. Default 150. */
+  maxHeight?: number;
+  /** Clears its lines when the preview restarts. Default true. */
+  resetOnPreviewRestart?: boolean;
+}
+
+export interface SandpackEmbedProps {
   template?: string;
   theme?: string;
   layout?: string;
-  files?: Record<string, string>;
+  /**
+   * The files. Sandpack resets its own file state (edits included) whenever
+   * this object's identity changes, so a caller that keeps edits across
+   * renders memoizes it.
+   */
+  files?: Record<string, SandpackEmbedFile>;
   options?: SandpackEmbedOptions;
   onFilesChange?: (files: Record<string, string>, baseline: Record<string, string>) => void;
   slideTheme?: string;
   className?: string;
   editorWidthPercentage?: number;
+  /** Rendered inside the SandpackProvider, below the layout: hooks there can read Sandpack. */
+  children?: ReactNode;
+  /**
+   * When Sandpack starts its bundler (Sandpack's own default when absent:
+   * `lazy`). Read once, at mount: changing it later rebuilds the client.
+   */
+  initMode?: SandpackInitMode;
+  /** The file the editor opens on. Default: the first visible file, else the first file. */
+  activeFile?: string;
+  /**
+   * Whether the preview is mounted. Default true (subject to `layout`).
+   * Without a mounted preview no bundler runs; `previewPlaceholder` takes
+   * its place.
+   */
+  showPreview?: boolean;
+  /** Rendered in the preview's place while `showPreview` is false. */
+  previewPlaceholder?: ReactNode;
+  /** Read-only editor. Default: `options.readOnly`. */
+  readOnly?: boolean;
+  /** The layout's height (editor and preview). Default: the layout fills the wrapper. */
+  height?: CSSProperties['height'];
+  /** The console's own settings, when `options.showConsole` is on. */
+  consoleProps?: SandpackEmbedConsoleProps;
 }
 
 /**
@@ -148,14 +204,23 @@ export default function SandpackEmbed({
   slideTheme,
   className = '',
   editorWidthPercentage = 50,
+  children,
+  initMode,
+  activeFile,
+  showPreview: previewWanted = true,
+  previewPlaceholder = null,
+  readOnly: readOnlyProp,
+  height,
+  consoleProps,
 }: SandpackEmbedProps) {
   const {
     showTabs = true,
     showLineNumbers = true,
     showConsole = false,
-    readOnly = false,
+    readOnly: readOnlyOption = false,
     visibleFiles = null, // null means show all files
   } = options;
+  const readOnly = readOnlyProp ?? readOnlyOption;
 
   // Resolve theme - 'auto' picks based on slide theme
   // Returns a theme object from THEME_MAP (or string for 'light'/'dark')
@@ -178,7 +243,7 @@ export default function SandpackEmbed({
         : DEFAULT_FILES[template] || DEFAULT_FILES.vanilla;
 
     // Convert string values to Sandpack file format
-    const formatted: Record<string, { code: string }> = {};
+    const formatted: Record<string, SandpackFile> = {};
     for (const [path, content] of Object.entries(sourceFiles)) {
       // Object-form entries ({ code, hidden, active, … }) go to Sandpack as-is.
       formatted[path] = typeof content === 'string' ? { code: content } : content;
@@ -189,7 +254,15 @@ export default function SandpackEmbed({
   // Determine layout direction
   const isVertical = layout === 'preview-bottom';
   const showEditor = layout !== 'preview-only';
-  const showPreview = layout !== 'editor-only';
+  const hasPreview = layout !== 'editor-only';
+  const showPreview = hasPreview && previewWanted;
+  const paneStyle = (basis: string): CSSProperties => ({
+    flex: 1,
+    minHeight: 0, // Allow flex shrinking
+    flexBasis: basis,
+    minWidth: 0, // Allow shrinking below content size
+  });
+  const previewBasis = isVertical ? '100%' : `${100 - editorWidthPercentage}%`;
 
   return (
     <div className={`sandpack-embed-wrapper ${className}`}>
@@ -198,16 +271,18 @@ export default function SandpackEmbed({
         theme={resolvedTheme}
         files={sandpackFiles}
         options={{
-          activeFile: visibleFiles?.[0] || Object.keys(sandpackFiles)[0],
+          activeFile: activeFile || visibleFiles?.[0] || Object.keys(sandpackFiles)[0],
           visibleFiles: visibleFiles || undefined, // undefined = show all files
           recompileMode: 'delayed',
           recompileDelay: 500,
+          ...(initMode ? { initMode } : {}),
         }}
       >
         <SandpackLayout
           style={{
             flexDirection: isVertical ? 'column' : 'row',
             flexWrap: 'nowrap',
+            ...(height !== undefined ? { height } : {}),
           }}
         >
           {showEditor && (
@@ -230,19 +305,26 @@ export default function SandpackEmbed({
             <SandpackPreview
               showOpenInCodeSandbox={false}
               showRefreshButton
-              style={{
-                flex: 1,
-                minHeight: 0, // Allow flex shrinking
-                flexBasis: isVertical ? '100%' : `${100 - editorWidthPercentage}%`,
-                minWidth: 0, // Allow shrinking below content size
-              }}
+              style={paneStyle(previewBasis)}
             />
           )}
+          {hasPreview && !showPreview && previewPlaceholder && (
+            <div className="sandpack-embed-preview-placeholder" style={paneStyle(previewBasis)}>
+              {previewPlaceholder}
+            </div>
+          )}
         </SandpackLayout>
-        {showConsole && <CollapsibleConsole maxHeight={150} />}
+        {showConsole && (
+          <CollapsibleConsole
+            maxHeight={consoleProps?.maxHeight ?? 150}
+            defaultExpanded={consoleProps?.defaultExpanded ?? false}
+            resetOnPreviewRestart={consoleProps?.resetOnPreviewRestart ?? true}
+          />
+        )}
         {onFilesChange && (
           <FileSyncListener onFilesChange={onFilesChange} sourceFiles={sandpackFiles} />
         )}
+        {children}
       </SandpackProvider>
     </div>
   );

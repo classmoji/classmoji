@@ -1350,3 +1350,117 @@ describe('requestSession refusals', () => {
     expect(unknown.message).toBe("The quiz couldn't start. Please try again.");
   });
 });
+
+describe('QuizTranscript — a code submission (a parts-only student message)', () => {
+  const STARTER = {
+    '/index.js': 'const passed = [];\nconsole.log(passed.length);',
+    '/index.html': '<ul id="passed"></ul>',
+  };
+  const sandboxCard = {
+    ...questionPart,
+    output: {
+      card: {
+        question_text: 'Fix `passed`, then submit your code.',
+        sandbox: { template: 'vanilla', files: STARTER, active_file: '/index.js' },
+      },
+      question_number: 1,
+      total_questions: 8,
+    },
+  };
+  const DATA = {
+    sandbox_id: 'q1-1',
+    files: { ...STARTER, '/index.js': 'const passed = [1, 2];\nconsole.log(passed.length);' },
+    console: [{ method: 'log', text: '2' }],
+    errors: [
+      {
+        kind: 'runtime',
+        title: 'TypeError',
+        message: "Cannot read properties of undefined (reading 'map')",
+        path: '/index.js',
+        line: 2,
+        column: 3,
+      },
+    ],
+    question_number: 1,
+    attempt: 1,
+    base_attempt: null,
+    template: 'vanilla',
+    changed_files: ['/index.js'],
+  };
+  /** The row as admission stores it: the part, then its rendering and status, both hidden. */
+  const stored = msg(
+    'u1',
+    'user',
+    [
+      { type: 'data-code-submission', data: DATA },
+      {
+        type: 'text',
+        text: 'Code submission: question 1, attempt 1 (changes vs the starter code)',
+      },
+      { type: 'text', text: 'CURRENT STATUS: question 1 open' },
+    ],
+    { hiddenPartIndexes: [1, 2] }
+  );
+
+  for (const theme of ['light', 'dark'] as const) {
+    describe(`in the ${theme} theme`, () => {
+      beforeEach(() => {
+        darkMode = theme === 'dark';
+      });
+
+      it.each([
+        ['the student', quizVisibility],
+        ['staff', quizStaffVisibility],
+      ] as const)(
+        'shows %s the submission card, never its rendering for the model',
+        (_who, reg) => {
+          const projected = projectMessage(stored, reg)!;
+          expect(projected.parts).toEqual([{ type: 'data-code-submission', data: DATA }]);
+          const html = renderTranscript([
+            ...EARLIER,
+            msg('a1', 'assistant', [sandboxCard]),
+            projected,
+          ]);
+          expect(html).toContain('data-testid="quiz-sandbox-submission"');
+          expect(html).toContain('Submitted code');
+          expect(html).toContain('· Attempt 1');
+          expect(html).not.toContain('Code submission: question');
+          expect(html).not.toContain('CURRENT STATUS');
+          // The diff against the card's starter, the console and the error.
+          expect(html).toContain('data-diff="-"');
+          expect(html).toContain('const passed = [1, 2];');
+          expect(html).toContain('data-testid="quiz-submission-console"');
+          expect(html).toContain('data-testid="quiz-submission-error"');
+          expect(html).toContain('TypeError · index.js:2');
+          expect(html).toContain('dark:bg-[#0d1117]');
+          // Never wider than the column: no min-w-fit on its bubble.
+          const bubble = html.slice(html.indexOf('data-testid="quiz-user-submission"') - 200);
+          expect(bubble).toContain('min-w-0');
+        }
+      );
+
+      it('renders the same from the raw stored row, its hidden parts left out', () => {
+        const html = renderTranscript([...EARLIER, msg('a1', 'assistant', [sandboxCard]), stored]);
+        expect(html).toContain('data-testid="quiz-sandbox-submission"');
+        expect(html).not.toContain('Code submission: question');
+      });
+
+      it("numbers the browser's own copy (no server fields yet) from the transcript", () => {
+        const optimistic = msg('u1', 'user', [
+          {
+            type: 'data-code-submission',
+            data: { sandbox_id: 'q1-1', files: DATA.files, console: [], errors: [] },
+          },
+        ]);
+        const html = renderTranscript([
+          ...EARLIER,
+          msg('a1', 'assistant', [sandboxCard]),
+          optimistic,
+        ]);
+        expect(html).toContain('· Attempt 1');
+        expect(html).toContain('No output');
+        expect(html).toContain('data-diff="+"');
+      });
+    });
+  }
+});
