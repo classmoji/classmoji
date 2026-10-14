@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Button, Tag } from 'antd';
-import { CaretRightOutlined, LockOutlined, SendOutlined, UndoOutlined } from '@ant-design/icons';
+import {
+  CaretRightOutlined,
+  ExpandAltOutlined,
+  LockOutlined,
+  SendOutlined,
+  ShrinkOutlined,
+  UndoOutlined,
+} from '@ant-design/icons';
 import {
   DEFAULT_CAPTURE_LIMITS,
   SANDBOX_SUPPORT_FILES,
@@ -34,9 +41,20 @@ import {
  *   sandbox frozen in this session gets its bundler started again by
  *   useSandboxCapture).
  * Its files are built once, at mount (the caller keys it by sandbox id): the
- * standing submission's files when it was answered by then, else its seed,
- * plus the template's hidden support file. Frozen with a submission, it
- * shows the submitted files.
+ * standing submission's files when it was answered by then, else the edits
+ * carried from an earlier live instance of the same id (`edits`, below),
+ * else its seed, plus the template's hidden support file. Frozen with a
+ * submission, it shows the submitted files.
+ *
+ * Carried edits: the agent may show a question's card again, and the shared
+ * rule then makes the new instance live (its last), freezing the older one
+ * with whatever it held. While live or locked, a sandbox writes its files to
+ * the transcript's `edits` on every change; a new instance of the same id
+ * that mounts live or locked starts from them, only for the paths its own
+ * seed has. The older copy keeps showing what it showed. `seed` stays the
+ * card's starter (or the hint's seed), so carried edits still count as an
+ * edit for Submit, and Reset to starter still writes the starter. The map
+ * lives as long as the transcript: a reload starts from the seed.
  *
  * Submit is enabled only once the bundler has run the code (`ready`), the
  * files differ from the seed, and the chat can take a message
@@ -44,6 +62,11 @@ import {
  * the code again) and hands the capture to `onSubmit`, which locks the chat
  * while it runs and sends it. A bundler that never loads leaves the line
  * that the student can answer in a message instead.
+ *
+ * Expand: the footer's toggle switches the layout between its usual height
+ * and a tall one (`sandboxHeight`), on any sandbox, frozen included. Only the
+ * layout's height changes, never the provider: edits and a running bundler
+ * survive it. It starts collapsed on every mount.
  *
  * The wrapper is `aria-live="off"`: the transcript is a polite live region,
  * and typing in the editor must not be read out. The footer's lines (the
@@ -63,6 +86,37 @@ export const SUBMISSION_CAPTURE_LIMITS: CaptureLimits = {
 };
 
 export const LOAD_FAILED_LINE = "The code runner didn't load. You can answer in a message instead.";
+export const EXPAND_LABEL = 'Expand';
+export const COLLAPSE_LABEL = 'Collapse';
+
+/**
+ * The layout's height in px: live (or locked) 320 beside the preview, 460 in
+ * the narrow column (editor above preview); frozen, shorter. Expanded, one
+ * tall height for every state: 640, and 920 in the narrow column (the same
+ * 2× of the live height).
+ */
+export function sandboxHeight({
+  mode,
+  narrow,
+  expanded,
+}: {
+  mode: SandboxMode;
+  narrow: boolean;
+  expanded: boolean;
+}): number {
+  if (expanded) return narrow ? 920 : 640;
+  if (narrow) return mode === 'frozen' ? 330 : 460;
+  return mode === 'frozen' ? 230 : 320;
+}
+
+/**
+ * The latest files of each live sandbox, by id, for a later instance of the
+ * same id to start from (see the header). The transcript owns one.
+ */
+export interface SandboxEdits {
+  get(sandboxId: string): Record<string, string> | undefined;
+  set(sandboxId: string, files: Record<string, string>): void;
+}
 
 /** What the live sandbox's Submit does: capture, then send. Returns a line to show, or null. */
 export type SandboxSubmit = (
@@ -93,6 +147,11 @@ export interface QuizSandboxProps {
   isDarkMode: boolean;
   /** Narrow screens: editor above preview, at the column's full width. */
   narrow?: boolean;
+  /**
+   * The transcript's carried edits: written while live or locked, read once
+   * at mount by an instance that mounts live or locked. Absent, nothing carries.
+   */
+  edits?: SandboxEdits | null;
 }
 
 /** Scrolls the live sandbox into view. */
@@ -116,16 +175,19 @@ export default function QuizSandbox({
   liveElsewhere = false,
   isDarkMode,
   narrow = false,
+  edits = null,
 }: QuizSandboxProps) {
   // Built once: a new object would reset Sandpack, edits and all.
   const [files] = useState(() => ({
-    ...(submitted?.files ?? seed),
+    ...(submitted?.files ??
+      carriedOnto(seed, mode === 'frozen' ? undefined : edits?.get(sandboxId))),
     ...(SANDBOX_SUPPORT_FILES[template] ?? {}),
   }));
   const [paths] = useState(() => Object.keys(seed));
   const [running, setRunning] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const previewMounted = mode !== 'frozen' || running;
-  const height = narrow ? (mode === 'frozen' ? 330 : 460) : mode === 'frozen' ? 230 : 320;
+  const height = sandboxHeight({ mode, narrow, expanded });
 
   const placeholder = (
     <div
@@ -202,6 +264,9 @@ export default function QuizSandbox({
           canSubmit={canSubmit}
           onSubmit={onSubmit}
           liveElsewhere={liveElsewhere}
+          edits={edits}
+          expanded={expanded}
+          onToggleExpand={() => setExpanded(e => !e)}
         />
       </SandpackEmbed>
     </div>
@@ -221,6 +286,37 @@ interface FooterProps {
   canSubmit: boolean;
   onSubmit: SandboxSubmit | null;
   liveElsewhere: boolean;
+  edits: SandboxEdits | null;
+  expanded: boolean;
+  onToggleExpand: () => void;
+}
+
+/** The seed with the carried files for its own paths over it; the seed when nothing carried. */
+function carriedOnto(
+  seed: Record<string, string>,
+  carried: Record<string, string> | undefined
+): Record<string, string> {
+  if (!carried) return seed;
+  const out = { ...seed };
+  for (const path of Object.keys(seed)) {
+    if (typeof carried[path] === 'string') out[path] = carried[path];
+  }
+  return out;
+}
+
+/** The Expand / Collapse toggle: only the layout's height changes. */
+function ExpandToggle({ expanded, onToggle }: { expanded: boolean; onToggle: () => void }) {
+  return (
+    <Button
+      size="small"
+      icon={expanded ? <ShrinkOutlined /> : <ExpandAltOutlined />}
+      onClick={onToggle}
+      data-testid="quiz-sandbox-expand"
+      data-expanded={expanded ? 'true' : 'false'}
+    >
+      {expanded ? COLLAPSE_LABEL : EXPAND_LABEL}
+    </Button>
+  );
 }
 
 /** Under the editor, inside the provider: the attempt line and the controls. */
@@ -237,6 +333,9 @@ function SandboxFooter({
   canSubmit,
   onSubmit,
   liveElsewhere,
+  edits,
+  expanded,
+  onToggleExpand,
 }: FooterProps) {
   const { capture, ready, loadFailed, files, updateFiles } = useSandboxCapture({
     enabled: previewMounted,
@@ -273,6 +372,20 @@ function SandboxFooter({
     }
   }, [codeNow]);
 
+  // Live or locked: the latest files, for a later instance of this id (the
+  // card shown again) to start from. A frozen copy never writes: it only
+  // shows what it showed.
+  useEffect(() => {
+    if (!edits || mode === 'frozen') return;
+    const codes = JSON.parse(codeNow) as (string | null)[];
+    const carried: Record<string, string> = {};
+    paths.forEach((path, i) => {
+      const code = codes[i];
+      if (typeof code === 'string') carried[path] = code;
+    });
+    edits.set(sandboxId, carried);
+  }, [edits, mode, sandboxId, paths, codeNow]);
+
   if (mode === 'frozen') {
     return (
       <div className="mt-3 flex flex-wrap items-center gap-2" data-testid="quiz-sandbox-frozen">
@@ -299,6 +412,9 @@ function SandboxFooter({
             Continue in the sandbox below
           </Button>
         ) : null}
+        <div className="ml-auto">
+          <ExpandToggle expanded={expanded} onToggle={onToggleExpand} />
+        </div>
       </div>
     );
   }
@@ -352,6 +468,7 @@ function SandboxFooter({
       >
         <span className="text-xs text-gray-500 dark:text-gray-400">{label}</span>
         <div className="ml-auto flex flex-wrap justify-end gap-2">
+          <ExpandToggle expanded={expanded} onToggle={onToggleExpand} />
           <Button
             size="small"
             icon={<UndoOutlined />}
