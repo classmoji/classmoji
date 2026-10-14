@@ -18,7 +18,7 @@ export default async ({ command, mode }) => {
         await import('@sentry/react-router')
       ).sentryReactRouter(
         {
-          org: 'classmoji',
+          org: 'dali-lab',
           // One project for webapp, pages and slides; debug ids tell the bundles apart.
           project: 'classmoji',
           authToken: sentryAuthToken,
