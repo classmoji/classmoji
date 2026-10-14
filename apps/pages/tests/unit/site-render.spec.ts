@@ -241,6 +241,50 @@ test.describe('editor affordances are stripped', () => {
     expect(html).toContain('npm run dev');
   });
 
+  test('a long collapsible code block is drawn collapsed, with its bar', async () => {
+    const lines = (n: number) => Array.from({ length: n }, (_, i) => `line ${i + 1}`).join('\n');
+    const block = (id: string, n: number, props: Record<string, unknown>) => ({
+      id,
+      type: 'codeBlock',
+      props: { language: 'text', ...props },
+      content: text(lines(n)),
+    });
+    const { html } = await renderSitePage({
+      blocks: [
+        block('long', 16, { collapsible: true }),
+        block('short', 15, { collapsible: true }),
+        block('off', 40, {}),
+      ],
+      resolveLink,
+    });
+    const doc = parse(html);
+    const [long, short, off] = [...doc.querySelectorAll('[data-content-type="codeBlock"]')];
+
+    const pre = long.querySelector('pre')!;
+    const bar = long.querySelector(':scope > div > button.bn-code-expand')!;
+    expect(long.getAttribute('data-collapsible')).toBe('true');
+    // Clipped by CSS from the first paint: no script, no layout shift.
+    expect(pre.getAttribute('data-collapse')).toBe('collapsed');
+    expect(bar.getAttribute('type')).toBe('button');
+    expect(bar.getAttribute('aria-expanded')).toBe('false');
+    expect(bar.getAttribute('aria-controls')).toBe(pre.id);
+    expect(pre.id).toBe('bn-code-long');
+    expect(bar.querySelector('.bn-code-expand-more')!.textContent).toBe('Show all 16 lines');
+    expect(bar.querySelector('.bn-code-expand-less')!.textContent).toBe('Show less');
+    expect(long.querySelector(':scope > div > .bn-code-fade')).not.toBeNull();
+    // Every line is still in the page (find-in-page, Copy), and none of the bar.
+    expect(pre.textContent).toBe(lines(16));
+
+    // Up to 15 lines it is drawn in full; without the prop it is as before.
+    for (const block of [short, off]) {
+      expect(block.querySelector('.bn-code-expand')).toBeNull();
+      expect(block.querySelector('.bn-code-fade')).toBeNull();
+      expect(block.querySelector('pre')!.hasAttribute('data-collapse')).toBe(false);
+      expect(block.querySelector('pre')!.hasAttribute('id')).toBe(false);
+    }
+    expect(off.hasAttribute('data-collapsible')).toBe(false);
+  });
+
   test('the only inputs anywhere are disabled checkboxes', async () => {
     const blocks = Object.values(SAMPLES).filter(Boolean);
     const { html } = await renderSitePage({ blocks, resolveLink });
