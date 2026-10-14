@@ -85,9 +85,17 @@ jobs:
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy webapp
-        run: flyctl deploy --config apps/webapp/fly.toml --dockerfile apps/webapp/Dockerfile --remote-only
+        run: |
+          # Source maps go to Sentry only when the secret exists; without it
+          # the image builds exactly as before.
+          set --
+          if [ -n "$SENTRY_AUTH_TOKEN" ]; then
+            set -- --build-secret "SENTRY_AUTH_TOKEN=$SENTRY_AUTH_TOKEN"
+          fi
+          flyctl deploy --config apps/webapp/fly.toml --dockerfile apps/webapp/Dockerfile --remote-only "$@"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
 
   deploy-ai-agent:
     needs: [changes, deploy-webapp]
@@ -222,9 +230,17 @@ jobs:
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy slides
-        run: flyctl deploy --config apps/slides/fly.toml --dockerfile apps/slides/Dockerfile --remote-only
+        run: |
+          # Source maps go to Sentry only when the secret exists; without it
+          # the image builds exactly as before.
+          set --
+          if [ -n "$SENTRY_AUTH_TOKEN" ]; then
+            set -- --build-secret "SENTRY_AUTH_TOKEN=$SENTRY_AUTH_TOKEN"
+          fi
+          flyctl deploy --config apps/slides/fly.toml --dockerfile apps/slides/Dockerfile --remote-only "$@"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
 
   deploy-pages:
     needs: [changes, deploy-webapp]
@@ -242,9 +258,17 @@ jobs:
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy pages
-        run: flyctl deploy --config apps/pages/fly.toml --dockerfile apps/pages/Dockerfile --remote-only
+        run: |
+          # Source maps go to Sentry only when the secret exists; without it
+          # the image builds exactly as before.
+          set --
+          if [ -n "$SENTRY_AUTH_TOKEN" ]; then
+            set -- --build-secret "SENTRY_AUTH_TOKEN=$SENTRY_AUTH_TOKEN"
+          fi
+          flyctl deploy --config apps/pages/fly.toml --dockerfile apps/pages/Dockerfile --remote-only "$@"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
 
   deploy-admin:
     needs: [changes, deploy-webapp]

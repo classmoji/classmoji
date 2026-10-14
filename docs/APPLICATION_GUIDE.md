@@ -1431,7 +1431,7 @@ Secrets: Environment variables
 - [ ] Enable HTTPS everywhere
 - [ ] Configure CORS for production domains
 - [ ] Set up database backups
-- [ ] Configure monitoring (Sentry, etc.)
+- [ ] Set `SENTRY_DSN` in Infisical (`prod`/`sta`; synced to the webapp, pages and slides Fly apps) for browser error tracking
 - [ ] Test webhook delivery
 - [ ] Verify GitHub OAuth redirect URLs
 - [ ] Test quiz agent WebSocket connection
@@ -1444,7 +1444,7 @@ Secrets: Environment variables
 - Structured logging for production
 
 **Error Tracking**
-- Consider Sentry integration (future)
+- Sentry for browser errors in the webapp, pages and slides (errors + 5% tracing; user id only, no replay); see AGENTS.md
 - Audit logs for security events
 
 **Performance Monitoring**

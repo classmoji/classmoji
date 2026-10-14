@@ -20,7 +20,8 @@
     "./quiz-agent/copy": "./src/quizAgent/copy.ts",
     "./quiz-excluded-paths": "./src/quizExcludedPaths.ts",
     "./agents/projection": "./src/agents/projection.ts",
-    "./ai-models": "./src/aiModels.ts"
+    "./ai-models": "./src/aiModels.ts",
+    "./sentry": "./src/sentry.ts"
   },
   "dependencies": {
     "ai": "7.0.122",

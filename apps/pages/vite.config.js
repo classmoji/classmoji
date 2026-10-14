@@ -3,8 +3,41 @@ import { defineConfig } from 'vite';
 import tsconfigPaths from 'vite-tsconfig-paths';
 import tailwindcss from '@tailwindcss/vite';
 
-export default () => {
+export default async ({ command, mode }) => {
+  // Source maps for Sentry (error stack traces), only when SENTRY_AUTH_TOKEN is
+  // set (CI deploys). Without it nothing here runs and the build is unchanged.
+  // With it, maps are generated hidden, uploaded by `buildEnd` in
+  // react-router.config.js and then deleted, so they are never served.
+  const sentryAuthToken = process.env.SENTRY_AUTH_TOKEN?.trim();
+  const uploadSourceMaps = command === 'build' && Boolean(sentryAuthToken);
+  const sentryPlugins = uploadSourceMaps
+    ? await (
+        await import('@sentry/react-router')
+      ).sentryReactRouter(
+        {
+          org: 'dali-lab',
+          // One project for webapp, pages and slides; debug ids tell the bundles apart.
+          project: 'classmoji',
+          authToken: sentryAuthToken,
+          telemetry: false,
+          // A fixed label for the uploaded artifacts (debug ids do the
+          // matching). Nothing is injected into the bundles, so their content
+          // and file names do not change from build to build because of it.
+          release: {
+            name: 'classmoji-sourcemaps',
+            inject: false,
+            create: false,
+            finalize: false,
+            setCommits: false,
+          },
+        },
+        { command, mode }
+      )
+    : [];
+
   return defineConfig({
+    // Strips the Sentry SDK's debug logging from the client bundle.
+    define: { __SENTRY_DEBUG__: false },
     ssr: {
       // BlockNote + Mantine have CSS imports that Vite must process during SSR
       noExternal: [/^@blocknote\//, /^@mantine\//],
@@ -46,7 +79,7 @@ export default () => {
         '@octokit/auth-app',
       ],
     },
-    plugins: [tailwindcss(), reactRouter(), tsconfigPaths()],
+    plugins: [tailwindcss(), reactRouter(), tsconfigPaths(), ...sentryPlugins],
     server: {
       port: process.env.PORT ? Number(process.env.PORT) : 7100,
       host: '0.0.0.0',

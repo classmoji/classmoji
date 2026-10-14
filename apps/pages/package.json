@@ -40,6 +40,7 @@
     "@react-router/express": "^7.11.0",
     "@react-router/node": "^7.9.2",
     "@react-router/serve": "^7.9.2",
+    "@sentry/react-router": "^10.76.2",
     "@tabler/icons-react": "^2.47.0",
     "compression": "^1.8.1",
     "dayjs": "^1.11.13",

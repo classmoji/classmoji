@@ -1,6 +1,7 @@
 import { lazy, Suspense, type ComponentProps } from 'react';
 import { Button, Result, Skeleton } from 'antd';
 import { ErrorBoundary } from 'react-error-boundary';
+import { captureBoundaryError } from '~/utils/sentry.client';
 import type { QuizUIMessage } from '@classmoji/utils/quiz-agent';
 import QuizAttemptInterface from './QuizAttemptInterface';
 import type { QuizChatProps } from './QuizChat';
@@ -76,6 +77,7 @@ function QuizAttemptView(props: QuizAttemptViewProps) {
       <ErrorBoundary
         key={String((attempt as { id?: unknown } | null)?.id ?? '')}
         fallback={<QuizChatLoadFailed />}
+        onError={captureBoundaryError}
       >
         <Suspense fallback={<QuizChatLoading />}>
           <QuizChat

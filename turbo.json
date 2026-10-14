@@ -288,6 +288,11 @@
     "INFISICAL_CLIENT_ID",
     "INFISICAL_CLIENT_SECRET",
     "INFISICAL_PROJECT_ID",
-    "INFISICAL_HOST"
-  ]
+    "INFISICAL_HOST",
+    "SENTRY_DSN"
+  ],
+  // Reaches the app builds (source map upload to Sentry) without being hashed
+  // into the cache key: it is a secret, and it changes nothing in the output
+  // except that maps are uploaded and then deleted.
+  "globalPassThroughEnv": ["SENTRY_AUTH_TOKEN"]
 }
