@@ -9,6 +9,7 @@ import {
   useLocation,
   redirect,
   useRouteError,
+  useRouteLoaderData,
   isRouteErrorResponse,
   type ShouldRevalidateFunction,
 } from 'react-router';
@@ -21,6 +22,12 @@ import { IconMoodSad } from '@tabler/icons-react';
 
 import { ClassmojiService } from '@classmoji/services';
 import { gitUsername, withLogin } from '@classmoji/utils';
+import {
+  SENTRY_CONFIG_ELEMENT_ID,
+  sentryBrowserConfig,
+  serializeSentryConfig,
+  type SentryBrowserConfig,
+} from '@classmoji/utils/sentry';
 import { CalloutProvider, CalloutSlot } from '@classmoji/ui-components';
 import OperationProgress from '~/components/features/operations/OperationProgress';
 import { auth, getAuthSession } from '@classmoji/auth/server';
@@ -43,6 +50,7 @@ import { SyllabusBotRoot } from './components/features/syllabus-bot';
 import { OnboardingTour, InClassroomTour } from './components/features/onboarding';
 import ImpersonationBanner from './components/features/admin/ImpersonationBanner';
 import NavigationProgress from './components/layout/NavigationProgress';
+import { captureRouteError, setSentryUser } from '~/utils/sentry.client';
 
 import relativeTime from 'dayjs/plugin/relativeTime';
 import isSameOrBefore from 'dayjs/plugin/isSameOrBefore';
@@ -159,7 +167,7 @@ export const shouldRevalidate: ShouldRevalidateFunction = ({
   classroomSlugOf(currentUrl.pathname) !== classroomSlugOf(nextUrl.pathname) ||
   defaultShouldRevalidate;
 
-export const loader = async ({ request }: Route.LoaderArgs) => {
+const loadRoot = async ({ request }: Route.LoaderArgs) => {
   const url = new URL(request.url);
 
   // Redirect to setup wizard if requested
@@ -304,6 +312,27 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   };
 };
 
+export const loader = async (args: Route.LoaderArgs) => {
+  const result = await loadRoot(args);
+  if (result instanceof Response) return result;
+  // Browser error tracking (DSN + environment), read from the server's env at
+  // request time: runtime config, never baked into the bundle.
+  return { ...result, sentry: sentryBrowserConfig(process.env) };
+};
+
+/**
+ * The browser's Sentry settings as a JSON data block, read by entry.client.tsx
+ * before hydration. Rendered by both documents (App and the ErrorBoundary).
+ */
+const SentryConfigScript = ({ config }: { config: SentryBrowserConfig | null | undefined }) =>
+  config ? (
+    <script
+      type="application/json"
+      id={SENTRY_CONFIG_ELEMENT_ID}
+      dangerouslySetInnerHTML={{ __html: serializeSentryConfig(config) }}
+    />
+  ) : null;
+
 // Provides FetcherContext; must live inside CalloutProvider since
 // useNotifiedFetcher reads useCallout().
 const FetcherProvider = ({ children }: { children: React.ReactNode }) => {
@@ -319,7 +348,7 @@ const FetcherProvider = ({ children }: { children: React.ReactNode }) => {
 };
 
 const App = ({ loaderData }: Route.ComponentProps) => {
-  const { user, session, impersonationReturnUrl, impersonationCookieDomain } = loaderData;
+  const { user, session, impersonationReturnUrl, impersonationCookieDomain, sentry } = loaderData;
   const { isDarkMode, accent } = useDarkMode();
   const { pathname } = useLocation();
   const {
@@ -380,6 +409,12 @@ const App = ({ loaderData }: Route.ComponentProps) => {
     }
   }, [user, setUser]);
 
+  const userId = user?.id;
+  const impersonating = !!session?.session?.impersonatedBy;
+  useEffect(() => {
+    setSentryUser(userId, impersonating);
+  }, [userId, impersonating]);
+
   // The classroom's tier, for the admin sidebar's Pro-only entries (the
   // /teacher and /assistant layouts pass their own flag instead). The endpoint
   // admits OWNER alone, so only an owner of THIS classroom asks. Anyone else —
@@ -418,6 +453,7 @@ const App = ({ loaderData }: Route.ComponentProps) => {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <Meta />
         <Links />
+        <SentryConfigScript config={sentry} />
         <script
           dangerouslySetInnerHTML={{
             __html: `
@@ -542,8 +578,17 @@ const App = ({ loaderData }: Route.ComponentProps) => {
 // Root-level ErrorBoundary for loader/action errors
 export function ErrorBoundary() {
   const error = useRouteError();
+  // Present unless the root loader itself threw; carries the Sentry settings.
+  const rootData = useRouteLoaderData<typeof loader>('root');
   const isDevelopment = import.meta.env.MODE === 'development';
   const [isDarkMode, setIsDarkMode] = React.useState(false);
+
+  const userId = rootData?.user?.id;
+  const impersonating = !!rootData?.session?.session?.impersonatedBy;
+  React.useEffect(() => {
+    setSentryUser(userId, impersonating);
+    captureRouteError(error);
+  }, [error, userId, impersonating]);
 
   // Synchronous error message extraction
   // isRouteErrorResponse handles Response objects thrown from loaders/actions
@@ -580,6 +625,7 @@ export function ErrorBoundary() {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <Meta />
         <Links />
+        <SentryConfigScript config={rootData?.sentry} />
         <script
           dangerouslySetInnerHTML={{
             __html: `

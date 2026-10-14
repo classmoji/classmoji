@@ -1,6 +1,7 @@
 import { Result, Button } from 'antd';
 import { IconAlertTriangle } from '@tabler/icons-react';
 import { ErrorBoundary as ReactErrorBoundary, type FallbackProps } from 'react-error-boundary';
+import { captureBoundaryError } from '~/utils/sentry.client';
 
 const getErrorMessage = (error: unknown) => {
   return error instanceof Error ? error.message : 'Unknown error';
@@ -68,6 +69,7 @@ export default function ErrorBoundary({ children }: { children: React.ReactNode 
         if (import.meta.env.MODE === 'development') {
           console.error('Error caught by boundary:', error, errorInfo);
         }
+        captureBoundaryError(error, errorInfo);
       }}
       onReset={() => {
         // Optional: Clear any error state in your app
