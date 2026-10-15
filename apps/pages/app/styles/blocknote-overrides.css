@@ -264,6 +264,40 @@
   padding-top: 0;
 }
 
+/* Room around code and terminal blocks. BlockNote gives them none, so the
+   dark card touched the text above and below it.
+
+   Same mechanics as the heading gap above: padding on `.bn-block`, the box
+   the side menu and the section fade go by. Padding does not collapse, so the
+   gap below a card is the next block's top padding, not the card's own bottom
+   padding: two cards in a row get one gap, not two.
+
+   - A heading after a card keeps its own, larger gap.
+   - A card right after a heading with no children of its own keeps only the
+     heading's 6px, as a heading under a heading does. */
+.bn-block-outer:not(:first-child)
+  > .bn-block:has(
+    > .bn-block-content:is([data-content-type="codeBlock"], [data-content-type="terminal"])
+  ),
+.bn-block-outer:has(
+    > .bn-block
+      > .bn-block-content:is([data-content-type="codeBlock"], [data-content-type="terminal"])
+  )
+  + .bn-block-outer
+  > .bn-block:not(:has(> .bn-block-content[data-content-type="heading"])) {
+  padding-top: 1em;
+}
+
+.bn-block-outer:has(> .bn-block > .bn-block-content[data-content-type="heading"]):not(
+    :has(> .bn-block > .bn-block-group)
+  )
+  + .bn-block-outer
+  > .bn-block:has(
+    > .bn-block-content:is([data-content-type="codeBlock"], [data-content-type="terminal"])
+  ) {
+  padding-top: 0;
+}
+
 /* Apply background colors from data-background-color attribute */
 /* BlockNote paints only its nine color names. Pages also hold raw values
    (e.g. "rgb(251, 243, 219)" from pasted HTML) that paint nothing, so padding

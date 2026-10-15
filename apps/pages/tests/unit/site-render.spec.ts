@@ -1394,4 +1394,63 @@ test.describe('heading spacing', () => {
     );
     expect(offsets).toEqual([0, 0]);
   });
+
+  /* Room around code and terminal blocks: BlockNote gives them none, so the
+     dark card touched the paragraph above and below it. */
+  const code = (source: string) => ({
+    type: 'codeBlock',
+    props: { language: 'typescript' },
+    content: text(source),
+  });
+  const terminal = (command: string) => ({ type: 'terminal', props: { code: command } });
+
+  /** The gaps alone; a card's text also holds its language or title bar. */
+  const spacing = async (page: Page) => (await gaps(page)).map(([, gap]) => gap);
+
+  test('a code or terminal block gets room above and below it', async ({ page }) => {
+    await load(page, [
+      paragraph('a'),
+      code('const a = 1;'),
+      paragraph('b'),
+      terminal('npm run dev'),
+      paragraph('c'),
+    ]);
+
+    // 16px (1em of the 16px body) on each side of each card.
+    expect(await spacing(page)).toEqual([0, 16, 16, 16, 16]);
+  });
+
+  test('two cards in a row share one gap; a heading keeps its own', async ({ page }) => {
+    await load(page, [code('one'), terminal('two'), heading(2, 'next', 'blue'), paragraph('x')]);
+
+    // No gap on the first block, one 16px gap between the cards (padding does
+    // not collapse, so this is not 32), and the H2's 28px after a card.
+    expect(await spacing(page)).toEqual([0, 16, 28, 6]);
+  });
+
+  test('a card under a heading stays with it', async ({ page }) => {
+    await load(page, [paragraph('p'), heading(3, 'Example', 'gray'), code('const a = 1;')]);
+
+    expect(await spacing(page)).toEqual([0, 20, 6]);
+  });
+
+  test('the space around a card belongs to the card', async ({ page }) => {
+    // As with headings: space outside `.bn-block` hides the drag handle and
+    // dims a ticked section while the pointer crosses it.
+    await load(page, [paragraph('p'), code('const a = 1;'), paragraph('q')]);
+
+    const owners = await page.evaluate(() => {
+      const card = document.querySelector('.bn-block-content[data-content-type="codeBlock"]')!;
+      const { left, top, bottom } = card.getBoundingClientRect();
+      const ownerAt = (y: number) =>
+        document
+          .elementFromPoint(left + 20, y)
+          ?.closest('.bn-block')
+          ?.querySelector(':scope > .bn-block-content')
+          ?.getAttribute('data-content-type');
+      return [ownerAt(top - 8), ownerAt(bottom + 8)];
+    });
+    // Above the card is its own padding; below it is the next paragraph's.
+    expect(owners).toEqual(['codeBlock', 'paragraph']);
+  });
 });
