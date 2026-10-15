@@ -3,18 +3,24 @@ import { gitContextFor } from '~/utils/gitWeb';
 import { Await } from 'react-router';
 import { Skeleton } from 'antd';
 import { namedAction } from 'remix-utils/named-action';
-import { ClassmojiService, type StudentCourseworkRow } from '@classmoji/services';
+import {
+  ClassmojiService,
+  type LinkedMaterial,
+  type StudentCourseworkRow,
+} from '@classmoji/services';
 import type { Route } from './+types/route';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
+import { courseworkMaterials } from '~/utils/courseworkMaterials.server';
 import ProgressSummaryCard, { type BucketCounts } from './ProgressSummaryCard';
-import AssignmentsTabsCard from './AssignmentsTabsCard';
+import AssignmentsTabsCard, { type AssignmentRow } from './AssignmentsTabsCard';
 
 interface AssignmentsData {
   classroomTitle: string;
   classroomSubtitle: string | null;
   counts: BucketCounts;
-  rows: StudentCourseworkRow[];
+  /** Every row, each with the published pages and decks linked to its assignment. */
+  rows: AssignmentRow[];
   balance: number;
 }
 
@@ -32,7 +38,8 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const gitOrgLogin = classroom.git_organization?.login ?? null;
 
   const dataPromise = (async (): Promise<AssignmentsData> => {
-    const [rows, balance] = await Promise.all([
+    const context = { classroomId: classroom.id, userId };
+    const [coursework, balance] = await Promise.all([
       // Every assignment the student can see, every type. Where quizzes are
       // hidden (not Pro, or switched off) no quiz row is built. The quiz answer
       // and the assignment listing are read together. A failed read is logged
@@ -54,15 +61,32 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
           })
         )
         .catch((error): StudentCourseworkRow[] => {
-          console.error(
-            '[student assignments] coursework read failed',
-            { classroomId: classroom.id, userId },
-            error
-          );
+          console.error('[student assignments] coursework read failed', context, error);
           return [];
         }),
       ClassmojiService.token.getBalance(classroom.id, userId).catch(() => 0),
     ]);
+
+    // The pages and decks linked to each row's assignment, read for the rows
+    // just built here and nothing else. Published ones only, whoever is
+    // looking: staff opening this page see what their students see, drafts
+    // left out (the Modules page is where staff see those). A failed read is
+    // logged and leaves the rows without them.
+    const materials = coursework.length
+      ? await ClassmojiService.studentCoursework
+          .linkedMaterials(
+            classroom.id,
+            coursework.map(row => row.assignmentId)
+          )
+          .catch((error): Map<string, LinkedMaterial[]> => {
+            console.error('[student assignments] linked materials failed', context, error);
+            return new Map();
+          })
+      : new Map<string, LinkedMaterial[]>();
+    const rows: AssignmentRow[] = coursework.map(row => ({
+      ...row,
+      materials: courseworkMaterials(materials.get(row.assignmentId), classSlug),
+    }));
 
     // An untracked row (a PUBLIC form, open or closed) is neither owed nor
     // done by this student, so it does not count toward their progress.

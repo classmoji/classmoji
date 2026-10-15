@@ -629,6 +629,72 @@ export const listForStudent = async ({
   return rows.sort(compareRows);
 };
 
+/** A page or slide deck linked to an assignment, as a row lists it. */
+export interface LinkedMaterial {
+  kind: 'PAGE' | 'SLIDE';
+  id: string;
+  title: string;
+}
+
+/**
+ * The pages and slide decks linked to each of these assignments, keyed by
+ * assignment id: pages first, then decks, each in their hand-arranged order
+ * (the order the Modules page lists them in under an assignment). An
+ * assignment with none has no entry.
+ *
+ * Published ones only, for every viewer. This is the dashboard's read, and the
+ * dashboard is what the student sees: staff previewing it get the student's
+ * view, unlike the Modules page, which shows staff the drafts too.
+ *
+ * The assignment ids are the caller's own, read for this classroom, but the
+ * page or deck must belong to it as well: a link never surfaces another
+ * classroom's material, whatever row it hangs off.
+ */
+export const linkedMaterials = async (
+  classroomId: string,
+  assignmentIds: string[]
+): Promise<Map<string, LinkedMaterial[]>> => {
+  const byAssignment = new Map<string, LinkedMaterial[]>();
+  if (assignmentIds.length === 0) return byAssignment;
+
+  const order = [{ order: 'asc' as const }, { created_at: 'asc' as const }];
+  const [pageLinks, slideLinks] = await Promise.all([
+    getPrisma().pageLink.findMany({
+      where: {
+        assignment_id: { in: assignmentIds },
+        page: { is_draft: false, classroom_id: classroomId },
+      },
+      select: { assignment_id: true, page: { select: { id: true, title: true } } },
+      orderBy: order,
+    }),
+    getPrisma().slideLink.findMany({
+      where: {
+        assignment_id: { in: assignmentIds },
+        slide: { is_draft: false, classroom_id: classroomId },
+      },
+      select: { assignment_id: true, slide: { select: { id: true, title: true } } },
+      orderBy: order,
+    }),
+  ]);
+
+  const add = (assignmentId: string | null, material: LinkedMaterial) => {
+    if (!assignmentId) return;
+    const list = byAssignment.get(assignmentId);
+    // The link tables' unique key treats a NULL repository as distinct, so the
+    // same page can be linked to an assignment twice; it is listed once.
+    if (list?.some(m => m.kind === material.kind && m.id === material.id)) return;
+    if (list) list.push(material);
+    else byAssignment.set(assignmentId, [material]);
+  };
+  for (const link of pageLinks) {
+    add(link.assignment_id, { kind: 'PAGE', id: link.page.id, title: link.page.title });
+  }
+  for (const link of slideLinks) {
+    add(link.assignment_id, { kind: 'SLIDE', id: link.slide.id, title: link.slide.title });
+  }
+  return byAssignment;
+};
+
 /**
  * The dashboard's Up next: what the student still owes, soonest due first
  * (overdue first, then by due date), never a done row nor an untracked one

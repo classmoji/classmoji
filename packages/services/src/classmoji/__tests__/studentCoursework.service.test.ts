@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => ({
   formFindMany: vi.fn(),
   settingsFindUnique: vi.fn(),
   netQuizExtensionHours: vi.fn(),
+  pageLinkFindMany: vi.fn(),
+  slideLinkFindMany: vi.fn(),
 }));
 
 vi.mock('@classmoji/database', () => ({
@@ -26,6 +28,8 @@ vi.mock('@classmoji/database', () => ({
     quiz: { findMany: (...a: unknown[]) => mocks.quizFindMany(...a) },
     form: { findMany: (...a: unknown[]) => mocks.formFindMany(...a) },
     classroomSettings: { findUnique: (...a: unknown[]) => mocks.settingsFindUnique(...a) },
+    pageLink: { findMany: (...a: unknown[]) => mocks.pageLinkFindMany(...a) },
+    slideLink: { findMany: (...a: unknown[]) => mocks.slideLinkFindMany(...a) },
   }),
 }));
 vi.mock('../helper.service.ts', () => ({
@@ -42,7 +46,7 @@ vi.mock('../formResponse.service.ts', () => ({
 }));
 vi.mock('../../emails/escape.ts', () => ({ pagesUrl: () => 'https://pages.test' }));
 
-const { listForStudent, upNext } = await import('../studentCoursework.service.ts');
+const { linkedMaterials, listForStudent, upNext } = await import('../studentCoursework.service.ts');
 
 const NOW = new Date('2026-10-01T12:00:00Z');
 const HOUR = 3_600_000;
@@ -1090,5 +1094,83 @@ describe('upNext', () => {
         .map(r => r.assignmentId)
         .at(-1)
     ).toBe('undated');
+  });
+});
+
+describe('linkedMaterials — the pages and decks linked to Up next rows', () => {
+  beforeEach(() => {
+    mocks.pageLinkFindMany.mockReset().mockResolvedValue([]);
+    mocks.slideLinkFindMany.mockReset().mockResolvedValue([]);
+  });
+
+  it('reads published pages and decks of this classroom only, in their arranged order', async () => {
+    await linkedMaterials('class-x', ['a-1', 'a-2']);
+
+    const order = [{ order: 'asc' }, { created_at: 'asc' }];
+    expect(mocks.pageLinkFindMany).toHaveBeenCalledWith({
+      where: {
+        assignment_id: { in: ['a-1', 'a-2'] },
+        page: { is_draft: false, classroom_id: 'class-x' },
+      },
+      select: { assignment_id: true, page: { select: { id: true, title: true } } },
+      orderBy: order,
+    });
+    expect(mocks.slideLinkFindMany).toHaveBeenCalledWith({
+      where: {
+        assignment_id: { in: ['a-1', 'a-2'] },
+        slide: { is_draft: false, classroom_id: 'class-x' },
+      },
+      select: { assignment_id: true, slide: { select: { id: true, title: true } } },
+      orderBy: order,
+    });
+  });
+
+  it("scopes each read to the classroom it is asked for, never another's", async () => {
+    await linkedMaterials('class-y', ['a-1']);
+
+    for (const mock of [mocks.pageLinkFindMany, mocks.slideLinkFindMany]) {
+      const { where } = mock.mock.calls[0][0] as {
+        where: { page?: { classroom_id: string }; slide?: { classroom_id: string } };
+      };
+      expect((where.page ?? where.slide)?.classroom_id).toBe('class-y');
+    }
+  });
+
+  it('groups them by assignment, pages before decks', async () => {
+    mocks.pageLinkFindMany.mockResolvedValue([
+      { assignment_id: 'a-1', page: { id: 'p-2', title: 'Setup guide' } },
+      { assignment_id: 'a-2', page: { id: 'p-9', title: 'Rubric' } },
+      { assignment_id: 'a-1', page: { id: 'p-1', title: 'Spec' } },
+    ]);
+    mocks.slideLinkFindMany.mockResolvedValue([
+      { assignment_id: 'a-1', slide: { id: 's-1', title: 'Lecture 3' } },
+    ]);
+
+    const result = await linkedMaterials('class-x', ['a-1', 'a-2', 'a-3']);
+
+    expect(result.get('a-1')).toEqual([
+      { kind: 'PAGE', id: 'p-2', title: 'Setup guide' },
+      { kind: 'PAGE', id: 'p-1', title: 'Spec' },
+      { kind: 'SLIDE', id: 's-1', title: 'Lecture 3' },
+    ]);
+    expect(result.get('a-2')).toEqual([{ kind: 'PAGE', id: 'p-9', title: 'Rubric' }]);
+    expect(result.has('a-3')).toBe(false);
+  });
+
+  it('reads nothing for no assignments', async () => {
+    const result = await linkedMaterials('class-x', []);
+
+    expect(result.size).toBe(0);
+    expect(mocks.pageLinkFindMany).not.toHaveBeenCalled();
+    expect(mocks.slideLinkFindMany).not.toHaveBeenCalled();
+  });
+
+  it('lists a page linked to the same assignment twice once', async () => {
+    const link = { assignment_id: 'a-1', page: { id: 'p-1', title: 'Spec' } };
+    mocks.pageLinkFindMany.mockResolvedValue([link, { ...link }]);
+
+    const result = await linkedMaterials('class-x', ['a-1']);
+
+    expect(result.get('a-1')).toEqual([{ kind: 'PAGE', id: 'p-1', title: 'Spec' }]);
   });
 });
