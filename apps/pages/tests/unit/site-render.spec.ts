@@ -17,8 +17,9 @@
  */
 
 import * as fs from 'fs';
+import { createRequire } from 'module';
 
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 // @ts-expect-error -- jsdom ships no type declarations and `@types/jsdom` is
 // not a dependency; the cast below pins the shape this file uses.
 import { JSDOM as UntypedJSDOM } from 'jsdom';
@@ -1227,5 +1228,170 @@ test.describe('class-site images', () => {
 
     expect(html).toContain('diagram.png');
     expect(html).not.toContain('bn-visual-media');
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Room above headings
+ * ------------------------------------------------------------------ */
+
+/**
+ * Measured in a browser, with BlockNote's own stylesheet loaded under ours,
+ * because the bug was an interaction between the two: BlockNote spaces a
+ * heading with `padding-top: 18px`, and our colored-heading rule cut that to
+ * 3px, so blue H2s and grey H3s sat flush against the block above (#717).
+ */
+test.describe('heading spacing', () => {
+  const css = () =>
+    [
+      createRequire(import.meta.url).resolve('@blocknote/core/style.css'),
+      new URL('../../app/styles/blocknote-overrides.css', import.meta.url),
+      new URL('../../app/styles/page-sections.css', import.meta.url),
+    ]
+      .map(file => fs.readFileSync(file, 'utf-8'))
+      .join('\n');
+
+  const heading = (level: number, label: string, backgroundColor?: string) => ({
+    type: 'heading',
+    props: { level, ...(backgroundColor ? { backgroundColor } : {}) },
+    content: text(label),
+  });
+  const paragraph = (label: string) => ({ type: 'paragraph', content: text(label) });
+
+  /** Render through the site renderer and load it with the real stylesheets. */
+  const load = async (page: Page, blocks: unknown[]) => {
+    const { html } = await renderSitePage({ blocks, resolveLink: () => null });
+    await page.setContent(
+      `<style>${css()}</style><style>${SITE_STYLES}</style>` +
+        `<div class="site-article pg-reader-sections" style="width: 700px">${siteArticleWrapper(html)}</div>`
+    );
+  };
+
+  /**
+   * The space above each block's own content: from the bottom of whatever
+   * came before it (the previous block's content, or its last child's) to the
+   * top of this one. The first block is measured from the top of the page.
+   */
+  const gaps = (page: Page) =>
+    page.evaluate(() => {
+      const contents = [...document.querySelectorAll('.bn-editor .bn-block-content')];
+      const top = document
+        .querySelector('.bn-editor > .bn-block-group')!
+        .getBoundingClientRect().top;
+      return contents.map((content, i) => {
+        const before = i === 0 ? top : contents[i - 1].getBoundingClientRect().bottom;
+        return [
+          content.textContent,
+          Math.round(content.getBoundingClientRect().top - before),
+        ] as const;
+      });
+    });
+
+  test('a heading gets room above it by level, colored or not', async ({ page }) => {
+    await load(page, [
+      paragraph('intro'),
+      heading(2, 'H2', 'blue'),
+      paragraph('a'),
+      heading(3, 'H3', 'gray'),
+      paragraph('b'),
+      heading(4, 'H4'),
+      paragraph('c'),
+      heading(1, 'H1'),
+      paragraph('d'),
+    ]);
+
+    // 28 / 20 / 16 / 32px above (1.75 / 1.25 / 1 / 2em of the 16px body), and
+    // 6px between every heading and the text under it.
+    expect(await gaps(page)).toEqual([
+      ['intro', 0],
+      ['H2', 28],
+      ['a', 6],
+      ['H3', 20],
+      ['b', 6],
+      ['H4', 16],
+      ['c', 6],
+      ['H1', 32],
+      ['d', 6],
+    ]);
+  });
+
+  test('a heading right after a heading stays with it, and the first block has no gap', async ({
+    page,
+  }) => {
+    await load(page, [heading(2, 'first', 'blue'), heading(3, 'under it', 'gray'), paragraph('x')]);
+
+    expect(await gaps(page)).toEqual([
+      ['first', 0],
+      ['under it', 6],
+      ['x', 6],
+    ]);
+  });
+
+  test("a heading with children (a toggle's body) keeps the gap to the next heading", async ({
+    page,
+  }) => {
+    await load(page, [
+      { ...heading(2, 'Week 1', 'blue'), children: [paragraph('notes')] },
+      heading(2, 'Week 2', 'blue'),
+    ]);
+
+    expect(await gaps(page)).toEqual([
+      ['Week 1', 0],
+      ['notes', 6],
+      ['Week 2', 28],
+    ]);
+  });
+
+  test('the space above and below a heading belongs to the heading', async ({ page }) => {
+    // BlockNote's side menu finds the hovered block by walking up to its
+    // `.bn-block` (getDraggableBlockFromElement), and the section fade goes by
+    // the block too, so space outside that box hides the drag handle and dims
+    // a ticked section while the pointer crosses it.
+    await load(page, [paragraph('p'), heading(2, 'colored', 'blue'), paragraph('q')]);
+
+    const owners = await page.evaluate(() => {
+      const bar = document.querySelector('.bn-block-content[data-content-type="heading"]')!;
+      const { left, top, bottom } = bar.getBoundingClientRect();
+      const ownerAt = (y: number) =>
+        document.elementFromPoint(left + 20, y)?.closest('.bn-block')?.textContent;
+      return [ownerAt(top - 14), ownerAt(bottom + 3)];
+    });
+    expect(owners).toEqual(['colored', 'colored']);
+  });
+
+  test('the gap is outside a colored bar, not padding inside it', async ({ page }) => {
+    await load(page, [paragraph('p'), heading(2, 'colored', 'blue'), heading(4, 'plain')]);
+
+    const paddingTop = await page.$$eval('.bn-block-content[data-content-type="heading"]', els =>
+      els.map(el => getComputedStyle(el).paddingTop)
+    );
+    expect(paddingTop).toEqual(['3px', '0px']);
+
+    // BlockNote tints a colored block's whole `.bn-block`, which now holds the
+    // gap: left on, a blue H2 would paint 28px of blue above its bar.
+    const blockBackground = await page.$eval(
+      '.bn-block:has(> [data-content-type="heading"][data-background-color])',
+      el => getComputedStyle(el).backgroundColor
+    );
+    expect(blockBackground).toBe('rgba(0, 0, 0, 0)');
+  });
+
+  test("the reader's tick box sits on the heading's first line", async ({ page }) => {
+    // It used to assume BlockNote's 18px top padding, so on a colored heading
+    // (3px) it sat 15px below the text.
+    await load(page, [paragraph('p'), heading(2, 'colored', 'blue'), heading(3, 'plain')]);
+
+    const offsets = await page.evaluate(() =>
+      [...document.querySelectorAll('.bn-block-content[data-content-type="heading"]')].map(el => {
+        el.setAttribute('data-checkable', 'true');
+        const box = document.createElement('button');
+        box.className = 'pg-section-check';
+        el.appendChild(box);
+        const line = el.querySelector('h1, h2, h3, h4, h5, h6')!.getBoundingClientRect();
+        const check = box.getBoundingClientRect();
+        return Math.round(Math.abs((check.top + check.bottom) / 2 - (line.top + line.bottom) / 2));
+      })
+    );
+    expect(offsets).toEqual([0, 0]);
   });
 });
