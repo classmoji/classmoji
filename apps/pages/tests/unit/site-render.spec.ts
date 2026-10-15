@@ -1434,6 +1434,47 @@ test.describe('heading spacing', () => {
     expect(await spacing(page)).toEqual([0, 20, 6]);
   });
 
+  test("a card in a list item's children gets the gap on both sides", async ({ page }) => {
+    const step = (label: string, source: string) => ({
+      type: 'numberedListItem',
+      content: text(label),
+      children: [code(source)],
+    });
+    await load(page, [step('Install', 'npm install'), step('Run', 'npm run dev'), paragraph('x')]);
+
+    expect(await spacing(page)).toEqual([0, 16, 16, 16, 16]);
+  });
+
+  test("a card opening a toggle heading's body stays with the heading", async ({ page }) => {
+    await load(page, [{ ...heading(2, 'Week 1', 'blue'), children: [code('const a = 1;')] }]);
+
+    expect(await spacing(page)).toEqual([0, 6]);
+  });
+
+  test('a terminal in the editor, inside its .react-renderer, gets the gap too', async ({
+    page,
+  }) => {
+    // The class site renders a React block bare; the editor and the reader
+    // wrap its content in a `.react-renderer`. Rebuild that shape here.
+    await load(page, [
+      paragraph('a'),
+      terminal('one'),
+      paragraph('b'),
+      heading(3, 'H3'),
+      terminal('two'),
+    ]);
+    await page.evaluate(() => {
+      for (const content of document.querySelectorAll('[data-content-type="terminal"]')) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'react-renderer';
+        content.replaceWith(wrapper);
+        wrapper.appendChild(content);
+      }
+    });
+
+    expect(await spacing(page)).toEqual([0, 16, 16, 20, 6]);
+  });
+
   test('the space around a card belongs to the card', async ({ page }) => {
     // As with headings: space outside `.bn-block` hides the drag handle and
     // dims a ticked section while the pointer crosses it.
