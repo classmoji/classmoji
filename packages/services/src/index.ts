@@ -164,6 +164,7 @@ export type {
   CourseworkAssignment,
   CourseworkStatus,
   CourseworkType,
+  LinkedMaterial,
   RepoRowFields,
   StudentCourseworkRow,
 } from './classmoji/studentCoursework.service.ts';

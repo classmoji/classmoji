@@ -7,13 +7,17 @@ import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
 import { useGitWeb } from '~/hooks/useGitWeb';
 import type { StudentCourseworkRow } from '@classmoji/services';
 import { CourseworkTypeTag } from '~/components/features/assignments/CourseworkTags';
+import CourseworkMaterials, {
+  type CourseworkMaterial,
+} from '~/components/features/assignments/CourseworkMaterials';
 import { useStartQuiz } from '~/components/features/quiz/useStartQuiz';
 
 /**
  * An Up next row: a coursework row without the repo details the card never
- * shows. `extensionHours` is what the student bought on a repo or a quiz.
+ * shows, with the pages and decks linked to its assignment. `extensionHours`
+ * is what the student bought on a repo or a quiz.
  */
-export type UpNextRow = Omit<StudentCourseworkRow, 'repo'>;
+export type UpNextRow = Omit<StudentCourseworkRow, 'repo'> & { materials: CourseworkMaterial[] };
 
 /**
  * A repository row, shown instead of coursework in a class with no published
@@ -164,6 +168,7 @@ const UpNextCard = ({
                 <div className="flex-1 min-w-[9rem]">
                   <div className="text-sm font-semibold text-ink-0 truncate">{row.title}</div>
                   <div className="text-xs text-ink-3 truncate">{row.module.title}</div>
+                  <CourseworkMaterials materials={row.materials} />
                 </div>
                 <span
                   className={`text-xs whitespace-nowrap tabular-nums ${

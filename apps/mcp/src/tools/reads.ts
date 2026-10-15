@@ -262,8 +262,9 @@ export const listModulesTool = mirrorResourceTool({
     'teacher moves a quiz with quiz_update module_id. Staff see ' +
     'unpublished modules, items and assignments too, and for each assignment the repository, ' +
     'quiz or form it points at (target_id), weight and publish state. Students see published ' +
-    'ones only, each assignment by title, type and due date. Returns {enabled:false} when the ' +
-    'classroom hides modules. Any member.',
+    'ones only, each assignment by title, type and due date. Every assignment lists its linked ' +
+    'pages/decks as `materials` ({type, id, title}; students published only, staff all with ' +
+    'is_draft). Returns {enabled:false} when the classroom hides modules. Any member.',
 });
 
 export const listCalendarTool = mirrorResourceTool({

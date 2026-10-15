@@ -15,7 +15,10 @@
  *   - filtered for students by the service (`includeUnpublished` follows the
  *     role);
  *   - without quiz assignments where the classroom shows no quizzes, for every
- *     role, exactly as quiz items are.
+ *     role, exactly as quiz items are;
+ *   - with the pages and decks linked to each (`materials`): published ones for
+ *     a student, every one flagged `is_draft` for staff, and never one from
+ *     another classroom.
  *
  * Legacy REPOSITORY item rows are passed through as before: the public course
  * site still draws them.
@@ -181,6 +184,7 @@ describe('modules read — assignments', () => {
       weight: 100,
       is_extra_credit: false,
       student_deadline: DEADLINE,
+      materials: [],
       is_published: true,
     });
     // A quiz or form assignment names its own target, and carries no
@@ -194,6 +198,7 @@ describe('modules read — assignments', () => {
       weight: 100,
       is_extra_credit: false,
       student_deadline: null,
+      materials: [],
       is_published: false,
     });
     expect(form).toEqual({
@@ -205,6 +210,7 @@ describe('modules read — assignments', () => {
       weight: 100,
       is_extra_credit: true,
       student_deadline: DEADLINE,
+      materials: [],
       is_published: true,
     });
   });
@@ -263,9 +269,22 @@ describe('modules read — assignments', () => {
         title: 'Starterpack: Getting started with Vite',
         type: 'REPO',
         student_deadline: DEADLINE,
+        materials: [],
       },
-      { id: 'a-quiz', title: 'React quiz', type: 'QUIZ', student_deadline: DEADLINE },
-      { id: 'a-form', title: 'Team preferences', type: 'FORM', student_deadline: DEADLINE },
+      {
+        id: 'a-quiz',
+        title: 'React quiz',
+        type: 'QUIZ',
+        student_deadline: DEADLINE,
+        materials: [],
+      },
+      {
+        id: 'a-form',
+        title: 'Team preferences',
+        type: 'FORM',
+        student_deadline: DEADLINE,
+        materials: [],
+      },
     ]);
     const text = JSON.stringify(payload.modules[0].assignments);
     for (const leak of ['UNRELEASED', 'q-draft', 'f-draft', 'repo-1', 'private staff notes']) {
@@ -309,5 +328,67 @@ describe('modules read — assignments', () => {
     mocks.listForClassroom.mockResolvedValue([bare]);
 
     expect((await read('OWNER')).modules[0].assignments).toEqual([]);
+  });
+});
+
+describe('modules read — linked pages and decks', () => {
+  const doc = (id: string, title: string, over: Record<string, unknown> = {}) => ({
+    id,
+    title,
+    is_draft: false,
+    classroom_id: 'class-1',
+    content_path: 'private/path',
+    ...over,
+  });
+  const LINKED = {
+    ...LAB,
+    pages: [
+      { page: doc('p-spec', 'Lab spec') },
+      { page: doc('p-draft', 'UNRELEASED solutions', { is_draft: true }) },
+      { page: doc('p-other', 'Other classroom page', { classroom_id: 'class-2' }) },
+    ],
+    slides: [
+      { slide: doc('s-lec', 'Lecture 3') },
+      { slide: doc('s-draft', 'UNRELEASED deck', { is_draft: true }) },
+      { slide: doc('s-other', 'Other classroom deck', { classroom_id: 'class-2' }) },
+    ],
+  };
+
+  beforeEach(() => {
+    mocks.listForClassroom.mockResolvedValue([{ ...MODULES[0], assignments: [LINKED] }]);
+  });
+
+  it('gives a student the published ones only, pages first, with no draft flag', async () => {
+    const [lab] = (await read('STUDENT')).modules[0].assignments;
+
+    expect(lab.materials).toEqual([
+      { type: 'PAGE', id: 'p-spec', title: 'Lab spec' },
+      { type: 'SLIDE', id: 's-lec', title: 'Lecture 3' },
+    ]);
+    const text = JSON.stringify(lab);
+    for (const leak of ['UNRELEASED', 'is_draft', 'private/path']) {
+      expect(text, leak).not.toContain(leak);
+    }
+  });
+
+  it('gives staff every one, each flagged whether it is a draft', async () => {
+    for (const role of ['OWNER', 'TEACHER', 'ASSISTANT'] as const) {
+      const [lab] = (await read(role)).modules[0].assignments;
+      expect(lab.materials, role).toEqual([
+        { type: 'PAGE', id: 'p-spec', title: 'Lab spec', is_draft: false },
+        { type: 'PAGE', id: 'p-draft', title: 'UNRELEASED solutions', is_draft: true },
+        { type: 'SLIDE', id: 's-lec', title: 'Lecture 3', is_draft: false },
+        { type: 'SLIDE', id: 's-draft', title: 'UNRELEASED deck', is_draft: true },
+      ]);
+    }
+  });
+
+  it('never lists a page or deck from another classroom, for any role', async () => {
+    for (const role of ['OWNER', 'STUDENT'] as const) {
+      const text = JSON.stringify((await read(role)).modules[0].assignments);
+      for (const leak of ['p-other', 's-other', 'Other classroom']) {
+        expect(text, `${role} ${leak}`).not.toContain(leak);
+      }
+    }
   });
 });

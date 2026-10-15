@@ -57,8 +57,10 @@ const ASSIGNMENT_INCLUDE = {
   // assignment's own columns.
   quiz: { select: { id: true, name: true } },
   form: { select: { id: true, title: true, slug: true, status: true } },
-  pages: { include: { page: true }, orderBy: { order: 'asc' } },
-  slides: { include: { slide: true }, orderBy: { order: 'asc' } },
+  // Links made from the assignment form all sit at order 0: creation order
+  // breaks the tie, as the dashboard and Assignments page list them.
+  pages: { include: { page: true }, orderBy: [{ order: 'asc' }, { created_at: 'asc' }] },
+  slides: { include: { slide: true }, orderBy: [{ order: 'asc' }, { created_at: 'asc' }] },
   _count: { select: { git_repo_assignments: true } },
 } satisfies Prisma.AssignmentInclude;
 
