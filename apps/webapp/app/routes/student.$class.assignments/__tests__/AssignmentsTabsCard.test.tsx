@@ -10,7 +10,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
-import type { StudentCourseworkRow } from '@classmoji/services';
+import type { CourseworkMaterial } from '~/components/features/assignments/CourseworkMaterials';
 
 const popover = vi.hoisted(() => vi.fn());
 vi.mock('~/components/features/TokenExtensionPopover', () => ({
@@ -33,6 +33,7 @@ vi.mock('~/components/features/analytics', () => ({
 }));
 
 const { default: AssignmentsTabsCard } = await import('../AssignmentsTabsCard');
+type AssignmentRow = import('../AssignmentsTabsCard').AssignmentRow;
 
 const base = {
   module: { id: 'm1', title: 'Week 1' },
@@ -51,9 +52,10 @@ const base = {
   missing: false,
   suggestedExtensionHours: 0,
   extend: null,
+  materials: [] as CourseworkMaterial[],
 } as const;
 
-const REPO_LATE: StudentCourseworkRow = {
+const REPO_LATE: AssignmentRow = {
   ...base,
   assignmentId: 'a-repo',
   type: 'REPO',
@@ -84,7 +86,7 @@ const REPO_LATE: StudentCourseworkRow = {
   },
 };
 
-const QUIZ_OPEN: StudentCourseworkRow = {
+const QUIZ_OPEN: AssignmentRow = {
   ...base,
   assignmentId: 'a-quiz',
   type: 'QUIZ',
@@ -98,7 +100,7 @@ const QUIZ_OPEN: StudentCourseworkRow = {
   action: { kind: 'START_QUIZ', quizId: 'q1' },
 };
 
-const FORM_PUBLIC: StudentCourseworkRow = {
+const FORM_PUBLIC: AssignmentRow = {
   ...base,
   assignmentId: 'a-form',
   type: 'FORM',
@@ -112,7 +114,7 @@ const FORM_PUBLIC: StudentCourseworkRow = {
   action: null,
 };
 
-const render = (rows: StudentCourseworkRow[], initialTab?: 'current' | 'completed' | 'all') =>
+const render = (rows: AssignmentRow[], initialTab?: 'current' | 'completed' | 'all') =>
   renderToStaticMarkup(
     <MemoryRouter initialEntries={['/student/intro-101/assignments']}>
       <Routes>
@@ -197,7 +199,7 @@ describe('AssignmentsTabsCard', () => {
   });
 
   describe('a quiz row: late by its counting attempt, or missing', () => {
-    const QUIZ_DONE: StudentCourseworkRow = {
+    const QUIZ_DONE: AssignmentRow = {
       ...QUIZ_OPEN,
       status: 'COMPLETED',
       done: true,
@@ -250,6 +252,38 @@ describe('AssignmentsTabsCard', () => {
     });
   });
 
+  it("links a row's pages and decks under its module line", () => {
+    const html = render([
+      {
+        ...REPO_LATE,
+        materials: [
+          {
+            kind: 'PAGE',
+            id: 'p-1',
+            title: 'Lab 1 spec',
+            href: 'https://pages.test/intro-101/p-1',
+          },
+          { kind: 'SLIDE', id: 's-1', title: 'Week 1 deck', href: 'https://slides.test/s-1' },
+        ],
+      },
+    ]);
+
+    expect(html).toContain('>Lab 1 spec<');
+    expect(html).toContain('href="https://pages.test/intro-101/p-1"');
+    expect(html).toContain('>Week 1 deck<');
+    expect(html).toContain('href="https://slides.test/s-1"');
+    // Under the module line, above the student's repository.
+    const at = (text: string) => html.indexOf(text);
+    expect(at('Week 1</span>')).toBeLessThan(at('Lab 1 spec'));
+    expect(at('Week 1 deck')).toBeLessThan(at('href="https://github.com/org/lab-ada"'));
+  });
+
+  it('draws no materials for a row with none', () => {
+    const html = render([QUIZ_OPEN]);
+    expect(html).not.toContain('pages.test');
+    expect(html).not.toContain('slides.test');
+  });
+
   it('shows a quiz row with its attempts and its own link', () => {
     const html = render([QUIZ_OPEN]);
 
@@ -270,7 +304,7 @@ describe('AssignmentsTabsCard', () => {
   });
 
   it('counts every row in its tab, public forms (open or closed) under All only', () => {
-    const done: StudentCourseworkRow = {
+    const done: AssignmentRow = {
       ...QUIZ_OPEN,
       assignmentId: 'a-done',
       title: 'Finished quiz',
@@ -279,7 +313,7 @@ describe('AssignmentsTabsCard', () => {
       score: 0,
       action: null,
     };
-    const closedPublic: StudentCourseworkRow = {
+    const closedPublic: AssignmentRow = {
       ...FORM_PUBLIC,
       assignmentId: 'a-form-closed',
       title: 'Waitlist',
@@ -312,7 +346,7 @@ describe('AssignmentsTabsCard', () => {
 
   describe('the note under the date: the deadline stays, the hours applied are said', () => {
     const DEADLINE = '2020-01-01T12:00:00.000Z';
-    const repoRow = (over: Partial<StudentCourseworkRow>): StudentCourseworkRow => ({
+    const repoRow = (over: Partial<AssignmentRow>): AssignmentRow => ({
       ...REPO_LATE,
       deadline: DEADLINE,
       ...over,

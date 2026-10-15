@@ -11,6 +11,9 @@ import {
   CourseworkStatusPill,
   CourseworkTypeTag,
 } from '~/components/features/assignments/CourseworkTags';
+import CourseworkMaterials, {
+  type CourseworkMaterial,
+} from '~/components/features/assignments/CourseworkMaterials';
 import { POP_SPRING } from '~/utils/motion';
 import { formatDeadline } from './formatDeadline';
 import { useGitWeb } from '~/hooks/useGitWeb';
@@ -26,8 +29,11 @@ export type AssignmentStatus = 'current' | 'completed';
 
 type TabKey = 'current' | 'completed' | 'all';
 
+/** A coursework row with the published pages and decks linked to its assignment. */
+export type AssignmentRow = StudentCourseworkRow & { materials: CourseworkMaterial[] };
+
 interface AssignmentsTabsCardProps {
-  rows: StudentCourseworkRow[];
+  rows: AssignmentRow[];
   balance: number;
   /** The tab shown first; Current unless said otherwise. */
   initialTab?: TabKey;
@@ -215,6 +221,7 @@ const AssignmentsTabsCard = ({
                         <div className="flex flex-col gap-0.5 min-w-0">
                           <TitleLink row={row} />
                           <span className="text-xs text-ink-3">{meta.join(' · ')}</span>
+                          <CourseworkMaterials materials={row.materials} />
                           {repo && (
                             // The student's own repository: the only place they
                             // reach it, with its commits and the kind of repo.

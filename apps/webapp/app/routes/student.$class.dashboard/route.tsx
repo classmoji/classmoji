@@ -6,12 +6,14 @@ import dayjs from 'dayjs';
 import {
   ClassmojiService,
   type CourseworkAssignment,
+  type LinkedMaterial,
   type StudentCourseworkRow,
 } from '@classmoji/services';
 import type { StudentGradeSummary } from '@classmoji/utils';
 import type { Route } from './+types/route';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
+import { courseworkMaterials } from '~/utils/courseworkMaterials.server';
 import WeeklyCalendarCard, { type WeekEvent } from './WeeklyCalendarCard';
 import UpNextCard, { type DashboardRepoRow, type UpNextRow } from './UpNextCard';
 import { eventFetchWindow, startOfWeek } from './week';
@@ -25,7 +27,10 @@ import RetroTabsCard, {
 interface DashboardData {
   weekStart: string;
   weekEvents: WeekEvent[];
-  /** What the student still owes, soonest due first: every type, at most five. */
+  /**
+   * What the student still owes, soonest due first: every type, at most five,
+   * each with the published pages and decks linked to its assignment.
+   */
   upNext: UpNextRow[];
   /** Staff previewing the dashboard start a quiz from the quiz list instead. */
   viewerIsStudent: boolean;
@@ -190,6 +195,30 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
         .slice(0, 5);
     }
 
+    const upNextRows = ClassmojiService.studentCoursework.upNext(coursework);
+    // The pages and decks linked to each Up next assignment, so a row leads to
+    // what the work is about as well as to where it is done. Published ones
+    // only, whoever is looking. A failed read is logged and leaves the rows
+    // without them.
+    const materials = upNextRows.length
+      ? await ClassmojiService.studentCoursework
+          .linkedMaterials(
+            classroom.id,
+            upNextRows.map(row => row.assignmentId)
+          )
+          .catch((error): Map<string, LinkedMaterial[]> => {
+            console.error('[student dashboard] linked materials failed', courseworkContext, error);
+            return new Map();
+          })
+      : new Map<string, LinkedMaterial[]>();
+    // The card shows no repo details, so none are sent. Every row keeps the
+    // hours its student bought (repo or quiz), so a row inside them is not
+    // overdue.
+    const upNext: UpNextRow[] = upNextRows.map(({ repo: _repo, ...row }) => ({
+      ...row,
+      materials: courseworkMaterials(materials.get(row.assignmentId), classSlug),
+    }));
+
     const weekEvents: WeekEvent[] = (weekEventsRaw as Array<Record<string, unknown>>).map(e => ({
       id: String(e.id),
       title: String(e.title),
@@ -277,12 +306,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       // A plain date, which dayjs parses as local midnight on either side.
       weekStart: weekStart.format('YYYY-MM-DD'),
       weekEvents,
-      // The card shows no repo details, so none are sent. Every row keeps the
-      // hours its student bought (repo or quiz), so a row inside them is not
-      // overdue.
-      upNext: ClassmojiService.studentCoursework
-        .upNext(coursework)
-        .map(({ repo: _repo, ...row }): UpNextRow => row),
+      upNext,
       viewerIsStudent: membership?.role === 'STUDENT',
       feedback,
       team,

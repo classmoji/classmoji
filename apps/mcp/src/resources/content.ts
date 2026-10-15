@@ -159,6 +159,16 @@ interface ModuleAssignmentRow {
   repository?: { id: string; title?: string | null } | null;
   quiz?: { id: string; name?: string | null } | null;
   form?: { id: string; title?: string | null } | null;
+  /** The pages and decks linked to the assignment, in their hand-arranged order. */
+  pages?: Array<{ page: LinkedDoc | null }>;
+  slides?: Array<{ slide: LinkedDoc | null }>;
+}
+
+interface LinkedDoc {
+  id: string;
+  title: string;
+  is_draft: boolean;
+  classroom_id: string;
 }
 
 interface ModuleRow {
@@ -207,10 +217,39 @@ function moduleItemSummary(item: ModuleItemRow, position: number) {
 }
 
 /**
+ * The pages and decks linked to an assignment, pages first, as the Modules
+ * page lists them under it. A student gets the published ones only, as their
+ * module row shows them; staff get every one, each saying whether it is a
+ * draft. One that belongs to another classroom is never listed, whatever row
+ * it hangs off.
+ */
+function assignmentMaterials(assignment: ModuleAssignmentRow, staff: boolean, classroomId: string) {
+  const shown = (doc: LinkedDoc | null): doc is LinkedDoc =>
+    doc !== null && doc.classroom_id === classroomId && (staff || !doc.is_draft);
+  const entry = (type: 'PAGE' | 'SLIDE', doc: LinkedDoc) => ({
+    type,
+    id: doc.id,
+    title: doc.title,
+    ...(staff ? { is_draft: doc.is_draft } : {}),
+  });
+  return [
+    ...(assignment.pages ?? [])
+      .map(link => link.page)
+      .filter(shown)
+      .map(doc => entry('PAGE', doc)),
+    ...(assignment.slides ?? [])
+      .map(link => link.slide)
+      .filter(shown)
+      .map(doc => entry('SLIDE', doc)),
+  ];
+}
+
+/**
  * One assignment of a module.
  *
  * A STUDENT gets what their module row renders and nothing else: the
- * assignment's own id and title, its type and its due date. Not the target: the
+ * assignment's own id and title, its type, its due date and the published
+ * pages and decks linked to it (`materials`). Not the target: the
  * service's student filter (`openToStudents`) already leaves out an assignment
  * whose quiz or form is a draft, but the target's own name is still not what a
  * student's module row shows. Not weight, extra credit or submission mode
@@ -219,19 +258,24 @@ function moduleItemSummary(item: ModuleItemRow, position: number) {
  *
  * Staff get the placement in full: the target the type points at, as one
  * generic pair rather than three nullable id columns (a classroom without
- * quizzes must not carry a key that names one), the grading fields and the
- * publish flag.
+ * quizzes must not carry a key that names one), the grading fields, the
+ * publish flag, and every linked page and deck, drafts included.
  *
  * The array order IS the display order (the service sorts by the hand-arranged
  * position, then deadline, then title), so no position is emitted: a stored
  * position is only meaningful through that tie-break.
  */
-function moduleAssignmentSummary(assignment: ModuleAssignmentRow, staff: boolean) {
+function moduleAssignmentSummary(
+  assignment: ModuleAssignmentRow,
+  staff: boolean,
+  classroomId: string
+) {
   const base = {
     id: assignment.id,
     title: assignment.title,
     type: assignment.type,
     student_deadline: assignment.student_deadline ?? null,
+    materials: assignmentMaterials(assignment, staff, classroomId),
   };
   if (!staff) return base;
 
@@ -255,8 +299,9 @@ export const modulesResource: ResourceDefinition = {
   description:
     'Ordered curriculum modules, each with its content items (pages, slides, forms) and ' +
     'the assignments that belong to it (REPO, QUIZ or FORM, in display order). Students see ' +
-    'published modules, items and assignments only, each assignment by title, type and due ' +
-    'date; staff also see unpublished, with each assignment’s target and grading fields. ' +
+    'published modules, items and assignments only, each assignment by title, type, due ' +
+    'date and its published linked pages/decks (`materials`); staff also see unpublished, ' +
+    'with each assignment’s target, grading fields and draft materials flagged is_draft. ' +
     'Returns {enabled:false} when the classroom hides modules (show_modules).',
   scope: 'read',
   roles: MEMBER,
@@ -307,7 +352,7 @@ export const modulesResource: ResourceDefinition = {
           .map((item, index) => moduleItemSummary(item, index)),
         assignments: (m.assignments ?? [])
           .filter(a => quizzesVisible || a.type !== 'QUIZ')
-          .map(a => moduleAssignmentSummary(a, staff)),
+          .map(a => moduleAssignmentSummary(a, staff, classroomId)),
       })),
     };
   },

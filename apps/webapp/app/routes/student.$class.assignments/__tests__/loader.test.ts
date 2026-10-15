@@ -1,23 +1,26 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // The student Assignments loader. Its rows come from
 // studentCoursework.listForStudent (one per assignment the student can see,
 // every type; the row shapes, statuses and REPO fields are pinned in
 // packages/services studentCoursework.service.test.ts). What is pinned here is
 // what the loader adds: the classroom's quiz answer goes in, a failed read
-// degrades to an empty list instead of crashing the deferred render, and the
-// progress counts cover every row.
+// degrades to an empty list instead of crashing the deferred render, the
+// progress counts cover every row, and each row carries the pages and decks
+// linked to its assignment.
 const listForStudentMock = vi.fn();
 const listPublishedAssignmentsMock = vi.fn();
 const getBalanceMock = vi.fn();
 const assertAccessMock = vi.fn();
 const loadQuizzesVisibleMock = vi.fn();
+const linkedMaterialsMock = vi.fn();
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     studentCoursework: {
       listForStudent: (...a: unknown[]) => listForStudentMock(...a),
       listPublishedAssignments: (...a: unknown[]) => listPublishedAssignmentsMock(...a),
+      linkedMaterials: (...a: unknown[]) => linkedMaterialsMock(...a),
     },
     token: { getBalance: (...a: unknown[]) => getBalanceMock(...a) },
   },
@@ -73,6 +76,14 @@ beforeEach(() => {
     userId: 'student-1',
     classroom: { id: 'class-1', name: 'Test Class', git_organization: { login: 'test-org' } },
   });
+  linkedMaterialsMock.mockReset().mockResolvedValue(new Map());
+  // The pages and slides apps' addresses, pinned: the test script loads .env.
+  vi.stubEnv('PAGES_URL', 'https://pages.test');
+  vi.stubEnv('SLIDES_URL', 'https://slides.test');
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe('student assignments loader', () => {
@@ -162,5 +173,90 @@ describe('student assignments loader', () => {
     const data = await (await loader(loaderArgs())).data;
 
     expect(data.balance).toBe(0);
+  });
+});
+
+describe('student assignments loader — linked pages and decks', () => {
+  it("asks for the gate's classroom and the ids of the rows it built, nothing else", async () => {
+    listForStudentMock.mockResolvedValue([
+      row('repo-open', 'REPO', false),
+      row('quiz-done', 'QUIZ', true),
+    ]);
+
+    await (
+      await loader(loaderArgs())
+    ).data;
+
+    expect(linkedMaterialsMock).toHaveBeenCalledTimes(1);
+    expect(linkedMaterialsMock).toHaveBeenCalledWith('class-1', ['repo-open', 'quiz-done']);
+  });
+
+  it('links each row to its pages, then its decks; a row with none gets an empty list', async () => {
+    listForStudentMock.mockResolvedValue([
+      row('repo-open', 'REPO', false),
+      row('quiz-done', 'QUIZ', true),
+    ]);
+    linkedMaterialsMock.mockResolvedValue(
+      new Map([
+        [
+          'repo-open',
+          [
+            { kind: 'PAGE', id: 'p-1', title: 'Lab spec' },
+            { kind: 'SLIDE', id: 's-1', title: 'Lecture 3' },
+          ],
+        ],
+      ])
+    );
+
+    const data = await (await loader(loaderArgs())).data;
+
+    expect(data.rows.map(r => [r.assignmentId, r.materials])).toEqual([
+      [
+        'repo-open',
+        [
+          {
+            kind: 'PAGE',
+            id: 'p-1',
+            title: 'Lab spec',
+            href: 'https://pages.test/test-class/p-1',
+          },
+          { kind: 'SLIDE', id: 's-1', title: 'Lecture 3', href: 'https://slides.test/s-1' },
+        ],
+      ],
+      ['quiz-done', []],
+    ]);
+  });
+
+  it('reads none when there are no rows', async () => {
+    listForStudentMock.mockResolvedValue([]);
+
+    const data = await (await loader(loaderArgs())).data;
+
+    expect(data.rows).toEqual([]);
+    expect(linkedMaterialsMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps every row, without materials, and logs, when the read fails', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    listForStudentMock.mockResolvedValue([
+      row('repo-open', 'REPO', false),
+      row('quiz-done', 'QUIZ', true),
+    ]);
+    linkedMaterialsMock.mockRejectedValue(new Error('connection timeout'));
+
+    const data = await (await loader(loaderArgs())).data;
+
+    expect(data.rows.map(r => [r.assignmentId, r.materials])).toEqual([
+      ['repo-open', []],
+      ['quiz-done', []],
+    ]);
+    expect(data.counts).toEqual({ completed: 1, current: 1, total: 2 });
+    expect(data.balance).toBe(50);
+    expect(logged).toHaveBeenCalledWith(
+      '[student assignments] linked materials failed',
+      { classroomId: 'class-1', userId: 'student-1' },
+      expect.any(Error)
+    );
+    logged.mockRestore();
   });
 });

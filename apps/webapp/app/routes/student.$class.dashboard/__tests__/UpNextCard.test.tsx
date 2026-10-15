@@ -9,15 +9,15 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
 import dayjs from 'dayjs';
 import { describe, expect, it, vi } from 'vitest';
-import type { StudentCourseworkRow } from '@classmoji/services';
 
 vi.mock('~/components/features/quiz/useStartQuiz', () => ({
   useStartQuiz: () => ({ startQuiz: vi.fn(), resumeQuiz: vi.fn(), startingQuizId: null }),
 }));
 
 const { default: UpNextCard, formatDue } = await import('../UpNextCard');
+type UpNextRow = import('../UpNextCard').UpNextRow;
 
-const row = (over: Partial<StudentCourseworkRow>): StudentCourseworkRow => ({
+const row = (over: Partial<UpNextRow>): UpNextRow => ({
   assignmentId: 'a',
   type: 'QUIZ',
   title: 'Row',
@@ -42,10 +42,11 @@ const row = (over: Partial<StudentCourseworkRow>): StudentCourseworkRow => ({
   missing: false,
   suggestedExtensionHours: 0,
   extend: null,
+  materials: [],
   ...over,
 });
 
-const render = (rows: StudentCourseworkRow[], viewerIsStudent = true) =>
+const render = (rows: UpNextRow[], viewerIsStudent = true) =>
   renderToStaticMarkup(
     <MemoryRouter>
       <UpNextCard rows={rows} classSlug="intro-101" viewerIsStudent={viewerIsStudent} />
@@ -95,6 +96,44 @@ describe('UpNextCard', () => {
     expect(html).toContain('href="https://pages.test/intro-101/forms/signup"');
     expect(html).toContain('>Fill out<');
     expect(html).toContain('href="/student/intro-101/assignments"');
+  });
+
+  it("links a row's pages and decks under its module", () => {
+    const html = render([
+      row({
+        title: 'Lab 2',
+        materials: [
+          {
+            kind: 'PAGE',
+            id: 'p-1',
+            title: 'Lab 2 spec',
+            href: 'https://pages.test/intro-101/p-1',
+          },
+          { kind: 'SLIDE', id: 's-1', title: 'Week 2 lecture', href: 'https://slides.test/s-1' },
+        ],
+      }),
+    ]);
+
+    expect(html).toContain('>Lab 2 spec<');
+    expect(html).toContain('>Week 2 lecture<');
+    // No peek drawer outside the student shell: the page opens in a new tab.
+    expect(html).toContain('href="https://pages.test/intro-101/p-1"');
+    expect(html).toContain('href="https://slides.test/s-1"');
+    expect(html.indexOf('Lab 2 spec')).toBeLessThan(html.indexOf('Week 2 lecture'));
+    // One icon each, beside the All assignments arrow.
+    expect(html.match(/<svg/g)).toHaveLength(3);
+    // The row's own button is still there.
+    expect(html).toContain('>Start quiz<');
+  });
+
+  it('draws no materials line for a row with nothing linked', () => {
+    const html = render([row({ title: 'Lab 2' })]);
+
+    expect(html).not.toContain('pages.test');
+    expect(html).not.toContain('slides.test');
+    expect(html).not.toContain('target="_blank"');
+    // Only the All assignments arrow: no material icons.
+    expect(html.match(/<svg/g)).toHaveLength(1);
   });
 
   it('sends staff to the quiz list to start a quiz', () => {
