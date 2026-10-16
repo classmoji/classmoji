@@ -528,7 +528,7 @@ const sandboxProgressFor = async (
  * `data-sandbox` part's data): the card's template and opening file, seeded
  * from the student's last standing submission for the open question, with
  * the next attempt's id. The task's loop writes it under the hint of a Try
- * again turn (packages/tasks, agents/quiz/loop.ts). Null when no question is
+ * again turn (apps/ai-agent, src/trigger/quiz/loop.ts). Null when no question is
  * open, when its card has no sandbox, when a sandbox of it is still open (one
  * not yet answered by a standing submission), and for an attempt not pinned
  * with code sandboxes or already complete. A read only; no lock.

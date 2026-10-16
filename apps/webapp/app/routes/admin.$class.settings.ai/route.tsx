@@ -72,8 +72,8 @@ const EFFORT_OPTIONS = [
 /**
  * Exploration stops at High. Its excerpt call reads up to ~20k tokens of code,
  * and at xhigh or max the thinking can use up the call's max_tokens before it
- * answers, which falls back to whole files. (packages/tasks exploreRepo.ts runs
- * those two as high anyway.)
+ * answers, which falls back to whole files. (The explore-repo task runs those
+ * two as high anyway.)
  */
 const EXPLORATION_EFFORT_OPTIONS = EFFORT_OPTIONS.filter(
   option => option.value !== 'xhigh' && option.value !== 'max'
