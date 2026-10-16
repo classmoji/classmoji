@@ -7,6 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const calendarEventFindMany = vi.fn();
+const settingsFindUnique = vi.fn();
 
 vi.mock('@classmoji/database', async () => ({
   ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
@@ -17,6 +18,7 @@ vi.mock('@classmoji/database', async () => ({
     calendarEvent: { findMany: calendarEventFindMany },
     assignment: { findMany: vi.fn().mockResolvedValue([]) },
     form: { findMany: vi.fn().mockResolvedValue([]) },
+    classroomSettings: { findUnique: settingsFindUnique },
   }),
 }));
 

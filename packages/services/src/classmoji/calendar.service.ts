@@ -2,9 +2,11 @@ import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import {
   gitContextFor,
   gitWeb,
+  localTimeParts,
   openToStudents,
   withLogin,
   withLogins,
+  zonedWallClockToInstant,
   type ClassroomLike,
 } from '@classmoji/utils';
 import { Prisma } from '@prisma/client';
@@ -459,15 +461,44 @@ const getRecurrenceRule = (
   };
 };
 
+/** The classroom's IANA zone, or null when it has none (UTC then). */
+const classroomTimeZone = async (classroomId: string): Promise<string | null> =>
+  (
+    await getPrisma().classroomSettings.findUnique({
+      where: { classroom_id: classroomId },
+      select: { timezone: true },
+    })
+  )?.timezone ?? null;
+
+/**
+ * The `until` that ends a series the day before `occurrence`, as a date: the
+ * classroom's calendar day, which is what a date-only `until` is read in. A
+ * UTC date would keep an evening meeting that falls on the next UTC day.
+ */
+const untilDayBefore = async (classroomId: string, occurrence: Date): Promise<string> => {
+  const { year, month, day } = localTimeParts(occurrence, await classroomTimeZone(classroomId));
+  return new Date(Date.UTC(year, month - 1, day - 1)).toISOString().slice(0, 10);
+};
+
 /**
  * The last instant a recurrence may produce. A date-only `until` ("2026-11-16")
  * is inclusive: "until Nov 16" means through Nov 16, so it runs to the end of
- * that day (UTC, the zone occurrences are expanded in). Anything else is a
- * full instant and used as is. Null when unparseable.
+ * that day in the zone occurrences are expanded in. Anything else is a full
+ * instant and used as is. Null when unparseable.
  */
-const recurrenceUntilLimit = (until: string): Date | null => {
-  const limit = /^\d{4}-\d{2}-\d{2}$/.test(until)
-    ? new Date(`${until}T23:59:59.999Z`)
+const recurrenceUntilLimit = (until: string, timeZone: string | null): Date | null => {
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(until);
+  const limit = dateOnly
+    ? new Date(
+        zonedWallClockToInstant(
+          Number(dateOnly[1]),
+          Number(dateOnly[2]),
+          Number(dateOnly[3]) + 1,
+          0,
+          0,
+          timeZone
+        ).getTime() - 1
+      )
     : new Date(until);
   return isNaN(limit.getTime()) ? null : limit;
 };
@@ -500,10 +531,9 @@ const toNullableJsonInput = (
   return value;
 };
 
-const getDayName = (date: Date): string => {
-  const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-  return days[date.getDay()];
-};
+const DAY_MS = 86_400_000;
+
+const DAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 
 /**
  * Check if two dates are the same day (ignoring time)
@@ -756,13 +786,16 @@ const buildOccurrence = (
  * @param {Date} endDate - End of date range
  * @param {boolean} includeRawLinks - Whether to include raw link data for admin UI editing
  * @param {boolean} canSeeDrafts - Whether the viewer may see unpublished linked content
+ * @param {string|null} timeZone - The classroom's zone, which the days and the time of day are
+ *   read in: a 14:10 class stays at 14:10 across a daylight-saving change. UTC when unset.
  */
 const expandRecurringEvent = (
   event: CalendarEventWithLinks,
   startDate: Date,
   endDate: Date,
   includeRawLinks: boolean = false,
-  canSeeDrafts: boolean = false
+  canSeeDrafts: boolean = false,
+  timeZone: string | null = null
 ): CalendarExpandedEvent[] => {
   /** The links for one date, filtered for the occurrence and for the viewer. */
   const linksFor = (occurrenceDate: Date, isRecurring: boolean): CalendarDisplayLinksWithFeatured =>
@@ -802,98 +835,77 @@ const expandRecurringEvent = (
     return singleOccurrence();
   }
 
-  const currentDate = new Date(event.start_time);
   // Handle missing or invalid 'until' date - default to rangeEnd if not set
-  const endDateLimit = until ? recurrenceUntilLimit(until) : null;
+  const endDateLimit = until ? recurrenceUntilLimit(until, timeZone) : null;
   const rangeStart = new Date(startDate);
   const rangeEnd = new Date(endDate);
 
   // Use the earlier of endDateLimit or rangeEnd, handling case where endDateLimit is not set
-  const effectiveEndDate =
-    endDateLimit && !isNaN(endDateLimit.getTime())
-      ? endDateLimit < rangeEnd
-        ? endDateLimit
-        : rangeEnd
-      : rangeEnd;
+  const effectiveEndDate = endDateLimit && endDateLimit < rangeEnd ? endDateLimit : rangeEnd;
 
-  while (currentDate <= effectiveEndDate) {
-    const dayName = getDayName(currentDate);
+  // The series is a local date, a time of day and a weekday set, in the
+  // classroom's zone, so each occurrence's instant is worked out for its own
+  // date. Adding 24 hours to the first one would hold the UTC time of day and
+  // put every occurrence after a daylight-saving change an hour off.
+  const templateStart = new Date(event.start_time);
+  const template = localTimeParts(templateStart, timeZone);
+  const duration = new Date(event.end_time).getTime() - templateStart.getTime();
+  const occurrenceAt = (day: number) =>
+    zonedWallClockToInstant(
+      template.year,
+      template.month,
+      template.day + day,
+      template.hour,
+      template.minute,
+      timeZone
+    );
+  // Nothing before the range is shown, so start a day short of it, not at the
+  // series' first day.
+  const firstDay = Math.max(
+    0,
+    Math.floor((rangeStart.getTime() - templateStart.getTime()) / DAY_MS) - 1
+  );
 
-    if (days.includes(dayName) && currentDate >= rangeStart) {
-      const override = event.overrides?.find(o => isSameDate(new Date(o.date), currentDate));
+  for (let day = firstDay; ; day += 1) {
+    const templateOccurrence = occurrenceAt(day);
+    if (templateOccurrence > effectiveEndDate) break;
 
-      if (override?.is_cancelled) {
-        // Skip this occurrence
-      } else {
-        // Filter and map links for this specific occurrence
-        // Pass isRecurring=true so only occurrence-specific links are included
-        const occurrenceDate = new Date(currentDate);
-        const links = linksFor(occurrenceDate, true);
-
-        if (override) {
-          // Use override times/location
-          const duration =
-            new Date(event.end_time).getTime() - new Date(event.start_time).getTime();
-          const occurrenceStart = override.new_start_time
-            ? new Date(override.new_start_time)
-            : new Date(
-                currentDate.getFullYear(),
-                currentDate.getMonth(),
-                currentDate.getDate(),
-                new Date(event.start_time).getHours(),
-                new Date(event.start_time).getMinutes()
-              );
-          const occurrenceEnd = override.new_end_time
-            ? new Date(override.new_end_time)
-            : new Date(occurrenceStart.getTime() + duration);
-
-          occurrences.push(
-            buildOccurrence(
-              event,
-              {
-                start_time: occurrenceStart,
-                end_time: occurrenceEnd,
-                location: override.new_location || event.location,
-                meeting_link: override.new_meeting_link || event.meeting_link,
-                is_overridden: true,
-                occurrence_date: occurrenceDate,
-              },
-              links,
-              includeRawLinks
-            )
-          );
-        } else {
-          // Use template times for this date
-          const duration =
-            new Date(event.end_time).getTime() - new Date(event.start_time).getTime();
-          const occurrenceStart = new Date(
-            currentDate.getFullYear(),
-            currentDate.getMonth(),
-            currentDate.getDate(),
-            new Date(event.start_time).getHours(),
-            new Date(event.start_time).getMinutes()
-          );
-          const occurrenceEnd = new Date(occurrenceStart.getTime() + duration);
-
-          occurrences.push(
-            buildOccurrence(
-              event,
-              {
-                start_time: occurrenceStart,
-                end_time: occurrenceEnd,
-                location: event.location,
-                meeting_link: event.meeting_link,
-                occurrence_date: occurrenceDate,
-              },
-              links,
-              includeRawLinks
-            )
-          );
-        }
-      }
+    const weekday = new Date(Date.UTC(template.year, template.month - 1, template.day + day));
+    if (!days.includes(DAY_NAMES[weekday.getUTCDay()]) || templateOccurrence < rangeStart) {
+      continue;
     }
 
-    currentDate.setDate(currentDate.getDate() + 1);
+    const override = event.overrides?.find(o => isSameDate(new Date(o.date), templateOccurrence));
+    if (override?.is_cancelled) continue;
+
+    // Filter and map links for this specific occurrence
+    // Pass isRecurring=true so only occurrence-specific links are included
+    const occurrenceDate = new Date(templateOccurrence);
+    const links = linksFor(occurrenceDate, true);
+    const occurrenceStart = override?.new_start_time
+      ? new Date(override.new_start_time)
+      : templateOccurrence;
+    const occurrenceEnd = override?.new_end_time
+      ? new Date(override.new_end_time)
+      : new Date(occurrenceStart.getTime() + duration);
+
+    occurrences.push(
+      buildOccurrence(
+        event,
+        {
+          start_time: occurrenceStart,
+          end_time: occurrenceEnd,
+          location: override ? override.new_location || event.location : event.location,
+          meeting_link: override
+            ? override.new_meeting_link || event.meeting_link
+            : event.meeting_link,
+          ...(override ? { is_overridden: true } : {}),
+          occurrence_date: occurrenceDate,
+        },
+        links,
+        includeRawLinks
+      )
+    );
   }
 
   return occurrences;
@@ -1024,6 +1036,12 @@ export const getClassroomCalendar = async (
       }))
     : events;
 
+  // The classroom's zone decides what "every Monday at 2:10" means. Asked only
+  // when a series has to be expanded.
+  const timeZone = shownEvents.some(event => event.is_recurring)
+    ? await classroomTimeZone(classroomId)
+    : null;
+
   // Expand recurring events (pass includeRawLinks for admin UI editing)
   const expandedEvents = shownEvents.flatMap(event =>
     expandRecurringEvent(
@@ -1031,7 +1049,8 @@ export const getClassroomCalendar = async (
       startDate,
       endDate,
       includeRawLinks,
-      canSeeDrafts
+      canSeeDrafts,
+      timeZone
     )
   );
 
@@ -1610,8 +1629,7 @@ export const updateEventWithScope = async (
     case 'this_and_future': {
       // Update the recurrence rule to end just before this occurrence
       // and create a new event starting from this date
-      const dayBeforeOccurrence = new Date(occurrenceDate);
-      dayBeforeOccurrence.setDate(dayBeforeOccurrence.getDate() - 1);
+      const untilBefore = await untilDayBefore(event.classroom_id, occurrenceDate);
 
       // Links and overrides are both stored per occurrence date, so the split
       // has to divide them too: everything from this date on belongs to the new
@@ -1629,7 +1647,7 @@ export const updateEventWithScope = async (
           data: {
             recurrence_rule: {
               ...toInputJsonObject(event.recurrence_rule),
-              until: dayBeforeOccurrence.toISOString().slice(0, 10),
+              until: untilBefore,
             },
           },
         });
@@ -1770,8 +1788,7 @@ export const deleteEventWithScope = async (
 
     case 'this_and_future': {
       // Update the recurrence rule to end just before this occurrence
-      const dayBeforeOccurrence = new Date(occurrenceDate);
-      dayBeforeOccurrence.setDate(dayBeforeOccurrence.getDate() - 1);
+      const untilBefore = await untilDayBefore(event.classroom_id, occurrenceDate);
 
       // The occurrences from this date on are gone, so their per-date rows go
       // with them. One boundary at midnight UTC for links AND overrides: an
@@ -1802,7 +1819,7 @@ export const deleteEventWithScope = async (
           data: {
             recurrence_rule: {
               ...toInputJsonObject(event.recurrence_rule),
-              until: dayBeforeOccurrence.toISOString().slice(0, 10),
+              until: untilBefore,
             },
           },
         });

@@ -268,6 +268,66 @@ function localMidnight(year: number, month: number, day: number, timeZone: strin
   return new Date(valid.length > 0 ? Math.min(...valid) : Math.max(first, second));
 }
 
+/** The wall clock `instant` reads in `zone`: its calendar date, time of day and weekday. */
+export function localTimeParts(
+  instant: Date,
+  zone: string | null | undefined
+): { year: number; month: number; day: number; hour: number; minute: number; weekday: number } {
+  const { timeZone } = resolveTimeZone(zone);
+  const p = partsOf(instant, {
+    timeZone,
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: 'numeric',
+    hourCycle: 'h23',
+  });
+  const year = Number(p.year);
+  const month = Number(p.month);
+  const day = Number(p.day);
+  return {
+    year,
+    month,
+    day,
+    hour: Number(p.hour) % 24,
+    minute: Number(p.minute),
+    weekday: new Date(Date.UTC(year, month - 1, day)).getUTCDay(),
+  };
+}
+
+/**
+ * The instant at which `zone`'s wall clock reads `hour:minute` on local date
+ * `year-month-day` (`month` is 1-based; overflowing days roll over as Date.UTC
+ * does). The offset is resolved for THAT date, so a 14:10 class is 14:10 on
+ * both sides of a daylight-saving change, where adding fixed 24 hours would
+ * drift it by an hour.
+ *
+ * Two times are not one instant. One the clock skips (02:30 on a spring-forward
+ * day) is read with the offset from before the change, so it lands an hour
+ * later on the clock; one it repeats (01:30 on a fall-back day) is the first of
+ * its two occurrences, as RFC 5545 reads both.
+ */
+export function zonedWallClockToInstant(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  zone: string | null | undefined
+): Date {
+  const { timeZone } = resolveTimeZone(zone);
+  const wall = Date.UTC(year, month - 1, day, hour, minute);
+  const readsAsWall = (instant: number) => {
+    const p = localTimeParts(new Date(instant), timeZone);
+    return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute) === wall;
+  };
+  const first = wall - offsetMs(wall, timeZone);
+  const second = wall - offsetMs(first, timeZone);
+  const valid = [first, second].filter(readsAsWall);
+  return new Date(valid.length > 0 ? Math.min(...valid) : Math.max(first, second));
+}
+
 /** True when `YYYY-MM-DD` names a date that exists (no Feb 30, no month 13). */
 export function isRealCalendarDate(ymd: string): boolean {
   const m = YMD.exec(ymd);
