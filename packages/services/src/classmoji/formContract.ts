@@ -384,6 +384,12 @@ const rosterSelectDef = z
     optionSource: z.enum(OPTION_SOURCES),
     /** Pick several people ("who would you like to work with") vs. exactly one. */
     multiple: z.boolean().default(false),
+    /**
+     * What a pick means when the answers are turned into teams: someone to be
+     * grouped with (`together`) or kept apart from (`apart`). Optional. Left
+     * out, the team setup guesses from the question's wording.
+     */
+    intent: z.enum(['together', 'apart']).optional(),
     options: optionList(0, FORM_LIMITS.MAX_ROSTER_OPTIONS).default([]),
   })
   .strict();
