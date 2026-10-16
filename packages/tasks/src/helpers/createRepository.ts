@@ -87,6 +87,9 @@ interface SetupTarget {
  * request has something to open on. It is empty: the student's repository
  * holds exactly what the instructor's template does, and nothing a template's
  * .gitignore could refuse.
+ *
+ * The `github-push` webhook filter (workflows/githubWebhook.ts) matches this
+ * message to skip the push; change both together.
  */
 const commitFeedbackStart = async (repoGit: SimpleGit): Promise<void> => {
   await repoGit.commit('Start your feedback space', undefined, { '--allow-empty': null });

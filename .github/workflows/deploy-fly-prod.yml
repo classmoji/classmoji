@@ -314,7 +314,7 @@ jobs:
 
       - name: Deploy to Trigger.dev
         working-directory: packages/tasks
-        run: npx trigger.dev@4.6.4 deploy --push
+        run: npx trigger.dev@4.8.0-webhooks.20261015065339 deploy --push
         env:
           TRIGGER_ACCESS_TOKEN: ${{ secrets.TRIGGER_ACCESS_TOKEN }}
           INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
