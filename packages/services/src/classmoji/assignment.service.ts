@@ -951,7 +951,7 @@ export const moveToModuleTx = async (
   if (fromModuleId !== toModuleId) {
     const remaining = await tx.assignment.findMany({
       where: { module_id: fromModuleId },
-      orderBy: { position: 'asc' },
+      orderBy: MODULE_ORDER,
       select: { id: true },
     });
     for (const [index, row] of remaining.entries()) {

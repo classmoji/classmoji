@@ -53,6 +53,7 @@ const {
   QUIZ_ITEM_REFUSAL,
   listForClassroom,
   deleteById,
+  reorderModules,
 } = await import('../module.service.ts');
 
 beforeEach(() => {
@@ -300,6 +301,43 @@ describe('deleteById', () => {
     await expect(deleteById('mod1', 'class-2')).rejects.toThrow('Module not found in classroom');
     expect(transaction).not.toHaveBeenCalled();
     expect(txModuleDelete).not.toHaveBeenCalled();
+  });
+});
+
+describe('reorderModules', () => {
+  const txModuleUpdate = vi.fn();
+  const tx = { $queryRaw: queryRaw, module: { update: txModuleUpdate } };
+  beforeEach(() => {
+    transaction.mockImplementation(async (run: (client: typeof tx) => unknown) => run(tx));
+    moduleFindMany.mockResolvedValue([{ id: 'b' }, { id: 'c' }, { id: 'a' }]);
+  });
+
+  it('locks every module in id order before writing any position', async () => {
+    // A move locks the two modules it touches in id order; locking in the
+    // caller's order here could deadlock against it.
+    await reorderModules('class-1', ['c', 'a', 'b']);
+
+    expect(queryRaw.mock.calls.map(call => call[1])).toEqual(['a', 'b', 'c']);
+    expect(Math.max(...queryRaw.mock.invocationCallOrder)).toBeLessThan(
+      Math.min(...txModuleUpdate.mock.invocationCallOrder)
+    );
+  });
+
+  it('writes each position as its index, scoped to the classroom', async () => {
+    await reorderModules('class-1', ['c', 'a', 'b']);
+
+    expect(txModuleUpdate.mock.calls.map(call => call[0])).toEqual([
+      { where: { id: 'c', classroom_id: 'class-1' }, data: { position: 0 } },
+      { where: { id: 'a', classroom_id: 'class-1' }, data: { position: 1 } },
+      { where: { id: 'b', classroom_id: 'class-1' }, data: { position: 2 } },
+    ]);
+  });
+
+  it('refuses an ordering that is not exactly the classroom modules, writing nothing', async () => {
+    await expect(reorderModules('class-1', ['a', 'b'])).rejects.toThrow(
+      'Ordered module ids must match the classroom modules'
+    );
+    expect(transaction).not.toHaveBeenCalled();
   });
 });
 
