@@ -536,8 +536,8 @@ export const formCreateTool: ToolDefinition<FormCreateArgs> = {
   description:
     'Creates a form as a DRAFT — nobody can fill it until form_publish. Staff only (owner or ' +
     'teacher); requires a Pro subscription. `access` is a required choice and is FROZEN once the ' +
-    'form has been published even once: CLASSROOM forms may use roster_select / repeat_group ' +
-    '(teammate) fields, ' +
+    'form has been published even once: CLASSROOM forms may use roster_select (intent: together or ' +
+    'apart, what a pick means to form_teams) / repeat_group (teammate) fields, ' +
     'PUBLIC ones may not and are rejected at save if they try. The slug is derived from the title ' +
     'server-side and is the form’s permanent address — it cannot be supplied or changed. Optional ' +
     '`fields` seeds the draft field list.',

@@ -563,6 +563,22 @@ function TypeSpecific({ field, onChange, scopes, nested, siblings }: FieldConfig
               who was in the class at that moment.
             </p>
           </Row>
+          <Row label="What a pick means for teams">
+            <select
+              value={(field.intent as string | undefined) ?? ''}
+              data-testid="forms-field-intent"
+              onChange={event => onChange({ intent: event.target.value || undefined })}
+              className={inputClass}
+            >
+              <option value="">Work it out from the question</option>
+              <option value="together">Someone they want on their team</option>
+              <option value="apart">Someone they would rather not be teamed with</option>
+            </select>
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              Used when this form is turned into teams. Say it here rather than leave it to the
+              wording of the question.
+            </p>
+          </Row>
           <label className="mb-3 flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
             <input
               type="checkbox"
