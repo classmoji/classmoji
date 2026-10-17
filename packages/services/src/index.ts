@@ -624,3 +624,17 @@ export {
   publicFormUrlFor,
 } from './classmoji/siteLinks.ts';
 export type { SeoOriginInput } from './classmoji/siteLinks.ts';
+
+// Chat agents' shared storage pieces, and Ask Moji's conversation types (the
+// session route and the ask-moji task build against these).
+export type { ChatGrant, ReplyState, RedeliveryPolicy } from './classmoji/chatShared.ts';
+export type {
+  AskMojiGrant,
+  AskMojiRefusal,
+  AskMojiRuntimeState,
+  AskMojiSettingsRow,
+  AdmitResult as AskMojiAdmitResult,
+  CreateResult as AskMojiCreateResult,
+  OwnedConversation as AskMojiOwnedConversation,
+  TurnContext as AskMojiTurnContext,
+} from './classmoji/askMojiChat.service.ts';

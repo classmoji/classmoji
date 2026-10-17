@@ -86,6 +86,8 @@ import * as quizAssignmentService from './quizAssignment.service.ts';
 import * as quizAttemptService from './quizAttempt.service.ts';
 import * as quizSourceMaterialService from './quizSourceMaterial.service.ts';
 import * as quizChatService from './quizChat.service.ts';
+import * as askMojiChatService from './askMojiChat.service.ts';
+import * as chatSharedService from './chatShared.ts';
 import * as studentCourseworkService from './studentCoursework.service.ts';
 import * as quizGradingService from './quizGrading.service.ts';
 import * as quizGradeItemsService from './quizGradeItems.service.ts';
@@ -182,6 +184,13 @@ const ClassmojiService = {
   // turn admission and conversation storage, and the locked, fenced,
   // journaled grading writes their tools make.
   quizChat: quizChatService,
+  // Ask Moji served as a chat agent (the `ask-moji` Trigger task): session
+  // start and reuse, turn admission and conversation storage, keyed by the
+  // conversation id (type SYLLABUS_BOT, `context.grant`).
+  askMojiChat: askMojiChatService,
+  // What every chat agent's storage shares: the chat grant rule, the
+  // classroom mutation rule, the pace, the message-id pattern.
+  chatShared: chatSharedService,
   quizGrading: quizGradingService,
   // Quiz grades as engine items (`GradedItem`), batched for a classroom's
   // students: what every grade total adds for quizzes.
