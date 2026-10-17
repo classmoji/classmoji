@@ -18,7 +18,7 @@ export type AllowedModel = (typeof ALLOWED_MODELS)[number];
 
 /**
  * The code default for every AI surface: what a quiz model slot (quiz,
- * exploration, prompt assistant) runs when neither the classroom's choice nor
+ * exploration) runs when neither the classroom's choice nor
  * the platform's env value is allowed (or set), and what Ask Moji runs when
  * SYLLABUS_BOT_MODEL and LLM_MODEL are both unset.
  */

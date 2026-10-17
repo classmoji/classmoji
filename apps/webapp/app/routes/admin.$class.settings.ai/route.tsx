@@ -30,10 +30,10 @@ const MODEL_FIELDS = [
 
 /**
  * The quiz model fields. Both quiz runtimes (the ai-agent and the Trigger.dev
- * quiz tasks), and the prompt assistant that follows llm_model, run only
- * allow-listed models (isAllowedModel, @classmoji/utils/ai-models) and fall
- * back to the platform default for anything else, so these selects offer only
- * those models and the action stores nothing else. Ask Moji has no allow-list.
+ * quiz tasks) run only allow-listed models (isAllowedModel,
+ * @classmoji/utils/ai-models) and fall back to the platform default for
+ * anything else, so these selects offer only those models and the action
+ * stores nothing else. Ask Moji has no allow-list.
  */
 const QUIZ_MODEL_FIELDS = ['llm_model', 'code_aware_model', 'exploration_model'] as const;
 
