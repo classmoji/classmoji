@@ -19,6 +19,7 @@
 
 import getPrisma from '@classmoji/database';
 import { auth } from '@classmoji/auth/server';
+import type { Role } from '@prisma/client';
 import { UnauthorizedError } from '../mcp/errors.ts';
 
 export type Scope = 'read' | 'write';
@@ -44,6 +45,14 @@ export interface Viewer {
    * of an authorization decision.
    */
   agentSession?: string | null;
+  /**
+   * The highest role this request may resolve as in any classroom (the
+   * `X-Classmoji-Role-Ceiling` header, see routes/mcp.ts). Set only for the
+   * Ask Moji client, which sends the view the chat was opened in; null for
+   * every other client, whatever it sends. Narrows tool and resource role
+   * resolution (authz/classroomContext.ts) and nothing else.
+   */
+  roleCeiling?: Role | null;
 }
 
 /** Shape of the oauth_access_tokens row `getMcpSession` returns (better-auth 1.4.18). */

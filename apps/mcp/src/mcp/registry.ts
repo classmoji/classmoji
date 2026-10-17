@@ -42,10 +42,11 @@ import type { Role } from '@prisma/client';
 import type { ZodRawShape } from 'zod';
 import type { Viewer } from '../auth/resolveViewer.ts';
 import { resolveClassroomContext, type ClassroomContext } from '../authz/classroomContext.ts';
-import { assertMutationAllowed, canEnterClassroom } from '../authz/pure.ts';
+import { assertMutationAllowed, canEnterClassroom, withinRoleCeiling } from '../authz/pure.ts';
 import { ToolError, type ToolErrorKind } from './errors.ts';
 import { DEFAULT_RATE_LIMIT, tryConsume, type RateLimitConfig } from './rateLimit.ts';
 import { localizePayload, localizeToolResult, renderZone } from './localTimes.ts';
+import { auditRead, type ReadAudit } from './audit.ts';
 
 export type Scope = 'read' | 'write';
 
@@ -109,6 +110,13 @@ export interface ToolDefinition<Args = Record<string, unknown>> {
    * for classroom-bound write tools.
    */
   readerState?: boolean;
+  /**
+   * Set on a classroom-bound read that returns other people's data (rosters,
+   * submissions, grades, regrades, teams): the registry records each
+   * successful call in the audit log as a VIEW row (mcp/audit.ts). Leave it
+   * off for course content and the caller's own data.
+   */
+  auditRead?: ReadAudit;
   handler: (args: Args, ctx: ToolContext) => Promise<ToolResult>;
 }
 
@@ -148,6 +156,8 @@ export interface ResourceDefinition {
   rateLimit?: RateLimitConfig;
   /** Defaults to 'application/json'. */
   mimeType?: string;
+  /** Same as ToolDefinition.auditRead; `ids` reads the URI-template variables. */
+  auditRead?: ReadAudit;
   /**
    * Returns a JSON-serializable payload; the registry wraps it into MCP
    * resource contents. `vars` are the matched URI-template variables.
@@ -175,6 +185,12 @@ export function registerToolDefinition<Args>(def: ToolDefinition<Args>): void {
       `[mcp] tool '${def.name}' declares readerState but is not a classroom-bound write`
     );
   }
+  if (def.auditRead && (def.scope !== 'read' || !def.roles)) {
+    // A VIEW row needs a classroom, and writes record their own rows.
+    throw new Error(
+      `[mcp] tool '${def.name}' declares auditRead but is not a classroom-bound read`
+    );
+  }
   toolDefinitions.set(def.name, def as ToolDefinition<never>);
 }
 
@@ -199,6 +215,9 @@ export function registerResourceDefinition(def: ResourceDefinition): void {
         `[mcp] resource '${def.name}' declares roles but its uriTemplate lacks {org}/{slug} variables`
       );
     }
+  }
+  if (def.auditRead && !def.roles) {
+    throw new Error(`[mcp] resource '${def.name}' declares auditRead but is not classroom-bound`);
   }
   resourceDefinitions.set(def.name, def);
 }
@@ -330,7 +349,11 @@ function wrapHandler(def: ToolDefinition<never>, viewer: Viewer) {
       }
 
       const result = await (def.handler as ToolDefinition['handler'])(args, ctx);
-      // 5. Class-zone renderings next to every timestamp (mcp/localTimes.ts).
+      // 5. Record a staff read of student data (successful calls only).
+      if (def.auditRead && !result.isError) {
+        await auditRead(def.name, def.auditRead, args ?? {}, ctx);
+      }
+      // 6. Class-zone renderings next to every timestamp (mcp/localTimes.ts).
       //    Classroom-bound tools only: without a classroom there is no zone.
       return ctx.classroom
         ? localizeToolResult(result, renderZone(ctx.classroom.effectiveTimezone))
@@ -341,8 +364,8 @@ function wrapHandler(def: ToolDefinition<never>, viewer: Viewer) {
   };
 }
 
-// ─── Resource enforcement (mirrors the tool pipeline; steps 1–3, no mutation
-//     gate — resources are read-only by construction) ─────────────────────────
+// ─── Resource enforcement (mirrors the tool pipeline; steps 1–3 and the read
+//     audit, no mutation gate — resources are read-only by construction) ──────
 
 /** JSON-RPC error codes for resource-read failures (see ResourceDefinition doc). */
 const RESOURCE_ERROR_CODES: Record<ToolErrorKind, number> = {
@@ -410,6 +433,8 @@ function wrapResourceRead(def: ResourceDefinition, viewer: Viewer) {
       }
 
       const raw = await def.handler(vars, ctx, uri);
+      // 4. Record a staff read of student data, as the tools do.
+      if (def.auditRead) await auditRead(def.name, def.auditRead, vars, ctx);
       // Same class-zone renderings the tools get, so a mirror tool and its
       // resource keep returning the same document.
       const payload = ctx.classroom
@@ -433,8 +458,10 @@ function wrapResourceRead(def: ResourceDefinition, viewer: Viewer) {
 /**
  * Build a resources/list callback for a classroom-bound resource: expand the
  * template once per classroom where the viewer holds a satisfying role and
- * may enter (UNPUBLISHED blocks non-owners). Only templates whose variables
- * are exactly {org}/{slug} are listable; others return no list callback.
+ * may enter (UNPUBLISHED blocks non-owners). A role above the viewer's role
+ * ceiling (Ask Moji) does not count, matching what a read of the URI resolves.
+ * Only templates whose variables are exactly {org}/{slug} are listable; others
+ * return no list callback.
  * `fetchMemberships` is memoized per request-server so a resources/list call
  * costs one membership query total, not one per registered template.
  */
@@ -443,7 +470,8 @@ type MembershipListing = Awaited<ReturnType<typeof ClassmojiService.classroom.fi
 function makeListCallback(
   def: ResourceDefinition,
   template: UriTemplate,
-  fetchMemberships: () => Promise<MembershipListing>
+  fetchMemberships: () => Promise<MembershipListing>,
+  roleCeiling: Role | null | undefined
 ) {
   if (!def.roles) return undefined;
   if (template.variableNames.some(name => name !== 'org' && name !== 'slug')) return undefined;
@@ -455,6 +483,7 @@ function makeListCallback(
     for (const classroom of classrooms) {
       const role = classroom.membership.role;
       if (!roles.includes(role)) continue;
+      if (!withinRoleCeiling(role, roleCeiling)) continue;
       if (!canEnterClassroom({ status: classroom.status, role })) continue;
       if (seen.has(classroom.id)) continue; // multi-role users: one URI per classroom
       seen.add(classroom.id);
@@ -557,7 +586,7 @@ export function buildMcpServer(viewer: Viewer): McpServer {
       server.registerResource(
         def.name,
         new ResourceTemplate(def.uriTemplate, {
-          list: makeListCallback(def, template, fetchMemberships),
+          list: makeListCallback(def, template, fetchMemberships, viewer.roleCeiling),
         }),
         metadata,
         (uri: URL, variables: Record<string, string | string[]>) => read(uri, variables)

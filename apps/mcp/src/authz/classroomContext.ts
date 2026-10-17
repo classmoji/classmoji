@@ -18,7 +18,7 @@ import { resolveEffectiveTimeZone, type EffectiveTimeZone } from '@classmoji/uti
 import type { ClassroomStatus, Role } from '@prisma/client';
 import { ToolError } from '../mcp/errors.ts';
 import type { Viewer } from '../auth/resolveViewer.ts';
-import { assertEntryAllowed, parseClassroomRef, requireRole } from './pure.ts';
+import { applyRoleCeiling, assertEntryAllowed, parseClassroomRef, requireRole } from './pure.ts';
 
 type Classroom = NonNullable<Awaited<ReturnType<typeof ClassmojiService.classroom.findById>>>;
 type Membership = NonNullable<
@@ -49,11 +49,14 @@ export interface ClassroomContext {
   effectiveTimezone: EffectiveTimeZone;
   /** The membership that satisfied the tool's role requirement. */
   membership: Membership;
-  /** The caller's HIGHEST-privilege role among those satisfying the gate. */
+  /**
+   * The caller's HIGHEST-privilege role among those satisfying the gate (and
+   * the viewer's role ceiling, when one is set).
+   */
   role: Role;
   /**
-   * Every role the caller holds that satisfies the surface's role gate,
-   * highest-privilege first (ClassroomMembership is unique on
+   * Every role the caller holds that satisfies the surface's role gate (and
+   * the role ceiling), highest-privilege first (ClassroomMembership is unique on
    * (classroom_id, user_id, role) — multi-role users are normal).
    */
   roles: Role[];
@@ -118,7 +121,20 @@ export async function resolveClassroomContext(
     ),
     ClassmojiService.classroom.getTimeZone(classroom.id),
   ]);
-  let memberships = found.filter((m): m is Membership => Boolean(m));
+  // Ask Moji's role ceiling (null for every other client): keep only the
+  // roles at or below the view the chat was opened in, so a TA who is also
+  // enrolled resolves as STUDENT on `/student/`. It narrows the roles found and
+  // is never folded into `allowedRoles`, where an empty list means "any
+  // member". It refuses when it removes every role the gate admitted, before
+  // the unfiltered lookup below, which is an unordered findFirst and could hand
+  // a capped role straight back.
+  //
+  // Tool role resolution only. Locked-section reveal (`sectionViewer`) and the
+  // in-handler `holdsRole` sub-gates still read the caller's real memberships.
+  let memberships = applyRoleCeiling(
+    found.filter((m): m is Membership => Boolean(m)),
+    viewer.roleCeiling
+  );
   if (memberships.length === 0 && rolesFilter) {
     // Distinguish "not a member" from "insufficient role" for the error message.
     const any = await ClassmojiService.classroomMembership.findByClassroomAndUser(

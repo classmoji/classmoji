@@ -16,12 +16,15 @@
 import { describe, expect, it } from 'vitest';
 import type { ClassroomStatus, Role } from '@prisma/client';
 import {
+  applyRoleCeiling,
   assertEntryAllowed,
   assertMutationAllowed,
   canEnterClassroom,
   canMutateClassroom,
   parseClassroomRef,
+  parseRoleCeiling,
   requireRole,
+  withinRoleCeiling,
 } from '../pure.ts';
 import { ToolError } from '../../mcp/errors.ts';
 
@@ -182,5 +185,64 @@ describe('requireRole', () => {
     // A user can hold several roles in one classroom (unique on
     // classroom_id+user_id+role); the satisfying row must be returned.
     expect(requireRole([student, assistant], ['OWNER', 'TEACHER', 'ASSISTANT'])).toBe(assistant);
+  });
+});
+
+describe('role ceiling (Ask Moji view)', () => {
+  const ORDER: Role[] = ['STUDENT', 'ASSISTANT', 'TEACHER', 'OWNER'];
+  const m = (role: Role) => ({ role });
+
+  it('parses exactly the four uppercase roles and nothing else', () => {
+    for (const role of ORDER) expect(parseRoleCeiling(role)).toBe(role);
+    for (const bad of ['', 'student', 'Student', 'ADMIN', 'NONE', 'STUDENT, OWNER', ' STUDENT']) {
+      expect(parseRoleCeiling(bad)).toBeNull();
+    }
+  });
+
+  it('admits a role at or below the ceiling, in privilege order', () => {
+    // Hand-written: row = ceiling, the roles it admits.
+    const admits: Record<Role, Role[]> = {
+      STUDENT: ['STUDENT'],
+      ASSISTANT: ['STUDENT', 'ASSISTANT'],
+      TEACHER: ['STUDENT', 'ASSISTANT', 'TEACHER'],
+      OWNER: ['STUDENT', 'ASSISTANT', 'TEACHER', 'OWNER'],
+    };
+    for (const ceiling of ORDER) {
+      for (const role of ORDER) {
+        expect(withinRoleCeiling(role, ceiling)).toBe(admits[ceiling].includes(role));
+      }
+    }
+    for (const role of ORDER) {
+      expect(withinRoleCeiling(role, null)).toBe(true);
+      expect(withinRoleCeiling(role, undefined)).toBe(true);
+    }
+  });
+
+  it('no ceiling returns the memberships untouched', () => {
+    const held = [m('OWNER'), m('STUDENT')];
+    expect(applyRoleCeiling(held, null)).toBe(held);
+    expect(applyRoleCeiling(held, undefined)).toBe(held);
+  });
+
+  it('keeps only the roles at or below the ceiling, order preserved', () => {
+    expect(applyRoleCeiling([m('ASSISTANT'), m('STUDENT')], 'STUDENT')).toEqual([m('STUDENT')]);
+    expect(applyRoleCeiling([m('OWNER'), m('TEACHER'), m('STUDENT')], 'TEACHER')).toEqual([
+      m('TEACHER'),
+      m('STUDENT'),
+    ]);
+  });
+
+  it('a ceiling above every held role changes nothing', () => {
+    expect(applyRoleCeiling([m('STUDENT')], 'OWNER')).toEqual([m('STUDENT')]);
+  });
+
+  it('fails closed when the ceiling removes every held role', () => {
+    const error = thrownToolError(() => applyRoleCeiling([m('ASSISTANT')], 'STUDENT'));
+    expect(error?.kind).toBe('forbidden');
+    expect(error?.code).toBe('INSUFFICIENT_ROLE');
+  });
+
+  it('an empty input stays empty (the caller decides "not a member")', () => {
+    expect(applyRoleCeiling([], 'STUDENT')).toEqual([]);
   });
 });
