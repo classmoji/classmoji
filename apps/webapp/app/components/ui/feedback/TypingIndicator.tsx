@@ -1,6 +1,6 @@
 /**
  * TypingIndicator - A 3-dot bounce animation for AI thinking states
- * Used consistently across Quiz, Prompt Assistant, and Syllabus Bot
+ * Used consistently across Quiz and Syllabus Bot
  */
 const TypingIndicator = ({ color = '#1890ff' }) => {
   return (
