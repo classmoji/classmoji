@@ -82,7 +82,6 @@ function getVerificationConnection(): Promise<Socket> {
  */
 export const AgentType = {
   QUIZ: 'QUIZ',
-  PROMPT_ASSISTANT: 'PROMPT_ASSISTANT',
   SYLLABUS_BOT: 'SYLLABUS_BOT',
 };
 

@@ -20,11 +20,7 @@
     "format:check": "prettier --check \"**/*.{js,jsx,ts,tsx,json,md}\""
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "4.0.68",
-    "@ai-sdk/mcp": "2.0.62",
-    "@anthropic-ai/sdk": "^0.39.0",
     "@aws-sdk/client-s3": "^3.1136.0",
-    "@classmoji/auth": "*",
     "@classmoji/collab": "*",
     "@classmoji/content-signing": "*",
     "@classmoji/database": "*",
@@ -35,15 +31,12 @@
     "@trigger.dev/python": "4.6.4",
     "@trigger.dev/react-hooks": "4.6.4",
     "@trigger.dev/sdk": "4.6.4",
-    "ai": "7.0.122",
     "jsonwebtoken": "^9.0.2",
     "node-fetch": "^3.3.2",
-    "picomatch": "^4.0.5",
     "resend": "^6.20.0",
     "simple-git": "^3.36.0",
     "undici": "^7.19.0",
-    "yjs": "^13.6.33",
-    "zod": "^3.25.76"
+    "yjs": "^13.6.33"
   },
   "trigger.dev": {
     "endpointId": "classflow-ahnN"

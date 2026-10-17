@@ -30,10 +30,10 @@ const MODEL_FIELDS = [
 
 /**
  * The quiz model fields. Both quiz runtimes (the ai-agent and the Trigger.dev
- * quiz tasks), and the prompt assistant that follows llm_model, run only
- * allow-listed models (isAllowedModel, @classmoji/utils/ai-models) and fall
- * back to the platform default for anything else, so these selects offer only
- * those models and the action stores nothing else. Ask Moji has no allow-list.
+ * quiz tasks) run only allow-listed models (isAllowedModel,
+ * @classmoji/utils/ai-models) and fall back to the platform default for
+ * anything else, so these selects offer only those models and the action
+ * stores nothing else. Ask Moji has no allow-list.
  */
 const QUIZ_MODEL_FIELDS = ['llm_model', 'code_aware_model', 'exploration_model'] as const;
 
@@ -72,8 +72,8 @@ const EFFORT_OPTIONS = [
 /**
  * Exploration stops at High. Its excerpt call reads up to ~20k tokens of code,
  * and at xhigh or max the thinking can use up the call's max_tokens before it
- * answers, which falls back to whole files. (packages/tasks exploreRepo.ts runs
- * those two as high anyway.)
+ * answers, which falls back to whole files. (The explore-repo task runs those
+ * two as high anyway.)
  */
 const EXPLORATION_EFFORT_OPTIONS = EFFORT_OPTIONS.filter(
   option => option.value !== 'xhigh' && option.value !== 'max'

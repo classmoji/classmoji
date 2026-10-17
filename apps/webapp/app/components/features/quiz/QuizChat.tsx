@@ -235,7 +235,7 @@ export const FIXED_ERROR_COPY: ReadonlySet<string> = new Set<string>([
   'Quiz attempt not found.',
   "This quiz can't continue right now.",
   ...Object.values(CLASSROOM_STATUS_COPY),
-  // The Trigger task's own refusals and failures (packages/tasks, sanitize.ts).
+  // The Trigger task's own refusals and failures (apps/ai-agent, src/trigger/shared/sanitize.ts).
   ...QUIZ_AGENT_ERROR_COPY,
   ...Object.values(NOTICE_COPY),
 ]);
