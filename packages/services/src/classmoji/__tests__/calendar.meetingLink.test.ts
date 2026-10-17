@@ -19,6 +19,7 @@ vi.mock('@classmoji/database', () => ({
   default: () => ({
     calendarEvent,
     calendarEventOverride,
+    classroomSettings: { findUnique: vi.fn().mockResolvedValue(null) },
     $transaction: (fn: (tx: unknown) => unknown) =>
       fn({
         calendarEvent,
