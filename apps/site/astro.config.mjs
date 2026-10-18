@@ -78,6 +78,11 @@ export default defineConfig({
             { label: 'Grade assignments', slug: 'docs/instructors/grading' },
             { label: 'Configure tokens', slug: 'docs/instructors/tokens' },
             {
+              label: 'Ask Moji',
+              slug: 'docs/instructors/ask-moji',
+              badge: { text: 'New', variant: 'tip' },
+            },
+            {
               label: 'MCP server setup',
               slug: 'docs/instructors/mcp-server',
               badge: { text: 'New', variant: 'tip' },

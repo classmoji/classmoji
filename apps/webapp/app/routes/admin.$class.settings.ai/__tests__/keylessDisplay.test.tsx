@@ -33,10 +33,15 @@ vi.mock('~/hooks', () => ({ useGlobalFetcher: () => ({ fetcher: null }) }));
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: vi.fn(),
   assertClassroomMutationAllowed: vi.fn(),
+  addClassroomAuditLog: vi.fn(),
+}));
+vi.mock('~/routes/admin.$class.ask-moji/impersonation.server', () => ({
+  impersonationAuditFields: async () => ({}),
 }));
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {},
   ClassroomSettingsEntitlementError: class extends Error {},
+  ClassroomSettingsValidationError: class extends Error {},
 }));
 vi.mock('~/utils/aiFeatures.server', () => ({ isAIAgentConfigured: () => true }));
 
@@ -66,23 +71,23 @@ const render = (
     settings?: Record<string, unknown>;
     quizzesProRequired?: boolean;
     askMojiProRequired?: boolean;
+    askMojiToggleAvailable?: boolean;
+    askMojiUnavailableLine?: string | null;
   } = {}
 ) => {
   const props = {
     loaderData: {
-      organization: {
-        settings: {
-          has_anthropic_key: hasKey,
-          quizzes_enabled: true,
-          syllabus_bot_enabled: true,
-          // What is stored. The page must not show it without a key.
-          llm_model: 'claude-opus-5-5',
-          ...extra.settings,
-        },
+      settings: {
+        has_anthropic_key: hasKey,
+        quizzes_enabled: true,
+        syllabus_bot_enabled: true,
+        syllabus_bot_instructions: null,
+        ...extra.settings,
       },
-      availableModels: { anthropic: MODELS },
-      quizModels: MODELS,
+      allowedModels: MODELS,
       aiAgentAvailable,
+      askMojiToggleAvailable: extra.askMojiToggleAvailable ?? aiAgentAvailable,
+      askMojiUnavailableLine: extra.askMojiUnavailableLine ?? null,
       quizzesProRequired: extra.quizzesProRequired ?? false,
       askMojiProRequired: extra.askMojiProRequired ?? false,
       defaultLabels: DEFAULT_LABELS,
@@ -241,5 +246,44 @@ describe('AI settings: code exploration', () => {
 
     expect(html.match(/>Code exploration</g)).toHaveLength(2);
     expect(html).not.toMatch(/billed/i);
+  });
+});
+
+describe('AI settings: Ask Moji availability', () => {
+  it('disables only the Ask Moji switch where Ask Moji cannot run, with its line', () => {
+    const html = render(true, ALL_NULL, true, {
+      askMojiToggleAvailable: false,
+      askMojiUnavailableLine: "Ask Moji isn't set up on this server.",
+    });
+
+    expect(html).toContain('Ask Moji isn&#x27;t set up on this server.');
+    expect(switches(html)).toEqual([
+      { checked: true, disabled: false },
+      { checked: true, disabled: true },
+    ]);
+  });
+
+  it('keeps the Ask Moji switch usable while the AI agent is down, when Ask Moji can run', () => {
+    const html = render(true, ALL_NULL, false, { askMojiToggleAvailable: true });
+
+    expect(switches(html)[1]).toEqual({ checked: true, disabled: false });
+  });
+});
+
+describe('AI settings: Ask Moji instructions', () => {
+  it('shows the stored instructions in their own field, outside the model form', () => {
+    const html = render(true, ALL_NULL, true, {
+      settings: { syllabus_bot_instructions: 'Answer in Spanish.' },
+    });
+
+    expect(html).toContain('Classroom instructions for Ask Moji');
+    expect(html).toMatch(/<textarea[^>]*id="syllabus_bot_instructions"[^>]*maxLength="4000"/i);
+    expect(html).toContain('Answer in Spanish.');
+    expect(html).toContain('Save instructions');
+  });
+
+  it('shows an empty field when there are none', () => {
+    const html = render(true, ALL_NULL);
+    expect(html).toMatch(/<textarea[^>]*id="syllabus_bot_instructions"[^>]*><\/textarea>/i);
   });
 });
