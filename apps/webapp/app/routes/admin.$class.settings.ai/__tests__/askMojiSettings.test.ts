@@ -272,6 +272,24 @@ describe('every AI settings save is audited', () => {
     expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [{ _action: 'saveLLMSettings' }],
+    [{ _action: 'saveLLMSettings', anthropic_api_key: '   ' }],
+    [
+      {
+        _action: 'saveLLMSettings',
+        anthropic_api_key: '',
+        llm_temperature: 0.2,
+        llm_max_tokens: 9,
+      },
+    ],
+  ])('%o changes nothing, so it neither writes nor audits', async body => {
+    const result = await post(body);
+    expect(result.success).toBe('AI settings saved');
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
   it('writes no row when the Pro gate refuses turning Ask Moji on', async () => {
     mocks.updateSettings.mockRejectedValue(new mocks.EntitlementError('Pro'));
     await post({ _action: 'saveAskMojiSettings', syllabus_bot_enabled: true });
