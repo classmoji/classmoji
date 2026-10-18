@@ -372,8 +372,10 @@ const deriveGrant = (
 };
 
 class Refused extends Error {
-  constructor(readonly code: AskMojiRefusalCode) {
+  readonly code: AskMojiRefusalCode;
+  constructor(code: AskMojiRefusalCode) {
     super(`ask moji refused: ${code}`);
+    this.code = code;
   }
 }
 
