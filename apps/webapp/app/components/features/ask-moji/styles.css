@@ -1,0 +1,965 @@
+/* Ask Moji panel (the Trigger runtime). Own `moji-` prefix: the legacy
+   widget's `askmoji-` styles are loaded alongside until it is deleted. Colours
+   come from the shared tokens (tokens.css), which switch with `.dark`. */
+
+.moji-panel {
+  --mj-bg: var(--panel);
+  --mj-header-bg: var(--panel-tint);
+  --mj-border: var(--line);
+  --mj-title: var(--ink-3);
+  --mj-course: var(--ink-0);
+  --mj-subtitle: var(--ink-3);
+  --mj-text-user: var(--ink-0);
+  --mj-text-moji: var(--ink-1);
+  --mj-prompt: var(--accent);
+  --mj-hint: var(--accent);
+  --mj-hint-hover: var(--accent-hover);
+  --mj-hint-border: var(--line);
+  --mj-muted: var(--ink-4);
+  --mj-shadow: var(--shadow-float);
+  --mj-error-bg: var(--peach-bg);
+  --mj-error-border: var(--peach-bord);
+  --mj-error-ink: var(--peach-ink);
+  --mj-ref-bg: var(--accent-soft);
+  --mj-ref-border: var(--accent-soft-2);
+  --mj-ref-ink: var(--accent-ink);
+  --mj-code-bg: var(--panel-tint);
+  --mj-pressed: var(--accent);
+
+  display: flex;
+  flex-direction: column;
+  background: var(--mj-bg);
+  color: var(--mj-text-moji);
+  overflow: hidden;
+}
+
+.dark .moji-panel {
+  --mj-shadow: 0 12px 48px rgba(0, 0, 0, 0.6), 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+.moji-panel[hidden] {
+  display: none;
+}
+
+/* ── Floating (webapp) ── */
+.moji-panel[data-mode='floating'] {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  width: 420px;
+  height: min(640px, calc(100dvh - 48px));
+  z-index: 50;
+  border-radius: 16px;
+  border: 1px solid var(--mj-border);
+  box-shadow: var(--mj-shadow);
+  will-change: transform, opacity;
+  transition:
+    width 250ms ease,
+    height 250ms ease;
+}
+
+.moji-panel[data-mode='floating'][data-expanded] {
+  width: 500px;
+  height: min(740px, calc(100dvh - 48px));
+}
+
+@media (max-width: 640px) {
+  .moji-panel[data-mode='floating'],
+  .moji-panel[data-mode='floating'][data-expanded] {
+    inset: 0;
+    width: 100%;
+    height: 100dvh;
+    border-radius: 0;
+    border: none;
+    box-shadow: none;
+    padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
+      env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+  }
+  .moji-expand {
+    display: none;
+  }
+}
+
+/* ── Embed (the pages/slides frame; the host draws the container) ── */
+.moji-panel[data-mode='embed'] {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100dvh;
+}
+
+/* ── Genie open (and the close keyframes, kept for the close animation) ── */
+@keyframes moji-open {
+  0% {
+    opacity: 0;
+    transform: translate(var(--genie-x, -300px), var(--genie-y, 120px)) scale(0.04);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
+  }
+}
+
+@keyframes moji-genie {
+  0% {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--genie-x, -300px), var(--genie-y, 120px)) scale(0.04);
+  }
+}
+
+.moji-panel[data-mode='floating'][data-state='opening'] {
+  animation: moji-open 400ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.moji-panel[data-mode='floating'][data-state='closing'] {
+  animation: moji-genie 320ms cubic-bezier(0.4, 0, 1, 1) forwards;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .moji-panel[data-mode='floating'][data-state='opening'],
+  .moji-panel[data-mode='floating'][data-state='closing'] {
+    animation-duration: 1ms;
+  }
+}
+
+/* ── Header ── */
+.moji-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  min-height: 36px;
+  background: var(--mj-header-bg);
+  border-bottom: 1px solid var(--mj-border);
+  flex-shrink: 0;
+  position: relative;
+}
+
+.moji-dots {
+  display: flex;
+  align-items: center;
+  position: relative;
+  height: 26px;
+  min-width: 44px;
+}
+
+.moji-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  transition: opacity 0.15s;
+}
+
+.moji-dot-actions {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  position: absolute;
+  left: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s;
+}
+
+.moji-header:hover .moji-status-dot,
+.moji-header:focus-within .moji-status-dot {
+  opacity: 0;
+}
+
+.moji-header:hover .moji-dot-actions,
+.moji-header:focus-within .moji-dot-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Touch screens have no hover: the controls stay visible. */
+@media (hover: none) {
+  .moji-status-dot {
+    display: none;
+  }
+  .moji-dot-actions {
+    position: static;
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+.moji-dot-btn {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  border: none;
+  background: none;
+  color: var(--mj-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition:
+    color 0.15s,
+    background 0.15s;
+}
+
+.moji-dot-btn:hover {
+  color: var(--mj-text-user);
+  background: var(--mj-hint-border);
+}
+
+.moji-dot-btn--close:hover {
+  color: #ff6059;
+  background: rgba(255, 96, 89, 0.12);
+}
+
+.moji-dot-btn--shown {
+  opacity: 1;
+}
+
+.moji-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 6px;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.moji-title-name {
+  font-weight: 600;
+  color: var(--mj-title);
+}
+
+.moji-title-course {
+  color: var(--mj-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.moji-new {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: none;
+  background: none;
+  color: var(--mj-muted);
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    background 0.15s;
+}
+
+.moji-new:hover:not(:disabled) {
+  color: var(--mj-title);
+  background: var(--mj-hint-border);
+}
+
+.moji-new:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ── Body ── */
+.moji-body-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.moji-body {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 20px 20px 12px;
+  overscroll-behavior: contain;
+}
+
+.moji-state {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 0;
+}
+
+.moji-state-line {
+  font-size: 14px;
+  color: var(--mj-text-user);
+}
+
+.moji-state-sub {
+  font-size: 13px;
+  color: var(--mj-subtitle);
+}
+
+.moji-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid var(--mj-border);
+  background: var(--mj-bg);
+  color: var(--mj-text-user);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.moji-button:hover:not(:disabled) {
+  background: var(--mj-header-bg);
+}
+
+.moji-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── Welcome ── */
+.moji-course-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--mj-course);
+  margin-bottom: 4px;
+}
+
+.moji-course-sub {
+  font-size: 13px;
+  color: var(--mj-subtitle);
+  margin-bottom: 20px;
+}
+
+.moji-hints {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 8px;
+}
+
+.moji-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 0;
+  border: none;
+  border-bottom: 1px solid var(--mj-hint-border);
+  font-size: 13px;
+  color: var(--mj-hint);
+  cursor: pointer;
+  background: none;
+  text-align: left;
+  width: 100%;
+  transition: color 0.15s;
+}
+
+.moji-hint:first-child {
+  border-top: 1px solid var(--mj-hint-border);
+}
+
+.moji-hint:hover:not(:disabled) {
+  color: var(--mj-hint-hover);
+}
+
+.moji-hint:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.moji-hint svg {
+  opacity: 0.5;
+  flex-shrink: 0;
+}
+
+/* ── Messages ── */
+@keyframes moji-msg-in {
+  from {
+    opacity: 0;
+    transform: translateX(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.moji-msg {
+  animation: moji-msg-in 200ms ease-out both;
+}
+
+.moji-msg + .moji-msg {
+  margin-top: 20px;
+}
+
+.moji-msg--user {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.moji-chevron {
+  color: var(--mj-prompt);
+  font-size: 14px;
+  font-weight: 700;
+  flex-shrink: 0;
+  line-height: 1.6;
+}
+
+.moji-user-text {
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.moji-msg--moji {
+  padding-left: 22px;
+  color: var(--mj-text-moji);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.moji-answer {
+  overflow-wrap: anywhere;
+}
+
+.moji-answer > :first-child {
+  margin-top: 0;
+}
+
+.moji-answer p {
+  margin: 0;
+  padding-top: 6px;
+}
+
+.moji-answer p:first-child {
+  padding-top: 0;
+}
+
+.moji-answer h1,
+.moji-answer h2,
+.moji-answer h3,
+.moji-answer h4 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--mj-text-user);
+  margin: 12px 0 4px;
+}
+
+.moji-answer a {
+  color: var(--mj-hint);
+  text-decoration: none;
+}
+
+.moji-answer a:hover {
+  text-decoration: underline;
+}
+
+.moji-answer img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+}
+
+.moji-answer ul,
+.moji-answer ol {
+  margin: 6px 0;
+  padding-left: 18px;
+}
+
+.moji-answer ul {
+  list-style: disc;
+}
+
+.moji-answer ol {
+  list-style: decimal;
+}
+
+.moji-answer li {
+  margin-bottom: 2px;
+}
+
+.moji-answer li > input[type='checkbox'] {
+  margin-right: 6px;
+}
+
+.moji-answer blockquote {
+  margin: 8px 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--mj-border);
+  color: var(--mj-subtitle);
+}
+
+.moji-answer :not(pre) > code {
+  background: var(--mj-code-bg);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+/* Code blocks: scroll sideways, with their own Copy. */
+.moji-code {
+  position: relative;
+  margin: 8px 0;
+}
+
+.moji-code pre {
+  background: var(--mj-code-bg);
+  padding: 10px 12px;
+  border-radius: 8px;
+  overflow-x: auto;
+  font-size: 13px;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.moji-code-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border: 1px solid var(--mj-border);
+  background: var(--mj-bg);
+  color: var(--mj-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.moji-code:hover .moji-code-copy,
+.moji-code-copy:focus-visible {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .moji-code-copy {
+    opacity: 1;
+  }
+}
+
+/* Tables: scroll sideways inside the answer. */
+.moji-table-wrap {
+  overflow-x: auto;
+  margin: 8px 0;
+  border: 1px solid var(--mj-border);
+  border-radius: 8px;
+}
+
+.moji-table-wrap table {
+  border-collapse: collapse;
+  font-size: 13px;
+  min-width: 100%;
+}
+
+.moji-table-wrap th,
+.moji-table-wrap td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--mj-border);
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.moji-table-wrap th {
+  background: var(--mj-header-bg);
+  font-weight: 600;
+  color: var(--mj-text-user);
+}
+
+.moji-table-wrap tr:last-child td {
+  border-bottom: none;
+}
+
+/* Highlighting (rehype-highlight classes), light and dark. */
+.moji-code .hljs-keyword,
+.moji-code .hljs-selector-tag,
+.moji-code .hljs-built_in,
+.moji-code .hljs-type {
+  color: #8250df;
+}
+.moji-code .hljs-string,
+.moji-code .hljs-attr,
+.moji-code .hljs-regexp {
+  color: #0a3069;
+}
+.moji-code .hljs-number,
+.moji-code .hljs-literal {
+  color: #0550ae;
+}
+.moji-code .hljs-title,
+.moji-code .hljs-section {
+  color: #953800;
+}
+.moji-code .hljs-comment,
+.moji-code .hljs-quote {
+  color: #6e7781;
+  font-style: italic;
+}
+.dark .moji-code .hljs-keyword,
+.dark .moji-code .hljs-selector-tag,
+.dark .moji-code .hljs-built_in,
+.dark .moji-code .hljs-type {
+  color: #d2a8ff;
+}
+.dark .moji-code .hljs-string,
+.dark .moji-code .hljs-attr,
+.dark .moji-code .hljs-regexp {
+  color: #a5d6ff;
+}
+.dark .moji-code .hljs-number,
+.dark .moji-code .hljs-literal {
+  color: #79c0ff;
+}
+.dark .moji-code .hljs-title,
+.dark .moji-code .hljs-section {
+  color: #ffa657;
+}
+.dark .moji-code .hljs-comment,
+.dark .moji-code .hljs-quote {
+  color: #8b949e;
+}
+
+/* ── Steps ── */
+.moji-steps {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.moji-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--mj-muted);
+}
+
+.moji-step svg {
+  flex-shrink: 0;
+}
+
+@keyframes moji-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.moji-spin {
+  animation: moji-spin 1s linear infinite;
+}
+
+.moji-steps-folded {
+  margin-bottom: 6px;
+}
+
+.moji-steps-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 12px;
+  color: var(--mj-muted);
+  cursor: pointer;
+}
+
+.moji-steps-toggle:hover {
+  color: var(--mj-title);
+}
+
+.moji-steps-folded .moji-steps {
+  margin-top: 4px;
+  padding-left: 16px;
+}
+
+/* ── Sources ── */
+.moji-refs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.moji-ref {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  background: var(--mj-ref-bg);
+  border: 1px solid var(--mj-ref-border);
+  color: var(--mj-ref-ink);
+  text-decoration: none;
+  max-width: 100%;
+}
+
+.moji-ref span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+a.moji-ref:hover {
+  filter: brightness(0.95);
+}
+
+/* ── Actions under an answer ── */
+.moji-actions {
+  display: flex;
+  gap: 2px;
+  margin-top: 8px;
+  margin-left: -6px;
+}
+
+.moji-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: 6px;
+  border: none;
+  background: none;
+  font-size: 12px;
+  color: var(--mj-muted);
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    background 0.15s;
+}
+
+.moji-action:hover {
+  color: var(--mj-title);
+  background: var(--mj-hint-border);
+}
+
+.moji-action[aria-pressed='true'] {
+  color: var(--mj-pressed);
+}
+
+/* ── Typing ── */
+@keyframes moji-blink {
+  0%,
+  60%,
+  100% {
+    opacity: 0.2;
+  }
+  30% {
+    opacity: 1;
+  }
+}
+
+.moji-typing {
+  display: flex;
+  gap: 4px;
+}
+
+.moji-typing--inline {
+  padding-left: 22px;
+  padding-top: 14px;
+}
+
+.moji-typing-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--mj-hint);
+  animation: moji-blink 1s infinite;
+}
+
+.moji-typing-dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.moji-typing-dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+/* ── Lines ── */
+.moji-error {
+  margin: 12px 0 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  background: var(--mj-error-bg);
+  border: 1px solid var(--mj-error-border);
+  color: var(--mj-error-ink);
+}
+
+.moji-busy-line {
+  padding: 6px 16px;
+  font-size: 12px;
+  color: var(--mj-muted);
+  border-top: 1px solid var(--mj-border);
+  flex-shrink: 0;
+}
+
+.moji-ended {
+  display: flex;
+  justify-content: center;
+  padding: 8px 16px;
+  border-top: 1px solid var(--mj-border);
+  flex-shrink: 0;
+}
+
+/* ── Jump to latest ── */
+.moji-jump {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid var(--mj-border);
+  background: var(--mj-bg);
+  color: var(--mj-title);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  cursor: pointer;
+}
+
+/* ── Composer ── */
+.moji-composer {
+  padding: 10px 12px 12px;
+  background: var(--mj-header-bg);
+  border-top: 1px solid var(--mj-border);
+  flex-shrink: 0;
+}
+
+.moji-viewing {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  margin-bottom: 8px;
+  padding: 2px 4px 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  color: var(--mj-subtitle);
+  background: var(--mj-bg);
+  border: 1px solid var(--mj-border);
+}
+
+.moji-viewing-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.moji-viewing-dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: none;
+  background: none;
+  color: var(--mj-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.moji-viewing-dismiss:hover {
+  color: var(--mj-text-user);
+  background: var(--mj-hint-border);
+}
+
+.moji-input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.moji-input {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--mj-text-user);
+  max-height: 140px;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.moji-input::placeholder {
+  color: var(--mj-muted);
+}
+
+.moji-input:disabled {
+  opacity: 0.6;
+}
+
+.moji-send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: opacity 0.15s;
+}
+
+.moji-send:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.moji-counter {
+  margin-top: 4px;
+  text-align: right;
+  font-size: 11px;
+  color: var(--mj-muted);
+}
+
+.moji-counter--over {
+  color: var(--mj-error-ink);
+}
+
+.moji-panel :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.moji-input:focus-visible {
+  outline: none;
+}

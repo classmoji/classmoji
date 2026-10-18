@@ -112,9 +112,13 @@ const CommonLayout = ({
         user?: AppUser | null;
         memberships?: MembershipWithOrganization[];
         aiAgentAvailable?: boolean;
+        askMoji?: { runtime?: string; available?: boolean };
       }
     | undefined;
   const { user, memberships = [], aiAgentAvailable = false } = rootData ?? {};
+  // The root loader's `askMojiAvailable` for this classroom (Trigger runtime, a
+  // member). The insights entry follows it, like the sidebar button.
+  const askMojiAvailable = rootData?.askMoji?.available === true;
   const { isProTier: storeIsProTier } = useSubscription();
   const isProTier = isPro ?? storeIsProTier;
   const { tokenBalance } = useStore();
@@ -122,6 +126,10 @@ const CommonLayout = ({
   const isAskMojiOpen = useStore(s => s.isAskMojiOpen);
   const askMojiActive = useStore(s => s.askMojiActive);
   const setAskMojiOpen = useStore(s => s.setAskMojiOpen);
+  // A route that hides Ask Moji (a live quiz attempt) hides its button too.
+  // The Trigger runtime only: the legacy widget's path stays as it was.
+  const askMojiHideRequested = useStore(s => s.askMojiHideCount > 0);
+  const askMojiHidden = askMojiHideRequested && rootData?.askMoji?.runtime === 'trigger';
   const { isDarkMode, background: tweaksBackground } = useDarkMode();
 
   // Effective student-nav visibility: prefer the fresh value from the layout
@@ -163,6 +171,11 @@ const CommonLayout = ({
   useEffect(() => {
     setMobileOpen(false);
   }, [pathname]);
+
+  // Ask Moji takes the whole screen on a phone: the off-canvas sidebar closes for it.
+  useEffect(() => {
+    if (isAskMojiOpen) setMobileOpen(false);
+  }, [isAskMojiOpen]);
 
   const siderWidth = collapsed ? 64 : 240;
 
@@ -237,6 +250,7 @@ const CommonLayout = ({
     // one Pages entry that replaced them.
     if (item.link === '/pages' && role !== 'OWNER' && (!showPages || !hasPages)) return null;
     if (item.link === '/assignments' && role === 'STUDENT' && !hasAssignments) return null;
+    if (item.link === '/ask-moji' && !askMojiAvailable) return null;
 
     // Gitlab calls repositories projects.
     const displayLabel =
@@ -300,12 +314,13 @@ const CommonLayout = ({
     if (item.link === '/modules' && role !== 'OWNER' && (!showModules || !hasModules)) return false;
     if (item.link === '/pages' && role !== 'OWNER' && (!showPages || !hasPages)) return false;
     if (item.link === '/assignments' && role === 'STUDENT' && !hasAssignments) return false;
+    if (item.link === '/ask-moji' && !askMojiAvailable) return false;
 
     return true;
   };
 
   const renderAskMoji = () => {
-    if (!askMojiEnabled) return null;
+    if (!askMojiEnabled || askMojiHidden) return null;
 
     const baseClasses = `group flex items-center gap-2.5 rounded-md transition-colors duration-150 ${
       collapsed
@@ -318,6 +333,7 @@ const CommonLayout = ({
         key="ask-moji"
         type="button"
         data-askmoji-trigger
+        aria-expanded={isAskMojiOpen}
         onClick={() => setAskMojiOpen(!isAskMojiOpen)}
         className={baseClasses}
         style={{
@@ -593,7 +609,9 @@ const CommonLayout = ({
             // Segment-anchored like its neighbours: the forms list brings its
             // own floating card, so without this it would render card-on-card.
             pathname.match(/\/forms(\/|$)/) ||
-            pathname.match(/\/grades(\/|$)/)
+            pathname.match(/\/grades(\/|$)/) ||
+            // The Ask Moji insights page brings its own floating card.
+            pathname.match(/\/ask-moji(\/|$)/)
               ? ''
               : 'bg-panel rounded-2xl ring-1 ring-line'
           }`}

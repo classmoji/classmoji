@@ -3,6 +3,7 @@ import { useLocation, useNavigate, useParams } from 'react-router';
 import { Drawer, ConfigProvider, theme, Modal } from 'antd';
 import { useRouteDrawer, useDarkMode } from '~/hooks';
 import { QuizAttemptInterface } from '~/components';
+import { useAskMojiAttempt } from '~/components/features/ask-moji/viewing';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { attemptDrawerView, chatActivityView, quizDrawerView } from '~/utils/quizPayloads';
@@ -133,6 +134,12 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
 export default function AdminQuizPreviewDrawer({ loaderData }: Route.ComponentProps) {
   const data = loaderData;
+  useAskMojiAttempt({
+    quizId: data.quiz.id,
+    quizName: data.quiz.name,
+    readOnly: data.readOnly,
+    viewerOwnsAttempt: data.viewerOwnsAttempt,
+  });
   const { opened } = useRouteDrawer({});
   const { isDarkMode } = useDarkMode();
   const navigate = useNavigate();

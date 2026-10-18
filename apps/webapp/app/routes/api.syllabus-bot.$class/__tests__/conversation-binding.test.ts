@@ -44,6 +44,14 @@ const CONVERSATIONS = [
   { id: 'conv-other-user', user_id: 'user-2', classroom_id: 'c1', type: 'SYLLABUS_BOT' },
   { id: 'conv-other-class', user_id: 'user-1', classroom_id: 'c2', type: 'SYLLABUS_BOT' },
   { id: 'conv-quiz', user_id: 'user-1', classroom_id: 'c1', type: 'QUIZ' },
+  // The Trigger runtime's Ask Moji conversation: same type, but it carries a grant.
+  {
+    id: 'conv-trigger',
+    user_id: 'user-1',
+    classroom_id: 'c1',
+    type: 'SYLLABUS_BOT',
+    context: { grant: { actor_user_id: 'user-1', effective_user_id: 'user-1' } },
+  },
 ];
 
 const conversationFindFirst = vi.fn(
@@ -67,6 +75,8 @@ vi.mock('~/utils/routeAuth.server', () => ({
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
+    // A legacy conversation carries no Ask Moji grant.
+    askMojiChat: { readGrant: (context: { grant?: unknown } | null) => context?.grant ?? null },
     entitlement: { canUseSyllabusBot: (...a: unknown[]) => canUseSyllabusBotMock(...a) },
     classroom: {
       getClassroomSettingsForServer: (...a: unknown[]) => getClassroomSettingsForServerMock(...a),
@@ -197,6 +207,22 @@ describe('syllabus bot conversation binding — sendMessage', () => {
 
     expect(nonexistent.status).toBe(notYours.status);
     expect(await nonexistent.text()).toBe(await notYours.text());
+  });
+});
+
+describe('the two runtimes never mix', () => {
+  it('refuses to send into, or end, a Trigger-runtime conversation (it carries a grant)', async () => {
+    const send = await post({
+      _action: 'sendMessage',
+      conversationId: 'conv-trigger',
+      content: 'hi',
+    });
+    expect(send.status).toBe(404);
+    expect(await send.json()).toEqual({ error: 'Conversation not found' });
+    const end = await post({ _action: 'endConversation', conversationId: 'conv-trigger' });
+    expect(end.status).toBe(404);
+    expect(sendRequestMock).not.toHaveBeenCalled();
+    expect(publishDoneMock).not.toHaveBeenCalled();
   });
 });
 

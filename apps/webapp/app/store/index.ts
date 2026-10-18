@@ -7,6 +7,7 @@ import type {
   MembershipWithOrganization,
   AppSubscription,
   TourPhase,
+  AskMojiViewingState,
 } from '~/types';
 import type { Role } from '@prisma/client';
 
@@ -77,7 +78,33 @@ const createAskMojiSlice = (set: SetState) => ({
     }),
   askMojiActive: false,
   setAskMojiActive: (askMojiActive: boolean) => set({ askMojiActive }),
+  // What the user has open, as the route on screen publishes it
+  // (useAskMojiViewing). A hint for the panel's "Viewing" chip and the next
+  // message's metadata; the server resolves and checks it.
+  askMojiViewing: null as AskMojiViewingState | null,
+  setAskMojiViewing: (askMojiViewing: AskMojiViewingState | null) =>
+    set((state: StoreState) => {
+      if (sameViewing(state.askMojiViewing, askMojiViewing)) return state;
+      return { askMojiViewing };
+    }),
+  // How many mounted routes ask for Ask Moji to be hidden (useHideAskMoji):
+  // a live quiz attempt. Hidden while above zero.
+  askMojiHideCount: 0,
+  addAskMojiHide: () =>
+    set((state: StoreState) => ({ askMojiHideCount: state.askMojiHideCount + 1 })),
+  removeAskMojiHide: () =>
+    set((state: StoreState) => ({ askMojiHideCount: Math.max(0, state.askMojiHideCount - 1) })),
 });
+
+const sameViewing = (a: AskMojiViewingState | null, b: AskMojiViewingState | null) =>
+  a === b ||
+  (a !== null &&
+    b !== null &&
+    a.kind === b.kind &&
+    a.id === b.id &&
+    a.slide === b.slide &&
+    a.title === b.title &&
+    a.owner === b.owner);
 
 // Guided tour orchestration. "Take a tour" calls startFullTour() -> phase
 // 'landing'; OnboardingTour runs the landing steps and hands off to 'instructor'

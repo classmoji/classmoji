@@ -38,6 +38,8 @@ vi.mock('~/utils/agentStreamManager', () => ({
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
+    // A legacy conversation carries no Ask Moji grant.
+    askMojiChat: { readGrant: (context: { grant?: unknown } | null) => context?.grant ?? null },
     entitlement: {
       canUseSyllabusBotForConversation: (...a: unknown[]) =>
         canUseSyllabusBotForConversationMock(...a),

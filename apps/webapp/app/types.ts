@@ -148,6 +148,11 @@ export interface StoreState {
   setAskMojiEnabled: (enabled: boolean) => void;
   askMojiActive: boolean;
   setAskMojiActive: (active: boolean) => void;
+  askMojiViewing: AskMojiViewingState | null;
+  setAskMojiViewing: (viewing: AskMojiViewingState | null) => void;
+  askMojiHideCount: number;
+  addAskMojiHide: () => void;
+  removeAskMojiHide: () => void;
 
   // Guided tour orchestration: a single "Take a tour" runs the landing tour,
   // then the instructor class tour, then the student class tour, in sequence.
@@ -161,5 +166,19 @@ export interface StoreState {
 }
 
 export type TourPhase = 'idle' | 'landing' | 'instructor' | 'student';
+
+/**
+ * What a route says the user has open, for Ask Moji (useAskMojiViewing).
+ * `kind`/`id`/`slide` go on the next message as its `viewing`; `title` is the
+ * chip's label only and never leaves the browser; `owner` tells publishers
+ * apart so one route's cleanup never clears another's.
+ */
+export interface AskMojiViewingState {
+  kind: 'module' | 'assignment' | 'quiz' | 'page' | 'deck' | 'calendar';
+  id?: string;
+  slide?: number;
+  title?: string;
+  owner: string;
+}
 
 export { Role, SubscriptionTier };

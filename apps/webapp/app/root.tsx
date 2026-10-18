@@ -47,6 +47,7 @@ import { FetcherContext, UserContext } from '~/contexts';
 
 import RenderErrorBoundary from './components/ErrorBoundary';
 import { SyllabusBotRoot } from './components/features/syllabus-bot';
+import { AskMojiRoot, isAskMojiEmbedPath } from './components/features/ask-moji';
 import { OnboardingTour, InClassroomTour } from './components/features/onboarding';
 import ImpersonationBanner from './components/features/admin/ImpersonationBanner';
 import NavigationProgress from './components/layout/NavigationProgress';
@@ -167,6 +168,44 @@ export const shouldRevalidate: ShouldRevalidateFunction = ({
   classroomSlugOf(currentUrl.pathname) !== classroomSlugOf(nextUrl.pathname) ||
   defaultShouldRevalidate;
 
+/**
+ * Which Ask Moji the root mounts, and whether the classroom in the URL has it.
+ * `ASK_MOJI_RUNTIME=trigger` mounts the new panel (shown only where
+ * `askMojiAvailable` says so, for a member: `classroom` is one of the user's
+ * own memberships); anything else keeps the legacy widget, which asks its own
+ * route.
+ */
+const askMojiRootConfig = async (
+  classroom: { id: string; name?: string | null } | undefined
+): Promise<{
+  runtime: 'trigger' | 'ai_agent';
+  available: boolean;
+  courseName: string | null;
+  pagesUrl: string | null;
+  slidesUrl: string | null;
+}> => {
+  const runtime = ClassmojiService.askMojiSession.askMojiRuntimeIsTrigger()
+    ? 'trigger'
+    : 'ai_agent';
+  let available = false;
+  if (runtime === 'trigger' && classroom) {
+    try {
+      available = (
+        await ClassmojiService.askMojiSession.askMojiAvailable({ classroomId: classroom.id })
+      ).available;
+    } catch (error: unknown) {
+      console.error('[root] Ask Moji availability failed', error);
+    }
+  }
+  return {
+    runtime,
+    available,
+    courseName: classroom?.name ?? null,
+    pagesUrl: process.env.PAGES_URL || 'http://localhost:7100',
+    slidesUrl: process.env.SLIDES_URL || 'http://localhost:6500',
+  };
+};
+
 const loadRoot = async ({ request }: Route.LoaderArgs) => {
   const url = new URL(request.url);
 
@@ -181,6 +220,11 @@ const loadRoot = async ({ request }: Route.LoaderArgs) => {
   }
 
   if (url.pathname.endsWith('/invitation')) return { user: null };
+
+  // The Ask Moji embed (framed by the pages and slides apps) renders the panel
+  // alone and runs its own access check, signed-out state included: none of
+  // the redirects below may send the frame elsewhere.
+  if (isAskMojiEmbedPath(url.pathname)) return { user: null, askMojiEmbed: true };
 
   // Check if this is a public page route (e.g., /org-name/pages/page-id)
   const isPublicPageRoute = /^\/[^/]+\/pages\/[^/]+$/.test(url.pathname);
@@ -299,6 +343,7 @@ const loadRoot = async ({ request }: Route.LoaderArgs) => {
     gitMode,
     session: toClientSession(session),
     aiAgentAvailable: isAIAgentConfigured(),
+    askMoji: await askMojiRootConfig(currentClassroom),
     // Where "Stop viewing" should return to. Only set when apps/admin started
     // this impersonation (it drops the breadcrumb cookie before handing off) —
     // a classroom-initiated "View as" leaves this null and keeps its existing
@@ -349,6 +394,8 @@ const FetcherProvider = ({ children }: { children: React.ReactNode }) => {
 
 const App = ({ loaderData }: Route.ComponentProps) => {
   const { user, session, impersonationReturnUrl, impersonationCookieDomain, sentry } = loaderData;
+  const askMoji = 'askMoji' in loaderData ? loaderData.askMoji : undefined;
+  const embed = 'askMojiEmbed' in loaderData && loaderData.askMojiEmbed === true;
   const { isDarkMode, accent } = useDarkMode();
   const { pathname } = useLocation();
   const {
@@ -547,21 +594,32 @@ const App = ({ loaderData }: Route.ComponentProps) => {
                         classroom layout (landing, registration, select-organization)
                         are buffered then silently dropped. */}
                     <CalloutSlot placement="top-right" />
-                    {/* Background Trigger.dev work reports into the callout from
-                        here, above the router, so progress survives navigation
-                        and no route has to host a modal for it. */}
-                    <OperationProgress />
-                    <NavigationProgress />
-                    <ImpersonationBanner
-                      key={session?.session?.id}
-                      session={session}
-                      returnToAdminUrl={impersonationReturnUrl}
-                      impersonationCookieDomain={impersonationCookieDomain}
-                    />
+                    {/* The Ask Moji embed is the panel alone (a frame in the
+                        pages and slides apps): none of the app's chrome. */}
+                    {!embed && (
+                      <>
+                        {/* Background Trigger.dev work reports into the callout from
+                            here, above the router, so progress survives navigation
+                            and no route has to host a modal for it. */}
+                        <OperationProgress />
+                        <NavigationProgress />
+                        <ImpersonationBanner
+                          key={session?.session?.id}
+                          session={session}
+                          returnToAdminUrl={impersonationReturnUrl}
+                          impersonationCookieDomain={impersonationCookieDomain}
+                        />
+                      </>
+                    )}
                     <Outlet />
-                    <SyllabusBotRoot />
-                    <OnboardingTour />
-                    <InClassroomTour />
+                    {!embed &&
+                      (askMoji?.runtime === 'trigger' ? (
+                        <AskMojiRoot config={askMoji} />
+                      ) : (
+                        <SyllabusBotRoot />
+                      ))}
+                    {!embed && <OnboardingTour />}
+                    {!embed && <InClassroomTour />}
                     <ScrollRestoration />
                     <Scripts />
                   </FetcherProvider>

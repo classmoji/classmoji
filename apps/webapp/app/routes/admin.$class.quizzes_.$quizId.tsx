@@ -9,6 +9,7 @@ import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { UserThumbnailView, GradeBadge, SectionHeader } from '~/components';
 import { useGitWeb } from '~/hooks/useGitWeb';
+import { useAskMojiViewing } from '~/components/features/ask-moji/viewing';
 import { formatDuration } from '~/utils/quizUtils';
 import {
   buildQuizResultRows,
@@ -245,6 +246,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 const QuizView = ({ loaderData }: Route.ComponentProps) => {
   const callout = useCallout();
   const { quiz, students, adminAttempt } = loaderData;
+  useAskMojiViewing({ kind: 'quiz', id: quiz.id, title: quiz.name });
   const { terms } = useGitWeb();
   const navigate = useNavigate();
   const { class: classSlug, quizId } = useParams();

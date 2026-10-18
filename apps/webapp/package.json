@@ -101,6 +101,7 @@
     "react-syntax-highlighter": "^16.1.0",
     "recharts": "^2.13.3",
     "rehype-highlight": "^7.0.2",
+    "remark-gfm": "4.0.1",
     "remix-forms": "^2.2.1",
     "remix-utils": "^7.5.0",
     "simple-statistics": "^7.8.8",
