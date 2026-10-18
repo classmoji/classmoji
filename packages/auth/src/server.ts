@@ -3,6 +3,7 @@ import { APIError, createAuthMiddleware, getSession } from 'better-auth/api';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
 import { admin, emailOTP, mcp } from 'better-auth/plugins';
 import getPrisma from '@classmoji/database';
+import type { AskMojiAccess } from '@classmoji/services';
 import type { Role } from '@prisma/client';
 import { ClassmojiService } from '@classmoji/services';
 
@@ -1188,6 +1189,89 @@ export const assertClassroomAccess = async ({
     accessGrantedVia,
   };
 };
+
+/** The roles that may use Ask Moji, strongest first. */
+const ASK_MOJI_ROLES: readonly Role[] = ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'];
+
+/**
+ * Who is asking Ask Moji in a classroom, as `askMojiSession` takes it
+ * (`AskMojiAccess` in @classmoji/services): the effective user, who is
+ * acting (the impersonating admin, else the user), the impersonation behind
+ * the request, the web session id, the classroom (sanitized as
+ * `assertClassroomAccess` returns it), every bot role held (the same
+ * membership rule as `assertClassroomAccess`: any membership row, no
+ * acceptance filter) and the strongest of them.
+ */
+export interface AskMojiAccessResult extends AskMojiAccess {
+  classroom: SafeClassroomRecord;
+  membership: ClassroomMembershipRecord;
+}
+
+/**
+ * The gate every Ask Moji route runs (R2). `assertClassroomAccess` with all
+ * four bot roles (401 signed out, 404 no classroom, 403 not a member or an
+ * UNPUBLISHED classroom for a non-owner; a denial is audited ACCESS_DENIED
+ * with resource type ASK_MOJI), then every role the caller holds and the
+ * impersonation fields of the web session. Not the mutation rule: reading
+ * and reusing a conversation is allowed in a LOCKED classroom; creating one
+ * and taking a turn are refused by the services.
+ */
+export async function assertAskMojiAccess(
+  request: Request,
+  classroomSlug: string,
+  options: AccessOptions = {}
+): Promise<AskMojiAccessResult> {
+  const access = await assertClassroomAccess({
+    request,
+    classroomSlug,
+    allowedRoles: [...ASK_MOJI_ROLES],
+    resourceType: options.resourceType || 'ASK_MOJI',
+    attemptedAction: options.action || 'access',
+    metadata: options.metadata,
+  });
+  const held = await Promise.all(
+    ASK_MOJI_ROLES.map(role =>
+      ClassmojiService.classroomMembership.findByClassroomAndUser(
+        access.classroom.id,
+        access.userId,
+        [role]
+      )
+    )
+  );
+  const roles = ASK_MOJI_ROLES.filter((_, i) => Boolean(held[i]));
+  const highestRole = roles[0] ?? (access.membership!.role as Role);
+
+  const authData = await getAuthSession(request);
+  const webSession = (
+    authData as {
+      session?: { session?: { id?: unknown; impersonatedBy?: unknown; expiresAt?: unknown } };
+    } | null
+  )?.session?.session;
+  const impersonatedBy =
+    typeof webSession?.impersonatedBy === 'string' && webSession.impersonatedBy
+      ? webSession.impersonatedBy
+      : null;
+  const webSessionId = typeof webSession?.id === 'string' ? webSession.id : null;
+  const expiresAt =
+    webSession?.expiresAt instanceof Date
+      ? webSession.expiresAt.toISOString()
+      : typeof webSession?.expiresAt === 'string'
+        ? webSession.expiresAt
+        : null;
+
+  return {
+    userId: access.userId,
+    actorUserId: impersonatedBy ?? access.userId,
+    impersonation: impersonatedBy
+      ? { by: impersonatedBy, sessionId: webSessionId, expiresAt }
+      : null,
+    webSessionId,
+    classroom: access.classroom,
+    roles: roles.length > 0 ? [...roles] : [highestRole],
+    highestRole,
+    membership: access.membership,
+  };
+}
 
 /**
  * Require classroom admin (OWNER) access.

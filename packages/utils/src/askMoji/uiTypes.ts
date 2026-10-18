@@ -8,6 +8,7 @@
 import { tool, type InferUITools, type UIMessage, type UIMessageChunk } from 'ai';
 import { z } from 'zod';
 import { ASK_MOJI_COPY_CODES } from './copy.ts';
+import { MAX_SLIDE_INDEX } from './limits.ts';
 
 /** What the model cites: a page or deck by id, or a platform docs page by path. */
 export const CiteContentInputSchema = z.object({
@@ -48,9 +49,18 @@ export const askMojiToolDefs = {
 /** Longest step title: a label, not a payload. */
 export const STEP_TITLE_MAX = 200;
 
-/** A line while a lookup runs, written by the task (never by the model). */
+/** Where a lookup's step line is: still running, or done. */
+export const STEP_STATUSES = ['running', 'done'] as const;
+export type AskMojiStepStatus = (typeof STEP_STATUSES)[number];
+
+/**
+ * A line while a lookup runs, written by the task (never by the model). The
+ * part's id is the tool call's id, so `done` replaces its `running` line.
+ * `status` is optional for rows stored before it existed.
+ */
 export const AskMojiStepDataSchema = z.object({
   title: z.string().min(1).max(STEP_TITLE_MAX),
+  status: z.enum(STEP_STATUSES).optional(),
 });
 
 /** A fixed line in place of an answer (copy.ts, by code). */
@@ -70,8 +80,18 @@ export type AskMojiDataParts = {
 /** What a user message may say it was sent from (the page the widget was open on). */
 export const VIEWING_KINDS = ['module', 'assignment', 'quiz', 'page', 'deck', 'calendar'] as const;
 
+export type AskMojiViewingKind = (typeof VIEWING_KINDS)[number];
+
+/**
+ * What the widget says is open. `slide` is the deck's current slide (0-based,
+ * a deck only; the server ignores it on any other kind and clamps it).
+ */
 export const AskMojiViewingSchema = z
-  .object({ kind: z.enum(VIEWING_KINDS), id: z.string().min(1).max(128).optional() })
+  .object({
+    kind: z.enum(VIEWING_KINDS),
+    id: z.string().min(1).max(128).optional(),
+    slide: z.number().int().min(0).max(MAX_SLIDE_INDEX).optional(),
+  })
   .strict();
 
 /**

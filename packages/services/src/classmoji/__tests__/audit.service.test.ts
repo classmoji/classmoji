@@ -325,6 +325,42 @@ describe('audit.create dedup: the targeted page block joins the key', () => {
   });
 });
 
+describe('audit.create dedup key: client_id', () => {
+  const readRow = (clientId: string | number) => ({
+    ...baseEntry,
+    resource_type: 'ROSTER',
+    resource_id: 'class-1',
+    action: 'VIEW' as const,
+    data: { tool: 'get_roster', client_id: clientId },
+  });
+
+  it('includes data.client_id in the dedup lookup when the payload names a client', async () => {
+    await audit.create(readRow('ask-moji'));
+    const where = (findFirstMock.mock.calls[0][0] as WhereArg).where;
+    expect(where).toMatchObject({
+      data: { path: ['tool'], equals: 'get_roster' },
+      AND: [{ data: { path: ['client_id'], equals: 'ask-moji' } }],
+    });
+  });
+
+  it('the same read through two clients within the window is two rows', async () => {
+    // Emulate the database: a recent row exists for the assistant client only.
+    findFirstMock.mockImplementation(async ({ where }: WhereArg) => {
+      const filters = (where.AND ?? []) as Array<{ data: { path: string[]; equals: unknown } }>;
+      const client = filters.find(f => f.data.path[0] === 'client_id');
+      return client?.data.equals === 'ask-moji' ? { id: 'recent' } : null;
+    });
+    expect(await audit.create(readRow('ask-moji'))).toBeNull(); // same client: deduped
+    expect(await audit.create(readRow('personal-client'))).not.toBeNull(); // other client
+    expect(createMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('a non-string client_id does not join the key', async () => {
+    await audit.create(readRow(7));
+    expect((findFirstMock.mock.calls[0][0] as WhereArg).where).not.toHaveProperty('AND');
+  });
+});
+
 describe('audit.service live-editing actions', () => {
   it.each(['COLLAB_JOIN', 'COLLAB_LEAVE', 'COLLAB_CHECKPOINT'] as const)(
     'records %s (not skipped as an unknown action)',

@@ -66,8 +66,12 @@ export const nextCreatedAt = async (tx: Tx, conversationId: string): Promise<Dat
 
 // ─── ai_conversations.context ───────────────────────────────────────────────
 
-/** The `context` keys written one at a time, each without touching the others. */
-export type ContextKey = 'runtime' | 'grant';
+/**
+ * The `context` keys written one at a time, each without touching the others:
+ * `grant` and `runtime` (both chat agents), Ask Moji's compaction `summary`
+ * and its Trigger `session` record.
+ */
+export type ContextKey = 'runtime' | 'grant' | 'summary' | 'session';
 
 /** Replace one key of `ai_conversations.context`, keeping every other key. */
 export const writeContextKey = async (

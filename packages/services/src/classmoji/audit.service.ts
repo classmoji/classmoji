@@ -124,6 +124,11 @@ export const create = async (data: AuditLogData, { dedupe = true }: AuditCreateO
   // are two records, so the block joins the key.
   const payloadBlockId = payload?.block_id;
 
+  // The client that made the call (data.client_id — the MCP's OAuth client).
+  // The same read through two clients inside the window (an assistant and a
+  // personal MCP client) are two records, so the client joins the key.
+  const payloadClientId = payload?.client_id;
+
   // Each extra JSON-path filter needs its own `data` clause, and two cannot sit
   // beside each other in one object — they go under `AND`, which Prisma
   // combines conjunctively with the rest.
@@ -135,6 +140,9 @@ export const create = async (data: AuditLogData, { dedupe = true }: AuditCreateO
       : []),
     ...(typeof payloadBlockId === 'string'
       ? [{ data: { path: ['block_id'], equals: payloadBlockId } }]
+      : []),
+    ...(typeof payloadClientId === 'string'
+      ? [{ data: { path: ['client_id'], equals: payloadClientId } }]
       : []),
   ];
 

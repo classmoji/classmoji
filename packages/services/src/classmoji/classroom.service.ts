@@ -4,6 +4,7 @@ import {
   GITLAB_PROJECTS_SUBGROUP,
   GITLAB_TEAMS_SUBGROUP,
 } from '@classmoji/utils';
+import { INSTRUCTIONS_MAX_CHARS } from '@classmoji/utils/ask-moji/limits';
 import { GitHubProvider } from '../git/index.ts';
 import * as entitlementService from './entitlement.service.ts';
 // The barrel, whose write half (and the S3 client behind it) loads only when a
@@ -31,10 +32,15 @@ export class ClassroomSettingsEntitlementError extends Error {
  * A settings value refused as malformed, with a machine-readable `code` the web
  * actions and the MCP registry map to a caller error (never a 500).
  */
-export class ClassroomSettingsValidationError extends Error {
-  readonly code: 'TIMEZONE_INVALID';
+export type ClassroomSettingsValidationCode =
+  | 'TIMEZONE_INVALID'
+  | 'INSTRUCTIONS_INVALID'
+  | 'INSTRUCTIONS_TOO_LONG';
 
-  constructor(code: 'TIMEZONE_INVALID', message: string) {
+export class ClassroomSettingsValidationError extends Error {
+  readonly code: ClassroomSettingsValidationCode;
+
+  constructor(code: ClassroomSettingsValidationCode, message: string) {
     super(message);
     this.name = 'ClassroomSettingsValidationError';
     this.code = code;
@@ -1025,6 +1031,16 @@ export const updateSettings = async (
     updates = { ...updates, timezone: normalizeTimeZoneSetting(updates.timezone) };
   }
 
+  // The owner's Ask Moji instructions: trimmed, blank = cleared, at most
+  // INSTRUCTIONS_MAX_CHARS. Owner-only to read and write (the callers gate
+  // it); never in SAFE_SETTINGS_FIELDS, never copied by an import.
+  if (updates.syllabus_bot_instructions !== undefined) {
+    updates = {
+      ...updates,
+      syllabus_bot_instructions: normalizeInstructionsSetting(updates.syllabus_bot_instructions),
+    };
+  }
+
   return getPrisma().classroomSettings.upsert({
     where: { classroom_id: classroomId },
     create: {
@@ -1034,6 +1050,31 @@ export const updateSettings = async (
     update: updates,
   });
 };
+
+/**
+ * Submitted Ask Moji instructions as they should be stored: null for a clear
+ * (null or blank), the trimmed text otherwise, and a
+ * ClassroomSettingsValidationError for a non-string or for more than
+ * `INSTRUCTIONS_MAX_CHARS` characters.
+ */
+export function normalizeInstructionsSetting(value: unknown): string | null {
+  if (value === null) return null;
+  if (typeof value !== 'string') {
+    throw new ClassroomSettingsValidationError(
+      'INSTRUCTIONS_INVALID',
+      'Ask Moji instructions must be text.'
+    );
+  }
+  const text = value.trim();
+  if (text === '') return null;
+  if (text.length > INSTRUCTIONS_MAX_CHARS) {
+    throw new ClassroomSettingsValidationError(
+      'INSTRUCTIONS_TOO_LONG',
+      `Ask Moji instructions can be at most ${INSTRUCTIONS_MAX_CHARS.toLocaleString('en-US')} characters.`
+    );
+  }
+  return text;
+}
 
 /**
  * A submitted time-zone setting as it should be stored: null for a clear (null

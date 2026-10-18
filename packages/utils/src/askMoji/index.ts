@@ -6,6 +6,7 @@ export * from './visibility.ts';
 export * from './copy.ts';
 export * from './refusals.ts';
 export * from './limits.ts';
+export * from './metadata.ts';
 export {
   createChunkProjector,
   projectMessage,

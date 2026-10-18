@@ -245,12 +245,19 @@ describe.skipIf(!RUN)('ask moji chat service (integration)', () => {
       const older = await start(userA, classX);
       const otherClass = await start(userA, classY);
       const otherUser = await start(userB, classX);
-      const otherView = await start(userA, classX, { view_as: 'OWNER', role_ceiling: null });
+      // taStudent holds ASSISTANT and STUDENT: an ASSISTANT view is another view.
+      const taOlder = await start(taStudent, classX);
+      const otherView = await start(taStudent, classX, {
+        view_as: 'ASSISTANT',
+        role_ceiling: null,
+      });
 
       const result = await askMoji.create({ grant: grantFor(userA, classX) });
       expect(result.ok).toBe(true);
       if (!result.ok) return;
       expect(result.closedConversationIds).toEqual([older]);
+      const taNew = await askMoji.create({ grant: grantFor(taStudent, classX) });
+      expect(taNew.ok && taNew.closedConversationIds).toEqual([taOlder]);
 
       const statuses = await prisma.aIConversation.findMany({
         where: {
@@ -266,7 +273,7 @@ describe.skipIf(!RUN)('ask moji chat service (integration)', () => {
       expect(statusOf(otherView)).toBe('ACTIVE');
       expect(statusOf(result.conversationId)).toBe('ACTIVE');
       expect(
-        (await askMoji.findActive({ userId: userA, classroomId: classX, viewAs: 'OWNER' }))
+        (await askMoji.findActive({ userId: taStudent, classroomId: classX, viewAs: 'ASSISTANT' }))
           ?.conversationId
       ).toBe(otherView);
     });
@@ -323,10 +330,10 @@ describe.skipIf(!RUN)('ask moji chat service (integration)', () => {
         { owned: false, changed: false }
       );
       expect(await askMoji.end({ conversationId: id, userId: userA, classroomId: classX })).toEqual(
-        { owned: true, changed: true }
+        { owned: true, changed: true, hadSession: false }
       );
       expect(await askMoji.end({ conversationId: id, userId: userA, classroomId: classX })).toEqual(
-        { owned: true, changed: false }
+        { owned: true, changed: false, hadSession: false }
       );
       expect(
         await askMoji.findOwned({ conversationId: id, userId: userA, classroomId: classX })
@@ -348,13 +355,15 @@ describe.skipIf(!RUN)('ask moji chat service (integration)', () => {
         role: 'STUDENT',
         turnsUsed: 1,
         metadata: {},
+        viewing: null,
       });
       const row = await prisma.aIConversationMessage.findFirstOrThrow({
         where: { conversation_id: id, ui_message_id: message.id },
       });
       expect(row.role).toBe('USER');
       expect(row.parts).toEqual([{ type: 'text', text: 'When is the midterm?' }]);
-      expect(row.metadata).toBeNull();
+      // Server-only: the acting role and the resolved viewing (none sent).
+      expect(row.metadata).toEqual({ acting_role: 'STUDENT', resolved_viewing: null });
       expect(row.format).toBe('ui_message_v1');
       expect(row.contract_version).toBe(CONTRACT_VERSION);
     });
@@ -655,8 +664,10 @@ describe.skipIf(!RUN)('ask moji chat service (integration)', () => {
       const row = await prisma.aIConversationMessage.findFirstOrThrow({
         where: { conversation_id: id, ui_message_id: message.id },
       });
-      expect(row.metadata).toEqual({ viewing });
-      // A re-delivery reports the stored metadata.
+      // Stored as sent, with the server-only keys beside it (an id from
+      // nowhere resolves to nothing).
+      expect(row.metadata).toEqual({ viewing, acting_role: 'STUDENT', resolved_viewing: null });
+      // A re-delivery reports the stored client metadata only.
       expect(await admit(id, message)).toMatchObject({
         status: 'redelivered',
         metadata: { viewing },

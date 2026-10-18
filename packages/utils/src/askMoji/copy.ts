@@ -66,6 +66,8 @@ export const ASK_MOJI_COPY = {
   NOT_FOUND: 'This conversation has ended. Start a new one to keep asking.',
   INVALID_MESSAGE: 'Could not send your message. Please try again.',
   NOT_ALLOWED: "This conversation can't continue. Start a new one to keep asking.",
+  /** A turn is in flight elsewhere (another tab or device); the widget joins it. */
+  BUSY_ELSEWHERE: 'Ask Moji is answering in another window.',
 } as const;
 
 export type AskMojiCopyCode = keyof typeof ASK_MOJI_COPY;
@@ -91,3 +93,18 @@ export const isAskMojiErrorCopy = (text: unknown): text is string =>
 
 /** Shown while the session starts (the widget's opening state). */
 export const ASK_MOJI_STARTING = 'Reading the course materials…';
+
+/**
+ * Why Ask Moji is not available in a classroom, by code (askMojiSession's
+ * `askMojiAvailable`). Staff see the line on the AI settings page; members
+ * see `ASK_MOJI_COPY.UNAVAILABLE` whatever the reason.
+ */
+export const ASK_MOJI_AVAILABILITY_COPY = {
+  RUNTIME_OFF: "Ask Moji isn't switched on for this server yet.",
+  TRIGGER_NOT_CONFIGURED: "Ask Moji isn't set up on this server.",
+  NO_API_KEY: 'Ask Moji needs an Anthropic API key: add one in AI settings.',
+  PRO_REQUIRED: 'Ask Moji needs a Pro subscription.',
+  NOT_ENABLED: 'Ask Moji is switched off for this class.',
+} as const;
+
+export type AskMojiAvailabilityCode = keyof typeof ASK_MOJI_AVAILABILITY_COPY;
