@@ -12,6 +12,7 @@ import {
 import { deckOnlyRefusal } from '~/utils/slideKind';
 import { canonicalStoredPath } from '~/utils/slideDocumentAccess';
 import { checkpointBeforePresenting, readEditorName } from '~/utils/collab/collab.server';
+import { askMojiHostData } from '~/utils/askMoji.server';
 
 /**
  * Speaker route - Remote speaker notes view
@@ -48,7 +49,7 @@ export const loader = async ({
   }
 
   // Authorization: require speakerNotes access (staff, or viewers when show_speaker_notes=true)
-  const { canEdit, userId } = await assertSlideAccess({
+  const { canEdit, userId, accessGrantedVia } = await assertSlideAccess({
     request,
     slideId,
     slide,
@@ -122,17 +123,26 @@ export const loader = async ({
     contentError = 'Failed to load slide content';
   }
 
+  // The Ask Moji launcher: accepted members of the deck's classroom who were
+  // let in as members (never public access). See utils/askMoji.server.ts.
+  const askMoji = await askMojiHostData({ userId, accessGrantedVia, slide });
+
   return {
     // The speaker view needs the id to open its socket; the rest of the row has
     // no business in a page payload.
     slide: { id: slide.id },
     slideContent,
     contentError,
+    // Ask Moji (all null/false unless this viewer gets the launcher).
+    askMojiEnabled: askMoji.askMojiEnabled,
+    askMojiOrigin: askMoji.askMojiOrigin,
+    classroomSlug: askMoji.classroomSlug,
   };
 };
 
 export default function SlideSpeaker() {
-  const { slide, slideContent, contentError } = useLoaderData<typeof loader>();
+  const { slide, slideContent, contentError, askMojiEnabled, askMojiOrigin, classroomSlug } =
+    useLoaderData<typeof loader>();
 
   // Authorization is handled by assertSlideAccess in the loader
   // If we reach here, user has speakerNotes access
@@ -148,5 +158,15 @@ export default function SlideSpeaker() {
     );
   }
 
-  return <SpeakerView slideId={slide.id} initialContent={slideContent ?? ''} />;
+  return (
+    <SpeakerView
+      slideId={slide.id}
+      initialContent={slideContent ?? ''}
+      askMoji={
+        askMojiEnabled && askMojiOrigin && classroomSlug
+          ? { webappOrigin: askMojiOrigin, classroomSlug }
+          : null
+      }
+    />
+  );
 }

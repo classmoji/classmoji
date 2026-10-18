@@ -63,6 +63,7 @@ import { useToast, useUser } from '~/hooks';
 import { diffDeckSnapshots, extractDeckSnapshot, type DeckSnapshot } from '~/utils/deckOpsDiff';
 import { getThemeUrls } from '~/utils/themeService.server';
 import { loadUploadCapability } from '~/utils/uploadCapability.server';
+import { askMojiHostData } from '~/utils/askMoji.server';
 import {
   deckAccessFor,
   deckDeliveryContext,
@@ -124,6 +125,8 @@ import { PREVIEW_CHANGED_CLASS } from '~/utils/collab/previewHighlight';
 import type { CollabNotesBinding } from '~/components/SlideNotesPanel';
 import SlideToolbar from '~/components/SlideToolbar';
 import SlideNotesPanel from '~/components/SlideNotesPanel';
+import AskMojiHost, { useRevealFlatIndex } from '~/components/askMoji/AskMojiHost';
+import { deckViewing } from '~/components/askMoji/askMojiProtocol';
 import OrphanedImagesModal from '~/components/OrphanedImagesModal';
 import { ElementSelectionProvider } from '~/components/properties/ElementSelectionContext';
 import PropertiesPanel from '~/components/properties/PropertiesPanel';
@@ -182,12 +185,13 @@ export const loader = async ({
   }
 
   // Authorization: check view access (supports public, private, and draft slides)
-  const { canEdit, canPresent, canViewSpeakerNotes, membership, userId } = await assertSlideAccess({
-    request,
-    slideId,
-    slide,
-    accessType: 'view',
-  });
+  const { canEdit, canPresent, canViewSpeakerNotes, membership, userId, accessGrantedVia } =
+    await assertSlideAccess({
+      request,
+      slideId,
+      slide,
+      accessType: 'view',
+    });
 
   // Fire-and-forget: record the slide view for presence tracking
   // Use the user's actual membership role (OWNER, STUDENT, etc.)
@@ -611,6 +615,11 @@ export const loader = async ({
     ? await loadUploadCapability(slide.classroom, 'deck editor')
     : null;
 
+  // The Ask Moji launcher: accepted members of the deck's classroom who were
+  // let in as members (never public or share-code access). See
+  // utils/askMoji.server.ts.
+  const askMoji = await askMojiHostData({ userId, accessGrantedVia, slide });
+
   return {
     // What the viewer reads of the slide. The classroom's organization is
     // `gitOrgLogin` below; the present route carries what presenting needs.
@@ -631,6 +640,10 @@ export const loader = async ({
     snippets: [],
     cssThemes: [],
     webappUrl: process.env.WEBAPP_URL || 'http://localhost:3000',
+    // Ask Moji (all null/false unless this viewer gets the launcher).
+    askMojiEnabled: askMoji.askMojiEnabled,
+    askMojiOrigin: askMoji.askMojiOrigin,
+    classroomSlug: askMoji.classroomSlug,
     // Auto-enter edit mode if ?mode=edit is in URL (useful for new slides where CDN hasn't caught up)
     autoEdit: mode === 'edit',
     // Indicate if we fell back to API (CDN wasn't available yet)
@@ -2260,6 +2273,9 @@ export default function SlideViewer() {
     collab,
     liveCheckpoint,
     previewChangedIds,
+    askMojiEnabled,
+    askMojiOrigin,
+    classroomSlug,
   } = useLoaderData<typeof loader>();
   // Live editing: the deck is edited on the collab server, slide by slide.
   // The git save machinery below stays exactly as it was for every other
@@ -2408,6 +2424,8 @@ export default function SlideViewer() {
   const snippetFetcher = useFetcher(); // For lazy-loading snippets
   const revealRef = useRef<RevealSlidesHandle>(null);
   const [revealInstance, setRevealInstance] = useState<RevealApi | null>(null);
+  // Ask Moji: the slide on screen, as one number (see askMojiProtocol.ts).
+  const askMojiSlide = useRevealFlatIndex(revealInstance, askMojiEnabled);
   const [currentSlideTheme, setCurrentSlideTheme] = useState('white'); // For Sandpack auto-theme
 
   // ── Live editing state ──────────────────────────────────────────────────
@@ -3926,6 +3944,16 @@ export default function SlideViewer() {
               >
                 {isLoadingLatest || isFetchingLatest || wantsLiveEdit ? 'Loading...' : 'Edit'}
               </button>
+            )}
+            {/* Ask Moji: in the navbar, which stays mounted across edit/view
+                (RevealSlides remounts; this must not). Its container is
+                portalled to <body>. */}
+            {askMojiEnabled && askMojiOrigin && classroomSlug && (
+              <AskMojiHost
+                webappOrigin={askMojiOrigin}
+                classroomSlug={classroomSlug}
+                viewing={deckViewing(slide.id, askMojiSlide)}
+              />
             )}
             {/* Present button - only shown if user can present (staff only) */}
             {canPresent && (
