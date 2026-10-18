@@ -9,10 +9,10 @@ import {
   ASKMOJI_OPEN,
   ASKMOJI_READY,
   ASKMOJI_REQUEST_CLOSE,
-  ASKMOJI_VIEWING,
   askMojiEmbedUrl,
   readAskMojiMessage,
   syncMessages,
+  viewingMessage,
   visibleFlatIndex,
   type AskMojiHostMessage,
   type AskMojiViewing,
@@ -25,6 +25,8 @@ interface AskMojiHostProps {
   webappOrigin: string;
   classroomSlug: string;
   viewing: AskMojiViewing;
+  /** The deck's title (loader data), for the frame's chip only. */
+  title?: string | null;
   /** Extra classes for the launcher (its placement). */
   launcherClassName?: string;
   /** Hide the launcher (another overlay owns the screen); the frame stays. */
@@ -55,6 +57,7 @@ function AskMojiHostInner({
   webappOrigin,
   classroomSlug,
   viewing,
+  title,
   launcherClassName = '',
   launcherHidden = false,
 }: AskMojiHostProps) {
@@ -70,8 +73,8 @@ function AskMojiHostInner({
   const containerRef = useRef<HTMLDivElement>(null);
   // Set once the frame says it is listening; nothing is posted before that.
   const readyRef = useRef(false);
-  const latest = useRef({ viewing, open });
-  latest.current = { viewing, open };
+  const latest = useRef({ viewing, title, open });
+  latest.current = { viewing, title, open };
 
   // Client only (the server render has no document), and never inside a
   // frame: a framed copy of this screen (an embed on a page, the webapp's own
@@ -118,7 +121,8 @@ function AskMojiHostInner({
       if (!message) return;
       if (message.type === ASKMOJI_READY) {
         readyRef.current = true;
-        for (const sync of syncMessages(latest.current.viewing, latest.current.open)) post(sync);
+        const { viewing: v, open: o, title: t } = latest.current;
+        for (const sync of syncMessages(v, o, t)) post(sync);
       } else if (message.type === ASKMOJI_REQUEST_CLOSE) {
         close();
       } else if (message.type === ASKMOJI_BUSY) {
@@ -129,10 +133,10 @@ function AskMojiHostInner({
     return () => window.removeEventListener('message', onMessage);
   }, [frameSrc, webappOrigin, post, close]);
 
-  // Host → frame: the viewing, whenever it changes.
-  const viewingKey = viewing ? `${viewing.kind}:${viewing.id}:${viewing.slide}` : '';
+  // Host → frame: the viewing (and its title), whenever either changes.
+  const viewingKey = viewing ? `${viewing.kind}:${viewing.id}:${viewing.slide}:${title ?? ''}` : '';
   useEffect(() => {
-    post({ type: ASKMOJI_VIEWING, viewing: latest.current.viewing });
+    post(viewingMessage(latest.current.viewing, latest.current.title));
   }, [viewingKey, post]);
 
   // Host → frame: open/close. Before `ready` this is a no-op; `ready` resends it.

@@ -78,6 +78,7 @@ describe('an answer', () => {
         <AskMojiMessageView
           message={answer}
           live={false}
+          rateable
           rating="UP"
           onRate={onRate}
           chips={chips}
@@ -100,6 +101,7 @@ describe('an answer', () => {
         <AskMojiMessageView
           message={answer}
           live={false}
+          rateable={false}
           rating={null}
           onRate={vi.fn()}
           chips={chips}
@@ -112,12 +114,37 @@ describe('an answer', () => {
 
     act(() =>
       root.render(
-        <AskMojiMessageView message={answer} live rating={null} onRate={vi.fn()} chips={chips} />
+        <AskMojiMessageView
+          message={answer}
+          live
+          rateable={false}
+          rating={null}
+          onRate={vi.fn()}
+          chips={chips}
+        />
       )
     );
     expect(container.textContent).toContain('Reading Syllabus');
     expect(container.textContent).not.toContain('Looked at');
     expect(container.querySelector('[aria-label="Helpful"]')).toBeNull();
+  });
+
+  it('no thumbs on an answer that is not rateable (a partial reply, a live one); Copy stays', () => {
+    act(() =>
+      root.render(
+        <AskMojiMessageView
+          message={answer}
+          live={false}
+          rateable={false}
+          rating="UP"
+          onRate={vi.fn()}
+          chips={chips}
+        />
+      )
+    );
+    expect(container.querySelector('[aria-label="Helpful"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Not helpful"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Copy answer"]')).not.toBeNull();
   });
 
   it('Copy copies the answer’s Markdown and says Copied', async () => {
@@ -128,6 +155,7 @@ describe('an answer', () => {
         <AskMojiMessageView
           message={answer}
           live={false}
+          rateable={false}
           rating={null}
           onRate={vi.fn()}
           chips={chips}

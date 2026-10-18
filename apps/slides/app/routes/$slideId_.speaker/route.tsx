@@ -133,16 +133,26 @@ export const loader = async ({
     slide: { id: slide.id },
     slideContent,
     contentError,
-    // Ask Moji (all null/false unless this viewer gets the launcher).
+    // Ask Moji (all null/false unless this viewer gets the launcher). The
+    // deck title labels the panel's "Viewing" chip; sent only with the
+    // launcher, to a viewer the access gate already let into this deck.
     askMojiEnabled: askMoji.askMojiEnabled,
     askMojiOrigin: askMoji.askMojiOrigin,
     classroomSlug: askMoji.classroomSlug,
+    askMojiTitle: askMoji.askMojiEnabled ? (slide.title ?? null) : null,
   };
 };
 
 export default function SlideSpeaker() {
-  const { slide, slideContent, contentError, askMojiEnabled, askMojiOrigin, classroomSlug } =
-    useLoaderData<typeof loader>();
+  const {
+    slide,
+    slideContent,
+    contentError,
+    askMojiEnabled,
+    askMojiOrigin,
+    classroomSlug,
+    askMojiTitle,
+  } = useLoaderData<typeof loader>();
 
   // Authorization is handled by assertSlideAccess in the loader
   // If we reach here, user has speakerNotes access
@@ -164,7 +174,7 @@ export default function SlideSpeaker() {
       initialContent={slideContent ?? ''}
       askMoji={
         askMojiEnabled && askMojiOrigin && classroomSlug
-          ? { webappOrigin: askMojiOrigin, classroomSlug }
+          ? { webappOrigin: askMojiOrigin, classroomSlug, title: askMojiTitle }
           : null
       }
     />

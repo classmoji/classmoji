@@ -17,7 +17,10 @@
  * THE PROTOCOL. Messages are plain objects.
  *   host → frame, posted to the frame's window with targetOrigin = the webapp
  *   origin:
- *     { type: 'askmoji:viewing', viewing }   viewing: {kind:'deck', id, slide} | null
+ *     { type: 'askmoji:viewing', viewing, title? }
+ *                                            viewing: {kind:'deck', id, slide} | null;
+ *                                            title: the deck's, for the chip (the
+ *                                            frame adds the slide number)
  *     { type: 'askmoji:open' }
  *     { type: 'askmoji:close' }
  *   frame → host, believed only from the webapp origin AND our own frame:
@@ -26,6 +29,8 @@
  *     { type: 'askmoji:busy', busy: boolean }→ a dot on the launcher
  *
  * `viewing` is a hint. The webapp resolves and checks it on its own server.
+ * `title` labels the frame's "Viewing" chip and nothing else; the frame takes
+ * a string of at most `MAX_TITLE_CHARS` and drops anything else.
  *
  * THE SLIDE NUMBER. `slide` is one zero-based integer: how many slides come
  * before the current one in reading order, counting the deck as a non-editor
@@ -59,8 +64,11 @@ export const ASKMOJI_ATTR = 'data-askmoji';
 /** What the viewer has open. */
 export type AskMojiViewing = { kind: 'deck'; id: string; slide: number } | null;
 
+/** The longest title the frame takes (it drops a longer one). */
+export const MAX_TITLE_CHARS = 200;
+
 export type AskMojiHostMessage =
-  | { type: typeof ASKMOJI_VIEWING; viewing: AskMojiViewing }
+  | { type: typeof ASKMOJI_VIEWING; viewing: AskMojiViewing; title?: string }
   | { type: typeof ASKMOJI_OPEN }
   | { type: typeof ASKMOJI_CLOSE };
 
@@ -149,6 +157,20 @@ export function deckViewing(deckId: string | null | undefined, slide: number): A
  * Messages
  * ------------------------------------------------------------------ */
 
+/** A title for the chip (the deck's, from loader data): trimmed and cut, or undefined. */
+export function chipTitle(raw: string | null | undefined): string | undefined {
+  const title = raw?.trim().slice(0, MAX_TITLE_CHARS);
+  return title ? title : undefined;
+}
+
+/** The viewing message: the title only with a viewing, and only when there is one. */
+export function viewingMessage(viewing: AskMojiViewing, title?: string | null): AskMojiHostMessage {
+  const t = chipTitle(title);
+  return viewing && t
+    ? { type: ASKMOJI_VIEWING, viewing, title: t }
+    : { type: ASKMOJI_VIEWING, viewing };
+}
+
 /** Structural check: the wire format is untrusted even after origin and source match. */
 function parseFrameMessage(data: unknown): AskMojiFrameMessage | null {
   if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
@@ -185,8 +207,12 @@ export function readAskMojiMessage(
 }
 
 /** The messages that bring a (re)loaded frame up to date: viewing, then open/close. */
-export function syncMessages(viewing: AskMojiViewing, open: boolean): AskMojiHostMessage[] {
-  return [{ type: ASKMOJI_VIEWING, viewing }, { type: open ? ASKMOJI_OPEN : ASKMOJI_CLOSE }];
+export function syncMessages(
+  viewing: AskMojiViewing,
+  open: boolean,
+  title?: string | null
+): AskMojiHostMessage[] {
+  return [viewingMessage(viewing, title), { type: open ? ASKMOJI_OPEN : ASKMOJI_CLOSE }];
 }
 
 /**
@@ -221,21 +247,22 @@ export type SlideAccessVia =
  *
  * Every condition must hold: let in as a member of the deck's classroom (not
  * as the public or through a share code), an ACCEPTED member of it, Ask Moji
- * switched on for the classroom, the Trigger runtime selected, and a usable
- * webapp origin. This is for the UI only; the embed route enforces the real
- * gates.
+ * switched on for the classroom, the Trigger runtime selected
+ * (`triggerRuntime`: the shared `isAskMojiTriggerRuntime()` parse, read by the
+ * server module), and a usable webapp origin. This is for the UI only; the
+ * embed route enforces the real gates.
  */
 export function askMojiHostDecision({
   via,
   acceptedRole,
   botEnabled,
-  runtime,
+  triggerRuntime,
   webappUrl,
 }: {
   via: SlideAccessVia | undefined;
   acceptedRole: string | null | undefined;
   botEnabled: boolean | null | undefined;
-  runtime: string | null | undefined;
+  triggerRuntime: boolean;
   webappUrl: string | null | undefined;
 }): { enabled: boolean; origin: string | null } {
   const origin = originOf(webappUrl);
@@ -243,7 +270,7 @@ export function askMojiHostDecision({
     via === 'membership' || via === 'role' || via === 'ownership' || via === 'team_edit';
   const enabled =
     memberAccess &&
-    runtime === 'trigger' &&
+    triggerRuntime &&
     Boolean(origin) &&
     Boolean(acceptedRole) &&
     botEnabled === true;

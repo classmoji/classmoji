@@ -89,6 +89,27 @@ describe('host messages', () => {
     ).toBeNull();
   });
 
+  it('takes a host title for the chip: a string of at most 200 characters, else none', () => {
+    expect(
+      ok({ type: 'askmoji:viewing', viewing: { kind: 'page', id: 'p1' }, title: ' Week 1 ' })
+    ).toEqual({ type: 'askmoji:viewing', viewing: { kind: 'page', id: 'p1' }, title: 'Week 1' });
+    expect(
+      ok({ type: 'askmoji:viewing', viewing: { kind: 'page', id: 'p1' }, title: 'x'.repeat(200) })
+    ).toMatchObject({ title: 'x'.repeat(200) });
+    // A bad title is dropped; the viewing still counts.
+    for (const title of ['x'.repeat(201), 42, { text: 'x' }, '   ', null]) {
+      expect(ok({ type: 'askmoji:viewing', viewing: { kind: 'page', id: 'p1' }, title })).toEqual({
+        type: 'askmoji:viewing',
+        viewing: { kind: 'page', id: 'p1' },
+      });
+    }
+    // No viewing, no title.
+    expect(ok({ type: 'askmoji:viewing', viewing: null, title: 'Stale' })).toEqual({
+      type: 'askmoji:viewing',
+      viewing: null,
+    });
+  });
+
   it('refuses malformed messages and viewings', () => {
     for (const data of [
       null,

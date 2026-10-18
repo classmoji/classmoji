@@ -1,9 +1,11 @@
+/**
+ * Ask Moji's webapp surface. The root does not import this barrel: it reads
+ * `./paths` and lazy-loads `./AskMojiRoot`, which lazy-loads the panel, so
+ * nothing here reaches a page where Ask Moji is off or was never opened.
+ */
 export { default as AskMojiRoot, type AskMojiRootConfig } from './AskMojiRoot';
 export { default as AskMojiPanel } from './AskMojiPanel';
 export { default as AskMojiEmbed } from './AskMojiEmbed';
 export { AskMojiProvider } from './AskMojiProvider';
 export { useAskMojiAttempt, useAskMojiViewing, useHideAskMoji, viewingLabel } from './viewing';
-
-/** The embed route's path (`/ask-moji/:class/embed`): the root renders the panel alone there. */
-export const isAskMojiEmbedPath = (pathname: string) =>
-  /^\/ask-moji\/[^/]+\/embed(?:\.data)?\/?$/.test(pathname);
+export { isAskMojiEmbedPath } from './paths';

@@ -10,6 +10,9 @@
  *     value, and `impersonated_by` while an admin views as the owner. A
  *     refused save writes none.
  *   - With ASK_MOJI_RUNTIME=trigger the switch follows askMojiAvailable.
+ *   - The instructions exist only on the Trigger runtime: off it the loader
+ *     sends none and the save is refused without a write.
+ *   - Every save is its own row (`dedupe: false`).
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -128,6 +131,16 @@ beforeEach(() => {
 });
 
 describe('saveAskMojiInstructions', () => {
+  beforeEach(() => mocks.askMojiRuntimeIsTrigger.mockReturnValue(true));
+
+  it('is refused off the Trigger runtime, writing and auditing nothing', async () => {
+    mocks.askMojiRuntimeIsTrigger.mockReturnValue(false);
+    const result = await saveInstructions('Be brief.');
+    expect(result.error).toBe(INSTRUCTIONS_ERROR_COPY.INSTRUCTIONS_UNAVAILABLE);
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
   it('is gated to the OWNER of the classroom, and to the mutation rule', async () => {
     await saveInstructions('Be brief.');
     expect(mocks.assertClassroomAccess).toHaveBeenCalledWith(
@@ -200,6 +213,7 @@ describe('saveAskMojiInstructions', () => {
       action: 'UPDATE',
       resourceType: 'SETTINGS',
       resourceId: 'c1',
+      dedupe: false,
     });
     expect(row.metadata).toEqual({
       tool: AI_SETTINGS_AUDIT_TOOL,
@@ -234,10 +248,11 @@ describe('every AI settings save is audited', () => {
       },
       ['llm_model', 'syllabus_bot_effort', 'anthropic_api_key'],
     ],
-  ])('%o writes one row naming its fields', async (body, fields) => {
+  ])('%o writes one row naming its fields, never folded into the last', async (body, fields) => {
     await post(body);
-    const row = auditRow();
+    const row = auditRow() as ReturnType<typeof auditRow> & { dedupe?: boolean };
     expect(row.metadata).toEqual({ tool: AI_SETTINGS_AUDIT_TOOL, fields });
+    expect(row.dedupe).toBe(false);
     expect(row.action).toBe('UPDATE');
     expect(JSON.stringify(row)).not.toContain('sk-ant-new-secret');
   });
@@ -311,6 +326,19 @@ describe('loader: Ask Moji switch availability', () => {
 });
 
 describe('loader: the instructions', () => {
+  beforeEach(() => mocks.askMojiRuntimeIsTrigger.mockReturnValue(true));
+
+  it('are neither shown nor sent off the Trigger runtime', async () => {
+    mocks.askMojiRuntimeIsTrigger.mockReturnValue(false);
+    mocks.getClassroomSettingsForServer.mockResolvedValue({
+      anthropic_api_key: null,
+      syllabus_bot_instructions: 'Owner text',
+    });
+    const data = await load();
+    expect(data.askMojiInstructionsShown).toBe(false);
+    expect(data.settings.syllabus_bot_instructions).toBeNull();
+  });
+
   it('reaches the owner page only through the OWNER gate', async () => {
     mocks.getClassroomSettingsForServer.mockResolvedValue({
       anthropic_api_key: null,
@@ -320,6 +348,7 @@ describe('loader: the instructions', () => {
     expect(mocks.assertClassroomAccess).toHaveBeenCalledWith(
       expect.objectContaining({ allowedRoles: ['OWNER'] })
     );
+    expect(data.askMojiInstructionsShown).toBe(true);
     expect(data.settings.syllabus_bot_instructions).toBe('Owner text');
   });
 

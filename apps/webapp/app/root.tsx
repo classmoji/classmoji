@@ -15,7 +15,7 @@ import {
 } from 'react-router';
 import axios from 'axios';
 
-import React, { useEffect } from 'react';
+import React, { lazy, Suspense, useEffect } from 'react';
 import dayjs from 'dayjs';
 import { ConfigProvider, theme, App as AntdApp } from 'antd';
 import { IconMoodSad } from '@tabler/icons-react';
@@ -46,8 +46,16 @@ import { getRoleFromPath } from './constants/roleSettings';
 import { FetcherContext, UserContext } from '~/contexts';
 
 import RenderErrorBoundary from './components/ErrorBoundary';
+
+/**
+ * Ask Moji on the Trigger runtime: its own chunk, loaded only where it is
+ * available (it loads the panel itself on the first open).
+ */
+const AskMojiRoot = lazy(() => import('./components/features/ask-moji/AskMojiRoot'));
 import { SyllabusBotRoot } from './components/features/syllabus-bot';
-import { AskMojiRoot, isAskMojiEmbedPath } from './components/features/ask-moji';
+import { isAskMojiEmbedPath } from './components/features/ask-moji/paths';
+import type { AskMojiRootConfig } from './components/features/ask-moji/AskMojiRoot';
+import { askMojiHostUrls } from '~/utils/askMojiHosts.server';
 import { OnboardingTour, InClassroomTour } from './components/features/onboarding';
 import ImpersonationBanner from './components/features/admin/ImpersonationBanner';
 import NavigationProgress from './components/layout/NavigationProgress';
@@ -177,13 +185,7 @@ export const shouldRevalidate: ShouldRevalidateFunction = ({
  */
 const askMojiRootConfig = async (
   classroom: { id: string; name?: string | null } | undefined
-): Promise<{
-  runtime: 'trigger' | 'ai_agent';
-  available: boolean;
-  courseName: string | null;
-  pagesUrl: string | null;
-  slidesUrl: string | null;
-}> => {
+): Promise<AskMojiRootConfig & { runtime: 'trigger' | 'ai_agent' }> => {
   const runtime = ClassmojiService.askMojiSession.askMojiRuntimeIsTrigger()
     ? 'trigger'
     : 'ai_agent';
@@ -201,8 +203,8 @@ const askMojiRootConfig = async (
     runtime,
     available,
     courseName: classroom?.name ?? null,
-    pagesUrl: process.env.PAGES_URL || 'http://localhost:7100',
-    slidesUrl: process.env.SLIDES_URL || 'http://localhost:6500',
+    // Null in production when unset (no localhost guess): chips to that app are labels.
+    ...askMojiHostUrls(),
   };
 };
 
@@ -614,7 +616,11 @@ const App = ({ loaderData }: Route.ComponentProps) => {
                     <Outlet />
                     {!embed &&
                       (askMoji?.runtime === 'trigger' ? (
-                        <AskMojiRoot config={askMoji} />
+                        askMoji.available && (
+                          <Suspense fallback={null}>
+                            <AskMojiRoot config={askMoji} />
+                          </Suspense>
+                        )
                       ) : (
                         <SyllabusBotRoot />
                       ))}

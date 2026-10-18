@@ -15,6 +15,7 @@
  * only; the webapp's embed route enforces the real gates.
  */
 import { ClassmojiService } from '@classmoji/services';
+import { isAskMojiTriggerRuntime } from '@classmoji/utils/ask-moji';
 import { findClassroomRole } from '@classmoji/auth/classroom-role';
 
 import { askMojiHostDecision, type SlideAccessVia } from '~/components/askMoji/askMojiProtocol';
@@ -45,7 +46,8 @@ export async function askMojiHostData({
   const classroomSlug = slide.classroom?.slug;
   const base = {
     via: accessGrantedVia,
-    runtime: process.env.ASK_MOJI_RUNTIME,
+    // The one ASK_MOJI_RUNTIME parse every app shares.
+    triggerRuntime: isAskMojiTriggerRuntime(),
     webappUrl: process.env.WEBAPP_URL,
     // Availability decides below; this only lets the pure checks run first.
     botEnabled: true,

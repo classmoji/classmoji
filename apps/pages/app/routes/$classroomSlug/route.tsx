@@ -20,7 +20,7 @@ import { headerImageRefs, withResolvedHeaderImages } from '~/utils/headerImages.
 import PagesLayout from '~/components/layout/PagesLayout.tsx';
 import PagesSidebar from '~/components/layout/PagesSidebar.tsx';
 import AskMojiHost from '~/components/askMoji/AskMojiHost.tsx';
-import { pageViewing } from '~/components/askMoji/askMojiProtocol.ts';
+import { pageTitle, pageViewing } from '~/components/askMoji/askMojiProtocol.ts';
 
 /**
  * Index route: displays different views based on user role.
@@ -527,6 +527,7 @@ const ClassroomLayout = () => {
           webappOrigin={askMojiOrigin}
           classroomSlug={classroom.slug}
           viewing={pageViewing(currentPageId)}
+          title={pageTitle(currentPageId, pages)}
           launcherClassName={`askmoji-launcher-floating ${collapsed ? 'askmoji-launcher-sidebar-collapsed' : ''}`}
           launcherHidden={mobileOpen}
         />

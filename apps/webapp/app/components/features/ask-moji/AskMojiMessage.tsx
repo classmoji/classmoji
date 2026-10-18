@@ -110,12 +110,17 @@ interface AnswerProps {
   message: AskMojiUIMessage;
   /** This answer is still streaming. */
   live: boolean;
+  /**
+   * The thumbs show: a final model answer from the server's transcript
+   * (`metadata.rateable`), with nothing streaming. Never a live or partial one.
+   */
+  rateable: boolean;
   rating: AskMojiRating | null;
   onRate: (id: string, rating: AskMojiRating | null) => void;
   chips: ChipContext;
 }
 
-function AnswerView({ message, live, rating, onRate, chips }: AnswerProps) {
+function AnswerView({ message, live, rateable, rating, onRate, chips }: AnswerProps) {
   const text = textOf(message);
   const sources = live ? [] : sourceChipsOf(message, chips);
   const toggle = (value: AskMojiRating) => onRate(message.id, rating === value ? null : value);
@@ -133,29 +138,43 @@ function AnswerView({ message, live, rating, onRate, chips }: AnswerProps) {
       {!live && text && (
         <div className="moji-actions">
           <CopyButton text={text} label="Copy answer" className="moji-action" />
-          <button
-            type="button"
-            className="moji-action"
-            aria-pressed={rating === 'UP'}
-            aria-label="Helpful"
-            title="Helpful"
-            onClick={() => toggle('UP')}
-          >
-            <IconThumbUp size={13} />
-          </button>
-          <button
-            type="button"
-            className="moji-action"
-            aria-pressed={rating === 'DOWN'}
-            aria-label="Not helpful"
-            title="Not helpful"
-            onClick={() => toggle('DOWN')}
-          >
-            <IconThumbDown size={13} />
-          </button>
+          {rateable && <RatingButtons rating={rating} onToggle={toggle} />}
         </div>
       )}
     </div>
+  );
+}
+
+function RatingButtons({
+  rating,
+  onToggle,
+}: {
+  rating: AskMojiRating | null;
+  onToggle: (value: AskMojiRating) => void;
+}) {
+  return (
+    <>
+      <button
+        type="button"
+        className="moji-action"
+        aria-pressed={rating === 'UP'}
+        aria-label="Helpful"
+        title="Helpful"
+        onClick={() => onToggle('UP')}
+      >
+        <IconThumbUp size={13} />
+      </button>
+      <button
+        type="button"
+        className="moji-action"
+        aria-pressed={rating === 'DOWN'}
+        aria-label="Not helpful"
+        title="Not helpful"
+        onClick={() => onToggle('DOWN')}
+      >
+        <IconThumbDown size={13} />
+      </button>
+    </>
   );
 }
 
@@ -173,6 +192,7 @@ function QuestionView({ message }: { message: AskMojiUIMessage }) {
 function AskMojiMessageView(props: {
   message: AskMojiUIMessage;
   live: boolean;
+  rateable: boolean;
   rating: AskMojiRating | null;
   onRate: (id: string, rating: AskMojiRating | null) => void;
   chips: ChipContext;

@@ -41,7 +41,7 @@ interface SpeakerViewProps {
   slideId: string;
   initialContent: string;
   /** Ask Moji for this deck's classroom; null when this viewer does not get it. */
-  askMoji?: { webappOrigin: string; classroomSlug: string } | null;
+  askMoji?: { webappOrigin: string; classroomSlug: string; title?: string | null } | null;
 }
 
 function formatTime(ms: number) {
@@ -560,6 +560,7 @@ export default function SpeakerView({ slideId, initialContent, askMoji = null }:
               webappOrigin={askMoji.webappOrigin}
               classroomSlug={askMoji.classroomSlug}
               viewing={deckViewing(slideId, askMojiSlide)}
+              title={askMoji.title}
               launcherClassName="askmoji-launcher-on-dark"
             />
           )}

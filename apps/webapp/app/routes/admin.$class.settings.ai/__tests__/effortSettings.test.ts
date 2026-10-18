@@ -368,7 +368,9 @@ describe('loader', () => {
       quizzes_enabled: true,
       syllabus_bot_enabled: false,
       has_anthropic_key: true,
-      syllabus_bot_instructions: 'Owner text',
+      // This file runs on the AI agent runtime, which never reads them
+      // (askMojiSettings.test.ts covers the Trigger runtime).
+      syllabus_bot_instructions: null,
     });
     expect(data).not.toHaveProperty('organization');
   });

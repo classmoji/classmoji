@@ -8,6 +8,13 @@
  * it is not the caller's active Ask Moji conversation under this request's
  * scope. Refused while Ask Moji is unavailable, so a lapsed classroom boots
  * no run.
+ *
+ * NOT AUDITED, deliberately. The service records the new Trigger session id
+ * on the caller's own conversation (`askMojiChat.recordTriggerSession`):
+ * bookkeeping on a row the caller already owns, which changes nothing they or
+ * anyone else can see, and no user action other than typing. The data-changing
+ * actions around it are audited where they happen: the conversation's create
+ * (`start` / `new`), its end, and every rating.
  */
 import { ClassmojiService } from '@classmoji/services';
 import {

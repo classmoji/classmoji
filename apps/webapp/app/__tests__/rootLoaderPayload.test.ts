@@ -177,10 +177,8 @@ vi.mock('@classmoji/ui-components', () => ({
 vi.mock('~/components/features/operations/OperationProgress', () => ({ default: () => null }));
 vi.mock('~/components/ErrorBoundary', () => ({ default: () => null }));
 vi.mock('~/components/features/syllabus-bot', () => ({ SyllabusBotRoot: () => null }));
-vi.mock('~/components/features/ask-moji', () => ({
-  AskMojiRoot: () => null,
-  isAskMojiEmbedPath: (p: string) => /^\/ask-moji\/[^/]+\/embed$/.test(p),
-}));
+// The root reads only the pure path check and lazy-loads AskMojiRoot (never
+// rendered here), so nothing of Ask Moji's panel needs mocking.
 vi.mock('~/components/features/onboarding', () => ({
   OnboardingTour: () => null,
   InClassroomTour: () => null,
@@ -348,6 +346,25 @@ describe('root loader payload', () => {
       available: false,
     });
     expect(askMojiAvailableMock).not.toHaveBeenCalled();
+    askMojiRuntime = 'ai_agent';
+  });
+
+  it('production never hands the panel a localhost pages or slides URL', async () => {
+    askMojiRuntime = 'trigger';
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('PAGES_URL', '');
+    vi.stubEnv('SLIDES_URL', '');
+    expect((await load('/student/test-class/dashboard')).askMoji).toMatchObject({
+      pagesUrl: null,
+      slidesUrl: null,
+    });
+    vi.stubEnv('PAGES_URL', 'https://pages.example.org');
+    vi.stubEnv('SLIDES_URL', 'https://slides.example.org');
+    expect((await load('/student/test-class/dashboard')).askMoji).toMatchObject({
+      pagesUrl: 'https://pages.example.org',
+      slidesUrl: 'https://slides.example.org',
+    });
+    vi.unstubAllEnvs();
     askMojiRuntime = 'ai_agent';
   });
 

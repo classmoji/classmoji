@@ -15,9 +15,10 @@ import type {
   AskMojiResolvedViewing,
   AskMojiUsageInsights,
 } from '@classmoji/services';
+import { ASK_MOJI_INSIGHT_DEFAULT_WEEKS } from '@classmoji/utils/ask-moji/limits';
 
-/** Weeks the usage table covers. */
-export const USAGE_WEEKS = 12;
+/** Weeks the usage table covers (the default the MCP usage tool uses too). */
+export const USAGE_WEEKS = ASK_MOJI_INSIGHT_DEFAULT_WEEKS;
 
 /** Feedback rows the review list shows. */
 export const REVIEW_LIMIT = 50;
@@ -136,6 +137,8 @@ export type ReviewRowView = {
   askerName: string;
   askerRole: string;
   question: string;
+  /** The start of the answer (the service caps it), as plain text. */
+  answerPreview: string;
   when: string;
   viewing: ViewingView | null;
 };
@@ -152,6 +155,7 @@ export const toReviewRowView = (
   askerName: row.asker.name?.trim() || UNNAMED,
   askerRole: ROLE_LABEL[row.askerRole] ?? row.askerRole,
   question: row.question,
+  answerPreview: row.answerPreview,
   when: formatWhen(row.createdAt, timeZone),
   viewing: viewingView(row.viewing),
 });

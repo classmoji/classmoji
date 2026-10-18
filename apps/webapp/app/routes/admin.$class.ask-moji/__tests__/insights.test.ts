@@ -11,6 +11,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ASK_MOJI_INSIGHT_DEFAULT_WEEKS } from '@classmoji/utils/ask-moji/limits';
 
 type Role = 'OWNER' | 'TEACHER' | 'ASSISTANT' | 'STUDENT';
 
@@ -122,6 +123,7 @@ const REVIEW_ROW = {
   asker: { userId: 'student-x', name: 'Ada Lovelace' },
   askerRole: 'STUDENT',
   question: 'Why is my loop infinite?',
+  answerPreview: 'Check the **condition**.',
   viewing: { kind: 'page', id: 'p1', title: 'Lab 3' },
 };
 
@@ -257,9 +259,10 @@ describe('the insights page', () => {
     await loadPage('class-x');
     expect(mocks.usage).toHaveBeenCalledWith({
       classroomId: 'X',
-      weeks: 12,
+      weeks: ASK_MOJI_INSIGHT_DEFAULT_WEEKS,
       timeZone: 'America/New_York',
     });
+    expect(ASK_MOJI_INSIGHT_DEFAULT_WEEKS).toBe(12);
     expect(mocks.feedbackReview).toHaveBeenCalledWith({
       classroomId: 'X',
       viewerRole: 'TEACHER',
@@ -315,6 +318,14 @@ describe('the insights page', () => {
     ]);
   });
 
+  it('names the rating filter in data.rating, so a 👎 read and a 👍 read are two rows', async () => {
+    mocks.currentUser = 'teacher-x';
+    await loadPage('class-x');
+    await loadPage('class-x', '?rating=up');
+    const reviews = auditRows().filter(row => row.resourceType === 'ASK_MOJI_FEEDBACK');
+    expect(reviews.map(row => (row.metadata as { rating: string }).rating)).toEqual(['DOWN', 'UP']);
+  });
+
   it('records the admin behind a View As session on both rows', async () => {
     mocks.impersonationAuditFields.mockResolvedValue({ impersonated_by: 'admin-9' });
     await loadPage('class-x');
@@ -354,6 +365,7 @@ describe('the insights page', () => {
         askerName: 'Ada Lovelace',
         askerRole: 'Student',
         question: 'Why is my loop infinite?',
+        answerPreview: 'Check the **condition**.',
         // 19:30 UTC is 3:30 PM in New York (EDT).
         when: 'Oct 14, 3:30 PM',
         viewing: { kind: 'Page', title: 'Lab 3', detail: null },

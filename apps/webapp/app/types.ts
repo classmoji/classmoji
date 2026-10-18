@@ -148,8 +148,10 @@ export interface StoreState {
   setAskMojiEnabled: (enabled: boolean) => void;
   askMojiActive: boolean;
   setAskMojiActive: (active: boolean) => void;
+  askMojiViewingStack: AskMojiViewingState[];
   askMojiViewing: AskMojiViewingState | null;
-  setAskMojiViewing: (viewing: AskMojiViewingState | null) => void;
+  publishAskMojiViewing: (viewing: AskMojiViewingState) => void;
+  withdrawAskMojiViewing: (owner: string) => void;
   askMojiHideCount: number;
   addAskMojiHide: () => void;
   removeAskMojiHide: () => void;
@@ -171,7 +173,8 @@ export type TourPhase = 'idle' | 'landing' | 'instructor' | 'student';
  * What a route says the user has open, for Ask Moji (useAskMojiViewing).
  * `kind`/`id`/`slide` go on the next message as its `viewing`; `title` is the
  * chip's label only and never leaves the browser; `owner` tells publishers
- * apart so one route's cleanup never clears another's.
+ * apart so one route's cleanup never clears another's; `seq` orders them
+ * (render order: a drawer rendered inside a page is above it).
  */
 export interface AskMojiViewingState {
   kind: 'module' | 'assignment' | 'quiz' | 'page' | 'deck' | 'calendar';
@@ -179,6 +182,7 @@ export interface AskMojiViewingState {
   slide?: number;
   title?: string;
   owner: string;
+  seq: number;
 }
 
 export { Role, SubscriptionTier };

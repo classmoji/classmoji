@@ -14,7 +14,7 @@ beforeEach(() => {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
-  useStore.setState({ askMojiViewing: null, askMojiHideCount: 0 });
+  useStore.setState({ askMojiViewing: null, askMojiViewingStack: [], askMojiHideCount: 0 });
 });
 
 afterEach(() => {
@@ -22,9 +22,17 @@ afterEach(() => {
   container.remove();
 });
 
-function Publisher(props: { kind: 'page' | 'module'; id: string; title?: string }) {
+function Publisher({
+  children,
+  ...props
+}: {
+  kind: 'page' | 'module';
+  id: string;
+  title?: string;
+  children?: React.ReactNode;
+}) {
   useAskMojiViewing(props);
-  return null;
+  return <>{children}</>;
 }
 
 function Attempt(props: { readOnly: boolean; viewerOwnsAttempt: boolean }) {
@@ -65,6 +73,54 @@ describe('useAskMojiViewing', () => {
     expect(useStore.getState().askMojiViewing).toMatchObject({ kind: 'page', id: 'p1' });
   });
 
+  it('a drawer over a page: closing the drawer restores the page’s viewing, not nothing', () => {
+    act(() => root.render(<Publisher kind="module" id="m1" title="Week 1" />));
+    act(() =>
+      root.render(
+        <Publisher kind="module" id="m1" title="Week 1">
+          <Publisher kind="page" id="p1" title="Reading" />
+        </Publisher>
+      )
+    );
+    expect(useStore.getState().askMojiViewing).toMatchObject({ kind: 'page', id: 'p1' });
+    act(() => root.render(<Publisher kind="module" id="m1" title="Week 1" />));
+    expect(useStore.getState().askMojiViewing).toMatchObject({ kind: 'module', id: 'm1' });
+    expect(useStore.getState().askMojiViewingStack).toHaveLength(1);
+  });
+
+  it('a page and its drawer mounting together (a direct link) put the drawer on top', () => {
+    act(() =>
+      root.render(
+        <Publisher kind="module" id="m1">
+          <Publisher kind="page" id="p1" />
+        </Publisher>
+      )
+    );
+    expect(useStore.getState().askMojiViewing).toMatchObject({ kind: 'page', id: 'p1' });
+    act(() => root.render(<Publisher kind="module" id="m1" />));
+    expect(useStore.getState().askMojiViewing).toMatchObject({ kind: 'module', id: 'm1' });
+  });
+
+  it('a publisher whose viewing changes keeps its place under a drawer', () => {
+    act(() =>
+      root.render(
+        <Publisher kind="module" id="m1">
+          <Publisher kind="page" id="p1" />
+        </Publisher>
+      )
+    );
+    act(() =>
+      root.render(
+        <Publisher kind="module" id="m2">
+          <Publisher kind="page" id="p1" />
+        </Publisher>
+      )
+    );
+    expect(useStore.getState().askMojiViewing).toMatchObject({ kind: 'page', id: 'p1' });
+    act(() => root.render(<Publisher kind="module" id="m2" />));
+    expect(useStore.getState().askMojiViewing).toMatchObject({ kind: 'module', id: 'm2' });
+  });
+
   it('labels: the title, else the kind; a deck adds its slide', () => {
     expect(viewingLabel({ kind: 'page', title: 'Syllabus' })).toBe('Syllabus');
     expect(viewingLabel({ kind: 'calendar' })).toBe('the calendar');
@@ -73,6 +129,20 @@ describe('useAskMojiViewing', () => {
 });
 
 describe('quiz attempts', () => {
+  function Results({ drawer }: { drawer: boolean }) {
+    useAskMojiViewing({ kind: 'quiz', id: 'q1', title: 'Quiz 1' });
+    return drawer ? <Attempt readOnly viewerOwnsAttempt={false} /> : null;
+  }
+
+  it('closing the attempt drawer on the results page keeps the quiz as what is open', () => {
+    act(() => root.render(<Results drawer={false} />));
+    act(() => root.render(<Results drawer />));
+    expect(useStore.getState().askMojiViewingStack).toHaveLength(2);
+    act(() => root.render(<Results drawer={false} />));
+    expect(useStore.getState().askMojiViewing).toMatchObject({ kind: 'quiz', id: 'q1' });
+    expect(useStore.getState().askMojiViewingStack).toHaveLength(1);
+  });
+
   it('hides Ask Moji on the owner’s live attempt', () => {
     act(() => root.render(<Attempt readOnly={false} viewerOwnsAttempt />));
     expect(useStore.getState().askMojiHideCount).toBe(1);

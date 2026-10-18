@@ -231,6 +231,11 @@ const ReviewList = ({ rows, rating }: { rows: ReviewRowView[]; rating: 'UP' | 'D
             <div className="line-clamp-2 text-sm text-gray-800 dark:text-gray-200">
               {row.question}
             </div>
+            {row.answerPreview && (
+              <div className="mt-1 line-clamp-2 text-sm text-gray-500 dark:text-gray-400">
+                {row.answerPreview}
+              </div>
+            )}
             <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500 dark:text-gray-400">
               <span className="font-medium text-gray-600 dark:text-gray-300">{row.askerName}</span>
               {row.askerRole !== ROLE_LABEL.STUDENT && (

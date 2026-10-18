@@ -73,6 +73,25 @@ describe('source chips', () => {
     expect(chips[1].url).toBeNull();
   });
 
+  it('production without PAGES_URL / SLIDES_URL (null): page and deck chips are labels, or the server’s http(s) url', () => {
+    const chips = sourceChipsOf(
+      msg([
+        cite('output-available', { ok: true, type: 'page', id: 'p1', title: 'Page' }),
+        cite('output-available', { ok: true, type: 'slides', id: 'd1', title: 'Deck' }),
+        cite('output-available', {
+          ok: true,
+          type: 'slides',
+          id: 'd2',
+          title: 'Linked deck',
+          url: 'https://slides.example.org/d2',
+        }),
+      ]),
+      { ...ctx, pagesUrl: null, slidesUrl: null }
+    );
+    expect(chips.map(c => c.url)).toEqual([null, null, 'https://slides.example.org/d2']);
+    expect(JSON.stringify(chips)).not.toContain('localhost');
+  });
+
   it('dedupe by target, skip untitled ones, and only accept an http(s) server url as a fallback', () => {
     const chips = sourceChipsOf(
       msg([

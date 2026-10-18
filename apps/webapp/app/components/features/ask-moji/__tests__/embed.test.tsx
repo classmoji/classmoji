@@ -33,6 +33,7 @@ const ready = {
   courseName: 'CS 1',
   pagesUrl: PAGES,
   slidesUrl: null,
+  impersonated: false,
 };
 
 const hostSays = (data: unknown, origin = PAGES, source: unknown = parent) =>
@@ -84,6 +85,29 @@ describe('the embed', () => {
     expect(lastPanel().viewing).toEqual({ kind: 'page', id: 'p1' });
     hostSays({ type: 'askmoji:close' });
     expect(lastPanel().open).toBe(false);
+  });
+
+  it('the host’s title labels the chip only; a bad one is dropped, the viewing kept', () => {
+    act(() => root.render(<AskMojiEmbed data={ready} />));
+    hostSays({
+      type: 'askmoji:viewing',
+      viewing: { kind: 'deck', id: 'd1', slide: 2 },
+      title: 'Lecture 3',
+    });
+    expect(lastPanel().viewing).toEqual({ kind: 'deck', id: 'd1', slide: 2, title: 'Lecture 3' });
+    hostSays({
+      type: 'askmoji:viewing',
+      viewing: { kind: 'page', id: 'p1' },
+      title: 'x'.repeat(201),
+    });
+    expect(lastPanel().viewing).toEqual({ kind: 'page', id: 'p1' });
+  });
+
+  it('an impersonated session shows the fixed notice; a normal one none', () => {
+    act(() => root.render(<AskMojiEmbed data={ready} />));
+    expect(lastPanel().notice).toBeNull();
+    act(() => root.render(<AskMojiEmbed data={{ ...ready, impersonated: true }} />));
+    expect(lastPanel().notice).toBe('You are viewing as another user.');
   });
 
   it('asks the host to close, and reports busy changes once each', () => {

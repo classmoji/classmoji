@@ -17,9 +17,11 @@ import {
   askMojiHostDecision,
   isAskMojiTarget,
   originOf,
+  pageTitle,
   pageViewing,
   readAskMojiMessage,
   syncMessages,
+  viewingMessage,
 } from '../../app/components/askMoji/askMojiProtocol.ts';
 
 const source = (relative: string) =>
@@ -113,6 +115,35 @@ test.describe('what the frame is told', () => {
     expect(pageViewing('')).toBeNull();
   });
 
+  test('the chip title is the page’s own, from the loader’s page list', () => {
+    const pages = [
+      { id: 'p1', title: '  Week 1: Loops ' },
+      { id: 'p2', title: '' },
+      { id: 'p3', title: 'x'.repeat(250) },
+    ];
+    expect(pageTitle('p1', pages)).toBe('Week 1: Loops');
+    expect(pageTitle('p2', pages)).toBeUndefined();
+    expect(pageTitle('p3', pages)).toHaveLength(200);
+    expect(pageTitle('missing', pages)).toBeUndefined();
+    expect(pageTitle(undefined, pages)).toBeUndefined();
+  });
+
+  test('the viewing message carries the title only with a viewing', () => {
+    expect(viewingMessage({ kind: 'page', id: 'p1' }, 'Week 1')).toEqual({
+      type: 'askmoji:viewing',
+      viewing: { kind: 'page', id: 'p1' },
+      title: 'Week 1',
+    });
+    expect(viewingMessage({ kind: 'page', id: 'p1' }, '  ')).toEqual({
+      type: 'askmoji:viewing',
+      viewing: { kind: 'page', id: 'p1' },
+    });
+    expect(viewingMessage(null, 'Stale')).toEqual({ type: 'askmoji:viewing', viewing: null });
+    expect(viewingMessage({ kind: 'page', id: 'p1' }, 'y'.repeat(300))).toMatchObject({
+      title: 'y'.repeat(200),
+    });
+  });
+
   test('ready brings the frame up to date: viewing first, then open or close', () => {
     expect(syncMessages({ kind: 'page', id: 'p1' }, true)).toEqual([
       { type: 'askmoji:viewing', viewing: { kind: 'page', id: 'p1' } },
@@ -120,6 +151,10 @@ test.describe('what the frame is told', () => {
     ]);
     expect(syncMessages(null, false)).toEqual([
       { type: 'askmoji:viewing', viewing: null },
+      { type: 'askmoji:close' },
+    ]);
+    expect(syncMessages({ kind: 'page', id: 'p1' }, false, 'Week 1')).toEqual([
+      { type: 'askmoji:viewing', viewing: { kind: 'page', id: 'p1' }, title: 'Week 1' },
       { type: 'askmoji:close' },
     ]);
   });
@@ -145,7 +180,7 @@ test.describe('who gets the launcher', () => {
   const on = {
     acceptedRole: 'STUDENT',
     botEnabled: true,
-    runtime: 'trigger',
+    triggerRuntime: true,
     webappUrl: 'https://classmoji.io/',
     embedded: false,
   };
@@ -176,9 +211,7 @@ test.describe('who gets the launcher', () => {
   test('not when the classroom has Ask Moji off, or another runtime is selected', () => {
     expect(askMojiHostDecision({ ...on, botEnabled: false }).enabled).toBe(false);
     expect(askMojiHostDecision({ ...on, botEnabled: null }).enabled).toBe(false);
-    for (const runtime of [undefined, '', 'ai_agent', 'TRIGGER']) {
-      expect(askMojiHostDecision({ ...on, runtime }).enabled, String(runtime)).toBe(false);
-    }
+    expect(askMojiHostDecision({ ...on, triggerRuntime: false }).enabled).toBe(false);
   });
 
   test('not without a usable webapp origin', () => {
@@ -214,13 +247,17 @@ test.describe('where the host is mounted', () => {
     expect(LAYOUT.match(/<AskMojiHost/g)).toHaveLength(1);
     expect(host).toBeGreaterThan(embeddedReturnEnd);
     expect(LAYOUT).toContain('{askMojiEnabled && askMojiOrigin && (');
+    // The chip title comes from the loader's page list.
+    expect(LAYOUT).toContain('title={pageTitle(currentPageId, pages)}');
   });
 
   test('the loader decides from the session and the classroom row, embedded included', () => {
     expect(LAYOUT).toContain('userId: authData?.userId,');
     expect(LAYOUT).toContain('embedded: isEmbedded,');
     expect(SERVER).toContain('acceptedOnly: true,');
-    expect(SERVER).toContain('process.env.ASK_MOJI_RUNTIME');
+    // The shared parse, never a local `=== 'trigger'` of the variable.
+    expect(SERVER).toContain('triggerRuntime: isAskMojiTriggerRuntime(),');
+    expect(SERVER).not.toContain('process.env.ASK_MOJI_RUNTIME');
   });
 
   test("the final say is the webapp's availability rule, asked for accepted members only", () => {

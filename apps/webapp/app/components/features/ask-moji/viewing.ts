@@ -3,23 +3,33 @@
  * label. Called inside a route's default component, so every role prefix
  * that re-exports it publishes the same thing.
  *
- *   useAskMojiViewing(v)  publishes `v` while the component is mounted (the
- *                         latest publisher wins; a cleanup clears only its
- *                         own value). `title` is for the chip only; the
- *                         message carries kind, id and slide, which the
- *                         server resolves and checks.
+ *   useAskMojiViewing(v)  publishes `v` while the component is mounted. The
+ *                         publishers form a stack: the one rendered last is
+ *                         on top (a drawer over its page), and unmounting one
+ *                         uncovers the one below instead of clearing. `title`
+ *                         is for the chip only; the message carries kind, id
+ *                         and slide, which the server resolves and checks.
  *   useHideAskMoji(hide)  hides the sidebar button and the panel while
  *                         mounted with `hide` true (a live quiz attempt).
  */
-import { useEffect, useId } from 'react';
+import { useEffect, useId, useState } from 'react';
 import useStore from '~/store';
 import type { AskMojiViewingState } from '~/types';
 
-export type AskMojiViewingInput = Omit<AskMojiViewingState, 'owner'>;
+export type AskMojiViewingInput = Omit<AskMojiViewingState, 'owner' | 'seq'>;
+
+/**
+ * Render order, taken once per publisher. Effects run child first, so a page
+ * and the drawer inside it mounting together would put the page on top if the
+ * stack went by effect order; render order puts the drawer there.
+ */
+let renderSeq = 0;
 
 export function useAskMojiViewing(viewing: AskMojiViewingInput | null | undefined) {
   const owner = useId();
-  const setViewing = useStore(s => s.setAskMojiViewing);
+  const [seq] = useState(() => ++renderSeq);
+  const publish = useStore(s => s.publishAskMojiViewing);
+  const withdraw = useStore(s => s.withdrawAskMojiViewing);
   const kind = viewing?.kind;
   const id = viewing?.id;
   const slide = viewing?.slide;
@@ -27,17 +37,16 @@ export function useAskMojiViewing(viewing: AskMojiViewingInput | null | undefine
 
   useEffect(() => {
     if (!kind) return undefined;
-    setViewing({
+    publish({
       kind,
       ...(id ? { id } : {}),
       ...(typeof slide === 'number' ? { slide } : {}),
       ...(title ? { title } : {}),
       owner,
+      seq,
     });
-    return () => {
-      if (useStore.getState().askMojiViewing?.owner === owner) setViewing(null);
-    };
-  }, [kind, id, slide, title, owner, setViewing]);
+    return () => withdraw(owner);
+  }, [kind, id, slide, title, owner, seq, publish, withdraw]);
 }
 
 export function useHideAskMoji(hide = true) {

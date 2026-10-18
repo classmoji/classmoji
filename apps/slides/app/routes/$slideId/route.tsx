@@ -3953,6 +3953,7 @@ export default function SlideViewer() {
                 webappOrigin={askMojiOrigin}
                 classroomSlug={classroomSlug}
                 viewing={deckViewing(slide.id, askMojiSlide)}
+                title={slide.title}
               />
             )}
             {/* Present button - only shown if user can present (staff only) */}

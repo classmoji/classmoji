@@ -133,6 +133,33 @@ export const isEndingCode = (code: string | null | undefined): boolean =>
   Object.prototype.hasOwnProperty.call(ASK_MOJI_REFUSALS, code) &&
   ASK_MOJI_REFUSALS[code as keyof typeof ASK_MOJI_REFUSALS] === 'permanent';
 
+/** The last user message of a list (the question a turn answers). */
+export const lastUserMessage = <M extends UIMessage>(messages: readonly M[]): M | undefined => {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'user') return messages[i];
+  }
+  return undefined;
+};
+
+/**
+ * Whether the turn the server reports in flight is the one this tab sent.
+ * Only with `ownTurn` (this tab sent a turn the server has not yet reported
+ * settled). A transcript that came with the state names the question in
+ * flight: ours only when its last user row is the message this tab sent
+ * (never `lastMessageId`, which may be a reply row). No transcript means
+ * nothing changed on the server since this tab last looked: still ours.
+ */
+export function ownsInFlight(i: {
+  ownTurn: boolean;
+  ownMessageId: string | null;
+  transcript: readonly UIMessage[] | undefined;
+}): boolean {
+  if (!i.ownTurn) return false;
+  if (!i.transcript || !i.ownMessageId) return true;
+  const asked = lastUserMessage(i.transcript);
+  return !asked || asked.id === i.ownMessageId;
+}
+
 /** Every notice code but the busy hint means "no answer came": the question goes back. */
 export const restoresQuestion = (code: AskMojiCopyCode | string | null): boolean =>
   code !== 'BUSY_ELSEWHERE';
@@ -164,6 +191,8 @@ export const viewingKey = (v: AskMojiViewing | null) =>
 export interface ReplyHooks {
   /** The ids the server has confirmed (its last transcript): replays of these are dropped. */
   knownIds: () => ReadonlySet<string>;
+  /** A new message is going out: the messages the Chat sends (its last user message is ours). */
+  onSend?: (messages: readonly UIMessage[]) => void;
   /** Called with each reply stream as it opens; `sawFinish` reads whether its `finish` came. */
   onReply: (reply: WatchedReply, sawFinish: () => boolean) => void;
   /** The reply went quiet (or a chunk ended the quiet). */
@@ -206,7 +235,10 @@ export function askMojiChatTransport<M extends UIMessage = AskMojiUIMessage>(
     return reply.stream;
   };
   return {
-    sendMessages: async options => prepare(await base.sendMessages(options), true),
+    sendMessages: async options => {
+      hooks.onSend?.(options.messages);
+      return prepare(await base.sendMessages(options), true);
+    },
     reconnectToStream: async options => {
       const stream = await base.reconnectToStream(options);
       return stream ? prepare(stream, false) : stream;

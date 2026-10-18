@@ -524,3 +524,216 @@ describe('ratings', () => {
     });
   });
 });
+
+describe('preload (R14: the first keystroke, never open)', () => {
+  it('opening boots nothing; preload starts the session once while it is starting', async () => {
+    api.start.mockResolvedValue(openedFor('c1', { sessionReady: false }));
+    let finish!: () => void;
+    transport.preload.mockImplementation(
+      chatId =>
+        new Promise<void>(resolve => {
+          finish = () => {
+            transport.sessions.set(chatId, { publicAccessToken: 'started' });
+            resolve();
+          };
+        })
+    );
+    const c = make();
+    await openReady(c);
+    await flush();
+    expect(transport.preload).not.toHaveBeenCalled();
+    expect(api.ensureSession).not.toHaveBeenCalled();
+    c.preload();
+    c.preload();
+    c.preload();
+    expect(transport.preload).toHaveBeenCalledTimes(1);
+    finish();
+    await flush();
+    c.preload();
+    expect(transport.preload).toHaveBeenCalledTimes(1);
+  });
+
+  it('a failed preload can be tried again by the next keystroke', async () => {
+    api.start.mockResolvedValue(openedFor('c1', { sessionReady: false }));
+    transport.preload.mockRejectedValueOnce(new Error('down'));
+    const c = make();
+    await openReady(c);
+    c.preload();
+    await flush();
+    c.preload();
+    expect(transport.preload).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('start refusals Try again cannot fix', () => {
+  const refusal = (code: string, permanent = false) =>
+    new AskMojiApiError({
+      code,
+      status: 403,
+      line: (ASK_MOJI_COPY as Record<string, string>)[code] ?? ASK_MOJI_COPY.ERROR,
+      permanent,
+    });
+
+  it.each(['CLASSROOM_LOCKED', 'CLASSROOM_UNPUBLISHED', 'NOT_ALLOWED'])(
+    '%s is unavailable with its fixed line, not failed',
+    async code => {
+      api.start.mockRejectedValue(refusal(code));
+      const c = make();
+      c.open();
+      await vi.waitFor(() => expect(c.getSnapshot().phase).toBe('unavailable'));
+      expect(c.getSnapshot().line).toBe((ASK_MOJI_COPY as Record<string, string>)[code]);
+      c.retry();
+      expect(api.start).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('any permanent refusal is unavailable; a transient one keeps Try again', async () => {
+    api.start.mockRejectedValueOnce(refusal('NOT_FOUND', true));
+    const c = make();
+    c.open();
+    await vi.waitFor(() => expect(c.getSnapshot().phase).toBe('unavailable'));
+
+    api.start.mockRejectedValueOnce(refusal('RATE_LIMITED'));
+    const d = make();
+    d.open();
+    await vi.waitFor(() => expect(d.getSnapshot().phase).toBe('failed'));
+    expect(d.getSnapshot().line).toBe(ASK_MOJI_COPY.RATE_LIMITED);
+  });
+
+  it('reopening asks again (the class may have been unlocked)', async () => {
+    api.start.mockRejectedValueOnce(refusal('CLASSROOM_LOCKED'));
+    const c = make();
+    c.open();
+    await vi.waitFor(() => expect(c.getSnapshot().phase).toBe('unavailable'));
+    c.close();
+    c.open();
+    await vi.waitFor(() => expect(c.getSnapshot().phase).toBe('ready'));
+  });
+
+  it('New conversation refused for a locked class is unavailable too', async () => {
+    const c = make();
+    await openReady(c);
+    api.newConversation.mockRejectedValue(refusal('CLASSROOM_LOCKED'));
+    await c.newConversation();
+    expect(c.getSnapshot().phase).toBe('unavailable');
+    expect(c.getSnapshot().line).toBe(ASK_MOJI_COPY.CLASSROOM_LOCKED);
+  });
+});
+
+describe('a send that cannot go says why', () => {
+  const deferred = <T>() => {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>(r => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  };
+
+  it('waits for a poll in flight, then sends (Enter never does nothing)', async () => {
+    const c = make();
+    await openReady(c);
+    const poll = deferred<ReturnType<typeof stateOf>>();
+    api.state.mockImplementationOnce(() => poll.promise);
+    const polling = c.sync();
+    transport.sendQueue.push(() => streamOf(reply('a1', 'A1')));
+    const sending = c.send('Queued', null);
+    await flush();
+    expect(c.getSnapshot().working).toBe(true);
+    expect(transport.sends).toHaveLength(0);
+    poll.resolve(stateOf());
+    await polling;
+    expect(await sending).toBe(true);
+    await vi.waitFor(() => expect(transport.sends).toHaveLength(1));
+    expect(c.getSnapshot().working).toBe(false);
+  });
+
+  it('the conversation moved while it waited: not sent, SEND_FAILED, the text is the caller’s', async () => {
+    const c = make();
+    await openReady(c);
+    const poll = deferred<ReturnType<typeof stateOf>>();
+    api.state.mockImplementationOnce(() => poll.promise);
+    api.start.mockResolvedValue(openedFor('c2'));
+    const polling = c.sync();
+    const sending = c.send('Lost in the move', null);
+    poll.resolve(stateOf({ status: 'COMPLETED', conversationId: 'c2' }));
+    await polling;
+    expect(await sending).toBe(false);
+    expect(c.getSnapshot().conversationId).toBe('c2');
+    expect(c.getSnapshot().line).toBe(ASK_MOJI_COPY.SEND_FAILED);
+    expect(transport.sends).toHaveLength(0);
+  });
+
+  it('while this tab is answering: the busy hint, not silence', async () => {
+    const c = make();
+    await openReady(c);
+    const live = pushable();
+    transport.sendQueue.push(() => live.stream);
+    expect(await c.send('Q1', null)).toBe(true);
+    expect(c.getSnapshot().hint).toBeNull();
+    expect(await c.send('Q2', null)).toBe(false);
+    expect(c.getSnapshot().hint).toBe(ASK_MOJI_COPY.PACE);
+    c.clearLine();
+    expect(c.getSnapshot().hint).toBeNull();
+    c.blocked();
+    expect(c.getSnapshot().hint).toBe(ASK_MOJI_COPY.PACE);
+    live.push(...reply('a1', 'A1'));
+    live.close();
+    await vi.waitFor(() => expect(c.getSnapshot().hint).toBeNull());
+  });
+
+  it('a second send while one is checking gets the hint', async () => {
+    const c = make();
+    await openReady(c);
+    const check = deferred<ReturnType<typeof stateOf>>();
+    api.state.mockImplementationOnce(() => check.promise);
+    transport.sendQueue.push(() => streamOf(reply('a1', 'A1')));
+    const first = c.send('First', null);
+    expect(await c.send('Second', null)).toBe(false);
+    expect(c.getSnapshot().hint).toBe(ASK_MOJI_COPY.PACE);
+    check.resolve(stateOf());
+    expect(await first).toBe(true);
+  });
+});
+
+describe('BUSY_ELSEWHERE is never this tab’s own turn', () => {
+  it('after the watchdog released our reply, the turn still in flight is joined silently', async () => {
+    const c = make({ replyTimings: { startMs: 30, silenceMs: 30 } });
+    const chat = await openReady(c);
+    const silent = pushable();
+    transport.sendQueue.push(() => silent.stream);
+    api.state.mockResolvedValueOnce(stateOf());
+    // Our question is the one in flight on the server.
+    api.state.mockImplementation(async () => {
+      const u = chat.messages.find(m => m.role === 'user')!;
+      return stateOf({ lastMessageId: u.id, inFlight: true, transcript: [u] });
+    });
+    expect(await c.send('Slow one', null)).toBe(true);
+    await vi.waitFor(() => expect(transport.reconnects.length).toBeGreaterThanOrEqual(1), {
+      timeout: 2000,
+    });
+    expect(c.getSnapshot().busyElsewhere).toBe(false);
+    await vi.waitFor(() => expect(chat.status).toBe('ready'));
+    await flush();
+    // Trying again while it still runs: joined, and not called "another window".
+    expect(await c.send('Again', null)).toBe(false);
+    expect(c.getSnapshot().line).not.toBe(ASK_MOJI_COPY.BUSY_ELSEWHERE);
+    expect(c.getSnapshot().busyElsewhere).toBe(false);
+  });
+
+  it('a turn another window started after ours is theirs', async () => {
+    const c = make({ replyTimings: { startMs: 30, silenceMs: 30 } });
+    const chat = await openReady(c);
+    transport.sendQueue.push(() => pushable().stream);
+    api.state.mockResolvedValueOnce(stateOf());
+    api.state.mockImplementation(async () => {
+      const u = chat.messages.find(m => m.role === 'user')!;
+      return stateOf({
+        lastMessageId: 'u-other',
+        inFlight: true,
+        transcript: [u, answerMsg('a-mine', 'Mine'), userMsg('u-other', 'Theirs')],
+      });
+    });
+    expect(await c.send('Mine', null)).toBe(true);
+    await vi.waitFor(() => expect(c.getSnapshot().busyElsewhere).toBe(true), { timeout: 2000 });
+  });
+});

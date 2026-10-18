@@ -48,6 +48,8 @@ export interface AskMojiPanelProps {
   viewing: AskMojiViewingInput | null;
   /** Told whenever "answering anywhere" changes (the embed posts it to its host). */
   onBusyChange?: (busy: boolean) => void;
+  /** A fixed line under the header (the embed's impersonation notice), or none. */
+  notice?: string | null;
 }
 
 /**
@@ -140,6 +142,7 @@ export default function AskMojiPanel(props: AskMojiPanelProps) {
             onNew={null}
             newDisabled
           />
+          {props.notice && <div className="moji-notice">{props.notice}</div>}
           <div className="moji-body" aria-busy={snapshot.phase === 'starting'}>
             <EmptyState snapshot={snapshot} onRetry={() => controller.retry()} />
           </div>
@@ -300,6 +303,7 @@ function ChatView({
   slidesUrl,
   viewing,
   onBusyChange,
+  notice,
 }: AskMojiPanelProps & {
   chat: Chat<AskMojiUIMessage>;
   snapshot: AskMojiSnapshot;
@@ -385,7 +389,9 @@ function ChatView({
     wasAnswering.current = answering;
   }, [answering]);
 
-  const suggestionClick = (text: string) => void controller.send(text, included ? wire : null);
+  // A suggestion is sent like a typed question: the chip's state applies, and
+  // a dismissed chip comes back after it went.
+  const suggestionClick = (text: string) => void onSend(text);
 
   let line: ReactNode = null;
   if (snapshot.line && snapshot.line !== ASK_MOJI_COPY.BUSY_ELSEWHERE) {
@@ -396,6 +402,9 @@ function ChatView({
     );
   }
   const busyLine = snapshot.busyElsewhere || snapshot.line === ASK_MOJI_COPY.BUSY_ELSEWHERE;
+  // Thumbs only on stored final answers (the server's `rateable`), and only
+  // while nothing streams: never on a live or partial reply.
+  const ratingsShown = status === 'ready';
 
   return (
     <>
@@ -408,6 +417,7 @@ function ChatView({
         onNew={() => void controller.newConversation()}
         newDisabled={answering || snapshot.working}
       />
+      {notice && <div className="moji-notice">{notice}</div>}
       <div className="moji-body-wrap">
         <div className="moji-body" ref={bodyRef} onScroll={onScroll} aria-busy={answering}>
           {!hasQuestions && (
@@ -437,6 +447,7 @@ function ChatView({
               key={message.id}
               message={message}
               live={message.id === liveId}
+              rateable={ratingsShown && message.metadata?.rateable === true}
               rating={snapshot.ratings[message.id] ?? null}
               onRate={onRate}
               chips={chips}
@@ -466,7 +477,15 @@ function ChatView({
       <div className="sr-only" aria-live="polite">
         {announce}
       </div>
-      {busyLine && <div className="moji-busy-line">{ASK_MOJI_COPY.BUSY_ELSEWHERE}</div>}
+      {busyLine ? (
+        <div className="moji-busy-line">{ASK_MOJI_COPY.BUSY_ELSEWHERE}</div>
+      ) : (
+        snapshot.hint && (
+          <div className="moji-busy-line" role="status">
+            {snapshot.hint}
+          </div>
+        )
+      )}
       {snapshot.phase === 'ended' && (
         <div className="moji-ended">
           <button
@@ -485,8 +504,12 @@ function ChatView({
         canSend={canSend}
         disabled={!ready}
         onSend={onSend}
-        onFocus={() => controller.preload()}
-        onEdit={() => controller.clearLine()}
+        onEdit={() => {
+          controller.clearLine();
+          // The first keystroke starts the session (never open or focus).
+          controller.preload();
+        }}
+        onBlocked={() => controller.blocked()}
         viewingLabel={label}
         viewingIncluded={included}
         onDismissViewing={() => setDismissedKey(key)}

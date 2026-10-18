@@ -10,17 +10,21 @@
  *
  *   open   `start` → `setSession` when the server says a Trigger session
  *          exists (`sessionReady`), else the transport's `startSession`
- *          (→ `ensure-session`) creates it on composer focus or the first
- *          send → the Chat, seeded with the transcript → `resumeStream()`
- *          when a turn is in flight.
+ *          (→ `ensure-session`) creates it on the first keystroke in the
+ *          composer or the first send, never on open or focus → the Chat,
+ *          seeded with the transcript → `resumeStream()` when a turn is in
+ *          flight.
  *   poll   every `STATE_POLL_MS` while open and visible, and on becoming
  *          visible. Acts only while the Chat is idle (`ready`): moves to a
  *          newer conversation (another device's New conversation), adopts a
  *          newer transcript (re-seeding the resume cursor), joins a turn in
  *          flight.
- *   send   `state` first: a turn in flight anywhere is joined, and the line
- *          says so (`BUSY_ELSEWHERE`); else `sendMessage({ text, metadata:
- *          { viewing } })` (viewing on the message, never request options).
+ *   send   waits for a request of ours already running (a poll), then
+ *          `state`: a turn in flight is joined (saying `BUSY_ELSEWHERE` only
+ *          when it is not the one this tab sent); else `sendMessage({ text,
+ *          metadata: { viewing } })` (viewing on the message, never request
+ *          options). A send that can't go always says why: the busy hint, or
+ *          `SEND_FAILED` with the text kept when the conversation moved.
  *   end    of a turn: the server's transcript replaces ours (`decideState`
  *          keeps ours while the server has not stored the reply yet).
  *   quiet  `watchReply` (90 s to the first chunk, deadline + 60 s of
@@ -46,8 +50,10 @@ import {
   decideState,
   hasAnswerText,
   isEndingCode,
+  lastUserMessage,
   lineForError,
   lineForNotice,
+  ownsInFlight,
   restoresQuestion,
   textOf,
 } from './machine';
@@ -99,6 +105,8 @@ export interface AskMojiSnapshot {
   working: boolean;
   /** Fixed copy: what went wrong, or why the conversation can't go on. */
   line: string | null;
+  /** Fixed copy, not an error: why the message just tried did not go (yet). */
+  hint: string | null;
   /** Why Ask Moji is unavailable, for OWNER/TEACHER (fixed staff copy). */
   staffLine: string | null;
   /** A question to put back in the composer (its turn got no answer). */
@@ -139,11 +147,30 @@ const EMPTY_SNAPSHOT: AskMojiSnapshot = {
   busyElsewhere: false,
   working: false,
   line: null,
+  hint: null,
   staffLine: null,
   restore: null,
 };
 
-const UNAVAILABLE_CODES = new Set(['UNAVAILABLE', 'NOT_ENABLED', 'NOT_A_MEMBER', 'SIGNED_OUT']);
+/**
+ * Start / New conversation refusals that Try again cannot fix: the panel
+ * shows the refusal's fixed line (`unavailable`), and opening it again asks
+ * again. Any refusal the server marks `permanent` too.
+ */
+const UNAVAILABLE_CODES: ReadonlySet<string> = new Set([
+  'UNAVAILABLE',
+  'NOT_ENABLED',
+  'NOT_A_MEMBER',
+  'SIGNED_OUT',
+  'CLASSROOM_LOCKED',
+  'CLASSROOM_UNPUBLISHED',
+  'NOT_ALLOWED',
+]);
+
+/** A start refusal Try again can't fix (see UNAVAILABLE_CODES). */
+export const isUnavailableRefusal = (error: unknown): error is AskMojiApiError =>
+  error instanceof AskMojiApiError &&
+  (error.permanent || (error.code !== null && UNAVAILABLE_CODES.has(error.code)));
 
 export class AskMojiController {
   private readonly api: AskMojiApi;
@@ -165,6 +192,15 @@ export class AskMojiController {
 
   /** One request of ours at a time (start, state, send check, New conversation). */
   private busyRequest = false;
+  /** Settles when the request of ours running now ends (`beginRequest` / `endRequest`). */
+  private requestSettled: Promise<void> = Promise.resolve();
+  private releaseRequest: (() => void) | null = null;
+  /** Foreground work the panel shows as busy (start, a send, New conversation). */
+  private workCount = 0;
+  /** A send is waiting or checking: another one gets the busy hint. */
+  private sending = false;
+  /** The conversation whose Trigger session `preload` is starting. */
+  private preloadingId: string | null = null;
   /** A turn this tab sent, from `sendMessage` to its `onFinish`. */
   private turnPending = false;
   /** A `resumeStream()` this controller started and that has not settled. */
@@ -173,6 +209,8 @@ export class AskMojiController {
   private watchingTurn = false;
   /** The turn in flight was sent from this tab (until the server reports it settled). */
   private ownTurn = false;
+  /** The user message this tab sent last (the transport saw it go). */
+  private ownMessageId: string | null = null;
   /** The last reply this tab read ended with its `finish` and was not released. */
   private lastFinishClean = false;
   /** The reply stream read now, and whether the watchdog released it. */
@@ -234,12 +272,23 @@ export class AskMojiController {
     this.updatePolling();
   }
 
-  /** Start the Trigger session early (composer focus), when none exists yet. */
+  /**
+   * Start the Trigger session early, when none exists yet: on the first
+   * keystroke in the composer. Never on open or focus, so opening the panel
+   * boots no run. Once per conversation while it is starting.
+   */
   preload() {
     const conv = this.conv;
     if (!conv || this.snapshot.phase !== 'ready') return;
-    if (this.transport.getSession(conv.id)) return;
-    this.transport.preload(conv.id).catch(() => {});
+    if (this.transport.getSession(conv.id) || this.preloadingId === conv.id) return;
+    const id = conv.id;
+    this.preloadingId = id;
+    this.transport
+      .preload(id)
+      .catch(() => {})
+      .finally(() => {
+        if (this.preloadingId === id) this.preloadingId = null;
+      });
   }
 
   /** Try a failed start again. */
@@ -274,6 +323,41 @@ export class AskMojiController {
     }
   }
 
+  // ─── Requests and foreground work ────────────────────────────────────────
+
+  private beginRequest() {
+    this.busyRequest = true;
+    this.requestSettled = new Promise(resolve => {
+      this.releaseRequest = resolve;
+    });
+  }
+
+  private endRequest() {
+    this.busyRequest = false;
+    const release = this.releaseRequest;
+    this.releaseRequest = null;
+    release?.();
+  }
+
+  /** Wait until no request of ours is running. False when the provider went away meanwhile. */
+  private async requestIdle(): Promise<boolean> {
+    while (this.busyRequest) {
+      await this.requestSettled;
+      if (this.disposed) return false;
+    }
+    return !this.disposed;
+  }
+
+  private beginWork() {
+    this.workCount += 1;
+    this.set({ working: true });
+  }
+
+  private endWork() {
+    this.workCount = Math.max(0, this.workCount - 1);
+    if (!this.disposed) this.set({ working: this.workCount > 0 });
+  }
+
   // ─── Derived ──────────────────────────────────────────────────────────────
 
   /** The Chat is reading or about to read a reply. */
@@ -291,8 +375,9 @@ export class AskMojiController {
 
   private async start() {
     if (this.busyRequest || this.disposed) return;
-    this.busyRequest = true;
-    this.set({ phase: 'starting', working: true, line: null, staffLine: null });
+    this.beginRequest();
+    this.beginWork();
+    this.set({ phase: 'starting', line: null, hint: null, staffLine: null });
     try {
       const opened = await this.api.start({ viewAs: this.viewAs, browserTimeZone: this.zone() });
       if (this.disposed) return;
@@ -301,18 +386,23 @@ export class AskMojiController {
       if (this.disposed) return;
       this.failStart(error);
     } finally {
-      this.busyRequest = false;
-      if (!this.disposed) this.set({ working: false });
+      this.endRequest();
+      this.endWork();
       this.updatePolling();
     }
   }
 
+  /**
+   * A refused start: `unavailable` with the refusal's fixed line when Try
+   * again can't help (a locked or unpublished class, a role no longer held,
+   * Ask Moji off, any permanent refusal); `failed` with Try again otherwise.
+   */
   private failStart(error: unknown) {
-    const apiError = error instanceof AskMojiApiError ? error : null;
-    if (apiError && apiError.code && UNAVAILABLE_CODES.has(apiError.code)) {
-      this.set({ phase: 'unavailable', line: apiError.line, staffLine: apiError.staffLine });
+    if (isUnavailableRefusal(error)) {
+      this.set({ phase: 'unavailable', line: error.line, staffLine: error.staffLine });
       return;
     }
+    const apiError = error instanceof AskMojiApiError ? error : null;
     this.set({ phase: 'failed', line: apiError?.line ?? ASK_MOJI_COPY.INIT_FAILED });
   }
 
@@ -340,6 +430,9 @@ export class AskMojiController {
       messages: opened.transcript,
       transport: askMojiChatTransport<AskMojiUIMessage>(this.transport, {
         knownIds: () => conv.confirmedIds,
+        onSend: messages => {
+          if (this.conv === conv) this.ownMessageId = lastUserMessage(messages)?.id ?? null;
+        },
         onReply: (watched, sawFinish) => {
           if (this.conv === conv) this.reply = { watched, sawFinish, released: false };
         },
@@ -365,6 +458,7 @@ export class AskMojiController {
     this.resuming = false;
     this.watchingTurn = false;
     this.ownTurn = false;
+    this.ownMessageId = null;
     this.lastFinishClean = false;
     this.reply = null;
     this.pendingNotice = null;
@@ -378,6 +472,7 @@ export class AskMojiController {
       serverInFlight: opened.state.inFlight,
       busyElsewhere: opened.state.inFlight,
       line: null,
+      hint: null,
       staffLine: null,
       restore: null,
     });
@@ -418,7 +513,7 @@ export class AskMojiController {
     }
     if (chat.status === 'error') chat.clearError();
 
-    const patch: Partial<AskMojiSnapshot> = {};
+    const patch: Partial<AskMojiSnapshot> = { hint: null };
     if (line) {
       patch.line = line;
       if (!hasAnswerText(chat.messages.at(-1)) && restoresQuestion(notice)) {
@@ -440,7 +535,7 @@ export class AskMojiController {
     const conv = this.conv;
     if (!conv || this.disposed || this.busyRequest || this.chatBusy()) return;
     if (conv.chat.status !== 'ready') return;
-    this.busyRequest = true;
+    this.beginRequest();
     try {
       const state = await this.api.state({
         conversationId: conv.id,
@@ -451,7 +546,7 @@ export class AskMojiController {
     } catch {
       // A failed poll changes nothing; the next one tries again.
     } finally {
-      this.busyRequest = false;
+      this.endRequest();
     }
   }
 
@@ -485,6 +580,8 @@ export class AskMojiController {
       return false;
     }
     const s = state!;
+    // Whose turn is in flight, read before the transcript replaces ours.
+    const own = s.inFlight && this.isOwnInFlight(s);
     if (decision.adopt && s.transcript) {
       conv.chat.messages = s.transcript;
       conv.confirmedIds = new Set(s.transcript.map(m => m.id));
@@ -496,8 +593,10 @@ export class AskMojiController {
 
     const patch: Partial<AskMojiSnapshot> = {
       serverInFlight: s.inFlight,
-      busyElsewhere: s.inFlight && !this.ownTurn,
+      busyElsewhere: s.inFlight && !own,
     };
+    // A turn from elsewhere is in flight now: whatever this tab sent has settled.
+    if (s.inFlight && !own) this.ownTurn = false;
     if (!s.inFlight) {
       // A turn this tab watched settled with no answer stored: it failed.
       const line = this.snapshot.line === ASK_MOJI_COPY.BUSY_ELSEWHERE ? null : this.snapshot.line;
@@ -521,6 +620,15 @@ export class AskMojiController {
     }
     if (decision.adopt && s.resumeCursor) this.reseed(conv.id, s.resumeCursor);
     return !s.inFlight;
+  }
+
+  /** Whether the turn `state` reports in flight is the one this tab sent (machine.ownsInFlight). */
+  private isOwnInFlight(state: { transcript?: readonly AskMojiUIMessage[] }) {
+    return ownsInFlight({
+      ownTurn: this.ownTurn,
+      ownMessageId: this.ownMessageId,
+      transcript: state.transcript,
+    });
   }
 
   /** The cursor after an adopted transcript: past the last reply the transcript holds. */
@@ -577,7 +685,12 @@ export class AskMojiController {
       const opened = await this.api.start({ viewAs: this.viewAs, browserTimeZone: this.zone() });
       if (!this.disposed) this.install(opened);
     } catch (error) {
-      if (!this.disposed) this.set({ phase: 'ended', line: lineForError(error) });
+      if (this.disposed) return;
+      if (isUnavailableRefusal(error)) {
+        this.set({ phase: 'unavailable', line: error.line, staffLine: error.staffLine });
+      } else {
+        this.set({ phase: 'ended', line: lineForError(error) });
+      }
     } finally {
       this.updatePolling();
     }
@@ -586,48 +699,94 @@ export class AskMojiController {
   // ─── Send ─────────────────────────────────────────────────────────────────
 
   /**
-   * Send a question. Checks `state` first: a turn in flight anywhere is
-   * joined instead (`BUSY_ELSEWHERE`). Resolves true when the message went.
+   * Send a question. Resolves true when the message went. When it can't go,
+   * the panel always says why and the composer keeps the text:
+   *   - this tab is answering, or a send is already on its way: the busy hint;
+   *   - a request of ours is running (a poll): the send waits for it;
+   *   - the conversation moved meanwhile (another device's New conversation):
+   *     `SEND_FAILED`;
+   *   - `state` says a turn is in flight: it is joined, with `BUSY_ELSEWHERE`
+   *     unless it is the turn this tab sent (a reply the watchdog released).
    */
   async send(text: string, viewing: AskMojiViewing | null): Promise<boolean> {
     const conv = this.conv;
     const question = text.trim();
     if (!conv || this.snapshot.phase !== 'ready') return false;
     if (!question || question.length > MAX_MESSAGE_CHARS) return false;
-    if (this.busyRequest || this.chatBusy() || conv.chat.status !== 'ready') return false;
-    this.busyRequest = true;
-    this.set({ working: true });
+    if (this.sending || this.chatBusy() || conv.chat.status !== 'ready') {
+      this.blocked();
+      return false;
+    }
+    this.sending = true;
+    this.beginWork();
+    this.set({ hint: null });
     try {
-      const state = await this.api.state({
-        conversationId: conv.id,
-        knownLastMessageId: conv.knownLastMessageId,
-      });
-      if (this.conv !== conv || this.disposed) return false;
-      if (state?.inFlight && state.status === 'ACTIVE' && state.conversationId === conv.id) {
-        // Answering elsewhere: join that turn; the question stays in the composer.
-        this.set({ line: ASK_MOJI_COPY.BUSY_ELSEWHERE });
-        await this.apply(conv, state);
+      if (!(await this.requestIdle())) return false;
+      if (this.conv !== conv) return this.moved();
+      if (this.snapshot.phase !== 'ready') return false;
+      if (this.chatBusy() || conv.chat.status !== 'ready') {
+        // The poll we waited for joined a turn in flight.
+        if (!this.snapshot.busyElsewhere) this.set({ hint: ASK_MOJI_COPY.PACE });
         return false;
       }
-      const clear = await this.apply(conv, state);
-      if (!clear || this.conv !== conv || this.snapshot.phase !== 'ready') return false;
-      this.set({ line: null, restore: null, busyElsewhere: false });
-      this.turnPending = true;
-      this.watchingTurn = true;
-      this.ownTurn = true;
-      this.lastFinishClean = false;
-      this.pendingNotice = null;
-      void conv.chat.sendMessage(
-        viewing ? { text: question, metadata: { viewing } } : { text: question }
-      );
-      return true;
+      this.beginRequest();
+      try {
+        const state = await this.api.state({
+          conversationId: conv.id,
+          knownLastMessageId: conv.knownLastMessageId,
+        });
+        if (this.disposed) return false;
+        if (this.conv !== conv) return this.moved();
+        if (state?.inFlight && state.status === 'ACTIVE' && state.conversationId === conv.id) {
+          // A turn is in flight: join it; the question stays in the composer.
+          // Said only when it is someone else's; this tab's own turn (its
+          // reply released by the watchdog) is joined silently.
+          if (!this.isOwnInFlight(state)) this.set({ line: ASK_MOJI_COPY.BUSY_ELSEWHERE });
+          await this.apply(conv, state);
+          return false;
+        }
+        const clear = await this.apply(conv, state);
+        if (this.conv !== conv) return this.moved();
+        if (!clear || this.snapshot.phase !== 'ready') return false;
+        this.set({ line: null, hint: null, restore: null, busyElsewhere: false });
+        this.turnPending = true;
+        this.watchingTurn = true;
+        this.ownTurn = true;
+        this.ownMessageId = null;
+        this.lastFinishClean = false;
+        this.pendingNotice = null;
+        void conv.chat.sendMessage(
+          viewing ? { text: question, metadata: { viewing } } : { text: question }
+        );
+        return true;
+      } finally {
+        this.endRequest();
+      }
     } catch (error) {
       const line = lineForError(error);
       this.set({ line: line === ASK_MOJI_COPY.ERROR ? ASK_MOJI_COPY.SEND_FAILED : line });
       return false;
     } finally {
-      this.busyRequest = false;
-      if (!this.disposed) this.set({ working: false });
+      this.sending = false;
+      this.endWork();
+    }
+  }
+
+  /** The conversation moved while a send waited: it did not go; the composer keeps the text. */
+  private moved(): false {
+    if (!this.disposed) this.set({ line: ASK_MOJI_COPY.SEND_FAILED });
+    return false;
+  }
+
+  /**
+   * The user tried to send while nothing can go (this tab is answering, or a
+   * send is on its way): a short hint instead of nothing. The busy line
+   * already says it when another window is answering.
+   */
+  blocked() {
+    if (this.snapshot.phase !== 'ready' || this.snapshot.busyElsewhere) return;
+    if (this.isAnswering() || this.sending || this.snapshot.working) {
+      this.set({ hint: ASK_MOJI_COPY.PACE });
     }
   }
 
@@ -635,10 +794,16 @@ export class AskMojiController {
 
   /** End this conversation and open a new one (atomic across devices on the server). */
   async newConversation() {
-    if (this.busyRequest || this.isAnswering() || this.disposed) return;
+    if (this.isAnswering() || this.disposed || this.workCount > 0) return;
+    this.beginWork();
+    // A poll running now finishes first (it may itself move the conversation).
+    if (!(await this.requestIdle()) || this.isAnswering()) {
+      this.endWork();
+      return;
+    }
     const current = this.conv;
-    this.busyRequest = true;
-    this.set({ working: true, line: null, restore: null });
+    this.beginRequest();
+    this.set({ line: null, hint: null, restore: null });
     try {
       const opened = current
         ? await this.api.newConversation({
@@ -650,15 +815,15 @@ export class AskMojiController {
       if (!this.disposed) this.install(opened);
     } catch (error) {
       if (!this.disposed) {
-        if (error instanceof AskMojiApiError && error.code && UNAVAILABLE_CODES.has(error.code)) {
+        if (isUnavailableRefusal(error)) {
           this.set({ phase: 'unavailable', line: error.line, staffLine: error.staffLine });
         } else {
           this.set({ line: lineForError(error) });
         }
       }
     } finally {
-      this.busyRequest = false;
-      if (!this.disposed) this.set({ working: false });
+      this.endRequest();
+      this.endWork();
       this.updatePolling();
     }
   }
@@ -693,17 +858,15 @@ export class AskMojiController {
     this.set({ ratings });
   }
 
-  /** Forget a line the user has read (they started typing). The busy hint stays while it holds. */
+  /**
+   * Forget a line or hint the user has read (they started typing). The
+   * busy-elsewhere line stays while it holds.
+   */
   clearLine() {
-    if (this.snapshot.line && this.snapshot.line !== ASK_MOJI_COPY.BUSY_ELSEWHERE) {
-      this.set({ line: null });
-    }
+    const patch: Partial<AskMojiSnapshot> = {};
+    if (this.snapshot.line && this.snapshot.line !== ASK_MOJI_COPY.BUSY_ELSEWHERE)
+      patch.line = null;
+    if (this.snapshot.hint) patch.hint = null;
+    if (Object.keys(patch).length > 0) this.set(patch);
   }
 }
-
-const lastUserMessage = (messages: readonly AskMojiUIMessage[]) => {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === 'user') return messages[i];
-  }
-  return undefined;
-};

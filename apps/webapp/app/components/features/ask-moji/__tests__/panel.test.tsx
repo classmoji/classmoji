@@ -6,7 +6,17 @@ import { ASK_MOJI_COPY } from '@classmoji/utils/ask-moji';
 import AskMojiPanel from '../AskMojiPanel';
 import { AskMojiContext } from '../AskMojiProvider';
 import { AskMojiController } from '../controller';
-import { FakeTransport, fakeApi, openedFor, reply, stateOf, streamOf } from './fakes';
+import {
+  FakeTransport,
+  answerMsg,
+  fakeApi,
+  openedFor,
+  pushable,
+  reply,
+  stateOf,
+  streamOf,
+  userMsg,
+} from './fakes';
 
 /** The panel mounted over a controller with a scripted transport and API. */
 
@@ -103,9 +113,11 @@ describe('the panel', () => {
       key('Enter');
     });
     await vi.waitFor(() => expect(transport.sends).toHaveLength(1));
+    // The chip's title (a host's, a route's) never goes on the message.
     expect(transport.sends[0].messages.at(-1)!.metadata).toEqual({
       viewing: { kind: 'page', id: 'p1' },
     });
+    expect(JSON.stringify(transport.sends[0])).not.toContain('Week 1');
     await vi.waitFor(() => expect(textarea().value).toBe(''));
     expect(window.sessionStorage.getItem('classmoji:ask-moji:draft:c1')).toBeNull();
     await vi.waitFor(() => expect(container.textContent).toContain('Hi back'));
@@ -207,5 +219,167 @@ describe('the panel', () => {
     await act(async () => key('Enter'));
     await vi.waitFor(() => expect(container.textContent).toContain(ASK_MOJI_COPY.REPLY_FAILED));
     await vi.waitFor(() => expect(textarea().value).toBe('Lost question'));
+  });
+
+  it('opening (and its auto-focus) boots no Trigger run; the first keystroke does, once', async () => {
+    api.start.mockResolvedValue(openedFor('c1', { sessionReady: false }));
+    render(true);
+    await vi.waitFor(() => expect(textarea().disabled).toBe(false));
+    await vi.waitFor(() => expect(document.activeElement).toBe(textarea()));
+    act(() => textarea().dispatchEvent(new FocusEvent('focusin', { bubbles: true })));
+    expect(transport.preload).not.toHaveBeenCalled();
+    expect(api.ensureSession).not.toHaveBeenCalled();
+    type('W');
+    expect(transport.preload).toHaveBeenCalledTimes(1);
+    expect(transport.preload).toHaveBeenCalledWith('c1');
+    type('Wh');
+    expect(transport.preload).toHaveBeenCalledTimes(1);
+  });
+
+  it('thumbs only on the server’s rateable answers, and never while a reply streams', async () => {
+    const rated = { ...answerMsg('a0', 'Stored final'), metadata: { rateable: true } };
+    const partial = { ...answerMsg('a1', 'Stored partial'), metadata: { rateable: false } };
+    api.start.mockResolvedValue(
+      openedFor('c1', {
+        transcript: [userMsg('u0', 'Q0'), rated, userMsg('u1', 'Q1'), partial],
+        state: { status: 'ACTIVE', lastMessageId: 'a1', inFlight: false },
+      })
+    );
+    render(true);
+    await vi.waitFor(() => expect(container.textContent).toContain('Stored partial'));
+    const thumbs = () => container.querySelectorAll('[aria-label="Helpful"]').length;
+    expect(thumbs()).toBe(1);
+
+    const live = pushable();
+    transport.sendQueue.push(() => live.stream);
+    type('Q2');
+    await act(async () => key('Enter'));
+    await vi.waitFor(() => expect(transport.sends).toHaveLength(1));
+    live.push(
+      { type: 'start', messageId: 'a2' },
+      { type: 'text-start', id: 't' },
+      { type: 'text-delta', id: 't', delta: 'Streaming' }
+    );
+    await vi.waitFor(() => expect(container.textContent).toContain('Streaming'));
+    expect(thumbs()).toBe(0);
+
+    // The stream ends; until the server's transcript marks it, the new answer has none.
+    const userId = controller.getSnapshot().chat!.messages.at(-2)!.id;
+    api.state.mockResolvedValue(
+      stateOf({
+        lastMessageId: 'a2',
+        transcript: [
+          userMsg('u0', 'Q0'),
+          rated,
+          userMsg('u1', 'Q1'),
+          partial,
+          userMsg(userId, 'Q2'),
+          { ...answerMsg('a2', 'Streaming done'), metadata: { rateable: true } },
+        ],
+      })
+    );
+    await act(async () => {
+      live.push({ type: 'text-end', id: 't' }, { type: 'finish' });
+      live.close();
+    });
+    await vi.waitFor(() => expect(container.textContent).toContain('Streaming done'));
+    expect(thumbs()).toBe(2);
+  });
+
+  it('a suggestion keeps the chip’s state, and a dismissed chip comes back after it is sent', async () => {
+    render(true, { kind: 'page', id: 'p1', title: 'Week 1' });
+    await vi.waitFor(() => expect(textarea().disabled).toBe(false));
+    act(() =>
+      (
+        container.querySelector(
+          '[aria-label="Leave this out of the next question"]'
+        ) as HTMLButtonElement
+      ).click()
+    );
+    transport.sendQueue.push(() => streamOf(reply('a1', 'ok')));
+    const suggestion = [...container.querySelectorAll('.moji-hint')].find(b =>
+      b.textContent?.includes('What is due?')
+    ) as HTMLButtonElement;
+    await act(async () => suggestion.click());
+    await vi.waitFor(() => expect(transport.sends).toHaveLength(1));
+    expect(transport.sends[0].messages.at(-1)!.metadata).toBeUndefined();
+    await vi.waitFor(() => expect(container.textContent).toContain('Viewing: Week 1'));
+  });
+
+  it('a notice shows under the header', async () => {
+    act(() =>
+      root.render(
+        <AskMojiContext.Provider value={controller}>
+          <AskMojiPanel
+            mode="embed"
+            open
+            onRequestClose={onRequestClose}
+            courseName="CS 1"
+            classroomSlug="cs1"
+            pagesUrl={null}
+            slidesUrl={null}
+            viewing={null}
+            notice="You are viewing as another user."
+          />
+        </AskMojiContext.Provider>
+      )
+    );
+    expect(container.querySelector('.moji-notice')!.textContent).toBe(
+      'You are viewing as another user.'
+    );
+    await vi.waitFor(() => expect(textarea().disabled).toBe(false));
+    expect(container.querySelector('.moji-notice')!.textContent).toBe(
+      'You are viewing as another user.'
+    );
+  });
+
+  it('a suggestion with the chip shown carries the viewing', async () => {
+    render(true, { kind: 'page', id: 'p1', title: 'Week 1' });
+    await vi.waitFor(() => expect(textarea().disabled).toBe(false));
+    transport.sendQueue.push(() => streamOf(reply('a1', 'ok')));
+    const suggestion = container.querySelector('.moji-hint') as HTMLButtonElement;
+    await act(async () => suggestion.click());
+    await vi.waitFor(() => expect(transport.sends).toHaveLength(1));
+    expect(transport.sends[0].messages.at(-1)!.metadata).toEqual({
+      viewing: { kind: 'page', id: 'p1' },
+    });
+  });
+
+  it('the length is announced at 90% and at the limit, not on every keystroke', async () => {
+    render(true);
+    await vi.waitFor(() => expect(textarea().disabled).toBe(false));
+    const announced = () =>
+      container.querySelector('[data-testid="moji-counter-announce"]')!.textContent;
+    const visible = container.querySelector('.moji-composer')!;
+    type('x'.repeat(3599));
+    expect(announced()).toBe('');
+    type('x'.repeat(3600));
+    expect(announced()).toBe('3,600 of 4,000 characters');
+    type('x'.repeat(3750));
+    expect(announced()).toBe('3,600 of 4,000 characters');
+    type('x'.repeat(4000));
+    expect(announced()).toBe('4,000 character limit reached');
+    type('x'.repeat(4001));
+    expect(announced()).toBe('Over the 4,000 character limit');
+    // The visible counter is not a live region.
+    expect(visible.querySelector('.moji-counter')!.getAttribute('aria-live')).toBeNull();
+  });
+
+  it('Enter while an answer streams says why instead of nothing', async () => {
+    render(true);
+    await vi.waitFor(() => expect(textarea().disabled).toBe(false));
+    const live = pushable();
+    transport.sendQueue.push(() => live.stream);
+    type('First');
+    await act(async () => key('Enter'));
+    await vi.waitFor(() => expect(transport.sends).toHaveLength(1));
+    type('Second');
+    await act(async () => key('Enter'));
+    expect(container.textContent).toContain(ASK_MOJI_COPY.PACE);
+    expect(textarea().value).toBe('Second');
+    act(() => {
+      live.push(...reply('a1', 'done'));
+      live.close();
+    });
   });
 });

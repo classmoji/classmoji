@@ -14,6 +14,7 @@
  * availability queries. This is for the UI only; the webapp's embed route
  * enforces the real gates.
  */
+import { isAskMojiTriggerRuntime } from '@classmoji/utils/ask-moji';
 import { askMojiHostDecision } from '~/components/askMoji/askMojiProtocol.ts';
 import { findClassroomRole } from '~/utils/classroomRole.server.ts';
 import { ClassmojiService } from '~/utils/db.server.ts';
@@ -38,7 +39,8 @@ export async function askMojiHostData({
   const base = {
     // Availability decides below; this only lets the pure checks run first.
     botEnabled: true,
-    runtime: process.env.ASK_MOJI_RUNTIME,
+    // The one ASK_MOJI_RUNTIME parse every app shares.
+    triggerRuntime: isAskMojiTriggerRuntime(),
     webappUrl: process.env.WEBAPP_URL,
     embedded,
   };

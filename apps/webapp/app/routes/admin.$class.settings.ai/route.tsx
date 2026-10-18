@@ -143,7 +143,11 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const aiAgentAvailable = isAIAgentConfigured();
   let askMojiToggleAvailable = aiAgentAvailable;
   let askMojiUnavailableLine: string | null = null;
-  if (ClassmojiService.askMojiSession.askMojiRuntimeIsTrigger()) {
+  // The one runtime parse (`isAskMojiTriggerRuntime`, through the service).
+  // The instructions exist only on the Trigger runtime: the AI agent never
+  // reads them, so off it the page neither shows nor saves them.
+  const askMojiTrigger = ClassmojiService.askMojiSession.askMojiRuntimeIsTrigger();
+  if (askMojiTrigger) {
     const availability = await ClassmojiService.askMojiSession.askMojiAvailable({
       classroomId: classroom.id,
     });
@@ -208,7 +212,9 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     quizzes_enabled: settings?.quizzes_enabled ?? null,
     syllabus_bot_enabled: settings?.syllabus_bot_enabled ?? null,
     has_anthropic_key: Boolean(apiKey),
-    syllabus_bot_instructions: settings?.syllabus_bot_instructions ?? null,
+    syllabus_bot_instructions: askMojiTrigger
+      ? (settings?.syllabus_bot_instructions ?? null)
+      : null,
   };
 
   return {
@@ -217,6 +223,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     aiAgentAvailable,
     askMojiToggleAvailable,
     askMojiUnavailableLine,
+    askMojiInstructionsShown: askMojiTrigger,
     quizzesProRequired: !quizzesEntitlement.allowed,
     askMojiProRequired: !askMojiEntitlement.allowed,
     defaultLabels,
@@ -231,6 +238,7 @@ const SettingsAI = ({ loaderData }: Route.ComponentProps) => {
     aiAgentAvailable,
     askMojiToggleAvailable,
     askMojiUnavailableLine,
+    askMojiInstructionsShown,
     quizzesProRequired,
     askMojiProRequired,
     defaultLabels,
@@ -496,30 +504,33 @@ const SettingsAI = ({ loaderData }: Route.ComponentProps) => {
           </Button>
 
           {/* Not a Form.Item: the instructions save on their own, never with
-              the model and effort choices above. */}
-          <div className="mt-8">
-            {subheading('Instructions')}
-            <label htmlFor="syllabus_bot_instructions" className="mb-2 block text-sm text-ink-2">
-              Classroom instructions for Ask Moji
-            </label>
-            <Input.TextArea
-              id="syllabus_bot_instructions"
-              value={instructions}
-              onChange={event => setInstructions(event.target.value)}
-              maxLength={INSTRUCTIONS_MAX_CHARS}
-              showCount
-              autoSize={{ minRows: 4, maxRows: 14 }}
-            />
-            <p className="mt-6 mb-3 text-xs text-ink-3">Only owners of this class see these.</p>
-            <Button
-              type="primary"
-              htmlType="button"
-              onClick={handleSaveInstructions}
-              disabled={instructions === savedInstructions}
-            >
-              Save instructions
-            </Button>
-          </div>
+              the model and effort choices above. Only on the Trigger
+              runtime, the one that reads them. */}
+          {askMojiInstructionsShown && (
+            <div className="mt-8">
+              {subheading('Instructions')}
+              <label htmlFor="syllabus_bot_instructions" className="mb-2 block text-sm text-ink-2">
+                Classroom instructions for Ask Moji
+              </label>
+              <Input.TextArea
+                id="syllabus_bot_instructions"
+                value={instructions}
+                onChange={event => setInstructions(event.target.value)}
+                maxLength={INSTRUCTIONS_MAX_CHARS}
+                showCount
+                autoSize={{ minRows: 4, maxRows: 14 }}
+              />
+              <p className="mt-6 mb-3 text-xs text-ink-3">Only owners of this class see these.</p>
+              <Button
+                type="primary"
+                htmlType="button"
+                onClick={handleSaveInstructions}
+                disabled={instructions === savedInstructions}
+              >
+                Save instructions
+              </Button>
+            </div>
+          )}
         </SettingSection>
       </Form>
 
@@ -560,9 +571,11 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
   // Every save is audited once it has been written: the field names only
   // (never a value: the key is a secret, the instructions are owner-only), and
-  // for the instructions their length.
+  // for the instructions their length. One row per save (`dedupe: false`):
+  // two saves inside the service's dedup window are two changes.
   const audit = async (fields: string[], extra: Record<string, unknown> = {}) =>
     addClassroomAuditLog({
+      dedupe: false,
       classroomId: classroom.id,
       userId,
       role: membership!.role,
@@ -634,6 +647,13 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
 
     async saveAskMojiInstructions() {
+      // Only on the Trigger runtime (the page shows the field nowhere else).
+      if (!ClassmojiService.askMojiSession.askMojiRuntimeIsTrigger()) {
+        return {
+          error: INSTRUCTIONS_ERROR_COPY.INSTRUCTIONS_UNAVAILABLE,
+          action: ActionTypes.SAVE_QUIZ_SETTINGS,
+        };
+      }
       // Only this field. Validated by updateSettings (trimmed, blank clears,
       // at most INSTRUCTIONS_MAX_CHARS); a refusal is a fixed line by code.
       const value = data.syllabus_bot_instructions;

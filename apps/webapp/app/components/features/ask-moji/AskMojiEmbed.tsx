@@ -17,6 +17,9 @@ import {
 import { useEscapeWithin } from './useEscapeWithin';
 import './styles.css';
 
+/** The embed's line while an admin views as the user (fixed copy). */
+export const ASK_MOJI_IMPERSONATION_NOTICE = 'You are viewing as another user.';
+
 export type AskMojiEmbedData =
   | {
       state: 'ready';
@@ -25,6 +28,12 @@ export type AskMojiEmbedData =
       courseName: string;
       pagesUrl: string | null;
       slidesUrl: string | null;
+      /**
+       * The session is a platform admin viewing as this user (read on the
+       * server from the access check). The webapp's own pages show the
+       * global banner; the frame has none, so it says so itself.
+       */
+      impersonated: boolean;
     }
   | { state: 'signed-out'; parentOrigin: string | null; signInUrl: string }
   | { state: 'unavailable'; parentOrigin: string | null; line: string; staffLine: string | null };
@@ -43,7 +52,7 @@ export type AskMojiEmbedData =
 export default function AskMojiEmbed({ data }: { data: AskMojiEmbedData }) {
   const parentOrigin = data.parentOrigin;
   const [open, setOpen] = useState(false);
-  const [viewing, setViewing] = useState<EmbedViewing | null>(null);
+  const [viewing, setViewing] = useState<(EmbedViewing & { title?: string }) | null>(null);
   const revalidator = useRevalidator();
   const revalidateRef = useRef(revalidator.revalidate);
   revalidateRef.current = revalidator.revalidate;
@@ -66,8 +75,14 @@ export default function AskMojiEmbed({ data }: { data: AskMojiEmbedData }) {
     const onMessage = (event: MessageEvent) => {
       const message = readHostMessage(event, { parentOrigin, parentWindow: window.parent });
       if (!message) return;
-      if (message.type === ASKMOJI_VIEWING) setViewing(message.viewing);
-      else if (message.type === ASKMOJI_OPEN) {
+      if (message.type === ASKMOJI_VIEWING) {
+        // The host's title labels the chip; the message carries kind, id, slide only.
+        setViewing(
+          message.viewing
+            ? { ...message.viewing, ...(message.title ? { title: message.title } : {}) }
+            : null
+        );
+      } else if (message.type === ASKMOJI_OPEN) {
         setOpen(true);
         // Signed in elsewhere since: look again.
         if (stateRef.current === 'signed-out') revalidateRef.current();
@@ -140,6 +155,7 @@ export default function AskMojiEmbed({ data }: { data: AskMojiEmbedData }) {
         slidesUrl={data.slidesUrl}
         viewing={viewing}
         onBusyChange={onBusyChange}
+        notice={data.impersonated ? ASK_MOJI_IMPERSONATION_NOTICE : null}
       />
     </AskMojiProvider>
   );

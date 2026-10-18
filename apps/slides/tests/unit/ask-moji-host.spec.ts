@@ -14,12 +14,14 @@ import { test, expect } from '@playwright/test';
 import {
   askMojiEmbedUrl,
   askMojiHostDecision,
+  chipTitle,
   deckViewing,
   flatSlideIndex,
   isAskMojiTarget,
   originOf,
   readAskMojiMessage,
   syncMessages,
+  viewingMessage,
   visibleFlatIndex,
   visibleStackSizes,
 } from '../../app/components/askMoji/askMojiProtocol.ts';
@@ -152,6 +154,23 @@ test.describe('the slide number', () => {
     expect(visibleFlatIndex([], { h: 0, v: 0 })).toBe(0);
   });
 
+  test('the viewing message carries the deck title for the chip, only with a viewing', () => {
+    const viewing = { kind: 'deck' as const, id: 'd1', slide: 3 };
+    expect(viewingMessage(viewing, ' Lecture 3 ')).toEqual({
+      type: 'askmoji:viewing',
+      viewing,
+      title: 'Lecture 3',
+    });
+    expect(viewingMessage(viewing, null)).toEqual({ type: 'askmoji:viewing', viewing });
+    expect(viewingMessage(null, 'Lecture 3')).toEqual({ type: 'askmoji:viewing', viewing: null });
+    expect(chipTitle('z'.repeat(300))).toHaveLength(200);
+    expect(chipTitle('   ')).toBeUndefined();
+    expect(syncMessages(viewing, true, 'Lecture 3')).toEqual([
+      { type: 'askmoji:viewing', viewing, title: 'Lecture 3' },
+      { type: 'askmoji:open' },
+    ]);
+  });
+
   test('the viewing names the deck and the slide', () => {
     expect(deckViewing('deck-1', 4)).toEqual({ kind: 'deck', id: 'deck-1', slide: 4 });
     expect(deckViewing('deck-1', -2)).toEqual({ kind: 'deck', id: 'deck-1', slide: 0 });
@@ -166,7 +185,7 @@ test.describe('who gets the launcher', () => {
     via: 'membership' as const,
     acceptedRole: 'STUDENT',
     botEnabled: true,
-    runtime: 'trigger',
+    triggerRuntime: true,
     webappUrl: 'https://classmoji.io',
   };
 
@@ -193,8 +212,7 @@ test.describe('who gets the launcher', () => {
 
   test('not when the classroom has Ask Moji off, another runtime, or no webapp origin', () => {
     expect(askMojiHostDecision({ ...on, botEnabled: false }).enabled).toBe(false);
-    expect(askMojiHostDecision({ ...on, runtime: 'ai_agent' }).enabled).toBe(false);
-    expect(askMojiHostDecision({ ...on, runtime: undefined }).enabled).toBe(false);
+    expect(askMojiHostDecision({ ...on, triggerRuntime: false }).enabled).toBe(false);
     expect(askMojiHostDecision({ ...on, webappUrl: '' }).enabled).toBe(false);
   });
 });
@@ -222,7 +240,17 @@ test.describe('where the host is mounted', () => {
       expect(text).toContain('classroomSlug: askMoji.classroomSlug,');
     }
     expect(SERVER).toContain('acceptedOnly: true');
-    expect(SERVER).toContain('process.env.ASK_MOJI_RUNTIME');
+    // The shared parse, never a local `=== 'trigger'` of the variable.
+    expect(SERVER).toContain('triggerRuntime: isAskMojiTriggerRuntime(),');
+    expect(SERVER).not.toContain('process.env.ASK_MOJI_RUNTIME');
+  });
+
+  test('both hosts send the deck title from their loader data, the speaker only with the launcher', () => {
+    expect(VIEWER).toContain('title={slide.title}');
+    expect(SPEAKER_ROUTE).toContain(
+      'askMojiTitle: askMoji.askMojiEnabled ? (slide.title ?? null) : null,'
+    );
+    expect(SPEAKER_ROUTE).toContain('title: askMojiTitle');
   });
 
   test("the final say is the webapp's availability rule, asked for accepted members only", () => {

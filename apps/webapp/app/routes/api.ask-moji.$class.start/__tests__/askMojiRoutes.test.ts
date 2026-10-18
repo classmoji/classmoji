@@ -75,8 +75,11 @@ const opened = (id: string) => ({
   created: true,
 });
 
+const auditCreate = vi.fn();
+
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
+    audit: { create: (...a: unknown[]) => auditCreate(...a) },
     askMojiSession: {
       askMojiAvailable: (i: unknown) => availability(i as never),
       start: async (a: Access, i: Record<string, unknown>) => {
@@ -405,6 +408,72 @@ describe('scoping: every id the service sees is checked against the server-deriv
     });
     await call('start', { viewAs: 'ROOT' });
     expect(calls[1].input.viewAs).toBeUndefined();
+  });
+});
+
+describe('scoping: start and New conversation (user B, classroom Y)', () => {
+  /** The service answers start per caller and classroom, as askMojiSession does. */
+  const perScope = (a: Access) => opened(`conv-${a.userId}-${a.classroom.id}`);
+
+  it('start opens the caller’s own conversation for the URL’s classroom, never one the body names', async () => {
+    startImpl.mockImplementation(perScope);
+    signInAs(access('user-a'));
+    const mine = await call('start', { conversationId: 'conv-b', userId: 'user-b' });
+    signInAs(access('user-b'));
+    const theirs = await call('start');
+    signInAs(access('user-a', { classroomId: 'class-y' }));
+    const otherClass = await call('start');
+    expect(mine.body.conversationId).toBe('conv-user-a-class-x');
+    expect(theirs.body.conversationId).toBe('conv-user-b-class-x');
+    expect(otherClass.body.conversationId).toBe('conv-user-a-class-y');
+    for (const c of calls.filter(c => c.fn === 'start')) {
+      expect(c.input).not.toHaveProperty('conversationId');
+      expect(c.input).not.toHaveProperty('userId');
+    }
+  });
+
+  it('user B’s New conversation on user A’s conversation replaces nothing of A’s', async () => {
+    signInAs(access('user-b'));
+    const res = await call('new', { conversationId: 'conv-a' });
+    expect(res.status).toBe(200);
+    // Not A's replacement: the service saw B's access and found no conversation of B's.
+    expect(res.body.conversationId).toBe('conv-fresh');
+    const sent = calls.find(c => c.fn === 'newConversation')!;
+    expect(sent.access.userId).toBe('user-b');
+    expect(sent.input).toEqual({
+      conversationId: 'conv-a',
+      viewAs: undefined,
+      browserTimeZone: undefined,
+      tool: 'web:ask_moji.new',
+    });
+  });
+
+  it('classroom Y’s New conversation cannot replace classroom X’s conversation', async () => {
+    signInAs(access('user-a', { classroomId: 'class-y' }));
+    const res = await call('new', { conversationId: 'conv-a' });
+    expect(res.body.conversationId).toBe('conv-fresh');
+    expect(calls.at(-1)!.access.classroom.id).toBe('class-y');
+  });
+
+  it('an impersonated New conversation cannot replace the real user’s conversation', async () => {
+    signInAs(access('user-a', { impersonatedBy: 'admin-1' }));
+    const res = await call('new', { conversationId: 'conv-a' });
+    expect(res.body.conversationId).toBe('conv-fresh');
+  });
+
+  it('the owner’s New conversation replaces their own', async () => {
+    signInAs(access('user-a'));
+    expect((await call('new', { conversationId: 'conv-a' })).body.conversationId).toBe('conv-next');
+  });
+});
+
+describe('ensure-session: bookkeeping, not an audited action', () => {
+  it('starting the caller’s own session writes no audit row from the route', async () => {
+    signInAs(access('user-a'));
+    const res = await call('ensure-session', { conversationId: 'conv-a' });
+    expect(res.status).toBe(200);
+    expect(calls.map(c => c.fn)).toEqual(['ensureSession']);
+    expect(auditCreate).not.toHaveBeenCalled();
   });
 });
 

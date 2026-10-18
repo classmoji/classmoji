@@ -78,14 +78,30 @@ const createAskMojiSlice = (set: SetState) => ({
     }),
   askMojiActive: false,
   setAskMojiActive: (askMojiActive: boolean) => set({ askMojiActive }),
-  // What the user has open, as the route on screen publishes it
-  // (useAskMojiViewing). A hint for the panel's "Viewing" chip and the next
-  // message's metadata; the server resolves and checks it.
+  // What the user has open, as the routes on screen publish it
+  // (useAskMojiViewing): a stack of publishers, the one rendered last on top.
+  // `askMojiViewing` is the top, a hint for the panel's "Viewing" chip and the
+  // next message's metadata; the server resolves and checks it. Closing a
+  // drawer that published its own viewing restores the page's under it.
+  askMojiViewingStack: [] as AskMojiViewingState[],
   askMojiViewing: null as AskMojiViewingState | null,
-  setAskMojiViewing: (askMojiViewing: AskMojiViewingState | null) =>
+  publishAskMojiViewing: (viewing: AskMojiViewingState) =>
     set((state: StoreState) => {
-      if (sameViewing(state.askMojiViewing, askMojiViewing)) return state;
-      return { askMojiViewing };
+      const at = state.askMojiViewingStack.findIndex(v => v.owner === viewing.owner);
+      if (at >= 0 && sameViewing(state.askMojiViewingStack[at], viewing)) return state;
+      const stack =
+        at >= 0
+          ? state.askMojiViewingStack.map((v, i) => (i === at ? viewing : v))
+          : [...state.askMojiViewingStack, viewing];
+      return viewingStackState(state, stack);
+    }),
+  withdrawAskMojiViewing: (owner: string) =>
+    set((state: StoreState) => {
+      if (!state.askMojiViewingStack.some(v => v.owner === owner)) return state;
+      return viewingStackState(
+        state,
+        state.askMojiViewingStack.filter(v => v.owner !== owner)
+      );
     }),
   // How many mounted routes ask for Ask Moji to be hidden (useHideAskMoji):
   // a live quiz attempt. Hidden while above zero.
@@ -96,6 +112,16 @@ const createAskMojiSlice = (set: SetState) => ({
     set((state: StoreState) => ({ askMojiHideCount: Math.max(0, state.askMojiHideCount - 1) })),
 });
 
+/** The stack, and its top: the publisher rendered last (highest `seq`). */
+const viewingStackState = (state: StoreState, stack: AskMojiViewingState[]) => {
+  let top: AskMojiViewingState | null = null;
+  for (const v of stack) if (!top || v.seq > top.seq) top = v;
+  return {
+    askMojiViewingStack: stack,
+    askMojiViewing: sameViewing(state.askMojiViewing, top) ? state.askMojiViewing : top,
+  };
+};
+
 const sameViewing = (a: AskMojiViewingState | null, b: AskMojiViewingState | null) =>
   a === b ||
   (a !== null &&
@@ -104,7 +130,8 @@ const sameViewing = (a: AskMojiViewingState | null, b: AskMojiViewingState | nul
     a.id === b.id &&
     a.slide === b.slide &&
     a.title === b.title &&
-    a.owner === b.owner);
+    a.owner === b.owner &&
+    a.seq === b.seq);
 
 // Guided tour orchestration. "Take a tour" calls startFullTour() -> phase
 // 'landing'; OnboardingTour runs the landing steps and hands off to 'instructor'
@@ -119,7 +146,10 @@ const persistTour = (tourPhase: TourPhase, tourStep: number) => {
   try {
     if (tourPhase === 'idle') sessionStorage.removeItem(TOUR_STORAGE_KEY);
     else
-      sessionStorage.setItem(TOUR_STORAGE_KEY, JSON.stringify({ phase: tourPhase, step: tourStep }));
+      sessionStorage.setItem(
+        TOUR_STORAGE_KEY,
+        JSON.stringify({ phase: tourPhase, step: tourStep })
+      );
   } catch {
     /* sessionStorage unavailable (SSR / private mode) */
   }

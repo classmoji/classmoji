@@ -812,6 +812,15 @@ a.moji-ref:hover {
   color: var(--mj-error-ink);
 }
 
+/* A fixed line under the header (the embed's "viewing as" notice). */
+.moji-notice {
+  padding: 6px 16px;
+  font-size: 12px;
+  color: var(--mj-muted);
+  border-bottom: 1px solid var(--mj-border);
+  flex-shrink: 0;
+}
+
 .moji-busy-line {
   padding: 6px 16px;
   font-size: 12px;

@@ -22,6 +22,7 @@
  */
 
 import { FALLBACK_MODEL, platformDefaultModel } from '@classmoji/utils/ai-models';
+import { isAskMojiTriggerRuntime } from '@classmoji/utils/ask-moji';
 
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 
@@ -54,10 +55,9 @@ export function getPlatformAIDefaults(
     llm_model: quizModel,
     code_aware_model: quizModel,
     exploration_model: platformDefaultModel(env.EXPLORATION_MODEL),
-    syllabus_bot_model:
-      env.ASK_MOJI_RUNTIME === 'trigger'
-        ? platformDefaultModel(env.SYLLABUS_BOT_MODEL?.trim() || env.LLM_MODEL)
-        : env.SYLLABUS_BOT_MODEL || env.LLM_MODEL || FALLBACK_MODEL,
+    syllabus_bot_model: isAskMojiTriggerRuntime(env)
+      ? platformDefaultModel(env.SYLLABUS_BOT_MODEL?.trim() || env.LLM_MODEL)
+      : env.SYLLABUS_BOT_MODEL || env.LLM_MODEL || FALLBACK_MODEL,
     question_effort: effortFromEnv(env.QUIZ_QUESTION_EFFORT, 'medium'),
     grading_effort: effortFromEnv(env.QUIZ_GRADING_EFFORT, 'high'),
     exploration_effort:

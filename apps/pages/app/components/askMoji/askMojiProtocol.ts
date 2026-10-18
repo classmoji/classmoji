@@ -10,14 +10,17 @@
  *   1. who sees the launcher (`askMojiHostDecision`);
  *   2. what URL the frame loads (`askMojiEmbedUrl`);
  *   3. which window messages the host believes (`readAskMojiMessage`);
- *   4. what the frame is told the reader is looking at (`pageViewing`).
+ *   4. what the frame is told the reader is looking at (`pageViewing`,
+ *      `viewingMessage`).
  *
  * The slides app keeps its own copy of this module (no cross-app imports).
  *
  * THE PROTOCOL. Messages are plain objects.
  *   host → frame, posted to the frame's window with targetOrigin = the webapp
  *   origin:
- *     { type: 'askmoji:viewing', viewing }   viewing: {kind:'page', id} | null
+ *     { type: 'askmoji:viewing', viewing, title? }
+ *                                            viewing: {kind:'page', id} | null;
+ *                                            title: the page's, for the chip
  *     { type: 'askmoji:open' }
  *     { type: 'askmoji:close' }
  *   frame → host, believed only from the webapp origin AND our own frame:
@@ -26,6 +29,8 @@
  *     { type: 'askmoji:busy', busy: boolean }→ a dot on the launcher
  *
  * `viewing` is a hint. The webapp resolves and checks it on its own server.
+ * `title` labels the frame's "Viewing" chip and nothing else; the frame takes
+ * a string of at most `MAX_TITLE_CHARS` and drops anything else.
  */
 
 export const ASKMOJI_VIEWING = 'askmoji:viewing';
@@ -41,8 +46,11 @@ export const ASKMOJI_ATTR = 'data-askmoji';
 /** What the reader has open. Null: nothing in particular (the page list). */
 export type AskMojiViewing = { kind: 'page'; id: string } | null;
 
+/** The longest title the frame takes (it drops a longer one). */
+export const MAX_TITLE_CHARS = 200;
+
 export type AskMojiHostMessage =
-  | { type: typeof ASKMOJI_VIEWING; viewing: AskMojiViewing }
+  | { type: typeof ASKMOJI_VIEWING; viewing: AskMojiViewing; title?: string }
   | { type: typeof ASKMOJI_OPEN }
   | { type: typeof ASKMOJI_CLOSE };
 
@@ -84,6 +92,27 @@ export function pageViewing(pageId: string | null | undefined): AskMojiViewing {
   return typeof pageId === 'string' && pageId ? { kind: 'page', id: pageId } : null;
 }
 
+/**
+ * The page title for the chip, from the layout's page list (loader data):
+ * trimmed and cut to MAX_TITLE_CHARS, or undefined when there is none.
+ */
+export function pageTitle(
+  pageId: string | null | undefined,
+  pages: readonly { id: string; title?: string | null }[]
+): string | undefined {
+  if (!pageId) return undefined;
+  const title = pages.find(p => p.id === pageId)?.title?.trim();
+  return title ? title.slice(0, MAX_TITLE_CHARS) : undefined;
+}
+
+/** The viewing message: the title only with a viewing, and only when there is one. */
+export function viewingMessage(viewing: AskMojiViewing, title?: string | null): AskMojiHostMessage {
+  const t = title?.trim().slice(0, MAX_TITLE_CHARS);
+  return viewing && t
+    ? { type: ASKMOJI_VIEWING, viewing, title: t }
+    : { type: ASKMOJI_VIEWING, viewing };
+}
+
 /** Structural check: the wire format is untrusted even after origin and source match. */
 function parseFrameMessage(data: unknown): AskMojiFrameMessage | null {
   if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
@@ -119,8 +148,12 @@ export function readAskMojiMessage(
 }
 
 /** The messages that bring a (re)loaded frame up to date: viewing, then open/close. */
-export function syncMessages(viewing: AskMojiViewing, open: boolean): AskMojiHostMessage[] {
-  return [{ type: ASKMOJI_VIEWING, viewing }, { type: open ? ASKMOJI_OPEN : ASKMOJI_CLOSE }];
+export function syncMessages(
+  viewing: AskMojiViewing,
+  open: boolean,
+  title?: string | null
+): AskMojiHostMessage[] {
+  return [viewingMessage(viewing, title), { type: open ? ASKMOJI_OPEN : ASKMOJI_CLOSE }];
 }
 
 /** Whether a DOM event started on the launcher or inside the panel container. */
@@ -133,29 +166,27 @@ export function isAskMojiTarget(target: unknown): boolean {
  * Who gets the launcher, decided on the server from facts the server derived.
  *
  * Every condition must hold: an ACCEPTED member of this classroom, Ask Moji
- * switched on for it, the Trigger runtime selected, a usable webapp origin,
- * and not inside the webapp's own reader frame (it shows its own panel).
- * This is for the UI only; the embed route enforces the real gates.
+ * switched on for it, the Trigger runtime selected (`triggerRuntime`: the
+ * shared `isAskMojiTriggerRuntime()` parse, read by the server module), a
+ * usable webapp origin, and not inside the webapp's own reader frame (it
+ * shows its own panel). This is for the UI only; the embed route enforces
+ * the real gates.
  */
 export function askMojiHostDecision({
   acceptedRole,
   botEnabled,
-  runtime,
+  triggerRuntime,
   webappUrl,
   embedded,
 }: {
   acceptedRole: string | null | undefined;
   botEnabled: boolean | null | undefined;
-  runtime: string | null | undefined;
+  triggerRuntime: boolean;
   webappUrl: string | null | undefined;
   embedded: boolean;
 }): { enabled: boolean; origin: string | null } {
   const origin = originOf(webappUrl);
   const enabled =
-    !embedded &&
-    runtime === 'trigger' &&
-    Boolean(origin) &&
-    Boolean(acceptedRole) &&
-    botEnabled === true;
+    !embedded && triggerRuntime && Boolean(origin) && Boolean(acceptedRole) && botEnabled === true;
   return enabled ? { enabled: true, origin } : { enabled: false, origin: null };
 }

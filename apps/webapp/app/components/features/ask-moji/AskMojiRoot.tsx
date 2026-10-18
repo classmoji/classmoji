@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router';
 import { getRoleFromPath } from '~/constants/roleSettings';
 import useStore from '~/store';
-import { AskMojiProvider } from './AskMojiProvider';
-import AskMojiPanel from './AskMojiPanel';
+
+/** The panel, its controller and the chat stack: loaded on the first open only. */
+const AskMojiFloating = lazy(() => import('./AskMojiFloating'));
 
 /** What the root loader says about Ask Moji for the classroom in the URL. */
 export interface AskMojiRootConfig {
@@ -26,6 +27,11 @@ const CLASSROOM_PATH = /^\/(student|admin|teacher|assistant)\/([^/]+)/;
  * Shown only when the root loader says Ask Moji is available here; hidden on
  * a route that asks for it (`useHideAskMoji`, a live quiz attempt), without
  * unmounting.
+ *
+ * Loading: the root lazy-loads this module only on the Trigger runtime where
+ * Ask Moji is available, and this module lazy-loads the panel (the AI SDK,
+ * the Trigger transport, the Markdown renderer) the first time it opens. The
+ * sidebar button needs only the store flags set here.
  */
 export default function AskMojiRoot({ config }: { config: AskMojiRootConfig }) {
   const { pathname } = useLocation();
@@ -49,6 +55,14 @@ export default function AskMojiRoot({ config }: { config: AskMojiRootConfig }) {
   useEffect(() => {
     setEnabled(enabled);
   }, [enabled, setEnabled]);
+  // Unmounted (a classroom without Ask Moji): the button goes with it.
+  useEffect(
+    () => () => {
+      setEnabled(false);
+      setActive(false);
+    },
+    [setEnabled, setActive]
+  );
 
   // Another classroom or view: the panel closes (a new one mounts for it).
   const place = `${slug ?? ''}:${viewAs ?? ''}`;
@@ -70,6 +84,12 @@ export default function AskMojiRoot({ config }: { config: AskMojiRootConfig }) {
     setActive(shown);
   }, [shown, setActive]);
 
+  // The panel chunk loads on the first open and then stays: closing hides it.
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    if (shown) setLoaded(true);
+  }, [shown]);
+
   const viewing = useMemo(
     () =>
       stored
@@ -83,20 +103,21 @@ export default function AskMojiRoot({ config }: { config: AskMojiRootConfig }) {
     [stored]
   );
 
-  if (!mounted || !enabled || !slug) return null;
+  if (!mounted || !enabled || !slug || !(loaded || shown)) return null;
 
   return (
-    <AskMojiProvider key={place} classroomSlug={slug} viewAs={viewAs}>
-      <AskMojiPanel
-        mode="floating"
+    <Suspense fallback={null}>
+      <AskMojiFloating
+        key={place}
+        classroomSlug={slug}
+        viewAs={viewAs}
         open={shown}
         onRequestClose={() => setOpen(false)}
         courseName={config.courseName ?? ''}
-        classroomSlug={slug}
         pagesUrl={config.pagesUrl}
         slidesUrl={config.slidesUrl}
         viewing={viewing}
       />
-    </AskMojiProvider>
+    </Suspense>
   );
 }

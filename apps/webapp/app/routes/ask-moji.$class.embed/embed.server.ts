@@ -8,7 +8,8 @@
  *
  * THE LOADER never throws, so the header always lands: signed out → a sign-in
  * prompt; not a member, no classroom, or Ask Moji unavailable → the members'
- * line (OWNER and TEACHER also get why); otherwise the panel. `parentOrigin`
+ * line (OWNER and TEACHER also get why); otherwise the panel, with
+ * `impersonated` when a platform admin is viewing as the user. `parentOrigin`
  * is the host's claim of its own origin, kept only when it is exactly one of
  * the two allowed origins.
  */
@@ -22,18 +23,13 @@ import {
   originOf,
 } from '~/components/features/ask-moji/protocol';
 import type { AskMojiEmbedData } from '~/components/features/ask-moji/AskMojiEmbed';
+import { askMojiHostUrls } from '~/utils/askMojiHosts.server';
 import { seesAvailabilityReason } from '~/utils/askMojiRoute.server';
 
 type Env = Record<string, string | undefined>;
 
 /** The pages and slides URLs; the development defaults only outside production. */
-export function hostUrls(env: Env = process.env) {
-  const dev = env.NODE_ENV !== 'production';
-  return {
-    pagesUrl: env.PAGES_URL || (dev ? 'http://localhost:7100' : null),
-    slidesUrl: env.SLIDES_URL || (dev ? 'http://localhost:6500' : null),
-  };
-}
+export const hostUrls = askMojiHostUrls;
 
 /** The embed's response headers. */
 export function embedHeaders(env: Env = process.env): Record<string, string> {
@@ -81,6 +77,8 @@ export async function loadEmbed(
       courseName: access.classroom.name ?? '',
       pagesUrl: urls.pagesUrl,
       slidesUrl: urls.slidesUrl,
+      // From the access check (the web session), never from the request.
+      impersonated: Boolean(access.impersonation),
     };
   } catch (error: unknown) {
     if (error instanceof Response && error.status === 401) {
