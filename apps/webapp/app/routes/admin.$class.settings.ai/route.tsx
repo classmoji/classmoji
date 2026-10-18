@@ -750,8 +750,11 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         };
       }
 
-      await ClassmojiService.classroom.updateSettings(classroom.id, updateData);
-      await audit(Object.keys(updateData));
+      // Nothing to change: no write and no audit row.
+      if (Object.keys(updateData).length > 0) {
+        await ClassmojiService.classroom.updateSettings(classroom.id, updateData);
+        await audit(Object.keys(updateData));
+      }
       return {
         success: 'AI settings saved',
         action: ActionTypes.SAVE_QUIZ_SETTINGS,
