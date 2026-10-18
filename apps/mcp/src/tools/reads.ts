@@ -37,6 +37,7 @@ import { IssueStatus, type Role } from '@prisma/client';
 import { z, type ZodRawShape } from 'zod';
 import type { ResourceDefinition, ToolDefinition } from '../mcp/registry.ts';
 import { parseClassroomRef } from '../authz/pure.ts';
+import type { ClassroomContext } from '../authz/classroomContext.ts';
 import { idArgs, type ReadAudit } from '../mcp/audit.ts';
 import {
   ok,
@@ -88,7 +89,10 @@ function mirroredAudit(audit: ReadAudit, buildVars: MirrorConfig['buildVars']): 
   return {
     ...audit,
     ...(ids
-      ? { ids: (args: Record<string, unknown>) => ids(buildVars ? buildVars(args) : {}) }
+      ? {
+          ids: (args: Record<string, unknown>, classroom: ClassroomContext) =>
+            ids(buildVars ? buildVars(args) : {}, classroom),
+        }
       : {}),
   };
 }

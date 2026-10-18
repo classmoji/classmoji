@@ -361,6 +361,37 @@ describe('audit.create dedup key: client_id', () => {
   });
 });
 
+describe('audit.create dedup: impersonated_by', () => {
+  const row = (impersonatedBy?: string) => ({
+    ...baseEntry,
+    resource_type: 'ROSTER',
+    resource_id: 'class-1',
+    action: 'VIEW' as const,
+    data: { tool: 'get_roster', ...(impersonatedBy ? { impersonated_by: impersonatedBy } : {}) },
+  });
+
+  it('a direct read never folds into a recent impersonated one', async () => {
+    findFirstMock.mockResolvedValue({
+      id: 'recent',
+      data: { tool: 'get_roster', impersonated_by: 'admin-1' },
+    });
+    expect(await audit.create(row())).not.toBeNull();
+  });
+
+  it('an impersonated read never folds into a recent direct one', async () => {
+    findFirstMock.mockResolvedValue({ id: 'recent', data: { tool: 'get_roster' } });
+    expect(await audit.create(row('admin-1'))).not.toBeNull();
+  });
+
+  it('the same impersonator within the window still dedups', async () => {
+    findFirstMock.mockResolvedValue({
+      id: 'recent',
+      data: { tool: 'get_roster', impersonated_by: 'admin-1' },
+    });
+    expect(await audit.create(row('admin-1'))).toBeNull();
+  });
+});
+
 describe.each([
   ['rating', 'DOWN', 'UP'],
   ['filter_key', 'feedback:f1', 'feedback:f2'],

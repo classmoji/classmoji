@@ -44,6 +44,14 @@ import { loadPageInClassroom, ok, OWNER_ONLY, requireClassroomCtx, writeAudit } 
  */
 const THEME_KEYS = ['classic', 'stone', 'lavender', 'sand', 'peach'] as const;
 
+/**
+ * The longest raw `syllabus_bot_instructions` the schema takes. The real cap,
+ * INSTRUCTIONS_MAX_CHARS, applies after trimming (the service's
+ * normalizeInstructionsSetting, as on the web), so text padded with whitespace
+ * that the web would store is not refused here; this only bounds the input.
+ */
+const INSTRUCTIONS_RAW_MAX_CHARS = INSTRUCTIONS_MAX_CHARS * 2;
+
 /** The settings columns this tool may write, in database vocabulary. */
 interface SafeSettingsUpdate {
   show_modules?: boolean;
@@ -99,7 +107,7 @@ export const classroomSettingsUpdateTool: ToolDefinition<ClassroomSettingsUpdate
     'page in this classroom, published and shown in the student menu, or students fall back to ' +
     'the dashboard). timezone is the course IANA zone (e.g. "America/New_York"; null clears it) ' +
     'that deadlines are shown in. syllabus_bot_instructions is your guidance to Ask Moji (at ' +
-    `most ${INSTRUCTIONS_MAX_CHARS} characters; null or blank clears it); only owners can read ` +
+    `most ${INSTRUCTIONS_MAX_CHARS} characters after trimming; null or blank clears it); only owners can read ` +
     'it (ask_moji_settings_get). AI provider keys and the Ask Moji and quiz model and effort ' +
     'settings are not editable here; those are managed in the web app.',
   scope: 'write',
@@ -159,7 +167,7 @@ export const classroomSettingsUpdateTool: ToolDefinition<ClassroomSettingsUpdate
       .describe("Course IANA time zone, e.g. 'America/New_York'; null clears it"),
     syllabus_bot_instructions: z
       .string()
-      .max(INSTRUCTIONS_MAX_CHARS)
+      .max(INSTRUCTIONS_RAW_MAX_CHARS)
       .nullable()
       .optional()
       .describe('Owner instructions for Ask Moji; null or blank clears them'),
@@ -262,11 +270,14 @@ export const classroomSettingsUpdateTool: ToolDefinition<ClassroomSettingsUpdate
       await ClassmojiService.classroom.update(classroom.classroomId, { name: args.name });
     }
 
+    // Every call is its own row: switching a setting on and off again inside
+    // the audit service's 5-second window must record both changes.
     await writeAudit(ctx, {
       resource_type: 'SETTINGS',
       resource_id: classroom.classroomId,
       action: 'UPDATE',
       data: { tool: 'classroom_settings_update', fields: changed },
+      dedupe: false,
     });
 
     // Echo the validated values we just wrote — never the service return, which

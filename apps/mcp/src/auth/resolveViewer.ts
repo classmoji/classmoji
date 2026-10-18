@@ -53,6 +53,14 @@ export interface Viewer {
    * resolution (authz/classroomContext.ts) and nothing else.
    */
   roleCeiling?: Role | null;
+  /**
+   * The user id of the person viewing as this user, when an Ask Moji
+   * conversation runs under impersonation (the `X-Classmoji-Impersonated-By`
+   * header, see routes/mcp.ts). Set only for the Ask Moji client; null for
+   * every other client, whatever it sends. Recorded as `impersonated_by` on
+   * every audit row the request writes (mcp/audit.ts) and nothing else.
+   */
+  impersonatedBy?: string | null;
 }
 
 /** Shape of the oauth_access_tokens row `getMcpSession` returns (better-auth 1.4.18). */

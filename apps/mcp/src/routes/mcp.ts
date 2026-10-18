@@ -63,6 +63,36 @@ export function roleCeilingFrom(headers: Headers, clientId: string | null): Role
   };
 }
 
+/**
+ * Who is viewing as the user, when an Ask Moji conversation runs under
+ * impersonation: the actor's user id, which the Ask Moji task sends on every
+ * request of such a conversation. Read only from the Ask Moji client, like the
+ * role ceiling; every other client's header is ignored, whatever its value.
+ * It is written into audit rows, so a value from Ask Moji that is not a plain
+ * id is refused instead of dropped.
+ */
+export const IMPERSONATED_BY_HEADER = 'x-classmoji-impersonated-by';
+
+const IMPERSONATED_BY_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+export type ImpersonatedByResult =
+  | { ok: true; impersonatedBy: string | null }
+  | { ok: false; message: string };
+
+export function impersonatedByFrom(
+  headers: Headers,
+  clientId: string | null
+): ImpersonatedByResult {
+  if (clientId !== ASK_MOJI_CLIENT_ID) return { ok: true, impersonatedBy: null };
+  const value = headers.get(IMPERSONATED_BY_HEADER);
+  if (value === null) return { ok: true, impersonatedBy: null };
+  if (IMPERSONATED_BY_PATTERN.test(value)) return { ok: true, impersonatedBy: value };
+  return {
+    ok: false,
+    message: 'Invalid X-Classmoji-Impersonated-By header: expected a user id',
+  };
+}
+
 /** The Streamable HTTP session header. */
 export const SESSION_HEADER = 'mcp-session-id';
 
@@ -133,8 +163,8 @@ export default async function mcpRoutes(fastify: FastifyInstance) {
       return sendUnauthorized(reply, message);
     }
 
-    // The ceiling depends on which client the token was issued to, so it is
-    // read after the token is resolved.
+    // The ceiling and the impersonation actor depend on which client the
+    // token was issued to, so they are read after the token is resolved.
     const roleCeiling = roleCeilingFrom(headers, viewer.clientId);
     if (!roleCeiling.ok) {
       return reply.status(400).send({
@@ -144,6 +174,15 @@ export default async function mcpRoutes(fastify: FastifyInstance) {
       });
     }
     viewer.roleCeiling = roleCeiling.ceiling;
+    const impersonatedBy = impersonatedByFrom(headers, viewer.clientId);
+    if (!impersonatedBy.ok) {
+      return reply.status(400).send({
+        jsonrpc: '2.0',
+        error: { code: -32600, message: impersonatedBy.message },
+        id: null,
+      });
+    }
+    viewer.impersonatedBy = impersonatedBy.impersonatedBy;
 
     const server = buildMcpServer(viewer);
     const transport = new StreamableHTTPServerTransport({

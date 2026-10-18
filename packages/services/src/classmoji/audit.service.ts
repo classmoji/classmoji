@@ -178,7 +178,12 @@ export const create = async (data: AuditLogData, { dedupe = true }: AuditCreateO
     },
   });
 
-  if (!recentLog) {
+  // An impersonated action and the person's own never coalesce, in either
+  // order (data.impersonated_by): checked on the row found, because a key
+  // filter only narrows when the new payload carries the field.
+  const recentImpersonator = (recentLog?.data as Record<string, unknown> | null)?.impersonated_by;
+  const payloadImpersonator = payload?.impersonated_by;
+  if (!recentLog || (recentImpersonator ?? null) !== (payloadImpersonator ?? null)) {
     return getPrisma().auditLog.create({ data: auditData });
   }
 

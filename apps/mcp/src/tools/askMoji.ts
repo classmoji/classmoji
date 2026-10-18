@@ -26,15 +26,19 @@
 
 import { ClassmojiService } from '@classmoji/services';
 import { ASK_MOJI_AVAILABILITY_COPY } from '@classmoji/utils/ask-moji/copy';
-import { FEEDBACK_REVIEW_MAX_LIMIT, INSIGHT_MAX_WEEKS } from '@classmoji/utils/ask-moji/limits';
+import {
+  ASK_MOJI_INSIGHT_DEFAULT_WEEKS,
+  FEEDBACK_REVIEW_MAX_LIMIT,
+  INSIGHT_MAX_WEEKS,
+} from '@classmoji/utils/ask-moji/limits';
 import { z } from 'zod';
 import { idArgs } from '../mcp/audit.ts';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
 import { ok, OWNER_ONLY, OWNER_TEACHER, requireClassroomCtx, scopedNotFound } from './shared.ts';
 
-/** Weeks `ask_moji_usage` covers when the caller names none. */
-export const DEFAULT_USAGE_WEEKS = 8;
+/** Weeks `ask_moji_usage` covers when the caller names none: the web usage view's. */
+export const DEFAULT_USAGE_WEEKS = ASK_MOJI_INSIGHT_DEFAULT_WEEKS;
 
 type FeedbackRow = Awaited<
   ReturnType<typeof ClassmojiService.askMojiInsights.feedbackReview>
@@ -99,19 +103,42 @@ function messageText(message: { parts?: readonly unknown[] }): string {
     .join('\n\n');
 }
 
-/** The citations the answer showed: successful `cite_content` results only. */
+/** An http(s) URL as the web shows it; anything else (or unparseable) is null. */
+function httpUrl(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The citations the answer showed: successful `cite_content` results with a
+ * title, each once (by title and URL), and a URL only when it is http(s). The
+ * web exchange view's rule (`sourcesOf` in the insights view); `type` and `id`
+ * are kept for MCP callers.
+ */
 function messageCites(message: { parts?: readonly unknown[] }) {
   const cites: Array<{ title: string; url: string | null; type?: string; id?: string }> = [];
+  const seen = new Set<string>();
   for (const part of message.parts ?? []) {
     const p = part as Part;
     if (p?.type !== 'tool-cite_content' || p.state !== 'output-available') continue;
     const out = p.output as
       | { ok?: unknown; title?: unknown; url?: unknown; type?: unknown; id?: unknown }
       | undefined;
-    if (!out || out.ok !== true || typeof out.title !== 'string') continue;
+    if (!out || typeof out !== 'object' || out.ok !== true) continue;
+    const title = typeof out.title === 'string' ? out.title : '';
+    if (!title) continue;
+    const url = httpUrl(out.url);
+    const key = `${title}\n${url ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
     cites.push({
-      title: out.title,
-      url: typeof out.url === 'string' ? out.url : null,
+      title,
+      url,
       ...(typeof out.type === 'string' ? { type: out.type } : {}),
       ...(typeof out.id === 'string' ? { id: out.id } : {}),
     });
@@ -135,8 +162,15 @@ export const askMojiUsageTool: ToolDefinition<UsageArgs> = {
   scope: 'read',
   roles: OWNER_TEACHER,
   annotations: { openWorld: false },
-  // Students' activity, aggregated.
-  auditRead: { resourceType: 'ASK_MOJI_INSIGHTS' },
+  // Students' activity, aggregated. The web usage view's row: the classroom,
+  // and the weeks it covered.
+  auditRead: {
+    resourceType: 'ASK_MOJI_INSIGHTS',
+    ids: (args, classroom) => ({
+      resourceId: classroom.classroomId,
+      data: { weeks: typeof args.weeks === 'number' ? args.weeks : DEFAULT_USAGE_WEEKS },
+    }),
+  },
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     weeks: z
@@ -190,16 +224,19 @@ export const askMojiFeedbackListTool: ToolDefinition<FeedbackListArgs> = {
   name: 'ask_moji_feedback_list',
   title: 'Ask Moji feedback review',
   description:
-    "The rated Ask Moji answers in this classroom, newest first, the rows of the web feedback review: the rating (UP/DOWN), who asked and as which role, the question (cut to 500 characters), and what they had open. Students' questions show, and a staff member's only when asked as a role at or below yours. Current members only. Filters: rating, since (ISO date-time, rated at or after), limit (default 50, max " +
+    "The rated Ask Moji answers in this classroom, newest first, the rows of the web feedback review: the rating (UP/DOWN), who asked and as which role, the question and the start of the rated answer (answer_preview; each cut to 500 characters), and what they had open. Students' questions show, and a staff member's only when asked as a role at or below yours. Current members only. Filters: rating, since (ISO date-time, rated at or after), limit (default 50, max " +
     `${FEEDBACK_REVIEW_MAX_LIMIT}). Read one in full with ask_moji_exchange_get. OWNER and TEACHER only; needs Ask Moji on (Pro).`,
   scope: 'read',
   roles: OWNER_TEACHER,
   annotations: { openWorld: false },
-  // Other people's questions. Only the rating filter is recorded: `since` is
-  // free input, not an id.
+  // Other people's questions. The web review's row (the classroom); only the
+  // rating filter is recorded: `since` is free input, not an id.
   auditRead: {
-    resourceType: 'ASK_MOJI_FEEDBACK_REVIEW',
-    ids: args => ({ data: idArgs(args, ['rating']) }),
+    resourceType: 'ASK_MOJI_FEEDBACK',
+    ids: (args, classroom) => ({
+      resourceId: classroom.classroomId,
+      data: idArgs(args, ['rating']),
+    }),
   },
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
@@ -230,7 +267,11 @@ export const askMojiFeedbackListTool: ToolDefinition<FeedbackListArgs> = {
     });
     return ok({
       total: rows.length,
-      rows: rows.map(row => ({ ...rowHead(row), question: row.question })),
+      rows: rows.map(row => ({
+        ...rowHead(row),
+        question: row.question,
+        answer_preview: row.answerPreview,
+      })),
     });
   },
 };

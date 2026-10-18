@@ -150,6 +150,36 @@ const ANSWER = {
       input: { type: 'page', id: 'page-2' },
       output: { ok: false },
     },
+    // The same source cited twice: shown once.
+    {
+      type: 'tool-cite_content',
+      toolCallId: 'c-3',
+      state: 'output-available',
+      input: { type: 'page', id: 'page-1' },
+      output: {
+        ok: true,
+        title: 'Week 3',
+        url: 'https://pages/x/week-3',
+        type: 'page',
+        id: 'page-1',
+      },
+    },
+    // A URL that is not http(s): the source shows, without its URL.
+    {
+      type: 'tool-cite_content',
+      toolCallId: 'c-4',
+      state: 'output-available',
+      input: { type: 'page', id: 'page-3' },
+      output: { ok: true, title: 'Week 4', url: 'javascript:alert(1)', type: 'page', id: 'page-3' },
+    },
+    // No title: not a source.
+    {
+      type: 'tool-cite_content',
+      toolCallId: 'c-5',
+      state: 'output-available',
+      input: { type: 'page', id: 'page-5' },
+      output: { ok: true, title: '', url: 'https://pages/x/untitled', id: 'page-5' },
+    },
     { type: 'text', text: 'See the base case.' },
   ],
 };
@@ -213,7 +243,7 @@ beforeEach(() => {
     ],
   }));
   mocks.feedbackReview.mockImplementation(async ({ classroomId }: { classroomId: string }) => [
-    reviewRow(classroomId),
+    { ...reviewRow(classroomId), answerPreview: 'Recursion calls itself.' },
   ]);
   // A rating exists only in the classroom it was made in.
   mocks.exchange.mockImplementation(
@@ -377,11 +407,22 @@ describe('audit', () => {
         classroom_id: 'class-x',
         role: 'TEACHER',
         resource_type: 'ASK_MOJI_INSIGHTS',
-        resource_id: null,
+        resource_id: 'class-x',
         action: 'VIEW',
-        data: { tool: 'ask_moji_usage', via: 'mcp', client_id: 'personal-client' },
+        data: {
+          tool: 'ask_moji_usage',
+          via: 'mcp',
+          client_id: 'personal-client',
+          weeks: 4,
+          filter_key: '{"weeks":4}',
+        },
       },
     ]);
+  });
+
+  it('ask_moji_usage: records the default weeks when none is named', async () => {
+    await call(viewer('teacher-x'), 'ask_moji_usage', { classroom: 'org/x' });
+    expect(rows()[0].data).toMatchObject({ weeks: 12, filter_key: '{"weeks":12}' });
   });
 
   it('ask_moji_feedback_list: one row with the rating only, never since', async () => {
@@ -396,19 +437,57 @@ describe('audit', () => {
         user_id: 'owner-x',
         classroom_id: 'class-x',
         role: 'OWNER',
-        resource_type: 'ASK_MOJI_FEEDBACK_REVIEW',
-        resource_id: null,
+        resource_type: 'ASK_MOJI_FEEDBACK',
+        resource_id: 'class-x',
         action: 'VIEW',
         data: {
           tool: 'ask_moji_feedback_list',
           via: 'mcp',
           client_id: 'personal-client',
           rating: 'DOWN',
+          filter_key: '{"rating":"DOWN"}',
         },
       },
     ]);
     expect(JSON.stringify(rows())).not.toContain('2026-10-01');
     expect(JSON.stringify(rows())).not.toContain('recursion');
+  });
+
+  it('ask_moji_feedback_list: each rating filter has its own filter_key', async () => {
+    for (const rating of ['UP', 'DOWN', undefined]) {
+      await call(viewer('owner-x'), 'ask_moji_feedback_list', {
+        classroom: 'org/x',
+        ...(rating ? { rating } : {}),
+      });
+    }
+    expect(rows().map(r => (r.data as { filter_key: string }).filter_key)).toEqual([
+      '{"rating":"UP"}',
+      '{"rating":"DOWN"}',
+      '{}',
+    ]);
+  });
+
+  it("the vocabulary is the web insights pages' (resource type and id)", async () => {
+    await call(viewer('owner-x'), 'ask_moji_usage', { classroom: 'org/x' });
+    await call(viewer('owner-x'), 'ask_moji_feedback_list', { classroom: 'org/x' });
+    await call(viewer('owner-x'), 'ask_moji_exchange_get', {
+      classroom: 'org/x',
+      feedback_id: 'fb-x',
+    });
+    expect(rows().map(r => [r.resource_type, r.resource_id])).toEqual([
+      ['ASK_MOJI_INSIGHTS', 'class-x'],
+      ['ASK_MOJI_FEEDBACK', 'class-x'],
+      ['ASK_MOJI_FEEDBACK', 'fb-x'],
+    ]);
+  });
+
+  it('classroom X vs Y: the row names the classroom the call resolved', async () => {
+    await call(viewer('owner-x'), 'ask_moji_feedback_list', { classroom: 'org/x' });
+    await call(viewer('owner-y'), 'ask_moji_feedback_list', { classroom: 'org/y' });
+    expect(rows().map(r => [r.classroom_id, r.resource_id])).toEqual([
+      ['class-x', 'class-x'],
+      ['class-y', 'class-y'],
+    ]);
   });
 
   it('ask_moji_exchange_get: one row naming the feedback id, none for not found', async () => {
@@ -445,7 +524,7 @@ describe('ask_moji_usage', () => {
     const result = await call(viewer('owner-x'), 'ask_moji_usage', { classroom: 'org/x' });
     expect(mocks.usage).toHaveBeenCalledWith({
       classroomId: 'class-x',
-      weeks: 8,
+      weeks: 12,
       timeZone: 'America/New_York',
     });
     expect(body(result)).toEqual({
@@ -516,6 +595,7 @@ describe('ask_moji_feedback_list', () => {
           asker: { user_id: 'stu-x', name: 'Student X' },
           asker_role: 'STUDENT',
           question: 'What is recursion?',
+          answer_preview: 'Recursion calls itself.',
           viewing: { kind: 'page', id: 'page-1', title: 'Week 3' },
         },
       ],
@@ -570,8 +650,15 @@ describe('ask_moji_exchange_get', () => {
       asker_role: 'STUDENT',
       question: 'What is recursion?',
       answer: 'Recursion calls itself.\n\nSee the base case.',
-      cites: [{ title: 'Week 3', url: 'https://pages/x/week-3', type: 'page', id: 'page-1' }],
     });
+    // Each source once; a non-http(s) URL is dropped (the source stays); no
+    // untitled or failed cites. The web exchange view's rule.
+    expect(out.cites).toEqual([
+      { title: 'Week 3', url: 'https://pages/x/week-3', type: 'page', id: 'page-1' },
+      { title: 'Week 4', url: null, type: 'page', id: 'page-3' },
+    ]);
+    expect(result.content[0].text).not.toContain('javascript:');
+    expect(result.content[0].text).not.toContain('untitled');
     // No step lines or tool parts.
     expect(result.content[0].text).not.toContain('Looking at Week 3');
     expect(result.content[0].text).not.toContain('page-2');

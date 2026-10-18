@@ -104,6 +104,8 @@ beforeAll(async () => {
 }, 60_000);
 
 const asClassroom = (role: ClassroomContext['role']) => ({ role }) as ClassroomContext;
+/** The classroom an `ids` call is handed (the one the registry resolved). */
+const CLASSROOM = { classroomId: 'class-1', role: 'OWNER' } as ClassroomContext;
 
 describe('read audit manifest', () => {
   it('classifies every read tool and resource, and nothing that is not registered', () => {
@@ -135,50 +137,73 @@ describe('read audit manifest', () => {
     const tool = byName.get('get_submission');
     const resource = byName.get('submission');
     expect(tool?.auditRead?.resourceType).toBe(resource?.auditRead?.resourceType);
-    expect(tool?.auditRead?.ids?.({ classroom: 'o/s', submission_id: '5482151816' })).toEqual({
+    expect(
+      tool?.auditRead?.ids?.({ classroom: 'o/s', submission_id: '5482151816' }, CLASSROOM)
+    ).toEqual({
       resourceId: '5482151816',
     });
-    expect(resource?.auditRead?.ids?.({ org: 'o', slug: 's', submissionId: '5482151816' })).toEqual(
-      { resourceId: '5482151816' }
-    );
+    expect(
+      resource?.auditRead?.ids?.({ org: 'o', slug: 's', submissionId: '5482151816' }, CLASSROOM)
+    ).toEqual({ resourceId: '5482151816' });
   });
 
   it('list filters record only the id arguments', () => {
     const byName = new Map(reads.map(def => [def.name, def]));
     expect(
-      byName.get('list_submissions')?.auditRead?.ids?.({
-        classroom: 'o/s',
-        assignment_id: 'a-1',
-        status: 'OPEN',
-        limit: 10,
-      })
+      byName.get('list_submissions')?.auditRead?.ids?.(
+        {
+          classroom: 'o/s',
+          assignment_id: 'a-1',
+          status: 'OPEN',
+          limit: 10,
+        },
+        CLASSROOM
+      )
     ).toEqual({ data: { assignment_id: 'a-1' } });
     expect(
-      byName.get('grading_report')?.auditRead?.ids?.({ classroom: 'o/s', grader_id: 'g-1' })
+      byName
+        .get('grading_report')
+        ?.auditRead?.ids?.({ classroom: 'o/s', grader_id: 'g-1' }, CLASSROOM)
     ).toEqual({ data: { grader_id: 'g-1' } });
   });
 
-  it('Ask Moji reads record the rating and the feedback id, never since or a limit', () => {
+  it('Ask Moji reads match the web rows: the classroom or the feedback id, the rating, never since or a limit', () => {
     const byName = new Map(reads.map(def => [def.name, def]));
     expect(
-      byName.get('ask_moji_feedback_list')?.auditRead?.ids?.({
-        classroom: 'o/s',
-        rating: 'DOWN',
-        since: '2026-10-01T00:00:00Z',
-        limit: 10,
-      })
-    ).toEqual({ data: { rating: 'DOWN' } });
+      byName.get('ask_moji_feedback_list')?.auditRead?.ids?.(
+        {
+          classroom: 'o/s',
+          rating: 'DOWN',
+          since: '2026-10-01T00:00:00Z',
+          limit: 10,
+        },
+        CLASSROOM
+      )
+    ).toEqual({ resourceId: 'class-1', data: { rating: 'DOWN' } });
     expect(
-      byName.get('ask_moji_feedback_list')?.auditRead?.ids?.({
-        classroom: 'o/s',
-        since: '2026-10-01T00:00:00Z',
-      })
-    ).toEqual({ data: {} });
+      byName.get('ask_moji_feedback_list')?.auditRead?.ids?.(
+        {
+          classroom: 'o/s',
+          since: '2026-10-01T00:00:00Z',
+        },
+        CLASSROOM
+      )
+    ).toEqual({ resourceId: 'class-1', data: {} });
     expect(
       byName
         .get('ask_moji_exchange_get')
-        ?.auditRead?.ids?.({ classroom: 'o/s', feedback_id: 'f-1' })
+        ?.auditRead?.ids?.({ classroom: 'o/s', feedback_id: 'f-1' }, CLASSROOM)
     ).toEqual({ resourceId: 'f-1' });
-    expect(byName.get('ask_moji_usage')?.auditRead?.ids).toBeUndefined();
+    expect(
+      byName.get('ask_moji_usage')?.auditRead?.ids?.({ classroom: 'o/s', weeks: 4 }, CLASSROOM)
+    ).toEqual({ resourceId: 'class-1', data: { weeks: 4 } });
+    expect(byName.get('ask_moji_usage')?.auditRead?.ids?.({ classroom: 'o/s' }, CLASSROOM)).toEqual(
+      { resourceId: 'class-1', data: { weeks: 12 } }
+    );
+    expect(
+      ['ask_moji_usage', 'ask_moji_feedback_list', 'ask_moji_exchange_get'].map(
+        name => byName.get(name)?.auditRead?.resourceType
+      )
+    ).toEqual(['ASK_MOJI_INSIGHTS', 'ASK_MOJI_FEEDBACK', 'ASK_MOJI_FEEDBACK']);
   });
 });

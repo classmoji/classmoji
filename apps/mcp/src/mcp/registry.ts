@@ -318,16 +318,20 @@ function toErrorResult(error: unknown, toolName: string): ToolResult {
 }
 
 /**
- * Tools the Ask Moji client is never offered: its own owner tools
- * (`ask_moji_*`: usage, the feedback review, rated exchanges, the owner's
- * configuration). They read other people's questions, which must never be
- * copied into an Ask Moji conversation, whoever is asking. Enforced here, on
- * the server, at listing and again at call time, whatever the client asks.
+ * Tools and resources the Ask Moji client is never offered: its own owner
+ * surfaces (`ask_moji_*`: usage, the feedback review, rated exchanges, the
+ * owner's configuration). They read other people's questions, which must never
+ * be copied into an Ask Moji conversation, whoever is asking. Enforced here, on
+ * the server, at listing and again at call or read time, whatever the client
+ * asks. A resource named in kebab case (`ask-moji-*`) counts too.
  */
 export const ASK_MOJI_TOOL_PREFIX = 'ask_moji_';
 
-export function hiddenFromClient(toolName: string, viewer: Pick<Viewer, 'clientId'>): boolean {
-  return viewer.clientId === ASK_MOJI_CLIENT_ID && toolName.startsWith(ASK_MOJI_TOOL_PREFIX);
+export function hiddenFromClient(name: string, viewer: Pick<Viewer, 'clientId'>): boolean {
+  return (
+    viewer.clientId === ASK_MOJI_CLIENT_ID &&
+    name.replaceAll('-', '_').startsWith(ASK_MOJI_TOOL_PREFIX)
+  );
 }
 
 function wrapHandler(def: ToolDefinition<never>, viewer: Viewer) {
@@ -421,12 +425,16 @@ function normalizeVars(variables: Record<string, string | string[]>): Record<str
 function wrapResourceRead(def: ResourceDefinition, viewer: Viewer) {
   return async (uri: URL, variables: Record<string, string | string[]>) => {
     try {
-      // 1. Scope (defense in depth — registration is already scope-filtered).
+      // 1. Scope and client (defense in depth — registration already filters
+      //    both).
       if (!viewer.scopes.has(def.scope)) {
         throw new ToolError(
           'forbidden',
           `Resource '${def.name}' requires the '${def.scope}' scope`
         );
+      }
+      if (hiddenFromClient(def.name, viewer)) {
+        throw new ToolError('forbidden', `Resource '${def.name}' is not available to Ask Moji`);
       }
 
       // 2. Rate limit (S6 — reads are rate-limited too). Namespaced so a
@@ -550,8 +558,8 @@ export function toolAnnotations(def: ToolDefinition<never>): {
  * (locked decision 3: stateless — new server + transport per request).
  * Tools/resources whose scope the token was not granted are not registered at
  * all, so tools/list + resources/list only ever show what the token can
- * actually call (S7). Neither are the tools hidden from the token's client
- * (`hiddenFromClient`).
+ * actually call (S7). Neither are the tools and resources hidden from the
+ * token's client (`hiddenFromClient`).
  */
 /**
  * Server-level guidance every MCP client sees at initialize — including the
@@ -592,6 +600,7 @@ export function buildMcpServer(viewer: Viewer): McpServer {
 
   for (const def of resourceDefinitions.values()) {
     if (!viewer.scopes.has(def.scope)) continue;
+    if (hiddenFromClient(def.name, viewer)) continue;
     const metadata = {
       title: def.title,
       description: def.description,

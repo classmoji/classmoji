@@ -321,8 +321,22 @@ describe('classroom_settings_update', () => {
           resource_type: 'SETTINGS',
           action: 'UPDATE',
           data: { tool: 'classroom_settings_update', fields: ['final_grades_released'] },
-        })
+        }),
+        { dedupe: false }
       );
+    }
+  });
+
+  it('writes every call as its own row (no dedup), so on then off keeps both', async () => {
+    for (const enabled of [true, false]) {
+      await classroomSettingsUpdateTool.handler(
+        { classroom: 'org/w26', syllabus_bot_enabled: enabled },
+        CTX
+      );
+    }
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(2);
+    for (const call of mocks.auditCreate.mock.calls) {
+      expect(call[1]).toEqual({ dedupe: false });
     }
   });
 
@@ -439,6 +453,22 @@ describe('classroom_settings_update — Ask Moji instructions', () => {
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
+  it('accepts 4,000 characters padded with whitespace, storing them trimmed', async () => {
+    const text = 'x'.repeat(4000);
+    const padded = `\n  ${text}  \n`;
+    const schema = z.object(classroomSettingsUpdateTool.inputSchema);
+    expect(schema.safeParse({ classroom: 'o/s', syllabus_bot_instructions: padded }).success).toBe(
+      true
+    );
+    await classroomSettingsUpdateTool.handler(
+      { classroom: 'org/w26', syllabus_bot_instructions: padded },
+      CTX
+    );
+    expect(mocks.updateSettings).toHaveBeenCalledWith('class-1', {
+      syllabus_bot_instructions: text,
+    });
+  });
+
   it('refuses non-text as invalid_params with the service code', async () => {
     const error = await classroomSettingsUpdateTool
       .handler({ classroom: 'org/w26', syllabus_bot_instructions: 5 as unknown as string }, CTX)
@@ -447,13 +477,17 @@ describe('classroom_settings_update — Ask Moji instructions', () => {
     expect(mocks.updateSettings).not.toHaveBeenCalled();
   });
 
-  it('caps the schema at 4,000 characters, nullable', () => {
+  it('bounds the raw schema at 8,000 characters, nullable; the 4,000 cap is after trimming', () => {
     const schema = z.object(classroomSettingsUpdateTool.inputSchema);
     const base = { classroom: 'o/s' };
     expect(schema.safeParse({ ...base, syllabus_bot_instructions: 'x'.repeat(4000) }).success).toBe(
       true
     );
+    // Over 4,000 raw passes the schema; the handler refuses it once trimmed (above).
     expect(schema.safeParse({ ...base, syllabus_bot_instructions: 'x'.repeat(4001) }).success).toBe(
+      true
+    );
+    expect(schema.safeParse({ ...base, syllabus_bot_instructions: 'x'.repeat(8001) }).success).toBe(
       false
     );
     expect(schema.safeParse({ ...base, syllabus_bot_instructions: null }).success).toBe(true);

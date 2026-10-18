@@ -11,6 +11,10 @@
  * successful call (mcp/registry.ts). A member reading their own state is not
  * logged. The row names the surface and the ids the call was given, never
  * anything from the payload.
+ *
+ * Every row a request writes, through either path, carries `impersonated_by`
+ * (the actor's user id) when the Ask Moji client says the conversation runs
+ * under impersonation (`Viewer.impersonatedBy`, routes/mcp.ts).
  */
 
 import { ClassmojiService } from '@classmoji/services';
@@ -36,6 +40,24 @@ export interface AuditEntry {
 }
 
 /**
+ * The row's `data`, with `impersonated_by` added when the request runs under
+ * impersonation. Callers pass object literals (several typed through
+ * `as Prisma.InputJsonValue`, which is why the type stays wide); a non-object
+ * would be kept under `value` rather than lose the actor.
+ */
+function withImpersonation(
+  data: Prisma.InputJsonValue | undefined,
+  impersonatedBy: string | null | undefined
+): { data?: Prisma.InputJsonValue } {
+  if (!impersonatedBy) return data !== undefined ? { data } : {};
+  if (data === undefined) return { data: { impersonated_by: impersonatedBy } };
+  if (typeof data === 'object' && data !== null && !Array.isArray(data)) {
+    return { data: { ...(data as Prisma.InputJsonObject), impersonated_by: impersonatedBy } };
+  }
+  return { data: { value: data, impersonated_by: impersonatedBy } };
+}
+
+/**
  * Write an audit-log row for a mutation. The audit service console.warns and
  * SKIPS on malformed input, so the payload is built strictly from validated
  * context: `role` is the enforcing membership's Role enum (or the tool's own
@@ -55,7 +77,7 @@ export async function writeAudit(ctx: ToolContext, entry: AuditEntry): Promise<v
       resource_type: entry.resource_type,
       resource_id: entry.resource_id ?? null,
       action: entry.action,
-      ...(entry.data !== undefined ? { data: entry.data } : {}),
+      ...withImpersonation(entry.data, ctx.viewer.impersonatedBy),
     },
     ...(entry.dedupe === false ? [{ dedupe: false }] : [])
   );
@@ -77,12 +99,28 @@ export interface ReadAudit {
   /**
    * Ids the call was given (a tool's validated args, or a resource's URI
    * variables): the row it read as `resourceId`, and filters as `data`.
-   * Only schema-validated ids belong here — never free text, never output.
+   * Only schema-validated ids and values belong here — never free text, never
+   * output. `classroom` is the one the registry resolved, for a read whose row
+   * is the classroom itself (`resourceId: classroom.classroomId`).
+   *
+   * A read that returns `data` (even empty) is a filtered read: its row also
+   * gets `data.filter_key`, a stable key of those filters, so two calls with
+   * different filters inside the audit service's 5-second window stay two rows.
    */
-  ids?: (input: Record<string, unknown>) => {
+  ids?: (
+    input: Record<string, unknown>,
+    classroom: ClassroomContext
+  ) => {
     resourceId?: string | null;
-    data?: Record<string, string>;
+    data?: Record<string, string | number>;
   };
+}
+
+/** A stable key of a read's recorded filters: their JSON, keys sorted. */
+export function filterKey(data: Record<string, string | number>): string {
+  return JSON.stringify(
+    Object.fromEntries(Object.entries(data).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+  );
 }
 
 /**
@@ -102,7 +140,7 @@ export async function auditRead(
   if (!classroom) return;
   try {
     if (audit.when && !audit.when(classroom)) return;
-    const ids = audit.ids?.(input) ?? {};
+    const ids = audit.ids?.(input, classroom) ?? {};
     await writeAudit(ctx, {
       resource_type: audit.resourceType,
       resource_id: ids.resourceId ?? null,
@@ -112,6 +150,7 @@ export async function auditRead(
         via: 'mcp',
         client_id: ctx.viewer.clientId,
         ...(ids.data ?? {}),
+        ...(ids.data ? { filter_key: filterKey(ids.data) } : {}),
       },
     });
   } catch (error) {
@@ -119,7 +158,19 @@ export async function auditRead(
   }
 }
 
-/** The uuid-validated id args a list read was filtered by (absent keys skipped). */
+/**
+ * An id-shaped value: letters, digits, `_`, `-` and `:` (a scoped GitLab id is
+ * `<instance id>:<id>`), at most 128 characters. Enum filters such as a
+ * rating fit too.
+ */
+const ID_ARG_PATTERN = /^[A-Za-z0-9_:-]{1,128}$/;
+
+/**
+ * The id args a list read was filtered by, for its audit row. Keys that are
+ * absent, or whose value is not id-shaped (ID_ARG_PATTERN), are dropped: the
+ * schemas validate most of them first, but this is what keeps anything else
+ * out of the audit log.
+ */
 export function idArgs(
   input: Record<string, unknown>,
   keys: readonly string[]
@@ -127,7 +178,7 @@ export function idArgs(
   const data: Record<string, string> = {};
   for (const key of keys) {
     const value = input[key];
-    if (typeof value === 'string' && value) data[key] = value;
+    if (typeof value === 'string' && ID_ARG_PATTERN.test(value)) data[key] = value;
   }
   return data;
 }
