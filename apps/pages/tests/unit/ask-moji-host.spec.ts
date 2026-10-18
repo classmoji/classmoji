@@ -223,6 +223,25 @@ test.describe('where the host is mounted', () => {
     expect(SERVER).toContain('process.env.ASK_MOJI_RUNTIME');
   });
 
+  test("the final say is the webapp's availability rule, asked for accepted members only", () => {
+    // Pro, the runtime switch, Trigger, a key and the classroom switch: the
+    // same rule the webapp's panel uses, not a copy of it.
+    const membership = SERVER.indexOf('await findClassroomRole({');
+    const memberGate = SERVER.indexOf('if (!decision.enabled) return DISABLED;', membership);
+    const availability = SERVER.indexOf('await ClassmojiService.askMojiSession.askMojiAvailable({');
+    expect(membership).toBeGreaterThan(0);
+    expect(memberGate).toBeGreaterThan(membership);
+    expect(availability).toBeGreaterThan(memberGate);
+    expect(SERVER.match(/askMojiAvailable\(/g)).toHaveLength(1);
+    expect(SERVER).toContain('classroomId: classroom.id,');
+    expect(SERVER).toContain('return availability.available');
+    // The cheap checks return before any query.
+    const cheap = SERVER.indexOf('return DISABLED;');
+    expect(cheap).toBeGreaterThan(SERVER.indexOf('!userId ||'));
+    expect(cheap).toBeLessThan(membership);
+    expect(SERVER).toContain('classroom.settings?.syllabus_bot_enabled === false ||');
+  });
+
   test('never on the class site, the page render or the forms', () => {
     const root = fileURLToPath(new URL('../../app/', import.meta.url));
     const files = (readdirSync(root, { recursive: true }) as string[]).filter(file =>

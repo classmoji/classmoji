@@ -225,6 +225,27 @@ test.describe('where the host is mounted', () => {
     expect(SERVER).toContain('process.env.ASK_MOJI_RUNTIME');
   });
 
+  test("the final say is the webapp's availability rule, asked for accepted members only", () => {
+    // Pro, the runtime switch, Trigger, a key and the classroom switch: the
+    // same rule the webapp's panel uses, not a copy of it.
+    const membership = SERVER.indexOf('await findClassroomRole({');
+    const memberGate = SERVER.indexOf('if (!decision.enabled) return DISABLED;', membership);
+    const availability = SERVER.indexOf('await ClassmojiService.askMojiSession.askMojiAvailable({');
+    expect(membership).toBeGreaterThan(0);
+    expect(memberGate).toBeGreaterThan(membership);
+    expect(availability).toBeGreaterThan(memberGate);
+    expect(SERVER.match(/askMojiAvailable\(/g)).toHaveLength(1);
+    expect(SERVER).toContain('classroomId: slide.classroom_id,');
+    expect(SERVER).toContain('return availability.available');
+    // No second copy of the rule: no settings read of its own, no parallel lookup.
+    expect(SERVER).not.toContain('classroomSettings');
+    expect(SERVER).not.toContain('Promise.all');
+    // Public and share-code access return before any query.
+    const cheap = SERVER.indexOf('return DISABLED;');
+    expect(cheap).toBeGreaterThan(SERVER.indexOf('!userId ||'));
+    expect(cheap).toBeLessThan(membership);
+  });
+
   test('the viewer mounts it once, in the navbar, outside the keyed RevealSlides', () => {
     expect(VIEWER.match(/<AskMojiHost/g)).toHaveLength(1);
     const nav = VIEWER.indexOf('<nav className={`slides-navbar');

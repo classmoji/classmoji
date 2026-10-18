@@ -116,6 +116,8 @@ export default [
         '@classmoji/utils/ai-models',
         '@classmoji/content-signing',
         '@classmoji/tasks',
+        // A package `exports` subpath, which the lint resolver does not read.
+        '@trigger.dev/sdk/ai',
       ],
     },
     rules: {

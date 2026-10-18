@@ -65,6 +65,10 @@ const READS: Record<string, Kind> = {
   list_form_responses: 'handler', // VIEW row with filters and identity disclosure
   form_response_get: 'handler', // VIEW row per response revealed
   form_teams_get: 'handler', // VIEW row when people's placements are read
+  ask_moji_usage: 'audited', // students' Ask Moji activity, per week and per material
+  ask_moji_feedback_list: 'audited', // other people's rated questions
+  ask_moji_exchange_get: 'audited', // one person's question and answer
+  ask_moji_settings_get: 'none', // the owner's own Ask Moji configuration (OWNER only)
   // ── resources ──
   me: 'none',
   'classroom-info': 'none',
@@ -152,5 +156,29 @@ describe('read audit manifest', () => {
     expect(
       byName.get('grading_report')?.auditRead?.ids?.({ classroom: 'o/s', grader_id: 'g-1' })
     ).toEqual({ data: { grader_id: 'g-1' } });
+  });
+
+  it('Ask Moji reads record the rating and the feedback id, never since or a limit', () => {
+    const byName = new Map(reads.map(def => [def.name, def]));
+    expect(
+      byName.get('ask_moji_feedback_list')?.auditRead?.ids?.({
+        classroom: 'o/s',
+        rating: 'DOWN',
+        since: '2026-10-01T00:00:00Z',
+        limit: 10,
+      })
+    ).toEqual({ data: { rating: 'DOWN' } });
+    expect(
+      byName.get('ask_moji_feedback_list')?.auditRead?.ids?.({
+        classroom: 'o/s',
+        since: '2026-10-01T00:00:00Z',
+      })
+    ).toEqual({ data: {} });
+    expect(
+      byName
+        .get('ask_moji_exchange_get')
+        ?.auditRead?.ids?.({ classroom: 'o/s', feedback_id: 'f-1' })
+    ).toEqual({ resourceId: 'f-1' });
+    expect(byName.get('ask_moji_usage')?.auditRead?.ids).toBeUndefined();
   });
 });

@@ -95,6 +95,7 @@ import {
   formResponseUpdateTool,
 } from './forms.ts';
 import { formTeamsGetTool, formTeamsRunTool, formTeamsCreateTool } from './formTeams.ts';
+import { askMojiTools } from './askMoji.ts';
 import {
   fileImportUrlTool,
   fileUploadFinishTool,
@@ -326,4 +327,10 @@ export function registerAllTools(): void {
   registerToolDefinition(formTeamsGetTool);
   registerToolDefinition(formTeamsRunTool);
   registerToolDefinition(formTeamsCreateTool);
+
+  // Ask Moji owner reads: usage, the feedback review and one rated exchange
+  // (OWNER+TEACHER, refused unless Ask Moji is available, one VIEW row each),
+  // and the configuration (OWNER, not audited: the owner's own settings).
+  // Never listed or served to the Ask Moji client (registry.ts).
+  for (const tool of askMojiTools) registerToolDefinition(tool);
 }

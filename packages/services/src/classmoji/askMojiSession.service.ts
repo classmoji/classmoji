@@ -124,7 +124,6 @@ const trigger = async () => {
   const [{ auth, sessions }, { chat }] = await Promise.all([
     import('@trigger.dev/sdk'),
     // A package subpath export (resolved by TypeScript; the lint resolver reads `main` only).
-    // eslint-disable-next-line import/no-unresolved
     import('@trigger.dev/sdk/ai'),
   ]);
   return { auth, sessions, chat };

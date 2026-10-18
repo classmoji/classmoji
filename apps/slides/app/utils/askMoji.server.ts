@@ -3,12 +3,18 @@
  * webapp origin its frame loads from and the deck's classroom slug.
  *
  * Derived only from what `assertSlideAccess` answered for the session user and
- * the slide row the loader read, never from anything the client sent. The
- * cheap checks (runtime switch, a configured webapp origin, how the viewer was
- * let in) run first, so a classroom without Ask Moji costs no extra query. The
- * rule itself is `askMojiHostDecision`.
+ * the slide row the loader read, never from anything the client sent. In
+ * order, cheapest first:
+ *   1. no query: signed in, the deck has a classroom, let in as a member (never
+ *      public or share-code access), the runtime switch, a configured webapp
+ *      origin (`askMojiHostDecision`);
+ *   2. one query: an ACCEPTED member of the deck's classroom;
+ *   3. members only: `askMojiSession.askMojiAvailable`, the webapp's own rule
+ *      (runtime, Trigger configured, an Anthropic key, Pro, switched on).
+ * So a non-member never costs the availability queries. This is for the UI
+ * only; the webapp's embed route enforces the real gates.
  */
-import getPrisma from '@classmoji/database';
+import { ClassmojiService } from '@classmoji/services';
 import { findClassroomRole } from '@classmoji/auth/classroom-role';
 
 import { askMojiHostDecision, type SlideAccessVia } from '~/components/askMoji/askMojiProtocol';
@@ -41,30 +47,31 @@ export async function askMojiHostData({
     via: accessGrantedVia,
     runtime: process.env.ASK_MOJI_RUNTIME,
     webappUrl: process.env.WEBAPP_URL,
+    // Availability decides below; this only lets the pure checks run first.
+    botEnabled: true,
   };
-  // Everything but the classroom's own state first: if that says no, skip the queries.
+  // Everything but membership and availability first: if that says no, skip the queries.
   if (
     !userId ||
     !classroomSlug ||
-    !askMojiHostDecision({ ...base, acceptedRole: 'STUDENT', botEnabled: true }).enabled
+    !askMojiHostDecision({ ...base, acceptedRole: 'STUDENT' }).enabled
   ) {
     return DISABLED;
   }
 
   try {
-    const [acceptedRole, settings] = await Promise.all([
-      findClassroomRole({ userId, classroomId: slide.classroom_id, acceptedOnly: true }),
-      getPrisma().classroomSettings.findUnique({
-        where: { classroom_id: slide.classroom_id },
-        select: { syllabus_bot_enabled: true },
-      }),
-    ]);
-    const decision = askMojiHostDecision({
-      ...base,
-      acceptedRole,
-      botEnabled: settings?.syllabus_bot_enabled === true,
+    const acceptedRole = await findClassroomRole({
+      userId,
+      classroomId: slide.classroom_id,
+      acceptedOnly: true,
     });
-    return decision.enabled
+    const decision = askMojiHostDecision({ ...base, acceptedRole });
+    if (!decision.enabled) return DISABLED;
+
+    const availability = await ClassmojiService.askMojiSession.askMojiAvailable({
+      classroomId: slide.classroom_id,
+    });
+    return availability.available
       ? { askMojiEnabled: true, askMojiOrigin: decision.origin, classroomSlug }
       : DISABLED;
   } catch (error) {

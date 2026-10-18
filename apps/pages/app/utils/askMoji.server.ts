@@ -3,13 +3,20 @@
  * origin its frame loads from.
  *
  * Derived only from the session user and the classroom row the loader read,
- * never from anything the client sent. The cheap checks (runtime switch, a
- * configured webapp origin, a signed-in user, not embedded, the classroom
- * setting) run first, so a classroom without Ask Moji costs no extra query.
- * The rule itself is `askMojiHostDecision`.
+ * never from anything the client sent. In order, cheapest first:
+ *   1. no query: signed in, not embedded, the runtime switch, a configured
+ *      webapp origin (`askMojiHostDecision`), and the row's own
+ *      `syllabus_bot_enabled` when it already says off;
+ *   2. one query: an ACCEPTED member of this classroom;
+ *   3. members only: `askMojiSession.askMojiAvailable`, the webapp's own rule
+ *      (runtime, Trigger configured, an Anthropic key, Pro, switched on).
+ * So a non-member or a classroom without Ask Moji never costs the
+ * availability queries. This is for the UI only; the webapp's embed route
+ * enforces the real gates.
  */
 import { askMojiHostDecision } from '~/components/askMoji/askMojiProtocol.ts';
 import { findClassroomRole } from '~/utils/classroomRole.server.ts';
+import { ClassmojiService } from '~/utils/db.server.ts';
 
 export interface AskMojiHostData {
   askMojiEnabled: boolean;
@@ -29,28 +36,38 @@ export async function askMojiHostData({
   embedded: boolean;
 }): Promise<AskMojiHostData> {
   const base = {
-    botEnabled: classroom.settings?.syllabus_bot_enabled === true,
+    // Availability decides below; this only lets the pure checks run first.
+    botEnabled: true,
     runtime: process.env.ASK_MOJI_RUNTIME,
     webappUrl: process.env.WEBAPP_URL,
     embedded,
   };
-  // Everything but membership first: if that already says no, skip the query.
-  if (!userId || !askMojiHostDecision({ ...base, acceptedRole: 'STUDENT' }).enabled) {
+  // Everything but membership and availability first: if that says no, skip the queries.
+  if (
+    !userId ||
+    classroom.settings?.syllabus_bot_enabled === false ||
+    !askMojiHostDecision({ ...base, acceptedRole: 'STUDENT' }).enabled
+  ) {
     return DISABLED;
   }
 
-  let acceptedRole: string | null = null;
   try {
-    acceptedRole = await findClassroomRole({
+    const acceptedRole = await findClassroomRole({
       userId,
       classroomId: classroom.id,
       acceptedOnly: true,
     });
+    const decision = askMojiHostDecision({ ...base, acceptedRole });
+    if (!decision.enabled) return DISABLED;
+
+    const availability = await ClassmojiService.askMojiSession.askMojiAvailable({
+      classroomId: classroom.id,
+    });
+    return availability.available
+      ? { askMojiEnabled: true, askMojiOrigin: decision.origin }
+      : DISABLED;
   } catch (error) {
-    console.warn('[pages] Ask Moji membership check failed:', error);
+    console.warn('[pages] Ask Moji availability check failed:', error);
     return DISABLED;
   }
-
-  const decision = askMojiHostDecision({ ...base, acceptedRole });
-  return { askMojiEnabled: decision.enabled, askMojiOrigin: decision.origin };
 }
