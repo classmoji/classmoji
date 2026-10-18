@@ -13,7 +13,9 @@
  * AUDIT. Written here, through `ClassmojiService.audit`, with the caller's
  * `tool` as `data.tool` and `impersonated_by` whenever an impersonation is
  * behind the request: a conversation created (CREATE `ASK_MOJI_CONVERSATION`,
- * only when one actually was), ended (UPDATE, only when it was active), and a
+ * only when one actually was), ended (UPDATE, only when it was active; an
+ * unusable one `findOrCreate` closed without a create: UPDATE with
+ * `reason: 'unusable'`), and a
  * rating set, changed or cleared (CREATE / UPDATE / DELETE `ASK_MOJI_FEEDBACK`,
  * `resource_id` = the feedback row, `dedupe: false`, `data.value` = the
  * rating or null). Reading one's own conversation is not audited. A failed
@@ -34,6 +36,7 @@ import type { Role } from '@prisma/client';
 import {
   ASK_MOJI_WELCOME,
   isAskMojiRole,
+  isAskMojiTriggerRuntime,
   suggestionsForRole,
   type AskMojiAvailabilityCode,
   type AskMojiRefusalCode,
@@ -78,8 +81,11 @@ export interface AskMojiAccess {
 export const isTriggerConfigured = () =>
   Boolean(process.env.TRIGGER_SECRET_KEY || process.env.TRIGGER_ACCESS_TOKEN);
 
-/** The rollout switch: `trigger` serves Ask Moji on the Trigger runtime; anything else does not. */
-export const askMojiRuntimeIsTrigger = () => process.env.ASK_MOJI_RUNTIME === 'trigger';
+/**
+ * The rollout switch (`askMojiRuntime`, one parse for every app): `trigger`
+ * serves Ask Moji on the Trigger runtime; anything else does not.
+ */
+export const askMojiRuntimeIsTrigger = () => isAskMojiTriggerRuntime();
 
 export type AskMojiAvailability =
   | { available: true }
@@ -88,7 +94,7 @@ export type AskMojiAvailability =
 /**
  * Whether Ask Moji runs in this classroom on this runtime, and if not why
  * (`ASK_MOJI_AVAILABILITY_COPY` has a staff line per reason; members see
- * `ASK_MOJI_COPY.UNAVAILABLE`). In order: the switch (`ASK_MOJI_RUNTIME ===
+ * `ASK_MOJI_COPY.UNAVAILABLE`). In order: the switch (`askMojiRuntime() ===
  * 'trigger'`), Trigger configured, an Anthropic key (the platform's
  * `ANTHROPIC_API_KEY` or the classroom's own), Pro (`canUseSyllabusBot`; a
  * failed lookup reads as not Pro), `syllabus_bot_enabled`.
@@ -267,9 +273,22 @@ const open = async (
     grant: grantFor(a, i.viewAs, i.browserTimeZone),
     ...(i.replace !== undefined ? { replace: i.replace } : {}),
   });
+  await closeSessions(result.closedWithSession ?? []);
+  // Without a create, every conversation ended is an unusable one
+  // (`findOrCreate` closes them first, on a refusal too): one UPDATE each, as
+  // `end` writes. A create lists them in its `ended_conversation_ids`.
+  if (!result.ok || !result.created) {
+    for (const id of result.closedConversationIds ?? []) {
+      await writeAudit(a, {
+        resourceType: ASK_MOJI_AUDIT.conversation,
+        resourceId: id,
+        action: 'UPDATE',
+        data: { tool: i.tool, status: 'COMPLETED', reason: 'unusable' },
+      });
+    }
+  }
   if (!result.ok) return { ok: false, code: result.code, permanent: result.permanent };
 
-  await closeSessions(result.closedWithSession);
   if (result.created) {
     await writeAudit(a, {
       resourceType: ASK_MOJI_AUDIT.conversation,

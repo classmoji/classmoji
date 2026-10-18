@@ -104,7 +104,17 @@ export const AskMojiMessageMetadataSchema = z
   .strict();
 
 export type AskMojiViewing = z.infer<typeof AskMojiViewingSchema>;
-export type AskMojiMessageMetadata = z.infer<typeof AskMojiMessageMetadataSchema>;
+
+/** What a browser may send as a user message's metadata (`AskMojiMessageMetadataSchema`). */
+export type AskMojiClientMetadata = z.infer<typeof AskMojiMessageMetadataSchema>;
+
+/**
+ * A message's metadata as a viewer receives it: a user row's `viewing`, and
+ * on an assistant row `rateable` (the server sets it from the row: a final
+ * answer written by the model). Never accepted from a browser: admission
+ * validates with `AskMojiMessageMetadataSchema`, which refuses `rateable`.
+ */
+export type AskMojiMessageMetadata = AskMojiClientMetadata & { rateable?: boolean };
 
 export type AskMojiUITools = InferUITools<typeof askMojiToolDefs>;
 export type AskMojiUIMessage = UIMessage<AskMojiMessageMetadata, AskMojiDataParts, AskMojiUITools>;

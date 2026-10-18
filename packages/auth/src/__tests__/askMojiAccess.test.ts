@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   getSession: vi.fn(),
   findBySlug: vi.fn(),
   findByClassroomAndUser: vi.fn(),
+  membershipFindMany: vi.fn(),
   auditCreate: vi.fn(),
   getClassroomForUI: vi.fn(),
 }));
@@ -23,7 +24,11 @@ vi.mock('better-auth/plugins', () => ({
   emailOTP: () => ({}),
   mcp: () => ({}),
 }));
-vi.mock('@classmoji/database', () => ({ default: () => ({}) }));
+vi.mock('@classmoji/database', () => ({
+  default: () => ({
+    classroomMembership: { findMany: (...a: unknown[]) => mocks.membershipFindMany(...a) },
+  }),
+}));
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     classroom: {
@@ -57,6 +62,13 @@ const signedIn = (
       const match = wanted ? wanted.find(r => roles.includes(r)) : roles[0];
       return Promise.resolve(match ? { id: `m-${match}`, role: match } : null);
     }
+  );
+  mocks.membershipFindMany.mockImplementation((args: { where: { role: { in: Role[] } } }) =>
+    Promise.resolve(
+      roles
+        .filter(r => args.where.role.in.includes(r))
+        .map(role => ({ role, has_accepted_invite: role !== 'STUDENT' }))
+    )
   );
 };
 
@@ -97,6 +109,23 @@ describe('assertAskMojiAccess', () => {
     const access = await assertAskMojiAccess(request(), SLUG);
     expect(access.roles).toEqual(['ASSISTANT', 'STUDENT']);
     expect(access.highestRole).toBe('ASSISTANT');
+  });
+
+  it('reads the roles held in one query of role and acceptance only', async () => {
+    signedIn(['TEACHER', 'STUDENT']);
+    const access = await assertAskMojiAccess(request(), SLUG);
+    expect(mocks.membershipFindMany).toHaveBeenCalledTimes(1);
+    expect(mocks.membershipFindMany).toHaveBeenCalledWith({
+      where: {
+        classroom_id: 'class-1',
+        user_id: 'user-1',
+        role: { in: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'] },
+      },
+      select: { role: true, has_accepted_invite: true },
+    });
+    // An unaccepted row still counts (the rule assertClassroomAccess admits by).
+    expect(access.roles).toEqual(['TEACHER', 'STUDENT']);
+    expect(access.highestRole).toBe('TEACHER');
   });
 
   it('carries the impersonation behind the web session', async () => {

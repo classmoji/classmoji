@@ -23,7 +23,8 @@ const askMoji = await import('../askMojiChat.service.ts');
 const viewing = await import('../askMojiViewing.service.ts');
 const feedback = await import('../askMojiFeedback.service.ts');
 const insights = await import('../askMojiInsights.service.ts');
-const { TOOL_OUTPUT_STUB, IN_FLIGHT_STALE_MS } = await import('@classmoji/utils/ask-moji');
+const { TOOL_OUTPUT_STUB, IN_FLIGHT_STALE_MS, ASK_MOJI_INSIGHT_DEFAULT_WEEKS } =
+  await import('@classmoji/utils/ask-moji');
 
 describe.skipIf(!RUN)('ask moji trigger runtime (integration)', () => {
   const suite = randomUUID().slice(0, 8);
@@ -295,6 +296,113 @@ describe.skipIf(!RUN)('ask moji trigger runtime (integration)', () => {
       });
     });
 
+    const expire = (conversationId: string) =>
+      prisma.$executeRaw`
+        UPDATE ai_conversations
+        SET context = jsonb_set(context, '{grant,impersonation,expires_at}',
+          to_jsonb(${new Date(Date.now() - 60_000).toISOString()}::text), false)
+        WHERE id = ${conversationId}`;
+
+    const withLookup = async (conversationId: string, answerId = 'a:1') => {
+      await admit(conversationId, userMessage('Q'));
+      await askMoji.persistAssistantMessage({
+        conversationId,
+        message: reply('A', answerId, [
+          {
+            type: 'dynamic-tool',
+            toolName: 'content_get',
+            toolCallId: 't1',
+            state: 'output-available',
+            input: {},
+            output: 'course text',
+          },
+        ]),
+      });
+    };
+
+    it('closes the user’s unusable conversations in the classroom, any view or scope', async () => {
+      const mine = await open(userA, classX);
+      const dead = await open(userA, classX, asAdmin('s1'));
+      const live = await open(userA, classX, asAdmin('s2'));
+      const elsewhere = await open(userA, classY, asAdmin('s3'));
+      const otherUser = await open(userB, classX, asAdmin('s4'));
+      await withLookup(dead.conversationId);
+      await askMoji.recordTriggerSession(dead.conversationId, 'session_dead');
+      for (const c of [dead, elsewhere, otherUser]) await expire(c.conversationId);
+      const legacy = await prisma.aIConversation.create({
+        data: { type: 'SYLLABUS_BOT', user_id: userA, classroom_id: classX },
+      });
+
+      // The user, as themselves: their own conversation is reused, the dead one closed.
+      const again = await askMoji.findOrCreate({ grant: grantFor(userA, classX) });
+      expect(again).toMatchObject({
+        ok: true,
+        created: false,
+        conversationId: mine.conversationId,
+        closedConversationIds: [dead.conversationId],
+        closedWithSession: [dead.conversationId],
+      });
+      const status = async (id: string) =>
+        (await prisma.aIConversation.findUniqueOrThrow({ where: { id } })).status;
+      expect(await status(dead.conversationId)).toBe('COMPLETED');
+      // Retention: its lookups are stubbed, as a replace does.
+      const answer = await prisma.aIConversationMessage.findFirstOrThrow({
+        where: { conversation_id: dead.conversationId, ui_message_id: 'a:1' },
+      });
+      expect(JSON.stringify(answer.parts)).toContain(TOOL_OUTPUT_STUB);
+      expect(JSON.stringify(answer.parts)).not.toContain('course text');
+      // A live impersonation, another classroom, another user and a legacy row stay open.
+      for (const id of [
+        mine.conversationId,
+        live.conversationId,
+        elsewhere.conversationId,
+        otherUser.conversationId,
+        legacy.id,
+      ]) {
+        expect(await status(id)).toBe('ACTIVE');
+      }
+      // Nothing left to close the next time.
+      const third = await askMoji.findOrCreate({ grant: grantFor(userA, classX) });
+      expect(third).toMatchObject({ closedConversationIds: [], closedWithSession: [] });
+    });
+
+    it('lists unusable ones next to the replaced one on a create', async () => {
+      const mine = await open(userA, classX);
+      const dead = await open(userA, classX, asAdmin('s1'));
+      await expire(dead.conversationId);
+      const next = await askMoji.findOrCreate({
+        grant: grantFor(userA, classX),
+        replace: mine.conversationId,
+      });
+      expect(next).toMatchObject({ ok: true, created: true });
+      if (!next.ok) return;
+      expect([...next.closedConversationIds].sort()).toEqual(
+        [mine.conversationId, dead.conversationId].sort()
+      );
+    });
+
+    it('closes them on a refusal too, and keeps them closed', async () => {
+      const mine = await open(userB, classX);
+      await prisma.classroomMembership.deleteMany({
+        where: { classroom_id: classX, user_id: userB },
+      });
+      try {
+        expect(await askMoji.findOrCreate({ grant: grantFor(userB, classX) })).toEqual({
+          ok: false,
+          code: 'NOT_A_MEMBER',
+          permanent: true,
+          closedConversationIds: [mine.conversationId],
+          closedWithSession: [],
+        });
+        expect(
+          (await prisma.aIConversation.findUniqueOrThrow({ where: { id: mine.conversationId } }))
+            .status
+        ).toBe('COMPLETED');
+      } finally {
+        await join(classX, userB, 'STUDENT');
+      }
+    });
+
     it('refuses a create the mutation rule refuses, but reuses an existing one', async () => {
       const existing = await open(userA, classX);
       await prisma.classroom.update({ where: { id: classX }, data: { status: 'LOCKED' } });
@@ -546,6 +654,58 @@ describe.skipIf(!RUN)('ask moji trigger runtime (integration)', () => {
         'tool-cite_content',
         'text',
       ]);
+    });
+
+    it('marks each assistant row rateable: final model answers only', async () => {
+      const { conversationId: id } = await open(userA, classX);
+      const q1 = userMessage('Q1');
+      await admit(id, q1);
+      await askMoji.persistAssistantMessage({ conversationId: id, message: reply('A1', 'a:1') });
+      const q2 = userMessage('Q2');
+      await admit(id, q2);
+      await askMoji.persistAssistantMessage({
+        conversationId: id,
+        message: reply('notice', 'a:s'),
+        provenance: 'server',
+      });
+      const q3 = userMessage('Q3');
+      await admit(id, q3);
+      await askMoji.persistAssistantMessage({
+        conversationId: id,
+        message: reply('half', 'a:p'),
+        final: false,
+        outcome: 'stopped',
+      });
+      // A stored rateable claim is never what the viewer gets.
+      await prisma.$executeRaw`
+        UPDATE ai_conversation_messages SET metadata = '{"rateable": true}'::jsonb
+        WHERE conversation_id = ${id} AND ui_message_id = 'a:p'`;
+
+      const transcript = await askMoji.loadTranscriptForViewer({
+        conversationId: id,
+        userId: userA,
+        classroomId: classX,
+      });
+      expect(transcript?.map(m => [m.id, m.metadata?.rateable])).toEqual([
+        [q1.id, undefined],
+        ['a:1', true],
+        [q2.id, undefined],
+        ['a:s', false],
+        [q3.id, undefined],
+        ['a:p', false],
+      ]);
+      // The state poll (and so start) carries the same transcript.
+      const st = await stateOf(id, userA, classX, { knownLastMessageId: null });
+      expect(st?.transcript).toEqual(transcript);
+      // What is rateable is exactly what feedback accepts.
+      const target = { conversationId: id, classroomId: classX, userId: userA };
+      for (const [uiMessageId, ok] of [
+        ['a:1', true],
+        ['a:s', false],
+        ['a:p', false],
+      ] as const) {
+        expect((await feedback.set({ ...target, uiMessageId, rating: 'UP' })).ok).toBe(ok);
+      }
     });
 
     it('hides a partial reply once its turn got a final one', async () => {
@@ -945,6 +1105,50 @@ describe.skipIf(!RUN)('ask moji trigger runtime (integration)', () => {
     });
   });
 
+  describe('feedback races', () => {
+    it('two clicks at once never fail: one creates, one sees it', async () => {
+      const r = await open(userA, classX);
+      await admit(r.conversationId, userMessage('Q'));
+      await askMoji.persistAssistantMessage({
+        conversationId: r.conversationId,
+        message: reply('A', 'a:1'),
+      });
+      const target = {
+        conversationId: r.conversationId,
+        classroomId: classX,
+        userId: userA,
+        uiMessageId: 'a:1',
+      };
+      const same = await Promise.all([
+        feedback.set({ ...target, rating: 'DOWN' }),
+        feedback.set({ ...target, rating: 'DOWN' }),
+      ]);
+      if (!same[0].ok || !same[1].ok) throw new Error('refused');
+      expect(same.map(r => (r.ok ? r.action : null)).sort()).toEqual(['created', 'unchanged']);
+      expect(same[0].id).toBe(same[1].id);
+      const count = () =>
+        prisma.askMojiFeedback.count({ where: { conversation_id: r.conversationId } });
+      expect(await count()).toBe(1);
+
+      const cleared = await Promise.all([feedback.clear(target), feedback.clear(target)]);
+      expect(cleared.map(r => (r.ok ? r.deleted : null)).sort()).toEqual([false, true]);
+      expect(await count()).toBe(0);
+
+      const flip = await Promise.all([
+        feedback.set({ ...target, rating: 'DOWN' }),
+        feedback.set({ ...target, rating: 'UP' }),
+      ]);
+      const actions = flip.map(r => (r.ok ? r.action : null)).sort();
+      expect(actions).toEqual(['created', 'updated']);
+      const updated = flip.find(r => r.ok && r.action === 'updated');
+      const created = flip.find(r => r.ok && r.action === 'created');
+      if (!updated?.ok || !created?.ok) throw new Error('refused');
+      expect(updated.previous).toBe(created.rating);
+      expect(updated.id).toBe(created.id);
+      expect(await count()).toBe(1);
+    });
+  });
+
   // ─── R11: insights ────────────────────────────────────────────────────────
 
   describe('insights (R11)', () => {
@@ -958,6 +1162,7 @@ describe.skipIf(!RUN)('ask moji trigger runtime (integration)', () => {
         usage?: object;
         rating?: 'UP' | 'DOWN';
         classroomId?: string;
+        answer?: string;
       } = {}
     ) => {
       const classroomId = o.classroomId ?? classX;
@@ -971,7 +1176,7 @@ describe.skipIf(!RUN)('ask moji trigger runtime (integration)', () => {
       const answerId = `a:${randomUUID()}`;
       await askMoji.persistAssistantMessage({
         conversationId: r.conversationId,
-        message: reply('Answer', answerId, o.cites ?? []),
+        message: reply(o.answer ?? 'Answer', answerId, o.cites ?? []),
         ...(o.usage ? { usage: o.usage as never } : {}),
       });
       let feedbackId: string | null = null;
@@ -1142,6 +1347,7 @@ describe.skipIf(!RUN)('ask moji trigger runtime (integration)', () => {
         viewing: { kind: 'page', id: page.id, title: `Reviewed ${suite}` },
       });
       expect(row?.question).toMatch(/^Question from/);
+      expect(row?.answerPreview).toBe('Answer');
       expect(
         await insights.feedbackReview({
           classroomId: classX,
@@ -1157,7 +1363,10 @@ describe.skipIf(!RUN)('ask moji trigger runtime (integration)', () => {
         feedbackId: student.feedbackId!,
       });
       expect(ex?.question.role).toBe('user');
-      expect(ex?.question.metadata).toEqual({ viewing: { kind: 'page', id: page.id } });
+      // The question carries no metadata; what it was asked from is `viewing`.
+      expect(ex?.question.metadata).toBeNull();
+      expect(ex?.viewing).toEqual({ kind: 'page', id: page.id, title: `Reviewed ${suite}` });
+      expect(ex).not.toHaveProperty('answerPreview');
       expect(ex?.answer.parts.map(p => p.type)).toEqual(['step-start', 'text']);
       expect(JSON.stringify(ex)).not.toContain('acting_role');
       expect(
@@ -1181,6 +1390,72 @@ describe.skipIf(!RUN)('ask moji trigger runtime (integration)', () => {
           feedbackId: student.feedbackId!,
         })
       ).toBeNull();
+    });
+
+    it('cuts the answer preview at 500 characters', async () => {
+      const long = 'x'.repeat(600);
+      const { feedbackId } = await ask(userA, { answer: long, rating: 'DOWN' });
+      const [row] = await insights.feedbackReview({ classroomId: classX, viewerRole: 'OWNER' });
+      expect(row.feedbackId).toBe(feedbackId);
+      expect(row.answerPreview).toBe('x'.repeat(insights.REVIEW_ANSWER_MAX_CHARS));
+      expect(insights.REVIEW_ANSWER_MAX_CHARS).toBe(500);
+    });
+
+    it('leaves impersonated conversations out of every insight', async () => {
+      const page = await prisma.page.create({
+        data: {
+          classroom_id: classX,
+          title: `Viewed-as ${suite}`,
+          content_path: 'pi',
+          created_by: ownerX,
+          is_draft: false,
+        },
+      });
+      const viewedAs: (string | null)[] = [];
+      for (const [u, s] of [
+        [userA, 's1'],
+        [userB, 's2'],
+        [userC, 's3'],
+      ] as const) {
+        const { feedbackId } = await ask(u, {
+          scope: asAdmin(s),
+          viewing: { kind: 'page', id: page.id },
+          cites: [citeOf(page.id)],
+          usage,
+          rating: 'DOWN',
+        });
+        viewedAs.push(feedbackId);
+      }
+      expect(viewedAs.every(Boolean)).toBe(true);
+      // The same three students as themselves count (one question each).
+      const own = await ask(userA, { usage, rating: 'UP' });
+
+      const result = await insights.usage({ classroomId: classX, weeks: 1, timeZone: null });
+      expect(result.weeks[0]).toMatchObject({
+        questions: 1,
+        conversations: 1,
+        activeStudents: 1,
+        tokensIn: 10,
+        tokensOut: 3,
+      });
+      expect(result.askedFrom).toEqual([]);
+      expect(result.mostCited).toEqual([]);
+      const review = await insights.feedbackReview({ classroomId: classX, viewerRole: 'OWNER' });
+      expect(review.map(r => r.feedbackId)).toEqual([own.feedbackId]);
+      for (const feedbackId of viewedAs) {
+        expect(
+          await insights.exchange({
+            classroomId: classX,
+            viewerRole: 'OWNER',
+            feedbackId: feedbackId!,
+          })
+        ).toBeNull();
+      }
+    });
+
+    it('covers the default weeks when none are named', async () => {
+      const result = await insights.usage({ classroomId: classX });
+      expect(result.weeks).toHaveLength(ASK_MOJI_INSIGHT_DEFAULT_WEEKS);
     });
 
     it('uses the message index for the weekly counts (EXPLAIN)', async () => {

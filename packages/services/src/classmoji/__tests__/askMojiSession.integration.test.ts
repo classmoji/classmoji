@@ -414,6 +414,56 @@ describe.skipIf(!RUN)('ask moji session module (integration)', () => {
     });
   });
 
+  describe('unusable conversations', () => {
+    it('start closes an expired impersonation’s conversation, its session and audits it', async () => {
+      const viewedAs = await started(impersonated(userA));
+      await session.ensureSession(impersonated(userA), {
+        conversationId: viewedAs.conversationId,
+      });
+      await prisma.$executeRaw`
+        UPDATE ai_conversations
+        SET context = jsonb_set(context, '{grant,impersonation,expires_at}',
+          to_jsonb(${new Date(Date.now() - 60_000).toISOString()}::text), false)
+        WHERE id = ${viewedAs.conversationId}`;
+      await prisma.auditLog.deleteMany({ where: { classroom_id: classX } });
+      trigger.close.mockClear();
+
+      const mine = await started(access(userA));
+      expect(mine.created).toBe(true);
+      expect(trigger.close).toHaveBeenCalledWith(viewedAs.conversationId);
+      expect(
+        (await prisma.aIConversation.findUniqueOrThrow({ where: { id: viewedAs.conversationId } }))
+          .status
+      ).toBe('COMPLETED');
+      // A create lists it in the CREATE row.
+      const [created] = await audits('ASK_MOJI_CONVERSATION');
+      expect(created).toMatchObject({ action: 'CREATE', resource_id: mine.conversationId });
+      expect(created.data).toMatchObject({ ended_conversation_ids: [viewedAs.conversationId] });
+    });
+
+    it('without a create, each one closed gets its own UPDATE row', async () => {
+      const mine = await started(access(userA));
+      const viewedAs = await started(impersonated(userA, 's2'));
+      await prisma.$executeRaw`
+        UPDATE ai_conversations
+        SET context = jsonb_set(context, '{grant,impersonation,expires_at}',
+          to_jsonb(${new Date(Date.now() - 60_000).toISOString()}::text), false)
+        WHERE id = ${viewedAs.conversationId}`;
+      await prisma.auditLog.deleteMany({ where: { classroom_id: classX } });
+
+      const again = await started(access(userA));
+      expect(again).toMatchObject({ created: false, conversationId: mine.conversationId });
+      const rows = await audits('ASK_MOJI_CONVERSATION');
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ action: 'UPDATE', resource_id: viewedAs.conversationId });
+      expect(rows[0].data).toEqual({
+        tool: 'web:ask_moji.start',
+        status: 'COMPLETED',
+        reason: 'unusable',
+      });
+    });
+  });
+
   describe('feedback', () => {
     it('audits each real change with the rating and the row id; refuses others', async () => {
       const a = impersonated(userA, 'fb');

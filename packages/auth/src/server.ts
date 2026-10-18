@@ -1229,16 +1229,19 @@ export async function assertAskMojiAccess(
     attemptedAction: options.action || 'access',
     metadata: options.metadata,
   });
-  const held = await Promise.all(
-    ASK_MOJI_ROLES.map(role =>
-      ClassmojiService.classroomMembership.findByClassroomAndUser(
-        access.classroom.id,
-        access.userId,
-        [role]
-      )
-    )
-  );
-  const roles = ASK_MOJI_ROLES.filter((_, i) => Boolean(held[i]));
+  // Every bot role held, in one read of the role (and acceptance) columns
+  // only. Today's rule: any membership row counts, accepted or not, as
+  // `assertClassroomAccess` admits it.
+  const memberships = await getPrisma().classroomMembership.findMany({
+    where: {
+      classroom_id: access.classroom.id,
+      user_id: access.userId,
+      role: { in: [...ASK_MOJI_ROLES] },
+    },
+    select: { role: true, has_accepted_invite: true },
+  });
+  const heldRoles = new Set<Role>(memberships.map(m => m.role));
+  const roles = ASK_MOJI_ROLES.filter(role => heldRoles.has(role));
   const highestRole = roles[0] ?? (access.membership!.role as Role);
 
   const authData = await getAuthSession(request);

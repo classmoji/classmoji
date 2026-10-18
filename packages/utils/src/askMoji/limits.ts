@@ -56,5 +56,8 @@ export const INSIGHT_MIN_ASKERS = 3;
 /** Weeks the usage view may cover. */
 export const INSIGHT_MAX_WEEKS = 26;
 
+/** Weeks the usage view covers when the caller names none (web and MCP alike). */
+export const ASK_MOJI_INSIGHT_DEFAULT_WEEKS = 12;
+
 /** Rows the feedback review returns at most per call. */
 export const FEEDBACK_REVIEW_MAX_LIMIT = 100;

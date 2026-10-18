@@ -27,15 +27,29 @@ import {
   askMojiCopyFor,
   askMojiToolDefs,
   askMojiVisibility,
-  createChunkProjector,
   isAskMojiErrorCopy,
   isPermanentRefusal,
-  projectMessage,
   suggestionsForRole,
-  toolVisibility,
   type AskMojiUIMessage,
 } from '../index.ts';
+import * as barrel from '../index.ts';
+import { createChunkProjector, projectMessage, toolVisibility } from '../../agents/projection.ts';
 import * as agentLimits from '../../agents/limits.ts';
+
+describe('the ask-moji barrel', () => {
+  it('does not re-export the generic projection (Ask Moji reads use the allow-list)', () => {
+    for (const name of [
+      'projectTranscript',
+      'projectMessage',
+      'createChunkProjector',
+      'toolVisibility',
+    ]) {
+      expect(name in barrel).toBe(false);
+    }
+    expect('projectAskMojiTranscript' in barrel).toBe(true);
+    expect('createAskMojiChunkProjector' in barrel).toBe(true);
+  });
+});
 
 describe('actingRole', () => {
   it('is the strongest role at or below the ceiling', () => {

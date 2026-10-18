@@ -7,6 +7,9 @@ import { describe, expect, it } from 'vitest';
 import {
   ASK_MOJI_AVAILABILITY_COPY,
   ASK_MOJI_COPY,
+  ASK_MOJI_INSIGHT_DEFAULT_WEEKS,
+  ASK_MOJI_PROJECTED_METADATA_KEYS,
+  INSIGHT_MAX_WEEKS,
   AskMojiMessageMetadataSchema,
   AskMojiStepDataSchema,
   AskMojiUsageSchema,
@@ -20,9 +23,11 @@ import {
   createAskMojiChunkProjector,
   filterAskMojiChunkMetadata,
   isLookupPart,
+  isRateableRow,
   projectAskMojiMetadata,
   projectAskMojiTranscript,
   stubLookupOutputs,
+  withRateable,
   type AskMojiUIMessage,
 } from '../index.ts';
 
@@ -57,9 +62,51 @@ describe('projectAskMojiMetadata', () => {
     expect(projectAskMojiMetadata('user', null)).toBeUndefined();
   });
 
-  it('keeps nothing on assistant rows', () => {
+  it('keeps only a boolean rateable on assistant rows', () => {
     expect(projectAskMojiMetadata('assistant', serverOnlyAssistant)).toBeUndefined();
     expect(projectAskMojiMetadata('assistant', { viewing: { kind: 'page' } })).toBeUndefined();
+    expect(projectAskMojiMetadata('assistant', { ...serverOnlyAssistant, rateable: true })).toEqual(
+      { rateable: true }
+    );
+    expect(projectAskMojiMetadata('assistant', { rateable: false })).toEqual({ rateable: false });
+    expect(projectAskMojiMetadata('assistant', { rateable: 'yes' })).toBeUndefined();
+    // rateable never passes on a user row.
+    expect(projectAskMojiMetadata('user', { rateable: true })).toBeUndefined();
+    expect(ASK_MOJI_PROJECTED_METADATA_KEYS.assistant).toEqual(['rateable']);
+  });
+
+  it('refuses rateable from a browser (admission schema)', () => {
+    expect(AskMojiMessageMetadataSchema.safeParse({ rateable: true }).success).toBe(false);
+  });
+});
+
+describe('rateable', () => {
+  const row = (over: object) => ({
+    role: 'ASSISTANT',
+    final: true,
+    provenance: 'model',
+    metadata: null as unknown,
+    ...over,
+  });
+
+  it('is a final assistant row written by the model', () => {
+    expect(isRateableRow(row({}))).toBe(true);
+    expect(isRateableRow(row({ final: false }))).toBe(false);
+    expect(isRateableRow(row({ provenance: 'server' }))).toBe(false);
+    expect(isRateableRow(row({ provenance: null }))).toBe(false);
+    expect(isRateableRow(row({ role: 'USER' }))).toBe(false);
+  });
+
+  it('withRateable writes the decision over a stored value, on assistant rows only', () => {
+    expect(withRateable(row({ metadata: { rateable: true }, final: false })).metadata).toEqual({
+      rateable: false,
+    });
+    expect(withRateable(row({ metadata: serverOnlyAssistant })).metadata).toEqual({
+      ...serverOnlyAssistant,
+      rateable: true,
+    });
+    const user = row({ role: 'USER', metadata: { viewing: { kind: 'calendar' } } });
+    expect(withRateable(user)).toBe(user);
   });
 });
 
@@ -84,12 +131,37 @@ describe('projectAskMojiTranscript', () => {
     ] as unknown as AskMojiUIMessage[];
     const shown = projectAskMojiTranscript(rows);
     expect(shown[0].metadata).toEqual({ viewing: { kind: 'deck', id: 'd1', slide: 3 } });
+    // No rateable decision on the stored row: no metadata at all.
     expect('metadata' in shown[1]).toBe(false);
     expect(shown[1].parts.map(p => p.type)).toEqual(['text']);
     const json = JSON.stringify(shown);
     for (const key of ['acting_role', 'resolved_viewing', 'settled', 'usage', 'cites', 'Bo']) {
       expect(json).not.toContain(key);
     }
+  });
+
+  it('passes the rateable decision on assistant rows and nothing else of theirs', () => {
+    const rows = [
+      { id: 'u1', role: 'user', parts: [{ type: 'text', text: 'Q' }], metadata: serverOnlyUser },
+      {
+        id: 'a1',
+        role: 'assistant',
+        parts: [{ type: 'text', text: 'A' }],
+        metadata: { ...serverOnlyAssistant, rateable: true },
+      },
+      {
+        id: 'a2',
+        role: 'assistant',
+        parts: [{ type: 'text', text: 'notice' }],
+        metadata: { rateable: false },
+      },
+    ] as unknown as AskMojiUIMessage[];
+    const shown = projectAskMojiTranscript(rows);
+    expect(shown.map(m => m.metadata)).toEqual([
+      { viewing: { kind: 'deck', id: 'd1', slide: 3 } },
+      { rateable: true },
+      { rateable: false },
+    ]);
   });
 });
 
@@ -113,6 +185,15 @@ describe('chunk metadata', () => {
     ).toBeNull();
     const text = { type: 'text-delta', id: 't', delta: 'x' };
     expect(filterAskMojiChunkMetadata(text as never)).toBe(text);
+  });
+
+  it('never passes rateable on a live chunk (only the stored transcript decides it)', () => {
+    expect(
+      filterAskMojiChunkMetadata({
+        type: 'finish',
+        messageMetadata: { rateable: true },
+      } as never)
+    ).toEqual({ type: 'finish' });
   });
 
   it('the full projector applies the part rule and the metadata rule', () => {
@@ -228,6 +309,8 @@ describe('contract additions', () => {
     expect(IN_FLIGHT_STALE_MS).toBeGreaterThan(TURN_DEADLINE_MS);
     expect(INSTRUCTIONS_MAX_CHARS).toBe(4_000);
     expect(INSIGHT_MIN_ASKERS).toBe(3);
+    expect(ASK_MOJI_INSIGHT_DEFAULT_WEEKS).toBe(12);
+    expect(ASK_MOJI_INSIGHT_DEFAULT_WEEKS).toBeLessThanOrEqual(INSIGHT_MAX_WEEKS);
     expect(ASK_MOJI_COPY.BUSY_ELSEWHERE).toBe('Ask Moji is answering in another window.');
     expect(Object.keys(ASK_MOJI_AVAILABILITY_COPY).sort()).toEqual(
       ['NOT_ENABLED', 'NO_API_KEY', 'PRO_REQUIRED', 'RUNTIME_OFF', 'TRIGGER_NOT_CONFIGURED'].sort()

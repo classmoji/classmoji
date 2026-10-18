@@ -361,6 +361,43 @@ describe('audit.create dedup key: client_id', () => {
   });
 });
 
+describe.each([
+  ['rating', 'DOWN', 'UP'],
+  ['filter_key', 'feedback:f1', 'feedback:f2'],
+] as const)('audit.create dedup key: %s', (key, one, other) => {
+  const readRow = (value: string | number) => ({
+    ...baseEntry,
+    resource_type: 'ASK_MOJI_FEEDBACK',
+    resource_id: 'class-1',
+    action: 'VIEW' as const,
+    data: { tool: 'web:ask_moji.feedback_review', [key]: value } as Record<string, string | number>,
+  });
+
+  it(`includes data.${key} in the dedup lookup when it is a string`, async () => {
+    await audit.create(readRow(one));
+    expect((findFirstMock.mock.calls[0][0] as WhereArg).where).toMatchObject({
+      data: { path: ['tool'], equals: 'web:ask_moji.feedback_review' },
+      AND: [{ data: { path: [key], equals: one } }],
+    });
+  });
+
+  it('two rows differing only in it are two records; the same value twice dedups', async () => {
+    findFirstMock.mockImplementation(async ({ where }: WhereArg) => {
+      const filters = (where.AND ?? []) as Array<{ data: { path: string[]; equals: unknown } }>;
+      const match = filters.find(f => f.data.path[0] === key);
+      return match?.data.equals === one ? { id: 'recent' } : null;
+    });
+    expect(await audit.create(readRow(one))).toBeNull();
+    expect(await audit.create(readRow(other))).not.toBeNull();
+    expect(createMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('a non-string value does not join the key', async () => {
+    await audit.create(readRow(3));
+    expect((findFirstMock.mock.calls[0][0] as WhereArg).where).not.toHaveProperty('AND');
+  });
+});
+
 describe('audit.service live-editing actions', () => {
   it.each(['COLLAB_JOIN', 'COLLAB_LEAVE', 'COLLAB_CHECKPOINT'] as const)(
     'records %s (not skipped as an unknown action)',

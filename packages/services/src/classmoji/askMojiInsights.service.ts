@@ -9,7 +9,9 @@
  * Rules:
  * - Only this runtime's rows count: conversations of type SYLLABUS_BOT that
  *   carry a grant (`context ? 'grant'`), messages `format = ui_message_v1`.
- *   Legacy rows are excluded.
+ *   Legacy rows are excluded, and so are conversations held under an
+ *   impersonation (`context.grant.impersonation` set): an admin's look at a
+ *   student's view is not that student's use (`OWN_GRANT_ROWS`).
  * - Time is the message's own `created_at` (through the join), never the
  *   conversation's start.
  * - Askers are classified by the role stored on each question
@@ -31,6 +33,7 @@
 import getPrisma from '@classmoji/database';
 import { canonicalTimeZone } from '@classmoji/utils';
 import {
+  ASK_MOJI_INSIGHT_DEFAULT_WEEKS,
   ASK_MOJI_ROLES,
   FEEDBACK_REVIEW_MAX_LIMIT,
   INSIGHT_MAX_WEEKS,
@@ -51,12 +54,30 @@ import {
 import type { AskMojiRating } from './askMojiFeedback.service.ts';
 import { currentMembers } from './classroomStudents.ts';
 import { isObject, toUIMessage } from './chatShared.ts';
+import { mapWithConcurrency } from '../helpers/concurrency.ts';
 
 /** Rows shown in "Asked from" and "Most cited". */
 export const INSIGHT_TOP_MATERIALS = 10;
 
 /** The longest question text a review row carries (the exchange has it in full). */
 export const REVIEW_QUESTION_MAX_CHARS = 500;
+
+/** The longest answer text a review row carries (`answerPreview`; the exchange has it in full). */
+export const REVIEW_ANSWER_MAX_CHARS = 500;
+
+/** Viewings the review list resolves at once (each is a few lookups on the pool). */
+export const REVIEW_VIEWING_CONCURRENCY = 5;
+
+/**
+ * The conversations every insight reads (`c` is `ai_conversations`): Ask
+ * Moji's (SYLLABUS_BOT with a grant: legacy rows excluded) held by the user
+ * as themselves. A grant whose `impersonation` is set (a JSON object; stored
+ * JSON null and a missing key both read as none) is left out of every
+ * statement: usage, "Asked from", "Most cited", the review list and the
+ * exchange.
+ */
+const OWN_GRANT_ROWS = Prisma.sql`c.type = 'SYLLABUS_BOT' AND c.context ? 'grant'
+  AND COALESCE(jsonb_typeof(c.context->'grant'->'impersonation'), 'null') = 'null'`;
 
 export type UsageWeek = {
   /** Monday of the week in the course zone, `YYYY-MM-DD`. */
@@ -112,14 +133,16 @@ const zoneOf = (timeZone: string | null | undefined) => canonicalTimeZone(timeZo
 
 /**
  * The classroom's usage over the last `weeks` weeks (this week included,
- * 1..`INSIGHT_MAX_WEEKS`), every week present (zeros included), oldest first.
+ * 1..`INSIGHT_MAX_WEEKS`; unset: `ASK_MOJI_INSIGHT_DEFAULT_WEEKS`), every week
+ * present (zeros included), oldest first.
  */
 export const usage = async (i: {
   classroomId: string;
-  weeks: number;
+  weeks?: number | null;
   timeZone?: string | null;
 }): Promise<UsageInsights> => {
-  const weeks = Math.min(Math.max(1, Math.trunc(Number(i.weeks) || 1)), INSIGHT_MAX_WEEKS);
+  const asked = i.weeks ?? ASK_MOJI_INSIGHT_DEFAULT_WEEKS;
+  const weeks = Math.min(Math.max(1, Math.trunc(Number(asked) || 1)), INSIGHT_MAX_WEEKS);
   const tz = zoneOf(i.timeZone);
   const prisma = getPrisma();
   const { studentIds, staffIds } = await currentMembers(i.classroomId);
@@ -153,7 +176,7 @@ export const usage = async (i: {
       CROSS JOIN LATERAL (
         SELECT (m.metadata->>'acting_role' = 'STUDENT' AND c.user_id = ANY(${studentIds}::text[])) AS student
       ) s
-      WHERE c.classroom_id = ${i.classroomId} AND c.type = 'SYLLABUS_BOT' AND c.context ? 'grant'
+      WHERE c.classroom_id = ${i.classroomId} AND ${OWN_GRANT_ROWS}
         AND m.format = 'ui_message_v1' AND m.metadata ? 'acting_role'
       GROUP BY 1`,
     prisma.$queryRaw<
@@ -168,7 +191,7 @@ export const usage = async (i: {
       FROM ai_conversations c
       JOIN ai_conversation_messages m
         ON m.conversation_id = c.id AND m.role = 'ASSISTANT' AND m.created_at >= ${fromUtc}
-      WHERE c.classroom_id = ${i.classroomId} AND c.type = 'SYLLABUS_BOT' AND c.context ? 'grant'
+      WHERE c.classroom_id = ${i.classroomId} AND ${OWN_GRANT_ROWS}
         AND m.format = 'ui_message_v1' AND jsonb_typeof(m.metadata->'usage') = 'object'
       GROUP BY 1`,
     prisma.$queryRaw<{ local_from: Date }[]>`${range}`,
@@ -241,7 +264,7 @@ const askedFromRows = async (
     FROM ai_conversations c
     JOIN ai_conversation_messages m
       ON m.conversation_id = c.id AND m.role = 'USER' AND m.created_at >= ${fromUtc}
-    WHERE c.classroom_id = ${classroomId} AND c.type = 'SYLLABUS_BOT' AND c.context ? 'grant'
+    WHERE c.classroom_id = ${classroomId} AND ${OWN_GRANT_ROWS}
       AND m.format = 'ui_message_v1'
       AND m.metadata->>'acting_role' = 'STUDENT'
       AND c.user_id = ANY(${studentIds}::text[])
@@ -250,10 +273,13 @@ const askedFromRows = async (
     HAVING count(DISTINCT c.user_id) >= ${INSIGHT_MIN_ASKERS}
     ORDER BY askers DESC, questions DESC, kind, id
     LIMIT ${INSIGHT_TOP_MATERIALS}`;
+  const titles = await mapWithConcurrency(rows, REVIEW_VIEWING_CONCURRENCY, row =>
+    titleOf(classroomId, row.kind, row.id)
+  );
   const out: MaterialRow[] = [];
-  for (const row of rows) {
-    const title = await titleOf(classroomId, row.kind, row.id);
-    if (title === null) continue;
+  rows.forEach((row, n) => {
+    const title = titles[n];
+    if (title === null) return;
     out.push({
       kind: row.kind as AskMojiViewingKind,
       id: row.id,
@@ -261,7 +287,7 @@ const askedFromRows = async (
       askers: toInt(row.askers),
       count: toInt(row.questions),
     });
-  }
+  });
   return out;
 };
 
@@ -288,38 +314,41 @@ const mostCitedRows = async (
       count(*) AS cites
     FROM ai_conversations c
     JOIN ai_conversation_messages m
-      ON m.conversation_id = c.id AND m.role = 'ASSISTANT' AND m.created_at >= ${fromUtc}
+      ON m.conversation_id = c.id AND m.role = 'ASSISTANT' AND m.final
+      AND m.created_at >= ${fromUtc}
     CROSS JOIN LATERAL jsonb_array_elements(
       CASE WHEN jsonb_typeof(m.metadata->'cites') = 'array' THEN m.metadata->'cites' ELSE '[]'::jsonb END
     ) AS cite
-    WHERE c.classroom_id = ${classroomId} AND c.type = 'SYLLABUS_BOT' AND c.context ? 'grant'
+    WHERE c.classroom_id = ${classroomId} AND ${OWN_GRANT_ROWS}
       AND m.format = 'ui_message_v1'
       AND c.user_id = ANY(${studentIds}::text[])
     GROUP BY 1, 2, 3
     HAVING count(DISTINCT c.user_id) >= ${INSIGHT_MIN_ASKERS}
     ORDER BY askers DESC, cites DESC, type, id, path
     LIMIT ${INSIGHT_TOP_MATERIALS}`;
-  const out: MaterialRow[] = [];
-  for (const row of rows) {
-    if (row.type === 'platform_docs') {
-      out.push({
-        kind: 'platform_docs',
-        id: null,
-        ...(row.path ? { path: row.path } : {}),
-        title: row.title ?? row.path ?? '',
-        askers: toInt(row.askers),
-        count: toInt(row.cites),
-      });
-      continue;
+  const resolved = await mapWithConcurrency(
+    rows,
+    REVIEW_VIEWING_CONCURRENCY,
+    async (row): Promise<MaterialRow | null> => {
+      if (row.type === 'platform_docs') {
+        return {
+          kind: 'platform_docs',
+          id: null,
+          ...(row.path ? { path: row.path } : {}),
+          title: row.title ?? row.path ?? '',
+          askers: toInt(row.askers),
+          count: toInt(row.cites),
+        };
+      }
+      const kind = row.type === 'slides' ? 'deck' : row.type === 'page' ? 'page' : null;
+      if (!kind) return null;
+      // The current title, by id in this classroom; a row since deleted drops out.
+      const title = await titleOf(classroomId, kind, row.id);
+      if (title === null) return null;
+      return { kind, id: row.id, title, askers: toInt(row.askers), count: toInt(row.cites) };
     }
-    const kind = row.type === 'slides' ? 'deck' : row.type === 'page' ? 'page' : null;
-    if (!kind) continue;
-    // The current title, by id in this classroom; a row since deleted drops out.
-    const title = await titleOf(classroomId, kind, row.id);
-    if (title === null) continue;
-    out.push({ kind, id: row.id, title, askers: toInt(row.askers), count: toInt(row.cites) });
-  }
-  return out;
+  );
+  return resolved.filter((r): r is MaterialRow => r !== null);
 };
 
 /**
@@ -369,6 +398,7 @@ type ExchangeRow = {
   user_name: string | null;
   conversation_id: string;
   answer_id: string;
+  answer_content: string;
   answer_parts: unknown;
   question_id: string;
   question_content: string;
@@ -396,13 +426,13 @@ const exchangeRows = async (i: {
   return getPrisma().$queryRaw<ExchangeRow[]>`
     SELECT f.id, f.rating::text AS rating, f.created_at, f.updated_at, f.user_id,
       u.name AS user_name, f.conversation_id,
-      a.ui_message_id AS answer_id, a.parts AS answer_parts,
+      a.ui_message_id AS answer_id, a.content AS answer_content, a.parts AS answer_parts,
       q.ui_message_id AS question_id, q.content AS question_content,
       q.parts AS question_parts, q.metadata AS question_metadata
     FROM ask_moji_feedback f
     JOIN ai_conversations c
       ON c.id = f.conversation_id AND c.classroom_id = f.classroom_id
-      AND c.user_id = f.user_id AND c.type = 'SYLLABUS_BOT' AND c.context ? 'grant'
+      AND c.user_id = f.user_id AND ${OWN_GRANT_ROWS}
     JOIN users u ON u.id = f.user_id
     JOIN ai_conversation_messages a
       ON a.conversation_id = f.conversation_id AND a.ui_message_id = f.ui_message_id
@@ -457,6 +487,8 @@ export type FeedbackReviewRow = {
   askerRole: AskMojiRole;
   /** The question's text, cut to `REVIEW_QUESTION_MAX_CHARS`. */
   question: string;
+  /** The rated answer's text (its text parts), cut to `REVIEW_ANSWER_MAX_CHARS`. */
+  answerPreview: string;
   viewing: ResolvedViewing | null;
 };
 
@@ -478,12 +510,14 @@ export const feedbackReview = async (i: {
   if (i.rating !== undefined && i.rating !== 'UP' && i.rating !== 'DOWN') return [];
   if (i.since !== undefined && Number.isNaN(i.since.getTime())) return [];
   const limit = Math.min(Math.max(1, Math.trunc(i.limit ?? 50)), FEEDBACK_REVIEW_MAX_LIMIT);
-  const rows = await exchangeRows({ ...i, viewerRole: i.viewerRole, limit });
-  const out: FeedbackReviewRow[] = [];
-  for (const row of rows) {
+  const rows = (await exchangeRows({ ...i, viewerRole: i.viewerRole, limit })).flatMap(row => {
     const role = storedRole(row.question_metadata);
-    if (!role) continue;
-    out.push({
+    return role ? [{ row, role }] : [];
+  });
+  return mapWithConcurrency(
+    rows,
+    REVIEW_VIEWING_CONCURRENCY,
+    async ({ row, role }): Promise<FeedbackReviewRow> => ({
       feedbackId: row.id,
       rating: row.rating,
       createdAt: row.created_at,
@@ -491,15 +525,19 @@ export const feedbackReview = async (i: {
       asker: { userId: row.user_id, name: row.user_name },
       askerRole: role,
       question: row.question_content.slice(0, REVIEW_QUESTION_MAX_CHARS),
+      answerPreview: (row.answer_content ?? '').slice(0, REVIEW_ANSWER_MAX_CHARS),
       viewing: await viewingFor(row, i.classroomId),
-    });
-  }
-  return out;
+    })
+  );
 };
 
-export type FeedbackExchange = Omit<FeedbackReviewRow, 'question'> & {
-  /** The question and the rated answer, projected (R8) as their owner saw them. */
-  question: AskMojiUIMessage;
+export type FeedbackExchange = Omit<FeedbackReviewRow, 'question' | 'answerPreview'> & {
+  /**
+   * The question, projected (R8), with `metadata: null`: what it was asked
+   * from is `viewing` (resolved now), never the client's own claim.
+   */
+  question: Omit<AskMojiUIMessage, 'metadata'> & { metadata: null };
+  /** The rated answer, projected (R8) as its owner saw it, without metadata. */
   answer: AskMojiUIMessage;
 };
 
@@ -529,7 +567,7 @@ export const exchange = async (i: {
       ui_message_id: row.question_id,
       role: 'USER',
       parts: row.question_parts as Prisma.JsonValue,
-      metadata: row.question_metadata as Prisma.JsonValue,
+      metadata: null,
     })
   );
   const answer = projectAskMojiMessage(
@@ -548,7 +586,7 @@ export const exchange = async (i: {
     updatedAt: row.updated_at,
     asker: { userId: row.user_id, name: row.user_name },
     askerRole: role,
-    question,
+    question: { ...question, metadata: null },
     answer,
     viewing: await viewingFor(row, i.classroomId),
   };

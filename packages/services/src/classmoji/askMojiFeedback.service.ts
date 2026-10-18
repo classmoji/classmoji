@@ -5,7 +5,10 @@
  * by the model (`provenance = 'model'`), in an Ask Moji conversation the
  * caller owns under the request's scope (`askMojiChat.findOwned`, any status).
  * The message id is checked by length only (assistant ids contain `:`). One
- * row per answer; clearing deletes it.
+ * row per answer; clearing deletes it. Each set or clear of one answer runs
+ * under a per-answer advisory lock, so a double click (two requests at once)
+ * serializes: the second sees the first's row instead of failing on the
+ * unique key.
  *
  * Nothing here writes audit rows. The caller audits each change with what
  * these return: `resource_id` = the feedback row id, `dedupe: false`,
@@ -14,6 +17,7 @@
  * the single exchange read are in askMojiInsights.
  */
 import getPrisma from '@classmoji/database';
+import type { Prisma } from '@prisma/client';
 import type { AskMojiScope } from './askMojiChat.service.ts';
 import { findOwned, validMessageId } from './askMojiChat.service.ts';
 
@@ -52,6 +56,12 @@ export type FeedbackClearResult =
 
 type Target = AskMojiScope & { conversationId: string; classroomId: string; uiMessageId: string };
 
+type Tx = Prisma.TransactionClient;
+
+/** Serializes every write of one answer's rating, until the transaction ends. */
+const lockAnswer = (tx: Tx, conversationId: string, uiMessageId: string) =>
+  tx.$queryRaw`SELECT 1 FROM (SELECT pg_advisory_xact_lock(hashtext(${`ask-moji-feedback:${conversationId}:${uiMessageId}`}))) AS l`;
+
 /** The rated answer, when the caller may rate it; else null (one answer for every refusal). */
 const ratableAnswer = async (i: Target) => {
   if (!validMessageId(i.uiMessageId)) return null;
@@ -85,7 +95,8 @@ export const set = async (i: Target & { rating: unknown }): Promise<FeedbackSetR
   const owned = await ratableAnswer(i);
   if (!owned) return { ok: false, code: 'NOT_FOUND' };
   const key = { conversation_id: owned.conversationId, ui_message_id: i.uiMessageId };
-  return getPrisma().$transaction(async tx => {
+  return getPrisma().$transaction(async (tx): Promise<FeedbackSetResult> => {
+    await lockAnswer(tx, owned.conversationId, i.uiMessageId);
     const existing = await tx.askMojiFeedback.findUnique({
       where: { conversation_id_ui_message_id: key },
       select: { id: true, rating: true },
@@ -122,14 +133,17 @@ export const clear = async (i: Target): Promise<FeedbackClearResult> => {
   const owned = await ratableAnswer(i);
   if (!owned) return { ok: false, code: 'NOT_FOUND' };
   const key = { conversation_id: owned.conversationId, ui_message_id: i.uiMessageId };
-  const existing = await getPrisma().askMojiFeedback.findUnique({
-    where: { conversation_id_ui_message_id: key },
-    select: { id: true, rating: true },
-  });
   const base = { conversationId: owned.conversationId, classroomId: i.classroomId };
-  if (!existing) return { ok: true, id: null, deleted: false, previous: null, ...base };
-  const { count } = await getPrisma().askMojiFeedback.deleteMany({ where: { id: existing.id } });
-  return { ok: true, id: existing.id, deleted: count > 0, previous: existing.rating, ...base };
+  return getPrisma().$transaction(async (tx): Promise<FeedbackClearResult> => {
+    await lockAnswer(tx, owned.conversationId, i.uiMessageId);
+    const existing = await tx.askMojiFeedback.findUnique({
+      where: { conversation_id_ui_message_id: key },
+      select: { id: true, rating: true },
+    });
+    if (!existing) return { ok: true, id: null, deleted: false, previous: null, ...base };
+    const { count } = await tx.askMojiFeedback.deleteMany({ where: { id: existing.id } });
+    return { ok: true, id: existing.id, deleted: count > 0, previous: existing.rating, ...base };
+  });
 };
 
 /**

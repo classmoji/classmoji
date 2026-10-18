@@ -129,6 +129,16 @@ export const create = async (data: AuditLogData, { dedupe = true }: AuditCreateO
   // personal MCP client) are two records, so the client joins the key.
   const payloadClientId = payload?.client_id;
 
+  // The rating the payload set (data.rating — e.g. a feedback review filtered
+  // to thumbs-down, then to thumbs-up). Two reads or writes that differ only in
+  // the rating are two records, so it joins the key.
+  const payloadRating = payload?.rating;
+
+  // A caller-built key for whatever else distinguishes one call from the next
+  // (data.filter_key — e.g. the ids a read was filtered by). Opaque here: two
+  // rows with different keys never coalesce; the same key twice still dedups.
+  const payloadFilterKey = payload?.filter_key;
+
   // Each extra JSON-path filter needs its own `data` clause, and two cannot sit
   // beside each other in one object — they go under `AND`, which Prisma
   // combines conjunctively with the rest.
@@ -143,6 +153,12 @@ export const create = async (data: AuditLogData, { dedupe = true }: AuditCreateO
       : []),
     ...(typeof payloadClientId === 'string'
       ? [{ data: { path: ['client_id'], equals: payloadClientId } }]
+      : []),
+    ...(typeof payloadRating === 'string'
+      ? [{ data: { path: ['rating'], equals: payloadRating } }]
+      : []),
+    ...(typeof payloadFilterKey === 'string'
+      ? [{ data: { path: ['filter_key'], equals: payloadFilterKey } }]
       : []),
   ];
 

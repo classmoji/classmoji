@@ -7,12 +7,7 @@ export * from './copy.ts';
 export * from './refusals.ts';
 export * from './limits.ts';
 export * from './metadata.ts';
-export {
-  createChunkProjector,
-  projectMessage,
-  projectTranscript,
-  toolVisibility,
-  type DataPartSchema,
-  type Registry,
-  type ToolVisibility,
-} from '../agents/projection.ts';
+export * from './runtime.ts';
+// The generic projection (`projectMessage`, `projectTranscript`, …) is not
+// re-exported: Ask Moji reads go through `projectAskMojiTranscript`, which adds
+// the metadata allow-list. Import `@classmoji/utils/agents/projection` directly.

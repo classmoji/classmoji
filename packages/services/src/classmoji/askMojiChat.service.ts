@@ -64,6 +64,7 @@ import {
   isAskMojiRole,
   projectAskMojiTranscript,
   stubLookupOutputs,
+  withRateable,
   type AskMojiMessageMetadata,
   type AskMojiRefusalCode,
   type AskMojiRole,
@@ -330,13 +331,27 @@ export type FindOrCreateResult =
       grant: AskMojiGrant;
       /** Whether a conversation was created by this call (else an existing one is reused). */
       created: boolean;
-      /** Conversations this call ended (the replaced one). */
+      /**
+       * Conversations this call ended: the replaced ones, and the user's
+       * unusable ones in this classroom (`closeUnusable`). Without a create,
+       * only unusable ones.
+       */
       closedConversationIds: string[];
       /** Those of them with a recorded Trigger session: the caller closes these (`sessions.close`). */
       closedWithSession: string[];
       triggerSessionId: string | null;
     }
-  | AskMojiRefusal;
+  | FindOrCreateRefusal;
+
+/**
+ * A refused start. The unusable conversations closed before the refusal stay
+ * closed (`closeUnusable`); they are listed here, when there were any, so the
+ * caller can close their Trigger sessions.
+ */
+export type FindOrCreateRefusal = AskMojiRefusal & {
+  closedConversationIds?: string[];
+  closedWithSession?: string[];
+};
 
 /** Kept for callers of the first version; `findOrCreate` with a create. */
 export type CreateResult =
@@ -382,7 +397,12 @@ class Refused extends Error {
 /**
  * The conversation the widget should be on, for the grant's user, classroom,
  * view and request scope, under a per-user lock (so two tabs or devices
- * converge):
+ * converge). First, under the same lock, the user's unusable conversations in
+ * this classroom are ended, whatever their view or scope: every ACTIVE one
+ * carrying a grant that no longer holds (an impersonation behind it expired),
+ * or all of them once the user holds no bot role there. They are closed as a
+ * replace closes (COMPLETED, tool outputs stubbed) and listed in
+ * `closedConversationIds` / `closedWithSession`, on a refusal too. Then:
  * - without `replace`: the ACTIVE one if there is one (`created: false`),
  *   else a new one;
  * - with `replace` (New conversation, naming the conversation the caller is
@@ -443,18 +463,21 @@ const start = async (
       : null,
   };
 
-  let result: FindOrCreateResult;
-  try {
-    result = await getPrisma().$transaction(async (tx): Promise<FindOrCreateResult> => {
-      // Serializes one user's starts, so the reuse, the count and the closing
-      // below see every earlier start.
-      await lockUser(tx, userId);
+  const result = await getPrisma().$transaction(async (tx): Promise<FindOrCreateResult> => {
+    // Serializes one user's starts, so the reuse, the count and the closing
+    // below see every earlier start.
+    await lockUser(tx, userId);
 
-      const memberships = await tx.classroomMembership.findMany({
-        where: { classroom_id: classroomId, user_id: userId, role: { in: [...BOT_ROLES] } },
-        select: { role: true },
-      });
-      const held = memberships.map(m => m.role).filter(isAskMojiRole);
+    const memberships = await tx.classroomMembership.findMany({
+      where: { classroom_id: classroomId, user_id: userId, role: { in: [...BOT_ROLES] } },
+      select: { role: true },
+    });
+    const held = memberships.map(m => m.role).filter(isAskMojiRole);
+    // Committed whatever follows: a refusal below returns (never throws) so
+    // the transaction keeps these closes.
+    const unusable = await closeUnusable(tx, { userId, classroomId, held, now });
+
+    try {
       if (held.length === 0) throw new Refused('NOT_A_MEMBER');
       const grant = deriveGrant(requested, held);
 
@@ -471,8 +494,8 @@ const start = async (
           ok: true,
           ...active,
           created: false,
-          closedConversationIds: [],
-          closedWithSession: [],
+          closedConversationIds: unusable.ids,
+          closedWithSession: unusable.withSession,
         };
       }
 
@@ -535,22 +558,60 @@ const start = async (
         conversationId: conversation.id,
         grant,
         created: true,
-        closedConversationIds: closed,
-        closedWithSession: closedRows
-          .filter(r => readTriggerSessionId(r.context) !== null)
-          .map(r => r.id),
+        closedConversationIds: [...unusable.ids, ...closed],
+        closedWithSession: [
+          ...unusable.withSession,
+          ...closedRows.filter(r => readTriggerSessionId(r.context) !== null).map(r => r.id),
+        ],
         triggerSessionId: null,
       };
-    }, TX_OPTIONS);
-  } catch (error) {
-    if (error instanceof Refused) return refusal(error.code);
-    throw error;
-  }
+    } catch (error) {
+      if (!(error instanceof Refused)) throw error;
+      return {
+        ...refusal(error.code),
+        ...(unusable.ids.length > 0
+          ? { closedConversationIds: unusable.ids, closedWithSession: unusable.withSession }
+          : {}),
+      };
+    }
+  }, TX_OPTIONS);
   // Retention (R7): an ended conversation's lookups can no longer reach the model.
-  if (result.ok) {
-    for (const id of result.closedConversationIds) await stripToolOutputs(id);
-  }
+  for (const id of result.closedConversationIds ?? []) await stripToolOutputs(id);
   return result;
+};
+
+/**
+ * End the user's unusable Ask Moji conversations in a classroom (inside
+ * `start`'s transaction, under the user lock): every ACTIVE one with a grant
+ * that no longer holds (`grantHolds`: an impersonation behind it expired), and
+ * every one once the user holds no bot role there (`held` empty). Any view
+ * and any request scope: none of them can take a turn again. Legacy rows (no
+ * grant) are left alone. Returns the ids ended, and those with a Trigger
+ * session.
+ */
+const closeUnusable = async (
+  tx: Tx,
+  i: { userId: string; classroomId: string; held: readonly AskMojiRole[]; now: Date }
+): Promise<{ ids: string[]; withSession: string[] }> => {
+  const rows = await tx.aIConversation.findMany({
+    where: { user_id: i.userId, classroom_id: i.classroomId, type: TYPE, status: 'ACTIVE' },
+    select: { id: true, user_id: true, classroom_id: true, context: true },
+  });
+  const dead = rows.filter(row => {
+    const grant = readGrant(row.context);
+    if (!grant) return false;
+    return i.held.length === 0 || !holds(grant, row, i.now.getTime());
+  });
+  if (dead.length === 0) return { ids: [], withSession: [] };
+  const { count } = await tx.aIConversation.updateMany({
+    where: { id: { in: dead.map(r => r.id) }, status: 'ACTIVE' },
+    data: { status: 'COMPLETED', ended_at: i.now },
+  });
+  if (count === 0) return { ids: [], withSession: [] };
+  return {
+    ids: dead.map(r => r.id),
+    withSession: dead.filter(r => readTriggerSessionId(r.context) !== null).map(r => r.id),
+  };
 };
 
 /**
@@ -1417,7 +1478,9 @@ export const saveSummary = async (
 /**
  * The transcript the conversation's owner sees under this scope, projected
  * (`projectAskMojiTranscript`: text, cite_content, notice and step parts; of
- * the metadata a user row's `viewing` only). A partial assistant row whose
+ * the metadata a user row's `viewing` and, on every assistant row, `rateable`:
+ * true when the row is final and written by the model, the rows
+ * `askMojiFeedback.set` accepts; `withRateable`). A partial assistant row whose
  * turn later got a final reply is left out (R16). Null when the conversation
  * is not this user's Ask Moji conversation (with a grant) in this classroom
  * under this scope. Ended conversations are still readable by their owner.
@@ -1440,10 +1503,17 @@ export const loadTranscriptForViewer = async (
       ui_message_id: { not: null },
     },
     orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
-    select: { ui_message_id: true, role: true, parts: true, metadata: true, final: true },
+    select: {
+      ui_message_id: true,
+      role: true,
+      parts: true,
+      metadata: true,
+      final: true,
+      provenance: true,
+    },
   });
   return projectAskMojiTranscript(
-    withoutSupersededPartials(rows).map(row => toUIMessage<AskMojiUIMessage>(row))
+    withoutSupersededPartials(rows).map(row => toUIMessage<AskMojiUIMessage>(withRateable(row)))
   );
 };
 

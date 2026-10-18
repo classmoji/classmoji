@@ -30,16 +30,13 @@ import { gitUsername, type GitIdentityAccount } from '@classmoji/utils';
 import type { Role } from '@prisma/client';
 
 import { findClassroomGitProvider } from './classroomGitProvider.ts';
-import { currentStudentIds } from './classroomStudents.ts';
+import { TEACHING_TEAM_ROLES, currentStudentIds } from './classroomStudents.ts';
 
 /** Longest block id accepted. BlockNote ids are uuids (36 chars). */
 export const BLOCK_ID_MAX_LENGTH = 64;
 
 const BLOCK_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 const ID_MAX_LENGTH = 255;
-
-/** Roles that make a member part of the teaching team. */
-const TEACHING_TEAM_ROLES: readonly Role[] = ['OWNER', 'TEACHER', 'ASSISTANT'];
 
 /** Higher is more privileged (same order as `@classmoji/auth`'s classroomRole). */
 const ROLE_PRIORITY: Record<Role, number> = {

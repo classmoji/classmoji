@@ -6,7 +6,11 @@
  * live view showed.
  *
  *   user rows       `viewing` (as the widget sent it) passes; nothing else
- *   assistant rows  nothing passes
+ *   assistant rows  `rateable` (boolean) passes; nothing else. The server
+ *                   sets it on every assistant row it reads
+ *                   (`withRateable`: final, `provenance = 'model'`), so a
+ *                   stored value never reaches a viewer. Live chunks carry no
+ *                   assistant metadata at all (a streaming row is not final).
  *
  * Server-only keys (`ASK_MOJI_SERVER_METADATA_KEYS`): the acting role, the
  * resolved viewing and the settled marker on user rows; usage, model and cites
@@ -31,7 +35,7 @@ import { askMojiVisibility } from './visibility.ts';
 /** The metadata keys a viewer may receive, by row role. */
 export const ASK_MOJI_PROJECTED_METADATA_KEYS = {
   user: ['viewing'],
-  assistant: [],
+  assistant: ['rateable'],
 } as const;
 
 /** Keys only the server reads. Never sent to a browser, live or stored. */
@@ -101,15 +105,38 @@ const isRecord = (v: unknown): v is Record<string, unknown> =>
 
 /**
  * The metadata a viewer receives for a stored row of this role: `{ viewing }`
- * for a user row whose stored viewing still parses, else undefined (no key).
+ * for a user row whose stored viewing still parses, `{ rateable }` for an
+ * assistant row carrying a boolean one, else undefined (no key).
  */
 export function projectAskMojiMetadata(
   role: string,
   metadata: unknown
 ): AskMojiMessageMetadata | undefined {
-  if (role !== 'user' || !isRecord(metadata)) return undefined;
+  if (!isRecord(metadata)) return undefined;
+  if (role === 'assistant') {
+    return typeof metadata.rateable === 'boolean' ? { rateable: metadata.rateable } : undefined;
+  }
+  if (role !== 'user') return undefined;
   const viewing = AskMojiViewingSchema.safeParse(metadata.viewing);
   return viewing.success ? { viewing: viewing.data } : undefined;
+}
+
+/** The stored row facts `rateable` is decided by. */
+export type AskMojiRateableRow = { role: string; final: boolean; provenance: string | null };
+
+/** Whether a viewer may rate a stored row: a final ASSISTANT row written by the model. */
+export const isRateableRow = (row: AskMojiRateableRow): boolean =>
+  row.role === 'ASSISTANT' && row.final === true && row.provenance === 'model';
+
+/**
+ * Stored metadata with the server's `rateable` decision written over any
+ * stored value: on an ASSISTANT row, `rateable` is `isRateableRow(row)`; any
+ * other row's metadata is returned as it is. Apply before projecting.
+ */
+export function withRateable<T extends AskMojiRateableRow & { metadata: unknown }>(row: T): T {
+  if (row.role !== 'ASSISTANT') return row;
+  const metadata = isRecord(row.metadata) ? row.metadata : {};
+  return { ...row, metadata: { ...metadata, rateable: isRateableRow(row) } };
 }
 
 /** A stored message as a viewer sees it: parts through the registry, metadata through the allow-list. */
