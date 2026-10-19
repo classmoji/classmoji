@@ -166,6 +166,22 @@ export const captureRecoverableError = (
 };
 
 /**
+ * An error a feature caught and turned into a generic line for the user, so
+ * nothing else would ever see it (Ask Moji's "hit an error"). Kept in the
+ * console too. `surface` names the feature; nothing the user wrote is sent.
+ */
+export const captureHandledError = (error: unknown, surface: string): void => {
+  console.error(`[${surface}]`, error);
+  if (!enabled || !firstReport(error)) return;
+  const route = currentRoutePattern();
+  withScope(scope => {
+    scope.setTag('surface', surface);
+    if (route) scope.setTag('route', route);
+    captureException(error, { mechanism: { type: 'generic', handled: true } });
+  });
+};
+
+/**
  * Tie events to the signed-in user by internal id only. A staff "view as"
  * session is marked with a tag, never with who is viewing.
  */

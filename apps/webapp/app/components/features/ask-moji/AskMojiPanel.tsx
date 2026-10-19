@@ -11,6 +11,7 @@ import { useChat } from '@ai-sdk/react';
 import type { Chat } from '@ai-sdk/react';
 import { IconArrowDown, IconChevronRight, IconMessagePlus } from '@tabler/icons-react';
 import { ASK_MOJI_COPY, ASK_MOJI_STARTING, type AskMojiUIMessage } from '@classmoji/utils/ask-moji';
+import { CHAT_RENDER_THROTTLE_MS } from '../chat/transport';
 import AskMojiMessageView, { type ChipContext } from './AskMojiMessage';
 import Composer, { type ComposerHandle } from './Composer';
 import { useAskMojiController, useAskMojiSnapshot } from './AskMojiProvider';
@@ -313,7 +314,10 @@ function ChatView({
 }) {
   const controller = useAskMojiController();
   // Externally managed: unmounting this view never stops the chat.
-  const { messages, status } = useChat<AskMojiUIMessage>({ chat });
+  const { messages, status } = useChat<AskMojiUIMessage>({
+    chat,
+    throttle: CHAT_RENDER_THROTTLE_MS,
+  });
 
   const streaming = status === 'submitted' || status === 'streaming';
   const answering = streaming || snapshot.serverInFlight;
@@ -364,8 +368,12 @@ function ChatView({
     const el = bodyRef.current;
     if (!el) return;
     el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
-    atBottomRef.current = true;
-    setAtBottom(true);
+    // Only on a change: this runs from a layout effect on every streamed
+    // update, where a state update is a synchronous nested render each time.
+    if (!atBottomRef.current) {
+      atBottomRef.current = true;
+      setAtBottom(true);
+    }
   }, []);
   useLayoutEffect(() => {
     if (atBottomRef.current) toBottom(false);

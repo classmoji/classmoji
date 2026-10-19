@@ -125,6 +125,11 @@ export interface AskMojiControllerOptions {
   ) => Chat<AskMojiUIMessage>;
   pollMs?: number;
   replyTimings?: ReplyTimings;
+  /**
+   * An error that is not fixed copy (`lineForError` shows the generic line
+   * for it): reported, never shown. The app passes a Sentry capture.
+   */
+  onUnexpectedError?: (error: unknown) => void;
 }
 
 interface Conversation {
@@ -178,6 +183,7 @@ export class AskMojiController {
   private readonly viewAs: string | null;
   private readonly zone: () => string | null;
   private readonly createChat: NonNullable<AskMojiControllerOptions['createChat']>;
+  private readonly onUnexpectedError: (error: unknown) => void;
   private readonly pollMs: number;
   private readonly replyTimings: ReplyTimings | undefined;
 
@@ -229,6 +235,7 @@ export class AskMojiController {
     this.createChat = options.createChat ?? (init => new Chat<AskMojiUIMessage>(init));
     this.pollMs = options.pollMs ?? STATE_POLL_MS;
     this.replyTimings = options.replyTimings;
+    this.onUnexpectedError = options.onUnexpectedError ?? (() => {});
   }
 
   // ─── Store protocol (useSyncExternalStore) ────────────────────────────────
@@ -481,6 +488,13 @@ export class AskMojiController {
     }
   }
 
+  /** The line for a failed request or reply (`lineForError`); an unexpected error is reported. */
+  private lineFor(error: unknown): string {
+    const line = lineForError(error);
+    if (line === ASK_MOJI_COPY.ERROR) this.onUnexpectedError(error);
+    return line;
+  }
+
   // ─── Turn end ─────────────────────────────────────────────────────────────
 
   private onTurnEnd(
@@ -505,7 +519,7 @@ export class AskMojiController {
       line = lineForNotice(notice);
       ended = isEndingCode(notice);
     } else if (isError && error) {
-      line = lineForError(error);
+      line = this.lineFor(error);
     }
     if (this.transport.sessionStatus(conv.id) === 'closed') {
       ended = true;
@@ -689,7 +703,7 @@ export class AskMojiController {
       if (isUnavailableRefusal(error)) {
         this.set({ phase: 'unavailable', line: error.line, staffLine: error.staffLine });
       } else {
-        this.set({ phase: 'ended', line: lineForError(error) });
+        this.set({ phase: 'ended', line: this.lineFor(error) });
       }
     } finally {
       this.updatePolling();
@@ -763,7 +777,7 @@ export class AskMojiController {
         this.endRequest();
       }
     } catch (error) {
-      const line = lineForError(error);
+      const line = this.lineFor(error);
       this.set({ line: line === ASK_MOJI_COPY.ERROR ? ASK_MOJI_COPY.SEND_FAILED : line });
       return false;
     } finally {
@@ -818,7 +832,7 @@ export class AskMojiController {
         if (isUnavailableRefusal(error)) {
           this.set({ phase: 'unavailable', line: error.line, staffLine: error.staffLine });
         } else {
-          this.set({ line: lineForError(error) });
+          this.set({ line: this.lineFor(error) });
         }
       }
     } finally {

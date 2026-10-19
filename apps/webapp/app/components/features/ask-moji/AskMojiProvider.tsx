@@ -8,6 +8,7 @@ import {
 } from 'react';
 import { TriggerChatTransport } from '@trigger.dev/sdk/chat';
 import { browserTimeZone } from '~/utils/browserTimeZone';
+import { captureHandledError } from '~/utils/sentry.client';
 import { createAskMojiApi } from './api';
 import { AskMojiController, type AskMojiSessionTransport } from './controller';
 
@@ -48,6 +49,7 @@ export function AskMojiProvider({
       transport: transport as unknown as AskMojiSessionTransport,
       viewAs,
       browserTimeZone,
+      onUnexpectedError: error => captureHandledError(error, 'ask-moji'),
     });
   });
 

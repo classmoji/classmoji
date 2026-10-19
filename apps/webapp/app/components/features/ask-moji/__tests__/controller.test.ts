@@ -394,6 +394,48 @@ describe('turn end', () => {
     await vi.waitFor(() => expect(c.getSnapshot().line).toBe(ASK_MOJI_COPY.MCP_UNAVAILABLE));
   });
 
+  it('reports an error that is not copy; allow-listed copy and notices are not reported', async () => {
+    const onUnexpectedError = vi.fn();
+    const c = make({ onUnexpectedError });
+    await openReady(c);
+    api.state.mockResolvedValue(stateOf());
+
+    transport.sendQueue.push(() =>
+      streamOf([
+        { type: 'start', messageId: 'u1' },
+        { type: 'error', errorText: ASK_MOJI_COPY.MCP_UNAVAILABLE },
+      ])
+    );
+    await c.send('Q', null);
+    await vi.waitFor(() => expect(c.getSnapshot().line).toBe(ASK_MOJI_COPY.MCP_UNAVAILABLE));
+    await vi.waitFor(() => expect(c.getSnapshot().chat!.status).toBe('ready'));
+
+    transport.sendQueue.push(() =>
+      streamOf([
+        { type: 'start', messageId: 'u2' },
+        { type: 'data-notice', data: { code: 'PACE' } } as never,
+        { type: 'finish' },
+      ])
+    );
+    await c.send('Q again', null);
+    await vi.waitFor(() => expect(c.getSnapshot().line).toBe(ASK_MOJI_COPY.PACE));
+    await vi.waitFor(() => expect(c.getSnapshot().chat!.status).toBe('ready'));
+    expect(onUnexpectedError).not.toHaveBeenCalled();
+
+    transport.sendQueue.push(() =>
+      streamOf([
+        { type: 'start', messageId: 'u3' },
+        { type: 'error', errorText: 'Maximum update depth exceeded' },
+      ])
+    );
+    await c.send('Q a third time', null);
+    await vi.waitFor(() => expect(c.getSnapshot().line).toBe(ASK_MOJI_COPY.ERROR));
+    expect(onUnexpectedError).toHaveBeenCalledTimes(1);
+    expect((onUnexpectedError.mock.calls[0][0] as Error).message).toBe(
+      'Maximum update depth exceeded'
+    );
+  });
+
   it('a reply that goes quiet is released; a turn that settles unanswered says REPLY_FAILED and gives the question back', async () => {
     const c = make({ replyTimings: { startMs: 30, silenceMs: 30 } });
     const chat = await openReady(c);
