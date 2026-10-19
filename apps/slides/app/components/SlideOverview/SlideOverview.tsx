@@ -7,6 +7,7 @@ import SlideGrid from './SlideGrid';
 import NewStackDropZone from './NewStackDropZone';
 import SlideThumbnail from './SlideThumbnail';
 import type { SlideCollabBadge } from './SlideGrid';
+import { isAskMojiTarget } from '../askMoji/askMojiProtocol';
 
 /**
  * Custom collision detection that tries pointerWithin first,
@@ -152,6 +153,8 @@ export default function SlideOverview({
   // Handle escape key to close
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Escape on the Ask Moji launcher or panel closes that, not the overview.
+      if (isAskMojiTarget(e.target)) return;
       if (e.key === 'Escape') {
         onClose?.();
       }

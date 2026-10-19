@@ -1,16 +1,33 @@
+import { useEffect, useState } from 'react';
 import { useParams } from 'react-router';
 import { Form, Switch, Input, Select, Button, Modal, Badge, Alert, Divider } from 'antd';
 import { IconInfoCircle } from '@tabler/icons-react';
 
 import { namedAction } from 'remix-utils/named-action';
 
-import { ClassmojiService, ClassroomSettingsEntitlementError } from '@classmoji/services';
+import {
+  ClassmojiService,
+  ClassroomSettingsEntitlementError,
+  ClassroomSettingsValidationError,
+} from '@classmoji/services';
 import { ALLOWED_MODELS, isAllowedModel } from '@classmoji/utils/ai-models';
+import { ASK_MOJI_AVAILABILITY_COPY } from '@classmoji/utils/ask-moji/copy';
+import { INSTRUCTIONS_MAX_CHARS } from '@classmoji/utils/ask-moji/limits';
 import { SettingSection } from '~/components';
 import { ActionTypes } from '~/constants';
 import { useGlobalFetcher } from '~/hooks';
-import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
+import {
+  addClassroomAuditLog,
+  assertClassroomAccess,
+  assertClassroomMutationAllowed,
+} from '~/utils/helpers';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
+import { impersonationAuditFields } from '../admin.$class.ask-moji/impersonation.server';
+import {
+  AI_SETTINGS_AUDIT_TOOL,
+  INSTRUCTIONS_ERROR_COPY,
+  isInstructionsErrorCode,
+} from './aiSettingsCopy';
 import { buildLLMSettingsPayload } from './llmSettingsPayload';
 import { getPlatformAIDefaults } from './platformDefaults.server';
 import type { Route } from './+types/route';
@@ -20,6 +37,12 @@ const { Option } = Select;
 /**
  * Per-classroom model choices: standard quizzes, code-aware quizzes, code
  * exploration, Ask Moji. Null (or unset) = the platform default.
+ *
+ * Every one is allow-listed. The chat agents (both quiz runtimes and the
+ * Ask Moji agent) run only allow-listed models (isAllowedModel,
+ * @classmoji/utils/ai-models) and fall back to the platform default for
+ * anything else, so these selects offer only those models and the action
+ * stores nothing else.
  */
 const MODEL_FIELDS = [
   'llm_model',
@@ -28,24 +51,13 @@ const MODEL_FIELDS = [
   'syllabus_bot_model',
 ] as const;
 
-/**
- * The quiz model fields. Both quiz runtimes (the ai-agent and the Trigger.dev
- * quiz tasks) run only allow-listed models (isAllowedModel,
- * @classmoji/utils/ai-models) and fall back to the platform default for
- * anything else, so these selects offer only those models and the action
- * stores nothing else. Ask Moji has no allow-list.
- */
-const QUIZ_MODEL_FIELDS = ['llm_model', 'code_aware_model', 'exploration_model'] as const;
+type ModelField = (typeof MODEL_FIELDS)[number];
 
-type QuizModelField = (typeof QUIZ_MODEL_FIELDS)[number];
-
-const isQuizModelField = (field: string): field is QuizModelField =>
-  (QUIZ_MODEL_FIELDS as readonly string[]).includes(field);
-
-const QUIZ_MODEL_LABELS: Record<QuizModelField, string> = {
+const MODEL_LABELS: Record<ModelField, string> = {
   llm_model: 'Standard quiz model',
   code_aware_model: 'Code-aware quiz model',
   exploration_model: 'Code exploration model',
+  syllabus_bot_model: 'Ask Moji model',
 };
 
 /**
@@ -59,7 +71,10 @@ const EFFORT_FIELDS = [
   'syllabus_bot_effort',
 ] as const;
 
-type SelectField = (typeof MODEL_FIELDS)[number] | (typeof EFFORT_FIELDS)[number];
+type SelectField = ModelField | (typeof EFFORT_FIELDS)[number];
+
+const isModelField = (field: string): field is ModelField =>
+  (MODEL_FIELDS as readonly string[]).includes(field);
 
 const EFFORT_OPTIONS = [
   { value: 'low', label: 'Low' },
@@ -121,6 +136,30 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     ClassmojiService.entitlement.canUseSyllabusBot(classroom.id),
   ]);
 
+  // Whether the Ask Moji switch can be used. On the Trigger runtime
+  // (ASK_MOJI_RUNTIME=trigger) that is askMojiAvailable, where "switched off
+  // for this class" is the one reason the switch itself fixes; on the AI agent
+  // runtime it is the agent being configured.
+  const aiAgentAvailable = isAIAgentConfigured();
+  let askMojiToggleAvailable = aiAgentAvailable;
+  let askMojiUnavailableLine: string | null = null;
+  // The one runtime parse (`isAskMojiTriggerRuntime`, through the service).
+  // The instructions exist only on the Trigger runtime: the AI agent never
+  // reads them, so off it the page neither shows nor saves them.
+  const askMojiTrigger = ClassmojiService.askMojiSession.askMojiRuntimeIsTrigger();
+  if (askMojiTrigger) {
+    const availability = await ClassmojiService.askMojiSession.askMojiAvailable({
+      classroomId: classroom.id,
+    });
+    const reason = availability.available ? null : availability.reason;
+    askMojiToggleAvailable = reason === null || reason === 'NOT_ENABLED';
+    // PRO_REQUIRED has the upsell below; NOT_ENABLED is the switch's own state.
+    askMojiUnavailableLine =
+      reason && reason !== 'NOT_ENABLED' && reason !== 'PRO_REQUIRED'
+        ? ASK_MOJI_AVAILABILITY_COPY[reason]
+        : null;
+  }
+
   // Dynamically fetch available models
   const { getAllModels, getModelLabel } = await import('@classmoji/services');
 
@@ -141,7 +180,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   }
 
   // The "Default: X" on each select: what runs when the classroom names
-  // nothing, on whichever runtime serves the quiz.
+  // nothing, on whichever runtime serves it.
   const platformDefaults = getPlatformAIDefaults();
   const defaultLabels = {} as Record<SelectField, string>;
   for (const field of MODEL_FIELDS) {
@@ -151,41 +190,40 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     defaultLabels[field] = effortLabel(platformDefaults[field]);
   }
 
-  // The quiz selects offer only the models the quiz runtimes run.
-  const quizModels = models.anthropic.filter(model => isAllowedModel(model.value));
+  // The model selects offer only the models the agents run.
+  const allowedModels = models.anthropic.filter(model => isAllowedModel(model.value));
 
   // What the selects show. Without a classroom key every AI call runs on the
   // platform defaults, whatever is stored (a value left from before the key was
   // removed, or copied in by a config import), so the selects show the
   // defaults too. The stored values are kept and apply again once a key is
-  // added. A stored quiz model off the allow-list runs as the platform default
-  // as well, on either quiz runtime, so its select shows the default.
+  // added. A stored model off the allow-list runs as the platform default as
+  // well, so its select shows the default.
   const selectValues = {} as Record<SelectField, string | null>;
   for (const field of [...MODEL_FIELDS, ...EFFORT_FIELDS]) {
     const stored = apiKey ? (settings?.[field] ?? null) : null;
-    selectValues[field] =
-      stored && isQuizModelField(field) && !isAllowedModel(stored) ? null : stored;
+    selectValues[field] = stored && isModelField(field) && !isAllowedModel(stored) ? null : stored;
   }
 
-  // Return classroom with settings (excluding sensitive API keys). Without a
-  // key the stored model and effort choices are not sent either (selectValues
-  // is all null then): nothing shows them, and they stay in the database for
-  // when a key is added.
-  const safeSettings = settings
-    ? {
-        ...settings,
-        ...(apiKey ? {} : selectValues),
-        anthropic_api_key: undefined,
-        openai_api_key: undefined,
-        has_anthropic_key: Boolean(settings.anthropic_api_key),
-      }
-    : null;
+  // What the page reads, field by field: the two switches, whether there is a
+  // key (never the key), and the owner's Ask Moji instructions (this page is
+  // owner-only). The model and effort choices go as selectValues.
+  const pageSettings = {
+    quizzes_enabled: settings?.quizzes_enabled ?? null,
+    syllabus_bot_enabled: settings?.syllabus_bot_enabled ?? null,
+    has_anthropic_key: Boolean(apiKey),
+    syllabus_bot_instructions: askMojiTrigger
+      ? (settings?.syllabus_bot_instructions ?? null)
+      : null,
+  };
 
   return {
-    organization: { ...classroom, settings: safeSettings },
-    availableModels: models,
-    quizModels,
-    aiAgentAvailable: isAIAgentConfigured(),
+    settings: pageSettings,
+    allowedModels,
+    aiAgentAvailable,
+    askMojiToggleAvailable,
+    askMojiUnavailableLine,
+    askMojiInstructionsShown: askMojiTrigger,
     quizzesProRequired: !quizzesEntitlement.allowed,
     askMojiProRequired: !askMojiEntitlement.allowed,
     defaultLabels,
@@ -195,10 +233,12 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
 const SettingsAI = ({ loaderData }: Route.ComponentProps) => {
   const {
-    organization,
-    availableModels,
-    quizModels,
+    settings,
+    allowedModels,
     aiAgentAvailable,
+    askMojiToggleAvailable,
+    askMojiUnavailableLine,
+    askMojiInstructionsShown,
     quizzesProRequired,
     askMojiProRequired,
     defaultLabels,
@@ -208,14 +248,16 @@ const SettingsAI = ({ loaderData }: Route.ComponentProps) => {
 
   const { fetcher } = useGlobalFetcher();
 
-  const settings = (organization.settings || {}) as Record<string, unknown>;
   // Use the computed flag from the loader (API key is never sent to client)
   const hasAnthropicKey = Boolean(settings.has_anthropic_key);
 
-  // Get model lists from loader data: the quiz selects offer quizModels (the
-  // allow-listed subset), Ask Moji every model.
-  const anthropicModels = availableModels?.anthropic || [];
-  const quizModelOptions = quizModels || [];
+  // The model selects offer the allow-listed models only.
+  const modelOptions = allowedModels || [];
+
+  const savedInstructions = settings.syllabus_bot_instructions ?? '';
+  const [instructions, setInstructions] = useState(savedInstructions);
+  // After a save the loader returns the stored (trimmed) text: show that.
+  useEffect(() => setInstructions(savedInstructions), [savedInstructions]);
 
   const submit = (payload: Record<string, string | boolean | null>) => {
     fetcher!.submit(payload, {
@@ -231,6 +273,10 @@ const SettingsAI = ({ loaderData }: Route.ComponentProps) => {
 
   const handleAskMojiToggle = (checked: boolean) => {
     submit({ _action: 'saveAskMojiSettings', syllabus_bot_enabled: checked });
+  };
+
+  const handleSaveInstructions = () => {
+    submit({ _action: 'saveAskMojiInstructions', syllabus_bot_instructions: instructions });
   };
 
   const handleSaveLLMSettings = (values: Record<string, unknown>) => {
@@ -250,15 +296,13 @@ const SettingsAI = ({ loaderData }: Route.ComponentProps) => {
     });
   };
 
-  const modelSelect = (field: (typeof MODEL_FIELDS)[number]) => (
+  const modelSelect = (field: ModelField) => (
     <Select allowClear disabled={!hasAnthropicKey} placeholder={`Default: ${defaultLabels[field]}`}>
-      {(isQuizModelField(field) ? quizModelOptions : anthropicModels).map(
-        (model: { value: string; label: string }) => (
-          <Option key={model.value} value={model.value}>
-            {model.label}
-          </Option>
-        )
-      )}
+      {modelOptions.map((model: { value: string; label: string }) => (
+        <Option key={model.value} value={model.value}>
+          {model.label}
+        </Option>
+      ))}
     </Select>
   );
 
@@ -305,8 +349,8 @@ const SettingsAI = ({ loaderData }: Route.ComponentProps) => {
   // (entitlement is checked when serving, never written into settings), so it
   // applies again once the classroom is back on Pro. Unset quizzes_enabled is
   // the schema default, on; unset syllabus_bot_enabled is off.
-  const quizzesOn = !quizzesProRequired && (organization.settings?.quizzes_enabled ?? true);
-  const askMojiOn = !askMojiProRequired && (organization.settings?.syllabus_bot_enabled ?? false);
+  const quizzesOn = !quizzesProRequired && (settings.quizzes_enabled ?? true);
+  const askMojiOn = !askMojiProRequired && (settings.syllabus_bot_enabled ?? false);
 
   const subheading = (text: string) => (
     <h3 className="mb-3 mt-2 text-sm font-semibold text-ink-1">{text}</h3>
@@ -433,11 +477,18 @@ const SettingsAI = ({ loaderData }: Route.ComponentProps) => {
             <Switch
               checked={askMojiOn}
               onChange={handleAskMojiToggle}
-              disabled={!aiAgentAvailable || askMojiProRequired}
+              disabled={!askMojiToggleAvailable || askMojiProRequired}
             />
           </Form.Item>
 
           {askMojiProRequired && proUpsell('Ask Moji')}
+
+          {askMojiUnavailableLine && (
+            <div className="mb-6 flex items-start gap-2 rounded-lg bg-stone-50 p-3 text-sm text-gray-600 dark:bg-neutral-800 dark:text-gray-400">
+              <IconInfoCircle size={16} className="mt-0.5 shrink-0" />
+              <span>{askMojiUnavailableLine}</span>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-2 xl:grid-cols-3">
             <Form.Item label="Model" name="syllabus_bot_model">
@@ -451,6 +502,35 @@ const SettingsAI = ({ loaderData }: Route.ComponentProps) => {
           <Button type="primary" htmlType="submit" disabled={!hasAnthropicKey}>
             Save
           </Button>
+
+          {/* Not a Form.Item: the instructions save on their own, never with
+              the model and effort choices above. Only on the Trigger
+              runtime, the one that reads them. */}
+          {askMojiInstructionsShown && (
+            <div className="mt-8">
+              {subheading('Instructions')}
+              <label htmlFor="syllabus_bot_instructions" className="mb-2 block text-sm text-ink-2">
+                Classroom instructions for Ask Moji
+              </label>
+              <Input.TextArea
+                id="syllabus_bot_instructions"
+                value={instructions}
+                onChange={event => setInstructions(event.target.value)}
+                maxLength={INSTRUCTIONS_MAX_CHARS}
+                showCount
+                autoSize={{ minRows: 4, maxRows: 14 }}
+              />
+              <p className="mt-6 mb-3 text-xs text-ink-3">Only owners of this class see these.</p>
+              <Button
+                type="primary"
+                htmlType="button"
+                onClick={handleSaveInstructions}
+                disabled={instructions === savedInstructions}
+              >
+                Save instructions
+              </Button>
+            </div>
+          )}
         </SettingSection>
       </Form>
 
@@ -473,7 +553,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
   // Authorize: only OWNER can modify AI settings
-  const { classroom, membership } = await assertClassroomAccess({
+  const { userId, classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER'],
@@ -488,6 +568,27 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   const currentSettings = await ClassmojiService.classroom.getClassroomSettingsForServer(
     classroom.id
   );
+
+  // Every save is audited once it has been written: the field names only
+  // (never a value: the key is a secret, the instructions are owner-only), and
+  // for the instructions their length. One row per save (`dedupe: false`):
+  // two saves inside the service's dedup window are two changes.
+  const audit = async (fields: string[], extra: Record<string, unknown> = {}) =>
+    addClassroomAuditLog({
+      dedupe: false,
+      classroomId: classroom.id,
+      userId,
+      role: membership!.role,
+      action: 'UPDATE',
+      resourceType: 'SETTINGS',
+      resourceId: classroom.id,
+      metadata: {
+        tool: AI_SETTINGS_AUDIT_TOOL,
+        fields,
+        ...extra,
+        ...(await impersonationAuditFields(request)),
+      },
+    });
 
   // Create FormData with the action from the JSON
   const formData = new FormData();
@@ -513,6 +614,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         }
         throw error;
       }
+      await audit(['quizzes_enabled']);
       return {
         success: 'Quiz settings updated',
         action: ActionTypes.SAVE_QUIZ_SETTINGS,
@@ -537,8 +639,51 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         }
         throw error;
       }
+      await audit(['syllabus_bot_enabled']);
       return {
         success: 'Ask Moji settings updated',
+        action: ActionTypes.SAVE_QUIZ_SETTINGS,
+      };
+    },
+
+    async saveAskMojiInstructions() {
+      // Only on the Trigger runtime (the page shows the field nowhere else).
+      if (!ClassmojiService.askMojiSession.askMojiRuntimeIsTrigger()) {
+        return {
+          error: INSTRUCTIONS_ERROR_COPY.INSTRUCTIONS_UNAVAILABLE,
+          action: ActionTypes.SAVE_QUIZ_SETTINGS,
+        };
+      }
+      // Only this field. Validated by updateSettings (trimmed, blank clears,
+      // at most INSTRUCTIONS_MAX_CHARS); a refusal is a fixed line by code.
+      const value = data.syllabus_bot_instructions;
+      if (value !== null && typeof value !== 'string') {
+        return {
+          error: INSTRUCTIONS_ERROR_COPY.INSTRUCTIONS_INVALID,
+          action: ActionTypes.SAVE_QUIZ_SETTINGS,
+        };
+      }
+      try {
+        await ClassmojiService.classroom.updateSettings(classroom.id, {
+          syllabus_bot_instructions: value,
+        });
+      } catch (error: unknown) {
+        if (
+          error instanceof ClassroomSettingsValidationError &&
+          isInstructionsErrorCode(error.code)
+        ) {
+          return {
+            error: INSTRUCTIONS_ERROR_COPY[error.code],
+            action: ActionTypes.SAVE_QUIZ_SETTINGS,
+          };
+        }
+        throw error;
+      }
+      await audit(['syllabus_bot_instructions'], {
+        instructions_length: typeof value === 'string' ? value.trim().length : 0,
+      });
+      return {
+        success: 'Ask Moji instructions saved',
         action: ActionTypes.SAVE_QUIZ_SETTINGS,
       };
     },
@@ -557,11 +702,11 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         const value = data[field];
         // '' and null both mean "platform default", stored as null.
         const model = typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
-        // Both quiz runtimes fall back to the platform default for a model off
-        // the allow-list, so one is refused rather than stored and ignored.
-        if (model && isQuizModelField(field) && !isAllowedModel(model)) {
+        // The agents fall back to the platform default for a model off the
+        // allow-list, so one is refused rather than stored and ignored.
+        if (model && !isAllowedModel(model)) {
           return {
-            error: `${QUIZ_MODEL_LABELS[field]} must be one of ${ALLOWED_MODELS.join(', ')}, or empty for the default.`,
+            error: `${MODEL_LABELS[field]} must be one of ${ALLOWED_MODELS.join(', ')}, or empty for the default.`,
             action: ActionTypes.SAVE_QUIZ_SETTINGS,
           };
         }
@@ -605,7 +750,11 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         };
       }
 
-      await ClassmojiService.classroom.updateSettings(classroom.id, updateData);
+      // Nothing to change: no write and no audit row.
+      if (Object.keys(updateData).length > 0) {
+        await ClassmojiService.classroom.updateSettings(classroom.id, updateData);
+        await audit(Object.keys(updateData));
+      }
       return {
         success: 'AI settings saved',
         action: ActionTypes.SAVE_QUIZ_SETTINGS,
@@ -615,7 +764,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     async clearLLMSettings() {
       // Clear the key and every model and effort choice. Not the Enable
       // switches: quizzes_enabled and syllabus_bot_enabled stay as they are.
-      await ClassmojiService.classroom.updateSettings(classroom.id, {
+      const cleared = {
         llm_provider: null,
         llm_model: null,
         llm_temperature: null,
@@ -628,7 +777,9 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         exploration_effort: null,
         syllabus_bot_model: null,
         syllabus_bot_effort: null,
-      });
+      };
+      await ClassmojiService.classroom.updateSettings(classroom.id, cleared);
+      await audit(Object.keys(cleared));
       return {
         success: 'AI settings cleared. Using system defaults.',
         action: ActionTypes.SAVE_QUIZ_SETTINGS,

@@ -94,6 +94,13 @@ interface ClassroomAuditParams {
   resourceType: string;
   resourceId?: string | number | null;
   metadata?: Record<string, unknown> | null;
+  /**
+   * `false`: every call is its own row, even one the audit service's 5-second
+   * dedup window would fold into the previous one (two saves of the same
+   * settings in a row are two changes). Passed to `audit.create` as its
+   * options argument, the only place the service reads it.
+   */
+  dedupe?: boolean;
 }
 
 /**
@@ -115,6 +122,7 @@ const writeAuditRow = async ({
   resourceType,
   resourceId = null,
   metadata = null,
+  dedupe,
 }: ClassroomAuditParams) => {
   const auditData: {
     classroom_id: string | undefined;
@@ -142,9 +150,9 @@ const writeAuditRow = async ({
   }
 
   try {
-    await ClassmojiService.audit.create(
-      auditData as Parameters<typeof ClassmojiService.audit.create>[0]
-    );
+    const row = auditData as Parameters<typeof ClassmojiService.audit.create>[0];
+    if (dedupe === false) await ClassmojiService.audit.create(row, { dedupe: false });
+    else await ClassmojiService.audit.create(row);
   } catch (error: unknown) {
     console.error('[audit] Failed to write audit log', error);
   }

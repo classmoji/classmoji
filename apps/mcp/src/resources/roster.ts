@@ -36,7 +36,7 @@
 
 import { ClassmojiService } from '@classmoji/services';
 import type { ResourceDefinition } from '../mcp/registry.ts';
-import { MEMBER, TEACHING_TEAM, classroomCtx, publicUser } from './shape.ts';
+import { MEMBER, TEACHING_TEAM, classroomCtx, isStaff, publicUser } from './shape.ts';
 
 interface RosterRow {
   id: string;
@@ -60,6 +60,7 @@ export const rosterResource: ResourceDefinition = {
     'fields and per-student letter_grade/comment overrides.',
   scope: 'read',
   roles: TEACHING_TEAM,
+  auditRead: { resourceType: 'STUDENT_ROSTER' },
   handler: async (_vars, ctx) => {
     const { classroomId, role } = classroomCtx(ctx);
     const students = (await ClassmojiService.classroomMembership.findUsersByRole(
@@ -108,6 +109,8 @@ export const teamsResource: ResourceDefinition = {
     'Students see the teams they belong to; the teaching team sees all teams.',
   scope: 'read',
   roles: MEMBER,
+  // Staff see every team and its members; a student reads only their own teams.
+  auditRead: { resourceType: 'TEAMS', when: classroom => isStaff(classroom.role) },
   handler: async (_vars, ctx) => {
     const { classroomId, role } = classroomCtx(ctx);
     const teams = (await ClassmojiService.team.findByClassroomId(classroomId)) as TeamRow[];

@@ -124,6 +124,21 @@ export const create = async (data: AuditLogData, { dedupe = true }: AuditCreateO
   // are two records, so the block joins the key.
   const payloadBlockId = payload?.block_id;
 
+  // The client that made the call (data.client_id — the MCP's OAuth client).
+  // The same read through two clients inside the window (an assistant and a
+  // personal MCP client) are two records, so the client joins the key.
+  const payloadClientId = payload?.client_id;
+
+  // The rating the payload set (data.rating — e.g. a feedback review filtered
+  // to thumbs-down, then to thumbs-up). Two reads or writes that differ only in
+  // the rating are two records, so it joins the key.
+  const payloadRating = payload?.rating;
+
+  // A caller-built key for whatever else distinguishes one call from the next
+  // (data.filter_key — e.g. the ids a read was filtered by). Opaque here: two
+  // rows with different keys never coalesce; the same key twice still dedups.
+  const payloadFilterKey = payload?.filter_key;
+
   // Each extra JSON-path filter needs its own `data` clause, and two cannot sit
   // beside each other in one object — they go under `AND`, which Prisma
   // combines conjunctively with the rest.
@@ -135,6 +150,15 @@ export const create = async (data: AuditLogData, { dedupe = true }: AuditCreateO
       : []),
     ...(typeof payloadBlockId === 'string'
       ? [{ data: { path: ['block_id'], equals: payloadBlockId } }]
+      : []),
+    ...(typeof payloadClientId === 'string'
+      ? [{ data: { path: ['client_id'], equals: payloadClientId } }]
+      : []),
+    ...(typeof payloadRating === 'string'
+      ? [{ data: { path: ['rating'], equals: payloadRating } }]
+      : []),
+    ...(typeof payloadFilterKey === 'string'
+      ? [{ data: { path: ['filter_key'], equals: payloadFilterKey } }]
       : []),
   ];
 
@@ -154,7 +178,12 @@ export const create = async (data: AuditLogData, { dedupe = true }: AuditCreateO
     },
   });
 
-  if (!recentLog) {
+  // An impersonated action and the person's own never coalesce, in either
+  // order (data.impersonated_by): checked on the row found, because a key
+  // filter only narrows when the new payload carries the field.
+  const recentImpersonator = (recentLog?.data as Record<string, unknown> | null)?.impersonated_by;
+  const payloadImpersonator = payload?.impersonated_by;
+  if (!recentLog || (recentImpersonator ?? null) !== (payloadImpersonator ?? null)) {
     return getPrisma().auditLog.create({ data: auditData });
   }
 

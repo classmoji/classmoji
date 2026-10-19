@@ -24,7 +24,10 @@ import { buildMcpServer } from '../mcp/registry.ts';
 import { registerAllResources } from '../resources/index.ts';
 import { canonicalTimeZone } from '@classmoji/utils';
 import { normalizeAgentSession } from '@classmoji/collab';
+import { ASK_MOJI_CLIENT_ID } from '@classmoji/auth/mcp-token';
+import type { Role } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
+import { parseRoleCeiling, ROLE_CEILING_VALUES } from '../authz/pure.ts';
 
 /**
  * The caller's rendering-zone hint. Validated against Intl and dropped when
@@ -35,6 +38,59 @@ export const TIMEZONE_HEADER = 'x-classmoji-timezone';
 
 export function timezoneHintFrom(headers: Headers): string | null {
   return canonicalTimeZone(headers.get(TIMEZONE_HEADER));
+}
+
+/**
+ * Ask Moji's role ceiling: the view (`viewAs`) the chat was opened in, so a
+ * user who holds several roles resolves at or below it. Read only from the
+ * Ask Moji client; every other client's header is ignored, whatever its value.
+ * Unlike the zone hint it changes authorization, so a value from Ask Moji
+ * that is not exactly one role is refused instead of dropped.
+ */
+export const ROLE_CEILING_HEADER = 'x-classmoji-role-ceiling';
+
+export type RoleCeilingResult = { ok: true; ceiling: Role | null } | { ok: false; message: string };
+
+export function roleCeilingFrom(headers: Headers, clientId: string | null): RoleCeilingResult {
+  if (clientId !== ASK_MOJI_CLIENT_ID) return { ok: true, ceiling: null };
+  const value = headers.get(ROLE_CEILING_HEADER);
+  if (value === null) return { ok: true, ceiling: null };
+  const ceiling = parseRoleCeiling(value);
+  if (ceiling) return { ok: true, ceiling };
+  return {
+    ok: false,
+    message: `Invalid X-Classmoji-Role-Ceiling header: expected one of ${ROLE_CEILING_VALUES.join(', ')}`,
+  };
+}
+
+/**
+ * Who is viewing as the user, when an Ask Moji conversation runs under
+ * impersonation: the actor's user id, which the Ask Moji task sends on every
+ * request of such a conversation. Read only from the Ask Moji client, like the
+ * role ceiling; every other client's header is ignored, whatever its value.
+ * It is written into audit rows, so a value from Ask Moji that is not a plain
+ * id is refused instead of dropped.
+ */
+export const IMPERSONATED_BY_HEADER = 'x-classmoji-impersonated-by';
+
+const IMPERSONATED_BY_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+export type ImpersonatedByResult =
+  | { ok: true; impersonatedBy: string | null }
+  | { ok: false; message: string };
+
+export function impersonatedByFrom(
+  headers: Headers,
+  clientId: string | null
+): ImpersonatedByResult {
+  if (clientId !== ASK_MOJI_CLIENT_ID) return { ok: true, impersonatedBy: null };
+  const value = headers.get(IMPERSONATED_BY_HEADER);
+  if (value === null) return { ok: true, impersonatedBy: null };
+  if (IMPERSONATED_BY_PATTERN.test(value)) return { ok: true, impersonatedBy: value };
+  return {
+    ok: false,
+    message: 'Invalid X-Classmoji-Impersonated-By header: expected a user id',
+  };
 }
 
 /** The Streamable HTTP session header. */
@@ -92,9 +148,10 @@ export default async function mcpRoutes(fastify: FastifyInstance) {
   registerAllResources();
 
   fastify.post('/mcp', async (request, reply) => {
+    let headers: Headers;
     let viewer;
     try {
-      const headers = toFetchHeaders(request);
+      headers = toFetchHeaders(request);
       viewer = {
         ...(await resolveViewer(headers)),
         timezoneHint: timezoneHintFrom(headers),
@@ -105,6 +162,27 @@ export default async function mcpRoutes(fastify: FastifyInstance) {
       if (!(error instanceof UnauthorizedError)) request.log.error(error);
       return sendUnauthorized(reply, message);
     }
+
+    // The ceiling and the impersonation actor depend on which client the
+    // token was issued to, so they are read after the token is resolved.
+    const roleCeiling = roleCeilingFrom(headers, viewer.clientId);
+    if (!roleCeiling.ok) {
+      return reply.status(400).send({
+        jsonrpc: '2.0',
+        error: { code: -32600, message: roleCeiling.message },
+        id: null,
+      });
+    }
+    viewer.roleCeiling = roleCeiling.ceiling;
+    const impersonatedBy = impersonatedByFrom(headers, viewer.clientId);
+    if (!impersonatedBy.ok) {
+      return reply.status(400).send({
+        jsonrpc: '2.0',
+        error: { code: -32600, message: impersonatedBy.message },
+        id: null,
+      });
+    }
+    viewer.impersonatedBy = impersonatedBy.impersonatedBy;
 
     const server = buildMcpServer(viewer);
     const transport = new StreamableHTTPServerTransport({

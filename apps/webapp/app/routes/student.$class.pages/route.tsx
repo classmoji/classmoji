@@ -5,6 +5,7 @@ import type { Route } from './+types/route';
 import getPrisma from '@classmoji/database';
 import { requireClassroomMember } from '~/utils/routeAuth.server';
 import { loadPagesNav } from '~/utils/pagesNav.server';
+import { useAskMojiViewing } from '~/components/features/ask-moji/viewing';
 import {
   PageViewPanel,
   inAppPageUrl,
@@ -74,6 +75,12 @@ const StudentPages = ({ loaderData, params }: Route.ComponentProps) => {
   const onNav = useCallback(
     (message: PageNavMessage) => setCurrent({ pageId: message.pageId, title: message.title || '' }),
     []
+  );
+  // What the docked reader shows, as it moves through the hub.
+  useAskMojiViewing(
+    current
+      ? { kind: 'page', id: current.pageId, title: current.title || homePage?.title || '' }
+      : null
   );
 
   const Title = (

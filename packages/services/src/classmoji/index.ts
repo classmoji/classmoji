@@ -86,6 +86,13 @@ import * as quizAssignmentService from './quizAssignment.service.ts';
 import * as quizAttemptService from './quizAttempt.service.ts';
 import * as quizSourceMaterialService from './quizSourceMaterial.service.ts';
 import * as quizChatService from './quizChat.service.ts';
+import * as askMojiChatService from './askMojiChat.service.ts';
+import * as askMojiViewingService from './askMojiViewing.service.ts';
+import * as askMojiFeedbackService from './askMojiFeedback.service.ts';
+import * as askMojiInsightsService from './askMojiInsights.service.ts';
+import * as askMojiSessionService from './askMojiSession.service.ts';
+import * as classroomStudentsService from './classroomStudents.ts';
+import * as chatSharedService from './chatShared.ts';
 import * as studentCourseworkService from './studentCoursework.service.ts';
 import * as quizGradingService from './quizGrading.service.ts';
 import * as quizGradeItemsService from './quizGradeItems.service.ts';
@@ -182,6 +189,25 @@ const ClassmojiService = {
   // turn admission and conversation storage, and the locked, fenced,
   // journaled grading writes their tools make.
   quizChat: quizChatService,
+  // Ask Moji served as a chat agent (the `ask-moji` Trigger task): session
+  // start and reuse, turn admission and conversation storage, keyed by the
+  // conversation id (type SYLLABUS_BOT, `context.grant`).
+  askMojiChat: askMojiChatService,
+  // What an Ask Moji message says is open, resolved against the classroom and
+  // the asker's acting role (R9).
+  askMojiViewing: askMojiViewingService,
+  // Thumbs up / down on Ask Moji answers, by the conversation's owner.
+  askMojiFeedback: askMojiFeedbackService,
+  // Owners' and teachers' usage view, feedback review and one rated exchange.
+  askMojiInsights: askMojiInsightsService,
+  // The webapp routes' one entry point: availability, start and reuse, the
+  // Trigger session, tokens, end and ratings, audited.
+  askMojiSession: askMojiSessionService,
+  // A classroom's current students and teaching team (staff views count these).
+  classroomStudents: classroomStudentsService,
+  // What every chat agent's storage shares: the chat grant rule, the
+  // classroom mutation rule, the pace, the message-id pattern.
+  chatShared: chatSharedService,
   quizGrading: quizGradingService,
   // Quiz grades as engine items (`GradedItem`), batched for a classroom's
   // students: what every grade total adds for quizzes.

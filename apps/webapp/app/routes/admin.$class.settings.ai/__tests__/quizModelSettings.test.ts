@@ -1,11 +1,11 @@
 /**
- * Quiz models on AI settings (llm_model, code_aware_model, exploration_model).
- * Both quiz runtimes (the ai-agent and the Trigger.dev quiz tasks) run only
- * allow-listed models (isAllowedModel, @classmoji/utils/ai-models) and fall
- * back to the platform default for any other, so:
- *   - the quiz selects offer only allow-listed models; Ask Moji's offers every
- *     model (it has no allow-list);
- *   - a stored quiz model off the list shows as the default it runs as;
+ * Models on AI settings (llm_model, code_aware_model, exploration_model,
+ * syllabus_bot_model). The chat agents (both quiz runtimes and the Ask Moji
+ * agent) run only allow-listed models (isAllowedModel,
+ * @classmoji/utils/ai-models) and fall back to the platform default for any
+ * other, so:
+ *   - every model select offers only allow-listed models;
+ *   - a stored model off the list shows as the default it runs as;
  *   - the action refuses one, so the page and the API cannot store a model the
  *     runtimes ignore.
  */
@@ -26,6 +26,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: (...a: unknown[]) => mocks.assertClassroomAccess(...a),
   assertClassroomMutationAllowed: vi.fn(),
+  addClassroomAuditLog: vi.fn(),
+}));
+vi.mock('~/routes/admin.$class.ask-moji/impersonation.server', () => ({
+  impersonationAuditFields: async () => ({}),
 }));
 
 vi.mock('@classmoji/services', () => ({
@@ -38,8 +42,13 @@ vi.mock('@classmoji/services', () => ({
       canUseSyllabusBot: (...a: unknown[]) => mocks.canUseSyllabusBot(...a),
       canUseQuizzes: (...a: unknown[]) => mocks.canUseQuizzes(...a),
     },
+    askMojiSession: {
+      askMojiRuntimeIsTrigger: () => false,
+      askMojiAvailable: vi.fn(),
+    },
   },
   ClassroomSettingsEntitlementError: mocks.EntitlementError,
+  ClassroomSettingsValidationError: class ClassroomSettingsValidationError extends Error {},
   getAllModels: (...a: unknown[]) => mocks.getAllModels(...a),
   getModelLabel: (id: string) => `label:${id}`,
 }));
@@ -50,7 +59,12 @@ vi.mock('~/hooks', () => ({ useGlobalFetcher: () => ({ fetcher: null }) }));
 
 const { action, loader } = await import('../route');
 
-const QUIZ_FIELDS = ['llm_model', 'code_aware_model', 'exploration_model'] as const;
+const MODEL_FIELDS = [
+  'llm_model',
+  'code_aware_model',
+  'exploration_model',
+  'syllabus_bot_model',
+] as const;
 
 /** What the live models call returns: allow-listed models and others. */
 const LIVE_MODELS = [
@@ -98,24 +112,20 @@ beforeEach(() => {
 });
 
 describe('loader: model lists', () => {
-  it('offers the quiz selects only allow-listed models', async () => {
+  it('offers the model selects (Ask Moji included) only allow-listed models', async () => {
     const data = await load();
-    expect(data.quizModels.map(model => model.value)).toEqual([
+    expect(data.allowedModels.map(model => model.value)).toEqual([
       'claude-opus-5-5',
       'claude-sonnet-5-5-20260901',
       'claude-sonnet-5',
       'claude-fable-5-1',
     ]);
-  });
-
-  it("leaves Ask Moji's list whole", async () => {
-    const data = await load();
-    expect(data.availableModels.anthropic).toEqual(LIVE_MODELS);
+    expect(data).not.toHaveProperty('availableModels');
   });
 });
 
-describe('loader: a stored quiz model off the allow-list', () => {
-  it.each(QUIZ_FIELDS)('shows the default for %s, not the stored model', async field => {
+describe('loader: a stored model off the allow-list', () => {
+  it.each(MODEL_FIELDS)('shows the default for %s, not the stored model', async field => {
     mocks.getClassroomSettingsForServer.mockResolvedValue({
       anthropic_api_key: 'sk-ant-classroom',
       [field]: HAIKU,
@@ -135,24 +145,25 @@ describe('loader: a stored quiz model off the allow-list', () => {
     expect(data.selectValues.exploration_model).toBe('claude-sonnet-5-5-20260901');
   });
 
-  it("keeps Ask Moji's stored model, which its runtime runs", async () => {
+  it('keeps an allow-listed stored Ask Moji model', async () => {
     mocks.getClassroomSettingsForServer.mockResolvedValue({
       anthropic_api_key: 'sk-ant-classroom',
-      syllabus_bot_model: HAIKU,
+      syllabus_bot_model: 'claude-fable-5',
     });
     const data = await load();
-    expect(data.selectValues.syllabus_bot_model).toBe(HAIKU);
+    expect(data.selectValues.syllabus_bot_model).toBe('claude-fable-5');
   });
 });
 
-describe('saveLLMSettings: quiz models', () => {
+describe('saveLLMSettings: models', () => {
   const ERRORS = {
     llm_model: 'Standard quiz model',
     code_aware_model: 'Code-aware quiz model',
     exploration_model: 'Code exploration model',
+    syllabus_bot_model: 'Ask Moji model',
   } as const;
 
-  it.each(QUIZ_FIELDS)('refuses Haiku for %s and writes nothing', async field => {
+  it.each(MODEL_FIELDS)('refuses Haiku for %s and writes nothing', async field => {
     const result = await save({ question_effort: 'high', [field]: HAIKU });
     expect(result.error).toBe(
       `${ERRORS[field]} must be one of ${ALLOWED_MODELS.join(', ')}, or empty for the default.`
@@ -169,7 +180,7 @@ describe('saveLLMSettings: quiz models', () => {
     }
   );
 
-  it.each(QUIZ_FIELDS)('stores every allow-listed model for %s', async field => {
+  it.each(MODEL_FIELDS)('stores every allow-listed model for %s', async field => {
     for (const model of ALLOWED_MODELS) {
       mocks.updateSettings.mockClear();
       const result = await save({ [field]: model });
@@ -185,17 +196,12 @@ describe('saveLLMSettings: quiz models', () => {
     });
   });
 
-  it('still puts a cleared quiz model back to the default', async () => {
-    await save({ llm_model: null, exploration_model: '' });
+  it('still puts a cleared model back to the default', async () => {
+    await save({ llm_model: null, exploration_model: '', syllabus_bot_model: null });
     expect(mocks.updateSettings).toHaveBeenCalledWith('c1', {
       llm_model: null,
       exploration_model: null,
+      syllabus_bot_model: null,
     });
-  });
-
-  it('stores any model for Ask Moji, whose runtime has no allow-list', async () => {
-    const result = await save({ syllabus_bot_model: HAIKU });
-    expect(result.error).toBeUndefined();
-    expect(mocks.updateSettings).toHaveBeenCalledWith('c1', { syllabus_bot_model: HAIKU });
   });
 });

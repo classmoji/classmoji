@@ -613,6 +613,17 @@ describe('content_get on a page with locked sections', () => {
     expect((payload.locked_sections as Array<{ open: boolean }>).every(s => s.open)).toBe(true);
   });
 
+  it('reveals by real roles under an Ask Moji STUDENT ceiling (D11)', async () => {
+    // The role ceiling narrows the registry's role resolution only; the
+    // locked-section reveal still reads every membership the caller holds, so
+    // a teacher who is also a student keeps the bodies in the student view.
+    rawRows = [indexRow(PAGE, 'Lab 3', 'pages/lab-3/content.json')];
+    const ctx = ctxFor(STAFF_STUDENT, 'STUDENT', { scopes: ['read'] });
+    ctx.viewer = { ...ctx.viewer, roleCeiling: 'STUDENT' };
+    const payload = await getPage(ctx);
+    for (const secret of SECRETS) expect(payload.text).toContain(secret);
+  });
+
   it('shows a pending (not accepted) student titles only, with no id and no unlock hint', async () => {
     rawRows = [indexRow(PAGE, 'Lab 3', 'pages/lab-3/content.json')];
     const payload = await getPage(ctxFor(PENDING, 'STUDENT'));

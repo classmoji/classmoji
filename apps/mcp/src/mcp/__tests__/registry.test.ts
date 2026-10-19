@@ -21,6 +21,7 @@ import type { Viewer } from '../../auth/resolveViewer.ts';
 const findAll = vi.fn();
 const findByClassroomAndUser = vi.fn();
 const getClassroomTimeZone = vi.fn();
+const findByUserId = vi.fn();
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
@@ -29,6 +30,7 @@ vi.mock('@classmoji/services', () => ({
       // Sanitization itself is the webapp service's concern; identity is fine here.
       getClassroomForUI: (c: unknown) => c,
       getTimeZone: (...args: unknown[]) => getClassroomTimeZone(...args),
+      findByUserId: (...args: unknown[]) => findByUserId(...args),
     },
     classroomMembership: {
       findByClassroomAndUser: (...args: unknown[]) => findByClassroomAndUser(...args),
@@ -36,7 +38,8 @@ vi.mock('@classmoji/services', () => ({
   },
 }));
 
-const { buildMcpServer, registerToolDefinition, toolAnnotations } = await import('../registry.ts');
+const { buildMcpServer, registerResourceDefinition, registerToolDefinition, toolAnnotations } =
+  await import('../registry.ts');
 const { resetRateLimits } = await import('../rateLimit.ts');
 
 /** Minimal def stub — toolAnnotations only reads `.scope` and `.annotations`. */
@@ -205,6 +208,39 @@ beforeAll(() => {
     }),
   });
 
+  registerToolDefinition<{ classroom: string }>({
+    name: 't_read_member_role',
+    title: 'Read member role',
+    description: 'read-scope, any-member gated, echoes the resolved role',
+    scope: 'read',
+    roles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
+    inputSchema: { classroom: z.string() },
+    handler: async (_args, ctx) => ({
+      content: [{ type: 'text', text: JSON.stringify({ role: ctx.classroom?.role }) }],
+    }),
+  });
+
+  // Classroom-bound resources for the role-ceiling tests: one teaching-team,
+  // one any-member, both echoing the role the registry resolved.
+  registerResourceDefinition({
+    name: 'r_staff',
+    uriTemplate: 'classmoji-test://{org}/{slug}/staff',
+    title: 'Staff resource',
+    description: 'teaching-team gated',
+    scope: 'read',
+    roles: ['OWNER', 'TEACHER', 'ASSISTANT'],
+    handler: async (_vars, ctx) => ({ role: ctx.classroom?.role }),
+  });
+  registerResourceDefinition({
+    name: 'r_member',
+    uriTemplate: 'classmoji-test://{org}/{slug}/member',
+    title: 'Member resource',
+    description: 'any-member gated',
+    scope: 'read',
+    roles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
+    handler: async (_vars, ctx) => ({ role: ctx.classroom?.role }),
+  });
+
   // Registry defense-in-depth guard for a missing classroom arg: the zod
   // schema must let the argument through so the registry's own check runs.
   registerToolDefinition<{ classroom?: string }>({
@@ -284,6 +320,7 @@ beforeEach(() => {
   findByClassroomAndUser.mockReset();
   getClassroomTimeZone.mockReset();
   getClassroomTimeZone.mockResolvedValue(null);
+  findByUserId.mockReset();
   writeHandlerCalls = 0;
   readerStateCalls = 0;
 });
@@ -496,6 +533,103 @@ describe('classroom-bound tools', () => {
 
     const result = await callTool(client, 't_read_classroom', { classroom: REF });
     expect(result.isError).toBeFalsy();
+  });
+});
+
+// ─── Role ceiling (Ask Moji's view) ──────────────────────────────────────────
+
+describe('role ceiling on tools and resources', () => {
+  const REF = 'dev-org/cs101-fall-2025';
+  const STAFF_URI = 'classmoji-test://dev-org/cs101-fall-2025/staff';
+  const MEMBER_URI = 'classmoji-test://dev-org/cs101-fall-2025/member';
+
+  /** A TA who is also enrolled as a student (unordered findFirst: ASSISTANT first). */
+  function mockTaAndStudent(status = 'ACTIVE') {
+    const held = ['ASSISTANT', 'STUDENT'];
+    findAll.mockResolvedValue([{ ...CLASSROOM_ROW, status }]);
+    findByClassroomAndUser.mockImplementation(
+      async (_classroomId: string, _userId: string, roles: string[] | null) => {
+        const match = roles ? held.find(r => roles.includes(r)) : held[0];
+        return match ? { id: `membership-${match}`, role: match } : null;
+      }
+    );
+    findByUserId.mockResolvedValue(
+      held.map(role => ({
+        ...CLASSROOM_ROW,
+        status,
+        git_organization: { login: 'dev-org' },
+        membership: { role },
+      }))
+    );
+  }
+
+  const cappedViewer = (ceiling: 'STUDENT' | 'ASSISTANT' | 'TEACHER' | 'OWNER' | null) => ({
+    ...makeViewer(['read']),
+    roleCeiling: ceiling,
+  });
+
+  async function readRole(client: Client, uri: string) {
+    const result = await client.readResource({ uri });
+    return JSON.parse(String((result.contents[0] as { text: string }).text)).role;
+  }
+
+  it('without a ceiling the TA+STUDENT resolves as ASSISTANT everywhere', async () => {
+    mockTaAndStudent();
+    const client = await connectClient(cappedViewer(null));
+
+    const tool = await callTool(client, 't_read_member_role', { classroom: REF });
+    expect(JSON.parse(tool.content[0].text).role).toBe('ASSISTANT');
+    expect(await readRole(client, MEMBER_URI)).toBe('ASSISTANT');
+    expect(await readRole(client, STAFF_URI)).toBe('ASSISTANT');
+  });
+
+  it('a STUDENT ceiling resolves the any-member tool as STUDENT', async () => {
+    mockTaAndStudent();
+    const client = await connectClient(cappedViewer('STUDENT'));
+
+    const result = await callTool(client, 't_read_member_role', { classroom: REF });
+    expect(result.isError).toBeFalsy();
+    expect(JSON.parse(result.content[0].text).role).toBe('STUDENT');
+  });
+
+  it('a STUDENT ceiling refuses the teaching-team tool', async () => {
+    mockTaAndStudent();
+    const client = await connectClient(cappedViewer('STUDENT'));
+
+    const denied = parseErrorResult(await callTool(client, 't_read_classroom', { classroom: REF }));
+    expect(denied.error).toBe('forbidden');
+    expect(denied.code).toBe('INSUFFICIENT_ROLE');
+  });
+
+  it('a ceiling at the held role changes nothing', async () => {
+    mockTaAndStudent();
+    const client = await connectClient(cappedViewer('ASSISTANT'));
+
+    const result = await callTool(client, 't_read_classroom', { classroom: REF });
+    expect(JSON.parse(result.content[0].text).role).toBe('ASSISTANT');
+  });
+
+  it('resources/read honours the ceiling: any-member as STUDENT, teaching-team refused', async () => {
+    mockTaAndStudent();
+    const client = await connectClient(cappedViewer('STUDENT'));
+
+    expect(await readRole(client, MEMBER_URI)).toBe('STUDENT');
+    const err = await client.readResource({ uri: STAFF_URI }).catch(e => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as { code?: number }).code).toBe(-32003);
+    expect((err as { data?: { code?: string } }).data?.code).toBe('INSUFFICIENT_ROLE');
+  });
+
+  it('resources/list does not offer a teaching-team URI under a STUDENT ceiling', async () => {
+    mockTaAndStudent();
+    const uncapped = await connectClient(cappedViewer(null));
+    const all = (await uncapped.listResources()).resources.map(r => r.uri);
+    expect(all).toEqual(expect.arrayContaining([STAFF_URI, MEMBER_URI]));
+
+    const capped = await connectClient(cappedViewer('STUDENT'));
+    const listed = (await capped.listResources()).resources.map(r => r.uri);
+    expect(listed).toContain(MEMBER_URI);
+    expect(listed).not.toContain(STAFF_URI);
   });
 });
 

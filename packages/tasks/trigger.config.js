@@ -85,7 +85,7 @@ function requirePrivateAgentsOnDeploy() {
     onBuildStart(context) {
       if (context.target === 'dev' || hasPrivateAgents) return;
       throw new Error(
-        `[private-agents] ${privateAgentsEntry} is missing, so this ${context.target} build would ship without the quiz-attempt and explore-repo tasks. ` +
+        `[private-agents] ${privateAgentsEntry} is missing, so this ${context.target} build would ship without the quiz-attempt and ask-moji chat agents and the explore-repo task. ` +
           'Populate the ai-agent submodule (git submodule update --init apps/ai-agent) at a commit that has src/trigger, then build again.'
       );
     },
