@@ -9,6 +9,23 @@ import type { ChatTransport, UIMessage, UIMessageChunk } from 'ai';
  */
 
 // ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+
+/**
+ * `useChat`'s `throttle` for a chat that reads a Trigger reply stream (Ask
+ * Moji), in milliseconds. The session's reply stream arrives in batches, and
+ * one batch can hold a whole answer (a hundred and more chunks). Unthrottled, useChat
+ * renders once per chunk, synchronously, and a batch that size passes React's
+ * nested-update limit: React throws "Maximum update depth exceeded" (#185),
+ * the chat takes that as the reply's error and cancels the stream before its
+ * `finish`. Throttled, the stream is still read chunk by chunk and callbacks
+ * still run at once; only the renders are spaced, and the final messages are
+ * rendered before the chat turns `ready`.
+ */
+export const CHAT_RENDER_THROTTLE_MS = 50;
+
+// ---------------------------------------------------------------------------
 // Replies the transcript already shows
 // ---------------------------------------------------------------------------
 
