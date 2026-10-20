@@ -1,5 +1,4 @@
 import getPrisma from '@classmoji/database';
-import { Prisma } from '@prisma/client';
 import type { FeedbackCategory, FeedbackStatus } from '@prisma/client';
 import { createNotifications } from './notification.service.ts';
 
@@ -23,6 +22,20 @@ export const FEEDBACK_STATUS_LABELS: Record<FeedbackStatus, string> = {
 export type FeedbackSort = 'top' | 'new' | 'trending';
 
 const LIMITS = { titleMin: 3, titleMax: 120, body: 5000, comment: 3000 };
+
+/**
+ * Per-user budgets for writing to the board: a burst, then tokens back per
+ * hour. Each surface (the webapp route, the MCP) keeps its own buckets with
+ * these numbers; post and comment votes share the `vote` budget.
+ */
+export const FEEDBACK_RATE_LIMITS = {
+  post: { capacity: 5, perHour: 10 },
+  comment: { capacity: 20, perHour: 60 },
+  vote: { capacity: 60, perHour: 600 },
+} as const satisfies Record<string, { capacity: number; perHour: number }>;
+
+export type FeedbackRateKind = keyof typeof FEEDBACK_RATE_LIMITS;
+
 /** The board shows at most this many posts; search narrows it. */
 const LIST_LIMIT = 200;
 
@@ -81,9 +94,6 @@ const publicComment = <
   };
 };
 
-const isUniqueViolation = (error: unknown) =>
-  error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
-
 // ─────────────────── Reading ───────────────────
 
 /**
@@ -91,23 +101,30 @@ const isUniqueViolation = (error: unknown) =>
  * sort in the database. `viewerVoted` is filled in when a viewer is signed in.
  * Completed posts show only when asked for by status: unfiltered, the board
  * lists what is still open, and shipped work lives on the roadmap.
+ * `includeCompleted` lifts that for a search across every status (the MCP).
  */
 export const listPosts = async ({
   sort = 'top',
   status,
   query,
   viewerId,
+  includeCompleted = false,
 }: {
   sort?: FeedbackSort;
   status?: FeedbackStatus | null;
   query?: string;
   viewerId?: string | null;
+  includeCompleted?: boolean;
 }) => {
   const q = query?.trim();
   const posts = await getPrisma().feedbackPost.findMany({
     where: {
       // `not` alone would drop untriaged posts (status null) too.
-      ...(status ? { status } : { OR: [{ status: null }, { status: { not: 'COMPLETED' } }] }),
+      ...(status
+        ? { status }
+        : includeCompleted
+          ? {}
+          : { OR: [{ status: null }, { status: { not: 'COMPLETED' } }] }),
       ...(q
         ? {
             AND: {
@@ -292,43 +309,72 @@ export const createPost = async ({
   });
 };
 
-/** Adds or removes the user's vote. Voting also follows the post. */
-export const togglePostVote = async (postId: string, userId: string) => {
-  const prisma = getPrisma();
-  return prisma.$transaction(async tx => {
-    const post = await tx.feedbackPost.findUnique({ where: { id: postId }, select: { id: true } });
-    if (!post) throw new FeedbackNotFoundError();
+/** The state a vote or follow write asks for: a value, or the opposite of now. */
+type Wanted = boolean | 'toggle';
+
+/**
+ * Puts the user's vote on a post in the wanted state and keeps `vote_count`
+ * in step. The rows written are counted, so a vote added or removed by a
+ * concurrent request moves the count only once. Voting also follows the post.
+ *
+ * The vote is read before the count, and the count read again when a
+ * concurrent request wrote the row first: a vote row and its count change
+ * commit together, so the count returned is never older than the vote seen.
+ */
+const writePostVote = (postId: string, userId: string, wanted: Wanted) =>
+  getPrisma().$transaction(async tx => {
+    const voteCount = async () => {
+      const post = await tx.feedbackPost.findUnique({
+        where: { id: postId },
+        select: { vote_count: true },
+      });
+      if (!post) throw new FeedbackNotFoundError();
+      return post.vote_count;
+    };
     const existing = await tx.feedbackVote.findUnique({
       where: { post_id_user_id: { post_id: postId, user_id: userId } },
       select: { id: true },
     });
-    if (existing) {
-      await tx.feedbackVote.delete({ where: { id: existing.id } });
-      const { vote_count } = await tx.feedbackPost.update({
-        where: { id: postId },
-        data: { vote_count: { decrement: 1 } },
-        select: { vote_count: true },
+    // Also the missing-post check, before anything is written.
+    const current = await voteCount();
+    const voted = wanted === 'toggle' ? !existing : wanted;
+    if (voted === Boolean(existing)) return { voted, voteCount: current };
+
+    let delta: number;
+    if (voted) {
+      ({ count: delta } = await tx.feedbackVote.createMany({
+        data: [{ post_id: postId, user_id: userId }],
+        skipDuplicates: true,
+      }));
+      await tx.feedbackFollow.createMany({
+        data: [{ post_id: postId, user_id: userId }],
+        skipDuplicates: true,
       });
-      return { voted: false, voteCount: vote_count };
+    } else {
+      const { count } = await tx.feedbackVote.deleteMany({
+        where: { post_id: postId, user_id: userId },
+      });
+      delta = -count;
     }
-    try {
-      await tx.feedbackVote.create({ data: { post_id: postId, user_id: userId } });
-    } catch (error) {
-      if (!isUniqueViolation(error)) throw error;
-    }
-    await tx.feedbackFollow.upsert({
-      where: { post_id_user_id: { post_id: postId, user_id: userId } },
-      create: { post_id: postId, user_id: userId },
-      update: {},
-    });
+    if (delta === 0) return { voted, voteCount: await voteCount() };
     const { vote_count } = await tx.feedbackPost.update({
       where: { id: postId },
-      data: { vote_count: { increment: 1 } },
+      data: { vote_count: { increment: delta } },
       select: { vote_count: true },
     });
-    return { voted: true, voteCount: vote_count };
+    return { voted, voteCount: vote_count };
   });
-};
+
+/** Adds or removes the user's vote. Voting also follows the post. */
+export const togglePostVote = (postId: string, userId: string) =>
+  writePostVote(postId, userId, 'toggle');
+
+/**
+ * Sets the user's vote (`voted`), changing nothing when it is already so: a
+ * repeated call never undoes itself. Voting also follows the post.
+ */
+export const setPostVote = (postId: string, userId: string, voted: boolean) =>
+  writePostVote(postId, userId, voted);
 
 /**
  * A comment, or a reply to a top-level comment on the same post. An anonymous
@@ -379,63 +425,80 @@ export const addComment = async ({
   });
 };
 
-export const toggleCommentVote = async (commentId: string, userId: string) => {
-  const prisma = getPrisma();
-  return prisma.$transaction(async tx => {
-    const comment = await tx.feedbackComment.findUnique({
-      where: { id: commentId },
-      select: { id: true },
-    });
-    if (!comment) throw new FeedbackNotFoundError('That comment no longer exists.');
+/** `writePostVote` for a comment's vote; a comment vote follows nothing. */
+const writeCommentVote = (commentId: string, userId: string, wanted: Wanted) =>
+  getPrisma().$transaction(async tx => {
+    const voteCount = async () => {
+      const comment = await tx.feedbackComment.findUnique({
+        where: { id: commentId },
+        select: { vote_count: true },
+      });
+      if (!comment) throw new FeedbackNotFoundError('That comment no longer exists.');
+      return comment.vote_count;
+    };
     const existing = await tx.feedbackCommentVote.findUnique({
       where: { comment_id_user_id: { comment_id: commentId, user_id: userId } },
       select: { id: true },
     });
-    if (existing) {
-      await tx.feedbackCommentVote.delete({ where: { id: existing.id } });
-      const { vote_count } = await tx.feedbackComment.update({
-        where: { id: commentId },
-        data: { vote_count: { decrement: 1 } },
-        select: { vote_count: true },
-      });
-      return { voted: false, voteCount: vote_count };
-    }
-    try {
-      await tx.feedbackCommentVote.create({ data: { comment_id: commentId, user_id: userId } });
-    } catch (error) {
-      if (!isUniqueViolation(error)) throw error;
-    }
+    const current = await voteCount();
+    const voted = wanted === 'toggle' ? !existing : wanted;
+    if (voted === Boolean(existing)) return { voted, voteCount: current };
+
+    const { count } = voted
+      ? await tx.feedbackCommentVote.createMany({
+          data: [{ comment_id: commentId, user_id: userId }],
+          skipDuplicates: true,
+        })
+      : await tx.feedbackCommentVote.deleteMany({
+          where: { comment_id: commentId, user_id: userId },
+        });
+    if (count === 0) return { voted, voteCount: await voteCount() };
     const { vote_count } = await tx.feedbackComment.update({
       where: { id: commentId },
-      data: { vote_count: { increment: 1 } },
+      data: { vote_count: { increment: voted ? count : -count } },
       select: { vote_count: true },
     });
-    return { voted: true, voteCount: vote_count };
+    return { voted, voteCount: vote_count };
   });
-};
 
-export const toggleFollow = async (postId: string, userId: string) => {
+export const toggleCommentVote = (commentId: string, userId: string) =>
+  writeCommentVote(commentId, userId, 'toggle');
+
+/** Sets the user's vote on a comment; nothing changes when it is already so. */
+export const setCommentVote = (commentId: string, userId: string, voted: boolean) =>
+  writeCommentVote(commentId, userId, voted);
+
+/** Puts the user's follow of a post in the wanted state. A missing post throws. */
+const writeFollow = async (postId: string, userId: string, wanted: Wanted) => {
   const prisma = getPrisma();
-  const existing = await prisma.feedbackFollow.findUnique({
-    where: { post_id_user_id: { post_id: postId, user_id: userId } },
-    select: { id: true },
-  });
-  if (existing) {
-    await prisma.feedbackFollow.delete({ where: { id: existing.id } });
-    return { following: false };
-  }
   const post = await prisma.feedbackPost.findUnique({
     where: { id: postId },
     select: { id: true },
   });
   if (!post) throw new FeedbackNotFoundError();
-  try {
-    await prisma.feedbackFollow.create({ data: { post_id: postId, user_id: userId } });
-  } catch (error) {
-    if (!isUniqueViolation(error)) throw error;
+  const existing = await prisma.feedbackFollow.findUnique({
+    where: { post_id_user_id: { post_id: postId, user_id: userId } },
+    select: { id: true },
+  });
+  const following = wanted === 'toggle' ? !existing : wanted;
+  if (following === Boolean(existing)) return { following };
+  if (following) {
+    await prisma.feedbackFollow.createMany({
+      data: [{ post_id: postId, user_id: userId }],
+      skipDuplicates: true,
+    });
+  } else {
+    await prisma.feedbackFollow.deleteMany({ where: { post_id: postId, user_id: userId } });
   }
-  return { following: true };
+  return { following };
 };
+
+export const toggleFollow = (postId: string, userId: string) =>
+  writeFollow(postId, userId, 'toggle');
+
+/** Sets whether the user follows a post; nothing changes when it is already so. */
+export const setFollow = (postId: string, userId: string, following: boolean) =>
+  writeFollow(postId, userId, following);
 
 /**
  * Moves a post to a status (null takes it off the roadmap) and tells its
@@ -482,28 +545,40 @@ export const setStatus = async ({
   return post;
 };
 
+/**
+ * Who wrote a post or comment, or null when there is no such post or comment
+ * (`author_id` is null once the author's account is gone). For a caller that
+ * must tell "missing" from "someone else's", like the MCP's delete.
+ */
+export const findPostAuthor = (postId: string) =>
+  getPrisma().feedbackPost.findUnique({ where: { id: postId }, select: { author_id: true } });
+
+export const findCommentAuthor = (commentId: string) =>
+  getPrisma().feedbackComment.findUnique({
+    where: { id: commentId },
+    select: { author_id: true },
+  });
+
 /** Who wrote a post or comment, so the route can let authors delete their own. */
 export const getPostAuthorId = async (postId: string) =>
-  (
-    await getPrisma().feedbackPost.findUnique({
-      where: { id: postId },
-      select: { author_id: true },
-    })
-  )?.author_id ?? null;
+  (await findPostAuthor(postId))?.author_id ?? null;
 
 export const getCommentAuthorId = async (commentId: string) =>
-  (
-    await getPrisma().feedbackComment.findUnique({
-      where: { id: commentId },
-      select: { author_id: true },
-    })
-  )?.author_id ?? null;
+  (await findCommentAuthor(commentId))?.author_id ?? null;
 
+/**
+ * Deletes a post. One already gone (a concurrent delete) throws
+ * `FeedbackNotFoundError` rather than Prisma's opaque P2025.
+ */
 export const deletePost = async (postId: string) => {
-  await getPrisma().feedbackPost.delete({ where: { id: postId } });
+  const { count } = await getPrisma().feedbackPost.deleteMany({ where: { id: postId } });
+  if (count === 0) throw new FeedbackNotFoundError();
 };
 
-/** Deletes a comment and its replies, and keeps the post's count in step. */
+/**
+ * Deletes a comment and its replies, and keeps the post's count in step. One
+ * already gone throws `FeedbackNotFoundError`, as `deletePost` does.
+ */
 export const deleteComment = async (commentId: string) => {
   const prisma = getPrisma();
   await prisma.$transaction(async tx => {
@@ -512,7 +587,8 @@ export const deleteComment = async (commentId: string) => {
       select: { post_id: true, _count: { select: { replies: true } } },
     });
     if (!comment) throw new FeedbackNotFoundError('That comment no longer exists.');
-    await tx.feedbackComment.delete({ where: { id: commentId } });
+    const { count } = await tx.feedbackComment.deleteMany({ where: { id: commentId } });
+    if (count === 0) throw new FeedbackNotFoundError('That comment no longer exists.');
     await tx.feedbackPost.update({
       where: { id: comment.post_id },
       data: { comment_count: { decrement: 1 + comment._count.replies } },

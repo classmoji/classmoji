@@ -7,11 +7,13 @@
  * `classroom` ('org/slug') argument, gets the registry's enforcement pipeline
  * (scope → rate limit → classroom/role → mutation gate), re-verifies target
  * ownership against the authorized classroom (S1), routes mutations through
- * packages/services orchestrators, and writes an audit-log row.
+ * packages/services orchestrators, and writes an audit-log row. The feedback
+ * board's tools (feedback.ts) are the exception: no classroom, no audit row.
  */
 
 import { registerToolDefinition } from '../mcp/registry.ts';
 import { whoamiTool } from './whoami.ts';
+import { feedbackReadTool, feedbackWriteTool, feedbackDeleteTool } from './feedback.ts';
 import { readTools } from './reads.ts';
 import { gradeAddTool, gradeRemoveTool, gradeRemoveAllTool } from './grades.ts';
 import { graderAssignTool, graderUnassignTool, graderAssignBulkTool } from './graders.ts';
@@ -118,6 +120,13 @@ import {
 export function registerAllTools(): void {
   // Identity / bootstrap
   registerToolDefinition(whoamiTool);
+
+  // The platform-wide feedback board (/feedback): any signed-in user, no
+  // classroom (roles: null). No audit rows, by decision: the webapp writes
+  // none for the board either.
+  registerToolDefinition(feedbackReadTool);
+  registerToolDefinition(feedbackWriteTool);
+  registerToolDefinition(feedbackDeleteTool);
 
   // Read surface mirrored as tools (tool-only clients like claude.ai cannot
   // list/read MCP resources). Each mirror reuses its resource's handler + tier;
