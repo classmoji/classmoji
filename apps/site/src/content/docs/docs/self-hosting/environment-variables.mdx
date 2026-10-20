@@ -7,7 +7,7 @@ description: All environment variables required to run Classmoji
 
 | Name | Required | Default | Description |
 |------|----------|---------|-------------|
-| `DATABASE_URL` | Yes | | PostgreSQL connection string for the Classmoji database. |
+| `DATABASE_URL` | Yes | | PostgreSQL connection string for the Classmoji database. We recommend [Neon](https://neon.com) for production. |
 | `BETTER_AUTH_SECRET` | Yes | | Secret used to sign auth sessions and tokens. Generate with `openssl rand -base64 32`. |
 | `WEBAPP_URL` | Yes | | Public base URL of the main web app (e.g. `http://localhost:3000`). |
 | `SLIDES_URL` | Yes | | Public base URL of the slides service. |
