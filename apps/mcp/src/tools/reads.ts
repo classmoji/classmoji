@@ -37,6 +37,8 @@ import { IssueStatus, type Role } from '@prisma/client';
 import { z, type ZodRawShape } from 'zod';
 import type { ResourceDefinition, ToolDefinition } from '../mcp/registry.ts';
 import { parseClassroomRef } from '../authz/pure.ts';
+import type { ClassroomContext } from '../authz/classroomContext.ts';
+import { idArgs, type ReadAudit } from '../mcp/audit.ts';
 import {
   ok,
   OWNER_TEACHER,
@@ -81,6 +83,20 @@ interface MirrorConfig {
   buildVars?: (args: Record<string, unknown>) => Record<string, string>;
 }
 
+/** A resource's read audit for its mirror tool: ids from the mapped URI variables. */
+function mirroredAudit(audit: ReadAudit, buildVars: MirrorConfig['buildVars']): ReadAudit {
+  const ids = audit.ids;
+  return {
+    ...audit,
+    ...(ids
+      ? {
+          ids: (args: Record<string, unknown>, classroom: ClassroomContext) =>
+            ids(buildVars ? buildVars(args) : {}, classroom),
+        }
+      : {}),
+  };
+}
+
 /**
  * Wrap a ResourceDefinition as a read tool. The tool inherits the resource's
  * exact role tier and calls the resource's handler with the same ctx + vars.
@@ -89,6 +105,7 @@ function mirrorResourceTool(config: MirrorConfig): ToolDefinition {
   const { resource, name, title, description, extraInput = {}, buildVars } = config;
   const classroomScoped = resource.roles !== null;
   const template = new UriTemplate(resource.uriTemplate);
+  const audit = resource.auditRead;
 
   const inputSchema: ZodRawShape = {
     ...(classroomScoped
@@ -104,6 +121,9 @@ function mirrorResourceTool(config: MirrorConfig): ToolDefinition {
     scope: 'read',
     roles: resource.roles,
     inputSchema,
+    // The resource's read audit, with its ids read from the URI variables this
+    // tool's args map to — the same row under the tool's own name.
+    ...(audit ? { auditRead: mirroredAudit(audit, buildVars) } : {}),
     handler: async (args: Record<string, unknown>, ctx) => {
       let vars: Record<string, string> = {};
       if (classroomScoped) {
@@ -341,6 +361,10 @@ export const listSubmissionsTool: ToolDefinition<ListSubmissionsArgs> = {
     'submission_late_override consume. Teaching team only.',
   scope: 'read',
   roles: TEACHING_TEAM,
+  auditRead: {
+    resourceType: 'GIT_REPO_ASSIGNMENT',
+    ids: args => ({ data: idArgs(args, ['repository_id', 'assignment_id', 'grader_id']) }),
+  },
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     repository_id: z
@@ -546,6 +570,11 @@ export const gradingReportTool: ToolDefinition<GradingReportArgs> = {
   // Personnel oversight: this exposes a TA's own throughput and grading
   // patterns, so assistants must not read their peers' stats through MCP.
   roles: OWNER_TEACHER,
+  // Each TA's grading of students' work.
+  auditRead: {
+    resourceType: 'GIT_REPO_ASSIGNMENT_GRADER',
+    ids: args => ({ data: idArgs(args, ['assignment_id', 'grader_id']) }),
+  },
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     assignment_id: z.string().uuid().optional().describe('Limit the report to one Assignment id'),

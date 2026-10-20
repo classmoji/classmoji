@@ -30,15 +30,13 @@ import { gitUsername, type GitIdentityAccount } from '@classmoji/utils';
 import type { Role } from '@prisma/client';
 
 import { findClassroomGitProvider } from './classroomGitProvider.ts';
+import { TEACHING_TEAM_ROLES, currentStudentIds } from './classroomStudents.ts';
 
 /** Longest block id accepted. BlockNote ids are uuids (36 chars). */
 export const BLOCK_ID_MAX_LENGTH = 64;
 
 const BLOCK_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 const ID_MAX_LENGTH = 255;
-
-/** Roles that make a member part of the teaching team. */
-const TEACHING_TEAM_ROLES: readonly Role[] = ['OWNER', 'TEACHER', 'ASSISTANT'];
 
 /** Higher is more privileged (same order as `@classmoji/auth`'s classroomRole). */
 const ROLE_PRIORITY: Record<Role, number> = {
@@ -299,24 +297,6 @@ export const recordUnlock = async ({
 };
 
 // ── Staff views ────────────────────────────────────────────────────────────
-
-/**
- * The classroom's current students: accepted STUDENT members holding no
- * accepted OWNER/TEACHER/ASSISTANT membership there.
- */
-const currentStudentIds = async (classroomId: string): Promise<string[]> => {
-  const rows = await getPrisma().classroomMembership.findMany({
-    where: { classroom_id: classroomId, has_accepted_invite: true },
-    select: { user_id: true, role: true },
-  });
-  const students = new Set<string>();
-  const staff = new Set<string>();
-  for (const row of rows) {
-    if (row.role === 'STUDENT') students.add(row.user_id);
-    else if (TEACHING_TEAM_ROLES.includes(row.role)) staff.add(row.user_id);
-  }
-  return [...students].filter(id => !staff.has(id));
-};
 
 /** Is this page in this classroom? Both ids must already be valid. */
 const pageIsInClassroom = async (pageId: string, classroomId: string): Promise<boolean> => {

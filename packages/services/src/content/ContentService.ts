@@ -14,6 +14,7 @@ import {
   type FileTypePolicy,
 } from './utils/validateFile.ts';
 import { RepoFileTooLargeError, asRepoTooLarge } from './repoLimits.ts';
+import { mapWithConcurrency } from '../helpers/concurrency.ts';
 import { resolveContentBranch } from './contentBranch.ts';
 import * as gitlab from './gitlabContent.ts';
 
@@ -334,40 +335,8 @@ const getErrorMessage = (error: unknown): string =>
 /** Blob creations `uploadBatch` keeps in flight at once. */
 const BLOB_CONCURRENCY = 4;
 
-/**
- * `Promise.all(items.map(fn))`, with at most `limit` calls of `fn` in flight.
- *
- * Results come back in INPUT order, whatever order the calls finish in. The
- * first rejection rejects the whole call, as `Promise.all` would, and stops
- * the workers taking new items: the calls already running finish, but nothing
- * further is started for a batch that has already failed.
- */
-export async function mapWithConcurrency<T, R>(
-  items: readonly T[],
-  limit: number,
-  fn: (item: T, index: number) => Promise<R>
-): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let next = 0;
-  let failed = false;
-
-  const worker = async () => {
-    while (!failed && next < items.length) {
-      const index = next++;
-      try {
-        results[index] = await fn(items[index]!, index);
-      } catch (error) {
-        failed = true;
-        throw error;
-      }
-    }
-  };
-
-  await Promise.all(
-    Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, () => worker())
-  );
-  return results;
-}
+// `Promise.all` with at most `limit` calls in flight; shared with other services.
+export { mapWithConcurrency };
 
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 

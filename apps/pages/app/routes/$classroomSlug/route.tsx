@@ -14,10 +14,13 @@ import { ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
 import { findClassroomRole } from '~/utils/classroomRole.server.ts';
 import { closeLivePageForDelete } from '~/utils/collab.server.ts';
 import { assetResolveContext } from '~/utils/assetRefs.server.ts';
+import { askMojiHostData } from '~/utils/askMoji.server.ts';
 import { headerImageRefs, withResolvedHeaderImages } from '~/utils/headerImages.ts';
 
 import PagesLayout from '~/components/layout/PagesLayout.tsx';
 import PagesSidebar from '~/components/layout/PagesSidebar.tsx';
+import AskMojiHost from '~/components/askMoji/AskMojiHost.tsx';
+import { pageTitle, pageViewing } from '~/components/askMoji/askMojiProtocol.ts';
 
 /**
  * Index route: displays different views based on user role.
@@ -143,6 +146,15 @@ export const loader = async ({
   const resolvedPages =
     resolvedRefs.size > 0 ? withResolvedHeaderImages(pages, resolvedRefs) : pages;
 
+  // The Ask Moji launcher: accepted members of this classroom only, never
+  // inside the webapp's reader frame. Decided here from the session and the
+  // classroom row; see utils/askMoji.server.ts.
+  const askMoji = await askMojiHostData({
+    userId: authData?.userId,
+    classroom,
+    embedded: isEmbedded,
+  });
+
   return {
     view,
     isEmbedded,
@@ -182,6 +194,8 @@ export const loader = async ({
         : null,
     })),
     membership: membership ? { role: membership.role } : null,
+    askMojiEnabled: askMoji.askMojiEnabled,
+    askMojiOrigin: askMoji.askMojiOrigin,
   };
 };
 
@@ -350,8 +364,15 @@ export const action = async ({
 };
 
 const ClassroomLayout = () => {
-  const { isEmbedded, embedParentOrigin, classroom, pages, membership } =
-    useLoaderData<typeof loader>();
+  const {
+    isEmbedded,
+    embedParentOrigin,
+    classroom,
+    pages,
+    membership,
+    askMojiEnabled,
+    askMojiOrigin,
+  } = useLoaderData<typeof loader>();
   const params = useParams();
   const navigate = useNavigate();
   const location = useLocation();
@@ -498,6 +519,19 @@ const ClassroomLayout = () => {
       }
     >
       <Outlet context={{ classroom, userRole: membership?.role, canEdit, pages, isEmbedded }} />
+      {/* Ask Moji: here, in the layout, so moving between pages keeps the panel
+          (and a running answer) alive. Never in the embedded branch above:
+          the webapp shows its own panel around its reader. */}
+      {askMojiEnabled && askMojiOrigin && (
+        <AskMojiHost
+          webappOrigin={askMojiOrigin}
+          classroomSlug={classroom.slug}
+          viewing={pageViewing(currentPageId)}
+          title={pageTitle(currentPageId, pages)}
+          launcherClassName={`askmoji-launcher-floating ${collapsed ? 'askmoji-launcher-sidebar-collapsed' : ''}`}
+          launcherHidden={mobileOpen}
+        />
+      )}
     </PagesLayout>
   );
 };

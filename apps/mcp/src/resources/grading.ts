@@ -162,6 +162,8 @@ export const gradingQueueResource: ResourceDefinition = {
     'work only. Teaching team only.',
   scope: 'read',
   roles: TEACHING_TEAM,
+  // Every student's submissions: a staff read of student data.
+  auditRead: { resourceType: 'GIT_REPO_ASSIGNMENT' },
   handler: async (_vars, ctx) => {
     const { classroomId } = classroomCtx(ctx);
     const git = orgGit(ctx);
@@ -198,6 +200,10 @@ export const submissionResource: ResourceDefinition = {
     'present. Teaching team only. submissionId comes from the grading-queue resource.',
   scope: 'read',
   roles: TEACHING_TEAM,
+  auditRead: {
+    resourceType: 'GIT_REPO_ASSIGNMENT',
+    ids: vars => ({ resourceId: String(vars.submissionId) }),
+  },
   handler: async (vars, ctx) => {
     const { classroomId } = classroomCtx(ctx);
     // Mirrors the admin.$class.submissions.$id loader, which is itself a raw
@@ -240,6 +246,7 @@ export const leaderboardResource: ResourceDefinition = {
     'ascending by grade as the web dashboard receives it. OWNER only.',
   scope: 'read',
   roles: OWNER_ONLY,
+  auditRead: { resourceType: 'GRADES' },
   handler: async (vars, ctx) => {
     const { classroomId } = classroomCtx(ctx);
     // Shared with the get_leaderboard tool (tools/reads.ts): the twin-classroom
@@ -295,6 +302,7 @@ export const regradeQueueResource: ResourceDefinition = {
     'submission. Teaching team only.',
   scope: 'read',
   roles: TEACHING_TEAM,
+  auditRead: { resourceType: 'REGRADE_REQUEST' },
   handler: async (_vars, ctx) => {
     const { classroomId } = classroomCtx(ctx);
     const requests = (await ClassmojiService.regradeRequest.findMany({

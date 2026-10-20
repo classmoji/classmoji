@@ -42,7 +42,11 @@ class OrgRepoSettingsError extends Error {
 // same contract so the tool's wiring — call it, store what it returns, map its
 // refusal — is what gets tested here.
 class ClassroomSettingsValidationError extends Error {
-  code = 'TIMEZONE_INVALID';
+  code: string;
+  constructor(code: string, message: string) {
+    super(message);
+    this.code = code;
+  }
 }
 
 vi.mock('@classmoji/services', () => ({
@@ -52,7 +56,23 @@ vi.mock('@classmoji/services', () => ({
       normalizeTimeZoneSetting: (value: unknown) => {
         if (value === null) return null;
         if (value === 'america/new_york') return 'America/New_York';
-        throw new ClassroomSettingsValidationError(`'${String(value)}' is not a time zone`);
+        throw new ClassroomSettingsValidationError(
+          'TIMEZONE_INVALID',
+          `'${String(value)}' is not a time zone`
+        );
+      },
+      // The service's rule: trimmed, blank = cleared, at most 4,000 characters.
+      normalizeInstructionsSetting: (value: unknown) => {
+        if (value === null) return null;
+        if (typeof value !== 'string') {
+          throw new ClassroomSettingsValidationError('INSTRUCTIONS_INVALID', 'must be text');
+        }
+        const text = value.trim();
+        if (text === '') return null;
+        if (text.length > 4000) {
+          throw new ClassroomSettingsValidationError('INSTRUCTIONS_TOO_LONG', 'too long');
+        }
+        return text;
       },
       update: (...a: unknown[]) => mocks.classroomUpdate(...a),
       updateSettings: (...a: unknown[]) => mocks.updateSettings(...a),
@@ -301,8 +321,22 @@ describe('classroom_settings_update', () => {
           resource_type: 'SETTINGS',
           action: 'UPDATE',
           data: { tool: 'classroom_settings_update', fields: ['final_grades_released'] },
-        })
+        }),
+        { dedupe: false }
       );
+    }
+  });
+
+  it('writes every call as its own row (no dedup), so on then off keeps both', async () => {
+    for (const enabled of [true, false]) {
+      await classroomSettingsUpdateTool.handler(
+        { classroom: 'org/w26', syllabus_bot_enabled: enabled },
+        CTX
+      );
+    }
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(2);
+    for (const call of mocks.auditCreate.mock.calls) {
+      expect(call[1]).toEqual({ dedupe: false });
     }
   });
 
@@ -378,6 +412,125 @@ describe('classroom_settings_update — timezone', () => {
     const schema = z.object(classroomSettingsUpdateTool.inputSchema);
     expect(schema.safeParse({ classroom: 'o/s', timezone: null }).success).toBe(true);
     expect(schema.safeParse({ classroom: 'o/s', timezone: 5 }).success).toBe(false);
+  });
+});
+
+describe('classroom_settings_update — Ask Moji instructions', () => {
+  const SECRET = 'Never give full solutions; point to the lecture notes.';
+
+  it('stores the trimmed instructions through the explicit payload', async () => {
+    const result = await classroomSettingsUpdateTool.handler(
+      { classroom: 'org/w26', syllabus_bot_instructions: `  ${SECRET}  ` },
+      CTX
+    );
+    expect(mocks.updateSettings).toHaveBeenCalledWith('class-1', {
+      syllabus_bot_instructions: SECRET,
+    });
+    expect(parse(result).updated_fields).toEqual(['syllabus_bot_instructions']);
+  });
+
+  it('clears them with null or blank text', async () => {
+    await classroomSettingsUpdateTool.handler(
+      { classroom: 'org/w26', syllabus_bot_instructions: null },
+      CTX
+    );
+    await classroomSettingsUpdateTool.handler(
+      { classroom: 'org/w26', syllabus_bot_instructions: '   ' },
+      CTX
+    );
+    expect(mocks.updateSettings.mock.calls).toEqual([
+      ['class-1', { syllabus_bot_instructions: null }],
+      ['class-1', { syllabus_bot_instructions: null }],
+    ]);
+  });
+
+  it('refuses text over the limit as invalid_params with the service code, writing nothing', async () => {
+    const error = await classroomSettingsUpdateTool
+      .handler({ classroom: 'org/w26', syllabus_bot_instructions: 'x'.repeat(4001) }, CTX)
+      .catch((e: unknown) => e as { kind: string; code: string });
+    expect(error).toMatchObject({ kind: 'invalid_params', code: 'INSTRUCTIONS_TOO_LONG' });
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('accepts 4,000 characters padded with whitespace, storing them trimmed', async () => {
+    const text = 'x'.repeat(4000);
+    const padded = `\n  ${text}  \n`;
+    const schema = z.object(classroomSettingsUpdateTool.inputSchema);
+    expect(schema.safeParse({ classroom: 'o/s', syllabus_bot_instructions: padded }).success).toBe(
+      true
+    );
+    await classroomSettingsUpdateTool.handler(
+      { classroom: 'org/w26', syllabus_bot_instructions: padded },
+      CTX
+    );
+    expect(mocks.updateSettings).toHaveBeenCalledWith('class-1', {
+      syllabus_bot_instructions: text,
+    });
+  });
+
+  it('refuses non-text as invalid_params with the service code', async () => {
+    const error = await classroomSettingsUpdateTool
+      .handler({ classroom: 'org/w26', syllabus_bot_instructions: 5 as unknown as string }, CTX)
+      .catch((e: unknown) => e as { kind: string; code: string });
+    expect(error).toMatchObject({ kind: 'invalid_params', code: 'INSTRUCTIONS_INVALID' });
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('bounds the raw schema at 8,000 characters, nullable; the 4,000 cap is after trimming', () => {
+    const schema = z.object(classroomSettingsUpdateTool.inputSchema);
+    const base = { classroom: 'o/s' };
+    expect(schema.safeParse({ ...base, syllabus_bot_instructions: 'x'.repeat(4000) }).success).toBe(
+      true
+    );
+    // Over 4,000 raw passes the schema; the handler refuses it once trimmed (above).
+    expect(schema.safeParse({ ...base, syllabus_bot_instructions: 'x'.repeat(4001) }).success).toBe(
+      true
+    );
+    expect(schema.safeParse({ ...base, syllabus_bot_instructions: 'x'.repeat(8001) }).success).toBe(
+      false
+    );
+    expect(schema.safeParse({ ...base, syllabus_bot_instructions: null }).success).toBe(true);
+    expect(schema.safeParse({ ...base, syllabus_bot_instructions: 5 }).success).toBe(false);
+  });
+
+  it('audits the field name only, never the instructions text', async () => {
+    await classroomSettingsUpdateTool.handler(
+      { classroom: 'org/w26', syllabus_bot_instructions: SECRET, syllabus_bot_enabled: true },
+      CTX
+    );
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    const row = mocks.auditCreate.mock.calls[0][0] as { data: unknown };
+    expect(row.data).toEqual({
+      tool: 'classroom_settings_update',
+      fields: ['syllabus_bot_enabled', 'syllabus_bot_instructions'],
+    });
+    expect(JSON.stringify(mocks.auditCreate.mock.calls)).not.toContain('lecture notes');
+  });
+
+  it('is owner only, and still says model and effort are managed in the web app', () => {
+    expect(classroomSettingsUpdateTool.roles).toEqual(['OWNER']);
+    const description = classroomSettingsUpdateTool.description;
+    expect(description).toContain('syllabus_bot_instructions');
+    expect(description).toContain('managed in the web app');
+    expect(Object.keys(classroomSettingsUpdateTool.inputSchema)).not.toContain(
+      'syllabus_bot_model'
+    );
+    expect(Object.keys(classroomSettingsUpdateTool.inputSchema)).not.toContain(
+      'syllabus_bot_effort'
+    );
+  });
+});
+
+describe('every settings tool description', () => {
+  it('stays under 1,500 bytes', () => {
+    for (const tool of [
+      classroomSettingsUpdateTool,
+      classroomStatusUpdateTool,
+      orgRepoSettingsUpdateTool,
+    ]) {
+      expect(Buffer.byteLength(tool.description, 'utf8'), tool.name).toBeLessThan(1500);
+    }
   });
 });
 

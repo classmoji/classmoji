@@ -116,6 +116,35 @@ test.describe('AI Settings Tab', () => {
     await expect(page.getByText('Grading', { exact: true })).toBeVisible();
   });
 
+  test('displays the Ask Moji instructions field with its counter', async ({
+    authenticatedPage: page,
+  }) => {
+    const field = page.getByLabel('Classroom instructions for Ask Moji');
+    await expect(field).toBeVisible();
+    await expect(field).toHaveAttribute('maxlength', '4000');
+    await expect(page.getByText(/\d+ \/ 4000/)).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Save instructions' })).toBeVisible();
+  });
+
+  test('saves and clears the Ask Moji instructions', async ({ authenticatedPage: page }) => {
+    const field = page.getByLabel('Classroom instructions for Ask Moji');
+    const save = page.getByRole('button', { name: 'Save instructions' });
+    const original = await field.inputValue();
+    const text = `E2E instructions ${Date.now()}`;
+
+    await field.fill(text);
+    await save.click();
+    await expect(page.getByText('Ask Moji instructions saved')).toBeVisible();
+    await page.reload();
+    await waitForDataLoad(page);
+    await expect(page.getByLabel('Classroom instructions for Ask Moji')).toHaveValue(text);
+
+    // Put back what was there (blank clears).
+    await page.getByLabel('Classroom instructions for Ask Moji').fill(original);
+    await page.getByRole('button', { name: 'Save instructions' }).click();
+    await expect(page.getByText('Ask Moji instructions saved')).toBeVisible();
+  });
+
   test('shows api-key status badge', async ({ authenticatedPage: page }) => {
     // Exactly one badge always renders (system defaults vs classroom key). Poll
     // with a single .or() locator instead of an instant isVisible() so a

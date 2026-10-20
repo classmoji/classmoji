@@ -624,3 +624,41 @@ export {
   publicFormUrlFor,
 } from './classmoji/siteLinks.ts';
 export type { SeoOriginInput } from './classmoji/siteLinks.ts';
+
+// Chat agents' shared storage pieces, and Ask Moji's conversation types (the
+// session route and the ask-moji task build against these).
+export type { ChatGrant, ReplyState, RedeliveryPolicy } from './classmoji/chatShared.ts';
+export type {
+  AskMojiGrant,
+  AskMojiRefusal,
+  AskMojiRuntimeState,
+  AskMojiSettingsRow,
+  AdmitResult as AskMojiAdmitResult,
+  CreateResult as AskMojiCreateResult,
+  OwnedConversation as AskMojiOwnedConversation,
+  TurnContext as AskMojiTurnContext,
+  AskMojiScope,
+  AskMojiSummary,
+  ConversationState as AskMojiConversationState,
+  FindOrCreateResult as AskMojiFindOrCreateResult,
+} from './classmoji/askMojiChat.service.ts';
+export type { ResolvedViewing as AskMojiResolvedViewing } from './classmoji/askMojiViewing.service.ts';
+export type {
+  AskMojiRating,
+  FeedbackSetResult as AskMojiFeedbackSetResult,
+  FeedbackClearResult as AskMojiFeedbackClearResult,
+} from './classmoji/askMojiFeedback.service.ts';
+export type {
+  UsageInsights as AskMojiUsageInsights,
+  UsageWeek as AskMojiUsageWeek,
+  MaterialRow as AskMojiMaterialRow,
+  FeedbackReviewRow as AskMojiFeedbackReviewRow,
+  FeedbackExchange as AskMojiFeedbackExchange,
+} from './classmoji/askMojiInsights.service.ts';
+export type {
+  AskMojiAccess,
+  AskMojiAvailability,
+  AskMojiStartResult,
+  AskMojiSessionRefusal,
+  AskMojiFeedbackResult,
+} from './classmoji/askMojiSession.service.ts';

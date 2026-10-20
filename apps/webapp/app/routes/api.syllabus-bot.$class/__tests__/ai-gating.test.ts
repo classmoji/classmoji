@@ -32,6 +32,8 @@ vi.mock('@classmoji/utils', async importOriginal => ({
 }));
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
+    // A legacy conversation carries no Ask Moji grant.
+    askMojiChat: { readGrant: (context: { grant?: unknown } | null) => context?.grant ?? null },
     classroom: { getClassroomSettingsForServer: vi.fn() },
   },
 }));

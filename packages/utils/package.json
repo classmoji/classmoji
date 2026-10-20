@@ -18,8 +18,12 @@
     "./quiz-agent": "./src/quizAgent/index.ts",
     "./quiz-agent/limits": "./src/quizAgent/limits.ts",
     "./quiz-agent/copy": "./src/quizAgent/copy.ts",
+    "./ask-moji": "./src/askMoji/index.ts",
+    "./ask-moji/limits": "./src/askMoji/limits.ts",
+    "./ask-moji/copy": "./src/askMoji/copy.ts",
     "./quiz-excluded-paths": "./src/quizExcludedPaths.ts",
     "./agents/projection": "./src/agents/projection.ts",
+    "./agents/limits": "./src/agents/limits.ts",
     "./ai-models": "./src/aiModels.ts",
     "./sentry": "./src/sentry.ts"
   },
