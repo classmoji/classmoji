@@ -10,6 +10,7 @@ import {
 import type { UploadCapability } from '~/utils/mediaUpload';
 import BlockSourceModal from '../blocks/BlockSourceModal';
 import { reHighlightCode } from './utils/codeBlockUtils';
+import { isAskMojiTarget } from '../askMoji/askMojiProtocol';
 
 /**
  * ElementSelectionContext - Tracks the currently selected element in the slide editor
@@ -401,6 +402,10 @@ export function ElementSelectionProvider({
     (event: KeyboardEvent) => {
       if (!isEditing) return;
 
+      // Keys on the Ask Moji launcher or panel are theirs: never delete the
+      // selected element or turn the slide from there.
+      if (isAskMojiTarget(event.target)) return;
+
       // Keys typed in a dialog's editor (a block's source) are the editor's.
       const keyTarget = event.target as HTMLElement | null;
       if (keyTarget?.closest?.('.ant-modal, .cm-editor')) return;
@@ -518,6 +523,9 @@ export function ElementSelectionProvider({
 
       // Ignore clicks on the properties panel
       if ((event.target as HTMLElement).closest('[data-properties-panel]')) return;
+
+      // Ignore clicks on the Ask Moji launcher and panel
+      if (isAskMojiTarget(event.target)) return;
 
       // Ignore clicks on the toolbar/navbar
       if ((event.target as HTMLElement).closest('nav')) return;

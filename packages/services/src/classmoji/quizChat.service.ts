@@ -48,6 +48,20 @@ import {
 } from '@classmoji/utils/quiz-agent';
 import { quizzesVisible } from './entitlement.service.ts';
 import {
+  CLIENT_MESSAGE_ID_PATTERN,
+  MIN_TURN_INTERVAL_MS,
+  QUIZ_REDELIVERY,
+  classroomAllowsTurn,
+  findStoredMessage,
+  grantHolds as chatGrantHolds,
+  isObject,
+  nextCreatedAt,
+  replyStateAfter,
+  toUIMessage as storedToUIMessage,
+  writeContextKey,
+  type StoredMessageRow,
+} from './chatShared.ts';
+import {
   LOCKED_TX_OPTIONS,
   TRIGGER_CHAT_RUNTIME,
   appendEvent,
@@ -133,12 +147,13 @@ export { MAX_STUDENT_TURNS };
  * the previous admission (its journal row), not from the reply to it. The chat
  * sends nothing while a reply is running and a reply takes longer than this,
  * so only a scripted sender meets it. A message sent sooner is refused for
- * now (`too_fast`); the session stays open.
+ * now (`too_fast`); the session stays open. One copy for every chat agent
+ * (chatShared.ts).
  */
-export const MIN_TURN_INTERVAL_MS = 3_000;
+export { MIN_TURN_INTERVAL_MS };
 
-/** Browser message ids. Server-made ids contain `:` and never match. */
-export const CLIENT_MESSAGE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+/** Browser message ids. Server-made ids contain `:` and never match (chatShared.ts). */
+export { CLIENT_MESSAGE_ID_PATTERN };
 
 /** The hidden go-ahead that opens an attempt (today's opening turn). */
 export const OPENING_TEXT = 'The student is ready. Begin.';
@@ -150,13 +165,11 @@ type AllowedRole = (typeof ALLOWED_ROLES)[number];
 
 /**
  * Whether the classroom's status lets this role take a turn: the webapp's
- * mutation gate, `canMutateClassroom` in packages/auth/src/predicates.ts,
- * restated here because @classmoji/auth depends on this package (a parity
- * test holds the two together). The owner always may; anyone else only while
- * the classroom is ACTIVE (LOCKED and UNPUBLISHED are read-only).
+ * mutation gate, restated in chatShared.ts (a parity test holds the two
+ * together). The owner always may; anyone else only while the classroom is
+ * ACTIVE (LOCKED and UNPUBLISHED are read-only).
  */
-export const classroomAllowsTurn = ({ status, role }: { status: string; role: string }) =>
-  role === 'OWNER' || status === 'ACTIVE';
+export { classroomAllowsTurn };
 
 /**
  * Whether a student's message imitates the server's framing (a line opening
@@ -172,23 +185,7 @@ export type QuizChatRuntimeState = { cursors: unknown; state: unknown };
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-const isObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
-type StoredMessageRow = {
-  ui_message_id: string | null;
-  role: string;
-  parts: Prisma.JsonValue | null;
-  metadata: Prisma.JsonValue | null;
-};
-
-const toUIMessage = (row: StoredMessageRow): QuizUIMessage =>
-  ({
-    id: row.ui_message_id ?? '',
-    role: row.role === 'ASSISTANT' ? 'assistant' : row.role === 'SYSTEM' ? 'system' : 'user',
-    parts: Array.isArray(row.parts) ? row.parts : [],
-    ...(isObject(row.metadata) ? { metadata: row.metadata } : {}),
-  }) as unknown as QuizUIMessage;
+const toUIMessage = (row: StoredMessageRow): QuizUIMessage => storedToUIMessage<QuizUIMessage>(row);
 
 /**
  * A part's readable text: a text part's text, or the feedback an accepted
@@ -211,20 +208,6 @@ const textOf = (parts: unknown): string =>
     .map(partText)
     .filter((t): t is string => t !== null)
     .join('\n\n');
-
-/**
- * A `created_at` strictly after the conversation's latest row, so the order
- * rows are read back in is the order they were written. Caller holds the
- * attempt lock, which serializes every writer of this conversation.
- */
-const nextCreatedAt = async (tx: Tx, conversationId: string): Promise<Date> => {
-  const last = await tx.aIConversationMessage.findFirst({
-    where: { conversation_id: conversationId },
-    orderBy: { created_at: 'desc' },
-    select: { created_at: true },
-  });
-  return new Date(Math.max(Date.now(), (last?.created_at.getTime() ?? 0) + 1));
-};
 
 /** The attempt's conversation, created on first use. Caller holds the attempt lock. */
 const ensureConversation = async (tx: Tx, attempt: LockedAttempt): Promise<string> => {
@@ -295,17 +278,12 @@ const preflight = async (attemptId: string) => {
  * expired (a grant that names one with no expiry does not hold). The web
  * sign-in session itself is not re-checked per turn (plan Q20/Q23).
  */
-const grantHolds = (attempt: LockedAttempt, now: number): boolean => {
-  const grant = attempt.chat_grant;
-  if (!isObject(grant)) return false;
-  if (grant.effective_user_id !== attempt.user_id) return false;
-  if (grant.classroom_id !== attempt.quiz.classroom_id) return false;
-  const impersonation = grant.impersonation;
-  if (impersonation === null || impersonation === undefined) return true;
-  if (!isObject(impersonation) || typeof impersonation.expires_at !== 'string') return false;
-  const expiresAt = Date.parse(impersonation.expires_at);
-  return Number.isFinite(expiresAt) && expiresAt > now;
-};
+const grantHolds = (attempt: LockedAttempt, now: number): boolean =>
+  chatGrantHolds(
+    attempt.chat_grant,
+    { userId: attempt.user_id, classroomId: attempt.quiz.classroom_id },
+    now
+  );
 
 /**
  * Per-turn revalidation against the current state, the checks the previous
@@ -528,7 +506,7 @@ const sandboxProgressFor = async (
  * `data-sandbox` part's data): the card's template and opening file, seeded
  * from the student's last standing submission for the open question, with
  * the next attempt's id. The task's loop writes it under the hint of a Try
- * again turn (packages/tasks, agents/quiz/loop.ts). Null when no question is
+ * again turn (apps/ai-agent, src/trigger/quiz/loop.ts). Null when no question is
  * open, when its card has no sandbox, when a sandbox of it is still open (one
  * not yet answered by a standing submission), and for an attempt not pinned
  * with code sandboxes or already complete. A read only; no lock.
@@ -739,15 +717,7 @@ export const admitStudentMessage = async (i: {
       ) {
         throw new QuizChatRefusal('temporary', 'message_conflict');
       }
-      const row = await tx.aIConversationMessage.findUnique({
-        where: {
-          conversation_id_ui_message_id: {
-            conversation_id: attempt.conversation_id,
-            ui_message_id: id,
-          },
-        },
-        select: { parts: true, role: true, created_at: true },
-      });
+      const row = await findStoredMessage(tx, attempt.conversation_id, id);
       const parts = Array.isArray(row?.parts) ? row.parts : [];
       const stored = parts[0];
       const payload = isObject(existing.payload) ? existing.payload : {};
@@ -765,16 +735,10 @@ export const admitStudentMessage = async (i: {
       // reply is saved) is not run again for the same message: what it
       // committed stands, and the student sends a new message. A turn that
       // wrote nothing yet (a crashed or handed-over run) is run again.
-      const reply = await tx.aIConversationMessage.findFirst({
-        where: {
-          conversation_id: attempt.conversation_id,
-          role: 'ASSISTANT',
-          created_at: { gt: row.created_at },
-        },
-        orderBy: { created_at: 'desc' },
-        select: { final: true },
-      });
-      if (reply && !reply.final) throw new QuizChatRefusal('temporary', 'message_conflict');
+      const reply = await replyStateAfter(tx, attempt.conversation_id, row.created_at);
+      if (QUIZ_REDELIVERY[reply] === 'refuse') {
+        throw new QuizChatRefusal('temporary', 'message_conflict');
+      }
       await tx.quizAttempt.update({
         where: { id: attempt.id },
         data: {
@@ -1275,11 +1239,7 @@ export const writeRuntimeState = async (
     const attempt = await lockAttempt(tx, attemptId);
     if (!attempt) throw new QuizChatRefusal('permanent', 'attempt_not_found');
     const conversationId = await ensureConversation(tx, attempt);
-    const value = JSON.stringify(v ?? null);
-    await tx.$executeRaw`
-      UPDATE ai_conversations
-      SET context = jsonb_set(COALESCE(context, '{}'::jsonb), '{runtime}', ${value}::jsonb, true)
-      WHERE id = ${conversationId}`;
+    await writeContextKey(tx, conversationId, 'runtime', v);
   }, LOCKED_TX_OPTIONS);
 };
 

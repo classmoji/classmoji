@@ -149,7 +149,7 @@ function checkFiles(
 /**
  * The model-facing description of `present_question`'s `sandbox` field. It
  * exists only on a sandbox attempt's schema, so the fleet-wide tool
- * descriptions (`TOOL_DESCRIPTIONS`) stay as they are.
+ * descriptions (the quiz agent's, in apps/ai-agent) stay as they are.
  */
 export const SANDBOX_FIELD_DESCRIPTION =
   'Only for a question the student answers by writing or fixing code: an editable sandbox in the card. ' +

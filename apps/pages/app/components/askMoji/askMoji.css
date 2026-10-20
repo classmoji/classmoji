@@ -1,0 +1,141 @@
+/* Ask Moji host: the launcher and the fixed container that holds the webapp's
+ * panel frame (AskMojiHost.tsx).
+ *
+ * One stacking value for both: above the page header (40), the sidebar (50)
+ * and its dialogs (60); below the media dialogs (100) and Mantine's modals
+ * (200). */
+:root {
+  --askmoji-z: 90;
+}
+
+.askmoji-launcher {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.25rem;
+  color: #37352f;
+  background: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  box-shadow:
+    0 2px 4px rgba(0, 0, 0, 0.04),
+    0 2px 8px rgba(0, 0, 0, 0.06);
+  cursor: pointer;
+}
+
+.askmoji-launcher:hover {
+  background: #f7f7f5;
+}
+
+.askmoji-launcher:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
+.askmoji-launcher[aria-expanded='true'] {
+  background: #f1f1ef;
+}
+
+.dark .askmoji-launcher {
+  color: #e5e5e5;
+  background: #262626;
+  border-color: #404040;
+}
+
+.dark .askmoji-launcher:hover,
+.dark .askmoji-launcher[aria-expanded='true'] {
+  background: #333333;
+}
+
+/* Answering: a small dot on the launcher. */
+.askmoji-launcher-dot {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 9999px;
+  background: #2563eb;
+  box-shadow: 0 0 0 2px #ffffff;
+}
+
+.dark .askmoji-launcher-dot {
+  background: #60a5fa;
+  box-shadow: 0 0 0 2px #191919;
+}
+
+/* Floating placement (the pages layout): bottom-left of the content column,
+ * clear of the sidebar. The bottom-right corner belongs to the page's own
+ * floating controls. */
+.askmoji-launcher-floating {
+  position: fixed;
+  z-index: var(--askmoji-z);
+  bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+  left: calc(1rem + env(safe-area-inset-left, 0px));
+}
+
+@media (min-width: 768px) {
+  .askmoji-launcher-floating {
+    left: calc(15rem + 1rem);
+  }
+  .askmoji-launcher-floating.askmoji-launcher-sidebar-collapsed {
+    left: calc(4rem + 1rem);
+  }
+}
+
+/* The container. Hidden, never removed: the frame keeps running while closed. */
+.askmoji-panel {
+  display: none;
+  position: fixed;
+  z-index: var(--askmoji-z);
+  /* Below the page header, so its buttons stay reachable. */
+  top: 3.5rem;
+  right: 1rem;
+  bottom: 1rem;
+  width: min(420px, calc(100vw - 2rem));
+  border-radius: 1rem;
+  overflow: hidden;
+  background: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  box-shadow:
+    0 4px 8px rgba(0, 0, 0, 0.08),
+    0 4px 16px rgba(0, 0, 0, 0.12);
+}
+
+.askmoji-panel.askmoji-panel-open {
+  display: block;
+}
+
+.dark .askmoji-panel {
+  background: #191919;
+  border-color: #404040;
+}
+
+.askmoji-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+}
+
+/* Phones: the whole screen. */
+@media (max-width: 640px) {
+  .askmoji-panel {
+    top: 0;
+    right: 0;
+    bottom: auto;
+    left: 0;
+    width: 100%;
+    height: 100dvh;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
+      env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+  }
+}

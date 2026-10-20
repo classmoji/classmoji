@@ -1,7 +1,7 @@
 /**
  * The fixed lines a quiz chat agent may send the student on the chat
- * runtime's `error` chunk. The task's sanitizer (packages/tasks,
- * `agents/shared/sanitize.ts`) writes only these; the chat (QuizChat) shows an
+ * runtime's `error` chunk. The task's sanitizer (apps/ai-agent,
+ * `src/trigger/shared/sanitize.ts`) writes only these; the chat (QuizChat) shows an
  * error only when its text is one of them. Both read this one module, so the
  * two can never drift apart.
  *

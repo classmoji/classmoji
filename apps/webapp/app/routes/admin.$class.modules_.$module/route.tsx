@@ -17,6 +17,7 @@ import {
 
 import { ClassmojiService } from '@classmoji/services';
 import FolderTabs from '~/components/ui/FolderTabs';
+import { useAskMojiViewing } from '~/components/features/ask-moji/viewing';
 import AddContentItemModal from '~/components/features/modules/AddContentItemModal';
 import { TYPE_META, describeItem, typeLabel } from '~/components/features/modules/moduleItemMeta';
 import AssignmentsTable, {
@@ -84,6 +85,7 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
   const { module, candidates, repositories, boundFormIds, tags, quizzesVisible } = loaderData;
   const { class: classSlug } = useParams();
   const navigate = useNavigate();
+  useAskMojiViewing({ kind: 'module', id: module.id, title: module.title });
 
   // Navigates away after delete; item ops revalidate in place.
   const deleteFetcher = useFetcher<{ success?: string; error?: string }>();

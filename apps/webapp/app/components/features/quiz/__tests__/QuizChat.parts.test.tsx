@@ -1247,7 +1247,7 @@ describe('errorLineFor', () => {
     expect(errorLineFor(new Error('An error occurred.'))).toBe(REPLY_FAILED_LINE);
   });
 
-  // Every line the task's sanitizer can send (packages/tasks/src/agents/shared/sanitize.ts),
+  // Every line the task's sanitizer can send (apps/ai-agent, src/trigger/shared/sanitize.ts),
   // byte for byte. Changing one there must change it here.
   const SANITIZER_COPY = [
     "That reply couldn't be finished. Please send your message again.",

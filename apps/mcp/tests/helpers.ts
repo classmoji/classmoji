@@ -463,6 +463,20 @@ export const MCP_TOOL_NAMES = new Set([
   'page_delete',
   'token_grant',
   'extension_purchase',
+  // Reads of other people's data write VIEW rows too (mcp/audit.ts).
+  'get_roster',
+  'list_teams',
+  'list_submissions',
+  'get_submission',
+  'get_leaderboard',
+  'list_regrade_requests',
+  'grading_report',
+  'roster',
+  'teams',
+  'grading-queue',
+  'submission',
+  'leaderboard',
+  'regrade-requests',
 ]);
 
 export interface AuditExpectation {

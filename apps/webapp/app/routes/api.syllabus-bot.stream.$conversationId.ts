@@ -45,11 +45,15 @@ export async function loader({ params, request }: LoaderFunctionArgs) {
   //    classroom mid-conversation would otherwise keep an open stream usable.
   //    One scoped query, so "no such conversation" and "not yours" are the same
   //    answer and the id space cannot be probed.
+  //    The Trigger runtime's Ask Moji conversations share the SYLLABUS_BOT
+  //    type and carry a grant in `context`: this legacy stream never serves
+  //    one (the same rule as the legacy action's findOwnedConversation), and
+  //    refuses it with the same answer as a conversation that is not yours.
   const conversation = await getPrisma().aIConversation.findFirst({
     where: { id: conversationId, user_id: authData.userId, type: 'SYLLABUS_BOT' },
-    select: { classroom_id: true },
+    select: { classroom_id: true, context: true },
   });
-  if (!conversation) {
+  if (!conversation || ClassmojiService.askMojiChat.readGrant(conversation.context) !== null) {
     console.warn(
       `[syllabus-bot-stream] Forbidden access: User ${authData.userId} tried to access conversation ${conversationId}`
     );

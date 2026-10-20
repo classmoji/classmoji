@@ -27,6 +27,7 @@ import { loadQuizzesVisible, quizzesVisibleOrThrow } from '~/utils/classroomProF
 import { buildCalendarUrl, getCalendarDateRange } from '~/utils/calendar.server';
 import type { Route } from './+types/route';
 import CourseCalendar from '~/components/features/calendar/CourseCalendar';
+import { useAskMojiViewing } from '~/components/features/ask-moji/viewing';
 import type { CalendarEventWithLinks } from '~/components/features/calendar/types';
 import { buildMovePayload } from '~/components/features/calendar/eventScope';
 import CalendarSubscriptionCard from '~/components/features/calendar/CalendarSubscriptionCard';
@@ -471,6 +472,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 };
 
 const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
+  useAskMojiViewing({ kind: 'calendar' });
   const {
     events: initialEvents,
     userId,

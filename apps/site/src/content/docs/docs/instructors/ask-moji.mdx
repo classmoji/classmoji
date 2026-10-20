@@ -1,0 +1,46 @@
+---
+title: Ask Moji
+description: Turn on the course assistant, give it classroom instructions, and see how students use it.
+---
+
+**Ask Moji** is the course assistant. Students and staff ask it questions about the class, and it answers from your course materials: pages, slides, modules, assignments, quizzes and the calendar. It sees what the person asking could see in the class themselves, and nothing more: a student never gets another student's work, a draft page, or a locked section's body.
+
+Ask Moji is part of the **Pro** plan.
+
+## Turn it on
+
+Go to **Settings > AI** and switch on **Enable Ask Moji**. Students and staff then see **Ask Moji** in the sidebar, and in the pages and slides readers.
+
+If the switch is off and can't be turned on, the line under it says why (for example, the server has no Anthropic key yet).
+
+Ask Moji in the pages and slides readers, the classroom instructions and the insights page need a server that runs Ask Moji on background jobs (`ASK_MOJI_RUNTIME=trigger`, see [environment variables](/docs/self-hosting/environment-variables)). Elsewhere Ask Moji is in the web app's sidebar only, without instructions or insights.
+
+With your classroom's own Anthropic API key (**Settings > AI > API Key**), you can also pick Ask Moji's **Model** and **Effort**. Without one, Ask Moji runs on the platform defaults.
+
+## Classroom instructions
+
+Under **Settings > AI > Ask Moji > Instructions**, write anything you want Ask Moji to follow in this class, up to 4,000 characters. For example: the tone to use, what to send students to office hours for, or that it should never give a full solution to a lab.
+
+Ask Moji follows your instructions within the platform's own rules: they can't give it access to anything the person asking couldn't already see.
+
+Only owners of the class can see or change the instructions. Teachers, assistants and students never see them in Classmoji, and they are not copied when you import settings from another class.
+
+## Ask Moji insights
+
+Owners and teachers have an **Ask Moji Insights** page in the sidebar. It shows only while Ask Moji is on for the class.
+
+- **Usage**: per week, in the class time zone: questions asked by students, conversations, active students, questions asked by staff, and the tokens Ask Moji used.
+- **Asked from**: the materials students had open when they asked.
+- **Most cited**: the materials Ask Moji's answers to students pointed to.
+
+A material appears in **Asked from** or **Most cited** only once at least 3 different students have asked about it, so a single student's questions are never singled out. Students count while they are on the roster.
+
+## Feedback review
+
+Every answer has 👍 and 👎 buttons. On the insights page, **Feedback** lists the answers rated 👎 (switch to 👍 to see the others). Each row shows the question, who asked it, when, and what they had open.
+
+Click a row to read that one exchange: the question and the answer as the student saw it, with the sources it cited. There is no way to browse whole conversations.
+
+Questions that staff asked appear in the review only when they were asked as your role or a lower one: a teacher sees students', assistants' and teachers' rated answers, not an owner's.
+
+Opening the insights page and each exchange is recorded in the class's audit log.

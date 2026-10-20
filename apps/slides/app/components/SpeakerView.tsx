@@ -18,6 +18,8 @@ import {
   IconX,
 } from '@tabler/icons-react';
 import QRCodeOverlay from './QRCodeOverlay';
+import AskMojiHost from './askMoji/AskMojiHost';
+import { deckViewing, flatSlideIndex, isAskMojiTarget } from './askMoji/askMojiProtocol';
 
 // Configure marked for speaker notes
 marked.setOptions({
@@ -38,6 +40,8 @@ interface ParsedSlide {
 interface SpeakerViewProps {
   slideId: string;
   initialContent: string;
+  /** Ask Moji for this deck's classroom; null when this viewer does not get it. */
+  askMoji?: { webappOrigin: string; classroomSlug: string; title?: string | null } | null;
 }
 
 function formatTime(ms: number) {
@@ -111,7 +115,7 @@ function parseSlides(htmlContent: string): ParsedSlide[] {
  * - Navigation controls (prev/next)
  * - Real-time sync with other presenter windows
  */
-export default function SpeakerView({ slideId, initialContent }: SpeakerViewProps) {
+export default function SpeakerView({ slideId, initialContent, askMoji = null }: SpeakerViewProps) {
   const socketRef = useRef<ReturnType<typeof io> | null>(null);
   const isRemoteUpdateRef = useRef(false);
   const startTimeRef = useRef(Date.now());
@@ -150,6 +154,18 @@ export default function SpeakerView({ slideId, initialContent }: SpeakerViewProp
 
   const currentIndex = useMemo(() => {
     return slides.findIndex(s => s.h === currentSlide.h && s.v === currentSlide.v);
+  }, [slides, currentSlide]);
+
+  // Ask Moji: the slide on screen as one number (askMoji/askMojiProtocol.ts). The
+  // parsed slides already have hidden slides removed, so this is the viewer's
+  // numbering; out-of-range positions clamp into the deck.
+  const askMojiSlide = useMemo(() => {
+    const stackSizes: number[] = [];
+    for (const s of slides) stackSizes[s.h] = (stackSizes[s.h] ?? 0) + 1;
+    return flatSlideIndex(
+      Array.from(stackSizes, size => size ?? 1),
+      currentSlide
+    );
   }, [slides, currentSlide]);
 
   // Connect to Socket.IO
@@ -420,6 +436,8 @@ export default function SpeakerView({ slideId, initialContent }: SpeakerViewProp
   // Keyboard navigation - use actual directional keys
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Keys on the Ask Moji launcher or panel are theirs, not the deck's.
+      if (isAskMojiTarget(e.target)) return;
       if (e.key === 'ArrowLeft') {
         e.preventDefault();
         goLeft();
@@ -535,6 +553,17 @@ export default function SpeakerView({ slideId, initialContent }: SpeakerViewProp
 
         {/* Right side: Share/Phone buttons, Viewer count, and connection status */}
         <div className="flex items-center gap-2">
+          {/* Ask Moji: the header stays mounted for the whole session; the
+              panel is portalled to <body>. */}
+          {askMoji && (
+            <AskMojiHost
+              webappOrigin={askMoji.webappOrigin}
+              classroomSlug={askMoji.classroomSlug}
+              viewing={deckViewing(slideId, askMojiSlide)}
+              title={askMoji.title}
+              launcherClassName="askmoji-launcher-on-dark"
+            />
+          )}
           {/* Share QR button - toggles follow QR on presenter screen */}
           <button
             onClick={() => {

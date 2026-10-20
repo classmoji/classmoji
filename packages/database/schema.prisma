@@ -377,6 +377,7 @@ model User {
   feedback_follows              FeedbackFollow[]
   page_section_checks           PageSectionCheck[]
   page_section_unlocks          PageSectionUnlock[]
+  ask_moji_feedback             AskMojiFeedback[]
 
   @@map("users")
 }
@@ -603,6 +604,7 @@ model Classroom {
   media_objects         MediaObject[]
   team_sets             TeamSet[]
   page_section_unlocks  PageSectionUnlock[]
+  ask_moji_feedback     AskMojiFeedback[]
 
   // Logically redundant now that slug is globally unique, but retained: it is
   // the compound key live upserts select on (githubClassroomImport, example
@@ -638,6 +640,11 @@ model ClassroomSettings {
   // the settings page; the ai-agent drops effort for a model that takes none.
   syllabus_bot_model           String?
   syllabus_bot_effort          String?
+  // The owner's instructions Ask Moji follows (under the platform's rules), at
+  // most 4,000 characters (validated in classroom.updateSettings). Owner-only:
+  // not in SAFE_SETTINGS_FIELDS, never copied by config or class-to-class
+  // import, never served to non-owners.
+  syllabus_bot_instructions    String?
   llm_provider                 String?
   llm_model                    String?
   // Legacy: no quiz call sends a temperature or token cap, and the settings page
@@ -1686,6 +1693,37 @@ model PageLink {
   @@map("page_links")
 }
 
+enum ASK_MOJI_RATING {
+  UP
+  DOWN
+}
+
+/// A thumbs up or down on one Ask Moji answer, by the conversation's owner.
+/// One row per answer (`conversation_id` + the assistant message's
+/// `ui_message_id`); clearing the rating deletes the row. `classroom_id` is
+/// the conversation's classroom, copied from its row, so the staff review
+/// list reads one classroom's ratings by index. Named, with no notice in the
+/// student UI; staff see it only on the insights page (one rated exchange).
+model AskMojiFeedback {
+  id              String          @id @default(uuid())
+  classroom_id    String
+  conversation_id String
+  ui_message_id   String
+  user_id         String
+  rating          ASK_MOJI_RATING
+  created_at      DateTime        @default(now())
+  updated_at      DateTime        @default(now()) @updatedAt
+
+  classroom    Classroom      @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  conversation AIConversation @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
+  user         User           @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([conversation_id, ui_message_id])
+  @@index([classroom_id, rating, created_at])
+  @@index([user_id])
+  @@map("ask_moji_feedback")
+}
+
 /// A checkable heading a student has ticked on a page: per student, per page,
 /// per heading block (the BlockNote block id in the page's content.json).
 /// Reader state only; the page document never changes.
@@ -1874,10 +1912,11 @@ model AIConversation {
   last_activity DateTime             @default(now())
   status        AIConversationStatus @default(ACTIVE)
 
-  classroom    Classroom               @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
-  user         User                    @relation(fields: [user_id], references: [id], onDelete: Cascade)
-  messages     AIConversationMessage[]
-  quiz_attempt QuizAttempt?
+  classroom         Classroom               @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  user              User                    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  messages          AIConversationMessage[]
+  quiz_attempt      QuizAttempt?
+  ask_moji_feedback AskMojiFeedback[]
 
   @@index([classroom_id])
   @@index([user_id])
@@ -1906,8 +1945,10 @@ model AIConversationMessage {
 
   conversation AIConversation @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
 
+  // The unique key's leading column serves conversation-only lookups; this one
+  // serves reads by role in time order (latest user row, insights by week).
   @@unique([conversation_id, ui_message_id])
-  @@index([conversation_id])
+  @@index([conversation_id, role, created_at])
   @@map("ai_conversation_messages")
 }
 

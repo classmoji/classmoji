@@ -14,6 +14,7 @@ import {
 import { stripMediaRefs } from '~/utils/mediaRefs';
 import { cleanupEditorContainer } from '~/utils/editorCleanup';
 import { lockSourceBlockContent } from '~/utils/collab/bridgeDom';
+import { isAskMojiTarget } from '~/components/askMoji/askMojiProtocol';
 
 // Built-in Reveal.js themes (exported for use in SlideToolbar)
 export const BUILTIN_THEMES = [
@@ -470,6 +471,8 @@ const RevealSlides = forwardRef(function RevealSlides(
         transition: 'slide',
         // Disable keyboard when editing to allow normal text editing
         keyboard: !isEditing,
+        // Keys pressed on the Ask Moji launcher or panel never turn the slide.
+        keyboardCondition: (event: KeyboardEvent) => !isAskMojiTarget(event.target),
         // Touch gestures
         touch: !isEditing,
         // Disable cursor auto-hide in edit and view mode (only used in presenter mode)

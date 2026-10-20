@@ -26,22 +26,24 @@ description: All environment variables required to run Classmoji
 
 ### AI features
 
-AI features (quizzes, Ask Moji, prompt assistant) run on **Anthropic Claude**. They are optional: when `AI_AGENT_URL` and `AI_AGENT_SHARED_SECRET` are unset, AI features are hidden and the related API routes return 503.
+AI features (quizzes, Ask Moji) run on **Anthropic Claude**. They are optional: when `AI_AGENT_URL` and `AI_AGENT_SHARED_SECRET` are unset, AI features that run on the AI agent are hidden and the related API routes return 503. Ask Moji can instead run as a background-jobs chat agent (`ASK_MOJI_RUNTIME=trigger`), which needs `TRIGGER_SECRET_KEY` and an Anthropic key rather than the AI agent.
 
 | Name | Required | Default | Description |
 |------|----------|---------|-------------|
 | `AI_AGENT_URL` | No | | URL of the AI agent service. Enables AI features when set with the shared secret. |
 | `AI_AGENT_SHARED_SECRET` | No | | Shared secret used to authenticate the webapp to the AI agent. |
 | `ANTHROPIC_API_KEY` | No | | Anthropic API key the AI agent uses to call Claude. |
-| `LLM_MODEL` | No | `claude-sonnet-5-5` | Claude model used for quizzes and the quiz prompt assistant. These accept only the models listed in `packages/utils/src/aiModels.ts`; any other value runs the default. Set the same value in all three places that read it: the AI agent and the background jobs, which run quizzes, and the web app, which shows it as the default on AI settings. |
+| `LLM_MODEL` | No | `claude-sonnet-5-5` | Claude model used for quizzes. These accept only the models listed in `packages/utils/src/aiModels.ts`; any other value runs the default. Set the same value in all three places that read it: the AI agent and the background jobs, which run quizzes, and the web app, which shows it as the default on AI settings. |
 | `EXPLORATION_MODEL` | No | `claude-sonnet-5-5` | Claude model used for code-aware quiz repository exploration. Same list and default as `LLM_MODEL`, read by the same three: the AI agent, the background jobs and the web app. |
 | `EXPLORATION_MODE` | No | | Controls the code-aware exploration behavior for quizzes. |
 | `QUIZ_QUESTION_EFFORT` | No | `medium` | Reasoning effort (`low`, `medium`, `high`, `xhigh`, `max`) for quiz question and conversation turns. A classroom with its own API key can override it. |
 | `QUIZ_GRADING_EFFORT` | No | `high` | Reasoning effort for final quiz grading. A classroom with its own API key can override it. |
 | `EXPLORATION_EFFORT` | No | `low` | Reasoning effort for the code-aware quiz's excerpt selection (`xhigh` and `max` run as `high`). A classroom with its own API key can override it. |
-| `SYLLABUS_BOT_MODEL` | No | `LLM_MODEL`, then `claude-sonnet-5-5` | Claude model used for Ask Moji. Any Claude model id works here; the quiz list does not apply. Read by the AI agent, and by the web app to show the default. A classroom with its own API key can override it. |
+| `ASK_MOJI_RUNTIME` | No | `ai_agent` | Which runtime serves Ask Moji. `ai_agent` (also when unset): the AI agent, in the web app only. `trigger`: the `ask-moji` chat agent on Trigger.dev, in the web app, pages and slides, with the instructor insights page; it needs `TRIGGER_SECRET_KEY` and an Anthropic key (`ANTHROPIC_API_KEY` or the classroom's own). Set it on the web app, pages and slides alike (the pages and slides apps embed the web app's Ask Moji panel), and on the MCP server: it also gates the MCP server's Ask Moji tools (usage, feedback review, settings), which work only where Ask Moji does. With `trigger`, the background jobs also need `MCP_PUBLIC_URL`. Any value other than `trigger` or `ai_agent` runs as `ai_agent`. |
+| `MCP_PUBLIC_URL` | With `ASK_MOJI_RUNTIME=trigger` | | Public origin of the MCP server (`apps/mcp`), for example `https://mcp.example.org`. The MCP server advertises it to its clients, and Ask Moji reads the course through it: set it on the background jobs too, or Ask Moji can't answer questions. Use the public HTTPS origin, not a private network hostname. |
+| `SYLLABUS_BOT_MODEL` | No | `LLM_MODEL`, then `claude-sonnet-5-5` | Claude model used for Ask Moji. With `ASK_MOJI_RUNTIME=trigger` it accepts only the models listed in `packages/utils/src/aiModels.ts` (any other value runs `claude-sonnet-5-5`), as `LLM_MODEL` does; on the AI agent any Claude model id works. Read by the AI agent and the background jobs, and by the web app to show the default. A classroom with its own API key can override it with an allow-listed model. |
 | `SYLLABUS_BOT_EFFORT` | No | `low` | Reasoning effort for Ask Moji. A classroom with its own API key can override it. |
-| `AI_MAX_BUDGET_USD` | No | `1.00` | Per-call cost ceiling in USD for quiz and Ask Moji agent calls on the platform `ANTHROPIC_API_KEY`. A runaway guard, not a spend limit. |
+| `AI_MAX_BUDGET_USD` | No | `1.00` | Per-call cost ceiling in USD for quiz and Ask Moji agent calls on the AI agent with the platform `ANTHROPIC_API_KEY`. A runaway guard, not a spend limit. |
 | `OPENAI_API_KEY` | No | | Reserved. Not used by any current feature. |
 | `LLM_PROVIDER` | No | | Reserved. Only Anthropic/Claude is wired today. |
 

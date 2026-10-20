@@ -120,3 +120,46 @@ export function requireRole<M extends MembershipLike>(
   }
   return match;
 }
+
+// ─── Role ceiling (Ask Moji's "view as") ─────────────────────────────────────
+
+/** Privilege rank, highest first: OWNER > TEACHER > ASSISTANT > STUDENT. */
+const ROLE_RANK: Record<Role, number> = { OWNER: 3, TEACHER: 2, ASSISTANT: 1, STUDENT: 0 };
+
+/** The values a role ceiling may take — exactly the Role enum, uppercase. */
+export const ROLE_CEILING_VALUES: readonly Role[] = ['STUDENT', 'ASSISTANT', 'TEACHER', 'OWNER'];
+
+/** Parse a ceiling value; null for anything that is not exactly one Role. */
+export function parseRoleCeiling(value: string): Role | null {
+  return (ROLE_CEILING_VALUES as readonly string[]).includes(value) ? (value as Role) : null;
+}
+
+/**
+ * Whether `role` is at or below `ceiling` in privilege order. No ceiling
+ * (null/undefined) admits every role.
+ */
+export function withinRoleCeiling(role: Role, ceiling: Role | null | undefined): boolean {
+  return !ceiling || ROLE_RANK[role] <= ROLE_RANK[ceiling];
+}
+
+/**
+ * Pure ceiling gate: keep the memberships at or below `ceiling`. When the
+ * caller held roles and the ceiling removes every one of them, refuse rather
+ * than return an empty list — an empty list would read as "not a member" and
+ * send the caller down the unfiltered lookup. No ceiling returns the input.
+ */
+export function applyRoleCeiling<M extends MembershipLike>(
+  memberships: M[],
+  ceiling: Role | null | undefined
+): M[] {
+  if (!ceiling) return memberships;
+  const kept = memberships.filter(m => withinRoleCeiling(m.role, ceiling));
+  if (memberships.length > 0 && kept.length === 0) {
+    throw new ToolError(
+      'forbidden',
+      `Not available in the ${ceiling.toLowerCase()} view of this classroom`,
+      'INSUFFICIENT_ROLE'
+    );
+  }
+  return kept;
+}

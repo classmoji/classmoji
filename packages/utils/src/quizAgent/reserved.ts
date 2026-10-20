@@ -2,7 +2,7 @@
  * Text only the server may write into a quiz agent's context. The services
  * refuse a student message framed as the server's (quizChat.service
  * `admitStudentMessage`), the task refuses a sandbox starter that is
- * (packages/tasks, agents/quiz/tools), and a code submission is checked on its
+ * (apps/ai-agent, src/trigger/quiz/tools), and a code submission is checked on its
  * rendering (`reservedCheckText` in sandbox.ts). One copy of the rule for all
  * three. No server imports: this reaches the client bundle.
  */

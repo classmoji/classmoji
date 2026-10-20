@@ -10,6 +10,7 @@ import { namedAction } from 'remix-utils/named-action';
 import { ClassmojiService, HelperService } from '@classmoji/services';
 import { SearchInput } from '~/components';
 import AssignmentFormModal from '~/components/features/assignments/AssignmentFormModal';
+import { useAskMojiViewing } from '~/components/features/ask-moji/viewing';
 import type { AssignmentRowData } from '~/components/features/assignments/AssignmentsTable';
 import { useGlobalFetcher } from '~/hooks';
 import { ActionTypes } from '~/constants';
@@ -206,7 +207,7 @@ const Stat = ({ label, value, tone }: { label: string; value: React.ReactNode; t
   </div>
 );
 
-const AssignmentPage = ({ loaderData }: Route.ComponentProps) => {
+const AssignmentPage = ({ loaderData, params }: Route.ComponentProps) => {
   const {
     assignment,
     repos,
@@ -222,6 +223,7 @@ const AssignmentPage = ({ loaderData }: Route.ComponentProps) => {
     boundFormIds,
   } = loaderData;
   const classSlug = classroom.slug;
+  useAskMojiViewing({ kind: 'assignment', id: params.id, title: assignment.title });
   const web = gitWeb(gitContextFor(classroom as ClassroomLike));
   const terms = web.terms;
   const { fetcher, notify } = useGlobalFetcher();

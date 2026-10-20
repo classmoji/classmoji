@@ -46,6 +46,8 @@ vi.mock('~/utils/routeAuth.server', () => ({
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
+    // A legacy conversation carries no Ask Moji grant.
+    askMojiChat: { readGrant: (context: { grant?: unknown } | null) => context?.grant ?? null },
     entitlement: { canUseSyllabusBot: (...a: unknown[]) => canUseSyllabusBotMock(...a) },
     classroom: {
       getClassroomSettingsForServer: (...a: unknown[]) => getClassroomSettingsForServerMock(...a),
