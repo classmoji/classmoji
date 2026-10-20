@@ -113,7 +113,11 @@ vi.mock('@trigger.dev/sdk', () => ({ tasks: {} }));
 
 // Only the loader is under test; the view layer only needs to import.
 vi.mock('antd', () => ({ Modal: () => null, Button: () => null }));
-vi.mock('@classmoji/ui-components', () => ({ useCallout: vi.fn(), Button: () => null, IconGithub: () => null }));
+vi.mock('@classmoji/ui-components', () => ({
+  useCallout: vi.fn(),
+  Button: () => null,
+  IconGithub: () => null,
+}));
 vi.mock('~/hooks', () => ({ useUser: vi.fn(), useDisclosure: vi.fn(), useGlobalFetcher: vi.fn() }));
 vi.mock('~/store', () => ({ default: vi.fn() }));
 vi.mock('~/components/features/landing', () => ({ ClassroomsLandingScreen: () => null }));
