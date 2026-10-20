@@ -150,6 +150,13 @@ export const VIDEO_PROCESS_TASK_ID = 'media-video-process';
 export const VIDEO_PROCESS_IDEMPOTENCY_TTL = '10m';
 
 /**
+ * The tag every video run carries, so the reaper (`media-video-reaper` in
+ * @classmoji/tasks, which spells it the same way) can ask Trigger whether a
+ * row's job is still alive.
+ */
+export const videoRunTag = (mediaId: string) => `media:${mediaId}`;
+
+/**
  * What `processing_error` says when the job could not even be queued. Shown as
  * the detail under "Couldn't optimise — the original is shown", so it is about
  * the outcome, not the machinery.
@@ -204,6 +211,7 @@ export async function onMediaReady(row: MediaRecord): Promise<void> {
       {
         idempotencyKey: `media-video-process:${row.id}`,
         idempotencyKeyTTL: VIDEO_PROCESS_IDEMPOTENCY_TTL,
+        tags: [videoRunTag(row.id)],
       }
     );
   } catch (error) {

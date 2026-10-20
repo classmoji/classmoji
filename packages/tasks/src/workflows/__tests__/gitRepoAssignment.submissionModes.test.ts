@@ -236,9 +236,18 @@ describe('retry on database blips', () => {
     });
   });
 
-  it('does not opt the GitHub issue task into retries (a retry could open another issue)', () => {
+  // A retry cannot open a second issue: an attempt first adopts an unclaimed
+  // issue with the assignment's title, which is what a failed attempt leaves.
+  it('retries the Github issue task on a Github or database blip only', async () => {
     const config = workflows.createGithubRepositoryAssignmentTask as unknown as RetryingTask;
-    expect(config.retry).toBeUndefined();
+    expect(config.retry?.maxAttempts).toBeGreaterThan(1);
+    const githubOutage = Object.assign(new Error('Service Unavailable'), { status: 503 });
+    await expect(config.catchError?.({ error: githubOutage })).resolves.toBeUndefined();
+    await expect(config.catchError?.({ error: neonBlip })).resolves.toBeUndefined();
+    const notFound = Object.assign(new Error('Not Found'), { status: 404 });
+    await expect(config.catchError?.({ error: notFound })).resolves.toEqual({
+      skipRetrying: true,
+    });
   });
 });
 

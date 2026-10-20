@@ -30,6 +30,8 @@
  */
 
 import { task, logger } from '@trigger.dev/sdk';
+import { retryOnGitBlip } from '../helpers/gitRetry.ts';
+import { retryOnDatabaseBlip } from '../helpers/databaseRetry.ts';
 import getPrisma from '@classmoji/database';
 import { ClassmojiService, describeTokenMintError, getGitProvider } from '@classmoji/services';
 /*
@@ -326,7 +328,9 @@ async function contentRepoCoordinates(
  */
 export const importContentRepoTask = task({
   id: 'import-content-repo',
-  retry: { maxAttempts: 1 },
+  // Repo creation is what Github blips break, and ensureContentRepo adopts an
+  // existing repo, so a retry is safe.
+  ...retryOnGitBlip,
   maxDuration: 600,
   run: async ({ importJobId }: { importJobId: string }) => {
     const prisma = getPrisma();
@@ -912,7 +916,8 @@ export async function importSlideRows({
  */
 export const importModulesTask = task({
   id: 'import-modules',
-  retry: { maxAttempts: 1 },
+  // Database only and idempotent (see above), so a connection blip retries.
+  ...retryOnDatabaseBlip,
   maxDuration: 900,
   run: async ({ importJobId }: { importJobId: string }) => {
     const prisma = getPrisma();

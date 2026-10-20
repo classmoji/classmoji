@@ -3,8 +3,8 @@
  *
  * Focus: the Resend SDK does NOT throw on API errors, it resolves with
  * `{ data, error }`. If the task ignores `error`, every failed send is recorded
- * as a successful run — and extension.ts awaits this task via triggerAndWait,
- * so a false success propagates. These tests pin that behavior, plus the
+ * as a successful run — and a caller that awaits this task via triggerAndWait
+ * sees a false success. These tests pin that behavior, plus the
  * bare/wrapped payload shim that seven inconsistent call sites depend on.
  * `resend` and `@trigger.dev/sdk` are mocked — no real emails.
  */

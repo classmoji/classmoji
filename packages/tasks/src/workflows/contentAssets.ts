@@ -1,4 +1,5 @@
 import { task, schedules, logger } from '@trigger.dev/sdk';
+import { retryOnGitBlip } from '../helpers/gitRetry.ts';
 import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
 
@@ -48,6 +49,9 @@ interface ContentAssetsSyncPayload {
 
 export const contentAssetsSyncTask = task({
   id: 'content-assets-sync',
+  // One blip left the asset map stale until the next push or the nightly
+  // sweep. Safe to repeat: mark-and-sweep with a compare-and-swap commit.
+  ...retryOnGitBlip,
   /**
    * ONE sync per classroom at a time.
    *
@@ -118,6 +122,8 @@ const BATCH_SIZE = 20;
  */
 export const contentAssetsSweepTask = schedules.task({
   id: 'content-assets-sweep',
+  // Runs again on its schedule, and that next run is the retry.
+  retry: { maxAttempts: 1 },
   // 05:25 UTC daily — off the hour, and clear of the other nightly jobs.
   cron: '25 5 * * *',
   run: async () => {

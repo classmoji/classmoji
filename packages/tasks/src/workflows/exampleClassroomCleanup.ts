@@ -18,6 +18,8 @@ const CLEANUP_CRON = '15 6 * * *';
 
 export const exampleClassroomCleanupTask = schedules.task({
   id: 'example-classroom-cleanup',
+  // Runs again on its schedule, and that next run is the retry.
+  retry: { maxAttempts: 1 },
   cron: CLEANUP_CRON,
   run: async () => {
     const report = await deleteAbandonedExampleClassrooms();

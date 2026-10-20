@@ -1,4 +1,5 @@
 import { logger, task } from '@trigger.dev/sdk';
+import { retryOnGitBlip } from '../helpers/gitRetry.ts';
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import { GITLAB_PROJECTS_SUBGROUP, gitUsername } from '@classmoji/utils';
 import {
@@ -269,6 +270,9 @@ async function leaveGitLabClassAsStudent(
 
 export const activateMembershipTask = task({
   id: 'activate_membership',
+  // On failure the student stayed pending with no repository. Safe to repeat:
+  // activation is idempotent and its children resume.
+  ...retryOnGitBlip,
   run: async (payload: ActivateMembershipPayload) => {
     await activateMembership(payload);
   },
@@ -276,6 +280,8 @@ export const activateMembershipTask = task({
 
 export const memberAddedHandlerTask = task({
   id: 'webhook-member_added_handler',
+  // Github does not redeliver a webhook whose task failed; same activation as above.
+  ...retryOnGitBlip,
   run: async (payload: MemberAddedPayload) => {
     const {
       membership: { user: githubUser },
@@ -306,6 +312,9 @@ export const removeUserFromOrganizationTask = task({
   queue: {
     concurrencyLimit: 6,
   },
+  // A Github 5xx used to leave the membership in place. Safe to repeat: a 404
+  // counts as already removed, and the membership row is deleted last.
+  ...retryOnGitBlip,
   run: async (arg: RemoveUserPayload) => {
     const payload = arg?.payload ? arg.payload : arg;
 

@@ -3,7 +3,6 @@ import * as repositoryAssignmentTasks from './workflows/gitRepoAssignment.ts';
 import * as organizationTasks from './workflows/organization.ts';
 import * as autogradeTasks from './workflows/autograde.ts';
 import * as emailTasks from './workflows/email.ts';
-import * as extensionTasks from './workflows/extension.ts';
 import * as installationTasks from './workflows/installation.ts';
 import * as gitOrgInstallationRepairTasks from './workflows/gitOrgInstallationRepair.ts';
 import * as tokenTasks from './workflows/token.ts';
@@ -33,7 +32,6 @@ const Tasks = {
   ...organizationTasks,
   ...autogradeTasks,
   ...emailTasks,
-  ...extensionTasks,
   ...installationTasks,
   ...gitOrgInstallationRepairTasks,
   ...tokenTasks,

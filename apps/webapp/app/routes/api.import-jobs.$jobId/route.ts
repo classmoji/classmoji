@@ -61,6 +61,26 @@ const toView = (job: {
   updated_at: job.updated_at.toISOString(),
 });
 
+/**
+ * A job still PENDING or RUNNING whose row has not moved for this long is dead.
+ * The orchestrator records FAILED when it throws, but a crashed process or a
+ * killed run never reaches that catch, and the row stays RUNNING forever. Every
+ * phase writes progress as it goes (each item, each rate-limit wait), and no
+ * single phase may run past an hour, so two quiet hours means nothing is
+ * working on it any more.
+ */
+export const STALLED_AFTER_MS = 2 * 60 * 60 * 1000;
+
+const STALLED_ERROR = 'The import stopped responding. Retry to resume it from where it stopped.';
+
+export const isStalled = (job: { status: string; updated_at: Date }, now = Date.now()) =>
+  (job.status === 'PENDING' || job.status === 'RUNNING') &&
+  now - job.updated_at.getTime() > STALLED_AFTER_MS;
+
+/** A stalled job reads as FAILED, so the banner offers Retry instead of polling forever. */
+const viewOf = (job: Parameters<typeof toView>[0]): ImportJobView =>
+  isStalled(job) ? { ...toView(job), status: 'FAILED', error: STALLED_ERROR } : toView(job);
+
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const jobId = params.jobId!;
 
@@ -81,7 +101,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     attemptedAction: 'view_import_job',
   });
 
-  return Response.json(toView(job));
+  return Response.json(viewOf(job));
 };
 
 /**
@@ -92,8 +112,10 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
  * skips those on the next run. That is what makes retrying safe when the
  * per-item creates are not idempotent — nothing already imported is touched.
  *
- * Refused for any status but FAILED: retrying a PENDING or RUNNING job would
- * put two workers on the same row, and a COMPLETED one has nothing to redo.
+ * Refused for any status but FAILED: retrying a live PENDING or RUNNING job
+ * would put two workers on the same row, and a COMPLETED one has nothing to
+ * redo. A stalled one (see `isStalled`) has no worker left, so it counts as
+ * FAILED.
  *
  * Same admin gate as the read — a retry re-runs a copy out of the source
  * classroom, so it is at least as privileged as viewing the progress.
@@ -120,7 +142,8 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     attemptedAction: 'retry_import_job',
   });
 
-  if (job.status !== 'FAILED') {
+  const stalled = isStalled(job);
+  if (job.status !== 'FAILED' && !stalled) {
     return Response.json(
       { error: `Only a failed import can be retried (this one is ${job.status}).` },
       { status: 409 }
@@ -128,9 +151,14 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   }
 
   const progress = job.progress as unknown as ImportProgress;
+  // A stalled run died mid-phase without marking it failed: its `running`
+  // phases are the ones to redo.
   const reset = applyPhaseUpdates(
     progress,
-    IMPORT_PHASE_ORDER.filter(key => progress.phases?.[key]?.status === 'failed').map(phase => ({
+    IMPORT_PHASE_ORDER.filter(key => {
+      const status = progress.phases?.[key]?.status;
+      return status === 'failed' || (stalled && status === 'running');
+    }).map(phase => ({
       phase,
       status: 'pending' as const,
       note: null,
@@ -144,8 +172,12 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   //
   // PENDING before the trigger: if the trigger throws, the row is left claiming
   // a run that never started, which the caller sees and can retry again.
+  // A stalled job is claimed on the same `updated_at` the check read, so a run
+  // that wakes up and writes in between keeps the row.
   const { count } = await getPrisma().importJob.updateMany({
-    where: { id: job.id, status: 'FAILED' },
+    where: stalled
+      ? { id: job.id, status: job.status, updated_at: job.updated_at }
+      : { id: job.id, status: 'FAILED' },
     data: {
       status: 'PENDING',
       error: null,
