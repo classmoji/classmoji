@@ -1,4 +1,5 @@
 import { task } from '@trigger.dev/sdk';
+import { retryOnDatabaseBlip } from '../helpers/databaseRetry.ts';
 import { appUrl, ClassmojiService, escapeVars } from '@classmoji/services';
 import { sendBatchEmailTask, sendEmailTask } from './email.ts';
 import { getEmojiSymbol, gitContextFor, gitWeb } from '@classmoji/utils';
@@ -51,6 +52,8 @@ interface TaskPayloadWrapper<TPayload> {
 
 export const requestRegradeTask = task({
   id: 'request_regrade',
+  // Connection blips only: a failed create has written nothing.
+  ...retryOnDatabaseBlip,
   run: async (payload: RequestRegradeTaskPayload) => {
     const { classroom_id, gitRepoAssignment, student_id, student_comment, previous_grade } =
       payload;
@@ -117,6 +120,8 @@ export const requestRegradeTask = task({
 
 export const updateRegradeRequestTask = task({
   id: 'update_regrade_request',
+  // Sets fields, so safe to repeat on a connection blip.
+  ...retryOnDatabaseBlip,
   run: async (payload: UpdateRegradeRequestTaskPayload) => {
     const { request, data } = payload;
 

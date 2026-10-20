@@ -105,6 +105,8 @@ async function repairClassrooms(classroomIds?: string[]): Promise<RepairResult> 
 /** One classroom, on demand (the classroom settings button). */
 export const repairGitlabWebhooksTask = task({
   id: 'gitlab-repair-webhooks',
+  // Started from the repo settings, which can start it again; errors per project are logged and skipped.
+  retry: { maxAttempts: 1 },
   queue: { concurrencyLimit: 2 },
   run: async (payload: { classroomId: string }) => repairClassrooms([payload.classroomId]),
 });
@@ -112,6 +114,8 @@ export const repairGitlabWebhooksTask = task({
 /** Every active GitLab classroom, nightly. */
 export const repairGitlabWebhooksNightly = schedules.task({
   id: 'gitlab-repair-webhooks-nightly',
+  // Runs again on its schedule, and that next run is the retry.
+  retry: { maxAttempts: 1 },
   cron: '40 4 * * *',
   run: async () => repairClassrooms(),
 });
@@ -271,6 +275,8 @@ export async function pollGitlabPushes(): Promise<{
  */
 export const pollGitlabPushesTask = schedules.task({
   id: 'gitlab-poll-pushes',
+  // Runs again on its schedule, and that next run is the retry.
+  retry: { maxAttempts: 1 },
   cron: '*/30 * * * *',
   run: async () => pollGitlabPushes(),
 });

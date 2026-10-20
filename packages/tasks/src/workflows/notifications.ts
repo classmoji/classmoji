@@ -6,6 +6,8 @@ import getPrisma from '@classmoji/database';
  */
 export const cleanupExpiredNotifications = schedules.task({
   id: 'cleanup-expired-notifications',
+  // Runs again on its schedule, and that next run is the retry.
+  retry: { maxAttempts: 1 },
   cron: '15 3 * * *',
   run: async () => {
     const result = await getPrisma().notification.deleteMany({

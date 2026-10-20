@@ -1,4 +1,6 @@
 import { task, logger, auth } from '@trigger.dev/sdk';
+import { retryOnGitBlip } from '../helpers/gitRetry.ts';
+import { retryOnDatabaseBlip } from '../helpers/databaseRetry.ts';
 import getPrisma from '@classmoji/database';
 import { repoNamespace } from '@classmoji/utils';
 import {
@@ -207,6 +209,8 @@ interface ProvisionPayload {
  */
 export const provisionAutogradeWorkflowTask = task({
   id: 'dispatch_autograde_workflow',
+  // Safe to repeat: committing an identical workflow file is a no-op.
+  ...retryOnGitBlip,
   run: async (
     { repositoryId, classroomSlug }: ProvisionPayload,
     { ctx }: { ctx: { run: { tags?: string[] } } }
@@ -286,6 +290,8 @@ interface CommitToRepoPayload {
 export const commitAutogradeWorkflowToRepoTask = task({
   id: 'gh-commit_autograde_workflow',
   queue: { concurrencyLimit: 6 },
+  // A missing `workflows` permission (403) is not a blip and still fails once.
+  ...retryOnGitBlip,
   run: async ({ gitOrganization, repoName, yaml, owner }: CommitToRepoPayload) => {
     const gitProvider = getGitProvider(gitOrganization);
     await commitWorkflow(
@@ -368,6 +374,8 @@ async function reprovisionLegacyClassroom(classroomId: string, classroomSlug: st
  */
 export const reprovisionAllAutogradingTask = task({
   id: 'autograde-reprovision-all',
+  // Run by hand from the dashboard; whoever runs it re-runs it.
+  retry: { maxAttempts: 1 },
   run: async () => {
     const repositories = await getPrisma().repository.findMany({
       where: { autograding_tests: { some: {} }, classroom: { is_archived: false } },
@@ -388,6 +396,8 @@ export const reprovisionAllAutogradingTask = task({
 
 export const ingestAutogradeResultTask = task({
   id: INGEST_TASK_ID,
+  // Github Actions reports each result once; a database blip used to drop it.
+  ...retryOnDatabaseBlip,
   run: async (payload: IngestPayload) => {
     const { classroomSlug, repo, sha, run_id, token, results } = payload;
 

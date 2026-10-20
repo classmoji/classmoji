@@ -1,4 +1,6 @@
 import { task } from '@trigger.dev/sdk';
+import { retryOnGitBlip } from '../helpers/gitRetry.ts';
+import { retryOnDatabaseBlip } from '../helpers/databaseRetry.ts';
 import getPrisma from '@classmoji/database';
 import {
   GitHubProvider,
@@ -103,6 +105,8 @@ const adoptInstallation = async (
  */
 export const newInstallationHandlerTask = task({
   id: 'webhook-new_installation_handler',
+  // Github does not redeliver a webhook whose task failed. Safe to repeat: an upsert.
+  ...retryOnGitBlip,
   run: async (payload: InstallationPayload) => adoptInstallation(payload, 'installation.created'),
 });
 
@@ -117,6 +121,8 @@ export const newInstallationHandlerTask = task({
  */
 export const appUninstalledHandlerTask = task({
   id: 'webhook-app_uninstalled_handler',
+  // Database only, and the clear is conditional, so safe to repeat.
+  ...retryOnDatabaseBlip,
   run: async (payload: InstallationPayload) => {
     const {
       installation: { id: installationId, account },
@@ -142,6 +148,8 @@ export const appUninstalledHandlerTask = task({
  */
 export const appSuspendedHandlerTask = task({
   id: 'webhook-app_suspended_handler',
+  // Database only, and the clear is conditional, so safe to repeat.
+  ...retryOnDatabaseBlip,
   run: async (payload: InstallationPayload) => {
     const {
       installation: { id: installationId, account },
@@ -166,5 +174,7 @@ export const appSuspendedHandlerTask = task({
  */
 export const appUnsuspendedHandlerTask = task({
   id: 'webhook-app_unsuspended_handler',
+  // Same adoption as a new installation, so the same retry.
+  ...retryOnGitBlip,
   run: async (payload: InstallationPayload) => adoptInstallation(payload, 'installation.unsuspend'),
 });

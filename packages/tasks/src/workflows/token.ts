@@ -1,4 +1,5 @@
 import { task } from '@trigger.dev/sdk';
+import { retryOnDatabaseBlip } from '../helpers/databaseRetry.ts';
 import { ClassmojiService } from '@classmoji/services';
 
 export const assignTokensToStudentTask = task({
@@ -6,6 +7,9 @@ export const assignTokensToStudentTask = task({
   queue: {
     concurrencyLimit: 10,
   },
+  // A blip used to skip a student silently in a class-wide grant. One
+  // transaction, so a failed attempt has written nothing.
+  ...retryOnDatabaseBlip,
   run: async (payload: {
     student: { id: string | number };
     classroomId: string;
