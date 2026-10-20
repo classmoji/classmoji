@@ -1414,6 +1414,8 @@ async function publishResult(result: ExploreResult): Promise<void> {
  */
 export const exploreRepoTask = task({
   id: 'explore-repo',
+  // The ai-agent waits on this run and turns a failure into an error; another attempt would pay for the model calls again.
+  retry: { maxAttempts: 1 },
   machine: 'small-2x',
   maxDuration: 120,
   queue: { concurrencyLimit: 50 },

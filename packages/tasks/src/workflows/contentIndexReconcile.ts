@@ -70,6 +70,8 @@ const RECONCILE_CRON = '45 5 * * *';
 
 export const contentIndexReconcileTask = schedules.task({
   id: 'content-index-reconcile',
+  // Runs again on its schedule, and that next run is the retry.
+  retry: { maxAttempts: 1 },
   cron: RECONCILE_CRON,
   run: async () => {
     const report = await ClassmojiService.contentIndex.reconcileContentIndex();
@@ -173,6 +175,8 @@ export const parseBackfillPayload = (input: unknown): ContentIndexBackfillPayloa
  */
 export const contentIndexBackfillTask = schemaTask({
   id: 'content-index-backfill',
+  // Run by hand from the dashboard; whoever runs it re-runs it.
+  retry: { maxAttempts: 1 },
   schema: parseBackfillPayload,
   run: async (payload: ContentIndexBackfillPayload) => {
     const report = await ClassmojiService.contentIndex.reconcileContentIndex({

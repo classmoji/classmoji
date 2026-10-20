@@ -18,8 +18,11 @@ vi.mock('@trigger.dev/sdk', () => {
   return {
     AbortTaskRunError,
     task: (config: object) => config,
+    schedules: { task: (config: object) => config },
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     usage: { getCurrent: vi.fn() },
+    tags: { add: vi.fn(async () => {}) },
+    runs: { list: vi.fn() },
   };
 });
 vi.mock('@classmoji/database', () => ({ default: () => ({}) }));
@@ -31,6 +34,7 @@ const {
   mediaVideoProcess,
   processVideo,
   runVideoAttempt,
+  shouldReap,
   VIDEO_MAX_ATTEMPTS,
 } = await import('../mediaVideo.ts');
 type Deps = import('../mediaVideo.ts').VideoJobDeps;
@@ -539,5 +543,40 @@ describe('tmp cleanup', () => {
     const { deps } = world();
     (deps.removeTmpDir as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('EBUSY'));
     await expect(processVideo(PAYLOAD, deps)).resolves.toMatchObject({ status: 'done' });
+  });
+});
+
+// A run the platform ended from outside (crash, OOM, disk) never reaches
+// onFailure, so the row stays PENDING ("Optimising"); the reaper fails it.
+describe('shouldReap', () => {
+  const HOUR = 60 * 60 * 1000;
+  const now = Date.UTC(2026, 9, 20, 12);
+  const readyAgo = (ms: number) => new Date(now - ms);
+
+  it('never touches a row whose job is still alive', () => {
+    expect(
+      shouldReap({ readyAt: readyAgo(48 * HOUR), hasLiveRun: true, hasAnyRun: true, now })
+    ).toBe(false);
+  });
+
+  it('leaves a fresh row alone', () => {
+    expect(
+      shouldReap({ readyAt: readyAgo(10 * 60 * 1000), hasLiveRun: false, hasAnyRun: true, now })
+    ).toBe(false);
+  });
+
+  it('fails a row whose tagged run has ended', () => {
+    expect(
+      shouldReap({ readyAt: readyAgo(2 * HOUR), hasLiveRun: false, hasAnyRun: true, now })
+    ).toBe(true);
+  });
+
+  it('waits a day for a row with no tagged run at all', () => {
+    expect(
+      shouldReap({ readyAt: readyAgo(5 * HOUR), hasLiveRun: false, hasAnyRun: false, now })
+    ).toBe(false);
+    expect(
+      shouldReap({ readyAt: readyAgo(25 * HOUR), hasLiveRun: false, hasAnyRun: false, now })
+    ).toBe(true);
   });
 });

@@ -17,6 +17,7 @@ import {
 import { createRepositoriesTask } from './gitRepo.ts';
 import { ensureGitInstallation, GitAppNotInstalledError } from '../helpers/gitInstallation.ts';
 import { retryOnDatabaseBlip, withDatabaseRetry } from '../helpers/databaseRetry.ts';
+import { retryOnGitBlip } from '../helpers/gitRetry.ts';
 import { nanoid } from 'nanoid';
 import dayjs from 'dayjs';
 
@@ -540,6 +541,9 @@ export const createGithubRepositoryAssignmentTask = task({
   queue: {
     concurrencyLimit: 4,
   },
+  // A lost attempt left the student without the assignment. Safe to repeat:
+  // an existing row is skipped and an issue a failed attempt left is adopted.
+  ...retryOnGitBlip,
   run: addAssignmentToRepo,
 });
 
@@ -596,6 +600,9 @@ export const createDatabaseRepositoryAssignmentTask = task({
 
 export const addGraderToRepositoryAssignmentTask = task({
   id: 'add_grader_to_git_repo_assignment',
+  // Safe to repeat: assigning on Github is a no-op the second time, and a
+  // duplicate grader row (P2002) is not a blip, so it stops there.
+  ...retryOnGitBlip,
   run: async (payload: GitRepoAssignmentGraderTaskPayload) => {
     return HelperService.addGraderToGitRepoAssignment(payload);
   },
@@ -603,6 +610,8 @@ export const addGraderToRepositoryAssignmentTask = task({
 
 export const removeGraderFromRepositoryAssignmentTask = task({
   id: 'remove_grader_from_git_repo_assignment',
+  // No caller today; grader moves go through move_grader_slot.
+  retry: { maxAttempts: 1 },
   run: async (payload: GitRepoAssignmentGraderTaskPayload) => {
     return HelperService.removeGraderFromGitRepoAssignment(payload);
   },
@@ -771,68 +780,73 @@ export const repositoryAssignmentDeletedHandlerTask = task({
 
 export const dailyRepositoryAssignmentsReleaseTask = schedules.task({
   id: 'daily_git_repo_assignments_release',
+  // Runs again on its schedule, and that next run is the retry.
+  retry: { maxAttempts: 1 },
   cron: '1 4 * * *',
   run: async (_payload: ScheduleTaskPayload, { ctx }: GitRepoAssignmentTaskContext) => {
-    try {
-      const assignmentsToRelease = (await ClassmojiService.assignment.findReadyForRelease(
-        dayjs().endOf('day').toDate()
-      )) as ReleaseAssignmentRecord[];
+    const assignmentsToRelease = (await ClassmojiService.assignment.findReadyForRelease(
+      dayjs().endOf('day').toDate()
+    )) as ReleaseAssignmentRecord[];
 
-      logger.debug('Assignments to release', { assignmentsToRelease });
+    logger.debug('Assignments to release', { assignmentsToRelease });
 
-      if (assignmentsToRelease.length === 0) {
-        logger.info('No assignments to release');
-        return;
+    if (assignmentsToRelease.length === 0) {
+      logger.info('No assignments to release');
+      return;
+    }
+
+    logger.info('Found assignments to release', { count: assignmentsToRelease.length });
+
+    // One installation check per Github org per run. Without it an org whose
+    // app was uninstalled spawned one failing create_git_repos run per
+    // unreleased repository, every night, all with the same error.
+    const installationChecks = new Map<string, Promise<GitOrganizationLike | null>>();
+    const checkInstallation = (classroom: ClassroomRecord): Promise<GitOrganizationLike | null> => {
+      const gitOrg = classroom.git_organization;
+      const key = (gitOrg as { id?: string }).id ?? gitOrg.login ?? classroom.id;
+      let check = installationChecks.get(key);
+      if (!check) {
+        check = ensureGitInstallation(gitOrg).catch((error: unknown) => {
+          const message = getErrorMessage(error);
+          if (error instanceof GitAppNotInstalledError) {
+            logger.error('Skipping assignment release: Github App not installed', {
+              org: gitOrg.login,
+              classroomSlug: classroom.slug,
+              status: error.status,
+              message,
+            });
+          } else {
+            logger.warn('Skipping assignment release: installation check failed', {
+              org: gitOrg.login,
+              classroomSlug: classroom.slug,
+              message,
+            });
+          }
+          return null;
+        });
+        installationChecks.set(key, check);
       }
+      return check;
+    };
 
-      logger.info('Found assignments to release', { count: assignmentsToRelease.length });
-
-      // One installation check per Github org per run. Without it an org whose
-      // app was uninstalled spawned one failing create_git_repos run per
-      // unreleased repository, every night, all with the same error.
-      const installationChecks = new Map<string, Promise<GitOrganizationLike | null>>();
-      const checkInstallation = (
-        classroom: ClassroomRecord
-      ): Promise<GitOrganizationLike | null> => {
-        const gitOrg = classroom.git_organization;
-        const key = (gitOrg as { id?: string }).id ?? gitOrg.login ?? classroom.id;
-        let check = installationChecks.get(key);
-        if (!check) {
-          check = ensureGitInstallation(gitOrg).catch((error: unknown) => {
-            const message = getErrorMessage(error);
-            if (error instanceof GitAppNotInstalledError) {
-              logger.error('Skipping assignment release: Github App not installed', {
-                org: gitOrg.login,
-                classroomSlug: classroom.slug,
-                status: error.status,
-                message,
-              });
-            } else {
-              logger.warn('Skipping assignment release: installation check failed', {
-                org: gitOrg.login,
-                classroomSlug: classroom.slug,
-                message,
-              });
-            }
-            return null;
-          });
-          installationChecks.set(key, check);
-        }
-        return check;
-      };
-
-      const moduleGroups: Record<string, ReleaseAssignmentRecord[]> = {};
-      for (const assignment of assignmentsToRelease) {
-        if (!moduleGroups[assignment.repository_id]) {
-          moduleGroups[assignment.repository_id] = [];
-        }
-        moduleGroups[assignment.repository_id].push(assignment);
+    const moduleGroups: Record<string, ReleaseAssignmentRecord[]> = {};
+    for (const assignment of assignmentsToRelease) {
+      if (!moduleGroups[assignment.repository_id]) {
+        moduleGroups[assignment.repository_id] = [];
       }
+      moduleGroups[assignment.repository_id].push(assignment);
+    }
 
-      for (const repositoryId in moduleGroups) {
-        const moduleAssignments = moduleGroups[repositoryId];
-        const repository = moduleAssignments[0].repository;
-        const classroom = repository.classroom;
+    // What went wrong, collected across every repository: one repository's
+    // failure no longer stops the release for the repositories after it, and
+    // the run still ends failed so the failure is seen.
+    const failures: string[] = [];
+
+    for (const repositoryId in moduleGroups) {
+      const moduleAssignments = moduleGroups[repositoryId];
+      const repository = moduleAssignments[0].repository;
+      const classroom = repository.classroom;
+      try {
         const gitOrg = await checkInstallation(classroom);
         if (!gitOrg) continue;
 
@@ -861,60 +875,97 @@ export const dailyRepositoryAssignmentsReleaseTask = schedules.task({
           const recipients = uniqueLogins(logins);
 
           if (recipients.length > 0) {
-            await createRepositoriesTask.triggerAndWait({
+            const result = await createRepositoriesTask.triggerAndWait({
               logins: recipients,
               assignmentTitle: repository.title,
               org: classroom.slug,
               sessionId: nanoid(),
             });
+            if (result && !result.ok) {
+              failures.push(`${classroom.slug}/${repository.title}: repository creation failed`);
+            }
           }
-        } else {
-          const repositorySlug = repository.slug || titleToIdentifier(repository.title);
-          const recipients = uniqueLogins(logins);
-          const repos = await ensureReposForLogins(
-            classroom,
-            repository,
-            repositorySlug,
-            recipients,
-            nanoid()
-          );
-          const findRepo = await repoFinderFor(classroom, repositorySlug, repos);
+          continue;
+        }
 
-          for await (const assignment of moduleAssignments) {
-            logger.info('Processing assignment', { title: assignment.title });
+        const repositorySlug = repository.slug || titleToIdentifier(repository.title);
+        const recipients = uniqueLogins(logins);
+        const repos = await ensureReposForLogins(
+          classroom,
+          repository,
+          repositorySlug,
+          recipients,
+          nanoid()
+        );
+        const findRepo = await repoFinderFor(classroom, repositorySlug, repos);
 
-            const payloads = recipients.map(login => {
-              const studentRepo = findRepo(login);
+        for await (const assignment of moduleAssignments) {
+          logger.info('Processing assignment', { title: assignment.title });
 
-              if (!studentRepo) {
-                throw new Error(
-                  `GitRepo not found after provisioning for ${login} in classroom ${classroom.slug}`
-                );
-              }
-              const repoName = studentRepo.name;
-
-              return {
+          // A student whose repository could not be made is skipped, not
+          // allowed to stop the release for the rest of the class.
+          const missing: string[] = [];
+          const payloads = recipients.flatMap(login => {
+            const studentRepo = findRepo(login);
+            if (!studentRepo) {
+              missing.push(login);
+              return [];
+            }
+            return [
+              {
                 payload: {
                   assignment,
                   organization: gitOrg,
-                  repoName,
+                  repoName: studentRepo.name,
                   studentRepo,
                 },
                 options: { tags: ctx.run.tags },
-              };
-            });
+              },
+            ];
+          });
 
-            if (payloads.length > 0) {
-              await createGithubRepositoryAssignmentTask.batchTriggerAndWait(payloads);
-            }
-            await ClassmojiService.assignment.update(assignment.id, {
-              is_published: true,
+          let failedRuns = 0;
+          if (payloads.length > 0) {
+            const result = await createGithubRepositoryAssignmentTask.batchTriggerAndWait(payloads);
+            failedRuns = (result?.runs ?? []).filter(run => !run.ok).length;
+          }
+
+          // Published even when some students failed: holding it back would
+          // hide the assignment from the whole class. Those students are
+          // reported below and fixed with Sync.
+          await ClassmojiService.assignment.update(assignment.id, {
+            is_published: true,
+          });
+
+          if (missing.length > 0 || failedRuns > 0) {
+            logger.error('Assignment released with students missing it', {
+              classroomSlug: classroom.slug,
+              assignmentId: assignment.id,
+              title: assignment.title,
+              noRepository: missing,
+              failedIssueRuns: failedRuns,
             });
+            failures.push(
+              `${classroom.slug}/${assignment.title}: ${missing.length} without a repository, ` +
+                `${failedRuns} failed`
+            );
           }
         }
+      } catch (error: unknown) {
+        logger.error('Assignment release failed for a repository', {
+          classroomSlug: classroom.slug,
+          repositoryId,
+          title: repository.title,
+          message: getErrorMessage(error),
+        });
+        failures.push(`${classroom.slug}/${repository.title}: ${getErrorMessage(error)}`);
       }
-    } catch (error: unknown) {
-      logger.error('Error in dailyRepositoryAssignmentsReleaseTask', { error });
+    }
+
+    if (failures.length > 0) {
+      throw new Error(
+        `Assignment release finished with ${failures.length} failure(s): ${failures.join('; ')}`
+      );
     }
   },
 });
@@ -936,6 +987,8 @@ interface ReleaseAssignmentsNowPayload {
  */
 export const releaseAssignmentsNowTask = task({
   id: 'release_git_repo_assignments_now',
+  // No caller today; the daily release covers it.
+  retry: { maxAttempts: 1 },
   run: async (payload: ReleaseAssignmentsNowPayload, { ctx }: GitRepoAssignmentTaskContext) => {
     const assignments = (await ClassmojiService.assignment.findForReleaseByRepository(
       payload.repositoryId,

@@ -93,6 +93,8 @@ const addToSegment = async (
 
 export const syncInstructorContacts = schedules.task({
   id: 'sync-instructor-contacts',
+  // Runs again on its schedule, and that next run is the retry.
+  retry: { maxAttempts: 1 },
   // 05:50 UTC daily, after the other nightly jobs and off the hour.
   cron: '50 5 * * *',
   run: async () => {

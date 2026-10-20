@@ -1,4 +1,5 @@
 import { task } from '@trigger.dev/sdk';
+import { retryOnGitBlip } from '../helpers/gitRetry.ts';
 import { simpleGit } from 'simple-git';
 import dotenv from 'dotenv';
 import fs from 'fs';
@@ -75,6 +76,9 @@ export const calculateContributionsTask = task({
   queue: {
     concurrencyLimit: 6,
   },
+  // A clone is what Github blips break. Safe to repeat: a fresh checkout per
+  // run, and the result overwrites the stored contributions.
+  ...retryOnGitBlip,
   run: async (arg: { classroomSlug: string; repoName: string; accessToken?: string }) => {
     const { classroomSlug, repoName, accessToken = '' } = arg;
     // A fresh directory per run: concurrent runs never share a checkout.

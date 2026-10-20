@@ -1,4 +1,4 @@
-import { AbortTaskRunError, logger, task, usage } from '@trigger.dev/sdk';
+import { AbortTaskRunError, logger, runs, schedules, tags, task, usage } from '@trigger.dev/sdk';
 import getPrisma from '@classmoji/database';
 import { mediaKey, posterVariant, renditionVariant } from '@classmoji/content-signing';
 import { mkdtemp, rm, stat } from 'node:fs/promises';
@@ -91,6 +91,13 @@ import { probeFile, runFfmpeg } from '../helpers/videoTools.ts';
 
 export const VIDEO_TASK_ID = 'media-video-process';
 export const VIDEO_MAX_ATTEMPTS = 3;
+
+/**
+ * The tag on every run for one media row, so `media-video-reaper` can ask
+ * Trigger whether the row's job is still alive. Same spelling as
+ * `videoRunTag` in @classmoji/services' media.service, which tags at enqueue.
+ */
+export const videoRunTag = (mediaId: string) => `media:${mediaId}`;
 
 export interface MediaVideoPayload {
   classroomId: string;
@@ -533,6 +540,8 @@ export const mediaVideoProcess = task({
     factor: 2,
   },
   run: async (payload: MediaVideoPayload, { ctx }): Promise<MediaVideoResult> => {
+    // Enqueue already tags the run; this covers one started by hand.
+    await tags.add(videoRunTag(payload.mediaId)).catch(() => {});
     const deadlineMs = deadlineInMs(
       ctx.run.maxDuration ?? VIDEO_MAX_DURATION_SEC,
       usage.getCurrent().compute.total.durationMs
@@ -566,5 +575,102 @@ export const mediaVideoProcess = task({
         error: describe(error),
       });
     }
+  },
+});
+
+/** Run states in which a video job may still write its row. */
+const LIVE_RUN_STATUSES = [
+  'PENDING_VERSION',
+  'DELAYED',
+  'QUEUED',
+  'DEQUEUED',
+  'EXECUTING',
+  'WAITING',
+] as const;
+
+/** What the reaper writes: the same words as any other failed optimise. */
+export const REAPED_MESSAGE = GENERIC_FAILURE_MESSAGE;
+
+/** Rows younger than this are left alone: their job may not be listed yet. */
+const REAP_MIN_AGE_MS = 60 * 60 * 1000;
+/** A row with no tagged run at all (queued before runs were tagged) waits this long. */
+const REAP_UNTAGGED_AGE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Should a row stuck at PENDING be marked FAILED? Only when nothing alive can
+ * still finish it: a live run would have its DONE write refused by the FAILED
+ * row. A run the reaper misjudges is not lost either way: a later run claims a
+ * FAILED row back to PENDING.
+ */
+export const shouldReap = ({
+  readyAt,
+  hasLiveRun,
+  hasAnyRun,
+  now,
+}: {
+  readyAt: Date | null;
+  hasLiveRun: boolean;
+  hasAnyRun: boolean;
+  now: number;
+}): boolean => {
+  if (hasLiveRun) return false;
+  const age = readyAt ? now - readyAt.getTime() : Infinity;
+  if (age < REAP_MIN_AGE_MS) return false;
+  return hasAnyRun || age >= REAP_UNTAGGED_AGE_MS;
+};
+
+/**
+ * Rows the video job left at PENDING ("Optimising") when the platform ended it
+ * from outside: a crash, an out-of-memory kill, the disk limit. `onFailure`
+ * never runs for those, so without this the row shows Optimising forever.
+ * Marked FAILED here, which the page shows as "Couldn't optimise" with the
+ * original still served.
+ */
+export const mediaVideoReaper = schedules.task({
+  id: 'media-video-reaper',
+  // Hourly; the next run is the retry.
+  retry: { maxAttempts: 1 },
+  cron: '35 * * * *',
+  run: async () => {
+    const prisma = getPrisma();
+    const now = Date.now();
+    const stuck = await prisma.mediaObject.findMany({
+      where: {
+        kind: 'VIDEO',
+        status: 'READY',
+        processing: 'PENDING',
+        ready_at: { lt: new Date(now - REAP_MIN_AGE_MS) },
+      },
+      select: { id: true, ready_at: true },
+      take: 200,
+    });
+
+    let reaped = 0;
+    for (const row of stuck) {
+      const tag = videoRunTag(row.id);
+      const [live, any] = await Promise.all([
+        runs.list({ taskIdentifier: VIDEO_TASK_ID, tag, status: [...LIVE_RUN_STATUSES], limit: 1 }),
+        runs.list({ taskIdentifier: VIDEO_TASK_ID, tag, limit: 1 }),
+      ]);
+      if (
+        !shouldReap({
+          readyAt: row.ready_at,
+          hasLiveRun: live.data.length > 0,
+          hasAnyRun: any.data.length > 0,
+          now,
+        })
+      ) {
+        continue;
+      }
+      const { count } = await prisma.mediaObject.updateMany({
+        where: { id: row.id, status: 'READY', processing: 'PENDING' },
+        data: { processing: 'FAILED', processing_error: REAPED_MESSAGE },
+      });
+      if (count > 0) {
+        reaped += 1;
+        logger.warn('Marked a stuck video as failed', { mediaId: row.id });
+      }
+    }
+    return { checked: stuck.length, reaped };
   },
 });

@@ -82,6 +82,8 @@ async function schemaVersions(): Promise<{ page: number; deck: number } | undefi
 
 export const collabSweeper = schedules.task({
   id: 'collab-sweeper',
+  // Runs every 30 minutes, and a throw here is a deliberate alert; retrying it is only noise.
+  retry: { maxAttempts: 1 },
   // Every 30 minutes. The cadence only bounds how late each pass notices:
   // a lost trigger is re-run between 2 × COLLAB_CHECKPOINT_MAX_DELAY and that
   // plus 30 minutes after the doc went dirty, and the stuck-error alert fires
