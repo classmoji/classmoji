@@ -27,7 +27,13 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 
-const notifications = vi.hoisted(() => ({ calls: [] as Array<{ recipientUserIds: string[] }> }));
+const notifications = vi.hoisted(() => ({
+  calls: [] as Array<{
+    recipientUserIds: string[];
+    type?: string;
+    metadata?: Record<string, unknown>;
+  }>,
+}));
 
 // In-app notifications are recorded, not written (their emails would reach
 // Trigger.dev).
@@ -517,8 +523,23 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
           status: 'IN_REVIEW',
         },
       });
-      // OWNER/TEACHER of the classroom get the in-app notification.
+      // OWNER/TEACHER of the classroom get the in-app notification, once,
+      // naming the quiz and the attempt for its email.
+      expect(notifications.calls).toHaveLength(1);
       expect(notifications.calls.at(-1)?.recipientUserIds).toEqual([owner]);
+      const attemptRow = await prisma.quizAttempt.findUniqueOrThrow({
+        where: { id },
+        select: { attempt_number: true, quiz: { select: { name: true } } },
+      });
+      expect(first.attemptNumber).toBe(attemptRow.attempt_number);
+      expect(notifications.calls.at(-1)).toMatchObject({
+        type: 'TA_REGRADE_ASSIGNED',
+        metadata: {
+          target: 'quiz',
+          quiz_name: attemptRow.quiz.name,
+          attempt_number: attemptRow.attempt_number,
+        },
+      });
 
       const dup = await regradeRequest.createForQuizAttempt({
         attemptId: id,
@@ -528,6 +549,8 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
       });
       expect(dup.created).toBe(false);
       expect(dup.request.id).toBe(first.request.id);
+      // A duplicate ask notifies no one.
+      expect(notifications.calls).toHaveLength(1);
       expect((await regradeRequest.findOpenByQuizAttemptId(id))?.id).toBe(first.request.id);
 
       const created = await prisma.auditLog.findMany({

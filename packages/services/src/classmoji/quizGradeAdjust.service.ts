@@ -92,6 +92,7 @@ const ATTEMPT_SELECT = {
   id: true,
   user_id: true,
   quiz_id: true,
+  attempt_number: true,
   completed_at: true,
   partial_credit_percentage: true,
   adjusted_emoji: true,

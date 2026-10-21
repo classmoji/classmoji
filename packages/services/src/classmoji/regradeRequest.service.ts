@@ -243,6 +243,8 @@ export interface CreateQuizRegradeResult {
   created: boolean;
   classroomId: string;
   quiz: { id: string; name: string; assignmentTitle: string | null };
+  /** The attempt's number within the quiz (1-based). */
+  attemptNumber: number;
 }
 
 /**
@@ -279,6 +281,7 @@ export const createForQuizAttempt = async (
         name: attempt.quiz.name,
         assignmentTitle: attempt.quiz.assignment?.title ?? null,
       };
+      const attemptNumber = attempt.attempt_number;
       // Own attempt only, as a current student of its classroom. Same answer
       // for "not yours" and "no such attempt".
       const role = await acceptedRoleIn(tx, classroomId, actorUserId);
@@ -297,7 +300,7 @@ export const createForQuizAttempt = async (
       await requireGradableAttempt(tx, attempt);
 
       const open = await findOpenByQuizAttemptId(attempt.id, tx);
-      if (open) return { request: open, created: false, classroomId, quiz, role };
+      if (open) return { request: open, created: false, classroomId, quiz, attemptNumber, role };
 
       const scale = await findScaleByClassroomId(classroomId);
       const emoji = quizAttemptGrade(attempt, scale).effective.emoji;
@@ -310,7 +313,7 @@ export const createForQuizAttempt = async (
           previous_grade: emoji ? [emoji] : [],
         },
       });
-      return { request, created: true, classroomId, quiz, role };
+      return { request, created: true, classroomId, quiz, attemptNumber, role };
     });
 
   let result: Awaited<ReturnType<typeof run>>;
@@ -325,7 +328,7 @@ export const createForQuizAttempt = async (
     }
   }
 
-  const { request, created, classroomId, quiz, role } = result;
+  const { request, created, classroomId, quiz, attemptNumber, role } = result;
   if (created) {
     await auditRegrade(input, {
       classroomId,
@@ -358,11 +361,18 @@ export const createForQuizAttempt = async (
         resourceType: 'regrade_request',
         resourceId: request.id,
         title: `Regrade request: ${quiz.assignmentTitle ?? quiz.name}`,
+        // The email names the quiz and the attempt: "A student asked for a
+        // regrade of <quiz> (attempt N)" (notificationEmails.regradeSubject).
+        metadata: {
+          target: 'quiz',
+          quiz_name: quiz.name,
+          attempt_number: attemptNumber,
+        },
       });
     });
   }
 
-  return { request, created, classroomId, quiz };
+  return { request, created, classroomId, quiz, attemptNumber };
 };
 
 export interface ResolveQuizRegradeInput extends QuizGradeActor {
