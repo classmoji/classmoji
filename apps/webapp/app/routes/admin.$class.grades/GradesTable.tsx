@@ -20,6 +20,7 @@ import {
   finalStudentGrade,
   gradedItemValue,
   quizItemEmoji,
+  quizPercentageEmoji,
 } from '@classmoji/utils';
 import type {
   GitRepo,
@@ -699,21 +700,34 @@ const GradesTable = (props: GradesTableProps) => {
     // One summary cell per VISIBLE column, in column order: a collapsed module
     // contributes only its total cell.
     const meanText = (values: number[]) => (values.length ? mean(values).toFixed(1) : '–');
-    const summaryCells = groups.flatMap(group => {
+    const summaryCells: { key: string; content: React.ReactNode }[] = groups.flatMap(group => {
       const ids = new Set(group.items.map(a => a.id));
       const assignmentCells = collapsedModules.has(group.id)
         ? []
         : group.items.map(a => {
+            if (a.type === 'QUIZ') {
+              // Quiz cells are emoji only (E1): the class mean as the nearest
+              // emoji on the classroom's scale, the quiz cells' own helper.
+              const grades = pageData
+                .map(s => quizValueOf(s, a.id))
+                .filter((g): g is number => g !== null);
+              return {
+                key: a.id,
+                content: (
+                  <QuizGradeEmoji
+                    emoji={grades.length ? quizPercentageEmoji(mean(grades), emojiMappings) : null}
+                  />
+                ),
+              };
+            }
             const grades =
               a.type === 'REPO'
                 ? pageData.map(s => gradeOf(s, a.id)).filter((g): g is number => g !== null)
-                : a.type === 'QUIZ'
-                  ? pageData.map(s => quizValueOf(s, a.id)).filter((g): g is number => g !== null)
-                  : [];
-            return { key: a.id, text: meanText(grades) };
+                : [];
+            return { key: a.id, content: meanText(grades) };
           });
       const totals = pageData.map(s => moduleTotalOf(s, group.id, ids)).filter(t => t >= 0);
-      return [...assignmentCells, { key: `module-total-${group.id}`, text: meanText(totals) }];
+      return [...assignmentCells, { key: `module-total-${group.id}`, content: meanText(totals) }];
     });
     return (
       <Table.Summary fixed>
@@ -723,7 +737,7 @@ const GradesTable = (props: GradesTableProps) => {
           </Table.Summary.Cell>
           {summaryCells.map((cell, i) => (
             <Table.Summary.Cell key={cell.key} index={i + 1}>
-              <span className="text-xs text-ink-2 tabular-nums">{cell.text}</span>
+              <span className="text-xs text-ink-2 tabular-nums">{cell.content}</span>
             </Table.Summary.Cell>
           ))}
           <Table.Summary.Cell index={summaryCells.length + 1}>

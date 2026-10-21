@@ -11,7 +11,6 @@ import TableActionButtons from '~/components/ui/buttons/TableActionButtons';
 import UserThumbnailView from '~/components/features/profile/UserThumbnailView';
 import { openRepositoryAssignmentInGithub } from '~/utils/helpers.client';
 import GradeBadges from '~/components/features/grading/GradeBadges';
-import QuizGradeEmoji from '~/components/features/quiz/QuizGradeEmoji';
 import ResolveQuizRegradeModal from '~/components/features/regrade/ResolveQuizRegradeModal';
 import { quizRequestLabel, type RegradeRequestRowData } from '~/components/features/regrade/types';
 import { QUIZ_STATUS_LABEL, QuizRemedy } from '~/components/features/regrade/QuizRemedy';
@@ -196,8 +195,11 @@ const RegradeRequestsTable = ({
       render: (_: unknown, request: RegradeRequestRowData) =>
         request.quiz ? (
           <div className="flex justify-center">
-            {request.status === 'APPROVED' ? (
-              <QuizGradeEmoji emoji={request.quiz.resolvedEmoji} size="lg" />
+            {request.status === 'APPROVED' && request.quiz.resolvedEmoji ? (
+              // The repo row's GradeBadges size, so both rows read alike.
+              <div className="p-0.5">
+                <Emoji emoji={request.quiz.resolvedEmoji} fontSize={18} className="block" />
+              </div>
             ) : (
               <span className="text-gray-400 dark:text-gray-500">—</span>
             )}
@@ -220,7 +222,12 @@ const RegradeRequestsTable = ({
       render: (previousGrade: string[], request: RegradeRequestRowData) =>
         request.quiz ? (
           <div className="flex justify-center">
-            <QuizGradeEmoji emoji={previousGrade[0] ?? null} size="lg" />
+            {/* The repo row's previous-grade size. */}
+            {previousGrade[0] ? (
+              <Emoji emoji={previousGrade[0]} size="lg" />
+            ) : (
+              <span className="text-gray-400 dark:text-gray-500">—</span>
+            )}
           </div>
         ) : (
           <div className="flex gap-2 justify-center">

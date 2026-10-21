@@ -419,7 +419,10 @@ export default function AdminQuizAttemptViewDrawer({ loaderData }: Route.Compone
               {panel.adjustable && (
                 <QuizAttemptGradePanel
                   panel={panel}
-                  resolveUrl={panel.openRequest ? resolveUrl(panel.openRequest.id) : null}
+                  // The banner above already resolves it when the classroom takes changes.
+                  resolveUrl={
+                    panel.openRequest && !panel.canEdit ? resolveUrl(panel.openRequest.id) : null
+                  }
                 />
               )}
             </>

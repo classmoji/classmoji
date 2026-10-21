@@ -106,6 +106,12 @@ const NUMERIC_SCALE = Object.fromEntries(
   Array.from({ length: 11 }, (_, i) => [`score-${i * 10}`, i * 10])
 );
 
+/** The class row under the table. */
+const summaryOf = (html: string) => {
+  const start = html.indexOf('ant-table-summary');
+  return start === -1 ? '' : html.slice(start);
+};
+
 /** The quiz cell: the link to the quiz results page. */
 const cellOf = (html: string) => {
   const match = /<a[^>]*href="\/admin\/intro-101\/quizzes\/quiz-a-quiz"[^>]*>([\s\S]*?)<\/a>/.exec(
@@ -339,16 +345,36 @@ describe('gradebook row filters', () => {
 describe('gradebook totals with quiz items', () => {
   it('counts the quiz item in the Total, the module total and the column mean', () => {
     const html = render({
+      emojiMappings: NUMERIC_SCALE,
       assignments: [quizColumn('a-quiz', 'Recursion')],
       students: [student('s-1', 'Ada', [item('a-quiz')])],
       activity: { quiz: { 'a-quiz': { 's-1': { completed: true, emoji: 'score-80' } } }, form: {} },
     });
     const flat = text(html);
 
-    // Column mean and module total in the class row read the item value (72),
-    // not the raw attempt score (80).
-    expect(flat).toContain('Class 72.0 72.0 mean 72.0');
+    // Module total in the class row reads the item value (72), not the raw
+    // attempt score (80); the quiz column's mean is that value as an emoji.
+    expect(flat).toContain('Class 72.0 mean 72.0');
     expect(flat).not.toContain('80.0');
+    expect(summaryOf(html)).toContain('data-emoji="score-70"');
+  });
+
+  it("shows a quiz column's class mean as the classroom's emoji, never a number (E1)", () => {
+    const html = render({
+      emojiMappings: NUMERIC_SCALE,
+      assignments: [quizColumn('a-quiz', 'Recursion'), quizColumn('a-quiz-2', 'Lists')],
+      students: [
+        student('s-1', 'Ada', [item('a-quiz', { grade: 100, raw_grade: 100, late_hours: 0 })]),
+        student('s-2', 'Bo', [item('a-quiz', { grade: 60, raw_grade: 60, late_hours: 0 })]),
+      ],
+    });
+    const summary = summaryOf(html);
+
+    // Mean 80 → score-80; the ungraded quiz reads a dash; the module total stays a number.
+    expect(summary).toContain('data-emoji="score-80"');
+    expect(summary).toContain('data-testid="quiz-grade-none"');
+    // Quiz columns (emoji, dash) carry no number; the module total does.
+    expect(text(summary)).toContain('Class — 80.0 mean 80.0');
   });
 
   it('counts a counted zero in the Total', () => {
