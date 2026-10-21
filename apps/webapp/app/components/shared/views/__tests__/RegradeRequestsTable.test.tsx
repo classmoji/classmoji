@@ -12,6 +12,11 @@
  *     name on rows resolved before that was recorded), and the
  *     "Request regrade/resubmit" button; no Resolve.
  *   - A repo row keeps its title, picker and Resolve.
+ *   - A resolved quiz row reads Approved / Denied with "Score adjusted A → B"
+ *     or "Score kept A", B the resolution's own grade (`resolvedEmoji`), not
+ *     the attempt's grade now.
+ *   - A read-only classroom (`canResolve` false) shows no Resolve or picker.
+ *   - `?resolve=<id>` opens that open quiz request's resolve modal.
  */
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createMemoryRouter, RouterProvider } from 'react-router';
@@ -60,6 +65,7 @@ const quizRow = (over: Partial<RegradeRequestRowData> = {}): RegradeRequestRowDa
     originalEmoji: 'score-60',
     effectiveEmoji: 'score-60',
     adjusted: false,
+    resolvedEmoji: null,
     adjustedByName: null,
     adjustedAt: null,
     lateHours: 0,
@@ -81,6 +87,7 @@ const resolvedQuizRow = () =>
       ...quizRow().quiz!,
       attemptNumber: 1,
       effectiveEmoji: 'score-90',
+      resolvedEmoji: 'score-90',
       adjusted: true,
       // Whoever last touched the attempt is not the reply's author.
       adjustedByName: 'Someone Else',
@@ -112,7 +119,7 @@ const repoRow = (): RegradeRequestRowData => ({
 });
 
 // A data router: the resolve modal posts through `useFetcher`.
-const render = (requests: RegradeRequestRowData[], path: string) =>
+const render = (requests: RegradeRequestRowData[], path: string, canResolve = true) =>
   renderToStaticMarkup(
     <RouterProvider
       router={createMemoryRouter(
@@ -124,6 +131,7 @@ const render = (requests: RegradeRequestRowData[], path: string) =>
                 requests={requests}
                 emojiMappings={{ 'score-90': 90, 'score-60': 60, 'score-0': 0 }}
                 org="test-org"
+                canResolve={canResolve}
               />
             ),
           },
@@ -177,6 +185,36 @@ describe('RegradeRequestsTable, staff', () => {
 
     const done = render([resolvedQuizRow()], '/teacher/cs1/regrade-requests');
     expect(done).not.toContain('regrade-quiz-resolve');
+  });
+
+  it("reads a resolved quiz row with the resolution's own grade", () => {
+    // Adjusted to 👀-90 at resolution; adjusted again afterwards directly.
+    const approved = quizRow({
+      id: 'req-approved',
+      status: 'APPROVED',
+      quiz: { ...quizRow().quiz!, effectiveEmoji: 'score-0', resolvedEmoji: 'score-90' },
+    });
+    const html = render([approved], '/admin/cs1/regrade-requests');
+    expect(text(html)).toContain('Approved');
+    expect(text(html)).toContain('Score adjusted');
+    expect(html).toContain('data-emoji="score-90"');
+    expect(html).not.toContain('data-emoji="score-0"');
+
+    const denied = quizRow({
+      id: 'req-denied',
+      status: 'DENIED',
+      quiz: { ...quizRow().quiz!, resolvedEmoji: 'score-60' },
+    });
+    const kept = text(render([denied], '/admin/cs1/regrade-requests'));
+    expect(kept).toContain('Denied');
+    expect(kept).toContain('Score kept');
+  });
+
+  it('shows no Resolve or picker in a read-only classroom', () => {
+    const html = render([quizRow(), repoRow()], '/admin/cs1/regrade-requests', false);
+    expect(html).not.toContain('regrade-quiz-resolve');
+    expect(html).not.toContain('regrade-repo-resolve');
+    expect(html).not.toContain('emoji-grade-trigger');
   });
 
   it('keeps the repo row: its title, the picker and Resolve', () => {

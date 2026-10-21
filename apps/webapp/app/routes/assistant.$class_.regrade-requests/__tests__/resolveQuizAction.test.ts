@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   findMany: vi.fn(),
   resolveQuiz: vi.fn(),
   trigger: vi.fn(),
+  loadRows: vi.fn(),
 }));
 
 vi.mock('@trigger.dev/sdk', () => ({
@@ -57,9 +58,11 @@ vi.mock('@classmoji/services', () => {
 
 // The page component and the loader's helpers are not under test.
 vi.mock('~/components', () => ({ RegradeRequestsTable: () => null }));
-vi.mock('~/utils/regradeRequestRows.server', () => ({ loadStaffRegradeRows: vi.fn() }));
+vi.mock('~/utils/regradeRequestRows.server', () => ({
+  loadStaffRegradeRows: (...a: unknown[]) => mocks.loadRows(...a),
+}));
 
-const { action } = await import('../route');
+const { action, loader } = await import('../route');
 const { QuizGradeError } = (await import('@classmoji/services')) as unknown as {
   QuizGradeError: new (code: string, message: string, status: number) => Error;
 };
@@ -74,6 +77,7 @@ const REQUESTS = [
 const CLASSROOMS: Record<string, { id: string; status: string }> = {
   'class-x-slug': { id: 'class-x', status: 'ACTIVE' },
   'class-y-slug': { id: 'class-y', status: 'ACTIVE' },
+  'class-locked-slug': { id: 'class-x', status: 'LOCKED' },
 };
 
 /**
@@ -230,10 +234,49 @@ describe('quiz regrade resolve action', () => {
     expect(mocks.trigger).not.toHaveBeenCalled();
   });
 
+  it("returns a read-only classroom's refusal as data, resolving nothing", async () => {
+    const result = (await call(adjust(), 'class-locked-slug')) as DataResult & {
+      data: { code?: string };
+    };
+    expect(result.init?.status).toBe(403);
+    expect(result.data.code).toBe('CLASSROOM_LOCKED');
+    expect(mocks.resolveQuiz).not.toHaveBeenCalled();
+  });
+
+  it('passes the quizzes-unavailable refusal through as data', async () => {
+    mocks.resolveQuiz.mockRejectedValue(
+      new QuizGradeError('forbidden', 'Quizzes are not available in this classroom', 403)
+    );
+    const result = (await call(adjust())) as DataResult;
+    expect(result.init?.status).toBe(403);
+    expect(result.data.error).toBe('Quizzes are not available in this classroom');
+  });
+
   it('is the action the /teacher and /admin requests pages serve', async () => {
     const teacher = await import('../../teacher.$class_.regrade-requests/route');
     const admin = await import('../../admin.$class.regrade-requests/route');
     expect(teacher.action).toBe(action);
     expect(admin.action).toBe(action);
+  });
+});
+
+describe('regrade queue loader', () => {
+  const load = (slug: string) =>
+    loader({
+      params: { class: slug },
+      request: new Request(`http://localhost/assistant/${slug}/regrade-requests`),
+    } as unknown as Parameters<typeof loader>[0]);
+
+  it('reads the queue as the viewer (audited there) and offers Resolve where it can be used', async () => {
+    mocks.loadRows.mockResolvedValue([]);
+    const open = await load('class-x-slug');
+    expect(mocks.loadRows).toHaveBeenCalledWith(
+      expect.objectContaining({
+        classroomId: 'class-x',
+        viewer: { userId: 'staff-1', role: 'ASSISTANT', tool: 'web:regrade_requests.view' },
+      })
+    );
+    expect(open.canResolve).toBe(true);
+    expect((await load('class-locked-slug')).canResolve).toBe(false);
   });
 });

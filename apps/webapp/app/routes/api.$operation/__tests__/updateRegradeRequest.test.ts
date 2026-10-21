@@ -1,46 +1,42 @@
 /**
- * `/api/operation?action=updateRegradeRequest`: resolving a regrade request.
+ * `/api/operation?action=updateRegradeRequest`: resolving a REPO regrade request.
  *
  * Held here: authorization is on the RECORD's classroom (teaching team); the
- * status must be APPROVED or DENIED; a QUIZ request goes through
- * `regradeRequest.resolveQuiz` (the reply required, the emoji for APPROVED)
- * and then only the `quiz_regrade_resolved` email, never
- * `update_regrade_request` (which would flip the status with no adjustment
- * and clear nothing of a repo grade); a repo request keeps its task, with the
- * reply stored when one is given and the session user as `resolved_by_id`.
+ * status must be APPROVED or DENIED; a QUIZ request is refused (400): quiz
+ * requests resolve only on the Regrade/Resubmit Requests page or through the
+ * MCP, which write the adjustment with the status; a read-only classroom's
+ * refusal comes back as data; a repo request keeps its task, with the reply
+ * stored when one is given, the session user as `resolved_by_id` and this
+ * surface as the audit `tool`.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   findMany: vi.fn(),
-  resolveQuiz: vi.fn(),
   trigger: vi.fn(),
   waitForRunCompletion: vi.fn(),
   assertClassroomAccess: vi.fn(),
 }));
 
-class QuizGradeError extends Error {
-  code: string;
-  status: number;
-  constructor(code: string, message: string, status: number) {
-    super(message);
-    this.code = code;
-    this.status = status;
-  }
-}
-
 vi.mock('@classmoji/services', () => ({
-  QuizGradeError,
   ClassmojiService: {
     regradeRequest: {
       findMany: (...a: unknown[]) => mocks.findMany(...a),
-      resolveQuiz: (...a: unknown[]) => mocks.resolveQuiz(...a),
     },
   },
 }));
-vi.mock('@classmoji/auth/server', () => ({
-  getAuthSession: async () => ({ userId: 'ta-1', session: { session: {} } }),
+vi.mock('@classmoji/auth/server', async () => {
+  const predicates = await vi.importActual<typeof import('@classmoji/auth/predicates')>(
+    '@classmoji/auth/predicates'
+  );
+  return {
+    ...predicates,
+    getAuthSession: async () => ({ userId: 'ta-1', session: { session: {} } }),
+  };
+});
+vi.mock('~/routes/admin.$class.ask-moji/impersonation.server', () => ({
+  impersonatedBy: async () => null,
 }));
 vi.mock('@trigger.dev/sdk', () => ({
   tasks: { trigger: (...a: unknown[]) => mocks.trigger(...a) },
@@ -87,9 +83,12 @@ const repoRequest = {
 
 beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
-  mocks.assertClassroomAccess.mockResolvedValue({ userId: 'ta-1' });
+  mocks.assertClassroomAccess.mockResolvedValue({
+    userId: 'ta-1',
+    classroom: { id: 'class-1', status: 'ACTIVE' },
+    membership: { role: 'ASSISTANT' },
+  });
   mocks.trigger.mockResolvedValue({ id: 'run-1' });
-  mocks.resolveQuiz.mockResolvedValue({ alreadyResolved: false });
 });
 
 describe('updateRegradeRequest', () => {
@@ -112,54 +111,38 @@ describe('updateRegradeRequest', () => {
     expect(mocks.trigger).not.toHaveBeenCalled();
   });
 
-  it('resolves a quiz request through resolveQuiz, then queues only its email', async () => {
+  it('refuses a quiz request: it resolves on the queue page or through the MCP', async () => {
     mocks.findMany.mockResolvedValue([quizRequest]);
-
-    const { body } = unwrap(
+    const { body, status } = unwrap(
       await post({
         request: { id: 'rr-quiz' },
         status: 'APPROVED',
         emoji: 'rocket',
-        comment: ' Fair point. ',
+        comment: 'Fair point.',
       })
     );
-
-    expect(mocks.resolveQuiz).toHaveBeenCalledWith({
-      requestId: 'rr-quiz',
-      resolution: 'APPROVED',
-      emoji: 'rocket',
-      comment: 'Fair point.',
-      actorUserId: 'ta-1',
-      tool: 'web:api.updateRegradeRequest',
-      impersonatedBy: null,
-    });
-    expect(mocks.trigger).toHaveBeenCalledTimes(1);
-    expect(mocks.trigger).toHaveBeenCalledWith('quiz_regrade_resolved', { request_id: 'rr-quiz' });
-    expect(body.success).toBe('Score adjusted');
-  });
-
-  it("passes the service's refusal through (a missing reply or emoji)", async () => {
-    mocks.findMany.mockResolvedValue([quizRequest]);
-    mocks.resolveQuiz.mockRejectedValue(
-      new QuizGradeError('invalid_input', 'A reply to the student is required', 400)
-    );
-    const { body, status } = unwrap(await post({ request: { id: 'rr-quiz' }, status: 'DENIED' }));
     expect(status).toBe(400);
-    expect(body.code).toBe('invalid_input');
+    expect(body.code).toBe('not_repo_request');
+    expect(String(body.error)).toContain('Regrade/Resubmit Requests');
     expect(mocks.trigger).not.toHaveBeenCalled();
   });
 
-  it('sends no second email for a quiz request already resolved', async () => {
-    mocks.findMany.mockResolvedValue([quizRequest]);
-    mocks.resolveQuiz.mockResolvedValue({ alreadyResolved: true });
-    await post({ request: { id: 'rr-quiz' }, status: 'DENIED', comment: 'No.' });
+  it("returns a read-only classroom's refusal as data, writing nothing", async () => {
+    mocks.findMany.mockResolvedValue([repoRequest]);
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: 'ta-1',
+      classroom: { id: 'class-1', status: 'LOCKED' },
+      membership: { role: 'ASSISTANT' },
+    });
+    const { body, status } = unwrap(await post({ request: { id: 'rr-repo' }, status: 'APPROVED' }));
+    expect(status).toBe(403);
+    expect(body.code).toBe('CLASSROOM_LOCKED');
     expect(mocks.trigger).not.toHaveBeenCalled();
   });
 
   it('keeps the repo path on its task, storing a reply when given', async () => {
     mocks.findMany.mockResolvedValue([repoRequest]);
     await post({ request: { id: 'rr-repo' }, status: 'APPROVED', comment: 'Regraded.' });
-    expect(mocks.resolveQuiz).not.toHaveBeenCalled();
     expect(mocks.trigger).toHaveBeenCalledWith('update_regrade_request', {
       request: {
         id: 'rr-repo',
@@ -167,8 +150,11 @@ describe('updateRegradeRequest', () => {
         git_repo_assignment: { assignment: { title: 'Lab 1' } },
       },
       data: { status: 'APPROVED', grader_comment: 'Regraded.' },
-      // Who resolved it: the session user the gate admitted, never the body.
+      // Who resolved it: the session user the gate admitted, never the body,
+      // and this surface for the audit row.
       resolved_by_id: 'ta-1',
+      tool: 'web:api.updateRegradeRequest',
+      impersonated_by: null,
     });
   });
 

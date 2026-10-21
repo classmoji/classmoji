@@ -8,9 +8,12 @@
  * open quiz request: the attempt's late hours and the classroom's penalty per
  * hour, so the modal can show what a picked emoji counts for after the late
  * penalty (D2). Every read is scoped to the classroom the caller's gate
- * resolved.
+ * resolved, through `regradeRequest.findManyForDisplay`, which leaves quiz
+ * requests out where the classroom does not show quizzes. The staff queue's
+ * read of students' grades is audited (VIEW, `data.tool` naming the surface).
  */
 import { ClassmojiService } from '@classmoji/services';
+import { addClassroomAuditLog } from '~/utils/helpers';
 import {
   lateHours,
   quizAttemptGrade,
@@ -34,6 +37,12 @@ export interface QuizRegradeView {
   effectiveEmoji: string | null;
   /** A staff adjustment is in effect. */
   adjusted: boolean;
+  /**
+   * A resolved request's grade: the emoji the resolution set or kept
+   * (`resolved_emoji`), else, on a row resolved before that was recorded, the
+   * attempt's grade now. Null while open.
+   */
+  resolvedEmoji: string | null;
   /** Who last adjusted the attempt, and when (staff views; not the reply author). */
   adjustedByName: string | null;
   adjustedAt: string | null;
@@ -72,6 +81,8 @@ const projectRow = (row: ServiceRow, scale: QuizEmojiScale): RegradeRequestRow =
       originalEmoji: grade.original.emoji,
       effectiveEmoji: grade.effective.emoji,
       adjusted: grade.adjusted,
+      resolvedEmoji:
+        row.status === 'IN_REVIEW' ? null : (row.resolved_emoji ?? grade.effective.emoji),
       adjustedByName: attempt.adjusted_by?.name ?? null,
       adjustedAt: iso(attempt.adjusted_at),
     },
@@ -91,27 +102,46 @@ export const loadStudentRegradeRows = async ({
   studentId: string;
   scale: QuizEmojiScale;
 }): Promise<RegradeRequestRow[]> => {
-  const rows = await ClassmojiService.regradeRequest.findMany({
+  const rows = await ClassmojiService.regradeRequest.findManyForDisplay(classroomId, {
     student_id: studentId,
-    classroom_id: classroomId,
   });
   return rows.map(row => projectRow(row, scale));
 };
 
+/** The staff member viewing the queue, as their gate resolved them. */
+export interface RegradeQueueViewer {
+  userId: string;
+  role: string | undefined;
+  /** The surface, for the audit row's `data.tool`. */
+  tool: string;
+}
+
 /**
  * Every request in a classroom, for the teaching team. Open quiz requests also
  * carry the attempt's late hours and its counted emoji for the resolve modal.
+ * The read is audited as `viewer` (VIEW on REGRADE_REQUESTS): the queue shows
+ * students' grades.
  */
 export const loadStaffRegradeRows = async ({
   classroomId,
   scale,
   latePenaltyPerHour,
+  viewer,
 }: {
   classroomId: string;
   scale: QuizEmojiScale;
   latePenaltyPerHour: number;
+  viewer: RegradeQueueViewer;
 }): Promise<RegradeRequestRow[]> => {
-  const rows = await ClassmojiService.regradeRequest.findMany({ classroom_id: classroomId });
+  const rows = await ClassmojiService.regradeRequest.findManyForDisplay(classroomId, {});
+  await addClassroomAuditLog({
+    classroomId,
+    userId: viewer.userId,
+    role: viewer.role,
+    action: 'VIEW',
+    resourceType: 'REGRADE_REQUESTS',
+    metadata: { tool: viewer.tool, request_count: rows.length },
+  });
   const penalty = Number.isFinite(latePenaltyPerHour) ? Math.max(0, latePenaltyPerHour) : 0;
 
   return Promise.all(

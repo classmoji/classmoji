@@ -13,10 +13,8 @@
 import { data } from 'react-router';
 import { tasks } from '@trigger.dev/sdk';
 import { ClassmojiService, QuizGradeError } from '@classmoji/services';
-import {
-  requireClassroomTeachingTeam,
-  assertClassroomMutationAllowed,
-} from '~/utils/routeAuth.server';
+import { requireClassroomTeachingTeam } from '~/utils/routeAuth.server';
+import { mutationRefusal } from '~/utils/mutationRefusal.server';
 import { impersonatedBy } from '~/routes/admin.$class.ask-moji/impersonation.server';
 
 export const RESOLVE_QUIZ_INTENT = 'resolve-quiz';
@@ -29,7 +27,9 @@ export const resolveQuizRegradeAction = async (request: Request, classSlug: stri
     resourceType: 'REGRADE_REQUEST',
     action: 'resolve_regrade_request',
   });
-  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+  // Read-only classroom: the refusal comes back as data for the modal.
+  const blocked = mutationRefusal(classroom, membership?.role);
+  if (blocked) return blocked;
 
   const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
   if (!body || body.intent !== RESOLVE_QUIZ_INTENT) {

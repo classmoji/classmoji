@@ -1,13 +1,11 @@
 /**
- * The resolve modal's "Counted" line: what a picked emoji counts for after
- * the late penalty (D2: the adjustment applies before the penalty), as the
- * nearest emoji on the classroom's scale.
+ * The "Counted" line of the resolve modal and the attempt drawer: what a
+ * picked emoji counts for after the late penalty (D2: the adjustment applies
+ * before the penalty), as the nearest emoji on the classroom's scale. One
+ * helper for both (`countedQuizEmoji`, and its per-scale map for the drawer).
  */
-import { describe, expect, it, vi } from 'vitest';
-
-vi.mock('@classmoji/ui-components', () => ({ useCallout: () => ({ show: vi.fn() }) }));
-
-const { countedEmojiFor } = await import('../ResolveQuizRegradeModal');
+import { describe, expect, it } from 'vitest';
+import { countedQuizEmoji as countedEmojiFor, countedQuizEmojiMap } from '@classmoji/utils';
 
 const NUMERIC = Object.fromEntries(
   Array.from({ length: 11 }, (_, i) => [`score-${i * 10}`, i * 10])
@@ -31,5 +29,18 @@ describe('countedEmojiFor', () => {
 
   it('is nothing until an emoji is picked', () => {
     expect(countedEmojiFor(null, NUMERIC, 3, 1)).toBeNull();
+  });
+});
+
+describe('countedQuizEmojiMap', () => {
+  it('maps every emoji on the scale to what it counts for', () => {
+    expect(countedQuizEmojiMap(EMOJI, 0, 5)).toEqual({
+      rocket: 'rocket',
+      '+1': '+1',
+      eyes: 'eyes',
+      '-1': '-1',
+      sob: 'sob',
+    });
+    expect(countedQuizEmojiMap(NUMERIC, 6, 1)['score-90']).toBe('score-80');
   });
 });

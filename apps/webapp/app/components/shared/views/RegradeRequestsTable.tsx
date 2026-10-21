@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Table, Button, Tag } from 'antd';
 import dayjs from 'dayjs';
-import { Link, useLocation, useNavigate, useParams } from 'react-router';
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import { IconEye } from '@tabler/icons-react';
 import { useGitContext } from '~/hooks/useGitWeb';
 import { useGlobalFetcher, useRole } from '~/hooks';
@@ -14,6 +14,7 @@ import GradeBadges from '~/components/features/grading/GradeBadges';
 import QuizGradeEmoji from '~/components/features/quiz/QuizGradeEmoji';
 import ResolveQuizRegradeModal from '~/components/features/regrade/ResolveQuizRegradeModal';
 import { quizRequestLabel, type RegradeRequestRowData } from '~/components/features/regrade/types';
+import { QUIZ_STATUS_LABEL, QuizRemedy } from '~/components/features/regrade/QuizRemedy';
 
 export type { RegradeRequestRowData } from '~/components/features/regrade/types';
 
@@ -24,6 +25,11 @@ interface RegradeRequestsTableProps {
   /** `late_penalty_points_per_hour`, for the resolve modal's Counted line. */
   latePenaltyPerHour?: number;
   org?: string | null;
+  /**
+   * Staff: the classroom takes changes from this viewer (not LOCKED or
+   * UNPUBLISHED for a non-owner). False hides Resolve and the grade picker.
+   */
+  canResolve?: boolean;
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -31,10 +37,6 @@ const STATUS_LABEL: Record<string, string> = {
   APPROVED: 'Resolved',
   DENIED: 'Denied',
 };
-
-/** The remedy a resolved quiz request got, under its status tag. */
-const quizRemedy = (status: string) =>
-  status === 'APPROVED' ? 'Score adjusted' : status === 'DENIED' ? 'Score kept' : null;
 
 /** The text-link style of the repo row's own actions (View, Resolve). */
 const viewLinkClass =
@@ -65,6 +67,7 @@ const RegradeRequestsTable = ({
   emojiMappings,
   latePenaltyPerHour = 0,
   org,
+  canResolve = true,
 }: RegradeRequestsTableProps) => {
   const gitCtx = useGitContext();
   const navigate = useNavigate();
@@ -73,8 +76,44 @@ const RegradeRequestsTable = ({
   const { class: classSlug } = useParams();
   const { fetcher } = useGlobalFetcher();
   const [resolving, setResolving] = useState<RegradeRequestRowData | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  // The repo request whose Resolve is in flight: its link stays disabled
+  // until the global fetcher settles, so a double click submits once.
+  const [repoResolving, setRepoResolving] = useState<string | null>(null);
+  const fetcherBusy = Boolean(fetcher && fetcher.state !== 'idle');
+  const repoBusy = repoResolving !== null || fetcherBusy;
+  const sawBusy = useRef(false);
 
   const isStudent = role === 'STUDENT';
+  const staffCanResolve = !isStudent && canResolve;
+
+  // `?resolve=<requestId>` (the attempt drawer's link) opens that open quiz
+  // request's resolve modal on load; the param goes once it has been read.
+  const resolveParam = searchParams.get('resolve');
+  useEffect(() => {
+    if (!resolveParam) return;
+    const target = requests.find(r => r.id === resolveParam && r.quiz && r.status === 'IN_REVIEW');
+    if (target && staffCanResolve) setResolving(target);
+    setSearchParams(
+      prev => {
+        const next = new URLSearchParams(prev);
+        next.delete('resolve');
+        return next;
+      },
+      { replace: true }
+    );
+    // Runs when the param appears; `requests` is the loader's list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resolveParam]);
+
+  // Clear the in-flight Resolve once the submission has run and settled.
+  useEffect(() => {
+    if (fetcherBusy) sawBusy.current = true;
+    else if (sawBusy.current) {
+      sawBusy.current = false;
+      setRepoResolving(null);
+    }
+  }, [fetcherBusy]);
   // The attempt drawer on the quiz results page, under the viewer's own
   // prefix (/admin, /teacher or /assistant); a student opens their attempt.
   const rolePrefix = isStudent ? 'student' : pathname.split('/')[1] || 'admin';
@@ -127,16 +166,24 @@ const RegradeRequestsTable = ({
       key: 'status',
       width: 120,
       render: (status: RegradeRequestRowData['status'], request: RegradeRequestRowData) => {
-        const remedy = request.quiz ? quizRemedy(status) : null;
+        const labels = request.quiz ? QUIZ_STATUS_LABEL : STATUS_LABEL;
         return (
           <div>
             <Tag
               color={status === 'IN_REVIEW' ? 'orange' : status === 'APPROVED' ? 'green' : 'red'}
               className="font-semibold"
             >
-              {STATUS_LABEL[status] ?? status}
+              {labels[status] ?? status}
             </Tag>
-            {remedy && <div className="text-xs text-ink-3 mt-1 whitespace-nowrap">{remedy}</div>}
+            {request.quiz && status !== 'IN_REVIEW' && (
+              <div className="text-xs text-ink-3 mt-1">
+                <QuizRemedy
+                  status={status}
+                  previousEmoji={request.previous_grade[0] ?? null}
+                  resolvedEmoji={request.quiz.resolvedEmoji}
+                />
+              </div>
+            )}
           </div>
         );
       },
@@ -150,7 +197,7 @@ const RegradeRequestsTable = ({
         request.quiz ? (
           <div className="flex justify-center">
             {request.status === 'APPROVED' ? (
-              <QuizGradeEmoji emoji={request.quiz.effectiveEmoji} size="lg" />
+              <QuizGradeEmoji emoji={request.quiz.resolvedEmoji} size="lg" />
             ) : (
               <span className="text-gray-400 dark:text-gray-500">—</span>
             )}
@@ -235,7 +282,7 @@ const RegradeRequestsTable = ({
                 <IconEye size={17} />
                 <span>View</span>
               </Link>
-              {!isStudent && request.status === 'IN_REVIEW' && (
+              {staffCanResolve && request.status === 'IN_REVIEW' && (
                 <div
                   role="button"
                   tabIndex={0}
@@ -266,7 +313,7 @@ const RegradeRequestsTable = ({
                 : undefined
             }
           >
-            {!isStudent && submission && (
+            {staffCanResolve && submission && (
               <EmojiGrader
                 repositoryAssignment={{
                   ...submission,
@@ -275,9 +322,15 @@ const RegradeRequestsTable = ({
                 emojiMappings={emojiMappings ?? {}}
               />
             )}
-            {request.status === 'IN_REVIEW' && !isStudent && submission && (
+            {request.status === 'IN_REVIEW' && staffCanResolve && submission && (
               <div
+                role="button"
+                tabIndex={0}
+                aria-disabled={repoBusy}
+                data-testid="regrade-repo-resolve"
                 onClick={() => {
+                  if (repoBusy) return;
+                  setRepoResolving(request.id);
                   fetcher!.submit(
                     {
                       request: {
@@ -296,9 +349,9 @@ const RegradeRequestsTable = ({
                     }
                   );
                 }}
-                className={resolveLinkClass}
+                className={`${resolveLinkClass} ${repoBusy ? 'pointer-events-none opacity-50' : ''}`}
               >
-                <span>Resolve</span>
+                <span>{repoResolving === request.id && repoBusy ? 'Resolving…' : 'Resolve'}</span>
               </div>
             )}
           </TableActionButtons>
@@ -351,7 +404,7 @@ const RegradeRequestsTable = ({
         />
       </div>
 
-      {!isStudent && (
+      {staffCanResolve && (
         <ResolveQuizRegradeModal
           request={resolving}
           scale={emojiMappings ?? {}}

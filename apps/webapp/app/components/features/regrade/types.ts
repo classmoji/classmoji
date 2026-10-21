@@ -28,6 +28,8 @@ export interface RegradeQuizAttempt {
   originalEmoji: string | null;
   effectiveEmoji: string | null;
   adjusted: boolean;
+  /** A resolved request's grade (the snapshot, or the attempt's now on older rows); null while open. */
+  resolvedEmoji: string | null;
   adjustedByName: string | null;
   adjustedAt: string | Date | null;
   /** Staff rows, open requests: the attempt's whole hours late. */

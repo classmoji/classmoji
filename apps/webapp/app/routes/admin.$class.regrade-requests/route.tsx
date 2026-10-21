@@ -2,12 +2,13 @@ import { RegradeRequestsTable } from '~/components';
 import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import { loadStaffRegradeRows } from '~/utils/regradeRequestRows.server';
+import { canMutate } from '~/utils/mutationRefusal.server';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const classSlug = params.class!;
 
-  const { classroom } = await requireClassroomAdmin(request, classSlug, {
+  const { classroom, userId, membership } = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'REGRADE_REQUESTS',
     action: 'view_requests',
   });
@@ -18,8 +19,16 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     classroomId: classroom.id,
     scale: emojiMappings,
     latePenaltyPerHour,
+    viewer: { userId, role: membership?.role, tool: 'web:regrade_requests.view' },
   });
-  return { requests, emojiMappings, latePenaltyPerHour, org: classroom.git_organization?.login };
+  return {
+    requests,
+    emojiMappings,
+    latePenaltyPerHour,
+    org: classroom.git_organization?.login,
+    // Resolve and grade controls show only where the classroom takes changes.
+    canResolve: canMutate(classroom, membership?.role),
+  };
 };
 
 // The quiz resolve action carries its own teaching-team gate (an OWNER
@@ -27,7 +36,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 export { action } from '../assistant.$class_.regrade-requests/route';
 
 const AdminRegradeRequests = ({ loaderData }: Route.ComponentProps) => {
-  const { requests, emojiMappings, latePenaltyPerHour, org } = loaderData;
+  const { requests, emojiMappings, latePenaltyPerHour, org, canResolve } = loaderData;
 
   return (
     <RegradeRequestsTable
@@ -35,6 +44,7 @@ const AdminRegradeRequests = ({ loaderData }: Route.ComponentProps) => {
       emojiMappings={emojiMappings}
       latePenaltyPerHour={latePenaltyPerHour}
       org={org}
+      canResolve={canResolve}
     />
   );
 };

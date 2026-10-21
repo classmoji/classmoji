@@ -3,6 +3,7 @@ import { RegradeRequestsTable } from '~/components';
 import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomTeachingTeam } from '~/utils/routeAuth.server';
 import { loadStaffRegradeRows } from '~/utils/regradeRequestRows.server';
+import { canMutate } from '~/utils/mutationRefusal.server';
 import { resolveQuizRegradeAction } from './resolveQuizRegrade.server';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
@@ -11,7 +12,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   // 'TEACHING_RESOURCE'/'access'. 'REGRADE_REQUEST' is the vocabulary the MCP
   // regrade tools already write, so denials and mutations line up. Served under
   // /assistant and /teacher alike.
-  const { classroom } = await requireClassroomTeachingTeam(request, classSlug, {
+  const { classroom, userId, membership } = await requireClassroomTeachingTeam(request, classSlug, {
     resourceType: 'REGRADE_REQUEST',
     action: 'view_regrade_requests',
   });
@@ -23,8 +24,16 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     classroomId: classroom.id,
     scale: emojiMappings,
     latePenaltyPerHour,
+    viewer: { userId, role: membership?.role, tool: 'web:regrade_requests.view' },
   });
-  return { requests, emojiMappings, latePenaltyPerHour, org: classroom.git_organization?.login };
+  return {
+    requests,
+    emojiMappings,
+    latePenaltyPerHour,
+    org: classroom.git_organization?.login,
+    // Resolve and grade controls show only where the classroom takes changes.
+    canResolve: canMutate(classroom, membership?.role),
+  };
 };
 
 /**
@@ -36,7 +45,7 @@ export const action = async ({ request, params }: Route.ActionArgs) =>
   resolveQuizRegradeAction(request, params.class!);
 
 const AssistantRegradeRequests = ({ loaderData }: Route.ComponentProps) => {
-  const { requests, emojiMappings, latePenaltyPerHour, org } = loaderData;
+  const { requests, emojiMappings, latePenaltyPerHour, org, canResolve } = loaderData;
 
   return (
     <RegradeRequestsTable
@@ -44,6 +53,7 @@ const AssistantRegradeRequests = ({ loaderData }: Route.ComponentProps) => {
       emojiMappings={emojiMappings}
       latePenaltyPerHour={latePenaltyPerHour}
       org={org}
+      canResolve={canResolve}
     />
   );
 };

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Button, Input, Modal, Segmented } from 'antd';
 import { useFetcher, useLocation } from 'react-router';
 import { useCallout } from '@classmoji/ui-components';
-import { quizPercentageEmoji } from '@classmoji/utils';
+import { countedQuizEmoji } from '@classmoji/utils';
 
 import UserAvatar from '~/components/shared/UserAvatar';
 import Emoji from '~/components/ui/display/Emoji';
@@ -21,22 +21,6 @@ interface ResolveQuizRegradeModalProps {
   latePenaltyPerHour: number;
   onClose: () => void;
 }
-
-/** What an emoji counts for after `lateHours` of penalty, as the nearest emoji. */
-export const countedEmojiFor = (
-  emoji: string | null,
-  scale: Record<string, number>,
-  lateHours: number,
-  latePenaltyPerHour: number
-): string | null => {
-  if (!emoji) return null;
-  const value = scale[emoji];
-  if (lateHours <= 0 || typeof value !== 'number') return emoji;
-  return quizPercentageEmoji(
-    Math.max(0, value - lateHours * Math.max(0, latePenaltyPerHour)),
-    scale
-  );
-};
 
 const LateNote = ({ hours }: { hours: number }) => (
   <span className="text-xs text-ink-3">{hours > 0 ? `${hours}h late` : 'On time'}</span>
@@ -106,7 +90,8 @@ const ResolveQuizRegradeModal = ({
     );
   };
 
-  const counted = countedEmojiFor(emoji, scale, late, latePenaltyPerHour);
+  // The same helper as the attempt drawer's Counted line.
+  const counted = countedQuizEmoji(emoji, scale, late, latePenaltyPerHour);
 
   return (
     <Modal

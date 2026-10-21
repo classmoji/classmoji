@@ -3,8 +3,9 @@ import { data } from 'react-router';
 import { namedAction } from 'remix-utils/named-action';
 import { getAuthSession } from '@classmoji/auth/server';
 
-import { ClassmojiService, QuizGradeError } from '@classmoji/services';
+import { ClassmojiService } from '@classmoji/services';
 import { checkAuth, waitForRunCompletion, assertClassroomAccess } from '~/utils/helpers';
+import { mutationRefusal } from '~/utils/mutationRefusal.server';
 import { impersonatedBy } from '~/routes/admin.$class.ask-moji/impersonation.server';
 
 export const loader = checkAuth(
@@ -116,7 +117,7 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
       // authorizing against its slug would re-resolve through a second lookup,
       // leaving nothing that ties the authorized classroom to the regrade
       // request being updated below.
-      const { userId } = await assertClassroomAccess({
+      const { userId, classroom, membership } = await assertClassroomAccess({
         request,
         classroomId: regradeRequest.classroom_id,
         allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
@@ -133,51 +134,27 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
       }
       const reply = typeof body?.comment === 'string' ? body.comment.trim() : '';
 
-      // A quiz request: resolveQuiz writes the status, the reply and any
-      // adjustment (APPROVED takes `emoji`, an emoji on the classroom's scale)
-      // and its own audit rows; `quiz_regrade_resolved` then emails the student
-      // from the database. It never runs `update_regrade_request`, which
-      // refuses quiz requests, and never touches repo grades.
+      // A quiz request resolves only on the Regrade/Resubmit Requests page
+      // (its `resolve-quiz` action) or through the MCP `regrade_resolve`
+      // tool, both of which write the adjustment with the status. This
+      // endpoint resolves repo requests only.
       if (regradeRequest.quiz_attempt_id) {
-        let result: Awaited<ReturnType<typeof ClassmojiService.regradeRequest.resolveQuiz>>;
-        try {
-          result = await ClassmojiService.regradeRequest.resolveQuiz({
-            requestId: regradeRequest.id,
-            resolution: status,
-            ...(status === 'APPROVED' && typeof body?.emoji === 'string'
-              ? { emoji: body.emoji }
-              : {}),
-            comment: reply,
-            actorUserId: userId,
-            tool: 'web:api.updateRegradeRequest',
-            impersonatedBy: await impersonatedBy(request),
-          });
-        } catch (error: unknown) {
-          if (error instanceof QuizGradeError) {
-            return data(
-              { action: 'UPDATE_REGRADE_REQUEST', error: error.message, code: error.code },
-              { status: error.status }
-            );
-          }
-          throw error;
-        }
-        if (!result.alreadyResolved) {
-          try {
-            await tasks.trigger('quiz_regrade_resolved', { request_id: regradeRequest.id });
-          } catch (error: unknown) {
-            // The resolution stands; only the email failed to queue.
-            console.error('quiz_regrade_resolved enqueue failed:', error);
-          }
-        }
-        return {
-          action: 'UPDATE_REGRADE_REQUEST',
-          success: result.alreadyResolved
-            ? 'This request was already resolved'
-            : status === 'APPROVED'
-              ? 'Score adjusted'
-              : 'Score kept',
-        };
+        return data(
+          {
+            action: 'UPDATE_REGRADE_REQUEST',
+            error: 'Resolve quiz regrade requests from the Regrade/Resubmit Requests page',
+            code: 'not_repo_request',
+          },
+          { status: 400 }
+        );
       }
+
+      // Read-only classroom (LOCKED / UNPUBLISHED, non-owner): the refusal
+      // comes back as data for the queue to show in place.
+      const blocked = mutationRefusal(classroom, membership?.role, {
+        action: 'UPDATE_REGRADE_REQUEST',
+      });
+      if (blocked) return blocked;
 
       try {
         // Re-derive the task payload from the DB record so the status update and
@@ -199,8 +176,11 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
             // The reply the student reads, when one is given.
             ...(reply ? { grader_comment: reply } : {}),
           },
-          // Who resolved it: the session user the gate above admitted.
+          // Who resolved it: the session user the gate above admitted, and
+          // the surface, for the audit row.
           resolved_by_id: userId,
+          tool: 'web:api.updateRegradeRequest',
+          impersonated_by: await impersonatedBy(request),
         });
 
         await waitForRunCompletion(run.id);
