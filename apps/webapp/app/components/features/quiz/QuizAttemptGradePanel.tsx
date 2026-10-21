@@ -7,15 +7,21 @@ import type { StaffAttemptGradePanel } from '~/utils/quizPayloads';
 import Emoji from '~/components/ui/display/Emoji';
 import { LateChip } from './QuizGradeEmoji';
 import { QuizEmojiPicker } from './QuizEmojiPicker';
+import {
+  QuizResolveFields,
+  useQuizResolveForm,
+} from '~/components/features/regrade/QuizResolveForm';
 
 /**
  * The staff side of a completed attempt in its drawer: the "Instructor" panel
  * (grade, adjust with the classroom's scale, a comment to the student,
- * revert) and the open regrade/resubmit request, which is resolved in the
- * queue (`?resolve=<id>` opens its resolve modal there). Emoji only (E1).
- * Posts to the drawer route's own action (`_action: 'adjust' | 'revert'`);
- * the server re-checks everything and returns refusals as data. In a
- * read-only classroom (`panel.canEdit` false) only the grade shows.
+ * revert) and the open regrade/resubmit request, resolved right in its
+ * banner (E13: the queue modal's form, `QuizResolveFields`) or in the queue
+ * (`?resolve=<id>` opens its resolve modal there). Emoji only (E1).
+ * Posts to the drawer route's own action (`_action: 'adjust' | 'revert' |
+ * 'resolve'`); the server re-checks everything and returns refusals as data.
+ * In a read-only classroom (`panel.canEdit` false) only the grade and the
+ * request show.
  */
 
 const formatDate = (iso: string | null) => (iso ? dayjs(iso).format('MMM D') : null);
@@ -78,13 +84,90 @@ const OpenRequestNote = ({ resolveUrl }: { resolveUrl: string }) => (
   </div>
 );
 
+/**
+ * The open request's form in its banner (E13): reply, Adjust score / Keep
+ * score, the picker and the Counted line, posted to the drawer's own action
+ * (`_action: 'resolve'`). On success the loader's revalidation drops the
+ * banner, the attempt's grade and comment move with it.
+ */
+const ResolveInBanner = ({
+  requestId,
+  panel,
+}: {
+  requestId: string;
+  panel: StaffAttemptGradePanel;
+}) => {
+  const fetcher = useFetcher<{ success?: string; info?: string; error?: string }>();
+  const { pathname } = useLocation();
+  const callout = useCallout();
+  const form = useQuizResolveForm(requestId);
+  const busy = fetcher.state !== 'idle';
+  const grade = panel.grade;
+
+  useEffect(() => {
+    if (fetcher.state !== 'idle' || !fetcher.data) return;
+    if (fetcher.data.success || fetcher.data.info) {
+      callout.show({
+        variant: fetcher.data.success ? 'success' : 'info',
+        title: (fetcher.data.success ?? fetcher.data.info) as string,
+        autoDismissMs: 2000,
+      });
+    }
+    // `callout` is stable per provider.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetcher.state, fetcher.data]);
+
+  const submit = () => {
+    if (!form.canSubmit) return;
+    fetcher.submit({ _action: 'resolve', requestId, ...form.payload() } as never, {
+      method: 'POST',
+      action: pathname,
+      encType: 'application/json',
+    });
+  };
+
+  return (
+    <div data-testid="quiz-regrade-resolve" className="mt-3">
+      <QuizResolveFields
+        form={form}
+        grade={{
+          originalEmoji: (grade?.adjusted ? grade.originalEmoji : grade?.emoji) ?? null,
+          effectiveEmoji: grade?.emoji ?? null,
+          adjusted: grade?.adjusted ?? false,
+          lateHours: grade?.lateHours ?? 0,
+          countedEmoji: grade?.countedEmoji ?? grade?.emoji ?? null,
+        }}
+        scaleEmojis={panel.scaleEmojis}
+        countedFor={emoji => (emoji ? (panel.countedByEmoji[emoji] ?? emoji) : null)}
+        disabled={busy}
+        idPrefix={`quiz-regrade-${requestId}`}
+        error={fetcher.state === 'idle' ? (fetcher.data?.error ?? null) : null}
+      />
+      <div className="mt-3 flex justify-end">
+        <Button
+          type="primary"
+          onClick={submit}
+          loading={busy}
+          disabled={!form.canSubmit}
+          data-testid="quiz-regrade-resolve-submit"
+        >
+          {form.submitLabel}
+        </Button>
+      </div>
+    </div>
+  );
+};
+
 export function QuizRegradeRequestBanner({
   request,
   resolveUrl,
+  panel = null,
 }: {
   request: NonNullable<StaffAttemptGradePanel['openRequest']>;
   /** The queue with this request's resolve modal open (`?resolve=<id>`). */
   resolveUrl: string;
+  /** The adjust panel's state, where the viewer may resolve here; null shows the request only. */
+  panel?: StaffAttemptGradePanel | null;
 }) {
   return (
     <div
@@ -117,9 +200,10 @@ export function QuizRegradeRequestBanner({
           to={resolveUrl}
           className="text-sm font-medium text-amber-800 underline underline-offset-2 hover:text-amber-900 dark:text-amber-300 dark:hover:text-amber-200"
         >
-          Resolve in Regrade/Resubmit Requests
+          {panel ? 'Open in Regrade/Resubmit Requests' : 'Resolve in Regrade/Resubmit Requests'}
         </Link>
       </div>
+      {panel && <ResolveInBanner requestId={request.id} panel={panel} />}
     </div>
   );
 }

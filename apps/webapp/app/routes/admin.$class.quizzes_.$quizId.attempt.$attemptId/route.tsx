@@ -24,6 +24,7 @@ import {
   staffAttemptGradePanel,
 } from '~/utils/quizPayloads';
 import { impersonatedBy } from '~/routes/admin.$class.ask-moji/impersonation.server';
+import { resolveQuizRequest } from '~/routes/assistant.$class_.regrade-requests/resolveQuizRegrade.server';
 import { isTriggerChatAttempt } from '~/utils/quizRuntime.server';
 import { closeIfExpired } from '~/utils/quizAttemptExpiry.server';
 import type { Route } from './+types/route';
@@ -289,14 +290,20 @@ const loadGradePanel = async ({
   });
 };
 
+/** The audit `data.tool` of a quiz request resolved in the attempt drawer (E13). */
+const RESOLVE_IN_DRAWER_TOOL = 'web:quiz_attempt.resolve_regrade';
+
 /**
  * Adjust or revert a quiz attempt's grade (teaching team, D5), from the
- * adjust panel. The attempt is the one in the URL, bound to this classroom's
- * quiz before the service runs; the service re-checks the actor against the
- * attempt's own classroom, refuses a preview or running attempt, and writes
- * the audit row (`data.tool` names this surface). Refusals come back as
- * data (`{ error, code }`), for the panel to show in place: this is reached
- * by `fetcher.submit`, and a thrown Response would replace the drawer.
+ * adjust panel, or resolve the attempt's open regrade/resubmit request from
+ * its banner (`_action: 'resolve'`, E13: the queue's rules, through
+ * `resolveQuizRequest`, with the request bound to this attempt). The attempt
+ * is the one in the URL, bound to this classroom's quiz before the service
+ * runs; the service re-checks the actor against the attempt's own classroom,
+ * refuses a preview or running attempt, and writes the audit row
+ * (`data.tool` names this surface). Refusals come back as data
+ * (`{ error, code }`), for the panel to show in place: this is reached by
+ * `fetcher.submit`, and a thrown Response would replace the drawer.
  */
 export async function action({ params, request }: Route.ActionArgs) {
   const { ClassmojiService, QuizGradeError } = await import('@classmoji/services');
@@ -329,11 +336,19 @@ export async function action({ params, request }: Route.ActionArgs) {
     throw new Response('Attempt not found', { status: 404 });
   }
 
-  const body = (await request.json().catch(() => null)) as {
-    _action?: unknown;
-    emoji?: unknown;
-    comment?: unknown;
-  } | null;
+  const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
+
+  if (body?._action === 'resolve') {
+    // The open request on THIS attempt only; the email goes out as from the queue.
+    return resolveQuizRequest({
+      classroomId: classroom.id,
+      userId,
+      body,
+      tool: RESOLVE_IN_DRAWER_TOOL,
+      impersonatedBy: await impersonatedBy(request),
+      attemptId: attempt.id,
+    });
+  }
 
   try {
     if (body?._action === 'adjust') {
@@ -397,6 +412,8 @@ export default function AdminQuizAttemptViewDrawer({ loaderData }: Route.Compone
                 <QuizRegradeRequestBanner
                   request={panel.openRequest}
                   resolveUrl={resolveUrl(panel.openRequest.id)}
+                  // Resolved right here where the classroom takes changes (E13).
+                  panel={panel.canEdit ? panel : null}
                 />
               )}
               {panel.adjustable && (

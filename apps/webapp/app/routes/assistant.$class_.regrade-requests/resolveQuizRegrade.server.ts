@@ -5,6 +5,9 @@
  * a reply to the student is required either way (D5: the teaching team,
  * assistants included).
  *
+ * The attempt drawer resolves through `resolveQuizRequest` too (E13), after
+ * its own gate, with its attempt pinned.
+ *
  * Scoping: the request must belong to the classroom the gate resolved from the
  * URL; `regradeRequest.resolveQuiz` then re-checks the actor against the
  * request's own classroom and writes the status, the reply and its own audit
@@ -35,6 +38,41 @@ export const resolveQuizRegradeAction = async (request: Request, classSlug: stri
   if (!body || body.intent !== RESOLVE_QUIZ_INTENT) {
     return data({ error: 'Unknown action' }, { status: 400 });
   }
+  return resolveQuizRequest({
+    classroomId: classroom.id,
+    userId,
+    body,
+    tool: RESOLVE_QUIZ_TOOL,
+    impersonatedBy: await impersonatedBy(request),
+  });
+};
+
+/**
+ * Resolve one quiz request after the caller's own gate (the teaching team of
+ * `classroomId`, the classroom writable): validates the body, requires the
+ * request to be this classroom's (and, with `attemptId`, that attempt's: the
+ * drawer resolves only the attempt it shows), resolves it through
+ * `regradeRequest.resolveQuiz` (which re-checks the actor against the
+ * request's own classroom and writes the audit rows under `tool`), then
+ * queues the student's email. Every refusal is data, for a fetcher.
+ */
+export const resolveQuizRequest = async ({
+  classroomId,
+  userId,
+  body,
+  tool,
+  impersonatedBy: viewAs,
+  attemptId,
+}: {
+  classroomId: string;
+  userId: string;
+  body: Record<string, unknown>;
+  tool: string;
+  /** The View As admin, when there is one (`impersonatedBy`). */
+  impersonatedBy: string | null;
+  /** The drawer's attempt: a request on any other attempt is not found. */
+  attemptId?: string;
+}) => {
   const requestId = typeof body.requestId === 'string' ? body.requestId : '';
   const resolution = body.resolution;
   const comment = typeof body.comment === 'string' ? body.comment.trim() : '';
@@ -53,9 +91,12 @@ export const resolveQuizRegradeAction = async (request: Request, classSlug: stri
   // classroom (or of both) cannot resolve it from here.
   const [owned] = await ClassmojiService.regradeRequest.findMany({
     id: requestId,
-    classroom_id: classroom.id,
+    classroom_id: classroomId,
   });
   if (!owned) return data({ error: 'Regrade request not found' }, { status: 404 });
+  if (attemptId !== undefined && owned.quiz_attempt_id !== attemptId) {
+    return data({ error: 'Regrade request not found' }, { status: 404 });
+  }
   if (!owned.quiz_attempt_id) {
     return data({ error: 'This is not a quiz regrade request' }, { status: 400 });
   }
@@ -68,8 +109,8 @@ export const resolveQuizRegradeAction = async (request: Request, classSlug: stri
       emoji: resolution === 'APPROVED' ? emoji : undefined,
       comment,
       actorUserId: userId,
-      tool: RESOLVE_QUIZ_TOOL,
-      impersonatedBy: await impersonatedBy(request),
+      tool,
+      impersonatedBy: viewAs,
     });
   } catch (error) {
     if (error instanceof QuizGradeError) {

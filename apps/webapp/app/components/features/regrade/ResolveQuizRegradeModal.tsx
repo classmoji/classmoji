@@ -1,16 +1,12 @@
 import { useEffect, useState } from 'react';
-import { Button, Input, Modal, Segmented } from 'antd';
+import { Button, Modal } from 'antd';
 import { useFetcher, useLocation } from 'react-router';
 import { useCallout } from '@classmoji/ui-components';
 import { countedQuizEmoji } from '@classmoji/utils';
 
 import UserAvatar from '~/components/shared/UserAvatar';
-import Emoji from '~/components/ui/display/Emoji';
-import QuizGradeEmoji from '~/components/features/quiz/QuizGradeEmoji';
-import QuizEmojiPicker from '~/components/features/quiz/QuizEmojiPicker';
 import { quizRequestLabel, type RegradeRequestRowData } from './types';
-
-type Remedy = 'adjust' | 'keep';
+import { QuizResolveFields, useQuizResolveForm } from './QuizResolveForm';
 
 interface ResolveQuizRegradeModalProps {
   /** An open quiz request (`quiz` set). Null closes the modal. */
@@ -22,14 +18,10 @@ interface ResolveQuizRegradeModalProps {
   onClose: () => void;
 }
 
-const LateNote = ({ hours }: { hours: number }) => (
-  <span className="text-xs text-ink-3">{hours > 0 ? `${hours}h late` : 'On time'}</span>
-);
-
 /**
- * Resolve a quiz regrade/resubmit request: Adjust score (APPROVED, with an
- * emoji off the classroom's scale) or Keep score (DENIED). A reply to the
- * student is required either way. Posts to the requests page's own action.
+ * Resolve a quiz regrade/resubmit request from the queue: the shared form
+ * (`QuizResolveFields`, also in the attempt drawer) in a modal. Posts to the
+ * requests page's own action.
  */
 const ResolveQuizRegradeModal = ({
   request,
@@ -40,19 +32,10 @@ const ResolveQuizRegradeModal = ({
   const fetcher = useFetcher<{ success?: string; info?: string; error?: string }>();
   const { pathname } = useLocation();
   const callout = useCallout();
-  const [remedy, setRemedy] = useState<Remedy>('adjust');
-  const [emoji, setEmoji] = useState<string | null>(null);
-  const [reply, setReply] = useState('');
+  const form = useQuizResolveForm(request?.id);
   // The request the last submission was for, so an earlier request's error
   // never shows on the next one opened.
   const [submittedFor, setSubmittedFor] = useState<string | null>(null);
-
-  // A fresh form for every request opened.
-  useEffect(() => {
-    setRemedy('adjust');
-    setEmoji(null);
-    setReply('');
-  }, [request?.id]);
 
   useEffect(() => {
     if (fetcher.state !== 'idle' || !fetcher.data || !submittedFor) return;
@@ -72,26 +55,15 @@ const ResolveQuizRegradeModal = ({
   const quiz = request?.quiz ?? null;
   const late = quiz?.lateHours ?? 0;
   const submitting = fetcher.state !== 'idle';
-  const canSubmit = reply.trim().length > 0 && (remedy === 'keep' || Boolean(emoji));
-  const title = remedy === 'adjust' ? 'Adjust score' : 'Keep score';
 
   const submit = () => {
-    if (!request || !canSubmit) return;
+    if (!request || !form.canSubmit) return;
     setSubmittedFor(request.id);
     fetcher.submit(
-      {
-        intent: 'resolve-quiz',
-        requestId: request.id,
-        resolution: remedy === 'adjust' ? 'APPROVED' : 'DENIED',
-        emoji: remedy === 'adjust' ? emoji : null,
-        comment: reply.trim(),
-      },
+      { intent: 'resolve-quiz', requestId: request.id, ...form.payload() },
       { method: 'post', action: pathname, encType: 'application/json' }
     );
   };
-
-  // The same helper as the attempt drawer's Counted line.
-  const counted = countedQuizEmoji(emoji, scale, late, latePenaltyPerHour);
 
   return (
     <Modal
@@ -108,10 +80,10 @@ const ResolveQuizRegradeModal = ({
           type="primary"
           onClick={submit}
           loading={submitting}
-          disabled={!canSubmit}
+          disabled={!form.canSubmit}
           data-testid="resolve-quiz-submit"
         >
-          {title}
+          {form.submitLabel}
         </Button>,
       ]}
     >
@@ -132,15 +104,6 @@ const ResolveQuizRegradeModal = ({
             </div>
           </div>
 
-          <Segmented
-            value={remedy}
-            onChange={value => setRemedy(value as Remedy)}
-            options={[
-              { value: 'adjust', label: 'Adjust score' },
-              { value: 'keep', label: 'Keep score' },
-            ]}
-          />
-
           <div>
             <div className="text-[13px] text-ink-3 mb-1">Student comment</div>
             <div className="rounded-md px-3 py-2 bg-stone-50 dark:bg-neutral-800/60 ring-1 ring-stone-200 dark:ring-neutral-700 text-ink-1 whitespace-pre-wrap break-words">
@@ -150,80 +113,26 @@ const ResolveQuizRegradeModal = ({
             </div>
           </div>
 
-          {remedy === 'adjust' ? (
-            <div className="grid grid-cols-[6rem_minmax(0,1fr)] items-center gap-x-4 gap-y-3">
-              <span className="text-[13px] text-ink-3">Original</span>
-              <span>
-                <QuizGradeEmoji emoji={quiz.originalEmoji} size="md" />
-              </span>
-              {quiz.adjusted && (
-                <>
-                  <span className="text-[13px] text-ink-3">Current</span>
-                  <span>
-                    <QuizGradeEmoji emoji={quiz.effectiveEmoji} adjusted size="md" />
-                  </span>
-                </>
-              )}
-              <span className="text-[13px] text-ink-3">Adjusted</span>
-              <span>
-                <QuizEmojiPicker
-                  scaleEmojis={Object.keys(scale)}
-                  value={emoji}
-                  onChange={setEmoji}
-                  disabled={submitting}
-                />
-              </span>
-              <span className="text-[13px] text-ink-3">Counted</span>
-              <span className="inline-flex items-center gap-2">
-                {counted ? (
-                  <Emoji emoji={counted} fontSize={20} />
-                ) : (
-                  <span className="text-gray-400 dark:text-gray-500">—</span>
-                )}
-                <LateNote hours={late} />
-              </span>
-            </div>
-          ) : (
-            <div className="grid grid-cols-[6rem_minmax(0,1fr)] items-center gap-x-4 gap-y-3">
-              <span className="text-[13px] text-ink-3">Grade</span>
-              <span className="inline-flex items-center gap-2">
-                <QuizGradeEmoji
-                  emoji={quiz.effectiveEmoji}
-                  originalEmoji={quiz.originalEmoji}
-                  adjusted={quiz.adjusted}
-                  size="md"
-                />
-                {late === 0 && <LateNote hours={0} />}
-              </span>
-              {late > 0 && (
-                <>
-                  <span className="text-[13px] text-ink-3">Counted</span>
-                  <span className="inline-flex items-center gap-2">
-                    <QuizGradeEmoji emoji={quiz.countedEmoji ?? null} size="md" />
-                    <LateNote hours={late} />
-                  </span>
-                </>
-              )}
-            </div>
-          )}
-
-          <div>
-            <label htmlFor="resolve-quiz-reply" className="block text-sm text-ink-1 mb-1">
-              <span className="text-red-500 mr-1">*</span>Reply to student
-            </label>
-            <Input.TextArea
-              id="resolve-quiz-reply"
-              rows={3}
-              value={reply}
-              onChange={e => setReply(e.target.value)}
-              disabled={submitting}
-              maxLength={2000}
-            />
-          </div>
-
-          {fetcher.data?.error && fetcher.state === 'idle' && submittedFor === request.id && (
-            <div className="text-sm text-rose-600 dark:text-rose-400">{fetcher.data.error}</div>
-          )}
+          <QuizResolveFields
+            form={form}
+            grade={{
+              originalEmoji: quiz.originalEmoji,
+              effectiveEmoji: quiz.effectiveEmoji,
+              adjusted: quiz.adjusted,
+              lateHours: late,
+              countedEmoji: quiz.countedEmoji ?? null,
+            }}
+            scaleEmojis={Object.keys(scale)}
+            // The same helper as the attempt drawer's Counted line.
+            countedFor={emoji => countedQuizEmoji(emoji, scale, late, latePenaltyPerHour)}
+            disabled={submitting}
+            idPrefix="resolve-quiz"
+            error={
+              fetcher.data?.error && fetcher.state === 'idle' && submittedFor === request.id
+                ? fetcher.data.error
+                : null
+            }
+          />
         </div>
       )}
     </Modal>
