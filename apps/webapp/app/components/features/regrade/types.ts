@@ -51,6 +51,9 @@ export interface RegradeRequestRowData {
   previous_grade: string[];
   student_comment: string | null;
   grader_comment: string | null;
+  /** Who resolved it (name only); null while open and on rows resolved before it was recorded. */
+  resolved_by_name?: string | null;
+  resolved_at?: string | Date | null;
   created_at: string | Date;
   updated_at: string | Date;
 }

@@ -571,7 +571,10 @@ describe('regrade_resolve on a submission request', () => {
     await regradeResolveTool.handler({ ...args, comment: ' See the rubric. ' }, STAFF_CTX);
     expect(mocks.trigger).toHaveBeenCalledWith(
       'update_regrade_request',
-      expect.objectContaining({ data: { status: 'DENIED', grader_comment: 'See the rubric.' } })
+      // Who resolved it: the token's user.
+      expect.objectContaining({
+        data: { status: 'DENIED', grader_comment: 'See the rubric.', resolved_by_id: 'ta-1' },
+      })
     );
     expect(mocks.resolveQuiz).not.toHaveBeenCalled();
   });

@@ -8,9 +8,10 @@
  *     (a `score-N` badge as its number, never a percentage), carries the
  *     staff reply escaped, and sends nothing for a repo request, an open one,
  *     or a student with no email.
- *   - `update_regrade_request` refuses a quiz request (resolveQuiz owns its
- *     status and adjustment) and still resolves a repo request, with an
- *     email that tolerates a missing submission title.
+ *   - `update_regrade_request` resolves a repo request through
+ *     `regradeRequest.resolveRepo` (which refuses a quiz request: resolveQuiz
+ *     owns its status and adjustment), passing who resolved it, and emails
+ *     the student even without a submission title.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -18,6 +19,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   findMany: vi.fn(),
   update: vi.fn(),
+  resolveRepo: vi.fn(),
   classroomFindById: vi.fn(),
   findScaleByClassroomId: vi.fn(),
   sendEmail: vi.fn(),
@@ -37,6 +39,7 @@ vi.mock('@classmoji/services', async () => ({
     regradeRequest: {
       findMany: (...a: unknown[]) => mocks.findMany(...a),
       update: (...a: unknown[]) => mocks.update(...a),
+      resolveRepo: (...a: unknown[]) => mocks.resolveRepo(...a),
     },
     classroom: { findById: (...a: unknown[]) => mocks.classroomFindById(...a) },
     emojiMapping: {
@@ -164,28 +167,55 @@ describe('quiz_regrade_resolved', () => {
 });
 
 describe('update_regrade_request', () => {
-  it('refuses a quiz request, writing nothing', async () => {
-    mocks.findMany.mockResolvedValue([quizRequest({ status: 'IN_REVIEW' })]);
+  it('resolves through resolveRepo with the reply and who resolved it', async () => {
+    mocks.resolveRepo.mockResolvedValue({ id: 'rr-1', status: 'DENIED' });
+    await updateTask.run({
+      request: { id: 'rr-1', student: { email: 'ada@school.edu' } },
+      data: { status: 'DENIED', grader_comment: 'See the rubric.', resolved_by_id: 'ta-1' },
+    });
+    expect(mocks.resolveRepo).toHaveBeenCalledWith({
+      id: 'rr-1',
+      status: 'DENIED',
+      graderComment: 'See the rubric.',
+      resolvedById: 'ta-1',
+    });
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it('still resolves a payload queued without a resolver (null, no name shown)', async () => {
+    mocks.resolveRepo.mockResolvedValue({ id: 'rr-1', status: 'APPROVED' });
+    await updateTask.run({
+      request: { id: 'rr-1', student: { email: 'ada@school.edu' } },
+      data: { status: 'APPROVED' },
+    });
+    expect(mocks.resolveRepo).toHaveBeenCalledWith({
+      id: 'rr-1',
+      status: 'APPROVED',
+      graderComment: null,
+      resolvedById: null,
+    });
+  });
+
+  it('refuses a status other than APPROVED or DENIED, writing nothing', async () => {
+    await expect(
+      updateTask.run({
+        request: { id: 'rr-1', student: { email: 'ada@school.edu' } },
+        data: { status: 'IN_REVIEW' },
+      })
+    ).rejects.toThrow(/APPROVED or DENIED/);
+    expect(mocks.resolveRepo).not.toHaveBeenCalled();
+  });
+
+  it('surfaces resolveRepo refusing a quiz request', async () => {
+    mocks.resolveRepo.mockRejectedValue(
+      new Error('A quiz regrade request is resolved with resolveQuiz')
+    );
     await expect(
       updateTask.run({
         request: { id: 'rr-1', student: { email: 'ada@school.edu' } },
         data: { status: 'APPROVED' },
       })
-    ).rejects.toThrow(/does not resolve quiz regrade requests/);
-    expect(mocks.update).not.toHaveBeenCalled();
-  });
-
-  it('still resolves a repo request', async () => {
-    mocks.findMany.mockResolvedValue([quizRequest({ quiz_attempt_id: null, quiz_attempt: null })]);
-    mocks.update.mockResolvedValue({ id: 'rr-1', status: 'DENIED' });
-    await updateTask.run({
-      request: { id: 'rr-1', student: { email: 'ada@school.edu' } },
-      data: { status: 'DENIED', grader_comment: 'See the rubric.' },
-    });
-    expect(mocks.update).toHaveBeenCalledWith({
-      id: 'rr-1',
-      data: { status: 'DENIED', grader_comment: 'See the rubric.' },
-    });
+    ).rejects.toThrow(/resolveQuiz/);
   });
 
   it('emails a repo resolution even without a submission title', async () => {

@@ -283,6 +283,12 @@ export interface StudentQuizRegradeView {
     status: 'APPROVED' | 'DENIED';
     reply: string | null;
     previousEmoji: string | null;
+    /**
+     * Who resolved it and when (the request's own `resolved_by` /
+     * `resolved_at`, name only). Null on requests resolved before that was
+     * recorded: no name is shown then.
+     */
+    resolvedByName: string | null;
     resolvedAt: string | null;
   } | null;
 }
@@ -294,7 +300,8 @@ export const studentQuizRegradeView = (
     grader_comment?: string | null;
     previous_grade?: readonly string[] | null;
     created_at?: Date | string | null;
-    updated_at?: Date | string | null;
+    resolved_at?: Date | string | null;
+    resolved_by?: { name?: string | null } | null;
   }[]
 ): StudentQuizRegradeView => {
   const newest = [...requests].sort(
@@ -310,7 +317,8 @@ export const studentQuizRegradeView = (
           status: resolved.status as 'APPROVED' | 'DENIED',
           reply: resolved.grader_comment ?? null,
           previousEmoji: resolved.previous_grade?.[0] ?? null,
-          resolvedAt: isoOrNull(resolved.updated_at),
+          resolvedByName: resolved.resolved_by?.name ?? null,
+          resolvedAt: isoOrNull(resolved.resolved_at),
         }
       : null,
   };

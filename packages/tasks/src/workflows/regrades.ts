@@ -63,7 +63,18 @@ interface UpdateRegradeRequestTaskPayload {
       } | null;
     } | null;
   };
-  data: Record<string, unknown>;
+  /**
+   * The resolution: `status` (APPROVED | DENIED), the reply (`grader_comment`,
+   * optional) and who resolved it (`resolved_by_id`, the caller's session or
+   * token user). Kept in this shape so a payload queued before or after a
+   * deploy still resolves.
+   */
+  data: {
+    status?: unknown;
+    grader_comment?: unknown;
+    resolved_by_id?: unknown;
+    [key: string]: unknown;
+  };
 }
 
 interface TaskPayloadWrapper<TPayload> {
@@ -144,16 +155,19 @@ export const updateRegradeRequestTask = task({
   ...retryOnDatabaseBlip,
   run: async (payload: UpdateRegradeRequestTaskPayload) => {
     const { request, data } = payload;
-
-    // A quiz request is resolved by regradeRequest.resolveQuiz, which writes
-    // the adjustment with the status. A bare status write here would mark it
-    // APPROVED with no adjustment.
-    const [stored] = await ClassmojiService.regradeRequest.findMany({ id: request.id });
-    if (stored?.quiz_attempt_id) {
-      throw new Error('update_regrade_request does not resolve quiz regrade requests');
+    if (data.status !== 'APPROVED' && data.status !== 'DENIED') {
+      throw new Error('update_regrade_request needs status APPROVED or DENIED');
     }
 
-    return ClassmojiService.regradeRequest.update({ id: request.id, data });
+    // resolveRepo refuses a quiz request: regradeRequest.resolveQuiz writes
+    // its adjustment with the status, and a bare status write here would mark
+    // it APPROVED with no adjustment.
+    return ClassmojiService.regradeRequest.resolveRepo({
+      id: request.id,
+      status: data.status,
+      graderComment: typeof data.grader_comment === 'string' ? data.grader_comment : null,
+      resolvedById: typeof data.resolved_by_id === 'string' ? data.resolved_by_id : null,
+    });
   },
   onSuccess: async ({ payload }: TaskPayloadWrapper<UpdateRegradeRequestTaskPayload>) => {
     const { request } = payload;

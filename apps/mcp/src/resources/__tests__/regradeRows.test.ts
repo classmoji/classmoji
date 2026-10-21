@@ -199,6 +199,33 @@ describe('my_regrade_requests with quiz requests', () => {
     expect(text).not.toContain('ada@school.edu');
   });
 
+  it('names who resolved the request and when, from the request (not the attempt)', async () => {
+    mocks.findMany.mockResolvedValue([
+      quizRequest({
+        resolved_by: { id: 'ta-9', name: 'Grace Hopper' },
+        resolved_at: new Date('2026-10-21T09:00:00Z'),
+        quiz_attempt: { ...quizRequest().quiz_attempt, adjusted_by: { id: 'x', name: 'Someone Else' } },
+      }),
+      { ...repoRequest, status: 'DENIED', resolved_by: { id: 'ta-8', name: 'Alan Turing' }, resolved_at: new Date('2026-10-21T08:00:00Z') },
+    ]);
+    const rows = (await regradeMineResource.handler(VARS, ctx('STUDENT'), URI)) as Rows;
+    expect(rows.requests[0]).toMatchObject({
+      resolved_by_name: 'Grace Hopper',
+      resolved_at: new Date('2026-10-21T09:00:00Z'),
+    });
+    expect(rows.requests[1]).toMatchObject({ resolved_by_name: 'Alan Turing' });
+    const text = JSON.stringify(rows);
+    expect(text).not.toContain('Someone Else');
+    // A name only: no staff id reaches the student.
+    expect(text).not.toContain('ta-9');
+  });
+
+  it('shows no name on a request resolved before the resolver was recorded', async () => {
+    mocks.findMany.mockResolvedValue([quizRequest({ resolved_by: null, resolved_at: null })]);
+    const rows = (await regradeMineResource.handler(VARS, ctx('STUDENT'), URI)) as Rows;
+    expect(rows.requests[0]).toMatchObject({ resolved_by_name: null, resolved_at: null });
+  });
+
   it('states no emoji where the classroom has no scale', async () => {
     mocks.findScaleByClassroomId.mockResolvedValue({});
     mocks.findMany.mockResolvedValue([

@@ -178,9 +178,11 @@ const RegradeRequestsTable = ({
       dataIndex: 'student_comment',
       key: 'student_comment',
       render: (comment: string | null, request: RegradeRequestRowData) => {
-        const replyBy =
-          request.status === 'APPROVED' ? (request.quiz?.adjustedByName ?? null) : null;
-        const replyMeta = [replyBy, fmtDate(request.updated_at)].filter(Boolean).join(' · ');
+        // Who resolved it and when, from the request itself. Rows resolved
+        // before that was recorded name no one.
+        const replyMeta = [request.resolved_by_name ?? null, fmtDate(request.resolved_at ?? null)]
+          .filter(Boolean)
+          .join(' · ');
         return (
           <div className="text-gray-700 dark:text-gray-300 max-w-md">
             {comment ? (

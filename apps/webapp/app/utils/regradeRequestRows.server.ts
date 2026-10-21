@@ -34,7 +34,7 @@ export interface QuizRegradeView {
   effectiveEmoji: string | null;
   /** A staff adjustment is in effect. */
   adjusted: boolean;
-  /** Who last adjusted the attempt, and when (the reply author on an approved request). */
+  /** Who last adjusted the attempt, and when (staff views; not the reply author). */
   adjustedByName: string | null;
   adjustedAt: string | null;
   /** Staff only, open requests only: the attempt's whole hours late. */
@@ -43,8 +43,13 @@ export interface QuizRegradeView {
   countedEmoji?: string | null;
 }
 
-export type RegradeRequestRow = Omit<ServiceRow, 'quiz_attempt'> & {
+export type RegradeRequestRow = Omit<ServiceRow, 'quiz_attempt' | 'resolved_by'> & {
   quiz: QuizRegradeView | null;
+  /**
+   * Who resolved the request (name only), the author of the staff reply.
+   * Null while open and on rows resolved before it was recorded.
+   */
+  resolved_by_name: string | null;
 };
 
 const iso = (value: Date | string | null | undefined) =>
@@ -52,7 +57,8 @@ const iso = (value: Date | string | null | undefined) =>
 
 /** One row, with its quiz attempt (if any) reduced to emoji. */
 const projectRow = (row: ServiceRow, scale: QuizEmojiScale): RegradeRequestRow => {
-  const { quiz_attempt: attempt, ...rest } = row;
+  const { quiz_attempt: attempt, resolved_by: resolvedBy, ...base } = row;
+  const rest = { ...base, resolved_by_name: resolvedBy?.name ?? null };
   if (!attempt) return { ...rest, quiz: null };
   const grade = quizAttemptGrade(attempt, scale);
   return {

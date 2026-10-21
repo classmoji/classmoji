@@ -7,7 +7,7 @@
  * and then only the `quiz_regrade_resolved` email, never
  * `update_regrade_request` (which would flip the status with no adjustment
  * and clear nothing of a repo grade); a repo request keeps its task, with the
- * reply stored when one is given.
+ * reply stored when one is given and the session user as `resolved_by_id`.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -166,7 +166,23 @@ describe('updateRegradeRequest', () => {
         student: { email: 'ada@school.edu' },
         git_repo_assignment: { assignment: { title: 'Lab 1' } },
       },
-      data: { status: 'APPROVED', grader_comment: 'Regraded.' },
+      // Who resolved it: the session user the gate admitted, never the body.
+      data: { status: 'APPROVED', grader_comment: 'Regraded.', resolved_by_id: 'ta-1' },
     });
+  });
+
+  it('names the session user as the resolver even when the body names someone else', async () => {
+    mocks.findMany.mockResolvedValue([repoRequest]);
+    const body = (await post({
+      request: { id: 'rr-repo' },
+      status: 'DENIED',
+      data: { resolved_by_id: 'mallory' },
+      resolved_by_id: 'mallory',
+    })) as { success?: string };
+    expect(mocks.trigger).toHaveBeenCalledWith(
+      'update_regrade_request',
+      expect.objectContaining({ data: { status: 'DENIED', resolved_by_id: 'ta-1' } })
+    );
+    expect(body.success).toBe('Regrade/resubmit request updated');
   });
 });

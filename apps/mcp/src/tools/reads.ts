@@ -243,7 +243,8 @@ export const listRegradeRequestsTool = mirrorResourceTool({
   title: 'List regrade requests',
   description:
     'All regrade requests in the classroom: status, target (submission or quiz), student ' +
-    'comment, grader_comment (the staff reply), previous_grade and new_grade (emoji, new once ' +
+    'comment, grader_comment (the staff reply) with resolved_by_name and resolved_at, ' +
+    'previous_grade and new_grade (emoji, new once ' +
     'resolved), and the submission or the quiz attempt (quiz_id, quiz_name, attempt_id, ' +
     'attempt_number, current_emoji, adjusted, original_emoji). Grades are emoji, never ' +
     'numbers; quiz requests only where the classroom shows quizzes. Teaching team only. ' +
@@ -256,7 +257,8 @@ export const myRegradeRequestsTool = mirrorResourceTool({
   title: 'My regrade requests',
   description:
     'Your own regrade requests in this classroom: status, target (submission or quiz), your ' +
-    'comment, grader_comment (the staff reply), previous_grade and new_grade (emoji), and the ' +
+    'comment, grader_comment (the staff reply) with resolved_by_name and resolved_at (who ' +
+    'replied, when), previous_grade and new_grade (emoji), and the ' +
     'submission or the quiz attempt (quiz_id, quiz_name, attempt_id, attempt_number, ' +
     'current_emoji, adjusted, original_emoji). Grades are emoji, never numbers. Ask with ' +
     'regrade_create. Students only.',

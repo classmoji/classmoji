@@ -833,7 +833,10 @@ describe('student attempt drawer payload', () => {
         grader_comment: 'Fixed.',
         previous_grade: ['+1'],
         created_at: new Date('2026-03-03T10:00:00Z'),
-        updated_at: new Date('2026-03-04T10:00:00Z'),
+        updated_at: new Date('2026-03-06T10:00:00Z'),
+        // The resolver, from the request itself (not the attempt's adjuster).
+        resolved_by: { id: 'ta-7', name: 'Ada Lovelace' },
+        resolved_at: new Date('2026-03-04T11:00:00Z'),
         student: { email: SENTINEL.email },
       },
     ]);
@@ -870,7 +873,8 @@ describe('student attempt drawer payload', () => {
           status: 'APPROVED',
           reply: 'Fixed.',
           previousEmoji: '+1',
-          resolvedAt: '2026-03-04T10:00:00.000Z',
+          resolvedByName: 'Ada Lovelace',
+          resolvedAt: '2026-03-04T11:00:00.000Z',
         },
       },
     });
@@ -901,6 +905,11 @@ describe('student attempt drawer payload', () => {
       createdAt: '2026-03-05T10:00:00.000Z',
     });
     expect(payload.result?.regrade.resolved).toMatchObject({ id: 'rr-1', status: 'DENIED' });
+    // Resolved before the resolver was recorded: no name, no date.
+    expect(payload.result?.regrade.resolved).toMatchObject({
+      resolvedByName: null,
+      resolvedAt: null,
+    });
   });
 
   it('gives staff reading a student attempt here the grade only', async () => {

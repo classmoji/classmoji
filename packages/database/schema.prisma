@@ -349,6 +349,8 @@ model User {
   /// Quiz attempts whose score this user (teaching team) adjusted.
   quiz_attempts_adjusted        QuizAttempt[]             @relation("QuizAttemptAdjustedBy")
   regrade_requests              RegradeRequest[]
+  /// Regrade requests this user (teaching team) resolved.
+  regrade_requests_resolved     RegradeRequest[]          @relation("RegradeRequestResolvedBy")
   token_transactions            TokenTransaction[]
   audit_logs                    AuditLog[]
   team_memberships              TeamMembership[]
@@ -1254,6 +1256,9 @@ model RegradeRequest {
   grader_comment         String?
   previous_grade         String[]
   status                 RegradeRequestStatus @default(IN_REVIEW)
+  /// The teaching-team member who resolved the request (APPROVED or DENIED). Null while open and on rows resolved before it was recorded.
+  resolved_by_id         String?
+  resolved_at            DateTime?
   created_at             DateTime             @default(now())
   updated_at             DateTime             @default(now()) @updatedAt
 
@@ -1261,6 +1266,7 @@ model RegradeRequest {
   quiz_attempt        QuizAttempt?       @relation(fields: [quiz_attempt_id], references: [id], onDelete: Cascade)
   classroom           Classroom          @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
   student             User               @relation(fields: [student_id], references: [id], onDelete: Cascade)
+  resolved_by         User?              @relation("RegradeRequestResolvedBy", fields: [resolved_by_id], references: [id], onDelete: SetNull)
 
   @@index([classroom_id])
   @@index([student_id])

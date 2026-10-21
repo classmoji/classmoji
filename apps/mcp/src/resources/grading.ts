@@ -268,6 +268,9 @@ interface RegradeRow {
   previous_grade: string[];
   created_at: Date | string;
   updated_at?: Date | string;
+  /** Who resolved it and when; null while open and on rows resolved before it was recorded. */
+  resolved_at?: Date | string | null;
+  resolved_by?: { id: string; name?: string | null } | null;
   student?: { id: string; name?: string | null; login?: string | null; image?: string | null };
   git_repo_assignment?: SubmissionLike | null;
   /** A quiz request's attempt (regradeRequest.findMany), null on a repo request. */
@@ -301,8 +304,11 @@ function regradeRow(r: RegradeRow, git: GitWebContext | null, scale: EmojiScale)
     target: attempt ? 'quiz' : 'submission',
     student: publicUser(r.student),
     student_comment: r.student_comment ?? null,
-    // The staff reply written when the request was resolved.
+    // The staff reply written when the request was resolved, and who wrote
+    // it when (name only; null on requests resolved before it was recorded).
     grader_comment: r.grader_comment ?? null,
+    resolved_by_name: r.resolved_by?.name ?? null,
+    resolved_at: r.resolved_at ?? null,
     previous_grade: r.previous_grade,
     // The target's grade now, once the request is resolved; null while open.
     new_grade: r.status === 'IN_REVIEW' ? null : currentGrade,

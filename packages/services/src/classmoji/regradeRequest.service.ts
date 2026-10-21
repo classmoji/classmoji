@@ -135,6 +135,9 @@ export const findMany = async (query: Prisma.RegradeRequestWhereInput) => {
           },
         },
       },
+      // Who resolved it (name only): the author of the staff reply. Null
+      // while open, and on rows resolved before it was recorded.
+      resolved_by: { select: { id: true, name: true } },
       student: {
         select: {
           name: true,
@@ -478,7 +481,12 @@ export const resolveQuiz = async (
 
       const updated = await tx.regradeRequest.update({
         where: { id: request.id },
-        data: { status: resolution, grader_comment: reply },
+        data: {
+          status: resolution,
+          grader_comment: reply,
+          resolved_by_id: actorUserId,
+          resolved_at: new Date(),
+        },
       });
       return { ...base, request: updated, alreadyResolved: false, attempt: current, change };
     },
@@ -516,6 +524,47 @@ export const resolveQuiz = async (
     quiz: outcome.quiz,
     student: outcome.student,
   };
+};
+
+/**
+ * Resolve a repo (submission) regrade request: the status, the reply when
+ * there is one, and who resolved it and when. Called by the
+ * `update_regrade_request` task, which the web queue and the MCP trigger
+ * after their own teaching-team gate. Refuses a quiz request: those resolve
+ * through `resolveQuiz`, which writes the adjustment with the status.
+ */
+export const resolveRepo = async ({
+  id,
+  status,
+  graderComment,
+  resolvedById,
+}: {
+  id: string;
+  status: 'APPROVED' | 'DENIED';
+  graderComment?: string | null;
+  resolvedById?: string | null;
+}): Promise<RegradeRequest> => {
+  if (status !== 'APPROVED' && status !== 'DENIED') {
+    throw new Error('Resolution must be APPROVED or DENIED');
+  }
+  const stored = await getPrisma().regradeRequest.findUnique({
+    where: { id },
+    select: { quiz_attempt_id: true },
+  });
+  if (!stored) throw new Error('Regrade request not found');
+  if (stored.quiz_attempt_id) {
+    throw new Error('A quiz regrade request is resolved with resolveQuiz');
+  }
+  const reply = typeof graderComment === 'string' ? graderComment.trim() : '';
+  return getPrisma().regradeRequest.update({
+    where: { id },
+    data: {
+      status,
+      ...(reply ? { grader_comment: reply } : {}),
+      resolved_by_id: resolvedById ?? null,
+      resolved_at: new Date(),
+    },
+  });
 };
 
 export const update = async ({

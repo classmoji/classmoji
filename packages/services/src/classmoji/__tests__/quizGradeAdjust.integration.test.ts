@@ -669,7 +669,12 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
       });
       expect(approved).toMatchObject({
         alreadyResolved: false,
-        request: { status: 'APPROVED', grader_comment: 'Q1 was right; adjusted.' },
+        request: {
+          status: 'APPROVED',
+          grader_comment: 'Q1 was right; adjusted.',
+          // Who resolved it, on the request itself.
+          resolved_by_id: assistant,
+        },
         attempt: { adjusted_emoji: 'eyes', adjusted_by_id: assistant },
         grade: { effective: { emoji: 'eyes', percentage: 80 } },
       });
@@ -699,7 +704,15 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
         actorUserId: owner,
         tool: TOOL,
       });
-      expect(again).toMatchObject({ alreadyResolved: true, request: { status: 'APPROVED' } });
+      expect(approved.request.resolved_at).toBeInstanceOf(Date);
+      const [listedApproved] = await regradeRequest.findMany({ id: request.id });
+      expect(listedApproved.resolved_by).toMatchObject({ id: assistant });
+
+      expect(again).toMatchObject({
+        alreadyResolved: true,
+        request: { status: 'APPROVED', resolved_by_id: assistant },
+      });
+      expect(again.request.resolved_at?.getTime()).toBe(approved.request.resolved_at?.getTime());
 
       // Deny keeps the score.
       const next = await regradeRequest.createForQuizAttempt({
@@ -716,8 +729,9 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
         actorUserId: owner,
         tool: TOOL,
       });
+      expect(next.request).toMatchObject({ resolved_by_id: null, resolved_at: null });
       expect(denied).toMatchObject({
-        request: { status: 'DENIED', grader_comment: 'Stays.' },
+        request: { status: 'DENIED', grader_comment: 'Stays.', resolved_by_id: owner },
         attempt: { adjusted_emoji: 'eyes' },
       });
       const denyAudit = await prisma.auditLog.findFirst({
@@ -815,6 +829,37 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
         )
       ).toBe('not_quiz_request');
 
+      // The repo resolve path refuses a quiz request, and records who
+      // resolved a repo request and when.
+      await expect(
+        regradeRequest.resolveRepo({ id: request.id, status: 'APPROVED', resolvedById: owner })
+      ).rejects.toThrow(/resolveQuiz/);
+      expect(
+        (await prisma.regradeRequest.findUniqueOrThrow({ where: { id: request.id } }))
+          .resolved_by_id
+      ).toBe(owner);
+      const before = Date.now();
+      const repoResolved = await regradeRequest.resolveRepo({
+        id: repoRequest.id,
+        status: 'DENIED',
+        graderComment: '  The deadline was firm.  ',
+        resolvedById: assistant,
+      });
+      expect(repoResolved).toMatchObject({
+        status: 'DENIED',
+        grader_comment: 'The deadline was firm.',
+        resolved_by_id: assistant,
+      });
+      expect(repoResolved.resolved_at!.getTime()).toBeGreaterThanOrEqual(before - 1000);
+      // Repo grades are the caller's (grade_add), untouched here.
+      expect(
+        (
+          await prisma.assignmentGrade.findMany({
+            where: { git_repo_assignment_id: submission.id },
+          })
+        ).map(g => g.emoji)
+      ).toEqual(['-1']);
+
       // findMany carries both kinds, with the right relation set.
       const listed = await regradeRequest.findMany({ id: { in: [repoRequest.id, request.id] } });
       const quizRow = listed.find(r => r.id === request.id);
@@ -826,6 +871,7 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
         quiz: { id: quizId },
       });
       expect(repoRow?.quiz_attempt).toBeNull();
+      expect(repoRow?.resolved_by).toMatchObject({ id: assistant });
       expect(repoRow?.git_repo_assignment?.id).toBe(submission.id);
 
       // The CHECK: exactly one target.

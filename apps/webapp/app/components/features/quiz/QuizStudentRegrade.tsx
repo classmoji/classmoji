@@ -173,9 +173,14 @@ export function QuizStudentGradeNotes({
               {resolved.reply}
             </div>
           )}
-          {resolved.resolvedAt && (
-            <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              {formatDate(resolved.resolvedAt)}
+          {(resolved.resolvedByName || resolved.resolvedAt) && (
+            <div
+              data-testid="quiz-regrade-resolved-by"
+              className="mt-1 text-xs text-gray-500 dark:text-gray-400"
+            >
+              {[resolved.resolvedByName, formatDate(resolved.resolvedAt)]
+                .filter(Boolean)
+                .join(' · ')}
             </div>
           )}
         </div>

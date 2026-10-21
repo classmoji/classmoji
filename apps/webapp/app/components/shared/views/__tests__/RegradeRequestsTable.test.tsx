@@ -79,11 +79,14 @@ const resolvedQuizRow = () =>
       attemptNumber: 1,
       effectiveEmoji: 'score-90',
       adjusted: true,
-      adjustedByName: 'Jordan Lee',
-      adjustedAt: '2026-10-14T10:00:00.000Z',
+      // Whoever last touched the attempt is not the reply's author.
+      adjustedByName: 'Someone Else',
+      adjustedAt: '2026-10-16T10:00:00.000Z',
     },
     grader_comment: 'Q3 now has full credit.',
-    updated_at: '2026-10-14T10:00:00.000Z',
+    resolved_by_name: 'Jordan Lee',
+    resolved_at: '2026-10-14T10:00:00.000Z',
+    updated_at: '2026-10-16T10:00:00.000Z',
   });
 
 const repoRow = (): RegradeRequestRowData => ({
@@ -194,10 +197,46 @@ describe('RegradeRequestsTable, student', () => {
     expect(html).toContain('href="/student/cs1/quizzes/quiz-1/attempt/att-1"');
     expect(html).toContain('data-testid="regrade-staff-reply"');
     expect(flat).toContain('Jordan Lee · Oct 14');
+    expect(flat).not.toContain('Someone Else');
     expect(flat).toContain('Q3 now has full credit.');
     expect(html).not.toContain('regrade-quiz-resolve');
     expect(html).not.toContain('emoji-grade-trigger');
     // No staff columns.
     expect(flat).not.toContain('Sam Chen');
+  });
+
+  it('signs a resolved repo request with its resolver too', () => {
+    const html = render(
+      [
+        {
+          ...repoRow(),
+          status: 'DENIED',
+          grader_comment: 'The deadline was firm.',
+          resolved_by_name: 'Ari Patel',
+          resolved_at: '2026-10-15T10:00:00.000Z',
+        },
+      ],
+      '/student/cs1/regrade-requests'
+    );
+    expect(text(html)).toContain('Ari Patel · Oct 15');
+    expect(text(html)).toContain('The deadline was firm.');
+  });
+
+  it('names no one on a request resolved before the resolver was recorded', () => {
+    const html = render(
+      [
+        {
+          ...resolvedQuizRow(),
+          resolved_by_name: null,
+          resolved_at: null,
+        },
+      ],
+      '/student/cs1/regrade-requests'
+    );
+    const flat = text(html);
+    expect(html).toContain('data-testid="regrade-staff-reply"');
+    expect(flat).toContain('Q3 now has full credit.');
+    expect(flat).not.toContain('Someone Else');
+    expect(flat).not.toContain('Jordan Lee');
   });
 });
