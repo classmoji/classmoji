@@ -1,13 +1,7 @@
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import type { MessageRole, Prisma, Role } from '@prisma/client';
-import {
-  DEFAULT_EMOJI_GRADE_MAPPINGS,
-  effectivePercentage,
-  isClosed,
-  isReleased,
-  withLogins,
-} from '@classmoji/utils';
-import { findScaleByClassroomId } from './emojiMapping.service.ts';
+import { effectivePercentage, isClosed, isReleased, withLogins } from '@classmoji/utils';
+import { findScaleByClassroomId, quizScaleForClassroom } from './emojiMapping.service.ts';
 
 // Staff grade adjustments: `ClassmojiService.quizAttempt.adjust` / `revert`.
 export { adjust, revert } from './quizGradeAdjust.service.ts';
@@ -1596,38 +1590,23 @@ export const clearForUserAndQuiz = async (userId: string, quizId: string, classr
 // ============================================================================
 
 /**
- * Get emoji mappings for an attempt's classroom.
- * Returns a map of { emoji: grade } for use with gradeToEmoji().
+ * The emoji scale of an attempt's classroom (emoji → grade), for the legacy
+ * runtime's `record_question_result` (`gradeToEmoji`). Always the classroom's
+ * own scale (E10): a classroom with none is given the new-classroom scale
+ * first (`quizScaleForClassroom`). Empty only for an attempt that does not
+ * exist.
  *
  * @param {string} attemptId - Quiz attempt ID (UUID)
- * @returns {Object} Map of emoji shortcode to grade value, e.g. { heart: 100, '+1': 90 }
  */
-export const getEmojiMappingsForAttempt = async (attemptId: string) => {
+export const getEmojiMappingsForAttempt = async (
+  attemptId: string
+): Promise<Record<string, number>> => {
   const attempt = await getPrisma().quizAttempt.findUnique({
     where: { id: attemptId },
-    include: {
-      quiz: {
-        include: {
-          classroom: {
-            include: { emoji_mappings: true },
-          },
-        },
-      },
-    },
+    select: { quiz: { select: { classroom_id: true } } },
   });
-
-  const classroomMappings = attempt?.quiz?.classroom?.emoji_mappings;
-
-  // Fall back to sensible defaults if classroom hasn't configured emoji mappings
-  if (!classroomMappings || classroomMappings.length === 0) {
-    return { ...DEFAULT_EMOJI_GRADE_MAPPINGS };
-  }
-
-  // Convert array to { emoji: grade } map
-  return classroomMappings.reduce((acc: Record<string, number>, m) => {
-    acc[m.emoji] = m.grade;
-    return acc;
-  }, {});
+  if (!attempt) return {};
+  return quizScaleForClassroom(attempt.quiz.classroom_id);
 };
 
 /**

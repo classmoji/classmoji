@@ -364,6 +364,8 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
         )
       ).toBe('invalid_emoji');
 
+      // A classroom with no scale (E10): the adjustment first gives it the
+      // new-classroom scale as real rows, and the emoji must be on that one.
       const e = await makeQuiz(classE);
       const onEmpty = await makeAttempt(e.quizId, studentA, 50);
       expect(
@@ -376,6 +378,18 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
           })
         )
       ).toBe('invalid_emoji');
+      expect(await prisma.emojiMapping.count({ where: { classroom_id: classE } })).toBe(
+        SCORE_EMOJI_MAPPINGS.length
+      );
+      const seeded = await quizAttempt.adjust({
+        attemptId: onEmpty.id,
+        emoji: 'score-70',
+        actorUserId: owner,
+        tool: TOOL,
+      });
+      expect(seeded.grade.original.emoji).toBe('score-50');
+      expect(seeded.grade.effective).toMatchObject({ emoji: 'score-70', percentage: 70 });
+      expect(await itemFor(classE, studentA, e.assignmentId)).toMatchObject({ grade: 70 });
     });
 
     it('numeric scale: a score-N badge is the adjustment and the total reads its number', async () => {

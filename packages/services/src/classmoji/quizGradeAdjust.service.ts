@@ -40,7 +40,7 @@ import type { Prisma, Role } from '@prisma/client';
 
 import * as audit from './audit.service.ts';
 import { TEACHING_TEAM_ROLES } from './classroomStudents.ts';
-import { findScaleByClassroomId } from './emojiMapping.service.ts';
+import { quizScaleForClassroom } from './emojiMapping.service.ts';
 import { quizzesVisibleOrThrow } from './entitlement.service.ts';
 
 /** The refusal every quiz surface gives in a classroom that does not show quizzes. */
@@ -230,7 +230,8 @@ const prepareForAttempt = async (attemptId: unknown, actorUserId: string) => {
   if (!row) throw new QuizGradeError('not_found', 'Quiz attempt not found');
   const classroomId = row.quiz.classroom_id;
   await requireQuizzesVisible(classroomId, actorUserId);
-  const scale = await findScaleByClassroomId(classroomId);
+  // The classroom's own scale, re-seeded first if every row was deleted (E10).
+  const scale = await quizScaleForClassroom(classroomId);
   return { attemptId: id, classroomId, scale };
 };
 

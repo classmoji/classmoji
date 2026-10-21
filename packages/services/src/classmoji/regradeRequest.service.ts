@@ -36,7 +36,7 @@ import {
 } from '@classmoji/utils';
 import { Prisma, type RegradeRequest, type Role } from '@prisma/client';
 import * as audit from './audit.service.ts';
-import { findScaleByClassroomId } from './emojiMapping.service.ts';
+import { quizScaleForClassroom } from './emojiMapping.service.ts';
 import { quizzesVisibleOrThrow } from './entitlement.service.ts';
 import * as notificationService from './notification.service.ts';
 import { netQuizExtensionHours } from './quizGradeItems.service.ts';
@@ -403,7 +403,8 @@ export const createForQuizAttempt = async (
       : null;
   if (!located) throw new QuizGradeError('not_found', 'Quiz attempt not found');
   await requireQuizzesVisible(located.quiz.classroom_id, actorUserId);
-  const scale = await findScaleByClassroomId(located.quiz.classroom_id);
+  // The classroom's own scale, re-seeded first if every row was deleted (E10).
+  const scale = await quizScaleForClassroom(located.quiz.classroom_id);
 
   const run = () =>
     getPrisma().$transaction(async tx => {
@@ -571,7 +572,8 @@ export const resolveQuiz = async (
   });
   if (!located) throw new QuizGradeError('not_found', 'Regrade request not found');
   if (located.quiz_attempt_id) await requireQuizzesVisible(located.classroom_id, actorUserId);
-  const scale = await findScaleByClassroomId(located.classroom_id);
+  // The classroom's own scale, re-seeded first if every row was deleted (E10).
+  const scale = await quizScaleForClassroom(located.classroom_id);
 
   const outcome = await getPrisma().$transaction(
     async tx => {

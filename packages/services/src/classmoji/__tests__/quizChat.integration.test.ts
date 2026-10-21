@@ -28,6 +28,7 @@ const grading = await import('../quizGrading.service.ts');
 const chat = await import('../quizChat.service.ts');
 const { createNew, updateAttemptDurations } = await import('../quizAttempt.service.ts');
 const { BUTTON_TEXT, CONTRACT_VERSION, deriveResult } = await import('@classmoji/utils/quiz-agent');
+const { SCORE_EMOJI_MAPPINGS } = await import('@classmoji/utils');
 
 type Answer = {
   level: 'correct' | 'mostly_right' | 'partly_right' | 'minimal' | 'no_attempt';
@@ -465,6 +466,49 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
       credit_earned: 85,
     });
     expect(journal.input_message_id).toBe(answerTurn.inputMessageId);
+  });
+
+  it('grades on the new-classroom scale, seeded as real rows, when every row was deleted (E10)', async () => {
+    const original = await prisma.emojiMapping.findMany({
+      where: { classroom_id: classroomId },
+      select: { emoji: true, grade: true },
+    });
+    await prisma.emojiMapping.deleteMany({ where: { classroom_id: classroomId } });
+    try {
+      const attemptId = await newAttempt();
+      const turn = await begin(attemptId);
+      await grading.presentQuestion(call(turn), question(1));
+      const answerTurn = await say(attemptId, 'my answer');
+      const output = await grading.finalizeQuestion(
+        call(answerTurn),
+        result(1, [{ level: 'correct', hints_before: 0 }], 'Right.')
+      );
+      // The classroom now has the scale a new classroom gets, and the result
+      // is on it: never an in-code default set.
+      expect(output.emoji).toBe('score-100');
+      const rows = await prisma.emojiMapping.findMany({
+        where: { classroom_id: classroomId },
+        select: { emoji: true, grade: true, description: true },
+        orderBy: { grade: 'desc' },
+      });
+      expect(rows).toEqual(
+        SCORE_EMOJI_MAPPINGS.map(m => ({
+          emoji: m.emoji,
+          grade: m.grade,
+          description: m.description,
+        }))
+      );
+      const stored = (await attemptRow(attemptId)).question_results_json as Record<
+        string,
+        unknown
+      >[];
+      expect(stored[0]).toMatchObject({ emoji: 'score-100' });
+    } finally {
+      await prisma.emojiMapping.deleteMany({ where: { classroom_id: classroomId } });
+      await prisma.emojiMapping.createMany({
+        data: original.map(m => ({ classroom_id: classroomId, ...m })),
+      });
+    }
   });
 
   it('refuses answers whose hint counts decrease', async () => {
