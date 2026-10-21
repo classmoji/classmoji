@@ -1207,6 +1207,71 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
       );
       expect(lateness.get(request.id)).toEqual({ lateHours: 3, countedEmoji: '-1' });
     });
+
+    it('reads many requests at once: per student and assignment, bought hours, no assignment, resolved', async () => {
+      const scale = Object.fromEntries(DEFAULT_EMOJI_MAPPINGS.map(m => [m.emoji, m.grade]));
+      const q1 = await makeQuiz(classX);
+      const q2 = await makeQuiz(classX);
+      // A quiz in no module: never late.
+      const loose = await prisma.quiz.create({
+        data: { classroom_id: classX, name: `Loose ${suite}`, rubric_prompt: 'r' },
+        select: { id: true },
+      });
+      const lateBy = (hours: number) => new Date(deadline.getTime() + hours * H + 60_000);
+      // Student A bought 2 h on quiz 1 only; student B bought nothing.
+      await prisma.tokenTransaction.create({
+        data: {
+          classroom_id: classX,
+          student_id: studentA,
+          assignment_id: q1.assignmentId,
+          amount: -2,
+          hours_purchased: 2,
+          type: 'PURCHASE',
+          balance_after: 100,
+          description: `qga ${suite}`,
+        },
+      });
+      const a1 = await makeAttempt(q1.quizId, studentA, 90, lateBy(3)); // 3 - 2 = 1 h late
+      const a2 = await makeAttempt(q2.quizId, studentA, 90, lateBy(3)); // 3 h late
+      const b1 = await makeAttempt(q1.quizId, studentB, 90, lateBy(3)); // 3 h late
+      const b2 = await makeAttempt(q2.quizId, studentB, 90, lateBy(0)); // 0 h late
+      const looseAttempt = await makeAttempt(loose.id, studentB, 90, lateBy(10));
+      const ask = async (attemptId: string, student: string) =>
+        (
+          await regradeRequest.createForQuizAttempt({
+            attemptId,
+            comment: 'batch',
+            actorUserId: student,
+            tool: TOOL,
+          })
+        ).request.id;
+      const ids = {
+        a1: await ask(a1.id, studentA),
+        a2: await ask(a2.id, studentA),
+        b1: await ask(b1.id, studentB),
+        b2: await ask(b2.id, studentB),
+        loose: await ask(looseAttempt.id, studentB),
+      };
+      // A resolved request gets no entry.
+      await regradeRequest.resolveQuiz({
+        requestId: ids.b2,
+        resolution: 'DENIED',
+        comment: 'kept',
+        actorUserId: owner,
+        tool: TOOL,
+      });
+
+      const rows = await regradeRequest.findMany({ id: { in: Object.values(ids) } });
+      const lateness = await regradeRequest.openQuizRequestLateness(classX, rows, scale);
+      // 90 - 5/h. 1 h → 85, a tie between 👍 (90) and 👀 (80) that goes to
+      // the higher grade (gradeToEmoji's rule); 3 h → 75 → 👀.
+      expect(lateness.get(ids.a1)).toEqual({ lateHours: 1, countedEmoji: '+1' });
+      expect(lateness.get(ids.a2)).toEqual({ lateHours: 3, countedEmoji: 'eyes' });
+      expect(lateness.get(ids.b1)).toEqual({ lateHours: 3, countedEmoji: 'eyes' });
+      expect(lateness.get(ids.loose)).toEqual({ lateHours: 0, countedEmoji: '+1' });
+      expect(lateness.has(ids.b2)).toBe(false);
+      expect(lateness.size).toBe(4);
+    });
   });
 
   describe('a classroom that does not show quizzes', () => {

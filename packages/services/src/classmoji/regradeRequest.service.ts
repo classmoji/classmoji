@@ -39,7 +39,7 @@ import * as audit from './audit.service.ts';
 import { findScaleByClassroomId } from './emojiMapping.service.ts';
 import { quizzesVisibleOrThrow } from './entitlement.service.ts';
 import * as notificationService from './notification.service.ts';
-import { netQuizExtensionHours } from './quizGradeItems.service.ts';
+import { netQuizExtensionHoursByStudent } from './quizGradeItems.service.ts';
 import {
   QuizGradeError,
   acceptedRoleIn,
@@ -235,46 +235,55 @@ export const openQuizRequestLateness = async (
   const open = rows.filter(r => r.status === 'IN_REVIEW' && r.quiz_attempt);
   const result = new Map<string, QuizRequestLateness>();
   if (open.length === 0) return result;
-  const settings = await getPrisma().classroomSettings.findUnique({
-    where: { classroom_id: classroomId },
-    select: { late_penalty_points_per_hour: true },
-  });
+  const assignmentIds = [
+    ...new Set(
+      open.flatMap(r =>
+        r.quiz_attempt?.quiz.assignment ? [r.quiz_attempt.quiz.assignment.id] : []
+      )
+    ),
+  ];
+  // Three reads for the whole list: the penalty, the due dates (only this
+  // classroom's assignments) and the hours each student bought on each.
+  const [settings, assignments, bought] = await Promise.all([
+    getPrisma().classroomSettings.findUnique({
+      where: { classroom_id: classroomId },
+      select: { late_penalty_points_per_hour: true },
+    }),
+    assignmentIds.length > 0
+      ? getPrisma().assignment.findMany({
+          where: { id: { in: assignmentIds }, module: { classroom_id: classroomId } },
+          select: { id: true, student_deadline: true },
+        })
+      : [],
+    netQuizExtensionHoursByStudent({
+      classroomId,
+      studentIds: open.map(r => r.student_id),
+      assignmentIds,
+    }),
+  ]);
   const penalty = Number(settings?.late_penalty_points_per_hour ?? 0) || 0;
-  await Promise.all(
-    open.map(async row => {
-      const attempt = row.quiz_attempt!;
-      const assignmentId = attempt.quiz.assignment?.id ?? null;
-      const [assignment, hours] = assignmentId
-        ? await Promise.all([
-            getPrisma().assignment.findFirst({
-              where: { id: assignmentId, module: { classroom_id: classroomId } },
-              select: { student_deadline: true },
-            }),
-            netQuizExtensionHours({
-              classroomId,
-              studentId: row.student_id,
-              assignmentIds: [assignmentId],
-            }),
-          ])
-        : [null, new Map<string, number>()];
-      const late = assignment
+  const deadlineOf = new Map(assignments.map(a => [a.id, a.student_deadline]));
+  for (const row of open) {
+    const attempt = row.quiz_attempt!;
+    const assignmentId = attempt.quiz.assignment?.id ?? null;
+    const late =
+      assignmentId && deadlineOf.has(assignmentId)
         ? lateHoursOf(
             attempt.completed_at,
-            assignment.student_deadline,
-            assignmentId ? Math.max(0, hours.get(assignmentId) ?? 0) : 0
+            deadlineOf.get(assignmentId) ?? null,
+            Math.max(0, bought.get(row.student_id)?.get(assignmentId) ?? 0)
           )
         : 0;
-      // The penalty comes off the effective score itself (D2), not off its emoji.
-      const { effective } = quizAttemptGrade(attempt, scale);
-      result.set(row.id, {
-        lateHours: late,
-        countedEmoji:
-          late > 0 && effective.percentage !== null
-            ? quizPercentageEmoji(Math.max(0, effective.percentage - late * penalty), scale)
-            : effective.emoji,
-      });
-    })
-  );
+    // The penalty comes off the effective score itself (D2), not off its emoji.
+    const { effective } = quizAttemptGrade(attempt, scale);
+    result.set(row.id, {
+      lateHours: late,
+      countedEmoji:
+        late > 0 && effective.percentage !== null
+          ? quizPercentageEmoji(Math.max(0, effective.percentage - late * penalty), scale)
+          : effective.emoji,
+    });
+  }
   return result;
 };
 

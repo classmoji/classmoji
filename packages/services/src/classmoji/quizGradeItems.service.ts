@@ -68,6 +68,42 @@ export const netQuizExtensionHours = async ({
 };
 
 /**
+ * `netQuizExtensionHours` for several students at once, in one query:
+ * student id → (assignment id → net hours bought). A student or assignment
+ * with no purchase has no key.
+ */
+export const netQuizExtensionHoursByStudent = async ({
+  classroomId,
+  studentIds,
+  assignmentIds,
+}: {
+  classroomId: string;
+  studentIds: readonly string[];
+  assignmentIds: readonly string[];
+}): Promise<Map<string, Map<string, number>>> => {
+  const byStudent = new Map<string, Map<string, number>>();
+  if (studentIds.length === 0 || assignmentIds.length === 0) return byStudent;
+
+  const rows = await getPrisma().tokenTransaction.groupBy({
+    by: ['student_id', 'assignment_id'],
+    where: {
+      classroom_id: classroomId,
+      student_id: { in: [...new Set(studentIds)] },
+      assignment_id: { in: [...new Set(assignmentIds)] },
+    },
+    _sum: { hours_purchased: true },
+  });
+
+  for (const row of rows) {
+    if (!row.student_id || !row.assignment_id) continue;
+    const forStudent = byStudent.get(row.student_id) ?? new Map<string, number>();
+    forStudent.set(row.assignment_id, row._sum.hours_purchased ?? 0);
+    byStudent.set(row.student_id, forStudent);
+  }
+  return byStudent;
+};
+
+/**
  * user id → that student's quiz items. A student with no item (nothing open,
  * nothing scored and nothing overdue) has no key: read `get(id) ?? []`.
  */
