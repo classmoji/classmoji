@@ -228,8 +228,8 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     }));
 
     // Recent grades: released repo grades (emoji, as on the Assignments page)
-    // and quiz scores (the counting attempt's percentage, shown as soon as it
-    // completes), newest first. Both come from the coursework rows, so a grade
+    // and quiz grades (the counting attempt's grade as the classroom's emoji,
+    // shown as soon as it completes; never the number, E1), newest first. Both come from the coursework rows, so a grade
     // shows here only for an assignment the student can see there.
     const repoFeedback: FeedbackItem[] = coursework.flatMap(row =>
       row.repo && row.repo.gradesReleased && row.repo.grades.length > 0
@@ -250,12 +250,15 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       .filter(row => row.type === 'QUIZ' && row.score !== null)
       .map(row => ({
         id: `quiz-${row.assignmentId}`,
+        kind: 'QUIZ' as const,
         assignmentTitle: row.title,
         closedAt: row.scoredAt,
         graders: [],
         grades: [],
         issueUrl: null,
-        score: row.score,
+        scoreEmoji: row.scoreEmoji ?? null,
+        originalScoreEmoji: row.originalScoreEmoji ?? null,
+        adjusted: row.adjusted ?? false,
         href: row.href,
       }));
     const feedback: FeedbackItem[] = [...repoFeedback, ...quizFeedback]
@@ -292,13 +295,28 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       ? { moduleTitle: latestMissing.repository.title, moduleSlug: latestMissing.repository.slug }
       : null;
 
-    const resubmits: ResubmitItem[] = (regradeRequests as Array<Record<string, unknown>>).map(r => {
-      const ra = r.git_repo_assignment as { assignment?: { title?: string } } | undefined;
+    // A request is on a repo submission or on a quiz attempt; a quiz one is
+    // labelled as a quiz with its attempt number.
+    const resubmits: ResubmitItem[] = regradeRequests.map(r => {
+      const attempt = r.quiz_attempt;
+      if (attempt) {
+        return {
+          id: r.id,
+          kind: 'QUIZ' as const,
+          // The quiz's own name, as the requests page shows it.
+          assignmentTitle: attempt.quiz.name || 'Quiz',
+          attemptNumber: attempt.attempt_number,
+          status: r.status,
+          createdAt: r.created_at,
+        };
+      }
       return {
-        id: String(r.id),
-        assignmentTitle: ra?.assignment?.title ?? 'Assignment',
-        status: String(r.status),
-        createdAt: r.created_at as string | Date,
+        id: r.id,
+        kind: 'REPO' as const,
+        assignmentTitle: r.git_repo_assignment?.assignment?.title ?? 'Assignment',
+        attemptNumber: null,
+        status: r.status,
+        createdAt: r.created_at,
       };
     });
 

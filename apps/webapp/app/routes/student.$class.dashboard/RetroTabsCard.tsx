@@ -5,16 +5,19 @@ import dayjs from 'dayjs';
 import { IconArrowRight, IconBrandGithub } from '@tabler/icons-react';
 import type { StudentGradeSummary } from '@classmoji/utils';
 import Emoji from '~/components/ui/display/Emoji';
+import QuizGradeEmoji from '~/components/features/quiz/QuizGradeEmoji';
 import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
 import { useGitWeb } from '~/hooks/useGitWeb';
 
 /**
  * A recent grade: a repo assignment's released emoji grades (as on the
- * Assignments page), or a quiz's counting score, shown as soon as the attempt
- * completes.
+ * Assignments page), or a quiz's counting grade as the classroom's emoji,
+ * shown as soon as the attempt completes. Never a number (E1).
  */
 export interface FeedbackItem {
   id: string;
+  /** A quiz grade; absent for a repo grade. */
+  kind?: 'QUIZ';
   assignmentTitle: string;
   /** When it was submitted (repo) or when the counting attempt completed (quiz). */
   closedAt: string | Date | null;
@@ -22,15 +25,23 @@ export interface FeedbackItem {
   grades: { id?: string; emoji: string }[];
   /** The issue or repo on GitHub, for a repo grade. */
   issueUrl: string | null;
-  /** A quiz's percentage (0-100); absent for a repo grade. */
-  score?: number | null;
-  /** In-app link for a quiz score (the quiz list). */
+  /** A quiz's grade as the classroom's emoji (the adjustment when staff adjusted it). */
+  scoreEmoji?: string | null;
+  /** The AI's original grade, shown beside an adjusted one. */
+  originalScoreEmoji?: string | null;
+  /** Staff adjusted the counting attempt. */
+  adjusted?: boolean;
+  /** In-app link for a quiz grade (the quiz list). */
   href?: string | null;
 }
 
 export interface ResubmitItem {
   id: string;
+  /** A request on a repo submission or on a quiz attempt. */
+  kind: 'REPO' | 'QUIZ';
   assignmentTitle: string;
+  /** The quiz attempt's number; null for a repo request. */
+  attemptNumber: number | null;
   status: string;
   createdAt: string | Date;
 }
@@ -69,7 +80,7 @@ type TabKey = 'feedback' | 'team' | 'resubmits';
 const TAB_ORDER: { key: TabKey; label: string }[] = [
   { key: 'feedback', label: 'Feedback' },
   { key: 'team', label: 'Team' },
-  { key: 'resubmits', label: 'Resubmits' },
+  { key: 'resubmits', label: 'Regrade/Resubmit' },
 ];
 
 const statusStyles: Record<string, string> = {
@@ -164,7 +175,7 @@ const FeedbackPanel = ({
   items: FeedbackItem[];
   summary: StudentGradeSummary | null;
 }) => {
-  const subtitle = 'Released grades and quiz scores';
+  const subtitle = 'Released grades and quiz results';
   const footer = summary ? <GradeSummaryFooter summary={summary} /> : undefined;
   if (items.length === 0) {
     return (
@@ -180,7 +191,7 @@ const FeedbackPanel = ({
       <Eyebrow>RECENT GRADES</Eyebrow>
       <ul className="flex flex-col">
         {items.map(item => {
-          const isQuiz = typeof item.score === 'number';
+          const isQuiz = item.kind === 'QUIZ';
           return (
             <li
               key={item.id}
@@ -188,9 +199,12 @@ const FeedbackPanel = ({
             >
               <div className="flex items-center gap-1 shrink-0">
                 {isQuiz ? (
-                  <span className="min-w-[2.75rem] text-sm font-bold tabular-nums text-accent-ink">
-                    {Math.round(item.score! * 10) / 10}%
-                  </span>
+                  <QuizGradeEmoji
+                    emoji={item.scoreEmoji ?? null}
+                    originalEmoji={item.originalScoreEmoji ?? null}
+                    adjusted={item.adjusted === true}
+                    size="md"
+                  />
                 ) : (
                   item.grades
                     .slice(0, 3)
@@ -330,9 +344,9 @@ const TeamPanel = ({
 const ResubmitsPanel = ({ items, classSlug }: { items: ResubmitItem[]; classSlug: string }) => {
   if (items.length === 0) {
     return (
-      <PanelShell title="Regrade requests" subtitle="Track resubmits and their status">
+      <PanelShell title="Regrade/Resubmit requests" subtitle="Track your requests and their status">
         <div className="h-full flex flex-col items-center justify-center text-center">
-          <p className="text-sm text-ink-3">No resubmits yet</p>
+          <p className="text-sm text-ink-3">No regrade/resubmit requests yet</p>
         </div>
       </PanelShell>
     );
@@ -350,7 +364,11 @@ const ResubmitsPanel = ({ items, classSlug }: { items: ResubmitItem[]; classSlug
     </>
   );
   return (
-    <PanelShell title="Regrade requests" subtitle={`${items.length} total`} footer={footer}>
+    <PanelShell
+      title="Regrade/Resubmit requests"
+      subtitle={`${items.length} total`}
+      footer={footer}
+    >
       <Eyebrow>RECENT</Eyebrow>
       <ul className="flex flex-col">
         {items.slice(0, 5).map(item => (
@@ -360,7 +378,12 @@ const ResubmitsPanel = ({ items, classSlug }: { items: ResubmitItem[]; classSlug
           >
             <div className="flex-1 min-w-0">
               <div className="text-sm font-medium text-ink-0 truncate">{item.assignmentTitle}</div>
-              <div className="text-xs text-ink-3">{fromNow(item.createdAt)}</div>
+              <div className="text-xs text-ink-3">
+                {item.kind === 'QUIZ' && (
+                  <>Quiz{item.attemptNumber != null ? ` · Attempt ${item.attemptNumber}` : ''} · </>
+                )}
+                {fromNow(item.createdAt)}
+              </div>
             </div>
             <span
               className={`text-xs font-bold tracking-wider px-2 py-0.5 rounded-full ring-1 ${

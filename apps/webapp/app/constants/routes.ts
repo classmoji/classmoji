@@ -162,7 +162,7 @@ export const routes = {
   },
   'regrade-requests': {
     link: '/regrade-requests',
-    label: 'Resubmits',
+    label: 'Regrade/Resubmit',
     icon: IconRotate,
     roles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
     category: 'assessment',

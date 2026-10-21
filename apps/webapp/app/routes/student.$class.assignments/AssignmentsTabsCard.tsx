@@ -5,6 +5,7 @@ import { motion, useReducedMotion } from 'framer-motion';
 import { IconExternalLink } from '@tabler/icons-react';
 import type { StudentCourseworkRow } from '@classmoji/services';
 import Emoji from '~/components/ui/display/Emoji';
+import QuizGradeEmoji from '~/components/features/quiz/QuizGradeEmoji';
 import TokenExtensionPopover from '~/components/features/TokenExtensionPopover';
 import { CommitCount } from '~/components/features/analytics';
 import {
@@ -308,10 +309,15 @@ const AssignmentsTabsCard = ({
                           ) : (
                             <Dash />
                           )
-                        ) : row.score !== null ? (
-                          <span className="font-semibold tabular-nums text-ink-1">
-                            {Math.round(row.score * 10) / 10}%
-                          </span>
+                        ) : row.scoreEmoji ? (
+                          // A quiz: the counting attempt's grade as the
+                          // classroom's emoji, never the number (E1), with the
+                          // original beside it when staff adjusted it (D6).
+                          <QuizGradeEmoji
+                            emoji={row.scoreEmoji}
+                            originalEmoji={row.originalScoreEmoji ?? null}
+                            adjusted={row.adjusted === true}
+                          />
                         ) : (
                           <Dash />
                         )}
@@ -364,7 +370,7 @@ const AssignmentsTabsCard = ({
                                 }}
                                 className="inline-flex items-center text-xs font-medium text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-full ring-1 ring-line bg-panel hover:bg-nav-hover transition-colors"
                               >
-                                Request regrade
+                                Request regrade/resubmit
                               </Link>
                             )}
                           </span>

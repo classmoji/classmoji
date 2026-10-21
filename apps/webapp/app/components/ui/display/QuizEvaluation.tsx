@@ -1,4 +1,4 @@
-import { Alert, Card, Progress, Space, Typography, Tag, Tooltip } from 'antd';
+import { Alert, Card, Space, Typography, Tag, Tooltip } from 'antd';
 import {
   CheckCircleOutlined,
   BulbOutlined,
@@ -7,7 +7,12 @@ import {
   ClockCircleOutlined,
 } from '@ant-design/icons';
 import { formatDuration } from '~/utils/quizUtils';
-import { gradeToEmoji, DEFAULT_EMOJI_GRADE_MAPPINGS, getEmojiSymbol } from '@classmoji/utils';
+import Emoji from '~/components/ui/display/Emoji';
+import {
+  QuizGradeHero,
+  effectiveBand,
+  useQuizResultSlots,
+} from '~/components/features/quiz/QuizResultContext';
 
 const { Title, Text } = Typography;
 
@@ -15,6 +20,8 @@ export interface QuestionResult {
   question_num: number;
   credit_earned: number;
   attempts: number;
+  /** The emoji stored with the result, from the classroom's scale (attemptDrawerView). */
+  emoji?: string | null;
 }
 
 export interface EvaluationData {
@@ -48,11 +55,15 @@ const QuizEvaluation = ({
   focusMetrics,
   isDarkMode = false,
 }: QuizEvaluationProps) => {
+  const slots = useQuizResultSlots();
   if (!evaluationData) return null;
 
-  // Always show formative score (partial_credit_percentage) - same for everyone
-  const displayScore =
-    evaluationData.partial_credit_percentage || evaluationData.raw_percentage || 0; // fallback for old data
+  // The grade shows as the classroom's emoji with its band (E3), never as a
+  // number; the band follows the effective grade when the drawer has it (D9).
+  const { evaluation: band, numeric_score: bandScore } = effectiveBand(slots, {
+    evaluation: evaluationData.evaluation ?? null,
+    numeric_score: evaluationData.numeric_score ?? null,
+  });
 
   // Unified 5-tier color scheme for scores/percentages
   // Works for both borders and Ant Design Tag color prop
@@ -72,6 +83,7 @@ const QuizEvaluation = ({
 
   return (
     <div style={{ marginTop: 20 }}>
+      {slots?.beforeResults}
       <Alert
         message="Quiz Complete!"
         description="Your responses have been evaluated. Here are your results:"
@@ -83,25 +95,14 @@ const QuizEvaluation = ({
       <Card
         title={
           <Space>
-            {getGradeIcon(evaluationData.numeric_score ?? 0)}
-            <span>Quiz Evaluation: {evaluationData.evaluation}</span>
+            {getGradeIcon(bandScore ?? 0)}
+            <span>Quiz Evaluation: {band}</span>
           </Space>
         }
+        extra={slots?.headerExtra}
         style={{ marginBottom: 16 }}
       >
-        <div style={{ textAlign: 'center', marginBottom: 20 }}>
-          <Progress
-            type="circle"
-            percent={displayScore}
-            strokeColor={getScoreColor(displayScore)}
-            format={percent => (
-              <div>
-                <div style={{ fontSize: 24, fontWeight: 'bold' }}>{percent}%</div>
-                <div style={{ fontSize: 14, color: '#666' }}>Score</div>
-              </div>
-            )}
-          />
-        </div>
+        <QuizGradeHero band={band} />
 
         <div style={{ marginBottom: 20 }}>
           <Title level={5}>Summary</Title>
@@ -217,8 +218,6 @@ const QuizEvaluation = ({
             >
               {evaluationData.question_results.map((result: QuestionResult) => {
                 const creditPct = result.credit_earned ?? 0;
-                const emojiShortcode = gradeToEmoji(creditPct, DEFAULT_EMOJI_GRADE_MAPPINGS);
-                const emoji = getEmojiSymbol(emojiShortcode);
                 return (
                   <Card
                     key={result.question_num}
@@ -232,7 +231,10 @@ const QuizEvaluation = ({
                     <div style={{ fontSize: 12, color: '#666' }}>
                       {result.attempts} attempt{result.attempts !== 1 ? 's' : ''}
                     </div>
-                    <div style={{ fontSize: 20 }}>{emoji}</div>
+                    {/* The emoji stored with the result (the classroom's scale), never recomputed. */}
+                    <div style={{ fontSize: 20 }}>
+                      {result.emoji ? <Emoji emoji={result.emoji} fontSize={20} /> : null}
+                    </div>
                   </Card>
                 );
               })}

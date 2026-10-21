@@ -1,4 +1,4 @@
-import { Alert, Card, Progress, Space, Tag, Tooltip, Typography } from 'antd';
+import { Alert, Card, Space, Tag, Tooltip, Typography } from 'antd';
 import {
   BulbOutlined,
   CheckCircleOutlined,
@@ -9,6 +9,7 @@ import {
 import { QUIZ_MESSAGE_LIMIT_COPY, type QuizEvaluationRecordV2 } from '@classmoji/utils/quiz-agent';
 import Emoji from '~/components/ui/display/Emoji';
 import { formatDuration } from '~/utils/quizUtils';
+import { QuizGradeHero, effectiveBand, useQuizResultSlots } from './QuizResultContext';
 
 const { Title, Text } = Typography;
 
@@ -16,7 +17,9 @@ const { Title, Text } = Typography;
  * The results panel of a chat-runtime attempt, rendered from its stored
  * evaluation record (`evaluation_json`, or the same record carried by the
  * evaluation tool part / `data-evaluation`). Scores and each question's emoji
- * are the stored values; nothing is recomputed here. A record the server
+ * are the stored values; nothing is recomputed here. The grade shows as the
+ * classroom's emoji with its band (E3; the drawer supplies it through
+ * `QuizResultProvider`), never as a number. A record the server
  * completed from the recorded results (`source: 'server'`) has no feedback
  * text, and the panel simply shows its band, the scores and per-question
  * results. An attempt the server submitted at its message limit
@@ -50,25 +53,27 @@ const gradeIcon = (score: number | undefined) => {
   return <RocketOutlined style={{ fontSize: 24, color: '#faad14' }} />;
 };
 
-const roundScore = (value: number) => Math.round(Number(value || 0) * 10) / 10;
-
 function QuizResults({
   evaluation,
   focusMetrics = null,
   submittedAtLimit = false,
 }: QuizResultsProps) {
   const feedback = evaluation.feedback;
-  // The band the server stores on every completion, its own included; a
-  // record stored before it was added has it in the model's feedback only.
-  const band = evaluation.evaluation ?? feedback?.evaluation ?? null;
-  const bandScore = evaluation.numeric_score ?? feedback?.numeric_score;
-  const score = roundScore(evaluation.partial_credit_percentage);
+  const slots = useQuizResultSlots();
+  // The effective grade's band (D9) when the drawer has it; else the band the
+  // server stores on every completion, its own included (a record stored
+  // before it was added has it in the model's feedback only).
+  const { evaluation: band, numeric_score: bandScore } = effectiveBand(slots, {
+    evaluation: evaluation.evaluation ?? feedback?.evaluation ?? null,
+    numeric_score: evaluation.numeric_score ?? feedback?.numeric_score ?? null,
+  });
   const results = [...(evaluation.question_results ?? [])].sort(
     (a, b) => a.question_num - b.question_num
   );
 
   return (
     <div className="mt-5" data-testid="quiz-results">
+      {slots?.beforeResults}
       {submittedAtLimit && (
         <Alert
           data-testid="quiz-results-limit"
@@ -90,30 +95,17 @@ function QuizResults({
         title={
           band ? (
             <Space>
-              {gradeIcon(bandScore)}
+              {gradeIcon(bandScore ?? undefined)}
               <span>Quiz Evaluation: {band}</span>
             </Space>
           ) : (
             <span>Quiz Results</span>
           )
         }
+        extra={slots?.headerExtra}
         style={{ marginBottom: 16 }}
       >
-        <div className="mb-5 text-center">
-          <Progress
-            type="circle"
-            percent={score}
-            strokeColor={scoreColor(score)}
-            format={percent => (
-              <div>
-                <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">
-                  {percent}%
-                </div>
-                <div className="text-sm text-gray-500 dark:text-gray-400">Score</div>
-              </div>
-            )}
-          />
-        </div>
+        <QuizGradeHero band={band} />
 
         {feedback?.feedback_summary && (
           <div className="mb-5">

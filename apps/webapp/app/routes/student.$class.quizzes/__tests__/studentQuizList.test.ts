@@ -16,6 +16,16 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+/** The classroom's scale rows, best first: 🚀 100, 👍 85, 👀 70, 👎 50, 😭 0. */
+const SCALE_ROWS = [
+  { emoji: 'rocket', grade: 100 },
+  { emoji: '+1', grade: 85 },
+  { emoji: 'eyes', grade: 70 },
+  { emoji: '-1', grade: 50 },
+  { emoji: 'sob', grade: 0 },
+];
+const SCALE = Object.fromEntries(SCALE_ROWS.map(r => [r.emoji, r.grade]));
+
 const mocks = vi.hoisted(() => ({
   assertClassroomAccess: vi.fn(),
   quizFindMany: vi.fn(),
@@ -29,7 +39,11 @@ vi.mock('@classmoji/database', async () => ({
     '@classmoji/database/gitIdentity'
   )),
 
-  default: () => ({ quiz: { findMany: (...a: unknown[]) => mocks.quizFindMany(...a) } }),
+  default: () => ({
+    quiz: { findMany: (...a: unknown[]) => mocks.quizFindMany(...a) },
+    // The classroom's grading scale, as the real `findScaleByClassroomId` reads it.
+    emojiMapping: { findMany: async () => SCALE_ROWS },
+  }),
 }));
 // Pulled in by quiz.service; nothing here sends a notification.
 vi.mock('../../../../../../packages/services/src/classmoji/notification.service.ts', () => ({}));
@@ -44,6 +58,7 @@ vi.mock('@classmoji/services', async () => {
         netQuizExtensionHours: (...a: unknown[]) => mocks.netQuizExtensionHours(...a),
       },
       classroomMembership: { hasRole: (...a: unknown[]) => mocks.hasRole(...a) },
+      emojiMapping: { findScaleByClassroomId: async () => SCALE },
     },
     QuizAccessError: quiz.QuizAccessError,
   };
@@ -192,7 +207,9 @@ describe('student quiz list payload', () => {
           'id',
           'isCounting',
           'lateHours',
-          'partialCreditScore',
+          'scoreEmoji',
+          'originalScoreEmoji',
+          'adjusted',
           'status',
         ].sort()
       );
@@ -224,7 +241,9 @@ describe('student quiz list payload', () => {
         attemptNumber: 2,
         status: 'in_progress',
         completed_at: null,
-        partialCreditScore: null,
+        scoreEmoji: null,
+        originalScoreEmoji: null,
+        adjusted: false,
         focusMetrics: null,
         isCounting: false,
         lateHours: 0,
@@ -234,14 +253,18 @@ describe('student quiz list payload', () => {
         attemptNumber: 1,
         status: 'completed',
         completed_at: COMPLETED.completed_at,
-        partialCreditScore: 85,
+        scoreEmoji: '+1',
+        originalScoreEmoji: '+1',
+        adjusted: false,
         focusMetrics: { totalMs: 1000, focusedMs: 900, percentage: 90 },
         isCounting: true,
         lateHours: 0,
       },
     ]);
     expect(quiz.attemptStatus).toBe('in_progress');
-    expect(quiz.score).toBe(85);
+    // No grade number is sent (E1): the grade is the classroom's emoji.
+    expect('score' in quiz).toBe(false);
+    expect(JSON.stringify(quiz.attempts)).not.toContain('partialCreditScore');
   });
 
   it('gives the summary the fields the list reads, maxAttempts included', async () => {
@@ -250,7 +273,9 @@ describe('student quiz list payload', () => {
     expect(quiz.attemptsSummary).toEqual({
       count: 2,
       canCreateNew: true,
-      currentScore: 85,
+      currentEmoji: '+1',
+      currentAdjusted: false,
+      countedEmoji: null,
       currentLateHours: 0,
       maxAttempts: 3,
     });
@@ -327,7 +352,7 @@ describe('student quiz list — due date, closed quizzes, zero scores', () => {
     const [quiz] = (await load()).quizzes;
 
     expect(quiz.closed).toBe(true);
-    expect(quiz.score).toBe(85);
+    expect(quiz.attemptsSummary.currentEmoji).toBe('+1');
     expect(quiz.attemptsSummary.canCreateNew).toBe(false);
   });
 
@@ -383,8 +408,7 @@ describe('student quiz list — due date, closed quizzes, zero scores', () => {
 
     const [quiz] = (await load()).quizzes;
 
-    expect(quiz.score).toBe(0);
-    expect(quiz.attemptsSummary.currentScore).toBe(0);
+    expect(quiz.attemptsSummary.currentEmoji).toBe('sob');
   });
 });
 
@@ -434,8 +458,11 @@ describe('student quiz list — late attempts and hours bought', () => {
       ['late', 5, false],
       ['early', 0, true],
     ]);
-    expect(quiz.attemptsSummary).toMatchObject({ currentScore: 70, currentLateHours: 0 });
-    expect(quiz.score).toBe(70);
+    expect(quiz.attemptsSummary).toMatchObject({
+      currentEmoji: 'eyes',
+      countedEmoji: null,
+      currentLateHours: 0,
+    });
   });
 
   it('shows the late hours beside the score when the late attempt still counts', async () => {
@@ -446,7 +473,53 @@ describe('student quiz list — late attempts and hours bought', () => {
 
     const [quiz] = (await load()).quizzes;
 
-    expect(quiz.attemptsSummary).toMatchObject({ currentScore: 82, currentLateHours: 3 });
+    // 82 counts 79 after 3 h at 1 point: still 👍, so no "counted" emoji beside it.
+    expect(quiz.attemptsSummary).toMatchObject({
+      currentEmoji: '+1',
+      countedEmoji: null,
+      currentLateHours: 3,
+    });
+  });
+
+  it('shows what a late grade counts for when the penalty changes its emoji', async () => {
+    withPenalty(5);
+    mocks.quizFindMany.mockResolvedValue([withAssignment([done('late', 5, 90, 5)])]);
+
+    const [quiz] = (await load()).quizzes;
+
+    // 90 (👍) − 5 h × 5 = 65 (👀).
+    expect(quiz.attemptsSummary).toMatchObject({
+      currentEmoji: '+1',
+      countedEmoji: 'eyes',
+      currentLateHours: 5,
+    });
+  });
+
+  it("shows a staff adjustment's emoji, the original beside it, and lets it count (D3)", async () => {
+    mocks.quizFindMany.mockResolvedValue([
+      {
+        ...QUIZ_ROW,
+        attempts: [
+          attemptRow('adjusted', {
+            completed_at: new Date('2026-03-02T10:20:00Z'),
+            partial_credit_percentage: 10,
+            adjusted_emoji: 'rocket',
+          }),
+          COMPLETED,
+        ],
+      },
+    ]);
+
+    const [quiz] = (await load()).quizzes;
+
+    expect(quiz.attempts[0]).toMatchObject({
+      id: 'adjusted',
+      scoreEmoji: 'rocket',
+      originalScoreEmoji: 'sob',
+      adjusted: true,
+      isCounting: true,
+    });
+    expect(quiz.attemptsSummary).toMatchObject({ currentEmoji: 'rocket', currentAdjusted: true });
   });
 
   it('adds the hours bought to the due date and to every attempt', async () => {
@@ -509,7 +582,7 @@ describe('student quiz list — late attempts and hours bought', () => {
       ['late', 4, false],
       ['early', 0, true],
     ]);
-    expect(quiz.attemptsSummary).toMatchObject({ currentScore: 70, currentLateHours: 0 });
+    expect(quiz.attemptsSummary).toMatchObject({ currentEmoji: 'eyes', currentLateHours: 0 });
   });
 
   it('asks for no other membership when the gate already found a STUDENT one', async () => {

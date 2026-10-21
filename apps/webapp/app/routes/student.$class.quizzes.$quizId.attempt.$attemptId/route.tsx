@@ -1,13 +1,33 @@
-import { useState } from 'react';
-import { useNavigate, useParams, useLocation } from 'react-router';
+import { useMemo, useState } from 'react';
+import { data as reply, useNavigate, useParams, useLocation } from 'react-router';
 import { Drawer, ConfigProvider, theme, Modal } from 'antd';
 import type { Route } from './+types/route';
 import { useRouteDrawer, useDarkMode } from '~/hooks';
 import { QuizAttemptInterface } from '~/components';
 import { useAskMojiAttempt } from '~/components/features/ask-moji/viewing';
-import { addClassroomAuditLog, assertClassroomAccess } from '~/utils/helpers';
+import {
+  QuizResultProvider,
+  type QuizResultSlots,
+} from '~/components/features/quiz/QuizResultContext';
+import {
+  QuizRegradeButton,
+  QuizStudentGradeNotes,
+} from '~/components/features/quiz/QuizStudentRegrade';
+import {
+  addClassroomAuditLog,
+  assertClassroomAccess,
+  assertClassroomMutationAllowed,
+  requireStudentAccess,
+} from '~/utils/helpers';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
-import { attemptDrawerView, chatActivityView, quizDrawerView } from '~/utils/quizPayloads';
+import {
+  attemptDrawerView,
+  attemptGradeView,
+  chatActivityView,
+  instructorCommentView,
+  quizDrawerView,
+  studentQuizRegradeView,
+} from '~/utils/quizPayloads';
 import { isTriggerChatAttempt } from '~/utils/quizRuntime.server';
 import { closeIfExpired } from '~/utils/quizAttemptExpiry.server';
 
@@ -146,7 +166,20 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     ? await ClassmojiService.quizChat.messageLimitOf(attemptData.attempt.id)
     : null;
 
-  // 8. Send only what the drawer and QuizAttemptInterface read — see
+  // 8. A completed attempt's grade as the classroom's emoji (E3; the scale is
+  // this classroom's, the one the gate resolved), and for the student who sat
+  // it: the instructor's comment, their regrade/resubmit requests on it, and
+  // whether they may ask (D7: not while one is in review).
+  const result = readOnly
+    ? await loadStudentResult({
+        classroom,
+        quiz,
+        attempt: attemptData.attempt,
+        ownerIsStudent: viewerOwnsAttempt && !isInstructor,
+      })
+    : null;
+
+  // 9. Send only what the drawer and QuizAttemptInterface read — see
   // ~/utils/quizPayloads. Both rows arrive joined to much more: the attempt to
   // its user, quiz and classroom; the quiz to every attempt and its user, and
   // its prompts.
@@ -174,7 +207,144 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     showTimestamps: false,
     focusMetrics,
     org: classSlug,
+    result,
   };
+}
+
+/**
+ * A completed attempt's result-panel extras. `ownerIsStudent`: the viewer sat
+ * it as a student (lateness, the comment and the requests are theirs);
+ * otherwise only the grade. Every id comes from rows already bound to the
+ * authorized classroom; requests are read by attempt AND student AND classroom.
+ */
+const loadStudentResult = async ({
+  classroom,
+  quiz,
+  attempt,
+  ownerIsStudent,
+}: {
+  classroom: { id: string; settings?: { late_penalty_points_per_hour?: unknown } | null };
+  quiz: { assignment?: { id: string; student_deadline: Date | string | null } | null };
+  attempt: {
+    id: string;
+    user_id: string;
+    attempt_number?: number | null;
+    started_at: Date | string;
+    completed_at: Date | string | null;
+    partial_credit_percentage: number | null;
+    adjusted_emoji?: string | null;
+    instructor_comment?: string | null;
+    adjusted_by_id?: string | null;
+    adjusted_at?: Date | string | null;
+  };
+  ownerIsStudent: boolean;
+}) => {
+  const { ClassmojiService } = await import('@classmoji/services');
+  const assignment = quiz.assignment ?? null;
+  const late = ownerIsStudent && assignment?.student_deadline;
+  const [emojiScale, extensionHours, adjustedBy, requests] = await Promise.all([
+    ClassmojiService.emojiMapping.findScaleByClassroomId(classroom.id),
+    late
+      ? ClassmojiService.quizGradeItems
+          .netQuizExtensionHours({
+            classroomId: classroom.id,
+            studentId: attempt.user_id,
+            assignmentIds: [assignment.id],
+          })
+          .then(hours => hours.get(assignment.id) ?? 0)
+      : 0,
+    ownerIsStudent && attempt.instructor_comment && attempt.adjusted_by_id
+      ? ClassmojiService.user.findById(attempt.adjusted_by_id)
+      : null,
+    ownerIsStudent
+      ? ClassmojiService.regradeRequest.findMany({
+          quiz_attempt_id: attempt.id,
+          student_id: attempt.user_id,
+          classroom_id: classroom.id,
+        })
+      : [],
+  ]);
+  const penalty: unknown = classroom.settings?.late_penalty_points_per_hour;
+  return {
+    grade: attemptGradeView({
+      attempt,
+      emojiScale,
+      late: late
+        ? {
+            studentDeadline: assignment.student_deadline,
+            extensionHours: Math.max(0, extensionHours),
+            latePenaltyPerHour: typeof penalty === 'number' ? penalty : 0,
+          }
+        : null,
+    }),
+    attemptNumber: typeof attempt.attempt_number === 'number' ? attempt.attempt_number : null,
+    canRequest: ownerIsStudent,
+    comment: ownerIsStudent
+      ? instructorCommentView({
+          instructor_comment: attempt.instructor_comment,
+          adjusted_at: attempt.adjusted_at,
+          adjusted_by: adjustedBy ? { name: adjustedBy.name } : null,
+        })
+      : null,
+    regrade: studentQuizRegradeView(requests),
+  };
+};
+
+/**
+ * The student's regrade/resubmit request on this attempt (E4, D7). STUDENT
+ * only. The attempt is the one in the URL, bound to this classroom's quiz;
+ * the service takes the student from the session and refuses an attempt
+ * that is not theirs or not completed, returns the open request when there
+ * already is one, and writes the audit row (`data.tool` names this surface).
+ */
+export async function action({ params, request }: Route.ActionArgs) {
+  const { ClassmojiService, QuizGradeError } = await import('@classmoji/services');
+  const quizId = params.quizId!;
+  const attemptId = params.attemptId!;
+  const { userId, classroom, membership } = await requireStudentAccess(request, params.class!, {
+    resourceType: 'REGRADE_REQUESTS',
+    action: 'request_quiz_regrade',
+    metadata: { quiz_id: quizId, attempt_id: attemptId },
+  });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+
+  if (!(await quizzesVisibleOrThrow(classroom.id))) {
+    throw new Response('Not Found', { status: 404 });
+  }
+
+  // The quiz is this classroom's, and the attempt is that quiz's: a foreign
+  // id is a 404 before anything is written.
+  const quiz = await ClassmojiService.quiz.findById(quizId);
+  if (!quiz || String(quiz.classroom_id) !== String(classroom.id)) {
+    throw new Response('Quiz not found', { status: 404 });
+  }
+  const attempt = await ClassmojiService.quizAttempt.findById(attemptId);
+  if (!attempt || String(attempt.quiz_id) !== String(quiz.id)) {
+    throw new Response('Attempt not found', { status: 404 });
+  }
+
+  const body = (await request.json().catch(() => null)) as {
+    _action?: unknown;
+    comment?: unknown;
+  } | null;
+  if (body?._action !== 'requestRegrade') {
+    return reply({ error: 'Unknown action' }, { status: 400 });
+  }
+
+  try {
+    const { created } = await ClassmojiService.regradeRequest.createForQuizAttempt({
+      attemptId: attempt.id,
+      comment: typeof body.comment === 'string' ? body.comment : '',
+      actorUserId: userId,
+      tool: 'web:quiz_attempt.request_regrade',
+    });
+    return { ok: true, created };
+  } catch (error) {
+    if (error instanceof QuizGradeError) {
+      return reply({ error: error.message }, { status: error.status });
+    }
+    throw error;
+  }
 }
 
 export default function StudentQuizAttemptDrawer({ loaderData }: Route.ComponentProps) {
@@ -194,6 +364,32 @@ export default function StudentQuizAttemptDrawer({ loaderData }: Route.Component
 
   // Derive role prefix from current URL (e.g., /student or /assistant)
   const rolePrefix = location.pathname.split('/')[1];
+
+  // The results panel's grade and the student's blocks (see QuizResultContext).
+  const result = data.result;
+  const slots = useMemo<QuizResultSlots | null>(
+    () =>
+      result
+        ? {
+            grade: result.grade,
+            headerExtra: result.canRequest ? (
+              <QuizRegradeButton
+                quizName={data.quiz.name}
+                attemptNumber={result.attemptNumber}
+                regrade={result.regrade}
+              />
+            ) : null,
+            beforeResults: (
+              <QuizStudentGradeNotes
+                comment={result.comment}
+                regrade={result.regrade}
+                currentEmoji={result.grade?.emoji ?? null}
+              />
+            ),
+          }
+        : null,
+    [result, data.quiz.name]
+  );
 
   const navigateAway = () => {
     navigate(`/${rolePrefix}/${classSlug}/quizzes`);
@@ -244,7 +440,9 @@ export default function StudentQuizAttemptDrawer({ loaderData }: Route.Component
           },
         }}
       >
-        <QuizAttemptInterface {...data} onClose={handleClose} isVisible={opened} />
+        <QuizResultProvider value={slots}>
+          <QuizAttemptInterface {...data} onClose={handleClose} isVisible={opened} />
+        </QuizResultProvider>
       </Drawer>
 
       <Modal

@@ -39,7 +39,14 @@ vi.mock('@classmoji/services', () => ({
     helper: {
       findAllAssignmentsForStudent: (...a: unknown[]) => mocks.findAllAssignmentsForStudent(...a),
     },
-    emojiMapping: { findByClassroomId: vi.fn().mockResolvedValue({}) },
+    // The numeric scale: a grade reads as its score-N badge.
+    emojiMapping: {
+      findScaleByClassroomId: vi
+        .fn()
+        .mockResolvedValue(
+          Object.fromEntries(Array.from({ length: 11 }, (_, i) => [`score-${i * 10}`, i * 10]))
+        ),
+    },
     classroom: {
       getClassroomSettingsForServer: (...a: unknown[]) => mocks.getClassroomSettingsForServer(...a),
     },
@@ -119,10 +126,11 @@ describe('student report loader — quiz visibility', () => {
     const data = await load();
 
     expect(data.assignments.map(a => a.id)).toEqual(['a-repo', 'a-quiz', 'a-form']);
-    // The counting attempt's percentage, not whichever attempt came back
-    // first: the running retake does not hide the finished one.
+    // The counting attempt's grade as the classroom's emoji (no number), not
+    // whichever attempt came back first: the running retake does not hide
+    // the finished one.
     expect(data.quizStatus).toEqual({
-      'a-quiz': { attempted: true, completed: true, score: 80 },
+      'a-quiz': { attempted: true, completed: true, emoji: 'score-80', adjusted: false },
     });
     expect(mocks.findForUserByQuizIds).toHaveBeenCalledWith('u-1', ['quiz-1']);
     expect(mocks.findGradingStrategies).toHaveBeenCalledWith(['quiz-1']);
@@ -143,7 +151,7 @@ describe('student report loader — quiz visibility', () => {
     const data = await load();
 
     expect(data.quizStatus).toEqual({
-      'a-quiz': { attempted: true, completed: false, score: null },
+      'a-quiz': { attempted: true, completed: false, emoji: null, adjusted: false },
     });
   });
 
@@ -174,6 +182,7 @@ describe('student report loader — quiz grade items', () => {
     counts_as_zero: true,
     late_hours: 0,
     counting_raw_percentage: null,
+    counting_adjusted: false,
   };
 
   beforeEach(() => {

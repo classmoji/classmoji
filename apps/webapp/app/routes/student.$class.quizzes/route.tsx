@@ -10,12 +10,15 @@ import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { formatDuration } from '~/utils/quizUtils';
 import { useGitWeb } from '~/hooks/useGitWeb';
 import {
+  countedEmojiOf,
   studentQuizAttemptView,
   studentQuizAttemptsSummaryView,
   studentQuizScoring,
 } from '~/utils/quizPayloads';
 import { effectiveDeadline } from '@classmoji/utils';
 import { useStartQuiz } from '~/components/features/quiz/useStartQuiz';
+import { LateChip, QuizGradeEmoji } from '~/components/features/quiz/QuizGradeEmoji';
+import Emoji from '~/components/ui/display/Emoji';
 
 const { Text } = Typography;
 
@@ -29,7 +32,10 @@ interface QuizAttempt {
   id: string;
   attemptNumber: number;
   status: string;
-  partialCreditScore: number | null;
+  /** The effective grade as the classroom's emoji; the original when adjusted. */
+  scoreEmoji: string | null;
+  originalScoreEmoji: string | null;
+  adjusted: boolean;
   completed_at: string | Date | null;
   isCounting: boolean;
   /** Whole hours past the due date plus the hours bought. */
@@ -41,7 +47,9 @@ interface QuizAttempt {
 interface AttemptsSummary {
   count: number;
   maxAttempts: number;
-  currentScore: number | null;
+  currentEmoji: string | null;
+  currentAdjusted: boolean;
+  countedEmoji: string | null;
   currentLateHours: number;
   canCreateNew: boolean;
   [key: string]: unknown;
@@ -69,7 +77,6 @@ interface StudentQuiz {
   attempts: QuizAttempt[];
   attemptsSummary: AttemptsSummary;
   attemptStatus: string | null;
-  score: number | null;
 }
 
 interface GitHubRepo {
@@ -77,11 +84,7 @@ interface GitHubRepo {
 }
 
 /** How late an attempt completed, as the Assignments page says it. */
-const LateTag = ({ hours }: { hours: number }) => (
-  <span className="inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-700 dark:text-orange-300 whitespace-nowrap">
-    {hours}h late
-  </span>
-);
+const LateTag = LateChip;
 
 const getGradingStrategyLabel = (strategy: string) => {
   switch (strategy) {
@@ -122,15 +125,18 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   // The service keeps its own role list, so it can disagree with the gate above
   // — and a bare throw from it would surface as a 500 rather than a refusal.
   const { QuizAccessError } = await import('@classmoji/services');
-  let quizzes, user;
+  let quizzes, user, emojiScale;
   try {
-    [quizzes, user] = await Promise.all([
+    [quizzes, user, emojiScale] = await Promise.all([
       // CLOSED quizzes too: a student who finished one keeps seeing it, with
       // its score, and one they never took reads as closed.
       ClassmojiService.quiz.getQuizzesForStudent(classroom.id, userId, membership, {
         includeClosed: true,
       }),
       ClassmojiService.user.findById(userId),
+      // The classroom's scale: what an adjusted attempt counts for, and the
+      // emoji a late-penalised grade shows as. Grades are shown as emoji only.
+      ClassmojiService.emojiMapping.findScaleByClassroomId(classroom.id),
     ]);
   } catch (error) {
     if (error instanceof QuizAccessError) {
@@ -171,8 +177,11 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       quiz.grading_strategy,
       isStudent && quiz.assignment
         ? { studentDeadline: quiz.assignment.student_deadline, extensionHours, latePenaltyPerHour }
-        : null
+        : null,
+      emojiScale
     );
+    const counting =
+      (quiz.attempts || []).find(attempt => attempt.id === scoring.countingAttemptId) ?? null;
     return {
       id: quiz.id?.toString() || quiz.id,
       name: quiz.name,
@@ -207,17 +216,27 @@ export async function loader({ params, request }: Route.LoaderArgs) {
           lateHours: scoring.lateHoursOf(attempt),
         })
       ),
+      // The grade of the attempt that counts, as the classroom's emoji, with
+      // what it counts for after the late penalty when that differs.
       attemptsSummary: studentQuizAttemptsSummaryView(
-        { ...quiz.attemptsSummary, currentScore: scoring.currentScore },
+        quiz.attemptsSummary,
         quiz.max_attempts ?? 1,
-        scoring.currentLateHours
+        {
+          emoji: counting?.scoreEmoji ?? null,
+          adjusted: counting?.adjusted ?? false,
+          countedEmoji: countedEmojiOf(
+            scoring.currentScore,
+            scoring.countedScore,
+            emojiScale,
+            counting?.scoreEmoji
+          ),
+          lateHours: scoring.currentLateHours,
+        }
       ),
 
       // Backward compatibility
       attemptStatus:
         quiz.attemptsSummary?.count > 0 ? quiz.attempts[0]?.status || 'in_progress' : null,
-      // `??`, not `||`: a 0 is a score.
-      score: scoring.currentScore,
     };
   });
 
@@ -407,22 +426,20 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
       },
       {
         title: 'Score',
-        dataIndex: 'partialCreditScore',
+        dataIndex: 'scoreEmoji',
         key: 'score',
-        width: 110,
-        render: (score: number | null) => {
-          const displayScore = score ?? null;
-          if (displayScore === null) return <Text type="secondary">-</Text>;
-          const color =
-            displayScore >= 90
-              ? 'green'
-              : displayScore >= 70
-                ? 'blue'
-                : displayScore >= 50
-                  ? 'orange'
-                  : 'red';
-          return <Tag color={color}>{displayScore}%</Tag>;
-        },
+        width: 140,
+        // The classroom's emoji (E1), the original beside it when adjusted (D6).
+        render: (_: unknown, record: QuizAttempt) =>
+          record.scoreEmoji ? (
+            <QuizGradeEmoji
+              emoji={record.scoreEmoji}
+              originalEmoji={record.originalScoreEmoji}
+              adjusted={record.adjusted}
+            />
+          ) : (
+            <Text type="secondary">-</Text>
+          ),
       },
       {
         title: 'Time Spent',
@@ -543,31 +560,30 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
     {
       title: 'Current Score',
       key: 'currentScore',
-      width: 110,
+      width: 160,
       render: (_: unknown, record: StudentQuiz) => {
-        const { currentScore } = record.attemptsSummary;
-        if (currentScore === null) return <Text type="secondary">-</Text>;
-
-        const color =
-          currentScore >= 90
-            ? 'green'
-            : currentScore >= 70
-              ? 'blue'
-              : currentScore >= 50
-                ? 'orange'
-                : 'red';
+        const { currentEmoji, currentAdjusted, countedEmoji, currentLateHours } =
+          record.attemptsSummary;
+        if (!currentEmoji) return <Text type="secondary">-</Text>;
 
         const strategyLabel = getGradingStrategyLabel(record.gradingStrategy);
-        const { currentLateHours } = record.attemptsSummary;
 
-        // The raw score of the attempt that counts, with its late hours beside it.
+        // The grade of the attempt that counts as the classroom's emoji, an
+        // "adjusted" chip when staff adjusted it, and its late hours beside it.
         return (
           <Space size="small">
             <Tooltip title={`Graded by: ${strategyLabel}`}>
-              <Tag color={color} style={{ margin: 0 }}>
-                {currentScore}% <small>({strategyLabel})</small>
-              </Tag>
+              <span>
+                <QuizGradeEmoji emoji={currentEmoji} adjusted={currentAdjusted} />
+              </span>
             </Tooltip>
+            {countedEmoji && (
+              <Tooltip title="What it counts for after the late penalty">
+                <span className="inline-flex items-center gap-1 text-xs font-semibold text-orange-700 dark:text-orange-300">
+                  → <Emoji emoji={countedEmoji} fontSize={16} />
+                </span>
+              </Tooltip>
+            )}
             {currentLateHours > 0 && <LateTag hours={currentLateHours} />}
           </Space>
         );

@@ -1,12 +1,30 @@
-import { useState } from 'react';
-import { useLocation, useNavigate, useParams } from 'react-router';
+import { useMemo, useState } from 'react';
+import { data as reply, useLocation, useNavigate, useParams } from 'react-router';
 import { Drawer, ConfigProvider, theme, Modal } from 'antd';
 import { useRouteDrawer, useDarkMode } from '~/hooks';
 import { QuizAttemptInterface } from '~/components';
 import { useAskMojiAttempt } from '~/components/features/ask-moji/viewing';
+import {
+  QuizResultProvider,
+  type QuizResultSlots,
+} from '~/components/features/quiz/QuizResultContext';
+import {
+  QuizAttemptGradePanel,
+  QuizRegradeRequestBanner,
+} from '~/components/features/quiz/QuizAttemptGradePanel';
 import { addClassroomAuditLog, assertClassroomAccess } from '~/utils/helpers';
+import {
+  assertClassroomMutationAllowed,
+  requireClassroomTeachingTeam,
+} from '~/utils/routeAuth.server';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
-import { attemptDrawerView, chatActivityView, quizDrawerView } from '~/utils/quizPayloads';
+import {
+  attemptDrawerView,
+  attemptGradeView,
+  chatActivityView,
+  quizDrawerView,
+  staffAttemptGradePanel,
+} from '~/utils/quizPayloads';
 import { isTriggerChatAttempt } from '~/utils/quizRuntime.server';
 import { closeIfExpired } from '~/utils/quizAttemptExpiry.server';
 import type { Route } from './+types/route';
@@ -136,7 +154,20 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     ? await ClassmojiService.quizChat.messageLimitOf(attemptData.attempt.id)
     : null;
 
-  // 9. Send only what the drawer and QuizAttemptInterface read — see
+  // 9. A completed attempt's grade as the classroom's emoji (E1), with the
+  // adjust panel's state and any open regrade/resubmit request. The scale is
+  // this classroom's, the one the gate resolved. Only a current (accepted)
+  // student's attempt can be adjusted; a staff preview shows its grade only.
+  const gradePanel = readOnly
+    ? await loadGradePanel({
+        classroom,
+        quiz,
+        attempt: attemptData.attempt,
+        studentName,
+      })
+    : null;
+
+  // 10. Send only what the drawer and QuizAttemptInterface read — see
   // ~/utils/quizPayloads. Both rows arrive joined to much more: the attempt to
   // its user, quiz and classroom; the quiz to every attempt and its user.
   return {
@@ -163,7 +194,157 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     readOnly,
     showTimestamps: true, // Show timestamps for admin review
     focusMetrics,
+    gradePanel,
   };
+}
+
+/**
+ * The adjust panel's data for a completed attempt in `classroom`. Every id
+ * comes from rows already bound to the authorized classroom (the quiz to the
+ * classroom, the attempt to the quiz).
+ */
+const loadGradePanel = async ({
+  classroom,
+  quiz,
+  attempt,
+  studentName,
+}: {
+  classroom: { id: string; settings?: { late_penalty_points_per_hour?: unknown } | null };
+  quiz: {
+    assignment?: { id: string; student_deadline: Date | string | null } | null;
+  };
+  attempt: {
+    id: string;
+    user_id: string;
+    started_at: Date | string;
+    completed_at: Date | string | null;
+    partial_credit_percentage: number | null;
+    adjusted_emoji?: string | null;
+    instructor_comment?: string | null;
+    adjusted_by_id?: string | null;
+    adjusted_at?: Date | string | null;
+  };
+  studentName: string | null;
+}) => {
+  const { ClassmojiService } = await import('@classmoji/services');
+  const assignment = quiz.assignment ?? null;
+  const [emojiScale, studentMembership, openRequest, adjustedBy] = await Promise.all([
+    ClassmojiService.emojiMapping.findScaleByClassroomId(classroom.id),
+    ClassmojiService.classroomMembership.findByClassroomAndUser(
+      classroom.id,
+      attempt.user_id,
+      'STUDENT'
+    ),
+    ClassmojiService.regradeRequest.findOpenByQuizAttemptId(attempt.id),
+    attempt.adjusted_by_id ? ClassmojiService.user.findById(attempt.adjusted_by_id) : null,
+  ]);
+  const isStudent = Boolean(studentMembership?.has_accepted_invite);
+  // Lateness is a student's, measured from the due date plus the hours they bought.
+  const extensionHours =
+    isStudent && assignment?.student_deadline
+      ? ((
+          await ClassmojiService.quizGradeItems.netQuizExtensionHours({
+            classroomId: classroom.id,
+            studentId: attempt.user_id,
+            assignmentIds: [assignment.id],
+          })
+        ).get(assignment.id) ?? 0)
+      : 0;
+  const penalty: unknown = classroom.settings?.late_penalty_points_per_hour;
+  const grade = attemptGradeView({
+    attempt,
+    emojiScale,
+    late:
+      isStudent && assignment?.student_deadline
+        ? {
+            studentDeadline: assignment.student_deadline,
+            extensionHours: Math.max(0, extensionHours),
+            latePenaltyPerHour: typeof penalty === 'number' ? penalty : 0,
+          }
+        : null,
+  });
+  return staffAttemptGradePanel({
+    attempt,
+    adjustable: isStudent && Boolean(attempt.completed_at),
+    grade,
+    adjustedByName: adjustedBy?.name ?? null,
+    emojiScale,
+    // The request row is the attempt's own; its classroom must be this one.
+    openRequest: openRequest && openRequest.classroom_id === classroom.id ? openRequest : null,
+    studentName,
+  });
+};
+
+/**
+ * Adjust or revert a quiz attempt's grade (teaching team, D5), from the
+ * adjust panel. The attempt is the one in the URL, bound to this classroom's
+ * quiz before the service runs; the service re-checks the actor against the
+ * attempt's own classroom, refuses a preview or running attempt, and writes
+ * the audit row (`data.tool` names this surface).
+ */
+export async function action({ params, request }: Route.ActionArgs) {
+  const { ClassmojiService, QuizGradeError } = await import('@classmoji/services');
+  const quizId = params.quizId!;
+  const attemptId = params.attemptId!;
+  const { userId, classroom, membership } = await requireClassroomTeachingTeam(
+    request,
+    params.class!,
+    {
+      resourceType: 'QUIZ_ATTEMPT',
+      action: 'adjust_quiz_attempt',
+      metadata: { quiz_id: quizId, attempt_id: attemptId },
+    }
+  );
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+
+  if (!(await quizzesVisibleOrThrow(classroom.id))) {
+    throw new Response('Not Found', { status: 404 });
+  }
+
+  // The quiz is this classroom's, and the attempt is that quiz's: a foreign
+  // id is a 404 before anything is written.
+  const quiz = await ClassmojiService.quiz.findById(quizId);
+  if (!quiz || String(quiz.classroom_id) !== String(classroom.id)) {
+    throw new Response('Quiz not found', { status: 404 });
+  }
+  const attempt = await ClassmojiService.quizAttempt.findById(attemptId);
+  if (!attempt || String(attempt.quiz_id) !== String(quiz.id)) {
+    throw new Response('Attempt not found', { status: 404 });
+  }
+
+  const body = (await request.json().catch(() => null)) as {
+    _action?: unknown;
+    emoji?: unknown;
+    comment?: unknown;
+  } | null;
+
+  try {
+    if (body?._action === 'adjust') {
+      await ClassmojiService.quizAttempt.adjust({
+        attemptId: attempt.id,
+        ...(typeof body.emoji === 'string' ? { emoji: body.emoji } : {}),
+        ...(typeof body.comment === 'string' || body.comment === null
+          ? { comment: body.comment as string | null }
+          : {}),
+        actorUserId: userId,
+        tool: 'web:quiz_attempt.adjust',
+      });
+    } else if (body?._action === 'revert') {
+      await ClassmojiService.quizAttempt.revert({
+        attemptId: attempt.id,
+        actorUserId: userId,
+        tool: 'web:quiz_attempt.revert',
+      });
+    } else {
+      return reply({ error: 'Unknown action' }, { status: 400 });
+    }
+  } catch (error) {
+    if (error instanceof QuizGradeError) {
+      return reply({ error: error.message }, { status: error.status });
+    }
+    throw error;
+  }
+  return { ok: true };
 }
 
 export default function AdminQuizAttemptViewDrawer({ loaderData }: Route.ComponentProps) {
@@ -181,6 +362,29 @@ export default function AdminQuizAttemptViewDrawer({ loaderData }: Route.Compone
   // Served under every prefix this route's gate allows (/admin, /teacher and /assistant).
   const rolePrefix = useLocation().pathname.split('/')[1];
   const [showConfirm, setShowConfirm] = useState(false);
+
+  // The results panel's grade and the staff blocks above it (see QuizResultContext).
+  const panel = data.gradePanel;
+  const slots = useMemo<QuizResultSlots | null>(
+    () =>
+      panel
+        ? {
+            grade: panel.grade,
+            beforeResults: (
+              <>
+                {panel.openRequest && (
+                  <QuizRegradeRequestBanner
+                    request={panel.openRequest}
+                    queueUrl={`/${rolePrefix}/${classSlug}/regrade-requests`}
+                  />
+                )}
+                {panel.adjustable && <QuizAttemptGradePanel panel={panel} />}
+              </>
+            ),
+          }
+        : null,
+    [panel, rolePrefix, classSlug]
+  );
 
   const navigateAway = () => {
     navigate(`/${rolePrefix}/${classSlug}/quizzes/${quizId}`);
@@ -234,7 +438,9 @@ export default function AdminQuizAttemptViewDrawer({ loaderData }: Route.Compone
           },
         }}
       >
-        <QuizAttemptInterface {...data} onClose={handleClose} isVisible={opened} />
+        <QuizResultProvider value={slots}>
+          <QuizAttemptInterface {...data} onClose={handleClose} isVisible={opened} />
+        </QuizResultProvider>
       </Drawer>
 
       <Modal

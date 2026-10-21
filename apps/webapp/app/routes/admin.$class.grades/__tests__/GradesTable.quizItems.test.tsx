@@ -4,8 +4,10 @@
  *
  *   - A counted zero reads "Missing" with the missing tint (a running attempt
  *     past the deadline is one too).
- *   - A late item shows the late-penalised value the totals count, the late
- *     hours, and the late tint (with its dark variant).
+ *   - A late item shows the late-penalised value the totals count as the
+ *     classroom's emoji (never the number, E1), the late hours, and the late
+ *     tint (with its dark variant); an adjusted counting attempt gets the
+ *     "adjusted" chip (D8).
  *   - A quiz with a column but no item keeps its attempt-state render (before
  *     the deadline), or reads "Opens <date>" while it has not opened yet.
  *   - "Has something to grade" matches a quiz whose score is still to come.
@@ -22,6 +24,9 @@ vi.mock('~/components', () => ({
   UserThumbnailView: ({ user }: { user: { name: string | null } }) => <span>{user.name}</span>,
 }));
 vi.mock('~/hooks', () => ({ useDarkMode: () => ({ isDarkMode: false }) }));
+vi.mock('~/components/ui/display/Emoji', () => ({
+  default: ({ emoji }: { emoji: string }) => <span data-emoji={emoji} />,
+}));
 vi.mock('../GradeSettings', () => ({ default: () => null }));
 
 const { default: GradesTable, matchesRowFilter } = await import('../GradesTable');
@@ -96,6 +101,19 @@ const text = (html: string) =>
     .replace(/\s+/g, ' ')
     .trim();
 
+/** The numeric scale: score-0 … score-100 in tens. */
+const NUMERIC_SCALE = Object.fromEntries(
+  Array.from({ length: 11 }, (_, i) => [`score-${i * 10}`, i * 10])
+);
+
+/** The quiz cell: the link to the quiz results page. */
+const cellOf = (html: string) => {
+  const match = /<a[^>]*href="\/admin\/intro-101\/quizzes\/quiz-a-quiz"[^>]*>([\s\S]*?)<\/a>/.exec(
+    html
+  );
+  return match?.[1] ?? '';
+};
+
 /** The red Missing chip of a cell (the legend under the table says "Missing" too). */
 const MISSING_CHIP = 'text-red-700 dark:text-red-300">Missing<';
 
@@ -124,7 +142,7 @@ describe('gradebook quiz cells', () => {
     const html = render({
       assignments: [quizColumn('a-quiz', 'Recursion')],
       students: [student('s-1', 'Ada', [zero('a-quiz')])],
-      activity: { quiz: { 'a-quiz': { 's-1': { completed: false, score: null } } }, form: {} },
+      activity: { quiz: { 'a-quiz': { 's-1': { completed: false, emoji: null } } }, form: {} },
     });
 
     expect(html).toContain(MISSING_CHIP);
@@ -151,16 +169,54 @@ describe('gradebook quiz cells', () => {
     expect(text(html)).toContain('Not attempted');
   });
 
-  it('renders a late item with the penalised value, its late hours and the late tint', () => {
+  it('renders a late item as the emoji of the penalised value, its late hours and the late tint', () => {
     const html = render({
+      emojiMappings: NUMERIC_SCALE,
       assignments: [quizColumn('a-quiz', 'Recursion')],
       students: [student('s-1', 'Ada', [item('a-quiz')])],
       // The attempt state says 80 (raw); the cell shows what the totals count.
-      activity: { quiz: { 'a-quiz': { 's-1': { completed: true, score: 80 } } }, form: {} },
+      activity: { quiz: { 'a-quiz': { 's-1': { completed: true, emoji: 'score-80' } } }, form: {} },
     });
 
-    expect(text(html)).toContain('72 4h late');
+    // 72 counts: the nearest badge is score-70. No number in the cell.
+    expect(cellOf(html)).toContain('data-emoji="score-70"');
+    expect(cellOf(html)).not.toMatch(/>\s*72(\.0)?\s*</);
+    expect(text(cellOf(html))).toContain('4h late');
+    expect(html).not.toContain('quiz-grade-adjusted');
     expect(html).toContain('bg-amber-50 dark:bg-amber-950/30');
+  });
+
+  it('marks an adjusted counting attempt with the "adjusted" chip', () => {
+    const html = render({
+      emojiMappings: NUMERIC_SCALE,
+      assignments: [quizColumn('a-quiz', 'Recursion')],
+      students: [
+        student('s-1', 'Ada', [
+          item('a-quiz', {
+            grade: 90,
+            raw_grade: 90,
+            late_hours: 0,
+            counting_raw_percentage: 90,
+            counting_adjusted: true,
+          }),
+        ]),
+      ],
+    });
+
+    expect(cellOf(html)).toContain('data-emoji="score-90"');
+    expect(cellOf(html)).toContain('quiz-grade-adjusted');
+    expect(text(cellOf(html))).not.toContain('late');
+  });
+
+  it('shows the emoji of the counting attempt for a scored quiz with no item yet', () => {
+    const html = render({
+      emojiMappings: NUMERIC_SCALE,
+      assignments: [quizColumn('a-quiz', 'Recursion')],
+      students: [student('s-1', 'Ada', [])],
+      activity: { quiz: { 'a-quiz': { 's-1': { completed: true, emoji: 'score-80' } } }, form: {} },
+    });
+
+    expect(html).toContain('data-emoji="score-80"');
   });
 
   it('keeps the attempt-state render for a quiz column with no item', () => {
@@ -177,27 +233,27 @@ describe('gradebook quiz cells', () => {
 describe('gradebook row filters', () => {
   const columns = [quizColumn('a-quiz', 'Recursion')] as Parameters<typeof matchesRowFilter>[2];
   const ada = student('s-1', 'Ada', []);
-  const activityWith = (state: { completed: boolean; score: number | null }) => ({
+  const activityWith = (state: { completed: boolean; emoji: string | null }) => ({
     quiz: { 'a-quiz': { 's-1': state } },
     form: {},
   });
 
   it('"Has something to grade" matches a quiz with only unscored completed attempts', () => {
     expect(
-      matchesRowFilter(ada, 'ungraded', columns, activityWith({ completed: true, score: null }))
+      matchesRowFilter(ada, 'ungraded', columns, activityWith({ completed: true, emoji: null }))
     ).toBe(true);
   });
 
   it('but not a running attempt, a scored one, or a counted zero', () => {
     expect(
-      matchesRowFilter(ada, 'ungraded', columns, activityWith({ completed: false, score: null }))
+      matchesRowFilter(ada, 'ungraded', columns, activityWith({ completed: false, emoji: null }))
     ).toBe(false);
     expect(
       matchesRowFilter(
         student('s-1', 'Ada', [item('a-quiz')]),
         'ungraded',
         columns,
-        activityWith({ completed: true, score: 80 })
+        activityWith({ completed: true, emoji: 'score-80' })
       )
     ).toBe(false);
     expect(
@@ -231,7 +287,7 @@ describe('gradebook totals with quiz items', () => {
     const html = render({
       assignments: [quizColumn('a-quiz', 'Recursion')],
       students: [student('s-1', 'Ada', [item('a-quiz')])],
-      activity: { quiz: { 'a-quiz': { 's-1': { completed: true, score: 80 } } }, form: {} },
+      activity: { quiz: { 'a-quiz': { 's-1': { completed: true, emoji: 'score-80' } } }, form: {} },
     });
     const flat = text(html);
 

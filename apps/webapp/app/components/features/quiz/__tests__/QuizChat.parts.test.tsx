@@ -337,7 +337,9 @@ describe('QuizTranscript — parts', () => {
         expect(html).toContain('data-testid="quiz-results"');
         expect(html).toContain('Quiz Evaluation: GOOD');
         expect(html).toContain('Solid grasp of layout.');
-        expect(html).toContain('77.5%');
+        // The grade is never a number (E1, E3): the band, and the emoji the drawer supplies.
+        expect(html).not.toContain('77.5');
+        expect(html).toContain('data-testid="quiz-grade-hero"');
         expect(html).toContain('Spot on.');
       });
 
@@ -354,7 +356,7 @@ describe('QuizTranscript — parts', () => {
         ]);
         expect(html).toContain('Quiz Evaluation: NEEDS WORK');
         expect(html).not.toContain('Quiz Results');
-        expect(html).toContain('77.5%');
+        expect(html).not.toContain('77.5');
         expect(html).not.toContain('Summary');
         expect(html).not.toContain('Strengths');
       });
@@ -369,13 +371,13 @@ describe('QuizTranscript — parts', () => {
       });
 
       it('prefers the stored record and renders the panel once', () => {
-        const stored = { ...RECORD, partial_credit_percentage: 88 };
+        const stored = { ...RECORD, evaluation: 'EXCELLENT', numeric_score: 4 };
         const html = renderTranscript(
           [msg('a1', 'assistant', [{ type: 'data-evaluation', data: RECORD }])],
           { evaluationRecord: stored as never, status: 'complete' }
         );
-        expect(html).toContain('88%');
-        expect(html).not.toContain('77.5%');
+        expect(html).toContain('Quiz Evaluation: EXCELLENT');
+        expect(html).not.toContain('Quiz Evaluation: GOOD');
         expect(html.match(/data-testid="quiz-results"/g)).toHaveLength(1);
       });
 

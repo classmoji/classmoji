@@ -51,6 +51,10 @@ vi.mock('~/utils/classroomProFlag.server', () => ({
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
+    // The classroom's scale: the list shows the average grade as its emoji.
+    emojiMapping: {
+      findScaleByClassroomId: async () => ({ rocket: 100, '+1': 85, eyes: 70, '-1': 50 }),
+    },
     quiz: {
       create: (...a: unknown[]) => mocks.create(...a),
       update: (...a: unknown[]) => mocks.update(...a),
@@ -302,38 +306,35 @@ describe.each(PREFIXES)('the quiz action under /%s', (prefix, action) => {
       mocks.role = role;
     });
 
-    it.each(INTENTS.map(intent => [intent.name, intent] as const))(
-      '%s',
-      async (_name, intent) => {
-        const response = (await submit(action, prefix, intent.body)) as Response;
-        const body = await response.json();
+    it.each(INTENTS.map(intent => [intent.name, intent] as const))('%s', async (_name, intent) => {
+      const response = (await submit(action, prefix, intent.body)) as Response;
+      const body = await response.json();
 
-        // The gate admits the teaching team, under every prefix.
-        expect(mocks.assertClassroomAccess.mock.calls[0][0]).toMatchObject({
-          classroomSlug: CLASS_SLUG,
-          allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
-          resourceType: 'ADMIN_QUIZ_ACTION',
-        });
+      // The gate admits the teaching team, under every prefix.
+      expect(mocks.assertClassroomAccess.mock.calls[0][0]).toMatchObject({
+        classroomSlug: CLASS_SLUG,
+        allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
+        resourceType: 'ADMIN_QUIZ_ACTION',
+      });
 
-        if (intent.allowed.includes(role)) {
-          expect(response.status).toBe(200);
-          expect(body.success).toEqual(expect.any(String));
-          expect(intent.write()).toHaveBeenCalledTimes(1);
-          for (const other of WRITES()) {
-            if (other !== intent.write()) expect(other).not.toHaveBeenCalled();
-          }
-          expect(mocks.addClassroomAuditLog).toHaveBeenCalledTimes(1);
-        } else {
-          expect(response.status).toBe(403);
-          expect(body).toEqual({ error: QUIZ_AUTHOR_ONLY });
-          for (const write of WRITES()) expect(write).not.toHaveBeenCalled();
-          // Refused before the quiz or repository is even looked up.
-          expect(mocks.findById).not.toHaveBeenCalled();
-          expect(mocks.repositoryFindById).not.toHaveBeenCalled();
-          expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+      if (intent.allowed.includes(role)) {
+        expect(response.status).toBe(200);
+        expect(body.success).toEqual(expect.any(String));
+        expect(intent.write()).toHaveBeenCalledTimes(1);
+        for (const other of WRITES()) {
+          if (other !== intent.write()) expect(other).not.toHaveBeenCalled();
         }
+        expect(mocks.addClassroomAuditLog).toHaveBeenCalledTimes(1);
+      } else {
+        expect(response.status).toBe(403);
+        expect(body).toEqual({ error: QUIZ_AUTHOR_ONLY });
+        for (const write of WRITES()) expect(write).not.toHaveBeenCalled();
+        // Refused before the quiz or repository is even looked up.
+        expect(mocks.findById).not.toHaveBeenCalled();
+        expect(mocks.repositoryFindById).not.toHaveBeenCalled();
+        expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
       }
-    );
+    });
   });
 
   describe('as STUDENT', () => {

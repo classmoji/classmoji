@@ -19,6 +19,7 @@ import {
   calculateStudentFinalGrade,
   finalStudentGrade,
   gradedItemValue,
+  quizPercentageEmoji,
 } from '@classmoji/utils';
 import type {
   GitRepo,
@@ -29,6 +30,7 @@ import type {
 } from '@classmoji/utils';
 import { useDarkMode } from '~/hooks';
 import EmojiGrader from '~/components/features/grading/EmojiGrader';
+import QuizGradeEmoji from '~/components/features/quiz/QuizGradeEmoji';
 
 /**
  * A gradebook row as it leaves the loader. A CLOSED shape on purpose: the
@@ -80,7 +82,12 @@ export interface GradebookAssignment {
 
 /** Per-student state for quiz and form assignments, keyed by assignment id then user id. */
 export interface GradebookActivity {
-  quiz: Record<string, Record<string, { completed: boolean; score: number | null }>>;
+  /**
+   * `emoji`: the counting attempt's effective grade as the classroom's emoji,
+   * or null when no completed attempt is scored. No quiz number reaches the
+   * page outside the grade items (E1).
+   */
+  quiz: Record<string, Record<string, { completed: boolean; emoji: string | null }>>;
   form: Record<string, Record<string, { submitted: boolean }>>;
 }
 
@@ -166,7 +173,7 @@ const opensLater = (assignment: GradebookAssignment, now = Date.now()) =>
 const quizPending = (activity: GradebookActivity, student: Student, assignmentId: string) => {
   if (quizItemOf(student, assignmentId)) return false;
   const q = activity.quiz[assignmentId]?.[student.id];
-  return Boolean(q?.completed && q.score === null);
+  return Boolean(q?.completed && q.emoji === null);
 };
 /**
  * Whether a student's row passes the gradebook filter, over the visible
@@ -349,10 +356,11 @@ const GradesTable = (props: GradesTableProps) => {
     );
 
   /**
-   * A quiz cell. With a grade item it shows what the totals count: the
-   * late-penalised score (amber when late), or Missing (a counted 0). Without
-   * one it shows when the quiz opens, or the attempt state (before the
-   * deadline, running or unscored).
+   * A quiz cell. With a grade item it shows what the totals count as the
+   * classroom's emoji (E1): the late-penalised score (amber when late, with
+   * its late chip), an "adjusted" chip when staff adjusted the counting
+   * attempt (D8), or Missing (a counted 0). Without one it shows when the quiz
+   * opens, or the attempt state (before the deadline, running or unscored).
    */
   const renderQuizCell = (
     student: Student,
@@ -368,10 +376,11 @@ const GradesTable = (props: GradesTableProps) => {
       const late = item.late_hours > 0;
       return {
         body: (
-          <>
-            <span className="font-semibold tabular-nums">{Math.round(value * 10) / 10}</span>
-            {late && <Chip tone="amber">{item.late_hours}h late</Chip>}
-          </>
+          <QuizGradeEmoji
+            emoji={quizPercentageEmoji(value, emojiMappings)}
+            adjusted={item.counting_adjusted === true}
+            lateHours={item.late_hours}
+          />
         ),
         tint: late ? LATE_TINT : '',
       };
@@ -387,10 +396,10 @@ const GradesTable = (props: GradesTableProps) => {
       <Chip tone="grey">Not attempted</Chip>
     ) : !q.completed ? (
       <Chip tone="blue">In progress</Chip>
+    ) : q.emoji === null ? (
+      <span className="font-semibold">Completed</span>
     ) : (
-      <span className="font-semibold tabular-nums">
-        {q.score === null ? 'Completed' : Math.round(q.score * 10) / 10}
-      </span>
+      <QuizGradeEmoji emoji={q.emoji} />
     );
     return { body, tint: '' };
   };

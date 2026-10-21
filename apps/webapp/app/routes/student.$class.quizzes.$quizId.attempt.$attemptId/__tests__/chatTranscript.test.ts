@@ -23,6 +23,12 @@ vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     quiz: { findById: (...a: unknown[]) => quizFindByIdMock(...a) },
     quizAttempt: { findWithMessages: (...a: unknown[]) => findWithMessagesMock(...a) },
+    // A completed attempt's grade panel (emoji, adjustment, requests): empty here.
+    emojiMapping: { findScaleByClassroomId: async () => ({}) },
+    classroomMembership: { findByClassroomAndUser: async () => null },
+    regradeRequest: { findOpenByQuizAttemptId: async () => null, findMany: async () => [] },
+    quizGradeItems: { netQuizExtensionHours: async () => new Map() },
+    user: { findById: async () => null },
     quizGrading: { closeExpiredAttempt: (...a: unknown[]) => closeExpiredMock(...a) },
     quizChat: {
       loadTranscriptForViewer: (...a: unknown[]) => loadTranscriptMock(...a),

@@ -13,7 +13,8 @@ const result = (question_num: number, credit_earned = 100) => ({
   attempts: 1,
   eventually_correct: credit_earned > 0,
   credit_earned,
-  emoji: 'heart',
+  // The emoji stored when the result was recorded (the classroom's scale).
+  emoji: `emoji-${question_num}`,
   recorded_at: '2026-09-29T12:00:00.000Z',
 });
 
@@ -39,14 +40,41 @@ describe('attemptDrawerView', () => {
       partial_credit_percentage: 66.7,
       first_attempt_percentage: 33.3,
       question_results: [
-        { question_num: 1, attempts: 1, credit_earned: 100, eventually_correct: true },
-        { question_num: 2, attempts: 1, credit_earned: 60, eventually_correct: true },
-        { question_num: 3, attempts: 1, credit_earned: 40, eventually_correct: true },
+        {
+          question_num: 1,
+          attempts: 1,
+          credit_earned: 100,
+          eventually_correct: true,
+          emoji: 'emoji-1',
+        },
+        {
+          question_num: 2,
+          attempts: 1,
+          credit_earned: 60,
+          eventually_correct: true,
+          emoji: 'emoji-2',
+        },
+        {
+          question_num: 3,
+          attempts: 1,
+          credit_earned: 40,
+          eventually_correct: true,
+          emoji: 'emoji-3',
+        },
       ],
       agent_runtime: 'ai_agent',
       evaluation_json: null,
       ended_by: null,
     });
+  });
+
+  it('reads no emoji where none was stored, never recomputing one', () => {
+    const { emoji: _emoji, ...bare } = result(1);
+    const view = attemptDrawerView({ ...ATTEMPT, question_results_json: [bare, result(2, 60)] });
+    expect(view.question_results.map(r => [r.question_num, r.emoji])).toEqual([
+      [1, null],
+      [2, 'emoji-2'],
+    ]);
   });
 
   it('carries no scores for an attempt in progress', () => {

@@ -370,7 +370,7 @@ describe('student dashboard loader — recent grades', () => {
       ...over,
     });
 
-  it('adds quiz scores beside released repo grades, newest first', async () => {
+  it('adds quiz grades (emoji, never the number) beside released repo grades, newest first', async () => {
     listForStudentMock.mockResolvedValue([
       gradedRepo(),
       courseworkRow({
@@ -379,6 +379,9 @@ describe('student dashboard loader — recent grades', () => {
         title: 'Recursion',
         done: true,
         score: 0,
+        scoreEmoji: 'score-0',
+        originalScoreEmoji: 'score-0',
+        adjusted: false,
         scoredAt: '2026-09-20T12:00:00.000Z',
         href: '/student/test-class/quizzes?quiz=q-1',
       }),
@@ -391,12 +394,15 @@ describe('student dashboard loader — recent grades', () => {
     expect(data.feedback).toEqual([
       {
         id: 'quiz-a-quiz',
+        kind: 'QUIZ',
         assignmentTitle: 'Recursion',
         closedAt: '2026-09-20T12:00:00.000Z',
         graders: [],
         grades: [],
         issueUrl: null,
-        score: 0,
+        scoreEmoji: 'score-0',
+        originalScoreEmoji: 'score-0',
+        adjusted: false,
         href: '/student/test-class/quizzes?quiz=q-1',
       },
       {
