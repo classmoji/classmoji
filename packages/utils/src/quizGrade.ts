@@ -7,6 +7,9 @@
  *     deadline: nothing is ever late and nothing counts as zero.
  *   - An attempt is late by whole hours past the effective deadline, by its
  *     `completed_at`, truncated: 59 minutes late is 0 hours.
+ *   - An attempt's pct is its EFFECTIVE score (`effectivePercentage`): a
+ *     staff adjustment read through the classroom's emoji scale, else the
+ *     AI's. The late penalty applies after the adjustment.
  *   - Per attempt, penalised = max(0, pct − late hours × penalty per hour).
  *     The grading strategy picks `grade` among the penalised values and
  *     `raw_grade` among the raw ones, so a late retake never lowers a HIGHEST
@@ -15,11 +18,18 @@
  *     deadline has passed. One whose completed attempts are all unscored has
  *     no item yet (pending), not a 0.
  *
- * Pure: callers load the attempts, the hours and the classroom penalty.
+ * Pure: callers load the attempts (with `adjusted_emoji`), the hours, the
+ * classroom penalty and the classroom's emoji scale.
  */
 
 import type { GradedItem } from './grades.ts';
-import { countingQuizAttempt, type ScorableQuizAttempt } from './quizScore.ts';
+import {
+  adjustedPercentage,
+  countingQuizAttempt,
+  effectivePercentage,
+  type QuizEmojiScale,
+  type ScorableQuizAttempt,
+} from './quizScore.ts';
 import { openToStudents, type AssignmentVisibilityInput } from './assignmentVisibility.ts';
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -69,6 +79,12 @@ export interface QuizLateContext {
   extensionHours?: number;
   /** `ClassroomSettings.late_penalty_points_per_hour`. */
   latePenaltyPerHour?: number;
+  /**
+   * The classroom's emoji scale (`emojiMapping.findByClassroomId`): what an
+   * adjusted attempt's emoji is worth. Required, so no reader scores an
+   * adjusted attempt at its original percentage.
+   */
+  emojiScale: QuizEmojiScale;
 }
 
 /** A student's score on one quiz, with and without the late penalty. */
@@ -80,8 +96,12 @@ export interface CountingQuizScore<T extends ScorableQuizAttempt> {
   /** The attempt that counts for `grade`. */
   counting: T | null;
   counting_attempt_id: string | null;
-  /** That attempt's own (unpenalised) percentage: what the student is shown. */
+  /** That attempt's own effective (unpenalised) percentage: what counts before lateness. */
   raw_percentage: number | null;
+  /** That attempt's AI score (`partial_credit_percentage`), before any adjustment. */
+  original_percentage: number | null;
+  /** That attempt carries a staff adjustment in effect. */
+  adjusted: boolean;
   /** That attempt's whole hours late. */
   late_hours: number;
 }
@@ -89,12 +109,13 @@ export interface CountingQuizScore<T extends ScorableQuizAttempt> {
 /**
  * The counting attempt over late-penalised scores, plus the raw-score pick.
  * Built on `countingQuizAttempt`, so the strategies mean the same thing
- * everywhere. Attempts still running or unscored never count.
+ * everywhere. Attempts still running or unscored never count. Scores are
+ * effective: an adjustment replaces the AI's score, then the penalty applies.
  */
 export const countingQuizScore = <T extends ScorableQuizAttempt>(
   attempts: readonly T[],
   gradingStrategy: string | null | undefined,
-  { studentDeadline, extensionHours = 0, latePenaltyPerHour = 0 }: QuizLateContext
+  { studentDeadline, extensionHours = 0, latePenaltyPerHour = 0, emojiScale }: QuizLateContext
 ): CountingQuizScore<T> => {
   const penalty = Number.isFinite(latePenaltyPerHour) ? Math.max(0, latePenaltyPerHour) : 0;
   const byId = new Map(attempts.map(a => [a.id, a]));
@@ -102,16 +123,27 @@ export const countingQuizScore = <T extends ScorableQuizAttempt>(
     attempts.map(a => [a.id, lateHours(a.completed_at, studentDeadline, extensionHours)])
   );
 
-  const penalised = attempts.map(a => ({
-    ...a,
-    partial_credit_percentage:
-      typeof a.partial_credit_percentage === 'number'
-        ? Math.max(0, a.partial_credit_percentage - (lateById.get(a.id) ?? 0) * penalty)
-        : a.partial_credit_percentage,
-  }));
+  const effectiveById = new Map(attempts.map(a => [a.id, effectivePercentage(a, emojiScale)]));
 
-  const countingPenalised = countingQuizAttempt(penalised, gradingStrategy);
-  const countingRaw = countingQuizAttempt(attempts, gradingStrategy);
+  // The selector reads `partial_credit_percentage`; each copy carries its
+  // effective (then penalised) score there and no adjustment, so it is read
+  // as is. The AI's own value stays on the original rows.
+  const asScored = (a: T, value: number | null) => ({
+    ...a,
+    partial_credit_percentage: value,
+    adjusted_emoji: null,
+  });
+  const effective = attempts.map(a => asScored(a, effectiveById.get(a.id) ?? null));
+  const penalised = attempts.map(a => {
+    const value = effectiveById.get(a.id) ?? null;
+    return asScored(
+      a,
+      value === null ? null : Math.max(0, value - (lateById.get(a.id) ?? 0) * penalty)
+    );
+  });
+
+  const countingPenalised = countingQuizAttempt(penalised, gradingStrategy, emojiScale);
+  const countingRaw = countingQuizAttempt(effective, gradingStrategy, emojiScale);
   const counting = countingPenalised ? (byId.get(countingPenalised.id) ?? null) : null;
 
   return {
@@ -119,7 +151,12 @@ export const countingQuizScore = <T extends ScorableQuizAttempt>(
     raw_grade: countingRaw?.partial_credit_percentage ?? null,
     counting,
     counting_attempt_id: counting?.id ?? null,
-    raw_percentage: counting?.partial_credit_percentage ?? null,
+    raw_percentage: counting ? (effectiveById.get(counting.id) ?? null) : null,
+    original_percentage:
+      counting && typeof counting.partial_credit_percentage === 'number'
+        ? counting.partial_credit_percentage
+        : null,
+    adjusted: counting ? adjustedPercentage(counting, emojiScale) !== null : false,
     late_hours: counting ? (lateById.get(counting.id) ?? 0) : 0,
   };
 };
@@ -142,6 +179,8 @@ export interface QuizGradeItemInput<T extends ScorableQuizAttempt> {
   /** Net hours this student bought on the assignment (Σ hours_purchased). */
   extensionHours?: number;
   latePenaltyPerHour?: number;
+  /** The classroom's emoji scale: what an adjusted attempt is worth. */
+  emojiScale: QuizEmojiScale;
   /** Whether the classroom shows quizzes; the caller resolves it once. */
   quizzesVisible: boolean;
   now: Instant;
@@ -159,6 +198,7 @@ export const quizGradeItem = <T extends ScorableQuizAttempt>({
   attempts,
   extensionHours = 0,
   latePenaltyPerHour = 0,
+  emojiScale,
   quizzesVisible,
   now,
 }: QuizGradeItemInput<T>): GradedItem | null => {
@@ -176,6 +216,7 @@ export const quizGradeItem = <T extends ScorableQuizAttempt>({
     studentDeadline: assignment.student_deadline,
     extensionHours,
     latePenaltyPerHour,
+    emojiScale,
   });
 
   if (score.counting) {
@@ -186,6 +227,8 @@ export const quizGradeItem = <T extends ScorableQuizAttempt>({
       counts_as_zero: false,
       late_hours: score.late_hours,
       counting_raw_percentage: score.raw_percentage,
+      counting_attempt_id: score.counting_attempt_id,
+      counting_adjusted: score.adjusted,
     };
   }
 

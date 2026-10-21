@@ -346,6 +346,8 @@ model User {
   graded_repository_assignments GitRepoAssignmentGrader[]
   grades_given                  AssignmentGrade[]
   quiz_attempts                 QuizAttempt[]
+  /// Quiz attempts whose score this user (teaching team) adjusted.
+  quiz_attempts_adjusted        QuizAttempt[]             @relation("QuizAttemptAdjustedBy")
   regrade_requests              RegradeRequest[]
   token_transactions            TokenTransaction[]
   audit_logs                    AuditLog[]
@@ -1237,9 +1239,15 @@ model AssignmentGrade {
   @@map("assignment_grades")
 }
 
+/// A student's regrade/resubmit request: on a repo submission
+/// (`git_repo_assignment_id`) or on a quiz attempt (`quiz_attempt_id`), exactly
+/// one of the two (CHECK `regrade_requests_one_target`). One open (IN_REVIEW)
+/// request per quiz attempt (partial unique index
+/// `regrade_requests_open_quiz_attempt`).
 model RegradeRequest {
   id                     String               @id @default(uuid())
-  git_repo_assignment_id String
+  git_repo_assignment_id String?
+  quiz_attempt_id        String?
   classroom_id           String
   student_id             String
   student_comment        String?
@@ -1249,12 +1257,14 @@ model RegradeRequest {
   created_at             DateTime             @default(now())
   updated_at             DateTime             @default(now()) @updatedAt
 
-  git_repo_assignment GitRepoAssignment @relation(fields: [git_repo_assignment_id], references: [id], onDelete: Cascade)
-  classroom           Classroom         @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
-  student             User              @relation(fields: [student_id], references: [id], onDelete: Cascade)
+  git_repo_assignment GitRepoAssignment? @relation(fields: [git_repo_assignment_id], references: [id], onDelete: Cascade)
+  quiz_attempt        QuizAttempt?       @relation(fields: [quiz_attempt_id], references: [id], onDelete: Cascade)
+  classroom           Classroom          @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  student             User               @relation(fields: [student_id], references: [id], onDelete: Cascade)
 
   @@index([classroom_id])
   @@index([student_id])
+  @@index([quiz_attempt_id])
   @@map("regrade_requests")
 }
 
@@ -1503,13 +1513,25 @@ model QuizAttempt {
   /// Set at each admitted turn; a write from a superseded run no longer matches.
   turn_fence                String?
   chat_grant                Json?
+  /// Staff grade adjustment: an emoji on the classroom's scale (a `score-N`
+  /// badge on the numeric one). When set it replaces `partial_credit_percentage`
+  /// as the attempt's score, read through the classroom's EmojiMapping
+  /// (`effectivePercentage` in @classmoji/utils). The AI evaluation is never edited.
+  adjusted_emoji            String?
+  /// Staff comment to the student on this attempt; may be set without a score change.
+  instructor_comment        String?
+  /// Who last adjusted the score or the comment, and when.
+  adjusted_by_id            String?
+  adjusted_at               DateTime?
   created_at                DateTime  @default(now())
   updated_at                DateTime  @default(now()) @updatedAt
 
-  quiz         Quiz               @relation(fields: [quiz_id], references: [id], onDelete: Cascade)
-  user         User               @relation(fields: [user_id], references: [id], onDelete: Cascade)
-  conversation AIConversation?    @relation(fields: [conversation_id], references: [id])
-  events       QuizAttemptEvent[]
+  quiz             Quiz               @relation(fields: [quiz_id], references: [id], onDelete: Cascade)
+  user             User               @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  adjusted_by      User?              @relation("QuizAttemptAdjustedBy", fields: [adjusted_by_id], references: [id], onDelete: SetNull)
+  conversation     AIConversation?    @relation(fields: [conversation_id], references: [id])
+  events           QuizAttemptEvent[]
+  regrade_requests RegradeRequest[]
 
   @@index([quiz_id])
   @@index([user_id])

@@ -40,6 +40,7 @@ import {
   lateHours,
   openToStudents,
   quizStanding,
+  quizAttemptGrade,
   titleToIdentifier,
   type GitWebContext,
 } from '@classmoji/utils';
@@ -48,6 +49,7 @@ import * as formResponseService from './formResponse.service.ts';
 import * as helperService from './helper.service.ts';
 import * as quizAttemptService from './quizAttempt.service.ts';
 import { netQuizExtensionHours } from './quizGradeItems.service.ts';
+import { findScaleByClassroomId } from './emojiMapping.service.ts';
 
 export type CourseworkType = 'REPO' | 'QUIZ' | 'FORM';
 
@@ -118,11 +120,22 @@ export interface StudentCourseworkRow {
   /** Nothing left to do: under Completed, never Up next. */
   done: boolean;
   /**
-   * QUIZ: the raw percentage (0-100) of the attempt that counts for the
-   * grade (picked over late-penalised scores); its late hours are
-   * `numLateHours`.
+   * QUIZ: the effective, unpenalised percentage (0-100) of the attempt that
+   * counts for the grade (a staff adjustment when there is one; picked over
+   * late-penalised scores); its late hours are `numLateHours`. Internal: the
+   * UI shows `scoreEmoji`.
    */
   score: number | null;
+  /**
+   * QUIZ: that score as the classroom's emoji (the adjustment emoji itself
+   * when adjusted; a `score-N` badge on the numeric scale). Null when
+   * unscored or the classroom has no scale.
+   */
+  scoreEmoji?: string | null;
+  /** QUIZ: the AI's original score as the classroom's emoji, shown beside an adjusted one. */
+  originalScoreEmoji?: string | null;
+  /** QUIZ: the counting attempt's score was adjusted by staff. */
+  adjusted?: boolean;
   /** QUIZ: when the counting attempt completed. */
   scoredAt: string | null;
   /**
@@ -420,6 +433,8 @@ export const listForStudent = async ({
             },
           }),
           quizAttemptService.findForUserByQuizIds(userId, quizIds),
+          // What an adjusted attempt's emoji is worth, and the emoji shown.
+          findScaleByClassroomId(classroomId),
           // The hours this student bought on each quiz (net of refunds).
           netQuizExtensionHours({
             classroomId,
@@ -450,7 +465,12 @@ export const listForStudent = async ({
   ]);
   const classroomTokensPerHour = settings?.default_tokens_per_hour ?? 0;
   const latePenaltyPerHour = settings?.late_penalty_points_per_hour ?? 0;
-  const [quizzes, attempts, quizHours] = quizJoin ?? [[], [], new Map<string, number>()];
+  const [quizzes, attempts, emojiScale, quizHours] = quizJoin ?? [
+    [],
+    [],
+    {} as Record<string, number>,
+    new Map<string, number>(),
+  ];
   const [forms, submittedResponses] = formJoin ?? [[], []];
 
   // First submission row per assignment wins: the student's own before their
@@ -520,14 +540,18 @@ export const listForStudent = async ({
       const quiz = quizById.get(a.quiz_id);
       if (!quiz) continue;
       const own = attempts.filter(attempt => attempt.quiz_id === quiz.id);
-      const standing = quizStanding(own, quiz.grading_strategy);
+      const standing = quizStanding(own, quiz.grading_strategy, emojiScale);
       // Hours bought move this student's due date for every attempt.
       const extensionHours = Math.max(0, quizHours.get(a.id) ?? 0);
       const counting = countingQuizScore(own, quiz.grading_strategy, {
         studentDeadline: a.student_deadline,
         extensionHours,
         latePenaltyPerHour,
+        emojiScale,
       });
+      const countingGrade = counting.counting
+        ? quizAttemptGrade(counting.counting, emojiScale)
+        : null;
       const due = effectiveDeadline(a.student_deadline, extensionHours);
       // Past the (extended) due date with no completed attempt. Missing only
       // when none is running either: a running attempt reads In progress.
@@ -580,6 +604,9 @@ export const listForStudent = async ({
         status,
         done: status === 'COMPLETED' || status === 'CLOSED',
         score: counting.raw_percentage,
+        scoreEmoji: countingGrade?.effective.emoji ?? null,
+        originalScoreEmoji: countingGrade?.original.emoji ?? null,
+        adjusted: countingGrade?.adjusted ?? false,
         scoredAt: iso(counting.counting?.completed_at),
         attemptsUsed: standing.attemptsUsed,
         maxAttempts: quiz.max_attempts,

@@ -1,6 +1,16 @@
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import type { MessageRole, Prisma, Role } from '@prisma/client';
-import { DEFAULT_EMOJI_GRADE_MAPPINGS, isClosed, isReleased, withLogins } from '@classmoji/utils';
+import {
+  DEFAULT_EMOJI_GRADE_MAPPINGS,
+  effectivePercentage,
+  isClosed,
+  isReleased,
+  withLogins,
+} from '@classmoji/utils';
+import { findScaleByClassroomId } from './emojiMapping.service.ts';
+
+// Staff grade adjustments: `ClassmojiService.quizAttempt.adjust` / `revert`.
+export { adjust, revert } from './quizGradeAdjust.service.ts';
 import { CONTRACT_VERSION } from '@classmoji/utils/quiz-agent';
 
 /**
@@ -789,8 +799,9 @@ export const findByQuiz = async (quizId: string) => {
 /**
  * One user's attempts on the given quizzes, newest first, with only the
  * columns the counting-attempt selector reads (`quizStanding` in
- * @classmoji/utils). For a student's own Assignments page and a staff member's
- * report on one student.
+ * @classmoji/utils, which needs `adjusted_emoji` and the classroom's scale).
+ * For a student's own Assignments page and a staff member's report on one
+ * student.
  */
 export const findForUserByQuizIds = async (userId: string, quizIds: string[]) => {
   if (quizIds.length === 0) return [];
@@ -802,6 +813,7 @@ export const findForUserByQuizIds = async (userId: string, quizIds: string[]) =>
       started_at: true,
       completed_at: true,
       partial_credit_percentage: true,
+      adjusted_emoji: true,
     },
     orderBy: { started_at: 'desc' },
   });
@@ -833,17 +845,23 @@ export const findByUser = async (userId: string, organizationId: string | null =
 };
 
 export const getAttemptStatsByQuiz = async (quizId: string) => {
-  const attempts = await getPrisma().quizAttempt.findMany({
-    where: {
-      quiz_id: quizId,
-      completed_at: { not: null },
-    },
-    select: {
-      partial_credit_percentage: true,
-      completed_at: true,
-      started_at: true,
-    },
-  });
+  const [attempts, quiz] = await Promise.all([
+    getPrisma().quizAttempt.findMany({
+      where: {
+        quiz_id: quizId,
+        completed_at: { not: null },
+      },
+      select: {
+        partial_credit_percentage: true,
+        adjusted_emoji: true,
+        completed_at: true,
+        started_at: true,
+      },
+    }),
+    getPrisma().quiz.findUnique({ where: { id: quizId }, select: { classroom_id: true } }),
+  ]);
+  // Effective scores: a staff adjustment read through the quiz's own classroom scale.
+  const emojiScale = quiz ? await findScaleByClassroomId(quiz.classroom_id) : {};
 
   if (attempts.length === 0) {
     return {
@@ -857,8 +875,8 @@ export const getAttemptStatsByQuiz = async (quizId: string) => {
   }
 
   const scores = attempts
-    .map(a => a.partial_credit_percentage)
-    .filter(value => value !== null && value !== undefined) as number[];
+    .map(a => effectivePercentage(a, emojiScale))
+    .filter((value): value is number => value !== null);
   const times = attempts.map(a => {
     const duration =
       new Date(a.completed_at ?? a.started_at).getTime() - new Date(a.started_at).getTime();

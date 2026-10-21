@@ -49,6 +49,14 @@ export const findByClassroomId = async (classroomId: string, includeExtraTokens 
   return emojiMappings;
 };
 
+/**
+ * The classroom's grading scale as emoji → grade, exactly as the grade totals
+ * read it (`findByClassroomId` without tokens, grades truncated). What a quiz
+ * adjustment's emoji is worth (`effectivePercentage` in @classmoji/utils).
+ */
+export const findScaleByClassroomId = async (classroomId: string) =>
+  (await findByClassroomId(classroomId)) as Record<string, number>;
+
 export const deleteEmojiMapping = async (classroomId: string, emoji: string) => {
   return getPrisma().emojiMapping.delete({
     where: {

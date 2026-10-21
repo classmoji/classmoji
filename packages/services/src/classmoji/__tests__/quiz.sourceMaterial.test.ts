@@ -48,6 +48,8 @@ vi.mock('@classmoji/database', async () => ({
       // The row create hands back, read once the transaction has committed.
       findUniqueOrThrow: (...a: unknown[]) => tx.quiz.findUniqueOrThrow(...a),
     },
+    // The classroom's grading scale (no adjusted attempts here).
+    emojiMapping: { findMany: async () => [] },
   }),
 }));
 
@@ -455,9 +457,14 @@ describe('quiz.getQuizzesForStudent', () => {
       'first_attempt_percentage',
       'total_duration_ms',
       'unfocused_duration_ms',
+      // The student's own adjustment and comment, and who made it (name only).
+      'adjusted_emoji',
+      'instructor_comment',
+      'adjusted_at',
     ]) {
       expect(select[field], field).toBe(true);
     }
+    expect(select.adjusted_by).toEqual({ select: { name: true } });
   });
 
   it('keeps the derived attempt data and names published material only', async () => {

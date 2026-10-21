@@ -3,11 +3,13 @@
  * (`calculateStudentFinalGrade` / `calculateGrades`, `items`) counts for
  * quizzes.
  *
- * Four narrow reads in two rounds, whatever the number of quizzes or students:
- * the QUIZ assignments, the STUDENT roster and the classroom's late penalty;
- * then the completed attempts on those quizzes by those students, and the net
- * hours bought per (assignment, student). Each item is `quizGradeItem` from
- * `@classmoji/utils`, the same pure rule every reader uses.
+ * Five narrow reads in two rounds, whatever the number of quizzes or students:
+ * the QUIZ assignments, the STUDENT roster, the classroom's late penalty and
+ * its emoji scale; then the completed attempts on those quizzes by those
+ * students, and the net hours bought per (assignment, student). Each item is
+ * `quizGradeItem` from `@classmoji/utils`, the same pure rule every reader
+ * uses: an attempt scores its effective percentage (a staff adjustment read
+ * through this classroom's scale, else the AI's), then the late penalty.
  *
  *   - Only assignments `openToStudents` (with the caller's `quizzesVisible`)
  *     count, and only students on the STUDENT roster: a staff member's test
@@ -20,6 +22,7 @@
 
 import getPrisma from '@classmoji/database';
 import { openToStudents, quizGradeItem, type GradedItem } from '@classmoji/utils';
+import { findScaleByClassroomId } from './emojiMapping.service.ts';
 
 export interface LoadQuizGradeItemsInput {
   classroomId: string;
@@ -80,7 +83,7 @@ export const loadQuizGradeItems = async ({
 
   const prisma = getPrisma();
 
-  const [assignments, roster, settings] = await Promise.all([
+  const [assignments, roster, settings, emojiScale] = await Promise.all([
     prisma.assignment.findMany({
       where: {
         type: 'QUIZ',
@@ -113,6 +116,7 @@ export const loadQuizGradeItems = async ({
       where: { classroom_id: classroomId },
       select: { late_penalty_points_per_hour: true },
     }),
+    findScaleByClassroomId(classroomId),
   ]);
 
   const open = assignments.filter(
@@ -142,6 +146,7 @@ export const loadQuizGradeItems = async ({
         started_at: true,
         completed_at: true,
         partial_credit_percentage: true,
+        adjusted_emoji: true,
       },
     }),
     prisma.tokenTransaction.groupBy({
@@ -186,6 +191,7 @@ export const loadQuizGradeItems = async ({
         attempts: attemptsByQuizUser.get(key(assignment.quiz_id, studentId)) ?? [],
         extensionHours: hoursByAssignmentUser.get(key(assignment.id, studentId)) ?? 0,
         latePenaltyPerHour,
+        emojiScale,
         quizzesVisible,
         now,
       });
