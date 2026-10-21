@@ -15,6 +15,9 @@ import Emoji from '~/components/ui/display/Emoji';
  *   - `beforeResults`: blocks above "Quiz Complete!" (the staff adjust panel
  *     and request banner; the student's instructor comment and request
  *     outcome).
+ *
+ * A completed attempt with no results card gets both slots from
+ * `QuizResultSlotsFallback` instead.
  */
 export interface QuizResultSlots {
   grade: AttemptGradeView | null;
@@ -27,6 +30,24 @@ const QuizResultContext = createContext<QuizResultSlots | null>(null);
 export const QuizResultProvider = QuizResultContext.Provider;
 
 export const useQuizResultSlots = (): QuizResultSlots | null => useContext(QuizResultContext);
+
+/**
+ * The drawer's blocks for a completed attempt whose results card does not
+ * render (no evaluation record or message): the transcript runtimes render
+ * this at the place the card would have gone, so the staff adjust panel (and
+ * the student's comment, request outcome and request button) still show.
+ * Nothing without slots; a staff preview's slots carry no adjust panel.
+ */
+export function QuizResultSlotsFallback() {
+  const slots = useQuizResultSlots();
+  if (!slots || (!slots.beforeResults && !slots.headerExtra)) return null;
+  return (
+    <div data-testid="quiz-result-slots-fallback" className="mt-4 flex flex-col gap-3">
+      {slots.headerExtra && <div className="flex justify-end">{slots.headerExtra}</div>}
+      {slots.beforeResults}
+    </div>
+  );
+}
 
 /**
  * The band label the card shows: the effective grade's (D9) when the drawer

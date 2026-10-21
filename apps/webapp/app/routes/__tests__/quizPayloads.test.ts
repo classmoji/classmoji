@@ -662,6 +662,30 @@ describe('staff attempt drawer payload', () => {
     expectNoSentinels(payload);
   });
 
+  it('gives a completed student attempt with no evaluation record the adjust panel too', async () => {
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: TA.id,
+      classroom: CLASSROOM,
+      membership: { role: 'ASSISTANT' },
+    });
+    // Completed with no score and no evaluation: the results card won't render,
+    // and the drawer still offers the adjustment (QuizResultSlotsFallback).
+    const bare = attemptRow('a-ada-bare', ADA, {
+      completed_at: new Date('2026-03-02T12:00:00Z'),
+      partial_credit_percentage: null,
+      first_attempt_percentage: null,
+    });
+    mocks.findWithMessages.mockResolvedValue({ ...withMessages(bare), messages: [] });
+
+    const payload = await staffAttemptRoute.loader(attemptArgs('assistant', bare.id));
+
+    expect(payload.gradePanel).toMatchObject({
+      attemptId: bare.id,
+      adjustable: true,
+      grade: { emoji: null, adjusted: false },
+    });
+  });
+
   it("hides the adjust panel on a staff preview, and drops another classroom's request", async () => {
     mocks.assertClassroomAccess.mockResolvedValue({
       userId: 'owner-1',

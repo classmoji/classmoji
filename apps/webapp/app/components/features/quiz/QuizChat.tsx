@@ -44,6 +44,7 @@ import QuizSandbox, {
   type SandboxSubmit,
 } from './QuizSandbox';
 import CodeSubmissionCard from './CodeSubmissionCard';
+import { QuizResultSlotsFallback } from './QuizResultContext';
 import {
   cardSandboxOf,
   hintSandboxesOf,
@@ -1707,8 +1708,11 @@ export function QuizTranscript({
         </div>
       )}
 
-      {/* A completed attempt whose transcript carries no evaluation part still shows its results. */}
-      {status === 'complete' && renderResults(null)}
+      {/* A completed attempt whose transcript carries no evaluation part still
+          shows its results; with no record at all, the drawer's blocks (the
+          staff adjust panel) still show where the results would be. */}
+      {status === 'complete' &&
+        (renderResults(null) ?? (resultsRendered ? null : <QuizResultSlotsFallback />))}
 
       <div ref={endRef} />
     </div>

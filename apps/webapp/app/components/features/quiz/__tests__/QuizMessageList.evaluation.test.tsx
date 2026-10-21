@@ -94,4 +94,42 @@ describe('QuizMessageList — the evaluation card', () => {
     // The per-question emoji is the stored one (🚀), never recomputed.
     expect(html.match(/🚀/g)?.length).toBeGreaterThanOrEqual(2);
   });
+
+  it("shows the drawer's blocks on a completed attempt with no evaluation record", () => {
+    const slots = { grade: null, beforeResults: <div data-testid="staff-adjust-panel" /> };
+    const html = renderToStaticMarkup(
+      <QuizResultProvider value={slots}>
+        <QuizMessageList messages={[{ id: 'm1', role: 'assistant', content: 'Hi' }]} readOnly />
+      </QuizResultProvider>
+    );
+    expect(html).not.toContain('Quiz Complete!');
+    expect(html).toContain('data-testid="quiz-result-slots-fallback"');
+    expect(html.match(/data-testid="staff-adjust-panel"/g)).toHaveLength(1);
+
+    // With the card, the blocks are inside it and not repeated.
+    const card = renderToStaticMarkup(
+      <QuizResultProvider value={slots}>
+        <QuizMessageList
+          messages={[EVALUATION_MESSAGE]}
+          readOnly
+          isQuizComplete
+          evaluationData={{ evaluation: 'GOOD', numeric_score: 3, question_results: [] }}
+        />
+      </QuizResultProvider>
+    );
+    expect(card).toContain('Quiz Complete!');
+    expect(card).not.toContain('quiz-result-slots-fallback');
+    expect(card.match(/data-testid="staff-adjust-panel"/g)).toHaveLength(1);
+
+    // A running attempt shows none; no slots (a drawer without them) render nothing.
+    const running = renderToStaticMarkup(
+      <QuizResultProvider value={slots}>
+        <QuizMessageList messages={[{ id: 'm1', role: 'assistant', content: 'Hi' }]} />
+      </QuizResultProvider>
+    );
+    expect(running).not.toContain('staff-adjust-panel');
+    expect(renderToStaticMarkup(<QuizMessageList messages={[]} readOnly />)).not.toContain(
+      'quiz-result-slots-fallback'
+    );
+  });
 });

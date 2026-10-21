@@ -28,6 +28,7 @@ import QuizEvaluation, {
 import TypingIndicator from '~/components/ui/feedback/TypingIndicator';
 import QuestionCard from './QuestionCard';
 import ProgressDivider from './ProgressDivider';
+import { QuizResultSlotsFallback } from './QuizResultContext';
 import { useGitWeb } from '~/hooks/useGitWeb';
 import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
 
@@ -711,7 +712,7 @@ const QuizMessageList = ({
         )}
 
         {/* Quiz evaluation - rendered in same scroll area as messages */}
-        {isQuizComplete && evaluationData && (
+        {isQuizComplete && evaluationData ? (
           <div ref={evaluationRef}>
             <QuizEvaluation
               evaluationData={evaluationData}
@@ -719,6 +720,10 @@ const QuizMessageList = ({
               isDarkMode={isDarkMode}
             />
           </div>
+        ) : (
+          // A completed attempt with no evaluation record: the drawer's
+          // blocks (the staff adjust panel) still show.
+          (readOnly || isQuizComplete) && <QuizResultSlotsFallback />
         )}
 
         <div ref={messagesEndRef} />
