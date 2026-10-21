@@ -45,13 +45,16 @@ export type LimitedAction = 'CREATE' | 'REACTIVATE' | 'IMPORT';
  */
 export class ActiveClassroomLimitError extends Error {
   readonly code = ACTIVE_CLASSROOM_LIMIT;
-  constructor(
-    message: string,
-    readonly limit: number,
-    readonly activeClassrooms: ActiveClassroomSummary[] | null
-  ) {
+  // Plain fields, not constructor parameter properties: the services that run
+  // this file with Node's type stripping (mcp, collab, slides) cannot parse those.
+  readonly limit: number;
+  readonly activeClassrooms: ActiveClassroomSummary[] | null;
+
+  constructor(message: string, limit: number, activeClassrooms: ActiveClassroomSummary[] | null) {
     super(message);
     this.name = 'ActiveClassroomLimitError';
+    this.limit = limit;
+    this.activeClassrooms = activeClassrooms;
   }
 }
 
