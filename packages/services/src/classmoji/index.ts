@@ -35,6 +35,7 @@ import * as regradeRequestService from './regradeRequest.service.ts';
 import * as gitRepoService from './gitRepo.service.ts';
 import * as subscriptionService from './subscription.service.ts';
 import * as entitlementService from './entitlement.service.ts';
+import * as planLimitsService from './planLimits.ts';
 import * as instructorAudienceService from './instructorAudience.service.ts';
 import * as surveyService from './survey.service.ts';
 import * as feedbackService from './feedback.service.ts';
@@ -166,6 +167,7 @@ const ClassmojiService = {
   gitRepo: gitRepoService,
   subscription: subscriptionService,
   entitlement: entitlementService,
+  planLimits: planLimitsService,
   instructorAudience: instructorAudienceService,
   survey: surveyService,
   feedback: feedbackService,
@@ -293,6 +295,7 @@ export {
   gitRepoService,
   subscriptionService,
   entitlementService,
+  planLimitsService,
   teamMembershipService,
   teamService,
   teamAdminService,

@@ -24,6 +24,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  contentAllowance: vi.fn(),
   slideFindMany: vi.fn(),
   slideCreate: vi.fn(),
 }));
@@ -40,6 +41,10 @@ vi.mock('@classmoji/services', () => ({
     page: { createWithUniquePageSlug: vi.fn(), isPageSlugConflict: () => false },
     contentImport: { rewriteContentUrls: (value: unknown) => value },
     contentManifest: { saveManifest: vi.fn() },
+    planLimits: {
+      contentAllowance: (...a: unknown[]) => mocks.contentAllowance(...a),
+      contentLimitMessage: (kind: string, limit: number) => `limit ${limit} ${kind}`,
+    },
   },
   describeTokenMintError: vi.fn(),
   getGitProvider: vi.fn(),
@@ -137,6 +142,8 @@ const wholeRepo = new Set(['slides/week-1/index.html', 'slides/lecture-1/lecture
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Default: a Pro target, no limit.
+  mocks.contentAllowance.mockResolvedValue({ limit: null, used: 0, remaining: null });
   mocks.slideCreate.mockImplementation(async () => ({ id: 'new-slide' }));
 });
 

@@ -138,6 +138,10 @@ export async function processZipImport({
     warnings?: string[];
   }) => void;
 }) {
+  // One import is one new slide: refused at the plan limit before the ZIP is
+  // read or anything reaches the content repo.
+  await ClassmojiService.planLimits.assertCanCreateContent(classroomId, 'slides');
+
   // 1. Extract ZIP
   onProgress({ type: 'step', step: 'extracting_zip' });
   const arrayBuffer = await zipFile.arrayBuffer();

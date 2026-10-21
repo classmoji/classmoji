@@ -215,7 +215,12 @@ function messageFor(error: unknown, fallback: string): string {
   if (error instanceof slideFileService.SlideSourceError) return error.message;
   if (error && typeof error === 'object' && 'code' in error) {
     const code = (error as { code?: unknown }).code;
-    if (code === 'SLIDE_CONTENT_PATH_CONFLICT' && error instanceof Error) return error.message;
+    if (
+      (code === 'SLIDE_CONTENT_PATH_CONFLICT' || code === 'PLAN_CONTENT_LIMIT') &&
+      error instanceof Error
+    ) {
+      return error.message;
+    }
   }
   return fallback;
 }

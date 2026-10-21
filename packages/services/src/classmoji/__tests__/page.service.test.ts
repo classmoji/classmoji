@@ -16,6 +16,13 @@ const repositoryFindFirstMock = vi.fn();
 const assignmentFindFirstMock = vi.fn();
 const pageLinkCreateMock = vi.fn();
 
+// Plan limits have their own tests (planLimits.test.ts); here every classroom has room.
+vi.mock('../planLimits.ts', () => ({
+  assertCanCreateContent: vi.fn(async () => {}),
+  contentAllowance: vi.fn(async () => ({ limit: null, used: 0, remaining: null })),
+  contentLimitMessage: () => '',
+}));
+
 vi.mock('@classmoji/database', async () => ({
   ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
     '@classmoji/database/gitIdentity'
@@ -520,6 +527,27 @@ describe('page.createPage', () => {
     await expect(
       createPage({ classroomId: 'class-1', title: 'X', createdBy: 'user-1' })
     ).rejects.toThrow('Classroom content repo not configured');
+  });
+
+  it("refuses at the classroom's page limit BEFORE any GitHub write", async () => {
+    const planLimits = await import('../planLimits.ts');
+    const limitError = Object.assign(new Error('Free classes can have up to 10 pages.'), {
+      code: 'PLAN_CONTENT_LIMIT',
+    });
+    vi.mocked(planLimits.assertCanCreateContent).mockRejectedValueOnce(limitError);
+
+    const failure = await createPage({
+      classroomId: 'class-1',
+      title: 'Lab 11',
+      createdBy: 'user-1',
+    }).catch((e: Error) => e);
+
+    expect(failure).toBe(limitError);
+    expect(planLimits.assertCanCreateContent).toHaveBeenCalledWith('class-1', 'pages');
+    expect(putMock).not.toHaveBeenCalled();
+    expect(uploadBatchMock).not.toHaveBeenCalled();
+    expect(pageCreateMock).not.toHaveBeenCalled();
+    expect(saveManifestMock).not.toHaveBeenCalled();
   });
 
   it('refuses a content-path collision BEFORE any GitHub write (U3)', async () => {
