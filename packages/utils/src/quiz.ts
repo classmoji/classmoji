@@ -362,3 +362,82 @@ export const stripQuestionComplete = (messageContent: string): string =>
     .replace(/\[QUESTION_COMPLETE\]\s*```(?:json)?\s*[\s\S]*?```/g, '')
     .replace(/\[QUESTION_COMPLETE\]\s*\{[\s\S]*?\}\s*(?:\n\n|$)/g, '')
     .trim();
+
+/**
+ * The keys of a legacy [QUIZ_EVALUATION] block a student may receive: the
+ * completion flag, the band and the feedback. Everything else (the
+ * percentages, `total_questions`, the per-question results) is a grade
+ * number or gives one back (E1).
+ */
+const STUDENT_EVALUATION_KEYS = [
+  'quiz_complete',
+  'ended_early',
+  'evaluation',
+  'numeric_score',
+  'final_acknowledgment',
+  'feedback_summary',
+  'feedback_strengths',
+  'feedback_improvements',
+  'feedback_recommendation',
+  'feedback_effort_note',
+] as const;
+
+const EVALUATION_MARKER = '[QUIZ_EVALUATION]';
+
+/** One evaluation block's JSON narrowed to the student keys; null when it does not parse. */
+const narrowEvaluationJson = (json: string): string | null => {
+  try {
+    const parsed = JSON.parse(json.trim()) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const source = parsed as Record<string, unknown>;
+    const kept = Object.fromEntries(
+      STUDENT_EVALUATION_KEYS.filter(key => key in source).map(key => [key, source[key]])
+    );
+    return JSON.stringify(kept, null, 2);
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * A legacy assistant message as a student receives it: every [QUIZ_EVALUATION]
+ * block (fenced or raw JSON) keeps only the completion flag, the band and the
+ * feedback, so `checkForCompletion` and `completionMessageDisplay` still read
+ * it and no score reaches the browser. A block whose JSON does not parse is
+ * removed with its marker; a marker with no complete block after it ends the
+ * message there. The model's own text around it is left as it is.
+ */
+export const redactQuizEvaluationBlocks = (messageContent: string): string => {
+  if (typeof messageContent !== 'string' || !messageContent.includes(EVALUATION_MARKER)) {
+    return messageContent;
+  }
+  let out = '';
+  let rest = messageContent;
+  for (;;) {
+    const at = rest.indexOf(EVALUATION_MARKER);
+    if (at === -1) return out + rest;
+    out += rest.slice(0, at);
+    const afterMarker = rest.slice(at + EVALUATION_MARKER.length);
+    const lead = afterMarker.match(/^\s*/)?.[0] ?? '';
+    const body = afterMarker.slice(lead.length);
+
+    const fenced = body.match(/^```(?:json)?\s*([\s\S]*?)```/);
+    if (fenced) {
+      const narrowed = narrowEvaluationJson(fenced[1]);
+      if (narrowed !== null) out += `${EVALUATION_MARKER}${lead}\`\`\`json\n${narrowed}\n\`\`\``;
+      rest = body.slice(fenced[0].length);
+      continue;
+    }
+    const raw = body.startsWith('{') ? extractJsonObject(body, 0) : null;
+    if (raw) {
+      const narrowed = narrowEvaluationJson(raw.json);
+      if (narrowed !== null) out += `${EVALUATION_MARKER}${lead}${narrowed}`;
+      rest = body.slice(raw.endIndex + 1);
+      continue;
+    }
+    // A marker with no complete block after it (an unclosed fence, unbalanced
+    // braces): what follows may hold scores that cannot be read to narrow, so
+    // it is not sent.
+    return out.trimEnd();
+  }
+};

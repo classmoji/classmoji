@@ -6,7 +6,7 @@ import {
   RocketOutlined,
   TrophyOutlined,
 } from '@ant-design/icons';
-import { QUIZ_MESSAGE_LIMIT_COPY, type QuizEvaluationRecordV2 } from '@classmoji/utils/quiz-agent';
+import { QUIZ_MESSAGE_LIMIT_COPY, type QuizEvaluationRecordView } from '@classmoji/utils/quiz-agent';
 import Emoji from '~/components/ui/display/Emoji';
 import { formatDuration } from '~/utils/quizUtils';
 import { QuizGradeHero, effectiveBand, useQuizResultSlots } from './QuizResultContext';
@@ -32,7 +32,8 @@ export interface ResultsFocusMetrics {
 }
 
 interface QuizResultsProps {
-  evaluation: QuizEvaluationRecordV2;
+  /** Staff's full record, or a student's (no grade number, E1). */
+  evaluation: QuizEvaluationRecordView;
   focusMetrics?: ResultsFocusMetrics | null;
   /** The server submitted the attempt at its message limit (its journal says so). */
   submittedAtLimit?: boolean;
@@ -212,8 +213,18 @@ function QuizResults({
                 <div
                   key={result.question_num}
                   data-testid="quiz-result-question"
-                  className="rounded-lg border-2 bg-white p-2 text-center dark:bg-neutral-900"
-                  style={{ borderColor: scoreColor(result.credit_earned) }}
+                  // Coloured by the question's credit where the viewer has it
+                  // (staff); a student's record carries none (E1).
+                  className={`rounded-lg border-2 bg-white p-2 text-center dark:bg-neutral-900${
+                    typeof result.credit_earned === 'number'
+                      ? ''
+                      : ' border-stone-200 dark:border-neutral-700'
+                  }`}
+                  style={
+                    typeof result.credit_earned === 'number'
+                      ? { borderColor: scoreColor(result.credit_earned) }
+                      : undefined
+                  }
                 >
                   <div className="font-bold text-gray-900 dark:text-gray-100">
                     Q{result.question_num}

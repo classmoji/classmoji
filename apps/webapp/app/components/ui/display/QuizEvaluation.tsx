@@ -18,7 +18,8 @@ const { Title, Text } = Typography;
 
 export interface QuestionResult {
   question_num: number;
-  credit_earned: number;
+  /** Staff views only: a student's results carry no credit (E1). */
+  credit_earned?: number;
   attempts: number;
   /** The emoji stored with the result, from the classroom's scale (attemptDrawerView). */
   emoji?: string | null;
@@ -217,14 +218,18 @@ const QuizEvaluation = ({
               }}
             >
               {evaluationData.question_results.map((result: QuestionResult) => {
-                const creditPct = result.credit_earned ?? 0;
+                // Coloured by the question's credit where the viewer has it
+                // (staff); a student's results carry none (E1).
+                const creditPct = result.credit_earned;
                 return (
                   <Card
                     key={result.question_num}
                     size="small"
                     style={{
                       textAlign: 'center',
-                      borderColor: getScoreColor(creditPct),
+                      ...(typeof creditPct === 'number'
+                        ? { borderColor: getScoreColor(creditPct) }
+                        : {}),
                     }}
                   >
                     <div style={{ fontWeight: 'bold' }}>Q{result.question_num}</div>

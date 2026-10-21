@@ -110,6 +110,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     quiz: quizDrawerView(quiz),
     attempt: attemptDrawerView(attemptData.attempt, {
       endedBy: messageLimit?.endedBy ?? null,
+      viewer: 'staff',
     }),
     // Use unified messages from getAttemptWithMessages (ai-agent owns persistence)
     messages: isChatAttempt ? [] : attemptData.messages || [],

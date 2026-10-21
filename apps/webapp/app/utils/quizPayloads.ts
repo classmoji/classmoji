@@ -39,7 +39,11 @@ import {
   type QuizResultStudent,
   type ScorableQuizAttempt,
 } from '@classmoji/utils';
-import type { GradeBand, QuizEvaluationRecordV2 } from '@classmoji/utils/quiz-agent';
+import {
+  studentEvaluationRecord,
+  type GradeBand,
+  type QuizEvaluationRecordView,
+} from '@classmoji/utils/quiz-agent';
 
 // `buildQuizResultRows` and the drawer's stored-result readers live in
 // @classmoji/utils (quizResults.ts), shared with the MCP attempt reads.
@@ -343,16 +347,20 @@ export const quizDrawerView = (quiz: {
 
 /**
  * The attempt fields `QuizAttemptInterface` reads: identity, timing,
- * completion, and a completed attempt's stored scores and per-question
- * results (what the evaluation card shows).
+ * completion, and a completed attempt's stored per-question results (what the
+ * evaluation card shows). Staff views also carry the stored scores; a
+ * student's carries no grade number at all (E1): no percentages, no
+ * per-question credit, and the evaluation record narrowed.
  */
 export interface AttemptDrawerView {
   id: string;
   completed_at: Date | string | null;
   total_duration_ms: number | null;
   unfocused_duration_ms: number | null;
-  partial_credit_percentage: number | null;
-  first_attempt_percentage: number | null;
+  /** Staff views only. */
+  partial_credit_percentage?: number | null;
+  /** Staff views only. */
+  first_attempt_percentage?: number | null;
   /** Each question's recorded result with the emoji stored for it (the classroom's scale). */
   question_results: DrawerQuestionResult[];
   /**
@@ -364,7 +372,7 @@ export interface AttemptDrawerView {
    * A completed chat-runtime attempt's stored evaluation record (the results
    * panel reads it); null otherwise.
    */
-  evaluation_json: QuizEvaluationRecordV2 | null;
+  evaluation_json: QuizEvaluationRecordView | null;
   /**
    * `turn_limit` when the server submitted the completed attempt at its
    * message limit (the results panel says so); null otherwise.
@@ -372,8 +380,15 @@ export interface AttemptDrawerView {
   ended_by: 'turn_limit' | null;
 }
 
-/** A recorded question result with the emoji stored beside it when it was recorded. */
-export type DrawerQuestionResult = AttemptQuestionResult & { emoji: string | null };
+/**
+ * A recorded question result with the emoji stored beside it when it was
+ * recorded. A student's carries no credit (a per-question percentage) or
+ * correctness flag.
+ */
+export type DrawerQuestionResult = Pick<AttemptQuestionResult, 'question_num' | 'attempts'> &
+  Partial<Pick<AttemptQuestionResult, 'credit_earned' | 'eventually_correct'>> & {
+    emoji: string | null;
+  };
 
 /**
  * The emoji stored on each recorded result (`question_results_json[].emoji`,
@@ -400,6 +415,8 @@ const withStoredEmoji = (
 /**
  * `endedBy` is how a chat-runtime attempt ended, read from its journal
  * (quizChat.service, `messageLimitOf`): it is not an attempt column.
+ * `viewer`: `staff` keeps the stored scores (no staff surface displays
+ * them); `student` (the default) sends no grade number (E1).
  */
 export const attemptDrawerView = (
   attempt: {
@@ -415,30 +432,51 @@ export const attemptDrawerView = (
     evaluation_json?: unknown;
     quiz?: { question_count?: number | null } | null;
   },
-  { endedBy = null }: { endedBy?: 'turn_limit' | null } = {}
+  {
+    endedBy = null,
+    viewer = 'student',
+  }: { endedBy?: 'turn_limit' | null; viewer?: 'staff' | 'student' } = {}
 ): AttemptDrawerView => {
   // Scores are shown for a completed attempt only.
   const completed = Boolean(attempt.completed_at);
-  return {
-    agent_runtime: attempt.agent_runtime === 'trigger_chat' ? 'trigger_chat' : 'ai_agent',
-    evaluation_json: completed ? evaluationRecord(attempt.evaluation_json) : null,
-    ended_by: completed && endedBy === 'turn_limit' ? 'turn_limit' : null,
+  const record = completed ? evaluationRecord(attempt.evaluation_json) : null;
+  const results = completed
+    ? withStoredEmoji(
+        attemptQuestionResults(
+          attempt.question_results_json,
+          attempt.agent_config,
+          attempt.quiz?.question_count
+        ),
+        attempt.question_results_json
+      )
+    : [];
+  const base = {
+    agent_runtime: (attempt.agent_runtime === 'trigger_chat' ? 'trigger_chat' : 'ai_agent') as
+      | 'trigger_chat'
+      | 'ai_agent',
+    ended_by: (completed && endedBy === 'turn_limit' ? 'turn_limit' : null) as 'turn_limit' | null,
     id: attempt.id,
     completed_at: attempt.completed_at,
     total_duration_ms: attempt.total_duration_ms ?? null,
     unfocused_duration_ms: attempt.unfocused_duration_ms ?? null,
-    partial_credit_percentage: completed ? (attempt.partial_credit_percentage ?? null) : null,
-    first_attempt_percentage: completed ? (attempt.first_attempt_percentage ?? null) : null,
-    question_results: completed
-      ? withStoredEmoji(
-          attemptQuestionResults(
-            attempt.question_results_json,
-            attempt.agent_config,
-            attempt.quiz?.question_count
-          ),
-          attempt.question_results_json
-        )
-      : [],
+  };
+  if (viewer === 'staff') {
+    return {
+      ...base,
+      evaluation_json: record,
+      partial_credit_percentage: completed ? (attempt.partial_credit_percentage ?? null) : null,
+      first_attempt_percentage: completed ? (attempt.first_attempt_percentage ?? null) : null,
+      question_results: results,
+    };
+  }
+  return {
+    ...base,
+    evaluation_json: studentEvaluationRecord(record),
+    question_results: results.map(({ question_num, attempts, emoji }) => ({
+      question_num,
+      attempts,
+      emoji,
+    })),
   };
 };
 

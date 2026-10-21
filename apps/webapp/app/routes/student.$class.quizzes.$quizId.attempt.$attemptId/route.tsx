@@ -29,6 +29,7 @@ import {
   studentQuizRegradeView,
 } from '~/utils/quizPayloads';
 import { impersonatedBy } from '~/routes/admin.$class.ask-moji/impersonation.server';
+import { redactQuizEvaluationBlocks } from '@classmoji/utils';
 import { isTriggerChatAttempt } from '~/utils/quizRuntime.server';
 import { closeIfExpired } from '~/utils/quizAttemptExpiry.server';
 
@@ -184,13 +185,27 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   // ~/utils/quizPayloads. Both rows arrive joined to much more: the attempt to
   // its user, quiz and classroom; the quiz to every attempt and its user, and
   // its prompts.
+  // A student (or staff reading their own attempt here) gets no grade number
+  // (E1): no stored percentages or per-question credit, and the legacy
+  // [QUIZ_EVALUATION] blocks narrowed to the band and the feedback. Staff
+  // reading someone else's attempt get what the staff drawer sends.
+  const viewer = isInstructor && !viewerOwnsAttempt ? 'staff' : 'student';
+  const messages = isChatAttempt ? [] : attemptData.messages || [];
   return {
     quiz: quizDrawerView(quiz),
     attempt: attemptDrawerView(attemptData.attempt, {
       endedBy: messageLimit?.endedBy ?? null,
+      viewer,
     }),
     // Use unified messages from getAttemptWithMessages (ai-agent owns persistence)
-    messages: isChatAttempt ? [] : attemptData.messages || [],
+    messages:
+      viewer === 'student'
+        ? messages.map(m =>
+            typeof m.content === 'string'
+              ? { ...m, content: redactQuizEvaluationBlocks(m.content) }
+              : m
+          )
+        : messages,
     transcript,
     // The opening was admitted (its hidden row is stored), even when its reply
     // is not saved yet: a second tab joins it rather than beginning again.

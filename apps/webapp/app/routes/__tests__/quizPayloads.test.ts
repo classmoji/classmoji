@@ -758,6 +758,68 @@ describe('student attempt drawer payload', () => {
     expectNoSentinels(payload);
   });
 
+  it('sends a student no quiz grade number: no score, no credit, no evaluation numbers (E1)', async () => {
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: ADA.id,
+      classroom: CLASSROOM,
+      membership: { role: 'STUDENT' },
+    });
+    const graded = {
+      ...ADA_FIRST,
+      partial_credit_percentage: 73.37,
+      first_attempt_percentage: 41.5,
+      question_results_json: [
+        { question_num: 1, attempts: 2, credit_earned: 66.6, eventually_correct: true, emoji: 'eyes' },
+      ],
+    };
+    const evaluation = {
+      quiz_complete: true,
+      evaluation: 'GOOD',
+      final_acknowledgment: 'Nice work.',
+      partial_credit_percentage: 73.37,
+      raw_percentage: 74.12,
+      question_results: [{ question_num: 1, credit_earned: 66.6 }],
+    };
+    mocks.findWithMessages.mockResolvedValue({
+      ...withMessages(graded as unknown as typeof ADA_FIRST),
+      messages: [
+        {
+          id: 'm9',
+          role: 'assistant',
+          content: 'Done!\n\n[QUIZ_EVALUATION]\n```json\n' + JSON.stringify(evaluation) + '\n```',
+          metadata: null,
+          timestamp: new Date(),
+        },
+      ],
+    });
+
+    const payload = await studentAttemptRoute.loader(attemptArgs('student', ADA_FIRST.id));
+
+    const text = JSON.stringify(payload);
+    for (const n of ['73.37', '41.5', '74.12', '66.6', 'credit_earned', 'partial_credit']) {
+      expect(text).not.toContain(n);
+    }
+    // The chat still reads the completion and the band.
+    expect(payload.messages[0].content).toContain('[QUIZ_EVALUATION]');
+    expect(payload.messages[0].content).toContain('"evaluation": "GOOD"');
+    expect(payload.attempt.question_results).toEqual([
+      expect.objectContaining({ question_num: 1, attempts: 2, emoji: 'eyes' }),
+    ]);
+  });
+
+  it('sends staff reading a student attempt here what the staff drawer sends', async () => {
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: TA.id,
+      classroom: CLASSROOM,
+      membership: { role: 'ASSISTANT' },
+    });
+    mocks.findWithMessages.mockResolvedValue(withMessages(ADA_FIRST));
+
+    const payload = await studentAttemptRoute.loader(attemptArgs('student', ADA_FIRST.id));
+
+    expect(payload.attempt.partial_credit_percentage).toBe(80);
+  });
+
   it('sends exactly the keys the drawer and QuizAttemptInterface take', async () => {
     mocks.assertClassroomAccess.mockResolvedValue({
       userId: ADA.id,
@@ -795,9 +857,7 @@ describe('student attempt drawer payload', () => {
         'completed_at',
         'ended_by',
         'evaluation_json',
-        'first_attempt_percentage',
         'id',
-        'partial_credit_percentage',
         'question_results',
         'total_duration_ms',
         'unfocused_duration_ms',

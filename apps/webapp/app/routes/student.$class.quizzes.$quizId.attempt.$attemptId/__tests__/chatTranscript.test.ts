@@ -294,7 +294,8 @@ describe('attempt loader — a chat attempt past its session deadline', () => {
     expect(data.readOnly).toBe(true);
     expect(data.attempt.completed_at).not.toBeNull();
     expect(data.attempt.evaluation_json).toMatchObject({ source: 'server' });
-    expect(data.attempt.partial_credit_percentage).toBe(40);
+    // The owner's own view: no stored score (E1).
+    expect('partial_credit_percentage' in data.attempt).toBe(false);
     expect(data.attempt.ended_by).toBeNull();
     expect(data.messagesLeft).toBeNull();
   });
