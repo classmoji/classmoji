@@ -17,7 +17,9 @@ import type { ToolContext } from '../../mcp/registry.ts';
 
 const mocks = vi.hoisted(() => ({
   quizFindById: vi.fn(),
+  /** The quiz's attempts; findInQuiz answers from them. */
   findByQuiz: vi.fn(),
+  findInQuiz: vi.fn(),
   findWithMessages: vi.fn(),
   loadTranscript: vi.fn(),
   findUsersByRole: vi.fn(),
@@ -31,7 +33,11 @@ vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     quiz: { findById: (...a: unknown[]) => mocks.quizFindById(...a) },
     quizAttempt: {
-      findByQuiz: (...a: unknown[]) => mocks.findByQuiz(...a),
+      findInQuiz: async (quizId: string, attemptId: string, provider?: string) => {
+        mocks.findInQuiz(quizId, attemptId, provider);
+        const rows = ((await mocks.findByQuiz()) ?? []) as Array<{ id: string; quiz_id: string }>;
+        return rows.find(row => row.id === attemptId && row.quiz_id === quizId) ?? null;
+      },
       findWithMessages: (...a: unknown[]) => mocks.findWithMessages(...a),
     },
     quizChat: { loadTranscriptForViewer: (...a: unknown[]) => mocks.loadTranscript(...a) },
@@ -80,6 +86,23 @@ const NUMERIC_GRADE_KEYS = [
   'evaluation_json',
   'question_results_json',
 ];
+
+/**
+ * A grade's number in text: a percentage, a `"key": number` pair for a grade
+ * field, or a bare grade field name (the machine blocks old replies carry).
+ */
+const NUMERIC_GRADE_TEXT =
+  /\d+(\.\d+)?\s*%|credit_earned|numeric_score|partial_credit|first_attempt_percentage|raw_percentage|"percentage"|"score"\s*:/i;
+
+/** Every string in a JSON value, at any depth. */
+const stringsOf = (value: unknown): string[] =>
+  typeof value === 'string'
+    ? [value]
+    : Array.isArray(value)
+      ? value.flatMap(stringsOf)
+      : value && typeof value === 'object'
+        ? Object.values(value).flatMap(stringsOf)
+        : [];
 
 const keysOf = (value: unknown): string[] =>
   Array.isArray(value)
@@ -309,6 +332,98 @@ const CHAT_TRANSCRIPT = [
   },
 ];
 
+/**
+ * A legacy (ai_agent) attempt's messages as findWithMessages returns them:
+ * replies carrying the old runtime's machine blocks ([QUESTION_CARD],
+ * [BUTTON:…], [QUESTION_COMPLETE] with its credit, [QUIZ_EVALUATION] with
+ * every score), a system row and a blank one.
+ */
+const LEGACY_EVALUATION = {
+  quiz_complete: true,
+  final_acknowledgment: 'Thanks for working through this with me!',
+  evaluation: 'GOOD',
+  numeric_score: 3,
+  partial_credit_percentage: 87.5,
+  first_attempt_percentage: 50,
+  raw_percentage: 87.5,
+  percentage: 87.5,
+  total_questions: 2,
+  feedback_summary: 'You know the box model.',
+  feedback_strengths: ['Layout'],
+  feedback_improvements: ['Padding vs margin'],
+  feedback_recommendation: 'Review spacing.',
+  question_results: [
+    { question_num: 1, attempts: 2, credit_earned: 75, eventually_correct: true },
+    { question_num: 2, attempts: 1, credit_earned: 100, eventually_correct: true },
+  ],
+};
+
+const LEGACY_MESSAGES = [
+  { id: 'l0', role: 'system', content: 'SECRET SYSTEM PROMPT', timestamp: new Date() },
+  {
+    id: 'l1',
+    role: 'assistant',
+    content:
+      'Let us talk about your layout.\n\n[QUESTION_CARD]\n```json\n' +
+      JSON.stringify({
+        question_number: 1,
+        total_questions: 2,
+        question_text: 'What does margin do?',
+        code_snippet: 'div { margin: 4px }',
+        code_language: 'css',
+        context: 'style.css',
+      }) +
+      '\n```\nSo, what does margin do?',
+    metadata: { explorationSteps: [{ action: 'SECRET STEP' }] },
+    timestamp: new Date('2026-10-01T10:01:00Z'),
+  },
+  {
+    id: 'l2',
+    role: 'user',
+    content: 'Space inside the border.',
+    timestamp: new Date('2026-10-01T10:02:00Z'),
+  },
+  {
+    id: 'l3',
+    role: 'assistant',
+    content: 'Not quite: that is padding.\n\n[BUTTON:TRY_AGAIN] [BUTTON:NEXT]',
+    timestamp: new Date('2026-10-01T10:03:00Z'),
+  },
+  { id: 'l4', role: 'user', content: 'next', timestamp: new Date('2026-10-01T10:04:00Z') },
+  {
+    id: 'l5',
+    role: 'assistant',
+    content:
+      '[QUESTION_COMPLETE]\n```json\n' +
+      JSON.stringify({
+        question_num: 1,
+        emoji: 'eyes',
+        brief_feedback: 'Close, on the second try.',
+        credit_earned: 75,
+        attempts: 2,
+      }) +
+      '\n```\n\nOn to question two.',
+    timestamp: new Date('2026-10-01T10:05:00Z'),
+  },
+  { id: 'l6', role: 'user', content: '   ', timestamp: new Date('2026-10-01T10:06:00Z') },
+  {
+    id: 'l7',
+    role: 'assistant',
+    content:
+      '[QUESTION_COMPLETE]\n```json\n' +
+      JSON.stringify({
+        question_num: 2,
+        emoji: 'rocket',
+        brief_feedback: 'Spot on.',
+        credit_earned: 100,
+      }) +
+      '\n```\n\n[QUIZ_EVALUATION]\n```json\n' +
+      JSON.stringify(LEGACY_EVALUATION) +
+      '\n```',
+    timestamp: new Date('2026-10-01T10:09:00Z'),
+  },
+];
+
 beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
   mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
@@ -319,6 +434,7 @@ beforeEach(() => {
   mocks.findUsersByRole.mockResolvedValue([member('ada', 'gitlab-ada', 'Ada Lovelace')]);
   mocks.findUsersByRoles.mockResolvedValue([]);
   mocks.loadTranscript.mockResolvedValue(CHAT_TRANSCRIPT);
+  mocks.findWithMessages.mockResolvedValue({ messages: [] });
 });
 
 describe('get_quiz_attempt', () => {
@@ -346,7 +462,7 @@ describe('get_quiz_attempt', () => {
   it('returns the grades as emoji, each question’s result and the evaluation', async () => {
     const payload = parse(await getQuizAttemptTool.handler(ARGS, CTX));
 
-    expect(mocks.findByQuiz).toHaveBeenCalledWith('quiz-1', 'GITLAB');
+    expect(mocks.findInQuiz).toHaveBeenCalledWith('quiz-1', ATTEMPT_ID, 'GITLAB');
     expect(payload.attempt).toMatchObject({
       id: ATTEMPT_ID,
       student: { id: 'ada', login: 'gitlab-ada', name: 'Ada Lovelace' },
@@ -422,6 +538,7 @@ describe('get_quiz_attempt', () => {
       expect(key).not.toMatch(/score|credit|percentage$/i);
     }
     expect(keys).toEqual(expect.arrayContaining(['grade_emoji', 'first_attempt_emoji', 'emoji']));
+    for (const value of stringsOf(payload)) expect(value).not.toMatch(NUMERIC_GRADE_TEXT);
   });
 
   it('reads the evaluation by the drawer’s rule: a v2 record with results, nothing stricter', async () => {
@@ -543,8 +660,8 @@ describe('get_quiz_attempt', () => {
   });
 
   it('refuses an attempt of another quiz or classroom like an unknown one', async () => {
-    // findByQuiz returns this quiz's attempts only: a foreign id is not among them.
-    mocks.findByQuiz.mockResolvedValue([attemptRow({ id: 'someone-elses' })]);
+    // An attempt of another quiz (here or in another classroom) is no attempt of this one.
+    mocks.findByQuiz.mockResolvedValue([attemptRow({ quiz_id: 'other-quiz' })]);
     await expect(getQuizAttemptTool.handler(WITH_TRANSCRIPT, CTX)).rejects.toMatchObject({
       kind: 'not_found',
     });
@@ -716,44 +833,152 @@ describe('get_quiz_attempt', () => {
       await getQuizAttemptTool.handler(WITH_TRANSCRIPT, CTX);
 
       expect(mocks.loadTranscript).toHaveBeenCalledWith(ATTEMPT_ID, 'student');
+      // Reading one's own attempt is not logged, as on the web.
+      expect(mocks.auditCreate).not.toHaveBeenCalled();
     });
 
-    it('is a legacy attempt’s messages: text and time, never the prompts', async () => {
-      mocks.findByQuiz.mockResolvedValue([attemptRow({ agent_runtime: 'ai_agent' })]);
-      mocks.findWithMessages.mockResolvedValue({
-        attempt: attemptRow({ agent_runtime: 'ai_agent' }),
-        messages: [
-          { id: '1', role: 'system', content: 'SECRET SYSTEM PROMPT', timestamp: new Date() },
+    it('is a legacy attempt’s messages as its chat renders them, no machine block or number', async () => {
+      const legacyRow = attemptRow({
+        agent_runtime: 'ai_agent',
+        evaluation_json: null,
+        agent_config: { questionCount: 2 },
+        question_results_json: [
           {
-            id: '2',
-            role: 'assistant',
-            content: 'Question 1?',
-            metadata: { explorationSteps: ['SECRET STEP'] },
-            timestamp: new Date('2026-10-01T10:01:00Z'),
+            question_num: 1,
+            attempts: 2,
+            credit_earned: 75,
+            eventually_correct: true,
+            emoji: 'eyes',
           },
-          {
-            id: '3',
-            role: 'user',
-            content: 'Answer.',
-            timestamp: new Date('2026-10-01T10:02:00Z'),
-          },
-          { id: '4', role: 'user', content: '   ', timestamp: new Date() },
+          { question_num: 2, attempts: 1, credit_earned: 100, eventually_correct: true },
         ],
+      });
+      mocks.findByQuiz.mockResolvedValue([legacyRow]);
+      mocks.findWithMessages.mockResolvedValue({
+        attempt: legacyRow,
+        messages: LEGACY_MESSAGES,
         systemPrompt: 'SECRET PROMPT',
         rubricPrompt: 'SECRET RUBRIC',
         classroomSettings: { anthropic_api_key: 'SECRET KEY' },
       });
 
       const result = await getQuizAttemptTool.handler(WITH_TRANSCRIPT, CTX);
+      const payload = parse(result);
 
       expect(mocks.loadTranscript).not.toHaveBeenCalled();
-      expect(parse(result).transcript).toEqual([
-        { role: 'assistant', sent_at: '2026-10-01T10:01:00.000Z', text: 'Question 1?' },
-        { role: 'user', sent_at: '2026-10-01T10:02:00.000Z', text: 'Answer.' },
+      expect(payload.transcript).toEqual([
+        {
+          role: 'assistant',
+          sent_at: '2026-10-01T10:01:00.000Z',
+          parts: [
+            { kind: 'text', text: 'Let us talk about your layout.' },
+            {
+              kind: 'question',
+              number: 1,
+              total: 2,
+              preamble: null,
+              text: 'What does margin do?',
+              code: 'div { margin: 4px }',
+              code_language: 'css',
+              context: 'style.css',
+              source: null,
+              has_sandbox: false,
+            },
+          ],
+        },
+        {
+          role: 'user',
+          sent_at: '2026-10-01T10:02:00.000Z',
+          parts: [{ kind: 'text', text: 'Space inside the border.' }],
+        },
+        {
+          role: 'assistant',
+          sent_at: '2026-10-01T10:03:00.000Z',
+          parts: [
+            { kind: 'text', text: 'Not quite: that is padding.' },
+            { kind: 'buttons', actions: ['try_again', 'next'] },
+          ],
+        },
+        {
+          role: 'user',
+          sent_at: '2026-10-01T10:04:00.000Z',
+          parts: [{ kind: 'text', text: 'next' }],
+        },
+        {
+          role: 'assistant',
+          sent_at: '2026-10-01T10:05:00.000Z',
+          parts: [
+            {
+              kind: 'question_result',
+              question_num: 1,
+              emoji: 'eyes',
+              brief_feedback: 'Close, on the second try.',
+              revised: false,
+            },
+            { kind: 'text', text: 'On to question two.' },
+          ],
+        },
+        {
+          role: 'assistant',
+          sent_at: '2026-10-01T10:09:00.000Z',
+          parts: [
+            {
+              kind: 'question_result',
+              question_num: 2,
+              emoji: 'rocket',
+              brief_feedback: 'Spot on.',
+              revised: false,
+            },
+            { kind: 'text', text: 'Thanks for working through this with me!' },
+          ],
+        },
       ]);
-      for (const secret of ['SECRET', 'explorationSteps']) {
-        expect(result.content[0].text).not.toContain(secret);
+      // With no stored record, the evaluation is the closing block's, without its numbers.
+      expect(payload.evaluation).toEqual({
+        source: null,
+        band: 'GOOD',
+        feedback: {
+          final_acknowledgment: 'Thanks for working through this with me!',
+          summary: 'You know the box model.',
+          strengths: ['Layout'],
+          improvements: ['Padding vs margin'],
+          recommendation: 'Review spacing.',
+          effort_note: null,
+        },
+      });
+
+      const text = result.content[0].text;
+      for (const banned of [
+        'SECRET',
+        'explorationSteps',
+        '[QUESTION_CARD]',
+        '[QUESTION_COMPLETE]',
+        '[QUIZ_EVALUATION]',
+        '[BUTTON:',
+        'quiz_complete',
+        'credit_earned',
+        'numeric_score',
+        '"percentage"',
+        'partial_credit',
+        '87.5',
+      ]) {
+        expect(text).not.toContain(banned);
       }
+      for (const value of stringsOf(payload)) expect(value).not.toMatch(NUMERIC_GRADE_TEXT);
+      const keys = keysOf(payload);
+      for (const key of NUMERIC_GRADE_KEYS) expect(keys).not.toContain(key);
+    });
+
+    it('reads a completed legacy attempt’s evaluation even without the transcript', async () => {
+      const legacyRow = attemptRow({ agent_runtime: 'ai_agent', evaluation_json: null });
+      mocks.findByQuiz.mockResolvedValue([legacyRow]);
+      mocks.findWithMessages.mockResolvedValue({ attempt: legacyRow, messages: LEGACY_MESSAGES });
+
+      const payload = parse(await getQuizAttemptTool.handler(ARGS, CTX));
+
+      expect(payload).not.toHaveProperty('transcript');
+      expect(payload.evaluation).toMatchObject({ band: 'GOOD' });
+      for (const value of stringsOf(payload)) expect(value).not.toMatch(NUMERIC_GRADE_TEXT);
     });
 
     it('is not_found when a legacy attempt is gone by the time its messages are read', async () => {

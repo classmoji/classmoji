@@ -33,8 +33,11 @@
  * internal tools (record_question_result, the exploration and course-material
  * calls) and the quoted code's terms; the parts left are then flattened the
  * way QuizChat renders them, and nothing else (`transcriptPart`). A legacy
- * attempt's is its user and assistant messages' text, as the legacy view
- * shows it, never the prompts `findWithMessages` also returns.
+ * attempt's is its user and assistant messages as the legacy chat renders
+ * them: each machine block ([QUESTION_COMPLETE], [QUIZ_EVALUATION],
+ * [QUESTION_CARD], [BUTTON:…]) parsed by the chat's own parsers and shown as
+ * the chat shows it, never as text, and never the prompts `findWithMessages`
+ * also returns.
  *
  * Not here: how the attempt ended. An attempt past its session deadline is
  * closed, with the results so far, the next time someone opens it in the app;
@@ -42,7 +45,16 @@
  */
 
 import { ClassmojiService } from '@classmoji/services';
-import { attemptQuestionResults, quizEvaluationRecord } from '@classmoji/utils';
+import {
+  attemptQuestionResults,
+  checkForCompletion,
+  completionMessageDisplay,
+  parseMessageButtons,
+  parseQuestionCard,
+  parseQuestionComplete,
+  quizEvaluationRecord,
+  stripQuestionComplete,
+} from '@classmoji/utils';
 import { buttonActionFor, type QuizUIMessage } from '@classmoji/utils/quiz-agent';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
@@ -223,6 +235,8 @@ type TranscriptPart =
       revised: boolean;
     }
   | { kind: 'notice'; code: string | null }
+  /** A legacy reply's Try again / Next buttons. */
+  | { kind: 'buttons'; actions: string[] }
   /** Where the results were shown; their content is the attempt's `evaluation`. */
   | { kind: 'evaluation' }
   | {
@@ -456,15 +470,136 @@ function chatTranscript(messages: readonly QuizUIMessage[]) {
   });
 }
 
-/** A legacy (ai_agent) attempt's messages: role, text and time only, never metadata. */
-function legacyTranscript(messages: readonly unknown[]) {
+/** The machine blocks a legacy reply may carry; none is ever shown as text. */
+const LEGACY_MARKERS = ['[QUIZ_EVALUATION]', '[QUESTION_COMPLETE]', '[QUESTION_CARD]'];
+
+/** Text with any machine block left over cut off at its marker (a block the parsers could not read). */
+const withoutMarkers = (value: string): string | null => {
+  let cut = value;
+  for (const marker of LEGACY_MARKERS) {
+    const at = cut.indexOf(marker);
+    if (at !== -1) cut = cut.slice(0, at);
+  }
+  return text(cut.trim());
+};
+
+/** A legacy question card's fields, as QuestionCard renders them. */
+function legacyQuestionPart(data: unknown): TranscriptPart | null {
+  const card = record(data);
+  if (!card) return null;
+  return {
+    kind: 'question',
+    number: typeof card.question_number === 'number' ? card.question_number : null,
+    total: typeof card.total_questions === 'number' ? card.total_questions : null,
+    preamble: null,
+    text: text(card.question_text),
+    code: text(card.code_snippet),
+    code_language: text(card.code_language),
+    context: text(card.context),
+    source: null,
+    has_sandbox: false,
+  };
+}
+
+/**
+ * A legacy assistant message as the legacy chat (QuizMessageList) renders it:
+ * a question's marker from its [QUESTION_COMPLETE] block (its emoji and brief
+ * feedback, never its credit), then the message without its machine blocks:
+ * the text before a [QUIZ_EVALUATION] block or its final_acknowledgment
+ * (`completionMessageDisplay`), a [QUESTION_CARD] as its preamble and card
+ * (nothing after it), or the text with its [BUTTON:…] markers as buttons.
+ */
+function legacyAssistantParts(content: string, isLast: boolean): TranscriptPart[] {
+  const parts: TranscriptPart[] = [];
+  let body = content;
+  const complete = parseQuestionComplete(body);
+  if (complete) {
+    parts.push({
+      kind: 'question_result',
+      question_num: complete.question_num,
+      emoji: text(complete.emoji),
+      brief_feedback: text(complete.brief_feedback),
+      revised: false,
+    });
+    body = stripQuestionComplete(body);
+  }
+  const shown = completionMessageDisplay(body, isLast);
+  if (shown.shouldHide) return parts;
+  body = shown.content;
+
+  const card = parseQuestionCard(body);
+  if (card.hasQuestionCard) {
+    const preamble = card.preamble ? withoutMarkers(card.preamble) : null;
+    if (preamble) parts.push({ kind: 'text', text: preamble });
+    const question = legacyQuestionPart(card.questionData);
+    if (question) parts.push(question);
+    return parts;
+  }
+  const { cleanContent, buttons } = parseMessageButtons(body);
+  const t = withoutMarkers(cleanContent);
+  if (t) parts.push({ kind: 'text', text: t });
+  if (buttons.length > 0) {
+    parts.push({
+      kind: 'buttons',
+      actions: buttons.map(b => (b === 'TRY_AGAIN' ? 'try_again' : 'next')),
+    });
+  }
+  return parts;
+}
+
+interface LegacyMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: Date | string | null;
+}
+
+/** A legacy attempt's displayed messages: user and assistant rows with text, in order. */
+function legacyMessages(messages: readonly unknown[]): LegacyMessage[] {
   return messages.flatMap(raw => {
     const m = record(raw);
     if (!m || (m.role !== 'user' && m.role !== 'assistant')) return [];
-    const t = text(m.content);
-    if (!t) return [];
-    return [{ role: m.role, sent_at: iso(m.timestamp as Date | string | null), text: t }];
+    if (typeof m.content !== 'string') return [];
+    return [
+      {
+        role: m.role,
+        content: m.content,
+        timestamp: (m.timestamp as Date | string | null) ?? null,
+      },
+    ];
   });
+}
+
+/** A legacy (ai_agent) attempt's transcript: who spoke, when, and what the chat showed. */
+function legacyTranscript(messages: readonly LegacyMessage[]) {
+  return messages.flatMap((m, index) => {
+    const parts: TranscriptPart[] =
+      m.role === 'assistant'
+        ? legacyAssistantParts(m.content, index === messages.length - 1)
+        : text(m.content)
+          ? [{ kind: 'text', text: m.content.trim() }]
+          : [];
+    if (parts.length === 0) return [];
+    return [{ role: m.role, sent_at: iso(m.timestamp), parts }];
+  });
+}
+
+/**
+ * A legacy attempt's evaluation, from its last [QUIZ_EVALUATION] block, as the
+ * drawer's evaluation card reads it: the band and the feedback, no number.
+ */
+function legacyEvaluation(messages: readonly LegacyMessage[]) {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role !== 'assistant') continue;
+    const completion = checkForCompletion(messages[i].content);
+    if (completion) {
+      return {
+        source: null,
+        band: text(completion.evaluation),
+        feedback: evaluationFeedback(completion),
+      };
+    }
+  }
+  return null;
 }
 
 export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
@@ -499,14 +634,15 @@ export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
     }
 
     const quiz = await loadQuizInClassroom(args.quiz_id, ctx);
-    // The quiz's attempts as the results page reads them, each login the
-    // classroom's git provider's.
-    const attempts = (await ClassmojiService.quizAttempt.findByQuiz(
+    // The attempt only if it is this quiz's, its login the classroom's git
+    // provider's: another quiz's attempt is the same not_found as none.
+    const attempt = (await ClassmojiService.quizAttempt.findInQuiz(
       quiz.id,
+      args.attempt_id,
       orgProvider(ctx)
-    )) as AttemptRow[];
-    const attempt = attempts.find(row => row.id === args.attempt_id);
+    )) as AttemptRow | null;
     if (!attempt) throw scopedNotFound('Attempt');
+    const ownsAttempt = String(attempt.user_id) === String(ctx.viewer.userId);
     const userId = String(attempt.user_id);
     const includeTranscript = args.include_transcript === true;
 
@@ -525,48 +661,70 @@ export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
     const unfocused = Math.max(0, Number(attempt.unfocused_duration_ms ?? 0));
     const completed = Boolean(attempt.completed_at);
     // The drawer's rule: a `v: 2` record with its results, read field by field below.
-    const evaluation = completed ? quizEvaluationRecord(attempt.evaluation_json) : null;
+    const record2 = completed ? quizEvaluationRecord(attempt.evaluation_json) : null;
+    const isChat = attempt.agent_runtime === 'trigger_chat';
+
+    // A legacy attempt's messages: its transcript, and for a completed one
+    // with no stored record, its evaluation (the drawer reads it from the
+    // closing message). An attempt deleted since the lookup is not found.
+    const legacy =
+      !isChat && (includeTranscript || (completed && !record2))
+        ? legacyMessages(
+            (
+              await ClassmojiService.quizAttempt
+                .findWithMessages(attempt.id)
+                .catch((error: unknown) => {
+                  // Only the service's not-found error, matched by name; anything else surfaces.
+                  if ((error as { name?: unknown } | null)?.name === 'QuizAttemptNotFoundError') {
+                    throw scopedNotFound('Attempt');
+                  }
+                  throw error;
+                })
+            ).messages ?? []
+          )
+        : null;
 
     // The transcript as the drawer reads it: staff reading someone else's
     // attempt get each answer's expected_answer; the caller's own attempt (a
-    // preview) is read as its owner reads it. A legacy attempt's messages are
-    // read only here, and an attempt deleted since the lookup is not found.
+    // preview) is read as its owner reads it.
     let transcript: unknown[] | undefined;
     if (includeTranscript) {
-      if (attempt.agent_runtime === 'trigger_chat') {
-        const ownsAttempt = userId === String(ctx.viewer.userId);
-        const messages = await ClassmojiService.quizChat.loadTranscriptForViewer(
-          attempt.id,
-          ownsAttempt ? 'student' : 'staff'
-        );
-        transcript = chatTranscript(messages);
-      } else {
-        const data = await ClassmojiService.quizAttempt
-          .findWithMessages(attempt.id)
-          .catch((error: unknown) => {
-            // Only the service's not-found error, matched by name; anything else surfaces.
-            if ((error as { name?: unknown } | null)?.name === 'QuizAttemptNotFoundError') {
-              throw scopedNotFound('Attempt');
-            }
-            throw error;
-          });
-        transcript = legacyTranscript(data.messages ?? []);
-      }
+      transcript = isChat
+        ? chatTranscript(
+            await ClassmojiService.quizChat.loadTranscriptForViewer(
+              attempt.id,
+              ownsAttempt ? 'student' : 'staff'
+            )
+          )
+        : legacyTranscript(legacy ?? []);
     }
 
-    await writeAudit(ctx, {
-      resource_type: 'QUIZ_ATTEMPT',
-      resource_id: attempt.id,
-      action: 'VIEW',
-      data: {
-        tool: 'quiz.attempt.view',
-        via: 'mcp',
-        mcp_tool: 'get_quiz_attempt',
-        quiz_id: quiz.id,
-        student_id: userId,
-        include_transcript: includeTranscript,
-      },
-    });
+    const evaluation = record2
+      ? {
+          // The record is JSON checked only for `v: 2`: read field by field.
+          source: text(record2.source),
+          band: text(record2.evaluation),
+          feedback: evaluationFeedback(record2.feedback),
+        }
+      : completed && legacy
+        ? legacyEvaluation(legacy)
+        : null;
+
+    // Reading one's own attempt (a preview) is not logged, as on the web.
+    if (!ownsAttempt)
+      await writeAudit(ctx, {
+        resource_type: 'QUIZ_ATTEMPT',
+        resource_id: attempt.id,
+        action: 'VIEW',
+        data: {
+          tool: 'quiz.attempt.view',
+          via: 'mcp',
+          mcp_tool: 'get_quiz_attempt',
+          quiz_id: quiz.id,
+          student_id: userId,
+          include_transcript: includeTranscript,
+        },
+      });
 
     return ok({
       quiz: { id: quiz.id, name: quiz.name },
@@ -593,14 +751,7 @@ export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
       },
       // Results are shown for a completed attempt only, as on the review page.
       question_results: completed ? questionResults(attempt, quiz.question_count, scale) : [],
-      evaluation: evaluation
-        ? {
-            // The record is JSON checked only for `v: 2`: read field by field.
-            source: text(evaluation.source),
-            band: text(evaluation.evaluation),
-            feedback: evaluationFeedback(evaluation.feedback),
-          }
-        : null,
+      evaluation,
       ...(transcript ? { transcript } : {}),
     });
   },

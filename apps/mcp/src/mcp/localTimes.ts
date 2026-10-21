@@ -23,8 +23,12 @@ import type { ToolResult } from './registry.ts';
 
 /**
  * The dates a reader actually QUOTES — deadlines, when something opens,
- * closes, starts or ends, and when a student's own work was submitted, closed
- * or graded. Only these get a `_local` twin.
+ * closes, starts or ends, when a student's own work was submitted, closed
+ * or graded, and when a quiz attempt was started, finished or last active.
+ * Only these get a `_local` twin. The quiz keys apply wherever they appear:
+ * besides the quiz attempt tools, a student's own quiz standing in my_grades
+ * (`completed_at`) and a team-creation run's state in the form_teams tools
+ * (`started_at`).
  *
  * Record-keeping stamps (`created_at`, `updated_at`, `verified_at`,
  * `oldest_commit_at`, token expiries, …) get no twin, to keep

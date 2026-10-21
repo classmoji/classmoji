@@ -167,8 +167,9 @@ export const listQuizAttemptsTool: ToolDefinition<ListQuizAttemptsArgs> = {
       ...(attempt.completed_at
         ? {}
         : { last_activity: iso(rowsById.get(attempt.id)?.last_activity) }),
-      grade_emoji: emojiFor(attempt.partialCreditScore, scale),
-      first_attempt_emoji: emojiFor(attempt.firstAttemptScore, scale),
+      // Grades are a completed attempt's only, as on the review page.
+      grade_emoji: attempt.completed_at ? emojiFor(attempt.partialCreditScore, scale) : null,
+      first_attempt_emoji: attempt.completed_at ? emojiFor(attempt.firstAttemptScore, scale) : null,
       focus_percentage: attempt.focusMetrics?.percentage ?? null,
       late_hours: attempt.lateHours,
       is_counting: attempt.isCounting,
