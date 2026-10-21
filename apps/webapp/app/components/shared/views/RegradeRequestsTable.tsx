@@ -42,6 +42,21 @@ const viewLinkClass =
 const resolveLinkClass =
   'flex items-center gap-1 text-green-600 hover:text-green-700 dark:text-green-500 dark:hover:text-green-400 cursor-pointer whitespace-nowrap';
 
+/**
+ * What a request is on: a QUIZ attempt or a REPOSITORY submission. The design
+ * system's `.chip` tones (mint / peach), which carry their own dark-mode
+ * colours, at the small size the queue's mockup uses.
+ */
+const KindChip = ({ kind }: { kind: 'quiz' | 'repository' }) => (
+  <span
+    data-testid={`regrade-kind-${kind}`}
+    className={`chip shrink-0 ${kind === 'quiz' ? 'chip-quiz' : 'chip-asgn'}`}
+    style={{ fontSize: '0.625rem', padding: '0 6px' }}
+  >
+    {kind === 'quiz' ? 'Quiz' : 'Repository'}
+  </span>
+);
+
 const fmtDate = (value: string | Date | null | undefined) =>
   value ? dayjs(value).format('MMM D') : null;
 
@@ -95,21 +110,16 @@ const RegradeRequestsTable = ({
       title: 'Assignment',
       key: 'assignment',
       width: 260,
-      render: (_: unknown, request: RegradeRequestRowData) =>
-        request.quiz ? (
-          <div className="flex items-center gap-2 min-w-0">
-            <Tag color="purple" className="uppercase text-[11px] m-0">
-              Quiz
-            </Tag>
-            <span className="truncate font-medium text-ink-1">
-              {quizRequestLabel(request.quiz)}
-            </span>
-          </div>
-        ) : (
-          <div className="truncate font-medium text-ink-1">
-            {request.git_repo_assignment?.assignment.title}
-          </div>
-        ),
+      render: (_: unknown, request: RegradeRequestRowData) => (
+        <div className="flex items-center gap-2 min-w-0">
+          <KindChip kind={request.quiz ? 'quiz' : 'repository'} />
+          <span className="truncate font-medium text-ink-1">
+            {request.quiz
+              ? quizRequestLabel(request.quiz)
+              : request.git_repo_assignment?.assignment.title}
+          </span>
+        </div>
+      ),
     },
     {
       title: 'Status',

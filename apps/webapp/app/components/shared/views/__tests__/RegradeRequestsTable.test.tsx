@@ -2,11 +2,14 @@
  * The regrade/resubmit requests table with quiz requests in it. Rendered on
  * the server.
  *
- *   - A quiz row (no `git_repo_assignment`) renders without crashing: a Quiz
- *     tag, "<quiz name> · Attempt N", the previous grade's emoji, the new one
+ *   - A quiz row (no `git_repo_assignment`) renders without crashing: a QUIZ
+ *     chip (a repo row gets a REPOSITORY chip), "<quiz name> · Attempt N", the previous grade's emoji, the new one
  *     once resolved, View (the attempt drawer under the viewer's prefix) and,
  *     for staff on an open request, Resolve, with no Grade picker.
- *   - The student variant shows the staff reply under their comment and the
+ *   - The student variant shows the staff reply under their comment, signed
+ *     with who resolved the request and when (the request's own
+ *     `resolved_by_name` / `resolved_at`, not the attempt's last adjuster; no
+ *     name on rows resolved before that was recorded), and the
  *     "Request regrade/resubmit" button; no Resolve.
  *   - A repo row keeps its title, picker and Resolve.
  */
@@ -149,7 +152,11 @@ describe('RegradeRequestsTable, staff', () => {
     const flat = text(html);
 
     expect(flat).toContain('Regrade/Resubmit Requests');
-    expect(flat).toContain('Quiz');
+    // What each request is on, as the design system's chips.
+    expect(html.match(/data-testid="regrade-kind-quiz"/g)?.length).toBe(2);
+    expect(html.match(/data-testid="regrade-kind-repository"/g)?.length).toBe(1);
+    expect(html).toMatch(/class="chip shrink-0 chip-quiz"[^>]*>Quiz</);
+    expect(html).toMatch(/class="chip shrink-0 chip-asgn"[^>]*>Repository</);
     expect(flat).toContain('Recursion check-in · Attempt 2');
     expect(flat).toContain('Recursion check-in · Attempt 1');
     // The attempt drawer under the viewer's own prefix.
