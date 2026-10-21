@@ -26,8 +26,8 @@ import type { ToolResult } from './registry.ts';
  * closes, starts or ends, and when a student's own work was submitted, closed
  * or graded. Only these get a `_local` twin.
  *
- * Record-keeping stamps (`created_at`, `updated_at`, `last_activity`,
- * `verified_at`, `oldest_commit_at`, token expiries, …) get no twin, to keep
+ * Record-keeping stamps (`created_at`, `updated_at`, `verified_at`,
+ * `oldest_commit_at`, token expiries, …) get no twin, to keep
  * payloads small: nobody quotes when a row was last updated, and on a long
  * submissions list those twins would be most of the added bytes.
  * An allowlist rather than a denylist, so a new bookkeeping column added
@@ -44,6 +44,13 @@ const LOCALIZED_KEYS: ReadonlySet<string> = new Set([
   'submitted_at',
   'closed_at',
   'last_graded_at',
+  // When a quiz attempt was started and finished (its submission), when a
+  // student was last active in an open one, and when a legacy transcript
+  // turn was said.
+  'started_at',
+  'completed_at',
+  'last_activity',
+  'sent_at',
   // The calendar's `range: { start, end }`: which local window was searched.
   'start',
   'end',
