@@ -364,8 +364,9 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
         )
       ).toBe('invalid_emoji');
 
-      // A classroom with no scale (E10): the adjustment first gives it the
-      // new-classroom scale as real rows, and the emoji must be on that one.
+      // A classroom with no scale (E10): the adjustment gives it the
+      // new-classroom scale as real rows, in its own transaction, and the
+      // emoji must be on that one. A refused emoji rolls the seed back with it.
       const e = await makeQuiz(classE);
       const onEmpty = await makeAttempt(e.quizId, studentA, 50);
       expect(
@@ -378,18 +379,35 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
           })
         )
       ).toBe('invalid_emoji');
-      expect(await prisma.emojiMapping.count({ where: { classroom_id: classE } })).toBe(
-        SCORE_EMOJI_MAPPINGS.length
-      );
+      expect(await prisma.emojiMapping.count({ where: { classroom_id: classE } })).toBe(0);
       const seeded = await quizAttempt.adjust({
         attemptId: onEmpty.id,
         emoji: 'score-70',
         actorUserId: owner,
         tool: TOOL,
       });
+      expect(await prisma.emojiMapping.count({ where: { classroom_id: classE } })).toBe(
+        SCORE_EMOJI_MAPPINGS.length
+      );
       expect(seeded.grade.original.emoji).toBe('score-50');
       expect(seeded.grade.effective).toMatchObject({ emoji: 'score-70', percentage: 70 });
       expect(await itemFor(classE, studentA, e.assignmentId)).toMatchObject({ grade: 70 });
+    });
+
+    it('seeds no scale for an actor who is refused (E10: only after authorization)', async () => {
+      const bare = await makeClassroom('e2', []);
+      await member(bare, studentA, 'STUDENT');
+      const { quizId } = await makeQuiz(bare);
+      const { id } = await makeAttempt(quizId, studentA, 50);
+      // staffY teaches classroom Y only; studentA cannot grade.
+      for (const actor of [staffY, studentA]) {
+        expect(
+          await refusal(
+            quizAttempt.adjust({ attemptId: id, emoji: 'score-70', actorUserId: actor, tool: TOOL })
+          )
+        ).not.toBe('no error');
+      }
+      expect(await prisma.emojiMapping.count({ where: { classroom_id: bare } })).toBe(0);
     });
 
     it('numeric scale: a score-N badge is the adjustment and the total reads its number', async () => {

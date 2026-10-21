@@ -36,7 +36,7 @@ import {
 } from '@classmoji/utils';
 import { Prisma, type RegradeRequest, type Role } from '@prisma/client';
 import * as audit from './audit.service.ts';
-import { quizScaleForClassroom } from './emojiMapping.service.ts';
+import { findScaleByClassroomId } from './emojiMapping.service.ts';
 import { quizzesVisibleOrThrow } from './entitlement.service.ts';
 import * as notificationService from './notification.service.ts';
 import { netQuizExtensionHours } from './quizGradeItems.service.ts';
@@ -53,6 +53,7 @@ import {
   requireQuizzesVisible,
   requireScaleEmoji,
   requireTeachingTeam,
+  seededScaleInTx,
   type QuizAttemptAdjustment,
   type QuizGradeActor,
 } from './quizGradeAdjust.service.ts';
@@ -403,8 +404,7 @@ export const createForQuizAttempt = async (
       : null;
   if (!located) throw new QuizGradeError('not_found', 'Quiz attempt not found');
   await requireQuizzesVisible(located.quiz.classroom_id, actorUserId);
-  // The classroom's own scale, re-seeded first if every row was deleted (E10).
-  const scale = await quizScaleForClassroom(located.quiz.classroom_id);
+  const scale = await findScaleByClassroomId(located.quiz.classroom_id);
 
   const run = () =>
     getPrisma().$transaction(async tx => {
@@ -572,8 +572,9 @@ export const resolveQuiz = async (
   });
   if (!located) throw new QuizGradeError('not_found', 'Regrade request not found');
   if (located.quiz_attempt_id) await requireQuizzesVisible(located.classroom_id, actorUserId);
-  // The classroom's own scale, re-seeded first if every row was deleted (E10).
-  const scale = await quizScaleForClassroom(located.classroom_id);
+  // A read only: the transaction re-seeds an empty scale once the actor is
+  // authorized (`seededScaleInTx`, E10).
+  const scale = await findScaleByClassroomId(located.classroom_id);
 
   const outcome = await getPrisma().$transaction(
     async tx => {
@@ -612,25 +613,26 @@ export const resolveQuiz = async (
 
       if (request.status !== 'IN_REVIEW') {
         const { student: _student, ...row } = request;
-        return { ...base, request: row, alreadyResolved: true, attempt, change: null };
+        return { ...base, request: row, alreadyResolved: true, attempt, change: null, scale };
       }
 
       const reply = normalizeComment(input.comment);
       if (reply === null) {
         throw new QuizGradeError('invalid_input', 'A reply to the student is required');
       }
+      const txScale = await seededScaleInTx(tx, located.classroom_id, scale);
 
       let current = attempt;
       let change = null;
       if (resolution === 'APPROVED') {
-        const emoji = requireScaleEmoji(input.emoji, scale);
+        const emoji = requireScaleEmoji(input.emoji, txScale);
         await requireGradableAttempt(tx, attempt);
         const applied = await applyAdjustmentInTx(tx, attempt, {
           emoji,
           comment: undefined,
           actorUserId,
           actorRole,
-          scale,
+          scale: txScale,
           event: 'quiz_attempt_adjust',
         });
         current = applied.attempt;
@@ -644,10 +646,17 @@ export const resolveQuiz = async (
           grader_comment: reply,
           resolved_by_id: actorUserId,
           resolved_at: new Date(),
-          resolved_emoji: quizAttemptGrade(current, scale).effective.emoji,
+          resolved_emoji: quizAttemptGrade(current, txScale).effective.emoji,
         },
       });
-      return { ...base, request: updated, alreadyResolved: false, attempt: current, change };
+      return {
+        ...base,
+        request: updated,
+        alreadyResolved: false,
+        attempt: current,
+        change,
+        scale: txScale,
+      };
     },
     { timeout: 15_000 }
   );
@@ -679,7 +688,7 @@ export const resolveQuiz = async (
     request: outcome.request,
     alreadyResolved: outcome.alreadyResolved,
     attempt: projectAttempt(outcome.attempt),
-    grade: quizAttemptGrade(outcome.attempt, scale),
+    grade: quizAttemptGrade(outcome.attempt, outcome.scale),
     classroomId: outcome.classroomId,
     quiz: outcome.quiz,
     student: outcome.student,

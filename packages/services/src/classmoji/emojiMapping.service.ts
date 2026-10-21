@@ -76,7 +76,8 @@ export const findScaleByClassroomId = async (
  * `findScaleByClassroomId` and write nothing.
  *
  * `client` is a transaction's when the caller is inside one (quiz grading
- * holds the attempt's row lock), so the seed and the read are in it.
+ * holds the attempt's row lock), so the seed and the read are in it. Call it
+ * only for an authorized actor or the server's own grading: it may write.
  */
 export const quizScaleForClassroom = async (
   classroomId: string,

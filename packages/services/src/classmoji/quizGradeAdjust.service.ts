@@ -40,7 +40,7 @@ import type { Prisma, Role } from '@prisma/client';
 
 import * as audit from './audit.service.ts';
 import { TEACHING_TEAM_ROLES } from './classroomStudents.ts';
-import { quizScaleForClassroom } from './emojiMapping.service.ts';
+import { findScaleByClassroomId, quizScaleForClassroom } from './emojiMapping.service.ts';
 import { quizzesVisibleOrThrow } from './entitlement.service.ts';
 
 /** The refusal every quiz surface gives in a classroom that does not show quizzes. */
@@ -230,10 +230,24 @@ const prepareForAttempt = async (attemptId: unknown, actorUserId: string) => {
   if (!row) throw new QuizGradeError('not_found', 'Quiz attempt not found');
   const classroomId = row.quiz.classroom_id;
   await requireQuizzesVisible(classroomId, actorUserId);
-  // The classroom's own scale, re-seeded first if every row was deleted (E10).
-  const scale = await quizScaleForClassroom(classroomId);
+  // A read only: nobody is authorized yet (`seededScaleInTx` re-seeds an
+  // empty scale once the actor is).
+  const scale = await findScaleByClassroomId(classroomId);
   return { attemptId: id, classroomId, scale };
 };
+
+/**
+ * The scale a grading write uses, called inside its transaction AFTER the
+ * actor is authorized: the scale read before it, or, when the classroom had
+ * none (every row deleted in settings), the new-classroom scale seeded in
+ * this transaction (E10). Never seeded for an actor the transaction refuses.
+ */
+export const seededScaleInTx = async (
+  tx: Tx,
+  classroomId: string,
+  scale: Record<string, number>
+): Promise<Record<string, number>> =>
+  Object.keys(scale).length > 0 ? scale : quizScaleForClassroom(classroomId, tx);
 
 /** Staff never grade an attempt of their own. */
 export const refuseOwnAttempt = (attempt: { user_id: string }, actorUserId: string) => {
@@ -462,7 +476,7 @@ export const adjust = async (input: AdjustQuizAttemptInput): Promise<QuizAdjustR
   const comment = input.comment === undefined ? undefined : normalizeComment(input.comment);
   const { attemptId, classroomId, scale } = await prepareForAttempt(input.attemptId, actorUserId);
 
-  const { attempt, change } = await getPrisma().$transaction(async tx => {
+  const { attempt, change, txScale } = await getPrisma().$transaction(async tx => {
     const current = await loadAttemptForUpdate(tx, attemptId);
     if (current.quiz.classroom_id !== classroomId) {
       throw new QuizGradeError('not_found', 'Quiz attempt not found');
@@ -470,23 +484,24 @@ export const adjust = async (input: AdjustQuizAttemptInput): Promise<QuizAdjustR
     const actorRole = await requireTeachingTeam(tx, classroomId, actorUserId);
     refuseOwnAttempt(current, actorUserId);
     await requireGradableAttempt(tx, current);
-    const nextEmoji = emoji === undefined ? undefined : requireScaleEmoji(emoji, scale);
+    const txScale = await seededScaleInTx(tx, classroomId, scale);
+    const nextEmoji = emoji === undefined ? undefined : requireScaleEmoji(emoji, txScale);
     const result = await applyAdjustmentInTx(tx, current, {
       emoji: nextEmoji,
       comment,
       actorUserId,
       actorRole,
-      scale,
+      scale: txScale,
       event: 'quiz_attempt_adjust',
     });
-    return result;
+    return { ...result, txScale };
   }, TX_OPTIONS);
 
   if (change) await auditAdjustment(change, input);
 
   return {
     attempt: projectAttempt(attempt),
-    grade: quizAttemptGrade(attempt, scale),
+    grade: quizAttemptGrade(attempt, txScale),
     classroomId: attempt.quiz.classroom_id,
     changed: change !== null,
   };
