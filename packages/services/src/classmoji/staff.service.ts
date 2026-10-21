@@ -43,6 +43,7 @@ import { buildRemoveUserPayload } from './removeUserPayload.ts';
 import * as classroomService from './classroom.service.ts';
 import * as classroomMembershipService from './classroomMembership.service.ts';
 import * as gitRepoAssignmentGraderService from './gitRepoAssignmentGrader.service.ts';
+import * as planOwnerService from './planOwner.service.ts';
 
 /** The roles this service manages. STUDENT is the roster service's business. */
 export const STAFF_ROLES = ['ASSISTANT', 'TEACHER', 'OWNER'] as const;
@@ -546,6 +547,9 @@ const addGitLabStaff = async ({
     };
   }
 
+  // Added as an accepted owner straight away (no invite on Gitlab).
+  if (role === 'OWNER') await planOwnerService.onOwnerAccepted(user.id);
+
   return {
     created: true,
     alreadyExists: false,
@@ -654,7 +658,7 @@ export const previewRemoval = async ({
     );
   }
 
-  if (role === 'OWNER') await assertNotLastOwner(classroomId, login);
+  if (role === 'OWNER') await assertNotLastOwner(classroomId, user.id, login);
 
   const otherGraderRoles = gitRepoAssignmentGraderService.GRADER_ROLES.filter(r => r !== role);
   const remainsGrader =
@@ -779,16 +783,22 @@ export const previewLeftoverSlots = async ({
   return { userId: user.id, login: user.login ?? login, name: user.name, ungradedCount };
 };
 
-/** Refuse to orphan the classroom — shared by previewRemoval and removeStaff. */
-const assertNotLastOwner = async (classroomId: string, login: string) => {
-  const ownerCount = await getPrisma().classroomMembership.count({
-    where: { classroom_id: classroomId, role: 'OWNER' },
-  });
-  if (ownerCount <= 1) {
-    throw new StaffServiceError(
-      'last_owner',
-      `[staff] ${login} is the only owner of classroom ${classroomId}`
-    );
+/**
+ * Refuse to orphan the classroom — shared by previewRemoval and removeStaff.
+ * The same rule as the removal itself (`planOwner.assertOwnerRemains`): an
+ * accepted owner must remain, and a pending invitation does not count.
+ */
+const assertNotLastOwner = async (classroomId: string, userId: string, login: string) => {
+  try {
+    await planOwnerService.assertOwnerRemains(getPrisma(), classroomId, userId);
+  } catch (error) {
+    if (error instanceof Error && error.message === planOwnerService.LAST_OWNER_ERROR) {
+      throw new StaffServiceError(
+        'last_owner',
+        `[staff] ${login} is the only accepted owner of classroom ${classroomId}`
+      );
+    }
+    throw error;
   }
 };
 
@@ -817,10 +827,13 @@ export const removeStaff = async ({
   classroomId,
   login,
   role,
+  actorUserId = null,
 }: {
   classroomId: string;
   login: string;
   role: StaffRole;
+  /** The owner asking; audits a plan-owner hand-off the removal causes. */
+  actorUserId?: string | null;
 }): Promise<RemoveStaffResult> => {
   assertStaffRole(role);
 
@@ -846,7 +859,7 @@ export const removeStaff = async ({
   }
 
   // Refuse to orphan the classroom BEFORE the fire-and-forget trigger.
-  if (role === 'OWNER') await assertNotLastOwner(classroomId, login);
+  if (role === 'OWNER') await assertNotLastOwner(classroomId, user.id, login);
 
   const run = await tasks.trigger('remove_user_from_organization', {
     payload: buildRemoveUserPayload({
@@ -857,6 +870,7 @@ export const removeStaff = async ({
       },
       classroom,
       role,
+      actorUserId,
     }),
   });
 

@@ -239,6 +239,8 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
               name,
               content_namespace: contentNamespace,
               content_repo: contentRepo,
+              created_by: user.id,
+              plan_owner_id: user.id,
             },
           });
 

@@ -43,6 +43,8 @@ interface RemoveUserPayload {
   classroom?: { id: string; slug: string };
   organization?: { id: string; slug: string; git_organization?: GitOrgData };
   role?: 'OWNER' | 'TEACHER' | 'STUDENT' | 'ASSISTANT';
+  /** Who asked for the removal; audits a plan-owner hand-off it causes. */
+  actorUserId?: string | null;
   payload?: RemoveUserPayload;
 }
 
@@ -318,7 +320,7 @@ export const removeUserFromOrganizationTask = task({
   run: async (arg: RemoveUserPayload) => {
     const payload = arg?.payload ? arg.payload : arg;
 
-    const { user, gitOrganization, classroom, organization, role } = payload;
+    const { user, gitOrganization, classroom, organization, role, actorUserId } = payload;
 
     // Support both new (classroom/gitOrganization) and legacy (organization) params
     const classroomData = classroom || organization;
@@ -366,7 +368,9 @@ export const removeUserFromOrganizationTask = task({
           }
         }
       }
-      return ClassmojiService.classroomMembership.remove(classroomData.id, user.id, userRole);
+      return ClassmojiService.classroomMembership.remove(classroomData.id, user.id, userRole, {
+        actorUserId,
+      });
     }
 
     // The username on the org's provider, read from the stored account; the
@@ -462,7 +466,8 @@ export const removeUserFromOrganizationTask = task({
     return ClassmojiService.classroomMembership.remove(
       classroomData.id,
       user.id,
-      role || 'STUDENT'
+      role || 'STUDENT',
+      { actorUserId }
     );
   },
 });

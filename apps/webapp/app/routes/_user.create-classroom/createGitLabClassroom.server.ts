@@ -117,6 +117,8 @@ export async function createGitLabClassroom(
               name,
               content_namespace: contentNamespace,
               content_repo: defaultContentRepoName(contentNamespace),
+              created_by: userId,
+              plan_owner_id: userId,
             },
           });
           await tx.classroomSettings.create({

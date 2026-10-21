@@ -487,6 +487,7 @@ describe('students action — removal payload', () => {
       classroom: { id: 'class-1', slug: CLASS_SLUG },
       gitOrganization: expect.objectContaining({ id: 'org-1', login: 'dev-org' }),
       role: 'STUDENT',
+      actorUserId: null,
     });
     expect(JSON.stringify(payload)).not.toContain('sk-test');
     expect(JSON.stringify(payload)).not.toContain('ada@school.test');

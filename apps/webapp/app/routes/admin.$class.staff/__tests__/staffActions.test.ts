@@ -260,7 +260,7 @@ describe('staff action — service errors map to their own messages', () => {
     const result = await run('removeStaff', { login: 'ada', role: 'OWNER' }, 'DELETE');
 
     expect(result.error).toBe(
-      'This is the only owner of the classroom. Add another owner before removing this one.'
+      'This is the only owner who has accepted. Another owner has to accept their invite before this one can be removed.'
     );
   });
 
@@ -312,6 +312,9 @@ describe('staff action — role-scoped update and removal', () => {
       role: 'OWNER',
       // No ungraded-slot choice was posted: the service keeps them.
       ungradedSubmissions: null,
+      // The signed-in owner, never a posted value: a plan-owner hand-off this
+      // removal causes is audited as them.
+      actorUserId: 'owner-1',
     });
     expect(mocks.waitForRunCompletion).toHaveBeenCalledWith('run-1');
   });

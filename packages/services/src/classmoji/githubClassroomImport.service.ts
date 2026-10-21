@@ -305,9 +305,11 @@ export async function resolveImportedClassroom(
     requestedSlug: string;
     candidateSlug: string;
     name: string;
+    /** The importing user: creator and plan owner of a NEW classroom only. */
+    ownerUserId: string;
   }
 ) {
-  const { gitOrgId, githubClassroomId, requestedSlug, candidateSlug, name } = args;
+  const { gitOrgId, githubClassroomId, requestedSlug, candidateSlug, name, ownerUserId } = args;
 
   if (githubClassroomId != null) {
     const byCourse = await tx.classroom.findUnique({
@@ -350,6 +352,10 @@ export async function resolveImportedClassroom(
       content_namespace: candidateSlug,
       content_repo: defaultContentRepoName(candidateSlug),
       github_classroom_id: githubClassroomId,
+      // Only here: a re-import (the two updates above) keeps who created the
+      // classroom and whose plan it counts against.
+      created_by: ownerUserId,
+      plan_owner_id: ownerUserId,
       settings: { create: { quizzes_enabled: true } },
     },
     include: { settings: true },
@@ -416,6 +422,7 @@ async function importClassroomAttempt(args: {
         requestedSlug,
         candidateSlug,
         name: gh.name,
+        ownerUserId,
       });
       summary.classroomId = classroom.id;
       // The PERSISTED slug, not the candidate: a re-import updates a row in

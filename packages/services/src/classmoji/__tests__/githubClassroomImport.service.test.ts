@@ -163,6 +163,7 @@ describe('resolveImportedClassroom', () => {
     requestedSlug: 'cs-52',
     candidateSlug: 'cs-52',
     name: 'CS 52 Full Stack',
+    ownerUserId: 'user-1',
   };
 
   it('matches on the course id first and never touches the slug', async () => {
@@ -207,6 +208,9 @@ describe('resolveImportedClassroom', () => {
           git_org_id: 'org-1',
           slug: 'cs-52-2',
           github_classroom_id: 222,
+          // The importer creates it, and it uses their plan slot.
+          created_by: 'user-1',
+          plan_owner_id: 'user-1',
         }),
       })
     );

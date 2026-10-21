@@ -20,6 +20,7 @@ const accountUpdate = vi.fn();
 const classroomFindUnique = vi.fn();
 const membershipCreate = vi.fn();
 const membershipCount = vi.fn();
+const membershipFindFirst = vi.fn();
 vi.mock('@classmoji/database', async () => ({
   ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
     '@classmoji/database/gitIdentity'
@@ -39,6 +40,7 @@ vi.mock('@classmoji/database', async () => ({
     classroomMembership: {
       create: (...a: unknown[]) => membershipCreate(...a),
       count: (...a: unknown[]) => membershipCount(...a),
+      findFirst: (...a: unknown[]) => membershipFindFirst(...a),
     },
   }),
 }));
@@ -110,6 +112,8 @@ beforeEach(() => {
   classroomFindUnique.mockResolvedValue({ git_organization: CLASSROOM.git_organization });
   triggerTask.mockResolvedValue({ id: 'run-1' });
   membershipCount.mockResolvedValue(2);
+  // The owner row being removed, for the last-owner rule.
+  membershipFindFirst.mockResolvedValue({ id: 'm-owner', has_accepted_invite: true });
 });
 
 describe('staff.addStaff', () => {
@@ -417,6 +421,7 @@ describe('staff.removeStaff', () => {
           },
           classroom: { id: 'class-1', slug: 'cs1-25f' },
           role,
+          actorUserId: null,
         },
       });
       expect(result).toEqual({ userId: 'u-1', login: 'ada', role, runId: 'run-1' });
@@ -464,14 +469,20 @@ describe('staff.removeStaff', () => {
   it('refuses to remove the LAST owner before anything is queued', async () => {
     userFindFirst.mockResolvedValue({ id: 'u-1', login: 'ada' });
     findByClassroomAndUser.mockResolvedValue({ id: 'm-1', has_accepted_invite: true });
-    membershipCount.mockResolvedValue(1);
+    // No OTHER accepted owner: a pending co-owner invitation does not count.
+    membershipCount.mockResolvedValue(0);
 
     await expect(
       staff.removeStaff({ classroomId: 'class-1', login: 'ada', role: 'OWNER' })
     ).rejects.toMatchObject({ code: 'last_owner' });
 
     expect(membershipCount).toHaveBeenCalledWith({
-      where: { classroom_id: 'class-1', role: 'OWNER' },
+      where: {
+        classroom_id: 'class-1',
+        role: 'OWNER',
+        id: { not: 'm-owner' },
+        has_accepted_invite: true,
+      },
     });
     // The removal is fire-and-forget, so the guard MUST run before the trigger —
     // otherwise the failure would surface inside the task and the caller would
@@ -500,7 +511,13 @@ describe('staff.removeStaff', () => {
     await staff.removeStaff({ classroomId: 'class-1', login: 'ada', role: 'ASSISTANT' });
 
     const { payload } = triggerTask.mock.calls[0][1] as { payload: Record<string, unknown> };
-    expect(Object.keys(payload).sort()).toEqual(['classroom', 'gitOrganization', 'role', 'user']);
+    expect(Object.keys(payload).sort()).toEqual([
+      'actorUserId',
+      'classroom',
+      'gitOrganization',
+      'role',
+      'user',
+    ]);
     expect(Object.keys(payload.classroom as object)).toEqual(['id', 'slug']);
     expect(Object.keys(payload.gitOrganization as object).sort()).toEqual([
       'base_url',

@@ -191,6 +191,8 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
           where: { id: { in: pendingGitLab.map(m => m.id) } },
           data: { has_accepted_invite: true },
         });
+        // An owner invitation among them may fill a classroom with no plan owner.
+        await ClassmojiService.planOwner.onOwnerAccepted(typedUser.id);
         for (const gitOrganizationId of new Set(pendingGitLab.map(m => m.classroom.git_org_id))) {
           await tasks.trigger('activate_membership', { login: gitlabUsername, gitOrganizationId });
         }

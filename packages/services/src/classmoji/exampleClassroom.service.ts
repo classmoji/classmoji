@@ -178,6 +178,8 @@ function buildExampleSandbox(args: {
           content_namespace: slug,
           content_repo: defaultContentRepoName(slug),
           is_example: true,
+          created_by: ownerUserId,
+          plan_owner_id: ownerUserId,
           settings: {
             create: { quizzes_enabled: true, timezone },
           },
