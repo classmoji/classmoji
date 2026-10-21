@@ -710,6 +710,9 @@ export const resolveQuiz = async (
  * `update_regrade_request` task, which the web queue and the MCP trigger
  * after their own teaching-team gate. Refuses a quiz request: those resolve
  * through `resolveQuiz`, which writes the adjustment with the status.
+ * Only an open (IN_REVIEW) request is resolved, under a row lock: a second
+ * resolve writes nothing and returns the request as it is
+ * (`alreadyResolved`), so the task sends no second email.
  * Audited `regrade_resolve` (`target: 'repo'`) with the caller's `tool`, as
  * the resolver's highest accepted role in the request's classroom; a payload
  * queued without a resolver writes no audit row (no actor to name).
@@ -730,28 +733,33 @@ export const resolveRepo = async ({
   tool?: string | null;
   /** The admin user id behind an impersonated session, when there is one. */
   impersonatedBy?: string | null;
-}): Promise<RegradeRequest> => {
+}): Promise<{ request: RegradeRequest; alreadyResolved: boolean }> => {
   if (status !== 'APPROVED' && status !== 'DENIED') {
     throw new Error('Resolution must be APPROVED or DENIED');
   }
-  const stored = await getPrisma().regradeRequest.findUnique({
-    where: { id },
-    select: { quiz_attempt_id: true, classroom_id: true, git_repo_assignment_id: true },
-  });
-  if (!stored) throw new Error('Regrade request not found');
-  if (stored.quiz_attempt_id) {
-    throw new Error('A quiz regrade request is resolved with resolveQuiz');
-  }
   const reply = typeof graderComment === 'string' ? graderComment.trim() : '';
-  const updated = await getPrisma().regradeRequest.update({
-    where: { id },
-    data: {
-      status,
-      ...(reply ? { grader_comment: reply } : {}),
-      resolved_by_id: resolvedById ?? null,
-      resolved_at: new Date(),
-    },
+
+  const outcome = await getPrisma().$transaction(async tx => {
+    await tx.$queryRaw`SELECT id FROM regrade_requests WHERE id = ${id} FOR UPDATE`;
+    const stored = await tx.regradeRequest.findUnique({ where: { id } });
+    if (!stored) throw new Error('Regrade request not found');
+    if (stored.quiz_attempt_id) {
+      throw new Error('A quiz regrade request is resolved with resolveQuiz');
+    }
+    if (stored.status !== 'IN_REVIEW') return { request: stored, alreadyResolved: true };
+    const updated = await tx.regradeRequest.update({
+      where: { id },
+      data: {
+        status,
+        ...(reply ? { grader_comment: reply } : {}),
+        resolved_by_id: resolvedById ?? null,
+        resolved_at: new Date(),
+      },
+    });
+    return { request: updated, alreadyResolved: false };
   });
+  if (outcome.alreadyResolved) return outcome;
+  const stored = outcome.request;
 
   if (resolvedById) {
     const role = await acceptedRoleIn(getPrisma(), stored.classroom_id, resolvedById);
@@ -779,5 +787,5 @@ export const resolveRepo = async ({
     }
   }
 
-  return updated;
+  return outcome;
 };

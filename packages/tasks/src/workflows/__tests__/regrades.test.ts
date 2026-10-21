@@ -60,7 +60,7 @@ const { quizRegradeResolvedTask, updateRegradeRequestTask, renderQuizRegradeReso
 type Runnable<P> = { run: (payload: P) => Promise<unknown> };
 const quizTask = quizRegradeResolvedTask as unknown as Runnable<{ request_id: string }>;
 const updateTask = updateRegradeRequestTask as unknown as Runnable<unknown> & {
-  onSuccess: (args: { payload: unknown }) => Promise<void>;
+  onSuccess: (args: { payload: unknown; output?: unknown }) => Promise<void>;
 };
 
 const SCALE = { rocket: 100, '+1': 90, eyes: 80, '-1': 60, sob: 0 };
@@ -184,7 +184,10 @@ describe('quiz_regrade_resolved', () => {
 
 describe('update_regrade_request', () => {
   it('resolves through resolveRepo with the reply and who resolved it', async () => {
-    mocks.resolveRepo.mockResolvedValue({ id: 'rr-1', status: 'DENIED' });
+    mocks.resolveRepo.mockResolvedValue({
+      request: { id: 'rr-1', status: 'DENIED' },
+      alreadyResolved: false,
+    });
     await updateTask.run({
       request: { id: 'rr-1', student: { email: 'ada@school.edu' } },
       data: { status: 'DENIED', grader_comment: 'See the rubric.' },
@@ -203,7 +206,10 @@ describe('update_regrade_request', () => {
   });
 
   it('still resolves a payload queued without a resolver (null, no name shown)', async () => {
-    mocks.resolveRepo.mockResolvedValue({ id: 'rr-1', status: 'APPROVED' });
+    mocks.resolveRepo.mockResolvedValue({
+      request: { id: 'rr-1', status: 'APPROVED' },
+      alreadyResolved: false,
+    });
     await updateTask.run({
       request: { id: 'rr-1', student: { email: 'ada@school.edu' } },
       data: { status: 'APPROVED' },
@@ -246,5 +252,13 @@ describe('update_regrade_request', () => {
     });
     expect(sent().template.id).toBe('regrade-resolved');
     expect(sent().template.variables.ASSIGNMENT_TITLE).toBe('your assignment');
+  });
+
+  it('sends no second email when the request was already resolved', async () => {
+    await updateTask.onSuccess({
+      payload: { request: { id: 'rr-1', student: { email: 'ada@school.edu' } }, data: {} },
+      output: { request: { id: 'rr-1', status: 'APPROVED' }, alreadyResolved: true },
+    });
+    expect(mocks.sendEmail).not.toHaveBeenCalled();
   });
 });

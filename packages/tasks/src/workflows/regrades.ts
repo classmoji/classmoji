@@ -175,7 +175,14 @@ export const updateRegradeRequestTask = task({
       impersonatedBy: typeof impersonated_by === 'string' ? impersonated_by : null,
     });
   },
-  onSuccess: async ({ payload }: TaskPayloadWrapper<UpdateRegradeRequestTaskPayload>) => {
+  onSuccess: async ({
+    payload,
+    output,
+  }: TaskPayloadWrapper<UpdateRegradeRequestTaskPayload> & {
+    output?: { alreadyResolved?: boolean } | null;
+  }) => {
+    // A request that was already resolved was not written again: no second email.
+    if (output?.alreadyResolved) return;
     const { request } = payload;
     sendEmailTask.trigger({
       to: request.student.email,

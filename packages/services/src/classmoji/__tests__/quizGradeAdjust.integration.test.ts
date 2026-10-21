@@ -975,11 +975,43 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
         status: 'DENIED',
       });
       expect(repoResolved).toMatchObject({
-        status: 'DENIED',
-        grader_comment: 'The deadline was firm.',
-        resolved_by_id: assistant,
+        alreadyResolved: false,
+        request: {
+          status: 'DENIED',
+          grader_comment: 'The deadline was firm.',
+          resolved_by_id: assistant,
+        },
       });
-      expect(repoResolved.resolved_at!.getTime()).toBeGreaterThanOrEqual(before - 1000);
+      expect(repoResolved.request.resolved_at!.getTime()).toBeGreaterThanOrEqual(before - 1000);
+
+      // A second resolve is a no-op: nothing written, no second audit row.
+      const repoAgain = await regradeRequest.resolveRepo({
+        id: repoRequest.id,
+        status: 'APPROVED',
+        graderComment: 'Changed my mind.',
+        resolvedById: owner,
+        tool: 'repo_surface',
+      });
+      expect(repoAgain).toMatchObject({
+        alreadyResolved: true,
+        request: {
+          status: 'DENIED',
+          grader_comment: 'The deadline was firm.',
+          resolved_by_id: assistant,
+        },
+      });
+      expect(repoAgain.request.resolved_at?.getTime()).toBe(
+        repoResolved.request.resolved_at?.getTime()
+      );
+      expect(
+        await prisma.auditLog.count({
+          where: {
+            resource_type: 'REGRADE_REQUEST',
+            resource_id: repoRequest.id,
+            action: 'UPDATE',
+          },
+        })
+      ).toBe(1);
       // Repo grades are the caller's (grade_add), untouched here.
       expect(
         (
