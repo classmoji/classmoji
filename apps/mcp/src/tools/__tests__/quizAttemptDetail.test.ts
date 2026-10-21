@@ -660,11 +660,13 @@ describe('get_quiz_attempt', () => {
   });
 
   it('refuses an attempt of another quiz or classroom like an unknown one', async () => {
-    // An attempt of another quiz (here or in another classroom) is no attempt of this one.
-    mocks.findByQuiz.mockResolvedValue([attemptRow({ quiz_id: 'other-quiz' })]);
+    // The attempt is looked up within this quiz only (the service's where
+    // clause is pinned in quizAttempt.findInQuiz.test.ts); none found is not_found.
+    mocks.findByQuiz.mockResolvedValue([]);
     await expect(getQuizAttemptTool.handler(WITH_TRANSCRIPT, CTX)).rejects.toMatchObject({
       kind: 'not_found',
     });
+    expect(mocks.findInQuiz).toHaveBeenCalledWith('quiz-1', ATTEMPT_ID, 'GITLAB');
 
     mocks.quizFindById.mockResolvedValue(quiz({ classroom_id: 'other-class' }));
     await expect(getQuizAttemptTool.handler(WITH_TRANSCRIPT, CTX)).rejects.toMatchObject({
@@ -979,6 +981,117 @@ describe('get_quiz_attempt', () => {
       expect(payload).not.toHaveProperty('transcript');
       expect(payload.evaluation).toMatchObject({ band: 'GOOD' });
       for (const value of stringsOf(payload)) expect(value).not.toMatch(NUMERIC_GRADE_TEXT);
+    });
+
+    describe('a malformed legacy reply', () => {
+      /** The transcript of a legacy attempt whose messages are `contents` (assistant replies). */
+      const legacyRun = async (contents: string[], extra: unknown[] = []) => {
+        const legacyRow = attemptRow({ agent_runtime: 'ai_agent', evaluation_json: null });
+        mocks.findByQuiz.mockResolvedValue([legacyRow]);
+        mocks.findWithMessages.mockResolvedValue({
+          attempt: legacyRow,
+          messages: [
+            ...contents.map((content, i) => ({
+              id: `r${i}`,
+              role: 'assistant',
+              content,
+              timestamp: new Date('2026-10-01T10:00:00Z'),
+            })),
+            ...extra,
+          ],
+        });
+        const result = await getQuizAttemptTool.handler(WITH_TRANSCRIPT, CTX);
+        const payload = parse(result);
+        // Nothing of a machine block, under any input.
+        for (const banned of [
+          '[QUIZ_EVALUATION]',
+          '[QUESTION_COMPLETE]',
+          'quiz_complete',
+          '"score"',
+        ]) {
+          expect(result.content[0].text).not.toContain(banned);
+        }
+        for (const value of stringsOf(payload)) expect(value).not.toMatch(NUMERIC_GRADE_TEXT);
+        return payload as {
+          transcript: Array<{ parts: Array<{ kind: string; text?: string }> }>;
+          evaluation: { band: string | null } | null;
+        };
+      };
+      const textsOf = (payload: Awaited<ReturnType<typeof legacyRun>>) =>
+        payload.transcript.flatMap(turn =>
+          turn.parts.flatMap(part => (part.kind === 'text' ? [part.text] : []))
+        );
+      const fenced = (value: unknown) => '```json\n' + JSON.stringify(value) + '\n```';
+      const DONE = {
+        quiz_complete: true,
+        final_acknowledgment: 'All done.',
+        evaluation: 'GOOD',
+        numeric_score: 3,
+        partial_credit_percentage: 80,
+      };
+
+      it('shows only the text before the first of two evaluation blocks (raw, then fenced)', async () => {
+        const payload = await legacyRun([
+          'Done.\n[QUIZ_EVALUATION]\n{"quiz_complete":false,"score":40}\nretry\n[QUIZ_EVALUATION]\n' +
+            fenced(DONE),
+        ]);
+
+        expect(textsOf(payload)).toEqual(['Done.']);
+        expect(payload.evaluation?.band).toBe('GOOD');
+      });
+
+      it('never shows a block whose quiz_complete is false', async () => {
+        const payload = await legacyRun([
+          'Not yet.\n[QUIZ_EVALUATION]\n' + fenced({ quiz_complete: false, score: 40 }),
+        ]);
+
+        expect(textsOf(payload)).toEqual(['Not yet.']);
+        expect(payload.evaluation).toBeNull();
+      });
+
+      it('never shows an unparseable question result', async () => {
+        const payload = await legacyRun([
+          'Moving on.\n\n[QUESTION_COMPLETE]\n{"question_num": 1, "credit_earned": 50, oops',
+        ]);
+
+        expect(textsOf(payload)).toEqual(['Moving on.']);
+        expect(payload.transcript[0].parts.map(part => part.kind)).toEqual(['text']);
+      });
+
+      it('cuts at the marker when a stray fence comes before it', async () => {
+        const payload = await legacyRun([
+          'Here is a fence ``` before the end.\n[QUIZ_EVALUATION]\n' + fenced(DONE),
+        ]);
+
+        expect(textsOf(payload)).toEqual(['Here is a fence ``` before the end.']);
+      });
+
+      it('shows the acknowledgment of a nested evaluation with no text before it', async () => {
+        const nested = {
+          ...DONE,
+          question_results: [{ question_num: 1, credit_earned: 80, detail: { score: 80 } }],
+        };
+        const payload = await legacyRun(['[QUIZ_EVALUATION]\n' + fenced(nested)]);
+
+        expect(textsOf(payload)).toEqual(['All done.']);
+      });
+
+      it('shows the closing line on the last reply, a blank student row after it aside', async () => {
+        const { final_acknowledgment: _ack, ...noAck } = DONE;
+        const payload = await legacyRun(
+          ['[QUIZ_EVALUATION]\n' + fenced(noAck)],
+          [{ id: 'blank', role: 'user', content: '  ', timestamp: new Date() }]
+        );
+
+        expect(textsOf(payload)).toEqual(['Quiz completed! See your evaluation below.']);
+      });
+
+      it('shows nothing of an earlier closing reply with no text or acknowledgment', async () => {
+        const { final_acknowledgment: _ack, ...noAck } = DONE;
+        const payload = await legacyRun(['[QUIZ_EVALUATION]\n' + fenced(noAck), 'Anything else?']);
+
+        expect(textsOf(payload)).toEqual(['Anything else?']);
+      });
     });
 
     it('is not_found when a legacy attempt is gone by the time its messages are read', async () => {

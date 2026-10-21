@@ -501,12 +501,38 @@ function legacyQuestionPart(data: unknown): TranscriptPart | null {
   };
 }
 
+/** The fixed line the legacy chat shows for a closing reply with nothing else to show. */
+const LEGACY_CLOSING_LINE = 'Quiz completed! See your evaluation below.';
+
+/**
+ * What a legacy reply shows besides its markers, or null when it shows
+ * nothing. With no [QUIZ_EVALUATION] block, the chat's own rule
+ * (`completionMessageDisplay`, which then returns the reply unchanged). With
+ * one, never anything from the marker on: the reply's text before its FIRST
+ * marker of any kind (the chat's rule takes the text before the first fenced
+ * block, which keeps an earlier raw block when a reply carries two), else
+ * the evaluation's final_acknowledgment, else the chat's closing line on the
+ * last message, else nothing.
+ */
+function replyBody(body: string, isLast: boolean): string | null {
+  const completion = checkForCompletion(body);
+  if (!completion) {
+    const shown = completionMessageDisplay(body, isLast);
+    return shown.shouldHide ? null : shown.content;
+  }
+  return (
+    withoutMarkers(body) ??
+    text(completion.final_acknowledgment) ??
+    (isLast ? LEGACY_CLOSING_LINE : null)
+  );
+}
+
 /**
  * A legacy assistant message as the legacy chat (QuizMessageList) renders it:
  * a question's marker from its [QUESTION_COMPLETE] block (its emoji and brief
  * feedback, never its credit), then the message without its machine blocks:
  * the text before a [QUIZ_EVALUATION] block or its final_acknowledgment
- * (`completionMessageDisplay`), a [QUESTION_CARD] as its preamble and card
+ * (`replyBody`), a [QUESTION_CARD] as its preamble and card
  * (nothing after it), or the text with its [BUTTON:…] markers as buttons.
  */
 function legacyAssistantParts(content: string, isLast: boolean): TranscriptPart[] {
@@ -523,9 +549,9 @@ function legacyAssistantParts(content: string, isLast: boolean): TranscriptPart[
     });
     body = stripQuestionComplete(body);
   }
-  const shown = completionMessageDisplay(body, isLast);
-  if (shown.shouldHide) return parts;
-  body = shown.content;
+  const shown = replyBody(body, isLast);
+  if (shown === null) return parts;
+  body = shown;
 
   const card = parseQuestionCard(body);
   if (card.hasQuestionCard) {
@@ -571,13 +597,13 @@ function legacyMessages(messages: readonly unknown[]): LegacyMessage[] {
 
 /** A legacy (ai_agent) attempt's transcript: who spoke, when, and what the chat showed. */
 function legacyTranscript(messages: readonly LegacyMessage[]) {
-  return messages.flatMap((m, index) => {
+  // A blank student row shows nothing, so the last message is counted without them.
+  const shown = messages.filter(m => m.role === 'assistant' || text(m.content));
+  return shown.flatMap((m, index) => {
     const parts: TranscriptPart[] =
       m.role === 'assistant'
-        ? legacyAssistantParts(m.content, index === messages.length - 1)
-        : text(m.content)
-          ? [{ kind: 'text', text: m.content.trim() }]
-          : [];
+        ? legacyAssistantParts(m.content, index === shown.length - 1)
+        : [{ kind: 'text', text: m.content.trim() }];
     if (parts.length === 0) return [];
     return [{ role: m.role, sent_at: iso(m.timestamp), parts }];
   });
@@ -585,7 +611,10 @@ function legacyTranscript(messages: readonly LegacyMessage[]) {
 
 /**
  * A legacy attempt's evaluation, from its last [QUIZ_EVALUATION] block, as the
- * drawer's evaluation card reads it: the band and the feedback, no number.
+ * drawer's `lastEvaluationIn` finds it on load (its skip set, the evaluations
+ * a live session saw refused, is empty when a saved attempt is opened), read
+ * as the drawer's evaluation card reads it: the band and the feedback, no
+ * number.
  */
 function legacyEvaluation(messages: readonly LegacyMessage[]) {
   for (let i = messages.length - 1; i >= 0; i--) {
