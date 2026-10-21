@@ -36,6 +36,10 @@ vi.mock('../audit.service.ts', () => ({
   create: (...a: unknown[]) => mocks.auditCreate(...a),
 }));
 
+// The rule is tested switched on (a limit of 1); the shipped constant is
+// unlimited, which planLimits.test.ts pins.
+vi.mock('../planLimits.ts', () => ({ PLAN_ACTIVE_CLASSROOM_LIMITS: { FREE: 1, PRO: null } }));
+
 const tx = {
   $queryRaw: (...a: unknown[]) => mocks.queryRaw(...a),
   $executeRaw: (...a: unknown[]) => mocks.executeRaw(...a),

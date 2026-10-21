@@ -25,6 +25,7 @@ const {
   assertCanCreateContent,
   contentAllowance,
   isContentLimitError,
+  PLAN_ACTIVE_CLASSROOM_LIMITS,
   PLAN_CONTENT_LIMITS,
   PLAN_CONTENT_LIMIT,
 } = await import('../planLimits.ts');
@@ -125,5 +126,13 @@ describe('assertCanCreateContent', () => {
     getProStateForClassroomIdMock.mockResolvedValue(PRO);
 
     await expect(assertCanCreateContent('class-x', 'slides', 500)).resolves.toBeUndefined();
+  });
+});
+
+describe('PLAN_ACTIVE_CLASSROOM_LIMITS', () => {
+  it('does not limit how many classes a Free teacher runs', () => {
+    // Decided 2026-10-21: the rule exists, switched off. Changing this is a
+    // product decision, not a refactor.
+    expect(PLAN_ACTIVE_CLASSROOM_LIMITS).toEqual({ FREE: null, PRO: null });
   });
 });

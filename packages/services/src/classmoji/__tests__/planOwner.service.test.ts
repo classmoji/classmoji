@@ -22,6 +22,10 @@ vi.mock('../audit.service.ts', () => ({
 }));
 vi.mock('@classmoji/database', () => ({ default: () => db }));
 
+// The rule is tested switched on (a limit of 1); the shipped constant is
+// unlimited, which planLimits.test.ts pins.
+vi.mock('../planLimits.ts', () => ({ PLAN_ACTIVE_CLASSROOM_LIMITS: { FREE: 1, PRO: null } }));
+
 interface Membership {
   id: string;
   classroom_id: string;

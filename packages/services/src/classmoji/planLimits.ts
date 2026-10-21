@@ -32,9 +32,16 @@ export const PLAN_CONTENT_LIMITS: Record<'FREE' | 'PRO', Record<LimitedContent, 
  * them is Pro (`classrooms.plan_owner_id`, see `planOwner.service.ts`).
  * Locked, unpublished and example classrooms do not count, and neither does a
  * classroom that is Pro because any accepted owner is. `null` = unlimited.
+ *
+ * Unlimited on Free too, deliberately (decided 2026-10-21): instructors
+ * routinely run several sections at once, and a class cap would limit the core
+ * use rather than a costly extra. The rule and everything around it (plan
+ * owners, the locked lifecycle writes, the refusal and notice UI) stay in
+ * place, so a number here turns it on everywhere. Measure concurrent usage
+ * before choosing one.
  */
 export const PLAN_ACTIVE_CLASSROOM_LIMITS: Record<'FREE' | 'PRO', number | null> = {
-  FREE: 1,
+  FREE: null,
   PRO: null,
 };
 
