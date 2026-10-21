@@ -684,7 +684,7 @@ describe('get_quiz_attempt', () => {
         {
           role: 'assistant',
           parts: [
-            { kind: 'evaluation' },
+            // One results panel, though two parts carry the evaluation.
             { kind: 'evaluation' },
             { kind: 'notice', code: 'turn_stopped' },
           ],

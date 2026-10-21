@@ -438,8 +438,14 @@ function chatTranscript(messages: readonly QuizUIMessage[]) {
       }
       action = message.metadata?.action ?? buttonActionFor(typed.join('\n')) ?? null;
     } else if (message.role === 'assistant') {
+      // One results panel per message, however many parts carry the evaluation.
+      let evaluationShown = false;
       parts = assistantDisplayParts(raw).flatMap(part => {
         const shown = assistantPart(part);
+        if (shown?.kind === 'evaluation') {
+          if (evaluationShown) return [];
+          evaluationShown = true;
+        }
         return shown ? [shown] : [];
       });
     } else {
