@@ -205,13 +205,13 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
 
         return {
           action: 'UPDATE_REGRADE_REQUEST',
-          success: 'Resubmit request updated',
+          success: 'Regrade/resubmit request updated',
         };
       } catch (error: unknown) {
         console.error('updateRegradeRequest failed:', error);
         return {
           action: 'UPDATE_REGRADE_REQUEST',
-          error: 'Failed to update resubmit request. Please try again.',
+          error: 'Failed to update regrade/resubmit request. Please try again.',
         };
       }
     },

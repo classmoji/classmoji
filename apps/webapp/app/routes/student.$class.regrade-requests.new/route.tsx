@@ -150,13 +150,13 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
     return {
       action: 'REQUEST_REGRADE',
-      success: 'Regrade request submitted',
+      success: 'Regrade/resubmit request submitted',
     };
   } catch (error: unknown) {
     console.error('request_regrade failed:', error);
     return {
       action: 'REQUEST_REGRADE',
-      error: 'Failed to submit regrade request. Please try again.',
+      error: 'Failed to submit regrade/resubmit request. Please try again.',
     };
   }
 };

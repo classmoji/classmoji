@@ -174,7 +174,7 @@ async function createQuizRegrade(attemptId: string, comment: string, ctx: ToolCo
 export const regradeCreateTool: ToolDefinition<RegradeCreateArgs> = {
   name: 'regrade_create',
   annotations: { destructive: false },
-  title: 'Request a regrade',
+  title: 'Request regrade/resubmit',
   description:
     'Submits a regrade (resubmit) request on YOUR OWN work: a graded submission ' +
     '(git_repo_assignment_id) or a completed quiz attempt (quiz_attempt_id, e.g. ' +
