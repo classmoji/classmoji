@@ -11,14 +11,16 @@
  *   - `update_regrade_request` resolves a repo request through
  *     `regradeRequest.resolveRepo` (which refuses a quiz request: resolveQuiz
  *     owns its status and adjustment), passing who resolved it, and emails
- *     the student even without a submission title.
+ *     the student even without a submission title; the caller's surface
+ *     (`tool`) travels beside `data` for the audit row.
+ *   - The quiz email reads the resolution's snapshot (`resolved_emoji`), and
+ *     the attempt's grade now only for a request resolved before it.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   findMany: vi.fn(),
-  update: vi.fn(),
   resolveRepo: vi.fn(),
   classroomFindById: vi.fn(),
   findScaleByClassroomId: vi.fn(),
@@ -38,7 +40,6 @@ vi.mock('@classmoji/services', async () => ({
   ClassmojiService: {
     regradeRequest: {
       findMany: (...a: unknown[]) => mocks.findMany(...a),
-      update: (...a: unknown[]) => mocks.update(...a),
       resolveRepo: (...a: unknown[]) => mocks.resolveRepo(...a),
     },
     classroom: { findById: (...a: unknown[]) => mocks.classroomFindById(...a) },
@@ -80,6 +81,7 @@ const quizRequest = (over: Record<string, unknown> = {}) => ({
     quiz: { id: 'quiz-1', name: 'Quiz 1', assignment: { id: 'asg-1', title: 'Week 3 quiz' } },
   },
   git_repo_assignment: null,
+  resolved_emoji: 'rocket',
   ...over,
 });
 
@@ -124,6 +126,7 @@ describe('quiz_regrade_resolved', () => {
       quizRequest({
         status: 'DENIED',
         grader_comment: 'The rubric holds.',
+        resolved_emoji: '-1',
         quiz_attempt: { ...quizRequest().quiz_attempt, adjusted_emoji: null },
       }),
     ]);
@@ -132,6 +135,19 @@ describe('quiz_regrade_resolved', () => {
 
     expect(sent().template.variables.MESSAGE_TEXT).toContain('Score kept 👎');
     expect(sent().template.variables.MESSAGE_TEXT).not.toContain('Score adjusted');
+  });
+
+  it('says what the resolution set, not what the attempt reads now', async () => {
+    // Adjusted to 👀 at resolution, adjusted again to 🚀 directly afterwards.
+    mocks.findMany.mockResolvedValue([quizRequest({ resolved_emoji: 'eyes' })]);
+    await quizTask.run({ request_id: 'rr-1' });
+    expect(sent().template.variables.MESSAGE_TEXT).toContain('Score adjusted 👎 → 👀');
+  });
+
+  it('reads the attempt for a request resolved before the snapshot existed', async () => {
+    mocks.findMany.mockResolvedValue([quizRequest({ resolved_emoji: null })]);
+    await quizTask.run({ request_id: 'rr-1' });
+    expect(sent().template.variables.MESSAGE_TEXT).toContain('Score adjusted 👎 → 🚀');
   });
 
   it('sends nothing for a repo request, an open one, or a student with no email', async () => {
@@ -173,14 +189,17 @@ describe('update_regrade_request', () => {
       request: { id: 'rr-1', student: { email: 'ada@school.edu' } },
       data: { status: 'DENIED', grader_comment: 'See the rubric.' },
       resolved_by_id: 'ta-1',
+      tool: 'web:api.updateRegradeRequest',
+      impersonated_by: 'admin-1',
     });
     expect(mocks.resolveRepo).toHaveBeenCalledWith({
       id: 'rr-1',
       status: 'DENIED',
       graderComment: 'See the rubric.',
       resolvedById: 'ta-1',
+      tool: 'web:api.updateRegradeRequest',
+      impersonatedBy: 'admin-1',
     });
-    expect(mocks.update).not.toHaveBeenCalled();
   });
 
   it('still resolves a payload queued without a resolver (null, no name shown)', async () => {
@@ -194,6 +213,8 @@ describe('update_regrade_request', () => {
       status: 'APPROVED',
       graderComment: null,
       resolvedById: null,
+      tool: null,
+      impersonatedBy: null,
     });
   });
 

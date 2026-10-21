@@ -14,7 +14,15 @@
  *     again after a resolution (D7), approve = adjust, deny = keep, reply
  *     required, and a quiz approve never touches repo grades or the repo
  *     request in the same classroom;
- *   - the CHECK: exactly one target per request.
+ *   - the CHECK: exactly one target per request, and the partial unique
+ *     index: one open request per attempt;
+ *   - staff never grade their own attempt (a user holding a student and a
+ *     staff role in one classroom); a pending staff invite is no access; a
+ *     removed student's attempt is not adjusted or regraded;
+ *   - comment authorship apart from adjustment authorship; the resolution's
+ *     emoji snapshot; repo resolutions audited;
+ *   - a classroom that does not show quizzes refuses every quiz action and
+ *     lists no quiz request (`findManyForDisplay`).
  *
  * SAFETY: every fixture is namespaced with a fresh uuid and torn down in
  * afterAll by deleting the git organization (cascades classrooms → quizzes,
@@ -26,6 +34,14 @@
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
+
+// Whether quizzes show in the classroom (`entitlement.quizzesVisibleOrThrow`):
+// on, unless a test turns it off. The real one needs Pro and the AI agent env.
+const entitlement = vi.hoisted(() => ({ visible: true }));
+vi.mock('../entitlement.service.ts', async importOriginal => {
+  const actual = await importOriginal<typeof import('../entitlement.service.ts')>();
+  return { ...actual, quizzesVisibleOrThrow: async () => entitlement.visible };
+});
 
 const notifications = vi.hoisted(() => ({
   calls: [] as Array<{
@@ -52,7 +68,8 @@ const { default: getPrisma } = await import('@classmoji/database');
 const quizAttempt = await import('../quizAttempt.service.ts');
 const regradeRequest = await import('../regradeRequest.service.ts');
 const { loadQuizGradeItems } = await import('../quizGradeItems.service.ts');
-const { QuizGradeError } = await import('../quizGradeAdjust.service.ts');
+const { QuizGradeError, QUIZZES_UNAVAILABLE_MESSAGE } =
+  await import('../quizGradeAdjust.service.ts');
 const { DEFAULT_EMOJI_MAPPINGS, SCORE_EMOJI_MAPPINGS } = await import('@classmoji/utils');
 
 const DATABASE_URL = process.env.DATABASE_URL ?? '';
@@ -62,6 +79,16 @@ const RUN = Boolean(DATABASE_URL) && isLocal && !isSharedDevDb;
 
 const H = 60 * 60 * 1000;
 const TOOL = 'test_surface';
+
+const refusalMessage = async (promise: Promise<unknown>) => {
+  try {
+    await promise;
+  } catch (error) {
+    if (error instanceof QuizGradeError) return error.message;
+    throw error;
+  }
+  return 'no error';
+};
 
 const refusal = async (promise: Promise<unknown>) => {
   try {
@@ -94,6 +121,10 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
   let staffY: string; // TEACHER of Y
   let studentA: string; // STUDENT of X (and N, E)
   let studentB: string; // STUDENT of X
+  let dual: string; // STUDENT and ASSISTANT of X
+  let studentY: string; // STUDENT of Y
+  let pendingStaff: string; // TEACHER of X, invite not accepted
+  let removed: string; // was a STUDENT of X, membership gone
 
   const makeUser = async (tag: string) => {
     const user = await prisma.user.create({
@@ -126,10 +157,11 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
   const member = (
     classroomId: string,
     userId: string,
-    role: 'OWNER' | 'TEACHER' | 'ASSISTANT' | 'STUDENT'
+    role: 'OWNER' | 'TEACHER' | 'ASSISTANT' | 'STUDENT',
+    accepted = true
   ) =>
     prisma.classroomMembership.create({
-      data: { classroom_id: classroomId, user_id: userId, role, has_accepted_invite: true },
+      data: { classroom_id: classroomId, user_id: userId, role, has_accepted_invite: accepted },
     });
 
   const makeQuiz = async (classroomId: string) => {
@@ -212,6 +244,15 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
     await member(classN, studentA, 'STUDENT');
     await member(classE, owner, 'OWNER');
     await member(classE, studentA, 'STUDENT');
+
+    dual = await makeUser('dual');
+    studentY = await makeUser('student-y');
+    pendingStaff = await makeUser('pending');
+    removed = await makeUser('removed');
+    await member(classX, dual, 'STUDENT');
+    await member(classX, dual, 'ASSISTANT');
+    await member(classY, studentY, 'STUDENT');
+    await member(classX, pendingStaff, 'TEACHER', false);
   });
 
   afterAll(async () => {
@@ -238,6 +279,7 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
           adjusted_emoji: '+1',
           instructor_comment: 'Q3 has full credit.',
           adjusted_by_id: assistant,
+          comment_by_id: assistant,
           partial_credit_percentage: 62,
         },
         grade: { adjusted: true, effective: { emoji: '+1', percentage: 90 } },
@@ -409,29 +451,50 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
         actorUserId: owner,
         tool: TOOL,
       });
+      // A comment-only save is the comment's authorship, not an adjustment.
       expect(commented.attempt).toMatchObject({
         adjusted_emoji: null,
         instructor_comment: 'See Q2.',
+        adjusted_by_id: null,
+        adjusted_at: null,
+        comment_by_id: owner,
       });
+      expect(commented.attempt.comment_at).toBeInstanceOf(Date);
       expect(commented.grade.adjusted).toBe(false);
 
-      await quizAttempt.adjust({ attemptId: id, emoji: 'eyes', actorUserId: owner, tool: TOOL });
+      // A score change by someone else leaves the comment's author alone.
+      const scored = await quizAttempt.adjust({
+        attemptId: id,
+        emoji: 'eyes',
+        actorUserId: assistant,
+        tool: TOOL,
+      });
+      expect(scored.attempt).toMatchObject({
+        adjusted_emoji: 'eyes',
+        adjusted_by_id: assistant,
+        comment_by_id: owner,
+      });
+      expect(scored.attempt.comment_at?.getTime()).toBe(commented.attempt.comment_at?.getTime());
+
       const reverted = await quizAttempt.revert({
         attemptId: id,
         actorUserId: assistant,
         tool: TOOL,
       });
       expect(reverted.changed).toBe(true);
+      // Revert clears the adjustment and its author; the comment and its author stay.
       expect(reverted.attempt).toMatchObject({
         adjusted_emoji: null,
+        adjusted_by_id: null,
+        adjusted_at: null,
         instructor_comment: 'See Q2.',
-        adjusted_by_id: assistant,
+        comment_by_id: owner,
       });
       expect(reverted.grade.effective.percentage).toBe(55);
 
-      const audit = await prisma.auditLog.findFirst({
-        where: { resource_id: id, user_id: assistant },
-      });
+      const audit = (
+        await prisma.auditLog.findMany({ where: { resource_id: id, user_id: assistant } })
+      ).find(row => (row.data as { event?: string })?.event === 'quiz_attempt_adjust_revert');
       expect(audit?.data).toMatchObject({
         tool: TOOL,
         event: 'quiz_attempt_adjust_revert',
@@ -678,6 +741,8 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
         attempt: { adjusted_emoji: 'eyes', adjusted_by_id: assistant },
         grade: { effective: { emoji: 'eyes', percentage: 80 } },
       });
+      // The resolution's grade is snapshotted on the request.
+      expect(approved.request.resolved_emoji).toBe('eyes');
       expect(await itemFor(classX, studentB, assignmentId)).toMatchObject({ grade: 80 });
 
       const resolveAudit = await prisma.auditLog.findFirst({
@@ -696,7 +761,8 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
         via_regrade_request_id: request.id,
       });
 
-      // Resolving again is a no-op that reports the recorded resolution.
+      // Resolving again is a no-op that reports the recorded resolution,
+      // before the reply or the emoji are looked at (a retry).
       const again = await regradeRequest.resolveQuiz({
         requestId: request.id,
         resolution: 'DENIED',
@@ -704,6 +770,15 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
         actorUserId: owner,
         tool: TOOL,
       });
+      expect(
+        await regradeRequest.resolveQuiz({
+          requestId: request.id,
+          resolution: 'APPROVED',
+          comment: '',
+          actorUserId: owner,
+          tool: TOOL,
+        })
+      ).toMatchObject({ alreadyResolved: true });
       expect(approved.request.resolved_at).toBeInstanceOf(Date);
       const [listedApproved] = await regradeRequest.findMany({ id: request.id });
       expect(listedApproved.resolved_by).toMatchObject({ id: assistant });
@@ -731,7 +806,13 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
       });
       expect(next.request).toMatchObject({ resolved_by_id: null, resolved_at: null });
       expect(denied).toMatchObject({
-        request: { status: 'DENIED', grader_comment: 'Stays.', resolved_by_id: owner },
+        request: {
+          status: 'DENIED',
+          grader_comment: 'Stays.',
+          resolved_by_id: owner,
+          // Keep: the effective emoji the attempt kept.
+          resolved_emoji: 'eyes',
+        },
         attempt: { adjusted_emoji: 'eyes' },
       });
       const denyAudit = await prisma.auditLog.findFirst({
@@ -844,6 +925,22 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
         status: 'DENIED',
         graderComment: '  The deadline was firm.  ',
         resolvedById: assistant,
+        tool: 'repo_surface',
+      });
+      // Audited with the caller's surface, as the resolver's role.
+      const repoAudit = await prisma.auditLog.findFirst({
+        where: {
+          resource_type: 'REGRADE_REQUEST',
+          resource_id: repoRequest.id,
+          action: 'UPDATE',
+        },
+      });
+      expect(repoAudit).toMatchObject({ user_id: assistant, role: 'ASSISTANT' });
+      expect(repoAudit?.data).toMatchObject({
+        tool: 'repo_surface',
+        event: 'regrade_resolve',
+        target: 'repo',
+        status: 'DENIED',
       });
       expect(repoResolved).toMatchObject({
         status: 'DENIED',
@@ -888,6 +985,222 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
       await expect(
         prisma.regradeRequest.create({ data: { classroom_id: classX, student_id: studentA } })
       ).rejects.toThrow();
+    });
+  });
+
+  describe('who may act', () => {
+    it('staff never adjust, revert or resolve their own attempt', async () => {
+      const { quizId } = await makeQuiz(classX);
+      const { id } = await makeAttempt(quizId, dual, 50);
+      expect(
+        await refusal(
+          quizAttempt.adjust({ attemptId: id, emoji: 'rocket', actorUserId: dual, tool: TOOL })
+        )
+      ).toBe('forbidden');
+      expect(
+        await refusal(
+          quizAttempt.adjust({ attemptId: id, comment: 'me', actorUserId: dual, tool: TOOL })
+        )
+      ).toBe('forbidden');
+      expect(
+        await refusal(quizAttempt.revert({ attemptId: id, actorUserId: dual, tool: TOOL }))
+      ).toBe('forbidden');
+
+      // As a student they may still ask; someone else resolves it.
+      const { request } = await regradeRequest.createForQuizAttempt({
+        attemptId: id,
+        comment: 'please',
+        actorUserId: dual,
+        tool: TOOL,
+      });
+      expect(
+        await refusal(
+          regradeRequest.resolveQuiz({
+            requestId: request.id,
+            resolution: 'APPROVED',
+            emoji: 'rocket',
+            comment: 'ok',
+            actorUserId: dual,
+            tool: TOOL,
+          })
+        )
+      ).toBe('forbidden');
+      const row = await prisma.quizAttempt.findUniqueOrThrow({ where: { id } });
+      expect(row.adjusted_emoji).toBeNull();
+      expect(
+        (await prisma.regradeRequest.findUniqueOrThrow({ where: { id: request.id } })).status
+      ).toBe('IN_REVIEW');
+
+      // Another assistant may.
+      const resolved = await regradeRequest.resolveQuiz({
+        requestId: request.id,
+        resolution: 'APPROVED',
+        emoji: 'rocket',
+        comment: 'ok',
+        actorUserId: assistant,
+        tool: TOOL,
+      });
+      expect(resolved.request.status).toBe('APPROVED');
+    });
+
+    it('a student of classroom Y cannot request on an attempt in classroom X', async () => {
+      const { quizId } = await makeQuiz(classX);
+      const { id } = await makeAttempt(quizId, studentA, 50);
+      expect(
+        await refusal(
+          regradeRequest.createForQuizAttempt({
+            attemptId: id,
+            comment: 'mine?',
+            actorUserId: studentY,
+            tool: TOOL,
+          })
+        )
+      ).toBe('not_found');
+      expect(await prisma.regradeRequest.count({ where: { quiz_attempt_id: id } })).toBe(0);
+    });
+
+    it('staff with a pending invite cannot adjust or resolve', async () => {
+      const { quizId } = await makeQuiz(classX);
+      const { id } = await makeAttempt(quizId, studentA, 50);
+      expect(
+        await refusal(
+          quizAttempt.adjust({
+            attemptId: id,
+            emoji: 'rocket',
+            actorUserId: pendingStaff,
+            tool: TOOL,
+          })
+        )
+      ).toBe('not_found');
+      expect(
+        await refusal(quizAttempt.revert({ attemptId: id, actorUserId: pendingStaff, tool: TOOL }))
+      ).toBe('not_found');
+      const { request } = await regradeRequest.createForQuizAttempt({
+        attemptId: id,
+        comment: 'x',
+        actorUserId: studentA,
+        tool: TOOL,
+      });
+      expect(
+        await refusal(
+          regradeRequest.resolveQuiz({
+            requestId: request.id,
+            resolution: 'DENIED',
+            comment: 'no',
+            actorUserId: pendingStaff,
+            tool: TOOL,
+          })
+        )
+      ).toBe('not_found');
+    });
+
+    it("a removed student's attempt is neither adjusted nor regraded", async () => {
+      const { quizId } = await makeQuiz(classX);
+      const membership = await member(classX, removed, 'STUDENT');
+      const { id } = await makeAttempt(quizId, removed, 50);
+      await prisma.classroomMembership.delete({ where: { id: membership.id } });
+
+      expect(
+        await refusal(
+          quizAttempt.adjust({ attemptId: id, emoji: 'rocket', actorUserId: owner, tool: TOOL })
+        )
+      ).toBe('not_student_attempt');
+      expect(
+        await refusal(
+          regradeRequest.createForQuizAttempt({
+            attemptId: id,
+            comment: 'x',
+            actorUserId: removed,
+            tool: TOOL,
+          })
+        )
+      ).toBe('not_found');
+    });
+
+    it('a student asking on an unfinished attempt reads "regraded", not "adjusted"', async () => {
+      const { quizId } = await makeQuiz(classX);
+      const { id } = await makeAttempt(quizId, studentA, null, null);
+      expect(
+        await refusalMessage(
+          regradeRequest.createForQuizAttempt({
+            attemptId: id,
+            comment: 'x',
+            actorUserId: studentA,
+            tool: TOOL,
+          })
+        )
+      ).toBe('Only a completed quiz attempt can be regraded');
+      expect(
+        await refusalMessage(
+          quizAttempt.adjust({ attemptId: id, emoji: 'rocket', actorUserId: owner, tool: TOOL })
+        )
+      ).toBe('Only a completed quiz attempt can be adjusted');
+    });
+
+    it('the partial unique index allows one open request per attempt', async () => {
+      const { quizId } = await makeQuiz(classX);
+      const { id } = await makeAttempt(quizId, studentB, 50);
+      const open = { classroom_id: classX, student_id: studentB, quiz_attempt_id: id };
+      await prisma.regradeRequest.create({ data: open });
+      await expect(prisma.regradeRequest.create({ data: open })).rejects.toMatchObject({
+        code: 'P2002',
+      });
+      // A resolved one beside the open one is fine.
+      await prisma.regradeRequest.create({ data: { ...open, status: 'DENIED' } });
+      expect(await prisma.regradeRequest.count({ where: { quiz_attempt_id: id } })).toBe(2);
+    });
+  });
+
+  describe('a classroom that does not show quizzes', () => {
+    it('refuses every quiz action and lists no quiz request', async () => {
+      const { quizId } = await makeQuiz(classX);
+      const { id } = await makeAttempt(quizId, studentA, 50);
+      const { request } = await regradeRequest.createForQuizAttempt({
+        attemptId: id,
+        comment: 'x',
+        actorUserId: studentA,
+        tool: TOOL,
+      });
+      entitlement.visible = false;
+      try {
+        for (const attempt of [
+          () =>
+            quizAttempt.adjust({ attemptId: id, emoji: 'rocket', actorUserId: owner, tool: TOOL }),
+          () => quizAttempt.revert({ attemptId: id, actorUserId: owner, tool: TOOL }),
+          () =>
+            regradeRequest.createForQuizAttempt({
+              attemptId: id,
+              comment: 'again',
+              actorUserId: studentA,
+              tool: TOOL,
+            }),
+          () =>
+            regradeRequest.resolveQuiz({
+              requestId: request.id,
+              resolution: 'DENIED',
+              comment: 'no',
+              actorUserId: owner,
+              tool: TOOL,
+            }),
+        ]) {
+          expect(await refusalMessage(attempt())).toBe(QUIZZES_UNAVAILABLE_MESSAGE);
+        }
+        // A non-member still learns nothing.
+        expect(
+          await refusal(
+            quizAttempt.adjust({ attemptId: id, emoji: 'rocket', actorUserId: staffY, tool: TOOL })
+          )
+        ).toBe('not_found');
+
+        const shown = await regradeRequest.findManyForDisplay(classX, { student_id: studentA });
+        expect(shown.some(r => r.quiz_attempt_id)).toBe(false);
+      } finally {
+        entitlement.visible = true;
+      }
+      const shown = await regradeRequest.findManyForDisplay(classX, { student_id: studentA });
+      expect(shown.some(r => r.id === request.id)).toBe(true);
+      // Scoped to the classroom given, whatever the query says.
+      expect(await regradeRequest.findManyForDisplay(classY, { id: request.id })).toHaveLength(0);
     });
   });
 });

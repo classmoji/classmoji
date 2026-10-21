@@ -15,10 +15,18 @@
  * classroom (checked against the quiz's assignment's module), which decides
  * who may act and which scale validates the emoji. No function takes a
  * classroom id. The actor must hold an ACCEPTED OWNER, TEACHER or ASSISTANT
- * membership there (D5); the attempt must be completed and belong to a
- * current (accepted) STUDENT member of that classroom, so a staff preview
- * attempt is never adjusted. Someone with no accepted membership in the
- * attempt's classroom gets `not_found`, never a hint that the attempt exists.
+ * membership there (D5) and must not own the attempt (someone holding a
+ * student and a staff role in one classroom never grades their own attempt);
+ * the attempt must be completed and belong to a current (accepted) STUDENT
+ * member of that classroom, so a staff preview attempt is never adjusted.
+ * Someone with no accepted membership in the attempt's classroom gets
+ * `not_found`, never a hint that the attempt exists. A classroom that does not
+ * show quizzes (`entitlement.quizzesVisibleOrThrow`) refuses every action
+ * here with `forbidden` (`QUIZZES_UNAVAILABLE_MESSAGE`).
+ *
+ * AUTHORSHIP. `adjusted_by_id` / `adjusted_at` record the score adjustment
+ * only (cleared on revert); `comment_by_id` / `comment_at` record who last
+ * wrote the comment to the student (kept on revert).
  *
  * AUDIT through `ClassmojiService.audit` (`dedupe: false`), resource
  * `QUIZ_ATTEMPT`, action UPDATE, `data.tool` = the caller's surface,
@@ -33,6 +41,10 @@ import type { Prisma, Role } from '@prisma/client';
 import * as audit from './audit.service.ts';
 import { TEACHING_TEAM_ROLES } from './classroomStudents.ts';
 import { findScaleByClassroomId } from './emojiMapping.service.ts';
+import { quizzesVisibleOrThrow } from './entitlement.service.ts';
+
+/** The refusal every quiz surface gives in a classroom that does not show quizzes. */
+export const QUIZZES_UNAVAILABLE_MESSAGE = 'Quizzes are not available in this classroom';
 
 /** Longest instructor comment / regrade reply accepted. */
 export const QUIZ_GRADE_COMMENT_MAX_LENGTH = 5000;
@@ -99,6 +111,8 @@ const ATTEMPT_SELECT = {
   instructor_comment: true,
   adjusted_by_id: true,
   adjusted_at: true,
+  comment_by_id: true,
+  comment_at: true,
   quiz: {
     select: {
       id: true,
@@ -121,6 +135,8 @@ export interface QuizAttemptAdjustment {
   instructor_comment: string | null;
   adjusted_by_id: string | null;
   adjusted_at: Date | null;
+  comment_by_id: string | null;
+  comment_at: Date | null;
 }
 
 export interface QuizAdjustResult {
@@ -133,11 +149,16 @@ export interface QuizAdjustResult {
   changed: boolean;
 }
 
-/** Lock the attempt row and read it with its quiz and classroom. */
-export const loadAttemptForUpdate = async (tx: Tx, attemptId: string) => {
+const requireAttemptId = (attemptId: unknown): string => {
   if (typeof attemptId !== 'string' || attemptId.length === 0 || attemptId.length > 255) {
     throw new QuizGradeError('not_found', 'Quiz attempt not found');
   }
+  return attemptId;
+};
+
+/** Lock the attempt row and read it with its quiz and classroom. */
+export const loadAttemptForUpdate = async (tx: Tx, attemptId: string) => {
+  requireAttemptId(attemptId);
   await tx.$queryRaw`SELECT id FROM quiz_attempts WHERE id = ${attemptId} FOR UPDATE`;
   const attempt = await tx.quizAttempt.findUnique({
     where: { id: attemptId },
@@ -182,10 +203,56 @@ export const requireTeachingTeam = async (
   return role;
 };
 
-/** The attempt is completed and belongs to a current student of its classroom. */
-const requireGradableAttempt = async (tx: Tx, attempt: AdjustableAttempt) => {
+/**
+ * Refuses a quiz action in a classroom that does not show quizzes, for an
+ * actor with an accepted membership there. A non-member is left to the
+ * caller's own gate, which answers `not_found` without saying more.
+ */
+export const requireQuizzesVisible = async (classroomId: string, actorUserId: string) => {
+  const role = await acceptedRoleIn(getPrisma(), classroomId, actorUserId);
+  if (role === null) return;
+  if (!(await quizzesVisibleOrThrow(classroomId))) {
+    throw new QuizGradeError('forbidden', QUIZZES_UNAVAILABLE_MESSAGE);
+  }
+};
+
+/**
+ * Before an action's transaction: the attempt's classroom (an unlocked read;
+ * a quiz never changes classroom), the quiz visibility gate, and the
+ * classroom's scale, so the transaction reads nothing outside itself.
+ */
+const prepareForAttempt = async (attemptId: unknown, actorUserId: string) => {
+  const id = requireAttemptId(attemptId);
+  const row = await getPrisma().quizAttempt.findUnique({
+    where: { id },
+    select: { quiz: { select: { classroom_id: true } } },
+  });
+  if (!row) throw new QuizGradeError('not_found', 'Quiz attempt not found');
+  const classroomId = row.quiz.classroom_id;
+  await requireQuizzesVisible(classroomId, actorUserId);
+  const scale = await findScaleByClassroomId(classroomId);
+  return { attemptId: id, classroomId, scale };
+};
+
+/** Staff never grade an attempt of their own. */
+export const refuseOwnAttempt = (attempt: { user_id: string }, actorUserId: string) => {
+  if (attempt.user_id === actorUserId) {
+    throw new QuizGradeError('forbidden', 'You cannot grade your own quiz attempt');
+  }
+};
+
+/**
+ * The attempt is completed and belongs to a current student of its classroom.
+ * `verb` names the action in the refusal: staff adjust, a student asks for a
+ * regrade.
+ */
+const requireGradableAttempt = async (
+  tx: Tx,
+  attempt: AdjustableAttempt,
+  verb: 'adjusted' | 'regraded' = 'adjusted'
+) => {
   if (attempt.completed_at == null) {
-    throw new QuizGradeError('not_completed', 'Only a completed quiz attempt can be adjusted');
+    throw new QuizGradeError('not_completed', `Only a completed quiz attempt can be ${verb}`);
   }
   const student = await tx.classroomMembership.findFirst({
     where: {
@@ -199,7 +266,7 @@ const requireGradableAttempt = async (tx: Tx, attempt: AdjustableAttempt) => {
   if (!student) {
     throw new QuizGradeError(
       'not_student_attempt',
-      'Only a current student’s quiz attempt can be adjusted'
+      `Only a current student’s quiz attempt can be ${verb}`
     );
   }
 };
@@ -240,6 +307,8 @@ const projectAttempt = (a: AdjustableAttempt): QuizAttemptAdjustment => ({
   instructor_comment: a.instructor_comment,
   adjusted_by_id: a.adjusted_by_id,
   adjusted_at: a.adjusted_at,
+  comment_by_id: a.comment_by_id,
+  comment_at: a.comment_at,
 });
 
 /** What an adjust/revert wrote, for its audit row. */
@@ -262,8 +331,9 @@ export interface AdjustmentChange {
  * Write an adjustment on a locked, authorized attempt inside the caller's
  * transaction. `emoji`: undefined keeps the score, a string sets it, null
  * clears it (revert). `comment`: undefined keeps it, null/'' clears it.
- * `adjusted_by_id` / `adjusted_at` record the last staff edit (score or
- * comment); cleared when neither an adjustment nor a comment is left.
+ * A score change stamps `adjusted_by_id` / `adjusted_at` (cleared with the
+ * score); a comment change stamps `comment_by_id` / `comment_at` (cleared with
+ * the comment). Each is left alone when its own field does not change.
  */
 export const applyAdjustmentInTx = async (
   tx: Tx,
@@ -290,14 +360,24 @@ export const applyAdjustmentInTx = async (
   const commentChanged = nextComment !== attempt.instructor_comment;
   if (!emojiChanged && !commentChanged) return { attempt, change: null };
 
-  const keepsSomething = nextEmoji !== null || nextComment !== null;
+  const now = new Date();
   const updated = await tx.quizAttempt.update({
     where: { id: attempt.id },
     data: {
-      adjusted_emoji: nextEmoji,
-      instructor_comment: nextComment,
-      adjusted_by_id: keepsSomething ? actorUserId : null,
-      adjusted_at: keepsSomething ? new Date() : null,
+      ...(emojiChanged
+        ? {
+            adjusted_emoji: nextEmoji,
+            adjusted_by_id: nextEmoji === null ? null : actorUserId,
+            adjusted_at: nextEmoji === null ? null : now,
+          }
+        : {}),
+      ...(commentChanged
+        ? {
+            instructor_comment: nextComment,
+            comment_by_id: nextComment === null ? null : actorUserId,
+            comment_at: nextComment === null ? null : now,
+          }
+        : {}),
     },
     select: ATTEMPT_SELECT,
   });
@@ -374,18 +454,21 @@ export interface AdjustQuizAttemptInput extends QuizGradeActor {
  * nothing (`changed: false`).
  */
 export const adjust = async (input: AdjustQuizAttemptInput): Promise<QuizAdjustResult> => {
-  const { attemptId, emoji, actorUserId } = input;
+  const { emoji, actorUserId } = input;
   if (emoji === undefined && input.comment === undefined) {
     throw new QuizGradeError('invalid_input', 'Give an emoji, a comment, or both');
   }
   const comment = input.comment === undefined ? undefined : normalizeComment(input.comment);
+  const { attemptId, classroomId, scale } = await prepareForAttempt(input.attemptId, actorUserId);
 
-  const { attempt, change, scale } = await getPrisma().$transaction(async tx => {
+  const { attempt, change } = await getPrisma().$transaction(async tx => {
     const current = await loadAttemptForUpdate(tx, attemptId);
-    const classroomId = current.quiz.classroom_id;
+    if (current.quiz.classroom_id !== classroomId) {
+      throw new QuizGradeError('not_found', 'Quiz attempt not found');
+    }
     const actorRole = await requireTeachingTeam(tx, classroomId, actorUserId);
+    refuseOwnAttempt(current, actorUserId);
     await requireGradableAttempt(tx, current);
-    const scale = await findScaleByClassroomId(classroomId);
     const nextEmoji = emoji === undefined ? undefined : requireScaleEmoji(emoji, scale);
     const result = await applyAdjustmentInTx(tx, current, {
       emoji: nextEmoji,
@@ -395,7 +478,7 @@ export const adjust = async (input: AdjustQuizAttemptInput): Promise<QuizAdjustR
       scale,
       event: 'quiz_attempt_adjust',
     });
-    return { ...result, scale };
+    return result;
   }, TX_OPTIONS);
 
   if (change) await auditAdjustment(change, input);
@@ -418,13 +501,16 @@ export interface RevertQuizAttemptInput extends QuizGradeActor {
  * no adjustment writes nothing and audits nothing (`changed: false`).
  */
 export const revert = async (input: RevertQuizAttemptInput): Promise<QuizAdjustResult> => {
-  const { attemptId, actorUserId } = input;
+  const { actorUserId } = input;
+  const { attemptId, classroomId, scale } = await prepareForAttempt(input.attemptId, actorUserId);
 
-  const { attempt, change, scale } = await getPrisma().$transaction(async tx => {
+  const { attempt, change } = await getPrisma().$transaction(async tx => {
     const current = await loadAttemptForUpdate(tx, attemptId);
-    const classroomId = current.quiz.classroom_id;
+    if (current.quiz.classroom_id !== classroomId) {
+      throw new QuizGradeError('not_found', 'Quiz attempt not found');
+    }
     const actorRole = await requireTeachingTeam(tx, classroomId, actorUserId);
-    const scale = await findScaleByClassroomId(classroomId);
+    refuseOwnAttempt(current, actorUserId);
     const result = await applyAdjustmentInTx(tx, current, {
       emoji: null,
       comment: undefined,
@@ -433,7 +519,7 @@ export const revert = async (input: RevertQuizAttemptInput): Promise<QuizAdjustR
       scale,
       event: 'quiz_attempt_adjust_revert',
     });
-    return { ...result, scale };
+    return result;
   }, TX_OPTIONS);
 
   if (change) await auditAdjustment(change, input);

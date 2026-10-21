@@ -10,18 +10,27 @@
  * (partial unique index `regrade_requests_open_quiz_attempt`); no other
  * limit, so they may ask again after a resolution. Staff resolve with Adjust
  * (APPROVED: writes the attempt's adjustment with the chosen emoji) or Keep
- * (DENIED); the reply is required and stored in `grader_comment`. A quiz
+ * (DENIED); the reply is required and stored in `grader_comment`, and the
+ * grade the resolution left is snapshotted in `resolved_emoji`. Staff never
+ * resolve a request on their own attempt. In a classroom that does not show
+ * quizzes, quiz requests are refused and left out of every list
+ * (`findManyForDisplay`). A quiz
  * request never enters the repo grade-clearing path
  * (`clearStaleGradesInScope` / `clearGradesForOpenRegradeRequest` in
  * helper/index.ts), which reads repo submissions only. Audited here:
  * `regrade_create` and `regrade_resolve` (resource REGRADE_REQUEST, with the
- * caller's `data.tool`); emails stay with the caller (the tasks).
+ * caller's `data.tool`), for repo resolutions too (`resolveRepo`); emails
+ * stay with the caller (the tasks).
+ *
+ * LOCK ORDER: the attempt row before the request row, as deleting an attempt
+ * (which cascades to its requests) takes them.
  */
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import { quizAttemptGrade, withLogins, type QuizAttemptGrade } from '@classmoji/utils';
 import { Prisma, type RegradeRequest, type Role } from '@prisma/client';
 import * as audit from './audit.service.ts';
 import { findScaleByClassroomId } from './emojiMapping.service.ts';
+import { quizzesVisibleOrThrow } from './entitlement.service.ts';
 import * as notificationService from './notification.service.ts';
 import {
   QuizGradeError,
@@ -31,7 +40,9 @@ import {
   loadAttemptForUpdate,
   normalizeComment,
   projectAttempt,
+  refuseOwnAttempt,
   requireGradableAttempt,
+  requireQuizzesVisible,
   requireScaleEmoji,
   requireTeachingTeam,
   type QuizAttemptAdjustment,
@@ -124,6 +135,8 @@ export const findMany = async (query: Prisma.RegradeRequestWhereInput) => {
           instructor_comment: true,
           adjusted_at: true,
           adjusted_by: { select: { id: true, name: true } },
+          comment_at: true,
+          comment_by: { select: { id: true, name: true } },
           quiz: {
             select: {
               id: true,
@@ -158,6 +171,24 @@ export const findMany = async (query: Prisma.RegradeRequestWhereInput) => {
     },
   });
   return withLogins(requests);
+};
+
+/**
+ * `findMany` for a page or tool that SHOWS requests in one classroom: quiz
+ * requests are left out where the classroom does not show quizzes
+ * (`entitlement.quizzesVisibleOrThrow`, the predicate the gradebook and the
+ * MCP use), so a classroom without them shows no trace of quiz requests.
+ * `classroomId` is the one the caller's gate resolved; the query must be
+ * scoped to it.
+ */
+export const findManyForDisplay = async (
+  classroomId: string,
+  query: Prisma.RegradeRequestWhereInput
+) => {
+  const rows = await findMany({ ...query, classroom_id: classroomId });
+  if (!rows.some(row => row.quiz_attempt_id)) return rows;
+  if (await quizzesVisibleOrThrow(classroomId)) return rows;
+  return rows.filter(row => !row.quiz_attempt_id);
 };
 
 /**
@@ -275,10 +306,26 @@ export const createForQuizAttempt = async (
     );
   }
 
+  // Before the transaction: the attempt's classroom (a quiz never changes
+  // classroom), the quiz visibility gate and the scale.
+  const located =
+    typeof attemptId === 'string' && attemptId.length > 0 && attemptId.length <= 255
+      ? await getPrisma().quizAttempt.findUnique({
+          where: { id: attemptId },
+          select: { quiz: { select: { classroom_id: true } } },
+        })
+      : null;
+  if (!located) throw new QuizGradeError('not_found', 'Quiz attempt not found');
+  await requireQuizzesVisible(located.quiz.classroom_id, actorUserId);
+  const scale = await findScaleByClassroomId(located.quiz.classroom_id);
+
   const run = () =>
     getPrisma().$transaction(async tx => {
       const attempt = await loadAttemptForUpdate(tx, attemptId);
       const classroomId = attempt.quiz.classroom_id;
+      if (classroomId !== located.quiz.classroom_id) {
+        throw new QuizGradeError('not_found', 'Quiz attempt not found');
+      }
       const quiz = {
         id: attempt.quiz.id,
         name: attempt.quiz.name,
@@ -300,12 +347,11 @@ export const createForQuizAttempt = async (
       if (attempt.user_id !== actorUserId || !isStudent || role === null) {
         throw new QuizGradeError('not_found', 'Quiz attempt not found');
       }
-      await requireGradableAttempt(tx, attempt);
+      await requireGradableAttempt(tx, attempt, 'regraded');
 
       const open = await findOpenByQuizAttemptId(attempt.id, tx);
       if (open) return { request: open, created: false, classroomId, quiz, attemptNumber, role };
 
-      const scale = await findScaleByClassroomId(classroomId);
       const emoji = quizAttemptGrade(attempt, scale).effective.emoji;
       const request = await tx.regradeRequest.create({
         data: {
@@ -368,7 +414,7 @@ export const createForQuizAttempt = async (
         // regrade of <quiz> (attempt N)" (notificationEmails.regradeSubject).
         metadata: {
           target: 'quiz',
-          quiz_name: quiz.name,
+          quiz_name: quiz.assignmentTitle ?? quiz.name,
           attempt_number: attemptNumber,
         },
       });
@@ -400,51 +446,71 @@ export interface ResolveQuizRegradeResult {
   student: { id: string; email: string | null; name: string | null };
 }
 
+const requireRequestId = (requestId: unknown): string => {
+  if (typeof requestId !== 'string' || requestId.length === 0 || requestId.length > 255) {
+    throw new QuizGradeError('not_found', 'Regrade request not found');
+  }
+  return requestId;
+};
+
 /**
  * Resolve a quiz regrade request (teaching team of the request's classroom,
- * which must be the attempt's own). APPROVED writes the attempt's adjustment
- * with `emoji` (audited `quiz_attempt_adjust`, `via_regrade_request_id`) and
- * marks the request APPROVED; DENIED leaves the attempt as it is. Both store
- * the reply in `grader_comment` and audit `regrade_resolve` (`resolution`:
- * adjust | keep). A request already resolved is returned as is
- * (`alreadyResolved`). A repo request is refused (`not_quiz_request`): this
- * path never touches repo grades. The resolution email is the caller's.
+ * which must be the attempt's own; never the attempt's owner). APPROVED
+ * writes the attempt's adjustment with `emoji` (audited `quiz_attempt_adjust`,
+ * `via_regrade_request_id`) and marks the request APPROVED; DENIED leaves the
+ * attempt as it is. Both store the reply in `grader_comment`, snapshot the
+ * resulting emoji in `resolved_emoji` (the one set, or the effective one
+ * kept) and audit `regrade_resolve` (`resolution`: adjust | keep). A request
+ * already resolved is returned as is (`alreadyResolved`), before the emoji and
+ * the reply are validated, so a retry reads as already resolved. A repo
+ * request is refused (`not_quiz_request`): this path never touches repo
+ * grades. The resolution email is the caller's.
+ *
+ * Locks the attempt, then the request (the order attempt deletion takes).
  */
 export const resolveQuiz = async (
   input: ResolveQuizRegradeInput
 ): Promise<ResolveQuizRegradeResult> => {
-  const { requestId, resolution, actorUserId } = input;
+  const { resolution, actorUserId } = input;
   if (resolution !== 'APPROVED' && resolution !== 'DENIED') {
     throw new QuizGradeError('invalid_input', 'Resolution must be APPROVED or DENIED');
   }
-  const reply = normalizeComment(input.comment);
-  if (reply === null) {
-    throw new QuizGradeError('invalid_input', 'A reply to the student is required');
-  }
-  if (typeof requestId !== 'string' || requestId.length === 0 || requestId.length > 255) {
-    throw new QuizGradeError('not_found', 'Regrade request not found');
-  }
+  const requestId = requireRequestId(input.requestId);
+
+  // Before the transaction (unlocked): the request's classroom and attempt,
+  // neither of which changes once written; the quiz visibility gate; the scale.
+  const located = await getPrisma().regradeRequest.findUnique({
+    where: { id: requestId },
+    select: { classroom_id: true, quiz_attempt_id: true },
+  });
+  if (!located) throw new QuizGradeError('not_found', 'Regrade request not found');
+  if (located.quiz_attempt_id) await requireQuizzesVisible(located.classroom_id, actorUserId);
+  const scale = await findScaleByClassroomId(located.classroom_id);
 
   const outcome = await getPrisma().$transaction(
     async tx => {
+      // Authorize on the request's own classroom before saying anything else.
+      const actorRole = await requireTeachingTeam(tx, located.classroom_id, actorUserId);
+      if (!located.quiz_attempt_id) {
+        throw new QuizGradeError('not_quiz_request', 'This is not a quiz regrade request');
+      }
+
+      const attempt = await loadAttemptForUpdate(tx, located.quiz_attempt_id);
       await tx.$queryRaw`SELECT id FROM regrade_requests WHERE id = ${requestId} FOR UPDATE`;
       const request = await tx.regradeRequest.findUnique({
         where: { id: requestId },
         include: { student: { select: { id: true, email: true, name: true } } },
       });
-      if (!request) throw new QuizGradeError('not_found', 'Regrade request not found');
-
-      // Authorize on the request's own classroom before saying anything else.
-      const actorRole = await requireTeachingTeam(tx, request.classroom_id, actorUserId);
-      if (!request.quiz_attempt_id) {
-        throw new QuizGradeError('not_quiz_request', 'This is not a quiz regrade request');
-      }
-
-      const attempt = await loadAttemptForUpdate(tx, request.quiz_attempt_id);
-      if (attempt.quiz.classroom_id !== request.classroom_id) {
+      if (
+        !request ||
+        request.quiz_attempt_id !== attempt.id ||
+        request.classroom_id !== located.classroom_id ||
+        attempt.quiz.classroom_id !== request.classroom_id
+      ) {
         throw new QuizGradeError('not_found', 'Regrade request not found');
       }
-      const scale = await findScaleByClassroomId(request.classroom_id);
+      refuseOwnAttempt(attempt, actorUserId);
+
       const base = {
         classroomId: request.classroom_id,
         quiz: {
@@ -453,13 +519,17 @@ export const resolveQuiz = async (
           assignmentTitle: attempt.quiz.assignment?.title ?? null,
         },
         student: request.student,
-        scale,
         actorRole,
       };
 
       if (request.status !== 'IN_REVIEW') {
         const { student: _student, ...row } = request;
         return { ...base, request: row, alreadyResolved: true, attempt, change: null };
+      }
+
+      const reply = normalizeComment(input.comment);
+      if (reply === null) {
+        throw new QuizGradeError('invalid_input', 'A reply to the student is required');
       }
 
       let current = attempt;
@@ -486,6 +556,7 @@ export const resolveQuiz = async (
           grader_comment: reply,
           resolved_by_id: actorUserId,
           resolved_at: new Date(),
+          resolved_emoji: quizAttemptGrade(current, scale).effective.emoji,
         },
       });
       return { ...base, request: updated, alreadyResolved: false, attempt: current, change };
@@ -508,6 +579,7 @@ export const resolveQuiz = async (
         quiz_attempt_id: outcome.attempt.id,
         status: resolution,
         resolution: resolution === 'APPROVED' ? 'adjust' : 'keep',
+        resolved_emoji: outcome.request.resolved_emoji,
         ...(outcome.change
           ? { old_emoji: outcome.change.oldEmoji, new_emoji: outcome.change.newEmoji }
           : {}),
@@ -519,7 +591,7 @@ export const resolveQuiz = async (
     request: outcome.request,
     alreadyResolved: outcome.alreadyResolved,
     attempt: projectAttempt(outcome.attempt),
-    grade: quizAttemptGrade(outcome.attempt, outcome.scale),
+    grade: quizAttemptGrade(outcome.attempt, scale),
     classroomId: outcome.classroomId,
     quiz: outcome.quiz,
     student: outcome.student,
@@ -532,31 +604,40 @@ export const resolveQuiz = async (
  * `update_regrade_request` task, which the web queue and the MCP trigger
  * after their own teaching-team gate. Refuses a quiz request: those resolve
  * through `resolveQuiz`, which writes the adjustment with the status.
+ * Audited `regrade_resolve` (`target: 'repo'`) with the caller's `tool`, as
+ * the resolver's highest accepted role in the request's classroom; a payload
+ * queued without a resolver writes no audit row (no actor to name).
  */
 export const resolveRepo = async ({
   id,
   status,
   graderComment,
   resolvedById,
+  tool,
+  impersonatedBy,
 }: {
   id: string;
   status: 'APPROVED' | 'DENIED';
   graderComment?: string | null;
   resolvedById?: string | null;
+  /** The resolving surface (`data.tool` on the audit row). */
+  tool?: string | null;
+  /** The admin user id behind an impersonated session, when there is one. */
+  impersonatedBy?: string | null;
 }): Promise<RegradeRequest> => {
   if (status !== 'APPROVED' && status !== 'DENIED') {
     throw new Error('Resolution must be APPROVED or DENIED');
   }
   const stored = await getPrisma().regradeRequest.findUnique({
     where: { id },
-    select: { quiz_attempt_id: true },
+    select: { quiz_attempt_id: true, classroom_id: true, git_repo_assignment_id: true },
   });
   if (!stored) throw new Error('Regrade request not found');
   if (stored.quiz_attempt_id) {
     throw new Error('A quiz regrade request is resolved with resolveQuiz');
   }
   const reply = typeof graderComment === 'string' ? graderComment.trim() : '';
-  return getPrisma().regradeRequest.update({
+  const updated = await getPrisma().regradeRequest.update({
     where: { id },
     data: {
       status,
@@ -565,17 +646,32 @@ export const resolveRepo = async ({
       resolved_at: new Date(),
     },
   });
-};
 
-export const update = async ({
-  id,
-  data,
-}: {
-  id: string;
-  data: Prisma.RegradeRequestUpdateInput;
-}) => {
-  return getPrisma().regradeRequest.update({
-    where: { id },
-    data,
-  });
+  if (resolvedById) {
+    const role = await acceptedRoleIn(getPrisma(), stored.classroom_id, resolvedById);
+    if (role) {
+      await auditRegrade(
+        {
+          actorUserId: resolvedById,
+          tool: tool || 'update_regrade_request',
+          impersonatedBy: impersonatedBy ?? null,
+        },
+        {
+          classroomId: stored.classroom_id,
+          role,
+          requestId: id,
+          action: 'UPDATE',
+          data: {
+            event: 'regrade_resolve',
+            target: 'repo',
+            git_repo_assignment_id: stored.git_repo_assignment_id,
+            status,
+            reply_set: reply.length > 0,
+          },
+        }
+      );
+    }
+  }
+
+  return updated;
 };

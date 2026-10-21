@@ -241,6 +241,7 @@ export {
 export {
   QuizGradeError,
   QUIZ_GRADE_COMMENT_MAX_LENGTH,
+  QUIZZES_UNAVAILABLE_MESSAGE,
 } from './classmoji/quizGradeAdjust.service.ts';
 export type {
   QuizGradeErrorCode,

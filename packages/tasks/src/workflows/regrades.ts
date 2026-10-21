@@ -75,6 +75,10 @@ interface UpdateRegradeRequestTaskPayload {
    * than handing Prisma an unknown field; absent on payloads queued before.
    */
   resolved_by_id?: string | null;
+  /** The resolving surface, for the audit row's `data.tool`. Beside `data`, like `resolved_by_id`. */
+  tool?: string | null;
+  /** The admin user id behind an impersonated session, when there is one. */
+  impersonated_by?: string | null;
 }
 
 interface TaskPayloadWrapper<TPayload> {
@@ -154,7 +158,7 @@ export const updateRegradeRequestTask = task({
   // Sets fields, so safe to repeat on a connection blip.
   ...retryOnDatabaseBlip,
   run: async (payload: UpdateRegradeRequestTaskPayload) => {
-    const { request, data, resolved_by_id: resolvedById } = payload;
+    const { request, data, resolved_by_id: resolvedById, tool, impersonated_by } = payload;
     if (data.status !== 'APPROVED' && data.status !== 'DENIED') {
       throw new Error('update_regrade_request needs status APPROVED or DENIED');
     }
@@ -167,6 +171,8 @@ export const updateRegradeRequestTask = task({
       status: data.status,
       graderComment: typeof data.grader_comment === 'string' ? data.grader_comment : null,
       resolvedById: typeof resolvedById === 'string' ? resolvedById : null,
+      tool: typeof tool === 'string' ? tool : null,
+      impersonatedBy: typeof impersonated_by === 'string' ? impersonated_by : null,
     });
   },
   onSuccess: async ({ payload }: TaskPayloadWrapper<UpdateRegradeRequestTaskPayload>) => {
@@ -198,7 +204,7 @@ export interface QuizRegradeResolution {
   status: 'APPROVED' | 'DENIED';
   /** The grade the student asked about (the request's snapshot), as a shortcode. */
   previousEmoji: string | null;
-  /** The attempt's grade now, as a shortcode. */
+  /** The grade the resolution left (the request's `resolved_emoji` snapshot), as a shortcode. */
   currentEmoji: string | null;
   reply: string | null;
 }
@@ -264,6 +270,8 @@ export const quizRegradeResolvedTask = task({
       ClassmojiService.emojiMapping.findScaleByClassroomId(request.classroom_id),
     ]);
     const grade = quizAttemptGrade(attempt, scale);
+    // The resolution's own snapshot; the attempt's grade now only for a
+    // request resolved before the snapshot was recorded.
     const template = renderQuizRegradeResolvedEmail({
       classroomName: classroom?.name ?? null,
       studentName: request.student?.name ?? null,
@@ -271,7 +279,7 @@ export const quizRegradeResolvedTask = task({
       attemptNumber: attempt.attempt_number ?? null,
       status: request.status,
       previousEmoji: request.previous_grade[0] ?? grade.original.emoji,
-      currentEmoji: grade.effective.emoji,
+      currentEmoji: request.resolved_emoji ?? grade.effective.emoji,
       reply: request.grader_comment ?? null,
     });
 
