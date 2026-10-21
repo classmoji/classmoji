@@ -7,7 +7,12 @@ import {
   quizStanding,
   type ScorableQuizAttempt,
 } from '../quizScore.ts';
-import { countingQuizScore, quizGradeItem, type QuizGradeAssignment } from '../quizGrade.ts';
+import {
+  countingQuizScore,
+  quizGradeItem,
+  quizItemEmoji,
+  type QuizGradeAssignment,
+} from '../quizGrade.ts';
 import { estimateStudentGrade } from '../grades.ts';
 import { SCORE_EMOJI_MAPPINGS } from '../emojis.ts';
 
@@ -174,6 +179,7 @@ describe('late penalty after the adjustment (D2)', () => {
       raw_percentage: 90,
       original_percentage: 50,
       adjusted: true,
+      adjusted_emoji: '+1',
       late_hours: 2,
     });
     expect(score.counting).toBe(a);
@@ -205,6 +211,7 @@ describe('late penalty after the adjustment (D2)', () => {
       counting_raw_percentage: 90,
       counting_attempt_id: 'a',
       counting_adjusted: true,
+      counting_adjusted_emoji: 'score-90',
     });
 
     // The estimate reads the effective value.
@@ -216,5 +223,32 @@ describe('late penalty after the adjustment (D2)', () => {
       letterGradeMappings: [],
     });
     expect(estimate).toMatchObject({ kind: 'emoji', emoji: 'score-80' });
+  });
+});
+
+describe('quizItemEmoji (the gradebook cell)', () => {
+  // Two entries share 90: the staff pick is shown as picked.
+  const SCALE = { rocket: 100, '+1': 90, tada: 90, eyes: 80 };
+  const base = { counts_as_zero: false, counting_adjusted: true, counting_adjusted_emoji: 'tada' };
+
+  it('is the emoji staff picked on an adjusted attempt on time', () => {
+    expect(quizItemEmoji({ ...base, late_hours: 0 }, 90, SCALE)).toBe('tada');
+  });
+
+  it('is the penalised value as the nearest emoji when late', () => {
+    expect(quizItemEmoji({ ...base, late_hours: 2 }, 80, SCALE)).toBe('eyes');
+  });
+
+  it('is the nearest emoji without an adjustment, or when its emoji left the scale', () => {
+    expect(quizItemEmoji({ ...base, counting_adjusted: false, late_hours: 0 }, 100, SCALE)).toBe(
+      'rocket'
+    );
+    expect(
+      quizItemEmoji({ ...base, counting_adjusted_emoji: 'gone', late_hours: 0 }, 80, SCALE)
+    ).toBe('eyes');
+  });
+
+  it('is null on an empty scale', () => {
+    expect(quizItemEmoji({ ...base, late_hours: 0 }, 90, {})).toBeNull();
   });
 });

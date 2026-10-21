@@ -202,6 +202,7 @@ describe('quizGradeItem', () => {
       counting_raw_percentage: 82,
       counting_attempt_id: 'a',
       counting_adjusted: false,
+      counting_adjusted_emoji: null,
     });
   });
 

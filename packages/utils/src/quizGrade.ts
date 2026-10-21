@@ -27,6 +27,7 @@ import {
   adjustedPercentage,
   countingQuizAttempt,
   effectivePercentage,
+  quizPercentageEmoji,
   type QuizEmojiScale,
   type ScorableQuizAttempt,
 } from './quizScore.ts';
@@ -102,6 +103,8 @@ export interface CountingQuizScore<T extends ScorableQuizAttempt> {
   original_percentage: number | null;
   /** That attempt carries a staff adjustment in effect. */
   adjusted: boolean;
+  /** That attempt's adjustment emoji when `adjusted`, else null. */
+  adjusted_emoji: string | null;
   /** That attempt's whole hours late. */
   late_hours: number;
 }
@@ -157,9 +160,36 @@ export const countingQuizScore = <T extends ScorableQuizAttempt>(
         ? counting.partial_credit_percentage
         : null,
     adjusted: counting ? adjustedPercentage(counting, emojiScale) !== null : false,
+    adjusted_emoji:
+      counting && adjustedPercentage(counting, emojiScale) !== null
+        ? counting.adjusted_emoji
+        : null,
     late_hours: counting ? (lateById.get(counting.id) ?? 0) : 0,
   };
 };
+
+/**
+ * The emoji a quiz grade item shows for `value` (what the totals count): the
+ * staff-picked adjustment emoji itself when the counting attempt is adjusted
+ * and on time (two scale entries may share a value; the pick is what staff
+ * chose), else the nearest emoji to the value (the late-penalised score, or a
+ * counted 0). Null on an empty scale.
+ */
+export const quizItemEmoji = (
+  item: Pick<
+    GradedItem,
+    'counting_adjusted' | 'counting_adjusted_emoji' | 'late_hours' | 'counts_as_zero'
+  >,
+  value: number | null,
+  scale: QuizEmojiScale
+): string | null =>
+  item.counting_adjusted &&
+  item.counting_adjusted_emoji &&
+  !item.counts_as_zero &&
+  !(item.late_hours > 0) &&
+  Object.prototype.hasOwnProperty.call(scale, item.counting_adjusted_emoji)
+    ? item.counting_adjusted_emoji
+    : quizPercentageEmoji(value, scale);
 
 /** The assignment fields a quiz item reads. Structural: a narrow select fits. */
 export interface QuizGradeAssignment extends AssignmentVisibilityInput {
@@ -229,6 +259,7 @@ export const quizGradeItem = <T extends ScorableQuizAttempt>({
       counting_raw_percentage: score.raw_percentage,
       counting_attempt_id: score.counting_attempt_id,
       counting_adjusted: score.adjusted,
+      counting_adjusted_emoji: score.adjusted_emoji,
     };
   }
 

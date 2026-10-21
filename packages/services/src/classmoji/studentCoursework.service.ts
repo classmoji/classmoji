@@ -41,6 +41,7 @@ import {
   openToStudents,
   quizStanding,
   quizAttemptGrade,
+  quizPercentageEmoji,
   titleToIdentifier,
   type GitWebContext,
 } from '@classmoji/utils';
@@ -134,6 +135,12 @@ export interface StudentCourseworkRow {
   scoreEmoji?: string | null;
   /** QUIZ: the AI's original score as the classroom's emoji, shown beside an adjusted one. */
   originalScoreEmoji?: string | null;
+  /**
+   * QUIZ: what the counting attempt counts for after the late penalty, as the
+   * classroom's emoji, only when late and different from `scoreEmoji`; else
+   * null. The quizzes list shows it the same way ("→ 👀").
+   */
+  countedScoreEmoji?: string | null;
   /** QUIZ: the counting attempt's score was adjusted by staff. */
   adjusted?: boolean;
   /** QUIZ: when the counting attempt completed. */
@@ -552,6 +559,13 @@ export const listForStudent = async ({
       const countingGrade = counting.counting
         ? quizAttemptGrade(counting.counting, emojiScale)
         : null;
+      const countedEmoji =
+        counting.late_hours > 0 &&
+        counting.grade !== null &&
+        counting.raw_percentage !== null &&
+        counting.grade !== counting.raw_percentage
+          ? quizPercentageEmoji(counting.grade, emojiScale)
+          : null;
       const due = effectiveDeadline(a.student_deadline, extensionHours);
       // Past the (extended) due date with no completed attempt. Missing only
       // when none is running either: a running attempt reads In progress.
@@ -606,6 +620,8 @@ export const listForStudent = async ({
         score: counting.raw_percentage,
         scoreEmoji: countingGrade?.effective.emoji ?? null,
         originalScoreEmoji: countingGrade?.original.emoji ?? null,
+        countedScoreEmoji:
+          countedEmoji && countedEmoji !== countingGrade?.effective.emoji ? countedEmoji : null,
         adjusted: countingGrade?.adjusted ?? false,
         scoredAt: iso(counting.counting?.completed_at),
         attemptsUsed: standing.attemptsUsed,

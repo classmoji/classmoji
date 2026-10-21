@@ -73,6 +73,8 @@ export interface GradedItem {
   counting_attempt_id?: string | null;
   /** That attempt carries a staff grade adjustment in effect (the gradebook's "adjusted" chip). */
   counting_adjusted?: boolean;
+  /** The adjustment emoji itself when `counting_adjusted`: what staff picked, shown as is. */
+  counting_adjusted_emoji?: string | null;
 }
 
 /**
