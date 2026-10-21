@@ -348,6 +348,8 @@ model User {
   quiz_attempts                 QuizAttempt[]
   /// Quiz attempts whose score this user (teaching team) adjusted.
   quiz_attempts_adjusted        QuizAttempt[]             @relation("QuizAttemptAdjustedBy")
+  /// Quiz attempts whose instructor comment this user (teaching team) wrote.
+  quiz_attempts_commented       QuizAttempt[]             @relation("QuizAttemptCommentBy")
   regrade_requests              RegradeRequest[]
   /// Regrade requests this user (teaching team) resolved.
   regrade_requests_resolved     RegradeRequest[]          @relation("RegradeRequestResolvedBy")
@@ -1259,6 +1261,10 @@ model RegradeRequest {
   /// The teaching-team member who resolved the request (APPROVED or DENIED). Null while open and on rows resolved before it was recorded.
   resolved_by_id         String?
   resolved_at            DateTime?
+  /// Quiz requests: the attempt's emoji at resolution (APPROVED: the one set;
+  /// DENIED: the effective one kept). Null while open, on repo requests, and on
+  /// rows resolved before it was recorded.
+  resolved_emoji         String?
   created_at             DateTime             @default(now())
   updated_at             DateTime             @default(now()) @updatedAt
 
@@ -1526,15 +1532,19 @@ model QuizAttempt {
   adjusted_emoji            String?
   /// Staff comment to the student on this attempt; may be set without a score change.
   instructor_comment        String?
-  /// Who last adjusted the score or the comment, and when.
+  /// Who last set or changed the score adjustment, and when. Cleared on revert.
   adjusted_by_id            String?
   adjusted_at               DateTime?
+  /// Who last wrote `instructor_comment`, and when. Kept on revert.
+  comment_by_id             String?
+  comment_at                DateTime?
   created_at                DateTime  @default(now())
   updated_at                DateTime  @default(now()) @updatedAt
 
   quiz             Quiz               @relation(fields: [quiz_id], references: [id], onDelete: Cascade)
   user             User               @relation(fields: [user_id], references: [id], onDelete: Cascade)
   adjusted_by      User?              @relation("QuizAttemptAdjustedBy", fields: [adjusted_by_id], references: [id], onDelete: SetNull)
+  comment_by       User?              @relation("QuizAttemptCommentBy", fields: [comment_by_id], references: [id], onDelete: SetNull)
   conversation     AIConversation?    @relation(fields: [conversation_id], references: [id])
   events           QuizAttemptEvent[]
   regrade_requests RegradeRequest[]
