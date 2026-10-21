@@ -56,21 +56,6 @@ export function deriveResult(answers: readonly Answer[]): DerivedQuestionResult 
   };
 }
 
-/** Points one question is worth: the credit of a correct answer with no hint. */
-export const QUESTION_POINTS = ANSWER_LEVEL_CREDIT.correct;
-
-/**
- * The points earned so far out of the points possible so far, from the
- * recorded results only (a question still open counts toward neither).
- */
-export function scoreSoFar(results: readonly { credit_earned: number }[]): {
-  earned: number;
-  possible: number;
-} {
-  const earned = results.reduce((sum, r) => sum + r.credit_earned, 0);
-  return { earned: Math.round(earned * 10) / 10, possible: QUESTION_POINTS * results.length };
-}
-
 /**
  * Attempt percentages from its question results, rounded to one decimal as the
  * existing completion path does: partial credit is the mean credit, first-attempt

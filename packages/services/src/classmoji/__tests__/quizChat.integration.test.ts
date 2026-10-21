@@ -1135,14 +1135,13 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
       questionCount: 3,
       presented: 2,
       finalized: [1],
-      score: { earned: 100, possible: 100 },
       completed: false,
       hasEvaluation: false,
       lastAction: 'try_again',
     });
   });
 
-  it("puts the score so far in the hidden status of the student's next message", async () => {
+  it("puts progress, never a score, in the hidden status of the student's next message (E14)", async () => {
     const attemptId = await newAttempt();
     let turn: Turn = await begin(attemptId);
     turn = await completeQuestion(attemptId, turn, 1, [
@@ -1154,9 +1153,9 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     await admit({ attemptId, message: { id, text: 'how am I doing?' }, runId });
     const admitted = (await chat.loadCanonicalMessages(attemptId)).find(m => m.id === id);
     const status = admitted?.parts[1] as { type: string; text: string } | undefined;
-    expect(status?.text).toContain(
-      'Score so far: 85 of 100 points, from the 1 question with a recorded result (100 points each). Questions remaining: 2.'
-    );
+    expect(status?.text).toContain('Questions with a recorded result: 1/3');
+    expect(status?.text).toContain('Questions remaining: 2');
+    expect(status?.text).not.toMatch(/score|points?\b|%|\b85\b/i);
   });
 
   // ─── admission ────────────────────────────────────────────────────────────
@@ -1365,7 +1364,6 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     expect(await grading.getProgress(attemptId)).toMatchObject({
       presented: 1,
       finalized: [1],
-      score: { earned: 25, possible: 100 },
       lastAction: 'next',
     });
 
