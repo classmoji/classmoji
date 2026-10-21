@@ -53,6 +53,7 @@ import {
   requireQuizzesVisible,
   requireScaleEmoji,
   requireTeachingTeam,
+  scoreChangingEmoji,
   seededScaleInTx,
   type QuizAttemptAdjustment,
   type QuizGradeActor,
@@ -509,9 +510,16 @@ export const createForQuizAttempt = async (
   return { request, created, classroomId, quiz, attemptNumber };
 };
 
+/** Longest staff reply on a quiz regrade request (what the student reads). */
+export const QUIZ_REGRADE_REPLY_MAX_LENGTH = 2000;
+
 export interface ResolveQuizRegradeInput extends QuizGradeActor {
   requestId: string;
-  /** APPROVED = adjust the attempt to `emoji`; DENIED = keep its score. */
+  /**
+   * APPROVED = adjust the attempt to `emoji`; DENIED = keep its score.
+   * APPROVED with the emoji the attempt already shows keeps the score and
+   * resolves DENIED (read the stored `request.status`).
+   */
   resolution: 'APPROVED' | 'DENIED';
   /** Required for APPROVED: an emoji on the classroom's scale. Ignored for DENIED. */
   emoji?: string;
@@ -520,6 +528,7 @@ export interface ResolveQuizRegradeInput extends QuizGradeActor {
 }
 
 export interface ResolveQuizRegradeResult {
+  /** The request as stored; `status` is the resolution written, which can differ from the input's. */
   request: RegradeRequest;
   /** True when the request was no longer IN_REVIEW: nothing was written or audited. */
   alreadyResolved: boolean;
@@ -543,7 +552,11 @@ const requireRequestId = (requestId: unknown): string => {
  * which must be the attempt's own; never the attempt's owner). APPROVED
  * writes the attempt's adjustment with `emoji` (audited `quiz_attempt_adjust`,
  * `via_regrade_request_id`) and marks the request APPROVED; DENIED leaves the
- * attempt as it is. Both store the reply in `grader_comment`, snapshot the
+ * attempt as it is. APPROVED with the emoji the attempt already shows
+ * (`scoreChangingEmoji`) is a Keep: nothing is adjusted and the request is
+ * marked DENIED ("Score kept"), so picking the shown emoji never lowers an
+ * unadjusted score to that emoji's own value. The reply is required and at
+ * most `QUIZ_REGRADE_REPLY_MAX_LENGTH` characters. Both store the reply in `grader_comment`, snapshot the
  * resulting emoji in `resolved_emoji` (the one set, or the effective one
  * kept) and audit `regrade_resolve` (`resolution`: adjust | keep). A request
  * already resolved is returned as is (`alreadyResolved`), before the emoji and
@@ -618,29 +631,42 @@ export const resolveQuiz = async (
       if (reply === null) {
         throw new QuizGradeError('invalid_input', 'A reply to the student is required');
       }
+      if (reply.length > QUIZ_REGRADE_REPLY_MAX_LENGTH) {
+        throw new QuizGradeError(
+          'invalid_input',
+          `The reply is longer than ${QUIZ_REGRADE_REPLY_MAX_LENGTH} characters`
+        );
+      }
       const txScale = await seededScaleInTx(tx, located.classroom_id, scale);
 
       let current = attempt;
       let change = null;
+      let status: 'APPROVED' | 'DENIED' = resolution;
       if (resolution === 'APPROVED') {
-        const emoji = requireScaleEmoji(input.emoji, txScale);
+        const picked = requireScaleEmoji(input.emoji, txScale);
         await requireGradableAttempt(tx, attempt);
-        const applied = await applyAdjustmentInTx(tx, attempt, {
-          emoji,
-          comment: undefined,
-          actorUserId,
-          actorRole,
-          scale: txScale,
-          event: 'quiz_attempt_adjust',
-        });
-        current = applied.attempt;
-        change = applied.change;
+        const emoji = scoreChangingEmoji(attempt, picked, txScale);
+        if (emoji === undefined) {
+          // The grade the student already sees: keep it.
+          status = 'DENIED';
+        } else {
+          const applied = await applyAdjustmentInTx(tx, attempt, {
+            emoji,
+            comment: undefined,
+            actorUserId,
+            actorRole,
+            scale: txScale,
+            event: 'quiz_attempt_adjust',
+          });
+          current = applied.attempt;
+          change = applied.change;
+        }
       }
 
       const updated = await tx.regradeRequest.update({
         where: { id: request.id },
         data: {
-          status: resolution,
+          status,
           grader_comment: reply,
           resolved_by_id: actorUserId,
           resolved_at: new Date(),
@@ -672,8 +698,9 @@ export const resolveQuiz = async (
         event: 'regrade_resolve',
         target: 'quiz',
         quiz_attempt_id: outcome.attempt.id,
-        status: resolution,
-        resolution: resolution === 'APPROVED' ? 'adjust' : 'keep',
+        status: outcome.request.status,
+        resolution: outcome.request.status === 'APPROVED' ? 'adjust' : 'keep',
+        ...(outcome.request.status !== resolution ? { requested_status: resolution } : {}),
         resolved_emoji: outcome.request.resolved_emoji,
         ...(outcome.change
           ? { old_emoji: outcome.change.oldEmoji, new_emoji: outcome.change.newEmoji }

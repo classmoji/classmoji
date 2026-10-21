@@ -464,9 +464,24 @@ export interface AdjustQuizAttemptInput extends QuizGradeActor {
 }
 
 /**
+ * The emoji to write for a staff pick, or undefined to keep the score: the
+ * attempt's current grade (`quizAttemptGrade(...).effective.emoji`, the
+ * adjustment itself or the AI score's nearest emoji) picked again is no
+ * change. Without this, picking the emoji an unadjusted 84% already shows
+ * would store that emoji's own value (80) and lower the grade.
+ */
+export const scoreChangingEmoji = (
+  attempt: AdjustableAttempt,
+  emoji: string,
+  scale: Record<string, number>
+): string | undefined =>
+  emoji === quizAttemptGrade(attempt, scale).effective.emoji ? undefined : emoji;
+
+/**
  * Adjust a quiz attempt's score and/or its comment to the student (teaching
  * team). Setting the same emoji and comment again writes nothing and audits
- * nothing (`changed: false`).
+ * nothing (`changed: false`); so does picking the emoji the attempt already
+ * shows (`scoreChangingEmoji`): the score is kept, a comment change still saves.
  */
 export const adjust = async (input: AdjustQuizAttemptInput): Promise<QuizAdjustResult> => {
   const { emoji, actorUserId } = input;
@@ -485,7 +500,10 @@ export const adjust = async (input: AdjustQuizAttemptInput): Promise<QuizAdjustR
     refuseOwnAttempt(current, actorUserId);
     await requireGradableAttempt(tx, current);
     const txScale = await seededScaleInTx(tx, classroomId, scale);
-    const nextEmoji = emoji === undefined ? undefined : requireScaleEmoji(emoji, txScale);
+    const nextEmoji =
+      emoji === undefined
+        ? undefined
+        : scoreChangingEmoji(current, requireScaleEmoji(emoji, txScale), txScale);
     const result = await applyAdjustmentInTx(tx, current, {
       emoji: nextEmoji,
       comment,
@@ -509,15 +527,20 @@ export const adjust = async (input: AdjustQuizAttemptInput): Promise<QuizAdjustR
 
 export interface RevertQuizAttemptInput extends QuizGradeActor {
   attemptId: string;
+  /** The comment to the student, written with the revert. Omit to keep it; null or '' clears it. */
+  comment?: string | null;
 }
 
 /**
  * Clear a quiz attempt's score adjustment (teaching team): the AI's score
- * counts again. The comment to the student stays. Reverting an attempt with
- * no adjustment writes nothing and audits nothing (`changed: false`).
+ * counts again. The comment to the student stays unless `comment` is given,
+ * which is written in the same transaction (one audit row). Reverting an
+ * attempt with no adjustment and no comment change writes nothing and audits
+ * nothing (`changed: false`).
  */
 export const revert = async (input: RevertQuizAttemptInput): Promise<QuizAdjustResult> => {
   const { actorUserId } = input;
+  const comment = input.comment === undefined ? undefined : normalizeComment(input.comment);
   const { attemptId, classroomId, scale } = await prepareForAttempt(input.attemptId, actorUserId);
 
   const { attempt, change } = await getPrisma().$transaction(async tx => {
@@ -527,9 +550,11 @@ export const revert = async (input: RevertQuizAttemptInput): Promise<QuizAdjustR
     }
     const actorRole = await requireTeachingTeam(tx, classroomId, actorUserId);
     refuseOwnAttempt(current, actorUserId);
+    // A comment is written only where `adjust` would write it.
+    if (comment !== undefined) await requireGradableAttempt(tx, current);
     const result = await applyAdjustmentInTx(tx, current, {
       emoji: null,
-      comment: undefined,
+      comment,
       actorUserId,
       actorRole,
       scale,

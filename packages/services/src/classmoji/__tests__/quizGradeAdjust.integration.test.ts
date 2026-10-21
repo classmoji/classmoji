@@ -322,6 +322,106 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
       expect(again.changed).toBe(false);
     });
 
+    it("picking the emoji the attempt already shows keeps its score (84% shows as 80's emoji)", async () => {
+      const { quizId, assignmentId } = await makeQuiz(classX);
+      const { id } = await makeAttempt(quizId, studentA, 84);
+
+      // 84 shows as 👀 (80). Picking 👀 alone changes nothing.
+      const same = await quizAttempt.adjust({
+        attemptId: id,
+        emoji: 'eyes',
+        actorUserId: owner,
+        tool: TOOL,
+      });
+      expect(same).toMatchObject({
+        changed: false,
+        attempt: { adjusted_emoji: null, adjusted_by_id: null },
+        grade: { adjusted: false, effective: { emoji: 'eyes', percentage: 84 } },
+      });
+
+      // With a comment: the comment saves, the score stays 84.
+      const withComment = await quizAttempt.adjust({
+        attemptId: id,
+        emoji: 'eyes',
+        comment: 'Looks right to me.',
+        actorUserId: owner,
+        tool: TOOL,
+      });
+      expect(withComment).toMatchObject({
+        changed: true,
+        attempt: { adjusted_emoji: null, instructor_comment: 'Looks right to me.' },
+        grade: { adjusted: false, effective: { percentage: 84 } },
+      });
+      expect(await itemFor(classX, studentA, assignmentId)).toMatchObject({
+        grade: 84,
+        counting_adjusted: false,
+      });
+      const audits = await prisma.auditLog.findMany({
+        where: { resource_type: 'QUIZ_ATTEMPT', resource_id: id },
+      });
+      expect(audits).toHaveLength(1);
+      expect(audits[0].data).toMatchObject({
+        old_emoji: null,
+        new_emoji: null,
+        new_percentage: 84,
+        comment_changed: true,
+      });
+
+      // Another emoji still adjusts; picking it again is the same no-op.
+      const up = await quizAttempt.adjust({
+        attemptId: id,
+        emoji: '+1',
+        actorUserId: owner,
+        tool: TOOL,
+      });
+      expect(up).toMatchObject({ changed: true, grade: { effective: { percentage: 90 } } });
+      const upAgain = await quizAttempt.adjust({
+        attemptId: id,
+        emoji: '+1',
+        actorUserId: owner,
+        tool: TOOL,
+      });
+      expect(upAgain.changed).toBe(false);
+    });
+
+    it('revert with a comment writes both in one change and one audit row', async () => {
+      const { quizId } = await makeQuiz(classX);
+      const { id } = await makeAttempt(quizId, studentA, 50);
+      await quizAttempt.adjust({ attemptId: id, emoji: 'rocket', actorUserId: owner, tool: TOOL });
+
+      const reverted = await quizAttempt.revert({
+        attemptId: id,
+        comment: 'Back to the AI grade.',
+        actorUserId: assistant,
+        tool: TOOL,
+      });
+      expect(reverted).toMatchObject({
+        changed: true,
+        attempt: {
+          adjusted_emoji: null,
+          adjusted_by_id: null,
+          instructor_comment: 'Back to the AI grade.',
+          comment_by_id: assistant,
+        },
+        grade: { adjusted: false, effective: { percentage: 50 } },
+      });
+      const revertAudits = await prisma.auditLog.findMany({
+        where: {
+          resource_type: 'QUIZ_ATTEMPT',
+          resource_id: id,
+          user_id: assistant,
+        },
+      });
+      expect(revertAudits).toHaveLength(1);
+      expect(revertAudits[0].data).toMatchObject({
+        event: 'quiz_attempt_adjust_revert',
+        old_emoji: 'rocket',
+        new_emoji: null,
+        comment_set: true,
+        comment_changed: true,
+      });
+    });
+
     it('a student may not adjust, not even their own attempt', async () => {
       const { quizId } = await makeQuiz(classX);
       const { id } = await makeAttempt(quizId, studentA, 50);
@@ -851,6 +951,85 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
         where: { resource_type: 'REGRADE_REQUEST', resource_id: next.request.id, action: 'UPDATE' },
       });
       expect(denyAudit?.data).toMatchObject({ event: 'regrade_resolve', resolution: 'keep' });
+    });
+
+    it('approving with the emoji the attempt already shows keeps the score (DENIED)', async () => {
+      const { quizId, assignmentId } = await makeQuiz(classX);
+      const { id } = await makeAttempt(quizId, studentB, 84);
+      const { request } = await regradeRequest.createForQuizAttempt({
+        attemptId: id,
+        comment: 'Q2',
+        actorUserId: studentB,
+        tool: TOOL,
+      });
+      expect(request.previous_grade).toEqual(['eyes']);
+
+      const kept = await regradeRequest.resolveQuiz({
+        requestId: request.id,
+        resolution: 'APPROVED',
+        emoji: 'eyes',
+        comment: 'Your grade already reflects that.',
+        actorUserId: owner,
+        tool: TOOL,
+      });
+      expect(kept).toMatchObject({
+        alreadyResolved: false,
+        request: {
+          status: 'DENIED',
+          grader_comment: 'Your grade already reflects that.',
+          resolved_emoji: 'eyes',
+        },
+        attempt: { adjusted_emoji: null, adjusted_by_id: null },
+        grade: { adjusted: false, effective: { emoji: 'eyes', percentage: 84 } },
+      });
+      // 84 still counts, not 80.
+      expect(await itemFor(classX, studentB, assignmentId)).toMatchObject({ grade: 84 });
+      expect(
+        await prisma.auditLog.count({ where: { resource_type: 'QUIZ_ATTEMPT', resource_id: id } })
+      ).toBe(0);
+      const audit = await prisma.auditLog.findFirst({
+        where: { resource_type: 'REGRADE_REQUEST', resource_id: request.id, action: 'UPDATE' },
+      });
+      expect(audit?.data).toMatchObject({
+        event: 'regrade_resolve',
+        status: 'DENIED',
+        resolution: 'keep',
+        requested_status: 'APPROVED',
+      });
+    });
+
+    it('refuses a reply longer than 2000 characters, writing nothing', async () => {
+      const { quizId } = await makeQuiz(classX);
+      const { id } = await makeAttempt(quizId, studentB, 40);
+      const { request } = await regradeRequest.createForQuizAttempt({
+        attemptId: id,
+        comment: 'long',
+        actorUserId: studentB,
+        tool: TOOL,
+      });
+      expect(
+        await refusalMessage(
+          regradeRequest.resolveQuiz({
+            requestId: request.id,
+            resolution: 'DENIED',
+            comment: 'x'.repeat(2001),
+            actorUserId: owner,
+            tool: TOOL,
+          })
+        )
+      ).toMatch(/longer than 2000 characters/);
+      expect(
+        (await prisma.regradeRequest.findUniqueOrThrow({ where: { id: request.id } })).status
+      ).toBe('IN_REVIEW');
+      // 2000 exactly is fine.
+      const ok = await regradeRequest.resolveQuiz({
+        requestId: request.id,
+        resolution: 'DENIED',
+        comment: 'y'.repeat(2000),
+        actorUserId: owner,
+        tool: TOOL,
+      });
+      expect(ok.request.grader_comment).toHaveLength(2000);
     });
 
     it('a quiz approve never touches repo grades or a repo request', async () => {
