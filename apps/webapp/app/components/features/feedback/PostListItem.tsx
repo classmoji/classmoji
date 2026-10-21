@@ -2,6 +2,7 @@ import { Link } from 'react-router';
 import { plainText } from './LinkedText';
 import { MessageSquareIcon } from 'lucide-react';
 import { FeedbackAvatar } from '~/components/features/feedback/FeedbackAvatar';
+import { CategoryLabel } from './CategoryLabel';
 import { authorName, timeAgo, type FeedbackPostSummary } from './feedback';
 import { StatusLabel } from './StatusLabel';
 import { useOptimisticVote } from './useFeedbackAction';
@@ -20,11 +21,10 @@ export function PostListItem({ post, signedIn }: { post: FeedbackPostSummary; si
   return (
     <article className="group relative flex gap-8 px-8 py-5 transition-colors duration-150 hover:bg-panel-hover">
       <div className="min-w-0 flex-1">
-        {post.status && (
-          <div className="mb-1.5">
-            <StatusLabel status={post.status} />
-          </div>
-        )}
+        <div className="mb-1.5 flex items-center gap-3">
+          <CategoryLabel category={post.category} />
+          {post.status && <StatusLabel status={post.status} />}
+        </div>
         <h3 className="text-[15px] font-semibold leading-snug text-ink-0">
           <Link
             to={`/feedback/p/${post.id}`}

@@ -186,7 +186,7 @@ export default function FeedbackBoard() {
               ))}
             </ul>
           ) : (
-            <p className="mt-3 px-1 text-[13px] text-ink-4">Shipped requests will show up here.</p>
+            <p className="mt-3 px-1 text-[13px] text-ink-4">Shipped posts will show up here.</p>
           )}
         </section>
       </aside>
