@@ -6,6 +6,10 @@
  * best; logos show in their own colours. In dark mode they are white
  * silhouettes, which reads for any brand colour.
  *
+ * Supporters back the project; infrastructure providers donate a service
+ * (credits, hosting). They are kept in separate rows so neither reads as the
+ * other.
+ *
  * An entry without `logo` renders as a placeholder tile, so the row keeps its
  * shape while logos are still coming in.
  */
@@ -20,7 +24,7 @@ interface Sponsor {
   height?: number;
 }
 
-const sponsors: Sponsor[] = [
+const supporters: Sponsor[] = [
   { name: 'DALI Lab', href: 'https://dali.dartmouth.edu', logo: '/sponsors/dali.svg', height: 58 },
   {
     name: 'Dartmouth Department of Computer Science',
@@ -36,60 +40,74 @@ const sponsors: Sponsor[] = [
   },
 ];
 
+const infrastructure: Sponsor[] = [
+  { name: 'Trigger.dev', href: 'https://trigger.dev', logo: '/sponsors/trigger-dev.svg', height: 38 },
+];
+
+const groups = [
+  { id: 'sponsors-heading', heading: 'Supported by', sponsors: supporters },
+  { id: 'infrastructure-heading', heading: 'Infrastructure by', sponsors: infrastructure },
+].filter(group => group.sponsors.length > 0);
+
 const tile =
   'group flex h-24 items-center justify-center rounded-xl px-5 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent';
 ---
 
 <section aria-labelledby="sponsors-heading" class="px-6 pb-24 pt-8 lg:pb-32">
-  <div class="mx-auto max-w-5xl text-center">
-    <h2
-      id="sponsors-heading"
-      class="text-xs font-semibold uppercase tracking-[0.18em] text-ink-3 dark:text-inkd-3"
-    >
-      Supported by
-    </h2>
+  <div class="mx-auto max-w-5xl space-y-12 text-center">
+    {
+      groups.map(group => (
+        <div>
+          <h2
+            id={group.id}
+            class="text-xs font-semibold uppercase tracking-[0.18em] text-ink-3 dark:text-inkd-3"
+          >
+            {group.heading}
+          </h2>
 
-    {/* Equal columns, so the row's middle sits under the heading whatever
-        each logo's width; one column on phones. */}
-    <ul
-      style={`--sponsor-cols: ${sponsors.length}`}
-      class="mx-auto mt-8 grid max-w-4xl grid-cols-1 items-center justify-items-center gap-y-6 sm:grid-cols-[repeat(var(--sponsor-cols),minmax(0,1fr))]"
-    >
-      {
-        sponsors.map(sponsor => {
-          const content = sponsor.logo ? (
-            <img
-              src={sponsor.logo}
-              alt={sponsor.name}
-              loading="lazy"
-              style={`height: ${sponsor.height ?? 48}px`}
-              class="w-auto max-w-[80vw] object-contain dark:brightness-0 dark:invert"
-            />
-          ) : (
-            <span class="text-sm font-medium text-ink-3 dark:text-inkd-3">{sponsor.name}</span>
-          );
-          const placeholder = sponsor.logo
-            ? ''
-            : ' border border-dashed border-edge dark:border-neutral-700';
-          return (
-            <li>
-              {sponsor.href ? (
-                <a
-                  href={sponsor.href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  aria-label={sponsor.name}
-                  class={`${tile}${placeholder} hover:bg-panel dark:hover:bg-panel-dark`}
-                >
-                  {content}
-                </a>
+          {/* Equal columns, so the row's middle sits under the heading whatever
+              each logo's width; one column on phones. */}
+          <ul
+            aria-labelledby={group.id}
+            style={`--sponsor-cols: ${group.sponsors.length}`}
+            class="mx-auto mt-8 grid max-w-4xl grid-cols-1 items-center justify-items-center gap-y-6 sm:grid-cols-[repeat(var(--sponsor-cols),minmax(0,1fr))]"
+          >
+            {group.sponsors.map(sponsor => {
+              const content = sponsor.logo ? (
+                <img
+                  src={sponsor.logo}
+                  alt={sponsor.name}
+                  loading="lazy"
+                  style={`height: ${sponsor.height ?? 48}px`}
+                  class="w-auto max-w-[80vw] object-contain dark:brightness-0 dark:invert"
+                />
               ) : (
-                <div class={`${tile}${placeholder}`}>{content}</div>
-              )}
-            </li>
-          );
-        })
-      }
-    </ul>
+                <span class="text-sm font-medium text-ink-3 dark:text-inkd-3">{sponsor.name}</span>
+              );
+              const placeholder = sponsor.logo
+                ? ''
+                : ' border border-dashed border-edge dark:border-neutral-700';
+              return (
+                <li>
+                  {sponsor.href ? (
+                    <a
+                      href={sponsor.href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label={sponsor.name}
+                      class={`${tile}${placeholder} hover:bg-panel dark:hover:bg-panel-dark`}
+                    >
+                      {content}
+                    </a>
+                  ) : (
+                    <div class={`${tile}${placeholder}`}>{content}</div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ))
+    }
   </div>
 </section>

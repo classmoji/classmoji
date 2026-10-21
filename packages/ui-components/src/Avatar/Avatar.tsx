@@ -18,7 +18,7 @@ export const Avatar = forwardRef<HTMLSpanElement, AvatarProps>(function Avatar(
   ref
 ) {
   const baseStyle: CSSProperties = {
-    background: `linear-gradient(135deg, oklch(82% 0.09 ${hue}), oklch(60% 0.18 ${hue}))`,
+    background: `oklch(60% 0.18 ${hue})`,
     width: size,
     height: size,
     fontSize: size * 0.42,
