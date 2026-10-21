@@ -511,9 +511,11 @@ export {
   FEEDBACK_STATUSES,
   FEEDBACK_CATEGORIES,
   FEEDBACK_STATUS_LABELS,
+  FEEDBACK_RATE_LIMITS,
   isFeedbackStatus,
   isFeedbackCategory,
   type FeedbackSort,
+  type FeedbackRateKind,
 } from './classmoji/feedback.service.ts';
 
 // Fly certificate automation for class-site custom domains. Every method throws

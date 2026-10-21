@@ -14,6 +14,7 @@ import {
   ClassmojiService,
   FeedbackNotFoundError,
   FeedbackValidationError,
+  isFeedbackCategory,
   isFeedbackStatus,
 } from '@classmoji/services';
 import { allowFeedbackAction } from '~/utils/feedbackRate.server';
@@ -40,11 +41,16 @@ export const action = async ({ request }: Route.ActionArgs) => {
     switch (intent) {
       case 'create-post': {
         if (!allowFeedbackAction(userId, 'post')) return tooFast();
-        // Every post is a feature request for now; the board has no other kind.
+        const category = field('category');
+        if (category && !isFeedbackCategory(category)) {
+          return Response.json({ error: 'Unknown category.' }, { status: 400 });
+        }
         const { id } = await feedback.createPost({
           authorId: userId,
           title: field('title'),
           body: field('body'),
+          // Left out, the service files it as a feature request.
+          category: category && isFeedbackCategory(category) ? category : undefined,
           isAnonymous: field('anonymous') === 'true',
         });
         return { ok: true, postId: id };

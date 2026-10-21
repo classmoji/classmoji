@@ -46,6 +46,8 @@ export const STATUS_META: Record<
   COMPLETED: { label: 'Completed', description: 'Recently shipped', ink: 'text-mint-ink' },
 };
 
+export const CATEGORY_ORDER: FeedbackCategory[] = ['FEATURE', 'BUG', 'INTEGRATION'];
+
 export const CATEGORY_EMOJI: Record<FeedbackCategory, string> = {
   FEATURE: '💡',
   BUG: '🐛',

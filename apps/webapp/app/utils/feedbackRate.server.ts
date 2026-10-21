@@ -1,28 +1,19 @@
 /**
  * Per-user token buckets for the feedback board, so one account cannot flood
  * it. In memory, like apps/mcp/src/mcp/rateLimit.ts: the webapp runs on one
- * Fly machine. If it ever scales out, this needs a shared store.
+ * Fly machine. If it ever scales out, this needs a shared store. The budgets
+ * are the service's `FEEDBACK_RATE_LIMITS`, which the MCP applies too (to its
+ * own buckets).
  */
 
-interface Limit {
-  /** Burst size. */
-  capacity: number;
-  /** Tokens returned per hour. */
-  perHour: number;
-}
-
-export const FEEDBACK_LIMITS = {
-  post: { capacity: 5, perHour: 10 },
-  comment: { capacity: 20, perHour: 60 },
-  vote: { capacity: 60, perHour: 600 },
-} satisfies Record<string, Limit>;
+import { FEEDBACK_RATE_LIMITS, type FeedbackRateKind } from '@classmoji/services';
 
 const buckets = new Map<string, { tokens: number; at: number }>();
 const IDLE_MS = 2 * 60 * 60 * 1000;
 
 /** True when the user may act now; false means slow down. */
-export function allowFeedbackAction(userId: string, kind: keyof typeof FEEDBACK_LIMITS): boolean {
-  const limit = FEEDBACK_LIMITS[kind];
+export function allowFeedbackAction(userId: string, kind: FeedbackRateKind): boolean {
+  const limit = FEEDBACK_RATE_LIMITS[kind];
   const key = `${kind}:${userId}`;
   const now = Date.now();
   if (buckets.size > 5000) {
