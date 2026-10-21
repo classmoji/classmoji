@@ -457,14 +457,17 @@ describe('quiz.getQuizzesForStudent', () => {
       'first_attempt_percentage',
       'total_duration_ms',
       'unfocused_duration_ms',
-      // The student's own adjustment and comment, and who made it (name only).
+      // The student's own adjustment and comment, and who wrote the comment
+      // (name only); not who adjusted the score.
       'adjusted_emoji',
       'instructor_comment',
       'adjusted_at',
+      'comment_at',
     ]) {
       expect(select[field], field).toBe(true);
     }
-    expect(select.adjusted_by).toEqual({ select: { name: true } });
+    expect(select.comment_by).toEqual({ select: { name: true } });
+    expect(select).not.toHaveProperty('adjusted_by');
   });
 
   it('keeps the derived attempt data and names published material only', async () => {
