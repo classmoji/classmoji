@@ -1,47 +1,52 @@
-# 🍎 classmoji
+<div align="center">
 
-[![Open Source Love](https://img.shields.io/badge/Open%20Source-%E2%9D%A4-red)](https://github.com/classmoji/classmoji)
-[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](./LICENSE.MD)
+![Classmoji](.github/assets/banner.png)
 
-The classroom management system for teaching CS as it's actually practiced. Students learn git by using it for every assignment. Instructors get automated workflows and teaching tools without fighting clunky interfaces. Open source, lightweight, and focused on what matters: helping students become better developers while making instructors' lives easier.
+### Classroom management for coding courses, built on git
 
-## Features
+[Website](https://classmoji.io) | [Docs](https://classmoji.io/docs) | [Issues](https://github.com/classmoji/classmoji/issues) | [Self-hosting](https://classmoji.io/docs/self-hosting/docker)
 
-**Same GitHub Classroom features:**
+[![Open Source](https://img.shields.io/badge/Open%20Source-%E2%9D%A4-red.svg)](https://github.com/classmoji/classmoji)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](./LICENSE)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](./CONTRIBUTING.md)
+[![Last commit](https://img.shields.io/github/last-commit/classmoji/classmoji)](https://github.com/classmoji/classmoji/commits/main)
+[![Github stars](https://img.shields.io/github/stars/classmoji/classmoji?style=social)](https://github.com/classmoji/classmoji)
 
-- Modules with typed assignments: a repository, a quiz or a form
-- Individual or group repositories with automatic creation for each student/team
-- Template repositories with starter code and boilerplate
-- Submit by pushing to the repo or by closing a GitHub issue, per assignment
-- Autograding via GitHub Actions, with results shown alongside submissions
-- Set release dates and deadlines and track progress in the teacher dashboard
-- Access control management
+</div>
 
-**Extra features:**
+## About Classmoji
 
-- Grade with an emoji scale or a plain numeric scale
-- A grading page per assignment, plus a gradebook with every assignment in one view
-- AI quiz generation and grading using Claude
-- Code-aware quiz mode (can access student repositories)
-- Interactive slide presentations with Reveal.js
-- Custom course pages built on BlockNote (Notion-style editor)
-- Classroom token system for extensions
-- Integrated calendar with event types (lectures, office hours, labs)
-- Self-formed teams (students choose)
-- Instructor-assigned teams
+Students use git for every assignment, the way developers actually work. Instructors get repositories, quizzes, pages, slides and grading in one open-source app.
 
-## Quick Links
+![A Classmoji assignment page: each student's repository, commit count, last push and grade](.github/assets/assignment.png)
 
-- [Try Demo](https://demo.classmoji.io)
-- [Documentation](https://classmoji.io/docs)
-- [Local Development Guide](https://classmoji.io/docs/open-source/local-development)
+## Key features
+
+- **[Assignments on Github or Gitlab](https://classmoji.io/docs/instructors/repositories)** - a repository per student or team, submitted by push or by closing an issue
+- **[Autograding](https://classmoji.io/docs/instructors/autograding)** - tests run in Github Actions, results shown next to each submission
+- **AI quizzes** - generated and graded with Claude, optionally reading the student's code
+- **[Pages](https://classmoji.io/docs/instructors/pages) and slides** - course pages and Reveal.js decks, co-edited live
+- **[Grading](https://classmoji.io/docs/instructors/grading)** - emoji or numeric scales, a page per assignment and a gradebook
+- **[Ask Moji](https://classmoji.io/docs/instructors/ask-moji)** - a course assistant that answers from your class materials
+- **[MCP server](https://classmoji.io/docs/instructors/mcp-server)** - everything in the app, available to AI clients
+
+## Getting started
+
+Sign in at [classmoji.io](https://classmoji.io) and create a classroom. See [Create a classroom](https://classmoji.io/docs/instructors/create-classroom).
+
+## Self-hosting
+
+- [Docker guide](https://classmoji.io/docs/self-hosting/docker)
+- [Environment variables](https://classmoji.io/docs/self-hosting/environment-variables)
 
 ## Contributing
 
-Contributions are welcome! We especially encourage student contributions — this project was built for CS education, and students bring the most valuable perspective.
+Contributions are welcome, especially from students. See [CONTRIBUTING.md](./CONTRIBUTING.md), the [local development guide](https://classmoji.io/docs/open-source/local-development) and the [Code of Conduct](./CODE_OF_CONDUCT.md).
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md) to get your local environment running and learn how to submit a pull request.
+## Supported by
 
-## Code of Conduct
-
-Please read the [Community Code of Conduct](./CODE_OF_CONDUCT.MD) for interacting with this repository.
+<p align="center">
+  <a href="https://trigger.dev"><img src=".github/assets/trigger-dev.svg" alt="Trigger.dev" height="32"></a>
+  <br>
+  Background jobs powered by <a href="https://trigger.dev">Trigger.dev</a>
+</p>
