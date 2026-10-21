@@ -415,63 +415,52 @@ export const createForQuizAttempt = async (
   await requireQuizzesVisible(located.quiz.classroom_id, actorUserId);
   const scale = await findScaleByClassroomId(located.quiz.classroom_id);
 
-  const run = () =>
-    getPrisma().$transaction(async tx => {
-      const attempt = await loadAttemptForUpdate(tx, attemptId);
-      const classroomId = attempt.quiz.classroom_id;
-      if (classroomId !== located.quiz.classroom_id) {
-        throw new QuizGradeError('not_found', 'Quiz attempt not found');
-      }
-      const quiz = {
-        id: attempt.quiz.id,
-        name: attempt.quiz.name,
-        assignmentTitle: attempt.quiz.assignment?.title ?? null,
-      };
-      const attemptNumber = attempt.attempt_number;
-      // Own attempt only, as a current student of its classroom. Same answer
-      // for "not yours" and "no such attempt".
-      const role = await acceptedRoleIn(tx, classroomId, actorUserId);
-      const isStudent =
-        (await tx.classroomMembership.count({
-          where: {
-            classroom_id: classroomId,
-            user_id: actorUserId,
-            role: 'STUDENT',
-            has_accepted_invite: true,
-          },
-        })) > 0;
-      if (attempt.user_id !== actorUserId || !isStudent || role === null) {
-        throw new QuizGradeError('not_found', 'Quiz attempt not found');
-      }
-      await requireGradableAttempt(tx, attempt, 'regraded');
-
-      const open = await findOpenByQuizAttemptId(attempt.id, tx);
-      if (open) return { request: open, created: false, classroomId, quiz, attemptNumber, role };
-
-      const emoji = quizAttemptGrade(attempt, scale).effective.emoji;
-      const request = await tx.regradeRequest.create({
-        data: {
-          classroom_id: classroomId,
-          quiz_attempt_id: attempt.id,
-          student_id: actorUserId,
-          student_comment: comment,
-          previous_grade: emoji ? [emoji] : [],
-        },
-      });
-      return { request, created: true, classroomId, quiz, attemptNumber, role };
-    });
-
-  let result: Awaited<ReturnType<typeof run>>;
-  try {
-    result = await run();
-  } catch (error) {
-    // A concurrent ask won the partial unique index: return its request.
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-      result = await run();
-    } else {
-      throw error;
+  // The attempt row lock below serializes asks on one attempt: a second ask
+  // waits for the first to commit, then finds its open request.
+  const result = await getPrisma().$transaction(async tx => {
+    const attempt = await loadAttemptForUpdate(tx, attemptId);
+    const classroomId = attempt.quiz.classroom_id;
+    if (classroomId !== located.quiz.classroom_id) {
+      throw new QuizGradeError('not_found', 'Quiz attempt not found');
     }
-  }
+    const quiz = {
+      id: attempt.quiz.id,
+      name: attempt.quiz.name,
+      assignmentTitle: attempt.quiz.assignment?.title ?? null,
+    };
+    const attemptNumber = attempt.attempt_number;
+    // Own attempt only, as a current student of its classroom. Same answer
+    // for "not yours" and "no such attempt".
+    const role = await acceptedRoleIn(tx, classroomId, actorUserId);
+    const isStudent =
+      (await tx.classroomMembership.count({
+        where: {
+          classroom_id: classroomId,
+          user_id: actorUserId,
+          role: 'STUDENT',
+          has_accepted_invite: true,
+        },
+      })) > 0;
+    if (attempt.user_id !== actorUserId || !isStudent || role === null) {
+      throw new QuizGradeError('not_found', 'Quiz attempt not found');
+    }
+    await requireGradableAttempt(tx, attempt, 'regraded');
+
+    const open = await findOpenByQuizAttemptId(attempt.id, tx);
+    if (open) return { request: open, created: false, classroomId, quiz, attemptNumber, role };
+
+    const emoji = quizAttemptGrade(attempt, scale).effective.emoji;
+    const request = await tx.regradeRequest.create({
+      data: {
+        classroom_id: classroomId,
+        quiz_attempt_id: attempt.id,
+        student_id: actorUserId,
+        student_comment: comment,
+        previous_grade: emoji ? [emoji] : [],
+      },
+    });
+    return { request, created: true, classroomId, quiz, attemptNumber, role };
+  });
 
   const { request, created, classroomId, quiz, attemptNumber, role } = result;
   if (created) {
