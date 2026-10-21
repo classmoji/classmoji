@@ -34,7 +34,7 @@ const ATTEMPTS: Record<string, { id: string; quiz_id: string; user_id: string }>
   'att-y': { id: 'att-y', quiz_id: 'quiz-y', user_id: 'stu-y' },
 };
 
-const session = vi.hoisted(() => ({ userId: 'stu-a' }));
+const session = vi.hoisted(() => ({ userId: 'stu-a', impersonatedBy: null as string | null }));
 const mocks = vi.hoisted(() => ({
   gate: vi.fn(),
   create: vi.fn(),
@@ -57,6 +57,10 @@ vi.mock('~/utils/helpers', () => ({
   assertClassroomMutationAllowed: (...a: unknown[]) => mocks.mutationAllowed(...a),
   assertClassroomAccess: vi.fn(),
   addClassroomAuditLog: vi.fn(),
+}));
+// A platform admin's "View As" session, read from the request's session.
+vi.mock('~/routes/admin.$class.ask-moji/impersonation.server', () => ({
+  impersonatedBy: async () => session.impersonatedBy,
 }));
 vi.mock('~/utils/classroomProFlag.server', () => ({
   quizzesVisibleOrThrow: (...a: unknown[]) => mocks.quizzesVisible(...a),
@@ -101,6 +105,7 @@ const asReply = (value: unknown) =>
 beforeEach(() => {
   vi.clearAllMocks();
   session.userId = 'stu-a';
+  session.impersonatedBy = null;
   mocks.quizzesVisible.mockResolvedValue(true);
   // The real gate: a STUDENT membership in the URL's classroom, else 403.
   mocks.gate.mockImplementation(async (_request: Request, slug: string) => {
@@ -137,8 +142,17 @@ describe('quiz regrade request action', () => {
       comment: 'Q2 handled n < 0.',
       actorUserId: 'stu-a',
       tool: 'web:quiz_attempt.request_regrade',
+      impersonatedBy: null,
     });
     expect(mocks.mutationAllowed).toHaveBeenCalledWith({ status: 'ACTIVE', role: 'STUDENT' });
+  });
+
+  it('names the platform admin behind a View As session', async () => {
+    session.impersonatedBy = 'admin-1';
+    await post('cs-x', 'quiz-x', 'att-a', { _action: 'requestRegrade', comment: 'Q2.' });
+    expect(mocks.create).toHaveBeenCalledWith(
+      expect.objectContaining({ actorUserId: 'stu-a', impersonatedBy: 'admin-1' })
+    );
   });
 
   it("refuses another student's attempt, whatever the body claims", async () => {

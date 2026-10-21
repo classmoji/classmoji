@@ -25,6 +25,7 @@ import {
   quizDrawerView,
   staffAttemptGradePanel,
 } from '~/utils/quizPayloads';
+import { impersonatedBy } from '~/routes/admin.$class.ask-moji/impersonation.server';
 import { isTriggerChatAttempt } from '~/utils/quizRuntime.server';
 import { closeIfExpired } from '~/utils/quizAttemptExpiry.server';
 import type { Route } from './+types/route';
@@ -328,12 +329,14 @@ export async function action({ params, request }: Route.ActionArgs) {
           : {}),
         actorUserId: userId,
         tool: 'web:quiz_attempt.adjust',
+        impersonatedBy: await impersonatedBy(request),
       });
     } else if (body?._action === 'revert') {
       await ClassmojiService.quizAttempt.revert({
         attemptId: attempt.id,
         actorUserId: userId,
         tool: 'web:quiz_attempt.revert',
+        impersonatedBy: await impersonatedBy(request),
       });
     } else {
       return reply({ error: 'Unknown action' }, { status: 400 });

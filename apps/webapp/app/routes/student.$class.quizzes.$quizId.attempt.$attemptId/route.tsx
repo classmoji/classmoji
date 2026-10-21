@@ -28,6 +28,7 @@ import {
   quizDrawerView,
   studentQuizRegradeView,
 } from '~/utils/quizPayloads';
+import { impersonatedBy } from '~/routes/admin.$class.ask-moji/impersonation.server';
 import { isTriggerChatAttempt } from '~/utils/quizRuntime.server';
 import { closeIfExpired } from '~/utils/quizAttemptExpiry.server';
 
@@ -337,6 +338,7 @@ export async function action({ params, request }: Route.ActionArgs) {
       comment: typeof body.comment === 'string' ? body.comment : '',
       actorUserId: userId,
       tool: 'web:quiz_attempt.request_regrade',
+      impersonatedBy: await impersonatedBy(request),
     });
     return { ok: true, created };
   } catch (error) {

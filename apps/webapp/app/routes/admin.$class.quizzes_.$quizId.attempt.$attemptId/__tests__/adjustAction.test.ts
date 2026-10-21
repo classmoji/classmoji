@@ -36,7 +36,7 @@ const ATTEMPTS: Record<string, { id: string; quiz_id: string; user_id: string }>
   'att-y': { id: 'att-y', quiz_id: 'quiz-y', user_id: 'stu-y' },
 };
 
-const session = vi.hoisted(() => ({ userId: 'ta-x' }));
+const session = vi.hoisted(() => ({ userId: 'ta-x', impersonatedBy: null as string | null }));
 const mocks = vi.hoisted(() => ({
   gate: vi.fn(),
   adjust: vi.fn(),
@@ -62,6 +62,10 @@ vi.mock('~/utils/routeAuth.server', () => ({
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: vi.fn(),
   addClassroomAuditLog: vi.fn(),
+}));
+// A platform admin's "View As" session, read from the request's session.
+vi.mock('~/routes/admin.$class.ask-moji/impersonation.server', () => ({
+  impersonatedBy: async () => session.impersonatedBy,
 }));
 vi.mock('~/utils/classroomProFlag.server', () => ({
   quizzesVisibleOrThrow: (...a: unknown[]) => mocks.quizzesVisible(...a),
@@ -108,6 +112,7 @@ const asReply = (value: unknown) =>
 beforeEach(() => {
   vi.clearAllMocks();
   session.userId = 'ta-x';
+  session.impersonatedBy = null;
   mocks.quizzesVisible.mockResolvedValue(true);
   mocks.adjust.mockResolvedValue({ changed: true });
   mocks.revert.mockResolvedValue({ changed: true });
@@ -143,6 +148,7 @@ describe('adjust action — who may', () => {
         comment: 'Q3 has full credit.',
         actorUserId: user,
         tool: 'web:quiz_attempt.adjust',
+        impersonatedBy: null,
       });
     }
   );
@@ -217,6 +223,7 @@ describe('adjust action — what it does', () => {
       comment: 'Note only',
       actorUserId: 'ta-x',
       tool: 'web:quiz_attempt.adjust',
+      impersonatedBy: null,
     });
   });
 
@@ -228,8 +235,21 @@ describe('adjust action — what it does', () => {
       attemptId: 'att-x',
       actorUserId: 'ta-x',
       tool: 'web:quiz_attempt.revert',
+      impersonatedBy: null,
     });
     expect(mocks.adjust).not.toHaveBeenCalled();
+  });
+
+  it('names the platform admin behind a View As session on adjust and revert', async () => {
+    session.impersonatedBy = 'admin-1';
+    await post('cs-x', 'quiz-x', 'att-x', { _action: 'adjust', emoji: '+1' });
+    await post('cs-x', 'quiz-x', 'att-x', { _action: 'revert' });
+    expect(mocks.adjust).toHaveBeenCalledWith(
+      expect.objectContaining({ actorUserId: 'ta-x', impersonatedBy: 'admin-1' })
+    );
+    expect(mocks.revert).toHaveBeenCalledWith(
+      expect.objectContaining({ actorUserId: 'ta-x', impersonatedBy: 'admin-1' })
+    );
   });
 
   it("answers a service refusal with its status and message (a staff preview can't be adjusted)", async () => {
