@@ -29,12 +29,8 @@ export const findClassroomEmojiMappingDescription = async (classroomId: string) 
   }));
 };
 
-export const findByClassroomId = async (
-  classroomId: string,
-  includeExtraTokens = false,
-  tx?: Prisma.TransactionClient
-) => {
-  const mappings = await (tx ?? getPrisma()).emojiMapping.findMany({
+export const findByClassroomId = async (classroomId: string, includeExtraTokens = false) => {
+  const mappings = await getPrisma().emojiMapping.findMany({
     where: { classroom_id: classroomId },
     orderBy: { grade: 'desc' },
   });
@@ -57,10 +53,9 @@ export const findByClassroomId = async (
  * The classroom's grading scale as emoji → grade, exactly as the grade totals
  * read it (`findByClassroomId` without tokens, grades truncated). What a quiz
  * adjustment's emoji is worth (`effectivePercentage` in @classmoji/utils).
- * Pass `tx` to read it inside a transaction.
  */
-export const findScaleByClassroomId = async (classroomId: string, tx?: Prisma.TransactionClient) =>
-  (await findByClassroomId(classroomId, false, tx)) as Record<string, number>;
+export const findScaleByClassroomId = async (classroomId: string) =>
+  (await findByClassroomId(classroomId)) as Record<string, number>;
 
 export const deleteEmojiMapping = async (classroomId: string, emoji: string) => {
   return getPrisma().emojiMapping.delete({
