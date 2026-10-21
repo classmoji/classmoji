@@ -34,6 +34,7 @@ const mocks = vi.hoisted(() => ({
   regradeFindMany: vi.fn(),
   findOpenByQuizAttemptId: vi.fn(),
   findByClassroomAndUser: vi.fn(),
+  findForUserByQuizIds: vi.fn(),
 }));
 
 vi.mock('~/utils/helpers', () => ({
@@ -60,6 +61,7 @@ vi.mock('@classmoji/services', () => ({
       findByQuiz: (...a: unknown[]) => mocks.findByQuiz(...a),
       findWithMessages: (...a: unknown[]) => mocks.findWithMessages(...a),
       getMessages: (...a: unknown[]) => mocks.getMessages(...a),
+      findForUserByQuizIds: (...a: unknown[]) => mocks.findForUserByQuizIds(...a),
       clearForUserAndQuiz: vi.fn(),
     },
     user: { findById: (...a: unknown[]) => mocks.userFindById(...a) },
@@ -359,6 +361,10 @@ beforeEach(() => {
   mocks.regradeFindMany.mockResolvedValue([]);
   mocks.findOpenByQuizAttemptId.mockResolvedValue(null);
   mocks.netQuizExtensionHours.mockResolvedValue(new Map());
+  // One user's attempts on the quiz, newest first (the counting-attempt read).
+  mocks.findForUserByQuizIds.mockImplementation(async (userId: string) =>
+    ATTEMPTS.filter(a => a.user_id === userId)
+  );
   // Ada and Babbage are current students; nobody else is.
   mocks.findByClassroomAndUser.mockImplementation(async (_c: string, userId: string) =>
     [ADA.id, BABBAGE.id].includes(userId) ? { has_accepted_invite: true } : null
@@ -653,6 +659,8 @@ describe('staff attempt drawer payload', () => {
         band: { evaluation: 'GOOD', numeric_score: 3 },
         lateHours: null,
         countedEmoji: null,
+        // Staff views do not work it out (E15 is the student's label).
+        countsTowardGrade: null,
       },
       adjustedEmoji: '+1',
       comment: 'Q3 has full credit.',
@@ -974,6 +982,8 @@ describe('student attempt drawer payload', () => {
         band: { evaluation: 'EXCELLENT', numeric_score: 4 },
         lateHours: null,
         countedEmoji: null,
+        // Ada's best attempt under HIGHEST (E15).
+        countsTowardGrade: true,
       },
       attemptNumber: 1,
       isOwnStudentAttempt: true,
@@ -1040,6 +1050,74 @@ describe('student attempt drawer payload', () => {
     expect(payload.result?.regrade.resolved).toMatchObject({
       resolvedByName: null,
       resolvedAt: null,
+    });
+  });
+
+  describe("whether the attempt counts toward the student's grade (E15)", () => {
+    const asAda = (classroom: Record<string, unknown> = CLASSROOM) =>
+      mocks.assertClassroomAccess.mockResolvedValue({
+        userId: ADA.id,
+        classroom,
+        membership: { role: 'STUDENT' },
+      });
+
+    it('flags an attempt the grading strategy does not count, and the one it does', async () => {
+      asAda();
+      // HIGHEST: the first attempt (80) counts, the second (60) does not.
+      mocks.findWithMessages.mockResolvedValue(withMessages(ADA_SECOND));
+      const second = await studentAttemptRoute.loader(attemptArgs('student', ADA_SECOND.id));
+      expect(second.result?.grade?.countsTowardGrade).toBe(false);
+      // Read for the attempt's own student and this quiz only.
+      expect(mocks.findForUserByQuizIds).toHaveBeenCalledWith(ADA.id, [QUIZ_ID]);
+
+      mocks.findWithMessages.mockResolvedValue(withMessages(ADA_FIRST));
+      const first = await studentAttemptRoute.loader(attemptArgs('student', ADA_FIRST.id));
+      expect(first.result?.grade?.countsTowardGrade).toBe(true);
+    });
+
+    it('follows the strategy: MOST_RECENT counts the latest attempt', async () => {
+      asAda();
+      mocks.quizFindById.mockResolvedValue({ ...QUIZ_ROW, grading_strategy: 'MOST_RECENT' });
+      mocks.findWithMessages.mockResolvedValue(withMessages(ADA_SECOND));
+      const second = await studentAttemptRoute.loader(attemptArgs('student', ADA_SECOND.id));
+      expect(second.result?.grade?.countsTowardGrade).toBe(true);
+    });
+
+    it('picks over effective, late-penalised scores, as the gradebook does', async () => {
+      // Due between the two attempts, 5 points an hour: the second attempt's
+      // higher raw score (90) counts for 0, so the on-time first one counts.
+      asAda({ ...CLASSROOM, settings: { late_penalty_points_per_hour: 5 } });
+      mocks.quizFindById.mockResolvedValue({
+        ...QUIZ_ROW,
+        assignment: { id: 'asg-1', student_deadline: new Date('2026-03-02T00:00:00Z') },
+      });
+      const lateBest = { ...ADA_SECOND, partial_credit_percentage: 90 };
+      mocks.findForUserByQuizIds.mockResolvedValue([lateBest, ADA_FIRST]);
+      mocks.findWithMessages.mockResolvedValue(withMessages(lateBest));
+      const payload = await studentAttemptRoute.loader(attemptArgs('student', lateBest.id));
+      expect(payload.result?.grade?.countsTowardGrade).toBe(false);
+
+      // A staff adjustment is read as the effective score: the late attempt
+      // adjusted to rocket (100) still counts for 0 after the penalty.
+      mocks.findForUserByQuizIds.mockResolvedValue([
+        { ...lateBest, adjusted_emoji: 'rocket' },
+        ADA_FIRST,
+      ]);
+      mocks.findWithMessages.mockResolvedValue(withMessages(ADA_FIRST));
+      const first = await studentAttemptRoute.loader(attemptArgs('student', ADA_FIRST.id));
+      expect(first.result?.grade?.countsTowardGrade).toBe(true);
+    });
+
+    it('is not worked out for staff reading a student attempt', async () => {
+      mocks.assertClassroomAccess.mockResolvedValue({
+        userId: TA.id,
+        classroom: CLASSROOM,
+        membership: { role: 'ASSISTANT' },
+      });
+      mocks.findWithMessages.mockResolvedValue(withMessages(ADA_SECOND));
+      const payload = await studentAttemptRoute.loader(attemptArgs('student', ADA_SECOND.id));
+      expect(payload.result?.grade?.countsTowardGrade).toBeNull();
+      expect(mocks.findForUserByQuizIds).not.toHaveBeenCalled();
     });
   });
 

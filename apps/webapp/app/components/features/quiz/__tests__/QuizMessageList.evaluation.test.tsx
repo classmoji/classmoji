@@ -59,6 +59,7 @@ describe('QuizMessageList — the evaluation card', () => {
             band: { evaluation: 'EXCELLENT', numeric_score: 4 },
             lateHours: 6,
             countedEmoji: '+1',
+            countsTowardGrade: true,
           },
           headerExtra: <span data-testid="header-extra" />,
           beforeResults: <div data-testid="before-results" />,
@@ -93,6 +94,38 @@ describe('QuizMessageList — the evaluation card', () => {
     expect(html).not.toContain('66.7');
     // The per-question emoji is the stored one (🚀), never recomputed.
     expect(html.match(/🚀/g)?.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("labels a student's attempt that does not count toward their grade (E15)", () => {
+    const render = (countsTowardGrade: boolean | null) =>
+      renderToStaticMarkup(
+        <QuizResultProvider
+          value={{
+            grade: {
+              emoji: 'eyes',
+              originalEmoji: null,
+              adjusted: false,
+              band: { evaluation: 'GOOD', numeric_score: 3 },
+              lateHours: null,
+              countedEmoji: null,
+              countsTowardGrade,
+            },
+          }}
+        >
+          <QuizMessageList
+            messages={[EVALUATION_MESSAGE]}
+            readOnly
+            isQuizComplete
+            evaluationData={{ evaluation: 'GOOD', numeric_score: 3, question_results: [] }}
+          />
+        </QuizResultProvider>
+      );
+    const notCounting = render(false);
+    expect(notCounting).toContain('data-testid="quiz-grade-not-counting"');
+    expect(notCounting).toContain('Doesn&#x27;t count toward your grade');
+    // The counting attempt, and staff views (not worked out), say nothing.
+    expect(render(true)).not.toContain('quiz-grade-not-counting');
+    expect(render(null)).not.toContain('quiz-grade-not-counting');
   });
 
   it("shows the drawer's blocks on a completed attempt with no evaluation record", () => {

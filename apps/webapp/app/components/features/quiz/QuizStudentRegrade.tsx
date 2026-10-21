@@ -5,6 +5,7 @@ import dayjs from 'dayjs';
 import { useCallout } from '@classmoji/ui-components';
 import type { InstructorCommentView, StudentQuizRegradeView } from '~/utils/quizPayloads';
 import { QUIZ_STATUS_LABEL, QuizRemedy } from '~/components/features/regrade/QuizRemedy';
+import { NotCountingNote } from './QuizResultContext';
 
 /**
  * The student's side of a completed quiz attempt: the "Request
@@ -26,12 +27,18 @@ export function QuizRegradeButton({
   attemptNumber,
   regrade,
   canRequest = true,
+  countsTowardGrade = null,
 }: {
   quizName: string;
   attemptNumber: number | null;
   regrade: StudentQuizRegradeView;
   /** False in a read-only classroom: an open request's status shows, no button. */
   canRequest?: boolean;
+  /**
+   * False when this attempt is not the one that counts (E15): a request is
+   * still allowed, and the modal says so.
+   */
+  countsTowardGrade?: boolean | null;
 }) {
   const fetcher = useFetcher<{ ok?: boolean; created?: boolean; error?: string }>();
   const { pathname } = useLocation();
@@ -97,8 +104,11 @@ export function QuizRegradeButton({
         <Alert message="Explain your regrade/resubmit request below." type="info" showIcon banner />
         <Form layout="vertical" className="mt-4">
           <Form.Item label="Assignment">
-            <span data-testid="quiz-regrade-target" className="text-gray-800 dark:text-gray-100">
-              {label}
+            <span className="inline-flex flex-wrap items-center gap-2">
+              <span data-testid="quiz-regrade-target" className="text-gray-800 dark:text-gray-100">
+                {label}
+              </span>
+              {countsTowardGrade === false && <NotCountingNote />}
             </span>
           </Form.Item>
           <Form.Item label="Comment" required>

@@ -6,7 +6,10 @@ import {
   RocketOutlined,
   TrophyOutlined,
 } from '@ant-design/icons';
-import { QUIZ_MESSAGE_LIMIT_COPY, type QuizEvaluationRecordView } from '@classmoji/utils/quiz-agent';
+import {
+  QUIZ_MESSAGE_LIMIT_COPY,
+  type QuizEvaluationRecordView,
+} from '@classmoji/utils/quiz-agent';
 import Emoji from '~/components/ui/display/Emoji';
 import { formatDuration } from '~/utils/quizUtils';
 import { QuizGradeHero, effectiveBand, useQuizResultSlots } from './QuizResultContext';

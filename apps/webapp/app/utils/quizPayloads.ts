@@ -216,12 +216,20 @@ export interface AttemptGradeView {
   band: GradeBand | null;
   lateHours: number | null;
   countedEmoji: string | null;
+  /**
+   * Whether this attempt is the one whose grade counts (E15): the quiz's
+   * grading strategy over effective, late-penalised scores, the gradebook's
+   * rule (`studentQuizScoring`). Null where it is not worked out (staff
+   * views, a preview) or where no attempt counts yet.
+   */
+  countsTowardGrade: boolean | null;
 }
 
 export const attemptGradeView = ({
   attempt,
   emojiScale,
   late = null,
+  countingAttemptId,
 }: {
   attempt: AdjustableQuizScore & {
     id: string;
@@ -231,6 +239,12 @@ export const attemptGradeView = ({
   emojiScale: QuizEmojiScale;
   /** Null where lateness does not apply (a preview, no due date). */
   late?: Omit<QuizLateContext, 'emojiScale'> | null;
+  /**
+   * The counting attempt among the student's attempts on this quiz
+   * (`studentQuizScoring(...).countingAttemptId`); omitted where the viewer
+   * is not the student, null when none counts.
+   */
+  countingAttemptId?: string | null;
 }): AttemptGradeView | null => {
   if (!attempt.completed_at) return null;
   const grade = quizAttemptGrade(attempt, emojiScale);
@@ -253,6 +267,7 @@ export const attemptGradeView = ({
     band: grade.effective.band,
     lateHours,
     countedEmoji,
+    countsTowardGrade: countingAttemptId ? countingAttemptId === attempt.id : null,
   };
 };
 

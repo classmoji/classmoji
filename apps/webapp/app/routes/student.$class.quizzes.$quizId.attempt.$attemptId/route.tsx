@@ -23,6 +23,7 @@ import {
   instructorCommentView,
   quizDrawerView,
   studentQuizRegradeView,
+  studentQuizScoring,
 } from '~/utils/quizPayloads';
 import { impersonatedBy } from '~/routes/admin.$class.ask-moji/impersonation.server';
 import { redactQuizEvaluationBlocks } from '@classmoji/utils';
@@ -239,7 +240,11 @@ const loadStudentResult = async ({
   classroomWritable,
 }: {
   classroom: { id: string; settings?: { late_penalty_points_per_hour?: unknown } | null };
-  quiz: { assignment?: { id: string; student_deadline: Date | string | null } | null };
+  quiz: {
+    id: string;
+    grading_strategy?: string | null;
+    assignment?: { id: string; student_deadline: Date | string | null } | null;
+  };
   attempt: {
     id: string;
     user_id: string;
@@ -259,7 +264,7 @@ const loadStudentResult = async ({
   const { ClassmojiService } = await import('@classmoji/services');
   const assignment = quiz.assignment ?? null;
   const late = ownerIsStudent && assignment?.student_deadline;
-  const [emojiScale, extensionHours, commentBy, requests] = await Promise.all([
+  const [emojiScale, extensionHours, commentBy, requests, ownAttempts] = await Promise.all([
     ClassmojiService.emojiMapping.findScaleByClassroomId(classroom.id),
     late
       ? ClassmojiService.quizGradeItems
@@ -280,19 +285,36 @@ const loadStudentResult = async ({
           classroom_id: classroom.id,
         })
       : [],
+    // The student's own attempts on this quiz: which one counts (E15).
+    ownerIsStudent
+      ? ClassmojiService.quizAttempt.findForUserByQuizIds(attempt.user_id, [quiz.id])
+      : [],
   ]);
   const penalty: unknown = classroom.settings?.late_penalty_points_per_hour;
+  const lateContext = late
+    ? {
+        studentDeadline: assignment.student_deadline,
+        extensionHours: Math.max(0, extensionHours),
+        latePenaltyPerHour: typeof penalty === 'number' ? penalty : 0,
+      }
+    : null;
   return {
     grade: attemptGradeView({
       attempt,
       emojiScale,
-      late: late
+      late: lateContext,
+      // The gradebook's rule: the quiz's strategy over effective,
+      // late-penalised scores (the student quiz list's trophy).
+      ...(ownerIsStudent
         ? {
-            studentDeadline: assignment.student_deadline,
-            extensionHours: Math.max(0, extensionHours),
-            latePenaltyPerHour: typeof penalty === 'number' ? penalty : 0,
+            countingAttemptId: studentQuizScoring(
+              ownAttempts,
+              quiz.grading_strategy,
+              lateContext,
+              emojiScale
+            ).countingAttemptId,
           }
-        : null,
+        : {}),
     }),
     attemptNumber: typeof attempt.attempt_number === 'number' ? attempt.attempt_number : null,
     // The attempt's own student sees its request status; they may ask only
@@ -402,6 +424,7 @@ export default function StudentQuizAttemptDrawer({ loaderData }: Route.Component
                 quizName={data.quiz.name}
                 attemptNumber={result.attemptNumber}
                 regrade={result.regrade}
+                countsTowardGrade={result.grade?.countsTowardGrade ?? null}
               />
             ) : null,
             beforeResults: (

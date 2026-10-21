@@ -62,10 +62,25 @@ export const effectiveBand = (
     : { evaluation: stored.evaluation ?? null, numeric_score: stored.numeric_score ?? null };
 
 /**
+ * Said of a completed attempt that is not the one the quiz's grading strategy
+ * counts (E15): on the result panel, under the grade, and in the request
+ * modal. Light and dark.
+ */
+export const NotCountingNote = ({ className = '' }: { className?: string }) => (
+  <span
+    data-testid="quiz-grade-not-counting"
+    className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-stone-100 text-gray-600 ring-1 ring-stone-200 dark:bg-neutral-800 dark:text-gray-300 dark:ring-neutral-700 ${className}`}
+  >
+    Doesn&apos;t count toward your grade
+  </span>
+);
+
+/**
  * The large grade at the top of the results card (E3): the effective emoji
  * and its band, "adjusted from <original>" when staff adjusted it (D6), and
- * what it counts for when late. With no grade (see `QuizResultSlots`), the
- * band alone.
+ * what it counts for when late, and "Doesn't count toward your grade" on a
+ * student's attempt that is not the counting one (E15). With no grade (see
+ * `QuizResultSlots`), the band alone.
  */
 export function QuizGradeHero({ band }: { band: string | null }) {
   const slots = useQuizResultSlots();
@@ -110,6 +125,7 @@ export function QuizGradeHero({ band }: { band: string | null }) {
       {!grade?.countedEmoji && typeof grade?.lateHours === 'number' && grade.lateHours > 0 && (
         <div className="text-xs text-gray-500 dark:text-gray-400">{grade.lateHours}h late</div>
       )}
+      {grade?.countsTowardGrade === false && <NotCountingNote />}
     </div>
   );
 }
