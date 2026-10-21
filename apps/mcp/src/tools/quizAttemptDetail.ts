@@ -94,7 +94,7 @@ interface AttemptRow {
   unfocused_duration_ms: number | bigint | null;
   question_results_json: unknown;
   evaluation_json: unknown;
-  adjusted_emoji?: string | null;
+  adjusted_emoji: string | null;
   instructor_comment?: string | null;
   adjusted_by_id?: string | null;
   adjusted_at?: Date | string | null;

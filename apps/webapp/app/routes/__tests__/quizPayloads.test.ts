@@ -245,6 +245,7 @@ const attemptRow = (
   question_results_json: { note: SENTINEL.feedback },
   partial_credit_percentage: null as number | null,
   first_attempt_percentage: null as number | null,
+  adjusted_emoji: null as string | null,
   session_status: 'active',
   codebase_path: SENTINEL.codebasePath,
   agent_config: { instructorRepoName: SENTINEL.repo },

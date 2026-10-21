@@ -35,8 +35,12 @@ const attempt = (
 
 describe('effectivePercentage', () => {
   it('is the AI score without an adjustment', () => {
-    expect(effectivePercentage({ partial_credit_percentage: 72 }, EMOJI_SCALE)).toBe(72);
-    expect(effectivePercentage({ partial_credit_percentage: null }, EMOJI_SCALE)).toBeNull();
+    expect(
+      effectivePercentage({ partial_credit_percentage: 72, adjusted_emoji: null }, EMOJI_SCALE)
+    ).toBe(72);
+    expect(
+      effectivePercentage({ partial_credit_percentage: null, adjusted_emoji: null }, EMOJI_SCALE)
+    ).toBeNull();
   });
 
   it('reads an adjustment through the scale', () => {
@@ -122,7 +126,9 @@ describe('quizAttemptGrade (display)', () => {
   });
 
   it('an empty scale gives no emoji', () => {
-    expect(quizAttemptGrade({ partial_credit_percentage: 72 }, {}).effective.emoji).toBeNull();
+    expect(
+      quizAttemptGrade({ partial_credit_percentage: 72, adjusted_emoji: null }, {}).effective.emoji
+    ).toBeNull();
   });
 });
 

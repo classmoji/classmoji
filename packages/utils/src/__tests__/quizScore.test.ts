@@ -11,6 +11,7 @@ const attempt = (
   started_at: new Date(startedAt),
   completed_at: completedAt ? new Date(completedAt) : null,
   partial_credit_percentage: pct,
+  adjusted_emoji: null,
 });
 
 // Started in order 1, 2, 3; attempt 1 finished LAST (it stayed open the

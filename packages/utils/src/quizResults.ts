@@ -167,7 +167,8 @@ export interface QuizAttemptSource {
   unfocused_duration_ms: number | null;
   partial_credit_percentage: number | null;
   first_attempt_percentage: number | null;
-  adjusted_emoji?: string | null;
+  /** A staff adjustment, null when none. Required, like `ScorableQuizAttempt`. */
+  adjusted_emoji: string | null;
   user?: {
     id: string;
     name?: string | null;

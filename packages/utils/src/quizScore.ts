@@ -37,8 +37,12 @@ export interface ScorableQuizAttempt {
   completed_at: Date | string | null;
   /** The AI's score. Never edited by staff. */
   partial_credit_percentage: number | null;
-  /** A staff adjustment: an emoji on the classroom's scale. Select it wherever attempts are scored. */
-  adjusted_emoji?: string | null;
+  /**
+   * A staff adjustment: an emoji on the classroom's scale, null when there is
+   * none. Required, so a reader that scores attempts without selecting it
+   * does not compile.
+   */
+  adjusted_emoji: string | null;
 }
 
 /** The attempt fields `effectivePercentage` reads. */

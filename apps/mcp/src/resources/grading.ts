@@ -278,7 +278,7 @@ interface RegradeRow {
     id: string;
     attempt_number?: number | null;
     partial_credit_percentage: number | null;
-    adjusted_emoji?: string | null;
+    adjusted_emoji: string | null;
     quiz?: {
       id: string;
       name?: string | null;

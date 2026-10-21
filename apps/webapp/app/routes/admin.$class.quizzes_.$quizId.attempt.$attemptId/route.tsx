@@ -221,7 +221,7 @@ const loadGradePanel = async ({
     started_at: Date | string;
     completed_at: Date | string | null;
     partial_credit_percentage: number | null;
-    adjusted_emoji?: string | null;
+    adjusted_emoji: string | null;
     instructor_comment?: string | null;
     adjusted_by_id?: string | null;
     adjusted_at?: Date | string | null;

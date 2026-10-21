@@ -23,6 +23,7 @@ const attempt = (
   started_at: startedAt,
   completed_at: completedAt,
   partial_credit_percentage: pct,
+  adjusted_emoji: null,
 });
 
 describe('effectiveDeadline', () => {
