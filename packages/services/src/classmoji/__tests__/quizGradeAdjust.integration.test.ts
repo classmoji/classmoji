@@ -1151,6 +1151,32 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
     });
   });
 
+  describe('open quiz request lateness', () => {
+    it("measures the attempt against its assignment's due date and the classroom penalty", async () => {
+      const { quizId } = await makeQuiz(classX);
+      // 3 h late at 5/h: 80 → 65, nearest emoji 👎 (60).
+      const { id } = await makeAttempt(
+        quizId,
+        studentB,
+        80,
+        new Date(deadline.getTime() + 3 * H + 60_000)
+      );
+      const { request } = await regradeRequest.createForQuizAttempt({
+        attemptId: id,
+        comment: 'late',
+        actorUserId: studentB,
+        tool: TOOL,
+      });
+      const rows = await regradeRequest.findMany({ id: request.id });
+      const lateness = await regradeRequest.openQuizRequestLateness(
+        classX,
+        rows,
+        Object.fromEntries(DEFAULT_EMOJI_MAPPINGS.map(m => [m.emoji, m.grade]))
+      );
+      expect(lateness.get(request.id)).toEqual({ lateHours: 3, countedEmoji: '-1' });
+    });
+  });
+
   describe('a classroom that does not show quizzes', () => {
     it('refuses every quiz action and lists no quiz request', async () => {
       const { quizId } = await makeQuiz(classX);

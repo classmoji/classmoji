@@ -12,14 +12,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   findManyForDisplay: vi.fn(),
+  lateness: vi.fn(),
   audit: vi.fn(),
 }));
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
-    regradeRequest: { findManyForDisplay: (...a: unknown[]) => mocks.findManyForDisplay(...a) },
-    assignment: { findByIdInClassroom: async () => null },
-    quizGradeItems: { netQuizExtensionHours: async () => new Map() },
+    regradeRequest: {
+      findManyForDisplay: (...a: unknown[]) => mocks.findManyForDisplay(...a),
+      openQuizRequestLateness: (...a: unknown[]) => mocks.lateness(...a),
+    },
   },
 }));
 vi.mock('~/utils/helpers', () => ({
@@ -55,6 +57,7 @@ const quizRow = (over: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.lateness.mockResolvedValue(new Map());
 });
 
 describe('regrade request rows', () => {
@@ -63,10 +66,10 @@ describe('regrade request rows', () => {
     await loadStaffRegradeRows({
       classroomId: 'class-x',
       scale: SCALE,
-      latePenaltyPerHour: 0,
       viewer: { userId: 'ta-1', role: 'ASSISTANT', tool: 'web:regrade_requests.view' },
     });
     expect(mocks.findManyForDisplay).toHaveBeenCalledWith('class-x', {});
+    expect(mocks.lateness).toHaveBeenCalledWith('class-x', [quizRow()], SCALE);
     expect(mocks.audit).toHaveBeenCalledWith(
       expect.objectContaining({
         classroomId: 'class-x',
@@ -77,6 +80,17 @@ describe('regrade request rows', () => {
         metadata: expect.objectContaining({ tool: 'web:regrade_requests.view' }),
       })
     );
+  });
+
+  it("carries an open quiz request's lateness from the service", async () => {
+    mocks.findManyForDisplay.mockResolvedValue([quizRow({ status: 'IN_REVIEW' })]);
+    mocks.lateness.mockResolvedValue(new Map([['rr-1', { lateHours: 3, countedEmoji: 'eyes' }]]));
+    const [row] = await loadStaffRegradeRows({
+      classroomId: 'class-x',
+      scale: SCALE,
+      viewer: { userId: 'ta-1', role: 'ASSISTANT', tool: 'web:regrade_requests.view' },
+    });
+    expect(row.quiz).toMatchObject({ lateHours: 3, countedEmoji: 'eyes' });
   });
 
   it("shows a resolved request's own grade, not the attempt's grade now", async () => {

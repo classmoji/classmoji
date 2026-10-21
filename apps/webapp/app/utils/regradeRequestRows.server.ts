@@ -14,12 +14,7 @@
  */
 import { ClassmojiService } from '@classmoji/services';
 import { addClassroomAuditLog } from '~/utils/helpers';
-import {
-  lateHours,
-  quizAttemptGrade,
-  quizPercentageEmoji,
-  type QuizEmojiScale,
-} from '@classmoji/utils';
+import { quizAttemptGrade, type QuizEmojiScale } from '@classmoji/utils';
 
 type ServiceRow = Awaited<ReturnType<typeof ClassmojiService.regradeRequest.findMany>>[number];
 
@@ -125,12 +120,10 @@ export interface RegradeQueueViewer {
 export const loadStaffRegradeRows = async ({
   classroomId,
   scale,
-  latePenaltyPerHour,
   viewer,
 }: {
   classroomId: string;
   scale: QuizEmojiScale;
-  latePenaltyPerHour: number;
   viewer: RegradeQueueViewer;
 }): Promise<RegradeRequestRow[]> => {
   const rows = await ClassmojiService.regradeRequest.findManyForDisplay(classroomId, {});
@@ -142,40 +135,19 @@ export const loadStaffRegradeRows = async ({
     resourceType: 'REGRADE_REQUESTS',
     metadata: { tool: viewer.tool, request_count: rows.length },
   });
-  const penalty = Number.isFinite(latePenaltyPerHour) ? Math.max(0, latePenaltyPerHour) : 0;
-
-  return Promise.all(
-    rows.map(async row => {
-      const projected = projectRow(row, scale);
-      const attempt = row.quiz_attempt;
-      if (!projected.quiz || !attempt || row.status !== 'IN_REVIEW') return projected;
-
-      // Lateness against the quiz's own assignment in THIS classroom, pushed
-      // out by the hours the student bought on it.
-      const assignmentId = attempt.quiz.assignment?.id ?? null;
-      const [assignment, hours] = assignmentId
-        ? await Promise.all([
-            ClassmojiService.assignment.findByIdInClassroom(assignmentId, classroomId),
-            ClassmojiService.quizGradeItems.netQuizExtensionHours({
-              classroomId,
-              studentId: row.student_id,
-              assignmentIds: [assignmentId],
-            }),
-          ])
-        : [null, new Map<string, number>()];
-      const late = assignment
-        ? lateHours(
-            attempt.completed_at,
-            assignment.student_deadline,
-            assignmentId ? (hours.get(assignmentId) ?? 0) : 0
-          )
-        : 0;
-      const effective = quizAttemptGrade(attempt, scale).effective.percentage;
-      const countedEmoji =
-        late > 0 && effective !== null
-          ? quizPercentageEmoji(Math.max(0, effective - late * penalty), scale)
-          : projected.quiz.effectiveEmoji;
-      return { ...projected, quiz: { ...projected.quiz, lateHours: late, countedEmoji } };
-    })
+  const lateness = await ClassmojiService.regradeRequest.openQuizRequestLateness(
+    classroomId,
+    rows,
+    scale
   );
+  return rows.map(row => {
+    const projected = projectRow(row, scale);
+    const late = lateness.get(row.id);
+    return projected.quiz && late
+      ? {
+          ...projected,
+          quiz: { ...projected.quiz, lateHours: late.lateHours, countedEmoji: late.countedEmoji },
+        }
+      : projected;
+  });
 };

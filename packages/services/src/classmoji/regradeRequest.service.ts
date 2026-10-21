@@ -26,12 +26,20 @@
  * (which cascades to its requests) takes them.
  */
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
-import { quizAttemptGrade, withLogins, type QuizAttemptGrade } from '@classmoji/utils';
+import {
+  lateHours as lateHoursOf,
+  quizAttemptGrade,
+  quizPercentageEmoji,
+  withLogins,
+  type QuizAttemptGrade,
+  type QuizEmojiScale,
+} from '@classmoji/utils';
 import { Prisma, type RegradeRequest, type Role } from '@prisma/client';
 import * as audit from './audit.service.ts';
 import { findScaleByClassroomId } from './emojiMapping.service.ts';
 import { quizzesVisibleOrThrow } from './entitlement.service.ts';
 import * as notificationService from './notification.service.ts';
+import { netQuizExtensionHours } from './quizGradeItems.service.ts';
 import {
   QuizGradeError,
   acceptedRoleIn,
@@ -189,6 +197,71 @@ export const findManyForDisplay = async (
   if (!rows.some(row => row.quiz_attempt_id)) return rows;
   if (await quizzesVisibleOrThrow(classroomId)) return rows;
   return rows.filter(row => !row.quiz_attempt_id);
+};
+
+/** An open quiz request's lateness, as the resolve modal and the MCP queue show it. */
+export interface QuizRequestLateness {
+  /** The attempt's whole hours past its due date plus the hours the student bought. */
+  lateHours: number;
+  /** The attempt's grade now after the late penalty, as the classroom's emoji. */
+  countedEmoji: string | null;
+}
+
+/**
+ * request id → lateness, for the OPEN quiz requests among `rows` (what the
+ * staff resolve modal's "Counted" line and the MCP queue show). Lateness is
+ * measured against the quiz's own assignment in `classroomId`, pushed out by
+ * the hours the student bought on it; the penalty is the classroom's.
+ */
+export const openQuizRequestLateness = async (
+  classroomId: string,
+  rows: ReadonlyArray<Awaited<ReturnType<typeof findMany>>[number]>,
+  scale: QuizEmojiScale
+): Promise<Map<string, QuizRequestLateness>> => {
+  const open = rows.filter(r => r.status === 'IN_REVIEW' && r.quiz_attempt);
+  const result = new Map<string, QuizRequestLateness>();
+  if (open.length === 0) return result;
+  const settings = await getPrisma().classroomSettings.findUnique({
+    where: { classroom_id: classroomId },
+    select: { late_penalty_points_per_hour: true },
+  });
+  const penalty = Number(settings?.late_penalty_points_per_hour ?? 0) || 0;
+  await Promise.all(
+    open.map(async row => {
+      const attempt = row.quiz_attempt!;
+      const assignmentId = attempt.quiz.assignment?.id ?? null;
+      const [assignment, hours] = assignmentId
+        ? await Promise.all([
+            getPrisma().assignment.findFirst({
+              where: { id: assignmentId, module: { classroom_id: classroomId } },
+              select: { student_deadline: true },
+            }),
+            netQuizExtensionHours({
+              classroomId,
+              studentId: row.student_id,
+              assignmentIds: [assignmentId],
+            }),
+          ])
+        : [null, new Map<string, number>()];
+      const late = assignment
+        ? lateHoursOf(
+            attempt.completed_at,
+            assignment.student_deadline,
+            assignmentId ? Math.max(0, hours.get(assignmentId) ?? 0) : 0
+          )
+        : 0;
+      // The penalty comes off the effective score itself (D2), not off its emoji.
+      const { effective } = quizAttemptGrade(attempt, scale);
+      result.set(row.id, {
+        lateHours: late,
+        countedEmoji:
+          late > 0 && effective.percentage !== null
+            ? quizPercentageEmoji(Math.max(0, effective.percentage - late * penalty), scale)
+            : effective.emoji,
+      });
+    })
+  );
+  return result;
 };
 
 /**
