@@ -213,9 +213,22 @@ export interface QuizRequestLateness {
  * measured against the quiz's own assignment in `classroomId`, pushed out by
  * the hours the student bought on it; the penalty is the classroom's.
  */
+/** The request fields `openQuizRequestLateness` reads (a `findMany` row fits). */
+export interface LatenessRequestRow {
+  id: string;
+  status: string;
+  student_id: string;
+  quiz_attempt: {
+    completed_at: Date | string | null;
+    partial_credit_percentage: number | null;
+    adjusted_emoji: string | null;
+    quiz: { assignment: { id: string } | null };
+  } | null;
+}
+
 export const openQuizRequestLateness = async (
   classroomId: string,
-  rows: ReadonlyArray<Awaited<ReturnType<typeof findMany>>[number]>,
+  rows: ReadonlyArray<LatenessRequestRow>,
   scale: QuizEmojiScale
 ): Promise<Map<string, QuizRequestLateness>> => {
   const open = rows.filter(r => r.status === 'IN_REVIEW' && r.quiz_attempt);
