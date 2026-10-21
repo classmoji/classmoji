@@ -229,26 +229,43 @@ describe('late penalty after the adjustment (D2)', () => {
 describe('quizItemEmoji (the gradebook cell)', () => {
   // Two entries share 90: the staff pick is shown as picked.
   const SCALE = { rocket: 100, '+1': 90, tada: 90, eyes: 80 };
-  const base = { counts_as_zero: false, counting_adjusted: true, counting_adjusted_emoji: 'tada' };
+  const base = {
+    counts_as_zero: false,
+    counting_adjusted: true,
+    counting_adjusted_emoji: 'tada',
+    counting_raw_percentage: 90,
+  };
 
-  it('is the emoji staff picked on an adjusted attempt on time', () => {
-    expect(quizItemEmoji({ ...base, late_hours: 0 }, 90, SCALE)).toBe('tada');
+  it('is the emoji staff picked on an adjusted attempt the penalty did not lower', () => {
+    expect(quizItemEmoji(base, 90, SCALE)).toBe('tada');
   });
 
-  it('is the penalised value as the nearest emoji when late', () => {
-    expect(quizItemEmoji({ ...base, late_hours: 2 }, 80, SCALE)).toBe('eyes');
+  it('keeps the pick on a late attempt when the penalty took nothing off (no late penalty)', () => {
+    // Three hours late, but nothing came off: 90 still counts. The nearest
+    // emoji to 90 is '+1' by the tie rule; the pick was 'tada'.
+    const lateNoPenalty = { ...base, late_hours: 3 };
+    expect(quizItemEmoji(lateNoPenalty, 90, SCALE)).toBe('tada');
+    expect(quizItemEmoji({ ...lateNoPenalty, counting_adjusted: false }, 90, SCALE)).toBe('+1');
+  });
+
+  it('is the penalised value as the nearest emoji when the penalty lowered it', () => {
+    expect(quizItemEmoji(base, 80, SCALE)).toBe('eyes');
   });
 
   it('is the nearest emoji without an adjustment, or when its emoji left the scale', () => {
-    expect(quizItemEmoji({ ...base, counting_adjusted: false, late_hours: 0 }, 100, SCALE)).toBe(
-      'rocket'
-    );
     expect(
-      quizItemEmoji({ ...base, counting_adjusted_emoji: 'gone', late_hours: 0 }, 80, SCALE)
+      quizItemEmoji({ ...base, counting_adjusted: false, counting_raw_percentage: 100 }, 100, SCALE)
+    ).toBe('rocket');
+    expect(
+      quizItemEmoji(
+        { ...base, counting_adjusted_emoji: 'gone', counting_raw_percentage: 80 },
+        80,
+        SCALE
+      )
     ).toBe('eyes');
   });
 
   it('is null on an empty scale', () => {
-    expect(quizItemEmoji({ ...base, late_hours: 0 }, 90, {})).toBeNull();
+    expect(quizItemEmoji(base, 90, {})).toBeNull();
   });
 });

@@ -171,25 +171,31 @@ export const countingQuizScore = <T extends ScorableQuizAttempt>(
 /**
  * The emoji a quiz grade item shows for `value` (what the totals count): the
  * staff-picked adjustment emoji itself when the counting attempt is adjusted
- * and on time (two scale entries may share a value; the pick is what staff
- * chose), else the nearest emoji to the value (the late-penalised score, or a
- * counted 0). Null on an empty scale.
+ * and the late penalty took nothing off it (two scale entries may share a
+ * value; the pick is what staff chose), else the nearest emoji to the value
+ * (the late-penalised score, or a counted 0). Penalised means the value
+ * dropped below the attempt's effective score (`counting_raw_percentage`),
+ * not merely that it was late: a late attempt in a classroom with no late
+ * penalty keeps the pick. Null on an empty scale.
  */
 export const quizItemEmoji = (
   item: Pick<
     GradedItem,
-    'counting_adjusted' | 'counting_adjusted_emoji' | 'late_hours' | 'counts_as_zero'
+    'counting_adjusted' | 'counting_adjusted_emoji' | 'counts_as_zero' | 'counting_raw_percentage'
   >,
   value: number | null,
   scale: QuizEmojiScale
-): string | null =>
-  item.counting_adjusted &&
-  item.counting_adjusted_emoji &&
-  !item.counts_as_zero &&
-  !(item.late_hours > 0) &&
-  Object.prototype.hasOwnProperty.call(scale, item.counting_adjusted_emoji)
+): string | null => {
+  const raw = item.counting_raw_percentage;
+  const penalised = typeof value === 'number' && typeof raw === 'number' && value < raw;
+  return item.counting_adjusted &&
+    item.counting_adjusted_emoji &&
+    !item.counts_as_zero &&
+    !penalised &&
+    Object.prototype.hasOwnProperty.call(scale, item.counting_adjusted_emoji)
     ? item.counting_adjusted_emoji
     : quizPercentageEmoji(value, scale);
+};
 
 /** The assignment fields a quiz item reads. Structural: a narrow select fits. */
 export interface QuizGradeAssignment extends AssignmentVisibilityInput {

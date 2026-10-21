@@ -153,9 +153,9 @@ export const quizPercentageEmoji = (
 /**
  * What an emoji counts for after `lateHours` of late penalty (D2: the penalty
  * applies after the adjustment), as the nearest emoji on the scale: the emoji
- * itself when on time or not on the scale, null when there is none. The
- * attempt drawer and the regrade resolve modal show it under "Counted" while
- * an emoji is being picked.
+ * itself when the penalty takes nothing off (on time, no penalty) or it is
+ * not on the scale, null when there is none. The attempt drawer and the
+ * regrade resolve modal show it under "Counted" while an emoji is being picked.
  */
 export const countedQuizEmoji = (
   emoji: string | null | undefined,
@@ -167,7 +167,9 @@ export const countedQuizEmoji = (
   const value = Object.prototype.hasOwnProperty.call(scale, emoji) ? scale[emoji] : undefined;
   if (!(lateHours > 0) || typeof value !== 'number') return emoji;
   const penalty = Number.isFinite(latePenaltyPerHour) ? Math.max(0, latePenaltyPerHour) : 0;
-  return quizPercentageEmoji(Math.max(0, value - lateHours * penalty), scale);
+  const counted = Math.max(0, value - lateHours * penalty);
+  // Nothing taken off: the emoji itself, not a re-derived one of equal value.
+  return counted < value ? quizPercentageEmoji(counted, scale) : emoji;
 };
 
 /** `countedQuizEmoji` for every emoji on the scale: emoji → the emoji it counts as. */

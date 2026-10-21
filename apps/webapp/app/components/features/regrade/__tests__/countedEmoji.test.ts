@@ -27,6 +27,16 @@ describe('countedEmojiFor', () => {
     expect(countedEmojiFor('score-10', NUMERIC, 100, 5)).toBe('score-0');
   });
 
+  it('is the picked emoji itself when late but the penalty takes nothing off', () => {
+    // Two entries share 90; the nearest to 90 is '+1' by the tie rule.
+    const SHARED = { rocket: 100, '+1': 90, tada: 90, eyes: 80 };
+    expect(countedEmojiFor('tada', SHARED, 3, 0)).toBe('tada');
+    // A zero grade cannot drop further.
+    expect(countedEmojiFor('sob', EMOJI, 3, 5)).toBe('sob');
+    // With a penalty it is re-read from the lowered value.
+    expect(countedEmojiFor('tada', SHARED, 2, 5)).toBe('eyes');
+  });
+
   it('is nothing until an emoji is picked', () => {
     expect(countedEmojiFor(null, NUMERIC, 3, 1)).toBeNull();
   });
