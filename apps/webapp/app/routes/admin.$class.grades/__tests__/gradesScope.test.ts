@@ -377,7 +377,7 @@ describe('grades loader — quiz columns appear only where quizzes are visible',
     expect(mocks.findAttemptsByQuiz).toHaveBeenCalledWith('quiz-1');
     expect(mocks.findGradingStrategies).toHaveBeenCalledWith(['quiz-1']);
     expect(activity.quiz['a-quiz']).toEqual({
-      'student-1': { completed: true, emoji: 'score-90' },
+      'student-1': { completed: true, scored: true, emoji: 'score-90' },
     });
     expect(mocks.quizzesVisibleOrThrow).toHaveBeenCalledWith('class-1');
   });
@@ -393,9 +393,9 @@ describe('grades loader — quiz columns appear only where quizzes are visible',
     const { activity } = await resolveColumns();
 
     expect(activity.quiz['a-quiz']).toEqual({
-      'student-1': { completed: true, emoji: 'score-40' },
+      'student-1': { completed: true, scored: true, emoji: 'score-40' },
       // A 0 is a score, not "Completed".
-      'student-2': { completed: true, emoji: 'score-0' },
+      'student-2': { completed: true, scored: true, emoji: 'score-0' },
     });
   });
 
@@ -409,7 +409,7 @@ describe('grades loader — quiz columns appear only where quizzes are visible',
     const { activity } = await resolveColumns();
 
     expect(activity.quiz['a-quiz']).toEqual({
-      'student-1': { completed: true, emoji: 'score-100' },
+      'student-1': { completed: true, scored: true, emoji: 'score-100' },
     });
   });
 
@@ -424,8 +424,8 @@ describe('grades loader — quiz columns appear only where quizzes are visible',
     const { activity } = await resolveColumns();
 
     expect(activity.quiz['a-quiz']).toEqual({
-      'student-1': { completed: true, emoji: 'score-90' },
-      'student-2': { completed: false, emoji: null },
+      'student-1': { completed: true, scored: true, emoji: 'score-90' },
+      'student-2': { completed: false, scored: false, emoji: null },
     });
   });
 
@@ -456,8 +456,9 @@ describe('grades loader — quiz grade items join the totals', () => {
     counts_as_zero: false,
     late_hours: 4,
     counting_raw_percentage: 80,
-    // The cell's "adjusted" chip (D8).
+    // The cell's "adjusted" chip (D8), and the emoji staff picked.
     counting_adjusted: true,
+    counting_adjusted_emoji: 'score-80',
   };
 
   const resolveAll = async () => {

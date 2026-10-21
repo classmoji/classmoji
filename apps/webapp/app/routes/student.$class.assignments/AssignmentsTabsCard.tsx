@@ -5,7 +5,7 @@ import { motion, useReducedMotion } from 'framer-motion';
 import { IconExternalLink } from '@tabler/icons-react';
 import type { StudentCourseworkRow } from '@classmoji/services';
 import Emoji from '~/components/ui/display/Emoji';
-import QuizGradeEmoji from '~/components/features/quiz/QuizGradeEmoji';
+import QuizGradeEmoji, { CountedEmoji } from '~/components/features/quiz/QuizGradeEmoji';
 import TokenExtensionPopover from '~/components/features/TokenExtensionPopover';
 import { CommitCount } from '~/components/features/analytics';
 import {
@@ -316,12 +316,17 @@ const AssignmentsTabsCard = ({
                         ) : row.scoreEmoji ? (
                           // A quiz: the counting attempt's grade as the
                           // classroom's emoji, never the number (E1), with the
-                          // original beside it when staff adjusted it (D6).
-                          <QuizGradeEmoji
-                            emoji={row.scoreEmoji}
-                            originalEmoji={row.originalScoreEmoji ?? null}
-                            adjusted={row.adjusted === true}
-                          />
+                          // original beside it when staff adjusted it (D6),
+                          // and what it counts for after the late penalty
+                          // (the late chip is in the status column).
+                          <span className="inline-flex items-center gap-1.5">
+                            <QuizGradeEmoji
+                              emoji={row.scoreEmoji}
+                              originalEmoji={row.originalScoreEmoji ?? null}
+                              adjusted={row.adjusted === true}
+                            />
+                            <CountedEmoji emoji={row.countedScoreEmoji} />
+                          </span>
                         ) : (
                           <Dash />
                         )}

@@ -1,3 +1,4 @@
+import { Tooltip } from 'antd';
 import Emoji from '~/components/ui/display/Emoji';
 
 /**
@@ -8,7 +9,8 @@ import Emoji from '~/components/ui/display/Emoji';
  *   - adjusted with `originalEmoji`: "orig → new" and an "adjusted" chip (D6, D8);
  *     adjusted without it: the new emoji and the chip.
  *   - `lateHours` > 0: an "Nh late" chip.
- *   - no emoji: an em dash.
+ *   - no emoji: an em dash; with `noScale` (a scored attempt in a classroom
+ *     with no grading scale) the dash says why (`NoScaleGrade`).
  */
 export interface QuizGradeEmojiProps {
   emoji: string | null;
@@ -16,7 +18,29 @@ export interface QuizGradeEmojiProps {
   adjusted?: boolean;
   lateHours?: number | null;
   size?: 'sm' | 'md' | 'lg';
+  /** The attempt is scored but the classroom has no grading scale to show it on. */
+  noScale?: boolean;
 }
+
+/** Whether a classroom's scale (emoji → grade) has nothing to show a grade with. */
+export const isNoScale = (scale: Readonly<Record<string, number>> | null | undefined) =>
+  !scale || Object.keys(scale).length === 0;
+
+/**
+ * A scored quiz grade in a classroom with no grading scale: an em dash that
+ * says why, never "Pending", "No score" or "Completed". The one place this
+ * display lives (the no-scale rule may change).
+ */
+export const NoScaleGrade = () => (
+  <Tooltip title="No grading scale">
+    <span
+      data-testid="quiz-grade-no-scale"
+      className="text-gray-400 dark:text-gray-500 cursor-help"
+    >
+      —
+    </span>
+  </Tooltip>
+);
 
 const FONT_SIZE: Record<NonNullable<QuizGradeEmojiProps['size']>, number> = {
   sm: 16,
@@ -44,14 +68,33 @@ export const LateChip = ({ hours }: { hours: number }) => (
   </span>
 );
 
+/**
+ * What a late quiz grade counts for after the late penalty, beside the grade:
+ * "→ 👀" with a tooltip. The quizzes list, the Assignments tab and the
+ * dashboard show it the same way. Nothing when there is no counted emoji.
+ */
+export const CountedEmoji = ({ emoji }: { emoji: string | null | undefined }) =>
+  emoji ? (
+    <Tooltip title="What it counts for after the late penalty">
+      <span
+        data-testid="quiz-grade-counted"
+        className="inline-flex items-center gap-1 text-xs font-semibold text-orange-700 dark:text-orange-300 whitespace-nowrap"
+      >
+        → <Emoji emoji={emoji} fontSize={16} />
+      </span>
+    </Tooltip>
+  ) : null;
+
 export function QuizGradeEmoji({
   emoji,
   originalEmoji = null,
   adjusted = false,
   lateHours = null,
   size = 'sm',
+  noScale = false,
 }: QuizGradeEmojiProps) {
   const fontSize = FONT_SIZE[size];
+  if (!emoji && noScale) return <NoScaleGrade />;
   if (!emoji) {
     return (
       <span data-testid="quiz-grade-none" className="text-gray-400 dark:text-gray-500">

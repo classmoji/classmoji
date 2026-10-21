@@ -18,9 +18,10 @@ type Role = 'OWNER' | 'TEACHER' | 'ASSISTANT' | 'STUDENT';
 const CLASSROOMS: Record<string, { id: string; slug: string; status: string }> = {
   'cs-x': { id: 'class-x', slug: 'cs-x', status: 'ACTIVE' },
   'cs-y': { id: 'class-y', slug: 'cs-y', status: 'ACTIVE' },
+  'cs-locked': { id: 'class-locked', slug: 'cs-locked', status: 'LOCKED' },
 };
 const MEMBERS: Record<string, Record<string, Role>> = {
-  'stu-a': { 'class-x': 'STUDENT' },
+  'stu-a': { 'class-x': 'STUDENT', 'class-locked': 'STUDENT' },
   'stu-b': { 'class-x': 'STUDENT' },
   'stu-y': { 'class-y': 'STUDENT' },
   'ta-x': { 'class-x': 'ASSISTANT' },
@@ -39,7 +40,6 @@ const mocks = vi.hoisted(() => ({
   gate: vi.fn(),
   create: vi.fn(),
   quizzesVisible: vi.fn(),
-  mutationAllowed: vi.fn(),
 }));
 
 class QuizGradeError extends Error {
@@ -54,7 +54,6 @@ class QuizGradeError extends Error {
 
 vi.mock('~/utils/helpers', () => ({
   requireStudentAccess: (...a: unknown[]) => mocks.gate(...a),
-  assertClassroomMutationAllowed: (...a: unknown[]) => mocks.mutationAllowed(...a),
   assertClassroomAccess: vi.fn(),
   addClassroomAuditLog: vi.fn(),
 }));
@@ -144,7 +143,15 @@ describe('quiz regrade request action', () => {
       tool: 'web:quiz_attempt.request_regrade',
       impersonatedBy: null,
     });
-    expect(mocks.mutationAllowed).toHaveBeenCalledWith({ status: 'ACTIVE', role: 'STUDENT' });
+  });
+
+  it("returns a read-only classroom's refusal as data, so the drawer stays", async () => {
+    const result = asReply(
+      await post('cs-locked', 'quiz-x', 'att-a', { _action: 'requestRegrade', comment: 'Q2.' })
+    ) as { init?: { status?: number }; data?: { code?: string } };
+    expect(result.init?.status).toBe(403);
+    expect(result.data?.code).toBe('CLASSROOM_LOCKED');
+    expect(mocks.create).not.toHaveBeenCalled();
   });
 
   it('names the platform admin behind a View As session', async () => {

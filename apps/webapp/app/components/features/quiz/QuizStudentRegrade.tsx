@@ -4,14 +4,15 @@ import { Alert, Button, Form, Input, Modal } from 'antd';
 import dayjs from 'dayjs';
 import { useCallout } from '@classmoji/ui-components';
 import type { InstructorCommentView, StudentQuizRegradeView } from '~/utils/quizPayloads';
-import Emoji from '~/components/ui/display/Emoji';
+import { QUIZ_STATUS_LABEL, QuizRemedy } from '~/components/features/regrade/QuizRemedy';
 
 /**
  * The student's side of a completed quiz attempt: the "Request
  * regrade/resubmit" button in the evaluation card's header (E4), replaced by
  * a "Regrade requested" status while a request is in review (D7), and the
  * blocks above the results: the instructor's comment and the latest resolved
- * request (status, from → to or "Score kept", the staff reply). Posts to the
+ * request (the requests page's words: Approved / Denied, "Score adjusted
+ * A → B" or "Score kept A", then the staff reply). Posts to the
  * attempt route's own action (`_action: 'requestRegrade'`); the server takes
  * the attempt from the URL and the student from the session.
  */
@@ -118,7 +119,7 @@ export function QuizStudentGradeNotes({
 }: {
   comment: InstructorCommentView | null;
   regrade: StudentQuizRegradeView;
-  /** The attempt's grade now, as the classroom's emoji. */
+  /** The attempt's grade now: shown for a request resolved before its grade was recorded. */
   currentEmoji: string | null;
 }) {
   const resolved = regrade.resolved;
@@ -150,23 +151,23 @@ export function QuizStudentGradeNotes({
             <span className="font-semibold text-gray-800 dark:text-gray-100">
               Regrade/resubmit request:
             </span>
-            <span className="rounded px-1.5 py-0.5 text-xs font-medium bg-green-500/15 text-green-700 dark:text-green-300">
-              Resolved
+            <span
+              data-testid="quiz-regrade-resolved-status"
+              className={`rounded px-1.5 py-0.5 text-xs font-medium ${
+                resolved.status === 'APPROVED'
+                  ? 'bg-green-500/15 text-green-700 dark:text-green-300'
+                  : 'bg-red-500/15 text-red-700 dark:text-red-300'
+              }`}
+            >
+              {QUIZ_STATUS_LABEL[resolved.status]}
             </span>
-            {resolved.status === 'APPROVED' ? (
-              <span className="inline-flex items-center gap-1.5 text-gray-600 dark:text-gray-300">
-                Score adjusted
-                {resolved.previousEmoji && (
-                  <>
-                    <Emoji emoji={resolved.previousEmoji} fontSize={16} />
-                    <span className="text-gray-400">→</span>
-                  </>
-                )}
-                {currentEmoji && <Emoji emoji={currentEmoji} fontSize={16} />}
-              </span>
-            ) : (
-              <span className="text-gray-600 dark:text-gray-300">Score kept</span>
-            )}
+            <span className="text-gray-600 dark:text-gray-300">
+              <QuizRemedy
+                status={resolved.status}
+                previousEmoji={resolved.previousEmoji}
+                resolvedEmoji={resolved.resolvedEmoji ?? currentEmoji}
+              />
+            </span>
           </div>
           {resolved.reply && (
             <div className="mt-2 whitespace-pre-wrap text-sm text-gray-800 dark:text-gray-100">

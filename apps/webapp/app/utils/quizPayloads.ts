@@ -26,6 +26,7 @@
 
 import {
   attemptQuestionResults,
+  countedQuizEmojiMap,
   countingQuizScore,
   lateHours as lateHoursOf,
   quizAttemptGrade,
@@ -262,16 +263,17 @@ export interface InstructorCommentView {
   at: string | null;
 }
 
+/** The comment's own author and time (`comment_by` / `comment_at`), not the score adjuster's. */
 export const instructorCommentView = (attempt: {
   instructor_comment?: string | null;
-  adjusted_at?: Date | string | null;
-  adjusted_by?: { name?: string | null } | null;
+  comment_at?: Date | string | null;
+  comment_by?: { name?: string | null } | null;
 }): InstructorCommentView | null =>
   attempt.instructor_comment
     ? {
         text: attempt.instructor_comment,
-        byName: attempt.adjusted_by?.name ?? null,
-        at: isoOrNull(attempt.adjusted_at),
+        byName: attempt.comment_by?.name ?? null,
+        at: isoOrNull(attempt.comment_at),
       }
     : null;
 
@@ -288,6 +290,12 @@ export interface StudentQuizRegradeView {
     reply: string | null;
     previousEmoji: string | null;
     /**
+     * The grade the resolution left (`resolved_emoji`): the emoji set, or the
+     * one kept. Null on requests resolved before it was recorded; the panel
+     * then shows the attempt's grade now.
+     */
+    resolvedEmoji: string | null;
+    /**
      * Who resolved it and when (the request's own `resolved_by` /
      * `resolved_at`, name only). Null on requests resolved before that was
      * recorded: no name is shown then.
@@ -303,6 +311,7 @@ export const studentQuizRegradeView = (
     status: string;
     grader_comment?: string | null;
     previous_grade?: readonly string[] | null;
+    resolved_emoji?: string | null;
     created_at?: Date | string | null;
     resolved_at?: Date | string | null;
     resolved_by?: { name?: string | null } | null;
@@ -321,6 +330,7 @@ export const studentQuizRegradeView = (
           status: resolved.status as 'APPROVED' | 'DENIED',
           reply: resolved.grader_comment ?? null,
           previousEmoji: resolved.previous_grade?.[0] ?? null,
+          resolvedEmoji: resolved.resolved_emoji ?? null,
           resolvedByName: resolved.resolved_by?.name ?? null,
           resolvedAt: isoOrNull(resolved.resolved_at),
         }
@@ -625,13 +635,29 @@ export const quizResultStatsView = (
 export interface StaffAttemptGradePanel {
   attemptId: string;
   adjustable: boolean;
+  /**
+   * The classroom takes changes from this viewer (not LOCKED/UNPUBLISHED for
+   * a non-owner, `assertClassroomMutationAllowed`'s rule). False hides the
+   * adjust, comment and revert controls.
+   */
+  canEdit: boolean;
   grade: AttemptGradeView | null;
   adjustedEmoji: string | null;
   comment: string | null;
+  /** Who set the score adjustment, and when (cleared on revert). */
   adjustedByName: string | null;
   adjustedAt: string | null;
+  /** Who last wrote the comment, and when. */
+  commentByName: string | null;
+  commentAt: string | null;
   /** The classroom's scale, best first (emoji keys only). */
   scaleEmojis: string[];
+  /**
+   * What each emoji on the scale would count for on this attempt after its
+   * late penalty (`countedQuizEmojiMap`): the drawer's "Counted" line follows
+   * the emoji being picked. Emoji only, no number.
+   */
+  countedByEmoji: Record<string, string | null>;
   openRequest: {
     id: string;
     comment: string | null;
@@ -643,22 +669,30 @@ export interface StaffAttemptGradePanel {
 export const staffAttemptGradePanel = ({
   attempt,
   adjustable,
+  canEdit,
   grade,
   adjustedByName,
+  commentByName,
   emojiScale,
+  latePenaltyPerHour,
   openRequest,
   studentName,
 }: {
   attempt: {
     id: string;
-    adjusted_emoji?: string | null;
+    adjusted_emoji: string | null;
     instructor_comment?: string | null;
     adjusted_at?: Date | string | null;
+    comment_at?: Date | string | null;
   };
   adjustable: boolean;
+  canEdit: boolean;
   grade: AttemptGradeView | null;
   adjustedByName: string | null;
+  commentByName: string | null;
   emojiScale: QuizEmojiScale;
+  /** The classroom's late penalty per hour, for `countedByEmoji`. */
+  latePenaltyPerHour: number;
   openRequest: {
     id: string;
     student_comment?: string | null;
@@ -668,12 +702,16 @@ export const staffAttemptGradePanel = ({
 }): StaffAttemptGradePanel => ({
   attemptId: attempt.id,
   adjustable,
+  canEdit,
   grade,
   adjustedEmoji: attempt.adjusted_emoji ?? null,
   comment: attempt.instructor_comment ?? null,
-  adjustedByName: attempt.adjusted_emoji || attempt.instructor_comment ? adjustedByName : null,
-  adjustedAt: isoOrNull(attempt.adjusted_at),
+  adjustedByName: attempt.adjusted_emoji ? adjustedByName : null,
+  adjustedAt: attempt.adjusted_emoji ? isoOrNull(attempt.adjusted_at) : null,
+  commentByName: attempt.instructor_comment ? commentByName : null,
+  commentAt: attempt.instructor_comment ? isoOrNull(attempt.comment_at) : null,
   scaleEmojis: Object.keys(emojiScale),
+  countedByEmoji: countedQuizEmojiMap(emojiScale, grade?.lateHours ?? 0, latePenaltyPerHour),
   openRequest: openRequest
     ? {
         id: openRequest.id,

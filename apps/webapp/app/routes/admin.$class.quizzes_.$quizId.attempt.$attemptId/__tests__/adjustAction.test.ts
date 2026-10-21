@@ -19,11 +19,12 @@ type Role = 'OWNER' | 'TEACHER' | 'ASSISTANT' | 'STUDENT';
 const CLASSROOMS: Record<string, { id: string; slug: string; status: string }> = {
   'cs-x': { id: 'class-x', slug: 'cs-x', status: 'ACTIVE' },
   'cs-y': { id: 'class-y', slug: 'cs-y', status: 'ACTIVE' },
+  'cs-locked': { id: 'class-locked', slug: 'cs-locked', status: 'LOCKED' },
 };
 const MEMBERS: Record<string, Record<string, Role>> = {
   'owner-x': { 'class-x': 'OWNER' },
   'teacher-x': { 'class-x': 'TEACHER' },
-  'ta-x': { 'class-x': 'ASSISTANT' },
+  'ta-x': { 'class-x': 'ASSISTANT', 'class-locked': 'ASSISTANT' },
   'stu-x': { 'class-x': 'STUDENT' },
   'ta-y': { 'class-y': 'ASSISTANT' },
 };
@@ -42,7 +43,6 @@ const mocks = vi.hoisted(() => ({
   adjust: vi.fn(),
   revert: vi.fn(),
   quizzesVisible: vi.fn(),
-  mutationAllowed: vi.fn(),
 }));
 
 class QuizGradeError extends Error {
@@ -57,7 +57,6 @@ class QuizGradeError extends Error {
 
 vi.mock('~/utils/routeAuth.server', () => ({
   requireClassroomTeachingTeam: (...a: unknown[]) => mocks.gate(...a),
-  assertClassroomMutationAllowed: (...a: unknown[]) => mocks.mutationAllowed(...a),
 }));
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: vi.fn(),
@@ -140,7 +139,7 @@ describe('adjust action — who may', () => {
         comment: 'Q3 has full credit.',
       });
 
-      expect(asReply(result)).toEqual({ ok: true });
+      expect(asReply(result)).toEqual({ ok: true, success: 'Saved' });
       expect(mocks.gate).toHaveBeenCalledWith(expect.any(Request), 'cs-x', expect.anything());
       expect(mocks.adjust).toHaveBeenCalledWith({
         attemptId: 'att-x',
@@ -196,9 +195,16 @@ describe('adjust action — who may', () => {
     expect(teacherRoute.action).toBe(route.action);
   });
 
-  it('checks the classroom mutation rule with the role the gate found', async () => {
-    await post('cs-x', 'quiz-x', 'att-x', { _action: 'revert' });
-    expect(mocks.mutationAllowed).toHaveBeenCalledWith({ status: 'ACTIVE', role: 'ASSISTANT' });
+  it("returns a read-only classroom's refusal as data, writing nothing", async () => {
+    const result = asReply(
+      await post('cs-locked', 'quiz-x', 'att-x', { _action: 'adjust', emoji: '+1' })
+    );
+    expect(result.init?.status).toBe(403);
+    expect(result.data).toMatchObject({ code: 'CLASSROOM_LOCKED' });
+    expect(mocks.adjust).not.toHaveBeenCalled();
+    const reverted = asReply(await post('cs-locked', 'quiz-x', 'att-x', { _action: 'revert' }));
+    expect(reverted.init?.status).toBe(403);
+    expect(mocks.revert).not.toHaveBeenCalled();
   });
 
   it('answers 404 where the classroom has no quizzes', async () => {
@@ -230,7 +236,7 @@ describe('adjust action — what it does', () => {
   it('reverts with its own tool name', async () => {
     const result = await post('cs-x', 'quiz-x', 'att-x', { _action: 'revert' });
 
-    expect(asReply(result)).toEqual({ ok: true });
+    expect(asReply(result)).toEqual({ ok: true, success: 'Adjustment reverted' });
     expect(mocks.revert).toHaveBeenCalledWith({
       attemptId: 'att-x',
       actorUserId: 'ta-x',
@@ -267,6 +273,12 @@ describe('adjust action — what it does', () => {
 
     expect(result.init?.status).toBe(409);
     expect(result.data?.error).toBe('Only a current student’s quiz attempt can be adjusted');
+  });
+
+  it('says so when a save changed nothing', async () => {
+    mocks.adjust.mockResolvedValue({ changed: false });
+    const result = await post('cs-x', 'quiz-x', 'att-x', { _action: 'adjust', emoji: '+1' });
+    expect(asReply(result)).toEqual({ ok: true, success: 'No changes to save' });
   });
 
   it('refuses an unknown action without writing', async () => {

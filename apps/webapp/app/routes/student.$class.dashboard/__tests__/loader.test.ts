@@ -200,6 +200,40 @@ describe('student dashboard loader — assignment lookup guard', () => {
   });
 });
 
+describe('student dashboard loader — regrade/resubmit requests', () => {
+  const requests = [
+    {
+      id: 'rr-quiz',
+      status: 'IN_REVIEW',
+      created_at: '2026-09-20T12:00:00.000Z',
+      quiz_attempt_id: 'att-1',
+      quiz_attempt: { attempt_number: 2, quiz: { name: 'Recursion check-in' } },
+      git_repo_assignment: null,
+    },
+    {
+      id: 'rr-repo',
+      status: 'IN_REVIEW',
+      created_at: '2026-09-19T12:00:00.000Z',
+      quiz_attempt_id: null,
+      quiz_attempt: null,
+      git_repo_assignment: { assignment: { title: 'Lab 1' } },
+    },
+  ];
+
+  it('lists quiz requests where the classroom shows quizzes', async () => {
+    regradeRequestsMock.mockResolvedValue(requests);
+    const data = await (await loader(loaderArgs())).data;
+    expect(data.resubmits.map((r: { id: string }) => r.id)).toEqual(['rr-quiz', 'rr-repo']);
+  });
+
+  it('leaves quiz requests out where it does not', async () => {
+    regradeRequestsMock.mockResolvedValue(requests);
+    loadQuizzesVisibleMock.mockResolvedValue(false);
+    const data = await (await loader(loaderArgs())).data;
+    expect(data.resubmits.map((r: { id: string }) => r.id)).toEqual(['rr-repo']);
+  });
+});
+
 describe('student dashboard loader — Up next', () => {
   it("reads the student's coursework with the quiz answer and the submissions already read", async () => {
     const submissions = [{ id: 'ra-1', assignment_id: 'a-1' }];
@@ -405,6 +439,7 @@ describe('student dashboard loader — recent grades', () => {
         scoreEmoji: 'score-0',
         originalScoreEmoji: 'score-0',
         adjusted: false,
+        numLateHours: 0,
         scoredAt: '2026-09-20T12:00:00.000Z',
         href: '/student/test-class/quizzes?quiz=q-1',
       }),
@@ -426,6 +461,8 @@ describe('student dashboard loader — recent grades', () => {
         scoreEmoji: 'score-0',
         originalScoreEmoji: 'score-0',
         adjusted: false,
+        countedScoreEmoji: null,
+        lateHours: 0,
         href: '/student/test-class/quizzes?quiz=q-1',
       },
       {

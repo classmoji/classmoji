@@ -13,6 +13,7 @@ import {
   gradedItemValue,
   isReleased,
   quizAttemptGrade,
+  quizItemEmoji,
   quizPercentageEmoji,
   quizStanding,
   type GradedItem,
@@ -21,7 +22,7 @@ import {
 } from '@classmoji/utils';
 import { LateOverrideButton } from '~/components';
 import GradeBadges from '~/components/features/grading/GradeBadges';
-import QuizGradeEmoji from '~/components/features/quiz/QuizGradeEmoji';
+import QuizGradeEmoji, { NoScaleGrade, isNoScale } from '~/components/features/quiz/QuizGradeEmoji';
 import Emoji from '~/components/ui/display/Emoji';
 import UserAvatar from '~/components/shared/UserAvatar';
 import { ASSIGNMENT_TYPE_META } from '~/components/features/assignments/AssignmentsTable';
@@ -122,14 +123,22 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     counts_as_zero: item.counts_as_zero,
     late_hours: item.late_hours,
     counting_raw_percentage: item.counting_raw_percentage,
-    // The row's "adjusted" chip (D8).
+    // The row's "adjusted" chip (D8), and the emoji staff picked (shown as is when on time).
     counting_adjusted: item.counting_adjusted ?? false,
+    counting_adjusted_emoji: item.counting_adjusted_emoji ?? null,
   }));
   const quizStatus: Record<
     string,
     // `emoji`: the counting attempt's effective grade as the classroom's
     // emoji; no quiz number leaves the server outside the grade items (E1).
-    { attempted: boolean; completed: boolean; emoji: string | null; adjusted: boolean }
+    {
+      attempted: boolean;
+      completed: boolean;
+      /** The counting attempt has a score, shown or not (no grading scale). */
+      scored: boolean;
+      emoji: string | null;
+      adjusted: boolean;
+    }
   > = {};
   const formStatus: Record<string, { responded: boolean; draft: boolean }> = {};
   await Promise.all(
@@ -145,6 +154,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
         quizStatus[a.id] = {
           attempted: standing.attemptsUsed > 0,
           completed: standing.completed,
+          scored: standing.counting !== null,
           emoji: grade?.effective.emoji ?? null,
           adjusted: grade?.adjusted ?? false,
         };
@@ -656,7 +666,7 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
         // What the total counts (the late-penalised score, or the counted 0)
         // as the classroom's emoji, with the adjusted chip (D8). The note
         // shows the counting attempt's own grade before the penalty.
-        const shown = quizPercentageEmoji(value, mappings);
+        const shown = quizItemEmoji(item, value, mappings);
         const beforePenalty = quizScoreNote(item, value)
           ? quizPercentageEmoji(item.counting_raw_percentage, mappings)
           : null;
@@ -671,12 +681,19 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
             }
           >
             <span className="inline-flex">
-              <QuizGradeEmoji emoji={shown} adjusted={item.counting_adjusted === true} size="md" />
+              <QuizGradeEmoji
+                emoji={shown}
+                adjusted={item.counting_adjusted === true}
+                size="md"
+                noScale={isNoScale(mappings)}
+              />
             </span>
           </Tooltip>
         );
       } else if (q?.emoji) {
         grade = <QuizGradeEmoji emoji={q.emoji} adjusted={q.adjusted} size="md" />;
+      } else if (q?.scored && isNoScale(mappings)) {
+        grade = <NoScaleGrade />;
       }
     } else if (a.type === 'FORM') {
       const f = formStatus[a.id];

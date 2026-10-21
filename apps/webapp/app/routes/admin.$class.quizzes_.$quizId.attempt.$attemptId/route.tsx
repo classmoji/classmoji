@@ -13,10 +13,8 @@ import {
   QuizRegradeRequestBanner,
 } from '~/components/features/quiz/QuizAttemptGradePanel';
 import { addClassroomAuditLog, assertClassroomAccess } from '~/utils/helpers';
-import {
-  assertClassroomMutationAllowed,
-  requireClassroomTeachingTeam,
-} from '~/utils/routeAuth.server';
+import { requireClassroomTeachingTeam } from '~/utils/routeAuth.server';
+import { canMutate, mutationRefusal } from '~/utils/mutationRefusal.server';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import {
   attemptDrawerView,
@@ -165,6 +163,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
         quiz,
         attempt: attemptData.attempt,
         studentName,
+        canEdit: canMutate(classroom, membership?.role) && !viewerOwnsAttempt,
       })
     : null;
 
@@ -210,6 +209,7 @@ const loadGradePanel = async ({
   quiz,
   attempt,
   studentName,
+  canEdit,
 }: {
   classroom: { id: string; settings?: { late_penalty_points_per_hour?: unknown } | null };
   quiz: {
@@ -225,12 +225,16 @@ const loadGradePanel = async ({
     instructor_comment?: string | null;
     adjusted_by_id?: string | null;
     adjusted_at?: Date | string | null;
+    comment_by_id?: string | null;
+    comment_at?: Date | string | null;
   };
   studentName: string | null;
+  /** The viewer may change things here (classroom status, not their own attempt). */
+  canEdit: boolean;
 }) => {
   const { ClassmojiService } = await import('@classmoji/services');
   const assignment = quiz.assignment ?? null;
-  const [emojiScale, studentMembership, openRequest, adjustedBy] = await Promise.all([
+  const [emojiScale, studentMembership, openRequest, adjustedBy, commentBy] = await Promise.all([
     ClassmojiService.emojiMapping.findScaleByClassroomId(classroom.id),
     ClassmojiService.classroomMembership.findByClassroomAndUser(
       classroom.id,
@@ -238,7 +242,12 @@ const loadGradePanel = async ({
       'STUDENT'
     ),
     ClassmojiService.regradeRequest.findOpenByQuizAttemptId(attempt.id),
-    attempt.adjusted_by_id ? ClassmojiService.user.findById(attempt.adjusted_by_id) : null,
+    attempt.adjusted_emoji && attempt.adjusted_by_id
+      ? ClassmojiService.user.findById(attempt.adjusted_by_id)
+      : null,
+    attempt.instructor_comment && attempt.comment_by_id
+      ? ClassmojiService.user.findById(attempt.comment_by_id)
+      : null,
   ]);
   const isStudent = Boolean(studentMembership?.has_accepted_invite);
   // Lateness is a student's, measured from the due date plus the hours they bought.
@@ -268,9 +277,12 @@ const loadGradePanel = async ({
   return staffAttemptGradePanel({
     attempt,
     adjustable: isStudent && Boolean(attempt.completed_at),
+    canEdit,
     grade,
     adjustedByName: adjustedBy?.name ?? null,
+    commentByName: commentBy?.name ?? null,
     emojiScale,
+    latePenaltyPerHour: typeof penalty === 'number' ? penalty : 0,
     // The request row is the attempt's own; its classroom must be this one.
     openRequest: openRequest && openRequest.classroom_id === classroom.id ? openRequest : null,
     studentName,
@@ -282,7 +294,9 @@ const loadGradePanel = async ({
  * adjust panel. The attempt is the one in the URL, bound to this classroom's
  * quiz before the service runs; the service re-checks the actor against the
  * attempt's own classroom, refuses a preview or running attempt, and writes
- * the audit row (`data.tool` names this surface).
+ * the audit row (`data.tool` names this surface). Refusals come back as
+ * data (`{ error, code }`), for the panel to show in place: this is reached
+ * by `fetcher.submit`, and a thrown Response would replace the drawer.
  */
 export async function action({ params, request }: Route.ActionArgs) {
   const { ClassmojiService, QuizGradeError } = await import('@classmoji/services');
@@ -297,7 +311,8 @@ export async function action({ params, request }: Route.ActionArgs) {
       metadata: { quiz_id: quizId, attempt_id: attemptId },
     }
   );
-  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+  const blocked = mutationRefusal(classroom, membership?.role);
+  if (blocked) return blocked;
 
   if (!(await quizzesVisibleOrThrow(classroom.id))) {
     throw new Response('Not Found', { status: 404 });
@@ -322,7 +337,7 @@ export async function action({ params, request }: Route.ActionArgs) {
 
   try {
     if (body?._action === 'adjust') {
-      await ClassmojiService.quizAttempt.adjust({
+      const result = await ClassmojiService.quizAttempt.adjust({
         attemptId: attempt.id,
         ...(typeof body.emoji === 'string' ? { emoji: body.emoji } : {}),
         ...(typeof body.comment === 'string' || body.comment === null
@@ -332,6 +347,7 @@ export async function action({ params, request }: Route.ActionArgs) {
         tool: 'web:quiz_attempt.adjust',
         impersonatedBy: await impersonatedBy(request),
       });
+      return { ok: true, success: result.changed ? 'Saved' : 'No changes to save' };
     } else if (body?._action === 'revert') {
       await ClassmojiService.quizAttempt.revert({
         attemptId: attempt.id,
@@ -339,16 +355,15 @@ export async function action({ params, request }: Route.ActionArgs) {
         tool: 'web:quiz_attempt.revert',
         impersonatedBy: await impersonatedBy(request),
       });
-    } else {
-      return reply({ error: 'Unknown action' }, { status: 400 });
+      return { ok: true, success: 'Adjustment reverted' };
     }
+    return reply({ error: 'Unknown action' }, { status: 400 });
   } catch (error) {
     if (error instanceof QuizGradeError) {
-      return reply({ error: error.message }, { status: error.status });
+      return reply({ error: error.message, code: error.code }, { status: error.status });
     }
     throw error;
   }
-  return { ok: true };
 }
 
 export default function AdminQuizAttemptViewDrawer({ loaderData }: Route.ComponentProps) {
@@ -369,26 +384,32 @@ export default function AdminQuizAttemptViewDrawer({ loaderData }: Route.Compone
 
   // The results panel's grade and the staff blocks above it (see QuizResultContext).
   const panel = data.gradePanel;
-  const slots = useMemo<QuizResultSlots | null>(
-    () =>
-      panel
-        ? {
-            grade: panel.grade,
-            beforeResults: (
-              <>
-                {panel.openRequest && (
-                  <QuizRegradeRequestBanner
-                    request={panel.openRequest}
-                    queueUrl={`/${rolePrefix}/${classSlug}/regrade-requests`}
-                  />
-                )}
-                {panel.adjustable && <QuizAttemptGradePanel panel={panel} />}
-              </>
-            ),
-          }
-        : null,
-    [panel, rolePrefix, classSlug]
-  );
+  const slots = useMemo<QuizResultSlots | null>(() => {
+    // The queue, opened on this request's resolve modal.
+    const resolveUrl = (requestId: string) =>
+      `/${rolePrefix}/${classSlug}/regrade-requests?resolve=${encodeURIComponent(requestId)}`;
+    return panel
+      ? {
+          grade: panel.grade,
+          beforeResults: (
+            <>
+              {panel.openRequest && (
+                <QuizRegradeRequestBanner
+                  request={panel.openRequest}
+                  resolveUrl={resolveUrl(panel.openRequest.id)}
+                />
+              )}
+              {panel.adjustable && (
+                <QuizAttemptGradePanel
+                  panel={panel}
+                  resolveUrl={panel.openRequest ? resolveUrl(panel.openRequest.id) : null}
+                />
+              )}
+            </>
+          ),
+        }
+      : null;
+  }, [panel, rolePrefix, classSlug]);
 
   const navigateAway = () => {
     navigate(`/${rolePrefix}/${classSlug}/quizzes/${quizId}`);

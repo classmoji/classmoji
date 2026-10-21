@@ -5,7 +5,7 @@ import dayjs from 'dayjs';
 import { IconArrowRight, IconBrandGithub } from '@tabler/icons-react';
 import type { StudentGradeSummary } from '@classmoji/utils';
 import Emoji from '~/components/ui/display/Emoji';
-import QuizGradeEmoji from '~/components/features/quiz/QuizGradeEmoji';
+import QuizGradeEmoji, { CountedEmoji } from '~/components/features/quiz/QuizGradeEmoji';
 import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
 import { useGitWeb } from '~/hooks/useGitWeb';
 
@@ -31,6 +31,10 @@ export interface FeedbackItem {
   originalScoreEmoji?: string | null;
   /** Staff adjusted the counting attempt. */
   adjusted?: boolean;
+  /** A late quiz: what it counts for after the late penalty, when that differs. */
+  countedScoreEmoji?: string | null;
+  /** A quiz's late hours (its counting attempt's). */
+  lateHours?: number;
   /** In-app link for a quiz grade (the quiz list). */
   href?: string | null;
 }
@@ -199,12 +203,16 @@ const FeedbackPanel = ({
             >
               <div className="flex items-center gap-1 shrink-0">
                 {isQuiz ? (
-                  <QuizGradeEmoji
-                    emoji={item.scoreEmoji ?? null}
-                    originalEmoji={item.originalScoreEmoji ?? null}
-                    adjusted={item.adjusted === true}
-                    size="md"
-                  />
+                  <>
+                    <QuizGradeEmoji
+                      emoji={item.scoreEmoji ?? null}
+                      originalEmoji={item.originalScoreEmoji ?? null}
+                      adjusted={item.adjusted === true}
+                      lateHours={item.lateHours ?? 0}
+                      size="md"
+                    />
+                    <CountedEmoji emoji={item.countedScoreEmoji} />
+                  </>
                 ) : (
                   item.grades
                     .slice(0, 3)

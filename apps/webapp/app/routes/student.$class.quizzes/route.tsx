@@ -17,8 +17,7 @@ import {
 } from '~/utils/quizPayloads';
 import { effectiveDeadline } from '@classmoji/utils';
 import { useStartQuiz } from '~/components/features/quiz/useStartQuiz';
-import { LateChip, QuizGradeEmoji } from '~/components/features/quiz/QuizGradeEmoji';
-import Emoji from '~/components/ui/display/Emoji';
+import { CountedEmoji, LateChip, QuizGradeEmoji } from '~/components/features/quiz/QuizGradeEmoji';
 
 const { Text } = Typography;
 
@@ -577,13 +576,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
                 <QuizGradeEmoji emoji={currentEmoji} adjusted={currentAdjusted} />
               </span>
             </Tooltip>
-            {countedEmoji && (
-              <Tooltip title="What it counts for after the late penalty">
-                <span className="inline-flex items-center gap-1 text-xs font-semibold text-orange-700 dark:text-orange-300">
-                  → <Emoji emoji={countedEmoji} fontSize={16} />
-                </span>
-              </Tooltip>
-            )}
+            <CountedEmoji emoji={countedEmoji} />
             {currentLateHours > 0 && <LateTag hours={currentLateHours} />}
           </Space>
         );

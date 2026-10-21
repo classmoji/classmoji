@@ -260,6 +260,8 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
         scoreEmoji: row.scoreEmoji ?? null,
         originalScoreEmoji: row.originalScoreEmoji ?? null,
         adjusted: row.adjusted ?? false,
+        countedScoreEmoji: row.countedScoreEmoji ?? null,
+        lateHours: row.numLateHours,
         href: row.href,
       }));
     const feedback: FeedbackItem[] = [...repoFeedback, ...quizFeedback]
@@ -297,29 +299,34 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       : null;
 
     // A request is on a repo submission or on a quiz attempt; a quiz one is
-    // labelled as a quiz with its attempt number.
-    const resubmits: ResubmitItem[] = regradeRequests.map(r => {
-      const attempt = r.quiz_attempt;
-      if (attempt) {
+    // labelled as a quiz with its attempt number. Where the classroom does
+    // not show quizzes, its quiz requests are left out (the predicate the
+    // rest of this page and `regradeRequest.findManyForDisplay` use).
+    const showQuizRequests = await quizzesVisiblePromise;
+    const resubmits: ResubmitItem[] = regradeRequests
+      .filter(r => showQuizRequests || !r.quiz_attempt_id)
+      .map(r => {
+        const attempt = r.quiz_attempt;
+        if (attempt) {
+          return {
+            id: r.id,
+            kind: 'QUIZ' as const,
+            // The quiz's own name, as the requests page shows it.
+            assignmentTitle: attempt.quiz.name || 'Quiz',
+            attemptNumber: attempt.attempt_number,
+            status: r.status,
+            createdAt: r.created_at,
+          };
+        }
         return {
           id: r.id,
-          kind: 'QUIZ' as const,
-          // The quiz's own name, as the requests page shows it.
-          assignmentTitle: attempt.quiz.name || 'Quiz',
-          attemptNumber: attempt.attempt_number,
+          kind: 'REPO' as const,
+          assignmentTitle: r.git_repo_assignment?.assignment?.title ?? 'Assignment',
+          attemptNumber: null,
           status: r.status,
           createdAt: r.created_at,
         };
-      }
-      return {
-        id: r.id,
-        kind: 'REPO' as const,
-        assignmentTitle: r.git_repo_assignment?.assignment?.title ?? 'Assignment',
-        attemptNumber: null,
-        status: r.status,
-        createdAt: r.created_at,
-      };
-    });
+      });
 
     return {
       // A plain date, which dayjs parses as local midnight on either side.

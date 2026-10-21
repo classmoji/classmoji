@@ -130,7 +130,13 @@ describe('student report loader — quiz visibility', () => {
     // whichever attempt came back first: the running retake does not hide
     // the finished one.
     expect(data.quizStatus).toEqual({
-      'a-quiz': { attempted: true, completed: true, emoji: 'score-80', adjusted: false },
+      'a-quiz': {
+        attempted: true,
+        completed: true,
+        scored: true,
+        emoji: 'score-80',
+        adjusted: false,
+      },
     });
     expect(mocks.findForUserByQuizIds).toHaveBeenCalledWith('u-1', ['quiz-1']);
     expect(mocks.findGradingStrategies).toHaveBeenCalledWith(['quiz-1']);
@@ -151,7 +157,13 @@ describe('student report loader — quiz visibility', () => {
     const data = await load();
 
     expect(data.quizStatus).toEqual({
-      'a-quiz': { attempted: true, completed: false, emoji: null, adjusted: false },
+      'a-quiz': {
+        attempted: true,
+        completed: false,
+        scored: false,
+        emoji: null,
+        adjusted: false,
+      },
     });
   });
 
@@ -183,6 +195,7 @@ describe('student report loader — quiz grade items', () => {
     late_hours: 0,
     counting_raw_percentage: null,
     counting_adjusted: false,
+    counting_adjusted_emoji: null,
   };
 
   beforeEach(() => {

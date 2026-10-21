@@ -13,12 +13,8 @@ import {
   QuizRegradeButton,
   QuizStudentGradeNotes,
 } from '~/components/features/quiz/QuizStudentRegrade';
-import {
-  addClassroomAuditLog,
-  assertClassroomAccess,
-  assertClassroomMutationAllowed,
-  requireStudentAccess,
-} from '~/utils/helpers';
+import { addClassroomAuditLog, assertClassroomAccess, requireStudentAccess } from '~/utils/helpers';
+import { canMutate, mutationRefusal } from '~/utils/mutationRefusal.server';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import {
   attemptDrawerView,
@@ -178,6 +174,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
         quiz,
         attempt: attemptData.attempt,
         ownerIsStudent: viewerOwnsAttempt && !isInstructor,
+        // A read-only classroom (LOCKED / UNPUBLISHED) takes no request: no button.
+        classroomWritable: canMutate(classroom, membership?.role),
       })
     : null;
 
@@ -238,6 +236,7 @@ const loadStudentResult = async ({
   quiz,
   attempt,
   ownerIsStudent,
+  classroomWritable,
 }: {
   classroom: { id: string; settings?: { late_penalty_points_per_hour?: unknown } | null };
   quiz: { assignment?: { id: string; student_deadline: Date | string | null } | null };
@@ -250,15 +249,17 @@ const loadStudentResult = async ({
     partial_credit_percentage: number | null;
     adjusted_emoji: string | null;
     instructor_comment?: string | null;
-    adjusted_by_id?: string | null;
-    adjusted_at?: Date | string | null;
+    comment_by_id?: string | null;
+    comment_at?: Date | string | null;
   };
   ownerIsStudent: boolean;
+  /** The classroom takes changes from the viewer (`canMutate`). */
+  classroomWritable: boolean;
 }) => {
   const { ClassmojiService } = await import('@classmoji/services');
   const assignment = quiz.assignment ?? null;
   const late = ownerIsStudent && assignment?.student_deadline;
-  const [emojiScale, extensionHours, adjustedBy, requests] = await Promise.all([
+  const [emojiScale, extensionHours, commentBy, requests] = await Promise.all([
     ClassmojiService.emojiMapping.findScaleByClassroomId(classroom.id),
     late
       ? ClassmojiService.quizGradeItems
@@ -269,8 +270,8 @@ const loadStudentResult = async ({
           })
           .then(hours => hours.get(assignment.id) ?? 0)
       : 0,
-    ownerIsStudent && attempt.instructor_comment && attempt.adjusted_by_id
-      ? ClassmojiService.user.findById(attempt.adjusted_by_id)
+    ownerIsStudent && attempt.instructor_comment && attempt.comment_by_id
+      ? ClassmojiService.user.findById(attempt.comment_by_id)
       : null,
     ownerIsStudent
       ? ClassmojiService.regradeRequest.findMany({
@@ -294,12 +295,12 @@ const loadStudentResult = async ({
         : null,
     }),
     attemptNumber: typeof attempt.attempt_number === 'number' ? attempt.attempt_number : null,
-    canRequest: ownerIsStudent,
+    canRequest: ownerIsStudent && classroomWritable,
     comment: ownerIsStudent
       ? instructorCommentView({
           instructor_comment: attempt.instructor_comment,
-          adjusted_at: attempt.adjusted_at,
-          adjusted_by: adjustedBy ? { name: adjustedBy.name } : null,
+          comment_at: attempt.comment_at,
+          comment_by: commentBy ? { name: commentBy.name } : null,
         })
       : null,
     regrade: studentQuizRegradeView(requests),
@@ -322,7 +323,10 @@ export async function action({ params, request }: Route.ActionArgs) {
     action: 'request_quiz_regrade',
     metadata: { quiz_id: quizId, attempt_id: attemptId },
   });
-  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+  // Read-only classroom: the refusal comes back as data for the request
+  // modal; a thrown 403 would replace the drawer with the error page.
+  const blocked = mutationRefusal(classroom, membership?.role);
+  if (blocked) return blocked;
 
   if (!(await quizzesVisibleOrThrow(classroom.id))) {
     throw new Response('Not Found', { status: 404 });
@@ -358,7 +362,7 @@ export async function action({ params, request }: Route.ActionArgs) {
     return { ok: true, created };
   } catch (error) {
     if (error instanceof QuizGradeError) {
-      return reply({ error: error.message }, { status: error.status });
+      return reply({ error: error.message, code: error.code }, { status: error.status });
     }
     throw error;
   }

@@ -208,6 +208,81 @@ describe('gradebook quiz cells', () => {
     expect(text(cellOf(html))).not.toContain('late');
   });
 
+  it('shows the emoji staff picked on an adjusted, on-time attempt, not the nearest to its value', () => {
+    // Two scale entries share 90; the pick is the one staff chose.
+    const scale = { rocket: 100, '+1': 90, tada: 90, eyes: 80 };
+    const html = render({
+      emojiMappings: scale,
+      assignments: [quizColumn('a-quiz', 'Recursion')],
+      students: [
+        student('s-1', 'Ada', [
+          item('a-quiz', {
+            grade: 90,
+            raw_grade: 90,
+            late_hours: 0,
+            counting_raw_percentage: 90,
+            counting_adjusted: true,
+            counting_adjusted_emoji: 'tada',
+          }),
+        ]),
+      ],
+    });
+    expect(cellOf(html)).toContain('data-emoji="tada"');
+    expect(cellOf(html)).not.toContain('data-emoji="+1"');
+
+    // Late: the penalised value's nearest emoji, as before.
+    const late = render({
+      emojiMappings: scale,
+      assignments: [quizColumn('a-quiz', 'Recursion')],
+      students: [
+        student('s-1', 'Ada', [
+          item('a-quiz', {
+            grade: 80,
+            raw_grade: 90,
+            late_hours: 5,
+            counting_raw_percentage: 90,
+            counting_adjusted: true,
+            counting_adjusted_emoji: 'tada',
+          }),
+        ]),
+      ],
+    });
+    expect(cellOf(late)).toContain('data-emoji="eyes"');
+  });
+
+  it('reads a scored grade with no grading scale as a dash that says so', () => {
+    const withItem = render({
+      emojiMappings: {},
+      assignments: [quizColumn('a-quiz', 'Recursion')],
+      students: [student('s-1', 'Ada', [item('a-quiz', { late_hours: 0 })])],
+    });
+    expect(cellOf(withItem)).toContain('quiz-grade-no-scale');
+
+    const noItem = render({
+      emojiMappings: {},
+      assignments: [quizColumn('a-quiz', 'Recursion')],
+      students: [student('s-1', 'Ada', [])],
+      activity: {
+        quiz: { 'a-quiz': { 's-1': { completed: true, scored: true, emoji: null } } },
+        form: {},
+      },
+    });
+    expect(cellOf(noItem)).toContain('quiz-grade-no-scale');
+    expect(text(cellOf(noItem))).not.toContain('Completed');
+
+    // Unscored (the AI has not graded it yet) still reads Completed.
+    const unscored = render({
+      emojiMappings: {},
+      assignments: [quizColumn('a-quiz', 'Recursion')],
+      students: [student('s-1', 'Ada', [])],
+      activity: {
+        quiz: { 'a-quiz': { 's-1': { completed: true, scored: false, emoji: null } } },
+        form: {},
+      },
+    });
+    expect(text(cellOf(unscored))).toContain('Completed');
+  });
+
   it('shows the emoji of the counting attempt for a scored quiz with no item yet', () => {
     const html = render({
       emojiMappings: NUMERIC_SCALE,

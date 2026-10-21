@@ -225,6 +225,8 @@ const attemptRow = (
     instructor_comment: string | null;
     adjusted_by_id: string | null;
     adjusted_at: Date | null;
+    comment_by_id: string | null;
+    comment_at: Date | null;
   }> = {}
 ) => ({
   id,
@@ -624,6 +626,9 @@ describe('staff attempt drawer payload', () => {
         instructor_comment: 'Q3 has full credit.',
         adjusted_by_id: TA.id,
         adjusted_at: new Date('2026-03-04T10:00:00Z'),
+        // The comment's own author, apart from the score's adjuster.
+        comment_by_id: BABBAGE.id,
+        comment_at: new Date('2026-03-03T10:00:00Z'),
       })
     );
     mocks.findOpenByQuizAttemptId.mockResolvedValue({
@@ -640,6 +645,7 @@ describe('staff attempt drawer payload', () => {
     expect(payload.gradePanel).toEqual({
       attemptId: ADA_SECOND.id,
       adjustable: true,
+      canEdit: true,
       grade: {
         emoji: '+1',
         originalEmoji: 'eyes',
@@ -652,7 +658,11 @@ describe('staff attempt drawer payload', () => {
       comment: 'Q3 has full credit.',
       adjustedByName: 'Grace Hopper',
       adjustedAt: '2026-03-04T10:00:00.000Z',
+      commentByName: BABBAGE.name,
+      commentAt: '2026-03-03T10:00:00.000Z',
       scaleEmojis: ['rocket', '+1', 'eyes', '-1', 'sob'],
+      // On time: every emoji counts as itself.
+      countedByEmoji: { rocket: 'rocket', '+1': '+1', eyes: 'eyes', '-1': '-1', sob: 'sob' },
       openRequest: {
         id: 'rr-1',
         comment: 'Q3 covered the base case.',
@@ -661,6 +671,17 @@ describe('staff attempt drawer payload', () => {
       },
     });
     expectNoSentinels(payload);
+  });
+
+  it('shows the panel without its controls in a read-only classroom', async () => {
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: TA.id,
+      classroom: { ...CLASSROOM, status: 'LOCKED' },
+      membership: { role: 'ASSISTANT' },
+    });
+    mocks.findWithMessages.mockResolvedValue(withMessages(ADA_SECOND));
+    const payload = await staffAttemptRoute.loader(attemptArgs('assistant', ADA_SECOND.id));
+    expect(payload.gradePanel).toMatchObject({ adjustable: true, canEdit: false });
   });
 
   it('gives a completed student attempt with no evaluation record the adjust panel too', async () => {
@@ -770,7 +791,13 @@ describe('student attempt drawer payload', () => {
       partial_credit_percentage: 73.37,
       first_attempt_percentage: 41.5,
       question_results_json: [
-        { question_num: 1, attempts: 2, credit_earned: 66.6, eventually_correct: true, emoji: 'eyes' },
+        {
+          question_num: 1,
+          attempts: 2,
+          credit_earned: 66.6,
+          eventually_correct: true,
+          emoji: 'eyes',
+        },
       ],
     };
     const evaluation = {
@@ -907,8 +934,11 @@ describe('student attempt drawer payload', () => {
         ...ADA_FIRST,
         adjusted_emoji: 'rocket',
         instructor_comment: 'Q3 has full credit.',
-        adjusted_by_id: TA.id,
-        adjusted_at: new Date('2026-03-04T10:00:00Z'),
+        adjusted_by_id: BABBAGE.id,
+        adjusted_at: new Date('2026-03-05T10:00:00Z'),
+        // The comment is signed by its own author, not the last adjuster.
+        comment_by_id: TA.id,
+        comment_at: new Date('2026-03-04T10:00:00Z'),
       })
     );
     mocks.regradeFindMany.mockResolvedValue([
@@ -917,6 +947,7 @@ describe('student attempt drawer payload', () => {
         status: 'APPROVED',
         grader_comment: 'Fixed.',
         previous_grade: ['+1'],
+        resolved_emoji: 'rocket',
         created_at: new Date('2026-03-03T10:00:00Z'),
         updated_at: new Date('2026-03-06T10:00:00Z'),
         // The resolver, from the request itself (not the attempt's adjuster).
@@ -958,12 +989,25 @@ describe('student attempt drawer payload', () => {
           status: 'APPROVED',
           reply: 'Fixed.',
           previousEmoji: '+1',
+          resolvedEmoji: 'rocket',
           resolvedByName: 'Ada Lovelace',
           resolvedAt: '2026-03-04T11:00:00.000Z',
         },
       },
     });
     expectNoSentinels(payload);
+  });
+
+  it('offers no request button in a read-only classroom', async () => {
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: ADA.id,
+      classroom: { ...CLASSROOM, status: 'UNPUBLISHED' },
+      membership: { role: 'STUDENT' },
+    });
+    mocks.findWithMessages.mockResolvedValue(withMessages(ADA_FIRST));
+    mocks.regradeFindMany.mockResolvedValue([]);
+    const payload = await studentAttemptRoute.loader(attemptArgs('student', ADA_FIRST.id));
+    expect(payload.result?.canRequest).toBe(false);
   });
 
   it('reports an open request so the button turns into its status (D7)', async () => {
