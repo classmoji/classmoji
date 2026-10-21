@@ -25,9 +25,11 @@ ALTER TABLE "quiz_attempts" ADD CONSTRAINT "quiz_attempts_comment_by_id_fkey" FO
 -- Backfill: an existing comment was last written by the last adjuster.
 UPDATE "quiz_attempts"
 SET "comment_by_id" = "adjusted_by_id", "comment_at" = "adjusted_at"
-WHERE "instructor_comment" IS NOT NULL;
+WHERE "instructor_comment" IS NOT NULL
+  AND ("adjusted_by_id" IS NOT NULL OR "adjusted_at" IS NOT NULL);
 
 -- A comment-only edit no longer counts as a score adjustment.
 UPDATE "quiz_attempts"
 SET "adjusted_by_id" = NULL, "adjusted_at" = NULL
-WHERE "adjusted_emoji" IS NULL;
+WHERE "adjusted_emoji" IS NULL
+  AND ("adjusted_by_id" IS NOT NULL OR "adjusted_at" IS NOT NULL);
