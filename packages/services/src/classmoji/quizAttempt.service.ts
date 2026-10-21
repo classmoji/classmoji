@@ -784,7 +784,8 @@ export const calculateAndApplyModalGap = async (attemptId: string) => {
   });
 };
 
-export const findByQuiz = async (quizId: string) => {
+/** `provider` picks which username each user's `login` is (the classroom's); without it, Github first. */
+export const findByQuiz = async (quizId: string, provider?: string | null) => {
   const attempts = await getPrisma().quizAttempt.findMany({
     where: { quiz_id: quizId },
     include: {
@@ -793,7 +794,7 @@ export const findByQuiz = async (quizId: string) => {
     orderBy: { started_at: 'desc' },
   });
 
-  return withLogins(attempts);
+  return withLogins(attempts, provider);
 };
 
 /**
