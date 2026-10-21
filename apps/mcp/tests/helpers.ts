@@ -449,6 +449,7 @@ export const MCP_TOOL_NAMES = new Set([
   'assignment_update',
   'regrade_create',
   'regrade_resolve',
+  'quiz_attempt_adjust',
   'module_create',
   'module_update',
   'module_publish',

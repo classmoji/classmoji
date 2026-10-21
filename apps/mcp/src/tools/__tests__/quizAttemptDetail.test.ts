@@ -25,6 +25,15 @@ const mocks = vi.hoisted(() => ({
   quizzesVisibleOrThrow: vi.fn(),
   emojiScale: vi.fn(),
   auditCreate: vi.fn(),
+  findOpenByQuizAttemptId: vi.fn(),
+  userFindUnique: vi.fn(),
+}));
+
+vi.mock('@classmoji/database', async () => ({
+  ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
+    '@classmoji/database/gitIdentity'
+  )),
+  default: () => ({ user: { findUnique: (...a: unknown[]) => mocks.userFindUnique(...a) } }),
 }));
 
 vi.mock('@classmoji/services', () => ({
@@ -40,8 +49,11 @@ vi.mock('@classmoji/services', () => ({
       findUsersByRoles: (...a: unknown[]) => mocks.findUsersByRoles(...a),
     },
     entitlement: { quizzesVisibleOrThrow: (...a: unknown[]) => mocks.quizzesVisibleOrThrow(...a) },
-    emojiMapping: { findByClassroomId: (...a: unknown[]) => mocks.emojiScale(...a) },
+    emojiMapping: { findScaleByClassroomId: (...a: unknown[]) => mocks.emojiScale(...a) },
     audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
+    regradeRequest: {
+      findOpenByQuizAttemptId: (...a: unknown[]) => mocks.findOpenByQuizAttemptId(...a),
+    },
   },
 }));
 
@@ -766,5 +778,51 @@ describe('get_quiz_attempt', () => {
         kind: 'not_found',
       });
     });
+  });
+});
+
+describe('get_quiz_attempt: staff adjustment', () => {
+  it('states the adjusted grade by its own emoji, the AI original, the comment and who', async () => {
+    mocks.emojiScale.mockResolvedValue(EMOJI_SCALE);
+    mocks.findByQuiz.mockResolvedValue([
+      attemptRow({
+        partial_credit_percentage: 62,
+        adjusted_emoji: 'rocket',
+        instructor_comment: 'Q3 was ambiguous.',
+        adjusted_by_id: 'staff-1',
+        adjusted_at: new Date('2026-10-03T12:00:00Z'),
+      }),
+    ]);
+    mocks.userFindUnique.mockResolvedValue({ id: 'staff-1', name: 'Prof Staff' });
+    mocks.findOpenByQuizAttemptId.mockResolvedValue({ id: 'rr-open' });
+
+    const payload = parse(await getQuizAttemptTool.handler(ARGS, CTX));
+
+    expect(payload.attempt).toMatchObject({
+      grade_emoji: 'rocket',
+      original_emoji: '-1',
+      adjusted: true,
+      band: 'EXCELLENT',
+      instructor_comment: 'Q3 was ambiguous.',
+      adjusted_at: '2026-10-03T12:00:00.000Z',
+      adjusted_by: { id: 'staff-1', name: 'Prof Staff' },
+      open_regrade_request_id: 'rr-open',
+    });
+    expect(mocks.userFindUnique).toHaveBeenCalledWith({
+      where: { id: 'staff-1' },
+      select: { id: true, name: true },
+    });
+    expect(mocks.findOpenByQuizAttemptId).toHaveBeenCalledWith(ATTEMPT_ID);
+  });
+
+  it('says not adjusted, with no adjuster read, for an attempt staff never touched', async () => {
+    const payload = parse(await getQuizAttemptTool.handler(ARGS, CTX));
+    expect(payload.attempt).toMatchObject({
+      adjusted: false,
+      instructor_comment: null,
+      adjusted_by: null,
+      open_regrade_request_id: null,
+    });
+    expect(mocks.userFindUnique).not.toHaveBeenCalled();
   });
 });

@@ -25,7 +25,9 @@
  * Grades are emoji on the classroom's own scale (quizGradeEmoji.ts), never a
  * number: each attempt's grade and first-try grade, and per student the
  * counting attempt's grade before and after the late penalty (a counted zero
- * is the scale's emoji for 0).
+ * is the scale's emoji for 0). A staff adjustment (quiz_attempt_adjust) is
+ * the attempt's grade (its own emoji), with the AI's original emoji, the
+ * comment to the student, and who on staff last edited it and when.
  *
  * The response is built field by field. The attempt and roster rows are
  * joined to full user rows (contact and account fields, the staff note and
@@ -47,6 +49,7 @@ import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
 import { orgProvider, sanitizedSettings } from '../resources/shape.ts';
+import getPrisma from '@classmoji/database';
 import { emojiFor, loadQuizEmojiScale } from './quizGradeEmoji.ts';
 import { loadQuizInClassroom, ok, QUIZ_STAFF, requireClassroomCtx, writeAudit } from './shared.ts';
 
@@ -58,6 +61,9 @@ interface ListQuizAttemptsArgs {
 /** The attempt columns read beyond the ones `buildQuizResultRows` takes. */
 interface AttemptRow extends QuizAttemptSource {
   last_activity?: Date | string | null;
+  instructor_comment?: string | null;
+  adjusted_by_id?: string | null;
+  adjusted_at?: Date | string | null;
 }
 
 interface Member {
@@ -91,9 +97,11 @@ export const listQuizAttemptsTool: ToolDefinition<ListQuizAttemptsArgs> = {
     "A quiz's results, as its web results page shows them. students: every student on the " +
     'roster, not-started ones included, each with status (NOT_STARTED, IN_PROGRESS, ' +
     'COMPLETED), every attempt (id, started_at, completed_at, last_activity while open, ' +
-    'grade_emoji, first_attempt_emoji, focus_percentage, late_hours, is_counting), the ' +
-    'attempt that counts, current_emoji (its grade) and counted_emoji (after the late ' +
-    'penalty), and counts_as_zero (no completed attempt past the due date). Grades are emoji ' +
+    'grade_emoji, first_attempt_emoji, focus_percentage, late_hours, is_counting; adjusted, ' +
+    'original_emoji (the AI grade), instructor_comment, adjusted_at, adjusted_by from ' +
+    'quiz_attempt_adjust), the attempt that counts, current_emoji (its grade) and ' +
+    'counted_emoji (after the late penalty), and counts_as_zero (no completed attempt past ' +
+    'the due date). Grades are emoji ' +
     "on the classroom's own scale (score-N badges on the numeric scale), never numbers. " +
     'staff_previews and former_members (people no longer in the classroom) are kept apart, ' +
     'never late or graded. summary counts the roster. For one attempt and its transcript use ' +
@@ -141,6 +149,7 @@ export const listQuizAttemptsTool: ToolDefinition<ListQuizAttemptsArgs> = {
     const now = new Date();
     const { students: rows } = buildQuizResultRows({
       attempts,
+      emojiScale: scale,
       gradingStrategy: quiz.grading_strategy,
       viewerId: ctx.viewer.userId,
       late:
@@ -159,6 +168,35 @@ export const listQuizAttemptsTool: ToolDefinition<ListQuizAttemptsArgs> = {
     // member's from the attempt join. Both name the classroom's git provider.
     const members = new Map([...staff, ...roster].map(member => [String(member.id), member]));
     const rowsById = new Map(attempts.map(attempt => [attempt.id, attempt]));
+    // Who on staff last edited an adjustment: id and name only.
+    const adjusterIds = [
+      ...new Set(attempts.flatMap(a => (a.adjusted_by_id ? [String(a.adjusted_by_id)] : []))),
+    ];
+    const adjusters = new Map(
+      adjusterIds.length === 0
+        ? []
+        : (
+            await getPrisma().user.findMany({
+              where: { id: { in: adjusterIds } },
+              select: { id: true, name: true },
+            })
+          ).map(user => [user.id, user])
+    );
+
+    /** The staff adjustment on an attempt (quiz_attempt_adjust), emoji only. */
+    const adjustmentView = (attempt: QuizResultAttempt) => {
+      const row = rowsById.get(attempt.id);
+      const adjusterId = row?.adjusted_by_id ? String(row.adjusted_by_id) : null;
+      return {
+        adjusted: attempt.grade.adjusted,
+        original_emoji: attempt.grade.original.emoji,
+        instructor_comment: row?.instructor_comment ?? null,
+        adjusted_at: iso(row?.adjusted_at),
+        adjusted_by: adjusterId
+          ? { id: adjusterId, name: adjusters.get(adjusterId)?.name ?? null }
+          : null,
+      };
+    };
 
     const attemptView = (attempt: QuizResultAttempt) => ({
       id: attempt.id,
@@ -167,15 +205,22 @@ export const listQuizAttemptsTool: ToolDefinition<ListQuizAttemptsArgs> = {
       ...(attempt.completed_at
         ? {}
         : { last_activity: iso(rowsById.get(attempt.id)?.last_activity) }),
-      grade_emoji: emojiFor(attempt.partialCreditScore, scale),
+      // The effective grade: an adjustment's own emoji, else the AI's.
+      grade_emoji: attempt.grade.effective.emoji,
       first_attempt_emoji: emojiFor(attempt.firstAttemptScore, scale),
       focus_percentage: attempt.focusMetrics?.percentage ?? null,
       late_hours: attempt.lateHours,
       is_counting: attempt.isCounting,
+      ...adjustmentView(attempt),
     });
 
     const rowView = (row: QuizResultStudent) => {
       const member = members.get(row.userId);
+      const counting = row.attempts.find(attempt => attempt.id === row.countingAttemptId);
+      // The counting attempt's own emoji (an adjustment's, not one re-derived).
+      const currentEmoji = counting
+        ? counting.grade.effective.emoji
+        : emojiFor(row.currentScore, scale);
       return {
         student: {
           id: row.userId,
@@ -186,8 +231,13 @@ export const listQuizAttemptsTool: ToolDefinition<ListQuizAttemptsArgs> = {
         attempt_count: row.attemptCount,
         attempts: row.attempts.map(attemptView),
         counting_attempt_id: row.countingAttemptId,
-        current_emoji: emojiFor(row.currentScore, scale),
-        counted_emoji: emojiFor(row.countedScore, scale),
+        counting_adjusted: row.countingAdjusted,
+        current_emoji: currentEmoji,
+        // Re-derived only when the late penalty moved it.
+        counted_emoji:
+          row.countedScore !== null && row.countedScore === row.currentScore
+            ? currentEmoji
+            : emojiFor(row.countedScore, scale),
         counts_as_zero: row.countsAsZero,
         late_hours: row.lateHours,
       };

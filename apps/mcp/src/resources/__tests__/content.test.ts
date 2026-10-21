@@ -45,6 +45,9 @@ const findByClassroom = vi.fn();
 const getQuizzesForStudent = vi.fn();
 const getClassroomCalendar = vi.fn();
 const quizzesVisibleOrThrow = vi.fn();
+/** The classroom's scale (emojiMapping.findScaleByClassroomId). */
+const SCALE = { rocket: 100, eyes: 70, sob: 0 };
+const findScaleByClassroomId = vi.fn(async () => SCALE);
 
 /** The lifted platform gate the wrapper delegates to (see the module note). */
 vi.mock('@classmoji/auth/server', () => ({
@@ -60,6 +63,7 @@ vi.mock('@classmoji/services', () => ({
     },
     calendar: { getClassroomCalendar: (...a: unknown[]) => getClassroomCalendar(...a) },
     entitlement: { quizzesVisibleOrThrow: (...a: unknown[]) => quizzesVisibleOrThrow(...a) },
+    emojiMapping: { findScaleByClassroomId: () => findScaleByClassroomId() },
   },
 }));
 
@@ -324,7 +328,7 @@ describe('quizzes resource source_material (quiz source material)', () => {
     expect(result.quizzes[0].source_material).toEqual([]);
   });
 
-  it("students get the student list's counting score as is, a 0 included", async () => {
+  it("students get the student list's counting attempt as an emoji, a 0 included", async () => {
     getQuizzesForStudent.mockResolvedValue([
       {
         id: 'q1',
@@ -332,7 +336,21 @@ describe('quizzes resource source_material (quiz source material)', () => {
         status: 'PUBLISHED',
         weight: 0,
         question_count: 3,
-        attemptsSummary: { count: 1, canCreateNew: false, currentScore: 0, bestScore: 0 },
+        attempts: [
+          {
+            id: 'a1',
+            started_at: new Date('2026-10-01T10:00:00Z'),
+            completed_at: new Date('2026-10-01T10:30:00Z'),
+            partial_credit_percentage: 0,
+          },
+        ],
+        attemptsSummary: {
+          count: 1,
+          canCreateNew: false,
+          currentScore: 0,
+          bestScore: 0,
+          countingAttemptId: 'a1',
+        },
       },
     ]);
     const ctx = studentCtx();
@@ -340,10 +358,34 @@ describe('quizzes resource source_material (quiz source material)', () => {
       'authorized-slug';
 
     const result = (await quizzesResource.handler(VARS, ctx, new URL('classmoji://x'))) as {
-      quizzes: Array<{ my_attempts: { currentScore: number | null } }>;
+      quizzes: Array<{ my_attempts: Record<string, unknown> }>;
     };
 
-    expect(result.quizzes[0].my_attempts.currentScore).toBe(0);
+    expect(result.quizzes[0].my_attempts).toEqual({
+      count: 1,
+      canCreateNew: false,
+      countingAttemptId: 'a1',
+      current_emoji: 'sob',
+      adjusted: false,
+      original_emoji: null,
+      instructor_comment: null,
+      instructor_name: null,
+    });
+  });
+
+  it('staff get the class average as an emoji, never a number', async () => {
+    findByClassroom.mockResolvedValue([
+      { id: 'q1', name: 'Quiz 1', status: 'DRAFT', weight: 0, question_count: 3, avgScore: 72 },
+    ]);
+
+    const result = (await quizzesResource.handler(
+      VARS,
+      ownerCtx({ quizzes_enabled: true }),
+      new URL('classmoji://x')
+    )) as { quizzes: Array<Record<string, unknown>> };
+
+    expect(result.quizzes[0].avg_emoji).toBe('eyes');
+    expect(result.quizzes[0]).not.toHaveProperty('avg_score');
   });
 
   it('gives students closed quizzes too, as the web list does, reading as CLOSED', async () => {
@@ -376,7 +418,8 @@ describe('quizzes resource source_material (quiz source material)', () => {
 
     expect(getQuizzesForStudent.mock.calls[0][3]).toEqual({ includeClosed: true });
     expect(result.quizzes[0]).toMatchObject({ status: 'CLOSED', published: true });
-    expect(result.quizzes[0].my_attempts).toMatchObject({ currentScore: 70 });
+    expect(result.quizzes[0].my_attempts).toMatchObject({ count: 1 });
+    expect(result.quizzes[0].my_attempts).not.toHaveProperty('currentScore');
   });
 
   it("gives students the assignment's due date, falling back to the quiz's own", async () => {

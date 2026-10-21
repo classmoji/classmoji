@@ -67,6 +67,13 @@ import { renderZone } from '../mcp/localTimes.ts';
 import type { ResourceDefinition, ToolContext } from '../mcp/registry.ts';
 import { assertProTier } from '../authz/proTier.ts';
 import {
+  emojiFor,
+  loadQuizEmojiScale,
+  studentQuizGradeView,
+  type EmojiScale,
+  type StudentAdjustedAttempt,
+} from '../tools/quizGradeEmoji.ts';
+import {
   MEMBER,
   QUIZ_ROLES,
   classroomCtx,
@@ -397,7 +404,7 @@ interface QuizRow extends QuizPlacementSource {
   attemptsSummary?: unknown;
   attemptCount?: number;
   /** The student list's own attempts (student branch only). */
-  attempts?: ScorableQuizAttempt[];
+  attempts?: Array<ScorableQuizAttempt & StudentAdjustedAttempt>;
 }
 
 /**
@@ -427,13 +434,15 @@ interface QuizRow extends QuizPlacementSource {
  * 0 = no extensions), the net hours this student bought, the due date those
  * hours give, and — inside `my_attempts` — the late hours of the attempt that
  * counts. The counting attempt is the grade engine's (`countingQuizScore`:
- * the strategy picks among late-penalised scores), and the score shown for it
- * stays its raw percentage, as students see quiz scores. A quiz in no module
- * has no assignment: no price, no hours, its own due date.
+ * the strategy picks among late-penalised scores), and its grade is shown
+ * unpenalised as the classroom's emoji (an adjustment's own emoji, with the
+ * AI's original and the instructor's comment: `studentQuizGradeView`), never
+ * a number (E6). A quiz in no module has no assignment: no price, no hours,
+ * its own due date, and the service's counting attempt.
  *
  * Two narrow reads for the whole list (prices and hours), never one per quiz.
  */
-async function studentQuizExtensions(ctx: ToolContext, quizzes: QuizRow[]) {
+async function studentQuizExtensions(ctx: ToolContext, quizzes: QuizRow[], scale: EmojiScale) {
   const { classroomId } = classroomCtx(ctx);
   const settings = sanitizedSettings(ctx);
   const classroomPrice = Number(settings.default_tokens_per_hour ?? 0) || 0;
@@ -477,19 +486,38 @@ async function studentQuizExtensions(ctx: ToolContext, quizzes: QuizRow[]) {
     },
     attemptsOf(q: QuizRow) {
       const summary = (q.attemptsSummary ?? null) as Record<string, unknown> | null;
+      if (!summary) return null;
+      // The service's scores are numbers: none of them leaves (E6).
+      const { currentScore: _current, bestScore: _best, ...rest } = summary;
+      const attempts = Array.isArray(q.attempts) ? q.attempts : [];
       const a = q.assignment;
-      if (!summary || !a?.id || !Array.isArray(q.attempts)) return summary;
-      const score = countingQuizScore(q.attempts, q.grading_strategy, {
-        studentDeadline: a.student_deadline,
-        extensionHours: hours.get(a.id) ?? 0,
-        latePenaltyPerHour: penalty,
-      });
+      const late =
+        a?.id && Array.isArray(q.attempts)
+          ? countingQuizScore(q.attempts, q.grading_strategy, {
+              studentDeadline: a.student_deadline,
+              extensionHours: hours.get(a.id) ?? 0,
+              latePenaltyPerHour: penalty,
+              emojiScale: scale,
+            })
+          : null;
+      const countingId = late
+        ? late.counting_attempt_id
+        : typeof rest.countingAttemptId === 'string'
+          ? rest.countingAttemptId
+          : null;
+      const counting = attempts.find(attempt => attempt.id === countingId) ?? null;
+      const grade = studentQuizGradeView(counting, scale);
       return {
-        ...summary,
-        // The attempt the grade counts, shown at its raw score.
-        currentScore: score.raw_percentage,
-        countingAttemptId: score.counting_attempt_id,
-        lateHours: score.late_hours,
+        ...rest,
+        ...(late
+          ? { countingAttemptId: late.counting_attempt_id, lateHours: late.late_hours }
+          : {}),
+        // The attempt the grade counts, as an emoji before any late penalty.
+        current_emoji: grade.emoji,
+        adjusted: grade.adjusted,
+        original_emoji: grade.original_emoji,
+        instructor_comment: grade.instructor_comment,
+        instructor_name: grade.instructor_name,
       };
     },
   };
@@ -502,9 +530,12 @@ export const QUIZZES_DESCRIPTION =
   'published quizzes (closed ones too, as CLOSED), published material and their own attempt ' +
   'summary. For a student each quiz also has assignment_id (what extension_purchase takes), ' +
   'effective_tokens_per_hour (price of one extension hour; 0 = none), extension_hours ' +
-  'bought, effective_due_date (due date plus those hours) and my_attempts.lateHours (hours ' +
-  'late of the attempt that counts; currentScore is its raw score). Requires a Pro ' +
-  'subscription and quizzes_enabled.';
+  'bought, effective_due_date (due date plus those hours) and my_attempts: lateHours (hours ' +
+  'late of the attempt that counts), current_emoji (its grade before the late penalty), ' +
+  'adjusted with original_emoji when staff changed the grade, instructor_comment and ' +
+  "instructor_name. Grades are emoji on the classroom's scale (score-N badges on the " +
+  'numeric scale), never numbers; staff get avg_emoji. Requires a Pro subscription and ' +
+  'quizzes_enabled.';
 
 export const quizzesResource: ResourceDefinition = {
   name: 'quizzes',
@@ -564,7 +595,11 @@ export const quizzesResource: ResourceDefinition = {
         membership as never,
         { includeClosed: true }
       )) as QuizRow[];
-      const extensions = await studentQuizExtensions(ctx, quizzes);
+      const extensions = await studentQuizExtensions(
+        ctx,
+        quizzes,
+        await loadQuizEmojiScale(classroomId)
+      );
       // Student allowlist (mirrors the student route's .map): NO system_prompt,
       // rubric_prompt, subject, difficulty_level, or class-wide stats.
       return {
@@ -576,10 +611,10 @@ export const quizzesResource: ResourceDefinition = {
       };
     }
 
-    const quizzes = (await ClassmojiService.quiz.findByClassroom(
-      classroomId,
-      membership as never
-    )) as QuizRow[];
+    const [quizzes, scale] = await Promise.all([
+      ClassmojiService.quiz.findByClassroom(classroomId, membership as never) as Promise<QuizRow[]>,
+      loadQuizEmojiScale(classroomId),
+    ]);
     return {
       quizzes: quizzes.map(q => ({
         ...base(q),
@@ -592,7 +627,8 @@ export const quizzesResource: ResourceDefinition = {
         // Null = the classroom's default_tokens_per_hour.
         tokens_per_hour: q.assignment?.tokens_per_hour ?? null,
         attempts_count: q.attemptsCount ?? 0,
-        avg_score: q.avgScore ?? null,
+        // The class average (effective scores) as the scale's nearest emoji.
+        avg_emoji: emojiFor(q.avgScore, scale),
       })),
     };
   },

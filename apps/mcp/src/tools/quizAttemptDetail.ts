@@ -18,7 +18,10 @@
  *
  * Grades are emoji on the classroom's own scale (quizGradeEmoji.ts), never a
  * number: the attempt's grade and first-try grade, and each question's stored
- * emoji. No credit, percentage or evaluation score leaves.
+ * emoji. No credit, percentage or evaluation score leaves. A staff adjustment
+ * (quiz_attempt_adjust) is the attempt's grade (its own emoji), shown with the
+ * AI's original emoji, the comment to the student, who last edited it and
+ * when, and the open regrade request on the attempt, if any.
  *
  * The response is built field by field: the attempt row carries the agent
  * configuration, the session token and the joined user's contact fields, none
@@ -48,7 +51,8 @@ import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
 import { orgProvider } from '../resources/shape.ts';
-import { emojiFor, loadQuizEmojiScale, type EmojiScale } from './quizGradeEmoji.ts';
+import getPrisma from '@classmoji/database';
+import { attemptGrade, emojiFor, loadQuizEmojiScale, type EmojiScale } from './quizGradeEmoji.ts';
 import {
   loadQuizInClassroom,
   ok,
@@ -78,6 +82,10 @@ interface AttemptRow {
   unfocused_duration_ms: number | bigint | null;
   question_results_json: unknown;
   evaluation_json: unknown;
+  adjusted_emoji?: string | null;
+  instructor_comment?: string | null;
+  adjusted_by_id?: string | null;
+  adjusted_at?: Date | string | null;
   user?: { id: string; login?: string | null; name?: string | null } | null;
 }
 
@@ -474,7 +482,9 @@ export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
   description:
     'One quiz attempt: the student, when it started and completed, grade_emoji and ' +
     "first_attempt_emoji (emoji on the classroom's own scale, score-N badges on the numeric " +
-    'scale; never numbers), focus_percentage, the result of each question (tries, ' +
+    'scale; never numbers), band, the staff adjustment (adjusted, original_emoji, ' +
+    'instructor_comment, adjusted_at, adjusted_by; change it with quiz_attempt_adjust), ' +
+    'open_regrade_request_id, focus_percentage, the result of each question (tries, ' +
     'eventually_correct, first_attempt_correct, emoji, brief_feedback), and the evaluation ' +
     '(band, closing feedback). include_transcript: true adds the conversation as the staff ' +
     'review drawer shows it: questions, answers, feedback with each expected_answer (not on ' +
@@ -511,7 +521,8 @@ export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
     const includeTranscript = args.include_transcript === true;
 
     // Whether its user is on the STUDENT roster or on staff now.
-    const [[student], [staff], scale] = await Promise.all([
+    const adjusterId = attempt.adjusted_by_id ? String(attempt.adjusted_by_id) : null;
+    const [[student], [staff], scale, adjuster, openRequest] = await Promise.all([
       ClassmojiService.classroomMembership.findUsersByRole(classroomId, 'STUDENT', {
         user_id: userId,
       }) as Promise<Member[]>,
@@ -519,7 +530,16 @@ export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
         user_id: userId,
       }) as Promise<Member[]>,
       loadQuizEmojiScale(classroomId),
+      // Who on staff last edited the adjustment: id and name only.
+      adjusterId
+        ? getPrisma().user.findUnique({
+            where: { id: adjusterId },
+            select: { id: true, name: true },
+          })
+        : null,
+      ClassmojiService.regradeRequest.findOpenByQuizAttemptId(attempt.id),
     ]);
+    const grade = attemptGrade(attempt, scale);
 
     const total = Number(attempt.total_duration_ms ?? 0);
     const unfocused = Math.max(0, Number(attempt.unfocused_duration_ms ?? 0));
@@ -583,9 +603,18 @@ export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
         status: completed ? 'COMPLETED' : 'IN_PROGRESS',
         started_at: iso(attempt.started_at),
         completed_at: iso(attempt.completed_at),
-        // Grades are a completed attempt's only, as on the review page.
-        grade_emoji: completed ? emojiFor(attempt.partial_credit_percentage, scale) : null,
+        // Grades are a completed attempt's only, as on the review page. The
+        // grade is the effective one: an adjustment's own emoji, else the AI's.
+        grade_emoji: completed ? grade.effective.emoji : null,
         first_attempt_emoji: completed ? emojiFor(attempt.first_attempt_percentage, scale) : null,
+        // The band follows the effective grade (D9).
+        band: completed ? (grade.effective.band?.evaluation ?? null) : null,
+        adjusted: grade.adjusted,
+        original_emoji: completed ? grade.original.emoji : null,
+        instructor_comment: attempt.instructor_comment ?? null,
+        adjusted_at: iso(attempt.adjusted_at),
+        adjusted_by: adjusterId ? { id: adjusterId, name: adjuster?.name ?? null } : null,
+        open_regrade_request_id: openRequest?.id ?? null,
         focus_percentage:
           Number.isFinite(total) && total > 0
             ? Math.round((Math.max(total - unfocused, 0) / total) * 100)

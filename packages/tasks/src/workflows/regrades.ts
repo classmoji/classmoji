@@ -1,8 +1,28 @@
+/**
+ * Regrade/resubmit request workflows.
+ *
+ * Repo submissions: `request_regrade` creates the request (in-app notice to
+ * the assigned graders) and emails them; `update_regrade_request` writes the
+ * resolution and emails the student.
+ *
+ * Quiz attempts never go through those two. A quiz request is created by
+ * `regradeRequest.createForQuizAttempt`, whose in-app notice to the
+ * classroom's owners and teachers is also its only staff email (preference
+ * gated, `notification` template), so staff get one email per request. It is
+ * resolved by `regradeRequest.resolveQuiz`, which writes the status, the reply
+ * and any grade adjustment itself; the caller then triggers
+ * `quiz_regrade_resolved` with the request id only, and that task re-reads the
+ * resolved request and emails the student: "Score adjusted X → Y" or "Score
+ * kept X", plus the reply. Grades are emoji, never percentages (a `score-N`
+ * badge reads as its number, as in the repo emails). No repo grade is cleared
+ * or touched for a quiz request. `update_regrade_request` refuses a quiz
+ * request, so a stale caller cannot flip one without its adjustment.
+ */
 import { task } from '@trigger.dev/sdk';
 import { retryOnDatabaseBlip } from '../helpers/databaseRetry.ts';
-import { appUrl, ClassmojiService, escapeVars } from '@classmoji/services';
+import { appUrl, ClassmojiService, escapeHtml, escapeVars } from '@classmoji/services';
 import { sendBatchEmailTask, sendEmailTask } from './email.ts';
-import { getEmojiSymbol, gitContextFor, gitWeb } from '@classmoji/utils';
+import { getEmojiSymbol, gitContextFor, gitWeb, quizAttemptGrade } from '@classmoji/utils';
 
 interface GitRepoAssignmentGraderRecord {
   grader: {
@@ -37,11 +57,11 @@ interface UpdateRegradeRequestTaskPayload {
     student: {
       email: string;
     };
-    git_repo_assignment: {
-      assignment: {
-        title: string;
-      };
-    };
+    git_repo_assignment?: {
+      assignment?: {
+        title?: string | null;
+      } | null;
+    } | null;
   };
   data: Record<string, unknown>;
 }
@@ -125,6 +145,14 @@ export const updateRegradeRequestTask = task({
   run: async (payload: UpdateRegradeRequestTaskPayload) => {
     const { request, data } = payload;
 
+    // A quiz request is resolved by regradeRequest.resolveQuiz, which writes
+    // the adjustment with the status. A bare status write here would mark it
+    // APPROVED with no adjustment.
+    const [stored] = await ClassmojiService.regradeRequest.findMany({ id: request.id });
+    if (stored?.quiz_attempt_id) {
+      throw new Error('update_regrade_request does not resolve quiz regrade requests');
+    }
+
     return ClassmojiService.regradeRequest.update({ id: request.id, data });
   },
   onSuccess: async ({ payload }: TaskPayloadWrapper<UpdateRegradeRequestTaskPayload>) => {
@@ -134,10 +162,106 @@ export const updateRegradeRequestTask = task({
       template: {
         id: 'regrade-resolved',
         variables: escapeVars({
-          ASSIGNMENT_TITLE: request.git_repo_assignment.assignment.title,
+          ASSIGNMENT_TITLE: request.git_repo_assignment?.assignment?.title ?? 'your assignment',
           APP_URL: appUrl(),
         }),
       },
     });
+  },
+});
+
+interface QuizRegradeResolvedPayload {
+  /** The resolved quiz request. Everything else is re-read from the database. */
+  request_id: string;
+}
+
+/** What the student is told about their resolved quiz request. */
+export interface QuizRegradeResolution {
+  classroomName: string | null;
+  studentName: string | null;
+  quizName: string;
+  attemptNumber: number | null;
+  status: 'APPROVED' | 'DENIED';
+  /** The grade the student asked about (the request's snapshot), as a shortcode. */
+  previousEmoji: string | null;
+  /** The attempt's grade now, as a shortcode. */
+  currentEmoji: string | null;
+  reply: string | null;
+}
+
+const symbol = (emoji: string | null) => (emoji ? getEmojiSymbol(emoji) : '—');
+
+/**
+ * The resolution email for a quiz request, as variables of the `notification`
+ * template (pre-rendered, escaped HTML plus a plain-text twin; no template
+ * change or Resend sync needed). "Score adjusted X → Y" or "Score kept X",
+ * then the staff reply. No percentages.
+ */
+export const renderQuizRegradeResolvedEmail = (r: QuizRegradeResolution) => {
+  const cls = r.classroomName ?? 'your classroom';
+  const what = r.attemptNumber ? `${r.quizName} (attempt ${r.attemptNumber})` : r.quizName;
+  const outcome =
+    r.status === 'APPROVED'
+      ? `Score adjusted ${symbol(r.previousEmoji)} → ${symbol(r.currentEmoji)}`
+      : `Score kept ${symbol(r.currentEmoji ?? r.previousEmoji)}`;
+  const sentence = `Your regrade request for ${what} in ${cls} has been reviewed.`;
+  const greetingHtml = r.studentName
+    ? `<p style="margin-top:0;">Hi ${escapeHtml(r.studentName)},</p>`
+    : '';
+  const greetingText = r.studentName ? `Hi ${r.studentName},\n\n` : '';
+  const replyHtml = r.reply
+    ? `<p style="margin-bottom:4px;">Reply from your instructor:</p><p style="margin-top:0; margin-bottom:0; padding-left:12px; border-left:3px solid #e7e5e4; white-space:pre-wrap;">${escapeHtml(r.reply)}</p>`
+    : '';
+  const replyText = r.reply ? `\n\nReply from your instructor:\n${r.reply}` : '';
+  return {
+    id: 'notification' as const,
+    variables: {
+      SUBJECT: `[Classmoji]${r.classroomName ? ` ${r.classroomName}` : ''} - Regrade request resolved`,
+      PREHEADER: escapeHtml(`${sentence} ${outcome}.`),
+      MESSAGE_HTML: `${greetingHtml}<p style="margin-top:0;">Your regrade request for <strong>${escapeHtml(what)}</strong> in <strong>${escapeHtml(cls)}</strong> has been reviewed.</p><p${replyHtml ? '' : ' style="margin-bottom:0;"'}><strong>${escapeHtml(outcome)}</strong></p>${replyHtml}`,
+      MESSAGE_TEXT: `${greetingText}${sentence}\n\n${outcome}${replyText}`,
+      ACTION_URL: `${appUrl()}/select-organization`,
+      PREFS_URL: `${appUrl()}/settings/notifications`,
+    },
+  };
+};
+
+/**
+ * Email the student that their quiz regrade request was resolved. Triggered
+ * by the resolving surface (webapp, MCP) after `regradeRequest.resolveQuiz`
+ * wrote the resolution; only the request id travels, so the email says what
+ * the database says. Sends nothing for a repo request or one still open.
+ */
+export const quizRegradeResolvedTask = task({
+  id: 'quiz_regrade_resolved',
+  // Reads only before the one send: safe to repeat on a connection blip.
+  ...retryOnDatabaseBlip,
+  run: async ({ request_id }: QuizRegradeResolvedPayload) => {
+    const [request] = await ClassmojiService.regradeRequest.findMany({ id: request_id });
+    const attempt = request?.quiz_attempt;
+    if (!request || !attempt || (request.status !== 'APPROVED' && request.status !== 'DENIED')) {
+      return { sent: false as const };
+    }
+    const to = request.student?.email;
+    if (!to) return { sent: false as const };
+
+    const [classroom, scale] = await Promise.all([
+      ClassmojiService.classroom.findById(request.classroom_id),
+      ClassmojiService.emojiMapping.findScaleByClassroomId(request.classroom_id),
+    ]);
+    const grade = quizAttemptGrade(attempt, scale);
+    const template = renderQuizRegradeResolvedEmail({
+      classroomName: classroom?.name ?? null,
+      studentName: request.student?.name ?? null,
+      quizName: attempt.quiz?.assignment?.title ?? attempt.quiz?.name ?? 'your quiz',
+      attemptNumber: attempt.attempt_number ?? null,
+      status: request.status,
+      previousEmoji: request.previous_grade[0] ?? grade.original.emoji,
+      currentEmoji: grade.effective.emoji,
+      reply: request.grader_comment ?? null,
+    });
+
+    await sendEmailTask.trigger({ to, template });
+    return { sent: true as const };
   },
 });

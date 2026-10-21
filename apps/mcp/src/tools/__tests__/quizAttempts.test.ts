@@ -24,6 +24,14 @@ const mocks = vi.hoisted(() => ({
   quizzesVisibleOrThrow: vi.fn(),
   auditCreate: vi.fn(),
   emojiScale: vi.fn(),
+  userFindMany: vi.fn(),
+}));
+
+vi.mock('@classmoji/database', async () => ({
+  ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
+    '@classmoji/database/gitIdentity'
+  )),
+  default: () => ({ user: { findMany: (...a: unknown[]) => mocks.userFindMany(...a) } }),
 }));
 
 vi.mock('@classmoji/services', () => ({
@@ -36,7 +44,7 @@ vi.mock('@classmoji/services', () => ({
     },
     token: { netQuizExtensionHoursByStudent: (...a: unknown[]) => mocks.netHours(...a) },
     entitlement: { quizzesVisibleOrThrow: (...a: unknown[]) => mocks.quizzesVisibleOrThrow(...a) },
-    emojiMapping: { findByClassroomId: (...a: unknown[]) => mocks.emojiScale(...a) },
+    emojiMapping: { findScaleByClassroomId: (...a: unknown[]) => mocks.emojiScale(...a) },
     audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
   },
 }));
@@ -44,7 +52,7 @@ vi.mock('@classmoji/services', () => ({
 const { listQuizAttemptsTool } = await import('../quizAttempts.ts');
 const { toolAnnotations } = await import('../../mcp/registry.ts');
 
-/** An emoji scale, as emojiMapping.findByClassroomId returns it. */
+/** An emoji scale, as emojiMapping.findScaleByClassroomId returns it. */
 const EMOJI_SCALE = { rocket: 100, '+1': 90, eyes: 80, '-1': 60, sob: 0 };
 /** The numeric scale: score-0 … score-100 in tens, as ensureDefaultScale seeds it. */
 const SCORE_SCALE = Object.fromEntries(
@@ -355,7 +363,7 @@ describe('list_quiz_attempts', () => {
     expect(ada.counted_emoji).toBe('score-60');
   });
 
-  it('falls back to the default scale where the classroom has none', async () => {
+  it('states no emoji where the classroom has no scale, as the web pages do', async () => {
     mocks.emojiScale.mockResolvedValue({});
     mocks.findByQuiz.mockResolvedValue([
       attempt('a1', 'ada', '2026-10-01T10:00:00Z', '2026-10-01T10:30:00Z', 100),
@@ -363,7 +371,8 @@ describe('list_quiz_attempts', () => {
 
     const [ada] = parse(await listQuizAttemptsTool.handler(ARGS, CTX)).students;
 
-    expect(ada.current_emoji).toBe('rocket');
+    expect(ada.current_emoji).toBeNull();
+    expect(ada.attempts[0].grade_emoji).toBeNull();
   });
 
   it('states no grade as a number anywhere in the payload', async () => {
@@ -455,7 +464,9 @@ describe('list_quiz_attempts', () => {
       'PRIVATE NOTE',
       'B+',
       'letter_grade',
-      'comment',
+      // The membership's staff note (`comment`); `instructor_comment` is the
+      // attempt's comment to the student, which staff may read.
+      '"comment"',
       'has_accepted_invite',
       'SECRET PROMPT',
       'SECRET TOKEN',
@@ -504,5 +515,58 @@ describe('list_quiz_attempts', () => {
       action: 'VIEW',
       data: { tool: 'quiz.attempts.view', mcp_tool: 'list_quiz_attempts', students: 3 },
     });
+  });
+});
+
+describe('list_quiz_attempts: staff adjustments', () => {
+  it('shows an adjusted attempt by its own emoji, with the AI original and who adjusted it', async () => {
+    mocks.findByQuiz.mockResolvedValue([
+      attempt('a1', 'ada', '2026-10-01T10:00:00Z', '2026-10-01T10:30:00Z', 62, {
+        adjusted_emoji: 'rocket',
+        instructor_comment: 'Q3 was ambiguous.',
+        adjusted_by_id: 'staff-1',
+        adjusted_at: at('2026-10-03T12:00:00Z'),
+      }),
+      attempt('a2', 'ada', '2026-10-02T10:00:00Z', '2026-10-02T10:30:00Z', 80),
+    ]);
+    mocks.userFindMany.mockResolvedValue([{ id: 'staff-1', name: 'Prof Staff' }]);
+
+    const [ada] = parse(await listQuizAttemptsTool.handler(ARGS, CTX)).students;
+    const adjusted = ada.attempts.find((a: { id: string }) => a.id === 'a1');
+    const plain = ada.attempts.find((a: { id: string }) => a.id === 'a2');
+
+    // HIGHEST over effective grades: the adjusted 100 counts over the 80.
+    expect(ada.counting_attempt_id).toBe('a1');
+    expect(ada.counting_adjusted).toBe(true);
+    expect(ada.current_emoji).toBe('rocket');
+    expect(adjusted).toMatchObject({
+      grade_emoji: 'rocket',
+      adjusted: true,
+      original_emoji: '-1',
+      instructor_comment: 'Q3 was ambiguous.',
+      adjusted_at: '2026-10-03T12:00:00.000Z',
+      adjusted_by: { id: 'staff-1', name: 'Prof Staff' },
+    });
+    expect(plain).toMatchObject({
+      grade_emoji: 'eyes',
+      adjusted: false,
+      original_emoji: 'eyes',
+      instructor_comment: null,
+      adjusted_at: null,
+      adjusted_by: null,
+    });
+    // One name read, for the adjusters only: id and name.
+    expect(mocks.userFindMany).toHaveBeenCalledWith({
+      where: { id: { in: ['staff-1'] } },
+      select: { id: true, name: true },
+    });
+  });
+
+  it('reads no names when nothing is adjusted', async () => {
+    mocks.findByQuiz.mockResolvedValue([
+      attempt('a1', 'ada', '2026-10-01T10:00:00Z', '2026-10-01T10:30:00Z', 80),
+    ]);
+    await listQuizAttemptsTool.handler(ARGS, CTX);
+    expect(mocks.userFindMany).not.toHaveBeenCalled();
   });
 });

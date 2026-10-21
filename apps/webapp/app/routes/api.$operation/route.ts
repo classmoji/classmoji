@@ -3,8 +3,9 @@ import { data } from 'react-router';
 import { namedAction } from 'remix-utils/named-action';
 import { getAuthSession } from '@classmoji/auth/server';
 
-import { ClassmojiService } from '@classmoji/services';
+import { ClassmojiService, QuizGradeError } from '@classmoji/services';
 import { checkAuth, waitForRunCompletion, assertClassroomAccess } from '~/utils/helpers';
+import { impersonatedBy } from '~/routes/admin.$class.ask-moji/impersonation.server';
 
 export const loader = checkAuth(
   async ({ request, params }: { request: Request; params: Record<string, string | undefined> }) => {
@@ -115,7 +116,7 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
       // authorizing against its slug would re-resolve through a second lookup,
       // leaving nothing that ties the authorized classroom to the regrade
       // request being updated below.
-      await assertClassroomAccess({
+      const { userId } = await assertClassroomAccess({
         request,
         classroomId: regradeRequest.classroom_id,
         allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
@@ -125,6 +126,58 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
           regrade_request_id: regradeRequest.id,
         },
       });
+
+      const status = body?.status;
+      if (status !== 'APPROVED' && status !== 'DENIED') {
+        return data({ error: 'status must be APPROVED or DENIED' }, { status: 400 });
+      }
+      const reply = typeof body?.comment === 'string' ? body.comment.trim() : '';
+
+      // A quiz request: resolveQuiz writes the status, the reply and any
+      // adjustment (APPROVED takes `emoji`, an emoji on the classroom's scale)
+      // and its own audit rows; `quiz_regrade_resolved` then emails the student
+      // from the database. It never runs `update_regrade_request`, which
+      // refuses quiz requests, and never touches repo grades.
+      if (regradeRequest.quiz_attempt_id) {
+        let result: Awaited<ReturnType<typeof ClassmojiService.regradeRequest.resolveQuiz>>;
+        try {
+          result = await ClassmojiService.regradeRequest.resolveQuiz({
+            requestId: regradeRequest.id,
+            resolution: status,
+            ...(status === 'APPROVED' && typeof body?.emoji === 'string'
+              ? { emoji: body.emoji }
+              : {}),
+            comment: reply,
+            actorUserId: userId,
+            tool: 'web:api.updateRegradeRequest',
+            impersonatedBy: await impersonatedBy(request),
+          });
+        } catch (error: unknown) {
+          if (error instanceof QuizGradeError) {
+            return data(
+              { action: 'UPDATE_REGRADE_REQUEST', error: error.message, code: error.code },
+              { status: error.status }
+            );
+          }
+          throw error;
+        }
+        if (!result.alreadyResolved) {
+          try {
+            await tasks.trigger('quiz_regrade_resolved', { request_id: regradeRequest.id });
+          } catch (error: unknown) {
+            // The resolution stands; only the email failed to queue.
+            console.error('quiz_regrade_resolved enqueue failed:', error);
+          }
+        }
+        return {
+          action: 'UPDATE_REGRADE_REQUEST',
+          success: result.alreadyResolved
+            ? 'This request was already resolved'
+            : status === 'APPROVED'
+              ? 'Score adjusted'
+              : 'Score kept',
+        };
+      }
 
       try {
         // Re-derive the task payload from the DB record so the status update and
@@ -142,7 +195,9 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
             },
           },
           data: {
-            status: body.status,
+            status,
+            // The reply the student reads, when one is given.
+            ...(reply ? { grader_comment: reply } : {}),
           },
         });
 

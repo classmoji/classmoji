@@ -59,6 +59,7 @@ import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
 import { countingQuizScore, effectiveDeadline, effectiveTokensPerHour } from '@classmoji/utils';
 import type { ResourceDefinition, ToolContext } from '../mcp/registry.ts';
+import { emojiFor, loadQuizEmojiScale, studentQuizGradeView } from '../tools/quizGradeEmoji.ts';
 import {
   MEMBER,
   STUDENT_ONLY,
@@ -110,10 +111,12 @@ interface RepositoryRow {
 /** grades-mine's description; my_grades (tools/reads.ts) carries the same text. */
 export const GRADES_MINE_DESCRIPTION =
   'Your own grades in this classroom. Repository submissions appear only once their grades ' +
-  'are released (Assignment.grades_released). Quiz scores (quiz_grades) appear as soon as an ' +
-  'attempt is scored: the raw percentage of the attempt that counts, with how many hours late ' +
-  'it was (after any hours you bought), or 0 with counts_as_zero when the deadline passed ' +
-  'with no attempt. final_grade {letter}, present once the instructor releases final grades, ' +
+  'are released (Assignment.grades_released). Quiz grades (quiz_grades) appear as soon as an ' +
+  "attempt is scored: emoji, the grade of the attempt that counts on the classroom's scale " +
+  '(a score-N badge on the numeric scale, never a number), before any late penalty, with how ' +
+  'many hours late it was (after any hours you bought); adjusted and original_emoji when ' +
+  'staff changed it, and instructor_comment with instructor_name; or the emoji for 0 with ' +
+  'counts_as_zero when the deadline passed with no attempt. final_grade {letter}, present once the instructor releases final grades, ' +
   'is your final course grade. Otherwise estimated_grade, present only where the instructor ' +
   'shows it, is the estimate on your dashboard from released grades: {kind:"letter",letter,' +
   'count} or {kind:"emoji",emoji,count}; null when there is none. Students only.';
@@ -305,31 +308,66 @@ async function myQuizGrades(ctx: ToolContext) {
     orderBy: [{ student_deadline: 'asc' }, { title: 'asc' }],
   });
   const quizIds = assignments.flatMap(a => (a.quiz_id ? [a.quiz_id] : []));
-  const [attempts, hours] = await Promise.all([
+  const [attempts, hours, scale] = await Promise.all([
     ClassmojiService.quizAttempt.findForUserByQuizIds(studentId, quizIds),
     ClassmojiService.quizGradeItems.netQuizExtensionHours({
       classroomId,
       studentId,
       assignmentIds,
     }),
+    loadQuizEmojiScale(classroomId),
   ]);
   const penalty = Number(sanitizedSettings(ctx).late_penalty_points_per_hour ?? 0) || 0;
 
-  return assignments.flatMap(a => {
+  const scored = assignments.map(a => {
     const item = itemByAssignment.get(a.id);
-    if (!item) return [];
     const extensionHours = hours.get(a.id) ?? 0;
-    const score = item.counts_as_zero
-      ? null
-      : countingQuizScore(
-          attempts.filter(t => t.quiz_id === a.quiz_id),
-          a.quiz?.grading_strategy,
-          {
-            studentDeadline: a.student_deadline,
-            extensionHours,
-            latePenaltyPerHour: penalty,
+    const score =
+      !item || item.counts_as_zero
+        ? null
+        : countingQuizScore(
+            attempts.filter(t => t.quiz_id === a.quiz_id),
+            a.quiz?.grading_strategy,
+            {
+              studentDeadline: a.student_deadline,
+              extensionHours,
+              latePenaltyPerHour: penalty,
+              emojiScale: scale,
+            }
+          );
+    return { a, item, extensionHours, score };
+  });
+
+  // The counting attempts' comment to the student and its author's name (D6),
+  // the caller's own attempts only.
+  const countingIds = scored.flatMap(({ score }) =>
+    score?.counting_attempt_id ? [score.counting_attempt_id] : []
+  );
+  const notes = new Map(
+    countingIds.length === 0
+      ? []
+      : (
+          await getPrisma().quizAttempt.findMany({
+            where: { id: { in: countingIds }, user_id: studentId },
+            select: { id: true, instructor_comment: true, adjusted_by: { select: { name: true } } },
+          })
+        ).map(row => [row.id, row])
+  );
+
+  return scored.flatMap(({ a, item, extensionHours, score }) => {
+    if (!item) return [];
+    const counting = score?.counting ?? null;
+    const note = counting ? notes.get(counting.id) : undefined;
+    const grade = studentQuizGradeView(
+      counting
+        ? {
+            ...counting,
+            instructor_comment: note?.instructor_comment ?? null,
+            adjusted_by: note?.adjusted_by ?? null,
           }
-        );
+        : null,
+      scale
+    );
     return [
       {
         assignment_id: a.id,
@@ -339,8 +377,13 @@ async function myQuizGrades(ctx: ToolContext) {
         student_deadline: a.student_deadline ?? null,
         // The due date with the hours this student bought on it.
         effective_deadline: effectiveDeadline(a.student_deadline, extensionHours),
-        // The raw score of the attempt that counts; 0 for a counted zero.
-        percentage: item.counts_as_zero ? 0 : (score?.raw_percentage ?? null),
+        // The grade of the attempt that counts, before the late penalty, as
+        // an emoji (an adjustment's own); the emoji for 0 for a counted zero.
+        emoji: item.counts_as_zero ? emojiFor(0, scale) : grade.emoji,
+        adjusted: grade.adjusted,
+        original_emoji: grade.original_emoji,
+        instructor_comment: grade.instructor_comment,
+        instructor_name: grade.instructor_name,
         late_hours: score?.late_hours ?? 0,
         counts_as_zero: item.counts_as_zero,
         counting_attempt_id: score?.counting_attempt_id ?? null,

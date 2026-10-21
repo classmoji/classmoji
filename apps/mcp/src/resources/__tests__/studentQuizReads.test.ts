@@ -3,11 +3,14 @@
  * and the student branch of list_quizzes (quizzes).
  *
  * Pinned here:
- *   - my_grades shows the RAW score of the attempt the grade counts (the
- *     strategy picks among late-penalised scores, so a late best attempt can
- *     lose to an on-time one), that attempt's late hours, and a counted 0 as
- *     such; the quiz key is absent where quizzes are hidden, and a failed
- *     visibility lookup fails the read.
+ *   - my_grades shows the grade of the attempt the grade counts as an emoji on
+ *     the classroom's scale, before the late penalty (the strategy picks among
+ *     late-penalised scores, so a late best attempt can lose to an on-time
+ *     one), never a number; that attempt's late hours, and a counted 0 as the
+ *     scale's emoji for 0. A staff adjustment shows its own emoji, the AI's
+ *     original, and the instructor's comment and name (D6). The quiz key is
+ *     absent where quizzes are hidden, and a failed visibility lookup fails
+ *     the read.
  *   - my_tokens names a quiz extension by its assignment, and an orphaned one
  *     (assignment deleted) by the title its description was written with.
  *   - list_quizzes gives a student the assignment id, the price of an hour,
@@ -30,6 +33,7 @@ const mocks = vi.hoisted(() => ({
   gradeSummaryForStudent: vi.fn(),
   getBalance: vi.fn(),
   findTransactions: vi.fn(),
+  findScaleByClassroomId: vi.fn(),
 }));
 
 vi.mock('@classmoji/database', async () =>
@@ -66,8 +70,14 @@ vi.mock('@classmoji/services', () => ({
       getBalance: (...a: unknown[]) => mocks.getBalance(...a),
       findTransactions: (...a: unknown[]) => mocks.findTransactions(...a),
     },
+    emojiMapping: {
+      findScaleByClassroomId: (...a: unknown[]) => mocks.findScaleByClassroomId(...a),
+    },
   },
 }));
+
+/** The classroom's scale (emojiMapping.findScaleByClassroomId). */
+const SCALE = { rocket: 100, '+1': 90, eyes: 80, '-1': 60, sob: 0 };
 
 // The real grade-line entry point, below the mocked barrel; its reads go to the
 // prisma stub. Its quiz gate is a read too: answered here, so no quiz items load.
@@ -142,6 +152,7 @@ beforeEach(() => {
   mocks.findForUser.mockResolvedValue([]);
   mocks.netQuizExtensionHours.mockResolvedValue(new Map());
   mocks.findForUserByQuizIds.mockResolvedValue([]);
+  mocks.findScaleByClassroomId.mockResolvedValue(SCALE);
 });
 
 // ─── my_grades ───────────────────────────────────────────────────────────────
@@ -204,7 +215,7 @@ describe('my_grades quiz rows', () => {
     mocks.findForUserByQuizIds.mockResolvedValue(ATTEMPTS);
   }
 
-  it('shows the raw score and late hours of the attempt that counts, and a counted 0', async () => {
+  it('shows the emoji and late hours of the attempt that counts, and a counted 0', async () => {
     arrangeTwoQuizzes();
 
     const payload = (await gradesMineResource.handler(
@@ -221,7 +232,11 @@ describe('my_grades quiz rows', () => {
         module: { id: 'mod-1', title: 'Week 1' },
         student_deadline: DUE,
         effective_deadline: DUE,
-        percentage: 80,
+        emoji: 'eyes',
+        adjusted: false,
+        original_emoji: null,
+        instructor_comment: null,
+        instructor_name: null,
         late_hours: 0,
         counts_as_zero: false,
         counting_attempt_id: 'ontime-80',
@@ -234,7 +249,11 @@ describe('my_grades quiz rows', () => {
         module: { id: 'mod-1', title: 'Week 1' },
         student_deadline: at(-48),
         effective_deadline: at(-48),
-        percentage: 0,
+        emoji: 'sob',
+        adjusted: false,
+        original_emoji: null,
+        instructor_comment: null,
+        instructor_name: null,
         late_hours: 0,
         counts_as_zero: true,
         counting_attempt_id: null,
@@ -256,10 +275,56 @@ describe('my_grades quiz rows', () => {
 
     expect(payload.quiz_grades?.[0]).toMatchObject({
       effective_deadline: at(3),
-      percentage: 90,
+      emoji: '+1',
       late_hours: 2,
       counting_attempt_id: 'late-90',
     });
+  });
+
+  it('shows a staff adjustment: its own emoji, the AI original, the comment and its author', async () => {
+    arrangeTwoQuizzes();
+    mocks.findForUserByQuizIds.mockResolvedValue([
+      { ...ATTEMPTS[0], adjusted_emoji: 'sob' },
+      { ...ATTEMPTS[1], adjusted_emoji: 'rocket' },
+    ]);
+    setPrismaRows({
+      quizAttempt: {
+        findMany: [
+          {
+            id: 'ontime-80',
+            instructor_comment: 'Question 3 was ambiguous.',
+            adjusted_by: { name: 'Prof. Hopper' },
+          },
+        ],
+      },
+    });
+
+    const payload = (await gradesMineResource.handler(
+      VARS,
+      studentCtx({ late_penalty_points_per_hour: 4 }),
+      URI
+    )) as Payload;
+
+    expect(payload.quiz_grades?.[0]).toMatchObject({
+      counting_attempt_id: 'ontime-80',
+      emoji: 'rocket',
+      adjusted: true,
+      original_emoji: 'eyes',
+      instructor_comment: 'Question 3 was ambiguous.',
+      instructor_name: 'Prof. Hopper',
+    });
+    // The comment read is the caller's own counting attempts only.
+    const [noteRead] = prismaCallsFor('quizAttempt', 'findMany');
+    expect((noteRead.args as { where: unknown }).where).toEqual({
+      id: { in: ['ontime-80'] },
+      user_id: 'stu-1',
+    });
+    // No grade leaves as a number.
+    for (const row of payload.quiz_grades ?? []) {
+      for (const [key, value] of Object.entries(row)) {
+        if (key !== 'late_hours') expect(typeof value, key).not.toBe('number');
+      }
+    }
   });
 
   it('asks the grade loader for the caller only, and scopes the title read to the classroom', async () => {
@@ -717,23 +782,35 @@ describe('list_quizzes for a student: extension fields', () => {
     });
   });
 
-  it('names the attempt the grade counts, at its raw score, with its late hours', async () => {
+  it('names the attempt the grade counts, as an emoji, with its late hours', async () => {
     arrangeList();
 
     const { quizzes } = (await quizzesResource.handler(VARS, studentCtx(settings), URI)) as {
       quizzes: Row[];
     };
 
-    // Penalised, the late 90 is a 70: the on-time 80 counts, shown as 80.
+    // Penalised, the late 90 is a 70: the on-time 80 counts, shown as its emoji.
     expect(quizzes[0].my_attempts).toEqual({
       count: 2,
       canCreateNew: false,
-      currentScore: 80,
       countingAttemptId: 'ontime-80',
       lateHours: 0,
+      current_emoji: 'eyes',
+      adjusted: false,
+      original_emoji: null,
+      instructor_comment: null,
+      instructor_name: null,
     });
-    // No assignment: the service's summary passes through untouched.
-    expect(quizzes[2].my_attempts).toEqual({ count: 0, canCreateNew: true, currentScore: null });
+    // No assignment: the service's summary, without its numbers.
+    expect(quizzes[2].my_attempts).toEqual({
+      count: 0,
+      canCreateNew: true,
+      current_emoji: null,
+      adjusted: false,
+      original_emoji: null,
+      instructor_comment: null,
+      instructor_name: null,
+    });
   });
 
   it('lets bought hours change which attempt counts', async () => {
@@ -745,7 +822,7 @@ describe('list_quizzes for a student: extension fields', () => {
     };
 
     expect(quizzes[0].my_attempts).toMatchObject({
-      currentScore: 90,
+      current_emoji: '+1',
       countingAttemptId: 'late-90',
       lateHours: 2,
     });

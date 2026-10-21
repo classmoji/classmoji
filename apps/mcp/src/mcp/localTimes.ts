@@ -51,6 +51,8 @@ const LOCALIZED_KEYS: ReadonlySet<string> = new Set([
   'completed_at',
   'last_activity',
   'sent_at',
+  // When staff last adjusted a quiz attempt's grade or comment.
+  'adjusted_at',
   // The calendar's `range: { start, end }`: which local window was searched.
   'start',
   'end',
