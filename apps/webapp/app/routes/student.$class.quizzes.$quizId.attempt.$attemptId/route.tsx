@@ -295,6 +295,9 @@ const loadStudentResult = async ({
         : null,
     }),
     attemptNumber: typeof attempt.attempt_number === 'number' ? attempt.attempt_number : null,
+    // The attempt's own student sees its request status; they may ask only
+    // where the classroom takes changes.
+    isOwnStudentAttempt: ownerIsStudent,
     canRequest: ownerIsStudent && classroomWritable,
     comment: ownerIsStudent
       ? instructorCommentView({
@@ -393,8 +396,9 @@ export default function StudentQuizAttemptDrawer({ loaderData }: Route.Component
       result
         ? {
             grade: result.grade,
-            headerExtra: result.canRequest ? (
+            headerExtra: result.isOwnStudentAttempt ? (
               <QuizRegradeButton
+                canRequest={result.canRequest}
                 quizName={data.quiz.name}
                 attemptNumber={result.attemptNumber}
                 regrade={result.regrade}

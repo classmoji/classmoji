@@ -25,10 +25,13 @@ export function QuizRegradeButton({
   quizName,
   attemptNumber,
   regrade,
+  canRequest = true,
 }: {
   quizName: string;
   attemptNumber: number | null;
   regrade: StudentQuizRegradeView;
+  /** False in a read-only classroom: an open request's status shows, no button. */
+  canRequest?: boolean;
 }) {
   const fetcher = useFetcher<{ ok?: boolean; created?: boolean; error?: string }>();
   const { pathname } = useLocation();
@@ -65,6 +68,7 @@ export function QuizRegradeButton({
       </span>
     );
   }
+  if (!canRequest) return null;
 
   const label = ['Quiz', quizName, attemptNumber ? `Attempt ${attemptNumber}` : null]
     .filter(Boolean)

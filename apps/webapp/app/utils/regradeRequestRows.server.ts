@@ -5,9 +5,9 @@
  * whether staff adjusted it. No percentage leaves the server.
  *
  * Staff rows also carry what the resolve modal's "Counted" line needs for an
- * open quiz request: the attempt's late hours and the classroom's penalty per
- * hour, so the modal can show what a picked emoji counts for after the late
- * penalty (D2). Every read is scoped to the classroom the caller's gate
+ * open quiz request: the attempt's late hours and its counted emoji
+ * (`regradeRequest.openQuizRequestLateness`); the modal takes the classroom's
+ * penalty from the loader to show what a picked emoji counts for (D2). Every read is scoped to the classroom the caller's gate
  * resolved, through `regradeRequest.findManyForDisplay`, which leaves quiz
  * requests out where the classroom does not show quizzes. The staff queue's
  * read of students' grades is audited (VIEW, `data.tool` naming the surface).

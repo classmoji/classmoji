@@ -976,6 +976,7 @@ describe('student attempt drawer payload', () => {
         countedEmoji: null,
       },
       attemptNumber: 1,
+      isOwnStudentAttempt: true,
       canRequest: true,
       comment: {
         text: 'Q3 has full credit.',
@@ -1007,7 +1008,8 @@ describe('student attempt drawer payload', () => {
     mocks.findWithMessages.mockResolvedValue(withMessages(ADA_FIRST));
     mocks.regradeFindMany.mockResolvedValue([]);
     const payload = await studentAttemptRoute.loader(attemptArgs('student', ADA_FIRST.id));
-    expect(payload.result?.canRequest).toBe(false);
+    // No button, but the status of an open request still shows.
+    expect(payload.result).toMatchObject({ isOwnStudentAttempt: true, canRequest: false });
   });
 
   it('reports an open request so the button turns into its status (D7)', async () => {
