@@ -30,7 +30,7 @@ import type {
 } from '@classmoji/utils';
 import { useDarkMode } from '~/hooks';
 import EmojiGrader from '~/components/features/grading/EmojiGrader';
-import QuizGradeEmoji, { NoScaleGrade, isNoScale } from '~/components/features/quiz/QuizGradeEmoji';
+import QuizGradeEmoji from '~/components/features/quiz/QuizGradeEmoji';
 
 /**
  * A gradebook row as it leaves the loader. A CLOSED shape on purpose: the
@@ -365,8 +365,7 @@ const GradesTable = (props: GradesTableProps) => {
    * its late chip), an "adjusted" chip when staff adjusted the counting
    * attempt (D8; on time it shows the emoji staff picked, `quizItemEmoji`), or
    * Missing (a counted 0). Without one it shows when the quiz opens, or the
-   * attempt state (before the deadline, running or unscored). A scored grade
-   * in a classroom with no grading scale reads as `NoScaleGrade`.
+   * attempt state (before the deadline, running or unscored).
    */
   const renderQuizCell = (
     student: Student,
@@ -386,7 +385,6 @@ const GradesTable = (props: GradesTableProps) => {
             emoji={quizItemEmoji(item, value, emojiMappings)}
             adjusted={item.counting_adjusted === true}
             lateHours={item.late_hours}
-            noScale={isNoScale(emojiMappings)}
           />
         ),
         tint: late ? LATE_TINT : '',
@@ -403,8 +401,6 @@ const GradesTable = (props: GradesTableProps) => {
       <Chip tone="grey">Not attempted</Chip>
     ) : !q.completed ? (
       <Chip tone="blue">In progress</Chip>
-    ) : q.emoji === null && q.scored && isNoScale(emojiMappings) ? (
-      <NoScaleGrade />
     ) : q.emoji === null ? (
       <span className="font-semibold">Completed</span>
     ) : (

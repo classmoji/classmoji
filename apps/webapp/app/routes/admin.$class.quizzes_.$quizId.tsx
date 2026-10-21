@@ -9,7 +9,7 @@ import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { UserThumbnailView, SectionHeader } from '~/components';
 import Emoji from '~/components/ui/display/Emoji';
-import { NoScaleGrade, QuizGradeEmoji, isNoScale } from '~/components/features/quiz/QuizGradeEmoji';
+import { QuizGradeEmoji } from '~/components/features/quiz/QuizGradeEmoji';
 import { useGitWeb } from '~/hooks/useGitWeb';
 import { useAskMojiViewing } from '~/components/features/ask-moji/viewing';
 import { formatDuration } from '~/utils/quizUtils';
@@ -65,7 +65,7 @@ const RegradeRequestedPill = () => (
  * ("→ 👀", the gradebook's value). "Missing" for a counted 0, "Not started"
  * for a rostered student with no attempt.
  */
-const CurrentScoreCell = ({ student, noScale }: { student: QuizStudent; noScale: boolean }) => {
+const CurrentScoreCell = ({ student }: { student: QuizStudent }) => {
   const pill = student.regradeRequested ? <RegradeRequestedPill /> : null;
   if (student.countsAsZero) {
     return (
@@ -83,11 +83,7 @@ const CurrentScoreCell = ({ student, noScale }: { student: QuizStudent; noScale:
   if (!student.currentEmoji) {
     return (
       <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-        {noScale && student.countingAttemptId ? (
-          <NoScaleGrade />
-        ) : (
-          <span className="text-gray-400 dark:text-gray-500 italic">No score</span>
-        )}
+        <span className="text-gray-400 dark:text-gray-500 italic">No score</span>
         {pill}
       </span>
     );
@@ -207,8 +203,6 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     stats: quizResultStatsView(students, emojiScale),
     // The viewer's own latest attempt, for resuming or restarting a preview.
     adminAttempt: viewerAttempt,
-    // No grading scale: a scored grade has no emoji to show (`NoScaleGrade`).
-    noScale: isNoScale(emojiScale),
   };
 };
 
@@ -288,7 +282,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
 const QuizView = ({ loaderData }: Route.ComponentProps) => {
   const callout = useCallout();
-  const { quiz, students, stats, adminAttempt, noScale } = loaderData;
+  const { quiz, students, stats, adminAttempt } = loaderData;
   useAskMojiViewing({ kind: 'quiz', id: quiz.id, title: quiz.name });
   const { terms } = useGitWeb();
   const navigate = useNavigate();
@@ -552,14 +546,6 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
       width: 160,
       dataIndex: 'grade',
       render: (_: unknown, record: QuizAttempt) => {
-        if (
-          record.completed_at &&
-          !record.grade.effective.emoji &&
-          noScale &&
-          record.grade.effective.percentage !== null
-        ) {
-          return <NoScaleGrade />;
-        }
         if (!record.completed_at || !record.grade.effective.emoji) {
           return <span className="text-gray-400 dark:text-gray-500 italic">Pending</span>;
         }
@@ -702,9 +688,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
       ),
       width: 220,
       dataIndex: 'currentScore',
-      render: (_: number | null, record: QuizStudent) => (
-        <CurrentScoreCell student={record} noScale={noScale} />
-      ),
+      render: (_: number | null, record: QuizStudent) => <CurrentScoreCell student={record} />,
       // By what counts, as the gradebook does: a counted 0 is 0, no score last.
       sorter: (a: QuizStudent, b: QuizStudent) => (a.countedScore ?? -1) - (b.countedScore ?? -1),
     },

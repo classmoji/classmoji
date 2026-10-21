@@ -7,9 +7,12 @@
  *
  * The scale is `emojiMapping.findScaleByClassroomId`, the one the web pages and
  * the grade totals read, so an adjusted attempt's emoji is worth here what it
- * is worth everywhere. A classroom with no scale has no emoji: every grade
- * reads null, as on the web (`quizAttemptGrade` / `quizPercentageEmoji` give
- * null on an empty scale). An adjusted attempt shows its adjustment emoji
+ * is worth everywhere. Never an in-code default set (E10): every classroom has
+ * a real scale (a migration seeded the ones that had none, and grading
+ * re-seeds a scale whose rows were all deleted). A read writes nothing, so a
+ * classroom caught with no rows reads null for every grade, as on the web
+ * (`quizAttemptGrade` / `quizPercentageEmoji` give null on an empty scale).
+ * An adjusted attempt shows its adjustment emoji
  * itself, never one re-derived from its value (`quizAttemptGrade`).
  */
 

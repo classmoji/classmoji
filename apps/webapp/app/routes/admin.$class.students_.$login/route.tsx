@@ -22,7 +22,7 @@ import {
 } from '@classmoji/utils';
 import { LateOverrideButton } from '~/components';
 import GradeBadges from '~/components/features/grading/GradeBadges';
-import QuizGradeEmoji, { NoScaleGrade, isNoScale } from '~/components/features/quiz/QuizGradeEmoji';
+import QuizGradeEmoji from '~/components/features/quiz/QuizGradeEmoji';
 import Emoji from '~/components/ui/display/Emoji';
 import UserAvatar from '~/components/shared/UserAvatar';
 import { ASSIGNMENT_TYPE_META } from '~/components/features/assignments/AssignmentsTable';
@@ -681,19 +681,12 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
             }
           >
             <span className="inline-flex">
-              <QuizGradeEmoji
-                emoji={shown}
-                adjusted={item.counting_adjusted === true}
-                size="md"
-                noScale={isNoScale(mappings)}
-              />
+              <QuizGradeEmoji emoji={shown} adjusted={item.counting_adjusted === true} size="md" />
             </span>
           </Tooltip>
         );
       } else if (q?.emoji) {
         grade = <QuizGradeEmoji emoji={q.emoji} adjusted={q.adjusted} size="md" />;
-      } else if (q?.scored && isNoScale(mappings)) {
-        grade = <NoScaleGrade />;
       }
     } else if (a.type === 'FORM') {
       const f = formStatus[a.id];
