@@ -37,6 +37,7 @@ import * as subscriptionService from './subscription.service.ts';
 import * as entitlementService from './entitlement.service.ts';
 import * as planLimitsService from './planLimits.ts';
 import * as planOwnerService from './planOwner.service.ts';
+import * as classroomLifecycleService from './classroomLifecycle.service.ts';
 import * as instructorAudienceService from './instructorAudience.service.ts';
 import * as surveyService from './survey.service.ts';
 import * as feedbackService from './feedback.service.ts';
@@ -170,6 +171,7 @@ const ClassmojiService = {
   entitlement: entitlementService,
   planLimits: planLimitsService,
   planOwner: planOwnerService,
+  classroomLifecycle: classroomLifecycleService,
   instructorAudience: instructorAudienceService,
   survey: surveyService,
   feedback: feedbackService,
@@ -299,6 +301,7 @@ export {
   entitlementService,
   planLimitsService,
   planOwnerService,
+  classroomLifecycleService,
   teamMembershipService,
   teamService,
   teamAdminService,

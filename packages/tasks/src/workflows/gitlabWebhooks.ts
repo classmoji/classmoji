@@ -37,7 +37,8 @@ async function repairClassrooms(classroomIds?: string[]): Promise<RepairResult> 
   const classrooms = await getPrisma().classroom.findMany({
     where: {
       ...(classroomIds ? { id: { in: classroomIds } } : {}),
-      is_archived: false,
+      // Archived classes included: they still take submissions (only the
+      // deadline decides lateness), so their hooks must keep working.
       git_namespace: { not: null },
       git_organization: { provider: 'GITLAB' },
     },
@@ -185,7 +186,10 @@ export async function pollGitlabPushes(): Promise<{
   const candidates = await getPrisma().gitRepo.findMany({
     where: {
       provider: 'GITLAB',
-      classroom: { is_archived: false, git_namespace: { not: null } },
+      // Archived classes included: they still take submissions, and the
+      // deadline filter below already keeps this to repos that can still
+      // submit.
+      classroom: { git_namespace: { not: null } },
       assignments: { some: rowFilter },
     },
     take: POLL_MAX_REPOS,

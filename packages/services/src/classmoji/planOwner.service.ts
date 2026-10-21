@@ -47,7 +47,7 @@ export const effectivePlanOwnerId = async (
 };
 
 /** Whether this user's own latest subscription is an active Pro. */
-const userIsPro = async (db: Db, userId: string): Promise<boolean> => {
+export const userIsPro = async (db: Db, userId: string): Promise<boolean> => {
   const latest = await db.subscription.findFirst({
     where: { user_id: userId },
     orderBy: { created_at: 'desc' },
@@ -55,16 +55,22 @@ const userIsPro = async (db: Db, userId: string): Promise<boolean> => {
   return latest?.tier === 'PRO' && subscriptionService.isSubscriptionActive(latest);
 };
 
+export interface ActiveClassroomSummary {
+  id: string;
+  name: string;
+  slug: string;
+}
+
 /**
- * How many classrooms use up this user's Free-plan slots: they are the stored
+ * The classrooms that use up this user's Free-plan slots: they are the stored
  * plan owner and still an accepted OWNER, the classroom is ACTIVE (whatever its
  * `is_archived`), it is not the Example Course, and no accepted owner makes it
- * Pro.
+ * Pro. Oldest first.
  */
-export const countActiveFreeClassrooms = async (
+export const listActiveFreeClassrooms = async (
   userId: string,
   { excludeClassroomId, db = getPrisma() }: { excludeClassroomId?: string; db?: Db } = {}
-): Promise<number> => {
+): Promise<ActiveClassroomSummary[]> => {
   const classrooms = await db.classroom.findMany({
     where: {
       plan_owner_id: userId,
@@ -73,16 +79,23 @@ export const countActiveFreeClassrooms = async (
       ...(excludeClassroomId ? { id: { not: excludeClassroomId } } : {}),
       memberships: { some: { user_id: userId, role: 'OWNER', has_accepted_invite: true } },
     },
-    select: { id: true },
+    orderBy: { created_at: 'asc' },
+    select: { id: true, name: true, slug: true },
   });
 
-  let count = 0;
-  for (const { id } of classrooms) {
-    const { isPro } = await subscriptionService.getProStateForClassroomId(id);
-    if (!isPro) count++;
+  const counted: ActiveClassroomSummary[] = [];
+  for (const classroom of classrooms) {
+    const { isPro } = await subscriptionService.getProStateForClassroomId(classroom.id);
+    if (!isPro) counted.push(classroom);
   }
-  return count;
+  return counted;
 };
+
+/** How many classrooms use up this user's Free-plan slots (see above). */
+export const countActiveFreeClassrooms = async (
+  userId: string,
+  options: { excludeClassroomId?: string; db?: Db } = {}
+): Promise<number> => (await listActiveFreeClassrooms(userId, options)).length;
 
 /** Whether the user can take on one more Free-plan active classroom. */
 const hasFreeCapacity = async (db: Db, userId: string, classroomId: string): Promise<boolean> => {

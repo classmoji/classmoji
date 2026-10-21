@@ -164,6 +164,8 @@ describe('resolveImportedClassroom', () => {
     candidateSlug: 'cs-52',
     name: 'CS 52 Full Stack',
     ownerUserId: 'user-1',
+    // The Free-plan rule says there is room (its own tests are the lifecycle's).
+    mayCreateActive: async () => true,
   };
 
   it('matches on the course id first and never touches the slug', async () => {
@@ -208,12 +210,38 @@ describe('resolveImportedClassroom', () => {
           git_org_id: 'org-1',
           slug: 'cs-52-2',
           github_classroom_id: 222,
+          status: 'ACTIVE',
           // The importer creates it, and it uses their plan slot.
           created_by: 'user-1',
           plan_owner_id: 'user-1',
         }),
       })
     );
+  });
+
+  it('creates a NEW classroom LOCKED, and says so, when the importer has no free active slot', async () => {
+    const { tx, create } = makeTx({});
+    const onCreatedLocked = vi.fn();
+
+    await resolveImportedClassroom(tx, {
+      ...args,
+      mayCreateActive: async () => false,
+      onCreatedLocked,
+    });
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'LOCKED' }) })
+    );
+    expect(onCreatedLocked).toHaveBeenCalledTimes(1);
+  });
+
+  it('never asks about the slot on a re-import', async () => {
+    const { tx } = makeTx({ byCourse: { id: 'existing' } });
+    const mayCreateActive = vi.fn(async () => false);
+
+    await resolveImportedClassroom(tx, { ...args, mayCreateActive });
+
+    expect(mayCreateActive).not.toHaveBeenCalled();
   });
 
   it('self-heals a legacy row by stamping the course id onto it', async () => {

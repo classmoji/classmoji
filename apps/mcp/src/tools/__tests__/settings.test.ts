@@ -17,6 +17,7 @@ import type { ToolContext } from '../../mcp/registry.ts';
 
 const mocks = vi.hoisted(() => ({
   classroomUpdate: vi.fn(),
+  setLifecycle: vi.fn(),
   updateSettings: vi.fn(),
   classroomFindById: vi.fn(),
   pageFindById: vi.fn(),
@@ -78,6 +79,12 @@ vi.mock('@classmoji/services', () => ({
       updateSettings: (...a: unknown[]) => mocks.updateSettings(...a),
       findById: (...a: unknown[]) => mocks.classroomFindById(...a),
     },
+    classroomLifecycle: {
+      setLifecycle: (...a: unknown[]) => mocks.setLifecycle(...a),
+      isActiveClassroomLimitError: (error: unknown) =>
+        (error as { code?: unknown })?.code === 'PLAN_ACTIVE_CLASSROOM_LIMIT',
+      NO_PLAN_OWNER: 'NO_PLAN_OWNER',
+    },
     page: { findById: (...a: unknown[]) => mocks.pageFindById(...a) },
     audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
     orgRepoSettings: {
@@ -116,6 +123,7 @@ beforeEach(() => {
   mocks.auditCreate.mockResolvedValue(undefined);
   mocks.updateSettings.mockResolvedValue({});
   mocks.classroomUpdate.mockResolvedValue({ status: 'ACTIVE', is_archived: false });
+  mocks.setLifecycle.mockResolvedValue({ status: 'ACTIVE', is_archived: false });
   mocks.getGitHubTokenForUser.mockResolvedValue({ token: 'ghu_owner', expiresAt: null });
   mocks.updateOrgRepoSettings.mockImplementation(
     async ({ input }: { input: Record<string, unknown> }) => ({
@@ -539,11 +547,11 @@ describe('classroom_status_update', () => {
     await expect(
       classroomStatusUpdateTool.handler({ classroom: 'org/w26' }, CTX)
     ).rejects.toMatchObject({ kind: 'invalid_params' });
-    expect(mocks.classroomUpdate).not.toHaveBeenCalled();
+    expect(mocks.setLifecycle).not.toHaveBeenCalled();
   });
 
-  it('updates both columns explicitly using the ctx classroom id', async () => {
-    mocks.classroomUpdate.mockResolvedValue({ status: 'LOCKED', is_archived: true });
+  it('changes both columns through the lifecycle service, on the ctx classroom, as the caller', async () => {
+    mocks.setLifecycle.mockResolvedValue({ status: 'LOCKED', is_archived: true });
 
     const payload = parse(
       await classroomStatusUpdateTool.handler(
@@ -552,22 +560,27 @@ describe('classroom_status_update', () => {
       )
     );
     expect(payload).toMatchObject({ status: 'LOCKED', is_archived: true });
-    expect(mocks.classroomUpdate).toHaveBeenCalledWith('class-1', {
+    // The service gates going ACTIVE and writes the audit row, so the web
+    // route and this tool cannot disagree.
+    expect(mocks.setLifecycle).toHaveBeenCalledWith({
+      classroomId: 'class-1',
       status: 'LOCKED',
-      is_archived: true,
+      isArchived: true,
+      actorUserId: CTX.viewer.userId,
+      tool: 'classroom_status_update',
     });
+    expect(mocks.classroomUpdate).not.toHaveBeenCalled();
   });
 
   it('sets only the column provided', async () => {
-    mocks.classroomUpdate.mockResolvedValue({ status: 'ACTIVE', is_archived: true });
     await classroomStatusUpdateTool.handler({ classroom: 'org/w26', is_archived: true }, CTX);
-    expect(mocks.classroomUpdate.mock.calls[0][1]).toEqual({ is_archived: true });
+    expect(mocks.setLifecycle.mock.calls[0][0]).toMatchObject({
+      status: undefined,
+      isArchived: true,
+    });
   });
 
-  it('never forwards extra argument keys to the classroom row', async () => {
-    // classroom.update takes an arbitrary ClassroomUpdateInput — slug (the key
-    // in every URL and two HMAC credentials) and git_org_id are exactly what
-    // the web route's PROFILE_FIELDS whitelist exists to keep unwritable.
+  it('never forwards extra argument keys', async () => {
     await classroomStatusUpdateTool.handler(
       {
         classroom: 'org/w26',
@@ -578,10 +591,14 @@ describe('classroom_status_update', () => {
       CTX
     );
 
-    const updates = mocks.classroomUpdate.mock.calls[0][1] as Record<string, unknown>;
-    expect(updates).toEqual({ status: 'LOCKED' });
-    expect(updates).not.toHaveProperty('slug');
-    expect(updates).not.toHaveProperty('git_org_id');
+    const args = mocks.setLifecycle.mock.calls[0][0] as Record<string, unknown>;
+    expect(Object.keys(args).sort()).toEqual([
+      'actorUserId',
+      'classroomId',
+      'isArchived',
+      'status',
+      'tool',
+    ]);
   });
 
   it('accepts only the three lifecycle statuses and is marked idempotent', () => {
@@ -594,14 +611,15 @@ describe('classroom_status_update', () => {
     expect(classroomStatusUpdateTool.annotations?.idempotent).toBe(true);
   });
 
-  it('audits against CLASSROOM with the ctx classroom id', async () => {
-    await classroomStatusUpdateTool.handler({ classroom: 'org/w26', status: 'ACTIVE' }, CTX);
-    const audit = mocks.auditCreate.mock.calls[0][0] as {
-      resource_type: string;
-      classroom_id: string;
-    };
-    expect(audit.resource_type).toBe('CLASSROOM');
-    expect(audit.classroom_id).toBe('class-1');
+  it("answers forbidden, with the service's sentence, when the Free plan's active class is taken", async () => {
+    const sentence = 'The Free plan includes one active class at a time.';
+    mocks.setLifecycle.mockRejectedValue(
+      Object.assign(new Error(sentence), { code: 'PLAN_ACTIVE_CLASSROOM_LIMIT' })
+    );
+
+    await expect(
+      classroomStatusUpdateTool.handler({ classroom: 'org/w26', status: 'ACTIVE' }, CTX)
+    ).rejects.toMatchObject({ kind: 'forbidden', message: sentence });
   });
 });
 
