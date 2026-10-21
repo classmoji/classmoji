@@ -49,6 +49,11 @@ const quizzesVisibleOrThrow = vi.fn();
 const SCALE = { rocket: 100, eyes: 70, sob: 0 };
 const findScaleByClassroomId = vi.fn(async () => SCALE);
 
+// Queries are checked against the real schema and answered from canned rows.
+vi.mock('@classmoji/database', async () =>
+  (await import('../../__tests__/prismaSchemaStub.ts')).databaseModuleMock()
+);
+
 /** The lifted platform gate the wrapper delegates to (see the module note). */
 vi.mock('@classmoji/auth/server', () => ({
   assertProTier: (...a: unknown[]) => assertProTier(...a),
@@ -370,6 +375,20 @@ describe('quizzes resource source_material (quiz source material)', () => {
       original_emoji: null,
       instructor_comment: null,
       instructor_name: null,
+      // Every attempt, for regrade_create; none has an open request here.
+      attempts: [
+        {
+          id: 'a1',
+          attempt_number: null,
+          completed_at: new Date('2026-10-01T10:30:00Z'),
+          grade_emoji: 'sob',
+          adjusted: false,
+          original_emoji: null,
+          instructor_comment: null,
+          instructor_name: null,
+          open_regrade_request_id: null,
+        },
+      ],
     });
   });
 

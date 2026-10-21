@@ -28,14 +28,14 @@ const mocks = vi.hoisted(() => ({
   emojiScale: vi.fn(),
   auditCreate: vi.fn(),
   findOpenByQuizAttemptId: vi.fn(),
-  userFindUnique: vi.fn(),
+  userFindMany: vi.fn(),
 }));
 
 vi.mock('@classmoji/database', async () => ({
   ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
     '@classmoji/database/gitIdentity'
   )),
-  default: () => ({ user: { findUnique: (...a: unknown[]) => mocks.userFindUnique(...a) } }),
+  default: () => ({ user: { findMany: (...a: unknown[]) => mocks.userFindMany(...a) } }),
 }));
 
 vi.mock('@classmoji/services', () => ({
@@ -711,8 +711,8 @@ describe('get_quiz_attempt', () => {
       resource_id: ATTEMPT_ID,
       action: 'VIEW',
       data: {
-        tool: 'quiz.attempt.view',
-        mcp_tool: 'get_quiz_attempt',
+        // The tool's own name, like every other MCP tool's audit row.
+        tool: 'get_quiz_attempt',
         quiz_id: 'quiz-1',
         student_id: 'ada',
         include_transcript: include,
@@ -1129,10 +1129,20 @@ describe('get_quiz_attempt: staff adjustment', () => {
         instructor_comment: 'Q3 was ambiguous.',
         adjusted_by_id: 'staff-1',
         adjusted_at: new Date('2026-10-03T12:00:00Z'),
+        // The comment's own author, apart from the adjuster.
+        comment_by_id: 'staff-2',
+        comment_at: new Date('2026-10-02T12:00:00Z'),
       }),
     ]);
-    mocks.userFindUnique.mockResolvedValue({ id: 'staff-1', name: 'Prof Staff' });
-    mocks.findOpenByQuizAttemptId.mockResolvedValue({ id: 'rr-open' });
+    mocks.userFindMany.mockResolvedValue([
+      { id: 'staff-1', name: 'Prof Staff' },
+      { id: 'staff-2', name: 'TA Two' },
+    ]);
+    mocks.findOpenByQuizAttemptId.mockResolvedValue({
+      id: 'rr-open',
+      student_comment: 'Q3 had two readings.',
+      created_at: new Date('2026-10-04T09:00:00Z'),
+    });
 
     const payload = parse(await getQuizAttemptTool.handler(ARGS, CTX));
 
@@ -1141,16 +1151,50 @@ describe('get_quiz_attempt: staff adjustment', () => {
       original_emoji: '-1',
       adjusted: true,
       band: 'EXCELLENT',
-      instructor_comment: 'Q3 was ambiguous.',
       adjusted_at: '2026-10-03T12:00:00.000Z',
       adjusted_by: { id: 'staff-1', name: 'Prof Staff' },
+      instructor_comment: 'Q3 was ambiguous.',
+      comment_at: '2026-10-02T12:00:00.000Z',
+      comment_by: { id: 'staff-2', name: 'TA Two' },
       open_regrade_request_id: 'rr-open',
+      // The student's own words, not just the id.
+      open_regrade_request: {
+        id: 'rr-open',
+        student_comment: 'Q3 had two readings.',
+        created_at: '2026-10-04T09:00:00.000Z',
+      },
     });
-    expect(mocks.userFindUnique).toHaveBeenCalledWith({
-      where: { id: 'staff-1' },
+    // The scale quiz_attempt_adjust takes, best first, emoji only.
+    expect(payload.emoji_scale).toEqual(Object.keys(EMOJI_SCALE));
+    expect(mocks.userFindMany).toHaveBeenCalledWith({
+      where: { id: { in: ['staff-1', 'staff-2'] } },
       select: { id: true, name: true },
     });
     expect(mocks.findOpenByQuizAttemptId).toHaveBeenCalledWith(ATTEMPT_ID);
+  });
+
+  it('names no adjuster once the adjustment is reverted, and keeps the comment author', async () => {
+    mocks.emojiScale.mockResolvedValue(EMOJI_SCALE);
+    mocks.findByQuiz.mockResolvedValue([
+      attemptRow({
+        partial_credit_percentage: 62,
+        adjusted_emoji: null,
+        adjusted_by_id: null,
+        adjusted_at: null,
+        instructor_comment: 'See Q2.',
+        comment_by_id: 'staff-2',
+        comment_at: new Date('2026-10-02T12:00:00Z'),
+      }),
+    ]);
+    mocks.userFindMany.mockResolvedValue([{ id: 'staff-2', name: 'TA Two' }]);
+
+    const payload = parse(await getQuizAttemptTool.handler(ARGS, CTX));
+    expect(payload.attempt).toMatchObject({
+      adjusted: false,
+      adjusted_by: null,
+      adjusted_at: null,
+      comment_by: { id: 'staff-2', name: 'TA Two' },
+    });
   });
 
   it('says not adjusted, with no adjuster read, for an attempt staff never touched', async () => {
@@ -1161,6 +1205,6 @@ describe('get_quiz_attempt: staff adjustment', () => {
       adjusted_by: null,
       open_regrade_request_id: null,
     });
-    expect(mocks.userFindUnique).not.toHaveBeenCalled();
+    expect(mocks.userFindMany).not.toHaveBeenCalled();
   });
 });

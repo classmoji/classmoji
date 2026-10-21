@@ -266,6 +266,8 @@ interface RegradeRow {
   student_comment?: string | null;
   grader_comment?: string | null;
   previous_grade: string[];
+  /** A quiz request's resolution grade (the emoji set or kept); null while open and on older rows. */
+  resolved_emoji?: string | null;
   created_at: Date | string;
   updated_at?: Date | string;
   /** Who resolved it and when; null while open and on rows resolved before it was recorded. */
@@ -287,13 +289,21 @@ interface RegradeRow {
   } | null;
 }
 
-function regradeRow(r: RegradeRow, git: GitWebContext | null, scale: EmojiScale) {
+function regradeRow(
+  r: RegradeRow,
+  git: GitWebContext | null,
+  scale: EmojiScale,
+  lateness?: { lateHours: number; countedEmoji: string | null }
+) {
   const submission = r.git_repo_assignment;
   const attempt = r.quiz_attempt;
   const grade = attempt ? attemptGrade(attempt, scale) : null;
+  // A quiz request's new grade is what its resolution set or kept (the
+  // snapshot), the attempt's grade now only on a row resolved before it.
+  const quizNewEmoji = r.resolved_emoji ?? grade?.effective.emoji ?? null;
   const currentGrade = attempt
-    ? grade?.effective.emoji
-      ? [grade.effective.emoji]
+    ? quizNewEmoji
+      ? [quizNewEmoji]
       : []
     : submission
       ? gradeRefs(submission.grades).map(g => g.emoji)
@@ -310,7 +320,8 @@ function regradeRow(r: RegradeRow, git: GitWebContext | null, scale: EmojiScale)
     resolved_by_name: r.resolved_by?.name ?? null,
     resolved_at: r.resolved_at ?? null,
     previous_grade: r.previous_grade,
-    // The target's grade now, once the request is resolved; null while open.
+    // Once resolved: a quiz request's resolution grade, a submission's grades
+    // now; null while open.
     new_grade: r.status === 'IN_REVIEW' ? null : currentGrade,
     created_at: r.created_at,
     submission: submission
@@ -333,29 +344,43 @@ function regradeRow(r: RegradeRow, git: GitWebContext | null, scale: EmojiScale)
             current_emoji: grade.effective.emoji,
             adjusted: grade.adjusted,
             original_emoji: grade.adjusted ? grade.original.emoji : null,
+            // Staff queue, open requests: as the resolve modal shows them.
+            ...(lateness
+              ? { late_hours: lateness.lateHours, counted_emoji: lateness.countedEmoji }
+              : {}),
           }
         : null,
   };
 }
 
 /**
- * The classroom's regrade requests as rows: quiz requests only where the
- * classroom shows quizzes (the predicate every quiz surface uses), with the
- * scale read once for their emoji.
+ * The classroom's regrade requests as rows. `findManyForDisplay` already left
+ * quiz requests out where the classroom shows no quizzes (the predicate every
+ * quiz surface uses); the scale is read once for their emoji. `withLateness`
+ * (the staff queue) adds an open quiz request's late hours and counted emoji,
+ * as the web resolve modal shows them.
  */
-async function regradeRows(ctx: ToolContext, requests: RegradeRow[]) {
+async function regradeRows(
+  ctx: ToolContext,
+  requests: RegradeRow[],
+  { withLateness = false }: { withLateness?: boolean } = {}
+) {
   const { classroomId } = classroomCtx(ctx);
   const hasQuiz = requests.some(r => r.quiz_attempt);
-  const [quizzesVisible, scale] = hasQuiz
-    ? await Promise.all([
-        ClassmojiService.entitlement.quizzesVisibleOrThrow(classroomId),
-        loadQuizEmojiScale(classroomId),
-      ])
-    : [false, {}];
+  const scale = hasQuiz ? await loadQuizEmojiScale(classroomId) : {};
+  const lateness =
+    withLateness && hasQuiz
+      ? await ClassmojiService.regradeRequest.openQuizRequestLateness(
+          classroomId,
+          // findManyForDisplay rows: the fields RegradeRow leaves untyped are there.
+          requests as unknown as Parameters<
+            typeof ClassmojiService.regradeRequest.openQuizRequestLateness
+          >[1],
+          scale
+        )
+      : new Map<string, { lateHours: number; countedEmoji: string | null }>();
   const git = orgGit(ctx);
-  return requests
-    .filter(r => !r.quiz_attempt || quizzesVisible)
-    .map(r => regradeRow(r, git, scale));
+  return requests.map(r => regradeRow(r, git, scale, lateness.get(r.id)));
 }
 
 export const regradeQueueResource: ResourceDefinition = {
@@ -370,10 +395,11 @@ export const regradeQueueResource: ResourceDefinition = {
   auditRead: { resourceType: 'REGRADE_REQUEST' },
   handler: async (_vars, ctx) => {
     const { classroomId } = classroomCtx(ctx);
-    const requests = (await ClassmojiService.regradeRequest.findMany({
-      classroom_id: classroomId,
-    })) as RegradeRow[];
-    const rows = await regradeRows(ctx, requests);
+    const requests = (await ClassmojiService.regradeRequest.findManyForDisplay(
+      classroomId,
+      {}
+    )) as RegradeRow[];
+    const rows = await regradeRows(ctx, requests, { withLateness: true });
     return { count: rows.length, requests: rows };
   },
 };
@@ -389,8 +415,7 @@ export const regradeMineResource: ResourceDefinition = {
   roles: STUDENT_ONLY,
   handler: async (_vars, ctx) => {
     const { classroomId } = classroomCtx(ctx);
-    const requests = (await ClassmojiService.regradeRequest.findMany({
-      classroom_id: classroomId,
+    const requests = (await ClassmojiService.regradeRequest.findManyForDisplay(classroomId, {
       student_id: ctx.viewer.userId,
     })) as RegradeRow[];
     const rows = await regradeRows(ctx, requests);

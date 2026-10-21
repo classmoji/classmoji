@@ -106,6 +106,7 @@ describe('regrade_create idempotency (F1)', () => {
     const payload = parse(result);
 
     expect(payload.success).toBe(true);
+    expect(payload.created).toBe(false);
     expect(payload.regrade_request.id).toBe('rr-existing');
     expect(payload.regrade_request.status).toBe('IN_REVIEW');
     // The whole point of F1: no second enqueue (and thus no duplicate email).
@@ -134,6 +135,17 @@ describe('regrade_create idempotency (F1)', () => {
       })
     );
     expect(payload.regrade_request.id).toBe('rr-new');
+    // Both branches say whether a request was opened, as the description says.
+    expect(payload.created).toBe(true);
+  });
+
+  it('is a destructive, closed-world write: it opens a permanent record', () => {
+    expect(toolAnnotations(regradeCreateTool as never)).toEqual({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    });
   });
 });
 
@@ -520,6 +532,30 @@ describe('regrade_resolve on a quiz request', () => {
     expect(mocks.trigger).not.toHaveBeenCalled();
   });
 
+  it('reads a retry of a settled request as already resolved, before checking its arguments', async () => {
+    mocks.findMany.mockResolvedValue(quizRequest({ status: 'APPROVED' }));
+    mocks.resolveQuiz.mockResolvedValue(resolved('APPROVED', true));
+    // No reply and no emoji: an open request would be invalid_params.
+    const payload = parse(
+      await regradeResolveTool.handler({ ...RESOLVE, resolution: 'APPROVED' }, STAFF_CTX)
+    );
+    expect(payload.already_resolved).toBe(true);
+    expect(mocks.trigger).not.toHaveBeenCalled();
+  });
+
+  it('refuses where the classroom shows no quizzes, as the service does', async () => {
+    mocks.resolveQuiz.mockRejectedValue(
+      new QuizGradeError('forbidden', 'Quizzes are not available in this classroom', 403)
+    );
+    await expect(
+      regradeResolveTool.handler({ ...RESOLVE, resolution: 'DENIED', comment: 'no' }, STAFF_CTX)
+    ).rejects.toMatchObject({
+      kind: 'forbidden',
+      message: 'Quizzes are not available in this classroom',
+    });
+    expect(mocks.trigger).not.toHaveBeenCalled();
+  });
+
   it('sends no second email for a request already resolved', async () => {
     mocks.resolveQuiz.mockResolvedValue(resolved('DENIED', true));
     const payload = parse(
@@ -575,9 +611,40 @@ describe('regrade_resolve on a submission request', () => {
       expect.objectContaining({
         data: { status: 'DENIED', grader_comment: 'See the rubric.' },
         resolved_by_id: 'ta-1',
+        // The audit row is resolveRepo's, written in the task under this tool's name.
+        tool: 'regrade_resolve',
+        impersonated_by: null,
       })
     );
     expect(mocks.resolveQuiz).not.toHaveBeenCalled();
+    // No second audit row here: the task's resolveRepo writes it.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('reports a settled submission request as already resolved whatever the arguments', async () => {
+    mocks.findMany.mockResolvedValue([
+      {
+        id: 'rr-1',
+        classroom_id: 'class-1',
+        status: 'DENIED',
+        quiz_attempt_id: null,
+        student: { email: 's@example.com' },
+        git_repo_assignment: { assignment: { title: 'Lab 1' } },
+      },
+    ]);
+    const payload = parse(
+      await regradeResolveTool.handler(
+        {
+          classroom: 'org/winter-2025',
+          regrade_request_id: 'rr-1',
+          resolution: 'APPROVED',
+          emoji: 'rocket',
+        },
+        STAFF_CTX
+      )
+    );
+    expect(payload.already_resolved).toBe(true);
+    expect(mocks.trigger).not.toHaveBeenCalled();
   });
 });
 

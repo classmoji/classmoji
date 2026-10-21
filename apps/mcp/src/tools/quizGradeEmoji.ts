@@ -40,7 +40,8 @@ export const attemptGrade = (attempt: AdjustableQuizScore, scale: EmojiScale): Q
 /** The adjustment columns a student's own quiz grade reads. */
 export interface StudentAdjustedAttempt extends AdjustableQuizScore {
   instructor_comment?: string | null;
-  adjusted_by?: { name?: string | null } | null;
+  /** Who wrote the comment (`comment_by`), not who adjusted the score. */
+  comment_by?: { name?: string | null } | null;
 }
 
 /**
@@ -69,6 +70,6 @@ export const studentQuizGradeView = (
     adjusted: grade.adjusted,
     original_emoji: grade.adjusted ? grade.original.emoji : null,
     instructor_comment: comment,
-    instructor_name: comment ? (attempt.adjusted_by?.name ?? null) : null,
+    instructor_name: comment ? (attempt.comment_by?.name ?? null) : null,
   };
 };

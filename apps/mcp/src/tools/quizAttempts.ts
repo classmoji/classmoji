@@ -64,6 +64,8 @@ interface AttemptRow extends QuizAttemptSource {
   instructor_comment?: string | null;
   adjusted_by_id?: string | null;
   adjusted_at?: Date | string | null;
+  comment_by_id?: string | null;
+  comment_at?: Date | string | null;
 }
 
 interface Member {
@@ -98,8 +100,8 @@ export const listQuizAttemptsTool: ToolDefinition<ListQuizAttemptsArgs> = {
     'roster, not-started ones included, each with status (NOT_STARTED, IN_PROGRESS, ' +
     'COMPLETED), every attempt (id, started_at, completed_at, last_activity while open, ' +
     'grade_emoji, first_attempt_emoji, focus_percentage, late_hours, is_counting; adjusted, ' +
-    'original_emoji (the AI grade), instructor_comment, adjusted_at, adjusted_by from ' +
-    'quiz_attempt_adjust), the attempt that counts, current_emoji (its grade) and ' +
+    'original_emoji (the AI grade), adjusted_at, adjusted_by; instructor_comment, ' +
+    'comment_at, comment_by; both from quiz_attempt_adjust), the attempt that counts, current_emoji (its grade) and ' +
     'counted_emoji (after the late penalty), and counts_as_zero (no completed attempt past ' +
     'the due date). Grades are emoji ' +
     "on the classroom's own scale (score-N badges on the numeric scale), never numbers. " +
@@ -168,9 +170,14 @@ export const listQuizAttemptsTool: ToolDefinition<ListQuizAttemptsArgs> = {
     // member's from the attempt join. Both name the classroom's git provider.
     const members = new Map([...staff, ...roster].map(member => [String(member.id), member]));
     const rowsById = new Map(attempts.map(attempt => [attempt.id, attempt]));
-    // Who on staff last edited an adjustment: id and name only.
+    // Who set an adjustment and who wrote a comment: id and name only.
     const adjusterIds = [
-      ...new Set(attempts.flatMap(a => (a.adjusted_by_id ? [String(a.adjusted_by_id)] : []))),
+      ...new Set(
+        attempts.flatMap(a => [
+          ...(a.adjusted_emoji && a.adjusted_by_id ? [String(a.adjusted_by_id)] : []),
+          ...(a.instructor_comment && a.comment_by_id ? [String(a.comment_by_id)] : []),
+        ])
+      ),
     ];
     const adjusters = new Map(
       adjusterIds.length === 0
@@ -186,14 +193,22 @@ export const listQuizAttemptsTool: ToolDefinition<ListQuizAttemptsArgs> = {
     /** The staff adjustment on an attempt (quiz_attempt_adjust), emoji only. */
     const adjustmentView = (attempt: QuizResultAttempt) => {
       const row = rowsById.get(attempt.id);
-      const adjusterId = row?.adjusted_by_id ? String(row.adjusted_by_id) : null;
+      const adjusterId =
+        row?.adjusted_emoji && row.adjusted_by_id ? String(row.adjusted_by_id) : null;
+      const commenterId =
+        row?.instructor_comment && row.comment_by_id ? String(row.comment_by_id) : null;
       return {
         adjusted: attempt.grade.adjusted,
         original_emoji: attempt.grade.original.emoji,
-        instructor_comment: row?.instructor_comment ?? null,
-        adjusted_at: iso(row?.adjusted_at),
+        adjusted_at: adjusterId ? iso(row?.adjusted_at) : null,
         adjusted_by: adjusterId
           ? { id: adjusterId, name: adjusters.get(adjusterId)?.name ?? null }
+          : null,
+        // The comment's own author and time, apart from the adjustment's.
+        instructor_comment: row?.instructor_comment ?? null,
+        comment_at: commenterId ? iso(row?.comment_at) : null,
+        comment_by: commenterId
+          ? { id: commenterId, name: adjusters.get(commenterId)?.name ?? null }
           : null,
       };
     };
@@ -256,9 +271,7 @@ export const listQuizAttemptsTool: ToolDefinition<ListQuizAttemptsArgs> = {
       resource_id: quiz.id,
       action: 'VIEW',
       data: {
-        tool: 'quiz.attempts.view',
-        via: 'mcp',
-        mcp_tool: 'list_quiz_attempts',
+        tool: 'list_quiz_attempts',
         quiz_id: quiz.id,
         students: students.length,
       },

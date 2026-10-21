@@ -34,10 +34,10 @@
  *   Quiz scores (`quiz_grades`) show as soon as an attempt is scored, as on the
  *   web: one row per quiz item the grade engine counts for this student
  *   (quizGradeItems.loadQuizGradeItems, the loader every total uses), with the
- *   RAW percentage of the attempt that counts and that attempt's late hours —
- *   students see the raw score and the lateness, never the penalised value,
- *   as for repositories. A quiz whose deadline (plus the hours bought on it)
- *   passed with no attempt is a counted 0 (`counts_as_zero`). Gated on
+ *   grade of the attempt that counts as the classroom's emoji (before the late
+ *   penalty; no number, E6) and that attempt's late hours, as for
+ *   repositories. A quiz whose deadline (plus the hours bought on it) passed
+ *   with no attempt is a counted 0 (`counts_as_zero`). Gated on
  *   entitlement.quizzesVisibleOrThrow, the predicate the totals use: where
  *   quizzes are hidden the key is absent, and a failed lookup fails the read
  *   rather than dropping the quizzes.
@@ -349,7 +349,7 @@ async function myQuizGrades(ctx: ToolContext) {
       : (
           await getPrisma().quizAttempt.findMany({
             where: { id: { in: countingIds }, user_id: studentId },
-            select: { id: true, instructor_comment: true, adjusted_by: { select: { name: true } } },
+            select: { id: true, instructor_comment: true, comment_by: { select: { name: true } } },
           })
         ).map(row => [row.id, row])
   );
@@ -363,7 +363,7 @@ async function myQuizGrades(ctx: ToolContext) {
         ? {
             ...counting,
             instructor_comment: note?.instructor_comment ?? null,
-            adjusted_by: note?.adjusted_by ?? null,
+            comment_by: note?.comment_by ?? null,
           }
         : null,
       scale

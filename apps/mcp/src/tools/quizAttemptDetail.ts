@@ -20,8 +20,11 @@
  * number: the attempt's grade and first-try grade, and each question's stored
  * emoji. No credit, percentage or evaluation score leaves. A staff adjustment
  * (quiz_attempt_adjust) is the attempt's grade (its own emoji), shown with the
- * AI's original emoji, the comment to the student, who last edited it and
- * when, and the open regrade request on the attempt, if any.
+ * AI's original emoji and who set it when; the comment to the student with
+ * who wrote it when (its own authorship); the open regrade request on the
+ * attempt with the student's comment, if any; and the classroom's scale
+ * (`emoji_scale`, its emoji best first, no numbers), the emoji
+ * quiz_attempt_adjust and regrade_resolve take.
  *
  * The response is built field by field: the attempt row carries the agent
  * configuration, the session token and the joined user's contact fields, none
@@ -98,6 +101,8 @@ interface AttemptRow {
   instructor_comment?: string | null;
   adjusted_by_id?: string | null;
   adjusted_at?: Date | string | null;
+  comment_by_id?: string | null;
+  comment_at?: Date | string | null;
   user?: { id: string; login?: string | null; name?: string | null } | null;
 }
 
@@ -647,8 +652,10 @@ export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
     'One quiz attempt: the student, when it started and completed, grade_emoji and ' +
     "first_attempt_emoji (emoji on the classroom's own scale, score-N badges on the numeric " +
     'scale; never numbers), band, the staff adjustment (adjusted, original_emoji, ' +
-    'instructor_comment, adjusted_at, adjusted_by; change it with quiz_attempt_adjust), ' +
-    'open_regrade_request_id, focus_percentage, the result of each question (tries, ' +
+    'adjusted_at, adjusted_by) and the comment to the student (instructor_comment, ' +
+    'comment_at, comment_by); change either with quiz_attempt_adjust, picking from ' +
+    'emoji_scale (the classroom scale, best first). open_regrade_request (id, ' +
+    'student_comment, created_at), focus_percentage, the result of each question (tries, ' +
     'eventually_correct, first_attempt_correct, emoji, brief_feedback), and the evaluation ' +
     '(band, closing feedback). include_transcript: true adds the conversation as the staff ' +
     'review drawer shows it: questions, answers, feedback with each expected_answer (not on ' +
@@ -686,8 +693,12 @@ export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
     const includeTranscript = args.include_transcript === true;
 
     // Whether its user is on the STUDENT roster or on staff now.
-    const adjusterId = attempt.adjusted_by_id ? String(attempt.adjusted_by_id) : null;
-    const [[student], [staff], scale, adjuster, openRequest] = await Promise.all([
+    const adjusterId =
+      attempt.adjusted_emoji && attempt.adjusted_by_id ? String(attempt.adjusted_by_id) : null;
+    const commenterId =
+      attempt.instructor_comment && attempt.comment_by_id ? String(attempt.comment_by_id) : null;
+    const staffNames = [adjusterId, commenterId].filter((id): id is string => id !== null);
+    const [[student], [staff], scale, people, openRequest] = await Promise.all([
       ClassmojiService.classroomMembership.findUsersByRole(classroomId, 'STUDENT', {
         user_id: userId,
       }) as Promise<Member[]>,
@@ -695,15 +706,16 @@ export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
         user_id: userId,
       }) as Promise<Member[]>,
       loadQuizEmojiScale(classroomId),
-      // Who on staff last edited the adjustment: id and name only.
-      adjusterId
-        ? getPrisma().user.findUnique({
-            where: { id: adjusterId },
+      // Who set the adjustment and who wrote the comment: id and name only.
+      staffNames.length > 0
+        ? getPrisma().user.findMany({
+            where: { id: { in: staffNames } },
             select: { id: true, name: true },
           })
-        : null,
+        : [],
       ClassmojiService.regradeRequest.findOpenByQuizAttemptId(attempt.id),
     ]);
+    const nameOf = (id: string) => people.find(p => p.id === id)?.name ?? null;
     const grade = attemptGrade(attempt, scale);
 
     const total = Number(attempt.total_duration_ms ?? 0);
@@ -766,9 +778,7 @@ export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
         resource_id: attempt.id,
         action: 'VIEW',
         data: {
-          tool: 'quiz.attempt.view',
-          via: 'mcp',
-          mcp_tool: 'get_quiz_attempt',
+          tool: 'get_quiz_attempt',
           quiz_id: quiz.id,
           student_id: userId,
           include_transcript: includeTranscript,
@@ -798,15 +808,28 @@ export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
         band: completed ? (grade.effective.band?.evaluation ?? null) : null,
         adjusted: grade.adjusted,
         original_emoji: completed ? grade.original.emoji : null,
+        adjusted_at: adjusterId ? iso(attempt.adjusted_at) : null,
+        adjusted_by: adjusterId ? { id: adjusterId, name: nameOf(adjusterId) } : null,
+        // The comment's own author and time, apart from the adjustment's.
         instructor_comment: attempt.instructor_comment ?? null,
-        adjusted_at: iso(attempt.adjusted_at),
-        adjusted_by: adjusterId ? { id: adjusterId, name: adjuster?.name ?? null } : null,
+        comment_at: commenterId ? iso(attempt.comment_at) : null,
+        comment_by: commenterId ? { id: commenterId, name: nameOf(commenterId) } : null,
         open_regrade_request_id: openRequest?.id ?? null,
+        open_regrade_request: openRequest
+          ? {
+              id: openRequest.id,
+              student_comment: openRequest.student_comment ?? null,
+              created_at: iso(openRequest.created_at),
+            }
+          : null,
         focus_percentage:
           Number.isFinite(total) && total > 0
             ? Math.round((Math.max(total - unfocused, 0) / total) * 100)
             : null,
       },
+      // The classroom's scale to pick from, best first (the scale is read in
+      // grade order), as the drawer's picker offers it: emoji only (E6).
+      emoji_scale: Object.keys(scale),
       // Results are shown for a completed attempt only, as on the review page.
       question_results: completed ? questionResults(attempt, quiz.question_count, scale) : [],
       evaluation,

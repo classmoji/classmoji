@@ -293,7 +293,8 @@ describe('my_grades quiz rows', () => {
           {
             id: 'ontime-80',
             instructor_comment: 'Question 3 was ambiguous.',
-            adjusted_by: { name: 'Prof. Hopper' },
+            // The comment's own author (comment_by), not the score's adjuster.
+            comment_by: { name: 'Prof. Hopper' },
           },
         ],
       },
@@ -800,6 +801,14 @@ describe('list_quizzes for a student: extension fields', () => {
       original_emoji: null,
       instructor_comment: null,
       instructor_name: null,
+      attempts: [
+        expect.objectContaining({
+          id: 'late-90',
+          grade_emoji: '+1',
+          open_regrade_request_id: null,
+        }),
+        expect.objectContaining({ id: 'ontime-80', grade_emoji: 'eyes' }),
+      ],
     });
     // No assignment: the service's summary, without its numbers.
     expect(quizzes[2].my_attempts).toEqual({
@@ -810,6 +819,67 @@ describe('list_quizzes for a student: extension fields', () => {
       original_emoji: null,
       instructor_comment: null,
       instructor_name: null,
+      attempts: [],
+    });
+  });
+
+  it('lists every attempt with its grade, comment and open request, so regrade_create can target any', async () => {
+    arrangeList();
+    mocks.getQuizzesForStudent.mockResolvedValue([
+      {
+        ...(await mocks.getQuizzesForStudent())[0],
+        attempts: [
+          { ...ATTEMPTS[0], attempt_number: 2 },
+          {
+            ...ATTEMPTS[1],
+            attempt_number: 1,
+            adjusted_emoji: 'rocket',
+            instructor_comment: 'Q3 had two readings.',
+            comment_by: { name: 'Prof. Hopper' },
+          },
+        ],
+      },
+    ]);
+    setPrismaRows({
+      assignment: { findMany: [{ id: QUIZ_A, tokens_per_hour: null }] },
+      regradeRequest: { findMany: [{ id: 'rr-open', quiz_attempt_id: 'late-90' }] },
+    });
+
+    const { quizzes } = (await quizzesResource.handler(VARS, studentCtx(settings), URI)) as {
+      quizzes: Row[];
+    };
+
+    expect(quizzes[0].my_attempts?.attempts).toEqual([
+      {
+        id: 'late-90',
+        attempt_number: 2,
+        completed_at: at(5),
+        grade_emoji: '+1',
+        adjusted: false,
+        original_emoji: null,
+        instructor_comment: null,
+        instructor_name: null,
+        open_regrade_request_id: 'rr-open',
+      },
+      {
+        id: 'ontime-80',
+        attempt_number: 1,
+        completed_at: at(-1),
+        grade_emoji: 'rocket',
+        adjusted: true,
+        original_emoji: 'eyes',
+        instructor_comment: 'Q3 had two readings.',
+        instructor_name: 'Prof. Hopper',
+        open_regrade_request_id: null,
+      },
+    ]);
+    // The open requests read: the caller's own, open, on their own attempts here.
+    const [read] = prismaCallsFor('regradeRequest', 'findMany');
+    expect((read.args as { where: unknown }).where).toEqual({
+      classroom_id: 'class-1',
+      student_id: 'stu-1',
+      status: 'IN_REVIEW',
+      quiz_attempt_id: { in: ['late-90', 'ontime-80'] },
     });
   });
 

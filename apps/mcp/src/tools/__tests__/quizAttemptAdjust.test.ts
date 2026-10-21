@@ -148,7 +148,12 @@ describe('quiz_attempt_adjust: tier and hints', () => {
 
   it('keeps its description under 1,500 bytes and points at the scale', () => {
     expect(Buffer.byteLength(quizAttemptAdjustTool.description, 'utf8')).toBeLessThan(1500);
-    expect(quizAttemptAdjustTool.description).toContain('emoji_scale');
+    // The scale comes from get_quiz_attempt, which the teaching team (assistants
+    // included) may read and which returns it (quizAttemptDetail.test.ts).
+    expect(quizAttemptAdjustTool.description).toContain(
+      'get_quiz_attempt returns it as emoji_scale'
+    );
+    expect(quizAttemptAdjustTool.description).not.toContain('grading_report');
   });
 });
 

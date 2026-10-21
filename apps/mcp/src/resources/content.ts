@@ -404,7 +404,10 @@ interface QuizRow extends QuizPlacementSource {
   attemptsSummary?: unknown;
   attemptCount?: number;
   /** The student list's own attempts (student branch only). */
-  attempts?: Array<ScorableQuizAttempt & StudentAdjustedAttempt>;
+  attempts?: Array<
+    ScorableQuizAttempt &
+      StudentAdjustedAttempt & { attempt_number?: number | null; attemptNumber?: number }
+  >;
 }
 
 /**
@@ -438,9 +441,13 @@ interface QuizRow extends QuizPlacementSource {
  * unpenalised as the classroom's emoji (an adjustment's own emoji, with the
  * AI's original and the instructor's comment: `studentQuizGradeView`), never
  * a number (E6). A quiz in no module has no assignment: no price, no hours,
- * its own due date, and the service's counting attempt.
+ * its own due date, and the service's counting attempt. `my_attempts.attempts`
+ * lists every attempt of the caller's (as the web quiz list does), each with
+ * its grade, the instructor's comment and the id of its open regrade request,
+ * so regrade_create can target any of them.
  *
- * Two narrow reads for the whole list (prices and hours), never one per quiz.
+ * Three narrow reads for the whole list (prices, hours, open requests), never
+ * one per quiz.
  */
 async function studentQuizExtensions(ctx: ToolContext, quizzes: QuizRow[], scale: EmojiScale) {
   const { classroomId } = classroomCtx(ctx);
@@ -448,6 +455,22 @@ async function studentQuizExtensions(ctx: ToolContext, quizzes: QuizRow[], scale
   const classroomPrice = Number(settings.default_tokens_per_hour ?? 0) || 0;
   const penalty = Number(settings.late_penalty_points_per_hour ?? 0) || 0;
   const assignmentIds = quizzes.flatMap(q => (q.assignment?.id ? [q.assignment.id] : []));
+
+  // The caller's own open requests on their own attempts in this classroom.
+  const attemptIds = quizzes.flatMap(q => (q.attempts ?? []).map(attempt => attempt.id));
+  const openRequests =
+    attemptIds.length === 0
+      ? []
+      : await getPrisma().regradeRequest.findMany({
+          where: {
+            classroom_id: classroomId,
+            student_id: ctx.viewer.userId,
+            status: 'IN_REVIEW',
+            quiz_attempt_id: { in: attemptIds },
+          },
+          select: { id: true, quiz_attempt_id: true },
+        });
+  const openRequestOf = new Map(openRequests.map(r => [r.quiz_attempt_id, r.id]));
 
   const [prices, hours] =
     assignmentIds.length === 0
@@ -518,6 +541,21 @@ async function studentQuizExtensions(ctx: ToolContext, quizzes: QuizRow[], scale
         original_emoji: grade.original_emoji,
         instructor_comment: grade.instructor_comment,
         instructor_name: grade.instructor_name,
+        // Every attempt, newest first, as regrade_create targets.
+        attempts: attempts.map(attempt => {
+          const own = studentQuizGradeView(attempt, scale);
+          return {
+            id: attempt.id,
+            attempt_number: attempt.attempt_number ?? attempt.attemptNumber ?? null,
+            completed_at: attempt.completed_at ?? null,
+            grade_emoji: own.emoji,
+            adjusted: own.adjusted,
+            original_emoji: own.original_emoji,
+            instructor_comment: own.instructor_comment,
+            instructor_name: own.instructor_name,
+            open_regrade_request_id: openRequestOf.get(attempt.id) ?? null,
+          };
+        }),
       };
     },
   };
@@ -533,7 +571,9 @@ export const QUIZZES_DESCRIPTION =
   'bought, effective_due_date (due date plus those hours) and my_attempts: lateHours (hours ' +
   'late of the attempt that counts), current_emoji (its grade before the late penalty), ' +
   'adjusted with original_emoji when staff changed the grade, instructor_comment and ' +
-  "instructor_name. Grades are emoji on the classroom's scale (score-N badges on the " +
+  'instructor_name, and attempts: every attempt (id, attempt_number, completed_at, ' +
+  'grade_emoji, adjusted, original_emoji, instructor_comment, instructor_name, ' +
+  "open_regrade_request_id), the ids regrade_create takes. Grades are emoji on the classroom's scale (score-N badges on the " +
   'numeric scale), never numbers; staff get avg_emoji. Requires a Pro subscription and ' +
   'quizzes_enabled.';
 

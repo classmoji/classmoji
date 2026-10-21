@@ -532,7 +532,8 @@ describe('list_quiz_attempts', () => {
       resource_type: 'QUIZ_DETAILS',
       resource_id: 'quiz-1',
       action: 'VIEW',
-      data: { tool: 'quiz.attempts.view', mcp_tool: 'list_quiz_attempts', students: 3 },
+      // The tool's own name, like every other MCP tool's audit row.
+      data: { tool: 'list_quiz_attempts', students: 3 },
     });
   });
 });

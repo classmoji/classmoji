@@ -246,7 +246,8 @@ export const listRegradeRequestsTool = mirrorResourceTool({
     'comment, grader_comment (the staff reply) with resolved_by_name and resolved_at, ' +
     'previous_grade and new_grade (emoji, new once ' +
     'resolved), and the submission or the quiz attempt (quiz_id, quiz_name, attempt_id, ' +
-    'attempt_number, current_emoji, adjusted, original_emoji). Grades are emoji, never ' +
+    'attempt_number, current_emoji, adjusted, original_emoji; an open one also late_hours ' +
+    'and counted_emoji, its grade after the late penalty). Grades are emoji, never ' +
     'numbers; quiz requests only where the classroom shows quizzes. Teaching team only. ' +
     'Resolve them with regrade_resolve.',
 });

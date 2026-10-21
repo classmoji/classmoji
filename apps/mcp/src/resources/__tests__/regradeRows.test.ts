@@ -7,7 +7,10 @@
  * attempt shows its own emoji and the AI's original; the staff reply
  * (grader_comment) reaches the student who asked; new_grade is null while a
  * request is open; quiz requests are left out where the classroom shows no
- * quizzes; the student's list is read for the caller only.
+ * quizzes (`regradeRequest.findManyForDisplay`, emulated here over the same
+ * predicate); the student's list is read for the caller only; a resolved quiz
+ * request's new_grade is its own snapshot (`resolved_emoji`); the staff queue
+ * carries an open quiz request's late_hours and counted_emoji.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -17,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   findMany: vi.fn(),
   quizzesVisibleOrThrow: vi.fn(),
   findScaleByClassroomId: vi.fn(),
+  lateness: vi.fn(),
 }));
 
 vi.mock('@classmoji/database', async () =>
@@ -25,7 +29,20 @@ vi.mock('@classmoji/database', async () =>
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
-    regradeRequest: { findMany: (...a: unknown[]) => mocks.findMany(...a) },
+    regradeRequest: {
+      // The service's rule: scoped to the classroom, quiz rows only where the
+      // classroom shows quizzes (asked only when there is one).
+      findManyForDisplay: async (classroomId: string, query: Record<string, unknown>) => {
+        const rows = (await mocks.findMany({ ...query, classroom_id: classroomId })) as Array<{
+          quiz_attempt: unknown;
+        }>;
+        if (!rows.some(r => r.quiz_attempt)) return rows;
+        return (await mocks.quizzesVisibleOrThrow(classroomId))
+          ? rows
+          : rows.filter(r => !r.quiz_attempt);
+      },
+      openQuizRequestLateness: (...a: unknown[]) => mocks.lateness(...a),
+    },
     entitlement: { quizzesVisibleOrThrow: (...a: unknown[]) => mocks.quizzesVisibleOrThrow(...a) },
     emojiMapping: {
       findScaleByClassroomId: (...a: unknown[]) => mocks.findScaleByClassroomId(...a),
@@ -111,6 +128,7 @@ beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
   mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
   mocks.findScaleByClassroomId.mockResolvedValue(SCALE);
+  mocks.lateness.mockResolvedValue(new Map());
 });
 
 describe('list_regrade_requests with quiz requests', () => {
@@ -174,10 +192,28 @@ describe('list_regrade_requests with quiz requests', () => {
     expect(mocks.findScaleByClassroomId).not.toHaveBeenCalled();
   });
 
-  it('gives an open quiz request no new grade yet', async () => {
+  it('gives an open quiz request no new grade yet, and its lateness as the modal shows it', async () => {
     mocks.findMany.mockResolvedValue([quizRequest({ status: 'IN_REVIEW', grader_comment: null })]);
+    mocks.lateness.mockResolvedValue(
+      new Map([['rr-quiz', { lateHours: 3, countedEmoji: 'eyes' }]])
+    );
     const rows = (await regradeQueueResource.handler(VARS, ctx('TEACHER'), URI)) as Rows;
-    expect(rows.requests[0]).toMatchObject({ status: 'IN_REVIEW', new_grade: null });
+    expect(rows.requests[0]).toMatchObject({
+      status: 'IN_REVIEW',
+      new_grade: null,
+      quiz: { late_hours: 3, counted_emoji: 'eyes' },
+    });
+    expect(mocks.lateness).toHaveBeenCalledWith('class-1', expect.any(Array), SCALE);
+  });
+
+  it("states a resolved quiz request's new grade from its own snapshot", async () => {
+    // Resolved to 👀; adjusted again directly afterwards to 🚀.
+    mocks.findMany.mockResolvedValue([quizRequest({ resolved_emoji: 'eyes' })]);
+    const rows = (await regradeQueueResource.handler(VARS, ctx('TEACHER'), URI)) as Rows;
+    expect(rows.requests[0]).toMatchObject({
+      new_grade: ['eyes'],
+      quiz: { current_emoji: 'rocket' },
+    });
   });
 });
 
@@ -188,6 +224,8 @@ describe('my_regrade_requests with quiz requests', () => {
     const rows = (await regradeMineResource.handler(VARS, ctx('STUDENT'), URI)) as Rows;
 
     expect(mocks.findMany).toHaveBeenCalledWith({ classroom_id: 'class-1', student_id: 'stu-1' });
+    // The student's list carries no staff lateness read.
+    expect(mocks.lateness).not.toHaveBeenCalled();
     expect(rows.requests[0]).toMatchObject({
       target: 'quiz',
       grader_comment: 'Fair point, adjusted.',
@@ -204,9 +242,17 @@ describe('my_regrade_requests with quiz requests', () => {
       quizRequest({
         resolved_by: { id: 'ta-9', name: 'Grace Hopper' },
         resolved_at: new Date('2026-10-21T09:00:00Z'),
-        quiz_attempt: { ...quizRequest().quiz_attempt, adjusted_by: { id: 'x', name: 'Someone Else' } },
+        quiz_attempt: {
+          ...quizRequest().quiz_attempt,
+          adjusted_by: { id: 'x', name: 'Someone Else' },
+        },
       }),
-      { ...repoRequest, status: 'DENIED', resolved_by: { id: 'ta-8', name: 'Alan Turing' }, resolved_at: new Date('2026-10-21T08:00:00Z') },
+      {
+        ...repoRequest,
+        status: 'DENIED',
+        resolved_by: { id: 'ta-8', name: 'Alan Turing' },
+        resolved_at: new Date('2026-10-21T08:00:00Z'),
+      },
     ]);
     const rows = (await regradeMineResource.handler(VARS, ctx('STUDENT'), URI)) as Rows;
     expect(rows.requests[0]).toMatchObject({

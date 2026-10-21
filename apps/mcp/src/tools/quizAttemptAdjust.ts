@@ -71,8 +71,13 @@ export function adjustmentPayload(result: QuizAdjustResult) {
     adjusted_emoji: grade.adjusted_emoji,
     // The band's label only; its numeric_score stays internal (E6).
     band: grade.effective.band?.evaluation ?? null,
-    instructor_comment: attempt.instructor_comment,
+    // Who set the score and when (cleared on revert) ...
+    adjusted_by_id: attempt.adjusted_by_id,
     adjusted_at: attempt.adjusted_at ? new Date(attempt.adjusted_at).toISOString() : null,
+    // ... and who wrote the comment and when, its own authorship (kept on revert).
+    instructor_comment: attempt.instructor_comment,
+    comment_by_id: attempt.comment_by_id,
+    comment_at: attempt.comment_at ? new Date(attempt.comment_at).toISOString() : null,
   };
 }
 
@@ -91,7 +96,7 @@ export const quizAttemptAdjustTool: ToolDefinition<QuizAttemptAdjustArgs> = {
   title: 'Adjust a quiz attempt grade',
   description:
     "Sets the grade of one student's completed quiz attempt to an emoji on the classroom's " +
-    'own scale (grading_report and list_submissions return emoji_scale; score-N badges on the ' +
+    'own scale (get_quiz_attempt returns it as emoji_scale, best first; score-N badges on the ' +
     'numeric scale), ' +
     'and/or the comment the student reads with it (empty string clears it). revert: true ' +
     "clears the adjustment so the AI's grade counts again (the comment stays; emoji not " +

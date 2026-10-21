@@ -41,8 +41,12 @@
  * grader_comment), then triggers `quiz_regrade_resolved`, which emails the
  * student from the database. Both services write their own audit rows
  * (`data.tool` = the tool name, impersonation included), so the quiz paths
- * write none here. Asking is refused where the classroom shows no quizzes;
- * resolving is not, so an open request is never stranded.
+ * write none here; a repo resolution is audited by `regradeRequest.resolveRepo`
+ * in the task, which gets this tool's name beside its data. Asking and
+ * resolving are both refused where the classroom shows no quizzes (the
+ * service's refusal, the one every quiz tool gives); such a classroom lists no
+ * quiz requests either. A request already resolved is reported as such
+ * before its arguments are checked, so a retry reads as already_resolved.
  */
 
 import getPrisma from '@classmoji/database';
@@ -173,16 +177,19 @@ async function createQuizRegrade(attemptId: string, comment: string, ctx: ToolCo
 
 export const regradeCreateTool: ToolDefinition<RegradeCreateArgs> = {
   name: 'regrade_create',
-  annotations: { destructive: false },
+  // Creates a permanent record about the student (a request staff see and
+  // answer), so clients confirm before calling it.
+  annotations: { destructive: true, idempotent: false, openWorld: false },
   title: 'Request regrade/resubmit',
   description:
     'Submits a regrade (resubmit) request on YOUR OWN work: a graded submission ' +
     '(git_repo_assignment_id) or a completed quiz attempt (quiz_attempt_id, e.g. ' +
     'counting_attempt_id from my_grades); give exactly one. Students only. Snapshots your ' +
     'current grade (emoji) as previous_grade. A submission notifies its assigned graders, a ' +
-    "quiz the classroom's owners and teachers (in-app and by email). If the target already " +
-    'has an open request, that one is returned (created: false). You may ask again after a ' +
-    'request is resolved. Follow it with my_regrade_requests.',
+    "quiz the classroom's owners and teachers (in-app and by email). Returns created: true " +
+    'for a new request; if the target already has an open request, that one is returned ' +
+    '(created: false). You may ask again after a request is resolved. Quiz attempt ids: ' +
+    'list_quizzes my_attempts.attempts. Follow it with my_regrade_requests.',
   scope: 'write',
   roles: ['STUDENT'],
   inputSchema: {
@@ -231,6 +238,8 @@ export const regradeCreateTool: ToolDefinition<RegradeCreateArgs> = {
     if (existing && existing.student_id === ctx.viewer.userId) {
       return ok({
         success: true,
+        created: false,
+        note: 'This submission already has an open regrade request; it was returned unchanged.',
         regrade_request: {
           id: existing.id,
           status: existing.status,
@@ -286,6 +295,7 @@ export const regradeCreateTool: ToolDefinition<RegradeCreateArgs> = {
 
     return ok({
       success: true,
+      created: true,
       regrade_request: {
         id: request.id,
         status: request.status,
@@ -310,18 +320,27 @@ async function resolveQuizRegrade(
   ctx: ToolContext
 ) {
   const { classroomId } = requireClassroomCtx(ctx);
+  // A request already resolved is reported before the arguments are checked:
+  // the service returns it as it is (already_resolved), so a retry with the
+  // reply or emoji left out reads as the resolution it already has.
+  const settled = request.status !== 'IN_REVIEW';
   const comment = args.comment?.trim() ?? '';
-  if (!comment) {
-    throw new ToolError('invalid_params', 'A quiz regrade needs a reply to the student (comment)');
-  }
-  if (args.resolution === 'APPROVED' && args.emoji === undefined) {
-    throw new ToolError(
-      'invalid_params',
-      "APPROVED on a quiz request needs emoji: the new grade, on the classroom's scale"
-    );
-  }
-  if (args.resolution === 'DENIED' && args.emoji !== undefined) {
-    throw new ToolError('invalid_params', 'DENIED keeps the grade: give no emoji');
+  if (!settled) {
+    if (!comment) {
+      throw new ToolError(
+        'invalid_params',
+        'A quiz regrade needs a reply to the student (comment)'
+      );
+    }
+    if (args.resolution === 'APPROVED' && args.emoji === undefined) {
+      throw new ToolError(
+        'invalid_params',
+        "APPROVED on a quiz request needs emoji: the new grade, on the classroom's scale"
+      );
+    }
+    if (args.resolution === 'DENIED' && args.emoji !== undefined) {
+      throw new ToolError('invalid_params', 'DENIED keeps the grade: give no emoji');
+    }
   }
 
   let result: Awaited<ReturnType<typeof ClassmojiService.regradeRequest.resolveQuiz>>;
@@ -365,6 +384,8 @@ async function resolveQuizRegrade(
       target: 'quiz',
       grader_comment: result.request.grader_comment ?? null,
       previous_grade: result.request.previous_grade,
+      // The grade the resolution set or kept.
+      new_grade: result.request.resolved_emoji ? [result.request.resolved_emoji] : [],
       quiz: {
         quiz_id: result.quiz.id,
         quiz_name: result.quiz.name,
@@ -391,7 +412,7 @@ export const regradeResolveTool: ToolDefinition<RegradeResolveArgs> = {
     'request: after approving, add the new grade with grade_add; it replaces the pre-request ' +
     'grades rather than averaging with them. A quiz request (target quiz in ' +
     'list_regrade_requests): APPROVED needs emoji, the new grade on the classroom scale ' +
-    "(emoji_scale from grading_report or list_submissions), which becomes the attempt's " +
+    "(get_quiz_attempt's emoji_scale), which becomes the attempt's " +
     'grade ("Score adjusted"); ' +
     'DENIED keeps the grade ("Score kept"). Grades come back as emoji only. A request ' +
     'already resolved is returned unchanged (already_resolved). Teaching team; audited.',
@@ -418,7 +439,7 @@ export const regradeResolveTool: ToolDefinition<RegradeResolveArgs> = {
     if (request.quiz_attempt_id) {
       return resolveQuizRegrade(request, args, ctx);
     }
-    if (args.emoji !== undefined) {
+    if (request.status === 'IN_REVIEW' && args.emoji !== undefined) {
       throw new ToolError(
         'invalid_params',
         'emoji is for quiz requests; add a submission grade with grade_add'
@@ -460,17 +481,13 @@ export const regradeResolveTool: ToolDefinition<RegradeResolveArgs> = {
         // The reply the student reads, when one is given.
         ...(reply ? { grader_comment: reply } : {}),
       },
-      // Who resolved it: the token's user, whom the teaching-team gate admitted.
+      // Who resolved it: the token's user, whom the teaching-team gate
+      // admitted; and this tool, for the audit row resolveRepo writes.
       resolved_by_id: ctx.viewer.userId,
+      tool: 'regrade_resolve',
+      impersonated_by: ctx.viewer.impersonatedBy ?? null,
     });
     await waitForRunCompletion(run.id);
-
-    await writeAudit(ctx, {
-      resource_type: 'REGRADE_REQUEST',
-      resource_id: request.id,
-      action: 'UPDATE',
-      data: { tool: 'regrade_resolve', resolution: args.resolution, comment_set: reply !== null },
-    });
 
     return ok({
       success: true,

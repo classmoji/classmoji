@@ -839,11 +839,12 @@ const STUDENT_ATTEMPT_SELECT = {
   total_duration_ms: true,
   unfocused_duration_ms: true,
   // The student's own staff adjustment and comment: the score that counts,
-  // the comment, and who/when (name only).
+  // the comment, and who wrote the comment and when (name only).
   adjusted_emoji: true,
   instructor_comment: true,
   adjusted_at: true,
-  adjusted_by: { select: { name: true } },
+  comment_at: true,
+  comment_by: { select: { name: true } },
 } as const;
 
 /**
