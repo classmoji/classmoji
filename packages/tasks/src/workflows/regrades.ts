@@ -63,18 +63,18 @@ interface UpdateRegradeRequestTaskPayload {
       } | null;
     } | null;
   };
-  /**
-   * The resolution: `status` (APPROVED | DENIED), the reply (`grader_comment`,
-   * optional) and who resolved it (`resolved_by_id`, the caller's session or
-   * token user). Kept in this shape so a payload queued before or after a
-   * deploy still resolves.
-   */
+  /** The resolution: `status` (APPROVED | DENIED) and the reply (`grader_comment`, optional). */
   data: {
     status?: unknown;
     grader_comment?: unknown;
-    resolved_by_id?: unknown;
     [key: string]: unknown;
   };
+  /**
+   * Who resolved it: the caller's session or token user. Beside `data`, not
+   * in it, so a worker deployed before the column existed ignores it rather
+   * than handing Prisma an unknown field; absent on payloads queued before.
+   */
+  resolved_by_id?: string | null;
 }
 
 interface TaskPayloadWrapper<TPayload> {
@@ -154,7 +154,7 @@ export const updateRegradeRequestTask = task({
   // Sets fields, so safe to repeat on a connection blip.
   ...retryOnDatabaseBlip,
   run: async (payload: UpdateRegradeRequestTaskPayload) => {
-    const { request, data } = payload;
+    const { request, data, resolved_by_id: resolvedById } = payload;
     if (data.status !== 'APPROVED' && data.status !== 'DENIED') {
       throw new Error('update_regrade_request needs status APPROVED or DENIED');
     }
@@ -166,7 +166,7 @@ export const updateRegradeRequestTask = task({
       id: request.id,
       status: data.status,
       graderComment: typeof data.grader_comment === 'string' ? data.grader_comment : null,
-      resolvedById: typeof data.resolved_by_id === 'string' ? data.resolved_by_id : null,
+      resolvedById: typeof resolvedById === 'string' ? resolvedById : null,
     });
   },
   onSuccess: async ({ payload }: TaskPayloadWrapper<UpdateRegradeRequestTaskPayload>) => {

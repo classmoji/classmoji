@@ -171,7 +171,8 @@ describe('update_regrade_request', () => {
     mocks.resolveRepo.mockResolvedValue({ id: 'rr-1', status: 'DENIED' });
     await updateTask.run({
       request: { id: 'rr-1', student: { email: 'ada@school.edu' } },
-      data: { status: 'DENIED', grader_comment: 'See the rubric.', resolved_by_id: 'ta-1' },
+      data: { status: 'DENIED', grader_comment: 'See the rubric.' },
+      resolved_by_id: 'ta-1',
     });
     expect(mocks.resolveRepo).toHaveBeenCalledWith({
       id: 'rr-1',

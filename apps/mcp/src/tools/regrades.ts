@@ -459,9 +459,9 @@ export const regradeResolveTool: ToolDefinition<RegradeResolveArgs> = {
         status: args.resolution,
         // The reply the student reads, when one is given.
         ...(reply ? { grader_comment: reply } : {}),
-        // Who resolved it: the token's user, whom the teaching-team gate admitted.
-        resolved_by_id: ctx.viewer.userId,
       },
+      // Who resolved it: the token's user, whom the teaching-team gate admitted.
+      resolved_by_id: ctx.viewer.userId,
     });
     await waitForRunCompletion(run.id);
 

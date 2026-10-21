@@ -166,8 +166,9 @@ describe('updateRegradeRequest', () => {
         student: { email: 'ada@school.edu' },
         git_repo_assignment: { assignment: { title: 'Lab 1' } },
       },
+      data: { status: 'APPROVED', grader_comment: 'Regraded.' },
       // Who resolved it: the session user the gate admitted, never the body.
-      data: { status: 'APPROVED', grader_comment: 'Regraded.', resolved_by_id: 'ta-1' },
+      resolved_by_id: 'ta-1',
     });
   });
 
@@ -181,7 +182,7 @@ describe('updateRegradeRequest', () => {
     })) as { success?: string };
     expect(mocks.trigger).toHaveBeenCalledWith(
       'update_regrade_request',
-      expect.objectContaining({ data: { status: 'DENIED', resolved_by_id: 'ta-1' } })
+      expect.objectContaining({ data: { status: 'DENIED' }, resolved_by_id: 'ta-1' })
     );
     expect(body.success).toBe('Regrade/resubmit request updated');
   });

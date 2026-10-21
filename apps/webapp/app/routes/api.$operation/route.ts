@@ -198,9 +198,9 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
             status,
             // The reply the student reads, when one is given.
             ...(reply ? { grader_comment: reply } : {}),
-            // Who resolved it: the session user the gate above admitted.
-            resolved_by_id: userId,
           },
+          // Who resolved it: the session user the gate above admitted.
+          resolved_by_id: userId,
         });
 
         await waitForRunCompletion(run.id);

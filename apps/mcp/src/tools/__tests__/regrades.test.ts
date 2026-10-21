@@ -573,7 +573,8 @@ describe('regrade_resolve on a submission request', () => {
       'update_regrade_request',
       // Who resolved it: the token's user.
       expect.objectContaining({
-        data: { status: 'DENIED', grader_comment: 'See the rubric.', resolved_by_id: 'ta-1' },
+        data: { status: 'DENIED', grader_comment: 'See the rubric.' },
+        resolved_by_id: 'ta-1',
       })
     );
     expect(mocks.resolveQuiz).not.toHaveBeenCalled();
