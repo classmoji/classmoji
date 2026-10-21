@@ -860,6 +860,8 @@ describe('list_quizzes for a student: extension fields', () => {
         instructor_comment: null,
         instructor_name: null,
         open_regrade_request_id: 'rr-open',
+        // The late attempt's higher raw score counts for less (E15).
+        counts_toward_grade: false,
       },
       {
         id: 'ontime-80',
@@ -871,6 +873,7 @@ describe('list_quizzes for a student: extension fields', () => {
         instructor_comment: 'Q3 had two readings.',
         instructor_name: 'Prof. Hopper',
         open_regrade_request_id: null,
+        counts_toward_grade: true,
       },
     ]);
     // The open requests read: the caller's own, open, on their own attempts here.

@@ -443,8 +443,9 @@ interface QuizRow extends QuizPlacementSource {
  * a number (E6). A quiz in no module has no assignment: no price, no hours,
  * its own due date, and the service's counting attempt. `my_attempts.attempts`
  * lists every attempt of the caller's (as the web quiz list does), each with
- * its grade, the instructor's comment and the id of its open regrade request,
- * so regrade_create can target any of them.
+ * its grade, whether it is the one that counts, the instructor's comment and
+ * the id of its open regrade request, so regrade_create can target any of
+ * them.
  *
  * Three narrow reads for the whole list (prices, hours, open requests), never
  * one per quiz.
@@ -554,6 +555,9 @@ async function studentQuizExtensions(ctx: ToolContext, quizzes: QuizRow[], scale
             instructor_comment: own.instructor_comment,
             instructor_name: own.instructor_name,
             open_regrade_request_id: openRequestOf.get(attempt.id) ?? null,
+            // Whether this is the attempt the grade counts (E15, the web's
+            // "Doesn't count toward your grade"); null when none counts yet.
+            counts_toward_grade: countingId ? attempt.id === countingId : null,
           };
         }),
       };
@@ -573,7 +577,8 @@ export const QUIZZES_DESCRIPTION =
   'adjusted with original_emoji when staff changed the grade, instructor_comment and ' +
   'instructor_name, and attempts: every attempt (id, attempt_number, completed_at, ' +
   'grade_emoji, adjusted, original_emoji, instructor_comment, instructor_name, ' +
-  "open_regrade_request_id), the ids regrade_create takes. Grades are emoji on the classroom's scale (score-N badges on the " +
+  'open_regrade_request_id, counts_toward_grade), the ids regrade_create takes. ' +
+  "Grades are emoji on the classroom's scale (score-N badges on the " +
   'numeric scale), never numbers; staff get avg_emoji. Requires a Pro subscription and ' +
   'quizzes_enabled.';
 

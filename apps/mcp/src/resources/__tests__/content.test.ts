@@ -387,6 +387,7 @@ describe('quizzes resource source_material (quiz source material)', () => {
           instructor_comment: null,
           instructor_name: null,
           open_regrade_request_id: null,
+          counts_toward_grade: true,
         },
       ],
     });
