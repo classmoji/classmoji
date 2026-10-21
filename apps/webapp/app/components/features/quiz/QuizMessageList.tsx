@@ -14,7 +14,13 @@ import {
 } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
-import { checkForCompletion, parseQuestionComplete } from '~/utils/quizUtils';
+import {
+  completionMessageDisplay,
+  parseMessageButtons,
+  parseQuestionCard,
+  parseQuestionComplete,
+  stripQuestionComplete,
+} from '~/utils/quizUtils';
 import QuizEvaluation, {
   type EvaluationData,
   type FocusMetrics,
@@ -72,143 +78,6 @@ interface ChatMessage {
 }
 
 // FocusMetrics imported from QuizEvaluation
-
-// Extract a complete JSON object from a string starting at a given position
-// Uses bracket counting to handle nested braces properly
-const extractJsonObject = (str: string, startIndex: number) => {
-  if (str[startIndex] !== '{') return null;
-
-  let depth = 0;
-  let inString = false;
-  let escapeNext = false;
-
-  for (let i = startIndex; i < str.length; i++) {
-    const char = str[i];
-
-    if (escapeNext) {
-      escapeNext = false;
-      continue;
-    }
-
-    if (char === '\\' && inString) {
-      escapeNext = true;
-      continue;
-    }
-
-    if (char === '"' && !escapeNext) {
-      inString = !inString;
-      continue;
-    }
-
-    if (!inString) {
-      if (char === '{') depth++;
-      else if (char === '}') {
-        depth--;
-        if (depth === 0) {
-          return {
-            json: str.substring(startIndex, i + 1),
-            endIndex: i,
-          };
-        }
-      }
-    }
-  }
-
-  return null; // Unbalanced braces
-};
-
-// Parse message content to extract question card data
-// Format 1 (from tool): {preamble}\n\n[QUESTION_CARD]\n```json\n{...}\n```
-// Format 2 (direct): {preamble}\n\n[QUESTION_CARD]\n{...}
-const parseQuestionCard = (content: string) => {
-  if (!content || !content.includes('[QUESTION_CARD]')) {
-    return {
-      hasQuestionCard: false,
-      questionData: null,
-      preamble: null,
-      remainingContent: content,
-    };
-  }
-
-  const markerIndex = content.indexOf('[QUESTION_CARD]');
-  const afterMarker = content.substring(markerIndex + '[QUESTION_CARD]'.length);
-
-  let jsonString = null;
-  let jsonEndIndex = markerIndex; // Will be updated to actual end position
-
-  // Find the first '{' after the marker (could be inside code block or raw)
-  const firstBraceInAfterMarker = afterMarker.indexOf('{');
-
-  if (firstBraceInAfterMarker !== -1) {
-    const absoluteJsonStart = markerIndex + '[QUESTION_CARD]'.length + firstBraceInAfterMarker;
-    const extracted = extractJsonObject(content, absoluteJsonStart);
-
-    if (extracted) {
-      jsonString = extracted.json;
-
-      // Check if there's a closing code fence after the JSON
-      const afterJson = content.substring(extracted.endIndex + 1);
-      const closingFenceMatch = afterJson.match(/^\s*```/);
-
-      if (closingFenceMatch) {
-        // Include the closing fence in what we skip
-        jsonEndIndex = extracted.endIndex + 1 + closingFenceMatch[0].length;
-      } else {
-        jsonEndIndex = extracted.endIndex + 1;
-      }
-    }
-  }
-
-  if (!jsonString) {
-    return {
-      hasQuestionCard: false,
-      questionData: null,
-      preamble: null,
-      remainingContent: content,
-    };
-  }
-
-  try {
-    const questionData = JSON.parse(jsonString);
-
-    // Extract preamble (text before [QUESTION_CARD] marker)
-    const preamble = markerIndex > 0 ? content.substring(0, markerIndex).trim() : null;
-
-    // Extract remaining content (text after the JSON block)
-    const remainingContent = content.substring(jsonEndIndex).trim();
-
-    return {
-      hasQuestionCard: true,
-      questionData,
-      preamble,
-      remainingContent,
-    };
-  } catch (error: unknown) {
-    console.error(
-      '[parseQuestionCard] JSON.parse FAILED:',
-      error instanceof Error ? error.message : String(error)
-    );
-    console.error('[parseQuestionCard] JSON string was:', jsonString?.substring(0, 200));
-    return {
-      hasQuestionCard: false,
-      questionData: null,
-      preamble: null,
-      remainingContent: content,
-    };
-  }
-};
-
-// Parse message content to extract button markers
-const parseMessageButtons = (content: string) => {
-  const buttons = [];
-  if (content.includes('[BUTTON:TRY_AGAIN]')) buttons.push('TRY_AGAIN');
-  if (content.includes('[BUTTON:NEXT]')) buttons.push('NEXT');
-
-  return {
-    cleanContent: content.replace(/\[BUTTON:(TRY_AGAIN|NEXT)\]\s*/g, '').trim(),
-    buttons,
-  };
-};
 
 // Shared markdown component configurations
 interface MarkdownElementProps {
@@ -364,74 +233,6 @@ const getToolIcon = (toolName: string | undefined, isGitLab = false) => {
   if (name === 'Glob' || name === 'secure_glob')
     return <FolderOpenOutlined style={{ color: '#6366f1' }} />;
   return <CodeOutlined style={{ color: '#8c8c8c' }} />;
-};
-
-// Process completion message and extract displayable content
-const processCompletionMessage = (
-  messageContent: string,
-  evaluationData: EvaluationData | null,
-  messageIndex: number,
-  messages: ChatMessage[]
-) => {
-  const completionData = checkForCompletion(messageContent);
-
-  // If no completion data, show the full message
-  if (!completionData) {
-    return { shouldHide: false, content: messageContent };
-  }
-
-  // Message contains completion data - always extract text before JSON
-  // Extract text before the JSON code block (agent's natural response)
-  const quizCompleteBlockMatch = messageContent.match(/```(?:[a-z]*\n|\n|)([\s\S]*?)```/gi);
-  let textBeforeJson = '';
-
-  if (quizCompleteBlockMatch) {
-    // Find the block that contains quiz_complete
-    for (const block of quizCompleteBlockMatch) {
-      if (block.includes('quiz_complete')) {
-        const blockStartIndex = messageContent.indexOf(block);
-        if (blockStartIndex > 0) {
-          textBeforeJson = messageContent.substring(0, blockStartIndex).trim();
-        }
-        break;
-      }
-    }
-  }
-
-  // If we couldn't find it in code blocks, try to find raw JSON
-  if (!textBeforeJson) {
-    const jsonStartMatch = messageContent.match(/\{[^{}]*"quiz_complete"/);
-    if (jsonStartMatch) {
-      const jsonStartIndex = messageContent.indexOf(jsonStartMatch[0]);
-      if (jsonStartIndex > 0) {
-        textBeforeJson = messageContent.substring(0, jsonStartIndex).trim();
-      }
-    }
-  }
-
-  // Priority 1: Use extracted text before JSON if it exists
-  if (textBeforeJson) {
-    // Strip the [QUIZ_EVALUATION] marker - it's for parsing, not display
-    const cleanedText = textBeforeJson.replace(/\[QUIZ_EVALUATION\]\s*/g, '').trim();
-    if (cleanedText) {
-      return { shouldHide: false, content: cleanedText };
-    }
-    // If only the marker was there (no actual text), fall through to other priorities
-  }
-
-  // Priority 2: Use final_acknowledgment from completion data
-  if (completionData.final_acknowledgment) {
-    return { shouldHide: false, content: completionData.final_acknowledgment };
-  }
-
-  // Priority 3: If this is the last message, show a generic completion message
-  const isLastMessage = messageIndex === messages.length - 1;
-  if (isLastMessage) {
-    return { shouldHide: false, content: 'Quiz completed! See your evaluation below.' };
-  }
-
-  // Priority 4: Hide the message entirely (JSON only, no displayable text)
-  return { shouldHide: true };
 };
 
 // Render exploration steps collapse
@@ -665,17 +466,12 @@ const QuizMessageList = ({
       questionCompleteData = parseQuestionComplete(messageContent);
       if (questionCompleteData) {
         // Strip the [QUESTION_COMPLETE] marker and JSON from display
-        messageContent = messageContent
-          .replace(/\[QUESTION_COMPLETE\]\s*```(?:json)?\s*[\s\S]*?```/g, '')
-          .replace(/\[QUESTION_COMPLETE\]\s*\{[\s\S]*?\}\s*(?:\n\n|$)/g, '')
-          .trim();
+        messageContent = stripQuestionComplete(messageContent);
       }
 
-      const processed = processCompletionMessage(
+      const processed = completionMessageDisplay(
         messageContent,
-        evaluationData,
-        messageIndex,
-        messages
+        messageIndex === messages.length - 1
       );
       if (processed.shouldHide) {
         return null;
