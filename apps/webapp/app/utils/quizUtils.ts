@@ -1,8 +1,12 @@
 // Import the shared quiz helpers from @classmoji/utils
 export {
   checkForCompletion,
+  completionMessageDisplay,
   getQuestionProgressFromMessage,
+  parseMessageButtons,
+  parseQuestionCard,
   parseQuestionComplete,
+  stripQuestionComplete,
 } from '@classmoji/utils';
 
 /**

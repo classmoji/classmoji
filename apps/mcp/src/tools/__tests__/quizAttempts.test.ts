@@ -76,6 +76,20 @@ const NUMERIC_GRADE_KEYS = [
   'late_penalty_per_hour',
 ];
 
+/** A grade's number in text: a percentage or a grade field's name. */
+const NUMERIC_GRADE_TEXT =
+  /\d+(\.\d+)?\s*%|credit_earned|numeric_score|partial_credit|first_attempt_percentage|raw_percentage/i;
+
+/** Every string in a JSON value, at any depth. */
+const stringsOf = (value: unknown): string[] =>
+  typeof value === 'string'
+    ? [value]
+    : Array.isArray(value)
+      ? value.flatMap(stringsOf)
+      : value && typeof value === 'object'
+        ? Object.values(value).flatMap(stringsOf)
+        : [];
+
 /** Every key in a JSON value, at any depth. */
 const keysOf = (value: unknown): string[] =>
   Array.isArray(value)
@@ -279,7 +293,10 @@ describe('list_quiz_attempts', () => {
   });
 
   it('reports a running attempt as IN_PROGRESS with its last activity', async () => {
-    mocks.findByQuiz.mockResolvedValue([attempt('a1', 'bo', '2026-10-01T10:00:00Z', null, null)]);
+    // A running attempt may already hold a partial score: it is not shown.
+    mocks.findByQuiz.mockResolvedValue([
+      attempt('a1', 'bo', '2026-10-01T10:00:00Z', null, 40, { first_attempt_percentage: 40 }),
+    ]);
 
     const payload = parse(await listQuizAttemptsTool.handler(ARGS, CTX));
     const bo = payload.students.find((s: { student: { id: string } }) => s.student.id === 'bo');
@@ -288,6 +305,7 @@ describe('list_quiz_attempts', () => {
     expect(bo.attempts[0]).toMatchObject({
       last_activity: '2026-10-01T10:00:00.000Z',
       grade_emoji: null,
+      first_attempt_emoji: null,
       late_hours: null,
     });
     expect(payload.summary.in_progress).toBe(1);
@@ -396,6 +414,7 @@ describe('list_quiz_attempts', () => {
     expect(keys).toEqual(
       expect.arrayContaining(['grade_emoji', 'first_attempt_emoji', 'counted_emoji'])
     );
+    for (const value of stringsOf(payload)) expect(value).not.toMatch(NUMERIC_GRADE_TEXT);
   });
 
   it('keeps staff previews and former members apart from students, never late', async () => {

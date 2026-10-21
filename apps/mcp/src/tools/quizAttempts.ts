@@ -205,9 +205,10 @@ export const listQuizAttemptsTool: ToolDefinition<ListQuizAttemptsArgs> = {
       ...(attempt.completed_at
         ? {}
         : { last_activity: iso(rowsById.get(attempt.id)?.last_activity) }),
-      // The effective grade: an adjustment's own emoji, else the AI's.
-      grade_emoji: attempt.grade.effective.emoji,
-      first_attempt_emoji: emojiFor(attempt.firstAttemptScore, scale),
+      // A completed attempt's grades only, as on the review page; the
+      // effective grade is an adjustment's own emoji, else the AI's.
+      grade_emoji: attempt.completed_at ? attempt.grade.effective.emoji : null,
+      first_attempt_emoji: attempt.completed_at ? emojiFor(attempt.firstAttemptScore, scale) : null,
       focus_percentage: attempt.focusMetrics?.percentage ?? null,
       late_hours: attempt.lateHours,
       is_counting: attempt.isCounting,

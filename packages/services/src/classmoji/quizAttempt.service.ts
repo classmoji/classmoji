@@ -784,6 +784,19 @@ export const calculateAndApplyModalGap = async (attemptId: string) => {
   });
 };
 
+/**
+ * One attempt, only when it is an attempt of `quizId` (null otherwise, so an
+ * attempt of another quiz reads as none), with its user. `provider` picks
+ * which username `login` is (the classroom's); without it, Github first.
+ */
+export const findInQuiz = async (quizId: string, attemptId: string, provider?: string | null) => {
+  const attempt = await getPrisma().quizAttempt.findFirst({
+    where: { id: attemptId, quiz_id: quizId },
+    include: { user: { include: GIT_IDENTITY } },
+  });
+  return attempt ? withLogins(attempt, provider) : null;
+};
+
 /** `provider` picks which username each user's `login` is (the classroom's); without it, Github first. */
 export const findByQuiz = async (quizId: string, provider?: string | null) => {
   const attempts = await getPrisma().quizAttempt.findMany({
