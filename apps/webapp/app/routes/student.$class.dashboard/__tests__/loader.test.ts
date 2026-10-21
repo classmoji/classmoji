@@ -233,7 +233,9 @@ describe('student dashboard loader — Up next', () => {
     const data = await (await loader(loaderArgs())).data;
 
     expect(upNextMock).toHaveBeenCalledWith([open, done]);
-    expect(data.upNext).toEqual([{ ...open, materials: [] }]);
+    // Everything but the quiz percentage, which stays on the server (E1).
+    const { score: _score, ...sent } = open;
+    expect(data.upNext).toEqual([{ ...sent, materials: [] }]);
     expect(data.viewerIsStudent).toBe(true);
   });
 
@@ -369,6 +371,27 @@ describe('student dashboard loader — recent grades', () => {
       },
       ...over,
     });
+
+  it('sends no quiz percentage in Up next or anywhere else (E1)', async () => {
+    const open = courseworkRow({ assignmentId: 'open', type: 'QUIZ', score: 73.37 });
+    const done = courseworkRow({
+      assignmentId: 'done',
+      type: 'QUIZ',
+      done: true,
+      score: 41.5,
+      scoreEmoji: 'eyes',
+      scoredAt: '2026-09-20T12:00:00.000Z',
+    });
+    listForStudentMock.mockResolvedValue([open, done]);
+
+    const data = await (await loader(loaderArgs())).data;
+
+    expect(data.upNext.map(r => r.assignmentId)).toEqual(['open']);
+    expect('score' in data.upNext[0]).toBe(false);
+    const text = JSON.stringify(data);
+    expect(text).not.toContain('73.37');
+    expect(text).not.toContain('41.5');
+  });
 
   it('adds quiz grades (emoji, never the number) beside released repo grades, newest first', async () => {
     listForStudentMock.mockResolvedValue([

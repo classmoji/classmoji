@@ -27,7 +27,6 @@ const row = (over: Partial<UpNextRow>): UpNextRow => ({
   status: 'NOT_STARTED',
   tracked: true,
   done: false,
-  score: null,
   scoredAt: null,
   attemptsUsed: 0,
   maxAttempts: 1,

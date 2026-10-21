@@ -39,7 +39,6 @@ const base = {
   module: { id: 'm1', title: 'Week 1' },
   isExtraCredit: false,
   tracked: true,
-  score: null,
   scoredAt: null,
   attemptsUsed: null,
   maxAttempts: null,
@@ -203,7 +202,6 @@ describe('AssignmentsTabsCard', () => {
       ...QUIZ_OPEN,
       status: 'COMPLETED',
       done: true,
-      score: 82,
       scoreEmoji: 'score-80',
       originalScoreEmoji: 'score-80',
       adjusted: false,
@@ -325,7 +323,6 @@ describe('AssignmentsTabsCard', () => {
       title: 'Finished quiz',
       status: 'COMPLETED',
       done: true,
-      score: 0,
       action: null,
     };
     const closedPublic: AssignmentRow = {

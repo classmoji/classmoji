@@ -31,7 +31,11 @@ export type AssignmentStatus = 'current' | 'completed';
 type TabKey = 'current' | 'completed' | 'all';
 
 /** A coursework row with the published pages and decks linked to its assignment. */
-export type AssignmentRow = StudentCourseworkRow & { materials: CourseworkMaterial[] };
+/** A coursework row as the page receives it: no quiz percentage (`score`), only its emoji (E1). */
+type CourseworkRow = Omit<StudentCourseworkRow, 'score'>;
+export type AssignmentRow = CourseworkRow & {
+  materials: CourseworkMaterial[];
+};
 
 interface AssignmentsTabsCardProps {
   rows: AssignmentRow[];
@@ -59,7 +63,7 @@ const emptyCopy: Record<TabKey, string> = {
 
 const Dash = () => <span className="text-gray-400 dark:text-gray-600">—</span>;
 
-const attemptsLine = (row: StudentCourseworkRow) => {
+const attemptsLine = (row: CourseworkRow) => {
   if (row.attemptsUsed === null) return null;
   const used = row.attemptsUsed;
   if (!row.maxAttempts) return `${used} ${used === 1 ? 'attempt' : 'attempts'} used`;
@@ -67,7 +71,7 @@ const attemptsLine = (row: StudentCourseworkRow) => {
 };
 
 /** The row's title, linked to where the student does the work. */
-const TitleLink = ({ row }: { row: StudentCourseworkRow }) => {
+const TitleLink = ({ row }: { row: CourseworkRow }) => {
   const web = useGitWeb();
   const className =
     'inline-flex items-center gap-1.5 font-medium text-ink-0! hover:underline underline-offset-2';
@@ -105,7 +109,7 @@ const AssignmentsTabsCard = ({
 
   // An untracked row (a PUBLIC form, open or closed) is neither still to do
   // nor done for this student: it is listed under All only.
-  const tabOf = (row: StudentCourseworkRow): AssignmentStatus | null =>
+  const tabOf = (row: CourseworkRow): AssignmentStatus | null =>
     !row.tracked ? null : row.done ? 'completed' : 'current';
 
   const counts: Record<TabKey, number> = {

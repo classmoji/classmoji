@@ -214,7 +214,8 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     // The card shows no repo details, so none are sent. Every row keeps the
     // hours its student bought (repo or quiz), so a row inside them is not
     // overdue.
-    const upNext: UpNextRow[] = upNextRows.map(({ repo: _repo, ...row }) => ({
+    // Nor a quiz row's raw percentage (`score`): grades reach the page as emoji (E1).
+    const upNext: UpNextRow[] = upNextRows.map(({ repo: _repo, score: _score, ...row }) => ({
       ...row,
       materials: courseworkMaterials(materials.get(row.assignmentId), classSlug),
     }));
