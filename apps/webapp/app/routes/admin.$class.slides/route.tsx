@@ -45,6 +45,7 @@ interface Slide {
   kind: 'DECK' | 'FILE' | 'LINK';
   kindLabel: string;
   linkHost: string | null;
+  updated_at: string | Date;
 }
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
@@ -77,6 +78,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
       source_filename: true,
       source_path: true,
       source_url: true,
+      updated_at: true,
     },
     orderBy: { updated_at: 'desc' },
   });
@@ -94,6 +96,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     kind: slide.kind,
     kindLabel: slideKindLabel(slide),
     linkHost: slideLinkHost(slide.source_url),
+    updated_at: slide.updated_at,
   }));
 
   // Fetch recent viewers for all slides in one query (with total counts and roles for admin UI)
@@ -419,6 +422,19 @@ export default function SlidesAdmin({ loaderData }: Route.ComponentProps) {
       width: 80,
       align: 'center',
       render: (_: unknown, record: Slide) => deckOnlySwitch(record, 'show_speaker_notes'),
+    },
+    {
+      title: 'Updated',
+      dataIndex: 'updated_at',
+      key: 'updated_at',
+      width: 180,
+      // Most recent first by default, as on the pages list. The third entry in
+      // `sortDirections` keeps a click from clearing the sort back to none.
+      sorter: (a: Slide, b: Slide) =>
+        new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime(),
+      defaultSortOrder: 'descend',
+      sortDirections: ['descend', 'ascend', 'descend'],
+      render: (date: string | Date) => new Date(date).toLocaleString(),
     },
     {
       title: 'Actions',
