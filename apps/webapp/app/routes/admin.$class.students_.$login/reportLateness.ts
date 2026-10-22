@@ -13,16 +13,6 @@ import {
 const tenth = (value: number) => Math.round(value * 10) / 10;
 
 /**
- * Points a quiz item lost to the late penalty: the counting attempt's raw
- * score minus what it counts for. 0 for a counted zero or an on-time attempt.
- */
-export const quizPointsLost = (item: GradedItem): number => {
-  if (item.counts_as_zero || item.late_hours <= 0) return 0;
-  if (item.counting_raw_percentage == null || item.grade == null) return 0;
-  return tenth(Math.max(0, item.counting_raw_percentage - item.grade));
-};
-
-/**
  * Points a graded repo submission lost to the late penalty. Nothing is lost
  * before it is graded, or when the lateness was waived.
  */

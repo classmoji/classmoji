@@ -38,7 +38,7 @@ export function QuizEmojiPicker({
       role="radiogroup"
       aria-label="Grade"
       data-testid="quiz-emoji-picker"
-      className="inline-flex flex-wrap gap-1 rounded-lg bg-white p-1.5 shadow-sm ring-1 ring-stone-200 dark:bg-neutral-900 dark:ring-neutral-700"
+      className="inline-flex flex-wrap items-start gap-1 rounded-lg bg-white p-1.5 shadow-sm ring-1 ring-stone-200 dark:bg-neutral-900 dark:ring-neutral-700"
     >
       {scaleEmojis.map(key => {
         const selected = key === value;

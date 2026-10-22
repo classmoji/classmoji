@@ -1,17 +1,11 @@
 /**
  * The student report's lateness copy: the points the late penalty actually
- * took (the counting attempt's raw score minus what it counts for), never
- * hours × rate, and never "−0 pts".
+ * took from repo submissions, never hours × rate, never "−0 pts", and never
+ * quiz points (E1: quiz grades show as emoji).
  */
 import { describe, expect, it } from 'vitest';
 import type { GitRepoAssignment, GradedItem } from '@classmoji/utils';
-import {
-  lateTileSummary,
-  latePillText,
-  quizPointsLost,
-  quizScoreNote,
-  repoPointsLost,
-} from '../reportLateness';
+import { lateTileSummary, latePillText, quizScoreNote, repoPointsLost } from '../reportLateness';
 
 const item = (over: Partial<GradedItem> = {}): GradedItem => ({
   assignment_id: 'a-quiz',
@@ -24,33 +18,6 @@ const item = (over: Partial<GradedItem> = {}): GradedItem => ({
   late_hours: 6,
   counting_raw_percentage: 90,
   ...over,
-});
-
-describe('quizPointsLost', () => {
-  it('is the counting attempt before minus after the penalty', () => {
-    expect(quizPointsLost(item())).toBe(12);
-  });
-
-  it('is what the penalty took when it floors at 0, not hours × rate', () => {
-    // 6 h at 20 an hour would be 120; a 90 can only lose 90.
-    expect(quizPointsLost(item({ grade: 0 }))).toBe(90);
-  });
-
-  it('is 0 for an on-time attempt and for a counted zero', () => {
-    expect(quizPointsLost(item({ late_hours: 0, grade: 90 }))).toBe(0);
-    expect(
-      quizPointsLost(
-        item({ counts_as_zero: true, grade: 0, raw_grade: 0, counting_raw_percentage: null })
-      )
-    ).toBe(0);
-  });
-
-  it('reads the counting attempt, not the raw pick of another attempt', () => {
-    // HIGHEST over raw is a late 95; the on-time 80 counts and lost nothing.
-    expect(
-      quizPointsLost(item({ grade: 80, raw_grade: 95, counting_raw_percentage: 80, late_hours: 0 }))
-    ).toBe(0);
-  });
 });
 
 describe('lateTileSummary (the report header)', () => {
