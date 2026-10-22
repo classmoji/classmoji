@@ -25,22 +25,60 @@
  */
 
 import {
+  attemptQuestionResults,
+  countedQuizEmojiMap,
   countingQuizScore,
   lateHours as lateHoursOf,
-  quizGradeItem,
-  type QuizGradeAssignment,
+  isOrphanedAdjustment,
+  quizAttemptGrade,
+  quizEvaluationRecord as evaluationRecord,
+  quizPercentageEmoji,
+  type AdjustableQuizScore,
+  type AttemptQuestionResult,
+  type QuizEmojiScale,
   type QuizLateContext,
+  type QuizResultAttempt,
+  type QuizResultStudent,
   type ScorableQuizAttempt,
 } from '@classmoji/utils';
-import type { QuizEvaluationRecordV2 } from '@classmoji/utils/quiz-agent';
+import {
+  studentEvaluationRecord,
+  type GradeBand,
+  type QuizEvaluationRecordView,
+} from '@classmoji/utils/quiz-agent';
 
-/** The attempt fields the student quiz list reads (table columns and tab filters). */
+// `buildQuizResultRows` and the drawer's stored-result readers live in
+// @classmoji/utils (quizResults.ts), shared with the MCP attempt reads.
+export {
+  buildQuizResultRows,
+  type AttemptQuestionResult,
+  type QuizAttemptSource,
+  type QuizFocusMetrics,
+  type QuizResultAttempt,
+  type QuizResultStudent,
+  type QuizResultsLateContext,
+  type QuizResultUser,
+  type QuizRosterStudent,
+  type QuizViewerAttempt,
+} from '@classmoji/utils';
+
+/**
+ * The attempt fields the student quiz list reads (table columns and tab
+ * filters). The grade is the classroom's emoji (a `score-N` badge on the
+ * numeric scale), never a number: the effective one, and the AI's original
+ * beside it when staff adjusted it.
+ */
 export interface StudentQuizAttemptView {
   id: string;
   attemptNumber: number;
   status: string;
   completed_at: Date | string | null;
-  partialCreditScore: number | null;
+  /** The effective grade as the classroom's emoji, or null when unscored. */
+  scoreEmoji: string | null;
+  /** The AI's original grade as the classroom's emoji. */
+  originalScoreEmoji: string | null;
+  /** A staff adjustment is in effect. */
+  adjusted: boolean;
   focusMetrics: { totalMs: number; focusedMs: number; percentage: number } | null;
   /** The attempt that counts for the grade (after the late penalty). */
   isCounting: boolean;
@@ -53,7 +91,9 @@ export const studentQuizAttemptView = (attempt: {
   attemptNumber: number;
   status: string;
   completed_at: Date | string | null;
-  partialCreditScore: number | null;
+  scoreEmoji?: string | null;
+  originalScoreEmoji?: string | null;
+  adjusted?: boolean;
   focusMetrics: { totalMs: number; focusedMs: number; percentage: number } | null;
   isCounting: boolean;
   lateHours: number;
@@ -62,7 +102,9 @@ export const studentQuizAttemptView = (attempt: {
   attemptNumber: attempt.attemptNumber,
   status: attempt.status,
   completed_at: attempt.completed_at,
-  partialCreditScore: attempt.partialCreditScore,
+  scoreEmoji: attempt.scoreEmoji ?? null,
+  originalScoreEmoji: attempt.originalScoreEmoji ?? null,
+  adjusted: attempt.adjusted === true,
   focusMetrics: attempt.focusMetrics
     ? {
         totalMs: attempt.focusMetrics.totalMs,
@@ -78,9 +120,15 @@ export const studentQuizAttemptView = (attempt: {
 export interface StudentQuizAttemptsSummaryView {
   count: number;
   canCreateNew: boolean;
-  /** The raw percentage of the attempt that counts for the grade. */
-  currentScore: number | null;
-  /** That attempt's late hours, shown beside the score. */
+  /** The effective grade of the attempt that counts, as the classroom's emoji. */
+  currentEmoji: string | null;
+  /** That attempt carries a staff adjustment. */
+  currentAdjusted: boolean;
+  /** The AI's original grade of that attempt, when adjusted (D6: shown beside it); else null. */
+  currentOriginalEmoji: string | null;
+  /** What it counts for after the late penalty, when that differs; else null. */
+  countedEmoji: string | null;
+  /** That attempt's late hours, shown beside the grade. */
   currentLateHours: number;
   maxAttempts: number;
 }
@@ -91,36 +139,222 @@ export interface StudentQuizAttemptsSummaryView {
  * never carried it.
  */
 export const studentQuizAttemptsSummaryView = (
-  summary: { count?: number; canCreateNew?: boolean; currentScore?: number | null } | undefined,
+  summary: { count?: number; canCreateNew?: boolean } | undefined,
   maxAttempts: number,
-  currentLateHours = 0
+  current: {
+    emoji?: string | null;
+    adjusted?: boolean;
+    originalEmoji?: string | null;
+    countedEmoji?: string | null;
+    lateHours?: number;
+  } = {}
 ): StudentQuizAttemptsSummaryView => ({
   count: summary?.count ?? 0,
   canCreateNew: summary?.canCreateNew ?? false,
-  currentScore: summary?.currentScore ?? null,
-  currentLateHours,
+  currentEmoji: current.emoji ?? null,
+  currentAdjusted: current.adjusted === true,
+  currentOriginalEmoji: current.adjusted === true ? (current.originalEmoji ?? null) : null,
+  countedEmoji: current.countedEmoji ?? null,
+  currentLateHours: current.lateHours ?? 0,
   maxAttempts,
 });
 
 /**
  * A student's attempts on one quiz, scored the way their grade is: the
- * attempt that counts is picked over late-penalised scores
- * (`countingQuizScore`), and the student is shown its raw percentage and its
- * late hours. `late` is null where nothing is late: a staff member's preview,
- * or a quiz with no assignment; the pick is then over raw scores.
+ * attempt that counts is picked over late-penalised effective scores
+ * (`countingQuizScore`, a staff adjustment read through `emojiScale`), and the
+ * student is shown its grade and late hours. `late` is null where nothing is
+ * late: a staff member's preview, or a quiz with no assignment; the pick is
+ * then over raw scores. The numbers here stay on the server.
  */
 export const studentQuizScoring = <T extends ScorableQuizAttempt>(
   attempts: readonly T[],
   gradingStrategy: string | null | undefined,
-  late: QuizLateContext | null
+  late: Omit<QuizLateContext, 'emojiScale'> | null,
+  emojiScale: QuizEmojiScale
 ) => {
-  const score = countingQuizScore(attempts, gradingStrategy, late ?? { studentDeadline: null });
+  const score = countingQuizScore(
+    attempts,
+    gradingStrategy,
+    late ? { ...late, emojiScale } : { studentDeadline: null, emojiScale }
+  );
   return {
     countingAttemptId: score.counting_attempt_id,
     currentScore: score.raw_percentage,
+    /** What the counting attempt counts for after the late penalty. */
+    countedScore: score.grade,
     currentLateHours: score.late_hours,
     lateHoursOf: (attempt: Pick<ScorableQuizAttempt, 'completed_at'>) =>
       late ? lateHoursOf(attempt.completed_at, late.studentDeadline, late.extensionHours) : 0,
+  };
+};
+
+/**
+ * The emoji a counted (late-penalised) score shows as, only when it differs
+ * from the grade shown (`shownEmoji`, else the raw score's emoji); null when
+ * on time, when the penalty does not change the emoji, or when nothing is
+ * scored.
+ */
+export const countedEmojiOf = (
+  raw: number | null | undefined,
+  counted: number | null | undefined,
+  emojiScale: QuizEmojiScale,
+  shownEmoji?: string | null
+): string | null => {
+  if (typeof counted !== 'number' || typeof raw !== 'number' || counted === raw) return null;
+  const countedEmoji = quizPercentageEmoji(counted, emojiScale);
+  const shown = shownEmoji ?? quizPercentageEmoji(raw, emojiScale);
+  return countedEmoji !== shown ? countedEmoji : null;
+};
+
+/**
+ * One attempt's grade as its result panel shows it (E3, D6, D9): the
+ * effective emoji, the AI's original beside it when adjusted, the band from
+ * the effective score, and — for a student's attempt on a quiz with a due
+ * date — its late hours and what it counts for after the late penalty when
+ * that differs. No number. Null for an attempt still running.
+ */
+export interface AttemptGradeView {
+  emoji: string | null;
+  originalEmoji: string | null;
+  adjusted: boolean;
+  band: GradeBand | null;
+  lateHours: number | null;
+  countedEmoji: string | null;
+  /**
+   * Whether this attempt is the one whose grade counts (E15): the quiz's
+   * grading strategy over effective, late-penalised scores, the gradebook's
+   * rule (`studentQuizScoring`). Null where it is not worked out (staff
+   * views, a preview) or where no attempt counts yet.
+   */
+  countsTowardGrade: boolean | null;
+}
+
+export const attemptGradeView = ({
+  attempt,
+  emojiScale,
+  late = null,
+  countingAttemptId,
+}: {
+  attempt: AdjustableQuizScore & {
+    id: string;
+    started_at: Date | string;
+    completed_at: Date | string | null;
+  };
+  emojiScale: QuizEmojiScale;
+  /** Null where lateness does not apply (a preview, no due date). */
+  late?: Omit<QuizLateContext, 'emojiScale'> | null;
+  /**
+   * The counting attempt among the student's attempts on this quiz
+   * (`studentQuizScoring(...).countingAttemptId`); omitted where the viewer
+   * is not the student, null when none counts.
+   */
+  countingAttemptId?: string | null;
+}): AttemptGradeView | null => {
+  if (!attempt.completed_at) return null;
+  const grade = quizAttemptGrade(attempt, emojiScale);
+  let lateHours: number | null = null;
+  let countedEmoji: string | null = null;
+  if (late && late.studentDeadline != null) {
+    const score = countingQuizScore([attempt], null, { ...late, emojiScale });
+    lateHours = lateHoursOf(attempt.completed_at, late.studentDeadline, late.extensionHours);
+    countedEmoji = countedEmojiOf(
+      grade.effective.percentage,
+      score.grade,
+      emojiScale,
+      grade.effective.emoji
+    );
+  }
+  return {
+    emoji: grade.effective.emoji,
+    originalEmoji: grade.adjusted ? grade.original.emoji : null,
+    adjusted: grade.adjusted,
+    band: grade.effective.band,
+    lateHours,
+    countedEmoji,
+    countsTowardGrade: countingAttemptId ? countingAttemptId === attempt.id : null,
+  };
+};
+
+/** A staff comment on an attempt, with who wrote it and when (name only). */
+export interface InstructorCommentView {
+  text: string;
+  byName: string | null;
+  at: string | null;
+}
+
+/** The comment's own author and time (`comment_by` / `comment_at`), not the score adjuster's. */
+export const instructorCommentView = (attempt: {
+  instructor_comment?: string | null;
+  comment_at?: Date | string | null;
+  comment_by?: { name?: string | null } | null;
+}): InstructorCommentView | null =>
+  attempt.instructor_comment
+    ? {
+        text: attempt.instructor_comment,
+        byName: attempt.comment_by?.name ?? null,
+        at: isoOrNull(attempt.comment_at),
+      }
+    : null;
+
+/**
+ * A student's regrade/resubmit requests on one of their quiz attempts, as the
+ * result panel shows them: the open one (the button turns into its status),
+ * and the latest resolved one (status, the staff reply, from → to).
+ */
+export interface StudentQuizRegradeView {
+  open: { id: string; createdAt: string | null } | null;
+  resolved: {
+    id: string;
+    status: 'APPROVED' | 'DENIED';
+    reply: string | null;
+    previousEmoji: string | null;
+    /**
+     * The grade the resolution left (`resolved_emoji`): the emoji set, or the
+     * one kept. Null on requests resolved before it was recorded; the panel
+     * then shows the attempt's grade now.
+     */
+    resolvedEmoji: string | null;
+    /**
+     * Who resolved it and when (the request's own `resolved_by` /
+     * `resolved_at`, name only). Null on requests resolved before that was
+     * recorded: no name is shown then.
+     */
+    resolvedByName: string | null;
+    resolvedAt: string | null;
+  } | null;
+}
+
+export const studentQuizRegradeView = (
+  requests: readonly {
+    id: string;
+    status: string;
+    grader_comment?: string | null;
+    previous_grade?: readonly string[] | null;
+    resolved_emoji?: string | null;
+    created_at?: Date | string | null;
+    resolved_at?: Date | string | null;
+    resolved_by?: { name?: string | null } | null;
+  }[]
+): StudentQuizRegradeView => {
+  const newest = [...requests].sort(
+    (a, b) => new Date(b.created_at ?? 0).getTime() - new Date(a.created_at ?? 0).getTime()
+  );
+  const open = newest.find(r => r.status === 'IN_REVIEW') ?? null;
+  const resolved = newest.find(r => r.status === 'APPROVED' || r.status === 'DENIED') ?? null;
+  return {
+    open: open ? { id: open.id, createdAt: isoOrNull(open.created_at) } : null,
+    resolved: resolved
+      ? {
+          id: resolved.id,
+          status: resolved.status as 'APPROVED' | 'DENIED',
+          reply: resolved.grader_comment ?? null,
+          previousEmoji: resolved.previous_grade?.[0] ?? null,
+          resolvedEmoji: resolved.resolved_emoji ?? null,
+          resolvedByName: resolved.resolved_by?.name ?? null,
+          resolvedAt: isoOrNull(resolved.resolved_at),
+        }
+      : null,
   };
 };
 
@@ -141,27 +375,24 @@ export const quizDrawerView = (quiz: {
   question_count: quiz.question_count ?? null,
 });
 
-/** One question's recorded result, as the evaluation card shows it. */
-export interface AttemptQuestionResult {
-  question_num: number;
-  attempts: number;
-  credit_earned: number;
-  eventually_correct: boolean;
-}
-
 /**
  * The attempt fields `QuizAttemptInterface` reads: identity, timing,
- * completion, and a completed attempt's stored scores and per-question
- * results (what the evaluation card shows).
+ * completion, and a completed attempt's stored per-question results (what the
+ * evaluation card shows). Staff views also carry the stored scores; a
+ * student's carries no grade number at all (E1): no percentages, no
+ * per-question credit, and the evaluation record narrowed.
  */
 export interface AttemptDrawerView {
   id: string;
   completed_at: Date | string | null;
   total_duration_ms: number | null;
   unfocused_duration_ms: number | null;
-  partial_credit_percentage: number | null;
-  first_attempt_percentage: number | null;
-  question_results: AttemptQuestionResult[];
+  /** Staff views only. */
+  partial_credit_percentage?: number | null;
+  /** Staff views only. */
+  first_attempt_percentage?: number | null;
+  /** Each question's recorded result with the emoji stored for it (the classroom's scale). */
+  question_results: DrawerQuestionResult[];
   /**
    * The runtime the attempt was stamped with at creation: `ai_agent` renders
    * the legacy chat, `trigger_chat` the chat-runtime one.
@@ -171,7 +402,7 @@ export interface AttemptDrawerView {
    * A completed chat-runtime attempt's stored evaluation record (the results
    * panel reads it); null otherwise.
    */
-  evaluation_json: QuizEvaluationRecordV2 | null;
+  evaluation_json: QuizEvaluationRecordView | null;
   /**
    * `turn_limit` when the server submitted the completed attempt at its
    * message limit (the results panel says so); null otherwise.
@@ -180,61 +411,42 @@ export interface AttemptDrawerView {
 }
 
 /**
- * The stored evaluation record, when the column holds one (`v: 2`). Anything
- * else reads as none; the results panel then falls back to the transcript.
+ * A recorded question result with the emoji stored beside it when it was
+ * recorded. A student's carries no credit (a per-question percentage) or
+ * correctness flag.
  */
-const evaluationRecord = (json: unknown): QuizEvaluationRecordV2 | null => {
-  const r = json as { v?: unknown; question_results?: unknown } | null;
-  return r && typeof r === 'object' && r.v === 2 && Array.isArray(r.question_results)
-    ? (r as QuizEvaluationRecordV2)
-    : null;
-};
+export type DrawerQuestionResult = Pick<AttemptQuestionResult, 'question_num' | 'attempts'> &
+  Partial<Pick<AttemptQuestionResult, 'credit_earned' | 'eventually_correct'>> & {
+    emoji: string | null;
+  };
 
 /**
- * The attempt's recorded results for its questions 1..N, in question order:
- * N is the count stored when the attempt started (`agent_config.questionCount`),
- * else the quiz's `question_count` — the same results the attempt is scored on
- * (quizAttempt.service.ts, scoredQuestionResults).
+ * The emoji stored on each recorded result (`question_results_json[].emoji`,
+ * picked from the classroom's scale when the result was recorded), by
+ * question number. Never recomputed here.
  */
-const attemptQuestionResults = (
-  json: unknown,
-  agentConfig: unknown,
-  quizQuestionCount: number | null | undefined
-): AttemptQuestionResult[] => {
-  const started = (agentConfig as { questionCount?: unknown } | null)?.questionCount;
-  const count =
-    typeof started === 'number' && Number.isInteger(started) && started > 0
-      ? started
-      : typeof quizQuestionCount === 'number' && quizQuestionCount > 0
-        ? quizQuestionCount
-        : 5;
-  const byNumber = new Map<number, AttemptQuestionResult>();
+const withStoredEmoji = (
+  results: AttemptQuestionResult[],
+  json: unknown
+): DrawerQuestionResult[] => {
+  const emojiByNumber = new Map<number, string>();
   for (const entry of Array.isArray(json) ? json : []) {
-    const r = entry as Record<string, unknown> | null;
-    if (
-      r &&
-      typeof r.question_num === 'number' &&
-      Number.isInteger(r.question_num) &&
-      r.question_num >= 1 &&
-      r.question_num <= count &&
-      typeof r.attempts === 'number' &&
-      typeof r.credit_earned === 'number' &&
-      typeof r.eventually_correct === 'boolean'
-    ) {
-      byNumber.set(r.question_num, {
-        question_num: r.question_num,
-        attempts: r.attempts,
-        credit_earned: r.credit_earned,
-        eventually_correct: r.eventually_correct,
-      });
+    const r = entry as { question_num?: unknown; emoji?: unknown } | null;
+    if (r && typeof r.question_num === 'number' && typeof r.emoji === 'string' && r.emoji) {
+      emojiByNumber.set(r.question_num, r.emoji);
     }
   }
-  return [...byNumber.values()].sort((a, b) => a.question_num - b.question_num);
+  return results.map(result => ({
+    ...result,
+    emoji: emojiByNumber.get(result.question_num) ?? null,
+  }));
 };
 
 /**
  * `endedBy` is how a chat-runtime attempt ended, read from its journal
  * (quizChat.service, `messageLimitOf`): it is not an attempt column.
+ * `viewer`: `staff` keeps the stored scores (no staff surface displays
+ * them); `student` (the default) sends no grade number (E1).
  */
 export const attemptDrawerView = (
   attempt: {
@@ -250,27 +462,51 @@ export const attemptDrawerView = (
     evaluation_json?: unknown;
     quiz?: { question_count?: number | null } | null;
   },
-  { endedBy = null }: { endedBy?: 'turn_limit' | null } = {}
+  {
+    endedBy = null,
+    viewer = 'student',
+  }: { endedBy?: 'turn_limit' | null; viewer?: 'staff' | 'student' } = {}
 ): AttemptDrawerView => {
   // Scores are shown for a completed attempt only.
   const completed = Boolean(attempt.completed_at);
-  return {
-    agent_runtime: attempt.agent_runtime === 'trigger_chat' ? 'trigger_chat' : 'ai_agent',
-    evaluation_json: completed ? evaluationRecord(attempt.evaluation_json) : null,
-    ended_by: completed && endedBy === 'turn_limit' ? 'turn_limit' : null,
+  const record = completed ? evaluationRecord(attempt.evaluation_json) : null;
+  const results = completed
+    ? withStoredEmoji(
+        attemptQuestionResults(
+          attempt.question_results_json,
+          attempt.agent_config,
+          attempt.quiz?.question_count
+        ),
+        attempt.question_results_json
+      )
+    : [];
+  const base = {
+    agent_runtime: (attempt.agent_runtime === 'trigger_chat' ? 'trigger_chat' : 'ai_agent') as
+      | 'trigger_chat'
+      | 'ai_agent',
+    ended_by: (completed && endedBy === 'turn_limit' ? 'turn_limit' : null) as 'turn_limit' | null,
     id: attempt.id,
     completed_at: attempt.completed_at,
     total_duration_ms: attempt.total_duration_ms ?? null,
     unfocused_duration_ms: attempt.unfocused_duration_ms ?? null,
-    partial_credit_percentage: completed ? (attempt.partial_credit_percentage ?? null) : null,
-    first_attempt_percentage: completed ? (attempt.first_attempt_percentage ?? null) : null,
-    question_results: completed
-      ? attemptQuestionResults(
-          attempt.question_results_json,
-          attempt.agent_config,
-          attempt.quiz?.question_count
-        )
-      : [],
+  };
+  if (viewer === 'staff') {
+    return {
+      ...base,
+      evaluation_json: record,
+      partial_credit_percentage: completed ? (attempt.partial_credit_percentage ?? null) : null,
+      first_attempt_percentage: completed ? (attempt.first_attempt_percentage ?? null) : null,
+      question_results: results,
+    };
+  }
+  return {
+    ...base,
+    evaluation_json: studentEvaluationRecord(record),
+    question_results: results.map(({ question_num, attempts, emoji }) => ({
+      question_num,
+      attempts,
+      emoji,
+    })),
   };
 };
 
@@ -317,277 +553,199 @@ export const quizResultsQuizView = (quiz: {
   include_code_context: quiz.include_code_context === true,
 });
 
-export interface QuizResultUser {
-  id: string;
-  name: string | null;
-  login: string | null;
-  avatar_url: string | null;
-}
-
-export interface QuizFocusMetrics {
-  totalMs: number;
-  focusedMs: number;
-  percentage: number;
-}
-
-export interface QuizResultAttempt {
-  id: string;
-  started_at: Date | string;
-  completed_at: Date | string | null;
-  partialCreditScore: number | null;
-  firstAttemptScore: number | null;
-  focusMetrics: QuizFocusMetrics | null;
-  isCounting: boolean;
-  /**
-   * Whole hours past the student's due date (plus the hours they bought), by
-   * `completed_at`; null where lateness does not apply (a staff member's or
-   * other non-student's attempt, or a quiz with no due date).
-   */
-  lateHours: number | null;
-}
-
-export interface QuizResultStudent {
-  userId: string;
-  user: QuizResultUser;
-  attempts: QuizResultAttempt[];
-  attemptCount: number;
-  /** The raw percentage of the attempt that counts (picked after the late penalty). */
-  currentScore: number | null;
-  /** What that attempt counts for after the late penalty; equals `currentScore` when on time. */
-  countedScore: number | null;
-  /** That attempt's late hours, or null where lateness does not apply. */
-  lateHours: number | null;
-  /**
-   * A rostered student who counts 0 in the gradebook: no completed attempt
-   * once the due date (plus the hours they bought) has passed, even with an
-   * attempt still running.
-   */
-  countsAsZero: boolean;
-  bestScore: number | null;
-  firstAttemptScore: number | null;
-  countingAttemptId: string | null;
-  /** When the newest attempt started; null for a student with no attempt. */
-  latestAttempt: Date | string | null;
-}
-
-/** The viewer's own attempt on this quiz: enough to resume or restart a preview. */
-export interface QuizViewerAttempt {
-  id: string;
-  completed_at: Date | string | null;
-}
-
-/** The attempt columns this module reads; any other column is ignored. */
-export interface QuizAttemptSource {
-  id: string;
-  user_id: string;
-  started_at: Date | string;
-  completed_at: Date | string | null;
-  total_duration_ms: number | null;
-  unfocused_duration_ms: number | null;
-  partial_credit_percentage: number | null;
-  first_attempt_percentage: number | null;
-  user?: {
-    id: string;
-    name?: string | null;
-    login?: string | null;
-    image?: string | null;
-  } | null;
-}
-
-/** A STUDENT on the roster, as the membership lookup returns them (any extra field is ignored). */
-export interface QuizRosterStudent {
-  id: string;
-  name?: string | null;
-  login?: string | null;
-  image?: string | null;
-}
-
-const toUser = (userId: string, user: QuizAttemptSource['user']): QuizResultUser => ({
-  id: user?.id ?? userId,
-  name: user?.name ?? null,
-  login: user?.login ?? null,
-  // The avatar column is `image` (BetterAuth); the thumbnail reads `avatar_url`.
-  avatar_url: user?.image ?? null,
-});
-
-const focusMetricsOf = (attempt: QuizAttemptSource): QuizFocusMetrics | null => {
-  const totalMs = attempt.total_duration_ms ?? null;
-  const unfocusedMs = attempt.unfocused_duration_ms ?? null;
-  if (
-    totalMs === null ||
-    unfocusedMs === null ||
-    !Number.isFinite(totalMs) ||
-    totalMs <= 0 ||
-    !Number.isFinite(unfocusedMs) ||
-    unfocusedMs < 0
-  ) {
-    return null;
-  }
-  const focusedMs = Math.max(totalMs - unfocusedMs, 0);
-  return { totalMs, focusedMs, percentage: Math.round((focusedMs / totalMs) * 100) };
-};
-
-const score = (value: number | null | undefined) => (typeof value === 'number' ? value : null);
-
-const time = (value: Date | string | null) => (value ? new Date(value).getTime() : 0);
-
 /**
- * What lateness is measured against on the results page: the assignment's due
- * date, each student's net hours bought, the classroom's penalty, and who is
- * a STUDENT (anyone else's attempts are previews, never late).
+ * The results page's rows with every grade as the classroom's emoji (E1: no
+ * grade number is shown to anyone). The numeric fields stay on the row as
+ * sort keys only. `regradeAttemptIds`: the attempts of this quiz with an
+ * open (IN_REVIEW) regrade/resubmit request.
  */
-export interface QuizResultsLateContext {
-  studentDeadline: Date | string | null;
-  latePenaltyPerHour: number;
-  /** student id → net hours bought on this quiz's assignment. */
-  extensionHours: ReadonlyMap<string, number>;
-  studentIds: ReadonlySet<string>;
+export interface QuizResultAttemptView extends QuizResultAttempt {
+  /** The attempt's first-try score (analytics) as the nearest emoji. */
+  firstAttemptEmoji: string | null;
+  /** An open regrade/resubmit request on this attempt. */
+  regradeRequested: boolean;
 }
 
-export const buildQuizResultRows = ({
-  attempts,
-  gradingStrategy,
-  viewerId,
-  late = null,
-  roster = null,
-}: {
-  attempts: QuizAttemptSource[];
-  gradingStrategy: string | null | undefined;
-  viewerId: string;
-  /** Null for a quiz with no assignment: nothing is late. */
-  late?: QuizResultsLateContext | null;
-  /**
-   * The STUDENT roster and the quiz's assignment. Every rostered student gets
-   * a row, and whether they count 0 follows the gradebook's rule
-   * (`quizGradeItem`). Null: rows for students with attempts only, nobody
-   * counts 0.
-   */
-  roster?: {
-    students: readonly QuizRosterStudent[];
-    /** Null for a quiz with no assignment: nobody counts 0. */
-    assignment: QuizGradeAssignment | null;
-    now: Date;
-  } | null;
-}): { students: QuizResultStudent[]; viewerAttempt: QuizViewerAttempt | null } => {
-  const byStudent = new Map<
-    string,
-    { user: QuizResultUser; attempts: QuizResultAttempt[]; sources: QuizAttemptSource[] }
-  >();
+export interface QuizResultStudentView extends Omit<QuizResultStudent, 'attempts'> {
+  attempts: QuizResultAttemptView[];
+  /** The counting attempt's effective grade. */
+  currentEmoji: string | null;
+  /** What it counts for after the late penalty, when that differs (or a counted 0). */
+  countedEmoji: string | null;
+  bestEmoji: string | null;
+  firstAttemptEmoji: string | null;
+  /** One of the student's attempts has an open regrade/resubmit request. */
+  regradeRequested: boolean;
+}
 
-  for (const attempt of attempts) {
-    const userId = String(attempt.user_id);
-    let student = byStudent.get(userId);
-    if (!student) {
-      student = { user: toUser(userId, attempt.user), attempts: [], sources: [] };
-      byStudent.set(userId, student);
-    }
-    student.sources.push(attempt);
-    student.attempts.push({
-      id: attempt.id,
-      started_at: attempt.started_at,
-      completed_at: attempt.completed_at,
-      partialCreditScore: score(attempt.partial_credit_percentage),
-      firstAttemptScore: score(attempt.first_attempt_percentage),
-      focusMetrics: focusMetricsOf(attempt),
-      isCounting: false,
-      lateHours: null,
-    });
-  }
-
-  const rostered = new Set(roster?.students.map(s => String(s.id)) ?? []);
-  // The gradebook's zero rule, for a rostered student's attempts (any state).
-  const countsAsZero = (userId: string, sources: QuizAttemptSource[]) => {
-    if (!roster?.assignment || !rostered.has(userId)) return false;
-    const item = quizGradeItem({
-      assignment: roster.assignment,
-      gradingStrategy,
-      attempts: sources,
-      extensionHours: late?.extensionHours.get(userId) ?? 0,
-      latePenaltyPerHour: late?.latePenaltyPerHour ?? 0,
-      // This page is shown only where quizzes are.
-      quizzesVisible: true,
-      now: roster.now,
-    });
-    return item?.counts_as_zero === true;
-  };
-
-  const withAttempts = Array.from(byStudent.entries()).map(([userId, student]) => {
-    const completed = student.attempts.filter(a => a.completed_at && a.partialCreditScore !== null);
-    // Lateness applies to students on the roster when the quiz has a due date.
-    const lateContext =
-      late && late.studentDeadline != null && late.studentIds.has(userId)
-        ? {
-            studentDeadline: late.studentDeadline,
-            extensionHours: late.extensionHours.get(userId) ?? 0,
-            latePenaltyPerHour: late.latePenaltyPerHour,
-          }
-        : null;
-    // The shared selector over late-penalised scores, read over the attempt
-    // rows themselves (raw scores where nothing is late).
-    const score = countingQuizScore(
-      student.sources,
-      gradingStrategy,
-      lateContext ?? { studentDeadline: null }
-    );
-    const counting = student.attempts.find(a => a.id === score.counting_attempt_id) ?? null;
-    const sorted = [...student.attempts].sort((a, b) => time(b.started_at) - time(a.started_at));
-    const lateOf = (attempt: QuizResultAttempt) =>
-      lateContext && attempt.completed_at
-        ? lateHoursOf(attempt.completed_at, lateContext.studentDeadline, lateContext.extensionHours)
-        : null;
-
-    const zero = countsAsZero(userId, student.sources);
-
+export const quizResultStudentsView = (
+  students: readonly QuizResultStudent[],
+  emojiScale: QuizEmojiScale,
+  regradeAttemptIds: ReadonlySet<string> = new Set()
+): QuizResultStudentView[] =>
+  students.map(student => {
+    const attempts = student.attempts.map(attempt => ({
+      ...attempt,
+      firstAttemptEmoji: attempt.completed_at
+        ? quizPercentageEmoji(attempt.firstAttemptScore, emojiScale)
+        : null,
+      regradeRequested: regradeAttemptIds.has(attempt.id),
+    }));
+    const counting = attempts.find(a => a.id === student.countingAttemptId) ?? null;
     return {
-      userId,
-      user: student.user,
-      attempts: sorted.map(attempt => ({
-        ...attempt,
-        isCounting: attempt.id === counting?.id,
-        lateHours: lateOf(attempt),
-      })),
-      attemptCount: student.attempts.length,
-      currentScore: counting?.partialCreditScore ?? null,
-      countedScore: zero ? 0 : score.grade,
-      lateHours: counting && lateContext ? score.late_hours : null,
-      countsAsZero: zero,
-      bestScore:
-        completed.length > 0 ? Math.max(...completed.map(a => a.partialCreditScore ?? 0)) : null,
-      firstAttemptScore: counting?.firstAttemptScore ?? null,
-      countingAttemptId: counting?.id ?? null,
-      latestAttempt: sorted[0].started_at,
+      ...student,
+      attempts,
+      currentEmoji: counting?.grade.effective.emoji ?? null,
+      countedEmoji: student.countsAsZero
+        ? quizPercentageEmoji(0, emojiScale)
+        : countedEmojiOf(
+            student.currentScore,
+            student.countedScore,
+            emojiScale,
+            counting?.grade.effective.emoji
+          ),
+      bestEmoji: quizPercentageEmoji(student.bestScore, emojiScale),
+      firstAttemptEmoji: quizPercentageEmoji(student.firstAttemptScore, emojiScale),
+      regradeRequested: attempts.some(a => a.regradeRequested),
     };
   });
 
-  // Rostered students with no attempt, after those with one, in roster order.
-  const notStarted = (roster?.students ?? [])
-    .filter(s => !byStudent.has(String(s.id)))
-    .map((s): QuizResultStudent => {
-      const userId = String(s.id);
-      const zero = countsAsZero(userId, []);
-      return {
-        userId,
-        user: toUser(userId, { id: userId, name: s.name, login: s.login, image: s.image }),
-        attempts: [],
-        attemptCount: 0,
-        currentScore: null,
-        countedScore: zero ? 0 : null,
-        lateHours: null,
-        countsAsZero: zero,
-        bestScore: null,
-        firstAttemptScore: null,
-        countingAttemptId: null,
-        latestAttempt: null,
-      };
-    });
-  const students: QuizResultStudent[] = [...withAttempts, ...notStarted];
+/** The results page's statistics: counts, and the grades as the classroom's emoji. */
+export interface QuizResultStatsView {
+  totalAttempts: number;
+  completedAttempts: number;
+  inProgressAttempts: number;
+  /** Share of attempts completed, 0-100 (not a grade). */
+  completionRate: number;
+  averageEmoji: string | null;
+  highestEmoji: string | null;
+  lowestEmoji: string | null;
+}
 
-  // First match in the order the attempts arrived — the service returns them
-  // newest first, so this is the viewer's latest preview.
-  const own = attempts.find(a => String(a.user_id) === String(viewerId));
-
+export const quizResultStatsView = (
+  students: readonly QuizResultStudent[],
+  emojiScale: QuizEmojiScale
+): QuizResultStatsView => {
+  const all = students.flatMap(s => s.attempts);
+  const completed = all.filter(a => a.completed_at !== null);
+  const scores = completed
+    .map(a => a.partialCreditScore)
+    .filter((value): value is number => typeof value === 'number');
   return {
-    students,
-    viewerAttempt: own ? { id: own.id, completed_at: own.completed_at } : null,
+    totalAttempts: all.length,
+    completedAttempts: completed.length,
+    inProgressAttempts: all.length - completed.length,
+    completionRate: all.length > 0 ? Math.round((completed.length / all.length) * 1000) / 10 : 0,
+    averageEmoji:
+      scores.length > 0
+        ? quizPercentageEmoji(scores.reduce((a, b) => a + b, 0) / scores.length, emojiScale)
+        : null,
+    highestEmoji: scores.length > 0 ? quizPercentageEmoji(Math.max(...scores), emojiScale) : null,
+    lowestEmoji: scores.length > 0 ? quizPercentageEmoji(Math.min(...scores), emojiScale) : null,
   };
 };
+
+/**
+ * The staff attempt drawer's adjust panel: the attempt's grade (emoji only),
+ * the adjustment and its author, the scale to pick from, and the open
+ * regrade/resubmit request when there is one. `adjustable` is false for an
+ * attempt staff may not adjust (still running, or not a current student's:
+ * a staff preview); the panel is then hidden.
+ */
+export interface StaffAttemptGradePanel {
+  attemptId: string;
+  adjustable: boolean;
+  /**
+   * The classroom takes changes from this viewer (not LOCKED/UNPUBLISHED for
+   * a non-owner, `assertClassroomMutationAllowed`'s rule). False hides the
+   * adjust, comment and revert controls.
+   */
+  canEdit: boolean;
+  grade: AttemptGradeView | null;
+  /** The stored adjustment emoji, in effect or orphaned. */
+  adjustedEmoji: string | null;
+  /**
+   * The adjustment's emoji is no longer on the classroom's scale (E17): the
+   * AI's grade (`grade.emoji`) counts until it is remapped in Grade settings;
+   * the panel shows a "needs remap" chip.
+   */
+  orphaned: boolean;
+  comment: string | null;
+  /** Who set the score adjustment, and when (cleared on revert). */
+  adjustedByName: string | null;
+  adjustedAt: string | null;
+  /** Who last wrote the comment, and when. */
+  commentByName: string | null;
+  commentAt: string | null;
+  /** The classroom's scale, best first (emoji keys only). */
+  scaleEmojis: string[];
+  /**
+   * What each emoji on the scale would count for on this attempt after its
+   * late penalty (`countedQuizEmojiMap`): the drawer's "Counted" line follows
+   * the emoji being picked. Emoji only, no number.
+   */
+  countedByEmoji: Record<string, string | null>;
+  openRequest: {
+    id: string;
+    comment: string | null;
+    studentName: string | null;
+    createdAt: string | null;
+  } | null;
+}
+
+export const staffAttemptGradePanel = ({
+  attempt,
+  adjustable,
+  canEdit,
+  grade,
+  adjustedByName,
+  commentByName,
+  emojiScale,
+  latePenaltyPerHour,
+  openRequest,
+  studentName,
+}: {
+  attempt: {
+    id: string;
+    adjusted_emoji: string | null;
+    instructor_comment?: string | null;
+    adjusted_at?: Date | string | null;
+    comment_at?: Date | string | null;
+  };
+  adjustable: boolean;
+  canEdit: boolean;
+  grade: AttemptGradeView | null;
+  adjustedByName: string | null;
+  commentByName: string | null;
+  emojiScale: QuizEmojiScale;
+  /** The classroom's late penalty per hour, for `countedByEmoji`. */
+  latePenaltyPerHour: number;
+  openRequest: {
+    id: string;
+    student_comment?: string | null;
+    created_at?: Date | string | null;
+  } | null;
+  studentName: string | null;
+}): StaffAttemptGradePanel => ({
+  attemptId: attempt.id,
+  adjustable,
+  canEdit,
+  grade,
+  adjustedEmoji: attempt.adjusted_emoji ?? null,
+  orphaned: isOrphanedAdjustment(attempt, emojiScale),
+  comment: attempt.instructor_comment ?? null,
+  adjustedByName: attempt.adjusted_emoji ? adjustedByName : null,
+  adjustedAt: attempt.adjusted_emoji ? isoOrNull(attempt.adjusted_at) : null,
+  commentByName: attempt.instructor_comment ? commentByName : null,
+  commentAt: attempt.instructor_comment ? isoOrNull(attempt.comment_at) : null,
+  scaleEmojis: Object.keys(emojiScale),
+  countedByEmoji: countedQuizEmojiMap(emojiScale, grade?.lateHours ?? 0, latePenaltyPerHour),
+  openRequest: openRequest
+    ? {
+        id: openRequest.id,
+        comment: openRequest.student_comment ?? null,
+        studentName,
+        createdAt: isoOrNull(openRequest.created_at),
+      }
+    : null,
+});

@@ -109,6 +109,18 @@ describe('student assignments loader', () => {
     });
   });
 
+  it("sends a quiz row's emoji, never its percentage (E1)", async () => {
+    listForStudentMock.mockResolvedValue([
+      { ...row('quiz-done', 'QUIZ', true), score: 73.37, scoreEmoji: 'eyes' },
+    ]);
+
+    const data = await (await loader(loaderArgs())).data;
+
+    expect(data.rows[0]).toMatchObject({ assignmentId: 'quiz-done', scoreEmoji: 'eyes' });
+    expect('score' in data.rows[0]).toBe(false);
+    expect(JSON.stringify(data)).not.toContain('73.37');
+  });
+
   it('counts every type in the progress, done rows as completed', async () => {
     listForStudentMock.mockResolvedValue([
       row('repo-open', 'REPO', false),

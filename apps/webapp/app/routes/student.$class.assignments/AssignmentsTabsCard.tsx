@@ -5,6 +5,7 @@ import { motion, useReducedMotion } from 'framer-motion';
 import { IconExternalLink } from '@tabler/icons-react';
 import type { StudentCourseworkRow } from '@classmoji/services';
 import Emoji from '~/components/ui/display/Emoji';
+import QuizGradeEmoji, { CountedEmoji } from '~/components/features/quiz/QuizGradeEmoji';
 import TokenExtensionPopover from '~/components/features/TokenExtensionPopover';
 import { CommitCount } from '~/components/features/analytics';
 import {
@@ -30,7 +31,11 @@ export type AssignmentStatus = 'current' | 'completed';
 type TabKey = 'current' | 'completed' | 'all';
 
 /** A coursework row with the published pages and decks linked to its assignment. */
-export type AssignmentRow = StudentCourseworkRow & { materials: CourseworkMaterial[] };
+/** A coursework row as the page receives it: no quiz percentage (`score`), only its emoji (E1). */
+type CourseworkRow = Omit<StudentCourseworkRow, 'score'>;
+export type AssignmentRow = CourseworkRow & {
+  materials: CourseworkMaterial[];
+};
 
 interface AssignmentsTabsCardProps {
   rows: AssignmentRow[];
@@ -58,7 +63,7 @@ const emptyCopy: Record<TabKey, string> = {
 
 const Dash = () => <span className="text-gray-400 dark:text-gray-600">—</span>;
 
-const attemptsLine = (row: StudentCourseworkRow) => {
+const attemptsLine = (row: CourseworkRow) => {
   if (row.attemptsUsed === null) return null;
   const used = row.attemptsUsed;
   if (!row.maxAttempts) return `${used} ${used === 1 ? 'attempt' : 'attempts'} used`;
@@ -66,7 +71,7 @@ const attemptsLine = (row: StudentCourseworkRow) => {
 };
 
 /** The row's title, linked to where the student does the work. */
-const TitleLink = ({ row }: { row: StudentCourseworkRow }) => {
+const TitleLink = ({ row }: { row: CourseworkRow }) => {
   const web = useGitWeb();
   const className =
     'inline-flex items-center gap-1.5 font-medium text-ink-0! hover:underline underline-offset-2';
@@ -104,7 +109,7 @@ const AssignmentsTabsCard = ({
 
   // An untracked row (a PUBLIC form, open or closed) is neither still to do
   // nor done for this student: it is listed under All only.
-  const tabOf = (row: StudentCourseworkRow): AssignmentStatus | null =>
+  const tabOf = (row: CourseworkRow): AssignmentStatus | null =>
     !row.tracked ? null : row.done ? 'completed' : 'current';
 
   const counts: Record<TabKey, number> = {
@@ -308,9 +313,19 @@ const AssignmentsTabsCard = ({
                           ) : (
                             <Dash />
                           )
-                        ) : row.score !== null ? (
-                          <span className="font-semibold tabular-nums text-ink-1">
-                            {Math.round(row.score * 10) / 10}%
+                        ) : row.scoreEmoji ? (
+                          // A quiz: the counting attempt's grade as the
+                          // classroom's emoji, never the number (E1), with the
+                          // original beside it when staff adjusted it (D6),
+                          // and what it counts for after the late penalty
+                          // (the late chip is in the status column).
+                          <span className="inline-flex items-center gap-1.5">
+                            <QuizGradeEmoji
+                              emoji={row.scoreEmoji}
+                              originalEmoji={row.originalScoreEmoji ?? null}
+                              adjusted={row.adjusted === true}
+                            />
+                            <CountedEmoji emoji={row.countedScoreEmoji} />
                           </span>
                         ) : (
                           <Dash />
@@ -364,7 +379,7 @@ const AssignmentsTabsCard = ({
                                 }}
                                 className="inline-flex items-center text-xs font-medium text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-full ring-1 ring-line bg-panel hover:bg-nav-hover transition-colors"
                               >
-                                Request regrade
+                                Request regrade/resubmit
                               </Link>
                             )}
                           </span>

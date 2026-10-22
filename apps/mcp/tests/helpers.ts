@@ -449,6 +449,7 @@ export const MCP_TOOL_NAMES = new Set([
   'assignment_update',
   'regrade_create',
   'regrade_resolve',
+  'quiz_attempt_adjust',
   'module_create',
   'module_update',
   'module_publish',
@@ -464,6 +465,8 @@ export const MCP_TOOL_NAMES = new Set([
   'token_grant',
   'extension_purchase',
   // Reads of other people's data write VIEW rows too (mcp/audit.ts).
+  'list_quiz_attempts',
+  'get_quiz_attempt',
   'get_roster',
   'list_teams',
   'list_submissions',

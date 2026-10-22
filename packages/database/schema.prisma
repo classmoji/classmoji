@@ -349,7 +349,13 @@ model User {
   graded_repository_assignments GitRepoAssignmentGrader[]
   grades_given                  AssignmentGrade[]
   quiz_attempts                 QuizAttempt[]
+  /// Quiz attempts whose score this user (teaching team) adjusted.
+  quiz_attempts_adjusted        QuizAttempt[]             @relation("QuizAttemptAdjustedBy")
+  /// Quiz attempts whose instructor comment this user (teaching team) wrote.
+  quiz_attempts_commented       QuizAttempt[]             @relation("QuizAttemptCommentBy")
   regrade_requests              RegradeRequest[]
+  /// Regrade requests this user (teaching team) resolved.
+  regrade_requests_resolved     RegradeRequest[]          @relation("RegradeRequestResolvedBy")
   token_transactions            TokenTransaction[]
   audit_logs                    AuditLog[]
   team_memberships              TeamMembership[]
@@ -1254,24 +1260,40 @@ model AssignmentGrade {
   @@map("assignment_grades")
 }
 
+/// A student's regrade/resubmit request: on a repo submission
+/// (`git_repo_assignment_id`) or on a quiz attempt (`quiz_attempt_id`), exactly
+/// one of the two (CHECK `regrade_requests_one_target`). One open (IN_REVIEW)
+/// request per quiz attempt (partial unique index
+/// `regrade_requests_open_quiz_attempt`).
 model RegradeRequest {
   id                     String               @id @default(uuid())
-  git_repo_assignment_id String
+  git_repo_assignment_id String?
+  quiz_attempt_id        String?
   classroom_id           String
   student_id             String
   student_comment        String?
   grader_comment         String?
   previous_grade         String[]
   status                 RegradeRequestStatus @default(IN_REVIEW)
+  /// The teaching-team member who resolved the request (APPROVED or DENIED). Null while open and on rows resolved before it was recorded.
+  resolved_by_id         String?
+  resolved_at            DateTime?
+  /// Quiz requests: the attempt's emoji at resolution (APPROVED: the one set;
+  /// DENIED: the effective one kept). Null while open, on repo requests, and on
+  /// rows resolved before it was recorded.
+  resolved_emoji         String?
   created_at             DateTime             @default(now())
   updated_at             DateTime             @default(now()) @updatedAt
 
-  git_repo_assignment GitRepoAssignment @relation(fields: [git_repo_assignment_id], references: [id], onDelete: Cascade)
-  classroom           Classroom         @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
-  student             User              @relation(fields: [student_id], references: [id], onDelete: Cascade)
+  git_repo_assignment GitRepoAssignment? @relation(fields: [git_repo_assignment_id], references: [id], onDelete: Cascade)
+  quiz_attempt        QuizAttempt?       @relation(fields: [quiz_attempt_id], references: [id], onDelete: Cascade)
+  classroom           Classroom          @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  student             User               @relation(fields: [student_id], references: [id], onDelete: Cascade)
+  resolved_by         User?              @relation("RegradeRequestResolvedBy", fields: [resolved_by_id], references: [id], onDelete: SetNull)
 
   @@index([classroom_id])
   @@index([student_id])
+  @@index([quiz_attempt_id])
   @@map("regrade_requests")
 }
 
@@ -1520,13 +1542,29 @@ model QuizAttempt {
   /// Set at each admitted turn; a write from a superseded run no longer matches.
   turn_fence                String?
   chat_grant                Json?
+  /// Staff grade adjustment: an emoji on the classroom's scale (a `score-N`
+  /// badge on the numeric one). When set it replaces `partial_credit_percentage`
+  /// as the attempt's score, read through the classroom's EmojiMapping
+  /// (`effectivePercentage` in @classmoji/utils). The AI evaluation is never edited.
+  adjusted_emoji            String?
+  /// Staff comment to the student on this attempt; may be set without a score change.
+  instructor_comment        String?
+  /// Who last set or changed the score adjustment, and when. Cleared on revert.
+  adjusted_by_id            String?
+  adjusted_at               DateTime?
+  /// Who last wrote `instructor_comment`, and when. Kept on revert.
+  comment_by_id             String?
+  comment_at                DateTime?
   created_at                DateTime  @default(now())
   updated_at                DateTime  @default(now()) @updatedAt
 
-  quiz         Quiz               @relation(fields: [quiz_id], references: [id], onDelete: Cascade)
-  user         User               @relation(fields: [user_id], references: [id], onDelete: Cascade)
-  conversation AIConversation?    @relation(fields: [conversation_id], references: [id])
-  events       QuizAttemptEvent[]
+  quiz             Quiz               @relation(fields: [quiz_id], references: [id], onDelete: Cascade)
+  user             User               @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  adjusted_by      User?              @relation("QuizAttemptAdjustedBy", fields: [adjusted_by_id], references: [id], onDelete: SetNull)
+  comment_by       User?              @relation("QuizAttemptCommentBy", fields: [comment_by_id], references: [id], onDelete: SetNull)
+  conversation     AIConversation?    @relation(fields: [conversation_id], references: [id])
+  events           QuizAttemptEvent[]
+  regrade_requests RegradeRequest[]
 
   @@index([quiz_id])
   @@index([user_id])

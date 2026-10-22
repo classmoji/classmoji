@@ -52,6 +52,10 @@ vi.mock('~/utils/classroomProFlag.server', () => ({
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
+    // The classroom's scale: the list shows the average grade as its emoji.
+    emojiMapping: {
+      findScaleByClassroomId: async () => ({ rocket: 100, '+1': 85, eyes: 70, '-1': 50 }),
+    },
     quiz: {
       create: (...a: unknown[]) => mocks.create(...a),
       update: (...a: unknown[]) => mocks.update(...a),

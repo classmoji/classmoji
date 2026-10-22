@@ -24,7 +24,7 @@ import {
   sandboxId,
   type CodeSubmissionInput,
   type NextStepAction,
-  type QuizEvaluationRecordV2,
+  type QuizEvaluationRecordView,
   type QuizUIMessage,
 } from '@classmoji/utils/quiz-agent';
 import { useDarkMode } from '~/hooks';
@@ -44,6 +44,7 @@ import QuizSandbox, {
   type SandboxSubmit,
 } from './QuizSandbox';
 import CodeSubmissionCard from './CodeSubmissionCard';
+import { QuizResultSlotsFallback } from './QuizResultContext';
 import {
   cardSandboxOf,
   hintSandboxesOf,
@@ -148,7 +149,7 @@ export interface QuizChatAttempt {
   completed_at?: Date | string | null;
   total_duration_ms?: number | null;
   unfocused_duration_ms?: number | null;
-  evaluation_json?: QuizEvaluationRecordV2 | null;
+  evaluation_json?: QuizEvaluationRecordView | null;
   /** `turn_limit`: the server submitted the attempt at its message limit. */
   ended_by?: 'turn_limit' | null;
 }
@@ -1293,7 +1294,7 @@ interface TranscriptProps {
   userLogin?: string | null;
   userImage?: string | null;
   /** The stored evaluation record (loader); preferred over a part's copy. */
-  evaluationRecord?: QuizEvaluationRecordV2 | null;
+  evaluationRecord?: QuizEvaluationRecordView | null;
   focusMetrics?: ResultsFocusMetrics | null;
   /** Absent in read-only views. */
   onButton?: ((text: string, action: NextStepAction) => void) | null;
@@ -1406,7 +1407,7 @@ export function QuizTranscript({
   // when there was none).
   let resultsRendered = false;
   const renderResults = (
-    fallback: QuizEvaluationRecordV2 | null | undefined,
+    fallback: QuizEvaluationRecordView | null | undefined,
     { ownClosingText = false, spaced = false }: { ownClosingText?: boolean; spaced?: boolean } = {}
   ) => {
     const record = evaluationRecord ?? fallback ?? null;
@@ -1707,8 +1708,11 @@ export function QuizTranscript({
         </div>
       )}
 
-      {/* A completed attempt whose transcript carries no evaluation part still shows its results. */}
-      {status === 'complete' && renderResults(null)}
+      {/* A completed attempt whose transcript carries no evaluation part still
+          shows its results; with no record at all, the drawer's blocks (the
+          staff adjust panel) still show where the results would be. */}
+      {status === 'complete' &&
+        (renderResults(null) ?? (resultsRendered ? null : <QuizResultSlotsFallback />))}
 
       <div ref={endRef} />
     </div>

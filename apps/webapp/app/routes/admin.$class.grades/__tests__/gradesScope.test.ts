@@ -70,7 +70,10 @@ vi.mock('@classmoji/services', () => ({
       updateInClassroom: (...a: unknown[]) => mocks.updateInClassroom(...a),
       findByClassroomId: (...a: unknown[]) => mocks.findByClassroomId(...a),
     },
-    emojiMapping: { findByClassroomId: (...a: unknown[]) => mocks.findEmojiMappings(...a) },
+    emojiMapping: {
+      findByClassroomId: (...a: unknown[]) => mocks.findEmojiMappings(...a),
+      findScaleByClassroomId: (...a: unknown[]) => mocks.findEmojiMappings(...a),
+    },
     module: { findByClassroomSlug: (...a: unknown[]) => mocks.findByClassroomSlug(...a) },
     assignment: { listForClassroom: (...a: unknown[]) => mocks.listForClassroom(...a) },
     user: {
@@ -343,17 +346,23 @@ describe('grades loader — quiz columns appear only where quizzes are visible',
     userId: string,
     startedAt: string,
     completedAt: string | null,
-    pct: number | null
+    pct: number | null,
+    adjustedEmoji: string | null = null
   ) => ({
     id,
     user_id: userId,
     started_at: new Date(startedAt),
     completed_at: completedAt ? new Date(completedAt) : null,
     partial_credit_percentage: pct,
+    adjusted_emoji: adjustedEmoji,
     score: null,
   });
 
   beforeEach(() => {
+    // The numeric scale: a grade reads as its score-N badge.
+    mocks.findEmojiMappings.mockResolvedValue(
+      Object.fromEntries(Array.from({ length: 11 }, (_, i) => [`score-${i * 10}`, i * 10]))
+    );
     mocks.listForClassroom.mockResolvedValue(ASSIGNMENT_ROWS);
     mocks.findGradingStrategies.mockResolvedValue({ 'quiz-1': 'HIGHEST' });
     mocks.findAttemptsByQuiz.mockResolvedValue([
@@ -361,13 +370,15 @@ describe('grades loader — quiz columns appear only where quizzes are visible',
     ]);
   });
 
-  it('keeps the quiz column and its attempt scores when quizzes are visible', async () => {
+  it('keeps the quiz column and its attempt grades (emoji, no number) when quizzes are visible', async () => {
     const { assignments, activity } = await resolveColumns();
 
     expect(assignments.map(a => a.id)).toEqual(['a-repo', 'a-quiz', 'a-form']);
     expect(mocks.findAttemptsByQuiz).toHaveBeenCalledWith('quiz-1');
     expect(mocks.findGradingStrategies).toHaveBeenCalledWith(['quiz-1']);
-    expect(activity.quiz['a-quiz']).toEqual({ 'student-1': { completed: true, score: 90 } });
+    expect(activity.quiz['a-quiz']).toEqual({
+      'student-1': { completed: true, scored: true, emoji: 'score-90', orphaned: false },
+    });
     expect(mocks.quizzesVisibleOrThrow).toHaveBeenCalledWith('class-1');
   });
 
@@ -382,9 +393,23 @@ describe('grades loader — quiz columns appear only where quizzes are visible',
     const { activity } = await resolveColumns();
 
     expect(activity.quiz['a-quiz']).toEqual({
-      'student-1': { completed: true, score: 40 },
+      'student-1': { completed: true, scored: true, emoji: 'score-40', orphaned: false },
       // A 0 is a score, not "Completed".
-      'student-2': { completed: true, score: 0 },
+      'student-2': { completed: true, scored: true, emoji: 'score-0', orphaned: false },
+    });
+  });
+
+  it('reads a staff adjustment through the scale, and it can become the counting attempt', async () => {
+    mocks.findAttemptsByQuiz.mockResolvedValue([
+      attempt('at-2', 'student-1', '2026-09-02T10:00:00Z', '2026-09-02T10:30:00Z', 70),
+      // The AI gave 40; staff adjusted it to the 100 badge, so it is the HIGHEST.
+      attempt('at-1', 'student-1', '2026-09-01T10:00:00Z', '2026-09-01T10:30:00Z', 40, 'score-100'),
+    ]);
+
+    const { activity } = await resolveColumns();
+
+    expect(activity.quiz['a-quiz']).toEqual({
+      'student-1': { completed: true, scored: true, emoji: 'score-100', orphaned: false },
     });
   });
 
@@ -399,8 +424,8 @@ describe('grades loader — quiz columns appear only where quizzes are visible',
     const { activity } = await resolveColumns();
 
     expect(activity.quiz['a-quiz']).toEqual({
-      'student-1': { completed: true, score: 90 },
-      'student-2': { completed: false, score: null },
+      'student-1': { completed: true, scored: true, emoji: 'score-90', orphaned: false },
+      'student-2': { completed: false, scored: false, emoji: null, orphaned: false },
     });
   });
 
@@ -431,6 +456,10 @@ describe('grades loader — quiz grade items join the totals', () => {
     counts_as_zero: false,
     late_hours: 4,
     counting_raw_percentage: 80,
+    // The cell's "adjusted" chip (D8), and the emoji staff picked.
+    counting_adjusted: true,
+    counting_adjusted_emoji: 'score-80',
+    counting_orphaned: false,
   };
 
   const resolveAll = async () => {

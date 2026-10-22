@@ -5,12 +5,15 @@
  *
  * `quizVisibility` is the student's view, and every live stream's: the
  * attempt's owner drives the chat, so it is also the owner's view on reload.
- * `quizStaffVisibility` is for staff reading someone else's attempt: the same,
- * except that it keeps offer_next_step's `expected_answer`.
+ * Its evaluation record (submit_quiz_evaluation's output, the `evaluation`
+ * data part) carries no grade number: `QuizEvaluationRecordStudentSchema`
+ * (E1). `quizStaffVisibility` is for staff reading someone else's attempt:
+ * the full record, and offer_next_step's `expected_answer`.
  */
 import type { Registry } from '../agents/projection.ts';
 import type { CodeAwareSandboxQuizQuestion, OfferNextStep } from './schemas.ts';
 import type { QuizToolName } from './tools.ts';
+import { QuizEvaluationRecordStudentSchema } from './records.ts';
 import { quizDataPartSchemas, type QuizDataParts } from './uiTypes.ts';
 
 const tools = {
@@ -36,7 +39,8 @@ const cardInputKeys = [
 
 export const quizVisibility = {
   tools,
-  dataParts: quizDataPartSchemas,
+  dataParts: { ...quizDataPartSchemas, evaluation: QuizEvaluationRecordStudentSchema },
+  outputSchemas: { submit_quiz_evaluation: QuizEvaluationRecordStudentSchema },
   hiddenInputKeys: {
     present_question: cardInputKeys,
     // The correct answer, for staff only. A call with a hidden key sends no

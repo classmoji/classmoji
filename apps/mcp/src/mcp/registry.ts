@@ -30,6 +30,8 @@
  *      against `ctx.classroom.classroomId`, route mutations through
  *      packages/services orchestrators, and write an audit-log entry for
  *      every mutation (ClassmojiService.audit.create).
+ *      Exception: the platform-wide feedback board (tools/feedback.ts) writes
+ *      no audit rows, by decision, matching the webapp.
  * Resources follow the same shape via `ResourceDefinition` (scope is always
  * 'read'); they get the identical enforcement pipeline.
  */

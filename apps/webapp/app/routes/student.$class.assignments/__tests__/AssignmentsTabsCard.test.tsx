@@ -39,7 +39,6 @@ const base = {
   module: { id: 'm1', title: 'Week 1' },
   isExtraCredit: false,
   tracked: true,
-  score: null,
   scoredAt: null,
   attemptsUsed: null,
   maxAttempts: null,
@@ -203,17 +202,34 @@ describe('AssignmentsTabsCard', () => {
       ...QUIZ_OPEN,
       status: 'COMPLETED',
       done: true,
-      score: 82,
+      scoreEmoji: 'score-80',
+      originalScoreEmoji: 'score-80',
+      adjusted: false,
       attemptsUsed: 1,
       action: null,
       deadline: '2020-01-01T12:00:00.000Z',
     };
 
-    it('shows the score and the late pill of the attempt that counts', () => {
-      const html = render([{ ...QUIZ_DONE, numLateHours: 3 }], 'completed');
-      expect(html).toContain('82%');
+    it('shows the grade as the emoji, never the number, and the late pill of the attempt that counts', () => {
+      // Even a row that still carried its raw percentage (the loader strips
+      // it; loader.test.ts) shows only the emoji.
+      const leaky = { ...QUIZ_DONE, numLateHours: 3, score: 82.4 } as AssignmentRow;
+      const html = render([leaky], 'completed');
+      expect(html).toContain('data-emoji="score-80"');
+      expect(html).not.toMatch(/82(\.4)?\s*%?/);
       expect(html).toContain('3h late');
       expect(html).not.toContain('Missing');
+      expect(html).not.toContain('quiz-grade-adjusted');
+    });
+
+    it('shows an adjusted grade with its original and the adjusted chip', () => {
+      const html = render(
+        [{ ...QUIZ_DONE, scoreEmoji: 'score-90', originalScoreEmoji: 'score-60', adjusted: true }],
+        'completed'
+      );
+      expect(html).toContain('data-emoji="score-90"');
+      expect(html).toContain('data-emoji="score-60"');
+      expect(html).toContain('quiz-grade-adjusted');
     });
 
     it('reads as missing, not hours late, past the due date with no completed attempt', () => {
@@ -310,7 +326,6 @@ describe('AssignmentsTabsCard', () => {
       title: 'Finished quiz',
       status: 'COMPLETED',
       done: true,
-      score: 0,
       action: null,
     };
     const closedPublic: AssignmentRow = {

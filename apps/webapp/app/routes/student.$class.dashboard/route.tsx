@@ -214,7 +214,8 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     // The card shows no repo details, so none are sent. Every row keeps the
     // hours its student bought (repo or quiz), so a row inside them is not
     // overdue.
-    const upNext: UpNextRow[] = upNextRows.map(({ repo: _repo, ...row }) => ({
+    // Nor a quiz row's raw percentage (`score`): grades reach the page as emoji (E1).
+    const upNext: UpNextRow[] = upNextRows.map(({ repo: _repo, score: _score, ...row }) => ({
       ...row,
       materials: courseworkMaterials(materials.get(row.assignmentId), classSlug),
     }));
@@ -228,8 +229,8 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     }));
 
     // Recent grades: released repo grades (emoji, as on the Assignments page)
-    // and quiz scores (the counting attempt's percentage, shown as soon as it
-    // completes), newest first. Both come from the coursework rows, so a grade
+    // and quiz grades (the counting attempt's grade as the classroom's emoji,
+    // shown as soon as it completes; never the number, E1), newest first. Both come from the coursework rows, so a grade
     // shows here only for an assignment the student can see there.
     const repoFeedback: FeedbackItem[] = coursework.flatMap(row =>
       row.repo && row.repo.gradesReleased && row.repo.grades.length > 0
@@ -250,12 +251,17 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       .filter(row => row.type === 'QUIZ' && row.score !== null)
       .map(row => ({
         id: `quiz-${row.assignmentId}`,
+        kind: 'QUIZ' as const,
         assignmentTitle: row.title,
         closedAt: row.scoredAt,
         graders: [],
         grades: [],
         issueUrl: null,
-        score: row.score,
+        scoreEmoji: row.scoreEmoji ?? null,
+        originalScoreEmoji: row.originalScoreEmoji ?? null,
+        adjusted: row.adjusted ?? false,
+        countedScoreEmoji: row.countedScoreEmoji ?? null,
+        lateHours: row.numLateHours,
         href: row.href,
       }));
     const feedback: FeedbackItem[] = [...repoFeedback, ...quizFeedback]
@@ -292,15 +298,35 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       ? { moduleTitle: latestMissing.repository.title, moduleSlug: latestMissing.repository.slug }
       : null;
 
-    const resubmits: ResubmitItem[] = (regradeRequests as Array<Record<string, unknown>>).map(r => {
-      const ra = r.git_repo_assignment as { assignment?: { title?: string } } | undefined;
-      return {
-        id: String(r.id),
-        assignmentTitle: ra?.assignment?.title ?? 'Assignment',
-        status: String(r.status),
-        createdAt: r.created_at as string | Date,
-      };
-    });
+    // A request is on a repo submission or on a quiz attempt; a quiz one is
+    // labelled as a quiz with its attempt number. Where the classroom does
+    // not show quizzes, its quiz requests are left out (the predicate the
+    // rest of this page and `regradeRequest.findManyForDisplay` use).
+    const showQuizRequests = await quizzesVisiblePromise;
+    const resubmits: ResubmitItem[] = regradeRequests
+      .filter(r => showQuizRequests || !r.quiz_attempt_id)
+      .map(r => {
+        const attempt = r.quiz_attempt;
+        if (attempt) {
+          return {
+            id: r.id,
+            kind: 'QUIZ' as const,
+            // The quiz's own name, as the requests page shows it.
+            assignmentTitle: attempt.quiz.name || 'Quiz',
+            attemptNumber: attempt.attempt_number,
+            status: r.status,
+            createdAt: r.created_at,
+          };
+        }
+        return {
+          id: r.id,
+          kind: 'REPO' as const,
+          assignmentTitle: r.git_repo_assignment?.assignment?.title ?? 'Assignment',
+          attemptNumber: null,
+          status: r.status,
+          createdAt: r.created_at,
+        };
+      });
 
     return {
       // A plain date, which dayjs parses as local midnight on either side.

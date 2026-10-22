@@ -7,7 +7,11 @@ import { tasks } from '@trigger.dev/sdk';
 import type { Route } from './+types/route';
 import { useDisclosure, useGlobalFetcher } from '~/hooks';
 import { ClassmojiService } from '@classmoji/services';
-import { requireStudentAccess, waitForRunCompletion, assertClassroomMutationAllowed } from '~/utils/helpers';
+import {
+  requireStudentAccess,
+  waitForRunCompletion,
+  assertClassroomMutationAllowed,
+} from '~/utils/helpers';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { userId } = await requireStudentAccess(request, params.class!, {
@@ -68,22 +72,18 @@ const NewRegradeRequest = ({ loaderData }: Route.ComponentProps) => {
         navigate(-1);
       }}
       onOk={handleSubmit}
-      okText="Request a resubmit"
-      title="Request a resubmit"
-      destroyOnClose={true}
+      okText="Request regrade/resubmit"
+      title="Request regrade/resubmit"
+      destroyOnHidden
       okButtonProps={{
         disabled: !comment || !assignment,
       }}
-      cancelButtonProps={{
-        danger: true,
-        type: 'primary',
-      }}
     >
-      <Alert message="Explain your resubmit request below." type="info" showIcon banner />
+      <Alert message="Explain your regrade/resubmit request below." type="info" showIcon banner />
 
       <p className="my-4 text-sm text-gray-500">
-        If you want to resubmit your assignment, you can use this form to contact the TA
-        responsible. Make sure to review your course resubmit policy before submitting.
+        If you want a regrade or to resubmit your assignment, you can use this form to contact the
+        TA responsible. Make sure to review your course regrade/resubmit policy before submitting.
       </p>
 
       <Form layout="vertical">
@@ -146,13 +146,13 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
     return {
       action: 'REQUEST_REGRADE',
-      success: 'Regrade request submitted',
+      success: 'Regrade/resubmit request submitted',
     };
   } catch (error: unknown) {
     console.error('request_regrade failed:', error);
     return {
       action: 'REQUEST_REGRADE',
-      error: 'Failed to submit regrade request. Please try again.',
+      error: 'Failed to submit regrade/resubmit request. Please try again.',
     };
   }
 };

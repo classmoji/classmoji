@@ -14,6 +14,7 @@ import {
   QuestionCardSchema,
   QUIZ_TOOL_ORDER,
   QuizEvaluationFeedbackSchema,
+  QuizEvaluationRecordStudentSchema,
   QuizEvaluationRecordV2Schema,
   QuizQuestionSchema,
   RecordQuestionResultSchema,
@@ -177,7 +178,17 @@ describe('OfferNextStepSchema', () => {
       quizVisibility.hiddenInputKeys.present_question
     );
     expect(quizStaffVisibility.tools).toEqual(quizVisibility.tools);
-    expect(quizStaffVisibility.dataParts).toBe(quizVisibility.dataParts);
+    // The same data parts, but the student's evaluation record carries no
+    // grade number (E1); staff keep the full one.
+    const { evaluation: studentEvaluation, ...studentRest } = quizVisibility.dataParts;
+    const { evaluation: staffEvaluation, ...staffRest } = quizStaffVisibility.dataParts;
+    expect(studentRest).toEqual(staffRest);
+    expect(studentEvaluation).toBe(QuizEvaluationRecordStudentSchema);
+    expect(staffEvaluation).toBe(QuizEvaluationRecordV2Schema);
+    expect(quizVisibility.outputSchemas.submit_quiz_evaluation).toBe(
+      QuizEvaluationRecordStudentSchema
+    );
+    expect(quizStaffVisibility).not.toHaveProperty('outputSchemas');
   });
 });
 

@@ -27,6 +27,7 @@ const READS: Record<string, Kind> = {
   // ── tools ──
   whoami: 'none', // the caller's identity
   billing_status: 'none', // the caller's own plan
+  feedback_read: 'none', // the public feedback board (no classroom)
   my_classrooms: 'none', // the caller's memberships
   get_classroom_info: 'none', // classroom settings
   get_roster: 'audited', // every student, with contact fields for the owner
@@ -42,6 +43,8 @@ const READS: Record<string, Kind> = {
   list_teaching_team: 'none', // the staff directory (the web staff list is not audited)
   grading_report: 'audited', // each TA's grading of students' work
   list_quizzes: 'none', // quiz configuration; class-wide counts and averages only
+  list_quiz_attempts: 'handler', // every student's attempts on a quiz (QUIZ_DETAILS VIEW)
+  get_quiz_attempt: 'handler', // one student's attempt and transcript (QUIZ_ATTEMPT VIEW)
   list_pages: 'none', // course content
   list_modules: 'none', // course content (a student: their own items)
   list_calendar: 'none', // course calendar

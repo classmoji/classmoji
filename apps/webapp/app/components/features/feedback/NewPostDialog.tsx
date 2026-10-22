@@ -2,7 +2,8 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useFetcher, useNavigate } from 'react-router';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { GlobeIcon, LinkIcon, XIcon } from 'lucide-react';
-import { FEEDBACK_ACTION } from './feedback';
+import type { FeedbackCategory } from '@prisma/client';
+import { CATEGORY_EMOJI, CATEGORY_LABELS, CATEGORY_ORDER, FEEDBACK_ACTION } from './feedback';
 
 /** The title and description are bare text on the card, like a document. */
 const bare =
@@ -16,6 +17,7 @@ export function NewPostDialog({ open, onClose }: { open: boolean; onClose: () =>
   const fetcher = useFetcher<{ ok?: boolean; error?: string; postId?: string }>();
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
+  const [category, setCategory] = useState<FeedbackCategory>('FEATURE');
   const [anonymous, setAnonymous] = useState(false);
   const [error, setError] = useState('');
   const sent = useRef(false);
@@ -26,6 +28,7 @@ export function NewPostDialog({ open, onClose }: { open: boolean; onClose: () =>
     if (!open) return;
     setTitle('');
     setBody('');
+    setCategory('FEATURE');
     setAnonymous(false);
     setError('');
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
@@ -67,7 +70,7 @@ export function NewPostDialog({ open, onClose }: { open: boolean; onClose: () =>
       return;
     }
     if (!body.trim()) {
-      setError('Add a few details so others understand the request.');
+      setError('Add a few details so others understand your post.');
       return;
     }
     sent.current = true;
@@ -76,6 +79,7 @@ export function NewPostDialog({ open, onClose }: { open: boolean; onClose: () =>
         intent: 'create-post',
         title: title.trim(),
         body: body.trim(),
+        category,
         anonymous: String(anonymous),
       },
       { method: 'post', action: FEEDBACK_ACTION }
@@ -107,10 +111,24 @@ export function NewPostDialog({ open, onClose }: { open: boolean; onClose: () =>
           >
             <form onSubmit={onSubmit} noValidate className="px-7 pb-6 pt-6">
               <div className="flex items-start justify-between gap-4">
-                <span className="inline-flex items-center gap-2 rounded-full border border-line bg-stone-50 px-3.5 py-1.5 text-[13px] font-medium text-ink-1 dark:bg-neutral-800/60">
-                  <span aria-hidden>💡</span>
-                  Feature Request
-                </span>
+                <div role="group" aria-label="Category" className="flex flex-wrap gap-2">
+                  {CATEGORY_ORDER.map(c => (
+                    <button
+                      key={c}
+                      type="button"
+                      aria-pressed={category === c}
+                      onClick={() => setCategory(c)}
+                      className={`inline-flex cursor-pointer items-center gap-2 rounded-full border px-3.5 py-1.5 text-[13px] font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+                        category === c
+                          ? 'border-line-strong bg-stone-50 text-ink-0 dark:bg-neutral-800/60'
+                          : 'border-line text-ink-3 hover:bg-panel-hover hover:text-ink-0'
+                      }`}
+                    >
+                      <span aria-hidden>{CATEGORY_EMOJI[c]}</span>
+                      {CATEGORY_LABELS[c]}
+                    </button>
+                  ))}
+                </div>
                 <button
                   type="button"
                   onClick={onClose}
@@ -134,7 +152,7 @@ export function NewPostDialog({ open, onClose }: { open: boolean; onClose: () =>
                   setTitle(e.target.value);
                   if (error) setError('');
                 }}
-                placeholder="Title of your request"
+                placeholder="Title of your post"
                 aria-describedby={error ? 'post-error' : undefined}
                 className={`mt-6 w-full ${bare} text-2xl font-bold tracking-tight text-ink-0 placeholder:text-ink-4`}
               />
@@ -150,7 +168,7 @@ export function NewPostDialog({ open, onClose }: { open: boolean; onClose: () =>
                   if (error) setError('');
                 }}
                 required
-                placeholder="Describe your request..."
+                placeholder="Add the details..."
                 className={`mt-4 min-h-[340px] w-full resize-y ${bare} text-sm leading-relaxed text-ink-1 placeholder:text-ink-4`}
               />
 

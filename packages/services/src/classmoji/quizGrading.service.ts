@@ -23,7 +23,8 @@
 import { randomUUID } from 'node:crypto';
 import getPrisma from '@classmoji/database';
 import type { Prisma, Role } from '@prisma/client';
-import { DEFAULT_EMOJI_GRADE_MAPPINGS, gradeToEmoji } from '@classmoji/utils';
+import { gradeToEmoji } from '@classmoji/utils';
+import { quizScaleForClassroom } from './emojiMapping.service.ts';
 import {
   QuizEvaluationFeedbackSchema,
   QuizEvaluationRecordV2Schema,
@@ -33,7 +34,6 @@ import {
   deriveResult,
   gradeBandFor,
   replyShowsHint,
-  scoreSoFar,
   type Answer,
   type AttemptProgress,
   type PresentQuestionOutput,
@@ -325,21 +325,19 @@ export const progressOf = async (
     questionCount,
     presented: attempt.questions_asked ?? 0,
     finalized: results.map(r => r.question_num),
-    score: scoreSoFar(results),
     completed: Boolean(attempt.completed_at),
     hasEvaluation: attempt.evaluation_json !== null && attempt.evaluation_json !== undefined,
     ...(lastAction ? { lastAction } : {}),
   };
 };
 
-const loadEmojiMappings = async (tx: Tx, classroomId: string) => {
-  const mappings = await tx.emojiMapping.findMany({
-    where: { classroom_id: classroomId },
-    select: { emoji: true, grade: true },
-  });
-  if (mappings.length === 0) return { ...DEFAULT_EMOJI_GRADE_MAPPINGS };
-  return Object.fromEntries(mappings.map(m => [m.emoji, m.grade])) as Record<string, number>;
-};
+/**
+ * The classroom's own scale, read in the grading transaction (E10). A
+ * classroom whose rows were all deleted is given the new-classroom scale
+ * first, in the same transaction, so a result's emoji is always one the
+ * faculty can see and edit; never an in-code default.
+ */
+const loadEmojiMappings = (tx: Tx, classroomId: string) => quizScaleForClassroom(classroomId, tx);
 
 // ─── Guards ─────────────────────────────────────────────────────────────────
 

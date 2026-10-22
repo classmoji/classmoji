@@ -30,6 +30,8 @@ vi.mock('@classmoji/database', () => ({
     classroomSettings: { findUnique: (...a: unknown[]) => mocks.settingsFindUnique(...a) },
     pageLink: { findMany: (...a: unknown[]) => mocks.pageLinkFindMany(...a) },
     slideLink: { findMany: (...a: unknown[]) => mocks.slideLinkFindMany(...a) },
+    // The classroom's grading scale (no adjusted attempts here).
+    emojiMapping: { findMany: async () => [] },
   }),
 }));
 vi.mock('../helper.service.ts', () => ({

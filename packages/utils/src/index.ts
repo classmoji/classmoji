@@ -40,6 +40,7 @@ export * from './assignmentVisibility.ts';
 export * from './quizAssignment.ts';
 export * from './quizScore.ts';
 export * from './quizGrade.ts';
+export * from './quizResults.ts';
 export * from './extensionPrice.ts';
 export * from './lateness.ts';
 export * from './tokenDescription.ts';

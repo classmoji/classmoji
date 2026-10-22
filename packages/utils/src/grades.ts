@@ -53,7 +53,8 @@ export interface OrganizationSettings {
  *   - A null value with `counts_as_zero` false is left out, like an ungraded
  *     repo submission.
  *   - `late_hours`: whole hours late of the attempt that counts for `grade`.
- *   - `counting_raw_percentage`: that same attempt's own unpenalised score, so
+ *   - `counting_raw_percentage`: that same attempt's own unpenalised
+ *     (effective: a staff adjustment when there is one) score, so
  *     `counting_raw_percentage − grade` is the points the penalty took. It can
  *     differ from `raw_grade`, which the strategy may pick from another
  *     attempt. Null for a counted zero.
@@ -68,6 +69,17 @@ export interface GradedItem {
   counts_as_zero: boolean;
   late_hours: number;
   counting_raw_percentage: number | null;
+  /** The attempt that counts for `grade` (quizzes), or absent/null. */
+  counting_attempt_id?: string | null;
+  /** That attempt carries a staff grade adjustment in effect (the gradebook's "adjusted" chip). */
+  counting_adjusted?: boolean;
+  /** The adjustment emoji itself when `counting_adjusted`: what staff picked, shown as is. */
+  counting_adjusted_emoji?: string | null;
+  /**
+   * That attempt's adjustment is orphaned (its emoji left the scale, E17): the
+   * AI's grade counts; staff see a "needs remap" chip. Staff surfaces only.
+   */
+  counting_orphaned?: boolean;
 }
 
 /**
