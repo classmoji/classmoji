@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Input, Segmented } from 'antd';
+import { QUIZ_REGRADE_REPLY_MAX_LENGTH } from '@classmoji/utils';
 
 import Emoji from '~/components/ui/display/Emoji';
 import QuizGradeEmoji from '~/components/features/quiz/QuizGradeEmoji';
@@ -47,9 +48,6 @@ export interface QuizResolveFormState {
   };
 }
 
-/** Longest reply to the student (the server's `QUIZ_REGRADE_REPLY_MAX_LENGTH`). */
-export const QUIZ_RESOLVE_REPLY_MAX = 2000;
-
 /**
  * The form's state, fresh whenever `resetKey` (the request id) changes.
  * `currentEmoji` is the grade the attempt shows now: Adjust with it is a Keep
@@ -79,7 +77,7 @@ export const useQuizResolveForm = (
     setReply,
     canSubmit:
       reply.trim().length > 0 &&
-      reply.trim().length <= QUIZ_RESOLVE_REPLY_MAX &&
+      reply.trim().length <= QUIZ_REGRADE_REPLY_MAX_LENGTH &&
       (remedy === 'keep' || Boolean(emoji)),
     submitLabel: keepsScore ? 'Keep score' : 'Adjust score',
     payload: () => ({
@@ -213,7 +211,7 @@ export function QuizResolveFields({
           value={form.reply}
           onChange={e => form.setReply(e.target.value)}
           disabled={disabled}
-          maxLength={QUIZ_RESOLVE_REPLY_MAX}
+          maxLength={QUIZ_REGRADE_REPLY_MAX_LENGTH}
           showCount
         />
       </div>

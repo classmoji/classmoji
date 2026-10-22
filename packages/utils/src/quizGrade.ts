@@ -34,6 +34,12 @@ import {
 } from './quizScore.ts';
 import { openToStudents, type AssignmentVisibilityInput } from './assignmentVisibility.ts';
 
+/**
+ * Longest staff reply on a quiz regrade request (what the student reads). The
+ * service refuses a longer one; the resolve forms and the MCP tool cap at it.
+ */
+export const QUIZ_REGRADE_REPLY_MAX_LENGTH = 2000;
+
 const HOUR_MS = 60 * 60 * 1000;
 
 type Instant = Date | string | number;

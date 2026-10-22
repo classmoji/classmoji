@@ -27,6 +27,7 @@
  */
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import {
+  QUIZ_REGRADE_REPLY_MAX_LENGTH,
   lateHours as lateHoursOf,
   quizAttemptGrade,
   quizPercentageEmoji,
@@ -529,8 +530,8 @@ export const createForQuizAttempt = async (
   return { request, created, classroomId, quiz, attemptNumber };
 };
 
-/** Longest staff reply on a quiz regrade request (what the student reads). */
-export const QUIZ_REGRADE_REPLY_MAX_LENGTH = 2000;
+// Longest staff reply on a quiz regrade request: shared with the forms and the MCP.
+export { QUIZ_REGRADE_REPLY_MAX_LENGTH };
 
 export interface ResolveQuizRegradeInput extends QuizGradeActor {
   requestId: string;
