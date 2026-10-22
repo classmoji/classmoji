@@ -284,6 +284,9 @@ export const action = async ({
       });
       return redirect(`/${classroomSlug}/${page.id}`);
     } catch (error: unknown) {
+      if (ClassmojiService.planLimits.isContentLimitError(error)) {
+        return Response.json({ error: error.message }, { status: 403 });
+      }
       return Response.json(
         { error: error instanceof Error ? error.message : 'Unknown error' },
         { status: 500 }

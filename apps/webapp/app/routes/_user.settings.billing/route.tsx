@@ -1,38 +1,42 @@
-import { Button, Spin } from 'antd';
-import { IconCrown, IconArrowRight, IconExternalLink, IconCheck } from '@tabler/icons-react';
+import { Spin } from 'antd';
 import { useFetcher, useLocation } from 'react-router';
 import { useEffect, useState, useRef } from 'react';
 import { namedAction } from 'remix-utils/named-action';
-import dayjs from 'dayjs';
 
 import { ClassmojiService, StripeService } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
-import { useSubscription } from '~/hooks';
-import InfoCard from './InforCard';
+import FreePlans from './FreePlans';
+import ProBilling from './ProBilling';
+import type { PortalFlow } from './ProBilling';
 import { getAuthSession } from '@classmoji/auth/server';
 import type { Route } from './+types/route';
 
+/** `data.tool` / `source` for every billing event written from this page. */
+const SOURCE = 'web:billing';
+
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const authData = await getAuthSession(request);
+  const { billing: billingService } = ClassmojiService;
 
-  const classmojiSubscription = await ClassmojiService.subscription.getCurrent(authData!.userId);
-  let stripeSubscription = null;
-
-  if (classmojiSubscription.stripe_subscription_id) {
-    stripeSubscription = await StripeService.findSubscription(
-      classmojiSubscription.stripe_subscription_id
-    );
-  }
+  // The caller's own plan only: a normal page load of one's own state, so no
+  // event is recorded.
+  const status = await billingService.getStatus(authData!.userId);
 
   return {
-    stripeSubscription,
-    classmojiSubscription,
+    tier: status.tier,
+    isComped: status.isComped,
+    billing: status.billing,
+    proPriceCents: status.proPriceCents,
+    // As display lines, so the components need nothing from the server bundle.
+    freeLines: status.features
+      .filter(row => row.free !== false)
+      .map(row => billingService.featureText(row.label, row.free)),
+    proLines: billingService.proFeatures().map(row => billingService.featureText(row.label, row.pro)),
   };
 };
 
 const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
-  const { stripeSubscription, classmojiSubscription } = loaderData;
-  const { isProTier, isFreeTier } = useSubscription('owner');
+  const { tier, billing, isComped, proPriceCents, freeLines, proLines } = loaderData;
   const fetcher = useFetcher();
   const [loading, setLoading] = useState(false);
   const { search } = useLocation();
@@ -63,13 +67,6 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
     }
   }, [fetcher.data]);
 
-  useEffect(() => {
-    const data = loaderData as Record<string, unknown>;
-    if (data?.action === 'UPDATE_SUBSCRIPTION') {
-      callout.show({ variant: 'success', title: data.message as string });
-    }
-  }, [loaderData]);
-
   const handleUpgrade = () => {
     setLoading(true);
     // No price in the body: which price grants Pro is a server decision, and
@@ -84,150 +81,48 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
     );
   };
 
-  const handleManagePlan = () => {
+  // `flow` only picks which portal screen opens; the subscription it acts on
+  // is resolved on the server.
+  const handlePortal = (flow?: PortalFlow) => {
     setLoading(true);
-    fetcher.submit(
-      {},
-      {
-        method: 'post',
-        encType: 'application/json',
-        action: '?/createBillingPortalSession',
-      }
-    );
+    fetcher.submit(flow ? { flow } : {}, {
+      method: 'post',
+      encType: 'application/json',
+      action: '?/createBillingPortalSession',
+    });
   };
-
-  const isVIP = !stripeSubscription;
-
-  let nextBillingDate = null;
-
-  if (isVIP) {
-    nextBillingDate = classmojiSubscription.started_at
-      ? dayjs(classmojiSubscription.started_at).format('MMM D, YYYY')
-      : 'N/A';
-  } else {
-    nextBillingDate = dayjs
-      .unix(stripeSubscription?.items?.data[0]?.current_period_end)
-      .format('MMM D, YYYY');
-  }
 
   return (
     <>
       <Spin spinning={loading} fullscreen />
-      <div className="space-y-6">
-        {/* Upgrade Banner for Free Users */}
-        {isFreeTier && (
-          <div className="bg-linear-to-r from-yellow-50 to-orange-50 dark:from-yellow-900/20 dark:to-orange-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-lg font-semibold text-ink-0 mb-2">
-                  Unleash the full power of Classmoji
-                </h3>
-                <p className="text-ink-2">
-                  Unlock AI Quizzes to auto-generate and grade assessments for your students.
-                </p>
-              </div>
-              <div className="flex items-center gap-4">
-                <Button type="primary" onClick={handleUpgrade}>
-                  Upgrade Plan
-                </Button>
-                <div className="text-right">
-                  <p className="text-sm text-ink-2 mb-1">Want to learn more?</p>
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={<IconExternalLink size={14} />}
-                    className="text-ink-1 hover:text-gray-900 dark:hover:text-gray-100 p-0 h-auto"
-                  >
-                    Book a demo
-                  </Button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Plan Details Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {/* Current Plan */}
-          <InfoCard title="Current plan">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3 mb-4">
-                <div
-                  className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                    isProTier ? 'bg-secondary' : 'bg-gray-100 dark:bg-neutral-700'
-                  }`}
-                >
-                  <IconCrown className={`w-5 h-5 ${isProTier ? 'text-black' : 'text-ink-4'}`} />
-                </div>
-                <div>
-                  <h2 data-onboarding="settings-billing" className="text-xl font-bold text-ink-0">
-                    {isFreeTier ? 'Free' : 'Pro'}
-                  </h2>
-                </div>
-              </div>
-              {isProTier && isVIP === false && (
-                <Button
-                  type="primary"
-                  icon={<IconArrowRight size={14} color="white" />}
-                  onClick={handleManagePlan}
-                >
-                  Manage plan
-                </Button>
-              )}
-            </div>
-          </InfoCard>
-
-          {/* Price */}
-          <InfoCard title="Price">
-            <p className="text-xl font-bold text-ink-0">
-              {isFreeTier || isVIP ? '$0.00' : '$29.00'} / month
-            </p>
-          </InfoCard>
-
-          {/* Subscription Renews */}
-          <InfoCard title="Subscription renews on">
-            <p
-              className={`text-xl font-bold ${
-                classmojiSubscription.cancelled_at ? 'text-red-500' : 'text-ink-0'
-              }`}
-            >
-              {nextBillingDate}
-            </p>
-          </InfoCard>
-        </div>
-
-        {/* Plan inclusions */}
-        {isProTier && (
-          <InfoCard title="Your plan includes">
-            <div className="flex items-center gap-2">
-              <IconCheck size={18} className="text-green-600 dark:text-green-500" />
-              <span className="text-ink-0 font-medium">AI Quizzes</span>
-            </div>
-          </InfoCard>
-        )}
-      </div>
+      {tier === 'PRO' ? (
+        <ProBilling
+          billing={billing}
+          isComped={isComped}
+          proLines={proLines}
+          onPortal={handlePortal}
+        />
+      ) : (
+        <FreePlans
+          freeLines={freeLines}
+          proLines={proLines}
+          proPriceCents={proPriceCents}
+          onUpgrade={handleUpgrade}
+        />
+      )}
     </>
   );
 };
 
-/**
- * The Stripe price that grants Pro, resolved from the environment.
- *
- * The subscribed price is what the Stripe webhook asserts before writing a PRO
- * row (apps/hook-station/src/routes/stripe.ts), so it is a server decision
- * end to end. Returns '' when unset, and the caller refuses rather than
- * creating a checkout session with an empty line item.
- */
-const proPriceId = (): string => (process.env.STRIPE_PRO_PRICE_ID || '').trim();
-
 export const action = async ({ request }: Route.ActionArgs) => {
-  await request.json();
+  const body = ((await request.json().catch(() => ({}))) ?? {}) as { flow?: unknown };
   const authData = await getAuthSession(request);
-  const classmojiUser = await ClassmojiService.user.findById(authData!.userId);
+  const userId = authData!.userId;
+  const classmojiUser = await ClassmojiService.user.findById(userId);
 
   return namedAction(request, {
     async createCheckoutSession() {
-      const priceId = proPriceId();
+      const priceId = ClassmojiService.billing.checkoutPriceId();
       if (!priceId) {
         console.error('STRIPE_PRO_PRICE_ID is not set — cannot start a Pro checkout.');
         return {
@@ -236,33 +131,77 @@ export const action = async ({ request }: Route.ActionArgs) => {
       }
 
       let customerId = classmojiUser!.stripe_customer_id;
+      const customerCreated = !customerId;
 
       if (!customerId) {
         customerId = (
           await StripeService.createCustomer({
             name: classmojiUser!.name!,
             email: classmojiUser!.email!,
-            userId: authData!.userId.toString(),
+            userId: userId.toString(),
           })
         ).id;
 
-        ClassmojiService.user.update(authData!.userId, {
+        // Awaited: the webhook finds the user by this id, so a lost write
+        // would leave a paid subscription that grants nothing.
+        await ClassmojiService.user.update(userId, {
           stripe_customer_id: customerId,
         });
       }
 
       const session = await StripeService.createCheckoutSession({
         priceId,
-        userId: authData!.userId.toString(),
+        userId: userId.toString(),
         customerId,
       });
+
+      await ClassmojiService.billing.recordEvent({
+        userId,
+        action: 'CHECKOUT_STARTED',
+        source: SOURCE,
+        stripeCustomerId: customerId,
+        data: { tool: SOURCE, price_id: priceId, customer_created: customerCreated },
+      });
+
       return { checkoutSessionUrl: session.url };
     },
     async createBillingPortalSession() {
-      const classmojiUser = await ClassmojiService.user.findById(authData!.userId);
-      const session = await StripeService.createBillingPortalSession(
-        classmojiUser!.stripe_customer_id!
-      );
+      const customerId = classmojiUser?.stripe_customer_id;
+      if (!customerId) {
+        return { error: 'There is no billing account yet. Upgrade to Pro first.' };
+      }
+
+      let flow: 'payment_method_update' | 'subscription_cancel' | null = null;
+      let subscriptionId: string | null = null;
+      let session;
+
+      if (body.flow === 'payment_method_update') {
+        flow = 'payment_method_update';
+        session = await StripeService.createBillingPortalSession(customerId, {
+          type: 'payment_method_update',
+        });
+      } else if (body.flow === 'subscription_cancel') {
+        const current = await ClassmojiService.subscription.getCurrent(userId);
+        if (current?.stripe_subscription_id) {
+          flow = 'subscription_cancel';
+          subscriptionId = current.stripe_subscription_id;
+          session = await StripeService.createBillingPortalSession(customerId, {
+            type: 'subscription_cancel',
+            subscriptionId,
+          });
+        }
+      }
+      session ??= await StripeService.createBillingPortalSession(customerId);
+
+      await ClassmojiService.billing.recordEvent({
+        userId,
+        action: 'PORTAL_OPENED',
+        source: SOURCE,
+        stripeCustomerId: customerId,
+        stripeSubscriptionId: subscriptionId,
+        data: { tool: SOURCE, flow },
+      });
+
       return { billingPortalSessionUrl: session.url };
     },
   });

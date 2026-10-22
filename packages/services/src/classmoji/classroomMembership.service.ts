@@ -1,6 +1,7 @@
 import getPrisma, { GIT_IDENTITY, gitScopeProvider, whereGitUsername } from '@classmoji/database';
 import { withLogin, withLogins } from '@classmoji/utils';
 import { findClassroomGitProvider, findClassroomGitScope } from './classroomGitProvider.ts';
+import * as planOwnerService from './planOwner.service.ts';
 import type { Prisma, Role } from '@prisma/client';
 
 interface ClassroomMembershipUpsertData {
@@ -10,8 +11,6 @@ interface ClassroomMembershipUpsertData {
   letter_grade?: string | null;
   comment?: string | null;
 }
-
-const LAST_OWNER_ERROR = 'Cannot remove the last owner of a classroom';
 
 /**
  * Resolve the target role from a Prisma update input, which may be a bare enum
@@ -28,26 +27,46 @@ const resolveRoleUpdate = (
   return undefined;
 };
 
+/** Who is acting on a membership, for the audit row a plan-owner change writes. */
+export interface MembershipActor {
+  actorUserId?: string | null;
+}
+
 /**
- * Guard against orphaning a classroom: throw when it would be left with zero
- * OWNER memberships. Call before removing an OWNER membership or demoting one.
+ * Run `write`, the step that ends `userId`'s OWNER membership (a removal or a
+ * demotion), with everything that has to hold around it in ONE transaction:
  *
- * Pass the transaction client when the count and the write that depends on it
- * must see the same snapshot (see `remove`); the default reads outside any
- * transaction.
- * @param {string} classroomId - UUID of the Classroom
- * @param {Object} [client] - Prisma client or transaction client
+ *  - a row lock on the classroom, so two owners leaving at once serialize and
+ *    the second sees the owners the first left behind;
+ *  - `assertOwnerRemains`: an owner who has accepted must remain (a pending
+ *    invitation does not keep a classroom owned);
+ *  - the plan-owner hand-off, when they were the plan owner.
+ *
+ * The hand-off is audited after the commit, as `actorUserId`.
  */
-const assertNotLastOwner = async (
+const leaveOwnership = async <T>(
   classroomId: string,
-  client: Prisma.TransactionClient = getPrisma()
-): Promise<void> => {
-  const ownerCount = await client.classroomMembership.count({
-    where: { classroom_id: classroomId, role: 'OWNER' },
+  userId: string,
+  write: (tx: Prisma.TransactionClient) => Promise<T>,
+  { actorUserId }: MembershipActor = {}
+): Promise<T> => {
+  const { result, change } = await getPrisma().$transaction(async tx => {
+    await tx.$queryRaw`SELECT id FROM classrooms WHERE id = ${classroomId} FOR UPDATE`;
+    await planOwnerService.assertOwnerRemains(tx, classroomId, userId);
+    const change = await planOwnerService.handOffPlanOwnership(tx, classroomId, userId);
+    return { result: await write(tx), change };
   });
-  if (ownerCount <= 1) {
-    throw new Error(LAST_OWNER_ERROR);
+  if (change) {
+    await planOwnerService.auditPlanOwnerChange(change, { actorUserId, reason: 'owner_left' });
   }
+  return result;
+};
+
+/** Whether an update input sets `has_accepted_invite` to true. */
+const acceptsInvite = (updates: Prisma.ClassroomMembershipUpdateInput): boolean => {
+  const value = updates.has_accepted_invite;
+  if (value === true) return true;
+  return typeof value === 'object' && value !== null && 'set' in value && value.set === true;
 };
 
 /**
@@ -281,28 +300,33 @@ export const upsert = async (
 export const update = async (
   classroomId: string,
   userId: string,
-  updates: Prisma.ClassroomMembershipUpdateInput
+  updates: Prisma.ClassroomMembershipUpdateInput,
+  actor: MembershipActor = {}
 ) => {
   const membership = await getPrisma().classroomMembership.findFirst({
     where: { classroom_id: classroomId, user_id: userId },
   });
   if (!membership) return null;
 
-  const newRole = resolveRoleUpdate(updates.role);
-  if (membership.role === 'OWNER' && newRole && newRole !== 'OWNER') {
-    await assertNotLastOwner(classroomId);
-  }
-
-  return withLogins(
-    await getPrisma().classroomMembership.update({
+  const write = (db: Prisma.TransactionClient) =>
+    db.classroomMembership.update({
       where: { id: membership.id },
       data: updates,
       include: {
         user: { include: GIT_IDENTITY },
         classroom: true,
       },
-    })
-  );
+    });
+
+  const newRole = resolveRoleUpdate(updates.role);
+  const updated =
+    membership.role === 'OWNER' && newRole && newRole !== 'OWNER'
+      ? await leaveOwnership(classroomId, userId, write, actor)
+      : await write(getPrisma());
+
+  if (updated.role === 'OWNER' && acceptsInvite(updates))
+    await planOwnerService.onOwnerAccepted(userId);
+  return withLogins(updated);
 };
 
 /**
@@ -311,25 +335,35 @@ export const update = async (
  * @param {Object} updates - Fields to update
  * @returns {Promise<Object>}
  */
-export const updateById = async (id: string, updates: Prisma.ClassroomMembershipUpdateInput) => {
-  const newRole = resolveRoleUpdate(updates.role);
-  if (newRole && newRole !== 'OWNER') {
-    const membership = await getPrisma().classroomMembership.findUnique({ where: { id } });
-    if (membership?.role === 'OWNER') {
-      await assertNotLastOwner(membership.classroom_id);
-    }
-  }
-
-  return withLogins(
-    await getPrisma().classroomMembership.update({
+export const updateById = async (
+  id: string,
+  updates: Prisma.ClassroomMembershipUpdateInput,
+  actor: MembershipActor = {}
+) => {
+  const write = (db: Prisma.TransactionClient) =>
+    db.classroomMembership.update({
       where: { id },
       data: updates,
       include: {
         user: { include: GIT_IDENTITY },
         classroom: true,
       },
-    })
-  );
+    });
+
+  const newRole = resolveRoleUpdate(updates.role);
+  const membership =
+    newRole && newRole !== 'OWNER'
+      ? await getPrisma().classroomMembership.findUnique({ where: { id } })
+      : null;
+
+  const updated =
+    membership?.role === 'OWNER'
+      ? await leaveOwnership(membership.classroom_id, membership.user_id, write, actor)
+      : await write(getPrisma());
+
+  if (updated.role === 'OWNER' && acceptsInvite(updates))
+    await planOwnerService.onOwnerAccepted(updated.user_id);
+  return withLogins(updated);
 };
 
 /**
@@ -401,33 +435,28 @@ export const updateInClassroom = async (
  * @param {Role} [role] - Optional role to remove; omit to remove every role
  * @returns {Promise<Object>}
  */
-export const remove = async (classroomId: string, userId: string, role?: Role) => {
-  // Removing a named non-owner role cannot change the owner count, so it takes
-  // the plain delete.
-  if (role && role !== 'OWNER') {
-    return getPrisma().classroomMembership.deleteMany({
-      where: { classroom_id: classroomId, user_id: userId, role },
-    });
-  }
-
-  // The count and the delete it authorizes must see the same state, so they run
-  // in ONE transaction behind a row lock on the classroom. Two removals that
-  // each target a different owner of the same classroom serialize on that lock,
-  // and the second one counts the owners the first one left behind.
-  return getPrisma().$transaction(async tx => {
-    const ownerMembership = await tx.classroomMembership.findFirst({
-      where: { classroom_id: classroomId, user_id: userId, role: 'OWNER' },
-    });
-
-    if (ownerMembership) {
-      await tx.$queryRaw`SELECT id FROM classrooms WHERE id = ${classroomId} FOR UPDATE`;
-      await assertNotLastOwner(classroomId, tx);
-    }
-
-    return tx.classroomMembership.deleteMany({
+export const remove = async (
+  classroomId: string,
+  userId: string,
+  role?: Role,
+  actor: MembershipActor = {}
+) => {
+  const deleteRows = (db: Prisma.TransactionClient) =>
+    db.classroomMembership.deleteMany({
       where: { classroom_id: classroomId, user_id: userId, ...(role ? { role } : {}) },
     });
+
+  // Removing a named non-owner role cannot change the owners, so it takes the
+  // plain delete.
+  if (role && role !== 'OWNER') return deleteRows(getPrisma());
+
+  const ownerMembership = await getPrisma().classroomMembership.findFirst({
+    where: { classroom_id: classroomId, user_id: userId, role: 'OWNER' },
+    select: { id: true },
   });
+  if (!ownerMembership) return deleteRows(getPrisma());
+
+  return leaveOwnership(classroomId, userId, deleteRows, actor);
 };
 
 /**
@@ -435,15 +464,17 @@ export const remove = async (classroomId: string, userId: string, role?: Role) =
  * @param {string} id - UUID of the membership
  * @returns {Promise<Object>}
  */
-export const removeById = async (id: string) => {
+export const removeById = async (id: string, actor: MembershipActor = {}) => {
+  const deleteRow = (db: Prisma.TransactionClient) =>
+    db.classroomMembership.delete({
+      where: { id },
+    });
+
   const membership = await getPrisma().classroomMembership.findUnique({ where: { id } });
   if (membership?.role === 'OWNER') {
-    await assertNotLastOwner(membership.classroom_id);
+    return leaveOwnership(membership.classroom_id, membership.user_id, deleteRow, actor);
   }
-
-  return getPrisma().classroomMembership.delete({
-    where: { id },
-  });
+  return deleteRow(getPrisma());
 };
 
 /**

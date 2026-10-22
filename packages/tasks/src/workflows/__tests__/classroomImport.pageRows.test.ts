@@ -22,6 +22,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  contentAllowance: vi.fn(),
   createWithUniquePageSlug: vi.fn(),
   // Rest-typed so the `(...a: unknown[])` forwarder below typechecks. Never
   // actually called here — every fixture has a null header_image_url.
@@ -59,6 +60,10 @@ vi.mock('@classmoji/services', () => ({
     },
     contentImport: { rewriteContentUrls: (...a: unknown[]) => mocks.rewriteContentUrls(...a) },
     contentManifest: { saveManifest: vi.fn() },
+    planLimits: {
+      contentAllowance: (...a: unknown[]) => mocks.contentAllowance(...a),
+      contentLimitMessage: (kind: string, limit: number) => `limit ${limit} ${kind}`,
+    },
   },
   describeTokenMintError: vi.fn(),
   getGitProvider: vi.fn(),
@@ -131,6 +136,8 @@ const run = (writer: ReturnType<typeof makeWriter>) =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Default: a Pro target, no limit.
+  mocks.contentAllowance.mockResolvedValue({ limit: null, used: 0, remaining: null });
   mocks.pageFindMany.mockResolvedValue([
     sourcePage('src-1', 'Lab 1'),
     sourcePage('src-2', 'Lab 2'),
@@ -148,6 +155,17 @@ describe('importPageRows', () => {
     const writer = makeWriter();
     await expect(run(writer)).resolves.toBe(2);
     expect(writer.warnings).toEqual([]);
+  });
+
+  it("stops at a free target's page limit, oldest first, and warns once", async () => {
+    mocks.contentAllowance.mockResolvedValue({ limit: 10, used: 9, remaining: 1 });
+    const writer = makeWriter();
+
+    await expect(run(writer)).resolves.toBe(1);
+
+    expect(mocks.contentAllowance).toHaveBeenCalledWith('target-class', 'pages');
+    expect(writer.idMaps).toEqual({ 'src-1': 'new-page' });
+    expect(writer.warnings).toEqual(['pages: skipped 1 page(s). limit 10 pages']);
   });
 
   it('rethrows a slug P2002 rather than warning the page away', async () => {

@@ -133,6 +133,7 @@ describe('removeStaff — ungraded submissions', () => {
         login: 'ta-gone',
         role: 'ASSISTANT',
         ungradedSubmissions: choice,
+        actorUserId: 'owner-1',
       });
       expect(mocks.settleUngradedSlots).toHaveBeenCalledExactlyOnceWith({
         classroomId: 'class-1',

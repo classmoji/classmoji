@@ -45,3 +45,4 @@ export * from './extensionPrice.ts';
 export * from './lateness.ts';
 export * from './tokenDescription.ts';
 export * from './avatar.ts';
+export * from './proPrice.ts';

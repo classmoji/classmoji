@@ -83,6 +83,10 @@ export type {
   MediaUsage,
 } from './media/index.ts';
 
+// The Free plan's one-active-class rule: the shape of a plan owner's counted
+// classes, for the pages that offer "Archive X and continue".
+export type { ActiveClassroomSummary } from './classmoji/planOwner.service.ts';
+
 // Git provider abstraction layer
 export {
   GitProvider,

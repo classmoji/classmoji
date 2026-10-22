@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import Stripe from 'stripe';
 import { ClassmojiService, StripeService } from '@classmoji/services';
 import { getPrisma } from '@classmoji/database';
+import { proPriceIds } from '@classmoji/utils';
 import dayjs from 'dayjs';
 
 /**
@@ -64,28 +65,112 @@ const getCustomerId = (
  *  - **A foreign price is a real answer.** See `matchesProPrice`.
  *
  * Still fails closed either way: no branch here can mint a PRO row.
+ *
+ * The variable may list several prices, comma-separated: the FIRST is the one
+ * checkout sells (the webapp reads only that one), the rest are older Pro
+ * prices whose subscribers keep Pro after a price change.
  */
-const getProPriceId = (): string => {
-  const proPriceId = (process.env.STRIPE_PRO_PRICE_ID || '').trim();
-  if (!proPriceId) {
+const getProPriceIds = (): string[] => {
+  const ids = proPriceIds();
+  if (ids.length === 0) {
     throw new Error(
       'STRIPE_PRO_PRICE_ID is not set on hook-station; refusing to judge a subscription price.'
     );
   }
-  return proPriceId;
+  return ids;
 };
 
 /**
- * Does this Stripe subscription carry the Pro price?
+ * Does this Stripe subscription carry a Pro price?
  *
  * Checked before ANY write that grants PRO. Checkout is a customer-facing flow
  * and the price it is handed has, historically, come from the browser; without
  * this assertion a subscription to any price at all — a $0 test price, a
  * different product — mints a PRO row here.
  */
-const matchesProPrice = (subscription: Stripe.Subscription, proPriceId: string): boolean => {
+const matchesProPrice = (subscription: Stripe.Subscription, proPriceIds: string[]): boolean => {
   const items = subscription.items?.data ?? [];
-  return items.some(item => item.price?.id === proPriceId);
+  return items.some(item => Boolean(item.price?.id) && proPriceIds.includes(item.price.id));
+};
+
+/**
+ * Subscription states that have been paid for (or are in a trial). An
+ * `incomplete` subscription, a first payment that failed or still needs 3D
+ * Secure, must not grant Pro; Stripe sends `updated` when it becomes `active`,
+ * and that grants it then. `past_due` is not here because it never starts a
+ * grant: an existing Pro row stays while Stripe retries, and `deleted` ends it.
+ */
+const GRANTING_STATUSES: ReadonlySet<string> = new Set(['active', 'trialing']);
+
+/** `source` / `data.tool` of every billing event this webhook records. */
+const SOURCE = 'stripe:webhook';
+
+const customerIdOf = (subscription: Stripe.Subscription): string | null =>
+  typeof subscription.customer === 'string'
+    ? subscription.customer
+    : (subscription.customer?.id ?? null);
+
+/**
+ * Write the PRO row for a paid subscription. Shared by `created` and by
+ * `updated` (a subscription that was `incomplete` when created).
+ */
+const grantPro = async (
+  user: BillingUser,
+  subscription: Stripe.Subscription,
+  eventId: string
+): Promise<void> => {
+  // Throws when the variable is missing — see getProPriceIds. Read BEFORE any
+  // database work so a misconfigured deployment fails without a half-write.
+  const proPriceIds = getProPriceIds();
+
+  if (!matchesProPrice(subscription, proPriceIds)) {
+    // A price we do not sell: someone else's SKU, or a leftover test price.
+    // Write nothing, and treat the delivery as finished — retrying will
+    // produce the same answer forever, and an endpoint that never 2xxs is one
+    // Stripe eventually disables.
+    console.warn(
+      `Stripe subscription ${subscription.id} does not carry a STRIPE_PRO_PRICE_ID price — no tier granted`
+    );
+    return;
+  }
+
+  // Idempotent under redelivery, which now actually happens: a failure after
+  // this point is answered with a 5xx and Stripe sends the event again.
+  // Without this check the retry would expire the PRO row it just minted and
+  // mint a duplicate. `stripe_subscription_id` is unique.
+  const existing = await ClassmojiService.subscription.findBy({
+    where: { stripe_subscription_id: subscription.id },
+  });
+  if (existing?.id) {
+    return;
+  }
+
+  const currentSubscription = await ClassmojiService.subscription.getCurrent(user.id);
+
+  if (currentSubscription?.id) {
+    await ClassmojiService.subscription.update(currentSubscription.id, {
+      ends_at: new Date(),
+    });
+  }
+
+  const endsAt = resolveEndsAt(subscription);
+  await ClassmojiService.subscription.create({
+    user_id: user.id,
+    tier: 'PRO',
+    started_at: new Date(),
+    ends_at: endsAt,
+    stripe_subscription_id: subscription.id,
+  });
+
+  await ClassmojiService.billing.recordEvent({
+    userId: user.id,
+    action: 'PRO_GRANTED',
+    source: SOURCE,
+    stripeCustomerId: customerIdOf(subscription),
+    stripeSubscriptionId: subscription.id,
+    stripeEventId: eventId,
+    data: { tool: SOURCE, status: subscription.status, ends_at: endsAt?.toISOString() ?? null },
+  });
 };
 
 /**
@@ -111,9 +196,15 @@ const resolveEndsAt = (subscription: Stripe.Subscription): Date | null => {
     ended_at?: number | null;
   };
 
+  // Newer Stripe API versions keep the period end on the subscription item.
+  const periodEnd =
+    raw.current_period_end ??
+    (subscription.items?.data?.[0] as { current_period_end?: number } | undefined)
+      ?.current_period_end;
+
   if (raw.cancel_at) return dayjs.unix(raw.cancel_at).toDate();
-  if (raw.cancel_at_period_end && raw.current_period_end) {
-    return dayjs.unix(raw.current_period_end).toDate();
+  if (raw.cancel_at_period_end && periodEnd) {
+    return dayjs.unix(periodEnd).toDate();
   }
   if (raw.ended_at) return dayjs.unix(raw.ended_at).toDate();
   return null;
@@ -121,11 +212,12 @@ const resolveEndsAt = (subscription: Stripe.Subscription): Date | null => {
 
 const stripeWebhookHandlers: Record<
   string,
-  (user: BillingUser | null, subscription: Stripe.Subscription) => Promise<void>
+  (user: BillingUser | null, subscription: Stripe.Subscription, eventId: string) => Promise<void>
 > = {
   'customer.subscription.created': async (
     user: BillingUser | null,
-    subscription: Stripe.Subscription
+    subscription: Stripe.Subscription,
+    eventId: string
   ) => {
     if (!user) {
       // A customer nobody here owns. Retrying cannot make them matchable, so
@@ -133,47 +225,12 @@ const stripeWebhookHandlers: Record<
       return;
     }
 
-    // Throws when the variable is missing — see getProPriceId. Read BEFORE any
-    // database work so a misconfigured deployment fails without a half-write.
-    const proPriceId = getProPriceId();
-
-    if (!matchesProPrice(subscription, proPriceId)) {
-      // A price we do not sell: someone else's SKU, or a leftover test price.
-      // Write nothing, and treat the delivery as finished — retrying will
-      // produce the same answer forever, and an endpoint that never 2xxs is one
-      // Stripe eventually disables.
-      console.warn(
-        `Stripe subscription ${subscription.id} does not carry STRIPE_PRO_PRICE_ID — no tier granted`
-      );
+    if (!GRANTING_STATUSES.has(subscription.status)) {
+      // Not paid yet. `updated` grants it once it turns `active`.
       return;
     }
 
-    // Idempotent under redelivery, which now actually happens: a failure after
-    // this point is answered with a 5xx and Stripe sends the event again.
-    // Without this check the retry would expire the PRO row it just minted and
-    // mint a duplicate. `stripe_subscription_id` is unique.
-    const existing = await ClassmojiService.subscription.findBy({
-      where: { stripe_subscription_id: subscription.id },
-    });
-    if (existing?.id) {
-      return;
-    }
-
-    const currentSubscription = await ClassmojiService.subscription.getCurrent(user.id);
-
-    if (currentSubscription?.id) {
-      await ClassmojiService.subscription.update(currentSubscription.id, {
-        ends_at: new Date(),
-      });
-    }
-
-    await ClassmojiService.subscription.create({
-      user_id: user.id,
-      tier: 'PRO',
-      started_at: new Date(),
-      ends_at: resolveEndsAt(subscription),
-      stripe_subscription_id: subscription.id,
-    });
+    await grantPro(user, subscription, eventId);
   },
 
   /**
@@ -199,22 +256,52 @@ const stripeWebhookHandlers: Record<
    * an `updated` for a fresh subscription a no-op write of the same values. It
    * also removes an ordering assumption — Stripe does not guarantee `created`
    * arrives first, and an `updated` that gets there early simply finds no row.
+   *
+   * No row and a paid status is the one case that grants here: a subscription
+   * created `incomplete` (no grant then) whose first payment has now gone
+   * through. `grantPro` makes a grant that `created` already wrote a no-op.
    */
   'customer.subscription.updated': async (
-    _user: BillingUser | null,
-    subscription: Stripe.Subscription
+    user: BillingUser | null,
+    subscription: Stripe.Subscription,
+    eventId: string
   ) => {
     const existing = await ClassmojiService.subscription.findBy({
       where: { stripe_subscription_id: subscription.id },
     });
     if (!existing?.id) {
+      if (user && GRANTING_STATUSES.has(subscription.status)) {
+        await grantPro(user, subscription, eventId);
+      }
       return;
     }
 
+    const endsAt = resolveEndsAt(subscription);
+    const cancelledAt = subscription.canceled_at
+      ? dayjs.unix(subscription.canceled_at).toDate()
+      : null;
+    const cancellationReason = subscription.cancellation_details?.reason ?? null;
+
     await ClassmojiService.subscription.update(existing.id, {
-      ends_at: resolveEndsAt(subscription),
-      cancelled_at: subscription.canceled_at ? dayjs.unix(subscription.canceled_at).toDate() : null,
-      cancellation_reason: subscription.cancellation_details?.reason ?? null,
+      ends_at: endsAt,
+      cancelled_at: cancelledAt,
+      cancellation_reason: cancellationReason,
+    });
+
+    await ClassmojiService.billing.recordEvent({
+      userId: existing.user_id,
+      action: 'PLAN_UPDATED',
+      source: SOURCE,
+      stripeCustomerId: customerIdOf(subscription),
+      stripeSubscriptionId: subscription.id,
+      stripeEventId: eventId,
+      data: {
+        tool: SOURCE,
+        status: subscription.status,
+        ends_at: endsAt?.toISOString() ?? null,
+        cancelled_at: cancelledAt?.toISOString() ?? null,
+        cancellation_reason: cancellationReason,
+      },
     });
   },
 
@@ -233,7 +320,8 @@ const stripeWebhookHandlers: Record<
    */
   'customer.subscription.deleted': async (
     _user: BillingUser | null,
-    subscription: Stripe.Subscription
+    subscription: Stripe.Subscription,
+    eventId: string
   ) => {
     const classmojiSubscription = await ClassmojiService.subscription.findBy({
       where: {
@@ -246,13 +334,24 @@ const stripeWebhookHandlers: Record<
     }
 
     const endedAt = (subscription as unknown as { ended_at?: number | null }).ended_at;
+    const endsAt = endedAt ? dayjs.unix(endedAt).toDate() : new Date();
     await ClassmojiService.subscription.update(classmojiSubscription.id, {
-      ends_at: endedAt ? dayjs.unix(endedAt).toDate() : new Date(),
+      ends_at: endsAt,
     });
 
     await ClassmojiService.subscription.create({
       user_id: classmojiSubscription.user_id,
       tier: 'FREE',
+    });
+
+    await ClassmojiService.billing.recordEvent({
+      userId: classmojiSubscription.user_id,
+      action: 'MOVED_TO_FREE',
+      source: SOURCE,
+      stripeCustomerId: customerIdOf(subscription),
+      stripeSubscriptionId: subscription.id,
+      stripeEventId: eventId,
+      data: { tool: SOURCE, ended_at: endsAt.toISOString() },
     });
   },
 };
@@ -311,7 +410,7 @@ export default async function stripeRoutes(fastify: FastifyInstance): Promise<vo
       // of the same event.id short-circuits above without running anything, so a
       // transient failure lost a paid PRO grant permanently and silently.
       try {
-        await handler(user, subscription);
+        await handler(user, subscription, event.id);
       } catch (err: unknown) {
         request.log.error({ err, eventId: event.id, type: event.type }, 'Stripe handler failed');
         // No processed row: Stripe redelivers for ~3 days, and the handlers are

@@ -341,7 +341,10 @@ model User {
   sessions                      Session[]                 @relation("SessionUser")
   impersonated_sessions         Session[]                 @relation("ImpersonatedBy")
   subscriptions                 Subscription[]
+  billing_events                BillingEvent[]
   classroom_memberships         ClassroomMembership[]
+  classrooms_created            Classroom[]               @relation("ClassroomCreator")
+  classrooms_plan_owned         Classroom[]               @relation("ClassroomPlanOwner")
   git_repos                     GitRepo[]                 @relation("StudentRepositories")
   graded_repository_assignments GitRepoAssignmentGrader[]
   grades_given                  AssignmentGrade[]
@@ -546,6 +549,16 @@ model Classroom {
   // True for the auto-provisioned per-user "Example Course" sandbox used by the
   // in-classroom onboarding tour. Backed by a mock GitOrganization (no live GitHub).
   is_example                   Boolean         @default(false)
+  /// Who created this classroom. Provenance only (support, analytics); never
+  /// decides access or plan limits. NULL for classrooms created before it was
+  /// recorded: an inferred value would make history confidently wrong.
+  created_by                   String?
+  /// Whose Free-plan slot this classroom consumes when no accepted owner is Pro
+  /// (any accepted Pro owner still makes the whole classroom Pro). An accepted
+  /// OWNER; handed to another accepted owner when they leave
+  /// (`planOwner.service.ts`). NULL or stale is resolved by
+  /// `effectivePlanOwnerId`, which falls back to the oldest accepted owner.
+  plan_owner_id                String?
   // Edge-cache bust for this classroom's content. Every signed content URL
   // carries it, so bumping it changes ALL of them at once and the CDN misses
   // on every asset until it refills. Old URLs STILL VERIFY — this is not a
@@ -582,6 +595,8 @@ model Classroom {
   updated_at                   DateTime        @default(now()) @updatedAt
 
   git_organization      GitOrganization       @relation(fields: [git_org_id], references: [id], onDelete: Cascade)
+  creator               User?                 @relation("ClassroomCreator", fields: [created_by], references: [id], onDelete: SetNull)
+  plan_owner            User?                 @relation("ClassroomPlanOwner", fields: [plan_owner_id], references: [id], onDelete: SetNull)
   settings              ClassroomSettings?
   memberships           ClassroomMembership[]
   modules               Module[]
@@ -624,6 +639,8 @@ model Classroom {
   // repo names are org-scoped on GitHub too.
   @@unique([git_org_id, content_repo])
   @@index([git_org_id])
+  @@index([plan_owner_id, status])
+  @@index([created_by])
   @@map("classrooms")
 }
 
@@ -634,7 +651,7 @@ model ClassroomSettings {
   show_grades_to_students      Boolean  @default(false)
   final_grades_released        Boolean  @default(false)
   quizzes_enabled              Boolean  @default(true)
-  slides_enabled               Boolean  @default(false)
+  slides_enabled               Boolean  @default(true)
   syllabus_bot_enabled         Boolean  @default(false)
   recent_viewers_enabled       Boolean  @default(true)
   show_modules                 Boolean  @default(true)
@@ -2108,6 +2125,34 @@ model ProcessedWebhookEvent {
 
   @@index([source, processed_at])
   @@map("processed_webhook_events")
+}
+
+/// What happened to a user's paid plan. Billing belongs to the user, not to a
+/// classroom, so it cannot use `audit_logs` (which requires one).
+enum BillingEventAction {
+  CHECKOUT_STARTED
+  PORTAL_OPENED
+  PRO_GRANTED
+  PLAN_UPDATED
+  MOVED_TO_FREE
+}
+
+model BillingEvent {
+  id                     String             @id @default(uuid())
+  user_id                String
+  action                 BillingEventAction
+  /// Where it came from: `web:billing`, `stripe:webhook`.
+  source                 String
+  stripe_customer_id     String?
+  stripe_subscription_id String?
+  stripe_event_id        String?
+  data                   Json?
+  created_at             DateTime           @default(now())
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id, created_at])
+  @@map("billing_events")
 }
 
 // ============================================================================

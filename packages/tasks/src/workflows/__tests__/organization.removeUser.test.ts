@@ -85,6 +85,7 @@ type RemovePayload = {
   gitOrganization: typeof GIT_ORG;
   classroom: typeof CLASSROOM;
   role: 'OWNER' | 'TEACHER' | 'STUDENT' | 'ASSISTANT';
+  actorUserId?: string | null;
 };
 
 const run = (overrides: Partial<RemovePayload> = {}) =>
@@ -133,9 +134,20 @@ describe('remove_user_from_organization — the shared staff team', () => {
         expect.arrayContaining(['OWNER', 'TEACHER', 'ASSISTANT'].filter(r => r !== role))
       );
       // The membership row itself is still deleted.
-      expect(mocks.removeMembership).toHaveBeenCalledWith('class-1', 'user-1', role);
+      expect(mocks.removeMembership).toHaveBeenCalledWith('class-1', 'user-1', role, {
+        actorUserId: undefined,
+      });
     }
   );
+
+  it('hands the membership delete the owner who asked for the removal', async () => {
+    await run({ role: 'OWNER', actorUserId: 'owner-9' });
+
+    // The delete is where a plan-owner hand-off happens, and it is audited as them.
+    expect(mocks.removeMembership).toHaveBeenCalledWith('class-1', 'user-1', 'OWNER', {
+      actorUserId: 'owner-9',
+    });
+  });
 
   it.each(['OWNER', 'TEACHER', 'ASSISTANT'] as const)(
     'removes the staff team membership when %s is their only staff role',
@@ -145,7 +157,9 @@ describe('remove_user_from_organization — the shared staff team', () => {
       await run({ role });
 
       expect(mocks.removeTeamMember).toHaveBeenCalledWith('dev-org', STAFF_TEAM, 'ada');
-      expect(mocks.removeMembership).toHaveBeenCalledWith('class-1', 'user-1', role);
+      expect(mocks.removeMembership).toHaveBeenCalledWith('class-1', 'user-1', role, {
+        actorUserId: undefined,
+      });
     }
   );
 
@@ -188,7 +202,9 @@ describe('remove_user_from_organization — the shared staff team', () => {
     expect(mocks.hasRole).not.toHaveBeenCalled();
     expect(mocks.removeTeamMember).not.toHaveBeenCalled();
     expect(mocks.removeFromOrganization).not.toHaveBeenCalled();
-    expect(mocks.removeMembership).toHaveBeenCalledWith('class-1', 'user-1', 'ASSISTANT');
+    expect(mocks.removeMembership).toHaveBeenCalledWith('class-1', 'user-1', 'ASSISTANT', {
+      actorUserId: undefined,
+    });
   });
 
   it('continues to the org check when the team removal fails', async () => {
@@ -199,7 +215,9 @@ describe('remove_user_from_organization — the shared staff team', () => {
     await run({ role: 'ASSISTANT' });
 
     expect(mocks.removeFromOrganization).toHaveBeenCalledWith('dev-org', 'ada');
-    expect(mocks.removeMembership).toHaveBeenCalledWith('class-1', 'user-1', 'ASSISTANT');
+    expect(mocks.removeMembership).toHaveBeenCalledWith('class-1', 'user-1', 'ASSISTANT', {
+      actorUserId: undefined,
+    });
   });
 });
 
@@ -221,7 +239,9 @@ describe('remove_user_from_organization — a stale Github login', () => {
 
     expect(mocks.currentGithubLogin).toHaveBeenCalledWith(expect.anything(), 'user-1', 'ada');
     expect(mocks.removeFromOrganization).toHaveBeenLastCalledWith('dev-org', 'ada-renamed');
-    expect(mocks.removeMembership).toHaveBeenCalledWith('class-1', 'user-1', 'STUDENT');
+    expect(mocks.removeMembership).toHaveBeenCalledWith('class-1', 'user-1', 'STUDENT', {
+      actorUserId: undefined,
+    });
   });
 
   it('still removes the membership when Github no longer has the account', async () => {
@@ -231,7 +251,9 @@ describe('remove_user_from_organization — a stale Github login', () => {
     await run({ role: 'STUDENT' });
 
     expect(mocks.removeFromOrganization).toHaveBeenCalledTimes(1);
-    expect(mocks.removeMembership).toHaveBeenCalledWith('class-1', 'user-1', 'STUDENT');
+    expect(mocks.removeMembership).toHaveBeenCalledWith('class-1', 'user-1', 'STUDENT', {
+      actorUserId: undefined,
+    });
   });
 
   it('still fails on any other Github error', async () => {

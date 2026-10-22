@@ -183,6 +183,16 @@ export const findAll = async (query: Prisma.ClassroomWhereInput = {}) => {
 };
 
 /**
+ * What every classroom creation must say: who created it and whose plan slot it
+ * uses (normally the same person). Required here so a new caller cannot leave
+ * them out.
+ */
+export type ClassroomCreateData = Prisma.ClassroomUncheckedCreateInput & {
+  created_by: string;
+  plan_owner_id: string;
+};
+
+/**
  * Create a new Classroom
  * @param {Object} data - Classroom data
  * @param {string} data.git_org_id - UUID of the GitOrganization
@@ -193,7 +203,7 @@ export const findAll = async (query: Prisma.ClassroomWhereInput = {}) => {
  * @param {string} [data.emoji] - Emoji (default: "dart")
  * @returns {Promise<Object>}
  */
-export const create = async (data: Prisma.ClassroomUncheckedCreateInput) => {
+export const create = async (data: ClassroomCreateData) => {
   return getPrisma().classroom.create({
     data,
     include: {
@@ -210,7 +220,7 @@ export const create = async (data: Prisma.ClassroomUncheckedCreateInput) => {
  * @returns {Promise<Object>}
  */
 export const createWithSettings = async (
-  classroomData: Prisma.ClassroomUncheckedCreateInput,
+  classroomData: ClassroomCreateData,
   settingsData: Prisma.ClassroomSettingsUncheckedCreateWithoutClassroomInput = {}
 ) => {
   return getPrisma().$transaction(async tx => {

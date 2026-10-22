@@ -13,6 +13,7 @@
 
 import { registerToolDefinition } from '../mcp/registry.ts';
 import { whoamiTool } from './whoami.ts';
+import { billingStatusTool } from './billing.ts';
 import { feedbackReadTool, feedbackWriteTool, feedbackDeleteTool } from './feedback.ts';
 import { readTools } from './reads.ts';
 import { gradeAddTool, gradeRemoveTool, gradeRemoveAllTool } from './grades.ts';
@@ -123,6 +124,9 @@ import {
 export function registerAllTools(): void {
   // Identity / bootstrap
   registerToolDefinition(whoamiTool);
+
+  // The caller's own plan (Settings → Billing).
+  registerToolDefinition(billingStatusTool);
 
   // The platform-wide feedback board (/feedback): any signed-in user, no
   // classroom (roles: null). No audit rows, by decision: the webapp writes

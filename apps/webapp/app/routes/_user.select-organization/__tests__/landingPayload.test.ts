@@ -94,6 +94,12 @@ vi.mock('~/utils/helpers', () => ({ checkAuth: (fn: unknown) => fn }));
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     user: { findById: (...a: unknown[]) => findById(...a), findProviderUsernames: vi.fn() },
+    // The Free plan's one-active-class rule has its own tests; here there is room.
+    classroomLifecycle: {
+      allowanceFor: vi.fn(async () => ({ limit: 1, active: [], canCreate: true })),
+      assertCanCreateActive: vi.fn(async () => {}),
+      isActiveClassroomLimitError: () => false,
+    },
     classroomInvite: { claimPendingInvites: vi.fn(async () => ({ claimed: 0 })) },
   },
   GitHubProvider: { getUserOctokit: vi.fn() },
@@ -144,6 +150,8 @@ describe('select-organization payload', () => {
 
     expect(Object.keys(data).sort()).toEqual(
       [
+        // The viewer's own Free-plan allowance (their classes only).
+        'activeClassAllowance',
         'gitMode',
         'githubAppName',
         'inviteEmailMismatch',

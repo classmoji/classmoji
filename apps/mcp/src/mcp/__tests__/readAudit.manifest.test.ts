@@ -26,6 +26,7 @@ type Kind = 'audited' | 'staff' | 'handler' | 'none';
 const READS: Record<string, Kind> = {
   // ── tools ──
   whoami: 'none', // the caller's identity
+  billing_status: 'none', // the caller's own plan
   feedback_read: 'none', // the public feedback board (no classroom)
   my_classrooms: 'none', // the caller's memberships
   get_classroom_info: 'none', // classroom settings

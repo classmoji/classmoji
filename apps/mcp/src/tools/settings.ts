@@ -305,9 +305,13 @@ export const classroomStatusUpdateTool: ToolDefinition<ClassroomStatusUpdateArgs
     'Sets the classroom lifecycle status and/or its archive flag. Owner only. Provide at least ' +
     'one. status: ACTIVE = normal; LOCKED = read-only for everyone except the owner (members ' +
     'can still browse the class, they just cannot change anything); UNPUBLISHED = hidden from ' +
-    'everyone except the owner. is_archived only groups the class separately on the owner ' +
-    'dashboard — it is cosmetic and changes nobody’s access. Nothing here deletes data, and each ' +
-    'change is reversible with another call.',
+    'everyone except the owner. is_archived groups the class separately on the owner dashboard ' +
+    'and takes its public class site offline; it changes nobody’s access. To archive a ' +
+    'finished class, set status LOCKED and is_archived true together. On the Free plan a class ' +
+    "counts as its plan owner's one active class while its status is ACTIVE (is_archived does " +
+    'not change that), so setting status ACTIVE can be refused with forbidden when the plan ' +
+    'owner already has an active class; archive that one first or upgrade to Pro. Nothing here ' +
+    'deletes data, and each change is reversible with another call.',
   scope: 'write',
   roles: OWNER_ONLY,
   inputSchema: {
@@ -319,7 +323,10 @@ export const classroomStatusUpdateTool: ToolDefinition<ClassroomStatusUpdateArgs
     is_archived: z
       .boolean()
       .optional()
-      .describe('Archive flag — dashboard grouping only, no access change'),
+      .describe(
+        'Archive flag: dashboard grouping and public class site offline, no access change, ' +
+          'does not free the Free-plan active-class slot'
+      ),
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
@@ -336,15 +343,29 @@ export const classroomStatusUpdateTool: ToolDefinition<ClassroomStatusUpdateArgs
 
     // The owner is exempt from the registry's mutation gate, so the owner of a
     // LOCKED classroom can still call this to unlock it — the same semantics
-    // the web status route has.
-    const updated = await ClassmojiService.classroom.update(classroom.classroomId, updates);
-
-    await writeAudit(ctx, {
-      resource_type: 'CLASSROOM',
-      resource_id: classroom.classroomId,
-      action: 'UPDATE',
-      data: { tool: 'classroom_status_update', ...updates },
-    });
+    // the web status route has. The lifecycle service applies the Free plan's
+    // one-active-class rule and writes the audit row, for both surfaces alike.
+    let updated;
+    try {
+      updated = await ClassmojiService.classroomLifecycle.setLifecycle({
+        classroomId: classroom.classroomId,
+        status: updates.status,
+        isArchived: updates.is_archived,
+        actorUserId: ctx.viewer.userId,
+        tool: 'classroom_status_update',
+      });
+    } catch (error) {
+      if (ClassmojiService.classroomLifecycle.isActiveClassroomLimitError(error)) {
+        throw new ToolError('forbidden', error.message);
+      }
+      if (
+        error instanceof Error &&
+        (error as { code?: unknown }).code === ClassmojiService.classroomLifecycle.NO_PLAN_OWNER
+      ) {
+        throw new ToolError('invalid_params', error.message);
+      }
+      throw error;
+    }
 
     return ok({
       success: true,

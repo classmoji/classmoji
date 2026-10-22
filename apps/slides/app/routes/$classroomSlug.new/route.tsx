@@ -56,6 +56,7 @@ import {
 } from 'react-router';
 import getPrisma from '@classmoji/database';
 import { requireClassroomTeachingTeam } from '@classmoji/auth/server';
+import { ClassmojiService } from '@classmoji/services';
 import {
   SLIDE_FILE_EXTENSIONS,
   SLIDE_FILE_MAX_BYTES,
@@ -153,7 +154,22 @@ export const loader = async ({
   // action re-derives it from the uploaded row; this is only what the form says.
   const uploadCapability = await loadUploadCapability(classroom, 'new slide');
 
+  // At the Free plan's slide limit the picker is not shown at all: the page
+  // says so up front instead of refusing after the form was filled in.
+  const { limit, remaining } = await ClassmojiService.planLimits.contentAllowance(
+    classroom.id,
+    'slides'
+  );
+  const limitMessage =
+    limit !== null && remaining === 0
+      ? ClassmojiService.planLimits.contentLimitMessage('slides', limit)
+      : null;
+  const webappUrl = process.env.WEBAPP_URL || 'http://localhost:3000';
+
   return {
+    limitMessage,
+    // Only an owner can upgrade; other staff are told who can.
+    upgradeUrl: membership?.role === 'OWNER' ? `${webappUrl}/settings/billing` : null,
     classroomSlug,
     classroomId: classroom.id,
     uploadCapability,
@@ -215,7 +231,12 @@ function messageFor(error: unknown, fallback: string): string {
   if (error instanceof slideFileService.SlideSourceError) return error.message;
   if (error && typeof error === 'object' && 'code' in error) {
     const code = (error as { code?: unknown }).code;
-    if (code === 'SLIDE_CONTENT_PATH_CONFLICT' && error instanceof Error) return error.message;
+    if (
+      (code === 'SLIDE_CONTENT_PATH_CONFLICT' || code === 'PLAN_CONTENT_LIMIT') &&
+      error instanceof Error
+    ) {
+      return error.message;
+    }
   }
   return fallback;
 }
@@ -542,6 +563,49 @@ function SourceOption({
 }
 
 export default function NewSlidePage() {
+  const { limitMessage, upgradeUrl, slidesListUrl } = useLoaderData<typeof loader>();
+  return limitMessage ? (
+    <SlideLimitReached message={limitMessage} upgradeUrl={upgradeUrl} backUrl={slidesListUrl} />
+  ) : (
+    <NewSlideForm />
+  );
+}
+
+function SlideLimitReached({
+  message,
+  upgradeUrl,
+  backUrl,
+}: {
+  message: string;
+  upgradeUrl: string | null;
+  backUrl: string;
+}) {
+  return (
+    <div className="min-h-screen bg-[var(--bg-page)] px-4 py-10">
+      <div className="mx-auto w-full max-w-lg card p-6">
+        <h1 className="text-lg font-semibold text-[var(--ink-0)]">Free plan limit reached</h1>
+        <p className="mt-2 text-sm text-[var(--ink-2)]">{message}</p>
+        <div className="mt-5 flex items-center justify-end gap-2">
+          {!upgradeUrl && (
+            <span className="mr-auto text-sm text-[var(--ink-3)]">
+              Ask the class owner to upgrade.
+            </span>
+          )}
+          <a href={backUrl} className="btn">
+            Back to slides
+          </a>
+          {upgradeUrl && (
+            <a href={upgradeUrl} className="btn btn-primary">
+              Upgrade to Pro
+            </a>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NewSlideForm() {
   const {
     classroomSlug,
     classroomId,
