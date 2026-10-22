@@ -479,6 +479,33 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
       });
     });
 
+    it('revert with a comment on an unadjusted attempt is audited as the comment edit', async () => {
+      const { quizId } = await makeQuiz(classX);
+      const { id } = await makeAttempt(quizId, studentA, 50);
+
+      const reverted = await quizAttempt.revert({
+        attemptId: id,
+        comment: 'The AI grade stands.',
+        actorUserId: assistant,
+        tool: TOOL,
+      });
+      expect(reverted).toMatchObject({
+        changed: true,
+        attempt: { adjusted_emoji: null, instructor_comment: 'The AI grade stands.' },
+      });
+      const audits = await prisma.auditLog.findMany({
+        where: { resource_type: 'QUIZ_ATTEMPT', resource_id: id, user_id: assistant },
+      });
+      expect(audits).toHaveLength(1);
+      expect(audits[0].data).toMatchObject({
+        event: 'quiz_attempt_adjust',
+        old_emoji: null,
+        new_emoji: null,
+        comment_set: true,
+        comment_changed: true,
+      });
+    });
+
     it('a student may not adjust, not even their own attempt', async () => {
       const { quizId } = await makeQuiz(classX);
       const { id } = await makeAttempt(quizId, studentA, 50);

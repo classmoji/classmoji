@@ -545,7 +545,9 @@ export interface RevertQuizAttemptInput extends QuizGradeActor {
  * counts again. The comment to the student stays unless `comment` is given,
  * which is written in the same transaction (one audit row). Reverting an
  * attempt with no adjustment and no comment change writes nothing and audits
- * nothing (`changed: false`).
+ * nothing (`changed: false`); with no adjustment but a comment change, the
+ * comment is saved and audited `quiz_attempt_adjust`, as `adjust` audits a
+ * comment-only save.
  */
 export const revert = async (input: RevertQuizAttemptInput): Promise<QuizAdjustResult> => {
   const { actorUserId } = input;
@@ -567,7 +569,9 @@ export const revert = async (input: RevertQuizAttemptInput): Promise<QuizAdjustR
       actorUserId,
       actorRole,
       scale,
-      event: 'quiz_attempt_adjust_revert',
+      // With no adjustment to clear, only the comment changes: audited as the
+      // comment edit it is, as `adjust` audits one.
+      event: current.adjusted_emoji === null ? 'quiz_attempt_adjust' : 'quiz_attempt_adjust_revert',
     });
     return result;
   }, TX_OPTIONS);
