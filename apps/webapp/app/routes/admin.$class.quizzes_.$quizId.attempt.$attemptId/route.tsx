@@ -11,6 +11,7 @@ import {
 import {
   QuizAttemptGradePanel,
   QuizRegradeRequestBanner,
+  QuizResolveToast,
 } from '~/components/features/quiz/QuizAttemptGradePanel';
 import { addClassroomAuditLog, assertClassroomAccess } from '~/utils/helpers';
 import { requireClassroomTeachingTeam } from '~/utils/routeAuth.server';
@@ -400,31 +401,28 @@ export default function AdminQuizAttemptViewDrawer({ loaderData }: Route.Compone
   // The results panel's grade and the staff blocks above it (see QuizResultContext).
   const panel = data.gradePanel;
   const slots = useMemo<QuizResultSlots | null>(() => {
-    // The queue, opened on this request's resolve modal.
-    const resolveUrl = (requestId: string) =>
-      `/${rolePrefix}/${classSlug}/regrade-requests?resolve=${encodeURIComponent(requestId)}`;
+    // The request in the queue: its resolve modal open where the viewer may
+    // resolve; else the queue itself (a read-only classroom hides Resolve).
+    const queueUrl = (requestId: string, canResolve: boolean) =>
+      canResolve
+        ? `/${rolePrefix}/${classSlug}/regrade-requests?resolve=${encodeURIComponent(requestId)}`
+        : `/${rolePrefix}/${classSlug}/regrade-requests`;
     return panel
       ? {
           grade: panel.grade,
           beforeResults: (
             <>
+              {/* Mounted with or without a request: the banner is gone once it resolves. */}
+              <QuizResolveToast attemptId={panel.attemptId} />
               {panel.openRequest && (
                 <QuizRegradeRequestBanner
                   request={panel.openRequest}
-                  resolveUrl={resolveUrl(panel.openRequest.id)}
+                  queueUrl={queueUrl(panel.openRequest.id, panel.canEdit)}
                   // Resolved right here where the classroom takes changes (E13).
                   panel={panel.canEdit ? panel : null}
                 />
               )}
-              {panel.adjustable && (
-                <QuizAttemptGradePanel
-                  panel={panel}
-                  // The banner above already resolves it when the classroom takes changes.
-                  resolveUrl={
-                    panel.openRequest && !panel.canEdit ? resolveUrl(panel.openRequest.id) : null
-                  }
-                />
-              )}
+              {panel.adjustable && <QuizAttemptGradePanel panel={panel} />}
             </>
           ),
         }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useFetcher, useLocation } from 'react-router';
 import { App, Button, Input } from 'antd';
 import dayjs from 'dayjs';
@@ -21,7 +21,7 @@ import {
  * Posts to the drawer route's own action (`_action: 'adjust' | 'revert' |
  * 'resolve'`); the server re-checks everything and returns refusals as data.
  * In a read-only classroom (`panel.canEdit` false) only the grade and the
- * request show.
+ * request show, with a link to view the request in the queue.
  */
 
 const formatDate = (iso: string | null) => (iso ? dayjs(iso).format('MMM D') : null);
@@ -68,44 +68,30 @@ const Counted = ({
   );
 };
 
-/** Under the adjust panel: the attempt's open request, resolved in the queue. */
-const OpenRequestNote = ({ resolveUrl }: { resolveUrl: string }) => (
-  <div
-    data-testid="quiz-adjust-open-request"
-    className="flex flex-wrap items-center justify-between gap-2 border-t border-stone-200 px-4 py-2.5 text-sm text-amber-800 dark:border-neutral-800 dark:text-amber-300"
-  >
-    <span>This attempt has an open regrade/resubmit request</span>
-    <Link
-      to={resolveUrl}
-      className="font-medium underline underline-offset-2 hover:text-amber-900 dark:hover:text-amber-200"
-    >
-      Resolve request
-    </Link>
-  </div>
-);
+type ResolveResult = { success?: string; info?: string; error?: string };
+
+/** The banner's resolve fetcher, shared by key with `QuizResolveToast`. */
+const resolveFetcherKey = (attemptId: string) => `quiz-resolve-in-drawer-${attemptId}`;
 
 /**
- * The open request's form in its banner (E13): reply, Adjust score / Keep
- * score, the picker and the Counted line, posted to the drawer's own action
- * (`_action: 'resolve'`). On success the loader's revalidation drops the
- * banner, the attempt's grade and comment move with it.
+ * The toast for a request resolved in the drawer's banner. The banner goes
+ * away as soon as the request is resolved (the loader revalidates), so the
+ * toast lives here, rendered whether or not a request is open, and reads the
+ * banner's fetcher by key. Only a submission seen in flight is announced, so
+ * a reopened drawer never toasts an old result.
  */
-const ResolveInBanner = ({
-  requestId,
-  panel,
-}: {
-  requestId: string;
-  panel: StaffAttemptGradePanel;
-}) => {
-  const fetcher = useFetcher<{ success?: string; info?: string; error?: string }>();
-  const { pathname } = useLocation();
+export function QuizResolveToast({ attemptId }: { attemptId: string }) {
+  const fetcher = useFetcher<ResolveResult>({ key: resolveFetcherKey(attemptId) });
   const callout = useCallout();
-  const form = useQuizResolveForm(requestId);
-  const busy = fetcher.state !== 'idle';
-  const grade = panel.grade;
+  const sawSubmit = useRef(false);
 
   useEffect(() => {
-    if (fetcher.state !== 'idle' || !fetcher.data) return;
+    if (fetcher.state !== 'idle') {
+      sawSubmit.current = true;
+      return;
+    }
+    if (!sawSubmit.current || !fetcher.data) return;
+    sawSubmit.current = false;
     if (fetcher.data.success || fetcher.data.info) {
       callout.show({
         variant: fetcher.data.success ? 'success' : 'info',
@@ -116,6 +102,29 @@ const ResolveInBanner = ({
     // `callout` is stable per provider.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetcher.state, fetcher.data]);
+
+  return null;
+}
+
+/**
+ * The open request's form in its banner (E13): reply, Adjust score / Keep
+ * score, the picker and the Counted line, posted to the drawer's own action
+ * (`_action: 'resolve'`). On success the loader's revalidation drops the
+ * banner, the attempt's grade and comment move with it; `QuizResolveToast`
+ * says how it was resolved.
+ */
+const ResolveInBanner = ({
+  requestId,
+  panel,
+}: {
+  requestId: string;
+  panel: StaffAttemptGradePanel;
+}) => {
+  const fetcher = useFetcher<ResolveResult>({ key: resolveFetcherKey(panel.attemptId) });
+  const { pathname } = useLocation();
+  const grade = panel.grade;
+  const form = useQuizResolveForm(requestId, grade?.emoji ?? null);
+  const busy = fetcher.state !== 'idle';
 
   const submit = () => {
     if (!form.canSubmit) return;
@@ -134,7 +143,7 @@ const ResolveInBanner = ({
           originalEmoji: (grade?.adjusted ? grade.originalEmoji : grade?.emoji) ?? null,
           effectiveEmoji: grade?.emoji ?? null,
           adjusted: grade?.adjusted ?? false,
-          lateHours: grade?.lateHours ?? 0,
+          lateHours: grade?.lateHours ?? null,
           countedEmoji: grade?.countedEmoji ?? grade?.emoji ?? null,
         }}
         scaleEmojis={panel.scaleEmojis}
@@ -160,13 +169,19 @@ const ResolveInBanner = ({
 
 export function QuizRegradeRequestBanner({
   request,
-  resolveUrl,
+  queueUrl,
   panel = null,
 }: {
   request: NonNullable<StaffAttemptGradePanel['openRequest']>;
-  /** The queue with this request's resolve modal open (`?resolve=<id>`). */
-  resolveUrl: string;
-  /** The adjust panel's state, where the viewer may resolve here; null shows the request only. */
+  /**
+   * The request in the queue: with its resolve modal open (`?resolve=<id>`)
+   * where the viewer may resolve, else the queue itself.
+   */
+  queueUrl: string;
+  /**
+   * The adjust panel's state, where the viewer may resolve here; null shows
+   * the request only (a read-only classroom, or the viewer's own attempt).
+   */
   panel?: StaffAttemptGradePanel | null;
 }) {
   return (
@@ -197,10 +212,11 @@ export function QuizRegradeRequestBanner({
             .join(' · ')}
         </span>
         <Link
-          to={resolveUrl}
+          to={queueUrl}
+          data-testid="quiz-regrade-banner-link"
           className="text-sm font-medium text-amber-800 underline underline-offset-2 hover:text-amber-900 dark:text-amber-300 dark:hover:text-amber-200"
         >
-          {panel ? 'Open in Regrade/Resubmit Requests' : 'Resolve in Regrade/Resubmit Requests'}
+          {panel ? 'Open in Regrade/Resubmit Requests' : 'View in Regrade/Resubmit Requests'}
         </Link>
       </div>
       {panel && <ResolveInBanner requestId={request.id} panel={panel} />}
@@ -208,14 +224,7 @@ export function QuizRegradeRequestBanner({
   );
 }
 
-export function QuizAttemptGradePanel({
-  panel,
-  resolveUrl = null,
-}: {
-  panel: StaffAttemptGradePanel;
-  /** The open request's resolve modal in the queue, when there is one. */
-  resolveUrl?: string | null;
-}) {
+export function QuizAttemptGradePanel({ panel }: { panel: StaffAttemptGradePanel }) {
   const fetcher = useFetcher<{ ok?: boolean; success?: string; error?: string }>();
   const { pathname } = useLocation();
   const callout = useCallout();
@@ -301,8 +310,17 @@ export function QuizAttemptGradePanel({
             value={pick}
             onChange={setPick}
             disabled={busy}
+            currentEmoji={grade?.emoji ?? null}
           />
         </Row>
+        {!grade?.adjusted && pick !== null && pick === grade?.emoji && (
+          <div
+            data-testid="quiz-adjust-keeps"
+            className="pl-27 text-xs text-gray-500 dark:text-gray-400"
+          >
+            That is the current grade: picking it keeps the score.
+          </div>
+        )}
         {(grade?.countedEmoji || (grade?.lateHours ?? 0) > 0) && (
           <Row label="Counted">
             <Counted panel={panel} pick={pick} label={false} />
@@ -313,7 +331,7 @@ export function QuizAttemptGradePanel({
             htmlFor={`quiz-adjust-comment-${panel.attemptId}`}
             className="mb-1 block text-sm text-gray-700 dark:text-gray-300"
           >
-            Comment to student <span className="text-gray-400">(optional)</span>
+            Comment to student <span className="text-gray-400 dark:text-gray-500">(optional)</span>
           </label>
           <Input.TextArea
             id={`quiz-adjust-comment-${panel.attemptId}`}
@@ -354,7 +372,7 @@ export function QuizAttemptGradePanel({
             <span className="inline-flex flex-wrap items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
               Adjusted
               <Emoji emoji={grade.originalEmoji ?? ''} fontSize={18} />
-              <span className="text-gray-400">→</span>
+              <span className="text-gray-400 dark:text-gray-500">→</span>
               <Emoji emoji={grade.emoji ?? ''} fontSize={18} />
               {by && <span className="text-xs text-gray-500 dark:text-gray-400">by {by}</span>}
               {canEdit && (
@@ -417,7 +435,6 @@ export function QuizAttemptGradePanel({
     >
       {header}
       {body}
-      {resolveUrl && <OpenRequestNote resolveUrl={resolveUrl} />}
     </div>
   );
 }
