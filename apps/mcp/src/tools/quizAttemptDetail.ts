@@ -654,7 +654,8 @@ export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
     'scale; never numbers), band, the staff adjustment (adjusted, original_emoji, ' +
     'adjusted_at, adjusted_by) and the comment to the student (instructor_comment, ' +
     'comment_at, comment_by); change either with quiz_attempt_adjust, picking from ' +
-    'emoji_scale (the classroom scale, best first). open_regrade_request (id, ' +
+    'emoji_scale (the classroom scale, best first; grade_emoji keeps the score). ' +
+    'open_regrade_request (id, ' +
     'student_comment, created_at), focus_percentage, the result of each question (tries, ' +
     'eventually_correct, first_attempt_correct, emoji, brief_feedback), and the evaluation ' +
     '(band, closing feedback). include_transcript: true adds the conversation as the staff ' +
@@ -814,7 +815,6 @@ export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
         instructor_comment: attempt.instructor_comment ?? null,
         comment_at: commenterId ? iso(attempt.comment_at) : null,
         comment_by: commenterId ? { id: commenterId, name: nameOf(commenterId) } : null,
-        open_regrade_request_id: openRequest?.id ?? null,
         open_regrade_request: openRequest
           ? {
               id: openRequest.id,

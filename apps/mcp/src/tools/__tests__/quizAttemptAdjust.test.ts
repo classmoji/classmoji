@@ -307,14 +307,16 @@ describe('quiz_attempt_adjust: revert', () => {
     expect(payload.changed).toBe(false);
   });
 
-  it('sets the comment after reverting when one is given', async () => {
+  it('reverts and sets the comment in one service call when one is given', async () => {
     await quizAttemptAdjustTool.handler(
       { ...ARGS, revert: true, comment: 'Back to the AI grade.' },
       ctx('OWNER')
     );
     expect(mocks.revert).toHaveBeenCalledTimes(1);
-    expect(mocks.adjust).toHaveBeenCalledWith(
-      expect.objectContaining({ comment: 'Back to the AI grade.' })
+    expect(mocks.revert).toHaveBeenCalledWith(
+      expect.objectContaining({ attemptId: ATTEMPT_ID, comment: 'Back to the AI grade.' })
     );
+    // One change, one audit row (the service's): no second call.
+    expect(mocks.adjust).not.toHaveBeenCalled();
   });
 });

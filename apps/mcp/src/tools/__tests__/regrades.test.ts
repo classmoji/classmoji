@@ -568,6 +568,34 @@ describe('regrade_resolve on a quiz request', () => {
     expect(mocks.trigger).not.toHaveBeenCalled();
   });
 
+  it('says the score was kept when APPROVED named the grade already shown (stored DENIED)', async () => {
+    mocks.resolveQuiz.mockResolvedValue(resolved('DENIED'));
+    const payload = parse(
+      await regradeResolveTool.handler(
+        { ...RESOLVE, resolution: 'APPROVED', emoji: '-1', comment: 'Already right.' },
+        STAFF_CTX
+      )
+    );
+    expect(payload).toMatchObject({
+      regrade_request: { status: 'DENIED' },
+      note: expect.stringMatching(/score was kept/),
+    });
+    expect(mocks.trigger).toHaveBeenCalledWith('quiz_regrade_resolved', {
+      request_id: REQUEST_ID,
+    });
+  });
+
+  it('says nothing extra on a plain DENIED', async () => {
+    mocks.resolveQuiz.mockResolvedValue(resolved('DENIED'));
+    const payload = parse(
+      await regradeResolveTool.handler(
+        { ...RESOLVE, resolution: 'DENIED', comment: 'Stays.' },
+        STAFF_CTX
+      )
+    );
+    expect(payload).not.toHaveProperty('note');
+  });
+
   it('keeps the resolution when the email fails to queue', async () => {
     mocks.resolveQuiz.mockResolvedValue(resolved('APPROVED'));
     mocks.trigger.mockRejectedValue(new Error('trigger down'));
@@ -666,5 +694,16 @@ describe('regrade_resolve hints and description', () => {
 
   it('keeps its description under 1,500 bytes', () => {
     expect(Buffer.byteLength(regradeResolveTool.description, 'utf8')).toBeLessThan(1500);
+  });
+
+  it('says the email is best effort and caps the reply at 2000 characters', () => {
+    expect(regradeResolveTool.description).toMatch(/best\s+effort/);
+    const comment = regradeResolveTool.inputSchema.comment as {
+      safeParse: (v: unknown) => { success: boolean; error?: { issues: { message: string }[] } };
+    };
+    expect(comment.safeParse('x'.repeat(2000)).success).toBe(true);
+    const tooLong = comment.safeParse('x'.repeat(2001));
+    expect(tooLong.success).toBe(false);
+    expect(tooLong.error?.issues[0].message).toBe('The reply is longer than 2000 characters');
   });
 });

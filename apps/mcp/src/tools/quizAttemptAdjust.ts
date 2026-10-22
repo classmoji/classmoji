@@ -16,8 +16,10 @@
  *
  * The grade is one emoji from the classroom's own scale (a `score-N` badge on
  * the numeric scale), stored like a repo grade; the AI's evaluation is never
- * edited. `revert` clears the adjustment (the comment stays). Repeating a call
- * with the same values writes nothing (`changed: false`).
+ * edited. `revert` clears the adjustment (the comment stays, or is replaced by
+ * `comment` in the same transaction). Repeating a call with the same values,
+ * or picking the grade the attempt already shows, writes nothing
+ * (`changed: false`).
  *
  * AUDIT: the service writes the row (`quiz_attempt_adjust` /
  * `quiz_attempt_adjust_revert`, `data.tool` = this tool's name, with
@@ -99,8 +101,10 @@ export const quizAttemptAdjustTool: ToolDefinition<QuizAttemptAdjustArgs> = {
     'own scale (get_quiz_attempt returns it as emoji_scale, best first; score-N badges on the ' +
     'numeric scale), ' +
     'and/or the comment the student reads with it (empty string clears it). revert: true ' +
-    "clears the adjustment so the AI's grade counts again (the comment stays; emoji not " +
-    "allowed with it). The AI's evaluation is never edited; the grading strategy still picks " +
+    "clears the adjustment so the AI's grade counts again (the comment stays unless given, " +
+    'in the same change; emoji not allowed with it). Picking the grade_emoji the attempt ' +
+    "already shows keeps its score (changed: false). The AI's evaluation is never edited; " +
+    'the grading strategy still picks ' +
     'the counting attempt and the late penalty applies after the adjustment. Returns the ' +
     'grade as emoji only: grade_emoji (what counts), original_emoji (the AI grade), adjusted. ' +
     'Repeating the same values changes nothing (changed: false). The student is not ' +
@@ -154,26 +158,18 @@ export const quizAttemptAdjustTool: ToolDefinition<QuizAttemptAdjustArgs> = {
     };
 
     try {
-      let result: QuizAdjustResult;
-      let changed = false;
-      if (revert) {
-        result = await ClassmojiService.quizAttempt.revert(actor);
-        changed = result.changed;
-        if (args.comment !== undefined) {
-          result = await ClassmojiService.quizAttempt.adjust({ ...actor, comment: args.comment });
-          changed = changed || result.changed;
-        }
-      } else {
-        result = await ClassmojiService.quizAttempt.adjust({
-          ...actor,
-          ...(args.emoji !== undefined ? { emoji: args.emoji } : {}),
-          ...(args.comment !== undefined ? { comment: args.comment } : {}),
-        });
-        changed = result.changed;
-      }
-      // Defense in depth: the service derived the classroom from the attempt.
-      if (result.classroomId !== classroomId) throw scopedNotFound('Attempt');
-      return ok({ success: true, changed, attempt: adjustmentPayload(result) });
+      // A revert with a comment is one change: one transaction, one audit row.
+      const result: QuizAdjustResult = revert
+        ? await ClassmojiService.quizAttempt.revert({
+            ...actor,
+            ...(args.comment !== undefined ? { comment: args.comment } : {}),
+          })
+        : await ClassmojiService.quizAttempt.adjust({
+            ...actor,
+            ...(args.emoji !== undefined ? { emoji: args.emoji } : {}),
+            ...(args.comment !== undefined ? { comment: args.comment } : {}),
+          });
+      return ok({ success: true, changed: result.changed, attempt: adjustmentPayload(result) });
     } catch (error) {
       throw mapQuizGradeError(error);
     }

@@ -1156,8 +1156,7 @@ describe('get_quiz_attempt: staff adjustment', () => {
       instructor_comment: 'Q3 was ambiguous.',
       comment_at: '2026-10-02T12:00:00.000Z',
       comment_by: { id: 'staff-2', name: 'TA Two' },
-      open_regrade_request_id: 'rr-open',
-      // The student's own words, not just the id.
+      // The open request: its id and the student's own words.
       open_regrade_request: {
         id: 'rr-open',
         student_comment: 'Q3 had two readings.',
@@ -1203,8 +1202,10 @@ describe('get_quiz_attempt: staff adjustment', () => {
       adjusted: false,
       instructor_comment: null,
       adjusted_by: null,
-      open_regrade_request_id: null,
+      open_regrade_request: null,
     });
+    // One field carries the request; the old bare id is gone.
+    expect(payload.attempt).not.toHaveProperty('open_regrade_request_id');
     expect(mocks.userFindMany).not.toHaveBeenCalled();
   });
 });

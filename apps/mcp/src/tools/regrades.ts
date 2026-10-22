@@ -153,7 +153,6 @@ async function createQuizRegrade(attemptId: string, comment: string, ctx: ToolCo
   } catch (error) {
     throw mapQuizGradeError(error, 'Quiz attempt');
   }
-  if (result.classroomId !== classroomId) throw scopedNotFound('Quiz attempt');
 
   const { classroom_id: _classroom, ...quiz } = target;
   return ok({
@@ -319,7 +318,7 @@ async function resolveQuizRegrade(
   args: RegradeResolveArgs,
   ctx: ToolContext
 ) {
-  const { classroomId } = requireClassroomCtx(ctx);
+  // The request was loaded within this classroom (loadRegradeRequestInClassroom).
   // A request already resolved is reported before the arguments are checked:
   // the service returns it as it is (already_resolved), so a retry with the
   // reply or emoji left out reads as the resolution it already has.
@@ -357,7 +356,6 @@ async function resolveQuizRegrade(
   } catch (error) {
     throw mapQuizGradeError(error, 'Regrade request');
   }
-  if (result.classroomId !== classroomId) throw scopedNotFound('Regrade request');
 
   // The email reads the resolved request from the database. The resolution is
   // already written, so a failed enqueue is reported, not thrown.
@@ -375,9 +373,15 @@ async function resolveQuizRegrade(
   }
 
   const attempt = request.quiz_attempt;
+  // APPROVED with the grade the attempt already shows is a Keep (DENIED).
+  const kept =
+    !result.alreadyResolved && args.resolution === 'APPROVED' && result.request.status === 'DENIED';
   return ok({
     success: true,
     ...(result.alreadyResolved ? { already_resolved: true } : { email_queued: emailQueued }),
+    ...(kept
+      ? { note: 'That emoji is the grade the attempt already shows: the score was kept (DENIED).' }
+      : {}),
     regrade_request: {
       id: result.request.id,
       status: result.request.status,
@@ -407,14 +411,16 @@ export const regradeResolveTool: ToolDefinition<RegradeResolveArgs> = {
   annotations: { destructive: true, idempotent: true, openWorld: false },
   title: 'Resolve a regrade request',
   description:
-    'Resolves a pending regrade request (APPROVED or DENIED) and emails the student. comment ' +
-    'is your reply, which the student reads (required for a quiz request). A submission ' +
+    'Resolves a pending regrade request (APPROVED or DENIED) and emails the student (best ' +
+    'effort: email_queued says whether it was queued; the resolution stands either way). ' +
+    'comment is your reply, which the student reads (required for a quiz request, at most ' +
+    '2000 characters). A submission ' +
     'request: after approving, add the new grade with grade_add; it replaces the pre-request ' +
     'grades rather than averaging with them. A quiz request (target quiz in ' +
     'list_regrade_requests): APPROVED needs emoji, the new grade on the classroom scale ' +
     "(get_quiz_attempt's emoji_scale), which becomes the attempt's " +
-    'grade ("Score adjusted"); ' +
-    'DENIED keeps the grade ("Score kept"). Grades come back as emoji only. A request ' +
+    'grade ("Score adjusted"); the grade_emoji it already shows keeps the score and resolves ' +
+    'DENIED. DENIED keeps the grade ("Score kept"). Grades come back as emoji only. A request ' +
     'already resolved is returned unchanged (already_resolved). Teaching team; audited.',
   scope: 'write',
   roles: TEACHING_TEAM,
@@ -430,9 +436,9 @@ export const regradeResolveTool: ToolDefinition<RegradeResolveArgs> = {
       .describe("Quiz requests, APPROVED only: the new grade, an emoji on the classroom's scale"),
     comment: z
       .string()
-      .max(5000)
+      .max(2000, 'The reply is longer than 2000 characters')
       .optional()
-      .describe('Your reply to the student (required for quiz requests)'),
+      .describe('Your reply to the student, at most 2000 characters (required for quiz requests)'),
   },
   handler: async (args, ctx) => {
     const request = await loadRegradeRequestInClassroom(args.regrade_request_id, ctx);
