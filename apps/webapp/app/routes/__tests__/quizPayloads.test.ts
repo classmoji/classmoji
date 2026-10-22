@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => ({
   netQuizExtensionHours: vi.fn(),
   findScaleByClassroomId: vi.fn(),
   regradeFindMany: vi.fn(),
+  openQuizRequestAttemptIds: vi.fn(),
   findOpenByQuizAttemptId: vi.fn(),
   findByClassroomAndUser: vi.fn(),
   findForUserByQuizIds: vi.fn(),
@@ -81,6 +82,7 @@ vi.mock('@classmoji/services', () => ({
     },
     regradeRequest: {
       findMany: (...a: unknown[]) => mocks.regradeFindMany(...a),
+      openQuizRequestAttemptIds: (...a: unknown[]) => mocks.openQuizRequestAttemptIds(...a),
       findOpenByQuizAttemptId: (...a: unknown[]) => mocks.findOpenByQuizAttemptId(...a),
     },
   },
@@ -359,6 +361,7 @@ beforeEach(() => {
   mocks.findUsersByRole.mockResolvedValue([]);
   mocks.findScaleByClassroomId.mockResolvedValue(SCALE);
   mocks.regradeFindMany.mockResolvedValue([]);
+  mocks.openQuizRequestAttemptIds.mockResolvedValue(new Set());
   mocks.findOpenByQuizAttemptId.mockResolvedValue(null);
   mocks.netQuizExtensionHours.mockResolvedValue(new Map());
   // One user's attempts on the quiz, newest first (the counting-attempt read).
@@ -544,17 +547,13 @@ describe('quiz results page: adjustments and regrade requests', () => {
   });
 
   it("marks a student with an open quiz regrade request, read from this classroom's requests on this quiz", async () => {
-    mocks.regradeFindMany.mockResolvedValue([
-      { id: 'rr-1', quiz_attempt_id: ADA_FIRST.id, student: { email: SENTINEL.email } },
-    ]);
+    // Attempt ids only (the service selects nothing else).
+    mocks.openQuizRequestAttemptIds.mockResolvedValue(new Set([ADA_FIRST.id]));
 
     const payload = await detailRoute.loader(detailArgs());
 
-    expect(mocks.regradeFindMany).toHaveBeenCalledWith({
-      classroom_id: CLASSROOM.id,
-      status: 'IN_REVIEW',
-      quiz_attempt: { quiz_id: QUIZ_ID },
-    });
+    expect(mocks.openQuizRequestAttemptIds).toHaveBeenCalledWith(CLASSROOM.id, QUIZ_ID);
+    expect(mocks.regradeFindMany).not.toHaveBeenCalled();
     const ada = payload.students.find(s => s.userId === ADA.id)!;
     expect(ada.regradeRequested).toBe(true);
     expect(ada.attempts.map(a => [a.id, a.regradeRequested])).toEqual([
