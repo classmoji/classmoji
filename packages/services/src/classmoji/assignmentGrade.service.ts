@@ -196,6 +196,9 @@ export const findOrphanedGradeEmojis = async (
   return [...byEmoji.values()];
 };
 
+/** A large classroom's remap rewrites many rows; the grading writes' allowance. */
+const REMAP_TX_OPTIONS = { timeout: 15_000 } as const;
+
 /** Why a remap was refused; the settings action returns the message. */
 export class RemapGradeEmojisError extends Error {
   constructor(message: string) {
@@ -279,4 +282,4 @@ export const remapGradeEmojis = async (
     }
     result.totalRemapped = result.repoGrades + result.quizAdjustments;
     return result;
-  });
+  }, REMAP_TX_OPTIONS);

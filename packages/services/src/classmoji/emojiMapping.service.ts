@@ -160,11 +160,14 @@ export const ensureDefaultScale = async (classroomId: string, client: ScaleClien
  * become orphaned (the settings page's remap banner).
  */
 export const replaceScale = async (classroomId: string, mappings: readonly EmojiMappingInput[]) =>
-  getPrisma().$transaction(async tx => {
-    await lockScale(tx, classroomId);
-    await tx.emojiMapping.deleteMany({ where: { classroom_id: classroomId } });
-    await tx.emojiMapping.createMany({
-      data: mappings.map(m => ({ ...m, classroom_id: classroomId })),
-    });
-    return { count: mappings.length };
-  });
+  getPrisma().$transaction(
+    async tx => {
+      await lockScale(tx, classroomId);
+      await tx.emojiMapping.deleteMany({ where: { classroom_id: classroomId } });
+      await tx.emojiMapping.createMany({
+        data: mappings.map(m => ({ ...m, classroom_id: classroomId })),
+      });
+      return { count: mappings.length };
+    },
+    { timeout: 15_000 }
+  );

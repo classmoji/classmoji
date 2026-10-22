@@ -327,6 +327,16 @@ describe.skipIf(!RUN)('orphaned quiz adjustments (integration)', () => {
     ]);
   });
 
+  it('a classroom with no scale at all: every grade and adjustment is orphaned', async () => {
+    const classE = await makeClassroom('e');
+    const e = await seedGrades(classE, studentX, owner);
+    await prisma.emojiMapping.deleteMany({ where: { classroom_id: classE } });
+    expect(await assignmentGrade.findOrphanedGradeEmojis(classE)).toEqual([
+      { emoji: '+1', count: 2, quiz_count: 1 },
+    ]);
+    expect(e.attemptId).toBeTruthy();
+  });
+
   it('a re-seed never mixes into a concurrent replaceScale', async () => {
     const classZ = await makeClassroom('z');
     const want = DEFAULT_EMOJI_MAPPINGS.map(m => m.emoji).sort();
