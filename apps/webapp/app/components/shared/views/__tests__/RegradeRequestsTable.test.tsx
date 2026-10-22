@@ -8,15 +8,17 @@
  *     for staff on an open request, Resolve, with no Grade picker.
  *   - The student variant shows the staff reply under their comment, signed
  *     with who resolved the request and when (the request's own
- *     `resolved_by_name` / `resolved_at`, not the attempt's last adjuster; no
- *     name on rows resolved before that was recorded), and the
+ *     `resolved_by_name` / `resolved_at`; no name on rows resolved before
+ *     that was recorded), and the
  *     "Request regrade/resubmit" button; no Resolve.
  *   - A repo row keeps its title, picker and Resolve.
  *   - A resolved quiz row reads Approved / Denied with "Score adjusted A → B"
  *     or "Score kept A", B the resolution's own grade (`resolvedEmoji`), not
  *     the attempt's grade now.
  *   - A read-only classroom (`canResolve` false) shows no Resolve or picker.
- *   - `?resolve=<id>` opens that open quiz request's resolve modal.
+ *
+ * `?resolve=<id>` and the keyboard on Resolve need effects and events:
+ * RegradeRequestsTable.interactive.test.tsx (jsdom).
  */
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createMemoryRouter, RouterProvider } from 'react-router';
@@ -61,13 +63,10 @@ const quizRow = (over: Partial<RegradeRequestRowData> = {}): RegradeRequestRowDa
     attemptNumber: 2,
     quizId: 'quiz-1',
     quizName: 'Recursion check-in',
-    assignmentTitle: 'Recursion',
     originalEmoji: 'score-60',
     effectiveEmoji: 'score-60',
     adjusted: false,
     resolvedEmoji: null,
-    adjustedByName: null,
-    adjustedAt: null,
     lateHours: 0,
     countedEmoji: 'score-60',
   },
@@ -89,9 +88,6 @@ const resolvedQuizRow = () =>
       effectiveEmoji: 'score-90',
       resolvedEmoji: 'score-90',
       adjusted: true,
-      // Whoever last touched the attempt is not the reply's author.
-      adjustedByName: 'Someone Else',
-      adjustedAt: '2026-10-16T10:00:00.000Z',
     },
     grader_comment: 'Q3 now has full credit.',
     resolved_by_name: 'Jordan Lee',
@@ -173,8 +169,11 @@ describe('RegradeRequestsTable, staff', () => {
     expect(html).toContain('data-emoji="score-60"');
     expect(html).toContain('data-emoji="score-90"');
     expect(flat).toContain('Score adjusted');
-    // No grade number anywhere for quizzes: the grades are emoji only.
-    expect(flat).not.toMatch(/(^|\s)(60|90)%?(\s|$)/);
+    // The table prints no grade number of its own: every grade goes through
+    // Emoji (mocked here to text-free markers), though the scale it was handed
+    // carries the numbers. A score-N badge's own label is Emoji's business.
+    expect(flat).not.toMatch(/\d+\s*%|(^|\s)(0|60|90)(\s|$)/);
+    expect(html.match(/data-emoji="score-(60|90)"/g)?.length).toBeGreaterThanOrEqual(3);
   });
 
   it('offers Resolve on an open quiz request only, and no Grade picker on quiz rows', () => {
@@ -242,7 +241,6 @@ describe('RegradeRequestsTable, student', () => {
     expect(html).toContain('href="/student/cs1/quizzes/quiz-1/attempt/att-1"');
     expect(html).toContain('data-testid="regrade-staff-reply"');
     expect(flat).toContain('Jordan Lee · Oct 14');
-    expect(flat).not.toContain('Someone Else');
     expect(flat).toContain('Q3 now has full credit.');
     expect(html).not.toContain('regrade-quiz-resolve');
     expect(html).not.toContain('emoji-grade-trigger');
@@ -281,7 +279,6 @@ describe('RegradeRequestsTable, student', () => {
     const flat = text(html);
     expect(html).toContain('data-testid="regrade-staff-reply"');
     expect(flat).toContain('Q3 now has full credit.');
-    expect(flat).not.toContain('Someone Else');
     expect(flat).not.toContain('Jordan Lee');
   });
 });

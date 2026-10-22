@@ -24,8 +24,6 @@ export interface QuizRegradeView {
   attemptNumber: number;
   quizId: string;
   quizName: string;
-  /** The quiz's assignment title, when it has one. */
-  assignmentTitle: string | null;
   /** The AI's score as the classroom's emoji. */
   originalEmoji: string | null;
   /** What counts now (the adjustment when there is one), unpenalised. */
@@ -38,11 +36,8 @@ export interface QuizRegradeView {
    * attempt's grade now. Null while open.
    */
   resolvedEmoji: string | null;
-  /** Who last adjusted the attempt, and when (staff views; not the reply author). */
-  adjustedByName: string | null;
-  adjustedAt: string | null;
-  /** Staff only, open requests only: the attempt's whole hours late. */
-  lateHours?: number;
+  /** Staff only, open requests only: the attempt's whole hours late; null with no due date. */
+  lateHours?: number | null;
   /** Staff only, open requests only: the effective score after the late penalty, as emoji. */
   countedEmoji?: string | null;
 }
@@ -55,9 +50,6 @@ export type RegradeRequestRow = Omit<ServiceRow, 'quiz_attempt' | 'resolved_by'>
    */
   resolved_by_name: string | null;
 };
-
-const iso = (value: Date | string | null | undefined) =>
-  value ? new Date(value).toISOString() : null;
 
 /** One row, with its quiz attempt (if any) reduced to emoji. */
 const projectRow = (row: ServiceRow, scale: QuizEmojiScale): RegradeRequestRow => {
@@ -72,14 +64,11 @@ const projectRow = (row: ServiceRow, scale: QuizEmojiScale): RegradeRequestRow =
       attemptNumber: attempt.attempt_number,
       quizId: attempt.quiz.id,
       quizName: attempt.quiz.name,
-      assignmentTitle: attempt.quiz.assignment?.title ?? null,
       originalEmoji: grade.original.emoji,
       effectiveEmoji: grade.effective.emoji,
       adjusted: grade.adjusted,
       resolvedEmoji:
         row.status === 'IN_REVIEW' ? null : (row.resolved_emoji ?? grade.effective.emoji),
-      adjustedByName: attempt.adjusted_by?.name ?? null,
-      adjustedAt: iso(attempt.adjusted_at),
     },
   };
 };

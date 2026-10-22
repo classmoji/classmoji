@@ -24,16 +24,13 @@ export interface RegradeQuizAttempt {
   attemptNumber: number;
   quizId: string;
   quizName: string;
-  assignmentTitle: string | null;
   originalEmoji: string | null;
   effectiveEmoji: string | null;
   adjusted: boolean;
   /** A resolved request's grade (the snapshot, or the attempt's now on older rows); null while open. */
   resolvedEmoji: string | null;
-  adjustedByName: string | null;
-  adjustedAt: string | Date | null;
-  /** Staff rows, open requests: the attempt's whole hours late. */
-  lateHours?: number;
+  /** Staff rows, open requests: the attempt's whole hours late; null with no due date. */
+  lateHours?: number | null;
   /** Staff rows, open requests: the current grade after the late penalty. */
   countedEmoji?: string | null;
 }

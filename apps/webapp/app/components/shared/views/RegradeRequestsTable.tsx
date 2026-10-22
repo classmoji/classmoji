@@ -296,7 +296,11 @@ const RegradeRequestsTable = ({
                   data-testid="regrade-quiz-resolve"
                   onClick={() => setResolving(request)}
                   onKeyDown={e => {
-                    if (e.key === 'Enter' || e.key === ' ') setResolving(request);
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      // Space would otherwise scroll the page.
+                      e.preventDefault();
+                      setResolving(request);
+                    }
                   }}
                   className={resolveLinkClass}
                 >
@@ -308,6 +312,27 @@ const RegradeRequestsTable = ({
         }
 
         const submission = request.git_repo_assignment;
+        const resolveRepo = () => {
+          if (repoBusy || !submission) return;
+          setRepoResolving(request.id);
+          fetcher!.submit(
+            {
+              request: {
+                id: request.id,
+                student_id: request.student_id,
+                git_repo_assignment: {
+                  id: submission.id,
+                },
+              },
+              status: 'APPROVED',
+            },
+            {
+              method: 'post',
+              action: `/api/operation/?action=updateRegradeRequest`,
+              encType: 'application/json',
+            }
+          );
+        };
         return (
           <TableActionButtons
             onView={
@@ -335,26 +360,13 @@ const RegradeRequestsTable = ({
                 tabIndex={0}
                 aria-disabled={repoBusy}
                 data-testid="regrade-repo-resolve"
-                onClick={() => {
-                  if (repoBusy) return;
-                  setRepoResolving(request.id);
-                  fetcher!.submit(
-                    {
-                      request: {
-                        id: request.id,
-                        student_id: request.student_id,
-                        git_repo_assignment: {
-                          id: submission.id,
-                        },
-                      },
-                      status: 'APPROVED',
-                    },
-                    {
-                      method: 'post',
-                      action: `/api/operation/?action=updateRegradeRequest`,
-                      encType: 'application/json',
-                    }
-                  );
+                onClick={resolveRepo}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    // Space would otherwise scroll the page.
+                    e.preventDefault();
+                    resolveRepo();
+                  }
                 }}
                 className={`${resolveLinkClass} ${repoBusy ? 'pointer-events-none opacity-50' : ''}`}
               >
