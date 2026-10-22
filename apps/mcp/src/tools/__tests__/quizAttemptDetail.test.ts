@@ -720,6 +720,10 @@ describe('get_quiz_attempt', () => {
     });
     expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject(expected(false));
     expect(mocks.auditCreate.mock.calls[1][0]).toMatchObject(expected(true));
+    // A plain read keeps the service's dedup window; a transcript read skips
+    // it, so a plain read just before cannot absorb it.
+    expect(mocks.auditCreate.mock.calls[0]).toHaveLength(1);
+    expect(mocks.auditCreate.mock.calls[1][1]).toEqual({ dedupe: false });
   });
 
   describe('transcript', () => {
