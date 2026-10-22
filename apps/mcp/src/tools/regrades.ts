@@ -51,6 +51,7 @@
 
 import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
+import { QUIZ_REGRADE_REPLY_MAX_LENGTH } from '@classmoji/utils';
 import { runs, tasks } from '@trigger.dev/sdk';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
@@ -66,6 +67,9 @@ import {
   writeAudit,
 } from './shared.ts';
 import { mapQuizGradeError } from './quizAttemptAdjust.ts';
+
+/** Longest reply on a submission (repo) regrade request. */
+const REPO_REPLY_MAX_LENGTH = 5000;
 
 const RUN_POLL_INTERVAL_MS = 500;
 const RUN_WAIT_TIMEOUT_MS = 60_000;
@@ -331,6 +335,12 @@ async function resolveQuizRegrade(
         'A quiz regrade needs a reply to the student (comment)'
       );
     }
+    if (comment.length > QUIZ_REGRADE_REPLY_MAX_LENGTH) {
+      throw new ToolError(
+        'invalid_params',
+        `The reply is longer than ${QUIZ_REGRADE_REPLY_MAX_LENGTH} characters`
+      );
+    }
     if (args.resolution === 'APPROVED' && args.emoji === undefined) {
       throw new ToolError(
         'invalid_params',
@@ -413,8 +423,9 @@ export const regradeResolveTool: ToolDefinition<RegradeResolveArgs> = {
   description:
     'Resolves a pending regrade request (APPROVED or DENIED) and emails the student (best ' +
     'effort: email_queued says whether it was queued; the resolution stands either way). ' +
-    'comment is your reply, which the student reads (required for a quiz request, at most ' +
-    '2000 characters). A submission ' +
+    'comment is your reply, which the student reads (required for a quiz request; at most ' +
+    `${QUIZ_REGRADE_REPLY_MAX_LENGTH} characters on a quiz request, ${REPO_REPLY_MAX_LENGTH} on a ` +
+    'submission request). A submission ' +
     'request: after approving, add the new grade with grade_add; it replaces the pre-request ' +
     'grades rather than averaging with them. A quiz request (target quiz in ' +
     'list_regrade_requests): APPROVED needs emoji, the new grade on the classroom scale ' +
@@ -434,11 +445,16 @@ export const regradeResolveTool: ToolDefinition<RegradeResolveArgs> = {
       .max(100)
       .optional()
       .describe("Quiz requests, APPROVED only: the new grade, an emoji on the classroom's scale"),
+    // The longer cap of the two targets; a quiz request is held to its own
+    // (QUIZ_REGRADE_REPLY_MAX_LENGTH) in resolveQuizRegrade.
     comment: z
       .string()
-      .max(2000, 'The reply is longer than 2000 characters')
+      .max(REPO_REPLY_MAX_LENGTH, `The reply is longer than ${REPO_REPLY_MAX_LENGTH} characters`)
       .optional()
-      .describe('Your reply to the student, at most 2000 characters (required for quiz requests)'),
+      .describe(
+        `Your reply to the student (required for quiz requests): at most ${QUIZ_REGRADE_REPLY_MAX_LENGTH} ` +
+          `characters on a quiz request, ${REPO_REPLY_MAX_LENGTH} on a submission request`
+      ),
   },
   handler: async (args, ctx) => {
     const request = await loadRegradeRequestInClassroom(args.regrade_request_id, ctx);
@@ -493,11 +509,22 @@ export const regradeResolveTool: ToolDefinition<RegradeResolveArgs> = {
       tool: 'regrade_resolve',
       impersonated_by: ctx.viewer.impersonatedBy ?? null,
     });
-    await waitForRunCompletion(run.id);
+    // The task's output: the request as stored, which a resolution that
+    // landed first (alreadyResolved) may have left with another status.
+    const output = (await waitForRunCompletion(run.id)) as {
+      request?: { status?: unknown } | null;
+      alreadyResolved?: unknown;
+    } | null;
+    const stored = output?.request?.status;
+    const alreadyResolved = output?.alreadyResolved === true;
 
     return ok({
       success: true,
-      regrade_request: { id: request.id, status: args.resolution },
+      regrade_request: {
+        id: request.id,
+        status: typeof stored === 'string' ? stored : args.resolution,
+      },
+      ...(alreadyResolved ? { already_resolved: true } : {}),
     });
   },
 };

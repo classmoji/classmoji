@@ -510,6 +510,26 @@ describe('regrade_resolve on a quiz request', () => {
     expect(mocks.trigger).not.toHaveBeenCalled();
   });
 
+  it('holds a quiz reply to 2000 characters, before anything is written', async () => {
+    await expect(
+      regradeResolveTool.handler(
+        { ...RESOLVE, resolution: 'DENIED', comment: 'x'.repeat(2001) },
+        STAFF_CTX
+      )
+    ).rejects.toMatchObject({
+      kind: 'invalid_params',
+      message: 'The reply is longer than 2000 characters',
+    });
+    expect(mocks.resolveQuiz).not.toHaveBeenCalled();
+
+    mocks.resolveQuiz.mockResolvedValue(resolved('DENIED'));
+    await regradeResolveTool.handler(
+      { ...RESOLVE, resolution: 'DENIED', comment: 'x'.repeat(2000) },
+      STAFF_CTX
+    );
+    expect(mocks.resolveQuiz).toHaveBeenCalledTimes(1);
+  });
+
   it('refuses a request of another classroom like an unknown one', async () => {
     mocks.findMany.mockResolvedValue(quizRequest({ classroom_id: 'other-class' }));
     await expect(
@@ -649,6 +669,70 @@ describe('regrade_resolve on a submission request', () => {
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
+  it('takes a submission reply up to 5000 characters', async () => {
+    mocks.findMany.mockResolvedValue([
+      {
+        id: 'rr-1',
+        classroom_id: 'class-1',
+        status: 'IN_REVIEW',
+        quiz_attempt_id: null,
+        student: { email: 's@example.com' },
+        git_repo_assignment: { assignment: { title: 'Lab 1' } },
+      },
+    ]);
+    mocks.trigger.mockResolvedValue({ id: 'run-1' });
+    mocks.retrieve.mockResolvedValue({
+      status: 'COMPLETED',
+      output: { request: { id: 'rr-1', status: 'APPROVED' }, alreadyResolved: false },
+    });
+    const payload = parse(
+      await regradeResolveTool.handler(
+        {
+          classroom: 'org/winter-2025',
+          regrade_request_id: 'rr-1',
+          resolution: 'APPROVED',
+          comment: 'x'.repeat(5000),
+        },
+        STAFF_CTX
+      )
+    );
+    expect(mocks.trigger).toHaveBeenCalledWith(
+      'update_regrade_request',
+      expect.objectContaining({ data: { status: 'APPROVED', grader_comment: 'x'.repeat(5000) } })
+    );
+    expect(payload).toMatchObject({ regrade_request: { id: 'rr-1', status: 'APPROVED' } });
+    expect(payload.already_resolved).toBeUndefined();
+  });
+
+  it('returns the status the task stored when another resolution landed first', async () => {
+    mocks.findMany.mockResolvedValue([
+      {
+        id: 'rr-1',
+        classroom_id: 'class-1',
+        status: 'IN_REVIEW',
+        quiz_attempt_id: null,
+        student: { email: 's@example.com' },
+        git_repo_assignment: { assignment: { title: 'Lab 1' } },
+      },
+    ]);
+    mocks.trigger.mockResolvedValue({ id: 'run-1' });
+    mocks.retrieve.mockResolvedValue({
+      status: 'COMPLETED',
+      output: { request: { id: 'rr-1', status: 'DENIED' }, alreadyResolved: true },
+    });
+    const payload = parse(
+      await regradeResolveTool.handler(
+        { classroom: 'org/winter-2025', regrade_request_id: 'rr-1', resolution: 'APPROVED' },
+        STAFF_CTX
+      )
+    );
+    expect(payload).toMatchObject({
+      success: true,
+      regrade_request: { id: 'rr-1', status: 'DENIED' },
+      already_resolved: true,
+    });
+  });
+
   it('reports a settled submission request as already resolved whatever the arguments', async () => {
     mocks.findMany.mockResolvedValue([
       {
@@ -696,14 +780,15 @@ describe('regrade_resolve hints and description', () => {
     expect(Buffer.byteLength(regradeResolveTool.description, 'utf8')).toBeLessThan(1500);
   });
 
-  it('says the email is best effort and caps the reply at 2000 characters', () => {
+  it('says the email is best effort and caps the reply at 5000 characters (a submission request)', () => {
     expect(regradeResolveTool.description).toMatch(/best\s+effort/);
+    expect(regradeResolveTool.description).toMatch(/2000 characters on a quiz request, 5000/);
     const comment = regradeResolveTool.inputSchema.comment as {
       safeParse: (v: unknown) => { success: boolean; error?: { issues: { message: string }[] } };
     };
-    expect(comment.safeParse('x'.repeat(2000)).success).toBe(true);
-    const tooLong = comment.safeParse('x'.repeat(2001));
+    expect(comment.safeParse('x'.repeat(5000)).success).toBe(true);
+    const tooLong = comment.safeParse('x'.repeat(5001));
     expect(tooLong.success).toBe(false);
-    expect(tooLong.error?.issues[0].message).toBe('The reply is longer than 2000 characters');
+    expect(tooLong.error?.issues[0].message).toBe('The reply is longer than 5000 characters');
   });
 });
