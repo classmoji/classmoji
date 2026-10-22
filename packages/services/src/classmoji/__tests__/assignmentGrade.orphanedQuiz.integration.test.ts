@@ -320,8 +320,7 @@ describe.skipIf(!RUN)('orphaned quiz adjustments (integration)', () => {
     ).toBe('score-90');
     // Every entry of the asked-about grade, the rest kept in place.
     expect(
-      (await prisma.regradeRequest.findUniqueOrThrow({ where: { id: x.requestId } }))
-        .previous_grade
+      (await prisma.regradeRequest.findUniqueOrThrow({ where: { id: x.requestId } })).previous_grade
     ).toEqual(['score-90']);
     expect(
       (await prisma.regradeRequest.findUniqueOrThrow({ where: { id: x.repoRequestId } }))
@@ -345,8 +344,7 @@ describe.skipIf(!RUN)('orphaned quiz adjustments (integration)', () => {
       (await prisma.regradeRequest.findUniqueOrThrow({ where: { id: y.requestId } })).resolved_emoji
     ).toBe('+1');
     expect(
-      (await prisma.regradeRequest.findUniqueOrThrow({ where: { id: y.requestId } }))
-        .previous_grade
+      (await prisma.regradeRequest.findUniqueOrThrow({ where: { id: y.requestId } })).previous_grade
     ).toEqual(['+1']);
     expect(
       (await prisma.regradeRequest.findUniqueOrThrow({ where: { id: y.repoRequestId } }))
