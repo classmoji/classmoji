@@ -9,6 +9,7 @@ import {
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { pickSettings } from '~/utils/pickSettings';
 import { addClassroomAuditLog } from '~/utils/helpers';
+import { impersonationAuditFields } from '~/routes/admin.$class.ask-moji/impersonation.server';
 import type { Route } from './+types/route';
 
 /** The remap body's `mappings` (client JSON): a non-empty list of emoji pairs, else null. */
@@ -142,6 +143,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           repo_grades: result.repoGrades,
           quiz_adjustments: result.quizAdjustments,
           regrade_snapshots: result.regradeSnapshots,
+          ...(await impersonationAuditFields(request)),
         },
         dedupe: false,
       });
