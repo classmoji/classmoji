@@ -43,10 +43,12 @@ export const AdjustedChip = () => (
 
 /**
  * A staff adjustment whose emoji left the classroom's scale (E17): the AI's
- * grade counts until the owner remaps it in Grade settings. Staff only.
+ * grade counts until the owner remaps it in Grade settings. Staff only; the
+ * copy names the owner, since teachers and assistants cannot open Grade
+ * settings.
  */
 export const NeedsRemapChip = () => (
-  <Tooltip title="The adjusted emoji is no longer on the grading scale. The AI's grade counts until it is remapped in Grade settings.">
+  <Tooltip title="This adjusted emoji is no longer on the grading scale. The AI's grade counts until the classroom owner remaps it in Grade settings.">
     <span
       data-testid="quiz-grade-needs-remap"
       className="inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-700 dark:text-rose-300 whitespace-nowrap"
