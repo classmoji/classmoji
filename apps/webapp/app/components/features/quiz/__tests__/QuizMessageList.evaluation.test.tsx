@@ -73,8 +73,10 @@ describe('QuizMessageList — the evaluation card', () => {
             evaluation: 'GOOD',
             numeric_score: 3,
             partial_credit_percentage: 66.7,
+            // Stored emoji that a recompute from credit_earned would not give:
+            // 100 would read 🚀 and 50 👎 on the default set.
             question_results: [
-              { question_num: 1, attempts: 1, credit_earned: 100, emoji: 'rocket' },
+              { question_num: 1, attempts: 1, credit_earned: 100, emoji: 'sob' },
               { question_num: 2, attempts: 2, credit_earned: 50, emoji: null },
             ],
           }}
@@ -92,8 +94,10 @@ describe('QuizMessageList — the evaluation card', () => {
       html.indexOf('Quiz Complete!')
     );
     expect(html).not.toContain('66.7');
-    // The per-question emoji is the stored one (🚀), never recomputed.
-    expect(html.match(/🚀/g)?.length).toBeGreaterThanOrEqual(2);
+    // The per-question emoji is the stored one, never recomputed: Q1 shows its
+    // stored 😭 (nothing else on the card is 😭), Q2 has none and shows none.
+    expect(html.match(/😭/g)?.length).toBe(1);
+    expect(html).not.toContain('👎');
   });
 
   it("labels a student's attempt that does not count toward their grade (E15)", () => {

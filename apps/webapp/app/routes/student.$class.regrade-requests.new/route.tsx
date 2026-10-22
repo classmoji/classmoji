@@ -74,13 +74,9 @@ const NewRegradeRequest = ({ loaderData }: Route.ComponentProps) => {
       onOk={handleSubmit}
       okText="Request regrade/resubmit"
       title="Request regrade/resubmit"
-      destroyOnClose={true}
+      destroyOnHidden
       okButtonProps={{
         disabled: !comment || !assignment,
-      }}
-      cancelButtonProps={{
-        danger: true,
-        type: 'primary',
       }}
     >
       <Alert message="Explain your regrade/resubmit request below." type="info" showIcon banner />

@@ -162,7 +162,9 @@ describe('quiz regrade request action', () => {
     );
   });
 
-  it("refuses another student's attempt, whatever the body claims", async () => {
+  it("asks for another student's attempt as the session user, never the body's, and passes the refusal on", async () => {
+    // The ownership rule itself is the service's (integration-tested in
+    // packages/services); this pins what the action hands it.
     session.userId = 'stu-b';
 
     const result = asReply(
@@ -171,10 +173,21 @@ describe('quiz regrade request action', () => {
         comment: 'Mine now.',
         actorUserId: 'stu-a',
         student_id: 'stu-a',
+        attemptId: 'att-other',
       })
     );
 
-    expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ actorUserId: 'stu-b' }));
+    // Exactly the URL's attempt and the session user: nothing from the body
+    // but the comment reaches the service.
+    expect(mocks.create).toHaveBeenCalledTimes(1);
+    expect(mocks.create).toHaveBeenCalledWith({
+      attemptId: 'att-a',
+      comment: 'Mine now.',
+      actorUserId: 'stu-b',
+      tool: 'web:quiz_attempt.request_regrade',
+      impersonatedBy: null,
+    });
+    // The service's not_found comes back as the same 404 an unknown id gets.
     expect(result.init?.status).toBe(404);
     expect(result.data?.error).toBe('Quiz attempt not found');
   });

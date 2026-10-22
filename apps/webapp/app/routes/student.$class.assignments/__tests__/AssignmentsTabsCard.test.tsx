@@ -211,9 +211,12 @@ describe('AssignmentsTabsCard', () => {
     };
 
     it('shows the grade as the emoji, never the number, and the late pill of the attempt that counts', () => {
-      const html = render([{ ...QUIZ_DONE, numLateHours: 3 }], 'completed');
+      // Even a row that still carried its raw percentage (the loader strips
+      // it; loader.test.ts) shows only the emoji.
+      const leaky = { ...QUIZ_DONE, numLateHours: 3, score: 82.4 } as AssignmentRow;
+      const html = render([leaky], 'completed');
       expect(html).toContain('data-emoji="score-80"');
-      expect(html).not.toContain('82%');
+      expect(html).not.toMatch(/82(\.4)?\s*%?/);
       expect(html).toContain('3h late');
       expect(html).not.toContain('Missing');
       expect(html).not.toContain('quiz-grade-adjusted');
