@@ -155,7 +155,10 @@ export const requestRegradeTask = task({
 
 export const updateRegradeRequestTask = task({
   id: 'update_regrade_request',
-  // Sets fields, so safe to repeat on a connection blip.
+  // Safe to repeat on a connection blip: resolveRepo writes only an open
+  // request, and a retry that finds it already resolved the same way (same
+  // resolver and status: the first attempt committed without hearing back)
+  // returns it as resolved now, so the retry still audits and emails.
   ...retryOnDatabaseBlip,
   run: async (payload: UpdateRegradeRequestTaskPayload) => {
     const { request, data, resolved_by_id: resolvedById, tool, impersonated_by } = payload;
@@ -181,7 +184,7 @@ export const updateRegradeRequestTask = task({
   }: TaskPayloadWrapper<UpdateRegradeRequestTaskPayload> & {
     output?: { alreadyResolved?: boolean } | null;
   }) => {
-    // A request that was already resolved was not written again: no second email.
+    // A request someone else (or another status) resolved first: no second email.
     if (output?.alreadyResolved) return;
     const { request } = payload;
     sendEmailTask.trigger({

@@ -765,10 +765,16 @@ export const resolveQuiz = async (
  * through `resolveQuiz`, which writes the adjustment with the status.
  * Only an open (IN_REVIEW) request is resolved, under a row lock: a second
  * resolve writes nothing and returns the request as it is
- * (`alreadyResolved`), so the task sends no second email.
+ * (`alreadyResolved`), so the task sends no second email. The exception is
+ * the same resolution again: a request already resolved by `resolvedById`
+ * with this status (and this reply, when one is given) is returned as
+ * resolved now (`alreadyResolved: false`) and audited, so a task retry whose
+ * first attempt committed without hearing back still audits and emails.
  * Audited `regrade_resolve` (`target: 'repo'`) with the caller's `tool`, as
- * the resolver's highest accepted role in the request's classroom; a payload
- * queued without a resolver writes no audit row (no actor to name).
+ * the resolver's highest accepted role in the request's classroom, read in
+ * the transaction: after the commit only the audit write runs, and it never
+ * throws. A payload queued without a resolver writes no audit row (no actor
+ * to name).
  */
 export const resolveRepo = async ({
   id,
@@ -799,7 +805,15 @@ export const resolveRepo = async ({
     if (stored.quiz_attempt_id) {
       throw new Error('A quiz regrade request is resolved with resolveQuiz');
     }
-    if (stored.status !== 'IN_REVIEW') return { request: stored, alreadyResolved: true };
+    const role = resolvedById ? await acceptedRoleIn(tx, stored.classroom_id, resolvedById) : null;
+    if (stored.status !== 'IN_REVIEW') {
+      const sameResolution =
+        Boolean(resolvedById) &&
+        stored.resolved_by_id === resolvedById &&
+        stored.status === status &&
+        (!reply || stored.grader_comment === reply);
+      return { request: stored, alreadyResolved: !sameResolution, role };
+    }
     const updated = await tx.regradeRequest.update({
       where: { id },
       data: {
@@ -809,36 +823,33 @@ export const resolveRepo = async ({
         resolved_at: new Date(),
       },
     });
-    return { request: updated, alreadyResolved: false };
+    return { request: updated, alreadyResolved: false, role };
   });
-  if (outcome.alreadyResolved) return outcome;
-  const stored = outcome.request;
+  const { request: stored, alreadyResolved, role } = outcome;
+  if (alreadyResolved) return { request: stored, alreadyResolved };
 
-  if (resolvedById) {
-    const role = await acceptedRoleIn(getPrisma(), stored.classroom_id, resolvedById);
-    if (role) {
-      await auditRegrade(
-        {
-          actorUserId: resolvedById,
-          tool: tool || 'update_regrade_request',
-          impersonatedBy: impersonatedBy ?? null,
+  if (resolvedById && role) {
+    await auditRegrade(
+      {
+        actorUserId: resolvedById,
+        tool: tool || 'update_regrade_request',
+        impersonatedBy: impersonatedBy ?? null,
+      },
+      {
+        classroomId: stored.classroom_id,
+        role,
+        requestId: id,
+        action: 'UPDATE',
+        data: {
+          event: 'regrade_resolve',
+          target: 'repo',
+          git_repo_assignment_id: stored.git_repo_assignment_id,
+          status,
+          reply_set: reply.length > 0,
         },
-        {
-          classroomId: stored.classroom_id,
-          role,
-          requestId: id,
-          action: 'UPDATE',
-          data: {
-            event: 'regrade_resolve',
-            target: 'repo',
-            git_repo_assignment_id: stored.git_repo_assignment_id,
-            status,
-            reply_set: reply.length > 0,
-          },
-        }
-      );
-    }
+      }
+    );
   }
 
-  return outcome;
+  return { request: stored, alreadyResolved: false };
 };

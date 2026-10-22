@@ -1287,6 +1287,57 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
           },
         })
       ).toBe(1);
+
+      // The same resolver with another status, or another reply, is a no-op too.
+      for (const again of [
+        { status: 'APPROVED' as const, graderComment: 'The deadline was firm.' },
+        { status: 'DENIED' as const, graderComment: 'Something else.' },
+      ]) {
+        expect(
+          await regradeRequest.resolveRepo({
+            id: repoRequest.id,
+            ...again,
+            resolvedById: assistant,
+            tool: 'repo_surface',
+          })
+        ).toMatchObject({ alreadyResolved: true });
+      }
+
+      // The same resolution again (a task retry whose first attempt committed
+      // without hearing back): returned as resolved now, so the task emails,
+      // and audited; nothing rewritten.
+      for (const graderComment of ['The deadline was firm.', undefined]) {
+        const replay = await regradeRequest.resolveRepo({
+          id: repoRequest.id,
+          status: 'DENIED',
+          graderComment,
+          resolvedById: assistant,
+          tool: 'repo_surface',
+        });
+        expect(replay).toMatchObject({
+          alreadyResolved: false,
+          request: {
+            status: 'DENIED',
+            grader_comment: 'The deadline was firm.',
+            resolved_by_id: assistant,
+          },
+        });
+        expect(replay.request.resolved_at?.getTime()).toBe(
+          repoResolved.request.resolved_at?.getTime()
+        );
+      }
+      const replayAudits = await prisma.auditLog.findMany({
+        where: {
+          resource_type: 'REGRADE_REQUEST',
+          resource_id: repoRequest.id,
+          action: 'UPDATE',
+        },
+      });
+      expect(replayAudits).toHaveLength(3);
+      for (const row of replayAudits) {
+        expect(row).toMatchObject({ user_id: assistant, role: 'ASSISTANT' });
+        expect(row.data).toMatchObject({ event: 'regrade_resolve', status: 'DENIED' });
+      }
       // Repo grades are the caller's (grade_add), untouched here.
       expect(
         (
