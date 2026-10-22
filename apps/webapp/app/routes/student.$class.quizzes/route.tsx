@@ -48,6 +48,8 @@ interface AttemptsSummary {
   maxAttempts: number;
   currentEmoji: string | null;
   currentAdjusted: boolean;
+  /** The AI's original grade when adjusted, shown before the adjusted one (D6). */
+  currentOriginalEmoji: string | null;
   countedEmoji: string | null;
   currentLateHours: number;
   canCreateNew: boolean;
@@ -223,6 +225,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
         {
           emoji: counting?.scoreEmoji ?? null,
           adjusted: counting?.adjusted ?? false,
+          originalEmoji: counting?.originalScoreEmoji ?? null,
           countedEmoji: countedEmojiOf(
             scoring.currentScore,
             scoring.countedScore,
@@ -561,19 +564,29 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
       key: 'currentScore',
       width: 160,
       render: (_: unknown, record: StudentQuiz) => {
-        const { currentEmoji, currentAdjusted, countedEmoji, currentLateHours } =
-          record.attemptsSummary;
+        const {
+          currentEmoji,
+          currentAdjusted,
+          currentOriginalEmoji,
+          countedEmoji,
+          currentLateHours,
+        } = record.attemptsSummary;
         if (!currentEmoji) return <Text type="secondary">-</Text>;
 
         const strategyLabel = getGradingStrategyLabel(record.gradingStrategy);
 
-        // The grade of the attempt that counts as the classroom's emoji, an
-        // "adjusted" chip when staff adjusted it, and its late hours beside it.
+        // The grade of the attempt that counts as the classroom's emoji, the
+        // AI's original before it and an "adjusted" chip when staff adjusted
+        // it (D6), and its late hours beside it.
         return (
           <Space size="small">
             <Tooltip title={`Graded by: ${strategyLabel}`}>
               <span>
-                <QuizGradeEmoji emoji={currentEmoji} adjusted={currentAdjusted} />
+                <QuizGradeEmoji
+                  emoji={currentEmoji}
+                  originalEmoji={currentOriginalEmoji}
+                  adjusted={currentAdjusted}
+                />
               </span>
             </Tooltip>
             <CountedEmoji emoji={countedEmoji} />

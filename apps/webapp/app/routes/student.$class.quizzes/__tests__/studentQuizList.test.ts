@@ -275,6 +275,7 @@ describe('student quiz list payload', () => {
       canCreateNew: true,
       currentEmoji: '+1',
       currentAdjusted: false,
+      currentOriginalEmoji: null,
       countedEmoji: null,
       currentLateHours: 0,
       maxAttempts: 3,
@@ -519,7 +520,12 @@ describe('student quiz list — late attempts and hours bought', () => {
       adjusted: true,
       isCounting: true,
     });
-    expect(quiz.attemptsSummary).toMatchObject({ currentEmoji: 'rocket', currentAdjusted: true });
+    // The list shows original → adjusted (D6).
+    expect(quiz.attemptsSummary).toMatchObject({
+      currentEmoji: 'rocket',
+      currentAdjusted: true,
+      currentOriginalEmoji: 'sob',
+    });
   });
 
   it('adds the hours bought to the due date and to every attempt', async () => {

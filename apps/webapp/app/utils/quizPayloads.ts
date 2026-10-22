@@ -123,6 +123,8 @@ export interface StudentQuizAttemptsSummaryView {
   currentEmoji: string | null;
   /** That attempt carries a staff adjustment. */
   currentAdjusted: boolean;
+  /** The AI's original grade of that attempt, when adjusted (D6: shown beside it); else null. */
+  currentOriginalEmoji: string | null;
   /** What it counts for after the late penalty, when that differs; else null. */
   countedEmoji: string | null;
   /** That attempt's late hours, shown beside the grade. */
@@ -141,6 +143,7 @@ export const studentQuizAttemptsSummaryView = (
   current: {
     emoji?: string | null;
     adjusted?: boolean;
+    originalEmoji?: string | null;
     countedEmoji?: string | null;
     lateHours?: number;
   } = {}
@@ -149,6 +152,7 @@ export const studentQuizAttemptsSummaryView = (
   canCreateNew: summary?.canCreateNew ?? false,
   currentEmoji: current.emoji ?? null,
   currentAdjusted: current.adjusted === true,
+  currentOriginalEmoji: current.adjusted === true ? (current.originalEmoji ?? null) : null,
   countedEmoji: current.countedEmoji ?? null,
   currentLateHours: current.lateHours ?? 0,
   maxAttempts,
