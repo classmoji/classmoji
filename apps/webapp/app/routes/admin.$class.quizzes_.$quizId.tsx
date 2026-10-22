@@ -176,17 +176,10 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   // `quiz` (from findById) joins every attempt again, so neither is sent as-is.
   // Every grade is shown as this classroom's emoji (E1); the open
   // regrade/resubmit requests on this quiz's attempts mark their students.
-  const [emojiScale, openRequests] = await Promise.all([
+  const [emojiScale, regradeAttemptIds] = await Promise.all([
     ClassmojiService.emojiMapping.findScaleByClassroomId(classroom.id),
-    ClassmojiService.regradeRequest.findMany({
-      classroom_id: classroom.id,
-      status: 'IN_REVIEW',
-      quiz_attempt: { quiz_id: quiz.id },
-    }),
+    ClassmojiService.regradeRequest.openQuizRequestAttemptIds(classroom.id, quiz.id),
   ]);
-  const regradeAttemptIds = new Set(
-    openRequests.flatMap(r => (r.quiz_attempt_id ? [r.quiz_attempt_id] : []))
-  );
 
   const { students, viewerAttempt } = buildQuizResultRows({
     attempts,

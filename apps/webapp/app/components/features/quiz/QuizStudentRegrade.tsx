@@ -99,7 +99,7 @@ export function QuizRegradeButton({
         onCancel={() => setOpen(false)}
         okButtonProps={{ disabled: !comment.trim(), loading: busy }}
         cancelButtonProps={{ disabled: busy }}
-        destroyOnClose
+        destroyOnHidden
       >
         <Alert message="Explain your regrade/resubmit request below." type="info" showIcon banner />
         <Form layout="vertical" className="mt-4">
