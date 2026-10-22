@@ -200,7 +200,7 @@ export function QuizResolveFields({
         </div>
       )}
 
-      <div>
+      <div className="pb-5">
         <label htmlFor={replyId} className="block text-sm text-ink-1 mb-1">
           <span className="text-red-500 mr-1">*</span>Reply to student
         </label>
