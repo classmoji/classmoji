@@ -38,6 +38,34 @@ export const repoPointsLost = (
   return tenth(Math.max(0, raw - counted));
 };
 
+/**
+ * The report header's Late tile: how many repo submissions and quizzes were
+ * late, their hours together, and the points the penalty took from the repo
+ * submissions (`repoLost`, as their rows show it). Quiz points are left out:
+ * they are a number, and quiz grades show as emoji (E1).
+ */
+export const lateTileSummary = <
+  R extends {
+    is_late?: boolean | null;
+    is_late_override?: boolean | null;
+    num_late_hours?: number | null;
+  },
+>(
+  repoRows: readonly R[],
+  quizItems: readonly Pick<GradedItem, 'late_hours'>[],
+  repoLost: (row: R) => number
+) => {
+  const lateRows = repoRows.filter(ra => ra.is_late && !ra.is_late_override);
+  const lateQuizItems = quizItems.filter(item => item.late_hours > 0);
+  return {
+    count: lateRows.length + lateQuizItems.length,
+    hours:
+      lateRows.reduce((sum, ra) => sum + (ra.num_late_hours ?? 0), 0) +
+      lateQuizItems.reduce((sum, item) => sum + item.late_hours, 0),
+    pointsLost: tenth(lateRows.reduce((sum, ra) => sum + repoLost(ra), 0)),
+  };
+};
+
 /** "Late 3h", plus " · −12 pts" only when the penalty took something. */
 export const latePillText = (hours: number, lost: number) =>
   `Late ${hours}h${lost > 0 ? ` · −${lost} pts` : ''}`;

@@ -30,7 +30,7 @@ import { addAuditLog, addClassroomAuditLog } from '~/utils/helpers';
 import { requireClassroomStaff, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { normalizeSchoolId } from '~/utils/schoolId';
 import { useGitWeb } from '~/hooks/useGitWeb';
-import { latePillText, quizPointsLost, quizScoreNote, repoPointsLost } from './reportLateness';
+import { lateTileSummary, latePillText, quizScoreNote, repoPointsLost } from './reportLateness';
 import type { Route } from './+types/route';
 
 /**
@@ -481,19 +481,13 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
   const gradableCount = assignments.filter(
     a => a.type === 'REPO' || (a.type === 'QUIZ' && !unopened.has(a.id))
   ).length;
-  const lateRows = repoAssignments.filter(ra => ra.is_late && !ra.is_late_override);
-  const lateQuizItems = quizItems.filter(item => item.late_hours > 0);
-  const lateCount = lateRows.length + lateQuizItems.length;
-  const lateHours =
-    lateRows.reduce((sum, ra) => sum + (ra.num_late_hours ?? 0), 0) +
-    lateQuizItems.reduce((sum, item) => sum + item.late_hours, 0);
-  // The points the penalty actually took, as the rows show them.
-  const latePointsLost =
-    Math.round(
-      (lateRows.reduce((sum, ra) => sum + repoPointsLost(ra, mappings, orgSettings), 0) +
-        lateQuizItems.reduce((sum, item) => sum + quizPointsLost(item), 0)) *
-        10
-    ) / 10;
+  // The header's Late tile: late repo submissions and quizzes, their hours,
+  // and the points the penalty took from the repo submissions only (E1).
+  const {
+    count: lateCount,
+    hours: lateHours,
+    pointsLost: latePointsLost,
+  } = lateTileSummary(repoAssignments, quizItems, ra => repoPointsLost(ra, mappings, orgSettings));
 
   const computedLetter =
     totals.finalNumericGrade >= 0 ? calculateLetterGrade(totals.finalNumericGrade, letters) : null;

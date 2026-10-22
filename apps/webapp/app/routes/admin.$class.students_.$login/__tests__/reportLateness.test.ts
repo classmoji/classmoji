@@ -5,7 +5,13 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { GitRepoAssignment, GradedItem } from '@classmoji/utils';
-import { latePillText, quizPointsLost, quizScoreNote, repoPointsLost } from '../reportLateness';
+import {
+  lateTileSummary,
+  latePillText,
+  quizPointsLost,
+  quizScoreNote,
+  repoPointsLost,
+} from '../reportLateness';
 
 const item = (over: Partial<GradedItem> = {}): GradedItem => ({
   assignment_id: 'a-quiz',
@@ -44,6 +50,23 @@ describe('quizPointsLost', () => {
     expect(
       quizPointsLost(item({ grade: 80, raw_grade: 95, counting_raw_percentage: 80, late_hours: 0 }))
     ).toBe(0);
+  });
+});
+
+describe('lateTileSummary (the report header)', () => {
+  it('counts late quizzes and their hours but takes no quiz points (E1)', () => {
+    const repo = [
+      { id: 'r1', is_late: true, is_late_override: false, num_late_hours: 2 },
+      { id: 'r2', is_late: true, is_late_override: true, num_late_hours: 9 },
+      { id: 'r3', is_late: false, is_late_override: false, num_late_hours: 0 },
+    ];
+    // A late quiz that lost 12 points.
+    const quizzes = [item(), item({ late_hours: 0 })];
+    expect(lateTileSummary(repo, quizzes, row => (row.id === 'r1' ? 5.04 : 99))).toEqual({
+      count: 2,
+      hours: 8,
+      pointsLost: 5,
+    });
   });
 });
 
