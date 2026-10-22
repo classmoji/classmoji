@@ -53,8 +53,12 @@ export type AdjustableQuizScore = Pick<
 
 /**
  * The value of a staff adjustment on the classroom's scale, or null when the
- * attempt has none or its emoji is no longer on the scale (removed after the
- * adjustment, like an orphaned repo grade).
+ * attempt has none or its emoji is no longer on the scale (E17: the owner
+ * removed or replaced the scale after the adjustment). Such an adjustment is
+ * ORPHANED (`isOrphanedAdjustment`): unlike an orphaned repo grade, which has
+ * no value to fall back on, the AI's `partial_credit_percentage` counts until
+ * the owner remaps the emoji in Grade settings. The stored emoji is kept and
+ * staff surfaces flag it ("needs remap"); students just see the AI's grade.
  */
 export const adjustedPercentage = (
   attempt: Pick<ScorableQuizAttempt, 'adjusted_emoji'>,
@@ -67,10 +71,21 @@ export const adjustedPercentage = (
 };
 
 /**
+ * The attempt carries a staff adjustment whose emoji is no longer on the
+ * classroom's scale (E17): it is not in effect, the AI's grade counts, and it
+ * waits to be remapped in Grade settings.
+ */
+export const isOrphanedAdjustment = (
+  attempt: Pick<ScorableQuizAttempt, 'adjusted_emoji'>,
+  scale: QuizEmojiScale
+): boolean => Boolean(attempt.adjusted_emoji) && adjustedPercentage(attempt, scale) === null;
+
+/**
  * The attempt's score (0-100): the staff adjustment read through the
  * classroom's scale when there is one, else the AI's
- * `partial_credit_percentage`. An adjustment whose emoji has left the scale
- * falls back to the AI's score. Null when the attempt has neither.
+ * `partial_credit_percentage`. An orphaned adjustment (its emoji has left the
+ * scale) falls back to the AI's score until it is remapped (E17). Null when
+ * the attempt has neither.
  */
 export const effectivePercentage = (
   attempt: AdjustableQuizScore,
@@ -101,6 +116,12 @@ export interface QuizAttemptGrade {
   effective: QuizGradeFace;
   /** A staff adjustment is in effect (set and still on the scale). */
   adjusted: boolean;
+  /**
+   * A staff adjustment is set but its emoji is no longer on the scale
+   * (`isOrphanedAdjustment`, E17): `effective` is the AI's grade until it is
+   * remapped. Staff surfaces show a "needs remap" chip; students see nothing.
+   */
+  orphaned: boolean;
   /** The stored adjustment emoji, in effect or not. */
   adjusted_emoji: string | null;
 }
@@ -137,6 +158,7 @@ export const quizAttemptGrade = (
     effective:
       adjusted !== null ? face(adjusted, scale, attempt.adjusted_emoji as string) : originalFace,
     adjusted: adjusted !== null,
+    orphaned: Boolean(attempt.adjusted_emoji) && adjusted === null,
     adjusted_emoji: attempt.adjusted_emoji ?? null,
   };
 };

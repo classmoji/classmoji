@@ -75,6 +75,11 @@ export interface GradedItem {
   counting_adjusted?: boolean;
   /** The adjustment emoji itself when `counting_adjusted`: what staff picked, shown as is. */
   counting_adjusted_emoji?: string | null;
+  /**
+   * That attempt's adjustment is orphaned (its emoji left the scale, E17): the
+   * AI's grade counts; staff see a "needs remap" chip. Staff surfaces only.
+   */
+  counting_orphaned?: boolean;
 }
 
 /**

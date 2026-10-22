@@ -25,6 +25,7 @@
 import type { GradedItem } from './grades.ts';
 import {
   adjustedPercentage,
+  isOrphanedAdjustment,
   countingQuizAttempt,
   effectivePercentage,
   quizPercentageEmoji,
@@ -105,6 +106,11 @@ export interface CountingQuizScore<T extends ScorableQuizAttempt> {
   adjusted: boolean;
   /** That attempt's adjustment emoji when `adjusted`, else null. */
   adjusted_emoji: string | null;
+  /**
+   * That attempt's adjustment is orphaned (its emoji left the scale, E17):
+   * the AI's score counts until it is remapped.
+   */
+  orphaned: boolean;
   /** That attempt's whole hours late. */
   late_hours: number;
 }
@@ -164,6 +170,7 @@ export const countingQuizScore = <T extends ScorableQuizAttempt>(
       counting && adjustedPercentage(counting, emojiScale) !== null
         ? counting.adjusted_emoji
         : null,
+    orphaned: counting ? isOrphanedAdjustment(counting, emojiScale) : false,
     late_hours: counting ? (lateById.get(counting.id) ?? 0) : 0,
   };
 };
@@ -266,6 +273,7 @@ export const quizGradeItem = <T extends ScorableQuizAttempt>({
       counting_attempt_id: score.counting_attempt_id,
       counting_adjusted: score.adjusted,
       counting_adjusted_emoji: score.adjusted_emoji,
+      counting_orphaned: score.orphaned,
     };
   }
 

@@ -147,6 +147,8 @@ export interface QuizResultStudent {
   countingAttemptId: string | null;
   /** The counting attempt carries a staff adjustment. */
   countingAdjusted: boolean;
+  /** The counting attempt's adjustment is orphaned (E17): the AI's grade counts until remapped. */
+  countingOrphaned: boolean;
   /** When the newest attempt started; null for a student with no attempt. */
   latestAttempt: Date | string | null;
 }
@@ -345,6 +347,7 @@ export const buildQuizResultRows = ({
       firstAttemptScore: counting?.firstAttemptScore ?? null,
       countingAttemptId: counting?.id ?? null,
       countingAdjusted: counting?.grade.adjusted ?? false,
+      countingOrphaned: counting?.grade.orphaned ?? false,
       latestAttempt: sorted[0].started_at,
     };
   });
@@ -368,6 +371,7 @@ export const buildQuizResultRows = ({
         firstAttemptScore: null,
         countingAttemptId: null,
         countingAdjusted: false,
+        countingOrphaned: false,
         latestAttempt: null,
       };
     });

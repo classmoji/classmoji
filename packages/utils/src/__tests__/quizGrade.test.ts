@@ -203,6 +203,7 @@ describe('quizGradeItem', () => {
       counting_attempt_id: 'a',
       counting_adjusted: false,
       counting_adjusted_emoji: null,
+      counting_orphaned: false,
     });
   });
 

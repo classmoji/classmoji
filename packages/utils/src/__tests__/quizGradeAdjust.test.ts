@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   countingQuizAttempt,
   effectivePercentage,
+  isOrphanedAdjustment,
   quizAttemptGrade,
   quizPercentageEmoji,
   quizStanding,
@@ -120,14 +121,30 @@ describe('quizAttemptGrade (display)', () => {
     expect(grade.effective.emoji).toBe('score-80');
   });
 
-  it('an orphaned adjustment is not in effect', () => {
+  it('an orphaned adjustment is not in effect: the AI grade counts and it is flagged (E17)', () => {
     const grade = quizAttemptGrade(
       { partial_credit_percentage: 72, adjusted_emoji: 'heart' },
       EMOJI_SCALE
     );
     expect(grade.adjusted).toBe(false);
+    expect(grade.orphaned).toBe(true);
     expect(grade.adjusted_emoji).toBe('heart');
     expect(grade.effective).toEqual(grade.original);
+    expect(grade.effective).toMatchObject({ percentage: 72, emoji: 'eyes' });
+  });
+
+  it('is not orphaned with no adjustment, or one still on the scale', () => {
+    expect(
+      quizAttemptGrade({ partial_credit_percentage: 72, adjusted_emoji: null }, EMOJI_SCALE)
+        .orphaned
+    ).toBe(false);
+    expect(
+      quizAttemptGrade({ partial_credit_percentage: 72, adjusted_emoji: '+1' }, EMOJI_SCALE)
+        .orphaned
+    ).toBe(false);
+    expect(isOrphanedAdjustment({ adjusted_emoji: 'heart' }, EMOJI_SCALE)).toBe(true);
+    expect(isOrphanedAdjustment({ adjusted_emoji: '+1' }, EMOJI_SCALE)).toBe(false);
+    expect(isOrphanedAdjustment({ adjusted_emoji: null }, EMOJI_SCALE)).toBe(false);
   });
 
   it('an empty scale gives no emoji', () => {
@@ -223,6 +240,41 @@ describe('late penalty after the adjustment (D2)', () => {
       letterGradeMappings: [],
     });
     expect(estimate).toMatchObject({ kind: 'emoji', emoji: 'score-80' });
+  });
+
+  it('an orphaned adjustment: the AI grade counts and the item is flagged (E17)', () => {
+    const assignment: QuizGradeAssignment = {
+      id: 'asg',
+      module_id: 'mod',
+      type: 'QUIZ',
+      is_published: true,
+      release_at: null,
+      weight: 10,
+      is_extra_credit: false,
+      student_deadline: DEADLINE,
+    };
+    // `+1` is an emoji-scale shortcode; the classroom now uses the numeric one.
+    const item = quizGradeItem({
+      assignment,
+      gradingStrategy: 'HIGHEST',
+      attempts: [attempt('a', at(-2), at(-1), 64, '+1')],
+      emojiScale: NUMERIC_SCALE,
+      quizzesVisible: true,
+      now: at(48),
+    });
+    expect(item).toMatchObject({
+      grade: 64,
+      raw_grade: 64,
+      counting_attempt_id: 'a',
+      counting_adjusted: false,
+      counting_adjusted_emoji: null,
+      counting_orphaned: true,
+    });
+    const score = countingQuizScore([attempt('a', at(-2), at(-1), 64, '+1')], 'HIGHEST', {
+      studentDeadline: DEADLINE,
+      emojiScale: NUMERIC_SCALE,
+    });
+    expect(score).toMatchObject({ grade: 64, adjusted: false, orphaned: true });
   });
 });
 
