@@ -7,16 +7,20 @@ import { IconEye, IconArrowLeft, IconClock, IconTrophy, IconChartBar } from '@ta
 import { TrophyOutlined, PlayCircleOutlined, ClearOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { UserThumbnailView, GradeBadge, SectionHeader } from '~/components';
+import { UserThumbnailView, SectionHeader } from '~/components';
+import Emoji from '~/components/ui/display/Emoji';
+import { QuizGradeEmoji } from '~/components/features/quiz/QuizGradeEmoji';
 import { useGitWeb } from '~/hooks/useGitWeb';
 import { useAskMojiViewing } from '~/components/features/ask-moji/viewing';
 import { formatDuration } from '~/utils/quizUtils';
 import {
   buildQuizResultRows,
+  quizResultStatsView,
+  quizResultStudentsView,
   quizResultsQuizView,
   type QuizFocusMetrics as FocusMetrics,
-  type QuizResultAttempt as QuizAttempt,
-  type QuizResultStudent as QuizStudent,
+  type QuizResultAttemptView as QuizAttempt,
+  type QuizResultStudentView as QuizStudent,
 } from '~/utils/quizPayloads';
 import { namedAction } from 'remix-utils/named-action';
 import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
@@ -24,7 +28,7 @@ import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 dayjs.extend(relativeTime);
 
 interface StatCardProps {
-  value: string | number;
+  value: React.ReactNode;
   label: string;
   icon?: React.ComponentType<{ size: number; className: string }>;
   color?: string;
@@ -32,60 +36,80 @@ interface StatCardProps {
 
 /**
  * An attempt's late hours: a pill when late, "On time" when not, a dash where
- * lateness does not apply (a staff preview, a quiz with no due date). With the
- * score the attempt counts for after the late penalty, when it differs.
+ * lateness does not apply (a staff preview, a quiz with no due date).
  */
-const LateCell = ({ hours, counted = null }: { hours: number | null; counted?: number | null }) => {
+const LateCell = ({ hours }: { hours: number | null }) => {
   if (hours === null) return <span className="text-gray-400 dark:text-gray-500">—</span>;
   if (hours === 0) return <span className="text-xs text-gray-500 dark:text-gray-400">On time</span>;
-  const pill = (
+  return (
     <span className="inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-700 dark:text-orange-300 whitespace-nowrap">
       {hours}h late
     </span>
   );
-  return counted !== null ? (
-    <Tooltip title={`Counts as ${Math.round(counted * 10) / 10}% after the late penalty`}>
-      {pill}
-    </Tooltip>
-  ) : (
-    pill
-  );
 };
 
-const round = (value: number) => Math.round(value * 10) / 10;
+/** A student with an open regrade/resubmit request on this quiz. */
+const RegradeRequestedPill = () => (
+  <span
+    data-testid="quiz-regrade-requested"
+    className="inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-700 dark:text-sky-300 whitespace-nowrap"
+  >
+    Regrade requested
+  </span>
+);
 
 /**
- * A student's current score: the raw score of the attempt that counts, with
- * what it counts for after the late penalty when that differs ("90 → 60",
- * the gradebook's value). "Missing" for a counted 0, "Not started" for a
- * rostered student with no attempt.
+ * A student's current grade as the classroom's emoji (E1): the effective
+ * grade of the attempt that counts, an "adjusted" chip when staff adjusted it
+ * (D8) or "needs remap" when that adjustment's emoji left the scale (E17), and what it counts for after the late penalty when that differs
+ * ("→ 👀", the gradebook's value). "Missing" for a counted 0, "Not started"
+ * for a rostered student with no attempt.
  */
 const CurrentScoreCell = ({ student }: { student: QuizStudent }) => {
+  const pill = student.regradeRequested ? <RegradeRequestedPill /> : null;
   if (student.countsAsZero) {
     return (
-      <span className="inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded-full bg-red-500/15 text-red-700 dark:text-red-300 whitespace-nowrap">
-        Missing
+      <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+        <span className="inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded-full bg-red-500/15 text-red-700 dark:text-red-300 whitespace-nowrap">
+          Missing
+        </span>
+        {pill}
       </span>
     );
   }
   if (student.attemptCount === 0) {
     return <span className="text-gray-400 dark:text-gray-500 italic">Not started</span>;
   }
-  if (student.currentScore === null) {
-    return <span className="text-gray-400 dark:text-gray-500 italic">No score</span>;
+  if (!student.currentEmoji) {
+    return (
+      <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+        <span className="text-gray-400 dark:text-gray-500 italic">No score</span>
+        {pill}
+      </span>
+    );
   }
-  const counted = student.countedScore;
   return (
     <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-      <GradeBadge grade={student.currentScore} />
-      {counted !== null && counted !== student.currentScore && (
-        <span className="text-xs font-semibold tabular-nums text-orange-700 dark:text-orange-300">
-          → {round(counted)}
-        </span>
+      <QuizGradeEmoji
+        emoji={student.currentEmoji}
+        adjusted={student.countingAdjusted}
+        orphaned={student.countingOrphaned}
+      />
+      {student.countedEmoji && (
+        <Tooltip title="What it counts for after the late penalty">
+          <span className="inline-flex items-center gap-1 text-xs font-semibold text-orange-700 dark:text-orange-300">
+            → <Emoji emoji={student.countedEmoji} fontSize={16} />
+          </span>
+        </Tooltip>
       )}
+      {pill}
     </span>
   );
 };
+
+/** A grade-shaped stat as the classroom's emoji, or a dash when nothing is scored. */
+const statEmoji = (emoji: string | null) =>
+  emoji ? <Emoji emoji={emoji} fontSize={26} /> : <span className="opacity-60">—</span>;
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { ClassmojiService } = await import('@classmoji/services');
@@ -123,7 +147,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const penalty: unknown = classroom.settings?.late_penalty_points_per_hour;
   const latePenaltyPerHour = typeof penalty === 'number' ? penalty : 0;
   const [attempts, roster, extensionHours] = await Promise.all([
-    ClassmojiService.quizAttempt.findByQuiz(quiz.id),
+    // Each user's login is the one on this classroom's git provider.
+    ClassmojiService.quizAttempt.findByQuiz(quiz.id, classroom.git_organization?.provider ?? null),
     ClassmojiService.classroomMembership.findUsersByRole(classroom.id, 'STUDENT'),
     assignment?.student_deadline
       ? ClassmojiService.token.netQuizExtensionHoursByStudent({
@@ -153,17 +178,26 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   // Rows carry the fields this page renders and nothing else — see
   // ~/utils/quizPayloads. `findByQuiz` already joins each attempt's user, and
   // `quiz` (from findById) joins every attempt again, so neither is sent as-is.
+  // Every grade is shown as this classroom's emoji (E1); the open
+  // regrade/resubmit requests on this quiz's attempts mark their students.
+  const [emojiScale, regradeAttemptIds] = await Promise.all([
+    ClassmojiService.emojiMapping.findScaleByClassroomId(classroom.id),
+    ClassmojiService.regradeRequest.openQuizRequestAttemptIds(classroom.id, quiz.id),
+  ]);
+
   const { students, viewerAttempt } = buildQuizResultRows({
     attempts,
     gradingStrategy: quiz.grading_strategy,
     viewerId: userId,
+    emojiScale,
     late,
     roster: { students: roster, assignment: assignment ?? null, now: new Date() },
   });
 
   return {
     quiz: quizResultsQuizView(quiz),
-    students,
+    students: quizResultStudentsView(students, emojiScale, regradeAttemptIds),
+    stats: quizResultStatsView(students, emojiScale),
     // The viewer's own latest attempt, for resuming or restarting a preview.
     adminAttempt: viewerAttempt,
   };
@@ -245,7 +279,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
 const QuizView = ({ loaderData }: Route.ComponentProps) => {
   const callout = useCallout();
-  const { quiz, students, adminAttempt } = loaderData;
+  const { quiz, students, stats, adminAttempt } = loaderData;
   useAskMojiViewing({ kind: 'quiz', id: quiz.id, title: quiz.name });
   const { terms } = useGitWeb();
   const navigate = useNavigate();
@@ -425,29 +459,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
     });
   };
 
-  // Calculate stats from all attempts across all students
   const allAttempts = students.flatMap((s: QuizStudent) => s.attempts);
-  const completedAttempts = allAttempts.filter((a: QuizAttempt) => a.completed_at !== null);
-  const inProgressAttempts = allAttempts.filter((a: QuizAttempt) => a.completed_at === null);
-  const scores = completedAttempts
-    .map((a: QuizAttempt) => a.partialCreditScore)
-    .filter((score: number | null): score is number => score !== null && score !== undefined);
-
-  const stats = {
-    totalAttempts: allAttempts.length,
-    completedAttempts: completedAttempts.length,
-    inProgressAttempts: inProgressAttempts.length,
-    averageScore:
-      scores.length > 0
-        ? (scores.reduce((a: number, b: number) => a + b, 0) / scores.length).toFixed(1)
-        : 0,
-    highestScore: scores.length > 0 ? Math.max(...scores).toFixed(1) : 0,
-    lowestScore: scores.length > 0 ? Math.min(...scores).toFixed(1) : 0,
-    completionRate:
-      allAttempts.length > 0
-        ? ((completedAttempts.length / allAttempts.length) * 100).toFixed(1)
-        : 0,
-  };
 
   const StatCard = ({ value, label, icon: Icon, color = 'blue' }: StatCardProps) => {
     const colorClasses: Record<string, { bg: string; text: string }> = {
@@ -528,13 +540,23 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
     },
     {
       title: () => <Tooltip title="Formative score (with partial credit)">Score</Tooltip>,
-      width: 100,
-      dataIndex: 'partialCreditScore',
-      render: (score: number | null) => {
-        if (score === null || score === undefined) {
+      width: 160,
+      dataIndex: 'grade',
+      render: (_: unknown, record: QuizAttempt) => {
+        if (!record.completed_at || !record.grade.effective.emoji) {
           return <span className="text-gray-400 dark:text-gray-500 italic">Pending</span>;
         }
-        return <GradeBadge grade={score} />;
+        return (
+          <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+            <QuizGradeEmoji
+              emoji={record.grade.effective.emoji}
+              originalEmoji={record.grade.original.emoji}
+              adjusted={record.grade.adjusted}
+              orphaned={record.grade.orphaned}
+            />
+            {record.regradeRequested && <RegradeRequestedPill />}
+          </span>
+        );
       },
     },
     {
@@ -550,15 +572,15 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
         </Tooltip>
       ),
       width: 100,
-      dataIndex: 'firstAttemptScore',
-      render: (score: number | null, record: QuizAttempt) => {
+      dataIndex: 'firstAttemptEmoji',
+      render: (emoji: string | null, record: QuizAttempt) => {
         if (record.completed_at === null) {
           return <span className="text-gray-400 dark:text-gray-500 italic text-xs">-</span>;
         }
-        if (score === null || score === undefined) {
+        if (!emoji) {
           return <span className="text-gray-400 dark:text-gray-500 italic text-xs">N/A</span>;
         }
-        return <span className="text-gray-600 dark:text-gray-300 text-xs">{score}%</span>;
+        return <Emoji emoji={emoji} fontSize={16} />;
       },
     },
     {
@@ -662,7 +684,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
           </Space>
         </Tooltip>
       ),
-      width: 170,
+      width: 220,
       dataIndex: 'currentScore',
       render: (_: number | null, record: QuizStudent) => <CurrentScoreCell student={record} />,
       // By what counts, as the gradebook does: a counted 0 is 0, no score last.
@@ -676,16 +698,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
       ),
       width: 110,
       dataIndex: 'lateHours',
-      render: (lateHours: number | null, record: QuizStudent) => (
-        <LateCell
-          hours={lateHours}
-          counted={
-            lateHours && record.countedScore !== null && record.countedScore !== record.currentScore
-              ? record.countedScore
-              : null
-          }
-        />
-      ),
+      render: (lateHours: number | null) => <LateCell hours={lateHours} />,
       sorter: (a: QuizStudent, b: QuizStudent) => (a.lateHours ?? -1) - (b.lateHours ?? -1),
     },
     {
@@ -695,14 +708,12 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
         </Tooltip>
       ),
       width: 120,
-      dataIndex: 'firstAttemptScore',
-      render: (score: number | null) => {
-        // For now, show N/A since we don't have this data yet in the query
-        // This will be populated when quiz attempts include first_attempt_percentage
-        if (score === null || score === undefined) {
+      dataIndex: 'firstAttemptEmoji',
+      render: (emoji: string | null) => {
+        if (!emoji) {
           return <span className="text-gray-400 dark:text-gray-500 italic text-xs">N/A</span>;
         }
-        return <span className="text-gray-600 dark:text-gray-300">{score}%</span>;
+        return <Emoji emoji={emoji} fontSize={16} />;
       },
       sorter: (a: QuizStudent, b: QuizStudent) =>
         (a.firstAttemptScore || 0) - (b.firstAttemptScore || 0),
@@ -710,12 +721,12 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
     {
       title: 'Best Score',
       width: 120,
-      dataIndex: 'bestScore',
-      render: (score: number | null) => {
-        if (score === null) {
+      dataIndex: 'bestEmoji',
+      render: (emoji: string | null) => {
+        if (!emoji) {
           return <span className="text-gray-400 dark:text-gray-500 italic">N/A</span>;
         }
-        return <GradeBadge grade={score} />;
+        return <Emoji emoji={emoji} fontSize={16} />;
       },
       sorter: (a: QuizStudent, b: QuizStudent) => (a.bestScore || 0) - (b.bestScore || 0),
     },
@@ -844,9 +855,9 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
               color="yellow"
             />
             <StatCard value={`${stats.completionRate}%`} label="Completion Rate" color="purple" />
-            <StatCard value={stats.averageScore} label="Average Score" color="blue" />
-            <StatCard value={stats.highestScore} label="Highest Score" color="green" />
-            <StatCard value={stats.lowestScore} label="Lowest Score" color="red" />
+            <StatCard value={statEmoji(stats.averageEmoji)} label="Average Score" color="blue" />
+            <StatCard value={statEmoji(stats.highestEmoji)} label="Highest Score" color="green" />
+            <StatCard value={statEmoji(stats.lowestEmoji)} label="Lowest Score" color="red" />
           </div>
         </div>
 

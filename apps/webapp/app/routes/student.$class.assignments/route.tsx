@@ -83,7 +83,9 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
             return new Map();
           })
       : new Map<string, LinkedMaterial[]>();
-    const rows: AssignmentRow[] = coursework.map(row => ({
+    // A quiz row's raw percentage (`score`) stays on the server: the page
+    // shows its emoji (`scoreEmoji`), never a number (E1).
+    const rows: AssignmentRow[] = coursework.map(({ score: _score, ...row }) => ({
       ...row,
       materials: courseworkMaterials(materials.get(row.assignmentId), classSlug),
     }));

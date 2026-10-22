@@ -12,6 +12,9 @@ import {
   calculateLetterGrade,
   gradedItemValue,
   isReleased,
+  quizAttemptGrade,
+  quizItemEmoji,
+  quizPercentageEmoji,
   quizStanding,
   type GradedItem,
   type LetterGradeMappingEntry,
@@ -19,13 +22,15 @@ import {
 } from '@classmoji/utils';
 import { LateOverrideButton } from '~/components';
 import GradeBadges from '~/components/features/grading/GradeBadges';
+import QuizGradeEmoji from '~/components/features/quiz/QuizGradeEmoji';
+import Emoji from '~/components/ui/display/Emoji';
 import UserAvatar from '~/components/shared/UserAvatar';
 import { ASSIGNMENT_TYPE_META } from '~/components/features/assignments/AssignmentsTable';
 import { addAuditLog, addClassroomAuditLog } from '~/utils/helpers';
 import { requireClassroomStaff, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { normalizeSchoolId } from '~/utils/schoolId';
 import { useGitWeb } from '~/hooks/useGitWeb';
-import { latePillText, quizPointsLost, quizScoreNote, repoPointsLost } from './reportLateness';
+import { lateTileSummary, latePillText, quizScoreNote, repoPointsLost } from './reportLateness';
 import type { Route } from './+types/route';
 
 /**
@@ -65,7 +70,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     // Individual repos AND team repos: a team member's submission row hangs
     // off the team's git repo, not off the student.
     ClassmojiService.helper.findAllAssignmentsForStudent(studentId, classSlug),
-    ClassmojiService.emojiMapping.findByClassroomId(classroom.id),
+    // The classroom's scale, read once: repo totals and every quiz emoji.
+    ClassmojiService.emojiMapping.findScaleByClassroomId(classroom.id),
     ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id),
     ClassmojiService.letterGradeMapping.findByClassroomId(classroom.id),
     ClassmojiService.token.getBalance(classroom.id, studentId),
@@ -117,10 +123,26 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     counts_as_zero: item.counts_as_zero,
     late_hours: item.late_hours,
     counting_raw_percentage: item.counting_raw_percentage,
+    // The row's "adjusted" chip (D8), and the emoji staff picked (shown as is when on time).
+    counting_adjusted: item.counting_adjusted ?? false,
+    counting_adjusted_emoji: item.counting_adjusted_emoji ?? null,
+    // The row's "needs remap" chip: an adjustment off the scale (E17).
+    counting_orphaned: item.counting_orphaned ?? false,
   }));
   const quizStatus: Record<
     string,
-    { attempted: boolean; completed: boolean; score: number | null }
+    // `emoji`: the counting attempt's effective grade as the classroom's
+    // emoji; no quiz number leaves the server outside the grade items (E1).
+    {
+      attempted: boolean;
+      completed: boolean;
+      /** The counting attempt has a score, shown or not (no grading scale). */
+      scored: boolean;
+      emoji: string | null;
+      adjusted: boolean;
+      /** The counting attempt's adjustment left the scale (E17). */
+      orphaned: boolean;
+    }
   > = {};
   const formStatus: Record<string, { responded: boolean; draft: boolean }> = {};
   await Promise.all(
@@ -129,12 +151,17 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
         const quizId = a.quiz.id;
         const standing = quizStanding(
           quizAttempts.filter(attempt => attempt.quiz_id === quizId),
-          gradingStrategies[quizId]
+          gradingStrategies[quizId],
+          emojiMappings
         );
+        const grade = standing.counting ? quizAttemptGrade(standing.counting, emojiMappings) : null;
         quizStatus[a.id] = {
           attempted: standing.attemptsUsed > 0,
           completed: standing.completed,
-          score: standing.score,
+          scored: standing.counting !== null,
+          emoji: grade?.effective.emoji ?? null,
+          adjusted: grade?.adjusted ?? false,
+          orphaned: grade?.orphaned ?? false,
         };
       } else if (a.type === 'FORM' && a.form) {
         const response = await ClassmojiService.formResponse.findOwnResponse(a.form.id, studentId);
@@ -459,19 +486,13 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
   const gradableCount = assignments.filter(
     a => a.type === 'REPO' || (a.type === 'QUIZ' && !unopened.has(a.id))
   ).length;
-  const lateRows = repoAssignments.filter(ra => ra.is_late && !ra.is_late_override);
-  const lateQuizItems = quizItems.filter(item => item.late_hours > 0);
-  const lateCount = lateRows.length + lateQuizItems.length;
-  const lateHours =
-    lateRows.reduce((sum, ra) => sum + (ra.num_late_hours ?? 0), 0) +
-    lateQuizItems.reduce((sum, item) => sum + item.late_hours, 0);
-  // The points the penalty actually took, as the rows show them.
-  const latePointsLost =
-    Math.round(
-      (lateRows.reduce((sum, ra) => sum + repoPointsLost(ra, mappings, orgSettings), 0) +
-        lateQuizItems.reduce((sum, item) => sum + quizPointsLost(item), 0)) *
-        10
-    ) / 10;
+  // The header's Late tile: late repo submissions and quizzes, their hours,
+  // and the points the penalty took from the repo submissions only (E1).
+  const {
+    count: lateCount,
+    hours: lateHours,
+    pointsLost: latePointsLost,
+  } = lateTileSummary(repoAssignments, quizItems, ra => repoPointsLost(ra, mappings, orgSettings));
 
   const computedLetter =
     totals.finalNumericGrade >= 0 ? calculateLetterGrade(totals.finalNumericGrade, letters) : null;
@@ -626,7 +647,9 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
         // Counts 0, whether or not an attempt is still running.
         status = <Pill tone="red">Missing</Pill>;
       } else if (item && item.late_hours > 0) {
-        status = <Pill tone="amber">{latePillText(item.late_hours, quizPointsLost(item))}</Pill>;
+        // Hours only: the points a quiz lost are a number, and quiz grades
+        // show as emoji (E1).
+        status = <Pill tone="amber">{latePillText(item.late_hours, 0)}</Pill>;
       } else if (!item && unopened.has(a.id)) {
         status = <Pill tone="grey">Opens {fmt(a.release_at) ?? ''}</Pill>;
       } else {
@@ -639,17 +662,37 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
         );
       }
       if (item && value !== null) {
-        // What the total counts: the late-penalised score, or the counted 0.
-        // The note quotes the counting attempt's own score before the penalty.
+        // What the total counts (the late-penalised score, or the counted 0)
+        // as the classroom's emoji, with the adjusted chip (D8). The note
+        // shows the counting attempt's own grade before the penalty.
+        const shown = quizItemEmoji(item, value, mappings);
+        const beforePenalty = quizScoreNote(item, value)
+          ? quizPercentageEmoji(item.counting_raw_percentage, mappings)
+          : null;
         grade = (
-          <Tooltip title={quizScoreNote(item, value)}>
-            <span className="inline-flex items-center justify-center min-w-9 h-8 px-2 rounded-lg bg-[#6c8fae] text-white text-sm font-bold tabular-nums">
-              {Math.round(value * 10) / 10}
+          <Tooltip
+            title={
+              beforePenalty && beforePenalty !== shown ? (
+                <span className="inline-flex items-center gap-1">
+                  <Emoji emoji={beforePenalty} /> before the late penalty
+                </span>
+              ) : undefined
+            }
+          >
+            <span className="inline-flex">
+              <QuizGradeEmoji
+                emoji={shown}
+                adjusted={item.counting_adjusted === true}
+                orphaned={item.counting_orphaned === true}
+                size="md"
+              />
             </span>
           </Tooltip>
         );
-      } else if (q?.score !== null && q?.score !== undefined) {
-        grade = <span className="text-sm font-semibold tabular-nums">{q.score}</span>;
+      } else if (q?.emoji) {
+        grade = (
+          <QuizGradeEmoji emoji={q.emoji} adjusted={q.adjusted} orphaned={q.orphaned} size="md" />
+        );
       }
     } else if (a.type === 'FORM') {
       const f = formStatus[a.id];

@@ -17,7 +17,10 @@ import { useStartQuiz } from '~/components/features/quiz/useStartQuiz';
  * shows, with the pages and decks linked to its assignment. `extensionHours`
  * is what the student bought on a repo or a quiz.
  */
-export type UpNextRow = Omit<StudentCourseworkRow, 'repo'> & { materials: CourseworkMaterial[] };
+/** A coursework row as the card receives it: no repo details and no quiz percentage (`score`). */
+export type UpNextRow = Omit<StudentCourseworkRow, 'repo' | 'score'> & {
+  materials: CourseworkMaterial[];
+};
 
 /**
  * A repository row, shown instead of coursework in a class with no published

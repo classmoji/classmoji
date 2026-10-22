@@ -13,7 +13,9 @@
  *     drawer reads of a completed attempt's stored evaluation and results.
  *   - `quizFocusMetrics` — the share of an attempt's time the tab was focused.
  *
- * Moved unchanged from apps/webapp/app/utils/quizPayloads.ts.
+ * Moved from apps/webapp/app/utils/quizPayloads.ts. Every score here is the
+ * effective one (a staff adjustment, read through the classroom's scale,
+ * replaces the AI's score), so `emojiScale` is required.
  */
 
 import type { QuizEvaluationRecordV2 } from './quizAgent/records.ts';
@@ -23,6 +25,12 @@ import {
   quizGradeItem,
   type QuizGradeAssignment,
 } from './quizGrade.ts';
+import {
+  effectivePercentage,
+  quizAttemptGrade,
+  type QuizAttemptGrade,
+  type QuizEmojiScale,
+} from './quizScore.ts';
 
 /** One question's recorded result, as the evaluation card shows it. */
 export interface AttemptQuestionResult {
@@ -102,8 +110,11 @@ export interface QuizResultAttempt {
   id: string;
   started_at: Date | string;
   completed_at: Date | string | null;
+  /** The effective score: the staff adjustment when there is one, else the AI's. */
   partialCreditScore: number | null;
   firstAttemptScore: number | null;
+  /** The attempt's grade as the classroom's emoji, original and effective. */
+  grade: QuizAttemptGrade;
   focusMetrics: QuizFocusMetrics | null;
   isCounting: boolean;
   /**
@@ -134,6 +145,10 @@ export interface QuizResultStudent {
   bestScore: number | null;
   firstAttemptScore: number | null;
   countingAttemptId: string | null;
+  /** The counting attempt carries a staff adjustment. */
+  countingAdjusted: boolean;
+  /** The counting attempt's adjustment is orphaned (E17): the AI's grade counts until remapped. */
+  countingOrphaned: boolean;
   /** When the newest attempt started; null for a student with no attempt. */
   latestAttempt: Date | string | null;
 }
@@ -154,6 +169,8 @@ export interface QuizAttemptSource {
   unfocused_duration_ms: number | null;
   partial_credit_percentage: number | null;
   first_attempt_percentage: number | null;
+  /** A staff adjustment, null when none. Required, like `ScorableQuizAttempt`. */
+  adjusted_emoji: string | null;
   user?: {
     id: string;
     name?: string | null;
@@ -216,10 +233,13 @@ export const buildQuizResultRows = ({
   attempts,
   gradingStrategy,
   viewerId,
+  emojiScale,
   late = null,
   roster = null,
 }: {
   attempts: QuizAttemptSource[];
+  /** The classroom's grading scale (`emojiMapping.findScaleByClassroomId`). */
+  emojiScale: QuizEmojiScale;
   gradingStrategy: string | null | undefined;
   viewerId: string;
   /** Null for a quiz with no assignment: nothing is late. */
@@ -254,8 +274,9 @@ export const buildQuizResultRows = ({
       id: attempt.id,
       started_at: attempt.started_at,
       completed_at: attempt.completed_at,
-      partialCreditScore: score(attempt.partial_credit_percentage),
+      partialCreditScore: score(effectivePercentage(attempt, emojiScale)),
       firstAttemptScore: score(attempt.first_attempt_percentage),
+      grade: quizAttemptGrade(attempt, emojiScale),
       focusMetrics: quizFocusMetrics(attempt),
       isCounting: false,
       lateHours: null,
@@ -275,6 +296,7 @@ export const buildQuizResultRows = ({
       // This page is shown only where quizzes are.
       quizzesVisible: true,
       now: roster.now,
+      emojiScale,
     });
     return item?.counts_as_zero === true;
   };
@@ -288,6 +310,7 @@ export const buildQuizResultRows = ({
             studentDeadline: late.studentDeadline,
             extensionHours: late.extensionHours.get(userId) ?? 0,
             latePenaltyPerHour: late.latePenaltyPerHour,
+            emojiScale,
           }
         : null;
     // The shared selector over late-penalised scores, read over the attempt
@@ -295,7 +318,7 @@ export const buildQuizResultRows = ({
     const score = countingQuizScore(
       student.sources,
       gradingStrategy,
-      lateContext ?? { studentDeadline: null }
+      lateContext ?? { studentDeadline: null, emojiScale }
     );
     const counting = student.attempts.find(a => a.id === score.counting_attempt_id) ?? null;
     const sorted = [...student.attempts].sort((a, b) => time(b.started_at) - time(a.started_at));
@@ -323,6 +346,8 @@ export const buildQuizResultRows = ({
         completed.length > 0 ? Math.max(...completed.map(a => a.partialCreditScore ?? 0)) : null,
       firstAttemptScore: counting?.firstAttemptScore ?? null,
       countingAttemptId: counting?.id ?? null,
+      countingAdjusted: counting?.grade.adjusted ?? false,
+      countingOrphaned: counting?.grade.orphaned ?? false,
       latestAttempt: sorted[0].started_at,
     };
   });
@@ -345,6 +370,8 @@ export const buildQuizResultRows = ({
         bestScore: null,
         firstAttemptScore: null,
         countingAttemptId: null,
+        countingAdjusted: false,
+        countingOrphaned: false,
         latestAttempt: null,
       };
     });

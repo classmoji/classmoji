@@ -1,6 +1,10 @@
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import type { MessageRole, Prisma, Role } from '@prisma/client';
-import { DEFAULT_EMOJI_GRADE_MAPPINGS, isClosed, isReleased, withLogins } from '@classmoji/utils';
+import { effectivePercentage, isClosed, isReleased, withLogins } from '@classmoji/utils';
+import { findScaleByClassroomId, quizScaleForClassroom } from './emojiMapping.service.ts';
+
+// Staff grade adjustments: `ClassmojiService.quizAttempt.adjust` / `revert`.
+export { adjust, revert } from './quizGradeAdjust.service.ts';
 import { CONTRACT_VERSION } from '@classmoji/utils/quiz-agent';
 
 /**
@@ -803,8 +807,9 @@ export const findByQuiz = async (quizId: string, provider?: string | null) => {
 /**
  * One user's attempts on the given quizzes, newest first, with only the
  * columns the counting-attempt selector reads (`quizStanding` in
- * @classmoji/utils). For a student's own Assignments page and a staff member's
- * report on one student.
+ * @classmoji/utils, which needs `adjusted_emoji` and the classroom's scale).
+ * For a student's own Assignments page and a staff member's report on one
+ * student.
  */
 export const findForUserByQuizIds = async (userId: string, quizIds: string[]) => {
   if (quizIds.length === 0) return [];
@@ -816,6 +821,7 @@ export const findForUserByQuizIds = async (userId: string, quizIds: string[]) =>
       started_at: true,
       completed_at: true,
       partial_credit_percentage: true,
+      adjusted_emoji: true,
     },
     orderBy: { started_at: 'desc' },
   });
@@ -847,17 +853,23 @@ export const findByUser = async (userId: string, organizationId: string | null =
 };
 
 export const getAttemptStatsByQuiz = async (quizId: string) => {
-  const attempts = await getPrisma().quizAttempt.findMany({
-    where: {
-      quiz_id: quizId,
-      completed_at: { not: null },
-    },
-    select: {
-      partial_credit_percentage: true,
-      completed_at: true,
-      started_at: true,
-    },
-  });
+  const [attempts, quiz] = await Promise.all([
+    getPrisma().quizAttempt.findMany({
+      where: {
+        quiz_id: quizId,
+        completed_at: { not: null },
+      },
+      select: {
+        partial_credit_percentage: true,
+        adjusted_emoji: true,
+        completed_at: true,
+        started_at: true,
+      },
+    }),
+    getPrisma().quiz.findUnique({ where: { id: quizId }, select: { classroom_id: true } }),
+  ]);
+  // Effective scores: a staff adjustment read through the quiz's own classroom scale.
+  const emojiScale = quiz ? await findScaleByClassroomId(quiz.classroom_id) : {};
 
   if (attempts.length === 0) {
     return {
@@ -871,8 +883,8 @@ export const getAttemptStatsByQuiz = async (quizId: string) => {
   }
 
   const scores = attempts
-    .map(a => a.partial_credit_percentage)
-    .filter(value => value !== null && value !== undefined) as number[];
+    .map(a => effectivePercentage(a, emojiScale))
+    .filter((value): value is number => value !== null);
   const times = attempts.map(a => {
     const duration =
       new Date(a.completed_at ?? a.started_at).getTime() - new Date(a.started_at).getTime();
@@ -1578,38 +1590,23 @@ export const clearForUserAndQuiz = async (userId: string, quizId: string, classr
 // ============================================================================
 
 /**
- * Get emoji mappings for an attempt's classroom.
- * Returns a map of { emoji: grade } for use with gradeToEmoji().
+ * The emoji scale of an attempt's classroom (emoji → grade), for the legacy
+ * runtime's `record_question_result` (`gradeToEmoji`). Always the classroom's
+ * own scale (E10): a classroom with none is given the new-classroom scale
+ * first (`quizScaleForClassroom`). Empty only for an attempt that does not
+ * exist.
  *
  * @param {string} attemptId - Quiz attempt ID (UUID)
- * @returns {Object} Map of emoji shortcode to grade value, e.g. { heart: 100, '+1': 90 }
  */
-export const getEmojiMappingsForAttempt = async (attemptId: string) => {
+export const getEmojiMappingsForAttempt = async (
+  attemptId: string
+): Promise<Record<string, number>> => {
   const attempt = await getPrisma().quizAttempt.findUnique({
     where: { id: attemptId },
-    include: {
-      quiz: {
-        include: {
-          classroom: {
-            include: { emoji_mappings: true },
-          },
-        },
-      },
-    },
+    select: { quiz: { select: { classroom_id: true } } },
   });
-
-  const classroomMappings = attempt?.quiz?.classroom?.emoji_mappings;
-
-  // Fall back to sensible defaults if classroom hasn't configured emoji mappings
-  if (!classroomMappings || classroomMappings.length === 0) {
-    return { ...DEFAULT_EMOJI_GRADE_MAPPINGS };
-  }
-
-  // Convert array to { emoji: grade } map
-  return classroomMappings.reduce((acc: Record<string, number>, m) => {
-    acc[m.emoji] = m.grade;
-    return acc;
-  }, {});
+  if (!attempt) return {};
+  return quizScaleForClassroom(attempt.quiz.classroom_id);
 };
 
 /**

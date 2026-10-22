@@ -27,6 +27,15 @@ const mocks = vi.hoisted(() => ({
   quizzesVisibleOrThrow: vi.fn(),
   emojiScale: vi.fn(),
   auditCreate: vi.fn(),
+  findOpenByQuizAttemptId: vi.fn(),
+  userFindMany: vi.fn(),
+}));
+
+vi.mock('@classmoji/database', async () => ({
+  ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
+    '@classmoji/database/gitIdentity'
+  )),
+  default: () => ({ user: { findMany: (...a: unknown[]) => mocks.userFindMany(...a) } }),
 }));
 
 vi.mock('@classmoji/services', () => ({
@@ -46,8 +55,11 @@ vi.mock('@classmoji/services', () => ({
       findUsersByRoles: (...a: unknown[]) => mocks.findUsersByRoles(...a),
     },
     entitlement: { quizzesVisibleOrThrow: (...a: unknown[]) => mocks.quizzesVisibleOrThrow(...a) },
-    emojiMapping: { findByClassroomId: (...a: unknown[]) => mocks.emojiScale(...a) },
+    emojiMapping: { findScaleByClassroomId: (...a: unknown[]) => mocks.emojiScale(...a) },
     audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
+    regradeRequest: {
+      findOpenByQuizAttemptId: (...a: unknown[]) => mocks.findOpenByQuizAttemptId(...a),
+    },
   },
 }));
 
@@ -699,8 +711,8 @@ describe('get_quiz_attempt', () => {
       resource_id: ATTEMPT_ID,
       action: 'VIEW',
       data: {
-        tool: 'quiz.attempt.view',
-        mcp_tool: 'get_quiz_attempt',
+        // The tool's own name, like every other MCP tool's audit row.
+        tool: 'get_quiz_attempt',
         quiz_id: 'quiz-1',
         student_id: 'ada',
         include_transcript: include,
@@ -708,6 +720,10 @@ describe('get_quiz_attempt', () => {
     });
     expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject(expected(false));
     expect(mocks.auditCreate.mock.calls[1][0]).toMatchObject(expected(true));
+    // A plain read keeps the service's dedup window; a transcript read skips
+    // it, so a plain read just before cannot absorb it.
+    expect(mocks.auditCreate.mock.calls[0]).toHaveLength(1);
+    expect(mocks.auditCreate.mock.calls[1][1]).toEqual({ dedupe: false });
   });
 
   describe('transcript', () => {
@@ -1104,5 +1120,122 @@ describe('get_quiz_attempt', () => {
         kind: 'not_found',
       });
     });
+  });
+});
+
+describe('get_quiz_attempt: staff adjustment', () => {
+  it('states the adjusted grade by its own emoji, the AI original, the comment and who', async () => {
+    mocks.emojiScale.mockResolvedValue(EMOJI_SCALE);
+    mocks.findByQuiz.mockResolvedValue([
+      attemptRow({
+        partial_credit_percentage: 62,
+        adjusted_emoji: 'rocket',
+        instructor_comment: 'Q3 was ambiguous.',
+        adjusted_by_id: 'staff-1',
+        adjusted_at: new Date('2026-10-03T12:00:00Z'),
+        // The comment's own author, apart from the adjuster.
+        comment_by_id: 'staff-2',
+        comment_at: new Date('2026-10-02T12:00:00Z'),
+      }),
+    ]);
+    mocks.userFindMany.mockResolvedValue([
+      { id: 'staff-1', name: 'Prof Staff' },
+      { id: 'staff-2', name: 'TA Two' },
+    ]);
+    mocks.findOpenByQuizAttemptId.mockResolvedValue({
+      id: 'rr-open',
+      student_comment: 'Q3 had two readings.',
+      created_at: new Date('2026-10-04T09:00:00Z'),
+    });
+
+    const payload = parse(await getQuizAttemptTool.handler(ARGS, CTX));
+
+    expect(payload.attempt).toMatchObject({
+      grade_emoji: 'rocket',
+      original_emoji: '-1',
+      adjusted: true,
+      adjusted_emoji: 'rocket',
+      adjustment_orphaned: false,
+      band: 'EXCELLENT',
+      adjusted_at: '2026-10-03T12:00:00.000Z',
+      adjusted_by: { id: 'staff-1', name: 'Prof Staff' },
+      instructor_comment: 'Q3 was ambiguous.',
+      comment_at: '2026-10-02T12:00:00.000Z',
+      comment_by: { id: 'staff-2', name: 'TA Two' },
+      // The open request: its id and the student's own words.
+      open_regrade_request: {
+        id: 'rr-open',
+        student_comment: 'Q3 had two readings.',
+        created_at: '2026-10-04T09:00:00.000Z',
+      },
+    });
+    // The scale quiz_attempt_adjust takes, best first, emoji only.
+    expect(payload.emoji_scale).toEqual(Object.keys(EMOJI_SCALE));
+    expect(mocks.userFindMany).toHaveBeenCalledWith({
+      where: { id: { in: ['staff-1', 'staff-2'] } },
+      select: { id: true, name: true },
+    });
+    expect(mocks.findOpenByQuizAttemptId).toHaveBeenCalledWith(ATTEMPT_ID);
+  });
+
+  it("flags an adjustment whose emoji left the scale, with the stored emoji; the AI's grade shows (E17)", async () => {
+    mocks.emojiScale.mockResolvedValue(EMOJI_SCALE);
+    mocks.findByQuiz.mockResolvedValue([
+      attemptRow({
+        partial_credit_percentage: 62,
+        adjusted_emoji: 'heart',
+        adjusted_by_id: 'staff-1',
+        adjusted_at: new Date('2026-10-03T12:00:00Z'),
+      }),
+    ]);
+    mocks.userFindMany.mockResolvedValue([{ id: 'staff-1', name: 'Prof Staff' }]);
+
+    const payload = parse(await getQuizAttemptTool.handler(ARGS, CTX));
+    expect(payload.attempt).toMatchObject({
+      grade_emoji: '-1',
+      adjusted: false,
+      adjusted_emoji: 'heart',
+      adjustment_orphaned: true,
+      adjusted_by: { id: 'staff-1', name: 'Prof Staff' },
+    });
+  });
+
+  it('names no adjuster once the adjustment is reverted, and keeps the comment author', async () => {
+    mocks.emojiScale.mockResolvedValue(EMOJI_SCALE);
+    mocks.findByQuiz.mockResolvedValue([
+      attemptRow({
+        partial_credit_percentage: 62,
+        adjusted_emoji: null,
+        adjusted_by_id: null,
+        adjusted_at: null,
+        instructor_comment: 'See Q2.',
+        comment_by_id: 'staff-2',
+        comment_at: new Date('2026-10-02T12:00:00Z'),
+      }),
+    ]);
+    mocks.userFindMany.mockResolvedValue([{ id: 'staff-2', name: 'TA Two' }]);
+
+    const payload = parse(await getQuizAttemptTool.handler(ARGS, CTX));
+    expect(payload.attempt).toMatchObject({
+      adjusted: false,
+      adjusted_by: null,
+      adjusted_at: null,
+      comment_by: { id: 'staff-2', name: 'TA Two' },
+    });
+  });
+
+  it('says not adjusted, with no adjuster read, for an attempt staff never touched', async () => {
+    const payload = parse(await getQuizAttemptTool.handler(ARGS, CTX));
+    expect(payload.attempt).toMatchObject({
+      adjusted: false,
+      adjusted_emoji: null,
+      adjustment_orphaned: false,
+      instructor_comment: null,
+      adjusted_by: null,
+      open_regrade_request: null,
+    });
+    // One field carries the request; the old bare id is gone.
+    expect(payload.attempt).not.toHaveProperty('open_regrade_request_id');
+    expect(mocks.userFindMany).not.toHaveBeenCalled();
   });
 });

@@ -200,6 +200,40 @@ describe('student dashboard loader — assignment lookup guard', () => {
   });
 });
 
+describe('student dashboard loader — regrade/resubmit requests', () => {
+  const requests = [
+    {
+      id: 'rr-quiz',
+      status: 'IN_REVIEW',
+      created_at: '2026-09-20T12:00:00.000Z',
+      quiz_attempt_id: 'att-1',
+      quiz_attempt: { attempt_number: 2, quiz: { name: 'Recursion check-in' } },
+      git_repo_assignment: null,
+    },
+    {
+      id: 'rr-repo',
+      status: 'IN_REVIEW',
+      created_at: '2026-09-19T12:00:00.000Z',
+      quiz_attempt_id: null,
+      quiz_attempt: null,
+      git_repo_assignment: { assignment: { title: 'Lab 1' } },
+    },
+  ];
+
+  it('lists quiz requests where the classroom shows quizzes', async () => {
+    regradeRequestsMock.mockResolvedValue(requests);
+    const data = await (await loader(loaderArgs())).data;
+    expect(data.resubmits.map((r: { id: string }) => r.id)).toEqual(['rr-quiz', 'rr-repo']);
+  });
+
+  it('leaves quiz requests out where it does not', async () => {
+    regradeRequestsMock.mockResolvedValue(requests);
+    loadQuizzesVisibleMock.mockResolvedValue(false);
+    const data = await (await loader(loaderArgs())).data;
+    expect(data.resubmits.map((r: { id: string }) => r.id)).toEqual(['rr-repo']);
+  });
+});
+
 describe('student dashboard loader — Up next', () => {
   it("reads the student's coursework with the quiz answer and the submissions already read", async () => {
     const submissions = [{ id: 'ra-1', assignment_id: 'a-1' }];
@@ -233,7 +267,9 @@ describe('student dashboard loader — Up next', () => {
     const data = await (await loader(loaderArgs())).data;
 
     expect(upNextMock).toHaveBeenCalledWith([open, done]);
-    expect(data.upNext).toEqual([{ ...open, materials: [] }]);
+    // Everything but the quiz percentage, which stays on the server (E1).
+    const { score: _score, ...sent } = open;
+    expect(data.upNext).toEqual([{ ...sent, materials: [] }]);
     expect(data.viewerIsStudent).toBe(true);
   });
 
@@ -370,7 +406,28 @@ describe('student dashboard loader — recent grades', () => {
       ...over,
     });
 
-  it('adds quiz scores beside released repo grades, newest first', async () => {
+  it('sends no quiz percentage in Up next or anywhere else (E1)', async () => {
+    const open = courseworkRow({ assignmentId: 'open', type: 'QUIZ', score: 73.37 });
+    const done = courseworkRow({
+      assignmentId: 'done',
+      type: 'QUIZ',
+      done: true,
+      score: 41.5,
+      scoreEmoji: 'eyes',
+      scoredAt: '2026-09-20T12:00:00.000Z',
+    });
+    listForStudentMock.mockResolvedValue([open, done]);
+
+    const data = await (await loader(loaderArgs())).data;
+
+    expect(data.upNext.map(r => r.assignmentId)).toEqual(['open']);
+    expect('score' in data.upNext[0]).toBe(false);
+    const text = JSON.stringify(data);
+    expect(text).not.toContain('73.37');
+    expect(text).not.toContain('41.5');
+  });
+
+  it('adds quiz grades (emoji, never the number) beside released repo grades, newest first', async () => {
     listForStudentMock.mockResolvedValue([
       gradedRepo(),
       courseworkRow({
@@ -379,6 +436,10 @@ describe('student dashboard loader — recent grades', () => {
         title: 'Recursion',
         done: true,
         score: 0,
+        scoreEmoji: 'score-0',
+        originalScoreEmoji: 'score-0',
+        adjusted: false,
+        numLateHours: 0,
         scoredAt: '2026-09-20T12:00:00.000Z',
         href: '/student/test-class/quizzes?quiz=q-1',
       }),
@@ -391,12 +452,17 @@ describe('student dashboard loader — recent grades', () => {
     expect(data.feedback).toEqual([
       {
         id: 'quiz-a-quiz',
+        kind: 'QUIZ',
         assignmentTitle: 'Recursion',
         closedAt: '2026-09-20T12:00:00.000Z',
         graders: [],
         grades: [],
         issueUrl: null,
-        score: 0,
+        scoreEmoji: 'score-0',
+        originalScoreEmoji: 'score-0',
+        adjusted: false,
+        countedScoreEmoji: null,
+        lateHours: 0,
         href: '/student/test-class/quizzes?quiz=q-1',
       },
       {

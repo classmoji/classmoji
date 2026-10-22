@@ -403,7 +403,7 @@ const CommonLayout = ({
       // groups each category under a small muted label (no full-width rule);
       // collapsed (icon-only) mode has no room for a label, so the extra top
       // spacing alone carries the grouping.
-      // A student's list is short (Modules, Assignments, Resubmits, Tokens…),
+      // A student's list is short (Modules, Assignments, Regrade/Resubmit, Tokens…),
       // so it is one flat list with no section labels.
       const flat = role === 'STUDENT';
       return (

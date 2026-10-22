@@ -5,7 +5,7 @@ import { waitForDataLoad } from '../helpers/wait.helpers';
  * Student Dashboard Tests
  *
  * RetroTabsCard renders three <button> tabs (not role="tab"): Feedback / Team /
- * Resubmits. Feedback is the default and always renders the "Recent feedback"
+ * Regrade/Resubmit. Feedback is the default and always renders the "Recent feedback"
  * heading. Authenticates as fake-student-1 (STUDENT only, non-owner).
  */
 
@@ -24,7 +24,7 @@ test.describe('Student Dashboard', () => {
 
     await expect(page.getByRole('button', { name: 'Feedback' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Team' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Resubmits' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Regrade/Resubmit' })).toBeVisible();
   });
 
   test('defaults to the Feedback panel', async ({ authenticatedPage: page }) => {
@@ -35,8 +35,8 @@ test.describe('Student Dashboard', () => {
     await page.getByRole('button', { name: 'Team' }).click();
     await expect(page.getByRole('heading', { name: 'Recent feedback' })).toHaveCount(0);
 
-    await page.getByRole('button', { name: 'Resubmits' }).click();
-    await expect(page.getByRole('heading', { name: 'Regrade requests' })).toBeVisible();
+    await page.getByRole('button', { name: 'Regrade/Resubmit' }).click();
+    await expect(page.getByRole('heading', { name: 'Regrade/Resubmit requests' })).toBeVisible();
 
     await page.getByRole('button', { name: 'Feedback' }).click();
     await expect(page.getByRole('heading', { name: 'Recent feedback' })).toBeVisible();

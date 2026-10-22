@@ -25,7 +25,17 @@ const quizzesVisibleMock = vi.fn();
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     quiz: { findById: (...a: unknown[]) => quizFindByIdMock(...a) },
-    quizAttempt: { findWithMessages: (...a: unknown[]) => findWithMessagesMock(...a) },
+    quizAttempt: {
+      findWithMessages: (...a: unknown[]) => findWithMessagesMock(...a),
+      // The student's attempts on the quiz (which one counts, E15).
+      findForUserByQuizIds: async () => [],
+    },
+    // A completed attempt's grade panel (emoji, adjustment, requests): empty here.
+    emojiMapping: { findScaleByClassroomId: async () => ({}) },
+    classroomMembership: { findByClassroomAndUser: async () => null },
+    regradeRequest: { findOpenByQuizAttemptId: async () => null, findMany: async () => [] },
+    quizGradeItems: { netQuizExtensionHours: async () => new Map() },
+    user: { findById: async () => null },
   },
   QuizAttemptNotFoundError: class QuizAttemptNotFoundError extends Error {},
 }));
