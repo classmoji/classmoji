@@ -74,6 +74,8 @@ import {
 import { rosterAddStudentTool, rosterRemoveStudentTool } from './roster.ts';
 import { staffAddTool, staffUpdateTool, staffRemoveTool } from './staff.ts';
 import { quizCreateTool, quizUpdateTool, quizPublishTool, quizDeleteTool } from './quizzes.ts';
+import { listQuizAttemptsTool } from './quizAttempts.ts';
+import { getQuizAttemptTool } from './quizAttemptDetail.ts';
 import {
   classroomSettingsUpdateTool,
   classroomStatusUpdateTool,
@@ -234,6 +236,8 @@ export function registerAllTools(): void {
   registerToolDefinition(quizUpdateTool);
   registerToolDefinition(quizPublishTool);
   registerToolDefinition(quizDeleteTool);
+  registerToolDefinition(listQuizAttemptsTool);
+  registerToolDefinition(getQuizAttemptTool);
 
   // Course content: semantic search, enumeration and full-text reads over the
   // classroom's pages, decks and bot-context/ notes (MEMBER — every role,
