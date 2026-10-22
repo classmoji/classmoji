@@ -469,13 +469,21 @@ export interface AdjustQuizAttemptInput extends QuizGradeActor {
  * adjustment itself or the AI score's nearest emoji) picked again is no
  * change. Without this, picking the emoji an unadjusted 84% already shows
  * would store that emoji's own value (80) and lower the grade.
+ *
+ * On an orphaned adjustment (E17: its emoji left the scale, the AI's grade
+ * counts) the shown emoji is the AI's, and picking it means "keep that
+ * grade": null, which clears the stale adjustment so the attempt no longer
+ * needs a remap, and the score stays the AI's.
  */
 export const scoreChangingEmoji = (
   attempt: AdjustableAttempt,
   emoji: string,
   scale: Record<string, number>
-): string | undefined =>
-  emoji === quizAttemptGrade(attempt, scale).effective.emoji ? undefined : emoji;
+): string | null | undefined => {
+  const grade = quizAttemptGrade(attempt, scale);
+  if (emoji !== grade.effective.emoji) return emoji;
+  return grade.orphaned ? null : undefined;
+};
 
 /**
  * Adjust a quiz attempt's score and/or its comment to the student (teaching
@@ -510,7 +518,8 @@ export const adjust = async (input: AdjustQuizAttemptInput): Promise<QuizAdjustR
       actorUserId,
       actorRole,
       scale: txScale,
-      event: 'quiz_attempt_adjust',
+      // Null clears an orphaned adjustment (`scoreChangingEmoji`): a revert.
+      event: nextEmoji === null ? 'quiz_attempt_adjust_revert' : 'quiz_attempt_adjust',
     });
     return { ...result, txScale };
   }, TX_OPTIONS);

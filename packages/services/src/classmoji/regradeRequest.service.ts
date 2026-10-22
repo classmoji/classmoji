@@ -574,7 +574,9 @@ const requireRequestId = (requestId: unknown): string => {
  * attempt as it is. APPROVED with the emoji the attempt already shows
  * (`scoreChangingEmoji`) is a Keep: nothing is adjusted and the request is
  * marked DENIED ("Score kept"), so picking the shown emoji never lowers an
- * unadjusted score to that emoji's own value. The reply is required and at
+ * unadjusted score to that emoji's own value; on an orphaned adjustment
+ * (E17) that Keep also clears the stale adjustment (audited
+ * `quiz_attempt_adjust_revert`). The reply is required and at
  * most `QUIZ_REGRADE_REPLY_MAX_LENGTH` characters. Both store the reply in `grader_comment`, snapshot the
  * resulting emoji in `resolved_emoji` (the one set, or the effective one
  * kept) and audit `regrade_resolve` (`resolution`: adjust | keep). A request
@@ -668,6 +670,21 @@ export const resolveQuiz = async (
         if (emoji === undefined) {
           // The grade the student already sees: keep it.
           status = 'DENIED';
+        } else if (emoji === null) {
+          // The grade the student already sees (the AI's, an orphaned
+          // adjustment's fallback, E17): keep it, and clear the stale
+          // adjustment so it no longer needs a remap.
+          status = 'DENIED';
+          const applied = await applyAdjustmentInTx(tx, attempt, {
+            emoji: null,
+            comment: undefined,
+            actorUserId,
+            actorRole,
+            scale: txScale,
+            event: 'quiz_attempt_adjust_revert',
+          });
+          current = applied.attempt;
+          change = applied.change;
         } else {
           const applied = await applyAdjustmentInTx(tx, attempt, {
             emoji,

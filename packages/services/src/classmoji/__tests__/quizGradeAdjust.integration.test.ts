@@ -322,6 +322,63 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
       expect(again.changed).toBe(false);
     });
 
+    it('an orphaned adjustment (E17): the AI grade counts; picking the shown emoji clears it, keeping the score', async () => {
+      const { quizId, assignmentId } = await makeQuiz(classX);
+      const { id } = await makeAttempt(quizId, studentA, 84);
+      // An adjustment on an emoji no longer on X's scale.
+      await prisma.quizAttempt.update({
+        where: { id },
+        data: { adjusted_emoji: 'heart', adjusted_by_id: owner, adjusted_at: now },
+      });
+      expect(await itemFor(classX, studentA, assignmentId)).toMatchObject({
+        grade: 84,
+        counting_adjusted: false,
+        counting_orphaned: true,
+      });
+
+      // 84 shows as 👀: picking it keeps 84 and drops the stale adjustment.
+      const kept = await quizAttempt.adjust({
+        attemptId: id,
+        emoji: 'eyes',
+        actorUserId: owner,
+        tool: TOOL,
+      });
+      expect(kept).toMatchObject({
+        changed: true,
+        attempt: { adjusted_emoji: null, adjusted_by_id: null },
+        grade: { adjusted: false, orphaned: false, effective: { emoji: 'eyes', percentage: 84 } },
+      });
+      expect(await itemFor(classX, studentA, assignmentId)).toMatchObject({
+        grade: 84,
+        counting_orphaned: false,
+      });
+      const audits = await prisma.auditLog.findMany({
+        where: { resource_type: 'QUIZ_ATTEMPT', resource_id: id },
+      });
+      expect(audits).toHaveLength(1);
+      expect(audits[0].data).toMatchObject({
+        event: 'quiz_attempt_adjust_revert',
+        old_emoji: 'heart',
+        new_emoji: null,
+        old_percentage: 84,
+        new_percentage: 84,
+      });
+
+      // On an orphan, another emoji adjusts as usual.
+      await prisma.quizAttempt.update({ where: { id }, data: { adjusted_emoji: 'heart' } });
+      const up = await quizAttempt.adjust({
+        attemptId: id,
+        emoji: '+1',
+        actorUserId: owner,
+        tool: TOOL,
+      });
+      expect(up).toMatchObject({
+        changed: true,
+        attempt: { adjusted_emoji: '+1' },
+        grade: { adjusted: true, orphaned: false, effective: { percentage: 90 } },
+      });
+    });
+
     it("picking the emoji the attempt already shows keeps its score (84% shows as 80's emoji)", async () => {
       const { quizId, assignmentId } = await makeQuiz(classX);
       const { id } = await makeAttempt(quizId, studentA, 84);
@@ -792,6 +849,45 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
           })
         )
       ).toBe('not_completed');
+    });
+
+    it('on an orphaned adjustment (E17), approving with the shown emoji keeps the score and clears it', async () => {
+      const { quizId } = await makeQuiz(classX);
+      const { id } = await makeAttempt(quizId, studentB, 84);
+      await prisma.quizAttempt.update({
+        where: { id },
+        data: { adjusted_emoji: 'heart', adjusted_by_id: owner, adjusted_at: now },
+      });
+      const { request } = await regradeRequest.createForQuizAttempt({
+        attemptId: id,
+        comment: 'Q2',
+        actorUserId: studentB,
+        tool: TOOL,
+      });
+
+      // 84 shows as 👀 (the AI's grade, the adjustment being off the scale).
+      const kept = await regradeRequest.resolveQuiz({
+        requestId: request.id,
+        resolution: 'APPROVED',
+        emoji: 'eyes',
+        comment: 'Your grade stands.',
+        actorUserId: assistant,
+        tool: TOOL,
+      });
+      expect(kept).toMatchObject({
+        request: { status: 'DENIED', resolved_emoji: 'eyes' },
+        attempt: { adjusted_emoji: null, adjusted_by_id: null },
+        grade: { adjusted: false, orphaned: false, effective: { emoji: 'eyes', percentage: 84 } },
+      });
+      const adjustAudit = await prisma.auditLog.findFirst({
+        where: { resource_type: 'QUIZ_ATTEMPT', resource_id: id },
+      });
+      expect(adjustAudit?.data).toMatchObject({
+        event: 'quiz_attempt_adjust_revert',
+        old_emoji: 'heart',
+        new_emoji: null,
+        via_regrade_request_id: request.id,
+      });
     });
 
     it('approve adjusts with the chosen emoji; deny keeps; a reply is required', async () => {
