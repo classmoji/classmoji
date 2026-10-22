@@ -1,5 +1,5 @@
 import { Input, InputNumber, Button, Table, Popconfirm, Alert, Select } from 'antd';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { DeleteOutlined, WarningOutlined } from '@ant-design/icons';
 
@@ -48,6 +48,23 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
 
   const { notify, fetcher } = useGlobalFetcher();
   const callout = useCallout();
+
+  // A remap in flight on the shared fetcher: 'sent' until the fetcher leaves
+  // idle, then 'inflight' until it settles. The picks are cleared only when
+  // the remap succeeded, so a refusal leaves them to correct and resend.
+  const remapState = useRef<'sent' | 'inflight' | null>(null);
+  const fetcherState = fetcher?.state;
+  const fetcherData = fetcher?.data as { action?: string; success?: string } | undefined;
+  useEffect(() => {
+    if (remapState.current === 'sent' && fetcherState !== 'idle') {
+      remapState.current = 'inflight';
+    } else if (remapState.current === 'inflight' && fetcherState === 'idle') {
+      remapState.current = null;
+      if (fetcherData?.action === 'REMAP_ORPHANED_EMOJIS' && fetcherData.success) {
+        setRemapSelections({});
+      }
+    }
+  }, [fetcherState, fetcherData]);
 
   const handleCellUpdate = (emojiKey: string, field: string, value: string | number | null) => {
     const mapping = emojiMappings.find(m => m.emoji === emojiKey);
@@ -105,8 +122,7 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
         encType: 'application/json',
       }
     );
-
-    setRemapSelections({});
+    remapState.current = 'sent';
   };
 
   const createEmojiMapping = () => {
