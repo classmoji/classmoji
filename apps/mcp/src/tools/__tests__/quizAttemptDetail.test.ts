@@ -1150,6 +1150,8 @@ describe('get_quiz_attempt: staff adjustment', () => {
       grade_emoji: 'rocket',
       original_emoji: '-1',
       adjusted: true,
+      adjusted_emoji: 'rocket',
+      adjustment_orphaned: false,
       band: 'EXCELLENT',
       adjusted_at: '2026-10-03T12:00:00.000Z',
       adjusted_by: { id: 'staff-1', name: 'Prof Staff' },
@@ -1170,6 +1172,28 @@ describe('get_quiz_attempt: staff adjustment', () => {
       select: { id: true, name: true },
     });
     expect(mocks.findOpenByQuizAttemptId).toHaveBeenCalledWith(ATTEMPT_ID);
+  });
+
+  it("flags an adjustment whose emoji left the scale, with the stored emoji; the AI's grade shows (E17)", async () => {
+    mocks.emojiScale.mockResolvedValue(EMOJI_SCALE);
+    mocks.findByQuiz.mockResolvedValue([
+      attemptRow({
+        partial_credit_percentage: 62,
+        adjusted_emoji: 'heart',
+        adjusted_by_id: 'staff-1',
+        adjusted_at: new Date('2026-10-03T12:00:00Z'),
+      }),
+    ]);
+    mocks.userFindMany.mockResolvedValue([{ id: 'staff-1', name: 'Prof Staff' }]);
+
+    const payload = parse(await getQuizAttemptTool.handler(ARGS, CTX));
+    expect(payload.attempt).toMatchObject({
+      grade_emoji: '-1',
+      adjusted: false,
+      adjusted_emoji: 'heart',
+      adjustment_orphaned: true,
+      adjusted_by: { id: 'staff-1', name: 'Prof Staff' },
+    });
   });
 
   it('names no adjuster once the adjustment is reverted, and keeps the comment author', async () => {
@@ -1200,6 +1224,8 @@ describe('get_quiz_attempt: staff adjustment', () => {
     const payload = parse(await getQuizAttemptTool.handler(ARGS, CTX));
     expect(payload.attempt).toMatchObject({
       adjusted: false,
+      adjusted_emoji: null,
+      adjustment_orphaned: false,
       instructor_comment: null,
       adjusted_by: null,
       open_regrade_request: null,

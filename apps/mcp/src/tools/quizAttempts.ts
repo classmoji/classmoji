@@ -101,7 +101,9 @@ export const listQuizAttemptsTool: ToolDefinition<ListQuizAttemptsArgs> = {
     'COMPLETED), every attempt (id, started_at, completed_at, last_activity while open, ' +
     'grade_emoji, first_attempt_emoji, focus_percentage, late_hours, is_counting; adjusted, ' +
     'original_emoji (the AI grade), adjusted_at, adjusted_by; instructor_comment, ' +
-    'comment_at, comment_by; both from quiz_attempt_adjust), the attempt that counts, current_emoji (its grade) and ' +
+    'comment_at, comment_by; both from quiz_attempt_adjust; adjustment_orphaned: the stored ' +
+    "adjusted_emoji left the scale, the AI's grade counts until remapped in Grade settings), " +
+    'the attempt that counts, current_emoji (its grade) and ' +
     'counted_emoji (after the late penalty), and counts_as_zero (no completed attempt past ' +
     'the due date). Grades are emoji ' +
     "on the classroom's own scale (score-N badges on the numeric scale), never numbers. " +
@@ -200,6 +202,10 @@ export const listQuizAttemptsTool: ToolDefinition<ListQuizAttemptsArgs> = {
       return {
         adjusted: attempt.grade.adjusted,
         original_emoji: attempt.grade.original.emoji,
+        // The stored adjustment emoji, in effect or not, and whether it left
+        // the scale (E17): then the AI's grade counts until it is remapped.
+        adjusted_emoji: row?.adjusted_emoji ?? null,
+        adjustment_orphaned: attempt.grade.orphaned,
         adjusted_at: adjusterId ? iso(row?.adjusted_at) : null,
         adjusted_by: adjusterId
           ? { id: adjusterId, name: adjusters.get(adjusterId)?.name ?? null }
@@ -248,6 +254,7 @@ export const listQuizAttemptsTool: ToolDefinition<ListQuizAttemptsArgs> = {
         attempts: row.attempts.map(attemptView),
         counting_attempt_id: row.countingAttemptId,
         counting_adjusted: row.countingAdjusted,
+        counting_adjustment_orphaned: row.countingOrphaned,
         current_emoji: currentEmoji,
         // Re-derived only when the late penalty moved it.
         counted_emoji:

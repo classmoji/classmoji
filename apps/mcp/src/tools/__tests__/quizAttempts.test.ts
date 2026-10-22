@@ -567,10 +567,14 @@ describe('list_quiz_attempts: staff adjustments', () => {
       adjusted_at: '2026-10-03T12:00:00.000Z',
       adjusted_by: { id: 'staff-1', name: 'Prof Staff' },
     });
+    expect(adjusted).toMatchObject({ adjusted_emoji: 'rocket', adjustment_orphaned: false });
+    expect(ada.counting_adjustment_orphaned).toBe(false);
     expect(plain).toMatchObject({
       grade_emoji: 'eyes',
       adjusted: false,
       original_emoji: 'eyes',
+      adjusted_emoji: null,
+      adjustment_orphaned: false,
       instructor_comment: null,
       adjusted_at: null,
       adjusted_by: null,
@@ -579,6 +583,32 @@ describe('list_quiz_attempts: staff adjustments', () => {
     expect(mocks.userFindMany).toHaveBeenCalledWith({
       where: { id: { in: ['staff-1'] } },
       select: { id: true, name: true },
+    });
+  });
+
+  it("flags an adjustment whose emoji left the scale, with the stored emoji; the AI's grade counts (E17)", async () => {
+    mocks.findByQuiz.mockResolvedValue([
+      attempt('a1', 'ada', '2026-10-01T10:00:00Z', '2026-10-01T10:30:00Z', 62, {
+        adjusted_emoji: 'heart',
+        adjusted_by_id: 'staff-1',
+        adjusted_at: at('2026-10-03T12:00:00Z'),
+      }),
+    ]);
+    mocks.userFindMany.mockResolvedValue([{ id: 'staff-1', name: 'Prof Staff' }]);
+
+    const [ada] = parse(await listQuizAttemptsTool.handler(ARGS, CTX)).students;
+    expect(ada).toMatchObject({
+      counting_attempt_id: 'a1',
+      counting_adjusted: false,
+      counting_adjustment_orphaned: true,
+      current_emoji: '-1',
+    });
+    expect(ada.attempts[0]).toMatchObject({
+      grade_emoji: '-1',
+      adjusted: false,
+      adjusted_emoji: 'heart',
+      adjustment_orphaned: true,
+      adjusted_by: { id: 'staff-1', name: 'Prof Staff' },
     });
   });
 

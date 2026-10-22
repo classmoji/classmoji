@@ -652,7 +652,9 @@ export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
     'One quiz attempt: the student, when it started and completed, grade_emoji and ' +
     "first_attempt_emoji (emoji on the classroom's own scale, score-N badges on the numeric " +
     'scale; never numbers), band, the staff adjustment (adjusted, original_emoji, ' +
-    'adjusted_at, adjusted_by) and the comment to the student (instructor_comment, ' +
+    'adjusted_at, adjusted_by; adjustment_orphaned: the stored adjusted_emoji left the ' +
+    "scale, the AI's grade counts until remapped in Grade settings) and the comment to the " +
+    'student (instructor_comment, ' +
     'comment_at, comment_by); change either with quiz_attempt_adjust, picking from ' +
     'emoji_scale (the classroom scale, best first; grade_emoji keeps the score). ' +
     'open_regrade_request (id, ' +
@@ -809,6 +811,10 @@ export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
         band: completed ? (grade.effective.band?.evaluation ?? null) : null,
         adjusted: grade.adjusted,
         original_emoji: completed ? grade.original.emoji : null,
+        // The stored adjustment emoji, in effect or not, and whether it left
+        // the scale (E17): then the AI's grade counts until it is remapped.
+        adjusted_emoji: attempt.adjusted_emoji ?? null,
+        adjustment_orphaned: grade.orphaned,
         adjusted_at: adjusterId ? iso(attempt.adjusted_at) : null,
         adjusted_by: adjusterId ? { id: adjusterId, name: nameOf(adjusterId) } : null,
         // The comment's own author and time, apart from the adjustment's.
