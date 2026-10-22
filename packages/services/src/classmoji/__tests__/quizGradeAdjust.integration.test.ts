@@ -1479,9 +1479,20 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
       expect(lateness.get(ids.a1)).toEqual({ lateHours: 1, countedEmoji: '+1' });
       expect(lateness.get(ids.a2)).toEqual({ lateHours: 3, countedEmoji: 'eyes' });
       expect(lateness.get(ids.b1)).toEqual({ lateHours: 3, countedEmoji: 'eyes' });
-      expect(lateness.get(ids.loose)).toEqual({ lateHours: 0, countedEmoji: '+1' });
+      // No due date: no lateness at all, not "on time".
+      expect(lateness.get(ids.loose)).toEqual({ lateHours: null, countedEmoji: '+1' });
       expect(lateness.has(ids.b2)).toBe(false);
       expect(lateness.size).toBe(4);
+
+      // The ids of one quiz's attempts with an open request: quiz 2's
+      // resolved one is left out, and no other classroom's quiz is read.
+      expect(await regradeRequest.openQuizRequestAttemptIds(classX, q1.quizId)).toEqual(
+        new Set([a1.id, b1.id])
+      );
+      expect(await regradeRequest.openQuizRequestAttemptIds(classX, q2.quizId)).toEqual(
+        new Set([a2.id])
+      );
+      expect((await regradeRequest.openQuizRequestAttemptIds(classY, q1.quizId)).size).toBe(0);
     });
   });
 

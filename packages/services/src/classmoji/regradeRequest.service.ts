@@ -203,8 +203,11 @@ export const findManyForDisplay = async (
 
 /** An open quiz request's lateness, as the resolve modal and the MCP queue show it. */
 export interface QuizRequestLateness {
-  /** The attempt's whole hours past its due date plus the hours the student bought. */
-  lateHours: number;
+  /**
+   * The attempt's whole hours past its due date plus the hours the student
+   * bought; null when the quiz has no due date (no assignment, or none set).
+   */
+  lateHours: number | null;
   /** The attempt's grade now after the late penalty, as the classroom's emoji. */
   countedEmoji: string | null;
 }
@@ -267,20 +270,21 @@ export const openQuizRequestLateness = async (
   for (const row of open) {
     const attempt = row.quiz_attempt!;
     const assignmentId = attempt.quiz.assignment?.id ?? null;
+    const deadline = assignmentId ? (deadlineOf.get(assignmentId) ?? null) : null;
     const late =
-      assignmentId && deadlineOf.has(assignmentId)
+      assignmentId && deadline
         ? lateHoursOf(
             attempt.completed_at,
-            deadlineOf.get(assignmentId) ?? null,
+            deadline,
             Math.max(0, bought.get(row.student_id)?.get(assignmentId) ?? 0)
           )
-        : 0;
+        : null;
     // The penalty comes off the effective score itself (D2), not off its emoji.
     const { effective } = quizAttemptGrade(attempt, scale);
     result.set(row.id, {
       lateHours: late,
       countedEmoji:
-        late > 0 && effective.percentage !== null
+        late !== null && late > 0 && effective.percentage !== null
           ? quizPercentageEmoji(Math.max(0, effective.percentage - late * penalty), scale)
           : effective.emoji,
     });
@@ -305,6 +309,21 @@ export const findOpenByAssignmentId = async (
       created_at: 'desc',
     },
   });
+};
+
+/**
+ * The attempts of one quiz in a classroom that have an open (IN_REVIEW)
+ * regrade request: their ids only, for a list that marks them.
+ */
+export const openQuizRequestAttemptIds = async (
+  classroomId: string,
+  quizId: string
+): Promise<Set<string>> => {
+  const rows = await getPrisma().regradeRequest.findMany({
+    where: { classroom_id: classroomId, status: 'IN_REVIEW', quiz_attempt: { quiz_id: quizId } },
+    select: { quiz_attempt_id: true },
+  });
+  return new Set(rows.flatMap(r => (r.quiz_attempt_id ? [r.quiz_attempt_id] : [])));
 };
 
 /**

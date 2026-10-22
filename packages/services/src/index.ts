@@ -251,6 +251,7 @@ export type {
   AdjustQuizAttemptInput,
   RevertQuizAttemptInput,
 } from './classmoji/quizGradeAdjust.service.ts';
+export { QUIZ_REGRADE_REPLY_MAX_LENGTH } from './classmoji/regradeRequest.service.ts';
 export type {
   CreateQuizRegradeInput,
   CreateQuizRegradeResult,
