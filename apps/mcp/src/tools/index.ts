@@ -12,6 +12,7 @@
 
 import { registerToolDefinition } from '../mcp/registry.ts';
 import { whoamiTool } from './whoami.ts';
+import { billingStatusTool } from './billing.ts';
 import { readTools } from './reads.ts';
 import { gradeAddTool, gradeRemoveTool, gradeRemoveAllTool } from './grades.ts';
 import { graderAssignTool, graderUnassignTool, graderAssignBulkTool } from './graders.ts';
@@ -118,6 +119,9 @@ import {
 export function registerAllTools(): void {
   // Identity / bootstrap
   registerToolDefinition(whoamiTool);
+
+  // The caller's own plan (Settings → Billing).
+  registerToolDefinition(billingStatusTool);
 
   // Read surface mirrored as tools (tool-only clients like claude.ai cannot
   // list/read MCP resources). Each mirror reuses its resource's handler + tier;

@@ -41,19 +41,42 @@ class StripeService {
     return session;
   }
 
+  /**
+   * A portal session, optionally opened straight on one task. `subscriptionId`
+   * is required for `subscription_cancel`, which cancels that subscription.
+   */
   static async createBillingPortalSession(
-    customerId: string
+    customerId: string,
+    flow?: { type: 'payment_method_update' } | { type: 'subscription_cancel'; subscriptionId: string }
   ): Promise<Stripe.BillingPortal.Session> {
+    const returnUrl = `${process.env.WEBAPP_URL}/settings/billing`;
+    const flowData: Stripe.BillingPortal.SessionCreateParams.FlowData | undefined = !flow
+      ? undefined
+      : flow.type === 'payment_method_update'
+        ? { type: 'payment_method_update' }
+        : {
+            type: 'subscription_cancel',
+            subscription_cancel: { subscription: flow.subscriptionId },
+            after_completion: { type: 'redirect', redirect: { return_url: returnUrl } },
+          };
     const session = await stripe().billingPortal.sessions.create({
       customer: customerId,
-      return_url: `${process.env.WEBAPP_URL}/settings/billing`,
+      return_url: returnUrl,
+      ...(flowData ? { flow_data: flowData } : {}),
     });
     return session;
   }
 
+  /** The subscription with its card and customer, for the billing page. */
   static async findSubscription(subscriptionId: string): Promise<Stripe.Subscription> {
-    const subscription = await stripe().subscriptions.retrieve(subscriptionId);
+    const subscription = await stripe().subscriptions.retrieve(subscriptionId, {
+      expand: ['default_payment_method', 'customer.invoice_settings.default_payment_method'],
+    });
     return subscription;
+  }
+
+  static async findPrice(priceId: string): Promise<Stripe.Price> {
+    return stripe().prices.retrieve(priceId);
   }
 
   static constructWebhookEvent(body: string | Buffer, signature: string): Stripe.Event {

@@ -341,6 +341,7 @@ model User {
   sessions                      Session[]                 @relation("SessionUser")
   impersonated_sessions         Session[]                 @relation("ImpersonatedBy")
   subscriptions                 Subscription[]
+  billing_events                BillingEvent[]
   classroom_memberships         ClassroomMembership[]
   classrooms_created            Classroom[]               @relation("ClassroomCreator")
   classrooms_plan_owned         Classroom[]               @relation("ClassroomPlanOwner")
@@ -2086,6 +2087,34 @@ model ProcessedWebhookEvent {
 
   @@index([source, processed_at])
   @@map("processed_webhook_events")
+}
+
+/// What happened to a user's paid plan. Billing belongs to the user, not to a
+/// classroom, so it cannot use `audit_logs` (which requires one).
+enum BillingEventAction {
+  CHECKOUT_STARTED
+  PORTAL_OPENED
+  PRO_GRANTED
+  PLAN_UPDATED
+  MOVED_TO_FREE
+}
+
+model BillingEvent {
+  id                     String             @id @default(uuid())
+  user_id                String
+  action                 BillingEventAction
+  /// Where it came from: `web:billing`, `stripe:webhook`.
+  source                 String
+  stripe_customer_id     String?
+  stripe_subscription_id String?
+  stripe_event_id        String?
+  data                   Json?
+  created_at             DateTime           @default(now())
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id, created_at])
+  @@map("billing_events")
 }
 
 // ============================================================================

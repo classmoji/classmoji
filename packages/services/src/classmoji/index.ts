@@ -34,6 +34,7 @@ import * as organizationTagService from './organizationTag.service.ts';
 import * as regradeRequestService from './regradeRequest.service.ts';
 import * as gitRepoService from './gitRepo.service.ts';
 import * as subscriptionService from './subscription.service.ts';
+import * as billingService from './billing.service.ts';
 import * as entitlementService from './entitlement.service.ts';
 import * as planLimitsService from './planLimits.ts';
 import * as planOwnerService from './planOwner.service.ts';
@@ -168,6 +169,7 @@ const ClassmojiService = {
   regradeRequest: regradeRequestService,
   gitRepo: gitRepoService,
   subscription: subscriptionService,
+  billing: billingService,
   entitlement: entitlementService,
   planLimits: planLimitsService,
   planOwner: planOwnerService,

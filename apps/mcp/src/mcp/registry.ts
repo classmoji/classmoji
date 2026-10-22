@@ -327,11 +327,16 @@ function toErrorResult(error: unknown, toolName: string): ToolResult {
  */
 export const ASK_MOJI_TOOL_PREFIX = 'ask_moji_';
 
+/**
+ * Account tools a course assistant has no business with: `billing_status`
+ * reads the asker's own plan, card and receipt email.
+ */
+const ASK_MOJI_HIDDEN_TOOLS: ReadonlySet<string> = new Set(['billing_status']);
+
 export function hiddenFromClient(name: string, viewer: Pick<Viewer, 'clientId'>): boolean {
-  return (
-    viewer.clientId === ASK_MOJI_CLIENT_ID &&
-    name.replaceAll('-', '_').startsWith(ASK_MOJI_TOOL_PREFIX)
-  );
+  if (viewer.clientId !== ASK_MOJI_CLIENT_ID) return false;
+  const normalized = name.replaceAll('-', '_');
+  return normalized.startsWith(ASK_MOJI_TOOL_PREFIX) || ASK_MOJI_HIDDEN_TOOLS.has(normalized);
 }
 
 function wrapHandler(def: ToolDefinition<never>, viewer: Viewer) {

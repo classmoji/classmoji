@@ -20,22 +20,32 @@ const createCustomerMock = vi.fn();
 const findByIdMock = vi.fn();
 const updateUserMock = vi.fn();
 const getAuthSessionMock = vi.fn();
+const getCurrentMock = vi.fn();
+const recordEventMock = vi.fn();
 
-vi.mock('@classmoji/services', () => ({
-  ClassmojiService: {
-    user: {
-      findById: (...a: unknown[]) => findByIdMock(...a),
-      update: (...a: unknown[]) => updateUserMock(...a),
+vi.mock('@classmoji/services', async () => {
+  // The real price rule, so these tests still prove where the price comes from.
+  const { checkoutPriceId } = await import('@classmoji/utils');
+  return {
+    ClassmojiService: {
+      user: {
+        findById: (...a: unknown[]) => findByIdMock(...a),
+        update: (...a: unknown[]) => updateUserMock(...a),
+      },
+      subscription: { getCurrent: (...a: unknown[]) => getCurrentMock(...a) },
+      billing: {
+        checkoutPriceId: () => checkoutPriceId(),
+        recordEvent: (...a: unknown[]) => recordEventMock(...a),
+      },
     },
-    subscription: { getCurrent: vi.fn() },
-  },
-  StripeService: {
-    createCheckoutSession: (...a: unknown[]) => createCheckoutSessionMock(...a),
-    createBillingPortalSession: (...a: unknown[]) => createBillingPortalSessionMock(...a),
-    createCustomer: (...a: unknown[]) => createCustomerMock(...a),
-    findSubscription: vi.fn(),
-  },
-}));
+    StripeService: {
+      createCheckoutSession: (...a: unknown[]) => createCheckoutSessionMock(...a),
+      createBillingPortalSession: (...a: unknown[]) => createBillingPortalSessionMock(...a),
+      createCustomer: (...a: unknown[]) => createCustomerMock(...a),
+      findSubscription: vi.fn(),
+    },
+  };
+});
 
 vi.mock('@classmoji/auth/server', () => ({
   getAuthSession: (...a: unknown[]) => getAuthSessionMock(...a),
@@ -89,6 +99,14 @@ describe('billing action — createCheckoutSession', () => {
       customerId: 'cus_existing',
     });
     expect(result).toEqual({ checkoutSessionUrl: 'https://checkout.stripe.test/session' });
+  });
+
+  it('sells only the first price when older Pro prices are listed after it', async () => {
+    vi.stubEnv('STRIPE_PRO_PRICE_ID', 'price_current, price_older');
+
+    await action(post('createCheckoutSession'));
+
+    expect(createCheckoutSessionMock.mock.calls[0][0]).toMatchObject({ priceId: 'price_current' });
   });
 
   it('IGNORES a price supplied by the client', async () => {
@@ -175,5 +193,124 @@ describe('billing action — createBillingPortalSession', () => {
 
     expect(createBillingPortalSessionMock).toHaveBeenCalledWith('cus_existing');
     expect(result).toEqual({ billingPortalSessionUrl: 'https://portal.stripe.test/session' });
+  });
+
+  it('opens the card update screen when asked', async () => {
+    await action(post('createBillingPortalSession', { flow: 'payment_method_update' }));
+
+    expect(createBillingPortalSessionMock).toHaveBeenCalledWith('cus_existing', {
+      type: 'payment_method_update',
+    });
+  });
+
+  it('cancels the subscription the SERVER resolves, never one the client names', async () => {
+    getCurrentMock.mockResolvedValue({ stripe_subscription_id: 'sub_own' });
+
+    await action(
+      post('createBillingPortalSession', { flow: 'subscription_cancel', subscriptionId: 'sub_other' })
+    );
+
+    expect(getCurrentMock).toHaveBeenCalledWith('user-1');
+    expect(createBillingPortalSessionMock).toHaveBeenCalledWith('cus_existing', {
+      type: 'subscription_cancel',
+      subscriptionId: 'sub_own',
+    });
+  });
+
+  it('falls back to the plain portal when there is no subscription to cancel', async () => {
+    getCurrentMock.mockResolvedValue({ stripe_subscription_id: null });
+
+    await action(post('createBillingPortalSession', { flow: 'subscription_cancel' }));
+
+    expect(createBillingPortalSessionMock).toHaveBeenCalledWith('cus_existing');
+  });
+
+  it('ignores an unknown flow', async () => {
+    await action(post('createBillingPortalSession', { flow: 'subscription_update' }));
+
+    expect(createBillingPortalSessionMock).toHaveBeenCalledWith('cus_existing');
+  });
+
+  it('refuses, without calling Stripe, when the user has no Stripe customer', async () => {
+    findByIdMock.mockResolvedValue({ id: 'user-1', stripe_customer_id: null });
+
+    const result = await action(post('createBillingPortalSession'));
+
+    expect(createBillingPortalSessionMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ error: expect.stringContaining('no billing account') });
+  });
+});
+
+describe('billing action — billing events', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubEnv('STRIPE_PRO_PRICE_ID', 'price_from_env');
+    getAuthSessionMock.mockResolvedValue({ userId: 'user-1' });
+    findByIdMock.mockResolvedValue({ id: 'user-1', stripe_customer_id: 'cus_existing' });
+    createCheckoutSessionMock.mockResolvedValue({ url: 'https://checkout.stripe.test/session' });
+    createBillingPortalSessionMock.mockResolvedValue({ url: 'https://portal.stripe.test/session' });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('records CHECKOUT_STARTED for the signed-in user', async () => {
+    await action(post('createCheckoutSession'));
+
+    expect(recordEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        action: 'CHECKOUT_STARTED',
+        source: 'web:billing',
+        stripeCustomerId: 'cus_existing',
+        data: expect.objectContaining({ tool: 'web:billing', price_id: 'price_from_env' }),
+      })
+    );
+  });
+
+  it('records PORTAL_OPENED with the screen and the server-resolved subscription', async () => {
+    getCurrentMock.mockResolvedValue({ stripe_subscription_id: 'sub_own' });
+
+    await action(post('createBillingPortalSession', { flow: 'subscription_cancel' }));
+
+    expect(recordEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        action: 'PORTAL_OPENED',
+        stripeSubscriptionId: 'sub_own',
+        data: expect.objectContaining({ flow: 'subscription_cancel' }),
+      })
+    );
+  });
+
+  it('records nothing when there is no checkout price', async () => {
+    vi.stubEnv('STRIPE_PRO_PRICE_ID', '');
+
+    await action(post('createCheckoutSession'));
+
+    expect(recordEventMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('billing action — saving the new Stripe customer', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubEnv('STRIPE_PRO_PRICE_ID', 'price_from_env');
+    getAuthSessionMock.mockResolvedValue({ userId: 'user-1' });
+    findByIdMock.mockResolvedValue({ id: 'user-1', name: 'Tim', email: 'tim@example.com' });
+    createCustomerMock.mockResolvedValue({ id: 'cus_new' });
+    createCheckoutSessionMock.mockResolvedValue({ url: 'https://checkout.stripe.test/session' });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('does not open checkout when saving the customer id fails', async () => {
+    updateUserMock.mockRejectedValue(new Error('db down'));
+
+    await expect(action(post('createCheckoutSession'))).rejects.toThrow('db down');
+    expect(createCheckoutSessionMock).not.toHaveBeenCalled();
   });
 });
