@@ -377,7 +377,7 @@ describe('grades loader — quiz columns appear only where quizzes are visible',
     expect(mocks.findAttemptsByQuiz).toHaveBeenCalledWith('quiz-1');
     expect(mocks.findGradingStrategies).toHaveBeenCalledWith(['quiz-1']);
     expect(activity.quiz['a-quiz']).toEqual({
-      'student-1': { completed: true, scored: true, emoji: 'score-90' },
+      'student-1': { completed: true, scored: true, emoji: 'score-90', orphaned: false },
     });
     expect(mocks.quizzesVisibleOrThrow).toHaveBeenCalledWith('class-1');
   });
@@ -393,9 +393,9 @@ describe('grades loader — quiz columns appear only where quizzes are visible',
     const { activity } = await resolveColumns();
 
     expect(activity.quiz['a-quiz']).toEqual({
-      'student-1': { completed: true, scored: true, emoji: 'score-40' },
+      'student-1': { completed: true, scored: true, emoji: 'score-40', orphaned: false },
       // A 0 is a score, not "Completed".
-      'student-2': { completed: true, scored: true, emoji: 'score-0' },
+      'student-2': { completed: true, scored: true, emoji: 'score-0', orphaned: false },
     });
   });
 
@@ -409,7 +409,7 @@ describe('grades loader — quiz columns appear only where quizzes are visible',
     const { activity } = await resolveColumns();
 
     expect(activity.quiz['a-quiz']).toEqual({
-      'student-1': { completed: true, scored: true, emoji: 'score-100' },
+      'student-1': { completed: true, scored: true, emoji: 'score-100', orphaned: false },
     });
   });
 
@@ -424,8 +424,8 @@ describe('grades loader — quiz columns appear only where quizzes are visible',
     const { activity } = await resolveColumns();
 
     expect(activity.quiz['a-quiz']).toEqual({
-      'student-1': { completed: true, scored: true, emoji: 'score-90' },
-      'student-2': { completed: false, scored: false, emoji: null },
+      'student-1': { completed: true, scored: true, emoji: 'score-90', orphaned: false },
+      'student-2': { completed: false, scored: false, emoji: null, orphaned: false },
     });
   });
 
@@ -459,6 +459,7 @@ describe('grades loader — quiz grade items join the totals', () => {
     // The cell's "adjusted" chip (D8), and the emoji staff picked.
     counting_adjusted: true,
     counting_adjusted_emoji: 'score-80',
+    counting_orphaned: false,
   };
 
   const resolveAll = async () => {

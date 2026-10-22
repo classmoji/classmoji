@@ -38,6 +38,14 @@ describe('QuizGradeEmoji', () => {
     expect(html).not.toMatch(/>\s*90\s*</);
   });
 
+  it('shows a "needs remap" chip for an orphaned adjustment (staff, E17)', () => {
+    const html = renderToStaticMarkup(<QuizGradeEmoji emoji="eyes" orphaned />);
+    expect(html).toContain('data-testid="quiz-grade-needs-remap"');
+    expect(html).toContain('needs remap');
+    expect(html).not.toContain('data-testid="quiz-grade-adjusted"');
+    expect(renderToStaticMarkup(<QuizGradeEmoji emoji="eyes" />)).not.toContain('needs remap');
+  });
+
   it('shows an em dash with no grade', () => {
     expect(renderToStaticMarkup(<QuizGradeEmoji emoji={null} />)).toContain('—');
   });

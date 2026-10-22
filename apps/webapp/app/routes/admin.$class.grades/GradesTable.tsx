@@ -91,7 +91,10 @@ export interface GradebookActivity {
   /** `scored`: the counting attempt has a score (absent on older payloads). */
   quiz: Record<
     string,
-    Record<string, { completed: boolean; scored?: boolean; emoji: string | null }>
+    Record<
+      string,
+      { completed: boolean; scored?: boolean; emoji: string | null; orphaned?: boolean }
+    >
   >;
   form: Record<string, Record<string, { submitted: boolean }>>;
 }
@@ -364,7 +367,8 @@ const GradesTable = (props: GradesTableProps) => {
    * A quiz cell. With a grade item it shows what the totals count as the
    * classroom's emoji (E1): the late-penalised score (amber when late, with
    * its late chip), an "adjusted" chip when staff adjusted the counting
-   * attempt (D8; on time it shows the emoji staff picked, `quizItemEmoji`), or
+   * attempt (D8; on time it shows the emoji staff picked, `quizItemEmoji`), a
+   * "needs remap" chip when that adjustment's emoji left the scale (E17), or
    * Missing (a counted 0). Without one it shows when the quiz opens, or the
    * attempt state (before the deadline, running or unscored).
    */
@@ -385,6 +389,7 @@ const GradesTable = (props: GradesTableProps) => {
           <QuizGradeEmoji
             emoji={quizItemEmoji(item, value, emojiMappings)}
             adjusted={item.counting_adjusted === true}
+            orphaned={item.counting_orphaned === true}
             lateHours={item.late_hours}
           />
         ),
@@ -405,7 +410,7 @@ const GradesTable = (props: GradesTableProps) => {
     ) : q.emoji === null ? (
       <span className="font-semibold">Completed</span>
     ) : (
-      <QuizGradeEmoji emoji={q.emoji} />
+      <QuizGradeEmoji emoji={q.emoji} orphaned={q.orphaned === true} />
     );
     return { body, tint: '' };
   };

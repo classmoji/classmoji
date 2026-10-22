@@ -9,12 +9,18 @@ import Emoji from '~/components/ui/display/Emoji';
  *   - adjusted with `originalEmoji`: "orig → new" and an "adjusted" chip (D6, D8);
  *     adjusted without it: the new emoji and the chip.
  *   - `lateHours` > 0: an "Nh late" chip.
+ *   - `orphaned` (staff surfaces only): a "needs remap" chip, E17.
  *   - no emoji: an em dash.
  */
 export interface QuizGradeEmojiProps {
   emoji: string | null;
   originalEmoji?: string | null;
   adjusted?: boolean;
+  /**
+   * The attempt's staff adjustment is on an emoji no longer on the scale: the
+   * AI's grade (`emoji`) counts until it is remapped. Staff surfaces only.
+   */
+  orphaned?: boolean;
   lateHours?: number | null;
   size?: 'sm' | 'md' | 'lg';
 }
@@ -33,6 +39,21 @@ export const AdjustedChip = () => (
   >
     adjusted
   </span>
+);
+
+/**
+ * A staff adjustment whose emoji left the classroom's scale (E17): the AI's
+ * grade counts until the owner remaps it in Grade settings. Staff only.
+ */
+export const NeedsRemapChip = () => (
+  <Tooltip title="The adjusted emoji is no longer on the grading scale. The AI's grade counts until it is remapped in Grade settings.">
+    <span
+      data-testid="quiz-grade-needs-remap"
+      className="inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-700 dark:text-rose-300 whitespace-nowrap"
+    >
+      needs remap
+    </span>
+  </Tooltip>
 );
 
 /** How late an attempt completed, as the Assignments page says it. */
@@ -66,6 +87,7 @@ export function QuizGradeEmoji({
   emoji,
   originalEmoji = null,
   adjusted = false,
+  orphaned = false,
   lateHours = null,
   size = 'sm',
 }: QuizGradeEmojiProps) {
@@ -97,6 +119,7 @@ export function QuizGradeEmoji({
         <Emoji emoji={emoji} fontSize={fontSize} />
       </span>
       {adjusted && <AdjustedChip />}
+      {orphaned && <NeedsRemapChip />}
       {typeof lateHours === 'number' && lateHours > 0 && <LateChip hours={lateHours} />}
     </span>
   );

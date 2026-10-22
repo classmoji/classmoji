@@ -29,6 +29,7 @@ import {
   countedQuizEmojiMap,
   countingQuizScore,
   lateHours as lateHoursOf,
+  isOrphanedAdjustment,
   quizAttemptGrade,
   quizEvaluationRecord as evaluationRecord,
   quizPercentageEmoji,
@@ -661,7 +662,14 @@ export interface StaffAttemptGradePanel {
    */
   canEdit: boolean;
   grade: AttemptGradeView | null;
+  /** The stored adjustment emoji, in effect or orphaned. */
   adjustedEmoji: string | null;
+  /**
+   * The adjustment's emoji is no longer on the classroom's scale (E17): the
+   * AI's grade (`grade.emoji`) counts until it is remapped in Grade settings;
+   * the panel shows a "needs remap" chip.
+   */
+  orphaned: boolean;
   comment: string | null;
   /** Who set the score adjustment, and when (cleared on revert). */
   adjustedByName: string | null;
@@ -724,6 +732,7 @@ export const staffAttemptGradePanel = ({
   canEdit,
   grade,
   adjustedEmoji: attempt.adjusted_emoji ?? null,
+  orphaned: isOrphanedAdjustment(attempt, emojiScale),
   comment: attempt.instructor_comment ?? null,
   adjustedByName: attempt.adjusted_emoji ? adjustedByName : null,
   adjustedAt: attempt.adjusted_emoji ? isoOrNull(attempt.adjusted_at) : null,

@@ -136,6 +136,7 @@ describe('student report loader — quiz visibility', () => {
         scored: true,
         emoji: 'score-80',
         adjusted: false,
+        orphaned: false,
       },
     });
     expect(mocks.findForUserByQuizIds).toHaveBeenCalledWith('u-1', ['quiz-1']);
@@ -163,6 +164,7 @@ describe('student report loader — quiz visibility', () => {
         scored: false,
         emoji: null,
         adjusted: false,
+        orphaned: false,
       },
     });
   });
@@ -196,6 +198,7 @@ describe('student report loader — quiz grade items', () => {
     counting_raw_percentage: null,
     counting_adjusted: false,
     counting_adjusted_emoji: null,
+    counting_orphaned: false,
   };
 
   beforeEach(() => {

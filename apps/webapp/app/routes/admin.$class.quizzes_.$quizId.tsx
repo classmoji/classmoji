@@ -61,7 +61,7 @@ const RegradeRequestedPill = () => (
 /**
  * A student's current grade as the classroom's emoji (E1): the effective
  * grade of the attempt that counts, an "adjusted" chip when staff adjusted it
- * (D8), and what it counts for after the late penalty when that differs
+ * (D8) or "needs remap" when that adjustment's emoji left the scale (E17), and what it counts for after the late penalty when that differs
  * ("→ 👀", the gradebook's value). "Missing" for a counted 0, "Not started"
  * for a rostered student with no attempt.
  */
@@ -90,7 +90,11 @@ const CurrentScoreCell = ({ student }: { student: QuizStudent }) => {
   }
   return (
     <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-      <QuizGradeEmoji emoji={student.currentEmoji} adjusted={student.countingAdjusted} />
+      <QuizGradeEmoji
+        emoji={student.currentEmoji}
+        adjusted={student.countingAdjusted}
+        orphaned={student.countingOrphaned}
+      />
       {student.countedEmoji && (
         <Tooltip title="What it counts for after the late penalty">
           <span className="inline-flex items-center gap-1 text-xs font-semibold text-orange-700 dark:text-orange-300">
@@ -548,6 +552,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
               emoji={record.grade.effective.emoji}
               originalEmoji={record.grade.original.emoji}
               adjusted={record.grade.adjusted}
+              orphaned={record.grade.orphaned}
             />
             {record.regradeRequested && <RegradeRequestedPill />}
           </span>

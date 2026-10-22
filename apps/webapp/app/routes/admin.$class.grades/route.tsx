@@ -28,6 +28,8 @@ const projectGradedItem = (item: GradedItem): GradedItem => ({
   // The cell's "adjusted" chip (D8), and the emoji staff picked (shown as is when on time).
   counting_adjusted: item.counting_adjusted ?? false,
   counting_adjusted_emoji: item.counting_adjusted_emoji ?? null,
+  // The cell's "needs remap" chip: an adjustment off the scale (E17).
+  counting_orphaned: item.counting_orphaned ?? false,
 });
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
@@ -161,7 +163,10 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     // with no grading scale has no emoji for it).
     const quiz: Record<
       string,
-      Record<string, { completed: boolean; scored: boolean; emoji: string | null }>
+      Record<
+        string,
+        { completed: boolean; scored: boolean; emoji: string | null; orphaned: boolean }
+      >
     > = {};
     const form: Record<string, Record<string, { submitted: boolean }>> = {};
     const quizIds = assignments.flatMap(a => (a.type === 'QUIZ' && a.quiz_id ? [a.quiz_id] : []));
@@ -188,12 +193,14 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
           quiz[a.id] = {};
           for (const [userId, own] of byUser) {
             const standing = quizStanding(own, strategies?.[a.quiz_id], emojiScale);
+            const grade = standing.counting
+              ? quizAttemptGrade(standing.counting, emojiScale)
+              : null;
             quiz[a.id][userId] = {
               completed: standing.completed,
               scored: standing.counting !== null,
-              emoji: standing.counting
-                ? quizAttemptGrade(standing.counting, emojiScale).effective.emoji
-                : null,
+              emoji: grade?.effective.emoji ?? null,
+              orphaned: grade?.orphaned ?? false,
             };
           }
         } else if (a.type === 'FORM' && a.form_id) {

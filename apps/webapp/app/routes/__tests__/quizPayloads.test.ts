@@ -144,7 +144,8 @@ const staffAttemptRoute =
   await import('../admin.$class.quizzes_.$quizId.attempt.$attemptId/route.tsx');
 const studentAttemptRoute =
   await import('../student.$class.quizzes.$quizId.attempt.$attemptId/route.tsx');
-const { buildQuizResultRows } = await import('~/utils/quizPayloads');
+const { buildQuizResultRows, staffAttemptGradePanel, attemptGradeView } =
+  await import('~/utils/quizPayloads');
 
 /** The classroom's grading scale (emoji → grade), best first, as `findScaleByClassroomId` returns it. */
 const SCALE = { rocket: 100, '+1': 85, eyes: 70, '-1': 50, sob: 0 };
@@ -662,6 +663,7 @@ describe('staff attempt drawer payload', () => {
         countsTowardGrade: null,
       },
       adjustedEmoji: '+1',
+      orphaned: false,
       comment: 'Q3 has full credit.',
       adjustedByName: 'Grace Hopper',
       adjustedAt: '2026-03-04T10:00:00.000Z',
@@ -1243,6 +1245,7 @@ describe('quiz results page: lateness', () => {
       firstAttemptScore: null,
       countingAttemptId: null,
       countingAdjusted: false,
+      countingOrphaned: false,
       latestAttempt: null,
       currentEmoji: null,
       countedEmoji: 'sob',
@@ -1367,6 +1370,30 @@ describe('buildQuizResultRows', () => {
 
     expect(students[0].countingAttemptId).toBe(zero.id);
     expect(students[0].currentScore).toBe(0);
+    expect(students[0].countingOrphaned).toBe(false);
+  });
+
+  it("flags an orphaned adjustment on the counting attempt and counts the AI's grade (E17)", () => {
+    const orphan = attemptRow('a-ada-orphan', ADA, {
+      started_at: new Date('2026-03-04T10:00:00Z'),
+      completed_at: new Date('2026-03-04T10:20:00Z'),
+      partial_credit_percentage: 72,
+      adjusted_emoji: 'heart',
+    });
+    const { students } = buildQuizResultRows({
+      attempts: [orphan],
+      gradingStrategy: 'HIGHEST',
+      viewerId: 'nobody',
+      emojiScale: SCALE,
+    });
+
+    expect(students[0]).toMatchObject({
+      countingAttemptId: orphan.id,
+      currentScore: 72,
+      countingAdjusted: false,
+      countingOrphaned: true,
+    });
+    expect(students[0].attempts[0].grade).toMatchObject({ orphaned: true, adjusted: false });
   });
 
   it('counts the attempt that scores best after the late penalty, and shows its raw score', () => {
@@ -1400,5 +1427,53 @@ describe('buildQuizResultRows', () => {
       late: { ...late, latePenaltyPerHour: 10 },
     });
     expect(harsh.students[0]).toMatchObject({ countedScore: 0, lateHours: 10 });
+  });
+});
+
+describe('an orphaned adjustment in the staff drawer payload (E17)', () => {
+  const scale = { rocket: 100, '+1': 90, eyes: 80, '-1': 60, sob: 0 };
+  const attempt = {
+    id: 'att-o',
+    started_at: '2026-03-01T10:00:00Z',
+    completed_at: '2026-03-01T11:00:00Z',
+    partial_credit_percentage: 72,
+    adjusted_emoji: 'heart',
+  };
+
+  it("flags it for staff and shows the AI's grade; the student's view is unchanged", () => {
+    const grade = attemptGradeView({ attempt, emojiScale: scale });
+    const panel = staffAttemptGradePanel({
+      attempt,
+      adjustable: true,
+      canEdit: true,
+      grade,
+      adjustedByName: 'Grace Hopper',
+      commentByName: null,
+      emojiScale: scale,
+      latePenaltyPerHour: 0,
+      openRequest: null,
+      studentName: null,
+    });
+    expect(panel).toMatchObject({ orphaned: true, adjustedEmoji: 'heart' });
+    expect(panel.grade).toMatchObject({ emoji: 'eyes', adjusted: false, originalEmoji: null });
+    // What a student is sent carries no orphan flag.
+    expect(grade).not.toHaveProperty('orphaned');
+  });
+
+  it('is not orphaned when the emoji is on the scale', () => {
+    const onScale = { ...attempt, adjusted_emoji: '+1' };
+    const panel = staffAttemptGradePanel({
+      attempt: onScale,
+      adjustable: true,
+      canEdit: true,
+      grade: attemptGradeView({ attempt: onScale, emojiScale: scale }),
+      adjustedByName: null,
+      commentByName: null,
+      emojiScale: scale,
+      latePenaltyPerHour: 0,
+      openRequest: null,
+      studentName: null,
+    });
+    expect(panel.orphaned).toBe(false);
   });
 });

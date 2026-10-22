@@ -42,6 +42,7 @@ const panel = (over: Partial<StaffAttemptGradePanel> = {}): StaffAttemptGradePan
     countsTowardGrade: null,
   },
   adjustedEmoji: null,
+  orphaned: false,
   comment: null,
   adjustedByName: null,
   adjustedAt: null,
@@ -223,5 +224,34 @@ describe('the picker marks the current grade', () => {
     ).not.toBeNull();
     await click(panelEl!.querySelector('[data-testid="quiz-emoji-option-eyes"]'));
     expect(byTestId('quiz-adjust-keeps')?.textContent).toMatch(/keeps the score/);
+  });
+});
+
+describe('an orphaned adjustment (E17)', () => {
+  const orphaned = (over: Partial<StaffAttemptGradePanel> = {}) =>
+    panel({ openRequest: null, adjustedEmoji: 'heart', orphaned: true, ...over });
+
+  it('shows the AI grade with a "needs remap" chip', async () => {
+    await mount(() => orphaned());
+    const chip = byTestId('quiz-grade-needs-remap');
+    expect(chip?.textContent).toBe('needs remap');
+    expect(container.querySelector('[data-emoji="eyes"]')).not.toBeNull();
+    expect(container.querySelector('[data-emoji="heart"]')).toBeNull();
+  });
+
+  it('shows the chip beside the grade when there is a comment too', async () => {
+    await mount(() => orphaned({ comment: 'See Q2.' }));
+    expect(byTestId('quiz-grade-needs-remap')).not.toBeNull();
+  });
+
+  it('opens the picker with nothing picked', async () => {
+    await mount(() => orphaned());
+    await click(byTestId('quiz-adjust-open'));
+    expect(container.querySelectorAll('[aria-checked="true"]')).toHaveLength(0);
+  });
+
+  it('no chip on an adjustment in effect or none', async () => {
+    await mount(() => panel({ openRequest: null }));
+    expect(byTestId('quiz-grade-needs-remap')).toBeNull();
   });
 });

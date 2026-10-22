@@ -5,7 +5,7 @@ import dayjs from 'dayjs';
 import { useCallout } from '@classmoji/ui-components';
 import type { StaffAttemptGradePanel } from '~/utils/quizPayloads';
 import Emoji from '~/components/ui/display/Emoji';
-import { LateChip } from './QuizGradeEmoji';
+import { LateChip, NeedsRemapChip } from './QuizGradeEmoji';
 import { QuizEmojiPicker } from './QuizEmojiPicker';
 import {
   QuizResolveFields,
@@ -230,16 +230,19 @@ export function QuizAttemptGradePanel({ panel }: { panel: StaffAttemptGradePanel
   const callout = useCallout();
   const { modal } = App.useApp();
   const [editing, setEditing] = useState(false);
-  const [pick, setPick] = useState<string | null>(panel.adjustedEmoji);
+  // An orphaned adjustment (E17) is not on the scale the picker shows: start
+  // with nothing picked.
+  const savedPick = panel.orphaned ? null : panel.adjustedEmoji;
+  const [pick, setPick] = useState<string | null>(savedPick);
   const [comment, setComment] = useState(panel.comment ?? '');
   const busy = fetcher.state !== 'idle';
   const grade = panel.grade;
 
   // A fresh panel (after a save, or another attempt) starts from the saved state.
   useEffect(() => {
-    setPick(panel.adjustedEmoji);
+    setPick(savedPick);
     setComment(panel.comment ?? '');
-  }, [panel.attemptId, panel.adjustedEmoji, panel.comment]);
+  }, [panel.attemptId, savedPick, panel.comment]);
 
   useEffect(() => {
     if (fetcher.state !== 'idle' || !fetcher.data) return;
@@ -347,7 +350,7 @@ export function QuizAttemptGradePanel({ panel }: { panel: StaffAttemptGradePanel
           <Button
             onClick={() => {
               setEditing(false);
-              setPick(panel.adjustedEmoji);
+              setPick(savedPick);
               setComment(panel.comment ?? '');
             }}
             disabled={busy}
@@ -391,6 +394,7 @@ export function QuizAttemptGradePanel({ panel }: { panel: StaffAttemptGradePanel
             <span className="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
               Grade
               <Emoji emoji={grade?.emoji ?? ''} fontSize={18} />
+              {panel.orphaned && <NeedsRemapChip />}
             </span>
           )}
           <Counted panel={panel} />
@@ -414,6 +418,7 @@ export function QuizAttemptGradePanel({ panel }: { panel: StaffAttemptGradePanel
         <span className="inline-flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
           Grade
           <Emoji emoji={grade?.emoji ?? ''} fontSize={18} />
+          {panel.orphaned && <NeedsRemapChip />}
           <Counted panel={panel} />
         </span>
         {canEdit && (

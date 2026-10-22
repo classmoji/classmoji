@@ -126,6 +126,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     // The row's "adjusted" chip (D8), and the emoji staff picked (shown as is when on time).
     counting_adjusted: item.counting_adjusted ?? false,
     counting_adjusted_emoji: item.counting_adjusted_emoji ?? null,
+    // The row's "needs remap" chip: an adjustment off the scale (E17).
+    counting_orphaned: item.counting_orphaned ?? false,
   }));
   const quizStatus: Record<
     string,
@@ -138,6 +140,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
       scored: boolean;
       emoji: string | null;
       adjusted: boolean;
+      /** The counting attempt's adjustment left the scale (E17). */
+      orphaned: boolean;
     }
   > = {};
   const formStatus: Record<string, { responded: boolean; draft: boolean }> = {};
@@ -157,6 +161,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
           scored: standing.counting !== null,
           emoji: grade?.effective.emoji ?? null,
           adjusted: grade?.adjusted ?? false,
+          orphaned: grade?.orphaned ?? false,
         };
       } else if (a.type === 'FORM' && a.form) {
         const response = await ClassmojiService.formResponse.findOwnResponse(a.form.id, studentId);
@@ -675,12 +680,19 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
             }
           >
             <span className="inline-flex">
-              <QuizGradeEmoji emoji={shown} adjusted={item.counting_adjusted === true} size="md" />
+              <QuizGradeEmoji
+                emoji={shown}
+                adjusted={item.counting_adjusted === true}
+                orphaned={item.counting_orphaned === true}
+                size="md"
+              />
             </span>
           </Tooltip>
         );
       } else if (q?.emoji) {
-        grade = <QuizGradeEmoji emoji={q.emoji} adjusted={q.adjusted} size="md" />;
+        grade = (
+          <QuizGradeEmoji emoji={q.emoji} adjusted={q.adjusted} orphaned={q.orphaned} size="md" />
+        );
       }
     } else if (a.type === 'FORM') {
       const f = formStatus[a.id];
