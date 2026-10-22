@@ -1,11 +1,13 @@
 /**
  * ensureDefaultScale gives a classroom with no grading scale the number scale
- * and leaves one that has any mapping alone. Prisma is mocked.
+ * and leaves one that has any mapping alone; saveEmojiMapping upserts under
+ * the same scale lock. Prisma is mocked.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const count = vi.fn();
 const createMany = vi.fn();
+const upsert = vi.fn();
 // The scale lock (`pg_advisory_xact_lock`), taken before the count.
 const queryRaw = vi.fn();
 const calls: string[] = [];
@@ -22,6 +24,10 @@ vi.mock('@classmoji/database', () => {
         return count(...a);
       },
       createMany: (...a: unknown[]) => createMany(...a),
+      upsert: (...a: unknown[]) => {
+        calls.push('upsert');
+        return upsert(...a);
+      },
     },
   };
   return {
@@ -32,13 +38,14 @@ vi.mock('@classmoji/database', () => {
   };
 });
 
-const { ensureDefaultScale } = await import('../emojiMapping.service.ts');
+const { ensureDefaultScale, saveEmojiMapping } = await import('../emojiMapping.service.ts');
 const { SCORE_EMOJI_MAPPINGS } = await import('@classmoji/utils');
 
 beforeEach(() => {
   count.mockReset();
   createMany.mockReset();
   queryRaw.mockReset();
+  upsert.mockReset();
   calls.length = 0;
   createMany.mockResolvedValue({ count: SCORE_EMOJI_MAPPINGS.length });
 });
@@ -68,6 +75,23 @@ describe('ensureDefaultScale', () => {
 
     expect(result).toEqual({ seeded: false });
     expect(createMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('saveEmojiMapping', () => {
+  it('upserts under the scale lock, so it never lands inside a replaceScale', async () => {
+    const values = { emoji: 'rocket', grade: 100, extra_tokens: 0, description: 'Great' };
+    upsert.mockResolvedValue({ classroom_id: 'class-1', ...values });
+
+    await expect(saveEmojiMapping('class-1', values)).resolves.toMatchObject(values);
+
+    expect(calls).toEqual(['lock', 'upsert']);
+    expect(queryRaw.mock.calls[0].slice(1)).toEqual(['emoji-scale:class-1']);
+    expect(upsert).toHaveBeenCalledWith({
+      where: { classroom_id_emoji: { classroom_id: 'class-1', emoji: 'rocket' } },
+      update: values,
+      create: { classroom_id: 'class-1', ...values },
+    });
   });
 });
 

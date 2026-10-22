@@ -4,18 +4,25 @@ import { SCORE_EMOJI_MAPPINGS } from '@classmoji/utils';
 
 type EmojiMappingInput = Prisma.EmojiMappingUncheckedCreateWithoutClassroomInput;
 
-export const saveEmojiMapping = async (classroomId: string, values: EmojiMappingInput) => {
-  return getPrisma().emojiMapping.upsert({
-    where: {
-      classroom_id_emoji: {
-        classroom_id: classroomId,
-        emoji: values.emoji,
+/**
+ * Add or update one emoji on a classroom's scale (the settings table, MCP
+ * `emoji_mapping_upsert`). Under the scale lock (`lockScale`), so it lands
+ * before or after a `replaceScale`, never between its delete and its insert.
+ */
+export const saveEmojiMapping = async (classroomId: string, values: EmojiMappingInput) =>
+  getPrisma().$transaction(async tx => {
+    await lockScale(tx, classroomId);
+    return tx.emojiMapping.upsert({
+      where: {
+        classroom_id_emoji: {
+          classroom_id: classroomId,
+          emoji: values.emoji,
+        },
       },
-    },
-    update: values,
-    create: { classroom_id: classroomId, ...values },
+      update: values,
+      create: { classroom_id: classroomId, ...values },
+    });
   });
-};
 
 export const findClassroomEmojiMappingDescription = async (classroomId: string) => {
   const mappings = await getPrisma().emojiMapping.findMany({
@@ -34,8 +41,9 @@ type ScaleClient = PrismaClient | Prisma.TransactionClient;
 
 /**
  * Serialise every write that may leave a classroom's scale empty or fill an
- * empty one: the settings page's wipe-and-replace (`replaceScale`) and the
- * re-seed (`ensureDefaultScale`). Without it a re-seed that ran while the
+ * empty one, and every insert that could collide with one: the settings
+ * page's wipe-and-replace (`replaceScale`), the re-seed (`ensureDefaultScale`)
+ * and the one-row upsert (`saveEmojiMapping`). Without it a re-seed that ran while the
  * owner's replacement was half done (or into a classroom emptied row by row
  * while a replacement ran) left a scale mixing both sets. Transaction-scoped:
  * released at commit or rollback. An advisory lock, not `FOR UPDATE` on the
