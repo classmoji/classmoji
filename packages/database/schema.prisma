@@ -644,7 +644,7 @@ model ClassroomSettings {
   show_grades_to_students      Boolean  @default(false)
   final_grades_released        Boolean  @default(false)
   quizzes_enabled              Boolean  @default(true)
-  slides_enabled               Boolean  @default(false)
+  slides_enabled               Boolean  @default(true)
   syllabus_bot_enabled         Boolean  @default(false)
   recent_viewers_enabled       Boolean  @default(true)
   show_modules                 Boolean  @default(true)
