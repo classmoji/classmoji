@@ -6,15 +6,31 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const count = vi.fn();
 const createMany = vi.fn();
+// The scale lock (`pg_advisory_xact_lock`), taken before the count.
+const queryRaw = vi.fn();
+const calls: string[] = [];
 
-vi.mock('@classmoji/database', () => ({
-  default: () => ({
+vi.mock('@classmoji/database', () => {
+  const tx = {
+    $queryRaw: (...a: unknown[]) => {
+      calls.push('lock');
+      return queryRaw(...a);
+    },
     emojiMapping: {
-      count: (...a: unknown[]) => count(...a),
+      count: (...a: unknown[]) => {
+        calls.push('count');
+        return count(...a);
+      },
       createMany: (...a: unknown[]) => createMany(...a),
     },
-  }),
-}));
+  };
+  return {
+    default: () => ({
+      ...tx,
+      $transaction: (fn: (t: typeof tx) => unknown) => fn(tx),
+    }),
+  };
+});
 
 const { ensureDefaultScale } = await import('../emojiMapping.service.ts');
 const { SCORE_EMOJI_MAPPINGS } = await import('@classmoji/utils');
@@ -22,6 +38,8 @@ const { SCORE_EMOJI_MAPPINGS } = await import('@classmoji/utils');
 beforeEach(() => {
   count.mockReset();
   createMany.mockReset();
+  queryRaw.mockReset();
+  calls.length = 0;
   createMany.mockResolvedValue({ count: SCORE_EMOJI_MAPPINGS.length });
 });
 
@@ -39,6 +57,9 @@ describe('ensureDefaultScale', () => {
     expect(data.every((row: { classroom_id: string }) => row.classroom_id === 'class-1')).toBe(
       true
     );
+    // Counted under the scale lock, so it cannot interleave with a replaceScale.
+    expect(calls).toEqual(['lock', 'count']);
+    expect(queryRaw.mock.calls[0].slice(1)).toEqual(['emoji-scale:class-1']);
   });
 
   it('leaves a classroom that already has a scale untouched', async () => {
@@ -53,6 +74,7 @@ describe('ensureDefaultScale', () => {
 describe('quizScaleForClassroom (E10)', () => {
   const findMany = vi.fn();
   const client = {
+    $queryRaw: (...a: unknown[]) => queryRaw(...a),
     emojiMapping: {
       findMany: (...a: unknown[]) => findMany(...a),
       count: (...a: unknown[]) => count(...a),
