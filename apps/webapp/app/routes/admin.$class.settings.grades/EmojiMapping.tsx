@@ -20,7 +20,10 @@ interface EmojiMappingRecord {
 
 interface OrphanedEmoji {
   emoji: string;
+  /** Every use: repo grades plus quiz adjustments. */
   count: number;
+  /** Of `count`, quiz adjustments (E17). */
+  quiz_count?: number;
 }
 
 interface EditingCell {
@@ -329,13 +332,22 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
                   The following emoji grades are used but no longer have mappings. Select a new
                   emoji for each to fix:
                 </p>
+                {orphanedEmojis!.some(o => (o.quiz_count ?? 0) > 0) && (
+                  <p data-testid="orphaned-quiz-note" className="mb-3 text-ink-2">
+                    Quiz adjustments on these emojis count the AI&apos;s grade until they are
+                    remapped.
+                  </p>
+                )}
                 <div className="space-y-2">
-                  {orphanedEmojis!.map(({ emoji: oldEmoji, count }) => (
+                  {orphanedEmojis!.map(({ emoji: oldEmoji, count, quiz_count: quizCount = 0 }) => (
                     <div key={oldEmoji} className="flex items-center gap-3">
                       <div className="flex items-center gap-2 min-w-[140px]">
                         <Emoji emoji={oldEmoji} size="sm" />
                         <span className="text-ink-1 font-mono text-sm">{oldEmoji}</span>
-                        <span className="text-ink-3 text-xs">({count})</span>
+                        <span className="text-ink-3 text-xs">
+                          ({count}
+                          {quizCount > 0 && ` · ${quizCount} quiz`})
+                        </span>
                       </div>
                       <span className="text-ink-4">&rarr;</span>
                       <Select
