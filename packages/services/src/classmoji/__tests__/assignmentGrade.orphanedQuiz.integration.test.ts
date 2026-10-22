@@ -5,8 +5,9 @@
  *   - replacing the scale (the settings page's populate) orphans a quiz
  *     adjustment like a repo grade: the finder counts both, merged per emoji;
  *   - while orphaned the AI's grade counts and the grade item is flagged;
- *   - the remap rewrites repo grades, `QuizAttempt.adjusted_emoji` and the quiz
- *     requests' `resolved_emoji` in the given classroom only (X vs Y), and
+ *   - the remap rewrites repo grades, `QuizAttempt.adjusted_emoji`, the quiz
+ *     requests' `resolved_emoji` and every request's `previous_grade` entries
+ *     (repo and quiz) in the given classroom only (X vs Y), and
  *     refuses a target off the scale or a source still on it, writing nothing;
  *   - the re-seed (`quizScaleForClassroom`) cannot mix its rows into a
  *     concurrent `replaceScale`.
@@ -72,7 +73,8 @@ describe.skipIf(!RUN)('orphaned quiz adjustments (integration)', () => {
 
   /**
    * A classroom's fixtures, all on the emoji `+1`: a repo grade, a quiz
-   * attempt adjusted to it (AI 64%), and a resolved quiz request snapshotting it.
+   * attempt adjusted to it (AI 64%), a resolved quiz request asking about it
+   * and snapshotting it, and an open repo request asking about stacked `+1`s.
    */
   const seedGrades = async (classroomId: string, studentId: string, graderId: string) => {
     const n = ++serial;
@@ -153,7 +155,7 @@ describe.skipIf(!RUN)('orphaned quiz adjustments (integration)', () => {
         classroom_id: classroomId,
         quiz_attempt_id: attempt.id,
         student_id: studentId,
-        previous_grade: [],
+        previous_grade: ['+1'],
         status: 'APPROVED',
         resolved_by_id: graderId,
         resolved_at: now,
@@ -161,10 +163,20 @@ describe.skipIf(!RUN)('orphaned quiz adjustments (integration)', () => {
       },
       select: { id: true },
     });
+    const repoRequest = await prisma.regradeRequest.create({
+      data: {
+        classroom_id: classroomId,
+        git_repo_assignment_id: submission.id,
+        student_id: studentId,
+        previous_grade: ['+1', 'eyes', '+1'],
+      },
+      select: { id: true },
+    });
     return {
       gradeId: grade.id,
       attemptId: attempt.id,
       requestId: request.id,
+      repoRequestId: repoRequest.id,
       quizAssignmentId: quizAssignment.id,
       adjustedAt,
     };
@@ -289,6 +301,7 @@ describe.skipIf(!RUN)('orphaned quiz adjustments (integration)', () => {
       repoGrades: 1,
       quizAdjustments: 1,
       regradeSnapshots: 1,
+      regradePreviousGrades: 2,
     });
 
     // Classroom X: rewritten; who adjusted and when are kept.
@@ -305,6 +318,15 @@ describe.skipIf(!RUN)('orphaned quiz adjustments (integration)', () => {
     expect(
       (await prisma.regradeRequest.findUniqueOrThrow({ where: { id: x.requestId } })).resolved_emoji
     ).toBe('score-90');
+    // Every entry of the asked-about grade, the rest kept in place.
+    expect(
+      (await prisma.regradeRequest.findUniqueOrThrow({ where: { id: x.requestId } }))
+        .previous_grade
+    ).toEqual(['score-90']);
+    expect(
+      (await prisma.regradeRequest.findUniqueOrThrow({ where: { id: x.repoRequestId } }))
+        .previous_grade
+    ).toEqual(['score-90', 'eyes', 'score-90']);
     expect(await assignmentGrade.findOrphanedGradeEmojis(classX)).toEqual([]);
     expect(await itemFor(classX, studentX, x.quizAssignmentId)).toMatchObject({
       grade: 90,
@@ -322,6 +344,14 @@ describe.skipIf(!RUN)('orphaned quiz adjustments (integration)', () => {
     expect(
       (await prisma.regradeRequest.findUniqueOrThrow({ where: { id: y.requestId } })).resolved_emoji
     ).toBe('+1');
+    expect(
+      (await prisma.regradeRequest.findUniqueOrThrow({ where: { id: y.requestId } }))
+        .previous_grade
+    ).toEqual(['+1']);
+    expect(
+      (await prisma.regradeRequest.findUniqueOrThrow({ where: { id: y.repoRequestId } }))
+        .previous_grade
+    ).toEqual(['+1', 'eyes', '+1']);
     expect(await assignmentGrade.findOrphanedGradeEmojis(classY)).toEqual([
       { emoji: '+1', count: 2, quiz_count: 1 },
     ]);

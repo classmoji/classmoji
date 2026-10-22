@@ -214,6 +214,8 @@ export interface RemapGradeEmojisResult {
   quizAdjustments: number;
   /** Quiz regrade requests whose resolution snapshot (`resolved_emoji`) was rewritten. */
   regradeSnapshots: number;
+  /** Regrade requests (repo and quiz) whose asked-about grade (`previous_grade`) was rewritten. */
+  regradePreviousGrades: number;
 }
 
 /**
@@ -222,7 +224,10 @@ export interface RemapGradeEmojisResult {
  * grades, quiz adjustments (`QuizAttempt.adjusted_emoji` on the classroom's
  * quizzes, E17; who adjusted and when are kept, as a repo grade keeps its
  * grader) and the quiz regrade requests' resolution snapshots
- * (`RegradeRequest.resolved_emoji`). Refused, with nothing written, when a
+ * (`RegradeRequest.resolved_emoji`), and the grade every regrade request of
+ * the classroom asked about (`RegradeRequest.previous_grade`, each entry; repo
+ * and quiz requests, their target checked in the classroom like the
+ * snapshots'). Refused, with nothing written, when a
  * target is not on the scale or a source still is (only orphans are remapped).
  */
 export const remapGradeEmojis = async (
@@ -254,6 +259,7 @@ export const remapGradeEmojis = async (
       repoGrades: 0,
       quizAdjustments: 0,
       regradeSnapshots: 0,
+      regradePreviousGrades: 0,
     };
     for (const { oldEmoji, newEmoji } of mappings) {
       const grades = await tx.assignmentGrade.updateMany({
@@ -276,9 +282,32 @@ export const remapGradeEmojis = async (
         },
         data: { resolved_emoji: newEmoji },
       });
+      // An array column: Prisma's updateMany cannot rewrite its entries, so
+      // the ids are scoped here and the entries replaced in SQL.
+      const asked = await tx.regradeRequest.findMany({
+        where: {
+          classroom_id: classroomId,
+          previous_grade: { has: oldEmoji },
+          OR: [
+            { quiz_attempt: { quiz: { classroom_id: classroomId } } },
+            {
+              git_repo_assignment: {
+                assignment: { repository: { classroom_id: classroomId } },
+              },
+            },
+          ],
+        },
+        select: { id: true },
+      });
+      const askedIds = asked.map(r => r.id);
+      const previousGrades =
+        askedIds.length > 0
+          ? await tx.$executeRaw`UPDATE regrade_requests SET previous_grade = array_replace(previous_grade, ${oldEmoji}::text, ${newEmoji}::text) WHERE id = ANY(${askedIds}::text[])`
+          : 0;
       result.repoGrades += grades.count;
       result.quizAdjustments += adjustments.count;
       result.regradeSnapshots += snapshots.count;
+      result.regradePreviousGrades += previousGrades;
     }
     result.totalRemapped = result.repoGrades + result.quizAdjustments;
     return result;

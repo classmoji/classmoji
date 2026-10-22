@@ -120,8 +120,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       if (!mappings) {
         return { action: 'REMAP_ORPHANED_EMOJIS', error: 'Pick a new emoji for each grade.' };
       }
-      // Repo grades, quiz adjustments and quiz regrade snapshots, in the gate's
-      // classroom only, in one transaction (E17).
+      // Repo grades, quiz adjustments and the regrade requests' grades, in the
+      // gate's classroom only, in one transaction (E17).
       let result;
       try {
         result = await ClassmojiService.assignmentGrade.remapGradeEmojis(classroom.id, mappings);
@@ -143,6 +143,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           repo_grades: result.repoGrades,
           quiz_adjustments: result.quizAdjustments,
           regrade_snapshots: result.regradeSnapshots,
+          regrade_previous_grades: result.regradePreviousGrades,
           ...(await impersonationAuditFields(request)),
         },
         dedupe: false,

@@ -67,6 +67,7 @@ beforeEach(() => {
     repoGrades: 2,
     quizAdjustments: 1,
     regradeSnapshots: 1,
+    regradePreviousGrades: 2,
   });
 });
 
@@ -98,6 +99,7 @@ describe('remapOrphanedEmojis', () => {
         repo_grades: 2,
         quiz_adjustments: 1,
         regrade_snapshots: 1,
+        regrade_previous_grades: 2,
       },
       dedupe: false,
     });
