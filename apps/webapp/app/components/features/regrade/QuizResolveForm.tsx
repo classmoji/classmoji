@@ -22,8 +22,8 @@ export interface QuizResolveGrade {
   originalEmoji: string | null;
   effectiveEmoji: string | null;
   adjusted: boolean;
-  /** Whole hours late; 0 on time. */
-  lateHours: number;
+  /** Whole hours late; 0 on time; null when the quiz has no due date. */
+  lateHours: number | null;
   /** The current grade after the late penalty. */
   countedEmoji: string | null;
 }
@@ -47,8 +47,18 @@ export interface QuizResolveFormState {
   };
 }
 
-/** The form's state, fresh whenever `resetKey` (the request id) changes. */
-export const useQuizResolveForm = (resetKey: string | null | undefined): QuizResolveFormState => {
+/** Longest reply to the student (the server's `QUIZ_REGRADE_REPLY_MAX_LENGTH`). */
+export const QUIZ_RESOLVE_REPLY_MAX = 2000;
+
+/**
+ * The form's state, fresh whenever `resetKey` (the request id) changes.
+ * `currentEmoji` is the grade the attempt shows now: Adjust with it is a Keep
+ * (the server resolves it DENIED), so the button says "Keep score".
+ */
+export const useQuizResolveForm = (
+  resetKey: string | null | undefined,
+  currentEmoji: string | null = null
+): QuizResolveFormState => {
   const [remedy, setRemedy] = useState<QuizResolveRemedy>('adjust');
   const [emoji, setEmoji] = useState<string | null>(null);
   const [reply, setReply] = useState('');
@@ -59,6 +69,7 @@ export const useQuizResolveForm = (resetKey: string | null | undefined): QuizRes
     setReply('');
   }, [resetKey]);
 
+  const keepsScore = remedy === 'keep' || (Boolean(emoji) && emoji === currentEmoji);
   return {
     remedy,
     setRemedy,
@@ -66,8 +77,11 @@ export const useQuizResolveForm = (resetKey: string | null | undefined): QuizRes
     setEmoji,
     reply,
     setReply,
-    canSubmit: reply.trim().length > 0 && (remedy === 'keep' || Boolean(emoji)),
-    submitLabel: remedy === 'adjust' ? 'Adjust score' : 'Keep score',
+    canSubmit:
+      reply.trim().length > 0 &&
+      reply.trim().length <= QUIZ_RESOLVE_REPLY_MAX &&
+      (remedy === 'keep' || Boolean(emoji)),
+    submitLabel: keepsScore ? 'Keep score' : 'Adjust score',
     payload: () => ({
       resolution: remedy === 'adjust' ? 'APPROVED' : 'DENIED',
       emoji: remedy === 'adjust' ? emoji : null,
@@ -76,9 +90,11 @@ export const useQuizResolveForm = (resetKey: string | null | undefined): QuizRes
   };
 };
 
-const LateNote = ({ hours }: { hours: number }) => (
-  <span className="text-xs text-ink-3">{hours > 0 ? `${hours}h late` : 'On time'}</span>
-);
+/** "Nh late" / "On time"; nothing for a quiz with no due date (`hours` null). */
+const LateNote = ({ hours }: { hours: number | null }) =>
+  hours === null ? null : (
+    <span className="text-xs text-ink-3">{hours > 0 ? `${hours}h late` : 'On time'}</span>
+  );
 
 export function QuizResolveFields({
   form,
@@ -101,8 +117,10 @@ export function QuizResolveFields({
   /** The last submission's refusal, shown under the reply. */
   error?: string | null;
 }) {
-  const late = grade.lateHours;
+  const lateNote = grade.lateHours;
+  const late = lateNote ?? 0;
   const counted = countedFor(form.emoji);
+  const picksCurrent = Boolean(form.emoji) && form.emoji === grade.effectiveEmoji;
   const replyId = `${idPrefix}-reply`;
 
   return (
@@ -139,8 +157,17 @@ export function QuizResolveFields({
               value={form.emoji}
               onChange={form.setEmoji}
               disabled={disabled}
+              currentEmoji={grade.effectiveEmoji}
             />
           </span>
+          {picksCurrent && (
+            <>
+              <span />
+              <span data-testid="quiz-resolve-keeps" className="text-xs text-ink-3">
+                That is the current grade: picking it keeps the score.
+              </span>
+            </>
+          )}
           <span className="text-[13px] text-ink-3">Counted</span>
           <span data-testid="quiz-resolve-counted" className="inline-flex items-center gap-2">
             {counted ? (
@@ -148,7 +175,7 @@ export function QuizResolveFields({
             ) : (
               <span className="text-gray-400 dark:text-gray-500">—</span>
             )}
-            <LateNote hours={late} />
+            <LateNote hours={lateNote} />
           </span>
         </div>
       ) : (
@@ -161,7 +188,7 @@ export function QuizResolveFields({
               adjusted={grade.adjusted}
               size="md"
             />
-            {late === 0 && <LateNote hours={0} />}
+            {late === 0 && <LateNote hours={lateNote} />}
           </span>
           {late > 0 && (
             <>
@@ -186,7 +213,8 @@ export function QuizResolveFields({
           value={form.reply}
           onChange={e => form.setReply(e.target.value)}
           disabled={disabled}
-          maxLength={2000}
+          maxLength={QUIZ_RESOLVE_REPLY_MAX}
+          showCount
         />
       </div>
 

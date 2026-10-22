@@ -99,6 +99,7 @@ vi.mock('@classmoji/services', () => ({
     },
   },
   QuizGradeError,
+  QUIZ_REGRADE_REPLY_MAX_LENGTH: 2000,
   QuizAttemptNotFoundError: class extends Error {},
 }));
 vi.mock('~/hooks', () => ({
@@ -142,7 +143,10 @@ beforeEach(() => {
   mocks.findMany.mockImplementation(async (where: { id: string; classroom_id: string }) =>
     REQUESTS.filter(r => r.id === where.id && r.classroom_id === where.classroom_id)
   );
-  mocks.resolveQuiz.mockResolvedValue({ request: { id: 'req-x' }, alreadyResolved: false });
+  mocks.resolveQuiz.mockResolvedValue({
+    request: { id: 'req-x', status: 'APPROVED' },
+    alreadyResolved: false,
+  });
   mocks.trigger.mockResolvedValue({ id: 'run-1' });
   mocks.gate.mockImplementation(async (_request: Request, slug: string) => {
     const classroom = CLASSROOMS[slug];
@@ -180,6 +184,10 @@ describe('drawer resolve action — who may', () => {
   );
 
   it('keeps the score (DENIED) without an emoji', async () => {
+    mocks.resolveQuiz.mockResolvedValueOnce({
+      request: { id: 'req-x', status: 'DENIED' },
+      alreadyResolved: false,
+    });
     const result = asReply(
       await post('cs-x', 'quiz-x', 'att-x', resolve({ resolution: 'DENIED', emoji: null }))
     );

@@ -4,7 +4,7 @@ import Emoji from '~/components/ui/display/Emoji';
  * Pick one grade from the classroom's scale (emoji, or `score-N` badges on
  * the numeric scale), styled like the repo grading picker (`EmojiGrader`),
  * which submits a repo grade on click and so can't be reused here. Controlled:
- * it only reports the pick.
+ * it only reports the pick. The attempt's current grade is marked "current".
  */
 export interface QuizEmojiPickerProps {
   /** The scale's emoji, best first. */
@@ -12,6 +12,11 @@ export interface QuizEmojiPickerProps {
   value: string | null;
   onChange: (emoji: string) => void;
   disabled?: boolean;
+  /**
+   * The grade the attempt shows now, marked "current" in the picker: picking
+   * it keeps the score (the server writes no adjustment for it).
+   */
+  currentEmoji?: string | null;
 }
 
 export function QuizEmojiPicker({
@@ -19,6 +24,7 @@ export function QuizEmojiPicker({
   value,
   onChange,
   disabled = false,
+  currentEmoji = null,
 }: QuizEmojiPickerProps) {
   if (scaleEmojis.length === 0) {
     return (
@@ -36,20 +42,31 @@ export function QuizEmojiPicker({
     >
       {scaleEmojis.map(key => {
         const selected = key === value;
+        const current = key === currentEmoji;
         return (
           <button
             key={key}
             type="button"
             role="radio"
             aria-checked={selected}
+            aria-label={current ? `${key} (current grade)` : undefined}
+            title={current ? 'Current grade: picking it keeps the score' : undefined}
             disabled={disabled}
             data-testid={`quiz-emoji-option-${key}`}
             onClick={() => onChange(key)}
-            className={`cursor-pointer rounded-md px-2 py-1 transition-colors hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-neutral-700 ${
+            className={`flex cursor-pointer flex-col items-center rounded-md px-2 py-1 transition-colors hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-neutral-700 ${
               selected ? 'bg-amber-100 dark:bg-amber-500/25' : ''
             }`}
           >
             <Emoji emoji={key} fontSize={18} />
+            {current && (
+              <span
+                data-testid="quiz-emoji-current"
+                className="mt-0.5 text-[10px] leading-none text-gray-500 dark:text-gray-400"
+              >
+                current
+              </span>
+            )}
           </button>
         );
       })}

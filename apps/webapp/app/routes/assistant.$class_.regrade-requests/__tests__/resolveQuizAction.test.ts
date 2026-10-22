@@ -46,6 +46,7 @@ vi.mock('@classmoji/services', () => {
   }
   return {
     QuizGradeError,
+    QUIZ_REGRADE_REPLY_MAX_LENGTH: 2000,
     ClassmojiService: {
       regradeRequest: {
         findMany: (...a: unknown[]) => mocks.findMany(...a),
@@ -157,6 +158,13 @@ describe('quiz regrade resolve action', () => {
 
   it('lets a teacher keep the score (DENIED) without an emoji', async () => {
     signInAs('TEACHER');
+    mocks.resolveQuiz.mockResolvedValue({
+      request: { id: 'req-x', status: 'DENIED' },
+      alreadyResolved: false,
+      classroomId: 'class-x',
+      quiz: { id: 'quiz-1', name: 'Recursion check-in', assignmentTitle: null },
+      student: { id: 'student-1', email: 'ada@example.test', name: 'Ada' },
+    });
     const result = await call(adjust({ resolution: 'DENIED', emoji: undefined }));
 
     expect(mocks.resolveQuiz).toHaveBeenCalledWith(
@@ -192,6 +200,29 @@ describe('quiz regrade resolve action', () => {
       expect(result.data.error).toMatch(/reply/i);
     }
     expect(mocks.resolveQuiz).not.toHaveBeenCalled();
+  });
+
+  it('refuses a reply over 2000 characters before the service runs', async () => {
+    const result = (await call(adjust({ comment: 'x'.repeat(2001) }))) as DataResult;
+    expect(result.init?.status).toBe(400);
+    expect(result.data.error).toBe('The reply is longer than 2000 characters');
+    expect(mocks.resolveQuiz).not.toHaveBeenCalled();
+    // 2000 exactly goes through.
+    await call(adjust({ comment: 'y'.repeat(2000) }));
+    expect(mocks.resolveQuiz).toHaveBeenCalledTimes(1);
+  });
+
+  it('says "Score kept" when Adjust with the grade already shown was kept (stored DENIED)', async () => {
+    mocks.resolveQuiz.mockResolvedValue({
+      request: { id: 'req-x', status: 'DENIED' },
+      alreadyResolved: false,
+      classroomId: 'class-x',
+      quiz: { id: 'quiz-1', name: 'Recursion check-in', assignmentTitle: null },
+      student: { id: 'student-1', email: 'ada@example.test', name: 'Ada' },
+    });
+    const result = await call(adjust({ resolution: 'APPROVED', emoji: 'score-80' }));
+    expect(result).toMatchObject({ success: 'Score kept' });
+    expect(mocks.trigger).toHaveBeenCalledWith('quiz_regrade_resolved', { request_id: 'req-x' });
   });
 
   it('refuses Adjust score with no emoji, and an unknown resolution', async () => {

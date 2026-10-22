@@ -32,10 +32,15 @@ const ResolveQuizRegradeModal = ({
   const fetcher = useFetcher<{ success?: string; info?: string; error?: string }>();
   const { pathname } = useLocation();
   const callout = useCallout();
-  const form = useQuizResolveForm(request?.id);
+  const form = useQuizResolveForm(request?.id, request?.quiz?.effectiveEmoji ?? null);
   // The request the last submission was for, so an earlier request's error
   // never shows on the next one opened.
   const [submittedFor, setSubmittedFor] = useState<string | null>(null);
+
+  // Opening (or reopening) a request starts with no error from a past submission.
+  useEffect(() => {
+    setSubmittedFor(null);
+  }, [request?.id]);
 
   useEffect(() => {
     if (fetcher.state !== 'idle' || !fetcher.data || !submittedFor) return;
@@ -53,7 +58,9 @@ const ResolveQuizRegradeModal = ({
   }, [fetcher.state, fetcher.data]);
 
   const quiz = request?.quiz ?? null;
-  const late = quiz?.lateHours ?? 0;
+  // Null when the quiz has no due date: no "On time" note then.
+  const lateHours = quiz?.lateHours ?? null;
+  const late = lateHours ?? 0;
   const submitting = fetcher.state !== 'idle';
 
   const submit = () => {
@@ -119,7 +126,7 @@ const ResolveQuizRegradeModal = ({
               originalEmoji: quiz.originalEmoji,
               effectiveEmoji: quiz.effectiveEmoji,
               adjusted: quiz.adjusted,
-              lateHours: late,
+              lateHours,
               countedEmoji: quiz.countedEmoji ?? null,
             }}
             scaleEmojis={Object.keys(scale)}

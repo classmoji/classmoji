@@ -15,7 +15,11 @@
  */
 import { data } from 'react-router';
 import { tasks } from '@trigger.dev/sdk';
-import { ClassmojiService, QuizGradeError } from '@classmoji/services';
+import {
+  ClassmojiService,
+  QuizGradeError,
+  QUIZ_REGRADE_REPLY_MAX_LENGTH,
+} from '@classmoji/services';
 import { requireClassroomTeachingTeam } from '~/utils/routeAuth.server';
 import { mutationRefusal } from '~/utils/mutationRefusal.server';
 import { impersonatedBy } from '~/routes/admin.$class.ask-moji/impersonation.server';
@@ -83,6 +87,12 @@ export const resolveQuizRequest = async ({
     return data({ error: 'Pick Adjust score or Keep score' }, { status: 400 });
   }
   if (!comment) return data({ error: 'A reply to the student is required' }, { status: 400 });
+  if (comment.length > QUIZ_REGRADE_REPLY_MAX_LENGTH) {
+    return data(
+      { error: `The reply is longer than ${QUIZ_REGRADE_REPLY_MAX_LENGTH} characters` },
+      { status: 400 }
+    );
+  }
   if (resolution === 'APPROVED' && !emoji) {
     return data({ error: 'Pick the adjusted grade' }, { status: 400 });
   }
@@ -138,8 +148,9 @@ export const resolveQuizRequest = async ({
     console.error('[regrade-requests] quiz_regrade_resolved enqueue failed', { requestId, error });
   }
 
+  // The stored status: Adjust with the grade the attempt already shows is a Keep.
   return {
     action: 'RESOLVE_QUIZ_REGRADE',
-    success: resolution === 'APPROVED' ? 'Score adjusted' : 'Score kept',
+    success: result.request.status === 'APPROVED' ? 'Score adjusted' : 'Score kept',
   };
 };
