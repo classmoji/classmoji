@@ -11,81 +11,54 @@ import { ClassmojiService } from '@classmoji/services';
  * anything by hand, and both are safe to run again for the same push.
  *
  * ── Why a task rather than doing it in the webhook ─────────────────────────
- * A push webhook has to be answered fast, and a sync is one-to-many GitHub
- * calls plus a transaction. hook-station therefore does the cheap part —
- * decide the push is for a content repo, aggregate the changed paths — and
+ * A push webhook has to be answered fast, and a sync is a few GitHub calls
+ * plus a transaction. hook-station decides the push is for a content repo and
  * hands the work here.
  *
- * ── Idempotency ────────────────────────────────────────────────────────────
- * `syncContentAssets` is mark-and-sweep, not a diff: every row it writes
- * carries the same `synced_at` stamp, and a full run deletes whatever is left
- * below it. Running the same payload twice therefore lands on exactly the same
- * rows the first run produced. That matters because Trigger retries, and
- * because GitHub redelivers.
+ * ── What a run does ────────────────────────────────────────────────────────
+ * Reads the branch head (never the push's `after`: a later push may already
+ * have moved it, and the head is what the map should match), skips when the
+ * map is already level with it, else reads the whole tree and applies the
+ * diff. A redelivered push, a Trigger retry, or a push that a later run
+ * already covered all land on the same rows.
  */
 
-/**
- * A push that isn't a plain fast-forward, or one whose commit list GitHub
- * truncated, can't be trusted to name every changed path — so those escalate
- * to a full tree read rather than applying an incomplete diff.
- */
 interface ContentAssetsSyncPayload {
   classroomId: string;
   reason: 'push' | 'ttl' | 'manual' | 'bootstrap';
-  changes?: { added: string[]; modified: string[]; removed: string[] };
-  /** Non-fast-forward push (force-push, branch reset) → the diff is meaningless. */
-  forced?: boolean;
-  /** False when the push payload's `commits[]` was capped (GitHub sends at most 20). */
-  complete?: boolean;
-  /**
-   * The commit the push built on. A push whose parent is not the commit the map
-   * is level with means an earlier delivery was lost, and the sync escalates to
-   * a full tree read rather than applying a diff against a state it never had.
-   */
+  /** The commits the push spans; logged only — the run reads the branch head. */
   before?: string;
-  /** The commit the push landed — recorded as the map's new level. */
   after?: string;
 }
 
 export const contentAssetsSyncTask = task({
   id: 'content-assets-sync',
   // One blip left the asset map stale until the next push or the nightly
-  // sweep. Safe to repeat: mark-and-sweep with a compare-and-swap commit.
+  // sweep. Safe to repeat: the run reads the head and diffs.
   ...retryOnGitBlip,
   /**
-   * ONE sync per classroom at a time.
-   *
-   * The map is only self-correcting if the runs that build it are ordered.
-   * Two deliveries for one repo arriving together can apply their diffs in
-   * either order and record either `after` as "the commit the map is level
-   * with" — so the map's commit can move BACKWARDS, which hides the very gap
-   * `before` exists to expose. `concurrencyKey` (passed at trigger time, per
-   * classroom) gives each classroom its own copy of this queue, and the limit
-   * of 1 on that copy is what serializes them. Classrooms still run in
-   * parallel with each other.
-   *
-   * The queue is the fence, not the whole guarantee: a retry or a render-path
-   * `ensureContentAssets` still runs outside it, which is why the incremental
-   * commit write is also a compare-and-swap.
+   * ONE sync per classroom at a time. `concurrencyKey` (passed at trigger
+   * time, per classroom) gives each classroom its own copy of this queue, and
+   * the limit of 1 on that copy serializes them, so a burst of pushes reads
+   * the head one run at a time and the later runs skip as level. Classrooms
+   * still run in parallel with each other. A render-path `ensureContentAssets`
+   * runs outside the queue; the sync's stamp guards make that overlap safe.
    */
   queue: { concurrencyLimit: 1 },
   run: async (payload: ContentAssetsSyncPayload) => {
-    const { classroomId, reason, changes, forced, complete, before, after } = payload;
+    const { classroomId, reason, before, after } = payload;
 
-    // Three separate reasons the incremental path can't be used, all meaning
-    // the same thing: we do not have a trustworthy list of what changed.
-    const full = Boolean(forced) || complete === false || !changes;
-
+    // A push may skip when the map is already level with the head; a manual or
+    // bootstrap run is asked for on purpose and always reads the tree.
     const result = await ClassmojiService.contentAssets.syncContentAssets(classroomId, {
-      full,
-      changes,
-      before,
-      after,
+      force: reason !== 'push',
     });
 
     logger.info('Synced content assets', {
       classroomId,
       reason,
+      before,
+      after,
       mode: result.mode,
       upserted: result.upserted,
       deleted: result.deleted,

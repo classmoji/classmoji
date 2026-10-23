@@ -124,7 +124,7 @@ async function createPage({ request, params }: Route.ActionArgs, slot: { held: b
   const title = formData.get('title') as string;
 
   // Flat content path: pages/{slug}
-  const contentPath = ClassmojiService.page.pageContentPath(title);
+  const contentPath = await ClassmojiService.page.freePageContentPath(classroom.id, title);
 
   try {
     // Page HTML, converted to content.json by the service; undefined = blank page

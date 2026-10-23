@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const classroomFindUniqueMock = vi.fn();
 const pageCreateMock = vi.fn();
 const pageFindFirstMock = vi.fn();
+const pageFindManyMock = vi.fn();
 const pageFindUniqueMock = vi.fn();
 const pageDeleteMock = vi.fn();
 const repositoryFindFirstMock = vi.fn();
@@ -36,6 +37,7 @@ vi.mock('@classmoji/database', async () => ({
     page: {
       create: (...args: unknown[]) => pageCreateMock(...args),
       findFirst: (...args: unknown[]) => pageFindFirstMock(...args),
+      findMany: (...args: unknown[]) => pageFindManyMock(...args),
       findUnique: (...args: unknown[]) => pageFindUniqueMock(...args),
       delete: (...args: unknown[]) => pageDeleteMock(...args),
     },
@@ -145,6 +147,11 @@ describe('page.pageContentPath', () => {
     expect(pageContentPath('Hello World!')).toBe('pages/hello-world');
     expect(pageContentPath('  Lab 3: Pointers & Arrays ')).toBe('pages/lab-3-pointers-arrays');
   });
+
+  it('never returns the bare pages folder for a title with no slug characters', () => {
+    expect(pageContentPath('!!!')).toBe('pages/page');
+    expect(pageContentPath('第一课')).toBe('pages/page');
+  });
 });
 
 describe('page.createPage', () => {
@@ -171,6 +178,61 @@ describe('page.createPage', () => {
     deleteBranchMock.mockRejectedValue(
       Object.assign(new Error('Reference does not exist'), { status: 422 })
     );
+  });
+
+  describe('a title with no slug characters', () => {
+    const createdPaths = () =>
+      (uploadBatchMock.mock.calls[0][0] as { files: Array<{ path: string }> }).files.map(
+        f => f.path
+      );
+
+    it('takes pages/page when it is free', async () => {
+      pageFindManyMock.mockResolvedValue([]);
+
+      await createPage({ classroomId: 'class-1', title: '!!!', createdBy: 'user-1' });
+
+      expect(pageFindManyMock).toHaveBeenCalledWith({
+        where: { classroom_id: 'class-1', content_path: { startsWith: 'pages/page' } },
+        select: { content_path: true },
+      });
+      expect(createdPaths()).toEqual(['pages/page/index.html', 'pages/page/content.json']);
+      expect(pageCreateMock.mock.calls[0][0].data.content_path).toBe('pages/page');
+    });
+
+    it('takes the first free page-N in this classroom', async () => {
+      pageFindManyMock.mockResolvedValue([
+        { content_path: 'pages/page' },
+        { content_path: 'pages/page-2' },
+        { content_path: 'pages/pages-overview' },
+      ]);
+
+      await createPage({ classroomId: 'class-1', title: '第一课', createdBy: 'user-1' });
+
+      expect(createdPaths()).toEqual(['pages/page-3/index.html', 'pages/page-3/content.json']);
+      expect(pageCreateMock.mock.calls[0][0].data.content_path).toBe('pages/page-3');
+    });
+
+    it('keeps the path its files were placed under, and refuses it when taken', async () => {
+      pageFindFirstMock.mockResolvedValue({ id: 'page-0', title: '???' });
+
+      await expect(
+        createPage({
+          classroomId: 'class-1',
+          title: '!!!',
+          createdBy: 'user-1',
+          files: [{ path: 'pages/page/assets/a.png', content: 'AA==', encoding: 'base64' }],
+        })
+      ).rejects.toMatchObject({ code: 'PAGE_CONTENT_PATH_CONFLICT' });
+
+      expect(pageFindManyMock).not.toHaveBeenCalled();
+      expect(uploadBatchMock).not.toHaveBeenCalled();
+    });
+
+    it('does not look for a free name when the title has a slug', async () => {
+      await createPage({ classroomId: 'class-1', title: 'Week 1', createdBy: 'user-1' });
+
+      expect(pageFindManyMock).not.toHaveBeenCalled();
+    });
   });
 
   it('blank flow: index.html + blank content.json in ONE uploadBatch + DB row + manifest refresh', async () => {

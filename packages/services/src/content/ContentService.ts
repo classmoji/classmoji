@@ -986,7 +986,8 @@ export class ContentService {
    *   sent (never updates), and GitHub's 422 "file exists" rejection is mapped
    *   to a 409 so callers can treat it as an existence race. Mutually
    *   exclusive with expectedSha.
-   * @returns {Promise<{ sha: string, commit: string }>}
+   * @returns {Promise<{ sha: string, commit: string, treeSha?: string }>} — `treeSha`
+   *   is the new commit's root tree (GitHub only; undefined on GitLab)
    * @throws {Error} 409 Conflict if expectedSha doesn't match, if the file was
    *   deleted since it was read (expectedSha given but file missing), or if a
    *   createOnly write finds the file already exists
@@ -1011,7 +1012,7 @@ export class ContentService {
     branch?: string;
     message?: string;
     createOnly?: boolean;
-  }): Promise<{ sha: string; commit: string }> {
+  }): Promise<{ sha: string; commit: string; treeSha?: string }> {
     const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin, repo);
 
     if (createOnly && expectedSha) {
@@ -1139,6 +1140,9 @@ export class ContentService {
     return {
       sha: data.content.sha,
       commit: data.commit.sha,
+      // The new commit's ROOT tree — lets a caller resolve folder tree shas at
+      // this commit by sha (`recordFolderTreesAfterCommit`). GitLab has none.
+      treeSha: data.commit.tree?.sha,
     };
   }
 
@@ -1819,6 +1823,8 @@ export class ContentService {
     allowRootCommit?: boolean;
   }): Promise<{
     commit: string;
+    /** The new commit's root tree (GitHub only). */
+    treeSha?: string;
     filesUploaded: number;
     files: Array<{ path: string; sha: string }>;
   }> {
@@ -2012,6 +2018,7 @@ export class ContentService {
 
       return {
         commit: newCommit.sha,
+        treeSha: treeData.sha,
         filesUploaded: files.length,
         files: blobResults.map(({ path, sha }) => ({ path, sha })),
       };
