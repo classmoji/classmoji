@@ -30,7 +30,10 @@ class StripeService {
       // for; `customer_update` saves that address on the existing customer,
       // which Stripe requires before it will calculate tax for one.
       automatic_tax: { enabled: true },
-      customer_update: { address: 'auto' },
+      // A university or business that enters its VAT number pays VAT itself
+      // (reverse charge); `name` saves the business name that comes with it.
+      tax_id_collection: { enabled: true },
+      customer_update: { address: 'auto', name: 'auto' },
       success_url: `${process.env.WEBAPP_URL}/settings/billing?success=true&session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${process.env.WEBAPP_URL}/settings/billing?canceled=true`,
       metadata: {
