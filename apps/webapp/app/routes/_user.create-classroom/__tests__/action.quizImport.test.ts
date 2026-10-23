@@ -51,6 +51,12 @@ vi.mock('~/utils/aiFeatures.server', () => ({
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     user: { findById: (...a: unknown[]) => mocks.findById(...a) },
+    // The Free plan's one-active-class rule has its own tests; here there is room.
+    classroomLifecycle: {
+      allowanceFor: vi.fn(async () => ({ limit: 1, active: [], canCreate: true })),
+      assertCanCreateActive: vi.fn(async () => {}),
+      isActiveClassroomLimitError: () => false,
+    },
     entitlement: { quizzesVisible: (...a: unknown[]) => mocks.quizzesVisible(...a) },
     classroomConfigImport: {
       importClassroomConfig: (...a: unknown[]) => mocks.importClassroomConfig(...a),

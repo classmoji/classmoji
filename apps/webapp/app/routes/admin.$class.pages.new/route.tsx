@@ -29,11 +29,12 @@ import BatchImportTab from './BatchImportTab';
 import { useRouteDrawer } from '~/hooks';
 import type { Route } from './+types/route';
 import { classroomForClient } from '~/utils/classroomForClient';
+import ContentLimitModal from '~/components/features/plan/ContentLimitModal';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
 
-  const { classroom } = await assertClassroomAccess({
+  const { classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug!,
     allowedRoles: ['OWNER', 'TEACHER'],
@@ -41,8 +42,21 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     attemptedAction: 'create_page',
   });
 
+  // At the Free plan's page limit the form is not shown at all: the page says
+  // so up front instead of refusing after it was filled in.
+  const { limit, remaining } = await ClassmojiService.planLimits.contentAllowance(
+    classroom.id,
+    'pages'
+  );
+  const limitMessage =
+    limit !== null && remaining === 0
+      ? ClassmojiService.planLimits.contentLimitMessage('pages', limit)
+      : null;
+
   // Include slug for navigation and gitOrgLogin for API calls
   return {
+    limitMessage,
+    canUpgrade: membership?.role === 'OWNER',
     classroom: {
       ...classroomForClient(classroom),
       slug: classroom.slug, // For navigation URLs
@@ -287,7 +301,25 @@ interface BatchPage {
   imageFiles: File[];
 }
 
-export default function NewPage({ loaderData }: Route.ComponentProps) {
+export default function NewPage(props: Route.ComponentProps) {
+  return props.loaderData.limitMessage ? (
+    <PageLimitReached
+      message={props.loaderData.limitMessage}
+      canUpgrade={props.loaderData.canUpgrade}
+    />
+  ) : (
+    <NewPageForm {...props} />
+  );
+}
+
+function PageLimitReached({ message, canUpgrade }: { message: string; canUpgrade: boolean }) {
+  const { opened, close } = useRouteDrawer({});
+  return (
+    <ContentLimitModal open={opened} message={message} canUpgrade={canUpgrade} onClose={close} />
+  );
+}
+
+function NewPageForm({ loaderData }: Route.ComponentProps) {
   const { classroom } = loaderData;
   const fetcher = useFetcher();
   const navigate = useNavigate();

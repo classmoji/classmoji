@@ -60,6 +60,7 @@ const {
   requestSession,
   THINKING_LINE,
 } = await import('../QuizChat');
+const { QuizResultProvider } = await import('../QuizResultContext');
 
 const msg = (id: string, role: 'user' | 'assistant', parts: unknown[], metadata?: unknown) =>
   ({ id, role, parts, ...(metadata ? { metadata } : {}) }) as unknown as QuizUIMessage;
@@ -337,7 +338,9 @@ describe('QuizTranscript — parts', () => {
         expect(html).toContain('data-testid="quiz-results"');
         expect(html).toContain('Quiz Evaluation: GOOD');
         expect(html).toContain('Solid grasp of layout.');
-        expect(html).toContain('77.5%');
+        // The grade is never a number (E1, E3): the band, and the emoji the drawer supplies.
+        expect(html).not.toContain('77.5');
+        expect(html).toContain('data-testid="quiz-grade-hero"');
         expect(html).toContain('Spot on.');
       });
 
@@ -354,7 +357,7 @@ describe('QuizTranscript — parts', () => {
         ]);
         expect(html).toContain('Quiz Evaluation: NEEDS WORK');
         expect(html).not.toContain('Quiz Results');
-        expect(html).toContain('77.5%');
+        expect(html).not.toContain('77.5');
         expect(html).not.toContain('Summary');
         expect(html).not.toContain('Strengths');
       });
@@ -369,13 +372,13 @@ describe('QuizTranscript — parts', () => {
       });
 
       it('prefers the stored record and renders the panel once', () => {
-        const stored = { ...RECORD, partial_credit_percentage: 88 };
+        const stored = { ...RECORD, evaluation: 'EXCELLENT', numeric_score: 4 };
         const html = renderTranscript(
           [msg('a1', 'assistant', [{ type: 'data-evaluation', data: RECORD }])],
           { evaluationRecord: stored as never, status: 'complete' }
         );
-        expect(html).toContain('88%');
-        expect(html).not.toContain('77.5%');
+        expect(html).toContain('Quiz Evaluation: EXCELLENT');
+        expect(html).not.toContain('Quiz Evaluation: GOOD');
         expect(html.match(/data-testid="quiz-results"/g)).toHaveLength(1);
       });
 
@@ -487,6 +490,54 @@ describe('QuizTranscript — parts', () => {
         expect(closing).toBeGreaterThan(html.indexOf('Question 1 of 8'));
         expect(closing).toBeLessThan(html.indexOf('data-testid="quiz-results"'));
         expect(html).toContain('Nice work.');
+      });
+
+      it("shows the drawer's blocks on a completed attempt with no record at all, once", () => {
+        const slots = {
+          grade: null,
+          beforeResults: <div data-testid="staff-adjust-panel" />,
+        };
+        const none = renderToStaticMarkup(
+          <QuizResultProvider value={slots}>
+            <QuizTranscript
+              messages={[msg('a1', 'assistant', [questionPart])]}
+              status="complete"
+              busy={false}
+              isDarkMode={darkMode}
+            />
+          </QuizResultProvider>
+        );
+        expect(none).not.toContain('data-testid="quiz-results"');
+        expect(none).toContain('data-testid="quiz-result-slots-fallback"');
+        expect(none.match(/data-testid="staff-adjust-panel"/g)).toHaveLength(1);
+
+        // With a results card, the blocks are inside it and not repeated.
+        const card = renderToStaticMarkup(
+          <QuizResultProvider value={slots}>
+            <QuizTranscript
+              messages={[msg('a1', 'assistant', [{ type: 'data-evaluation', data: RECORD }])]}
+              status="complete"
+              busy={false}
+              isDarkMode={darkMode}
+            />
+          </QuizResultProvider>
+        );
+        expect(card).toContain('data-testid="quiz-results"');
+        expect(card).not.toContain('quiz-result-slots-fallback');
+        expect(card.match(/data-testid="staff-adjust-panel"/g)).toHaveLength(1);
+
+        // Not on an attempt still running.
+        const running = renderToStaticMarkup(
+          <QuizResultProvider value={slots}>
+            <QuizTranscript
+              messages={[msg('a1', 'assistant', [questionPart])]}
+              status="ready"
+              busy={false}
+              isDarkMode={darkMode}
+            />
+          </QuizResultProvider>
+        );
+        expect(running).not.toContain('staff-adjust-panel');
       });
 
       it('counts each question in attempts, as the legacy results did', () => {

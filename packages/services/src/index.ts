@@ -83,6 +83,10 @@ export type {
   MediaUsage,
 } from './media/index.ts';
 
+// The Free plan's one-active-class rule: the shape of a plan owner's counted
+// classes, for the pages that offer "Archive X and continue".
+export type { ActiveClassroomSummary } from './classmoji/planOwner.service.ts';
+
 // Git provider abstraction layer
 export {
   GitProvider,
@@ -237,6 +241,27 @@ export {
   QuizAttemptNotFoundError,
   QuizAttemptIncompleteError,
 } from './classmoji/quizAttempt.service.ts';
+// A refused quiz grade adjustment or quiz regrade action (`code`, `status`).
+export {
+  QuizGradeError,
+  QUIZ_GRADE_COMMENT_MAX_LENGTH,
+  QUIZZES_UNAVAILABLE_MESSAGE,
+} from './classmoji/quizGradeAdjust.service.ts';
+export type {
+  QuizGradeErrorCode,
+  QuizGradeActor,
+  QuizAdjustResult,
+  QuizAttemptAdjustment,
+  AdjustQuizAttemptInput,
+  RevertQuizAttemptInput,
+} from './classmoji/quizGradeAdjust.service.ts';
+export { QUIZ_REGRADE_REPLY_MAX_LENGTH } from './classmoji/regradeRequest.service.ts';
+export type {
+  CreateQuizRegradeInput,
+  CreateQuizRegradeResult,
+  ResolveQuizRegradeInput,
+  ResolveQuizRegradeResult,
+} from './classmoji/regradeRequest.service.ts';
 // One builder for the remove_user_from_organization payload, so every caller
 // sends the same fields.
 export { buildRemoveUserPayload } from './classmoji/removeUserPayload.ts';

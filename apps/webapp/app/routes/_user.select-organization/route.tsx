@@ -4,6 +4,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Modal, Button as AntdButton } from 'antd';
 import { Button, IconGithub, IconX, useCallout } from '@classmoji/ui-components';
 import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
+import ActiveClassLimitNotice, {
+  isOverActiveClassLimit,
+} from '~/components/features/plan/ActiveClassLimitNotice';
 
 import { useUser, useDisclosure } from '~/hooks';
 import { getAuthSession } from '@classmoji/auth/server';
@@ -191,6 +194,8 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
           where: { id: { in: pendingGitLab.map(m => m.id) } },
           data: { has_accepted_invite: true },
         });
+        // An owner invitation among them may fill a classroom with no plan owner.
+        await ClassmojiService.planOwner.onOwnerAccepted(typedUser.id);
         for (const gitOrganizationId of new Set(pendingGitLab.map(m => m.classroom.git_org_id))) {
           await tasks.trigger('activate_membership', { login: gitlabUsername, gitOrganizationId });
         }
@@ -266,7 +271,12 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       return { needsGithub: true as const, linkError };
     }
 
+    // The viewer's own Free-plan allowance, for the over-limit notice. Their
+    // own classes only; empty for a Pro user.
+    const allowance = await ClassmojiService.classroomLifecycle.allowanceFor(typedUser.id);
+
     return {
+      activeClassAllowance: { limit: allowance.limit, active: allowance.active },
       // The signed-in user comes from the root loader (useUser), not from here:
       // the service user carries whole membership and organization rows.
       gitMode,
@@ -643,10 +653,17 @@ const SelectOrganization = ({
     </div>
   ) : null;
 
+  const allowance = 'activeClassAllowance' in loaderData ? loaderData.activeClassAllowance : null;
+  const limitNotice =
+    allowance && isOverActiveClassLimit(allowance) ? (
+      <ActiveClassLimitNotice allowance={allowance} />
+    ) : null;
+
   const notice =
-    joinFailureBanner || connectNotice ? (
+    joinFailureBanner || connectNotice || limitNotice ? (
       <div className="flex flex-col gap-2">
         {joinFailureBanner}
+        {limitNotice}
         {connectNotice}
       </div>
     ) : null;

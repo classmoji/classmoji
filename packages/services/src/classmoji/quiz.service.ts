@@ -1,7 +1,9 @@
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import {
   countingQuizAttempt,
+  effectivePercentage,
   isClosed,
+  quizAttemptGrade,
   isReleased,
   mirroredQuizStatus,
   mirroredQuizWeight,
@@ -10,6 +12,7 @@ import {
 import { normalizeExcludedPaths } from '@classmoji/utils/quiz-excluded-paths';
 import type { Prisma, QuizGradingStrategy, QuizStatus, Role } from '@prisma/client';
 import * as assignmentService from './assignment.service.ts';
+import { findScaleByClassroomId } from './emojiMapping.service.ts';
 import {
   MODULE_REQUIRED_MESSAGE,
   QUIZ_ASSIGNMENT_SELECT,
@@ -751,7 +754,39 @@ export const getQuizzesByOrganization = async (
     throw new QuizAccessError('classroom_mismatch', 'Membership does not match classroom');
   }
 
-  const quizzes = await getPrisma().quiz.findMany({
+  const [quizzes, emojiScale] = await Promise.all([
+    getQuizzesWithAttempts(classroomId),
+    // What an adjusted attempt's emoji is worth.
+    findScaleByClassroomId(classroomId),
+  ]);
+
+  // Calculate statistics for each quiz (effective scores: a staff adjustment
+  // replaces the AI's score).
+  return withLogins(quizzes).map(({ page_links, slide_links, ...quiz }) => {
+    const scores = quiz.attempts
+      .filter(a => a.completed_at !== null)
+      .map(a => effectivePercentage(a, emojiScale))
+      .filter((value): value is number => value !== null);
+    const avgScore =
+      scores.length > 0 ? scores.reduce((sum, value) => sum + value, 0) / scores.length : null;
+
+    return {
+      ...quiz,
+      // Staff list: drafts included, flagged by is_draft.
+      source_material: sourceMaterialOf({
+        classroom_id: quiz.classroom_id,
+        page_links,
+        slide_links,
+      }),
+      attemptsCount: quiz._count.attempts,
+      avgScore: avgScore !== null ? Math.round(avgScore) : null,
+    };
+  });
+};
+
+/** Every quiz of a classroom with its attempts, for the staff list. */
+const getQuizzesWithAttempts = (classroomId: string) =>
+  getPrisma().quiz.findMany({
     where: { classroom_id: classroomId },
     include: {
       repository: true,
@@ -783,31 +818,6 @@ export const getQuizzesByOrganization = async (
     orderBy: { created_at: 'desc' },
   });
 
-  // Calculate statistics for each quiz
-  return withLogins(quizzes).map(({ page_links, slide_links, ...quiz }) => {
-    const completedAttempts = quiz.attempts.filter(
-      a => a.completed_at !== null && a.partial_credit_percentage !== null
-    );
-    const avgScore =
-      completedAttempts.length > 0
-        ? completedAttempts.reduce((sum, a) => sum + (a.partial_credit_percentage || 0), 0) /
-          completedAttempts.length
-        : null;
-
-    return {
-      ...quiz,
-      // Staff list: drafts included, flagged by is_draft.
-      source_material: sourceMaterialOf({
-        classroom_id: quiz.classroom_id,
-        page_links,
-        slide_links,
-      }),
-      attemptsCount: quiz._count.attempts,
-      avgScore: avgScore !== null ? Math.round(avgScore) : null,
-    };
-  });
-};
-
 /**
  * The attempt columns the student quiz list reads (its table, tab filters and
  * focus metrics) and the scoring below needs. Selected rather than spread:
@@ -828,6 +838,13 @@ const STUDENT_ATTEMPT_SELECT = {
   first_attempt_percentage: true,
   total_duration_ms: true,
   unfocused_duration_ms: true,
+  // The student's own staff adjustment and comment: the score that counts,
+  // the comment, and who wrote the comment and when (name only).
+  adjusted_emoji: true,
+  instructor_comment: true,
+  adjusted_at: true,
+  comment_at: true,
+  comment_by: { select: { name: true } },
 } as const;
 
 /**
@@ -876,6 +893,8 @@ export const getQuizzesForStudent = async (
   }
 
   const now = new Date();
+  // What an adjusted attempt's emoji is worth, and the emoji the list shows.
+  const emojiScalePromise = findScaleByClassroomId(classroomId);
   const listed = await getPrisma().quiz.findMany({
     where: {
       classroom_id: classroomId,
@@ -922,6 +941,7 @@ export const getQuizzesForStudent = async (
   const closedOf = (quiz: { status: QuizStatus; assignment: { closes_at: Date | null } | null }) =>
     quiz.assignment ? isClosed(quiz.assignment.closes_at, now) : quiz.status === 'CLOSED';
   const quizzes = includeClosed ? listed : listed.filter(quiz => !closedOf(quiz));
+  const emojiScale = await emojiScalePromise;
 
   // Add attempt metadata for each quiz
   return quizzes.map(({ page_links, slide_links, ...quiz }) => {
@@ -958,10 +978,11 @@ export const getQuizzesForStudent = async (
         focusMetrics = { totalMs, unfocusedMs, focusedMs, percentage };
       }
 
-      const partialCreditScore =
-        typeof attempt.partial_credit_percentage === 'number'
-          ? attempt.partial_credit_percentage
-          : null;
+      // The effective score (a staff adjustment when there is one) and both
+      // faces of it as the classroom's emoji; the AI's own score stays on
+      // `partial_credit_percentage`.
+      const grade = quizAttemptGrade(attempt, emojiScale);
+      const partialCreditScore = grade.effective.percentage;
       const firstAttemptScore =
         typeof attempt.first_attempt_percentage === 'number'
           ? attempt.first_attempt_percentage
@@ -974,6 +995,10 @@ export const getQuizzesForStudent = async (
         focusMetrics,
         partialCreditScore,
         firstAttemptScore,
+        scoreEmoji: grade.effective.emoji,
+        originalScoreEmoji: grade.original.emoji,
+        adjusted: grade.adjusted,
+        band: grade.effective.band,
       };
     });
 
@@ -987,7 +1012,7 @@ export const getQuizzesForStudent = async (
 
     // The shared selector (@classmoji/utils quizScore), so this list, the
     // results page, the gradebook and the Assignments page agree.
-    const counting = countingQuizAttempt(baseAttempts, quiz.grading_strategy);
+    const counting = countingQuizAttempt(baseAttempts, quiz.grading_strategy, emojiScale);
     const countingAttemptId = counting?.id ?? null;
     const currentScore = counting?.partialCreditScore ?? null;
 

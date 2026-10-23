@@ -1443,7 +1443,7 @@ describe('resource tiers', () => {
     expect(rows.length).toBeGreaterThan(0);
   });
 
-  it('regrade queues: staff queue exposes grader_comment, student view strips it', async () => {
+  it('regrade queues: staff queue and the student view both carry grader_comment (the staff reply)', async () => {
     const queue = await readResource(ta, `classmoji://${DEV_REF}/regrade-requests`);
     expect(queue.error).toBeUndefined();
     const staffRows = queue.payload!.requests as Array<Record<string, unknown>>;
@@ -1458,7 +1458,8 @@ describe('resource tiers', () => {
     const myRows = mine.payload!.requests as Array<Record<string, unknown>>;
     expect(myRows.length).toBeGreaterThan(0); // seeded APPROVED request
     for (const row of myRows) {
-      expect(row).not.toHaveProperty('grader_comment');
+      // The staff reply is the student's to read (null until one is written).
+      expect(row).toHaveProperty('grader_comment');
       expect(row).toHaveProperty('student_comment');
     }
 

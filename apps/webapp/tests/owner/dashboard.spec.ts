@@ -125,7 +125,7 @@ test.describe('Owner Dashboard Navigation', () => {
     // tier (and the demo classroom), so it is correctly absent for the standard
     // seed classroom. Quiz functionality is covered by quizzes/crud.spec.
     await expect(nav.getByRole('link', { name: 'Grades' })).toBeVisible();
-    await expect(nav.getByRole('link', { name: 'Resubmits' })).toBeVisible();
+    await expect(nav.getByRole('link', { name: 'Regrade/Resubmit' })).toBeVisible();
     await expect(nav.getByRole('link', { name: 'Tokens' })).toBeVisible();
     await expect(nav.getByRole('link', { name: 'Students' })).toBeVisible();
     await expect(nav.getByRole('link', { name: 'Teams' })).toBeVisible();

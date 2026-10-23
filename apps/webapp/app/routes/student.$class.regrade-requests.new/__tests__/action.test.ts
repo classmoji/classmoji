@@ -81,7 +81,7 @@ describe('regrade-requests.new action — request_regrade payload contract', () 
     expect(payload.student_id).toBe('student-1'); // authenticated user, never the body
     expect(payload.previous_grade).toEqual([':x:', ':white_check_mark:']);
     expect(waitMock).toHaveBeenCalledWith('run-1');
-    expect(result).toMatchObject({ success: 'Regrade request submitted' });
+    expect(result).toMatchObject({ success: 'Regrade/resubmit request submitted' });
   });
 
   it('rejects submissions that belong to another student (IDOR guard)', async () => {

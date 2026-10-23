@@ -169,6 +169,10 @@ export const slideCreateTool: ToolDefinition<SlideCreateArgs> = {
         sha_source: 'deck',
       });
     } catch (error) {
+      // The free plan's slide limit: the same sentence the web shows.
+      if (hasErrorCode(error, 'PLAN_CONTENT_LIMIT')) {
+        throw new ToolError('forbidden', (error as Error).message);
+      }
       if (hasErrorCode(error, slideService.SLIDE_CONTENT_PATH_CONFLICT)) {
         throw new ToolError('invalid_params', (error as Error).message);
       }

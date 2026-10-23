@@ -93,7 +93,7 @@ function mapStaffError(error: unknown): unknown {
     case 'last_owner':
       return new ToolError(
         'invalid_params',
-        'This is the only owner of the classroom — add another owner before removing this one'
+        'This is the only owner who has accepted. Another owner has to accept before this one can be removed'
       );
     case 'grader_flag_invalid':
       return new ToolError(
@@ -468,6 +468,7 @@ export const staffRemoveTool: StaffRemoveTool = {
         role: parsed.data.role,
         ungradedSubmissions: choiceArg,
         requireChoice: true,
+        actorUserId: ctx.viewer.userId,
       });
     } catch (error) {
       // The follow-up to a removal that could not finish settling: the role is

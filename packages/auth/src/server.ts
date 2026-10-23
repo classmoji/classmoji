@@ -1414,6 +1414,7 @@ export * from './predicates.ts';
 import {
   canEnterClassroom,
   canMutateClassroom,
+  CLASSROOM_STATUS_MESSAGES,
   type ClassroomStatusError,
   type ClassroomStatusInput,
 } from './predicates.ts';
@@ -1437,7 +1438,7 @@ export function assertClassroomEntryAllowed(input: ClassroomStatusInput): void {
   if (canEnterClassroom(input)) return;
   throw statusErrorResponse(
     'CLASSROOM_UNPUBLISHED',
-    'This class has been unpublished by the owner.'
+    CLASSROOM_STATUS_MESSAGES.CLASSROOM_UNPUBLISHED
   );
 }
 
@@ -1445,14 +1446,11 @@ export function assertClassroomEntryAllowed(input: ClassroomStatusInput): void {
 export function assertClassroomMutationAllowed(args: ClassroomStatusInput): void {
   if (canMutateClassroom(args)) return;
   if (args.status === 'LOCKED') {
-    throw statusErrorResponse(
-      'CLASSROOM_LOCKED',
-      'This class is in read-only mode. The owner has locked it.'
-    );
+    throw statusErrorResponse('CLASSROOM_LOCKED', CLASSROOM_STATUS_MESSAGES.CLASSROOM_LOCKED);
   }
   throw statusErrorResponse(
     'CLASSROOM_UNPUBLISHED',
-    'This class has been unpublished by the owner.'
+    CLASSROOM_STATUS_MESSAGES.CLASSROOM_UNPUBLISHED
   );
 }
 

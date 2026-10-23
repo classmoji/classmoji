@@ -430,6 +430,7 @@ describe.skipIf(!RUN)('expired chat attempts (integration)', () => {
       countingQuizScore([row], 'HIGHEST', {
         studentDeadline: due,
         latePenaltyPerHour: PENALTY_PER_HOUR,
+        emojiScale: {},
       });
 
     it('is not late when the student was last active before the due date', async () => {

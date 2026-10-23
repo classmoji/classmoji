@@ -1,12 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { GITLAB_ANTD_BUTTON, GITLAB_BUTTON_LOGO } from '~/components/ui/gitlabButton';
 import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
 import { useNavigate, useSearchParams } from 'react-router';
-import { Alert, Button, Card, Form, Input, Select } from 'antd';
+import { Alert, Button, Card, Form, Input, Select, message } from 'antd';
 
 import { useGlobalFetcher } from '~/hooks';
 import { ActionTypes } from '~/constants';
 import { browserTimeZone } from '~/utils/browserTimeZone';
+import ActiveClassLimitModal from '~/components/features/plan/ActiveClassLimitModal';
+import type { ActiveClassLimitData } from '~/components/features/plan/ActiveClassLimitModal';
 import { slugify } from './utils';
 import StepImportModules from './StepImportModules';
 import type { GitLabOptions } from './gitlabOptions.server';
@@ -76,13 +78,17 @@ const GitLabClassroomForm = ({
   });
 
   const outcome = CONNECT_OUTCOMES[searchParams.get('gitlab') ?? ''];
-  const data = fetcher!.data as { classroomSlug?: string; error?: string } | undefined;
+  const data = fetcher!.data as
+    | { classroomSlug?: string; error?: string; activation_warning?: string | null }
+    | undefined;
   const submitting = fetcher!.state !== 'idle';
   const group = gitlab.groups.find(g => g.id === groupId);
   const slug = slugify(name);
 
   useEffect(() => {
-    if (data?.classroomSlug) navigate(`/admin/${data.classroomSlug}/dashboard`);
+    if (!data?.classroomSlug) return;
+    if (data.activation_warning) message.warning(data.activation_warning, 10);
+    navigate(`/admin/${data.classroomSlug}/dashboard`);
   }, [data, navigate]);
 
   const submit = () => {
@@ -100,21 +106,39 @@ const GitLabClassroomForm = ({
         content: { pages, slides, modules, duplicateTemplates },
       };
     }
+    send({
+      intent: 'create-gitlab',
+      group_id: groupId,
+      name,
+      timezone: browserTimeZone(),
+      importConfig,
+    });
+  };
+
+  // The last create request, so "Archive X and continue" can send it again.
+  const lastSubmission = useRef<Record<string, unknown> | null>(null);
+  const send = (submission: Record<string, unknown>) => {
+    lastSubmission.current = submission;
     notify(ActionTypes.CREATE_CLASSROOM, 'Creating classroom...');
-    fetcher!.submit(
-      {
-        intent: 'create-gitlab',
-        group_id: groupId,
-        name,
-        timezone: browserTimeZone(),
-        importConfig,
-      },
-      { method: 'post', action: '/create-classroom', encType: 'application/json' }
-    );
+    // The typed payload serializes cleanly but is not structurally a React
+    // Router `JsonValue`.
+    fetcher!.submit(submission as unknown as Parameters<NonNullable<typeof fetcher>['submit']>[0], {
+      method: 'post',
+      action: '/create-classroom',
+      encType: 'application/json',
+    });
+  };
+  const archiveAndContinue = (classroomId: string) => {
+    if (lastSubmission.current)
+      send({ ...lastSubmission.current, archiveClassroomId: classroomId });
   };
 
   return (
     <div className="max-w-2xl mx-auto">
+      <ActiveClassLimitModal
+        data={data as ActiveClassLimitData | undefined}
+        onArchiveAndContinue={archiveAndContinue}
+      />
       <h1 className="text-xl font-semibold mb-6 dark:text-gray-100">Create New Classroom</h1>
       {providerSwitch}
 

@@ -11,6 +11,7 @@ import {
 import { indexOneFile } from './contentIndex.service.ts';
 import * as contentManifestService from './contentManifest.service.ts';
 import * as notificationService from './notification.service.ts';
+import { assertCanCreateContent } from './planLimits.ts';
 import {
   blankPageContentJson,
   preparePageContent,
@@ -179,6 +180,8 @@ export async function create(values: Prisma.PageUncheckedCreateInput) {
   // `slug` is likewise never taken from the caller: it is derived here so every
   // creation path (web, import, MCP) produces the same address for a title.
   const { id: _id, slug: _slug, ...safeValues } = values;
+
+  await assertCanCreateContent(safeValues.classroom_id, 'pages');
 
   const data = {
     classroom_id: safeValues.classroom_id,
@@ -446,6 +449,11 @@ export async function createPage({
   ensureRepo?: boolean;
   commitMessage?: string;
 }) {
+  // Before any Github write, so a refused page leaves nothing in the repo.
+  // create() checks again at the insert; that is the guard for callers that
+  // skip this function.
+  await assertCanCreateContent(classroomId, 'pages');
+
   const ctx = await resolveContentRepo(classroomId);
 
   const contentPath = pageContentPath(title);

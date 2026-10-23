@@ -1,4 +1,4 @@
-import { Modal, Radio, Button } from 'antd';
+import { Modal, Radio, Button, message } from 'antd';
 import { SettingSection } from '~/components';
 
 type Status = 'ACTIVE' | 'LOCKED' | 'UNPUBLISHED';
@@ -29,11 +29,18 @@ const STATUS_OPTIONS: { value: Status; label: string; desc: string }[] = [
 
 const StatusSection = ({ classroomId, status, isArchived }: StatusSectionProps) => {
   const setStatus = async (next: Status) => {
-    await fetch(`/api/classrooms/${classroomId}/status`, {
+    const response = await fetch(`/api/classrooms/${classroomId}/status`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: next }),
     });
+    if (!response.ok) {
+      // Making a class Active again can be refused by the Free plan's
+      // one-active-class rule; the server says why.
+      const body = (await response.json().catch(() => null)) as { error?: string } | null;
+      message.error(body?.error ?? 'Could not change the class status.');
+      return;
+    }
     window.location.reload();
   };
 
@@ -41,7 +48,7 @@ const StatusSection = ({ classroomId, status, isArchived }: StatusSectionProps) 
     Modal.confirm({
       title: next ? 'Archive class?' : 'Unarchive class?',
       content: next
-        ? 'The class will be moved to the Archived section on the landing page. Access is not changed.'
+        ? 'The class will be moved to the Archived section on the landing page and its public class site goes offline. Access is not changed, and it still counts as your active class on the Free plan: set the status to Locked to free that.'
         : 'The class will be returned to the active list.',
       okText: next ? 'Archive' : 'Unarchive',
       onOk: async () => {
@@ -63,19 +70,11 @@ const StatusSection = ({ classroomId, status, isArchived }: StatusSectionProps) 
       >
         <div className="space-y-3" data-tour="settings-status">
           {STATUS_OPTIONS.map(opt => (
-            <label
-              key={opt.value}
-              className="flex items-start gap-3 cursor-pointer"
-            >
-              <Radio
-                checked={status === opt.value}
-                onChange={() => setStatus(opt.value)}
-              />
+            <label key={opt.value} className="flex items-start gap-3 cursor-pointer">
+              <Radio checked={status === opt.value} onChange={() => setStatus(opt.value)} />
               <span>
                 <span className="font-medium">{opt.label}</span>
-                <span className="block text-sm text-ink-3">
-                  {opt.desc}
-                </span>
+                <span className="block text-sm text-ink-3">{opt.desc}</span>
               </span>
             </label>
           ))}
@@ -84,7 +83,7 @@ const StatusSection = ({ classroomId, status, isArchived }: StatusSectionProps) 
 
       <SettingSection
         title="Archive"
-        description="Move this class out of the way on your landing page. Archiving does not change access."
+        description="Move this class out of the way on your landing page and take its public class site offline. Archiving does not change access, and it does not free your Free plan's active class: only the Locked or Unpublished status does."
       >
         <Button onClick={() => setArchived(!isArchived)} data-tour="settings-archive">
           {isArchived ? 'Unarchive class' : 'Archive class'}

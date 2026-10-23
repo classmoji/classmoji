@@ -16,6 +16,13 @@ const slideUpdateMock = vi.fn();
 const gitOrgFindFirstMock = vi.fn();
 
 const classroomFindManyMock = vi.fn();
+// Plan limits have their own tests (planLimits.test.ts); here every classroom has room.
+vi.mock('../../classmoji/planLimits.ts', () => ({
+  assertCanCreateContent: vi.fn(async () => {}),
+  contentAllowance: vi.fn(async () => ({ limit: null, used: 0, remaining: null })),
+  contentLimitMessage: () => '',
+}));
+
 vi.mock('@classmoji/database', () => ({
   default: () => ({
     classroom: {
@@ -255,6 +262,23 @@ describe('createSlide', () => {
 
     expect(result.slide.id).toBe('slide-new');
     expect(uploadBatchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses at the classroom's slide limit BEFORE any GitHub write", async () => {
+    const planLimits = await import('../../classmoji/planLimits.ts');
+    vi.mocked(planLimits.assertCanCreateContent).mockRejectedValueOnce(
+      Object.assign(new Error('Free classes can have up to 10 slides.'), {
+        code: 'PLAN_CONTENT_LIMIT',
+      })
+    );
+
+    await expect(
+      createSlide({ classroomId: 'class-1', title: 'Week 11', createdBy: 'user-1' })
+    ).rejects.toMatchObject({ code: 'PLAN_CONTENT_LIMIT' });
+    expect(planLimits.assertCanCreateContent).toHaveBeenCalledWith('class-1', 'slides');
+    expect(ensureContentRepoMock).not.toHaveBeenCalled();
+    expect(uploadBatchMock).not.toHaveBeenCalled();
+    expect(slideCreateMock).not.toHaveBeenCalled();
   });
 
   it('refuses content-path collisions BEFORE any GitHub write', async () => {

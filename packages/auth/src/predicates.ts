@@ -15,6 +15,12 @@ import type { ClassroomStatus, Role } from '@prisma/client';
 
 export type ClassroomStatusError = 'CLASSROOM_LOCKED' | 'CLASSROOM_UNPUBLISHED';
 
+/** What a refused mutation or entry says, per typed code. */
+export const CLASSROOM_STATUS_MESSAGES: Record<ClassroomStatusError, string> = {
+  CLASSROOM_LOCKED: 'This class is in read-only mode. The owner has locked it.',
+  CLASSROOM_UNPUBLISHED: 'This class has been unpublished by the owner.',
+};
+
 export interface ClassroomStatusInput {
   status: ClassroomStatus;
   role: Role;

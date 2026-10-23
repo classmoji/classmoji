@@ -13,6 +13,7 @@
 
 import { registerToolDefinition } from '../mcp/registry.ts';
 import { whoamiTool } from './whoami.ts';
+import { billingStatusTool } from './billing.ts';
 import { feedbackReadTool, feedbackWriteTool, feedbackDeleteTool } from './feedback.ts';
 import { readTools } from './reads.ts';
 import { gradeAddTool, gradeRemoveTool, gradeRemoveAllTool } from './grades.ts';
@@ -74,6 +75,9 @@ import {
 import { rosterAddStudentTool, rosterRemoveStudentTool } from './roster.ts';
 import { staffAddTool, staffUpdateTool, staffRemoveTool } from './staff.ts';
 import { quizCreateTool, quizUpdateTool, quizPublishTool, quizDeleteTool } from './quizzes.ts';
+import { listQuizAttemptsTool } from './quizAttempts.ts';
+import { getQuizAttemptTool } from './quizAttemptDetail.ts';
+import { quizAttemptAdjustTool } from './quizAttemptAdjust.ts';
 import {
   classroomSettingsUpdateTool,
   classroomStatusUpdateTool,
@@ -120,6 +124,9 @@ import {
 export function registerAllTools(): void {
   // Identity / bootstrap
   registerToolDefinition(whoamiTool);
+
+  // The caller's own plan (Settings → Billing).
+  registerToolDefinition(billingStatusTool);
 
   // The platform-wide feedback board (/feedback): any signed-in user, no
   // classroom (roles: null). No audit rows, by decision: the webapp writes
@@ -234,6 +241,9 @@ export function registerAllTools(): void {
   registerToolDefinition(quizUpdateTool);
   registerToolDefinition(quizPublishTool);
   registerToolDefinition(quizDeleteTool);
+  registerToolDefinition(listQuizAttemptsTool);
+  registerToolDefinition(getQuizAttemptTool);
+  registerToolDefinition(quizAttemptAdjustTool);
 
   // Course content: semantic search, enumeration and full-text reads over the
   // classroom's pages, decks and bot-context/ notes (MEMBER — every role,

@@ -22,7 +22,17 @@ const auditMock = vi.fn();
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     quiz: { findById: (...a: unknown[]) => quizFindByIdMock(...a) },
-    quizAttempt: { findWithMessages: (...a: unknown[]) => findWithMessagesMock(...a) },
+    quizAttempt: {
+      findWithMessages: (...a: unknown[]) => findWithMessagesMock(...a),
+      // The student's attempts on the quiz (which one counts, E15).
+      findForUserByQuizIds: async () => [],
+    },
+    // A completed attempt's grade panel (emoji, adjustment, requests): empty here.
+    emojiMapping: { findScaleByClassroomId: async () => ({}) },
+    classroomMembership: { findByClassroomAndUser: async () => null },
+    regradeRequest: { findOpenByQuizAttemptId: async () => null, findMany: async () => [] },
+    quizGradeItems: { netQuizExtensionHours: async () => new Map() },
+    user: { findById: async () => null },
     quizGrading: { closeExpiredAttempt: (...a: unknown[]) => closeExpiredMock(...a) },
     quizChat: {
       loadTranscriptForViewer: (...a: unknown[]) => loadTranscriptMock(...a),
@@ -288,7 +298,8 @@ describe('attempt loader — a chat attempt past its session deadline', () => {
     expect(data.readOnly).toBe(true);
     expect(data.attempt.completed_at).not.toBeNull();
     expect(data.attempt.evaluation_json).toMatchObject({ source: 'server' });
-    expect(data.attempt.partial_credit_percentage).toBe(40);
+    // The owner's own view: no stored score (E1).
+    expect('partial_credit_percentage' in data.attempt).toBe(false);
     expect(data.attempt.ended_by).toBeNull();
     expect(data.messagesLeft).toBeNull();
   });

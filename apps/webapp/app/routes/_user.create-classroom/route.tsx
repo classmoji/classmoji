@@ -4,7 +4,7 @@ import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
 import { fallbackMode } from '~/utils/sessionMode.server';
 import { useState, useEffect, useRef } from 'react';
 import { useForm, FormProvider } from 'react-hook-form';
-import { Button, Card, Alert, Steps, Spin } from 'antd';
+import { Button, Card, Alert, Steps, Spin, message } from 'antd';
 
 import { getAuthSession, clearRevokedToken } from '@classmoji/auth/server';
 import { useGlobalFetcher, useGitHubAppInstallPopup } from '~/hooks';
@@ -18,6 +18,8 @@ import StepImportModules from './StepImportModules';
 import StepReview from './StepReview';
 import { slugify, STEPS } from './utils';
 import { browserTimeZone } from '~/utils/browserTimeZone';
+import ActiveClassLimitModal from '~/components/features/plan/ActiveClassLimitModal';
+import type { ActiveClassLimitData } from '~/components/features/plan/ActiveClassLimitModal';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import type { GitOrganizationOption, ImportSelections } from './types';
 import { loadGitLabOptions } from './gitlabOptions.server';
@@ -445,11 +447,32 @@ const CreateClassroomForm = ({
 
   // Navigate to new classroom on success
   useEffect(() => {
-    const fetcherData = fetcher!.data as { classroomSlug?: string } | undefined;
+    const fetcherData = fetcher!.data as
+      | { classroomSlug?: string; activation_warning?: string | null }
+      | undefined;
     if (fetcherData?.classroomSlug) {
+      if (fetcherData.activation_warning) message.warning(fetcherData.activation_warning, 10);
       navigate(`/admin/${fetcherData.classroomSlug}/dashboard`);
     }
   }, [fetcher!.data, navigate]);
+
+  // The last create request, so "Archive X and continue" can send it again.
+  const lastSubmission = useRef<Record<string, unknown> | null>(null);
+  const archiveAndContinue = (classroomId: string) => {
+    if (!lastSubmission.current) return;
+    notify(ActionTypes.CREATE_CLASSROOM, 'Creating classroom...');
+    // Same cast as the first submit: the typed payload serializes cleanly but is
+    // not structurally a React Router `JsonValue`.
+    const target = {
+      ...lastSubmission.current,
+      archiveClassroomId: classroomId,
+    } as unknown as Parameters<NonNullable<typeof fetcher>['submit']>[0];
+    fetcher!.submit(target, {
+      method: 'post',
+      action: '/create-classroom',
+      encType: 'application/json',
+    });
+  };
 
   // Compute slug preview from watched form values
   const slugPreview = formValues.name ? slugify(formValues.name) : '';
@@ -536,28 +559,31 @@ const CreateClassroomForm = ({
 
     notify(ActionTypes.CREATE_CLASSROOM, 'Creating classroom...');
 
-    fetcher!.submit(
-      {
-        ...values,
-        slug: effectiveSlug,
-        content_repo: effectiveContentRepo,
-        importConfig,
-        // The creator's browser zone seeds the course time zone (validated on
-        // the server; editable later in General settings).
-        timezone: browserTimeZone(),
-      },
-      {
-        method: 'post',
-        action: '/create-classroom',
-        encType: 'application/json',
-      }
-    );
+    const submission = {
+      ...values,
+      slug: effectiveSlug,
+      content_repo: effectiveContentRepo,
+      importConfig,
+      // The creator's browser zone seeds the course time zone (validated on
+      // the server; editable later in General settings).
+      timezone: browserTimeZone(),
+    };
+    lastSubmission.current = submission;
+    fetcher!.submit(submission, {
+      method: 'post',
+      action: '/create-classroom',
+      encType: 'application/json',
+    });
   };
 
   const sourceClassroom = importableClassrooms.find(c => c.id === sourceClassroomId);
 
   return (
     <div className="max-w-2xl mx-auto">
+      <ActiveClassLimitModal
+        data={fetcher!.data as ActiveClassLimitData | undefined}
+        onArchiveAndContinue={archiveAndContinue}
+      />
       <h1 className="text-xl font-semibold mb-6 dark:text-gray-100">Create New Classroom</h1>
       {providerSwitch}
 

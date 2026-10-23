@@ -37,6 +37,7 @@ import { enqueueDeckThumbnail } from './deckThumbnail.service.ts';
 import { indexOneFile } from './contentIndex.service.ts';
 import { getGitProvider } from '../git/index.ts';
 import * as contentManifestService from './contentManifest.service.ts';
+import { contentAllowance, contentLimitMessage, type LimitedContent } from './planLimits.ts';
 import { createWithUniquePageSlug, ensureContentRepo, isPageSlugConflict } from './page.service.ts';
 // The slide FILE policy, from the module that has no cheerio in it — importing
 // the `./slides` barrel here would pull the deck engine into the import task.
@@ -858,6 +859,23 @@ interface RepoContext {
 
 type WarnFn = (scope: string, detail: string) => void;
 
+/**
+ * The source rows a free target has room for under its plan limit, oldest
+ * first, with one warning for the rest. Applied before anything is staged, so
+ * a skipped page or slide writes nothing to the target repo.
+ */
+async function withinPlanLimit<T>(
+  rows: T[],
+  classroomId: string,
+  kind: LimitedContent,
+  warn: WarnFn
+): Promise<T[]> {
+  const { limit, remaining } = await contentAllowance(classroomId, kind);
+  if (limit === null || remaining === null || rows.length <= remaining) return rows;
+  warn(kind, `skipped ${rows.length - remaining} ${kind}. ${contentLimitMessage(kind, limit)}`);
+  return rows.slice(0, remaining);
+}
+
 function errText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -1318,10 +1336,15 @@ async function importPages({
   /** The run's media copy — see `openImportMediaCopy`. Absent: refs verbatim. */
   media?: ImportMediaCopy;
 }): Promise<number> {
-  const sourcePages = await getPrisma().page.findMany({
-    where: { classroom_id: source.classroomId },
-    orderBy: { created_at: 'asc' },
-  });
+  const sourcePages = await withinPlanLimit(
+    await getPrisma().page.findMany({
+      where: { classroom_id: source.classroomId },
+      orderBy: { created_at: 'asc' },
+    }),
+    target.classroomId,
+    'pages',
+    warn
+  );
   // The real total lands before the empty-set return, so the bar sizes itself
   // the moment the phase starts even when there is nothing to copy.
   const total = sourcePages.length;
@@ -1703,10 +1726,15 @@ async function importSlides({
   /** The run's media copy — shared with the pages pass. Absent: refs verbatim. */
   media?: ImportMediaCopy;
 }): Promise<number> {
-  const sourceSlides = await getPrisma().slide.findMany({
-    where: { classroom_id: source.classroomId },
-    orderBy: { created_at: 'asc' },
-  });
+  const sourceSlides = await withinPlanLimit(
+    await getPrisma().slide.findMany({
+      where: { classroom_id: source.classroomId },
+      orderBy: { created_at: 'asc' },
+    }),
+    target.classroomId,
+    'slides',
+    warn
+  );
   // Same as pages: the real total before the empty-set return.
   const total = sourceSlides.length;
   emitProgress(onProgress, { kind: 'slides', done: 0, total });

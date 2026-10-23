@@ -1,4 +1,5 @@
 import getPrisma from '@classmoji/database';
+import { pickEffectivePlanOwner } from './planOwnerPick.ts';
 import type { Prisma, SubscriptionTier } from '@prisma/client';
 
 type SubscriptionRecord = Prisma.SubscriptionGetPayload<Record<string, never>>;
@@ -151,8 +152,10 @@ const FREE_STATE: ClassroomProState = {
  *     across all owners is also the only TIER-PRESERVING rule; "oldest owner"
  *     is merely deterministic, and would strip quizzes from any classroom whose
  *     paying owner is not the oldest.
- *  2. **Otherwise, the oldest owner's tier**, so a FREE answer still names a
- *     specific row rather than varying between calls.
+ *  2. **Otherwise, the plan owner's tier** (`classrooms.plan_owner_id`, or
+ *     the oldest accepted owner when that is unset or no longer an owner; see
+ *     `pickEffectivePlanOwner`), so a FREE answer names the person whose
+ *     Free-plan slot the classroom uses rather than varying between calls.
  *
  * Only ACCEPTED owners count. An unaccepted OWNER membership is an invitation,
  * and an invitation must not donate its recipient's subscription to a classroom
@@ -170,12 +173,13 @@ export const getProStateForClassroomId = async (
   const classroom = await getPrisma().classroom.findUnique({
     where: { id: classroomId },
     select: {
+      plan_owner_id: true,
       memberships: {
         where: { role: 'OWNER', has_accepted_invite: true },
-        // Oldest first, so the fallback below is the oldest owner without a
-        // second query.
-        orderBy: { created_at: 'asc' },
+        // Oldest first: the order `pickEffectivePlanOwner` falls back on.
+        orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
         select: {
+          user_id: true,
           user: {
             select: {
               subscriptions: {
@@ -198,15 +202,17 @@ export const getProStateForClassroomId = async (
   );
   if (pro) return { tier: 'PRO', isActive: true, isPro: true, subscription: pro };
 
-  const oldest = current[0];
-  if (!oldest) return FREE_STATE;
+  const ownerIds = classroom.memberships.map(membership => membership.user_id);
+  const planOwnerId = pickEffectivePlanOwner(classroom.plan_owner_id, ownerIds);
+  const planOwner = planOwnerId ? current[ownerIds.indexOf(planOwnerId)] : null;
+  if (!planOwner) return FREE_STATE;
 
-  const isActive = isSubscriptionActive(oldest);
+  const isActive = isSubscriptionActive(planOwner);
   return {
-    tier: oldest.tier,
+    tier: planOwner.tier,
     isActive,
-    isPro: oldest.tier === 'PRO' && isActive,
-    subscription: oldest,
+    isPro: planOwner.tier === 'PRO' && isActive,
+    subscription: planOwner,
   };
 };
 
@@ -219,7 +225,7 @@ export const getProStateForClassroomId = async (
  * `getProStateForClassroomId` so the nav agrees with the Pro gates on the
  * routes it links to.
  *
- * Keyed on `isPro`, never on `tier`: the resolver reports the oldest owner's
+ * Keyed on `isPro`, never on `tier`: the resolver reports the plan owner's
  * `tier` when nobody holds an active PRO, so a lapsed PRO row comes back as
  * `tier: 'PRO', isPro: false`.
  */

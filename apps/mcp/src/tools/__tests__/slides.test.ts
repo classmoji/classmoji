@@ -342,6 +342,18 @@ describe('slide_create', () => {
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
+  it("maps the free plan's slide limit to forbidden, with the shared sentence", async () => {
+    const sentence = 'Free classes can have up to 10 slides. Upgrade to Pro for unlimited slides.';
+    mocks.createSlide.mockRejectedValue(
+      Object.assign(new Error(sentence), { code: 'PLAN_CONTENT_LIMIT' })
+    );
+
+    await expect(
+      slideCreateTool.handler({ classroom: 'org/x', title: 'New Deck' }, TEACHER_CTX)
+    ).rejects.toMatchObject({ kind: 'forbidden', message: sentence });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
   it('maps a unique-violation (P2002) to invalid_params', async () => {
     mocks.createSlide.mockRejectedValue(Object.assign(new Error('unique'), { code: 'P2002' }));
 

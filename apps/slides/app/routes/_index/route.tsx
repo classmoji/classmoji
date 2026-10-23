@@ -358,6 +358,10 @@ export const action = async ({ request }: { request: Request }) => {
         return { error: 'Git organization not configured for this classroom' };
       }
 
+      // A copy is a new slide: same plan limit as creating one, checked before
+      // the folder copy so a refusal leaves nothing in the content repo.
+      await ClassmojiService.planLimits.assertCanCreateContent(slide.classroom_id, 'slides');
+
       // Content repo is STORED and user-editable — never re-derived from the namespace.
       const repo = slide.classroom.content_repo;
       const newSlug = `${slide.slug}-copy-${Date.now()}`;

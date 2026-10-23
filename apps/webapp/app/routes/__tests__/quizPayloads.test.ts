@@ -29,6 +29,13 @@ const mocks = vi.hoisted(() => ({
   userFindById: vi.fn(),
   findUsersByRole: vi.fn(),
   netQuizExtensionHoursByStudent: vi.fn(),
+  netQuizExtensionHours: vi.fn(),
+  findScaleByClassroomId: vi.fn(),
+  regradeFindMany: vi.fn(),
+  openQuizRequestAttemptIds: vi.fn(),
+  findOpenByQuizAttemptId: vi.fn(),
+  findByClassroomAndUser: vi.fn(),
+  findForUserByQuizIds: vi.fn(),
 }));
 
 vi.mock('~/utils/helpers', () => ({
@@ -37,7 +44,10 @@ vi.mock('~/utils/helpers', () => ({
   addAuditLog: (...a: unknown[]) => mocks.addAuditLog(...a),
   addClassroomAuditLog: vi.fn(),
 }));
-vi.mock('~/utils/routeAuth.server', () => ({ assertClassroomMutationAllowed: vi.fn() }));
+vi.mock('~/utils/routeAuth.server', () => ({
+  assertClassroomMutationAllowed: vi.fn(),
+  requireClassroomTeachingTeam: vi.fn(),
+}));
 // Every loader here gates on quiz visibility; these payload tests run with
 // quizzes visible.
 vi.mock('~/utils/classroomProFlag.server', () => ({
@@ -52,16 +62,32 @@ vi.mock('@classmoji/services', () => ({
       findByQuiz: (...a: unknown[]) => mocks.findByQuiz(...a),
       findWithMessages: (...a: unknown[]) => mocks.findWithMessages(...a),
       getMessages: (...a: unknown[]) => mocks.getMessages(...a),
+      findForUserByQuizIds: (...a: unknown[]) => mocks.findForUserByQuizIds(...a),
       clearForUserAndQuiz: vi.fn(),
     },
     user: { findById: (...a: unknown[]) => mocks.userFindById(...a) },
-    classroomMembership: { findUsersByRole: (...a: unknown[]) => mocks.findUsersByRole(...a) },
+    classroomMembership: {
+      findUsersByRole: (...a: unknown[]) => mocks.findUsersByRole(...a),
+      findByClassroomAndUser: (...a: unknown[]) => mocks.findByClassroomAndUser(...a),
+    },
     token: {
       netQuizExtensionHoursByStudent: (...a: unknown[]) =>
         mocks.netQuizExtensionHoursByStudent(...a),
     },
+    quizGradeItems: {
+      netQuizExtensionHours: (...a: unknown[]) => mocks.netQuizExtensionHours(...a),
+    },
+    emojiMapping: {
+      findScaleByClassroomId: (...a: unknown[]) => mocks.findScaleByClassroomId(...a),
+    },
+    regradeRequest: {
+      findMany: (...a: unknown[]) => mocks.regradeFindMany(...a),
+      openQuizRequestAttemptIds: (...a: unknown[]) => mocks.openQuizRequestAttemptIds(...a),
+      findOpenByQuizAttemptId: (...a: unknown[]) => mocks.findOpenByQuizAttemptId(...a),
+    },
   },
   QuizAttemptNotFoundError: class QuizAttemptNotFoundError extends Error {},
+  QuizGradeError: class QuizGradeError extends Error {},
 }));
 
 // The loaders are under test; the view layers only need to import.
@@ -109,6 +135,8 @@ vi.mock('react-router', () => ({
   useParams: () => ({ class: 'intro-101', quizId: 'quiz-1' }),
   useFetcher: () => ({ submit: vi.fn() }),
   Outlet: () => null,
+  Link: () => null,
+  data: (body: unknown, init?: unknown) => ({ body, init }),
 }));
 
 const detailRoute = await import('../admin.$class.quizzes_.$quizId.tsx');
@@ -116,7 +144,11 @@ const staffAttemptRoute =
   await import('../admin.$class.quizzes_.$quizId.attempt.$attemptId/route.tsx');
 const studentAttemptRoute =
   await import('../student.$class.quizzes.$quizId.attempt.$attemptId/route.tsx');
-const { buildQuizResultRows } = await import('~/utils/quizPayloads');
+const { buildQuizResultRows, staffAttemptGradePanel, attemptGradeView } =
+  await import('~/utils/quizPayloads');
+
+/** The classroom's grading scale (emoji → grade), best first, as `findScaleByClassroomId` returns it. */
+const SCALE = { rocket: 100, '+1': 85, eyes: 70, '-1': 50, sob: 0 };
 
 // ─── Fixtures shaped like the real joins ────────────────────────────────────
 
@@ -194,6 +226,12 @@ const attemptRow = (
     first_attempt_percentage: number | null;
     total_duration_ms: number | null;
     unfocused_duration_ms: number | null;
+    adjusted_emoji: string | null;
+    instructor_comment: string | null;
+    adjusted_by_id: string | null;
+    adjusted_at: Date | null;
+    comment_by_id: string | null;
+    comment_at: Date | null;
   }> = {}
 ) => ({
   id,
@@ -214,6 +252,7 @@ const attemptRow = (
   question_results_json: { note: SENTINEL.feedback },
   partial_credit_percentage: null as number | null,
   first_attempt_percentage: null as number | null,
+  adjusted_emoji: null as string | null,
   session_status: 'active',
   codebase_path: SENTINEL.codebasePath,
   agent_config: { instructorRepoName: SENTINEL.repo },
@@ -321,6 +360,19 @@ beforeEach(() => {
   mocks.getMessages.mockResolvedValue([{ role: 'ASSISTANT', content: SENTINEL.feedback }]);
   // The results page always reads the STUDENT roster; empty unless a test says.
   mocks.findUsersByRole.mockResolvedValue([]);
+  mocks.findScaleByClassroomId.mockResolvedValue(SCALE);
+  mocks.regradeFindMany.mockResolvedValue([]);
+  mocks.openQuizRequestAttemptIds.mockResolvedValue(new Set());
+  mocks.findOpenByQuizAttemptId.mockResolvedValue(null);
+  mocks.netQuizExtensionHours.mockResolvedValue(new Map());
+  // One user's attempts on the quiz, newest first (the counting-attempt read).
+  mocks.findForUserByQuizIds.mockImplementation(async (userId: string) =>
+    ATTEMPTS.filter(a => a.user_id === userId)
+  );
+  // Ada and Babbage are current students; nobody else is.
+  mocks.findByClassroomAndUser.mockImplementation(async (_c: string, userId: string) =>
+    [ADA.id, BABBAGE.id].includes(userId) ? { has_accepted_invite: true } : null
+  );
 });
 
 // ─── The results page ───────────────────────────────────────────────────────
@@ -353,12 +405,15 @@ describe('quiz results page payload', () => {
       expect(Object.keys(attempt).sort()).toEqual(
         [
           'completed_at',
+          'firstAttemptEmoji',
           'firstAttemptScore',
           'focusMetrics',
+          'grade',
           'id',
           'isCounting',
           'lateHours',
           'partialCreditScore',
+          'regradeRequested',
           'started_at',
         ].sort()
       );
@@ -415,6 +470,101 @@ describe('quiz results page payload', () => {
     expect(babbage.bestScore).toBeNull();
     expect(babbage.attempts[0].completed_at).toBeNull();
   });
+
+  it("shows every grade as the classroom's emoji (E1), from this classroom's scale", () => {
+    expect(mocks.findScaleByClassroomId).toHaveBeenCalledWith(CLASSROOM.id);
+    const ada = payload.students.find(s => s.userId === ADA.id)!;
+    // 80 is nearest 👍 (85); 60 ties 👀 and 👎 and takes the higher (E5).
+    expect(ada).toMatchObject({
+      currentEmoji: '+1',
+      countedEmoji: null,
+      bestEmoji: '+1',
+      firstAttemptEmoji: '+1',
+      countingAdjusted: false,
+      regradeRequested: false,
+    });
+    expect(ada.attempts.map(a => [a.grade.effective.emoji, a.firstAttemptEmoji])).toEqual([
+      ['eyes', '-1'],
+      ['+1', '+1'],
+    ]);
+    const babbage = payload.students.find(s => s.userId === BABBAGE.id)!;
+    expect(babbage).toMatchObject({ currentEmoji: null, bestEmoji: null });
+    // Average of 60 and 80 is 70 (👀); highest 80 (👍); lowest 60 (👀).
+    expect(payload.stats).toEqual({
+      totalAttempts: 4,
+      completedAttempts: 2,
+      inProgressAttempts: 2,
+      completionRate: 50,
+      averageEmoji: 'eyes',
+      highestEmoji: '+1',
+      lowestEmoji: 'eyes',
+    });
+  });
+
+  it("reads each user's login on the classroom's own git provider", async () => {
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: TA.id,
+      classroom: { ...CLASSROOM, git_organization: { provider: 'GITLAB' } },
+      membership: { role: 'ASSISTANT' },
+    });
+    await detailRoute.loader(detailArgs());
+    expect(mocks.findByQuiz).toHaveBeenLastCalledWith(QUIZ_ID, 'GITLAB');
+  });
+});
+
+describe('quiz results page: adjustments and regrade requests', () => {
+  beforeEach(() => {
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: TA.id,
+      classroom: CLASSROOM,
+      membership: { role: 'ASSISTANT' },
+    });
+  });
+
+  it('shows an adjusted attempt by its adjustment, with the original beside it (D6, D8)', async () => {
+    // Ada's 60 adjusted to 🚀 becomes the best attempt and counts (D3).
+    mocks.findByQuiz.mockResolvedValue([
+      { ...ADA_SECOND, adjusted_emoji: 'rocket' },
+      TA_PREVIEW,
+      BABBAGE_OPEN,
+      ADA_FIRST,
+    ]);
+
+    const payload = await detailRoute.loader(detailArgs());
+
+    const ada = payload.students.find(s => s.userId === ADA.id)!;
+    expect(ada).toMatchObject({
+      countingAttemptId: ADA_SECOND.id,
+      currentEmoji: 'rocket',
+      countingAdjusted: true,
+      bestEmoji: 'rocket',
+    });
+    expect(ada.attempts[0].grade).toMatchObject({
+      adjusted: true,
+      original: { emoji: 'eyes' },
+      effective: { emoji: 'rocket' },
+    });
+    expect(payload.stats.highestEmoji).toBe('rocket');
+  });
+
+  it("marks a student with an open quiz regrade request, read from this classroom's requests on this quiz", async () => {
+    // Attempt ids only (the service selects nothing else).
+    mocks.openQuizRequestAttemptIds.mockResolvedValue(new Set([ADA_FIRST.id]));
+
+    const payload = await detailRoute.loader(detailArgs());
+
+    expect(mocks.openQuizRequestAttemptIds).toHaveBeenCalledWith(CLASSROOM.id, QUIZ_ID);
+    expect(mocks.regradeFindMany).not.toHaveBeenCalled();
+    const ada = payload.students.find(s => s.userId === ADA.id)!;
+    expect(ada.regradeRequested).toBe(true);
+    expect(ada.attempts.map(a => [a.id, a.regradeRequested])).toEqual([
+      [ADA_SECOND.id, false],
+      [ADA_FIRST.id, true],
+    ]);
+    expect(payload.students.find(s => s.userId === BABBAGE.id)!.regradeRequested).toBe(false);
+    // The request rows themselves never leave.
+    expectNoSentinels(payload);
+  });
 });
 
 // ─── The attempt drawers ────────────────────────────────────────────────────
@@ -452,6 +602,7 @@ describe('staff attempt drawer payload', () => {
         'chatActivity',
         'chatStarted',
         'focusMetrics',
+        'gradePanel',
         'isAdmin',
         'messages',
         'messagesLeft',
@@ -466,6 +617,153 @@ describe('staff attempt drawer payload', () => {
       ].sort()
     );
     expectNoSentinels(payload);
+  });
+
+  it("gives a current student's completed attempt the adjust panel, as emoji only", async () => {
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: TA.id,
+      classroom: CLASSROOM,
+      membership: { role: 'ASSISTANT' },
+    });
+    mocks.findWithMessages.mockResolvedValue(
+      withMessages({
+        ...ADA_SECOND,
+        adjusted_emoji: '+1',
+        instructor_comment: 'Q3 has full credit.',
+        adjusted_by_id: TA.id,
+        adjusted_at: new Date('2026-03-04T10:00:00Z'),
+        // The comment's own author, apart from the score's adjuster.
+        comment_by_id: BABBAGE.id,
+        comment_at: new Date('2026-03-03T10:00:00Z'),
+      })
+    );
+    mocks.findOpenByQuizAttemptId.mockResolvedValue({
+      id: 'rr-1',
+      classroom_id: CLASSROOM.id,
+      student_comment: 'Q3 covered the base case.',
+      created_at: new Date('2026-03-04T09:00:00Z'),
+    });
+
+    const payload = await staffAttemptRoute.loader(attemptArgs('assistant', ADA_SECOND.id));
+
+    expect(mocks.findScaleByClassroomId).toHaveBeenCalledWith(CLASSROOM.id);
+    expect(mocks.findByClassroomAndUser).toHaveBeenCalledWith(CLASSROOM.id, ADA.id, 'STUDENT');
+    expect(payload.gradePanel).toEqual({
+      attemptId: ADA_SECOND.id,
+      adjustable: true,
+      canEdit: true,
+      grade: {
+        emoji: '+1',
+        originalEmoji: 'eyes',
+        adjusted: true,
+        band: { evaluation: 'GOOD', numeric_score: 3 },
+        lateHours: null,
+        countedEmoji: null,
+        // Staff views do not work it out (E15 is the student's label).
+        countsTowardGrade: null,
+      },
+      adjustedEmoji: '+1',
+      orphaned: false,
+      comment: 'Q3 has full credit.',
+      adjustedByName: 'Grace Hopper',
+      adjustedAt: '2026-03-04T10:00:00.000Z',
+      commentByName: BABBAGE.name,
+      commentAt: '2026-03-03T10:00:00.000Z',
+      scaleEmojis: ['rocket', '+1', 'eyes', '-1', 'sob'],
+      // On time: every emoji counts as itself.
+      countedByEmoji: { rocket: 'rocket', '+1': '+1', eyes: 'eyes', '-1': '-1', sob: 'sob' },
+      openRequest: {
+        id: 'rr-1',
+        comment: 'Q3 covered the base case.',
+        studentName: 'Ada Lovelace',
+        createdAt: '2026-03-04T09:00:00.000Z',
+      },
+    });
+    expectNoSentinels(payload);
+  });
+
+  it('shows the panel without its controls in a read-only classroom', async () => {
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: TA.id,
+      classroom: { ...CLASSROOM, status: 'LOCKED' },
+      membership: { role: 'ASSISTANT' },
+    });
+    mocks.findWithMessages.mockResolvedValue(withMessages(ADA_SECOND));
+    const payload = await staffAttemptRoute.loader(attemptArgs('assistant', ADA_SECOND.id));
+    expect(payload.gradePanel).toMatchObject({ adjustable: true, canEdit: false });
+  });
+
+  it('gives a completed student attempt with no evaluation record the adjust panel too', async () => {
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: TA.id,
+      classroom: CLASSROOM,
+      membership: { role: 'ASSISTANT' },
+    });
+    // Completed with no score and no evaluation: the results card won't render,
+    // and the drawer still offers the adjustment (QuizResultSlotsFallback).
+    const bare = attemptRow('a-ada-bare', ADA, {
+      completed_at: new Date('2026-03-02T12:00:00Z'),
+      partial_credit_percentage: null,
+      first_attempt_percentage: null,
+    });
+    mocks.findWithMessages.mockResolvedValue({ ...withMessages(bare), messages: [] });
+
+    const payload = await staffAttemptRoute.loader(attemptArgs('assistant', bare.id));
+
+    expect(payload.gradePanel).toMatchObject({
+      attemptId: bare.id,
+      adjustable: true,
+      grade: { emoji: null, adjusted: false },
+    });
+  });
+
+  it("hides the adjust panel on a staff preview, and drops another classroom's request", async () => {
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: 'owner-1',
+      classroom: CLASSROOM,
+      membership: { role: 'OWNER' },
+    });
+    const taDone = attemptRow('a-ta-done', TA, {
+      completed_at: new Date('2026-03-02T12:00:00Z'),
+      partial_credit_percentage: 95,
+    });
+    mocks.findWithMessages.mockResolvedValue(withMessages(taDone));
+    mocks.findOpenByQuizAttemptId.mockResolvedValue({ id: 'rr-x', classroom_id: 'class-2' });
+
+    const payload = await staffAttemptRoute.loader(attemptArgs('admin', taDone.id));
+
+    expect(payload.gradePanel).toMatchObject({
+      adjustable: false,
+      grade: { emoji: 'rocket', adjusted: false, band: { evaluation: 'EXCELLENT' } },
+      openRequest: null,
+    });
+  });
+
+  it('measures lateness for a student attempt and shows what it counts for (D2)', async () => {
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: TA.id,
+      classroom: { ...CLASSROOM, settings: { late_penalty_points_per_hour: 1 } },
+      membership: { role: 'ASSISTANT' },
+    });
+    // Due 6 h before Ada's second attempt completed; 60 → 54 counts as 👎.
+    mocks.quizFindById.mockResolvedValue({
+      ...QUIZ_ROW,
+      assignment: { id: 'asg-1', student_deadline: new Date('2026-03-03T04:20:00Z') },
+    });
+    mocks.findWithMessages.mockResolvedValue(withMessages(ADA_SECOND));
+
+    const payload = await staffAttemptRoute.loader(attemptArgs('assistant', ADA_SECOND.id));
+
+    expect(mocks.netQuizExtensionHours).toHaveBeenCalledWith({
+      classroomId: CLASSROOM.id,
+      studentId: ADA.id,
+      assignmentIds: ['asg-1'],
+    });
+    expect(payload.gradePanel?.grade).toMatchObject({
+      emoji: 'eyes',
+      lateHours: 6,
+      countedEmoji: '-1',
+    });
   });
 });
 
@@ -491,6 +789,74 @@ describe('student attempt drawer payload', () => {
     expectNoSentinels(payload);
   });
 
+  it('sends a student no quiz grade number: no score, no credit, no evaluation numbers (E1)', async () => {
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: ADA.id,
+      classroom: CLASSROOM,
+      membership: { role: 'STUDENT' },
+    });
+    const graded = {
+      ...ADA_FIRST,
+      partial_credit_percentage: 73.37,
+      first_attempt_percentage: 41.5,
+      question_results_json: [
+        {
+          question_num: 1,
+          attempts: 2,
+          credit_earned: 66.6,
+          eventually_correct: true,
+          emoji: 'eyes',
+        },
+      ],
+    };
+    const evaluation = {
+      quiz_complete: true,
+      evaluation: 'GOOD',
+      final_acknowledgment: 'Nice work.',
+      partial_credit_percentage: 73.37,
+      raw_percentage: 74.12,
+      question_results: [{ question_num: 1, credit_earned: 66.6 }],
+    };
+    mocks.findWithMessages.mockResolvedValue({
+      ...withMessages(graded as unknown as typeof ADA_FIRST),
+      messages: [
+        {
+          id: 'm9',
+          role: 'assistant',
+          content: 'Done!\n\n[QUIZ_EVALUATION]\n```json\n' + JSON.stringify(evaluation) + '\n```',
+          metadata: null,
+          timestamp: new Date(),
+        },
+      ],
+    });
+
+    const payload = await studentAttemptRoute.loader(attemptArgs('student', ADA_FIRST.id));
+
+    const text = JSON.stringify(payload);
+    for (const n of ['73.37', '41.5', '74.12', '66.6', 'credit_earned', 'partial_credit']) {
+      expect(text).not.toContain(n);
+    }
+    // The chat still reads the completion and the band.
+    expect(payload.messages[0].content).toContain('[QUIZ_EVALUATION]');
+    expect(payload.messages[0].content).toContain('"evaluation": "GOOD"');
+    expect(payload.attempt.question_results).toEqual([
+      expect.objectContaining({ question_num: 1, attempts: 2, emoji: 'eyes' }),
+    ]);
+  });
+
+  it('sends staff reading a student attempt here what the staff drawer sends', async () => {
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: TA.id,
+      classroom: CLASSROOM,
+      membership: { role: 'ASSISTANT' },
+    });
+    mocks.findWithMessages.mockResolvedValue(withMessages(ADA_FIRST));
+
+    const payload = await studentAttemptRoute.loader(attemptArgs('student', ADA_FIRST.id));
+
+    expect(payload.attempt.partial_credit_percentage).toBe(80);
+  });
+
   it('sends exactly the keys the drawer and QuizAttemptInterface take', async () => {
     mocks.assertClassroomAccess.mockResolvedValue({
       userId: ADA.id,
@@ -513,6 +879,7 @@ describe('student attempt drawer payload', () => {
         'org',
         'quiz',
         'readOnly',
+        'result',
         'showTimestamps',
         'transcript',
         'userImage',
@@ -527,9 +894,7 @@ describe('student attempt drawer payload', () => {
         'completed_at',
         'ended_by',
         'evaluation_json',
-        'first_attempt_percentage',
         'id',
-        'partial_credit_percentage',
         'question_results',
         'total_duration_ms',
         'unfocused_duration_ms',
@@ -565,6 +930,215 @@ describe('student attempt drawer payload', () => {
     expect(payload.userLogin).toBe('ada');
     expect(payload.messages).toHaveLength(1);
     expect(payload.org).toBe(CLASS_SLUG);
+  });
+
+  it('gives the student their grade as emoji, the comment, and their requests on this attempt', async () => {
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: ADA.id,
+      classroom: CLASSROOM,
+      membership: { role: 'STUDENT' },
+    });
+    mocks.findWithMessages.mockResolvedValue(
+      withMessages({
+        ...ADA_FIRST,
+        adjusted_emoji: 'rocket',
+        instructor_comment: 'Q3 has full credit.',
+        adjusted_by_id: BABBAGE.id,
+        adjusted_at: new Date('2026-03-05T10:00:00Z'),
+        // The comment is signed by its own author, not the last adjuster.
+        comment_by_id: TA.id,
+        comment_at: new Date('2026-03-04T10:00:00Z'),
+      })
+    );
+    mocks.regradeFindMany.mockResolvedValue([
+      {
+        id: 'rr-1',
+        status: 'APPROVED',
+        grader_comment: 'Fixed.',
+        previous_grade: ['+1'],
+        resolved_emoji: 'rocket',
+        created_at: new Date('2026-03-03T10:00:00Z'),
+        updated_at: new Date('2026-03-06T10:00:00Z'),
+        // The resolver, from the request itself (not the attempt's adjuster).
+        resolved_by: { id: 'ta-7', name: 'Ada Lovelace' },
+        resolved_at: new Date('2026-03-04T11:00:00Z'),
+        student: { email: SENTINEL.email },
+      },
+    ]);
+
+    const payload = await studentAttemptRoute.loader(attemptArgs('student', ADA_FIRST.id));
+
+    expect(mocks.findScaleByClassroomId).toHaveBeenCalledWith(CLASSROOM.id);
+    // Read by attempt, student and classroom, all server-derived.
+    expect(mocks.regradeFindMany).toHaveBeenCalledWith({
+      quiz_attempt_id: ADA_FIRST.id,
+      student_id: ADA.id,
+      classroom_id: CLASSROOM.id,
+    });
+    expect(payload.result).toEqual({
+      grade: {
+        emoji: 'rocket',
+        originalEmoji: '+1',
+        adjusted: true,
+        band: { evaluation: 'EXCELLENT', numeric_score: 4 },
+        lateHours: null,
+        countedEmoji: null,
+        // Ada's best attempt under HIGHEST (E15).
+        countsTowardGrade: true,
+      },
+      attemptNumber: 1,
+      isOwnStudentAttempt: true,
+      canRequest: true,
+      comment: {
+        text: 'Q3 has full credit.',
+        byName: 'Grace Hopper',
+        at: '2026-03-04T10:00:00.000Z',
+      },
+      regrade: {
+        open: null,
+        resolved: {
+          id: 'rr-1',
+          status: 'APPROVED',
+          reply: 'Fixed.',
+          previousEmoji: '+1',
+          resolvedEmoji: 'rocket',
+          resolvedByName: 'Ada Lovelace',
+          resolvedAt: '2026-03-04T11:00:00.000Z',
+        },
+      },
+    });
+    expectNoSentinels(payload);
+  });
+
+  it('offers no request button in a read-only classroom', async () => {
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: ADA.id,
+      classroom: { ...CLASSROOM, status: 'UNPUBLISHED' },
+      membership: { role: 'STUDENT' },
+    });
+    mocks.findWithMessages.mockResolvedValue(withMessages(ADA_FIRST));
+    mocks.regradeFindMany.mockResolvedValue([]);
+    const payload = await studentAttemptRoute.loader(attemptArgs('student', ADA_FIRST.id));
+    // No button, but the status of an open request still shows.
+    expect(payload.result).toMatchObject({ isOwnStudentAttempt: true, canRequest: false });
+  });
+
+  it('reports an open request so the button turns into its status (D7)', async () => {
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: ADA.id,
+      classroom: CLASSROOM,
+      membership: { role: 'STUDENT' },
+    });
+    mocks.findWithMessages.mockResolvedValue(withMessages(ADA_FIRST));
+    mocks.regradeFindMany.mockResolvedValue([
+      { id: 'rr-2', status: 'IN_REVIEW', created_at: new Date('2026-03-05T10:00:00Z') },
+      {
+        id: 'rr-1',
+        status: 'DENIED',
+        grader_comment: 'Kept.',
+        created_at: new Date('2026-03-03T10:00:00Z'),
+      },
+    ]);
+
+    const payload = await studentAttemptRoute.loader(attemptArgs('student', ADA_FIRST.id));
+
+    expect(payload.result?.regrade.open).toEqual({
+      id: 'rr-2',
+      createdAt: '2026-03-05T10:00:00.000Z',
+    });
+    expect(payload.result?.regrade.resolved).toMatchObject({ id: 'rr-1', status: 'DENIED' });
+    // Resolved before the resolver was recorded: no name, no date.
+    expect(payload.result?.regrade.resolved).toMatchObject({
+      resolvedByName: null,
+      resolvedAt: null,
+    });
+  });
+
+  describe("whether the attempt counts toward the student's grade (E15)", () => {
+    const asAda = (classroom: Record<string, unknown> = CLASSROOM) =>
+      mocks.assertClassroomAccess.mockResolvedValue({
+        userId: ADA.id,
+        classroom,
+        membership: { role: 'STUDENT' },
+      });
+
+    it('flags an attempt the grading strategy does not count, and the one it does', async () => {
+      asAda();
+      // HIGHEST: the first attempt (80) counts, the second (60) does not.
+      mocks.findWithMessages.mockResolvedValue(withMessages(ADA_SECOND));
+      const second = await studentAttemptRoute.loader(attemptArgs('student', ADA_SECOND.id));
+      expect(second.result?.grade?.countsTowardGrade).toBe(false);
+      // Read for the attempt's own student and this quiz only.
+      expect(mocks.findForUserByQuizIds).toHaveBeenCalledWith(ADA.id, [QUIZ_ID]);
+
+      mocks.findWithMessages.mockResolvedValue(withMessages(ADA_FIRST));
+      const first = await studentAttemptRoute.loader(attemptArgs('student', ADA_FIRST.id));
+      expect(first.result?.grade?.countsTowardGrade).toBe(true);
+    });
+
+    it('follows the strategy: MOST_RECENT counts the latest attempt', async () => {
+      asAda();
+      mocks.quizFindById.mockResolvedValue({ ...QUIZ_ROW, grading_strategy: 'MOST_RECENT' });
+      mocks.findWithMessages.mockResolvedValue(withMessages(ADA_SECOND));
+      const second = await studentAttemptRoute.loader(attemptArgs('student', ADA_SECOND.id));
+      expect(second.result?.grade?.countsTowardGrade).toBe(true);
+    });
+
+    it('picks over effective, late-penalised scores, as the gradebook does', async () => {
+      // Due between the two attempts, 5 points an hour: the second attempt's
+      // higher raw score (90) counts for 0, so the on-time first one counts.
+      asAda({ ...CLASSROOM, settings: { late_penalty_points_per_hour: 5 } });
+      mocks.quizFindById.mockResolvedValue({
+        ...QUIZ_ROW,
+        assignment: { id: 'asg-1', student_deadline: new Date('2026-03-02T00:00:00Z') },
+      });
+      const lateBest = { ...ADA_SECOND, partial_credit_percentage: 90 };
+      mocks.findForUserByQuizIds.mockResolvedValue([lateBest, ADA_FIRST]);
+      mocks.findWithMessages.mockResolvedValue(withMessages(lateBest));
+      const payload = await studentAttemptRoute.loader(attemptArgs('student', lateBest.id));
+      expect(payload.result?.grade?.countsTowardGrade).toBe(false);
+
+      // A staff adjustment is read as the effective score: the late attempt
+      // adjusted to rocket (100) still counts for 0 after the penalty.
+      mocks.findForUserByQuizIds.mockResolvedValue([
+        { ...lateBest, adjusted_emoji: 'rocket' },
+        ADA_FIRST,
+      ]);
+      mocks.findWithMessages.mockResolvedValue(withMessages(ADA_FIRST));
+      const first = await studentAttemptRoute.loader(attemptArgs('student', ADA_FIRST.id));
+      expect(first.result?.grade?.countsTowardGrade).toBe(true);
+    });
+
+    it('is not worked out for staff reading a student attempt', async () => {
+      mocks.assertClassroomAccess.mockResolvedValue({
+        userId: TA.id,
+        classroom: CLASSROOM,
+        membership: { role: 'ASSISTANT' },
+      });
+      mocks.findWithMessages.mockResolvedValue(withMessages(ADA_SECOND));
+      const payload = await studentAttemptRoute.loader(attemptArgs('student', ADA_SECOND.id));
+      expect(payload.result?.grade?.countsTowardGrade).toBeNull();
+      expect(mocks.findForUserByQuizIds).not.toHaveBeenCalled();
+    });
+  });
+
+  it('gives staff reading a student attempt here the grade only', async () => {
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: TA.id,
+      classroom: CLASSROOM,
+      membership: { role: 'ASSISTANT' },
+    });
+    mocks.findWithMessages.mockResolvedValue(withMessages(ADA_FIRST));
+
+    const payload = await studentAttemptRoute.loader(attemptArgs('student', ADA_FIRST.id));
+
+    expect(mocks.regradeFindMany).not.toHaveBeenCalled();
+    expect(payload.result).toMatchObject({
+      canRequest: false,
+      comment: null,
+      regrade: { open: null, resolved: null },
+      grade: { emoji: '+1' },
+    });
   });
 });
 
@@ -670,7 +1244,14 @@ describe('quiz results page: lateness', () => {
       bestScore: null,
       firstAttemptScore: null,
       countingAttemptId: null,
+      countingAdjusted: false,
+      countingOrphaned: false,
       latestAttempt: null,
+      currentEmoji: null,
+      countedEmoji: 'sob',
+      bestEmoji: null,
+      firstAttemptEmoji: null,
+      regradeRequested: false,
     });
     // A running attempt past the due date is still a counted 0.
     const babbage = payload.students.find(s => s.userId === BABBAGE.id)!;
@@ -730,7 +1311,12 @@ describe('quiz results page: lateness', () => {
 
 describe('buildQuizResultRows', () => {
   const rows = (gradingStrategy: string) =>
-    buildQuizResultRows({ attempts: ATTEMPTS, gradingStrategy, viewerId: 'nobody' });
+    buildQuizResultRows({
+      attempts: ATTEMPTS,
+      gradingStrategy,
+      viewerId: 'nobody',
+      emojiScale: SCALE,
+    });
 
   it('counts the most recently completed attempt under MOST_RECENT', () => {
     const ada = rows('MOST_RECENT').students.find(s => s.userId === ADA.id)!;
@@ -779,10 +1365,35 @@ describe('buildQuizResultRows', () => {
       attempts: [unscored, zero],
       gradingStrategy: 'MOST_RECENT',
       viewerId: 'nobody',
+      emojiScale: SCALE,
     });
 
     expect(students[0].countingAttemptId).toBe(zero.id);
     expect(students[0].currentScore).toBe(0);
+    expect(students[0].countingOrphaned).toBe(false);
+  });
+
+  it("flags an orphaned adjustment on the counting attempt and counts the AI's grade (E17)", () => {
+    const orphan = attemptRow('a-ada-orphan', ADA, {
+      started_at: new Date('2026-03-04T10:00:00Z'),
+      completed_at: new Date('2026-03-04T10:20:00Z'),
+      partial_credit_percentage: 72,
+      adjusted_emoji: 'heart',
+    });
+    const { students } = buildQuizResultRows({
+      attempts: [orphan],
+      gradingStrategy: 'HIGHEST',
+      viewerId: 'nobody',
+      emojiScale: SCALE,
+    });
+
+    expect(students[0]).toMatchObject({
+      countingAttemptId: orphan.id,
+      currentScore: 72,
+      countingAdjusted: false,
+      countingOrphaned: true,
+    });
+    expect(students[0].attempts[0].grade).toMatchObject({ orphaned: true, adjusted: false });
   });
 
   it('counts the attempt that scores best after the late penalty, and shows its raw score', () => {
@@ -797,6 +1408,7 @@ describe('buildQuizResultRows', () => {
       attempts: [ADA_SECOND, ADA_FIRST],
       gradingStrategy: 'HIGHEST',
       viewerId: 'nobody',
+      emojiScale: SCALE,
       late,
     });
     expect(students[0]).toMatchObject({
@@ -811,8 +1423,57 @@ describe('buildQuizResultRows', () => {
       attempts: [ADA_SECOND, ADA_FIRST],
       gradingStrategy: 'HIGHEST',
       viewerId: 'nobody',
+      emojiScale: SCALE,
       late: { ...late, latePenaltyPerHour: 10 },
     });
     expect(harsh.students[0]).toMatchObject({ countedScore: 0, lateHours: 10 });
+  });
+});
+
+describe('an orphaned adjustment in the staff drawer payload (E17)', () => {
+  const scale = { rocket: 100, '+1': 90, eyes: 80, '-1': 60, sob: 0 };
+  const attempt = {
+    id: 'att-o',
+    started_at: '2026-03-01T10:00:00Z',
+    completed_at: '2026-03-01T11:00:00Z',
+    partial_credit_percentage: 72,
+    adjusted_emoji: 'heart',
+  };
+
+  it("flags it for staff and shows the AI's grade; the student's view is unchanged", () => {
+    const grade = attemptGradeView({ attempt, emojiScale: scale });
+    const panel = staffAttemptGradePanel({
+      attempt,
+      adjustable: true,
+      canEdit: true,
+      grade,
+      adjustedByName: 'Grace Hopper',
+      commentByName: null,
+      emojiScale: scale,
+      latePenaltyPerHour: 0,
+      openRequest: null,
+      studentName: null,
+    });
+    expect(panel).toMatchObject({ orphaned: true, adjustedEmoji: 'heart' });
+    expect(panel.grade).toMatchObject({ emoji: 'eyes', adjusted: false, originalEmoji: null });
+    // What a student is sent carries no orphan flag.
+    expect(grade).not.toHaveProperty('orphaned');
+  });
+
+  it('is not orphaned when the emoji is on the scale', () => {
+    const onScale = { ...attempt, adjusted_emoji: '+1' };
+    const panel = staffAttemptGradePanel({
+      attempt: onScale,
+      adjustable: true,
+      canEdit: true,
+      grade: attemptGradeView({ attempt: onScale, emojiScale: scale }),
+      adjustedByName: null,
+      commentByName: null,
+      emojiScale: scale,
+      latePenaltyPerHour: 0,
+      openRequest: null,
+      studentName: null,
+    });
+    expect(panel.orphaned).toBe(false);
   });
 });
