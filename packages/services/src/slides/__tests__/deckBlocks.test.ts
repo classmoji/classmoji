@@ -8,6 +8,7 @@
  * apps/slides/tests/unit/slide-blocks.spec.ts with the same cases.
  */
 
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   generateDeckHtml,
@@ -29,9 +30,14 @@ import {
   blockBoxStyle,
   blockMarkup,
   escapeBlockAttr,
+  htmlBlockFileFrameMarkup,
   htmlBlockMarkup,
   htmlBlockSource,
   htmlBlockSrcdoc,
+  htmlBlockSrcProblem,
+  isHtmlBlockFileSrc,
+  mintHtmlBlockFileSrc,
+  resolveDeckRelativeRef,
   isAllowedSvgAnimation,
   isAllowedSvgAttr,
   isAllowedSvgLink,
@@ -72,7 +78,7 @@ describe('isSafeHtmlBlockSandbox', () => {
     ['allow-scripts allow-top-navigation', false],
     ['allow-scripts allow-top-navigation-by-user-activation', false],
     ['allow-scripts allow-top-navigation-to-custom-protocols', false],
-    ['allow-scripts allow-popups-to-escape-sandbox', false],
+    ['allow-scripts allow-popups-to-escape-sandbox', true],
     ['allow-scripts allow-storage-access-by-user-activation', false],
     ['allow-scripts made-up-token', false],
   ])('%j → %s', (value, safe) => {
@@ -355,14 +361,17 @@ describe('block reads and edits', () => {
     expect(readSlideBlocks(inert)[0].source).toBe('<i>s</i>');
   });
 
-  it('updates source (frame rebuilt with the standard sandbox) and box (other style kept)', () => {
+  it('updates the file (frame rebuilt with the standard sandbox) and box (other style kept)', () => {
     const inert = normalizeSlideHtml(htmlBlockWithSandbox('allow-same-origin', '<i>old</i>'));
     const next = updateSlideBlock(inert, 'b1', {
-      source: '<i>new</i>',
+      src: 'blocks/0000000b.html',
+      rev: 'b'.repeat(40),
       box: { left: 1, height: 2 },
     });
     const [block] = readSlideBlocks(next);
-    expect(block.source).toBe('<i>new</i>');
+    expect(block.source).toBeUndefined();
+    expect(block.src).toBe('blocks/0000000b.html');
+    expect(block.rev).toBe('b'.repeat(40));
     expect(block.box).toEqual({ left: 1, top: 60, width: 800, height: 2 });
     expect(next).toContain(`sandbox="${HTML_BLOCK_SANDBOX}"`);
     expect(next).not.toContain('data-cm-inert-');
@@ -389,11 +398,15 @@ describe('block reads and edits', () => {
     expect(() => updateSlideBlock(slideHtml, 'nope', { box: { left: 1 } })).toThrow(
       SlideBlockError
     );
-    expect(() => updateSlideBlock(slideHtml, 'svg00001', { source: 'x' })).toThrow(SlideBlockError);
+    expect(() => updateSlideBlock(slideHtml, 'svg00001', { rev: 'a'.repeat(40) })).toThrow(
+      SlideBlockError
+    );
     expect(() => updateSlideBlock(slideHtml, 'html0001', { svg: '<svg></svg>' })).toThrow(
       SlideBlockError
     );
-    expect(() => updateSlideBlock(slideHtml, 'html0001', { src: '/x' })).toThrow(SlideBlockError);
+    expect(() => updateSlideBlock(slideHtml, 'html0001', { rev: 'a'.repeat(40) })).toThrow(
+      SlideBlockError
+    );
     expect(() => removeSlideBlock(slideHtml, 'nope')).toThrow(SlideBlockError);
   });
 
@@ -747,5 +760,136 @@ describe('svg sheets on the server: stored and rendered held to their drawing', 
 describe('slide html cap', () => {
   it("the editor's cap is the deck ops cap", () => {
     expect(MAX_SLIDE_HTML_LENGTH).toBe(MAX_SLIDE_HTML);
+  });
+});
+
+describe('html blocks are files', () => {
+  const REV = 'c'.repeat(40);
+  const file = htmlBlockMarkup({ id: 'f1', box: BOX, src: 'blocks/0a0b0c0d.html', rev: REV });
+
+  it('uses the content service box sandbox, byte for byte', () => {
+    const box = readFileSync(
+      new URL('../../../../../apps/content/src/box.ts', import.meta.url),
+      'utf8'
+    );
+    const literal = /export const BOX_SANDBOX =\s*((?:'[^']*'\s*\+?\s*)+);/.exec(box)?.[1] ?? '';
+    const value = [...literal.matchAll(/'([^']*)'/g)].map(m => m[1]).join('');
+    expect(value).toBe(HTML_BLOCK_SANDBOX);
+    expect(HTML_BLOCK_SANDBOX).not.toMatch(/allow-same-origin|allow-top-navigation/);
+    expect(isSafeHtmlBlockSandbox(HTML_BLOCK_SANDBOX)).toBe(true);
+  });
+
+  it('builds the stored frame: data-cm-src + data-cm-rev, no src, no srcdoc', () => {
+    expect(htmlBlockFileFrameMarkup({ src: 'games/a/index.html?x=1&y=2' })).toBe(
+      `<iframe sandbox="${HTML_BLOCK_SANDBOX}" allow="fullscreen" ` +
+        'data-cm-src="games/a/index.html?x=1&amp;y=2" style="width: 100%; height: 100%; border: 0px;"></iframe>'
+    );
+    expect(file).toContain(`data-cm-src="blocks/0a0b0c0d.html" data-cm-rev="${REV}"`);
+    expect(file).not.toMatch(/\ssrc=|srcdoc/);
+    // Already in the browser's form.
+    expect(normalizeSlideHtml(file)).toBe(file);
+    expect(secureSlideBlocksInHtml(file)).toBe(file);
+  });
+
+  it('reads src and rev, with or without content; no source', () => {
+    expect(readSlideBlocks(file)).toEqual([
+      { id: 'f1', type: 'html', box: BOX, src: 'blocks/0a0b0c0d.html', rev: REV },
+    ]);
+    expect(readSlideBlocks(file, { content: false })).toEqual([
+      { id: 'f1', type: 'html', box: BOX, src: 'blocks/0a0b0c0d.html', rev: REV },
+    ]);
+  });
+
+  it('a frame naming its file stores no other source (write and generate)', () => {
+    const extra = file.replace(
+      'data-cm-src=',
+      'src="https://x.example/" srcdoc="&lt;p&gt;x&lt;/p&gt;" data-src="y" data-cm-inert-src="z" data-cm-src='
+    );
+    const stored = normalizeSlideHtml(extra);
+    expect(stored).toBe(file);
+    expect(secureSlideBlocksInHtml(extra)).toBe(file);
+    const deck: DeckJson = {
+      version: 1,
+      theme: 'white',
+      codeTheme: 'github',
+      slides: [{ id: 's1', html: extra }],
+    };
+    const doc = generateDeckHtml(deck, { title: 't' });
+    expect(doc).toContain(`data-cm-src="blocks/0a0b0c0d.html" data-cm-rev="${REV}"`);
+    expect(doc).not.toMatch(/srcdoc|x\.example|data-src="y"/);
+  });
+
+  it('round-trips a deck with a file block byte for byte', () => {
+    const deck: DeckJson = {
+      version: 1,
+      theme: 'white',
+      codeTheme: 'github',
+      slides: [{ id: 's1', html: file }],
+    };
+    const h1 = generateDeckHtml(deck, { title: 't' });
+    const p1 = parseDeckHtml(h1);
+    expect(generateDeckHtml(p1.deck, { title: 't' })).toBe(h1);
+    expect(p1.deck.slides[0].html).toBe(file);
+  });
+
+  it('frames inside other blocks are not html blocks: data-cm-src there is left alone', () => {
+    const iframe =
+      '<div class="sl-block" data-block-type="iframe"><div class="sl-block-content">' +
+      '<iframe data-cm-src="a.html" src="https://example.com/"></iframe></div></div>';
+    expect(normalizeSlideHtml(iframe)).toBe(iframe);
+  });
+
+  it('mints pasted-code file names', () => {
+    const src = mintHtmlBlockFileSrc();
+    expect(isHtmlBlockFileSrc(src)).toBe(true);
+    expect(src).toMatch(/^blocks\/[0-9a-f]{8}\.html$/);
+    expect(isHtmlBlockFileSrc('blocks/0A0B0C0D.html')).toBe(false);
+    expect(isHtmlBlockFileSrc('blocks/x/0a0b0c0d.html')).toBe(false);
+    expect(isHtmlBlockFileSrc('games/0a0b0c0d.html')).toBe(false);
+  });
+
+  it.each([
+    ['blocks/0a0b0c0d.html', 'slides/intro/blocks/0a0b0c0d.html', ''],
+    ['./games/snake/index.html', 'slides/intro/games/snake/index.html', ''],
+    ['games//snake/index.html#top', 'slides/intro/games/snake/index.html', '#top'],
+    ['../../games/sketchkit/draw.html?deck=x&f=y', 'games/sketchkit/draw.html', '?deck=x&f=y'],
+    ['../intro/%2e%2e/other/a.html', 'slides/other/a.html', ''],
+  ])('resolves %j against the deck folder', (ref, repoPath, suffix) => {
+    expect(resolveDeckRelativeRef(ref, 'slides/intro')).toEqual({ repoPath, suffix });
+  });
+
+  it.each([
+    '',
+    'https://example.com/a.html',
+    'HTTP://example.com/a.html',
+    'javascript:alert(1)',
+    'data:text/html,<p>',
+    '/content/o/r/a.html',
+    '//evil.example/a.html',
+    '../../../a.html',
+    '../../%2E%2E/a.html',
+    'games/',
+    'games/..',
+    '.',
+    '?x=1',
+    'a%2fb.html',
+    'a%5Cb.html',
+    'a b.html',
+    'a\\b.html',
+    'a\tb.html',
+  ])('refuses ref %j', ref => {
+    expect(resolveDeckRelativeRef(ref, 'slides/intro')).toBeNull();
+  });
+
+  it('accepts .html files in the repo, refuses other files and deck/page documents', () => {
+    expect(htmlBlockSrcProblem('blocks/0a0b0c0d.html')).toBeNull();
+    expect(htmlBlockSrcProblem('../../games/a/index.HTM?x')).toBeNull();
+    expect(htmlBlockSrcProblem('games/a/game.js')).toMatch(/\.html file/);
+    expect(htmlBlockSrcProblem('index.html')).toMatch(/document/);
+    expect(htmlBlockSrcProblem('deck.json')).toMatch(/\.html file/);
+    expect(htmlBlockSrcProblem('../other/index.html')).toMatch(/document/);
+    expect(htmlBlockSrcProblem('../../pages/p/index.html')).toMatch(/document/);
+    expect(htmlBlockSrcProblem('../../../x.html')).toMatch(/relative to the deck folder/);
+    expect(htmlBlockSrcProblem(`${'a/'.repeat(1001)}x.html`)).toMatch(/too long/);
   });
 });

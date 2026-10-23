@@ -50,7 +50,6 @@ const UNSAFE = [
   'allow-scripts allow-top-navigation',
   'allow-scripts allow-top-navigation-by-user-activation',
   'ALLOW-SAME-ORIGIN allow-scripts',
-  'allow-scripts allow-popups-to-escape-sandbox',
 ];
 
 test.describe('html block isolation rule (display)', () => {

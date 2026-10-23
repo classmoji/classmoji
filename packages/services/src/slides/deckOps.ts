@@ -30,8 +30,12 @@ import {
   blockMarkup,
   escapeBlockAttr,
   htmlBlockMarkup,
+  htmlBlockSrcProblem,
+  isHtmlBlockRev,
+  MAX_HTML_BLOCK_FILE_BYTES,
   MAX_SLIDE_HTML_LENGTH,
   mintBlockId,
+  utf8ByteLength,
   type BlockBox,
 } from './deckBlocks.ts';
 import {
@@ -52,6 +56,8 @@ import type { DeckJson, DeckSlide } from './deckTypes.ts';
 // engine's normalizeSlideHtml throws (module-identity-safe instanceof), and
 // read blocks with the engine's own reader.
 export { SlideHtmlError, readSlideBlocks, type SlideBlockInfo } from './deckHtml.ts';
+// The html-block file helpers deck_apply needs beside the engine.
+export { isHtmlBlockFileSrc, resolveDeckRelativeRef } from './deckBlocks.ts';
 
 /** The most characters a slide's html may hold (the op schemas' html cap). */
 export const MAX_SLIDE_HTML = MAX_SLIDE_HTML_LENGTH;
@@ -111,24 +117,34 @@ const newSlideSchema = z
 
 /** Which block to use — the guide agents read on block_add's `type`. */
 const BLOCK_TYPE_DESCRIPTION =
-  'html: a small self-contained interactive piece (figure, widget, one-file mini-game, demo) ' +
-  'in a sandboxed frame. It lives in the slide: co-edited live, shown in previews and ' +
-  'renders, copied with the slide. Limits: one document, slide html ≤200 KB, in-memory ' +
-  'localStorage only, no private /content fetches, loads with the deck, restarts when ' +
-  'someone edits the slide. iframe: embeds files uploaded to the deck (file_upload_start / ' +
-  'file_import_url with slide_id + folder) — multi-file games, sprites, sounds, shared ' +
-  'libraries, large code, persistent storage, private files, lazy loading, state that ' +
-  'survives co-edits; not live-editable (re-upload to change). svg: static vector art ' +
-  '(SMIL animation ok, scripts stripped)';
+  'html: an interactive HTML file (widget, demo, game) in a sandboxed frame. Give source ' +
+  '(one self-contained document; stored as a file in the deck, blocks/<id>.html) or src ' +
+  '(an .html file in the repo: multi-file games, shared libraries — upload with ' +
+  'file_upload_start slide_id + folder). iframe: an https page or a file of the deck, ' +
+  'loaded lazily. svg: static vector art (SMIL ok, scripts stripped)';
 
 const BLOCK_SOURCE_DESCRIPTION =
-  'html: the whole document the frame shows (<!doctype html>…; scripts run, no same-origin ' +
-  'access). svg: one <svg> element (sanitized, scaled to the box). Plain text: escaping is ' +
-  'done for you, and deck_get returns it decoded';
+  'html: the whole document (<!doctype html>…; scripts run, no same-origin access, ' +
+  "≤1 MB), written to the block's file. svg: one <svg> element (sanitized, scaled to the " +
+  'box). Plain text: escaping is done for you';
 
 const BLOCK_SRC_DESCRIPTION =
-  'iframe: the ref file_upload_status returned, a path in the deck folder ' +
-  '(games/x/index.html), or an https URL; loaded lazily';
+  'html: an .html file relative to the deck folder (blocks/x.html, games/x/index.html, ' +
+  '../../games/x/index.html). iframe: the ref file_upload_status returned, a deck path, ' +
+  'or an https URL';
+
+const BLOCK_REV_DESCRIPTION = 'html with src: the blob sha the file is at (deck_get reports it)';
+
+/** An html block's source: at most MAX_HTML_BLOCK_FILE_BYTES of UTF-8. */
+const blockSourceSchema = z
+  .string()
+  .refine(value => utf8ByteLength(value) <= MAX_HTML_BLOCK_FILE_BYTES, {
+    message: `source is over ${MAX_HTML_BLOCK_FILE_BYTES} bytes`,
+  });
+
+const blockRevSchema = z
+  .string()
+  .regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/, 'rev is a blob sha (40 or 64 hex characters)');
 
 const blockIdSchema = z
   .string()
@@ -217,8 +233,9 @@ export const deckOpSchema = z.discriminatedUnion('op', [
     slide: blockSlideSchema,
     type: z.enum(['html', 'svg', 'iframe']).describe(BLOCK_TYPE_DESCRIPTION),
     box: blockBoxSchema,
-    source: z.string().max(MAX_SLIDE_HTML).optional().describe(BLOCK_SOURCE_DESCRIPTION),
+    source: blockSourceSchema.optional().describe(BLOCK_SOURCE_DESCRIPTION),
     src: z.string().max(2_000).optional().describe(BLOCK_SRC_DESCRIPTION),
+    rev: blockRevSchema.optional().describe(BLOCK_REV_DESCRIPTION),
     block_id: blockIdSchema.optional().describe('Id for the new block; minted when omitted'),
   }),
   z.object({
@@ -226,17 +243,20 @@ export const deckOpSchema = z.discriminatedUnion('op', [
     slide: blockSlideSchema,
     block_id: existingBlockIdSchema,
     box: blockBoxPatchSchema.optional(),
-    source: z
-      .string()
-      .max(MAX_SLIDE_HTML)
-      .optional()
-      .describe('New source (html and svg blocks), as for block_add'),
-    src: z.string().max(2_000).optional().describe('New src (iframe blocks), as for block_add'),
+    source: blockSourceSchema.optional().describe('New source (html and svg), as for block_add'),
+    src: z.string().max(2_000).optional().describe('New src (html and iframe), as for block_add'),
+    rev: blockRevSchema.optional().describe(BLOCK_REV_DESCRIPTION),
   }),
   z.object({
     op: z.literal('block_delete'),
     slide: blockSlideSchema,
     block_id: existingBlockIdSchema,
+    delete_file: z
+      .boolean()
+      .optional()
+      .describe(
+        "html blocks: also delete the block's blocks/ file when no other block uses it (default false)"
+      ),
   }),
 ]);
 
@@ -441,17 +461,58 @@ export function resolveDeckFrameSrc(src: string, ctx: DeckFrameContext): string 
 }
 
 /**
+ * An html block `src` as stored: relative to the deck folder. A repo path
+ * inside the deck folder (what an upload reports) loses the folder; anything
+ * else is kept as given (the engine judges it).
+ */
+function deckRelativeSrc(src: string, ctx: DeckFrameContext): string {
+  const value = src.trim();
+  const folder = `${ctx.contentPath.replace(/\/+$/, '')}/`;
+  return value.startsWith(folder) && value.length > folder.length
+    ? value.slice(folder.length)
+    : value;
+}
+
+/** The type of block `blockId` on slide `slideId` of `deck` (ids as deck_outline reports them), or null. */
+function deckBlockType(deck: DeckJson, slideId: string, blockId: string): string | null {
+  const found = findSlide(deck.slides, slideId);
+  if (!found?.slide.html) return null;
+  let html: string;
+  try {
+    html = ensureSlideBlockIds(found.slide.html);
+  } catch {
+    return null;
+  }
+  return readSlideBlocks(html, { content: false }).find(b => b.id === blockId)?.type ?? null;
+}
+
+/**
  * Ops ready to send to every place that applies them: each block_add carries a
  * block id (minted here when the caller gave none, so a dry run, the live
  * server and a replay all name the same block) and every iframe `src` is
- * resolved against the deck folder. Input untouched.
+ * resolved against the deck folder. An html block's `src` stays relative to
+ * the deck folder (that is how it is stored); `deck` (the deck the ops apply
+ * to) tells which block_update targets an html block. Input untouched.
  */
-export function prepareDeckOps(ops: DeckOp[], ctx: DeckFrameContext | null): DeckOp[] {
+export function prepareDeckOps(
+  ops: DeckOp[],
+  ctx: DeckFrameContext | null,
+  deck: DeckJson | null = null
+): DeckOp[] {
+  const addedHtml = new Set<string>();
   return ops.map(op => {
     if (op.op !== 'block_add' && op.op !== 'block_update') return op;
     const next = { ...op };
     if (next.op === 'block_add' && next.block_id === undefined) next.block_id = mintBlockId();
-    if (ctx && next.src !== undefined) next.src = resolveDeckFrameSrc(next.src, ctx);
+    const isHtml =
+      next.op === 'block_add'
+        ? next.type === 'html'
+        : addedHtml.has(`${next.slide}\u0000${next.block_id}`) ||
+          (deck !== null && deckBlockType(deck, next.slide, next.block_id) === 'html');
+    if (next.op === 'block_add' && isHtml) addedHtml.add(`${next.slide}\u0000${next.block_id}`);
+    if (ctx && next.src !== undefined) {
+      next.src = isHtml ? deckRelativeSrc(next.src, ctx) : resolveDeckFrameSrc(next.src, ctx);
+    }
     return next;
   });
 }
@@ -519,10 +580,34 @@ function assertSlideHtmlFits(html: string, slideId: string): void {
   if (html.length > MAX_SLIDE_HTML) {
     throw new DeckOpError(
       `Slide '${slideId}' would hold ${html.length} characters of html, over the ` +
-        `${MAX_SLIDE_HTML} limit — keep html blocks small, or upload the files and embed ` +
-        'them with an iframe block'
+        `${MAX_SLIDE_HTML} limit — move large pieces into html blocks (their code is a file, ` +
+        'not slide html) or split the slide'
     );
   }
+}
+
+/** Refused in the pure engine: an html block's code is written to a file first. */
+const HTML_SOURCE_REFUSAL =
+  'An html block takes src (its file, relative to the deck folder): source is written to a ' +
+  'file before the ops are applied';
+
+/** An html block's `src` as stored, or a DeckOpError. */
+function checkHtmlBlockSrc(src: string): string {
+  const value = src.trim();
+  const problem = htmlBlockSrcProblem(value);
+  if (problem)
+    throw new DeckOpError(`Invalid html block src '${value.slice(0, 120)}' — ${problem}`);
+  return value;
+}
+
+/** An html block's `rev` (a blob sha), or a DeckOpError. */
+function checkHtmlBlockRev(rev: string | undefined): string | undefined {
+  if (rev !== undefined && !isHtmlBlockRev(rev)) {
+    throw new DeckOpError(
+      `Invalid rev '${String(rev).slice(0, 80)}' — a blob sha (40 or 64 hex characters)`
+    );
+  }
+  return rev;
 }
 
 /** A block edit, its SlideBlockError as the engine's own error. */
@@ -543,6 +628,9 @@ function newBlockMarkup(
   id: string,
   box: BlockBox
 ): string {
+  if (op.rev !== undefined && op.type !== 'html') {
+    throw new DeckOpError(`A ${op.type} block takes no rev`);
+  }
   if (op.type === 'iframe') {
     if (op.source !== undefined) {
       throw new DeckOpError('An iframe block takes src (a URL or deck path), not source');
@@ -550,13 +638,22 @@ function newBlockMarkup(
     if (op.src === undefined) throw new DeckOpError('An iframe block needs src');
     return blockMarkup('iframe', id, box, iframeEmbedMarkup(checkBlockFrameSrc(op.src)));
   }
+  if (op.type === 'html') {
+    if (op.source !== undefined) throw new DeckOpError(HTML_SOURCE_REFUSAL);
+    if (op.src === undefined) throw new DeckOpError('An html block needs src');
+    return htmlBlockMarkup({
+      id,
+      box,
+      src: checkHtmlBlockSrc(op.src),
+      rev: checkHtmlBlockRev(op.rev),
+    });
+  }
   if (op.src !== undefined) {
     throw new DeckOpError(`A ${op.type} block takes source, not src`);
   }
   if (op.source === undefined || op.source.trim() === '') {
     throw new DeckOpError(`A ${op.type} block needs source`);
   }
-  if (op.type === 'html') return htmlBlockMarkup({ id, box, source: op.source });
   return blockMarkup('svg', id, box, normalizeSvgBlockSource(op.source));
 }
 
@@ -841,7 +938,7 @@ export function applyDeckOps(
       case 'block_update': {
         const slide = blockSlide(deck, op.slide, 'block_update');
         const hasBox = op.box !== undefined && Object.keys(op.box).length > 0;
-        if (!hasBox && op.source === undefined && op.src === undefined) {
+        if (!hasBox && op.source === undefined && op.src === undefined && op.rev === undefined) {
           throw new DeckOpError(
             `block_update for '${op.block_id}' must set at least one of box, source, src`
           );
@@ -857,22 +954,29 @@ export function applyDeckOps(
         const edit: SlideBlockEdit = {};
         if (hasBox) edit.box = op.box;
         if (op.source !== undefined) {
-          if (block.type === 'html') edit.source = op.source;
-          else if (block.type === 'svg') edit.svg = op.source;
-          else {
+          if (block.type === 'html') throw new DeckOpError(HTML_SOURCE_REFUSAL);
+          if (block.type !== 'svg') {
             throw new DeckOpError(
               `Block '${op.block_id}' is ${block.type}; source applies to html and svg blocks` +
                 (block.type === 'iframe' ? ' (an iframe block takes src)' : '')
             );
           }
+          edit.svg = op.source;
+        }
+        if (op.rev !== undefined && (block.type !== 'html' || op.src === undefined)) {
+          throw new DeckOpError(`rev goes with src on an html block ('${op.block_id}')`);
         }
         if (op.src !== undefined) {
-          if (block.type !== 'iframe') {
+          if (block.type === 'html') {
+            edit.src = checkHtmlBlockSrc(op.src);
+            edit.rev = checkHtmlBlockRev(op.rev);
+          } else if (block.type === 'iframe') {
+            edit.src = checkBlockFrameSrc(op.src);
+          } else {
             throw new DeckOpError(
-              `Block '${op.block_id}' is ${block.type}; src applies to iframe blocks`
+              `Block '${op.block_id}' is ${block.type}; src applies to html and iframe blocks`
             );
           }
-          edit.src = checkBlockFrameSrc(op.src);
         }
         const next = blockEdit(op.slide, () => updateSlideBlock(html, op.block_id, edit));
         assertSlideHtmlFits(next, op.slide);

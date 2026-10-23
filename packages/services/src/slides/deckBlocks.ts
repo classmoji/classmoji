@@ -3,13 +3,18 @@
  * keep an html block's code to itself.
  *
  * - An **html block** is an `.sl-block[data-block-type="html"]` holding one
- *   `<iframe sandbox srcdoc>`. The frame's `srcdoc` IS the block's source, so
- *   every surface (editor, viewer, presenter, follow, render-view, thumbnail)
- *   shows it without hydration, and its scripts run in an opaque origin: no
- *   access to the page around it, its cookies, or the live session. The rule:
- *   a frame inside an html block loads only while its `sandbox` is present and
- *   holds nothing beyond {@link HTML_BLOCK_SANDBOX_ALLOWED}; otherwise its
- *   source attributes are renamed to `data-cm-inert-*` for display.
+ *   `<iframe sandbox data-cm-src data-cm-rev>`. Its code is a FILE in the
+ *   content repo: `data-cm-src` is a URL relative to the deck folder (pasted
+ *   code lives at `blocks/<8 hex>.html`; any other repo HTML file may be
+ *   named, e.g. `games/snake/index.html`), `data-cm-rev` the blob sha it was
+ *   written at. The stored frame carries neither `src` nor `srcdoc`: every
+ *   display surface turns the ref into a URL on the content service, where
+ *   the page loads in a sandboxed origin. Blocks made before files kept their
+ *   code in `srcdoc` (the storage shim first); they are still read here.
+ *   The rule for any frame inside an html block: it loads only while its
+ *   `sandbox` is present and holds nothing beyond
+ *   {@link HTML_BLOCK_SANDBOX_ALLOWED}; otherwise its source attributes are
+ *   renamed to `data-cm-inert-*` for display.
  * - An **svg block** is an `.sl-block[data-block-type="svg"]` holding inline
  *   SVG, so `currentColor` and theme CSS apply. Its content is held to a list
  *   of drawing elements and attributes (no script, no foreignObject, no event
@@ -36,8 +41,14 @@ export const INERT_ATTR_PREFIX = 'data-cm-inert-';
 
 // ─── html blocks: the isolation rule ─────────────────────────────────────────
 
-/** The sandbox every html block's frame is built with. */
-export const HTML_BLOCK_SANDBOX = 'allow-scripts allow-pointer-lock allow-modals allow-popups';
+/**
+ * The sandbox every html block's frame is built with — the same flags the
+ * content service sends with every page it serves to a frame
+ * (`apps/content/src/box.ts` `BOX_SANDBOX`, pinned equal in the tests).
+ */
+export const HTML_BLOCK_SANDBOX =
+  'allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals ' +
+  'allow-pointer-lock allow-downloads';
 
 /**
  * Sandbox tokens an html block's frame may carry and still load. Anything
@@ -49,6 +60,7 @@ export const HTML_BLOCK_SANDBOX_ALLOWED: ReadonlySet<string> = new Set([
   'allow-pointer-lock',
   'allow-modals',
   'allow-popups',
+  'allow-popups-to-escape-sandbox',
   'allow-forms',
   'allow-downloads',
   'allow-presentation',
@@ -163,13 +175,15 @@ export function neutralizeHtmlBlockFrames(root: Element | Document | DocumentFra
   return renamed;
 }
 
-// ─── html blocks: source ⇄ srcdoc ────────────────────────────────────────────
+// ─── html blocks: legacy source ⇄ srcdoc ─────────────────────────────────────
 
 /**
- * Runs first in every html block: an opaque origin has no storage, so
- * `localStorage` / `sessionStorage` throw there. This puts an in-memory
- * stand-in in their place (it lasts as long as the frame) when the real one
- * is unavailable. Stored as part of the srcdoc, never shown as source.
+ * Runs first in a legacy (srcdoc) html block: an opaque origin has no
+ * storage, so `localStorage` / `sessionStorage` throw there. This puts an
+ * in-memory stand-in in their place (it lasts as long as the frame) when the
+ * real one is unavailable. Stored as part of the srcdoc, never shown as
+ * source. Block FILES never hold it: the content service adds the same shim
+ * to every page it serves to a frame.
  */
 export const HTML_BLOCK_STORAGE_SHIM =
   '<script data-cm-storage-shim>(function(){function m(){var d=new Map();return{get length(){' +
@@ -199,7 +213,7 @@ function leadingDoctype(html: string): string {
   return close === -1 ? '' : html.slice(0, close + 1);
 }
 
-/** The srcdoc for an html block's source: the storage shim, then the source. */
+/** The srcdoc for a legacy html block's source: the storage shim, then the source. */
 export function htmlBlockSrcdoc(source: string): string {
   const doctype = leadingDoctype(source);
   if (doctype) return doctype + HTML_BLOCK_STORAGE_SHIM + source.slice(doctype.length);
@@ -216,6 +230,116 @@ export function htmlBlockSource(srcdoc: string): string {
     return srcdoc.slice(HTML_BLOCK_STORAGE_SHIM.length);
   }
   return srcdoc;
+}
+
+// ─── html blocks: files ──────────────────────────────────────────────────────
+
+/** The frame attribute naming an html block's file, relative to the deck folder. */
+export const HTML_BLOCK_SRC_ATTR = 'data-cm-src';
+
+/** The frame attribute holding the blob sha the block's file was written at. */
+export const HTML_BLOCK_REV_ATTR = 'data-cm-rev';
+
+/** The most an html block's file may hold, in UTF-8 bytes. */
+export const MAX_HTML_BLOCK_FILE_BYTES = 1_000_000;
+
+/** Where pasted code is stored, relative to the deck folder: `blocks/<8 hex>.html`. */
+export const HTML_BLOCK_FILE_RE = /^blocks\/[0-9a-f]{8}\.html$/;
+
+/** A git blob sha (sha-1, or sha-256 in repos that use it). */
+const BLOB_SHA_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+/** `text`'s length in UTF-8 bytes. */
+export function utf8ByteLength(text: string): number {
+  return new TextEncoder().encode(text).length;
+}
+
+/** Whether `src` names a pasted-code file of the deck (`blocks/<8 hex>.html`). */
+export function isHtmlBlockFileSrc(src: string | null | undefined): src is string {
+  return typeof src === 'string' && HTML_BLOCK_FILE_RE.test(src);
+}
+
+/** Whether `rev` looks like a blob sha. */
+export function isHtmlBlockRev(rev: string | null | undefined): rev is string {
+  return typeof rev === 'string' && BLOB_SHA_RE.test(rev);
+}
+
+/** A fresh pasted-code file name: `blocks/<8 hex>.html`. */
+export function mintHtmlBlockFileSrc(): string {
+  return `blocks/${mintBlockId()}.html`;
+}
+
+// Control characters are exactly what a stored ref may not carry.
+// eslint-disable-next-line no-control-regex
+const REF_BAD_CHARS = /[\s\u0000-\u001f\u007f\\]/;
+const DOT_SEGMENT_RE = /^(?:\.|%2e)$/i;
+const DOT_DOT_SEGMENT_RE = /^(?:\.|%2e){2}$/i;
+
+/** A deck-relative ref resolved to the repo: the file's repo path and its `?query#hash` (kept as written). */
+export interface ResolvedDeckRef {
+  repoPath: string;
+  suffix: string;
+}
+
+/**
+ * Resolve a URL written relative to the deck folder (an html block's
+ * `data-cm-src`) against it, with URL path semantics: `.` / `..` segments
+ * (also percent-encoded) resolved, the query and hash kept as they are.
+ * Null when it is not such a ref: a scheme, a root or protocol-relative path,
+ * whitespace, a backslash or an encoded slash, a path that climbs above the
+ * repo root, or one that names a folder (empty last segment) or nothing.
+ */
+export function resolveDeckRelativeRef(ref: string, deckFolder: string): ResolvedDeckRef | null {
+  if (!ref || REF_BAD_CHARS.test(ref)) return null;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(ref) || ref.startsWith('/')) return null;
+  const cut = ref.search(/[?#]/);
+  const path = cut === -1 ? ref : ref.slice(0, cut);
+  const suffix = cut === -1 ? '' : ref.slice(cut);
+  if (!path || /%(?:2f|5c)/i.test(path)) return null;
+  const out = deckFolder.split('/').filter(Boolean);
+  const segments = path.split('/');
+  for (let i = 0; i < segments.length; i++) {
+    const segment = segments[i];
+    const last = i === segments.length - 1;
+    if (DOT_DOT_SEGMENT_RE.test(segment)) {
+      if (out.length === 0) return null;
+      out.pop();
+      if (last) return null;
+    } else if (DOT_SEGMENT_RE.test(segment) || segment === '') {
+      if (last) return null;
+    } else {
+      out.push(segment);
+    }
+  }
+  if (out.length === 0) return null;
+  return { repoPath: out.join('/'), suffix };
+}
+
+/** Deck and page documents: never the target of a frame. */
+const DOCUMENT_PATH_RE =
+  /^(?:slides\/[^/]+\/(?:index\.html|deck\.json)|pages\/[^/]+\/(?:content\.json|index\.html))$/i;
+
+/**
+ * Why `src` cannot be an html block's file ref (relative to the deck folder
+ * `deckFolder`), or null when it can: a URL {@link resolveDeckRelativeRef}
+ * resolves, to an `.html` / `.htm` file that is not a deck or page document.
+ * The ref is stored as written. Every deck folder is `slides/<one segment>`,
+ * so the default stands in for any deck: only the depth decides what climbs
+ * out of the repo, and a deck's own documents read the same under any name.
+ */
+export function htmlBlockSrcProblem(src: string, deckFolder = 'slides/deck'): string | null {
+  if (src.length > 2_000) return 'it is too long';
+  const resolved = resolveDeckRelativeRef(src, deckFolder);
+  if (!resolved) {
+    return (
+      'it must be a path relative to the deck folder (blocks/x.html, games/snake/index.html, ' +
+      '../../games/x/index.html) that stays inside the repository — no URL, no root path, ' +
+      'no spaces or backslashes'
+    );
+  }
+  if (!/\.html?$/i.test(resolved.repoPath)) return 'it must name an .html file';
+  if (DOCUMENT_PATH_RE.test(resolved.repoPath)) return 'a deck or page document cannot be a block';
+  return null;
 }
 
 // ─── svg blocks: the element and attribute lists ─────────────────────────────
@@ -1089,7 +1213,8 @@ export function scopeSvgStyles(root: Element): void {
 /**
  * The most html one slide may hold, in characters. Deck ops refuse a slide
  * over it (deckOps.ts `MAX_SLIDE_HTML`, pinned equal in the tests); the
- * editor checks before a block edit would cross it.
+ * editor checks before a block edit would cross it. An html block's code is
+ * a file, not slide html: {@link MAX_HTML_BLOCK_FILE_BYTES} caps that.
  */
 export const MAX_SLIDE_HTML_LENGTH = 200_000;
 
@@ -1147,7 +1272,29 @@ export function blockMarkup(type: DeckBlockType, id: string, box: BlockBox, inne
   );
 }
 
-/** The frame inside an html block, for `source`. */
+/**
+ * The frame inside an html block, for its file: `src` relative to the deck
+ * folder, `rev` the blob sha it was written at (omitted when unknown). No
+ * `src`, no `srcdoc`: display surfaces resolve the ref.
+ */
+export function htmlBlockFileFrameMarkup(opts: {
+  src: string;
+  rev?: string;
+  style?: string;
+}): string {
+  const rev = opts.rev ? ` ${HTML_BLOCK_REV_ATTR}="${escapeBlockAttr(opts.rev)}"` : '';
+  return (
+    `<iframe sandbox="${HTML_BLOCK_SANDBOX}" allow="${HTML_BLOCK_FRAME_ALLOW}" ` +
+    `${HTML_BLOCK_SRC_ATTR}="${escapeBlockAttr(opts.src)}"${rev} ` +
+    `style="${escapeBlockAttr(opts.style ?? HTML_BLOCK_FRAME_STYLE)}"></iframe>`
+  );
+}
+
+/**
+ * The frame of a legacy html block, its code in `srcdoc`. Kept for reading
+ * and converting blocks made before files; new blocks are
+ * {@link htmlBlockFileFrameMarkup}.
+ */
 export function htmlBlockFrameMarkup(source: string): string {
   return (
     `<iframe sandbox="${HTML_BLOCK_SANDBOX}" allow="${HTML_BLOCK_FRAME_ALLOW}" ` +
@@ -1155,7 +1302,18 @@ export function htmlBlockFrameMarkup(source: string): string {
   );
 }
 
-/** A whole html block. */
-export function htmlBlockMarkup(opts: { id: string; box: BlockBox; source: string }): string {
-  return blockMarkup('html', opts.id, opts.box, htmlBlockFrameMarkup(opts.source));
+/**
+ * A whole html block: for its file (`src`, `rev`), or — legacy, see
+ * {@link htmlBlockFrameMarkup} — for inline `source`.
+ */
+export function htmlBlockMarkup(
+  opts:
+    | { id: string; box: BlockBox; src: string; rev?: string }
+    | { id: string; box: BlockBox; source: string }
+): string {
+  const frame =
+    'src' in opts
+      ? htmlBlockFileFrameMarkup({ src: opts.src, rev: opts.rev })
+      : htmlBlockFrameMarkup(opts.source);
+  return blockMarkup('html', opts.id, opts.box, frame);
 }

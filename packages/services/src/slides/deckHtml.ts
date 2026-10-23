@@ -31,12 +31,14 @@ import { domhandlerSlideTree, mayHaveHiddenSlides, removeHiddenSlides } from './
 import {
   BLOCK_ID_ATTR,
   HTML_BLOCK_FRAME_SELECTOR,
+  HTML_BLOCK_REV_ATTR,
   HTML_BLOCK_SELECTOR,
+  HTML_BLOCK_SRC_ATTR,
   INERT_ATTR_PREFIX,
   SVG_BLOCK_SELECTOR,
   SVG_SCOPE_ATTR,
   cssPx,
-  htmlBlockFrameMarkup,
+  htmlBlockFileFrameMarkup,
   htmlBlockSource,
   isAllowedSvgAnimation,
   isAllowedSvgAttr,
@@ -893,7 +895,8 @@ export function normalizeSlideHtml(html: string): string {
   stripFragmentRuntimeClasses($.root());
 
   // svg blocks held to the drawing lists; an html block's frame whose
-  // sandbox would let it out is stored inert.
+  // sandbox would let it out is stored inert, and one that names its file
+  // stores no other source.
   sanitizeSvgBlocksIn($);
   neutralizeHtmlBlocksIn($);
 
@@ -960,12 +963,35 @@ function insideHtmlBlock($: CheerioAPI, el: Element): boolean {
   return $(el).closest(HTML_BLOCK_SELECTOR).length > 0;
 }
 
-/** Html-block frames whose sandbox would let them out get inert sources. Returns the count. */
+/**
+ * Sources an html-block frame that names its file (`data-cm-src`) never
+ * stores: the file is the source, and display surfaces build the URL.
+ */
+const FILE_FRAME_DROPPED_ATTRS = ['src', 'srcdoc', 'data-src'].flatMap(name => [
+  name,
+  `${INERT_ATTR_PREFIX}${name}`,
+]);
+
+/**
+ * Html-block frames whose sandbox would let them out get inert sources, and
+ * frames naming their file lose any other source. Returns the count.
+ */
 function neutralizeHtmlBlocksIn($: CheerioAPI): number {
   let count = 0;
   $(HTML_BLOCK_FRAME_SELECTOR).each((_i, node) => {
     const el = node as Element;
     const inside = insideHtmlBlock($, el);
+    if (
+      inside &&
+      el.tagName.toLowerCase() === 'iframe' &&
+      el.attribs[HTML_BLOCK_SRC_ATTR] != null
+    ) {
+      for (const name of FILE_FRAME_DROPPED_ATTRS) {
+        if (el.attribs[name] === undefined) continue;
+        delete el.attribs[name];
+        count++;
+      }
+    }
     const blocked = (name: string) =>
       isBlockedFrameAttr(el.tagName, name, el.attribs['sandbox'], inside, el.attribs[name]);
     if (!Object.keys(el.attribs).some(blocked)) return;
@@ -1260,12 +1286,17 @@ export interface SlideBlockInfo {
   type: string;
   /** left/top/width/height in px, each present when the block's style sets it in px. */
   box: Partial<BlockBox>;
-  /** html blocks: the source, decoded from srcdoc (storage shim taken out). */
+  /** Legacy html blocks (code in srcdoc): the source, storage shim taken out. */
   source?: string;
   /** svg blocks: the `<svg>` markup. */
   svg?: string;
-  /** iframe blocks: the frame's URL (`data-src`, else `src`). */
+  /**
+   * iframe blocks: the frame's URL (`data-src`, else `src`). html blocks: the
+   * block's file, relative to the deck folder (`data-cm-src`).
+   */
   src?: string;
+  /** html blocks: the blob sha the file was written at (`data-cm-rev`), when known. */
+  rev?: string;
 }
 
 const BOX_KEYS = ['left', 'top', 'width', 'height'] as const;
@@ -1291,7 +1322,11 @@ function blockFrame($: CheerioAPI, block: Element): Element | undefined {
   return $(block).find('iframe').toArray()[0] as Element | undefined;
 }
 
-/** The draggable blocks of a slide's html, top-level `.sl-block`s in document order. */
+/**
+ * The draggable blocks of a slide's html, top-level `.sl-block`s in document
+ * order. `content: false` leaves out sources, svg and iframe URLs; an html
+ * block's file ref (`src`, `rev`) is always listed.
+ */
 export function readSlideBlocks(html: string, opts: { content?: boolean } = {}): SlideBlockInfo[] {
   if (!html.includes('sl-block')) return [];
   const $ = cheerio.load(html, null, false);
@@ -1306,11 +1341,17 @@ export function readSlideBlocks(html: string, opts: { content?: boolean } = {}):
         type,
         box: boxFromStyle(el.attribs['style'] ?? ''),
       };
-      if (opts.content === false) return info;
       if (type === 'html') {
         const frame = blockFrame($, el);
+        const src = frame?.attribs[HTML_BLOCK_SRC_ATTR];
+        const rev = frame?.attribs[HTML_BLOCK_REV_ATTR];
+        if (src != null) info.src = src;
+        if (src != null && rev) info.rev = rev;
+        if (opts.content === false || src != null) return info;
         const srcdoc = frame?.attribs['srcdoc'] ?? frame?.attribs[`${INERT_ATTR_PREFIX}srcdoc`];
         if (srcdoc != null) info.source = htmlBlockSource(srcdoc);
+      } else if (opts.content === false) {
+        return info;
       } else if (type === 'svg') {
         const svg = $(el).find('svg').first();
         if (svg.length > 0) info.svg = $.html(svg);
@@ -1326,12 +1367,16 @@ export function readSlideBlocks(html: string, opts: { content?: boolean } = {}):
 /** What a block edit changes; only the fields given. */
 export interface SlideBlockEdit {
   box?: Partial<BlockBox>;
-  /** html blocks: new source (the frame is rebuilt with the standard sandbox). */
-  source?: string;
   /** svg blocks: new `<svg>` markup. */
   svg?: string;
-  /** iframe blocks: new URL (stored as `data-src`, so it loads lazily). */
+  /**
+   * iframe blocks: new URL (stored as `data-src`, so it loads lazily). html
+   * blocks: the block's file relative to the deck folder — the frame is
+   * rebuilt with the standard sandbox, `data-cm-src` and `rev`.
+   */
   src?: string;
+  /** html blocks, with `src`: the blob sha the file was written at. */
+  rev?: string;
 }
 
 /** Typed failure for a block edit (unknown block id, field that does not fit the type). */
@@ -1396,18 +1441,21 @@ export function updateSlideBlock(html: string, blockId: string, edit: SlideBlock
   const block = findBlock($, blockId);
   const type = block.attribs['data-block-type'] ?? 'text';
   const content = $(block).children('.sl-block-content').first();
-  if ((edit.source !== undefined || edit.svg !== undefined) && content.length === 0) {
+  const htmlSrc = type === 'html' && edit.src !== undefined;
+  if ((htmlSrc || edit.svg !== undefined) && content.length === 0) {
     throw new SlideBlockError(`Block '${blockId}' has no content to replace`);
   }
-  if (edit.source !== undefined) {
-    if (type !== 'html') throw new SlideBlockError(`Block '${blockId}' is ${type}, not html`);
-    content.empty().append(htmlBlockFrameMarkup(edit.source));
+  if (edit.rev !== undefined && !htmlSrc) {
+    throw new SlideBlockError(`Block '${blockId}': rev goes with an html block's src`);
+  }
+  if (htmlSrc && edit.src !== undefined) {
+    content.empty().append(htmlBlockFileFrameMarkup({ src: edit.src, rev: edit.rev }));
   }
   if (edit.svg !== undefined) {
     if (type !== 'svg') throw new SlideBlockError(`Block '${blockId}' is ${type}, not svg`);
     content.empty().append(normalizeSvgBlockSource(edit.svg));
   }
-  if (edit.src !== undefined) {
+  if (edit.src !== undefined && !htmlSrc) {
     if (type !== 'iframe') throw new SlideBlockError(`Block '${blockId}' is ${type}, not iframe`);
     const frame = blockFrame($, block);
     if (!frame) throw new SlideBlockError(`Block '${blockId}' has no frame`);

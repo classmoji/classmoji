@@ -42,7 +42,7 @@ export function sqlSweeperDb(prisma: RawClient): CollabSweeperDb {
           AND octet_length(state) > 0
           AND last_checkpoint_error LIKE 'schema-mismatch:%'
           AND ((kind = 'page' AND schema_version <= ${page})
-               OR (kind = 'deck' AND schema_version = ${deck}))
+               OR (kind = 'deck' AND schema_version <= ${deck}))
         LIMIT 500`;
     },
 

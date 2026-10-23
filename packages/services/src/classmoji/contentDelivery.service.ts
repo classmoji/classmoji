@@ -4,7 +4,9 @@ import {
   contentDispositionFor,
   normalizeDownloadFilename,
   parseContentUrl,
+  parseFilesUrl,
   signBlobUrl,
+  signFilesBase,
   signMediaUrl,
   signSrcSet,
   signThemeBase,
@@ -31,8 +33,17 @@ import {
   lookupContentAssets,
   lookupContentAssetsBySha,
   lookupContentTree,
+  recordFolderTreesAfterCommit,
 } from './contentAssets.service.ts';
 import { extractOwnRepoPath } from './contentRefs.ts';
+// Zero-import string rules, shared with the editor.
+import {
+  encodeRepoPath,
+  isRepoDocumentPath,
+  normalizeFrameRepoPath,
+  type FrameRefOptions,
+  type RepoFrameTarget,
+} from '../slides/frameRefs.ts';
 // The pure slide-source policy — no Prisma, no GitHub, no cycle back to here.
 import { slideFileSourceProblem } from '../slides/slideSource.ts';
 
@@ -576,17 +587,42 @@ async function mintSigned<T>(
   now: number | undefined,
   mint: (origin: string, signing: SigningContext) => Promise<T>
 ): Promise<T | null> {
-  // The invariant, in one line. A row read for another classroom names bytes
-  // this classroom has no claim on, and the Worker would honour the signature.
-  if (asset.classroom_id !== classroom.id) {
-    return refuseToSign(classroom.id, asset.sha, `row belongs to classroom ${asset.classroom_id}`);
+  return mintSignedAll(classroom, env, [asset], tier, expect, now, mint);
+}
+
+/**
+ * `mintSigned` over several proofs at once — a files grant names one tree per
+ * folder, and every one of them is asserted before anything is signed. One
+ * refused proof refuses the whole signature.
+ */
+async function mintSignedAll<T>(
+  classroom: { id: string; content_key_version: number },
+  env: { origin: string; master: string },
+  assets: readonly MappedAsset[],
+  tier: ResolveTier,
+  expect: 'blob' | 'tree',
+  now: number | undefined,
+  mint: (origin: string, signing: SigningContext) => Promise<T>
+): Promise<T | null> {
+  if (assets.length === 0) return null;
+  for (const asset of assets) {
+    // The invariant, in one line. A row read for another classroom names bytes
+    // this classroom has no claim on, and the Worker would honour the signature.
+    if (asset.classroom_id !== classroom.id) {
+      return refuseToSign(
+        classroom.id,
+        asset.sha,
+        `row belongs to classroom ${asset.classroom_id}`
+      );
+    }
+    // A tree is not a file. Signing a directory's sha as a blob mints a
+    // confidently-wrong URL the Worker cannot serve; signing a blob as a theme
+    // folder is the same mistake mirrored.
+    if (asset.type !== expect) {
+      return refuseToSign(classroom.id, asset.sha, `row is a ${asset.type}, not a ${expect}`);
+    }
   }
-  // A tree is not a file. Signing a directory's sha as a blob mints a
-  // confidently-wrong URL the Worker cannot serve; signing a blob as a theme
-  // folder is the same mistake mirrored.
-  if (asset.type !== expect) {
-    return refuseToSign(classroom.id, asset.sha, `row is a ${asset.type}, not a ${expect}`);
-  }
+  const asset = assets[0];
 
   const signing: SigningContext = {
     master: env.master,
@@ -1518,6 +1554,342 @@ export async function resolveThemeBase(
   return mintSigned(ctx.classroom, env, tree, ctx.tier, 'tree', undefined, (origin, signing) =>
     signThemeBase(origin, signing, { theme: themeName, treeSha: tree.sha })
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Frames — folder grants for the repo files a deck embeds
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** At most this many of the deck folder's own subfolders go into one grant. */
+const FRAME_GRANT_MAX_SUBFOLDERS = 10;
+
+/** Top-level folders a frame grant never opens, nor anything under them. */
+const FRAME_DENIED_TREES: ReadonlySet<string> = new Set([
+  '.classmoji',
+  '.github',
+  'bot-context',
+  THEMES_FOLDER,
+]);
+
+/** Top-level folders a frame grant never opens WHOLE; their item folders are judged one by one. */
+const FRAME_DENIED_ROOTS: ReadonlySet<string> = new Set(['slides', 'pages']);
+
+/** How long reading one folder the map does not have may hold a render. */
+const FRAME_TREE_READ_TIMEOUT_MS = 3000;
+
+/**
+ * `{classroom}|{commit}|{folder}` for every folder already read from the
+ * provider. A folder the map lacks is read once per synced commit: at the same
+ * commit the answer cannot change, so a deck whose frame names a folder that
+ * is not there costs one read, not one per viewer. Cleared past a bound.
+ */
+const frameTreeReads = new Set<string>();
+const FRAME_TREE_READS_MAX = 2000;
+
+export interface FrameSignerRequest {
+  classroom: ResolveClassroom;
+  /** The deck's folder (`slides/<seg>`): the slide row's own `content_path`. */
+  deckFolder: string;
+  /**
+   * The DECK's visibility. Frames are signed `month` for a public deck and
+   * `week` otherwise, whoever is looking: a frame stays open as long as the
+   * slide does, and the short `edit` lifetime would expire under it.
+   */
+  isPublic: boolean;
+  /** One clock for a pass that signs several frames (see `mintSigned`). */
+  now?: number;
+}
+
+export interface FrameSigner {
+  /**
+   * A file in this classroom's content repo → its signed files URL
+   * (`<grant base><repoPath><query>`), or null when it cannot be framed.
+   */
+  sign(repoPath: string, query?: string): Promise<string | null>;
+}
+
+interface FrameLayout {
+  /** The deck folder's immediate subfolders the map has, with their tree shas. */
+  subfolders: Map<string, string>;
+  /** The folder of every slide and page in the classroom. */
+  itemFolders: string[];
+  /** Every FILE slide's document. */
+  sourcePaths: string[];
+}
+
+/** What a frame grant may not open. A reason, or null when the folder is fine. */
+function frameFolderRefusal(
+  folder: string,
+  deckFolder: string,
+  layout: FrameLayout
+): string | null {
+  if (!folder) return 'repo root';
+  if (FRAME_DENIED_TREES.has(folder.split('/')[0])) return 'reserved folder';
+  if (FRAME_DENIED_ROOTS.has(folder)) return 'reserved folder';
+  const holds = (path: string) => path === folder || path.startsWith(`${folder}/`);
+  // The deck's own folder is the one item folder a grant may name, and only
+  // when the frame sits in it directly; the Worker still refuses its documents.
+  if (
+    layout.itemFolders.some(path => holds(path) && !(path === deckFolder && folder === deckFolder))
+  ) {
+    return 'holds a slide or page';
+  }
+  if (layout.sourcePaths.some(path => path.startsWith(`${folder}/`))) return 'holds a file slide';
+  return null;
+}
+
+async function readFrameLayout(classroomId: string, deckFolder: string): Promise<FrameLayout> {
+  // The 24h backstop every resolver applies; a no-op when the map is fresh.
+  await ensureMapBounded(classroomId);
+  const prisma = getPrisma();
+  const prefix = `${deckFolder}/`;
+  const [trees, slides, pages] = await Promise.all([
+    prisma.contentAsset.findMany({
+      where: { classroom_id: classroomId, type: 'tree', path: { startsWith: prefix } },
+      select: { path: true, sha: true },
+    }),
+    prisma.slide.findMany({
+      where: { classroom_id: classroomId },
+      select: { content_path: true, source_path: true },
+    }),
+    prisma.page.findMany({ where: { classroom_id: classroomId }, select: { content_path: true } }),
+  ]);
+
+  const subfolders = new Map<string, string>();
+  for (const row of [...(trees as { path: string; sha: string }[])].sort((a, b) =>
+    a.path < b.path ? -1 : a.path > b.path ? 1 : 0
+  )) {
+    const rest = row.path.startsWith(prefix) ? row.path.slice(prefix.length) : '';
+    if (rest && !rest.includes('/')) subfolders.set(row.path, row.sha);
+  }
+  const normalized = (paths: (string | null | undefined)[]) =>
+    paths
+      .map(path => (path ? normalizeFrameRepoPath(path) : null))
+      .filter((path): path is string => path !== null);
+
+  return {
+    subfolders,
+    itemFolders: normalized([
+      ...(slides as { content_path: string }[]).map(slide => slide.content_path),
+      ...(pages as { content_path: string }[]).map(page => page.content_path),
+    ]),
+    sourcePaths: normalized(
+      (slides as { source_path: string | null }[]).map(slide => slide.source_path)
+    ),
+  };
+}
+
+/**
+ * A folder the map has no tree row for, read once from the provider at the
+ * commit the map was last synced at (written through to the map). Null when it
+ * is not there, the read fails or runs out of time, or it was already tried at
+ * this commit.
+ */
+async function readMissingFrameTree(classroomId: string, folder: string): Promise<string | null> {
+  try {
+    const row = await getPrisma().classroom.findUnique({
+      where: { id: classroomId },
+      select: { content_assets_synced_commit: true },
+    });
+    const commit = row?.content_assets_synced_commit;
+    if (!commit) return null;
+    const key = `${classroomId}|${commit}|${folder}`;
+    if (frameTreeReads.has(key)) return null;
+    if (frameTreeReads.size >= FRAME_TREE_READS_MAX) frameTreeReads.clear();
+    frameTreeReads.add(key);
+    const found = await withDeadline(
+      recordFolderTreesAfterCommit({ classroomId, commit, folders: [folder] }),
+      FRAME_TREE_READ_TIMEOUT_MS,
+      'frame folder read'
+    );
+    return found.get(folder) ?? null;
+  } catch (error) {
+    console.warn(
+      `[contentDelivery] Could not read folder ${folder} for classroom ${classroomId}:`,
+      error instanceof Error ? error.message : error
+    );
+    return null;
+  }
+}
+
+/** Drop every folder that sits inside another one in the list; sorted. */
+function outermostFolders(folders: string[]): string[] {
+  const unique = [...new Set(folders)].sort();
+  return unique.filter(
+    folder => !unique.some(other => other !== folder && folder.startsWith(`${other}/`))
+  );
+}
+
+/**
+ * The signer for one pass over one deck's frames.
+ *
+ * A frame target T opens a grant over:
+ *   - the deck folder's immediate subfolders the map has (at most ten), never
+ *     the deck folder itself — so the deck's own documents are outside every
+ *     grant, and a deck save does not change its frames' URLs;
+ *   - plus T's own folder when T is outside the deck folder
+ *     (`games/sketchkit` for `games/sketchkit/draw.html`), or the deck folder
+ *     itself when T sits directly in it (then that one folder is the grant).
+ *
+ * Refused (null): the repo root; `.github`, `.classmoji`, `bot-context` and
+ * the theme folder, and anything under them; `slides` or `pages` whole; any
+ * folder that is or holds another slide's or page's folder, or holds a FILE
+ * slide's document; a deck or page document as the target; a folder with no
+ * tree row of THIS classroom (after one read from the provider).
+ *
+ * Every folder's tree row is a `MappedAsset` of this classroom, asserted at
+ * the mint like every other signature. Bases are memoized per folder set, and
+ * the layout (subfolders, item folders) is read once per signer.
+ */
+export function createFrameSigner(req: FrameSignerRequest): FrameSigner {
+  const env = deliveryEnvFor({ classroom: req.classroom, tier: 'week' });
+  const deckFolder = normalizeFrameRepoPath(req.deckFolder);
+  const classroomId = req.classroom.id;
+  const tier: ResolveTier = req.isPublic ? 'month' : 'week';
+  const now = req.now ?? passClock();
+
+  let layout: Promise<FrameLayout> | null = null;
+  const trees = new Map<string, Promise<string | null>>();
+  const bases = new Map<string, Promise<string | null>>();
+
+  const treeShaOf = (folder: string, known: Map<string, string>): Promise<string | null> => {
+    const fromLayout = known.get(folder);
+    if (fromLayout) return Promise.resolve(fromLayout);
+    let pending = trees.get(folder);
+    if (!pending) {
+      pending = (async () => {
+        const row = await lookupContentTree(classroomId, folder);
+        if (row) return row.sha;
+        return readMissingFrameTree(classroomId, folder);
+      })();
+      trees.set(folder, pending);
+    }
+    return pending;
+  };
+
+  const refuse = (target: string, why: string): null => {
+    console.warn(
+      `[contentDelivery] Not signing frame ${target} for classroom ${classroomId}: ${why}`
+    );
+    return null;
+  };
+
+  return {
+    async sign(repoPath: string, query = ''): Promise<string | null> {
+      if (!env || !deckFolder) return null;
+      const target = normalizeFrameRepoPath(repoPath);
+      if (!target) return null;
+      if (isRepoDocumentPath(target)) return refuse(target, 'a stored document');
+      const slash = target.lastIndexOf('/');
+      if (slash <= 0) return refuse(target, 'repo root');
+
+      const known = await (layout ??= readFrameLayout(classroomId, deckFolder));
+
+      const prefix = `${deckFolder}/`;
+      const inDeck = target.startsWith(prefix);
+      let targetFolder: string;
+      if (inDeck) {
+        const rest = target.slice(prefix.length);
+        const cut = rest.indexOf('/');
+        targetFolder = cut === -1 ? deckFolder : `${deckFolder}/${rest.slice(0, cut)}`;
+      } else {
+        targetFolder = target.slice(0, slash);
+      }
+
+      const refusal = frameFolderRefusal(targetFolder, deckFolder, known);
+      if (refusal) return refuse(target, refusal);
+
+      let folders: string[];
+      if (targetFolder === deckFolder) {
+        folders = [deckFolder];
+      } else {
+        const subfolders = [...known.subfolders.keys()].filter(
+          folder => frameFolderRefusal(folder, deckFolder, known) === null
+        );
+        let chosen = subfolders.slice(0, FRAME_GRANT_MAX_SUBFOLDERS);
+        if (!chosen.includes(targetFolder)) {
+          if (inDeck) chosen = chosen.slice(0, FRAME_GRANT_MAX_SUBFOLDERS - 1);
+          chosen.push(targetFolder);
+        }
+        folders = outermostFolders(chosen);
+      }
+
+      const shas = await Promise.all(folders.map(folder => treeShaOf(folder, known.subfolders)));
+      const proofs: MappedAsset[] = [];
+      for (const [index, folder] of folders.entries()) {
+        const sha = shas[index];
+        if (!sha) {
+          if (folder === targetFolder || folders.length === 1) {
+            return refuse(target, `no tree row for ${folder}`);
+          }
+          continue;
+        }
+        proofs.push(mappedAsset(classroomId, folder, { sha, type: 'tree' }));
+      }
+
+      const key = proofs.map(proof => `${proof.path}\t${proof.sha}`).join('\n');
+      let base = bases.get(key);
+      if (!base) {
+        base = mintSignedAll(req.classroom, env, proofs, tier, 'tree', now, (origin, signing) =>
+          signFilesBase(origin, signing, {
+            folders: proofs.map(proof => ({ path: proof.path, treeSha: proof.sha })),
+          })
+        );
+        bases.set(key, base);
+      }
+      const signed = await base;
+      return signed ? `${signed}${encodeRepoPath(target)}${query}` : null;
+    },
+  };
+}
+
+/** One frame target → its signed files URL, or null. See `createFrameSigner`. */
+export async function signFrameGrant(
+  req: FrameSignerRequest & { repoPath: string; query?: string }
+): Promise<string | null> {
+  return createFrameSigner(req).sign(req.repoPath, req.query ?? '');
+}
+
+/**
+ * A files URL of OURS — this deployment's delivery host, this classroom — →
+ * the repo path and query (and hash) it was minted for; null for anything
+ * else. Structural: says nothing about whether the signature is valid, so it
+ * is only ever used to turn a URL back into the reference behind it.
+ */
+export function parseOwnFilesUrl(classroomId: string, url: string): RepoFrameTarget | null {
+  if (typeof url !== 'string' || url.length === 0) return null;
+  const parts = parseFilesUrl(url);
+  if (!parts || !isOwnDeliveryHost(parts.host)) return null;
+  if (parts.classroomId.toLowerCase() !== classroomId.toLowerCase()) return null;
+  const repoPath = normalizeFrameRepoPath(parts.repoPath);
+  if (!repoPath) return null;
+  let hash = '';
+  try {
+    hash = new URL(url).hash;
+  } catch {
+    // parseFilesUrl already parsed it.
+  }
+  return { repoPath, query: `${parts.query}${hash}` };
+}
+
+/**
+ * The frame rule's inputs for one deck of one classroom: its repo's URL
+ * shapes, the content origin, and this classroom's files URLs. `ourHosts` is
+ * the caller's (the app knows its own hosts and cookie domain).
+ */
+export function frameRefOptions(
+  classroom: Pick<ResolveClassroom, 'id' | 'content_repo' | 'git_organization'>,
+  opts: { deckFolder: string; slideId?: string | null; ourHosts: readonly string[] }
+): FrameRefOptions {
+  return {
+    deckFolder: opts.deckFolder,
+    ownRepoPath: value =>
+      extractOwnRepoPath(value, classroom.git_organization.login, classroom.content_repo),
+    ourHosts: opts.ourHosts,
+    contentOrigin: process.env.CONTENT_DELIVERY_ORIGIN ?? null,
+    slideId: opts.slideId ?? null,
+    filesRef: url => parseOwnFilesUrl(classroom.id, url),
+  };
 }
 
 /**

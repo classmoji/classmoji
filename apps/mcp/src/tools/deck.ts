@@ -95,6 +95,7 @@ import { assertLivePin, expectSinceFor, splitInsertedIds } from '../collab/liveC
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition, ToolResult } from '../mcp/registry.ts';
 import { renderAfterDeckApply } from './render.ts';
+import { attachBlockSources, deleteUnusedBlockFiles, writeBlockSources } from './deckBlockFiles.ts';
 import {
   assertSlideEditable,
   loadSlideInClassroom,
@@ -404,7 +405,7 @@ export const deckOutlineTool: ToolDefinition<DeckOutlineArgs> = {
   description:
     "Returns a compact outline of a deck's slides: one entry per slide (id, index like '4' or " +
     "'4.2' for vertical stacks, ≤80-char text preview, hidden, has_notes, blocks: id/type/box of " +
-    'html, svg and iframe blocks) plus theme info, the ' +
+    'html, svg and iframe blocks, html with src/rev) plus theme info, the ' +
     'content sha + sha_source, and pending-preview status. Start here, then fetch only the ' +
     'slides you need with deck_get (slide_ids) and edit them with deck_apply — never ' +
     "round-trip whole decks. Pass at: 'preview' to outline the pending preview instead of main. " +
@@ -501,7 +502,8 @@ export const deckGetTool: ToolDefinition<DeckGetArgs> = {
     'returned sha + sha_source are the expected_sha/sha_source for a subsequent deck_apply. ' +
     "Pass at: 'preview' to read the pending preview branch. In a classroom with live editing, " +
     "main is the live deck and sha is its version ('live:E.V', sha_source 'live'). A slide's " +
-    'blocks list its html/svg/iframe blocks with source, svg or src decoded.',
+    'blocks list its html/svg/iframe blocks: svg decoded, iframe src, html src + rev (its file) ' +
+    'and source (the code of a blocks/ file).',
   scope: 'read',
   roles: TEACHING_TEAM,
   inputSchema: {
@@ -532,9 +534,13 @@ export const deckGetTool: ToolDefinition<DeckGetArgs> = {
     if (liveState && !ref) {
       const live = await readLiveDeck(liveState.env, slide, ctx.viewer);
       if ('snapshot' in live) {
-        return ok(
-          selectSlides(liveDeckHead(slide, live.snapshot), live.snapshot.content, args.slide_ids)
+        const payload = selectSlides(
+          liveDeckHead(slide, live.snapshot),
+          live.snapshot.content,
+          args.slide_ids
         );
+        await attachBlockSources(payload.slides, { slideId: slide.id, ctx });
+        return ok(payload);
       }
       if (live.fallbackNote) fallback = { live_unavailable: true, note: live.fallbackNote };
     }
@@ -565,7 +571,9 @@ export const deckGetTool: ToolDefinition<DeckGetArgs> = {
       slide_count: countSlides(deck.slides),
     };
 
-    return ok({ ...selectSlides(base, deck, args.slide_ids), ...fallback });
+    const payload = selectSlides(base, deck, args.slide_ids);
+    await attachBlockSources(payload.slides, { slideId: slide.id, ctx });
+    return ok({ ...payload, ...fallback });
   },
 };
 
@@ -574,7 +582,7 @@ function selectSlides(
   head: Record<string, unknown>,
   deck: DeckJson,
   slideIds: string[] | undefined
-): Record<string, unknown> {
+): Record<string, unknown> & { slides: Array<ReturnType<typeof slideWithBlocks>> } {
   if (slideIds?.length) {
     const selected: DeckSlide[] = [];
     for (const id of slideIds) {
@@ -666,10 +674,21 @@ async function applyDeckLive(
   }
   const since = expectSinceFor('deck', args.expected_sha, snapshot);
 
+  // The ops judged on the live deck, then html block code written to files
+  // (the ops that travel carry the files' src + rev).
+  let ops: DeckOp[];
+  let files: Awaited<ReturnType<typeof writeBlockSources>>['outcome'];
   let newDeck: DeckJson;
   let applied: Array<Record<string, unknown>>;
   try {
-    ({ deck: newDeck, applied } = applyDeckOps(snapshot.content, args.ops, {
+    ops = prepareDeckOps(args.ops, frameContext(slide), snapshot.content);
+    ({ ops, outcome: files } = await writeBlockSources(ops, snapshot.content, {
+      slide,
+      ctx,
+      mode: 'live',
+      starterCustomCss: slideService.STARTER_CUSTOM_CSS,
+    }));
+    ({ deck: newDeck, applied } = applyDeckOps(snapshot.content, ops, {
       starterCustomCss: slideService.STARTER_CUSTOM_CSS,
     }));
   } catch (error: unknown) {
@@ -686,7 +705,7 @@ async function applyDeckLive(
   const actor = await actorFor(ctx);
   let response: Awaited<ReturnType<typeof postOps>>;
   try {
-    response = await postOps(env, 'deck', slide.id, args.ops, actor, since);
+    response = await postOps(env, 'deck', slide.id, ops, actor, since);
   } catch (error) {
     throw liveWriteError(error, 'deck', { expectedSha: args.expected_sha });
   }
@@ -707,6 +726,8 @@ async function applyDeckLive(
       ...(Object.keys(live.children).length > 0 ? { children: live.children } : {}),
     };
   });
+
+  applied = await deleteUnusedBlockFiles(files, newDeck, applied, { slide, ctx });
 
   const hasDestructiveOps = args.ops.some(op => op.op === 'delete');
   await writeAudit(ctx, {
@@ -831,23 +852,22 @@ export const deckApplyTool: ToolDefinition<DeckApplyArgs> = {
   },
 };
 
-/** deck_apply itself; `render: true` is layered on by the handler above. */
-async function applyDeckEdits(rawArgs: DeckApplyArgs, ctx: ToolContext): Promise<ToolResult> {
-  const slide = await loadSlideInClassroom(rawArgs.slide_id, ctx);
-  await assertSlideEditable(slide, ctx);
-
-  // Block ops leave here ready to apply anywhere: a new block's id is fixed
-  // now (the dry run, the live server and the replay must name the same
-  // block), and iframe srcs are resolved against the deck folder.
+/**
+ * Where the deck's iframe srcs resolve. Block ops are prepared against the
+ * deck they apply to (`prepareDeckOps`): a new block's id is fixed then (the
+ * dry run, the live server and the replay must name the same block), iframe
+ * srcs are resolved against the deck folder, html block srcs stay relative.
+ */
+function frameContext(slide: SlideWithRepoRecord) {
   const org = slide.classroom.git_organization?.login;
   const repo = slide.classroom.content_repo;
-  const args: DeckApplyArgs = {
-    ...rawArgs,
-    ops: prepareDeckOps(
-      rawArgs.ops,
-      org && repo ? { org, repo, contentPath: slide.content_path } : null
-    ),
-  };
+  return org && repo ? { org, repo, contentPath: slide.content_path } : null;
+}
+
+/** deck_apply itself; `render: true` is layered on by the handler above. */
+async function applyDeckEdits(args: DeckApplyArgs, ctx: ToolContext): Promise<ToolResult> {
+  const slide = await loadSlideInClassroom(args.slide_id, ctx);
+  await assertSlideEditable(slide, ctx);
 
   // Live editing: 'live' goes into the live deck through the collab server;
   // git main is only its checkpoint and is never written here.
@@ -911,10 +931,20 @@ async function applyDeckEdits(rawArgs: DeckApplyArgs, ctx: ToolContext): Promise
 
   const priorSlideCount = countSlides(loaded.deck.slides);
 
+  // Judged on the loaded deck, then html block code written to files (only
+  // after the sha check above: a stale read writes nothing).
+  let files: Awaited<ReturnType<typeof writeBlockSources>>['outcome'];
   let newDeck: DeckJson;
   let applied: Array<Record<string, unknown>>;
   try {
-    ({ deck: newDeck, applied } = applyDeckOps(loaded.deck, args.ops, {
+    let ops = prepareDeckOps(args.ops, frameContext(slide), loaded.deck);
+    ({ ops, outcome: files } = await writeBlockSources(ops, loaded.deck, {
+      slide,
+      ctx,
+      mode: committedTo === 'preview' ? 'preview' : 'live',
+      starterCustomCss: slideService.STARTER_CUSTOM_CSS,
+    }));
+    ({ deck: newDeck, applied } = applyDeckOps(loaded.deck, ops, {
       starterCustomCss: slideService.STARTER_CUSTOM_CSS,
     }));
   } catch (error: unknown) {
@@ -988,6 +1018,8 @@ async function applyDeckEdits(rawArgs: DeckApplyArgs, ctx: ToolContext): Promise
     }
     throw error;
   }
+
+  applied = await deleteUnusedBlockFiles(files, newDeck, applied, { slide, ctx });
 
   const hasDestructiveOps = args.ops.some(op => op.op === 'delete');
 

@@ -342,7 +342,7 @@ describe('applyOps', () => {
       }
     };
     for (const op of [
-      { op: 'block_add', slide: 'aaaa0004', type: 'html', box, source: '<p>x</p>' },
+      { op: 'block_add', slide: 'aaaa0004', type: 'html', box, src: 'blocks/0a0b0c0d.html' },
       { op: 'block_update', slide: 'aaaa0004', block_id: 'b1', box: { top: 5 } },
       { op: 'block_delete', slide: 'aaaa0004', block_id: 'b1' },
     ]) {
@@ -355,7 +355,14 @@ describe('applyOps', () => {
 
     // Another slide takes the block; the outcome names that slide.
     const result = attempt([
-      { op: 'block_add', slide: 'aaaa0001', type: 'html', box, source: '<p>x</p>', block_id: 'b1' },
+      {
+        op: 'block_add',
+        slide: 'aaaa0001',
+        type: 'html',
+        box,
+        src: 'blocks/0a0b0c0d.html',
+        block_id: 'b1',
+      },
     ]);
     expect(result).toEqual({ touchedId: 'aaaa0001', touchedIds: ['aaaa0001'] });
     expect(yDocToDeck(document).slides[0].html).toContain('data-cm-block-id="b1"');
