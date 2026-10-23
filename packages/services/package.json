@@ -31,6 +31,8 @@
     "./slides/hidden": "./src/slides/hiddenSlides.ts",
     "./slides/ops": "./src/slides/deckOps.ts",
     "./slides/runtime-attrs": "./src/slides/deckRuntimeAttrs.ts",
+    "./slides/safe-markup": "./src/slides/safeMarkup/index.ts",
+    "./slides/safe-markup/server": "./src/slides/safeMarkup/server.ts",
     "./workers-ai": "./src/helpers/workersAi.ts"
   },
   "dependencies": {

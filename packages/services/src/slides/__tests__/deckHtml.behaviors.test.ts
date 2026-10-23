@@ -4,6 +4,8 @@
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import * as cheerio from 'cheerio';
+import { createHash } from 'node:crypto';
 import {
   generateDeckHtml,
   parseDeckHtml,
@@ -11,6 +13,10 @@ import {
   SL_BLOCK_CSS,
   normalizeSlideHtml,
   DeckParseError,
+  GENERATED_DOC_SCRIPT_HASHES,
+  REVEAL_CONFIG_ELEMENT_ID,
+  REVEAL_INIT_SCRIPT,
+  deckHtmlForViewer,
   SlideHtmlError,
   mintSlideId,
 } from '../deckHtml.ts';
@@ -235,13 +241,11 @@ describe('generateDeckHtml specifics', () => {
 
   it('emits canonical defaults when config is absent', () => {
     const html = generateDeckHtml(baseDeck(), { title: 'T' });
-    expect(html).toContain('hash: true,');
-    expect(html).toContain('controls: true,');
-    expect(html).toContain('progress: true,');
-    expect(html).toContain('center: true,');
-    expect(html).toContain("transition: 'slide',");
-    expect(html).not.toContain('width:');
-    expect(html).not.toContain('height:');
+    expect(html).toContain(
+      `<script type="application/json" id="${REVEAL_CONFIG_ELEMENT_ID}">{"hash":true,"controls":true,"progress":true,"center":true,"transition":"slide"}</script>`
+    );
+    expect(html).not.toContain('"width"');
+    expect(html).not.toContain('"height"');
   });
 
   it('emits config keys only when set', () => {
@@ -249,10 +253,9 @@ describe('generateDeckHtml specifics', () => {
       baseDeck({ config: { width: 1280, height: 720, center: false, transition: 'convex' } }),
       { title: 'T' }
     );
-    expect(html).toContain('width: 1280,');
-    expect(html).toContain('height: 720,');
-    expect(html).toContain('center: false,');
-    expect(html).toContain("transition: 'convex',");
+    expect(html).toContain(
+      '{"hash":true,"controls":true,"progress":true,"center":false,"transition":"convex","width":1280,"height":720}'
+    );
   });
 
   it('emits NO implicit styles (no style tag unless customCss is set)', () => {
@@ -384,5 +387,142 @@ describe('generateDeckHtml specifics', () => {
   it('mintSlideId produces 8-char ids', () => {
     expect(mintSlideId()).toMatch(/^[0-9a-f]{8}$/);
     expect(mintSlideId()).not.toBe(mintSlideId());
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Generated document scripts and config
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('generated document scripts', () => {
+  const deckWith = (extra: Partial<DeckJson> = {}): DeckJson => ({
+    version: 1,
+    theme: 'white',
+    codeTheme: 'github',
+    slides: [s('aaa11111', '<h1>Hi</h1>')],
+    ...extra,
+  });
+
+  /** Every inline (no src) script that is not a data block, by text. */
+  const inlineScripts = (html: string): string[] => {
+    const $ = cheerio.load(html);
+    return $('script:not([src])')
+      .toArray()
+      .filter(el => !$(el).attr('type'))
+      .map(el => $(el).text());
+  };
+
+  const sha = (text: string) =>
+    `'sha256-${createHash('sha256').update(text, 'utf8').digest('base64')}'`;
+
+  it('carries one inline script, the same text in every deck, allowed by its hash', () => {
+    const a = generateDeckHtml(deckWith(), { title: 'A' });
+    const b = generateDeckHtml(
+      deckWith({
+        theme: 'night',
+        config: { width: 1280, height: 720, center: false, transition: 'zoom' },
+        customCss: '.reveal { color: red; }',
+        slides: [s('bbb22222', '<p>Other</p>', { notes: 'n' })],
+      }),
+      { title: 'B', standalone: true }
+    );
+    expect(inlineScripts(a)).toEqual([REVEAL_INIT_SCRIPT]);
+    expect(inlineScripts(b)).toEqual([REVEAL_INIT_SCRIPT]);
+    expect(GENERATED_DOC_SCRIPT_HASHES).toEqual([sha(REVEAL_INIT_SCRIPT)]);
+  });
+
+  it('keeps the script byte for byte through the viewer pass', () => {
+    const html = generateDeckHtml(
+      deckWith({ slides: [s('ccc33333', '<p>x</p>', { notes: 'secret' })] }),
+      {
+        title: 'T',
+      }
+    );
+    const viewed = deckHtmlForViewer(html, { canEdit: false, canViewSpeakerNotes: false });
+    expect(viewed).not.toBe(html);
+    expect(inlineScripts(viewed)).toEqual([REVEAL_INIT_SCRIPT]);
+  });
+
+  it('puts the config block right before the init script, after every slide', () => {
+    const forged = `<script type="application/json" id="${REVEAL_CONFIG_ELEMENT_ID}">{"transition":"zoom","width":5}</script>`;
+    const html = generateDeckHtml(deckWith({ slides: [s('ddd44444', `<p>x</p>${forged}`)] }), {
+      title: 'T',
+    });
+    const $ = cheerio.load(html);
+    const init = $('script:not([src])')
+      .filter((_i, el) => !$(el).attr('type'))
+      .first();
+    const before = init.prev();
+    expect(before.is(`script#${REVEAL_CONFIG_ELEMENT_ID}[type="application/json"]`)).toBe(true);
+    expect(JSON.parse(before.text())).toEqual({
+      hash: true,
+      controls: true,
+      progress: true,
+      center: true,
+      transition: 'slide',
+    });
+    // the parser reads the generator's block (the last one), not a slide's
+    expect(parseDeckHtml(html).deck.config).toBeUndefined();
+  });
+
+  it('writes only listed transitions and numeric sizes', () => {
+    const html = generateDeckHtml(
+      deckWith({
+        config: {
+          transition: "slide'}); alert(1); ({x:'",
+          width: '1px; alert(1)' as unknown as number,
+          height: Number.NaN,
+        },
+      }),
+      { title: 'T' }
+    );
+    expect(html).not.toContain('alert');
+    expect(html).toContain('"transition":"slide"');
+    expect(html).not.toContain('"width"');
+    expect(html).not.toContain('"height"');
+    expect(
+      generateDeckHtml(deckWith({ config: { width: '1024' as unknown as number } }), { title: 'T' })
+    ).toContain('"width":1024');
+  });
+
+  it('cannot close the config block from a value', () => {
+    const html = generateDeckHtml(
+      deckWith({ config: { transition: '</script><script>alert(1)</script>' } }),
+      { title: 'T' }
+    );
+    expect(html).not.toContain('<script>alert(1)');
+    expect(inlineScripts(html)).toEqual([REVEAL_INIT_SCRIPT]);
+  });
+
+  it('keeps a deck’s css inside its style element', () => {
+    const html = generateDeckHtml(
+      deckWith({ customCss: '.a{color:red}</STYLE><script>alert(1)</script>' }),
+      { title: 'T' }
+    );
+    expect(html).toContain('<style>.a{color:red}<\\/STYLE><script>alert(1)</script></style>');
+    expect(inlineScripts(html)).toEqual([REVEAL_INIT_SCRIPT]);
+  });
+
+  it('parses unknown transitions and bad sizes out of a config block', () => {
+    const html = generateDeckHtml(deckWith(), { title: 'T' }).replace(
+      /(<script type="application\/json" id="cm-reveal-config">)[^<]*/,
+      '$1{"transition":"spin","width":-3,"height":"720","center":false}'
+    );
+    const { deck, warnings } = parseDeckHtml(html);
+    expect(deck.config).toEqual({ height: 720, center: false });
+    expect(warnings).toContain("Unknown transition 'spin' dropped");
+  });
+
+  it('still reads the config of a document written before the config block', () => {
+    const legacy = generateDeckHtml(deckWith(), { title: 'T' }).replace(
+      /<script type="application\/json"[\s\S]*<\/script>\n<\/body>/,
+      "<script>\n    Reveal.initialize({\n      hash: true,\n      center: false,\n      transition: 'fade',\n      width: 1280,\n    });\n  </script>\n</body>"
+    );
+    expect(legacy).toContain('Reveal.initialize({');
+    expect(parseDeckHtml(legacy).deck.config).toEqual({
+      width: 1280,
+      center: false,
+      transition: 'fade',
+    });
   });
 });
