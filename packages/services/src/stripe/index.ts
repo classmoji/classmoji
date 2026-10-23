@@ -26,6 +26,11 @@ class StripeService {
           quantity: 1,
         },
       ],
+      // Stripe Tax works out the tax from the billing address checkout asks
+      // for; `customer_update` saves that address on the existing customer,
+      // which Stripe requires before it will calculate tax for one.
+      automatic_tax: { enabled: true },
+      customer_update: { address: 'auto' },
       success_url: `${process.env.WEBAPP_URL}/settings/billing?success=true&session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${process.env.WEBAPP_URL}/settings/billing?canceled=true`,
       metadata: {
