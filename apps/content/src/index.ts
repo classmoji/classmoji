@@ -10,6 +10,8 @@
  *   GET /c/{classroomId}/blob/{sha}.{ext}?p=&v=&exp=&sig=[&w=&fmt=][&dl=]
  *   GET /c/{classroomId}/media/{mediaId}/{variant}?p=&v=&exp=&sig=[&dl=]
  *   GET /c/{classroomId}/theme/{theme}/{treeSha}/{p}.{v}.{exp}.{sig}/{relPath}
+ *   GET /c/{classroomId}/files/{grant}/{p}.{v}.{exp}.{sig}/{repoPath}[?anything]
+ *   GET /preview-frame
  *   GET /healthz
  *   OPTIONS *
  *
@@ -17,12 +19,14 @@
  * only ever in R2, so a miss there is a 404 rather than a pull.
  */
 import { serveBlob } from './blob.ts';
+import { previewFrameResponse } from './box.ts';
 import { errorResponse, jsonResponse, preflightResponse, withoutBody } from './cache.ts';
 import { hasMediaBinding, isConfigured, signingSecrets, type Env } from './env.ts';
+import { serveFiles } from './files.ts';
 import { serveMedia } from './media.ts';
 import { OriginError } from './origins/types.ts';
 import { serveTheme } from './theme.ts';
-import { isClassroomId, parseContentUrl, verifyContentUrl } from './verify.ts';
+import { isClassroomId, parseContentUrl, parseFilesUrl, verifyContentUrl } from './verify.ts';
 
 /**
  * `/c/{classroomId}/missing/{encodedRepoPath}` — the deterministic URL the
@@ -92,6 +96,31 @@ function decodeForLog(value: string): string {
 }
 
 /**
+ * A request path as it may appear in a log line.
+ *
+ * Theme and files URLs carry their signature in the PATH, so the path alone
+ * would hand a working credential to anyone who can read the logs. The policy
+ * segment keeps its tier and key version (`month.1.…`) and loses the expiry
+ * and signature; a files grant segment, which names the folders it opens, is
+ * dropped outright. Blob and media paths carry nothing secret and are logged
+ * as they are.
+ */
+export function pathForLog(pathname: string): string {
+  const segments = pathname.split('/');
+  const redactPolicy = (index: number) => {
+    if (segments[index] === undefined) return;
+    const [tier = '', version = ''] = segments[index].split('.');
+    segments[index] = `${tier}.${version}.…`;
+  };
+  if (segments[1] === 'c' && segments[3] === 'theme') redactPolicy(6);
+  if (segments[1] === 'c' && segments[3] === 'files') {
+    if (segments[4] !== undefined) segments[4] = '…';
+    redactPolicy(5);
+  }
+  return segments.join('/');
+}
+
+/**
  * The whole request, minus the one guarantee applied to its answer.
  *
  * A HEAD is answered from R2 metadata wherever the object is already there
@@ -125,6 +154,8 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
     return errorResponse(405, 'method not allowed');
   }
 
+  if (url.pathname === '/preview-frame') return previewFrameResponse();
+
   if (!url.pathname.startsWith('/c/')) return errorResponse(404, 'not found');
 
   const missing = MISSING_PATH.exec(url.pathname);
@@ -144,12 +175,19 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
     // Structural parse only (no crypto) - just to recover the classroom id
     // for a URL whose signature we don't yet trust. Never log `sig`, the
     // query string, or the full URL: those can leak a valid credential.
-    const classroomId = parseContentUrl(request.url)?.classroomId ?? 'unknown';
-    const p = url.searchParams.get('p');
-    const v = url.searchParams.get('v');
-    let message = `[content] 403 ${verified.reason} classroom=${classroomId} path=${url.pathname}`;
-    if (p !== null) message += ` p=${p}`;
-    if (v !== null) message += ` v=${v}`;
+    const classroomId =
+      parseContentUrl(request.url)?.classroomId ??
+      parseFilesUrl(request.url)?.classroomId ??
+      'unknown';
+    let message = `[content] 403 ${verified.reason} classroom=${classroomId} path=${pathForLog(url.pathname)}`;
+    // A files URL's query belongs to the page it serves, not to us: its
+    // values are never read, let alone logged.
+    if (url.pathname.split('/')[3] !== 'files') {
+      const p = url.searchParams.get('p');
+      const v = url.searchParams.get('v');
+      if (p !== null) message += ` p=${p}`;
+      if (v !== null) message += ` v=${v}`;
+    }
     console.warn(message);
     return errorResponse(403, verified.reason);
   }
@@ -166,7 +204,7 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
       if (rotationLogged.size >= ROTATION_LOG_LIMIT) rotationLogged.clear();
       rotationLogged.add(rotation);
       console.warn(
-        `[content] key=previous classroom=${verified.classroomId} path=${url.pathname}` +
+        `[content] key=previous classroom=${verified.classroomId} path=${pathForLog(url.pathname)}` +
           ` p=${verified.tier} v=${verified.keyVersion}`
       );
     }
@@ -175,6 +213,7 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
   try {
     if (verified.kind === 'blob') return await serveBlob(env, ctx, request, verified);
     if (verified.kind === 'media') return await serveMedia(env, request, verified);
+    if (verified.kind === 'files') return await serveFiles(env, ctx, verified, request);
     return await serveTheme(env, ctx, verified, request);
   } catch (error) {
     if (error instanceof OriginError) {

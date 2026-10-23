@@ -31,6 +31,16 @@ describe('content type mapping', () => {
     ['json', 'application/json; charset=utf-8'],
     ['txt', 'text/plain; charset=utf-8'],
     ['md', 'text/markdown; charset=utf-8'],
+    ['xhtml', 'application/xhtml+xml; charset=utf-8'],
+    ['map', 'application/json; charset=utf-8'],
+    ['wasm', 'application/wasm'],
+    ['glb', 'model/gltf-binary'],
+    ['gltf', 'model/gltf+json'],
+    ['mp3', 'audio/mpeg'],
+    ['wav', 'audio/wav'],
+    ['ogg', 'audio/ogg'],
+    ['m4a', 'audio/mp4'],
+    ['csv', 'text/csv; charset=utf-8'],
   ])('maps %s', (ext, expected) => {
     expect(contentTypeForExtension(ext)).toBe(expected);
   });
