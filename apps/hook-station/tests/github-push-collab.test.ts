@@ -408,7 +408,7 @@ describe('pushes whose full diff the payload does not show', () => {
       i === 0 ? first : { message: `c${i}`, modified: ['images/x.png'] }
     );
 
-  it('a 20-commit push is complete for collab (the payload holds 2048), still a full re-read for assets', async () => {
+  it('a 20-commit push is complete for collab (the payload holds 2048)', async () => {
     await post(
       app,
       pushBody(many(20, { message: 'edit', modified: ['pages/intro/content.json'] }))
@@ -416,7 +416,8 @@ describe('pushes whose full diff the payload does not show', () => {
     await vi.waitFor(() => expect(tasksTrigger).toHaveBeenCalledTimes(1));
 
     expect(fetchMock).not.toHaveBeenCalled(); // no compare needed
-    expect(contentAssetsSync.mock.calls[0][0]).toMatchObject({ complete: false });
+    // The asset sync reads the whole tree whatever the push held.
+    expect(contentAssetsSync.mock.calls[0][0]).not.toHaveProperty('complete');
   });
 
   it('a truncated push (2048 commits) takes its files from the compare API', async () => {

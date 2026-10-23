@@ -97,6 +97,7 @@ import {
   resolveDeliveryThemeUrls,
 } from '~/utils/deckDelivery.server';
 import { FRAME_SETTLE_JS } from '~/utils/frameSettle';
+import { generatedDocCspHeaders } from '~/utils/csp.server';
 
 /**
  * Never cached, never indexed, never framed. The SAME headers on the refusal
@@ -220,65 +221,73 @@ export function firstSlideOnly(deck: DeckJson): DeckJson {
  * unreachable image must produce a slightly incomplete thumbnail rather than
  * burning the whole render budget and producing none.
  */
+/** The readiness script's exact text (its CSP hash is taken over these bytes). */
+export const READINESS_SCRIPT = [
+  '',
+  '  (function () {',
+  '    var done = false;',
+  '    function mark() {',
+  '      if (done) return;',
+  '      done = true;',
+  `      document.documentElement.setAttribute('${THUMBNAIL_READY_ATTRIBUTE}', '');`,
+  '    }',
+  '    // Outer cap: whatever else happens, the page declares itself ready.',
+  '    setTimeout(mark, 8000);',
+  FRAME_SETTLE_JS,
+  '    function revealReady() {',
+  '      return new Promise(function (resolve) {',
+  '        var R = window.Reveal;',
+  '        if (!R || !R.on || (R.isReady && R.isReady())) return resolve();',
+  "        R.on('ready', function () { resolve(); });",
+  '      });',
+  '    }',
+  '    function settle() {',
+  '      var pending = [];',
+  '      var images = document.images || [];',
+  '      for (var i = 0; i < images.length; i += 1) {',
+  '        var img = images[i];',
+  '        if (img.complete) continue;',
+  '        pending.push(',
+  '          new Promise(function (resolve) {',
+  "            img.addEventListener('load', resolve, { once: true });",
+  "            img.addEventListener('error', resolve, { once: true });",
+  '          })',
+  '        );',
+  '      }',
+  '      if (document.fonts && document.fonts.ready) {',
+  '        pending.push(document.fonts.ready.catch(function () {}));',
+  '      }',
+  '      // Frames: once Reveal has shown the slide, so its lazy embeds have a src.',
+  '      pending.push(',
+  '        revealReady().then(function () {',
+  '          return new Promise(function (resolve) { requestAnimationFrame(resolve); });',
+  '        }).then(function () { return settleFrames(document, 6000); })',
+  '      );',
+  '      Promise.all(pending).then(function () {',
+  '        requestAnimationFrame(function () { requestAnimationFrame(mark); });',
+  '      }, mark);',
+  '    }',
+  "    if (document.readyState === 'complete') settle();",
+  "    else window.addEventListener('load', settle);",
+  '  })();',
+  '',
+].join('\n');
+
+/** The inline scripts this route adds to the generated document (exact text). */
+export const READINESS_DOC_SCRIPTS: readonly string[] = [READINESS_SCRIPT];
+
 export function readinessScript(): string {
   return [
     '<style>',
     '  .reveal .controls, .reveal .progress, .reveal .slide-number { display: none !important; }',
     '  html, body { margin: 0; overflow: hidden; }',
     '</style>',
-    '<script>',
-    '  (function () {',
-    '    var done = false;',
-    '    function mark() {',
-    '      if (done) return;',
-    '      done = true;',
-    `      document.documentElement.setAttribute('${THUMBNAIL_READY_ATTRIBUTE}', '');`,
-    '    }',
-    '    // Outer cap: whatever else happens, the page declares itself ready.',
-    '    setTimeout(mark, 8000);',
-    FRAME_SETTLE_JS,
-    '    function revealReady() {',
-    '      return new Promise(function (resolve) {',
-    '        var R = window.Reveal;',
-    '        if (!R || !R.on || (R.isReady && R.isReady())) return resolve();',
-    "        R.on('ready', function () { resolve(); });",
-    '      });',
-    '    }',
-    '    function settle() {',
-    '      var pending = [];',
-    '      var images = document.images || [];',
-    '      for (var i = 0; i < images.length; i += 1) {',
-    '        var img = images[i];',
-    '        if (img.complete) continue;',
-    '        pending.push(',
-    '          new Promise(function (resolve) {',
-    "            img.addEventListener('load', resolve, { once: true });",
-    "            img.addEventListener('error', resolve, { once: true });",
-    '          })',
-    '        );',
-    '      }',
-    '      if (document.fonts && document.fonts.ready) {',
-    '        pending.push(document.fonts.ready.catch(function () {}));',
-    '      }',
-    '      // Frames: once Reveal has shown the slide, so its lazy embeds have a src.',
-    '      pending.push(',
-    '        revealReady().then(function () {',
-    '          return new Promise(function (resolve) { requestAnimationFrame(resolve); });',
-    '        }).then(function () { return settleFrames(document, 6000); })',
-    '      );',
-    '      Promise.all(pending).then(function () {',
-    '        requestAnimationFrame(function () { requestAnimationFrame(mark); });',
-    '      }, mark);',
-    '    }',
-    "    if (document.readyState === 'complete') settle();",
-    "    else window.addEventListener('load', settle);",
-    '  })();',
-    '</script>',
+    `<script>${READINESS_SCRIPT}</script>`,
   ].join('\n');
 }
 
 /** Splice the readiness block in just before `</body>`; append if absent. */
-function withReadinessMarker(html: string): string {
+export function withReadinessMarker(html: string): string {
   const block = readinessScript();
   const at = html.lastIndexOf('</body>');
   return at === -1 ? `${html}\n${block}` : `${html.slice(0, at)}${block}\n${html.slice(at)}`;
@@ -433,5 +442,7 @@ export const loader = async ({
       : await resolveDeckAssetsPublic(generated, gitOrgLogin, repo, slide.classroom_id)) ??
     generated;
 
-  return new Response(withReadinessMarker(html), { headers: RENDER_HEADERS });
+  return new Response(withReadinessMarker(html), {
+    headers: { ...RENDER_HEADERS, ...generatedDocCspHeaders(READINESS_DOC_SCRIPTS) },
+  });
 };

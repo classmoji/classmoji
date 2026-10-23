@@ -16,6 +16,7 @@ export default function PropertiesPanel() {
     selectElement: _selectElement,
     clearSelection,
     onContentChange,
+    afterBlocksRemoved,
   } = useElementSelection();
 
   // Select the current slide section for slide-level properties
@@ -65,7 +66,8 @@ export default function PropertiesPanel() {
 
     // Notify of content change (triggers save)
     onContentChange?.();
-  }, [selectedElement, clearSelection, onContentChange]);
+    afterBlocksRemoved([selectedElement]);
+  }, [selectedElement, clearSelection, onContentChange, afterBlocksRemoved]);
 
   // Determine if the current element type is deletable
   // Don't allow deleting slides or columns (too destructive)

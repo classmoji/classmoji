@@ -3,12 +3,18 @@ import { Select, Input, InputNumber, Switch } from 'antd';
 import PropertySection, { PropertyRow, PropertyLabel } from '../PropertySection';
 import { useElementSelection } from '../ElementSelectionContext';
 import { convertToBlock, canConvertToBlock } from '../utils/convertToBlock';
+import {
+  DEFAULT_IFRAME_SANDBOX,
+  readStoredIframeSrc,
+  writeStoredIframeSrc,
+} from '~/utils/editorFrames';
 
 /**
  * IframeProperties - Property editor for iframe elements
  *
  * Allows configuring:
- * - URL (src attribute)
+ * - URL (the stored source: `data-src` when the frame loads lazily, else
+ *   `src` — never the URL the editor shows a repo file through)
  * - Title (accessibility)
  * - Width and height
  * - Allow fullscreen
@@ -16,6 +22,10 @@ import { convertToBlock, canConvertToBlock } from '../utils/convertToBlock';
  */
 
 const SANDBOX_PRESETS = [
+  {
+    value: DEFAULT_IFRAME_SANDBOX,
+    label: 'Scripts + Same Origin + Forms + Popups (default)',
+  },
   { value: '', label: 'No sandbox (unrestricted)' },
   { value: 'allow-scripts allow-same-origin', label: 'Scripts + Same Origin' },
   { value: 'allow-scripts', label: 'Scripts only' },
@@ -24,13 +34,13 @@ const SANDBOX_PRESETS = [
 ];
 
 export default function IframeProperties({ element }: { element: HTMLIFrameElement }) {
-  const { onContentChange, selectElement } = useElementSelection();
+  const { onContentChange, selectElement, frames } = useElementSelection();
 
   // For iframes, we want to convert the wrapper if it exists
   const convertibleElement = (element?.closest('.iframe-wrapper') as HTMLElement | null) || element;
 
   // State for all properties
-  const [url, setUrl] = useState(() => element?.src || '');
+  const [url, setUrl] = useState(() => (element ? readStoredIframeSrc(element, frames) : ''));
   const [title, setTitle] = useState(() => element?.title || '');
   const [width, setWidth] = useState(() => parseSize(element?.style.width || element?.width));
   const [height, setHeight] = useState(() => parseSize(element?.style.height || element?.height));
@@ -52,21 +62,21 @@ export default function IframeProperties({ element }: { element: HTMLIFrameEleme
   // Sync state when element changes
   useEffect(() => {
     if (element) {
-      setUrl(element.src || '');
+      setUrl(readStoredIframeSrc(element, frames));
       setTitle(element.title || '');
       setWidth(parseSize(element.style.width || element.getAttribute('width')));
       setHeight(parseSize(element.style.height || element.getAttribute('height')));
       setAllowFullscreen(element.hasAttribute('allowfullscreen'));
       setSandbox(element.getAttribute('sandbox') || '');
     }
-  }, [element]);
+  }, [element, frames]);
 
   // Update URL
   const handleUrlChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       if (!element) return;
       const newUrl = e.target.value;
-      element.src = newUrl;
+      writeStoredIframeSrc(element, newUrl, frames);
       setUrl(newUrl);
 
       // Remove placeholder styling from wrapper when a real URL is set
@@ -81,7 +91,7 @@ export default function IframeProperties({ element }: { element: HTMLIFrameEleme
 
       onContentChange?.();
     },
-    [element, onContentChange]
+    [element, onContentChange, frames]
   );
 
   // Update title

@@ -114,9 +114,7 @@ describe('importer media-pair fixture', () => {
     expect(html).toContain(
       '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css" media="(prefers-color-scheme: dark)">'
     );
-    expect(html).toContain('width: 960,');
-    expect(html).toContain('height: 700,');
-    expect(html).toContain('center: false,');
+    expect(html).toContain('"center":false,"transition":"slide","width":960,"height":700}');
   });
 });
 
@@ -255,7 +253,7 @@ describe('hidden + background fixture', () => {
     const html = generateDeckHtml(deck, { title: TITLE });
     expect(html).toContain('data-hidden="true"');
     expect(html).toContain('data-background-image="https://example.com/img.png?a=1&amp;b=2"');
-    expect(html).toContain("transition: 'fade',");
+    expect(html).toContain('"transition":"fade"');
   });
 });
 

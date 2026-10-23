@@ -120,7 +120,7 @@ test.describe('the response headers', () => {
     // RENDER_HEADERS. A hand-rolled header object on either side is how the two
     // answers start to differ.
     expect(ROUTE_SOURCE).toContain(
-      'new Response(withReadinessMarker(html), { headers: RENDER_HEADERS })'
+      'new Response(withReadinessMarker(html), {\n    headers: { ...RENDER_HEADERS, ...generatedDocCspHeaders(READINESS_DOC_SCRIPTS) },'
     );
   });
 });

@@ -12,8 +12,12 @@ import {
 /** Past this, proxying through the Worker is the wrong move (same bound as Github). */
 const MAX_PROXY_BYTES = 100 * 1024 * 1024;
 
-/** Gitlab caps a tree page at 100 entries. A theme folder never needs more than a few. */
-const MAX_TREE_PAGES = 50;
+/**
+ * Gitlab caps a tree page at 100 entries. A theme or game folder never needs
+ * more than a few; a folder that does is listed this far and reported
+ * truncated, so the partial listing is never cached.
+ */
+export const MAX_TREE_PAGES = 50;
 
 interface GitLabTreeItem {
   id: string;
@@ -61,25 +65,34 @@ export class GitLabOrigin implements OriginAdapter {
     const parent = folder.includes('/') ? folder.slice(0, folder.lastIndexOf('/')) : '';
     const name = folder.slice(folder.lastIndexOf('/') + 1);
 
-    const siblings = await this.#list(ref, parent, false);
+    const { items: siblings } = await this.#list(ref, parent, false);
     const current = siblings.find(item => item.type === 'tree' && item.name === name);
     if (!current) throw new OriginError(404, `gitlab tree ${folder}: not found`);
 
-    const items = await this.#list(ref, folder, true);
+    const { items, complete } = await this.#list(ref, folder, true);
     const prefix = `${folder}/`;
     const entries: TreeEntry[] = items
       .filter(item => item.type === 'blob' && item.path.startsWith(prefix))
       .map(item => ({ path: item.path.slice(prefix.length), sha: item.id, type: 'blob' }));
 
-    // Moved on since the URL was signed: serve it, never cache it.
-    const truncated = current.id !== ref.treeSha;
-    if (truncated) {
+    // Moved on since the URL was signed, or cut short at the page cap: serve
+    // it, never cache it.
+    const moved = current.id !== ref.treeSha;
+    if (moved) {
       console.warn(`[content] gitlab tree ${folder} is ${current.id}, signed ${ref.treeSha}`);
     }
-    return { entries, truncated };
+    if (!complete) {
+      console.warn(`[content] gitlab tree ${folder} stopped at ${MAX_TREE_PAGES} pages`);
+    }
+    return { entries, truncated: moved || !complete };
   }
 
-  async #list(ref: TreeRef, path: string, recursive: boolean): Promise<GitLabTreeItem[]> {
+  /** Every page up to the cap; `complete` is false when a next page was left unread. */
+  async #list(
+    ref: TreeRef,
+    path: string,
+    recursive: boolean
+  ): Promise<{ items: GitLabTreeItem[]; complete: boolean }> {
     const params = new URLSearchParams({ per_page: '100', pagination: 'keyset' });
     if (path) params.set('path', path);
     if (recursive) params.set('recursive', 'true');
@@ -105,6 +118,6 @@ export class GitLabOrigin implements OriginAdapter {
       const match = link.split(',').find(part => part.includes('rel="next"'));
       next = match ? (match.match(/<([^>]+)>/)?.[1] ?? null) : null;
     }
-    return items;
+    return { items, complete: next === null };
   }
 }

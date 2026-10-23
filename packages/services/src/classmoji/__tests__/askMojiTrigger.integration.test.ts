@@ -542,7 +542,7 @@ describe.skipIf(!RUN)('ask moji trigger runtime (integration)', () => {
         data: {
           classroom_id: classX,
           title: `Syllabus ${suite}`,
-          content_path: 'p',
+          content_path: 'pages/p',
           created_by: ownerX,
           is_draft: false,
         },
@@ -841,7 +841,7 @@ describe.skipIf(!RUN)('ask moji trigger runtime (integration)', () => {
         data: {
           classroom_id: classX,
           title: `Draft ${suite}`,
-          content_path: 'd',
+          content_path: 'pages/d',
           created_by: ownerX,
         },
       });
@@ -849,7 +849,7 @@ describe.skipIf(!RUN)('ask moji trigger runtime (integration)', () => {
         data: {
           classroom_id: classY,
           title: `Other ${suite}`,
-          content_path: 'o',
+          content_path: 'pages/o',
           created_by: ownerX,
           is_draft: false,
         },
@@ -865,7 +865,7 @@ describe.skipIf(!RUN)('ask moji trigger runtime (integration)', () => {
           classroom_id: classX,
           title: `Week 1 ${suite}`,
           slug: `w1-${suite}`,
-          content_path: 's',
+          content_path: 'slides/s',
           created_by: ownerX,
         },
       });
@@ -882,7 +882,7 @@ describe.skipIf(!RUN)('ask moji trigger runtime (integration)', () => {
           classroom_id: classX,
           title: `Handout ${suite}`,
           slug: `h-${suite}`,
-          content_path: 'f',
+          content_path: 'slides/f',
           created_by: ownerX,
           kind: 'FILE',
           is_draft: false,
@@ -1221,7 +1221,7 @@ describe.skipIf(!RUN)('ask moji trigger runtime (integration)', () => {
         data: {
           classroom_id: classX,
           title: `Popular ${suite}`,
-          content_path: 'pp',
+          content_path: 'pages/pp',
           created_by: ownerX,
           is_draft: false,
         },
@@ -1230,7 +1230,7 @@ describe.skipIf(!RUN)('ask moji trigger runtime (integration)', () => {
         data: {
           classroom_id: classX,
           title: `Lonely ${suite}`,
-          content_path: 'pl',
+          content_path: 'pages/pl',
           created_by: ownerX,
           is_draft: false,
         },
@@ -1307,7 +1307,7 @@ describe.skipIf(!RUN)('ask moji trigger runtime (integration)', () => {
         data: {
           classroom_id: classX,
           title: `Reviewed ${suite}`,
-          content_path: 'pr',
+          content_path: 'pages/pr',
           created_by: ownerX,
           is_draft: false,
         },
@@ -1406,7 +1406,7 @@ describe.skipIf(!RUN)('ask moji trigger runtime (integration)', () => {
         data: {
           classroom_id: classX,
           title: `Viewed-as ${suite}`,
-          content_path: 'pi',
+          content_path: 'pages/pi',
           created_by: ownerX,
           is_draft: false,
         },

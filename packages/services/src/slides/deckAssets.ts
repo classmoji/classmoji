@@ -130,6 +130,8 @@ export interface RewriteElementOptions {
    * and is left exactly as written.
    */
   isOwnRef?: (ref: string) => boolean;
+  /** READ side, when the frame pass owns them: an `<iframe>`'s `src` is not touched. */
+  skipFrameSrc?: boolean;
 }
 
 /**
@@ -147,7 +149,8 @@ function rewriteElements(
   let changed = false;
 
   for (const el of elements) {
-    const { src, srcset, href, style } = el.attribs;
+    const { srcset, href, style } = el.attribs;
+    const src = opts.skipFrameSrc && el.name === 'iframe' ? undefined : el.attribs.src;
     const bgImage = el.attribs[BG_IMAGE];
     const bgVideo = el.attribs[BG_VIDEO];
 
@@ -432,7 +435,16 @@ export async function canonicalizeDeckAssets(
 export async function rewriteDeckAssetUrls(
   html: string,
   resolve: (refs: string[]) => Promise<Map<string, string>>,
-  opts: { srcSets?: (refs: string[]) => Promise<Map<string, string>>; sizes?: string } = {}
+  opts: {
+    srcSets?: (refs: string[]) => Promise<Map<string, string>>;
+    sizes?: string;
+    /**
+     * Leave every `<iframe>`'s `src` alone: the frame pass (`rewriteDeckFrames`)
+     * owns them on this read. READ side only — the save path still collects
+     * them, so a signed URL that reached a frame is canonicalized like any other.
+     */
+    skipFrames?: boolean;
+  } = {}
 ): Promise<string> {
   if (!html) return html;
 
@@ -441,7 +453,15 @@ export async function rewriteDeckAssetUrls(
 
   const elements = $(ASSET_SELECTOR).toArray();
 
-  for (const el of elements) elementRefs(el.attribs, candidates);
+  for (const el of elements) {
+    if (opts.skipFrames && el.name === 'iframe') {
+      const rest = { ...el.attribs };
+      delete rest.src;
+      elementRefs(rest, candidates);
+    } else {
+      elementRefs(el.attribs, candidates);
+    }
+  }
 
   if (candidates.size === 0) return html;
 
@@ -467,7 +487,13 @@ export async function rewriteDeckAssetUrls(
 
   // Keyed by the STORED reference, which is what the emit step looks up: it
   // reads the `src` the element arrived with, not the one it leaves with.
-  if (!rewriteElements(elements, map, { srcSets: srcSetsByRef ?? undefined, sizes: opts.sizes })) {
+  if (
+    !rewriteElements(elements, map, {
+      srcSets: srcSetsByRef ?? undefined,
+      sizes: opts.sizes,
+      skipFrameSrc: opts.skipFrames,
+    })
+  ) {
     return html;
   }
 

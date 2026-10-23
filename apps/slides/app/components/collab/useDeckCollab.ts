@@ -10,6 +10,7 @@ import {
   type CollabSessionState,
 } from '~/utils/collab/session';
 import { DeckBridge, type BridgeUiState } from '~/utils/collab/DeckBridge';
+import type { EditorFrames } from '~/utils/editorFrames';
 
 /** The real provider: Hocuspocus 4.7, one socket per deck. */
 export const hocuspocusProviderFactory: CollabProviderFactory = ({
@@ -55,6 +56,10 @@ export interface UseDeckCollabArgs {
   active: boolean;
   slideId: string;
   mediaScope: { host: string | null | undefined; classroomId: string | null | undefined };
+  /** This deck's frames, shown through the editor frame route (null: as stored). */
+  frames?: EditorFrames | null;
+  /** The content service origin (legacy html blocks' preview frame). */
+  contentOrigin?: string | null;
   notify(message: string): void;
 }
 
@@ -64,13 +69,23 @@ export interface UseDeckCollabArgs {
  * effect (never in render) and destroyed in its cleanup; keyed by the room,
  * so a new epoch closes the old room first.
  */
-export function useDeckCollab({ collab, active, slideId, mediaScope, notify }: UseDeckCollabArgs) {
+export function useDeckCollab({
+  collab,
+  active,
+  slideId,
+  mediaScope,
+  frames = null,
+  contentOrigin = null,
+  notify,
+}: UseDeckCollabArgs) {
   const [pair, setPair] = useState<{ session: DeckCollabSession; bridge: DeckBridge } | null>(null);
   const [bridgeState, setBridgeState] = useState<BridgeUiState>(EMPTY_BRIDGE_STATE);
   const notifyRef = useRef(notify);
   notifyRef.current = notify;
   const scopeRef = useRef(mediaScope);
   scopeRef.current = mediaScope;
+  const displayRef = useRef({ frames, contentOrigin });
+  displayRef.current = { frames, contentOrigin };
 
   const room = collab?.room ?? null;
   const wsUrl = collab?.wsUrl ?? null;
@@ -81,6 +96,8 @@ export function useDeckCollab({ collab, active, slideId, mediaScope, notify }: U
     const bridge = new DeckBridge({
       session,
       mediaScope: scopeRef.current,
+      frames: displayRef.current.frames,
+      contentOrigin: displayRef.current.contentOrigin,
       resolveMedia: async refs => {
         const urls = await Promise.all(refs.map(ref => playableMediaUrl(slideId, ref)));
         return new Map(refs.map((ref, i) => [ref, urls[i]]));

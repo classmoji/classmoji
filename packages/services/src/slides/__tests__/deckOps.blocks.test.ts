@@ -2,10 +2,11 @@
  * Block ops in the shared op engine (block_add / block_update / block_delete):
  * the vocabulary deck_apply and the live collab server both apply.
  *
- * Pinned here: the markup each type builds (html source escaped into srcdoc
- * and read back exactly, svg sanitized, iframe embeds lazy-loaded), ids, the
- * box, the 200 KB slide cap, stack containers, the `applied` report, and the
- * iframe `src` rules and resolution the MCP applies before the ops travel.
+ * Pinned here: the markup each type builds (an html block names its file by
+ * `data-cm-src` + `data-cm-rev` and never carries code, svg sanitized, iframe
+ * embeds lazy-loaded), ids, the box, the 200 KB slide cap, stack containers,
+ * the `applied` report, and the `src` rules and resolution the MCP applies
+ * before the ops travel.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -14,6 +15,7 @@ import {
   MAX_SLIDE_HTML,
   SlideHtmlError,
   applyDeckOps,
+  canonicalizeOpFrames,
   checkBlockFrameSrc,
   deckOpSchema,
   deckOpsPayloadSchema,
@@ -23,7 +25,7 @@ import {
   resolveDeckFrameSrc,
   type DeckOp,
 } from '../deckOps.ts';
-import { HTML_BLOCK_SANDBOX, htmlBlockSrcdoc } from '../deckBlocks.ts';
+import { HTML_BLOCK_SANDBOX, htmlBlockMarkup } from '../deckBlocks.ts';
 import { normalizeSlideHtml } from '../deckHtml.ts';
 import type { DeckJson } from '../deckTypes.ts';
 
@@ -62,41 +64,118 @@ function apply(ops: DeckOp[], start: DeckJson = deck()) {
   );
 }
 
-const GAME = `<!doctype html>
-<html><body style="margin:0">
-<canvas id="c" width="200" height="100"></canvas>
-<script>
-  const ctx = document.getElementById('c').getContext('2d');
-  let x = 0;
-  (function tick() { ctx.clearRect(0, 0, 200, 100); ctx.fillText("a < b && \\"q\\" & 'r'", x++ % 200, 50); requestAnimationFrame(tick); })();
-</script>
-</body></html>`;
+const REV = 'a'.repeat(40);
+const REV2 = 'b'.repeat(40);
 
 describe('block_add', () => {
-  it('html: escapes the source into srcdoc and reads it back exactly', () => {
+  it('html: names its file and rev, stores no code', () => {
     const { deck: next, applied } = apply([
-      { op: 'block_add', slide: 's1', type: 'html', box: BOX, source: GAME, block_id: 'game0001' },
+      {
+        op: 'block_add',
+        slide: 's1',
+        type: 'html',
+        box: BOX,
+        src: 'blocks/0a1b2c3d.html',
+        rev: REV,
+        block_id: 'game0001',
+      },
     ]);
     const out = html(next, 's1');
-    expect(out.startsWith('<h2>Title</h2><div class="sl-block" data-block-type="html"')).toBe(true);
-    expect(out).toContain(`sandbox="${HTML_BLOCK_SANDBOX}"`);
-    expect(out).toContain('style="left: 40px; top: 60px; width: 480px; height: 320px;"');
-    expect(out).not.toContain('<script>');
+    expect(out).toBe(
+      '<h2>Title</h2><div class="sl-block" data-block-type="html" data-cm-block-id="game0001" ' +
+        'style="left: 40px; top: 60px; width: 480px; height: 320px;"><div class="sl-block-content">' +
+        `<iframe sandbox="${HTML_BLOCK_SANDBOX}" allow="fullscreen" data-cm-src="blocks/0a1b2c3d.html" ` +
+        `data-cm-rev="${REV}" style="width: 100%; height: 100%; border: 0px;"></iframe></div></div>`
+    );
     const [block] = readSlideBlocks(out);
-    expect(block).toEqual({ id: 'game0001', type: 'html', box: BOX, source: GAME });
+    expect(block).toEqual({
+      id: 'game0001',
+      type: 'html',
+      box: BOX,
+      src: 'blocks/0a1b2c3d.html',
+      rev: REV,
+    });
     // Stored in canonical form: a second normalize pass changes nothing.
     expect(normalizeSlideHtml(out)).toBe(out);
     expect(applied).toEqual([{ op: 'block_add', slide: 's1', block_id: 'game0001', type: 'html' }]);
   });
 
-  it('html: the srcdoc carries the storage shim, the source does not', () => {
+  it('html: a repo file outside the deck, query kept; rev optional', () => {
+    const src = '../../games/sketchkit/draw.html?deck=x&f=y';
     const { deck: next } = apply([
-      { op: 'block_add', slide: 's1', type: 'html', box: BOX, source: '<p>hi</p>' },
+      { op: 'block_add', slide: 's1', type: 'html', box: BOX, src, block_id: 'sk000001' },
     ]);
     const out = html(next, 's1');
-    const srcdoc = htmlBlockSrcdoc('<p>hi</p>');
-    expect(srcdoc).not.toBe('<p>hi</p>');
-    expect(readSlideBlocks(out)[0].source).toBe('<p>hi</p>');
+    expect(out).toContain('data-cm-src="../../games/sketchkit/draw.html?deck=x&amp;f=y"');
+    expect(out).not.toContain('data-cm-rev');
+    expect(readSlideBlocks(out)[0]).toEqual({ id: 'sk000001', type: 'html', box: BOX, src });
+  });
+
+  it('html: source is refused by the engine (written to a file first)', () => {
+    expect(() =>
+      apply([{ op: 'block_add', slide: 's1', type: 'html', box: BOX, source: '<p>hi</p>' }])
+    ).toThrow(/takes src/);
+  });
+
+  it.each([
+    'https://example.com/x.html',
+    '/content/o/r/slides/d/x.html',
+    '//evil.example/x.html',
+    '../../../x.html',
+    'games/%2e%2e/%2e%2e/%2e%2e/%2e%2e/x.html',
+    'games%2fx.html',
+    'a b.html',
+    'a\\b.html',
+    'games/x.js',
+    'games/',
+    'index.html',
+    'deck.json',
+    '../other/index.html',
+    '../../pages/p/content.json',
+    'javascript:alert(1)',
+  ])('html: refuses src %j', src => {
+    expect(() => apply([{ op: 'block_add', slide: 's1', type: 'html', box: BOX, src }])).toThrow(
+      /Invalid html block src/
+    );
+  });
+
+  it('html: refuses a rev that is not a blob sha', () => {
+    expect(
+      deckOpSchema.safeParse({
+        op: 'block_add',
+        slide: 's1',
+        type: 'html',
+        box: BOX,
+        src: 'blocks/0a1b2c3d.html',
+        rev: 'nope',
+      }).success
+    ).toBe(false);
+    expect(() =>
+      applyDeckOps(deck(), [
+        {
+          op: 'block_add',
+          slide: 's1',
+          type: 'html',
+          box: BOX,
+          src: 'blocks/0a1b2c3d.html',
+          rev: 'nope',
+        } as DeckOp,
+      ])
+    ).toThrow(/Invalid rev/);
+  });
+
+  it('html source: the schema allows up to 1,000,000 UTF-8 bytes', () => {
+    const op = (source: string) => ({
+      op: 'block_add',
+      slide: 's1',
+      type: 'html',
+      box: BOX,
+      source,
+    });
+    expect(deckOpSchema.safeParse(op('x'.repeat(1_000_000))).success).toBe(true);
+    expect(deckOpSchema.safeParse(op('x'.repeat(1_000_001))).success).toBe(false);
+    // Counted in bytes, not characters: 'é' is two.
+    expect(deckOpSchema.safeParse(op('é'.repeat(500_001))).success).toBe(false);
   });
 
   it('svg: sanitizes and sizes the drawing to the box', () => {
@@ -145,8 +224,8 @@ describe('block_add', () => {
 
   it('mints a fresh 8-hex id when none is given, unique within the slide', () => {
     const { deck: next, applied } = apply([
-      { op: 'block_add', slide: 's1', type: 'html', box: BOX, source: '<p>1</p>' },
-      { op: 'block_add', slide: 's1', type: 'html', box: BOX, source: '<p>2</p>' },
+      { op: 'block_add', slide: 's1', type: 'html', box: BOX, src: 'blocks/00000001.html' },
+      { op: 'block_add', slide: 's1', type: 'html', box: BOX, src: 'blocks/00000002.html' },
     ]);
     const ids = readSlideBlocks(html(next, 's1')).map(b => b.id);
     expect(ids).toHaveLength(2);
@@ -157,8 +236,8 @@ describe('block_add', () => {
 
   it('refuses an id the slide already has', () => {
     const ops: DeckOp[] = [
-      { op: 'block_add', slide: 's1', type: 'html', box: BOX, source: 'a', block_id: 'same' },
-      { op: 'block_add', slide: 's1', type: 'html', box: BOX, source: 'b', block_id: 'same' },
+      { op: 'block_add', slide: 's1', type: 'html', box: BOX, src: 'a.html', block_id: 'same' },
+      { op: 'block_add', slide: 's1', type: 'html', box: BOX, src: 'b.html', block_id: 'same' },
     ];
     expect(() => apply(ops)).toThrow(/already has a block 'same'/);
   });
@@ -169,34 +248,42 @@ describe('block_add', () => {
       '<div class="sl-block" data-block-type="text"><div class="sl-block-content">' +
       '<div class="sl-block" data-block-type="svg" data-cm-block-id="inner01"></div></div></div>';
     const ops: DeckOp[] = [
-      { op: 'block_add', slide: 's1', type: 'html', box: BOX, source: 'a', block_id: 'inner01' },
+      { op: 'block_add', slide: 's1', type: 'html', box: BOX, src: 'a.html', block_id: 'inner01' },
     ];
     expect(() => apply(ops, start)).toThrow(/already has a block 'inner01'/);
   });
 
   it('adds to a stack child, refuses the stack container', () => {
     const { deck: next } = apply([
-      { op: 'block_add', slide: 'c2', type: 'html', box: BOX, source: 'x' },
+      { op: 'block_add', slide: 'c2', type: 'html', box: BOX, src: 'x.html' },
     ]);
     expect(readSlideBlocks(html(next, 'c2'))).toHaveLength(1);
     expect(() =>
-      apply([{ op: 'block_add', slide: 'stack', type: 'html', box: BOX, source: 'x' }])
+      apply([{ op: 'block_add', slide: 'stack', type: 'html', box: BOX, src: 'x.html' }])
     ).toThrow(/vertical stack container/);
   });
 
   it('refuses an unknown slide', () => {
     expect(() =>
-      apply([{ op: 'block_add', slide: 'nope', type: 'html', box: BOX, source: 'x' }])
+      apply([{ op: 'block_add', slide: 'nope', type: 'html', box: BOX, src: 'x.html' }])
     ).toThrow(DeckOpError);
   });
 
   it('refuses fields that do not fit the type', () => {
+    expect(() => apply([{ op: 'block_add', slide: 's1', type: 'html', box: BOX }])).toThrow(
+      /needs src/
+    );
     expect(() =>
-      apply([{ op: 'block_add', slide: 's1', type: 'html', box: BOX, src: 'https://a.b/' }])
+      apply([{ op: 'block_add', slide: 's1', type: 'svg', box: BOX, src: 'https://a.b/' }])
     ).toThrow(/takes source, not src/);
     expect(() =>
       apply([{ op: 'block_add', slide: 's1', type: 'iframe', box: BOX, source: '<p/>' }])
     ).toThrow(/takes src/);
+    expect(() =>
+      apply([
+        { op: 'block_add', slide: 's1', type: 'iframe', box: BOX, src: 'https://a.b/', rev: REV },
+      ])
+    ).toThrow(/takes no rev/);
     expect(() => apply([{ op: 'block_add', slide: 's1', type: 'iframe', box: BOX }])).toThrow(
       /needs src/
     );
@@ -207,11 +294,12 @@ describe('block_add', () => {
 
   it('refuses a slide html over 200 KB after the op, and leaves the deck untouched', () => {
     const start = deck();
-    const big = 'x'.repeat(MAX_SLIDE_HTML - 100);
+    start.slides[0].html = `<p>${'x'.repeat(MAX_SLIDE_HTML - 100)}</p>`;
+    const before = start.slides[0].html;
     expect(() =>
-      apply([{ op: 'block_add', slide: 's1', type: 'html', box: BOX, source: big }], start)
+      apply([{ op: 'block_add', slide: 's1', type: 'html', box: BOX, src: 'x.html' }], start)
     ).toThrow(/over the 200000 limit/);
-    expect(html(start, 's1')).toBe('<h2>Title</h2>');
+    expect(html(start, 's1')).toBe(before);
   });
 
   it('schema: box needs all four numbers, positive size; type is one of three', () => {
@@ -237,7 +325,15 @@ describe('block_add', () => {
 describe('block_update', () => {
   function withBlocks() {
     return apply([
-      { op: 'block_add', slide: 's1', type: 'html', box: BOX, source: '<p>v1</p>', block_id: 'h1' },
+      {
+        op: 'block_add',
+        slide: 's1',
+        type: 'html',
+        box: BOX,
+        src: 'blocks/0000000a.html',
+        rev: REV,
+        block_id: 'h1',
+      },
       {
         op: 'block_add',
         slide: 's1',
@@ -257,14 +353,15 @@ describe('block_update', () => {
     ]).deck;
   }
 
-  it('html: replaces the source and moves the box', () => {
+  it('html: points at a new file version and moves the box', () => {
     const { deck: next, applied } = apply(
       [
         {
           op: 'block_update',
           slide: 's1',
           block_id: 'h1',
-          source: GAME,
+          src: 'blocks/0000000b.html',
+          rev: REV2,
           box: { left: 0, width: 960 },
         },
       ],
@@ -275,9 +372,39 @@ describe('block_update', () => {
       id: 'h1',
       type: 'html',
       box: { left: 0, top: 60, width: 960, height: 320 },
-      source: GAME,
+      src: 'blocks/0000000b.html',
+      rev: REV2,
     });
     expect(applied).toEqual([{ op: 'block_update', slide: 's1', block_id: 'h1' }]);
+  });
+
+  it('html: a legacy srcdoc block becomes a file block', () => {
+    const start = deck();
+    start.slides[0].html = normalizeSlideHtml(
+      htmlBlockMarkup({ id: 'old1', box: BOX, source: '<p>legacy</p>' })
+    );
+    expect(readSlideBlocks(start.slides[0].html).at(0)?.source).toBe('<p>legacy</p>');
+    const { deck: next } = apply(
+      [
+        {
+          op: 'block_update',
+          slide: 's1',
+          block_id: 'old1',
+          src: 'blocks/0000000c.html',
+          rev: REV,
+        },
+      ],
+      start
+    );
+    const out = html(next, 's1');
+    expect(out).not.toContain('srcdoc');
+    expect(readSlideBlocks(out)[0]).toEqual({
+      id: 'old1',
+      type: 'html',
+      box: BOX,
+      src: 'blocks/0000000c.html',
+      rev: REV,
+    });
   });
 
   it('svg: source replaces the drawing', () => {
@@ -312,8 +439,23 @@ describe('block_update', () => {
       apply([{ op: 'block_update', slide: 's1', block_id: 'f1', source: 'x' }], start)
     ).toThrow(/takes src/);
     expect(() =>
-      apply([{ op: 'block_update', slide: 's1', block_id: 'h1', src: 'https://a.b/' }], start)
-    ).toThrow(/src applies to iframe blocks/);
+      apply([{ op: 'block_update', slide: 's1', block_id: 'h1', source: '<p>x</p>' }], start)
+    ).toThrow(/html block takes src/);
+    expect(() =>
+      apply([{ op: 'block_update', slide: 's1', block_id: 'h1', src: 'https://a.b/x.html' }], start)
+    ).toThrow(/Invalid html block src/);
+    expect(() =>
+      apply([{ op: 'block_update', slide: 's1', block_id: 'v1', src: 'https://a.b/' }], start)
+    ).toThrow(/src applies to html and iframe blocks/);
+    expect(() =>
+      apply([{ op: 'block_update', slide: 's1', block_id: 'h1', rev: REV2 }], start)
+    ).toThrow(/rev goes with src/);
+    expect(() =>
+      apply(
+        [{ op: 'block_update', slide: 's1', block_id: 'f1', src: 'https://a.b/', rev: REV2 }],
+        start
+      )
+    ).toThrow(/rev goes with src/);
     expect(() => apply([{ op: 'block_update', slide: 's1', block_id: 'h1' }], start)).toThrow(
       /at least one of box, source, src/
     );
@@ -335,8 +477,8 @@ describe('block_update', () => {
           {
             op: 'block_update',
             slide: 's1',
-            block_id: 'h1',
-            source: 'y'.repeat(MAX_SLIDE_HTML - 50),
+            block_id: 'v1',
+            source: `<svg viewBox="0 0 9 9"><text>${'y'.repeat(MAX_SLIDE_HTML)}</text></svg>`,
           },
         ],
         withBlocks()
@@ -348,11 +490,11 @@ describe('block_update', () => {
 describe('block_delete', () => {
   it('removes exactly that block', () => {
     const start = apply([
-      { op: 'block_add', slide: 's1', type: 'html', box: BOX, source: 'a', block_id: 'a1' },
-      { op: 'block_add', slide: 's1', type: 'html', box: BOX, source: 'b', block_id: 'b1' },
+      { op: 'block_add', slide: 's1', type: 'html', box: BOX, src: 'a.html', block_id: 'a1' },
+      { op: 'block_add', slide: 's1', type: 'html', box: BOX, src: 'b.html', block_id: 'b1' },
     ]).deck;
     const { deck: next, applied } = apply(
-      [{ op: 'block_delete', slide: 's1', block_id: 'a1' }],
+      [{ op: 'block_delete', slide: 's1', block_id: 'a1', delete_file: true }],
       start
     );
     expect(readSlideBlocks(html(next, 's1')).map(b => b.id)).toEqual(['b1']);
@@ -484,20 +626,37 @@ describe('iframe src', () => {
     expect(resolveDeckFrameSrc('javascript:1', ctx)).toBe('javascript:1');
   });
 
-  it('prepareDeckOps mints block_add ids and resolves srcs, leaving the input alone', () => {
+  it('prepareDeckOps mints block_add ids and resolves iframe srcs, leaving the input alone', () => {
     const ops: DeckOp[] = [
       { op: 'block_add', slide: 's1', type: 'iframe', box: BOX, src: 'games/x/index.html' },
-      { op: 'block_add', slide: 's1', type: 'html', box: BOX, source: 'x', block_id: 'keep' },
+      { op: 'block_add', slide: 's1', type: 'html', box: BOX, src: 'g/a.html', block_id: 'keep' },
       { op: 'block_update', slide: 's1', block_id: 'f', src: 'games/y/index.html' },
       { op: 'update', id: 's1', html: '<p>games/x</p>' },
+      { op: 'block_update', slide: 's1', block_id: 'keep', src: 'g/b.html' },
     ];
     const snapshot = structuredClone(ops);
     const prepared = prepareDeckOps(ops, ctx);
     expect(ops).toEqual(snapshot);
-    const [add, keep, update, plain] = prepared as Array<Record<string, unknown>>;
+    const [add, keep, update, plain, keepUpdate] = prepared as Array<Record<string, unknown>>;
     expect(add.block_id).toMatch(/^[0-9a-f]{8}$/);
     expect(add.src).toBe('/content/org/repo/slides/my-deck/games/x/index.html');
     expect(keep.block_id).toBe('keep');
+    // An html block's file stays relative to the deck folder.
+    expect(keep.src).toBe('g/a.html');
+    const [fromUpload] = prepareDeckOps(
+      [
+        {
+          op: 'block_add',
+          slide: 's1',
+          type: 'html',
+          box: BOX,
+          src: 'slides/my-deck/games/x/index.html',
+        },
+      ],
+      ctx
+    ) as Array<Record<string, unknown>>;
+    expect(fromUpload.src).toBe('games/x/index.html');
+    expect(keepUpdate.src).toBe('g/b.html');
     expect(update.src).toBe('/content/org/repo/slides/my-deck/games/y/index.html');
     expect(plain).toBe(ops[3]);
     // A dry run and a second application with the prepared ops name the same block.
@@ -505,5 +664,76 @@ describe('iframe src', () => {
     const second = applyDeckOps(deck(), [prepared[0]]);
     expect(first.applied[0].block_id).toBe(add.block_id);
     expect(html(first.deck, 's1')).toBe(html(second.deck, 's1'));
+  });
+
+  it("prepareDeckOps reads the deck to leave an existing html block's src alone", () => {
+    const start = deck();
+    start.slides[0].html = normalizeSlideHtml(
+      htmlBlockMarkup({ id: 'h1', box: BOX, src: 'blocks/0000000a.html' }) +
+        '<div class="sl-block" data-block-type="iframe" data-cm-block-id="f1">' +
+        '<div class="sl-block-content"><iframe data-src="https://a.b/"></iframe></div></div>'
+    );
+    const [h, f] = prepareDeckOps(
+      [
+        { op: 'block_update', slide: 's1', block_id: 'h1', src: 'games/y/index.html' },
+        { op: 'block_update', slide: 's1', block_id: 'f1', src: 'games/y/index.html' },
+      ],
+      ctx,
+      start
+    ) as Array<Record<string, unknown>>;
+    expect(h.src).toBe('games/y/index.html');
+    expect(f.src).toBe('/content/org/repo/slides/my-deck/games/y/index.html');
+  });
+
+  it('with frames, the markup ops carry loses its display-derived frame values', () => {
+    const frames = {
+      deckFolder: 'slides/my-deck',
+      slideId: '11111111-1111-4111-8111-111111111111',
+      filesRef: (url: string) =>
+        url.startsWith('https://files.test/')
+          ? { repoPath: url.slice('https://files.test/'.length), query: '' }
+          : null,
+    };
+    const ops: DeckOp[] = [
+      {
+        op: 'update',
+        id: 's1',
+        html: '<iframe data-src="/11111111-1111-4111-8111-111111111111/frame/slides/my-deck/games/x/index.html"></iframe>',
+        notes: null,
+        attrs: { 'data-background-iframe': 'https://files.test/games/bg.html', gone: null },
+      },
+      {
+        op: 'insert',
+        position: { at: 'end' },
+        slides: [
+          {
+            children: [
+              { html: '<iframe src="https://files.test/slides/my-deck/a.html"></iframe>' },
+              { html: '<p>plain</p>' },
+            ],
+          },
+        ],
+      },
+      { op: 'update', id: 's2', html: '<p>no frames</p>' },
+    ];
+    const snapshot = structuredClone(ops);
+    type Update = Extract<DeckOp, { op: 'update' }>;
+    type Insert = Extract<DeckOp, { op: 'insert' }>;
+    const [update, insert, plain] = prepareDeckOps(ops, ctx, null, frames) as [
+      Update,
+      Insert,
+      DeckOp,
+    ];
+    expect(ops).toEqual(snapshot);
+    expect(update.html).toBe('<iframe data-src="games/x/index.html"></iframe>');
+    expect(update.notes).toBeNull();
+    expect(update.attrs).toEqual({ 'data-background-iframe': '../../games/bg.html', gone: null });
+    const children = insert.slides[0].children ?? [];
+    expect(children[0].html).toBe('<iframe src="a.html"></iframe>');
+    expect(children[1]).toBe((ops[1] as Insert).slides[0].children?.[1]);
+    expect(plain).toBe(ops[2]);
+    // Nothing to undo: the same ops back.
+    const clean = canonicalizeOpFrames([ops[2]], frames);
+    expect(clean[0]).toBe(ops[2]);
   });
 });

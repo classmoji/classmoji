@@ -214,11 +214,43 @@ export async function create(values: Prisma.PageUncheckedCreateInput) {
  * from the DB `slug` column, which uses titleToIdentifier.
  */
 export function pageContentPath(title: string): string {
-  const slug = title
+  return `pages/${contentSlug(title) || EMPTY_SLUG_FALLBACK}`;
+}
+
+/**
+ * The folder name for a title with no slug characters at all ("!!!", "第一课"),
+ * which would otherwise be `pages/` — the whole pages folder.
+ */
+const EMPTY_SLUG_FALLBACK = 'page';
+
+function contentSlug(title: string): string {
+  return title
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '');
-  return `pages/${slug}`;
+}
+
+/**
+ * `pageContentPath`, made unique for a title with no slug characters: the
+ * first of `pages/page`, `pages/page-2`, … no page in the classroom uses. A
+ * title that does have a slug keeps `pageContentPath` exactly; a collision
+ * there is refused by `createPage`, as before.
+ */
+export async function freePageContentPath(classroomId: string, title: string): Promise<string> {
+  if (contentSlug(title)) return pageContentPath(title);
+
+  const rows = await getPrisma().page.findMany({
+    where: {
+      classroom_id: classroomId,
+      content_path: { startsWith: `pages/${EMPTY_SLUG_FALLBACK}` },
+    },
+    select: { content_path: true },
+  });
+  const taken = new Set(rows.map((row: { content_path: string }) => row.content_path));
+  for (let n = 1; ; n++) {
+    const candidate = `pages/${EMPTY_SLUG_FALLBACK}${n === 1 ? '' : `-${n}`}`;
+    if (!taken.has(candidate)) return candidate;
+  }
 }
 
 /** Initial index.html content for a blank page (web "Create Blank" flow). */
@@ -456,7 +488,19 @@ export async function createPage({
 
   const ctx = await resolveContentRepo(classroomId);
 
-  const contentPath = pageContentPath(title);
+  // The callers that pass `files` placed them under this same
+  // `freePageContentPath` (`<path>/assets/…`), so the page and its files agree.
+  // Should the free path have moved since (another page took it), the page
+  // would land away from its files: refused instead, before any write.
+  const contentPath = await freePageContentPath(classroomId, title);
+  if (files.some(file => !file.path.startsWith(`${contentPath}/`))) {
+    throw Object.assign(
+      new Error(
+        `The page's files are not under its content path '${contentPath}'. Please try again.`
+      ),
+      { code: PAGE_CONTENT_PATH_CONFLICT }
+    );
+  }
 
   // Distinct titles can normalize to the SAME content path ("Lab 1" and
   // "Lab-1" → pages/lab-1), and content_path carries no unique constraint —
