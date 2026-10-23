@@ -71,6 +71,8 @@ import {
   type SlideBlockInfo,
 } from '@classmoji/services/slides/ops';
 import type { SnapshotResponse } from '@classmoji/collab';
+import { COOKIE_DOMAIN } from '@classmoji/auth/secret';
+import { appFrameHosts } from '@classmoji/services/slides/frame-refs';
 import { ClassmojiService, ContentService } from '@classmoji/services';
 import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
@@ -866,7 +868,7 @@ function frameContext(slide: SlideWithRepoRecord) {
 
 /**
  * The write-side frame backstop for the ops' markup: a files URL of this
- * classroom or this deck's editor frame URL (an agent copying what a render
+ * classroom or an editor frame URL on our hosts (an agent copying what a render
  * showed) is stored as the deck-relative reference it was made from.
  */
 function frameBackstop(slide: SlideWithRepoRecord) {
@@ -875,6 +877,7 @@ function frameBackstop(slide: SlideWithRepoRecord) {
     slideId: slide.id,
     filesRef: (url: string) =>
       ClassmojiService.contentDelivery.parseOwnFilesUrl(slide.classroom.id, url),
+    ourHosts: appFrameHosts(process.env, COOKIE_DOMAIN),
   };
 }
 

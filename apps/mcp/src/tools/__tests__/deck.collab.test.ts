@@ -731,14 +731,9 @@ describe('block ops', () => {
     expect(JSON.stringify(audit)).toContain(String(sent[0].block_id));
   });
 
-  it('live block_update with source writes a new file, then deletes the old one once the deck names the new', async () => {
+  it('live block_update with source writes a new file and keeps the one the block named (other decks may name it)', async () => {
     serve(4, deckWithBlock());
     await read();
-    mocks.deleteHtmlBlockFile.mockImplementation(async () => {
-      // The deck write has landed by the time the old file goes.
-      expect(posts()).toHaveLength(1);
-      return { deleted: true };
-    });
     const result = parse(
       await apply([{ op: 'block_update', slide: 'bbb', block_id: 'b1', source: '<p>v2</p>' }])
     );
@@ -756,47 +751,53 @@ describe('block ops', () => {
       rev: NEW_REV,
     });
     expect(result.applied[0]).toMatchObject({ src: 'blocks/f0000001.html', rev: NEW_REV });
-    expect(mocks.deleteHtmlBlockFile).toHaveBeenCalledTimes(1);
-    expect(mocks.deleteHtmlBlockFile).toHaveBeenCalledWith({
-      slideId: SLIDE_ID,
-      actorUserId: 'teacher-1',
-      src: 'blocks/0a0b0c0d.html',
-      surface: 'mcp',
-    });
+    // No block of this deck names it any more, but another deck may, and the
+    // published deck does until the next checkpoint.
+    expect(mocks.deleteHtmlBlockFile).not.toHaveBeenCalled();
   });
 
-  it('two sources for one block in a call: the deck names the last file, the others are deleted', async () => {
+  it('two sources for one block in a call: the deck names the last file, only the one written between goes', async () => {
     serve(4, deckWithBlock());
     await read();
+    mocks.deleteHtmlBlockFile.mockImplementation(async () => {
+      // The deck write has landed by the time the file goes.
+      expect(posts()).toHaveLength(1);
+      return { deleted: true };
+    });
     await apply([
       { op: 'block_update', slide: 'bbb', block_id: 'b1', source: '<p>v2</p>' },
       { op: 'block_update', slide: 'bbb', block_id: 'b1', source: '<p>v3</p>' },
     ]);
     const sent = posts()[0]?.body?.ops as Array<Record<string, unknown>>;
     expect(sent.map(op => op.src)).toEqual(['blocks/f0000001.html', 'blocks/f0000002.html']);
-    expect(mocks.deleteHtmlBlockFile.mock.calls.map(call => call[0].src).sort()).toEqual([
-      'blocks/0a0b0c0d.html',
-      'blocks/f0000001.html',
-    ]);
+    expect(mocks.deleteHtmlBlockFile).toHaveBeenCalledTimes(1);
+    expect(mocks.deleteHtmlBlockFile).toHaveBeenCalledWith({
+      slideId: SLIDE_ID,
+      actorUserId: 'teacher-1',
+      src: 'blocks/f0000001.html',
+      surface: 'mcp',
+    });
   });
 
-  it('the old file is kept while another block of the deck names it', async () => {
-    const shared = applyDeckOps(deckWithBlock(), [
+  it('a file written earlier in the call is kept while another block of the deck names it', async () => {
+    serve(4, deckWithBlock());
+    await read();
+    await apply([
+      { op: 'block_update', slide: 'bbb', block_id: 'b1', source: '<p>v2</p>' },
+      // A second block given the file the first one is about to leave.
       {
         op: 'block_add',
         slide: 'aaa',
         type: 'html',
         box: BOX,
-        src: 'blocks/0a0b0c0d.html',
-        rev: REV,
+        src: 'blocks/f0000001.html',
+        rev: NEW_REV,
         block_id: 'b2',
       },
-    ]).deck;
-    serve(4, shared);
-    await read();
-    await apply([{ op: 'block_update', slide: 'bbb', block_id: 'b1', source: '<p>mine</p>' }]);
+      { op: 'block_update', slide: 'bbb', block_id: 'b1', source: '<p>v3</p>' },
+    ]);
     const sent = posts()[0]?.body?.ops as Array<Record<string, unknown>>;
-    expect(sent[0]).toMatchObject({ src: 'blocks/f0000001.html' });
+    expect(sent.at(-1)).toMatchObject({ src: 'blocks/f0000002.html' });
     expect(mocks.deleteHtmlBlockFile).not.toHaveBeenCalled();
   });
 
@@ -1151,7 +1152,7 @@ describe('block ops', () => {
     expect(fakeFetch).not.toHaveBeenCalled();
   });
 
-  it('git mode: the deck save lands before the old file is deleted', async () => {
+  it('git mode: the deck save lands before a file the call left is deleted; the prior file stays', async () => {
     mocks.slideFindById.mockResolvedValue(PLAIN_DRAFT);
     mocks.loadDeck.mockResolvedValue({
       deck: deckWithBlock(),
@@ -1167,14 +1168,18 @@ describe('block ops', () => {
         classroom: 'org/x',
         slide_id: SLIDE_ID,
         expected_sha: 'git-sha-1',
-        ops: [{ op: 'block_update', slide: 'bbb', block_id: 'b1', source: '<p>v2</p>' }] as never,
+        ops: [
+          { op: 'block_update', slide: 'bbb', block_id: 'b1', source: '<p>v2</p>' },
+          { op: 'block_update', slide: 'bbb', block_id: 'b1', source: '<p>v3</p>' },
+        ] as never,
       },
       CTX
     );
     const saved = mocks.saveDeck.mock.calls[0][0].deck as DeckJson;
-    expect(saved.slides[1].html).toContain('data-cm-src="blocks/f0000001.html"');
+    expect(saved.slides[1].html).toContain('data-cm-src="blocks/f0000002.html"');
+    expect(mocks.deleteHtmlBlockFile).toHaveBeenCalledTimes(1);
     expect(mocks.deleteHtmlBlockFile).toHaveBeenCalledWith(
-      expect.objectContaining({ src: 'blocks/0a0b0c0d.html' })
+      expect.objectContaining({ src: 'blocks/f0000001.html' })
     );
   });
 
@@ -1277,6 +1282,7 @@ describe('the block guide reaches tools/list', () => {
       'multi-file games',
       'relative to the deck folder',
       'delete_file',
+      'other decks are not checked',
       'static vector art',
       'scripts stripped',
     ]) {

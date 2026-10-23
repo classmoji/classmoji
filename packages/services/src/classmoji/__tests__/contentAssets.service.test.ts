@@ -53,6 +53,10 @@ const rawCalls = () => executeRaw.mock.calls as RawCall[];
 const sqlOf = (call: RawCall) => call[0].join('?');
 const upsertCall = () => rawCalls().find(call => sqlOf(call).includes('INSERT'));
 const deleteCall = () => rawCalls().find(call => sqlOf(call).includes('DELETE'));
+const stampCall = () => rawCalls().find(call => sqlOf(call).includes('UPDATE classrooms'));
+// UPDATE params: stamp, commit, classroomId, stamp.
+const stampWrittenOf = () => stampCall()![1] as Date;
+const stampCommitOf = () => stampCall()![2] as string;
 // INSERT params: classroomId, stamp, paths, shas, types, sizes.
 const upsertedPathsOf = () => upsertCall()![3] as string[];
 const upsertedShasOf = () => upsertCall()![4] as string[];
@@ -130,19 +134,21 @@ const syncedAgo = (ms: number) => ({
  * transaction answers each with what Postgres would: a row count for raw
  * statements, `{ count }` for `updateMany`.
  */
-const setupTransaction = ({ upserted = 0, deleted = 0 } = {}) => {
+const setupTransaction = ({ upserted = 0, deleted = 0, stamped = 1 } = {}) => {
   contentAssetUpsert.mockImplementation(args => ({ op: 'upsert', args }));
-  executeRaw.mockImplementation((strings: TemplateStringsArray) => ({
-    op: strings.join('?').includes('DELETE') ? 'rawDelete' : 'rawUpsert',
-  }));
+  executeRaw.mockImplementation((strings: TemplateStringsArray) => {
+    const sql = strings.join('?');
+    if (sql.includes('UPDATE classrooms')) return { op: 'stamp' };
+    return { op: sql.includes('DELETE') ? 'rawDelete' : 'rawUpsert' };
+  });
   contentAssetDeleteMany.mockImplementation(args => ({ op: 'deleteMany', args }));
-  classroomUpdateMany.mockImplementation(args => ({ op: 'stamp', args }));
+  classroomUpdateMany.mockImplementation(args => ({ op: 'updateMany', args }));
   transaction.mockImplementation((ops: { op: string }[]) =>
     Promise.resolve(
       ops.map(op => {
         if (op.op === 'rawDelete') return deleted;
         if (op.op === 'rawUpsert') return upserted;
-        if (op.op === 'stamp') return { count: 1 };
+        if (op.op === 'stamp') return stamped;
         return op;
       })
     )
@@ -258,7 +264,7 @@ describe('contentAssets.service', () => {
 
       expect(upsertCall()).toBeUndefined();
       expect(keptPathsOf()).toEqual([]);
-      expect(classroomUpdateMany).toHaveBeenCalledTimes(1);
+      expect(rawCalls().filter(call => sqlOf(call).includes('UPDATE classrooms'))).toHaveLength(1);
     });
 
     it('does NOT delete when the tree came back truncated, but still records the commit', async () => {
@@ -278,9 +284,7 @@ describe('contentAssets.service', () => {
       expect(result).toEqual({ mode: 'full', upserted: 1, deleted: 0, truncated: true });
       expect(deleteCall()).toBeUndefined();
       expect(contentAssetDeleteMany).not.toHaveBeenCalled();
-      expect(classroomUpdateMany.mock.calls[0][0].data.content_assets_synced_commit).toBe(
-        HEAD_COMMIT
-      );
+      expect(stampCommitOf()).toBe(HEAD_COMMIT);
       warn.mockRestore();
     });
 
@@ -310,23 +314,31 @@ describe('contentAssets.service', () => {
 
       await syncContentAssets('class-1');
 
-      const [stamp] = classroomUpdateMany.mock.calls[0];
+      const [strings, written, commit, classroomId, below] = stampCall()!;
       // An older run finishing late cannot record its older commit over a
       // newer run's: the stamp lands only on a classroom stamped before it.
-      expect(stamp.where).toEqual({
-        id: 'class-1',
-        OR: [
-          { content_assets_synced_at: null },
-          { content_assets_synced_at: { lt: upsertStampOf() } },
-        ],
-      });
-      expect(stamp.data).toEqual({
-        content_assets_synced_at: upsertStampOf(),
-        content_assets_synced_commit: HEAD_COMMIT,
-      });
+      expect(strings.join('?')).toMatch(
+        /WHERE id = \?\s+AND \(content_assets_synced_at IS NULL OR content_assets_synced_at < \?\)/
+      );
+      expect(classroomId).toBe('class-1');
+      expect(commit).toBe(HEAD_COMMIT);
+      // The one Date the upsert's and the delete's gates compare against.
+      expect(written).toBe(upsertStampOf());
+      expect(below).toBe(upsertStampOf());
+      expect(stampWrittenOf()).toBe(deleteStampOf());
+      expect(classroomUpdateMany).not.toHaveBeenCalled();
 
       const ops = transaction.mock.calls[0][0] as { op: string }[];
       expect(ops.map(op => op.op)).toEqual(['stamp', 'rawUpsert', 'rawDelete']);
+    });
+
+    it('reports superseded when a newer run already holds the stamp', async () => {
+      getTree.mockResolvedValue(tree([{ path: 'a.png', sha: 'a', type: 'blob', size: 1 }]));
+      setupTransaction({ stamped: 0 });
+
+      const result = await syncContentAssets('class-1');
+
+      expect(result).toEqual({ mode: 'superseded', upserted: 0, deleted: 0, truncated: false });
     });
 
     it('reads the tree at the repo default branch, not a hardcoded main', async () => {
@@ -980,6 +992,7 @@ describe('contentAssets.service', () => {
       await recordContentAsset('class-1', { path: 'images/a.png', sha: 'sha-a' });
 
       expect(classroomUpdateMany).not.toHaveBeenCalled();
+      expect(stampCall()).toBeUndefined();
     });
 
     it('resolves false instead of throwing when the write fails', async () => {

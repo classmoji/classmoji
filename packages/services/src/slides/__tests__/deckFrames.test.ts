@@ -173,7 +173,7 @@ describe('rewriteDeckFrames', () => {
 });
 
 describe('canonicalizeFrameMarkup', () => {
-  const opts = { deckFolder: DECK, slideId: SLIDE_ID, filesRef };
+  const opts = { deckFolder: DECK, slideId: SLIDE_ID, filesRef, ourHosts: ['slides.classmoji.io'] };
 
   it('turns files URLs and editor URLs back into deck-relative references', () => {
     expect(
@@ -241,6 +241,45 @@ describe('canonicalizeFrameMarkup', () => {
     ).toBe('<iframe data-cm-src="blocks/x.html"></iframe>');
   });
 
+  it("an html block naming one of this deck's own files keeps it, whatever URL it shows", () => {
+    expect(
+      canonicalizeFrameMarkup(
+        `<iframe data-cm-src="blocks/ab12cd34.html" data-cm-rev="r" src="/${OTHER_SLIDE_ID}/frame/slides/other/blocks/ee00ee00.html?cm-rev=r"></iframe>`,
+        opts
+      )
+    ).toBe('<iframe data-cm-src="blocks/ab12cd34.html" data-cm-rev="r"></iframe>');
+    // Missing, or not one of its own files: re-derived.
+    expect(
+      canonicalizeFrameMarkup(
+        `<iframe data-cm-src="" src="/${SLIDE_ID}/frame/slides/week-1/blocks/ab12cd34.html"></iframe>` +
+          `<iframe data-cm-src="../other/blocks/ee00ee00.html" src="/${SLIDE_ID}/frame/slides/week-1/games/a.html"></iframe>`,
+        opts
+      )
+    ).toBe(
+      '<iframe data-cm-src="blocks/ab12cd34.html"></iframe>' +
+        '<iframe data-cm-src="games/a.html"></iframe>'
+    );
+  });
+
+  it('drops the missing mark on save', () => {
+    expect(
+      canonicalizeFrameMarkup(
+        '<iframe data-cm-inert-src="javascript:x" data-cm-missing="1"></iframe>' +
+          '<div data-cm-missing="1"><p>x</p></div>',
+        opts
+      )
+    ).toBe('<iframe data-cm-inert-src="javascript:x"></iframe><div><p>x</p></div>');
+  });
+
+  it('an absolute editor URL is turned back only on our hosts', () => {
+    const external = `<iframe src="https://example.com/${SLIDE_ID}/frame/a.html"></iframe>`;
+    expect(canonicalizeFrameMarkup(external, opts)).toBe(external);
+    const ours = `<iframe src="https://slides.classmoji.io/${SLIDE_ID}/frame/slides/week-1/a.html"></iframe>`;
+    expect(canonicalizeFrameMarkup(ours, opts)).toBe('<iframe src="a.html"></iframe>');
+    // Not told our hosts: root-relative only.
+    expect(canonicalizeFrameMarkup(ours, { deckFolder: DECK, filesRef })).toBe(ours);
+  });
+
   it('leaves everything else byte for byte', () => {
     const html =
       '<iframe src="https://www.youtube.com/embed/x"  allowfullscreen></iframe><p>  x </p>' +
@@ -281,6 +320,7 @@ describe('canonicalizeDeckFrames', () => {
               attrs: {
                 'data-background-iframe': `/${SLIDE_ID}/frame/games/bg.html`,
                 'data-cm-orig-data-background-iframe': 'x',
+                'data-cm-missing': '1',
               },
             },
           ],

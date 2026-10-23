@@ -1,11 +1,7 @@
 import { useCallback, useState, useEffect, useRef } from 'react';
 import { Popconfirm, Popover, Tooltip, Dropdown } from 'antd';
 
-import {
-  blockMarkup,
-  mintBlockId,
-  type BlockBox,
-} from '@classmoji/services/slides/runtime-attrs';
+import { blockMarkup, mintBlockId, type BlockBox } from '@classmoji/services/slides/runtime-attrs';
 
 import { useToast } from '~/hooks';
 import { lockHolderOf, safeInnerHtml } from '~/utils/collab/bridgeDom';

@@ -166,10 +166,16 @@ export function displayFrameValue(value: string, frames: EditorFrames): FrameDis
   return shown === value ? { kind: 'keep' } : { kind: 'set', value: shown };
 }
 
-/** A frame source as stored: an editor frame URL (of any deck) → its reference relative to this deck; anything else as it is. */
+/**
+ * A frame source as stored: an editor frame URL (of any deck; on one of our
+ * hosts when absolute) → its reference relative to this deck; anything else as
+ * it is.
+ */
 export function storedFrameValue(value: string, frames: EditorFrames | null): string {
-  if (!frames || !isEditorFrameUrl(value)) return value;
-  return fromEditorFrameUrl(value, { deckFolder: frames.deckFolder }) ?? value;
+  if (!frames) return value;
+  const opts = { deckFolder: frames.deckFolder, ourHosts: frames.ourHosts };
+  if (!isEditorFrameUrl(value, opts)) return value;
+  return fromEditorFrameUrl(value, opts) ?? value;
 }
 
 /**
@@ -326,8 +332,9 @@ export function adoptPastedHtmlBlocks(
   for (const el of elementsUnder(root)) {
     if (!isHtmlBlockFrame(el)) continue;
     const shown = el.getAttribute('src');
-    if (!shown || !isEditorFrameUrl(shown)) continue;
-    const stored = fromEditorFrameUrl(shown, { deckFolder: frames.deckFolder });
+    const opts = { deckFolder: frames.deckFolder, ourHosts: frames.ourHosts };
+    if (!shown || !isEditorFrameUrl(shown, opts)) continue;
+    const stored = fromEditorFrameUrl(shown, opts);
     if (stored && stored !== el.getAttribute(HTML_BLOCK_SRC_ATTR)) {
       el.setAttribute(HTML_BLOCK_SRC_ATTR, stored);
     }

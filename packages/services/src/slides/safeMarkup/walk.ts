@@ -26,6 +26,7 @@ import {
   ATTR_NAME_RE,
   DROPPED_HTML_ELEMENTS,
   HTML_NS,
+  INERT_NODE_ATTR,
   INERT_PREFIX,
   RETAGGED_ELEMENTS,
   SVG_NS,
@@ -71,12 +72,16 @@ export interface WalkOptions {
   marker?: string;
 }
 
-interface Ctx {
+/** Where the nodes walked sit (what their ancestors make of them). */
+export interface WalkContext {
   inHtmlBlock: boolean;
   inSvgBlock: boolean;
   /** Inside `select`, `option` or `optgroup`. */
   inSelect: boolean;
 }
+type Ctx = WalkContext;
+
+const TOP: Ctx = { inHtmlBlock: false, inSvgBlock: false, inSelect: false };
 
 /** What a select (and its options and groups) may hold besides text. */
 const SELECT_CONTENT: ReadonlySet<string> = new Set(['option', 'optgroup']);
@@ -89,6 +94,24 @@ export function walkMarkup<N, E extends N>(
   adapter: MarkupAdapter<N, E>,
   root: N,
   opts: WalkOptions
+): number {
+  return walkMarkupNodes(adapter, adapter.childNodes(root), opts, TOP);
+}
+
+/**
+ * Hold `nodes` themselves, and everything under them, to the lists, as if
+ * they sat where `ctx` says (inside an html block, an svg block, a select).
+ * For nodes already in a document (a paste), each judged in place.
+ *
+ * Rename mode leaves a holder carrying this session's marker as it is: what is
+ * in it was already hidden by an earlier pass, and hiding the holder again
+ * would nest it.
+ */
+export function walkMarkupNodes<N, E extends N>(
+  adapter: MarkupAdapter<N, E>,
+  nodes: N[],
+  opts: WalkOptions,
+  ctx: WalkContext = TOP
 ): number {
   const rename = opts.mode === 'rename';
   const marker = opts.marker ?? '';
@@ -139,8 +162,10 @@ export function walkMarkup<N, E extends N>(
     }
   };
 
-  const visitChildren = (parent: N, ctx: Ctx): void => {
-    for (const node of adapter.childNodes(parent)) {
+  const visitChildren = (parent: N, ctx: Ctx): void => visitList(adapter.childNodes(parent), ctx);
+
+  const visitList = (list: N[], ctx: Ctx): void => {
+    for (const node of list) {
       const kind = adapter.kind(node);
       if (kind === 'text') continue;
       if (kind !== 'element') {
@@ -167,8 +192,9 @@ export function walkMarkup<N, E extends N>(
   const visitElement = (el: E, ctx: Ctx): void => {
     const ns = adapter.namespace(el);
     const name = adapter.localName(el).toLowerCase();
-    if (ctx.inSelect && (ns !== HTML_NS || !SELECT_CONTENT.has(name))) return drop(el);
     const attrs = adapter.attrs(el);
+    if (rename && name === 'template' && ns === HTML_NS && isOwnHolder(attrs, marker)) return;
+    if (ctx.inSelect && (ns !== HTML_NS || !SELECT_CONTENT.has(name))) return drop(el);
     if (ns === SVG_NS) return visitSvg(el, name, attrs, ctx);
     if (ns !== HTML_NS) return drop(el); // MathML and anything else
 
@@ -234,6 +260,11 @@ export function walkMarkup<N, E extends N>(
     }
   };
 
-  visitChildren(root, { inHtmlBlock: false, inSvgBlock: false, inSelect: false });
+  visitList(nodes, ctx);
   return changes;
+}
+
+/** A rename-mode holder of this session (`hide`): its one attribute is the marker. */
+function isOwnHolder(attrs: Array<[string, string]>, marker: string): boolean {
+  return attrs.length === 1 && attrs[0][0] === INERT_NODE_ATTR && attrs[0][1] === marker;
 }

@@ -39,8 +39,12 @@ export interface SyncContentAssetsOptions {
 }
 
 export interface SyncContentAssetsResult {
-  /** `skipped`: the head was the commit the map is level with; nothing read. */
-  mode: 'full' | 'skipped';
+  /**
+   * `skipped`: the head was the commit the map is level with; nothing read.
+   * `superseded`: a newer run already holds the classroom's stamp; this one
+   * wrote nothing.
+   */
+  mode: 'full' | 'skipped' | 'superseded';
   /**
    * Rows this run actually CHANGED — new paths and paths whose sha or type
    * moved. An unchanged row is not rewritten, and a row a newer write-through
@@ -339,7 +343,8 @@ function upsertKnownOp(classroomId: string, entry: TreeEntry, syncedAt: Date) {
  *   - the classroom stamp only moves forward, and the transaction writes it
  *     FIRST. The upsert and the delete then write only if the classroom still
  *     holds THIS run's stamp (their `EXISTS`): a run that lost it to a newer
- *     run — an older snapshot finishing late — writes no rows at all, so it
+ *     run — an older snapshot finishing late — writes no rows at all (and
+ *     reports `superseded`), so it
  *     can neither re-add a path the newer run deleted nor delete a path its
  *     older tree lacks. The stamp update takes the classroom row's lock, so two
  *     runs' transactions cannot interleave past it;
@@ -383,13 +388,17 @@ async function treeSync(
   }
 
   const prisma = getPrisma();
-  const stampOp = prisma.classroom.updateMany({
-    where: {
-      id: classroom.id,
-      OR: [{ content_assets_synced_at: null }, { content_assets_synced_at: { lt: syncedAt } }],
-    },
-    data: { content_assets_synced_at: syncedAt, content_assets_synced_commit: commit },
-  });
+  // Raw, with the same `${syncedAt}` binding the upsert's and the delete's
+  // `EXISTS` compare against, so the value written and the value compared are
+  // encoded alike.
+  const stampOp = prisma.$executeRaw`
+    UPDATE classrooms
+    SET content_assets_synced_at = ${syncedAt},
+        content_assets_synced_commit = ${commit},
+        updated_at = now()
+    WHERE id = ${classroom.id}
+      AND (content_assets_synced_at IS NULL OR content_assets_synced_at < ${syncedAt})
+  `;
   const upsertOp = upsertChangedOp(classroom.id, entries, syncedAt);
   const deleteOp = truncated
     ? null
@@ -411,6 +420,12 @@ async function treeSync(
     const result = op === null ? 0 : results[ops.indexOf(op as (typeof ops)[number])];
     return typeof result === 'number' ? result : 0;
   };
+
+  // The stamp matched no row: a newer run holds the classroom, and the
+  // upsert and the delete (gated on this run's stamp) wrote nothing.
+  if (countOf(stampOp) === 0) {
+    return { mode: 'superseded', upserted: 0, deleted: 0, truncated };
+  }
 
   return {
     mode: 'full',

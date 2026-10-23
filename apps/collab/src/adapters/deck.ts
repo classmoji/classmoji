@@ -24,6 +24,8 @@ import getPrisma from '@classmoji/database';
 import { ClassmojiService, ContentService } from '@classmoji/services';
 import { canMutateClassroom } from '@classmoji/auth/predicates';
 import { findClassroomRole } from '@classmoji/auth/classroom-role';
+import { COOKIE_DOMAIN } from '@classmoji/auth/secret';
+import { appFrameHosts } from '@classmoji/services/slides/frame-refs';
 import {
   DeckOpError,
   DeckParseError,
@@ -579,13 +581,14 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
 
   async applyOps(ctx: LiveEditContext, rawOps: DeckOp[]): Promise<ApplyOpsResult> {
     // The write-side frame backstop: a frame URL made for display (a files
-    // URL of this classroom, this deck's editor frame URL) is stored as the
+    // URL of this classroom, an editor frame URL on our hosts) is stored as the
     // deck-relative reference it was made from, as a deck save stores it.
     const slide = await this.mustFindSlide(ctx.ref.docId);
     const ops = canonicalizeOpFrames(rawOps, {
       deckFolder: slide.content_path,
       slideId: slide.id,
       filesRef: url => ClassmojiService.contentDelivery.parseOwnFilesUrl(slide.classroom_id, url),
+      ourHosts: appFrameHosts(process.env, COOKIE_DOMAIN),
     });
     this.attach(ctx.document);
     this.clearGoneLocks(ctx.document);

@@ -260,7 +260,8 @@ export const deckOpSchema = z.discriminatedUnion('op', [
       .boolean()
       .optional()
       .describe(
-        "html blocks: also delete the block's blocks/ file when no other block uses it (default false)"
+        "html blocks: also delete the block's blocks/ file when no other block of this deck " +
+          'uses it; other decks are not checked (default false)'
       ),
   }),
 ]);

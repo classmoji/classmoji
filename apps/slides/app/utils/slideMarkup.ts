@@ -13,10 +13,15 @@
  *
  * Pure DOM, no React: the unit suite runs it under jsdom.
  */
-import { sanitizeClient } from '@classmoji/services/slides/safe-markup';
+import {
+  pageSessionMarker,
+  sanitizeClient,
+  sanitizeClientNodesInPlace,
+} from '@classmoji/services/slides/safe-markup';
 import {
   neutralizeHtmlBlockFrames,
   sanitizeSvgBlocks,
+  scopeSvgStyles,
 } from '@classmoji/services/slides/runtime-attrs';
 
 import {
@@ -25,7 +30,12 @@ import {
   toStoredMarkup,
   type EditorDisplay,
 } from './collab/bridgeDom.ts';
-import { FRAME_MISSING_ATTR, showFrames, type EditorFrames } from './editorFrames.ts';
+import {
+  FRAME_MISSING_ATTR,
+  adoptPastedHtmlBlocks,
+  showFrames,
+  type EditorFrames,
+} from './editorFrames.ts';
 import { mountLegacyHtmlBlocks, restoreLegacyHtmlBlocks } from './legacyHtmlBlocks.ts';
 
 /**
@@ -96,4 +106,76 @@ export function clipboardHtml(contents: DocumentFragment, doc: Document): string
     frame.removeAttribute(FRAME_MISSING_ATTR);
   }
   return template.innerHTML;
+}
+
+/** The nodes inserted under a root while a watch ran. */
+export interface InsertedNodesWatch {
+  /** The inserted elements still in the document, outermost only; ends the watch. */
+  take(): Element[];
+  /** Ends the watch. */
+  stop(): void;
+}
+
+/**
+ * Watches `root` for inserted nodes — started when a paste or drop is about
+ * to happen (`beforeinput`) and taken when it has (`input`, same task, before
+ * anything inserted has had a chance to load).
+ */
+export function watchInsertedNodes(root: Element): InsertedNodesWatch {
+  const view = root.ownerDocument.defaultView as (Window & typeof globalThis) | null;
+  const Observer = view?.MutationObserver ?? globalThis.MutationObserver;
+  const observer = new Observer(() => {});
+  observer.observe(root, { childList: true, subtree: true });
+  return {
+    take() {
+      const records = observer.takeRecords();
+      observer.disconnect();
+      const added = new Set<Element>();
+      for (const record of records) {
+        for (const node of Array.from(record.addedNodes)) {
+          if (node.nodeType === 1 && node.isConnected && root.contains(node)) {
+            added.add(node as Element);
+          }
+        }
+      }
+      return [...added].filter(node => {
+        for (let up = node.parentElement; up && up !== root; up = up.parentElement) {
+          if (added.has(up)) return false;
+        }
+        return true;
+      });
+    },
+    stop() {
+      observer.disconnect();
+    },
+  };
+}
+
+/**
+ * Elements a paste or drop just inserted into the editor's slides, held to
+ * the slide markup lists in place, in rename mode (as the editor shows a
+ * slide; nothing authored is lost). Only the inserted nodes: the slide around
+ * them was held when it was shown, and rename mode run over it again would
+ * hide its holders again. Run before {@link showPastedMarkup}.
+ */
+export function holdPastedMarkup(nodes: Element[]): void {
+  if (nodes.length === 0) return;
+  sanitizeClientNodesInPlace(nodes, { mode: 'rename', marker: pageSessionMarker() });
+}
+
+/**
+ * A slide a paste or drop went into, shown the editor's way again: svg-block
+ * sheets scoped, html blocks copied from another deck adopted
+ * (`adoptPastedHtmlBlocks`), frames shown, legacy html blocks through the
+ * preview frame. Every step leaves what is already shown as it is.
+ */
+export function showPastedMarkup(section: Element, frames: EditorFrames | null): void {
+  for (const content of Array.from(
+    section.querySelectorAll('.sl-block[data-block-type="svg"] > .sl-block-content')
+  )) {
+    scopeSvgStyles(content);
+  }
+  adoptPastedHtmlBlocks(section, frames);
+  showFrames(section, frames);
+  mountLegacyHtmlBlocks(section, frames?.contentOrigin ?? null);
 }

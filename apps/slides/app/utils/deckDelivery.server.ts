@@ -43,6 +43,7 @@ import {
   type DeckJson,
   type DeckThemeUrls,
 } from '@classmoji/services/slides';
+import { appFrameHosts as frameHostsOf } from '@classmoji/services/slides/frame-refs';
 import { sanitizeDeckDocumentServer } from '@classmoji/services/slides/safe-markup/server';
 import { getThemeUrls } from '~/utils/themeService.server';
 import { NO_MEDIA_URL, stripMediaRefs } from '~/utils/mediaRefs';
@@ -82,36 +83,13 @@ export interface DeckFrameContext {
   isPublic: boolean;
 }
 
-/** The env vars naming the app's own origins. A deck frame never loads one of them. */
-const APP_ORIGIN_ENV = [
-  'SLIDES_URL',
-  'WEBAPP_URL',
-  'PAGES_URL',
-  'ADMIN_URL',
-  'COLLAB_URL',
-  'COLLAB_WS_URL',
-  'MCP_PUBLIC_URL',
-] as const;
-
 /**
  * The app's own hosts, for the frame rule: every configured app origin, plus
  * the session cookie's domain (`.classmoji.io` — every host under it) when
  * there is one. The content origin is excluded by the rule itself.
  */
 export function appFrameHosts(env: Record<string, string | undefined> = process.env): string[] {
-  const hosts = new Set<string>();
-  for (const key of APP_ORIGIN_ENV) {
-    const value = env[key];
-    if (!value) continue;
-    try {
-      hosts.add(new URL(value).host.toLowerCase());
-    } catch {
-      // Not a URL; nothing to add.
-    }
-  }
-  const cookieDomain = resolveCookieDomain(env);
-  if (cookieDomain) hosts.add(cookieDomain);
-  return [...hosts];
+  return frameHostsOf(env, resolveCookieDomain(env));
 }
 
 /** What the tier decision is made of. Passed straight to `tierFor`. */

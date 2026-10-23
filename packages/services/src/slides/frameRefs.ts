@@ -172,9 +172,44 @@ function tailOf(value: string): string {
   return cut === -1 ? '' : value.slice(cut);
 }
 
-/** Whether `host` (lowercase, with any port) is one of the app's own. */
-function isAppHost(host: string, opts: FrameRefOptions): boolean {
-  for (const entry of opts.ourHosts) {
+/** The env vars naming the app's own origins. A deck frame never loads one of them. */
+const APP_ORIGIN_ENV = [
+  'SLIDES_URL',
+  'WEBAPP_URL',
+  'PAGES_URL',
+  'ADMIN_URL',
+  'COLLAB_URL',
+  'COLLAB_WS_URL',
+  'MCP_PUBLIC_URL',
+] as const;
+
+/**
+ * The app's own hosts, for `FrameRefOptions.ourHosts`: every configured app
+ * origin in `env`, plus the session cookie's domain (`.classmoji.io` — every
+ * host under it) when the caller has one. The content origin is excluded by
+ * the rule itself.
+ */
+export function appFrameHosts(
+  env: Record<string, string | undefined>,
+  cookieDomain: string | null = null
+): string[] {
+  const hosts = new Set<string>();
+  for (const key of APP_ORIGIN_ENV) {
+    const value = env[key];
+    if (!value) continue;
+    try {
+      hosts.add(new URL(value).host.toLowerCase());
+    } catch {
+      // Not a URL; nothing to add.
+    }
+  }
+  if (cookieDomain) hosts.add(cookieDomain);
+  return [...hosts];
+}
+
+/** Whether `host` (lowercase, with any port) is one of `ourHosts` (see `FrameRefOptions`). */
+function isAppHost(host: string, ourHosts: readonly string[]): boolean {
+  for (const entry of ourHosts) {
     const rule = entry.toLowerCase();
     if (!rule) continue;
     if (rule.startsWith('.')) {
@@ -219,7 +254,7 @@ function classifyAbsolute(url: URL, written: string, opts: FrameRefOptions): Fra
     if (/^\/c\/[^/]+\/files\//.test(url.pathname)) return INERT;
     return EXTERNAL;
   }
-  if (isAppHost(host, opts)) return classifyAppPath(url, opts);
+  if (isAppHost(host, opts.ourHosts)) return classifyAppPath(url, opts);
 
   // This repo addressed through GitHub (raw, Pages). Matched on the spelling
   // the deck stored: a parsed URL lowercases the host, and a login need not be.
@@ -333,38 +368,62 @@ export function toEditorFrameUrl(
 
 /**
  * `[https://host]/<slide id>/frame/<repoPath>[?query][#hash]`. The first
- * segment must be a slide id (a uuid): an absolute URL of any host is accepted,
- * so the id's shape is what keeps an external page that happens to have a
- * `/x/frame/` path from being read as one of ours.
+ * segment must be a slide id (a uuid). An absolute URL counts only on one of
+ * the app's own hosts (`EditorFrameUrlOptions.ourHosts`): the same path on
+ * any other host is that host's page.
  */
 const EDITOR_FRAME_RE = new RegExp(
-  `^(?:https?://[^/?#]+)?/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/${EDITOR_FRAME_SEGMENT}/([^?#]+)([?#].*)?$`,
+  `^(?:https?://([^/?#]+))?/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/${EDITOR_FRAME_SEGMENT}/([^?#]+)([?#].*)?$`,
   'i'
 );
 
-/** Whether `url` has the editor frame route's shape (any deck). */
-export function isEditorFrameUrl(url: string): boolean {
-  return typeof url === 'string' && EDITOR_FRAME_RE.test(url.trim());
+export interface EditorFrameUrlOptions {
+  /**
+   * The app's own hosts (as `FrameRefOptions.ourHosts`): an absolute editor
+   * frame URL counts only on one of them. Absent: only root-relative URLs
+   * (`/<slide id>/frame/…`) count.
+   */
+  ourHosts?: readonly string[] | null;
+  /** @deprecated Ignored (see `FrameRefOptions.slideId`). */
+  slideId?: string | null;
+}
+
+/** The editor frame route's match for `url`, when it is one on our hosts. */
+function matchEditorFrameUrl(url: string, opts?: EditorFrameUrlOptions): RegExpExecArray | null {
+  if (typeof url !== 'string') return null;
+  const match = EDITOR_FRAME_RE.exec(url.trim());
+  if (!match) return null;
+  if (match[1] === undefined) return match;
+  let host: string;
+  try {
+    host = new URL(url.trim()).host.toLowerCase();
+  } catch {
+    return null;
+  }
+  return isAppHost(host, opts?.ourHosts ?? []) ? match : null;
+}
+
+/** Whether `url` has the editor frame route's shape (any deck), on our hosts. */
+export function isEditorFrameUrl(url: string, opts?: EditorFrameUrlOptions): boolean {
+  return matchEditorFrameUrl(url, opts) !== null;
 }
 
 /**
  * An editor frame URL of any deck → the repo path and query it names
  * (`cm-rev` removed; a path ending in `/` names its `index.html`). Null for any
- * other string. Which classroom's repo the path is read in is the caller's:
+ * other string, and for an absolute URL whose host is not one of
+ * `opts.ourHosts`. Which classroom's repo the path is read in is the caller's:
  * always its own.
- *
- * `slideId` is accepted and ignored (see `FrameRefOptions.slideId`).
  */
 export function parseEditorFrameUrl(
   url: string,
-  _opts?: { slideId?: string | null }
+  opts?: EditorFrameUrlOptions
 ): RepoFrameTarget | null {
-  if (typeof url !== 'string') return null;
-  const match = EDITOR_FRAME_RE.exec(url.trim());
+  const match = matchEditorFrameUrl(url, opts);
   if (!match) return null;
-  const repoPath = decodePathname(match[1]);
+  const repoPath = decodePathname(match[2]);
   if (!repoPath) return null;
-  return { repoPath, query: withoutParam(match[2] ?? '', EDITOR_FRAME_REV_PARAM) };
+  return { repoPath, query: withoutParam(match[3] ?? '', EDITOR_FRAME_REV_PARAM) };
 }
 
 /** `repoPath` written relative to `deckFolder` (`blocks/x.html`, `../../games/a/i.html`). */
@@ -388,9 +447,9 @@ export function relativeToDeck(repoPath: string, deckFolder: string): string {
  */
 export function fromEditorFrameUrl(
   url: string,
-  { deckFolder }: { deckFolder: string; slideId?: string | null }
+  { deckFolder, ...opts }: { deckFolder: string } & EditorFrameUrlOptions
 ): string | null {
-  const target = parseEditorFrameUrl(url);
+  const target = parseEditorFrameUrl(url, opts);
   if (!target) return null;
   return `${relativeToDeck(target.repoPath, deckFolder)}${target.query}`;
 }

@@ -19,6 +19,7 @@ import {
   restoreRenamedHtml,
   sanitizeClient,
   sanitizeClientInPlace,
+  sanitizeClientNodesInPlace,
   sanitizeClientToString,
   sanitizeNotesHtml,
   SESSION_MARKER_RE,
@@ -472,6 +473,47 @@ describe('rename mode (editor)', () => {
     expect(restored).not.toContain(' onclick=');
     // restoring with the planted marker does not turn a template's content into live markup either
     expect(restored).toContain(`<template ${INERT_NODE_ATTR}="${other}">`);
+  });
+
+  it('a second pass leaves this session’s holders alone (no nesting)', () => {
+    const html = '<p>a</p><script>alert(1)</script><object data="x"></object>';
+    const once = rename(html);
+    expect(rename(once)).toBe(once);
+    expect(restoreRenamedHtml(rename(once), marker, doc)).toBe(html);
+    // Another session's holder is a template like any other: hidden.
+    const other = `<template ${INERT_NODE_ATTR}="${newSessionMarker()}"><b>x</b></template>`;
+    expect(rename(other)).toContain(`<template ${INERT_NODE_ATTR}="${marker}"><template`);
+  });
+
+  it('inserted nodes are judged themselves, where they sit, and nothing else is', () => {
+    const host = doc.createElement('div');
+    host.innerHTML =
+      '<p onclick="kept()">around</p>' +
+      htmlBlockMarkup({
+        id: 'b1',
+        box: { left: 0, top: 0, width: 9, height: 9 },
+        src: 'blocks/ab12cd34.html',
+      });
+    const inBlock = host.querySelector('.sl-block-content') as Element;
+    const pastedTop = doc.createElement('p');
+    pastedTop.setAttribute('onclick', 'go()');
+    const pastedFrame = doc.createElement('iframe');
+    pastedFrame.setAttribute('srcdoc', '<p>x</p>');
+    host.append(pastedTop);
+    inBlock.append(pastedFrame);
+
+    sanitizeClientNodesInPlace([pastedTop, pastedFrame], { mode: 'rename', marker });
+
+    // The node itself is judged, not only what is under it.
+    expect(pastedTop.hasAttribute('onclick')).toBe(false);
+    expect(pastedTop.getAttribute(`data-cm-inert-${marker}-onclick`)).toBe('go()');
+    // The markup around it is not touched.
+    expect(host.querySelector('p')?.getAttribute('onclick')).toBe('kept()');
+    // Inside an html block a frame is judged by the block's frame rules: a
+    // frame there without the block sandbox keeps its code under the stored
+    // inert name (outside a block it would take this session's name).
+    expect(pastedFrame.hasAttribute('srcdoc')).toBe(false);
+    expect(pastedFrame.getAttribute('data-cm-inert-srcdoc')).toBe('<p>x</p>');
   });
 
   it('html-block frame sources under an unsafe sandbox take the stored inert name', () => {

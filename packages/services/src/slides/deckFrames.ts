@@ -1,6 +1,11 @@
 import * as cheerio from 'cheerio';
 
-import { HTML_BLOCK_SANDBOX, HTML_BLOCK_SRC_ATTR, INERT_ATTR_PREFIX } from './deckBlocks.ts';
+import {
+  HTML_BLOCK_SANDBOX,
+  HTML_BLOCK_SRC_ATTR,
+  INERT_ATTR_PREFIX,
+  isHtmlBlockFileSrc,
+} from './deckBlocks.ts';
 import type { DeckJson, DeckSlide } from './deckTypes.ts';
 import {
   classifyFrameRef,
@@ -21,9 +26,10 @@ import {
  * so the surfaces can show a placeholder.
  *
  * SAVE (`canonicalizeDeckFrames`): a files URL of this classroom or an editor
- * frame URL of any deck (`/<slideId>/frame/…`) that reached a deck is turned
- * back into the stored reference, relative to THIS deck, and nothing derived
- * for display survives.
+ * frame URL of any deck (`/<slideId>/frame/…`, on one of the app's hosts when
+ * absolute) that reached a deck is turned back into the stored reference,
+ * relative to THIS deck, and nothing derived for display survives (the
+ * `data-cm-orig-*` copies, the `data-cm-missing` mark).
  */
 
 /** Marks a frame whose source could not be shown (inert, or no signature). */
@@ -158,17 +164,23 @@ export interface CanonicalizeFramesOptions {
   slideId?: string | null;
   /** A files URL of this classroom → its target; null otherwise (`parseOwnFilesUrl`). */
   filesRef: (url: string) => RepoFrameTarget | null;
+  /**
+   * The app's own hosts (`appFrameHosts`): an absolute editor frame URL is
+   * turned back only on one of them. Absent: root-relative ones only.
+   */
+  ourHosts?: readonly string[] | null;
 }
 
 /** A frame URL derived for display → the stored deck-relative reference, or null. */
 function storedFrameRef(value: string, opts: CanonicalizeFramesOptions): string | null {
-  const target = opts.filesRef(value.trim()) ?? parseEditorFrameUrl(value);
+  const target =
+    opts.filesRef(value.trim()) ?? parseEditorFrameUrl(value, { ourHosts: opts.ourHosts });
   return target ? `${relativeToDeck(target.repoPath, opts.deckFolder)}${target.query}` : null;
 }
 
 /** Whether the markup could hold anything this pass changes (skips the parse when not). */
 function mayHoldDerivedFrames(html: string): boolean {
-  return /<iframe|data-background-iframe|data-cm-orig-/i.test(html);
+  return /<iframe|data-background-iframe|data-cm-orig-|data-cm-missing/i.test(html);
 }
 
 /**
@@ -183,17 +195,19 @@ export function canonicalizeFrameMarkup(html: string, opts: CanonicalizeFramesOp
   for (const node of $('*').toArray()) {
     const el = node as unknown as FrameElement;
     for (const name of Object.keys(el.attribs)) {
-      if (name.startsWith(ORIG_ATTR_PREFIX)) {
+      if (name.startsWith(ORIG_ATTR_PREFIX) || name === FRAME_MISSING_ATTR) {
         delete el.attribs[name];
         changed = true;
       }
     }
 
     const block = el.name === 'iframe' && el.attribs[HTML_BLOCK_SRC_ATTR] !== undefined;
-    if (block) {
+    if (block && !isHtmlBlockFileSrc(el.attribs[HTML_BLOCK_SRC_ATTR])) {
       // The URL the frame showed names the file it was showing — after a paste
       // from another deck, a file of that deck — so the reference is re-derived
-      // from it, relative to this deck.
+      // from it, relative to this deck. A block naming one of this deck's own
+      // `blocks/` files keeps it: that name is the block's, whatever URL the
+      // frame carries.
       for (const name of ['src', 'data-src']) {
         const value = el.attribs[name];
         const stored = value ? storedFrameRef(value, opts) : null;
@@ -242,7 +256,7 @@ function canonicalizeFrameAttrs(
 ): Record<string, string> {
   let next: Record<string, string> | null = null;
   for (const name of Object.keys(attrs)) {
-    if (name.startsWith(ORIG_ATTR_PREFIX)) {
+    if (name.startsWith(ORIG_ATTR_PREFIX) || name === FRAME_MISSING_ATTR) {
       next ??= { ...attrs };
       delete next[name];
     }
@@ -261,9 +275,10 @@ function canonicalizeFrameAttrs(
 /**
  * A deck with every display-derived frame value turned back into its stored
  * form: files URLs of this classroom and editor frame URLs of any deck become
- * references relative to this deck, `data-cm-orig-*` is dropped, and an html
- * block's frame keeps `data-cm-src` (re-derived from the URL it showed, when
- * there is one) with no `src`/`srcdoc`/`data-src`.
+ * references relative to this deck, `data-cm-orig-*` and `data-cm-missing` are
+ * dropped, and an html block's frame keeps `data-cm-src` (re-derived from the
+ * URL it showed when there is one and `data-cm-src` is not one of this deck's
+ * own `blocks/` files) with no `src`/`srcdoc`/`data-src`.
  *
  * Sync and pure (no database): it runs on every save whatever else fails.
  * Slides with nothing to change keep their objects; the deck comes back by

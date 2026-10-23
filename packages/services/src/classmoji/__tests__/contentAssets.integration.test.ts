@@ -288,7 +288,7 @@ describe.skipIf(!RUN)('contentAssets (integration)', () => {
     const after = await rows();
 
     expect(resultB).toMatchObject({ mode: 'full', deleted: 1 });
-    expect(resultA).toMatchObject({ mode: 'full', upserted: 0, deleted: 0 });
+    expect(resultA).toMatchObject({ mode: 'superseded', upserted: 0, deleted: 0 });
     // B deleted it; A's older tree still had it, and does not bring it back.
     expect(after.has('images/old.png')).toBe(false);
     // Unchanged since C1 and absent from A's tree: A does not delete it.
@@ -297,6 +297,39 @@ describe.skipIf(!RUN)('contentAssets (integration)', () => {
     expect(after.get('slides/intro/blocks/a.html')?.sha).toBe('a-3');
     expect([...after.keys()].sort()).toEqual(atC3.map(entry => entry.path).sort());
     expect((await classroomState()).content_assets_synced_commit).toBe(C3);
+  });
+
+  it('a run that finds a newer stamp on the classroom reports superseded and writes nothing', async () => {
+    repoAt(C1, BASE);
+    await syncContentAssets(classroomId);
+    const before = await rows();
+    // A newer run's stamp, already on the classroom.
+    const newer = new Date(Date.now() + 60_000);
+    await prisma.classroom.update({
+      where: { id: classroomId },
+      data: { content_assets_synced_at: newer, content_assets_synced_commit: C3 },
+    });
+
+    repoAt(C2, [...BASE, { path: 'images/new.png', sha: 'new-1', type: 'blob', size: 1 }]);
+    const result = await syncContentAssets(classroomId, { force: true });
+
+    expect(result).toEqual({ mode: 'superseded', upserted: 0, deleted: 0, truncated: false });
+    expect(await rows()).toEqual(before);
+    expect(await classroomState()).toEqual({
+      content_assets_synced_at: newer,
+      content_assets_synced_commit: C3,
+    });
+  });
+
+  it('the stamp a run writes is the one its own gates match', async () => {
+    repoAt(C1, BASE);
+    const result = await syncContentAssets(classroomId);
+    expect(result).toMatchObject({ mode: 'full', upserted: BASE.length });
+    const { content_assets_synced_at: stamp } = await classroomState();
+    // Every row this run wrote carries exactly the classroom's stamp.
+    for (const row of (await rows()).values()) {
+      expect(row.synced_at.getTime()).toBe(stamp?.getTime());
+    }
   });
 
   it("a reader's fill adds missing folders without holding back a sync in flight", async () => {

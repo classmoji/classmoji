@@ -16,10 +16,12 @@
  *   3. hands back the ops rewritten to `{ src, rev }`, which travel on as any
  *      other op (to the live server, or applied and saved to git).
  *
- * After the deck write: the `blocks/` file a block was moved off (live mode
- * only — in preview the published deck still names it) and the `blocks/` file
- * of a `block_delete` with `delete_file` are deleted once no html block of the
- * deck names them.
+ * After the deck write: a file written earlier in the same call that the
+ * block was then moved off again, and the `blocks/` file of a `block_delete`
+ * with `delete_file`, are deleted once no html block of the deck names them.
+ * The file a block named BEFORE the call is never deleted on a `source`
+ * update: another deck may name it (`../<deck>/blocks/x.html`), and a live
+ * deck's published copy names it until the next checkpoint.
  */
 
 import {
@@ -117,7 +119,7 @@ export interface BlockFileOutcome {
   written: Map<number, HtmlBlockFileRef>;
   /** block_delete ops with `delete_file`: op index → the file the block named. */
   toDelete: Map<number, string>;
-  /** `blocks/` files blocks were moved off by a new `source`. */
+  /** Files written in this call that a later `source` for the same block moved it off. */
   replaced: Set<string>;
 }
 
@@ -137,8 +139,8 @@ export async function writeBlockSources(
     starterCustomCss?: string;
   }
 ): Promise<{ ops: DeckOp[]; outcome: BlockFileOutcome }> {
-  // Each html `source` op, with the `blocks/` file its block named before it.
-  const pending: Array<{ index: number; prior: string | null }> = [];
+  // Each html `source` op.
+  const pending: number[] = [];
   const deletes: Array<{ index: number; src: string; key: string }> = [];
   let deck = base;
 
@@ -150,7 +152,7 @@ export async function writeBlockSources(
       }
       const { source: _source, ...rest } = op;
       dry = { ...rest, src: PLACEHOLDER_SRC };
-      pending.push({ index, prior: null });
+      pending.push(index);
     } else if (op.op === 'block_update' && op.source !== undefined) {
       const block = blockOf(deck, op.slide, op.block_id);
       if (block?.type === 'html') {
@@ -159,10 +161,7 @@ export async function writeBlockSources(
         }
         const { source: _source, ...rest } = op;
         dry = { ...rest, src: PLACEHOLDER_SRC };
-        pending.push({
-          index,
-          prior: block.src && isHtmlBlockFileSrc(block.src) ? block.src : null,
-        });
+        pending.push(index);
       }
     } else if (op.op === 'block_delete' && op.delete_file) {
       if (opts.mode === 'preview') {
@@ -185,7 +184,7 @@ export async function writeBlockSources(
   // The file each block was last given in this call.
   const byBlock = new Map<string, HtmlBlockFileRef>();
   const next = [...ops];
-  for (const { index, prior } of pending) {
+  for (const index of pending) {
     const op = ops[index] as Extract<DeckOp, { op: 'block_add' | 'block_update' }>;
     const key = `${op.slide}\u0000${op.block_id}`;
     let ref: HtmlBlockFileRef;
@@ -201,12 +200,11 @@ export async function writeBlockSources(
     } catch (error) {
       fileError(error);
     }
-    // The file the block moves off: one written earlier in this call (named
-    // by nothing else), or the deck's own — kept in preview, where the
-    // published deck still names it.
+    // A file written earlier in this call for the same block is named by
+    // nothing else once the block moves off it. The file the block named
+    // before the call is kept (see above).
     const earlier = byBlock.get(key)?.src;
     if (earlier) replaced.add(earlier);
-    else if (prior && prior !== PLACEHOLDER_SRC && opts.mode === 'live') replaced.add(prior);
     written.set(index, ref);
     byBlock.set(key, ref);
     const { source: _source, ...rest } = op;
@@ -222,10 +220,11 @@ export async function writeBlockSources(
 }
 
 /**
- * After the deck write: delete the files blocks were moved off and the files
- * of `delete_file` block_deletes that no html block of `deck` (the deck as
- * written) still names, noting each block_delete's outcome on its `applied`
- * entry. Never throws: the deck is already written.
+ * After the deck write: delete the files this call wrote and then moved a
+ * block off, and the files of `delete_file` block_deletes, that no html block
+ * of `deck` (the deck as written) still names, noting each block_delete's
+ * outcome on its `applied` entry. Other decks are not checked. Never throws:
+ * the deck is already written.
  */
 export async function deleteUnusedBlockFiles(
   outcome: BlockFileOutcome,

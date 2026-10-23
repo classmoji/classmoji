@@ -21,6 +21,7 @@ import { stripDeckRuntimeAttrs } from './deckRuntimeAttrs.ts';
 import { assertDeckSlide } from './slideSource.ts';
 import { canonicalizeDeckAssets } from './deckAssets.ts';
 import { canonicalizeDeckFrames } from './deckFrames.ts';
+import { appFrameHosts } from './frameRefs.ts';
 import { recordContentAssets, resolveContentBranch } from '../classmoji/contentAssets.service.ts';
 import { enqueueDeckThumbnail } from '../classmoji/deckThumbnail.service.ts';
 import {
@@ -337,6 +338,9 @@ export async function canonicalizeDeckForSave(
     deckFolder: slide.content_path,
     slideId: slide.id ?? null,
     filesRef: url => (classroomId ? parseOwnFilesUrl(classroomId, url) : null),
+    // The configured app origins (the slides app's among them); services has
+    // no session-cookie domain to add.
+    ourHosts: appFrameHosts(process.env),
   });
 
   const ctx = deckResolveContext(slide);

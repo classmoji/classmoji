@@ -9,14 +9,23 @@
  */
 
 import {
+  HTML_NS,
   INERT_NODE_ATTR,
   INERT_PREFIX,
   RETAGGED_ELEMENTS,
   XLINK_NS,
+  blockTypeOf,
   newSessionMarker,
   sessionTagAttr,
 } from './rules.ts';
-import { walkMarkup, type MarkupAdapter, type NodeKind, type SanitizeMode } from './walk.ts';
+import {
+  walkMarkup,
+  walkMarkupNodes,
+  type MarkupAdapter,
+  type NodeKind,
+  type SanitizeMode,
+  type WalkContext,
+} from './walk.ts';
 
 export interface ClientSanitizeOptions {
   mode: SanitizeMode;
@@ -107,6 +116,43 @@ export function sanitizeClientInPlace(
   opts: Omit<ClientSanitizeOptions, 'doc'>
 ): number {
   return walkMarkup(domAdapter, root, { mode: opts.mode, marker: opts.marker });
+}
+
+/** What the element ancestors of `parent` make of a node inserted under it. */
+function contextAt(parent: Node | null): WalkContext {
+  const ctx: WalkContext = { inHtmlBlock: false, inSvgBlock: false, inSelect: false };
+  for (let el = parent; el && el.nodeType === 1; el = el.parentNode) {
+    const element = el as Element;
+    if (element.namespaceURI !== HTML_NS) continue;
+    const name = element.localName;
+    if (name === 'select' || name === 'option' || name === 'optgroup') ctx.inSelect = true;
+    const type = blockTypeOf(domAdapter.attrs(element));
+    if (type === 'html') ctx.inHtmlBlock = true;
+    if (type === 'svg') ctx.inSvgBlock = true;
+  }
+  return ctx;
+}
+
+/**
+ * Hold nodes that are already in a document — what a paste or a drop just
+ * inserted — to the lists, in place: each node itself and everything under
+ * it, judged where it sits. Pass only the inserted nodes: the markup around
+ * them was held to the lists when it was shown. Returns the number of changes.
+ */
+export function sanitizeClientNodesInPlace(
+  nodes: Node[],
+  opts: Omit<ClientSanitizeOptions, 'doc'>
+): number {
+  let changes = 0;
+  for (const node of nodes) {
+    changes += walkMarkupNodes(
+      domAdapter,
+      [node],
+      { mode: opts.mode, marker: opts.marker },
+      contextAt(node.parentNode)
+    );
+  }
+  return changes;
 }
 
 /** {@link sanitizeClient} serialized — for tests and comparisons only, never for insertion. */

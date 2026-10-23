@@ -7,6 +7,7 @@ import { describe, it, expect } from 'vitest';
 
 import { extractOwnRepoPath } from '../../classmoji/contentRefs.ts';
 import {
+  appFrameHosts,
   classifyFrameRef,
   fromEditorFrameUrl,
   isEditorFrameUrl,
@@ -277,7 +278,7 @@ describe('editor frame URLs', () => {
   it('accepts an absolute form and any deck, refuses traversal', () => {
     expect(
       parseEditorFrameUrl(`https://slides.classmoji.io/${SLIDE_ID}/frame/a/b.html?cm-rev=1`, {
-        slideId: SLIDE_ID,
+        ourHosts: opts.ourHosts,
       })
     ).toEqual({ repoPath: 'a/b.html', query: '' });
     expect(parseEditorFrameUrl(`/${OTHER_SLIDE_ID}/frame/a/b.html`, { slideId: SLIDE_ID })).toEqual(
@@ -293,6 +294,48 @@ describe('editor frame URLs', () => {
     ).toBeNull();
     expect(parseEditorFrameUrl(`/${SLIDE_ID}/frame/a%2Fb.html`, { slideId: SLIDE_ID })).toBeNull();
     expect(isEditorFrameUrl('https://example.com/x.html')).toBe(false);
+  });
+
+  it('an absolute editor URL counts only on one of our hosts', () => {
+    const path = `/${SLIDE_ID}/frame/a.html`;
+    const hosts = { ourHosts: opts.ourHosts };
+    // Root-relative: always the app that serves the deck.
+    expect(parseEditorFrameUrl(path)).toEqual({ repoPath: 'a.html', query: '' });
+    for (const url of [
+      `https://example.com${path}`,
+      `https://slides.classmoji.io.evil.test${path}`,
+    ]) {
+      expect(isEditorFrameUrl(url, hosts), url).toBe(false);
+      expect(parseEditorFrameUrl(url, hosts), url).toBeNull();
+      expect(fromEditorFrameUrl(url, { deckFolder: DECK, ...hosts }), url).toBeNull();
+      expect(classify(url), url).toEqual({ kind: 'external' });
+    }
+    for (const url of [
+      `https://slides.classmoji.io${path}`,
+      `https://SLIDES.classmoji.io${path}`,
+      `http://localhost:6500${path}`,
+      `https://pages.classmoji.io${path}`,
+    ]) {
+      expect(parseEditorFrameUrl(url, hosts), url).toEqual({ repoPath: 'a.html', query: '' });
+    }
+    // Without our hosts, no absolute URL is one.
+    expect(parseEditorFrameUrl(`https://slides.classmoji.io${path}`)).toBeNull();
+    expect(isEditorFrameUrl(`https://slides.classmoji.io${path}`)).toBe(false);
+  });
+
+  it('appFrameHosts: the configured app origins, plus the cookie domain when given', () => {
+    const env = {
+      SLIDES_URL: 'https://Slides.classmoji.io',
+      WEBAPP_URL: 'http://localhost:3000/x',
+      PAGES_URL: 'not a url',
+      MCP_PUBLIC_URL: '',
+    };
+    expect(appFrameHosts(env)).toEqual(['slides.classmoji.io', 'localhost:3000']);
+    expect(appFrameHosts(env, '.classmoji.io')).toEqual([
+      'slides.classmoji.io',
+      'localhost:3000',
+      '.classmoji.io',
+    ]);
   });
 
   it('needs a slide id first: other pages with a /frame/ path are not editor URLs', () => {
@@ -314,8 +357,8 @@ describe('editor frame URLs', () => {
     expect(fromEditorFrameUrl(pasted, { deckFolder: DECK })).toBe('../other/blocks/x.html');
     expect(
       fromEditorFrameUrl(`https://slides.classmoji.io/${OTHER_SLIDE_ID}/frame/games/a/i.html?y=1`, {
-        slideId: SLIDE_ID,
         deckFolder: DECK,
+        ourHosts: opts.ourHosts,
       })
     ).toBe('../../games/a/i.html?y=1');
   });
