@@ -8,13 +8,21 @@
  */
 import {
   BLOCK_ID_ATTR,
+  HTML_BLOCK_FRAME_STYLE,
   HTML_BLOCK_SELECTOR,
+  HTML_BLOCK_SRC_ATTR,
   INERT_ATTR_PREFIX,
   MAX_SLIDE_HTML_LENGTH,
+  htmlBlockFileFrameMarkup,
+  htmlBlockSrcProblem,
   isAllowedSvgAttr,
+  isHtmlBlockFileSrc,
   mintBlockId,
   sanitizeSvgTree,
 } from '@classmoji/services/slides/runtime-attrs';
+import { resolveDeckRelative } from '@classmoji/services/slides/frame-refs';
+import { showFrames, type EditorFrames } from '../../utils/editorFrames.ts';
+import { LEGACY_SRCDOC_ATTR } from '../../utils/legacyHtmlBlocks.ts';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -127,11 +135,149 @@ export function frameOfBlock(block: Element): HTMLIFrameElement | null {
 }
 
 /**
- * An html block frame's srcdoc as stored: the live attribute, or the inert
- * one when the frame was kept from loading for display.
+ * An html block frame's srcdoc as stored: the live attribute, the code a
+ * legacy block shown through the preview frame keeps, or the inert one when
+ * the frame was kept from loading for display.
  */
 export function storedSrcdoc(frame: Element): string {
-  return frame.getAttribute('srcdoc') ?? frame.getAttribute(`${INERT_ATTR_PREFIX}srcdoc`) ?? '';
+  return (
+    frame.getAttribute('srcdoc') ??
+    frame.getAttribute(LEGACY_SRCDOC_ATTR) ??
+    frame.getAttribute(`${INERT_ATTR_PREFIX}srcdoc`) ??
+    ''
+  );
+}
+
+// ─── Html block files ───────────────────────────────────────────────────────
+
+/** Where an html block's code comes from: its own `blocks/` file, another repo file, or inline (legacy). */
+export type HtmlBlockSource =
+  | { kind: 'file'; src: string; rev: string | null }
+  | { kind: 'repo'; src: string }
+  | { kind: 'inline' };
+
+/** What an html block's frame names (see {@link HtmlBlockSource}). */
+export function htmlBlockSourceOf(block: Element): HtmlBlockSource {
+  const frame = frameOfBlock(block);
+  const src = frame?.getAttribute(HTML_BLOCK_SRC_ATTR) ?? null;
+  if (frame && src !== null) {
+    if (isHtmlBlockFileSrc(src)) {
+      return { kind: 'file', src, rev: frame.getAttribute('data-cm-rev') };
+    }
+    return { kind: 'repo', src };
+  }
+  return { kind: 'inline' };
+}
+
+/**
+ * Point an html block at a file (`src` relative to the deck folder; `rev`, the
+ * version written, for its own `blocks/` file): its frame rebuilt to the file
+ * form — `data-cm-src` (+ `data-cm-rev`), no inline code, its style kept —
+ * then shown the editor's way. One change to the slide, through the normal
+ * editor change path.
+ */
+export function setHtmlBlockFile(
+  block: Element,
+  ref: { src: string; rev?: string | null },
+  frames: EditorFrames | null
+): void {
+  const content = block.querySelector(':scope > .sl-block-content');
+  if (!content) return;
+  const style = frameOfBlock(block)?.getAttribute('style') ?? HTML_BLOCK_FRAME_STYLE;
+  const template = block.ownerDocument.createElement('template');
+  template.innerHTML = htmlBlockFileFrameMarkup({
+    src: ref.src,
+    ...(ref.rev ? { rev: ref.rev } : {}),
+    style,
+  });
+  content.replaceChildren(template.content);
+  // Shown in place: the frame is an html block's only inside its block.
+  showFrames(content, frames);
+}
+
+/** `a/b/c.html` → `a/b` (`''` at the root). */
+export function parentFolder(repoPath: string): string {
+  const cut = repoPath.lastIndexOf('/');
+  return cut === -1 ? '' : repoPath.slice(0, cut);
+}
+
+/**
+ * Why `src` (relative to the deck folder) cannot be an html block's repo
+ * file, or null once it is found: a usable path ({@link htmlBlockSrcProblem})
+ * naming a file the repository has (`list`: a folder's entries, repo paths).
+ */
+export async function repoFileProblem(
+  src: string,
+  deckFolder: string,
+  list: (folder: string) => Promise<{ entries: Array<{ path: string; type: string }> }>
+): Promise<string | null> {
+  const value = src.trim();
+  if (!value) return 'Enter a path relative to the deck folder';
+  const problem = htmlBlockSrcProblem(value, deckFolder);
+  if (problem) return `This path cannot be used: ${problem}`;
+  const resolved = resolveDeckRelative(value, deckFolder);
+  if (!resolved) return `Not found: ${value}`;
+  const listing = await list(parentFolder(resolved.repoPath));
+  const found = listing.entries.some(
+    entry => entry.type === 'file' && entry.path === resolved.repoPath
+  );
+  return found ? null : `Not found: ${value}`;
+}
+
+/** Html blocks at or under `root`. */
+function htmlBlocksUnder(root: Element | DocumentFragment): Element[] {
+  const out = Array.from(root.querySelectorAll(HTML_BLOCK_SELECTOR));
+  if ((root as Element).matches?.(HTML_BLOCK_SELECTOR)) out.unshift(root as Element);
+  return out;
+}
+
+/** The `blocks/` file an html block names, or null. */
+export function htmlBlockFileOf(block: Element): string | null {
+  const source = htmlBlockSourceOf(block);
+  return source.kind === 'file' ? source.src : null;
+}
+
+/** Html blocks with their own `blocks/` file at or under `root`. */
+export function htmlFileBlocksUnder(root: Element | DocumentFragment): Element[] {
+  return htmlBlocksUnder(root).filter(block => htmlBlockFileOf(block) !== null);
+}
+
+/** How many html blocks under `deck` (other than `except`) name the file `src`. */
+function referencesTo(src: string, deck: Element | null, except?: Element): number {
+  if (!deck) return 0;
+  return htmlBlocksUnder(deck).filter(block => block !== except && htmlBlockFileOf(block) === src)
+    .length;
+}
+
+/** Whether any html block under `deck` names the file `src`. */
+export function htmlBlockFileNamedIn(src: string, deck: Element | null): boolean {
+  return referencesTo(src, deck) > 0;
+}
+
+/**
+ * Whether another html block of the live deck (`deck`, the editor's
+ * `.slides`) names the same file as `block`: then the block's next code is
+ * written to a file of its own.
+ */
+export function isHtmlBlockFileShared(block: Element, src: string, deck: Element | null): boolean {
+  return referencesTo(src, deck, block) > 0;
+}
+
+/**
+ * The `blocks/` files named by html blocks in `removed` (elements just taken
+ * out of the deck: blocks, slides, stacks) that no html block left in `deck`
+ * names. Each once, in order.
+ */
+export function orphanedHtmlBlockFiles(removed: Iterable<Element>, deck: Element | null): string[] {
+  const out: string[] = [];
+  for (const el of removed) {
+    for (const block of htmlBlocksUnder(el)) {
+      const src = htmlBlockFileOf(block);
+      if (src === null || out.includes(src)) continue;
+      if (referencesTo(src, deck) === 0) out.push(src);
+    }
+  }
+  return out;
 }
 
 // ─── Slide html size ────────────────────────────────────────────────────────

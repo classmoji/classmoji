@@ -1,6 +1,11 @@
 import { useState, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import type * as Y from 'yjs';
+import {
+  pageSessionMarker,
+  restoreRenamedHtml,
+  sanitizeClient,
+} from '@classmoji/services/slides/safe-markup';
 
 import { historyKey } from '~/utils/collab/bridgeLogic';
 import { applyNotesEdit, transformIndex, type TextDelta } from '~/utils/collab/textCursor';
@@ -21,7 +26,8 @@ function extractNotesFromSlide(slideElement: HTMLElement | null) {
   // Use :scope to only get direct child <aside class="notes">
   // This handles nested sections (vertical slides) correctly
   const aside = slideElement.querySelector(':scope > aside.notes');
-  return aside ? aside.innerHTML : '';
+  // As authored: what the slide shows was renamed for display (see below).
+  return aside ? restoreRenamedHtml(aside.innerHTML, pageSessionMarker(), document) : '';
 }
 
 // Update or create notes in the slide section
@@ -45,9 +51,14 @@ function updateNotesInSlide(slideElement: HTMLElement | null, notesContent: stri
     slideElement.appendChild(aside);
   }
 
-  // Only update if content changed (prevents unnecessary DOM mutations)
-  if (aside.innerHTML !== notesContent) {
-    aside.innerHTML = notesContent;
+  // Only update if content changed (prevents unnecessary DOM mutations).
+  // Notes are the slide's markup: held to the slide markup lists in rename
+  // mode (nothing typed is lost; it is read back as authored) and inserted as
+  // nodes, never through innerHTML.
+  if (extractNotesFromSlide(slideElement) !== notesContent) {
+    aside.replaceChildren(
+      sanitizeClient(notesContent, { mode: 'rename', doc: document, marker: pageSessionMarker() })
+    );
   }
 }
 

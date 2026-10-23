@@ -21,18 +21,15 @@ const SLIDES = source('../../app/components/RevealSlides.tsx');
 const PRESENTER = source('../../app/components/RevealPresenter.tsx');
 const MEDIA_REFS = source('../../app/utils/mediaRefs.ts');
 
-/** The code between the fallback fetch and the parse of what it returned. */
-const fallbackOf = (text: string) =>
-  text.slice(text.indexOf('await fetch(contentUrl!)'), text.indexOf('} catch (err: unknown)'));
-
 test.describe('the client-side contentUrl fallback', () => {
-  test('the deck viewer blanks media refs outside the editor', () => {
-    const fallback = fallbackOf(SLIDES);
-    expect(fallback).toContain('parseContent(isEditing ? html : stripMediaRefs(html))');
+  test('the deck viewer reads only the document it is handed', () => {
+    expect(SLIDES).not.toMatch(/\bfetch\(/);
+    expect(SLIDES).not.toContain('contentUrl');
   });
 
-  test('the presenter and the /follow audience view blank them', () => {
-    expect(fallbackOf(PRESENTER)).toContain('parseContent(stripMediaRefs(html))');
+  test('the presenter and the /follow audience view read only what the loader sent', () => {
+    expect(PRESENTER).not.toMatch(/\bfetch\(/);
+    expect(PRESENTER).not.toContain('contentUrl');
   });
 
   test('the helper is browser-safe: it imports nothing', () => {

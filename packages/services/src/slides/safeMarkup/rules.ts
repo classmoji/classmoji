@@ -389,6 +389,10 @@ export const DROPPED_ATTRS: ReadonlySet<string> = new Set([
   // Reveal renders these as html (speaker notes, external markdown)
   'data-notes',
   'data-markdown',
+  // Reveal opens these in an overlay frame on the deck page
+  'data-preview-link',
+  'data-preview-image',
+  'data-preview-video',
 ]);
 
 /**
@@ -409,9 +413,6 @@ export const URL_ATTRS: ReadonlySet<string> = new Set([
   'data-background-image',
   'data-background-video',
   'data-background-iframe',
-  'data-preview-link',
-  'data-preview-image',
-  'data-preview-video',
   'data-cm-src',
 ]);
 
@@ -567,7 +568,6 @@ export function htmlAttrVerdict(name: string, value: string, ctx: AttrContext): 
 
   if (name === 'srcset') return isSafeSrcset(value, tag) ? KEEP : DROP;
   if (URL_ATTRS.has(name)) {
-    // `data-preview-link` may be valueless (the element's own href).
     return isSafeUrl(value, tag, name) ? KEEP : DROP;
   }
   if (name === 'id') {

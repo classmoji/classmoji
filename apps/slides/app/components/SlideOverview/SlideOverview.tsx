@@ -8,6 +8,7 @@ import NewStackDropZone from './NewStackDropZone';
 import SlideThumbnail from './SlideThumbnail';
 import type { SlideCollabBadge } from './SlideGrid';
 import { isAskMojiTarget } from '../askMoji/askMojiProtocol';
+import { useElementSelection } from '../properties/ElementSelectionContext';
 
 /**
  * Custom collision detection that tries pointerWithin first,
@@ -142,12 +143,17 @@ export default function SlideOverview({
     [onNavigate, onClose]
   );
 
+  const { afterBlocksRemoved } = useElementSelection();
+
   // Handle delete slide - sync is automatic via useSlideStructure
   const handleDeleteSlide = useCallback(
     (slideId: string) => {
+      const target = findSlideById(slideId)?.element ?? null;
       deleteSlide(slideId);
+      // Its html blocks' own files may now be named by no block at all.
+      if (target && !target.isConnected) afterBlocksRemoved([target]);
     },
-    [deleteSlide]
+    [deleteSlide, findSlideById, afterBlocksRemoved]
   );
 
   // Handle escape key to close

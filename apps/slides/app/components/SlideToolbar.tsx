@@ -9,9 +9,11 @@ import {
 } from '@classmoji/services/slides/runtime-attrs';
 
 import { useToast } from '~/hooks';
-import { lockHolderOf } from '~/utils/collab/bridgeDom';
+import { lockHolderOf, safeInnerHtml } from '~/utils/collab/bridgeDom';
+import { mountLegacyHtmlBlocks } from '~/utils/legacyHtmlBlocks';
 import ImageUploadModal from './ImageUploadModal';
 import { useElementSelection } from './properties/ElementSelectionContext';
+import { DEFAULT_IFRAME_SANDBOX } from '~/utils/editorFrames';
 import {
   DEFAULT_SVG_SOURCE,
   STARTER_HTML_SOURCE,
@@ -206,7 +208,8 @@ export default function SlideToolbar({
   const toolbarRef = useRef<HTMLDivElement>(null);
 
   // Get snippets from context
-  const { snippets, selectElement, openBlockSource } = useElementSelection();
+  const { snippets, selectElement, openBlockSource, afterBlocksRemoved, frames, contentOrigin } =
+    useElementSelection();
 
   // Overflow detection - progressively hide groups when toolbar doesn't fit
   // Note: Themes moved to SlideProperties panel, Insert Content group was removed (only draggable blocks remain)
@@ -405,6 +408,7 @@ export default function SlideToolbar({
       revealInstance.sync();
       revealInstance.layout();
       onContentChange?.();
+      afterBlocksRemoved([currentSlide]);
       return;
     }
 
@@ -450,7 +454,15 @@ export default function SlideToolbar({
     revealInstance.sync();
     revealInstance.layout(); // Recalculate slide positioning
     onContentChange?.();
-  }, [getCurrentSlide, revealInstance, onContentChange, toast, currentSlideHolder]);
+    afterBlocksRemoved([currentSlide]);
+  }, [
+    getCurrentSlide,
+    revealInstance,
+    onContentChange,
+    toast,
+    currentSlideHolder,
+    afterBlocksRemoved,
+  ]);
 
   // Live editing: someone else holds the slide on screen.
   const heldByOther = currentSlideHolder !== null;
@@ -683,6 +695,8 @@ document.querySelector('h1').addEventListener('click', () => {
       iframe.style.height = '100%';
       iframe.style.border = 'none';
       iframe.setAttribute('allowfullscreen', '');
+      // New embeds are external sites: give them a sandbox from the start.
+      iframe.setAttribute('sandbox', DEFAULT_IFRAME_SANDBOX);
 
       wrapper.appendChild(iframe);
       content.appendChild(wrapper);
@@ -710,7 +724,9 @@ document.querySelector('h1').addEventListener('click', () => {
         const id = mintBlockId();
         const template = document.createElement('template');
         if (kind === 'html') {
+          // A starter until the source editor's Apply saves its code as a file.
           template.innerHTML = htmlBlockMarkup({ id, box, source: STARTER_HTML_SOURCE });
+          mountLegacyHtmlBlocks(template.content, contentOrigin ?? frames?.contentOrigin);
         } else {
           template.innerHTML = blockMarkup('svg', id, box, '');
           const drawing = svgFromSource(DEFAULT_SVG_SOURCE, document);
@@ -726,7 +742,7 @@ document.querySelector('h1').addEventListener('click', () => {
         if (kind === 'html') openBlockSource(block);
       });
     },
-    [getCurrentSection, onContentChange, selectElement, openBlockSource]
+    [getCurrentSection, onContentChange, selectElement, openBlockSource, contentOrigin, frames]
   );
 
   // Insert a snippet as an sl-block
@@ -740,14 +756,17 @@ document.querySelector('h1').addEventListener('click', () => {
         const { block, content } = createSlBlock('snippet', 400, 150);
         block.dataset.snippetId = snippet.id;
 
-        // Insert the snippet HTML into the block content
-        content.innerHTML = snippet.content;
+        // The snippet's markup, held to the slide markup lists like the rest
+        // of the slide (renamed for display, written back as authored).
+        content.replaceChildren(
+          safeInnerHtml(document, snippet.content, { frames, contentOrigin })
+        );
         section.appendChild(block);
 
         onContentChange?.();
       });
     },
-    [getCurrentSection, createSlBlock, onContentChange]
+    [getCurrentSection, createSlBlock, onContentChange, frames, contentOrigin]
   );
 
   // ─────────────────────────────────────────────────────────────

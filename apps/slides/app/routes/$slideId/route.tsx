@@ -59,12 +59,14 @@ import {
 } from '~/utils/mediaUpload';
 import { playableMediaUrl } from '~/utils/mediaClient';
 import { canonicalMediaUrls, deliveryHostOf } from '~/utils/mediaRefs';
+import { canonicalFrames, type EditorFrames } from '~/utils/editorFrames';
 import { useToast, useUser } from '~/hooks';
 import { diffDeckSnapshots, extractDeckSnapshot, type DeckSnapshot } from '~/utils/deckOpsDiff';
 import { getThemeUrls } from '~/utils/themeService.server';
 import { loadUploadCapability } from '~/utils/uploadCapability.server';
 import { askMojiHostData } from '~/utils/askMoji.server';
 import {
+  appFrameHosts,
   deckAccessFor,
   deckDeliveryContext,
   readDeckText,
@@ -262,10 +264,6 @@ export const loader = async ({
   // below are the one spelling the proxy serves.
   const filePath = `${canonicalStoredPath(slide.content_path)}/index.html`;
 
-  // Build the content URL using content proxy (CDN-first + API fallback)
-  // Used as client-side fallback if server-side fetch fails
-  const contentUrl = `/content/${gitOrgLogin}/${repo}/${filePath}`;
-
   // ── Preview branches (plan §3b) ────────────────────────────────────────────
   // `?preview=1` renders the singleton `preview/<content_path>` branch instead
   // of main. Staff-gated to the EDIT tier (same gate as fetch-latest): viewers
@@ -335,6 +333,24 @@ export const loader = async ({
     repo,
     deckAccessFor('viewer', { canEdit, previewActive }, slide)
   );
+
+  // The editor's frames: a frame of ours is shown through `/<slideId>/frame/…`
+  // (a redirect to a fresh signature), so the editor never holds a signed URL.
+  // Editors only, and only where the content service serves the classroom;
+  // otherwise frames are shown as stored.
+  const contentOrigin = process.env.CONTENT_DELIVERY_ORIGIN || null;
+  const editorFrames: EditorFrames | null =
+    canEdit && deliveryCtx?.frames
+      ? {
+          slideId: slide.id,
+          deckFolder: deliveryCtx.frames.deckFolder,
+          classroomId: slide.classroom_id,
+          repoLogin: gitOrgLogin,
+          repo,
+          ourHosts: appFrameHosts(),
+          contentOrigin,
+        }
+      : null;
 
   // The provider's own diff UI for the pending preview (branch segment
   // URL-encoded — preview branch names contain slashes).
@@ -628,7 +644,12 @@ export const loader = async ({
     // The host signed media URLs are minted on, for the editor's diff (see
     // `canonicalMediaUrls`). Editors only, like the capability above.
     mediaDeliveryHost: canEdit ? deliveryHostOf(process.env.CONTENT_DELIVERY_ORIGIN) : null,
-    contentUrl,
+    // The deck's frames in the editor (see above), and the content service
+    // origin (legacy html blocks are shown through its preview frame).
+    editorFrames,
+    contentOrigin,
+    // The deck folder, for the html block panel's file paths (editors only).
+    deckFolder: canEdit ? canonicalStoredPath(slide.content_path) : null,
     slideContent,
     contentError,
     repo,
@@ -2250,7 +2271,9 @@ export default function SlideViewer() {
     slide,
     uploadCapability,
     mediaDeliveryHost,
-    contentUrl,
+    editorFrames,
+    contentOrigin,
+    deckFolder,
     slideContent,
     deckSha,
     contentError,
@@ -2355,6 +2378,19 @@ export default function SlideViewer() {
     () => ({ host: mediaDeliveryHost, classroomId: slide.classroom_id }),
     [mediaDeliveryHost, slide.classroom_id]
   );
+  /**
+   * Parse a document for the diff with its frames in their stored spelling: a
+   * frame of ours read back from the editor is written relative to the deck
+   * folder, so the stored document (baseline) is compared in that spelling too.
+   */
+  const parseDoc = useCallback(
+    (html: string) => {
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      canonicalFrames(doc.body, editorFrames);
+      return doc;
+    },
+    [editorFrames]
+  );
   /** Capture/refresh the diff baseline from a server-rendered document. */
   const captureBaseline = useCallback(
     (content: unknown, sha: unknown, source: unknown): void => {
@@ -2366,15 +2402,13 @@ export default function SlideViewer() {
         source === 'deck' &&
         typeof DOMParser !== 'undefined'
       ) {
-        const snapshot = extractDeckSnapshot(canonicalMediaUrls(content, mediaScope), html =>
-          new DOMParser().parseFromString(html, 'text/html')
-        );
+        const snapshot = extractDeckSnapshot(canonicalMediaUrls(content, mediaScope), parseDoc);
         baselineRef.current = snapshot ? { snapshot, baseSha: sha } : null;
       } else {
         baselineRef.current = null;
       }
     },
-    [mediaScope]
+    [mediaScope, parseDoc]
   );
   // Bumped when a merged save lands while editing: the committed document is
   // the MERGE (not what the DOM holds), so a live editor must remount from
@@ -2458,6 +2492,8 @@ export default function SlideViewer() {
     active: collabActive,
     slideId: slide.id,
     mediaScope: { host: mediaDeliveryHost, classroomId: slide.classroom_id },
+    frames: editorFrames,
+    contentOrigin,
     notify: collabNotify,
   });
   const bridgeRef = useRef(bridge);
@@ -3279,9 +3315,7 @@ export default function SlideViewer() {
         contentToken.content_sha === baseline.baseSha &&
         typeof DOMParser !== 'undefined'
       ) {
-        const currSnapshot = extractDeckSnapshot(canonicalMediaUrls(content, mediaScope), html =>
-          new DOMParser().parseFromString(html, 'text/html')
-        );
+        const currSnapshot = extractDeckSnapshot(canonicalMediaUrls(content, mediaScope), parseDoc);
         const ops = currSnapshot ? diffDeckSnapshots(baseline.snapshot, currSnapshot) : null;
         if (ops && ops.length > 0) {
           const opsJson = JSON.stringify(ops);
@@ -3303,7 +3337,7 @@ export default function SlideViewer() {
       }
       return payload;
     },
-    [contentToken, mediaScope]
+    [contentToken, mediaScope, parseDoc]
   );
 
   // Save the current slide content and, once the committed content is ready,
@@ -3776,6 +3810,9 @@ export default function SlideViewer() {
       classroomId={slide.classroom_id}
       slideId={slide.id}
       onUploadAsset={handleImageUpload}
+      frames={editorFrames}
+      contentOrigin={contentOrigin}
+      deckFolder={deckFolder}
     >
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
         {/* Navbar - uses grid layout to center toolbar when editing */}
@@ -4128,8 +4165,9 @@ export default function SlideViewer() {
                       ? `editing-${editorEpoch}`
                       : 'viewing'
                 }
-                contentUrl={contentUrl}
                 initialContent={displayContent}
+                frames={editorFrames}
+                contentOrigin={contentOrigin}
                 initialError={contentError}
                 canEdit={effectiveCanEdit}
                 isEditing={isEditing}

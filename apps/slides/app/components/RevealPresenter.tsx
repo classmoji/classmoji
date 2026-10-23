@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
-import { marked } from 'marked';
 import { io } from 'socket.io-client';
 import { IconUsers } from '@tabler/icons-react';
 import QRCodeOverlay from './QRCodeOverlay';
+import { deckSlidesFragment, hasVisibleSlides, renderSpeakerNotes } from '~/utils/presenterMarkup';
+import { mountLegacyHtmlBlocks } from '~/utils/legacyHtmlBlocks';
 import {
-  neutralizeHtmlBlockFrames,
-  sanitizeSvgBlocks,
-} from '@classmoji/services/slides/runtime-attrs';
-import { domSlideTree, removeHiddenSlides } from '@classmoji/services/slides/hidden';
-import { stripMediaRefs } from '~/utils/mediaRefs';
+  REVEAL_LOCKED_OPTIONS,
+  installRevealMessageGuard,
+  stripRevealQueryConfig,
+} from '~/utils/revealHardening';
 
 /**
  * A signed delivery theme folder: `/c/{classroomId}/theme/{name}/{treeSha}/...`.
@@ -19,12 +19,6 @@ import { stripMediaRefs } from '~/utils/mediaRefs';
  */
 const DELIVERY_THEME_HREF =
   /\/c\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/theme\//;
-
-// Configure marked for speaker notes (simple, safe rendering)
-marked.setOptions({
-  breaks: true, // Convert \n to <br>
-  gfm: true, // GitHub Flavored Markdown
-});
 
 // Built-in Reveal.js themes
 const BUILTIN_THEMES = [
@@ -48,7 +42,6 @@ const BUILTIN_THEMES = [
  * @returns {string | null} Full URL to the theme CSS, or null for shared themes
  */
 interface RevealPresenterProps {
-  contentUrl?: string;
   initialContent?: string | null;
   initialError?: string | null;
   slideId: string;
@@ -59,6 +52,8 @@ interface RevealPresenterProps {
   multiplexSecret?: string;
   /** One line for the presenter (from the loader), dismissible. */
   notice?: string | null;
+  /** The content service's origin, for html blocks that still carry inline code. */
+  contentOrigin?: string | null;
 }
 
 function getThemeUrl(theme: string) {
@@ -83,8 +78,7 @@ function getThemeUrl(theme: string) {
  * - Optional multiplex support for syncing with followers
  */
 export default function RevealPresenter({
-  contentUrl,
-  initialContent = null, // Pre-fetched content from server (bypasses CORS)
+  initialContent = null, // Slide content read and cleaned by the loader
   initialError = null, // Error from server-side fetch
   slideId,
   isPresenter = false,
@@ -93,6 +87,7 @@ export default function RevealPresenter({
   multiplexId,
   multiplexSecret: _multiplexSecret,
   notice = null,
+  contentOrigin = null,
 }: RevealPresenterProps) {
   const [noticeDismissed, setNoticeDismissed] = useState(false);
   const deckRef = useRef<HTMLDivElement>(null);
@@ -100,7 +95,10 @@ export default function RevealPresenter({
   const socketRef = useRef<ReturnType<typeof io> | null>(null);
   const isRemoteUpdateRef = useRef(false); // Prevent socket event loops
   const [loading, setLoading] = useState(!initialContent && !initialError);
-  const [error, setError] = useState(initialError);
+  // No content and no error from the loader reads as a failed load.
+  const [error, setError] = useState(
+    initialError ?? (initialContent ? null : 'Failed to load slide content')
+  );
   const [htmlContent, setHtmlContent] = useState<string | null>(null);
   const [isClient, setIsClient] = useState(false);
   const [viewerCount, setViewerCount] = useState(0);
@@ -214,9 +212,11 @@ export default function RevealPresenter({
     };
   }, [isClient, theme, themeLight, themeDark, bodyClasses]);
 
-  // Parse slide content (either from server or client fetch)
+  // Parse slide content (read by the loader). The DOMParser document is inert:
+  // nothing in it loads or runs. Its slide markup is kept as a string and
+  // inserted only through `deckSlidesFragment` (presenterMarkup.ts).
   useEffect(() => {
-    if (!isClient) return;
+    if (!isClient || !initialContent) return;
 
     const parseContent = (html: string) => {
       const parser = new DOMParser();
@@ -273,69 +273,21 @@ export default function RevealPresenter({
       });
       sharedThemeLinksRef.current = sharedLinks;
 
-      if (slidesContent) {
-        // Create a temp container to manipulate the DOM
-        const tempContainer = document.createElement('div');
-        tempContainer.innerHTML = slidesContent.innerHTML;
+      const markup = slidesContent ? slidesContent.innerHTML : doc.body.innerHTML;
 
-        // Hidden slides are only visible in edit mode (hiddenSlides.ts, #436).
-        removeHiddenSlides(tempContainer, domSlideTree);
-
-        // An html block's frame loads only in its sandbox; svg blocks are held to
-        // their lists (deckBlocks.ts).
-        neutralizeHtmlBlockFrames(tempContainer);
-        sanitizeSvgBlocks(tempContainer);
-
-        const content = tempContainer.innerHTML;
-
-        // Check if any slides remain
-        if (!content.trim() || !tempContainer.querySelector('section')) {
-          setError('All slides are hidden. At least one visible slide is required to present.');
-          setLoading(false);
-          return;
-        }
-
-        setHtmlContent(content);
-      } else {
-        neutralizeHtmlBlockFrames(doc.body);
-        sanitizeSvgBlocks(doc.body);
-        setHtmlContent(doc.body.innerHTML);
+      // Hidden slides are only visible in edit mode (hiddenSlides.ts, #436).
+      if (slidesContent && !hasVisibleSlides(deckSlidesFragment(markup, document))) {
+        setError('All slides are hidden. At least one visible slide is required to present.');
+        setLoading(false);
+        return;
       }
+
+      setHtmlContent(markup);
       setLoading(false);
     };
 
-    // Use server-side pre-fetched content if available (avoids CORS)
-    if (initialContent) {
-      parseContent(initialContent);
-      return;
-    }
-
-    // Fallback to client-side fetch (may fail due to CORS)
-    const fetchContent = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-
-        const response = await fetch(contentUrl!);
-        if (!response.ok) {
-          throw new Error(`Failed to load slides: ${response.status}`);
-        }
-
-        const html = await response.text();
-        // The stored index.html, unresolved: its `media://` references have no
-        // URL here, and a browser cannot load that scheme.
-        parseContent(stripMediaRefs(html));
-      } catch (err: unknown) {
-        console.error('Error loading slides:', err);
-        setError(err instanceof Error ? err.message : String(err));
-        setLoading(false);
-      }
-    };
-
-    if (contentUrl && !initialError) {
-      fetchContent();
-    }
-  }, [isClient, contentUrl, initialContent, initialError]);
+    parseContent(initialContent);
+  }, [isClient, initialContent]);
 
   // Initialize Reveal.js in presentation mode
   // IMPORTANT: We set innerHTML here, NOT in JSX, to prevent React from
@@ -344,14 +296,13 @@ export default function RevealPresenter({
     if (!isClient || !htmlContent || !deckRef.current) return;
 
     let mounted = true;
+    let unmountLegacyBlocks: () => void = () => {};
 
     const initReveal = async () => {
-      const [{ default: Reveal }, { default: RevealHighlight }, { default: RevealNotes }] =
-        await Promise.all([
-          import('reveal.js'),
-          import('reveal.js/plugin/highlight/highlight'),
-          import('reveal.js/plugin/notes/notes'),
-        ]);
+      const [{ default: Reveal }, { default: RevealHighlight }] = await Promise.all([
+        import('reveal.js'),
+        import('reveal.js/plugin/highlight/highlight'),
+      ]);
 
       if (!mounted || !deckRef.current) return;
 
@@ -361,10 +312,14 @@ export default function RevealPresenter({
 
       // Set the slides content BEFORE initializing Reveal.js
       // This is done here instead of JSX to prevent React reconciliation
-      // from overwriting Reveal.js's DOM modifications during navigation
+      // from overwriting Reveal.js's DOM modifications during navigation.
+      // The markup goes in as a cleaned fragment; html blocks that still carry
+      // inline code are pointed at the content service's preview frame first.
       const slidesContainer = deckRef.current.querySelector('.slides');
       if (slidesContainer) {
-        slidesContainer.innerHTML = htmlContent;
+        const fragment = deckSlidesFragment(htmlContent, document);
+        unmountLegacyBlocks = mountLegacyHtmlBlocks(fragment, contentOrigin);
+        slidesContainer.replaceChildren(fragment);
       }
 
       const config = {
@@ -385,11 +340,17 @@ export default function RevealPresenter({
         slideNumber: previewMode ? false : 'c/t',
         // Hide controls after 3 seconds of inactivity
         controlsAutoHide: true,
-        // Plugins: syntax highlighting + speaker notes support (but not built-in popup)
-        // We include RevealNotes for markdown processing of <aside class="notes">,
-        // but disable the 'S' keyboard shortcut to use our custom /speaker route instead
-        plugins: [RevealHighlight, RevealNotes],
+        // Syntax highlighting only. Speaker notes are this app's own /speaker
+        // route ('S' below opens it); Reveal's notes window is not used.
+        plugins: [RevealHighlight],
+        // Last, over everything above (revealHardening.ts).
+        ...REVEAL_LOCKED_OPTIONS,
       };
+
+      // Reveal also reads options from the query string; those go first, and
+      // Reveal API messages are stopped before any listener sees them.
+      stripRevealQueryConfig();
+      installRevealMessageGuard();
 
       const deck = new Reveal(deckRef.current, config);
       await deck.initialize();
@@ -399,14 +360,13 @@ export default function RevealPresenter({
         return;
       }
 
-      // Process speaker notes: convert markdown to HTML for speaker view
-      // This must happen after initialization so the notes are in the DOM
+      // Speaker notes: markdown rendered to cleaned markup (presenterMarkup.ts).
+      // Reveal's CSS keeps `aside.notes` hidden on the slide.
       const notesElements = deckRef.current.querySelectorAll('aside.notes');
       notesElements.forEach((aside: Element) => {
         const markdownContent = aside.textContent || '';
         if (markdownContent.trim()) {
-          // Convert markdown to HTML using marked
-          aside.innerHTML = marked.parse(markdownContent) as string;
+          renderSpeakerNotes(aside, markdownContent);
         }
       });
 
@@ -419,12 +379,13 @@ export default function RevealPresenter({
     return () => {
       mounted = false;
       setIsRevealReady(false);
+      unmountLegacyBlocks();
       if (revealRef.current) {
         revealRef.current.destroy();
         revealRef.current = null;
       }
     };
-  }, [isClient, htmlContent, isPresenter, previewMode]);
+  }, [isClient, htmlContent, isPresenter, previewMode, contentOrigin]);
 
   // Socket.IO connection for real-time slide sync (skip in preview mode)
   useEffect(() => {
