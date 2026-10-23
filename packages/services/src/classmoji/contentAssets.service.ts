@@ -209,7 +209,8 @@ async function readHead(classroom: ResolvedClassroom) {
 
 /**
  * Every row of a tree read that is NEW or CHANGED, in ONE statement, never
- * moving a row backwards.
+ * moving a row backwards — and nothing at all unless the classroom still
+ * holds this run's stamp (the `EXISTS`; see `treeSync`).
  *
  * `content_assets.synced_at < EXCLUDED.synced_at`: the run's stamp is taken
  * BEFORE the head is read, so a row stamped at or after it was written by
@@ -240,6 +241,10 @@ function upsertChangedOp(classroomId: string, entries: TreeEntry[], syncedAt: Da
       ${entries.map(entry => entry.type)}::text[],
       ${entries.map(entry => entry.size ?? 0)}::int[]
     ) AS entry(path, sha, type, size)
+    WHERE EXISTS (
+      SELECT 1 FROM classrooms
+      WHERE id = ${classroomId} AND content_assets_synced_at = ${syncedAt}
+    )
     ON CONFLICT (classroom_id, path) DO UPDATE
       SET sha = EXCLUDED.sha,
           type = EXCLUDED.type,
@@ -255,8 +260,27 @@ function upsertChangedOp(classroomId: string, entries: TreeEntry[], syncedAt: Da
  * stamp. Same backwards guard as `upsertChangedOp`; no change filter, because
  * these rows are the newest word on their paths and the fresh stamp is what
  * keeps a slower, older sync run from overwriting or sweeping them.
+ *
+ * `fill`: only rows the map does not have are added, and an existing row is
+ * left exactly as it is (see `recordFolderTreesAfterCommit`).
  */
-function upsertTreesOp(classroomId: string, entries: TreeEntry[], syncedAt: Date) {
+function upsertTreesOp(
+  classroomId: string,
+  entries: TreeEntry[],
+  syncedAt: Date,
+  { fill = false }: { fill?: boolean } = {}
+) {
+  if (fill) {
+    return getPrisma().$executeRaw`
+      INSERT INTO content_assets (classroom_id, path, sha, type, size, synced_at)
+      SELECT ${classroomId}, entry.path, entry.sha, 'tree', 0, ${syncedAt}
+      FROM UNNEST(
+        ${entries.map(entry => entry.path)}::text[],
+        ${entries.map(entry => entry.sha)}::text[]
+      ) AS entry(path, sha)
+      ON CONFLICT (classroom_id, path) DO NOTHING
+    `;
+  }
   return getPrisma().$executeRaw`
     INSERT INTO content_assets (classroom_id, path, sha, type, size, synced_at)
     SELECT ${classroomId}, entry.path, entry.sha, 'tree', 0, ${syncedAt}
@@ -300,8 +324,8 @@ function upsertKnownOp(classroomId: string, entry: TreeEntry, syncedAt: Date) {
 /**
  * Bring the map level with the branch head: one whole-tree read, diffed.
  *
- * stamp → head → (skip if level) → recursive tree → upsert what changed →
- * delete what left → record the stamp and the commit, the last three in ONE
+ * stamp → head → (skip if level) → recursive tree → record the stamp and the
+ * commit → upsert what changed → delete what left, the last three in ONE
  * transaction so a failure leaves the previous map intact (stale is
  * recoverable; half-applied is not distinguishable from good).
  *
@@ -312,14 +336,19 @@ function upsertKnownOp(classroomId: string, entry: TreeEntry, syncedAt: Date) {
  *
  * The stamp is taken BEFORE the head is read. Everything else leans on that:
  *
+ *   - the classroom stamp only moves forward, and the transaction writes it
+ *     FIRST. The upsert and the delete then write only if the classroom still
+ *     holds THIS run's stamp (their `EXISTS`): a run that lost it to a newer
+ *     run — an older snapshot finishing late — writes no rows at all, so it
+ *     can neither re-add a path the newer run deleted nor delete a path its
+ *     older tree lacks. The stamp update takes the classroom row's lock, so two
+ *     runs' transactions cannot interleave past it;
  *   - the upsert skips rows stamped at or after it (a newer write-through);
  *   - the delete only considers rows stamped below it AND whose path is not in
  *     the tree. Unchanged rows keep their old stamp, so the stamp alone can no
  *     longer tell "gone" from "untouched" — the path set does. A row written
  *     while the read was in flight is above the stamp and survives even though
- *     this snapshot has not seen it;
- *   - the classroom stamp only moves forward, so an older run finishing late
- *     cannot record an older commit over a newer one.
+ *     this snapshot has not seen it.
  *
  * A TRUNCATED tree upserts and does not delete: the entries that did not
  * arrive are not absent from the repo, and deleting their rows would strand
@@ -369,8 +398,13 @@ async function treeSync(
         WHERE classroom_id = ${classroom.id}
           AND synced_at < ${syncedAt}
           AND NOT (path = ANY(${entries.map(entry => entry.path)}::text[]))
+          AND EXISTS (
+            SELECT 1 FROM classrooms
+            WHERE id = ${classroom.id} AND content_assets_synced_at = ${syncedAt}
+          )
       `;
 
+  // The stamp first: the other two read it (see above).
   const ops = [stampOp, upsertOp, deleteOp].filter(op => op !== null);
   const results = await prisma.$transaction(ops);
   const countOf = (op: unknown) => {
@@ -483,6 +517,14 @@ function normalizeFolder(folder: string): string | null {
  * stamp, guarded so a newer row is never overwritten. The ancestors matter:
  * their tree shas moved too.
  *
+ * `fill`: for a READER that found a folder missing and reads it at the commit
+ * the map was last synced at (not a commit of its own). It only adds rows the
+ * map lacks, leaves every existing row alone, and stamps the new ones with the
+ * classroom's sync stamp rather than now: they are exactly as current as that
+ * sync, so a sync already in flight still overwrites or deletes them as it
+ * would any row of that snapshot. A fresh stamp would make the in-flight sync
+ * skip them as newer.
+ *
  * Returns folder → tree sha for every requested folder that exists at the
  * commit. NEVER THROWS: the commit already succeeded. An empty (or short) map
  * means "not resolved; sign nothing for it" — a folder missing from the result
@@ -493,11 +535,13 @@ export async function recordFolderTreesAfterCommit({
   commit,
   rootTreeSha,
   folders,
+  fill = false,
 }: {
   classroomId: string;
   commit: string;
   rootTreeSha?: string;
   folders: string[];
+  fill?: boolean;
 }): Promise<Map<string, string>> {
   const wanted = [...new Set(folders.map(normalizeFolder).filter((f): f is string => f !== null))];
   if (wanted.length === 0) return new Map();
@@ -554,7 +598,10 @@ export async function recordFolderTreesAfterCommit({
     const rows = [...shaOf]
       .filter(([path]) => path !== '')
       .map(([path, sha]) => ({ path, sha, type: 'tree' }));
-    if (rows.length > 0) await upsertTreesOp(classroomId, rows, new Date());
+    if (rows.length > 0) {
+      const stamp = fill ? (raw.content_assets_synced_at ?? new Date(0)) : new Date();
+      await upsertTreesOp(classroomId, rows, stamp, { fill });
+    }
 
     return new Map(
       wanted.filter(folder => shaOf.has(folder)).map(folder => [folder, shaOf.get(folder)!])

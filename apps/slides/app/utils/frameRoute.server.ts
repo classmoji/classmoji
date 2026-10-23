@@ -6,9 +6,11 @@
  * `/<slideId>/frame/<repoPath><query>` instead, and this route answers that
  * with a 302 to a freshly signed files URL on the content service.
  *
- * What it serves is decided entirely on the server:
+ * Only the deck's editors get these URLs (readers' frames are signed into the
+ * page by the server), so only they are answered. What it serves is decided
+ * entirely on the server:
  *   - the deck is the slide row named in the URL, and the caller must be able
- *     to VIEW it (`assertSlideAccess`, the gate every deck surface uses);
+ *     to EDIT it (`assertSlideAccess`, the gate every deck surface uses);
  *   - the repo is that deck's classroom's content repo — the URL carries a
  *     path, never a repo or a classroom;
  *   - the path goes through the same folder rules as every other frame
@@ -43,17 +45,17 @@ function findFrameSlide(slideId: string) {
 
 export interface FrameRouteDeps {
   findSlide(slideId: string): Promise<FrameSlide | null>;
-  /** Throws (a Response) when the caller may not view this deck. */
-  assertView(request: Request, slide: FrameSlide): Promise<unknown>;
+  /** Throws (a Response) when the caller may not edit this deck. */
+  assertEdit(request: Request, slide: FrameSlide): Promise<unknown>;
   frameSigner?: DeckDeliveryResolvers['frameSigner'];
 }
 
 const defaultDeps: FrameRouteDeps = {
   findSlide: findFrameSlide,
-  async assertView(request, slide) {
+  async assertEdit(request, slide) {
     // Loaded on use: the auth module builds its session store on import.
     const { assertSlideAccess } = await import('@classmoji/auth/server');
-    return assertSlideAccess({ request, slideId: slide.id, slide, accessType: 'view' });
+    return assertSlideAccess({ request, slideId: slide.id, slide, accessType: 'edit' });
   },
 };
 
@@ -67,9 +69,9 @@ export async function frameRedirect(
   const slide = await deps.findSlide(slideId);
   if (!slide) return frameNotFound();
 
-  // The view gate first: nothing below answers a question about a deck the
-  // caller could not already see.
-  await deps.assertView(request, slide);
+  // The edit gate first: nothing below answers a question about a deck the
+  // caller could not already edit.
+  await deps.assertEdit(request, slide);
   if (!isDeckSlide(slide)) return frameNotFound();
 
   // Read from the raw request path, decoded once, against THIS slide's id;

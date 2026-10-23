@@ -26,7 +26,7 @@ import {
   yDocToDeck,
 } from '../convert.ts';
 import { renderDeckSections } from '../render.ts';
-import { DECK_SCHEMA_VERSION, F } from '../shape.ts';
+import { F } from '../shape.ts';
 import { KITCHEN_SINK_HTML } from './kitchenSink.ts';
 
 const TITLE = 'Round Trip';
@@ -330,10 +330,6 @@ describe('html blocks are files', () => {
         },
       ]
     ).deck;
-
-  it('is a schema bump: editors built for code in the slide are refused', () => {
-    expect(DECK_SCHEMA_VERSION).toBe(2);
-  });
 
   it('data-cm-src / data-cm-rev survive the Y.Doc, the wire and the renderer byte for byte', () => {
     const original = deck();

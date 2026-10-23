@@ -40,8 +40,9 @@ export function grantedFolder(
  * immutable `trees/{sha}` cache the theme route uses — and served by its blob
  * sha exactly as a blob URL would be.
  *
- * HTML is served whole (no ranges: the shim insert changes every offset) and
- * boxed by `asHtmlApp`; everything else is untouched.
+ * HTML and XHTML are served whole (no ranges: the shim insert changes every
+ * offset of an HTML page) and boxed by `asHtmlApp`; everything else is
+ * untouched.
  */
 export async function serveFiles(
   env: Env,

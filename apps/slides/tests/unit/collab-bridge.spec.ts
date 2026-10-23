@@ -1362,7 +1362,8 @@ test.describe('live deck bridge', () => {
 });
 
 test.describe('live deck bridge: frames of the repo', () => {
-  const SLIDE_ID = 'deck-0001';
+  // A uuid, as slide ids are (the editor frame URL's first segment must be one).
+  const SLIDE_ID = 'dec00001-0000-4000-8000-000000000001';
   const FRAMES: EditorFrames = {
     slideId: SLIDE_ID,
     deckFolder: 'slides/week-1',

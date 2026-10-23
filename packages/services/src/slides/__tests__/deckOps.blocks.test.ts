@@ -15,6 +15,7 @@ import {
   MAX_SLIDE_HTML,
   SlideHtmlError,
   applyDeckOps,
+  canonicalizeOpFrames,
   checkBlockFrameSrc,
   deckOpSchema,
   deckOpsPayloadSchema,
@@ -682,5 +683,57 @@ describe('iframe src', () => {
     ) as Array<Record<string, unknown>>;
     expect(h.src).toBe('games/y/index.html');
     expect(f.src).toBe('/content/org/repo/slides/my-deck/games/y/index.html');
+  });
+
+  it('with frames, the markup ops carry loses its display-derived frame values', () => {
+    const frames = {
+      deckFolder: 'slides/my-deck',
+      slideId: '11111111-1111-4111-8111-111111111111',
+      filesRef: (url: string) =>
+        url.startsWith('https://files.test/')
+          ? { repoPath: url.slice('https://files.test/'.length), query: '' }
+          : null,
+    };
+    const ops: DeckOp[] = [
+      {
+        op: 'update',
+        id: 's1',
+        html: '<iframe data-src="/11111111-1111-4111-8111-111111111111/frame/slides/my-deck/games/x/index.html"></iframe>',
+        notes: null,
+        attrs: { 'data-background-iframe': 'https://files.test/games/bg.html', gone: null },
+      },
+      {
+        op: 'insert',
+        position: { at: 'end' },
+        slides: [
+          {
+            children: [
+              { html: '<iframe src="https://files.test/slides/my-deck/a.html"></iframe>' },
+              { html: '<p>plain</p>' },
+            ],
+          },
+        ],
+      },
+      { op: 'update', id: 's2', html: '<p>no frames</p>' },
+    ];
+    const snapshot = structuredClone(ops);
+    type Update = Extract<DeckOp, { op: 'update' }>;
+    type Insert = Extract<DeckOp, { op: 'insert' }>;
+    const [update, insert, plain] = prepareDeckOps(ops, ctx, null, frames) as [
+      Update,
+      Insert,
+      DeckOp,
+    ];
+    expect(ops).toEqual(snapshot);
+    expect(update.html).toBe('<iframe data-src="games/x/index.html"></iframe>');
+    expect(update.notes).toBeNull();
+    expect(update.attrs).toEqual({ 'data-background-iframe': '../../games/bg.html', gone: null });
+    const children = insert.slides[0].children ?? [];
+    expect(children[0].html).toBe('<iframe src="a.html"></iframe>');
+    expect(children[1]).toBe((ops[1] as Insert).slides[0].children?.[1]);
+    expect(plain).toBe(ops[2]);
+    // Nothing to undo: the same ops back.
+    const clean = canonicalizeOpFrames([ops[2]], frames);
+    expect(clean[0]).toBe(ops[2]);
   });
 });

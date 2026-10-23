@@ -31,6 +31,9 @@ import {
  * The commit carries no live-editing trailer: for a deck open live, the push
  * reaches the room as an outside change and is merged there.
  *
+ * A deck with no deck.json (an index.html-only deck) is not converted; it is
+ * listed in the result as `no-deck-json` so it can be opened and saved first.
+ *
  * Payload `{ dryRun = true, classroomId?, limit? }`: the dry run reads and
  * plans, writes nothing. `limit` caps the decks converted (or planned).
  * Only classrooms the content service delivers are touched. Idempotent: a
@@ -189,7 +192,7 @@ export interface DeckConversionReport {
   classroomId: string;
   path: string;
   blocks: number;
-  status: 'planned' | 'converted' | 'conflict' | 'failed';
+  status: 'planned' | 'converted' | 'conflict' | 'failed' | 'no-deck-json';
   commit?: string;
   error?: string;
 }
@@ -260,7 +263,13 @@ async function convertDeck(
   const stored = await readDeckJson(deps, deck);
   if (!stored) {
     counts.noDeckJson++;
-    return null;
+    return {
+      slideId: deck.id,
+      classroomId: deck.classroom_id,
+      path: deck.content_path,
+      blocks: 0,
+      status: 'no-deck-json',
+    };
   }
   const json = JSON.parse(stored.text) as DeckJson;
   if (!JSON.stringify(json.slides ?? []).includes('srcdoc')) return null;
@@ -342,16 +351,20 @@ export async function runHtmlBlockConvert(
     failed: 0,
   };
   const decks: DeckConversionReport[] = [];
+  // Decks planned, converted, refused or failed: what `limit` caps.
+  let handled = 0;
   const list = await deps.listDecks(
     payload.classroomId ? { classroomId: payload.classroomId } : {}
   );
   for (const deck of list) {
-    if (payload.limit !== undefined && decks.length >= payload.limit) break;
+    if (payload.limit !== undefined && handled >= payload.limit) break;
     counts.scanned++;
     try {
       const report = await convertDeck(deps, deck, payload.dryRun, counts);
       if (report) decks.push(report);
+      if (report && report.status !== 'no-deck-json') handled++;
     } catch (error) {
+      handled++;
       counts.failed++;
       const message = error instanceof Error ? error.message : String(error);
       deps.log('html-block-convert: deck failed', { slideId: deck.id, error: message });

@@ -11,6 +11,7 @@ import type { UploadCapability } from '~/utils/mediaUpload';
 import type { EditorFrames } from '~/utils/editorFrames';
 import BlockSourceModal, { type BlockSourceOptions } from '../blocks/BlockSourceModal';
 import { useHtmlBlockFilePrompt } from '../blocks/HtmlBlockFilePrompt';
+import type { PendingFileDeletes } from '../blocks/pendingFileDeletes';
 import { useBlockRemovalWatch } from '../blocks/useBlockRemovalWatch';
 import { reHighlightCode } from './utils/codeBlockUtils';
 import { isAskMojiTarget } from '../askMoji/askMojiProtocol';
@@ -126,6 +127,11 @@ interface ElementSelectionProviderProps {
   contentOrigin?: string | null;
   /** The deck folder (`slides/<seg>`), for html block file paths. */
   deckFolder?: string | null;
+  /**
+   * The git editor's queue of html block files to delete once a save lands;
+   * null (live editing) deletes a file when the author asks.
+   */
+  pendingFileDeletes?: PendingFileDeletes | null;
 }
 
 /** Value provided by the ElementSelectionContext */
@@ -329,6 +335,7 @@ export function ElementSelectionProvider({
   frames = null,
   contentOrigin = null,
   deckFolder = null,
+  pendingFileDeletes = null,
 }: ElementSelectionProviderProps) {
   const [selectedElement, setSelectedElement] = useState<HTMLElement | null>(null);
   const [elementType, setElementType] = useState<SlideElementType>(null);
@@ -338,7 +345,10 @@ export function ElementSelectionProvider({
   // which Escape or a click may clear while the editor is open).
   const [sourceBlock, setSourceBlock] = useState<HTMLElement | null>(null);
   const [sourceOptions, setSourceOptions] = useState<BlockSourceOptions>({});
-  const { afterBlocksRemoved, prompt: fileDeletePrompt } = useHtmlBlockFilePrompt(slideId);
+  const { afterBlocksRemoved, prompt: fileDeletePrompt } = useHtmlBlockFilePrompt(
+    slideId,
+    pendingFileDeletes
+  );
   // Cut, delete or typing over a selection that held an html block; frames
   // pasted onto a slide shown the editor's way.
   useBlockRemovalWatch(isEditing, afterBlocksRemoved, frames);
@@ -687,6 +697,12 @@ export function ElementSelectionProvider({
     setSourceBlock(block);
   }, []);
   const closeBlockSource = useCallback(() => setSourceBlock(null), []);
+  // Applied: the change is the deck's; a block that has just gone on its
+  // slide (a new one) is selected.
+  const blockSourceApplied = useCallback(() => {
+    onContentChange?.();
+    if (sourceOptions.insertInto && sourceBlock?.isConnected) selectElement(sourceBlock);
+  }, [onContentChange, sourceOptions, sourceBlock, selectElement]);
 
   // Leaving edit mode closes the source editor without applying.
   useEffect(() => {
@@ -742,7 +758,7 @@ export function ElementSelectionProvider({
         frames={frames}
         contentOrigin={contentOrigin}
         onClose={closeBlockSource}
-        onApplied={onContentChange}
+        onApplied={blockSourceApplied}
       />
       {fileDeletePrompt}
     </ElementSelectionContext.Provider>

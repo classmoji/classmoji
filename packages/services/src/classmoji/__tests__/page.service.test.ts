@@ -212,7 +212,43 @@ describe('page.createPage', () => {
       expect(pageCreateMock.mock.calls[0][0].data.content_path).toBe('pages/page-3');
     });
 
-    it('keeps the path its files were placed under, and refuses it when taken', async () => {
+    it('with files, takes the same free path the caller placed them under', async () => {
+      pageFindManyMock.mockResolvedValue([{ content_path: 'pages/page' }]);
+
+      await createPage({
+        classroomId: 'class-1',
+        title: '!!!',
+        createdBy: 'user-1',
+        files: [{ path: 'pages/page-2/assets/a.png', content: 'AA==', encoding: 'base64' }],
+      });
+
+      expect(createdPaths()).toContain('pages/page-2/assets/a.png');
+      expect(createdPaths()).toContain('pages/page-2/content.json');
+      expect(pageCreateMock.mock.calls[0][0].data.content_path).toBe('pages/page-2');
+    });
+
+    it('with files, refuses when the free path moved away from them', async () => {
+      // The caller placed them under pages/page-2; another page took it since.
+      pageFindManyMock.mockResolvedValue([
+        { content_path: 'pages/page' },
+        { content_path: 'pages/page-2' },
+      ]);
+
+      await expect(
+        createPage({
+          classroomId: 'class-1',
+          title: '!!!',
+          createdBy: 'user-1',
+          files: [{ path: 'pages/page-2/assets/a.png', content: 'AA==', encoding: 'base64' }],
+        })
+      ).rejects.toMatchObject({ code: 'PAGE_CONTENT_PATH_CONFLICT' });
+
+      expect(uploadBatchMock).not.toHaveBeenCalled();
+      expect(pageCreateMock).not.toHaveBeenCalled();
+    });
+
+    it('with files, refuses the path when it was taken in between', async () => {
+      pageFindManyMock.mockResolvedValue([]);
       pageFindFirstMock.mockResolvedValue({ id: 'page-0', title: '???' });
 
       await expect(
@@ -224,7 +260,6 @@ describe('page.createPage', () => {
         })
       ).rejects.toMatchObject({ code: 'PAGE_CONTENT_PATH_CONFLICT' });
 
-      expect(pageFindManyMock).not.toHaveBeenCalled();
       expect(uploadBatchMock).not.toHaveBeenCalled();
     });
 

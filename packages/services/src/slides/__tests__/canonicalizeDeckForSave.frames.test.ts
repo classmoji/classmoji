@@ -102,14 +102,16 @@ describe('canonicalizeDeckForSave — frames', () => {
     });
   }
 
-  it("leaves another classroom's files URL and another deck's editor URL as they are", async () => {
+  it("leaves another classroom's files URL as it is; another deck's editor URL maps into this deck", async () => {
     canonicalizeManyMock.mockImplementation(
       async (_ctx: unknown, refs: string[]) => new Map(refs.map(ref => [ref, ref]))
     );
     const foreign = `${await base(OTHER_CLASSROOM)}slides/deck/games/a.html`;
-    const otherDeck = '/8a1b2c3d-0000-4000-8000-00000000000b/frame/slides/deck/games/a.html';
+    const otherDeck = '/8a1b2c3d-0000-4000-8000-00000000000b/frame/slides/other/games/a.html';
     const html = `<iframe src="${foreign}"></iframe><iframe src="${otherDeck}"></iframe>`;
     const out = await canonicalizeDeckForSave(slide, deckWith(html));
-    expect(out.slides[0].html).toBe(html);
+    expect(out.slides[0].html).toContain(`src="${foreign}"`);
+    expect(out.slides[0].html).not.toContain('/frame/');
+    expect(out.slides[0].html).toContain('src="../other/games/a.html"');
   });
 });

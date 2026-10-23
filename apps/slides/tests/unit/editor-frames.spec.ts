@@ -18,6 +18,8 @@ import { HTML_BLOCK_SANDBOX, htmlBlockMarkup } from '@classmoji/services/slides/
 import { pageSessionMarker, sessionInertName } from '@classmoji/services/slides/safe-markup';
 
 import {
+  FRAME_MISSING_ATTR,
+  adoptPastedHtmlBlocks,
   canonicalFrames,
   displayFrameValue,
   ownFilesRef,
@@ -29,6 +31,7 @@ import {
 } from '../../app/utils/editorFrames.ts';
 import { sectionFromMarkup, serializeSection } from '../../app/utils/collab/bridgeDom.ts';
 import {
+  clipboardHtml,
   editorSlidesFragment,
   storedSectionsHtml,
   viewerSlidesFragment,
@@ -37,12 +40,16 @@ import { LEGACY_SRCDOC_ATTR } from '../../app/utils/legacyHtmlBlocks.ts';
 import { diffDeckSnapshots, extractDeckSnapshot } from '../../app/utils/deckOpsDiff.ts';
 import {
   htmlBlockFileNamedIn,
+  htmlBlockFileOf,
   htmlBlockSourceOf,
   isHtmlBlockFileShared,
   orphanedHtmlBlockFiles,
   repoFileProblem,
   setHtmlBlockFile,
+  setHtmlBlockInline,
+  svgBlockSource,
 } from '../../app/components/blocks/slideBlocks.ts';
+import { createPendingFileDeletes } from '../../app/components/blocks/pendingFileDeletes.ts';
 
 const jsdom = new JSDOM('<!DOCTYPE html><html><body></body></html>', {
   url: 'https://slides.test/deck-1',
@@ -459,5 +466,267 @@ test.describe('slide markup is cleaned where it is inserted', () => {
     expect(source('../../app/components/SlideToolbar.tsx')).not.toContain(
       'content.innerHTML = snippet.content'
     );
+  });
+});
+
+test.describe('frames that show nothing get a placeholder, never stored', () => {
+  test('a frame shown inert, and an html block that shows nothing, are marked', () => {
+    const html = '<iframe src="https://app.test/admin" title="x"></iframe>';
+    const section = shown(html);
+    expect(section.querySelector('iframe')?.getAttribute(FRAME_MISSING_ATTR)).toBe('1');
+    expect(serializeSection(section, FRAMES).html).toBe(holder(html).innerHTML);
+
+    const block = htmlBlockMarkup({ id: 'b1', box: BOX, src: 'blocks/ab12cd34.html', rev: REV });
+    const unsafe = block.replace(`sandbox="${HTML_BLOCK_SANDBOX}"`, 'sandbox="allow-same-origin"');
+    const blockSection = shown(unsafe);
+    expect(blockSection.querySelector('iframe')?.getAttribute(FRAME_MISSING_ATTR)).toBe('1');
+    expect(serializeSection(blockSection, FRAMES).html).toBe(holder(unsafe).innerHTML);
+  });
+
+  test('a frame that loads is not marked', () => {
+    const section = shown(
+      '<iframe src="games/a.html"></iframe>' +
+        htmlBlockMarkup({ id: 'b1', box: BOX, src: 'blocks/ab12cd34.html', rev: REV })
+    );
+    expect(section.querySelectorAll(`[${FRAME_MISSING_ATTR}]`)).toHaveLength(0);
+  });
+
+  test('the panel marks a value that must not load, and unmarks one that does', () => {
+    const section = shown('<iframe src="games/a.html"></iframe>');
+    const frame = section.querySelector('iframe') as HTMLIFrameElement;
+    writeStoredIframeSrc(frame, 'javascript:alert(1)', FRAMES);
+    expect(frame.getAttribute(FRAME_MISSING_ATTR)).toBe('1');
+    writeStoredIframeSrc(frame, 'games/b.html', FRAMES);
+    expect(frame.hasAttribute(FRAME_MISSING_ATTR)).toBe(false);
+    expect(serializeSection(section, FRAMES).html).toBe('<iframe src="games/b.html"></iframe>');
+  });
+
+  test('the stylesheet styles the mark, light and dark', () => {
+    const css = source('../../app/styles/global.css');
+    expect(css).toContain('.reveal iframe[data-cm-missing] {');
+    expect(css).toContain('.dark .reveal iframe[data-cm-missing] {');
+    expect(css).toContain('Embedded content unavailable');
+  });
+});
+
+test.describe('the iframe panel with src mirroring data-src', () => {
+  test('both move together, and one value is stored', () => {
+    // A frame Reveal loaded without its lazy-load mark: src mirrors data-src.
+    const section = shown('<iframe data-src="games/a.html" src="games/a.html"></iframe>');
+    const frame = section.querySelector('iframe') as HTMLIFrameElement;
+    writeStoredIframeSrc(frame, 'games/b.html', FRAMES);
+    expect(frame.getAttribute('src')).toBe(`${EDITOR}/slides/week-1/games/b.html`);
+    expect(frame.getAttribute('data-src')).toBe(frame.getAttribute('src'));
+    expect(serializeSection(section, FRAMES).html).toBe(
+      '<iframe data-src="games/b.html"></iframe>'
+    );
+
+    // Made inert: neither loads, the typed value is stored.
+    writeStoredIframeSrc(frame, 'https://app.test/x', FRAMES);
+    expect(frame.hasAttribute('src')).toBe(false);
+    expect(frame.hasAttribute('data-src')).toBe(false);
+    expect(serializeSection(section, FRAMES).html).toBe(
+      '<iframe data-src="https://app.test/x"></iframe>'
+    );
+  });
+});
+
+test.describe('copy and paste across decks', () => {
+  const OTHER_ID = '9b2f1c4e-0000-4000-8000-000000000002';
+
+  test("a block copied from another deck keeps naming that deck's file", () => {
+    // As the other deck's editor showed it (its URL carries the repo path).
+    const pasted = holder(
+      htmlBlockMarkup({ id: 'b1', box: BOX, src: 'blocks/ab12cd34.html', rev: REV }).replace(
+        '<iframe ',
+        `<iframe src="/${OTHER_ID}/frame/slides/week-2/blocks/ab12cd34.html?cm-rev=${REV}" `
+      ) + htmlBlockMarkup({ id: 'b2', box: BOX, src: 'blocks/eeeeeeee.html', rev: REV2 })
+    );
+    showFrames(pasted.lastElementChild as Element, FRAMES);
+    adoptPastedHtmlBlocks(pasted, FRAMES);
+    showFrames(pasted, FRAMES);
+    const [copied, own] = Array.from(pasted.querySelectorAll('.sl-block'));
+    expect(copied.querySelector('iframe')?.getAttribute('data-cm-src')).toBe(
+      '../week-2/blocks/ab12cd34.html'
+    );
+    expect(copied.querySelector('iframe')?.getAttribute('src')).toBe(
+      `${EDITOR}/slides/week-2/blocks/ab12cd34.html?cm-rev=${REV}`
+    );
+    expect(htmlBlockSourceOf(copied)).toEqual({
+      kind: 'copied',
+      src: '../week-2/blocks/ab12cd34.html',
+      rev: REV,
+    });
+    // Not this deck's file: never offered for deletion here.
+    expect(htmlBlockFileOf(copied)).toBeNull();
+    // A block of this deck is unchanged.
+    expect(own.querySelector('iframe')?.getAttribute('data-cm-src')).toBe('blocks/eeeeeeee.html');
+  });
+
+  test('a plain frame copied from another deck shows and stores relative to this deck', () => {
+    const pasted = holder(
+      `<iframe data-src="/${OTHER_ID}/frame/slides/week-2/games/a/index.html?x=1"></iframe>`
+    );
+    showFrames(pasted, FRAMES);
+    expect(pasted.querySelector('iframe')?.getAttribute('data-src')).toBe(
+      `${EDITOR}/slides/week-2/games/a/index.html?x=1`
+    );
+    const section = doc.createElement('section');
+    section.append(...Array.from(pasted.childNodes));
+    expect(serializeSection(section, FRAMES).html).toBe(
+      '<iframe data-src="../week-2/games/a/index.html?x=1"></iframe>'
+    );
+  });
+
+  test('the clipboard carries the authored form, never this page\'s markers', () => {
+    const section = shown(
+      '<p>hi</p><img src="x.png" onerror="alert(1)">' +
+        '<iframe src="https://app.test/admin"></iframe>' +
+        '<iframe src="games/a.html"></iframe>' +
+        htmlBlockMarkup({ id: 'b9', box: BOX, source: '<p>legacy</p>' })
+    );
+    expect(section.innerHTML).toContain(marker);
+    const contents = doc.createDocumentFragment();
+    for (const child of Array.from(section.childNodes)) contents.append(child.cloneNode(true));
+    const copied = clipboardHtml(contents, doc);
+    expect(copied).not.toContain(marker);
+    expect(copied).not.toContain(FRAME_MISSING_ATTR);
+    expect(copied).not.toContain(LEGACY_SRCDOC_ATTR);
+    expect(copied).toContain('onerror="alert(1)"');
+    expect(copied).toContain('src="https://app.test/admin"');
+    expect(copied).toContain('srcdoc=');
+    // Frames of ours keep the editor URL: it carries the repo path.
+    expect(copied).toContain(`src="${EDITOR}/slides/week-1/games/a.html"`);
+    // The live slide is untouched.
+    expect(section.innerHTML).toContain(marker);
+  });
+
+  test('copy and cut are handled while editing; a cut never asks about files', () => {
+    const watch = source('../../app/components/blocks/useBlockRemovalWatch.ts');
+    expect(watch).toContain("document.addEventListener('copy', onCopyOrCut, true)");
+    expect(watch).toContain("document.addEventListener('cut', onCopyOrCut, true)");
+    expect(watch).toContain("inputType !== 'deleteByCut'");
+    expect(watch).toContain('adoptPastedHtmlBlocks(section, framesRef.current)');
+  });
+});
+
+test.describe('Apply keeps what it does not set', () => {
+  test("a file: the frame's other attributes and the block's other content stay", () => {
+    const section = shown(
+      htmlBlockMarkup({ id: 'b1', box: BOX, src: 'blocks/ab12cd34.html', rev: REV })
+        .replace('<iframe ', '<iframe title="Demo" loading="lazy" data-note="n" ')
+        .replace('</iframe>', '</iframe><p class="caption">Caption</p>')
+    );
+    const block = section.querySelector('.sl-block') as HTMLElement;
+    const frameBefore = block.querySelector('iframe');
+    setHtmlBlockFile(block, { src: 'games/snake/index.html' }, FRAMES);
+    const frame = block.querySelector('iframe') as HTMLIFrameElement;
+    expect(frame).toBe(frameBefore);
+    expect(frame.getAttribute('title')).toBe('Demo');
+    expect(frame.getAttribute('loading')).toBe('lazy');
+    expect(frame.getAttribute('data-note')).toBe('n');
+    expect(frame.getAttribute('data-cm-src')).toBe('games/snake/index.html');
+    expect(frame.hasAttribute('data-cm-rev')).toBe(false);
+    expect(frame.getAttribute('sandbox')).toBe(HTML_BLOCK_SANDBOX);
+    expect(block.querySelector('p.caption')?.textContent).toBe('Caption');
+    const ser = serializeSection(section, FRAMES).html ?? '';
+    expect(ser).toContain('title="Demo"');
+    expect(ser).toContain('<p class="caption">Caption</p>');
+    expect(ser).not.toMatch(/\ssrc=|srcdoc/);
+  });
+
+  test('a legacy block becomes a file, and back inline, keeping the rest', () => {
+    const section = shown(
+      htmlBlockMarkup({ id: 'b1', box: BOX, source: '<p>old</p>' }).replace(
+        '<iframe ',
+        '<iframe title="Old" '
+      )
+    );
+    const block = section.querySelector('.sl-block') as HTMLElement;
+    setHtmlBlockFile(block, { src: 'blocks/ab12cd34.html', rev: REV }, FRAMES);
+    let frame = block.querySelector('iframe') as HTMLIFrameElement;
+    expect(frame.getAttribute('title')).toBe('Old');
+    expect(frame.hasAttribute('srcdoc')).toBe(false);
+    expect(frame.hasAttribute(LEGACY_SRCDOC_ATTR)).toBe(false);
+    expect(serializeSection(section, FRAMES).html).not.toContain('srcdoc');
+
+    setHtmlBlockInline(block, '<p>new</p>');
+    frame = block.querySelector('iframe') as HTMLIFrameElement;
+    expect(frame.getAttribute('title')).toBe('Old');
+    expect(frame.hasAttribute('data-cm-src')).toBe(false);
+    expect(frame.getAttribute('srcdoc')).toContain('<p>new</p>');
+  });
+
+  test('a block with no frame gets one, after its other content', () => {
+    const section = shown(
+      '<div class="sl-block" data-block-type="html" data-cm-block-id="b2"><div class="sl-block-content"><p>x</p></div></div>'
+    );
+    const block = section.querySelector('.sl-block') as HTMLElement;
+    setHtmlBlockFile(block, { src: 'blocks/ab12cd34.html', rev: REV }, FRAMES);
+    const content = block.querySelector('.sl-block-content') as HTMLElement;
+    expect(Array.from(content.children).map(el => el.localName)).toEqual(['p', 'iframe']);
+  });
+
+  test('a new html block goes on its slide at its first Apply', () => {
+    const toolbar = source('../../app/components/SlideToolbar.tsx');
+    expect(toolbar).toContain('openBlockSource(block, { fresh: true, insertInto: section })');
+    const modal = source('../../app/components/blocks/BlockSourceModal.tsx');
+    expect(modal).toContain('insertInto.appendChild(block)');
+  });
+});
+
+test.describe("the git editor's file deletes wait for the save", () => {
+  const deckOf = (...srcs: string[]) =>
+    holder(
+      srcs
+        .map(src => `<section>${htmlBlockMarkup({ id: 'b1', box: BOX, src, rev: REV })}</section>`)
+        .join('')
+    );
+
+  test('deleted once a save without the block lands; kept or dropped otherwise', () => {
+    const pending = createPendingFileDeletes();
+    pending.add(['blocks/aaaaaaaa.html', 'blocks/bbbbbbbb.html', 'blocks/cccccccc.html']);
+    pending.add(['blocks/aaaaaaaa.html']);
+    expect(pending.list()).toHaveLength(3);
+    const live = deckOf('blocks/cccccccc.html'); // an undo brought c back
+    const saved = deckOf('blocks/bbbbbbbb.html').innerHTML; // a save posted before b went
+    expect(pending.settle(saved, live, doc)).toEqual(['blocks/aaaaaaaa.html']);
+    expect(pending.list()).toEqual(['blocks/bbbbbbbb.html']);
+    // The next save without it deletes it.
+    expect(pending.settle(deckOf().innerHTML, deckOf(), doc)).toEqual(['blocks/bbbbbbbb.html']);
+    expect(pending.list()).toEqual([]);
+  });
+
+  test('discard, reload or conflict drops the queue', () => {
+    const pending = createPendingFileDeletes();
+    pending.add(['blocks/aaaaaaaa.html']);
+    pending.clear();
+    expect(pending.settle('', null, doc)).toEqual([]);
+  });
+
+  test('the route queues in the git editor only, and clears with the edit', () => {
+    const route = source('../../app/routes/$slideId/route.tsx');
+    expect(route).toContain('pendingFileDeletes={collabMode ? null : pendingFileDeletes}');
+    expect(route.match(/pendingFileDeletes\.clear\(\)/g)?.length).toBe(4);
+    expect(route).toContain('pendingFileDeletes.settle(');
+  });
+});
+
+test.describe('the svg source editor opens the drawing as authored', () => {
+  test('what display renamed is restored in the source, the shown drawing untouched', () => {
+    const section = shown(
+      '<div class="sl-block" data-block-type="svg" data-cm-block-id="s1"><div class="sl-block-content">' +
+        '<svg viewBox="0 0 10 10" onload="alert(1)"><circle r="4" data-x="1"></circle></svg>' +
+        '</div></div>'
+    );
+    doc.body.append(section); // on the slide, as in the editor
+    const svg = section.querySelector('svg') as SVGSVGElement;
+    const shownBefore = svg.outerHTML;
+    const text = svgBlockSource(svg);
+    expect(text).not.toContain(marker);
+    expect(text).toContain('onload="alert(1)"');
+    expect(text).toContain('<circle');
+    expect(svg.outerHTML).toBe(shownBefore);
+    section.remove();
   });
 });

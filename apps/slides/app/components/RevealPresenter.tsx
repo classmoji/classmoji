@@ -7,6 +7,7 @@ import { mountLegacyHtmlBlocks } from '~/utils/legacyHtmlBlocks';
 import {
   REVEAL_LOCKED_OPTIONS,
   installRevealMessageGuard,
+  lockRevealAfterInit,
   stripRevealQueryConfig,
 } from '~/utils/revealHardening';
 
@@ -354,6 +355,7 @@ export default function RevealPresenter({
 
       const deck = new Reveal(deckRef.current, config);
       await deck.initialize();
+      lockRevealAfterInit(deck);
 
       if (!mounted) {
         deck.destroy();

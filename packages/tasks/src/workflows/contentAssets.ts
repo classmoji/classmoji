@@ -42,7 +42,8 @@ export const contentAssetsSyncTask = task({
    * the limit of 1 on that copy serializes them, so a burst of pushes reads
    * the head one run at a time and the later runs skip as level. Classrooms
    * still run in parallel with each other. A render-path `ensureContentAssets`
-   * runs outside the queue; the sync's stamp guards make that overlap safe.
+   * runs outside the queue; the sync's stamp guards make that overlap safe (a
+   * run that loses the classroom's stamp to a newer one writes no rows).
    */
   queue: { concurrencyLimit: 1 },
   run: async (payload: ContentAssetsSyncPayload) => {

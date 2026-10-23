@@ -8,7 +8,8 @@
  *   - `delete` { src, blockId? }                     → { deleted }
  *   - `list`   { path? }                             → { path, deckFolder, entries }
  * Refusals: `{ error, code }` with 400 / 403 / 404 / 409 (`changed`: the
- * block's file moved on since `rev`) / 413.
+ * block's file moved on since `rev`) / 413, and 415 for a body that is not
+ * `application/json`.
  *
  * Editors only (`assertSlideAccess` edit), decks only; the user is the
  * session's. The services re-check the edit rule with the slide row's own
@@ -28,7 +29,7 @@ import {
   writeHtmlBlockFile,
 } from '@classmoji/services/slides';
 import { readLimitedBody, UploadTooLargeError } from '@classmoji/utils/upload-limit';
-import { handleHtmlBlockRequest } from '~/utils/htmlBlockApi.server';
+import { handleHtmlBlockRequest, isJsonContentType } from '~/utils/htmlBlockApi.server';
 
 /** The JSON around 1 MB of code, with room for escaping. */
 const MAX_BODY_BYTES = MAX_HTML_BLOCK_FILE_BYTES * 6 + 16 * 1024;
@@ -44,6 +45,9 @@ export const action = async ({
   request: Request;
 }) => {
   if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
+  if (!isJsonContentType(request.headers.get('content-type'))) {
+    return json({ error: 'Expected application/json', code: 'unsupported-media-type' }, 415);
+  }
   const { slideId } = params;
   if (!slideId) return json({ error: 'Missing slideId' }, 400);
 

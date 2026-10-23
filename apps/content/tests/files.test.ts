@@ -55,6 +55,10 @@ const FILES: Record<string, { sha: string; body: string }> = {
   'sprite.png': { sha: sha('7'), body: 'png-bytes' },
   'icon.svg': { sha: sha('8'), body: '<svg onload="x()"></svg>' },
   'levels/one.json': { sha: sha('9'), body: '{"level":1}' },
+  'page.xhtml': {
+    sha: sha('b'),
+    body: '<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><body>x</body></html>',
+  },
 };
 
 const listing = (paths: Record<string, { sha: string }>) =>
@@ -158,6 +162,30 @@ describe('files delivery', () => {
     );
     expect(response.headers.get('ETag')).toBeNull();
     expect(response.headers.get('Accept-Ranges')).toBeNull();
+  });
+
+  it('boxes XHTML without the shim, bytes and length as stored', async () => {
+    const { response } = await fetchFile('games/snake/page.xhtml');
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Content-Type')).toBe('application/xhtml+xml; charset=utf-8');
+    expect(response.headers.get('Content-Security-Policy')).toBe(BOX_CONTENT_SECURITY_POLICY);
+    expect(response.headers.get('Referrer-Policy')).toBe('no-referrer');
+    const body = await response.text();
+    expect(body).toBe(FILES['page.xhtml'].body);
+    expect(body).not.toContain('data-cm-storage-shim');
+    expect(response.headers.get('Content-Length')).toBe(
+      String(new TextEncoder().encode(FILES['page.xhtml'].body).byteLength)
+    );
+  });
+
+  it('answers HEAD on XHTML with the box headers and its stored length', async () => {
+    const { response } = await fetchFile('games/snake/page.xhtml', { init: { method: 'HEAD' } });
+    expect(response.status).toBe(200);
+    expect(response.body).toBeNull();
+    expect(response.headers.get('Content-Security-Policy')).toBe(BOX_CONTENT_SECURITY_POLICY);
+    expect(response.headers.get('Content-Length')).toBe(
+      String(new TextEncoder().encode(FILES['page.xhtml'].body).byteLength)
+    );
   });
 
   it('puts the shim first when the page has no doctype', async () => {

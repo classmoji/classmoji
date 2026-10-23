@@ -60,6 +60,12 @@ import {
 import { playableMediaUrl } from '~/utils/mediaClient';
 import { canonicalMediaUrls, deliveryHostOf } from '~/utils/mediaRefs';
 import { canonicalFrames, type EditorFrames } from '~/utils/editorFrames';
+import { refuseIfFramedCrossOrigin } from '~/utils/revealHardening';
+import {
+  createPendingFileDeletes,
+  type PendingFileDeletes,
+} from '~/components/blocks/pendingFileDeletes';
+import { deleteHtmlBlockFile } from '~/utils/htmlBlockClient';
 import { useToast, useUser } from '~/hooks';
 import { diffDeckSnapshots, extractDeckSnapshot, type DeckSnapshot } from '~/utils/deckOpsDiff';
 import { getThemeUrls } from '~/utils/themeService.server';
@@ -264,12 +270,16 @@ export const loader = async ({
   // below are the one spelling the proxy serves.
   const filePath = `${canonicalStoredPath(slide.content_path)}/index.html`;
 
+  // `?mode=edit` is an editor's: for anyone else it is the ordinary view read
+  // below (cleaned and signed), as if the param were not there.
+  const editMode = mode === 'edit' && canEdit;
+
   // ── Preview branches (plan §3b) ────────────────────────────────────────────
   // `?preview=1` renders the singleton `preview/<content_path>` branch instead
   // of main. Staff-gated to the EDIT tier (same gate as fetch-latest): viewers
   // without edit access never pay the GitHub status call and the param is
   // silently ignored for them. Edit mode always works on main.
-  const wantsPreview = url.searchParams.get('preview') === '1' && mode !== 'edit';
+  const wantsPreview = url.searchParams.get('preview') === '1' && !editMode;
   // NOTE: this route once also read `?preview=true` — a DIFFERENT param value,
   // set by the index's thumbnail iframe, which shortened the deck read and
   // skipped the compare probe below. The index draws stored images now, so
@@ -390,7 +400,7 @@ export const loader = async ({
   let shaSource: DeckShaSource = 'legacy_html';
 
   // Live editing renders the editor from the live deck — no edit-mode read.
-  if (mode === 'edit' && !collab) {
+  if (editMode && !collab) {
     // Phase 4c: deck.json-first read for edit mode. skipCache is REQUIRED —
     // this read both renders the editor and seeds the conflict token; the
     // per-process 60s cache has no cross-instance invalidation, so a cached
@@ -557,7 +567,7 @@ export const loader = async ({
     // editor. A media reference is the one exception, because it has no proxy
     // to load through; `saveDeck` turns a signed media URL back into the
     // reference on the way to the commit.
-    if (mode !== 'edit') {
+    if (!editMode) {
       slideContent = await resolveDeckAssets(slideContent, deliveryCtx, {
         classroomId: slide.classroom_id,
       });
@@ -666,7 +676,7 @@ export const loader = async ({
     askMojiOrigin: askMoji.askMojiOrigin,
     classroomSlug: askMoji.classroomSlug,
     // Auto-enter edit mode if ?mode=edit is in URL (useful for new slides where CDN hasn't caught up)
-    autoEdit: mode === 'edit',
+    autoEdit: editMode,
     // Indicate if we fell back to API (CDN wasn't available yet)
     usedApiFallback,
     // index.html's blob sha for the view-mode read (null when this read could
@@ -2256,6 +2266,8 @@ const LIVE_CONNECT_TIMEOUT_MS = 10_000;
 const DONE_WAIT_MS = 5_000;
 /** View mode after Done re-renders remote edits at most this often. */
 const VIEW_REFRESH_MS = 2_000;
+/** Edit is refused while the deck is framed by a page of another site. */
+const FRAMED_EDIT_MESSAGE = 'Open this deck in its own tab to edit it';
 /** How long Present and Save version wait for local live edits to reach the server. */
 const PRESENT_LOCAL_WAIT_MS = 3_000;
 /**
@@ -2345,6 +2357,12 @@ export default function SlideViewer() {
   }>({ content_sha: loaderContentSha, sha_source: loaderShaSource });
   // Non-null when the last save 409'd (deck changed under this session).
   const [saveConflict, setSaveConflict] = useState<string | null>(null);
+  // Html block files the author chose to delete: deleted once the save that
+  // drops their blocks lands; dropped with the edit (discard, reload,
+  // conflict). Live editing deletes at once and never queues.
+  const pendingFileDeletesRef = useRef<PendingFileDeletes | null>(null);
+  pendingFileDeletesRef.current ??= createPendingFileDeletes();
+  const pendingFileDeletes = pendingFileDeletesRef.current;
   // Phase 7.5: non-null when a stale save's 3-way merge hit true collisions —
   // the per-unit report the save-variant conflict chooser renders.
   const [saveMergeReport, setSaveMergeReport] = useState<{
@@ -2665,6 +2683,11 @@ export default function SlideViewer() {
   useEffect(() => {
     if (autoEdit && effectiveCanEdit && !autoEditTriggered && !isEditing) {
       setAutoEditTriggered(true);
+      // Framed by another site: the deck is shown, the editor is not.
+      if (refuseIfFramedCrossOrigin()) {
+        toast.error(FRAMED_EDIT_MESSAGE);
+        return;
+      }
       if (collabMode) {
         setCollabActive(true);
         setWantsLiveEdit(true);
@@ -2674,7 +2697,7 @@ export default function SlideViewer() {
       setIsLoadingLatest(true);
       fetcher.submit({ intent: 'fetch-latest' }, { method: 'post' });
     }
-  }, [autoEdit, effectiveCanEdit, autoEditTriggered, isEditing, fetcher, collabMode]);
+  }, [autoEdit, effectiveCanEdit, autoEditTriggered, isEditing, fetcher, collabMode, toast]);
 
   const isSaving = fetcher.state === 'submitting' && !fetcher.formData?.get('intent');
   const isFetchingLatest =
@@ -2706,6 +2729,8 @@ export default function SlideViewer() {
       captureBaseline(fetcher.data.content, fetcher.data.content_sha, fetcher.data.sha_source);
       setSaveConflict(null);
       setSaveMergeReport(null);
+      // A fresh edit session: nothing an earlier one queued is deleted.
+      pendingFileDeletes.clear();
       lastPostedOpsRef.current = null;
       setHasChanges(false);
       setIsEditing(true);
@@ -2808,6 +2833,7 @@ export default function SlideViewer() {
         oursSha: fetcher.data.oursSha ?? null,
       });
       setSaveConflict(null);
+      pendingFileDeletes.clear();
       // Stay in the edit context (no view switch). The chooser owns the
       // read-only scrim now, so drop the saving-hold scrim/strip. Keep
       // exitAfterSaveRef intact — resolving the conflict honors the original
@@ -2822,6 +2848,7 @@ export default function SlideViewer() {
           'This deck changed since you opened it — reload to get the latest version before saving.'
       );
       setSaveMergeReport(null);
+      pendingFileDeletes.clear();
       // Stay in edit mode with the reload banner (no view switch); drop the
       // saving-hold scrim/strip. The exit intent is moot — reloading discards
       // this session's edits — so reset it.
@@ -2890,6 +2917,17 @@ export default function SlideViewer() {
       // The committed document becomes the next diff-at-save baseline
       // (merged-save adoption included).
       captureBaseline(fetcher.data.savedContent, fetcher.data.sha, fetcher.data.sha_source);
+      // Files of html blocks this save dropped (and the author chose to delete).
+      for (const src of pendingFileDeletes.settle(
+        fetcher.data.savedContent,
+        document.querySelector('.reveal .slides')
+      )) {
+        deleteHtmlBlockFile(slide.id, { src }).catch((err: unknown) => {
+          toast.error(
+            `Couldn't delete ${src}: ${err instanceof Error ? err.message : 'the request failed'}`
+          );
+        });
+      }
       lastPostedOpsRef.current = null;
       setSaveConflict(null);
       setSaveMergeReport(null);
@@ -3088,6 +3126,11 @@ export default function SlideViewer() {
 
   // Enter edit mode - first fetch latest content from GitHub API
   const handleStartEditing = useCallback(() => {
+    // Framed by another site: the deck is shown, the editor is not.
+    if (refuseIfFramedCrossOrigin()) {
+      toast.error(FRAMED_EDIT_MESSAGE);
+      return;
+    }
     if (collabMode) {
       setLiveTimedOut(false);
       setCollabActive(true);
@@ -3096,7 +3139,7 @@ export default function SlideViewer() {
     }
     setIsLoadingLatest(true);
     fetcher.submit({ intent: 'fetch-latest' }, { method: 'post' });
-  }, [fetcher, collabMode]);
+  }, [fetcher, collabMode, toast]);
 
   // Live editing: once the room has synced, render the editor from the live
   // deck (media resolved first, so videos play on the first render).
@@ -3468,8 +3511,10 @@ export default function SlideViewer() {
     isEditingRef.current = false;
     setIsEditing(false);
     setHasChanges(false);
+    // The edit is discarded: so are the file deletes it asked for.
+    pendingFileDeletes.clear();
     // Keep editableContent for next edit session (it's the latest we know of)
-  }, [finishLiveDone]);
+  }, [finishLiveDone, pendingFileDeletes]);
 
   // Done is waiting: finish as soon as the edits are written; after a few
   // seconds, ask (stay, or leave and lose them). Still finishes on its own
@@ -3813,6 +3858,7 @@ export default function SlideViewer() {
       frames={editorFrames}
       contentOrigin={contentOrigin}
       deckFolder={deckFolder}
+      pendingFileDeletes={collabMode ? null : pendingFileDeletes}
     >
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
         {/* Navbar - uses grid layout to center toolbar when editing */}

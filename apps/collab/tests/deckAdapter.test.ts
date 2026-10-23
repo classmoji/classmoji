@@ -245,7 +245,7 @@ describe('seed and snapshot', () => {
 });
 
 describe('applyOps', () => {
-  it('applies deckOps id-aware: a concurrent peer edit elsewhere survives', () => {
+  it('applies deckOps id-aware: a concurrent peer edit elsewhere survives', async () => {
     const adapter = createDeckAdapter(makeDeps());
     const document = liveDoc();
     const peer = cloneYDoc(document);
@@ -256,7 +256,7 @@ describe('applyOps', () => {
       { op: 'insert', position: { after: 'aaaa0001' }, slides: [{ html: '<p>new</p>' }] },
       { op: 'move', id: 'aaaa0004', position: { after: 'aaaa0005' } },
     ]);
-    adapter.applyOps(context(document), ops);
+    await adapter.applyOps(context(document), ops);
     Y.applyUpdate(document, Y.encodeStateAsUpdate(peer));
 
     const deck = yDocToDeck(document);
@@ -266,13 +266,13 @@ describe('applyOps', () => {
     expect(deck.slides[3].children?.map(c => c.id)).toEqual(['aaaa0005', 'aaaa0004']);
   });
 
-  it('an attrs update merges into the live slide: a null removes a key, the rest stay', () => {
+  it('an attrs update merges into the live slide: a null removes a key, the rest stay', async () => {
     const adapter = createDeckAdapter(makeDeps());
     const withAttrs = structuredClone(DECK);
     withAttrs.slides[0].attrs = { spellcheck: 'false', 'data-background-color': '#fff' };
     const document = liveDoc(withAttrs);
 
-    adapter.applyOps(
+    await adapter.applyOps(
       context(document),
       adapter.parseOps([
         { op: 'update', id: 'aaaa0001', attrs: { 'data-transition': 'fade', spellcheck: null } },
@@ -283,7 +283,7 @@ describe('applyOps', () => {
       'data-transition': 'fade',
     });
 
-    adapter.applyOps(
+    await adapter.applyOps(
       context(document),
       adapter.parseOps([
         { op: 'update', id: 'aaaa0001', attrs: { 'data-transition': 'zoom' }, replace_attrs: true },
@@ -292,51 +292,51 @@ describe('applyOps', () => {
     expect(yDocToDeck(document).slides[0].attrs).toEqual({ 'data-transition': 'zoom' });
   });
 
-  it('409 slide-locked on an update or delete of a slide a person holds', () => {
+  it('409 slide-locked on an update or delete of a slide a person holds', async () => {
     const adapter = createDeckAdapter(makeDeps());
     const document = liveDoc(DECK, [42]);
     acquireLock(document, 'aaaa0004', holder(42), { now: 1_000_000 });
     adapter.attach(document);
 
-    const attempt = (ops: unknown[]) => {
+    const attempt = async (ops: unknown[]) => {
       try {
-        adapter.applyOps(context(document), adapter.parseOps(ops));
+        await adapter.applyOps(context(document), adapter.parseOps(ops));
         return null;
       } catch (err) {
         return err;
       }
     };
-    const update = attempt([{ op: 'update', id: 'aaaa0004', html: '<p>x</p>' }]);
+    const update = await attempt([{ op: 'update', id: 'aaaa0004', html: '<p>x</p>' }]);
     expect(update).toBeInstanceOf(CollabHttpError);
     expect(update).toMatchObject({
       status: 409,
       body: { error: 'slide-locked', slideId: 'aaaa0004', holder: { clientId: 42 } },
     });
     // Deleting the stack takes the held child with it: refused too.
-    expect(attempt([{ op: 'delete', id: 'aaaa0003' }])).toMatchObject({ status: 409 });
+    expect(await attempt([{ op: 'delete', id: 'aaaa0003' }])).toMatchObject({ status: 409 });
     // Nothing was written.
     expect(yDocToDeck(document).slides[2].children?.[0].html).toBe('<p>child</p>');
     // Other slides are fine.
-    expect(attempt([{ op: 'update', id: 'aaaa0001', html: '<h1>ok</h1>' }])).toBeNull();
+    expect(await attempt([{ op: 'update', id: 'aaaa0001', html: '<h1>ok</h1>' }])).toBeNull();
     // Moving the held slide: refused too (an agent does not move a slide a
     // person is editing).
-    expect(attempt([{ op: 'move', id: 'aaaa0004', position: { at: 'end' } }])).toMatchObject({
+    expect(await attempt([{ op: 'move', id: 'aaaa0004', position: { at: 'end' } }])).toMatchObject({
       status: 409,
       body: { error: 'slide-locked', slideId: 'aaaa0004' },
     });
     // Moving another slide is fine.
-    expect(attempt([{ op: 'move', id: 'aaaa0001', position: { at: 'end' } }])).toBeNull();
+    expect(await attempt([{ op: 'move', id: 'aaaa0001', position: { at: 'end' } }])).toBeNull();
   });
 
-  it('409 slide-locked on a block op on a held slide, exactly like an update', () => {
+  it('409 slide-locked on a block op on a held slide, exactly like an update', async () => {
     const adapter = createDeckAdapter(makeDeps());
     const document = liveDoc(DECK, [42]);
     acquireLock(document, 'aaaa0004', holder(42), { now: 1_000_000 });
     adapter.attach(document);
     const box = { left: 0, top: 0, width: 100, height: 100 };
-    const attempt = (ops: unknown[]) => {
+    const attempt = async (ops: unknown[]) => {
       try {
-        return adapter.applyOps(context(document), adapter.parseOps(ops));
+        return await adapter.applyOps(context(document), adapter.parseOps(ops));
       } catch (err) {
         return err;
       }
@@ -346,7 +346,7 @@ describe('applyOps', () => {
       { op: 'block_update', slide: 'aaaa0004', block_id: 'b1', box: { top: 5 } },
       { op: 'block_delete', slide: 'aaaa0004', block_id: 'b1' },
     ]) {
-      expect(attempt([op])).toMatchObject({
+      expect(await attempt([op])).toMatchObject({
         status: 409,
         body: { error: 'slide-locked', slideId: 'aaaa0004', holder: { clientId: 42 } },
       });
@@ -354,7 +354,7 @@ describe('applyOps', () => {
     expect(yDocToDeck(document).slides[2].children?.[0].html).toBe('<p>child</p>');
 
     // Another slide takes the block; the outcome names that slide.
-    const result = attempt([
+    const result = await attempt([
       {
         op: 'block_add',
         slide: 'aaaa0001',
@@ -367,31 +367,55 @@ describe('applyOps', () => {
     expect(result).toEqual({ touchedId: 'aaaa0001', touchedIds: ['aaaa0001'] });
     expect(yDocToDeck(document).slides[0].html).toContain('data-cm-block-id="b1"');
     // An unknown block is the 422 every impossible op is.
-    expect(attempt([{ op: 'block_delete', slide: 'aaaa0001', block_id: 'nope' }])).toMatchObject({
+    expect(
+      await attempt([{ op: 'block_delete', slide: 'aaaa0001', block_id: 'nope' }])
+    ).toMatchObject({
       status: 422,
     });
   });
 
-  it('a stale or disconnected holder does not block', () => {
+  it('a stale or disconnected holder does not block', async () => {
     const deps = makeDeps();
     const adapter = createDeckAdapter(deps);
     const document = liveDoc(DECK, [42]);
     acquireLock(document, 'aaaa0001', holder(42), { now: deps.now() });
     adapter.attach(document);
     deps.tick(61_000);
-    adapter.applyOps(
+    await adapter.applyOps(
       context(document),
       adapter.parseOps([{ op: 'update', id: 'aaaa0001', html: 'x' }])
     );
     expect(yDocToDeck(document).slides[0].html).toBe('x');
   });
 
-  it('bad ops are 400, impossible ops are 422', () => {
+  it("frame URLs made for display are stored as the deck's own references", async () => {
+    const id = '44444444-4444-4444-8444-444444444444';
+    const adapter = createDeckAdapter(makeDeps({ findSlide: async () => ({ ...SLIDE, id }) }));
+    const document = liveDoc();
+    await adapter.applyOps(
+      context(document),
+      adapter.parseOps([
+        {
+          op: 'update',
+          id: 'aaaa0001',
+          html:
+            `<iframe data-src="/${id}/frame/slides/deck/games/x/index.html?cm-rev=1" ` +
+            'data-cm-orig-data-src="games/x/index.html"></iframe>',
+          attrs: { 'data-background-iframe': `/${id}/frame/games/bg/index.html` },
+        },
+      ])
+    );
+    const slide = yDocToDeck(document).slides[0];
+    expect(slide.html).toBe('<iframe data-src="games/x/index.html"></iframe>');
+    expect(slide.attrs).toEqual({ 'data-background-iframe': '../../games/bg/index.html' });
+  });
+
+  it('bad ops are 400, impossible ops are 422', async () => {
     const adapter = createDeckAdapter(makeDeps());
     expect(() => adapter.parseOps([{ op: 'nope' }])).toThrow(CollabHttpError);
-    expect(() =>
+    await expect(
       adapter.applyOps(liveCtx(), adapter.parseOps([{ op: 'update', id: 'missing', html: 'x' }]))
-    ).toThrow(expect.objectContaining({ status: 422 }));
+    ).rejects.toMatchObject({ status: 422 });
   });
 });
 
@@ -500,14 +524,14 @@ describe('lock bookkeeping', () => {
     }
   });
 
-  it('agent ops treat a gone holder past the grace as free, and clear the lock', () => {
+  it('agent ops treat a gone holder past the grace as free, and clear the lock', async () => {
     const { deps, adapter } = longRunning();
     const document = liveDoc(DECK, [6]);
     adapter.attach(document);
     // Holder 5 joined after load and left; its lock was marked 31 s ago.
     acquireLock(document, 'aaaa0001', holder(5), { now: deps.now() });
     markDisconnected(document, [5], deps.now() - 31_000);
-    adapter.applyOps(
+    await adapter.applyOps(
       context(document),
       adapter.parseOps([{ op: 'update', id: 'aaaa0001', html: 'x' }])
     );
@@ -516,7 +540,7 @@ describe('lock bookkeeping', () => {
     document.destroy();
   });
 
-  it('after a server restart, a holder not yet reconnected keeps the slide for the grace', () => {
+  it('after a server restart, a holder not yet reconnected keeps the slide for the grace', async () => {
     vi.useFakeTimers();
     try {
       // A fresh process (a deploy): the stored lock is old, nobody is connected yet.
@@ -527,12 +551,12 @@ describe('lock bookkeeping', () => {
       adapter.attach(document);
       expect(getLock(document, 'aaaa0001')).not.toBeNull();
       // Agents may not write over it meanwhile.
-      expect(() =>
+      await expect(
         adapter.applyOps(
           context(document),
           adapter.parseOps([{ op: 'update', id: 'aaaa0001', html: 'x' }])
         )
-      ).toThrow(expect.objectContaining({ status: 409 }));
+      ).rejects.toMatchObject({ status: 409 });
       // The holder reconnects at 5 s: theirs, for good.
       deps.tick(5_000);
       vi.advanceTimersByTime(5_000);
@@ -724,10 +748,10 @@ describe('guarded ops', () => {
     );
   });
 
-  it('applyOps returns the minted ids in op order and the last slide touched', () => {
+  it('applyOps returns the minted ids in op order and the last slide touched', async () => {
     const adapter = createDeckAdapter(makeDeps());
     const document = liveDoc();
-    const result = adapter.applyOps(
+    const result = await adapter.applyOps(
       context(document),
       adapter.parseOps([
         { op: 'update', id: 'aaaa0001', html: '<h1>x</h1>' },

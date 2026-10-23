@@ -18,9 +18,11 @@ import {
   restoreRenamed,
   restoreRenamedHtml,
   sanitizeClient,
+  sanitizeClientInPlace,
   sanitizeClientToString,
   sanitizeNotesHtml,
   SESSION_MARKER_RE,
+  srcsetUrls,
 } from '../safeMarkup/index.ts';
 import {
   sanitizeDeckDocumentServer,
@@ -44,6 +46,13 @@ function both(html: string): string {
   };
   expect(reparse(s)).toBe(reparse(c));
   return s;
+}
+
+/** `html` parsed and serialized by the browser's parser (jsdom). */
+function serialized(html: string): string {
+  const t = doc.createElement('template');
+  t.innerHTML = html;
+  return t.innerHTML;
 }
 
 /** Nothing that runs or navigates to script survives, read as a browser reads it. */
@@ -112,12 +121,27 @@ describe('sanitizer: hostile markup (both engines agree, output is inert)', () =
     ['svg p style breakout', '<svg></p><style><a title="</style><img src onerror=alert(1)>">'],
     ['select style', '<select><style></select><img src=x onerror=alert(1)></style>'],
     ['select template', '<select><template><img src=x onerror=alert(1)></template></select>'],
+    ['select with an image', '<select><img src=x onerror=alert(1)></select>'],
+    [
+      'select with a button and options',
+      '<select><button><img src=x onerror=alert(1)></button><option>a<b>b</b></option></select>',
+    ],
     [
       'data-notes with markup',
       '<section data-notes="<img src=x onerror=alert(1)>"><p>x</p></section>',
     ],
     ['data-preview-link breakout', `<a data-preview-link='x"><img src=x onerror=1>'>x</a>`],
     ['srcset with javascript:', '<img srcset="a.png 1x, javascript:alert(1) 2x">'],
+    [
+      'srcset with a javascript: candidate after a data: one',
+      '<img srcset="data:image/png;base64,AAAA 1x,javascript:alert(1) 2x">',
+    ],
+    ['svg data url in a frame', '<iframe src="data:image/svg+xml;base64,PHN2Zz4="></iframe>'],
+    ['svg data url in a link', '<a href="data:image/svg+xml;base64,PHN2Zz4=">x</a>'],
+    [
+      'svg data url as a video poster',
+      '<video poster="data:image/svg+xml;base64,PHN2Zz4="></video>',
+    ],
     ['executable script', '<script>alert(1)</script>'],
     ['module script', '<script type="module">alert(1)</script>'],
     ['importmap script', '<script type="importmap">{"imports":{}}</script>'],
@@ -215,6 +239,27 @@ describe('sanitizer: deck markup that stays', () => {
     ['table', '<table><tbody><tr><td colspan="2">x</td></tr></tbody></table>'],
     ['speaker notes aside', '<aside class="notes"><p>say this</p></aside>'],
     ['srcset', '<img srcset="a.png 1x, b.png 2x" src="a.png">'],
+    ['svg data image', '<img src="data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=">'],
+    [
+      'percent-encoded svg data image, lazy',
+      '<img data-src="data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%3E%3C/svg%3E">',
+    ],
+    [
+      'svg data background',
+      '<section data-background-image="data:image/svg+xml;base64,PHN2Zz48L3N2Zz4="></section>',
+    ],
+    [
+      'srcset with data: candidates',
+      '<img srcset="data:image/png;base64,AAAA 1x, data:image/svg+xml;base64,PHN2Zz4= 2x, b.png 3x">',
+    ],
+    [
+      'picture source srcset with a data: candidate',
+      '<picture><source srcset="data:image/webp;base64,AAAA" type="image/webp"><img src="a.png"></picture>',
+    ],
+    [
+      'select with groups and options',
+      '<select name="s"><optgroup label="g"><option value="1">One</option></optgroup><option>Two</option></select>',
+    ],
   ];
 
   for (const [label, html] of kept) {
@@ -238,7 +283,8 @@ describe('sanitizer: deck markup that stays', () => {
       box: { left: 0, top: 0, width: 100, height: 100 },
       source: '<p>hi</p>',
     });
-    expect(server(block)).toBe(block);
+    // Kept as is: the same tree, as the parser serializes it.
+    expect(server(block)).toBe(serialized(block));
     expect(both(block)).toContain('srcdoc=');
   });
 
@@ -263,9 +309,45 @@ describe('sanitizer: engines', () => {
     expect(sanitizeServerResult(first.html).changes).toBe(0);
   });
 
-  it('clean markup comes back byte for byte', () => {
+  it('returns the serialized tree, never the input as given', () => {
     const html = '<h2>Title</h2>\n<p class="x">a &amp; b</p>';
     expect(server(html)).toBe(html);
+    // Same tree, written the way parse5 writes it.
+    expect(server("<p class='x' hidden>a & b</p>")).toBe('<p class="x" hidden="">a &amp; b</p>');
+    expect(sanitizeServerResult("<p class='x'>a</p>").changes).toBe(0);
+  });
+
+  it('what a select holds that parse5 does not build never reaches the output', () => {
+    // parse5 (like older browsers) ignores tags it finds in a select; a newer
+    // select parser builds them. The output is made from parse5's tree.
+    const out = server('<select><img src=x onerror=alert(1)><option>a</option></select>');
+    expect(out).toBe('<select><option>a</option></select>');
+    expect(out).not.toContain('onerror');
+    const doc = sanitizeDeckDocumentServer(
+      '<!doctype html><html><body><div class="reveal"><div class="slides"><section><select><img src=x onerror=alert(1)></select></section></div></div></body></html>'
+    );
+    expect(doc).not.toContain('onerror');
+    expect(doc).toContain('<section><select></select></section>');
+  });
+
+  it('a select built with more than options keeps only options and groups (client engine)', () => {
+    // A parser that builds other elements in a select: the walk still drops them.
+    const host = doc.createElement('div');
+    const select = host.appendChild(doc.createElement('select'));
+    const img = select.appendChild(doc.createElement('img'));
+    img.setAttribute('src', 'x');
+    img.setAttribute('onerror', 'alert(1)');
+    const button = select.appendChild(doc.createElement('button'));
+    button.textContent = 'b';
+    const option = select.appendChild(doc.createElement('option'));
+    option.append('a', doc.createElement('span'));
+    const group = select.appendChild(doc.createElement('optgroup'));
+    group.appendChild(doc.createElement('option')).textContent = 'c';
+    select.appendChild(doc.createElementNS('http://www.w3.org/2000/svg', 'svg'));
+    sanitizeClientInPlace(host, { mode: 'remove' });
+    expect(host.innerHTML).toBe(
+      '<select><option>a</option><optgroup><option>c</option></optgroup></select>'
+    );
   });
 
   it('client engine returns a fragment owned by the template, with nothing loaded', () => {
@@ -309,7 +391,15 @@ describe('isSafeUrl', () => {
     ['', 'img', 'src', true],
     ['x.png', 'img', 'src', true],
     ['data:image/png;base64,AA', 'img', 'src', true],
-    ['data:image/svg+xml;base64,AA', 'img', 'src', false],
+    ['data:image/svg+xml;base64,AA', 'img', 'src', true],
+    ['data:image/svg+xml;base64,AA', 'img', 'data-src', true],
+    ['data:image/svg+xml;base64,AA', 'section', 'data-background-image', true],
+    ['data:image/svg+xml;base64,AA', 'iframe', 'src', false],
+    ['data:image/svg+xml;base64,AA', 'a', 'href', false],
+    ['data:image/svg+xml;base64,AA', 'video', 'poster', false],
+    ['data:image/svg+xml;base64,AA', 'iframe', 'data-src', false],
+    ['data:image/svg+xml;base64,AA', 'section', 'data-background-iframe', false],
+    ['data:image/svg+xml;utf8,<svg></svg>', 'img', 'src', false],
     ['data:image/png;base64,AA', 'a', 'href', false],
     ['data:image/png;base64,AA', 'iframe', 'src', false],
     ['blob:https://a.example/1', 'img', 'src', false],
@@ -319,6 +409,20 @@ describe('isSafeUrl', () => {
     ['x"y', 'a', 'href', false],
   ])('%s on %s[%s] → %s', (value, tag, attr, expected) => {
     expect(isSafeUrl(value, tag, attr)).toBe(expected);
+  });
+});
+
+describe('srcsetUrls', () => {
+  it.each([
+    ['a.png 1x, b.png 2x', ['a.png', 'b.png']],
+    ['data:image/png;base64,AAAA 1x, b.png 2x', ['data:image/png;base64,AAAA', 'b.png']],
+    ['a.png,b.png', ['a.png,b.png']],
+    ['a.png, , b.png', ['a.png', 'b.png']],
+    ['a.png,, b.png 2x', ['a.png', 'b.png']],
+    ['a.png (100w, 2x), javascript:x 2x', ['a.png', 'javascript:x']],
+    ['', []],
+  ])('%s', (value, expected) => {
+    expect(srcsetUrls(value)).toEqual(expected);
   });
 });
 

@@ -3,6 +3,7 @@ import { Button, ConfigProvider, Modal, theme } from 'antd';
 
 import { useIsDarkMode } from '~/hooks/useIsDarkMode';
 import { deleteHtmlBlockFile } from '~/utils/htmlBlockClient';
+import type { PendingFileDeletes } from './pendingFileDeletes';
 import { htmlBlockFileNamedIn, orphanedHtmlBlockFiles } from './slideBlocks';
 
 /**
@@ -10,6 +11,11 @@ import { htmlBlockFileNamedIn, orphanedHtmlBlockFiles } from './slideBlocks';
  * (`blocks/<name>.html`) in the repository. When no other block of the deck
  * names that file any more, the author is asked whether to delete it too.
  * The block itself is gone either way.
+ *
+ * "Delete file" deletes it at once in a live deck (the live deck is the
+ * source of truth). The git editor hands it to `pending` instead: it is
+ * deleted once the save that drops the block has landed, and not at all if
+ * the edit is discarded.
  */
 
 /** The editor's slides: the live deck every reference is counted in. */
@@ -17,7 +23,10 @@ function liveDeck(): Element | null {
   return typeof document === 'undefined' ? null : document.querySelector('.reveal .slides');
 }
 
-export function useHtmlBlockFilePrompt(slideId: string | null) {
+export function useHtmlBlockFilePrompt(
+  slideId: string | null,
+  pending: PendingFileDeletes | null = null
+) {
   // One question per removal, asked in turn.
   const [queue, setQueue] = useState<string[][]>([]);
   const [busy, setBusy] = useState(false);
@@ -45,16 +54,16 @@ export function useHtmlBlockFilePrompt(slideId: string | null) {
     setError(null);
     try {
       // Checked again now: an undo may have brought a block back meanwhile.
-      for (const src of files) {
-        if (!htmlBlockFileNamedIn(src, liveDeck())) await deleteHtmlBlockFile(slideId, { src });
-      }
+      const orphans = files.filter(src => !htmlBlockFileNamedIn(src, liveDeck()));
+      if (pending) pending.add(orphans);
+      else for (const src of orphans) await deleteHtmlBlockFile(slideId, { src });
       next();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'The file could not be deleted.');
     } finally {
       setBusy(false);
     }
-  }, [files, slideId, next]);
+  }, [files, slideId, next, pending]);
 
   const prompt = (
     <HtmlBlockFilePromptModal

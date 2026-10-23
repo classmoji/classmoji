@@ -256,6 +256,14 @@ describe('runHtmlBlockConvert', () => {
       },
       decks: [
         { slideId: 'd1', classroomId: 'class-1', path: 'slides/d1', blocks: 2, status: 'planned' },
+        // An index.html-only deck is listed, not skipped in silence.
+        {
+          slideId: 'd3',
+          classroomId: 'class-1',
+          path: 'slides/d3',
+          blocks: 0,
+          status: 'no-deck-json',
+        },
       ],
     });
     expect(content.uploadBatch).not.toHaveBeenCalled();
@@ -336,6 +344,7 @@ describe('runHtmlBlockConvert', () => {
     expect(result.decks.map(d => [d.slideId, d.status])).toEqual([
       ['d1', 'failed'],
       ['d2', 'converted'],
+      ['d3', 'no-deck-json'],
     ]);
     expect(result.counts).toMatchObject({ failed: 1, converted: 1 });
 

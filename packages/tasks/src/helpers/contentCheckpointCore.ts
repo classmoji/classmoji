@@ -715,7 +715,7 @@ async function checkpointDocs(
           });
           continue;
         }
-        if (meta.schema_version > deckRenderer.schemaVersion) {
+        if (meta.schema_version !== deckRenderer.schemaVersion) {
           refuse(
             base,
             'schema-mismatch',

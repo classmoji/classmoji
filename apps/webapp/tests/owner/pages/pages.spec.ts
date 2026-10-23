@@ -172,14 +172,14 @@ test.describe('Page Actions', () => {
   test.beforeEach(async ({ authenticatedPage: page }) => {
     const classroom = await getClassroomBySlug(TEST_CLASSROOM);
     await getTestPrisma().page.deleteMany({
-      where: { classroom_id: classroom.id, content_path: { startsWith: `pages/${ACTIONS_TAG}/` } },
+      where: { classroom_id: classroom.id, content_path: { startsWith: `pages/${ACTIONS_TAG}-` } },
     });
   });
 
   test.afterEach(async () => {
     const classroom = await getClassroomBySlug(TEST_CLASSROOM);
     await getTestPrisma().page.deleteMany({
-      where: { classroom_id: classroom.id, content_path: { startsWith: `pages/${ACTIONS_TAG}/` } },
+      where: { classroom_id: classroom.id, content_path: { startsWith: `pages/${ACTIONS_TAG}-` } },
     });
   });
 
@@ -198,7 +198,7 @@ test.describe('Page Actions', () => {
         classroom_id: classroom.id,
         title,
         slug: 'e2e-actions-seeded-row',
-        content_path: `pages/${ACTIONS_TAG}/${pageId}`,
+        content_path: `pages/${ACTIONS_TAG}-${pageId}`,
         created_by: user.id,
         is_draft: false,
         is_public: true,
@@ -220,14 +220,14 @@ test.describe('Pages List reflects DB state', () => {
   test.beforeEach(async ({ authenticatedPage: page }) => {
     const classroom = await getClassroomBySlug(TEST_CLASSROOM);
     await getTestPrisma().page.deleteMany({
-      where: { classroom_id: classroom.id, content_path: { startsWith: `pages/${LIST_TAG}/` } },
+      where: { classroom_id: classroom.id, content_path: { startsWith: `pages/${LIST_TAG}-` } },
     });
   });
 
   test.afterEach(async () => {
     const classroom = await getClassroomBySlug(TEST_CLASSROOM);
     await getTestPrisma().page.deleteMany({
-      where: { classroom_id: classroom.id, content_path: { startsWith: `pages/${LIST_TAG}/` } },
+      where: { classroom_id: classroom.id, content_path: { startsWith: `pages/${LIST_TAG}-` } },
     });
   });
 
@@ -246,7 +246,7 @@ test.describe('Pages List reflects DB state', () => {
         classroom_id: classroom.id,
         title,
         slug: 'e2e-list-visible-published',
-        content_path: `pages/${LIST_TAG}/${pageId}`,
+        content_path: `pages/${LIST_TAG}-${pageId}`,
         created_by: user.id,
         is_draft: false,
         is_public: true,

@@ -15,6 +15,10 @@
  *   frame sources under an unsafe sandbox take the stored inert name
  *   (`data-cm-inert-<name>`, deckBlocks.ts) instead, as the server's
  *   normalize stores them, so they are not written back live.
+ *
+ * Inside `select`, `option` and `optgroup` only `option`, `optgroup` and text
+ * stay: parsers disagree about what else a select may hold, so nothing else
+ * is kept there whichever way it was parsed.
  */
 
 import {
@@ -70,7 +74,12 @@ export interface WalkOptions {
 interface Ctx {
   inHtmlBlock: boolean;
   inSvgBlock: boolean;
+  /** Inside `select`, `option` or `optgroup`. */
+  inSelect: boolean;
 }
+
+/** What a select (and its options and groups) may hold besides text. */
+const SELECT_CONTENT: ReadonlySet<string> = new Set(['option', 'optgroup']);
 
 /**
  * Hold every node under `root` (not `root` itself) to the lists. Returns the
@@ -158,6 +167,7 @@ export function walkMarkup<N, E extends N>(
   const visitElement = (el: E, ctx: Ctx): void => {
     const ns = adapter.namespace(el);
     const name = adapter.localName(el).toLowerCase();
+    if (ctx.inSelect && (ns !== HTML_NS || !SELECT_CONTENT.has(name))) return drop(el);
     const attrs = adapter.attrs(el);
     if (ns === SVG_NS) return visitSvg(el, name, attrs, ctx);
     if (ns !== HTML_NS) return drop(el); // MathML and anything else
@@ -166,6 +176,7 @@ export function walkMarkup<N, E extends N>(
     const inner: Ctx = {
       inHtmlBlock: ctx.inHtmlBlock || typeOf === 'html',
       inSvgBlock: ctx.inSvgBlock || typeOf === 'svg',
+      inSelect: ctx.inSelect || name === 'select' || SELECT_CONTENT.has(name),
     };
     const attrOf = (attr: string) => attrs.find(([n]) => n === attr)?.[1] ?? null;
     const verdict = (tag: string) => (attr: string, value: string) =>
@@ -223,6 +234,6 @@ export function walkMarkup<N, E extends N>(
     }
   };
 
-  visitChildren(root, { inHtmlBlock: false, inSvgBlock: false });
+  visitChildren(root, { inHtmlBlock: false, inSvgBlock: false, inSelect: false });
   return changes;
 }

@@ -416,13 +416,27 @@ export const URL_ATTRS: ReadonlySet<string> = new Set([
   'data-cm-src',
 ]);
 
-/** `data:` image types an image source may carry (never `svg+xml`). */
+/** `data:` image types an image source may carry. */
 const DATA_IMAGE_RE = /^data:image\/(?:png|jpeg|gif|webp|avif)[;,]/i;
 
-/** Where a `data:` image is accepted: `[element, attribute]`, `*` for any element. */
+/**
+ * `data:image/svg+xml`, accepted only where it is drawn as an image (an
+ * `<img>` or a slide background), where an svg runs no script.
+ */
+const DATA_SVG_RE = /^data:image\/svg\+xml[;,]/i;
+
+/** Where a raster `data:` image is accepted. */
 function acceptsDataImage(tag: string, attr: string): boolean {
   if (attr === 'data-background-image') return true;
+  if (attr === 'srcset') return tag === 'img' || tag === 'source';
   return (tag === 'img' || tag === 'input') && (attr === 'src' || attr === 'data-src');
+}
+
+/** Where a `data:image/svg+xml` image is accepted (always drawn as an image there). */
+function acceptsDataSvg(tag: string, attr: string): boolean {
+  if (attr === 'data-background-image') return true;
+  if (attr === 'srcset') return tag === 'img' || tag === 'source';
+  return tag === 'img' && (attr === 'src' || attr === 'data-src');
 }
 
 /** A classroom media reference (`media://{uuid}`), resolved by the read surfaces. */
@@ -471,8 +485,8 @@ function parseSafeUrl(raw: string): ParsedUrl | null {
 /**
  * Whether a URL value may stay on attribute `attr` of element `tag`: relative,
  * `http:`, `https:`, `mailto:`, a `media://{uuid}` reference, `about:blank`,
- * or (image sources only) a `data:image/png|jpeg|gif|webp|avif` URL. Empty is
- * fine (it loads nothing new).
+ * or (image sources only) a `data:image/png|jpeg|gif|webp|avif|svg+xml` URL.
+ * Empty is fine (it loads nothing new).
  */
 export function isSafeUrl(value: string, tag: string, attr: string): boolean {
   if (value.replace(URL_TRIM_RE, '') === '') return true;
@@ -481,18 +495,51 @@ export function isSafeUrl(value: string, tag: string, attr: string): boolean {
   if (url.relative || URL_SCHEMES.has(url.protocol)) return true;
   if (url.protocol === 'media:') return MEDIA_REF_RE.test(url.value);
   if (url.protocol === 'about:') return url.value.toLowerCase() === 'about:blank';
-  if (url.protocol === 'data:') return acceptsDataImage(tag, attr) && DATA_IMAGE_RE.test(url.value);
+  if (url.protocol === 'data:') {
+    if (DATA_SVG_RE.test(url.value)) return acceptsDataSvg(tag, attr);
+    return acceptsDataImage(tag, attr) && DATA_IMAGE_RE.test(url.value);
+  }
   return false;
+}
+
+const SRCSET_SPACE_RE = /[\t\n\f\r ]/;
+
+/**
+ * The candidate URLs of a `srcset`, split as the HTML spec's srcset parser
+ * splits them: a URL runs to the next whitespace (commas inside it, as in a
+ * `data:` URL, are part of it; trailing commas end it), then descriptors run
+ * to the next comma outside parentheses.
+ */
+export function srcsetUrls(value: string): string[] {
+  const urls: string[] = [];
+  let i = 0;
+  while (i < value.length) {
+    while (i < value.length && (SRCSET_SPACE_RE.test(value[i]) || value[i] === ',')) i++;
+    if (i >= value.length) break;
+    const start = i;
+    while (i < value.length && !SRCSET_SPACE_RE.test(value[i])) i++;
+    const url = value.slice(start, i);
+    if (url.endsWith(',')) {
+      urls.push(url.replace(/,+$/, ''));
+      continue;
+    }
+    urls.push(url);
+    let inParens = false;
+    while (i < value.length) {
+      const c = value[i++];
+      if (c === '(') inParens = true;
+      else if (c === ')') inParens = false;
+      else if (c === ',' && !inParens) break;
+    }
+  }
+  return urls;
 }
 
 /** A `srcset` whose every candidate URL passes {@link isSafeUrl}. */
 export function isSafeSrcset(value: string, tag: string): boolean {
   // eslint-disable-next-line no-control-regex -- see URL_FORBIDDEN_RE
   if (/[\u0000-\u001f\u007f"<>]/.test(value.replace(/[\t\n\f\r]/g, ' '))) return false;
-  return value
-    .split(',')
-    .map(candidate => candidate.trim().split(/\s+/)[0] ?? '')
-    .every(url => url === '' || isSafeUrl(url, tag, 'srcset'));
+  return srcsetUrls(value).every(url => url === '' || isSafeUrl(url, tag, 'srcset'));
 }
 
 /** Prefixes of element ids the app uses for its own elements; slide ids that start with one get {@link RESERVED_ID_REPLACEMENT_PREFIX}. */

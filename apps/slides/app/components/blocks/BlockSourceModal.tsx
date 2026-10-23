@@ -7,7 +7,6 @@ import {
   htmlBlockFrameMarkup,
   htmlBlockSource,
   htmlBlockSrcdoc,
-  isSafeHtmlBlockSandbox,
   utf8ByteLength,
 } from '@classmoji/services/slides/runtime-attrs';
 import { resolveDeckRelative } from '@classmoji/services/slides/frame-refs';
@@ -23,9 +22,11 @@ import {
   htmlBlockSourceOf,
   isHtmlBlockFileShared,
   setHtmlBlockFile,
+  setHtmlBlockInline,
   slideHtmlLengthWith,
   slideHtmlOverCap,
   storedSrcdoc,
+  svgBlockSource,
   svgFromSource,
   svgOfBlock,
   type HtmlBlockSource,
@@ -37,10 +38,16 @@ import {
  * html: the block's code is a file in the deck's repository
  * (`blocks/<name>.html`). Opening reads it; Apply writes it (a compare-and-swap
  * on the version opened) and points the block at the version written — one
- * change to the slide, so undo and live editing see it. The live preview is
- * the content service's preview frame, sent the draft as it is typed. A block
- * that shows another repo file is not edited here. Without the content service
- * (local development) a block keeps its code inline in `srcdoc`, as before.
+ * change to the slide, so undo and live editing see it. A block copied from
+ * another deck opens that deck's file and its first Apply writes a file of
+ * this deck. The live preview is the content service's preview frame, sent the
+ * draft as it is typed. A block that shows another repo file is not edited
+ * here. Without the content service (local development) a block keeps its code
+ * inline in `srcdoc`, as before.
+ *
+ * A new html block is not on its slide until its first Apply (`insertInto`):
+ * closing without applying leaves nothing behind, so no block is ever stored
+ * without its file.
  *
  * svg: the source is held to the svg-block lists on Apply and replaces the
  * block's `<svg>`.
@@ -58,6 +65,11 @@ export type SourceBlockKind = 'html' | 'svg';
 export interface BlockSourceOptions {
   /** Start from the starter code and save it as a new file (the block shows a repo file today). */
   fresh?: boolean;
+  /**
+   * A new block, not on a slide yet: Apply appends it to this slide; closing
+   * without applying inserts nothing.
+   */
+  insertInto?: Element | null;
 }
 
 export function sourceBlockKind(block: HTMLElement | null): SourceBlockKind | null {
@@ -71,8 +83,9 @@ function inlineSource(block: HTMLElement, kind: SourceBlockKind): string {
     const frame = frameOfBlock(block);
     return frame ? htmlBlockSource(storedSrcdoc(frame)) : '';
   }
+  // The drawing as authored, not as shown.
   const svg = svgOfBlock(block);
-  return svg ? new XMLSerializer().serializeToString(svg) : '';
+  return svg ? svgBlockSource(svg) : '';
 }
 
 function blockBox(block: HTMLElement): { width: number; height: number } {
@@ -156,6 +169,7 @@ export default function BlockSourceModal({
             block={block}
             kind={kind}
             fresh={Boolean(options.fresh)}
+            insertInto={options.insertInto ?? null}
             slideId={slideId}
             frames={frames}
             contentOrigin={contentOrigin ?? frames?.contentOrigin ?? null}
@@ -199,24 +213,42 @@ export default function BlockSourceModal({
 
 /** Where Apply writes an html block's code. */
 type HtmlTarget =
-  /** A file: the block's own (`src`, opened at `rev`), or a new one. */
-  | { kind: 'file'; src: string | null; rev: string | null }
+  /**
+   * A file: the block's own (`src`, opened at `rev`), or a new one (`src`
+   * null). `read`: the file the code opens from (the block's own, or the one
+   * of the deck it was copied from), null to start from what the block holds.
+   */
+  | {
+      kind: 'file';
+      src: string | null;
+      rev: string | null;
+      read: { src: string; rev: string | null } | null;
+    }
   /** Inline in `srcdoc` (no content service). */
   | { kind: 'inline' }
   /** Another repo file: not edited here. */
   | { kind: 'repo'; src: string };
 
 function htmlTargetOf(source: HtmlBlockSource, fresh: boolean, filesOn: boolean): HtmlTarget {
-  if (fresh) return filesOn ? { kind: 'file', src: null, rev: null } : { kind: 'inline' };
-  if (source.kind === 'file') return { kind: 'file', src: source.src, rev: source.rev };
+  const newFile = { kind: 'file', src: null, rev: null, read: null } as const;
+  if (fresh) return filesOn ? newFile : { kind: 'inline' };
+  if (source.kind === 'file') {
+    const read = { src: source.src, rev: source.rev };
+    return { kind: 'file', src: source.src, rev: source.rev, read };
+  }
+  if (source.kind === 'copied') {
+    // Another deck's file: read from there, written to a new file of this deck.
+    return { ...newFile, read: { src: source.src, rev: source.rev } };
+  }
   if (source.kind === 'repo') return { kind: 'repo', src: source.src };
-  return filesOn ? { kind: 'file', src: null, rev: null } : { kind: 'inline' };
+  return filesOn ? newFile : { kind: 'inline' };
 }
 
 function SourceEditorBody({
   block,
   kind,
   fresh,
+  insertInto,
   slideId,
   frames,
   contentOrigin,
@@ -229,6 +261,8 @@ function SourceEditorBody({
   block: HTMLElement;
   kind: SourceBlockKind;
   fresh: boolean;
+  /** A new block's slide (it is appended there on Apply). */
+  insertInto: Element | null;
   slideId: string | null;
   frames: EditorFrames | null;
   contentOrigin: string | null;
@@ -246,7 +280,9 @@ function SourceEditorBody({
         : null,
     [block, kind, fresh, frames, slideId]
   );
-  const readsFile = target?.kind === 'file' && target.src !== null;
+  const readsFile = target?.kind === 'file' && target.read !== null;
+  // Where the block is (or, new, will be): its slide decides lock and backdrop.
+  const host: Element = block.isConnected || !insertInto ? block : insertInto;
 
   // The code as opened: inline right away, a file once it is read. `rev` is
   // the version read — what Apply's compare-and-swap names.
@@ -269,14 +305,14 @@ function SourceEditorBody({
   const [previewSource, setPreviewSource] = useState(initial);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const locked = block.closest('section')?.classList.contains('cm-locked') ?? false;
+  const locked = host.closest('section')?.classList.contains('cm-locked') ?? false;
 
   useEffect(() => {
-    if (!readsFile || !slideId || target?.kind !== 'file' || !target.src) return;
+    if (!readsFile || !slideId || target?.kind !== 'file' || !target.read) return;
     let cancelled = false;
     setOpened(null);
     setLoadError(null);
-    readHtmlBlockFile(slideId, { src: target.src, rev: target.rev })
+    readHtmlBlockFile(slideId, { src: target.read.src, rev: target.read.rev })
       .then(file => {
         if (cancelled) return;
         setMissing(false);
@@ -318,11 +354,28 @@ function SourceEditorBody({
     return result.ok ? new XMLSerializer().serializeToString(result.svg) : null;
   }, [kind, previewSource]);
 
-  const backdrop = useMemo(() => slideBackdrop(block), [block]);
+  const backdrop = useMemo(() => slideBackdrop(host as HTMLElement), [host]);
   const contentColor = useMemo(() => {
-    const content = block.querySelector('.sl-block-content');
+    const content = block.isConnected ? block.querySelector('.sl-block-content') : null;
     return content ? getComputedStyle(content).color : '';
   }, [block]);
+
+  /**
+   * The block on its slide, for Apply to change: already there, or (new)
+   * appended to its slide now. False, with the reason shown, when there is
+   * nowhere to put it.
+   */
+  const placeBlock = useCallback((): boolean => {
+    if (block.isConnected) return true;
+    if (insertInto?.isConnected) {
+      insertInto.appendChild(block);
+      return true;
+    }
+    setError(
+      insertInto ? 'This slide is no longer in the deck' : 'This block is no longer on the slide'
+    );
+    return false;
+  }, [block, insertInto]);
 
   const previewDoc = useMemo(() => {
     if (kind === 'html') return htmlBlockSrcdoc(previewSource);
@@ -349,7 +402,7 @@ function SourceEditorBody({
       );
       return;
     }
-    const deck = block.closest('.slides');
+    const deck = host.closest('.slides');
     const own = target.src !== null && !missing;
     const fork = own && isHtmlBlockFileShared(block, target.src as string, deck);
     setSaving(true);
@@ -362,11 +415,10 @@ function SourceEditorBody({
         fork,
         blockId: block.getAttribute(BLOCK_ID_ATTR),
       });
-      if (!block.isConnected) {
-        setError('This block is no longer on the slide');
-        return;
-      }
+      // A new block gets its frame before it goes on the slide (one change).
+      const placed = block.isConnected;
       setHtmlBlockFile(block, ref, frames);
+      if (!placed && !placeBlock()) return;
       finish();
     } catch (err: unknown) {
       if (err instanceof HtmlBlockApiError && err.code === 'changed') {
@@ -378,11 +430,13 @@ function SourceEditorBody({
     } finally {
       setSaving(false);
     }
-  }, [target, slideId, source, block, missing, opened, frames, finish]);
+  }, [target, slideId, source, block, host, missing, opened, frames, finish, placeBlock]);
 
   const apply = useCallback(() => {
-    if (!block.isConnected) {
-      setError('This block is no longer on the slide');
+    if (!block.isConnected && !insertInto?.isConnected) {
+      setError(
+        insertInto ? 'This slide is no longer in the deck' : 'This block is no longer on the slide'
+      );
       return;
     }
     const content = block.querySelector(':scope > .sl-block-content');
@@ -395,25 +449,24 @@ function SourceEditorBody({
         void applyFile();
         return;
       }
-      const frame = frameOfBlock(block);
+      const removed = frameOfBlock(block)?.outerHTML ?? '';
+      const added = htmlBlockFrameMarkup(source);
       const tooLong = slideHtmlOverCap(
-        slideHtmlLengthWith(block, content.innerHTML, htmlBlockFrameMarkup(source))
+        block.isConnected
+          ? slideHtmlLengthWith(block, removed, added)
+          : (insertInto?.innerHTML.length ?? 0) +
+              block.outerHTML.length -
+              removed.length +
+              added.length
       );
       if (tooLong) {
         setError(tooLong);
         return;
       }
-      const loads =
-        frame !== null &&
-        frame.hasAttribute('srcdoc') &&
-        isSafeHtmlBlockSandbox(frame.getAttribute('sandbox')) &&
-        !Array.from(frame.attributes).some(a => a.name.startsWith('data-cm-inert-'));
-      if (frame && loads) {
-        frame.setAttribute('srcdoc', htmlBlockSrcdoc(source));
-      } else {
-        // A frame built outside the html-block rule is rebuilt to it.
-        content.innerHTML = htmlBlockFrameMarkup(source);
-      }
+      // The frame held to the html-block rule, its other attributes and the
+      // block's other content kept.
+      setHtmlBlockInline(block, source);
+      if (!placeBlock()) return;
     } else {
       const result = svgFromSource(source, document);
       if (!result.ok) {
@@ -432,7 +485,7 @@ function SourceEditorBody({
       else content.append(result.svg);
     }
     finish();
-  }, [block, kind, source, target, applyFile, finish]);
+  }, [block, kind, source, target, applyFile, finish, insertInto, placeBlock]);
 
   if (target?.kind === 'repo') {
     const resolved = frames ? resolveDeckRelative(target.src, frames.deckFolder) : null;
@@ -495,8 +548,8 @@ function SourceEditorBody({
           data-testid="block-source-error"
         >
           {error ??
-            (missing && target?.kind === 'file' && target.src
-              ? `Not found: ${target.src}. Apply saves this code as a new file.`
+            (missing && target?.kind === 'file' && target.read
+              ? `Not found: ${target.read.src}. Apply saves this code as a new file.`
               : null)}
         </div>
         <div className="flex gap-2">

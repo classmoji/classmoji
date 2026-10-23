@@ -33,13 +33,9 @@ export const DECK_LOCKS = 'locks';
 /**
  * Version of the deck doc shape. Sent as `schemaVersion` in the provider token
  * for deck rooms; the server rejects a mismatch with `schema-mismatch`. Bump on
- * any change to the shape above, or to what slide html may hold.
- *
- * 2: html blocks are files (`data-cm-src` + `data-cm-rev`, no `srcdoc`). The
- * Y.Doc shape is unchanged; an editor built for 1 would write code into the
- * slide, so it is refused.
+ * any change to the shape above.
  */
-export const DECK_SCHEMA_VERSION = 2;
+export const DECK_SCHEMA_VERSION = 1;
 
 /** Slide Y.Map field names. */
 export const F = {

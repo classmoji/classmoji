@@ -255,6 +255,98 @@ describe.skipIf(!RUN)('contentAssets (integration)', () => {
     expect((await classroomState()).content_assets_synced_commit).toBe(C3);
   });
 
+  it('an older run that commits after a newer one writes no rows', async () => {
+    // C1: the base, plus a file only C2 still has after C3 deletes it.
+    const old = { path: 'images/old.png', sha: 'old-1', type: 'blob', size: 5 };
+    repoAt(C1, [...BASE, old]);
+    await syncContentAssets(classroomId);
+
+    // C2 (run A's snapshot): logo.png removed, a.html changed.
+    const atC2 = [...BASE, old]
+      .filter(entry => entry.path !== 'images/logo.png')
+      .map(entry =>
+        entry.path === 'slides/intro/blocks/a.html' ? { ...entry, sha: 'a-2' } : entry
+      );
+    // C3 (run B's snapshot): old.png deleted, logo.png back exactly as at C1,
+    // a.html changed again.
+    const atC3 = BASE.map(entry =>
+      entry.path === 'slides/intro/blocks/a.html' ? { ...entry, sha: 'a-3' } : entry
+    );
+
+    // Run A stamps first and reads C2; it stalls until run B has finished.
+    let resultB: Awaited<ReturnType<typeof syncContentAssets>> | undefined;
+    getLatestCommitSHA.mockResolvedValueOnce(C2);
+    getTree.mockImplementationOnce(async () => {
+      await new Promise(resolve => setTimeout(resolve, 5));
+      getLatestCommitSHA.mockResolvedValueOnce(C3);
+      getTree.mockResolvedValueOnce(listing(atC3));
+      resultB = await syncContentAssets(classroomId);
+      return listing(atC2);
+    });
+
+    const resultA = await syncContentAssets(classroomId);
+    const after = await rows();
+
+    expect(resultB).toMatchObject({ mode: 'full', deleted: 1 });
+    expect(resultA).toMatchObject({ mode: 'full', upserted: 0, deleted: 0 });
+    // B deleted it; A's older tree still had it, and does not bring it back.
+    expect(after.has('images/old.png')).toBe(false);
+    // Unchanged since C1 and absent from A's tree: A does not delete it.
+    expect(after.get('images/logo.png')?.sha).toBe('logo-1');
+    // Changed by both: B's.
+    expect(after.get('slides/intro/blocks/a.html')?.sha).toBe('a-3');
+    expect([...after.keys()].sort()).toEqual(atC3.map(entry => entry.path).sort());
+    expect((await classroomState()).content_assets_synced_commit).toBe(C3);
+  });
+
+  it("a reader's fill adds missing folders without holding back a sync in flight", async () => {
+    repoAt(C1, BASE);
+    await syncContentAssets(classroomId);
+    const synced = (await classroomState()).content_assets_synced_at;
+    // A folder the map lost (or never had), and one it holds.
+    await prisma.contentAsset.delete({
+      where: { classroom_id_path: { classroom_id: classroomId, path: 'slides/intro/blocks' } },
+    });
+    const before = await rows();
+
+    // A sync run takes its stamp, then a reader fills the folder at C1 while
+    // that run's tree read is in flight; the run's snapshot moved the folder.
+    getLatestCommitSHA.mockResolvedValue(C2);
+    getTree.mockImplementationOnce(async () => {
+      const trees: Record<string, Entry[]> = {
+        root: [{ path: 'slides', sha: 'slides-1', type: 'tree' }],
+        'slides-1': [{ path: 'intro', sha: 'intro-1', type: 'tree' }],
+        'intro-1': [{ path: 'blocks', sha: 'blocks-1', type: 'tree' }],
+      };
+      getTree.mockImplementation(async (_o: string, _r: string, sha: string) =>
+        listing(trees[sha] ?? [])
+      );
+      const found = await recordFolderTreesAfterCommit({
+        classroomId,
+        commit: C1,
+        rootTreeSha: 'root',
+        folders: ['slides/intro/blocks'],
+        fill: true,
+      });
+      expect(found.get('slides/intro/blocks')).toBe('blocks-1');
+      const filled = await rows();
+      // Added with the sync's stamp; rows it already had are untouched.
+      expect(filled.get('slides/intro/blocks')?.synced_at.getTime()).toBe(synced?.getTime());
+      expect(filled.get('slides/intro')?.synced_at.getTime()).toBe(
+        before.get('slides/intro')?.synced_at.getTime()
+      );
+      return listing(
+        BASE.map(entry =>
+          entry.path === 'slides/intro/blocks' ? { ...entry, sha: 'blocks-2' } : entry
+        )
+      );
+    });
+
+    await syncContentAssets(classroomId);
+
+    expect((await rows()).get('slides/intro/blocks')?.sha).toBe('blocks-2');
+  });
+
   it('deletes nothing when the listing came back truncated', async () => {
     repoAt(C1, BASE);
     await syncContentAssets(classroomId);

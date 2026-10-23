@@ -1,13 +1,14 @@
 /**
  * `/:slideId/frame/*` — the editor's frame source (`frameRoute.server`).
  *
- * The slide lookup and the view gate are injected (the real ones need
+ * The slide lookup and the edit gate are injected (the real ones need
  * Postgres; `assertSlideAccess` has its own tests). The fake gate keeps the
- * real rule's shape — public decks open to anyone, private ones to members,
- * drafts to staff — so what is pinned here is the ROUTE's wiring: the gate is
- * asked about the slide the URL names, before anything else; the repo, the
- * classroom and the deck folder come from that slide's row, never from the
- * URL; only a deck is served; and what cannot be signed is a 404.
+ * real edit rule's shape — owners and teachers edit any deck, an assistant
+ * their own or a team-editable one, nobody else (students, anonymous callers,
+ * public decks included) — so what is pinned here is the ROUTE's wiring: the
+ * gate is asked about the slide the URL names, before anything else; the
+ * repo, the classroom and the deck folder come from that slide's row, never
+ * from the URL; only a deck is served; and what cannot be signed is a 404.
  */
 
 import { test, expect } from '@playwright/test';
@@ -24,17 +25,37 @@ const org = (login: string) => ({
   gitlab_connection_id: null,
 });
 
+/** Slide ids are uuids (the editor frame URL's first segment must be one). */
+const IDS: Record<string, string> = {
+  'deck-x': 'a0000000-0000-4000-8000-000000000001',
+  'public-x': 'a0000000-0000-4000-8000-000000000002',
+  'draft-x': 'a0000000-0000-4000-8000-000000000003',
+  'mine-x': 'a0000000-0000-4000-8000-000000000004',
+  'file-x': 'a0000000-0000-4000-8000-000000000005',
+  'deck-y': 'b0000000-0000-4000-8000-000000000001',
+};
+const idOf = (name: string): string => IDS[name] ?? name;
+
 function slideRow(
-  id: string,
+  name: string,
   classroomId: string,
-  opts: { public?: boolean; draft?: boolean; kind?: string; folder?: string } = {}
+  opts: {
+    public?: boolean;
+    draft?: boolean;
+    kind?: string;
+    folder?: string;
+    createdBy?: string;
+    teamEdit?: boolean;
+  } = {}
 ) {
   return {
-    id,
+    id: idOf(name),
     kind: opts.kind ?? 'DECK',
-    content_path: opts.folder ?? `slides/${id}`,
+    content_path: opts.folder ?? `slides/${name}`,
     is_public: opts.public ?? false,
     is_draft: opts.draft ?? false,
+    created_by: opts.createdBy ?? null,
+    allow_team_edit: opts.teamEdit ?? false,
     classroom_id: classroomId,
     classroom: {
       id: classroomId,
@@ -51,6 +72,7 @@ const SLIDES = new Map(
     slideRow('deck-x', CLASSROOM_X),
     slideRow('public-x', CLASSROOM_X, { public: true }),
     slideRow('draft-x', CLASSROOM_X, { draft: true }),
+    slideRow('mine-x', CLASSROOM_X, { createdBy: 'ta-x' }),
     slideRow('file-x', CLASSROOM_X, { kind: 'FILE' }),
     slideRow('deck-y', CLASSROOM_Y),
   ].map(row => [row.id, row])
@@ -61,6 +83,8 @@ const MEMBERS: Record<string, Record<string, string>> = {
   'user-a': { [CLASSROOM_X]: 'STUDENT' },
   'user-b': { [CLASSROOM_Y]: 'STUDENT' },
   'staff-x': { [CLASSROOM_X]: 'TEACHER' },
+  'staff-y': { [CLASSROOM_Y]: 'TEACHER' },
+  'ta-x': { [CLASSROOM_X]: 'ASSISTANT' },
 };
 
 type Row = ReturnType<typeof slideRow>;
@@ -69,13 +93,15 @@ function deps() {
   const calls = { gate: [] as string[], sign: [] as Array<Record<string, unknown>> };
   const d: FrameRouteDeps = {
     findSlide: async id => (SLIDES.get(id) as never) ?? null,
-    async assertView(request, slide) {
+    async assertEdit(request, slide) {
       const row = slide as unknown as Row;
       calls.gate.push(row.id);
       const user = request.headers.get('x-test-user');
       const role = user ? MEMBERS[user]?.[row.classroom_id] : undefined;
-      const staff = role === 'TEACHER' || role === 'OWNER' || role === 'ASSISTANT';
-      const allowed = row.is_draft ? staff : row.is_public || Boolean(role);
+      const allowed =
+        role === 'OWNER' ||
+        role === 'TEACHER' ||
+        (role === 'ASSISTANT' && (row.created_by === user || row.allow_team_edit));
       if (!allowed) throw new Response('Access denied', { status: 403 });
     },
     frameSigner(ctx, frames) {
@@ -112,7 +138,8 @@ test.afterEach(() => {
   }
 });
 
-async function get(slideId: string, rest: string, user?: string) {
+async function get(name: string, rest: string, user?: string) {
+  const slideId = idOf(name);
   const { d, calls } = deps();
   const request = new Request(`https://slides.classmoji.io/${slideId}/frame/${rest}`, {
     headers: user ? { 'x-test-user': user } : {},
@@ -128,11 +155,11 @@ async function get(slideId: string, rest: string, user?: string) {
 }
 
 test.describe('the frame route', () => {
-  test('a member is redirected to a fresh signature, never cached, cm-rev dropped', async () => {
+  test('an editor is redirected to a fresh signature, never cached, cm-rev dropped', async () => {
     const { response, calls } = await get(
       'deck-x',
       'slides/deck-x/blocks/ab12cd34.html?cm-rev=abc&x=1',
-      'user-a'
+      'staff-x'
     );
     expect(response.status).toBe(302);
     expect(response.headers.get('Cache-Control')).toBe('no-store');
@@ -151,16 +178,23 @@ test.describe('the frame route', () => {
     ]);
   });
 
-  test('user A vs B: a member of another classroom is refused before anything is signed', async () => {
-    const { response, calls } = await get('deck-x', 'slides/deck-x/games/a.html', 'user-b');
+  test('a member who only reads the deck is refused before anything is signed', async () => {
+    const { response, calls } = await get('deck-x', 'slides/deck-x/games/a.html', 'user-a');
     expect(response.status).toBe(403);
-    expect(calls.gate).toEqual(['deck-x']);
+    expect(calls.gate).toEqual([idOf('deck-x')]);
+    expect(calls.sign).toEqual([]);
+  });
+
+  test('user A vs B: an editor of another classroom is refused before anything is signed', async () => {
+    const { response, calls } = await get('deck-x', 'slides/deck-x/games/a.html', 'staff-y');
+    expect(response.status).toBe(403);
+    expect(calls.gate).toEqual([idOf('deck-x')]);
     expect(calls.sign).toEqual([]);
   });
 
   test('classroom X vs Y: a slide of Y only ever signs inside Y', async () => {
-    // B names X's deck folder through Y's slide; the signer is still Y's.
-    const { response, calls } = await get('deck-y', 'slides/deck-x/games/a.html', 'user-b');
+    // Y's editor names X's deck folder through Y's slide; the signer is still Y's.
+    const { response, calls } = await get('deck-y', 'slides/deck-x/games/a.html', 'staff-y');
     expect(response.status).toBe(302);
     expect(calls.sign[0]).toMatchObject({
       classroomId: CLASSROOM_Y,
@@ -170,31 +204,42 @@ test.describe('the frame route', () => {
     expect(response.headers.get('Location')).toContain(`/c/${CLASSROOM_Y}/`);
   });
 
-  test('anonymous: only a public deck, and only its own', async () => {
+  test('anonymous callers are refused, a public deck included', async () => {
     const open = await get('public-x', 'slides/public-x/games/a.html');
-    expect(open.response.status).toBe(302);
-    expect(open.calls.sign[0]).toMatchObject({ deckFolder: 'slides/public-x', isPublic: true });
+    expect(open.response.status).toBe(403);
+    expect(open.calls.sign).toEqual([]);
 
     const closed = await get('deck-x', 'slides/deck-x/games/a.html');
     expect(closed.response.status).toBe(403);
     expect(closed.calls.sign).toEqual([]);
   });
 
-  test('a draft is for staff', async () => {
+  test('a public deck signs for its editor at the public tier', async () => {
+    const { response, calls } = await get('public-x', 'slides/public-x/games/a.html', 'staff-x');
+    expect(response.status).toBe(302);
+    expect(calls.sign[0]).toMatchObject({ deckFolder: 'slides/public-x', isPublic: true });
+  });
+
+  test("an assistant: their own deck, not a colleague's", async () => {
+    expect((await get('mine-x', 'slides/mine-x/a.html', 'ta-x')).response.status).toBe(302);
+    expect((await get('deck-x', 'slides/deck-x/a.html', 'ta-x')).response.status).toBe(403);
+  });
+
+  test('a draft is for its editors', async () => {
     expect((await get('draft-x', 'slides/draft-x/a.html', 'user-a')).response.status).toBe(403);
     expect((await get('draft-x', 'slides/draft-x/a.html', 'staff-x')).response.status).toBe(302);
   });
 
   test('404s: unknown slide, not a deck, unsignable, encoded separator', async () => {
-    expect((await get('nope', 'a/b.html', 'user-a')).response.status).toBe(404);
-    const file = await get('file-x', 'slides/file-x/doc.pdf', 'user-a');
+    expect((await get('nope', 'a/b.html', 'staff-x')).response.status).toBe(404);
+    const file = await get('file-x', 'slides/file-x/doc.pdf', 'staff-x');
     expect(file.response.status).toBe(404);
-    expect(file.calls.gate).toEqual(['file-x']);
-    const missing = await get('deck-x', 'slides/deck-x/missing.html', 'user-a');
+    expect(file.calls.gate).toEqual([idOf('file-x')]);
+    const missing = await get('deck-x', 'slides/deck-x/missing.html', 'staff-x');
     expect(missing.response.status).toBe(404);
     expect(missing.response.headers.get('Cache-Control')).toBe('no-store');
     // An encoded separator would change which folder is meant: refused.
-    const encoded = await get('deck-x', 'slides%2Fdeck-x%2F..%2Fx.html', 'user-a');
+    const encoded = await get('deck-x', 'slides%2Fdeck-x%2F..%2Fx.html', 'staff-x');
     expect(encoded.response.status).toBe(404);
     expect(encoded.calls.sign).toEqual([]);
   });
@@ -202,7 +247,7 @@ test.describe('the frame route', () => {
   test('dot segments are resolved by the URL before the route sees them', async () => {
     // `..` can only climb within the frame path (the URL parser resolves it),
     // and the signer is handed a clean repo path — which it then judges.
-    const { calls } = await get('deck-x', 'slides/deck-x/%2e%2e/%2e%2e/x.html', 'user-a');
+    const { calls } = await get('deck-x', 'slides/deck-x/%2e%2e/%2e%2e/x.html', 'staff-x');
     expect(calls.sign.map(call => call.repoPath)).toEqual(['x.html']);
   });
 

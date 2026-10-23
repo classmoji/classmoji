@@ -71,7 +71,7 @@ import {
   type SlideBlockInfo,
 } from '@classmoji/services/slides/ops';
 import type { SnapshotResponse } from '@classmoji/collab';
-import { ContentService } from '@classmoji/services';
+import { ClassmojiService, ContentService } from '@classmoji/services';
 import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import {
@@ -681,7 +681,7 @@ async function applyDeckLive(
   let newDeck: DeckJson;
   let applied: Array<Record<string, unknown>>;
   try {
-    ops = prepareDeckOps(args.ops, frameContext(slide), snapshot.content);
+    ops = prepareDeckOps(args.ops, frameContext(slide), snapshot.content, frameBackstop(slide));
     ({ ops, outcome: files } = await writeBlockSources(ops, snapshot.content, {
       slide,
       ctx,
@@ -864,6 +864,20 @@ function frameContext(slide: SlideWithRepoRecord) {
   return org && repo ? { org, repo, contentPath: slide.content_path } : null;
 }
 
+/**
+ * The write-side frame backstop for the ops' markup: a files URL of this
+ * classroom or this deck's editor frame URL (an agent copying what a render
+ * showed) is stored as the deck-relative reference it was made from.
+ */
+function frameBackstop(slide: SlideWithRepoRecord) {
+  return {
+    deckFolder: slide.content_path,
+    slideId: slide.id,
+    filesRef: (url: string) =>
+      ClassmojiService.contentDelivery.parseOwnFilesUrl(slide.classroom.id, url),
+  };
+}
+
 /** deck_apply itself; `render: true` is layered on by the handler above. */
 async function applyDeckEdits(args: DeckApplyArgs, ctx: ToolContext): Promise<ToolResult> {
   const slide = await loadSlideInClassroom(args.slide_id, ctx);
@@ -937,7 +951,7 @@ async function applyDeckEdits(args: DeckApplyArgs, ctx: ToolContext): Promise<To
   let newDeck: DeckJson;
   let applied: Array<Record<string, unknown>>;
   try {
-    let ops = prepareDeckOps(args.ops, frameContext(slide), loaded.deck);
+    let ops = prepareDeckOps(args.ops, frameContext(slide), loaded.deck, frameBackstop(slide));
     ({ ops, outcome: files } = await writeBlockSources(ops, loaded.deck, {
       slide,
       ctx,

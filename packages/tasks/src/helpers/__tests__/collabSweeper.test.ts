@@ -245,7 +245,7 @@ describe('runCollabSweep', () => {
 });
 
 describe('sqlSweeperDb.clearedRefusals', () => {
-  it('retries page and deck refusals at or below the worker schema', async () => {
+  it('retries page refusals at or below the worker schema, deck refusals only at it', async () => {
     let sql = '';
     let values: unknown[] = [];
     const db = sqlSweeperDb({
@@ -257,7 +257,7 @@ describe('sqlSweeperDb.clearedRefusals', () => {
     });
     await db.clearedRefusals({ page: 2, deck: 1 });
     expect(sql).toContain("(kind = 'page' AND schema_version <= ?)");
-    expect(sql).toContain("(kind = 'deck' AND schema_version <= ?)");
+    expect(sql).toContain("(kind = 'deck' AND schema_version = ?)");
     expect(values).toEqual([2, 1]);
   });
 });

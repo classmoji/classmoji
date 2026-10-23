@@ -49,6 +49,11 @@ import {
   updateSlideBlock,
   type SlideBlockEdit,
 } from './deckHtml.ts';
+import {
+  canonicalizeDeckFrames,
+  canonicalizeFrameMarkup,
+  type CanonicalizeFramesOptions,
+} from './deckFrames.ts';
 import { stripRuntimeSectionAttrs } from './deckRuntimeAttrs.ts';
 import type { DeckJson, DeckSlide } from './deckTypes.ts';
 
@@ -486,21 +491,105 @@ function deckBlockType(deck: DeckJson, slideId: string, blockId: string): string
   return readSlideBlocks(html, { content: false }).find(b => b.id === blockId)?.type ?? null;
 }
 
+/** Section attributes with display-derived frame values undone; a null (remove the key) is kept. */
+function canonicalOpAttrs<T extends string | null>(
+  attrs: Record<string, T>,
+  frames: CanonicalizeFramesOptions
+): Record<string, T> {
+  const set: Record<string, string> = {};
+  for (const [name, value] of Object.entries(attrs)) if (value !== null) set[name] = value;
+  const probe: DeckJson = {
+    version: 1,
+    theme: '',
+    codeTheme: '',
+    slides: [{ id: '', attrs: set }],
+  };
+  const out = canonicalizeDeckFrames(probe, frames).slides[0].attrs ?? {};
+  if (out === set) return attrs;
+  const next: Record<string, T> = {};
+  for (const [name, value] of Object.entries(attrs)) {
+    if (value === null) next[name] = value;
+    else if (name in out) next[name] = out[name] as T;
+  }
+  return next;
+}
+
+/** One new slide of an insert op with its frames canonical; same object when unchanged. */
+function canonicalNewSlide<
+  S extends { html?: string; notes?: string; attrs?: Record<string, string> },
+>(slide: S, frames: CanonicalizeFramesOptions): S {
+  const html = slide.html === undefined ? undefined : canonicalizeFrameMarkup(slide.html, frames);
+  const notes =
+    slide.notes === undefined ? undefined : canonicalizeFrameMarkup(slide.notes, frames);
+  const attrs = slide.attrs === undefined ? undefined : canonicalOpAttrs(slide.attrs, frames);
+  if (html === slide.html && notes === slide.notes && attrs === slide.attrs) return slide;
+  return {
+    ...slide,
+    ...(html !== undefined ? { html } : {}),
+    ...(notes !== undefined ? { notes } : {}),
+    ...(attrs !== undefined ? { attrs } : {}),
+  };
+}
+
+/**
+ * The write-side frame backstop for ops: the html, notes and attrs that
+ * update and insert ops carry, with every frame value derived for display (a
+ * files URL of this classroom, this deck's editor frame URL, `data-cm-orig-*`,
+ * an html block frame's loading `src`) turned back into its stored form
+ * (`canonicalizeFrameMarkup`, the same rule the deck save runs). Ops with
+ * nothing to change keep their objects. Input untouched.
+ */
+export function canonicalizeOpFrames(ops: DeckOp[], frames: CanonicalizeFramesOptions): DeckOp[] {
+  return ops.map(op => {
+    if (op.op === 'update') {
+      const html = op.html === undefined ? undefined : canonicalizeFrameMarkup(op.html, frames);
+      const notes =
+        typeof op.notes === 'string' ? canonicalizeFrameMarkup(op.notes, frames) : op.notes;
+      const attrs = op.attrs ? canonicalOpAttrs(op.attrs, frames) : op.attrs;
+      if (html === op.html && notes === op.notes && attrs === op.attrs) return op;
+      return {
+        ...op,
+        ...(html !== undefined ? { html } : {}),
+        ...(notes !== undefined ? { notes } : {}),
+        ...(attrs !== undefined ? { attrs } : {}),
+      };
+    }
+    if (op.op === 'insert') {
+      let changed = false;
+      const slides = op.slides.map(slide => {
+        let next = canonicalNewSlide(slide, frames);
+        if (slide.children) {
+          const children = slide.children.map(child => canonicalNewSlide(child, frames));
+          if (children.some((child, i) => child !== slide.children![i])) {
+            next = { ...next, children };
+          }
+        }
+        if (next !== slide) changed = true;
+        return next;
+      });
+      return changed ? { ...op, slides } : op;
+    }
+    return op;
+  });
+}
+
 /**
  * Ops ready to send to every place that applies them: each block_add carries a
  * block id (minted here when the caller gave none, so a dry run, the live
  * server and a replay all name the same block) and every iframe `src` is
  * resolved against the deck folder. An html block's `src` stays relative to
  * the deck folder (that is how it is stored); `deck` (the deck the ops apply
- * to) tells which block_update targets an html block. Input untouched.
+ * to) tells which block_update targets an html block. With `frames`, the
+ * markup ops carry also goes through `canonicalizeOpFrames`. Input untouched.
  */
 export function prepareDeckOps(
   ops: DeckOp[],
   ctx: DeckFrameContext | null,
-  deck: DeckJson | null = null
+  deck: DeckJson | null = null,
+  frames: CanonicalizeFramesOptions | null = null
 ): DeckOp[] {
   const addedHtml = new Set<string>();
-  return ops.map(op => {
+  return (frames ? canonicalizeOpFrames(ops, frames) : ops).map(op => {
     if (op.op !== 'block_add' && op.op !== 'block_update') return op;
     const next = { ...op };
     if (next.op === 'block_add' && next.block_id === undefined) next.block_id = mintBlockId();

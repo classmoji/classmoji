@@ -16,38 +16,81 @@ export const REVEAL_LOCKED_OPTIONS = {
 
 /**
  * Reveal reads its config from the page's query string as well as from the
- * options object. These keys change what the page runs or shows, so they are
- * removed from the URL (in place, without navigation) before `initialize`.
+ * options object, and the query wins over both. It finds keys with this
+ * pattern anywhere in `location.search` (reveal.js `getQueryHash`): any run of
+ * letters and digits followed by `=`, so `?foo_postMessage=1` or a value like
+ * `?a=x/postMessage=1` is read as `postMessage`.
  */
-const REVEAL_QUERY_KEYS = [
-  'postMessage',
-  'postMessageEvents',
-  'previewLinks',
-  'showNotes',
-  'controls',
-  'help',
-  'embedded',
-  'autoSlide',
-  'plugins',
-  'dependencies',
-  'markdown',
-  'hash',
-  'history',
-];
+export const REVEAL_QUERY_KEY_RE = /[A-Z0-9]+?=([\w.%-]*)/gi;
 
-export function stripRevealQueryConfig(win: Window = window): void {
-  const url = new URL(win.location.href);
-  let changed = false;
-  for (const key of REVEAL_QUERY_KEYS) {
-    if (url.searchParams.has(key)) {
-      url.searchParams.delete(key);
-      changed = true;
-    }
-  }
-  if (changed) win.history.replaceState(win.history.state, '', url.toString());
+/** The keys Reveal would read from `search`, in order. */
+export function revealQueryKeys(search: string): string[] {
+  return Array.from(search.matchAll(REVEAL_QUERY_KEY_RE), match => match[0].split('=')[0]);
 }
 
-/** A Reveal API message: a JSON string whose object carries `method` or Reveal's namespace. */
+/**
+ * The app's own query parameters on pages that run Reveal (viewer/editor,
+ * presenter, follow). None of them is a Reveal option.
+ */
+export const APP_QUERY_PARAMS: ReadonlySet<string> = new Set([
+  'mode',
+  'preview',
+  'returnUrl',
+  'notice',
+  'auto_merged',
+  'shareCode',
+  'saved',
+  'saving',
+]);
+
+/**
+ * Leaves Reveal nothing to read from the query string but the app's own
+ * parameters: every other parameter Reveal would read a key from is removed,
+ * and what stays is written back encoded (so no value carries a key of its
+ * own). The URL changes in place, without navigation, and only when Reveal
+ * would read something different. Run before `initialize`.
+ */
+export function stripRevealQueryConfig(win: Window = window): void {
+  const url = new URL(win.location.href);
+  const kept = new URLSearchParams();
+  for (const [name, value] of url.searchParams) {
+    const pair = new URLSearchParams([[name, value]]).toString();
+    if (APP_QUERY_PARAMS.has(name) || revealQueryKeys(pair).length === 0) {
+      kept.append(name, value);
+    }
+  }
+  const search = kept.toString();
+  const before = revealQueryKeys(url.search).join('&');
+  if (before === revealQueryKeys(search).join('&')) return;
+  url.search = search;
+  win.history.replaceState(win.history.state, '', url.toString());
+}
+
+/** The part of a Reveal deck {@link lockRevealAfterInit} uses. */
+interface ConfigurableDeck {
+  /** Reveal has it; the app's minimal `RevealApi` type does not declare it. */
+  getConfig?(): Record<string, unknown>;
+  configure(options: Record<string, unknown>): void;
+}
+
+/**
+ * Puts {@link REVEAL_LOCKED_OPTIONS} back over the config Reveal composed
+ * (options, then the query string). Call right after `initialize`. Does
+ * nothing when the config already holds them (Reveal's `configure` re-syncs
+ * the deck, which restarts the current slide's media and frames).
+ */
+export function lockRevealAfterInit(deck: ConfigurableDeck): void {
+  const config = deck.getConfig?.();
+  const locked = REVEAL_LOCKED_OPTIONS as Record<string, unknown>;
+  if (config && Object.keys(locked).every(key => config[key] === locked[key])) return;
+  deck.configure({ ...locked });
+}
+
+/**
+ * A Reveal API message: a JSON string whose object carries a `method` key (of
+ * any type: Reveal looks the method up by whatever it coerces to) or Reveal's
+ * namespace.
+ */
 export function isRevealApiMessage(data: unknown): boolean {
   if (typeof data !== 'string') return false;
   const trimmed = data.trim();
@@ -56,7 +99,7 @@ export function isRevealApiMessage(data: unknown): boolean {
     const parsed: unknown = JSON.parse(trimmed);
     if (!parsed || typeof parsed !== 'object') return false;
     const record = parsed as Record<string, unknown>;
-    return typeof record.method === 'string' || record.namespace === 'reveal';
+    return 'method' in record || record.namespace === 'reveal';
   } catch {
     return false;
   }
@@ -78,4 +121,28 @@ export function installRevealMessageGuard(win: Window = window): void {
     },
     { capture: true }
   );
+}
+
+/**
+ * Whether this page is framed by a page of another origin (any ancestor, not
+ * just the parent). The editor refuses to run when it is.
+ */
+export function refuseIfFramedCrossOrigin(win: Window = window): boolean {
+  let current: Window = win;
+  for (let depth = 0; depth < 64; depth++) {
+    let parent: Window;
+    try {
+      parent = current.parent;
+    } catch {
+      return true;
+    }
+    if (!parent || parent === current) return false;
+    try {
+      if (parent.location.origin !== win.location.origin) return true;
+    } catch {
+      return true;
+    }
+    current = parent;
+  }
+  return true;
 }

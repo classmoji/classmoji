@@ -9,15 +9,17 @@
  *   1. dry-runs the ops op by op, each html `source` standing in as a
  *      placeholder `src` — every op is judged (ids, types, boxes, the slide
  *      cap) before anything is written;
- *   2. writes each `source` to the block's file: its own file, compare-and-swap
- *      on the rev the deck holds, in `mode: 'live'` when no other block shares
- *      it; a new file otherwise (and always in preview, so the published deck
- *      keeps its files);
+ *   2. writes each `source` to a NEW file (create-only), never over the file
+ *      the block names now: until the deck write lands, the deck keeps
+ *      showing the old code, and a deck write that fails leaves only an
+ *      unused new file behind;
  *   3. hands back the ops rewritten to `{ src, rev }`, which travel on as any
  *      other op (to the live server, or applied and saved to git).
  *
- * `block_delete` with `delete_file` removes the block's `blocks/` file once
- * the deck no longer names it (after the deck write, never in preview).
+ * After the deck write: the `blocks/` file a block was moved off (live mode
+ * only — in preview the published deck still names it) and the `blocks/` file
+ * of a `block_delete` with `delete_file` are deleted once no html block of the
+ * deck names them.
  */
 
 import {
@@ -71,13 +73,8 @@ function repoPathOf(src: string, deckFolder: string): string | null {
   return resolveDeckRelativeRef(src, deckFolder)?.repoPath ?? null;
 }
 
-/** How many html blocks of `deck` name the file `src` names, leaving out `except`. */
-function fileUsers(
-  deck: DeckJson,
-  src: string,
-  deckFolder: string,
-  except: { slide: string; block: string } | null = null
-): number {
+/** How many html blocks of `deck` name the file `src` names. */
+function fileUsers(deck: DeckJson, src: string, deckFolder: string): number {
   const target = repoPathOf(src, deckFolder);
   if (!target) return 0;
   let count = 0;
@@ -91,7 +88,6 @@ function fileUsers(
     }
     for (const block of readSlideBlocks(html, { content: false })) {
       if (block.type !== 'html' || !block.src) continue;
-      if (except && slide.id === except.slide && block.id === except.block) continue;
       if (repoPathOf(block.src, deckFolder) === target) count++;
     }
   });
@@ -121,6 +117,8 @@ export interface BlockFileOutcome {
   written: Map<number, HtmlBlockFileRef>;
   /** block_delete ops with `delete_file`: op index → the file the block named. */
   toDelete: Map<number, string>;
+  /** `blocks/` files blocks were moved off by a new `source`. */
+  replaced: Set<string>;
 }
 
 /**
@@ -139,12 +137,8 @@ export async function writeBlockSources(
     starterCustomCss?: string;
   }
 ): Promise<{ ops: DeckOp[]; outcome: BlockFileOutcome }> {
-  const deckFolder = opts.slide.content_path;
-  const pending: Array<{
-    index: number;
-    prior: { src: string; rev?: string } | null;
-    fork: boolean;
-  }> = [];
+  // Each html `source` op, with the `blocks/` file its block named before it.
+  const pending: Array<{ index: number; prior: string | null }> = [];
   const deletes: Array<{ index: number; src: string; key: string }> = [];
   let deck = base;
 
@@ -156,7 +150,7 @@ export async function writeBlockSources(
       }
       const { source: _source, ...rest } = op;
       dry = { ...rest, src: PLACEHOLDER_SRC };
-      pending.push({ index, prior: null, fork: false });
+      pending.push({ index, prior: null });
     } else if (op.op === 'block_update' && op.source !== undefined) {
       const block = blockOf(deck, op.slide, op.block_id);
       if (block?.type === 'html') {
@@ -165,15 +159,10 @@ export async function writeBlockSources(
         }
         const { source: _source, ...rest } = op;
         dry = { ...rest, src: PLACEHOLDER_SRC };
-        const prior =
-          block.src && isHtmlBlockFileSrc(block.src)
-            ? { src: block.src, ...(block.rev ? { rev: block.rev } : {}) }
-            : null;
-        const fork =
-          prior !== null &&
-          prior.src !== PLACEHOLDER_SRC &&
-          fileUsers(deck, prior.src, deckFolder, { slide: op.slide, block: op.block_id }) > 0;
-        pending.push({ index, prior, fork });
+        pending.push({
+          index,
+          prior: block.src && isHtmlBlockFileSrc(block.src) ? block.src : null,
+        });
       }
     } else if (op.op === 'block_delete' && op.delete_file) {
       if (opts.mode === 'preview') {
@@ -192,22 +181,19 @@ export async function writeBlockSources(
   }
 
   const written = new Map<number, HtmlBlockFileRef>();
-  // A block written earlier in this call: its next source goes to the same file.
+  const replaced = new Set<string>();
+  // The file each block was last given in this call.
   const byBlock = new Map<string, HtmlBlockFileRef>();
   const next = [...ops];
-  for (const { index, prior, fork } of pending) {
+  for (const { index, prior } of pending) {
     const op = ops[index] as Extract<DeckOp, { op: 'block_add' | 'block_update' }>;
     const key = `${op.slide}\u0000${op.block_id}`;
-    const own = byBlock.get(key) ?? (prior?.src === PLACEHOLDER_SRC ? null : prior);
     let ref: HtmlBlockFileRef;
     try {
       ref = await writeHtmlBlockFile({
         slideId: opts.slide.id,
         actorUserId: opts.ctx.viewer.userId,
         html: op.source ?? '',
-        ...(own ? { src: own.src } : {}),
-        ...(own?.rev ? { expectedRev: own.rev } : {}),
-        fork,
         mode: opts.mode,
         ...(op.block_id ? { blockId: op.block_id } : {}),
         surface: 'mcp',
@@ -215,6 +201,12 @@ export async function writeBlockSources(
     } catch (error) {
       fileError(error);
     }
+    // The file the block moves off: one written earlier in this call (named
+    // by nothing else), or the deck's own — kept in preview, where the
+    // published deck still names it.
+    const earlier = byBlock.get(key)?.src;
+    if (earlier) replaced.add(earlier);
+    else if (prior && prior !== PLACEHOLDER_SRC && opts.mode === 'live') replaced.add(prior);
     written.set(index, ref);
     byBlock.set(key, ref);
     const { source: _source, ...rest } = op;
@@ -226,13 +218,14 @@ export async function writeBlockSources(
     const file = src === PLACEHOLDER_SRC ? byBlock.get(key)?.src : src;
     if (file) toDelete.set(index, file);
   }
-  return { ops: next, outcome: { written, toDelete } };
+  return { ops: next, outcome: { written, toDelete, replaced } };
 }
 
 /**
- * After the deck write: delete the files of `delete_file` block_deletes that
- * no html block of `deck` (the deck as written) still names, and note each
- * outcome on its `applied` entry. Never throws: the deck is already written.
+ * After the deck write: delete the files blocks were moved off and the files
+ * of `delete_file` block_deletes that no html block of `deck` (the deck as
+ * written) still names, noting each block_delete's outcome on its `applied`
+ * entry. Never throws: the deck is already written.
  */
 export async function deleteUnusedBlockFiles(
   outcome: BlockFileOutcome,
@@ -244,6 +237,19 @@ export async function deleteUnusedBlockFiles(
   const out = applied.map(entry => ({ ...entry }));
   for (const [index, ref] of outcome.written) {
     if (out[index]) Object.assign(out[index], { src: ref.src, rev: ref.rev });
+  }
+  for (const src of outcome.replaced) {
+    if (fileUsers(deck, src, opts.slide.content_path) > 0) continue;
+    try {
+      await deleteHtmlBlockFile({
+        slideId: opts.slide.id,
+        actorUserId: opts.ctx.viewer.userId,
+        src,
+        surface: 'mcp',
+      });
+    } catch (error) {
+      console.warn('[deck_apply] Could not delete a replaced html block file:', error);
+    }
   }
   for (const [index, src] of outcome.toDelete) {
     const entry = out[index] ?? {};

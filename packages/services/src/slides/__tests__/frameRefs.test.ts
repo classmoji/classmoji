@@ -22,6 +22,7 @@ const ORG = 'cs52-org';
 const REPO = 'cs52-content';
 const DECK = 'slides/week-1';
 const SLIDE_ID = '9b2f1c4e-0000-4000-8000-000000000001';
+const OTHER_SLIDE_ID = 'aaaaaaaa-0000-4000-8000-000000000002';
 const CLASSROOM = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
 const CONTENT = 'https://content.classmoji.io';
 
@@ -105,7 +106,20 @@ describe('classifyFrameRef', () => {
     ).toEqual(ours('games/a/i.html'));
   });
 
-  it("ours: this classroom's files URL and this deck's editor URL", () => {
+  it('ours: a folder names its index page, in every spelling', () => {
+    expect(classify('games/snake/')).toEqual(ours('slides/week-1/games/snake/index.html'));
+    expect(classify(`/content/${ORG}/${REPO}/games/snake/?l=1`)).toEqual(
+      ours('games/snake/index.html', '?l=1')
+    );
+    expect(classify(`https://${ORG}.github.io/${REPO}/games/snake/`)).toEqual(
+      ours('games/snake/index.html')
+    );
+    expect(classify(`/${SLIDE_ID}/frame/games/snake/`)).toEqual(ours('games/snake/index.html'));
+    // The folder of a deck names the deck's own document, which is never framed.
+    expect(classify(`/content/${ORG}/${REPO}/slides/week-2/`)).toEqual({ kind: 'inert' });
+  });
+
+  it("ours: this classroom's files URL and any deck's editor URL", () => {
     expect(
       classify(`${CONTENT}/c/${CLASSROOM}/files/GRANT/week.1.2.sig/games/a/i.html?x=1`)
     ).toEqual(ours('games/a/i.html', '?x=1'));
@@ -114,6 +128,10 @@ describe('classifyFrameRef', () => {
     );
     expect(classify(`https://slides.classmoji.io/${SLIDE_ID}/frame/games/a/i.html`)).toEqual(
       ours('games/a/i.html')
+    );
+    // Another deck's editor URL (a paste) names the same path in this repo.
+    expect(classify(`/${OTHER_SLIDE_ID}/frame/slides/other/blocks/x.html?cm-rev=1`)).toEqual(
+      ours('slides/other/blocks/x.html')
     );
   });
 
@@ -154,8 +172,8 @@ describe('classifyFrameRef', () => {
       'http://localhost:6500/x',
       '/some-route',
       `/${SLIDE_ID}`,
-      // Another deck's editor URL is not this deck's.
-      '/aaaaaaaa-0000-4000-8000-000000000002/frame/games/a/i.html',
+      // The editor route's shape needs a slide id.
+      '/not-a-slide/frame/games/a/i.html',
     ]) {
       expect(classify(value), value).toEqual({ kind: 'inert' });
     }
@@ -256,23 +274,50 @@ describe('editor frame URLs', () => {
     }
   });
 
-  it('accepts an absolute form, refuses another deck and traversal', () => {
+  it('accepts an absolute form and any deck, refuses traversal', () => {
     expect(
       parseEditorFrameUrl(`https://slides.classmoji.io/${SLIDE_ID}/frame/a/b.html?cm-rev=1`, {
         slideId: SLIDE_ID,
       })
     ).toEqual({ repoPath: 'a/b.html', query: '' });
-    expect(
-      parseEditorFrameUrl(`/aaaaaaaa-0000-4000-8000-000000000002/frame/a/b.html`, {
-        slideId: SLIDE_ID,
-      })
-    ).toBeNull();
+    expect(parseEditorFrameUrl(`/${OTHER_SLIDE_ID}/frame/a/b.html`, { slideId: SLIDE_ID })).toEqual(
+      { repoPath: 'a/b.html', query: '' }
+    );
+    expect(parseEditorFrameUrl(`/${SLIDE_ID}/frame/games/snake/`)).toEqual({
+      repoPath: 'games/snake/index.html',
+      query: '',
+    });
     expect(parseEditorFrameUrl(`/${SLIDE_ID}/frame/a/../b.html`, { slideId: SLIDE_ID })).toBeNull();
     expect(
       parseEditorFrameUrl(`/${SLIDE_ID}/frame/a/%2e%2e/b.html`, { slideId: SLIDE_ID })
     ).toBeNull();
     expect(parseEditorFrameUrl(`/${SLIDE_ID}/frame/a%2Fb.html`, { slideId: SLIDE_ID })).toBeNull();
     expect(isEditorFrameUrl('https://example.com/x.html')).toBe(false);
+  });
+
+  it('needs a slide id first: other pages with a /frame/ path are not editor URLs', () => {
+    for (const url of [
+      'https://example.com/foo/frame/x.html',
+      '/admin/frame/x.html',
+      `/${SLIDE_ID}x/frame/x.html`,
+    ]) {
+      expect(isEditorFrameUrl(url), url).toBe(false);
+      expect(parseEditorFrameUrl(url), url).toBeNull();
+    }
+  });
+
+  it("another deck's editor URL is stored relative to this deck", () => {
+    const pasted = toEditorFrameUrl('slides/other/blocks/x.html', '', {
+      slideId: OTHER_SLIDE_ID,
+      rev: 'r',
+    });
+    expect(fromEditorFrameUrl(pasted, { deckFolder: DECK })).toBe('../other/blocks/x.html');
+    expect(
+      fromEditorFrameUrl(`https://slides.classmoji.io/${OTHER_SLIDE_ID}/frame/games/a/i.html?y=1`, {
+        slideId: SLIDE_ID,
+        deckFolder: DECK,
+      })
+    ).toBe('../../games/a/i.html?y=1');
   });
 
   it('relativeToDeck walks up only as far as it must', () => {

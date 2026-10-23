@@ -326,13 +326,25 @@ describe('the gate', () => {
     await expect(write('deck-team', 'ta-x')).resolves.toBeDefined();
   });
 
-  it('a locked classroom: only its owner writes', async () => {
+  it('a locked classroom: only its owner writes, and the refusal names the state', async () => {
     const locked = slide('deck-l', 'class-x');
     locked.classroom.status = 'LOCKED';
     db.slides.set('deck-l', locked);
     member('class-x', 'owner-x', 'OWNER');
-    expect((await refusal(write('deck-l', 'teacher-x'))).code).toBe('forbidden');
+    const error = await refusal(write('deck-l', 'teacher-x'));
+    expect(error.code).toBe('forbidden');
+    expect(error.message).toMatch(/read-only mode/);
     await expect(write('deck-l', 'owner-x')).resolves.toBeDefined();
+    // Someone the deck refuses anyway learns nothing about the classroom.
+    member('class-x', 'student-x', 'STUDENT');
+    expect((await refusal(write('deck-l', 'student-x'))).message).toMatch(/permission/);
+  });
+
+  it('an unpublished classroom: the refusal says so', async () => {
+    const hidden = slide('deck-u', 'class-x');
+    hidden.classroom.status = 'UNPUBLISHED';
+    db.slides.set('deck-u', hidden);
+    expect((await refusal(write('deck-u', 'teacher-x'))).message).toMatch(/unpublished/);
   });
 
   it('a missing slide or one that is not a deck is not-found; no signed-in user is forbidden', async () => {
@@ -413,6 +425,28 @@ describe('readHtmlBlockSource', () => {
         )
       ).code
     ).toBe('not-found');
+  });
+
+  it('reads a block file of another deck (a pasted block), but nothing else outside this deck', async () => {
+    const result = await readHtmlBlockSource({
+      slideId: 'deck-x',
+      actorUserId: 'teacher-x',
+      src: '../other/blocks/0a0b0c0d.html',
+    });
+    expect(result.html).toBe('<p>code</p>');
+    expect(content.getMeta).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'slides/other/blocks/0a0b0c0d.html' })
+    );
+    for (const src of [
+      '../other/games/x.html',
+      '../../pages/p/blocks/0a0b0c0d.html',
+      '../other/blocks/0a0b0c0d.html?x=1',
+    ]) {
+      expect(
+        (await refusal(readHtmlBlockSource({ slideId: 'deck-x', actorUserId: 'teacher-x', src })))
+          .code
+      ).toBe('invalid');
+    }
   });
 
   it('edit access by default; view admits the whole teaching team, never students or other classrooms', async () => {

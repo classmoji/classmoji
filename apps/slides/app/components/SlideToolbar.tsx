@@ -3,20 +3,17 @@ import { Popconfirm, Popover, Tooltip, Dropdown } from 'antd';
 
 import {
   blockMarkup,
-  htmlBlockMarkup,
   mintBlockId,
   type BlockBox,
 } from '@classmoji/services/slides/runtime-attrs';
 
 import { useToast } from '~/hooks';
 import { lockHolderOf, safeInnerHtml } from '~/utils/collab/bridgeDom';
-import { mountLegacyHtmlBlocks } from '~/utils/legacyHtmlBlocks';
 import ImageUploadModal from './ImageUploadModal';
 import { useElementSelection } from './properties/ElementSelectionContext';
 import { DEFAULT_IFRAME_SANDBOX } from '~/utils/editorFrames';
 import {
   DEFAULT_SVG_SOURCE,
-  STARTER_HTML_SOURCE,
   captureSlideTarget,
   countLeafSlides,
   removeSlideElement,
@@ -707,7 +704,9 @@ document.querySelector('h1').addEventListener('click', () => {
   }, [getCurrentSection, createSlBlock, onContentChange]);
 
   // Insert an svg or html block (built by the shared block builders, so it
-  // carries a data-cm-block-id), select it; an html block opens its source.
+  // carries a data-cm-block-id), select it. An html block opens its source
+  // first and goes on the slide at its first Apply (closing the source editor
+  // without applying adds nothing), so it never holds code that is not a file.
   const insertSourceBlock = useCallback(
     (kind: 'svg' | 'html') => {
       requestAnimationFrame(() => {
@@ -724,9 +723,9 @@ document.querySelector('h1').addEventListener('click', () => {
         const id = mintBlockId();
         const template = document.createElement('template');
         if (kind === 'html') {
-          // A starter until the source editor's Apply saves its code as a file.
-          template.innerHTML = htmlBlockMarkup({ id, box, source: STARTER_HTML_SOURCE });
-          mountLegacyHtmlBlocks(template.content, contentOrigin ?? frames?.contentOrigin);
+          // No frame yet: Apply gives the block its frame (a file, or inline
+          // code without the content service) as it goes on the slide.
+          template.innerHTML = blockMarkup('html', id, box, '');
         } else {
           template.innerHTML = blockMarkup('svg', id, box, '');
           const drawing = svgFromSource(DEFAULT_SVG_SOURCE, document);
@@ -736,13 +735,16 @@ document.querySelector('h1').addEventListener('click', () => {
         const block = template.content.firstElementChild as HTMLElement | null;
         if (!block) return;
         block.querySelector('.sl-block-content')?.setAttribute('contenteditable', 'false');
+        if (kind === 'html') {
+          openBlockSource(block, { fresh: true, insertInto: section });
+          return;
+        }
         section.appendChild(block);
         onContentChange?.();
         selectElement(block);
-        if (kind === 'html') openBlockSource(block);
       });
     },
-    [getCurrentSection, onContentChange, selectElement, openBlockSource, contentOrigin, frames]
+    [getCurrentSection, onContentChange, selectElement, openBlockSource]
   );
 
   // Insert a snippet as an sl-block

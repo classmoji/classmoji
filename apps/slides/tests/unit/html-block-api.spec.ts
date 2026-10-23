@@ -17,6 +17,7 @@ import { test, expect } from '@playwright/test';
 
 import {
   handleHtmlBlockRequest,
+  isJsonContentType,
   type HtmlBlockApiDeps,
 } from '../../app/utils/htmlBlockApi.server.ts';
 
@@ -244,5 +245,29 @@ test.describe('html-block route', () => {
     expect(source).toContain('where: { id: slideId }');
     expect(source).toContain('{ slideId: slide.id, userId, body }');
     expect(source).toContain("'Cache-Control': 'no-store'");
+  });
+
+  test('refuses anything but a JSON body with 415, before any lookup or read', () => {
+    const check = source.indexOf("isJsonContentType(request.headers.get('content-type'))");
+    expect(check).toBeGreaterThan(-1);
+    expect(check).toBeLessThan(source.indexOf('findUnique('));
+    expect(check).toBeLessThan(source.indexOf('readLimitedBody('));
+    expect(source).toMatch(/isJsonContentType\([^)]*\)\)\) \{\s*return json\([^;]*415\)/);
+  });
+
+  test('only application/json is JSON', () => {
+    expect(isJsonContentType('application/json')).toBe(true);
+    expect(isJsonContentType('Application/JSON; charset=utf-8')).toBe(true);
+    for (const type of [
+      null,
+      '',
+      'text/plain',
+      'text/plain; application/json',
+      'application/x-www-form-urlencoded',
+      'multipart/form-data; boundary=x',
+      'application/json-patch+json',
+    ]) {
+      expect(isJsonContentType(type)).toBe(false);
+    }
   });
 });

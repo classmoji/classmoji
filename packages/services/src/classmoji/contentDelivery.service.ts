@@ -1,7 +1,9 @@
 import type { FileTypePolicy } from '../content/utils/validateFile.ts';
 import getPrisma from '@classmoji/database';
 import {
+  MAX_FILES_GRANT_LENGTH,
   contentDispositionFor,
+  isFilesGrantFolder,
   normalizeDownloadFilename,
   parseContentUrl,
   parseFilesUrl,
@@ -1608,8 +1610,8 @@ export interface FrameSigner {
   sign(repoPath: string, query?: string): Promise<string | null>;
 }
 
-interface FrameLayout {
-  /** The deck folder's immediate subfolders the map has, with their tree shas. */
+export interface FrameLayout {
+  /** The deck folder's immediate subfolders the map has, with their tree shas (sorted by path). */
   subfolders: Map<string, string>;
   /** The folder of every slide and page in the classroom. */
   itemFolders: string[];
@@ -1698,7 +1700,8 @@ async function readMissingFrameTree(classroomId: string, folder: string): Promis
     if (frameTreeReads.size >= FRAME_TREE_READS_MAX) frameTreeReads.clear();
     frameTreeReads.add(key);
     const found = await withDeadline(
-      recordFolderTreesAfterCommit({ classroomId, commit, folders: [folder] }),
+      // `fill`: a read, not a write — it must not hold back a sync in flight.
+      recordFolderTreesAfterCommit({ classroomId, commit, folders: [folder], fill: true }),
       FRAME_TREE_READ_TIMEOUT_MS,
       'frame folder read'
     );
@@ -1720,6 +1723,82 @@ function outermostFolders(folders: string[]): string[] {
   );
 }
 
+const GIT_SHA = /^[0-9a-f]{40}$/;
+const utf8Encoder = new TextEncoder();
+
+/** The length of the grant segment `folders` encode to (base64url of `path\tsha` lines). */
+function grantSegmentLength(folders: string[]): number {
+  const bytes = folders.reduce(
+    (sum, folder, index) => sum + utf8Encoder.encode(folder).length + 1 + 40 + (index > 0 ? 1 : 0),
+    0
+  );
+  return Math.ceil((bytes * 4) / 3);
+}
+
+export type FrameGrantChoice =
+  | { folders: string[]; targetFolder: string }
+  | { refusal: string; folders?: never };
+
+/**
+ * The folders a grant for one frame target names — the rule in
+ * `createFrameSigner`'s comment, with no database: `target` is a normalized
+ * repo path, `layout` what the map holds for the deck.
+ *
+ * A subfolder a grant cannot carry (a name `isFilesGrantFolder` refuses, one
+ * the folder rules refuse) is left out rather than refusing the target, so one
+ * odd folder name never costs the deck its other frames; the target's own
+ * folder is refused for the same reasons. Folders other than the target's are
+ * dropped from the end until the grant fits its length limit.
+ */
+export function chooseFrameGrantFolders(
+  target: string,
+  deckFolder: string,
+  layout: FrameLayout
+): FrameGrantChoice {
+  if (isRepoDocumentPath(target)) return { refusal: 'a stored document' };
+  const slash = target.lastIndexOf('/');
+  if (slash <= 0) return { refusal: 'repo root' };
+
+  const prefix = `${deckFolder}/`;
+  const inDeck = target.startsWith(prefix);
+  let targetFolder: string;
+  if (inDeck) {
+    const rest = target.slice(prefix.length);
+    const cut = rest.indexOf('/');
+    targetFolder = cut === -1 ? deckFolder : `${deckFolder}/${rest.slice(0, cut)}`;
+  } else {
+    targetFolder = target.slice(0, slash);
+  }
+
+  if (!isFilesGrantFolder(targetFolder)) return { refusal: 'a folder name a grant cannot carry' };
+  const refusal = frameFolderRefusal(targetFolder, deckFolder, layout);
+  if (refusal) return { refusal };
+  if (targetFolder === deckFolder) return { folders: [deckFolder], targetFolder };
+
+  const usable = [...layout.subfolders]
+    .filter(
+      ([folder, sha]) =>
+        GIT_SHA.test(sha) &&
+        isFilesGrantFolder(folder) &&
+        frameFolderRefusal(folder, deckFolder, layout) === null
+    )
+    .map(([folder]) => folder);
+  let chosen = usable.slice(0, FRAME_GRANT_MAX_SUBFOLDERS);
+  if (!chosen.includes(targetFolder)) {
+    if (inDeck) chosen = chosen.slice(0, FRAME_GRANT_MAX_SUBFOLDERS - 1);
+    chosen.push(targetFolder);
+  }
+  let folders = outermostFolders(chosen);
+  while (folders.length > 1 && grantSegmentLength(folders) > MAX_FILES_GRANT_LENGTH) {
+    const drop = folders.filter(folder => folder !== targetFolder).pop();
+    folders = folders.filter(folder => folder !== drop);
+  }
+  if (grantSegmentLength(folders) > MAX_FILES_GRANT_LENGTH) {
+    return { refusal: 'a folder name a grant cannot carry' };
+  }
+  return { folders, targetFolder };
+}
+
 /**
  * The signer for one pass over one deck's frames.
  *
@@ -1735,7 +1814,10 @@ function outermostFolders(folders: string[]): string[] {
  * the theme folder, and anything under them; `slides` or `pages` whole; any
  * folder that is or holds another slide's or page's folder, or holds a FILE
  * slide's document; a deck or page document as the target; a folder with no
- * tree row of THIS classroom (after one read from the provider).
+ * tree row of THIS classroom (after one read from the provider). A subfolder
+ * other than the target's that a grant cannot carry (refused by those rules,
+ * a name the grant format refuses, a bad tree sha) is left out of the grant
+ * instead (`chooseFrameGrantFolders`).
  *
  * Every folder's tree row is a `MappedAsset` of this classroom, asserted at
  * the mint like every other signature. Bases are memoized per folder set, and
@@ -1780,45 +1862,19 @@ export function createFrameSigner(req: FrameSignerRequest): FrameSigner {
       const target = normalizeFrameRepoPath(repoPath);
       if (!target) return null;
       if (isRepoDocumentPath(target)) return refuse(target, 'a stored document');
-      const slash = target.lastIndexOf('/');
-      if (slash <= 0) return refuse(target, 'repo root');
+      if (target.lastIndexOf('/') <= 0) return refuse(target, 'repo root');
 
       const known = await (layout ??= readFrameLayout(classroomId, deckFolder));
-
-      const prefix = `${deckFolder}/`;
-      const inDeck = target.startsWith(prefix);
-      let targetFolder: string;
-      if (inDeck) {
-        const rest = target.slice(prefix.length);
-        const cut = rest.indexOf('/');
-        targetFolder = cut === -1 ? deckFolder : `${deckFolder}/${rest.slice(0, cut)}`;
-      } else {
-        targetFolder = target.slice(0, slash);
-      }
-
-      const refusal = frameFolderRefusal(targetFolder, deckFolder, known);
-      if (refusal) return refuse(target, refusal);
-
-      let folders: string[];
-      if (targetFolder === deckFolder) {
-        folders = [deckFolder];
-      } else {
-        const subfolders = [...known.subfolders.keys()].filter(
-          folder => frameFolderRefusal(folder, deckFolder, known) === null
-        );
-        let chosen = subfolders.slice(0, FRAME_GRANT_MAX_SUBFOLDERS);
-        if (!chosen.includes(targetFolder)) {
-          if (inDeck) chosen = chosen.slice(0, FRAME_GRANT_MAX_SUBFOLDERS - 1);
-          chosen.push(targetFolder);
-        }
-        folders = outermostFolders(chosen);
-      }
+      const choice = chooseFrameGrantFolders(target, deckFolder, known);
+      if (choice.folders === undefined) return refuse(target, choice.refusal);
+      const { folders, targetFolder } = choice;
 
       const shas = await Promise.all(folders.map(folder => treeShaOf(folder, known.subfolders)));
       const proofs: MappedAsset[] = [];
       for (const [index, folder] of folders.entries()) {
         const sha = shas[index];
-        if (!sha) {
+        // A sha a grant cannot carry is no proof either: left out like a missing row.
+        if (!sha || !GIT_SHA.test(sha)) {
           if (folder === targetFolder || folders.length === 1) {
             return refuse(target, `no tree row for ${folder}`);
           }

@@ -19,9 +19,14 @@ import {
   sanitizeSvgBlocks,
 } from '@classmoji/services/slides/runtime-attrs';
 
-import { stripUnsafeMarkup, toStoredMarkup, type EditorDisplay } from './collab/bridgeDom.ts';
-import { showFrames, type EditorFrames } from './editorFrames.ts';
-import { mountLegacyHtmlBlocks } from './legacyHtmlBlocks.ts';
+import {
+  restoreInertMarkup,
+  stripUnsafeMarkup,
+  toStoredMarkup,
+  type EditorDisplay,
+} from './collab/bridgeDom.ts';
+import { FRAME_MISSING_ATTR, showFrames, type EditorFrames } from './editorFrames.ts';
+import { mountLegacyHtmlBlocks, restoreLegacyHtmlBlocks } from './legacyHtmlBlocks.ts';
 
 /**
  * The deck's slides as the editor shows them: held to the slide markup lists
@@ -71,4 +76,24 @@ export function storedSectionsHtml(slidesDiv: Element, frames: EditorFrames | nu
     (section: Element) => !section.parentElement?.closest('section')
   );
   return rootSections.map((s: Element) => s.outerHTML).join('\n');
+}
+
+/**
+ * What a copy or cut of the editor's slides puts on the clipboard (`contents`:
+ * the selection, cloned): its authored form — what this page renamed or held
+ * back for display restored, legacy html blocks' code back in `srcdoc`, the
+ * placeholder mark dropped — so no other page or peer ever receives this
+ * page's session marker. Frames keep the editor's URLs: those carry the repo
+ * path, so a paste into another deck still names the same file
+ * (`adoptPastedHtmlBlocks`). Parsed in a template: nothing in it loads.
+ */
+export function clipboardHtml(contents: DocumentFragment, doc: Document): string {
+  const template = doc.createElement('template');
+  template.content.append(contents);
+  restoreLegacyHtmlBlocks(template.content);
+  restoreInertMarkup(template.content);
+  for (const frame of Array.from(template.content.querySelectorAll(`[${FRAME_MISSING_ATTR}]`))) {
+    frame.removeAttribute(FRAME_MISSING_ATTR);
+  }
+  return template.innerHTML;
 }

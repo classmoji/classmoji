@@ -4,9 +4,12 @@
  * parses `innerHTML`), held to the lists (walk.ts), serialized with parse5.
  * Remove mode only (rename mode is the editor's, client.ts).
  *
- * The output is parsed and held to the lists again; markup that comes back
- * different (a serialization the parser reads another way) is run until it
- * holds still, and reported.
+ * What comes back is always the serialized tree, never the input: a browser
+ * whose parser builds something parse5 does not (a newer `<select>` content
+ * model, say) only ever sees markup made from what was checked. The output is
+ * parsed and held to the lists again; markup that comes back different (a
+ * serialization the parser reads another way) is run until it holds still,
+ * and reported.
  */
 
 import * as cheerio from 'cheerio';
@@ -84,16 +87,16 @@ function makeAdapter($: CheerioAPI): MarkupAdapter<AnyNode, Element> {
   };
 }
 
-/** One pass over a fragment: the clean markup and how many changes it took. */
+/** One pass over a fragment: the clean markup, serialized, and how many changes it took. */
 function passFragment(html: string): { html: string; changes: number } {
   const $ = cheerio.load(html, null, false);
   const changes = walkMarkup(makeAdapter($), $.root()[0], { mode: 'remove' });
-  return { html: changes === 0 ? html : ($.root().html() ?? ''), changes };
+  return { html: $.root().html() ?? '', changes };
 }
 
 export interface ServerSanitizeResult {
   html: string;
-  /** Changes made (0: the input was already clean and is returned as it was). */
+  /** Changes made by the first pass (0: nothing in the input had to go). */
   changes: number;
   /** The first output did not survive a second parse unchanged (and was run again until it did). */
   unstable: boolean;
@@ -108,8 +111,8 @@ function untilStable(
   let current = pass(html);
   const changes = current.changes;
   let unstable = false;
-  // Nothing changed: the output is the input, and a second pass would read the same.
-  if (changes === 0) return { html, changes, unstable };
+  // The output is returned only once its own parse has been held to the lists
+  // and found clean.
   for (let i = 1; i < MAX_PASSES; i++) {
     const again = pass(current.html);
     if (again.changes === 0) break;
@@ -132,7 +135,7 @@ function reportUnstable(where: string): void {
 
 /**
  * Slide markup (a fragment: slide html, `.slides` content, notes) held to the
- * lists, remove mode. Clean input comes back byte for byte.
+ * lists, remove mode, as parse5 serializes it.
  */
 export function sanitizeServer(html: string, _opts?: { mode: 'remove' }): string {
   const result = sanitizeServerResult(html);
@@ -155,15 +158,15 @@ function passDocument(html: string): { html: string; changes: number } {
   const root = slides.length > 0 ? slides[0] : $('body')[0];
   if (!root) return { html, changes: 0 };
   const changes = walkMarkup(makeAdapter($), root, { mode: 'remove' });
-  return { html: changes === 0 ? html : $.html(), changes };
+  return { html: $.html(), changes };
 }
 
 /**
  * A whole deck document (index.html shape) with its slides held to the lists:
  * everything inside `.reveal .slides`; the head and the document's own
- * scripts are the generator's and are left as they are. A fragment is
- * treated as slide markup ({@link sanitizeServer}). Clean input comes back
- * byte for byte.
+ * scripts are the generator's and are left as they are (the whole document
+ * comes back serialized by parse5; script text is unchanged). A fragment is
+ * treated as slide markup ({@link sanitizeServer}).
  */
 export function sanitizeDeckDocumentServer(html: string): string {
   if (!DOCUMENT_RE.test(html)) return sanitizeServer(html);

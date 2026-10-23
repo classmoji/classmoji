@@ -21,8 +21,9 @@ import {
  * so the surfaces can show a placeholder.
  *
  * SAVE (`canonicalizeDeckFrames`): a files URL of this classroom or an editor
- * frame URL (`/<slideId>/frame/…`) that reached a deck is turned back into the
- * stored deck-relative reference, and nothing derived for display survives.
+ * frame URL of any deck (`/<slideId>/frame/…`) that reached a deck is turned
+ * back into the stored reference, relative to THIS deck, and nothing derived
+ * for display survives.
  */
 
 /** Marks a frame whose source could not be shown (inert, or no signature). */
@@ -115,8 +116,11 @@ export async function rewriteDeckFrames(
   const outcomes = await Promise.all(
     jobs.map(async job => {
       const ref = classifyFrameRef(job.value, opts.refs);
+      // An html block's file is in the repo; a block naming anything else shows nothing.
+      if (ref.kind === 'inert' || (ref.kind === 'external' && job.block)) {
+        return { job, kind: 'inert' as const };
+      }
       if (ref.kind === 'external') return { job, kind: 'external' as const };
-      if (ref.kind === 'inert') return { job, kind: 'inert' as const };
       const url = await signOnce(ref.repoPath, ref.query);
       return url ? { job, kind: 'signed' as const, url } : { job, kind: 'inert' as const };
     })
@@ -131,6 +135,7 @@ export async function rewriteDeckFrames(
       // An html block's frame is its file: nothing else may load in it.
       delete job.el.attribs['src'];
       delete job.el.attribs['srcdoc'];
+      delete job.el.attribs['data-src'];
     }
     if (outcome.kind === 'inert') {
       makeInert(job.el, job.attr, job.value);
@@ -149,7 +154,7 @@ export async function rewriteDeckFrames(
 export interface CanonicalizeFramesOptions {
   /** The deck folder (`slides/<seg>`), which stored references are relative to. */
   deckFolder: string;
-  /** This deck's id, for its editor frame URLs. Absent: those are left alone. */
+  /** @deprecated Ignored: editor frame URLs of any deck are turned back (see `parseEditorFrameUrl`). */
   slideId?: string | null;
   /** A files URL of this classroom → its target; null otherwise (`parseOwnFilesUrl`). */
   filesRef: (url: string) => RepoFrameTarget | null;
@@ -157,9 +162,7 @@ export interface CanonicalizeFramesOptions {
 
 /** A frame URL derived for display → the stored deck-relative reference, or null. */
 function storedFrameRef(value: string, opts: CanonicalizeFramesOptions): string | null {
-  const target =
-    opts.filesRef(value.trim()) ??
-    (opts.slideId ? parseEditorFrameUrl(value, { slideId: opts.slideId }) : null);
+  const target = opts.filesRef(value.trim()) ?? parseEditorFrameUrl(value);
   return target ? `${relativeToDeck(target.repoPath, opts.deckFolder)}${target.query}` : null;
 }
 
@@ -186,8 +189,28 @@ export function canonicalizeFrameMarkup(html: string, opts: CanonicalizeFramesOp
       }
     }
 
-    const names =
-      el.name === 'iframe' ? ['src', 'data-src', HTML_BLOCK_SRC_ATTR, BG_IFRAME] : [BG_IFRAME];
+    const block = el.name === 'iframe' && el.attribs[HTML_BLOCK_SRC_ATTR] !== undefined;
+    if (block) {
+      // The URL the frame showed names the file it was showing — after a paste
+      // from another deck, a file of that deck — so the reference is re-derived
+      // from it, relative to this deck.
+      for (const name of ['src', 'data-src']) {
+        const value = el.attribs[name];
+        const stored = value ? storedFrameRef(value, opts) : null;
+        if (stored === null) continue;
+        if (stored !== el.attribs[HTML_BLOCK_SRC_ATTR]) {
+          el.attribs[HTML_BLOCK_SRC_ATTR] = stored;
+          changed = true;
+        }
+        break;
+      }
+    }
+
+    const names = block
+      ? [HTML_BLOCK_SRC_ATTR, BG_IFRAME]
+      : el.name === 'iframe'
+        ? ['src', 'data-src', BG_IFRAME]
+        : [BG_IFRAME];
     for (const name of names) {
       const value = el.attribs[name];
       if (!value) continue;
@@ -199,7 +222,7 @@ export function canonicalizeFrameMarkup(html: string, opts: CanonicalizeFramesOp
     }
 
     // An html block's frame stores its file reference and nothing that loads.
-    if (el.name === 'iframe' && el.attribs[HTML_BLOCK_SRC_ATTR] !== undefined) {
+    if (block) {
       for (const name of ['src', 'srcdoc', 'data-src']) {
         if (el.attribs[name] !== undefined) {
           delete el.attribs[name];
@@ -237,9 +260,10 @@ function canonicalizeFrameAttrs(
 
 /**
  * A deck with every display-derived frame value turned back into its stored
- * form: files URLs of this classroom and this deck's editor frame URLs become
- * deck-relative references, `data-cm-orig-*` is dropped, and an html block's
- * frame keeps `data-cm-src` with no `src`/`srcdoc`/`data-src`.
+ * form: files URLs of this classroom and editor frame URLs of any deck become
+ * references relative to this deck, `data-cm-orig-*` is dropped, and an html
+ * block's frame keeps `data-cm-src` (re-derived from the URL it showed, when
+ * there is one) with no `src`/`srcdoc`/`data-src`.
  *
  * Sync and pure (no database): it runs on every save whatever else fails.
  * Slides with nothing to change keep their objects; the deck comes back by

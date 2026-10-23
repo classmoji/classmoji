@@ -58,6 +58,14 @@ export interface EditorFrames {
 /** Attributes holding a frame's source, on any element. */
 const FRAME_VALUE_ATTRS = ['src', 'data-src', 'data-background-iframe'] as const;
 
+/**
+ * On a frame that shows nothing because its source may not load (or names
+ * nothing of ours): the placeholder's hook in the stylesheet. The same
+ * attribute the server's read pass marks (`FRAME_MISSING_ATTR`, deckFrames.ts);
+ * in the editor it is display only and never written back.
+ */
+export const FRAME_MISSING_ATTR = 'data-cm-missing';
+
 // ─── The repo's own URL shapes, client side ──────────────────────────────────
 
 /**
@@ -158,12 +166,10 @@ export function displayFrameValue(value: string, frames: EditorFrames): FrameDis
   return shown === value ? { kind: 'keep' } : { kind: 'set', value: shown };
 }
 
-/** A frame source as stored: an editor frame URL of this deck → its deck-relative reference; anything else as it is. */
+/** A frame source as stored: an editor frame URL (of any deck) → its reference relative to this deck; anything else as it is. */
 export function storedFrameValue(value: string, frames: EditorFrames | null): string {
   if (!frames || !isEditorFrameUrl(value)) return value;
-  return (
-    fromEditorFrameUrl(value, { slideId: frames.slideId, deckFolder: frames.deckFolder }) ?? value
-  );
+  return fromEditorFrameUrl(value, { deckFolder: frames.deckFolder }) ?? value;
 }
 
 /**
@@ -231,8 +237,13 @@ export function showFrames(root: Element | DocumentFragment, frames: EditorFrame
       // The file is the block's only source: inline code never shows over it.
       el.removeAttribute('srcdoc');
       const src = htmlBlockDisplaySrc(el, frames);
-      if (src === null) el.removeAttribute('src');
-      else if (el.getAttribute('src') !== src) el.setAttribute('src', src);
+      if (src === null) {
+        el.removeAttribute('src');
+        el.setAttribute(FRAME_MISSING_ATTR, '1');
+      } else {
+        if (el.getAttribute('src') !== src) el.setAttribute('src', src);
+        el.removeAttribute(FRAME_MISSING_ATTR);
+      }
       continue;
     }
     for (const name of FRAME_VALUE_ATTRS) {
@@ -241,19 +252,24 @@ export function showFrames(root: Element | DocumentFragment, frames: EditorFrame
       if (value === null) continue;
       const shown = displayFrameValue(value, frames);
       if (shown.kind === 'set') el.setAttribute(name, shown.value);
-      else if (shown.kind === 'inert') renameAttr(el, name, sessionInertName(marker, name));
+      else if (shown.kind === 'inert') {
+        renameAttr(el, name, sessionInertName(marker, name));
+        if (el.localName === 'iframe') el.setAttribute(FRAME_MISSING_ATTR, '1');
+      }
     }
   }
 }
 
 /**
- * Before any write, in place: editor frame URLs of this deck back to their
- * stored references, and an html block's frame back to its file reference
- * alone (no `src`, `srcdoc` or `data-src`). Safe without a context: then only
- * the html-block rule applies.
+ * Before any write, in place: editor frame URLs back to their stored
+ * references (relative to this deck), an html block's frame back to its file
+ * reference alone (no `src`, `srcdoc` or `data-src`), and the editor's
+ * placeholder mark dropped. Safe without a context: then only the html-block
+ * rule and the mark apply.
  */
 export function storeFrames(root: Element | DocumentFragment, frames: EditorFrames | null): void {
   for (const el of elementsUnder(root)) {
+    if (el.localName === 'iframe') el.removeAttribute(FRAME_MISSING_ATTR);
     if (el.localName === 'iframe' && el.hasAttribute(HTML_BLOCK_SRC_ATTR)) {
       el.removeAttribute('src');
       el.removeAttribute('srcdoc');
@@ -290,6 +306,30 @@ export function canonicalFrames(
       if (value === null) continue;
       const canonical = canonicalFrameValue(value, frames);
       if (canonical !== value) el.setAttribute(name, canonical);
+    }
+  }
+}
+
+/**
+ * Html blocks just pasted onto a slide, in place, before they are shown: a
+ * block copied from another deck still names its file relative to THAT deck
+ * (`blocks/x.html`), but the frame's editor URL carries the file's repo path.
+ * The block's `data-cm-src` is written again from that URL, relative to this
+ * deck (`../other/blocks/x.html`), so it shows the same file; its first Apply
+ * here writes a file of this deck. Blocks of this deck come out unchanged.
+ */
+export function adoptPastedHtmlBlocks(
+  root: Element | DocumentFragment,
+  frames: EditorFrames | null
+): void {
+  if (!frames) return;
+  for (const el of elementsUnder(root)) {
+    if (!isHtmlBlockFrame(el)) continue;
+    const shown = el.getAttribute('src');
+    if (!shown || !isEditorFrameUrl(shown)) continue;
+    const stored = fromEditorFrameUrl(shown, { deckFolder: frames.deckFolder });
+    if (stored && stored !== el.getAttribute(HTML_BLOCK_SRC_ATTR)) {
+      el.setAttribute(HTML_BLOCK_SRC_ATTR, stored);
     }
   }
 }
@@ -365,11 +405,22 @@ export function writeStoredIframeSrc(
     if (shown.kind === 'set') value = shown.value;
     else if (shown.kind === 'inert') inert = true;
   }
+  // Both `data-src` and `src` without Reveal's lazy-load mark: `src` mirrors
+  // `data-src` (a frame Reveal loaded before marking it). Both move together.
+  const mirrored =
+    attr === 'data-src' &&
+    target === 'data-src' &&
+    frame.hasAttribute('src') &&
+    !frame.hasAttribute('data-lazy-loaded');
   if (inert) {
     frame.removeAttribute(target);
+    if (mirrored) frame.removeAttribute('src');
     frame.setAttribute(sessionInertName(marker, attr), stored);
     if (target !== attr) frame.removeAttribute('data-lazy-loaded');
+    frame.setAttribute(FRAME_MISSING_ATTR, '1');
     return;
   }
   frame.setAttribute(target, value);
+  if (mirrored) frame.setAttribute('src', value);
+  frame.removeAttribute(FRAME_MISSING_ATTR);
 }

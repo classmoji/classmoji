@@ -11,7 +11,9 @@
  *
  * Only HTML gets the box. A script, stylesheet, image or svg from the same
  * grant is a subresource of that boxed page, or an inert file opened on its
- * own, and keeps the strict policy byte for byte.
+ * own, and keeps the strict policy byte for byte. `text/html` also gets the
+ * storage shim; XHTML gets the box with its bytes untouched (a script ahead of
+ * its root element would not be well-formed XML).
  */
 import { finalizeHeaders } from './cache.ts';
 
@@ -101,9 +103,13 @@ export function withStorageShim(bytes: Uint8Array): Uint8Array {
   return out;
 }
 
+function essenceOf(contentType: string | null): string {
+  return (contentType ?? '').split(';')[0].trim().toLowerCase();
+}
+
 /** `text/html` or `application/xhtml+xml`, whatever the parameters. */
 export function isHtmlContentType(contentType: string | null): boolean {
-  const essence = (contentType ?? '').split(';')[0].trim().toLowerCase();
+  const essence = essenceOf(contentType);
   return essence === 'text/html' || essence === 'application/xhtml+xml';
 }
 
@@ -112,10 +118,11 @@ export function isHtmlContentType(contentType: string | null): boolean {
  * counterpart to `asDownload`. Anything else (another type, an error, a 404)
  * is returned untouched, strict policy and all.
  *
- * The body is buffered to insert the shim, which changes its length, so the
- * stored `Content-Length`, `ETag` and `Accept-Ranges` no longer describe it
- * and are dropped (the caller never asks for a range on HTML). A HEAD gets the
- * headers only — its body, if any, is a tee'd branch and is cancelled.
+ * For `text/html` the body is buffered to insert the shim, which changes its
+ * length, so the stored `Content-Length`, `ETag` and `Accept-Ranges` no longer
+ * describe it and are dropped (the caller never asks for a range on HTML).
+ * XHTML is passed through as stored, length and `ETag` included. A HEAD gets
+ * the headers only — its body, if any, is a tee'd branch and is cancelled.
  */
 export async function asHtmlApp(response: Response, head: boolean): Promise<Response> {
   if (response.status !== 200 || !isHtmlContentType(response.headers.get('Content-Type'))) {
@@ -125,14 +132,19 @@ export async function asHtmlApp(response: Response, head: boolean): Promise<Resp
   const headers = new Headers(response.headers);
   headers.set('Content-Security-Policy', BOX_CONTENT_SECURITY_POLICY);
   headers.set('Referrer-Policy', 'no-referrer');
-  headers.delete('Content-Length');
-  headers.delete('ETag');
   headers.delete('Accept-Ranges');
+
+  const shim = essenceOf(response.headers.get('Content-Type')) === 'text/html';
+  if (shim) {
+    headers.delete('Content-Length');
+    headers.delete('ETag');
+  }
 
   if (head) {
     response.body?.cancel().catch(() => {});
     return new Response(null, { status: 200, headers });
   }
+  if (!shim) return new Response(response.body, { status: 200, headers });
 
   const body = withStorageShim(new Uint8Array(await response.arrayBuffer()));
   headers.set('Content-Length', String(body.byteLength));

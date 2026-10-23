@@ -20,6 +20,7 @@ const ORG = 'cs52-org';
 const REPO = 'cs52-content';
 const DECK = 'slides/week-1';
 const SLIDE_ID = '9b2f1c4e-0000-4000-8000-000000000001';
+const OTHER_SLIDE_ID = 'aaaaaaaa-0000-4000-8000-000000000002';
 const CLASSROOM = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
 const CONTENT = 'https://content.classmoji.io';
 const BASE = `${CONTENT}/c/${CLASSROOM}/files/GRANT/week.1.2.sig/`;
@@ -118,6 +119,27 @@ describe('rewriteDeckFrames', () => {
     expect(out).not.toMatch(/\ssrc="/);
   });
 
+  it('an html block naming anything but a repo file shows nothing, and loads nothing else', async () => {
+    const out = await rewrite(
+      '<iframe data-cm-src="https://evil.example/x.html" src="https://evil.example/x.html" ' +
+        'data-src="https://evil.example/y.html" srcdoc="&lt;b&gt;"></iframe>' +
+        '<iframe data-cm-src="javascript:alert(1)" data-src="blocks/a.html"></iframe>'
+    );
+    expect(out).toBe(
+      `<iframe data-cm-inert-data-cm-src="https://evil.example/x.html" ${FRAME_MISSING_ATTR}="1"></iframe>` +
+        `<iframe data-cm-inert-data-cm-src="javascript:alert(1)" ${FRAME_MISSING_ATTR}="1"></iframe>`
+    );
+  });
+
+  it('an html block replaces whatever data-src it carried with its signed file', async () => {
+    const out = await rewrite(
+      '<iframe data-cm-src="blocks/a.html" data-src="https://evil.example/" src="x"></iframe>'
+    );
+    expect(out).toBe(
+      `<iframe data-cm-src="blocks/a.html" data-src="${BASE}slides/week-1/blocks/a.html" sandbox="${HTML_BLOCK_SANDBOX}"></iframe>`
+    );
+  });
+
   it('ours that cannot be signed is inert too', async () => {
     const out = await rewrite('<iframe data-cm-src="blocks/missing.html"></iframe>');
     expect(out).toBe(
@@ -128,10 +150,12 @@ describe('rewriteDeckFrames', () => {
   it('heals a leaked files URL or editor URL by signing it again', async () => {
     const leaked = `${BASE}slides/week-1/games/a/i.html?x=1`;
     const out = await rewrite(
-      `<iframe src="${leaked}"></iframe><iframe src="/${SLIDE_ID}/frame/games/b/i.html?cm-rev=9"></iframe>`
+      `<iframe src="${leaked}"></iframe><iframe src="/${SLIDE_ID}/frame/games/b/i.html?cm-rev=9"></iframe>` +
+        `<iframe src="/${OTHER_SLIDE_ID}/frame/games/c/i.html"></iframe>`
     );
     expect(out).toContain(`src="${leaked}"`);
     expect(out).toContain(`src="${BASE}games/b/i.html"`);
+    expect(out).toContain(`src="${BASE}games/c/i.html"`);
   });
 
   it('signs each target once per pass', async () => {
@@ -182,10 +206,46 @@ describe('canonicalizeFrameMarkup', () => {
     ).toBe('<img src="a.png"><iframe></iframe>');
   });
 
+  it("turns another deck's editor URL into a reference relative to this deck", () => {
+    expect(
+      canonicalizeFrameMarkup(
+        `<iframe src="/${OTHER_SLIDE_ID}/frame/slides/other/games/a/i.html?cm-rev=1"></iframe>` +
+          `<iframe src="https://slides.classmoji.io/${OTHER_SLIDE_ID}/frame/games/b/"></iframe>`,
+        opts
+      )
+    ).toBe(
+      '<iframe src="../other/games/a/i.html"></iframe>' +
+        '<iframe src="../../games/b/index.html"></iframe>'
+    );
+  });
+
+  it("an html block's reference is re-derived from the URL it showed", () => {
+    expect(
+      canonicalizeFrameMarkup(
+        `<iframe data-cm-src="blocks/x.html" data-cm-rev="r" src="/${OTHER_SLIDE_ID}/frame/slides/other/blocks/x.html?cm-rev=r"></iframe>`,
+        opts
+      )
+    ).toBe('<iframe data-cm-src="../other/blocks/x.html" data-cm-rev="r"></iframe>');
+    expect(
+      canonicalizeFrameMarkup(
+        `<iframe data-cm-src="blocks/x.html" data-src="${BASE}slides/week-1/blocks/y.html"></iframe>`,
+        opts
+      )
+    ).toBe('<iframe data-cm-src="blocks/y.html"></iframe>');
+    // A URL that is not ours says nothing about the file.
+    expect(
+      canonicalizeFrameMarkup(
+        '<iframe data-cm-src="blocks/x.html" src="https://example.com/a/frame/b.html"></iframe>',
+        opts
+      )
+    ).toBe('<iframe data-cm-src="blocks/x.html"></iframe>');
+  });
+
   it('leaves everything else byte for byte', () => {
     const html =
       '<iframe src="https://www.youtube.com/embed/x"  allowfullscreen></iframe><p>  x </p>' +
-      `<iframe src="/aaaaaaaa-0000-4000-8000-000000000002/frame/a/b.html"></iframe>`;
+      '<iframe src="https://example.com/team/frame/b.html"></iframe>' +
+      '<iframe src="/not-a-slide/frame/a/b.html"></iframe>';
     expect(canonicalizeFrameMarkup(html, opts)).toBe(html);
     expect(canonicalizeFrameMarkup('<p>no frames</p>', opts)).toBe('<p>no frames</p>');
   });
@@ -195,9 +255,11 @@ describe('canonicalizeFrameMarkup', () => {
     expect(canonicalizeFrameMarkup(html, opts)).toBe(html);
   });
 
-  it('without a slide id, editor URLs are left alone', () => {
-    const html = `<iframe src="/${SLIDE_ID}/frame/a/b.html"></iframe>`;
-    expect(canonicalizeFrameMarkup(html, { ...opts, slideId: null })).toBe(html);
+  it('turns editor URLs back without being told the slide id', () => {
+    const html = `<iframe src="/${SLIDE_ID}/frame/slides/week-1/a/b.html"></iframe>`;
+    expect(canonicalizeFrameMarkup(html, { deckFolder: DECK, filesRef })).toBe(
+      '<iframe src="a/b.html"></iframe>'
+    );
   });
 });
 

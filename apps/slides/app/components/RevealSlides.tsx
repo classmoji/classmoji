@@ -17,6 +17,7 @@ import {
 import {
   REVEAL_LOCKED_OPTIONS,
   installRevealMessageGuard,
+  lockRevealAfterInit,
   stripRevealQueryConfig,
 } from '~/utils/revealHardening';
 import { isAskMojiTarget } from '~/components/askMoji/askMojiProtocol';
@@ -486,6 +487,7 @@ const RevealSlides = forwardRef(function RevealSlides(
       });
 
       await deck.initialize();
+      lockRevealAfterInit(deck);
 
       if (!mounted) {
         deck.destroy();

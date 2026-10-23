@@ -16,7 +16,9 @@
  * Also the editor's display form: the editor never holds a signed URL. It
  * shows our frames through `/<slideId>/frame/<repoPath>` (a redirect to a fresh
  * signature) and turns that back into the stored deck-relative reference
- * before anything is saved.
+ * before anything is saved. The repo path is in the URL, so an editor URL of
+ * ANY deck (one pasted from another deck, or another classroom) names that
+ * path in the current deck's repo, written relative to the current deck.
  *
  * ZERO imports, so the browser (editor) and the server (read surfaces, save
  * backstop, frame route) apply the same rule.
@@ -66,7 +68,10 @@ export interface FrameRefOptions {
   ourHosts: readonly string[];
   /** The content delivery origin (`https://content.classmoji.io`). */
   contentOrigin?: string | null;
-  /** This deck's id: its editor frame URLs (`/<slideId>/frame/…`) are ours. */
+  /**
+   * @deprecated Ignored: an editor frame URL of any deck is ours (its repo
+   * path is read in this classroom's repo).
+   */
   slideId?: string | null;
   /** A files URL of THIS classroom on the content origin → its target; null otherwise. */
   filesRef?: (url: string) => RepoFrameTarget | null;
@@ -101,11 +106,19 @@ export function normalizeFrameRepoPath(path: string): string | null {
   return segments.join('/');
 }
 
+/** A folder reference (`games/snake/`) names its index page, as a static host would serve it. */
+function withIndexPage(path: string): string {
+  return path.endsWith('/') ? `${path}index.html` : path;
+}
+
+/** A decoded repo path from one of the repo's URL shapes → its one spelling, or null. */
+function ownTargetPath(path: string): string | null {
+  return normalizeFrameRepoPath(withIndexPage(path));
+}
+
 /** A URL pathname (percent-encoded) → the decoded repo path, or null. */
 function decodePathname(pathname: string): string | null {
-  let path = pathname;
-  // A folder reference names its index page, as a static host would serve it.
-  if (path.endsWith('/')) path = `${path}index.html`;
+  const path = withIndexPage(pathname);
   const decoded: string[] = [];
   for (const segment of path.split('/')) {
     try {
@@ -188,14 +201,11 @@ function classifyAppPath(url: URL, opts: FrameRefOptions): FrameRef {
   const pathAndTail = `${url.pathname}${url.search}${url.hash}`;
   if (url.pathname.startsWith('/content/')) {
     const own = opts.ownRepoPath(pathAndTail);
-    const repoPath = own === null ? null : normalizeFrameRepoPath(own);
+    const repoPath = own === null ? null : ownTargetPath(own);
     return repoPath ? OURS({ repoPath, query: url.search + url.hash }) : INERT;
   }
-  if (opts.slideId) {
-    const editor = parseEditorFrameUrl(pathAndTail, { slideId: opts.slideId });
-    if (editor) return OURS(editor);
-  }
-  return INERT;
+  const editor = parseEditorFrameUrl(pathAndTail);
+  return editor ? OURS(editor) : INERT;
 }
 
 /** An absolute http(s) URL; `written` is how the deck spelled it. */
@@ -215,7 +225,7 @@ function classifyAbsolute(url: URL, written: string, opts: FrameRefOptions): Fra
   // the deck stored: a parsed URL lowercases the host, and a login need not be.
   const own = opts.ownRepoPath(written);
   if (own !== null) {
-    const repoPath = normalizeFrameRepoPath(own);
+    const repoPath = ownTargetPath(own);
     return repoPath ? OURS({ repoPath, query: tailOf(written) }) : INERT;
   }
   return EXTERNAL;
@@ -321,8 +331,14 @@ export function toEditorFrameUrl(
   return `${path}${rev ? withParam(query, EDITOR_FRAME_REV_PARAM, rev) : query}`;
 }
 
+/**
+ * `[https://host]/<slide id>/frame/<repoPath>[?query][#hash]`. The first
+ * segment must be a slide id (a uuid): an absolute URL of any host is accepted,
+ * so the id's shape is what keeps an external page that happens to have a
+ * `/x/frame/` path from being read as one of ours.
+ */
 const EDITOR_FRAME_RE = new RegExp(
-  `^(?:https?://[^/?#]+)?/([^/?#]+)/${EDITOR_FRAME_SEGMENT}/([^?#]+)([?#].*)?$`,
+  `^(?:https?://[^/?#]+)?/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/${EDITOR_FRAME_SEGMENT}/([^?#]+)([?#].*)?$`,
   'i'
 );
 
@@ -332,26 +348,23 @@ export function isEditorFrameUrl(url: string): boolean {
 }
 
 /**
- * An editor frame URL of THIS deck → the repo path and query it names
- * (`cm-rev` removed). Null for any other string, or another deck's URL.
+ * An editor frame URL of any deck → the repo path and query it names
+ * (`cm-rev` removed; a path ending in `/` names its `index.html`). Null for any
+ * other string. Which classroom's repo the path is read in is the caller's:
+ * always its own.
+ *
+ * `slideId` is accepted and ignored (see `FrameRefOptions.slideId`).
  */
 export function parseEditorFrameUrl(
   url: string,
-  { slideId }: { slideId: string }
+  _opts?: { slideId?: string | null }
 ): RepoFrameTarget | null {
   if (typeof url !== 'string') return null;
   const match = EDITOR_FRAME_RE.exec(url.trim());
   if (!match) return null;
-  let id: string;
-  try {
-    id = decodeURIComponent(match[1]);
-  } catch {
-    return null;
-  }
-  if (id !== slideId) return null;
-  const repoPath = decodePathname(match[2]);
+  const repoPath = decodePathname(match[1]);
   if (!repoPath) return null;
-  return { repoPath, query: withoutParam(match[3] ?? '', EDITOR_FRAME_REV_PARAM) };
+  return { repoPath, query: withoutParam(match[2] ?? '', EDITOR_FRAME_REV_PARAM) };
 }
 
 /** `repoPath` written relative to `deckFolder` (`blocks/x.html`, `../../games/a/i.html`). */
@@ -368,15 +381,16 @@ export function relativeToDeck(repoPath: string, deckFolder: string): string {
 }
 
 /**
- * An editor frame URL of this deck → the stored reference, relative to the
- * deck folder (`blocks/x.html`, `games/a/index.html?y=1`,
- * `../../games/sketchkit/draw.html?deck=x`). Null for anything else.
+ * An editor frame URL of any deck → the stored reference, relative to THIS
+ * deck's folder (`blocks/x.html`, `games/a/index.html?y=1`,
+ * `../../games/sketchkit/draw.html?deck=x`, `../other/blocks/x.html` for a
+ * block pasted from another deck). Null for anything else.
  */
 export function fromEditorFrameUrl(
   url: string,
-  { slideId, deckFolder }: { slideId: string; deckFolder: string }
+  { deckFolder }: { deckFolder: string; slideId?: string | null }
 ): string | null {
-  const target = parseEditorFrameUrl(url, { slideId });
+  const target = parseEditorFrameUrl(url);
   if (!target) return null;
   return `${relativeToDeck(target.repoPath, deckFolder)}${target.query}`;
 }

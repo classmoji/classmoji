@@ -1,6 +1,6 @@
 /**
  * `/{slideId}/frame/*` — the editor's frame source: a 302 to a freshly signed
- * files URL for a file in the deck's own content repo, behind the deck's view
+ * files URL for a file in the deck's own content repo, behind the deck's edit
  * gate. A RESOURCE route (no default export), like `$slideId_.download`, so a
  * 404 is a 404 rather than route data. See `~/utils/frameRoute.server`.
  */

@@ -488,11 +488,19 @@ export async function createPage({
 
   const ctx = await resolveContentRepo(classroomId);
 
-  // With `files`, the caller already placed them under `pageContentPath`
-  // (`<path>/assets/…`), so that path is kept and a taken one is refused below
-  // rather than moving the page away from its files.
-  const contentPath =
-    files.length > 0 ? pageContentPath(title) : await freePageContentPath(classroomId, title);
+  // The callers that pass `files` placed them under this same
+  // `freePageContentPath` (`<path>/assets/…`), so the page and its files agree.
+  // Should the free path have moved since (another page took it), the page
+  // would land away from its files: refused instead, before any write.
+  const contentPath = await freePageContentPath(classroomId, title);
+  if (files.some(file => !file.path.startsWith(`${contentPath}/`))) {
+    throw Object.assign(
+      new Error(
+        `The page's files are not under its content path '${contentPath}'. Please try again.`
+      ),
+      { code: PAGE_CONTENT_PATH_CONFLICT }
+    );
+  }
 
   // Distinct titles can normalize to the SAME content path ("Lab 1" and
   // "Lab-1" → pages/lab-1), and content_path carries no unique constraint —

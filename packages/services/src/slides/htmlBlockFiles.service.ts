@@ -40,6 +40,7 @@ import {
   isHtmlBlockRev,
   MAX_HTML_BLOCK_FILE_BYTES,
   mintHtmlBlockFileSrc,
+  resolveDeckRelativeRef,
 } from './deckBlocks.ts';
 import { isDeckSlide } from './slideSource.ts';
 
@@ -95,6 +96,10 @@ interface DeckTarget {
   repo: string;
 }
 
+/** A refusal for the classroom's state, worded as `CLASSROOM_STATUS_MESSAGES` (packages/auth). */
+const CLASSROOM_LOCKED_MESSAGE = 'This class is in read-only mode. The owner has locked it.';
+const CLASSROOM_UNPUBLISHED_MESSAGE = 'This class has been unpublished by the owner.';
+
 /** The actor's highest role in the classroom, or null. */
 async function highestRole(classroomId: string, userId: string): Promise<Role | null> {
   const rows = await getPrisma().classroomMembership.findMany({
@@ -128,20 +133,29 @@ async function loadDeckFor(
   const role = await highestRole(slide.classroom_id, actorUserId);
   const status = slide.classroom?.status;
   const staff = role === 'OWNER' || role === 'TEACHER' || role === 'ASSISTANT';
-  const allowed =
+  const roleAllows =
     access === 'view'
-      ? staff && (status !== 'UNPUBLISHED' || role === 'OWNER')
-      : (role === 'OWNER' ||
-          role === 'TEACHER' ||
-          (role === 'ASSISTANT' &&
-            (slide.created_by === actorUserId || slide.allow_team_edit === true))) &&
-        (role === 'OWNER' || status === 'ACTIVE');
-  if (!allowed || !role) {
+      ? staff
+      : role === 'OWNER' ||
+        role === 'TEACHER' ||
+        (role === 'ASSISTANT' &&
+          (slide.created_by === actorUserId || slide.allow_team_edit === true));
+  if (!roleAllows || !role) {
     throw new HtmlBlockFileError(
       'forbidden',
       access === 'view'
         ? 'You do not have permission to read this deck'
         : 'You do not have permission to edit this deck'
+    );
+  }
+  // The classroom's state: owners always; everyone else edits only while it
+  // is ACTIVE and reads while it is published.
+  const stateAllows =
+    role === 'OWNER' || (access === 'view' ? status !== 'UNPUBLISHED' : status === 'ACTIVE');
+  if (!stateAllows) {
+    throw new HtmlBlockFileError(
+      'forbidden',
+      status === 'LOCKED' ? CLASSROOM_LOCKED_MESSAGE : CLASSROOM_UNPUBLISHED_MESSAGE
     );
   }
   const gitOrganization = slide.classroom?.git_organization;
@@ -169,6 +183,22 @@ function blockFilePath(target: DeckTarget, src: string): string {
     );
   }
   return `${target.deckFolder}/${src}`;
+}
+
+const DECK_BLOCK_FILE_RE = /^slides\/[^/.][^/]*\/blocks\/[0-9a-f]{8}\.html$/;
+
+/**
+ * For reading only: this deck's own `blocks/<8 hex>.html`, or another deck's
+ * (a block pasted from that deck stores `../<deck>/blocks/<8 hex>.html` until
+ * its first Apply here writes a file of this deck's own).
+ */
+function readableBlockFilePath(target: DeckTarget, src: string): string {
+  if (isHtmlBlockFileSrc(src)) return `${target.deckFolder}/${src}`;
+  const resolved = resolveDeckRelativeRef(src, target.deckFolder);
+  if (resolved && !resolved.suffix && DECK_BLOCK_FILE_RE.test(resolved.repoPath)) {
+    return resolved.repoPath;
+  }
+  throw new HtmlBlockFileError('invalid', 'Only an html block file of a deck can be read here');
 }
 
 async function audit(
@@ -369,7 +399,7 @@ export async function readHtmlBlockSources({
   const repo = { gitOrganization: target.gitOrganization as never, repo: target.repo };
   return Promise.all(
     refs.map(async ({ src, rev }) => {
-      const path = blockFilePath(target, src);
+      const path = readableBlockFilePath(target, src);
       const meta = await ContentService.getMeta({ ...repo, path, skipCache: true });
       if (!meta) return null;
       const blob = await ContentService.getBlobContent({ ...repo, sha: meta.sha });

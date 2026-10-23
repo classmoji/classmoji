@@ -54,6 +54,17 @@ export interface HtmlBlockApiAnswer {
   body: Record<string, unknown>;
 }
 
+/**
+ * Whether a request's `Content-Type` is JSON (`application/json`, any
+ * parameters). Anything else is refused before the body is read: a page on
+ * another site can send a form or `text/plain` POST without asking, never
+ * `application/json`.
+ */
+export function isJsonContentType(contentType: string | null): boolean {
+  if (!contentType) return false;
+  return contentType.split(';')[0].trim().toLowerCase() === 'application/json';
+}
+
 const fail = (status: number, error: string, code: string): HtmlBlockApiAnswer => ({
   status,
   body: { error, code },
