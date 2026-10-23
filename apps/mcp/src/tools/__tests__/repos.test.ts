@@ -1,5 +1,5 @@
 /**
- * Unit tests for repo_create (container create). The tool must:
+ * Unit tests for repository MCP tools. The tools must:
  *   - write classroom_id from ctx, never from input;
  *   - refresh the content manifest but NEVER trigger repo provisioning
  *     (provisioning is repo_publish's job — a create must not touch GitHub repos);
@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   findDependents: vi.fn(),
   deleteIfUnprovisioned: vi.fn(),
   checkTemplate: vi.fn(),
+  syncRepositoryAssignments: vi.fn(),
 }));
 
 vi.mock('@classmoji/services', () => ({
@@ -54,6 +55,7 @@ vi.mock('@classmoji/services', () => ({
 }));
 
 vi.mock('@classmoji/tasks', () => ({
+  syncRepositoryAssignments: (...a: unknown[]) => mocks.syncRepositoryAssignments(...a),
   default: {
     createRepositoriesTask: {
       trigger: (...a: unknown[]) => mocks.createRepositoriesTrigger(...a),
@@ -61,7 +63,7 @@ vi.mock('@classmoji/tasks', () => ({
   },
 }));
 
-const { repoCreateTool, repoPublishTool, repoUpdateTool, repoDeleteTool } =
+const { repoCreateTool, repoPublishTool, repoSyncTool, repoUpdateTool, repoDeleteTool } =
   await import('../repos.ts');
 
 const CTX: ToolContext = {
@@ -921,10 +923,17 @@ describe('repo tool definitions', () => {
   it('pin repo_update and repo_delete to OWNER only', () => {
     expect(repoUpdateTool.roles).toEqual(['OWNER']);
     expect(repoDeleteTool.roles).toEqual(['OWNER']);
+    expect(repoSyncTool.roles).toEqual(['OWNER']);
   });
 
   it('keep descriptions under the 1,500 bytes a client will keep', () => {
-    for (const tool of [repoCreateTool, repoUpdateTool, repoDeleteTool, repoPublishTool]) {
+    for (const tool of [
+      repoCreateTool,
+      repoUpdateTool,
+      repoDeleteTool,
+      repoPublishTool,
+      repoSyncTool,
+    ]) {
       expect(new TextEncoder().encode(tool.description).length, tool.name).toBeLessThan(1500);
     }
   });
@@ -934,3 +943,90 @@ describe('repo tool definitions', () => {
     expect(repoUpdateTool.description).toContain('list_tags');
   });
 });
+
+describe('repo_sync', () => {
+  const ARGS = { classroom: 'dev-org/cs1-w26', repository_id: REPO_ID };
+
+  beforeEach(() => {
+    mocks.repositoryFindById.mockResolvedValue(storedRepo());
+    mocks.classroomFindById.mockResolvedValue({ id: 'class-1', slug: 'cs1-w26' });
+    mocks.syncRepositoryAssignments.mockResolvedValue({
+      numReposToCreate: 2,
+      numIssuesToCreate: 4,
+    });
+  });
+
+  it('runs shared Sync for a scoped repo and audits its session and counts', async () => {
+    const repo = storedRepo();
+    const classroom = { id: 'class-1', slug: 'cs1-w26' };
+    mocks.repositoryFindById.mockResolvedValue(repo);
+    mocks.classroomFindById.mockResolvedValue(classroom);
+
+    const payload = parse(await repoSyncTool.handler(ARGS, CTX));
+
+    expect(mocks.syncRepositoryAssignments).toHaveBeenCalledWith(
+      'cs1-w26',
+      classroom,
+      repo,
+      expect.any(String)
+    );
+    expect(payload).toMatchObject({
+      success: true,
+      repos_to_create: 2,
+      issues_to_create: 4,
+      message: 'Repo sync started in the background.',
+    });
+    expect(mocks.auditCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resource_type: 'REPOSITORIES',
+        resource_id: REPO_ID,
+        action: 'UPDATE',
+        data: expect.objectContaining({
+          tool: 'repo_sync',
+          session_id: payload.session_id,
+          repos_to_create: 2,
+          issues_to_create: 4,
+          status: 'started',
+        }),
+      })
+    );
+  });
+
+  it('refuses a repo from another classroom before starting Sync', async () => {
+    mocks.repositoryFindById.mockResolvedValue(storedRepo({ classroom_id: 'other-class' }));
+
+    await expect(repoSyncTool.handler(ARGS, CTX)).rejects.toMatchObject({ kind: 'not_found' });
+    expect(mocks.syncRepositoryAssignments).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('reports an already-synced repo without claiming background work started', async () => {
+    mocks.syncRepositoryAssignments.mockResolvedValue({
+      numReposToCreate: 0,
+      numIssuesToCreate: 0,
+    });
+
+    const payload = parse(await repoSyncTool.handler(ARGS, CTX));
+
+    expect(payload).toMatchObject({
+      success: true,
+      repos_to_create: 0,
+      issues_to_create: 0,
+      message: 'Repo is already in sync.',
+    });
+    expect(mocks.auditCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ tool: 'repo_sync', status: 'already_in_sync' }),
+      })
+    );
+  });
+
+  it('advertises external, non-idempotent creation', () => {
+    expect(repoSyncTool.annotations).toMatchObject({
+      destructive: true,
+      idempotent: false,
+      openWorld: true,
+    });
+  });
+});
+

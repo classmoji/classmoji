@@ -1,8 +1,8 @@
 /**
- * Repo tools — repo_publish / repo_unpublish (plan §5.2 gap 1 — Phase 3).
+ * Repo tools — repo_publish / repo_unpublish / repo_sync (plan §5.2 gap 1 — Phase 3).
  *
  * Tier confirmed against apps/webapp/app/routes/admin.$class.repos/action.ts:
- * requireClassroomAdmin — OWNER only (both publish and unpublish intents).
+ * requireClassroomAdmin — OWNER only (publish, unpublish and sync intents).
  *
  * repo_publish mirrors admin.$class.repos/helpers.ts publishAssignment. The
  * publish flip is a plain service call (repository.setPublished — fires the
@@ -68,7 +68,7 @@ import { gitTermsFor } from '../resources/shape.ts';
 import { randomUUID } from 'node:crypto';
 import { ClassmojiService } from '@classmoji/services';
 import { gitUsername } from '@classmoji/utils';
-import Tasks from '@classmoji/tasks';
+import Tasks, { syncRepositoryAssignments } from '@classmoji/tasks';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition, ToolContext } from '../mcp/registry.ts';
@@ -169,7 +169,7 @@ export const repoPublishTool: ToolDefinition<RepoPublishArgs> = {
     'teams; self-formed team repos are created when students form teams). Owner only. ' +
     'Works before anyone has enrolled — publishing an empty classroom marks the repo available ' +
     'and provisions nothing; students who join later get their repos on join. ' +
-    'Re-publishing a previously published repo just restores visibility — use the web Sync to ' +
+    'Re-publishing a previously published repo just restores visibility — use repo_sync to ' +
     'backfill missing repositories.',
   scope: 'write',
   roles: OWNER_ONLY,
@@ -201,7 +201,9 @@ export const repoPublishTool: ToolDefinition<RepoPublishArgs> = {
       return ok({
         success: true,
         is_published: true,
-        message: `${gitTermsFor(ctx).Repo} re-published. Use Sync to update ${gitTermsFor(ctx).repos}.`,
+        message:
+          `${gitTermsFor(ctx).Repo} re-published. Use repo_sync to update ` +
+          `${gitTermsFor(ctx).repos}.`,
       });
     }
 
@@ -301,6 +303,67 @@ export const repoPublishTool: ToolDefinition<RepoPublishArgs> = {
       is_published: true,
       provisioning: { repos_to_create: teams.length },
       message: `${gitTermsFor(ctx).Repo} published. Team ${gitTermsFor(ctx).repos} are being created in the background.`,
+    });
+  },
+};
+
+interface RepoSyncArgs {
+  classroom: string;
+  repository_id: string;
+}
+
+export const repoSyncTool: ToolDefinition<RepoSyncArgs> = {
+  name: 'repo_sync',
+  // Sync can create permanent GitHub/GitLab repositories and issues.
+  annotations: { destructive: true, idempotent: false, openWorld: true },
+  title: 'Sync a repo',
+  description:
+    'Runs the repository Sync operation for an existing assignment container. Owner only. ' +
+    'Creates missing student/team git repositories and opens missing issues for released ' +
+    'assignments in existing repositories. Existing repositories and assignment links are ' +
+    'skipped. Work runs in the background; the response includes its session id and expected ' +
+    'creation counts. This can create permanent records in the classroom git provider.',
+  scope: 'write',
+  roles: OWNER_ONLY,
+  inputSchema: {
+    classroom: z.string().describe("Classroom reference as 'org/slug'"),
+    repository_id: z.string().uuid().describe('Repository (assignment container) id'),
+  },
+  handler: async (args, ctx) => {
+    const classroom = requireClassroomCtx(ctx);
+    const repository = await loadRepositoryInClassroom(args.repository_id, ctx);
+    const classroomRecord = await ClassmojiService.classroom.findById(classroom.classroomId);
+    if (!classroomRecord) throw new ToolError('internal', 'Classroom not found');
+
+    const sessionId = randomUUID();
+    const result = await syncRepositoryAssignments(
+      classroomSlugOf(ctx),
+      classroomRecord,
+      repository,
+      sessionId
+    );
+
+    await writeAudit(ctx, {
+      resource_type: 'REPOSITORIES',
+      resource_id: repository.id,
+      action: 'UPDATE',
+      data: {
+        tool: 'repo_sync',
+        session_id: sessionId,
+        repos_to_create: result.numReposToCreate,
+        issues_to_create: result.numIssuesToCreate,
+        status:
+          result.numReposToCreate + result.numIssuesToCreate > 0 ? 'started' : 'already_in_sync',
+      },
+    });
+
+    const alreadyInSync = result.numReposToCreate + result.numIssuesToCreate === 0;
+    return ok({
+      success: true,
+      session_id: sessionId,
+      repos_to_create: result.numReposToCreate,
+      issues_to_create: result.numIssuesToCreate,
+      message: alreadyInSync ? 'Repo is already in sync.' : 'Repo sync started in the background.',
     });
   },
 };
@@ -932,3 +995,4 @@ export const repoDeleteTool: ToolDefinition<RepoDeleteArgs> = {
     });
   },
 };
+
