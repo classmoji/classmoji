@@ -245,7 +245,12 @@ describe('listReadyMedia', () => {
       },
     ]);
     const query = findMany.mock.calls[0][0];
-    expect(query.where).toEqual({ classroom_id: 'class-1', status: 'READY', kind: 'VIDEO' });
+    expect(query.where).toEqual({
+      classroom_id: 'class-1',
+      status: 'READY',
+      gallery_form_id: null,
+      kind: 'VIDEO',
+    });
     expect(query.orderBy).toEqual({ created_at: 'desc' });
     // Bounded: the newest 200, never every row a classroom ever kept. READY
     // only, so a STAGING agent upload never appears in a picker.
@@ -256,6 +261,11 @@ describe('listReadyMedia', () => {
   it('does not narrow by kind unless asked', async () => {
     findMany.mockReset().mockResolvedValue([]);
     await listReadyMedia('class-1');
-    expect(findMany.mock.calls[0][0].where).toEqual({ classroom_id: 'class-1', status: 'READY' });
+    // Never a student's gallery upload: it is theirs, not course media.
+    expect(findMany.mock.calls[0][0].where).toEqual({
+      classroom_id: 'class-1',
+      status: 'READY',
+      gallery_form_id: null,
+    });
   });
 });

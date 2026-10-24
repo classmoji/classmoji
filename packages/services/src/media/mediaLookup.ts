@@ -342,7 +342,13 @@ export async function listReadyMedia(
   { kind }: { kind?: MediaKind } = {}
 ): Promise<MediaListItem[]> {
   const rows = (await getPrisma().mediaObject.findMany({
-    where: { classroom_id: classroomId, status: 'READY', ...(kind ? { kind } : {}) },
+    where: {
+      classroom_id: classroomId,
+      status: 'READY',
+      // A student's gallery upload is theirs, not course media to embed.
+      gallery_form_id: null,
+      ...(kind ? { kind } : {}),
+    },
     orderBy: { created_at: 'desc' },
     take: MEDIA_LIST_LIMIT,
     select: {

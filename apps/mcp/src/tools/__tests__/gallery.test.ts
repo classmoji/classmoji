@@ -147,10 +147,10 @@ describe('form_gallery_moderate', () => {
     });
   });
 
-  it('declares a reversible write that publishes to the open web', () => {
+  it('asks for confirmation: approving publishes to the open web', () => {
     expect(formGalleryModerateTool.roles).toEqual(['OWNER', 'TEACHER', 'ASSISTANT']);
     expect(formGalleryModerateTool.annotations).toEqual({
-      destructive: false,
+      destructive: true,
       idempotent: true,
       openWorld: true,
     });

@@ -107,8 +107,9 @@ export const formGalleryModerateTool: ToolDefinition<FormGalleryModerateArgs> = 
     'assistant).',
   scope: 'write',
   roles: TEACHING_TEAM,
-  // Reversible (hide again), but APPROVED publishes to the open web.
-  annotations: { destructive: false, idempotent: true, openWorld: true },
+  // Reversible (hide again), but APPROVED publishes students' work to the open
+  // web, so clients confirm first.
+  annotations: { destructive: true, idempotent: true, openWorld: true },
   inputSchema: {
     classroom: classroomArg,
     form_id: formIdArg,

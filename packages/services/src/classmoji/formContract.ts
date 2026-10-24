@@ -965,10 +965,12 @@ export const GALLERY_ROLE_TYPES: Record<GalleryRole, readonly FormFieldType[]> =
   team: ['roster_select'],
   tags: ['multiselect', 'short_text'],
   // Every input type that answers once with a value a reader can see. Email
-  // is identity, and a repeat group answers per teammate.
+  // is identity, a repeat group answers per teammate, and a roster pick reads
+  // "Name (login)": people go public only through `team`, which drops logins.
   extra: (Object.keys(FIELD_TYPE_REGISTRY) as FormFieldType[]).filter(
     type =>
-      FIELD_TYPE_REGISTRY[type].kind === 'input' && type !== 'email' && type !== 'repeat_group'
+      FIELD_TYPE_REGISTRY[type].kind === 'input' &&
+      !['email', 'repeat_group', 'roster_select'].includes(type)
   ),
 };
 

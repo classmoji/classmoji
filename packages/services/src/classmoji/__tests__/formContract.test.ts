@@ -704,6 +704,16 @@ describe('formContract — gallery roles', () => {
     expect(() => parseOne(group)).toThrow(/inside a repeat group/);
   });
 
+  it('takes the extra role on an answer field, but never on a roster pick', () => {
+    expect(parseOne({ ...SAMPLES.dropdown, gallery_role: 'extra' })).toMatchObject({
+      gallery_role: 'extra',
+    });
+    // Its labels read "Name (login)"; people go public only through `team`.
+    expect(() =>
+      parseOne({ ...SAMPLES.roster_select, multiple: true, gallery_role: 'extra' })
+    ).toThrow(/extra gallery role needs/);
+  });
+
   it('rejects a team role on a single-select roster', () => {
     expect(() =>
       parseOne({ ...SAMPLES.roster_select, multiple: false, gallery_role: 'team' })
