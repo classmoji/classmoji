@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
-import { InputNumber, Tooltip } from 'antd';
+import { Input, InputNumber, Tooltip } from 'antd';
 import PropertySection, { PropertyLabel } from '../PropertySection';
 import { useElementSelection } from '../ElementSelectionContext';
 import TextProperties from './TextProperties';
@@ -9,6 +9,7 @@ import IframeProperties from './IframeProperties';
 import VideoProperties from './VideoProperties';
 import HtmlBlockProperties from './HtmlBlockProperties';
 import SvgProperties from './SvgProperties';
+import { applyUserClasses, parseClassInput, userClassesOf } from '../../../utils/blockClasses';
 
 /**
  * BlockProperties - Property editor for sl-block elements
@@ -27,6 +28,11 @@ export default function BlockProperties({ element }: { element: HTMLElement }) {
   const [position, setPosition] = useState({ left: 0, top: 0 });
   const [size, setSize] = useState({ width: 100, height: 100 });
   const [zIndex, setZIndex] = useState(0);
+  const [classText, setClassText] = useState('');
+  const [ignoredClasses, setIgnoredClasses] = useState<string[]>([]);
+
+  // Themes style a block through classes on its content element.
+  const classTarget = useMemo(() => element?.querySelector('.sl-block-content') ?? null, [element]);
 
   // Parse pixel value from style string
   const parsePixels = useCallback((value: string | number | null | undefined) => {
@@ -51,6 +57,21 @@ export default function BlockProperties({ element }: { element: HTMLElement }) {
       setZIndex(parsePixels(element.style.zIndex));
     }
   }, [element, parsePixels]);
+
+  useEffect(() => {
+    setClassText(classTarget ? userClassesOf(classTarget).join(' ') : '');
+    setIgnoredClasses([]);
+  }, [classTarget]);
+
+  // Applied when the field is left or Enter is pressed, not on every keystroke:
+  // a half-typed name would otherwise be set on the block as a class.
+  const handleClassesCommit = useCallback(() => {
+    if (!classTarget) return;
+    const { classes, invalid } = parseClassInput(classText);
+    if (applyUserClasses(classTarget, classes)) onContentChange?.();
+    setClassText(classes.join(' '));
+    setIgnoredClasses(invalid);
+  }, [classTarget, classText, onContentChange]);
 
   // Update position
   const handlePositionChange = useCallback(
@@ -250,6 +271,30 @@ export default function BlockProperties({ element }: { element: HTMLElement }) {
           </div>
         </div>
       </PropertySection>
+
+      {classTarget && (
+        <PropertySection title="Classes">
+          <div>
+            <Input
+              value={classText}
+              onChange={event => setClassText(event.target.value)}
+              onBlur={handleClassesCommit}
+              onPressEnter={handleClassesCommit}
+              size="small"
+              placeholder="plain card"
+              aria-label="CSS classes"
+            />
+            <p className="text-xs text-gray-400 mt-1">
+              Classes your theme styles this block with. Separate them with spaces.
+            </p>
+            {ignoredClasses.length > 0 && (
+              <p className="text-xs text-red-500 mt-1">
+                Not valid class names, left out: {ignoredClasses.join(', ')}
+              </p>
+            )}
+          </div>
+        </PropertySection>
+      )}
 
       <PropertySection title="Layer Order">
         <div className="flex items-center justify-between gap-1">
