@@ -102,9 +102,7 @@ describe('cross-file registry agreement', () => {
    * Adding an entry to the registry means adding a migration here too.
    */
   it('RESERVED_PAGE_SLUGS matches the migration that evicted pages holding them', () => {
-    expect(reservedArrayIn('20261023220000_project_gallery')).toEqual(
-      new Set(RESERVED_PAGE_SLUGS)
-    );
+    expect(reservedArrayIn('20261023220000_project_gallery')).toEqual(new Set(RESERVED_PAGE_SLUGS));
   });
 
   /**

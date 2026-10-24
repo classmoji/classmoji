@@ -122,6 +122,7 @@ const SiteProject = () => {
         ) : null}
 
         {project.videoUrl ? (
+          // eslint-disable-next-line jsx-a11y/media-has-caption -- user-uploaded content
           <video
             src={project.videoUrl}
             controls
