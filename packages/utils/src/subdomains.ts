@@ -170,7 +170,7 @@ export const RESERVED_SUBDOMAINS: ReadonlySet<string> = new Set([
  *     imports, so each re-lists the whole set):
  *     20260821003300_page_slug_backfill_and_unique added the first five;
  *     20260902180000_reserve_forms_page_slug added `forms`;
- *     20260923120000_project_gallery added `projects`.
+ *     20261023220000_project_gallery added `projects`.
  *   - the site route table, which is what actually claims these paths.
  * page.service's create() DOES import it, so new pages can never land here.
  *
