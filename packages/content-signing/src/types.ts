@@ -125,6 +125,32 @@ export type ThemeVerification =
     }
   | { ok: false; reason: VerifyFailure };
 
+/**
+ * One folder a files grant opens: its repo path (no leading or trailing slash,
+ * never the repo root) and the git tree sha of that folder when it was signed.
+ */
+export interface FilesFolder {
+  path: string;
+  treeSha: string;
+}
+
+export type FilesVerification =
+  | {
+      ok: true;
+      kind: 'files';
+      classroomId: string;
+      /** The granted folders, decoded and re-validated after the signature check. */
+      folders: FilesFolder[];
+      tier: Tier;
+      keyVersion: number;
+      exp: number;
+      /** The requested file's repo path, decoded once. Not yet checked against `folders`. */
+      repoPath: string;
+      inGrace: boolean;
+      keySlot: KeySlot;
+    }
+  | { ok: false; reason: VerifyFailure };
+
 /** Raw fields lifted out of a blob URL, before any cryptographic check. */
 export interface ParsedBlobUrl {
   kind: 'blob';
@@ -174,6 +200,28 @@ export interface ParsedThemeUrl {
   exp: number;
   sig: string;
   relPath: string;
+}
+
+/**
+ * Raw fields lifted out of a files URL, before any cryptographic check.
+ *
+ * `grant` is the path segment exactly as it arrived (base64url). It is what the
+ * signature covers, and it is decoded only after the signature verifies.
+ *
+ * Deliberately NOT a member of `ParsedContentUrl`: callers that switch on that
+ * union read a sha or a theme off it, and a files URL has neither. See
+ * `parseFilesUrl` for the structural parse of this shape.
+ */
+export interface ParsedFilesUrl {
+  kind: 'files';
+  host: string;
+  classroomId: string;
+  grant: string;
+  tier: Tier;
+  keyVersion: number;
+  exp: number;
+  sig: string;
+  repoPath: string;
 }
 
 export type ParsedContentUrl = ParsedBlobUrl | ParsedThemeUrl | ParsedMediaUrl;

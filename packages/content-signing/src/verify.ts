@@ -1,10 +1,13 @@
 import { graceFor, nowSeconds } from './bucket.ts';
 import {
   BLOB_QUERY_KEYS,
+  MAX_FILES_GRANT_FOLDERS,
+  MAX_FILES_GRANT_LENGTH,
   MEDIA_QUERY_KEYS,
   SCHEME_SEGMENTS,
   SCHEME_SEGMENT_PATTERN,
   blobCanonicalString,
+  filesCanonicalString,
   fromBase64Url,
   isClassroomId,
   isExt,
@@ -19,16 +22,21 @@ import {
   isUnixSeconds,
   mediaCanonicalString,
   themeCanonicalString,
+  toBase64Url,
+  utf8,
 } from './canonical.ts';
 import { deriveKey, verifyCanonical } from './derive.ts';
 import { MAX_ENCODED_DOWNLOAD_FILENAME, decodeDownloadFilename } from './downloads.ts';
 import type {
   BlobVerification,
+  FilesFolder,
+  FilesVerification,
   KeySlot,
   MasterSecrets,
   MediaVerification,
   ParsedBlobUrl,
   ParsedContentUrl,
+  ParsedFilesUrl,
   ParsedMediaUrl,
   ParsedThemeUrl,
   ThemeVerification,
@@ -37,7 +45,9 @@ import type {
   VerifyFailure,
 } from './types.ts';
 
-type ParseResult = { ok: true; value: ParsedContentUrl } | { ok: false; reason: VerifyFailure };
+type ParseResult =
+  | { ok: true; value: ParsedContentUrl | ParsedFilesUrl }
+  | { ok: false; reason: VerifyFailure };
 
 const fail = (reason: VerifyFailure): { ok: false; reason: VerifyFailure } => ({
   ok: false,
@@ -182,6 +192,77 @@ export function normalizeRelPath(segments: string[]): string | null {
 }
 
 /**
+ * Whether `path` may be a folder in a files grant: a non-empty repo path that
+ * `normalizeRelPath` leaves exactly as it is — so no leading or trailing
+ * slash, no empty, `.` or `..` segment, no backslash, no control character
+ * (which covers the tab and newline the grant text is built from), and nothing
+ * a decode would change. The repo root is never grantable.
+ */
+export function isFilesGrantFolder(path: unknown): path is string {
+  if (typeof path !== 'string' || path.length === 0) return false;
+  return normalizeRelPath(path.split('/')) === path;
+}
+
+/**
+ * Whether a folder list is one a grant may carry: 1–12 entries, each a
+ * grantable folder with a 40-hex tree sha, sorted by path in code-unit order
+ * with no duplicates, and no folder equal to or nested inside another.
+ *
+ * Sorted-and-strict is what makes a grant canonical: one set of folders has
+ * exactly one encoding, so one signature cannot be spelled two ways.
+ */
+export function filesFoldersOk(folders: readonly FilesFolder[]): boolean {
+  if (folders.length === 0 || folders.length > MAX_FILES_GRANT_FOLDERS) return false;
+  for (const [index, folder] of folders.entries()) {
+    if (!isFilesGrantFolder(folder.path) || !isGitSha(folder.treeSha)) return false;
+    if (index > 0 && !(folders[index - 1].path < folder.path)) return false;
+  }
+  for (const outer of folders) {
+    for (const inner of folders) {
+      if (inner !== outer && inner.path.startsWith(`${outer.path}/`)) return false;
+    }
+  }
+  return true;
+}
+
+/** `{path}\t{treeSha}` lines joined by `\n` — the bytes a grant segment encodes. */
+export function filesGrantText(folders: readonly FilesFolder[]): string {
+  return folders.map(folder => `${folder.path}\t${folder.treeSha}`).join('\n');
+}
+
+const utf8Decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: false });
+
+/**
+ * Decode a grant segment back into its folders, or null when it is not one a
+ * signer could have produced.
+ *
+ * The decoded list is re-encoded and compared with the segment, so only the
+ * one canonical spelling of a grant is accepted. The Worker calls this only
+ * after the signature has verified; it is exported because it needs no key.
+ */
+export function parseFilesGrant(segment: string): FilesFolder[] | null {
+  if (segment.length === 0 || segment.length > MAX_FILES_GRANT_LENGTH) return null;
+  const bytes = fromBase64Url(segment);
+  if (!bytes) return null;
+  let text: string;
+  try {
+    text = utf8Decoder.decode(bytes);
+  } catch {
+    return null;
+  }
+
+  const folders: FilesFolder[] = [];
+  for (const line of text.split('\n')) {
+    const parts = line.split('\t');
+    if (parts.length !== 2) return null;
+    folders.push({ path: parts[0], treeSha: parts[1] });
+  }
+  if (!filesFoldersOk(folders)) return null;
+  if (toBase64Url(utf8(filesGrantText(folders))) !== segment) return null;
+  return folders;
+}
+
+/**
  * Whether a `dl` param is one we are willing to hash — absent, or bounded.
  *
  * Bounded, and never base64-decoded: the canonical string covers this value, so
@@ -307,6 +388,35 @@ function parseTheme(url: URL, host: string, classroomId: string, segments: strin
   return { ok: true, value };
 }
 
+/**
+ * `/c/{classroomId}/files/{grant}/{p}.{v}.{exp}.{sig}/{repoPath...}`
+ *
+ * The query string is NOT inspected: the files a grant serves are pages that
+ * read `location.search` themselves, so a query is allowed and ignored, and it
+ * is never part of what was signed.
+ *
+ * The grant is checked for shape and length only — it is decoded after the
+ * signature verifies (see `verifyParsedFiles`).
+ */
+function parseFiles(host: string, classroomId: string, segments: string[]): ParseResult {
+  if (segments.length < 6) return fail('malformed');
+
+  const grant = segments[3];
+  if (grant.length === 0 || grant.length > MAX_FILES_GRANT_LENGTH) return fail('malformed');
+  if (!/^[A-Za-z0-9_-]+$/.test(grant)) return fail('malformed');
+
+  const parts = segments[4].split('.');
+  if (parts.length !== 4) return fail('malformed');
+  const policy = readPolicy(parts[0], parts[1], parts[2], parts[3]);
+  if (!policy) return fail('malformed');
+
+  const repoPath = normalizeRelPath(segments.slice(5));
+  if (repoPath === null) return fail('malformed');
+
+  const value: ParsedFilesUrl = { kind: 'files', host, classroomId, grant, ...policy, repoPath };
+  return { ok: true, value };
+}
+
 function parseInternal(url: string | URL): ParseResult {
   const parsedUrl = toUrl(url);
   if (!parsedUrl) return fail('malformed');
@@ -329,16 +439,47 @@ function parseInternal(url: string | URL): ParseResult {
   if (segments[2] === 'blob') return parseBlob(parsedUrl, host, classroomId, segments);
   if (segments[2] === 'theme') return parseTheme(parsedUrl, host, classroomId, segments);
   if (segments[2] === 'media') return parseMedia(parsedUrl, host, classroomId, segments);
+  if (segments[2] === 'files') return parseFiles(host, classroomId, segments);
   return fail('malformed');
 }
 
 /**
  * Structural parse only - no key material, no signature check. Returns null on
  * anything that is not a well-formed content URL of a supported version.
+ *
+ * A files URL is null here too; `parseFilesUrl` is its parse.
  */
 export function parseContentUrl(url: string | URL): ParsedContentUrl | null {
   const result = parseInternal(url);
-  return result.ok ? result.value : null;
+  return result.ok && result.value.kind !== 'files' ? result.value : null;
+}
+
+/** What `parseFilesUrl` lifts out of a files URL. */
+export interface FilesUrlParts {
+  host: string;
+  classroomId: string;
+  /** The requested file's repo path, decoded once (`games/snake/index.html`). */
+  repoPath: string;
+  /** The query string with its leading `?`, or '' — never signed, kept as sent. */
+  query: string;
+}
+
+/**
+ * Structural parse of a files URL — no key material, no signature or expiry
+ * check, the grant not decoded. Returns null for anything that is not a
+ * well-formed files URL.
+ *
+ * For turning a files URL found in stored markup back into the repo reference
+ * it was minted for. The result says nothing about whether the URL is valid,
+ * so it must never be read as an authorisation.
+ */
+export function parseFilesUrl(url: string | URL): FilesUrlParts | null {
+  const parsedUrl = toUrl(url);
+  if (!parsedUrl) return null;
+  const result = parseInternal(parsedUrl);
+  if (!result.ok || result.value.kind !== 'files') return null;
+  const { host, classroomId, repoPath } = result.value;
+  return { host, classroomId, repoPath, query: parsedUrl.search };
 }
 
 /** null when the signature is past its tier's grace window. */
@@ -383,7 +524,7 @@ function masterList(master: MasterSecrets): readonly string[] {
  */
 async function checkSignature(
   masters: readonly string[],
-  parsed: ParsedContentUrl,
+  parsed: Pick<ParsedContentUrl | ParsedFilesUrl, 'classroomId' | 'keyVersion'>,
   canonical: string,
   signature: Uint8Array<ArrayBuffer>
 ): Promise<KeySlot | null> {
@@ -536,6 +677,48 @@ async function verifyParsedTheme(
   };
 }
 
+async function verifyParsedFiles(
+  masters: readonly string[],
+  parsed: ParsedFilesUrl,
+  now: number
+): Promise<FilesVerification> {
+  const signature = fromBase64Url(parsed.sig);
+  if (!signature) return fail('malformed');
+
+  const canonical = filesCanonicalString({
+    host: parsed.host,
+    classroomId: parsed.classroomId,
+    grant: parsed.grant,
+    tier: parsed.tier,
+    keyVersion: parsed.keyVersion,
+    exp: parsed.exp,
+  });
+  const keySlot = await checkSignature(masters, parsed, canonical, signature);
+  if (!keySlot) return fail('bad-signature');
+
+  const expiry = expiryFailure(parsed.tier, parsed.exp, now);
+  if (!expiry) return fail('expired');
+
+  // Only now, with the signature checked, is the grant decoded — and it is
+  // re-validated rather than trusted, so a grant that verifies but could not
+  // have been minted (a signer bug, a leaked key) still opens nothing.
+  const folders = parseFilesGrant(parsed.grant);
+  if (!folders) return fail('malformed');
+
+  return {
+    ok: true,
+    kind: 'files',
+    classroomId: parsed.classroomId,
+    folders,
+    tier: parsed.tier,
+    keyVersion: parsed.keyVersion,
+    exp: parsed.exp,
+    repoPath: parsed.repoPath,
+    inGrace: expiry.inGrace,
+    keySlot,
+  };
+}
+
 /**
  * `master` is the current secret, or an ordered list with the previous one
  * after it during a rotation. The result says which slot matched, so a caller
@@ -577,6 +760,18 @@ export async function verifyMediaUrl(
   return verifyParsedMedia(masters, parsed.value, now);
 }
 
+export async function verifyFilesUrl(
+  master: MasterSecrets,
+  url: string | URL,
+  now: number = nowSeconds()
+): Promise<FilesVerification> {
+  const masters = masterList(master);
+  const parsed = parseInternal(url);
+  if (!parsed.ok) return fail(parsed.reason);
+  if (parsed.value.kind !== 'files') return fail('malformed');
+  return verifyParsedFiles(masters, parsed.value, now);
+}
+
 /**
  * Whichever shape the URL is. The `kind` on the result is what a caller
  * switches on — a Worker route, for instance — and a caller that only ever
@@ -587,12 +782,13 @@ export async function verifyContentUrl(
   master: MasterSecrets,
   url: string | URL,
   now: number = nowSeconds()
-): Promise<BlobVerification | ThemeVerification | MediaVerification> {
+): Promise<BlobVerification | ThemeVerification | MediaVerification | FilesVerification> {
   const masters = masterList(master);
   const parsed = parseInternal(url);
   if (!parsed.ok) return fail(parsed.reason);
   if (parsed.value.kind === 'blob') return verifyParsedBlob(masters, parsed.value, now);
   if (parsed.value.kind === 'media') return verifyParsedMedia(masters, parsed.value, now);
+  if (parsed.value.kind === 'files') return verifyParsedFiles(masters, parsed.value, now);
   return verifyParsedTheme(masters, parsed.value, now);
 }
 

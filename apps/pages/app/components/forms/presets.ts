@@ -243,12 +243,14 @@ const projectBiddingFields = (): FormField[] => {
       required: false,
       optionSource: 'roster',
       multiple: true,
+      intent: 'together',
     }),
     field('roster_select', {
       label: "Anyone you'd rather not work with?",
       required: false,
       optionSource: 'roster',
       multiple: true,
+      intent: 'apart',
       help: 'Only course staff see this.',
     }),
     field('dropdown', {

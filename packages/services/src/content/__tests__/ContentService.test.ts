@@ -91,11 +91,46 @@ describe('uploadBatch', () => {
 
     expect(result).toEqual({
       commit: 'new-commit',
+      // The new commit's root tree, for resolving folder trees by sha.
+      treeSha: 'new-tree',
       filesUploaded: 2,
       files: [
         { path: 'pages/a/content.json', sha: 'blob-aaa' },
         { path: 'pages/a/index.html', sha: 'blob-bbb' },
       ],
+    });
+  });
+});
+
+describe('put return shape', () => {
+  it("returns the new commit's root tree sha from the PUT response", async () => {
+    requestMock.mockImplementation(async (route: string) => {
+      if (route === 'GET /repos/{owner}/{repo}/contents/{path}') {
+        throw Object.assign(new Error('Not Found'), { status: 404 });
+      }
+      if (route === 'PUT /repos/{owner}/{repo}/contents/{path}') {
+        return {
+          status: 201,
+          data: {
+            content: { sha: 'blob-new' },
+            commit: { sha: 'commit-new', tree: { sha: 'root-tree-new' } },
+          },
+        };
+      }
+      throw new Error(`Unexpected route: ${route}`);
+    });
+
+    const result = await ContentService.put({
+      gitOrganization,
+      repo: 'repo-put-tree',
+      path: 'slides/intro/blocks/ab12cd34.html',
+      content: '<p>hi</p>',
+    });
+
+    expect(result).toStrictEqual({
+      sha: 'blob-new',
+      commit: 'commit-new',
+      treeSha: 'root-tree-new',
     });
   });
 });

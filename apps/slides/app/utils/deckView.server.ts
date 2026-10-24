@@ -40,6 +40,7 @@ import {
 import { verifyDocViewToken } from '@classmoji/services/render-token';
 import { CollabRequestError } from './collab/env.server.ts';
 import { FRAME_SETTLE_JS } from './frameSettle.ts';
+import { generatedDocCspHeaders } from './csp.server.ts';
 import { fetchLiveDeck, liveEditingEnv } from './collab/collab.server.ts';
 import {
   deckDeliveryContext,
@@ -128,8 +129,7 @@ function jsonForScript(value: unknown): string {
  * clips (overflow ≠ visible) counts by its own rect, and what it hides is
  * reported separately as `clipped`.
  */
-export function viewScript(): string {
-  return `
+const VIEW_STYLE = `
 <style>
   .reveal .controls, .reveal .progress, .reveal .slide-number { display: none !important; }
   html, body { margin: 0; overflow: hidden; }
@@ -141,7 +141,10 @@ export function viewScript(): string {
     animation-duration: 0s !important; animation-delay: 0s !important;
   }
 </style>
-<script>
+`;
+
+/** The driver script's exact text (its CSP hash is taken over these bytes). */
+export const VIEW_DRIVER_SCRIPT = `
 (function () {
   var META = JSON.parse(document.getElementById(${JSON.stringify(VIEW_META_ELEMENT_ID)}).textContent);
 ${FRAME_SETTLE_JS}
@@ -307,11 +310,17 @@ ${FRAME_SETTLE_JS}
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();
 })();
-</script>`;
+`;
+
+/** The inline scripts this route adds to the generated document (exact text). */
+export const VIEW_DOC_SCRIPTS: readonly string[] = [VIEW_DRIVER_SCRIPT];
+
+export function viewScript(): string {
+  return `${VIEW_STYLE}<script>${VIEW_DRIVER_SCRIPT}</script>`;
 }
 
 /** Splice the meta blob + driver script in before `</body>`. */
-function withViewScript(html: string, meta: DeckViewMeta): string {
+export function withViewScript(html: string, meta: DeckViewMeta): string {
   const block = `<script type="application/json" id="${VIEW_META_ELEMENT_ID}">${jsonForScript(meta)}</script>\n${viewScript()}`;
   const at = html.lastIndexOf('</body>');
   return at === -1 ? `${html}\n${block}` : `${html.slice(0, at)}${block}\n${html.slice(at)}`;
@@ -395,5 +404,7 @@ export async function deckViewLoader({
     slides: deckViewSlides(deck),
   };
 
-  return new Response(withViewScript(html, meta), { headers: HTML_HEADERS });
+  return new Response(withViewScript(html, meta), {
+    headers: { ...HTML_HEADERS, ...generatedDocCspHeaders(VIEW_DOC_SCRIPTS) },
+  });
 }

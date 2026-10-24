@@ -19,19 +19,21 @@ type VerifiedTheme = Extract<ThemeVerification, { ok: true }>;
  * every omitted file forever, for every classroom sharing that tree sha. Paying
  * the origin fetch again next request is the cheaper mistake.
  */
-async function loadTree(
+export async function loadTree(
   env: Env,
   ctx: ExecutionContext,
   classroomId: string,
   treeSha: string,
-  theme: string
+  path: string
 ): Promise<TreeEntry[]> {
   const key = treeKey(treeSha);
   const hit = await env.CACHE.get(key);
   if (hit) return (await hit.json()) as TreeEntry[];
 
+  // `path` is the folder the sha was signed for. Github lists by sha alone and
+  // ignores it; Gitlab lists by path and checks the sha against it.
   const { entries, truncated } = await withOriginRetry(env, classroomId, ref =>
-    originFor(ref).fetchTree({ ...ref, treeSha, path: `.slidesthemes/${theme}` })
+    originFor(ref).fetchTree({ ...ref, treeSha, path })
   );
 
   if (truncated) {
@@ -63,7 +65,13 @@ export async function serveTheme(
 ): Promise<Response> {
   // The tree is read either way: a theme URL names a path, and only the listing
   // turns that into the sha a HEAD would look up.
-  const entries = await loadTree(env, ctx, verified.classroomId, verified.treeSha, verified.theme);
+  const entries = await loadTree(
+    env,
+    ctx,
+    verified.classroomId,
+    verified.treeSha,
+    `.slidesthemes/${verified.theme}`
+  );
   const entry = findEntry(entries, verified.relPath);
   if (!entry) return errorResponse(404, 'not found');
 

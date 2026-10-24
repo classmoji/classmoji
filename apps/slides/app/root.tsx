@@ -19,6 +19,7 @@ import {
 import useStore from '~/store';
 import type { SlideUser } from '~/store';
 import { captureRouteError, setSentryUser } from '~/utils/sentry.client';
+import { useNonce } from '~/utils/cspNonce';
 import type { loader } from './root.server';
 
 /**
@@ -51,7 +52,17 @@ const SentryConfigScript = ({ config }: { config: SentryBrowserConfig | null | u
     />
   ) : null;
 
+/**
+ * The CSP nonce for Vite's module preloads, which read it from this tag
+ * (entry.server.tsx sets the policy). Browsers blank the attribute once the
+ * policy applies, so hydration finds it empty.
+ */
+const CspNonceMeta = ({ nonce }: { nonce: string | undefined }) => (
+  <meta property="csp-nonce" nonce={nonce} suppressHydrationWarning />
+);
+
 const App = () => {
+  const nonce = useNonce();
   const { user, sentry } = useLoaderData<typeof loader>() as {
     user: SlideUser | null;
     sentry?: SentryBrowserConfig | null;
@@ -74,11 +85,14 @@ const App = () => {
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <CspNonceMeta nonce={nonce} />
         <Meta />
-        <Links />
+        <Links nonce={nonce} />
         <SentryConfigScript config={sentry} />
         {/* Flash-free dark mode: add 'dark' class before first paint based on system preference */}
         <script
+          nonce={nonce}
+          suppressHydrationWarning
           dangerouslySetInnerHTML={{
             __html: `
               (function() {
@@ -111,8 +125,8 @@ const App = () => {
           <CalloutSlot />
           <Outlet />
         </CalloutProvider>
-        <ScrollRestoration />
-        <Scripts />
+        <ScrollRestoration nonce={nonce} />
+        <Scripts nonce={nonce} />
       </body>
     </html>
   );
@@ -120,6 +134,7 @@ const App = () => {
 
 // Error boundary
 export function ErrorBoundary() {
+  const nonce = useNonce();
   const routeError = useRouteError();
   const error = routeError as { message?: string; stack?: string } | undefined;
   // Present unless the root loader itself threw; carries the Sentry settings.
@@ -139,8 +154,9 @@ export function ErrorBoundary() {
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <CspNonceMeta nonce={nonce} />
         <Meta />
-        <Links />
+        <Links nonce={nonce} />
         <SentryConfigScript config={rootData?.sentry} />
       </head>
       <body className="bg-gray-50 dark:bg-gray-900">
@@ -172,7 +188,7 @@ export function ErrorBoundary() {
             </pre>
           )}
         </div>
-        <Scripts />
+        <Scripts nonce={nonce} />
       </body>
     </html>
   );

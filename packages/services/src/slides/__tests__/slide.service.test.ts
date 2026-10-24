@@ -205,7 +205,7 @@ describe('createSlide', () => {
     // The generated artifact carries the starter content + seeded css
     expect(call.files[1].content).toContain('<h1>Intro: Web!</h1>');
     expect(call.files[1].content).toContain('.reveal h1, .reveal h2, .reveal h3 { color: #333; }');
-    expect(call.files[1].content).toContain('center: false,');
+    expect(call.files[1].content).toContain('"center":false');
 
     // DB row after the GitHub write
     expect(slideCreateMock).toHaveBeenCalledWith({

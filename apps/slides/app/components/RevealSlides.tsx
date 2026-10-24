@@ -1,19 +1,25 @@
 import { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle } from 'react';
 import { handleCodeBlockTab, handleCodeBlockEnter } from './properties/utils/codeBlockUtils';
 import {
-  neutralizeHtmlBlockFrames,
-  sanitizeSvgBlocks,
-} from '@classmoji/services/slides/runtime-attrs';
-import {
   domSlideTree,
   hiddenSlideLayout,
   remapRevealHash,
   removeHiddenSlides,
   slideIndicesWhere,
 } from '@classmoji/services/slides/hidden';
-import { stripMediaRefs } from '~/utils/mediaRefs';
-import { cleanupEditorContainer } from '~/utils/editorCleanup';
 import { lockSourceBlockContent } from '~/utils/collab/bridgeDom';
+import type { EditorFrames } from '~/utils/editorFrames';
+import {
+  editorSlidesFragment,
+  storedSectionsHtml,
+  viewerSlidesFragment,
+} from '~/utils/slideMarkup';
+import {
+  REVEAL_LOCKED_OPTIONS,
+  installRevealMessageGuard,
+  lockRevealAfterInit,
+  stripRevealQueryConfig,
+} from '~/utils/revealHardening';
 import { isAskMojiTarget } from '~/components/askMoji/askMojiProtocol';
 
 // Built-in Reveal.js themes (exported for use in SlideToolbar)
@@ -56,7 +62,6 @@ interface SharedTheme {
 }
 
 interface RevealSlidesProps {
-  contentUrl?: string;
   initialContent?: string | null;
   initialError?: string | null;
   canEdit?: boolean;
@@ -75,6 +80,14 @@ interface RevealSlidesProps {
   sharedThemes?: SharedTheme[];
   /** Live editing: whether a section may be made editable (false = someone else holds it). */
   sectionEditable?: (section: Element) => boolean;
+  /**
+   * The deck's editor frame context (editors of a classroom the content
+   * service serves): frames of ours are shown through the editor frame route
+   * and written back as their stored references. Null: frames as stored.
+   */
+  frames?: EditorFrames | null;
+  /** The content service origin: legacy html blocks are shown through its preview frame. */
+  contentOrigin?: string | null;
 }
 
 export interface RevealSlidesHandle {
@@ -145,15 +158,14 @@ function carryHashAcrossModes(container: ParentNode, editing: boolean) {
 /**
  * RevealSlides - Renders a Reveal.js presentation
  *
- * Fetches HTML content from GitHub Pages and initializes Reveal.js
- * Supports both view and edit modes with save functionality
+ * Renders the document it is given (the loader's, or the live deck's) and
+ * initializes Reveal.js. Supports both view and edit modes with save functionality
  * Dynamically loads themes based on system color scheme preference
  *
  * Note: Reveal.js is dynamically imported to avoid SSR issues
  */
 const RevealSlides = forwardRef(function RevealSlides(
   {
-    contentUrl,
     initialContent = null, // Pre-fetched content from server (bypasses CORS)
     initialError = null, // Error from server-side fetch
     canEdit: _canEdit = false,
@@ -164,6 +176,8 @@ const RevealSlides = forwardRef(function RevealSlides(
     customThemes = [], // Custom themes with cssUrl for loading
     sharedThemes = [], // Shared themes from slides.com imports (with lib/ folder)
     sectionEditable,
+    frames = null,
+    contentOrigin = null,
   }: RevealSlidesProps,
   ref: React.Ref<RevealSlidesHandle>
 ) {
@@ -175,6 +189,9 @@ const RevealSlides = forwardRef(function RevealSlides(
   onRevealReadyRef.current = onRevealReady;
   const sectionEditableRef = useRef(sectionEditable);
   sectionEditableRef.current = sectionEditable;
+  // Read at mount and save time; a new object identity never remounts the deck.
+  const displayRef = useRef({ frames, contentOrigin });
+  displayRef.current = { frames, contentOrigin };
   const [loading, setLoading] = useState(!initialContent && !initialError);
   const [error, setError] = useState(initialError);
   const [htmlContent, setHtmlContent] = useState<string | null>(null);
@@ -307,7 +324,7 @@ const RevealSlides = forwardRef(function RevealSlides(
     };
   }, [isClient, codeTheme]);
 
-  // Parse slide content (either from server or client fetch)
+  // Parse slide content (the document handed in)
   useEffect(() => {
     if (!isClient) return;
 
@@ -352,10 +369,8 @@ const RevealSlides = forwardRef(function RevealSlides(
         el.removeAttribute('contenteditable');
       });
 
-      // An html block's frame loads only in its sandbox; svg blocks are held to
-      // their lists (deckBlocks.ts).
-      neutralizeHtmlBlockFrames(container);
-      sanitizeSvgBlocks(container);
+      // Held to the slide markup lists where it is inserted (the mount below):
+      // rename mode while editing, remove mode for readers.
 
       // When editing, strip highlight.js spans from code blocks
       // This allows clean editing - highlighting will be re-applied on save/view
@@ -379,41 +394,17 @@ const RevealSlides = forwardRef(function RevealSlides(
       setLoading(false);
     };
 
-    // Use server-side pre-fetched content if available (avoids CORS)
+    // The loader's document (or the live deck's). There is no client-side
+    // read of the stored deck: without a document, the error state shows.
     if (initialContent) {
       parseContent(initialContent);
       return;
     }
-
-    // Fallback to client-side fetch (may fail due to CORS)
-    const fetchContent = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-
-        const response = await fetch(contentUrl!);
-        if (!response.ok) {
-          throw new Error(`Failed to load slides: ${response.status}`);
-        }
-
-        const html = await response.text();
-        // The stored index.html, unresolved: its `media://` references have no
-        // URL here, and a browser cannot load that scheme — so a read blanks
-        // them. Never in the editor, whose document goes back through a save:
-        // it keeps what it loaded (and edit mode always has `initialContent`
-        // from fetch-latest, so this fallback does not run there anyway).
-        parseContent(isEditing ? html : stripMediaRefs(html));
-      } catch (err: unknown) {
-        console.error('Error loading slides:', err);
-        setError(err instanceof Error ? err.message : String(err));
-        setLoading(false);
-      }
-    };
-
-    if (contentUrl && !initialError) {
-      fetchContent();
+    if (!initialError) {
+      setError('This deck could not be loaded.');
+      setLoading(false);
     }
-  }, [isClient, contentUrl, initialContent, initialError, isEditing]);
+  }, [isClient, initialContent, initialError, isEditing]);
 
   // Initialize Reveal.js when content is loaded (client-side only)
   // IMPORTANT: We set innerHTML here, NOT in JSX, to prevent React from
@@ -452,11 +443,23 @@ const RevealSlides = forwardRef(function RevealSlides(
 
       // Set the slides content BEFORE initializing Reveal.js
       // This is done here instead of JSX to prevent React reconciliation
-      // from overwriting Reveal.js's DOM modifications during navigation
+      // from overwriting Reveal.js's DOM modifications during navigation.
+      // Parsed into a template of this document, held to the slide markup
+      // lists, and inserted as nodes: what is checked is what is inserted.
       const slidesContainer = deckRef.current.querySelector('.slides');
       if (slidesContainer) {
-        slidesContainer.innerHTML = htmlContent;
+        const display = displayRef.current;
+        slidesContainer.replaceChildren(
+          isEditing
+            ? editorSlidesFragment(htmlContent, document, display)
+            : viewerSlidesFragment(htmlContent, document, display)
+        );
       }
+
+      // Reveal's cross-window API stays off: no query parameter may turn it
+      // (or anything else the app set) back on, and frames cannot drive the deck.
+      stripRevealQueryConfig();
+      installRevealMessageGuard();
 
       // Initialize Reveal.js
       // NOTE: When editing, we exclude RevealHighlight plugin so code stays as plain text
@@ -480,9 +483,11 @@ const RevealSlides = forwardRef(function RevealSlides(
         hideInactiveCursor: false,
         // Syntax highlighting for code blocks (disabled in edit mode for clean editing)
         plugins: isEditing ? [] : [RevealHighlight],
+        ...REVEAL_LOCKED_OPTIONS,
       });
 
       await deck.initialize();
+      lockRevealAfterInit(deck);
 
       if (!mounted) {
         deck.destroy();
@@ -611,14 +616,6 @@ const RevealSlides = forwardRef(function RevealSlides(
     const slidesDiv = deckRef.current.querySelector('.slides');
     if (!slidesDiv) return null;
 
-    // Clone the slides to clean up without affecting the live DOM
-    const slidesClone = slidesDiv.cloneNode(true) as HTMLElement;
-
-    // Strip editor/runtime additions (contenteditable, hljs spans, the live
-    // Sandpack mounts, Reveal paint). The same cleanup the diff-at-save
-    // snapshot runs on both sides (deckOpsDiff), so the two always agree.
-    cleanupEditorContainer(slidesClone);
-
     // Build data attributes for theme settings (single theme)
     const revealDiv = deckRef.current;
     const dataAttrs = [];
@@ -629,15 +626,11 @@ const RevealSlides = forwardRef(function RevealSlides(
       dataAttrs.push(`data-code-theme="${revealDiv.getAttribute('data-code-theme')}"`);
     }
 
-    // Extract ONLY the <section> elements, ignoring any nested wrapper divs
-    // This fixes corrupted HTML that has nested <div class="reveal/slides"> from previous bugs
-    const allSections = slidesClone.querySelectorAll('section');
-    // Filter to get only "root" sections (sections not nested inside other sections)
-    // Vertical slide children ARE nested in a parent section, so they stay grouped correctly
-    const rootSections = Array.from(allSections).filter((section: Element) => {
-      return !section.parentElement?.closest('section');
-    });
-    const sectionsHtml = rootSections.map((s: Element) => s.outerHTML).join('\n');
+    // A copy of the slides through the one write cleanup: editor/runtime
+    // additions stripped (contenteditable, hljs spans, the live Sandpack
+    // mounts, Reveal paint — the same cleanup the diff-at-save snapshot runs),
+    // display-only renames undone, frames back to their stored references.
+    const sectionsHtml = storedSectionsHtml(slidesDiv, displayRef.current.frames);
 
     // Return a thin wrapper with data attributes + slide sections
     // The save action parses this via parseSlidesFragment (themes from the
@@ -687,7 +680,6 @@ const RevealSlides = forwardRef(function RevealSlides(
       <div className="reveal-error">
         <div className="text-red-500 text-lg mb-2">Failed to load slides</div>
         <p className="text-gray-500 dark:text-gray-400">{error}</p>
-        <p className="text-sm text-gray-400 mt-4">URL: {contentUrl}</p>
       </div>
     );
   }

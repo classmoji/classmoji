@@ -1,6 +1,5 @@
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { io } from 'socket.io-client';
-import { marked } from 'marked';
 import { domSlideTree, removeHiddenSlides } from '@classmoji/services/slides/hidden';
 import {
   IconChevronDown,
@@ -20,12 +19,7 @@ import {
 import QRCodeOverlay from './QRCodeOverlay';
 import AskMojiHost from './askMoji/AskMojiHost';
 import { deckViewing, flatSlideIndex, isAskMojiTarget } from './askMoji/askMojiProtocol';
-
-// Configure marked for speaker notes
-marked.setOptions({
-  breaks: true,
-  gfm: true,
-});
+import { renderSpeakerNotes } from '~/utils/presenterMarkup';
 
 /**
  * Format milliseconds as HH:MM:SS
@@ -120,6 +114,7 @@ export default function SpeakerView({ slideId, initialContent, askMoji = null }:
   const isRemoteUpdateRef = useRef(false);
   const startTimeRef = useRef(Date.now());
   const previewContainerRef = useRef<HTMLDivElement>(null);
+  const notesRef = useRef<HTMLDivElement>(null);
 
   const [currentSlide, setCurrentSlide] = useState({ h: 0, v: 0 });
   const [elapsedTime, setElapsedTime] = useState(0);
@@ -457,11 +452,12 @@ export default function SpeakerView({ slideId, initialContent, askMoji = null }:
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [goLeft, goRight, goUp, goDown]);
 
-  // Render notes as markdown
-  const renderedNotes = useMemo(() => {
-    if (!currentSlideData?.notes) return null;
-    return marked.parse(currentSlideData.notes);
-  }, [currentSlideData?.notes]);
+  // Notes are markdown, rendered into the notes box as cleaned markup
+  // (presenterMarkup.ts), never handed to React as an HTML string.
+  const notes = currentSlideData?.notes || null;
+  useLayoutEffect(() => {
+    if (notesRef.current && notes) renderSpeakerNotes(notesRef.current, notes);
+  }, [notes]);
 
   // Build speaker URL for phone QR
   const speakerUrl =
@@ -691,11 +687,11 @@ export default function SpeakerView({ slideId, initialContent, askMoji = null }:
               </button>
             </div>
           </div>
-          {renderedNotes ? (
+          {notes ? (
             <div
+              ref={notesRef}
               className="speaker-notes text-white"
               style={{ fontSize: `${notesFontSize}rem` }}
-              dangerouslySetInnerHTML={{ __html: renderedNotes }}
             />
           ) : (
             <p className="text-gray-500 italic">No notes for this slide</p>

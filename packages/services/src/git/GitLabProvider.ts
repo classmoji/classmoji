@@ -401,12 +401,14 @@ export class GitLabProvider extends GitProvider {
    * Every path in the project and the git object behind it. GitLab's tree ids
    * are real git object ids, so the entries match Github's tree listing; the
    * listing carries no sizes. Never truncated: every page is followed.
+   * `opts.path` lists that folder (entries keep their full paths).
    */
   async getTree(
     group: string,
     project: string,
     ref: string,
-    recursive: boolean = true
+    recursive: boolean = true,
+    opts: { path?: string } = {}
   ): Promise<{
     sha: string;
     truncated: boolean;
@@ -417,6 +419,7 @@ export class GitLabProvider extends GitProvider {
       per_page: '100',
       pagination: 'keyset',
       ...(recursive ? { recursive: 'true' } : {}),
+      ...(opts.path ? { path: opts.path } : {}),
     });
     const items = await this.paginate<{ id: string; path: string; type: string }>(
       `${this.projectApi(group, project)}/repository/tree?${params.toString()}`

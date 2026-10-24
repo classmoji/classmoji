@@ -70,6 +70,7 @@ import {
 import type { DeckSlide } from '@classmoji/services/slides';
 
 import { canonicalMediaUrls } from '../mediaRefs.ts';
+import { displaySectionAttrs, type EditorFrames } from '../editorFrames.ts';
 import {
   LOCKED_BY_ATTR,
   applySectionAttrs,
@@ -79,6 +80,8 @@ import {
   prepareEditorSection,
   safeInnerHtml,
   scanDeckDom,
+  type EditorDisplay,
+  type SerializedSection,
   sectionChildren,
   sectionFromMarkup,
   sectionOf,
@@ -153,6 +156,10 @@ export interface DeckBridgeOptions {
   mediaScope: { host: string | null | undefined; classroomId: string | null | undefined };
   /** Playable URLs for `media://` refs (missing ones stay as refs). */
   resolveMedia(refs: string[]): Promise<Map<string, string>>;
+  /** This deck's frames, shown through the editor frame route (null: shown as stored). */
+  frames?: EditorFrames | null;
+  /** The content service origin (legacy html blocks are shown through its preview frame). */
+  contentOrigin?: string | null;
   notify(message: string): void;
   onState(state: BridgeUiState): void;
   clock?: () => number;
@@ -386,15 +393,8 @@ export class DeckBridge {
         });
       }
     }
-    return this.documentShell(deck.theme, deck.codeTheme, this.safeMarkup(sections));
-  }
-
-  /** Section markup with unsafe attributes stripped (display only). */
-  private safeMarkup(sections: string): string {
-    if (typeof document === 'undefined') return sections;
-    const holder = document.createElement('div');
-    holder.appendChild(safeInnerHtml(document, sections));
-    return holder.innerHTML;
+    // Held to the slide markup lists where it is shown (RevealSlides), once.
+    return this.documentShell(deck.theme, deck.codeTheme, sections);
   }
 
   /** The live deck as a static document (view mode after editing). */
@@ -403,7 +403,7 @@ export class DeckBridge {
     const sections = this.displaySlides(deck.slides)
       .map(slide => renderSlideSection(slide, { mapHtml: html => this.mapMedia(html) }))
       .join('\n');
-    return this.documentShell(deck.theme, deck.codeTheme, this.safeMarkup(sections));
+    return this.documentShell(deck.theme, deck.codeTheme, sections);
   }
 
   /** Slides as displayed: `media://` refs in section attributes made playable. */
@@ -415,13 +415,23 @@ export class DeckBridge {
     }));
   }
 
-  /** Section attributes for display (`media://` → playable URL). */
+  /** Section attributes for display (`media://` → playable URL, a background frame the editor's way). */
   private mapAttrs(attrs: Record<string, string>): Record<string, string> {
     const out: Record<string, string> = {};
     for (const [name, value] of Object.entries(attrs)) {
       out[name] = value.includes('media://') ? this.mapMedia(value) : value;
     }
-    return out;
+    return displaySectionAttrs(out, this.opts.frames ?? null);
+  }
+
+  /** What slide markup needs to be shown in this editor. */
+  private get display(): EditorDisplay {
+    return { frames: this.opts.frames ?? null, contentOrigin: this.opts.contentOrigin ?? null };
+  }
+
+  /** A section as the deck stores it (frames back to their stored references). */
+  private serialize(el: HTMLElement): SerializedSection {
+    return serializeSection(el, this.opts.frames ?? null);
   }
 
   /** Section attributes as stored (a signed media URL of ours → its ref). */
@@ -457,7 +467,7 @@ export class DeckBridge {
     const scan = scanDeckDom(slidesEl, taken => this.mintId(taken));
     for (const [id, el] of scan.elements) {
       const base = this.baseline.get(id);
-      const ser = serializeSection(el);
+      const ser = this.serialize(el);
       if (base) {
         base.domHtml = ser.html;
         base.domAttrs = json(ser.attrs);
@@ -826,7 +836,7 @@ export class DeckBridge {
         this.rebaseFromDom(id, el);
         continue;
       }
-      const ser = serializeSection(el);
+      const ser = this.serialize(el);
 
       if (ser.asideNotes != null) this.adoptAsideNotes(id, el, map, ser.asideNotes);
 
@@ -920,7 +930,7 @@ export class DeckBridge {
 
   private newSlideFields(el: HTMLElement | undefined, container: boolean): NewSlideFields {
     if (!el) return container ? {} : { html: '' };
-    const ser = serializeSection(el);
+    const ser = this.serialize(el);
     const fields: NewSlideFields = { attrs: this.canonAttrs(ser.attrs), hidden: ser.hidden };
     if (!container) fields.html = canonicalMediaUrls(ser.html ?? '', this.opts.mediaScope);
     if (ser.asideNotes) fields.notes = ser.asideNotes;
@@ -943,7 +953,7 @@ export class DeckBridge {
 
   private rebaseFromDom(id: string, el: HTMLElement): void {
     const map = deckSlides(this.doc).get(id);
-    const ser = serializeSection(el);
+    const ser = this.serialize(el);
     this.baseline.set(id, {
       yHtml: map instanceof Y.Map ? readSlideHtml(map) : ser.html,
       domHtml: ser.html,
@@ -1079,7 +1089,7 @@ export class DeckBridge {
           applySectionAttrs(el, this.mapAttrs(yAttrs), hidden);
           this.revision++;
           base.yAttrs = json(yAttrs);
-          base.domAttrs = json(serializeSection(el).attrs);
+          base.domAttrs = json(this.serialize(el).attrs);
           base.hidden = hidden;
         }
       }
@@ -1138,7 +1148,7 @@ export class DeckBridge {
     const markup = entry.container
       ? `<section${sectionAttrString(slide)}></section>`
       : renderSlideSection(slide, { includeNotes: false, mapHtml: html => this.mapMedia(html) });
-    const el = sectionFromMarkup(doc, markup);
+    const el = sectionFromMarkup(doc, markup, this.display);
     prepareEditorSection(el, !this.lockedByOther(entry.id));
     return el;
   }
@@ -1148,12 +1158,12 @@ export class DeckBridge {
     // The caret stays at the same place in the text (it would land at the start).
     const caret = caretTextOffset(el);
     this.mutateDom(() => {
-      el.replaceChildren(safeInnerHtml(el.ownerDocument, this.mapMedia(yHtml ?? '')));
+      el.replaceChildren(safeInnerHtml(el.ownerDocument, this.mapMedia(yHtml ?? ''), this.display));
       prepareEditorSection(el, !this.lockedByOther(id));
       if (caret !== null) placeCaretAtTextOffset(el, caret);
     });
     const base = this.baseline.get(id);
-    const ser = serializeSection(el);
+    const ser = this.serialize(el);
     if (base) {
       base.yHtml = yHtml;
       base.domHtml = ser.html;
@@ -1178,7 +1188,7 @@ export class DeckBridge {
       const id = el.getAttribute('data-cm-id') as string;
       const base = this.baseline.get(id);
       if (!base || this.held?.slideId === id || this.pendingEdits.has(id)) continue;
-      const ser = serializeSection(el as HTMLElement);
+      const ser = this.serialize(el as HTMLElement);
       base.domHtml = ser.html;
       base.domAttrs = json(ser.attrs);
     }
@@ -1291,14 +1301,14 @@ export class DeckBridge {
         // Not over an attribute edit that is not written yet (retried later).
         if (
           this.dirtySlides.has(entry.id) ||
-          (base && json(serializeSection(el0).attrs) !== base.domAttrs)
+          (base && json(this.serialize(el0).attrs) !== base.domAttrs)
         ) {
           this.mediaRetry = true;
         } else {
           this.mutateDom(() =>
             applySectionAttrs(el0, this.mapAttrs(yAttrs), entry.map.get('hidden') === true)
           );
-          if (base) base.domAttrs = json(serializeSection(el0).attrs);
+          if (base) base.domAttrs = json(this.serialize(el0).attrs);
         }
       }
       const html = readSlideHtml(entry.map);
@@ -1315,7 +1325,7 @@ export class DeckBridge {
         this.pendingEdits.has(entry.id) ||
         this.dirtySlides.has(entry.id) ||
         (!this.lockedByOther(entry.id) && this.busyIn(entry.id, el)) ||
-        (base && serializeSection(el).html !== base.domHtml)
+        (base && this.serialize(el).html !== base.domHtml)
       ) {
         this.mediaRetry = true;
         continue;
@@ -1439,7 +1449,7 @@ export class DeckBridge {
     const yHtml = readSlideHtml(map);
     if (yHtml === base.yHtml) return false;
     if (this.observer) this.onMutations(this.observer.takeRecords());
-    const unsent = serializeSection(el).html !== base.domHtml;
+    const unsent = this.serialize(el).html !== base.domHtml;
     this.renderHtml(slideId, el, yHtml);
     this.deferred.delete(slideId);
     this.dirtySlides.delete(slideId);

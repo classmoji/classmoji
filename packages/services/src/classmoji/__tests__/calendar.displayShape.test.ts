@@ -22,6 +22,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const calendarEventFindMany = vi.fn();
 const assignmentFindMany = vi.fn();
 const formFindMany = vi.fn();
+const settingsFindUnique = vi.fn();
 
 vi.mock('@classmoji/database', async () => ({
   ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
@@ -32,6 +33,7 @@ vi.mock('@classmoji/database', async () => ({
     calendarEvent: { findMany: calendarEventFindMany },
     assignment: { findMany: assignmentFindMany },
     form: { findMany: formFindMany },
+    classroomSettings: { findUnique: settingsFindUnique },
   }),
 }));
 

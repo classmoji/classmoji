@@ -1,5 +1,4 @@
 import getPrisma from '@classmoji/database';
-import { ContentService } from '../content/ContentService.ts';
 import { getGitProvider } from '../git/index.ts';
 import { owned, type GitLabOrgRecord } from '../content/gitlabContent.ts';
 
@@ -24,60 +23,32 @@ import { owned, type GitLabOrgRecord } from '../content/gitlabContent.ts';
  *     is what makes the first render fix it rather than fail on it.
  *   - A sync must be able to DELETE. A file removed from the repo whose row
  *     survives is a path the renderer will happily sign a URL for, and the
- *     Worker will 404 on it. The full sync's stamp-and-sweep below is how rows
+ *     Worker will 404 on it. The tree sync's path-set delete below is how rows
  *     for vanished paths go away.
  */
 
-/**
- * Above this many changed paths, one tree call beats N per-path reads.
- *
- * A per-path read is one GitHub request; the tree call is one request for the
- * WHOLE repo regardless of size. The crossover is not sharp — the tree
- * response is larger, and a big repo makes it much larger — so this is set at
- * the point where the request count starts to look like rate-limit pressure
- * rather than at a measured optimum. A push touching more than a couple of
- * dozen files is usually a bulk import or a folder move, which is exactly when
- * the whole-repo answer is also the more accurate one.
- */
-const TREE_CALL_THRESHOLD = 30;
-
-/**
- * Theme folders are served by the SHA of their TREE, not of any file inside.
- *
- * That makes them the one case where an incremental sync is not enough: editing
- * `.slidesthemes/midnight/theme.css` changes the tree SHA of `midnight/` and of
- * every parent above it, and a push webhook reports only the file. Rather than
- * recompute the affected tree chain — which needs the whole tree anyway — any
- * change under this prefix escalates to a full sync.
- */
-const THEME_PREFIX = '.slidesthemes/';
-
-export interface ContentAssetChanges {
-  added: string[];
-  modified: string[];
-  removed: string[];
-}
-
 export interface SyncContentAssetsOptions {
-  full?: boolean;
-  changes?: ContentAssetChanges;
   /**
-   * The commit the push built ON — `before` from the webhook. Compared against
-   * the commit the map was last brought level with; a mismatch means a delivery
-   * went missing and this run escalates to a full tree read.
+   * Read the tree even when the branch head is the commit the map was last
+   * brought level with. The push path leaves this off (a redelivered or
+   * already-applied push costs two small API calls, not a tree read); the
+   * daily refresh and manual runs set it, because they are the backstop for a
+   * map that drifted without the repo moving.
    */
-  before?: string | null;
-  /** The commit the push LANDED — `after`. Recorded once the diff is applied. */
-  after?: string | null;
+  force?: boolean;
 }
 
 export interface SyncContentAssetsResult {
-  mode: 'full' | 'incremental';
   /**
-   * Entries this run APPLIED, which is not always the number of rows it
-   * changed: the upsert skips any row a newer write-through already holds (see
-   * `upsertManyOp`). The difference is a save that landed mid-sync, so it is
-   * the count being right rather than the write being wrong.
+   * `skipped`: the head was the commit the map is level with; nothing read.
+   * `superseded`: a newer run already holds the classroom's stamp; this one
+   * wrote nothing.
+   */
+  mode: 'full' | 'skipped' | 'superseded';
+  /**
+   * Rows this run actually CHANGED — new paths and paths whose sha or type
+   * moved. An unchanged row is not rewritten, and a row a newer write-through
+   * already holds is skipped (see `upsertChangedOp`).
    */
   upserted: number;
   deleted: number;
@@ -214,84 +185,55 @@ interface TreeEntry {
 /** The branch a content repo serves — see `content/contentBranch.ts`. */
 export { resolveContentBranch } from '../content/contentBranch.ts';
 
-/**
- * The default branch's tree, plus the commit it was read AT.
- *
- * The branch head is resolved first and the tree is then read at that commit
- * rather than at the branch name, so the commit this returns describes exactly
- * the entries it returns. That matters because the commit is recorded as the
- * state the map is level with: reading the tree at a moving branch and asking
- * for its head separately could record a commit whose tree was never read, and
- * a later push building on that commit would then find the chain intact and
- * skip the escalation that should have repaired it.
- */
-async function readRepoTree(
-  classroom: ResolvedClassroom
-): Promise<{ entries: TreeEntry[]; truncated: boolean; commit: string }> {
+/** The provider and the owner the content repo lives under. */
+async function repoAccess(classroom: ResolvedClassroom) {
   const provider = getGitProvider(classroom.gitOrganization);
   // GitLab: the content project lives in the classroom's subgroup.
   const owner =
     classroom.gitOrganization.provider === 'GITLAB'
       ? (await owned(classroom.gitOrganization as GitLabOrgRecord, classroom.content_repo)).login
       : classroom.org;
-  const branch = await provider.getDefaultBranch(owner, classroom.content_repo);
-  const commit = await provider.getLatestCommitSHA(owner, classroom.content_repo, branch);
-  const tree = await provider.getTree(owner, classroom.content_repo, commit, /* recursive */ true);
-
-  if (tree.truncated) {
-    // Reported, not thrown. A truncated tree is still hundreds of correct
-    // entries, and a partial map degrades to "some assets fall back to the
-    // legacy path"; refusing it would leave the classroom with no map at all.
-    console.warn(
-      `[contentAssets] Tree for ${classroom.org}/${classroom.content_repo} was truncated by GitHub; ` +
-        `syncing the ${tree.entries.length} entries that arrived`
-    );
-  }
-
-  return { entries: tree.entries, truncated: tree.truncated, commit };
+  return { provider, owner };
 }
 
 /**
- * A whole tree's worth of rows, in ONE statement, that never moves a row
- * BACKWARDS.
+ * The default branch's head commit.
  *
- * Two problems, one fix.
+ * The tree is then read AT this commit rather than at the branch name, so the
+ * commit a sync records describes exactly the entries it read. Reading a
+ * moving branch and asking for its head separately could record a commit
+ * whose tree was never read, and the next push would then skip as "level".
+ */
+async function readHead(classroom: ResolvedClassroom) {
+  const { provider, owner } = await repoAccess(classroom);
+  const branch = await provider.getDefaultBranch(owner, classroom.content_repo);
+  const commit = await provider.getLatestCommitSHA(owner, classroom.content_repo, branch);
+  return { provider, owner, commit };
+}
+
+/**
+ * Every row of a tree read that is NEW or CHANGED, in ONE statement, never
+ * moving a row backwards — and nothing at all unless the classroom still
+ * holds this run's stamp (the `EXISTS`; see `treeSync`).
  *
- * ── The correctness one ────────────────────────────────────────────────────
- * `fullSync` takes its `syncedAt` BEFORE reading the tree, which is what makes
- * the sweep safe (see the header). But the write it fed was unconditional, so
- * the same ordering that protected a fresh row from the DELETE handed it
- * straight to the UPDATE: a save whose write-through landed while the tree read
- * was in flight got its sha replaced by the pre-save one the tree had reported.
- * The row survived and was wrong, which is worse than not surviving — the
- * renderer signs a URL for the previous deck and `/present` serves it until the
- * next webhook or the 24-hour refresh.
+ * `content_assets.synced_at < EXCLUDED.synced_at`: the run's stamp is taken
+ * BEFORE the head is read, so a row stamped at or after it was written by
+ * something newer than this snapshot — a save's write-through, or a later
+ * run — and keeps what it has. Without this a save that landed while the tree
+ * read was in flight would get its sha replaced by the pre-save one.
  *
- * `WHERE content_assets.synced_at < EXCLUDED.synced_at` is the whole fix. A row
- * stamped at or after this run keeps everything it has; every other row is
- * brought level with the tree.
+ * `(sha, type) IS DISTINCT FROM`: an unchanged row is left alone, stamp
+ * included, so a push that touched one file rewrites one row (plus the trees
+ * above it), not the whole repo. Size is not compared: GitLab's listing has
+ * none, and nothing reads it to decide anything.
  *
  * Deliberately NOT a Prisma upsert with an extra `where`: Prisma has no
  * conditional-update upsert, and the shapes that look like one degrade to
- * read-then-create, which inside `$transaction` surfaces as a P2002 on the
- * primary key rather than as a skip.
+ * read-then-create, which inside `$transaction` surfaces as a P2002.
  *
- * ── The size one ───────────────────────────────────────────────────────────
- * A repo of a few thousand files became a few thousand statements in a single
- * transaction — the plan's "chunk the upserts" follow-up. One `INSERT … SELECT
- * FROM UNNEST` is not a chunked version of that, it is the whole batch as a
- * single round trip, so the follow-up is closed rather than deferred.
- *
- * `synced_at` and `classroom_id` are scalars rather than parallel arrays on
- * purpose: they are the same for every row, and an array of `Date` would put
- * timestamp serialization between the driver and a `TIMESTAMP(3)` column for no
- * gain. Their types come from the INSERT target columns, so neither is cast;
- * the four arrays are cast because `UNNEST` has nothing else to infer from.
- *
- * Returns null for an empty batch — `UNNEST` of empty arrays is a valid no-op,
- * but there is no reason to send it.
+ * Returns null for an empty batch.
  */
-function upsertManyOp(classroomId: string, entries: TreeEntry[], syncedAt: Date) {
+function upsertChangedOp(classroomId: string, entries: TreeEntry[], syncedAt: Date) {
   if (entries.length === 0) return null;
 
   return getPrisma().$executeRaw`
@@ -303,6 +245,53 @@ function upsertManyOp(classroomId: string, entries: TreeEntry[], syncedAt: Date)
       ${entries.map(entry => entry.type)}::text[],
       ${entries.map(entry => entry.size ?? 0)}::int[]
     ) AS entry(path, sha, type, size)
+    WHERE EXISTS (
+      SELECT 1 FROM classrooms
+      WHERE id = ${classroomId} AND content_assets_synced_at = ${syncedAt}
+    )
+    ON CONFLICT (classroom_id, path) DO UPDATE
+      SET sha = EXCLUDED.sha,
+          type = EXCLUDED.type,
+          size = EXCLUDED.size,
+          synced_at = EXCLUDED.synced_at
+      WHERE content_assets.synced_at < EXCLUDED.synced_at
+        AND (content_assets.sha, content_assets.type) IS DISTINCT FROM (EXCLUDED.sha, EXCLUDED.type)
+  `;
+}
+
+/**
+ * Write-through tree rows a writer just learned from its own commit, with one
+ * stamp. Same backwards guard as `upsertChangedOp`; no change filter, because
+ * these rows are the newest word on their paths and the fresh stamp is what
+ * keeps a slower, older sync run from overwriting or sweeping them.
+ *
+ * `fill`: only rows the map does not have are added, and an existing row is
+ * left exactly as it is (see `recordFolderTreesAfterCommit`).
+ */
+function upsertTreesOp(
+  classroomId: string,
+  entries: TreeEntry[],
+  syncedAt: Date,
+  { fill = false }: { fill?: boolean } = {}
+) {
+  if (fill) {
+    return getPrisma().$executeRaw`
+      INSERT INTO content_assets (classroom_id, path, sha, type, size, synced_at)
+      SELECT ${classroomId}, entry.path, entry.sha, 'tree', 0, ${syncedAt}
+      FROM UNNEST(
+        ${entries.map(entry => entry.path)}::text[],
+        ${entries.map(entry => entry.sha)}::text[]
+      ) AS entry(path, sha)
+      ON CONFLICT (classroom_id, path) DO NOTHING
+    `;
+  }
+  return getPrisma().$executeRaw`
+    INSERT INTO content_assets (classroom_id, path, sha, type, size, synced_at)
+    SELECT ${classroomId}, entry.path, entry.sha, 'tree', 0, ${syncedAt}
+    FROM UNNEST(
+      ${entries.map(entry => entry.path)}::text[],
+      ${entries.map(entry => entry.sha)}::text[]
+    ) AS entry(path, sha)
     ON CONFLICT (classroom_id, path) DO UPDATE
       SET sha = EXCLUDED.sha,
           type = EXCLUDED.type,
@@ -315,11 +304,11 @@ function upsertManyOp(classroomId: string, entries: TreeEntry[], syncedAt: Date)
 /**
  * `upsertOp` for a writer that may not know the file's SIZE.
  *
- * A tree read always carries one, so `upsertOp` above writes it
+ * A tree read always carries one, so `upsertChangedOp` above writes it
  * unconditionally. A write-through often cannot: an accept learns its sha by
  * reading a file's metadata rather than its bytes, and `size ?? 0` would then
  * ZERO a real size an earlier sync had measured. On an update the column is
- * left alone; a new row starts at 0 and the next full sync fills it in.
+ * left alone; a new row starts at 0.
  */
 function upsertKnownOp(classroomId: string, entry: TreeEntry, syncedAt: Date) {
   const changed = {
@@ -337,296 +326,130 @@ function upsertKnownOp(classroomId: string, entry: TreeEntry, syncedAt: Date) {
 }
 
 /**
- * Rebuild the whole map from the repo's tree.
+ * Bring the map level with the branch head: one whole-tree read, diffed.
  *
- * Stamp-and-sweep: every row written this run carries the same `syncedAt`, and
- * anything left below that stamp is a path that is no longer in the repo and is
- * deleted. Doing it this way rather than diffing means the sweep is correct
- * even when the previous state was partial, wrong, or absent.
+ * stamp → head → (skip if level) → recursive tree → record the stamp and the
+ * commit → upsert what changed → delete what left, the last three in ONE
+ * transaction so a failure leaves the previous map intact (stale is
+ * recoverable; half-applied is not distinguishable from good).
  *
- * The stamp is taken BEFORE the tree is read, and that ordering is the whole
- * safety of the sweep. Reading a repo's tree is a network round trip — often
- * hundreds of milliseconds, sometimes seconds — and `recordContentAsset` writes
- * a row for a just-uploaded file stamped `now`. Stamping AFTER the read puts
- * this run's stamp ahead of that row, and `synced_at < syncedAt` then deletes
- * it: the file is genuinely in the repo, it is simply newer than the snapshot
- * this run read, and the teacher who just uploaded it watches it render as a
- * dangling URL. Stamping first can only ever leave a row the sweep keeps, which
- * is the same too-large-map trade the truncated case takes below.
+ * The whole tree, every time, rather than the paths a push names: a folder is
+ * served by its TREE sha, and editing one file changes the tree sha of every
+ * folder above it, which no per-file update can produce. One recursive call
+ * (GitHub) or one paged listing (GitLab) answers all of it.
  *
- * The whole thing is ONE transaction: a half-applied sync would leave the map
- * claiming paths at SHAs that never coexisted, and a reader cannot tell that
- * from a good map. All-or-nothing means a failure leaves the previous map
- * intact — stale, and stale is recoverable.
+ * The stamp is taken BEFORE the head is read. Everything else leans on that:
  *
- * A TRUNCATED tree is the exception to the sweep, and deliberately so: the
- * entries that did not arrive are not absent from the repo, and sweeping them
- * would delete rows for files that still exist. So a truncated run upserts and
- * does not delete, which can only leave the map too large — a superset, whose
- * worst case is a stale row, rather than a subset, whose worst case is a
- * missing asset on a live page.
+ *   - the classroom stamp only moves forward, and the transaction writes it
+ *     FIRST. The upsert and the delete then write only if the classroom still
+ *     holds THIS run's stamp (their `EXISTS`): a run that lost it to a newer
+ *     run — an older snapshot finishing late — writes no rows at all (and
+ *     reports `superseded`), so it
+ *     can neither re-add a path the newer run deleted nor delete a path its
+ *     older tree lacks. The stamp update takes the classroom row's lock, so two
+ *     runs' transactions cannot interleave past it;
+ *   - the upsert skips rows stamped at or after it (a newer write-through);
+ *   - the delete only considers rows stamped below it AND whose path is not in
+ *     the tree. Unchanged rows keep their old stamp, so the stamp alone can no
+ *     longer tell "gone" from "untouched" — the path set does. A row written
+ *     while the read was in flight is above the stamp and survives even though
+ *     this snapshot has not seen it.
  *
- * THIS is also the only thing that stamps `Classroom.content_assets_synced_at`,
- * the value `ensureContentAssets` measures its refresh against. Only a run that
- * read the repo's whole tree can honestly claim the map matches the repo, so an
- * incremental apply and an upload-time row must not move it — see
- * `ensureContentAssets`. The stamp goes INSIDE the transaction, so a sync that
- * fails leaves the classroom looking exactly as unsynced as it is. A truncated
- * run still stamps: it read the tree and applied everything that arrived, which
- * is as current as this classroom can get, and refusing to stamp would put it
- * into a permanent re-sync loop against a repo that is simply too big.
+ * A TRUNCATED tree upserts and does not delete: the entries that did not
+ * arrive are not absent from the repo, and deleting their rows would strand
+ * live files. A map that is too large costs a stale row; one that is too small
+ * costs a missing asset on a live page. It still records the commit — it read
+ * all it could at that commit, and refusing would re-read a too-big repo on
+ * every push for nothing.
+ *
+ * `Classroom.content_assets_synced_at` is what `ensureContentAssets` measures
+ * its refresh against; only this writes it.
  */
-async function fullSync(classroom: ResolvedClassroom): Promise<SyncContentAssetsResult> {
-  // Before the read, not after — see the header. A row written while the tree
-  // is in flight must stamp ABOVE this run, or the sweep deletes it.
-  const syncedAt = new Date();
-  const { entries, truncated, commit } = await readRepoTree(classroom);
-
-  // FIRST, not last. The sweep's count is read off the tail of the results, so
-  // the stamp goes in front of the upserts rather than after the delete.
-  //
-  // The commit rides along with the timestamp: this run read the repo at it, so
-  // it is the state the map is now level with, and the next push's `before` is
-  // measured against it. A truncated run records it too — it did read the tree
-  // at that commit, and refusing to record would leave a repo that is simply
-  // too big permanently claiming a missed delivery on every push.
-  const stampOp = getPrisma().classroom.update({
-    where: { id: classroom.id },
-    data: { content_assets_synced_at: syncedAt, content_assets_synced_commit: commit },
-  });
-
-  // One statement for the whole tree, and one that refuses to move a row
-  // backwards — see `upsertManyOp`.
-  const upsert = upsertManyOp(classroom.id, entries, syncedAt);
-  const operations = upsert ? [upsert] : [];
-
-  let deleted = 0;
-
-  if (truncated) {
-    await getPrisma().$transaction([stampOp, ...operations]);
-  } else {
-    // Destructured rather than indexed off the tail: the sweep's count is
-    // positionally coupled to it being the LAST operation, and appending
-    // another op later would otherwise report a wrong count silently.
-    const [...results] = await getPrisma().$transaction([
-      stampOp,
-      ...operations,
-      getPrisma().contentAsset.deleteMany({
-        where: { classroom_id: classroom.id, synced_at: { lt: syncedAt } },
-      }),
-    ]);
-    const sweep = results.at(-1) as { count: number };
-    deleted = sweep.count;
-  }
-
-  return { mode: 'full', upserted: entries.length, deleted, truncated };
-}
-
-/**
- * Apply just the paths a push touched.
- *
- * `removed` is deleted outright. `added` and `modified` are re-read — a push
- * webhook names the paths but not their new SHAs, which are the whole point of
- * the row — either one at a time or, past TREE_CALL_THRESHOLD, out of a single
- * whole-repo tree read.
- *
- * A path that comes back missing is treated as removed. That covers the
- * ordinary race where a later push deletes what this one added, and it is the
- * safe direction: no row means the renderer falls back, where a row at a SHA
- * that no longer exists means a signed URL that 404s at the edge.
- */
-async function incrementalSync(
+async function treeSync(
   classroom: ResolvedClassroom,
-  changes: ContentAssetChanges,
-  after: string | null
+  { force = false }: SyncContentAssetsOptions = {}
 ): Promise<SyncContentAssetsResult> {
-  const removed = unique(changes.removed ?? []);
-  const touched = unique([...(changes.added ?? []), ...(changes.modified ?? [])]);
-
-  let entries: TreeEntry[] = [];
-  // Whether the listing this run worked from was complete. Only the tree branch
-  // can come back short, and when it does a path's absence stops meaning "gone
-  // from the repo" — see the deletion guard below.
-  let truncated = false;
-
-  if (touched.length > TREE_CALL_THRESHOLD) {
-    const wanted = new Set(touched);
-    const tree = await readRepoTree(classroom);
-    truncated = tree.truncated;
-    entries = tree.entries.filter(entry => wanted.has(entry.path));
-  } else {
-    const found = await Promise.all(
-      touched.map(async path => {
-        // skipCache because this runs off a push webhook: ContentService's
-        // 60-second meta cache is very likely to still hold the PRE-push SHA,
-        // which is precisely the value that must not be written here.
-        const meta = await ContentService.getMeta({
-          gitOrganization: classroom.gitOrganization,
-          repo: classroom.content_repo,
-          path,
-          skipCache: true,
-        });
-        if (!meta) return null;
-        return { path, sha: meta.sha, type: 'blob', size: meta.size ?? 0 } as TreeEntry;
-      })
-    );
-    entries = found.filter((entry): entry is TreeEntry => entry !== null);
-  }
-
-  const resolvedPaths = new Set(entries.map(entry => entry.path));
-  const vanished = touched.filter(path => !resolvedPaths.has(path));
-
-  // `removed` is the webhook naming a deletion, which is always trustworthy.
-  // `vanished` is an INFERENCE from absence, and a truncated listing destroys
-  // the premise: the entries GitHub omitted are not gone from the repo, so
-  // deleting them would strand live files. Same invariant fullSync holds — a
-  // map that is too large costs a stale row, one that is too small costs a
-  // missing asset on a live page.
-  //
-  // The per-path branch never sets `truncated`, and does not need to:
-  // ContentService.getMeta returns null only on a 404 and rethrows everything
-  // else, so a rate limit or a 5xx aborts the sync instead of emptying the map.
-  const toDelete = truncated ? unique(removed) : unique([...removed, ...vanished]);
-
+  // Before the head read, not after — see above.
   const syncedAt = new Date();
-  const upsert = upsertManyOp(classroom.id, entries, syncedAt);
-  const operations = upsert ? [upsert] : [];
+  const { provider, owner, commit } = await readHead(classroom);
 
-  // The commit this diff lands the map on — and ONLY the commit. The freshness
-  // timestamp deliberately stays untouched (see `ensureContentAssets`): this run
-  // applied the paths one push named and knows nothing about the rest of the
-  // repo, so it may not suppress the daily full refresh. It may, however, say
-  // which commit the map is now level with, which is what lets the NEXT push
-  // notice a delivery that went missing. Inside the transaction, so a failed
-  // apply does not claim a commit it never applied.
-  //
-  // A COMPARE-AND-SWAP, not a write: `updateMany` matched on the commit this
-  // run read, so it lands only if nothing moved the classroom in between.
-  // Deliveries for one classroom are meant to run one at a time (the sync task
-  // carries a per-classroom concurrency key), but a Trigger retry, a manual
-  // sync, or a render-path `ensureContentAssets` can still overlap — and a
-  // blind write from the slower of two runs would move the map's commit
-  // BACKWARDS, which reads as a missed delivery on the next push at best and
-  // hides a real one at worst.
-  //
-  // Suppressed entirely when the listing was truncated: the run could not apply
-  // the deletions it inferred, so the map is not level with `after` and must not
-  // say it is.
-  const casCommit = after && !truncated ? after : null;
-  const commitOps = casCommit
-    ? [
-        getPrisma().classroom.updateMany({
-          where: { id: classroom.id, content_assets_synced_commit: classroom.syncedCommit },
-          data: { content_assets_synced_commit: casCommit },
-        }),
-      ]
-    : [];
+  if (!force && classroom.syncedCommit === commit) {
+    return { mode: 'skipped', upserted: 0, deleted: 0, truncated: false };
+  }
 
-  const results = await getPrisma().$transaction([
-    ...commitOps,
-    ...operations,
-    getPrisma().contentAsset.deleteMany({
-      where: { classroom_id: classroom.id, path: { in: toDelete } },
-    }),
-  ]);
-
-  if (casCommit && (results[0] as { count: number }).count === 0) {
-    // Lost the race. The ROWS this run wrote are still correct — they are
-    // content-addressed and idempotent — so only the commit claim is dropped.
-    // Whoever won recorded a commit this run cannot vouch for, and the next
-    // push's `before` will not match it, which escalates to a full tree read.
-    // That is the repair, and it is the one the mismatch path already runs.
+  const tree = await provider.getTree(owner, classroom.content_repo, commit, /* recursive */ true);
+  const { entries, truncated } = tree;
+  if (truncated) {
+    // Reported, not thrown — see above.
     console.warn(
-      `[contentAssets] Concurrent sync for ${classroom.id} moved the map past ` +
-        `${classroom.syncedCommit}; not recording ${casCommit}. The next push escalates.`
+      `[contentAssets] Tree for ${classroom.org}/${classroom.content_repo} was truncated; ` +
+        `syncing the ${entries.length} entries that arrived, deleting nothing`
     );
   }
 
-  // Same positional coupling as fullSync: the delete is appended last.
-  const deleted = (results.at(-1) as { count: number }).count;
+  const prisma = getPrisma();
+  // Raw, with the same `${syncedAt}` binding the upsert's and the delete's
+  // `EXISTS` compare against, so the value written and the value compared are
+  // encoded alike.
+  const stampOp = prisma.$executeRaw`
+    UPDATE classrooms
+    SET content_assets_synced_at = ${syncedAt},
+        content_assets_synced_commit = ${commit},
+        updated_at = now()
+    WHERE id = ${classroom.id}
+      AND (content_assets_synced_at IS NULL OR content_assets_synced_at < ${syncedAt})
+  `;
+  const upsertOp = upsertChangedOp(classroom.id, entries, syncedAt);
+  const deleteOp = truncated
+    ? null
+    : prisma.$executeRaw`
+        DELETE FROM content_assets
+        WHERE classroom_id = ${classroom.id}
+          AND synced_at < ${syncedAt}
+          AND NOT (path = ANY(${entries.map(entry => entry.path)}::text[]))
+          AND EXISTS (
+            SELECT 1 FROM classrooms
+            WHERE id = ${classroom.id} AND content_assets_synced_at = ${syncedAt}
+          )
+      `;
 
-  return { mode: 'incremental', upserted: entries.length, deleted, truncated };
-}
+  // The stamp first: the other two read it (see above).
+  const ops = [stampOp, upsertOp, deleteOp].filter(op => op !== null);
+  const results = await prisma.$transaction(ops);
+  const countOf = (op: unknown) => {
+    const result = op === null ? 0 : results[ops.indexOf(op as (typeof ops)[number])];
+    return typeof result === 'number' ? result : 0;
+  };
 
-function unique(values: string[]): string[] {
-  return [...new Set(values.filter(Boolean))];
-}
+  // The stamp matched no row: a newer run holds the classroom, and the
+  // upsert and the delete (gated on this run's stamp) wrote nothing.
+  if (countOf(stampOp) === 0) {
+    return { mode: 'superseded', upserted: 0, deleted: 0, truncated };
+  }
 
-function touchesThemes(changes: ContentAssetChanges): boolean {
-  return [...(changes.added ?? []), ...(changes.modified ?? []), ...(changes.removed ?? [])].some(
-    path => path.startsWith(THEME_PREFIX)
-  );
+  return {
+    mode: 'full',
+    upserted: countOf(upsertOp),
+    deleted: countOf(deleteOp),
+    truncated,
+  };
 }
 
 /**
- * Refresh a classroom's asset map.
+ * Bring a classroom's asset map level with its content repo's branch head.
  *
- * Full by default. Pass `changes` for the incremental path — but note that a
- * change under `.slidesthemes/` escalates back to full regardless, because a
- * theme is addressed by its tree SHA and no per-file update can produce one.
- * Pass `full: true` to force the full path even when `changes` is present.
- *
- * A push that does not build on the commit the map is level with escalates too
- * — see `missedDelivery` — as does the FIRST push for a classroom whose tree
- * has never been read.
+ * Skips (no tree read) when the head is the commit the map is already level
+ * with, unless `force`.
  */
 export async function syncContentAssets(
   classroomId: string,
   opts: SyncContentAssetsOptions = {}
 ): Promise<SyncContentAssetsResult> {
-  const classroom = await resolveClassroom(classroomId);
-
-  const missed = missedDelivery(classroom, opts.before);
-  if (missed) {
-    // Loud, because it is the only evidence that deliveries are being lost. One
-    // line is a hiccup; the same classroom every day is a webhook that needs
-    // looking at, and a map that has been running on the nightly sweep.
-    console.warn(
-      `[contentAssets] Push for ${classroomId} builds on ${opts.before}, but the map is level ` +
-        `with ${classroom.syncedCommit} — a delivery was missed. Escalating to a full sync.`
-    );
-  }
-
-  // A classroom with no recorded commit has never had its whole tree read, and
-  // a diff cannot build a map out of nothing: applying one push's paths would
-  // leave every file the push did not touch missing, and then RECORD that
-  // half-map as level with `after` — so the chain starts from a state that was
-  // never true and the gap never shows up again. The first sync reads the tree.
-  const firstSync = Boolean(opts.changes) && !classroom.syncedCommit;
-
-  const goFull =
-    opts.full === true || !opts.changes || touchesThemes(opts.changes) || missed || firstSync;
-
-  return goFull
-    ? fullSync(classroom)
-    : incrementalSync(classroom, opts.changes!, opts.after ?? null);
+  return treeSync(await resolveClassroom(classroomId), opts);
 }
 
 /**
- * Did the repo move without the map seeing it?
- *
- * A push webhook names the commit it built ON as well as the one it landed. If
- * that parent is not the commit the map was last brought level with, some push
- * in between never reached us — a dropped delivery, hook-station down, an App
- * install that finished after the first push — and the diff in hand is a diff
- * against a state the map does not hold. Applying it converges on nothing: the
- * paths the missing push added stay absent, the ones it deleted stay behind as
- * rows the renderer will happily sign 404s for, and the whole thing looks
- * perfectly healthy until the nightly sweep happens to run.
- *
- * BOTH sides have to be present. A null stored commit is a classroom that has
- * never synced, which is not a gap — there is no chain yet — and every classroom
- * in the table starts there, so counting it would make the first push after this
- * shipped a full sync for all of them at once. A push with no `before` is a
- * caller that cannot answer the question (a manual or TTL run), and silence is
- * not evidence.
- */
-function missedDelivery(classroom: ResolvedClassroom, before: string | null | undefined): boolean {
-  return Boolean(before && classroom.syncedCommit && before !== classroom.syncedCommit);
-}
-
-/**
- * Full-sync whatever classroom owns this content repo, addressed by org + repo.
+ * Sync whatever classroom owns this content repo, addressed by org + repo.
  *
  * For writers that commit to a content repo DIRECTLY and need the map to
  * reflect it before the next render — a shared theme save is the case that
@@ -635,9 +458,6 @@ function missedDelivery(classroom: ResolvedClassroom, before: string | null | un
  * edge keeps serving the previous CSS. The push webhook would eventually fix
  * it, but "eventually" is after the author has already reloaded and seen their
  * change not take.
- *
- * Full mode always, for the same reason: no per-file update can produce a tree
- * SHA, so an incremental apply cannot see a theme edit at all.
  *
  * NEVER THROWS. It sits after a write that already succeeded, and a commit that
  * reached GitHub must not be reported as a failed save because a cache could
@@ -658,7 +478,7 @@ export async function syncContentAssetsForRepo(
     // webhook's classroom lookup treats as "not a content repo".
     if (!classroom) return null;
 
-    return await syncContentAssets(classroom.id, { full: true });
+    return await syncContentAssets(classroom.id);
   } catch (error: unknown) {
     console.warn(
       `[contentAssets] ${reason} sync failed for ${org}/${repo}; ` +
@@ -669,10 +489,152 @@ export async function syncContentAssetsForRepo(
   }
 }
 
+/** How long to wait before the one retry of a tree read that 404'd. */
+const TREE_RETRY_MS = 500;
+
+/**
+ * A tree read that may 404 for a moment right after its commit landed
+ * (replication lag on the provider side): retried ONCE.
+ */
+async function retryOnce404<T>(read: () => Promise<T>): Promise<T> {
+  try {
+    return await read();
+  } catch (error: unknown) {
+    if ((error as { status?: number } | null)?.status !== 404) throw error;
+    await new Promise(resolve => setTimeout(resolve, TREE_RETRY_MS));
+    return read();
+  }
+}
+
+/** `a/b/` → `a/b`; null for the repo root or a path with `.`/`..` segments. */
+function normalizeFolder(folder: string): string | null {
+  const segments = folder.split('/').filter(Boolean);
+  if (segments.length === 0) return null;
+  if (segments.some(segment => segment === '.' || segment === '..')) return null;
+  return segments.join('/');
+}
+
+/**
+ * The tree shas of some folders at a commit a writer just made, written
+ * through to the map — so a URL signed for the folder right after the write
+ * names its new tree, without waiting for the push sync.
+ *
+ * Walks down from the root with NON-recursive reads, one per level, shared
+ * between folders (`slides/intro` and `slides/intro/blocks` cost three reads,
+ * not five):
+ *
+ *   - GitHub: by tree sha, starting at `rootTreeSha` (the commit's root tree,
+ *     which the write's response carries) or at the commit itself;
+ *   - GitLab: by path at `commit` — its listing has no read-by-sha — taking
+ *     each child's id.
+ *
+ * Every folder walked, ancestors included, is written as a tree row with ONE
+ * stamp, guarded so a newer row is never overwritten. The ancestors matter:
+ * their tree shas moved too.
+ *
+ * `fill`: for a READER that found a folder missing and reads it at the commit
+ * the map was last synced at (not a commit of its own). It only adds rows the
+ * map lacks, leaves every existing row alone, and stamps the new ones with the
+ * classroom's sync stamp rather than now: they are exactly as current as that
+ * sync, so a sync already in flight still overwrites or deletes them as it
+ * would any row of that snapshot. A fresh stamp would make the in-flight sync
+ * skip them as newer.
+ *
+ * Returns folder → tree sha for every requested folder that exists at the
+ * commit. NEVER THROWS: the commit already succeeded. An empty (or short) map
+ * means "not resolved; sign nothing for it" — a folder missing from the result
+ * was either absent at the commit or the walk/write failed (logged).
+ */
+export async function recordFolderTreesAfterCommit({
+  classroomId,
+  commit,
+  rootTreeSha,
+  folders,
+  fill = false,
+}: {
+  classroomId: string;
+  commit: string;
+  rootTreeSha?: string;
+  folders: string[];
+  fill?: boolean;
+}): Promise<Map<string, string>> {
+  const wanted = [...new Set(folders.map(normalizeFolder).filter((f): f is string => f !== null))];
+  if (wanted.length === 0) return new Map();
+
+  try {
+    const raw = await loadClassroomRaw(classroomId);
+    if (!isDeliverable(raw)) return new Map();
+    const classroom = toResolvedClassroom(raw, classroomId);
+    const { provider, owner } = await repoAccess(classroom);
+    const gitlab = classroom.gitOrganization.provider === 'GITLAB';
+    const repo = classroom.content_repo;
+
+    // path → tree sha, for every folder walked. '' is the root.
+    const shaOf = new Map<string, string>([['', rootTreeSha ?? commit]]);
+    const listings = new Map<string, Promise<TreeEntry[]>>();
+
+    const childrenOf = (parent: string): Promise<TreeEntry[]> => {
+      let listing = listings.get(parent);
+      if (!listing) {
+        listing = retryOnce404(async () => {
+          if (gitlab) {
+            const tree = await provider.getTree(owner, repo, commit, false, {
+              path: parent || undefined,
+            });
+            return tree.entries;
+          }
+          const tree = await provider.getTree(owner, repo, shaOf.get(parent)!, false);
+          // A non-recursive GitHub listing names entries relative to the tree.
+          return tree.entries.map(entry => ({
+            ...entry,
+            path: parent ? `${parent}/${entry.path}` : entry.path,
+          }));
+        });
+        listings.set(parent, listing);
+      }
+      return listing;
+    };
+
+    for (const folder of wanted) {
+      let parent = '';
+      for (const segment of folder.split('/')) {
+        const path = parent ? `${parent}/${segment}` : segment;
+        if (!shaOf.has(path)) {
+          const entry = (await childrenOf(parent)).find(
+            child => child.path === path && child.type === 'tree'
+          );
+          if (!entry) break;
+          shaOf.set(path, entry.sha);
+        }
+        parent = path;
+      }
+    }
+
+    const rows = [...shaOf]
+      .filter(([path]) => path !== '')
+      .map(([path, sha]) => ({ path, sha, type: 'tree' }));
+    if (rows.length > 0) {
+      const stamp = fill ? (raw.content_assets_synced_at ?? new Date(0)) : new Date();
+      await upsertTreesOp(classroomId, rows, stamp, { fill });
+    }
+
+    return new Map(
+      wanted.filter(folder => shaOf.has(folder)).map(folder => [folder, shaOf.get(folder)!])
+    );
+  } catch (error: unknown) {
+    console.warn(
+      `[contentAssets] Could not record folder trees at ${commit} for ${classroomId}; ` +
+        'the push sync will:',
+      error
+    );
+    return new Map();
+  }
+}
+
 /**
  * Make sure the map exists and is not older than `maxAgeMs`, syncing if not.
  *
- * Age is `Classroom.content_assets_synced_at`, which only a FULL sync writes —
+ * Age is `Classroom.content_assets_synced_at`, which only a tree sync writes —
  * the one thing that can claim the map matches the repo. See the body.
  *
  * This is what makes the system self-bootstrapping. No classroom needs to be
@@ -740,7 +702,7 @@ export async function ensureContentAssetsOutcome(
 /**
  * In-flight refreshes, keyed by classroom. Per-process and deliberately so:
  * this is a stampede guard, not a lock. Two Fly instances syncing the same
- * classroom at once is harmless — `fullSync` is one transaction and idempotent —
+ * classroom at once is harmless — `treeSync` is one transaction and idempotent —
  * and a real lock would need a table nobody wants to operate.
  */
 const ensuring = new Map<string, Promise<EnsureContentAssetsOutcome>>();
@@ -787,14 +749,13 @@ async function ensureOnce(
   }
 
   // Read off the CLASSROOM, not off the newest row. The rows cannot answer this
-  // question: an incremental webhook apply stamps the paths one push touched,
-  // and `recordContentAsset` stamps the single file a teacher just uploaded,
-  // both with `now` — so the newest row says "something was written recently",
+  // question: `recordContentAsset` stamps the single file a teacher just
+  // uploaded with `now` — so the newest row says "something was written recently",
   // never "the map matches the repo". Measuring against it let one upload
   // suppress the daily repair for another 24 hours on exactly the classrooms
   // that need it most: the ones whose push webhook is not arriving, where
   // pushed files render as dangling URLs and deleted files are never swept.
-  // Only `fullSync` writes this stamp. Null means never fully synced.
+  // Only `treeSync` writes this stamp. Null means never fully synced.
   const lastFullSync = classroom.content_assets_synced_at;
 
   if (lastFullSync && Date.now() - lastFullSync.getTime() < maxAgeMs) {
@@ -806,7 +767,9 @@ async function ensureOnce(
     //   predictable and not this caller's problem: the previous map is still in
     //   the table and still usable, so a failed refresh should cost staleness,
     //   never a broken page. Caught here and only here.
-    const result = await fullSync(toResolvedClassroom(classroom, classroomId));
+    // Forced: this is the backstop for a map that drifted while the repo did
+    // not move, so "the head is the commit we recorded" is no reason to skip.
+    const result = await treeSync(toResolvedClassroom(classroom, classroomId), { force: true });
     return { result, mapIsTrustworthy: true };
   } catch (error: unknown) {
     console.warn(`[contentAssets] sync failed for ${classroomId}; serving stale/legacy:`, error);
@@ -958,9 +921,9 @@ export async function recordContentAssets(
  * dangling image, it is `/present` showing the previous version of the deck
  * that was just saved. Multi-file saves use `recordContentAssets` above.
  *
- * A later full sync overwrites this row with identical values and its sweep
- * keeps it (the stamp is `now`), so this is only an early write of what the
- * sync would have written anyway. Type is always `blob`: an upload writes a
+ * A later tree sync finds this row unchanged and leaves it, and its delete
+ * keeps it (the path is in the tree), so this is only an early write of what
+ * the sync would have written anyway. Type is always `blob`: an upload writes a
  * file, never a tree.
  *
  * NEVER THROWS, for the same reason `ensureContentAssets` does not — it sits on

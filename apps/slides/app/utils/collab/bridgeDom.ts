@@ -11,21 +11,27 @@
  * what a save would have stored.
  */
 import {
+  HTML_BLOCK_SELECTOR,
   INERT_ATTR_PREFIX,
   RUNTIME_SECTION_ATTRS,
   RUNTIME_SECTION_CLASSES,
-  HTML_BLOCK_SELECTOR,
   isBlockedFrameAttr,
-  isBlockedHtmlBlockAttr,
-  isBlockedSvgBlockAttr,
-  offListSvgBlockNodes,
   scopeSvgStyles,
   splitStyleDeclarations,
 } from '@classmoji/services/slides/runtime-attrs';
-import { EDITOR_BLOCK_CLASSES, isRenderableAttr, type DeckStructure } from '@classmoji/collab';
+import {
+  htmlAttrVerdict,
+  pageSessionMarker,
+  restoreRenamed,
+  sanitizeClientInPlace,
+  sessionInertName,
+} from '@classmoji/services/slides/safe-markup';
+import { EDITOR_BLOCK_CLASSES, type DeckStructure } from '@classmoji/collab';
 
 import { cleanSectionAttrs } from '../deckOpsDiff.ts';
 import { cleanupEditorContainer, undoRevealLazyLoad } from '../editorCleanup.ts';
+import { showFrames, storeFrames, type EditorFrames } from '../editorFrames.ts';
+import { mountLegacyHtmlBlocks, restoreLegacyHtmlBlocks } from '../legacyHtmlBlocks.ts';
 
 /** Classes the live editor puts on sections (never authored, never saved). */
 export const COLLAB_SECTION_CLASSES = ['cm-locked', 'cm-held'] as const;
@@ -122,16 +128,38 @@ export interface SerializedSection {
 }
 
 /**
+ * Editor DOM (a copy of it) back to what the deck stores, in place: legacy
+ * html blocks get their inline code back, frames their stored references
+ * (`frames`: this deck's editor frame context, when frames are shown through
+ * it), markup renamed for display its authored names, and the git editor's
+ * cleanup run. The one path every write takes. `lazyLoad`: also undo Reveal's
+ * lazy loading (the live deck's per-slide serialization).
+ */
+export function toStoredMarkup(
+  holder: Element,
+  frames: EditorFrames | null = null,
+  { lazyLoad = true }: { lazyLoad?: boolean } = {}
+): void {
+  restoreLegacyHtmlBlocks(holder);
+  // Before the lazy-load undo: `src` and `data-src` reduce to one stored value.
+  storeFrames(holder, frames);
+  restoreInertMarkup(holder);
+  if (lazyLoad) undoRevealLazyLoad(holder);
+  cleanupEditorContainer(holder);
+}
+
+/**
  * One section as the live deck stores it, through the git editor's cleanup.
  * The live element is not touched.
  */
-export function serializeSection(el: HTMLElement): SerializedSection {
+export function serializeSection(
+  el: HTMLElement,
+  frames: EditorFrames | null = null
+): SerializedSection {
   const holder = el.ownerDocument.createElement('div');
   const clone = el.cloneNode(true) as HTMLElement;
   holder.appendChild(clone);
-  restoreInertMarkup(holder);
-  undoRevealLazyLoad(holder);
-  cleanupEditorContainer(holder);
+  toStoredMarkup(holder, frames);
 
   const kids = sectionChildren(clone);
   const container = kids.length > 0;
@@ -166,6 +194,16 @@ export function serializeSection(el: HTMLElement): SerializedSection {
 
 const RUNTIME_STYLE_RE = /^\s*(?:display|top)\s*:/i;
 
+/** Whether a section attribute may render as authored (the slide markup lists). */
+function isRenderableSectionAttr(name: string, value: string): boolean {
+  const verdict = htmlAttrVerdict(name.toLowerCase(), value, {
+    tag: 'section',
+    inHtmlBlock: false,
+    sandbox: null,
+  });
+  return verdict.keep && (verdict.value === undefined || verdict.value === value);
+}
+
 /**
  * Give a live section exactly the authored attributes `attrs` (+ data-hidden),
  * keeping whatever Reveal and the editor painted on it at runtime (position
@@ -186,29 +224,35 @@ export function applySectionAttrs(
     'aria-describedby',
     LOCKED_BY_ATTR,
   ]);
+  // Display-only renames carry this page's marker (`restoreInertMarkup`).
+  const sessionPrefix = sessionInertName(pageSessionMarker(), '');
   for (const attr of Array.from(el.attributes)) {
     const name = attr.name.toLowerCase();
     if (keepAlways.has(name) || RUNTIME_SECTION_ATTRS.has(name)) continue;
     if (name === 'hidden' || name === 'aria-hidden') continue;
     if (name === 'class' || name === 'style') continue;
-    const authored = name.startsWith(INERT_PREFIX)
-      ? attr.name.slice(INERT_PREFIX.length)
+    const authored = name.startsWith(sessionPrefix)
+      ? attr.name.slice(sessionPrefix.length)
       : attr.name;
-    if (!(authored in attrs)) el.removeAttribute(attr.name);
+    if (!(authored in attrs) && !(attr.name in attrs)) el.removeAttribute(attr.name);
   }
 
   for (const [name, value] of Object.entries(attrs)) {
     const lower = name.toLowerCase();
     if (lower === 'class' || lower === 'style') continue;
-    if (!isRenderableAttr(name, value)) {
-      // Kept (under the inert name) so it is written back as authored.
-      if (el.hasAttribute(name)) el.removeAttribute(name);
-      if (el.getAttribute(`${INERT_PREFIX}${name}`) !== value) {
-        el.setAttribute(`${INERT_PREFIX}${name}`, value);
-      }
+    if (lower.startsWith(sessionPrefix)) {
+      // Shown inert by the caller (a frame that must not load): kept so.
+      if (el.getAttribute(name) !== value) el.setAttribute(name, value);
       continue;
     }
-    if (el.hasAttribute(`${INERT_PREFIX}${name}`)) el.removeAttribute(`${INERT_PREFIX}${name}`);
+    const inertName = `${sessionPrefix}${name}`;
+    if (!isRenderableSectionAttr(name, value)) {
+      // Kept (under this page's inert name) so it is written back as authored.
+      if (el.hasAttribute(name)) el.removeAttribute(name);
+      if (el.getAttribute(inertName) !== value) el.setAttribute(inertName, value);
+      continue;
+    }
+    if (el.hasAttribute(inertName)) el.removeAttribute(inertName);
     if (el.getAttribute(name) !== value) el.setAttribute(name, value);
   }
 
@@ -246,86 +290,72 @@ export function applySectionAttrs(
   }
 }
 
+/** What the editor needs to show slide markup beyond the markup lists. */
+export interface EditorDisplay {
+  /** This deck's frame context: frames of ours shown through the editor frame route. */
+  frames?: EditorFrames | null;
+  /** The content service origin: legacy html blocks shown through its preview frame. */
+  contentOrigin?: string | null;
+}
+
 /**
- * Make event-handler attributes and `javascript:` URLs inert on every element
- * under (and including) `root`, for display: each is renamed in place to
- * `data-cm-inert-<name>`. So are the sources of a frame inside an html block
- * whose sandbox would let it out, and svg-block attributes off the svg lists
- * (deckBlocks.ts); svg-block nodes off the lists are hidden in an inert
- * <template>. `restoreInertMarkup` (run by serialization) puts the authored
- * attributes and nodes back. Only svg <style> scoping is kept (see below).
+ * Slide markup made safe to show in the editor, in place (the children of
+ * `root`): held to the slide markup lists in rename mode — what may not
+ * render is renamed or hidden under this page's session marker, never lost
+ * (`restoreInertMarkup` puts it back) — svg-block sheets scoped to their
+ * drawing, frames shown the editor's way, legacy html blocks through the
+ * preview frame.
+ *
+ * Run ONCE per piece of markup: a second pass would hide the hidden nodes'
+ * holders again.
  */
-export function stripUnsafeMarkup(root: Element | DocumentFragment): void {
-  for (const el of elementsUnder(root)) {
-    const attrs = Array.from(el.attributes);
-    const renders = (attr: Attr) =>
-      isRenderableAttr(attr.name, attr.value) &&
-      !isBlockedHtmlBlockAttr(el, attr.name) &&
-      !isBlockedSvgBlockAttr(el, attr.name);
-    if (attrs.every(renders)) continue;
-    // Renamed in place (same position), so putting them back restores the
-    // element's markup byte for byte.
-    rebuildAttributes(el, attrs, name => {
-      const attr = attrs.find(a => a.name === name) as Attr;
-      return renders(attr) ? name : `${INERT_PREFIX}${name}`;
-    });
-  }
-  // svg blocks show what the viewer and presenter show. A node off the svg
-  // lists (a foreignObject, a script, …) cannot be renamed inert like an
-  // attribute: it is put inside an inert <template> instead — not rendered,
-  // and `restoreInertMarkup` puts it back, so the markup written is still
-  // the authored one. Their <style> sheets are scoped to the drawing, and
-  // that IS written back: the scoping is idempotent and the server stores
-  // the same scoped form, so the doc converges to it.
-  for (const node of offListSvgBlockNodes(root)) {
-    if (!node.parentNode || !root.contains(node)) continue; // inside one already hidden
-    const doc = node.ownerDocument as Document;
-    const holder = doc.createElement('template');
-    holder.setAttribute(INERT_NODE_ATTR, '');
-    node.parentNode.replaceChild(holder, node);
-    holder.content.appendChild(node);
-  }
+export function stripUnsafeMarkup(
+  root: Element | DocumentFragment,
+  display: EditorDisplay = {}
+): void {
+  sanitizeClientInPlace(root, { mode: 'rename', marker: pageSessionMarker() });
+  // The scoping IS written back: it is idempotent and the server stores the
+  // same scoped form, so the doc converges to it.
   for (const content of Array.from(
     root.querySelectorAll('.sl-block[data-block-type="svg"] > .sl-block-content')
   )) {
     scopeSvgStyles(content);
   }
+  showFrames(root, display.frames ?? null);
+  mountLegacyHtmlBlocks(root, display.contentOrigin ?? display.frames?.contentOrigin ?? null);
 }
 
-/** Marks a <template> holding an svg-block node hidden for display. */
-const INERT_NODE_ATTR = 'data-cm-inert-node';
+/** Html-block frame sources the stored form may keep under their inert name. */
+const STORED_INERT_FRAME_ATTRS = ['srcdoc', 'src', 'data-src', 'allow'];
 
 /**
- * Undo `stripUnsafeMarkup`: every `data-cm-inert-*` attribute gets its
- * original name back, in place. Serialization runs this first, so what the
- * editor writes is the authored markup — never the display-time version.
- *
- * Except an html-block frame attribute the frame rule blocks (an `allow`
- * beyond fullscreen, a source under an unsafe sandbox): the stored form
- * keeps those inert too (the server's normalize renames them), so writing
- * them back live would only differ from what is stored and be renamed again.
+ * Undo `stripUnsafeMarkup`, in place: what this page renamed or hid for
+ * display gets its authored form back (`restoreRenamed` with this page's
+ * marker). Inert names carrying any other marker, or none, stay as the plain
+ * data attributes they are — except an html-block frame source stored inert
+ * (`data-cm-inert-src`, …) that the frame rule no longer blocks, which goes
+ * back to its name as it always has.
  */
 export function restoreInertMarkup(root: Element | DocumentFragment): void {
-  for (const holder of Array.from(root.querySelectorAll(`template[${INERT_NODE_ATTR}]`))) {
-    holder.replaceWith(...Array.from((holder as HTMLTemplateElement).content.childNodes));
-  }
+  restoreRenamed(root, pageSessionMarker());
   for (const el of elementsUnder(root)) {
+    if (el.localName !== 'iframe' || el.closest(HTML_BLOCK_SELECTOR) === null) continue;
     const attrs = Array.from(el.attributes);
-    if (!attrs.some(attr => attr.name.startsWith(INERT_PREFIX))) continue;
-    const inBlock = el.closest(HTML_BLOCK_SELECTOR) !== null;
-    rebuildAttributes(el, attrs, name => {
-      if (!name.startsWith(INERT_PREFIX)) return name;
+    const unblocked = (name: string): string | null => {
+      if (!name.startsWith(INERT_PREFIX)) return null;
       const original = name.slice(INERT_PREFIX.length);
-      const value = el.getAttribute(name);
+      if (!STORED_INERT_FRAME_ATTRS.includes(original) || el.hasAttribute(original)) return null;
       const blocked = isBlockedFrameAttr(
-        el.localName,
+        'iframe',
         original,
         el.getAttribute('sandbox'),
-        inBlock,
-        value
+        true,
+        el.getAttribute(name)
       );
-      return blocked ? name : original;
-    });
+      return blocked ? null : original;
+    };
+    if (!attrs.some(attr => unblocked(attr.name) !== null)) continue;
+    rebuildAttributes(el, attrs, name => unblocked(name) ?? name);
   }
 }
 
@@ -346,11 +376,15 @@ function rebuildAttributes(el: Element, attrs: Attr[], rename: (name: string) =>
   for (const [name, value] of entries) el.setAttribute(name, value);
 }
 
-/** `html` with unsafe markup stripped (for innerHTML). */
-export function safeInnerHtml(doc: Document, html: string): DocumentFragment {
+/** `html` made safe to show in the editor (`stripUnsafeMarkup`), as a fragment to insert. */
+export function safeInnerHtml(
+  doc: Document,
+  html: string,
+  display: EditorDisplay = {}
+): DocumentFragment {
   const template = doc.createElement('template');
   template.innerHTML = html;
-  stripUnsafeMarkup(template.content);
+  stripUnsafeMarkup(template.content, display);
   return template.content;
 }
 
@@ -386,10 +420,14 @@ export function prepareEditorSection(el: HTMLElement, editable: boolean): void {
 }
 
 /** A detached `<section>` from markup (renderSlideSection output). */
-export function sectionFromMarkup(doc: Document, markup: string): HTMLElement {
+export function sectionFromMarkup(
+  doc: Document,
+  markup: string,
+  display: EditorDisplay = {}
+): HTMLElement {
   const template = doc.createElement('template');
   template.innerHTML = markup.trim();
-  stripUnsafeMarkup(template.content);
+  stripUnsafeMarkup(template.content, display);
   const el = template.content.firstElementChild;
   if (!el || !isSection(el)) throw new Error('slide markup is not a <section>');
   return el as HTMLElement;

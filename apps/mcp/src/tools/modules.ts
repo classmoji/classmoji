@@ -1,6 +1,7 @@
 /**
  * Module (curriculum) tools — module_create / module_update / module_publish /
- * module_item_add / module_delete / module_reorder.
+ * module_item_add / module_item_remove / module_item_move / module_delete /
+ * module_reorder.
  *
  * A Module ("Week 3: Recursion") holds two things: an ORDERED CONTENT LIST of
  * pages, slides and forms (ModuleItem rows, what module_item_add writes), and
@@ -69,6 +70,17 @@ function translateModuleError(error: unknown): never {
     if (error.message === 'Module not found in classroom') throw scopedNotFound('Module');
     if (error.message === 'Module item target not found in classroom') {
       throw scopedNotFound('Item target');
+    }
+    if (error.message === 'Module item not found in classroom') {
+      throw scopedNotFound('Module item');
+    }
+    if (
+      error.message === 'That module already has this item' ||
+      error.message === 'That item is already in this module' ||
+      error.message === 'Repository items cannot be moved' ||
+      error.message === ClassmojiService.module.QUIZ_ITEM_REFUSAL
+    ) {
+      throw new ToolError('invalid_params', error.message);
     }
     if ('code' in error && (error as { code?: string }).code === 'P2002') {
       throw new ToolError(
@@ -260,7 +272,10 @@ export const moduleItemAddTool: ToolDefinition<ModuleItemAddArgs> = {
     'A DRAFT form can be attached — the item is created now and simply stays hidden from members ' +
     'until form_publish. A CLOSED form stays visible on purpose, reading as closed. Attaching a ' +
     'form requires a Pro subscription (the forms surface is Pro everywhere); pages and slides ' +
-    'do not.',
+    'do not.\n' +
+    'Adding an item that already sits in another module of the classroom lists it in both; the ' +
+    'response names the other modules in `also_in_modules`. To MOVE an item instead use ' +
+    'module_item_move, and to take one out use module_item_remove.',
   scope: 'write',
   roles: OWNER_ONLY,
   inputSchema: {
@@ -329,9 +344,131 @@ export const moduleItemAddTool: ToolDefinition<ModuleItemAddArgs> = {
         },
       });
 
+      const alsoIn = await ClassmojiService.module.findOtherModulesHolding(
+        args.item_type as Exclude<ModuleItemType, 'REPOSITORY' | 'QUIZ'>,
+        args.target_id,
+        args.module_id,
+        classroom.classroomId
+      );
+
       return ok({
         success: true,
         item: { id: item.id, item_type: item.item_type, position: item.position },
+        ...(alsoIn.length > 0
+          ? {
+              also_in_modules: alsoIn,
+              warning:
+                'This item is now listed in more than one module. To keep it in one place, ' +
+                'remove the other entry with module_item_remove (list_modules shows each ' +
+                'item id), or use module_item_move next time.',
+            }
+          : {}),
+      });
+    } catch (error) {
+      translateModuleError(error);
+    }
+  },
+};
+
+interface ModuleItemRemoveArgs {
+  classroom: string;
+  item_id: string;
+}
+
+export const moduleItemRemoveTool: ToolDefinition<ModuleItemRemoveArgs> = {
+  name: 'module_item_remove',
+  // Deletes one ModuleItem row. The page, slide or form it linked is untouched.
+  annotations: { destructive: true, idempotent: false, openWorld: false },
+  title: 'Remove an item from a module',
+  description:
+    'Removes a page, slide deck or form from a module, by the item `id` that list_modules ' +
+    'shows on each module item. Only the link is removed: the page, slide or form itself is ' +
+    'untouched and can be added again with module_item_add. Assignments are not module items; ' +
+    'move them with assignment_update module_id. Owner only.',
+  scope: 'write',
+  roles: OWNER_ONLY,
+  inputSchema: {
+    classroom: z.string().describe("Classroom reference as 'org/slug'"),
+    item_id: z.string().uuid().describe('Module item id (the `id` on an item in list_modules)'),
+  },
+  handler: async (args, ctx) => {
+    const classroom = requireClassroomCtx(ctx);
+    try {
+      const item = await ClassmojiService.module.removeItem(args.item_id, classroom.classroomId);
+
+      await writeAudit(ctx, {
+        resource_type: 'MODULE_ITEM',
+        resource_id: item.id,
+        action: 'DELETE',
+        data: {
+          tool: 'module_item_remove',
+          module_id: item.module_id,
+          item_type: item.item_type,
+        },
+      });
+
+      return ok({ success: true, removed: { id: item.id, module_id: item.module_id } });
+    } catch (error) {
+      translateModuleError(error);
+    }
+  },
+};
+
+interface ModuleItemMoveArgs {
+  classroom: string;
+  item_id: string;
+  module_id: string;
+}
+
+export const moduleItemMoveTool: ToolDefinition<ModuleItemMoveArgs> = {
+  name: 'module_item_move',
+  annotations: {
+    // Changes which module one row belongs to; nothing is removed.
+    destructive: false,
+    // Repeating the call finds the item already in the target and is refused.
+    idempotent: true,
+    openWorld: false,
+  },
+  title: 'Move an item to another module',
+  description:
+    'Moves a page, slide deck or form to the END of another module of the classroom, by the ' +
+    'item `id` that list_modules shows. The item leaves the module it was in, which closes up ' +
+    'behind it; use module_reorder afterwards to place it elsewhere in the target. The response ' +
+    'gives `moved_from_module_id`. Refused when the target module already lists the same page, ' +
+    'slide or form. Assignments move with assignment_update module_id, quizzes with quiz_update ' +
+    'module_id. Owner only.',
+  scope: 'write',
+  roles: OWNER_ONLY,
+  inputSchema: {
+    classroom: z.string().describe("Classroom reference as 'org/slug'"),
+    item_id: z.string().uuid().describe('Module item id (the `id` on an item in list_modules)'),
+    module_id: z.string().uuid().describe('Module to move the item into'),
+  },
+  handler: async (args, ctx) => {
+    const classroom = requireClassroomCtx(ctx);
+    try {
+      const moved = await ClassmojiService.module.moveItemToModuleEnd(
+        args.item_id,
+        args.module_id,
+        classroom.classroomId
+      );
+
+      await writeAudit(ctx, {
+        resource_type: 'MODULE_ITEM',
+        resource_id: moved.id,
+        action: 'UPDATE',
+        data: {
+          tool: 'module_item_move',
+          module_id: args.module_id,
+          from_module_id: moved.from_module_id,
+        },
+      });
+
+      return ok({
+        success: true,
+        item: { id: moved.id, item_type: moved.item_type, position: moved.position },
+        module_id: args.module_id,
+        moved_from_module_id: moved.from_module_id,
       });
     } catch (error) {
       translateModuleError(error);
@@ -538,7 +675,8 @@ export const moduleReorderTool: ToolDefinition<ModuleReorderArgs> = {
     'target_id) or module ids, all from list_modules. A partial list is refused, naming what ' +
     'was left out, and nothing is reordered. Only the order changes; students see the new ' +
     'order at once. It does not move anything between modules: assignment_update with ' +
-    'module_id does that (the assignment lands last; reorder afterwards). Items of type ' +
+    'module_id does that (the assignment lands last; reorder afterwards), and module_item_move ' +
+    'moves a page, slide or form likewise. Items of type ' +
     'REPOSITORY are legacy rows that cannot be reordered: leave them out of an ITEMS list.',
   scope: 'write',
   roles: OWNER_ONLY,
