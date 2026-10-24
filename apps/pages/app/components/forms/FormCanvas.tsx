@@ -118,8 +118,8 @@ export function FormHeader({
       ) : null}
       {gallery ? (
         <p className="mt-3 text-sm text-gray-600 dark:text-gray-300">
-          Approved project answers and uploads may appear in the public gallery. Identity questions
-          stay private.
+          Once approved, the project fields of this form and your uploads appear in the public
+          gallery. Your other answers stay with the teaching team.
         </p>
       ) : null}
     </header>

@@ -43,6 +43,8 @@ const mocks = vi.hoisted(() => ({
   formReopen: vi.fn(),
   formQuickUpdate: vi.fn(),
   formDelete: vi.fn(),
+  formSetGalleryOrg: vi.fn(),
+  membershipFind: vi.fn(),
   responseListByFormId: vi.fn(),
   responseStatusLabels: vi.fn(),
   responseUpdateStaff: vi.fn(),
@@ -78,6 +80,10 @@ vi.mock('@classmoji/services', () => ({
       reopen: (...a: unknown[]) => mocks.formReopen(...a),
       quickUpdate: (...a: unknown[]) => mocks.formQuickUpdate(...a),
       deleteForm: (...a: unknown[]) => mocks.formDelete(...a),
+      setGalleryOrg: (...a: unknown[]) => mocks.formSetGalleryOrg(...a),
+    },
+    classroomMembership: {
+      findByClassroomAndUser: (...a: unknown[]) => mocks.membershipFind(...a),
     },
     formResponse: {
       listByFormId: (...a: unknown[]) => mocks.responseListByFormId(...a),
@@ -744,6 +750,55 @@ describe('form_update', () => {
   beforeEach(() => {
     mocks.formFindById.mockResolvedValue(FORM_ROW);
     mocks.formUpdate.mockResolvedValue(FORM_ROW);
+  });
+
+  describe('gallery', () => {
+    const TEACHER_CTX = {
+      ...CTX,
+      classroom: { ...CTX.classroom, role: 'TEACHER', membership: { id: 'm-2', role: 'TEACHER' } },
+    } as unknown as ToolContext;
+
+    it('lets the owner turn the gallery on, and reports it', async () => {
+      mocks.formFindById.mockResolvedValue({ ...FORM_ROW, gallery_org_id: 'org-1' });
+
+      const payload = parse(
+        await formUpdateTool.handler(
+          { classroom: 'org/w26', form_id: 'form-1', gallery: true } as never,
+          CTX
+        )
+      );
+
+      expect(mocks.formSetGalleryOrg).toHaveBeenCalledWith('form-1', true);
+      expect(mocks.formUpdate).not.toHaveBeenCalled();
+      expect(payload.form.gallery).toBe(true);
+      expect(mocks.auditCreate.mock.calls[0][0].data).toMatchObject({
+        tool: 'forms.builder.save-meta',
+        fields: ['gallery'],
+      });
+    });
+
+    it('refuses a teacher, as the builder does, and writes nothing', async () => {
+      mocks.membershipFind.mockResolvedValue(null);
+
+      const error = await formUpdateTool
+        .handler({ classroom: 'org/w26', form_id: 'form-1', gallery: true } as never, TEACHER_CTX)
+        .catch(e => e);
+
+      expect((error as ToolError).kind).toBe('forbidden');
+      expect(mocks.formSetGalleryOrg).not.toHaveBeenCalled();
+      expect(mocks.auditCreate).not.toHaveBeenCalled();
+    });
+
+    it('never switches a form of another classroom', async () => {
+      mocks.formFindById.mockResolvedValue(FOREIGN_FORM);
+
+      const error = await formUpdateTool
+        .handler({ classroom: 'org/w26', form_id: 'form-x', gallery: true } as never, CTX)
+        .catch(e => e);
+
+      expect((error as ToolError).kind).toBe('not_found');
+      expect(mocks.formSetGalleryOrg).not.toHaveBeenCalled();
+    });
   });
 
   it('requires at least one field and never calls the service empty-handed', async () => {

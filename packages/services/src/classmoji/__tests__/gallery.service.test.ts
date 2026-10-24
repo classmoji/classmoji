@@ -34,7 +34,9 @@ const FIELDS: FormField[] = [
   f('video', 'short_text', 'Demo video', { gallery_role: 'link' }),
   f('bad', 'short_text', 'Figma', { gallery_role: 'link' }),
   f('problem', 'long_text', 'What is the problem?', { gallery_role: 'detail' }),
-  f('creds', 'short_text', 'Demo credentials'),
+  f('creds', 'short_text', 'Demo credentials', { gallery_role: 'extra' }),
+  // No role: private, however it is worded.
+  f('avoid', 'long_text', "Anyone you'd rather not work with?"),
   // A classroom form fills this from the account: the respondent's own name.
   f('who', 'short_text', 'Full name'),
   f('empty', 'short_text', 'Anything else'),
@@ -55,6 +57,7 @@ const ANSWERS = {
   bad: 'javascript:alert(1)',
   problem: 'Hiking alone is risky.',
   creds: 'demo / demo',
+  avoid: 'Sam',
   who: 'Maya Chen',
   empty: '',
   mail: 'maya@example.edu',
@@ -85,9 +88,14 @@ describe('projectFromResponse', () => {
     });
   });
 
-  it('keeps only answered, non-identity input fields as extras', () => {
+  it('publishes as extras only answered fields given the extra role', () => {
     const project = projectFromResponse(RESPONSE, FIELDS, CLASSROOM);
     expect(project.extras.map(extra => extra.field.id)).toEqual(['creds']);
+  });
+
+  it('never publishes an answer whose field has no gallery role', () => {
+    const project = projectFromResponse(RESPONSE, FIELDS, CLASSROOM);
+    expect(JSON.stringify(project)).not.toContain('Sam');
   });
 
   it('accepts an https cover and multiselect tags', () => {

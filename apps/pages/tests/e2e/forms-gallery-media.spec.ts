@@ -180,7 +180,7 @@ test('cover uploads show progress, block submission and store a stable ref in li
   await expect(file).toBeVisible();
   await expect(
     page.getByText(
-      'Approved project answers and uploads may appear in the public gallery. Identity questions stay private.'
+      'Once approved, the project fields of this form and your uploads appear in the public gallery. Your other answers stay with the teaching team.'
     )
   ).toBeVisible();
   await page.getByLabel('Project title', { exact: true }).fill('Gallery Upload Project');

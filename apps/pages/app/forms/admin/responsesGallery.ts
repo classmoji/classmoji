@@ -2,7 +2,7 @@ import { checkOrigin } from '~/utils/originCheck.server.ts';
 import type { GalleryStatus } from '@prisma/client';
 import { requireClassroomTeachingTeam } from '@classmoji/auth/server';
 import { readJsonBody } from '@classmoji/auth/media-http';
-import { ClassmojiService, prisma } from '~/utils/db.server.ts';
+import { ClassmojiService } from '~/utils/db.server.ts';
 import { FORMS_RESOURCE } from './responsesData.server.ts';
 
 /**
@@ -16,7 +16,6 @@ import { FORMS_RESOURCE } from './responsesData.server.ts';
  */
 
 const STATUSES = new Set<string>(['PENDING', 'APPROVED', 'HIDDEN']);
-const MAX_BULK = 200;
 
 export const action = async ({
   params,
@@ -49,7 +48,7 @@ export const action = async ({
   const status = body.status as GalleryStatus;
   if (
     !Array.isArray(body.responseIds) ||
-    body.responseIds.length > MAX_BULK ||
+    body.responseIds.length > ClassmojiService.gallery.GALLERY_MODERATION_MAX ||
     !body.responseIds.every(
       id =>
         typeof id === 'string' &&
@@ -58,34 +57,18 @@ export const action = async ({
   ) {
     return Response.json({ error: 'Choose up to 200 responses.' }, { status: 400 });
   }
-  // The status write and its audit record commit together. Scope again under the lock.
-  const updated = await prisma.$transaction(async tx => {
-    await tx.$queryRaw`SELECT id FROM forms WHERE id = ${form.id} FOR UPDATE`;
-    const rows = await tx.formResponse.findMany({
-      where: {
-        id: { in: body.responseIds as string[] },
-        form_id: form.id,
-        submission_state: 'SUBMITTED',
-      },
-      select: { id: true },
-    });
-    if (!rows.length) return 0;
-    await tx.formResponse.updateMany({
-      where: { id: { in: rows.map(row => row.id) }, form_id: form.id },
-      data: { gallery_status: status },
-    });
-    await tx.auditLog.createMany({
-      data: rows.map(row => ({
-        user_id: userId,
-        classroom_id: classroom.id,
-        role: membership!.role,
-        resource_type: FORMS_RESOURCE,
-        resource_id: row.id,
-        action: 'UPDATE' as const,
-        data: { tool: 'forms.responses.gallery_status', form_id: form.id, gallery_status: status },
-      })),
-    });
-    return rows.length;
+  // The status write and its audit rows commit together, scoped to this form.
+  const updated = await ClassmojiService.gallery.setStatuses({
+    formId: form.id,
+    responseIds: body.responseIds as string[],
+    status,
+    audit: {
+      user_id: userId,
+      classroom_id: classroom.id,
+      role: membership!.role,
+      resource_type: FORMS_RESOURCE,
+      data: { tool: 'forms.responses.gallery_status' },
+    },
   });
   return updated
     ? Response.json({ ok: true, updated })

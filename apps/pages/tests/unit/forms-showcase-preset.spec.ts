@@ -35,8 +35,9 @@ test.describe('Project Showcase preset', () => {
     expect(count('link')).toBe(4);
     expect(count('video')).toBe(1);
     expect(count('detail')).toBe(2);
-    expect(fields.some(field => field.label === 'Demo credentials' && !galleryRoleOf(field))).toBe(
-      true
-    );
+    // Only roled fields are public, so the one meant to show as answered says so.
+    expect(
+      fields.some(field => field.label === 'Demo credentials' && galleryRoleOf(field) === 'extra')
+    ).toBe(true);
   });
 });

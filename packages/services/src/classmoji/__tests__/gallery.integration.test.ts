@@ -310,4 +310,50 @@ describe.skipIf(!RUN)('project gallery (integration)', () => {
     );
     expect(await galleryService.getForOrg(orgA, id)).toBeNull();
   });
+  it('setStatuses changes only submitted responses of its own form, with one audit row each', async () => {
+    const form = await makeShowcase(newerClassroom);
+    const other = await makeShowcase(olderClassroom);
+    const mine = await submitProject(form, students[0], `Moderated ${suite}`);
+    const foreign = await submitProject(other, students[1], `Elsewhere ${suite}`);
+
+    const updated = await galleryService.setStatuses({
+      formId: form.formId,
+      responseIds: [mine, foreign],
+      status: 'APPROVED',
+      audit: {
+        user_id: ownerId,
+        classroom_id: newerClassroom,
+        role: 'ASSISTANT',
+        resource_type: 'FORMS',
+        data: { tool: 'forms.responses.gallery_status' },
+      },
+    });
+
+    expect(updated).toBe(1);
+    const statuses = await prisma.formResponse.findMany({
+      where: { id: { in: [mine, foreign] } },
+      select: { id: true, gallery_status: true },
+    });
+    expect(Object.fromEntries(statuses.map(row => [row.id, row.gallery_status]))).toEqual({
+      [mine]: 'APPROVED',
+      [foreign]: 'PENDING',
+    });
+    const rows = await prisma.auditLog.findMany({
+      where: { user_id: ownerId, resource_id: { in: [mine, foreign] } },
+      select: { resource_id: true, data: true },
+    });
+    expect(rows).toEqual([
+      {
+        resource_id: mine,
+        data: {
+          tool: 'forms.responses.gallery_status',
+          form_id: form.formId,
+          gallery_status: 'APPROVED',
+        },
+      },
+    ]);
+    expect((await galleryService.queueForForm(form.formId)).map(item => item.title)).toEqual([
+      `Moderated ${suite}`,
+    ]);
+  });
 });

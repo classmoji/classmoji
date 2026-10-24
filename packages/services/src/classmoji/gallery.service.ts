@@ -1,5 +1,5 @@
 import getPrisma from '@classmoji/database';
-import type { Prisma } from '@prisma/client';
+import type { GalleryStatus, Prisma } from '@prisma/client';
 import { fieldsOf } from './form.service.ts';
 import {
   canonicalizeMany,
@@ -48,7 +48,7 @@ export interface GalleryProject extends GalleryCard {
   links: Array<{ label: string; url: string }>;
   details: Array<{ heading: string; body: string }>;
   /**
-   * Every other answered input field. Formatted by the caller with apps/pages
+   * Answered fields with the `extra` role. Formatted by the caller with apps/pages
    * `formatAnswer` — the one answer formatter — which this package cannot import.
    */
   extras: Array<{ field: FormField; value: unknown }>;
@@ -169,8 +169,10 @@ export function projectFromResponse(
         if (text(value))
           project.details.push({ heading: String(field.label ?? ''), body: text(value) });
         break;
-      default:
+      case 'extra':
         if (isExtra(field, value)) project.extras.push({ field, value });
+        break;
+      // No role: the answer stays private. Only what the author marked goes public.
     }
   }
 
@@ -344,4 +346,80 @@ export async function getForOrg(orgId: string, responseId: string): Promise<Gall
     select: PUBLIC_SELECT,
   });
   return row ? (await publicProjects([row]))[0] : null;
+}
+
+/**
+ * The teaching team's moderation queue for one gallery form: each submitted
+ * response's project title and gallery status, and nothing else (no name,
+ * email or other answer). Read through the roles of each response's revision.
+ */
+export async function queueForForm(
+  formId: string
+): Promise<Array<{ id: string; title: string; galleryStatus: GalleryStatus }>> {
+  const rows = await getPrisma().formResponse.findMany({
+    where: { form_id: formId, submission_state: 'SUBMITTED' },
+    select: {
+      id: true,
+      submitted_at: true,
+      answers: true,
+      gallery_status: true,
+      revision: { select: { fields: true } },
+    },
+    orderBy: { submitted_at: 'asc' },
+  });
+  return rows.map(row => ({
+    id: row.id,
+    title: projectFromResponse(row, fieldsOf(row.revision.fields), { name: '', slug: '' }).title,
+    galleryStatus: row.gallery_status,
+  }));
+}
+
+/** How many responses one moderation call may change. */
+export const GALLERY_MODERATION_MAX = 200;
+
+/**
+ * Approve, hide or reset gallery responses of one form. Only SUBMITTED
+ * responses of `formId` change; any other id is ignored. The status write and
+ * one UPDATE audit row per response commit together, under a lock on the
+ * form. Returns how many responses changed. Carries no authorization: the
+ * caller has resolved `formId` inside the classroom it authorized.
+ */
+export async function setStatuses({
+  formId,
+  responseIds,
+  status,
+  audit,
+}: {
+  formId: string;
+  responseIds: string[];
+  status: GalleryStatus;
+  audit: Pick<
+    Prisma.AuditLogCreateManyInput,
+    'user_id' | 'classroom_id' | 'role' | 'resource_type'
+  > & { data: Record<string, unknown> };
+}): Promise<number> {
+  return getPrisma().$transaction(async tx => {
+    await tx.$queryRaw`SELECT id FROM forms WHERE id = ${formId} FOR UPDATE`;
+    const rows = await tx.formResponse.findMany({
+      where: { id: { in: responseIds }, form_id: formId, submission_state: 'SUBMITTED' },
+      select: { id: true },
+    });
+    if (!rows.length) return 0;
+    await tx.formResponse.updateMany({
+      where: { id: { in: rows.map(row => row.id) }, form_id: formId },
+      data: { gallery_status: status },
+    });
+    await tx.auditLog.createMany({
+      data: rows.map(row => ({
+        user_id: audit.user_id,
+        classroom_id: audit.classroom_id,
+        role: audit.role,
+        resource_type: audit.resource_type,
+        resource_id: row.id,
+        action: 'UPDATE' as const,
+        data: { ...audit.data, form_id: formId, gallery_status: status } as Prisma.InputJsonValue,
+      })),
+    });
+    return rows.length;
+  });
 }

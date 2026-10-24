@@ -210,6 +210,7 @@ const PROJECT_SHOWCASE: FormPreset = {
     field('short_text', {
       label: 'Demo credentials',
       help: 'Shown publicly on the project page. Use a throwaway demo account.',
+      gallery_role: 'extra',
     }),
     field('long_text', { label: 'What is the problem?', gallery_role: 'detail' }),
     field('long_text', { label: 'Our solution', gallery_role: 'detail' }),

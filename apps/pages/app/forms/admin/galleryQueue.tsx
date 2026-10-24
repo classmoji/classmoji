@@ -1,7 +1,7 @@
 import { data, useFetcher, useLoaderData } from 'react-router';
 import { requireClassroomTeachingTeam } from '@classmoji/auth/server';
 import GalleryCell from '~/components/forms/GalleryCell.tsx';
-import { ClassmojiService, prisma } from '~/utils/db.server.ts';
+import { ClassmojiService } from '~/utils/db.server.ts';
 import { FORMS_RESOURCE, NO_STORE } from './responsesData.server.ts';
 
 /**
@@ -19,33 +19,34 @@ export const loader = async ({
   params: Record<string, string | undefined>;
   request: Request;
 }) => {
-  const { classroom } = await requireClassroomTeachingTeam(request, params.classroomSlug!, {
-    resourceType: FORMS_RESOURCE,
-    action: 'view_gallery_queue',
-  });
+  const { classroom, userId, membership } = await requireClassroomTeachingTeam(
+    request,
+    params.classroomSlug!,
+    {
+      resourceType: FORMS_RESOURCE,
+      action: 'view_gallery_queue',
+    }
+  );
   const form = await ClassmojiService.form.findBySlug(classroom.id, params.formSlug!);
   if (!form || !form.gallery_org_id) throw new Response('Form not found', { status: 404 });
 
-  const [rows, revisions] = await Promise.all([
-    ClassmojiService.formResponse.listByFormId(form.id, { submissionState: 'SUBMITTED' }),
-    prisma.formRevision.findMany({
-      where: { form_id: form.id },
-      select: { id: true, fields: true },
-    }),
-  ]);
-  // Each response is read through the roles of the revision it was filled under.
-  const fieldsByRevision = new Map(
-    revisions.map(revision => [revision.id, ClassmojiService.form.fieldsOf(revision.fields)])
-  );
-  const items = rows.map(row => ({
-    id: row.id,
-    title: ClassmojiService.gallery.projectFromResponse(
-      row,
-      fieldsByRevision.get(row.revision_id) ?? [],
-      { name: '', slug: '' }
-    ).title,
-    galleryStatus: row.gallery_status,
-  }));
+  const items = await ClassmojiService.gallery.queueForForm(form.id);
+
+  // A staff read of students' submissions (their project titles).
+  await ClassmojiService.audit.create({
+    user_id: userId,
+    classroom_id: classroom.id,
+    role: membership!.role,
+    resource_type: FORMS_RESOURCE,
+    resource_id: form.id,
+    action: 'VIEW',
+    data: {
+      tool: 'forms.gallery.queue',
+      form_id: form.id,
+      form_slug: form.slug,
+      count: items.length,
+    },
+  });
 
   return data(
     {
