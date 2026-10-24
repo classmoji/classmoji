@@ -333,9 +333,52 @@ const dropdownDef = z
     }
   });
 
+/**
+ * How many picks a list question takes. `max_selections` caps the answer.
+ * `min_selections` is a floor that applies once the person answers: a
+ * required question already needs one pick, and an optional one may still be
+ * left blank.
+ */
+const selectionLimits = {
+  max_selections: z.number().int().min(1).optional(),
+  min_selections: z.number().int().min(1).optional(),
+};
+
+const refineSelectionLimits = (
+  field: { min_selections?: number; max_selections?: number },
+  ctx: z.RefinementCtx
+) => {
+  if (
+    field.min_selections !== undefined &&
+    field.max_selections !== undefined &&
+    field.min_selections > field.max_selections
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'min_selections must not exceed max_selections',
+    });
+  }
+};
+
 const multiselectDef = z
-  .object({ ...inputFieldBase, type: z.literal('multiselect'), options: optionList(1) })
-  .strict();
+  .object({
+    ...inputFieldBase,
+    type: z.literal('multiselect'),
+    options: optionList(1),
+    ...selectionLimits,
+  })
+  .strict()
+  .superRefine((field, ctx) => {
+    refineSelectionLimits(field, ctx);
+    for (const key of ['min_selections', 'max_selections'] as const) {
+      if ((field[key] ?? 0) > field.options.length) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `${key} cannot exceed the number of options`,
+        });
+      }
+    }
+  });
 
 const switchDef = z.object({ ...inputFieldBase, type: z.literal('switch') }).strict();
 
@@ -385,8 +428,25 @@ const rosterSelectDef = z
     /** Pick several people ("who would you like to work with") vs. exactly one. */
     multiple: z.boolean().default(false),
     options: optionList(0, FORM_LIMITS.MAX_ROSTER_OPTIONS).default([]),
+    /**
+     * Only with `multiple`. Not checked against `options`, which are empty
+     * until the form is published.
+     */
+    ...selectionLimits,
   })
-  .strict();
+  .strict()
+  .superRefine((field, ctx) => {
+    refineSelectionLimits(field, ctx);
+    if (
+      !field.multiple &&
+      (field.min_selections !== undefined || field.max_selections !== undefined)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Selection limits apply only when more than one person can be picked',
+      });
+    }
+  });
 
 const rankedChoiceDef = z
   .object({
@@ -544,6 +604,27 @@ const oneOf = (options: FormOption[]) => {
   return z.string().refine(value => ids.has(value), { message: 'Not an option of this field' });
 };
 
+/**
+ * The answer for a list question: ids of `item`, within the field's selection
+ * limits. `capacity` is how many the list can hold, which bounds the cap.
+ */
+const pickList = (
+  item: z.ZodTypeAny,
+  field: { required: boolean; min_selections?: number; max_selections?: number },
+  capacity: number
+) => {
+  const floor = field.min_selections ?? 0;
+  const ceiling = Math.min(field.max_selections ?? capacity, capacity);
+  const required = field.required ? Math.max(1, floor) : 0;
+  return z
+    .array(item)
+    .min(required, `Pick at least ${required}`)
+    .max(ceiling, `Pick at most ${ceiling}`)
+    .refine(values => field.required || values.length === 0 || values.length >= floor, {
+      message: `Pick at least ${floor}, or none`,
+    });
+};
+
 // ─── The registry ───────────────────────────────────────────────────────────
 
 interface FieldTypeSpec<TDef = never> {
@@ -652,10 +733,7 @@ export const FIELD_TYPE_REGISTRY = {
       const exclusive = new Map(
         field.options.filter(option => option.exclusive).map(option => [option.id, option.label])
       );
-      return z
-        .array(oneOf(field.options))
-        .min(field.required ? 1 : 0)
-        .max(field.options.length)
+      return pickList(oneOf(field.options), field, field.options.length)
         .refine(values => new Set(values).size === values.length, {
           message: 'Each option may be chosen once',
         })
@@ -696,13 +774,10 @@ export const FIELD_TYPE_REGISTRY = {
     defSchema: rosterSelectDef,
     answerSchema: field =>
       field.multiple
-        ? z
-            .array(oneOf(field.options))
-            .min(field.required ? 1 : 0)
-            .max(Math.max(field.options.length, 1))
-            .refine(values => new Set(values).size === values.length, {
-              message: 'Each person may be chosen once',
-            })
+        ? pickList(oneOf(field.options), field, Math.max(field.options.length, 1)).refine(
+            values => new Set(values).size === values.length,
+            { message: 'Each person may be chosen once' }
+          )
         : oneOf(field.options),
   } satisfies FieldTypeSpec<z.infer<typeof rosterSelectDef>>,
 
