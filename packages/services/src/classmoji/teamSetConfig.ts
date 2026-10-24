@@ -1553,9 +1553,10 @@ function priorityPresetAnswers(field: FormField): Record<string, TeamSetPriority
  * wrong guess at a hard rule makes runs infeasible or silently wrong, while a
  * wrong 'prefer' only nudges.
  *   - first ranked_choice → grouping by_option (teams_per_option 1) + rank prefer 8
- *   - roster_select (class roster) → together prefer 5; a label that clearly
+ *   - roster_select (class roster) → together prefer 5; apart prefer 8 when the
+ *     field's `intent` says apart, or, with no intent, a label that clearly
  *     asks whom to avoid (AVOID_LABEL: "avoid", "rather not work with",
- *     "don't want to work with", …) → apart prefer 8
+ *     "don't want to work with", …)
  *   - dropdown with the PRIORITY_PRESET options → priority prefer (rule_a =
  *     the rank rule, rule_b = the first together rule, shift 50), when both
  *     of those are suggested
@@ -1601,7 +1602,11 @@ export function suggestConfig(
     }
     const presetAnswers = field.type === 'dropdown' ? priorityPresetAnswers(field) : null;
     if (field.type === 'roster_select' && (field.optionSource ?? 'roster') === 'roster') {
-      if (AVOID_LABEL.test(fieldLabel(field))) {
+      // What the author said the picks mean wins; the wording is only a guess.
+      const avoids =
+        field.intent === 'apart' ||
+        (field.intent !== 'together' && AVOID_LABEL.test(fieldLabel(field)));
+      if (avoids) {
         rules.push({ field_id: field.id, job: 'apart', strength: 'prefer', weight: 8 });
       } else {
         rules.push({ field_id: field.id, job: 'together', strength: 'prefer', weight: 5 });

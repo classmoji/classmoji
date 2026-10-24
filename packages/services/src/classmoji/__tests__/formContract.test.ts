@@ -1020,6 +1020,36 @@ describe('formContract — selection limits', () => {
   });
 });
 
+describe('formContract — roster_select intent', () => {
+  const roster = (extra: Record<string, unknown> = {}) => ({
+    type: 'roster_select',
+    label: 'Picks',
+    optionSource: 'roster',
+    multiple: true,
+    ...extra,
+  });
+
+  it.each(['together', 'apart'])('keeps intent %s', intent => {
+    expect(parseOne(roster({ intent }))).toMatchObject({ intent });
+  });
+
+  it('leaves it unset when none is given', () => {
+    expect(parseOne(roster())).not.toHaveProperty('intent');
+  });
+
+  it('refuses any other value', () => {
+    expect(codeOf(() => parseFormDefinition([roster({ intent: 'friends' })]))).toBe(
+      FORM_DEFINITION_INVALID
+    );
+  });
+
+  it('is not accepted on another field type', () => {
+    expect(
+      codeOf(() => parseFormDefinition([{ type: 'short_text', label: 'Name', intent: 'apart' }]))
+    ).toBe(FORM_DEFINITION_INVALID);
+  });
+});
+
 describe('formContract — options_from', () => {
   const rankedId = '66666666-6666-4666-8666-666666666666';
   const dropdownId = '77777777-7777-4777-8777-777777777777';

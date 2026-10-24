@@ -111,6 +111,56 @@ describe('TeamSetConfigSchema', () => {
   });
 });
 
+describe('suggestConfig — a roster question that states its intent', () => {
+  const suggestFor = (...raw: Record<string, unknown>[]) =>
+    suggestConfig(
+      parseFormDefinition(
+        raw.map((field, i) => ({
+          id: uuid(40, i + 1),
+          type: 'roster_select',
+          optionSource: 'roster',
+          multiple: true,
+          ...field,
+        }))
+      ).fields,
+      'Picks'
+    ).config.rules.map(rule => [rule.job, rule.weight]);
+
+  it('follows the intent, whatever the wording says', () => {
+    expect(
+      suggestFor(
+        { label: 'Your picks', intent: 'apart' },
+        { label: 'Your other picks', intent: 'together' }
+      )
+    ).toEqual([
+      ['apart', 8],
+      ['together', 5],
+    ]);
+  });
+
+  it('puts the intent before the wording', () => {
+    // Worded as an avoid list, declared as the people they want.
+    expect(
+      suggestFor(
+        { label: 'Anyone you want to avoid?', intent: 'together' },
+        { label: 'Who do you want to work with?', intent: 'apart' }
+      )
+    ).toEqual([
+      ['together', 5],
+      ['apart', 8],
+    ]);
+  });
+
+  it('keeps reading the wording when no intent is given', () => {
+    expect(
+      suggestFor({ label: 'Anyone you want to avoid?' }, { label: 'Who do you want to work with?' })
+    ).toEqual([
+      ['apart', 8],
+      ['together', 5],
+    ]);
+  });
+});
+
 describe('suggestConfig', () => {
   it('suggests the expected rules for the workshop form', () => {
     const fields = workshopFields();
