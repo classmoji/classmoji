@@ -70,6 +70,18 @@ beforeEach(() => {
 });
 
 describe('public gallery media delivery', () => {
+  it('never signs a cover that is a raw link into the private content repo', async () => {
+    const raw = 'https://raw.githubusercontent.com/old-org/old-content/main/pages/exam/key.png';
+    mocks.findFirst.mockResolvedValue({ ...response, answers: { [fieldId]: raw } });
+
+    const project = await getForOrg('org-1', response.id);
+
+    for (const call of mocks.resolve.mock.calls) expect(call[1]).not.toContain(raw);
+    // Shown as typed: the private repo answers it with nothing.
+    expect(project?.coverUrl).toBe(raw);
+    expect(project?.coverUrl).not.toContain('content.test');
+  });
+
   it('signs approved media against its original classroom across terms', async () => {
     expect((await getForOrg('org', response.id))?.coverUrl).toBe(
       'https://content.test/fresh-signed-cover'

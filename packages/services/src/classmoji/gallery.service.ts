@@ -279,8 +279,14 @@ async function publicProjects(rows: PublicRow[]): Promise<GalleryProject[]> {
               }
             }
           }
+          // Sign only the student's own uploads, checked above. Any other ref
+          // (a raw content-repo URL, a /missing/ URL) would make the public
+          // gallery sign a private course file, so it is shown as typed or not
+          // at all, never signed.
+          const signable = (ref: string | null): ref is string =>
+            Boolean(ref && parseMediaRef(canonical.get(ref) ?? ref));
           const allowed = entries.flatMap(project =>
-            [project.coverUrl, project.videoUrl].filter((ref): ref is string => Boolean(ref))
+            [project.coverUrl, project.videoUrl].filter(signable)
           );
           const resolved = await resolveDelivery(
             ctx,
