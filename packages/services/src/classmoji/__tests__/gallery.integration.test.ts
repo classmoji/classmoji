@@ -315,11 +315,13 @@ describe.skipIf(!RUN)('project gallery (integration)', () => {
     const other = await makeShowcase(olderClassroom);
     const mine = await submitProject(form, students[0], `Moderated ${suite}`);
     const foreign = await submitProject(other, students[1], `Elsewhere ${suite}`);
+    const [seen] = await galleryService.queueForForm(form.formId);
 
-    const updated = await galleryService.setStatuses({
+    const { updated } = await galleryService.setStatuses({
       formId: form.formId,
       responseIds: [mine, foreign],
       status: 'APPROVED',
+      versions: { [mine]: seen.updatedAt },
       audit: {
         user_id: ownerId,
         classroom_id: newerClassroom,
@@ -355,5 +357,96 @@ describe.skipIf(!RUN)('project gallery (integration)', () => {
     expect((await galleryService.queueForForm(form.formId)).map(item => item.title)).toEqual([
       `Moderated ${suite}`,
     ]);
+  });
+  it('setStatuses refuses to approve a response edited since the moderator saw it', async () => {
+    const form = await makeShowcase(newerClassroom);
+    const id = await submitProject(form, students[2], `Before ${suite}`);
+    const [seen] = await galleryService.queueForForm(form.formId);
+    // The student resubmits while the queue is open.
+    await prisma.formResponse.update({
+      where: { id },
+      data: { answers: { [form.titleId]: `After ${suite}`, [form.summaryId]: 'changed' } },
+    });
+
+    const result = await galleryService.setStatuses({
+      formId: form.formId,
+      responseIds: [id],
+      status: 'APPROVED',
+      versions: { [id]: seen.updatedAt },
+      audit: {
+        user_id: ownerId,
+        classroom_id: newerClassroom,
+        role: 'TEACHER',
+        resource_type: 'FORMS',
+        data: { tool: 'forms.responses.gallery_status' },
+      },
+    });
+
+    expect(result).toEqual({ updated: 0, stale: [id] });
+    expect((await prisma.formResponse.findUniqueOrThrow({ where: { id } })).gallery_status).toBe(
+      'PENDING'
+    );
+  });
+
+  it('switching the gallery off and on again sends earlier approvals back to review', async () => {
+    const form = await makeShowcase(newerClassroom);
+    const id = await approve(form, students[3], `Toggled ${suite}`);
+
+    await formService.setGalleryOrg(form.formId, false);
+    await formService.setGalleryOrg(form.formId, true);
+
+    expect((await prisma.formResponse.findUniqueOrThrow({ where: { id } })).gallery_status).toBe(
+      'PENDING'
+    );
+    expect(await galleryService.getForOrg(orgA, id)).toBeNull();
+  });
+
+  it('an unpublished term leaves the public gallery', async () => {
+    const form = await makeShowcase(olderClassroom);
+    const id = await approve(form, students[0], `Unpublished ${suite}`);
+    expect(await galleryService.getForOrg(orgA, id)).not.toBeNull();
+
+    await prisma.classroom.update({
+      where: { id: olderClassroom },
+      data: { status: 'UNPUBLISHED' },
+    });
+    try {
+      expect(await galleryService.getForOrg(orgA, id)).toBeNull();
+      expect((await galleryService.listForOrg(orgA)).map(card => card.id)).not.toContain(id);
+    } finally {
+      await prisma.classroom.update({ where: { id: olderClassroom }, data: { status: 'ACTIVE' } });
+    }
+  });
+  it('findUnusedGalleryUploads keeps uploads a response uses and recent ones, and nothing else', async () => {
+    const form = await makeShowcase(newerClassroom);
+    const old = new Date(Date.now() - 30 * 86_400_000);
+    const upload = (gallery_form_id: string | null, created_at: Date) =>
+      prisma.mediaObject.create({
+        data: {
+          classroom_id: newerClassroom,
+          kind: 'IMAGE',
+          filename: 'cover.png',
+          ext: 'png',
+          content_type: 'image/png',
+          size_bytes: 10n,
+          status: 'READY',
+          uploaded_by: students[1],
+          gallery_form_id,
+          gallery_field_id: form.titleId,
+          created_at,
+        },
+      });
+    const used = await upload(form.formId, old);
+    const replaced = await upload(form.formId, old);
+    const recent = await upload(form.formId, new Date());
+    const ofDeletedForm = await upload(null, old);
+    await submitProject(form, students[1], `media://${used.id}`);
+
+    const ours = new Set([used.id, replaced.id, recent.id, ofDeletedForm.id]);
+    const unused = (await galleryService.findUnusedGalleryUploads({ take: 10_000 }))
+      .map(row => row.id)
+      .filter(id => ours.has(id));
+
+    expect(unused.sort()).toEqual([replaced.id, ofDeletedForm.id].sort());
   });
 });

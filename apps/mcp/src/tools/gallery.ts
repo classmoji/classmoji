@@ -81,6 +81,9 @@ export const formGalleryQueueTool: ToolDefinition<FormGalleryQueueArgs> = {
         response_id: item.id,
         title: item.title,
         gallery_status: item.galleryStatus,
+        // Quote it back to form_gallery_moderate: an approval publishes only
+        // a response unchanged since this read.
+        updated_at: item.updatedAt,
       })),
     });
   },
@@ -91,7 +94,7 @@ export const formGalleryQueueTool: ToolDefinition<FormGalleryQueueArgs> = {
 interface FormGalleryModerateArgs {
   classroom: string;
   form_id: string;
-  response_ids: string[];
+  responses: Array<{ response_id: string; updated_at: string }>;
   status: 'APPROVED' | 'HIDDEN' | 'PENDING';
 }
 
@@ -101,10 +104,11 @@ export const formGalleryModerateTool: ToolDefinition<FormGalleryModerateArgs> = 
   description:
     'Sets the gallery_status of submitted responses of a gallery form: APPROVED publishes the ' +
     'project on the org’s PUBLIC project gallery (every class site in the org, visible to ' +
-    'anyone), HIDDEN or PENDING takes it off. Ids that are not submitted responses of this ' +
-    `form are ignored. Up to ${ClassmojiService.gallery.GALLERY_MODERATION_MAX} responses per ` +
-    'call; response ids come from form_gallery_queue. Teaching team (owner, teacher or ' +
-    'assistant).',
+    'anyone), HIDDEN or PENDING takes it off. Pass each response_id with the updated_at ' +
+    'form_gallery_queue returned: a response edited since is not approved and comes back in ' +
+    '`stale` (read the queue again and review it). Ids that are not submitted responses of ' +
+    `this form are ignored. Up to ${ClassmojiService.gallery.GALLERY_MODERATION_MAX} ` +
+    'responses per call. Teaching team (owner, teacher or assistant).',
   scope: 'write',
   roles: TEACHING_TEAM,
   // Reversible (hide again), but APPROVED publishes students' work to the open
@@ -113,11 +117,16 @@ export const formGalleryModerateTool: ToolDefinition<FormGalleryModerateArgs> = 
   inputSchema: {
     classroom: classroomArg,
     form_id: formIdArg,
-    response_ids: z
-      .array(z.string().uuid())
+    responses: z
+      .array(
+        z.object({
+          response_id: z.string().uuid(),
+          updated_at: z.string().datetime().describe('As form_gallery_queue returned it'),
+        })
+      )
       .min(1)
       .max(ClassmojiService.gallery.GALLERY_MODERATION_MAX)
-      .describe('Response ids (from form_gallery_queue)'),
+      .describe('Responses to moderate, from form_gallery_queue'),
     status: z
       .enum(['APPROVED', 'HIDDEN', 'PENDING'])
       .describe('APPROVED shows it publicly; HIDDEN or PENDING keeps it off the gallery'),
@@ -126,10 +135,13 @@ export const formGalleryModerateTool: ToolDefinition<FormGalleryModerateArgs> = 
     const classroom = requireClassroomCtx(ctx);
     const form = await loadGalleryForm(args.form_id, ctx);
 
-    const updated = await ClassmojiService.gallery.setStatuses({
+    const { updated, stale } = await ClassmojiService.gallery.setStatuses({
       formId: form.id,
-      responseIds: args.response_ids,
+      responseIds: args.responses.map(entry => entry.response_id),
       status: args.status,
+      versions: Object.fromEntries(
+        args.responses.map(entry => [entry.response_id, entry.updated_at])
+      ),
       audit: {
         user_id: ctx.viewer.userId,
         classroom_id: classroom.classroomId,
@@ -143,10 +155,22 @@ export const formGalleryModerateTool: ToolDefinition<FormGalleryModerateArgs> = 
         },
       },
     });
-    if (!updated) {
+    if (!updated && !stale.length) {
       throw new ToolError('invalid_params', 'No submitted responses of this form match those ids');
     }
 
-    return ok({ success: true, updated, gallery_status: args.status });
+    return ok({
+      success: stale.length === 0,
+      updated,
+      gallery_status: args.status,
+      ...(stale.length
+        ? {
+            stale,
+            message:
+              'These responses changed since form_gallery_queue was read and were not approved. ' +
+              'Read the queue again and review them.',
+          }
+        : {}),
+    });
   },
 };

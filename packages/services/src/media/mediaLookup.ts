@@ -345,8 +345,9 @@ export async function listReadyMedia(
     where: {
       classroom_id: classroomId,
       status: 'READY',
-      // A student's gallery upload is theirs, not course media to embed.
-      gallery_form_id: null,
+      // A student's gallery upload is theirs, not course media to embed. By
+      // field, which survives the form's deletion (gallery_form_id does not).
+      gallery_field_id: null,
       ...(kind ? { kind } : {}),
     },
     orderBy: { created_at: 'desc' },

@@ -41,6 +41,7 @@ const CTX: ToolContext = {
 const FORM_ID = '11111111-1111-4111-8111-111111111111';
 const RESPONSE_ID = '22222222-2222-4222-8222-222222222222';
 const GALLERY_FORM = { id: FORM_ID, classroom_id: 'class-1', gallery_org_id: 'org-1' };
+const SEEN = '2026-10-20T12:00:00.000Z';
 
 const parse = (result: { content: Array<{ text: string }> }) => JSON.parse(result.content[0].text);
 
@@ -48,9 +49,9 @@ beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
   mocks.formFindById.mockResolvedValue(GALLERY_FORM);
   mocks.queueForForm.mockResolvedValue([
-    { id: RESPONSE_ID, title: 'Trail Buddy', galleryStatus: 'PENDING' },
+    { id: RESPONSE_ID, title: 'Trail Buddy', galleryStatus: 'PENDING', updatedAt: SEEN },
   ]);
-  mocks.setStatuses.mockResolvedValue(1);
+  mocks.setStatuses.mockResolvedValue({ updated: 1, stale: [] });
 });
 
 describe('form_gallery_queue', () => {
@@ -62,7 +63,14 @@ describe('form_gallery_queue', () => {
     expect(mocks.queueForForm).toHaveBeenCalledWith(FORM_ID);
     expect(payload).toEqual({
       form_id: FORM_ID,
-      projects: [{ response_id: RESPONSE_ID, title: 'Trail Buddy', gallery_status: 'PENDING' }],
+      projects: [
+        {
+          response_id: RESPONSE_ID,
+          title: 'Trail Buddy',
+          gallery_status: 'PENDING',
+          updated_at: SEEN,
+        },
+      ],
     });
     expect(formGalleryQueueTool.roles).toEqual(['OWNER', 'TEACHER', 'ASSISTANT']);
     expect(formGalleryQueueTool.auditRead?.resourceType).toBe('FORMS');
@@ -91,7 +99,7 @@ describe('form_gallery_moderate', () => {
   const ARGS = {
     classroom: 'org/w26',
     form_id: FORM_ID,
-    response_ids: [RESPONSE_ID],
+    responses: [{ response_id: RESPONSE_ID, updated_at: SEEN }],
     status: 'APPROVED' as const,
   };
 
@@ -103,6 +111,7 @@ describe('form_gallery_moderate', () => {
       formId: FORM_ID,
       responseIds: [RESPONSE_ID],
       status: 'APPROVED',
+      versions: { [RESPONSE_ID]: SEEN },
       audit: {
         user_id: 'ta-1',
         classroom_id: 'class-1',
@@ -139,8 +148,16 @@ describe('form_gallery_moderate', () => {
     expect(mocks.setStatuses).not.toHaveBeenCalled();
   });
 
+  it('reports a response edited since the queue was read, unapproved', async () => {
+    mocks.setStatuses.mockResolvedValue({ updated: 0, stale: [RESPONSE_ID] });
+
+    const payload = parse(await formGalleryModerateTool.handler(ARGS, CTX));
+
+    expect(payload).toMatchObject({ success: false, updated: 0, stale: [RESPONSE_ID] });
+  });
+
   it('says so when no submitted response of the form matched', async () => {
-    mocks.setStatuses.mockResolvedValue(0);
+    mocks.setStatuses.mockResolvedValue({ updated: 0, stale: [] });
 
     await expect(formGalleryModerateTool.handler(ARGS, CTX)).rejects.toMatchObject({
       kind: 'invalid_params',

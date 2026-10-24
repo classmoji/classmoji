@@ -64,12 +64,16 @@ export const headers = ({ loaderHeaders }: { loaderHeaders: Headers }) => loader
 export default function GalleryQueue() {
   const { classroomSlug, formSlug, formTitle, items } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ error?: string }>();
-  const setGallery = (id: string, status: 'APPROVED' | 'HIDDEN') =>
-    fetcher.submit({ responseIds: [id], status } as never, {
-      method: 'post',
-      action: `/${classroomSlug}/forms/${formSlug}/responses/gallery`,
-      encType: 'application/json',
-    });
+  // The version shown goes along: an approval publishes only what was seen.
+  const setGallery = (item: { id: string; updatedAt: string }, status: 'APPROVED' | 'HIDDEN') =>
+    fetcher.submit(
+      { responseIds: [item.id], versions: { [item.id]: item.updatedAt }, status } as never,
+      {
+        method: 'post',
+        action: `/${classroomSlug}/forms/${formSlug}/responses/gallery`,
+        encType: 'application/json',
+      }
+    );
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-8">
@@ -97,7 +101,7 @@ export default function GalleryQueue() {
                 <GalleryCell
                   status={item.galleryStatus}
                   disabled={fetcher.state !== 'idle'}
-                  onChange={status => setGallery(item.id, status)}
+                  onChange={status => setGallery(item, status)}
                 />
               </li>
             ))}

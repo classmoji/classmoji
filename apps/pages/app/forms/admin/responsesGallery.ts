@@ -1,8 +1,12 @@
 import { checkOrigin } from '~/utils/originCheck.server.ts';
 import type { GalleryStatus } from '@prisma/client';
-import { requireClassroomTeachingTeam } from '@classmoji/auth/server';
+import {
+  assertClassroomMutationAllowed,
+  requireClassroomTeachingTeam,
+} from '@classmoji/auth/server';
 import { readJsonBody } from '@classmoji/auth/media-http';
-import { ClassmojiService } from '~/utils/db.server.ts';
+import { ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
+import { impersonatorOf } from '~/utils/pageSections.server.ts';
 import { FORMS_RESOURCE } from './responsesData.server.ts';
 
 /**
@@ -10,9 +14,9 @@ import { FORMS_RESOURCE } from './responsesData.server.ts';
  * the responses page posts here with a fetcher.
  *
  * Gated on the TEACHING TEAM, not `assertFormAdmin`: moderation is TA work and
- * touches no PII (it returns a count). Deliberately no `formMutationBlocked`
- * and no Pro check — the gallery is cross-term, and hiding a project from a
- * locked or lapsed term must still work.
+ * touches no PII (it returns a count). No Pro check and no `formMutationBlocked`
+ * for hiding: the gallery is cross-term, and hiding a project from a locked or
+ * lapsed term must still work. Approving follows the classroom mutation rule.
  */
 
 const STATUSES = new Set<string>(['PENDING', 'APPROVED', 'HIDDEN']);
@@ -46,6 +50,12 @@ export const action = async ({
     return Response.json({ error: 'Unknown gallery status.' }, { status: 400 });
   }
   const status = body.status as GalleryStatus;
+  // Hiding always works, so a locked (archived) term can still be taken down.
+  // Approving publishes, which follows the ordinary mutation rule: in a locked
+  // term only the owner may (the same rule the MCP registry applies).
+  if (status === 'APPROVED') {
+    assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+  }
   if (
     !Array.isArray(body.responseIds) ||
     body.responseIds.length > ClassmojiService.gallery.GALLERY_MODERATION_MAX ||
@@ -57,19 +67,43 @@ export const action = async ({
   ) {
     return Response.json({ error: 'Choose up to 200 responses.' }, { status: 400 });
   }
+  // What the moderator saw: an approval only publishes a response unchanged since.
+  const versions: Record<string, string> = {};
+  if (body.versions && typeof body.versions === 'object' && !Array.isArray(body.versions)) {
+    for (const [id, at] of Object.entries(body.versions as Record<string, unknown>)) {
+      if (typeof at === 'string') versions[id] = at;
+    }
+  }
+  const impersonatedBy = impersonatorOf(await getAuthSession(request));
   // The status write and its audit rows commit together, scoped to this form.
-  const updated = await ClassmojiService.gallery.setStatuses({
+  const { updated, stale } = await ClassmojiService.gallery.setStatuses({
     formId: form.id,
     responseIds: body.responseIds as string[],
     status,
+    versions,
     audit: {
       user_id: userId,
       classroom_id: classroom.id,
       role: membership!.role,
       resource_type: FORMS_RESOURCE,
-      data: { tool: 'forms.responses.gallery_status' },
+      data: {
+        tool: 'forms.responses.gallery_status',
+        ...(impersonatedBy ? { impersonated_by: impersonatedBy } : {}),
+      },
     },
   });
+  if (stale.length) {
+    return Response.json(
+      {
+        error:
+          stale.length === 1
+            ? 'This project changed since you loaded the page. Reload to review it again.'
+            : `${stale.length} projects changed since you loaded the page. Reload to review them again.`,
+        updated,
+      },
+      { status: 409 }
+    );
+  }
   return updated
     ? Response.json({ ok: true, updated })
     : Response.json({ error: 'No matching responses.' }, { status: 400 });

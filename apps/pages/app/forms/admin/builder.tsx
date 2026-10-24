@@ -295,10 +295,18 @@ export const action = async ({
           if (membership.role !== 'OWNER') {
             return { error: 'Only the classroom owner can change the project gallery setting.' };
           }
+          // Its own save (the switch posts nothing else), so a refused setting
+          // can never leave the gallery flipped without its audit row.
+          const others = Object.keys(body).filter(key => key !== 'intent' && key !== 'gallery');
+          if (others.length > 0) {
+            return { error: 'Change the project gallery setting on its own.' };
+          }
           // Turning it on for a live form whose revision breaks the role rule
           // throws FORM_DEFINITION_INVALID; the catch below already maps that
           // code to { error }, so it lands in the existing error slot.
           await ClassmojiService.form.setGalleryOrg(form.id, body.gallery === true);
+          await audit('UPDATE', 'forms.builder.save-meta', { gallery: body.gallery === true });
+          return { ok: true, savedAt: new Date().toISOString() };
         }
         await ClassmojiService.form.update(form.id, {
           ...(body.title !== undefined ? { title: body.title } : {}),

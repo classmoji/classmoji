@@ -101,7 +101,12 @@ const SiteProject = () => {
         {project.links.length > 0 ? (
           <div className="mt-6 flex flex-wrap gap-2">
             {project.links.map(link => (
-              <a key={link.url} href={link.url} rel="noopener noreferrer" className={PILL}>
+              <a
+                key={link.url}
+                href={link.url}
+                rel="nofollow ugc noopener noreferrer"
+                className={PILL}
+              >
                 {`${link.label} ↗`}
               </a>
             ))}

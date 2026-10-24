@@ -248,7 +248,7 @@ describe('listReadyMedia', () => {
     expect(query.where).toEqual({
       classroom_id: 'class-1',
       status: 'READY',
-      gallery_form_id: null,
+      gallery_field_id: null,
       kind: 'VIDEO',
     });
     expect(query.orderBy).toEqual({ created_at: 'desc' });
@@ -265,7 +265,7 @@ describe('listReadyMedia', () => {
     expect(findMany.mock.calls[0][0].where).toEqual({
       classroom_id: 'class-1',
       status: 'READY',
-      gallery_form_id: null,
+      gallery_field_id: null,
     });
   });
 });

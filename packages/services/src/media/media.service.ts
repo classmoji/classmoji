@@ -447,7 +447,9 @@ async function reserveUpload({
     }
 
     if (gallery) {
-      const ownUploads = rows.filter(live => live.uploaded_by === userId && live.gallery_form_id);
+      // By field, not form: a deleted form nulls gallery_form_id, and its
+      // uploads still count until the gallery sweeper removes them.
+      const ownUploads = rows.filter(live => live.uploaded_by === userId && live.gallery_field_id);
       // A byte quota alone permits an unbounded number of tiny student uploads.
       if (ownUploads.length >= 50) {
         throw new MediaError(

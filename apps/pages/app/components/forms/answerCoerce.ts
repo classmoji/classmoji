@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   FIELD_TYPE_REGISTRY,
   FORM_LIMITS,
+  SELF_NAME_LABEL,
   isIdentityQuestion,
   type FormField,
   type FormOption,
@@ -487,16 +488,8 @@ export function extractIdentity(
 
 // ─── Classroom identity ─────────────────────────────────────────────────────
 
-/**
- * A `short_text` field that is asking the filler's own name.
- *
- * Much tighter than `identityPlan`'s `/\bname\b/i`, and deliberately so: that
- * heuristic only picked a display fallback, and getting it wrong cost a blank
- * column in the staff table. THIS one decides whether a question is removed
- * from the form and answered from the session, and "Project name" or "Your
- * partner's name" must not be. The whole label has to BE the question.
- */
-const SELF_NAME_LABEL = /^(your |full |preferred |legal )*name\s*[?:*]?$/i;
+// SELF_NAME_LABEL (form contract): the `short_text` label that asks the
+// filler's own name, answered from the session on a classroom form.
 
 export interface ClassroomIdentity {
   name: string;

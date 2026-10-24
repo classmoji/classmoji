@@ -126,9 +126,8 @@ export const action = async ({
   // from the classroom inside the service, never from the request. Owner-only,
   // like the builder switch: this route also admits TEACHERs, and the gallery
   // publishes onto every class site in the org.
-  if (preset.key === 'showcase' && membership.role === 'OWNER') {
-    await ClassmojiService.form.setGalleryOrg(form.id, true);
-  }
+  const gallery = preset.key === 'showcase' && membership.role === 'OWNER';
+  if (gallery) await ClassmojiService.form.setGalleryOrg(form.id, true);
 
   await ClassmojiService.audit.create({
     user_id: userId,
@@ -143,6 +142,7 @@ export const action = async ({
       slug: form.slug,
       access,
       preset: preset.key,
+      ...(gallery ? { gallery: true } : {}),
     },
   });
 

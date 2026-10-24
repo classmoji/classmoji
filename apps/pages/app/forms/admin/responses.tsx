@@ -463,12 +463,23 @@ export default function FormResponses() {
     submit({ intent: 'set-note', responseIds: [id], note });
 
   // Its own endpoint (teaching-team gate); the fetcher revalidates this page.
-  const setGallery = (ids: string[], status: 'APPROVED' | 'HIDDEN') =>
-    fetcher.submit({ responseIds: ids, status } as never, {
-      method: 'post',
-      action: `/${classroomSlug}/forms/${form.slug}/responses/gallery`,
-      encType: 'application/json',
-    });
+  // Each row's version goes along: an approval publishes only what was seen.
+  const setGallery = (
+    targets: Array<{ id: string; updatedAt: string }>,
+    status: 'APPROVED' | 'HIDDEN'
+  ) =>
+    fetcher.submit(
+      {
+        responseIds: targets.map(row => row.id),
+        versions: Object.fromEntries(targets.map(row => [row.id, row.updatedAt])),
+        status,
+      } as never,
+      {
+        method: 'post',
+        action: `/${classroomSlug}/forms/${form.slug}/responses/gallery`,
+        encType: 'application/json',
+      }
+    );
 
   // The ids a delete has been REQUESTED for and not yet confirmed. Keeping the
   // whole array (rather than a boolean) is what preserves the single-vs-bulk
@@ -725,7 +736,7 @@ export default function FormResponses() {
                   onStatus={next => setStatus([row.id], next)}
                   onNote={next => setNote(row.id, next)}
                   onDelete={() => setPendingDelete([row.id])}
-                  onGallery={galleryOn ? status => setGallery([row.id], status) : undefined}
+                  onGallery={galleryOn ? status => setGallery([row], status) : undefined}
                 />
               ))}
               {visible.length === 0 ? (

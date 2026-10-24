@@ -78,7 +78,8 @@ describe('projectFromResponse', () => {
       term: 'CS52 Fall 2026',
       classroomSlug: 'cs52-f26',
       submittedAt: '2026-09-01T12:00:00.000Z',
-      team: ['Maya Chen', 'slee'],
+      // 'slee' has no name on the account, so no git username goes public.
+      team: ['Maya Chen'],
       tags: ['maps', 'social'],
       links: [
         { label: 'Deployed URL', url: 'https://trailbuddy.app/' },

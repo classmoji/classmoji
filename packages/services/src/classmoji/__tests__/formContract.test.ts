@@ -714,6 +714,16 @@ describe('formContract — gallery roles', () => {
     ).toThrow(/extra gallery role needs/);
   });
 
+  it('refuses a gallery role on the question answered with the account name', () => {
+    // A classroom fill hides "Your name" and fills it from the account.
+    expect(() =>
+      parseOne({ type: 'short_text', label: 'Your name', gallery_role: 'title' })
+    ).toThrow(/account name and cannot have a gallery role/);
+    expect(
+      parseOne({ type: 'short_text', label: 'Project name', gallery_role: 'title' })
+    ).toMatchObject({ gallery_role: 'title' });
+  });
+
   it('rejects a team role on a single-select roster', () => {
     expect(() =>
       parseOne({ ...SAMPLES.roster_select, multiple: false, gallery_role: 'team' })

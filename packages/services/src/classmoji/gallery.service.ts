@@ -148,8 +148,13 @@ export function projectFromResponse(
         }
         break;
       case 'team':
-        // Roster labels are "Name (login)"; the public page shows names.
-        project.team = optionLabels(field, value).map(label => label.replace(/ \([^)]*\)$/, ''));
+        // Roster labels are "Name (login)". The public page shows the name, and
+        // a member labelled without one (a bare login, or "Unknown member")
+        // is left out rather than published by their git username.
+        project.team = optionLabels(field, value).flatMap(label => {
+          const named = /^(.+) \([^)]*\)$/.exec(label);
+          return named ? [named[1]] : [];
+        });
         break;
       case 'tags':
         project.tags =
@@ -210,7 +215,9 @@ type PublicRow = Prisma.FormResponseGetPayload<{ select: typeof PUBLIC_SELECT }>
 const approvedIn = (orgId: string): Prisma.FormResponseWhereInput => ({
   submission_state: 'SUBMITTED',
   gallery_status: 'APPROVED',
-  form: { gallery_org_id: orgId },
+  // An unpublished term is taken down everywhere, its projects included. A
+  // locked (archived) term stays: past projects are what the gallery is for.
+  form: { gallery_org_id: orgId, classroom: { status: { not: 'UNPUBLISHED' } } },
 });
 
 async function publicProjects(rows: PublicRow[]): Promise<GalleryProject[]> {
@@ -233,7 +240,9 @@ async function publicProjects(rows: PublicRow[]): Promise<GalleryProject[]> {
                 content_repo: classroom.content_repo,
                 git_organization: classroom.git_organization,
               },
-              tier: 'month',
+              // A week, not a month: a hidden project's copied media links
+              // stop working within days.
+              tier: 'week',
             }
           : null;
       let urls = new Map<string, string>();
@@ -361,7 +370,7 @@ export async function getForOrg(orgId: string, responseId: string): Promise<Gall
  */
 export async function queueForForm(
   formId: string
-): Promise<Array<{ id: string; title: string; galleryStatus: GalleryStatus }>> {
+): Promise<Array<{ id: string; title: string; galleryStatus: GalleryStatus; updatedAt: string }>> {
   const rows = await getPrisma().formResponse.findMany({
     where: { form_id: formId, submission_state: 'SUBMITTED' },
     select: {
@@ -369,6 +378,7 @@ export async function queueForForm(
       submitted_at: true,
       answers: true,
       gallery_status: true,
+      updated_at: true,
       revision: { select: { fields: true } },
     },
     orderBy: { submitted_at: 'asc' },
@@ -377,6 +387,8 @@ export async function queueForForm(
     id: row.id,
     title: projectFromResponse(row, fieldsOf(row.revision.fields), { name: '', slug: '' }).title,
     galleryStatus: row.gallery_status,
+    // What an approval must quote back (setStatuses `versions`).
+    updatedAt: row.updated_at.toISOString(),
   }));
 }
 
@@ -387,30 +399,42 @@ export const GALLERY_MODERATION_MAX = 200;
  * Approve, hide or reset gallery responses of one form. Only SUBMITTED
  * responses of `formId` change; any other id is ignored. The status write and
  * one UPDATE audit row per response commit together, under a lock on the
- * form. Returns how many responses changed. Carries no authorization: the
- * caller has resolved `formId` inside the classroom it authorized.
+ * form. Carries no authorization: the caller has resolved `formId` inside the
+ * classroom it authorized.
+ *
+ * An APPROVAL publishes what the moderator saw, so it must quote each
+ * response's `updated_at` (`versions`, from queueForForm or the responses
+ * table). A response edited since, or one with no version, is not approved
+ * and comes back in `stale`. Hiding needs no version: it only takes down.
  */
 export async function setStatuses({
   formId,
   responseIds,
   status,
+  versions = {},
   audit,
 }: {
   formId: string;
   responseIds: string[];
   status: GalleryStatus;
+  /** Response id → the `updated_at` (ISO) the moderator saw. */
+  versions?: Record<string, string>;
   audit: Pick<
     Prisma.AuditLogCreateManyInput,
     'user_id' | 'classroom_id' | 'role' | 'resource_type'
   > & { data: Record<string, unknown> };
-}): Promise<number> {
+}): Promise<{ updated: number; stale: string[] }> {
   return getPrisma().$transaction(async tx => {
     await tx.$queryRaw`SELECT id FROM forms WHERE id = ${formId} FOR UPDATE`;
-    const rows = await tx.formResponse.findMany({
+    const found = await tx.formResponse.findMany({
       where: { id: { in: responseIds }, form_id: formId, submission_state: 'SUBMITTED' },
-      select: { id: true },
+      select: { id: true, updated_at: true },
     });
-    if (!rows.length) return 0;
+    const fresh = (row: (typeof found)[number]) =>
+      status !== 'APPROVED' || versions[row.id] === row.updated_at.toISOString();
+    const rows = found.filter(fresh);
+    const stale = found.filter(row => !fresh(row)).map(row => row.id);
+    if (!rows.length) return { updated: 0, stale };
     await tx.formResponse.updateMany({
       where: { id: { in: rows.map(row => row.id) }, form_id: formId },
       data: { gallery_status: status },
@@ -426,6 +450,8 @@ export async function setStatuses({
         data: { ...audit.data, form_id: formId, gallery_status: status } as Prisma.InputJsonValue,
       })),
     });
-    return rows.length;
+    return { updated: rows.length, stale };
   });
 }
+
+export { findUnusedGalleryUploads, GALLERY_UPLOAD_UNUSED_DAYS } from './galleryMedia.ts';

@@ -132,6 +132,19 @@ export function formContractError(
 // the revision like any other def key, so a response renders against the roles
 // it was filled under. Non-gallery forms carry and ignore them.
 
+/**
+ * A `short_text` label asking the filler's own name.
+ *
+ * Much tighter than `identityPlan`'s `/\bname\b/i`, and deliberately so: that
+ * heuristic only picked a display fallback, and getting it wrong cost a blank
+ * column in the staff table. THIS one decides whether a question is removed
+ * from a classroom form and answered from the session (apps/pages
+ * answerCoerce.ts), and "Project name" or "Your partner's name" must not be.
+ * The whole label has to BE the question. Such a field never takes a gallery
+ * role: its answer is the account's name, which the filler never typed.
+ */
+export const SELF_NAME_LABEL = /^(your |full |preferred |legal )*name\s*[?:*]?$/i;
+
 export const GALLERY_IMAGE_MAX_BYTES = 20_000_000;
 export const GALLERY_VIDEO_MAX_BYTES = 250_000_000;
 
@@ -1271,6 +1284,12 @@ export function parseFormDefinition(input: unknown): FormDefinition {
       throw formContractError(
         FORM_DEFINITION_INVALID,
         'An identity question cannot have a gallery role.'
+      );
+    }
+    if (field.type === 'short_text' && SELF_NAME_LABEL.test(String(field.label ?? '').trim())) {
+      throw formContractError(
+        FORM_DEFINITION_INVALID,
+        `"${String(field.label)}" is answered with the filler's account name and cannot have a gallery role.`
       );
     }
     const nested = !definition.fields.includes(field);
