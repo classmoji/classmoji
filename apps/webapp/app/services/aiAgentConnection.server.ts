@@ -205,6 +205,10 @@ export async function sendRequest(
     const explorationSteps: Record<string, unknown>[] = [];
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined = undefined;
     let settled = false;
+    // The signature carries a timestamp the ai-agent accepts for 30 s. A
+    // request queued across a sleep or reconnect arrives with a stale one, so
+    // it is signed again and sent once more before the failure is reported.
+    let resigned = false;
 
     const cleanup = () => {
       if (settled) return;
@@ -293,6 +297,11 @@ export async function sendRequest(
 
       // Handle errors - must match our request
       if (msg.type === 'ERROR' && (matchesRequest || matchesSession)) {
+        if (msg.payload?.code === 'AUTH_FAILED' && !resigned) {
+          resigned = true;
+          socket.emit('message', { type, requestId, payload: signPayload(payload) });
+          return;
+        }
         cleanup();
         reject(agentRequestError(msg.payload));
         return;

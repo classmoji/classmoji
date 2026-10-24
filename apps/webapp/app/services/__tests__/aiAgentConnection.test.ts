@@ -42,9 +42,8 @@ const fake = vi.hoisted(() => {
 });
 
 vi.mock('socket.io-client', () => ({ io: () => fake.socket }));
-vi.mock('~/utils/agentAuth.server', () => ({
-  signPayload: (payload: Record<string, unknown>) => payload,
-}));
+const sign = vi.hoisted(() => vi.fn((payload: Record<string, unknown>) => payload));
+vi.mock('~/utils/agentAuth.server', () => ({ signPayload: sign }));
 
 const { sendRequest, AIAgentRequestError, AI_AGENT_GENERIC_ERROR } =
   await import('../aiAgentConnection.server');
@@ -54,6 +53,7 @@ const emitSpy = vi.fn();
 beforeEach(() => {
   process.env.AI_AGENT_URL = 'http://ai-agent.test';
   emitSpy.mockReset();
+  sign.mockClear();
   fake.socket.emit = emitSpy;
   fake.listeners.length = 0;
 });
@@ -118,6 +118,65 @@ describe('sendRequest: ERROR replies', () => {
       type: 'QUIZ_READY',
       payload: { attemptId: 'attempt-1', openingMessage: 'Question 1', explorationSteps: [] },
     });
+  });
+});
+
+describe('sendRequest: a stale signature', () => {
+  /** The requestId of the n-th message sent. */
+  const requestIdOf = (n: number) => (emitSpy.mock.calls[n][1] as { requestId: string }).requestId;
+  const deliver = (msg: Record<string, unknown>) => {
+    for (const listener of [...fake.listeners]) listener(msg);
+  };
+  const authFailed = (requestId: string) => ({
+    type: 'ERROR',
+    requestId,
+    payload: { attemptId: 'attempt-1', code: 'AUTH_FAILED', error: 'Authentication failed' },
+  });
+
+  it('signs the request again and sends it once more, then resolves on the reply', async () => {
+    const pending = sendRequest(
+      'QUIZ_INIT',
+      { attemptId: 'attempt-1' },
+      { responseTypes: ['QUIZ_READY'] }
+    );
+    await vi.waitFor(() => expect(emitSpy).toHaveBeenCalledTimes(1));
+
+    deliver(authFailed(requestIdOf(0)));
+
+    expect(emitSpy).toHaveBeenCalledTimes(2);
+    expect(sign).toHaveBeenCalledTimes(2);
+    // The same request: the reply is matched by the id it first went out with.
+    expect(requestIdOf(1)).toBe(requestIdOf(0));
+    expect(emitSpy.mock.calls[1][1]).toMatchObject({ type: 'QUIZ_INIT' });
+
+    deliver({ type: 'QUIZ_READY', requestId: requestIdOf(0), payload: { attemptId: 'attempt-1' } });
+    await expect(pending).resolves.toMatchObject({ type: 'QUIZ_READY' });
+  });
+
+  it('reports the failure when the second signature is refused too', async () => {
+    const pending = sendRequest(
+      'QUIZ_INIT',
+      { attemptId: 'attempt-1' },
+      { responseTypes: ['QUIZ_READY'] }
+    );
+    pending.catch(() => {});
+    await vi.waitFor(() => expect(emitSpy).toHaveBeenCalledTimes(1));
+
+    deliver(authFailed(requestIdOf(0)));
+    deliver(authFailed(requestIdOf(0)));
+
+    await expect(pending).rejects.toMatchObject({ code: 'AUTH_FAILED' });
+    expect(emitSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not resend for any other failure', async () => {
+    const error = await sendAndReply({
+      type: 'ERROR',
+      payload: { attemptId: 'attempt-1', code: 'API_ERROR' },
+    }).catch((e: unknown) => e);
+
+    expect(error).toMatchObject({ code: 'API_ERROR' });
+    expect(emitSpy).toHaveBeenCalledTimes(1);
   });
 });
 
