@@ -352,6 +352,37 @@ function DropdownOptions({
   );
 }
 
+/** The optional "at least / at most" pair for a list question. */
+function SelectionLimitsRow({ field, onChange }: Pick<FieldConfigProps, 'field' | 'onChange'>) {
+  const limit = (key: 'min_selections' | 'max_selections', label: string) => (
+    <div>
+      <div className="mb-1 text-xs font-medium uppercase tracking-wide text-gray-500">{label}</div>
+      <input
+        type="number"
+        min={1}
+        value={(field[key] as number | undefined) ?? ''}
+        placeholder="No limit"
+        onChange={event =>
+          onChange({ [key]: event.target.value === '' ? undefined : Number(event.target.value) })
+        }
+        className={inputClass}
+      />
+    </div>
+  );
+  return (
+    <div className="mb-3">
+      <div className="grid grid-cols-2 gap-2">
+        {limit('min_selections', 'At least')}
+        {limit('max_selections', 'At most')}
+      </div>
+      <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+        How many they can pick. The “at least” only applies once they answer: an optional question
+        can still be left blank.
+      </p>
+    </div>
+  );
+}
+
 function TypeSpecific({ field, onChange, scopes, nested, siblings }: FieldConfigProps) {
   switch (field.type) {
     case 'email':
@@ -433,6 +464,7 @@ function TypeSpecific({ field, onChange, scopes, nested, siblings }: FieldConfig
             maximum={FORM_LIMITS.MAX_OPTIONS}
             allowExclusive
           />
+          <SelectionLimitsRow field={field} onChange={onChange} />
         </div>
       );
 
@@ -563,14 +595,38 @@ function TypeSpecific({ field, onChange, scopes, nested, siblings }: FieldConfig
               who was in the class at that moment.
             </p>
           </Row>
+          <Row label="What a pick means for teams">
+            <select
+              value={(field.intent as string | undefined) ?? ''}
+              data-testid="forms-field-intent"
+              onChange={event => onChange({ intent: event.target.value || undefined })}
+              className={inputClass}
+            >
+              <option value="">Work it out from the question</option>
+              <option value="together">Someone they want on their team</option>
+              <option value="apart">Someone they would rather not be teamed with</option>
+            </select>
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              Used when this form is turned into teams. Say it here rather than leave it to the
+              wording of the question.
+            </p>
+          </Row>
           <label className="mb-3 flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
             <input
               type="checkbox"
               checked={Boolean(field.multiple)}
-              onChange={event => onChange({ multiple: event.target.checked })}
+              onChange={event =>
+                onChange(
+                  event.target.checked
+                    ? { multiple: true }
+                    : // The limits only exist for a multi-pick list.
+                      { multiple: false, min_selections: undefined, max_selections: undefined }
+                )
+              }
             />
             Allow picking more than one person
           </label>
+          {field.multiple ? <SelectionLimitsRow field={field} onChange={onChange} /> : null}
         </>
       );
 

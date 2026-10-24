@@ -3,16 +3,19 @@ import type { Prisma } from '@prisma/client';
 
 /**
  * Create multiple invites (bulk) - used when instructor uploads roster
- * @param {Object[]} invites - Array of { school_email, student_id, classroom_id }
+ * @param {Object[]} invites - Array of { school_email, student_name, student_id, classroom_id }
  * @returns {Promise<{count: number}>}
  */
 export const createManyInvites = async (
-  invites: { school_email: string; student_id?: string; classroom_id: string }[]
+  invites: {
+    school_email: string;
+    student_name: string;
+    student_id?: string;
+    classroom_id: string;
+  }[]
 ): Promise<{ count: number }> => {
-  const inviteData: unknown = invites;
-  // TODO: narrow further once classroom invite input shape is aligned with the generated Prisma schema.
   return getPrisma().classroomInvite.createMany({
-    data: inviteData as Prisma.ClassroomInviteCreateManyInput[],
+    data: invites,
     skipDuplicates: true,
   });
 };
@@ -116,7 +119,8 @@ export const claimPendingInvites = async (
     select: {
       email: true,
       emailVerified: true,
-      accounts: { where: { provider_id: 'github' }, select: { email: true } },
+      name: true,
+      accounts: { where: { provider_id: 'github' }, select: { email: true, username: true } },
     },
   });
   if (!user) return { claimed: 0, classroomIds: [] };
@@ -134,7 +138,17 @@ export const claimPendingInvites = async (
   // stored as typed and its unique key is case-sensitive.
   const classroomIds = Array.from(new Set(invites.map(invite => invite.classroom_id)));
 
+  // The name the instructor typed on the roster, for an account that has only
+  // the login sign-in fell back to. A name the person has of their own is
+  // theirs and stays.
+  const rosterName = invites.map(invite => invite.student_name.trim()).find(Boolean);
+  const hasOwnName =
+    !!user.name?.trim() && !user.accounts.some(account => account.username === user.name);
+
   await prisma.$transaction([
+    ...(rosterName && !hasOwnName
+      ? [prisma.user.update({ where: { id: userId }, data: { name: rosterName } })]
+      : []),
     prisma.classroomMembership.createMany({
       data: classroomIds.map(classroom_id => ({
         classroom_id,

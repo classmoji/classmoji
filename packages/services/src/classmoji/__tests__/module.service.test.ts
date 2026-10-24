@@ -53,6 +53,9 @@ const {
   QUIZ_ITEM_REFUSAL,
   listForClassroom,
   deleteById,
+  reorderModules,
+  moveItemToModuleEnd,
+  findOtherModulesHolding,
 } = await import('../module.service.ts');
 
 beforeEach(() => {
@@ -303,6 +306,177 @@ describe('deleteById', () => {
   });
 });
 
+describe('reorderModules', () => {
+  const txModuleUpdate = vi.fn();
+  const tx = { $queryRaw: queryRaw, module: { update: txModuleUpdate } };
+  beforeEach(() => {
+    transaction.mockImplementation(async (run: (client: typeof tx) => unknown) => run(tx));
+    moduleFindMany.mockResolvedValue([{ id: 'b' }, { id: 'c' }, { id: 'a' }]);
+  });
+
+  it('locks every module in id order before writing any position', async () => {
+    // A move locks the two modules it touches in id order; locking in the
+    // caller's order here could deadlock against it.
+    await reorderModules('class-1', ['c', 'a', 'b']);
+
+    expect(queryRaw.mock.calls.map(call => call[1])).toEqual(['a', 'b', 'c']);
+    expect(Math.max(...queryRaw.mock.invocationCallOrder)).toBeLessThan(
+      Math.min(...txModuleUpdate.mock.invocationCallOrder)
+    );
+  });
+
+  it('writes each position as its index, scoped to the classroom', async () => {
+    await reorderModules('class-1', ['c', 'a', 'b']);
+
+    expect(txModuleUpdate.mock.calls.map(call => call[0])).toEqual([
+      { where: { id: 'c', classroom_id: 'class-1' }, data: { position: 0 } },
+      { where: { id: 'a', classroom_id: 'class-1' }, data: { position: 1 } },
+      { where: { id: 'b', classroom_id: 'class-1' }, data: { position: 2 } },
+    ]);
+  });
+
+  it('refuses an ordering that is not exactly the classroom modules, writing nothing', async () => {
+    await expect(reorderModules('class-1', ['a', 'b'])).rejects.toThrow(
+      'Ordered module ids must match the classroom modules'
+    );
+    expect(transaction).not.toHaveBeenCalled();
+  });
+});
+
+describe('moveItemToModuleEnd', () => {
+  const txItemFindFirst = vi.fn();
+  const txItemUpdate = vi.fn();
+  const txItemFindMany = vi.fn();
+  const tx = {
+    $queryRaw: queryRaw,
+    moduleItem: { findFirst: txItemFindFirst, update: txItemUpdate, findMany: txItemFindMany },
+  };
+  const move = () => moveItemToModuleEnd('item-1', 'mod-b', 'class-1');
+
+  beforeEach(() => {
+    transaction.mockImplementation(async (run: (client: typeof tx) => unknown) => run(tx));
+    moduleFindFirst.mockResolvedValue({ id: 'mod-b' });
+    // The item read, then the target's last item.
+    txItemFindFirst
+      .mockResolvedValueOnce({ module_id: 'mod-a', item_type: 'PAGE' })
+      .mockResolvedValueOnce({ position: 2 });
+    txItemUpdate.mockResolvedValue({ id: 'item-1', item_type: 'PAGE', position: 3 });
+    txItemFindMany.mockResolvedValue([{ id: 'left-1' }, { id: 'left-2' }]);
+  });
+
+  it('puts the item last in the target and closes the gap it left', async () => {
+    const result = await move();
+
+    expect(txItemUpdate).toHaveBeenNthCalledWith(1, {
+      where: { id: 'item-1' },
+      data: { module_id: 'mod-b', position: 3 },
+      select: { id: true, item_type: true, position: true },
+    });
+    expect(txItemFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ module_id: 'mod-a' }) })
+    );
+    expect(txItemUpdate).toHaveBeenNthCalledWith(2, {
+      where: { id: 'left-1' },
+      data: { position: 0 },
+    });
+    expect(txItemUpdate).toHaveBeenNthCalledWith(3, {
+      where: { id: 'left-2' },
+      data: { position: 1 },
+    });
+    expect(result).toEqual({
+      id: 'item-1',
+      item_type: 'PAGE',
+      position: 3,
+      from_module_id: 'mod-a',
+    });
+  });
+
+  it('locks both modules in id order before writing', async () => {
+    await move();
+
+    expect(queryRaw.mock.calls.map(call => call[1])).toEqual(['mod-a', 'mod-b']);
+    expect(Math.max(...queryRaw.mock.invocationCallOrder)).toBeLessThan(
+      Math.min(...txItemUpdate.mock.invocationCallOrder)
+    );
+  });
+
+  it('starts an empty target at position 0', async () => {
+    txItemFindFirst.mockReset();
+    txItemFindFirst
+      .mockResolvedValueOnce({ module_id: 'mod-a', item_type: 'PAGE' })
+      .mockResolvedValueOnce(null);
+
+    await move();
+
+    expect(txItemUpdate.mock.calls[0][0].data).toEqual({ module_id: 'mod-b', position: 0 });
+  });
+
+  it('refuses a target module of another classroom before opening a transaction', async () => {
+    moduleFindFirst.mockResolvedValue(null);
+
+    await expect(move()).rejects.toThrow('Module not found in classroom');
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
+  it('refuses an item of another classroom, writing nothing', async () => {
+    txItemFindFirst.mockReset();
+    txItemFindFirst.mockResolvedValue(null);
+
+    await expect(move()).rejects.toThrow('Module item not found in classroom');
+    expect(txItemUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses an item that is already in the target', async () => {
+    txItemFindFirst.mockReset();
+    txItemFindFirst.mockResolvedValue({ module_id: 'mod-b', item_type: 'PAGE' });
+
+    await expect(move()).rejects.toThrow('That item is already in this module');
+    expect(txItemUpdate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['REPOSITORY', 'Repository items cannot be moved'],
+    ['QUIZ', QUIZ_ITEM_REFUSAL],
+  ])('refuses a legacy %s item', async (item_type, message) => {
+    txItemFindFirst.mockReset();
+    txItemFindFirst.mockResolvedValue({ module_id: 'mod-a', item_type });
+
+    await expect(move()).rejects.toThrow(message);
+    expect(txItemUpdate).not.toHaveBeenCalled();
+  });
+
+  it('says so when the target already lists the same page, slide or form', async () => {
+    txItemUpdate.mockReset();
+    txItemUpdate.mockRejectedValue(
+      Object.assign(new Error('unique'), {
+        code: 'P2002',
+        meta: { target: ['module_id', 'page_id'] },
+      })
+    );
+
+    await expect(move()).rejects.toThrow('That module already has this item');
+  });
+});
+
+describe('findOtherModulesHolding', () => {
+  it('asks for the other modules of the classroom whose items point at the target', async () => {
+    moduleFindMany.mockResolvedValue([{ id: 'mod-9', title: 'Week 1' }]);
+
+    const result = await findOtherModulesHolding('SLIDE', 'slide-1', 'mod-1', 'class-1');
+
+    expect(moduleFindMany).toHaveBeenCalledWith({
+      where: {
+        classroom_id: 'class-1',
+        id: { not: 'mod-1' },
+        items: { some: { item_type: 'SLIDE', slide_id: 'slide-1' } },
+      },
+      orderBy: { position: 'asc' },
+      select: { id: true, title: true },
+    });
+    expect(result).toEqual([{ id: 'mod-9', title: 'Week 1' }]);
+  });
+});
+
 describe('addItem', () => {
   it('appends at position 0 when the module is empty', async () => {
     itemFindFirst.mockResolvedValue(null);
@@ -519,7 +693,13 @@ describe('moveItemToModule', () => {
     // Both modules are in the classroom.
     moduleFindFirst.mockResolvedValue({ id: 'scoped' });
     itemUpdate.mockResolvedValue({});
-    transaction.mockResolvedValue([]);
+    // The reorder hands over a batch of writes; the compaction an interactive
+    // transaction that runs against the client it is given.
+    transaction.mockImplementation(async (work: unknown) =>
+      typeof work === 'function'
+        ? work({ moduleItem: { findMany: itemFindMany, update: itemUpdate } })
+        : Promise.all(work as unknown[])
+    );
   });
 
   afterEach(() => {
