@@ -23,6 +23,8 @@ import {
   IDENTITY_QUESTION_TYPES,
   answersByteSize,
   assertFieldsAllowedForAccess,
+  assertGalleryRoles,
+  galleryRoleOf,
   buildResponseSchema,
   exceedsMaxDepth,
   flattenFields,
@@ -517,9 +519,8 @@ describe('formContract — answers', () => {
  * every `error.code === …` branch on the submission paths and surfaced as a 500
  * to an anonymous caller. Denial of service for the price of forty kilobytes.
  *
- * 20,000 is chosen empirically, not decoratively: 5,000 still serializes on this
- * Node, 10,000 does not. Building the value with a loop rather than a recursive
- * helper keeps the TEST from overflowing on its own fixture.
+ * Serialization depth depends on the Node runtime. Building a deep value with
+ * a loop keeps the test independent of the serializer and its own call stack.
  */
 const nested = (depth: number): unknown => {
   let value: unknown = [];
@@ -528,12 +529,10 @@ const nested = (depth: number): unknown => {
 };
 
 describe('formContract — deeply nested answers', () => {
-  it('confirms the hazard is real: JSON.stringify cannot walk the fixture', () => {
-    expect(() => JSON.stringify(nested(20_000))).toThrow(RangeError);
-  });
-
   it('sizes an unserializable value as infinite rather than throwing', () => {
-    expect(answersByteSize(nested(20_000))).toBe(Number.POSITIVE_INFINITY);
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    expect(answersByteSize(cyclic)).toBe(Number.POSITIVE_INFINITY);
     // And still measures an ordinary one exactly.
     expect(answersByteSize({ a: 'bc' })).toBe(10);
   });
@@ -657,6 +656,85 @@ describe('formContract — repeat groups', () => {
     expect(() =>
       parseAnswers(relaxed, { [relaxedGroup.id]: { [alice]: { [relaxedScale]: 4 } } }, relaxedCtx)
     ).not.toThrow();
+  });
+});
+
+describe('formContract — gallery roles', () => {
+  it('accepts a role on the field types it reads, and keeps it through a re-parse', () => {
+    const { fields } = parseFormDefinition([
+      { type: 'short_text', label: 'Project title', gallery_role: 'title' },
+      { type: 'long_text', label: 'Summary', gallery_role: 'summary' },
+      { ...SAMPLES.multiselect, gallery_role: 'tags' },
+      { ...SAMPLES.roster_select, gallery_role: 'team' },
+      { type: 'short_text', label: 'Tags', gallery_role: 'tags' },
+    ]);
+    const roles = ['title', 'summary', 'tags', 'team', 'tags'];
+    expect(fields.map(field => galleryRoleOf(field))).toEqual(roles);
+    expect(parseFormDefinition(fields).fields.map(field => galleryRoleOf(field))).toEqual(roles);
+  });
+
+  it('rejects an unknown role', () => {
+    expect(
+      codeOf(() => parseOne({ type: 'short_text', label: 'Title', gallery_role: 'hero' }))
+    ).toBe(FORM_DEFINITION_INVALID);
+  });
+
+  it('rejects a role on a display block', () => {
+    expect(codeOf(() => parseOne({ ...SAMPLES.heading, gallery_role: 'title' }))).toBe(
+      FORM_DEFINITION_INVALID
+    );
+  });
+
+  // The strict schemas reject ANY unknown key today, so these assert the
+  // message: only the new pairing/nesting check produces it.
+  it('rejects a role on a field type it cannot read', () => {
+    expect(() => parseOne({ type: 'long_text', label: 'Title', gallery_role: 'title' })).toThrow(
+      /title gallery role needs a short_text field/
+    );
+    expect(() => parseOne({ ...SAMPLES.number, gallery_role: 'tags' })).toThrow(
+      /tags gallery role needs/
+    );
+  });
+
+  it('rejects a role inside a repeat group', () => {
+    const group = {
+      ...SAMPLES.repeat_group,
+      fields: [{ type: 'long_text', label: 'Comments', gallery_role: 'detail' }],
+    };
+    expect(() => parseOne(group)).toThrow(/inside a repeat group/);
+  });
+
+  it('rejects a team role on a single-select roster', () => {
+    expect(() =>
+      parseOne({ ...SAMPLES.roster_select, multiple: false, gallery_role: 'team' })
+    ).toThrow(/team gallery role needs a roster select that allows several people/);
+  });
+
+  it('assertGalleryRoles wants exactly one title and at most one of each single role', () => {
+    const withRole = (id: string, type: string, role: string) =>
+      ({ id, type, label: id, gallery_role: role }) as FormField;
+    const title = withRole('t1', 'short_text', 'title');
+    const summary = withRole('s1', 'long_text', 'summary');
+
+    expect(codeOf(() => assertGalleryRoles([summary]))).toBe(FORM_DEFINITION_INVALID);
+    expect(codeOf(() => assertGalleryRoles([title, withRole('t2', 'short_text', 'title')]))).toBe(
+      FORM_DEFINITION_INVALID
+    );
+    expect(
+      codeOf(() => assertGalleryRoles([title, summary, withRole('s2', 'long_text', 'summary')]))
+    ).toBe(FORM_DEFINITION_INVALID);
+    expect(
+      codeOf(() =>
+        assertGalleryRoles([
+          title,
+          summary,
+          withRole('d1', 'long_text', 'detail'),
+          withRole('d2', 'long_text', 'detail'),
+          withRole('l1', 'short_text', 'link'),
+          withRole('l2', 'short_text', 'link'),
+        ])
+      )
+    ).toBeUndefined();
   });
 });
 

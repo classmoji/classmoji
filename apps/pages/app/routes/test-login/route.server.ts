@@ -58,13 +58,12 @@ export const loader = async ({ request }: { request: Request }) => {
   try {
     // DB-first lookup: Check if this token is already stored in an account.
     // This avoids GitHub API calls after the first login with each token.
-    let account = await prisma.account.findFirst({
-      where: {
-        provider_id: 'github',
-        access_token: githubToken,
-      },
+    // Random-IV encrypted tokens cannot be compared in a database filter.
+    const accounts = await prisma.account.findMany({
+      where: { provider_id: 'github', access_token: { not: null } },
       include: { user: true },
     });
+    let account = accounts.find(account => account.access_token === githubToken) ?? null;
 
     if (!account) {
       // Token not found - need to call GitHub API to get user info

@@ -41,6 +41,8 @@ export interface MediaRow {
   status: MediaStatus;
   upload_id: string | null;
   uploaded_by: string;
+  gallery_form_id?: string | null;
+  gallery_field_id?: string | null;
   optimise: boolean;
   keep_original: boolean;
   allow_download: boolean;
