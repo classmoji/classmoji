@@ -206,6 +206,8 @@ describe('suggestConfig', () => {
       "Anyone you'd rather not be paired with?",
       'Who would you prefer not to work with?',
       'Who do you not want to work with?',
+      "Anyone you'd rather not be on a team with?",
+      'Who do you not want to be on a team with?',
     ];
     const fields = parseFormDefinition(
       [...labels, ...avoidLabels].map((label, i) => ({
