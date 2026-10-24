@@ -21,6 +21,8 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+vi.mock('../deckThumbnail.service.ts', () => ({ enqueueDeckThumbnail: vi.fn() }));
+
 vi.mock('@classmoji/database', () => ({
   default: () => ({ slide: { update: vi.fn() } }),
 }));

@@ -102,6 +102,7 @@ import {
   formResponseCreateTool,
   formResponseUpdateTool,
 } from './forms.ts';
+import { formGalleryModerateTool, formGalleryQueueTool } from './gallery.ts';
 import { formTeamsGetTool, formTeamsRunTool, formTeamsCreateTool } from './formTeams.ts';
 import { askMojiTools } from './askMoji.ts';
 import {
@@ -341,6 +342,9 @@ export function registerAllTools(): void {
   registerToolDefinition(formResponseGetTool);
   registerToolDefinition(formResponseCreateTool);
   registerToolDefinition(formResponseUpdateTool);
+  // Project gallery moderation (teaching team, no Pro check, as on the web).
+  registerToolDefinition(formGalleryQueueTool);
+  registerToolDefinition(formGalleryModerateTool);
 
   // Team sets on a CLASSROOM form (Pro, checked in-handler like every forms
   // tool). get/run are the forms tier (OWNER+TEACHER): a run is only a
