@@ -414,9 +414,9 @@ const fieldsArg = z
       'identity_question: true (top-level short_text, long_text, number, dropdown, multiselect, ' +
       'switch, opinion_scale) marks a question about the respondent, e.g. gender; response reads ' +
       'omit its answers except form_response_get for one response, on request. exclusive: true ' +
-      '(multiselect options only): that choice can’t be combined with others. options_from: ' +
+      '(multiselect options only): that choice can’t be combined with others. ' +
       'min_selections / max_selections: picks allowed (multiselect, multiple roster_select). ' +
-      '<field id> (top-level dropdown only) copies the options, ids included, of a top-level ' +
+      'options_from: <field id> (top-level dropdown only) copies the options, ids included, of a top-level ' +
       'ranked_choice or dropdown with no options_from, ' +
       'replacing any options sent; to link fields made in one call, give the source a uuid id. ' +
       'identity_question: false and exclusive: false are dropped. ' +
