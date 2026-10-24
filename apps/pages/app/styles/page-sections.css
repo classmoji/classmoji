@@ -169,7 +169,9 @@
   .bn-block-content[data-content-type='heading'][data-checkable='true']:has(
     > .pg-section-check:not([hidden])
   ) {
-  padding-left: 32px;
+  /* !important: a colored heading's own padding (blocknote-overrides.css) is
+     !important too, and would otherwise leave the box on top of the title. */
+  padding-left: 32px !important;
 }
 
 .pg-reader-sections[data-section-checks='inline'] .pg-section-check {
