@@ -748,6 +748,11 @@ export const formUpdateTool: ToolDefinition<FormUpdateArgs> = {
     if (changed.length === 0) {
       throw new ToolError('invalid_params', 'Provide at least one field to update');
     }
+    // One write per call when the gallery flips, so a refused update can never
+    // leave the gallery switched without its audit row.
+    if (args.gallery !== undefined && changed.length > 1) {
+      throw new ToolError('invalid_params', 'Change `gallery` on its own, in a separate call');
+    }
 
     // S1 before any write.
     const form = await loadFormInClassroom(args.form_id, ctx);

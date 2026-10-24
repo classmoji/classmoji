@@ -789,6 +789,19 @@ describe('form_update', () => {
       expect(mocks.auditCreate).not.toHaveBeenCalled();
     });
 
+    it('refuses gallery together with other fields, writing nothing', async () => {
+      const error = await formUpdateTool
+        .handler(
+          { classroom: 'org/w26', form_id: 'form-1', gallery: true, title: 'New' } as never,
+          CTX
+        )
+        .catch(e => e);
+
+      expect((error as ToolError).kind).toBe('invalid_params');
+      expect(mocks.formSetGalleryOrg).not.toHaveBeenCalled();
+      expect(mocks.formUpdate).not.toHaveBeenCalled();
+    });
+
     it('never switches a form of another classroom', async () => {
       mocks.formFindById.mockResolvedValue(FOREIGN_FORM);
 
