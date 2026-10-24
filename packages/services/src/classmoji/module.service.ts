@@ -666,19 +666,19 @@ const isModuleItemDuplicate = (error: unknown): boolean => {
 };
 
 /** Close the gap a departing item leaves behind, so positions stay 0..n-1. */
-const compactItems = async (moduleId: string) => {
-  const prisma = getPrisma();
-  const remaining = await prisma.moduleItem.findMany({
+const compactItemsTx = async (tx: Prisma.TransactionClient, moduleId: string) => {
+  const remaining = await tx.moduleItem.findMany({
     where: { module_id: moduleId, item_type: { notIn: LEGACY_ITEM_TYPES } },
     orderBy: { position: 'asc' },
     select: { id: true },
   });
-  await prisma.$transaction(
-    remaining.map((item, index) =>
-      prisma.moduleItem.update({ where: { id: item.id }, data: { position: index } })
-    )
-  );
+  for (const [index, item] of remaining.entries()) {
+    await tx.moduleItem.update({ where: { id: item.id }, data: { position: index } });
+  }
 };
+
+const compactItems = (moduleId: string) =>
+  getPrisma().$transaction(tx => compactItemsTx(tx, moduleId));
 
 /**
  * Move a content item into `toModuleId` and give that module the ordering the
@@ -722,6 +722,76 @@ export const moveItemToModule = async (
   await reorderItems(toModuleId, orderedItemIds, classroomId);
   if (fromModuleId !== toModuleId) await compactItems(fromModuleId);
 };
+
+/**
+ * Move a content item to the end of `toModuleId`, closing the gap in the
+ * module it left. The item row moves, so the page, slide or form keeps its
+ * single place in the curriculum instead of being added twice. Both module
+ * rows are locked in id order, as `moveToModuleEnd` for assignments locks
+ * them, so concurrent moves each land on their own position.
+ */
+export const moveItemToModuleEnd = async (
+  moduleItemId: string,
+  toModuleId: string,
+  classroomId: string
+) => {
+  await assertModuleInClassroom(toModuleId, classroomId);
+
+  try {
+    return await getPrisma().$transaction(async tx => {
+      const item = await tx.moduleItem.findFirst({
+        where: { id: moduleItemId, module: { classroom_id: classroomId } },
+        select: { module_id: true, item_type: true },
+      });
+      if (!item) throw new Error('Module item not found in classroom');
+      if (item.item_type === 'REPOSITORY') throw new Error('Repository items cannot be moved');
+      if (item.item_type === 'QUIZ') throw new Error(QUIZ_ITEM_REFUSAL);
+      const fromModuleId = item.module_id;
+      if (fromModuleId === toModuleId) throw new Error('That item is already in this module');
+
+      for (const moduleId of [fromModuleId, toModuleId].sort()) {
+        await tx.$queryRaw`SELECT id FROM modules WHERE id = ${moduleId} FOR UPDATE`;
+      }
+
+      const last = await tx.moduleItem.findFirst({
+        where: { module_id: toModuleId },
+        orderBy: { position: 'desc' },
+        select: { position: true },
+      });
+      const moved = await tx.moduleItem.update({
+        where: { id: moduleItemId },
+        data: { module_id: toModuleId, position: last ? last.position + 1 : 0 },
+        select: { id: true, item_type: true, position: true },
+      });
+      await compactItemsTx(tx, fromModuleId);
+
+      return { ...moved, from_module_id: fromModuleId };
+    });
+  } catch (error: unknown) {
+    if (isModuleItemDuplicate(error)) throw new Error('That module already has this item');
+    throw error;
+  }
+};
+
+/**
+ * The other modules of the classroom that already list this page, slide or
+ * form, so adding it again can say it is now in two places.
+ */
+export const findOtherModulesHolding = async (
+  type: ContentItemType,
+  targetId: string,
+  exceptModuleId: string,
+  classroomId: string
+) =>
+  getPrisma().module.findMany({
+    where: {
+      classroom_id: classroomId,
+      id: { not: exceptModuleId },
+      items: { some: { item_type: type, [ITEM_TYPE_COLUMN[type]]: targetId } },
+    },
+    orderBy: { position: 'asc' },
+    select: { id: true, title: true },
+  });
 
 /**
  * Persist a new ordering for a classroom's modules. `orderedModuleIds` is the
