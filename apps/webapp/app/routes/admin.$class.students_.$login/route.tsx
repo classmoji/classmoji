@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { ClassmojiService } from '@classmoji/services';
 import {
+  gitUsername,
   calculateAssignmentGrade,
   calculateGrades,
   calculateLetterGrade,
@@ -65,6 +66,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     letterGradeMappings,
     tokenBalance,
     quizzesVisible,
+    studentTeams,
   ] = await Promise.all([
     ClassmojiService.assignment.listForClassroom(classroom.id, { publishedOnly: true }),
     // Individual repos AND team repos: a team member's submission row hangs
@@ -79,6 +81,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     // total agrees with theirs. A failed lookup errors the page rather than
     // silently dropping quizzes from the total.
     ClassmojiService.entitlement.quizzesVisibleOrThrow(classroom.id),
+    // The teams this student is in, in THIS classroom only.
+    ClassmojiService.team.findTeamsForStudentInClassroom(classroom.id, studentId),
   ]);
 
   // Where quizzes are hidden their assignments are no row here, and no attempt
@@ -213,6 +217,22 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     finalGradesReleased: settingsRow?.final_grades_released === true,
     letterGradeMappings,
     tokenBalance,
+    // Each team with its set, teammates (not the student) and repositories.
+    // Logins are the classroom provider's username, as everywhere in a class.
+    teams: studentTeams.map(team => ({
+      id: team.id,
+      name: team.name,
+      slug: team.slug,
+      teamSets: team.teamSets.map(s => s.name),
+      teammates: team.members
+        .filter(member => member.id !== studentId)
+        .map(member => ({
+          id: member.id,
+          name: member.name,
+          login: gitUsername(member, classroom.git_organization?.provider),
+        })),
+      repositories: team.repositories,
+    })),
   };
 };
 
@@ -429,6 +449,7 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
     finalGradesReleased,
     letterGradeMappings,
     tokenBalance,
+    teams,
   } = loaderData;
   const repoAssignments = repoAssignmentRows as RepoAssignment[];
   const navigate = useNavigate();
@@ -839,6 +860,107 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
           </span>
         </div>
       </div>
+
+      {/* Which team(s) the student is in: one row per team, like the
+          assignment rows below. Editing is the owner's (the Teams page). */}
+      <section aria-labelledby="teams-heading" className="flex flex-col gap-2 mb-2">
+        <h2
+          id="teams-heading"
+          className="text-xs font-semibold uppercase tracking-wide text-ink-3 pt-3 pb-1"
+        >
+          Teams
+        </h2>
+        {teams.length === 0 ? (
+          <div className="px-4 py-3 rounded-xl bg-panel ring-1 ring-line text-sm text-ink-3">
+            Not in any team
+          </div>
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {teams.map(team => {
+              const repoWeb = gitWeb(classroom.git);
+              return (
+                <li
+                  key={team.id}
+                  className="grid grid-cols-1 gap-x-4 gap-y-1 px-4 py-3 rounded-xl bg-panel ring-1 ring-line sm:grid-cols-[minmax(0,14rem)_minmax(0,11rem)_minmax(0,1fr)_minmax(0,14rem)_3rem] sm:items-center"
+                >
+                  <span className="font-semibold text-ink-1 truncate">{team.name}</span>
+                  <span className="flex flex-wrap gap-1">
+                    {team.teamSets.length > 0 ? (
+                      team.teamSets.map(set => (
+                        <span
+                          key={set}
+                          className="rounded-full bg-sky-bg px-2 py-0.5 text-xs text-sky-ink truncate"
+                        >
+                          {set}
+                        </span>
+                      ))
+                    ) : (
+                      <span className="text-xs text-ink-3">No team set</span>
+                    )}
+                  </span>
+                  <span className="text-sm text-ink-2 min-w-0">
+                    {team.teammates.length === 0 ? (
+                      <span className="text-ink-3">No teammates yet</span>
+                    ) : (
+                      <>
+                        With{' '}
+                        {team.teammates.map((mate, i) => (
+                          <span key={mate.id}>
+                            {i > 0 && ', '}
+                            {mate.login ? (
+                              <Link
+                                to={`${base}/students/${mate.login}`}
+                                className="text-sky-600 hover:underline"
+                              >
+                                {mate.name ?? mate.login}
+                              </Link>
+                            ) : (
+                              (mate.name ?? 'Unnamed')
+                            )}
+                          </span>
+                        ))}
+                      </>
+                    )}
+                  </span>
+                  <span className="text-sm min-w-0">
+                    {team.repositories.length === 0 ? (
+                      <span className="text-ink-3">No repository yet</span>
+                    ) : (
+                      team.repositories.map(repo => (
+                        <span key={repo.name} className="block truncate">
+                          {classroom.gitOrgLogin ? (
+                            <a
+                              href={repoWeb.repo(repo.name)}
+                              target="_blank"
+                              rel="noreferrer"
+                              title={repo.title ?? undefined}
+                              className="text-sky-600 hover:underline"
+                            >
+                              {repo.name} ↗
+                            </a>
+                          ) : (
+                            repo.name
+                          )}
+                        </span>
+                      ))
+                    )}
+                  </span>
+                  <span className="sm:text-right">
+                    {isOwner && (
+                      <Link
+                        to={`/admin/${classroom.slug}/teams/${team.slug}/edit`}
+                        className="text-xs font-medium text-sky-600 hover:underline"
+                      >
+                        Edit
+                      </Link>
+                    )}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
 
       <div className="flex flex-col gap-2 mb-5">
         {sections.length === 0 && (
