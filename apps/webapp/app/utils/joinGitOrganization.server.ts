@@ -182,6 +182,13 @@ export const joinGitOrganization = async ({
         githubUserId: gitAccountId(identity, org.provider),
         gitOrganizationId: org.id,
       });
+      // Accept this membership here too, so the class picker they land on next
+      // shows their role, not "Pending invite" until the task gets to it (the
+      // task sets the same flag; its job is the repos). After the trigger, so a
+      // failed trigger leaves them pending and able to try again.
+      await ClassmojiService.classroomMembership.updateById(membership.id, {
+        has_accepted_invite: true,
+      });
       await auditJoin('added_to_team');
       return {
         ok: true,
