@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   auditCreate: vi.fn(),
   taskTrigger: vi.fn(),
   getTeam: vi.fn(),
-  isMember: vi.fn(),
+  membershipState: vi.fn(),
   addTeamMember: vi.fn(),
   getUserByLogin: vi.fn(),
   inviteToOrganization: vi.fn(),
@@ -27,7 +27,7 @@ vi.mock('@classmoji/database', async () => ({
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: { audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) } },
   getGitProvider: () => ({
-    isUserMemberOfOrganization: (...a: unknown[]) => mocks.isMember(...a),
+    orgMembershipState: (...a: unknown[]) => mocks.membershipState(...a),
     addTeamMember: (...a: unknown[]) => mocks.addTeamMember(...a),
     getUserByLogin: (...a: unknown[]) => mocks.getUserByLogin(...a),
     inviteToOrganization: (...a: unknown[]) => mocks.inviteToOrganization(...a),
@@ -52,10 +52,10 @@ const classroom = (provider: 'GITHUB' | 'GITLAB') => ({
   git_organization: { id: 'org-1', provider, login: 'cs10-org' } as never,
 });
 
-const run = (provider: 'GITHUB' | 'GITLAB' = 'GITHUB') =>
+const run = (provider: 'GITHUB' | 'GITLAB' = 'GITHUB', role = 'STUDENT') =>
   joinGitOrganization({
     userId: 'user-a',
-    membership: { id: 'mem-a', role: 'STUDENT' },
+    membership: { id: 'mem-a', role },
     classroom: classroom(provider),
     tool: 'web:roster.join_link',
   });
@@ -70,7 +70,7 @@ beforeEach(() => {
 describe('joinGitOrganization', () => {
   it('invites to the Github org and points at the invitation page', async () => {
     mocks.userFindUnique.mockResolvedValue(githubIdentity);
-    mocks.isMember.mockResolvedValue(false);
+    mocks.membershipState.mockResolvedValue('none');
 
     const result = await run();
 
@@ -91,7 +91,7 @@ describe('joinGitOrganization', () => {
 
   it('adds an existing org member to the team and activates, with no invitation page', async () => {
     mocks.userFindUnique.mockResolvedValue(githubIdentity);
-    mocks.isMember.mockResolvedValue(true);
+    mocks.membershipState.mockResolvedValue('active');
 
     const result = await run();
 
@@ -105,6 +105,40 @@ describe('joinGitOrganization', () => {
     expect(result.ok && result.invitationUrl).toBeUndefined();
   });
 
+  it.each([
+    ['STUDENT', 'STUDENT'],
+    ['ASSISTANT', 'ASSISTANT'],
+    ['TEACHER', 'TEACHER'],
+  ])('puts a %s in the team for their own role', async role => {
+    mocks.userFindUnique.mockResolvedValue(githubIdentity);
+    mocks.membershipState.mockResolvedValue('active');
+
+    await run('GITHUB', role);
+
+    expect(mocks.getTeam).toHaveBeenCalledWith(
+      expect.anything(),
+      'cs10-org',
+      expect.objectContaining({ slug: 'cs10' }),
+      role
+    );
+  });
+
+  it('sends nothing while Github still holds an open invitation, and writes no row', async () => {
+    mocks.userFindUnique.mockResolvedValue(githubIdentity);
+    mocks.membershipState.mockResolvedValue('pending');
+
+    const result = await run();
+
+    expect(mocks.inviteToOrganization).not.toHaveBeenCalled();
+    expect(mocks.getTeam).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      ok: true,
+      outcome: 'already_invited',
+      invitationUrl: 'https://github.com/orgs/cs10-org/invitation',
+    });
+  });
+
   it('asks a student with no account on the course provider to connect one', async () => {
     mocks.userFindUnique.mockResolvedValue(githubIdentity);
     const result = await run('GITLAB');
@@ -114,7 +148,7 @@ describe('joinGitOrganization', () => {
 
   it('turns a Github error into a failure the student can read, and audits it', async () => {
     mocks.userFindUnique.mockResolvedValue(githubIdentity);
-    mocks.isMember.mockResolvedValue(false);
+    mocks.membershipState.mockResolvedValue('none');
     mocks.inviteToOrganization.mockRejectedValue(
       Object.assign(new Error('Forbidden'), { status: 403 })
     );

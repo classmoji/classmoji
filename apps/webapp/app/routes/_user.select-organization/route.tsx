@@ -23,6 +23,7 @@ import useStore from '~/store';
 import getPrisma from '@classmoji/database';
 import { tasks } from '@trigger.dev/sdk';
 import { joinGitOrganization } from '~/utils/joinGitOrganization.server';
+import { autoSendGithubInvites } from './autoGithubInvites.server';
 import type { Route } from './+types/route';
 import type { AppUser, MembershipOrganization, MembershipWithOrganization } from '~/types';
 import {
@@ -204,6 +205,18 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       console.error('Failed to activate Gitlab course memberships:', error);
     }
 
+    // Github classes this person was added to as a student (roster, or an
+    // invite link they did not finish) or as staff: send the org invite without
+    // a click, or find the one Github
+    // still holds, so each card can link straight to Github's accept page.
+    // Github is asked each load (no stored flag), which also re-sends an
+    // invitation that expired. Not during impersonation, like the Gitlab step.
+    const acceptUrls = await autoSendGithubInvites(
+      typedUser.id,
+      !!(authData.session as { session?: { impersonatedBy?: string | null } } | undefined)?.session
+        ?.impersonatedBy
+    );
+
     // Runs after the invite claim above so a freshly-claimed student membership
     // counts toward the audience filter. Never asked during impersonation: a
     // platform admin must not answer on the user's behalf.
@@ -282,6 +295,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       surveyQuestions,
       inviteEmailMismatch,
       linkError,
+      acceptUrls,
     };
   } else {
     return redirect('/registration');
@@ -446,6 +460,7 @@ const SelectOrganization = ({
     surveyQuestions,
     inviteEmailMismatch,
     linkError,
+    acceptUrls,
   } = loaderData;
   const { user } = useUser();
   const { classroom, setClassroom, startFullTour } = useStore();
@@ -659,10 +674,42 @@ const SelectOrganization = ({
       <ActiveClassLimitNotice allowance={allowance} />
     ) : null;
 
+  // Github invites already sent (by the loader) and still to accept: say so up
+  // top, with the one action, so nobody has to guess the card is clickable.
+  const toAccept = Array.from(
+    new Map(
+      memberList
+        .filter(m => !m.has_accepted_invite && acceptUrls?.[m.organization.id])
+        .map(m => [m.organization.id, m.organization] as const)
+    ).values()
+  );
+  const acceptNotice =
+    toAccept.length > 0 ? (
+      <div className="flex flex-col gap-2">
+        {toAccept.map(org => (
+          <div
+            key={org.id}
+            className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg bg-panel ring-1 ring-line px-4 py-2.5"
+          >
+            <span className="inline-flex text-gray-900 dark:text-gray-100">
+              <IconGithub size={18} />
+            </span>
+            <div className="flex-1 min-w-[12rem] text-sm font-medium text-ink-0">
+              Accept your Github invite to finish joining {org.name || org.login}
+            </div>
+            <a href={acceptUrls![org.id]} className="btn btn-primary btn-sm no-underline">
+              Accept on Github
+            </a>
+          </div>
+        ))}
+      </div>
+    ) : null;
+
   const notice =
-    joinFailureBanner || connectNotice || limitNotice ? (
+    joinFailureBanner || acceptNotice || connectNotice || limitNotice ? (
       <div className="flex flex-col gap-2">
         {joinFailureBanner}
+        {acceptNotice}
         {limitNotice}
         {connectNotice}
       </div>
@@ -705,6 +752,12 @@ const SelectOrganization = ({
     // when a user has multiple memberships for the same classroom (e.g. OWNER
     // + STUDENT in a dev sandbox), and would always pick the first match.
     if (c.role === 'PENDING INVITE') {
+      // The Github invite is already out (sent by the loader): the card goes
+      // straight to Github to accept it, no dialog in between.
+      if (c.acceptUrl) {
+        window.location.assign(c.acceptUrl);
+        return;
+      }
       const membership = memberList.find(
         m => m.organization.id === c.organization.id && !m.has_accepted_invite
       );
@@ -795,7 +848,11 @@ const SelectOrganization = ({
         classes={classes
           .filter(c => !c.is_example)
           .map(c => {
-            if (c.role !== 'PENDING INVITE' || user.logins?.[c.provider]) return c;
+            if (c.role !== 'PENDING INVITE') return c;
+            // The Github invite went out on its own (loader): one click to Github.
+            const acceptUrl = acceptUrls?.[c.classroomId];
+            if (acceptUrl) return { ...c, acceptUrl };
+            if (user.logins?.[c.provider]) return c;
             // Gitlab has no invite to accept: connecting Gitlab is what lets
             // them in, so the card shows their real role, not "Pending invite".
             return c.provider === 'GITLAB'

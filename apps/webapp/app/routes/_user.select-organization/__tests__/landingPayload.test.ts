@@ -150,6 +150,8 @@ describe('select-organization payload', () => {
 
     expect(Object.keys(data).sort()).toEqual(
       [
+        // Classroom id -> Github's accept page, for this viewer's own invites.
+        'acceptUrls',
         // The viewer's own Free-plan allowance (their classes only).
         'activeClassAllowance',
         'gitMode',

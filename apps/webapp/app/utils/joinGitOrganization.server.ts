@@ -21,7 +21,12 @@ import { describeInviteFailure } from '~/routes/_user.select-organization/invite
 export type GitJoinResult =
   | {
       ok: true;
-      outcome: 'joined' | 'added_to_team' | 'invited';
+      /**
+       * `already_invited`: Github still holds an open invitation, so nothing
+       * was sent and no audit row written (the class picker asks on every
+       * load).
+       */
+      outcome: 'joined' | 'added_to_team' | 'invited' | 'already_invited';
       message: string;
       invitationUrl?: string;
     }
@@ -147,14 +152,27 @@ export const joinGitOrganization = async ({
         login?: string;
       }
     );
-    const team = await ensureClassroomTeam(gitProvider, org.login, classroom, 'STUDENT');
-    // If the student is ALREADY a member of the GitHub org (common when migrating
-    // from GitHub Classroom), GitHub rejects a fresh org invitation with a 422,
-    // which used to error the whole join. In that case skip the invite and add them
-    // straight to the class team — they're already in the org.
-    const alreadyMember = await gitProvider.isUserMemberOfOrganization(org.login, studentLogin);
+    // Github is the record of where the student stands. An ACTIVE member
+    // (common when migrating from Github Classroom) would get a 422 on a fresh
+    // invitation, so they go straight onto the class team. A PENDING one already
+    // has an open invitation: sending another is refused too, and they only
+    // need to accept it. Anyone else gets one, including after an invitation
+    // expired (Github drops them after 7 days).
+    const state = await gitProvider.orgMembershipState(org.login, studentLogin);
 
-    if (alreadyMember) {
+    if (state === 'pending') {
+      return {
+        ok: true,
+        outcome: 'already_invited',
+        message: 'Your invite is waiting. Accept it on Github to get your repositories.',
+        invitationUrl: githubInvitationUrl(org.login),
+      };
+    }
+
+    // The membership's own team: students in the student team, every staff
+    // role in the staff team (it used to be the student team for everyone).
+    const team = await ensureClassroomTeam(gitProvider, org.login, classroom, membership.role);
+    if (state === 'active') {
       await gitProvider.addTeamMember(org.login, team.slug, studentLogin);
       // No `member_added` webhook fires for users already in the org, so activate the
       // membership here (flip has_accepted_invite + provision repos) — otherwise they

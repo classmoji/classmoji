@@ -255,6 +255,11 @@ export class GitProvider {
     throw new Error('removeFromOrganization() must be implemented by subclass');
   }
 
+  /** Github only: `active`, `pending` (an open invitation) or `none`. */
+  async orgMembershipState(org: string, username: string): Promise<'active' | 'pending' | 'none'> {
+    throw new Error('orgMembershipState() must be implemented by subclass');
+  }
+
   // ─── Teams ─────────────────────────────────────────────────────────────────
   async createTeam(org: string, name: string): Promise<{ id: number; slug: string; name: string }> {
     throw new Error('createTeam() must be implemented by subclass');
