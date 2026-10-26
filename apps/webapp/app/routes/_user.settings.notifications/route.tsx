@@ -30,6 +30,7 @@ const TA_PREFS: PrefRow[] = [
 
 const FEEDBACK_PREFS: PrefRow[] = [
   { key: 'email_feedback_status_changed', label: 'A feedback post you follow changes status' },
+  { key: 'email_feedback_reply', label: 'Someone replies to your feedback post' },
 ];
 
 const ALLOWED_KEYS = new Set<EmailPrefKey>(

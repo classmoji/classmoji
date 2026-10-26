@@ -74,7 +74,7 @@ const POSTS: Row[] = [
     id: POST_A,
     title: 'Export grades to Canvas',
     body: 'Please let us export grades.',
-    category: 'INTEGRATION',
+    category: 'FEATURE',
     status: null,
     author_id: USER_A,
     is_anonymous: true,
@@ -184,6 +184,7 @@ const postWithThread = (post: Row) => ({
     ...withAuthor(c),
     replies: COMMENTS.filter(r => r.parent_id === c.id).map(withAuthor),
   })),
+  updates: [],
 });
 
 function installDatabase(): void {

@@ -36,6 +36,7 @@ enum NotificationType {
   TA_GRADING_ASSIGNED
   TA_REGRADE_ASSIGNED
   FEEDBACK_STATUS_CHANGED
+  FEEDBACK_REPLY
 }
 
 // How a Repository is provisioned: one git repo per student, or one per team.
@@ -379,7 +380,9 @@ model User {
   team_set_runs_created         TeamSetRun[]
   gitlab_connection             GitLabConnection?
   gitlab_instances_created      GitLabInstance[]
-  feedback_posts                FeedbackPost[]
+  feedback_posts                FeedbackPost[]            @relation("FeedbackPostAuthor")
+  feedback_posts_merged         FeedbackPost[]            @relation("FeedbackDuplicatedBy")
+  feedback_updates              FeedbackUpdate[]
   feedback_votes                FeedbackVote[]
   feedback_comments             FeedbackComment[]
   feedback_comment_votes        FeedbackCommentVote[]
@@ -2083,6 +2086,7 @@ model NotificationPreference {
   email_ta_grading_assigned         Boolean  @default(true)
   email_ta_regrade_assigned         Boolean  @default(true)
   email_feedback_status_changed     Boolean  @default(true)
+  email_feedback_reply              Boolean  @default(true)
   created_at                        DateTime @default(now())
   updated_at                        DateTime @default(now()) @updatedAt
 
@@ -2868,44 +2872,66 @@ model CollabDoc {
 
 /// Where a post sits on the roadmap. Null on the post means it has not been
 /// triaged yet and stays off the roadmap.
+/// Each post type has its own statuses (FEEDBACK_STATUSES_BY_CATEGORY in
+/// feedback.service.ts): features IN_REVIEW → COMPLETED (the roadmap), bugs
+/// FIXED, questions ANSWERED.
 enum FeedbackStatus {
   IN_REVIEW
   PLANNED
   IN_PROGRESS
   COMPLETED
+  FIXED
+  ANSWERED
 }
 
 enum FeedbackCategory {
   FEATURE
   BUG
-  INTEGRATION
+  QUESTION
 }
 
 model FeedbackPost {
-  id                String           @id @default(uuid())
-  title             String
-  body              String
-  category          FeedbackCategory @default(FEATURE)
-  status            FeedbackStatus?
+  id                  String           @id @default(uuid())
+  title               String
+  body                String
+  category            FeedbackCategory @default(FEATURE)
+  status              FeedbackStatus?
   /// Null once the author's account is deleted; the request itself stays.
-  author_id         String?
+  author_id           String?
   /// Shown as "Anonymous" on the board. The author is still recorded, so they
   /// can delete it and hear about status changes; it is never shown.
-  is_anonymous      Boolean          @default(false)
+  is_anonymous        Boolean          @default(false)
   /// Kept in step with feedback_votes / feedback_comments by the service, so the
   /// board can sort without counting.
-  vote_count        Int              @default(0)
-  comment_count     Int              @default(0)
+  vote_count          Int              @default(0)
+  comment_count       Int              @default(0)
   /// When the status last changed; orders "Recently shipped".
-  status_changed_at DateTime?
-  created_at        DateTime         @default(now())
-  updated_at        DateTime         @default(now()) @updatedAt
+  status_changed_at   DateTime?
+  /// Set when an admin merged this post into another: its votes, follows and
+  /// comments moved there, it leaves every list, and its link redirects.
+  duplicate_of_id     String?
+  duplicated_at       DateTime?
+  duplicated_by_id    String?
+  /// A bug report's fields (the Github bug template). Null on other types and
+  /// on bugs posted before the form had them; `body` always holds a readable
+  /// version, so search and older clients keep working.
+  bug_what_happened   String?
+  bug_expected        String?
+  bug_steps           String?
+  bug_additional_info String?
+  created_at          DateTime         @default(now())
+  updated_at          DateTime         @default(now()) @updatedAt
 
-  author   User?             @relation(fields: [author_id], references: [id], onDelete: SetNull)
-  votes    FeedbackVote[]
-  comments FeedbackComment[]
-  follows  FeedbackFollow[]
+  author        User?             @relation("FeedbackPostAuthor", fields: [author_id], references: [id], onDelete: SetNull)
+  duplicate_of  FeedbackPost?     @relation("FeedbackDuplicates", fields: [duplicate_of_id], references: [id], onDelete: SetNull)
+  duplicates    FeedbackPost[]    @relation("FeedbackDuplicates")
+  duplicated_by User?             @relation("FeedbackDuplicatedBy", fields: [duplicated_by_id], references: [id], onDelete: SetNull)
+  votes         FeedbackVote[]
+  comments      FeedbackComment[]
+  follows       FeedbackFollow[]
+  updates       FeedbackUpdate[]
 
+  @@index([duplicate_of_id])
   @@index([status])
   @@index([vote_count])
   @@index([created_at])
@@ -2925,6 +2951,25 @@ model FeedbackVote {
   @@unique([post_id, user_id])
   @@index([user_id])
   @@map("feedback_votes")
+}
+
+/// A public note an admin wrote when changing a post's status ("Planned for
+/// next month…"), shown as a timeline on the post and sent to its followers.
+model FeedbackUpdate {
+  id          String          @id @default(uuid())
+  post_id     String
+  /// Null once the admin's account is gone; shown as "Classmoji team" anyway.
+  actor_id    String?
+  from_status FeedbackStatus?
+  to_status   FeedbackStatus?
+  note        String
+  created_at  DateTime        @default(now())
+
+  post  FeedbackPost @relation(fields: [post_id], references: [id], onDelete: Cascade)
+  actor User?        @relation(fields: [actor_id], references: [id], onDelete: SetNull)
+
+  @@index([post_id, created_at])
+  @@map("feedback_updates")
 }
 
 /// A comment, or a reply when `parent_id` is set. Replies are one level deep:

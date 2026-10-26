@@ -33,9 +33,9 @@ export function PostListItem({ post, signedIn }: { post: FeedbackPostSummary; si
             {post.title}
           </Link>
         </h3>
-        {post.body && (
+        {(post.bug_what_happened || post.body) && (
           <p className="mt-1.5 line-clamp-2 text-[13px] leading-relaxed text-ink-2">
-            {plainText(post.body)}
+            {plainText(post.bug_what_happened || post.body)}
           </p>
         )}
         <div className="mt-3 flex items-center gap-2 text-[12px]">

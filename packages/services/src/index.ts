@@ -535,12 +535,19 @@ export {
   FeedbackNotFoundError,
   FEEDBACK_STATUSES,
   FEEDBACK_CATEGORIES,
+  FEEDBACK_STATUSES_BY_CATEGORY,
+  ROADMAP_STATUSES,
   FEEDBACK_STATUS_LABELS,
+  isStatusForCategory,
+  BUG_SECTION_LABELS,
+  type BugReportFields,
+  type VoterRole,
   FEEDBACK_RATE_LIMITS,
   isFeedbackStatus,
   isFeedbackCategory,
   type FeedbackSort,
   type FeedbackRateKind,
+  type RoadmapStatus,
 } from './classmoji/feedback.service.ts';
 
 // Fly certificate automation for class-site custom domains. Every method throws
