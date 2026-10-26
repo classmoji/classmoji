@@ -3,7 +3,7 @@ import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
 import { Button, Form, Input, Spin, Card, Alert, Space } from 'antd';
 import { redirect, useFetcher, useNavigate } from 'react-router';
 import { UserOutlined, MailOutlined, GithubOutlined, CheckCircleFilled } from '@ant-design/icons';
-import { IconInfoCircle } from '@tabler/icons-react';
+import { IconId, IconInfoCircle } from '@tabler/icons-react';
 
 import type { Route } from './+types/route';
 import { Logo } from '@classmoji/ui-components';
@@ -469,6 +469,22 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
                   />
                 </Form.Item>
 
+                {/* School ID: optional; instructors may use it to match grades with
+                    the registrar, and it can be added later in Settings. */}
+                <Form.Item
+                  label={
+                    <span className="flex items-center gap-2 font-medium text-gray-700 dark:text-gray-300 text-sm">
+                      <IconId size={14} />
+                      School ID
+                      <span className="font-normal text-gray-400">(optional)</span>
+                    </span>
+                  }
+                  name="school_id"
+                  className="mb-6"
+                >
+                  <Input placeholder="Enter your school ID" maxLength={64} />
+                </Form.Item>
+
                 {/* Submit Button */}
                 <Button
                   className="w-full h-10 text-sm font-medium !text-white"
@@ -579,6 +595,10 @@ export const action = async ({ request }: Route.ActionArgs) => {
       name: formData.name,
       email,
       emailVerified: true,
+      // Optional: left as it is when the field was left empty.
+      ...(typeof formData.school_id === 'string' && formData.school_id.trim()
+        ? { school_id: formData.school_id.trim() }
+        : {}),
     },
   });
   const hasSubscription = await getPrisma().subscription.count({ where: { user_id: user.id } });
