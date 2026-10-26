@@ -343,7 +343,7 @@ export default function FeedbackPostPage() {
               }}
             >
               <label htmlFor="status-note" className="text-[12px] font-medium text-ink-2">
-                Public note{nextStatus ? ' (required)' : ''}
+                Public note (optional)
               </label>
               <textarea
                 id="status-note"

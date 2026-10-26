@@ -749,30 +749,24 @@ export const setFollow = (postId: string, userId: string, following: boolean) =>
 /**
  * Moves a post to a status (null takes it off the roadmap) and tells its
  * followers, except whoever made the change. Voters follow automatically, so
- * this reaches every voter who has not unfollowed. With `note` (required when
- * `requireNote`, the admin path) the change is recorded as a public update on
- * the post, and the note goes with the notification. Notifying never fails
- * the update.
+ * this reaches every voter who has not unfollowed. With an optional `note`
+ * the change is recorded as a public update on the post, and the note goes
+ * with the notification. Notifying never fails the update.
  */
 export const setStatus = async ({
   postId,
   status,
   actorId,
   note,
-  requireNote = false,
 }: {
   postId: string;
   status: FeedbackStatus | null;
   actorId: string;
   note?: string | null;
-  requireNote?: boolean;
 }) => {
   if (status !== null && !isFeedbackStatus(status))
     throw new FeedbackValidationError('Unknown status.');
   const text = cleanBody(note ?? '', LIMITS.note, false, 'note');
-  if (requireNote && status !== null && !text) {
-    throw new FeedbackValidationError('Write a short note: followers get it with the update.');
-  }
   const prisma = getPrisma();
   const before = await prisma.feedbackPost.findUnique({
     where: { id: postId },

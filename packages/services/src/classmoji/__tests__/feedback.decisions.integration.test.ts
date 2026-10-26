@@ -132,16 +132,11 @@ describe.skipIf(!RUN)('feedback decisions (integration)', () => {
     const idea = await post(alice, 'Canvas sync');
     await feedback.setPostVote(idea, bob, true); // voting follows
 
-    await expect(
-      feedback.setStatus({ postId: idea, status: 'PLANNED', actorId: admin, requireNote: true })
-    ).rejects.toBeInstanceOf(feedback.FeedbackValidationError);
-
     await feedback.setStatus({
       postId: idea,
       status: 'PLANNED',
       actorId: admin,
       note: 'Planned for next month.',
-      requireNote: true,
     });
     const full = await feedback.getPost(idea);
     expect(full?.updates.map(u => [u.to_status, u.note])).toEqual([
@@ -155,6 +150,14 @@ describe.skipIf(!RUN)('feedback decisions (integration)', () => {
     });
     expect(notes.map(n => n.user_id).sort()).toEqual([alice, bob].sort());
     expect((notes[0].metadata as { note?: string }).note).toBe('Planned for next month.');
+  });
+
+  it('changes status without a note, recording no public update', async () => {
+    const idea = await post(alice, 'Dark mode for slides');
+    await feedback.setStatus({ postId: idea, status: 'IN_PROGRESS', actorId: admin });
+    const full = await feedback.getPost(idea);
+    expect(full?.status).toBe('IN_PROGRESS');
+    expect(full?.updates).toEqual([]);
   });
 
   it("notifies a post's author of someone else's reply, never of their own", async () => {

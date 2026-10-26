@@ -80,7 +80,7 @@ describe('admin-only actions', () => {
     expect(mocks.markDuplicate).not.toHaveBeenCalled();
   });
 
-  it('always asks the service for a note on an admin status change', async () => {
+  it('passes an admin status change and its optional note to the service', async () => {
     mocks.admins = ['user-a'];
     await post({ intent: 'set-status', postId: 'p', status: 'PLANNED', note: 'Soon' });
     expect(mocks.setStatus).toHaveBeenCalledWith({
@@ -88,7 +88,6 @@ describe('admin-only actions', () => {
       status: 'PLANNED',
       actorId: 'user-a',
       note: 'Soon',
-      requireNote: true,
     });
   });
 
