@@ -185,8 +185,9 @@ export const listTeamsTool = mirrorResourceTool({
   // description IS the contract the client reasons about. When the resource's
   // policy changes, change this string too.
   description:
-    'Teams in the classroom with member identities (id, name, login — no contact PII). Students ' +
-    'see the teams they belong to, and only those; the teaching team sees every team.',
+    'Teams in the classroom with member identities (id, name, login — no contact PII), the team ' +
+    'sets each belongs to (team_sets) and its repositories. Students see the teams they belong ' +
+    'to, and only those; the teaching team sees every team.',
 });
 
 export const listReposTool = mirrorResourceTool({
