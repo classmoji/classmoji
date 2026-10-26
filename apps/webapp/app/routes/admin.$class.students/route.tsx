@@ -4,12 +4,13 @@ import invariant from 'tiny-invariant';
 import { tasks } from '@trigger.dev/sdk';
 import { useState, useMemo } from 'react';
 import { Button } from 'antd';
-import { PlusCircleOutlined } from '@ant-design/icons';
+import { LinkOutlined, PlusCircleOutlined } from '@ant-design/icons';
 
 import { buildRemoveUserPayload, ClassmojiService } from '@classmoji/services';
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import { gitUsername } from '@classmoji/utils';
 import StudentsTable from './StudentsTable';
+import InviteLinkModal from './InviteLinkModal';
 import { ActionTypes } from '~/constants';
 import { waitForRunCompletion } from '~/utils/helpers';
 import {
@@ -133,17 +134,23 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       : {}),
   }));
 
+  // The invite link's code is as good as an invitation, so only the people
+  // who may manage the roster receive it.
+  const joinLink = canManage ? await ClassmojiService.joinLink.getJoinLink(classroom.id) : null;
+
   return {
     students: rosterStudents,
     classroom: classroomForClient(classroom),
     invitations: rosterInvitations,
     isOwner,
     canManage,
+    joinLink,
   };
 };
 
 const StudentsScreen = ({ loaderData }: Route.ComponentProps) => {
-  const { students, classroom, invitations, isOwner, canManage } = loaderData;
+  const { students, classroom, invitations, isOwner, canManage, joinLink } = loaderData;
+  const [inviteLinkOpen, setInviteLinkOpen] = useState(false);
   const isGitLab = classroom.git_organization?.provider === 'GITLAB';
   const { class: classSlug } = useParams();
   const navigate = useNavigate();
@@ -197,6 +204,12 @@ const StudentsScreen = ({ loaderData }: Route.ComponentProps) => {
             />
           </span>
 
+          {canManage && joinLink && (
+            <Button icon={<LinkOutlined />} onClick={() => setInviteLinkOpen(true)}>
+              Invite link
+            </Button>
+          )}
+
           {canManage && (
             <Button
               icon={<PlusCircleOutlined />}
@@ -209,6 +222,15 @@ const StudentsScreen = ({ loaderData }: Route.ComponentProps) => {
           )}
         </div>
       </div>
+
+      {canManage && joinLink && (
+        <InviteLinkModal
+          open={inviteLinkOpen}
+          onClose={() => setInviteLinkOpen(false)}
+          joinLink={joinLink}
+          isGitLab={isGitLab}
+        />
+      )}
 
       <StudentsTable
         students={filteredStudents}
@@ -227,7 +249,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   // OWNER-only, deliberately narrower than the loader above: removing a student
   // and revoking an invite are owner operations. This gate is the action's own —
   // widening the roster read must never widen these.
-  const { classroom, membership } = await requireClassroomAdmin(request, classSlug, {
+  const { userId, classroom, membership } = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'STUDENT_ROSTER',
     action: 'remove_student',
   });
@@ -278,6 +300,37 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           action: ActionTypes.REMOVE_USER,
           error: 'Failed to remove student. Please try again.',
         };
+      }
+    },
+
+    async updateJoinLink() {
+      const enabled = typeof data.enabled === 'boolean' ? data.enabled : undefined;
+      const reset = data.reset === true;
+      if (enabled === undefined && !reset) {
+        return { error: 'Nothing to change.' };
+      }
+      try {
+        const joinLink = await ClassmojiService.joinLink.updateJoinLink(classroom.id, {
+          enabled,
+          reset,
+        });
+        // The code itself stays out of the row: it is a credential.
+        await ClassmojiService.audit.create(
+          {
+            user_id: userId,
+            classroom_id: classroom.id,
+            role: membership!.role,
+            action: 'UPDATE',
+            resource_type: 'CLASSROOM_JOIN_LINK',
+            resource_id: classroom.id,
+            data: { tool: 'web:roster.join_link', enabled: joinLink.enabled, reset },
+          },
+          { dedupe: false }
+        );
+        return { joinLink };
+      } catch (error: unknown) {
+        console.error('updateJoinLink failed:', error);
+        return { error: 'Could not update the invite link. Please try again.' };
       }
     },
 

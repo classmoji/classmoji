@@ -17,20 +17,13 @@ import { checkAuth } from '~/utils/helpers';
 import { hashHue } from '~/utils/hue';
 import { connectGithub, connectGitlabAt } from '~/utils/connectGitAccount';
 
-import {
-  ClassmojiService,
-  getGitProvider,
-  ensureClassroomTeam,
-  notificationService,
-  pendingSurveyQuestions,
-} from '@classmoji/services';
+import { ClassmojiService, notificationService, pendingSurveyQuestions } from '@classmoji/services';
 import { ActionTypes, roleSettings } from '~/constants';
 import useStore from '~/store';
-import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
-import { gitAccountId, gitUsername } from '@classmoji/utils';
+import getPrisma from '@classmoji/database';
 import { tasks } from '@trigger.dev/sdk';
-import type { Prisma } from '@prisma/client';
-import { describeInviteFailure } from './inviteError.server';
+import { joinGitOrganization } from '~/utils/joinGitOrganization.server';
+import { autoSendGithubInvites } from './autoGithubInvites.server';
 import type { Route } from './+types/route';
 import type { AppUser, MembershipOrganization, MembershipWithOrganization } from '~/types';
 import {
@@ -212,6 +205,18 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       console.error('Failed to activate Gitlab course memberships:', error);
     }
 
+    // Github classes this person was added to as a student (roster, or an
+    // invite link they did not finish) or as staff: send the org invite without
+    // a click, or find the one Github
+    // still holds, so each card can link straight to Github's accept page.
+    // Github is asked each load (no stored flag), which also re-sends an
+    // invitation that expired. Not during impersonation, like the Gitlab step.
+    const acceptUrls = await autoSendGithubInvites(
+      typedUser.id,
+      !!(authData.session as { session?: { impersonatedBy?: string | null } } | undefined)?.session
+        ?.impersonatedBy
+    );
+
     // Runs after the invite claim above so a freshly-claimed student membership
     // counts toward the audience filter. Never asked during impersonation: a
     // platform admin must not answer on the user's behalf.
@@ -290,6 +295,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       surveyQuestions,
       inviteEmailMismatch,
       linkError,
+      acceptUrls,
     };
   } else {
     return redirect('/registration');
@@ -454,12 +460,17 @@ const SelectOrganization = ({
     surveyQuestions,
     inviteEmailMismatch,
     linkError,
+    acceptUrls,
   } = loaderData;
   const { user } = useUser();
   const { classroom, setClassroom, startFullTour } = useStore();
   // Joining uses its own fetcher, not the global one: the global fetcher turns
   // every `{ error }` into a toast, and a failed join belongs above the cards.
-  const joinFetcher = useFetcher<{ success?: string; error?: string }>();
+  const joinFetcher = useFetcher<{
+    success?: string;
+    error?: string;
+    invitationUrl?: string | null;
+  }>();
   const joinCalloutId = useRef<string | null>(null);
   const joinClassName = useRef('');
   const [joinFailure, setJoinFailure] = useState<{ className: string; message: string } | null>(
@@ -484,10 +495,14 @@ const SelectOrganization = ({
     const id = joinCalloutId.current;
     if (!id) return;
     joinCalloutId.current = null;
-    const { success, error } = joinFetcher.data;
+    const { success, error, invitationUrl } = joinFetcher.data;
     if (error) {
       callout.dismiss(id);
       setJoinFailure({ className: joinClassName.current, message: error });
+    } else if (invitationUrl) {
+      // Accept on Github now, rather than in whichever inbox Github emailed.
+      callout.update(id, { variant: 'progress', title: 'Opening your Github invitation...' });
+      window.location.assign(invitationUrl);
     } else if (success) {
       callout.update(id, {
         variant: 'success',
@@ -659,10 +674,42 @@ const SelectOrganization = ({
       <ActiveClassLimitNotice allowance={allowance} />
     ) : null;
 
+  // Github invites already sent (by the loader) and still to accept: say so up
+  // top, with the one action, so nobody has to guess the card is clickable.
+  const toAccept = Array.from(
+    new Map(
+      memberList
+        .filter(m => !m.has_accepted_invite && acceptUrls?.[m.organization.id])
+        .map(m => [m.organization.id, m.organization] as const)
+    ).values()
+  );
+  const acceptNotice =
+    toAccept.length > 0 ? (
+      <div className="flex flex-col gap-2">
+        {toAccept.map(org => (
+          <div
+            key={org.id}
+            className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg bg-panel ring-1 ring-line px-4 py-2.5"
+          >
+            <span className="inline-flex text-gray-900 dark:text-gray-100">
+              <IconGithub size={18} />
+            </span>
+            <div className="flex-1 min-w-[12rem] text-sm font-medium text-ink-0">
+              Accept your Github invite to finish joining {org.name || org.login}
+            </div>
+            <a href={acceptUrls![org.id]} className="btn btn-primary btn-sm no-underline">
+              Accept on Github
+            </a>
+          </div>
+        ))}
+      </div>
+    ) : null;
+
   const notice =
-    joinFailureBanner || connectNotice || limitNotice ? (
+    joinFailureBanner || acceptNotice || connectNotice || limitNotice ? (
       <div className="flex flex-col gap-2">
         {joinFailureBanner}
+        {acceptNotice}
         {limitNotice}
         {connectNotice}
       </div>
@@ -705,6 +752,12 @@ const SelectOrganization = ({
     // when a user has multiple memberships for the same classroom (e.g. OWNER
     // + STUDENT in a dev sandbox), and would always pick the first match.
     if (c.role === 'PENDING INVITE') {
+      // The Github invite is already out (sent by the loader): the card goes
+      // straight to Github to accept it, no dialog in between.
+      if (c.acceptUrl) {
+        window.location.assign(c.acceptUrl);
+        return;
+      }
       const membership = memberList.find(
         m => m.organization.id === c.organization.id && !m.has_accepted_invite
       );
@@ -771,7 +824,7 @@ const SelectOrganization = ({
             ? `This class runs on ${modalPlatform}. Connect your ${modalPlatform} account first, then come back here to accept.`
             : modalPlatform === 'Gitlab'
               ? 'Once you accept, you will get your Gitlab repositories right away.'
-              : 'Once you accept, you will be sent a Github invitation to join the organization.'}
+              : 'Once you accept, Github opens your invitation to join the organization.'}
         </p>
         {connectError && (
           <p className="mt-3 rounded-lg bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 text-sm px-3 py-2">
@@ -795,7 +848,11 @@ const SelectOrganization = ({
         classes={classes
           .filter(c => !c.is_example)
           .map(c => {
-            if (c.role !== 'PENDING INVITE' || user.logins?.[c.provider]) return c;
+            if (c.role !== 'PENDING INVITE') return c;
+            // The Github invite went out on its own (loader): one click to Github.
+            const acceptUrl = acceptUrls?.[c.classroomId];
+            if (acceptUrl) return { ...c, acceptUrl };
+            if (user.logins?.[c.provider]) return c;
             // Gitlab has no invite to accept: connecting Gitlab is what lets
             // them in, so the card shows their real role, not "Pending invite".
             return c.provider === 'GITLAB'
@@ -822,162 +879,25 @@ export const action = checkAuth(
 
     const membership = await getPrisma().classroomMembership.findFirst({
       where: { classroom_id, user_id: user.userId },
-      include: {
-        user: { include: GIT_IDENTITY },
-        classroom: { include: { git_organization: true } },
-      },
+      include: { classroom: { include: { git_organization: true } } },
     });
 
     if (!membership) {
       return { error: 'Classroom not found' };
     }
 
-    const classroom = membership.classroom;
-    const courseProvider = classroom.git_organization.provider;
-
-    // One audit row per join attempt, success or failure, so staff can see why
-    // a student is stuck pending. A failed write must not fail the join.
-    const auditJoin = async (outcome: string, detail: Record<string, unknown> = {}) => {
-      try {
-        await ClassmojiService.audit.create(
-          {
-            user_id: user.userId,
-            classroom_id: classroom.id,
-            role: membership.role,
-            action: 'UPDATE',
-            resource_type: 'CLASSROOM_MEMBERSHIP',
-            resource_id: membership.id,
-            data: {
-              tool: 'select-organization',
-              outcome,
-              provider: courseProvider,
-              organization: classroom.git_organization.login,
-              login: student_login ?? null,
-              ...detail,
-            } as Prisma.InputJsonValue,
-          },
-          { dedupe: false }
-        );
-      } catch (error: unknown) {
-        console.error('Failed to audit classroom join:', error);
-      }
+    const result = await joinGitOrganization({
+      userId: user.userId,
+      membership,
+      classroom: membership.classroom,
+      tool: 'select-organization',
+    });
+    if (!result.ok) return { error: result.message, action: ActionTypes.SEND_INVITATION };
+    return {
+      success: result.message,
+      invitationUrl: result.invitationUrl ?? null,
+      action: ActionTypes.SEND_INVITATION,
     };
-    // The student's username on the course's own provider. A Github username is
-    // never sent to a Gitlab group or the other way round: it would name a
-    // stranger who holds that username there.
-    const student_login = gitUsername(membership.user, courseProvider);
-
-    // GitLab course: the student needs GitLab connected (their project is
-    // named after, and shared with, their GitLab username). They never join
-    // the GitLab group: group members inherit every project in it, which would
-    // expose classmates' repos. Activation creates their projects straight
-    // away, since GitLab has no invite to accept and no webhook to wait for.
-    if (courseProvider === 'GITLAB') {
-      if (!student_login) {
-        return {
-          error: 'This course uses Gitlab. Connect your Gitlab account in Settings to join it.',
-        };
-      }
-      try {
-        await tasks.trigger('activate_membership', {
-          login: student_login,
-          gitOrganizationId: classroom.git_organization.id,
-        });
-      } catch (error: unknown) {
-        // Queueing the activation failed (Trigger unreachable or misconfigured);
-        // nothing changed, so the student can simply try again.
-        const message = error instanceof Error ? error.message : String(error);
-        console.error('Gitlab join failed on select-organization:', {
-          classroom_id: classroom.id,
-          organization: classroom.git_organization.login,
-          login: student_login,
-          message,
-        });
-        await auditJoin('failed', { message: message.slice(0, 200) });
-        return {
-          error: 'Could not join the class right now. Try again in a minute.',
-          action: ActionTypes.SEND_INVITATION,
-        };
-      }
-      await auditJoin('joined');
-      return {
-        success: "You're in. Your Gitlab repositories are being created.",
-        action: ActionTypes.SEND_INVITATION,
-      };
-    }
-
-    if (!student_login) {
-      return { error: 'Connect your Github account before joining this classroom.' };
-    }
-
-    try {
-      const gitProvider = getGitProvider(
-        classroom.git_organization as {
-          provider: string;
-          github_installation_id?: string;
-          access_token?: string;
-          base_url?: string;
-          login?: string;
-        }
-      );
-      const team = await ensureClassroomTeam(
-        gitProvider,
-        classroom.git_organization.login,
-        classroom,
-        'STUDENT'
-      );
-      // If the student is ALREADY a member of the GitHub org (common when migrating
-      // from GitHub Classroom), GitHub rejects a fresh org invitation with a 422,
-      // which used to error the whole join. In that case skip the invite and add them
-      // straight to the class team — they're already in the org.
-      const alreadyMember = await gitProvider.isUserMemberOfOrganization(
-        classroom.git_organization.login,
-        student_login
-      );
-
-      if (alreadyMember) {
-        await gitProvider.addTeamMember(classroom.git_organization.login, team.slug, student_login);
-        // No `member_added` webhook fires for users already in the org, so activate the
-        // membership here (flip has_accepted_invite + provision repos) — otherwise they
-        // stay stuck pending and never receive their assignment repos.
-        await tasks.trigger('activate_membership', {
-          login: student_login,
-          githubUserId: gitAccountId(membership.user, classroom.git_organization.provider),
-          gitOrganizationId: classroom.git_organization.id,
-        });
-        await auditJoin('added_to_team');
-        return {
-          success: 'Already in the organization — added you to the class.',
-          action: ActionTypes.SEND_INVITATION,
-        };
-      }
-
-      const githubUser = await gitProvider.getUserByLogin(student_login);
-      await gitProvider.inviteToOrganization(
-        classroom.git_organization.login,
-        String(githubUser.id),
-        [team.id]
-      );
-      await auditJoin('invited');
-
-      return {
-        success: 'Successfully sent invite.',
-        action: ActionTypes.SEND_INVITATION,
-      };
-    } catch (error: unknown) {
-      // Uncaught, this reached the root error boundary as a full-page
-      // "Unexpected Server Error". Turn it into a toast that says why.
-      const failure = describeInviteFailure(error, classroom.git_organization.login);
-      console.error('Github invite failed on select-organization:', {
-        classroom_id: classroom.id,
-        organization: classroom.git_organization.login,
-        login: student_login,
-        status: failure.status,
-        githubMessage: failure.githubMessage,
-      });
-      await auditJoin('failed', { status: failure.status, githubMessage: failure.githubMessage });
-      return { error: failure.message, action: ActionTypes.SEND_INVITATION };
-    }
   }
 );
 

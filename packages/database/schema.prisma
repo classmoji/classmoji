@@ -591,11 +591,17 @@ model Classroom {
   // rather than applying a diff against a state we do not have. Null means never
   // synced: no chain yet, so nothing to have a gap in.
   content_assets_synced_commit String?
+  // The shareable invite link (`/join/<join_code>`): anyone signed in who opens
+  // it joins as a STUDENT while `join_link_enabled`. Random, unguessable, and
+  // replaced on reset, so a leaked link stops working. Null until the owner
+  // first turns the link on (`joinLink.service.ts`).
+  join_code                    String?         @unique
+  join_link_enabled            Boolean         @default(false)
   created_at                   DateTime        @default(now())
   updated_at                   DateTime        @default(now()) @updatedAt
 
   git_organization      GitOrganization       @relation(fields: [git_org_id], references: [id], onDelete: Cascade)
-  creator               User?                 @relation("ClassroomCreator", fields: [created_by], references: [id], onDelete: SetNull)
+  creator           User?                 @relation("ClassroomCreator", fields: [created_by], references: [id], onDelete: SetNull)
   plan_owner            User?                 @relation("ClassroomPlanOwner", fields: [plan_owner_id], references: [id], onDelete: SetNull)
   settings              ClassroomSettings?
   memberships           ClassroomMembership[]

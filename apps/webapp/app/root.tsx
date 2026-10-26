@@ -130,7 +130,8 @@ const loadAppUser = async (userId: string): Promise<AppUser | null> => {
 // Paths an account that is not set up yet may still reach: the setup steps
 // themselves, signing out, and (for the git account step) account settings.
 const EMAIL_STEP_PATHS = ['/registration', '/logout'];
-const GITHUB_STEP_PATHS = ['/select-organization', '/logout', '/settings'];
+// The invite link (`/join/<code>`) connects the account its class needs itself.
+const GITHUB_STEP_PATHS = ['/select-organization', '/logout', '/settings', '/join'];
 
 const isUnder = (pathname: string, paths: string[]) =>
   paths.some(path => pathname === path || pathname.startsWith(`${path}/`));
@@ -251,8 +252,12 @@ const loadRoot = async ({ request }: Route.LoaderArgs) => {
   // The feedback board and roadmap are public to read; writing needs a session,
   // which its actions check themselves.
   const isFeedback = isUnder(url.pathname, ['/feedback']);
+  // The class invite link shows the class to anyone holding it; joining
+  // needs a session, which its action checks itself.
+  const isJoinLink = isUnder(url.pathname, ['/join']);
   const isPublicRoute =
     isFeedback ||
+    isJoinLink ||
     publicRoutes.some(
       route =>
         url.pathname === route ||
