@@ -1,5 +1,33 @@
--- Feedback board: duplicates, public status notes,
--- the Github bug template fields, and reply notifications.
+-- Feedback board: three post types with their own statuses, the Github bug
+-- template fields, merged duplicates, public status notes and reply
+-- notifications.
+--
+-- The two feedback enums are rebuilt with their final values rather than
+-- grown with ADD VALUE: Postgres refuses a value added in the same
+-- transaction, and rows are converted here as the columns change type.
+
+-- Types: Integration requests are feature requests; Question is new.
+CREATE TYPE "FeedbackCategory_new" AS ENUM ('FEATURE', 'BUG', 'QUESTION');
+ALTER TABLE "feedback_posts" ALTER COLUMN "category" DROP DEFAULT;
+ALTER TABLE "feedback_posts" ALTER COLUMN "category" TYPE "FeedbackCategory_new"
+  USING (CASE WHEN "category"::text = 'INTEGRATION' THEN 'FEATURE' ELSE "category"::text END)::"FeedbackCategory_new";
+ALTER TYPE "FeedbackCategory" RENAME TO "FeedbackCategory_old";
+ALTER TYPE "FeedbackCategory_new" RENAME TO "FeedbackCategory";
+DROP TYPE "FeedbackCategory_old";
+ALTER TABLE "feedback_posts" ALTER COLUMN "category" SET DEFAULT 'FEATURE';
+
+-- Statuses per type: bugs are Fixed (open until then), questions Answered.
+-- A bug that had a feature status is Fixed if it shipped, otherwise open.
+CREATE TYPE "FeedbackStatus_new" AS ENUM ('IN_REVIEW', 'PLANNED', 'IN_PROGRESS', 'COMPLETED', 'FIXED', 'ANSWERED');
+ALTER TABLE "feedback_posts" ALTER COLUMN "status" TYPE "FeedbackStatus_new"
+  USING (CASE
+    WHEN "category"::text = 'BUG' AND "status"::text = 'COMPLETED' THEN 'FIXED'
+    WHEN "category"::text = 'BUG' THEN NULL
+    ELSE "status"::text
+  END)::"FeedbackStatus_new";
+ALTER TYPE "FeedbackStatus" RENAME TO "FeedbackStatus_old";
+ALTER TYPE "FeedbackStatus_new" RENAME TO "FeedbackStatus";
+DROP TYPE "FeedbackStatus_old";
 
 -- AlterEnum
 ALTER TYPE "NotificationType" ADD VALUE 'FEEDBACK_REPLY';
