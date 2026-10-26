@@ -1,12 +1,10 @@
 import { Modal } from 'antd';
 import { IconExternalLink, IconMail } from '@tabler/icons-react';
 
-const DISCUSSIONS_URL = 'https://github.com/classmoji/classmoji/discussions';
-// Opens the guided bug form (.github/ISSUE_TEMPLATE/bug_report.yml) rather than
-// a blank issue, so reports arrive with repro steps and the `bug` label.
-const ISSUES_URL = 'https://github.com/classmoji/classmoji/issues/new?template=bug_report.yml';
-// The public feedback board, opened in a new tab so the classroom stays open.
-const FEEDBACK_URL = '/feedback';
+// The feedback board, opened in a new tab so the classroom stays open, with the
+// new-post form already set to the right type. Questions and bugs live there
+// too: teachers do not use Github, so nothing here sends them to it.
+const newPost = (type: 'question' | 'bug' | 'feature') => `/feedback?new=${type}`;
 export const SUPPORT_EMAIL = 'hello@classmoji.io';
 
 interface SupportModalProps {
@@ -25,20 +23,20 @@ interface SupportOption {
 const OPTIONS: SupportOption[] = [
   {
     title: 'Ask a question',
-    description: 'Get answers from the community on Github.',
-    href: DISCUSSIONS_URL,
+    description: 'Ask on the feedback board. Others may have asked already.',
+    href: newPost('question'),
     external: true,
   },
   {
     title: 'Report a bug',
     description: 'Tell us what broke and how to make it happen.',
-    href: ISSUES_URL,
+    href: newPost('bug'),
     external: true,
   },
   {
     title: 'Request a feature',
     description: 'Suggest an idea or upvote one you want.',
-    href: FEEDBACK_URL,
+    href: newPost('feature'),
     external: true,
   },
   {
@@ -50,8 +48,8 @@ const OPTIONS: SupportOption[] = [
 ];
 
 /**
- * Support entry point from the sidebar. Four ways to reach us: community
- * discussions, a Github issue, the feedback board, or plain email. Nothing is sent from here.
+ * Support entry point from the sidebar: a question, a bug or a feature request
+ * on the feedback board, or plain email. Nothing is sent from here.
  */
 const SupportModal = ({ open, onClose }: SupportModalProps) => {
   return (

@@ -71,7 +71,8 @@ export const findByClassroomId = async (classroomId: string) => {
     include: {
       tags: {
         include: {
-          tag: true,
+          // A tag that names a team set carries it (TeamSet.tag_id).
+          tag: { include: { team_sets: { select: { name: true } } } },
         },
       },
       memberships: {
@@ -79,6 +80,7 @@ export const findByClassroomId = async (classroomId: string) => {
           user: { include: GIT_IDENTITY },
         },
       },
+      git_repos: { select: { name: true } },
     },
   });
 
@@ -287,4 +289,51 @@ export const createWithMembershipAndTag = async (
       },
     },
   });
+};
+
+/**
+ * The teams a student is in within ONE classroom, for the student report:
+ * each team's name and slug, the team sets it belongs to (a team set is
+ * identified by its tag, `TeamSet.tag_id`; a plain tag is not a set), every
+ * member with their git identity, and the team's repositories. Scoped by the
+ * classroom id the caller derived, never by a team id from the request: a
+ * team in another classroom is never returned.
+ */
+export const findTeamsForStudentInClassroom = async (classroomId: string, userId: string) => {
+  const teams = await getPrisma().team.findMany({
+    where: { classroom_id: classroomId, memberships: { some: { user_id: userId } } },
+    orderBy: { name: 'asc' },
+    select: {
+      id: true,
+      name: true,
+      slug: true,
+      tags: {
+        where: { tag: { classroom_id: classroomId } },
+        select: {
+          tag: {
+            select: {
+              team_sets: { where: { classroom_id: classroomId }, select: { id: true, name: true } },
+            },
+          },
+        },
+      },
+      memberships: {
+        orderBy: { created_at: 'asc' },
+        select: { user: { select: { id: true, name: true, ...GIT_IDENTITY } } },
+      },
+      git_repos: {
+        where: { classroom_id: classroomId },
+        orderBy: { created_at: 'asc' },
+        select: { name: true, repository: { select: { title: true } } },
+      },
+    },
+  });
+  return teams.map(team => ({
+    id: team.id,
+    name: team.name,
+    slug: team.slug,
+    teamSets: team.tags.flatMap(t => t.tag.team_sets),
+    members: team.memberships.map(m => m.user),
+    repositories: team.git_repos.map(r => ({ name: r.name, title: r.repository.title })),
+  }));
 };

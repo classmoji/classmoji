@@ -1,11 +1,14 @@
 /**
- * Every write on the feedback board.
+ * Every write on the feedback board, and its one public read.
  *
+ * GET  /api/feedback?similar=<title>&type=<category>  posts like that title,
+ *      for the "already posted?" box. Public fields only, like the board.
  * POST /api/feedback   form fields: intent + the ids/fields that intent needs
  *
- * Auth: a session for everything. Platform admins (PLATFORM_ADMIN_USER_IDS)
- * may also set a post's status and delete anyone's post or comment; everyone
- * else may delete only their own.
+ * Auth: a session for every write. Platform admins (PLATFORM_ADMIN_USER_IDS)
+ * may also set a post's status (with a public note), merge duplicates, and
+ * delete anyone's post or comment; everyone else may delete only their own.
+ * The asker of a question may mark it answered.
  */
 
 import { redirect } from 'react-router';
@@ -21,6 +24,17 @@ import { allowFeedbackAction } from '~/utils/feedbackRate.server';
 import type { Route } from './+types/route';
 
 const feedback = ClassmojiService.feedback;
+
+export const loader = async ({ request }: Route.LoaderArgs) => {
+  const url = new URL(request.url);
+  const title = (url.searchParams.get('similar') ?? '').slice(0, 200);
+  const type = url.searchParams.get('type')?.toUpperCase() ?? null;
+  const posts = await feedback.findSimilarPosts({
+    title,
+    category: isFeedbackCategory(type) ? type : null,
+  });
+  return Response.json({ posts }, { headers: { 'Cache-Control': 'no-store' } });
+};
 
 const tooFast = () =>
   Response.json(
@@ -41,16 +55,27 @@ export const action = async ({ request }: Route.ActionArgs) => {
     switch (intent) {
       case 'create-post': {
         if (!allowFeedbackAction(userId, 'post')) return tooFast();
+        // The web form always names a type: one picked by default is how
+        // questions and bugs ended up filed as feature requests.
         const category = field('category');
-        if (category && !isFeedbackCategory(category)) {
-          return Response.json({ error: 'Unknown category.' }, { status: 400 });
+        if (!isFeedbackCategory(category)) {
+          return Response.json({ error: 'Pick what kind of post this is.' }, { status: 400 });
         }
         const { id } = await feedback.createPost({
           authorId: userId,
           title: field('title'),
           body: field('body'),
-          // Left out, the service files it as a feature request.
-          category: category && isFeedbackCategory(category) ? category : undefined,
+          // A bug from the form arrives as the Github template's fields.
+          bug:
+            category === 'BUG' && form.has('bug_what_happened')
+              ? {
+                  whatHappened: field('bug_what_happened'),
+                  expected: field('bug_expected'),
+                  steps: field('bug_steps'),
+                  additionalInfo: field('bug_additional_info'),
+                }
+              : null,
+          category,
           isAnonymous: field('anonymous') === 'true',
         });
         return { ok: true, postId: id };
@@ -82,12 +107,37 @@ export const action = async ({ request }: Route.ActionArgs) => {
         if (status && !isFeedbackStatus(status)) {
           return Response.json({ error: 'Unknown status.' }, { status: 400 });
         }
+        // Followers get the note with the update, so an admin always writes one.
         await feedback.setStatus({
           postId: field('postId'),
           status: status && isFeedbackStatus(status) ? status : null,
           actorId: userId,
+          note: field('note'),
+          requireNote: true,
         });
         return { ok: true };
+      }
+      case 'mark-answered': {
+        // The service checks the caller asked the question.
+        return {
+          ok: true,
+          ...(await feedback.markQuestionAnswered({
+            postId: field('postId'),
+            userId,
+            answered: field('answered') !== 'false',
+          })),
+        };
+      }
+      case 'mark-duplicate': {
+        if (!isAdmin) return new Response('Forbidden', { status: 403 });
+        // The original as its link (…/feedback/p/<id>) or its bare id.
+        const original = field('originalId').trim();
+        const { originalId } = await feedback.markDuplicate({
+          postId: field('postId'),
+          originalId: original.match(/\/feedback\/p\/([^/?#\s]+)/)?.[1] ?? original,
+          actorId: userId,
+        });
+        return redirect(`/feedback/p/${originalId}`);
       }
       case 'delete-post': {
         const postId = field('postId');

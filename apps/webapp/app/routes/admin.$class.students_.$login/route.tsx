@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { ClassmojiService } from '@classmoji/services';
 import {
+  gitUsername,
   calculateAssignmentGrade,
   calculateGrades,
   calculateLetterGrade,
@@ -65,6 +66,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     letterGradeMappings,
     tokenBalance,
     quizzesVisible,
+    studentTeams,
   ] = await Promise.all([
     ClassmojiService.assignment.listForClassroom(classroom.id, { publishedOnly: true }),
     // Individual repos AND team repos: a team member's submission row hangs
@@ -79,6 +81,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     // total agrees with theirs. A failed lookup errors the page rather than
     // silently dropping quizzes from the total.
     ClassmojiService.entitlement.quizzesVisibleOrThrow(classroom.id),
+    // The teams this student is in, in THIS classroom only.
+    ClassmojiService.team.findTeamsForStudentInClassroom(classroom.id, studentId),
   ]);
 
   // Where quizzes are hidden their assignments are no row here, and no attempt
@@ -213,6 +217,22 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     finalGradesReleased: settingsRow?.final_grades_released === true,
     letterGradeMappings,
     tokenBalance,
+    // Each team with its set, teammates (not the student) and repositories.
+    // Logins are the classroom provider's username, as everywhere in a class.
+    teams: studentTeams.map(team => ({
+      id: team.id,
+      name: team.name,
+      slug: team.slug,
+      teamSets: team.teamSets.map(s => s.name),
+      teammates: team.members
+        .filter(member => member.id !== studentId)
+        .map(member => ({
+          id: member.id,
+          name: member.name,
+          login: gitUsername(member, classroom.git_organization?.provider),
+        })),
+      repositories: team.repositories,
+    })),
   };
 };
 
@@ -429,6 +449,7 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
     finalGradesReleased,
     letterGradeMappings,
     tokenBalance,
+    teams,
   } = loaderData;
   const repoAssignments = repoAssignmentRows as RepoAssignment[];
   const navigate = useNavigate();
@@ -840,55 +861,130 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
         </div>
       </div>
 
-      <div className="flex flex-col gap-2 mb-5">
-        {sections.length === 0 && (
-          <div className="text-center py-12 text-gray-500">
-            <div className="font-medium">No published assignments yet</div>
-          </div>
-        )}
-        {sections.map(section => (
-          <div key={section.key} className="flex flex-col gap-2">
-            <h2 className="text-xs font-semibold uppercase tracking-wide text-ink-3 pt-3 pb-1">
-              {section.title}
-            </h2>
-            <ul className="flex flex-col gap-2">{section.items.map(renderLine)}</ul>
-          </div>
-        ))}
-      </div>
-
-      <div className="rounded-2xl bg-panel ring-1 ring-line px-4 py-3 flex flex-col gap-2">
-        <label htmlFor="staff-note" className="text-xs font-semibold text-ink-3">
-          Private note (staff only)
-        </label>
-        <Input.TextArea
-          id="staff-note"
-          rows={3}
-          value={note}
-          onChange={e => setNote(e.target.value)}
-          placeholder="Extensions agreed, conversations had, anything the next grader should know."
-        />
-        <div className="flex items-center gap-3">
-          <Button
-            type="primary"
-            size="small"
-            onClick={saveNote}
-            loading={noteFetcher.state !== 'idle'}
-            disabled={note === (membership.comment ?? '')}
+      <div
+        className={`grid grid-cols-1 gap-5 lg:items-start ${teams.length > 0 ? 'lg:grid-cols-[minmax(0,1fr)_18rem]' : ''}`}
+      >
+        {/* The teams this student is in, beside the assignments (above them on
+            narrow screens). No card when they are in none. */}
+        {teams.length > 0 && (
+          <aside
+            aria-labelledby="teams-heading"
+            className="rounded-2xl bg-panel ring-1 ring-line px-4 py-3 flex flex-col gap-3 lg:order-last lg:mt-8"
           >
-            Save note
-          </Button>
-          {noteFetcher.data?.ok && noteFetcher.state === 'idle' && (
-            <span className="text-xs text-ink-3">Saved</span>
-          )}
-          {noteFetcher.data?.error && (
-            <span className="text-xs text-red-500">{noteFetcher.data.error}</span>
-          )}
-          <span className="flex-1" />
-          <span className="text-xs text-ink-3">
-            {pathname.startsWith('/teacher')
-              ? 'Teachers and the owner see this.'
-              : 'Only owners and teachers see this.'}
-          </span>
+            <h2
+              id="teams-heading"
+              className="text-xs font-semibold uppercase tracking-wide text-ink-3"
+            >
+              Teams
+            </h2>
+            {teams.map((team, i) => (
+              <div
+                key={team.id}
+                className={`flex flex-col gap-1 min-w-0 ${i > 0 ? 'border-t border-line pt-3' : ''}`}
+              >
+                <div className="text-sm">
+                  <span className="font-semibold text-ink-1">{team.name}</span>
+                  {team.teamSets.map(set => (
+                    <span key={set} className="text-xs text-sky-ink">
+                      {' '}
+                      · {set}
+                    </span>
+                  ))}
+                </div>
+                {team.teammates.length > 0 && (
+                  <div className="text-sm text-ink-2">
+                    {team.teammates.map((mate, j) => (
+                      <span key={mate.id}>
+                        {j > 0 && ', '}
+                        {mate.login ? (
+                          <Link
+                            to={`${base}/students/${mate.login}`}
+                            className="!text-ink-2 hover:!text-ink-1 hover:underline"
+                          >
+                            {mate.name ?? mate.login}
+                          </Link>
+                        ) : (
+                          (mate.name ?? 'Unnamed')
+                        )}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {team.repositories.map(repo =>
+                  classroom.gitOrgLogin ? (
+                    <a
+                      key={repo.name}
+                      href={gitWeb(classroom.git).repo(repo.name)}
+                      target="_blank"
+                      rel="noreferrer"
+                      title={repo.title ?? undefined}
+                      className="text-sm text-sky-600 hover:underline truncate"
+                    >
+                      {repo.name} ↗
+                    </a>
+                  ) : (
+                    <span key={repo.name} className="text-sm text-ink-2 truncate">
+                      {repo.name}
+                    </span>
+                  )
+                )}
+              </div>
+            ))}
+          </aside>
+        )}
+
+        <div className="min-w-0">
+          <div className="flex flex-col gap-2 mb-5">
+            {sections.length === 0 && (
+              <div className="text-center py-12 text-gray-500">
+                <div className="font-medium">No published assignments yet</div>
+              </div>
+            )}
+            {sections.map(section => (
+              <div key={section.key} className="flex flex-col gap-2">
+                <h2 className="text-xs font-semibold uppercase tracking-wide text-ink-3 pt-3 pb-1">
+                  {section.title}
+                </h2>
+                <ul className="flex flex-col gap-2">{section.items.map(renderLine)}</ul>
+              </div>
+            ))}
+          </div>
+
+          <div className="rounded-2xl bg-panel ring-1 ring-line px-4 py-3 flex flex-col gap-2">
+            <label htmlFor="staff-note" className="text-xs font-semibold text-ink-3">
+              Private note (staff only)
+            </label>
+            <Input.TextArea
+              id="staff-note"
+              rows={3}
+              value={note}
+              onChange={e => setNote(e.target.value)}
+              placeholder="Extensions agreed, conversations had, anything the next grader should know."
+            />
+            <div className="flex items-center gap-3">
+              <Button
+                type="primary"
+                size="small"
+                onClick={saveNote}
+                loading={noteFetcher.state !== 'idle'}
+                disabled={note === (membership.comment ?? '')}
+              >
+                Save note
+              </Button>
+              {noteFetcher.data?.ok && noteFetcher.state === 'idle' && (
+                <span className="text-xs text-ink-3">Saved</span>
+              )}
+              {noteFetcher.data?.error && (
+                <span className="text-xs text-red-500">{noteFetcher.data.error}</span>
+              )}
+              <span className="flex-1" />
+              <span className="text-xs text-ink-3">
+                {pathname.startsWith('/teacher')
+                  ? 'Teachers and the owner see this.'
+                  : 'Only owners and teachers see this.'}
+              </span>
+            </div>
+          </div>
         </div>
       </div>
     </div>

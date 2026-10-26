@@ -160,6 +160,16 @@ const SignInPage = ({
         setError(errorMessage(signUpError));
         return;
       }
+      // Sign-up sends no code by itself (see emailVerification in
+      // @classmoji/auth/server), so ask for it here.
+      const { error: sendError } = await authClient.emailOtp.sendVerificationOtp({
+        email,
+        type: 'email-verification',
+      });
+      if (sendError) {
+        setError(errorMessage(sendError));
+        return;
+      }
       go('verify', `We sent a 6-digit code to ${email}.`);
     });
   };
@@ -480,6 +490,7 @@ const SignInPage = ({
                           <input
                             id="auth-school-id"
                             className={`mt-1.5 ${fieldClass}`}
+                            maxLength={64}
                             value={schoolId}
                             onChange={e => setSchoolId(e.target.value)}
                           />

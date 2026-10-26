@@ -1,5 +1,5 @@
-import { useCallback, useMemo, useState } from 'react';
-import { Link, data, useLoaderData } from 'react-router';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link, data, redirect, useLoaderData } from 'react-router';
 import {
   BellIcon,
   BellOffIcon,
@@ -25,11 +25,13 @@ import {
 import { VoteButton } from '~/components/features/feedback/VoteButton';
 import {
   authorName,
+  BUG_SECTIONS,
   CATEGORY_EMOJI,
   CATEGORY_LABELS,
   formatDate,
+  ALL_STATUSES,
   STATUS_META,
-  STATUS_ORDER,
+  STATUSES_BY_CATEGORY,
   type FeedbackCommentView,
 } from '~/components/features/feedback/feedback';
 import { feedbackViewer } from '~/utils/feedbackViewer.server';
@@ -39,6 +41,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { viewerId, isAdmin } = await feedbackViewer(request);
   const post = await ClassmojiService.feedback.getPost(params.postId ?? '', viewerId);
   if (!post) throw data('Not found', { status: 404 });
+  // A merged duplicate lives on in its original.
+  if (post.duplicate_of_id) throw redirect(`/feedback/p/${post.duplicate_of_id}`);
   return { post, viewerId, isAdmin, signedIn: Boolean(viewerId) };
 };
 
@@ -53,6 +57,11 @@ const actionClass =
 
 export default function FeedbackPostPage() {
   const { post, viewerId, isAdmin, signedIn } = useLoaderData<typeof loader>();
+  const [nextStatus, setNextStatus] = useState<string>(post.status ?? '');
+  const [note, setNote] = useState('');
+  const [duplicateOf, setDuplicateOf] = useState('');
+  const answered = useFeedbackAction(signedIn);
+  const merge = useFeedbackAction(signedIn);
   const [sort, setSort] = useState<CommentSort>('top');
   const [copied, setCopied] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -99,7 +108,16 @@ export default function FeedbackPostPage() {
   const shownStatus =
     status.fetcher.formData?.get('intent') === 'set-status'
       ? (status.fetcher.formData.get('status') as string) || null
-      : post.status;
+      : answered.fetcher.formData?.get('intent') === 'mark-answered'
+        ? answered.fetcher.formData.get('answered') === 'false'
+          ? null
+          : 'ANSWERED'
+        : post.status;
+  const statusChanged = nextStatus !== (post.status ?? '');
+  // The note is cleared once the update went through; on an error it stays.
+  useEffect(() => {
+    if (status.fetcher.state === 'idle' && status.fetcher.data?.ok) setNote('');
+  }, [status.fetcher.state, status.fetcher.data]);
 
   return (
     <div className="mx-auto grid max-w-6xl px-6 gap-12 pb-24 pt-8 lg:grid-cols-[minmax(0,1fr)_320px]">
@@ -115,7 +133,17 @@ export default function FeedbackPostPage() {
           {post.title}
         </h1>
         <div className="mt-4 flex flex-col gap-3">
-          {post.body ? (
+          {post.bug_what_happened ? (
+            // A bug report from the form: the Github template's sections.
+            BUG_SECTIONS.filter(({ field }) => post[field]).map(({ field, label }) => (
+              <section key={field}>
+                <h2 className="text-[13px] font-semibold text-ink-1">{label}</h2>
+                <p className="mt-1 whitespace-pre-line break-words text-sm leading-relaxed text-ink-1">
+                  <LinkedText text={post[field] ?? ''} />
+                </p>
+              </section>
+            ))
+          ) : post.body ? (
             post.body.split(/\n{2,}/).map((para, i) => (
               <p
                 key={i}
@@ -130,17 +158,57 @@ export default function FeedbackPostPage() {
         </div>
 
         <div className="mt-6 flex flex-wrap items-center gap-4">
-          {shownStatus && STATUS_ORDER.includes(shownStatus as (typeof STATUS_ORDER)[number]) && (
-            <StatusLabel status={shownStatus as (typeof STATUS_ORDER)[number]} />
+          {shownStatus && ALL_STATUSES.includes(shownStatus as (typeof ALL_STATUSES)[number]) && (
+            <StatusLabel status={shownStatus as (typeof ALL_STATUSES)[number]} />
           )}
           <span className="inline-flex items-center gap-1.5 text-[13px] text-ink-3">
             <MessageSquareIcon className="h-4 w-4" aria-hidden />
             {post.comment_count} {post.comment_count === 1 ? 'comment' : 'comments'}
           </span>
+          {post.category === 'QUESTION' && post.viewerIsAuthor && (
+            <button
+              type="button"
+              onClick={() =>
+                answered.submit({
+                  intent: 'mark-answered',
+                  postId: post.id,
+                  answered: String(shownStatus !== 'ANSWERED'),
+                })
+              }
+              className="inline-flex h-8 cursor-pointer items-center rounded-lg border border-line-2 bg-panel px-3 text-[12px] font-semibold text-ink-1 transition-colors duration-150 hover:border-line-strong"
+            >
+              {shownStatus === 'ANSWERED' ? 'Mark as not answered' : 'Mark as answered'}
+            </button>
+          )}
           <div className="ml-auto">
             <VoteButton count={vote.count} voted={vote.voted} onToggle={vote.toggle} />
           </div>
         </div>
+
+        {post.updates.length > 0 && (
+          <section aria-labelledby="updates-heading" className="mt-8">
+            <h2 id="updates-heading" className="text-sm font-semibold text-ink-0">
+              Updates from the team
+            </h2>
+            <ol className="mt-3 flex flex-col gap-4 border-l-2 border-line pl-4">
+              {post.updates.map(update => (
+                <li key={update.id}>
+                  <div className="flex flex-wrap items-center gap-2 text-[12px] text-ink-3">
+                    {update.to_status ? (
+                      <StatusLabel status={update.to_status} />
+                    ) : (
+                      <span className="font-semibold">Status cleared</span>
+                    )}
+                    <span>· Classmoji team · {formatDate(update.created_at)}</span>
+                  </div>
+                  <p className="mt-1 whitespace-pre-line break-words text-sm leading-relaxed text-ink-1">
+                    <LinkedText text={update.note} />
+                  </p>
+                </li>
+              ))}
+            </ol>
+          </section>
+        )}
 
         <div className="mt-8">
           <CommentComposer postId={post.id} signedIn={signedIn} />
@@ -231,22 +299,19 @@ export default function FeedbackPostPage() {
                 <div className="relative">
                   <select
                     aria-label="Status"
-                    value={shownStatus ?? ''}
-                    onChange={e =>
-                      status.submit({
-                        intent: 'set-status',
-                        postId: post.id,
-                        status: e.target.value,
-                      })
-                    }
+                    value={nextStatus}
+                    onChange={e => setNextStatus(e.target.value)}
                     className={`h-[32px] cursor-pointer appearance-none rounded-lg border border-line-2 bg-panel pl-3 pr-8 text-[13px] font-medium transition-colors duration-150 hover:border-line-strong focus:border-accent focus:outline-none ${
-                      shownStatus && shownStatus in STATUS_META
-                        ? STATUS_META[shownStatus as keyof typeof STATUS_META].ink
+                      nextStatus && nextStatus in STATUS_META
+                        ? STATUS_META[nextStatus as keyof typeof STATUS_META].ink
                         : 'text-ink-3'
                     }`}
                   >
-                    <option value="">Not on roadmap</option>
-                    {STATUS_ORDER.map(s => (
+                    <option value="">
+                      {post.category === 'FEATURE' ? 'Not on roadmap' : 'No status'}
+                    </option>
+                    {/* Only this type's statuses: a bug is never "Planned". */}
+                    {STATUSES_BY_CATEGORY[post.category].map(s => (
                       <option key={s} value={s}>
                         {STATUS_META[s].label}
                       </option>
@@ -257,13 +322,52 @@ export default function FeedbackPostPage() {
                     aria-hidden
                   />
                 </div>
-              ) : post.status ? (
-                <StatusLabel status={post.status} />
+              ) : shownStatus ? (
+                <StatusLabel status={shownStatus as (typeof ALL_STATUSES)[number]} />
               ) : (
                 <span className="text-ink-4">None</span>
               )}
             </dd>
           </div>
+          {isAdmin && (
+            <form
+              className="mt-2 flex flex-col gap-2 border-t border-line pt-3"
+              onSubmit={e => {
+                e.preventDefault();
+                status.submit({
+                  intent: 'set-status',
+                  postId: post.id,
+                  status: nextStatus,
+                  note,
+                });
+              }}
+            >
+              <label htmlFor="status-note" className="text-[12px] font-medium text-ink-2">
+                Public note{nextStatus ? ' (required)' : ''}
+              </label>
+              <textarea
+                id="status-note"
+                rows={3}
+                maxLength={1000}
+                value={note}
+                onChange={e => setNote(e.target.value)}
+                placeholder="What changed and why. Followers get this."
+                className="w-full resize-y rounded-lg border border-line-2 bg-panel px-2.5 py-2 text-[13px] text-ink-1 placeholder:text-ink-4 focus:border-accent focus:outline-none"
+              />
+              {status.fetcher.data?.error && (
+                <p role="alert" className="text-[12px] text-rose-ink">
+                  {status.fetcher.data.error}
+                </p>
+              )}
+              <button
+                type="submit"
+                disabled={status.pending || (!statusChanged && !note.trim())}
+                className="h-9 cursor-pointer rounded-lg bg-accent text-[13px] font-semibold text-white transition-colors duration-150 hover:bg-accent-hover disabled:cursor-default disabled:opacity-50"
+              >
+                {status.pending ? 'Updating…' : 'Update and notify'}
+              </button>
+            </form>
+          )}
         </dl>
 
         <div>
@@ -285,6 +389,51 @@ export default function FeedbackPostPage() {
               <Share2Icon className="h-4 w-4" aria-hidden />
               Share
             </button>
+            {isAdmin && (
+              <form
+                className="mt-2 flex w-full flex-col gap-2"
+                onSubmit={e => {
+                  e.preventDefault();
+                  if (
+                    duplicateOf.trim() &&
+                    window.confirm(
+                      'Merge this post into the original? Its votes, follows and comments move there, and this link will redirect.'
+                    )
+                  ) {
+                    merge.submit({
+                      intent: 'mark-duplicate',
+                      postId: post.id,
+                      originalId: duplicateOf.trim(),
+                    });
+                  }
+                }}
+              >
+                <label htmlFor="duplicate-of" className="text-[12px] font-medium text-ink-2">
+                  Duplicate of (link or id)
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    id="duplicate-of"
+                    value={duplicateOf}
+                    onChange={e => setDuplicateOf(e.target.value)}
+                    placeholder="…/feedback/p/…"
+                    className="h-8 min-w-0 flex-1 rounded-lg border border-line-2 bg-panel px-2.5 text-[13px] text-ink-1 placeholder:text-ink-4 focus:border-accent focus:outline-none"
+                  />
+                  <button
+                    type="submit"
+                    disabled={!duplicateOf.trim() || merge.pending}
+                    className="h-8 cursor-pointer rounded-lg border border-line-2 bg-panel px-3 text-[12px] font-semibold text-ink-1 hover:border-line-strong disabled:cursor-default disabled:opacity-50"
+                  >
+                    Merge
+                  </button>
+                </div>
+                {merge.fetcher.data?.error && (
+                  <p role="alert" className="text-[12px] text-rose-ink">
+                    {merge.fetcher.data.error}
+                  </p>
+                )}
+              </form>
+            )}
             {canDelete && (
               <button
                 type="button"

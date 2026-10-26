@@ -461,10 +461,13 @@ export const auth = betterAuth({
     revokeSessionsOnPasswordReset: true,
   },
   emailVerification: {
-    // Both send a code through the emailOTP plugin (it overrides the default
-    // link email): on sign-up, and again when an unverified account tries to
-    // sign in.
-    sendOnSignUp: true,
+    // Codes go through the emailOTP plugin (it overrides the default link
+    // email). NOT on sign-up: better-auth also fires that for every new Github
+    // or Gitlab account, mailing an unasked-for code to the provider's address
+    // (often a personal one) before registration even asks which email to use.
+    // The email sign-up form requests its own code instead. On sign-in, an
+    // unverified password account still gets one.
+    sendOnSignUp: false,
     sendOnSignIn: true,
     autoSignInAfterVerification: true,
   },

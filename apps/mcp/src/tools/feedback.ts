@@ -31,6 +31,7 @@ import {
   FEEDBACK_CATEGORIES,
   FEEDBACK_RATE_LIMITS,
   FEEDBACK_STATUSES,
+  ROADMAP_STATUSES,
   FeedbackNotFoundError,
   FeedbackValidationError,
   type FeedbackRateKind,
@@ -149,12 +150,16 @@ export const feedbackReadTool: ToolDefinition<ReadArgs> = {
   title: 'Read the feedback board',
   description:
     'Reads the Classmoji feedback board: platform-wide feature requests, bug reports and ' +
-    'integration ideas for Classmoji itself, not tied to a classroom. ' +
+    'questions about Classmoji itself, not tied to a classroom. ' +
     "view 'search' (default) lists posts of EVERY status, Completed included, matching query " +
     "(title and body) and status, sorted 'top', 'new' or 'trending', up to limit (default 25, " +
-    "max 100), each with a short excerpt and a link. view 'roadmap' lists triaged posts by " +
-    "status (IN_REVIEW, PLANNED, IN_PROGRESS, COMPLETED). view 'post' returns one post " +
-    '(post_id) with its full body and comment thread. viewerVoted and viewerIsAuthor describe ' +
+    'max 100), each with a short excerpt and a link. Statuses by type: feature requests ' +
+    'IN_REVIEW, PLANNED, IN_PROGRESS, COMPLETED; bugs FIXED (open until then); questions ANSWERED. ' +
+    "view 'roadmap' lists triaged feature requests by status (IN_REVIEW, PLANNED, " +
+    "IN_PROGRESS, COMPLETED). view 'post' returns one post " +
+    "(post_id) with its full body, the team's public status notes (updates) and the comment " +
+    'thread; a post merged into another opens the original (merged_from names the one asked ' +
+    'for). Merged duplicates never appear in search or the roadmap. viewerVoted and viewerIsAuthor describe ' +
     'you; anonymous posts and comments have author null. Search here before filing a post ' +
     'with feedback_write.',
   scope: 'read',
@@ -182,9 +187,14 @@ export const feedbackReadTool: ToolDefinition<ReadArgs> = {
 
     if (view === 'post') {
       if (!args.post_id) throw new ToolError('invalid_params', "view 'post' needs post_id");
-      const post = await feedback().getPost(args.post_id, viewer.userId);
+      let post = await feedback().getPost(args.post_id, viewer.userId);
+      // A merged duplicate lives on in its original, as on the web.
+      const mergedFrom = post?.duplicate_of_id ? post.id : null;
+      if (post?.duplicate_of_id)
+        post = await feedback().getPost(post.duplicate_of_id, viewer.userId);
       if (!post) throw new ToolError('not_found', 'That post no longer exists.');
       return ok({
+        ...(mergedFrom ? { merged_from: mergedFrom } : {}),
         id: post.id,
         title: post.title,
         body: post.body,
@@ -200,6 +210,13 @@ export const feedbackReadTool: ToolDefinition<ReadArgs> = {
         viewerFollows: post.viewerFollows,
         viewerIsAuthor: post.viewerIsAuthor,
         url: postUrl(post.id),
+        // The team's public notes on status changes, newest first.
+        updates: post.updates.map(update => ({
+          from_status: update.from_status,
+          to_status: update.to_status,
+          note: update.note,
+          created_at: update.created_at,
+        })),
         comments: post.comments.map(comment => ({
           ...shapeComment(comment),
           replies: comment.replies.map(shapeComment),
@@ -211,7 +228,7 @@ export const feedbackReadTool: ToolDefinition<ReadArgs> = {
       const columns = await feedback().listRoadmap(viewer.userId);
       return ok({
         columns: Object.fromEntries(
-          FEEDBACK_STATUSES.map(status => [
+          ROADMAP_STATUSES.map(status => [
             status,
             {
               total: columns[status].length,
@@ -278,7 +295,7 @@ export const feedbackWriteTool: ToolDefinition<WriteArgs> = {
     'integration ideas for Classmoji itself, not tied to a classroom) as you. Before filing a ' +
     "post, run feedback_read (view 'search') with a few keywords: if a post already covers it, " +
     'vote for it or comment on it instead of filing a duplicate. ' +
-    "action 'post': title and body; category FEATURE (default), BUG or INTEGRATION. You vote " +
+    "action 'post': title and body; category FEATURE (default), BUG or QUESTION. You vote " +
     "for and follow your new post. Returns post_id. action 'comment': body (up to 3000 " +
     'characters) on post_id; parent_comment_id replies to a top-level comment. Returns ' +
     "comment_id. action 'vote': post_id OR comment_id, and voted (true adds your vote, false " +
@@ -302,7 +319,7 @@ export const feedbackWriteTool: ToolDefinition<WriteArgs> = {
     category: z
       .enum(FEEDBACK_CATEGORIES)
       .optional()
-      .describe('post: FEATURE (default), BUG or INTEGRATION'),
+      .describe('post: FEATURE (default), BUG or QUESTION'),
     anonymous: z
       .boolean()
       .optional()
