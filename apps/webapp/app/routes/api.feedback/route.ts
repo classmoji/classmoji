@@ -107,13 +107,12 @@ export const action = async ({ request }: Route.ActionArgs) => {
         if (status && !isFeedbackStatus(status)) {
           return Response.json({ error: 'Unknown status.' }, { status: 400 });
         }
-        // Followers get the note with the update, so an admin always writes one.
+        // The note is optional; followers get it with the update when there is one.
         await feedback.setStatus({
           postId: field('postId'),
           status: status && isFeedbackStatus(status) ? status : null,
           actorId: userId,
           note: field('note'),
-          requireNote: true,
         });
         return { ok: true };
       }
