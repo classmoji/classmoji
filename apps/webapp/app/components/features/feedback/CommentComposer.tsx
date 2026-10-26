@@ -9,6 +9,8 @@ interface CommentComposerProps {
   parentId?: string;
   signedIn: boolean;
   placeholder?: string;
+  /** Text the box starts with, e.g. "@Paul " when answering a reply. */
+  initialBody?: string;
   compact?: boolean;
   autoFocus?: boolean;
   onCancel?: () => void;
@@ -20,17 +22,25 @@ export function CommentComposer({
   parentId,
   signedIn,
   placeholder = 'Add a comment…',
+  initialBody = '',
   compact = false,
   autoFocus = false,
   onCancel,
   onPosted,
 }: CommentComposerProps) {
-  const [body, setBody] = useState('');
+  const [body, setBody] = useState(initialBody);
   const [anonymous, setAnonymous] = useState(false);
   const location = useLocation();
   const { fetcher, submit, pending } = useFeedbackAction(signedIn);
   const sent = useRef(false);
+  const textarea = useRef<HTMLTextAreaElement>(null);
   const empty = body.trim().length === 0;
+
+  // Start typing after any text the box opened with.
+  useEffect(() => {
+    const el = textarea.current;
+    if (autoFocus && el) el.setSelectionRange(el.value.length, el.value.length);
+  }, [autoFocus]);
 
   // Clear once the server took it; keep the text if it was refused.
   useEffect(() => {
@@ -79,6 +89,7 @@ export function CommentComposer({
         className="rounded-xl border border-line-2 bg-panel transition-colors duration-150 focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/20"
       >
         <textarea
+          ref={textarea}
           aria-label={placeholder}
           rows={compact ? 2 : 3}
           autoFocus={autoFocus}
