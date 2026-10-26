@@ -1,6 +1,12 @@
 import type { FeedbackStatus } from '@prisma/client';
 import type { LucideIcon } from 'lucide-react';
-import { CheckCircle2Icon, CircleDashedIcon, CircleDotIcon, EyeIcon } from 'lucide-react';
+import {
+  CheckCircle2Icon,
+  CircleDashedIcon,
+  CircleDotIcon,
+  EyeIcon,
+  MessageCircleQuestionIcon,
+} from 'lucide-react';
 import { STATUS_META } from './feedback';
 
 const ICONS: Record<FeedbackStatus, LucideIcon> = {
@@ -8,6 +14,8 @@ const ICONS: Record<FeedbackStatus, LucideIcon> = {
   PLANNED: CircleDashedIcon,
   IN_PROGRESS: CircleDotIcon,
   COMPLETED: CheckCircle2Icon,
+  FIXED: CheckCircle2Icon,
+  ANSWERED: MessageCircleQuestionIcon,
 };
 
 export function StatusLabel({

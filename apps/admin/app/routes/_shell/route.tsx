@@ -28,6 +28,7 @@ const TABS = [
   { to: '/', label: 'Dashboard', end: true },
   { to: '/users', label: 'Users', end: false },
   { to: '/classrooms', label: 'Classrooms', end: false },
+  { to: '/feedback', label: 'Feedback', end: false },
   { to: '/content-delivery', label: 'Content delivery', end: false },
   { to: '/gitlab-instances', label: 'Gitlab', end: false },
 ];

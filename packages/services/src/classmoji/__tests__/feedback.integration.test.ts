@@ -53,7 +53,7 @@ describe.skipIf(!RUN)('feedback.service (integration)', () => {
       authorId: author,
       title: `Sync grades to Canvas ${suite}`,
       body: 'Please',
-      category: 'INTEGRATION',
+      category: 'FEATURE',
     }));
     const post = await feedback.getPost(postId, author);
     expect(post?.vote_count).toBe(1);
@@ -186,6 +186,58 @@ describe.skipIf(!RUN)('feedback.service (integration)', () => {
     expect(found[0]?.author).not.toHaveProperty('email');
   });
 
+  it("gives each type its own statuses, and refuses another type's", async () => {
+    const make = async (category: 'BUG' | 'QUESTION') =>
+      (
+        await feedback.createPost({
+          authorId: author,
+          title: `A ${category.toLowerCase()} ${suite}`,
+          body: 'Details',
+          category,
+        })
+      ).id;
+    const bug = await make('BUG');
+    const question = await make('QUESTION');
+
+    await expect(
+      feedback.setStatus({ postId: bug, status: 'PLANNED', actorId: admin })
+    ).rejects.toBeInstanceOf(feedback.FeedbackValidationError);
+    await expect(
+      feedback.setStatus({ postId: question, status: 'FIXED', actorId: admin })
+    ).rejects.toBeInstanceOf(feedback.FeedbackValidationError);
+    await expect(
+      feedback.setStatus({ postId, status: 'ANSWERED', actorId: admin })
+    ).rejects.toBeInstanceOf(feedback.FeedbackValidationError);
+
+    await feedback.setStatus({ postId: bug, status: 'FIXED', actorId: admin });
+    await feedback.setStatus({ postId: question, status: 'ANSWERED', actorId: admin });
+
+    // Only feature requests reach the roadmap and "Recently shipped".
+    const roadmap = await feedback.listRoadmap();
+    expect(Object.keys(roadmap).sort()).toEqual(
+      ['COMPLETED', 'IN_PROGRESS', 'IN_REVIEW', 'PLANNED'].sort()
+    );
+    const onRoadmap = Object.values(roadmap)
+      .flat()
+      .map(p => p.id);
+    expect(onRoadmap).not.toContain(bug);
+    expect(onRoadmap).not.toContain(question);
+    expect((await feedback.listRecentlyShipped(50)).map(p => p.id)).not.toContain(bug);
+
+    // A fixed bug leaves the open board like a completed feature; an answered
+    // question stays, because others will have the same question.
+    const open = (await feedback.listPosts({ query: suite })).map(p => p.id);
+    expect(open).not.toContain(bug);
+    expect(open).toContain(question);
+
+    // The type filter.
+    const fixedBugs = await feedback.listPosts({ query: suite, category: 'BUG', status: 'FIXED' });
+    expect(fixedBugs.map(p => p.id)).toEqual([bug]);
+    const questions = await feedback.listPosts({ query: suite, category: 'QUESTION' });
+    expect(questions.every(p => p.category === 'QUESTION')).toBe(true);
+    expect(questions.map(p => p.id)).toContain(question);
+  });
+
   it('stores a category and refuses an unknown one', async () => {
     const { id } = await feedback.createPost({
       authorId: author,
@@ -199,7 +251,7 @@ describe.skipIf(!RUN)('feedback.service (integration)', () => {
         authorId: author,
         title: `Unknown kind ${suite}`,
         body: 'Body',
-        category: 'QUESTION' as never,
+        category: 'SURVEY' as never,
       })
     ).rejects.toBeInstanceOf(feedback.FeedbackValidationError);
   });
