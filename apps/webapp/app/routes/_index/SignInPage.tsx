@@ -96,6 +96,7 @@ const SignInPage = ({
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [schoolId, setSchoolId] = useState('');
   const [code, setCode] = useState('');
   const [error, setError] = useState<string | null>(
     oauthError ? (OAUTH_ERRORS[oauthError] ?? 'Sign-in failed. Please try again.') : null
@@ -153,6 +154,7 @@ const SignInPage = ({
         email,
         password,
         callbackURL,
+        ...(schoolId.trim() ? { school_id: schoolId.trim() } : {}),
       } as Parameters<typeof authClient.signUp.email>[0]);
       if (signUpError) {
         setError(errorMessage(signUpError));
@@ -479,6 +481,18 @@ const SignInPage = ({
                             value={confirmPassword}
                             onChange={e => setConfirmPassword(e.target.value)}
                             required
+                          />
+                        </div>
+                        <div>
+                          <label htmlFor="auth-school-id" className={labelClass}>
+                            School ID <span className="font-normal text-ink-3">(optional)</span>
+                          </label>
+                          <input
+                            id="auth-school-id"
+                            className={`mt-1.5 ${fieldClass}`}
+                            maxLength={64}
+                            value={schoolId}
+                            onChange={e => setSchoolId(e.target.value)}
                           />
                         </div>
                         <button type="submit" className={primaryButton} disabled={busy}>
