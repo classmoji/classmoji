@@ -59,11 +59,7 @@ const InviteLinkModal = ({
   return (
     <Modal open={open} onCancel={onClose} footer={null} title="Invite link" width={480}>
       <p className="text-sm text-gray-600 dark:text-gray-400">
-        Share one link with the whole class. Students sign in with {platform} and join right away;
-        {isGitLab
-          ? ' their repositories are created as they join.'
-          : ' Github then asks them to accept the class organization in the same tab.'}{' '}
-        No roster needed: students on a roster you pasted are matched to it by their verified email.
+        Share this link with your class. Students sign in with {platform} and join right away.
       </p>
 
       <label className="mt-5 flex items-center justify-between gap-3">

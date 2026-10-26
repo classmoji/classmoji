@@ -3,7 +3,7 @@ import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
 import { Button, Form, Input, Spin, Card, Alert, Space } from 'antd';
 import { redirect, useFetcher, useNavigate } from 'react-router';
 import { UserOutlined, MailOutlined, GithubOutlined, CheckCircleFilled } from '@ant-design/icons';
-import { IconId } from '@tabler/icons-react';
+import { IconInfoCircle } from '@tabler/icons-react';
 
 import type { Route } from './+types/route';
 import { Logo } from '@classmoji/ui-components';
@@ -318,12 +318,28 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
             }}
             disabled={isSubmitting}
           >
-            {/* School Email + Send Code */}
+            {/* Which address to use: a roster match needs the one the instructor
+                pasted; an invite link works with any. */}
+            {!emailVerified && (
+              <div className="mb-4 flex items-start gap-2.5 rounded-lg bg-sky-50 dark:bg-sky-950/40 ring-1 ring-sky-200 dark:ring-sky-900 px-3.5 py-3">
+                <IconInfoCircle
+                  size={18}
+                  aria-hidden="true"
+                  className="mt-px shrink-0 text-sky-700 dark:text-sky-300"
+                />
+                <p className="m-0 text-[13px] leading-snug text-gray-800 dark:text-gray-200">
+                  <span className="font-semibold">Added by your instructor?</span> Use the email
+                  they added you with, and your classes will be waiting.
+                </p>
+              </div>
+            )}
+
+            {/* Email + Send Code */}
             <Form.Item
               label={
                 <span className="flex items-center gap-2 font-medium text-gray-700 text-sm">
                   <MailOutlined />
-                  School Email
+                  Email
                   {emailVerified && <CheckCircleFilled style={{ color: '#22c55e' }} />}
                 </span>
               }
@@ -339,12 +355,12 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
                   name="email"
                   noStyle
                   rules={[
-                    { required: true, message: 'Please enter your school email' },
+                    { required: true, message: 'Please enter your email' },
                     { type: 'email', message: 'Please enter a valid email address' },
                   ]}
                 >
                   <Input
-                    placeholder="your.email@university.edu"
+                    placeholder="you@example.com"
                     prefix={<MailOutlined className="text-gray-400" />}
                     readOnly={emailVerified}
                     className={emailVerified ? 'bg-gray-50' : ''}
@@ -451,21 +467,6 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
                     placeholder="Enter your full name"
                     prefix={<UserOutlined className="text-gray-400" />}
                   />
-                </Form.Item>
-
-                {/* School ID */}
-                <Form.Item
-                  label={
-                    <span className="flex items-center gap-2 font-medium text-gray-700 text-sm">
-                      <IconId size={14} />
-                      School ID
-                    </span>
-                  }
-                  name="school_id"
-                  rules={[{ required: true, message: 'Please enter your school ID' }]}
-                  className="mb-6"
-                >
-                  <Input placeholder="Enter your school ID" />
                 </Form.Item>
 
                 {/* Submit Button */}
@@ -578,7 +579,6 @@ export const action = async ({ request }: Route.ActionArgs) => {
       name: formData.name,
       email,
       emailVerified: true,
-      school_id: formData.school_id || null,
     },
   });
   const hasSubscription = await getPrisma().subscription.count({ where: { user_id: user.id } });
