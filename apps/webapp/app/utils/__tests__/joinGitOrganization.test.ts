@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mocks = vi.hoisted(() => ({
   userFindUnique: vi.fn(),
   auditCreate: vi.fn(),
+  membershipUpdateById: vi.fn(),
   taskTrigger: vi.fn(),
   getTeam: vi.fn(),
   membershipState: vi.fn(),
@@ -25,7 +26,12 @@ vi.mock('@classmoji/database', async () => ({
 }));
 
 vi.mock('@classmoji/services', () => ({
-  ClassmojiService: { audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) } },
+  ClassmojiService: {
+    audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
+    classroomMembership: {
+      updateById: (...a: unknown[]) => mocks.membershipUpdateById(...a),
+    },
+  },
   getGitProvider: () => ({
     orgMembershipState: (...a: unknown[]) => mocks.membershipState(...a),
     addTeamMember: (...a: unknown[]) => mocks.addTeamMember(...a),
@@ -74,6 +80,8 @@ describe('joinGitOrganization', () => {
 
     const result = await run();
 
+    // Still pending until they accept on Github (the member_added webhook).
+    expect(mocks.membershipUpdateById).not.toHaveBeenCalled();
     expect(mocks.inviteToOrganization).toHaveBeenCalledWith('cs10-org', '42', [7]);
     expect(result).toMatchObject({
       ok: true,
@@ -103,6 +111,21 @@ describe('joinGitOrganization', () => {
     );
     expect(result).toMatchObject({ ok: true, outcome: 'added_to_team' });
     expect(result.ok && result.invitationUrl).toBeUndefined();
+    // Accepted in the request, so the picker shows their role at once.
+    expect(mocks.membershipUpdateById).toHaveBeenCalledWith('mem-a', {
+      has_accepted_invite: true,
+    });
+  });
+
+  it('leaves the membership pending when the activation cannot be queued', async () => {
+    mocks.userFindUnique.mockResolvedValue(githubIdentity);
+    mocks.membershipState.mockResolvedValue('active');
+    mocks.taskTrigger.mockRejectedValue(new Error('trigger down'));
+
+    const result = await run();
+
+    expect(result).toMatchObject({ ok: false, reason: 'failed' });
+    expect(mocks.membershipUpdateById).not.toHaveBeenCalled();
   });
 
   it.each([

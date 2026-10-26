@@ -13,8 +13,12 @@ interface CommentItemProps {
   signedIn: boolean;
   viewerId: string | null;
   isAdmin: boolean;
-  /** Replies are one level deep, so only top-level comments offer "Reply". */
+  /**
+   * Threads are one level deep: a reply's "Reply" answers inside the same
+   * thread, under the top-level comment, starting with "@name".
+   */
   isReply?: boolean;
+  onReply?: (mention: string) => void;
 }
 
 export function CommentItem({
@@ -24,8 +28,10 @@ export function CommentItem({
   viewerId,
   isAdmin,
   isReply = false,
+  onReply,
 }: CommentItemProps) {
-  const [replying, setReplying] = useState(false);
+  // The thread's reply box: null when closed, else the text it opens with.
+  const [replyBody, setReplyBody] = useState<string | null>(null);
   const vote = useOptimisticVote(
     'comment-vote',
     'commentId',
@@ -58,16 +64,18 @@ export function CommentItem({
         </p>
         <div className="mt-2 flex items-center justify-between">
           <div className="flex items-center gap-4">
-            {!isReply && (
-              <button
-                type="button"
-                onClick={() => setReplying(v => !v)}
-                aria-expanded={replying}
-                className="cursor-pointer rounded-md text-[12px] font-medium text-ink-3 transition-colors duration-150 hover:text-ink-0"
-              >
-                Reply
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() =>
+                isReply
+                  ? onReply?.(comment.is_anonymous ? '' : `@${name} `)
+                  : setReplyBody(v => (v === null ? '' : null))
+              }
+              aria-expanded={isReply ? undefined : replyBody !== null}
+              className="cursor-pointer rounded-md text-[12px] font-medium text-ink-3 transition-colors duration-150 hover:text-ink-0"
+            >
+              Reply
+            </button>
             {canDelete && (
               <button
                 type="button"
@@ -85,20 +93,6 @@ export function CommentItem({
           </div>
           <VoteButton size="sm" count={vote.count} voted={vote.voted} onToggle={vote.toggle} />
         </div>
-        {replying && (
-          <div className="mt-3">
-            <CommentComposer
-              compact
-              autoFocus
-              postId={postId}
-              parentId={comment.id}
-              signedIn={signedIn}
-              placeholder={`Reply to ${name}…`}
-              onCancel={() => setReplying(false)}
-              onPosted={() => setReplying(false)}
-            />
-          </div>
-        )}
         {comment.replies && comment.replies.length > 0 && (
           <ul className="mt-4 flex flex-col gap-5 border-l border-line pl-4">
             {comment.replies.map(reply => (
@@ -110,9 +104,26 @@ export function CommentItem({
                 viewerId={viewerId}
                 isAdmin={isAdmin}
                 isReply
+                onReply={setReplyBody}
               />
             ))}
           </ul>
+        )}
+        {replyBody !== null && (
+          <div className="mt-3">
+            <CommentComposer
+              key={replyBody}
+              compact
+              autoFocus
+              postId={postId}
+              parentId={comment.id}
+              signedIn={signedIn}
+              initialBody={replyBody}
+              placeholder={`Reply to ${name}…`}
+              onCancel={() => setReplyBody(null)}
+              onPosted={() => setReplyBody(null)}
+            />
+          </div>
         )}
       </div>
     </li>
