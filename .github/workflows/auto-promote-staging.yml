@@ -1,45 +1,54 @@
 name: Auto-promote Staging to Main
 
+# Runs on every push to staging (a merged PR is a push), not on the PR event:
+# a `pull_request` run for a PR from a fork gets no secrets, so a merged fork
+# PR never opened the promote PR. A push to this repo's own branch is always a
+# trusted run. Event text (PR titles, commit messages) is passed to the shell
+# through `env:` only, never interpolated into a script with `${{ }}`.
+
 on:
-  pull_request:
-    types: [closed]
+  push:
     branches:
       - staging
 
+# One run at a time. Several quick merges may cancel a waiting run (and skip its
+# "new changes" comment); the PR itself stays right, since each run reads the
+# live branches.
+concurrency:
+  group: auto-promote-staging
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
 jobs:
   create-main-pr:
-    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
-
-    permissions:
-      contents: write
-      pull-requests: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
-
-      - name: Configure Git
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          persist-credentials: false
 
       - name: Check if staging is ahead of main
         id: check-changes
         run: |
           git fetch origin main staging
           COMMITS_AHEAD=$(git rev-list --count origin/main..origin/staging)
-          echo "commits_ahead=$COMMITS_AHEAD" >> $GITHUB_OUTPUT
+          echo "commits_ahead=$COMMITS_AHEAD" >> "$GITHUB_OUTPUT"
           echo "Staging is $COMMITS_AHEAD commits ahead of main"
 
       - name: Check for existing PR
         id: check-pr
         run: |
-          EXISTING_PR=$(gh pr list --head staging --base main --state open --json number --jq '.[0].number // empty')
-          echo "existing_pr=$EXISTING_PR" >> $GITHUB_OUTPUT
+          # This repo's own staging branch only: a fork's branch may also be
+          # named staging.
+          EXISTING_PR=$(gh pr list --head staging --base main --state open \
+            --json number,isCrossRepository \
+            --jq '[.[] | select(.isCrossRepository == false)][0].number // empty')
+          echo "existing_pr=$EXISTING_PR" >> "$GITHUB_OUTPUT"
           if [ -n "$EXISTING_PR" ]; then
             echo "Existing PR #$EXISTING_PR found"
           else
@@ -48,23 +57,46 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
 
+      - name: Describe what was pushed
+        id: describe
+        if: steps.check-changes.outputs.commits_ahead > 0
+        run: |
+          # The PR this push merged, if any (a direct push has none). Only
+          # describes the push, so a failed lookup must not stop the PR.
+          PR_JSON=$(gh api "repos/$REPO/commits/$SHA/pulls" \
+            --jq '[.[] | select(.base.ref == "staging" and .merged_at != null)][0] // empty') || PR_JSON=""
+          if [ -n "$PR_JSON" ]; then
+            NUMBER=$(jq -r '.number' <<<"$PR_JSON")
+            AUTHOR=$(jq -r '.user.login' <<<"$PR_JSON")
+            TITLE=$(jq -r '.title' <<<"$PR_JSON")
+            SOURCE="Merge of PR #$NUMBER by @$AUTHOR"
+          else
+            TITLE=$(git log -1 --format=%s "$SHA")
+            SOURCE="Push of ${SHA:0:7}"
+          fi
+          # A random delimiter, so no title can end the value early.
+          DELIM="EOF_$(openssl rand -hex 16)"
+          {
+            printf 'source=%s\n' "$SOURCE"
+            printf 'title<<%s\n' "$DELIM"
+            printf '%s\n' "$TITLE"
+            printf '%s\n' "$DELIM"
+          } >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+
       - name: Create PR from staging to main
+        id: create
         if: steps.check-changes.outputs.commits_ahead > 0 && steps.check-pr.outputs.existing_pr == ''
         run: |
-          # Get the latest merged PR info for context
-          MERGED_PR_TITLE="${{ github.event.pull_request.title }}"
-          MERGED_PR_NUMBER="${{ github.event.pull_request.number }}"
-          MERGED_PR_AUTHOR="${{ github.event.pull_request.user.login }}"
-
-          # Create PR with detailed body (without labels to avoid errors)
-          gh pr create \
-            --title "🚀 Promote staging to main" \
-            --body "## Summary
+          BODY="## Summary
 
           This PR promotes the latest changes from \`staging\` to \`main\`.
 
-          **Triggered by:** Merge of PR #$MERGED_PR_NUMBER by @$MERGED_PR_AUTHOR
-          **Latest change:** $MERGED_PR_TITLE
+          **Triggered by:** $SOURCE
+          **Latest change:** $TITLE
 
           ## Changes
 
@@ -79,45 +111,49 @@ jobs:
 
           ---
 
-          🤖 This PR was automatically created by GitHub Actions when PR #$MERGED_PR_NUMBER was merged into staging." \
-            --base main \
-            --head staging
+          🤖 This PR was automatically created by GitHub Actions when staging was updated ($SOURCE)."
 
-          echo "✅ Created PR from staging to main"
+          PR_URL=$(gh pr create \
+            --title "🚀 Promote staging to main" \
+            --body "$BODY" \
+            --base main \
+            --head staging)
+          echo "url=$PR_URL" >> "$GITHUB_OUTPUT"
+
+          echo "✅ Created PR from staging to main: $PR_URL"
         env:
           GH_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          SOURCE: ${{ steps.describe.outputs.source }}
+          TITLE: ${{ steps.describe.outputs.title }}
 
       - name: Add labels to PR (if they exist)
         if: steps.check-changes.outputs.commits_ahead > 0 && steps.check-pr.outputs.existing_pr == ''
         run: |
-          # Get the PR number that was just created
-          PR_NUMBER=$(gh pr list --head staging --base main --state open --json number --jq '.[0].number')
-
           # Try to add labels, but don't fail if they don't exist
-          gh pr edit $PR_NUMBER --add-label "staging-to-main" || echo "⚠️ Could not add staging-to-main label (label may not exist)"
-          gh pr edit $PR_NUMBER --add-label "auto-generated" || echo "⚠️ Could not add auto-generated label (label may not exist)"
+          gh pr edit "$PR_URL" --add-label "staging-to-main" || echo "⚠️ Could not add staging-to-main label (label may not exist)"
+          gh pr edit "$PR_URL" --add-label "auto-generated" || echo "⚠️ Could not add auto-generated label (label may not exist)"
 
-          echo "✅ Attempted to add labels to PR #$PR_NUMBER"
+          echo "✅ Attempted to add labels to $PR_URL"
         env:
           GH_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          PR_URL: ${{ steps.create.outputs.url }}
 
       - name: Update existing PR
         if: steps.check-changes.outputs.commits_ahead > 0 && steps.check-pr.outputs.existing_pr != ''
         run: |
-          MERGED_PR_TITLE="${{ github.event.pull_request.title }}"
-          MERGED_PR_NUMBER="${{ github.event.pull_request.number }}"
-          MERGED_PR_AUTHOR="${{ github.event.pull_request.user.login }}"
+          gh pr comment "$EXISTING_PR" --body "🔄 **New changes available**
 
-          gh pr comment ${{ steps.check-pr.outputs.existing_pr }} --body "🔄 **New changes available**
-
-          PR #$MERGED_PR_NUMBER by @$MERGED_PR_AUTHOR was just merged into staging:
-          **$MERGED_PR_TITLE**
+          $SOURCE just landed on staging:
+          **$TITLE**
 
           This PR now includes these latest changes."
 
           echo "✅ Updated existing PR with new changes"
         env:
           GH_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          EXISTING_PR: ${{ steps.check-pr.outputs.existing_pr }}
+          SOURCE: ${{ steps.describe.outputs.source }}
+          TITLE: ${{ steps.describe.outputs.title }}
 
       - name: No changes to promote
         if: steps.check-changes.outputs.commits_ahead == 0
