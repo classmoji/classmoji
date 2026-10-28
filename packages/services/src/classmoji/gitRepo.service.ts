@@ -140,13 +140,19 @@ export const find = async (query: Prisma.GitRepoWhereInput) => {
   });
 };
 
+/**
+ * The git repo a student works in for one Repository: their own repo for an
+ * individual Repository, or their team's repo for a group one (those rows have
+ * a team_id and no student_id).
+ */
 export const findByStudent = async (repositoryId: string, userId: string) => {
   return withLogins(
     await getPrisma().gitRepo.findFirst({
       where: {
         repository_id: repositoryId,
-        student_id: userId,
+        OR: [{ student_id: userId }, { team: { memberships: { some: { user_id: userId } } } }],
       },
+      orderBy: { created_at: 'asc' },
       include: {
         repository: true,
         student: { include: GIT_IDENTITY },
