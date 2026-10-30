@@ -42,6 +42,7 @@ const supporters: Sponsor[] = [
 
 const infrastructure: Sponsor[] = [
   { name: 'Trigger.dev', href: 'https://trigger.dev', logo: '/sponsors/trigger-dev.svg', height: 38 },
+  { name: 'Neon', href: 'https://neon.com', logo: '/sponsors/neon.svg', height: 40 },
 ];
 
 const groups = [
@@ -66,11 +67,12 @@ const tile =
           </h2>
 
           {/* Equal columns, so the row's middle sits under the heading whatever
-              each logo's width; one column on phones. */}
+              each logo's width; one column on phones. The row's width follows
+              its count, so a short row doesn't spread its logos far apart. */}
           <ul
             aria-labelledby={group.id}
-            style={`--sponsor-cols: ${group.sponsors.length}`}
-            class="mx-auto mt-8 grid max-w-4xl grid-cols-1 items-center justify-items-center gap-y-6 sm:grid-cols-[repeat(var(--sponsor-cols),minmax(0,1fr))]"
+            style={`--sponsor-cols: ${group.sponsors.length}; max-width: min(56rem, calc(var(--sponsor-cols) * 18rem))`}
+            class="mx-auto mt-8 grid grid-cols-1 items-center justify-items-center gap-y-6 sm:grid-cols-[repeat(var(--sponsor-cols),minmax(0,1fr))]"
           >
             {group.sponsors.map(sponsor => {
               const content = sponsor.logo ? (
