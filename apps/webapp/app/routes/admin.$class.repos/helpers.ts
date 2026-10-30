@@ -378,4 +378,3 @@ export const syncAssignment = async (
     },
   };
 };
-

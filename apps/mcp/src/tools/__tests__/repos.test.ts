@@ -992,6 +992,27 @@ describe('repo_sync', () => {
     );
   });
 
+  it('audits a failed partial Sync and rethrows the error', async () => {
+    const syncError = new Error('batchTrigger failed');
+    mocks.syncRepositoryAssignments.mockRejectedValue(syncError);
+
+    await expect(repoSyncTool.handler(ARGS, CTX)).rejects.toBe(syncError);
+
+    const sessionId = mocks.syncRepositoryAssignments.mock.calls[0][3];
+    expect(mocks.auditCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resource_type: 'REPOSITORIES',
+        resource_id: REPO_ID,
+        action: 'UPDATE',
+        data: expect.objectContaining({
+          tool: 'repo_sync',
+          session_id: sessionId,
+          status: 'failed',
+        }),
+      })
+    );
+  });
+
   it('refuses a repo from another classroom before starting Sync', async () => {
     mocks.repositoryFindById.mockResolvedValue(storedRepo({ classroom_id: 'other-class' }));
 
@@ -1029,4 +1050,3 @@ describe('repo_sync', () => {
     });
   });
 });
-

@@ -184,9 +184,8 @@ export const findMissingAssignments = (
 
   for (const repo of repos) {
     const repoAssignmentIds = new Set(
-      repo.assignments?.map(
-        (assignment: { assignment_id: string }) => assignment.assignment_id
-      ) || []
+      repo.assignments?.map((assignment: { assignment_id: string }) => assignment.assignment_id) ||
+        []
     );
     for (const assignmentId of Object.keys(moduleAssignments)) {
       if (!repoAssignmentIds.has(assignmentId)) moduleAssignments[assignmentId].repos.push(repo);
@@ -243,4 +242,3 @@ const countMissingAssignments = (missingAssignments: Record<string, MissingAssig
     (count, assignment) => count + assignment.repos.length,
     0
   );
-

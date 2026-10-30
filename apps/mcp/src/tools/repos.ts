@@ -336,12 +336,24 @@ export const repoSyncTool: ToolDefinition<RepoSyncArgs> = {
     if (!classroomRecord) throw new ToolError('internal', 'Classroom not found');
 
     const sessionId = randomUUID();
-    const result = await syncRepositoryAssignments(
-      classroomSlugOf(ctx),
-      classroomRecord,
-      repository,
-      sessionId
-    );
+    let result: Awaited<ReturnType<typeof syncRepositoryAssignments>>;
+    try {
+      result = await syncRepositoryAssignments(
+        classroomSlugOf(ctx),
+        classroomRecord,
+        repository,
+        sessionId
+      );
+    } catch (error) {
+      // Sync may have queued some work before failing, so record the partial attempt.
+      await writeAudit(ctx, {
+        resource_type: 'REPOSITORIES',
+        resource_id: repository.id,
+        action: 'UPDATE',
+        data: { tool: 'repo_sync', session_id: sessionId, status: 'failed' },
+      });
+      throw error;
+    }
 
     await writeAudit(ctx, {
       resource_type: 'REPOSITORIES',
@@ -995,4 +1007,3 @@ export const repoDeleteTool: ToolDefinition<RepoDeleteArgs> = {
     });
   },
 };
-

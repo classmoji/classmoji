@@ -19,19 +19,18 @@ vi.mock('@classmoji/services', () => ({
     gitRepo: { findByRepository: (...args: unknown[]) => mocks.findByRepository(...args) },
     organizationTag: {
       findTeamsByTag: (...args: unknown[]) => mocks.findTeamsByTag(...args),
-      findByClassroomIdAndName: (...args: unknown[]) =>
-        mocks.findByClassroomIdAndName(...args),
+      findByClassroomIdAndName: (...args: unknown[]) => mocks.findByClassroomIdAndName(...args),
     },
     team: { findByTagId: (...args: unknown[]) => mocks.findTeamsByTagId(...args) },
     assignment: { update: (...args: unknown[]) => mocks.updateAssignment(...args) },
   },
 }));
 
-vi.mock('../workflows/gitRepo.ts', () => ({
+vi.mock('../../workflows/gitRepo.ts', () => ({
   createRepositoriesTask: { trigger: (...args: unknown[]) => mocks.createRepositories(...args) },
 }));
 
-vi.mock('../workflows/gitRepoAssignment.ts', () => ({
+vi.mock('../../workflows/gitRepoAssignment.ts', () => ({
   createGithubRepositoryAssignmentTask: {
     batchTrigger: (...args: unknown[]) => mocks.createAssignments(...args),
   },
@@ -192,4 +191,3 @@ describe('syncRepositoryAssignments', () => {
     expect(mocks.findByRepository).not.toHaveBeenCalled();
   });
 });
-
