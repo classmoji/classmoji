@@ -3,6 +3,7 @@ import { IconChevronRight } from '@tabler/icons-react';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import { normalizeAssistantText } from '~/utils/contentReferenceUrl';
+import { shouldFocusInput } from './focusInput';
 import ContentReferenceChips from './ContentReferenceChips';
 
 interface ChatMessage {
@@ -159,6 +160,10 @@ const SyllabusBotChat = ({
     }
   };
 
+  const focusInputUnlessSelecting = () => {
+    if (shouldFocusInput(window.getSelection())) inputRef.current?.focus();
+  };
+
   const handleHint = (question: SuggestedQuestion | string) => {
     if (isStreaming) return;
     onAskSuggestedQuestion(question);
@@ -180,7 +185,7 @@ const SyllabusBotChat = ({
   return (
     <>
       {/* Scrollable body */}
-      <div className="askmoji-body" onClick={() => inputRef.current?.focus()}>
+      <div className="askmoji-body" onClick={focusInputUnlessSelecting}>
         {/* Course header */}
         <div className="askmoji-course-name">{courseName}</div>
         <div className="askmoji-course-sub">
