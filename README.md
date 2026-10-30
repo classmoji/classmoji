@@ -47,6 +47,8 @@ Contributions are welcome, especially from students. See [CONTRIBUTING.md](./CON
 
 <p align="center">
   <a href="https://trigger.dev"><img src=".github/assets/trigger-dev.svg" alt="Trigger.dev" height="32"></a>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://neon.com"><img src=".github/assets/neon.svg" alt="Neon" height="32"></a>
   <br>
-  Background jobs powered by <a href="https://trigger.dev">Trigger.dev</a>
+  Background jobs powered by <a href="https://trigger.dev">Trigger.dev</a>. Postgres powered by <a href="https://neon.com">Neon</a>.
 </p>
