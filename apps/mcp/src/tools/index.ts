@@ -72,6 +72,7 @@ import {
   repoUpdateTool,
   repoDeleteTool,
   repoPublishTool,
+  repoSyncTool,
   repoUnpublishTool,
 } from './repos.ts';
 import { rosterAddStudentTool, rosterRemoveStudentTool } from './roster.ts';
@@ -288,13 +289,14 @@ export function registerAllTools(): void {
   // Extensions (STUDENT self)
   registerToolDefinition(extensionPurchaseTool);
 
-  // Repos: create/update/delete container + publish/unpublish + provisioning
-  // (OWNER). update freezes structural fields once student repos exist; delete
-  // is destructive, confirm-gated, and refuses published/provisioned repos.
+  // Repos: create/update/delete container + publish/unpublish/sync (OWNER).
+  // update freezes structural fields once student repos exist; delete is
+  // destructive, confirm-gated, and refuses published/provisioned repos.
   registerToolDefinition(repoCreateTool);
   registerToolDefinition(repoUpdateTool);
   registerToolDefinition(repoDeleteTool);
   registerToolDefinition(repoPublishTool);
+  registerToolDefinition(repoSyncTool);
   registerToolDefinition(repoUnpublishTool);
 
   // Classroom settings + lifecycle status (OWNER). The org tool writes
