@@ -136,6 +136,55 @@ describe('selectedSettingsFields', () => {
   });
 });
 
+describe('Ask Moji instructions are never imported', () => {
+  const all = {
+    grading: true,
+    tokens: true,
+    features: true,
+    aiConfig: true,
+    apiKeys: true,
+    gradeScales: true,
+    calendar: true,
+  };
+
+  it('are in no settings group, whatever is selected', () => {
+    for (const fields of Object.values(SETTINGS_FIELD_GROUPS)) {
+      expect(fields).not.toContain('syllabus_bot_instructions');
+    }
+    expect(selectedSettingsFields(all)).not.toContain('syllabus_bot_instructions');
+  });
+
+  it('a teacher-source import (keys stripped) and an owner one both leave them behind', async () => {
+    const update = vi.fn().mockResolvedValue({});
+    const tx = {
+      classroomSettings: {
+        findUnique: vi.fn().mockResolvedValue({
+          classroom_id: 'src',
+          syllabus_bot_instructions: 'Owner-only instructions',
+          syllabus_bot_model: 'claude-x',
+          syllabus_bot_enabled: false,
+          theme: 'stone',
+          anthropic_api_key: 'sk-src',
+        }),
+        update,
+      },
+      emojiMapping: { findMany: vi.fn().mockResolvedValue([]) },
+      letterGradeMapping: { findMany: vi.fn().mockResolvedValue([]) },
+      calendarEvent: { findMany: vi.fn().mockResolvedValue([]) },
+    };
+    // A teacher of the source: the webapp strips apiKeys (sourceAccess.ts).
+    const teacher = { ...all, apiKeys: false };
+    for (const selections of [teacher, all]) {
+      update.mockClear();
+      const summary = await importClassroomConfig('src', 'dst', 'user', selections, tx as never);
+      expect(summary.settings_fields).not.toContain('syllabus_bot_instructions');
+      const data = update.mock.calls[0][0].data as Record<string, unknown>;
+      expect(data).not.toHaveProperty('syllabus_bot_instructions');
+      expect(JSON.stringify(data)).not.toContain('Owner-only instructions');
+    }
+  });
+});
+
 describe('importClassroomConfig — quiz models', () => {
   // A hand-rolled `tx`: the source's settings row, and the update the import
   // writes to the target.

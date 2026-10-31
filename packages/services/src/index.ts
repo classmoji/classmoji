@@ -83,6 +83,10 @@ export type {
   MediaUsage,
 } from './media/index.ts';
 
+// The Free plan's one-active-class rule: the shape of a plan owner's counted
+// classes, for the pages that offer "Archive X and continue".
+export type { ActiveClassroomSummary } from './classmoji/planOwner.service.ts';
+
 // Git provider abstraction layer
 export {
   GitProvider,
@@ -164,6 +168,7 @@ export type {
   CourseworkAssignment,
   CourseworkStatus,
   CourseworkType,
+  LinkedMaterial,
   RepoRowFields,
   StudentCourseworkRow,
 } from './classmoji/studentCoursework.service.ts';
@@ -236,6 +241,27 @@ export {
   QuizAttemptNotFoundError,
   QuizAttemptIncompleteError,
 } from './classmoji/quizAttempt.service.ts';
+// A refused quiz grade adjustment or quiz regrade action (`code`, `status`).
+export {
+  QuizGradeError,
+  QUIZ_GRADE_COMMENT_MAX_LENGTH,
+  QUIZZES_UNAVAILABLE_MESSAGE,
+} from './classmoji/quizGradeAdjust.service.ts';
+export type {
+  QuizGradeErrorCode,
+  QuizGradeActor,
+  QuizAdjustResult,
+  QuizAttemptAdjustment,
+  AdjustQuizAttemptInput,
+  RevertQuizAttemptInput,
+} from './classmoji/quizGradeAdjust.service.ts';
+export { QUIZ_REGRADE_REPLY_MAX_LENGTH } from './classmoji/regradeRequest.service.ts';
+export type {
+  CreateQuizRegradeInput,
+  CreateQuizRegradeResult,
+  ResolveQuizRegradeInput,
+  ResolveQuizRegradeResult,
+} from './classmoji/regradeRequest.service.ts';
 // One builder for the remove_user_from_organization payload, so every caller
 // sends the same fields.
 export { buildRemoveUserPayload } from './classmoji/removeUserPayload.ts';
@@ -509,10 +535,19 @@ export {
   FeedbackNotFoundError,
   FEEDBACK_STATUSES,
   FEEDBACK_CATEGORIES,
+  FEEDBACK_STATUSES_BY_CATEGORY,
+  ROADMAP_STATUSES,
   FEEDBACK_STATUS_LABELS,
+  isStatusForCategory,
+  BUG_SECTION_LABELS,
+  type BugReportFields,
+  type VoterRole,
+  FEEDBACK_RATE_LIMITS,
   isFeedbackStatus,
   isFeedbackCategory,
   type FeedbackSort,
+  type FeedbackRateKind,
+  type RoadmapStatus,
 } from './classmoji/feedback.service.ts';
 
 // Fly certificate automation for class-site custom domains. Every method throws
@@ -623,3 +658,41 @@ export {
   publicFormUrlFor,
 } from './classmoji/siteLinks.ts';
 export type { SeoOriginInput } from './classmoji/siteLinks.ts';
+
+// Chat agents' shared storage pieces, and Ask Moji's conversation types (the
+// session route and the ask-moji task build against these).
+export type { ChatGrant, ReplyState, RedeliveryPolicy } from './classmoji/chatShared.ts';
+export type {
+  AskMojiGrant,
+  AskMojiRefusal,
+  AskMojiRuntimeState,
+  AskMojiSettingsRow,
+  AdmitResult as AskMojiAdmitResult,
+  CreateResult as AskMojiCreateResult,
+  OwnedConversation as AskMojiOwnedConversation,
+  TurnContext as AskMojiTurnContext,
+  AskMojiScope,
+  AskMojiSummary,
+  ConversationState as AskMojiConversationState,
+  FindOrCreateResult as AskMojiFindOrCreateResult,
+} from './classmoji/askMojiChat.service.ts';
+export type { ResolvedViewing as AskMojiResolvedViewing } from './classmoji/askMojiViewing.service.ts';
+export type {
+  AskMojiRating,
+  FeedbackSetResult as AskMojiFeedbackSetResult,
+  FeedbackClearResult as AskMojiFeedbackClearResult,
+} from './classmoji/askMojiFeedback.service.ts';
+export type {
+  UsageInsights as AskMojiUsageInsights,
+  UsageWeek as AskMojiUsageWeek,
+  MaterialRow as AskMojiMaterialRow,
+  FeedbackReviewRow as AskMojiFeedbackReviewRow,
+  FeedbackExchange as AskMojiFeedbackExchange,
+} from './classmoji/askMojiInsights.service.ts';
+export type {
+  AskMojiAccess,
+  AskMojiAvailability,
+  AskMojiStartResult,
+  AskMojiSessionRefusal,
+  AskMojiFeedbackResult,
+} from './classmoji/askMojiSession.service.ts';

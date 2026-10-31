@@ -131,6 +131,19 @@ describe('gradeToEmoji', () => {
     expect(gradeToEmoji(85, EMOJI_MAP)).toBe('+1');
     expect(gradeToEmoji(10, EMOJI_MAP)).toBe('sob');
   });
+
+  it('gives a score halfway between two emojis the higher one, whatever the order', () => {
+    const reversed = Object.fromEntries(Object.entries(EMOJI_MAP).reverse());
+    for (const map of [EMOJI_MAP, reversed]) {
+      expect(gradeToEmoji(70, map)).toBe('eyes');
+      expect(gradeToEmoji(30, map)).toBe('-1');
+    }
+  });
+
+  it('picks the same emoji among ones sharing a grade, whatever the order', () => {
+    expect(gradeToEmoji(100, { rocket: 100, heart: 100 })).toBe('heart');
+    expect(gradeToEmoji(100, { heart: 100, rocket: 100 })).toBe('heart');
+  });
 });
 
 describe('calculateAssignmentGrade', () => {

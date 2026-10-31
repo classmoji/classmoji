@@ -267,7 +267,9 @@ export function NotificationBell({ initialItems, initialUnreadCount, membershipR
                     <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 2 }}>
                       {n.type === 'FEEDBACK_STATUS_CHANGED'
                         ? `Feedback · now ${feedbackStatusLabel(n.metadata)} | `
-                        : n.classroom?.name
+                        : n.type === 'FEEDBACK_REPLY'
+                          ? 'Feedback · new reply | '
+                          : n.classroom?.name
                           ? `${n.classroom.name} | `
                           : ''}
                       {formatRelative(n.created_at)}

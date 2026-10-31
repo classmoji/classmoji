@@ -26,18 +26,25 @@ interface Row {
   is_grader: boolean;
 }
 let memberships: Row[] = [];
+/** Every row here has accepted; its id is `user:role`. */
+const rowId = (row: Row) => `${row.user_id}:${row.role}`;
+const matches = (where: Record<string, unknown>) => (row: Row) => {
+  if (where.classroom_id !== undefined && row.classroom_id !== where.classroom_id) return false;
+  if (where.user_id !== undefined && row.user_id !== where.user_id) return false;
+  if (where.is_grader !== undefined && row.is_grader !== where.is_grader) return false;
+  const role = where.role as string | { in: string[] } | undefined;
+  if (typeof role === 'string' && row.role !== role) return false;
+  if (role && typeof role === 'object' && !role.in.includes(row.role)) return false;
+  const id = where.id as { not: string } | undefined;
+  if (id && rowId(row) === id.not) return false;
+  return true;
+};
 const membershipCount = ({ where }: { where: Record<string, unknown> }) =>
-  Promise.resolve(
-    memberships.filter(row => {
-      if (where.classroom_id !== undefined && row.classroom_id !== where.classroom_id) return false;
-      if (where.user_id !== undefined && row.user_id !== where.user_id) return false;
-      if (where.is_grader !== undefined && row.is_grader !== where.is_grader) return false;
-      const role = where.role as string | { in: string[] } | undefined;
-      if (typeof role === 'string' && row.role !== role) return false;
-      if (role && typeof role === 'object' && !role.in.includes(row.role)) return false;
-      return true;
-    }).length
-  );
+  Promise.resolve(memberships.filter(matches(where)).length);
+const membershipFindFirst = ({ where }: { where: Record<string, unknown> }) => {
+  const row = memberships.find(matches(where));
+  return Promise.resolve(row ? { id: rowId(row), has_accepted_invite: true } : null);
+};
 
 vi.mock('@classmoji/database', async () => ({
   ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
@@ -59,6 +66,7 @@ vi.mock('@classmoji/database', async () => ({
     },
     classroomMembership: {
       count: (args: { where: Record<string, unknown> }) => membershipCount(args),
+      findFirst: (args: { where: Record<string, unknown> }) => membershipFindFirst(args),
     },
     auditLog: { findFirst: (...a: unknown[]) => auditFindFirst(...a) },
   }),

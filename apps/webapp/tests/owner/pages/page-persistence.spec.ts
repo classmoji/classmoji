@@ -42,7 +42,7 @@ async function seedPage(
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/^-|-$/g, ''),
       // content_path carries the tag so afterEach can purge deterministically.
-      content_path: `pages/${TAG}/${opts.id}`,
+      content_path: `pages/${TAG}-${opts.id}`,
       created_by: createdBy,
       is_draft: opts.is_draft ?? true,
       is_public: opts.is_public ?? false,
@@ -54,7 +54,7 @@ async function seedPage(
 async function purgePages(classroomId: string): Promise<void> {
   const prisma = getTestPrisma();
   await prisma.page.deleteMany({
-    where: { classroom_id: classroomId, content_path: { startsWith: `pages/${TAG}/` } },
+    where: { classroom_id: classroomId, content_path: { startsWith: `pages/${TAG}-` } },
   });
 }
 

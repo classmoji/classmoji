@@ -142,10 +142,16 @@ const evaluationWithStoredScores = (
     ...feedback
   } = completion as QuizEvaluation & Record<string, unknown>;
   const results = Array.isArray(attempt.question_results) ? attempt.question_results : [];
+  // The stored scores only where the drawer sent them (staff); a student's
+  // attempt carries none (E1), and none is made up here.
+  const scores = Object.fromEntries(
+    (['partial_credit_percentage', 'first_attempt_percentage'] as const).flatMap(key =>
+      typeof attempt[key] === 'number' ? [[key, attempt[key]]] : []
+    )
+  );
   return {
     ...feedback,
-    partial_credit_percentage: Number(attempt.partial_credit_percentage ?? 0),
-    first_attempt_percentage: Number(attempt.first_attempt_percentage ?? 0),
+    ...scores,
     question_results: results,
     total_questions: results.length,
   } as unknown as QuizEvaluation;

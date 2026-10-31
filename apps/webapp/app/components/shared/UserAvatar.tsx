@@ -1,21 +1,21 @@
 import { useState } from 'react';
 import { isPlaceholderAvatar } from '@classmoji/utils';
 
-const GRADIENTS = [
-  'from-rose-400 to-pink-500',
-  'from-amber-400 to-orange-500',
-  'from-emerald-400 to-teal-500',
-  'from-sky-400 to-indigo-500',
-  'from-violet-400 to-fuchsia-500',
-  'from-lime-400 to-green-500',
-  'from-cyan-400 to-blue-500',
-  'from-fuchsia-400 to-rose-500',
+const COLORS = [
+  'bg-pink-500',
+  'bg-orange-500',
+  'bg-teal-500',
+  'bg-indigo-500',
+  'bg-fuchsia-500',
+  'bg-green-500',
+  'bg-blue-500',
+  'bg-rose-500',
 ];
 
-const pickGradient = (seed: string) => {
+const pickColor = (seed: string) => {
   let hash = 0;
   for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) | 0;
-  return GRADIENTS[Math.abs(hash) % GRADIENTS.length];
+  return COLORS[Math.abs(hash) % COLORS.length];
 };
 
 const getInitials = (name?: string | null, login?: string | null) => {
@@ -53,7 +53,7 @@ const UserAvatar = ({
   // Remember which src failed, so a new image gets its own chance to load.
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const initials = getInitials(name, login);
-  const gradient = pickGradient(seed || login || name || 'x');
+  const color = pickColor(seed || login || name || 'x');
   const style = { width: size, height: size };
   const fontSize = Math.max(10, Math.round(size * 0.38));
 
@@ -64,7 +64,7 @@ const UserAvatar = ({
     return (
       <div
         style={{ ...style, fontSize }}
-        className={`rounded-full bg-gradient-to-br ${gradient} text-white flex items-center justify-center font-bold flex-shrink-0 ring-1 ring-black/5 dark:ring-white/10 ${className}`}
+        className={`rounded-full ${color} text-white flex items-center justify-center font-bold flex-shrink-0 ring-1 ring-black/5 dark:ring-white/10 ${className}`}
       >
         {initials}
       </div>

@@ -94,6 +94,12 @@ vi.mock('~/utils/helpers', () => ({ checkAuth: (fn: unknown) => fn }));
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     user: { findById: (...a: unknown[]) => findById(...a), findProviderUsernames: vi.fn() },
+    // The Free plan's one-active-class rule has its own tests; here there is room.
+    classroomLifecycle: {
+      allowanceFor: vi.fn(async () => ({ limit: 1, active: [], canCreate: true })),
+      assertCanCreateActive: vi.fn(async () => {}),
+      isActiveClassroomLimitError: () => false,
+    },
     classroomInvite: { claimPendingInvites: vi.fn(async () => ({ claimed: 0 })) },
   },
   GitHubProvider: { getUserOctokit: vi.fn() },
@@ -113,7 +119,11 @@ vi.mock('@trigger.dev/sdk', () => ({ tasks: {} }));
 
 // Only the loader is under test; the view layer only needs to import.
 vi.mock('antd', () => ({ Modal: () => null, Button: () => null }));
-vi.mock('@classmoji/ui-components', () => ({ useCallout: vi.fn(), Button: () => null, IconGithub: () => null }));
+vi.mock('@classmoji/ui-components', () => ({
+  useCallout: vi.fn(),
+  Button: () => null,
+  IconGithub: () => null,
+}));
 vi.mock('~/hooks', () => ({ useUser: vi.fn(), useDisclosure: vi.fn(), useGlobalFetcher: vi.fn() }));
 vi.mock('~/store', () => ({ default: vi.fn() }));
 vi.mock('~/components/features/landing', () => ({ ClassroomsLandingScreen: () => null }));
@@ -140,6 +150,10 @@ describe('select-organization payload', () => {
 
     expect(Object.keys(data).sort()).toEqual(
       [
+        // Classroom id -> Github's accept page, for this viewer's own invites.
+        'acceptUrls',
+        // The viewer's own Free-plan allowance (their classes only).
+        'activeClassAllowance',
         'gitMode',
         'githubAppName',
         'inviteEmailMismatch',

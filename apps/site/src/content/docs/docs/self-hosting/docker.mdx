@@ -23,7 +23,7 @@ There is no compose or Kubernetes file that wires all the services together for 
 
 ### Database
 
-Postgres is the only database. For local work, `npm run db:start` brings up the dev Postgres defined in `docker-compose.yml`. For a real deployment, point `DATABASE_URL` at a managed Postgres. The hosted version runs on Neon.
+Postgres is the only database. For local work, `npm run db:start` brings up the dev Postgres defined in `docker-compose.yml`. For a real deployment, we recommend [Neon](https://neon.com), the managed Postgres the hosted version of Classmoji runs on. Create a Neon project, copy its connection string, and set it as `DATABASE_URL`.
 
 ### Migrations
 

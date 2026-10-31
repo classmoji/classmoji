@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useFetcher } from 'react-router';
-import { Avatar, Input, Card, Button, Alert } from 'antd';
+import { Avatar, Input, Button, Alert } from 'antd';
 import { MailOutlined, UserOutlined } from '@ant-design/icons';
 import { IconId } from '@tabler/icons-react';
 
@@ -205,7 +205,7 @@ const SettingsGeneral = () => {
 
   return (
     <div className="w-2/3">
-      <Card className="">
+      <div>
         {/* Profile Header */}
         <div className="flex items-start gap-6 mb-8">
           <div className="relative">
@@ -321,7 +321,7 @@ const SettingsGeneral = () => {
           </div>
 
           {editing && (
-            <div className="mb-8 p-5 rounded-lg border border-line bg-bg-1">
+            <div className="mt-8 mb-8">
               <p className="text-sm font-semibold text-ink-0 mb-1">Change email address</p>
               <p className="text-sm text-ink-3 mb-4">
                 We will send a code to the new address to confirm it is yours. Classroom invitations
@@ -389,7 +389,7 @@ const SettingsGeneral = () => {
         <div className="border-t border-gray-200 dark:border-neutral-700 my-8"></div>
 
         <PasswordSection />
-      </Card>
+      </div>
     </div>
   );
 };

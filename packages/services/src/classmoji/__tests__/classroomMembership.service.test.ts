@@ -49,6 +49,29 @@ const { GIT_IDENTITY, whereGitUsername } = await import('@classmoji/database/git
 
 const LAST_OWNER_ERROR = 'Cannot remove the last owner of a classroom';
 
+// The owner rules themselves (who counts, who takes over) are planOwner's own
+// tests. Here the stand-in keeps the old "count the owners, refuse at one"
+// shape so these tests pin what this module does: lock, guard, hand off, write,
+// in that order, in one transaction.
+const handOffMock = vi.fn();
+const auditChangeMock = vi.fn();
+const onOwnerAcceptedMock = vi.fn();
+vi.mock('../planOwner.service.ts', () => ({
+  LAST_OWNER_ERROR: 'Cannot remove the last owner of a classroom',
+  assertOwnerRemains: async (
+    db: { classroomMembership: { count: (a: unknown) => Promise<number> } },
+    classroomId: string
+  ) => {
+    const owners = await db.classroomMembership.count({
+      where: { classroom_id: classroomId, role: 'OWNER' },
+    });
+    if (owners <= 1) throw new Error('Cannot remove the last owner of a classroom');
+  },
+  handOffPlanOwnership: (...a: unknown[]) => handOffMock(...a),
+  auditPlanOwnerChange: (...a: unknown[]) => auditChangeMock(...a),
+  onOwnerAccepted: (...a: unknown[]) => onOwnerAcceptedMock(...a),
+}));
+
 const membershipService = await import('../classroomMembership.service.ts');
 
 beforeEach(() => {
@@ -67,6 +90,10 @@ beforeEach(() => {
   deleteManyMock.mockResolvedValue({ count: 1 });
   deleteMock.mockResolvedValue({ id: 'm1' });
   queryRawMock.mockResolvedValue([{ id: 'c1' }]);
+  handOffMock.mockReset();
+  handOffMock.mockResolvedValue(null);
+  auditChangeMock.mockReset();
+  onOwnerAcceptedMock.mockReset();
 });
 
 describe('remove', () => {
@@ -150,6 +177,77 @@ describe('remove', () => {
     const rejected = results.find(r => r.status === 'rejected') as PromiseRejectedResult;
     expect((rejected.reason as Error).message).toBe(LAST_OWNER_ERROR);
     expect(deleteManyMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('plan-owner hand-off', () => {
+  it('hands the classroom on inside the transaction, after the guard and before the delete', async () => {
+    findFirstMock.mockResolvedValue({ id: 'm1', role: 'OWNER' });
+    countMock.mockResolvedValue(2);
+
+    await membershipService.remove('c1', 'u1', 'OWNER');
+
+    expect(handOffMock).toHaveBeenCalledWith(client, 'c1', 'u1');
+    expect(countMock.mock.invocationCallOrder[0]).toBeLessThan(
+      handOffMock.mock.invocationCallOrder[0]
+    );
+    expect(handOffMock.mock.invocationCallOrder[0]).toBeLessThan(
+      deleteManyMock.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('audits a hand-off as the owner who asked for the removal', async () => {
+    findFirstMock.mockResolvedValue({ id: 'm1', role: 'OWNER' });
+    countMock.mockResolvedValue(2);
+    const change = { classroomId: 'c1', from: 'u1', to: 'u2' };
+    handOffMock.mockResolvedValue(change);
+
+    await membershipService.remove('c1', 'u1', 'OWNER', { actorUserId: 'boss' });
+
+    expect(auditChangeMock).toHaveBeenCalledWith(change, {
+      actorUserId: 'boss',
+      reason: 'owner_left',
+    });
+  });
+
+  it('does not hand anything off when the removal is refused', async () => {
+    findFirstMock.mockResolvedValue({ id: 'm1', role: 'OWNER' });
+    countMock.mockResolvedValue(1);
+
+    await expect(membershipService.remove('c1', 'u1', 'OWNER')).rejects.toThrow(LAST_OWNER_ERROR);
+    expect(handOffMock).not.toHaveBeenCalled();
+    expect(auditChangeMock).not.toHaveBeenCalled();
+  });
+
+  it('hands off when an owner is demoted too', async () => {
+    findUniqueMock.mockResolvedValue({
+      id: 'm1',
+      role: 'OWNER',
+      classroom_id: 'c1',
+      user_id: 'u1',
+    });
+    countMock.mockResolvedValue(2);
+    updateMock.mockResolvedValue({ id: 'm1', role: 'TEACHER', user_id: 'u1' });
+
+    await membershipService.updateById('m1', { role: 'TEACHER' });
+
+    expect(handOffMock).toHaveBeenCalledWith(client, 'c1', 'u1');
+  });
+
+  it('lets an owner who accepts take over classrooms with no plan owner', async () => {
+    updateMock.mockResolvedValue({ id: 'm1', role: 'OWNER', user_id: 'u1' });
+
+    await membershipService.updateById('m1', { has_accepted_invite: true });
+
+    expect(onOwnerAcceptedMock).toHaveBeenCalledWith('u1');
+  });
+
+  it('does not claim anything when a student accepts', async () => {
+    updateMock.mockResolvedValue({ id: 'm1', role: 'STUDENT', user_id: 'u1' });
+
+    await membershipService.updateById('m1', { has_accepted_invite: true });
+
+    expect(onOwnerAcceptedMock).not.toHaveBeenCalled();
   });
 });
 

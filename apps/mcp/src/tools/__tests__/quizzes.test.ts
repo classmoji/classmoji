@@ -452,6 +452,144 @@ describe('course_search_enabled (quiz source material, Stage 2 tier)', () => {
   });
 });
 
+describe('code_sandbox_enabled (quiz sandbox questions)', () => {
+  it('quiz_create forwards it as codeSandboxEnabled, echoes it and audits the value', async () => {
+    mocks.quizCreate.mockResolvedValue({ ...QUIZ_ROW, code_sandbox_enabled: true });
+
+    const payload = parse(
+      await quizCreateTool.handler(
+        {
+          classroom: 'org/w26',
+          name: 'Q',
+          rubric_prompt: 'r',
+          module_id: MODULE_ID,
+          code_sandbox_enabled: true,
+        },
+        CTX
+      )
+    );
+
+    expect(mocks.quizCreate.mock.calls[0][0]).toMatchObject({ codeSandboxEnabled: true });
+    expect(payload.quiz.code_sandbox_enabled).toBe(true);
+    const audit = mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(audit.data).toMatchObject({ tool: 'quiz_create', code_sandbox_enabled: true });
+  });
+
+  it('quiz_create leaves it out when not given; the summary and the audit say false', async () => {
+    mocks.quizCreate.mockResolvedValue({ ...QUIZ_ROW, code_sandbox_enabled: false });
+
+    const payload = parse(
+      await quizCreateTool.handler(
+        { classroom: 'org/w26', name: 'Q', rubric_prompt: 'r', module_id: MODULE_ID },
+        CTX
+      )
+    );
+
+    expect(mocks.quizCreate.mock.calls[0][0]).not.toHaveProperty('codeSandboxEnabled');
+    expect(payload.quiz.code_sandbox_enabled).toBe(false);
+    const audit = mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(audit.data.code_sandbox_enabled).toBe(false);
+  });
+
+  it('the summary reports false for a row read before the column existed', async () => {
+    mocks.quizCreate.mockResolvedValue(QUIZ_ROW);
+
+    const payload = parse(
+      await quizCreateTool.handler(
+        { classroom: 'org/w26', name: 'Q', rubric_prompt: 'r', module_id: MODULE_ID },
+        CTX
+      )
+    );
+
+    expect(payload.quiz.code_sandbox_enabled).toBe(false);
+  });
+
+  it.each([true, false])(
+    'quiz_update maps %s alone, echoes it and audits the field name with its value',
+    async value => {
+      mocks.quizFindById.mockResolvedValue(QUIZ_ROW);
+      mocks.quizUpdate.mockResolvedValue({ ...QUIZ_ROW, code_sandbox_enabled: value });
+
+      const payload = parse(
+        await quizUpdateTool.handler(
+          { classroom: 'org/w26', quiz_id: 'quiz-1', code_sandbox_enabled: value },
+          CTX
+        )
+      );
+
+      // Not silently dropped: an update carrying only this field reaches the service.
+      expect(mocks.quizUpdate.mock.calls[0][1]).toEqual({ codeSandboxEnabled: value });
+      expect(payload.quiz.code_sandbox_enabled).toBe(value);
+      const audit = mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> };
+      expect(audit.data).toEqual({
+        tool: 'quiz_update',
+        fields: ['code_sandbox_enabled'],
+        code_sandbox_enabled: value,
+      });
+    }
+  );
+
+  it('quiz_update records no value for a call that does not set it', async () => {
+    mocks.quizFindById.mockResolvedValue(QUIZ_ROW);
+    mocks.quizUpdate.mockResolvedValue(QUIZ_ROW);
+
+    await quizUpdateTool.handler({ classroom: 'org/w26', quiz_id: 'quiz-1', name: 'R' }, CTX);
+
+    const audit = mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(audit.data).not.toHaveProperty('code_sandbox_enabled');
+  });
+
+  it('refuses it in another classroom before writing or auditing', async () => {
+    mocks.quizFindById.mockResolvedValue({ ...QUIZ_ROW, classroom_id: 'class-2' });
+
+    await expect(
+      quizUpdateTool.handler(
+        { classroom: 'org/w26', quiz_id: 'quiz-1', code_sandbox_enabled: true },
+        CTX
+      )
+    ).rejects.toMatchObject({ kind: 'not_found' });
+    expect(mocks.quizUpdate).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('is behind the same Pro and quizzes_enabled gates', async () => {
+    const disabled = ctxWithSettings({ quizzes_enabled: false });
+    await expect(
+      quizUpdateTool.handler(
+        { classroom: 'org/w26', quiz_id: 'quiz-1', code_sandbox_enabled: true },
+        disabled
+      )
+    ).rejects.toMatchObject({ kind: 'forbidden' });
+    expect(mocks.quizFindById).not.toHaveBeenCalled();
+    expect(mocks.quizUpdate).not.toHaveBeenCalled();
+  });
+
+  it('is a boolean in both schemas, described, and the annotations are unchanged', () => {
+    for (const tool of [quizCreateTool, quizUpdateTool]) {
+      const schema = z.object(tool.inputSchema);
+      expect(tool.inputSchema).toHaveProperty('code_sandbox_enabled');
+      expect(
+        schema.safeParse({
+          classroom: 'o/s',
+          quiz_id: 'x',
+          name: 'n',
+          rubric_prompt: 'r',
+          code_sandbox_enabled: 'yes',
+        }).success
+      ).toBe(false);
+      expect(
+        (tool.inputSchema as Record<string, z.ZodTypeAny>).code_sandbox_enabled.description
+      ).toBe(
+        'Let the AI attach an editable code sandbox (HTML/CSS/JS, TypeScript or React) to ' +
+          'questions answered in code (default false)'
+      );
+      // Not irreversible, and no permanent record about a user.
+      expect(tool.annotations, tool.name).toEqual({ destructive: false, openWorld: false });
+      expect(new TextEncoder().encode(tool.description).length, tool.name).toBeLessThan(1500);
+    }
+  });
+});
+
 describe('excluded_paths (code-aware quizzes)', () => {
   it('quiz_create forwards the list trimmed, repeats dropped, and echoes it', async () => {
     mocks.quizCreate.mockResolvedValue({
@@ -888,6 +1026,8 @@ describe('quiz_update: an assistant edits content, not the assignment', () => {
     ['system_prompt', 'Be brief', { systemPrompt: 'Be brief' }],
     ['include_code_context', true, { includeCodeContext: true }],
     ['course_search_enabled', true, { courseSearchEnabled: true }],
+    // A content setting, like Code-Aware: not an author-only one.
+    ['code_sandbox_enabled', true, { codeSandboxEnabled: true }],
     ['excluded_paths', ['tests/**'], { excludedPaths: ['tests/**'] }],
   ] as const)('lets %s through for an assistant', async (field, value, forwarded) => {
     const payload = parse(await quizUpdateTool.handler({ ...BASE, [field]: value }, ASSISTANT_CTX));

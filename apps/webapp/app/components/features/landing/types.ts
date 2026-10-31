@@ -38,4 +38,6 @@ export interface LandingClass {
   hasAcceptedInvite: boolean;
   /** A pending invite to a class on a provider this person has not connected. */
   needsConnect?: boolean;
+  /** Github's page for the org invitation already sent: clicking the card goes there. */
+  acceptUrl?: string;
 }

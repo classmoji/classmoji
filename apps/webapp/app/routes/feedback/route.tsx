@@ -26,7 +26,8 @@ export const meta = () => [
   { title: 'Feedback - Classmoji' },
   {
     name: 'description',
-    content: 'Request features, vote on ideas, and see what Classmoji is building next.',
+    content:
+      'Request features, report bugs, vote on ideas, and see what Classmoji is building next.',
   },
 ];
 

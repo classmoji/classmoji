@@ -1,6 +1,7 @@
 /**
  * Unit tests for the module (curriculum) tool batch — module_create /
- * module_update / module_publish / module_item_add / module_delete /
+ * module_update / module_publish / module_item_add / module_item_remove /
+ * module_item_move / module_delete /
  * module_reorder.
  *
  * The focus is the FIFTH item type. `ModuleItemType` gained `FORM`, and a
@@ -37,6 +38,9 @@ const mocks = vi.hoisted(() => ({
   moduleUpdateForClassroom: vi.fn(),
   moduleSetPublished: vi.fn(),
   moduleAddItem: vi.fn(),
+  moduleRemoveItem: vi.fn(),
+  moduleMoveItemToModuleEnd: vi.fn(),
+  moduleFindOtherModulesHolding: vi.fn(),
   moduleFindById: vi.fn(),
   moduleDeleteById: vi.fn(),
   moduleListContents: vi.fn(),
@@ -57,6 +61,10 @@ vi.mock('@classmoji/services', () => ({
       updateForClassroom: (...a: unknown[]) => mocks.moduleUpdateForClassroom(...a),
       setPublished: (...a: unknown[]) => mocks.moduleSetPublished(...a),
       addItem: (...a: unknown[]) => mocks.moduleAddItem(...a),
+      removeItem: (...a: unknown[]) => mocks.moduleRemoveItem(...a),
+      moveItemToModuleEnd: (...a: unknown[]) => mocks.moduleMoveItemToModuleEnd(...a),
+      findOtherModulesHolding: (...a: unknown[]) => mocks.moduleFindOtherModulesHolding(...a),
+      QUIZ_ITEM_REFUSAL: 'A quiz is placed in a module from the quiz form',
       findById: (...a: unknown[]) => mocks.moduleFindById(...a),
       deleteById: (...a: unknown[]) => mocks.moduleDeleteById(...a),
       listModuleContentsForClassroom: (...a: unknown[]) => mocks.moduleListContents(...a),
@@ -76,6 +84,8 @@ const {
   moduleUpdateTool,
   modulePublishTool,
   moduleItemAddTool,
+  moduleItemRemoveTool,
+  moduleItemMoveTool,
   moduleDeleteTool,
   moduleReorderTool,
 } = await import('../modules.ts');
@@ -85,6 +95,8 @@ const ALL_TOOLS: ToolDefinition<never>[] = [
   moduleUpdateTool,
   modulePublishTool,
   moduleItemAddTool,
+  moduleItemRemoveTool,
+  moduleItemMoveTool,
   moduleDeleteTool,
   moduleReorderTool,
 ] as unknown as ToolDefinition<never>[];
@@ -132,6 +144,7 @@ beforeEach(() => {
   mocks.moduleUpdateForClassroom.mockResolvedValue(MODULE_ROW);
   mocks.moduleSetPublished.mockResolvedValue({ ...MODULE_ROW, is_published: true });
   mocks.moduleAddItem.mockResolvedValue(ITEM_ROW);
+  mocks.moduleFindOtherModulesHolding.mockResolvedValue([]);
 });
 
 // ─── Definition-level guarantees (the registry enforces these pre-handler) ───
@@ -205,6 +218,133 @@ describe('module tool definitions', () => {
       idempotentHint: true,
       openWorldHint: false,
     });
+  });
+});
+
+// ─── module_item_add: a target already in another module ────────────────────
+
+describe('module_item_add with a target that is already in another module', () => {
+  const ARGS = {
+    classroom: 'org/w26',
+    module_id: 'mod-1',
+    item_type: 'PAGE' as const,
+    target_id: 'page-1',
+  };
+
+  it('says which other modules list it instead of duplicating silently', async () => {
+    mocks.moduleFindOtherModulesHolding.mockResolvedValue([{ id: 'mod-9', title: 'Week 1' }]);
+
+    const payload = parse(await moduleItemAddTool.handler(ARGS as never, CTX));
+
+    expect(mocks.moduleFindOtherModulesHolding).toHaveBeenCalledWith(
+      'PAGE',
+      'page-1',
+      'mod-1',
+      'class-1'
+    );
+    expect(payload.also_in_modules).toEqual([{ id: 'mod-9', title: 'Week 1' }]);
+    expect(payload.warning).toMatch(/module_item_remove/);
+    expect(payload.warning).toMatch(/module_item_move/);
+  });
+
+  it('adds nothing to the response when it is in no other module', async () => {
+    const payload = parse(await moduleItemAddTool.handler(ARGS as never, CTX));
+
+    expect(payload).not.toHaveProperty('also_in_modules');
+    expect(payload).not.toHaveProperty('warning');
+  });
+});
+
+// ─── module_item_remove ─────────────────────────────────────────────────────
+
+describe('module_item_remove', () => {
+  const ARGS = { classroom: 'org/w26', item_id: 'item-1' };
+
+  beforeEach(() => {
+    mocks.moduleRemoveItem.mockResolvedValue({
+      id: 'item-1',
+      module_id: 'mod-1',
+      item_type: 'PAGE',
+    });
+  });
+
+  it('removes the item inside the AUTHORIZED classroom and audits the delete', async () => {
+    const payload = parse(await moduleItemRemoveTool.handler(ARGS as never, CTX));
+
+    expect(mocks.moduleRemoveItem).toHaveBeenCalledWith('item-1', 'class-1');
+    expect(payload).toEqual({ success: true, removed: { id: 'item-1', module_id: 'mod-1' } });
+    expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({
+      action: 'DELETE',
+      resource_type: 'MODULE_ITEM',
+      resource_id: 'item-1',
+      data: { tool: 'module_item_remove', module_id: 'mod-1', item_type: 'PAGE' },
+    });
+  });
+
+  it('answers an item of another classroom like a missing one', async () => {
+    mocks.moduleRemoveItem.mockRejectedValue(new Error('Module item not found in classroom'));
+
+    const error = await moduleItemRemoveTool.handler(ARGS as never, CTX).catch(e => e);
+
+    expect(error).toMatchObject({ kind: 'not_found' });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('declares itself destructive and not idempotent', () => {
+    expect(moduleItemRemoveTool.annotations).toEqual({
+      destructive: true,
+      idempotent: false,
+      openWorld: false,
+    });
+  });
+});
+
+// ─── module_item_move ───────────────────────────────────────────────────────
+
+describe('module_item_move', () => {
+  const ARGS = { classroom: 'org/w26', item_id: 'item-1', module_id: 'mod-2' };
+
+  beforeEach(() => {
+    mocks.moduleMoveItemToModuleEnd.mockResolvedValue({
+      id: 'item-1',
+      item_type: 'PAGE',
+      position: 4,
+      from_module_id: 'mod-1',
+    });
+  });
+
+  it('moves within the AUTHORIZED classroom and reports where it came from', async () => {
+    const payload = parse(await moduleItemMoveTool.handler(ARGS as never, CTX));
+
+    expect(mocks.moduleMoveItemToModuleEnd).toHaveBeenCalledWith('item-1', 'mod-2', 'class-1');
+    expect(payload).toEqual({
+      success: true,
+      item: { id: 'item-1', item_type: 'PAGE', position: 4 },
+      module_id: 'mod-2',
+      moved_from_module_id: 'mod-1',
+    });
+    expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({
+      action: 'UPDATE',
+      resource_type: 'MODULE_ITEM',
+      resource_id: 'item-1',
+      data: { tool: 'module_item_move', module_id: 'mod-2', from_module_id: 'mod-1' },
+    });
+  });
+
+  it.each([
+    ['Module not found in classroom', 'not_found'],
+    ['Module item not found in classroom', 'not_found'],
+    ['That module already has this item', 'invalid_params'],
+    ['That item is already in this module', 'invalid_params'],
+    ['Repository items cannot be moved', 'invalid_params'],
+    ['A quiz is placed in a module from the quiz form', 'invalid_params'],
+  ])('turns the service refusal %j into %s', async (message, kind) => {
+    mocks.moduleMoveItemToModuleEnd.mockRejectedValue(new Error(message));
+
+    const error = await moduleItemMoveTool.handler(ARGS as never, CTX).catch(e => e);
+
+    expect(error).toMatchObject({ kind });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 });
 

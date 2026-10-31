@@ -259,8 +259,8 @@ export const fileUploadStartTool: ToolDefinition<FileUploadStartArgs> = {
     'on Pro, videos and files over the repo limit go to media. A file the class cannot store ' +
     'is refused before you upload. For a file at a public https URL, use file_import_url. ' +
     'A multi-file game or demo for a deck: upload each file with slide_id + the same folder, ' +
-    'then deck_apply block_add type iframe with src = the html file ref; a small one-file ' +
-    'piece fits an html block instead.',
+    'then deck_apply block_add type html with src = the html file ref; a one-file piece can ' +
+    'go in as the html block source instead.',
   scope: 'write',
   roles: TEACHING_TEAM,
   inputSchema: {

@@ -26,6 +26,13 @@ const pageFindMany = vi.fn();
 const pageCreate = vi.fn();
 const classroomFindUnique = vi.fn();
 
+// Plan limits have their own tests (planLimits.test.ts); here every classroom has room.
+vi.mock('../planLimits.ts', () => ({
+  assertCanCreateContent: vi.fn(async () => {}),
+  contentAllowance: vi.fn(async () => ({ limit: null, used: 0, remaining: null })),
+  contentLimitMessage: () => '',
+}));
+
 vi.mock('@classmoji/database', async () => ({
   ...(await vi.importActual<typeof import('@classmoji/database/gitIdentity')>(
     '@classmoji/database/gitIdentity'

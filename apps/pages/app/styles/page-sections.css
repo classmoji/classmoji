@@ -77,12 +77,13 @@
   position: relative;
 }
 
-/* In the gutter, centred on the heading's first line (BlockNote's heading
-   padding-top is 18px; the line is --level × 1.3, see blocknote-overrides). */
+/* In the gutter, centred on the heading's first line (below the heading's top
+   padding, --heading-pad-top; the line is --level × 1.3, see
+   blocknote-overrides). */
 .pg-section-check {
   position: absolute;
   left: -34px;
-  top: calc(18px + (var(--level, 24px) * 1.3 - 24px) / 2);
+  top: calc(var(--heading-pad-top, 0px) + (var(--level, 24px) * 1.3 - 24px) / 2);
   width: 24px;
   height: 24px;
   display: flex;
@@ -217,7 +218,7 @@
 .bn-editor .pg-checkable-badge {
   position: absolute;
   left: -30px;
-  top: calc(18px + (var(--level, 24px) * 1.3 - 16px) / 2);
+  top: calc(var(--heading-pad-top, 0px) + (var(--level, 24px) * 1.3 - 16px) / 2);
   width: 16px;
   height: 16px;
   background-color: #9ca3af;

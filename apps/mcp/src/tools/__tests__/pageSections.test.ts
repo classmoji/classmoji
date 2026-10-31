@@ -43,6 +43,10 @@ vi.mock('@classmoji/services', async () => {
   const sections = await vi.importActual<
     typeof import('../../../../../packages/services/src/classmoji/pageSections.service.ts')
   >('../../../../../packages/services/src/classmoji/pageSections.service.ts');
+  // The REAL comment rules: content_get adds the caller's open comment count.
+  const comments = await vi.importActual<
+    typeof import('../../../../../packages/services/src/classmoji/pageComments.service.ts')
+  >('../../../../../packages/services/src/classmoji/pageComments.service.ts');
   return {
     ...search,
     ClassmojiService: {
@@ -51,6 +55,7 @@ vi.mock('@classmoji/services', async () => {
       },
       contentIndex: { slideMetadataText: () => '' },
       pageSections: sections,
+      pageComments: comments,
       audit: { create: (...args: unknown[]) => mocks.auditCreate(...args) },
     },
   };
@@ -186,6 +191,7 @@ const STUDENT_LIST_DOC = JSON.stringify({
 
 const classroomOf = (id: string) => ({
   id,
+  status: 'ACTIVE',
   content_key_version: 1,
   content_repo: `content-${id}`,
   git_organization: { login: 'org', provider: 'GITHUB' },
@@ -613,6 +619,17 @@ describe('content_get on a page with locked sections', () => {
     expect((payload.locked_sections as Array<{ open: boolean }>).every(s => s.open)).toBe(true);
   });
 
+  it('reveals by real roles under an Ask Moji STUDENT ceiling (D11)', async () => {
+    // The role ceiling narrows the registry's role resolution only; the
+    // locked-section reveal still reads every membership the caller holds, so
+    // a teacher who is also a student keeps the bodies in the student view.
+    rawRows = [indexRow(PAGE, 'Lab 3', 'pages/lab-3/content.json')];
+    const ctx = ctxFor(STAFF_STUDENT, 'STUDENT', { scopes: ['read'] });
+    ctx.viewer = { ...ctx.viewer, roleCeiling: 'STUDENT' };
+    const payload = await getPage(ctx);
+    for (const secret of SECRETS) expect(payload.text).toContain(secret);
+  });
+
   it('shows a pending (not accepted) student titles only, with no id and no unlock hint', async () => {
     rawRows = [indexRow(PAGE, 'Lab 3', 'pages/lab-3/content.json')];
     const payload = await getPage(ctxFor(PENDING, 'STUDENT'));
@@ -692,11 +709,12 @@ describe("content_get shows the caller's own checked state", () => {
     expect(forB.checkable_headings).toEqual([{ id: 'h1', title: 'Part one', checked: false }]);
     // A heading inside a closed locked section is not there for a student.
     expect(JSON.stringify(forA)).not.toContain('h2');
-    // Check rows are read per page AND user.
+    // Check rows are read per page AND user (the comment count on a page with
+    // locked sections reads the caller's own state once more, scoped the same).
     const reads = prismaCallsFor('pageSectionCheck', 'findMany').map(
       c => (c.args as { where: Row }).where
     );
-    expect(reads).toEqual([
+    expect([...new Map(reads.map(where => [JSON.stringify(where), where])).values()]).toEqual([
       { page_id: PAGE, user_id: STUDENT_A },
       { page_id: PAGE, user_id: STUDENT_B },
     ]);

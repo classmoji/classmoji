@@ -3,6 +3,7 @@ import type { Route } from './+types/route';
 import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomMember } from '~/utils/routeAuth.server';
 import { loadPagesNav } from '~/utils/pagesNav.server';
+import { useAskMojiViewing } from '~/components/features/ask-moji/viewing';
 import { PageViewPanel, sitePageUrl, type PageNavMessage } from '~/components/features/pages';
 
 /**
@@ -60,6 +61,8 @@ const Component = ({ loaderData, params }: Route.ComponentProps) => {
       })),
     []
   );
+
+  useAskMojiViewing({ kind: 'page', id: current.pageId, title: current.title });
 
   // No in-app fallback here: this IS the in-app view, so ↗ either offers the
   // public URL or nothing at all.

@@ -48,7 +48,7 @@
 - Remix-style route-based architecture
 
 **Backend Services**
-- **AI Agent** (`apps/ai-agent`): Unified WebSocket microservice for AI-powered features (quizzes, syllabus bot, prompt assistant)
+- **AI Agent** (`apps/ai-agent`): Unified WebSocket microservice for AI-powered features (quizzes, syllabus bot)
 - **Hook Station** (`apps/hook-station`): Webhook listener for GitHub and Stripe events
 - **Web App** (`apps/webapp`): Main React application
 
@@ -99,7 +99,7 @@
 classmoji/
 ├── apps/
 │   ├── webapp/          # React Router 7 frontend
-│   ├── ai-agent/        # WebSocket AI microservice (quiz, syllabus bot, prompt assistant)
+│   ├── ai-agent/        # WebSocket AI microservice (quiz, syllabus bot)
 │   ├── hook-station/    # Webhook listener
 │   └── docs/            # Documentation
 ├── packages/
@@ -1431,7 +1431,7 @@ Secrets: Environment variables
 - [ ] Enable HTTPS everywhere
 - [ ] Configure CORS for production domains
 - [ ] Set up database backups
-- [ ] Configure monitoring (Sentry, etc.)
+- [ ] Set `SENTRY_DSN` in Infisical (`prod`/`sta`; synced to the webapp, pages and slides Fly apps) for browser error tracking
 - [ ] Test webhook delivery
 - [ ] Verify GitHub OAuth redirect URLs
 - [ ] Test quiz agent WebSocket connection
@@ -1444,7 +1444,7 @@ Secrets: Environment variables
 - Structured logging for production
 
 **Error Tracking**
-- Consider Sentry integration (future)
+- Sentry for browser errors in the webapp, pages and slides (errors + 5% tracing; user id only, no replay); see AGENTS.md
 - Audit logs for security events
 
 **Performance Monitoring**
@@ -1566,7 +1566,7 @@ apps/
     admin.$org/                   # Admin dashboard
     student.$org/                 # Student dashboard
     admin.$org.settings*/         # Settings pages
-  ai-agent/src/                   # AI WebSocket service (quiz, syllabus bot, prompt assistant)
+  ai-agent/src/                   # AI WebSocket service (quiz, syllabus bot)
   hook-station/src/webhooks/      # GitHub & Stripe webhooks
 
 packages/

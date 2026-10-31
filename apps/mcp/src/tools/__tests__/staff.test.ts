@@ -447,6 +447,8 @@ describe('staff_remove', () => {
       role: 'ASSISTANT',
       ungradedSubmissions: null,
       requireChoice: true,
+      // The caller, so a plan-owner hand-off this causes is audited as them.
+      actorUserId: 'owner-1',
     });
 
     const audit = auditRow();
@@ -481,6 +483,7 @@ describe('staff_remove', () => {
         role,
         ungradedSubmissions: null,
         requireChoice: true,
+        actorUserId: 'owner-1',
       });
       expect(payload).toMatchObject({ success: true, queued: true, role });
       // The role is the whole point of the record.
@@ -510,7 +513,7 @@ describe('staff_remove', () => {
     await expect(staffRemoveTool.handler({ ...ARGS, role: 'OWNER' }, CTX)).rejects.toMatchObject({
       kind: 'invalid_params',
       message:
-        'This is the only owner of the classroom — add another owner before removing this one',
+        'This is the only owner who has accepted. Another owner has to accept before this one can be removed',
     });
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });

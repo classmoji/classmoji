@@ -18,7 +18,7 @@ export const navGroups: NavGroup[] = [
     label: 'Assessment',
     items: [
       { id: 'grades', label: 'Grades' },
-      { id: 'resubmits', label: 'Resubmits' },
+      { id: 'resubmits', label: 'Regrade/Resubmit' },
       { id: 'tokens', label: 'Tokens' },
     ],
   },

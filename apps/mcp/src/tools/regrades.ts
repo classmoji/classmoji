@@ -27,13 +27,35 @@
  * teaching-team (['OWNER','TEACHER','ASSISTANT']), authorization derived from
  * the RegradeRequest record's classroom, task payload re-derived from the DB
  * record (never the request). Statuses match the web UI: APPROVED | DENIED.
+ *
+ * QUIZ TARGET (quiz regrade design, D4/D7). regrade_create takes
+ * `quiz_attempt_id` instead of a submission (exactly one of the two): the
+ * attempt must be one of this classroom's (else the same not_found as an
+ * unknown id), and `regradeRequest.createForQuizAttempt` enforces the rest
+ * (the caller's own completed attempt, as a current student; an open request
+ * on the attempt is returned instead of a second one, `created: false`). No
+ * task runs: the service's in-app notice to the owners and teachers is the
+ * staff email, so staff get one email per request. regrade_resolve on a quiz
+ * request calls `regradeRequest.resolveQuiz` (APPROVED adjusts the attempt to
+ * `emoji`, DENIED keeps it; the reply `comment` is required and stored as
+ * grader_comment), then triggers `quiz_regrade_resolved`, which emails the
+ * student from the database. Both services write their own audit rows
+ * (`data.tool` = the tool name, impersonation included), so the quiz paths
+ * write none here; a repo resolution is audited by `regradeRequest.resolveRepo`
+ * in the task, which gets this tool's name beside its data. Asking and
+ * resolving are both refused where the classroom shows no quizzes (the
+ * service's refusal, the one every quiz tool gives); such a classroom lists no
+ * quiz requests either. A request already resolved is reported as such
+ * before its arguments are checked, so a retry reads as already_resolved.
  */
 
+import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
+import { QUIZ_REGRADE_REPLY_MAX_LENGTH } from '@classmoji/utils';
 import { runs, tasks } from '@trigger.dev/sdk';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
-import type { ToolDefinition } from '../mcp/registry.ts';
+import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
 import {
   loadGitRepoAssignmentInClassroom,
   loadRegradeRequestInClassroom,
@@ -44,6 +66,10 @@ import {
   TEACHING_TEAM,
   writeAudit,
 } from './shared.ts';
+import { mapQuizGradeError } from './quizAttemptAdjust.ts';
+
+/** Longest reply on a submission (repo) regrade request. */
+const REPO_REPLY_MAX_LENGTH = 5000;
 
 const RUN_POLL_INTERVAL_MS = 500;
 const RUN_WAIT_TIMEOUT_MS = 60_000;
@@ -83,28 +109,118 @@ async function waitForRunCompletion(runId: string): Promise<unknown> {
 
 interface RegradeCreateArgs {
   classroom: string;
-  git_repo_assignment_id: string;
+  git_repo_assignment_id?: string;
+  quiz_attempt_id?: string;
   comment: string;
+}
+
+/** A quiz request's target, as the regrade tools return it. */
+async function quizTarget(attemptId: string) {
+  const attempt = await getPrisma().quizAttempt.findUnique({
+    where: { id: attemptId },
+    select: {
+      id: true,
+      attempt_number: true,
+      quiz: { select: { id: true, name: true, classroom_id: true } },
+    },
+  });
+  return attempt
+    ? {
+        quiz_id: attempt.quiz.id,
+        quiz_name: attempt.quiz.name,
+        attempt_id: attempt.id,
+        attempt_number: attempt.attempt_number ?? null,
+        classroom_id: attempt.quiz.classroom_id,
+      }
+    : null;
+}
+
+/** regrade_create on a quiz attempt: the service does the work and the audit. */
+async function createQuizRegrade(attemptId: string, comment: string, ctx: ToolContext) {
+  const { classroomId } = requireClassroomCtx(ctx);
+  if (!(await ClassmojiService.entitlement.quizzesVisibleOrThrow(classroomId))) {
+    throw new ToolError('forbidden', 'Quizzes are not available in this classroom');
+  }
+  // S1: an attempt of another classroom is the same not_found as no attempt.
+  const target = await quizTarget(attemptId);
+  if (!target || target.classroom_id !== classroomId) throw scopedNotFound('Quiz attempt');
+
+  let result: Awaited<ReturnType<typeof ClassmojiService.regradeRequest.createForQuizAttempt>>;
+  try {
+    result = await ClassmojiService.regradeRequest.createForQuizAttempt({
+      attemptId: target.attempt_id,
+      comment,
+      actorUserId: ctx.viewer.userId,
+      tool: 'regrade_create',
+      impersonatedBy: ctx.viewer.impersonatedBy ?? null,
+    });
+  } catch (error) {
+    throw mapQuizGradeError(error, 'Quiz attempt');
+  }
+
+  const { classroom_id: _classroom, ...quiz } = target;
+  return ok({
+    success: true,
+    created: result.created,
+    ...(result.created
+      ? {}
+      : {
+          note: 'This attempt already has an open regrade request; it was returned unchanged.',
+        }),
+    regrade_request: {
+      id: result.request.id,
+      status: result.request.status,
+      target: 'quiz',
+      student_comment: result.request.student_comment ?? null,
+      previous_grade: result.request.previous_grade,
+      quiz,
+    },
+  });
 }
 
 export const regradeCreateTool: ToolDefinition<RegradeCreateArgs> = {
   name: 'regrade_create',
-  annotations: { destructive: false },
-  title: 'Request a regrade',
+  // Creates a permanent record about the student (a request staff see and
+  // answer), so clients confirm before calling it.
+  annotations: { destructive: true, idempotent: false, openWorld: false },
+  title: 'Request regrade/resubmit',
   description:
-    'Submits a regrade (resubmit) request for one of YOUR OWN graded submissions. Students ' +
-    'only. Snapshots the current grades as the previous grade and notifies the assigned ' +
-    'graders (in-app and by email).',
+    'Submits a regrade (resubmit) request on YOUR OWN work: a graded submission ' +
+    '(git_repo_assignment_id) or a completed quiz attempt (quiz_attempt_id, e.g. ' +
+    'counting_attempt_id from my_grades); give exactly one. Students only. Snapshots your ' +
+    'current grade (emoji) as previous_grade. A submission notifies its assigned graders, a ' +
+    "quiz the classroom's owners and teachers (in-app and by email). Returns created: true " +
+    'for a new request; if the target already has an open request, that one is returned ' +
+    '(created: false). You may ask again after a request is resolved. Quiz attempt ids: ' +
+    'list_quizzes my_attempts.attempts. Follow it with my_regrade_requests.',
   scope: 'write',
   roles: ['STUDENT'],
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    git_repo_assignment_id: submissionIdSchema().describe('Your submission (GitRepoAssignment) id'),
+    git_repo_assignment_id: submissionIdSchema()
+      .optional()
+      .describe('Your submission (GitRepoAssignment) id; or give quiz_attempt_id'),
+    quiz_attempt_id: z
+      .string()
+      .uuid()
+      .optional()
+      .describe('Your completed quiz attempt id; or give git_repo_assignment_id'),
     comment: z.string().min(1).max(2000).describe('Why the work should be regraded'),
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
-    const gra = await loadGitRepoAssignmentInClassroom(args.git_repo_assignment_id, ctx);
+    const hasSubmission = args.git_repo_assignment_id !== undefined;
+    const hasQuiz = args.quiz_attempt_id !== undefined;
+    if (hasSubmission === hasQuiz) {
+      throw new ToolError(
+        'invalid_params',
+        'Give exactly one of git_repo_assignment_id or quiz_attempt_id'
+      );
+    }
+    if (args.quiz_attempt_id !== undefined) {
+      return createQuizRegrade(args.quiz_attempt_id, args.comment, ctx);
+    }
+    const gra = await loadGitRepoAssignmentInClassroom(args.git_repo_assignment_id as string, ctx);
 
     // Self-scoping (assertClassroomAccess resourceOwnerId semantics): the
     // submission must belong to the calling student. Same non-leaking error
@@ -125,6 +241,8 @@ export const regradeCreateTool: ToolDefinition<RegradeCreateArgs> = {
     if (existing && existing.student_id === ctx.viewer.userId) {
       return ok({
         success: true,
+        created: false,
+        note: 'This submission already has an open regrade request; it was returned unchanged.',
         regrade_request: {
           id: existing.id,
           status: existing.status,
@@ -180,6 +298,7 @@ export const regradeCreateTool: ToolDefinition<RegradeCreateArgs> = {
 
     return ok({
       success: true,
+      created: true,
       regrade_request: {
         id: request.id,
         status: request.status,
@@ -193,25 +312,162 @@ interface RegradeResolveArgs {
   classroom: string;
   regrade_request_id: string;
   resolution: 'APPROVED' | 'DENIED';
+  emoji?: string;
+  comment?: string;
+}
+
+/** regrade_resolve on a quiz request: the service writes and audits; the task emails. */
+async function resolveQuizRegrade(
+  request: Awaited<ReturnType<typeof loadRegradeRequestInClassroom>>,
+  args: RegradeResolveArgs,
+  ctx: ToolContext
+) {
+  // The request was loaded within this classroom (loadRegradeRequestInClassroom).
+  // A request already resolved is reported before the arguments are checked:
+  // the service returns it as it is (already_resolved), so a retry with the
+  // reply or emoji left out reads as the resolution it already has.
+  const settled = request.status !== 'IN_REVIEW';
+  const comment = args.comment?.trim() ?? '';
+  if (!settled) {
+    if (!comment) {
+      throw new ToolError(
+        'invalid_params',
+        'A quiz regrade needs a reply to the student (comment)'
+      );
+    }
+    if (comment.length > QUIZ_REGRADE_REPLY_MAX_LENGTH) {
+      throw new ToolError(
+        'invalid_params',
+        `The reply is longer than ${QUIZ_REGRADE_REPLY_MAX_LENGTH} characters`
+      );
+    }
+    if (args.resolution === 'APPROVED' && args.emoji === undefined) {
+      throw new ToolError(
+        'invalid_params',
+        "APPROVED on a quiz request needs emoji: the new grade, on the classroom's scale"
+      );
+    }
+    if (args.resolution === 'DENIED' && args.emoji !== undefined) {
+      throw new ToolError('invalid_params', 'DENIED keeps the grade: give no emoji');
+    }
+  }
+
+  let result: Awaited<ReturnType<typeof ClassmojiService.regradeRequest.resolveQuiz>>;
+  try {
+    result = await ClassmojiService.regradeRequest.resolveQuiz({
+      requestId: request.id,
+      resolution: args.resolution,
+      ...(args.emoji !== undefined ? { emoji: args.emoji } : {}),
+      comment,
+      actorUserId: ctx.viewer.userId,
+      tool: 'regrade_resolve',
+      impersonatedBy: ctx.viewer.impersonatedBy ?? null,
+    });
+  } catch (error) {
+    throw mapQuizGradeError(error, 'Regrade request');
+  }
+
+  // The email reads the resolved request from the database. The resolution is
+  // already written, so a failed enqueue is reported, not thrown.
+  let emailQueued = false;
+  if (!result.alreadyResolved) {
+    try {
+      await tasks.trigger('quiz_regrade_resolved', { request_id: request.id });
+      emailQueued = true;
+    } catch (error) {
+      console.error('[mcp regrade_resolve] resolution email enqueue failed', {
+        requestId: request.id,
+        error,
+      });
+    }
+  }
+
+  const attempt = request.quiz_attempt;
+  // APPROVED with the grade the attempt already shows is a Keep (DENIED).
+  const kept =
+    !result.alreadyResolved && args.resolution === 'APPROVED' && result.request.status === 'DENIED';
+  return ok({
+    success: true,
+    ...(result.alreadyResolved ? { already_resolved: true } : { email_queued: emailQueued }),
+    ...(kept
+      ? { note: 'That emoji is the grade the attempt already shows: the score was kept (DENIED).' }
+      : {}),
+    regrade_request: {
+      id: result.request.id,
+      status: result.request.status,
+      target: 'quiz',
+      grader_comment: result.request.grader_comment ?? null,
+      previous_grade: result.request.previous_grade,
+      // The grade the resolution set or kept.
+      new_grade: result.request.resolved_emoji ? [result.request.resolved_emoji] : [],
+      quiz: {
+        quiz_id: result.quiz.id,
+        quiz_name: result.quiz.name,
+        attempt_id: result.attempt.id,
+        attempt_number: attempt?.attempt_number ?? null,
+      },
+    },
+    // The attempt's grade now: emoji only (E6).
+    attempt_grade: {
+      grade_emoji: result.grade.effective.emoji,
+      original_emoji: result.grade.original.emoji,
+      adjusted: result.grade.adjusted,
+    },
+  });
 }
 
 export const regradeResolveTool: ToolDefinition<RegradeResolveArgs> = {
   name: 'regrade_resolve',
-  annotations: { destructive: false },
+  annotations: { destructive: true, idempotent: true, openWorld: false },
   title: 'Resolve a regrade request',
   description:
-    'Approves or denies a pending regrade request and emails the student. After approving, add ' +
-    'the new grade with grade_add — it will replace the pre-request grades rather than average ' +
-    'with them.',
+    'Resolves a pending regrade request (APPROVED or DENIED) and emails the student (best ' +
+    'effort: email_queued says whether it was queued; the resolution stands either way). ' +
+    'comment is your reply, which the student reads (required for a quiz request; at most ' +
+    `${QUIZ_REGRADE_REPLY_MAX_LENGTH} characters on a quiz request, ${REPO_REPLY_MAX_LENGTH} on a ` +
+    'submission request). A submission ' +
+    'request: after approving, add the new grade with grade_add; it replaces the pre-request ' +
+    'grades rather than averaging with them. A quiz request (target quiz in ' +
+    'list_regrade_requests): APPROVED needs emoji, the new grade on the classroom scale ' +
+    "(get_quiz_attempt's emoji_scale), which becomes the attempt's " +
+    'grade ("Score adjusted"); the grade_emoji it already shows keeps the score and resolves ' +
+    'DENIED. DENIED keeps the grade ("Score kept"). Grades come back as emoji only. A request ' +
+    'already resolved is returned unchanged (already_resolved). Teaching team; audited.',
   scope: 'write',
   roles: TEACHING_TEAM,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     regrade_request_id: z.string().uuid().describe('RegradeRequest id'),
     resolution: z.enum(['APPROVED', 'DENIED']).describe('The resolution status'),
+    emoji: z
+      .string()
+      .min(1)
+      .max(100)
+      .optional()
+      .describe("Quiz requests, APPROVED only: the new grade, an emoji on the classroom's scale"),
+    // The longer cap of the two targets; a quiz request is held to its own
+    // (QUIZ_REGRADE_REPLY_MAX_LENGTH) in resolveQuizRegrade.
+    comment: z
+      .string()
+      .max(REPO_REPLY_MAX_LENGTH, `The reply is longer than ${REPO_REPLY_MAX_LENGTH} characters`)
+      .optional()
+      .describe(
+        `Your reply to the student (required for quiz requests): at most ${QUIZ_REGRADE_REPLY_MAX_LENGTH} ` +
+          `characters on a quiz request, ${REPO_REPLY_MAX_LENGTH} on a submission request`
+      ),
   },
   handler: async (args, ctx) => {
     const request = await loadRegradeRequestInClassroom(args.regrade_request_id, ctx);
+    if (request.quiz_attempt_id) {
+      return resolveQuizRegrade(request, args, ctx);
+    }
+    if (request.status === 'IN_REVIEW' && args.emoji !== undefined) {
+      throw new ToolError(
+        'invalid_params',
+        'emoji is for quiz requests; add a submission grade with grade_add'
+      );
+    }
+    const reply = args.comment?.trim() || null;
 
     // Idempotency (U11): waitForRunCompletion below is a 60s client-side
     // timeout, not a cancel — the update_regrade_request run can flip the row
@@ -244,20 +500,31 @@ export const regradeResolveTool: ToolDefinition<RegradeResolveArgs> = {
       },
       data: {
         status: args.resolution,
+        // The reply the student reads, when one is given.
+        ...(reply ? { grader_comment: reply } : {}),
       },
+      // Who resolved it: the token's user, whom the teaching-team gate
+      // admitted; and this tool, for the audit row resolveRepo writes.
+      resolved_by_id: ctx.viewer.userId,
+      tool: 'regrade_resolve',
+      impersonated_by: ctx.viewer.impersonatedBy ?? null,
     });
-    await waitForRunCompletion(run.id);
-
-    await writeAudit(ctx, {
-      resource_type: 'REGRADE_REQUEST',
-      resource_id: request.id,
-      action: 'UPDATE',
-      data: { tool: 'regrade_resolve', resolution: args.resolution },
-    });
+    // The task's output: the request as stored, which a resolution that
+    // landed first (alreadyResolved) may have left with another status.
+    const output = (await waitForRunCompletion(run.id)) as {
+      request?: { status?: unknown } | null;
+      alreadyResolved?: unknown;
+    } | null;
+    const stored = output?.request?.status;
+    const alreadyResolved = output?.alreadyResolved === true;
 
     return ok({
       success: true,
-      regrade_request: { id: request.id, status: args.resolution },
+      regrade_request: {
+        id: request.id,
+        status: typeof stored === 'string' ? stored : args.resolution,
+      },
+      ...(alreadyResolved ? { already_resolved: true } : {}),
     });
   },
 };

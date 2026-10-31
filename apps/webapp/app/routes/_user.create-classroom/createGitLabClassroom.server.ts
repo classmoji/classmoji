@@ -16,6 +16,11 @@ import { ActionTypes } from '~/constants';
 import { slugify } from './utils';
 import { pickContentNamespace } from './contentNamespace.server';
 import { prepareClassroomImport, runClassroomImport } from './importFlow.server';
+import {
+  finishArchiveAndContinue,
+  gateClassroomCreate,
+  limitPayload,
+} from './activeClassGate.server';
 
 /**
  * Create a classroom on GitLab: the group is the organization (connected
@@ -31,6 +36,7 @@ export async function createGitLabClassroom(
     slug?: unknown;
     timezone?: unknown;
     importConfig?: unknown;
+    archiveClassroomId?: unknown;
   }
 ) {
   const name = typeof input.name === 'string' ? input.name.trim() : '';
@@ -47,6 +53,10 @@ export async function createGitLabClassroom(
   // Import checks that can refuse the create run before anything is made.
   const prepared = await prepareClassroomImport(userId, input.importConfig ?? null);
   if ('error' in prepared) return { error: prepared.error };
+
+  // The Free plan's one-active-class rule (activeClassGate.server.ts).
+  const gate = await gateClassroomCreate(userId, input.archiveClassroomId);
+  if (!gate.ok) return gate.response;
 
   // The connection's instance: gitlab.com, or the school's own GitLab.
   const instanceId = connection.gitlab_instance_id ?? null;
@@ -110,6 +120,10 @@ export async function createGitLabClassroom(
       { slug, orgLogin: groupShortName },
       classroomSlug =>
         getPrisma().$transaction(async tx => {
+          // Re-checked under the creator's plan-owner lock.
+          if (gate.status === 'ACTIVE') {
+            await ClassmojiService.classroomLifecycle.assertCanCreateActive(tx, userId);
+          }
           const row = await tx.classroom.create({
             data: {
               git_org_id: gitOrg.id,
@@ -117,6 +131,9 @@ export async function createGitLabClassroom(
               name,
               content_namespace: contentNamespace,
               content_repo: defaultContentRepoName(contentNamespace),
+              created_by: userId,
+              plan_owner_id: userId,
+              status: gate.status,
             },
           });
           await tx.classroomSettings.create({
@@ -137,6 +154,9 @@ export async function createGitLabClassroom(
   } catch (error: unknown) {
     if (error instanceof ClassroomSlugUnavailableError) {
       return { error: `'${slug}' and every variation of it are already taken — pick another name` };
+    }
+    if (ClassmojiService.classroomLifecycle.isActiveClassroomLimitError(error)) {
+      return limitPayload(error.message, error.activeClassrooms ?? []);
     }
     throw error;
   }
@@ -214,10 +234,20 @@ export async function createGitLabClassroom(
       userId,
     });
 
+  // "Archive X and continue": the subgroup exists now, so the swap can run.
+  const activationWarning = gate.archiveClassroomId
+    ? await finishArchiveAndContinue({
+        newClassroomId: classroom.id,
+        archiveClassroomId: gate.archiveClassroomId,
+        userId,
+      })
+    : null;
+
   return {
     success: successMessage,
     action: ActionTypes.CREATE_CLASSROOM,
     classroomSlug: classroom.slug,
+    activation_warning: activationWarning,
     import_job_id: importJobId,
     import_warnings: importWarnings,
     import_github_unavailable: unreachableSourceOrg,

@@ -79,7 +79,7 @@ const AdminUsers = () => {
               type="search"
               name="q"
               defaultValue={query}
-              placeholder="Search by username, name, or email…"
+              placeholder="Search by username, name, email, or class…"
               aria-label="Search users"
               className="w-full rounded-md border border-line bg-panel pl-9 pr-8 py-1.5 text-sm text-ink-0 placeholder:text-ink-4 focus:outline-none focus:border-line-strong"
             />

@@ -30,6 +30,8 @@ vi.mock('~/utils/helpers', () => ({
 vi.mock('~/utils/routeAuth.server', () => ({ assertClassroomMutationAllowed: vi.fn() }));
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
+    // A legacy conversation carries no Ask Moji grant.
+    askMojiChat: { readGrant: (context: { grant?: unknown } | null) => context?.grant ?? null },
     entitlement: { canUseSyllabusBot: vi.fn(async () => ({ allowed: true })) },
     classroom: {
       getClassroomSettingsForServer: vi.fn(async () => ({

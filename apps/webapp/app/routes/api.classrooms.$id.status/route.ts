@@ -3,11 +3,13 @@
  *
  * PATCH /api/classrooms/:id/status  body: { status: 'ACTIVE' | 'LOCKED' | 'UNPUBLISHED' }
  *
- * Only OWNER. Returns `{ status }`.
+ * Only OWNER. Returns `{ status }`. Making a class ACTIVE again can be refused
+ * by the Free plan's one-active-class rule: 403 `{ error }`.
  */
 
-import getPrisma from '@classmoji/database';
+import { ClassmojiService } from '@classmoji/services';
 import { assertClassroomAccess } from '~/utils/routeAuth.server';
+import { lifecycleRefusal } from '~/utils/classroomLifecycle.server';
 import type { Route } from './+types/route';
 
 const STATUSES = ['ACTIVE', 'LOCKED', 'UNPUBLISHED'] as const;
@@ -34,7 +36,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   // updated below. `classroomId` makes them the same row by construction. It
   // also 404s an unknown id only after the session check, so ids stay
   // unenumerable to anonymous callers.
-  await assertClassroomAccess({
+  const { userId } = await assertClassroomAccess({
     request,
     classroomId,
     allowedRoles: ['OWNER'],
@@ -43,12 +45,17 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     metadata: { classroom_id: classroomId, new_status: body.status },
   });
 
-  const prisma = getPrisma();
-  const updated = await prisma.classroom.update({
-    where: { id: classroomId },
-    data: { status: body.status },
-    select: { status: true },
-  });
-
-  return Response.json(updated);
+  try {
+    const updated = await ClassmojiService.classroomLifecycle.setLifecycle({
+      classroomId,
+      status: body.status,
+      actorUserId: userId,
+      tool: 'web:classroom.status',
+    });
+    return Response.json({ status: updated.status });
+  } catch (error) {
+    const refusal = lifecycleRefusal(error);
+    if (refusal) return refusal;
+    throw error;
+  }
 };

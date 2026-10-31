@@ -6,6 +6,7 @@
 
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { consoleCountLabel } from '~/components/features/quiz/CodeSubmissionCard';
 import {
   projectMessage,
   quizStaffVisibility,
@@ -59,6 +60,7 @@ const {
   requestSession,
   THINKING_LINE,
 } = await import('../QuizChat');
+const { QuizResultProvider } = await import('../QuizResultContext');
 
 const msg = (id: string, role: 'user' | 'assistant', parts: unknown[], metadata?: unknown) =>
   ({ id, role, parts, ...(metadata ? { metadata } : {}) }) as unknown as QuizUIMessage;
@@ -336,7 +338,9 @@ describe('QuizTranscript — parts', () => {
         expect(html).toContain('data-testid="quiz-results"');
         expect(html).toContain('Quiz Evaluation: GOOD');
         expect(html).toContain('Solid grasp of layout.');
-        expect(html).toContain('77.5%');
+        // The grade is never a number (E1, E3): the band, and the emoji the drawer supplies.
+        expect(html).not.toContain('77.5');
+        expect(html).toContain('data-testid="quiz-grade-hero"');
         expect(html).toContain('Spot on.');
       });
 
@@ -353,7 +357,7 @@ describe('QuizTranscript — parts', () => {
         ]);
         expect(html).toContain('Quiz Evaluation: NEEDS WORK');
         expect(html).not.toContain('Quiz Results');
-        expect(html).toContain('77.5%');
+        expect(html).not.toContain('77.5');
         expect(html).not.toContain('Summary');
         expect(html).not.toContain('Strengths');
       });
@@ -368,13 +372,13 @@ describe('QuizTranscript — parts', () => {
       });
 
       it('prefers the stored record and renders the panel once', () => {
-        const stored = { ...RECORD, partial_credit_percentage: 88 };
+        const stored = { ...RECORD, evaluation: 'EXCELLENT', numeric_score: 4 };
         const html = renderTranscript(
           [msg('a1', 'assistant', [{ type: 'data-evaluation', data: RECORD }])],
           { evaluationRecord: stored as never, status: 'complete' }
         );
-        expect(html).toContain('88%');
-        expect(html).not.toContain('77.5%');
+        expect(html).toContain('Quiz Evaluation: EXCELLENT');
+        expect(html).not.toContain('Quiz Evaluation: GOOD');
         expect(html.match(/data-testid="quiz-results"/g)).toHaveLength(1);
       });
 
@@ -486,6 +490,54 @@ describe('QuizTranscript — parts', () => {
         expect(closing).toBeGreaterThan(html.indexOf('Question 1 of 8'));
         expect(closing).toBeLessThan(html.indexOf('data-testid="quiz-results"'));
         expect(html).toContain('Nice work.');
+      });
+
+      it("shows the drawer's blocks on a completed attempt with no record at all, once", () => {
+        const slots = {
+          grade: null,
+          beforeResults: <div data-testid="staff-adjust-panel" />,
+        };
+        const none = renderToStaticMarkup(
+          <QuizResultProvider value={slots}>
+            <QuizTranscript
+              messages={[msg('a1', 'assistant', [questionPart])]}
+              status="complete"
+              busy={false}
+              isDarkMode={darkMode}
+            />
+          </QuizResultProvider>
+        );
+        expect(none).not.toContain('data-testid="quiz-results"');
+        expect(none).toContain('data-testid="quiz-result-slots-fallback"');
+        expect(none.match(/data-testid="staff-adjust-panel"/g)).toHaveLength(1);
+
+        // With a results card, the blocks are inside it and not repeated.
+        const card = renderToStaticMarkup(
+          <QuizResultProvider value={slots}>
+            <QuizTranscript
+              messages={[msg('a1', 'assistant', [{ type: 'data-evaluation', data: RECORD }])]}
+              status="complete"
+              busy={false}
+              isDarkMode={darkMode}
+            />
+          </QuizResultProvider>
+        );
+        expect(card).toContain('data-testid="quiz-results"');
+        expect(card).not.toContain('quiz-result-slots-fallback');
+        expect(card.match(/data-testid="staff-adjust-panel"/g)).toHaveLength(1);
+
+        // Not on an attempt still running.
+        const running = renderToStaticMarkup(
+          <QuizResultProvider value={slots}>
+            <QuizTranscript
+              messages={[msg('a1', 'assistant', [questionPart])]}
+              status="ready"
+              busy={false}
+              isDarkMode={darkMode}
+            />
+          </QuizResultProvider>
+        );
+        expect(running).not.toContain('staff-adjust-panel');
       });
 
       it('counts each question in attempts, as the legacy results did', () => {
@@ -1246,7 +1298,7 @@ describe('errorLineFor', () => {
     expect(errorLineFor(new Error('An error occurred.'))).toBe(REPLY_FAILED_LINE);
   });
 
-  // Every line the task's sanitizer can send (packages/tasks/src/agents/shared/sanitize.ts),
+  // Every line the task's sanitizer can send (apps/ai-agent, src/trigger/shared/sanitize.ts),
   // byte for byte. Changing one there must change it here.
   const SANITIZER_COPY = [
     "That reply couldn't be finished. Please send your message again.",
@@ -1349,4 +1401,122 @@ describe('requestSession refusals', () => {
     const unknown = await refusedWith(500, { error: 'SOMETHING_ELSE', message: 'stack trace' });
     expect(unknown.message).toBe("The quiz couldn't start. Please try again.");
   });
+});
+
+describe('QuizTranscript — a code submission (a parts-only student message)', () => {
+  const STARTER = {
+    '/index.js': 'const passed = [];\nconsole.log(passed.length);',
+    '/index.html': '<ul id="passed"></ul>',
+  };
+  const sandboxCard = {
+    ...questionPart,
+    output: {
+      card: {
+        question_text: 'Fix `passed`, then submit your code.',
+        sandbox: { template: 'vanilla', files: STARTER, active_file: '/index.js' },
+      },
+      question_number: 1,
+      total_questions: 8,
+    },
+  };
+  const DATA = {
+    sandbox_id: 'q1-1',
+    files: { ...STARTER, '/index.js': 'const passed = [1, 2];\nconsole.log(passed.length);' },
+    console: [{ method: 'log', text: '2' }],
+    errors: [
+      {
+        kind: 'runtime',
+        title: 'TypeError',
+        message: "Cannot read properties of undefined (reading 'map')",
+        path: '/index.js',
+        line: 2,
+        column: 3,
+      },
+    ],
+    question_number: 1,
+    attempt: 1,
+    base_attempt: null,
+    template: 'vanilla',
+    changed_files: ['/index.js'],
+  };
+  /** The row as admission stores it: the part, then its rendering and status, both hidden. */
+  const stored = msg(
+    'u1',
+    'user',
+    [
+      { type: 'data-code-submission', data: DATA },
+      {
+        type: 'text',
+        text: 'Code submission: question 1, attempt 1 (changes vs the starter code)',
+      },
+      { type: 'text', text: 'CURRENT STATUS: question 1 open' },
+    ],
+    { hiddenPartIndexes: [1, 2] }
+  );
+
+  for (const theme of ['light', 'dark'] as const) {
+    describe(`in the ${theme} theme`, () => {
+      beforeEach(() => {
+        darkMode = theme === 'dark';
+      });
+
+      it.each([
+        ['the student', quizVisibility],
+        ['staff', quizStaffVisibility],
+      ] as const)(
+        'shows %s the submission card, never its rendering for the model',
+        (_who, reg) => {
+          const projected = projectMessage(stored, reg)!;
+          expect(projected.parts).toEqual([{ type: 'data-code-submission', data: DATA }]);
+          const html = renderTranscript([
+            ...EARLIER,
+            msg('a1', 'assistant', [sandboxCard]),
+            projected,
+          ]);
+          expect(html).toContain('data-testid="quiz-sandbox-submission"');
+          expect(html).toContain('Submitted code');
+          expect(html).toContain('· Attempt 1');
+          expect(html).not.toContain('Code submission: question');
+          expect(html).not.toContain('CURRENT STATUS');
+          // The diff against the card's starter, the console and the error.
+          expect(html).toContain('data-diff="-"');
+          expect(html).toContain('const passed = [1, 2];');
+          expect(html).toContain('data-testid="quiz-submission-console"');
+          // The console's count says what it counts to a screen reader.
+          expect(html).toContain('<span aria-hidden="true">1</span>');
+          expect(html).toContain('<span class="sr-only">1 log line</span>');
+          expect(consoleCountLabel(2, 'error', 'errors')).toBe('2 errors');
+          expect(html).toContain('data-testid="quiz-submission-error"');
+          expect(html).toContain('TypeError · index.js:2');
+          expect(html).toContain('dark:bg-[#0d1117]');
+          // Never wider than the column: no min-w-fit on its bubble.
+          const bubble = html.slice(html.indexOf('data-testid="quiz-user-submission"') - 200);
+          expect(bubble).toContain('min-w-0');
+        }
+      );
+
+      it('renders the same from the raw stored row, its hidden parts left out', () => {
+        const html = renderTranscript([...EARLIER, msg('a1', 'assistant', [sandboxCard]), stored]);
+        expect(html).toContain('data-testid="quiz-sandbox-submission"');
+        expect(html).not.toContain('Code submission: question');
+      });
+
+      it("numbers the browser's own copy (no server fields yet) from the transcript", () => {
+        const optimistic = msg('u1', 'user', [
+          {
+            type: 'data-code-submission',
+            data: { sandbox_id: 'q1-1', files: DATA.files, console: [], errors: [] },
+          },
+        ]);
+        const html = renderTranscript([
+          ...EARLIER,
+          msg('a1', 'assistant', [sandboxCard]),
+          optimistic,
+        ]);
+        expect(html).toContain('· Attempt 1');
+        expect(html).toContain('No output');
+        expect(html).toContain('data-diff="+"');
+      });
+    });
+  }
 });

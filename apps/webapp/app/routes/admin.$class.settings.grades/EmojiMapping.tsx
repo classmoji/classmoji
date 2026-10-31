@@ -1,5 +1,5 @@
 import { Input, InputNumber, Button, Table, Popconfirm, Alert, Select } from 'antd';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { DeleteOutlined, WarningOutlined } from '@ant-design/icons';
 
@@ -20,7 +20,10 @@ interface EmojiMappingRecord {
 
 interface OrphanedEmoji {
   emoji: string;
+  /** Every use: repo grades plus quiz adjustments. */
   count: number;
+  /** Of `count`, quiz adjustments (E17). */
+  quiz_count?: number;
 }
 
 interface EditingCell {
@@ -45,6 +48,23 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
 
   const { notify, fetcher } = useGlobalFetcher();
   const callout = useCallout();
+
+  // A remap in flight on the shared fetcher: 'sent' until the fetcher leaves
+  // idle, then 'inflight' until it settles. The picks are cleared only when
+  // the remap succeeded, so a refusal leaves them to correct and resend.
+  const remapState = useRef<'sent' | 'inflight' | null>(null);
+  const fetcherState = fetcher?.state;
+  const fetcherData = fetcher?.data as { action?: string; success?: string } | undefined;
+  useEffect(() => {
+    if (remapState.current === 'sent' && fetcherState !== 'idle') {
+      remapState.current = 'inflight';
+    } else if (remapState.current === 'inflight' && fetcherState === 'idle') {
+      remapState.current = null;
+      if (fetcherData?.action === 'REMAP_ORPHANED_EMOJIS' && fetcherData.success) {
+        setRemapSelections({});
+      }
+    }
+  }, [fetcherState, fetcherData]);
 
   const handleCellUpdate = (emojiKey: string, field: string, value: string | number | null) => {
     const mapping = emojiMappings.find(m => m.emoji === emojiKey);
@@ -102,8 +122,7 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
         encType: 'application/json',
       }
     );
-
-    setRemapSelections({});
+    remapState.current = 'sent';
   };
 
   const createEmojiMapping = () => {
@@ -329,13 +348,22 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
                   The following emoji grades are used but no longer have mappings. Select a new
                   emoji for each to fix:
                 </p>
+                {orphanedEmojis!.some(o => (o.quiz_count ?? 0) > 0) && (
+                  <p data-testid="orphaned-quiz-note" className="mb-3 text-ink-2">
+                    Quiz adjustments on these emojis count the AI&apos;s grade until they are
+                    remapped.
+                  </p>
+                )}
                 <div className="space-y-2">
-                  {orphanedEmojis!.map(({ emoji: oldEmoji, count }) => (
+                  {orphanedEmojis!.map(({ emoji: oldEmoji, count, quiz_count: quizCount = 0 }) => (
                     <div key={oldEmoji} className="flex items-center gap-3">
                       <div className="flex items-center gap-2 min-w-[140px]">
                         <Emoji emoji={oldEmoji} size="sm" />
                         <span className="text-ink-1 font-mono text-sm">{oldEmoji}</span>
-                        <span className="text-ink-3 text-xs">({count})</span>
+                        <span className="text-ink-3 text-xs">
+                          ({count}
+                          {quizCount > 0 && ` · ${quizCount} quiz`})
+                        </span>
                       </div>
                       <span className="text-ink-4">&rarr;</span>
                       <Select

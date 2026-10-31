@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, type ReactNode } from 'react';
 import gitlabLogo from '~/components/ui/gitlab.svg';
 import { IconBrandGithub, IconMaximize, IconMinimize, IconDots } from '@tabler/icons-react';
 import PageOptionsMenu from '~/components/editor/PageOptionsMenu.tsx';
@@ -20,6 +20,8 @@ interface HeaderProps {
    * the git editor's save controls.
    */
   live?: LiveHeaderControlsProps | null;
+  /** Extra buttons before Fullscreen (the comments button). */
+  actions?: ReactNode;
 }
 
 /**
@@ -33,6 +35,7 @@ const Header = ({
   canEdit = false,
   onSave,
   live = null,
+  actions = null,
 }: HeaderProps) => {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -126,6 +129,8 @@ const Header = ({
                     )}
                   </a>
                 )}
+
+                {actions}
 
                 {/* Fullscreen button (always visible) */}
                 <button

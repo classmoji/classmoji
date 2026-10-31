@@ -38,6 +38,8 @@ vi.mock('~/utils/agentStreamManager', () => ({
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
+    // A legacy conversation carries no Ask Moji grant.
+    askMojiChat: { readGrant: (context: { grant?: unknown } | null) => context?.grant ?? null },
     entitlement: {
       canUseSyllabusBotForConversation: (...a: unknown[]) =>
         canUseSyllabusBotForConversationMock(...a),
@@ -120,6 +122,30 @@ describe('syllabus bot SSE stream — membership is rechecked per open', () => {
     expect(res.status).toBe(403);
     expect(assertClassroomAccessMock).not.toHaveBeenCalled();
     expect(verifySessionOwnershipMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses a Trigger-runtime Ask Moji conversation (it carries a grant), the same as not yours', async () => {
+    conversationFindFirstMock.mockResolvedValue(null);
+    const notYours = await open('conv-someone-else');
+    conversationFindFirstMock.mockResolvedValue({
+      classroom_id: 'c1',
+      context: { grant: { actor_user_id: 'user-1', effective_user_id: 'user-1' } },
+    });
+
+    const res = await open('conv-trigger');
+
+    expect(res.status).toBe(403);
+    expect(await res.text()).toBe(await notYours.text());
+    expect(assertClassroomAccessMock).not.toHaveBeenCalled();
+    expect(verifySessionOwnershipMock).not.toHaveBeenCalled();
+    expect(subscribeToSessionMock).not.toHaveBeenCalled();
+  });
+
+  it('reads the conversation’s context to tell the two runtimes apart', async () => {
+    await open('conv-1');
+    expect(conversationFindFirstMock).toHaveBeenCalledWith(
+      expect.objectContaining({ select: { classroom_id: true, context: true } })
+    );
   });
 
   it('still 401s an unauthenticated caller before touching the database', async () => {

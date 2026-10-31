@@ -4,12 +4,14 @@ export * from './grading.ts';
 export * from './schemas.ts';
 export * from './records.ts';
 export * from './tools.ts';
-export * from './toolDescriptions.ts';
 export * from './uiTypes.ts';
 export * from './visibility.ts';
 export * from './status.ts';
 export * from './copy.ts';
 export * from './limits.ts';
+export * from './reserved.ts';
+export * from './sandbox.ts';
+export * from './sandboxState.ts';
 export {
   createChunkProjector,
   projectMessage,

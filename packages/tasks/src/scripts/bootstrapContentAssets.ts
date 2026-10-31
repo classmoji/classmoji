@@ -59,9 +59,9 @@ async function bootstrapContentAssets({ dryRun }: { dryRun: boolean }): Promise<
       continue;
     }
 
-    // No `changes`, so the task takes the full path: read the whole tree and
-    // stamp-and-sweep. That is the only correct mode for a classroom whose map
-    // may be absent, partial, or arbitrarily out of date.
+    // Not a push, so the task reads the whole tree even when the map claims to
+    // be level with the head. That is the only correct mode for a classroom
+    // whose map may be absent, partial, or arbitrarily out of date.
     await Tasks.contentAssetsSyncTask.trigger(
       {
         classroomId: classroom.id,

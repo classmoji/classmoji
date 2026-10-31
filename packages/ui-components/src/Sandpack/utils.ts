@@ -381,3 +381,24 @@ export function syncEditedFiles(
   updateFilesInElement(element, merged);
   return true;
 }
+
+/**
+ * Whether `current` holds an edit to any of `seed`'s files: a file whose code
+ * differs from the seed's, or one that is gone. Only the seed's paths count:
+ * the template's own files and hidden support files are not the student's to
+ * change, and Sandpack's re-serialized /package.json never counts as an edit
+ * (`sameCode`). Either side may hold plain contents or Sandpack's object form.
+ */
+export function filesDiffer(
+  seed: Record<string, unknown>,
+  current: Record<string, unknown>
+): boolean {
+  const currentByPath = byNormalizedPath(current);
+  for (const [path, entry] of Object.entries(seed)) {
+    const seedCode = codeOf(entry);
+    if (seedCode === undefined) continue;
+    const currentCode = currentByPath.get(normalizePath(path));
+    if (currentCode === undefined || !sameCode(path, seedCode, currentCode)) return true;
+  }
+  return false;
+}

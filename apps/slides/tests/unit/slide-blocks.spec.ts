@@ -50,7 +50,6 @@ const UNSAFE = [
   'allow-scripts allow-top-navigation',
   'allow-scripts allow-top-navigation-by-user-activation',
   'ALLOW-SAME-ORIGIN allow-scripts',
-  'allow-scripts allow-popups-to-escape-sandbox',
 ];
 
 test.describe('html block isolation rule (display)', () => {
@@ -168,9 +167,8 @@ test.describe('harder inputs on display', () => {
       '<rect width="1" height="1"></rect></a></svg></div></div>';
     const fragment = safeInnerHtml(doc, html);
     expect(fragment.querySelector('a')?.hasAttribute('href')).toBe(false);
-    expect(fragment.querySelector('animate')?.getAttribute('data-cm-inert-attributeName')).toBe(
-      'href'
-    );
+    // An animation of a link is off the lists as a whole: hidden, not shown.
+    expect(fragment.querySelector('animate')).toBeNull();
     const section = sectionFromMarkup(doc, `<section data-cm-id="s1">${html}</section>`);
     expect(serializeSection(section).html).toBe(holder(html).innerHTML);
   });

@@ -23,6 +23,7 @@ const attempt = (
   started_at: startedAt,
   completed_at: completedAt,
   partial_credit_percentage: pct,
+  adjusted_emoji: null,
 });
 
 describe('effectiveDeadline', () => {
@@ -79,7 +80,7 @@ describe('lateHours', () => {
 });
 
 describe('countingQuizScore', () => {
-  const ctx = { studentDeadline: DEADLINE, latePenaltyPerHour: 5 };
+  const ctx = { studentDeadline: DEADLINE, latePenaltyPerHour: 5, emojiScale: {} };
 
   it('penalises each attempt by its own late hours', () => {
     const late = attempt('late', at(1), at(4, 30), 90); // 4 h late → 70
@@ -148,6 +149,7 @@ describe('countingQuizScore', () => {
     const result = countingQuizScore([attempt('a', at(1), at(50), 80)], 'HIGHEST', {
       studentDeadline: null,
       latePenaltyPerHour: 5,
+      emojiScale: {},
     });
     expect(result).toMatchObject({ grade: 80, raw_grade: 80, late_hours: 0 });
   });
@@ -155,6 +157,7 @@ describe('countingQuizScore', () => {
   it('a 0 penalty leaves the grade raw but still reports late hours', () => {
     const result = countingQuizScore([attempt('a', at(1), at(3), 80)], 'HIGHEST', {
       studentDeadline: DEADLINE,
+      emojiScale: {},
     });
     expect(result).toMatchObject({ grade: 80, raw_grade: 80, late_hours: 3 });
   });
@@ -177,6 +180,7 @@ describe('quizGradeItem', () => {
     assignment: assignment(),
     gradingStrategy: 'HIGHEST',
     latePenaltyPerHour: 2,
+    emojiScale: {},
     quizzesVisible: true,
     now: at(48),
   };
@@ -196,6 +200,10 @@ describe('quizGradeItem', () => {
       counts_as_zero: false,
       late_hours: 5,
       counting_raw_percentage: 82,
+      counting_attempt_id: 'a',
+      counting_adjusted: false,
+      counting_adjusted_emoji: null,
+      counting_orphaned: false,
     });
   });
 

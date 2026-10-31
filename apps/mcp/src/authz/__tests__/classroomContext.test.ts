@@ -171,3 +171,169 @@ describe('deterministic multi-role resolution (U6)', () => {
     expect((notMember as ToolError).code).toBe('NOT_A_MEMBER');
   });
 });
+
+describe('role ceiling (Ask Moji view)', () => {
+  const MEMBER: Role[] = ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'];
+  const TEACHING_TEAM: Role[] = ['OWNER', 'TEACHER', 'ASSISTANT'];
+  const capped = (ceiling: Role, base: Viewer = VIEWER): Viewer => ({
+    ...base,
+    roleCeiling: ceiling,
+  });
+
+  /** Roles held per `${classroomId}:${userId}`; same findFirst semantics as holdRoles. */
+  function holdRolesBy(held: Record<string, Role[]>) {
+    findByClassroomAndUser.mockImplementation((cid: string, uid: string, roles: Role[] | null) => {
+      const mine = held[`${cid}:${uid}`] ?? [];
+      const match = roles ? mine.find(r => roles.includes(r)) : mine[0];
+      return Promise.resolve(
+        match ? { id: `membership-${cid}-${uid}-${match}`, role: match } : null
+      );
+    });
+  }
+
+  beforeEach(() => {
+    findAll.mockResolvedValue([classroomRow('the-one')]);
+  });
+
+  it('resolves a TA who is also a STUDENT as STUDENT on an any-member surface', async () => {
+    // list_repos / list_slides shape: the handler branches on ctx.role, so the
+    // capped TA has to land on the student branch.
+    holdRoles('ASSISTANT', 'STUDENT');
+
+    const uncapped = await resolveClassroomContext(VIEWER, REF, { allowedRoles: MEMBER });
+    expect(uncapped.role).toBe('ASSISTANT');
+
+    const ctx = await resolveClassroomContext(capped('STUDENT'), REF, { allowedRoles: MEMBER });
+    expect(ctx.role).toBe('STUDENT');
+    expect(ctx.membership.role).toBe('STUDENT');
+    expect(ctx.roles).toEqual(['STUDENT']);
+  });
+
+  it('lets the capped TA+STUDENT reach the student-only my_* surfaces', async () => {
+    holdRoles('ASSISTANT', 'STUDENT');
+    const ctx = await resolveClassroomContext(capped('STUDENT'), REF, {
+      allowedRoles: ['STUDENT'],
+    });
+    expect(ctx.role).toBe('STUDENT');
+  });
+
+  it('refuses the capped TA+STUDENT on a teaching-team surface, without the unfiltered lookup', async () => {
+    // Held order ASSISTANT first: if the unfiltered findFirst ran, it would
+    // hand ASSISTANT back and the gate would pass.
+    holdRoles('ASSISTANT', 'STUDENT');
+
+    const err = await resolveClassroomContext(capped('STUDENT'), REF, {
+      allowedRoles: TEACHING_TEAM,
+    }).catch(e => e);
+    expect(err).toBeInstanceOf(ToolError);
+    expect((err as ToolError).kind).toBe('forbidden');
+    expect((err as ToolError).code).toBe('INSUFFICIENT_ROLE');
+    for (const call of findByClassroomAndUser.mock.calls) expect(call[2]).not.toBeNull();
+  });
+
+  it('refuses a pure STUDENT with a STUDENT ceiling on get_roster (teaching team)', async () => {
+    holdRoles('STUDENT');
+    const err = await resolveClassroomContext(capped('STUDENT'), REF, {
+      allowedRoles: TEACHING_TEAM,
+    }).catch(e => e);
+    expect(err).toBeInstanceOf(ToolError);
+    expect((err as ToolError).kind).toBe('forbidden');
+    expect((err as ToolError).code).toBe('INSUFFICIENT_ROLE');
+  });
+
+  it('fails closed when the ceiling leaves nothing on an any-member surface', async () => {
+    // A null / empty allowedRoles means "any member"; the ceiling must never
+    // be read as that.
+    holdRoles('ASSISTANT');
+    for (const allowedRoles of [null, [] as Role[], MEMBER]) {
+      const err = await resolveClassroomContext(capped('STUDENT'), REF, { allowedRoles }).catch(
+        e => e
+      );
+      expect(err).toBeInstanceOf(ToolError);
+      expect((err as ToolError).kind).toBe('forbidden');
+    }
+  });
+
+  it('caps an OWNER+STUDENT under an empty allowedRoles instead of widening', async () => {
+    holdRoles('OWNER', 'STUDENT');
+    const ctx = await resolveClassroomContext(capped('STUDENT'), REF, { allowedRoles: [] });
+    expect(ctx.role).toBe('STUDENT');
+    expect(ctx.roles).toEqual(['STUDENT']);
+  });
+
+  it('changes nothing when the ceiling is at or above every role held', async () => {
+    holdRoles('STUDENT');
+    const student = await resolveClassroomContext(capped('OWNER'), REF, { allowedRoles: MEMBER });
+    expect(student.role).toBe('STUDENT');
+
+    holdRoles('ASSISTANT', 'STUDENT');
+    const ta = await resolveClassroomContext(capped('ASSISTANT'), REF, { allowedRoles: MEMBER });
+    expect(ta.role).toBe('ASSISTANT');
+    expect(ta.roles).toEqual(['ASSISTANT', 'STUDENT']);
+
+    holdRoles('OWNER');
+    const owner = await resolveClassroomContext(capped('OWNER'), REF, {
+      allowedRoles: TEACHING_TEAM,
+    });
+    expect(owner.role).toBe('OWNER');
+  });
+
+  it('keeps NOT_A_MEMBER for a non-member with a ceiling', async () => {
+    holdRoles();
+    const err = await resolveClassroomContext(capped('STUDENT'), REF, {
+      allowedRoles: MEMBER,
+    }).catch(e => e);
+    expect((err as ToolError).code).toBe('NOT_A_MEMBER');
+  });
+
+  it('applies the entry gate to the capped role (an OWNER viewing as STUDENT)', async () => {
+    findAll.mockResolvedValue([classroomRow('the-one', { status: 'UNPUBLISHED' })]);
+    holdRoles('OWNER', 'STUDENT');
+
+    const owner = await resolveClassroomContext(VIEWER, REF, { allowedRoles: MEMBER });
+    expect(owner.role).toBe('OWNER');
+    const err = await resolveClassroomContext(capped('STUDENT'), REF, {
+      allowedRoles: MEMBER,
+    }).catch(e => e);
+    expect((err as ToolError).code).toBe('CLASSROOM_UNPUBLISHED');
+  });
+
+  it('classroom X vs Y: the ceiling is judged against the roles held in the classroom named', async () => {
+    findAll.mockImplementation(async (where: { slug: string }) => [
+      classroomRow(where.slug === 'x' ? 'class-x' : 'class-y', { slug: where.slug }),
+    ]);
+    // TA + student in X, TA only in Y.
+    holdRolesBy({
+      'class-x:user-1': ['ASSISTANT', 'STUDENT'],
+      'class-y:user-1': ['ASSISTANT'],
+    });
+
+    const x = await resolveClassroomContext(capped('STUDENT'), 'org/x', { allowedRoles: MEMBER });
+    expect(x.classroomId).toBe('class-x');
+    expect(x.role).toBe('STUDENT');
+
+    const err = await resolveClassroomContext(capped('STUDENT'), 'org/y', {
+      allowedRoles: MEMBER,
+    }).catch(e => e);
+    expect((err as ToolError).kind).toBe('forbidden');
+    for (const [cid] of findByClassroomAndUser.mock.calls) {
+      expect(['class-x', 'class-y']).toContain(cid);
+    }
+  });
+
+  it('user A vs B: each request is capped by its own viewer and looks up its own user', async () => {
+    holdRolesBy({
+      'the-one:user-a': ['ASSISTANT', 'STUDENT'],
+      'the-one:user-b': ['ASSISTANT', 'STUDENT'],
+    });
+    const a: Viewer = { ...VIEWER, userId: 'user-a', roleCeiling: 'STUDENT' };
+    const b: Viewer = { ...VIEWER, userId: 'user-b' };
+
+    const ctxA = await resolveClassroomContext(a, REF, { allowedRoles: MEMBER });
+    const ctxB = await resolveClassroomContext(b, REF, { allowedRoles: MEMBER });
+    expect(ctxA.role).toBe('STUDENT');
+    expect(ctxA.membership.id).toBe('membership-the-one-user-a-STUDENT');
+    expect(ctxB.role).toBe('ASSISTANT');
+    expect(ctxB.membership.id).toBe('membership-the-one-user-b-ASSISTANT');
+  });
+});

@@ -5,7 +5,13 @@ import { Table, Button, Typography, Tag, Space, Tooltip, Popconfirm } from 'antd
 import { IconSend, IconBook, IconCalendar, IconTrash } from '@tabler/icons-react';
 import { TableActionButtons, EditableCell, ButtonNew } from '~/components';
 import { ClassmojiService, QuizAccessError } from '@classmoji/services';
-import { canAuthorQuiz, quizAssignmentKeysIn, quizAuthorSettingKeysIn } from '@classmoji/utils';
+import {
+  canAuthorQuiz,
+  quizAssignmentKeysIn,
+  quizAuthorSettingKeysIn,
+  quizPercentageEmoji,
+} from '@classmoji/utils';
+import Emoji from '~/components/ui/display/Emoji';
 import {
   QUIZ_AUTHOR_ONLY,
   deleteQuizCopy,
@@ -105,9 +111,9 @@ interface AdminQuiz {
   gradingStrategy: string;
   includeCodeContext: boolean;
   attemptsCount: number;
-  avgScore: number | null;
+  /** The average effective grade as the classroom's emoji (E1: no number shown). */
+  avgEmoji: string | null;
   attemptStatus: string | null;
-  score: number | null;
   userAttempt: Record<string, unknown> | null;
   [key: string]: unknown;
 }
@@ -147,6 +153,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   // role gap between the two lists fails visibly instead of looking like a
   // server fault.
   let quizzesWithAttempts;
+  // The classroom's scale: the average grade is shown as its emoji.
+  const emojiScale = await ClassmojiService.emojiMapping.findScaleByClassroomId(classroom.id);
   try {
     quizzesWithAttempts = await ClassmojiService.quiz.findByClassroom(classroom.id, membership);
   } catch (error) {
@@ -163,15 +171,10 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     // Find admin's attempt for preview functionality
     const adminAttempt = quiz.attempts?.find(a => String(a.user_id) === String(userId));
     let attemptStatus = null;
-    let score = null;
 
     if (adminAttempt) {
       if (adminAttempt.completed_at) {
         attemptStatus = 'completed';
-        score =
-          typeof adminAttempt.partial_credit_percentage === 'number'
-            ? adminAttempt.partial_credit_percentage
-            : null;
       } else {
         attemptStatus = 'in_progress';
       }
@@ -196,12 +199,11 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       gradingStrategy: quiz.grading_strategy || 'HIGHEST',
       includeCodeContext: quiz.include_code_context || false,
       attemptsCount: quiz.attemptsCount,
-      avgScore: quiz.avgScore,
+      avgEmoji: quizPercentageEmoji(quiz.avgScore, emojiScale),
       // Include admin's attempt data for preview. Only the fields a preview
       // needs: the attempt row is joined to its user, whose row carries far
       // more than this list uses.
       attemptStatus,
-      score,
       userAttempt: adminAttempt
         ? { id: adminAttempt.id, completed_at: adminAttempt.completed_at }
         : null,
@@ -388,6 +390,8 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         name: newQuiz.name,
         repository_id: newQuiz.repository_id ?? null,
         module_id: newQuiz.assignment?.module_id ?? null,
+        // As the row was saved: a create without the switch saves it off.
+        code_sandbox_enabled: newQuiz.code_sandbox_enabled === true,
       });
       const warning = newQuiz.assignment?.is_published
         ? await publishedDraftWarning(newQuiz.id)
@@ -429,6 +433,12 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         // Field NAMES only. The body carries system and rubric prompts, which
         // are long free text and do not belong in an audit payload.
         fields: Object.keys(data).filter(key => key !== '_action' && key !== 'id'),
+        // A short boolean, so its value too, as the service stores it. The form
+        // sends it only while its switch is shown, so `fields` naming it does
+        // not mean it changed.
+        ...(data.codeSandboxEnabled !== undefined
+          ? { code_sandbox_enabled: data.codeSandboxEnabled === true }
+          : {}),
       });
       const warning =
         data.assignment?.isPublished === true ? await publishedDraftWarning(data.id) : {};
@@ -717,9 +727,11 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
         record.attemptsCount > 0 ? (
           <Space direction="vertical" size={0}>
             <Text>{record.attemptsCount} attempts</Text>
-            {record.avgScore !== null && (
+            {record.avgEmoji && (
               <Text type="secondary" style={{ fontSize: 12 }}>
-                Avg: {record.avgScore}%
+                <span className="inline-flex items-center gap-1">
+                  Avg: <Emoji emoji={record.avgEmoji} fontSize={14} />
+                </span>
               </Text>
             )}
           </Space>

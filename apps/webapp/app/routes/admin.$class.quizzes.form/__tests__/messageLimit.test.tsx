@@ -40,7 +40,6 @@ vi.mock('~/hooks', () => ({
   useRouteDrawer: () => ({ opened: true, close: vi.fn() }),
   useDarkMode: () => ({ isDarkMode: false }),
 }));
-vi.mock('~/components/quiz/PromptAssistant', () => ({ PromptAssistant: () => null }));
 vi.mock('react-router', () => ({
   useFetcher: () => ({ state: 'idle', data: undefined, submit: vi.fn() }),
   useLocation: () => ({ pathname: '/admin/cs52-26f/quizzes/form' }),

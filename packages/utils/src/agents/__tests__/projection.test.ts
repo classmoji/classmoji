@@ -136,7 +136,11 @@ describe('createChunkProjector: every v7 chunk type', () => {
         toolName: 'submit_quiz_evaluation',
         input: { final_acknowledgment: 'Well done.' },
       },
-      { type: 'tool-output-available', toolCallId: 'c1', output: { v: 2 } },
+      {
+        type: 'tool-output-available',
+        toolCallId: 'c1',
+        output: { v: 2, source: 'server', question_results: [] },
+      },
       { type: 'tool-output-error', toolCallId: 'c1', errorText: 'refused' },
       { type: 'tool-output-denied', toolCallId: 'c1' },
     ];
@@ -306,14 +310,9 @@ describe('createChunkProjector: every v7 chunk type', () => {
       },
       { type: 'data-notice', data: { code: 'reply_failed' } },
       {
+        // The student's view: no grade number (E1).
         type: 'data-evaluation',
-        data: {
-          v: 2,
-          source: 'server',
-          partial_credit_percentage: 50,
-          first_attempt_percentage: 0,
-          question_results: [],
-        },
+        data: { v: 2, source: 'server', question_results: [] },
       },
     ]);
   });
@@ -323,6 +322,117 @@ describe('createChunkProjector: every v7 chunk type', () => {
     const b = createChunkProjector<Chunk>(quizVisibility);
     a({ type: 'tool-input-start', toolCallId: 'c1', toolName: 'present_question' });
     expect(b({ type: 'tool-output-available', toolCallId: 'c1', output: {} })).toBeNull();
+  });
+});
+
+describe('the evaluation record: no grade number for a student (E1)', () => {
+  const FEEDBACK = {
+    final_acknowledgment: 'Nice work.',
+    feedback_summary: 'Solid.',
+    feedback_strengths: ['Recursion'],
+    feedback_improvements: ['Base cases'],
+    feedback_recommendation: 'Practise.',
+    feedback_effort_note: 'Steady.',
+  };
+  const RECORD = {
+    v: 2,
+    source: 'model',
+    evaluation: 'GOOD',
+    numeric_score: 3,
+    feedback: FEEDBACK,
+    partial_credit_percentage: 73.37,
+    first_attempt_percentage: 41.5,
+    question_results: [
+      {
+        question_num: 1,
+        attempts: 2,
+        tries: 2,
+        eventually_correct: true,
+        first_attempt_correct: false,
+        credit_earned: 66.6,
+        emoji: 'eyes',
+        brief_feedback: 'Close.',
+      },
+    ],
+  };
+  const STUDENT_RECORD = {
+    v: 2,
+    source: 'model',
+    evaluation: 'GOOD',
+    numeric_score: 3,
+    feedback: FEEDBACK,
+    question_results: [
+      { question_num: 1, attempts: 2, tries: 2, emoji: 'eyes', brief_feedback: 'Close.' },
+    ],
+  };
+  const numbers = ['73.37', '41.5', '66.6', 'credit_earned', 'first_attempt_correct'];
+  const expectNoNumbers = (value: unknown) => {
+    const text = JSON.stringify(value);
+    for (const n of numbers) expect(text).not.toContain(n);
+  };
+
+  it('narrows submit_quiz_evaluation output on the live stream', () => {
+    const p = createChunkProjector<Chunk>(quizVisibility);
+    const out = [
+      {
+        type: 'tool-input-available',
+        toolCallId: 'e1',
+        toolName: 'submit_quiz_evaluation',
+        input: { final_acknowledgment: 'Nice work.', quiz_complete: true },
+      },
+      { type: 'tool-output-available', toolCallId: 'e1', output: RECORD },
+      { type: 'data-evaluation', data: RECORD },
+    ].map(c => p(c as Chunk));
+    expect(out[1]).toEqual({
+      type: 'tool-output-available',
+      toolCallId: 'e1',
+      output: STUDENT_RECORD,
+    });
+    expect(out[2]).toEqual({ type: 'data-evaluation', data: STUDENT_RECORD });
+    expectNoNumbers(out);
+  });
+
+  it('drops an output that does not parse rather than sending it whole', () => {
+    const p = createChunkProjector<Chunk>(quizVisibility);
+    p({
+      type: 'tool-input-available',
+      toolCallId: 'e1',
+      toolName: 'submit_quiz_evaluation',
+      input: {},
+    } as Chunk);
+    expect(
+      p({
+        type: 'tool-output-available',
+        toolCallId: 'e1',
+        output: { partial_credit_percentage: 73.37 },
+      } as Chunk)
+    ).toBeNull();
+  });
+
+  it('narrows the stored parts for a student and keeps them whole for staff', () => {
+    const m = {
+      id: 'm1',
+      role: 'assistant',
+      parts: [
+        {
+          type: 'tool-submit_quiz_evaluation',
+          toolCallId: 'e1',
+          state: 'output-available',
+          input: { final_acknowledgment: 'Nice work.', quiz_complete: true },
+          output: RECORD,
+        },
+        { type: 'data-evaluation', data: RECORD },
+      ],
+    } as unknown as QuizUIMessage;
+
+    const student = projectMessage(m, quizVisibility)!;
+    expect((student.parts[0] as { output?: unknown }).output).toEqual(STUDENT_RECORD);
+    expect((student.parts[1] as { data?: unknown }).data).toEqual(STUDENT_RECORD);
+    expectNoNumbers(student);
+
+    const staff = projectMessage(m, quizStaffVisibility)!;
+    expect((staff.parts[0] as { output?: unknown }).output).toEqual(RECORD);
+    expect((staff.parts[1] as { data?: unknown }).data).toEqual(RECORD);
   });
 });
 
@@ -877,5 +987,138 @@ describe('projectMessage', () => {
     );
     expect(t.map(m => m.id)).toEqual(['a1', 'u1']);
     expect(t[0].parts).toEqual([{ type: 'text', text: 'Hello' }]);
+  });
+});
+
+describe('code sandbox parts', () => {
+  const files = { '/index.js': 'console.log(1);\n', '/index.html': '<div id="app"></div>\n' };
+  const submission = {
+    sandbox_id: 'q3-1',
+    files: { ...files, '/index.js': 'console.log(2);\n' },
+    console: [{ method: 'log', text: '2' }],
+    errors: [],
+    question_number: 3,
+    attempt: 1,
+    base_attempt: null,
+    template: 'vanilla',
+    changed_files: ['/index.js'],
+  } as const;
+  const submissionRow = {
+    id: 'u3',
+    role: 'user',
+    metadata: { hiddenPartIndexes: [1, 2] },
+    parts: [
+      { type: 'data-code-submission', data: submission },
+      { type: 'text', text: 'Code submission: question 3, attempt 1 ...' },
+      { type: 'text', text: 'CURRENT STATUS ...' },
+    ],
+  } as unknown as QuizUIMessage;
+
+  it.each([
+    ['student', quizVisibility],
+    ['staff', quizStaffVisibility],
+  ])('projects a stored submission to the part alone (%s)', (_who, reg) => {
+    expect(projectMessage(submissionRow, reg)).toEqual({
+      id: 'u3',
+      role: 'user',
+      metadata: {},
+      parts: [{ type: 'data-code-submission', data: submission }],
+    });
+  });
+
+  it("keeps the browser's optimistic submission, which has no server fields", () => {
+    const {
+      question_number: _n,
+      attempt: _a,
+      base_attempt: _b,
+      template: _t,
+      changed_files: _c,
+      ...input
+    } = submission;
+    const m = {
+      id: 'u4',
+      role: 'user',
+      parts: [{ type: 'data-code-submission', data: input }],
+    } as unknown as QuizUIMessage;
+    expect(projectMessage(m, quizVisibility)!.parts).toEqual([
+      { type: 'data-code-submission', data: input },
+    ]);
+  });
+
+  it('passes the hint sandbox, live and stored, with its schema fields only', () => {
+    const data = {
+      id: 'q3-2',
+      question_number: 3,
+      attempt: 2,
+      seeded_from: 1,
+      template: 'vanilla',
+      files,
+      active_file: '/index.js',
+    };
+    const p = createChunkProjector<Chunk>(quizVisibility);
+    expect(p({ type: 'data-sandbox', id: 'sb', data: { ...data, extra: 1 } } as Chunk)).toEqual({
+      type: 'data-sandbox',
+      id: 'sb',
+      data,
+    });
+    const m = {
+      id: 'a3',
+      role: 'assistant',
+      parts: [
+        { type: 'data-sandbox', id: 'sb', data },
+        { type: 'text', text: 'A hint.' },
+      ],
+    } as unknown as QuizUIMessage;
+    expect(projectMessage(m, quizStaffVisibility)!.parts[0]).toEqual({
+      type: 'data-sandbox',
+      id: 'sb',
+      data,
+    });
+  });
+
+  it("cuts present_question's sandbox from the input and keeps the card's", () => {
+    const sandbox = { template: 'vanilla', files, active_file: '/index.js' };
+    const input = { ...cardFields, sandbox };
+    const output = {
+      card: { ...cardFields, sandbox },
+      question_number: 2,
+      total_questions: 8,
+    };
+    for (const reg of [quizVisibility, quizStaffVisibility]) {
+      const p = createChunkProjector<Chunk>(reg);
+      expect(
+        p({ type: 'tool-input-start', toolCallId: 'c1', toolName: 'present_question' } as Chunk)
+      ).not.toBeNull();
+      expect(
+        p({ type: 'tool-input-delta', toolCallId: 'c1', inputTextDelta: '{"s' } as Chunk)
+      ).toBeNull();
+      expect(
+        p({
+          type: 'tool-input-available',
+          toolCallId: 'c1',
+          toolName: 'present_question',
+          input,
+        } as Chunk)
+      ).toMatchObject({ input: cardFields });
+      const stored = projectMessage(
+        {
+          id: 'a4',
+          role: 'assistant',
+          parts: [
+            {
+              type: 'tool-present_question',
+              toolCallId: 'c1',
+              state: 'output-available',
+              input,
+              output,
+            },
+          ],
+        } as unknown as QuizUIMessage,
+        reg
+      )!;
+      const part = stored.parts[0] as { input: Record<string, unknown>; output: typeof output };
+      expect(part.input).toEqual(cardFields);
+      expect(part.output.card.sandbox).toEqual(sandbox);
+    }
   });
 });

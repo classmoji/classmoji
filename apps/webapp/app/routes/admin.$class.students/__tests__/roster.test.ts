@@ -47,6 +47,9 @@ vi.mock('@classmoji/services', async () => ({
       findInvitesByClassroomId: (...a: unknown[]) => mocks.findInvitesByClassroomId(...a),
       deleteInvite: (...a: unknown[]) => mocks.deleteInvite(...a),
     },
+    joinLink: {
+      getJoinLink: async () => ({ enabled: true, code: 'secretcode123456' }),
+    },
     user: { findRegisteredEmails: (...a: unknown[]) => mocks.findRegisteredEmails(...a) },
   },
   // The real builder: the payload's shape is part of what these tests pin.
@@ -287,6 +290,29 @@ describe('students loader — canManage follows the role AND the prefix', () => 
   });
 });
 
+// The invite link's code lets anyone in, so it travels only with canManage.
+describe('students loader — the invite link code', () => {
+  it('is sent to an OWNER on the /admin prefix', async () => {
+    grantLoader('OWNER');
+    expect((await loader(loaderArgs('admin'))).joinLink).toEqual({
+      enabled: true,
+      code: 'secretcode123456',
+    });
+  });
+
+  it.each([
+    ['OWNER', 'teacher'],
+    ['TEACHER', 'admin'],
+    ['TEACHER', 'teacher'],
+    ['ASSISTANT', 'assistant'],
+  ] as const)('is withheld from %s on /%s', async (role, prefix) => {
+    grantLoader(role);
+    const data = await loader(loaderArgs(prefix));
+    expect(data.joinLink).toBeNull();
+    expect(JSON.stringify(data)).not.toContain('secretcode123456');
+  });
+});
+
 /**
  * An owner using "Preview as" lands on this same loader under /teacher or
  * /assistant. The point of that control is to show what the role actually sees,
@@ -487,6 +513,7 @@ describe('students action — removal payload', () => {
       classroom: { id: 'class-1', slug: CLASS_SLUG },
       gitOrganization: expect.objectContaining({ id: 'org-1', login: 'dev-org' }),
       role: 'STUDENT',
+      actorUserId: null,
     });
     expect(JSON.stringify(payload)).not.toContain('sk-test');
     expect(JSON.stringify(payload)).not.toContain('ada@school.test');

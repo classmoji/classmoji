@@ -1,55 +1,91 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, ConfigProvider, Modal, theme } from 'antd';
 import {
+  BLOCK_ID_ATTR,
   HTML_BLOCK_SANDBOX,
+  MAX_HTML_BLOCK_FILE_BYTES,
   htmlBlockFrameMarkup,
   htmlBlockSource,
   htmlBlockSrcdoc,
-  isSafeHtmlBlockSandbox,
+  utf8ByteLength,
 } from '@classmoji/services/slides/runtime-attrs';
+import { resolveDeckRelative } from '@classmoji/services/slides/frame-refs';
 
 import { useIsDarkMode } from '~/hooks/useIsDarkMode';
+import type { EditorFrames } from '~/utils/editorFrames';
+import { HtmlBlockApiError, readHtmlBlockFile, saveHtmlBlockFile } from '~/utils/htmlBlockClient';
+import { feedPreviewFrame, previewFrameUrl } from '~/utils/legacyHtmlBlocks';
 import CodeSourceEditor from './CodeSourceEditor';
 import {
+  STARTER_HTML_SOURCE,
   frameOfBlock,
+  htmlBlockSourceOf,
+  isHtmlBlockFileShared,
+  setHtmlBlockFile,
+  setHtmlBlockInline,
   slideHtmlLengthWith,
   slideHtmlOverCap,
   storedSrcdoc,
+  svgBlockSource,
   svgFromSource,
   svgOfBlock,
+  type HtmlBlockSource,
 } from './slideBlocks';
 
 /**
  * BlockSourceModal — edit an html or svg block's source with a live preview.
  *
- * html: the preview is a frame in the block's own sandbox; Apply writes the
- * frame's srcdoc once (one change to the slide). svg: the source is held to
- * the svg-block lists on Apply and replaces the block's `<svg>`.
+ * html: the block's code is a file in the deck's repository
+ * (`blocks/<name>.html`). Opening reads it; Apply writes it (a compare-and-swap
+ * on the version opened) and points the block at the version written — one
+ * change to the slide, so undo and live editing see it. A block copied from
+ * another deck opens that deck's file and its first Apply writes a file of
+ * this deck. The live preview is the content service's preview frame, sent the
+ * draft as it is typed. A block that shows another repo file is not edited
+ * here. Without the content service (local development) a block keeps its code
+ * inline in `srcdoc`, as before.
+ *
+ * A new html block is not on its slide until its first Apply (`insertInto`):
+ * closing without applying leaves nothing behind, so no block is ever stored
+ * without its file.
+ *
+ * svg: the source is held to the svg-block lists on Apply and replaces the
+ * block's `<svg>`.
  *
  * While open, the block carries `editing-code`, so a live deck holds remote
  * changes to its slide until the modal closes (DeckBridge.busyIn); the
  * bridge applies them on its next tick.
  *
- * Apply refuses a change that would take the slide over the slide html cap
- * (the same cap deck ops hold agents to). Closing with changes not applied
- * asks first.
+ * Closing with changes not applied asks first.
  */
 
 export type SourceBlockKind = 'html' | 'svg';
+
+/** How the source editor opens. */
+export interface BlockSourceOptions {
+  /** Start from the starter code and save it as a new file (the block shows a repo file today). */
+  fresh?: boolean;
+  /**
+   * A new block, not on a slide yet: Apply appends it to this slide; closing
+   * without applying inserts nothing.
+   */
+  insertInto?: Element | null;
+}
 
 export function sourceBlockKind(block: HTMLElement | null): SourceBlockKind | null {
   const type = block?.dataset.blockType;
   return type === 'html' || type === 'svg' ? type : null;
 }
 
-/** The source the editor opens with. */
-function initialSource(block: HTMLElement, kind: SourceBlockKind): string {
+/** The source the editor opens with, when it is in the block itself. */
+function inlineSource(block: HTMLElement, kind: SourceBlockKind): string {
   if (kind === 'html') {
     const frame = frameOfBlock(block);
     return frame ? htmlBlockSource(storedSrcdoc(frame)) : '';
   }
+  // The drawing as authored, not as shown.
   const svg = svgOfBlock(block);
-  return svg ? new XMLSerializer().serializeToString(svg) : '';
+  return svg ? svgBlockSource(svg) : '';
 }
 
 function blockBox(block: HTMLElement): { width: number; height: number } {
@@ -70,13 +106,31 @@ function slideBackdrop(block: HTMLElement): string {
 
 const PREVIEW_DELAY_MS = 400;
 
+/** The message for a block whose file moved on since it was opened. */
+export const CODE_CHANGED_MESSAGE = "This block's code changed since you opened it";
+
 interface BlockSourceModalProps {
   block: HTMLElement | null;
+  options?: BlockSourceOptions;
+  /** The deck (its html-block API). */
+  slideId?: string | null;
+  /** The deck's editor frame context: present, new code is saved as a file. */
+  frames?: EditorFrames | null;
+  /** The content service origin: the live preview runs in its preview frame. */
+  contentOrigin?: string | null;
   onClose: () => void;
   onApplied?: () => void;
 }
 
-export default function BlockSourceModal({ block, onClose, onApplied }: BlockSourceModalProps) {
+export default function BlockSourceModal({
+  block,
+  options = {},
+  slideId = null,
+  frames = null,
+  contentOrigin = null,
+  onClose,
+  onApplied,
+}: BlockSourceModalProps) {
   const isDark = useIsDarkMode();
   const kind = sourceBlockKind(block);
   const open = block !== null && kind !== null;
@@ -114,6 +168,11 @@ export default function BlockSourceModal({ block, onClose, onApplied }: BlockSou
             key={block.dataset.cmBlockId ?? 'block'}
             block={block}
             kind={kind}
+            fresh={Boolean(options.fresh)}
+            insertInto={options.insertInto ?? null}
+            slideId={slideId}
+            frames={frames}
+            contentOrigin={contentOrigin ?? frames?.contentOrigin ?? null}
             dark={isDark}
             onClose={onClose}
             onCancel={requestClose}
@@ -152,9 +211,47 @@ export default function BlockSourceModal({ block, onClose, onApplied }: BlockSou
   );
 }
 
+/** Where Apply writes an html block's code. */
+type HtmlTarget =
+  /**
+   * A file: the block's own (`src`, opened at `rev`), or a new one (`src`
+   * null). `read`: the file the code opens from (the block's own, or the one
+   * of the deck it was copied from), null to start from what the block holds.
+   */
+  | {
+      kind: 'file';
+      src: string | null;
+      rev: string | null;
+      read: { src: string; rev: string | null } | null;
+    }
+  /** Inline in `srcdoc` (no content service). */
+  | { kind: 'inline' }
+  /** Another repo file: not edited here. */
+  | { kind: 'repo'; src: string };
+
+function htmlTargetOf(source: HtmlBlockSource, fresh: boolean, filesOn: boolean): HtmlTarget {
+  const newFile = { kind: 'file', src: null, rev: null, read: null } as const;
+  if (fresh) return filesOn ? newFile : { kind: 'inline' };
+  if (source.kind === 'file') {
+    const read = { src: source.src, rev: source.rev };
+    return { kind: 'file', src: source.src, rev: source.rev, read };
+  }
+  if (source.kind === 'copied') {
+    // Another deck's file: read from there, written to a new file of this deck.
+    return { ...newFile, read: { src: source.src, rev: source.rev } };
+  }
+  if (source.kind === 'repo') return { kind: 'repo', src: source.src };
+  return filesOn ? newFile : { kind: 'inline' };
+}
+
 function SourceEditorBody({
   block,
   kind,
+  fresh,
+  insertInto,
+  slideId,
+  frames,
+  contentOrigin,
   dark,
   onClose,
   onCancel,
@@ -163,6 +260,12 @@ function SourceEditorBody({
 }: {
   block: HTMLElement;
   kind: SourceBlockKind;
+  fresh: boolean;
+  /** A new block's slide (it is appended there on Apply). */
+  insertInto: Element | null;
+  slideId: string | null;
+  frames: EditorFrames | null;
+  contentOrigin: string | null;
   dark: boolean;
   onClose: () => void;
   /** Cancel: the parent asks first when there are changes. */
@@ -170,13 +273,69 @@ function SourceEditorBody({
   onDirtyChange: (dirty: boolean) => void;
   onApplied?: () => void;
 }) {
-  const initial = useMemo(() => initialSource(block, kind), [block, kind]);
+  const target = useMemo(
+    () =>
+      kind === 'html'
+        ? htmlTargetOf(htmlBlockSourceOf(block), fresh, frames !== null && slideId !== null)
+        : null,
+    [block, kind, fresh, frames, slideId]
+  );
+  const readsFile = target?.kind === 'file' && target.read !== null;
+  // Where the block is (or, new, will be): its slide decides lock and backdrop.
+  const host: Element = block.isConnected || !insertInto ? block : insertInto;
+
+  // The code as opened: inline right away, a file once it is read. `rev` is
+  // the version read — what Apply's compare-and-swap names.
+  const [opened, setOpened] = useState<{ source: string; rev: string | null } | null>(() =>
+    readsFile
+      ? null
+      : {
+          source: fresh ? STARTER_HTML_SOURCE : inlineSource(block, kind),
+          rev: null,
+        }
+  );
+  // Bumped to read the file again (and restart the editor from it).
+  const [loadKey, setLoadKey] = useState(0);
+  const [missing, setMissing] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const initial = opened?.source ?? '';
   const [source, setSource] = useState(initial);
-  const dirty = source !== initial;
+  const dirty = opened !== null && source !== initial;
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
   const [previewSource, setPreviewSource] = useState(initial);
   const [error, setError] = useState<string | null>(null);
-  const locked = block.closest('section')?.classList.contains('cm-locked') ?? false;
+  const [saving, setSaving] = useState(false);
+  const locked = host.closest('section')?.classList.contains('cm-locked') ?? false;
+
+  useEffect(() => {
+    if (!readsFile || !slideId || target?.kind !== 'file' || !target.read) return;
+    let cancelled = false;
+    setOpened(null);
+    setLoadError(null);
+    readHtmlBlockFile(slideId, { src: target.read.src, rev: target.read.rev })
+      .then(file => {
+        if (cancelled) return;
+        setMissing(false);
+        setOpened({ source: file.html, rev: file.rev });
+        setSource(file.html);
+        setPreviewSource(file.html);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        if (err instanceof HtmlBlockApiError && err.code === 'not-found') {
+          // A file that is gone: what is written next is saved as a new file.
+          setMissing(true);
+          setOpened({ source: '', rev: null });
+          setSource('');
+          setPreviewSource('');
+          return;
+        }
+        setLoadError(err instanceof Error ? err.message : 'The code could not be read.');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [readsFile, slideId, target, loadKey]);
 
   // The block is being edited: a live deck holds remote renders of its slide.
   useEffect(() => {
@@ -195,11 +354,28 @@ function SourceEditorBody({
     return result.ok ? new XMLSerializer().serializeToString(result.svg) : null;
   }, [kind, previewSource]);
 
-  const backdrop = useMemo(() => slideBackdrop(block), [block]);
+  const backdrop = useMemo(() => slideBackdrop(host as HTMLElement), [host]);
   const contentColor = useMemo(() => {
-    const content = block.querySelector('.sl-block-content');
+    const content = block.isConnected ? block.querySelector('.sl-block-content') : null;
     return content ? getComputedStyle(content).color : '';
   }, [block]);
+
+  /**
+   * The block on its slide, for Apply to change: already there, or (new)
+   * appended to its slide now. False, with the reason shown, when there is
+   * nowhere to put it.
+   */
+  const placeBlock = useCallback((): boolean => {
+    if (block.isConnected) return true;
+    if (insertInto?.isConnected) {
+      insertInto.appendChild(block);
+      return true;
+    }
+    setError(
+      insertInto ? 'This slide is no longer in the deck' : 'This block is no longer on the slide'
+    );
+    return false;
+  }, [block, insertInto]);
 
   const previewDoc = useMemo(() => {
     if (kind === 'html') return htmlBlockSrcdoc(previewSource);
@@ -210,9 +386,57 @@ function SourceEditorBody({
     );
   }, [kind, previewSource, svgPreview, contentColor]);
 
+  const finish = useCallback(() => {
+    onDirtyChange(false);
+    onApplied?.();
+    onClose();
+  }, [onApplied, onClose, onDirtyChange]);
+
+  const applyFile = useCallback(async () => {
+    if (target?.kind !== 'file' || !slideId) return;
+    if (utf8ByteLength(source) > MAX_HTML_BLOCK_FILE_BYTES) {
+      setError(
+        `This code is ${Math.ceil(utf8ByteLength(source) / 1000)} KB; the limit is ${
+          MAX_HTML_BLOCK_FILE_BYTES / 1000
+        } KB.`
+      );
+      return;
+    }
+    const deck = host.closest('.slides');
+    const own = target.src !== null && !missing;
+    const fork = own && isHtmlBlockFileShared(block, target.src as string, deck);
+    setSaving(true);
+    setError(null);
+    try {
+      const ref = await saveHtmlBlockFile(slideId, {
+        html: source,
+        src: own ? target.src : null,
+        rev: own ? opened?.rev : null,
+        fork,
+        blockId: block.getAttribute(BLOCK_ID_ATTR),
+      });
+      // A new block gets its frame before it goes on the slide (one change).
+      const placed = block.isConnected;
+      setHtmlBlockFile(block, ref, frames);
+      if (!placed && !placeBlock()) return;
+      finish();
+    } catch (err: unknown) {
+      if (err instanceof HtmlBlockApiError && err.code === 'changed') {
+        setError(CODE_CHANGED_MESSAGE);
+        setLoadKey(n => n + 1);
+        return;
+      }
+      setError(err instanceof Error ? err.message : 'The code could not be saved.');
+    } finally {
+      setSaving(false);
+    }
+  }, [target, slideId, source, block, host, missing, opened, frames, finish, placeBlock]);
+
   const apply = useCallback(() => {
-    if (!block.isConnected) {
-      setError('This block is no longer on the slide');
+    if (!block.isConnected && !insertInto?.isConnected) {
+      setError(
+        insertInto ? 'This slide is no longer in the deck' : 'This block is no longer on the slide'
+      );
       return;
     }
     const content = block.querySelector(':scope > .sl-block-content');
@@ -221,25 +445,28 @@ function SourceEditorBody({
       return;
     }
     if (kind === 'html') {
-      const frame = frameOfBlock(block);
+      if (target?.kind === 'file') {
+        void applyFile();
+        return;
+      }
+      const removed = frameOfBlock(block)?.outerHTML ?? '';
+      const added = htmlBlockFrameMarkup(source);
       const tooLong = slideHtmlOverCap(
-        slideHtmlLengthWith(block, content.innerHTML, htmlBlockFrameMarkup(source))
+        block.isConnected
+          ? slideHtmlLengthWith(block, removed, added)
+          : (insertInto?.innerHTML.length ?? 0) +
+              block.outerHTML.length -
+              removed.length +
+              added.length
       );
       if (tooLong) {
         setError(tooLong);
         return;
       }
-      const loads =
-        frame !== null &&
-        frame.hasAttribute('srcdoc') &&
-        isSafeHtmlBlockSandbox(frame.getAttribute('sandbox')) &&
-        !Array.from(frame.attributes).some(a => a.name.startsWith('data-cm-inert-'));
-      if (frame && loads) {
-        frame.setAttribute('srcdoc', htmlBlockSrcdoc(source));
-      } else {
-        // A frame built outside the html-block rule is rebuilt to it.
-        content.innerHTML = htmlBlockFrameMarkup(source);
-      }
+      // The frame held to the html-block rule, its other attributes and the
+      // block's other content kept.
+      setHtmlBlockInline(block, source);
+      if (!placeBlock()) return;
     } else {
       const result = svgFromSource(source, document);
       if (!result.ok) {
@@ -257,25 +484,50 @@ function SourceEditorBody({
       if (current) current.replaceWith(result.svg);
       else content.append(result.svg);
     }
-    onDirtyChange(false);
-    onApplied?.();
-    onClose();
-  }, [block, kind, source, onApplied, onClose, onDirtyChange]);
+    finish();
+  }, [block, kind, source, target, applyFile, finish, insertInto, placeBlock]);
+
+  if (target?.kind === 'repo') {
+    const resolved = frames ? resolveDeckRelative(target.src, frames.deckFolder) : null;
+    return (
+      <div className="flex flex-col gap-3" data-testid="block-source-repo-file">
+        <p className="text-sm text-gray-700 dark:text-gray-300">
+          This block shows a file from the repository:{' '}
+          <code className="font-mono text-xs">{resolved?.repoPath ?? target.src}</code>. Edit that
+          file in the repository, or set the block&apos;s source to Code to write its code here.
+        </p>
+        <div className="flex justify-end">
+          <Button onClick={onClose}>Close</Button>
+        </div>
+      </div>
+    );
+  }
+
+  const useFramePreview = kind === 'html' && contentOrigin !== null;
 
   return (
     <div className="flex flex-col gap-3">
       <div className="grid h-[65vh] min-h-[320px] grid-cols-1 gap-3 md:grid-cols-2">
-        <CodeSourceEditor
-          initialValue={initial}
-          onChange={value => {
-            setSource(value);
-            setError(null);
-          }}
-          dark={dark}
-          ariaLabel={kind === 'svg' ? 'SVG source' : 'HTML source'}
-        />
+        {opened === null ? (
+          <div className="flex items-center justify-center rounded-md border border-gray-200 text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400">
+            {loadError ?? 'Loading…'}
+          </div>
+        ) : (
+          <CodeSourceEditor
+            key={loadKey}
+            initialValue={initial}
+            onChange={value => {
+              setSource(value);
+              if (error !== CODE_CHANGED_MESSAGE) setError(null);
+            }}
+            dark={dark}
+            ariaLabel={kind === 'svg' ? 'SVG source' : 'HTML source'}
+          />
+        )}
         <ScaledPreview box={blockBox(block)} backdrop={backdrop}>
-          {previewDoc === null ? (
+          {useFramePreview ? (
+            <PreviewFrame html={previewSource} contentOrigin={contentOrigin as string} />
+          ) : previewDoc === null ? (
             <div className="flex h-full items-center justify-center text-sm text-gray-500 dark:text-gray-400">
               Needs exactly one &lt;svg&gt; element
             </div>
@@ -295,16 +547,54 @@ function SourceEditorBody({
           role="alert"
           data-testid="block-source-error"
         >
-          {error}
+          {error ??
+            (missing && target?.kind === 'file' && target.read
+              ? `Not found: ${target.read.src}. Apply saves this code as a new file.`
+              : null)}
         </div>
         <div className="flex gap-2">
           <Button onClick={onCancel}>Cancel</Button>
-          <Button type="primary" onClick={apply} disabled={locked}>
+          <Button
+            type="primary"
+            onClick={apply}
+            loading={saving}
+            disabled={locked || opened === null}
+          >
             Apply
           </Button>
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * The live preview of html code: the content service's preview frame (a
+ * sandboxed origin), sent the draft once it is ready. A new frame per draft:
+ * the preview frame takes one document and keeps it.
+ */
+function PreviewFrame({ html, contentOrigin }: { html: string; contentOrigin: string }) {
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  const generation = useRef(0);
+  const key = useMemo(() => {
+    void html;
+    return ++generation.current;
+  }, [html]);
+  useEffect(() => {
+    const frame = frameRef.current;
+    if (!frame) return;
+    return feedPreviewFrame(frame, contentOrigin, html);
+  }, [html, contentOrigin]);
+  return (
+    <iframe
+      key={key}
+      ref={frameRef}
+      title="Preview"
+      className="block h-full w-full border-0"
+      sandbox={HTML_BLOCK_SANDBOX}
+      src={previewFrameUrl(contentOrigin)}
+      data-testid="block-source-preview-frame"
+    />
   );
 }
 

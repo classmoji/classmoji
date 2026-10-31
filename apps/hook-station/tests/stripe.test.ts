@@ -23,10 +23,11 @@ import dayjs from 'dayjs';
 
 const PRO_PRICE_ID = 'price_pro_test';
 
-/** A subscription payload carrying the configured Pro price. */
+/** A paid subscription payload carrying the configured Pro price. */
 const proSub = (overrides: Record<string, unknown> = {}) => ({
   id: 'sub_new',
   customer: 'cus_1',
+  status: 'active',
   items: { data: [{ price: { id: PRO_PRICE_ID } }] },
   ...overrides,
 });
@@ -39,6 +40,7 @@ const subCreate = vi.fn();
 const subFindBy = vi.fn();
 const processedFindUnique = vi.fn();
 const processedCreate = vi.fn();
+const billingRecord = vi.fn();
 
 vi.mock('@classmoji/database', () => ({
   getPrisma: () => ({
@@ -59,6 +61,7 @@ vi.mock('@classmoji/services', () => ({
       create: subCreate,
       findBy: subFindBy,
     },
+    billing: { recordEvent: billingRecord },
   },
 }));
 
@@ -102,6 +105,7 @@ describe('stripe webhook route', () => {
       subFindBy,
       processedFindUnique,
       processedCreate,
+      billingRecord,
     ].forEach(m => m.mockReset());
     processedFindUnique.mockResolvedValue(null);
     processedCreate.mockResolvedValue({});
@@ -204,6 +208,238 @@ describe('stripe webhook route', () => {
 
     expect(res.statusCode).toBe(200);
     expect(subCreate).not.toHaveBeenCalled();
+  });
+
+  describe('billing events', () => {
+    it('records PRO_GRANTED for the paying user, with the Stripe ids', async () => {
+      constructWebhookEvent.mockReturnValue({
+        id: 'evt_grant',
+        type: 'customer.subscription.created',
+        data: { object: proSub() },
+      });
+      userFindBy.mockResolvedValue({ id: 'user-1' });
+      subGetCurrent.mockResolvedValue(null);
+
+      const app = await buildApp();
+      await post(app, {}, { 'stripe-signature': 'sig' });
+
+      expect(billingRecord).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'user-1',
+          action: 'PRO_GRANTED',
+          source: 'stripe:webhook',
+          stripeCustomerId: 'cus_1',
+          stripeSubscriptionId: 'sub_new',
+          stripeEventId: 'evt_grant',
+          data: expect.objectContaining({ tool: 'stripe:webhook' }),
+        })
+      );
+    });
+
+    it('records nothing when a price is refused', async () => {
+      constructWebhookEvent.mockReturnValue({
+        id: 'evt_refused',
+        type: 'customer.subscription.created',
+        data: { object: proSub({ items: { data: [{ price: { id: 'price_other' } }] } }) },
+      });
+      userFindBy.mockResolvedValue({ id: 'user-1' });
+
+      const app = await buildApp();
+      await post(app, {}, { 'stripe-signature': 'sig' });
+
+      expect(billingRecord).not.toHaveBeenCalled();
+    });
+
+    it('records PLAN_UPDATED against the row owner, not the event customer', async () => {
+      constructWebhookEvent.mockReturnValue({
+        id: 'evt_update',
+        type: 'customer.subscription.updated',
+        data: { object: proSub({ cancel_at: dayjs('2026-11-21').unix() }) },
+      });
+      userFindBy.mockResolvedValue({ id: 'someone-else' });
+      subFindBy.mockResolvedValue({ id: 'row-1', user_id: 'owner-1' });
+
+      const app = await buildApp();
+      await post(app, {}, { 'stripe-signature': 'sig' });
+
+      expect(billingRecord).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'owner-1', action: 'PLAN_UPDATED' })
+      );
+    });
+
+    it('records MOVED_TO_FREE when the subscription ends', async () => {
+      constructWebhookEvent.mockReturnValue({
+        id: 'evt_deleted',
+        type: 'customer.subscription.deleted',
+        data: { object: proSub() },
+      });
+      subFindBy.mockResolvedValue({ id: 'row-1', user_id: 'owner-1' });
+
+      const app = await buildApp();
+      await post(app, {}, { 'stripe-signature': 'sig' });
+
+      expect(billingRecord).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'owner-1',
+          action: 'MOVED_TO_FREE',
+          stripeEventId: 'evt_deleted',
+        })
+      );
+    });
+
+    it('reads the period end from the subscription item (newer Stripe API)', async () => {
+      const periodEnd = dayjs('2026-11-21').unix();
+      constructWebhookEvent.mockReturnValue({
+        id: 'evt_cancel_period_end',
+        type: 'customer.subscription.updated',
+        data: {
+          object: proSub({
+            cancel_at_period_end: true,
+            items: { data: [{ price: { id: PRO_PRICE_ID }, current_period_end: periodEnd }] },
+          }),
+        },
+      });
+      subFindBy.mockResolvedValue({ id: 'row-1', user_id: 'owner-1' });
+
+      const app = await buildApp();
+      await post(app, {}, { 'stripe-signature': 'sig' });
+
+      expect(subUpdate).toHaveBeenCalledWith(
+        'row-1',
+        expect.objectContaining({ ends_at: dayjs.unix(periodEnd).toDate() })
+      );
+    });
+  });
+
+  describe('subscription status', () => {
+    it('created: grants nothing while the first payment is incomplete', async () => {
+      constructWebhookEvent.mockReturnValue({
+        id: 'evt_incomplete',
+        type: 'customer.subscription.created',
+        data: { object: proSub({ status: 'incomplete' }) },
+      });
+      userFindBy.mockResolvedValue({ id: 'user-1' });
+
+      const app = await buildApp();
+      const res = await post(app, {}, { 'stripe-signature': 'sig' });
+
+      expect(res.statusCode).toBe(200);
+      expect(subCreate).not.toHaveBeenCalled();
+      expect(subUpdate).not.toHaveBeenCalled();
+    });
+
+    it('created: grants a trial', async () => {
+      constructWebhookEvent.mockReturnValue({
+        id: 'evt_trial',
+        type: 'customer.subscription.created',
+        data: { object: proSub({ status: 'trialing' }) },
+      });
+      userFindBy.mockResolvedValue({ id: 'user-1' });
+      subGetCurrent.mockResolvedValue(null);
+
+      const app = await buildApp();
+      await post(app, {}, { 'stripe-signature': 'sig' });
+
+      expect(subCreate).toHaveBeenCalledWith(expect.objectContaining({ tier: 'PRO' }));
+    });
+
+    it('updated: grants once an incomplete subscription becomes active', async () => {
+      constructWebhookEvent.mockReturnValue({
+        id: 'evt_now_active',
+        type: 'customer.subscription.updated',
+        data: { object: proSub({ status: 'active' }) },
+      });
+      userFindBy.mockResolvedValue({ id: 'user-1' });
+      subFindBy.mockResolvedValue(null);
+      subGetCurrent.mockResolvedValue(null);
+
+      const app = await buildApp();
+      const res = await post(app, {}, { 'stripe-signature': 'sig' });
+
+      expect(res.statusCode).toBe(200);
+      expect(subCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ user_id: 'user-1', tier: 'PRO', stripe_subscription_id: 'sub_new' })
+      );
+    });
+
+    it('updated: still grants nothing while the subscription is unpaid', async () => {
+      constructWebhookEvent.mockReturnValue({
+        id: 'evt_still_incomplete',
+        type: 'customer.subscription.updated',
+        data: { object: proSub({ status: 'incomplete_expired' }) },
+      });
+      userFindBy.mockResolvedValue({ id: 'user-1' });
+      subFindBy.mockResolvedValue(null);
+
+      const app = await buildApp();
+      await post(app, {}, { 'stripe-signature': 'sig' });
+
+      expect(subCreate).not.toHaveBeenCalled();
+    });
+
+    it('updated: never grants a customer nobody here owns', async () => {
+      constructWebhookEvent.mockReturnValue({
+        id: 'evt_unknown_customer',
+        type: 'customer.subscription.updated',
+        data: { object: proSub({ customer: 'cus_unknown' }) },
+      });
+      userFindBy.mockResolvedValue(null);
+      subFindBy.mockResolvedValue(null);
+
+      const app = await buildApp();
+      await post(app, {}, { 'stripe-signature': 'sig' });
+
+      expect(subCreate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('several Pro prices', () => {
+    it('grants a subscriber on an older Pro price listed after the current one', async () => {
+      process.env.STRIPE_PRO_PRICE_ID = `price_current, ${PRO_PRICE_ID}`;
+      constructWebhookEvent.mockReturnValue({
+        id: 'evt_old_price',
+        type: 'customer.subscription.created',
+        data: { object: proSub() },
+      });
+      userFindBy.mockResolvedValue({ id: 'user-1' });
+      subGetCurrent.mockResolvedValue(null);
+
+      const app = await buildApp();
+      await post(app, {}, { 'stripe-signature': 'sig' });
+
+      expect(subCreate).toHaveBeenCalledWith(expect.objectContaining({ tier: 'PRO' }));
+    });
+
+    it('still refuses a price that is not in the list', async () => {
+      process.env.STRIPE_PRO_PRICE_ID = 'price_current,price_older';
+      constructWebhookEvent.mockReturnValue({
+        id: 'evt_foreign_price',
+        type: 'customer.subscription.created',
+        data: { object: proSub() },
+      });
+      userFindBy.mockResolvedValue({ id: 'user-1' });
+
+      const app = await buildApp();
+      await post(app, {}, { 'stripe-signature': 'sig' });
+
+      expect(subCreate).not.toHaveBeenCalled();
+    });
+
+    it('treats a list of only commas as unset and asks for a redelivery', async () => {
+      process.env.STRIPE_PRO_PRICE_ID = ' , ';
+      constructWebhookEvent.mockReturnValue({
+        id: 'evt_empty_list',
+        type: 'customer.subscription.created',
+        data: { object: proSub() },
+      });
+      userFindBy.mockResolvedValue({ id: 'user-1' });
+
+      const app = await buildApp();
+      const res = await post(app, {}, { 'stripe-signature': 'sig' });
+
+      expect(res.statusCode).toBe(500);
+      expect(subCreate).not.toHaveBeenCalled();
+    });
   });
 
   describe('price assertion', () => {

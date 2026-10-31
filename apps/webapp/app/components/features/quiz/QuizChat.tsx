@@ -9,6 +9,9 @@ import type { ChatTransport, UIMessageChunk } from 'ai';
 import { useChatActions, useTriggerChatTransport } from '@trigger.dev/sdk/chat/react';
 import type { ChatSessionPersistedState } from '@trigger.dev/sdk/chat';
 import {
+  CodeSubmissionInputSchema,
+  MAX_SUBMISSION_FILE_CHARS,
+  MAX_SUBMISSION_TOTAL_CHARS,
   MESSAGES_LEFT_NOTICE_AT,
   QUIZ_AGENT_ERROR_COPY,
   QUIZ_FAILURE_COPY,
@@ -16,9 +19,12 @@ import {
   QUIZ_REFUSAL_COPY,
   QUIZ_REFUSAL_COPY_BY_KIND,
   buttonActionFor,
+  openSandboxOf,
   replyShowsHint,
+  sandboxId,
+  type CodeSubmissionInput,
   type NextStepAction,
-  type QuizEvaluationRecordV2,
+  type QuizEvaluationRecordView,
   type QuizUIMessage,
 } from '@classmoji/utils/quiz-agent';
 import { useDarkMode } from '~/hooks';
@@ -31,6 +37,46 @@ import NextStepButtons from './NextStepButtons';
 import QuizResults, { type ResultsFocusMetrics } from './QuizResults';
 import StepList, { onlyCourseSteps, type QuizStep } from './StepList';
 import { useQuizFocusMetrics } from './useQuizFocusMetrics';
+import QuizSandbox, {
+  useNarrowLayout,
+  type SandboxEdits,
+  type SandboxMode,
+  type SandboxSubmit,
+} from './QuizSandbox';
+import CodeSubmissionCard from './CodeSubmissionCard';
+import { QuizResultSlotsFallback } from './QuizResultContext';
+import {
+  cardSandboxOf,
+  hintSandboxesOf,
+  isLiveInstance,
+  sandboxViewOf,
+  submissionAttempt,
+  submissionOf,
+  type SandboxView,
+} from './sandboxView';
+import {
+  fromFirstStart,
+  watchReply,
+  withoutFoldedReplies,
+  withoutReplayedMessages,
+  type QuietEnd,
+  type WatchedReply,
+} from '../chat/transport';
+
+// The chat-transport helpers moved to `../chat/transport` (shared with Ask
+// Moji); re-exported here for the quiz chat's tests and callers.
+export {
+  REPLY_SILENCE_MS,
+  REPLY_START_MS,
+  dropReplayedMessages,
+  fromFirstStart,
+  watchReply,
+  withoutFoldedReplies,
+  withoutReplayedMessages,
+  type QuietEnd,
+  type ReplyTimings,
+  type WatchedReply,
+} from '../chat/transport';
 
 const { Text } = Typography;
 
@@ -69,6 +115,21 @@ const { Text } = Typography;
  * buttons or a notice arrive;
  * the evaluation's closing line sits above the results panel.
  *
+ * Code sandboxes (a quiz with sandbox questions): a card whose question
+ * carries a `sandbox` shows it under the question text, and the reply to a
+ * Try again click may carry a fresh one (`data-sandbox`, written by the
+ * server) at the foot of its last bubble; on a narrow screen each sits under
+ * its bubble at the column's full width (`useNarrowLayout`). Which one is live
+ * is the shared rule's (`openSandboxOf`, the one admission runs): its last
+ * instance, while this viewer drives the chat. Every other sandbox, and every
+ * sandbox in the saved transcript, is frozen (QuizSandbox). When the agent
+ * shows a card again, its sandbox's new instance is the live one and starts
+ * from the student's unsubmitted edits in the instance before it (the
+ * transcript's `sandboxEdits`, kept per sandbox id for the transcript's life,
+ * never across a reload); the older copy stays frozen as it was. A student message
+ * that is a code submission (`data-code-submission`, its rendering for the
+ * model hidden) shows as a CodeSubmissionCard.
+ *
  * The message limit: once `MESSAGES_LEFT_NOTICE_AT` or fewer messages are
  * left, a muted line under the latest reply counts them down, from the
  * server's count (the loader's, then each reply's `data-messages-left`),
@@ -88,7 +149,7 @@ export interface QuizChatAttempt {
   completed_at?: Date | string | null;
   total_duration_ms?: number | null;
   unfocused_duration_ms?: number | null;
-  evaluation_json?: QuizEvaluationRecordV2 | null;
+  evaluation_json?: QuizEvaluationRecordView | null;
   /** `turn_limit`: the server submitted the attempt at its message limit. */
   ended_by?: 'turn_limit' | null;
 }
@@ -198,7 +259,7 @@ export const FIXED_ERROR_COPY: ReadonlySet<string> = new Set<string>([
   'Quiz attempt not found.',
   "This quiz can't continue right now.",
   ...Object.values(CLASSROOM_STATUS_COPY),
-  // The Trigger task's own refusals and failures (packages/tasks, sanitize.ts).
+  // The Trigger task's own refusals and failures (apps/ai-agent, src/trigger/shared/sanitize.ts).
   ...QUIZ_AGENT_ERROR_COPY,
   ...Object.values(NOTICE_COPY),
 ]);
@@ -262,6 +323,12 @@ export const isRefusalForGood = (error: unknown) =>
  * the message went in.
  */
 const NOT_ADMITTED_LINES: ReadonlySet<string> = new Set([
+  // A code submission refused before admission: dropped, and its sandbox
+  // unlocks with the edits intact. The shared "couldn't be sent" line stays
+  // out: message_conflict uses it for a message that was admitted.
+  QUIZ_REFUSAL_COPY.sandbox_closed,
+  QUIZ_REFUSAL_COPY.invalid_submission,
+  QUIZ_REFUSAL_COPY.reserved_code,
   QUIZ_REFUSAL_COPY.too_fast,
   QUIZ_REFUSAL_COPY.session_ended,
   QUIZ_REFUSAL_COPY.classroom_locked,
@@ -365,209 +432,8 @@ export const persistSession = (attemptId: string, state: ChatSessionPersistedSta
 };
 
 // ---------------------------------------------------------------------------
-// Replies the transcript already shows
+// Replies out of order
 // ---------------------------------------------------------------------------
-
-/**
- * The reply stream without the replies the chat already holds. The session's
- * reply stream keeps about the last reply, and the transport reads it from a
- * resume cursor; a tab without a good cursor (no session state stored in this
- * tab, a stale copy of it, a session the transport had to create again, or a
- * reload before the stored cursor was written) reads that last reply again
- * ahead of the new one. useChat would add it as another message with the same
- * id, then fold its parts into the new reply, so the previous turn showed up
- * twice or three times, and new text after its card was hidden. Every reply
- * opens with a `start` chunk naming its message id and closes with `finish`:
- * from a `start` whose id is already in the chat through its `finish` (or up
- * to the next `start`, for a reply cut short), the chunks are dropped.
- * Anything else passes as it is, a new turn's error before its own `start`
- * included.
- */
-export const dropReplayedMessages = (
-  stream: ReadableStream<UIMessageChunk>,
-  knownIds: ReadonlySet<string>
-): ReadableStream<UIMessageChunk> => {
-  if (knownIds.size === 0) return stream;
-  let replaying = false;
-  return stream.pipeThrough(
-    new TransformStream<UIMessageChunk, UIMessageChunk>({
-      transform(chunk, controller) {
-        if (chunk.type === 'start') {
-          replaying = typeof chunk.messageId === 'string' && knownIds.has(chunk.messageId);
-        }
-        if (!replaying) controller.enqueue(chunk);
-        else if (chunk.type === 'finish') replaying = false;
-      },
-    })
-  );
-};
-
-/**
- * The transport as useChat sees it: every reply stream passes through
- * `dropReplayedMessages`, against the messages sent with the request (a new
- * message) or the chat's messages as they are now (a resumed reply).
- */
-export const withoutReplayedMessages = (
-  transport: ChatTransport<QuizUIMessage>,
-  currentMessages: () => readonly QuizUIMessage[]
-): ChatTransport<QuizUIMessage> => {
-  const idsOf = (messages: readonly QuizUIMessage[]) => new Set(messages.map(m => m.id));
-  return {
-    sendMessages: async options =>
-      dropReplayedMessages(await transport.sendMessages(options), idsOf(options.messages)),
-    reconnectToStream: async options => {
-      const stream = await transport.reconnectToStream(options);
-      return stream ? dropReplayedMessages(stream, idsOf(currentMessages())) : stream;
-    },
-  };
-};
-
-// ---------------------------------------------------------------------------
-// Replies that never come
-// ---------------------------------------------------------------------------
-
-/**
- * How long a reply may take to send its first chunk. A turn writes its
- * `start` as it begins, before any model call (the task's loop.ts), and an
- * ordinary reply shows text within 5 to 30 seconds of the message; this is
- * three times that. A run that ended without reading the message (between
- * turns, at its idle limit, in a crash) sends nothing at all.
- */
-export const REPLY_START_MS = 90_000;
-/**
- * How long a reply that has begun may go without a chunk: the task's turn
- * deadline (four minutes), with a minute's margin. The stream carries no
- * reasoning, so a turn that is thinking can be silent for minutes, but no
- * turn runs past its deadline: it ends with a notice by then.
- */
-export const REPLY_SILENCE_MS = 240_000 + 60_000;
-
-/** What ended a quiet: a chunk of the reply, the stream's own end, or `release`. */
-export type QuietEnd = 'chunk' | 'ended' | 'released';
-
-/** A reply stream as useChat reads it, watched for going quiet (`watchReply`). */
-export interface WatchedReply {
-  stream: ReadableStream<UIMessageChunk>;
-  /** No chunk within the current wait; the stream is still read. */
-  readonly quiet: boolean;
-  /** A chunk of the reply has come. */
-  readonly begun: boolean;
-  /**
-   * Stop reading the reply here: the transport's stream is cancelled, which
-   * ends this tab's reading of it and nothing else (only an abort of the
-   * request writes a stop, and stops the run's turn), and the stream ends as
-   * a finished reply would.
-   */
-  release: () => void;
-}
-
-/**
- * Watches a reply stream for going quiet: no chunk within `startMs` of the
- * start, or within `silenceMs` of the last chunk. Quiet, the reply is still
- * read, so a late one shows as it comes; the chat takes a message meanwhile
- * (and releases the reply first: `release`). A chunk ends the quiet, and so
- * does the end of the stream; `onQuietChange` hears each change, and what
- * ended a quiet. A tab coming back into view waits afresh: its timers ran on
- * while it was hidden or asleep, and the transport reconnects then.
- */
-export const watchReply = (
-  source: ReadableStream<UIMessageChunk>,
-  onQuietChange: (quiet: boolean, end?: QuietEnd) => void,
-  { startMs = REPLY_START_MS, silenceMs = REPLY_SILENCE_MS } = {}
-): WatchedReply => {
-  const reader = source.getReader();
-  let controller!: ReadableStreamDefaultController<UIMessageChunk>;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let over = false;
-  let begun = false;
-  let quiet = false;
-  const setQuiet = (next: boolean, end?: QuietEnd) => {
-    if (quiet === next) return;
-    quiet = next;
-    onQuietChange(next, end);
-  };
-  const arm = () => {
-    clearTimeout(timer);
-    if (over || quiet) return;
-    timer = setTimeout(() => setQuiet(true), begun ? silenceMs : startMs);
-  };
-  const onVisibility = () => {
-    if (document.visibilityState === 'visible') arm();
-  };
-  const watching = typeof document !== 'undefined';
-  /** Ends the watch, once: false when it had already ended. */
-  const finish = (end: QuietEnd) => {
-    if (over) return false;
-    over = true;
-    clearTimeout(timer);
-    if (watching) document.removeEventListener('visibilitychange', onVisibility);
-    setQuiet(false, end);
-    return true;
-  };
-  const stream = new ReadableStream<UIMessageChunk>({
-    start(c) {
-      controller = c;
-      arm();
-      if (watching) document.addEventListener('visibilitychange', onVisibility);
-      void (async () => {
-        try {
-          for (;;) {
-            const { done, value } = await reader.read();
-            if (over) return;
-            if (done) {
-              finish('ended');
-              controller.close();
-              return;
-            }
-            begun = true;
-            setQuiet(false, 'chunk');
-            arm();
-            controller.enqueue(value);
-          }
-        } catch (error) {
-          if (finish('ended')) controller.error(error);
-        }
-      })();
-    },
-    cancel(reason) {
-      finish('ended');
-      return reader.cancel(reason);
-    },
-  });
-  return {
-    stream,
-    get quiet() {
-      return quiet;
-    },
-    get begun() {
-      return begun;
-    },
-    release: () => {
-      if (!finish('released')) return;
-      reader.cancel().catch(() => {});
-      controller.close();
-    },
-  };
-};
-
-/**
- * The stream from its first `start` on: what comes before it (the rest of a
- * reply this tab stopped reading part way, which the stream reads on from)
- * is dropped, but for an error, which is the new turn's own.
- */
-export const fromFirstStart = (
-  stream: ReadableStream<UIMessageChunk>
-): ReadableStream<UIMessageChunk> => {
-  let started = false;
-  return stream.pipeThrough(
-    new TransformStream<UIMessageChunk, UIMessageChunk>({
-      transform(chunk, controller) {
-        if (chunk.type === 'start') started = true;
-        if (started || chunk.type === 'error') controller.enqueue(chunk);
-      },
-    })
-  );
-};
 
 /**
  * The chat with each reply after the student message it answers. A message
@@ -593,35 +459,6 @@ export const inAnswerOrder = (
     out ??= messages.slice();
     const [moved] = out.splice(reply, 1);
     out.splice(i + 1, 0, moved);
-  }
-  return out ?? messages;
-};
-
-/** Two parts with the same content. */
-const samePart = (a: QuizPart, b: QuizPart | undefined) =>
-  a === b || JSON.stringify(a) === JSON.stringify(b);
-
-/**
- * The chat with each reply useChat folded into the next one taken back out.
- * One reply stream can carry two replies: the message after one a run never
- * answered wakes a run that answers both, and both replies come on the new
- * message's stream (so does a turn a recovering run answers again). useChat
- * builds one message per stream: a second reply's `start` renames that
- * message and adds it again, holding the first reply's parts ahead of its
- * own. So an assistant message right after another that opens with all of
- * that one's parts holds them a second time, and they are dropped from it.
- */
-export const withoutFoldedReplies = (messages: QuizUIMessage[]): QuizUIMessage[] => {
-  let out: QuizUIMessage[] | null = null;
-  for (let i = 1; i < messages.length; i++) {
-    const earlier = messages[i - 1];
-    const later = messages[i];
-    if (earlier.role !== 'assistant' || later.role !== 'assistant') continue;
-    const held = earlier.parts.length;
-    if (held === 0 || later.parts.length < held) continue;
-    if (!earlier.parts.every((part, k) => samePart(part, later.parts[k]))) continue;
-    out ??= messages.slice();
-    out[i] = { ...later, parts: later.parts.slice(held) } as QuizUIMessage;
   }
   return out ?? messages;
 };
@@ -840,13 +677,19 @@ export const buttonSetsOf = (
 export const liveButtonsOf = (messages: readonly QuizUIMessage[]): LiveButtons | null =>
   buttonSetsOf(messages).live;
 
+/** A student message that is a code submission. */
+const isSubmissionMessage = (message: QuizUIMessage) =>
+  message.role === 'user' && submissionOf(visibleParts(message)) !== null;
+
 /**
- * The chat without a button click the task refused before admitting it
- * (`isRefusedBeforeAdmission`): the last student message, when it names a
- * button, and the empty reply the stream may have opened for it. The server
- * saved neither, so without them the chat shows what a reload would, and the
- * click's buttons are live again. Null when the chat does not end that way (a
- * typed message stays: its text is the student's).
+ * The chat without a button click or a code submission the task refused
+ * before admitting it (`isRefusedBeforeAdmission`): the last student message,
+ * when it names a button or is a submission, and the empty reply the stream
+ * may have opened for it. The server saved neither, so without them the chat
+ * shows what a reload would: the click's buttons are live again, and the
+ * submission's sandbox is open again, its edits intact (its provider never
+ * left the tree). Null when the chat does not end that way (a typed message
+ * stays: its text is the student's).
  */
 export const withoutRefusedClick = (messages: readonly QuizUIMessage[]): QuizUIMessage[] | null => {
   let end = messages.length;
@@ -858,7 +701,9 @@ export const withoutRefusedClick = (messages: readonly QuizUIMessage[]): QuizUIM
     end--;
   }
   const last = messages[end - 1];
-  if (!last || last.role !== 'user' || !buttonActionOf(last)) return null;
+  if (!last || last.role !== 'user' || !(buttonActionOf(last) || isSubmissionMessage(last))) {
+    return null;
+  }
   return messages.slice(0, end - 1);
 };
 
@@ -1139,26 +984,66 @@ const AssistantAvatar = () => (
   </Avatar>
 );
 
+const BUBBLE_CLASS = {
+  assistant:
+    'min-w-fit max-w-[70%] break-words rounded-lg border border-[#d9d9d9] bg-white px-4 py-3 text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100',
+  user: 'min-w-fit max-w-[70%] break-words rounded-lg bg-[#f0f2f5] px-4 py-3 text-gray-900 dark:bg-gray-700 dark:text-gray-100',
+  /** An assistant bubble holding a code sandbox: the column's width, up to a cap. */
+  'assistant-wide':
+    'min-w-0 max-w-[980px] flex-1 break-words rounded-lg border border-[#d9d9d9] bg-white px-4 py-3 text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100',
+  /** A student's code submission: never wider than the column (`min-w-fit` would spill a long line). */
+  'user-submission':
+    'min-w-0 break-words rounded-lg bg-[#f0f2f5] px-4 py-3 text-gray-900 dark:bg-gray-700 dark:text-gray-100',
+} as const;
+
 const Bubble = ({
   variant,
   testId,
+  className = '',
   children,
 }: {
-  variant: 'assistant' | 'user';
+  variant: keyof typeof BUBBLE_CLASS;
   testId?: string;
+  className?: string;
   children: ReactNode;
 }) => (
   <div
-    className={
-      variant === 'assistant'
-        ? 'min-w-fit max-w-[70%] break-words rounded-lg border border-[#d9d9d9] bg-white px-4 py-3 text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100'
-        : 'min-w-fit max-w-[70%] break-words rounded-lg bg-[#f0f2f5] px-4 py-3 text-gray-900 dark:bg-gray-700 dark:text-gray-100'
-    }
+    className={className ? `${BUBBLE_CLASS[variant]} ${className}` : BUBBLE_CLASS[variant]}
     data-testid={testId}
   >
     {children}
   </div>
 );
+
+/**
+ * The assistant's avatar and a bubble. A wide bubble (one holding a code
+ * sandbox) sits in a plain flex row, where it can grow: antd's Space wraps
+ * each child in an item that can't.
+ */
+const AssistantRow = ({
+  wide,
+  testId,
+  children,
+}: {
+  wide: boolean;
+  testId?: string;
+  children: ReactNode;
+}) =>
+  wide ? (
+    <div className="flex w-full min-w-0 items-start gap-2">
+      <AssistantAvatar />
+      <Bubble variant="assistant-wide" testId={testId}>
+        {children}
+      </Bubble>
+    </div>
+  ) : (
+    <Space align="start">
+      <AssistantAvatar />
+      <Bubble variant="assistant" testId={testId}>
+        {children}
+      </Bubble>
+    </Space>
+  );
 
 const QuestionCardSkeleton = () => (
   <div className="mb-2 min-w-[280px] rounded-lg border border-[#91caff] bg-[#e6f4ff] p-3 dark:border-[#2d4a6f] dark:bg-[#1e3a5f]">
@@ -1210,6 +1095,11 @@ interface PartContext {
   /** The index of this message's live offer (`buttonSetsOf`), if it has it. */
   liveOffer: number | null;
   onButton: ((text: string, action: NextStepAction) => void) | null;
+  /**
+   * The code sandbox a card at this index shows under its question text, or
+   * null (none, or it renders under the bubble on a narrow screen).
+   */
+  cardSandbox?: ((index: number) => ReactNode) | null;
 }
 
 /** One part inside the assistant's bubble, by type (`index`: its place in the visible parts). */
@@ -1265,7 +1155,9 @@ export function AssistantPart({
             <QuestionCard
               questionData={{ ...card, question_number, total_questions }}
               isDarkMode={ctx.isDarkMode}
-            />
+            >
+              {card.sandbox ? (ctx.cardSandbox?.(index) ?? null) : null}
+            </QuestionCard>
           </div>
         );
       }
@@ -1350,6 +1242,49 @@ export const activityLine = (
   return onlyCourseSteps(steps) ? LOOKING_UP_LINE : EXPLORING_LINE;
 };
 
+/**
+ * What the live chat lends its code sandboxes. Absent in read-only views
+ * (staff, a completed attempt), where every sandbox is frozen.
+ */
+export interface SandboxControls {
+  /** A submission's capture is running: the sandbox, the composer and the buttons are locked. */
+  capturing: boolean;
+  /** The chat can take a message (not complete, session open, no refusal for good). */
+  canSend: boolean;
+  /** The live sandbox's Submit: captures, re-checks, sends. */
+  submit: SandboxSubmit;
+}
+
+/** One sandbox as the transcript draws it: a card's, or a hint's. */
+type SandboxInstance = {
+  id: string;
+  question_number: number;
+  attempt: number;
+  seeded_from: number | null;
+  template: Parameters<typeof QuizSandbox>[0]['template'];
+  files: Record<string, string>;
+  active_file: string;
+};
+
+/** The sandbox a card part carries, as an instance (`q{n}-1`). */
+const cardInstanceOf = (part: QuizPart | undefined): SandboxInstance | null => {
+  if (!part) return null;
+  const spec = cardSandboxOf(part);
+  if (!spec || part.type !== 'tool-present_question' || part.state !== 'output-available') {
+    return null;
+  }
+  const n = part.output.question_number;
+  return {
+    id: sandboxId(n, 1),
+    question_number: n,
+    attempt: 1,
+    seeded_from: null,
+    template: spec.template,
+    files: spec.files,
+    active_file: spec.active_file,
+  };
+};
+
 interface TranscriptProps {
   messages: QuizUIMessage[];
   status: QuizChatStatus;
@@ -1359,7 +1294,7 @@ interface TranscriptProps {
   userLogin?: string | null;
   userImage?: string | null;
   /** The stored evaluation record (loader); preferred over a part's copy. */
-  evaluationRecord?: QuizEvaluationRecordV2 | null;
+  evaluationRecord?: QuizEvaluationRecordView | null;
   focusMetrics?: ResultsFocusMetrics | null;
   /** Absent in read-only views. */
   onButton?: ((text: string, action: NextStepAction) => void) | null;
@@ -1374,7 +1309,18 @@ interface TranscriptProps {
    * from `MESSAGES_LEFT_NOTICE_AT` down to 1 (never 0); null for none.
    */
   messagesLeft?: number | null;
+  /** The live chat's code sandbox controls; absent, every sandbox is frozen. */
+  sandboxControls?: SandboxControls | null;
 }
+
+const UserAvatar = ({ login, image }: { login: string | null; image: string | null }) =>
+  login ? (
+    <Avatar src={image ?? undefined} style={{ backgroundColor: '#52c41a' }}>
+      {login[0]?.toUpperCase()}
+    </Avatar>
+  ) : (
+    <Avatar icon={<UserOutlined />} style={{ backgroundColor: '#52c41a' }} />
+  );
 
 /** The transcript: messages, the typing indicator, the results panel. */
 export function QuizTranscript({
@@ -1392,6 +1338,7 @@ export function QuizTranscript({
   scrollToResults = false,
   endedAtLimit = false,
   messagesLeft = null,
+  sandboxControls = null,
 }: TranscriptProps) {
   const endRef = useRef<HTMLDivElement>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
@@ -1402,6 +1349,56 @@ export function QuizTranscript({
   // The one set of buttons that can still be clicked, if any, and the
   // replies that end with the Next button alone (the hints).
   const { live, hintReplies } = buttonSetsOf(shown);
+  // The code sandboxes, read from the messages as shown (`sandboxView`): the
+  // shared rule's positions are this list's indexes and visible parts'.
+  const narrow = useNarrowLayout();
+  const sandboxes: SandboxView = sandboxViewOf(
+    shown.map(m => ({ role: m.role, parts: visibleParts(m) }))
+  );
+  // Each sandbox id's latest files while live, for a new instance of the same
+  // id (a card shown again) to start from. One map for the transcript's life:
+  // written from effects, read once at a sandbox's mount (QuizSandbox).
+  const [sandboxEdits] = useState<SandboxEdits>(() => new Map<string, Record<string, string>>());
+  /**
+   * One sandbox, at its place in the transcript: live (or locked) only at the
+   * shared rule's last instance of the open sandbox, while this viewer drives
+   * the chat; frozen everywhere else. Keyed by sandbox id, never by streaming
+   * state, so a late chunk never remounts it.
+   */
+  const sandboxNode = (inst: SandboxInstance, messageAt: number, partAt: number) => {
+    const controls = sandboxControls;
+    const liveHere = controls !== null && isLiveInstance(sandboxes, inst.id, messageAt, partAt);
+    const mode: SandboxMode =
+      controls === null || !liveHere
+        ? 'frozen'
+        : controls.capturing || busy || !controls.canSend
+          ? 'locked'
+          : 'live';
+    const answered = sandboxes.submitted.get(inst.id);
+    const starter =
+      sandboxes.seeds.get(sandboxId(inst.question_number, 1))?.files ??
+      (inst.attempt === 1 ? inst.files : null);
+    return (
+      <QuizSandbox
+        key={inst.id}
+        sandboxId={inst.id}
+        template={inst.template}
+        seed={inst.files}
+        activeFile={inst.active_file}
+        starter={starter ?? inst.files}
+        attempt={inst.attempt}
+        seededFrom={inst.seeded_from}
+        mode={mode}
+        submitted={answered ? { attempt: answered.attempt, files: answered.files } : null}
+        canSubmit={mode === 'live'}
+        onSubmit={liveHere && controls ? controls.submit : null}
+        liveElsewhere={controls !== null && !liveHere && sandboxes.progress?.open?.id === inst.id}
+        isDarkMode={isDarkMode}
+        narrow={narrow}
+        edits={controls ? sandboxEdits : null}
+      />
+    );
+  };
 
   // The results panel renders once: at the first evaluation part, from the
   // stored record when the loader has it. Above it, the evaluation's closing
@@ -1410,7 +1407,7 @@ export function QuizTranscript({
   // when there was none).
   let resultsRendered = false;
   const renderResults = (
-    fallback: QuizEvaluationRecordV2 | null | undefined,
+    fallback: QuizEvaluationRecordView | null | undefined,
     { ownClosingText = false, spaced = false }: { ownClosingText?: boolean; spaced?: boolean } = {}
   ) => {
     const record = evaluationRecord ?? fallback ?? null;
@@ -1467,6 +1464,35 @@ export function QuizTranscript({
       {shown.map((message, index) => {
         const parts = visibleParts(message);
         if (message.role === 'user') {
+          // A code submission: the part alone (its rendering for the model is hidden).
+          const submission = submissionOf(parts);
+          if (submission) {
+            return (
+              <div
+                key={message.id}
+                className="mb-4 flex flex-col items-end"
+                data-message-role="user"
+              >
+                <div
+                  className={`flex min-w-0 items-start gap-2 ${narrow ? 'w-full' : 'max-w-[70%]'}`}
+                >
+                  <Bubble
+                    variant="user-submission"
+                    className={narrow ? 'flex-1' : undefined}
+                    testId="quiz-user-submission"
+                  >
+                    <CodeSubmissionCard
+                      submission={submission}
+                      attempt={submissionAttempt(sandboxes, index, submission)}
+                      seed={sandboxes.seeds.get(submission.sandbox_id)?.files ?? null}
+                      narrow={narrow}
+                    />
+                  </Bubble>
+                  <UserAvatar login={userLogin} image={userImage} />
+                </div>
+              </div>
+            );
+          }
           const text = parts
             .flatMap(p => (p.type === 'text' ? [p.text] : []))
             .join('\n')
@@ -1478,13 +1504,7 @@ export function QuizTranscript({
                 <Bubble variant="user">
                   <Markdown text={text} isAssistant={false} />
                 </Bubble>
-                {userLogin ? (
-                  <Avatar src={userImage ?? undefined} style={{ backgroundColor: '#52c41a' }}>
-                    {userLogin[0]?.toUpperCase()}
-                  </Avatar>
-                ) : (
-                  <Avatar icon={<UserOutlined />} style={{ backgroundColor: '#52c41a' }} />
-                )}
+                <UserAvatar login={userLogin} image={userImage} />
               </Space>
             </div>
           );
@@ -1492,14 +1512,46 @@ export function QuizTranscript({
         if (message.role !== 'assistant') return null;
 
         const isStreamingThis = busy && message === lastMessage;
+        const messageAt = index;
         const ctx: PartContext = {
           isDarkMode,
           streaming: isStreamingThis,
           buttonsDisabled: busy || status === 'complete' || !onButton,
           liveOffer: live?.message === index && 'part' in live ? live.part : null,
           onButton,
+          // In the card on a wide screen; under the bubble on a narrow one.
+          cardSandbox: narrow
+            ? null
+            : partAt => {
+                const inst = cardInstanceOf(parts[partAt]);
+                return inst ? sandboxNode(inst, messageAt, partAt) : null;
+              },
         };
         const blocks = messageBlocks(parts, isStreamingThis, { opening: message.id === openingId });
+        // The reply's hint sandboxes (after a Try again click), at the foot of
+        // its last bubble, wherever the shared rule counts them: not gated on
+        // `hintReplies` or on streaming.
+        const hints = hintSandboxesOf(parts).map(({ index: partAt, data }) =>
+          sandboxNode(
+            {
+              id: data.id,
+              question_number: data.question_number,
+              attempt: data.attempt,
+              seeded_from: data.seeded_from,
+              template: data.template,
+              files: data.files,
+              active_file: data.active_file,
+            },
+            messageAt,
+            partAt
+          )
+        );
+        let hintHost = -1;
+        blocks.forEach((block, i) => {
+          if (block.kind === 'content' && block.entries.some(e => e.part.type !== 'data-step')) {
+            hintHost = i;
+          }
+        });
         const evaluationPart = parts.find(isEvaluationPart);
         const evaluationFromPart =
           evaluationPart?.type === 'tool-submit_quiz_evaluation' &&
@@ -1509,7 +1561,7 @@ export function QuizTranscript({
               ? evaluationPart.data
               : null;
 
-        if (blocks.length === 0 && !evaluationPart) return null;
+        if (blocks.length === 0 && !evaluationPart && hints.length === 0) return null;
 
         // A hint ends with the Next button alone, in its last bubble, once the
         // reply is in (a card could still arrive while it streams). Live only
@@ -1552,6 +1604,12 @@ export function QuizTranscript({
               }
               const steps = stepsOf(block.entries.map(entry => entry.part));
               const inBubble = block.entries.filter(entry => entry.part.type !== 'data-step');
+              const cardsHere = inBubble.flatMap(({ part, index: partAt }) => {
+                const inst = cardInstanceOf(part);
+                return inst ? [{ inst, partAt }] : [];
+              });
+              const hintsHere = blockIndex === hintHost ? hints : [];
+              const wide = !narrow && (cardsHere.length > 0 || hintsHere.length > 0);
               return (
                 <div
                   key={block.key}
@@ -1571,25 +1629,34 @@ export function QuizTranscript({
                     />
                   )}
                   {inBubble.length > 0 && (
-                    <Space align="start">
-                      <AssistantAvatar />
-                      <Bubble variant="assistant" testId="quiz-assistant-bubble">
-                        {inBubble.map(({ part, index }) => (
-                          <AssistantPart key={index} part={part} index={index} ctx={ctx} />
-                        ))}
-                        {blockIndex === hintBubble && (
-                          <NextStepButtons
-                            actions={HINT_ACTIONS}
-                            disabled={ctx.buttonsDisabled || !hintLive}
-                            onAction={onButton}
-                          />
-                        )}
-                      </Bubble>
-                    </Space>
+                    <AssistantRow wide={wide} testId="quiz-assistant-bubble">
+                      {inBubble.map(({ part, index }) => (
+                        <AssistantPart key={index} part={part} index={index} ctx={ctx} />
+                      ))}
+                      {narrow ? null : hintsHere}
+                      {blockIndex === hintBubble && (
+                        <NextStepButtons
+                          actions={HINT_ACTIONS}
+                          disabled={ctx.buttonsDisabled || !hintLive}
+                          onAction={onButton}
+                        />
+                      )}
+                    </AssistantRow>
+                  )}
+                  {narrow && (cardsHere.length > 0 || hintsHere.length > 0) && (
+                    <div className="mt-2 w-full min-w-0" data-testid="quiz-sandbox-row">
+                      {cardsHere.map(({ inst, partAt }) => sandboxNode(inst, messageAt, partAt))}
+                      {hintsHere}
+                    </div>
                   )}
                 </div>
               );
             })}
+            {hints.length > 0 && hintHost === -1 && (
+              <div className="w-full min-w-0" data-testid="quiz-sandbox-row">
+                {hints}
+              </div>
+            )}
             {evaluationPart && (
               <div className="w-full">
                 {renderResults(evaluationFromPart, {
@@ -1641,8 +1708,11 @@ export function QuizTranscript({
         </div>
       )}
 
-      {/* A completed attempt whose transcript carries no evaluation part still shows its results. */}
-      {status === 'complete' && renderResults(null)}
+      {/* A completed attempt whose transcript carries no evaluation part still
+          shows its results; with no record at all, the drawer's blocks (the
+          staff adjust panel) still show where the results would be. */}
+      {status === 'complete' &&
+        (renderResults(null) ?? (resultsRendered ? null : <QuizResultSlotsFallback />))}
 
       <div ref={endRef} />
     </div>
@@ -1859,6 +1929,19 @@ const SAVED_OPENING_POLL_MS = 1500;
  */
 const SAVED_OPENING_WAIT_MS = 5 * 60_000;
 
+/** What the student sends: typed text (a button's included), or a code submission. */
+type Outgoing = { text: string } | { submission: CodeSubmissionInput };
+
+/** The message useChat sends: text, or the submission as the message's only part. */
+const toChatMessage = (outgoing: Outgoing) =>
+  'text' in outgoing
+    ? { text: outgoing.text }
+    : { parts: [{ type: 'data-code-submission' as const, data: outgoing.submission }] };
+
+/** Shown under a sandbox whose code is over the submission caps (never sent: the server would refuse it). */
+export const SUBMISSION_TOO_LONG_LINE =
+  'This code is too long to submit. Shorten it and try again.';
+
 function LiveQuizChat({
   attempt,
   transcript,
@@ -2059,10 +2142,15 @@ function LiveQuizChat({
   };
   // A message sent while a reply was still read (quiet, or come back as the
   // message was sent): it goes once useChat has let that reply go (`send`).
-  const [pendingText, setPendingText] = useState<string | null>(null);
+  const [pending, setPending] = useState<Outgoing | null>(null);
+  // A code submission's capture is running (up to about 8.6 s): the sandbox,
+  // the composer and the buttons are locked, with no typing line (`busy` is
+  // a reply running).
+  const [capturing, setCapturing] = useState(false);
+  const capturingRef = useRef(false);
 
   const replyOpen = status === 'submitted' || status === 'streaming';
-  const busy = (replyOpen && !quiet) || joining || awaitingSaved || pendingText !== null;
+  const busy = (replyOpen && !quiet) || joining || awaitingSaved || pending !== null;
   const evaluationSeen = hasEvaluation(messages);
   const complete = Boolean(attempt.completed_at) || evaluationSeen;
   // A session closed without an evaluation (the attempt can no longer take
@@ -2221,9 +2309,14 @@ function LiveQuizChat({
   }, [refusedBeforeAdmission, error, setMessages]);
 
   const send = useCallback(
-    (text: string) => {
-      const trimmed = text.trim();
-      if (!trimmed || busy || !canSend) return;
+    (outgoing: Outgoing) => {
+      let message: Outgoing = outgoing;
+      if ('text' in outgoing) {
+        const trimmed = outgoing.text.trim();
+        if (!trimmed) return;
+        message = { text: trimmed };
+      }
+      if (busy || !canSend || capturingRef.current) return;
       if (replyOpen) {
         // A reply still being read: the message goes once useChat has let it
         // go (sending into the open request would let that request's end mark
@@ -2241,22 +2334,71 @@ function LiveQuizChat({
           if (reply.begun) afterPartReplyRef.current = true;
           reply.release();
         }
-        setPendingText(trimmed);
+        setPending(message);
         return;
       }
       time.flush();
-      void sendMessage({ text: trimmed });
+      void sendMessage(toChatMessage(message));
     },
     [busy, canSend, replyOpen, sendMessage, time]
   );
 
   useEffect(() => {
-    if (pendingText === null || replyOpen) return;
-    setPendingText(null);
-    void sendMessage({ text: pendingText });
-  }, [pendingText, replyOpen, sendMessage]);
+    if (pending === null || replyOpen) return;
+    setPending(null);
+    void sendMessage(toChatMessage(pending));
+  }, [pending, replyOpen, sendMessage]);
 
-  const onButton = useCallback((text: string) => send(text), [send]);
+  const onButton = useCallback((text: string) => send({ text }), [send]);
+  const onType = useCallback((text: string) => send({ text }), [send]);
+
+  // The live sandbox's Submit (QuizSandbox). The capture runs locked; then,
+  // since it took seconds, everything is checked again from the latest
+  // render: no reply running, the chat can take a message, and the shared
+  // rule still names this sandbox as the open one. A submission the chat
+  // can't send is dropped, the sandbox staying as it is.
+  const latest = useRef({ busy, canSend, send, messages });
+  latest.current = { busy, canSend, send, messages };
+  const submitSandbox = useCallback<SandboxSubmit>(async (id, capture) => {
+    const before = latest.current;
+    if (capturingRef.current || before.busy || !before.canSend) return null;
+    capturingRef.current = true;
+    setCapturing(true);
+    let got: Awaited<ReturnType<typeof capture>>;
+    try {
+      got = await capture();
+    } finally {
+      capturingRef.current = false;
+      setCapturing(false);
+    }
+    const now = latest.current;
+    if (now.busy || !now.canSend) return null;
+    const shownNow = now.messages
+      .filter(m => !m.metadata?.hidden)
+      .map(m => ({ role: m.role, parts: visibleParts(m) }));
+    if (openSandboxOf(shownNow)?.id !== id) return null;
+    const sizes = Object.values(got.files).map(code => code.length);
+    if (
+      sizes.some(n => n > MAX_SUBMISSION_FILE_CHARS) ||
+      sizes.reduce((a, b) => a + b, 0) > MAX_SUBMISSION_TOTAL_CHARS
+    ) {
+      return SUBMISSION_TOO_LONG_LINE;
+    }
+    const parsed = CodeSubmissionInputSchema.safeParse({
+      sandbox_id: id,
+      files: got.files,
+      console: got.console,
+      errors: got.errors,
+      ...(got.timedOut ? { timed_out: true } : {}),
+    });
+    if (!parsed.success) return QUIZ_REFUSAL_COPY.invalid_submission;
+    now.send({ submission: parsed.data });
+    return null;
+  }, []);
+  const sandboxControls = useMemo<SandboxControls>(
+    () => ({ capturing, canSend, submit: submitSandbox }),
+    [capturing, canSend, submitSandbox]
+  );
 
   const shown = messages.filter(m => !m.metadata?.hidden);
   // `complete` for the test drivers only once the closing reply has finished,
@@ -2298,11 +2440,12 @@ function LiveQuizChat({
           userImage={userImage}
           evaluationRecord={attempt.evaluation_json ?? null}
           focusMetrics={time.finalMetrics ?? focusMetrics}
-          onButton={canSend ? onButton : null}
+          onButton={canSend && !capturing ? onButton : null}
           errorLine={shownErrorLine}
           onRetryStart={startFailed ? retryStart : null}
           endedAtLimit={endedAtLimit}
           messagesLeft={left}
+          sandboxControls={sandboxControls}
         />
       </div>
 
@@ -2312,12 +2455,12 @@ function LiveQuizChat({
         <div className="mt-4 border-t border-[#f0f0f0] pt-4 dark:border-gray-700">
           <div
             data-testid="quiz-editor"
-            className={canSend ? undefined : 'pointer-events-none opacity-50'}
+            className={canSend && !capturing ? undefined : 'pointer-events-none opacity-50'}
           >
             <ChatEditor
-              onSubmit={send}
+              onSubmit={onType}
               loading={busy}
-              disabled={!canSend}
+              disabled={!canSend || capturing}
               placeholder={
                 sessionClosed || refusedForGood
                   ? "This quiz can't continue right now."

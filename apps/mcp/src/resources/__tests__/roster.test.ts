@@ -140,7 +140,12 @@ describe('teams resource', () => {
       slug: 'team-own',
       is_visible: false,
       memberships: [member('student-1'), member('student-2')],
-      tags: [{ tag: { name: 'project-1' } }],
+      // One tag names a team set; the other is a plain tag.
+      tags: [
+        { tag: { name: 'project-1', team_sets: [{ name: 'Project 1 teams' }] } },
+        { tag: { name: 'lab', team_sets: [] } },
+      ],
+      git_repos: [{ name: 'project-1-team-own' }],
     },
     {
       id: 't-other-visible',
@@ -199,7 +204,7 @@ describe('teams resource', () => {
     }
   );
 
-  it('keeps the row shape narrow: public identity only, plus tag names', async () => {
+  it('keeps the row shape narrow: public identity, tag and team set names, repo names', async () => {
     const payload = await read<{ teams: Array<Record<string, unknown>> }>(
       teamsResource,
       ctxFor('STUDENT', 'student-1')
@@ -214,7 +219,9 @@ describe('teams resource', () => {
         { id: 'student-1', name: 'student-1', login: 'student-1', avatar: null },
         { id: 'student-2', name: 'student-2', login: 'student-2', avatar: null },
       ],
-      tags: ['project-1'],
+      tags: ['project-1', 'lab'],
+      team_sets: ['Project 1 teams'],
+      repositories: ['project-1-team-own'],
     });
   });
 });

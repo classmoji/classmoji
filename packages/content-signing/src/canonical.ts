@@ -33,6 +33,16 @@ export const BLOB_QUERY_KEYS: readonly string[] = ['p', 'v', 'exp', 'sig', 'w', 
  */
 export const MEDIA_QUERY_KEYS: readonly string[] = ['p', 'v', 'exp', 'sig', 'dl'];
 
+/** Most folders one files grant may open. */
+export const MAX_FILES_GRANT_FOLDERS = 12;
+
+/**
+ * Longest encoded grant segment a files URL may carry. Twelve folders with
+ * paths of a couple of hundred characters fit comfortably; anything longer
+ * could not have been minted, so it is refused before it is hashed.
+ */
+export const MAX_FILES_GRANT_LENGTH = 4096;
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/;
 
@@ -399,6 +409,28 @@ export function themeCanonicalString(fields: ThemeCanonicalFields): string {
     keyVersion,
     exp,
   ].join('|');
+}
+
+export interface FilesCanonicalFields {
+  host: string;
+  classroomId: string;
+  /** The ENCODED grant segment, exactly as it sits in the URL. */
+  grant: string;
+  tier: Tier;
+  keyVersion: number;
+  exp: number;
+}
+
+/**
+ * `cm1|files|{host}|{classroomId}|{grant}|{p}|{v}|{exp}`
+ *
+ * Signed over the raw base64url grant segment, so the verifier can build this
+ * string before it decodes anything the client sent. base64url has no `|` in
+ * its alphabet, so the segment cannot shift a field.
+ */
+export function filesCanonicalString(fields: FilesCanonicalFields): string {
+  const { host, classroomId, grant, tier, keyVersion, exp } = fields;
+  return [CANONICAL_VERSION, 'files', host, classroomId, grant, tier, keyVersion, exp].join('|');
 }
 
 const encoder = new TextEncoder();

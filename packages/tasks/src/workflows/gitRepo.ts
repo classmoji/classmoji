@@ -202,6 +202,10 @@ export const createRepositoriesTask = task({
   queue: {
     concurrencyLimit: 1,
   },
+  // A Github blip before the fan-out (installation check, org lookup) used to
+  // end the whole batch, and on the join path the student got no repository.
+  // Safe to repeat: each child resumes a half-made repository.
+  ...retryOnGitBlip,
   run: async (payload: CreateRepositoriesTaskPayload) => {
     const { logins, assignmentTitle, org, sessionId, provisionOnly } = payload;
     const uniqueLogins = [...new Set(logins.map(login => login.trim()).filter(Boolean))];
@@ -700,6 +704,9 @@ export const addCollaboratorsToRepoTask = task({
   queue: {
     concurrencyLimit: 6,
   },
+  // Started fire-and-forget on join: a lost attempt left the student with a
+  // 404 on their own repository. Adding a collaborator twice is a no-op.
+  ...retryOnGitBlip,
   run: addCollaboratorsToRepo,
 });
 
@@ -725,11 +732,15 @@ export const createRepoInDatabase = async (payload: CreateRepoInDatabaseTaskPayl
 
 export const createRepoInDatabaseTask = task({
   id: 'cf-create_git_repo',
+  // No caller today; repo rows are written inline by gh-create_git_repo.
+  retry: { maxAttempts: 1 },
   run: createRepoInDatabase,
 });
 
 export const deleteRepoTask = task({
   id: 'delete_git_repo',
+  // Not safe to repeat: a re-run after the repo is gone throws on Github's 404.
+  retry: { maxAttempts: 1 },
   queue: {
     concurrencyLimit: 6,
   },
@@ -743,6 +754,8 @@ export const updateRepositoryTask = task({
   queue: {
     concurrencyLimit: 6,
   },
+  // Safe to repeat: the updates branch is force-pushed and an open PR is reused.
+  ...retryOnGitBlip,
   run: async (payload: UpdateRepositoryPayload) => {
     // It can take a while; the callout says which repo it's on.
     await reportStatus(`Updating ${payload.repoName}`);
@@ -754,69 +767,75 @@ export const updateRepositoryTask = task({
  * Create a GitHub Project for a gitRepo by copying from a template
  */
 export const createProjectForRepo = async (payload: CreateProjectForRepoTaskPayload) => {
-  const { classroom, repository, repoName, repoId, team } = payload;
-
   try {
-    // Idempotency guard: copyProjectFromTemplate is not idempotent — a re-run would create
-    // a second GitHub Project and overwrite the first id below, orphaning it. Skip if this
-    // repo already has a project.
-    const existingRepo = await ClassmojiService.gitRepo.find({ id: repoId });
-    if (existingRepo?.project_id) {
-      logger.info(`Repo ${repoName} already has a project; skipping project copy`, {
-        projectId: existingRepo.project_id,
-        projectNumber: existingRepo.project_number ?? null,
-      });
-      return {
-        id: existingRepo.project_id,
-        number: existingRepo.project_number ?? 0,
-        url: '',
-      };
-    }
-
-    const gitProvider = getGitProvider(classroom.git_organization);
-    const org = classroom.git_organization.login;
-
-    if (!org || !repository.project_template_id) {
-      throw new Error(`Missing project configuration for ${repoName}`);
-    }
-
-    const orgNodeId = await gitProvider.getOrganizationNodeId(org);
-    const projectTitle = repoName;
-    const project = await gitProvider.copyProjectFromTemplate(
-      repository.project_template_id,
-      orgNodeId,
-      projectTitle
-    );
-
-    logger.info(`Created project "${projectTitle}" for repo ${repoName}`, {
-      projectNumber: project.number,
-      projectUrl: project.url,
-    });
-
-    await ClassmojiService.gitRepo.update(repoId, {
-      project_id: project.id,
-      project_number: project.number,
-    });
-
-    const repo = await gitProvider.getRepository(org, repoName);
-    if (!repo.node_id) {
-      throw new Error(`GitRepo ${repoName} is missing a node_id`);
-    }
-
-    await gitProvider.linkRepoToProject(project.id, repo.node_id);
-
-    if (team?.slug) {
-      await gitProvider.addTeamToProject(project.id, org, team.slug, 'WRITER');
-    }
-
-    const assistantsTeam = await ensureClassroomTeam(gitProvider, org, classroom, 'ASSISTANT');
-    await gitProvider.addTeamToProject(project.id, org, assistantsTeam.slug, 'WRITER');
-
-    return project;
+    return await copyProjectForRepo(payload);
   } catch (error: unknown) {
-    logger.error(`Error creating project for repo ${repoName}:`, { error });
+    // Inline during repo creation a project board is optional: log and carry on.
+    logger.error(`Error creating project for repo ${payload.repoName}:`, { error });
     return null;
   }
+};
+
+/** As createProjectForRepo, but a failure throws, so the task can fail and retry. */
+const copyProjectForRepo = async (payload: CreateProjectForRepoTaskPayload) => {
+  const { classroom, repository, repoName, repoId, team } = payload;
+
+  // Idempotency guard: copyProjectFromTemplate is not idempotent — a re-run would create
+  // a second GitHub Project and overwrite the first id below, orphaning it. Skip if this
+  // repo already has a project.
+  const existingRepo = await ClassmojiService.gitRepo.find({ id: repoId });
+  if (existingRepo?.project_id) {
+    logger.info(`Repo ${repoName} already has a project; skipping project copy`, {
+      projectId: existingRepo.project_id,
+      projectNumber: existingRepo.project_number ?? null,
+    });
+    return {
+      id: existingRepo.project_id,
+      number: existingRepo.project_number ?? 0,
+      url: '',
+    };
+  }
+
+  const gitProvider = getGitProvider(classroom.git_organization);
+  const org = classroom.git_organization.login;
+
+  if (!org || !repository.project_template_id) {
+    throw new Error(`Missing project configuration for ${repoName}`);
+  }
+
+  const orgNodeId = await gitProvider.getOrganizationNodeId(org);
+  const projectTitle = repoName;
+  const project = await gitProvider.copyProjectFromTemplate(
+    repository.project_template_id,
+    orgNodeId,
+    projectTitle
+  );
+
+  logger.info(`Created project "${projectTitle}" for repo ${repoName}`, {
+    projectNumber: project.number,
+    projectUrl: project.url,
+  });
+
+  await ClassmojiService.gitRepo.update(repoId, {
+    project_id: project.id,
+    project_number: project.number,
+  });
+
+  const repo = await gitProvider.getRepository(org, repoName);
+  if (!repo.node_id) {
+    throw new Error(`GitRepo ${repoName} is missing a node_id`);
+  }
+
+  await gitProvider.linkRepoToProject(project.id, repo.node_id);
+
+  if (team?.slug) {
+    await gitProvider.addTeamToProject(project.id, org, team.slug, 'WRITER');
+  }
+
+  const assistantsTeam = await ensureClassroomTeam(gitProvider, org, classroom, 'ASSISTANT');
+  await gitProvider.addTeamToProject(project.id, org, assistantsTeam.slug, 'WRITER');
+
+  return project;
 };
 
 export const createProjectForRepoTask = task({
@@ -824,7 +843,10 @@ export const createProjectForRepoTask = task({
   queue: {
     concurrencyLimit: 4,
   },
-  run: createProjectForRepo,
+  // Throws, unlike the inline call, so a failed board shows as a failed run.
+  // Safe to repeat: a repo that already has a project is skipped.
+  ...retryOnGitBlip,
+  run: copyProjectForRepo,
 });
 
 /**
@@ -835,6 +857,8 @@ export const createProjectsForModuleTask = task({
   queue: {
     concurrencyLimit: 1,
   },
+  // Safe to repeat: only repos without a project are picked.
+  ...retryOnGitBlip,
   run: async (payload: CreateProjectsForModuleTaskPayload, { ctx }: RepositoryTaskContext) => {
     const { repositoryId, classroomSlug } = payload;
 

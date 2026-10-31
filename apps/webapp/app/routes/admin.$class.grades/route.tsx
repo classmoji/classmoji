@@ -4,7 +4,7 @@ import { Skeleton } from 'antd';
 
 import GradesTable from './GradesTable';
 import { ClassmojiService } from '@classmoji/services';
-import { quizStanding, type GradedItem } from '@classmoji/utils';
+import { quizAttemptGrade, quizStanding, type GradedItem } from '@classmoji/utils';
 import { addAuditLog, addClassroomAuditLog } from '~/utils/helpers';
 import { pickOwnerOnlyContactFields } from '~/utils/studentFields.server';
 import {
@@ -25,6 +25,11 @@ const projectGradedItem = (item: GradedItem): GradedItem => ({
   counts_as_zero: item.counts_as_zero,
   late_hours: item.late_hours,
   counting_raw_percentage: item.counting_raw_percentage,
+  // The cell's "adjusted" chip (D8), and the emoji staff picked (shown as is when on time).
+  counting_adjusted: item.counting_adjusted ?? false,
+  counting_adjusted_emoji: item.counting_adjusted_emoji ?? null,
+  // The cell's "needs remap" chip: an adjustment off the scale (E17).
+  counting_orphaned: item.counting_orphaned ?? false,
 });
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
@@ -59,8 +64,12 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     })
   );
 
+  // The classroom's scale (emoji → grade), read once: the repo totals, the
+  // grading picker and every quiz cell's emoji.
+  const scale = ClassmojiService.emojiMapping.findScaleByClassroomId(classroom.id);
+
   const promises = {
-    emojiMappings: ClassmojiService.emojiMapping.findByClassroomId(classroom.id),
+    emojiMappings: scale,
     // Modules, in course order: the grid groups its columns under them.
     modules: ClassmojiService.module
       .findByClassroomSlug(classSlug!)
@@ -148,7 +157,17 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   // comes from attempts and responses, one query per assignment, keyed by
   // assignment id then user id.
   const activity = promises.assignments.then(async assignments => {
-    const quiz: Record<string, Record<string, { completed: boolean; score: number | null }>> = {};
+    // Cell states only, and the counting attempt's grade as the classroom's
+    // emoji: no quiz number leaves the server here (E1).
+    // `scored`: the counting attempt has a score, shown or not (a classroom
+    // with no grading scale has no emoji for it).
+    const quiz: Record<
+      string,
+      Record<
+        string,
+        { completed: boolean; scored: boolean; emoji: string | null; orphaned: boolean }
+      >
+    > = {};
     const form: Record<string, Record<string, { submitted: boolean }>> = {};
     const quizIds = assignments.flatMap(a => (a.type === 'QUIZ' && a.quiz_id ? [a.quiz_id] : []));
     const gradingStrategies =
@@ -156,9 +175,10 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     await Promise.all(
       assignments.map(async a => {
         if (a.type === 'QUIZ' && a.quiz_id) {
-          const [attempts, strategies] = await Promise.all([
+          const [attempts, strategies, emojiScale] = await Promise.all([
             ClassmojiService.quizAttempt.findByQuiz(a.quiz_id),
             gradingStrategies,
+            scale,
           ]);
           const byUser = new Map<string, typeof attempts>();
           for (const attempt of attempts) {
@@ -166,13 +186,22 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
           }
           // Each student's counting attempt under the quiz's grading strategy
           // (the shared selector): completed attempts only, scored by
-          // partial_credit_percentage, so a running retake never hides a
-          // finished attempt. Cell states only (in progress, unscored); the
-          // totals, sorter and column mean read the grade items.
+          // effective score (a staff adjustment when there is one), so a running
+          // retake never hides a finished attempt. Cell states only (in
+          // progress, unscored); the totals, sorter and column mean read the
+          // grade items.
           quiz[a.id] = {};
           for (const [userId, own] of byUser) {
-            const standing = quizStanding(own, strategies?.[a.quiz_id]);
-            quiz[a.id][userId] = { completed: standing.completed, score: standing.score };
+            const standing = quizStanding(own, strategies?.[a.quiz_id], emojiScale);
+            const grade = standing.counting
+              ? quizAttemptGrade(standing.counting, emojiScale)
+              : null;
+            quiz[a.id][userId] = {
+              completed: standing.completed,
+              scored: standing.counting !== null,
+              emoji: grade?.effective.emoji ?? null,
+              orphaned: grade?.orphaned ?? false,
+            };
           }
         } else if (a.type === 'FORM' && a.form_id) {
           const responses = await ClassmojiService.formResponse.listByFormId(a.form_id);

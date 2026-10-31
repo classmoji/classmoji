@@ -97,7 +97,7 @@ async function batchAction({ request }: Route.ActionArgs, slot: { held: boolean 
 
     try {
       // Flat content path: pages/{slug}
-      const contentPath = ClassmojiService.page.pageContentPath(title);
+      const contentPath = await ClassmojiService.page.freePageContentPath(classroom.id, title);
       const assetsFolder = `${contentPath}/assets`;
 
       // Get markdown and images

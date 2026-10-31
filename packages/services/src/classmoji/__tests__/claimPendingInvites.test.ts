@@ -9,6 +9,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const userFindUnique = vi.fn();
+const userUpdate = vi.fn();
 const inviteFindMany = vi.fn();
 const membershipCreateMany = vi.fn();
 const inviteDeleteMany = vi.fn();
@@ -20,7 +21,10 @@ vi.mock('@classmoji/database', async () => ({
   )),
 
   default: () => ({
-    user: { findUnique: (...a: unknown[]) => userFindUnique(...a) },
+    user: {
+      findUnique: (...a: unknown[]) => userFindUnique(...a),
+      update: (...a: unknown[]) => userUpdate(...a),
+    },
     classroomInvite: {
       findMany: (...a: unknown[]) => inviteFindMany(...a),
       deleteMany: (...a: unknown[]) => inviteDeleteMany(...a),
@@ -34,6 +38,8 @@ const invites = await import('../classroomInvite.service.ts');
 
 beforeEach(() => {
   userFindUnique.mockReset();
+  userUpdate.mockReset();
+  userUpdate.mockReturnValue('userUpdate-op');
   inviteFindMany.mockReset();
   membershipCreateMany.mockReset();
   inviteDeleteMany.mockReset();
@@ -64,8 +70,8 @@ describe('claimPendingInvites', () => {
   it('writes the membership and deletes the invite in one transaction', async () => {
     userFindUnique.mockResolvedValue({ email: 'a@school.edu', emailVerified: true, accounts: [] });
     inviteFindMany.mockResolvedValue([
-      { id: 'invite-1', classroom_id: 'class-1' },
-      { id: 'invite-2', classroom_id: 'class-2' },
+      { id: 'invite-1', classroom_id: 'class-1', student_name: '' },
+      { id: 'invite-2', classroom_id: 'class-2', student_name: '' },
     ]);
 
     const result = await invites.claimPendingInvites('user-1');
@@ -98,7 +104,9 @@ describe('claimPendingInvites', () => {
     // Both callers run repeatedly by construction: every login, every email
     // write. A plain `create` threw on the second run — that was the old bug.
     userFindUnique.mockResolvedValue({ email: 'a@school.edu', emailVerified: true, accounts: [] });
-    inviteFindMany.mockResolvedValue([{ id: 'invite-1', classroom_id: 'class-1' }]);
+    inviteFindMany.mockResolvedValue([
+      { id: 'invite-1', classroom_id: 'class-1', student_name: '' },
+    ]);
 
     await invites.claimPendingInvites('user-1');
 
@@ -114,8 +122,8 @@ describe('claimPendingInvites', () => {
       accounts: [{ email: 'a@school.edu' }],
     });
     inviteFindMany.mockResolvedValue([
-      { id: 'invite-1', classroom_id: 'class-1' },
-      { id: 'invite-2', classroom_id: 'class-1' },
+      { id: 'invite-1', classroom_id: 'class-1', student_name: '' },
+      { id: 'invite-2', classroom_id: 'class-1', student_name: '' },
     ]);
 
     const result = await invites.claimPendingInvites('user-1');
@@ -125,6 +133,53 @@ describe('claimPendingInvites', () => {
       where: { id: { in: ['invite-1', 'invite-2'] } },
     });
     expect(result.claimed).toBe(1);
+  });
+
+  describe('roster name', () => {
+    const claim = async (user: { name: string | null }, studentName: string) => {
+      userFindUnique.mockResolvedValue({
+        email: 'a@school.edu',
+        emailVerified: true,
+        accounts: [{ email: null, username: 'grace-h' }],
+        ...user,
+      });
+      inviteFindMany.mockResolvedValue([
+        { id: 'invite-1', classroom_id: 'class-1', student_name: studentName },
+      ]);
+      await invites.claimPendingInvites('user-1');
+    };
+
+    it('names an account that only has its Github login', async () => {
+      await claim({ name: 'grace-h' }, 'Grace Hopper');
+
+      expect(userUpdate).toHaveBeenCalledWith({
+        where: { id: 'user-1' },
+        data: { name: 'Grace Hopper' },
+      });
+      expect(transaction).toHaveBeenCalledWith(['userUpdate-op', 'createMany-op', 'deleteMany-op']);
+    });
+
+    it('names an account with no name at all', async () => {
+      await claim({ name: null }, ' Grace Hopper ');
+
+      expect(userUpdate).toHaveBeenCalledWith({
+        where: { id: 'user-1' },
+        data: { name: 'Grace Hopper' },
+      });
+    });
+
+    it('keeps a name the person already has', async () => {
+      await claim({ name: 'Grace M. Hopper' }, 'Grace Hopper');
+
+      expect(userUpdate).not.toHaveBeenCalled();
+      expect(transaction).toHaveBeenCalledWith(['createMany-op', 'deleteMany-op']);
+    });
+
+    it('does not name anyone from an invite that has no name', async () => {
+      await claim({ name: 'grace-h' }, '');
+
+      expect(userUpdate).not.toHaveBeenCalled();
+    });
   });
 
   it('writes nothing when there are no pending invites', async () => {

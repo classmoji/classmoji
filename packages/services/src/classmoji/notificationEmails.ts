@@ -41,6 +41,8 @@ const subjectFor = (ctx: EmailContext): string => {
       return `${SUBJECT_PREFIX}${scope} - New regrade request`;
     case 'FEEDBACK_STATUS_CHANGED':
       return `${SUBJECT_PREFIX} Update on: ${ctx.title}`;
+    case 'FEEDBACK_REPLY':
+      return `${SUBJECT_PREFIX} New reply on: ${ctx.title}`;
     default:
       // QUIZ_PUBLISHED, PAGE_(UN)PUBLISHED, REPOSITORY_(UN)PUBLISHED — the verb
       // is carried in `title` by the caller. A default also means a new enum
@@ -49,13 +51,38 @@ const subjectFor = (ctx: EmailContext): string => {
   }
 };
 
+/** The team's public note on a status change, when there is one. */
+const statusNote = (ctx: EmailContext): string | null =>
+  typeof ctx.metadata?.note === 'string' && ctx.metadata.note.trim() ? ctx.metadata.note : null;
+
 /** The status a feedback post moved to, as shown on the board ("In progress"). */
 const statusLabel = (ctx: EmailContext): string =>
   typeof ctx.metadata?.status_label === 'string' ? ctx.metadata.status_label : 'updated';
 
+/**
+ * What a regrade notice names, and whether it is a quiz request. A quiz
+ * request (no assigned graders: the classroom's owners and teachers get it)
+ * names the quiz and, when the notice carries `metadata.attempt_number`, the
+ * attempt; `metadata.quiz_name` overrides the title. Otherwise the title,
+ * without the in-app list's "Regrade request: " prefix (the sentence already
+ * says it is a regrade request). Never a grade.
+ */
+const regradeSubject = (ctx: EmailContext): { name: string; quiz: boolean } => {
+  const quiz = ctx.metadata?.target === 'quiz' || typeof ctx.metadata?.quiz_name === 'string';
+  const base =
+    typeof ctx.metadata?.quiz_name === 'string'
+      ? ctx.metadata.quiz_name
+      : ctx.title.replace(/^Regrade request:\s*/, '');
+  const attempt = ctx.metadata?.attempt_number;
+  return {
+    name: quiz && typeof attempt === 'number' ? `${base} (attempt ${attempt})` : base,
+    quiz,
+  };
+};
+
 /** Where the email's button goes: the post itself for feedback, else the app. */
 const actionUrlFor = (ctx: EmailContext): string =>
-  ctx.type === 'FEEDBACK_STATUS_CHANGED'
+  ctx.type === 'FEEDBACK_STATUS_CHANGED' || ctx.type === 'FEEDBACK_REPLY'
     ? `${appUrl()}/feedback/p/${encodeURIComponent(ctx.resourceId)}`
     : `${appUrl()}/select-organization`;
 
@@ -86,10 +113,20 @@ const sentenceFor = (ctx: EmailContext): string => {
       return `Your submission for ${ctx.title} in ${cls} has been graded.`;
     case 'TA_GRADING_ASSIGNED':
       return `You have been assigned to grade ${ctx.title} in ${cls}.`;
-    case 'TA_REGRADE_ASSIGNED':
-      return `A regrade request for ${ctx.title} in ${cls} has been assigned to you.`;
-    case 'FEEDBACK_STATUS_CHANGED':
-      return `"${ctx.title}", a post you follow on the Classmoji feedback board, is now ${statusLabel(ctx)}.`;
+    case 'TA_REGRADE_ASSIGNED': {
+      const { name, quiz } = regradeSubject(ctx);
+      return quiz
+        ? `A student asked for a regrade of ${name} in ${cls}.`
+        : `A regrade request for ${name} in ${cls} has been assigned to you.`;
+    }
+    case 'FEEDBACK_STATUS_CHANGED': {
+      const note = statusNote(ctx);
+      return `"${ctx.title}", a post you follow on the Classmoji feedback board, is now ${statusLabel(ctx)}.${
+        note ? `\n\n${note}` : ''
+      }`;
+    }
+    case 'FEEDBACK_REPLY':
+      return `Someone replied to "${ctx.title}", your post on the Classmoji feedback board.`;
     default:
       return `${ctx.title} in ${cls}.`;
   }
@@ -116,10 +153,22 @@ const bodyFor = (ctx: EmailContext): string => {
       return `<p style="margin-top:0; margin-bottom:0;">Your submission for <strong>${title}</strong> in <strong>${cls}</strong> has been graded.</p>`;
     case 'TA_GRADING_ASSIGNED':
       return `<p style="margin-top:0; margin-bottom:0;">You've been assigned to grade <strong>${title}</strong> in <strong>${cls}</strong>.</p>`;
-    case 'TA_REGRADE_ASSIGNED':
-      return `<p style="margin-top:0; margin-bottom:0;">A regrade request for <strong>${title}</strong> in <strong>${cls}</strong> has been assigned to you.</p>`;
-    case 'FEEDBACK_STATUS_CHANGED':
-      return `<p style="margin-top:0; margin-bottom:0;"><strong>${title}</strong>, a post you follow on the Classmoji feedback board, is now <strong>${escapeHtml(statusLabel(ctx))}</strong>.</p>`;
+    case 'TA_REGRADE_ASSIGNED': {
+      const { name, quiz } = regradeSubject(ctx);
+      return quiz
+        ? `<p style="margin-top:0; margin-bottom:0;">A student asked for a regrade of <strong>${escapeHtml(name)}</strong> in <strong>${cls}</strong>.</p>`
+        : `<p style="margin-top:0; margin-bottom:0;">A regrade request for <strong>${escapeHtml(name)}</strong> in <strong>${cls}</strong> has been assigned to you.</p>`;
+    }
+    case 'FEEDBACK_STATUS_CHANGED': {
+      const note = statusNote(ctx);
+      return `<p style="margin-top:0;${note ? '' : ' margin-bottom:0;'}"><strong>${title}</strong>, a post you follow on the Classmoji feedback board, is now <strong>${escapeHtml(statusLabel(ctx))}</strong>.</p>${
+        note
+          ? `<p style="margin-bottom:0; white-space:pre-line;">${escapeHtml(note)}</p>`
+          : ''
+      }`;
+    }
+    case 'FEEDBACK_REPLY':
+      return `<p style="margin-top:0; margin-bottom:0;">Someone replied to <strong>${title}</strong>, your post on the Classmoji feedback board.</p>`;
     default:
       return `<p style="margin-top:0; margin-bottom:0;"><strong>${title}</strong> in <strong>${cls}</strong>.</p>`;
   }

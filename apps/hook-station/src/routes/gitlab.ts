@@ -52,22 +52,6 @@ interface GitLabPushPayload {
   };
 }
 
-/** Gitlab lists at most 20 commits in a push payload, like Github. */
-const GITLAB_COMMIT_CAP = 20;
-
-/** One net change set for a push, the last word on each path winning. */
-function aggregateChanges(commits: NonNullable<GitLabPushPayload['commits']>) {
-  const statuses = new Map<string, 'added' | 'modified' | 'removed'>();
-  for (const commit of commits) {
-    for (const path of commit.added ?? []) statuses.set(path, 'added');
-    for (const path of commit.modified ?? []) statuses.set(path, 'modified');
-    for (const path of commit.removed ?? []) statuses.set(path, 'removed');
-  }
-  const changes = { added: [] as string[], modified: [] as string[], removed: [] as string[] };
-  for (const [path, status] of statuses) changes[status].push(path);
-  return changes;
-}
-
 interface GitLabIssuePayload {
   object_kind?: string;
   object_attributes?: { id?: number; action?: string; closed_at?: string | null };
@@ -156,17 +140,12 @@ async function handlePush(data: GitLabPushPayload, instanceId: string | null): P
   });
   if (!classroom) return;
 
-  const commits = data.commits ?? [];
-  const total = data.total_commits_count ?? commits.length;
+  // The sync reads the branch head and diffs the whole tree; `before`/`after`
+  // are for its log only.
   await Tasks.contentAssetsSyncTask.trigger(
     {
       classroomId: classroom.id,
       reason: 'push' as const,
-      changes: aggregateChanges(commits),
-      // Gitlab does not flag force-pushes; `before` not matching the map's
-      // recorded commit is what exposes one, and the task re-reads the tree.
-      forced: false,
-      complete: total < GITLAB_COMMIT_CAP && commits.length === total,
       before: data.before,
       after: data.after,
     },

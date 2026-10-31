@@ -186,6 +186,7 @@ describe.skipIf(!RUN)('quiz extension hours (integration)', () => {
         studentDeadline: deadline,
         extensionHours,
         latePenaltyPerHour: 2,
+        emojiScale: {},
       });
     expect(score(0)).toMatchObject({ late_hours: 5, grade: 70, raw_percentage: 80 });
 

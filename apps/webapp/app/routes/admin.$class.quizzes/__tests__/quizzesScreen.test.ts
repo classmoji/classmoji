@@ -61,6 +61,10 @@ vi.mock('~/utils/classroomProFlag.server', () => ({
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
+    // The classroom's scale: the list shows the average grade as its emoji.
+    emojiMapping: {
+      findScaleByClassroomId: async () => ({ rocket: 100, '+1': 85, eyes: 70, '-1': 50 }),
+    },
     quiz: { findByClassroom: (...a: unknown[]) => mocks.findByClassroom(...a) },
     user: { findById: (...a: unknown[]) => mocks.userFindById(...a) },
   },
@@ -323,7 +327,9 @@ describe('the attempts column', () => {
 
     expect(html).toContain('1 attempts');
     expect(html).toContain('2 attempts');
-    expect(html).toMatch(/Avg: (<!-- -->)?80(<!-- -->)?%/);
+    // The average is the classroom's emoji (80 is nearest 👍), never a number (E1).
+    expect(html).toMatch(/Avg: (<!-- -->)?<span[^>]*>👍<\/span>/);
+    expect(html).not.toMatch(/Avg: (<!-- -->)?\d/);
     expect(count(html, ' attempts<')).toBe(2);
   });
 });

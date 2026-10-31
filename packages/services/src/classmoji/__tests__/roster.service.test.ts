@@ -41,6 +41,20 @@ beforeEach(() => {
 });
 
 describe('roster.addStudents', () => {
+  it('invites an unknown email with no name using an empty student_name (NOT NULL column)', async () => {
+    userFindMany.mockResolvedValue([]);
+
+    await roster.addStudents({
+      classroomId: 'class-1',
+      signInvite: email => `tok(${email})`,
+      students: [{ email: 'noname@x.edu' }],
+    });
+
+    expect(createManyInvites).toHaveBeenCalledWith([
+      { school_email: 'noname@x.edu', classroom_id: 'class-1', student_name: '' },
+    ]);
+  });
+
   it('enrolls existing users, invites unknown emails, and returns both email sets', async () => {
     userFindMany.mockResolvedValue([{ id: 'u-existing', email: 'known@x.edu', name: 'Known' }]);
 

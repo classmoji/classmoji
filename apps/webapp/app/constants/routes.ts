@@ -21,6 +21,7 @@ import {
   IconStack2,
   IconLifebuoy,
   IconForms,
+  IconMessageChatbot,
 } from '@tabler/icons-react';
 
 /**
@@ -35,7 +36,7 @@ export const routeCategories = {
   },
   assessment: {
     label: 'Assessment',
-    items: ['grades', 'grading', 'regrade-requests', 'tokens'],
+    items: ['grades', 'grading', 'regrade-requests', 'tokens', 'ask-moji'],
   },
   people: {
     label: 'People',
@@ -161,7 +162,7 @@ export const routes = {
   },
   'regrade-requests': {
     link: '/regrade-requests',
-    label: 'Resubmits',
+    label: 'Regrade/Resubmit',
     icon: IconRotate,
     roles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
     category: 'assessment',
@@ -202,6 +203,18 @@ export const routes = {
     label: 'Tokens',
     icon: IconCoin,
     roles: ['OWNER', 'STUDENT'],
+    category: 'assessment',
+  },
+
+  // Ask Moji insights: usage and the feedback review, for the classroom's
+  // owners and teachers (the routes' own gate; assistants are refused). Pro,
+  // and shown only where Ask Moji is available in the classroom.
+  'ask-moji': {
+    link: '/ask-moji',
+    label: 'Ask Moji Insights',
+    icon: IconMessageChatbot,
+    roles: ['OWNER', 'TEACHER'],
+    isProTier: true,
     category: 'assessment',
   },
 

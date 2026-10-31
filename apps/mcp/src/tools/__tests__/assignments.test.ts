@@ -1126,9 +1126,117 @@ describe('assignment_update: the teacher tier depends on the assignment type', (
 
   it('says in the description what a teacher may set on a quiz assignment', () => {
     expect(assignmentUpdateTool.description).toContain(
-      'on a quiz assignment student_deadline, weight, release_at, closes_at and tokens_per_hour'
+      'on a quiz assignment student_deadline, weight, release_at, closes_at, tokens_per_hour and is_published'
     );
     expect(new TextEncoder().encode(assignmentUpdateTool.description).length).toBeLessThan(1500);
+  });
+});
+
+describe('assignment_update: title and is_published', () => {
+  const ARGS = { classroom: 'org/winter-2025', assignment_id: 'asg-1' };
+
+  const loaded = (type: 'REPO' | 'QUIZ') => ({
+    id: 'asg-1',
+    title: 'Lab 3',
+    type,
+    is_published: false,
+    module_id: 'mod-1',
+    module: { id: 'mod-1', title: 'Week 1', classroom_id: 'class-1' },
+    repository: { classroom_id: 'class-1' },
+  });
+
+  beforeEach(() => {
+    mocks.assignmentFindById.mockResolvedValue(loaded('REPO'));
+    mocks.assignmentUpdate.mockImplementation(
+      async (id: string, data: Record<string, unknown>) => ({
+        id,
+        title: 'Lab 3',
+        is_published: false,
+        student_deadline: null,
+        weight: 50,
+        grades_released: false,
+        grader_deadline: null,
+        release_at: null,
+        ...data,
+      })
+    );
+    mocks.membershipFindByClassroomAndUser.mockResolvedValue(null);
+  });
+
+  it('OWNER renames and publishes through the notifying update path, and audits both', async () => {
+    const payload = parse(
+      await assignmentUpdateTool.handler({ ...ARGS, title: 'Lab 3a', is_published: true }, CTX)
+    );
+
+    expect(mocks.assignmentUpdate).toHaveBeenCalledWith('asg-1', {
+      title: 'Lab 3a',
+      is_published: true,
+    });
+    expect(payload.assignment).toMatchObject({ title: 'Lab 3a', is_published: true });
+    expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({
+      action: 'UPDATE',
+      data: {
+        tool: 'assignment_update',
+        fields: ['title', 'is_published'],
+        values: { title: 'Lab 3a', is_published: true },
+      },
+    });
+  });
+
+  it('unpublishes with is_published false', async () => {
+    await assignmentUpdateTool.handler({ ...ARGS, is_published: false }, CTX);
+    expect(mocks.assignmentUpdate).toHaveBeenCalledWith('asg-1', { is_published: false });
+  });
+
+  it.each([
+    ['title', { title: 'Lab 3a' }],
+    ['is_published', { is_published: true }],
+  ])('refuses a TEACHER setting %s on a repo assignment', async (_field, args) => {
+    await expect(
+      assignmentUpdateTool.handler({ ...ARGS, ...args }, TEACHER_CTX)
+    ).rejects.toMatchObject({ kind: 'forbidden' });
+    expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
+  });
+
+  it('lets a TEACHER publish a quiz assignment, as the quiz schedule is theirs', async () => {
+    mocks.assignmentFindById.mockResolvedValue(loaded('QUIZ'));
+    mocks.quizzesVisible.mockResolvedValue(true);
+
+    await assignmentUpdateTool.handler({ ...ARGS, is_published: true }, TEACHER_CTX);
+
+    expect(mocks.assignmentUpdate).toHaveBeenCalledWith('asg-1', { is_published: true });
+  });
+
+  it('refuses a TEACHER renaming a quiz assignment', async () => {
+    mocks.assignmentFindById.mockResolvedValue(loaded('QUIZ'));
+    mocks.quizzesVisible.mockResolvedValue(true);
+
+    await expect(
+      assignmentUpdateTool.handler({ ...ARGS, title: 'Quiz 2' }, TEACHER_CTX)
+    ).rejects.toMatchObject({ kind: 'forbidden' });
+  });
+
+  it('maps a duplicate title to invalid_params and records nothing', async () => {
+    mocks.assignmentUpdate.mockRejectedValue(Object.assign(new Error('unique'), { code: 'P2002' }));
+
+    await expect(
+      assignmentUpdateTool.handler({ ...ARGS, title: 'Lab 4' }, CTX)
+    ).rejects.toMatchObject({ kind: 'invalid_params' });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('does not hide a failure that has nothing to do with the title', async () => {
+    mocks.assignmentUpdate.mockRejectedValue(Object.assign(new Error('unique'), { code: 'P2002' }));
+
+    await expect(
+      assignmentUpdateTool.handler({ ...ARGS, is_published: true }, CTX)
+    ).rejects.toMatchObject({ code: 'P2002' });
+  });
+
+  it('refuses a blank title before it reaches the handler', () => {
+    const title = assignmentUpdateTool.inputSchema.title as import('zod').ZodTypeAny;
+    expect(title.safeParse('   ').success).toBe(false);
+    expect(title.safeParse(' Lab 3a ').data).toBe('Lab 3a');
   });
 });
 

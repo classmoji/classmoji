@@ -30,6 +30,7 @@ const TA_PREFS: PrefRow[] = [
 
 const FEEDBACK_PREFS: PrefRow[] = [
   { key: 'email_feedback_status_changed', label: 'A feedback post you follow changes status' },
+  { key: 'email_feedback_reply', label: 'Someone replies to your feedback post' },
 ];
 
 const ALLOWED_KEYS = new Set<EmailPrefKey>(
@@ -115,7 +116,7 @@ const SettingsNotifications = ({ loaderData }: Route.ComponentProps) => {
 
       <section className="mb-8">
         <h2 className="text-sm font-semibold text-ink-1 mb-2">As a student</h2>
-        <div className="rounded-xl border border-line px-4">
+        <div className="border-t border-line">
           {STUDENT_PREFS.map((p, i) => (
             <Toggle
               key={p.key}
@@ -130,7 +131,7 @@ const SettingsNotifications = ({ loaderData }: Route.ComponentProps) => {
 
       <section>
         <h2 className="text-sm font-semibold text-ink-1 mb-2">As a teaching assistant</h2>
-        <div className="rounded-xl border border-line px-4">
+        <div className="border-t border-line">
           {TA_PREFS.map(p => (
             <Toggle key={p.key} prefKey={p.key} label={p.label} checked={Boolean(prefs[p.key])} />
           ))}
@@ -139,7 +140,7 @@ const SettingsNotifications = ({ loaderData }: Route.ComponentProps) => {
 
       <section className="mt-8">
         <h2 className="text-sm font-semibold text-ink-1 mb-2">Feedback board</h2>
-        <div className="rounded-xl border border-line px-4">
+        <div className="border-t border-line">
           {FEEDBACK_PREFS.map(p => (
             <Toggle key={p.key} prefKey={p.key} label={p.label} checked={Boolean(prefs[p.key])} />
           ))}

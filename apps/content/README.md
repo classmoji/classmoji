@@ -19,6 +19,8 @@ browser ──signed URL──▶ Worker ──hit──▶ R2
 GET /c/{classroomId}/blob/{sha}.{ext}?p=&v=&exp=&sig=[&w=&fmt=][&dl=]
 GET /c/{classroomId}/media/{mediaId}/{variant}?p=&v=&exp=&sig=[&dl=]
 GET /c/{classroomId}/theme/{theme}/{treeSha}/{p}.{v}.{exp}.{sig}/{relPath}
+GET /c/{classroomId}/files/{grant}/{p}.{v}.{exp}.{sig}/{repoPath}[?anything]
+GET /preview-frame
 GET /healthz
 OPTIONS *
 ```
@@ -36,6 +38,7 @@ after the scheme in the canonical string:
 cm1|blob|{host}|{classroomId}|{sha}|{ext}|{p}|{v}|{exp}|{w or ''}|{fmt or ''}[|dl|{dl}]
 cm1|media|{host}|{classroomId}|{mediaId}|{variant}|{p}|{v}|{exp}[|dl|{dl}]
 cm1|theme|{host}|{classroomId}|{theme}|{treeSha}|{p}|{v}|{exp}
+cm1|files|{host}|{classroomId}|{grant}|{p}|{v}|{exp}
 ```
 
 so a URL minted for one delivery origin cannot be replayed against another.
@@ -50,6 +53,41 @@ percent-encoded after one decode is refused.
 is no separate version field. Anything else is a 404. An unsigned, tampered, or
 long-expired URL is a 403 with `Cache-Control: no-store` — a refusal is never
 cached.
+
+### Files and the box
+
+A files URL opens up to twelve repo folders at once (games, diagrams, html
+block files that slides frame). `{grant}` is base64url, unpadded, of
+`{folder}\t{treeSha}` lines sorted by path and joined by `\n`; mint it with
+`signFilesBase`, never by hand. The signature covers the raw segment; the
+Worker decodes it only after verifying, and re-validates it (1–12 folders,
+sorted, unique, 40-hex shas, normalized paths, never the repo root, none
+inside another). The repo path must sit inside a granted folder
+(`folder + '/'`), is found by exact path in that folder's tree listing (the
+same `trees/{sha}.json` cache as themes; Gitlab lists by path) and is served by
+blob sha. Deck and page documents (`slides/*/index.html|deck.json`,
+`pages/*/content.json|index.html`, any case) are a 404 even inside a grant.
+
+The query string is the page's own (`?deck=x&f=y`): allowed, unsigned,
+ignored, and never logged.
+
+HTML from a grant (`text/html`, `application/xhtml+xml`, 200 only) runs in
+**the box**: `Content-Security-Policy: sandbox allow-scripts allow-forms
+allow-popups allow-popups-to-escape-sandbox allow-modals allow-pointer-lock
+allow-downloads` (no `allow-same-origin`, so an opaque origin with no cookies),
+`Referrer-Policy: no-referrer`, and an in-memory `localStorage` /
+`sessionStorage` shim (`data-cm-storage-shim`) inserted after the doctype, or
+first when there is none. The file in the repo is never changed; the shim is
+added on the way out, so HTML is always served whole (no ranges) with its
+length recomputed. Every other reply — scripts, styles, images, svg, errors —
+keeps the strict `default-src 'none'; sandbox`.
+
+`/preview-frame` is the box with nothing in it: an unsigned static page
+(`Cache-Control: public, max-age=3600`) that posts `{type:'cm-preview-ready'}`
+to its parent, then replaces itself with the first `{type:'cm-preview', html,
+base?}` message whose `source` is its parent (shim inserted the same way; an
+http(s) `base` becomes `<base href>`). The slides editor uses it for live
+previews of unsaved code.
 
 ### Tiers
 
@@ -514,18 +552,18 @@ Logs** (`classmoji-content-staging` or `classmoji-content`), with
 `observability.enabled` set in `wrangler.jsonc` for both. `npx wrangler tail
 --env staging` gives the same stream in a terminal. The lines worth searching:
 
-| Shape                                                        | Means                                                                                                                                                                                                       |
-| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `[content] 403 {reason} classroom=… path=… p=… v=…`          | refused: `bad-signature`, `expired`, `malformed`, `unsupported-version`. Never carries `sig` or a query string                                                                                              |
-| `[content] key=previous classroom=… path=… p=… v=…`          | served, but the signature only verified against `CONTENT_SIGNING_SECRET_PREVIOUS`. Expected during a rotation. Logged once per classroom and key version per isolate, so it counts classrooms, not requests |
-| `[content] 404 missing classroom=… path=…`                   | the app minted a `/missing/` URL: a reference that resolves to no blob (deleted, renamed, or a directory). Not an attack — a content bug                                                                    |
-| `[content] 404 media classroom=… media=… variant=…`          | a signed media URL whose object is not in the bucket: deleted, or an upload that never completed. There is no origin to fall back to                                                                        |
-| `[content] origin blob {sha}: {status}`                      | GitHub refused the blob; the client got a 502                                                                                                                                                               |
-| `[content] origin error: …` / `[content] unhandled error: …` | 502 / 500                                                                                                                                                                                                   |
-| `[content] image transform failed (w=…, fmt=…)`              | Images could not do it; the original was served on `max-age=60`                                                                                                                                             |
-| `[content] skipping transform for {sha}: …ceiling`           | source past `MAX_TRANSFORM_SOURCE_BYTES`; the original was streamed instead                                                                                                                                 |
-| `[content] refusing to cache truncated tree {sha}`           | the listing was used but not stored                                                                                                                                                                         |
-| `[content] failed to cache {key}`                            | the R2 write-back failed; the client was still served                                                                                                                                                       |
+| Shape                                                        | Means                                                                                                                                                                                                         |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `[content] 403 {reason} classroom=… path=… p=… v=…`          | refused: `bad-signature`, `expired`, `malformed`, `unsupported-version`. Never carries `sig` or a query string; on theme and files paths the policy segment is logged as `{p}.{v}.…` and a files grant as `…` |
+| `[content] key=previous classroom=… path=… p=… v=…`          | served, but the signature only verified against `CONTENT_SIGNING_SECRET_PREVIOUS`. Expected during a rotation. Logged once per classroom and key version per isolate, so it counts classrooms, not requests   |
+| `[content] 404 missing classroom=… path=…`                   | the app minted a `/missing/` URL: a reference that resolves to no blob (deleted, renamed, or a directory). Not an attack — a content bug                                                                      |
+| `[content] 404 media classroom=… media=… variant=…`          | a signed media URL whose object is not in the bucket: deleted, or an upload that never completed. There is no origin to fall back to                                                                          |
+| `[content] origin blob {sha}: {status}`                      | GitHub refused the blob; the client got a 502                                                                                                                                                                 |
+| `[content] origin error: …` / `[content] unhandled error: …` | 502 / 500                                                                                                                                                                                                     |
+| `[content] image transform failed (w=…, fmt=…)`              | Images could not do it; the original was served on `max-age=60`                                                                                                                                               |
+| `[content] skipping transform for {sha}: …ceiling`           | source past `MAX_TRANSFORM_SOURCE_BYTES`; the original was streamed instead                                                                                                                                   |
+| `[content] refusing to cache truncated tree {sha}`           | the listing was used but not stored                                                                                                                                                                           |
+| `[content] failed to cache {key}`                            | the R2 write-back failed; the client was still served                                                                                                                                                         |
 
 A burst of `403 bad-signature` on one classroom usually means a stale page in
 someone's browser, not an attacker: signatures expire, and the grace window is

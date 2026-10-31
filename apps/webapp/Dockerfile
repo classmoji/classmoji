@@ -48,8 +48,14 @@ RUN ./node_modules/.bin/prisma generate --schema packages/database/schema.prisma
 
 COPY . .
 
-# Build the web app
-RUN npx turbo run web:build
+# Build the web app. With the SENTRY_AUTH_TOKEN build secret (CI deploys) the
+# build uploads its source maps to Sentry and deletes them; without it (or
+# empty) the build is unchanged. A secret mount never lands in an image layer.
+RUN --mount=type=secret,id=SENTRY_AUTH_TOKEN \
+    if [ -s /run/secrets/SENTRY_AUTH_TOKEN ]; then \
+      export SENTRY_AUTH_TOKEN="$(cat /run/secrets/SENTRY_AUTH_TOKEN)"; \
+    fi; \
+    npx turbo run web:build
 
 
 # ======================

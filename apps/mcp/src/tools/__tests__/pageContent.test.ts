@@ -550,6 +550,36 @@ describe('page_content_apply', () => {
     expect(saveOpts.expectedSha).toBe('sha-1');
   });
 
+  it('a code block’s collapsible prop goes in through apply and comes back from get', async () => {
+    mocks.pageFindById.mockResolvedValue(DRAFT_PAGE);
+    const block = {
+      id: 'code',
+      type: 'codeBlock',
+      props: { language: 'ts', collapsible: true },
+      content: [{ type: 'text', text: 'const a = 1;' }],
+    };
+    await pageContentApplyTool.handler(
+      {
+        classroom: 'org/x',
+        page_id: PAGE_ID,
+        expected_sha: 'sha-1',
+        ops: [{ op: 'insert', blocks: [block], position: { at: 'end' } }],
+      },
+      CTX
+    );
+    const saved = mocks.savePageContent.mock.calls[0][1] as Array<{ id: string; props?: unknown }>;
+    expect(saved.find(b => b.id === 'code')?.props).toEqual({ language: 'ts', collapsible: true });
+
+    mocks.loadPageContent.mockResolvedValue(jsonContent([...DOC(), block]));
+    const payload = parse(
+      await pageContentGetTool.handler(
+        { classroom: 'org/x', page_id: PAGE_ID, block_ids: ['code'] },
+        CTX
+      )
+    );
+    expect(payload.blocks[0].props).toEqual({ language: 'ts', collapsible: true });
+  });
+
   it("explicit commit overrides both defaults ('direct' on published, 'preview' on draft)", async () => {
     // Published + direct → main.
     let payload = parse(

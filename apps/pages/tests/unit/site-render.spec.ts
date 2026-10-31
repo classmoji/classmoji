@@ -17,8 +17,9 @@
  */
 
 import * as fs from 'fs';
+import { createRequire } from 'module';
 
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 // @ts-expect-error -- jsdom ships no type declarations and `@types/jsdom` is
 // not a dependency; the cast below pins the shape this file uses.
 import { JSDOM as UntypedJSDOM } from 'jsdom';
@@ -239,6 +240,50 @@ test.describe('editor affordances are stripped', () => {
     // Nothing in place of the button: no lock, no text.
     expect(html).not.toContain('bn-copy');
     expect(html).toContain('npm run dev');
+  });
+
+  test('a long collapsible code block is drawn collapsed, with its bar', async () => {
+    const lines = (n: number) => Array.from({ length: n }, (_, i) => `line ${i + 1}`).join('\n');
+    const block = (id: string, n: number, props: Record<string, unknown>) => ({
+      id,
+      type: 'codeBlock',
+      props: { language: 'text', ...props },
+      content: text(lines(n)),
+    });
+    const { html } = await renderSitePage({
+      blocks: [
+        block('long', 16, { collapsible: true }),
+        block('short', 15, { collapsible: true }),
+        block('off', 40, {}),
+      ],
+      resolveLink,
+    });
+    const doc = parse(html);
+    const [long, short, off] = [...doc.querySelectorAll('[data-content-type="codeBlock"]')];
+
+    const pre = long.querySelector('pre')!;
+    const bar = long.querySelector(':scope > div > button.bn-code-expand')!;
+    expect(long.getAttribute('data-collapsible')).toBe('true');
+    // Clipped by CSS from the first paint: no script, no layout shift.
+    expect(pre.getAttribute('data-collapse')).toBe('collapsed');
+    expect(bar.getAttribute('type')).toBe('button');
+    expect(bar.getAttribute('aria-expanded')).toBe('false');
+    expect(bar.getAttribute('aria-controls')).toBe(pre.id);
+    expect(pre.id).toBe('bn-code-long');
+    expect(bar.querySelector('.bn-code-expand-more')!.textContent).toBe('Show all 16 lines');
+    expect(bar.querySelector('.bn-code-expand-less')!.textContent).toBe('Show less');
+    expect(long.querySelector(':scope > div > .bn-code-fade')).not.toBeNull();
+    // Every line is still in the page (find-in-page, Copy), and none of the bar.
+    expect(pre.textContent).toBe(lines(16));
+
+    // Up to 15 lines it is drawn in full; without the prop it is as before.
+    for (const block of [short, off]) {
+      expect(block.querySelector('.bn-code-expand')).toBeNull();
+      expect(block.querySelector('.bn-code-fade')).toBeNull();
+      expect(block.querySelector('pre')!.hasAttribute('data-collapse')).toBe(false);
+      expect(block.querySelector('pre')!.hasAttribute('id')).toBe(false);
+    }
+    expect(off.hasAttribute('data-collapsible')).toBe(false);
   });
 
   test('the only inputs anywhere are disabled checkboxes', async () => {
@@ -1183,5 +1228,270 @@ test.describe('class-site images', () => {
 
     expect(html).toContain('diagram.png');
     expect(html).not.toContain('bn-visual-media');
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Room above headings
+ * ------------------------------------------------------------------ */
+
+/**
+ * Measured in a browser, with BlockNote's own stylesheet loaded under ours,
+ * because the bug was an interaction between the two: BlockNote spaces a
+ * heading with `padding-top: 18px`, and our colored-heading rule cut that to
+ * 3px, so blue H2s and grey H3s sat flush against the block above (#717).
+ */
+test.describe('heading spacing', () => {
+  const css = () =>
+    [
+      createRequire(import.meta.url).resolve('@blocknote/core/style.css'),
+      new URL('../../app/styles/blocknote-overrides.css', import.meta.url),
+      new URL('../../app/styles/page-sections.css', import.meta.url),
+    ]
+      .map(file => fs.readFileSync(file, 'utf-8'))
+      .join('\n');
+
+  const heading = (level: number, label: string, backgroundColor?: string) => ({
+    type: 'heading',
+    props: { level, ...(backgroundColor ? { backgroundColor } : {}) },
+    content: text(label),
+  });
+  const paragraph = (label: string) => ({ type: 'paragraph', content: text(label) });
+
+  /** Render through the site renderer and load it with the real stylesheets. */
+  const load = async (page: Page, blocks: unknown[]) => {
+    const { html } = await renderSitePage({ blocks, resolveLink: () => null });
+    await page.setContent(
+      `<style>${css()}</style><style>${SITE_STYLES}</style>` +
+        `<div class="site-article pg-reader-sections" style="width: 700px">${siteArticleWrapper(html)}</div>`
+    );
+  };
+
+  /**
+   * The space above each block's own content: from the bottom of whatever
+   * came before it (the previous block's content, or its last child's) to the
+   * top of this one. The first block is measured from the top of the page.
+   */
+  const gaps = (page: Page) =>
+    page.evaluate(() => {
+      const contents = [...document.querySelectorAll('.bn-editor .bn-block-content')];
+      const top = document
+        .querySelector('.bn-editor > .bn-block-group')!
+        .getBoundingClientRect().top;
+      return contents.map((content, i) => {
+        const before = i === 0 ? top : contents[i - 1].getBoundingClientRect().bottom;
+        return [
+          content.textContent,
+          Math.round(content.getBoundingClientRect().top - before),
+        ] as const;
+      });
+    });
+
+  test('a heading gets room above it by level, colored or not', async ({ page }) => {
+    await load(page, [
+      paragraph('intro'),
+      heading(2, 'H2', 'blue'),
+      paragraph('a'),
+      heading(3, 'H3', 'gray'),
+      paragraph('b'),
+      heading(4, 'H4'),
+      paragraph('c'),
+      heading(1, 'H1'),
+      paragraph('d'),
+    ]);
+
+    // 28 / 20 / 16 / 32px above (1.75 / 1.25 / 1 / 2em of the 16px body), and
+    // 6px between every heading and the text under it.
+    expect(await gaps(page)).toEqual([
+      ['intro', 0],
+      ['H2', 28],
+      ['a', 6],
+      ['H3', 20],
+      ['b', 6],
+      ['H4', 16],
+      ['c', 6],
+      ['H1', 32],
+      ['d', 6],
+    ]);
+  });
+
+  test('a heading right after a heading stays with it, and the first block has no gap', async ({
+    page,
+  }) => {
+    await load(page, [heading(2, 'first', 'blue'), heading(3, 'under it', 'gray'), paragraph('x')]);
+
+    expect(await gaps(page)).toEqual([
+      ['first', 0],
+      ['under it', 6],
+      ['x', 6],
+    ]);
+  });
+
+  test("a heading with children (a toggle's body) keeps the gap to the next heading", async ({
+    page,
+  }) => {
+    await load(page, [
+      { ...heading(2, 'Week 1', 'blue'), children: [paragraph('notes')] },
+      heading(2, 'Week 2', 'blue'),
+    ]);
+
+    expect(await gaps(page)).toEqual([
+      ['Week 1', 0],
+      ['notes', 6],
+      ['Week 2', 28],
+    ]);
+  });
+
+  test('the space above and below a heading belongs to the heading', async ({ page }) => {
+    // BlockNote's side menu finds the hovered block by walking up to its
+    // `.bn-block` (getDraggableBlockFromElement), and the section fade goes by
+    // the block too, so space outside that box hides the drag handle and dims
+    // a ticked section while the pointer crosses it.
+    await load(page, [paragraph('p'), heading(2, 'colored', 'blue'), paragraph('q')]);
+
+    const owners = await page.evaluate(() => {
+      const bar = document.querySelector('.bn-block-content[data-content-type="heading"]')!;
+      const { left, top, bottom } = bar.getBoundingClientRect();
+      const ownerAt = (y: number) =>
+        document.elementFromPoint(left + 20, y)?.closest('.bn-block')?.textContent;
+      return [ownerAt(top - 14), ownerAt(bottom + 3)];
+    });
+    expect(owners).toEqual(['colored', 'colored']);
+  });
+
+  test('the gap is outside a colored bar, not padding inside it', async ({ page }) => {
+    await load(page, [paragraph('p'), heading(2, 'colored', 'blue'), heading(4, 'plain')]);
+
+    const paddingTop = await page.$$eval('.bn-block-content[data-content-type="heading"]', els =>
+      els.map(el => getComputedStyle(el).paddingTop)
+    );
+    expect(paddingTop).toEqual(['3px', '0px']);
+
+    // BlockNote tints a colored block's whole `.bn-block`, which now holds the
+    // gap: left on, a blue H2 would paint 28px of blue above its bar.
+    const blockBackground = await page.$eval(
+      '.bn-block:has(> [data-content-type="heading"][data-background-color])',
+      el => getComputedStyle(el).backgroundColor
+    );
+    expect(blockBackground).toBe('rgba(0, 0, 0, 0)');
+  });
+
+  test("the reader's tick box sits on the heading's first line", async ({ page }) => {
+    // It used to assume BlockNote's 18px top padding, so on a colored heading
+    // (3px) it sat 15px below the text.
+    await load(page, [paragraph('p'), heading(2, 'colored', 'blue'), heading(3, 'plain')]);
+
+    const offsets = await page.evaluate(() =>
+      [...document.querySelectorAll('.bn-block-content[data-content-type="heading"]')].map(el => {
+        el.setAttribute('data-checkable', 'true');
+        const box = document.createElement('button');
+        box.className = 'pg-section-check';
+        el.appendChild(box);
+        const line = el.querySelector('h1, h2, h3, h4, h5, h6')!.getBoundingClientRect();
+        const check = box.getBoundingClientRect();
+        return Math.round(Math.abs((check.top + check.bottom) / 2 - (line.top + line.bottom) / 2));
+      })
+    );
+    expect(offsets).toEqual([0, 0]);
+  });
+
+  /* Room around code and terminal blocks: BlockNote gives them none, so the
+     dark card touched the paragraph above and below it. */
+  const code = (source: string) => ({
+    type: 'codeBlock',
+    props: { language: 'typescript' },
+    content: text(source),
+  });
+  const terminal = (command: string) => ({ type: 'terminal', props: { code: command } });
+
+  /** The gaps alone; a card's text also holds its language or title bar. */
+  const spacing = async (page: Page) => (await gaps(page)).map(([, gap]) => gap);
+
+  test('a code or terminal block gets room above and below it', async ({ page }) => {
+    await load(page, [
+      paragraph('a'),
+      code('const a = 1;'),
+      paragraph('b'),
+      terminal('npm run dev'),
+      paragraph('c'),
+    ]);
+
+    // 16px (1em of the 16px body) on each side of each card.
+    expect(await spacing(page)).toEqual([0, 16, 16, 16, 16]);
+  });
+
+  test('two cards in a row share one gap; a heading keeps its own', async ({ page }) => {
+    await load(page, [code('one'), terminal('two'), heading(2, 'next', 'blue'), paragraph('x')]);
+
+    // No gap on the first block, one 16px gap between the cards (padding does
+    // not collapse, so this is not 32), and the H2's 28px after a card.
+    expect(await spacing(page)).toEqual([0, 16, 28, 6]);
+  });
+
+  test('a card under a heading stays with it', async ({ page }) => {
+    await load(page, [paragraph('p'), heading(3, 'Example', 'gray'), code('const a = 1;')]);
+
+    expect(await spacing(page)).toEqual([0, 20, 6]);
+  });
+
+  test("a card in a list item's children gets the gap on both sides", async ({ page }) => {
+    const step = (label: string, source: string) => ({
+      type: 'numberedListItem',
+      content: text(label),
+      children: [code(source)],
+    });
+    await load(page, [step('Install', 'npm install'), step('Run', 'npm run dev'), paragraph('x')]);
+
+    expect(await spacing(page)).toEqual([0, 16, 16, 16, 16]);
+  });
+
+  test("a card opening a toggle heading's body stays with the heading", async ({ page }) => {
+    await load(page, [{ ...heading(2, 'Week 1', 'blue'), children: [code('const a = 1;')] }]);
+
+    expect(await spacing(page)).toEqual([0, 6]);
+  });
+
+  test('a terminal in the editor, inside its .react-renderer, gets the gap too', async ({
+    page,
+  }) => {
+    // The class site renders a React block bare; the editor and the reader
+    // wrap its content in a `.react-renderer`. Rebuild that shape here.
+    await load(page, [
+      paragraph('a'),
+      terminal('one'),
+      paragraph('b'),
+      heading(3, 'H3'),
+      terminal('two'),
+    ]);
+    await page.evaluate(() => {
+      for (const content of document.querySelectorAll('[data-content-type="terminal"]')) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'react-renderer';
+        content.replaceWith(wrapper);
+        wrapper.appendChild(content);
+      }
+    });
+
+    expect(await spacing(page)).toEqual([0, 16, 16, 20, 6]);
+  });
+
+  test('the space around a card belongs to the card', async ({ page }) => {
+    // As with headings: space outside `.bn-block` hides the drag handle and
+    // dims a ticked section while the pointer crosses it.
+    await load(page, [paragraph('p'), code('const a = 1;'), paragraph('q')]);
+
+    const owners = await page.evaluate(() => {
+      const card = document.querySelector('.bn-block-content[data-content-type="codeBlock"]')!;
+      const { left, top, bottom } = card.getBoundingClientRect();
+      const ownerAt = (y: number) =>
+        document
+          .elementFromPoint(left + 20, y)
+          ?.closest('.bn-block')
+          ?.querySelector(':scope > .bn-block-content')
+          ?.getAttribute('data-content-type');
+      return [ownerAt(top - 8), ownerAt(bottom + 8)];
+    });
+    // Above the card is its own padding; below it is the next paragraph's.
+    expect(owners).toEqual(['codeBlock', 'paragraph']);
   });
 });

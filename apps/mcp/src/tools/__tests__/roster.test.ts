@@ -207,7 +207,13 @@ describe('roster_remove_student', () => {
       string,
       { payload: Record<string, unknown> },
     ];
-    expect(Object.keys(payload).sort()).toEqual(['classroom', 'gitOrganization', 'role', 'user']);
+    expect(Object.keys(payload).sort()).toEqual([
+      'actorUserId',
+      'classroom',
+      'gitOrganization',
+      'role',
+      'user',
+    ]);
     expect(Object.keys(payload.gitOrganization as object).sort()).toEqual([
       'base_url',
       'github_installation_id',

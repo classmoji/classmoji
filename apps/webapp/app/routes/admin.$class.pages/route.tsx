@@ -159,6 +159,12 @@ interface PageRecord {
   [key: string]: unknown;
 }
 
+// `updated_at` arrives as a Date or an ISO string depending on the serializer;
+// either way this is its sort key.
+function updatedTime(page: { updated_at: string | Date }) {
+  return new Date(page.updated_at).getTime();
+}
+
 function getPageStatus(page: PageRecord) {
   if (page.is_draft) return 'draft';
   if (page.is_public) return 'public';
@@ -233,18 +239,9 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
 
       return matchesSearch;
     })
-    .sort((a, b) => {
-      // Sort by repository first (nulls last), then by title
-      const repositoryA = getLinkedRepositoryTitle(a as unknown as PageRecord) || '';
-      const repositoryB = getLinkedRepositoryTitle(b as unknown as PageRecord) || '';
-      const repositoryCompare = repositoryA.localeCompare(repositoryB);
-
-      if (repositoryCompare !== 0) {
-        return repositoryCompare;
-      }
-
-      return a.title.localeCompare(b.title);
-    });
+    // Most recently updated first. The Updated column's default sort says the
+    // same; this is the order the table falls back to when no column is sorted.
+    .sort((a, b) => updatedTime(b) - updatedTime(a));
 
   const columns = [
     {
@@ -362,6 +359,9 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
       dataIndex: 'updated_at',
       key: 'updated_at',
       width: 180,
+      sorter: (a: PageRecord, b: PageRecord) => updatedTime(a) - updatedTime(b),
+      defaultSortOrder: 'descend',
+      sortDirections: ['descend', 'ascend', 'descend'],
       render: (date: string) => new Date(date).toLocaleString(),
     },
     {

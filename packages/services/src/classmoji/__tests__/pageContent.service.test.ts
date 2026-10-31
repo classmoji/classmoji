@@ -117,6 +117,15 @@ vi.mock('../../media/uploadCapability.ts', () => ({
   assertRepoTarget: (...args: unknown[]) => assertRepoTargetMock(...args),
 }));
 
+// The page row's `updated_at` bump at the end of a main-branch save. Only the
+// default export is replaced; anything else the module tree reads from the
+// database package stays real.
+const pageUpdateManyMock = vi.fn(async (..._args: unknown[]) => ({ count: 1 }));
+vi.mock('@classmoji/database', async importOriginal => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  default: () => ({ page: { updateMany: (...args: unknown[]) => pageUpdateManyMock(...args) } }),
+}));
+
 const {
   loadPageContent,
   savePageContent,
@@ -650,6 +659,42 @@ describe('pageContent.savePageContent write-through', () => {
     await savePageContent(keyedPage, blocks, { branch: 'preview/pages/syllabus' });
 
     expect(recordContentAssetMock).not.toHaveBeenCalled();
+  });
+
+  it("moves the page's updated_at with its content, bound to its classroom", async () => {
+    // A live-edited page's content reaches git only through the checkpoint
+    // worker, which records through here; without the bump the staff list's
+    // "Updated" sort would track title and status changes, not edits.
+    await savePageContent({ ...keyedPage, id: 'page-1' }, blocks, { coverImage: null });
+
+    expect(pageUpdateManyMock).toHaveBeenCalledTimes(1);
+    expect(pageUpdateManyMock).toHaveBeenCalledWith({
+      where: { id: 'page-1', classroom_id: 'class-1' },
+      data: { updated_at: expect.any(Date) },
+    });
+  });
+
+  it('does not move updated_at for a preview-branch save', async () => {
+    getContentMock.mockResolvedValueOnce(null);
+
+    await savePageContent({ ...keyedPage, id: 'page-1' }, blocks, {
+      branch: 'preview/pages/syllabus',
+    });
+
+    expect(pageUpdateManyMock).not.toHaveBeenCalled();
+  });
+
+  it('still returns the save when the updated_at bump fails', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    pageUpdateManyMock.mockRejectedValueOnce(new Error('db down'));
+
+    const result = await savePageContent({ ...keyedPage, id: 'page-1' }, blocks, {
+      coverImage: null,
+    });
+
+    expect(result).toEqual({ sha: 'new-sha', commit: 'commit-1', coverImage: null });
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
   });
 
   it('still returns the save when the map write cannot be keyed', async () => {

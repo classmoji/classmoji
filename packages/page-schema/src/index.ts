@@ -58,6 +58,23 @@ export {
   writeClipboardText,
 } from './copyControl.ts';
 export {
+  COLLAPSED_LINES,
+  COLLAPSE_ABOVE_LINES,
+  COLLAPSE_ATTR,
+  CODE_EXPAND_CLASS,
+  CODE_FADE_CLASS,
+  COLLAPSE_TOGGLE_CLASS,
+  COLLAPSE_TOGGLE_LABEL,
+  SHOW_LESS_LABEL,
+  codeBlockText,
+  codeExpandBarHTML,
+  codeLineCount,
+  codePreId,
+  collapsesAt,
+  isCollapsible,
+  showAllLabel,
+} from './codeCollapse.ts';
+export {
   serializePageContent,
   parsePageContent,
   type PageContent,

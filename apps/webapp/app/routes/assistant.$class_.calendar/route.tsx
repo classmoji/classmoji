@@ -23,6 +23,7 @@ import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/h
 import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import { buildCalendarUrl, getCalendarDateRange } from '~/utils/calendar.server';
 import CourseCalendar from '~/components/features/calendar/CourseCalendar';
+import { useAskMojiViewing } from '~/components/features/ask-moji/viewing';
 import CalendarSubscriptionCard from '~/components/features/calendar/CalendarSubscriptionCard';
 import AddEventModal, { type AddEventDefaults } from '~/components/features/calendar/AddEventModal';
 import EditEventModal, {
@@ -352,6 +353,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 };
 
 const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
+  useAskMojiViewing({ kind: 'calendar' });
   const {
     events: initialEvents,
     userId,

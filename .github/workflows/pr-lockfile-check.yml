@@ -23,6 +23,7 @@ on:
       - 'package-lock.json'
       - 'apps/*/package.json'
       - 'packages/*/package.json'
+      - 'apps/ai-agent'
 
 jobs:
   check-lockfile:

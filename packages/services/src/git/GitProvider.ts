@@ -122,12 +122,17 @@ export class GitProvider {
    * List every path in a repository and the git object behind it.
    * `truncated` is the provider saying the listing was cut short — the entries
    * that did arrive are still valid.
+   *
+   * `opts.path` lists the folder at that path instead of the root (GitLab,
+   * whose listing has no read-by-tree-sha; entries keep their full paths).
+   * GitHub reads a subtree by passing its tree sha as `ref` instead.
    */
   async getTree(
     org: string,
     repo: string,
     ref: string,
-    recursive?: boolean
+    recursive?: boolean,
+    opts?: { path?: string }
   ): Promise<{
     sha: string;
     truncated: boolean;
@@ -248,6 +253,11 @@ export class GitProvider {
 
   async removeFromOrganization(org: string, username: string): Promise<void> {
     throw new Error('removeFromOrganization() must be implemented by subclass');
+  }
+
+  /** Github only: `active`, `pending` (an open invitation) or `none`. */
+  async orgMembershipState(org: string, username: string): Promise<'active' | 'pending' | 'none'> {
+    throw new Error('orgMembershipState() must be implemented by subclass');
   }
 
   // ─── Teams ─────────────────────────────────────────────────────────────────

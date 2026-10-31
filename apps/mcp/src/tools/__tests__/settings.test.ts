@@ -17,6 +17,7 @@ import type { ToolContext } from '../../mcp/registry.ts';
 
 const mocks = vi.hoisted(() => ({
   classroomUpdate: vi.fn(),
+  setLifecycle: vi.fn(),
   updateSettings: vi.fn(),
   classroomFindById: vi.fn(),
   pageFindById: vi.fn(),
@@ -42,7 +43,11 @@ class OrgRepoSettingsError extends Error {
 // same contract so the tool's wiring — call it, store what it returns, map its
 // refusal — is what gets tested here.
 class ClassroomSettingsValidationError extends Error {
-  code = 'TIMEZONE_INVALID';
+  code: string;
+  constructor(code: string, message: string) {
+    super(message);
+    this.code = code;
+  }
 }
 
 vi.mock('@classmoji/services', () => ({
@@ -52,11 +57,33 @@ vi.mock('@classmoji/services', () => ({
       normalizeTimeZoneSetting: (value: unknown) => {
         if (value === null) return null;
         if (value === 'america/new_york') return 'America/New_York';
-        throw new ClassroomSettingsValidationError(`'${String(value)}' is not a time zone`);
+        throw new ClassroomSettingsValidationError(
+          'TIMEZONE_INVALID',
+          `'${String(value)}' is not a time zone`
+        );
+      },
+      // The service's rule: trimmed, blank = cleared, at most 4,000 characters.
+      normalizeInstructionsSetting: (value: unknown) => {
+        if (value === null) return null;
+        if (typeof value !== 'string') {
+          throw new ClassroomSettingsValidationError('INSTRUCTIONS_INVALID', 'must be text');
+        }
+        const text = value.trim();
+        if (text === '') return null;
+        if (text.length > 4000) {
+          throw new ClassroomSettingsValidationError('INSTRUCTIONS_TOO_LONG', 'too long');
+        }
+        return text;
       },
       update: (...a: unknown[]) => mocks.classroomUpdate(...a),
       updateSettings: (...a: unknown[]) => mocks.updateSettings(...a),
       findById: (...a: unknown[]) => mocks.classroomFindById(...a),
+    },
+    classroomLifecycle: {
+      setLifecycle: (...a: unknown[]) => mocks.setLifecycle(...a),
+      isActiveClassroomLimitError: (error: unknown) =>
+        (error as { code?: unknown })?.code === 'PLAN_ACTIVE_CLASSROOM_LIMIT',
+      NO_PLAN_OWNER: 'NO_PLAN_OWNER',
     },
     page: { findById: (...a: unknown[]) => mocks.pageFindById(...a) },
     audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
@@ -96,6 +123,7 @@ beforeEach(() => {
   mocks.auditCreate.mockResolvedValue(undefined);
   mocks.updateSettings.mockResolvedValue({});
   mocks.classroomUpdate.mockResolvedValue({ status: 'ACTIVE', is_archived: false });
+  mocks.setLifecycle.mockResolvedValue({ status: 'ACTIVE', is_archived: false });
   mocks.getGitHubTokenForUser.mockResolvedValue({ token: 'ghu_owner', expiresAt: null });
   mocks.updateOrgRepoSettings.mockImplementation(
     async ({ input }: { input: Record<string, unknown> }) => ({
@@ -301,8 +329,22 @@ describe('classroom_settings_update', () => {
           resource_type: 'SETTINGS',
           action: 'UPDATE',
           data: { tool: 'classroom_settings_update', fields: ['final_grades_released'] },
-        })
+        }),
+        { dedupe: false }
       );
+    }
+  });
+
+  it('writes every call as its own row (no dedup), so on then off keeps both', async () => {
+    for (const enabled of [true, false]) {
+      await classroomSettingsUpdateTool.handler(
+        { classroom: 'org/w26', syllabus_bot_enabled: enabled },
+        CTX
+      );
+    }
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(2);
+    for (const call of mocks.auditCreate.mock.calls) {
+      expect(call[1]).toEqual({ dedupe: false });
     }
   });
 
@@ -381,16 +423,135 @@ describe('classroom_settings_update — timezone', () => {
   });
 });
 
+describe('classroom_settings_update — Ask Moji instructions', () => {
+  const SECRET = 'Never give full solutions; point to the lecture notes.';
+
+  it('stores the trimmed instructions through the explicit payload', async () => {
+    const result = await classroomSettingsUpdateTool.handler(
+      { classroom: 'org/w26', syllabus_bot_instructions: `  ${SECRET}  ` },
+      CTX
+    );
+    expect(mocks.updateSettings).toHaveBeenCalledWith('class-1', {
+      syllabus_bot_instructions: SECRET,
+    });
+    expect(parse(result).updated_fields).toEqual(['syllabus_bot_instructions']);
+  });
+
+  it('clears them with null or blank text', async () => {
+    await classroomSettingsUpdateTool.handler(
+      { classroom: 'org/w26', syllabus_bot_instructions: null },
+      CTX
+    );
+    await classroomSettingsUpdateTool.handler(
+      { classroom: 'org/w26', syllabus_bot_instructions: '   ' },
+      CTX
+    );
+    expect(mocks.updateSettings.mock.calls).toEqual([
+      ['class-1', { syllabus_bot_instructions: null }],
+      ['class-1', { syllabus_bot_instructions: null }],
+    ]);
+  });
+
+  it('refuses text over the limit as invalid_params with the service code, writing nothing', async () => {
+    const error = await classroomSettingsUpdateTool
+      .handler({ classroom: 'org/w26', syllabus_bot_instructions: 'x'.repeat(4001) }, CTX)
+      .catch((e: unknown) => e as { kind: string; code: string });
+    expect(error).toMatchObject({ kind: 'invalid_params', code: 'INSTRUCTIONS_TOO_LONG' });
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('accepts 4,000 characters padded with whitespace, storing them trimmed', async () => {
+    const text = 'x'.repeat(4000);
+    const padded = `\n  ${text}  \n`;
+    const schema = z.object(classroomSettingsUpdateTool.inputSchema);
+    expect(schema.safeParse({ classroom: 'o/s', syllabus_bot_instructions: padded }).success).toBe(
+      true
+    );
+    await classroomSettingsUpdateTool.handler(
+      { classroom: 'org/w26', syllabus_bot_instructions: padded },
+      CTX
+    );
+    expect(mocks.updateSettings).toHaveBeenCalledWith('class-1', {
+      syllabus_bot_instructions: text,
+    });
+  });
+
+  it('refuses non-text as invalid_params with the service code', async () => {
+    const error = await classroomSettingsUpdateTool
+      .handler({ classroom: 'org/w26', syllabus_bot_instructions: 5 as unknown as string }, CTX)
+      .catch((e: unknown) => e as { kind: string; code: string });
+    expect(error).toMatchObject({ kind: 'invalid_params', code: 'INSTRUCTIONS_INVALID' });
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('bounds the raw schema at 8,000 characters, nullable; the 4,000 cap is after trimming', () => {
+    const schema = z.object(classroomSettingsUpdateTool.inputSchema);
+    const base = { classroom: 'o/s' };
+    expect(schema.safeParse({ ...base, syllabus_bot_instructions: 'x'.repeat(4000) }).success).toBe(
+      true
+    );
+    // Over 4,000 raw passes the schema; the handler refuses it once trimmed (above).
+    expect(schema.safeParse({ ...base, syllabus_bot_instructions: 'x'.repeat(4001) }).success).toBe(
+      true
+    );
+    expect(schema.safeParse({ ...base, syllabus_bot_instructions: 'x'.repeat(8001) }).success).toBe(
+      false
+    );
+    expect(schema.safeParse({ ...base, syllabus_bot_instructions: null }).success).toBe(true);
+    expect(schema.safeParse({ ...base, syllabus_bot_instructions: 5 }).success).toBe(false);
+  });
+
+  it('audits the field name only, never the instructions text', async () => {
+    await classroomSettingsUpdateTool.handler(
+      { classroom: 'org/w26', syllabus_bot_instructions: SECRET, syllabus_bot_enabled: true },
+      CTX
+    );
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    const row = mocks.auditCreate.mock.calls[0][0] as { data: unknown };
+    expect(row.data).toEqual({
+      tool: 'classroom_settings_update',
+      fields: ['syllabus_bot_enabled', 'syllabus_bot_instructions'],
+    });
+    expect(JSON.stringify(mocks.auditCreate.mock.calls)).not.toContain('lecture notes');
+  });
+
+  it('is owner only, and still says model and effort are managed in the web app', () => {
+    expect(classroomSettingsUpdateTool.roles).toEqual(['OWNER']);
+    const description = classroomSettingsUpdateTool.description;
+    expect(description).toContain('syllabus_bot_instructions');
+    expect(description).toContain('managed in the web app');
+    expect(Object.keys(classroomSettingsUpdateTool.inputSchema)).not.toContain(
+      'syllabus_bot_model'
+    );
+    expect(Object.keys(classroomSettingsUpdateTool.inputSchema)).not.toContain(
+      'syllabus_bot_effort'
+    );
+  });
+});
+
+describe('every settings tool description', () => {
+  it('stays under 1,500 bytes', () => {
+    for (const tool of [
+      classroomSettingsUpdateTool,
+      classroomStatusUpdateTool,
+      orgRepoSettingsUpdateTool,
+    ]) {
+      expect(Buffer.byteLength(tool.description, 'utf8'), tool.name).toBeLessThan(1500);
+    }
+  });
+});
+
 describe('classroom_status_update', () => {
   it('requires status and/or is_archived', async () => {
     await expect(
       classroomStatusUpdateTool.handler({ classroom: 'org/w26' }, CTX)
     ).rejects.toMatchObject({ kind: 'invalid_params' });
-    expect(mocks.classroomUpdate).not.toHaveBeenCalled();
+    expect(mocks.setLifecycle).not.toHaveBeenCalled();
   });
 
-  it('updates both columns explicitly using the ctx classroom id', async () => {
-    mocks.classroomUpdate.mockResolvedValue({ status: 'LOCKED', is_archived: true });
+  it('changes both columns through the lifecycle service, on the ctx classroom, as the caller', async () => {
+    mocks.setLifecycle.mockResolvedValue({ status: 'LOCKED', is_archived: true });
 
     const payload = parse(
       await classroomStatusUpdateTool.handler(
@@ -399,22 +560,27 @@ describe('classroom_status_update', () => {
       )
     );
     expect(payload).toMatchObject({ status: 'LOCKED', is_archived: true });
-    expect(mocks.classroomUpdate).toHaveBeenCalledWith('class-1', {
+    // The service gates going ACTIVE and writes the audit row, so the web
+    // route and this tool cannot disagree.
+    expect(mocks.setLifecycle).toHaveBeenCalledWith({
+      classroomId: 'class-1',
       status: 'LOCKED',
-      is_archived: true,
+      isArchived: true,
+      actorUserId: CTX.viewer.userId,
+      tool: 'classroom_status_update',
     });
+    expect(mocks.classroomUpdate).not.toHaveBeenCalled();
   });
 
   it('sets only the column provided', async () => {
-    mocks.classroomUpdate.mockResolvedValue({ status: 'ACTIVE', is_archived: true });
     await classroomStatusUpdateTool.handler({ classroom: 'org/w26', is_archived: true }, CTX);
-    expect(mocks.classroomUpdate.mock.calls[0][1]).toEqual({ is_archived: true });
+    expect(mocks.setLifecycle.mock.calls[0][0]).toMatchObject({
+      status: undefined,
+      isArchived: true,
+    });
   });
 
-  it('never forwards extra argument keys to the classroom row', async () => {
-    // classroom.update takes an arbitrary ClassroomUpdateInput — slug (the key
-    // in every URL and two HMAC credentials) and git_org_id are exactly what
-    // the web route's PROFILE_FIELDS whitelist exists to keep unwritable.
+  it('never forwards extra argument keys', async () => {
     await classroomStatusUpdateTool.handler(
       {
         classroom: 'org/w26',
@@ -425,10 +591,14 @@ describe('classroom_status_update', () => {
       CTX
     );
 
-    const updates = mocks.classroomUpdate.mock.calls[0][1] as Record<string, unknown>;
-    expect(updates).toEqual({ status: 'LOCKED' });
-    expect(updates).not.toHaveProperty('slug');
-    expect(updates).not.toHaveProperty('git_org_id');
+    const args = mocks.setLifecycle.mock.calls[0][0] as Record<string, unknown>;
+    expect(Object.keys(args).sort()).toEqual([
+      'actorUserId',
+      'classroomId',
+      'isArchived',
+      'status',
+      'tool',
+    ]);
   });
 
   it('accepts only the three lifecycle statuses and is marked idempotent', () => {
@@ -441,14 +611,15 @@ describe('classroom_status_update', () => {
     expect(classroomStatusUpdateTool.annotations?.idempotent).toBe(true);
   });
 
-  it('audits against CLASSROOM with the ctx classroom id', async () => {
-    await classroomStatusUpdateTool.handler({ classroom: 'org/w26', status: 'ACTIVE' }, CTX);
-    const audit = mocks.auditCreate.mock.calls[0][0] as {
-      resource_type: string;
-      classroom_id: string;
-    };
-    expect(audit.resource_type).toBe('CLASSROOM');
-    expect(audit.classroom_id).toBe('class-1');
+  it("answers forbidden, with the service's sentence, when the Free plan's active class is taken", async () => {
+    const sentence = 'The Free plan includes one active class at a time.';
+    mocks.setLifecycle.mockRejectedValue(
+      Object.assign(new Error(sentence), { code: 'PLAN_ACTIVE_CLASSROOM_LIMIT' })
+    );
+
+    await expect(
+      classroomStatusUpdateTool.handler({ classroom: 'org/w26', status: 'ACTIVE' }, CTX)
+    ).rejects.toMatchObject({ kind: 'forbidden', message: sentence });
   });
 });
 

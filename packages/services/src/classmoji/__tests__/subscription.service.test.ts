@@ -39,6 +39,7 @@ const classroomWithOwners = (
   ...owners: Array<{ tier: 'FREE' | 'PRO'; ends_at?: Date | null } | null>
 ) => ({
   memberships: owners.map((subscription, index) => ({
+    user_id: `owner-${index}`,
     user: {
       subscriptions: subscription
         ? [{ id: `sub-${index}`, tier: subscription.tier, ends_at: subscription.ends_at ?? null }]
@@ -168,6 +169,37 @@ describe('getProStateForClassroomId', () => {
       expect(state.isPro).toBe(false);
       expect(state.subscription?.id).toBe('sub-0');
     });
+
+    it("falls back to the classroom's PLAN OWNER, not the oldest, when one is set", async () => {
+      classroomFindUnique.mockResolvedValue({
+        ...classroomWithOwners({ tier: 'PRO', ends_at: past() }, { tier: 'FREE' }),
+        plan_owner_id: 'owner-1',
+      });
+      const state = await getProStateForClassroomId('class-1');
+      expect(state).toMatchObject({ tier: 'FREE', isPro: false });
+      expect(state.subscription?.id).toBe('sub-1');
+    });
+
+    it('ignores a plan owner who is no longer an accepted owner', async () => {
+      // Their account was removed by a path that did not hand the class on:
+      // the oldest accepted owner stands in.
+      classroomFindUnique.mockResolvedValue({
+        ...classroomWithOwners({ tier: 'FREE' }, { tier: 'FREE' }),
+        plan_owner_id: 'gone-user',
+      });
+      const state = await getProStateForClassroomId('class-1');
+      expect(state.subscription?.id).toBe('sub-0');
+    });
+
+    it('still makes the classroom Pro through a co-owner, whoever the plan owner is', async () => {
+      classroomFindUnique.mockResolvedValue({
+        ...classroomWithOwners({ tier: 'FREE' }, { tier: 'PRO' }),
+        plan_owner_id: 'owner-0',
+      });
+      await expect(getProStateForClassroomId('class-1')).resolves.toMatchObject({
+        isPro: true,
+      });
+    });
   });
 
   it('asks only for ACCEPTED owners, ordered oldest first', async () => {
@@ -183,14 +215,14 @@ describe('getProStateForClassroomId', () => {
         select: {
           memberships: {
             where: { role: string; has_accepted_invite: boolean };
-            orderBy: { created_at: string };
+            orderBy: unknown;
           };
         };
       },
     ];
     expect(args.where).toEqual({ id: 'class-1' });
     expect(args.select.memberships.where).toEqual({ role: 'OWNER', has_accepted_invite: true });
-    expect(args.select.memberships.orderBy).toEqual({ created_at: 'asc' });
+    expect(args.select.memberships.orderBy).toEqual([{ created_at: 'asc' }, { id: 'asc' }]);
   });
 });
 

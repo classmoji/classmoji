@@ -60,6 +60,8 @@ export const DOCS_INDEX_QUEUE = { name: 'docs-index', concurrencyLimit: 1 } as c
 
 export const docsIndexReconcileTask = schedules.task({
   id: 'docs-index-reconcile',
+  // Runs again on its schedule, and that next run is the retry.
+  retry: { maxAttempts: 1 },
   cron: RECONCILE_CRON,
   queue: DOCS_INDEX_QUEUE,
   run: async () => {
@@ -155,6 +157,8 @@ export const parseDocsBackfillPayload = (input: unknown): DocsIndexBackfillPaylo
  */
 export const docsIndexBackfillTask = schemaTask({
   id: 'docs-index-backfill',
+  // Run by hand from the dashboard; whoever runs it re-runs it.
+  retry: { maxAttempts: 1 },
   schema: parseDocsBackfillPayload,
   queue: DOCS_INDEX_QUEUE,
   run: async (payload: DocsIndexBackfillPayload) => {

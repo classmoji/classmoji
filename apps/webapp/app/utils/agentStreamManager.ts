@@ -4,7 +4,6 @@
  *
  * Supports:
  * - Quiz exploration steps and responses
- * - Prompt assistant responses and suggestions
  * - Syllabus bot messages and content references
  *
  * Features:
@@ -135,7 +134,6 @@ class AgentStreamManager extends EventEmitter {
       'message',
       'ready',
       'quiz_ready',
-      'message_ready',
       'assistant_response',
       'content_reference',
     ];
@@ -173,14 +171,7 @@ class AgentStreamManager extends EventEmitter {
   }
 
   /**
-   * Publish message ready event (agent response)
-   */
-  publishMessageReady(sessionId: string, data: Record<string, unknown>) {
-    this.publishEvent(sessionId, { type: 'message_ready', data });
-  }
-
-  /**
-   * Publish assistant response (for prompt assistant)
+   * Publish assistant response (for syllabus bot)
    */
   publishAssistantResponse(sessionId: string, data: Record<string, unknown>) {
     this.publishEvent(sessionId, { type: 'assistant_response', data });

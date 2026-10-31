@@ -1,7 +1,7 @@
 /**
- * assignment_update — deadline / weight / grades_released / grader_deadline /
- * release_at / closes_at / tokens_per_hour / module_id (the move to another
- * module).
+ * assignment_update — title / is_published / deadline / weight / grades_released /
+ * grader_deadline / release_at / closes_at / tokens_per_hour / module_id (the
+ * move to another module).
  *
  * Route-derived per-field tiers (plan §4.2, verified in the tree):
  *   - general edits (weight, …):   OWNER only, but see QUIZ below
@@ -33,6 +33,14 @@
  *                                  refused there for every role.
  *   - grades_released on a QUIZ:   refused for every role: a quiz's score shows
  *                                  as soon as an attempt completes.
+ *   - title, is_published:         OWNER only (the assignment edit form,
+ *                                  admin.$class.assignments `update`), except
+ *                                  is_published on a QUIZ row, which a teacher
+ *                                  flips with the rest of a quiz's schedule
+ *                                  (TEACHER_ASSIGNMENT_FIELDS). Neither opens
+ *                                  issues in student repositories: that is Sync
+ *                                  (and the nightly release), as it is on the
+ *                                  web.
  *   - module_id (move):            OWNER only on REPO and FORM rows
  *                                  (admin.$class.modules `moveAssignment` →
  *                                  requireClassroomAdmin →
@@ -104,6 +112,8 @@ function isUniqueTitleViolation(error: unknown): boolean {
 interface AssignmentUpdateArgs {
   classroom: string;
   assignment_id: string;
+  title?: string;
+  is_published?: boolean;
   student_deadline?: string;
   weight?: number;
   grades_released?: boolean;
@@ -139,28 +149,40 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
   annotations: { destructive: false },
   title: 'Update an assignment',
   description:
-    'Updates an assignment (a due-dated, gradeable unit of a module): student_deadline, ' +
-    'weight, grades_released, grader_deadline, release_at, closes_at, tokens_per_hour and/or ' +
-    'module_id. Owners can update all fields; teachers only grades_released and ' +
-    'student_deadline, and on a quiz assignment student_deadline, weight, release_at, ' +
-    'closes_at and tokens_per_hour. Releasing grades notifies graded students; moving the ' +
+    'Updates an assignment (a due-dated, gradeable unit of a module): title, is_published, ' +
+    'student_deadline, weight, grades_released, grader_deadline, release_at, closes_at, ' +
+    'tokens_per_hour and/or module_id. Owners can update all fields; teachers only ' +
+    'grades_released and student_deadline, and on a quiz assignment student_deadline, weight, ' +
+    'release_at, closes_at, tokens_per_hour and is_published. title is unique per repository. ' +
+    'is_published shows the assignment to students once its repository is published too; it ' +
+    'opens no issues (Sync does). Releasing grades notifies graded students; moving the ' +
     'student deadline notifies affected students. release_at is when an unpublished repo ' +
-    'assignment auto-releases (checked nightly); on a quiz it is when a published quiz opens. ' +
-    'closes_at (quiz only) stops new attempts. A quiz shows its score at once, so ' +
-    'grades_released is refused on one. Pass null to clear grader_deadline, release_at or ' +
-    'closes_at.\n' +
-    'module_id MOVES the assignment into another module of the classroom (see list_modules), ' +
-    'at the end of that module’s assignments (module_reorder sets the order). This is how a lab or form assignment is ' +
-    'placed in a week: an assignment belongs to exactly one module. A quiz moves with ' +
-    'quiz_update module_id instead. Only the module changes: ' +
-    'weight, deadlines, grades and submissions travel with it and nobody is notified. The ' +
-    'student module list shows it under the new module, so a move into an unpublished module ' +
-    'takes it off that list until the module is published.',
+    'assignment auto-releases (checked nightly); on a quiz, when a published quiz opens. ' +
+    'closes_at (quiz only) stops new attempts. grades_released is refused on a quiz (its ' +
+    'score shows at once). Pass null to clear grader_deadline, release_at or closes_at.\n' +
+    'module_id MOVES the assignment to the end of another module (see list_modules; ' +
+    'module_reorder sets the order): an assignment belongs to exactly one module. A quiz ' +
+    'moves with quiz_update module_id. Only the module changes; weight, deadlines, grades and ' +
+    'submissions travel with it and nobody is notified. Moving into an unpublished module ' +
+    'hides it from students until that module is published.',
   scope: 'write',
   roles: OWNER_TEACHER,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     assignment_id: z.string().uuid().describe('Assignment id'),
+    title: z
+      .string()
+      .trim()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe('New title (unique per repository). Owner only'),
+    is_published: z
+      .boolean()
+      .optional()
+      .describe(
+        'Publish (true) or unpublish (false) the assignment. Owner only, or a teacher on a quiz'
+      ),
     student_deadline: z
       .string()
       .datetime({ offset: true })
@@ -226,6 +248,10 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
       updates[field] = date;
       values[field] = date?.toISOString() ?? null;
     };
+    if (args.title !== undefined) updates.title = values.title = args.title;
+    if (args.is_published !== undefined) {
+      updates.is_published = values.is_published = args.is_published;
+    }
     if (args.student_deadline !== undefined) setDate('student_deadline', args.student_deadline);
     if (args.weight !== undefined) updates.weight = values.weight = args.weight;
     if (args.grades_released !== undefined) {
@@ -248,8 +274,8 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
     if (requested.length === 0) {
       throw new ToolError(
         'invalid_params',
-        'Provide at least one of: student_deadline, weight, grades_released, grader_deadline, ' +
-          'release_at, closes_at, tokens_per_hour, module_id'
+        'Provide at least one of: title, is_published, student_deadline, weight, ' +
+          'grades_released, grader_deadline, release_at, closes_at, tokens_per_hour, module_id'
       );
     }
 
@@ -350,6 +376,7 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
       typeof assignment,
       | 'id'
       | 'title'
+      | 'is_published'
       | 'student_deadline'
       | 'weight'
       | 'grades_released'
@@ -359,7 +386,17 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
       | 'tokens_per_hour'
     > = assignment;
     if (fields.length > 0) {
-      updated = await ClassmojiService.assignment.update(assignment.id, updates);
+      try {
+        updated = await ClassmojiService.assignment.update(assignment.id, updates);
+      } catch (error) {
+        if (args.title !== undefined && isUniqueTitleViolation(error)) {
+          throw new ToolError(
+            'invalid_params',
+            'An assignment with this title already exists in this repository.'
+          );
+        }
+        throw error;
+      }
       await writeAudit(ctx, {
         resource_type: 'ASSIGNMENT',
         resource_id: assignment.id,
@@ -375,6 +412,7 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
       assignment: {
         id: updated.id,
         title: updated.title,
+        is_published: updated.is_published,
         module_id: module.id,
         module_title: module.title,
         student_deadline: updated.student_deadline?.toISOString() ?? null,

@@ -149,7 +149,7 @@ const staffErrorMessage = (error: unknown, fallback: string, isGitLab = false): 
     case 'login_conflict':
       return 'That username belongs to a different account than the one already on file for it — contact support.';
     case 'last_owner':
-      return 'This is the only owner of the classroom. Add another owner before removing this one.';
+      return 'This is the only owner who has accepted. Another owner has to accept their invite before this one can be removed.';
     case 'grader_flag_invalid':
       return 'The grader flag applies to assistants and teachers only — owners do not join the grading pool.';
     case 'invalid_role':
@@ -173,7 +173,7 @@ const staffErrorMessage = (error: unknown, fallback: string, isGitLab = false): 
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const { classroom, membership } = await requireClassroomAdmin(request, classSlug, {
+  const { userId, classroom, membership } = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'TEACHING_STAFF',
     action: 'manage_staff',
   });
@@ -346,6 +346,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           login,
           role,
           ungradedSubmissions,
+          actorUserId: userId,
         });
 
         finalStatus = (await waitForRunCompletion(started.runId))?.status as string | undefined;

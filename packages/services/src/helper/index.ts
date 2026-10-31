@@ -825,12 +825,15 @@ class HelperService {
     role,
     ungradedSubmissions,
     requireChoice = false,
+    actorUserId = null,
   }: {
     classroomId: string;
     login: string;
     role: StaffRole;
     ungradedSubmissions?: UngradedChoice | null;
     requireChoice?: boolean;
+    /** The owner asking for the removal, for the audit of any plan-owner hand-off. */
+    actorUserId?: string | null;
   }): Promise<StaffRemovalStart> {
     const preview = await ClassmojiService.staff.previewRemoval({ classroomId, login, role });
 
@@ -842,7 +845,12 @@ class HelperService {
       );
     }
 
-    const removal = await ClassmojiService.staff.removeStaff({ classroomId, login, role });
+    const removal = await ClassmojiService.staff.removeStaff({
+      classroomId,
+      login,
+      role,
+      actorUserId,
+    });
 
     return {
       ...removal,

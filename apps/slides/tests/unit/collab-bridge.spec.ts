@@ -40,7 +40,10 @@ import {
   DeckBridge,
   type BridgeSession,
   type BridgeUiState,
+  type DeckBridgeOptions,
 } from '../../app/utils/collab/DeckBridge.ts';
+import { editorSlidesFragment } from '../../app/utils/slideMarkup.ts';
+import type { EditorFrames } from '../../app/utils/editorFrames.ts';
 
 // ─── jsdom globals the bridge uses ───────────────────────────────────────────
 
@@ -123,7 +126,7 @@ const MEDIA_URL =
 let fakeNow: number | null = null;
 const clock = () => fakeNow ?? Date.now();
 
-function setup(deck: DeckJson = DECK) {
+function setup(deck: DeckJson = DECK, extra: Partial<DeckBridgeOptions> = {}) {
   fakeNow = null;
   const remote = deckToYDoc(deck);
   installLockArbiter(remote);
@@ -146,6 +149,7 @@ function setup(deck: DeckJson = DECK) {
     notify: message => notices.push(message),
     onState: state => states.push(state),
     clock,
+    ...extra,
   });
 
   // What RevealSlides does with the initial document in edit mode.
@@ -159,7 +163,12 @@ function setup(deck: DeckJson = DECK) {
   revealEl.setAttribute('data-code-theme', 'github');
   const slidesEl = document.createElement('div');
   slidesEl.className = 'slides';
-  slidesEl.innerHTML = (parsed.querySelector('.slides') as Element).innerHTML;
+  slidesEl.replaceChildren(
+    editorSlidesFragment((parsed.querySelector('.slides') as Element).innerHTML, document, {
+      frames: extra.frames ?? null,
+      contentOrigin: extra.contentOrigin ?? null,
+    })
+  );
   revealEl.appendChild(slidesEl);
   document.body.innerHTML = '';
   document.body.appendChild(revealEl);
@@ -1348,6 +1357,96 @@ test.describe('live deck bridge', () => {
     await tick();
     t.session.ack();
     expect(getLock(t.remote, 'aaaa0003')).toBeNull();
+    t.bridge.destroy();
+  });
+});
+
+test.describe('live deck bridge: frames of the repo', () => {
+  // A uuid, as slide ids are (the editor frame URL's first segment must be one).
+  const SLIDE_ID = 'dec00001-0000-4000-8000-000000000001';
+  const FRAMES: EditorFrames = {
+    slideId: SLIDE_ID,
+    deckFolder: 'slides/week-1',
+    classroomId: 'class-1',
+    repoLogin: 'org',
+    repo: 'content',
+    ourHosts: ['slides.test'],
+    contentOrigin: 'https://content.test',
+  };
+  const EDITOR = `/${SLIDE_ID}/frame`;
+  const REV = 'a'.repeat(40);
+  const REV2 = 'b'.repeat(40);
+  const blockHtml = (rev: string) =>
+    '<div class="sl-block" data-block-type="html" data-cm-block-id="b1" style="left: 0px;">' +
+    '<div class="sl-block-content"><iframe sandbox="allow-scripts allow-forms" allow="fullscreen" ' +
+    `data-cm-src="blocks/ab12cd34.html" data-cm-rev="${rev}"></iframe></div></div>`;
+  const GAME = '<iframe data-src="games/snake/index.html"></iframe>';
+  const FRAME_DECK: DeckJson = {
+    version: 1,
+    theme: 'white',
+    codeTheme: 'github',
+    slides: [
+      { id: 'ffff0001', html: `<h2>Game</h2>${GAME}${blockHtml(REV)}` },
+      {
+        id: 'ffff0002',
+        html: '<p>bg</p>',
+        attrs: { 'data-background-iframe': '../../games/bg/index.html' },
+      },
+    ],
+  };
+
+  test('shown through the editor route; written back as stored references', () => {
+    const t = setup(FRAME_DECK, { frames: FRAMES });
+    const one = t.section('ffff0001');
+    const [game, block] = Array.from(one.querySelectorAll('iframe'));
+    expect(game.getAttribute('data-src')).toBe(`${EDITOR}/slides/week-1/games/snake/index.html`);
+    expect(block.getAttribute('src')).toBe(
+      `${EDITOR}/slides/week-1/blocks/ab12cd34.html?cm-rev=${REV}`
+    );
+    expect(t.section('ffff0002').getAttribute('data-background-iframe')).toBe(
+      `${EDITOR}/games/bg/index.html`
+    );
+
+    // Reveal loads the slide: not an edit.
+    game.setAttribute('src', game.getAttribute('data-src') as string);
+    game.setAttribute('data-lazy-loaded', '');
+    game.removeAttribute('data-src');
+    t.bridge.flushLocal();
+    expect(t.session.pending).toBe(0);
+
+    // A real edit writes the stored references, never the editor's URLs.
+    one.insertAdjacentHTML('beforeend', '<p>more</p>');
+    t.bridge.flushLocal();
+    t.session.ack();
+    t.session.ack();
+    const written = t.remoteHtml('ffff0001') as string;
+    expect(written).toContain('<p>more</p>');
+    expect(written).toContain('data-src="games/snake/index.html"');
+    expect(written).toContain(`data-cm-src="blocks/ab12cd34.html" data-cm-rev="${REV}"`);
+    expect(written).not.toContain('/frame/');
+    expect(written).not.toMatch(/\ssrc=/);
+    t.bridge.destroy();
+  });
+
+  test('a new revision from elsewhere (another editor, the MCP) reloads the block', async () => {
+    const t = setup(FRAME_DECK, { frames: FRAMES });
+    const map = deckSlides(t.remote).get('ffff0001') as Y.Map<unknown>;
+    t.remote.transact(() => map.set('html', `<h2>Game</h2>${GAME}${blockHtml(REV2)}`));
+    t.bridge.render();
+    const frame = t.section('ffff0001').querySelector('.sl-block iframe') as HTMLIFrameElement;
+    expect(frame.getAttribute('src')).toBe(
+      `${EDITOR}/slides/week-1/blocks/ab12cd34.html?cm-rev=${REV2}`
+    );
+    // A background frame set elsewhere is shown the same way.
+    const two = deckSlides(t.remote).get('ffff0002') as Y.Map<unknown>;
+    t.remote.transact(() =>
+      (two.get('attrs') as Y.Map<unknown>).set('data-background-iframe', 'games/other.html')
+    );
+    t.bridge.render();
+    expect(t.section('ffff0002').getAttribute('data-background-iframe')).toBe(
+      `${EDITOR}/slides/week-1/games/other.html`
+    );
+    expect(t.session.pending).toBe(0);
     t.bridge.destroy();
   });
 });

@@ -6,7 +6,7 @@ import { waitForDataLoad } from '../helpers/wait.helpers';
  *
  * Covers /assistant/$class/dashboard: heading, stat cards (Class assignments /
  * My assigned / My ungraded), the two GradingTabsCard <button> tabs, and the
- * ASSISTANT nav (Dashboard, Calendar, Repositories, Resubmits; no Students /
+ * ASSISTANT nav (Dashboard, Calendar, Repositories, Regrade/Resubmit; no Students /
  * Class Settings). Authenticates as fake-ta (ASSISTANT only, non-owner).
  */
 
@@ -60,7 +60,7 @@ test.describe('Assistant Navigation', () => {
     await expect(page.getByRole('link', { name: 'Dashboard' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Calendar' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Repositories' })).toBeVisible();
-    await expect(page.getByRole('link', { name: 'Resubmits' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Regrade/Resubmit' })).toBeVisible();
 
     // Owner-only links must not be visible to an assistant.
     await expect(page.getByRole('link', { name: 'Students' })).not.toBeVisible();
@@ -75,7 +75,7 @@ test.describe('Assistant Navigation', () => {
   });
 
   test('can navigate to regrade requests', async ({ authenticatedPage: page, testOrg }) => {
-    await page.getByRole('link', { name: 'Resubmits' }).click();
+    await page.getByRole('link', { name: 'Regrade/Resubmit' }).click();
     await page.waitForURL(`**/assistant/${testOrg}/regrade-requests`);
     await waitForDataLoad(page);
     await expect(page).toHaveURL(new RegExp(`/assistant/${testOrg}/regrade-requests`));

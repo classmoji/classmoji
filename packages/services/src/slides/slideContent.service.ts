@@ -20,6 +20,8 @@ import type { DeckJson } from './deckTypes.ts';
 import { stripDeckRuntimeAttrs } from './deckRuntimeAttrs.ts';
 import { assertDeckSlide } from './slideSource.ts';
 import { canonicalizeDeckAssets } from './deckAssets.ts';
+import { canonicalizeDeckFrames } from './deckFrames.ts';
+import { appFrameHosts } from './frameRefs.ts';
 import { recordContentAssets, resolveContentBranch } from '../classmoji/contentAssets.service.ts';
 import { enqueueDeckThumbnail } from '../classmoji/deckThumbnail.service.ts';
 import {
@@ -27,6 +29,7 @@ import {
   isOwnAssetRef,
   parseMediaUrl,
   parseMissingUrl,
+  parseOwnFilesUrl,
   stripSignedMediaUrls,
   warmContentText,
   type ResolveContext,
@@ -326,6 +329,20 @@ export async function canonicalizeDeckForSave(
   slide: SlideContentTarget,
   deck: DeckJson
 ): Promise<DeckJson> {
+  // Frames first, and outside every fallback below: no database, so nothing
+  // here can fail for want of one. A files URL of this classroom or this
+  // deck's editor frame URL becomes the deck-relative reference it was made
+  // from; display-only attributes never reach a commit.
+  const classroomId = slide.classroom?.id;
+  deck = canonicalizeDeckFrames(deck, {
+    deckFolder: slide.content_path,
+    slideId: slide.id ?? null,
+    filesRef: url => (classroomId ? parseOwnFilesUrl(classroomId, url) : null),
+    // The configured app origins (the slides app's among them); services has
+    // no session-cookie domain to add.
+    ourHosts: appFrameHosts(process.env),
+  });
+
   const ctx = deckResolveContext(slide);
   if (!ctx) return deck;
 

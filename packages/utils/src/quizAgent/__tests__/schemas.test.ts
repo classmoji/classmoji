@@ -14,11 +14,11 @@ import {
   QuestionCardSchema,
   QUIZ_TOOL_ORDER,
   QuizEvaluationFeedbackSchema,
+  QuizEvaluationRecordStudentSchema,
   QuizEvaluationRecordV2Schema,
   QuizQuestionSchema,
   RecordQuestionResultSchema,
   StoredQuestionResultSchema,
-  TOOL_DESCRIPTIONS,
   quizToolDefs,
   quizStaffVisibility,
   quizVisibility,
@@ -157,17 +157,9 @@ describe('OfferNextStepSchema', () => {
     expect(json.properties.feedback.description).not.toMatch(/where to look|look instead/);
   });
 
-  it('says a recorded result is final, and never mentions revising one', async () => {
-    expect(TOOL_DESCRIPTIONS.record_question_result).toContain('A recorded result is final.');
-    expect(JSON.stringify(TOOL_DESCRIPTIONS)).not.toMatch(/revis/i);
+  it('never mentions revising a recorded result in the input schema', async () => {
     const input = await asSchema(RecordQuestionResultSchema as FlexibleSchema<unknown>).jsonSchema;
     expect(JSON.stringify(input)).not.toMatch(/revis/i);
-  });
-
-  it('says in offer_next_step that feedback gives no direction toward the answer', () => {
-    expect(TOOL_DESCRIPTIONS.offer_next_step).toContain(
-      'The feedback says what is right, what is wrong and why; with Try again offered it gives no direction toward the answer, since guidance comes only as a hint after a Try again click.'
-    );
   });
 
   it('keeps stored parts without feedback or an expected answer valid, for the UI types and old rows', () => {
@@ -186,7 +178,17 @@ describe('OfferNextStepSchema', () => {
       quizVisibility.hiddenInputKeys.present_question
     );
     expect(quizStaffVisibility.tools).toEqual(quizVisibility.tools);
-    expect(quizStaffVisibility.dataParts).toBe(quizVisibility.dataParts);
+    // The same data parts, but the student's evaluation record carries no
+    // grade number (E1); staff keep the full one.
+    const { evaluation: studentEvaluation, ...studentRest } = quizVisibility.dataParts;
+    const { evaluation: staffEvaluation, ...staffRest } = quizStaffVisibility.dataParts;
+    expect(studentRest).toEqual(staffRest);
+    expect(studentEvaluation).toBe(QuizEvaluationRecordStudentSchema);
+    expect(staffEvaluation).toBe(QuizEvaluationRecordV2Schema);
+    expect(quizVisibility.outputSchemas.submit_quiz_evaluation).toBe(
+      QuizEvaluationRecordStudentSchema
+    );
+    expect(quizStaffVisibility).not.toHaveProperty('outputSchemas');
   });
 });
 
@@ -525,21 +527,9 @@ describe('quizToolDefs', () => {
     for (const def of Object.values(quizToolDefs)) {
       expect(def).not.toHaveProperty('execute');
       expect(def.outputSchema).toBeDefined();
-      expect(typeof def.description).toBe('string');
+      // The model never reads these: the task builds its own tools.
+      expect(def.description).toBeUndefined();
     }
-  });
-
-  it('takes each description from TOOL_DESCRIPTIONS, which has one per tool', () => {
-    expect(Object.keys(TOOL_DESCRIPTIONS)).toEqual([...QUIZ_TOOL_ORDER]);
-    for (const name of QUIZ_TOOL_ORDER) {
-      expect(quizToolDefs[name].description).toBe(TOOL_DESCRIPTIONS[name]);
-    }
-  });
-
-  it('names the exact button texts in offer_next_step', () => {
-    expect(TOOL_DESCRIPTIONS.offer_next_step).toContain(
-      `"${BUTTON_TEXT.try_again}" or "${BUTTON_TEXT.next}"`
-    );
   });
 
   it('every tool has a visibility entry', () => {

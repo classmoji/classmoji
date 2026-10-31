@@ -325,6 +325,110 @@ describe('audit.create dedup: the targeted page block joins the key', () => {
   });
 });
 
+describe('audit.create dedup key: client_id', () => {
+  const readRow = (clientId: string | number) => ({
+    ...baseEntry,
+    resource_type: 'ROSTER',
+    resource_id: 'class-1',
+    action: 'VIEW' as const,
+    data: { tool: 'get_roster', client_id: clientId },
+  });
+
+  it('includes data.client_id in the dedup lookup when the payload names a client', async () => {
+    await audit.create(readRow('ask-moji'));
+    const where = (findFirstMock.mock.calls[0][0] as WhereArg).where;
+    expect(where).toMatchObject({
+      data: { path: ['tool'], equals: 'get_roster' },
+      AND: [{ data: { path: ['client_id'], equals: 'ask-moji' } }],
+    });
+  });
+
+  it('the same read through two clients within the window is two rows', async () => {
+    // Emulate the database: a recent row exists for the assistant client only.
+    findFirstMock.mockImplementation(async ({ where }: WhereArg) => {
+      const filters = (where.AND ?? []) as Array<{ data: { path: string[]; equals: unknown } }>;
+      const client = filters.find(f => f.data.path[0] === 'client_id');
+      return client?.data.equals === 'ask-moji' ? { id: 'recent' } : null;
+    });
+    expect(await audit.create(readRow('ask-moji'))).toBeNull(); // same client: deduped
+    expect(await audit.create(readRow('personal-client'))).not.toBeNull(); // other client
+    expect(createMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('a non-string client_id does not join the key', async () => {
+    await audit.create(readRow(7));
+    expect((findFirstMock.mock.calls[0][0] as WhereArg).where).not.toHaveProperty('AND');
+  });
+});
+
+describe('audit.create dedup: impersonated_by', () => {
+  const row = (impersonatedBy?: string) => ({
+    ...baseEntry,
+    resource_type: 'ROSTER',
+    resource_id: 'class-1',
+    action: 'VIEW' as const,
+    data: { tool: 'get_roster', ...(impersonatedBy ? { impersonated_by: impersonatedBy } : {}) },
+  });
+
+  it('a direct read never folds into a recent impersonated one', async () => {
+    findFirstMock.mockResolvedValue({
+      id: 'recent',
+      data: { tool: 'get_roster', impersonated_by: 'admin-1' },
+    });
+    expect(await audit.create(row())).not.toBeNull();
+  });
+
+  it('an impersonated read never folds into a recent direct one', async () => {
+    findFirstMock.mockResolvedValue({ id: 'recent', data: { tool: 'get_roster' } });
+    expect(await audit.create(row('admin-1'))).not.toBeNull();
+  });
+
+  it('the same impersonator within the window still dedups', async () => {
+    findFirstMock.mockResolvedValue({
+      id: 'recent',
+      data: { tool: 'get_roster', impersonated_by: 'admin-1' },
+    });
+    expect(await audit.create(row('admin-1'))).toBeNull();
+  });
+});
+
+describe.each([
+  ['rating', 'DOWN', 'UP'],
+  ['filter_key', 'feedback:f1', 'feedback:f2'],
+] as const)('audit.create dedup key: %s', (key, one, other) => {
+  const readRow = (value: string | number) => ({
+    ...baseEntry,
+    resource_type: 'ASK_MOJI_FEEDBACK',
+    resource_id: 'class-1',
+    action: 'VIEW' as const,
+    data: { tool: 'web:ask_moji.feedback_review', [key]: value } as Record<string, string | number>,
+  });
+
+  it(`includes data.${key} in the dedup lookup when it is a string`, async () => {
+    await audit.create(readRow(one));
+    expect((findFirstMock.mock.calls[0][0] as WhereArg).where).toMatchObject({
+      data: { path: ['tool'], equals: 'web:ask_moji.feedback_review' },
+      AND: [{ data: { path: [key], equals: one } }],
+    });
+  });
+
+  it('two rows differing only in it are two records; the same value twice dedups', async () => {
+    findFirstMock.mockImplementation(async ({ where }: WhereArg) => {
+      const filters = (where.AND ?? []) as Array<{ data: { path: string[]; equals: unknown } }>;
+      const match = filters.find(f => f.data.path[0] === key);
+      return match?.data.equals === one ? { id: 'recent' } : null;
+    });
+    expect(await audit.create(readRow(one))).toBeNull();
+    expect(await audit.create(readRow(other))).not.toBeNull();
+    expect(createMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('a non-string value does not join the key', async () => {
+    await audit.create(readRow(3));
+    expect((findFirstMock.mock.calls[0][0] as WhereArg).where).not.toHaveProperty('AND');
+  });
+});
+
 describe('audit.service live-editing actions', () => {
   it.each(['COLLAB_JOIN', 'COLLAB_LEAVE', 'COLLAB_CHECKPOINT'] as const)(
     'records %s (not skipped as an unknown action)',

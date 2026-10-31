@@ -23,6 +23,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const loads = vi.hoisted(() => ({ s3: 0, copier: 0 }));
 const order = vi.hoisted(() => [] as string[]);
 
+// Plan limits have their own tests (planLimits.test.ts); here every classroom has room.
+vi.mock('../planLimits.ts', () => ({
+  assertCanCreateContent: vi.fn(async () => {}),
+  contentAllowance: vi.fn(async () => ({ limit: null, used: 0, remaining: null })),
+  contentLimitMessage: () => '',
+}));
+
 vi.mock('@aws-sdk/client-s3', () => {
   loads.s3 += 1;
   return {};

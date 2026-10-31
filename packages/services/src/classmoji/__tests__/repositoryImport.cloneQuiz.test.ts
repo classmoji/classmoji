@@ -24,6 +24,7 @@ const SOURCE = {
   include_code_context: true,
   course_search_enabled: true,
   excluded_paths: ['tests/**', '**/*.spec.js'],
+  code_sandbox_enabled: true,
   grading_strategy: 'HIGHEST',
   max_attempts: 2,
   status: 'PUBLISHED',
@@ -63,6 +64,16 @@ describe('cloneQuiz', () => {
       'tests/**',
       '**/*.spec.js',
     ]);
+  });
+
+  it("carries the source's code sandbox switch into the clone, on or off", async () => {
+    const tx = makeTx();
+    await cloneQuiz('quiz-src', 'classroom-dst', 'repo-dst', {}, tx as never);
+    expect(tx.quiz.create.mock.calls[0][0].data.code_sandbox_enabled).toBe(true);
+
+    tx.quiz.findUnique.mockResolvedValue({ ...SOURCE, code_sandbox_enabled: false });
+    await cloneQuiz('quiz-src', 'classroom-dst', null, {}, tx as never);
+    expect(tx.quiz.create.mock.calls[1][0].data.code_sandbox_enabled).toBe(false);
   });
 
   it('keeps course search off when the source has it off', async () => {

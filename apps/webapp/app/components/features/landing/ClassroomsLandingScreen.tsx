@@ -176,6 +176,13 @@ export function ClassroomsLandingScreen({
     return (name: string) => (nameCounts.get(name) ?? 0) > 1;
   }, [classes]);
 
+  // Cards animate only when the sections themselves change (pin, unpin,
+  // archive, reorder). Anything else that moves them, like a notice appearing
+  // above the grid, moves them without a slide.
+  const layoutKey = [pinnedDisplay, active, archived]
+    .map(list => list.map(c => c.id).join(','))
+    .join('|');
+
   const renderGrid = (items: LandingClass[], draggable = false) => (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
       <AnimatePresence initial={false}>
@@ -184,6 +191,7 @@ export function ClassroomsLandingScreen({
             key={c.id}
             layout
             layoutId={c.id}
+            layoutDependency={layoutKey}
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -8 }}

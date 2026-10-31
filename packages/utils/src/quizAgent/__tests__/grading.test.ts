@@ -6,9 +6,7 @@ import {
   computeAttemptPercentages,
   deriveResult,
   gradeBandFor,
-  QUESTION_POINTS,
   scoreAnswer,
-  scoreSoFar,
   type AnswerLevel,
 } from '../grading.ts';
 
@@ -193,19 +191,5 @@ describe('gradeBandFor', () => {
     );
     expect(partial_credit_percentage).toBe(90);
     expect(gradeBandFor(partial_credit_percentage).evaluation).toBe('EXCELLENT');
-  });
-});
-
-describe('scoreSoFar', () => {
-  it('adds the recorded credit out of 100 points per recorded question', () => {
-    expect(QUESTION_POINTS).toBe(100);
-    expect(scoreSoFar([{ credit_earned: 100 }, { credit_earned: 85 }])).toEqual({
-      earned: 185,
-      possible: 200,
-    });
-  });
-
-  it('is 0 of 0 before any result', () => {
-    expect(scoreSoFar([])).toEqual({ earned: 0, possible: 0 });
   });
 });

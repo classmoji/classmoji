@@ -11,8 +11,10 @@ import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
 
 import {
+  PAGE_SANDBOX_CSP,
   contentProxySafetyHeaders,
   isDocumentMimeType,
+  proxyHitKind,
   withNosniff,
 } from '../../app/utils/contentProxyHeaders.ts';
 import { DOWNLOAD_HARDENING_HEADERS, slideFileResponse } from '../../app/utils/slideKind.ts';
@@ -63,10 +65,22 @@ test.describe('the headers per type', () => {
     });
   });
 
-  test('HTML renders as a page, so a deck can embed it in an iframe', () => {
-    for (const mime of ['text/html; charset=utf-8', 'application/xhtml+xml']) {
-      expect(contentProxySafetyHeaders(mime)).toEqual({ 'X-Content-Type-Options': 'nosniff' });
+  test('HTML renders as a page in a sandboxed origin', () => {
+    for (const mime of ['text/html; charset=utf-8', 'TEXT/HTML', 'application/xhtml+xml']) {
+      expect(contentProxySafetyHeaders(mime)).toEqual({
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': PAGE_SANDBOX_CSP,
+      });
     }
+  });
+
+  test('the page sandbox lets scripts run and never grants the parent origin', () => {
+    expect(PAGE_SANDBOX_CSP).toBe(
+      'sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox ' +
+        'allow-modals allow-pointer-lock allow-downloads'
+    );
+    expect(PAGE_SANDBOX_CSP).not.toContain('allow-same-origin');
+    expect(PAGE_SANDBOX_CSP).not.toContain('allow-top-navigation');
   });
 
   test('SVG and XML get the download hardening the file-slide download uses', () => {
@@ -94,6 +108,25 @@ test.describe('the headers per type', () => {
   });
 });
 
+test.describe('the hit log', () => {
+  test('names the kind of path, never the path', () => {
+    expect(proxyHitKind('.slidesthemes/dark/lib/offline-v2.css')).toBe('theme');
+    expect(proxyHitKind('slides/week-1/index.html')).toBe('deck');
+    expect(proxyHitKind('slides/week-1/deck.json')).toBe('deck');
+    expect(proxyHitKind('pages/lab-1/content.json')).toBe('page');
+    expect(proxyHitKind('slides/week-1/games/snake/index.html')).toBe('html');
+    expect(proxyHitKind('games/snake/index.htm')).toBe('html');
+    expect(proxyHitKind('slides/week-1/assets/a.png')).toBe('asset');
+    expect(proxyHitKind('games/snake/app.js')).toBe('asset');
+  });
+
+  test('the route logs every answer, served or refused', () => {
+    expect(PROXY_SOURCE).toContain("const kind = proxyHitKind(args.params['*'] ?? '');");
+    expect(PROXY_SOURCE).toContain('logProxyHit(kind, response.status);');
+    expect(PROXY_SOURCE).toContain('logProxyHit(kind, error.status);');
+  });
+});
+
 test.describe('withNosniff', () => {
   test('adds nosniff to a plain refusal', () => {
     const response = withNosniff(new Response('Forbidden', { status: 403 }));
@@ -116,6 +149,7 @@ test.describe('the proxy route', () => {
 
   test('stamps nosniff on every other answer, returned or thrown', () => {
     expect(PROXY_SOURCE).toContain('return withNosniff(response);');
-    expect(PROXY_SOURCE).toContain('if (error instanceof Response) throw withNosniff(error);');
+    expect(PROXY_SOURCE).toContain('if (error instanceof Response) {');
+    expect(PROXY_SOURCE).toContain('throw withNosniff(error);');
   });
 });

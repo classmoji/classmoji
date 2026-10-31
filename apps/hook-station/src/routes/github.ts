@@ -151,17 +151,6 @@ const githubWebhookHandlers: Record<string, (data: WebhookEvent) => Promise<void
  */
 const GITHUB_PUSH_COMMIT_CAP = 2048;
 
-/**
- * The asset sync applies a push incrementally only below this many commits;
- * at or above it, it re-reads the whole tree (`complete: false`).
- *
- * This used to be documented as GitHub's cap. It isn't (see above), but the
- * threshold stays: a full re-read is always correct, only slower, and moving
- * the line to 2048 changes the asset sync's behaviour, which deserves its own
- * change and its own verification.
- */
-const ASSET_SYNC_INCREMENTAL_BELOW = 20;
-
 interface PushCommit {
   id?: string;
   message?: string;
@@ -203,39 +192,6 @@ function serverPushTime(pushedAt: number | string | undefined): string {
   return Number.isFinite(ms) && ms <= now + 60_000
     ? new Date(ms).toISOString()
     : new Date(now).toISOString();
-}
-
-type PathStatus = 'added' | 'modified' | 'removed';
-
-/**
- * Flatten a push's commits into one net change set.
- *
- * The commits arrive oldest-first, and a single push routinely touches the
- * same path more than once — a file added in one commit and deleted in the
- * next, or written repeatedly. Only the LAST word on a path describes the tree
- * the push actually left behind, so later commits overwrite earlier ones. A
- * path added and then removed in the same push comes out as `removed`, which
- * is the state of the repo now.
- */
-function aggregateChanges(commits: PushCommit[]): {
-  added: string[];
-  modified: string[];
-  removed: string[];
-} {
-  const statuses = new Map<string, PathStatus>();
-
-  for (const commit of commits) {
-    for (const path of commit.added ?? []) statuses.set(path, 'added');
-    for (const path of commit.modified ?? []) statuses.set(path, 'modified');
-    for (const path of commit.removed ?? []) statuses.set(path, 'removed');
-  }
-
-  const changes = { added: [] as string[], modified: [] as string[], removed: [] as string[] };
-  for (const [path, status] of statuses) {
-    changes[status].push(path);
-  }
-
-  return changes;
 }
 
 /**
@@ -334,25 +290,14 @@ async function handlePush(data: PushEventPayload): Promise<void> {
     {
       classroomId: classroom.id,
       reason: 'push' as const,
-      changes: aggregateChanges(commits),
-      // A force-push rewrites history, so the commits listed are not a diff
-      // against what we last synced and cannot be applied incrementally.
-      forced: Boolean(data.forced),
-      complete: commits.length < ASSET_SYNC_INCREMENTAL_BELOW,
-      // The commits this push spans. `before` is the only way the sync can tell
-      // that an EARLIER delivery went missing: a push whose parent is not the
-      // commit the map is level with proves the repo moved unseen, and that run
-      // has to re-read the whole tree rather than apply a diff against a state
-      // nobody holds. `after` is what the map records once it has.
+      // For the run's log only: the sync reads the branch head and diffs the
+      // whole tree, so it needs no list of changed paths.
       before: data.before,
       after: data.after,
     },
-    {
-      // One sync per classroom at a time. Two deliveries for one repo applied
-      // concurrently can record their commits in either order, moving the map's
-      // recorded commit backwards and hiding the gap `before` exists to expose.
-      concurrencyKey: classroom.id,
-    }
+    // One sync per classroom at a time, so a burst of pushes reads the head
+    // one run at a time and the later runs skip as already level.
+    { concurrencyKey: classroom.id }
   );
 }
 

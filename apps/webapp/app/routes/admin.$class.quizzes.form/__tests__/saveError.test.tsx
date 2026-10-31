@@ -26,7 +26,6 @@ vi.mock('~/hooks', () => ({
   useRouteDrawer: () => ({ opened: true, close: vi.fn() }),
   useDarkMode: () => ({ isDarkMode: false }),
 }));
-vi.mock('~/components/quiz/PromptAssistant', () => ({ PromptAssistant: () => null }));
 vi.mock('react-router', () => ({
   useFetcher: () => fetcher,
   useLocation: () => ({ pathname: '/teacher/cs52-26f/quizzes/form' }),

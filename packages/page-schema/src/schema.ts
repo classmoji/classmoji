@@ -22,6 +22,13 @@ import { multiColumnSchema } from '@blocknote/xl-multi-column';
 import type { EditorState } from 'prosemirror-state';
 
 import { customBlockConfigs, type CustomBlockType } from './configs.ts';
+import {
+  codeBlockText,
+  createCodeCollapse,
+  createCollapseToggle,
+  isCollapsible,
+  type CodeCollapseNodeView,
+} from './codeCollapse.ts';
 import { createCopyButton, createCopyToggle, isCopyable } from './copyControl.ts';
 
 /**
@@ -392,18 +399,26 @@ export function codeBlockLanguageName(language: unknown): string {
 
 /**
  * The code block every page schema uses: BlockNote's, with the language
- * select tolerant of any stored language and a `copyable` prop.
+ * select tolerant of any stored language, a `copyable` prop and a
+ * `collapsible` prop.
  *
  * BlockNote 0.55's render throws `Language <x> is not supported.` when a
  * block's language is not a KEY of `supportedLanguages` — and saved pages hold
  * aliases (`bash`, `js`, `py`, `yml`), names BlockNote never knew, and `''`.
- * 0.46 just left the select blank. This is BlockNote's spec with two changes:
+ * 0.46 just left the select blank. This is BlockNote's spec with these changes:
  * the select is told `codeBlockDisplayLanguage(language)` instead of the raw
- * value, and the title bar gets the copy control (copyControl.ts). Parse,
+ * value, and the title bar gets the copy control (copyControl.ts) and, in
+ * the editor, the collapse toggle; a collapsible block also gets the bar
+ * along its bottom (codeCollapse.ts). Parse,
  * input rule, keyboard shortcuts, highlight language, the block's
  * `data-language` and `toExternalHTML` are BlockNote's, unchanged, so
  * documents read and write exactly as before; picking a language in the
  * select writes its canonical id.
+ *
+ * `collapsible` has NO default (`default: undefined`, like the heading's
+ * `checkable`): a code block that never had it stays without it through
+ * every conversion, so stored documents are not rewritten, and one without
+ * it renders exactly as before. Turning it off sets it back to `undefined`.
  */
 export function createPageCodeBlockSpec() {
   const base = createCodeBlockSpec(codeBlockOptions);
@@ -420,37 +435,74 @@ export function createPageCodeBlockSpec() {
       ...base.config.propSchema,
       /** Readers may copy the code (a Copy button; select and copy). */
       copyable: { default: true },
+      /** Long code shows its first lines and a bar to open it (codeCollapse.ts). */
+      collapsible: { default: undefined, type: 'boolean' as const },
     },
   };
   return createBlockSpec<typeof config.type, typeof config.propSchema, typeof config.content>(
     config,
     {
       ...implementation,
-      render: (block, editor) => {
+      // A `function`: BlockNote calls it with `this.renderType` (a live node
+      // view, or a one-off `blocksToFullHTML` render) and the node view's props.
+      render: function (block, editor) {
         const rendered = createCodeBlock(block, editor, {
           selectedLanguage: codeBlockDisplayLanguage(block.props.language),
           supportedLanguages: CODE_LANGUAGES,
         });
         // The select's wrapper is already outside the editable content
-        // (contenteditable=false); the control goes in beside it.
+        // (contenteditable=false); the controls go in beside it.
         // (No `instanceof HTMLElement`: a server render has a document but
         // not always the DOM globals.)
         const bar = rendered.dom.firstChild as HTMLElement | null;
-        if (bar?.nodeName === 'DIV') {
-          const control = editor.isEditable
-            ? createCopyToggle(isCopyable(block.props), () => {
-                // The node view is rebuilt on every prop change, but read the
-                // live value anyway: a peer may have flipped it.
-                const current = editor.getBlock(block.id);
-                const copyable = current ? isCopyable(current.props) : true;
-                editor.updateBlock(block.id, { props: { copyable: !copyable } });
-              })
-            : isCopyable(block.props)
-              ? createCopyButton(() => rendered.contentDOM.textContent ?? '')
-              : null;
-          if (control) bar.appendChild(control);
+        if (bar?.nodeName !== 'DIV') return rendered;
+        if (editor.isEditable) {
+          // Left of the copy toggle. Off is `undefined`, never `false`: a
+          // block that never had the prop must not gain one.
+          bar.appendChild(
+            createCollapseToggle(isCollapsible(block.props), () => {
+              // Read the live value, as the copy toggle does.
+              const current = editor.getBlock(block.id);
+              const collapsible = current ? isCollapsible(current.props) : false;
+              editor.updateBlock(block.id, {
+                props: { collapsible: collapsible ? undefined : true },
+              });
+            })
+          );
         }
-        return rendered;
+        const control = editor.isEditable
+          ? createCopyToggle(isCopyable(block.props), () => {
+              // The node view is rebuilt on every prop change, but read the
+              // live value anyway: a peer may have flipped it.
+              const current = editor.getBlock(block.id);
+              const copyable = current ? isCopyable(current.props) : true;
+              editor.updateBlock(block.id, { props: { copyable: !copyable } });
+            })
+          : isCopyable(block.props)
+            ? createCopyButton(() => rendered.contentDOM.textContent ?? '')
+            : null;
+        if (control) bar.appendChild(control);
+
+        const pre = rendered.contentDOM.parentElement;
+        if (!isCollapsible(block.props) || !pre) return rendered;
+        const view = this as { renderType?: string; props?: CodeCollapseNodeView };
+        const collapse = createCodeCollapse({
+          editor,
+          blockId: block.id,
+          chrome: bar,
+          pre,
+          text: codeBlockText(block.content),
+          live: view.renderType === 'nodeView' && view.props ? view.props : null,
+        });
+        return {
+          ...rendered,
+          ignoreMutation: collapse.ignoreMutation,
+          ...(collapse.update ? { update: collapse.update } : {}),
+          destroy: () => {
+            collapse.destroy();
+            rendered.destroy();
+          },
+        };
       },
       toExternalHTML: block => createPreCode(block),
     },

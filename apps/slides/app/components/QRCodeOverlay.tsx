@@ -1,5 +1,6 @@
 import { useEffect, useCallback } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
+import { isAskMojiTarget } from './askMoji/askMojiProtocol';
 
 /**
  * QRCodeOverlay - Full-screen overlay displaying a QR code
@@ -20,6 +21,8 @@ export default function QRCodeOverlay({ url, title, onClose }: QRCodeOverlayProp
   // Handle keyboard events
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
+      // Escape on the Ask Moji launcher or panel closes that, not this overlay.
+      if (isAskMojiTarget(e.target)) return;
       if (e.key === 'Escape') {
         onClose();
       }

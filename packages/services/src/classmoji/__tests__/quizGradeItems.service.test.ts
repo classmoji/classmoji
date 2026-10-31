@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   settingsFindUnique: vi.fn(),
   attemptFindMany: vi.fn(),
   tokenGroupBy: vi.fn(),
+  emojiFindMany: vi.fn(),
 }));
 
 vi.mock('@classmoji/database', () => ({
@@ -22,6 +23,7 @@ vi.mock('@classmoji/database', () => ({
     classroomSettings: { findUnique: (...a: unknown[]) => mocks.settingsFindUnique(...a) },
     quizAttempt: { findMany: (...a: unknown[]) => mocks.attemptFindMany(...a) },
     tokenTransaction: { groupBy: (...a: unknown[]) => mocks.tokenGroupBy(...a) },
+    emojiMapping: { findMany: (...a: unknown[]) => mocks.emojiFindMany(...a) },
   }),
 }));
 
@@ -49,6 +51,7 @@ beforeEach(() => {
   mocks.settingsFindUnique.mockResolvedValue({ late_penalty_points_per_hour: 1 });
   mocks.attemptFindMany.mockResolvedValue([]);
   mocks.tokenGroupBy.mockResolvedValue([]);
+  mocks.emojiFindMany.mockResolvedValue([]);
 });
 
 describe('loadQuizGradeItems', () => {
@@ -128,6 +131,8 @@ describe('loadQuizGradeItems', () => {
       },
       _sum: { hours_purchased: true },
     });
+    // The scale an adjusted attempt is read through is this classroom's own.
+    expect(mocks.emojiFindMany.mock.calls[0][0].where).toEqual({ classroom_id: CLASSROOM });
   });
 
   it('reads nothing where quizzes are hidden or no user is asked for', async () => {

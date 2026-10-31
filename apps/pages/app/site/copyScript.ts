@@ -1,7 +1,7 @@
 /**
  * The class site's second (and last) inline script: the Copy buttons on code
- * and terminal blocks, and the copy guard for blocks whose author turned
- * copying off.
+ * and terminal blocks, the copy guard for blocks whose author turned
+ * copying off, and the bar that opens and closes a collapsible code block.
  *
  * A class site ships no bundle, so this is hand-written ES5 with no imports,
  * and its exact bytes are hashed into the site CSP (`SITE_COPY_SCRIPT_HASH`
@@ -13,6 +13,14 @@
  * from the selection with those blocks and the title-bar chrome removed; any
  * other copy is the browser's.
  * Change one, change the other — tests/unit/copy-guard.spec.ts runs both.
+ *
+ * The collapse bar is page-schema's codeCollapse.ts (`createCodeCollapse`),
+ * minus what only an editor needs: the bar flips `data-collapse` on the
+ * <pre> and its own `aria-expanded` (CSS clips, fades and picks the label),
+ * animating the height unless the reader asked for reduced motion; a
+ * collapsed <pre> the browser scrolls (find-in-page showing a hidden line)
+ * opens, and the page scrolls by as much, so the match stays in view. Change
+ * one, change the other — tests/unit/copy-guard.spec.ts runs this one too.
  */
 export const SITE_COPY_SCRIPT = `
 (function () {
@@ -127,5 +135,64 @@ export const SITE_COPY_SCRIPT = `
       done(fallbackCopy(value));
     }
   });
+  function reducedMotion() {
+    return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  }
+  function scrollerOf(element) {
+    for (var node = element.parentElement; node; node = node.parentElement) {
+      if (/(auto|scroll|overlay)/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight) return node;
+    }
+    return document.scrollingElement || document.documentElement;
+  }
+  function animateFrom(pre, from) {
+    var to = pre.getBoundingClientRect().height;
+    if (Math.abs(to - from) < 2) return;
+    var timer;
+    function done() {
+      clearTimeout(timer);
+      pre.removeEventListener('transitionend', onEnd);
+      pre.removeAttribute('data-animating');
+      pre.style.maxHeight = '';
+      if (!pre.getAttribute('style')) pre.removeAttribute('style');
+    }
+    function onEnd(event) {
+      if (event.target === pre) done();
+    }
+    pre.style.maxHeight = from + 'px';
+    void pre.offsetHeight;
+    pre.setAttribute('data-animating', '');
+    pre.style.maxHeight = to + 'px';
+    pre.addEventListener('transitionend', onEnd);
+    timer = setTimeout(done, 400);
+  }
+  function setOpen(pre, bar, open, animate) {
+    var from = pre.getBoundingClientRect();
+    var barTop = bar.getBoundingClientRect().top;
+    pre.setAttribute('data-collapse', open ? 'expanded' : 'collapsed');
+    bar.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (!open && from.top < 0) {
+      scrollerOf(pre).scrollTop += bar.getBoundingClientRect().top - barTop;
+      return;
+    }
+    if (animate && !reducedMotion()) animateFrom(pre, from.height);
+  }
+  document.addEventListener('click', function (event) {
+    var bar = event.target && event.target.closest ? event.target.closest('.bn-code-expand') : null;
+    var block = bar && bar.closest('.bn-block-content');
+    var pre = block && block.querySelector('pre[data-collapse]');
+    if (!pre) return;
+    setOpen(pre, bar, pre.getAttribute('data-collapse') === 'collapsed', true);
+  });
+  document.addEventListener('scroll', function (event) {
+    var pre = event.target;
+    if (!pre || pre.nodeType !== 1 || pre.getAttribute('data-collapse') !== 'collapsed' || pre.scrollTop <= 0) return;
+    var block = pre.closest('.bn-block-content');
+    var bar = block && block.querySelector('.bn-code-expand');
+    if (!bar) return;
+    var shift = pre.scrollTop;
+    setOpen(pre, bar, true, false);
+    pre.scrollTop = 0;
+    scrollerOf(pre).scrollTop += shift;
+  }, true);
 })();
 `;

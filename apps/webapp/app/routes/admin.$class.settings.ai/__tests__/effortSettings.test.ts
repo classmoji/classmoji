@@ -22,6 +22,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: (...a: unknown[]) => mocks.assertClassroomAccess(...a),
   assertClassroomMutationAllowed: vi.fn(),
+  addClassroomAuditLog: vi.fn(),
+}));
+vi.mock('~/routes/admin.$class.ask-moji/impersonation.server', () => ({
+  impersonationAuditFields: async () => ({}),
 }));
 
 vi.mock('@classmoji/services', () => ({
@@ -34,8 +38,13 @@ vi.mock('@classmoji/services', () => ({
       canUseSyllabusBot: (...a: unknown[]) => mocks.canUseSyllabusBot(...a),
       canUseQuizzes: (...a: unknown[]) => mocks.canUseQuizzes(...a),
     },
+    askMojiSession: {
+      askMojiRuntimeIsTrigger: () => false,
+      askMojiAvailable: vi.fn(),
+    },
   },
   ClassroomSettingsEntitlementError: mocks.EntitlementError,
+  ClassroomSettingsValidationError: class ClassroomSettingsValidationError extends Error {},
   getAllModels: (...a: unknown[]) => mocks.getAllModels(...a),
   getModelLabel: (id: string) => `label:${id}`,
 }));
@@ -341,39 +350,51 @@ describe('loader', () => {
     expect(data.selectValues).toEqual(STORED);
   });
 
-  // The page reads selectValues, but organization.settings goes to the client
-  // too; a keyless classroom's stored choices must not ride along in it.
-  it('sends no stored model or effort in the settings of a keyless classroom', async () => {
+  // The model and effort choices travel only as selectValues; the settings
+  // the page reads are picked field by field, so nothing else in the row
+  // (keys, other features' settings) rides along.
+  it('sends the page settings field by field, and no model or effort in them', async () => {
     mocks.getClassroomSettingsForServer.mockResolvedValue({
       ...STORED,
-      anthropic_api_key: null,
+      anthropic_api_key: 'sk-ant-classroom',
+      openai_api_key: 'sk-openai',
       quizzes_enabled: true,
+      syllabus_bot_enabled: false,
+      syllabus_bot_instructions: 'Owner text',
+      show_grades_to_students: true,
     });
     const data = await load();
-    const settings = data.organization.settings as Record<string, unknown>;
-    for (const field of Object.keys(STORED)) {
-      expect(settings[field], field).toBeNull();
-    }
-    expect(settings.quizzes_enabled).toBe(true);
-    expect(settings.has_anthropic_key).toBe(false);
-  });
-
-  it('sends the stored model and effort in the settings once the classroom has a key', async () => {
-    mocks.getClassroomSettingsForServer.mockResolvedValue({
-      ...STORED,
-      anthropic_api_key: 'sk-ant-classroom',
+    expect(data.settings).toEqual({
+      quizzes_enabled: true,
+      syllabus_bot_enabled: false,
+      has_anthropic_key: true,
+      // This file runs on the AI agent runtime, which never reads them
+      // (askMojiSettings.test.ts covers the Trigger runtime).
+      syllabus_bot_instructions: null,
     });
-    const data = await load();
-    expect(data.organization.settings).toMatchObject(STORED);
+    expect(data).not.toHaveProperty('organization');
   });
 
-  it('never sends the key to the client', async () => {
+  it('sends nulls for a classroom with no settings row', async () => {
+    mocks.getClassroomSettingsForServer.mockResolvedValue(null);
+    const data = await load();
+    expect(data.settings).toEqual({
+      quizzes_enabled: null,
+      syllabus_bot_enabled: null,
+      has_anthropic_key: false,
+      syllabus_bot_instructions: null,
+    });
+  });
+
+  it('never sends a key to the client', async () => {
     mocks.getClassroomSettingsForServer.mockResolvedValue({
       anthropic_api_key: 'sk-ant-classroom',
+      openai_api_key: 'sk-openai',
     });
     const data = await load();
     expect(JSON.stringify(data)).not.toContain('sk-ant-classroom');
-    expect(data.organization.settings?.has_anthropic_key).toBe(true);
+    expect(JSON.stringify(data)).not.toContain('sk-openai');
+    expect(data.settings.has_anthropic_key).toBe(true);
   });
 
   it('labels each select with the platform default', async () => {

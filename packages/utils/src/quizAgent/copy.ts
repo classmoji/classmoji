@@ -1,7 +1,7 @@
 /**
  * The fixed lines a quiz chat agent may send the student on the chat
- * runtime's `error` chunk. The task's sanitizer (packages/tasks,
- * `agents/shared/sanitize.ts`) writes only these; the chat (QuizChat) shows an
+ * runtime's `error` chunk. The task's sanitizer (apps/ai-agent,
+ * `src/trigger/shared/sanitize.ts`) writes only these; the chat (QuizChat) shows an
  * error only when its text is one of them. Both read this one module, so the
  * two can never drift apart.
  *
@@ -38,6 +38,11 @@ export const QUIZ_REFUSAL_COPY: Readonly<Record<string, string>> = {
   quiz_unavailable: "This quiz isn't available right now.",
   session_ended: 'This session ended. Reload the page to continue.',
   reserved_text: "That message couldn't be sent. Please rephrase it.",
+  // A code submission (sandbox questions). Each has its own line: the chat
+  // drops a refused submission and unlocks its sandbox with the edits intact.
+  sandbox_closed: 'That code can no longer be submitted.',
+  invalid_submission: "That code couldn't be submitted. Please try again.",
+  reserved_code: "That code can't be submitted as it is. Change it and try again.",
 };
 
 /** By refusal kind, for a code not listed above. */

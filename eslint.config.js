@@ -12,6 +12,9 @@ export default [
       '**/coverage/**',
       '**/public/build/**',
       'packages/database/migrations/**',
+      // TypeScript Trigger.dev tasks in the ai-agent submodule: no TS lint
+      // there yet (its `npm run typecheck` checks them).
+      'apps/ai-agent/src/trigger/**',
     ],
   },
 ]

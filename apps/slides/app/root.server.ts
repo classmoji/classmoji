@@ -1,5 +1,6 @@
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import { withLogin } from '@classmoji/utils';
+import { sentryBrowserConfig } from '@classmoji/utils/sentry';
 import { getAuthSession } from '@classmoji/auth/server';
 import type { Prisma } from '@prisma/client';
 import { redirect } from 'react-router';
@@ -17,7 +18,7 @@ type SlidesAppUser = ReturnType<
   typeof withLogin<Prisma.UserGetPayload<{ include: typeof ROOT_USER_INCLUDE }>>
 >;
 
-export const loader = async ({ request }: { request: Request }) => {
+const loadRoot = async ({ request }: { request: Request }) => {
   const url = new URL(request.url);
 
   // Allow public access to /follow routes with valid shareCode
@@ -81,4 +82,12 @@ export const loader = async ({ request }: { request: Request }) => {
   }
 
   return { user };
+};
+
+export const loader = async (args: { request: Request }) => {
+  const result = await loadRoot(args);
+  if (result instanceof Response) return result;
+  // Browser error tracking (DSN + environment), read from the server's env at
+  // request time: runtime config, never baked into the bundle.
+  return { ...result, sentry: sentryBrowserConfig(process.env) };
 };

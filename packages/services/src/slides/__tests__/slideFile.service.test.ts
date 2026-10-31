@@ -25,6 +25,13 @@ const slideFindUnique = vi.fn();
 const slideCreate = vi.fn();
 const slideUpdate = vi.fn();
 
+// Plan limits have their own tests (planLimits.test.ts); here every classroom has room.
+vi.mock('../../classmoji/planLimits.ts', () => ({
+  assertCanCreateContent: vi.fn(async () => {}),
+  contentAllowance: vi.fn(async () => ({ limit: null, used: 0, remaining: null })),
+  contentLimitMessage: () => '',
+}));
+
 vi.mock('@classmoji/database', () => ({
   default: () => ({
     classroom: { findUnique: (...args: unknown[]) => classroomFindUnique(...args) },

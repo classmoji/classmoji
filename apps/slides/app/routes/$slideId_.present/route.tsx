@@ -13,6 +13,7 @@ import {
 } from '~/utils/deckDelivery.server';
 import { deckOnlyRefusal } from '~/utils/slideKind';
 import { canonicalStoredPath } from '~/utils/slideDocumentAccess';
+import { contentDeliveryOrigin } from '~/utils/csp.server';
 import {
   PRESENT_LOAD_SAVE_TIMEOUT_MS,
   PRESENT_SAVE_TIMEOUT_MS,
@@ -115,13 +116,8 @@ export const loader = async ({
 
   // Content repo is STORED and user-editable — never re-derived from the namespace.
   const repo = slide.classroom.content_repo;
-  // The stored folder in canonical form, so the read and the `/content/` URL
-  // below are the one spelling the proxy serves.
+  // The stored folder in canonical form (a stray `/` in the row is dropped).
   const filePath = `${canonicalStoredPath(slide.content_path)}/index.html`;
-
-  // Legacy proxy URL, kept as the client-side fallback when the server-side
-  // read below fails entirely.
-  const contentUrl = `/content/${gitOrgLogin}/${repo}/${filePath}`;
 
   // Read the deck by SHA through the delivery layer. This route is the reason
   // that matters: the presenter is opened seconds after a save, and the CDN
@@ -189,16 +185,17 @@ export const loader = async ({
       multiplex_id: slide.multiplex_id,
       multiplex_secret: slide.multiplex_secret,
     },
-    contentUrl,
     slideContent,
     contentError,
     canPresent,
     notice,
+    // Where html blocks that still carry inline code are shown from.
+    contentOrigin: contentDeliveryOrigin(),
   };
 };
 
 export default function SlidePresenter() {
-  const { slide, contentUrl, slideContent, contentError, canPresent, notice } =
+  const { slide, slideContent, contentError, canPresent, notice, contentOrigin } =
     useLoaderData<typeof loader>();
 
   // Extract theme from slideContent for Sandpack auto-theme detection
@@ -219,7 +216,7 @@ export default function SlidePresenter() {
   return (
     <>
       <RevealPresenter
-        contentUrl={contentUrl}
+        contentOrigin={contentOrigin}
         initialContent={slideContent}
         initialError={contentError}
         slideId={slide.id}

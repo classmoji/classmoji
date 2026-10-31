@@ -1,11 +1,14 @@
-import { redirect, useNavigate, useSearchParams } from 'react-router';
+import { redirect, useFetcher, useNavigate, useSearchParams } from 'react-router';
 import { fallbackMode } from '~/utils/sessionMode.server';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Modal, Button as AntdButton } from 'antd';
-import { Button, IconGithub, useCallout } from '@classmoji/ui-components';
+import { Button, IconGithub, IconX, useCallout } from '@classmoji/ui-components';
 import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
+import ActiveClassLimitNotice, {
+  isOverActiveClassLimit,
+} from '~/components/features/plan/ActiveClassLimitNotice';
 
-import { useUser, useDisclosure, useGlobalFetcher } from '~/hooks';
+import { useUser, useDisclosure } from '~/hooks';
 import { getAuthSession } from '@classmoji/auth/server';
 import { verifyInviteToken } from '@classmoji/auth/invite-token';
 import { authClient } from '@classmoji/auth/client';
@@ -14,18 +17,13 @@ import { checkAuth } from '~/utils/helpers';
 import { hashHue } from '~/utils/hue';
 import { connectGithub, connectGitlabAt } from '~/utils/connectGitAccount';
 
-import {
-  ClassmojiService,
-  getGitProvider,
-  ensureClassroomTeam,
-  notificationService,
-  pendingSurveyQuestions,
-} from '@classmoji/services';
+import { ClassmojiService, notificationService, pendingSurveyQuestions } from '@classmoji/services';
 import { ActionTypes, roleSettings } from '~/constants';
 import useStore from '~/store';
-import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
-import { gitAccountId, gitUsername } from '@classmoji/utils';
+import getPrisma from '@classmoji/database';
 import { tasks } from '@trigger.dev/sdk';
+import { joinGitOrganization } from '~/utils/joinGitOrganization.server';
+import { autoSendGithubInvites } from './autoGithubInvites.server';
 import type { Route } from './+types/route';
 import type { AppUser, MembershipOrganization, MembershipWithOrganization } from '~/types';
 import {
@@ -189,6 +187,8 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
           where: { id: { in: pendingGitLab.map(m => m.id) } },
           data: { has_accepted_invite: true },
         });
+        // An owner invitation among them may fill a classroom with no plan owner.
+        await ClassmojiService.planOwner.onOwnerAccepted(typedUser.id);
         for (const gitOrganizationId of new Set(pendingGitLab.map(m => m.classroom.git_org_id))) {
           await tasks.trigger('activate_membership', { login: gitlabUsername, gitOrganizationId });
         }
@@ -204,6 +204,18 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     } catch (error) {
       console.error('Failed to activate Gitlab course memberships:', error);
     }
+
+    // Github classes this person was added to as a student (roster, or an
+    // invite link they did not finish) or as staff: send the org invite without
+    // a click, or find the one Github
+    // still holds, so each card can link straight to Github's accept page.
+    // Github is asked each load (no stored flag), which also re-sends an
+    // invitation that expired. Not during impersonation, like the Gitlab step.
+    const acceptUrls = await autoSendGithubInvites(
+      typedUser.id,
+      !!(authData.session as { session?: { impersonatedBy?: string | null } } | undefined)?.session
+        ?.impersonatedBy
+    );
 
     // Runs after the invite claim above so a freshly-claimed student membership
     // counts toward the audience filter. Never asked during impersonation: a
@@ -264,7 +276,12 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       return { needsGithub: true as const, linkError };
     }
 
+    // The viewer's own Free-plan allowance, for the over-limit notice. Their
+    // own classes only; empty for a Pro user.
+    const allowance = await ClassmojiService.classroomLifecycle.allowanceFor(typedUser.id);
+
     return {
+      activeClassAllowance: { limit: allowance.limit, active: allowance.active },
       // The signed-in user comes from the root loader (useUser), not from here:
       // the service user carries whole membership and organization rows.
       gitMode,
@@ -278,6 +295,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       surveyQuestions,
       inviteEmailMismatch,
       linkError,
+      acceptUrls,
     };
   } else {
     return redirect('/registration');
@@ -442,10 +460,22 @@ const SelectOrganization = ({
     surveyQuestions,
     inviteEmailMismatch,
     linkError,
+    acceptUrls,
   } = loaderData;
   const { user } = useUser();
   const { classroom, setClassroom, startFullTour } = useStore();
-  const { fetcher, notify } = useGlobalFetcher();
+  // Joining uses its own fetcher, not the global one: the global fetcher turns
+  // every `{ error }` into a toast, and a failed join belongs above the cards.
+  const joinFetcher = useFetcher<{
+    success?: string;
+    error?: string;
+    invitationUrl?: string | null;
+  }>();
+  const joinCalloutId = useRef<string | null>(null);
+  const joinClassName = useRef('');
+  const [joinFailure, setJoinFailure] = useState<{ className: string; message: string } | null>(
+    null
+  );
   const { show, close, visible } = useDisclosure();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -457,6 +487,35 @@ const SelectOrganization = ({
   useEffect(() => {
     setClassroom(null);
   }, [setClassroom]);
+
+  // Settle the progress callout once the join comes back: success stays a
+  // short toast, a failure moves into the banner above the cards.
+  useEffect(() => {
+    if (joinFetcher.state !== 'idle' || !joinFetcher.data) return;
+    const id = joinCalloutId.current;
+    if (!id) return;
+    joinCalloutId.current = null;
+    const { success, error, invitationUrl } = joinFetcher.data;
+    if (error) {
+      callout.dismiss(id);
+      setJoinFailure({ className: joinClassName.current, message: error });
+    } else if (invitationUrl) {
+      // Accept on Github now, rather than in whichever inbox Github emailed.
+      callout.update(id, { variant: 'progress', title: 'Opening your Github invitation...' });
+      window.location.assign(invitationUrl);
+    } else if (success) {
+      callout.update(id, {
+        variant: 'success',
+        title: success,
+        persistent: false,
+        autoDismissMs: 2000,
+      });
+    } else {
+      callout.dismiss(id);
+    }
+    // `callout` is stable per CalloutProvider; see the removed-toast effect below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [joinFetcher.state, joinFetcher.data]);
 
   // Classroom delete confirmation. The danger-zone action REDIRECTS here on success
   // rather than returning data, because the shared global fetcher consumes and nulls
@@ -585,15 +644,90 @@ const SelectOrganization = ({
       </div>
     ) : null;
 
+  // A failed join is often a long explanation with something to act on, so it
+  // stays above the cards until dismissed instead of in a corner toast.
+  const joinFailureBanner = joinFailure ? (
+    <div
+      role="alert"
+      className="flex items-start gap-3 rounded-lg bg-red-50 dark:bg-red-950/40 ring-1 ring-red-200 dark:ring-red-900 px-4 py-3"
+    >
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-medium text-red-800 dark:text-red-200">
+          Could not join {joinFailure.className}
+        </div>
+        <div className="mt-0.5 text-sm text-red-700 dark:text-red-300">{joinFailure.message}</div>
+      </div>
+      <button
+        type="button"
+        aria-label="Dismiss"
+        onClick={() => setJoinFailure(null)}
+        className="shrink-0 text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-200"
+      >
+        <IconX size={16} />
+      </button>
+    </div>
+  ) : null;
+
+  const allowance = 'activeClassAllowance' in loaderData ? loaderData.activeClassAllowance : null;
+  const limitNotice =
+    allowance && isOverActiveClassLimit(allowance) ? (
+      <ActiveClassLimitNotice allowance={allowance} />
+    ) : null;
+
+  // Github invites already sent (by the loader) and still to accept: say so up
+  // top, with the one action, so nobody has to guess the card is clickable.
+  const toAccept = Array.from(
+    new Map(
+      memberList
+        .filter(m => !m.has_accepted_invite && acceptUrls?.[m.organization.id])
+        .map(m => [m.organization.id, m.organization] as const)
+    ).values()
+  );
+  const acceptNotice =
+    toAccept.length > 0 ? (
+      <div className="flex flex-col gap-2">
+        {toAccept.map(org => (
+          <div
+            key={org.id}
+            className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg bg-panel ring-1 ring-line px-4 py-2.5"
+          >
+            <span className="inline-flex text-gray-900 dark:text-gray-100">
+              <IconGithub size={18} />
+            </span>
+            <div className="flex-1 min-w-[12rem] text-sm font-medium text-ink-0">
+              Accept your Github invite to finish joining {org.name || org.login}
+            </div>
+            <a href={acceptUrls![org.id]} className="btn btn-primary btn-sm no-underline">
+              Accept on Github
+            </a>
+          </div>
+        ))}
+      </div>
+    ) : null;
+
+  const notice =
+    joinFailureBanner || acceptNotice || connectNotice || limitNotice ? (
+      <div className="flex flex-col gap-2">
+        {joinFailureBanner}
+        {acceptNotice}
+        {limitNotice}
+        {connectNotice}
+      </div>
+    ) : null;
+
   const acceptInvite = (organization: MembershipOrganization | null) => {
     if (!organization || !user.login) return;
-    notify(
-      ActionTypes.SEND_INVITATION,
-      organization.git_organization?.provider === 'GITLAB'
-        ? 'Joining the class...'
-        : 'Sending you Github invite...'
-    );
-    fetcher?.submit(
+    setJoinFailure(null);
+    joinClassName.current = organization.name || organization.login;
+    joinCalloutId.current = callout.show({
+      variant: 'progress',
+      title:
+        organization.git_organization?.provider === 'GITLAB'
+          ? 'Joining the class...'
+          : 'Sending you Github invite...',
+      persistent: true,
+    });
+    joinFetcher.submit(
       { classroom_id: organization.id },
       {
         method: 'post',
@@ -618,6 +752,12 @@ const SelectOrganization = ({
     // when a user has multiple memberships for the same classroom (e.g. OWNER
     // + STUDENT in a dev sandbox), and would always pick the first match.
     if (c.role === 'PENDING INVITE') {
+      // The Github invite is already out (sent by the loader): the card goes
+      // straight to Github to accept it, no dialog in between.
+      if (c.acceptUrl) {
+        window.location.assign(c.acceptUrl);
+        return;
+      }
       const membership = memberList.find(
         m => m.organization.id === c.organization.id && !m.has_accepted_invite
       );
@@ -684,7 +824,7 @@ const SelectOrganization = ({
             ? `This class runs on ${modalPlatform}. Connect your ${modalPlatform} account first, then come back here to accept.`
             : modalPlatform === 'Gitlab'
               ? 'Once you accept, you will get your Gitlab repositories right away.'
-              : 'Once you accept, you will be sent a Github invitation to join the organization.'}
+              : 'Once you accept, Github opens your invitation to join the organization.'}
         </p>
         {connectError && (
           <p className="mt-3 rounded-lg bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 text-sm px-3 py-2">
@@ -695,7 +835,7 @@ const SelectOrganization = ({
 
       <ClassroomsLandingScreen
         gitMode={loaderData.gitMode}
-        notice={connectNotice}
+        notice={notice}
         user={
           user
             ? {
@@ -708,7 +848,11 @@ const SelectOrganization = ({
         classes={classes
           .filter(c => !c.is_example)
           .map(c => {
-            if (c.role !== 'PENDING INVITE' || user.logins?.[c.provider]) return c;
+            if (c.role !== 'PENDING INVITE') return c;
+            // The Github invite went out on its own (loader): one click to Github.
+            const acceptUrl = acceptUrls?.[c.classroomId];
+            if (acceptUrl) return { ...c, acceptUrl };
+            if (user.logins?.[c.provider]) return c;
             // Gitlab has no invite to accept: connecting Gitlab is what lets
             // them in, so the card shows their real role, not "Pending invite".
             return c.provider === 'GITLAB'
@@ -735,97 +879,23 @@ export const action = checkAuth(
 
     const membership = await getPrisma().classroomMembership.findFirst({
       where: { classroom_id, user_id: user.userId },
-      include: {
-        user: { include: GIT_IDENTITY },
-        classroom: { include: { git_organization: true } },
-      },
+      include: { classroom: { include: { git_organization: true } } },
     });
 
     if (!membership) {
       return { error: 'Classroom not found' };
     }
 
-    const classroom = membership.classroom;
-    const courseProvider = classroom.git_organization.provider;
-    // The student's username on the course's own provider. A Github username is
-    // never sent to a Gitlab group or the other way round: it would name a
-    // stranger who holds that username there.
-    const student_login = gitUsername(membership.user, courseProvider);
-
-    // GitLab course: the student needs GitLab connected (their project is
-    // named after, and shared with, their GitLab username). They never join
-    // the GitLab group: group members inherit every project in it, which would
-    // expose classmates' repos. Activation creates their projects straight
-    // away, since GitLab has no invite to accept and no webhook to wait for.
-    if (courseProvider === 'GITLAB') {
-      if (!student_login) {
-        return {
-          error: 'This course uses Gitlab. Connect your Gitlab account in Settings to join it.',
-        };
-      }
-      await tasks.trigger('activate_membership', {
-        login: student_login,
-        gitOrganizationId: classroom.git_organization.id,
-      });
-      return {
-        success: "You're in. Your Gitlab repositories are being created.",
-        action: ActionTypes.SEND_INVITATION,
-      };
-    }
-
-    if (!student_login) {
-      return { error: 'Connect your Github account before joining this classroom.' };
-    }
-
-    const gitProvider = getGitProvider(
-      classroom.git_organization as {
-        provider: string;
-        github_installation_id?: string;
-        access_token?: string;
-        base_url?: string;
-        login?: string;
-      }
-    );
-    const team = await ensureClassroomTeam(
-      gitProvider,
-      classroom.git_organization.login,
-      classroom,
-      'STUDENT'
-    );
-    // If the student is ALREADY a member of the GitHub org (common when migrating
-    // from GitHub Classroom), GitHub rejects a fresh org invitation with a 422,
-    // which used to error the whole join. In that case skip the invite and add them
-    // straight to the class team — they're already in the org.
-    const alreadyMember = await gitProvider.isUserMemberOfOrganization(
-      classroom.git_organization.login,
-      student_login
-    );
-
-    if (alreadyMember) {
-      await gitProvider.addTeamMember(classroom.git_organization.login, team.slug, student_login);
-      // No `member_added` webhook fires for users already in the org, so activate the
-      // membership here (flip has_accepted_invite + provision repos) — otherwise they
-      // stay stuck pending and never receive their assignment repos.
-      await tasks.trigger('activate_membership', {
-        login: student_login,
-        githubUserId: gitAccountId(membership.user, classroom.git_organization.provider),
-        gitOrganizationId: classroom.git_organization.id,
-      });
-      return {
-        success: 'Already in the organization — added you to the class.',
-        action: ActionTypes.SEND_INVITATION,
-      };
-    }
-
-    const githubUser = await gitProvider.getUserByLogin(student_login);
-    await gitProvider.inviteToOrganization(
-      classroom.git_organization.login,
-      String(githubUser.id),
-      [team.id]
-    );
-
+    const result = await joinGitOrganization({
+      userId: user.userId,
+      membership,
+      classroom: membership.classroom,
+      tool: 'select-organization',
+    });
+    if (!result.ok) return { error: result.message, action: ActionTypes.SEND_INVITATION };
     return {
-      success: 'Successfully sent invite.',
+      success: result.message,
+      invitationUrl: result.invitationUrl ?? null,
       action: ActionTypes.SEND_INVITATION,
     };
   }

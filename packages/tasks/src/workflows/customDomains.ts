@@ -47,6 +47,8 @@ const MAX_DELETIONS_PER_RUN = 25;
 
 export const reconcileCustomDomainCerts = schedules.task({
   id: 'reconcile-custom-domain-certs',
+  // Runs again on its schedule, and that next run is the retry.
+  retry: { maxAttempts: 1 },
   // 04:40 UTC daily — off the hour, and clear of the other nightly jobs.
   cron: '40 4 * * *',
   run: async () => {

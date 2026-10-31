@@ -8,12 +8,29 @@ import {
 } from '@classmoji/utils';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { pickSettings } from '~/utils/pickSettings';
+import { addClassroomAuditLog } from '~/utils/helpers';
+import { impersonationAuditFields } from '~/routes/admin.$class.ask-moji/impersonation.server';
 import type { Route } from './+types/route';
+
+/** The remap body's `mappings` (client JSON): a non-empty list of emoji pairs, else null. */
+export const parseRemapMappings = (
+  value: unknown
+): Array<{ oldEmoji: string; newEmoji: string }> | null => {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 200) return null;
+  const out: Array<{ oldEmoji: string; newEmoji: string }> = [];
+  for (const entry of value) {
+    const { oldEmoji, newEmoji } = (entry ?? {}) as Record<string, unknown>;
+    if (typeof oldEmoji !== 'string' || typeof newEmoji !== 'string') return null;
+    if (!oldEmoji || !newEmoji || oldEmoji.length > 100 || newEmoji.length > 100) return null;
+    out.push({ oldEmoji, newEmoji });
+  }
+  return out;
+};
 
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const { classroom, membership } = await requireClassroomAdmin(request, classSlug, {
+  const { classroom, membership, userId } = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'SETTINGS',
     action: 'update_grade_settings',
   });
@@ -56,19 +73,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     },
 
     async populateDefaultMappings() {
-      // Remove existing mappings first (pass true to get array with full mapping objects)
-      const existingMappings = (await ClassmojiService.emojiMapping.findByClassroomId(
-        classroom.id,
-        true
-      )) as Array<{ emoji: string }>;
-      for (const mapping of existingMappings) {
-        await ClassmojiService.emojiMapping.deleteEmojiMapping(classroom.id, mapping.emoji);
-      }
-
-      // Add defaults from shared constant
-      for (const mapping of DEFAULT_EMOJI_MAPPINGS) {
-        await ClassmojiService.emojiMapping.saveEmojiMapping(classroom.id, mapping);
-      }
+      // Wipe and replace in one transaction under the scale lock, so a quiz
+      // re-seeding an empty scale meanwhile cannot leave a mixed one.
+      await ClassmojiService.emojiMapping.replaceScale(classroom.id, DEFAULT_EMOJI_MAPPINGS);
 
       return {
         action: 'POPULATE_DEFAULT_MAPPINGS',
@@ -77,20 +84,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     },
 
     async populateScoreScaleMappings() {
-      // Same shape as populateDefaultMappings: wipe, then add the 11-step
-      // 0–100 scale. Grades awarded under the old emojis surface in the
-      // orphaned-grades banner, where the existing remap flow handles them.
-      const existingMappings = (await ClassmojiService.emojiMapping.findByClassroomId(
-        classroom.id,
-        true
-      )) as Array<{ emoji: string }>;
-      for (const mapping of existingMappings) {
-        await ClassmojiService.emojiMapping.deleteEmojiMapping(classroom.id, mapping.emoji);
-      }
-
-      for (const mapping of SCORE_EMOJI_MAPPINGS) {
-        await ClassmojiService.emojiMapping.saveEmojiMapping(classroom.id, mapping);
-      }
+      // Same shape as populateDefaultMappings: replace with the 11-step 0–100
+      // scale. Grades and quiz adjustments on the old emojis surface in the
+      // orphaned-grades banner, where the remap flow handles them.
+      await ClassmojiService.emojiMapping.replaceScale(classroom.id, SCORE_EMOJI_MAPPINGS);
 
       return {
         action: 'POPULATE_SCORE_SCALE_MAPPINGS',
@@ -119,14 +116,44 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     },
 
     async remapOrphanedEmojis() {
-      const { mappings } = data;
-      const result = await ClassmojiService.assignmentGrade.remapGradeEmojis(
-        classroom.id,
-        mappings
-      );
+      const mappings = parseRemapMappings(data?.mappings);
+      if (!mappings) {
+        return { action: 'REMAP_ORPHANED_EMOJIS', error: 'Pick a new emoji for each grade.' };
+      }
+      // Repo grades, quiz adjustments and the regrade requests' grades, in the
+      // gate's classroom only, in one transaction (E17).
+      let result;
+      try {
+        result = await ClassmojiService.assignmentGrade.remapGradeEmojis(classroom.id, mappings);
+      } catch (error) {
+        if (error instanceof Error && error.name === 'RemapGradeEmojisError') {
+          return { action: 'REMAP_ORPHANED_EMOJIS', error: error.message };
+        }
+        throw error;
+      }
+      await addClassroomAuditLog({
+        classroomId: classroom.id,
+        userId,
+        role: membership!.role,
+        action: 'UPDATE',
+        resourceType: 'GRADES',
+        metadata: {
+          tool: 'web:settings.grades.remap_orphaned_emojis',
+          mappings: mappings.map(m => ({ old_emoji: m.oldEmoji, new_emoji: m.newEmoji })),
+          repo_grades: result.repoGrades,
+          quiz_adjustments: result.quizAdjustments,
+          regrade_snapshots: result.regradeSnapshots,
+          regrade_previous_grades: result.regradePreviousGrades,
+          ...(await impersonationAuditFields(request)),
+        },
+        dedupe: false,
+      });
       return {
         action: 'REMAP_ORPHANED_EMOJIS',
-        success: `Successfully remapped ${result.totalRemapped} grade(s).`,
+        success:
+          result.quizAdjustments > 0
+            ? `Remapped ${result.repoGrades} grade(s) and ${result.quizAdjustments} quiz adjustment(s).`
+            : `Successfully remapped ${result.totalRemapped} grade(s).`,
         totalRemapped: result.totalRemapped,
       };
     },

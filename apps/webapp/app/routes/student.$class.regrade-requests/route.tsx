@@ -4,6 +4,7 @@ import type { Route } from './+types/route';
 import { ClassmojiService } from '@classmoji/services';
 import { RegradeRequestsTable } from '~/components/';
 import { requireStudentAccess } from '~/utils/helpers';
+import { loadStudentRegradeRows } from '~/utils/regradeRequestRows.server';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { userId, classroom } = await requireStudentAccess(request, params.class!, {
@@ -11,9 +12,13 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     action: 'view_regrade_requests',
   });
 
-  const regradeRequests = await ClassmojiService.regradeRequest.findMany({
-    student_id: userId,
-    classroom_id: classroom.id,
+  // The student's own requests only (session user + the gate's classroom).
+  // Quiz attempts reach the page as the classroom's emoji, never a number.
+  const scale = await ClassmojiService.emojiMapping.findScaleByClassroomId(classroom.id);
+  const regradeRequests = await loadStudentRegradeRows({
+    classroomId: classroom.id,
+    studentId: userId,
+    scale,
   });
   return { regradeRequests, org: classroom.git_organization?.login };
 };

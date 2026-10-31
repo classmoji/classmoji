@@ -6,12 +6,14 @@ import dayjs from 'dayjs';
 import {
   ClassmojiService,
   type CourseworkAssignment,
+  type LinkedMaterial,
   type StudentCourseworkRow,
 } from '@classmoji/services';
 import type { StudentGradeSummary } from '@classmoji/utils';
 import type { Route } from './+types/route';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
+import { courseworkMaterials } from '~/utils/courseworkMaterials.server';
 import WeeklyCalendarCard, { type WeekEvent } from './WeeklyCalendarCard';
 import UpNextCard, { type DashboardRepoRow, type UpNextRow } from './UpNextCard';
 import { eventFetchWindow, startOfWeek } from './week';
@@ -25,7 +27,10 @@ import RetroTabsCard, {
 interface DashboardData {
   weekStart: string;
   weekEvents: WeekEvent[];
-  /** What the student still owes, soonest due first: every type, at most five. */
+  /**
+   * What the student still owes, soonest due first: every type, at most five,
+   * each with the published pages and decks linked to its assignment.
+   */
   upNext: UpNextRow[];
   /** Staff previewing the dashboard start a quiz from the quiz list instead. */
   viewerIsStudent: boolean;
@@ -190,6 +195,31 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
         .slice(0, 5);
     }
 
+    const upNextRows = ClassmojiService.studentCoursework.upNext(coursework);
+    // The pages and decks linked to each Up next assignment, so a row leads to
+    // what the work is about as well as to where it is done. Published ones
+    // only, whoever is looking. A failed read is logged and leaves the rows
+    // without them.
+    const materials = upNextRows.length
+      ? await ClassmojiService.studentCoursework
+          .linkedMaterials(
+            classroom.id,
+            upNextRows.map(row => row.assignmentId)
+          )
+          .catch((error): Map<string, LinkedMaterial[]> => {
+            console.error('[student dashboard] linked materials failed', courseworkContext, error);
+            return new Map();
+          })
+      : new Map<string, LinkedMaterial[]>();
+    // The card shows no repo details, so none are sent. Every row keeps the
+    // hours its student bought (repo or quiz), so a row inside them is not
+    // overdue.
+    // Nor a quiz row's raw percentage (`score`): grades reach the page as emoji (E1).
+    const upNext: UpNextRow[] = upNextRows.map(({ repo: _repo, score: _score, ...row }) => ({
+      ...row,
+      materials: courseworkMaterials(materials.get(row.assignmentId), classSlug),
+    }));
+
     const weekEvents: WeekEvent[] = (weekEventsRaw as Array<Record<string, unknown>>).map(e => ({
       id: String(e.id),
       title: String(e.title),
@@ -199,8 +229,8 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     }));
 
     // Recent grades: released repo grades (emoji, as on the Assignments page)
-    // and quiz scores (the counting attempt's percentage, shown as soon as it
-    // completes), newest first. Both come from the coursework rows, so a grade
+    // and quiz grades (the counting attempt's grade as the classroom's emoji,
+    // shown as soon as it completes; never the number, E1), newest first. Both come from the coursework rows, so a grade
     // shows here only for an assignment the student can see there.
     const repoFeedback: FeedbackItem[] = coursework.flatMap(row =>
       row.repo && row.repo.gradesReleased && row.repo.grades.length > 0
@@ -221,12 +251,17 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       .filter(row => row.type === 'QUIZ' && row.score !== null)
       .map(row => ({
         id: `quiz-${row.assignmentId}`,
+        kind: 'QUIZ' as const,
         assignmentTitle: row.title,
         closedAt: row.scoredAt,
         graders: [],
         grades: [],
         issueUrl: null,
-        score: row.score,
+        scoreEmoji: row.scoreEmoji ?? null,
+        originalScoreEmoji: row.originalScoreEmoji ?? null,
+        adjusted: row.adjusted ?? false,
+        countedScoreEmoji: row.countedScoreEmoji ?? null,
+        lateHours: row.numLateHours,
         href: row.href,
       }));
     const feedback: FeedbackItem[] = [...repoFeedback, ...quizFeedback]
@@ -263,26 +298,41 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       ? { moduleTitle: latestMissing.repository.title, moduleSlug: latestMissing.repository.slug }
       : null;
 
-    const resubmits: ResubmitItem[] = (regradeRequests as Array<Record<string, unknown>>).map(r => {
-      const ra = r.git_repo_assignment as { assignment?: { title?: string } } | undefined;
-      return {
-        id: String(r.id),
-        assignmentTitle: ra?.assignment?.title ?? 'Assignment',
-        status: String(r.status),
-        createdAt: r.created_at as string | Date,
-      };
-    });
+    // A request is on a repo submission or on a quiz attempt; a quiz one is
+    // labelled as a quiz with its attempt number. Where the classroom does
+    // not show quizzes, its quiz requests are left out (the predicate the
+    // rest of this page and `regradeRequest.findManyForDisplay` use).
+    const showQuizRequests = await quizzesVisiblePromise;
+    const resubmits: ResubmitItem[] = regradeRequests
+      .filter(r => showQuizRequests || !r.quiz_attempt_id)
+      .map(r => {
+        const attempt = r.quiz_attempt;
+        if (attempt) {
+          return {
+            id: r.id,
+            kind: 'QUIZ' as const,
+            // The quiz's own name, as the requests page shows it.
+            assignmentTitle: attempt.quiz.name || 'Quiz',
+            attemptNumber: attempt.attempt_number,
+            status: r.status,
+            createdAt: r.created_at,
+          };
+        }
+        return {
+          id: r.id,
+          kind: 'REPO' as const,
+          assignmentTitle: r.git_repo_assignment?.assignment?.title ?? 'Assignment',
+          attemptNumber: null,
+          status: r.status,
+          createdAt: r.created_at,
+        };
+      });
 
     return {
       // A plain date, which dayjs parses as local midnight on either side.
       weekStart: weekStart.format('YYYY-MM-DD'),
       weekEvents,
-      // The card shows no repo details, so none are sent. Every row keeps the
-      // hours its student bought (repo or quiz), so a row inside them is not
-      // overdue.
-      upNext: ClassmojiService.studentCoursework
-        .upNext(coursework)
-        .map(({ repo: _repo, ...row }): UpNextRow => row),
+      upNext,
       viewerIsStudent: membership?.role === 'STUDENT',
       feedback,
       team,

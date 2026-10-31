@@ -24,8 +24,8 @@ import pluginPrettier from 'eslint-plugin-prettier';
  *
  * The rule names the MINTING exports rather than the package, because only
  * those bypass the gate: `signBlobUrl`, `signSrcSet`, `signThemeBase`,
- * `signMediaUrl` and `signRenderToken` produce a signature, and `deriveKey` and
- * `signCanonical` are the primitives they produce it with.
+ * `signFilesBase`, `signMediaUrl` and `signRenderToken` produce a signature,
+ * and `deriveKey` and `signCanonical` are the primitives they produce it with.
  *
  * Everything else in the package is grammar that both sides have to agree on —
  * `mediaKey`, `isMediaVariant`, `contentTypeForMediaExt`, the canonical-string
@@ -52,6 +52,7 @@ const CONTENT_SIGNING = {
     'signBlobUrl',
     'signSrcSet',
     'signThemeBase',
+    'signFilesBase',
     'signMediaUrl',
     'signRenderToken',
     'signCanonical',
@@ -109,9 +110,15 @@ export default [
         '@classmoji/utils/quiz-agent',
         '@classmoji/utils/quiz-excluded-paths',
         '@classmoji/utils/agents/projection',
+        '@classmoji/utils/agents/limits',
+        '@classmoji/utils/ask-moji',
+        '@classmoji/utils/ask-moji/copy',
+        '@classmoji/utils/ask-moji/limits',
         '@classmoji/utils/ai-models',
         '@classmoji/content-signing',
         '@classmoji/tasks',
+        // A package `exports` subpath, which the lint resolver does not read.
+        '@trigger.dev/sdk/ai',
       ],
     },
     rules: {

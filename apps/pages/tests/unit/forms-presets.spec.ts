@@ -242,6 +242,11 @@ test.describe('Project bidding', () => {
     );
   });
 
+  test('each people picker says what a pick means, so teams do not depend on the wording', () => {
+    expect(byLabel(parsed(), 'Who would you like to work with?').intent).toBe('together');
+    expect(byLabel(parsed(), "Anyone you'd rather not work with?").intent).toBe('apart');
+  });
+
   test('no Project bidding question is an identity question', () => {
     for (const field of parsed()) expect(isIdentityQuestion(field)).toBe(false);
   });

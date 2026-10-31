@@ -431,7 +431,7 @@ const STUDENT_STEPS: FeatureStep[] = [
     selector: '[data-tour="dashboard-activity-tabs"]',
     placement: 'top',
     title: 'Activity tabs',
-    description: 'Switch between your recent feedback, team, and regrade activity.',
+    description: 'Switch between your recent feedback, team, and regrade/resubmit activity.',
   },
   {
     link: '/assignments',
@@ -462,17 +462,17 @@ const STUDENT_STEPS: FeatureStep[] = [
   },
   {
     link: '/regrade-requests',
-    title: 'Regrade requests',
+    title: 'Regrade/Resubmit Requests',
     description:
-      'If you think a grade is wrong, regrade requests are how you formally ask your instructor or TA to take another look. Your requests and their status live on this page, so you can follow up without chasing anyone over email.',
+      'If you think a grade is wrong, regrade/resubmit requests are how you formally ask your instructor or TA to take another look. Your requests and their status live on this page, so you can follow up without chasing anyone over email.',
   },
   {
     link: '/regrade-requests',
     selector: '[data-tour="regrade-new"]',
     placement: 'bottom',
-    title: 'Request a regrade',
+    title: 'Request regrade/resubmit',
     description:
-      'Use this to open a new regrade request on an assignment you believe was marked incorrectly. Explain what you think is off, submit it, and your instructor or a TA will review the assignment and respond.',
+      'Use this to open a new regrade/resubmit request on an assignment you believe was marked incorrectly. Explain what you think is off, submit it, and your instructor or a TA will review the assignment and respond.',
   },
   {
     link: '/calendar',

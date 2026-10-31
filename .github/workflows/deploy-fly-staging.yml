@@ -109,6 +109,9 @@ jobs:
               - 'packages/**'
             tasks:
               - 'packages/tasks/**'
+              # Holds the quiz chat agent's tasks (a pointer bump redeploys).
+              - 'apps/ai-agent'
+              - 'apps/ai-agent/**'
               - 'packages/database/**'
               - 'packages/services/**'
               - 'packages/utils/**'
@@ -131,6 +134,7 @@ jobs:
     secrets:
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       PERSONAL_ACCESS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
 
   build-ai-agent:
     needs: changes
@@ -181,6 +185,7 @@ jobs:
     secrets:
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       PERSONAL_ACCESS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
 
   build-slides:
     needs: changes
@@ -191,6 +196,7 @@ jobs:
     secrets:
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       PERSONAL_ACCESS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
 
   build-admin:
     needs: [changes, build-ai-agent]
@@ -407,6 +413,15 @@ jobs:
 
       - name: Install dependencies
         run: npm ci --legacy-peer-deps
+
+      - name: Check a single @trigger.dev/sdk version is installed
+        run: |
+          versions=$(npm ls @trigger.dev/sdk --all --json --legacy-peer-deps 2>/dev/null | node -e 'const seen=new Set();const walk=n=>{for(const [k,v] of Object.entries((n&&n.dependencies)||{})){if(k==="@trigger.dev/sdk"&&v.version)seen.add(v.version);walk(v)}};walk(JSON.parse(require("fs").readFileSync(0,"utf8")));console.log([...seen].sort().join(" "))')
+          echo "@trigger.dev/sdk versions: ${versions:-none}"
+          if [ "$(echo $versions | wc -w)" -ne 1 ]; then
+            echo "::error::Expected exactly one @trigger.dev/sdk version; apps/ai-agent and packages/tasks must pin the same one."
+            exit 1
+          fi
 
       - name: Deploy to Trigger.dev
         working-directory: packages/tasks

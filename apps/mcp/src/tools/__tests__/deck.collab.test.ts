@@ -28,6 +28,23 @@ const mocks = vi.hoisted(() => ({
   userFindById: vi.fn(),
   auditCreate: vi.fn(),
   findMembership: vi.fn(),
+  writeHtmlBlockFile: vi.fn(),
+  readHtmlBlockSources: vi.fn(),
+  deleteHtmlBlockFile: vi.fn(),
+  parseOwnFilesUrl: vi.fn(),
+}));
+
+/** Stands in for the service's typed refusal (deck tools map it by instance). */
+const { FakeHtmlBlockFileError } = vi.hoisted(() => ({
+  FakeHtmlBlockFileError: class extends Error {
+    code: string;
+    status: number;
+    constructor(code: string, message: string) {
+      super(message);
+      this.code = code;
+      this.status = code === 'changed' ? 409 : 400;
+    }
+  },
 }));
 
 vi.mock('@classmoji/services/slides', async () => {
@@ -50,6 +67,10 @@ vi.mock('@classmoji/services/slides', async () => {
     resolveDeckPreviewConflicts: (...a: unknown[]) => mocks.resolveDeckPreviewConflicts(...a),
     discardDeckPreview: (...a: unknown[]) => mocks.discardDeckPreview(...a),
     resolveSharedThemeUrls: (...a: unknown[]) => mocks.resolveSharedThemeUrls(...a),
+    writeHtmlBlockFile: (...a: unknown[]) => mocks.writeHtmlBlockFile(...a),
+    readHtmlBlockSources: (...a: unknown[]) => mocks.readHtmlBlockSources(...a),
+    deleteHtmlBlockFile: (...a: unknown[]) => mocks.deleteHtmlBlockFile(...a),
+    HtmlBlockFileError: FakeHtmlBlockFileError,
     slideService: {
       findById: (...a: unknown[]) => mocks.slideFindById(...a),
       STARTER_CUSTOM_CSS: 'STARTER_CSS',
@@ -63,6 +84,9 @@ vi.mock('@classmoji/services', () => ({
   },
   ClassmojiService: {
     audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
+    contentDelivery: {
+      parseOwnFilesUrl: (...a: unknown[]) => mocks.parseOwnFilesUrl(...a),
+    },
     user: { findById: (...a: unknown[]) => mocks.userFindById(...a) },
     classroomMembership: {
       findByClassroomAndUser: (...a: unknown[]) => mocks.findMembership(...a),
@@ -186,6 +210,20 @@ beforeEach(() => {
   mocks.discardDeckPreview.mockResolvedValue({ existed: true });
   mocks.userFindById.mockResolvedValue({ id: 'teacher-1', name: 'Grace Hopper' });
   mocks.auditCreate.mockResolvedValue(undefined);
+  let fileCount = 0;
+  mocks.writeHtmlBlockFile.mockImplementation(async () => ({
+    src: `blocks/f${String(++fileCount).padStart(7, '0')}.html`,
+    rev: 'e'.repeat(40),
+  }));
+  mocks.deleteHtmlBlockFile.mockResolvedValue({ deleted: true });
+  // A files URL of class-1 on the test content host → its repo path.
+  mocks.parseOwnFilesUrl.mockImplementation((classroomId: string, url: string) => {
+    const prefix = `https://content.test/c/${classroomId}/files/G/sig/`;
+    if (classroomId !== 'class-1' || !url.startsWith(prefix)) return null;
+    const [path, query = ''] = url.slice(prefix.length).split('?');
+    return { repoPath: path, query: query ? `?${query}` : '' };
+  });
+  mocks.readHtmlBlockSources.mockResolvedValue([]);
   route('GET', 'snapshot', snapshotResponder());
   route('POST', 'ops', () => ({ status: 200, body: { version: 5 } }));
 });
@@ -629,27 +667,37 @@ describe('block ops', () => {
   const BOX = { left: 10, top: 20, width: 400, height: 300 };
   const SOURCE =
     '<!doctype html><canvas id="c"></canvas><script>let s = "a < b && \'c\'";</script>';
+  const REV = 'a'.repeat(40);
+  const NEW_REV = 'e'.repeat(40);
   const serve = (version: number, deck: DeckJson) =>
     route('GET', 'snapshot', () => ({
       status: 200,
       body: { epoch: 1, version, live: true, content: deck },
     }));
   const read = () => deckOutlineTool.handler({ classroom: 'org/x', slide_id: SLIDE_ID }, CTX);
-  const apply = (ops: unknown[], expected_sha = 'live:1.4') =>
+  const apply = (ops: unknown[], expected_sha = 'live:1.4', extra: Record<string, unknown> = {}) =>
     deckApplyTool.handler(
-      { classroom: 'org/x', slide_id: SLIDE_ID, expected_sha, ops: ops as never },
+      { classroom: 'org/x', slide_id: SLIDE_ID, expected_sha, ops: ops as never, ...extra },
       CTX
     );
   const posts = () => calls.filter(call => call.method === 'POST');
 
-  /** DECK() with the html block applied (what the live deck holds after the add). */
+  /** DECK() with an html file block (what the live deck holds after the add). */
   function deckWithBlock(): DeckJson {
     return applyDeckOps(DECK(), [
-      { op: 'block_add', slide: 'bbb', type: 'html', box: BOX, source: SOURCE, block_id: 'b1' },
+      {
+        op: 'block_add',
+        slide: 'bbb',
+        type: 'html',
+        box: BOX,
+        src: 'blocks/0a0b0c0d.html',
+        rev: REV,
+        block_id: 'b1',
+      },
     ]).deck;
   }
 
-  it('live block_add: the block id is fixed before the ops travel, and reported', async () => {
+  it('live block_add with source: the code is written to a new file and the op travels as src + rev', async () => {
     serve(4, DECK());
     await read();
     const result = parse(
@@ -657,8 +705,25 @@ describe('block ops', () => {
     );
     const sent = posts()[0]?.body?.ops as Array<Record<string, unknown>>;
     expect(sent[0].block_id).toMatch(/^[0-9a-f]{8}$/);
+    expect(sent[0]).not.toHaveProperty('source');
+    expect(sent[0]).toMatchObject({ src: 'blocks/f0000001.html', rev: NEW_REV });
+    expect(mocks.writeHtmlBlockFile).toHaveBeenCalledWith({
+      slideId: SLIDE_ID,
+      actorUserId: 'teacher-1',
+      html: SOURCE,
+      mode: 'live',
+      blockId: sent[0].block_id,
+      surface: 'mcp',
+    });
     expect(result.applied).toEqual([
-      { op: 'block_add', slide: 'bbb', block_id: sent[0].block_id, type: 'html' },
+      {
+        op: 'block_add',
+        slide: 'bbb',
+        block_id: sent[0].block_id,
+        type: 'html',
+        src: 'blocks/f0000001.html',
+        rev: NEW_REV,
+      },
     ]);
     // Guarded by the pin, like an update of the slide holding the block.
     expect(posts()[0]?.body?.expect_since).toEqual({ epoch: 1, version: 4 });
@@ -666,15 +731,264 @@ describe('block ops', () => {
     expect(JSON.stringify(audit)).toContain(String(sent[0].block_id));
   });
 
-  it('a block op the live service refuses (its slide changed) is BLOCK_CHANGED', async () => {
+  it('live block_update with source writes a new file and keeps the one the block named (other decks may name it)', async () => {
+    serve(4, deckWithBlock());
+    await read();
+    const result = parse(
+      await apply([{ op: 'block_update', slide: 'bbb', block_id: 'b1', source: '<p>v2</p>' }])
+    );
+    const write = mocks.writeHtmlBlockFile.mock.calls[0][0];
+    expect(write).toMatchObject({ html: '<p>v2</p>', mode: 'live', blockId: 'b1' });
+    // Never over the file the deck names now.
+    expect(write).not.toHaveProperty('src');
+    expect(write).not.toHaveProperty('expectedRev');
+    const sent = posts()[0]?.body?.ops as Array<Record<string, unknown>>;
+    expect(sent[0]).toEqual({
+      op: 'block_update',
+      slide: 'bbb',
+      block_id: 'b1',
+      src: 'blocks/f0000001.html',
+      rev: NEW_REV,
+    });
+    expect(result.applied[0]).toMatchObject({ src: 'blocks/f0000001.html', rev: NEW_REV });
+    // No block of this deck names it any more, but another deck may, and the
+    // published deck does until the next checkpoint.
+    expect(mocks.deleteHtmlBlockFile).not.toHaveBeenCalled();
+  });
+
+  it('two sources for one block in a call: the deck names the last file, only the one written between goes', async () => {
+    serve(4, deckWithBlock());
+    await read();
+    mocks.deleteHtmlBlockFile.mockImplementation(async () => {
+      // The deck write has landed by the time the file goes.
+      expect(posts()).toHaveLength(1);
+      return { deleted: true };
+    });
+    await apply([
+      { op: 'block_update', slide: 'bbb', block_id: 'b1', source: '<p>v2</p>' },
+      { op: 'block_update', slide: 'bbb', block_id: 'b1', source: '<p>v3</p>' },
+    ]);
+    const sent = posts()[0]?.body?.ops as Array<Record<string, unknown>>;
+    expect(sent.map(op => op.src)).toEqual(['blocks/f0000001.html', 'blocks/f0000002.html']);
+    expect(mocks.deleteHtmlBlockFile).toHaveBeenCalledTimes(1);
+    expect(mocks.deleteHtmlBlockFile).toHaveBeenCalledWith({
+      slideId: SLIDE_ID,
+      actorUserId: 'teacher-1',
+      src: 'blocks/f0000001.html',
+      surface: 'mcp',
+    });
+  });
+
+  it('a file written earlier in the call is kept while another block of the deck names it', async () => {
+    serve(4, deckWithBlock());
+    await read();
+    await apply([
+      { op: 'block_update', slide: 'bbb', block_id: 'b1', source: '<p>v2</p>' },
+      // A second block given the file the first one is about to leave.
+      {
+        op: 'block_add',
+        slide: 'aaa',
+        type: 'html',
+        box: BOX,
+        src: 'blocks/f0000001.html',
+        rev: NEW_REV,
+        block_id: 'b2',
+      },
+      { op: 'block_update', slide: 'bbb', block_id: 'b1', source: '<p>v3</p>' },
+    ]);
+    const sent = posts()[0]?.body?.ops as Array<Record<string, unknown>>;
+    expect(sent.at(-1)).toMatchObject({ src: 'blocks/f0000002.html' });
+    expect(mocks.deleteHtmlBlockFile).not.toHaveBeenCalled();
+  });
+
+  it('a refused live write leaves the deck and the old file as they were', async () => {
+    serve(4, deckWithBlock());
+    route('POST', 'ops', () => ({
+      status: 409,
+      body: { error: 'block-changed', changedIds: ['bbb'] },
+    }));
+    await read();
+    await expect(
+      apply([{ op: 'block_update', slide: 'bbb', block_id: 'b1', source: '<p>v2</p>' }])
+    ).rejects.toMatchObject({ code: 'BLOCK_CHANGED' });
+    // The new file is written (and left unused); nothing is deleted.
+    expect(mocks.writeHtmlBlockFile).toHaveBeenCalledTimes(1);
+    expect(mocks.deleteHtmlBlockFile).not.toHaveBeenCalled();
+  });
+
+  it('a file that cannot be written is refused and nothing travels', async () => {
+    serve(4, deckWithBlock());
+    await read();
+    mocks.writeHtmlBlockFile.mockRejectedValueOnce(
+      new FakeHtmlBlockFileError('too-large', "This block's code is too large")
+    );
+    await expect(
+      apply([{ op: 'block_update', slide: 'bbb', block_id: 'b1', source: '<p>v2</p>' }])
+    ).rejects.toMatchObject({ kind: 'invalid_params' });
+    expect(posts()).toHaveLength(0);
+    expect(mocks.deleteHtmlBlockFile).not.toHaveBeenCalled();
+  });
+
+  it('a preview keeps the old file: the published deck still names it', async () => {
+    mocks.slideFindById.mockResolvedValue(LIVE_SLIDE);
+    mocks.loadDeck.mockResolvedValue({
+      deck: deckWithBlock(),
+      sha: 'git-sha-1',
+      sha_source: 'deck',
+    });
+    serve(4, deckWithBlock());
+    await read();
+    const result = parse(
+      await apply([{ op: 'block_update', slide: 'bbb', block_id: 'b1', source: '<p>v2</p>' }])
+    );
+    expect(result.committed_to).toBe('preview');
+    expect(mocks.writeHtmlBlockFile.mock.calls[0][0]).toMatchObject({ mode: 'preview' });
+    expect(mocks.deleteHtmlBlockFile).not.toHaveBeenCalled();
+  });
+
+  it('frame URLs made for display travel as the stored deck-relative references', async () => {
+    serve(4, DECK());
+    await read();
+    const files = 'https://content.test/c/class-1/files/G/sig/';
+    const other = 'https://content.test/c/class-2/files/G/sig/';
+    await apply([
+      {
+        op: 'update',
+        id: 'bbb',
+        html:
+          `<iframe data-src="/${SLIDE_ID}/frame/slides/intro-week/games/x/index.html?cm-rev=1" ` +
+          'data-cm-orig-data-src="games/x/index.html"></iframe>' +
+          `<iframe src="${files}games/y/a.html?level=2"></iframe>` +
+          `<iframe src="${other}games/z/a.html"></iframe>`,
+        notes: `<iframe src="${files}slides/intro-week/n.html"></iframe>`,
+        attrs: { 'data-background-iframe': `${files}games/bg/index.html`, spellcheck: null },
+      },
+      {
+        op: 'insert',
+        position: { at: 'end' },
+        slides: [{ html: `<iframe src="${files}slides/intro-week/games/w/index.html"></iframe>` }],
+      },
+    ]);
+    const [update, insert] = posts()[0]?.body?.ops as Array<Record<string, unknown>>;
+    const html = String(update.html);
+    expect(html).toContain('data-src="games/x/index.html"');
+    expect(html).toContain('src="../../games/y/a.html?level=2"');
+    expect(html).not.toContain('/frame/');
+    expect(html).not.toContain('data-cm-orig');
+    // Another classroom's files URL is not ours to undo.
+    expect(html).toContain(`src="${other}games/z/a.html"`);
+    expect(update.notes).toBe('<iframe src="n.html"></iframe>');
+    expect(update.attrs).toEqual({
+      'data-background-iframe': '../../games/bg/index.html',
+      spellcheck: null,
+    });
+    expect((insert.slides as Array<{ html: string }>)[0].html).toBe(
+      '<iframe src="games/w/index.html"></iframe>'
+    );
+  });
+
+  it('every op is judged before a file is written', async () => {
+    serve(4, DECK());
+    await read();
+    await expect(
+      apply([
+        { op: 'block_add', slide: 'bbb', type: 'html', box: BOX, source: SOURCE },
+        { op: 'block_update', slide: 'bbb', block_id: 'zz', box: { top: 1 } },
+      ])
+    ).rejects.toMatchObject({
+      kind: 'invalid_params',
+      message: expect.stringMatching(/No block 'zz'/),
+    });
+    await expect(
+      apply([
+        {
+          op: 'block_add',
+          slide: 'bbb',
+          type: 'html',
+          box: BOX,
+          source: SOURCE,
+          src: 'blocks/0a0b0c0d.html',
+        },
+      ])
+    ).rejects.toMatchObject({ kind: 'invalid_params', message: expect.stringMatching(/not both/) });
+    expect(mocks.writeHtmlBlockFile).not.toHaveBeenCalled();
+    expect(posts()).toHaveLength(0);
+  });
+
+  it('html src: a repo file of the deck becomes deck-relative; one outside is kept as written', async () => {
+    serve(4, DECK());
+    await read();
+    await apply([
+      {
+        op: 'block_add',
+        slide: 'bbb',
+        type: 'html',
+        box: BOX,
+        src: 'slides/intro-week/games/snake/index.html',
+      },
+      {
+        op: 'block_add',
+        slide: 'aaa',
+        type: 'html',
+        box: BOX,
+        src: '../../games/sketchkit/draw.html?deck=x',
+      },
+    ]);
+    const sent = posts()[0]?.body?.ops as Array<Record<string, unknown>>;
+    expect(sent.map(op => op.src)).toEqual([
+      'games/snake/index.html',
+      '../../games/sketchkit/draw.html?deck=x',
+    ]);
+    expect(mocks.writeHtmlBlockFile).not.toHaveBeenCalled();
+  });
+
+  it('block_delete delete_file: deletes the file when no other block names it, after the write', async () => {
+    serve(4, deckWithBlock());
+    await read();
+    const result = parse(
+      await apply([{ op: 'block_delete', slide: 'bbb', block_id: 'b1', delete_file: true }])
+    );
+    expect(mocks.deleteHtmlBlockFile).toHaveBeenCalledWith({
+      slideId: SLIDE_ID,
+      actorUserId: 'teacher-1',
+      src: 'blocks/0a0b0c0d.html',
+      blockId: 'b1',
+      surface: 'mcp',
+    });
+    expect(result.applied[0]).toMatchObject({ file: 'blocks/0a0b0c0d.html', file_deleted: true });
+  });
+
+  it('block_delete delete_file keeps a file another block names; without it nothing is deleted', async () => {
+    const shared = applyDeckOps(deckWithBlock(), [
+      {
+        op: 'block_add',
+        slide: 'aaa',
+        type: 'html',
+        box: BOX,
+        src: './blocks/0a0b0c0d.html',
+        block_id: 'b2',
+      },
+    ]).deck;
+    serve(4, shared);
+    await read();
+    const kept = parse(
+      await apply([{ op: 'block_delete', slide: 'bbb', block_id: 'b1', delete_file: true }])
+    );
+    expect(kept.applied[0]).toMatchObject({ file_deleted: false });
+    await apply([{ op: 'block_delete', slide: 'aaa', block_id: 'b2' }], 'live:1.4');
+    expect(mocks.deleteHtmlBlockFile).not.toHaveBeenCalled();
+  });
+
+  it('a refused live write deletes nothing', async () => {
     serve(4, deckWithBlock());
     route('POST', 'ops', () => ({
       status: 409,
       body: { error: 'block-changed', changedIds: ['bbb'] },
     }));
     await expect(
-      apply([{ op: 'block_delete', slide: 'bbb', block_id: 'b1' }])
+      apply([{ op: 'block_delete', slide: 'bbb', block_id: 'b1', delete_file: true }])
     ).rejects.toMatchObject({ code: 'BLOCK_CHANGED', data: { changed_ids: ['bbb'] } });
+    expect(mocks.deleteHtmlBlockFile).not.toHaveBeenCalled();
   });
 
   it('block ops need a pin, like updates', async () => {
@@ -725,18 +1039,69 @@ describe('block ops', () => {
     expect(posts()).toHaveLength(0);
   });
 
-  it('outline lists blocks (id, type, box); get returns the source decoded', async () => {
+  it('outline lists blocks (id, type, box, src, rev); get adds the code of blocks/ files', async () => {
     serve(4, deckWithBlock());
+    mocks.readHtmlBlockSources.mockResolvedValue([
+      { src: 'blocks/0a0b0c0d.html', html: SOURCE, rev: REV, stale: false },
+    ]);
     const outline = parse(await read());
     expect(outline.slides[0]).not.toHaveProperty('blocks');
-    expect(outline.slides[1].blocks).toEqual([{ id: 'b1', type: 'html', box: BOX }]);
+    expect(outline.slides[1].blocks).toEqual([
+      { id: 'b1', type: 'html', box: BOX, src: 'blocks/0a0b0c0d.html', rev: REV },
+    ]);
+    expect(mocks.readHtmlBlockSources).not.toHaveBeenCalled();
 
     const got = parse(
       await deckGetTool.handler({ classroom: 'org/x', slide_id: SLIDE_ID, slide_ids: ['bbb'] }, CTX)
     );
-    expect(got.slides[0].blocks).toEqual([{ id: 'b1', type: 'html', box: BOX, source: SOURCE }]);
-    const whole = parse(await deckGetTool.handler({ classroom: 'org/x', slide_id: SLIDE_ID }, CTX));
-    expect(whole.slides[1].blocks[0].source).toBe(SOURCE);
+    expect(got.slides[0].blocks).toEqual([
+      { id: 'b1', type: 'html', box: BOX, src: 'blocks/0a0b0c0d.html', rev: REV, source: SOURCE },
+    ]);
+    // A teaching-team read, as the deck read itself.
+    expect(mocks.readHtmlBlockSources).toHaveBeenCalledWith({
+      slideId: SLIDE_ID,
+      actorUserId: 'teacher-1',
+      refs: [{ src: 'blocks/0a0b0c0d.html', rev: REV }],
+      access: 'view',
+    });
+  });
+
+  it('get bounds the code it returns, and a failed read omits it', async () => {
+    const many = applyDeckOps(
+      DECK(),
+      Array.from({ length: 14 }, (_, i) => ({
+        op: 'block_add' as const,
+        slide: 'bbb',
+        type: 'html' as const,
+        box: BOX,
+        src: `blocks/${String(i).padStart(8, '0')}.html`,
+        block_id: `b${i}`,
+      }))
+    ).deck;
+    serve(4, many);
+    mocks.readHtmlBlockSources.mockImplementation(
+      async ({ refs }: { refs: Array<{ src: string }> }) =>
+        refs.map(({ src }, i) => ({
+          src,
+          html: i === 1 ? 'y'.repeat(399_000) : 'x'.repeat(600),
+          rev: REV,
+          stale: false,
+        }))
+    );
+    const got = parse(await deckGetTool.handler({ classroom: 'org/x', slide_id: SLIDE_ID }, CTX));
+    const blocks = got.slides[1].blocks as Array<Record<string, unknown>>;
+    expect(mocks.readHtmlBlockSources.mock.calls[0][0].refs).toHaveLength(12);
+    expect(blocks[0].source).toHaveLength(600);
+    expect(blocks[1].source).toHaveLength(399_000);
+    expect(blocks[2]).not.toHaveProperty('source');
+    // Past the byte budget, then past the file cap.
+    expect(blocks.filter(b => b.source_omitted)).toHaveLength(blocks.length - 2);
+
+    mocks.readHtmlBlockSources.mockRejectedValue(new Error('GitHub is down'));
+    const failed = parse(
+      await deckGetTool.handler({ classroom: 'org/x', slide_id: SLIDE_ID }, CTX)
+    );
+    expect(failed.slides[1].blocks[0]).toMatchObject({ source_omitted: true });
   });
 
   it('a block made before block ids is listed under a derived id that block_update reaches', async () => {
@@ -786,6 +1151,94 @@ describe('block ops', () => {
     );
     expect(fakeFetch).not.toHaveBeenCalled();
   });
+
+  it('git mode: the deck save lands before a file the call left is deleted; the prior file stays', async () => {
+    mocks.slideFindById.mockResolvedValue(PLAIN_DRAFT);
+    mocks.loadDeck.mockResolvedValue({
+      deck: deckWithBlock(),
+      sha: 'git-sha-1',
+      sha_source: 'deck',
+    });
+    mocks.deleteHtmlBlockFile.mockImplementation(async () => {
+      expect(mocks.saveDeck).toHaveBeenCalledTimes(1);
+      return { deleted: true };
+    });
+    await deckApplyTool.handler(
+      {
+        classroom: 'org/x',
+        slide_id: SLIDE_ID,
+        expected_sha: 'git-sha-1',
+        ops: [
+          { op: 'block_update', slide: 'bbb', block_id: 'b1', source: '<p>v2</p>' },
+          { op: 'block_update', slide: 'bbb', block_id: 'b1', source: '<p>v3</p>' },
+        ] as never,
+      },
+      CTX
+    );
+    const saved = mocks.saveDeck.mock.calls[0][0].deck as DeckJson;
+    expect(saved.slides[1].html).toContain('data-cm-src="blocks/f0000002.html"');
+    expect(mocks.deleteHtmlBlockFile).toHaveBeenCalledTimes(1);
+    expect(mocks.deleteHtmlBlockFile).toHaveBeenCalledWith(
+      expect.objectContaining({ src: 'blocks/f0000001.html' })
+    );
+  });
+
+  it('git mode: a stale sha writes no file; preview always writes a new file and cannot delete files', async () => {
+    mocks.slideFindById.mockResolvedValue(PLAIN_DRAFT);
+    await expect(
+      deckApplyTool.handler(
+        {
+          classroom: 'org/x',
+          slide_id: SLIDE_ID,
+          expected_sha: 'stale',
+          ops: [{ op: 'block_add', slide: 'aaa', type: 'html', box: BOX, source: SOURCE }] as never,
+        },
+        CTX
+      )
+    ).rejects.toMatchObject({ code: 'CONTENT_CONFLICT' });
+    expect(mocks.writeHtmlBlockFile).not.toHaveBeenCalled();
+
+    mocks.loadDeck.mockResolvedValue({
+      deck: deckWithBlock(),
+      sha: 'git-sha-1',
+      sha_source: 'deck',
+    });
+    const result = parse(
+      await deckApplyTool.handler(
+        {
+          classroom: 'org/x',
+          slide_id: SLIDE_ID,
+          expected_sha: 'git-sha-1',
+          mode: 'preview',
+          ops: [{ op: 'block_update', slide: 'bbb', block_id: 'b1', source: '<p>v2</p>' }] as never,
+        },
+        CTX
+      )
+    );
+    expect(result.committed_to).toBe('preview');
+    expect(mocks.writeHtmlBlockFile.mock.calls[0][0]).toMatchObject({ mode: 'preview' });
+    expect(mocks.writeHtmlBlockFile.mock.calls[0][0]).not.toHaveProperty('src');
+    const saved = mocks.saveDeck.mock.calls[0][0].deck as DeckJson;
+    expect(saved.slides[1].html).toContain(`data-cm-rev="${NEW_REV}"`);
+    expect(saved.slides[1].html).not.toContain('srcdoc');
+
+    await expect(
+      deckApplyTool.handler(
+        {
+          classroom: 'org/x',
+          slide_id: SLIDE_ID,
+          expected_sha: 'git-sha-1',
+          mode: 'preview',
+          ops: [{ op: 'block_delete', slide: 'bbb', block_id: 'b1', delete_file: true }] as never,
+        },
+        CTX
+      )
+    ).rejects.toMatchObject({
+      kind: 'invalid_params',
+      message: expect.stringMatching(/delete_file/),
+    });
+    expect(mocks.deleteHtmlBlockFile).not.toHaveBeenCalled();
+  });
 });
 
 describe('the block guide reaches tools/list', () => {
@@ -823,12 +1276,13 @@ describe('the block guide reaches tools/list', () => {
     const schema = JSON.stringify(apply?.inputSchema);
     for (const phrase of [
       'block_add',
-      'one-file mini-game',
-      'slide html ≤200 KB',
-      'in-memory localStorage',
-      'restarts when someone edits the slide',
+      'interactive HTML file',
+      'blocks/<id>.html',
+      '≤1 MB',
       'multi-file games',
-      'not live-editable',
+      'relative to the deck folder',
+      'delete_file',
+      'other decks are not checked',
       'static vector art',
       'scripts stripped',
     ]) {
@@ -839,7 +1293,7 @@ describe('the block guide reaches tools/list', () => {
     expect(bytes(apply)).toBeLessThan(16_000);
 
     const upload = byName.get('file_upload_start');
-    expect(upload?.description).toMatch(/multi-file game.*folder.*block_add type iframe/s);
+    expect(upload?.description).toMatch(/multi-file game.*folder.*block_add type html with src/s);
     expect(upload?.description).toMatch(/html block/);
     expect(new TextEncoder().encode(upload?.description ?? '').length).toBeLessThan(1500);
     expect(JSON.stringify(upload?.inputSchema)).toContain('"folder"');

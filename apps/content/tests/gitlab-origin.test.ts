@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { GitLabOrigin } from '../src/origins/gitlab.ts';
+import { GitLabOrigin, MAX_TREE_PAGES } from '../src/origins/gitlab.ts';
 import { originFor } from '../src/origins/select.ts';
 import { GitHubOrigin } from '../src/origins/github.ts';
 import { OriginAuthError } from '../src/origins/types.ts';
@@ -90,6 +90,38 @@ describe('GitLabOrigin.fetchTree', () => {
       treeSha: 'signed',
       path: '.slidesthemes/dark',
     });
+    expect(listing.truncated).toBe(true);
+  });
+
+  it('reports a listing cut short at the page cap as truncated', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let recursivePages = 0;
+    globalThis.fetch = (async (url: string) => {
+      const u = new URL(url);
+      if (!u.searchParams.get('recursive')) {
+        return json([{ id: 'tree1', name: 'snake', type: 'tree', path: 'games/snake' }]);
+      }
+      recursivePages += 1;
+      return new Response(
+        JSON.stringify([
+          {
+            id: `b${recursivePages}`,
+            name: 'a.js',
+            type: 'blob',
+            path: `games/snake/${recursivePages}.js`,
+          },
+        ]),
+        { headers: { link: `<${url}&page_token=${recursivePages}>; rel="next"` } }
+      );
+    }) as unknown as typeof fetch;
+
+    const listing = await new GitLabOrigin().fetchTree({
+      ...ref,
+      treeSha: 'tree1',
+      path: 'games/snake',
+    });
+    expect(recursivePages).toBe(MAX_TREE_PAGES);
+    expect(listing.entries).toHaveLength(MAX_TREE_PAGES);
     expect(listing.truncated).toBe(true);
   });
 

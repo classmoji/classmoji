@@ -7,6 +7,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import QuizMessageList from '../QuizMessageList';
+import { QuizResultProvider } from '../QuizResultContext';
 
 const EVALUATION_MESSAGE = {
   id: 'm3',
@@ -42,6 +43,130 @@ describe('QuizMessageList — the evaluation card', () => {
     );
 
     expect(html).toContain('Quiz Complete!');
-    expect(html).toContain('66.7%');
+    expect(html).toContain('Quiz Evaluation: GOOD');
+    // No grade number (E1, E3): the progress ring is gone.
+    expect(html).not.toContain('66.7');
+  });
+
+  it("shows the drawer's grade as a large emoji, the band following the adjustment (D9)", () => {
+    const html = renderToStaticMarkup(
+      <QuizResultProvider
+        value={{
+          grade: {
+            emoji: 'rocket',
+            originalEmoji: 'eyes',
+            adjusted: true,
+            band: { evaluation: 'EXCELLENT', numeric_score: 4 },
+            lateHours: 6,
+            countedEmoji: '+1',
+            countsTowardGrade: true,
+          },
+          headerExtra: <span data-testid="header-extra" />,
+          beforeResults: <div data-testid="before-results" />,
+        }}
+      >
+        <QuizMessageList
+          messages={[EVALUATION_MESSAGE]}
+          readOnly
+          isQuizComplete
+          evaluationData={{
+            evaluation: 'GOOD',
+            numeric_score: 3,
+            partial_credit_percentage: 66.7,
+            // Stored emoji that a recompute from credit_earned would not give:
+            // 100 would read 🚀 and 50 👎 on the default set.
+            question_results: [
+              { question_num: 1, attempts: 1, credit_earned: 100, emoji: 'sob' },
+              { question_num: 2, attempts: 2, credit_earned: 50, emoji: null },
+            ],
+          }}
+        />
+      </QuizResultProvider>
+    );
+
+    expect(html).toContain('Quiz Evaluation: EXCELLENT');
+    expect(html).not.toContain('Quiz Evaluation: GOOD');
+    expect(html).toContain('data-testid="quiz-grade-hero-emoji"');
+    expect(html).toContain('adjusted from');
+    expect(html).toContain('6h late');
+    expect(html).toContain('data-testid="header-extra"');
+    expect(html.indexOf('data-testid="before-results"')).toBeLessThan(
+      html.indexOf('Quiz Complete!')
+    );
+    expect(html).not.toContain('66.7');
+    // The per-question emoji is the stored one, never recomputed: Q1 shows its
+    // stored 😭 (nothing else on the card is 😭), Q2 has none and shows none.
+    expect(html.match(/😭/g)?.length).toBe(1);
+    expect(html).not.toContain('👎');
+  });
+
+  it("labels a student's attempt that does not count toward their grade (E15)", () => {
+    const render = (countsTowardGrade: boolean | null) =>
+      renderToStaticMarkup(
+        <QuizResultProvider
+          value={{
+            grade: {
+              emoji: 'eyes',
+              originalEmoji: null,
+              adjusted: false,
+              band: { evaluation: 'GOOD', numeric_score: 3 },
+              lateHours: null,
+              countedEmoji: null,
+              countsTowardGrade,
+            },
+          }}
+        >
+          <QuizMessageList
+            messages={[EVALUATION_MESSAGE]}
+            readOnly
+            isQuizComplete
+            evaluationData={{ evaluation: 'GOOD', numeric_score: 3, question_results: [] }}
+          />
+        </QuizResultProvider>
+      );
+    const notCounting = render(false);
+    expect(notCounting).toContain('data-testid="quiz-grade-not-counting"');
+    expect(notCounting).toContain('Doesn&#x27;t count toward your grade');
+    // The counting attempt, and staff views (not worked out), say nothing.
+    expect(render(true)).not.toContain('quiz-grade-not-counting');
+    expect(render(null)).not.toContain('quiz-grade-not-counting');
+  });
+
+  it("shows the drawer's blocks on a completed attempt with no evaluation record", () => {
+    const slots = { grade: null, beforeResults: <div data-testid="staff-adjust-panel" /> };
+    const html = renderToStaticMarkup(
+      <QuizResultProvider value={slots}>
+        <QuizMessageList messages={[{ id: 'm1', role: 'assistant', content: 'Hi' }]} readOnly />
+      </QuizResultProvider>
+    );
+    expect(html).not.toContain('Quiz Complete!');
+    expect(html).toContain('data-testid="quiz-result-slots-fallback"');
+    expect(html.match(/data-testid="staff-adjust-panel"/g)).toHaveLength(1);
+
+    // With the card, the blocks are inside it and not repeated.
+    const card = renderToStaticMarkup(
+      <QuizResultProvider value={slots}>
+        <QuizMessageList
+          messages={[EVALUATION_MESSAGE]}
+          readOnly
+          isQuizComplete
+          evaluationData={{ evaluation: 'GOOD', numeric_score: 3, question_results: [] }}
+        />
+      </QuizResultProvider>
+    );
+    expect(card).toContain('Quiz Complete!');
+    expect(card).not.toContain('quiz-result-slots-fallback');
+    expect(card.match(/data-testid="staff-adjust-panel"/g)).toHaveLength(1);
+
+    // A running attempt shows none; no slots (a drawer without them) render nothing.
+    const running = renderToStaticMarkup(
+      <QuizResultProvider value={slots}>
+        <QuizMessageList messages={[{ id: 'm1', role: 'assistant', content: 'Hi' }]} />
+      </QuizResultProvider>
+    );
+    expect(running).not.toContain('staff-adjust-panel');
+    expect(renderToStaticMarkup(<QuizMessageList messages={[]} readOnly />)).not.toContain(
+      'quiz-result-slots-fallback'
+    );
   });
 });

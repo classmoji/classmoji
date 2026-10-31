@@ -4,7 +4,10 @@ import * as Y from 'yjs';
 import {
   applyDeckOps,
   generateDeckHtml,
+  htmlBlockMarkup,
+  normalizeSlideHtml,
   parseDeckHtml,
+  readSlideBlocks,
   slideService,
   type DeckJson,
 } from '../../../../services/src/slides/index.ts';
@@ -285,5 +288,79 @@ describe('editor block state never reaches the deck', () => {
     const out = yDocToDeck(deckToYDoc(deck));
     expect(out.slides[0].attrs).toEqual({ 'data-background-color': '#f6f5fb' });
     expect(out.slides[1].attrs).toBeUndefined();
+  });
+});
+
+describe('html blocks are files', () => {
+  const BOX = { left: 10, top: 20, width: 400, height: 300 };
+  const REV = 'd'.repeat(40);
+  const deck = (): DeckJson =>
+    applyDeckOps(
+      {
+        version: 1,
+        theme: 'white',
+        codeTheme: 'github',
+        slides: [
+          { id: 'a', html: '<h1>A</h1>' },
+          {
+            id: 'b',
+            html: normalizeSlideHtml(
+              htmlBlockMarkup({ id: 'old1', box: BOX, source: '<p>legacy</p>' })
+            ),
+          },
+        ],
+      },
+      [
+        {
+          op: 'block_add',
+          slide: 'a',
+          type: 'html',
+          box: BOX,
+          src: '../../games/sketchkit/draw.html?deck=x&f=y',
+          block_id: 'sk1',
+        },
+        {
+          op: 'block_add',
+          slide: 'a',
+          type: 'html',
+          box: BOX,
+          src: 'blocks/0a0b0c0d.html',
+          rev: REV,
+          block_id: 'f1',
+        },
+      ]
+    ).deck;
+
+  it('data-cm-src / data-cm-rev survive the Y.Doc, the wire and the renderer byte for byte', () => {
+    const original = deck();
+    const back = roundTrip(original);
+    expect(deckJson(back)).toBe(deckJson(original));
+    expect(readSlideBlocks(back.slides[0].html ?? '')).toEqual([
+      { id: 'sk1', type: 'html', box: BOX, src: '../../games/sketchkit/draw.html?deck=x&f=y' },
+      { id: 'f1', type: 'html', box: BOX, src: 'blocks/0a0b0c0d.html', rev: REV },
+    ]);
+    // A legacy srcdoc block is still carried as it is.
+    expect(readSlideBlocks(back.slides[1].html ?? '')[0].source).toBe('<p>legacy</p>');
+    const opts = { title: TITLE };
+    expect(generateDeckHtml(back, opts)).toBe(generateDeckHtml(original, opts));
+    const sections = renderDeckSections(back);
+    expect(sections).toContain(`data-cm-src="blocks/0a0b0c0d.html" data-cm-rev="${REV}"`);
+    expect(sections).not.toMatch(/<iframe[^>]*data-cm-src[^>]*\ssrc(?:doc)?=/);
+  });
+
+  it('a new rev from a peer replaces the old one through sync', () => {
+    const original = deck();
+    const doc = deckToYDoc(original);
+    const next = applyDeckOps(original, [
+      {
+        op: 'block_update',
+        slide: 'a',
+        block_id: 'f1',
+        src: 'blocks/0a0b0c0d.html',
+        rev: 'e'.repeat(40),
+      },
+    ]).deck;
+    syncDeckIntoYDoc(doc, next);
+    expect(readSlideBlocks(yDocToDeck(doc).slides[0].html ?? '')[1].rev).toBe('e'.repeat(40));
   });
 });

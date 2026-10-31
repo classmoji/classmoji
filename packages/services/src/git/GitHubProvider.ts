@@ -1185,6 +1185,25 @@ export class GitHubProvider extends GitProvider {
   }
 
   /**
+   * Where a user stands with the organization: `active` member, `pending`
+   * (an open invitation), or `none` (no membership, and no invitation, or one
+   * that expired; Github drops invitations after 7 days).
+   */
+  async orgMembershipState(org: string, username: string): Promise<'active' | 'pending' | 'none'> {
+    const octokit = await this.#getOctokit();
+    try {
+      const { data } = await octokit.request('GET /orgs/{org}/memberships/{username}', {
+        org,
+        username,
+      });
+      return data.state === 'pending' ? 'pending' : 'active';
+    } catch (error: unknown) {
+      if (isNotFound(error)) return 'none';
+      throw error;
+    }
+  }
+
+  /**
    * Get a user by their login
    * @param {string} username - GitHub username
    * @returns {Promise<Object>}

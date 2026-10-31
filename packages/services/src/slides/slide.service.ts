@@ -12,6 +12,7 @@ import { ContentService } from '../content/ContentService.ts';
 import { removeContentAssetFolder } from '../classmoji/contentAssets.service.ts';
 import * as contentManifestService from '../classmoji/contentManifest.service.ts';
 import { ensureContentRepo } from '../classmoji/page.service.ts';
+import { assertCanCreateContent } from '../classmoji/planLimits.ts';
 import { mintSlideId, type IdGenerator } from './deckHtml.ts';
 import { previewBranchName, saveDeck } from './slideContent.service.ts';
 import { isDeckSlide, isMediaBackedFileSlide, SlideKindError } from './slideSource.ts';
@@ -335,8 +336,9 @@ export function buildEditorDeck({
 
 /**
  * Everything a new slide of ANY kind has to settle before a byte is written:
- * the classroom is real and has a content repo, the title yields a slug, and
- * nothing already owns that slug or content path.
+ * the classroom is real and has a content repo, it is under its plan's slide
+ * limit, the title yields a slug, and nothing already owns that slug or
+ * content path.
  *
  * Shared by `createSlide` (deck), `createFileSlide` and `createLinkSlide`,
  * because the collision refusal is the part that MUST NOT drift: slug carries a
@@ -364,6 +366,8 @@ export async function prepareSlideCreate({
   if (!classroom.content_repo) {
     throw new Error('Classroom content repo not configured');
   }
+
+  await assertCanCreateContent(classroomId, 'slides');
 
   const slug = slideSlug(title);
   if (!slug) {

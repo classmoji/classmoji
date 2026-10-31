@@ -67,6 +67,13 @@ import { renderZone } from '../mcp/localTimes.ts';
 import type { ResourceDefinition, ToolContext } from '../mcp/registry.ts';
 import { assertProTier } from '../authz/proTier.ts';
 import {
+  emojiFor,
+  loadQuizEmojiScale,
+  studentQuizGradeView,
+  type EmojiScale,
+  type StudentAdjustedAttempt,
+} from '../tools/quizGradeEmoji.ts';
+import {
   MEMBER,
   QUIZ_ROLES,
   classroomCtx,
@@ -159,6 +166,16 @@ interface ModuleAssignmentRow {
   repository?: { id: string; title?: string | null } | null;
   quiz?: { id: string; name?: string | null } | null;
   form?: { id: string; title?: string | null } | null;
+  /** The pages and decks linked to the assignment, in their hand-arranged order. */
+  pages?: Array<{ page: LinkedDoc | null }>;
+  slides?: Array<{ slide: LinkedDoc | null }>;
+}
+
+interface LinkedDoc {
+  id: string;
+  title: string;
+  is_draft: boolean;
+  classroom_id: string;
 }
 
 interface ModuleRow {
@@ -207,10 +224,39 @@ function moduleItemSummary(item: ModuleItemRow, position: number) {
 }
 
 /**
+ * The pages and decks linked to an assignment, pages first, as the Modules
+ * page lists them under it. A student gets the published ones only, as their
+ * module row shows them; staff get every one, each saying whether it is a
+ * draft. One that belongs to another classroom is never listed, whatever row
+ * it hangs off.
+ */
+function assignmentMaterials(assignment: ModuleAssignmentRow, staff: boolean, classroomId: string) {
+  const shown = (doc: LinkedDoc | null): doc is LinkedDoc =>
+    doc !== null && doc.classroom_id === classroomId && (staff || !doc.is_draft);
+  const entry = (type: 'PAGE' | 'SLIDE', doc: LinkedDoc) => ({
+    type,
+    id: doc.id,
+    title: doc.title,
+    ...(staff ? { is_draft: doc.is_draft } : {}),
+  });
+  return [
+    ...(assignment.pages ?? [])
+      .map(link => link.page)
+      .filter(shown)
+      .map(doc => entry('PAGE', doc)),
+    ...(assignment.slides ?? [])
+      .map(link => link.slide)
+      .filter(shown)
+      .map(doc => entry('SLIDE', doc)),
+  ];
+}
+
+/**
  * One assignment of a module.
  *
  * A STUDENT gets what their module row renders and nothing else: the
- * assignment's own id and title, its type and its due date. Not the target: the
+ * assignment's own id and title, its type, its due date and the published
+ * pages and decks linked to it (`materials`). Not the target: the
  * service's student filter (`openToStudents`) already leaves out an assignment
  * whose quiz or form is a draft, but the target's own name is still not what a
  * student's module row shows. Not weight, extra credit or submission mode
@@ -219,19 +265,24 @@ function moduleItemSummary(item: ModuleItemRow, position: number) {
  *
  * Staff get the placement in full: the target the type points at, as one
  * generic pair rather than three nullable id columns (a classroom without
- * quizzes must not carry a key that names one), the grading fields and the
- * publish flag.
+ * quizzes must not carry a key that names one), the grading fields, the
+ * publish flag, and every linked page and deck, drafts included.
  *
  * The array order IS the display order (the service sorts by the hand-arranged
  * position, then deadline, then title), so no position is emitted: a stored
  * position is only meaningful through that tie-break.
  */
-function moduleAssignmentSummary(assignment: ModuleAssignmentRow, staff: boolean) {
+function moduleAssignmentSummary(
+  assignment: ModuleAssignmentRow,
+  staff: boolean,
+  classroomId: string
+) {
   const base = {
     id: assignment.id,
     title: assignment.title,
     type: assignment.type,
     student_deadline: assignment.student_deadline ?? null,
+    materials: assignmentMaterials(assignment, staff, classroomId),
   };
   if (!staff) return base;
 
@@ -255,8 +306,9 @@ export const modulesResource: ResourceDefinition = {
   description:
     'Ordered curriculum modules, each with its content items (pages, slides, forms) and ' +
     'the assignments that belong to it (REPO, QUIZ or FORM, in display order). Students see ' +
-    'published modules, items and assignments only, each assignment by title, type and due ' +
-    'date; staff also see unpublished, with each assignment’s target and grading fields. ' +
+    'published modules, items and assignments only, each assignment by title, type, due ' +
+    'date and its published linked pages/decks (`materials`); staff also see unpublished, ' +
+    'with each assignment’s target, grading fields and draft materials flagged is_draft. ' +
     'Returns {enabled:false} when the classroom hides modules (show_modules).',
   scope: 'read',
   roles: MEMBER,
@@ -307,7 +359,7 @@ export const modulesResource: ResourceDefinition = {
           .map((item, index) => moduleItemSummary(item, index)),
         assignments: (m.assignments ?? [])
           .filter(a => quizzesVisible || a.type !== 'QUIZ')
-          .map(a => moduleAssignmentSummary(a, staff)),
+          .map(a => moduleAssignmentSummary(a, staff, classroomId)),
       })),
     };
   },
@@ -334,6 +386,7 @@ interface QuizRow extends QuizPlacementSource {
   include_code_context: boolean;
   course_search_enabled?: boolean;
   excluded_paths?: string[];
+  code_sandbox_enabled?: boolean;
   repository_id?: string | null;
   source_material?: Array<{
     kind: string;
@@ -351,7 +404,10 @@ interface QuizRow extends QuizPlacementSource {
   attemptsSummary?: unknown;
   attemptCount?: number;
   /** The student list's own attempts (student branch only). */
-  attempts?: ScorableQuizAttempt[];
+  attempts?: Array<
+    ScorableQuizAttempt &
+      StudentAdjustedAttempt & { attempt_number?: number | null; attemptNumber?: number }
+  >;
 }
 
 /**
@@ -381,18 +437,41 @@ interface QuizRow extends QuizPlacementSource {
  * 0 = no extensions), the net hours this student bought, the due date those
  * hours give, and — inside `my_attempts` — the late hours of the attempt that
  * counts. The counting attempt is the grade engine's (`countingQuizScore`:
- * the strategy picks among late-penalised scores), and the score shown for it
- * stays its raw percentage, as students see quiz scores. A quiz in no module
- * has no assignment: no price, no hours, its own due date.
+ * the strategy picks among late-penalised scores), and its grade is shown
+ * unpenalised as the classroom's emoji (an adjustment's own emoji, with the
+ * AI's original and the instructor's comment: `studentQuizGradeView`), never
+ * a number (E6). A quiz in no module has no assignment: no price, no hours,
+ * its own due date, and the service's counting attempt. `my_attempts.attempts`
+ * lists every attempt of the caller's (as the web quiz list does), each with
+ * its grade, whether it is the one that counts, the instructor's comment and
+ * the id of its open regrade request, so regrade_create can target any of
+ * them.
  *
- * Two narrow reads for the whole list (prices and hours), never one per quiz.
+ * Three narrow reads for the whole list (prices, hours, open requests), never
+ * one per quiz.
  */
-async function studentQuizExtensions(ctx: ToolContext, quizzes: QuizRow[]) {
+async function studentQuizExtensions(ctx: ToolContext, quizzes: QuizRow[], scale: EmojiScale) {
   const { classroomId } = classroomCtx(ctx);
   const settings = sanitizedSettings(ctx);
   const classroomPrice = Number(settings.default_tokens_per_hour ?? 0) || 0;
   const penalty = Number(settings.late_penalty_points_per_hour ?? 0) || 0;
   const assignmentIds = quizzes.flatMap(q => (q.assignment?.id ? [q.assignment.id] : []));
+
+  // The caller's own open requests on their own attempts in this classroom.
+  const attemptIds = quizzes.flatMap(q => (q.attempts ?? []).map(attempt => attempt.id));
+  const openRequests =
+    attemptIds.length === 0
+      ? []
+      : await getPrisma().regradeRequest.findMany({
+          where: {
+            classroom_id: classroomId,
+            student_id: ctx.viewer.userId,
+            status: 'IN_REVIEW',
+            quiz_attempt_id: { in: attemptIds },
+          },
+          select: { id: true, quiz_attempt_id: true },
+        });
+  const openRequestOf = new Map(openRequests.map(r => [r.quiz_attempt_id, r.id]));
 
   const [prices, hours] =
     assignmentIds.length === 0
@@ -431,19 +510,56 @@ async function studentQuizExtensions(ctx: ToolContext, quizzes: QuizRow[]) {
     },
     attemptsOf(q: QuizRow) {
       const summary = (q.attemptsSummary ?? null) as Record<string, unknown> | null;
+      if (!summary) return null;
+      // The service's scores are numbers: none of them leaves (E6).
+      const { currentScore: _current, bestScore: _best, ...rest } = summary;
+      const attempts = Array.isArray(q.attempts) ? q.attempts : [];
       const a = q.assignment;
-      if (!summary || !a?.id || !Array.isArray(q.attempts)) return summary;
-      const score = countingQuizScore(q.attempts, q.grading_strategy, {
-        studentDeadline: a.student_deadline,
-        extensionHours: hours.get(a.id) ?? 0,
-        latePenaltyPerHour: penalty,
-      });
+      const late =
+        a?.id && Array.isArray(q.attempts)
+          ? countingQuizScore(q.attempts, q.grading_strategy, {
+              studentDeadline: a.student_deadline,
+              extensionHours: hours.get(a.id) ?? 0,
+              latePenaltyPerHour: penalty,
+              emojiScale: scale,
+            })
+          : null;
+      const countingId = late
+        ? late.counting_attempt_id
+        : typeof rest.countingAttemptId === 'string'
+          ? rest.countingAttemptId
+          : null;
+      const counting = attempts.find(attempt => attempt.id === countingId) ?? null;
+      const grade = studentQuizGradeView(counting, scale);
       return {
-        ...summary,
-        // The attempt the grade counts, shown at its raw score.
-        currentScore: score.raw_percentage,
-        countingAttemptId: score.counting_attempt_id,
-        lateHours: score.late_hours,
+        ...rest,
+        ...(late
+          ? { countingAttemptId: late.counting_attempt_id, lateHours: late.late_hours }
+          : {}),
+        // The attempt the grade counts, as an emoji before any late penalty.
+        current_emoji: grade.emoji,
+        adjusted: grade.adjusted,
+        original_emoji: grade.original_emoji,
+        instructor_comment: grade.instructor_comment,
+        instructor_name: grade.instructor_name,
+        // Every attempt, newest first, as regrade_create targets.
+        attempts: attempts.map(attempt => {
+          const own = studentQuizGradeView(attempt, scale);
+          return {
+            id: attempt.id,
+            attempt_number: attempt.attempt_number ?? attempt.attemptNumber ?? null,
+            completed_at: attempt.completed_at ?? null,
+            grade_emoji: own.emoji,
+            adjusted: own.adjusted,
+            original_emoji: own.original_emoji,
+            instructor_comment: own.instructor_comment,
+            instructor_name: own.instructor_name,
+            open_regrade_request_id: openRequestOf.get(attempt.id) ?? null,
+            // Whether this is the attempt the grade counts (E15, the web's
+            // "Doesn't count toward your grade"); null when none counts yet.
+            counts_toward_grade: countingId ? attempt.id === countingId : null,
+          };
+        }),
       };
     },
   };
@@ -456,9 +572,15 @@ export const QUIZZES_DESCRIPTION =
   'published quizzes (closed ones too, as CLOSED), published material and their own attempt ' +
   'summary. For a student each quiz also has assignment_id (what extension_purchase takes), ' +
   'effective_tokens_per_hour (price of one extension hour; 0 = none), extension_hours ' +
-  'bought, effective_due_date (due date plus those hours) and my_attempts.lateHours (hours ' +
-  'late of the attempt that counts; currentScore is its raw score). Requires a Pro ' +
-  'subscription and quizzes_enabled.';
+  'bought, effective_due_date (due date plus those hours) and my_attempts: lateHours (hours ' +
+  'late of the attempt that counts), current_emoji (its grade before the late penalty), ' +
+  'adjusted with original_emoji when staff changed the grade, instructor_comment and ' +
+  'instructor_name, and attempts: every attempt (id, attempt_number, completed_at, ' +
+  'grade_emoji, adjusted, original_emoji, instructor_comment, instructor_name, ' +
+  'open_regrade_request_id, counts_toward_grade), the ids regrade_create takes. ' +
+  "Grades are emoji on the classroom's scale (score-N badges on the " +
+  'numeric scale), never numbers; staff get avg_emoji. Requires a Pro subscription and ' +
+  'quizzes_enabled.';
 
 export const quizzesResource: ResourceDefinition = {
   name: 'quizzes',
@@ -489,6 +611,9 @@ export const quizzesResource: ResourceDefinition = {
       grading_strategy: q.grading_strategy,
       include_code_context: q.include_code_context,
       course_search_enabled: q.course_search_enabled ?? false,
+      // Students too, as on the web quiz list: the quiz may ask questions
+      // answered in a code sandbox.
+      code_sandbox_enabled: q.code_sandbox_enabled ?? false,
       repository_id: q.repository_id ?? null,
       // Field by field. The service already dropped drafts for the student list.
       source_material: (q.source_material ?? []).map(doc => ({
@@ -515,7 +640,11 @@ export const quizzesResource: ResourceDefinition = {
         membership as never,
         { includeClosed: true }
       )) as QuizRow[];
-      const extensions = await studentQuizExtensions(ctx, quizzes);
+      const extensions = await studentQuizExtensions(
+        ctx,
+        quizzes,
+        await loadQuizEmojiScale(classroomId)
+      );
       // Student allowlist (mirrors the student route's .map): NO system_prompt,
       // rubric_prompt, subject, difficulty_level, or class-wide stats.
       return {
@@ -527,10 +656,10 @@ export const quizzesResource: ResourceDefinition = {
       };
     }
 
-    const quizzes = (await ClassmojiService.quiz.findByClassroom(
-      classroomId,
-      membership as never
-    )) as QuizRow[];
+    const [quizzes, scale] = await Promise.all([
+      ClassmojiService.quiz.findByClassroom(classroomId, membership as never) as Promise<QuizRow[]>,
+      loadQuizEmojiScale(classroomId),
+    ]);
     return {
       quizzes: quizzes.map(q => ({
         ...base(q),
@@ -543,7 +672,8 @@ export const quizzesResource: ResourceDefinition = {
         // Null = the classroom's default_tokens_per_hour.
         tokens_per_hour: q.assignment?.tokens_per_hour ?? null,
         attempts_count: q.attemptsCount ?? 0,
-        avg_score: q.avgScore ?? null,
+        // The class average (effective scores) as the scale's nearest emoji.
+        avg_emoji: emojiFor(q.avgScore, scale),
       })),
     };
   },

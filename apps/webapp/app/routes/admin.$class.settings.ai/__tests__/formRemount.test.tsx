@@ -48,10 +48,15 @@ vi.mock('~/hooks', () => ({ useGlobalFetcher: () => ({ fetcher: { submit } }) })
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: vi.fn(),
   assertClassroomMutationAllowed: vi.fn(),
+  addClassroomAuditLog: vi.fn(),
+}));
+vi.mock('~/routes/admin.$class.ask-moji/impersonation.server', () => ({
+  impersonationAuditFields: async () => ({}),
 }));
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {},
   ClassroomSettingsEntitlementError: class extends Error {},
+  ClassroomSettingsValidationError: class extends Error {},
 }));
 vi.mock('~/utils/aiFeatures.server', () => ({ isAIAgentConfigured: () => true }));
 
@@ -90,15 +95,15 @@ const MODELS = [
   { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
 ];
 
-/** The quiz selects' list, as the loader filters it: allow-listed models only. */
-const QUIZ_MODELS = MODELS.slice(0, 2);
+/** The model selects' list, as the loader filters it: allow-listed models only. */
+const ALLOWED = MODELS.slice(0, 2);
 
 /** A choice in every select, none of them a default. */
 const STORED = {
   llm_model: 'claude-opus-5-5',
   code_aware_model: 'claude-opus-5-5',
   exploration_model: 'claude-sonnet-5',
-  syllabus_bot_model: 'claude-haiku-4-5-20251001',
+  syllabus_bot_model: 'claude-sonnet-5',
   question_effort: 'high',
   grading_effort: 'max',
   exploration_effort: 'medium',
@@ -113,7 +118,7 @@ const STORED_LABELS = [
   'High',
   'Max',
   'Medium',
-  'Claude Haiku 4.5',
+  'Claude Sonnet 5',
   'Extra high (xhigh)',
 ];
 
@@ -123,17 +128,17 @@ const ALL_NULL = Object.fromEntries(Object.keys(STORED).map(field => [field, nul
 const loaderData = (hasKey: boolean) =>
   ({
     loaderData: {
-      organization: {
-        settings: {
-          has_anthropic_key: hasKey,
-          quizzes_enabled: true,
-          syllabus_bot_enabled: true,
-          ...(hasKey ? STORED : ALL_NULL),
-        },
+      settings: {
+        has_anthropic_key: hasKey,
+        quizzes_enabled: true,
+        syllabus_bot_enabled: true,
+        syllabus_bot_instructions: null,
       },
-      availableModels: { anthropic: MODELS },
-      quizModels: QUIZ_MODELS,
+      allowedModels: ALLOWED,
       aiAgentAvailable: true,
+      askMojiToggleAvailable: true,
+      askMojiUnavailableLine: null,
+      askMojiInstructionsShown: true,
       quizzesProRequired: false,
       askMojiProRequired: false,
       defaultLabels: DEFAULT_LABELS,
@@ -231,20 +236,16 @@ const optionsOf = async (index: number) => {
 };
 
 describe('AI settings form: model options', () => {
-  // The loader passes the quiz selects only allow-listed models (quizModels);
-  // Ask Moji's select gets every model.
+  // The loader passes every model select only allow-listed models
+  // (allowedModels), Ask Moji's included.
   it.each([
     ['Standard quizzes', 0],
     ['Code-aware quizzes', 1],
     ['Code exploration', 2],
-  ])('lists only the quiz models in %s', async (_label, index) => {
-    await render(true);
-    expect(await optionsOf(index)).toEqual(QUIZ_MODELS.map(model => model.label));
-  });
-
-  it('lists every model for Ask Moji', async () => {
-    await render(true);
     // Page order: three quiz models, three efforts, then Ask Moji's model.
-    expect(await optionsOf(6)).toEqual(MODELS.map(model => model.label));
+    ['Ask Moji', 6],
+  ])('lists only the allow-listed models in %s', async (_label, index) => {
+    await render(true);
+    expect(await optionsOf(index)).toEqual(ALLOWED.map(model => model.label));
   });
 });

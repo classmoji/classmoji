@@ -37,8 +37,11 @@ const calendarEventPageLink = linkTable();
 const calendarEventSlideLink = linkTable();
 const calendarEventAssignmentLink = linkTable();
 
+const classroomSettings = { findUnique: vi.fn() };
+
 const client = {
   calendarEvent,
+  classroomSettings,
   calendarEventOverride,
   calendarEventPageLink,
   calendarEventSlideLink,
@@ -80,6 +83,7 @@ const linkTables = () => [
 
 beforeEach(() => {
   vi.clearAllMocks();
+  classroomSettings.findUnique.mockResolvedValue(null);
   calendarEvent.findUnique.mockResolvedValue(STORED_EVENT);
   calendarEvent.create.mockResolvedValue({ ...STORED_EVENT, id: 'event-2' });
   calendarEvent.update.mockResolvedValue({ ...STORED_EVENT });
@@ -188,5 +192,38 @@ describe('deleteEventWithScope — this and future', () => {
     for (const table of linkTables()) {
       expect(table.deleteMany).not.toHaveBeenCalled();
     }
+  });
+});
+
+describe('this and future — where the old series ends', () => {
+  /** A Monday-evening meeting: 21:00 in New York is already Tuesday in UTC. */
+  const EVENING_OCCURRENCE = new Date('2026-09-29T01:00:00Z');
+
+  const untilOfOldSeries = () => {
+    const call = calendarEvent.update.mock.calls.find(
+      ([args]) => (args as { where: { id: string } }).where.id === 'event-1'
+    );
+    return (call![0] as { data: { recurrence_rule: { until: unknown } } }).data.recurrence_rule
+      .until;
+  };
+
+  it.each([
+    ['update', () => updateEventWithScope('event-1', {}, 'this_and_future', EVENING_OCCURRENCE)],
+    ['delete', () => deleteEventWithScope('event-1', 'this_and_future', EVENING_OCCURRENCE)],
+  ])('%s: ends it on the classroom’s day before, as a date', async (_name, run) => {
+    classroomSettings.findUnique.mockResolvedValue({ timezone: 'America/New_York' });
+
+    await run();
+
+    // The occurrence removed is Monday Sep 28 locally, so the series runs to
+    // Sunday Sep 27: a date a date-only `until` reads in the same zone. The UTC
+    // date (Sep 28) would keep the Monday it is meant to remove.
+    expect(untilOfOldSeries()).toBe('2026-09-27');
+  });
+
+  it('uses the UTC day when the classroom has no zone', async () => {
+    await updateEventWithScope('event-1', {}, 'this_and_future', EVENING_OCCURRENCE);
+
+    expect(untilOfOldSeries()).toBe('2026-09-28');
   });
 });

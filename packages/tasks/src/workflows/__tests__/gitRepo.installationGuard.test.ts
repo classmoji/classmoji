@@ -243,6 +243,36 @@ describe('daily release cron with a missing installation id', () => {
     expect(mocks.repairInstallation).toHaveBeenCalledTimes(1);
     expect(createRepositoriesTriggerAndWait).toHaveBeenCalledTimes(2);
   });
+
+  it('keeps releasing after one repository fails, then ends the run failed', async () => {
+    mocks.findReadyForRelease.mockResolvedValue([
+      releaseRow('repo-1', 'Lab 1 Getting Started'),
+      releaseRow('repo-4', 'Lab 4'),
+    ]);
+    mocks.repairInstallation.mockResolvedValue({
+      status: 'connected',
+      org: { ...orphanedOrg(), github_installation_id: '987' },
+    });
+    createRepositoriesTriggerAndWait
+      .mockRejectedValueOnce(new Error('Github is down'))
+      .mockResolvedValueOnce({ ok: true });
+
+    await expect(runCron()).rejects.toThrow(
+      /1 failure\(s\).*Lab 1 Getting Started: Github is down/
+    );
+    expect(createRepositoriesTriggerAndWait).toHaveBeenCalledTimes(2);
+  });
+
+  it('ends the run failed when a child run failed', async () => {
+    mocks.findReadyForRelease.mockResolvedValue([releaseRow('repo-1', 'Lab 1 Getting Started')]);
+    mocks.repairInstallation.mockResolvedValue({
+      status: 'connected',
+      org: { ...orphanedOrg(), github_installation_id: '987' },
+    });
+    createRepositoriesTriggerAndWait.mockResolvedValueOnce({ ok: false });
+
+    await expect(runCron()).rejects.toThrow(/repository creation failed/);
+  });
 });
 
 describe('ensureGitInstallation', () => {

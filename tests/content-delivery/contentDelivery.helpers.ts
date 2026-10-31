@@ -1096,7 +1096,7 @@ export async function assetRow(
 export async function syncMap(classroomId: string): Promise<void> {
   assertWritableDatabase(`re-sync the asset map for classroom ${classroomId}`);
   const service = await services();
-  await service.contentAssets.syncContentAssets(classroomId, { full: true });
+  await service.contentAssets.syncContentAssets(classroomId, { force: true });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

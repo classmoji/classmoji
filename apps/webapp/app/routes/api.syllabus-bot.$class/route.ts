@@ -128,6 +128,11 @@ async function mintTurnMcpToken(userId: string): Promise<{
  * quiz conversation gets exactly the same answer as a caller who names an id
  * that does not exist — the response never distinguishes "no such conversation"
  * from "not yours", so the id space cannot be probed.
+ *
+ * A conversation carrying an Ask Moji grant (`context.grant`, the Trigger
+ * runtime's) is not one of this route's, whoever owns it: the two runtimes
+ * share the SYLLABUS_BOT type, and this legacy path must never resume, end or
+ * send into a Trigger conversation (R4). It gets the same not-found answer.
  */
 async function findOwnedConversation({
   conversationId,
@@ -138,15 +143,17 @@ async function findOwnedConversation({
   userId: string;
   classroomId: string;
 }) {
-  return getPrisma().aIConversation.findFirst({
+  const row = await getPrisma().aIConversation.findFirst({
     where: {
       id: conversationId,
       user_id: userId,
       classroom_id: classroomId,
       type: 'SYLLABUS_BOT',
     },
-    select: { id: true },
+    select: { id: true, context: true },
   });
+  if (!row || ClassmojiService.askMojiChat.readGrant(row.context) !== null) return null;
+  return { id: row.id };
 }
 
 /** The one scoped not-found every conversation-binding failure returns. */

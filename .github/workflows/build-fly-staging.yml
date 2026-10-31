@@ -11,6 +11,9 @@ on:
         required: true
       PERSONAL_ACCESS_TOKEN:
         required: true
+      # Source map upload for the webapp, pages and slides; optional.
+      SENTRY_AUTH_TOKEN:
+        required: false
     outputs:
       image:
         description: Image pushed for this staging service and workflow attempt
@@ -38,6 +41,7 @@ jobs:
         env:
           SERVICE: ${{ inputs.service }}
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         run: |
           case "$SERVICE" in
             webapp|ai-agent|hook-station|collab|mcp|pages|slides|admin) ;;
@@ -52,8 +56,18 @@ jobs:
           if [ "$SERVICE" = ai-agent ]; then
             DOCKERFILE=scripts/docker/ai-agent.staging.Dockerfile
           fi
+          # Browser apps upload source maps to Sentry when the secret exists;
+          # without it the image builds exactly as before.
+          set --
+          case "$SERVICE" in
+            webapp|pages|slides)
+              if [ -n "$SENTRY_AUTH_TOKEN" ]; then
+                set -- --build-secret "SENTRY_AUTH_TOKEN=$SENTRY_AUTH_TOKEN"
+              fi
+              ;;
+          esac
           LABEL="staging-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           flyctl deploy --config "apps/${SERVICE}/fly.toml" --dockerfile "$DOCKERFILE" \
             --app "$APP" --remote-only --depot=true --depot-scope=app \
-            --build-only --push --image-label "$LABEL"
+            --build-only --push --image-label "$LABEL" "$@"
           echo "image=registry.fly.io/${APP}:${LABEL}" >> "$GITHUB_OUTPUT"

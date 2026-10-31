@@ -8,7 +8,8 @@ import {
   IconWorld,
   IconX,
 } from '@tabler/icons-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { toast } from 'react-toastify';
 
 /**
  * PagesSidebar - Collapsible sidebar with page navigation
@@ -47,10 +48,17 @@ const PagesSidebar = ({
   mobileOpen,
   onMobileClose,
 }: PagesSidebarProps) => {
-  const fetcher = useFetcher();
+  const fetcher = useFetcher<{ error?: string }>();
   const isCreating = fetcher.state !== 'idle';
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newPageTitle, setNewPageTitle] = useState('');
+
+  // A refused create (the free plan's page limit, say) answers with an error
+  // instead of the redirect; without this the button just stops spinning.
+  const createError = fetcher.state === 'idle' ? fetcher.data?.error : undefined;
+  useEffect(() => {
+    if (createError) toast.error(createError);
+  }, [createError, fetcher.data]);
 
   const handleCreatePage = () => {
     setShowCreateModal(true);

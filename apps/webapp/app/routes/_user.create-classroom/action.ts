@@ -15,6 +15,11 @@ import { slugify } from './utils';
 import { pickContentNamespace } from './contentNamespace.server';
 import { createGitLabClassroom } from './createGitLabClassroom.server';
 import { prepareClassroomImport, runClassroomImport } from './importFlow.server';
+import {
+  finishArchiveAndContinue,
+  gateClassroomCreate,
+  limitPayload,
+} from './activeClassGate.server';
 
 export const action = checkAuth(async ({ request }: { request: Request }) => {
   const authData = await getAuthSession(request);
@@ -43,6 +48,7 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     content_repo: contentRepoInput,
     importConfig,
     timezone: browserTimeZone,
+    archiveClassroomId,
   } = body;
 
   // The creator's browser zone becomes the course's time zone. Validated
@@ -220,6 +226,10 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
   const prepared = await prepareClassroomImport(user.id, importConfig);
   if ('error' in prepared) return { error: prepared.error };
 
+  // The Free plan's one-active-class rule (activeClassGate.server.ts).
+  const gate = await gateClassroomCreate(user.id, archiveClassroomId);
+  if (!gate.ok) return gate.response;
+
   // Create Classroom, Settings, and Membership in transaction.
   //
   // The slug guard wraps the WHOLE `$transaction` call: a P2002 inside an
@@ -232,6 +242,11 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
       { slug, orgLogin: gitOrg.login },
       classroomSlug =>
         getPrisma().$transaction(async tx => {
+          // Re-checked under the creator's plan-owner lock, so two creates at
+          // once cannot both take the last slot.
+          if (gate.status === 'ACTIVE') {
+            await ClassmojiService.classroomLifecycle.assertCanCreateActive(tx, user.id);
+          }
           const row = await tx.classroom.create({
             data: {
               git_org_id,
@@ -239,6 +254,9 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
               name,
               content_namespace: contentNamespace,
               content_repo: contentRepo,
+              created_by: user.id,
+              plan_owner_id: user.id,
+              status: gate.status,
             },
           });
 
@@ -264,6 +282,9 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
       return {
         error: `'${slug}' and every variation of it are already taken — pick a different slug`,
       };
+    }
+    if (ClassmojiService.classroomLifecycle.isActiveClassroomLimitError(error)) {
+      return limitPayload(error.message, error.activeClassrooms ?? []);
     }
     // Unique-constraint race on something the guard does NOT retry: the content
     // repo or the internal namespace, claimed between the pre-checks and the
@@ -307,10 +328,21 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
       },
     });
 
+  // "Archive X and continue": only now that the class exists and its teams
+  // were set up is the old class archived and this one made active.
+  const activationWarning = gate.archiveClassroomId
+    ? await finishArchiveAndContinue({
+        newClassroomId: classroom.id,
+        archiveClassroomId: gate.archiveClassroomId,
+        userId: user.id,
+      })
+    : null;
+
   return {
     success: successMessage,
     action: ActionTypes.CREATE_CLASSROOM,
     classroomSlug: classroom.slug,
+    activation_warning: activationWarning,
     import_job_id: importJobId,
     import_warnings: importWarnings,
     /** Source org login when its GitHub App installation was unreachable, else null. */

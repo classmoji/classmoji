@@ -37,6 +37,7 @@
     "@react-router/express": "^7.11.0",
     "@react-router/node": "^7.9.2",
     "@react-router/serve": "^7.9.2",
+    "@sentry/react-router": "^10.76.2",
     "@tabler/icons-react": "^3.35.0",
     "@tailwindcss/typography": "^0.5.19",
     "cheerio": "^1.1.2",

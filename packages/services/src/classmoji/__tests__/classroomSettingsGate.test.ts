@@ -224,3 +224,45 @@ describe('getTimeZone', () => {
     expect(await getTimeZone(CLASSROOM_ID)).toBeNull();
   });
 });
+
+describe('updateSettings — Ask Moji instructions', () => {
+  it('stores trimmed text, clears blank, refuses too long or non-text', async () => {
+    const { updateSettings, ClassroomSettingsValidationError } =
+      await import('../classroom.service.ts');
+    const { INSTRUCTIONS_MAX_CHARS } = await import('@classmoji/utils/ask-moji/limits');
+
+    await updateSettings(CLASSROOM_ID, { syllabus_bot_instructions: '  Be brief.  ' });
+    expect(upsertMock.mock.calls[0][0].update).toEqual({ syllabus_bot_instructions: 'Be brief.' });
+
+    await updateSettings(CLASSROOM_ID, { syllabus_bot_instructions: '   ' });
+    expect(upsertMock.mock.calls[1][0].update).toEqual({ syllabus_bot_instructions: null });
+
+    await updateSettings(CLASSROOM_ID, {
+      syllabus_bot_instructions: 'x'.repeat(INSTRUCTIONS_MAX_CHARS),
+    });
+    expect(upsertMock).toHaveBeenCalledTimes(3);
+
+    const tooLong = updateSettings(CLASSROOM_ID, {
+      syllabus_bot_instructions: 'x'.repeat(INSTRUCTIONS_MAX_CHARS + 1),
+    });
+    await expect(tooLong).rejects.toBeInstanceOf(ClassroomSettingsValidationError);
+    await expect(tooLong).rejects.toMatchObject({ code: 'INSTRUCTIONS_TOO_LONG' });
+    await expect(
+      updateSettings(CLASSROOM_ID, { syllabus_bot_instructions: 42 as never })
+    ).rejects.toMatchObject({ code: 'INSTRUCTIONS_INVALID' });
+    expect(upsertMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('is never exposed to the client view of the settings', async () => {
+    const { getClassroomForUI } = await import('../classroom.service.ts');
+    const ui = getClassroomForUI({
+      id: 'c',
+      settings: { syllabus_bot_enabled: true, syllabus_bot_instructions: 'secret owner text' },
+    });
+    expect(ui?.settings).toEqual({
+      syllabus_bot_enabled: true,
+      has_anthropic_key: false,
+      has_openai_key: false,
+    });
+  });
+});

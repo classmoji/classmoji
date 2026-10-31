@@ -175,6 +175,7 @@ interface QuizRow extends QuizPlacementSource {
   include_code_context?: boolean;
   course_search_enabled?: boolean;
   excluded_paths?: string[];
+  code_sandbox_enabled?: boolean;
 }
 
 /** What quiz.publish returns: the quiz row plus what the publish did. */
@@ -206,6 +207,7 @@ function quizSummary(quiz: QuizRow) {
     include_code_context: quiz.include_code_context ?? false,
     course_search_enabled: quiz.course_search_enabled ?? false,
     excluded_paths: quiz.excluded_paths ?? [],
+    code_sandbox_enabled: quiz.code_sandbox_enabled ?? false,
     subject: quiz.subject ?? null,
     difficulty_level: quiz.difficulty_level ?? null,
     system_prompt: quiz.system_prompt ?? null,
@@ -266,6 +268,15 @@ const excludedPathsSchema = z
       '"**/*.spec.js"). At most 50, 200 characters each; no absolute paths, "..", "!" or "#"'
   );
 
+// A content setting, like include_code_context: an assistant may change it, so
+// it is not in QUIZ_AUTHOR_SETTING_ARGS. Each attempt pins it when it starts.
+const codeSandboxSchema = z
+  .boolean()
+  .describe(
+    'Let the AI attach an editable code sandbox (HTML/CSS/JS, TypeScript or React) to ' +
+      'questions answered in code (default false)'
+  );
+
 /**
  * The list as the quiz service will store it, checked with the quiz form's
  * own rule (@classmoji/utils/quiz-excluded-paths); a bad one is an
@@ -311,6 +322,7 @@ interface QuizCreateArgs {
   include_code_context?: boolean;
   course_search_enabled?: boolean;
   excluded_paths?: string[];
+  code_sandbox_enabled?: boolean;
   grading_strategy?: 'HIGHEST' | 'MOST_RECENT' | 'FIRST';
   max_attempts?: number;
 }
@@ -372,6 +384,7 @@ export const quizCreateTool: ToolDefinition<QuizCreateArgs> = {
       .describe('Let the AI read the student’s repo for the linked repository (default false)'),
     course_search_enabled: courseSearchSchema.optional(),
     excluded_paths: excludedPathsSchema.optional(),
+    code_sandbox_enabled: codeSandboxSchema.optional(),
     grading_strategy: gradingStrategySchema.optional(),
     max_attempts: maxAttemptsSchema.optional(),
   },
@@ -420,6 +433,9 @@ export const quizCreateTool: ToolDefinition<QuizCreateArgs> = {
           ? { courseSearchEnabled: args.course_search_enabled }
           : {}),
         ...(excludedPaths !== undefined ? { excludedPaths } : {}),
+        ...(args.code_sandbox_enabled !== undefined
+          ? { codeSandboxEnabled: args.code_sandbox_enabled }
+          : {}),
         ...(args.grading_strategy !== undefined ? { gradingStrategy: args.grading_strategy } : {}),
         ...(args.max_attempts !== undefined ? { maxAttempts: args.max_attempts } : {}),
       })) as QuizRow;
@@ -436,6 +452,8 @@ export const quizCreateTool: ToolDefinition<QuizCreateArgs> = {
         name: created.name,
         module_id: moduleId,
         repository_id: repositoryId ?? null,
+        // As the row was saved: absent from the call is off.
+        code_sandbox_enabled: created.code_sandbox_enabled === true,
       },
     });
 
@@ -462,6 +480,7 @@ interface QuizServiceUpdate {
   includeCodeContext?: boolean;
   courseSearchEnabled?: boolean;
   excludedPaths?: string[];
+  codeSandboxEnabled?: boolean;
   maxAttempts?: number;
   gradingStrategy?: 'HIGHEST' | 'MOST_RECENT' | 'FIRST';
   assignment?: {
@@ -502,6 +521,7 @@ interface QuizUpdateArgs {
   include_code_context?: boolean;
   course_search_enabled?: boolean;
   excluded_paths?: string[];
+  code_sandbox_enabled?: boolean;
   grading_strategy?: 'HIGHEST' | 'MOST_RECENT' | 'FIRST';
   max_attempts?: number;
 }
@@ -573,6 +593,7 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
       .describe('Let the AI read the student’s repo for the linked repository'),
     course_search_enabled: courseSearchSchema.optional(),
     excluded_paths: excludedPathsSchema.optional(),
+    code_sandbox_enabled: codeSandboxSchema.optional(),
     grading_strategy: gradingStrategySchema.optional(),
     max_attempts: maxAttemptsSchema.optional(),
   },
@@ -616,6 +637,7 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
     set('include_code_context', 'includeCodeContext', args.include_code_context);
     set('course_search_enabled', 'courseSearchEnabled', args.course_search_enabled);
     set('excluded_paths', 'excludedPaths', excludedPathsArg(args.excluded_paths));
+    set('code_sandbox_enabled', 'codeSandboxEnabled', args.code_sandbox_enabled);
     set('grading_strategy', 'gradingStrategy', args.grading_strategy);
     set('max_attempts', 'maxAttempts', args.max_attempts);
     setOnAssignment('release_at', 'releaseAt', args.release_at);
@@ -696,7 +718,14 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
       resource_type: 'QUIZ',
       resource_id: quiz.id,
       action: 'UPDATE',
-      data: { tool: 'quiz_update', fields },
+      data: {
+        tool: 'quiz_update',
+        fields,
+        // The value, not only the name, when the call set it: a short boolean.
+        ...(args.code_sandbox_enabled !== undefined
+          ? { code_sandbox_enabled: args.code_sandbox_enabled }
+          : {}),
+      },
     });
 
     return ok({ success: true, quiz: quizSummary(updated) });

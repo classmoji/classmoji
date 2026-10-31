@@ -19,6 +19,8 @@ import {
   calculateStudentFinalGrade,
   finalStudentGrade,
   gradedItemValue,
+  quizItemEmoji,
+  quizPercentageEmoji,
 } from '@classmoji/utils';
 import type {
   GitRepo,
@@ -29,6 +31,7 @@ import type {
 } from '@classmoji/utils';
 import { useDarkMode } from '~/hooks';
 import EmojiGrader from '~/components/features/grading/EmojiGrader';
+import QuizGradeEmoji from '~/components/features/quiz/QuizGradeEmoji';
 
 /**
  * A gradebook row as it leaves the loader. A CLOSED shape on purpose: the
@@ -80,7 +83,19 @@ export interface GradebookAssignment {
 
 /** Per-student state for quiz and form assignments, keyed by assignment id then user id. */
 export interface GradebookActivity {
-  quiz: Record<string, Record<string, { completed: boolean; score: number | null }>>;
+  /**
+   * `emoji`: the counting attempt's effective grade as the classroom's emoji,
+   * or null when no completed attempt is scored. No quiz number reaches the
+   * page outside the grade items (E1).
+   */
+  /** `scored`: the counting attempt has a score (absent on older payloads). */
+  quiz: Record<
+    string,
+    Record<
+      string,
+      { completed: boolean; scored?: boolean; emoji: string | null; orphaned?: boolean }
+    >
+  >;
   form: Record<string, Record<string, { submitted: boolean }>>;
 }
 
@@ -166,7 +181,7 @@ const opensLater = (assignment: GradebookAssignment, now = Date.now()) =>
 const quizPending = (activity: GradebookActivity, student: Student, assignmentId: string) => {
   if (quizItemOf(student, assignmentId)) return false;
   const q = activity.quiz[assignmentId]?.[student.id];
-  return Boolean(q?.completed && q.score === null);
+  return Boolean(q?.completed && q.emoji === null);
 };
 /**
  * Whether a student's row passes the gradebook filter, over the visible
@@ -349,10 +364,13 @@ const GradesTable = (props: GradesTableProps) => {
     );
 
   /**
-   * A quiz cell. With a grade item it shows what the totals count: the
-   * late-penalised score (amber when late), or Missing (a counted 0). Without
-   * one it shows when the quiz opens, or the attempt state (before the
-   * deadline, running or unscored).
+   * A quiz cell. With a grade item it shows what the totals count as the
+   * classroom's emoji (E1): the late-penalised score (amber when late, with
+   * its late chip), an "adjusted" chip when staff adjusted the counting
+   * attempt (D8; on time it shows the emoji staff picked, `quizItemEmoji`), a
+   * "needs remap" chip when that adjustment's emoji left the scale (E17), or
+   * Missing (a counted 0). Without one it shows when the quiz opens, or the
+   * attempt state (before the deadline, running or unscored).
    */
   const renderQuizCell = (
     student: Student,
@@ -368,10 +386,12 @@ const GradesTable = (props: GradesTableProps) => {
       const late = item.late_hours > 0;
       return {
         body: (
-          <>
-            <span className="font-semibold tabular-nums">{Math.round(value * 10) / 10}</span>
-            {late && <Chip tone="amber">{item.late_hours}h late</Chip>}
-          </>
+          <QuizGradeEmoji
+            emoji={quizItemEmoji(item, value, emojiMappings)}
+            adjusted={item.counting_adjusted === true}
+            orphaned={item.counting_orphaned === true}
+            lateHours={item.late_hours}
+          />
         ),
         tint: late ? LATE_TINT : '',
       };
@@ -387,10 +407,10 @@ const GradesTable = (props: GradesTableProps) => {
       <Chip tone="grey">Not attempted</Chip>
     ) : !q.completed ? (
       <Chip tone="blue">In progress</Chip>
+    ) : q.emoji === null ? (
+      <span className="font-semibold">Completed</span>
     ) : (
-      <span className="font-semibold tabular-nums">
-        {q.score === null ? 'Completed' : Math.round(q.score * 10) / 10}
-      </span>
+      <QuizGradeEmoji emoji={q.emoji} orphaned={q.orphaned === true} />
     );
     return { body, tint: '' };
   };
@@ -685,21 +705,34 @@ const GradesTable = (props: GradesTableProps) => {
     // One summary cell per VISIBLE column, in column order: a collapsed module
     // contributes only its total cell.
     const meanText = (values: number[]) => (values.length ? mean(values).toFixed(1) : '–');
-    const summaryCells = groups.flatMap(group => {
+    const summaryCells: { key: string; content: React.ReactNode }[] = groups.flatMap(group => {
       const ids = new Set(group.items.map(a => a.id));
       const assignmentCells = collapsedModules.has(group.id)
         ? []
         : group.items.map(a => {
+            if (a.type === 'QUIZ') {
+              // Quiz cells are emoji only (E1): the class mean as the nearest
+              // emoji on the classroom's scale, the quiz cells' own helper.
+              const grades = pageData
+                .map(s => quizValueOf(s, a.id))
+                .filter((g): g is number => g !== null);
+              return {
+                key: a.id,
+                content: (
+                  <QuizGradeEmoji
+                    emoji={grades.length ? quizPercentageEmoji(mean(grades), emojiMappings) : null}
+                  />
+                ),
+              };
+            }
             const grades =
               a.type === 'REPO'
                 ? pageData.map(s => gradeOf(s, a.id)).filter((g): g is number => g !== null)
-                : a.type === 'QUIZ'
-                  ? pageData.map(s => quizValueOf(s, a.id)).filter((g): g is number => g !== null)
-                  : [];
-            return { key: a.id, text: meanText(grades) };
+                : [];
+            return { key: a.id, content: meanText(grades) };
           });
       const totals = pageData.map(s => moduleTotalOf(s, group.id, ids)).filter(t => t >= 0);
-      return [...assignmentCells, { key: `module-total-${group.id}`, text: meanText(totals) }];
+      return [...assignmentCells, { key: `module-total-${group.id}`, content: meanText(totals) }];
     });
     return (
       <Table.Summary fixed>
@@ -709,7 +742,7 @@ const GradesTable = (props: GradesTableProps) => {
           </Table.Summary.Cell>
           {summaryCells.map((cell, i) => (
             <Table.Summary.Cell key={cell.key} index={i + 1}>
-              <span className="text-xs text-ink-2 tabular-nums">{cell.text}</span>
+              <span className="text-xs text-ink-2 tabular-nums">{cell.content}</span>
             </Table.Summary.Cell>
           ))}
           <Table.Summary.Cell index={summaryCells.length + 1}>

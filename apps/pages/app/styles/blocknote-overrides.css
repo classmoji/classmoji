@@ -194,6 +194,138 @@
   line-height: 1.3;
 }
 
+/* Room above headings — every surface, like the scale above (issue #717).
+
+   BlockNote's own gap is `padding-top: 18px` on the heading, the same at
+   every level. Padding lands INSIDE a colored heading's bar, so the colored
+   rule below has always cut it to 3px, and our blue H2s and grey H3s sat flush
+   against the block above while an uncolored H4 kept its 18px. Authors made up
+   the difference with empty paragraphs.
+
+   So the gap is padding on the heading's `.bn-block`, above the bar, and the
+   heading's own top padding is 0 (3px when colored). `--heading-pad-top`
+   states that padding for the tick box and badge in page-sections.css, which
+   sit on the heading's first line.
+
+   - The gap stays inside `.bn-block` because that box is the block for the
+     pointer: BlockNote's side menu finds the hovered block by walking up to it
+     (getDraggableBlockFromElement), and the section fade and tick box hover
+     go by the block too. A margin outside it hid the drag handle and dimmed a
+     ticked section while the pointer crossed the gap.
+   - The 6px under the bar is a margin on the heading's content. `.bn-block`
+     is a flex column, so it sits between the bar and the heading's own
+     children (a toggle's body) and does not collapse. In px, because an `em`
+     there is the heading's own `--level`.
+   - The `em` above is on `.bn-block`, the 16px body size, so the gap does not
+     grow with the heading.
+   - `:not(:first-child)`: no gap on the first block of the page, a column or a
+     nested group.
+   - A heading right after a heading with no children of its own keeps only the
+     first one's 6px, so an H2 and the H3 under it read as one unit. */
+.bn-block-content[data-content-type="heading"] {
+  --heading-pad-top: 0px;
+  padding-top: var(--heading-pad-top);
+  margin-bottom: 6px;
+}
+
+.bn-block-outer:not(:first-child)
+  > .bn-block:has(> .bn-block-content[data-content-type="heading"]:not([data-level])),
+.bn-block-outer:not(:first-child)
+  > .bn-block:has(> .bn-block-content[data-content-type="heading"][data-level="1"]) {
+  padding-top: 2em;
+}
+
+.bn-block-outer:not(:first-child)
+  > .bn-block:has(> .bn-block-content[data-content-type="heading"][data-level="2"]) {
+  padding-top: 1.75em;
+}
+
+.bn-block-outer:not(:first-child)
+  > .bn-block:has(> .bn-block-content[data-content-type="heading"][data-level="3"]) {
+  padding-top: 1.25em;
+}
+
+.bn-block-outer:not(:first-child)
+  > .bn-block:has(
+    > .bn-block-content[data-content-type="heading"]:is(
+        [data-level="4"],
+        [data-level="5"],
+        [data-level="6"]
+      )
+  ) {
+  padding-top: 1em;
+}
+
+.bn-block-outer:has(> .bn-block > .bn-block-content[data-content-type="heading"]):not(
+    :has(> .bn-block > .bn-block-group)
+  )
+  + .bn-block-outer
+  > .bn-block:has(> .bn-block-content[data-content-type="heading"]) {
+  padding-top: 0;
+}
+
+/* Room around code and terminal blocks. BlockNote gives them none, so the
+   dark card touched the text above and below it.
+
+   Same mechanics as the heading gap above: padding on `.bn-block`, the box
+   the side menu and the section fade go by. Padding does not collapse, so the
+   gap below a card is the next block's top padding, not the card's own bottom
+   padding: two cards in a row get one gap, not two.
+
+   - The terminal is a React block: in the editor and the reader BlockNote
+     puts a `.react-renderer` between `.bn-block` and its content (the class
+     site renders it without one), so every rule names both shapes. `:has()`
+     cannot nest, hence the spelled-out lists.
+   - A card that opens a list item's children (a step with its code) gets the
+     gap too. Under a heading it keeps only the heading's 6px, as does a card
+     right after a heading with no children of its own.
+   - The block after a list item whose children end in a card gets the gap
+     below that card.
+   - A heading after a card keeps its own, larger gap. */
+.bn-block-outer:not(:first-child)
+  > .bn-block:has(
+    > .bn-block-content:is([data-content-type="codeBlock"], [data-content-type="terminal"]),
+    > .react-renderer > .bn-block-content[data-content-type="terminal"]
+  ),
+.bn-block:not(:has(> .bn-block-content[data-content-type="heading"]))
+  > .bn-block-group
+  > .bn-block-outer:first-child
+  > .bn-block:has(
+    > .bn-block-content:is([data-content-type="codeBlock"], [data-content-type="terminal"]),
+    > .react-renderer > .bn-block-content[data-content-type="terminal"]
+  ),
+.bn-block-outer:has(
+    > .bn-block
+      > .bn-block-content:is([data-content-type="codeBlock"], [data-content-type="terminal"]),
+    > .bn-block > .react-renderer > .bn-block-content[data-content-type="terminal"],
+    > .bn-block
+      > .bn-block-group
+      > .bn-block-outer:last-child
+      > .bn-block
+      > .bn-block-content:is([data-content-type="codeBlock"], [data-content-type="terminal"]),
+    > .bn-block
+      > .bn-block-group
+      > .bn-block-outer:last-child
+      > .bn-block
+      > .react-renderer
+      > .bn-block-content[data-content-type="terminal"]
+  )
+  + .bn-block-outer
+  > .bn-block:not(:has(> .bn-block-content[data-content-type="heading"])) {
+  padding-top: 1em;
+}
+
+.bn-block-outer:has(> .bn-block > .bn-block-content[data-content-type="heading"]):not(
+    :has(> .bn-block > .bn-block-group)
+  )
+  + .bn-block-outer
+  > .bn-block:has(
+    > .bn-block-content:is([data-content-type="codeBlock"], [data-content-type="terminal"]),
+    > .react-renderer > .bn-block-content[data-content-type="terminal"]
+  ) {
+  padding-top: 0;
+}
+
 /* Apply background colors from data-background-color attribute */
 /* BlockNote paints only its nine color names. Pages also hold raw values
    (e.g. "rgb(251, 243, 219)" from pasted HTML) that paint nothing, so padding
@@ -209,13 +341,16 @@
     [data-background-color="brown"],
     [data-background-color="gray"]
   ) {
+  --heading-pad-top: 3px;
   padding: 3px 4px !important;
   border-radius: 0 !important;
 }
 
-/* Override the parent .bn-block background in dark mode — BlockNote sets light-mode
-   colors on .bn-block which leak through if .bn-block-content has border-radius */
-.dark .bn-block:has(> .bn-block-content[data-content-type="heading"][data-background-color]) {
+/* A colored heading's bar is its content alone. BlockNote also paints the
+   whole `.bn-block` (`.bn-block:has(> [data-background-color])`), which would
+   color the gap above the bar and the 6px under it, and in dark mode leaked its
+   light colors around the bar. */
+.bn-block:has(> .bn-block-content[data-content-type="heading"][data-background-color]) {
   background-color: transparent !important;
 }
 
@@ -564,6 +699,187 @@
 .terminal-header > .bn-copy-toggle {
   margin-left: auto;
   margin-right: -0.5rem;
+}
+
+/* Collapsible code blocks (page-schema codeCollapse.ts). The block's <code> is
+   its editable content, so lines cannot be taken out: the <pre> is clipped to
+   its first 10 lines (title bar and padding included, so 34px + 1rem above
+   and 1rem below) and the rest stays in place for find-in-page and Copy. The
+   clip is `hidden`, not `clip`: the browser may still scroll the <pre> to show
+   a match, and that scroll is what opens the block. `data-collapse` is only
+   on the <pre> of a block that collapses; every other code block is
+   untouched. */
+.bn-container .bn-block-content[data-content-type="codeBlock"] > pre[data-collapse] {
+  /* Room for the bar, which is absolute (the block content is a flex row). */
+  margin-bottom: 34px;
+}
+
+.bn-container .bn-block-content[data-content-type="codeBlock"] > pre[data-collapse="collapsed"] {
+  /* For browsers without the `lh` unit (before Safari 16.4, Firefox 120):
+     10 rows of the 21.7px line the built stylesheet gives 14px code. */
+  max-height: calc(34px + 2rem + 217px);
+  max-height: calc(34px + 2rem + 10lh);
+  overflow-y: hidden;
+}
+
+/* While the height animates (an inline max-height, removed when it lands). */
+.bn-container .bn-block-content[data-content-type="codeBlock"] > pre[data-animating] {
+  overflow-y: hidden;
+  transition: max-height 250ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* The bar along the bottom mirrors the title bar: same height and colours,
+   the label in the code's font, rounded with the block (its overflow clips). */
+.bn-container .bn-block-content[data-content-type="codeBlock"] > div > .bn-code-expand {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 34px;
+  margin: 0;
+  padding: 0 14px;
+  border: 0;
+  border-top: 1px solid #1a1a1a;
+  border-radius: 0;
+  background-color: #2d2d2d;
+  color: #8e8e8e;
+  font-size: 13px !important;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+
+.bn-container .bn-block-content[data-content-type="codeBlock"] > div > .bn-code-expand:hover {
+  color: #d4d4d4;
+  background-color: #333333;
+}
+
+.bn-container .bn-block-content[data-content-type="codeBlock"] > div > .bn-code-expand:focus-visible {
+  outline: 2px solid #60a5fa;
+  outline-offset: -2px;
+  color: #d4d4d4;
+}
+
+.bn-code-expand svg {
+  display: block;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  transition: transform 250ms ease;
+}
+
+.bn-code-expand[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+/* Both labels are drawn; the state picks one. */
+.bn-code-expand[aria-expanded="true"] .bn-code-expand-more,
+.bn-code-expand[aria-expanded="false"] .bn-code-expand-less {
+  display: none;
+}
+
+/* From the last shown line into the bar, in the block's own colour. */
+.bn-container .bn-block-content[data-content-type="codeBlock"] > div > .bn-code-fade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 34px;
+  z-index: 1;
+  height: 44px;
+  background: linear-gradient(to bottom, rgb(22 22 22 / 0), rgb(22 22 22) 88%);
+  pointer-events: none;
+  transition: opacity 200ms ease;
+}
+
+.dark .bn-container .bn-block-content[data-content-type="codeBlock"] > div > .bn-code-fade {
+  background: linear-gradient(to bottom, rgb(20 20 20 / 0), rgb(20 20 20) 88%);
+}
+
+.bn-code-expand[aria-expanded="true"] ~ .bn-code-fade {
+  opacity: 0;
+}
+
+/* A block that does not collapse (short, or shortened in the editor). */
+.bn-code-expand[hidden],
+.bn-code-fade[hidden] {
+  display: none !important;
+}
+
+/* The editor's "Collapse long code" toggle, left of the copy toggle: the same
+   24px icon button, lit on a faint chip while on. */
+.bn-collapse-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #8e8e8e;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.bn-collapse-toggle:hover,
+.bn-collapse-toggle:focus-visible {
+  color: #d4d4d4;
+}
+
+.bn-collapse-toggle:focus-visible {
+  outline: 1px solid #8e8e8e;
+  outline-offset: 0;
+}
+
+.bn-collapse-toggle[aria-pressed="true"] {
+  color: #e5e5e5;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.bn-collapse-toggle svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+.bn-container .bn-block-content[data-content-type="codeBlock"] > div > .bn-collapse-toggle {
+  position: absolute;
+  top: 5px;
+  right: 36px;
+  z-index: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bn-container .bn-block-content[data-content-type="codeBlock"] > pre[data-animating],
+  .bn-code-expand,
+  .bn-code-expand svg,
+  .bn-code-fade {
+    transition: none !important;
+  }
+}
+
+/* Print: every line, no bar, no fade. */
+@media print {
+  .bn-container .bn-block-content[data-content-type="codeBlock"] > pre[data-collapse] {
+    max-height: none !important;
+    margin-bottom: 0;
+  }
+
+  .bn-code-expand,
+  .bn-code-fade,
+  .bn-collapse-toggle {
+    display: none !important;
+  }
 }
 
 /* Copying turned off: readers cannot select the block's text (the copy guard,

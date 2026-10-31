@@ -21,6 +21,13 @@
  * a `media://` reference has no proxy to load through, so the editor gets it
  * signed and `saveDeck` turns it back into the reference — see there.
  *
+ * Every read surface also gets its slide markup held to the allow-list
+ * (`sanitizeDeckDocumentServer`) before anything else reads it, and — where
+ * the layer can serve the classroom — its frames of repo files signed onto the
+ * content service as folder grants (`rewriteDeckFrames`, `frames` on the
+ * context). The editor's pass (`resolveDeckMedia`) does neither: the editor
+ * cleans and shows frames on its own side.
+ *
  * Every failure degrades to the stored URLs, which still work through the
  * content proxy — except `media://`, which has no proxy and no URL of its own:
  * a failed pass hands back `about:blank` in its place (`stripMediaRefs`). Nothing
@@ -28,12 +35,16 @@
  */
 
 import { createHash } from 'node:crypto';
+import { resolveCookieDomain } from '@classmoji/auth/secret';
 import { ClassmojiService, getContentUrl } from '@classmoji/services';
 import {
   rewriteDeckAssetUrls,
+  rewriteDeckFrames,
   type DeckJson,
   type DeckThemeUrls,
 } from '@classmoji/services/slides';
+import { appFrameHosts as frameHostsOf } from '@classmoji/services/slides/frame-refs';
+import { sanitizeDeckDocumentServer } from '@classmoji/services/slides/safe-markup/server';
 import { getThemeUrls } from '~/utils/themeService.server';
 import { NO_MEDIA_URL, stripMediaRefs } from '~/utils/mediaRefs';
 import { canonicalStoredPath } from '~/utils/slideDocumentAccess';
@@ -43,12 +54,42 @@ const THEMES_FOLDER = '.slidesthemes';
 
 /** The slide fields a delivery context needs. Narrow on purpose. */
 interface DeliverySlide {
+  /** The deck's id and folder: present on a deck read, which is what turns the frame pass on. */
+  id?: string;
+  content_path?: string | null;
   classroom?: {
     id?: string;
     content_key_version?: number;
     content_repo?: string;
     content_delivery_enabled?: boolean | null;
+    git_organization?: {
+      login?: string | null;
+      provider?: string | null;
+      github_installation_id?: string | null;
+      gitlab_connection_id?: string | null;
+    } | null;
   } | null;
+}
+
+/**
+ * What the frame pass needs beside the classroom: the deck's folder (frame
+ * references are relative to it), its id (its editor frame URLs), and its
+ * visibility (frames are signed `month` for a public deck, `week` otherwise —
+ * never `edit`, whoever is looking).
+ */
+export interface DeckFrameContext {
+  deckFolder: string;
+  slideId: string | null;
+  isPublic: boolean;
+}
+
+/**
+ * The app's own hosts, for the frame rule: every configured app origin, plus
+ * the session cookie's domain (`.classmoji.io` — every host under it) when
+ * there is one. The content origin is excluded by the rule itself.
+ */
+export function appFrameHosts(env: Record<string, string | undefined> = process.env): string[] {
+  return frameHostsOf(env, resolveCookieDomain(env));
 }
 
 /** What the tier decision is made of. Passed straight to `tierFor`. */
@@ -153,6 +194,17 @@ export function deckDeliveryContext(
   // refusing the context is what keeps a cheerio parse-and-reserialize off the
   // read path of every deck in a classroom that has not been opted in.
   if (!ClassmojiService.contentDelivery.isContentDeliveryEnabled(classroom)) return null;
+
+  // Frames are signed only where the layer can actually SERVE the classroom: a
+  // classroom gated on with no App installation has no folder rows to sign, and
+  // its frames keep loading the way they always have.
+  const deckFolder = canonicalStoredPath(slide.content_path);
+  const frames: DeckFrameContext | null =
+    deckFolder &&
+    ClassmojiService.contentDelivery.canDeliverContent({ ...classroom, content_repo: repo })
+      ? { deckFolder, slideId: slide.id ?? null, isPublic: Boolean(access.isPublic) }
+      : null;
+
   return {
     classroom: {
       id: classroom.id,
@@ -162,6 +214,7 @@ export function deckDeliveryContext(
       git_organization: { login: gitOrgLogin },
     },
     tier: ClassmojiService.contentDelivery.tierFor(access),
+    frames,
   };
 }
 
@@ -323,6 +376,11 @@ export interface DeckDeliveryResolvers {
     srcSets: Map<string, { src: string; srcset: string }>;
   }>;
   resolveThemeBase(ctx: NonNullable<DeliveryContext>, themeName: string): Promise<string | null>;
+  /** One pass's frame signer (`contentDelivery.createFrameSigner`). */
+  frameSigner?(
+    ctx: NonNullable<DeliveryContext>,
+    frames: DeckFrameContext
+  ): { sign(repoPath: string, query: string): Promise<string | null> };
 }
 
 const defaultResolvers: DeckDeliveryResolvers = {
@@ -330,7 +388,38 @@ const defaultResolvers: DeckDeliveryResolvers = {
     ClassmojiService.contentDelivery.resolveDelivery(ctx, refs, { srcSets: true }),
   resolveThemeBase: (ctx, themeName) =>
     ClassmojiService.contentDelivery.resolveThemeBase(ctx, themeName),
+  frameSigner: (ctx, frames) =>
+    ClassmojiService.contentDelivery.createFrameSigner({
+      classroom: ctx.classroom,
+      deckFolder: frames.deckFolder,
+      isPublic: frames.isPublic,
+    }),
 };
+
+/**
+ * The frame pass over an already-cleaned deck document: our frames signed,
+ * external ones left alone, the rest inert. `signNothing` makes every frame of
+ * ours inert — the answer when the asset pass itself has failed.
+ */
+async function resolveDeckFrames(
+  html: string,
+  ctx: NonNullable<DeliveryContext>,
+  frames: DeckFrameContext,
+  resolvers: DeckDeliveryResolvers,
+  { signNothing = false }: { signNothing?: boolean } = {}
+): Promise<string> {
+  const refs = ClassmojiService.contentDelivery.frameRefOptions(ctx.classroom, {
+    deckFolder: frames.deckFolder,
+    slideId: frames.slideId,
+    ourHosts: appFrameHosts(),
+  });
+  const makeSigner = resolvers.frameSigner ?? defaultResolvers.frameSigner;
+  const signer = signNothing || !makeSigner ? null : makeSigner(ctx, frames);
+  return rewriteDeckFrames(html, {
+    refs,
+    sign: async (repoPath, query) => (signer ? signer.sign(repoPath, query) : null),
+  });
+}
 
 /**
  * Sign the asset — and optionally the shared-theme — references inside an
@@ -359,6 +448,9 @@ export async function resolveDeckDelivery(
   } = {}
 ): Promise<{ html: string | null; themeBase: string | null }> {
   if (!html) return { html, themeBase: null };
+  // Slide markup is held to the allow-list before anything else reads it, on
+  // every read surface and whether or not anything is signed.
+  html = sanitizeDeckDocumentServer(html);
   if (!ctx) {
     return {
       html: opts.classroomId
@@ -367,6 +459,8 @@ export async function resolveDeckDelivery(
       themeBase: null,
     };
   }
+  const stored = html;
+  const frames = ctx.frames;
 
   const resolvers = opts.resolvers ?? defaultResolvers;
 
@@ -413,13 +507,28 @@ export async function resolveDeckDelivery(
         // per-blob transform URL would leave the signed folder they live in.
         srcSets: async () => new Map([...candidates].map(([ref, set]) => [ref, set.srcset])),
         sizes: ClassmojiService.contentDelivery.IMAGE_SIZES,
+        // Frames are the frame pass's, below.
+        skipFrames: Boolean(frames),
       }
     );
-    return { html: rewritten, themeBase };
+    return {
+      html: frames ? await resolveDeckFrames(rewritten, ctx, frames, resolvers) : rewritten,
+      themeBase,
+    };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     console.warn('[slides] Asset resolution failed, serving stored URLs:', message);
-    return { html: stripMediaRefs(html), themeBase };
+    const fallback = stripMediaRefs(stored);
+    if (!frames) return { html: fallback, themeBase };
+    try {
+      // Stored image URLs, but no frame of ours loads unsigned.
+      return {
+        html: await resolveDeckFrames(fallback, ctx, frames, resolvers, { signNothing: true }),
+        themeBase,
+      };
+    } catch {
+      return { html: fallback, themeBase };
+    }
   }
 }
 
@@ -672,6 +781,7 @@ export async function resolveDeckAssetsPublic(
   classroomId: string
 ): Promise<string | null> {
   if (!html) return html;
+  html = sanitizeDeckDocumentServer(html);
   try {
     return await rewriteDeckAssetUrls(html, async refs => {
       const urls = await unservedMediaUrls(classroomId, refs);

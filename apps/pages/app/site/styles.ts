@@ -193,6 +193,20 @@ export const SITE_STYLES = `
    underline is the one that carries meaning, so the border goes. */
 .site-article .page-link-display { border-bottom: none; }
 
+/* --- collapsible code blocks ------------------------------------------ */
+
+/* A long collapsible block is served clipped, and only the copy script opens
+   it. With scripting off nothing could, so the whole block shows and the bar
+   and fade, which would do nothing, are not drawn. */
+@media (scripting: none) {
+  .site-article .bn-block-content[data-content-type="codeBlock"] > pre[data-collapse] {
+    max-height: none !important;
+    margin-bottom: 0 !important;
+  }
+  .site-article .bn-code-expand,
+  .site-article .bn-code-fade { display: none !important; }
+}
+
 /* --- page directory (navGrid) ----------------------------------------- */
 
 /* Restated for the site rather than inherited from the editor's stylesheet,

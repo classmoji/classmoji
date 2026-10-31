@@ -5,9 +5,41 @@ import { envOnlyMacros } from 'vite-env-only';
 import devtoolsJson from 'vite-plugin-devtools-json';
 import tailwindcss from '@tailwindcss/vite';
 
-export default ({ command }) => {
+export default async ({ command, mode }) => {
   const isBuild = command === 'build';
+  // Source maps for Sentry (error stack traces), only when SENTRY_AUTH_TOKEN is
+  // set (CI deploys). Without it nothing here runs and the build is unchanged.
+  // With it, maps are generated hidden, uploaded by `buildEnd` in
+  // react-router.config.js and then deleted, so they are never served.
+  const sentryAuthToken = process.env.SENTRY_AUTH_TOKEN?.trim();
+  const uploadSourceMaps = command === 'build' && Boolean(sentryAuthToken);
+  const sentryPlugins = uploadSourceMaps
+    ? await (
+        await import('@sentry/react-router')
+      ).sentryReactRouter(
+        {
+          org: 'dali-lab',
+          // One project for webapp, pages and slides; debug ids tell the bundles apart.
+          project: 'classmoji',
+          authToken: sentryAuthToken,
+          telemetry: false,
+          // A fixed label for the uploaded artifacts (debug ids do the
+          // matching). Nothing is injected into the bundles, so their content
+          // and file names do not change from build to build because of it.
+          release: {
+            name: 'classmoji-sourcemaps',
+            inject: false,
+            create: false,
+            finalize: false,
+            setCommits: false,
+          },
+        },
+        { command, mode }
+      )
+    : [];
   return defineConfig({
+    // Strips the Sentry SDK's debug logging from the client bundle.
+    define: { __SENTRY_DEBUG__: false },
     // Load .env from monorepo root so Vite watches it for changes.
     // This triggers a dev server restart when the setup wizard writes GitHub credentials.
     envDir: '../../',
@@ -67,7 +99,14 @@ export default ({ command }) => {
         'jsonwebtoken',
       ],
     },
-    plugins: [devtoolsJson(), tailwindcss(), reactRouter(), tsconfigPaths(), envOnlyMacros()],
+    plugins: [
+      devtoolsJson(),
+      tailwindcss(),
+      reactRouter(),
+      tsconfigPaths(),
+      envOnlyMacros(),
+      ...sentryPlugins,
+    ],
     server: {
       port: process.env.PORT ? Number(process.env.PORT) : 3000,
       host: '0.0.0.0',
@@ -84,7 +123,7 @@ export default ({ command }) => {
     },
     build: {
       // Only generate source maps for our own code, not node_modules
-      sourcemap: process.env.NODE_ENV === 'production' ? false : true,
+      sourcemap: uploadSourceMaps ? 'hidden' : process.env.NODE_ENV === 'production' ? false : true,
       chunkSizeWarningLimit: 1000, // Increase limit to 1MB to suppress chunk size warnings
       rollupOptions: {
         external: ['graphql'], // Mark graphql as external

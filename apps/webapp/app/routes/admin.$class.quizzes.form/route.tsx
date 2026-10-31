@@ -13,17 +13,14 @@ import {
   Button,
   Switch,
   Space,
-  Tooltip,
 } from 'antd';
 import type { Dayjs } from 'dayjs';
-import { RobotOutlined, DeleteOutlined, BulbOutlined } from '@ant-design/icons';
+import { RobotOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useRouteDrawer, useDarkMode } from '~/hooks';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { ClassmojiService } from '@classmoji/services';
 import { QUIZ_AUTHOR_SETTING_KEYS, canAuthorQuiz } from '@classmoji/utils';
-import { PromptAssistant, type PromptSuggestion } from '~/components/quiz/PromptAssistant';
-import { useGitWeb } from '~/hooks/useGitWeb';
 import {
   normalizeExcludedPaths,
   parseExcludedPathsText,
@@ -52,8 +49,6 @@ import {
 } from './QuizAssignmentPanel';
 
 import type { Route } from './+types/route';
-
-import './quiz-form.css';
 
 const { TextArea } = Input;
 const { Option } = Select;
@@ -201,6 +196,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       // In material order, as picker values.
       sourceMaterial: toPickerValues(found.source_material),
       courseSearchEnabled: found.course_search_enabled,
+      codeSandboxEnabled: found.code_sandbox_enabled,
       // The textarea's text: one pattern per line.
       excludedPaths: (found.excluded_paths ?? []).join('\n'),
     };
@@ -252,8 +248,6 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
   } = loaderData;
   const callout = useCallout();
   const { opened, close } = useRouteDrawer({});
-  const web = useGitWeb();
-  const { terms } = web;
   const { isDarkMode } = useDarkMode();
   const navigate = useNavigate();
   const { class: classSlug } = useParams();
@@ -282,71 +276,6 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
       : null;
   const saveBlocked = canAuthor && (!chosenModuleId || closesError !== null);
   const [selectedExample, setSelectedExample] = useState('');
-  const [showAssistant, setShowAssistant] = useState(false);
-  const [exampleRepoUrl, setExampleRepoUrl] = useState('');
-
-  // Build form context for the assistant
-  const formContext = useMemo(() => {
-    const values = form.getFieldsValue();
-    const linkedModule = assignments?.find(
-      (a: {
-        id: string;
-        title?: string;
-        template?: string;
-        issues?: Array<{ title: string; body: string }>;
-      }) => a.id?.toString() === values.repositoryId?.toString()
-    );
-
-    return {
-      name: values.name,
-      subject: values.subject,
-      difficultyLevel: values.difficultyLevel,
-      questionCount: values.questionCount,
-      includeCodeContext: values.includeCodeContext,
-      repository: linkedModule
-        ? {
-            title: linkedModule.title,
-            template: linkedModule.template,
-            issues: (
-              linkedModule as { issues?: Array<{ title: string; body: string }> }
-            ).issues?.map(i => ({
-              title: i.title,
-              description: i.body,
-            })),
-          }
-        : null,
-    };
-  }, [form, assignments]);
-
-  // Handle applying suggestions from the assistant
-  const handleApplySuggestion = (suggestion: PromptSuggestion) => {
-    if (suggestion?.systemPrompt) {
-      form.setFieldValue('systemPrompt', suggestion.systemPrompt);
-    }
-    if (suggestion?.rubricPrompt) {
-      form.setFieldValue('rubricPrompt', suggestion.rubricPrompt);
-    }
-    // Optional fields - quiz name, subject, question count, difficulty level
-    if (suggestion?.name) {
-      form.setFieldValue('name', suggestion.name);
-    }
-    if (suggestion?.subject) {
-      form.setFieldValue('subject', suggestion.subject);
-    }
-    if (
-      suggestion?.questionCount &&
-      suggestion.questionCount >= 1 &&
-      suggestion.questionCount <= 20
-    ) {
-      form.setFieldValue('questionCount', suggestion.questionCount);
-    }
-    if (
-      suggestion?.difficultyLevel &&
-      ['Beginner', 'Intermediate', 'Advanced'].includes(suggestion.difficultyLevel)
-    ) {
-      form.setFieldValue('difficultyLevel', suggestion.difficultyLevel);
-    }
-  };
 
   // Set form values when quiz data is loaded (edit mode)
   useEffect(() => {
@@ -428,7 +357,8 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
     form.validateFields().then(
       allValues => {
         // Absent while the quiz is not code-aware (the field is not shown): the
-        // saved list is left as it is.
+        // saved list is left as it is. So is codeSandboxEnabled, carried in
+        // `values` only while its switch is shown.
         const { excludedPaths: excludedPathsText, assignment, ...values } = allValues;
         // An assistant sees the number of questions, max attempts and grading
         // strategy read-only, and its save never carries them.
@@ -500,21 +430,10 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
       {modalHolder}
       <Drawer
         title={
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Space>
-              <RobotOutlined />
-              {isEditing ? 'Edit Quiz' : 'Create New Quiz'}
-            </Space>
-            <Tooltip title={showAssistant ? 'Hide AI Assistant' : 'Show AI Assistant'}>
-              <Button
-                type={showAssistant ? 'primary' : 'default'}
-                icon={<BulbOutlined />}
-                onClick={() => setShowAssistant(!showAssistant)}
-              >
-                AI Assistant
-              </Button>
-            </Tooltip>
-          </div>
+          <Space>
+            <RobotOutlined />
+            {isEditing ? 'Edit Quiz' : 'Create New Quiz'}
+          </Space>
         }
         open={opened}
         onClose={close}
@@ -563,14 +482,10 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
           {/* Form Section */}
           <div
             style={{
-              flex: showAssistant ? '0 0 50%' : 1,
+              flex: 1,
               height: '100%',
               overflowY: 'auto',
               padding: '24px',
-              borderRight: showAssistant
-                ? `1px solid ${isDarkMode ? '#2d2d44' : '#e5e7eb'}`
-                : 'none',
-              transition: 'all 0.3s ease',
               display: 'flex',
               justifyContent: 'center',
             }}
@@ -578,7 +493,7 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
             <div
               style={{
                 width: '100%',
-                maxWidth: showAssistant ? '800px' : '1200px',
+                maxWidth: '1200px',
               }}
             >
               {saveError && (
@@ -598,23 +513,18 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
                     excludedPaths: '',
                     sourceMaterial: [],
                     courseSearchEnabled: false,
+                    codeSandboxEnabled: false,
                   }),
                   ...(canAuthor ? { assignment: panelFormValues(assignmentPanel) } : {}),
                 }}
               >
                 {/* Two columns on a wide screen (the quiz, then its Assignment
-                    panel, as on board I1); one when the AI assistant shares
-                    the drawer or the screen is narrow, the panel on top. The
-                    panel comes first in the page, so the tab order follows
-                    the narrow layout; on a wide screen it is placed last. */}
-                <div
-                  className={
-                    showAssistant
-                      ? 'flex flex-col gap-6'
-                      : 'flex flex-col gap-6 lg:grid lg:grid-cols-[minmax(0,1fr)_340px] lg:items-start'
-                  }
-                >
-                  <div className={showAssistant ? '' : 'lg:order-last lg:sticky lg:top-0'}>
+                    panel, as on board I1); one when the screen is narrow, the
+                    panel on top. The panel comes first in the page, so the tab
+                    order follows the narrow layout; on a wide screen it is
+                    placed last. */}
+                <div className="flex flex-col gap-6 lg:grid lg:grid-cols-[minmax(0,1fr)_340px] lg:items-start">
+                  <div className="lg:order-last lg:sticky lg:top-0">
                     {canAuthor ? (
                       <EditableAssignmentPanel
                         modules={modules}
@@ -677,21 +587,34 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
                       <Switch checkedChildren="On" unCheckedChildren="Off" />
                     </Form.Item>
 
-                    {/* Example Solution Repo (optional - for AI assistant code exploration) */}
+                    {/* Code sandbox questions, for a quiz whose new attempts run on
+                    the chat runtime (the only runtime that offers them), by the
+                    message limit's rule. A content setting: an assistant may
+                    change it. Hidden, it is not saved, so the stored value
+                    stays. Read from the form's store, so it is right on the
+                    first render of an edit. */}
                     <Form.Item
-                      label="Example Solution Repository (Optional)"
-                      tooltip={`Provide a ${web.label} URL to an example solution. The AI Prompt Assistant can explore this code to generate more targeted prompts.`}
-                      extra="Used by the AI Prompt Assistant to analyze code and generate context-aware quiz prompts"
+                      noStyle
+                      shouldUpdate={(prev, next) =>
+                        prev.includeCodeContext !== next.includeCodeContext ||
+                        prev.repositoryId !== next.repositoryId
+                      }
                     >
-                      <Input
-                        value={exampleRepoUrl}
-                        onChange={e => setExampleRepoUrl(e.target.value)}
-                        placeholder={
-                          web.isGitLab
-                            ? 'https://gitlab.com/group/example-solution'
-                            : 'https://github.com/org/example-solution'
-                        }
-                      />
+                      {({ getFieldValue }) =>
+                        runsOnChatRuntime(chatRuntime, {
+                          repositoryId: getFieldValue('repositoryId'),
+                          includeCodeContext: getFieldValue('includeCodeContext'),
+                        }) ? (
+                          <Form.Item
+                            name="codeSandboxEnabled"
+                            label="Code sandbox questions"
+                            valuePropName="checked"
+                            extra="Lets the quiz ask questions the student answers in an editable code sandbox (HTML/CSS/JS, TypeScript or React)."
+                          >
+                            <Switch checkedChildren="On" unCheckedChildren="Off" />
+                          </Form.Item>
+                        ) : null
+                      }
                     </Form.Item>
 
                     <Form.Item
@@ -886,28 +809,6 @@ Weigh understanding over wording; don't penalize minor syntax slips.`}
               </Form>
             </div>
           </div>
-
-          {/* AI Assistant Panel - side by side with form */}
-          {showAssistant && (
-            <div
-              className="assistant-panel"
-              style={
-                {
-                  '--panel-bg': isDarkMode ? '#111827' : '#fafafa',
-                  '--panel-border': isDarkMode ? '#374151' : '#d9d9d9',
-                } as React.CSSProperties
-              }
-            >
-              <PromptAssistant
-                classroomSlug={org}
-                formContext={formContext}
-                exampleRepoUrl={exampleRepoUrl || null}
-                onApplySuggestion={handleApplySuggestion}
-                isDarkMode={isDarkMode}
-                onClose={() => setShowAssistant(false)}
-              />
-            </div>
-          )}
         </div>
       </Drawer>
     </ConfigProvider>

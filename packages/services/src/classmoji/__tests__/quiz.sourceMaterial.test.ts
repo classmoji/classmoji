@@ -48,6 +48,8 @@ vi.mock('@classmoji/database', async () => ({
       // The row create hands back, read once the transaction has committed.
       findUniqueOrThrow: (...a: unknown[]) => tx.quiz.findUniqueOrThrow(...a),
     },
+    // The classroom's grading scale (no adjusted attempts here).
+    emojiMapping: { findMany: async () => [] },
   }),
 }));
 
@@ -128,11 +130,35 @@ describe('quiz.create', () => {
   });
 
   it('defaults course search off and leaves material alone when none is given', async () => {
-    await quizService.create({ name: 'Q', classroomId: CLASSROOM, rubricPrompt: 'r', ...IN_MODULE });
+    await quizService.create({
+      name: 'Q',
+      classroomId: CLASSROOM,
+      rubricPrompt: 'r',
+      ...IN_MODULE,
+    });
 
     expect(tx.quiz.create.mock.calls[0][0].data.course_search_enabled).toBe(false);
     expect(tx.pageLink.deleteMany).not.toHaveBeenCalled();
     expect(tx.slideLink.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('saves code sandbox questions off unless given, and on when given', async () => {
+    await quizService.create({
+      name: 'Q',
+      classroomId: CLASSROOM,
+      rubricPrompt: 'r',
+      ...IN_MODULE,
+    });
+    expect(tx.quiz.create.mock.calls[0][0].data.code_sandbox_enabled).toBe(false);
+
+    await quizService.create({
+      name: 'Q',
+      classroomId: CLASSROOM,
+      rubricPrompt: 'r',
+      ...IN_MODULE,
+      codeSandboxEnabled: true,
+    });
+    expect(tx.quiz.create.mock.calls[1][0].data.code_sandbox_enabled).toBe(true);
   });
 
   it('fails the whole create (so the transaction rolls the quiz back) on an unknown document', async () => {
@@ -222,6 +248,17 @@ describe('quiz.update', () => {
     expect(tx.quiz.update.mock.calls[1][0].data).toEqual({ name: 'N' });
   });
 
+  it('sets code_sandbox_enabled only when given, either way', async () => {
+    await quizService.update('quiz-1', { codeSandboxEnabled: true });
+    expect(tx.quiz.update.mock.calls[0][0].data).toEqual({ code_sandbox_enabled: true });
+
+    await quizService.update('quiz-1', { codeSandboxEnabled: false });
+    expect(tx.quiz.update.mock.calls[1][0].data).toEqual({ code_sandbox_enabled: false });
+
+    await quizService.update('quiz-1', { courseSearchEnabled: true });
+    expect(tx.quiz.update.mock.calls[2][0].data).toEqual({ course_search_enabled: true });
+  });
+
   it('returns the saved row and its assignment without loading attempts inside the transaction', async () => {
     const row = { id: 'quiz-1', classroom_id: CLASSROOM, name: 'N', weight: 10, assignment: null };
     tx.quiz.findUniqueOrThrow.mockResolvedValue(row);
@@ -270,7 +307,12 @@ describe('quiz excluded paths', () => {
   });
 
   it('create leaves them to the column default when none are given', async () => {
-    await quizService.create({ name: 'Q', classroomId: CLASSROOM, rubricPrompt: 'r', ...IN_MODULE });
+    await quizService.create({
+      name: 'Q',
+      classroomId: CLASSROOM,
+      rubricPrompt: 'r',
+      ...IN_MODULE,
+    });
     expect(tx.quiz.create.mock.calls[0][0].data).not.toHaveProperty('excluded_paths');
   });
 
@@ -415,9 +457,17 @@ describe('quiz.getQuizzesForStudent', () => {
       'first_attempt_percentage',
       'total_duration_ms',
       'unfocused_duration_ms',
+      // The student's own adjustment and comment, and who wrote the comment
+      // (name only); not who adjusted the score.
+      'adjusted_emoji',
+      'instructor_comment',
+      'adjusted_at',
+      'comment_at',
     ]) {
       expect(select[field], field).toBe(true);
     }
+    expect(select.comment_by).toEqual({ select: { name: true } });
+    expect(select).not.toHaveProperty('adjusted_by');
   });
 
   it('keeps the derived attempt data and names published material only', async () => {
@@ -593,9 +643,7 @@ describe('quiz.update — closing a quiz', () => {
   });
 
   it('refuses new-shape assignment fields on a quiz in no module, writing nothing', async () => {
-    const refusal = await quizService
-      .update('quiz-1', { assignment: { weight: 5 } })
-      .catch(e => e);
+    const refusal = await quizService.update('quiz-1', { assignment: { weight: 5 } }).catch(e => e);
 
     expect(refusal).toMatchObject({ name: 'QuizAssignmentError', code: 'module_required' });
     expect(tx.quiz.update).not.toHaveBeenCalled();

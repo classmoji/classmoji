@@ -5,6 +5,8 @@ import { getAuthSession } from '@classmoji/auth/server';
 
 import { ClassmojiService } from '@classmoji/services';
 import { checkAuth, waitForRunCompletion, assertClassroomAccess } from '~/utils/helpers';
+import { mutationRefusal } from '~/utils/mutationRefusal.server';
+import { impersonatedBy } from '~/routes/admin.$class.ask-moji/impersonation.server';
 
 export const loader = checkAuth(
   async ({ request, params }: { request: Request; params: Record<string, string | undefined> }) => {
@@ -115,7 +117,7 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
       // authorizing against its slug would re-resolve through a second lookup,
       // leaving nothing that ties the authorized classroom to the regrade
       // request being updated below.
-      await assertClassroomAccess({
+      const { userId, classroom, membership } = await assertClassroomAccess({
         request,
         classroomId: regradeRequest.classroom_id,
         allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
@@ -125,6 +127,34 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
           regrade_request_id: regradeRequest.id,
         },
       });
+
+      const status = body?.status;
+      if (status !== 'APPROVED' && status !== 'DENIED') {
+        return data({ error: 'status must be APPROVED or DENIED' }, { status: 400 });
+      }
+      const reply = typeof body?.comment === 'string' ? body.comment.trim() : '';
+
+      // A quiz request resolves only on the Regrade/Resubmit Requests page
+      // (its `resolve-quiz` action) or through the MCP `regrade_resolve`
+      // tool, both of which write the adjustment with the status. This
+      // endpoint resolves repo requests only.
+      if (regradeRequest.quiz_attempt_id) {
+        return data(
+          {
+            action: 'UPDATE_REGRADE_REQUEST',
+            error: 'Resolve quiz regrade requests from the Regrade/Resubmit Requests page',
+            code: 'not_repo_request',
+          },
+          { status: 400 }
+        );
+      }
+
+      // Read-only classroom (LOCKED / UNPUBLISHED, non-owner): the refusal
+      // comes back as data for the queue to show in place.
+      const blocked = mutationRefusal(classroom, membership?.role, {
+        action: 'UPDATE_REGRADE_REQUEST',
+      });
+      if (blocked) return blocked;
 
       try {
         // Re-derive the task payload from the DB record so the status update and
@@ -142,21 +172,28 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
             },
           },
           data: {
-            status: body.status,
+            status,
+            // The reply the student reads, when one is given.
+            ...(reply ? { grader_comment: reply } : {}),
           },
+          // Who resolved it: the session user the gate above admitted, and
+          // the surface, for the audit row.
+          resolved_by_id: userId,
+          tool: 'web:api.updateRegradeRequest',
+          impersonated_by: await impersonatedBy(request),
         });
 
         await waitForRunCompletion(run.id);
 
         return {
           action: 'UPDATE_REGRADE_REQUEST',
-          success: 'Resubmit request updated',
+          success: 'Regrade/resubmit request updated',
         };
       } catch (error: unknown) {
         console.error('updateRegradeRequest failed:', error);
         return {
           action: 'UPDATE_REGRADE_REQUEST',
-          error: 'Failed to update resubmit request. Please try again.',
+          error: 'Failed to update regrade/resubmit request. Please try again.',
         };
       }
     },

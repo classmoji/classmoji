@@ -1,0 +1,447 @@
+import { useEffect, useRef, useState } from 'react';
+import { Link, useFetcher, useLocation } from 'react-router';
+import { App, Button, Input } from 'antd';
+import dayjs from 'dayjs';
+import { useCallout } from '@classmoji/ui-components';
+import type { StaffAttemptGradePanel } from '~/utils/quizPayloads';
+import Emoji from '~/components/ui/display/Emoji';
+import { LateChip, NeedsRemapChip } from './QuizGradeEmoji';
+import { QuizEmojiPicker } from './QuizEmojiPicker';
+import {
+  QuizResolveFields,
+  useQuizResolveForm,
+} from '~/components/features/regrade/QuizResolveForm';
+
+/**
+ * The staff side of a completed attempt in its drawer: the "Instructor" panel
+ * (grade, adjust with the classroom's scale, a comment to the student,
+ * revert) and the open regrade/resubmit request, resolved right in its
+ * banner (E13: the queue modal's form, `QuizResolveFields`) or in the queue
+ * (`?resolve=<id>` opens its resolve modal there). Emoji only (E1).
+ * Posts to the drawer route's own action (`_action: 'adjust' | 'revert' |
+ * 'resolve'`); the server re-checks everything and returns refusals as data.
+ * In a read-only classroom (`panel.canEdit` false) only the grade and the
+ * request show, with a link to view the request in the queue.
+ */
+
+const formatDate = (iso: string | null) => (iso ? dayjs(iso).format('MMM D') : null);
+
+const Row = ({ label, children }: { label: string; children: React.ReactNode }) => (
+  <div className="flex items-center gap-3 py-1.5">
+    <div className="w-24 shrink-0 text-sm text-gray-500 dark:text-gray-400">{label}</div>
+    <div className="flex min-w-0 flex-wrap items-center gap-2">{children}</div>
+  </div>
+);
+
+/**
+ * What the attempt counts for after its late penalty. While an emoji is being
+ * picked (`pick`), what that emoji would count for (`panel.countedByEmoji`).
+ */
+const Counted = ({
+  panel,
+  pick = null,
+  label = true,
+}: {
+  panel: StaffAttemptGradePanel;
+  pick?: string | null;
+  label?: boolean;
+}) => {
+  const grade = panel.grade;
+  const late = grade?.lateHours ?? 0;
+  if (!grade || (!grade.countedEmoji && !(late > 0))) return null;
+  const counted = pick
+    ? (panel.countedByEmoji[pick] ?? pick)
+    : (grade.countedEmoji ?? grade.emoji ?? null);
+  return (
+    <span
+      data-testid="quiz-adjust-counted"
+      className="inline-flex items-center gap-1.5 text-sm text-gray-500 dark:text-gray-400"
+    >
+      {label && 'Counted'}
+      {counted ? (
+        <Emoji emoji={counted} fontSize={16} />
+      ) : (
+        <span className="text-gray-400 dark:text-gray-500">—</span>
+      )}
+      {late > 0 ? <LateChip hours={late} /> : null}
+    </span>
+  );
+};
+
+type ResolveResult = { success?: string; info?: string; error?: string };
+
+/** The banner's resolve fetcher, shared by key with `QuizResolveToast`. */
+const resolveFetcherKey = (attemptId: string) => `quiz-resolve-in-drawer-${attemptId}`;
+
+/**
+ * The toast for a request resolved in the drawer's banner. The banner goes
+ * away as soon as the request is resolved (the loader revalidates), so the
+ * toast lives here, rendered whether or not a request is open, and reads the
+ * banner's fetcher by key. Only a submission seen in flight is announced, so
+ * a reopened drawer never toasts an old result.
+ */
+export function QuizResolveToast({ attemptId }: { attemptId: string }) {
+  const fetcher = useFetcher<ResolveResult>({ key: resolveFetcherKey(attemptId) });
+  const callout = useCallout();
+  const sawSubmit = useRef(false);
+
+  useEffect(() => {
+    if (fetcher.state !== 'idle') {
+      sawSubmit.current = true;
+      return;
+    }
+    if (!sawSubmit.current || !fetcher.data) return;
+    sawSubmit.current = false;
+    if (fetcher.data.success || fetcher.data.info) {
+      callout.show({
+        variant: fetcher.data.success ? 'success' : 'info',
+        title: (fetcher.data.success ?? fetcher.data.info) as string,
+        autoDismissMs: 2000,
+      });
+    }
+    // `callout` is stable per provider.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetcher.state, fetcher.data]);
+
+  return null;
+}
+
+/**
+ * The open request's form in its banner (E13): reply, Adjust score / Keep
+ * score, the picker and the Counted line, posted to the drawer's own action
+ * (`_action: 'resolve'`). On success the loader's revalidation drops the
+ * banner, the attempt's grade and comment move with it; `QuizResolveToast`
+ * says how it was resolved.
+ */
+const ResolveInBanner = ({
+  requestId,
+  panel,
+}: {
+  requestId: string;
+  panel: StaffAttemptGradePanel;
+}) => {
+  const fetcher = useFetcher<ResolveResult>({ key: resolveFetcherKey(panel.attemptId) });
+  const { pathname } = useLocation();
+  const grade = panel.grade;
+  const form = useQuizResolveForm(requestId, grade?.emoji ?? null);
+  const busy = fetcher.state !== 'idle';
+
+  const submit = () => {
+    if (!form.canSubmit) return;
+    fetcher.submit({ _action: 'resolve', requestId, ...form.payload() } as never, {
+      method: 'POST',
+      action: pathname,
+      encType: 'application/json',
+    });
+  };
+
+  return (
+    <div data-testid="quiz-regrade-resolve" className="mt-3">
+      <QuizResolveFields
+        form={form}
+        grade={{
+          originalEmoji: (grade?.adjusted ? grade.originalEmoji : grade?.emoji) ?? null,
+          effectiveEmoji: grade?.emoji ?? null,
+          adjusted: grade?.adjusted ?? false,
+          lateHours: grade?.lateHours ?? null,
+          countedEmoji: grade?.countedEmoji ?? grade?.emoji ?? null,
+        }}
+        scaleEmojis={panel.scaleEmojis}
+        countedFor={emoji => (emoji ? (panel.countedByEmoji[emoji] ?? emoji) : null)}
+        disabled={busy}
+        idPrefix={`quiz-regrade-${requestId}`}
+        error={fetcher.state === 'idle' ? (fetcher.data?.error ?? null) : null}
+      />
+      <div className="mt-3 flex justify-end">
+        <Button
+          type="primary"
+          onClick={submit}
+          loading={busy}
+          disabled={!form.canSubmit}
+          data-testid="quiz-regrade-resolve-submit"
+        >
+          {form.submitLabel}
+        </Button>
+      </div>
+    </div>
+  );
+};
+
+export function QuizRegradeRequestBanner({
+  request,
+  queueUrl,
+  panel = null,
+}: {
+  request: NonNullable<StaffAttemptGradePanel['openRequest']>;
+  /**
+   * The request in the queue: with its resolve modal open (`?resolve=<id>`)
+   * where the viewer may resolve, else the queue itself.
+   */
+  queueUrl: string;
+  /**
+   * The adjust panel's state, where the viewer may resolve here; null shows
+   * the request only (a read-only classroom, or the viewer's own attempt).
+   */
+  panel?: StaffAttemptGradePanel | null;
+}) {
+  return (
+    <div
+      data-testid="quiz-regrade-banner"
+      className="mb-4 rounded-xl border border-amber-300 bg-amber-50 p-4 dark:border-amber-500/40 dark:bg-amber-500/10"
+    >
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <span className="font-semibold text-amber-800 dark:text-amber-300">
+          Regrade/resubmit request
+        </span>
+        <span className="rounded px-1.5 py-0.5 text-xs font-medium bg-amber-500/15 text-amber-700 dark:text-amber-300">
+          In Review
+        </span>
+      </div>
+      {request.comment && (
+        <div className="whitespace-pre-wrap rounded-md bg-white px-3 py-2 text-sm text-gray-800 ring-1 ring-amber-200 dark:bg-neutral-900 dark:text-gray-100 dark:ring-amber-500/30">
+          {request.comment}
+        </div>
+      )}
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+        <span className="text-xs text-amber-800/80 dark:text-amber-300/80">
+          {[
+            request.studentName,
+            request.createdAt ? dayjs(request.createdAt).format('MMM D, h:mm A') : null,
+          ]
+            .filter(Boolean)
+            .join(' · ')}
+        </span>
+        <Link
+          to={queueUrl}
+          data-testid="quiz-regrade-banner-link"
+          className="text-sm font-medium text-amber-800 underline underline-offset-2 hover:text-amber-900 dark:text-amber-300 dark:hover:text-amber-200"
+        >
+          {panel ? 'Open in Regrade/Resubmit Requests' : 'View in Regrade/Resubmit Requests'}
+        </Link>
+      </div>
+      {panel && <ResolveInBanner requestId={request.id} panel={panel} />}
+    </div>
+  );
+}
+
+export function QuizAttemptGradePanel({ panel }: { panel: StaffAttemptGradePanel }) {
+  const fetcher = useFetcher<{ ok?: boolean; success?: string; error?: string }>();
+  const { pathname } = useLocation();
+  const callout = useCallout();
+  const { modal } = App.useApp();
+  const [editing, setEditing] = useState(false);
+  // An orphaned adjustment (E17) is not on the scale the picker shows: start
+  // with nothing picked.
+  const savedPick = panel.orphaned ? null : panel.adjustedEmoji;
+  const [pick, setPick] = useState<string | null>(savedPick);
+  const [comment, setComment] = useState(panel.comment ?? '');
+  const busy = fetcher.state !== 'idle';
+  const grade = panel.grade;
+
+  // A fresh panel (after a save, or another attempt) starts from the saved state.
+  useEffect(() => {
+    setPick(savedPick);
+    setComment(panel.comment ?? '');
+  }, [panel.attemptId, savedPick, panel.comment]);
+
+  useEffect(() => {
+    if (fetcher.state !== 'idle' || !fetcher.data) return;
+    if (fetcher.data.error) {
+      callout.show({ variant: 'error', title: fetcher.data.error });
+    } else if (fetcher.data.ok) {
+      setEditing(false);
+      if (fetcher.data.success) {
+        callout.show({ variant: 'success', title: fetcher.data.success, autoDismissMs: 2000 });
+      }
+    }
+    // `callout` is stable per provider.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetcher.state, fetcher.data]);
+
+  const submit = (body: Record<string, unknown>) =>
+    fetcher.submit(body as never, {
+      method: 'POST',
+      action: pathname,
+      encType: 'application/json',
+    });
+
+  const save = () => {
+    const body: Record<string, unknown> = {
+      _action: 'adjust',
+      attemptId: panel.attemptId,
+      comment,
+    };
+    if (pick && pick !== panel.adjustedEmoji) body.emoji = pick;
+    submit(body);
+  };
+
+  const revert = () =>
+    modal.confirm({
+      title: 'Revert the adjustment?',
+      content: "The AI's grade counts again. The comment to the student stays.",
+      okText: 'Revert',
+      okButtonProps: { danger: true },
+      cancelText: 'Cancel',
+      onOk: () => submit({ _action: 'revert', attemptId: panel.attemptId }),
+    });
+
+  const canEdit = panel.canEdit;
+  const header = (
+    <div className="flex items-center justify-between border-b border-stone-200 px-4 py-2.5 dark:border-neutral-800">
+      <span className="text-sm font-semibold text-gray-800 dark:text-gray-100">Instructor</span>
+      {canEdit && !editing && (grade?.adjusted || panel.comment) && (
+        <Button size="small" onClick={() => setEditing(true)}>
+          Edit
+        </Button>
+      )}
+    </div>
+  );
+
+  let body: React.ReactNode;
+  if (editing && canEdit) {
+    body = (
+      <div className="px-4 py-3">
+        <Row label="Original">
+          <Emoji
+            emoji={(grade?.adjusted ? grade.originalEmoji : grade?.emoji) ?? ''}
+            fontSize={18}
+          />
+        </Row>
+        <Row label="Adjusted">
+          <QuizEmojiPicker
+            scaleEmojis={panel.scaleEmojis}
+            value={pick}
+            onChange={setPick}
+            disabled={busy}
+            currentEmoji={grade?.emoji ?? null}
+          />
+        </Row>
+        {!grade?.adjusted && pick !== null && pick === grade?.emoji && (
+          <div
+            data-testid="quiz-adjust-keeps"
+            className="pl-27 text-xs text-gray-500 dark:text-gray-400"
+          >
+            That is the current grade: picking it keeps the score.
+          </div>
+        )}
+        {(grade?.countedEmoji || (grade?.lateHours ?? 0) > 0) && (
+          <Row label="Counted">
+            <Counted panel={panel} pick={pick} label={false} />
+          </Row>
+        )}
+        <div className="mt-2">
+          <label
+            htmlFor={`quiz-adjust-comment-${panel.attemptId}`}
+            className="mb-1 block text-sm text-gray-700 dark:text-gray-300"
+          >
+            Comment to student <span className="text-gray-400 dark:text-gray-500">(optional)</span>
+          </label>
+          <Input.TextArea
+            id={`quiz-adjust-comment-${panel.attemptId}`}
+            data-testid="quiz-adjust-comment"
+            rows={3}
+            value={comment}
+            maxLength={5000}
+            onChange={e => setComment(e.target.value)}
+            disabled={busy}
+          />
+        </div>
+        <div className="mt-3 flex justify-end gap-2">
+          <Button
+            onClick={() => {
+              setEditing(false);
+              setPick(savedPick);
+              setComment(panel.comment ?? '');
+            }}
+            disabled={busy}
+          >
+            Cancel
+          </Button>
+          <Button type="primary" onClick={save} loading={busy} data-testid="quiz-adjust-save">
+            Save
+          </Button>
+        </div>
+      </div>
+    );
+  } else if (grade?.adjusted || panel.comment) {
+    const by = [panel.adjustedByName, formatDate(panel.adjustedAt)].filter(Boolean).join(' · ');
+    const commentBy = [panel.commentByName, formatDate(panel.commentAt)]
+      .filter(Boolean)
+      .join(' · ');
+    body = (
+      <div className="px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          {grade?.adjusted ? (
+            <span className="inline-flex flex-wrap items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
+              Adjusted
+              <Emoji emoji={grade.originalEmoji ?? ''} fontSize={18} />
+              <span className="text-gray-400 dark:text-gray-500">→</span>
+              <Emoji emoji={grade.emoji ?? ''} fontSize={18} />
+              {by && <span className="text-xs text-gray-500 dark:text-gray-400">by {by}</span>}
+              {canEdit && (
+                <button
+                  type="button"
+                  onClick={revert}
+                  disabled={busy}
+                  data-testid="quiz-adjust-revert"
+                  className="cursor-pointer text-sm text-red-600 underline underline-offset-2 hover:text-red-700 disabled:opacity-50 dark:text-red-400"
+                >
+                  Revert
+                </button>
+              )}
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
+              Grade
+              <Emoji emoji={grade?.emoji ?? ''} fontSize={18} />
+              {panel.orphaned && <NeedsRemapChip />}
+            </span>
+          )}
+          <Counted panel={panel} />
+        </div>
+        {panel.comment && (
+          <div className="mt-3">
+            <div className="text-xs text-gray-500 dark:text-gray-400">
+              Comment to student
+              {commentBy && <span data-testid="quiz-comment-by"> · {commentBy}</span>}
+            </div>
+            <div className="whitespace-pre-wrap text-sm text-gray-800 dark:text-gray-100">
+              {panel.comment}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  } else {
+    body = (
+      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+        <span className="inline-flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+          Grade
+          <Emoji emoji={grade?.emoji ?? ''} fontSize={18} />
+          {panel.orphaned && <NeedsRemapChip />}
+          <Counted panel={panel} />
+        </span>
+        {canEdit && (
+          <div className="flex gap-2">
+            <Button onClick={() => setEditing(true)} data-testid="quiz-adjust-open">
+              Adjust score
+            </Button>
+            <Button onClick={() => setEditing(true)}>Add comment</Button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      data-testid="quiz-adjust-panel"
+      className="mb-4 rounded-xl bg-white ring-1 ring-stone-200 dark:bg-neutral-900 dark:ring-neutral-800"
+    >
+      {header}
+      {body}
+    </div>
+  );
+}
+
+export default QuizAttemptGradePanel;

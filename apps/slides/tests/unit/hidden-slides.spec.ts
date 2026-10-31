@@ -355,7 +355,8 @@ test.describe('every surface goes through the one rule', () => {
 
   for (const file of [
     'components/RevealSlides.tsx',
-    'components/RevealPresenter.tsx',
+    // The presenter and follow views insert slides through deckSlidesFragment.
+    'utils/presenterMarkup.ts',
     'components/SpeakerView.tsx',
   ]) {
     test(`${file} uses removeHiddenSlides, not its own filter`, () => {
@@ -364,6 +365,12 @@ test.describe('every surface goes through the one rule', () => {
       expect(source).not.toMatch(/section\[data-hidden/);
     });
   }
+
+  test('components/RevealPresenter.tsx inserts slides through deckSlidesFragment', () => {
+    const source = read('components/RevealPresenter.tsx');
+    expect(source).toContain('deckSlidesFragment(');
+    expect(source).not.toMatch(/section\[data-hidden/);
+  });
 
   for (const file of [
     'routes/$slideId/route.tsx',

@@ -20,7 +20,7 @@
 import * as cheerio from 'cheerio';
 import type { Cheerio, CheerioAPI } from 'cheerio';
 import type { AnyNode, Element } from 'domhandler';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 // Runtime paint the Reveal viewer / editor leaves on sections — the classes,
 // the computed `top` / `display` style, the `data-index-*` family — is
 // stripped by both parsers so `attrs` is deterministic between saves (plan §2,
@@ -31,12 +31,14 @@ import { domhandlerSlideTree, mayHaveHiddenSlides, removeHiddenSlides } from './
 import {
   BLOCK_ID_ATTR,
   HTML_BLOCK_FRAME_SELECTOR,
+  HTML_BLOCK_REV_ATTR,
   HTML_BLOCK_SELECTOR,
+  HTML_BLOCK_SRC_ATTR,
   INERT_ATTR_PREFIX,
   SVG_BLOCK_SELECTOR,
   SVG_SCOPE_ATTR,
   cssPx,
-  htmlBlockFrameMarkup,
+  htmlBlockFileFrameMarkup,
   htmlBlockSource,
   isAllowedSvgAnimation,
   isAllowedSvgAttr,
@@ -76,6 +78,62 @@ const MEDIA_FALLBACK = 'not all and (prefers-color-scheme)';
 
 /** Shared-theme assets live under this folder in the content repo. */
 const THEMES_FOLDER = '.slidesthemes';
+
+/**
+ * Reveal's slide transitions (reveal.js `config.transition`: none / fade /
+ * slide / convex / concave / zoom). The deck-wide value is put on `.reveal` as
+ * ONE class, so it is a single name; the `-in` / `-out` pairs exist only on a
+ * slide's own `data-transition`.
+ */
+export const REVEAL_TRANSITIONS = ['none', 'fade', 'slide', 'convex', 'concave', 'zoom'] as const;
+
+function isRevealTransition(value: unknown): value is string {
+  return typeof value === 'string' && (REVEAL_TRANSITIONS as readonly string[]).includes(value);
+}
+
+/** A positive, finite slide dimension in px, or undefined. */
+function deckDimension(value: unknown): number | undefined {
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+/** id of the generated document's config block (`<script type="application/json">`). */
+export const REVEAL_CONFIG_ELEMENT_ID = 'cm-reveal-config';
+
+/**
+ * The generated document's one inline script, the same text in every deck:
+ * it reads the config block right before it (never by id: slide markup comes
+ * first in the document) and starts Reveal. Constant, so a CSP can allow it by
+ * hash ({@link GENERATED_DOC_SCRIPT_HASHES}).
+ */
+export const REVEAL_INIT_SCRIPT = [
+  '',
+  '    (function () {',
+  '      var el = document.currentScript && document.currentScript.previousElementSibling;',
+  `      var config = el && el.id === '${REVEAL_CONFIG_ELEMENT_ID}' ? JSON.parse(el.textContent) : {};`,
+  '      config.plugins = [RevealHighlight];',
+  '      Reveal.initialize(config);',
+  '    })();',
+  '  ',
+].join('\n');
+
+/** Every inline script a generated deck document carries, exactly as emitted. */
+export const GENERATED_DOC_SCRIPTS: readonly string[] = [REVEAL_INIT_SCRIPT];
+
+/** CSP source tokens (`'sha256-…'`) for {@link GENERATED_DOC_SCRIPTS}. */
+export const GENERATED_DOC_SCRIPT_HASHES: readonly string[] = GENERATED_DOC_SCRIPTS.map(
+  text => `'sha256-${createHash('sha256').update(text, 'utf8').digest('base64')}'`
+);
+
+/** JSON for a `<script type="application/json">` block: `<` written `\u003c`, so nothing in it closes the element. */
+function jsonForScript(value: unknown): string {
+  return JSON.stringify(value).replace(/</g, '\\u003c');
+}
+
+/** A deck's own css inside `<style>`: `</style` cannot close the element (`<\/style` is the same css). */
+function cssForStyle(css: string): string {
+  return css.replace(/<\/(style)/gi, '<\\/$1');
+}
 
 /** Attribute names must look like real HTML attribute names. */
 const ATTR_NAME_RE = /^[a-zA-Z][\w:-]*$/;
@@ -260,8 +318,10 @@ function renderSection(slide: DeckSlide, includeNotes: boolean): string {
  * - Builtin themes via jsDelivr reveal.js@5.1.0; shared:/custom: themes via
  *   opts.themeUrls (caller-resolved).
  * - `data-cm-id` emitted on every section.
- * - Config keys go into Reveal.initialize only when set (canonical defaults:
- *   hash:true, controls:true, progress:true, center:true, transition:'slide').
+ * - Config goes into a `<script type="application/json">` block (canonical
+ *   defaults hash:true, controls:true, progress:true, center:true,
+ *   transition:'slide'; width/height only when set), read by the constant
+ *   {@link REVEAL_INIT_SCRIPT}.
  */
 export function generateDeckHtml(deck: DeckJson, opts: GenerateDeckOptions): string {
   const { title, themeUrls, includeNotes = true, standalone = false } = opts;
@@ -330,7 +390,7 @@ export function generateDeckHtml(deck: DeckJson, opts: GenerateDeckOptions): str
     headLines.push(`  <style data-cm-standalone>${SL_BLOCK_CSS}</style>`);
   }
   if (deck.customCss != null) {
-    headLines.push(`  <style>${deck.customCss}</style>`);
+    headLines.push(`  <style>${cssForStyle(deck.customCss)}</style>`);
   }
   for (const extra of deck.extraCss ?? []) {
     headLines.push(linkLine(extra.href, extra.media));
@@ -342,21 +402,22 @@ export function generateDeckHtml(deck: DeckJson, opts: GenerateDeckOptions): str
 
   const sections = deck.slides.map(slide => renderSection(slide, includeNotes)).join('\n');
 
-  // Reveal.initialize config: canonical defaults are not stored in deck.json,
-  // so fill them back in here; width/height emitted only when set.
+  // Reveal.initialize config, as data the constant init script reads:
+  // canonical defaults are not stored in deck.json, so fill them back in here;
+  // width/height emitted only when set. Every value is checked here, whatever
+  // deck.json holds.
   const config = deck.config ?? {};
-  const center = config.center ?? true;
-  const transition = (config.transition ?? 'slide').replace(/'/g, "\\'");
-  const configLines: string[] = [
-    '      hash: true,',
-    '      controls: true,',
-    '      progress: true,',
-    `      center: ${center},`,
-    `      transition: '${transition}',`,
-  ];
-  if (config.width != null) configLines.push(`      width: ${config.width},`);
-  if (config.height != null) configLines.push(`      height: ${config.height},`);
-  configLines.push('      plugins: [RevealHighlight]');
+  const revealConfig: Record<string, unknown> = {
+    hash: true,
+    controls: true,
+    progress: true,
+    center: config.center !== false,
+    transition: isRevealTransition(config.transition) ? config.transition : 'slide',
+  };
+  const width = deckDimension(config.width);
+  const height = deckDimension(config.height);
+  if (width !== undefined) revealConfig.width = width;
+  if (height !== undefined) revealConfig.height = height;
 
   return [
     ...headLines,
@@ -368,11 +429,8 @@ export function generateDeckHtml(deck: DeckJson, opts: GenerateDeckOptions): str
     '  </div>',
     `  <script src="https://cdn.jsdelivr.net/npm/reveal.js@${REVEAL_VERSION}/dist/reveal.js"></script>`,
     `  <script src="https://cdn.jsdelivr.net/npm/reveal.js@${REVEAL_VERSION}/plugin/highlight/highlight.js"></script>`,
-    '  <script>',
-    '    Reveal.initialize({',
-    ...configLines,
-    '    });',
-    '  </script>',
+    `  <script type="application/json" id="${REVEAL_CONFIG_ELEMENT_ID}">${jsonForScript(revealConfig)}</script>`,
+    `  <script>${REVEAL_INIT_SCRIPT}</script>`,
     '</body>',
     '</html>',
   ].join('\n');
@@ -577,6 +635,56 @@ function resolveSlots(
 // parseDeckHtml
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** The config keys deck.json stores (only what differs from the canonical defaults), validated. */
+function storedConfig(
+  raw: { width?: unknown; height?: unknown; center?: unknown; transition?: unknown },
+  warnings: string[]
+): DeckConfig {
+  const config: DeckConfig = {};
+  const width = deckDimension(raw.width);
+  const height = deckDimension(raw.height);
+  if (width !== undefined) config.width = width;
+  if (height !== undefined) config.height = height;
+  if (raw.center === false) config.center = false;
+  if (raw.transition !== undefined && raw.transition !== 'slide') {
+    if (isRevealTransition(raw.transition)) config.transition = raw.transition;
+    else warnings.push(`Unknown transition '${String(raw.transition)}' dropped`);
+  }
+  return config;
+}
+
+function readRevealConfig($: CheerioAPI, warnings: string[]): DeckConfig {
+  // The last block: the generator writes it after every slide.
+  const block = $(`script#${REVEAL_CONFIG_ELEMENT_ID}[type="application/json"]`).last();
+  if (block.length > 0) {
+    try {
+      const raw: unknown = JSON.parse(block.text());
+      if (raw && typeof raw === 'object') return storedConfig(raw, warnings);
+    } catch {
+      warnings.push('Unreadable Reveal config block dropped');
+    }
+    return {};
+  }
+  const initScript = $('script:not([src])')
+    .toArray()
+    .map(el => $(el).html() ?? '')
+    .find(text => text.includes('Reveal.initialize'));
+  if (!initScript) return {};
+  const widthMatch = initScript.match(/\bwidth\s*:\s*(\d+)/);
+  const heightMatch = initScript.match(/\bheight\s*:\s*(\d+)/);
+  const centerMatch = initScript.match(/\bcenter\s*:\s*(true|false)/);
+  const transitionMatch = initScript.match(/\btransition\s*:\s*['"]([^'"]+)['"]/);
+  return storedConfig(
+    {
+      width: widthMatch ? parseInt(widthMatch[1], 10) : undefined,
+      height: heightMatch ? parseInt(heightMatch[1], 10) : undefined,
+      center: centerMatch ? centerMatch[1] === 'true' : undefined,
+      transition: transitionMatch ? transitionMatch[1] : undefined,
+    },
+    warnings
+  );
+}
+
 export interface ParsedDeck {
   deck: DeckJson;
   warnings: string[];
@@ -678,22 +786,9 @@ export function parseDeckHtml(html: string, opts: ParseOptions = {}): ParsedDeck
     .map(el => $(el).html() ?? '');
   const customCss = styleBlocks.length > 0 ? styleBlocks.join('\n') : undefined;
 
-  // ── Reveal.initialize → regex-extract the four known config keys ──
-  const config: DeckConfig = {};
-  const initScript = $('script:not([src])')
-    .toArray()
-    .map(el => $(el).html() ?? '')
-    .find(text => text.includes('Reveal.initialize'));
-  if (initScript) {
-    const widthMatch = initScript.match(/\bwidth\s*:\s*(\d+)/);
-    if (widthMatch) config.width = parseInt(widthMatch[1], 10);
-    const heightMatch = initScript.match(/\bheight\s*:\s*(\d+)/);
-    if (heightMatch) config.height = parseInt(heightMatch[1], 10);
-    const centerMatch = initScript.match(/\bcenter\s*:\s*(true|false)/);
-    if (centerMatch && centerMatch[1] === 'false') config.center = false;
-    const transitionMatch = initScript.match(/\btransition\s*:\s*['"]([^'"]+)['"]/);
-    if (transitionMatch && transitionMatch[1] !== 'slide') config.transition = transitionMatch[1];
-  }
+  // ── Reveal config: the generator's JSON block, else the four known keys
+  // regex-extracted from an inline Reveal.initialize (older documents) ──
+  const config = readRevealConfig($, warnings);
 
   // ── Sections ──
   const rootSections = $('section')
@@ -800,7 +895,8 @@ export function normalizeSlideHtml(html: string): string {
   stripFragmentRuntimeClasses($.root());
 
   // svg blocks held to the drawing lists; an html block's frame whose
-  // sandbox would let it out is stored inert.
+  // sandbox would let it out is stored inert, and one that names its file
+  // stores no other source.
   sanitizeSvgBlocksIn($);
   neutralizeHtmlBlocksIn($);
 
@@ -867,12 +963,35 @@ function insideHtmlBlock($: CheerioAPI, el: Element): boolean {
   return $(el).closest(HTML_BLOCK_SELECTOR).length > 0;
 }
 
-/** Html-block frames whose sandbox would let them out get inert sources. Returns the count. */
+/**
+ * Sources an html-block frame that names its file (`data-cm-src`) never
+ * stores: the file is the source, and display surfaces build the URL.
+ */
+const FILE_FRAME_DROPPED_ATTRS = ['src', 'srcdoc', 'data-src'].flatMap(name => [
+  name,
+  `${INERT_ATTR_PREFIX}${name}`,
+]);
+
+/**
+ * Html-block frames whose sandbox would let them out get inert sources, and
+ * frames naming their file lose any other source. Returns the count.
+ */
 function neutralizeHtmlBlocksIn($: CheerioAPI): number {
   let count = 0;
   $(HTML_BLOCK_FRAME_SELECTOR).each((_i, node) => {
     const el = node as Element;
     const inside = insideHtmlBlock($, el);
+    if (
+      inside &&
+      el.tagName.toLowerCase() === 'iframe' &&
+      el.attribs[HTML_BLOCK_SRC_ATTR] != null
+    ) {
+      for (const name of FILE_FRAME_DROPPED_ATTRS) {
+        if (el.attribs[name] === undefined) continue;
+        delete el.attribs[name];
+        count++;
+      }
+    }
     const blocked = (name: string) =>
       isBlockedFrameAttr(el.tagName, name, el.attribs['sandbox'], inside, el.attribs[name]);
     if (!Object.keys(el.attribs).some(blocked)) return;
@@ -1167,12 +1286,17 @@ export interface SlideBlockInfo {
   type: string;
   /** left/top/width/height in px, each present when the block's style sets it in px. */
   box: Partial<BlockBox>;
-  /** html blocks: the source, decoded from srcdoc (storage shim taken out). */
+  /** Legacy html blocks (code in srcdoc): the source, storage shim taken out. */
   source?: string;
   /** svg blocks: the `<svg>` markup. */
   svg?: string;
-  /** iframe blocks: the frame's URL (`data-src`, else `src`). */
+  /**
+   * iframe blocks: the frame's URL (`data-src`, else `src`). html blocks: the
+   * block's file, relative to the deck folder (`data-cm-src`).
+   */
   src?: string;
+  /** html blocks: the blob sha the file was written at (`data-cm-rev`), when known. */
+  rev?: string;
 }
 
 const BOX_KEYS = ['left', 'top', 'width', 'height'] as const;
@@ -1198,7 +1322,11 @@ function blockFrame($: CheerioAPI, block: Element): Element | undefined {
   return $(block).find('iframe').toArray()[0] as Element | undefined;
 }
 
-/** The draggable blocks of a slide's html, top-level `.sl-block`s in document order. */
+/**
+ * The draggable blocks of a slide's html, top-level `.sl-block`s in document
+ * order. `content: false` leaves out sources, svg and iframe URLs; an html
+ * block's file ref (`src`, `rev`) is always listed.
+ */
 export function readSlideBlocks(html: string, opts: { content?: boolean } = {}): SlideBlockInfo[] {
   if (!html.includes('sl-block')) return [];
   const $ = cheerio.load(html, null, false);
@@ -1213,11 +1341,17 @@ export function readSlideBlocks(html: string, opts: { content?: boolean } = {}):
         type,
         box: boxFromStyle(el.attribs['style'] ?? ''),
       };
-      if (opts.content === false) return info;
       if (type === 'html') {
         const frame = blockFrame($, el);
+        const src = frame?.attribs[HTML_BLOCK_SRC_ATTR];
+        const rev = frame?.attribs[HTML_BLOCK_REV_ATTR];
+        if (src != null) info.src = src;
+        if (src != null && rev) info.rev = rev;
+        if (opts.content === false || src != null) return info;
         const srcdoc = frame?.attribs['srcdoc'] ?? frame?.attribs[`${INERT_ATTR_PREFIX}srcdoc`];
         if (srcdoc != null) info.source = htmlBlockSource(srcdoc);
+      } else if (opts.content === false) {
+        return info;
       } else if (type === 'svg') {
         const svg = $(el).find('svg').first();
         if (svg.length > 0) info.svg = $.html(svg);
@@ -1233,12 +1367,16 @@ export function readSlideBlocks(html: string, opts: { content?: boolean } = {}):
 /** What a block edit changes; only the fields given. */
 export interface SlideBlockEdit {
   box?: Partial<BlockBox>;
-  /** html blocks: new source (the frame is rebuilt with the standard sandbox). */
-  source?: string;
   /** svg blocks: new `<svg>` markup. */
   svg?: string;
-  /** iframe blocks: new URL (stored as `data-src`, so it loads lazily). */
+  /**
+   * iframe blocks: new URL (stored as `data-src`, so it loads lazily). html
+   * blocks: the block's file relative to the deck folder — the frame is
+   * rebuilt with the standard sandbox, `data-cm-src` and `rev`.
+   */
   src?: string;
+  /** html blocks, with `src`: the blob sha the file was written at. */
+  rev?: string;
 }
 
 /** Typed failure for a block edit (unknown block id, field that does not fit the type). */
@@ -1303,18 +1441,21 @@ export function updateSlideBlock(html: string, blockId: string, edit: SlideBlock
   const block = findBlock($, blockId);
   const type = block.attribs['data-block-type'] ?? 'text';
   const content = $(block).children('.sl-block-content').first();
-  if ((edit.source !== undefined || edit.svg !== undefined) && content.length === 0) {
+  const htmlSrc = type === 'html' && edit.src !== undefined;
+  if ((htmlSrc || edit.svg !== undefined) && content.length === 0) {
     throw new SlideBlockError(`Block '${blockId}' has no content to replace`);
   }
-  if (edit.source !== undefined) {
-    if (type !== 'html') throw new SlideBlockError(`Block '${blockId}' is ${type}, not html`);
-    content.empty().append(htmlBlockFrameMarkup(edit.source));
+  if (edit.rev !== undefined && !htmlSrc) {
+    throw new SlideBlockError(`Block '${blockId}': rev goes with an html block's src`);
+  }
+  if (htmlSrc && edit.src !== undefined) {
+    content.empty().append(htmlBlockFileFrameMarkup({ src: edit.src, rev: edit.rev }));
   }
   if (edit.svg !== undefined) {
     if (type !== 'svg') throw new SlideBlockError(`Block '${blockId}' is ${type}, not svg`);
     content.empty().append(normalizeSvgBlockSource(edit.svg));
   }
-  if (edit.src !== undefined) {
+  if (edit.src !== undefined && !htmlSrc) {
     if (type !== 'iframe') throw new SlideBlockError(`Block '${blockId}' is ${type}, not iframe`);
     const frame = blockFrame($, block);
     if (!frame) throw new SlideBlockError(`Block '${blockId}' has no frame`);

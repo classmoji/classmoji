@@ -9,18 +9,25 @@ import {
   useLocation,
   redirect,
   useRouteError,
+  useRouteLoaderData,
   isRouteErrorResponse,
   type ShouldRevalidateFunction,
 } from 'react-router';
 import axios from 'axios';
 
-import React, { useEffect } from 'react';
+import React, { lazy, Suspense, useEffect } from 'react';
 import dayjs from 'dayjs';
 import { ConfigProvider, theme, App as AntdApp } from 'antd';
 import { IconMoodSad } from '@tabler/icons-react';
 
 import { ClassmojiService } from '@classmoji/services';
 import { gitUsername, withLogin } from '@classmoji/utils';
+import {
+  SENTRY_CONFIG_ELEMENT_ID,
+  sentryBrowserConfig,
+  serializeSentryConfig,
+  type SentryBrowserConfig,
+} from '@classmoji/utils/sentry';
 import { CalloutProvider, CalloutSlot } from '@classmoji/ui-components';
 import OperationProgress from '~/components/features/operations/OperationProgress';
 import { auth, getAuthSession } from '@classmoji/auth/server';
@@ -39,10 +46,20 @@ import { getRoleFromPath } from './constants/roleSettings';
 import { FetcherContext, UserContext } from '~/contexts';
 
 import RenderErrorBoundary from './components/ErrorBoundary';
+
+/**
+ * Ask Moji on the Trigger runtime: its own chunk, loaded only where it is
+ * available (it loads the panel itself on the first open).
+ */
+const AskMojiRoot = lazy(() => import('./components/features/ask-moji/AskMojiRoot'));
 import { SyllabusBotRoot } from './components/features/syllabus-bot';
+import { isAskMojiEmbedPath } from './components/features/ask-moji/paths';
+import type { AskMojiRootConfig } from './components/features/ask-moji/AskMojiRoot';
+import { askMojiHostUrls } from '~/utils/askMojiHosts.server';
 import { OnboardingTour, InClassroomTour } from './components/features/onboarding';
 import ImpersonationBanner from './components/features/admin/ImpersonationBanner';
 import NavigationProgress from './components/layout/NavigationProgress';
+import { captureRouteError, setSentryUser } from '~/utils/sentry.client';
 
 import relativeTime from 'dayjs/plugin/relativeTime';
 import isSameOrBefore from 'dayjs/plugin/isSameOrBefore';
@@ -113,7 +130,8 @@ const loadAppUser = async (userId: string): Promise<AppUser | null> => {
 // Paths an account that is not set up yet may still reach: the setup steps
 // themselves, signing out, and (for the git account step) account settings.
 const EMAIL_STEP_PATHS = ['/registration', '/logout'];
-const GITHUB_STEP_PATHS = ['/select-organization', '/logout', '/settings'];
+// The invite link (`/join/<code>`) connects the account its class needs itself.
+const GITHUB_STEP_PATHS = ['/select-organization', '/logout', '/settings', '/join'];
 
 const isUnder = (pathname: string, paths: string[]) =>
   paths.some(path => pathname === path || pathname.startsWith(`${path}/`));
@@ -159,7 +177,39 @@ export const shouldRevalidate: ShouldRevalidateFunction = ({
   classroomSlugOf(currentUrl.pathname) !== classroomSlugOf(nextUrl.pathname) ||
   defaultShouldRevalidate;
 
-export const loader = async ({ request }: Route.LoaderArgs) => {
+/**
+ * Which Ask Moji the root mounts, and whether the classroom in the URL has it.
+ * `ASK_MOJI_RUNTIME=trigger` mounts the new panel (shown only where
+ * `askMojiAvailable` says so, for a member: `classroom` is one of the user's
+ * own memberships); anything else keeps the legacy widget, which asks its own
+ * route.
+ */
+const askMojiRootConfig = async (
+  classroom: { id: string; name?: string | null } | undefined
+): Promise<AskMojiRootConfig & { runtime: 'trigger' | 'ai_agent' }> => {
+  const runtime = ClassmojiService.askMojiSession.askMojiRuntimeIsTrigger()
+    ? 'trigger'
+    : 'ai_agent';
+  let available = false;
+  if (runtime === 'trigger' && classroom) {
+    try {
+      available = (
+        await ClassmojiService.askMojiSession.askMojiAvailable({ classroomId: classroom.id })
+      ).available;
+    } catch (error: unknown) {
+      console.error('[root] Ask Moji availability failed', error);
+    }
+  }
+  return {
+    runtime,
+    available,
+    courseName: classroom?.name ?? null,
+    // Null in production when unset (no localhost guess): chips to that app are labels.
+    ...askMojiHostUrls(),
+  };
+};
+
+const loadRoot = async ({ request }: Route.LoaderArgs) => {
   const url = new URL(request.url);
 
   // Redirect to setup wizard if requested
@@ -173,6 +223,11 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   }
 
   if (url.pathname.endsWith('/invitation')) return { user: null };
+
+  // The Ask Moji embed (framed by the pages and slides apps) renders the panel
+  // alone and runs its own access check, signed-out state included: none of
+  // the redirects below may send the frame elsewhere.
+  if (isAskMojiEmbedPath(url.pathname)) return { user: null, askMojiEmbed: true };
 
   // Check if this is a public page route (e.g., /org-name/pages/page-id)
   const isPublicPageRoute = /^\/[^/]+\/pages\/[^/]+$/.test(url.pathname);
@@ -197,8 +252,12 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   // The feedback board and roadmap are public to read; writing needs a session,
   // which its actions check themselves.
   const isFeedback = isUnder(url.pathname, ['/feedback']);
+  // The class invite link shows the class to anyone holding it; joining
+  // needs a session, which its action checks itself.
+  const isJoinLink = isUnder(url.pathname, ['/join']);
   const isPublicRoute =
     isFeedback ||
+    isJoinLink ||
     publicRoutes.some(
       route =>
         url.pathname === route ||
@@ -291,6 +350,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     gitMode,
     session: toClientSession(session),
     aiAgentAvailable: isAIAgentConfigured(),
+    askMoji: await askMojiRootConfig(currentClassroom),
     // Where "Stop viewing" should return to. Only set when apps/admin started
     // this impersonation (it drops the breadcrumb cookie before handing off) —
     // a classroom-initiated "View as" leaves this null and keeps its existing
@@ -303,6 +363,27 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     impersonationCookieDomain: COOKIE_DOMAIN,
   };
 };
+
+export const loader = async (args: Route.LoaderArgs) => {
+  const result = await loadRoot(args);
+  if (result instanceof Response) return result;
+  // Browser error tracking (DSN + environment), read from the server's env at
+  // request time: runtime config, never baked into the bundle.
+  return { ...result, sentry: sentryBrowserConfig(process.env) };
+};
+
+/**
+ * The browser's Sentry settings as a JSON data block, read by entry.client.tsx
+ * before hydration. Rendered by both documents (App and the ErrorBoundary).
+ */
+const SentryConfigScript = ({ config }: { config: SentryBrowserConfig | null | undefined }) =>
+  config ? (
+    <script
+      type="application/json"
+      id={SENTRY_CONFIG_ELEMENT_ID}
+      dangerouslySetInnerHTML={{ __html: serializeSentryConfig(config) }}
+    />
+  ) : null;
 
 // Provides FetcherContext; must live inside CalloutProvider since
 // useNotifiedFetcher reads useCallout().
@@ -319,7 +400,9 @@ const FetcherProvider = ({ children }: { children: React.ReactNode }) => {
 };
 
 const App = ({ loaderData }: Route.ComponentProps) => {
-  const { user, session, impersonationReturnUrl, impersonationCookieDomain } = loaderData;
+  const { user, session, impersonationReturnUrl, impersonationCookieDomain, sentry } = loaderData;
+  const askMoji = 'askMoji' in loaderData ? loaderData.askMoji : undefined;
+  const embed = 'askMojiEmbed' in loaderData && loaderData.askMojiEmbed === true;
   const { isDarkMode, accent } = useDarkMode();
   const { pathname } = useLocation();
   const {
@@ -380,6 +463,12 @@ const App = ({ loaderData }: Route.ComponentProps) => {
     }
   }, [user, setUser]);
 
+  const userId = user?.id;
+  const impersonating = !!session?.session?.impersonatedBy;
+  useEffect(() => {
+    setSentryUser(userId, impersonating);
+  }, [userId, impersonating]);
+
   // The classroom's tier, for the admin sidebar's Pro-only entries (the
   // /teacher and /assistant layouts pass their own flag instead). The endpoint
   // admits OWNER alone, so only an owner of THIS classroom asks. Anyone else —
@@ -418,6 +507,7 @@ const App = ({ loaderData }: Route.ComponentProps) => {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <Meta />
         <Links />
+        <SentryConfigScript config={sentry} />
         <script
           dangerouslySetInnerHTML={{
             __html: `
@@ -511,21 +601,36 @@ const App = ({ loaderData }: Route.ComponentProps) => {
                         classroom layout (landing, registration, select-organization)
                         are buffered then silently dropped. */}
                     <CalloutSlot placement="top-right" />
-                    {/* Background Trigger.dev work reports into the callout from
-                        here, above the router, so progress survives navigation
-                        and no route has to host a modal for it. */}
-                    <OperationProgress />
-                    <NavigationProgress />
-                    <ImpersonationBanner
-                      key={session?.session?.id}
-                      session={session}
-                      returnToAdminUrl={impersonationReturnUrl}
-                      impersonationCookieDomain={impersonationCookieDomain}
-                    />
+                    {/* The Ask Moji embed is the panel alone (a frame in the
+                        pages and slides apps): none of the app's chrome. */}
+                    {!embed && (
+                      <>
+                        {/* Background Trigger.dev work reports into the callout from
+                            here, above the router, so progress survives navigation
+                            and no route has to host a modal for it. */}
+                        <OperationProgress />
+                        <NavigationProgress />
+                        <ImpersonationBanner
+                          key={session?.session?.id}
+                          session={session}
+                          returnToAdminUrl={impersonationReturnUrl}
+                          impersonationCookieDomain={impersonationCookieDomain}
+                        />
+                      </>
+                    )}
                     <Outlet />
-                    <SyllabusBotRoot />
-                    <OnboardingTour />
-                    <InClassroomTour />
+                    {!embed &&
+                      (askMoji?.runtime === 'trigger' ? (
+                        askMoji.available && (
+                          <Suspense fallback={null}>
+                            <AskMojiRoot config={askMoji} />
+                          </Suspense>
+                        )
+                      ) : (
+                        <SyllabusBotRoot />
+                      ))}
+                    {!embed && <OnboardingTour />}
+                    {!embed && <InClassroomTour />}
                     <ScrollRestoration />
                     <Scripts />
                   </FetcherProvider>
@@ -542,8 +647,17 @@ const App = ({ loaderData }: Route.ComponentProps) => {
 // Root-level ErrorBoundary for loader/action errors
 export function ErrorBoundary() {
   const error = useRouteError();
+  // Present unless the root loader itself threw; carries the Sentry settings.
+  const rootData = useRouteLoaderData<typeof loader>('root');
   const isDevelopment = import.meta.env.MODE === 'development';
   const [isDarkMode, setIsDarkMode] = React.useState(false);
+
+  const userId = rootData?.user?.id;
+  const impersonating = !!rootData?.session?.session?.impersonatedBy;
+  React.useEffect(() => {
+    setSentryUser(userId, impersonating);
+    captureRouteError(error);
+  }, [error, userId, impersonating]);
 
   // Synchronous error message extraction
   // isRouteErrorResponse handles Response objects thrown from loaders/actions
@@ -580,6 +694,7 @@ export function ErrorBoundary() {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <Meta />
         <Links />
+        <SentryConfigScript config={rootData?.sentry} />
         <script
           dangerouslySetInnerHTML={{
             __html: `

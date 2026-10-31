@@ -4,7 +4,7 @@
  * A pattern is a glob relative to the root of the student's repository, read
  * like a .gitignore line (`tests/`, a spec-file pattern, `playwright.config.*`).
  * The quiz agent never lists, reads or quotes a matching file; the matching
- * runs in the agent (packages/tasks, agents/shared/exploration/excludedPaths.ts),
+ * runs in the agent (apps/ai-agent, src/trigger/shared/exploration/excludedPaths.ts),
  * which compiles only the patterns this module accepts. This module says which
  * patterns may be saved, and is shared by the quiz form (in the browser and in
  * its action), the MCP quiz tools, the quiz service and that matcher. It has no

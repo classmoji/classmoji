@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  localTimeParts,
+  zonedWallClockToInstant,
   addLocalTimes,
   canonicalTimeZone,
   isRealCalendarDate,
@@ -309,5 +311,101 @@ describe('days in zones whose DST changes AT midnight', () => {
     // 4th, so the 5th begins at 00:00 -04 = 04:00Z.
     const range = localDayRange('2026-04-05', '2026-04-05', 'America/Santiago')!;
     expect(range.start.toISOString()).toBe('2026-04-05T04:00:00.000Z');
+  });
+});
+
+describe('localTimeParts', () => {
+  it('reads the wall clock of an instant in the zone', () => {
+    // 18:10Z is 14:10 in New York during daylight time, 13:10 after the change.
+    expect(localTimeParts(new Date('2026-09-14T18:10:00Z'), 'America/New_York')).toEqual({
+      year: 2026,
+      month: 9,
+      day: 14,
+      hour: 14,
+      minute: 10,
+      weekday: 1,
+    });
+    expect(localTimeParts(new Date('2026-11-02T18:10:00Z'), 'America/New_York')).toMatchObject({
+      hour: 13,
+      minute: 10,
+    });
+  });
+
+  it('reads midnight as hour 0, not 24', () => {
+    expect(localTimeParts(new Date('2026-09-14T04:00:00Z'), 'America/New_York')).toMatchObject({
+      day: 14,
+      hour: 0,
+    });
+  });
+
+  it('is UTC when no zone is set', () => {
+    expect(localTimeParts(new Date('2026-09-14T18:10:00Z'), null)).toMatchObject({
+      hour: 18,
+      minute: 10,
+    });
+  });
+});
+
+describe('zonedWallClockToInstant', () => {
+  const nyClass = (month: number, day: number) =>
+    zonedWallClockToInstant(2026, month, day, 14, 10, 'America/New_York').toISOString();
+
+  it('keeps a 14:10 class at 14:10 across the end of daylight saving (Nov 1, 2026)', () => {
+    expect(nyClass(9, 14)).toBe('2026-09-14T18:10:00.000Z');
+    expect(nyClass(10, 30)).toBe('2026-10-30T18:10:00.000Z');
+    expect(nyClass(11, 2)).toBe('2026-11-02T19:10:00.000Z');
+    expect(nyClass(11, 16)).toBe('2026-11-16T19:10:00.000Z');
+  });
+
+  it('keeps it across the start of daylight saving (Mar 8, 2026)', () => {
+    expect(nyClass(3, 6)).toBe('2026-03-06T19:10:00.000Z');
+    expect(nyClass(3, 9)).toBe('2026-03-09T18:10:00.000Z');
+  });
+
+  it('reads a time the clock skips with the offset from before the change', () => {
+    // 02:30 does not exist on Mar 8, 2026 in New York; it lands at 03:30 EDT.
+    const instant = zonedWallClockToInstant(2026, 3, 8, 2, 30, 'America/New_York');
+    expect(instant.toISOString()).toBe('2026-03-08T07:30:00.000Z');
+    expect(localTimeParts(instant, 'America/New_York')).toMatchObject({ hour: 3, minute: 30 });
+  });
+
+  it('takes the first of a time the clock repeats', () => {
+    // 01:30 happens twice on Nov 1, 2026; the first is still daylight time.
+    expect(zonedWallClockToInstant(2026, 11, 1, 1, 30, 'America/New_York').toISOString()).toBe(
+      '2026-11-01T05:30:00.000Z'
+    );
+  });
+
+  it('rolls an overflowing day over like Date.UTC', () => {
+    expect(zonedWallClockToInstant(2026, 10, 32, 12, 0, 'UTC').toISOString()).toBe(
+      '2026-11-01T12:00:00.000Z'
+    );
+  });
+
+  it('is plain UTC when no zone is set', () => {
+    expect(zonedWallClockToInstant(2026, 11, 2, 14, 10, null).toISOString()).toBe(
+      '2026-11-02T14:10:00.000Z'
+    );
+  });
+
+  it('round-trips with localTimeParts across a year of days', () => {
+    for (let day = 0; day < 365; day += 1) {
+      const probe = new Date(Date.UTC(2026, 0, 1 + day));
+      const instant = zonedWallClockToInstant(
+        probe.getUTCFullYear(),
+        probe.getUTCMonth() + 1,
+        probe.getUTCDate(),
+        14,
+        10,
+        'America/New_York'
+      );
+      expect(localTimeParts(instant, 'America/New_York')).toMatchObject({
+        year: probe.getUTCFullYear(),
+        month: probe.getUTCMonth() + 1,
+        day: probe.getUTCDate(),
+        hour: 14,
+        minute: 10,
+      });
+    }
   });
 });

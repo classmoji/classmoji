@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, Outlet, useFetcher, useLoaderData } from 'react-router';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -21,6 +21,21 @@ import { useCopyLink } from '~/components/forms/useCopyLink.ts';
 import { formsListUrl, publicFormUrlFor } from './adminLinks.server.ts';
 
 dayjs.extend(relativeTime);
+
+/**
+ * Renders a time that depends on the clock or the viewer's timezone. The
+ * server and the browser disagree on both, which made hydration fail
+ * (React #418) and dropped the `dark` class from <html>. So the server and
+ * first client render show a placeholder, and the real value fills in after
+ * mount.
+ */
+function ClientTime({ value, relative }: { value: string | Date; relative?: boolean }) {
+  const [text, setText] = useState<string | null>(null);
+  useEffect(() => {
+    setText(relative ? dayjs(value).fromNow() : dayjs(value).format('MMM D, YYYY'));
+  }, [value, relative]);
+  return <>{text ?? '—'}</>;
+}
 
 /**
  * The admin forms list — the landing surface behind the webapp's Forms nav
@@ -368,10 +383,10 @@ export default function FormsList() {
                     </Link>
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
-                    {form.closesAt ? dayjs(form.closesAt).format('MMM D, YYYY') : '—'}
+                    {form.closesAt ? <ClientTime value={form.closesAt} /> : '—'}
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
-                    {dayjs(form.updatedAt).fromNow()}
+                    <ClientTime value={form.updatedAt} relative />
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-end gap-2">

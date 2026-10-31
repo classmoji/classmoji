@@ -3,14 +3,13 @@ import { plainText } from '~/components/features/feedback/LinkedText';
 import { Link, useLoaderData } from 'react-router';
 import { SearchIcon } from 'lucide-react';
 import { ClassmojiService } from '@classmoji/services';
+import { CategoryLabel } from '~/components/features/feedback/CategoryLabel';
 import { FeedbackAvatar } from '~/components/features/feedback/FeedbackAvatar';
 import { StatusLabel } from '~/components/features/feedback/StatusLabel';
 import { useOptimisticVote } from '~/components/features/feedback/useFeedbackAction';
 import { VoteButton } from '~/components/features/feedback/VoteButton';
 import {
   authorName,
-  CATEGORY_EMOJI,
-  CATEGORY_LABELS,
   STATUS_META,
   STATUS_ORDER,
   type FeedbackPostSummary,
@@ -38,10 +37,7 @@ function RoadmapCard({ post, signedIn }: { post: FeedbackPostSummary; signedIn: 
   return (
     <li className="relative rounded-xl bg-panel p-[14px] ring-1 ring-stone-200 transition-[box-shadow] duration-150 hover:ring-line-strong dark:ring-neutral-800">
       <div className="flex items-start justify-between gap-3">
-        <span className="inline-flex items-center gap-1.5 pt-1 text-[12px] font-medium text-ink-3">
-          <span aria-hidden>{CATEGORY_EMOJI[post.category]}</span>
-          {CATEGORY_LABELS[post.category]}
-        </span>
+        <CategoryLabel category={post.category} className="pt-1" />
         <VoteButton
           size="sm"
           className="relative z-10"

@@ -10,6 +10,9 @@ import { ClassmojiService, getGitProvider } from '@classmoji/services';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import { EASE_OUT_QUINT } from '~/utils/motion';
 import InstallAppBanner from '~/components/features/InstallAppBanner';
+import ActiveClassLimitNotice, {
+  isOverActiveClassLimit,
+} from '~/components/features/plan/ActiveClassLimitNotice';
 import SubmissionChart from './SubmissionChart';
 import Leaderboard from './Leaderboard';
 import GradingTabsCard from './GradingTabsCard';
@@ -19,13 +22,24 @@ import type { Route } from './+types/route';
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
 
-  const { classroom } = await requireClassroomAdmin(request, classSlug!, {
+  const { userId, classroom } = await requireClassroomAdmin(request, classSlug!, {
     resourceType: 'DASHBOARD',
     action: 'view_dashboard',
   });
 
   if (!classroom) {
     throw new Response('Classroom not found', { status: 404 });
+  }
+
+  // The over-limit notice: only for the class's plan owner, and only on a class
+  // that counts against them. Co-owners never see it (it is about someone
+  // else's plan).
+  let activeClassAllowance = null;
+  if ((await ClassmojiService.planOwner.effectivePlanOwnerId(classroom.id)) === userId) {
+    const allowance = await ClassmojiService.classroomLifecycle.allowanceFor(userId);
+    if (isOverActiveClassLimit(allowance) && allowance.active.some(c => c.id === classroom.id)) {
+      activeClassAllowance = { limit: allowance.limit, active: allowance.active };
+    }
   }
 
   const gitOrgLogin = classroom.git_organization?.login;
@@ -87,6 +101,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     // never be told to install one.
     gitProvider: classroom.git_organization?.provider ?? null,
     githubAppName: process.env.GITHUB_APP_NAME,
+    activeClassAllowance,
   };
 };
 // Larger classes count up a touch faster; clamped so it never snaps instantly.
@@ -223,6 +238,7 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
     gitOrgLogin,
     gitProvider,
     githubAppName,
+    activeClassAllowance,
   } = loaderData;
   const { class: classSlug } = useParams();
   const [bannerDismissed, setBannerDismissed] = useState(false);
@@ -241,6 +257,8 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
   return (
     <div className="min-h-full flex flex-col gap-4">
       <h1 className="mt-2 mb-1 text-lg font-semibold text-ink-0">Dashboard</h1>
+
+      {activeClassAllowance && <ActiveClassLimitNotice allowance={activeClassAllowance} />}
 
       {!appInstalled && !isExample && gitOrgLogin && gitProvider === 'GITHUB' && (
         <InstallAppBanner

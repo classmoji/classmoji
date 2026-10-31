@@ -695,6 +695,36 @@
   color: rgba(203, 213, 225, 0.85);
 }
 
+/* A frame whose content cannot be shown (its source may not load, or names a
+   file that is not there) is marked data-cm-missing: a dashed box with a line
+   of text instead of an empty frame. Editor, viewer and presenter. A frame is
+   a replaced element (no ::before/::after), so the text is a background
+   image. Outline, not border: html block frames carry an inline border. */
+.reveal iframe[data-cm-missing] {
+  outline: 2px dashed rgba(100, 116, 139, 0.6);
+  outline-offset: -2px;
+  border-radius: 6px;
+  background-color: rgba(148, 163, 184, 0.12);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='320' height='40'%3E%3Ctext x='160' y='20' dominant-baseline='middle' text-anchor='middle' font-family='system-ui,-apple-system,sans-serif' font-size='16' fill='%23475569'%3EEmbedded content unavailable%3C/text%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: min(320px, 90%) auto;
+}
+
+@media (prefers-color-scheme: dark) {
+  .reveal iframe[data-cm-missing] {
+    outline-color: rgba(148, 163, 184, 0.55);
+    background-color: rgba(148, 163, 184, 0.1);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='320' height='40'%3E%3Ctext x='160' y='20' dominant-baseline='middle' text-anchor='middle' font-family='system-ui,-apple-system,sans-serif' font-size='16' fill='%23cbd5e1'%3EEmbedded content unavailable%3C/text%3E%3C/svg%3E");
+  }
+}
+
+.dark .reveal iframe[data-cm-missing] {
+  outline-color: rgba(148, 163, 184, 0.55);
+  background-color: rgba(148, 163, 184, 0.1);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='320' height='40'%3E%3Ctext x='160' y='20' dominant-baseline='middle' text-anchor='middle' font-family='system-ui,-apple-system,sans-serif' font-size='16' fill='%23cbd5e1'%3EEmbedded content unavailable%3C/text%3E%3C/svg%3E");
+}
+
 /* Block selection overlay styles */
 .block-resize-overlay {
   position: fixed;

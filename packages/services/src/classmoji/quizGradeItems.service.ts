@@ -3,11 +3,13 @@
  * (`calculateStudentFinalGrade` / `calculateGrades`, `items`) counts for
  * quizzes.
  *
- * Four narrow reads in two rounds, whatever the number of quizzes or students:
- * the QUIZ assignments, the STUDENT roster and the classroom's late penalty;
- * then the completed attempts on those quizzes by those students, and the net
- * hours bought per (assignment, student). Each item is `quizGradeItem` from
- * `@classmoji/utils`, the same pure rule every reader uses.
+ * Five narrow reads in two rounds, whatever the number of quizzes or students:
+ * the QUIZ assignments, the STUDENT roster, the classroom's late penalty and
+ * its emoji scale; then the completed attempts on those quizzes by those
+ * students, and the net hours bought per (assignment, student). Each item is
+ * `quizGradeItem` from `@classmoji/utils`, the same pure rule every reader
+ * uses: an attempt scores its effective percentage (a staff adjustment read
+ * through this classroom's scale, else the AI's), then the late penalty.
  *
  *   - Only assignments `openToStudents` (with the caller's `quizzesVisible`)
  *     count, and only students on the STUDENT roster: a staff member's test
@@ -20,6 +22,7 @@
 
 import getPrisma from '@classmoji/database';
 import { openToStudents, quizGradeItem, type GradedItem } from '@classmoji/utils';
+import { findScaleByClassroomId } from './emojiMapping.service.ts';
 
 export interface LoadQuizGradeItemsInput {
   classroomId: string;
@@ -65,6 +68,42 @@ export const netQuizExtensionHours = async ({
 };
 
 /**
+ * `netQuizExtensionHours` for several students at once, in one query:
+ * student id → (assignment id → net hours bought). A student or assignment
+ * with no purchase has no key.
+ */
+export const netQuizExtensionHoursByStudent = async ({
+  classroomId,
+  studentIds,
+  assignmentIds,
+}: {
+  classroomId: string;
+  studentIds: readonly string[];
+  assignmentIds: readonly string[];
+}): Promise<Map<string, Map<string, number>>> => {
+  const byStudent = new Map<string, Map<string, number>>();
+  if (studentIds.length === 0 || assignmentIds.length === 0) return byStudent;
+
+  const rows = await getPrisma().tokenTransaction.groupBy({
+    by: ['student_id', 'assignment_id'],
+    where: {
+      classroom_id: classroomId,
+      student_id: { in: [...new Set(studentIds)] },
+      assignment_id: { in: [...new Set(assignmentIds)] },
+    },
+    _sum: { hours_purchased: true },
+  });
+
+  for (const row of rows) {
+    if (!row.student_id || !row.assignment_id) continue;
+    const forStudent = byStudent.get(row.student_id) ?? new Map<string, number>();
+    forStudent.set(row.assignment_id, row._sum.hours_purchased ?? 0);
+    byStudent.set(row.student_id, forStudent);
+  }
+  return byStudent;
+};
+
+/**
  * user id → that student's quiz items. A student with no item (nothing open,
  * nothing scored and nothing overdue) has no key: read `get(id) ?? []`.
  */
@@ -80,7 +119,7 @@ export const loadQuizGradeItems = async ({
 
   const prisma = getPrisma();
 
-  const [assignments, roster, settings] = await Promise.all([
+  const [assignments, roster, settings, emojiScale] = await Promise.all([
     prisma.assignment.findMany({
       where: {
         type: 'QUIZ',
@@ -113,6 +152,7 @@ export const loadQuizGradeItems = async ({
       where: { classroom_id: classroomId },
       select: { late_penalty_points_per_hour: true },
     }),
+    findScaleByClassroomId(classroomId),
   ]);
 
   const open = assignments.filter(
@@ -142,6 +182,7 @@ export const loadQuizGradeItems = async ({
         started_at: true,
         completed_at: true,
         partial_credit_percentage: true,
+        adjusted_emoji: true,
       },
     }),
     prisma.tokenTransaction.groupBy({
@@ -186,6 +227,7 @@ export const loadQuizGradeItems = async ({
         attempts: attemptsByQuizUser.get(key(assignment.quiz_id, studentId)) ?? [],
         extensionHours: hoursByAssignmentUser.get(key(assignment.id, studentId)) ?? 0,
         latePenaltyPerHour,
+        emojiScale,
         quizzesVisible,
         now,
       });

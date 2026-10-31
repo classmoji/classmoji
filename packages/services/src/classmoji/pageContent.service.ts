@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import getPrisma from '@classmoji/database';
 import { collectBlockAssetRefs, mapBlockAssetRefs } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
 import { recordContentAsset, resolveContentBranch } from './contentAssets.service.ts';
@@ -700,6 +701,27 @@ export async function recordPageFile(
     ...(content === undefined ? {} : { size: Buffer.byteLength(content) }),
   });
 
+  // The page's `updated_at` moves with its content, as a deck's does in
+  // `recordDeckCommit`. Without it a live-edited page (its edits reach git only
+  // through the checkpoint worker) would keep the date of its last title or
+  // status change, and the staff list's "Updated" sort would say nothing about
+  // edits. Bound to the classroom and `updateMany`, so a page deleted while a
+  // checkpoint was in flight is a no-op rather than a throw.
+  const pageId = (page as { id?: unknown }).id;
+  if (typeof pageId === 'string') {
+    try {
+      await getPrisma().page.updateMany({
+        where: { id: pageId, classroom_id: classroomId },
+        data: { updated_at: new Date() },
+      });
+    } catch (error) {
+      console.warn(
+        `[pageContent.recordPageFile] Could not bump updated_at for page ${pageId}:`,
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+  }
+
   // The cold pull, moved off the first reader and onto the save's tail.
   // Deliberately not awaited: a page save must return as soon as the commit and
   // the row are done, and a cache fill that is still running (or has already
@@ -724,7 +746,6 @@ export async function recordPageFile(
   //
   // Only when the bytes are actually here. The accept path calls this without
   // them and indexes from the merged file itself.
-  const pageId = (page as { id?: unknown }).id;
   if (content !== undefined && typeof pageId === 'string') {
     tail.push(
       indexOneFile({

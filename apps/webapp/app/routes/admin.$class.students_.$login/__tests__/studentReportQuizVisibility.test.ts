@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   loadQuizGradeItems: vi.fn(),
   // No settings row unless a test sets one.
   getClassroomSettingsForServer: vi.fn(),
+  findTeamsForStudentInClassroom: vi.fn(),
 }));
 
 vi.mock('~/utils/routeAuth.server', () => ({
@@ -39,7 +40,14 @@ vi.mock('@classmoji/services', () => ({
     helper: {
       findAllAssignmentsForStudent: (...a: unknown[]) => mocks.findAllAssignmentsForStudent(...a),
     },
-    emojiMapping: { findByClassroomId: vi.fn().mockResolvedValue({}) },
+    // The numeric scale: a grade reads as its score-N badge.
+    emojiMapping: {
+      findScaleByClassroomId: vi
+        .fn()
+        .mockResolvedValue(
+          Object.fromEntries(Array.from({ length: 11 }, (_, i) => [`score-${i * 10}`, i * 10]))
+        ),
+    },
     classroom: {
       getClassroomSettingsForServer: (...a: unknown[]) => mocks.getClassroomSettingsForServer(...a),
     },
@@ -57,6 +65,10 @@ vi.mock('@classmoji/services', () => ({
     },
     quizGradeItems: {
       loadQuizGradeItems: (...a: unknown[]) => mocks.loadQuizGradeItems(...a),
+    },
+    team: {
+      findTeamsForStudentInClassroom: (...a: unknown[]) =>
+        mocks.findTeamsForStudentInClassroom(...a),
     },
   },
 }));
@@ -113,16 +125,25 @@ describe('student report loader — quiz visibility', () => {
     mocks.findOwnResponse.mockResolvedValue(null);
     mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
     mocks.loadQuizGradeItems.mockResolvedValue(new Map());
+    mocks.findTeamsForStudentInClassroom.mockResolvedValue([]);
   });
 
   it('lists the quiz assignment with its attempt when quizzes are visible', async () => {
     const data = await load();
 
     expect(data.assignments.map(a => a.id)).toEqual(['a-repo', 'a-quiz', 'a-form']);
-    // The counting attempt's percentage, not whichever attempt came back
-    // first: the running retake does not hide the finished one.
+    // The counting attempt's grade as the classroom's emoji (no number), not
+    // whichever attempt came back first: the running retake does not hide
+    // the finished one.
     expect(data.quizStatus).toEqual({
-      'a-quiz': { attempted: true, completed: true, score: 80 },
+      'a-quiz': {
+        attempted: true,
+        completed: true,
+        scored: true,
+        emoji: 'score-80',
+        adjusted: false,
+        orphaned: false,
+      },
     });
     expect(mocks.findForUserByQuizIds).toHaveBeenCalledWith('u-1', ['quiz-1']);
     expect(mocks.findGradingStrategies).toHaveBeenCalledWith(['quiz-1']);
@@ -143,7 +164,14 @@ describe('student report loader — quiz visibility', () => {
     const data = await load();
 
     expect(data.quizStatus).toEqual({
-      'a-quiz': { attempted: true, completed: false, score: null },
+      'a-quiz': {
+        attempted: true,
+        completed: false,
+        scored: false,
+        emoji: null,
+        adjusted: false,
+        orphaned: false,
+      },
     });
   });
 
@@ -174,6 +202,9 @@ describe('student report loader — quiz grade items', () => {
     counts_as_zero: true,
     late_hours: 0,
     counting_raw_percentage: null,
+    counting_adjusted: false,
+    counting_adjusted_emoji: null,
+    counting_orphaned: false,
   };
 
   beforeEach(() => {
@@ -290,5 +321,70 @@ describe('student report loader — final-grade release state', () => {
     const data = await load();
 
     expect(data.finalGradesReleased).toBe(released);
+  });
+});
+
+describe('student report loader — teams', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.requireClassroomStaff.mockResolvedValue({
+      userId: 'staff-1',
+      classroom: {
+        id: 'c-1',
+        slug: 'cs101',
+        status: 'ACTIVE',
+        git_organization: { provider: 'GITHUB', login: 'cs101-org' },
+      },
+      membership: { role: 'OWNER' },
+    });
+    mocks.findStudentByLoginInClassroom.mockResolvedValue({
+      id: 'm-1',
+      comment: null,
+      letter_grade: null,
+      user: { id: 'u-1', name: 'Alice', login: 'alice', school_id: null, image: null },
+    });
+    mocks.listForClassroom.mockResolvedValue([]);
+    mocks.findAllAssignmentsForStudent.mockResolvedValue([]);
+    mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
+    mocks.loadQuizGradeItems.mockResolvedValue(new Map());
+  });
+
+  const github = (username: string) => ({
+    accounts: [{ provider_id: 'github', account_id: username, username, gitlab_instance_id: '' }],
+  });
+
+  it("asks for this student's teams in this classroom only, and lists teammates without them", async () => {
+    mocks.findTeamsForStudentInClassroom.mockResolvedValue([
+      {
+        id: 't-1',
+        name: 'Team Atlas',
+        slug: 'team-atlas',
+        teamSets: [{ id: 's-1', name: 'Project 1 teams' }],
+        members: [
+          { id: 'u-1', name: 'Alice', ...github('alice') },
+          { id: 'u-2', name: 'Sam', ...github('samlee') },
+        ],
+        repositories: [{ name: 'project-1-team-atlas', title: 'Project 1' }],
+      },
+    ]);
+
+    const data = await load();
+
+    expect(mocks.findTeamsForStudentInClassroom).toHaveBeenCalledWith('c-1', 'u-1');
+    expect(data.teams).toEqual([
+      {
+        id: 't-1',
+        name: 'Team Atlas',
+        slug: 'team-atlas',
+        teamSets: ['Project 1 teams'],
+        teammates: [{ id: 'u-2', name: 'Sam', login: 'samlee' }],
+        repositories: [{ name: 'project-1-team-atlas', title: 'Project 1' }],
+      },
+    ]);
+  });
+
+  it('has no teams when the student is in none', async () => {
+    mocks.findTeamsForStudentInClassroom.mockResolvedValue([]);
+    expect((await load()).teams).toEqual([]);
   });
 });

@@ -1,5 +1,6 @@
-import { useMemo } from 'react';
+import { useLayoutEffect, useMemo, useRef } from 'react';
 import { ConfigProvider, Popconfirm, theme } from 'antd';
+import { sanitizeClient } from '@classmoji/services/slides/safe-markup';
 
 import { useIsDarkMode } from '~/hooks/useIsDarkMode';
 import { thumbnailHtml } from '../blocks/slideBlocks';
@@ -52,6 +53,15 @@ export default function SlideThumbnail({
   // Calculate scale
   const scale = containerWidth / originalWidth;
 
+  // Inserted as nodes, held to the slide markup lists (remove mode): what is
+  // checked is what is inserted.
+  const contentRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = contentRef.current;
+    if (!el) return;
+    el.replaceChildren(sanitizeClient(slideHtml, { mode: 'remove', doc: el.ownerDocument }));
+  }, [slideHtml]);
+
   return (
     <div
       className={`
@@ -83,7 +93,7 @@ export default function SlideThumbnail({
           }}
         >
           {/* Render slide content */}
-          <div className="reveal-thumbnail p-8" dangerouslySetInnerHTML={{ __html: slideHtml }} />
+          <div ref={contentRef} className="reveal-thumbnail p-8" />
         </div>
       </div>
 

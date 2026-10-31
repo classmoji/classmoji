@@ -16,10 +16,17 @@ import { ToastContainer } from 'react-toastify';
 import { MantineProvider } from '@mantine/core';
 
 import { withLogin } from '@classmoji/utils';
+import {
+  SENTRY_CONFIG_ELEMENT_ID,
+  sentryBrowserConfig,
+  serializeSentryConfig,
+  type SentryBrowserConfig,
+} from '@classmoji/utils/sentry';
 import { prisma, getAuthSession, GIT_IDENTITY } from '~/utils/db.server.ts';
 import { classifyFormsPath } from '~/utils/formsPaths.ts';
 import { SITE_COPY_SCRIPT } from '~/site/copyScript.ts';
 import useStore from '~/store';
+import { captureRouteError, setSentryUser } from '~/utils/sentry.client.ts';
 
 /**
  * Custom hook to access user data from the root loader
@@ -85,7 +92,7 @@ const findRootUser = async (userId: string) => {
   return user ? withLogin(user) : null;
 };
 
-export const loader = async ({ request }: { request: Request }) => {
+const loadRoot = async ({ request }: { request: Request }) => {
   const url = new URL(request.url);
 
   // Class websites are public, anonymous and script-less. This MUST come before
@@ -195,6 +202,33 @@ export const loader = async ({ request }: { request: Request }) => {
   return { user, isSite: false };
 };
 
+export const loader = async (args: { request: Request }) => {
+  const result = await loadRoot(args);
+  // Class sites ship no bundle (and their CSP allows no other script), so only
+  // the app documents get the browser's Sentry settings. Read from the
+  // server's env at request time: runtime config, never baked into the bundle.
+  if (result instanceof Response || result.isSite) return result;
+  return { ...result, sentry: sentryBrowserConfig(process.env) };
+};
+
+/**
+ * The browser's Sentry settings as a JSON data block, read by entry.client.tsx
+ * before hydration. Rendered by the App document and the app ErrorBoundary,
+ * never by a class-site document.
+ */
+const SentryConfigScript = ({ config }: { config: SentryBrowserConfig | null | undefined }) =>
+  config ? (
+    <script
+      type="application/json"
+      id={SENTRY_CONFIG_ELEMENT_ID}
+      dangerouslySetInnerHTML={{ __html: serializeSentryConfig(config) }}
+    />
+  ) : null;
+
+/** The root loader's Sentry settings, when this document has them. */
+const sentryConfigOf = (data: unknown): SentryBrowserConfig | null =>
+  (data as { sentry?: SentryBrowserConfig | null } | undefined)?.sentry ?? null;
+
 /**
  * Flash-free dark mode: set the `dark` class before first paint.
  *
@@ -277,13 +311,19 @@ const APP_DARK_MODE_SCRIPT = `
             `;
 
 const App = () => {
-  const { user } = useLoaderData<typeof loader>();
+  const data = useLoaderData<typeof loader>();
+  const { user } = data;
   const setUser = useStore(state => state.setUser);
 
   // Populate Zustand store with user from loader
   useEffect(() => {
     setUser(user);
   }, [user, setUser]);
+
+  const userId = user?.id;
+  useEffect(() => {
+    setSentryUser(userId);
+  }, [userId]);
 
   return (
     <html lang="en" suppressHydrationWarning>
@@ -305,6 +345,7 @@ const App = () => {
         {/* Flash-free dark mode: honour an explicit `?theme=` (the webapp's
             resolved appearance when embedded), else follow system preference. */}
         <script dangerouslySetInnerHTML={{ __html: APP_DARK_MODE_SCRIPT }} />
+        <SentryConfigScript config={sentryConfigOf(data)} />
         {/* React Refresh preamble for dev mode — required for dynamic imports of JSX files.
             Must be a synchronous (non-module) script so it runs before any ESM modules load. */}
         {import.meta.env.DEV && (
@@ -403,7 +444,16 @@ export function ErrorBoundary() {
   const routeError = useRouteError();
   const error = routeError as { message?: string; stack?: string } | undefined;
   const location = useLocation();
+  // Present unless the root loader itself threw; carries the Sentry settings.
+  const rootData = useRouteLoaderData('root');
   const isDevelopment = import.meta.env.MODE === 'development';
+
+  // Class-site documents never hydrate, so this only runs on app documents.
+  const userId = (rootData as { user?: { id?: string } | null } | undefined)?.user?.id;
+  useEffect(() => {
+    setSentryUser(userId);
+    captureRouteError(routeError);
+  }, [routeError, userId]);
 
   /**
    * A 404 is a bad address, not a broken server, and telling someone to "try
@@ -470,6 +520,7 @@ export function ErrorBoundary() {
             class itself: `dark:` is class-driven (styles/tailwind.css) and an
             error page without this would always be light. */}
         <script dangerouslySetInnerHTML={{ __html: APP_DARK_MODE_SCRIPT }} />
+        <SentryConfigScript config={sentryConfigOf(rootData)} />
       </head>
       <body className="bg-gray-50 dark:bg-[#191919]">
         <div className="min-h-screen flex flex-col items-center justify-center px-4">

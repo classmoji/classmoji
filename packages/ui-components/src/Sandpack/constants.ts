@@ -162,3 +162,35 @@ if (heading) {
 }`,
   },
 };
+
+/** A file Sandpack gets but the editor never shows. */
+export interface SandboxSupportFile {
+  code: string;
+  hidden: true;
+}
+
+/**
+ * Files a quiz code sandbox adds to the student's files, by template. Hidden
+ * in the editor and never part of a submission.
+ *
+ * vanilla: the template's own /package.json, plus a Babel pin. The bundler's
+ * default Babel cannot parse `??`, `?.` or `for await` (verified 2026-09-23);
+ * 7.24.0 can. It must keep `main`, or nothing runs.
+ *
+ * vanilla-ts, react, react-ts: none. Their own /package.json carries
+ * `typescript`, the React dependencies and `main`, and supplying one replaces
+ * it whole.
+ */
+export const SANDBOX_SUPPORT_FILES: Readonly<
+  Record<string, Readonly<Record<string, SandboxSupportFile>>>
+> = {
+  vanilla: {
+    '/package.json': {
+      code: '{"main":"/index.js","devDependencies":{"@babel/core":"7.24.0"}}',
+      hidden: true,
+    },
+  },
+  'vanilla-ts': {},
+  react: {},
+  'react-ts': {},
+};

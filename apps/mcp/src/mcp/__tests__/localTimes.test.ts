@@ -60,6 +60,25 @@ describe('localizePayload', () => {
     expect(out.start_time_local).toBe('Wed Sep 16, 2026, 2:00 PM EDT');
   });
 
+  it("renders a quiz attempt's adjustment, its comment and a request's resolution times", () => {
+    const out = localizePayload(
+      [
+        {
+          adjusted_at: '2026-09-16T18:00:00Z',
+          comment_at: '2026-09-16T18:00:00Z',
+          resolved_at: '2026-09-16T18:00:00Z',
+        },
+      ],
+      NY,
+      NOW
+    ) as Array<Record<string, unknown>>;
+    expect(out[0]).toMatchObject({
+      adjusted_at_local: 'Wed Sep 16, 2026, 2:00 PM EDT',
+      comment_at_local: 'Wed Sep 16, 2026, 2:00 PM EDT',
+      resolved_at_local: 'Wed Sep 16, 2026, 2:00 PM EDT',
+    });
+  });
+
   it('returns the very same object when there is nothing to render', () => {
     const payload = { title: 'no dates here', count: 2 };
     expect(localizePayload(payload, NY, NOW)).toBe(payload);

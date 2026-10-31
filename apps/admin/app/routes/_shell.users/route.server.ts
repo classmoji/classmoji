@@ -19,6 +19,9 @@ export interface AdminUserRow {
   classrooms: { slug: string; name: string; role: string }[];
 }
 
+const classMatches = (c: { slug: string; name: string }, q: string) =>
+  q !== '' && [c.slug, c.name].some(s => s.toLowerCase().includes(q.toLowerCase()));
+
 export async function loadUsers({ request }: LoaderFunctionArgs) {
   const { user: admin } = await requirePlatformAdmin(request);
 
@@ -39,6 +42,18 @@ export async function loadUsers({ request }: LoaderFunctionArgs) {
                   { username: { contains: q, mode: 'insensitive' as const } },
                   { email: { contains: q, mode: 'insensitive' as const } },
                 ],
+              },
+            },
+          },
+          {
+            classroom_memberships: {
+              some: {
+                classroom: {
+                  OR: [
+                    { slug: { contains: q, mode: 'insensitive' as const } },
+                    { name: { contains: q, mode: 'insensitive' as const } },
+                  ],
+                },
               },
             },
           },
@@ -73,11 +88,14 @@ export async function loadUsers({ request }: LoaderFunctionArgs) {
     email: u.email ?? gitAccount(u)?.email ?? null,
     image: u.image,
     createdAt: u.created_at.toISOString(),
-    classrooms: u.classroom_memberships.map(m => ({
-      slug: m.classroom.slug,
-      name: m.classroom.name,
-      role: m.role,
-    })),
+    classrooms: u.classroom_memberships
+      .map(m => ({
+        slug: m.classroom.slug,
+        name: m.classroom.name,
+        role: m.role,
+      }))
+      // A matching class goes first so it is among the chips the row shows.
+      .sort((a, b) => Number(classMatches(b, q)) - Number(classMatches(a, q))),
   }));
 
   return {

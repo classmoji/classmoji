@@ -1,5 +1,6 @@
 import { bucketExpiry, nowSeconds } from './bucket.ts';
 import {
+  MAX_FILES_GRANT_LENGTH,
   TRANSFORM_WIDTHS,
   assertClassroomId,
   assertKeyVersion,
@@ -9,6 +10,7 @@ import {
   assertTier,
   assertTransform,
   blobCanonicalString,
+  filesCanonicalString,
   hostOf,
   isExt,
   isGitSha,
@@ -16,10 +18,19 @@ import {
   mediaCanonicalString,
   themeCanonicalString,
   toBase64Url,
+  utf8,
 } from './canonical.ts';
 import { deriveKey, signCanonical } from './derive.ts';
 import { encodeDownloadFilename, normalizeDownloadFilename } from './downloads.ts';
-import type { SigningContext, Tier, Transform, TransformFormat, TransformWidth } from './types.ts';
+import type {
+  FilesFolder,
+  SigningContext,
+  Tier,
+  Transform,
+  TransformFormat,
+  TransformWidth,
+} from './types.ts';
+import { filesFoldersOk, filesGrantText } from './verify.ts';
 
 export interface BlobRef {
   sha: string;
@@ -37,6 +48,11 @@ export interface BlobRef {
 export interface ThemeRef {
   theme: string;
   treeSha: string;
+}
+
+export interface FilesRef {
+  /** The folders the URL opens, in any order. Each needs its current tree sha. */
+  folders: readonly FilesFolder[];
 }
 
 export interface MediaRef {
@@ -250,6 +266,66 @@ export async function signThemeBase(
   const policy = `${ctx.tier}.${ctx.keyVersion}.${exp}.${sig}`;
 
   return `${base}/c/${ctx.classroomId}/theme/${ref.theme}/${ref.treeSha}/${policy}/`;
+}
+
+/**
+ * The grant segment for a set of folders: base64url (no padding) of
+ * `{path}\t{treeSha}` lines, sorted by path in code-unit order, joined by `\n`.
+ *
+ * Throws a TypeError for a set no verifier would accept — empty or more than
+ * twelve, the repo root, a path that is not already in normalized form, a
+ * duplicate, one folder inside another, or a sha that is not 40 hex — so a
+ * bad grant fails where it is minted rather than as a 403 in a browser.
+ */
+export function encodeFilesGrant(folders: readonly FilesFolder[]): string {
+  const sorted = folders
+    .map(folder => ({ path: folder.path, treeSha: folder.treeSha }))
+    .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  if (!filesFoldersOk(sorted)) {
+    throw new TypeError(
+      `content-signing: unusable files grant (${folders.map(f => f.path).join(', ') || 'no folders'})`
+    );
+  }
+  const grant = toBase64Url(utf8(filesGrantText(sorted)));
+  if (grant.length > MAX_FILES_GRANT_LENGTH) {
+    throw new TypeError('content-signing: files grant is too long');
+  }
+  return grant;
+}
+
+/**
+ * `{origin}/c/{classroomId}/files/{grant}/{p}.{v}.{exp}.{sig}/`
+ *
+ * The theme shape over several folders at once: the signature lives in the
+ * path, so a page served from one of the folders resolves its relative
+ * references against it and they inherit the grant. Always ends in a slash;
+ * the caller appends the repo path (and any query, which is not signed).
+ */
+export async function signFilesBase(
+  origin: string,
+  ctx: SigningContext,
+  ref: FilesRef
+): Promise<string> {
+  const base = normalizeOrigin(origin);
+  const host = hostOf(base);
+  const now = assertContext(ctx);
+  const grant = encodeFilesGrant(ref.folders);
+
+  const exp = bucketExpiry(ctx.tier, ctx.classroomId, now);
+  const canonical = filesCanonicalString({
+    host,
+    classroomId: ctx.classroomId,
+    grant,
+    tier: ctx.tier,
+    keyVersion: ctx.keyVersion,
+    exp,
+  });
+
+  const key = await deriveKey(ctx.master, ctx.classroomId, ctx.keyVersion);
+  const sig = toBase64Url(await signCanonical(key, canonical));
+  const policy = `${ctx.tier}.${ctx.keyVersion}.${exp}.${sig}`;
+
+  return `${base}/c/${ctx.classroomId}/files/${grant}/${policy}/`;
 }
 
 /**

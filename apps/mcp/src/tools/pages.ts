@@ -118,6 +118,10 @@ export const pageCreateTool: ToolDefinition<PageCreateArgs> = {
         },
       });
     } catch (error) {
+      // The free plan's page limit: the same sentence the web shows.
+      if (hasErrorCode(error, 'PLAN_CONTENT_LIMIT')) {
+        throw new ToolError('forbidden', (error as Error).message);
+      }
       if (isContentPathConflict(error)) {
         throw new ToolError('invalid_params', (error as Error).message);
       }

@@ -44,6 +44,7 @@ import {
   signInUrlFor,
   type SectionReaderState,
 } from '~/utils/pageSections.server.ts';
+import { readerCommentsFor, type CommentViewer } from '~/utils/pageComments.server.ts';
 import { downloadMapRole, type MediaDownloads } from '~/utils/mediaDownloads.ts';
 import {
   assetResolveContext,
@@ -381,6 +382,11 @@ export const loader = async ({
     viewerContent = [{ type: 'paragraph', content: [] }];
   }
 
+  // Page comments read the stored blocks themselves (the service redacts them
+  // for this reader), the same document `/api/page-comments` anchors against:
+  // a legacy HTML page has no stored block ids, so it counts page-level only.
+  const commentBlocks = format === 'json' && Array.isArray(content) ? content : [];
+
   // Locked bodies this reader may not see leave the document HERE, before
   // anything is derived from it: the asset and srcset maps, the download map
   // and the payload all read `viewerContent` from now on, so a body's text,
@@ -408,6 +414,41 @@ export const loader = async ({
   // Its failure surfaces where it is awaited, never as an unhandled rejection
   // if something in between throws first.
   sectionStatsPending?.catch(() => {});
+
+  // Page comments (`readerComments`): open-thread counts for a signed-in
+  // accepted member who may read this page's comments (the service's
+  // `commentAccess`), from the reader rule already read above. Not on a
+  // preview branch (its blocks are not what the threads were written on).
+  // Absent from the payload for everyone else. A failed count leaves the key
+  // out rather than failing the page. Started here, awaited with the payload.
+  const commentCtx =
+    authData?.userId && sectionViewer.acceptedRole !== null && !previewActive
+      ? ClassmojiService.pageComments.commentContext({
+          userId: authData.userId,
+          // The service's answer (only NO_SECTION_VIEWER has no accepted role).
+          viewer: sectionViewer as CommentViewer,
+          page,
+          classroom: page.classroom,
+          blocks: commentBlocks,
+          unlockedSectionIds: Object.keys(readerSections.unlocked),
+        })
+      : null;
+  const readerCommentsPending = commentCtx?.access.canRead
+    ? ClassmojiService.pageComments
+        .countsForViewer(commentCtx)
+        .then(counts =>
+          readerCommentsFor({
+            signedIn: true,
+            access: commentCtx.access,
+            impersonated: isImpersonatedSession(authData),
+            counts,
+          })
+        )
+        .catch(error => {
+          console.warn('[pages] comment counts unavailable:', error);
+          return undefined;
+        })
+    : undefined;
 
   // Which blocks the pending preview adds or edits — the changes the preview
   // makes, against the page as it was when the preview started (its
@@ -521,6 +562,8 @@ export const loader = async ({
         }).contentCompare(repoName, 'main', previewBranch)
       : null;
 
+  const readerComments = readerCommentsPending ? await readerCommentsPending : undefined;
+
   return {
     page: {
       id: page.id,
@@ -589,6 +632,10 @@ export const loader = async ({
     // staff lists answer). Null for everyone else, and for a page with no
     // locked section and no checkable heading.
     sectionStats: sectionStatsPending ? await sectionStatsPending : null,
+    // `{ counts, pageLevel, open, canWrite, canResolve, frozen }` for a
+    // signed-in accepted member (`readerCommentsFor`); the key is ABSENT for
+    // everyone else, never null. Threads load lazily from `/api/page-comments`.
+    ...(readerComments ? { readerComments } : {}),
     userRole,
     canEdit,
     uploadCapability,

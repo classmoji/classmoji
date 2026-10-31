@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { Card, Typography } from 'antd';
 import { QuestionCircleOutlined } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
@@ -25,6 +26,8 @@ interface QuestionData {
 interface QuestionCardProps {
   questionData: QuestionData;
   isDarkMode?: boolean;
+  /** Rendered under the question text: a sandbox question's code sandbox (QuizChat). */
+  children?: ReactNode;
 }
 
 type MarkdownCodeProps = React.ComponentProps<'code'> & {
@@ -75,7 +78,7 @@ const CodeSource = ({
   </div>
 );
 
-const QuestionCard = ({ questionData, isDarkMode = false }: QuestionCardProps) => {
+const QuestionCard = ({ questionData, isDarkMode = false, children }: QuestionCardProps) => {
   const {
     question_number,
     total_questions,
@@ -217,6 +220,8 @@ const QuestionCard = ({ questionData, isDarkMode = false }: QuestionCardProps) =
           {question_text}
         </ReactMarkdown>
       </div>
+
+      {children}
     </Card>
   );
 };

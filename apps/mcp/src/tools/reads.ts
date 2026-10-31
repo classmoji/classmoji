@@ -37,6 +37,8 @@ import { IssueStatus, type Role } from '@prisma/client';
 import { z, type ZodRawShape } from 'zod';
 import type { ResourceDefinition, ToolDefinition } from '../mcp/registry.ts';
 import { parseClassroomRef } from '../authz/pure.ts';
+import type { ClassroomContext } from '../authz/classroomContext.ts';
+import { idArgs, type ReadAudit } from '../mcp/audit.ts';
 import {
   ok,
   OWNER_TEACHER,
@@ -81,6 +83,20 @@ interface MirrorConfig {
   buildVars?: (args: Record<string, unknown>) => Record<string, string>;
 }
 
+/** A resource's read audit for its mirror tool: ids from the mapped URI variables. */
+function mirroredAudit(audit: ReadAudit, buildVars: MirrorConfig['buildVars']): ReadAudit {
+  const ids = audit.ids;
+  return {
+    ...audit,
+    ...(ids
+      ? {
+          ids: (args: Record<string, unknown>, classroom: ClassroomContext) =>
+            ids(buildVars ? buildVars(args) : {}, classroom),
+        }
+      : {}),
+  };
+}
+
 /**
  * Wrap a ResourceDefinition as a read tool. The tool inherits the resource's
  * exact role tier and calls the resource's handler with the same ctx + vars.
@@ -89,6 +105,7 @@ function mirrorResourceTool(config: MirrorConfig): ToolDefinition {
   const { resource, name, title, description, extraInput = {}, buildVars } = config;
   const classroomScoped = resource.roles !== null;
   const template = new UriTemplate(resource.uriTemplate);
+  const audit = resource.auditRead;
 
   const inputSchema: ZodRawShape = {
     ...(classroomScoped
@@ -104,6 +121,9 @@ function mirrorResourceTool(config: MirrorConfig): ToolDefinition {
     scope: 'read',
     roles: resource.roles,
     inputSchema,
+    // The resource's read audit, with its ids read from the URI variables this
+    // tool's args map to — the same row under the tool's own name.
+    ...(audit ? { auditRead: mirroredAudit(audit, buildVars) } : {}),
     handler: async (args: Record<string, unknown>, ctx) => {
       let vars: Record<string, string> = {};
       if (classroomScoped) {
@@ -165,8 +185,9 @@ export const listTeamsTool = mirrorResourceTool({
   // description IS the contract the client reasons about. When the resource's
   // policy changes, change this string too.
   description:
-    'Teams in the classroom with member identities (id, name, login — no contact PII). Students ' +
-    'see the teams they belong to, and only those; the teaching team sees every team.',
+    'Teams in the classroom with member identities (id, name, login — no contact PII), the team ' +
+    'sets each belongs to (team_sets) and its repositories. Students see the teams they belong ' +
+    'to, and only those; the teaching team sees every team.',
 });
 
 export const listReposTool = mirrorResourceTool({
@@ -222,8 +243,14 @@ export const listRegradeRequestsTool = mirrorResourceTool({
   name: 'list_regrade_requests',
   title: 'List regrade requests',
   description:
-    'All regrade requests in the classroom with student + grader comments and the affected ' +
-    'submission. Teaching team only. Resolve them with regrade_resolve.',
+    'All regrade requests in the classroom: status, target (submission or quiz), student ' +
+    'comment, grader_comment (the staff reply) with resolved_by_name and resolved_at, ' +
+    'previous_grade and new_grade (emoji, new once ' +
+    'resolved), and the submission or the quiz attempt (quiz_id, quiz_name, attempt_id, ' +
+    'attempt_number, current_emoji, adjusted, original_emoji; an open one also late_hours ' +
+    'and counted_emoji, its grade after the late penalty). Grades are emoji, never ' +
+    'numbers; quiz requests only where the classroom shows quizzes. Teaching team only. ' +
+    'Resolve them with regrade_resolve.',
 });
 
 export const myRegradeRequestsTool = mirrorResourceTool({
@@ -231,8 +258,12 @@ export const myRegradeRequestsTool = mirrorResourceTool({
   name: 'my_regrade_requests',
   title: 'My regrade requests',
   description:
-    'Your own regrade requests in this classroom (status, your comment, the affected submission). ' +
-    'Students only; grader comments are not included.',
+    'Your own regrade requests in this classroom: status, target (submission or quiz), your ' +
+    'comment, grader_comment (the staff reply) with resolved_by_name and resolved_at (who ' +
+    'replied, when), previous_grade and new_grade (emoji), and the ' +
+    'submission or the quiz attempt (quiz_id, quiz_name, attempt_id, attempt_number, ' +
+    'current_emoji, adjusted, original_emoji). Grades are emoji, never numbers. Ask with ' +
+    'regrade_create. Students only.',
 });
 
 export const listQuizzesTool = mirrorResourceTool({
@@ -262,8 +293,9 @@ export const listModulesTool = mirrorResourceTool({
     'teacher moves a quiz with quiz_update module_id. Staff see ' +
     'unpublished modules, items and assignments too, and for each assignment the repository, ' +
     'quiz or form it points at (target_id), weight and publish state. Students see published ' +
-    'ones only, each assignment by title, type and due date. Returns {enabled:false} when the ' +
-    'classroom hides modules. Any member.',
+    'ones only, each assignment by title, type and due date. Every assignment lists its linked ' +
+    'pages/decks as `materials` ({type, id, title}; students published only, staff all with ' +
+    'is_draft). Returns {enabled:false} when the classroom hides modules. Any member.',
 });
 
 export const listCalendarTool = mirrorResourceTool({
@@ -340,6 +372,10 @@ export const listSubmissionsTool: ToolDefinition<ListSubmissionsArgs> = {
     'submission_late_override consume. Teaching team only.',
   scope: 'read',
   roles: TEACHING_TEAM,
+  auditRead: {
+    resourceType: 'GIT_REPO_ASSIGNMENT',
+    ids: args => ({ data: idArgs(args, ['repository_id', 'assignment_id', 'grader_id']) }),
+  },
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     repository_id: z
@@ -545,6 +581,11 @@ export const gradingReportTool: ToolDefinition<GradingReportArgs> = {
   // Personnel oversight: this exposes a TA's own throughput and grading
   // patterns, so assistants must not read their peers' stats through MCP.
   roles: OWNER_TEACHER,
+  // Each TA's grading of students' work.
+  auditRead: {
+    resourceType: 'GIT_REPO_ASSIGNMENT_GRADER',
+    ids: args => ({ data: idArgs(args, ['assignment_id', 'grader_id']) }),
+  },
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     assignment_id: z.string().uuid().optional().describe('Limit the report to one Assignment id'),

@@ -231,6 +231,7 @@
     "AI_MAX_BUDGET_USD",
     "SYLLABUS_BOT_MODEL",
     "QUIZ_TRIGGER_RUNTIME",
+    "ASK_MOJI_RUNTIME",
     "TRIGGER_AI_SDK_OTEL_AUTOREGISTER",
     "STRIPE_SECRET_KEY",
     "STRIPE_WEBHOOK_SECRET",
@@ -264,6 +265,7 @@
     "COLLAB_CHECKPOINT_DELAY",
     "COLLAB_CHECKPOINT_MAX_DELAY",
     "ENABLE_TEST_LOGIN",
+    "ENABLE_DEV_AUTO_REGISTER",
     "DEVPORT_ID",
     "DEVPORT_NAME",
     "PORT",
@@ -288,6 +290,11 @@
     "INFISICAL_CLIENT_ID",
     "INFISICAL_CLIENT_SECRET",
     "INFISICAL_PROJECT_ID",
-    "INFISICAL_HOST"
-  ]
+    "INFISICAL_HOST",
+    "SENTRY_DSN"
+  ],
+  // Reaches the app builds (source map upload to Sentry) without being hashed
+  // into the cache key: it is a secret, and it changes nothing in the output
+  // except that maps are uploaded and then deleted.
+  "globalPassThroughEnv": ["SENTRY_AUTH_TOKEN"]
 }

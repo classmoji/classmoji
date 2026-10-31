@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const selfFormedMock = vi.fn();
 const findForStudentMock = vi.fn();
@@ -10,6 +10,7 @@ const loadQuizzesVisibleMock = vi.fn();
 const listForStudentMock = vi.fn();
 const listPublishedAssignmentsMock = vi.fn();
 const upNextMock = vi.fn();
+const linkedMaterialsMock = vi.fn();
 const summaryMock = vi.fn();
 const emojiMappingFindManyMock = vi.fn();
 const letterGradeMappingFindManyMock = vi.fn();
@@ -62,6 +63,7 @@ vi.mock('@classmoji/services', () => ({
       listForStudent: (...a: unknown[]) => listForStudentMock(...a),
       listPublishedAssignments: (...a: unknown[]) => listPublishedAssignmentsMock(...a),
       upNext: (...a: unknown[]) => upNextMock(...a),
+      linkedMaterials: (...a: unknown[]) => linkedMaterialsMock(...a),
     },
   },
 }));
@@ -131,6 +133,14 @@ beforeEach(() => {
   listPublishedAssignmentsMock.mockResolvedValue([{ id: 'listed' }]);
   upNextMock.mockImplementation((rows: Array<{ done: boolean }>) => rows.filter(r => !r.done));
   summaryMock.mockResolvedValue({ kind: 'letter', letter: 'B', count: 3 });
+  linkedMaterialsMock.mockResolvedValue(new Map());
+  // The pages and slides apps' addresses, pinned: the test script loads .env.
+  vi.stubEnv('PAGES_URL', 'https://pages.test');
+  vi.stubEnv('SLIDES_URL', 'https://slides.test');
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe('student dashboard loader — assignment lookup guard', () => {
@@ -190,6 +200,40 @@ describe('student dashboard loader — assignment lookup guard', () => {
   });
 });
 
+describe('student dashboard loader — regrade/resubmit requests', () => {
+  const requests = [
+    {
+      id: 'rr-quiz',
+      status: 'IN_REVIEW',
+      created_at: '2026-09-20T12:00:00.000Z',
+      quiz_attempt_id: 'att-1',
+      quiz_attempt: { attempt_number: 2, quiz: { name: 'Recursion check-in' } },
+      git_repo_assignment: null,
+    },
+    {
+      id: 'rr-repo',
+      status: 'IN_REVIEW',
+      created_at: '2026-09-19T12:00:00.000Z',
+      quiz_attempt_id: null,
+      quiz_attempt: null,
+      git_repo_assignment: { assignment: { title: 'Lab 1' } },
+    },
+  ];
+
+  it('lists quiz requests where the classroom shows quizzes', async () => {
+    regradeRequestsMock.mockResolvedValue(requests);
+    const data = await (await loader(loaderArgs())).data;
+    expect(data.resubmits.map((r: { id: string }) => r.id)).toEqual(['rr-quiz', 'rr-repo']);
+  });
+
+  it('leaves quiz requests out where it does not', async () => {
+    regradeRequestsMock.mockResolvedValue(requests);
+    loadQuizzesVisibleMock.mockResolvedValue(false);
+    const data = await (await loader(loaderArgs())).data;
+    expect(data.resubmits.map((r: { id: string }) => r.id)).toEqual(['rr-repo']);
+  });
+});
+
 describe('student dashboard loader — Up next', () => {
   it("reads the student's coursework with the quiz answer and the submissions already read", async () => {
     const submissions = [{ id: 'ra-1', assignment_id: 'a-1' }];
@@ -223,7 +267,9 @@ describe('student dashboard loader — Up next', () => {
     const data = await (await loader(loaderArgs())).data;
 
     expect(upNextMock).toHaveBeenCalledWith([open, done]);
-    expect(data.upNext).toEqual([open]);
+    // Everything but the quiz percentage, which stays on the server (E1).
+    const { score: _score, ...sent } = open;
+    expect(data.upNext).toEqual([{ ...sent, materials: [] }]);
     expect(data.viewerIsStudent).toBe(true);
   });
 
@@ -249,6 +295,87 @@ describe('student dashboard loader — Up next', () => {
     const data = await (await loader(loaderArgs())).data;
 
     expect(data.upNext[0].extensionHours).toBe(3);
+  });
+
+  it('links each row to the published pages and decks of its assignment, pages first', async () => {
+    listForStudentMock.mockResolvedValue([
+      courseworkRow({ assignmentId: 'lab', title: 'Lab 2' }),
+      courseworkRow({ assignmentId: 'quiz', type: 'QUIZ', title: 'Quiz 1' }),
+    ]);
+    linkedMaterialsMock.mockResolvedValue(
+      new Map([
+        [
+          'lab',
+          [
+            { kind: 'PAGE', id: 'p-1', title: 'Lab 2 spec' },
+            { kind: 'SLIDE', id: 's-1', title: 'Week 2 lecture' },
+          ],
+        ],
+      ])
+    );
+
+    const data = await (await loader(loaderArgs())).data;
+
+    expect(data.upNext.map(r => [r.assignmentId, r.materials])).toEqual([
+      [
+        'lab',
+        [
+          {
+            kind: 'PAGE',
+            id: 'p-1',
+            title: 'Lab 2 spec',
+            href: 'https://pages.test/test-class/p-1',
+          },
+          {
+            kind: 'SLIDE',
+            id: 's-1',
+            title: 'Week 2 lecture',
+            href: 'https://slides.test/s-1',
+          },
+        ],
+      ],
+      // A row with nothing linked sends an empty list.
+      ['quiz', []],
+    ]);
+  });
+
+  it("asks for the gate's classroom and only the Up next rows' assignments", async () => {
+    listForStudentMock.mockResolvedValue([
+      courseworkRow({ assignmentId: 'open' }),
+      courseworkRow({ assignmentId: 'done', done: true }),
+    ]);
+
+    await (
+      await loader(loaderArgs())
+    ).data;
+
+    expect(linkedMaterialsMock).toHaveBeenCalledTimes(1);
+    expect(linkedMaterialsMock).toHaveBeenCalledWith('class-1', ['open']);
+  });
+
+  it('reads no materials when nothing is up next', async () => {
+    const data = await (await loader(loaderArgs())).data;
+
+    expect(data.upNext).toEqual([]);
+    expect(linkedMaterialsMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps the rows, without materials, and logs, when the materials read fails', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    listForStudentMock.mockResolvedValue([courseworkRow({ assignmentId: 'lab' })]);
+    linkedMaterialsMock.mockRejectedValue(new Error('connection timeout'));
+
+    const data = await (await loader(loaderArgs())).data;
+
+    expect(data.upNext.map(r => [r.assignmentId, r.materials])).toEqual([['lab', []]]);
+    expect(data.viewerIsStudent).toBe(true);
+    expect(data.hasAssignments).toBe(true);
+    expect(logged).toHaveBeenCalledWith(
+      '[student dashboard] linked materials failed',
+      { classroomId: 'class-1', userId: 'student-1' },
+      expect.any(Error)
+    );
+    logged.mockRestore();
   });
 
   it('tells the card when the viewer is staff', async () => {
@@ -279,7 +406,28 @@ describe('student dashboard loader — recent grades', () => {
       ...over,
     });
 
-  it('adds quiz scores beside released repo grades, newest first', async () => {
+  it('sends no quiz percentage in Up next or anywhere else (E1)', async () => {
+    const open = courseworkRow({ assignmentId: 'open', type: 'QUIZ', score: 73.37 });
+    const done = courseworkRow({
+      assignmentId: 'done',
+      type: 'QUIZ',
+      done: true,
+      score: 41.5,
+      scoreEmoji: 'eyes',
+      scoredAt: '2026-09-20T12:00:00.000Z',
+    });
+    listForStudentMock.mockResolvedValue([open, done]);
+
+    const data = await (await loader(loaderArgs())).data;
+
+    expect(data.upNext.map(r => r.assignmentId)).toEqual(['open']);
+    expect('score' in data.upNext[0]).toBe(false);
+    const text = JSON.stringify(data);
+    expect(text).not.toContain('73.37');
+    expect(text).not.toContain('41.5');
+  });
+
+  it('adds quiz grades (emoji, never the number) beside released repo grades, newest first', async () => {
     listForStudentMock.mockResolvedValue([
       gradedRepo(),
       courseworkRow({
@@ -288,6 +436,10 @@ describe('student dashboard loader — recent grades', () => {
         title: 'Recursion',
         done: true,
         score: 0,
+        scoreEmoji: 'score-0',
+        originalScoreEmoji: 'score-0',
+        adjusted: false,
+        numLateHours: 0,
         scoredAt: '2026-09-20T12:00:00.000Z',
         href: '/student/test-class/quizzes?quiz=q-1',
       }),
@@ -300,12 +452,17 @@ describe('student dashboard loader — recent grades', () => {
     expect(data.feedback).toEqual([
       {
         id: 'quiz-a-quiz',
+        kind: 'QUIZ',
         assignmentTitle: 'Recursion',
         closedAt: '2026-09-20T12:00:00.000Z',
         graders: [],
         grades: [],
         issueUrl: null,
-        score: 0,
+        scoreEmoji: 'score-0',
+        originalScoreEmoji: 'score-0',
+        adjusted: false,
+        countedScoreEmoji: null,
+        lateHours: 0,
         href: '/student/test-class/quizzes?quiz=q-1',
       },
       {

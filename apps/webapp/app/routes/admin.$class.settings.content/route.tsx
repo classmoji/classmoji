@@ -241,7 +241,7 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
       >
         <Form layout="vertical" className="w-3/4">
           <Form.Item label="Enable Slides">
-            <Switch checked={settings.slides_enabled ?? false} onChange={handleSlidesToggle} />
+            <Switch checked={settings.slides_enabled ?? true} onChange={handleSlidesToggle} />
           </Form.Item>
         </Form>
       </SettingSection>

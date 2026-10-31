@@ -5,7 +5,7 @@ import fastifyRawBody from 'fastify-raw-body';
 
 /**
  * The `push` branch of the GitHub webhook: which pushes reach the sync task,
- * and what change set they carry.
+ * and what they tell it.
  *
  * ── Why this is its own file ───────────────────────────────────────────────
  * Every other GitHub event dispatches off `payload.action`. A push has no
@@ -252,31 +252,17 @@ describe('which pushes are ours', () => {
       {
         classroomId: 'classroom-1',
         reason: 'push',
-        changes: {
-          added: ['images/one.png'],
-          modified: ['pages/intro.md'],
-          removed: ['images/old.png'],
-        },
-        forced: false,
-        complete: true,
         before: 'a'.repeat(40),
         after: 'b'.repeat(40),
       },
-      // One sync per classroom at a time: two deliveries for one repo applied
-      // concurrently can record their commits in either order, moving the map's
-      // recorded commit backwards and hiding the gap `before` exists to expose.
+      // One sync per classroom at a time, so a burst of pushes reads the head
+      // one run at a time.
       { concurrencyKey: 'classroom-1' }
     );
   });
 
-  /**
-   * `before` is the only way the sync can tell an EARLIER delivery went
-   * missing: a push whose parent is not the commit the map is level with proves
-   * the repo moved unseen, and that run has to re-read the whole tree instead of
-   * applying a diff against a state nobody holds. `after` is the commit the map
-   * records once it has applied this one.
-   */
-  it('reports the commits the push spans, so a dropped delivery is detectable', async () => {
+  /** The commits the push spans, for the sync run's log. */
+  it('reports the commits the push spans', async () => {
     await post(app, pushBody({ before: 'c'.repeat(40), after: 'd'.repeat(40) }));
 
     const payload = contentAssetsSync.mock.calls[0][0];
@@ -284,12 +270,7 @@ describe('which pushes are ours', () => {
     expect(payload.after).toBe('d'.repeat(40));
   });
 
-  /**
-   * GitHub sends 40 zeros as `before` when a ref is CREATED. Forwarded as-is:
-   * it is not the commit any map is level with, so the sync treats it as the
-   * gap it is and re-reads the whole tree rather than applying a diff against
-   * a state nobody holds.
-   */
+  /** GitHub sends 40 zeros as `before` when a ref is CREATED. Forwarded as-is. */
   it('forwards the all-zero before of a branch-creation push', async () => {
     await post(app, pushBody({ before: '0'.repeat(40), created: true }));
 
@@ -371,105 +352,32 @@ describe('which pushes are ours', () => {
 
 describe('what the task is told about the push', () => {
   /**
-   * A force-push rewrites history: the commits listed are not a diff against
-   * what we last synced, so the task has to re-read the whole tree.
+   * The sync reads the branch head and diffs the whole tree, so no list of
+   * changed paths, force flag or commit count is sent: a force-push, a capped
+   * commit list or a dropped earlier delivery all come out right the same way.
    */
-  it('reports a force-push as forced', async () => {
-    await post(app, pushBody({ forced: true }));
-
-    expect(contentAssetsSync.mock.calls[0][0].forced).toBe(true);
-  });
-
-  /**
-   * GitHub caps `commits[]` at 20 and says nothing about it. At the cap the
-   * diff may be missing paths entirely, which is `complete: false` — the
-   * task's cue to fall back to a full sync.
-   */
-  it('reports a capped 20-commit payload as incomplete', async () => {
-    const commits = Array.from({ length: 20 }, (_unused, index) => ({
+  it('sends no diff, whatever the push held', async () => {
+    const commits = Array.from({ length: 25 }, (_unused, index) => ({
       added: [`images/${index}.png`],
       modified: [],
       removed: [],
     }));
 
-    await post(app, pushBody({ commits }));
+    await post(app, pushBody({ commits, forced: true }));
 
-    expect(contentAssetsSync.mock.calls[0][0].complete).toBe(false);
-  });
-
-  it('reports a 19-commit payload as complete', async () => {
-    const commits = Array.from({ length: 19 }, (_unused, index) => ({
-      added: [`images/${index}.png`],
-      modified: [],
-      removed: [],
-    }));
-
-    await post(app, pushBody({ commits }));
-
-    expect(contentAssetsSync.mock.calls[0][0].complete).toBe(true);
-  });
-
-  /**
-   * Last word on a path wins. A file added and then deleted in the same push
-   * is GONE from the repo now, and reporting it as added would leave the map
-   * signing URLs for a SHA that no longer resolves.
-   */
-  it('reports a path added then removed in the same push as removed', async () => {
-    const body = pushBody({
-      commits: [
-        { added: ['images/temp.png'], modified: [], removed: [] },
-        { added: [], modified: [], removed: ['images/temp.png'] },
-      ],
-    });
-
-    await post(app, body);
-
-    expect(contentAssetsSync.mock.calls[0][0].changes).toEqual({
-      added: [],
-      modified: [],
-      removed: ['images/temp.png'],
-    });
-  });
-
-  it('reports a path removed then re-added in the same push as added', async () => {
-    const body = pushBody({
-      commits: [
-        { added: [], modified: [], removed: ['images/logo.png'] },
-        { added: ['images/logo.png'], modified: [], removed: [] },
-      ],
-    });
-
-    await post(app, body);
-
-    expect(contentAssetsSync.mock.calls[0][0].changes).toEqual({
-      added: ['images/logo.png'],
-      modified: [],
-      removed: [],
-    });
-  });
-
-  it('does not report the same path twice when several commits touch it', async () => {
-    const body = pushBody({
-      commits: [
-        { added: [], modified: ['pages/intro.md'], removed: [] },
-        { added: [], modified: ['pages/intro.md'], removed: [] },
-      ],
-    });
-
-    await post(app, body);
-
-    expect(contentAssetsSync.mock.calls[0][0].changes.modified).toEqual(['pages/intro.md']);
+    expect(contentAssetsSync).toHaveBeenCalledTimes(1);
+    expect(Object.keys(contentAssetsSync.mock.calls[0][0]).sort()).toEqual([
+      'after',
+      'before',
+      'classroomId',
+      'reason',
+    ]);
   });
 
   it('still triggers on a push whose commits touched no files', async () => {
     await post(app, pushBody({ commits: [] }));
 
     expect(contentAssetsSync).toHaveBeenCalledTimes(1);
-    expect(contentAssetsSync.mock.calls[0][0].changes).toEqual({
-      added: [],
-      modified: [],
-      removed: [],
-    });
   });
 });
 

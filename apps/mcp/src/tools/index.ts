@@ -7,11 +7,14 @@
  * `classroom` ('org/slug') argument, gets the registry's enforcement pipeline
  * (scope → rate limit → classroom/role → mutation gate), re-verifies target
  * ownership against the authorized classroom (S1), routes mutations through
- * packages/services orchestrators, and writes an audit-log row.
+ * packages/services orchestrators, and writes an audit-log row. The feedback
+ * board's tools (feedback.ts) are the exception: no classroom, no audit row.
  */
 
 import { registerToolDefinition } from '../mcp/registry.ts';
 import { whoamiTool } from './whoami.ts';
+import { billingStatusTool } from './billing.ts';
+import { feedbackReadTool, feedbackWriteTool, feedbackDeleteTool } from './feedback.ts';
 import { readTools } from './reads.ts';
 import { gradeAddTool, gradeRemoveTool, gradeRemoveAllTool } from './grades.ts';
 import { graderAssignTool, graderUnassignTool, graderAssignBulkTool } from './graders.ts';
@@ -24,6 +27,8 @@ import {
   moduleUpdateTool,
   modulePublishTool,
   moduleItemAddTool,
+  moduleItemRemoveTool,
+  moduleItemMoveTool,
   moduleDeleteTool,
   moduleReorderTool,
 } from './modules.ts';
@@ -60,6 +65,14 @@ import {
   pageSectionsStatusTool,
   pageSectionUnlockTool,
 } from './pageSections.ts';
+import {
+  pageCommentCreateTool,
+  pageCommentDeleteTool,
+  pageCommentReactTool,
+  pageCommentResolveTool,
+  pageCommentUpdateTool,
+  pageCommentsListTool,
+} from './pageComments.ts';
 import { tokenGrantTool } from './tokens.ts';
 import { extensionPurchaseTool } from './extensions.ts';
 import {
@@ -72,6 +85,9 @@ import {
 import { rosterAddStudentTool, rosterRemoveStudentTool } from './roster.ts';
 import { staffAddTool, staffUpdateTool, staffRemoveTool } from './staff.ts';
 import { quizCreateTool, quizUpdateTool, quizPublishTool, quizDeleteTool } from './quizzes.ts';
+import { listQuizAttemptsTool } from './quizAttempts.ts';
+import { getQuizAttemptTool } from './quizAttemptDetail.ts';
+import { quizAttemptAdjustTool } from './quizAttemptAdjust.ts';
 import {
   classroomSettingsUpdateTool,
   classroomStatusUpdateTool,
@@ -95,6 +111,7 @@ import {
   formResponseUpdateTool,
 } from './forms.ts';
 import { formTeamsGetTool, formTeamsRunTool, formTeamsCreateTool } from './formTeams.ts';
+import { askMojiTools } from './askMoji.ts';
 import {
   fileImportUrlTool,
   fileUploadFinishTool,
@@ -117,6 +134,16 @@ import {
 export function registerAllTools(): void {
   // Identity / bootstrap
   registerToolDefinition(whoamiTool);
+
+  // The caller's own plan (Settings → Billing).
+  registerToolDefinition(billingStatusTool);
+
+  // The platform-wide feedback board (/feedback): any signed-in user, no
+  // classroom (roles: null). No audit rows, by decision: the webapp writes
+  // none for the board either.
+  registerToolDefinition(feedbackReadTool);
+  registerToolDefinition(feedbackWriteTool);
+  registerToolDefinition(feedbackDeleteTool);
 
   // Read surface mirrored as tools (tool-only clients like claude.ai cannot
   // list/read MCP resources). Each mirror reuses its resource's handler + tier;
@@ -157,6 +184,8 @@ export function registerAllTools(): void {
   registerToolDefinition(moduleUpdateTool);
   registerToolDefinition(modulePublishTool);
   registerToolDefinition(moduleItemAddTool);
+  registerToolDefinition(moduleItemRemoveTool);
+  registerToolDefinition(moduleItemMoveTool);
   registerToolDefinition(moduleDeleteTool);
   registerToolDefinition(moduleReorderTool);
 
@@ -224,6 +253,9 @@ export function registerAllTools(): void {
   registerToolDefinition(quizUpdateTool);
   registerToolDefinition(quizPublishTool);
   registerToolDefinition(quizDeleteTool);
+  registerToolDefinition(listQuizAttemptsTool);
+  registerToolDefinition(getQuizAttemptTool);
+  registerToolDefinition(quizAttemptAdjustTool);
 
   // Course content: semantic search, enumeration and full-text reads over the
   // classroom's pages, decks and bot-context/ notes (MEMBER — every role,
@@ -246,6 +278,19 @@ export function registerAllTools(): void {
   // Check/uncheck a checkable heading: the caller's own progress mark (any
   // accepted member, like the page's checkbox), reversible, audited.
   registerToolDefinition(pageSectionCheckTool);
+
+  // Page comments (accepted members of the page's classroom, the rules in
+  // ClassmojiService.pageComments): list is a read (no VIEW row: the shared
+  // discussion); create/reply, edit own, react are writes; delete is own or,
+  // for OWNER/TEACHER, anyone's (destructive, moderation audited); resolve is
+  // the teaching team's. Writes follow the mutation rule: read-only in a
+  // LOCKED classroom.
+  registerToolDefinition(pageCommentsListTool);
+  registerToolDefinition(pageCommentCreateTool);
+  registerToolDefinition(pageCommentUpdateTool);
+  registerToolDefinition(pageCommentDeleteTool);
+  registerToolDefinition(pageCommentReactTool);
+  registerToolDefinition(pageCommentResolveTool);
 
   // Tokens (OWNER)
   registerToolDefinition(tokenGrantTool);
@@ -326,4 +371,10 @@ export function registerAllTools(): void {
   registerToolDefinition(formTeamsGetTool);
   registerToolDefinition(formTeamsRunTool);
   registerToolDefinition(formTeamsCreateTool);
+
+  // Ask Moji owner reads: usage, the feedback review and one rated exchange
+  // (OWNER+TEACHER, refused unless Ask Moji is available, one VIEW row each),
+  // and the configuration (OWNER, not audited: the owner's own settings).
+  // Never listed or served to the Ask Moji client (registry.ts).
+  for (const tool of askMojiTools) registerToolDefinition(tool);
 }

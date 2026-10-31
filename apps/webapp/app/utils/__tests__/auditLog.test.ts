@@ -205,6 +205,22 @@ describe('addClassroomAuditLog — the gate-result variant', () => {
     );
   });
 
+  it('dedupe: false reaches audit.create as its options argument', async () => {
+    await addClassroomAuditLog({ ...entry, dedupe: false });
+
+    expect(mocks.auditCreate).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ resource_id: 'page-9' }),
+      { dedupe: false }
+    );
+  });
+
+  it('without dedupe (or dedupe: true) the service keeps its default window', async () => {
+    await addClassroomAuditLog(entry);
+    await addClassroomAuditLog({ ...entry, dedupe: true });
+
+    for (const call of mocks.auditCreate.mock.calls) expect(call).toHaveLength(1);
+  });
+
   it('does not reject when the audit write itself fails', async () => {
     // The mutation is already committed by the time this runs. Turning a failed
     // audit row into a 500 would report a successful delete as a failure.

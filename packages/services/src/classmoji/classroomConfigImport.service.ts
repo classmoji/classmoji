@@ -70,7 +70,10 @@ export interface ConfigImportSummary {
  * columns on classroom_settings.
  *
  * NEVER included: content_repo_name, classroom_id (PK), created_at, updated_at,
- * final_grades_released (a new term starts with final grades unreleased).
+ * final_grades_released (a new term starts with final grades unreleased),
+ * syllabus_bot_instructions (the owner's Ask Moji instructions: owner-only,
+ * and never copied, whoever imports and whatever is selected; a teacher of
+ * the source must not be able to read them out through a copy).
  */
 export const SETTINGS_FIELD_GROUPS: Record<
   'grading' | 'tokens' | 'features' | 'aiConfig' | 'apiKeys',

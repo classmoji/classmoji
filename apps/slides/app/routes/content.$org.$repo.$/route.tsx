@@ -50,7 +50,12 @@
  */
 
 import { fetchContent, getMimeType, isBinaryFile } from '~/utils/contentProxy';
-import { contentProxySafetyHeaders, withNosniff } from '~/utils/contentProxyHeaders';
+import {
+  contentProxySafetyHeaders,
+  logProxyHit,
+  proxyHitKind,
+  withNosniff,
+} from '~/utils/contentProxyHeaders';
 import {
   canonicalProxyPath,
   deckDocumentDecision,
@@ -210,11 +215,17 @@ interface ContentLoaderArgs {
  * thrown, so a new early exit cannot forget it.
  */
 export const loader = async (args: ContentLoaderArgs) => {
+  const kind = proxyHitKind(args.params['*'] ?? '');
   try {
     const response = await serveContent(args);
+    logProxyHit(kind, response.status);
     return withNosniff(response);
   } catch (error: unknown) {
-    if (error instanceof Response) throw withNosniff(error);
+    if (error instanceof Response) {
+      logProxyHit(kind, error.status);
+      throw withNosniff(error);
+    }
+    logProxyHit(kind, 500);
     throw error;
   }
 };
@@ -494,9 +505,8 @@ async function serveContent({ params, request }: ContentLoaderArgs): Promise<Res
     'Content-Type': mimeType,
     'Cache-Control': binary ? 'public, max-age=3600' : 'public, max-age=60',
     'X-Content-Source': result.source, // Debug header
-    // `nosniff` on everything; HTML, SVG and XML also go out as a sandboxed
-    // download rather than a page on this origin. See `contentProxyHeaders.ts`
-    // for why no deck surface is affected.
+    // `nosniff` on everything; HTML renders in a sandboxed origin, SVG and XML
+    // go out as a sandboxed download. See `contentProxyHeaders.ts`.
     ...contentProxySafetyHeaders(mimeType),
   };
 

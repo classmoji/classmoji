@@ -7,7 +7,7 @@
  * - HMAC signing for service-to-service authentication
  *
  * USAGE:
- * All agent types (quiz, syllabus bot, prompt assistant) use sendRequest directly:
+ * All agent types (quiz, syllabus bot) use sendRequest directly:
  *
  *   import { sendRequest } from '~/services/aiAgentConnection.server';
  *
@@ -198,8 +198,8 @@ export async function sendRequest(
   // Generate unique request ID for correlation
   const requestId = crypto.randomUUID();
   // Extract sessionId from payload for backwards compatibility filtering
-  // Support attemptId (quizzes), sessionId (prompt assistant), and conversationId (syllabus bot)
-  const sessionId = payload?.sessionId || payload?.attemptId || payload?.conversationId;
+  // Support attemptId (quizzes) and conversationId (syllabus bot)
+  const sessionId = payload?.attemptId || payload?.conversationId;
 
   return new Promise((resolve, reject) => {
     const explorationSteps: Record<string, unknown>[] = [];
@@ -234,7 +234,6 @@ export async function sendRequest(
       type: string;
       requestId?: string;
       payload: Record<string, unknown> & {
-        sessionId?: string;
         attemptId?: string;
         conversationId?: string;
         step?: Record<string, unknown>;
@@ -248,9 +247,7 @@ export async function sendRequest(
       const matchesRequest = msg.requestId === requestId;
       const matchesSession =
         sessionId &&
-        (msg.payload?.sessionId === sessionId ||
-          msg.payload?.attemptId === sessionId ||
-          msg.payload?.conversationId === sessionId);
+        (msg.payload?.attemptId === sessionId || msg.payload?.conversationId === sessionId);
 
       // For streaming events (EXPLORATION_STEP), match by session
       if (msg.type === 'EXPLORATION_STEP' && matchesSession) {
@@ -304,7 +301,7 @@ export async function sendRequest(
 
     // Fire-and-forget messages (session ends) wait for nothing, so a dropped
     // connection is not a failure for them: they resolve as they always have.
-    const fireAndForgetTypes = ['QUIZ_END', 'SYLLABUS_BOT_END', 'PROMPT_ASSISTANT_END'];
+    const fireAndForgetTypes = ['QUIZ_END', 'SYLLABUS_BOT_END'];
     const fireAndForget = fireAndForgetTypes.includes(type) && responseTypes.length === 0;
 
     // Register message handler

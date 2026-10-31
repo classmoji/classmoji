@@ -36,7 +36,7 @@
 
 import { ClassmojiService } from '@classmoji/services';
 import type { ResourceDefinition } from '../mcp/registry.ts';
-import { MEMBER, TEACHING_TEAM, classroomCtx, publicUser } from './shape.ts';
+import { MEMBER, TEACHING_TEAM, classroomCtx, isStaff, publicUser } from './shape.ts';
 
 interface RosterRow {
   id: string;
@@ -60,6 +60,7 @@ export const rosterResource: ResourceDefinition = {
     'fields and per-student letter_grade/comment overrides.',
   scope: 'read',
   roles: TEACHING_TEAM,
+  auditRead: { resourceType: 'STUDENT_ROSTER' },
   handler: async (_vars, ctx) => {
     const { classroomId, role } = classroomCtx(ctx);
     const students = (await ClassmojiService.classroomMembership.findUsersByRole(
@@ -96,7 +97,8 @@ interface TeamRow {
   memberships?: Array<{
     user?: { id: string; name?: string | null; login?: string | null; image?: string | null };
   }>;
-  tags?: Array<{ tag?: { name?: string | null } | null }>;
+  tags?: Array<{ tag?: { name?: string | null; team_sets?: Array<{ name: string }> } | null }>;
+  git_repos?: Array<{ name: string }>;
 }
 
 export const teamsResource: ResourceDefinition = {
@@ -104,10 +106,13 @@ export const teamsResource: ResourceDefinition = {
   uriTemplate: 'classmoji://{org}/{slug}/teams',
   title: 'Teams',
   description:
-    'Teams in the classroom with member identities (id, name, login only — no contact PII). ' +
-    'Students see the teams they belong to; the teaching team sees all teams.',
+    'Teams in the classroom with member identities (id, name, login only — no contact PII), ' +
+    'the team sets each belongs to, and its repositories. Students see the teams they belong ' +
+    'to; the teaching team sees all teams.',
   scope: 'read',
   roles: MEMBER,
+  // Staff see every team and its members; a student reads only their own teams.
+  auditRead: { resourceType: 'TEAMS', when: classroom => isStaff(classroom.role) },
   handler: async (_vars, ctx) => {
     const { classroomId, role } = classroomCtx(ctx);
     const teams = (await ClassmojiService.team.findByClassroomId(classroomId)) as TeamRow[];
@@ -132,6 +137,9 @@ export const teamsResource: ResourceDefinition = {
         is_visible: t.is_visible,
         members: (t.memberships ?? []).map(m => publicUser(m.user)).filter(Boolean),
         tags: (t.tags ?? []).map(tt => tt.tag?.name).filter(Boolean),
+        // A team set is named by its tag (TeamSet.tag_id); a plain tag is not one.
+        team_sets: (t.tags ?? []).flatMap(tt => (tt.tag?.team_sets ?? []).map(s => s.name)),
+        repositories: (t.git_repos ?? []).map(r => r.name),
       })),
     };
   },

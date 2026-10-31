@@ -49,7 +49,6 @@ vi.mock('~/utils/classroomProFlag.server', () => ({
 }));
 vi.mock('@classmoji/ui-components', () => ({ useCallout: () => ({ show: vi.fn() }) }));
 vi.mock('~/hooks', () => ({ useRouteDrawer: vi.fn(), useDarkMode: vi.fn() }));
-vi.mock('~/components/quiz/PromptAssistant', () => ({ PromptAssistant: () => null }));
 
 const { loader } = await import('../route');
 

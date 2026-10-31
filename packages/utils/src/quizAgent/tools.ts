@@ -1,10 +1,10 @@
 /**
  * The quiz agent's fixed tool set, without executes: the typed UI parts,
  * message validation, and the chat agent's `tools` option (which the SDK uses
- * to convert stored messages, never to call the model). The model never reads
- * these descriptions: the task builds its own tools with their executes
- * (packages/tasks, agents/quiz/tools) and passes those to `streamText`. Both
- * take their descriptions from `TOOL_DESCRIPTIONS`, the one copy of that text.
+ * to convert stored messages, never to call the model). They carry no
+ * descriptions: the model never reads these definitions. The quiz agent's
+ * task builds its own tools, with their executes and descriptions, and passes
+ * those to `streamText`.
  * AI SDK v7 requires `outputSchema` on a tool without `execute`.
  */
 import { tool } from 'ai';
@@ -20,21 +20,19 @@ import {
   PresentQuestionOutputSchema,
   QuestionResultOutputSchema,
   QuizEvaluationFeedbackSchema,
-  CodeAwareQuizQuestionSchema,
+  CodeAwareSandboxQuizQuestionSchema,
   RecordQuestionResultSchema,
 } from './schemas.ts';
-import { TOOL_DESCRIPTIONS } from './toolDescriptions.ts';
 
-// The code-aware input (with the optional `code_quote`), so the typed parts
-// cover both modes; a standard attempt's tool takes the card fields only.
+// The widest input (the optional `code_quote` and `sandbox`), so the typed
+// parts cover every mode; each attempt's own tool takes only the fields its
+// mode has (the quiz agent's own tools).
 const present_question = tool({
-  description: TOOL_DESCRIPTIONS.present_question,
-  inputSchema: CodeAwareQuizQuestionSchema,
+  inputSchema: CodeAwareSandboxQuizQuestionSchema,
   outputSchema: PresentQuestionOutputSchema,
 });
 
 const record_question_result = tool({
-  description: TOOL_DESCRIPTIONS.record_question_result,
   inputSchema: RecordQuestionResultSchema,
   outputSchema: QuestionResultOutputSchema,
 });
@@ -42,31 +40,26 @@ const record_question_result = tool({
 // The stored part's input: `feedback` is optional here, for parts saved before
 // it was added. The task's own tool (the model's) requires it.
 const offer_next_step = tool({
-  description: TOOL_DESCRIPTIONS.offer_next_step,
   inputSchema: OfferNextStepPartSchema,
   outputSchema: OfferNextStepOutputSchema,
 });
 
 const submit_quiz_evaluation = tool({
-  description: TOOL_DESCRIPTIONS.submit_quiz_evaluation,
   inputSchema: QuizEvaluationFeedbackSchema,
   outputSchema: QuizEvaluationRecordV2Schema,
 });
 
 const explore_codebase = tool({
-  description: TOOL_DESCRIPTIONS.explore_codebase,
   inputSchema: ExploreCodebaseSchema,
   outputSchema: ExploreCodebaseOutputSchema,
 });
 
 const content_get = tool({
-  description: TOOL_DESCRIPTIONS.content_get,
   inputSchema: ContentGetSchema,
   outputSchema: ContentToolOutputSchema,
 });
 
 const content_search = tool({
-  description: TOOL_DESCRIPTIONS.content_search,
   inputSchema: ContentSearchSchema,
   outputSchema: ContentToolOutputSchema,
 });

@@ -2,13 +2,17 @@ import {
   blobCanonicalString,
   deriveKey,
   encodeDownloadFilename,
+  encodeFilesGrant,
+  filesCanonicalString,
   hostOf,
   mediaCanonicalString,
   nowSeconds,
   signBlobUrl,
+  signFilesBase,
   signMediaUrl,
   signThemeBase,
   themeCanonicalString,
+  type FilesFolder,
   type Tier,
   type Transform,
 } from '@classmoji/content-signing';
@@ -425,4 +429,51 @@ export async function signedThemeUrl(options: {
   });
   const sig = await signCanonicalString(master, classroomId, keyVersion, canonical);
   return `${origin}/c/${classroomId}/theme/${options.theme}/${options.treeSha}/${tier}.${keyVersion}.${exp}.${sig}/${options.relPath}`;
+}
+
+/**
+ * A files URL: the signed base for `folders` plus `repoPath` (appended as
+ * given, so a test can spell it however it likes). Same escape hatches as the
+ * other helpers, plus `grant` — a raw grant segment signed as-is, for grants
+ * the mint path would refuse to produce.
+ */
+export async function signedFilesUrl(options: {
+  classroomId?: string;
+  folders: FilesFolder[];
+  repoPath: string;
+  grant?: string;
+  tier?: Tier;
+  keyVersion?: number;
+  exp?: number;
+  master?: string;
+  origin?: string;
+  signedHost?: string;
+}): Promise<string> {
+  const origin = options.origin ?? ORIGIN;
+  const classroomId = options.classroomId ?? CLASSROOM;
+  const tier = options.tier ?? 'month';
+  const keyVersion = options.keyVersion ?? 1;
+  const master = options.master ?? MASTER;
+
+  if (options.exp === undefined && options.signedHost === undefined && !options.grant) {
+    const base = await signFilesBase(
+      origin,
+      { master, classroomId, keyVersion, tier },
+      { folders: options.folders }
+    );
+    return `${base}${options.repoPath}`;
+  }
+
+  const exp = options.exp ?? futureExp();
+  const grant = options.grant ?? encodeFilesGrant(options.folders);
+  const canonical = filesCanonicalString({
+    host: options.signedHost ?? hostOf(origin),
+    classroomId,
+    grant,
+    tier,
+    keyVersion,
+    exp,
+  });
+  const sig = await signCanonicalString(master, classroomId, keyVersion, canonical);
+  return `${origin}/c/${classroomId}/files/${grant}/${tier}.${keyVersion}.${exp}.${sig}/${options.repoPath}`;
 }

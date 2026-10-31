@@ -22,7 +22,9 @@
  *      no one else's do; staff never get a session for someone else's attempt
  *      (they read its saved transcript instead). Audited (403).
  *   6. the attempt runs on the chat runtime, is not complete, and is within
- *      its session deadline (409)
+ *      its session deadline (409). One past its deadline is closed first,
+ *      with the results recorded so far (quizAttemptExpiry.server), so the
+ *      drawer the refusal refreshes shows it completed.
  * Then the grant is written on the attempt, the session is started (or
  * re-joined), and its id is stored.
  *
@@ -34,6 +36,7 @@ import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { isTriggerChatAttempt } from '~/utils/quizRuntime.server';
+import { closeIfExpired } from '~/utils/quizAttemptExpiry.server';
 import {
   isTriggerConfigured,
   recordTriggerSession,
@@ -196,6 +199,12 @@ export async function action({ request }: Route.ActionArgs) {
     if (attempt.completed_at) return refuse(SESSION_REFUSALS.complete);
     const now = new Date();
     if (pastDeadline((attempt as { session_expires_at?: unknown }).session_expires_at, now)) {
+      // Step 5 made the caller its owner.
+      await closeIfExpired(attempt, {
+        userId: String(userId),
+        role: access.membership!.role,
+        surface: 'session',
+      });
       return refuse(SESSION_REFUSALS.expired);
     }
 

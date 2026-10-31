@@ -58,7 +58,7 @@ describe('getPlatformAIDefaults', () => {
   });
 
   // Both quiz runtimes ignore a platform model off the allow-list and run
-  // FALLBACK_MODEL; Ask Moji has no allow-list and takes it as is.
+  // FALLBACK_MODEL; Ask Moji on the AI agent runtime takes it as is.
   it('names FALLBACK_MODEL for a quiz env model off the allow-list, not for Ask Moji', () => {
     const defaults = getPlatformAIDefaults({
       LLM_MODEL: 'claude-haiku-4-5-20251001',
@@ -78,6 +78,29 @@ describe('getPlatformAIDefaults', () => {
     expect(getPlatformAIDefaults({ LLM_MODEL: 'claude-opus-5-5' }).syllabus_bot_model).toBe(
       'claude-opus-5-5'
     );
+  });
+
+  // The Trigger runtime's Ask Moji agent runs allow-listed models only.
+  describe('on the Trigger runtime (ASK_MOJI_RUNTIME=trigger)', () => {
+    const TRIGGER = { ASK_MOJI_RUNTIME: 'trigger' };
+
+    it('names an allowed SYLLABUS_BOT_MODEL, then LLM_MODEL', () => {
+      expect(
+        getPlatformAIDefaults({ ...TRIGGER, SYLLABUS_BOT_MODEL: ' claude-fable-5 ' })
+          .syllabus_bot_model
+      ).toBe('claude-fable-5');
+      expect(
+        getPlatformAIDefaults({ ...TRIGGER, LLM_MODEL: 'claude-opus-5-5' }).syllabus_bot_model
+      ).toBe('claude-opus-5-5');
+    });
+
+    it('names FALLBACK_MODEL for an Ask Moji env model off the allow-list', () => {
+      expect(
+        getPlatformAIDefaults({ ...TRIGGER, SYLLABUS_BOT_MODEL: 'claude-haiku-4-5-20251001' })
+          .syllabus_bot_model
+      ).toBe(FALLBACK_MODEL);
+      expect(getPlatformAIDefaults(TRIGGER).syllabus_bot_model).toBe(FALLBACK_MODEL);
+    });
   });
 
   it('forgives case and whitespace in an effort, and ignores one that is not a level', () => {

@@ -7,6 +7,7 @@ import { ClassmojiService } from '@classmoji/services';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { buildCalendarUrl, getCalendarDateRange } from '~/utils/calendar.server';
 import CalendarSubscriptionCard from '~/components/features/calendar/CalendarSubscriptionCard';
+import { useAskMojiViewing } from '~/components/features/ask-moji/viewing';
 import EventCard from '~/components/features/calendar/EventCard';
 import EventLinks from '~/components/features/calendar/EventLinks';
 import type { CalendarEventWithLinks } from '~/components/features/calendar/types';
@@ -95,6 +96,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 };
 
 const StudentCalendar = ({ loaderData }: Route.ComponentProps) => {
+  useAskMojiViewing({ kind: 'calendar' });
   const {
     events: initialEvents,
     subscriptionUrl,

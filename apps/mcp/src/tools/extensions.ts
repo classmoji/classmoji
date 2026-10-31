@@ -24,8 +24,6 @@
  * refusal, deadline and price checks are re-enforced server-side; balance
  * check inside the DB transaction). Hours can be bought at any time, before
  * or after the deadline, submitted or not.
- * (The dormant api.extension.$class createExtension endpoint is a separate
- * OWNER/TEACHER grant flow and is intentionally not mirrored.)
  */
 
 import { ClassmojiService } from '@classmoji/services';

@@ -23,11 +23,15 @@ import type { ToolResult } from './registry.ts';
 
 /**
  * The dates a reader actually QUOTES — deadlines, when something opens,
- * closes, starts or ends, and when a student's own work was submitted, closed
- * or graded. Only these get a `_local` twin.
+ * closes, starts or ends, when a student's own work was submitted, closed
+ * or graded, and when a quiz attempt was started, finished or last active.
+ * Only these get a `_local` twin. The quiz keys apply wherever they appear:
+ * besides the quiz attempt tools, a student's own quiz standing in my_grades
+ * (`completed_at`) and a team-creation run's state in the form_teams tools
+ * (`started_at`).
  *
- * Record-keeping stamps (`created_at`, `updated_at`, `last_activity`,
- * `verified_at`, `oldest_commit_at`, token expiries, …) get no twin, to keep
+ * Record-keeping stamps (`created_at`, `updated_at`, `verified_at`,
+ * `oldest_commit_at`, token expiries, …) get no twin, to keep
  * payloads small: nobody quotes when a row was last updated, and on a long
  * submissions list those twins would be most of the added bytes.
  * An allowlist rather than a denylist, so a new bookkeeping column added
@@ -44,6 +48,18 @@ const LOCALIZED_KEYS: ReadonlySet<string> = new Set([
   'submitted_at',
   'closed_at',
   'last_graded_at',
+  // When a quiz attempt was started and finished (its submission), when a
+  // student was last active in an open one, and when a legacy transcript
+  // turn was said.
+  'started_at',
+  'completed_at',
+  'last_activity',
+  'sent_at',
+  // When staff last adjusted a quiz attempt's grade, last wrote its comment,
+  // and when a regrade request was resolved.
+  'adjusted_at',
+  'comment_at',
+  'resolved_at',
   // The calendar's `range: { start, end }`: which local window was searched.
   'start',
   'end',

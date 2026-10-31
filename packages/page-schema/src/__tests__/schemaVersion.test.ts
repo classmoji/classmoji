@@ -31,6 +31,8 @@ const RECORDED_FINGERPRINTS: Record<number, string> = {
   3: '59cdf539e308941e85052887eb15d24648f2f6b12e31a594ea42253e5f9f3ba5',
   // checkListItem gains `personal` (no default): student check lists.
   4: 'c03cb77ae791cce772cdbcfb87424d72b0b9a33eaea8fb3ef264c958e20e364d',
+  // codeBlock gains `collapsible` (no default): long code shows its first lines.
+  5: 'a0e014fd58ca64ff7b68f21b9fb7e4f54f860c3d8ab55500edcfa1b19d20687e',
 };
 
 /** Sorted-key JSON; functions and undefined are left out (they are not shape). */

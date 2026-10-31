@@ -30,6 +30,8 @@
  */
 
 import { task, logger } from '@trigger.dev/sdk';
+import { retryOnGitBlip } from '../helpers/gitRetry.ts';
+import { retryOnDatabaseBlip } from '../helpers/databaseRetry.ts';
 import getPrisma from '@classmoji/database';
 import { ClassmojiService, describeTokenMintError, getGitProvider } from '@classmoji/services';
 /*
@@ -326,7 +328,9 @@ async function contentRepoCoordinates(
  */
 export const importContentRepoTask = task({
   id: 'import-content-repo',
-  retry: { maxAttempts: 1 },
+  // Repo creation is what Github blips break, and ensureContentRepo adopts an
+  // existing repo, so a retry is safe.
+  ...retryOnGitBlip,
   maxDuration: 600,
   run: async ({ importJobId }: { importJobId: string }) => {
     const prisma = getPrisma();
@@ -665,6 +669,16 @@ export async function importPageRows({
   const total = sourcePages.length;
   writer.patch({ phase: 'pages', status: 'running', done: already.size, total });
 
+  // A free target takes pages up to its plan limit, oldest first; the rest are
+  // skipped with one warning. Their folders still arrive with the pushed tree,
+  // they just have no row. `null` = unlimited.
+  const { limit, remaining } = await ClassmojiService.planLimits.contentAllowance(
+    job.classroom_id,
+    'pages'
+  );
+  let room = remaining;
+  let overLimit = 0;
+
   let done = already.size;
   let created = 0;
   const warnings: string[] = [];
@@ -685,6 +699,12 @@ export async function importPageRows({
     // Resume: this page's row already exists from an earlier attempt. It still
     // counts as done — it IS imported — and it is not warned about.
     if (already.has(page.id)) continue;
+    if (room !== null && room <= 0) {
+      overLimit++;
+      done++;
+      writer.patch({ phase: 'pages', status: 'running', done, total });
+      continue;
+    }
     try {
       // `slug` is unique per classroom, and two source pages can normalize to
       // the same one ("Lab 1" and "Lab-1"). Writing the derived value straight
@@ -728,6 +748,7 @@ export async function importPageRows({
       );
       writer.mergeIdMaps({ pages: { [page.id]: row.id } });
       created++;
+      if (room !== null) room--;
     } catch (error: unknown) {
       // A slug collision is NOT a warning. The walker above absorbs every 23505
       // it can act on and exhausts into PAGE_SLUG_UNAVAILABLE, so a raw P2002 on
@@ -744,6 +765,13 @@ export async function importPageRows({
       done++;
       writer.patch({ phase: 'pages', status: 'running', done, total });
     }
+  }
+
+  if (overLimit > 0 && limit !== null) {
+    warnings.push(
+      `pages: skipped ${overLimit} page(s). ` +
+        ClassmojiService.planLimits.contentLimitMessage('pages', limit)
+    );
   }
 
   if (uncopiedRefs > 0) {
@@ -821,6 +849,14 @@ export async function importSlideRows({
   const total = sourceSlides.length;
   writer.patch({ phase: 'slides', status: 'running', done: already.size, total });
 
+  // Same plan limit as importPageRows: oldest first, the rest skipped.
+  const { limit, remaining } = await ClassmojiService.planLimits.contentAllowance(
+    job.classroom_id,
+    'slides'
+  );
+  let room = remaining;
+  let overLimit = 0;
+
   let done = already.size;
   let created = 0;
   const warnings: string[] = [];
@@ -833,6 +869,12 @@ export async function importSlideRows({
   );
   for (const slide of sourceSlides) {
     if (already.has(slide.id)) continue;
+    if (room !== null && room <= 0) {
+      overLimit++;
+      done++;
+      writer.patch({ phase: 'slides', status: 'running', done, total });
+      continue;
+    }
     try {
       // A FILE row is only worth creating if its document came across. The
       // path is not remapped on this route — the tree was pushed as it stood —
@@ -884,12 +926,20 @@ export async function importSlideRows({
       });
       writer.mergeIdMaps({ slides: { [slide.id]: row.id } });
       created++;
+      if (room !== null) room--;
     } catch (error: unknown) {
       warnings.push(`slides: DB row failed for "${slide.title}": ${errText(error)}`);
     } finally {
       done++;
       writer.patch({ phase: 'slides', status: 'running', done, total });
     }
+  }
+
+  if (overLimit > 0 && limit !== null) {
+    warnings.push(
+      `slides: skipped ${overLimit} slide(s). ` +
+        ClassmojiService.planLimits.contentLimitMessage('slides', limit)
+    );
   }
 
   writer.addWarnings(warnings);
@@ -912,7 +962,8 @@ export async function importSlideRows({
  */
 export const importModulesTask = task({
   id: 'import-modules',
-  retry: { maxAttempts: 1 },
+  // Database only and idempotent (see above), so a connection blip retries.
+  ...retryOnDatabaseBlip,
   maxDuration: 900,
   run: async ({ importJobId }: { importJobId: string }) => {
     const prisma = getPrisma();
