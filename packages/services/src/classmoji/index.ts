@@ -24,6 +24,7 @@ import * as formService from './form.service.ts';
 import * as formResponseService from './formResponse.service.ts';
 import * as formIdentityService from './formIdentity.service.ts';
 import * as formTeamResolverService from './formTeamResolver.ts';
+import * as galleryService from './gallery.service.ts';
 import * as pageService from './page.service.ts';
 import * as pageContentService from './pageContent.service.ts';
 import * as pageSectionsService from './pageSections.service.ts';
@@ -160,6 +161,7 @@ const ClassmojiService = {
   // Which questions' answers are hidden by default: one rule for every surface.
   formIdentity: formIdentityService,
   formTeam: formTeamResolverService,
+  gallery: galleryService,
   page: pageService,
   pageContent: pageContentService,
   // Per-student page state: checked headings and opened locked sections, with
@@ -297,6 +299,7 @@ export {
   formResponseService,
   formIdentityService,
   formTeamResolverService,
+  galleryService,
   pageService,
   pageContentService,
   pageSectionsService,

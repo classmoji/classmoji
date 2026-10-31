@@ -314,12 +314,14 @@ async function reserveUpload({
   filename,
   sizeBytes,
   options,
+  gallery,
 }: {
   classroom: MediaClassroom;
   userId: string;
   filename: string;
   sizeBytes: number;
   options: MediaOptions;
+  gallery?: { formId: string; fieldId: string };
 }): Promise<{
   mediaId: string;
   key: string;
@@ -373,7 +375,12 @@ async function reserveUpload({
       content_delivery_enabled: true,
       content_repo: true,
       git_organization: {
-        select: { login: true, provider: true, github_installation_id: true },
+        select: {
+          login: true,
+          provider: true,
+          github_installation_id: true,
+          gitlab_connection_id: true,
+        },
       },
     },
   });
@@ -439,6 +446,28 @@ async function reserveUpload({
       throw new MediaError('QUOTA_EXCEEDED', MEDIA_QUOTA_FULL_MESSAGE, { usedBytes, quotaBytes });
     }
 
+    if (gallery) {
+      // By field, not form: a deleted form nulls gallery_form_id, and its
+      // uploads still count until the gallery sweeper removes them.
+      const ownUploads = rows.filter(live => live.uploaded_by === userId && live.gallery_field_id);
+      // A byte quota alone permits an unbounded number of tiny student uploads.
+      if (ownUploads.length >= 50) {
+        throw new MediaError(
+          'QUOTA_EXCEEDED',
+          'You have 50 gallery uploads. Ask the teaching team to remove unused uploads.'
+        );
+      }
+      const ownBytes = ownUploads.reduce((sum, live) => sum + billedBytes(live), 0);
+      const ownQuota = 1_000_000_000;
+      if (ownBytes + sizeBytes > ownQuota) {
+        throw new MediaError(
+          'QUOTA_EXCEEDED',
+          'Your gallery uploads have reached 1 GB. Ask the teaching team to remove unused uploads.',
+          { usedBytes: ownBytes, quotaBytes: ownQuota }
+        );
+      }
+    }
+
     return tx.mediaObject.create({
       data: {
         id: mediaId,
@@ -449,6 +478,7 @@ async function reserveUpload({
         content_type: classified.contentType,
         size_bytes: BigInt(sizeBytes),
         uploaded_by: userId,
+        ...(gallery ? { gallery_form_id: gallery.formId, gallery_field_id: gallery.fieldId } : {}),
         optimise,
         keep_original: keepOriginal,
         allow_download: allowDownload,
@@ -500,12 +530,14 @@ export async function createUpload({
   filename,
   sizeBytes,
   options = {},
+  gallery,
 }: {
   classroom: MediaClassroom;
   userId: string;
   filename: string;
   sizeBytes: number;
   options?: MediaOptions;
+  gallery?: { formId: string; fieldId: string };
 }): Promise<{
   mediaId: string;
   uploadId: string;
@@ -521,6 +553,7 @@ export async function createUpload({
     filename,
     sizeBytes,
     options,
+    gallery,
   });
 
   let uploadId: string | undefined;

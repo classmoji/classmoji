@@ -68,6 +68,7 @@ const READS: Record<string, Kind> = {
   list_forms: 'none', // form definitions and response counts
   form_get: 'none', // a form's definition and revisions
   list_form_responses: 'handler', // VIEW row with filters and identity disclosure
+  form_gallery_queue: 'audited', // every submitted project's title and moderation status
   form_response_get: 'handler', // VIEW row per response revealed
   form_teams_get: 'handler', // VIEW row when people's placements are read
   ask_moji_usage: 'audited', // students' Ask Moji activity, per week and per material

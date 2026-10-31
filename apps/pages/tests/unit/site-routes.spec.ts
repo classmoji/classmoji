@@ -109,6 +109,10 @@ test.describe('the class-site route tree', () => {
     expect(leafFor(`${SITE}/schedule`)).toBe('site/schedule.tsx');
     expect(leafFor(`${SITE}/app`)).toBe('site/app.tsx');
     expect(leafFor(`${SITE}/robots.txt`)).toBe('site/robots.ts');
+    expect(leafFor(`${SITE}/projects`)).toBe('site/projects.tsx');
+    expect(leafFor(`${SITE}/projects/abc123`)).toBe('site/project.tsx');
+    expect(chainFor(`${SITE}/projects/abc123`)).toContain('site/layout.tsx');
+    expect(leafFor(`${SITE}/projects/abc123/extra`)).toBe('site/not-found.tsx');
   });
 
   test('the forms short-link bridge still outranks the splat', () => {
