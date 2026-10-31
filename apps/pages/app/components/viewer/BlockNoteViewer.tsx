@@ -5,6 +5,9 @@ import { MantineProvider } from '@mantine/core';
 import { normalizeCodeBlockContent } from '@classmoji/page-schema';
 import { findBlock, lockedSectionIds } from '@classmoji/page-schema/sections';
 import { useState, useEffect, useLayoutEffect, useMemo, useCallback } from 'react';
+import { pageCommentsExtension } from '~/components/comments/commentsPlugin.ts';
+import { CommentsHost } from '~/components/comments/CommentsHost.tsx';
+import type { CommentsBridge } from '~/components/comments/commentsBridge.ts';
 import type { PageBlockInsertions } from '~/components/editor/blocks/index.tsx';
 import { viewerSchema } from './viewerBlocks.tsx';
 import { AssetSrcSetContext, NO_SRC_SETS, type AssetSrcSets } from '~/hooks/useAssetSrcSets.ts';
@@ -68,6 +71,12 @@ interface BlockNoteViewerProps {
    * boxes, locked sections drawn from whatever the content holds.
    */
   readerSections?: ReaderSectionsValue;
+  /**
+   * Page comments for this reader (`usePageCommentsController` in the
+   * route): highlights, bubbles, the selection and block buttons. None: no
+   * comment UI at all (signed out, not a member, a preview).
+   */
+  comments?: CommentsBridge | null;
 }
 
 const BlockNoteViewer = ({
@@ -79,6 +88,7 @@ const BlockNoteViewer = ({
   pageId,
   mediaDownloads,
   readerSections = NO_READER_SECTIONS,
+  comments = null,
 }: BlockNoteViewerProps) => {
   const [isMounted, setIsMounted] = useState(false);
   const initialContent =
@@ -94,8 +104,9 @@ const BlockNoteViewer = ({
   const editor = useCreateBlockNote({
     schema: viewerSchema,
     initialContent: initialContent as never,
-    // Shiki highlighting for code blocks, as in the editor.
-    extensions: [syntaxHighlighter],
+    // Shiki highlighting for code blocks, as in the editor; comment
+    // highlights (decorations only, drawing nothing without threads).
+    extensions: [syntaxHighlighter, pageCommentsExtension()],
     ...(resolveFileUrl ? { resolveFileUrl } : {}),
   });
 
@@ -174,10 +185,12 @@ const BlockNoteViewer = ({
   // Tick boxes in the gutter, or inline where the gutter has no room.
   const gutterRef = useSectionCheckGutter(readerSections.canCheck);
   const fadeRef = fade.containerRef;
+  const [container, setContainer] = useState<HTMLElement | null>(null);
   const containerRef = useCallback(
     (element: HTMLElement | null) => {
       fadeRef(element);
       gutterRef(element);
+      setContainer(element);
     },
     [fadeRef, gutterRef]
   );
@@ -200,6 +213,7 @@ const BlockNoteViewer = ({
       }}
     >
       <div className="page-editor pg-reader-sections" ref={containerRef}>
+        {comments ? <CommentsHost editor={editor} bridge={comments} container={container} /> : null}
         {fade.css ? <style data-testid="section-fade-styles">{fade.css}</style> : null}
         <AssetSrcSetContext.Provider value={srcSets ?? NO_SRC_SETS}>
           <AssetDisplayUrlContext.Provider value={displayUrl ?? IDENTITY_DISPLAY_URL}>

@@ -289,3 +289,109 @@ export function lockedSectionTitle(block: unknown): string {
   const title = (block.props as Record<string, unknown>).title;
   return typeof title === 'string' ? title.trim() : '';
 }
+
+// ── Comment anchors ────────────────────────────────────────────────────────
+//
+// Page comments anchor on a block id and, optionally, a quote inside that
+// block's text (`quote` + which match of it, `occurrence`). The server checks
+// a new quote against the reader's tree and the browser finds it again to
+// draw the highlight, both with the functions below, so they always agree.
+
+/** Ids of every block at any depth, in document order (parents before their children). */
+export function blockIdsInOrder(blocks: unknown): string[] {
+  const ids: string[] = [];
+  walk(blocks, block => {
+    const id = blockId(block);
+    if (id) ids.push(id);
+  });
+  return ids;
+}
+
+/**
+ * The id of the nearest `lockedSection` that ENCLOSES the block with this id
+ * (an ancestor, never the block itself), or null when there is none or the
+ * block is not in `blocks`. A locked section's own title is public, so a
+ * comment on the section block itself is not inside it (asked about a section
+ * nested in another, this answers the outer one, whose body holds its title).
+ * Nested sections answer the INNERMOST: a reader who unlocked only the outer
+ * one still must not see what the inner one hides.
+ */
+export function enclosingLockedSectionId(blocks: unknown, id: string): string | null {
+  if (typeof id !== 'string' || !id) return null;
+  const search = (list: unknown, enclosing: string | null): string | null | undefined => {
+    if (!Array.isArray(list)) return undefined;
+    for (const block of list) {
+      if (!isObject(block)) continue;
+      if (block.id === id) return enclosing;
+      // (A locked section without a readable id is never revealed to a
+      // reader, so nothing in it can be commented on by one.)
+      const next = isLockedSection(block) ? (blockId(block) ?? enclosing) : enclosing;
+      const found = search(block.children, next);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  };
+  return search(blocks, null) ?? null;
+}
+
+function tableText(content: SectionBlock): string {
+  const rows = Array.isArray(content.rows) ? content.rows : [];
+  const cells: string[] = [];
+  for (const row of rows) {
+    const rowCells = isObject(row) && Array.isArray(row.cells) ? row.cells : [];
+    for (const cell of rowCells) cells.push(inlineText(cell));
+  }
+  return cells.join(' ');
+}
+
+/**
+ * The text a comment quote is matched in: a block's own inline content (text
+ * and link runs; a table's cells joined by a space), not its children. A
+ * `lockedSection` answers its title. Untrimmed and not normalized.
+ */
+export function blockText(block: unknown): string {
+  if (!isObject(block)) return '';
+  if (block.type === LOCKED_SECTION_TYPE) return lockedSectionTitle(block);
+  const content = block.content;
+  if (isObject(content) && Array.isArray(content.rows)) return tableText(content);
+  return inlineText(content);
+}
+
+/** Every run of whitespace as one space (quotes and block text are compared this way). */
+export function normalizeQuoteText(text: string): string {
+  return typeof text === 'string' ? text.replace(/\s+/gu, ' ') : '';
+}
+
+/**
+ * Where the `occurrence`-th match (0-based) of `quote` starts in `text`, both
+ * whitespace-normalized (`normalizeQuoteText`), or -1. Matches may overlap:
+ * in "aaa", "aa" occurs at 0 and at 1. The index is into the NORMALIZED text.
+ */
+export function quoteOccurrenceIndex(text: string, quote: string, occurrence: number): number {
+  if (!Number.isInteger(occurrence) || occurrence < 0) return -1;
+  const haystack = normalizeQuoteText(text);
+  const needle = normalizeQuoteText(quote);
+  if (!needle) return -1;
+  let index = -1;
+  for (let seen = 0; seen <= occurrence; seen++) {
+    index = haystack.indexOf(needle, index + 1);
+    if (index === -1) return -1;
+  }
+  return index;
+}
+
+/** How many (possibly overlapping) times `quote` occurs in `text`, both whitespace-normalized. */
+export function countQuoteOccurrences(text: string, quote: string): number {
+  const haystack = normalizeQuoteText(text);
+  const needle = normalizeQuoteText(quote);
+  if (!needle) return 0;
+  let count = 0;
+  for (
+    let index = haystack.indexOf(needle);
+    index !== -1;
+    index = haystack.indexOf(needle, index + 1)
+  ) {
+    count++;
+  }
+  return count;
+}
