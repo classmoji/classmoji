@@ -2,7 +2,7 @@ import { Outlet, useNavigate, useParams } from 'react-router';
 import { namedAction } from 'remix-utils/named-action';
 import invariant from 'tiny-invariant';
 import { tasks } from '@trigger.dev/sdk';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useId } from 'react';
 import { Button } from 'antd';
 import { PlusCircleOutlined } from '@ant-design/icons';
 
@@ -148,6 +148,7 @@ const StudentsScreen = ({ loaderData }: Route.ComponentProps) => {
   const { class: classSlug } = useParams();
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
+  const searchHintId = useId();
   // Merge students and invitations into unified list
   const allStudents = useMemo(() => {
     const inviteList = invitations.map(inv => ({
@@ -171,31 +172,38 @@ const StudentsScreen = ({ loaderData }: Route.ComponentProps) => {
   // Search over the fields the row actually carries. Name and login are always
   // present; the contact fields exist only in an OWNER's payload, so they widen
   // the search for an owner and are simply absent for other staff — which is
-  // why the placeholder promises name or login.
+  // why the hint under the field only names them for an owner.
   const filteredStudents = !query
     ? allStudents
     : allStudents.filter(student => {
         const q = query.toLowerCase();
         const row = student as Record<string, unknown>;
-        const haystack = [student.name, student.login, row.email];
+        const haystack = [student.name, student.login, row.email, row.school_id];
         return haystack.some(field => typeof field === 'string' && field.toLowerCase().includes(q));
       });
 
   return (
     <div className="min-h-full relative">
       <Outlet />
-      <div className="flex flex-col gap-3 mt-2 mb-4 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="text-lg font-semibold text-ink-1">Students</h1>
+      <div className="flex flex-col gap-3 mt-2 mb-4 sm:flex-row sm:items-start sm:justify-between">
+        <h1 className="text-lg font-semibold text-ink-1 sm:leading-8">Students</h1>
 
-        <div className="flex flex-wrap items-center gap-3">
-          <span data-tour="students-search" className="w-full sm:w-auto">
+        {/* items-start keeps the button level with the input, not the input + hint. */}
+        <div className="flex flex-wrap items-start gap-3 w-full sm:w-auto">
+          <div data-tour="students-search" className="flex flex-col gap-1 w-full sm:w-[340px]">
             <SearchInput
               query={query}
               setQuery={setQuery}
-              placeholder="Search by name or login..."
-              className="w-full sm:w-64"
+              placeholder="Search students"
+              ariaLabel="Search students"
+              describedBy={searchHintId}
+              className="w-full [&_input::placeholder]:text-ink-2!"
             />
-          </span>
+            {/* The hint names only the fields this viewer's payload carries. */}
+            <span id={searchHintId} className="text-xs text-ink-2 pl-0.5">
+              {isOwner ? 'Name, login, email or student ID' : 'Name or login'}
+            </span>
+          </div>
 
           {canManage && (
             <Button
