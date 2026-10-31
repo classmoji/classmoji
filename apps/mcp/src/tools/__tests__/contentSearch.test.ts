@@ -87,6 +87,11 @@ vi.mock('@classmoji/services', async () => {
   const sections = await vi.importActual<
     typeof import('../../../../../packages/services/src/classmoji/pageSections.service.ts')
   >('../../../../../packages/services/src/classmoji/pageSections.service.ts');
+  // The REAL comment rules: content_get adds the caller's open comment count
+  // (pageComments.test.ts covers it).
+  const comments = await vi.importActual<
+    typeof import('../../../../../packages/services/src/classmoji/pageComments.service.ts')
+  >('../../../../../packages/services/src/classmoji/pageComments.service.ts');
   return {
     ...real,
     ...docs,
@@ -96,6 +101,7 @@ vi.mock('@classmoji/services', async () => {
       },
       contentIndex: { slideMetadataText: index.slideMetadataText },
       pageSections: sections,
+      pageComments: comments,
     },
   };
 });
