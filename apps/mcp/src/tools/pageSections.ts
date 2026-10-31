@@ -106,6 +106,8 @@ export interface SectionPageRecord {
   is_public: boolean;
   classroom: {
     id: string;
+    /** The page's own classroom's status (the comment rules read it). */
+    status?: string;
     git_organization?: { login?: string | null } | null;
     [key: string]: unknown;
   } | null;
@@ -116,7 +118,7 @@ export interface SectionPageRecord {
  * A page of the bound classroom, by a query that names the classroom (S1):
  * another classroom's page id finds nothing.
  */
-async function findPageInClassroom(
+export async function findPageInClassroom(
   pageId: string,
   ctx: ToolContext
 ): Promise<SectionPageRecord | null> {
@@ -153,7 +155,10 @@ export function parsePageBlocks(json: unknown): unknown[] | null {
  * reads it (the delivery layer, never throws). Null when there is none or it
  * cannot be read: a legacy HTML page has no sections.
  */
-async function loadPageBlocks(page: SectionPageRecord, label: string): Promise<unknown[] | null> {
+export async function loadPageBlocks(
+  page: SectionPageRecord,
+  label: string
+): Promise<unknown[] | null> {
   if (!page.classroom?.git_organization?.login) return null;
   const body = await ClassmojiService.contentDelivery.fetchContentText(
     { classroom: page.classroom as never },
@@ -186,7 +191,7 @@ export type SectionReaderRule = Awaited<
 >;
 
 /** The caller's reader rule in the bound classroom (one membership read). */
-async function readerRuleFor(ctx: ToolContext): Promise<SectionReaderRule> {
+export async function readerRuleFor(ctx: ToolContext): Promise<SectionReaderRule> {
   const { classroomId } = requireClassroomCtx(ctx);
   return ClassmojiService.pageSections.sectionViewer({ userId: ctx.viewer.userId, classroomId });
 }
@@ -451,7 +456,9 @@ export interface ViewerPageText {
 export async function viewerPageText(
   page: Pick<SectionPageRecord, 'id' | 'title'>,
   json: unknown,
-  ctx: ToolContext
+  ctx: ToolContext,
+  /** The caller's reader rule, when the caller already read it. */
+  rule?: SectionReaderRule
 ): Promise<ViewerPageText | null> {
   const blocks = parsePageBlocks(json);
   if (!blocks) return null;
@@ -459,7 +466,7 @@ export async function viewerPageText(
   const hasLocked = containsLockedSection(blocks);
   const hasCheckable = checkTargetIds(blocks).length > 0;
   if (!hasLocked && !hasCheckable) return null;
-  const viewer = await sectionViewerFor(page.id, ctx);
+  const viewer = await sectionViewerFor(page.id, ctx, rule);
   if (!hasLocked && !viewer.canCheck) return null;
   const view = viewerPageBlocks(blocks, viewer);
   const text = await extractBlocksText(view.blocks, page.title);
@@ -473,7 +480,7 @@ export async function viewerPageText(
 }
 
 /** A lockedSection at any depth. */
-function containsLockedSection(blocks: unknown): boolean {
+export function containsLockedSection(blocks: unknown): boolean {
   if (!Array.isArray(blocks)) return false;
   return blocks.some(
     block =>

@@ -27,6 +27,7 @@ import * as formTeamResolverService from './formTeamResolver.ts';
 import * as pageService from './page.service.ts';
 import * as pageContentService from './pageContent.service.ts';
 import * as pageSectionsService from './pageSections.service.ts';
+import * as pageCommentsService from './pageComments.service.ts';
 import * as siteService from './site.service.ts';
 import * as emojiMappingService from './emojiMapping.service.ts';
 import * as helperService from './helper.service.ts';
@@ -164,6 +165,9 @@ const ClassmojiService = {
   // Per-student page state: checked headings and opened locked sections, with
   // the current-student counts and lists staff see.
   pageSections: pageSectionsService,
+  // Page comment threads, replies and reactions: the one access, visibility
+  // and audit rule the pages API and the MCP tools both read.
+  pageComments: pageCommentsService,
   site: siteService,
   emojiMapping: emojiMappingService,
   helper: helperService,
@@ -296,6 +300,7 @@ export {
   pageService,
   pageContentService,
   pageSectionsService,
+  pageCommentsService,
   siteService,
   emojiMappingService,
   helperService,

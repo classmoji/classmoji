@@ -63,6 +63,7 @@ const READS: Record<string, Kind> = {
   content_list: 'none', // course content
   content_get: 'none', // course content
   page_sections_status: 'handler', // VIEW row as the caller's accepted role
+  page_comments_list: 'none', // the page's shared discussion every member sees, not a staff view of student activity (plan D8)
   resource_links_list: 'none', // course links
   list_forms: 'none', // form definitions and response counts
   form_get: 'none', // a form's definition and revisions

@@ -4,6 +4,7 @@ import React, {
   useMemo,
   useImperativeHandle,
   useRef,
+  useState,
   forwardRef,
 } from 'react';
 import {
@@ -56,6 +57,9 @@ import { DoneChips } from './DoneChips.tsx';
 import { AddBlockButton } from './AddBlockButton.tsx';
 import { AlignedSideMenuController } from './AlignedSideMenuController.tsx';
 import { SectionStatsContext } from '~/hooks/useSectionStats.ts';
+import { pageCommentsExtension } from '~/components/comments/commentsPlugin.ts';
+import { CommentsHost } from '~/components/comments/CommentsHost.tsx';
+import type { CommentsBridge } from '~/components/comments/commentsBridge.ts';
 import type { SectionStats } from '~/hooks/useReaderSections.tsx';
 import { AssetSrcSetContext, NO_SRC_SETS, type AssetSrcSets } from '~/hooks/useAssetSrcSets.ts';
 import {
@@ -172,6 +176,12 @@ interface PageEditorProps {
    * (`sectionStats` from the loader, OWNER/TEACHER only). Null: no chips.
    */
   sectionStats?: SectionStats | null;
+  /**
+   * Page comments (`usePageCommentsController` in the route): highlights and
+   * bubbles as decorations (never in the document), the selection and block
+   * buttons. None: no comment UI.
+   */
+  comments?: CommentsBridge | null;
 }
 
 const PageEditor = forwardRef(function PageEditor(
@@ -189,6 +199,7 @@ const PageEditor = forwardRef(function PageEditor(
     uploadCapability = null,
     collab = null,
     sectionStats = null,
+    comments = null,
   }: PageEditorProps,
   ref: React.Ref<PageEditorHandle>
 ) {
@@ -326,8 +337,9 @@ const PageEditor = forwardRef(function PageEditor(
     dictionary: { ...defaultLocale, multi_column: multiColumnLocales.en },
     // Shiki highlighting for code blocks (github-light/github-dark). Up to
     // BlockNote 0.46 it came with the code block's options; 0.55 makes it an
-    // editor extension.
-    extensions: [syntaxHighlighter],
+    // editor extension. Page comments draw decorations only (nothing without
+    // threads, and never a change to the document).
+    extensions: [syntaxHighlighter, pageCommentsExtension()],
   };
 
   // Create the BlockNote editor with multi-column drop cursor + dictionary.
@@ -390,6 +402,8 @@ const PageEditor = forwardRef(function PageEditor(
     revive();
     return editor.onMount(revive);
   }, [editor, live]);
+
+  const [container, setContainer] = useState<HTMLDivElement | null>(null);
 
   const sectionStatsValue = useMemo(
     () => ({ pageId, stats: sectionStats }),
@@ -456,7 +470,8 @@ const PageEditor = forwardRef(function PageEditor(
     // opened to the left of the handle, under the fixed sidebar. With it the
     // column bounds them, and a menu with no room on one side flips to the
     // other (the drag-handle menu opens to the right).
-    <div className="page-editor" style={{ position: 'relative' }}>
+    <div className="page-editor" style={{ position: 'relative' }} ref={setContainer}>
+      {comments ? <CommentsHost editor={editor} bridge={comments} container={container} /> : null}
       <style>{`
         /* Editing chrome only. How a block looks (its size, line height,
            callout card, divider rule) lives in blocknote-overrides.css, which

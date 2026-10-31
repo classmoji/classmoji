@@ -8,6 +8,8 @@ import {
 import { useAssetMap, useAssetRetry } from '~/hooks/useAssetMap.ts';
 import type { AssetSrcSets } from '~/hooks/useAssetSrcSets.ts';
 import { useReaderSectionsState } from '~/hooks/useReaderSections.tsx';
+import { usePageCommentsController } from '~/components/comments/usePageCommentsController.ts';
+import { CommentsButton, CommentsPanel } from '~/components/comments/CommentsPanel.tsx';
 import { useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense } from 'react';
 import { IconPhoto } from '@tabler/icons-react';
 import { toast } from 'react-toastify';
@@ -202,6 +204,9 @@ const PageRoute = () => {
     readerSections,
     signInUrl,
     sectionStats,
+    // Page comments: only for a signed-in member (the key is absent otherwise,
+    // and then nothing comment-related is drawn).
+    readerComments,
   } = useLoaderData<typeof import('./route.server.ts').loader>();
   // This reader's ticks and unlocks. Kept here, not in the viewer, so a
   // viewer rebuild (asset retry) never drops an unlock in flight.
@@ -236,6 +241,9 @@ const PageRoute = () => {
   // Preview mode is strictly read-only — editing chrome is suppressed while
   // rendering the pending preview branch (plan §3b).
   const isPreview = Boolean(preview?.active);
+  // Comments are on the published page: none on a preview branch (its blocks
+  // and text are not what the threads were written on).
+  const comments = usePageCommentsController(page.id, isPreview ? null : readerComments);
   // Live editing switched on but unreachable, with unsaved live edits: the
   // page is shown read-only (the loader explains why below the header).
   const canEdit = canEditRole && !isPreview && !liveUnavailable;
@@ -1115,8 +1123,11 @@ const PageRoute = () => {
           canEdit={canEdit}
           onSave={saveEnabled ? handleSave : undefined}
           live={liveHeader}
+          actions={comments ? <CommentsButton controller={comments} /> : null}
         />
       )}
+      {isEmbedded && comments && <CommentsButton controller={comments} floating />}
+      {comments && <CommentsPanel controller={comments} embedded={isEmbedded} />}
 
       {/* Preview-branch chrome (staff only — `preview` is null otherwise).
           Keyed on page.id so the preview fetcher's conflict state resets on
@@ -1331,6 +1342,7 @@ const PageRoute = () => {
                   editable={liveEditable}
                   collab={{ doc: session.doc, provider: session.provider, user: collab.user }}
                   sectionStats={sectionStats ?? null}
+                  comments={comments?.bridge ?? null}
                 />
               </Suspense>
             ) : (
@@ -1382,6 +1394,7 @@ const PageRoute = () => {
                 // the editor. The chooser is the way forward (Apply / Reload).
                 editable={!saveMergeReport}
                 sectionStats={sectionStats ?? null}
+                comments={comments?.bridge ?? null}
               />
             </Suspense>
           ) : (
@@ -1409,6 +1422,7 @@ const PageRoute = () => {
                   pageId={page.id}
                   mediaDownloads={mediaDownloads}
                   readerSections={sections}
+                  comments={comments?.bridge ?? null}
                 />
               </div>
             </Suspense>
