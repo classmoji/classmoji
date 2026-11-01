@@ -61,7 +61,7 @@ export function CommentItem({
         <span className="text-[12px] text-ink-4">{formatDate(comment.created_at)}</span>
       </div>
       <div className={isReply ? 'pl-[34px]' : 'pl-[42px]'}>
-        <p className="mt-1.5 whitespace-pre-line break-words text-[13px] leading-relaxed text-ink-1">
+        <p className="mt-1.5 max-w-[70ch] whitespace-pre-line break-words text-[13px] leading-relaxed text-ink-1">
           <LinkedText text={comment.body} />
         </p>
         <div className="mt-2 flex items-center justify-between">

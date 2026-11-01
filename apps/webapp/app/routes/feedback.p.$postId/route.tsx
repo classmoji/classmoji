@@ -121,7 +121,7 @@ export default function FeedbackPostPage() {
   }, [status.fetcher.state, status.fetcher.data]);
 
   return (
-    <div className="mx-auto grid max-w-6xl px-6 gap-12 pb-24 pt-8 lg:grid-cols-[minmax(0,1fr)_320px]">
+    <div className="mx-auto grid w-full max-w-[1396px] px-6 gap-12 pb-24 pt-8 lg:grid-cols-[minmax(0,1fr)_320px]">
       <article className="min-w-0">
         <Link
           to="/feedback"
@@ -130,7 +130,7 @@ export default function FeedbackPostPage() {
           <ChevronLeftIcon className="h-4 w-4" aria-hidden />
           Back to feedback
         </Link>
-        <h1 className="mt-4 text-balance text-2xl font-bold leading-tight tracking-tight text-ink-0">
+        <h1 className="mt-4 max-w-[70ch] text-balance text-2xl font-bold leading-tight tracking-tight text-ink-0">
           {post.title}
         </h1>
         <div className="mt-4 flex flex-col gap-3">
@@ -139,7 +139,7 @@ export default function FeedbackPostPage() {
             BUG_SECTIONS.filter(({ field }) => post[field]).map(({ field, label }) => (
               <section key={field}>
                 <h2 className="text-[13px] font-semibold text-ink-1">{label}</h2>
-                <p className="mt-1 whitespace-pre-line break-words text-sm leading-relaxed text-ink-1">
+                <p className="mt-1 max-w-[70ch] whitespace-pre-line break-words text-sm leading-relaxed text-ink-1">
                   <LinkedText text={post[field] ?? ''} />
                 </p>
               </section>
@@ -148,7 +148,7 @@ export default function FeedbackPostPage() {
             post.body.split(/\n{2,}/).map((para, i) => (
               <p
                 key={i}
-                className="whitespace-pre-line break-words text-sm leading-relaxed text-ink-1"
+                className="max-w-[70ch] whitespace-pre-line break-words text-sm leading-relaxed text-ink-1"
               >
                 <LinkedText text={para} />
               </p>
@@ -204,7 +204,7 @@ export default function FeedbackPostPage() {
                     <MaintainerBadge />
                     <span>· {formatDate(update.created_at)}</span>
                   </div>
-                  <p className="mt-1 whitespace-pre-line break-words text-sm leading-relaxed text-ink-1">
+                  <p className="mt-1 max-w-[70ch] whitespace-pre-line break-words text-sm leading-relaxed text-ink-1">
                     <LinkedText text={update.note} />
                   </p>
                 </li>

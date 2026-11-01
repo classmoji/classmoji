@@ -139,7 +139,7 @@ export default function FeedbackBoard() {
   };
 
   return (
-    <div className="mx-auto grid max-w-6xl gap-10 px-6 pb-24 pt-10 lg:grid-cols-[minmax(0,1fr)_280px] lg:gap-14">
+    <div className="mx-auto grid w-full max-w-[1396px] gap-10 px-6 pb-24 pt-10 lg:grid-cols-[minmax(0,1fr)_280px] lg:gap-14">
       <section
         aria-labelledby="feedback-heading"
         className="overflow-hidden rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800"
