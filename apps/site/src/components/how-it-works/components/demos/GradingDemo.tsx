@@ -103,7 +103,7 @@ const TOTAL = 42;
 function Popover({ className, children }: { className: string; children: React.ReactNode }) {
   return (
     <div
-      className={`absolute z-20 rounded-lg bg-white shadow-[0_6px_16px_0_rgba(0,0,0,0.08),0_3px_6px_-4px_rgba(0,0,0,0.12),0_9px_28px_8px_rgba(0,0,0,0.05)] ${className}`}
+      className={`absolute z-20 rounded-lg bg-white dark:bg-panel-hover-dark dark:ring-1 dark:ring-line-2-dark shadow-[0_6px_16px_0_rgba(0,0,0,0.08),0_3px_6px_-4px_rgba(0,0,0,0.12),0_9px_28px_8px_rgba(0,0,0,0.05)] ${className}`}
     >
       {children}
     </div>
@@ -133,7 +133,7 @@ export function GradingDemo() {
         <div className="flex min-w-0 items-center gap-2">
           <div
             aria-hidden
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-stone-100 text-[11px] font-semibold text-stone-600 ring-1 ring-stone-200"
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-stone-100 text-[11px] font-semibold text-stone-600 ring-1 ring-stone-200 dark:bg-neutral-800 dark:text-stone-300 dark:ring-neutral-700"
           >
             {r.name.charAt(0)}
           </div>
@@ -149,8 +149,8 @@ export function GradingDemo() {
       key: 'repo',
       width: 100,
       render: (_, r) => (
-        <span className="inline-flex min-w-0 max-w-full items-center gap-1.5 text-[#21883d]">
-          <IconBrandGithub size={13} className="shrink-0 text-gray-900" />
+        <span className="inline-flex min-w-0 max-w-full items-center gap-1.5 text-[#21883d] dark:text-[#6BE39B]">
+          <IconBrandGithub size={13} className="shrink-0 text-gray-900 dark:text-inkd-0" />
           <span className="truncate">hw3-hashing-{r.login}</span>
         </span>
       ),
@@ -220,7 +220,7 @@ export function GradingDemo() {
             ))}
           </div>
         ) : (
-          <span className="whitespace-nowrap text-[10.5px] italic text-gray-400">
+          <span className="whitespace-nowrap text-[10.5px] italic text-gray-400 dark:text-inkd-4">
             No grades yet
           </span>
         ),
@@ -249,8 +249,7 @@ export function GradingDemo() {
                       data-cursor={`emoji-${e}`}
                       className={`rounded-md px-2 py-1 text-[16px] leading-none transition-transform duration-300 ${
                         s.popped === e ? 'scale-125' : ''
-                      }`}
-                      style={{ backgroundColor: selected ? '#ffebc2' : 'transparent' }}
+                      } ${selected ? 'bg-[#ffebc2] dark:bg-amber-line-dark' : 'bg-transparent'}`}
                     >
                       {e}
                     </span>
@@ -280,7 +279,7 @@ export function GradingDemo() {
                 {TOTAL} <span className="text-[11px] font-medium text-ink-3">of {TOTAL}</span>
               </Stat>
               <Stat label="Late">
-                <span className="text-amber-600">3</span>
+                <span className="text-amber-600 dark:text-amber-400">3</span>
               </Stat>
               <Stat label="Graded">
                 {graded} <span className="text-[11px] font-medium text-ink-3">of {TOTAL}</span>

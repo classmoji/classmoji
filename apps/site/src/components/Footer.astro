@@ -1,11 +1,11 @@
 ---
 const externalLink =
-  'font-medium text-gray-600 underline decoration-gray-300 underline-offset-4 transition-colors duration-150 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent';
+  'font-medium text-gray-600 underline decoration-gray-300 underline-offset-4 transition-colors duration-150 hover:text-gray-900 dark:text-inkd-2 dark:decoration-line-2-dark dark:hover:text-inkd-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent';
 const footerLink =
-  'font-medium transition-colors duration-150 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent';
+  'font-medium transition-colors duration-150 hover:text-gray-900 dark:hover:text-inkd-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent';
 ---
 
-<footer class="border-t border-gray-100 bg-panel px-6 py-10 text-sm text-gray-500">
+<footer class="border-t border-gray-100 bg-panel px-6 py-10 text-sm text-gray-500 dark:border-line-dark dark:bg-panel-dark dark:text-inkd-3">
   <div class="mx-auto max-w-7xl">
     <div class="flex flex-col items-center justify-between gap-8 text-center md:flex-row md:items-start md:text-left">
       <div class="max-w-2xl">
@@ -15,7 +15,7 @@ const footerLink =
           class="inline-flex items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         >
           <span class="text-[25px] leading-none" aria-hidden="true">🍎</span>
-          <span class="text-[20px] font-extrabold leading-none tracking-[-0.035em] text-[#1A1A1A]">classmoji</span>
+          <span class="text-[20px] font-extrabold leading-none tracking-[-0.035em] text-[#1A1A1A] dark:text-inkd-0">classmoji</span>
         </a>
         <p class="mt-4 leading-relaxed">
           Made with ❤️ with support from <a
@@ -38,7 +38,7 @@ const footerLink =
       </nav>
     </div>
 
-    <div class="mt-8 border-t border-gray-100 pt-5 text-center text-xs text-gray-400 md:text-left">
+    <div class="mt-8 border-t border-gray-100 pt-5 text-center text-xs text-gray-400 dark:border-line-dark dark:text-inkd-4 md:text-left">
       &copy; {new Date().getFullYear()} Classmoji. All rights reserved.
     </div>
   </div>

@@ -41,16 +41,16 @@ const links = [
   { label: 'Contact', href: '/contact' },
 ];
 
-const focusRing = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2';
+const focusRing = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 dark:focus-visible:ring-offset-page-dark';
 ---
 
 <header
-  class="fixed inset-x-0 top-0 z-50 border-b border-gray-100 bg-white/85 shadow-[0_1px_10px_rgba(20,25,50,0.035)] backdrop-blur-md"
+  class="fixed inset-x-0 top-0 z-50 border-b border-gray-100 bg-white/85 shadow-[0_1px_10px_rgba(20,25,50,0.035)] backdrop-blur-md dark:border-line-dark dark:bg-page-dark/85 dark:shadow-none"
 >
   <nav aria-label="Main navigation" class="mx-auto flex h-[68px] max-w-7xl items-center justify-between gap-5 px-6">
     <a href="/" aria-label="Classmoji home" class:list={['flex shrink-0 items-center gap-2 rounded-md', focusRing]}>
       <span class="text-[27px] leading-none" aria-hidden="true">🍎</span>
-      <span class="text-[22px] font-extrabold leading-none tracking-[-0.035em] text-[#1A1A1A]">classmoji</span>
+      <span class="text-[22px] font-extrabold leading-none tracking-[-0.035em] text-[#1A1A1A] dark:text-inkd-0">classmoji</span>
     </a>
 
     <div class="hidden items-center gap-5 md:flex">
@@ -59,7 +59,7 @@ const focusRing = 'focus-visible:outline-none focus-visible:ring-2 focus-visible
           <a
             href={link.href}
             class:list={[
-              'whitespace-nowrap rounded-md text-sm font-medium text-gray-600 transition-colors duration-150 hover:text-gray-900',
+              'whitespace-nowrap rounded-md text-sm font-medium text-gray-600 transition-colors duration-150 hover:text-gray-900 dark:text-inkd-2 dark:hover:text-inkd-0',
               focusRing,
             ]}
           >
@@ -75,11 +75,11 @@ const focusRing = 'focus-visible:outline-none focus-visible:ring-2 focus-visible
         target="_blank"
         rel="noopener noreferrer"
         aria-label={stars === null ? 'Github repository' : `Github repository, ${stars.toLocaleString()} stars`}
-        class="group flex h-8 items-center overflow-hidden rounded-lg border border-gray-200 bg-white shadow-card transition-colors duration-150 hover:border-gray-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        class="group flex h-8 items-center overflow-hidden rounded-lg border border-gray-200 bg-white shadow-card transition-colors duration-150 hover:border-gray-300 dark:border-line-dark dark:bg-panel-dark dark:hover:border-line-2-dark focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       >
         {
           stars !== null && (
-            <span class="inline-flex h-full items-center gap-1.5 border-r border-gray-200 px-2.5 text-sm font-medium text-gray-700">
+            <span class="inline-flex h-full items-center gap-1.5 border-r border-gray-200 px-2.5 text-sm font-medium text-gray-700 dark:border-line-dark dark:text-inkd-1">
               <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                 <path d="M11.05 2.93c.3-.92 1.6-.92 1.9 0l1.52 4.67a1 1 0 0 0 .95.69h4.91c.97 0 1.37 1.24.59 1.81l-3.98 2.89a1 1 0 0 0-.36 1.12l1.52 4.67c.3.92-.76 1.69-1.54 1.12l-3.98-2.89a1 1 0 0 0-1.17 0l-3.98 2.89c-.78.57-1.84-.2-1.54-1.12l1.52-4.67a1 1 0 0 0-.36-1.12L2.07 10.1c-.78-.57-.38-1.81.59-1.81h4.91a1 1 0 0 0 .95-.69l1.53-4.67Z" />
               </svg>
@@ -87,7 +87,7 @@ const focusRing = 'focus-visible:outline-none focus-visible:ring-2 focus-visible
             </span>
           )
         }
-        <span class="grid h-full w-9 place-items-center text-gray-600 transition-colors duration-150 group-hover:bg-gray-50 group-hover:text-gray-900">
+        <span class="grid h-full w-9 place-items-center text-gray-600 transition-colors duration-150 group-hover:bg-gray-50 group-hover:text-gray-900 dark:text-inkd-2 dark:group-hover:bg-panel-hover-dark dark:group-hover:text-inkd-0">
           <GithubMark className="h-[18px] w-[18px]" />
         </span>
       </a>
@@ -108,7 +108,7 @@ const focusRing = 'focus-visible:outline-none focus-visible:ring-2 focus-visible
         aria-label="Toggle menu"
         aria-expanded="false"
         aria-controls="mobile-site-menu"
-        class="grid h-9 w-9 place-items-center rounded-lg border border-gray-200 bg-white text-gray-600 shadow-card transition-colors duration-150 hover:bg-gray-50 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent md:hidden"
+        class="grid h-9 w-9 place-items-center rounded-lg border border-gray-200 bg-white text-gray-600 shadow-card transition-colors duration-150 hover:bg-gray-50 hover:text-gray-900 dark:border-line-dark dark:bg-panel-dark dark:text-inkd-2 dark:hover:bg-panel-hover-dark dark:hover:text-inkd-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent md:hidden"
       >
         <svg id="icon-menu" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
           <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"></path>
@@ -122,15 +122,15 @@ const focusRing = 'focus-visible:outline-none focus-visible:ring-2 focus-visible
 
   <div
     id="mobile-site-menu"
-    class="absolute inset-x-0 top-full hidden border-b border-gray-100 bg-white/95 px-4 pb-4 pt-2 shadow-float backdrop-blur-md md:hidden"
+    class="absolute inset-x-0 top-full hidden border-b border-gray-100 bg-white/95 px-4 pb-4 pt-2 shadow-float backdrop-blur-md md:hidden dark:border-line-dark dark:bg-page-dark/95"
   >
-    <div class="mx-auto max-w-7xl rounded-xl border border-gray-100 bg-gray-50 p-2">
+    <div class="mx-auto max-w-7xl rounded-xl border border-gray-100 bg-gray-50 p-2 dark:border-line-dark dark:bg-panel-dark">
       <div class="flex flex-col">
         {
           links.map(link => (
             <a
               href={link.href}
-              class="rounded-lg px-3 py-2.5 text-sm font-medium text-gray-600 transition-colors duration-150 hover:bg-white hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              class="rounded-lg px-3 py-2.5 text-sm font-medium text-gray-600 transition-colors duration-150 hover:bg-white hover:text-gray-900 dark:text-inkd-2 dark:hover:bg-panel-hover-dark dark:hover:text-inkd-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             >
               {link.label}
             </a>

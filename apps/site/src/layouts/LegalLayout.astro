@@ -22,8 +22,8 @@ const { title, description, updated } = Astro.props.frontmatter;
 
   <main class="px-6 pt-32 pb-20">
     <article class="max-w-3xl mx-auto">
-      <h1 class="text-4xl md:text-5xl font-bold text-gray-900 mb-3">{title}</h1>
-      <p class="text-sm text-gray-500 mb-10">Last updated {updated}</p>
+      <h1 class="text-4xl md:text-5xl font-bold text-gray-900 dark:text-inkd-0 mb-3">{title}</h1>
+      <p class="text-sm text-gray-500 dark:text-inkd-3 mb-10">Last updated {updated}</p>
       <div class="prose">
         <slot />
       </div>

@@ -129,7 +129,7 @@ function AssignmentPage() {
         <div className="flex min-w-0 items-center gap-2">
           <div
             aria-hidden
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-stone-100 text-[11px] font-semibold text-stone-600 ring-1 ring-stone-200"
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-stone-100 text-[11px] font-semibold text-stone-600 ring-1 ring-stone-200 dark:bg-neutral-800 dark:text-stone-300 dark:ring-neutral-700"
           >
             {r.name.charAt(0)}
           </div>
@@ -145,8 +145,8 @@ function AssignmentPage() {
       key: 'repo',
       width: 100,
       render: (_, r) => (
-        <span className="inline-flex min-w-0 max-w-full items-center gap-1.5 text-[#21883d]">
-          <IconBrandGithub size={13} className="shrink-0 text-gray-900" />
+        <span className="inline-flex min-w-0 max-w-full items-center gap-1.5 text-[#21883d] dark:text-[#6BE39B]">
+          <IconBrandGithub size={13} className="shrink-0 text-gray-900 dark:text-inkd-0" />
           <span className="truncate">hw4-heaps-{r.login}</span>
         </span>
       ),
@@ -178,7 +178,7 @@ function AssignmentPage() {
       key: 'grade',
       width: 96,
       render: () => (
-        <span className="whitespace-nowrap text-[10.5px] italic text-gray-400">No grades yet</span>
+        <span className="whitespace-nowrap text-[10.5px] italic text-gray-400 dark:text-inkd-4">No grades yet</span>
       ),
     },
     {
@@ -446,29 +446,29 @@ export function ClaudeDemo() {
         </div>
 
         {/* The Claude desktop app: warm paper, a borderless title bar, serif replies. */}
-        <section className="absolute bottom-2 left-0 top-2 flex w-[290px] flex-col overflow-hidden rounded-xl bg-[#FAF9F5] ring-1 ring-[#E8E6DC] shadow-[0_1px_2px_rgba(20,10,40,0.05),0_16px_36px_-18px_rgba(20,25,50,0.35)]">
-          <div className="flex h-9 shrink-0 items-center gap-2 px-3 text-[#3D3D3A]">
+        <section className="absolute bottom-2 left-0 top-2 flex w-[290px] flex-col overflow-hidden rounded-xl bg-[#FAF9F5] dark:bg-[#262624] ring-1 ring-[#E8E6DC] dark:ring-[#3A3935] shadow-[0_1px_2px_rgba(20,10,40,0.05),0_16px_36px_-18px_rgba(20,25,50,0.35)]">
+          <div className="flex h-9 shrink-0 items-center gap-2 px-3 text-[#3D3D3A] dark:text-[#C2C0B6]">
             <div className="flex gap-1.5" aria-hidden>
-              <span className="h-2.5 w-2.5 rounded-full bg-[#DAD8D0]" />
-              <span className="h-2.5 w-2.5 rounded-full bg-[#DAD8D0]" />
-              <span className="h-2.5 w-2.5 rounded-full bg-[#DAD8D0]" />
+              <span className="h-2.5 w-2.5 rounded-full bg-[#DAD8D0] dark:bg-[#4A4944]" />
+              <span className="h-2.5 w-2.5 rounded-full bg-[#DAD8D0] dark:bg-[#4A4944]" />
+              <span className="h-2.5 w-2.5 rounded-full bg-[#DAD8D0] dark:bg-[#4A4944]" />
             </div>
-            <PanelLeftIcon className="ml-1 h-3.5 w-3.5 text-[#73726C]" aria-hidden />
-            <ArrowLeftIcon className="h-3 w-3 text-[#73726C]" aria-hidden />
-            <ArrowRightIcon className="h-3 w-3 text-[#B5B3AC]" aria-hidden />
+            <PanelLeftIcon className="ml-1 h-3.5 w-3.5 text-[#73726C] dark:text-[#9C9A92]" aria-hidden />
+            <ArrowLeftIcon className="h-3 w-3 text-[#73726C] dark:text-[#9C9A92]" aria-hidden />
+            <ArrowRightIcon className="h-3 w-3 text-[#B5B3AC] dark:text-[#5F5E59]" aria-hidden />
             <span className="ml-1 flex min-w-0 items-center gap-1 truncate text-[11.5px] font-medium">
               CS52 26F
-              <ChevronDownIcon className="h-3 w-3 text-[#73726C]" aria-hidden />
+              <ChevronDownIcon className="h-3 w-3 text-[#73726C] dark:text-[#9C9A92]" aria-hidden />
             </span>
-            <span className="ml-auto rounded-md border border-[#DAD8D0] px-2 py-0.5 text-[10.5px] font-medium">
+            <span className="ml-auto rounded-md border border-[#DAD8D0] dark:border-[#4A4944] px-2 py-0.5 text-[10.5px] font-medium">
               Share
             </span>
           </div>
 
-          <div className="flex min-h-0 flex-1 flex-col justify-end gap-2.5 overflow-hidden px-4 pb-3 pt-2 text-[12px] leading-[1.5] text-[#141413]">
+          <div className="flex min-h-0 flex-1 flex-col justify-end gap-2.5 overflow-hidden px-4 pb-3 pt-2 text-[12px] leading-[1.5] text-[#141413] dark:text-[#FAF9F5]">
             {!s.sent ? (
               <div className="m-auto max-w-[220px] text-center">
-                <p className="font-serif text-[17px] leading-snug text-[#141413]">
+                <p className="font-serif text-[17px] leading-snug text-[#141413] dark:text-[#FAF9F5]">
                   How can I help with CS52 today?
                 </p>
               </div>
@@ -476,11 +476,11 @@ export function ClaudeDemo() {
               <>
                 <motion.p
                   {...enter}
-                  className="ml-auto max-w-[92%] rounded-xl bg-[#F0EEE6] px-3 py-2 text-[11.5px] text-[#141413]"
+                  className="ml-auto max-w-[92%] rounded-xl bg-[#F0EEE6] dark:bg-[#141413] px-3 py-2 text-[11.5px] text-[#141413] dark:text-[#FAF9F5]"
                 >
                   {s.message}
                 </motion.p>
-                <motion.p {...enter} className="text-[11px] text-[#73726C]">
+                <motion.p {...enter} className="text-[11px] text-[#73726C] dark:text-[#9C9A92]">
                   {s.reply ? 'Used 3 Classmoji tools' : 'Using Classmoji tools…'}
                 </motion.p>
                 {tools.map(
@@ -489,17 +489,17 @@ export function ClaudeDemo() {
                       <motion.div
                         key={tool.name}
                         {...enter}
-                        className="flex items-center gap-2 text-[11px] text-[#3D3D3A]"
+                        className="flex items-center gap-2 text-[11px] text-[#3D3D3A] dark:text-[#C2C0B6]"
                       >
                         <span className="grid h-4 w-4 shrink-0 place-items-center">
                           {tool.status === 'running' ? (
                             <Loader2Icon
-                              className="h-3 w-3 animate-spin text-[#73726C]"
+                              className="h-3 w-3 animate-spin text-[#73726C] dark:text-[#9C9A92]"
                               aria-label="Running"
                             />
                           ) : (
                             <CheckIcon
-                              className="h-3 w-3 text-[#73726C]"
+                              className="h-3 w-3 text-[#73726C] dark:text-[#9C9A92]"
                               strokeWidth={2.5}
                               aria-label="Done"
                             />
@@ -512,7 +512,7 @@ export function ClaudeDemo() {
                 {s.reply && (
                   <motion.p
                     {...enter}
-                    className="font-serif text-[12.5px] leading-[1.55] text-[#141413]"
+                    className="font-serif text-[12.5px] leading-[1.55] text-[#141413] dark:text-[#FAF9F5]"
                   >
                     {REPLY}
                   </motion.p>
@@ -522,7 +522,7 @@ export function ClaudeDemo() {
           </div>
 
           <div className="px-3 pb-2.5">
-            <div className="flex items-end gap-2 rounded-2xl border border-[#E1DFD6] bg-white px-3 py-2 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+            <div className="flex items-end gap-2 rounded-2xl border border-[#E1DFD6] dark:border-[#3A3935] bg-white dark:bg-[#30302E] px-3 py-2 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
               <label htmlFor="claude-composer" className="sr-only">
                 Reply to Claude
               </label>
@@ -543,7 +543,7 @@ export function ClaudeDemo() {
                   }
                 }}
                 placeholder="Reply"
-                className="flex-1 resize-none bg-transparent text-[12px] leading-[1.4] text-[#141413] placeholder:text-[#9A9890] focus:outline-none disabled:cursor-default"
+                className="flex-1 resize-none bg-transparent text-[12px] leading-[1.4] text-[#141413] dark:text-[#FAF9F5] placeholder:text-[#9A9890] dark:placeholder:text-[#77756E] focus:outline-none disabled:cursor-default"
               />
               <button
                 type="button"
@@ -551,18 +551,18 @@ export function ClaudeDemo() {
                 onClick={send}
                 disabled={s.sent || !s.draft.trim()}
                 aria-label="Send"
-                className={`grid h-6 w-6 shrink-0 place-items-center rounded-md text-[#73726C] transition-colors duration-150 enabled:bg-claude enabled:text-white ${ui.focus}`}
+                className={`grid h-6 w-6 shrink-0 place-items-center rounded-md text-[#73726C] dark:text-[#9C9A92] transition-colors duration-150 enabled:bg-claude enabled:text-white ${ui.focus}`}
               >
                 <CornerDownLeftIcon className="h-3.5 w-3.5" strokeWidth={2.25} aria-hidden />
               </button>
             </div>
-            <div className="mt-1.5 flex items-center justify-between px-1 text-[10.5px] text-[#73726C]">
+            <div className="mt-1.5 flex items-center justify-between px-1 text-[10.5px] text-[#73726C] dark:text-[#9C9A92]">
               <span className="flex items-center gap-2" aria-hidden>
                 <PlusIcon className="h-3 w-3" />
                 <MicIcon className="h-3 w-3" />
               </span>
               <span>
-                <span className="font-medium text-[#3D3D3A]">Opus 5</span> High
+                <span className="font-medium text-[#3D3D3A] dark:text-[#C2C0B6]">Opus 5</span> High
               </span>
             </div>
           </div>
