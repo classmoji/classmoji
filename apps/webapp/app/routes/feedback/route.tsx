@@ -41,7 +41,7 @@ export default function FeedbackLayout() {
   const location = useLocation();
 
   return (
-    <div className="min-h-screen bg-[#fafaf9] dark:bg-neutral-950">
+    <div className="min-h-screen bg-panel">
       <header className="border-b border-line bg-panel">
         <div className="mx-auto flex h-12 max-w-[1396px] px-6 items-center justify-between gap-6">
           <div className="flex h-full items-center gap-5">
