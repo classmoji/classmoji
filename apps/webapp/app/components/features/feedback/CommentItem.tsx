@@ -5,8 +5,7 @@ import { CommentComposer } from './CommentComposer';
 import { LinkedText } from './LinkedText';
 import { MaintainerBadge } from './MaintainerBadge';
 import { authorName, formatDate, type FeedbackCommentView } from './feedback';
-import { useFeedbackAction, useOptimisticVote } from './useFeedbackAction';
-import { VoteButton } from './VoteButton';
+import { useFeedbackAction } from './useFeedbackAction';
 
 interface CommentItemProps {
   comment: FeedbackCommentView;
@@ -33,14 +32,6 @@ export function CommentItem({
 }: CommentItemProps) {
   // The thread's reply box: null when closed, else the text it opens with.
   const [replyBody, setReplyBody] = useState<string | null>(null);
-  const vote = useOptimisticVote(
-    'comment-vote',
-    'commentId',
-    comment.id,
-    comment.vote_count,
-    comment.viewerVoted,
-    signedIn
-  );
   const remove = useFeedbackAction(signedIn);
   const canDelete = isAdmin || comment.viewerIsAuthor;
   const name = authorName(comment.author, comment.is_anonymous);
@@ -61,10 +52,10 @@ export function CommentItem({
         <span className="text-[12px] text-ink-4">{formatDate(comment.created_at)}</span>
       </div>
       <div className={isReply ? 'pl-[34px]' : 'pl-[42px]'}>
-        <p className="mt-1.5 max-w-[70ch] whitespace-pre-line break-words text-[13px] leading-relaxed text-ink-1">
+        <p className="mt-1.5 whitespace-pre-line break-words text-[13px] leading-relaxed text-ink-1">
           <LinkedText text={comment.body} />
         </p>
-        <div className="mt-2 flex items-center justify-between">
+        <div className="mt-2 flex items-center">
           <div className="flex items-center gap-4">
             <button
               type="button"
@@ -93,7 +84,6 @@ export function CommentItem({
               </button>
             )}
           </div>
-          <VoteButton size="sm" count={vote.count} voted={vote.voted} onToggle={vote.toggle} />
         </div>
         {comment.replies && comment.replies.length > 0 && (
           <ul className="mt-4 flex flex-col gap-5 border-l border-line pl-4">

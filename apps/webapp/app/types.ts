@@ -35,6 +35,7 @@ export const ROOT_GIT_ORGANIZATION_SELECT = {
 export const ROOT_MEMBERSHIP_SELECT = {
   id: true,
   role: true,
+  has_accepted_invite: true,
   classroom: {
     include: {
       git_organization: { select: ROOT_GIT_ORGANIZATION_SELECT },

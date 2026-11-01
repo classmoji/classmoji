@@ -31,10 +31,10 @@ export function AppOperationPanel({
         <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-ink-0 dark:text-inkd-0">
           {title}
         </span>
-        <span className="grid h-6 w-6 place-items-center text-ink-3">
+        <span className="grid h-6 w-6 place-items-center text-ink-3 dark:text-inkd-3">
           <IconChevronDown size={15} />
         </span>
-        <span className="grid h-6 w-6 place-items-center text-ink-3">
+        <span className="grid h-6 w-6 place-items-center text-ink-3 dark:text-inkd-3">
           <IconX size={15} />
         </span>
       </header>
@@ -43,7 +43,7 @@ export function AppOperationPanel({
           {running ? (
             <span className="h-3.5 w-3.5 flex-none animate-spin rounded-full border-2 border-accent/30 border-t-accent" />
           ) : (
-            <IconCheck size={15} className="flex-none text-accent" />
+            <IconCheck size={15} className="flex-none text-accent dark:text-[#6BE39B]" />
           )}
           <span className="font-medium tabular-nums text-ink-1 dark:text-inkd-1">
             {done} of {total} {noun}
@@ -57,7 +57,7 @@ export function AppOperationPanel({
                 style={{ width: `${pct}%` }}
               />
             </div>
-            {current && <p className="m-0 truncate text-[12px] text-ink-3">{current}</p>}
+            {current && <p className="m-0 truncate text-[12px] text-ink-3 dark:text-inkd-3">{current}</p>}
           </>
         )}
       </div>

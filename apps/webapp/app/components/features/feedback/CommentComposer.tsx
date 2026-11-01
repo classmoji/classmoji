@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { Link, useLocation } from 'react-router';
-import { ArrowUpIcon } from 'lucide-react';
 import { signInHref } from './feedback';
 import { useFeedbackAction } from './useFeedbackAction';
 
@@ -12,6 +11,8 @@ interface CommentComposerProps {
   /** Text the box starts with, e.g. "@Paul " when answering a reply. */
   initialBody?: string;
   compact?: boolean;
+  /** Starting height in lines; it grows as you type. */
+  rows?: number;
   autoFocus?: boolean;
   onCancel?: () => void;
   onPosted?: () => void;
@@ -24,6 +25,7 @@ export function CommentComposer({
   placeholder = 'Add a comment…',
   initialBody = '',
   compact = false,
+  rows,
   autoFocus = false,
   onCancel,
   onPosted,
@@ -99,7 +101,7 @@ export function CommentComposer({
         <textarea
           ref={textarea}
           aria-label={placeholder}
-          rows={compact ? 3 : 5}
+          rows={rows ?? (compact ? 3 : 5)}
           autoFocus={autoFocus}
           maxLength={3000}
           value={body}
@@ -130,10 +132,9 @@ export function CommentComposer({
           <button
             type="submit"
             disabled={empty || pending}
-            aria-label="Post comment"
-            className="grid h-8 w-8 cursor-pointer place-items-center rounded-full bg-accent text-white transition-colors duration-150 hover:bg-accent-hover disabled:cursor-default disabled:bg-line disabled:text-ink-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
+            className="h-8 cursor-pointer rounded-lg bg-accent px-3 text-[12px] font-semibold text-white transition-colors duration-150 hover:bg-accent-hover disabled:cursor-default disabled:bg-line disabled:text-ink-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
           >
-            <ArrowUpIcon className="h-4 w-4" aria-hidden />
+            {pending ? 'Posting…' : parentId ? 'Reply' : 'Post comment'}
           </button>
         </div>
       </form>

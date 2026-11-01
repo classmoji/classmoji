@@ -40,7 +40,7 @@ function getAuthorAvatar(author: string): string | null {
   <main class="pt-32 pb-16 px-6">
     <div class="max-w-6xl mx-auto">
       <!-- Back link -->
-      <a href="/blog" class="inline-flex items-center text-sm text-gray-500 hover:text-gray-900 mb-8">
+      <a href="/blog" class="inline-flex items-center text-sm text-gray-500 dark:text-inkd-3 hover:text-gray-900 dark:hover:text-inkd-0 mb-8">
         <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
         </svg>
@@ -51,17 +51,17 @@ function getAuthorAvatar(author: string): string | null {
         <article>
           <!-- Post header -->
           <header class="mb-8">
-            <h1 class="text-4xl font-bold text-gray-900 mb-4">{post.data.title}</h1>
+            <h1 class="text-4xl font-bold text-gray-900 dark:text-inkd-0 mb-4">{post.data.title}</h1>
             {post.data.author && getAuthorAvatar(post.data.author) && (
               <div class="flex items-center gap-3 mb-6">
                 <img
                   src={getAuthorAvatar(post.data.author)!}
                   alt={post.data.author}
-                  class="w-10 h-10 rounded-full ring-1 ring-gray-200"
+                  class="w-10 h-10 rounded-full ring-1 ring-gray-200 dark:ring-line-dark"
                 />
                 <div>
-                  <span class="text-sm font-medium text-gray-900">{post.data.author}</span>
-                  <div class="flex items-center gap-2 text-sm text-gray-500">
+                  <span class="text-sm font-medium text-gray-900 dark:text-inkd-0">{post.data.author}</span>
+                  <div class="flex items-center gap-2 text-sm text-gray-500 dark:text-inkd-3">
                     <time datetime={post.data.pubDate.toISOString()}>
                       {post.data.pubDate.toLocaleDateString('en-US', {
                         year: 'numeric',
@@ -87,7 +87,7 @@ function getAuthorAvatar(author: string): string | null {
             {post.data.tags && (
               <div class="flex gap-2 mt-4">
                 {post.data.tags.map(tag => (
-                  <span class="px-2 py-1 text-xs bg-gray-100 text-gray-600 rounded">{tag}</span>
+                  <span class="px-2 py-1 text-xs bg-gray-100 dark:bg-panel-hover-dark text-gray-600 dark:text-inkd-2 rounded">{tag}</span>
                 ))}
               </div>
             )}

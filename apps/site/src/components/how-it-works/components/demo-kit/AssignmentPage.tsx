@@ -26,14 +26,14 @@ export function AssignmentCompact({ children }: { children: React.ReactNode }) {
 }
 
 /** The webapp's quiet text link (Change, Grade, View). */
-export const assignmentLink = 'text-[12px] font-medium text-ink-2';
+export const assignmentLink = 'text-[12px] font-medium text-ink-2 dark:text-inkd-2';
 
 /** A Stat tile from the assignment page. */
 export function Stat({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex flex-col gap-0.5 rounded-xl bg-panel px-3 py-2 ring-1 ring-line">
-      <span className="text-[11px] font-medium text-ink-3">{label}</span>
-      <span className="text-[16px] font-bold tabular-nums text-ink-1">{children}</span>
+    <div className="flex flex-col gap-0.5 rounded-xl bg-panel px-3 py-2 ring-1 ring-line dark:bg-panel-dark dark:ring-line-dark">
+      <span className="text-[11px] font-medium text-ink-3 dark:text-inkd-3">{label}</span>
+      <span className="text-[16px] font-bold tabular-nums text-ink-1 dark:text-inkd-1">{children}</span>
     </div>
   );
 }
@@ -49,22 +49,22 @@ export function AssignmentFacts({
   total: number;
 }) {
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-ink-3">
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-ink-3 dark:text-inkd-3">
       <span>
-        Repo · <span className="font-medium text-ink-1">{mode}</span>
+        Repo · <span className="font-medium text-ink-1 dark:text-inkd-1">{mode}</span>
       </span>
       <span>
-        Repository <span className="font-medium text-[#21883d]">{repository}</span>
+        Repository <span className="font-medium text-[#21883d] dark:text-[#6BE39B]">{repository}</span>
       </span>
       <span>
-        Due <span className="font-medium text-ink-1">Fri Oct 9, 11:59 PM</span>
+        Due <span className="font-medium text-ink-1 dark:text-inkd-1">Fri Oct 9, 11:59 PM</span>
       </span>
       <span>
-        Weight <span className="font-medium text-ink-1">10%</span>
+        Weight <span className="font-medium text-ink-1 dark:text-inkd-1">10%</span>
       </span>
       <span>
         Student repos{' '}
-        <span className="font-medium text-ink-1">
+        <span className="font-medium text-ink-1 dark:text-inkd-1">
           {total} of {total}
         </span>
       </span>
@@ -77,17 +77,17 @@ export function AssignmentToolbar() {
   return (
     <div className="flex items-center gap-2">
       <Input
-        prefix={<IconSearch size={14} className="text-gray-400" />}
+        prefix={<IconSearch size={14} className="text-gray-400 dark:text-inkd-4" />}
         placeholder="Search students"
         className="w-36"
         readOnly
       />
-      <div className="flex gap-1 rounded-lg bg-stone-100 p-1">
+      <div className="flex gap-1 rounded-lg bg-stone-100 p-1 dark:bg-app-dark">
         {['All', 'Ungraded', 'Late', 'Not submitted'].map((f, i) => (
           <span
             key={f}
             className={`flex h-6 items-center whitespace-nowrap rounded-md px-2 text-[11px] font-medium ${
-              i === 0 ? 'bg-white text-ink-1 ring-1 ring-line' : 'text-ink-2'
+              i === 0 ? 'bg-white text-ink-1 ring-1 ring-line dark:bg-panel-dark dark:text-inkd-1 dark:ring-line-dark' : 'text-ink-2 dark:text-inkd-2'
             }`}
           >
             {f}
