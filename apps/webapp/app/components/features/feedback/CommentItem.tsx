@@ -3,6 +3,7 @@ import { Trash2Icon } from 'lucide-react';
 import { FeedbackAvatar } from '~/components/features/feedback/FeedbackAvatar';
 import { CommentComposer } from './CommentComposer';
 import { LinkedText } from './LinkedText';
+import { MaintainerBadge } from './MaintainerBadge';
 import { authorName, formatDate, type FeedbackCommentView } from './feedback';
 import { useFeedbackAction, useOptimisticVote } from './useFeedbackAction';
 import { VoteButton } from './VoteButton';
@@ -56,6 +57,7 @@ export function CommentItem({
           size={isReply ? 24 : 32}
         />
         <span className="text-[13px] font-semibold text-ink-0">{name}</span>
+        {comment.authorIsMaintainer && <MaintainerBadge />}
         <span className="text-[12px] text-ink-4">{formatDate(comment.created_at)}</span>
       </div>
       <div className={isReply ? 'pl-[34px]' : 'pl-[42px]'}>

@@ -14,6 +14,7 @@ import {
 import { ClassmojiService } from '@classmoji/services';
 import { FeedbackAvatar } from '~/components/features/feedback/FeedbackAvatar';
 import { LinkedText } from '~/components/features/feedback/LinkedText';
+import { MaintainerBadge } from '~/components/features/feedback/MaintainerBadge';
 import { CommentComposer } from '~/components/features/feedback/CommentComposer';
 import { CommentItem } from '~/components/features/feedback/CommentItem';
 import { NewPostDialog } from '~/components/features/feedback/NewPostDialog';
@@ -289,6 +290,7 @@ export default function FeedbackPostPage() {
                   />
                 )}
                 {value}
+                {label === 'Created by' && post.authorIsMaintainer && <MaintainerBadge />}
               </dd>
             </div>
           ))}

@@ -99,6 +99,19 @@ export const isFeedbackCategory = (value: unknown): value is FeedbackCategory =>
   typeof value === 'string' && (FEEDBACK_CATEGORIES as readonly string[]).includes(value);
 
 /**
+ * Maintainers are the platform admins (`PLATFORM_ADMIN_USER_IDS`); their posts
+ * and comments carry a tag on the board. Never for an anonymous one: the tag
+ * would name who wrote it.
+ */
+const writtenByMaintainer = (authorId: string | null, isAnonymous: boolean) =>
+  !isAnonymous &&
+  Boolean(authorId) &&
+  (process.env.PLATFORM_ADMIN_USER_IDS ?? '')
+    .split(',')
+    .map(id => id.trim())
+    .includes(authorId!);
+
+/**
  * A post as the public sees it: the raw `author_id` never leaves this module,
  * and an anonymous post has no author at all. `viewerIsAuthor` still lets the
  * person who wrote it manage it.
@@ -119,6 +132,7 @@ const publicPost = <
   return {
     ...rest,
     author: post.is_anonymous ? null : post.author,
+    authorIsMaintainer: writtenByMaintainer(author_id, post.is_anonymous),
     viewerIsAuthor: Boolean(viewerId && author_id === viewerId),
   };
 };
@@ -134,6 +148,7 @@ const publicComment = <
   return {
     ...rest,
     author: comment.is_anonymous ? null : comment.author,
+    authorIsMaintainer: writtenByMaintainer(author_id, comment.is_anonymous),
     viewerIsAuthor: Boolean(viewerId && author_id === viewerId),
   };
 };

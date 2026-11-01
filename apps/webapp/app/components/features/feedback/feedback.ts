@@ -18,6 +18,8 @@ export interface FeedbackPostSummary {
   created_at: string | Date;
   author: FeedbackAuthor | null;
   is_anonymous: boolean;
+  /** Written by a Classmoji maintainer (never set on an anonymous post). */
+  authorIsMaintainer: boolean;
   viewerVoted: boolean;
   /** A bug report's first field; the list shows it instead of the full body. */
   bug_what_happened?: string | null;
@@ -30,6 +32,8 @@ export interface FeedbackCommentView {
   created_at: string | Date;
   author: FeedbackAuthor | null;
   is_anonymous: boolean;
+  /** Written by a Classmoji maintainer (never set on an anonymous comment). */
+  authorIsMaintainer: boolean;
   /** The viewer wrote it (an anonymous comment has no author to compare). */
   viewerIsAuthor: boolean;
   viewerVoted: boolean;
