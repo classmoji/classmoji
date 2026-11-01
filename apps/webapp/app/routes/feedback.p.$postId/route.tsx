@@ -200,7 +200,9 @@ export default function FeedbackPostPage() {
                     ) : (
                       <span className="font-semibold">Status cleared</span>
                     )}
-                    <span>· Classmoji team · {formatDate(update.created_at)}</span>
+                    <span>· Classmoji team</span>
+                    <MaintainerBadge />
+                    <span>· {formatDate(update.created_at)}</span>
                   </div>
                   <p className="mt-1 whitespace-pre-line break-words text-sm leading-relaxed text-ink-1">
                     <LinkedText text={update.note} />
@@ -254,23 +256,34 @@ export default function FeedbackPostPage() {
       </article>
 
       <aside className="flex flex-col gap-6 lg:sticky lg:top-6 lg:self-start">
-        <button
-          type="button"
-          onClick={() => follow.submit({ intent: 'follow', postId: post.id })}
-          aria-pressed={following}
-          className={`inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-lg text-[13px] font-semibold transition-colors duration-150 ${
-            following
-              ? 'border border-line-2 bg-panel text-ink-0 hover:border-line-strong'
-              : 'bg-accent text-white hover:bg-accent-hover'
-          }`}
-        >
-          {following ? (
-            <BellOffIcon className="h-4 w-4" aria-hidden />
-          ) : (
+        {/* Following says so, with Unfollow beside it; otherwise one button. */}
+        {following ? (
+          <div className="flex items-center justify-between gap-3 rounded-xl bg-panel px-4 py-3 ring-1 ring-stone-200 dark:ring-neutral-800">
+            <span className="inline-flex items-center gap-2 text-[13px] font-semibold text-accent-ink">
+              <BellIcon className="h-4 w-4" aria-hidden />
+              Following updates
+            </span>
+            <button
+              type="button"
+              onClick={() => follow.submit({ intent: 'follow', postId: post.id })}
+              aria-pressed
+              className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border border-line-2 bg-panel px-3 text-[12px] font-semibold text-ink-1 transition-colors duration-150 hover:border-line-strong"
+            >
+              <BellOffIcon className="h-3.5 w-3.5" aria-hidden />
+              Unfollow
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => follow.submit({ intent: 'follow', postId: post.id })}
+            aria-pressed={false}
+            className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-lg bg-accent text-[13px] font-semibold text-white transition-colors duration-150 hover:bg-accent-hover"
+          >
             <BellIcon className="h-4 w-4" aria-hidden />
-          )}
-          {following ? 'Unfollow' : 'Follow this post'}
-        </button>
+            Follow this post
+          </button>
+        )}
 
         <dl className="rounded-xl bg-panel p-4 text-[13px] ring-1 ring-stone-200 dark:ring-neutral-800">
           {[

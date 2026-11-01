@@ -211,6 +211,35 @@ describe.skipIf(!RUN)('feedback.service (integration)', () => {
     expect(found[0]?.author).not.toHaveProperty('email');
   });
 
+  it('lists only the viewer’s own posts, or the posts they follow', async () => {
+    const { id: own } = await feedback.createPost({
+      authorId: voter,
+      title: `Mine to see ${suite}`,
+      body: 'Mine',
+    });
+
+    const mine = await feedback.listPosts({ scope: 'mine', viewerId: voter, query: suite });
+    expect(mine.map(p => p.id)).toContain(own);
+    expect(mine.map(p => p.id)).not.toContain(postId);
+
+    // The author follows their own post; a voter follows what they voted for.
+    const followed = await feedback.listPosts({
+      scope: 'following',
+      viewerId: voter,
+      query: suite,
+    });
+    expect(followed.map(p => p.id)).toEqual(expect.arrayContaining([own, postId]));
+
+    // Another person's lists never include it; nobody signed in gets nothing.
+    const others = await feedback.listPosts({ scope: 'mine', viewerId: admin, query: suite });
+    expect(others.map(p => p.id)).not.toContain(own);
+    expect(await feedback.listPosts({ scope: 'mine', viewerId: null })).toEqual([]);
+
+    const counts = await feedback.countViewerPosts(voter);
+    expect(counts.mine).toBeGreaterThanOrEqual(1);
+    expect(counts.following).toBeGreaterThanOrEqual(2);
+  });
+
   it("gives each type its own statuses, and refuses another type's", async () => {
     const make = async (category: 'BUG' | 'QUESTION') =>
       (

@@ -42,6 +42,14 @@ export function CommentComposer({
     if (autoFocus && el) el.setSelectionRange(el.value.length, el.value.length);
   }, [autoFocus]);
 
+  // Grow with the text (from its starting rows) up to a cap, then scroll.
+  useEffect(() => {
+    const el = textarea.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 360)}px`;
+  }, [body]);
+
   // Clear once the server took it; keep the text if it was refused.
   useEffect(() => {
     if (!sent.current || fetcher.state !== 'idle') return;
@@ -91,14 +99,14 @@ export function CommentComposer({
         <textarea
           ref={textarea}
           aria-label={placeholder}
-          rows={compact ? 2 : 3}
+          rows={compact ? 3 : 5}
           autoFocus={autoFocus}
           maxLength={3000}
           value={body}
           onChange={e => setBody(e.target.value)}
           onKeyDown={onKeyDown}
           placeholder={placeholder}
-          className="block w-full resize-none appearance-none border-0! bg-transparent px-4 pt-3 text-[13px] text-ink-0 shadow-none! outline-none! ring-0! placeholder:text-ink-4 focus:border-0! focus:shadow-none! focus:outline-none! focus:ring-0!"
+          className="block max-h-[360px] w-full resize-none overflow-y-auto appearance-none border-0! bg-transparent px-4 pt-3 text-[13px] text-ink-0 shadow-none! outline-none! ring-0! placeholder:text-ink-4 focus:border-0! focus:shadow-none! focus:outline-none! focus:ring-0!"
         />
         <div className="flex items-center justify-end gap-2 px-3 pb-3">
           <label className="mr-auto inline-flex cursor-pointer items-center gap-2 text-[12px] text-ink-3">

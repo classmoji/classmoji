@@ -1,5 +1,6 @@
 import { Outlet } from 'react-router';
 import { UserHeader } from '~/components';
+import { FeedbackLaunchBanner } from '~/components/features/feedback/FeedbackLaunchBanner';
 import { getAuthSession } from '@classmoji/auth/server';
 import { notificationService } from '@classmoji/services';
 import getPrisma from '@classmoji/database';
@@ -53,7 +54,9 @@ const UserLayout = () => {
   return (
     <div className="min-h-screen bg-[#fafaf9] dark:bg-[#1d1d1d]">
       <UserHeader />
-      <div className="max-w-[1200px] mx-auto px-4 sm:px-6 pt-4 sm:pt-7 pb-20">
+      {/* The same width and gutters as the header, so content lines up with it. */}
+      <div className="max-w-[1280px] mx-auto px-4 sm:px-8 pt-4 sm:pt-7 pb-20">
+        <FeedbackLaunchBanner />
         <Outlet />
       </div>
     </div>

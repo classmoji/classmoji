@@ -15,6 +15,7 @@ import githubLogo from '~/assets/images/github_logo.svg';
 import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
 import ProfileDropdown from '../../features/profile/ProfileDropdown';
 import SupportModal from '../../features/support/SupportModal';
+import { FeedbackLaunchBanner } from '../../features/feedback/FeedbackLaunchBanner';
 import { LockedBanner } from '~/components/features/classroom/LockedBanner';
 import ImportProgressBanner, {
   type ImportProgressBannerProps,
@@ -628,6 +629,7 @@ const CommonLayout = ({
             }
           >
             {classroom?.status === 'LOCKED' && role !== 'OWNER' && <LockedBanner />}
+            <FeedbackLaunchBanner />
             {/* Pinned above the page content on every teaching route, because
                 the import outlives the page the user started it from. */}
             {importBanner && (
