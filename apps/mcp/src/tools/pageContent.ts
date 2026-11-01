@@ -30,14 +30,12 @@
 import { ClassmojiService, ContentService, validateFile } from '@classmoji/services';
 import type { SnapshotResponse } from '@classmoji/collab';
 import {
-  CollabRequestError,
   actorFor,
   checkpointFields,
   fetchSnapshot,
   liveStateFor,
   requireLiveEnv,
   liveSha,
-  liveReadError,
   liveWriteError,
   notifyPreviewChanged,
   parseLiveVersion,
@@ -45,9 +43,9 @@ import {
   postMergePreview,
   postOps,
   type CollabEnv,
-  type SnapshotViewer,
 } from '../collab/client.ts';
 import { assertLivePin, expectSinceFor, splitInsertedIds } from '../collab/liveCheck.ts';
+import { readLivePage } from '../collab/livePage.ts';
 import {
   REPO_REST_MAX_BYTES,
   formatMegabytes,
@@ -304,48 +302,9 @@ export async function resolveReadRef(
 
 // ─── Live editing (classrooms with collab_enabled) ───────────────────────────
 
-const LIVE_UNCONFIGURED_NOTE =
-  'The live editing service is not configured here, so this is the last saved version from ' +
-  "git — it may be behind the live page. Live edits are refused; mode: 'preview' still works.";
-
-/** Said whenever a read falls back to git because the live service is down. */
-const LIVE_FALLBACK_NOTE =
-  'The live editing service did not answer, so this is the last saved version from git — it ' +
-  "may be behind the live page. Live edits fail until the service is back; mode: 'preview' " +
-  'still works.';
-
-/**
- * The live page for a read, or why the read falls back to git: `note` when
- * the service is down (said in the result), none for a page the live service
- * cannot hold (legacy HTML, no content file) — git then answers as today.
- */
-export async function readLivePage(
-  env: CollabEnv | null,
-  page: PageWithRepoRecord,
-  viewer: SnapshotViewer | null
-): Promise<{ snapshot: SnapshotResponse<'page'> } | { fallbackNote: string | null }> {
-  if (!env) return { fallbackNote: LIVE_UNCONFIGURED_NOTE };
-  try {
-    // An agent's read (viewer) is remembered by the live service for its pin;
-    // a render passes null, so a picture never stands in for a read.
-    const snapshot = await fetchSnapshot(env, 'page', page.id, viewer);
-    return { snapshot };
-  } catch (error) {
-    if (error instanceof CollabRequestError) {
-      if (error.unavailable) {
-        console.warn('[mcp] Live page snapshot unavailable, reading git:', error.message);
-        return { fallbackNote: LIVE_FALLBACK_NOTE };
-      }
-      if (error.code === 'legacy-html' || error.code === 'content-missing') {
-        return { fallbackNote: null };
-      }
-      if (error.status === 404)
-        throw new ToolError('not_found', 'Page not found in this classroom');
-      throw liveReadError(error, 'page');
-    }
-    throw error;
-  }
-}
+// `readLivePage` lives in collab/livePage.ts (the comment tools read the live
+// page too, without this module's weight); re-exported for pageRender.ts.
+export { readLivePage };
 
 /** The fields every live read reports about the version it read. */
 function liveVersionFields(snapshot: SnapshotResponse<'page'>) {

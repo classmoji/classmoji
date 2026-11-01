@@ -20,7 +20,7 @@ export function PostListItem({ post, signedIn }: { post: FeedbackPostSummary; si
 
   return (
     <article className="group relative flex gap-8 px-8 py-5 transition-colors duration-150 hover:bg-panel-hover">
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 max-w-[80ch] flex-1">
         <div className="mb-1.5 flex items-center gap-3">
           <CategoryLabel category={post.category} />
           {post.status && <StatusLabel status={post.status} />}
@@ -59,7 +59,7 @@ export function PostListItem({ post, signedIn }: { post: FeedbackPostSummary; si
         </div>
       </div>
       <VoteButton
-        className="relative z-10 self-start"
+        className="relative z-10 ml-auto self-start"
         count={vote.count}
         voted={vote.voted}
         onToggle={vote.toggle}

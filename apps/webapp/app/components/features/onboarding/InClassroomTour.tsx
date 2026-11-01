@@ -248,17 +248,17 @@ const OWNER_STEPS: FeatureStep[] = [
   },
   {
     link: '/tokens',
-    title: 'Extension tokens',
+    title: 'Extension Tokens',
     description:
-      'Tokens are a self-service deadline-extension system that replaces one-off email requests. You give students a balance of tokens, and they spend them to buy extra hours on a past-due assignment without asking you each time. This page shows the full token log for the class.',
+      'Extension Tokens are a self-service deadline-extension system that replaces one-off email requests. You give students a balance of tokens, and they spend them to buy extra hours on a past-due assignment without asking you each time. This page shows the full token log for the class.',
   },
   {
     link: '/tokens',
     selector: '[data-tour="tokens-assign"]',
     placement: 'bottom',
-    title: 'Hand out tokens',
+    title: 'Hand out Extension Tokens',
     description:
-      'Assign Tokens lets you grant tokens to one student or the whole class at once. Students spend them to extend their own deadlines, and you set the price, the tokens per hour of extension, in Settings under Extension. Allocations take effect immediately and appear in the token log.',
+      'Assign Extension Tokens lets you grant tokens to one student or the whole class at once. Students spend them to extend their own deadlines, and you set the price, the tokens per hour of extension, in Settings under Extension. Allocations take effect immediately and appear in the token log.',
   },
   {
     link: '/tokens/new',
@@ -278,7 +278,7 @@ const OWNER_STEPS: FeatureStep[] = [
     link: '/tokens/new',
     selector: '[data-tour="tokens-new-submit"]',
     placement: 'top',
-    title: 'Assign tokens',
+    title: 'Assign Extension Tokens',
     description: 'Click to grant the tokens to the chosen students.',
   },
   {
@@ -456,9 +456,9 @@ const STUDENT_STEPS: FeatureStep[] = [
   },
   {
     link: '/tokens',
-    title: 'Your tokens',
+    title: 'Your Extension Tokens',
     description:
-      'Tokens are how you give yourself extra time on a deadline without emailing your instructor. Your instructor grants you a balance, and once an assignment is past due you can spend tokens to extend it, paying a set number of tokens per hour.',
+      'Extension Tokens are how you give yourself extra time on a deadline without emailing your instructor. Your instructor grants you a balance, and once an assignment is past due you can spend tokens to extend it, paying a set number of tokens per hour.',
   },
   {
     link: '/regrade-requests',

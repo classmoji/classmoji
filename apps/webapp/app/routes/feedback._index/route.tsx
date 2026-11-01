@@ -9,7 +9,12 @@ import {
   SearchIcon,
   TrendingUpIcon,
 } from 'lucide-react';
-import { ClassmojiService, isFeedbackStatus, type FeedbackSort } from '@classmoji/services';
+import {
+  ClassmojiService,
+  isFeedbackStatus,
+  type FeedbackScope,
+  type FeedbackSort,
+} from '@classmoji/services';
 import { NewPostDialog } from '~/components/features/feedback/NewPostDialog';
 import { PostListItem } from '~/components/features/feedback/PostListItem';
 import {
@@ -40,6 +45,16 @@ const categoryParam = (value: string | null) => {
 const isSort = (value: string | null): value is FeedbackSort =>
   value === 'top' || value === 'new' || value === 'trending';
 
+/** `?view=mine|following`; anything else is the whole board. */
+const scopeParam = (value: string | null): FeedbackScope =>
+  value === 'mine' || value === 'following' ? value : 'all';
+
+const SCOPES: { id: FeedbackScope; label: string }[] = [
+  { id: 'all', label: 'All posts' },
+  { id: 'mine', label: 'My posts' },
+  { id: 'following', label: 'Following' },
+];
+
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const url = new URL(request.url);
   const sortParam = url.searchParams.get('sort');
@@ -49,15 +64,28 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   const category = categoryParam(url.searchParams.get('type'));
   const query = url.searchParams.get('q') ?? '';
   const { viewerId } = await feedbackViewer(request);
-  const [posts, shipped] = await Promise.all([
-    ClassmojiService.feedback.listPosts({ sort, status, category, query, viewerId }),
+  // Signed out, there is nothing of one's own to list: the whole board.
+  const scope = viewerId ? scopeParam(url.searchParams.get('view')) : 'all';
+  const [posts, shipped, counts] = await Promise.all([
+    ClassmojiService.feedback.listPosts({ sort, status, category, query, viewerId, scope }),
     ClassmojiService.feedback.listRecentlyShipped(5),
+    viewerId ? ClassmojiService.feedback.countViewerPosts(viewerId) : null,
   ]);
-  return { posts, shipped, sort, status, category, query, signedIn: Boolean(viewerId) };
+  return {
+    posts,
+    shipped,
+    sort,
+    status,
+    category,
+    query,
+    scope,
+    counts,
+    signedIn: Boolean(viewerId),
+  };
 };
 
 export default function FeedbackBoard() {
-  const { posts, shipped, sort, status, category, query, signedIn } =
+  const { posts, shipped, sort, status, category, query, scope, counts, signedIn } =
     useLoaderData<typeof loader>();
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -111,7 +139,7 @@ export default function FeedbackBoard() {
   };
 
   return (
-    <div className="mx-auto grid max-w-6xl gap-10 px-6 pb-24 pt-10 lg:grid-cols-[minmax(0,1fr)_280px] lg:gap-14">
+    <div className="mx-auto grid w-full max-w-[1396px] gap-10 px-6 pb-24 pt-10 lg:grid-cols-[minmax(0,1fr)_280px] lg:gap-14">
       <section
         aria-labelledby="feedback-heading"
         className="overflow-hidden rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800"
@@ -128,7 +156,45 @@ export default function FeedbackBoard() {
           </div>
         </div>
 
-        <div role="group" aria-label="Type of post" className="flex flex-wrap gap-2 px-8 pb-4">
+        {counts && (
+          <div
+            role="tablist"
+            aria-label="Whose posts"
+            className="flex gap-5 border-b border-line px-8"
+          >
+            {SCOPES.map(({ id, label }) => {
+              const count =
+                id === 'mine' ? counts.mine : id === 'following' ? counts.following : null;
+              return (
+                <button
+                  key={id}
+                  role="tab"
+                  type="button"
+                  aria-selected={scope === id}
+                  onClick={() => setParam('view', id === 'all' ? null : id)}
+                  className={`-mb-px inline-flex cursor-pointer items-center gap-1.5 border-b-2 py-2.5 text-[13px] font-medium transition-colors duration-150 ${
+                    scope === id
+                      ? 'border-accent text-ink-0'
+                      : 'border-transparent text-ink-3 hover:text-ink-0'
+                  }`}
+                >
+                  {label}
+                  {count !== null && (
+                    <span className="rounded-full bg-stone-100 px-1.5 text-[11px] font-semibold tabular-nums text-ink-2 dark:bg-neutral-800">
+                      {count}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        <div
+          role="group"
+          aria-label="Type of post"
+          className={`flex flex-wrap gap-2 px-8 pb-4 ${counts ? 'pt-4' : ''}`}
+        >
           {[null, ...CATEGORY_ORDER].map(c => (
             <button
               key={c ?? 'all'}
@@ -225,12 +291,22 @@ export default function FeedbackBoard() {
         ) : (
           <div className="px-8 py-16 text-center">
             <p className="text-sm font-semibold text-ink-0">
-              {query || status || category ? 'No posts match' : 'No posts yet'}
+              {query || status || category
+                ? 'No posts match'
+                : scope === 'mine'
+                  ? "You haven't posted yet"
+                  : scope === 'following'
+                    ? "You're not following any posts"
+                    : 'No posts yet'}
             </p>
             <p className="mt-1 text-[13px] text-ink-2">
-              {query || status || category
-                ? 'Try another filter, or create a post so others can vote on it.'
-                : 'Be the first to suggest something.'}
+              {scope !== 'all' && !(query || status || category)
+                ? scope === 'mine'
+                  ? 'Posts you write show up here.'
+                  : 'Posts you write, vote on or follow show up here.'
+                : query || status || category
+                  ? 'Try another filter, or create a post so others can vote on it.'
+                  : 'Be the first to suggest something.'}
             </p>
           </div>
         )}

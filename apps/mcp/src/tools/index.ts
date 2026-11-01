@@ -65,6 +65,14 @@ import {
   pageSectionsStatusTool,
   pageSectionUnlockTool,
 } from './pageSections.ts';
+import {
+  pageCommentCreateTool,
+  pageCommentDeleteTool,
+  pageCommentReactTool,
+  pageCommentResolveTool,
+  pageCommentUpdateTool,
+  pageCommentsListTool,
+} from './pageComments.ts';
 import { tokenGrantTool } from './tokens.ts';
 import { extensionPurchaseTool } from './extensions.ts';
 import {
@@ -270,6 +278,19 @@ export function registerAllTools(): void {
   // Check/uncheck a checkable heading: the caller's own progress mark (any
   // accepted member, like the page's checkbox), reversible, audited.
   registerToolDefinition(pageSectionCheckTool);
+
+  // Page comments (accepted members of the page's classroom, the rules in
+  // ClassmojiService.pageComments): list is a read (no VIEW row: the shared
+  // discussion); create/reply, edit own, react are writes; delete is own or,
+  // for OWNER/TEACHER, anyone's (destructive, moderation audited); resolve is
+  // the teaching team's. Writes follow the mutation rule: read-only in a
+  // LOCKED classroom.
+  registerToolDefinition(pageCommentsListTool);
+  registerToolDefinition(pageCommentCreateTool);
+  registerToolDefinition(pageCommentUpdateTool);
+  registerToolDefinition(pageCommentDeleteTool);
+  registerToolDefinition(pageCommentReactTool);
+  registerToolDefinition(pageCommentResolveTool);
 
   // Tokens (OWNER)
   registerToolDefinition(tokenGrantTool);

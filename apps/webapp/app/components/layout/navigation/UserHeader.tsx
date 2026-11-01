@@ -1,8 +1,9 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useRouteLoaderData } from 'react-router';
 import { useUser } from '~/hooks';
 import { Logo, IconDocs, IconChevron } from '@classmoji/ui-components';
 import ProfileDropdown from '~/components/features/profile/ProfileDropdown';
+import SupportModal from '~/components/features/support/SupportModal';
 import {
   NotificationBell,
   type BellNotification,
@@ -20,6 +21,8 @@ const UserHeader = () => {
   const { user } = useUser();
   const initials = getInitials(user?.name, user?.login);
   const layoutData = useRouteLoaderData('routes/_user') as UserLayoutData | undefined;
+  // The same Help & Feedback dialog the classroom sidebar opens.
+  const [supportOpen, setSupportOpen] = useState(false);
 
   // This header is sticky, so a callout at its default offset would land on
   // top of it. The card is 52px under ~30px of padding (pt-7 at a 17px root
@@ -45,13 +48,13 @@ const UserHeader = () => {
           </Link>
 
           <div className="flex items-center gap-1.5">
-            {/* Hidden until the feedback board launches.
-            <Link
-              to="/feedback"
-              className="hidden sm:inline-flex h-9 items-center rounded-lg px-2.5 text-sm font-medium text-ink-2 no-underline hover:bg-nav-hover hover:text-ink-0 transition-colors"
+            <button
+              type="button"
+              onClick={() => setSupportOpen(true)}
+              className="inline-flex h-9 items-center rounded-lg border-none bg-transparent px-2.5 text-sm font-medium text-ink-2 hover:bg-nav-hover hover:text-ink-0 transition-colors cursor-pointer whitespace-nowrap"
             >
-              Feedback
-            </Link> */}
+              Help &amp; Feedback
+            </button>
             <button
               type="button"
               title="Help & docs"
@@ -99,6 +102,7 @@ const UserHeader = () => {
           </div>
         </div>
       </div>
+      <SupportModal open={supportOpen} onClose={() => setSupportOpen(false)} />
     </div>
   );
 };

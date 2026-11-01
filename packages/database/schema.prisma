@@ -390,6 +390,10 @@ model User {
   page_section_checks           PageSectionCheck[]
   page_section_unlocks          PageSectionUnlock[]
   ask_moji_feedback             AskMojiFeedback[]
+  page_comment_threads_created  PageCommentThread[]       @relation("PageCommentThreadCreator")
+  page_comment_threads_resolved PageCommentThread[]       @relation("PageCommentThreadResolver")
+  page_comments                 PageComment[]
+  page_comment_reactions        PageCommentReaction[]
 
   @@map("users")
 }
@@ -604,7 +608,7 @@ model Classroom {
   updated_at                   DateTime        @default(now()) @updatedAt
 
   git_organization      GitOrganization       @relation(fields: [git_org_id], references: [id], onDelete: Cascade)
-  creator           User?                 @relation("ClassroomCreator", fields: [created_by], references: [id], onDelete: SetNull)
+  creator               User?                 @relation("ClassroomCreator", fields: [created_by], references: [id], onDelete: SetNull)
   plan_owner            User?                 @relation("ClassroomPlanOwner", fields: [plan_owner_id], references: [id], onDelete: SetNull)
   settings              ClassroomSettings?
   memberships           ClassroomMembership[]
@@ -635,6 +639,7 @@ model Classroom {
   team_sets             TeamSet[]
   page_section_unlocks  PageSectionUnlock[]
   ask_moji_feedback     AskMojiFeedback[]
+  page_comment_threads  PageCommentThread[]
 
   // Logically redundant now that slug is globally unique, but retained: it is
   // the compound key live upserts select on (githubClassroomImport, example
@@ -1721,6 +1726,7 @@ model Page {
   site_home_for      ClassroomSite[]         @relation("SiteHomePage")
   section_checks     PageSectionCheck[]
   section_unlocks    PageSectionUnlock[]
+  comment_threads    PageCommentThread[]
 
   @@unique([classroom_id, title])
   // The page's address on the public course site ({subdomain}/{slug}) and the
@@ -1827,6 +1833,74 @@ model PageSectionUnlock {
   @@index([classroom_id, page_id])
   @@index([user_id])
   @@map("page_section_unlocks")
+}
+
+/// A comment thread on a page: on a block (`block_id`, the BlockNote block id
+/// in content.json), optionally on a quote inside it (`quote`, and which match
+/// of it in the block's text, `quote_occurrence`), or on the page as a whole
+/// (`block_id` null). Nothing is written into the page document.
+/// `locked_section_id` is the nearest `lockedSection` enclosing the block when
+/// the thread was started, so a thread on a since-deleted block stays gated.
+/// `classroom_id` is the page's, copied from the page row.
+model PageCommentThread {
+  id                String    @id @default(uuid())
+  page_id           String
+  classroom_id      String
+  block_id          String?
+  quote             String?
+  quote_occurrence  Int       @default(0)
+  locked_section_id String?
+  created_by_id     String?
+  created_at        DateTime  @default(now())
+  resolved_at       DateTime?
+  resolved_by_id    String?
+
+  page        Page          @relation(fields: [page_id], references: [id], onDelete: Cascade)
+  classroom   Classroom     @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  created_by  User?         @relation("PageCommentThreadCreator", fields: [created_by_id], references: [id], onDelete: SetNull)
+  resolved_by User?         @relation("PageCommentThreadResolver", fields: [resolved_by_id], references: [id], onDelete: SetNull)
+  comments    PageComment[]
+
+  @@index([page_id, resolved_at])
+  @@index([classroom_id])
+  @@index([created_by_id])
+  @@index([resolved_by_id])
+  @@map("page_comment_threads")
+}
+
+/// One comment in a page comment thread, plain text. A deleted user's comments
+/// stay, with `author_id` null ("Deleted user").
+model PageComment {
+  id         String    @id @default(uuid())
+  thread_id  String
+  author_id  String?
+  body       String
+  created_at DateTime  @default(now())
+  edited_at  DateTime?
+
+  thread    PageCommentThread     @relation(fields: [thread_id], references: [id], onDelete: Cascade)
+  author    User?                 @relation(fields: [author_id], references: [id], onDelete: SetNull)
+  reactions PageCommentReaction[]
+
+  @@index([thread_id, created_at])
+  @@index([author_id])
+  @@map("page_comments")
+}
+
+/// One user's emoji reaction on a page comment: one row per comment, user and emoji.
+model PageCommentReaction {
+  id         String   @id @default(uuid())
+  comment_id String
+  user_id    String
+  emoji      String
+  created_at DateTime @default(now())
+
+  comment PageComment @relation(fields: [comment_id], references: [id], onDelete: Cascade)
+  user    User        @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([comment_id, user_id, emoji])
+  @@index([user_id])
+  @@map("page_comment_reactions")
 }
 
 model SlideLink {

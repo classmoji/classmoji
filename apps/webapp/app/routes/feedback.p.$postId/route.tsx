@@ -14,6 +14,7 @@ import {
 import { ClassmojiService } from '@classmoji/services';
 import { FeedbackAvatar } from '~/components/features/feedback/FeedbackAvatar';
 import { LinkedText } from '~/components/features/feedback/LinkedText';
+import { MaintainerBadge } from '~/components/features/feedback/MaintainerBadge';
 import { CommentComposer } from '~/components/features/feedback/CommentComposer';
 import { CommentItem } from '~/components/features/feedback/CommentItem';
 import { NewPostDialog } from '~/components/features/feedback/NewPostDialog';
@@ -120,7 +121,7 @@ export default function FeedbackPostPage() {
   }, [status.fetcher.state, status.fetcher.data]);
 
   return (
-    <div className="mx-auto grid max-w-6xl px-6 gap-12 pb-24 pt-8 lg:grid-cols-[minmax(0,1fr)_320px]">
+    <div className="mx-auto grid w-full max-w-[1396px] px-6 gap-12 pb-24 pt-8 lg:grid-cols-[minmax(0,1fr)_320px]">
       <article className="min-w-0">
         <Link
           to="/feedback"
@@ -129,7 +130,7 @@ export default function FeedbackPostPage() {
           <ChevronLeftIcon className="h-4 w-4" aria-hidden />
           Back to feedback
         </Link>
-        <h1 className="mt-4 text-balance text-2xl font-bold leading-tight tracking-tight text-ink-0">
+        <h1 className="mt-4 max-w-[70ch] text-balance text-2xl font-bold leading-tight tracking-tight text-ink-0">
           {post.title}
         </h1>
         <div className="mt-4 flex flex-col gap-3">
@@ -138,7 +139,7 @@ export default function FeedbackPostPage() {
             BUG_SECTIONS.filter(({ field }) => post[field]).map(({ field, label }) => (
               <section key={field}>
                 <h2 className="text-[13px] font-semibold text-ink-1">{label}</h2>
-                <p className="mt-1 whitespace-pre-line break-words text-sm leading-relaxed text-ink-1">
+                <p className="mt-1 max-w-[70ch] whitespace-pre-line break-words text-sm leading-relaxed text-ink-1">
                   <LinkedText text={post[field] ?? ''} />
                 </p>
               </section>
@@ -147,7 +148,7 @@ export default function FeedbackPostPage() {
             post.body.split(/\n{2,}/).map((para, i) => (
               <p
                 key={i}
-                className="whitespace-pre-line break-words text-sm leading-relaxed text-ink-1"
+                className="max-w-[70ch] whitespace-pre-line break-words text-sm leading-relaxed text-ink-1"
               >
                 <LinkedText text={para} />
               </p>
@@ -199,9 +200,11 @@ export default function FeedbackPostPage() {
                     ) : (
                       <span className="font-semibold">Status cleared</span>
                     )}
-                    <span>· Classmoji team · {formatDate(update.created_at)}</span>
+                    <span>· Classmoji team</span>
+                    <MaintainerBadge />
+                    <span>· {formatDate(update.created_at)}</span>
                   </div>
-                  <p className="mt-1 whitespace-pre-line break-words text-sm leading-relaxed text-ink-1">
+                  <p className="mt-1 max-w-[70ch] whitespace-pre-line break-words text-sm leading-relaxed text-ink-1">
                     <LinkedText text={update.note} />
                   </p>
                 </li>
@@ -253,23 +256,34 @@ export default function FeedbackPostPage() {
       </article>
 
       <aside className="flex flex-col gap-6 lg:sticky lg:top-6 lg:self-start">
-        <button
-          type="button"
-          onClick={() => follow.submit({ intent: 'follow', postId: post.id })}
-          aria-pressed={following}
-          className={`inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-lg text-[13px] font-semibold transition-colors duration-150 ${
-            following
-              ? 'border border-line-2 bg-panel text-ink-0 hover:border-line-strong'
-              : 'bg-accent text-white hover:bg-accent-hover'
-          }`}
-        >
-          {following ? (
-            <BellOffIcon className="h-4 w-4" aria-hidden />
-          ) : (
+        {/* Following says so, with Unfollow beside it; otherwise one button. */}
+        {following ? (
+          <div className="flex items-center justify-between gap-3 rounded-xl bg-panel px-4 py-3 ring-1 ring-stone-200 dark:ring-neutral-800">
+            <span className="inline-flex items-center gap-2 text-[13px] font-semibold text-accent-ink">
+              <BellIcon className="h-4 w-4" aria-hidden />
+              Following updates
+            </span>
+            <button
+              type="button"
+              onClick={() => follow.submit({ intent: 'follow', postId: post.id })}
+              aria-pressed
+              className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border border-line-2 bg-panel px-3 text-[12px] font-semibold text-ink-1 transition-colors duration-150 hover:border-line-strong"
+            >
+              <BellOffIcon className="h-3.5 w-3.5" aria-hidden />
+              Unfollow
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => follow.submit({ intent: 'follow', postId: post.id })}
+            aria-pressed={false}
+            className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-lg bg-accent text-[13px] font-semibold text-white transition-colors duration-150 hover:bg-accent-hover"
+          >
             <BellIcon className="h-4 w-4" aria-hidden />
-          )}
-          {following ? 'Unfollow' : 'Follow this post'}
-        </button>
+            Follow this post
+          </button>
+        )}
 
         <dl className="rounded-xl bg-panel p-4 text-[13px] ring-1 ring-stone-200 dark:ring-neutral-800">
           {[
@@ -289,6 +303,7 @@ export default function FeedbackPostPage() {
                   />
                 )}
                 {value}
+                {label === 'Created by' && post.authorIsMaintainer && <MaintainerBadge />}
               </dd>
             </div>
           ))}

@@ -249,10 +249,10 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
       },
     },
     {
-      title: 'Tokens',
+      title: 'Extension Tokens',
       dataIndex: 'extra_tokens',
       key: 'extra_tokens',
-      width: 90,
+      width: 130,
       render: (_: number, record: EmojiMappingRecord) => {
         const isEditing =
           editingCell?.emoji === record.emoji && editingCell?.field === 'extra_tokens';

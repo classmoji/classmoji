@@ -94,12 +94,16 @@ import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
 import { MEMBER } from '../resources/shape.ts';
 import { ok, requireClassroomCtx, scopedNotFound } from './shared.ts';
 import {
-  draftHiddenFromCaller,
-  pageDraftHiddenFromCaller,
-  pageTextForViewer,
+  findPageInClassroom,
+  loadPageBlocks,
+  pageHiddenFrom,
+  parsePageBlocks,
+  readerRuleFor,
   viewerPageText,
+  type SectionPageRecord,
   type ViewerPageText,
 } from './pageSections.ts';
+import { openCommentFields } from './pageComments.ts';
 
 // ─── Shared input pieces ────────────────────────────────────────────────────
 
@@ -611,6 +615,8 @@ interface LiveDocument {
    * checked headings): `text` is this viewer's own, these are its side fields.
    */
   sectionFields?: Omit<ViewerPageText, 'text'>;
+  /** A page's `open_comments` for the caller (pageComments.ts), when they may read them. */
+  commentFields?: Awaited<ReturnType<typeof openCommentFields>>;
 }
 
 /**
@@ -695,7 +701,10 @@ async function readLiveDocument(
   // as the page itself does. It gives the same answer as the predicate above
   // (both read the any-state role against OWNER/TEACHER/ASSISTANT); kept so the
   // pages app's rule is the one this path states.
-  if (kind === 'page' && (await draftHiddenFromCaller(record, ctx))) return null;
+  // The caller's reader rule is read once, for this and the per-viewer text
+  // and comment count below.
+  const rule = kind === 'page' ? await readerRuleFor(ctx) : undefined;
+  if (kind === 'page' && rule && pageHiddenFrom(record, rule)) return null;
 
   // A FILE or LINK slide has no `index.html` to read: its content is an
   // uploaded document (a PDF, whose bytes are not text anyone should be handed)
@@ -748,14 +757,26 @@ async function readLiveDocument(
     // A page with locked sections or checkable headings: the text is this
     // viewer's own (bodies they may read, a marker line for the rest, their
     // own checked state), built from the same bytes.
+    // The caller's open comment threads on the page, from the same blocks (a
+    // legacy HTML page is an empty document: page-level threads only).
+    const commentFields =
+      kind === 'page'
+        ? await openCommentFields(
+            record as unknown as SectionPageRecord,
+            path.endsWith('.json') ? parsePageBlocks(body.text) : null,
+            ctx,
+            rule
+          )
+        : {};
     if (kind === 'page' && path.endsWith('.json')) {
-      const personal = await viewerPageText(record, body.text, ctx);
+      const personal = await viewerPageText(record, body.text, ctx, rule);
       if (personal) {
         return {
           title: record.title,
           sourcePath: path,
           text: personal.text,
           sectionFields: sectionFieldsOf(personal),
+          commentFields,
         };
       }
     }
@@ -763,7 +784,7 @@ async function readLiveDocument(
     // `.text` only — never `.notes` (instructor-facing speaker notes) and never
     // `.references` (labels copied from other documents, whose own draft state
     // this one says nothing about).
-    return { title: record.title, sourcePath: path, text: extracted.text };
+    return { title: record.title, sourcePath: path, text: extracted.text, commentFields };
   }
 
   throw new ToolError(
@@ -782,7 +803,8 @@ export const contentGetTool: ToolDefinition<ContentGetArgs> = {
     'notes are never included; a locked page section the caller has not unlocked appears only ' +
     'as a "[Locked section ...]" line, a checkable heading ends with the caller\'s own ' +
     '"[done]" or "[not done]" state, and a student check list item starts with their own ' +
-    '"[x]" or "[ ]"). ' +
+    '"[x]" or "[ ]"; `open_comments` counts the open comment threads you can read, listed by ' +
+    'page_comments_list). ' +
     "For `kind: 'doc'` it is a Classmoji product documentation page from classmoji.io: pass the " +
     'page slug as `id`, and the response carries the canonical `url` you may cite. ' +
     'Use it after content_search or content_list to read a document a snippet only hinted at.',
@@ -842,23 +864,27 @@ export const contentGetTool: ToolDefinition<ContentGetArgs> = {
         docKind: args.kind,
         docId: args.id,
       });
+      // The page row and the caller's reader rule, read once for the draft
+      // rule, the per-viewer text and the comment count.
+      const page = args.kind === 'page' ? await findPageInClassroom(args.id, ctx) : null;
+      const rule = page ? await readerRuleFor(ctx) : undefined;
       // A draft page: only with `canViewDrafts`, as on the page (the index row
       // may not say whether it is a draft: ask the row).
-      if (
-        args.kind === 'page' &&
-        document.isDraft !== false &&
-        (await pageDraftHiddenFromCaller(args.id, ctx))
-      ) {
+      if (page && rule && document.isDraft !== false && pageHiddenFrom(page, rule)) {
         throw contentNotFound();
       }
       // The index holds one text for everyone, and never a locked section's
       // body. A page whose content.json holds locked sections or checkable
       // headings is answered with this viewer's own text instead
       // (pageSections.ts); legacy HTML pages cannot hold either.
-      const personal =
-        args.kind === 'page' && document.sourcePath.endsWith('content.json')
-          ? await pageTextForViewer(args.id, ctx)
+      // content.json read once, shared by the per-viewer text and the comment
+      // count (a legacy HTML page: no blocks, page-level threads only).
+      const blocks =
+        page && document.sourcePath.endsWith('content.json')
+          ? await loadPageBlocks(page, 'content_get')
           : null;
+      const personal = page && blocks ? await viewerPageText(page, blocks, ctx, rule) : null;
+      const commentFields = page ? await openCommentFields(page, blocks, ctx, rule) : {};
       return ok({
         kind: document.docKind,
         id: document.docId,
@@ -868,6 +894,7 @@ export const contentGetTool: ToolDefinition<ContentGetArgs> = {
         chunk_count: document.chunkCount,
         text: personal ? personal.text : document.text,
         ...(personal ? sectionFieldsOf(personal) : {}),
+        ...commentFields,
         ...(typeof document.isDraft === 'boolean' ? { isDraft: document.isDraft } : {}),
       });
     } catch (error) {
@@ -887,6 +914,7 @@ export const contentGetTool: ToolDefinition<ContentGetArgs> = {
         indexed: false,
         text: live.text,
         ...(live.sectionFields ?? {}),
+        ...(live.commentFields ?? {}),
       });
     }
   },
