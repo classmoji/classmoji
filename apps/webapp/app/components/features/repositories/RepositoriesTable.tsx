@@ -274,18 +274,23 @@ const RepositoriesTable = ({
     .filter(node => node.children?.length && !collapsed.has(node.key))
     .map(node => node.key);
 
+  // Sits beside the expand chevron (or its spacer, 1.25rem + 0.5rem margin) and
+  // wraps its tags there; a wider block would drop below the spacer, unindented.
+  const NAME_CELL =
+    'inline-flex max-w-[calc(100%-1.75rem)] flex-wrap items-center gap-x-2 gap-y-1 align-middle';
+
   const columns = [
     {
       title: terms.Repo,
       dataIndex: 'name',
       key: 'name',
-      width: 240,
+      // No width: the name takes the room left over, so Type and Weight stay narrow.
       sorter: (a: TreeNode, b: TreeNode) => a.name.localeCompare(b.name),
       render: (_: unknown, record: TreeNode) => {
         if (record.kind === 'assignment') {
           const a = record.assignment!;
           return (
-            <span className="inline-flex items-center gap-2 align-middle">
+            <span className={NAME_CELL}>
               <IconFileText size={16} className="text-gray-400 shrink-0" />
               <span className="text-ink-1">{record.name}</span>
               {record.showMode && (
@@ -312,19 +317,12 @@ const RepositoriesTable = ({
         // both tags show if it somehow carries a mix.
         const hasPush = (r.assignments ?? []).some(a => a.submission_mode === 'REPO');
         return (
-          <span className="inline-flex items-center gap-2 align-middle">
+          <span className={NAME_CELL}>
             <IconFolder size={18} className="text-gray-400 shrink-0" />
             <span className="font-semibold text-ink-1">{record.name}</span>
             {hasPush && (
               <Tag color="geekblue" className="m-0 shrink-0 font-medium">
                 push
-              </Tag>
-            )}
-            {/* Status is the repository's; a folded assignment still in draft
-                would otherwise go unseen. */}
-            {record.folded && !record.folded.is_published && (
-              <Tag color="orange" className="m-0 shrink-0 font-medium">
-                Assignment draft
               </Tag>
             )}
             {record.folded?.is_extra_credit && (
@@ -355,9 +353,9 @@ const RepositoriesTable = ({
     {
       title: 'Type',
       key: 'type',
-      width: 130,
+      width: 110,
       render: (_: unknown, record: TreeNode) => (
-        <span className="text-ink-2">
+        <span className="text-ink-2 whitespace-nowrap">
           {prettyType(record.repositoryType)}
           {record.repositoryType === 'GROUP' && (
             <span className="text-ink-3">
@@ -371,7 +369,7 @@ const RepositoriesTable = ({
     {
       title: 'Weight (%)',
       key: 'weight',
-      width: 110,
+      width: 100,
       // A repository has no weight of its own; the assignments that submit
       // through it carry the whole grade.
       render: (_: unknown, record: TreeNode) =>
