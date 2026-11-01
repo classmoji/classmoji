@@ -93,7 +93,13 @@ const OrgSelect = ({ memberships }: OrgSelectProps) => {
           },
         }}
         options={memberships
-          ?.filter(m => !(m.organization as { is_example?: boolean }).is_example)
+          // Example, archived and not-yet-accepted classes live on the
+          // classroom picker only; the class you are in always stays listed.
+          ?.filter(
+            m =>
+              m.id === membership?.id ||
+              (!m.organization.is_example && !m.organization.is_archived && m.has_accepted_invite)
+          )
           .sort(
             (a, b) =>
               new Date(b.organization.created_at ?? 0).getTime() -
