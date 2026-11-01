@@ -6,6 +6,7 @@ import getPrisma from '@classmoji/database';
 import type { AskMojiAccess } from '@classmoji/services';
 import type { Role } from '@prisma/client';
 import { ClassmojiService } from '@classmoji/services';
+import { noteSeen } from './lastSeen';
 
 // The signing secret and the cookie prefix live in ./secret.ts so that modules
 // which only need to sign something (./siteReturnToken.ts) can share them
@@ -610,6 +611,15 @@ export const auth = betterAuth({
           if (id !== 'github' && id !== 'gitlab') return;
           return { data: { ...session, sign_in_provider: id.toUpperCase() } };
         },
+        // A real sign-in (not "View as"): stamp first sign-in and last seen
+        // right away, unthrottled.
+        after: async session => {
+          noteSeen(
+            (session as { userId?: string }).userId,
+            (session as { impersonatedBy?: unknown }).impersonatedBy,
+            { force: true }
+          );
+        },
       },
     },
     account: {
@@ -800,6 +810,8 @@ export async function getAuthSession(request: Request): Promise<AuthSessionResul
   if (session?.user) {
     const userId = session.user.id;
     const cacheKey = `token:${userId}`;
+    // Throttled, not awaited; skips impersonated sessions.
+    noteSeen(userId, (session.session as { impersonatedBy?: unknown }).impersonatedBy);
 
     // 1. Check in-memory cache first
     const cachedToken = getCached<string>(cacheKey);

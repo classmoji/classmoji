@@ -337,6 +337,15 @@ model User {
   // A timestamp records that the user finished (or skipped) the tour.
   onboarding_completed_at DateTime?
 
+  /// First time this person signed in themselves (never an impersonation). A
+  /// roster placeholder has a user row long before this; analytics date a
+  /// signup by this column, never by created_at. Null = never signed in.
+  /// Rows from before the column were backfilled from sessions, then created_at.
+  first_sign_in_at DateTime?
+  /// Last request the person made in the webapp (never an impersonation),
+  /// written at most every 10 minutes by `noteSeen` (@classmoji/auth).
+  last_seen_at     DateTime?
+
   // Relations
   accounts                      Account[]
   sessions                      Session[]                 @relation("SessionUser")
@@ -394,7 +403,10 @@ model User {
   page_comment_threads_resolved PageCommentThread[]       @relation("PageCommentThreadResolver")
   page_comments                 PageComment[]
   page_comment_reactions        PageCommentReaction[]
+  platform_audit_logs           PlatformAuditLog[]        @relation("PlatformAuditActor")
 
+  @@index([last_seen_at])
+  @@index([first_sign_in_at])
   @@map("users")
 }
 
@@ -1466,6 +1478,33 @@ model AuditLog {
   @@index([user_id])
   @@index([timestamp])
   @@map("audit_logs")
+}
+
+/// What platform admins did in apps/admin: impersonations, content-delivery
+/// switches, staff reads of a person's page. Separate from AuditLog because
+/// that table needs a classroom and a classroom role, and a platform admin has
+/// neither. Rows outlive their target: no FK on target_id/classroom_id, and a
+/// deleted actor leaves the row with a null actor. Feedback actions are NOT
+/// written here (decided for #739).
+model PlatformAuditLog {
+  id           String   @id @default(uuid())
+  actor_id     String?
+  /// Dotted name, e.g. `impersonate`, `delivery.toggle`, `delivery.bulk`, `user.view`.
+  action       String
+  /// `user` | `classroom` | `classrooms`
+  target_type  String
+  target_id    String?
+  classroom_id String?
+  /// Structured detail (counts, filters, reason). Never secrets or free text from others.
+  data         Json?
+  created_at   DateTime @default(now())
+
+  actor User? @relation("PlatformAuditActor", fields: [actor_id], references: [id], onDelete: SetNull)
+
+  @@index([created_at])
+  @@index([actor_id])
+  @@index([target_id])
+  @@map("platform_audit_logs")
 }
 
 // ============================================================================
