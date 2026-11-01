@@ -149,16 +149,16 @@ const PY = /(\b(?:for|in|if|return)\b|\benumerate\b|\d+)/g;
 /** Github-light colors, as the card's highlight.js theme draws Python. */
 function Code({ lines }: { lines: string[] }) {
   return (
-    <pre className="m-0 overflow-hidden rounded-md border border-[#d0d7de] bg-[#f6f8fa] p-2.5 font-sans text-[11px] leading-[1.5] text-[#1f2328]">
+    <pre className="m-0 overflow-hidden rounded-md border border-[#d0d7de] dark:border-line-2-dark bg-[#f6f8fa] dark:bg-term p-2.5 font-sans text-[11px] leading-[1.5] text-[#1f2328] dark:text-inkd-0">
       {lines.map((line, i) => (
         <div key={i}>
           {line.split(PY).map((part, j) =>
             /^(for|in|if|return)$/.test(part) ? (
-              <span key={j} className="text-[#cf222e]">
+              <span key={j} className="text-[#cf222e] dark:text-[#ff7b72]">
                 {part}
               </span>
             ) : part === 'enumerate' ? (
-              <span key={j} className="text-[#0550ae]">
+              <span key={j} className="text-[#0550ae] dark:text-[#79c0ff]">
                 {part}
               </span>
             ) : (
@@ -185,7 +185,7 @@ function AssistantBubble({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex items-start gap-2">
       <AssistantAvatar />
-      <div className="max-w-[70%] break-words rounded-lg border border-[#d9d9d9] bg-white px-3 py-2 text-[12px] leading-[1.5] text-gray-900">
+      <div className="max-w-[70%] break-words rounded-lg border border-[#d9d9d9] dark:border-line-2-dark bg-white dark:bg-panel-hover-dark px-3 py-2 text-[12px] leading-[1.5] text-gray-900 dark:text-inkd-0">
         {children}
       </div>
     </div>
@@ -195,7 +195,7 @@ function AssistantBubble({ children }: { children: React.ReactNode }) {
 function UserBubble({ text }: { text: string }) {
   return (
     <div className="flex items-start justify-end gap-2">
-      <div className="max-w-[70%] break-words rounded-lg bg-[#f0f2f5] px-3 py-2 text-[12px] leading-[1.5] text-gray-900">
+      <div className="max-w-[70%] break-words rounded-lg bg-[#f0f2f5] dark:bg-[#23283a] px-3 py-2 text-[12px] leading-[1.5] text-gray-900 dark:text-inkd-0">
         {text}
       </div>
       <Avatar size={28} style={{ backgroundColor: '#52c41a', flexShrink: 0 }}>
@@ -208,18 +208,18 @@ function UserBubble({ text }: { text: string }) {
 /** StepList: "Code Analysis (N steps)", the files read, open only while reading. */
 function Steps({ files, open }: { files: number; open: boolean }) {
   return (
-    <div className="w-[70%] overflow-hidden rounded-lg border border-[#d9d9d9] bg-[#fafafa] text-[11.5px]">
-      <div className="flex items-center gap-1.5 px-3 py-1.5 text-gray-500">
+    <div className="w-[70%] overflow-hidden rounded-lg border border-[#d9d9d9] dark:border-line-2-dark bg-[#fafafa] dark:bg-panel-hover-dark text-[11.5px]">
+      <div className="flex items-center gap-1.5 px-3 py-1.5 text-gray-500 dark:text-inkd-3">
         <span className={`text-[9px] transition-transform ${open ? 'rotate-90' : ''}`}>▶</span>
         <RocketOutlined style={{ color: '#3b82f6' }} />
         Code Analysis ({files} {files === 1 ? 'step' : 'steps'})
       </div>
       {open && (
-        <ul className="m-0 list-none border-t border-[#d9d9d9] bg-white px-3 py-1.5">
+        <ul className="m-0 list-none border-t border-[#d9d9d9] dark:border-line-2-dark bg-white dark:bg-panel-dark px-3 py-1.5">
           {FILES.slice(0, files).map(f => (
             <li
               key={f}
-              className="flex items-center gap-2 py-0.5 font-sans text-[11px] text-gray-500"
+              className="flex items-center gap-2 py-0.5 font-sans text-[11px] text-gray-500 dark:text-inkd-3"
             >
               <FileTextOutlined style={{ color: '#10b981' }} />
               {f}
@@ -236,19 +236,19 @@ function Question({ n, code, text }: { n: number; code: typeof CODE1; text: stri
   return (
     <div className="flex items-start gap-2">
       <AssistantAvatar />
-      <div className="max-w-[70%] rounded-lg border border-[#d9d9d9] bg-white p-2">
-        <div className="rounded-lg border border-[#91caff] bg-[#e6f4ff] px-3 py-2.5">
-          <div className="mb-2 flex items-center gap-1.5 border-b border-[#91caff] pb-1.5">
+      <div className="max-w-[70%] rounded-lg border border-[#d9d9d9] dark:border-line-2-dark bg-white dark:bg-panel-hover-dark p-2">
+        <div className="rounded-lg border border-[#91caff] dark:border-sky-line-dark bg-[#e6f4ff] dark:bg-sky-bg-dark px-3 py-2.5">
+          <div className="mb-2 flex items-center gap-1.5 border-b border-[#91caff] dark:border-sky-line-dark pb-1.5">
             <QuestionCircleOutlined style={{ fontSize: 15, color: '#1890ff' }} />
-            <span className="text-[12.5px] font-semibold text-[#0958d9]">Question {n} of 2</span>
+            <span className="text-[12.5px] font-semibold text-[#0958d9] dark:text-sky-ink-dark">Question {n} of 2</span>
           </div>
-          <div className="mb-1 flex items-center gap-1.5 text-[11px] text-[#4b5563]">
+          <div className="mb-1 flex items-center gap-1.5 text-[11px] text-[#4b5563] dark:text-inkd-2">
             <span className="font-[family-name:monospace]">{code.path}</span>
             <span aria-hidden>·</span>
             <span>{code.lines.includes('–') ? `lines ${code.lines}` : `line ${code.lines}`}</span>
           </div>
           <Code lines={code.code} />
-          <p className="mb-0 mt-2 text-[12.5px] leading-[1.5] text-[#1f2937]">{text}</p>
+          <p className="mb-0 mt-2 text-[12.5px] leading-[1.5] text-[#1f2937] dark:text-inkd-0">{text}</p>
         </div>
       </div>
     </div>
@@ -280,11 +280,11 @@ function Completed({ n, emoji, text }: { n: number; emoji: string; text: string 
   return (
     <div className="flex items-start gap-2">
       <AssistantAvatar />
-      <div className="rounded-lg border border-[#d9d9d9] bg-white px-3 py-2 text-[12px] leading-[1.5]">
-        <div className="text-[#374151]">
+      <div className="rounded-lg border border-[#d9d9d9] dark:border-line-2-dark bg-white dark:bg-panel-hover-dark px-3 py-2 text-[12px] leading-[1.5]">
+        <div className="text-[#374151] dark:text-inkd-1">
           completed question {n}: <span className="text-[14px]">{emoji}</span>
         </div>
-        <div className="text-[#666]">{text}</div>
+        <div className="text-[#666] dark:text-inkd-2">{text}</div>
       </div>
     </div>
   );
@@ -317,21 +317,21 @@ function Results() {
             strokeColor="#1890ff"
             format={p => (
               <div>
-                <div className="text-[18px] font-bold text-gray-900">{p}%</div>
-                <div className="text-[11px] text-gray-500">Score</div>
+                <div className="text-[18px] font-bold text-gray-900 dark:text-inkd-0">{p}%</div>
+                <div className="text-[11px] text-gray-500 dark:text-inkd-3">Score</div>
               </div>
             )}
           />
           <div className="min-w-0 flex-1">
-            <div className="text-[12.5px] font-semibold text-gray-900">Summary</div>
-            <p className="m-0 text-[12px] text-gray-700">
+            <div className="text-[12.5px] font-semibold text-gray-900 dark:text-inkd-0">Summary</div>
+            <p className="m-0 text-[12px] text-gray-700 dark:text-inkd-1">
               Strong on why the hash map makes solve() linear. Collisions need another look.
             </p>
-            <div className="mt-2 text-[12.5px] font-semibold text-gray-900">
+            <div className="mt-2 text-[12.5px] font-semibold text-gray-900 dark:text-inkd-0">
               <CheckCircleOutlined style={{ color: '#52c41a', marginRight: 6 }} />
               Strengths
             </div>
-            <p className="m-0 text-[12px] text-gray-700">Explains average O(1) lookups clearly.</p>
+            <p className="m-0 text-[12px] text-gray-700 dark:text-inkd-1">Explains average O(1) lookups clearly.</p>
           </div>
         </div>
       </Card>
@@ -360,11 +360,11 @@ export function QuizDemo() {
         <Compact>
           <section
             aria-label="Code review quiz"
-            className="absolute inset-y-0 right-0 flex w-[90%] flex-col bg-white shadow-[-6px_0_16px_0_rgba(0,0,0,0.08),-3px_0_6px_-4px_rgba(0,0,0,0.12),-9px_0_28px_8px_rgba(0,0,0,0.05)]"
+            className="absolute inset-y-0 right-0 flex w-[90%] flex-col bg-white dark:bg-panel-dark shadow-[-6px_0_16px_0_rgba(0,0,0,0.08),-3px_0_6px_-4px_rgba(0,0,0,0.12),-9px_0_28px_8px_rgba(0,0,0,0.05)]"
           >
-            <header className="flex h-11 shrink-0 items-center gap-3 border-b border-[#f0f0f0] bg-[#f9f9f9] px-4">
-              <CloseOutlined style={{ fontSize: 13, color: 'rgba(0,0,0,0.45)' }} />
-              <span className="text-[14px] font-semibold text-[rgba(0,0,0,0.88)]">
+            <header className="flex h-11 shrink-0 items-center gap-3 border-b border-[#f0f0f0] dark:border-line-dark bg-[#f9f9f9] dark:bg-[#1c2030] px-4">
+              <CloseOutlined style={{ fontSize: 13 }} className="text-[rgba(0,0,0,0.45)] dark:text-inkd-3" />
+              <span className="text-[14px] font-semibold text-[rgba(0,0,0,0.88)] dark:text-inkd-0">
                 <span className="mr-1.5 text-[16px]">🧑‍💻</span>
                 {QUIZ}
               </span>
@@ -407,7 +407,7 @@ export function QuizDemo() {
                 {s.thinking && (
                   <div className="flex items-start gap-2">
                     <AssistantAvatar />
-                    <div className="flex items-center gap-2 rounded-lg border border-[#d9d9d9] bg-white px-3 py-2">
+                    <div className="flex items-center gap-2 rounded-lg border border-[#d9d9d9] dark:border-line-2-dark bg-white dark:bg-panel-hover-dark px-3 py-2">
                       <span className="flex gap-1">
                         {[0, 1, 2].map(d => (
                           <span
@@ -417,17 +417,17 @@ export function QuizDemo() {
                           />
                         ))}
                       </span>
-                      <span className="text-[12px] text-[rgba(0,0,0,0.45)]">{s.thinking}</span>
+                      <span className="text-[12px] text-[rgba(0,0,0,0.45)] dark:text-inkd-3">{s.thinking}</span>
                     </div>
                   </div>
                 )}
               </div>
 
-              <div className="mt-3 shrink-0 border-t border-[#f0f0f0] pt-3">
+              <div className="mt-3 shrink-0 border-t border-[#f0f0f0] dark:border-line-dark pt-3">
                 <div
-                  className={`overflow-hidden rounded-lg border border-[#e5e7eb] ${s.phase === 'done' ? 'opacity-50' : ''}`}
+                  className={`overflow-hidden rounded-lg border border-[#e5e7eb] dark:border-line-dark ${s.phase === 'done' ? 'opacity-50' : ''}`}
                 >
-                  <div className="flex items-center gap-2 border-b border-[#e5e7eb] bg-gray-50 px-2 py-1">
+                  <div className="flex items-center gap-2 border-b border-[#e5e7eb] dark:border-line-dark bg-gray-50 dark:bg-[#1c2030] px-2 py-1">
                     <Select
                       size="small"
                       value="javascript"
@@ -442,7 +442,7 @@ export function QuizDemo() {
                     >
                       Insert Code
                     </Button>
-                    <span className="ml-auto text-[11px] text-gray-500">
+                    <span className="ml-auto text-[11px] text-gray-500 dark:text-inkd-3">
                       Click Send to submit your message
                     </span>
                   </div>
@@ -451,16 +451,16 @@ export function QuizDemo() {
                     className="min-h-[38px] px-3 py-2 text-[12px] leading-[1.5]"
                   >
                     {s.draft ? (
-                      <span className="text-gray-900">{s.draft}</span>
+                      <span className="text-gray-900 dark:text-inkd-0">{s.draft}</span>
                     ) : (
-                      <span className="text-gray-400">
+                      <span className="text-gray-400 dark:text-inkd-4">
                         {s.phase === 'done'
                           ? 'Quiz completed!'
                           : 'Type your response... (use Code button to add code snippets)'}
                       </span>
                     )}
                   </div>
-                  <div className="flex justify-end border-t border-[#e5e7eb] px-2 py-1">
+                  <div className="flex justify-end border-t border-[#e5e7eb] dark:border-line-dark px-2 py-1">
                     <span data-cursor="send">
                       <Button
                         size="small"

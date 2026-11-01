@@ -18,13 +18,13 @@ const toc = headings.filter((h) => h.depth >= 2 && h.depth <= 3);
 {toc.length > 0 && (
   <nav class="hidden lg:block">
     <div class="sticky top-32">
-      <p class="text-sm font-semibold text-gray-900 mb-4">On this page</p>
+      <p class="text-sm font-semibold text-gray-900 dark:text-inkd-0 mb-4">On this page</p>
       <ul class="space-y-2 text-sm">
         {toc.map((heading) => (
           <li class={heading.depth === 3 ? 'pl-4' : ''}>
             <a
               href={`#${heading.slug}`}
-              class="text-gray-500 hover:text-gray-900 transition-colors block py-1"
+              class="text-gray-500 dark:text-inkd-3 hover:text-gray-900 dark:hover:text-inkd-0 transition-colors block py-1"
             >
               {heading.text}
             </a>

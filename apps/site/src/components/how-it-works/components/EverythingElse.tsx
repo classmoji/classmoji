@@ -72,7 +72,7 @@ export function EverythingElse() {
       <div className="mx-auto max-w-2xl text-center">
         <h2
           id="everything-else-heading"
-          className="text-balance text-[2rem] font-bold leading-[1.15] tracking-tight text-ink-0 sm:text-[2.375rem]"
+          className="text-balance text-[2rem] font-bold leading-[1.15] tracking-tight text-ink-0 dark:text-inkd-0 sm:text-[2.375rem]"
         >
           And everything else a course needs.
         </h2>
@@ -81,23 +81,23 @@ export function EverythingElse() {
         {ITEMS.map(({ icon: Icon, title, description, href }) => {
           const body = (
             <>
-              <Icon className="h-5 w-5 text-accent" aria-hidden />
-              <p className="mt-4 text-[1rem] font-semibold text-ink-0">{title}</p>
-              <p className="mt-1.5 text-[0.9375rem] leading-relaxed text-ink-3">{description}</p>
+              <Icon className="h-5 w-5 text-accent dark:text-[#6BE39B]" aria-hidden />
+              <p className="mt-4 text-[1rem] font-semibold text-ink-0 dark:text-inkd-0">{title}</p>
+              <p className="mt-1.5 text-[0.9375rem] leading-relaxed text-ink-3 dark:text-inkd-3">{description}</p>
               {href && (
-                <span className="mt-4 inline-flex items-center gap-1 text-[0.875rem] font-medium text-accent">
+                <span className="mt-4 inline-flex items-center gap-1 text-[0.875rem] font-medium text-accent dark:text-[#6BE39B]">
                   Learn more <span aria-hidden>→</span>
                 </span>
               )}
             </>
           );
-          const box = 'flex h-full flex-col rounded-xl bg-[#F2F1EE] p-6';
+          const box = 'flex h-full flex-col rounded-xl bg-[#F2F1EE] p-6 dark:bg-panel-dark';
           return (
             <li key={title}>
               {href ? (
                 <a
                   href={href}
-                  className={`${box} transition-colors duration-150 hover:bg-[#EAE8E3] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent`}
+                  className={`${box} transition-colors duration-150 hover:bg-[#EAE8E3] dark:hover:bg-panel-hover-dark focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent`}
                 >
                   {body}
                 </a>
@@ -112,7 +112,7 @@ export function EverythingElse() {
         <span className="font-semibold text-ink-0 dark:text-inkd-0">Missing something?</span>{' '}
         <a
           href="https://app.classmoji.io/feedback"
-          className="inline-flex items-center gap-1 rounded font-medium text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          className="inline-flex items-center gap-1 rounded font-medium text-accent hover:underline dark:text-[#6BE39B] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         >
           Tell us what your class needs <span aria-hidden>→</span>
         </a>

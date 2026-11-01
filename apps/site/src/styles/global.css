@@ -1,7 +1,7 @@
 @import 'tailwindcss';
 
-/* The site is light-only: `dark:` styles apply under a `.dark` class, which
-   nothing sets, instead of following the OS setting. */
+/* `dark:` styles apply under a `.dark` class on <html>, which Layout.astro sets
+   from the OS setting (and keeps in sync when it changes). */
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
@@ -102,6 +102,49 @@
 
   --shadow-card: 0 1px 2px rgba(20, 10, 40, 0.04);
   --shadow-float: 0 10px 30px rgba(20, 25, 50, 0.12), 0 2px 6px rgba(20, 25, 50, 0.06);
+}
+
+/* Dark mode: the light tokens take their `*-dark` values, so `bg-panel`,
+   `text-ink-2`, `border-line`, `bg-mint-bg`… flip without a `dark:` pair.
+   Literal values (not var(--color-*-dark)) so no token refers to itself. */
+.dark {
+  --color-page: #0a0d17;
+  --color-app: #0a0d17;
+  --color-panel: #171a25;
+  --color-panel-hover: #1e2232;
+  --color-line: #262a38;
+  --color-line-2: #323648;
+  --color-line-strong: #474c62;
+  --color-edge: #262626;
+  --color-ink-0: #f1f2f6;
+  --color-ink-1: #d9dbe3;
+  --color-ink-2: #a4a9b8;
+  --color-ink-3: #9398a6;
+  --color-ink-4: #767c8c;
+  --color-navhover: rgba(241, 242, 246, 0.08);
+  --color-bar: #262a38;
+  --color-mint-bg: #13291b;
+  --color-mint-line: #1f4a2e;
+  --color-mint-ink: #7fd497;
+  --color-peach-bg: #3a1e1a;
+  --color-peach-line: #5c2e27;
+  --color-peach-ink: #f5b29d;
+  --color-sky-bg: #172741;
+  --color-sky-line: #24406a;
+  --color-sky-ink: #a9c8f5;
+  --color-lilac-bg: #23204a;
+  --color-lilac-line: #3a3570;
+  --color-lilac-ink: #c9c2ff;
+  --color-amber-bg: #33270f;
+  --color-amber-line: #5a4718;
+  --color-amber-ink: #f1cf75;
+  --color-rose-bg: #3b1822;
+  --color-rose-line: #612a39;
+  --color-rose-ink: #f7a8ba;
+  --color-question: #8db4ff;
+  --color-question-line: #2a3f66;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-float: 0 10px 30px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.3);
 }
 
 /* "How it works" demo animations: the terminal caret and the typing dots. */
@@ -249,4 +292,34 @@ html {
 
 .prose em {
   font-style: italic;
+}
+
+/* Prose in dark mode (blog posts, legal pages). */
+.dark .prose {
+  color: #d9dbe3;
+}
+.dark .prose h1,
+.dark .prose h2,
+.dark .prose h3,
+.dark .prose strong {
+  color: #f1f2f6;
+}
+.dark .prose a {
+  color: #7fd497;
+}
+.dark .prose a:hover {
+  color: #a6e3b6;
+}
+.dark .prose hr {
+  border-color: #262a38;
+}
+.dark .prose code {
+  background-color: #1e2232;
+}
+.dark .prose pre {
+  background-color: #0f1117;
+  border: 1px solid #262a38;
+}
+.dark .prose blockquote {
+  color: #a4a9b8;
 }

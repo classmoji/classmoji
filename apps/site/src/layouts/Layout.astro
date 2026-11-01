@@ -34,8 +34,23 @@ const {
     />
 
     <title>{title}</title>
+
+    <!-- Dark mode follows the OS setting, like the webapp: `.dark` on <html>
+         turns on every `dark:` style. Inline and blocking so the page never
+         flashes light first. -->
+    <script is:inline>
+      (() => {
+        const query = window.matchMedia('(prefers-color-scheme: dark)');
+        const apply = () => {
+          document.documentElement.classList.toggle('dark', query.matches);
+          document.documentElement.style.colorScheme = query.matches ? 'dark' : 'light';
+        };
+        apply();
+        query.addEventListener('change', apply);
+      })();
+    </script>
   </head>
-  <body class="bg-white text-gray-900 font-sans antialiased">
+  <body class="bg-white text-gray-900 font-sans antialiased dark:bg-page-dark dark:text-inkd-0">
     <slot />
   </body>
 </html>

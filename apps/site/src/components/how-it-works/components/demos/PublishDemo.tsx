@@ -213,7 +213,7 @@ function RepositoryPage() {
         <div className="flex min-w-0 items-center gap-2">
           <div
             aria-hidden
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-stone-100 text-[11px] font-semibold text-stone-600 ring-1 ring-stone-200"
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-stone-100 text-[11px] font-semibold text-stone-600 ring-1 ring-stone-200 dark:bg-neutral-800 dark:text-stone-300 dark:ring-neutral-700"
           >
             {r.name.charAt(0)}
           </div>
@@ -229,7 +229,7 @@ function RepositoryPage() {
       key: 'repo',
       render: (_, r) => (
         <span className="inline-flex min-w-0 max-w-full items-center gap-1.5 text-ink-1">
-          <IconBrandGithub size={13} className="shrink-0 text-gray-900" />
+          <IconBrandGithub size={13} className="shrink-0 text-gray-900 dark:text-inkd-0" />
           <span className="truncate">
             {NEW_REPO}-{r.login}
           </span>
@@ -353,11 +353,11 @@ function RepositoryForm({ s }: { s: State }) {
               />
               {s.templateOpen && (
                 <div
-                  className={`absolute inset-x-0 top-full z-20 mt-1 rounded-lg bg-white p-1 ${popoverShadow}`}
+                  className={`absolute inset-x-0 top-full z-20 mt-1 rounded-lg bg-white p-1 dark:bg-panel-hover-dark dark:ring-1 dark:ring-line-2-dark ${popoverShadow}`}
                 >
                   <div
                     data-cursor="template-option"
-                    className="flex items-center justify-between rounded bg-black/[0.04] px-3 py-1.5"
+                    className="flex items-center justify-between rounded bg-black/[0.04] px-3 dark:bg-white/[0.06] py-1.5"
                   >
                     <div className="flex items-center gap-2">
                       <span className="font-medium text-ink-1">{TEMPLATE}</span>
@@ -365,7 +365,7 @@ function RepositoryForm({ s }: { s: State }) {
                         Private
                       </Tag>
                     </div>
-                    <span className="text-[11px] text-gray-400">Python</span>
+                    <span className="text-[11px] text-gray-400 dark:text-inkd-4">Python</span>
                   </div>
                 </div>
               )}
@@ -383,7 +383,7 @@ function RepositoryForm({ s }: { s: State }) {
               Add test
             </Button>
           </div>
-          <div className="py-4 text-center text-gray-500">
+          <div className="py-4 text-center text-gray-500 dark:text-inkd-3">
             <div className="font-medium">No tests added yet</div>
             <div className="text-[11.5px]">Add a test to enable autograding</div>
           </div>
@@ -394,14 +394,14 @@ function RepositoryForm({ s }: { s: State }) {
             title="Linked Content"
             subtitle="Link pages and slides to this repository"
           />
-          <p className="mb-1 text-[12px] font-medium text-gray-700">Pages</p>
+          <p className="mb-1 text-[12px] font-medium text-gray-700 dark:text-inkd-1">Pages</p>
           <Select
             className="mb-3 w-full"
             mode="multiple"
             placeholder="Select pages to link"
             open={false}
           />
-          <p className="mb-1 text-[12px] font-medium text-gray-700">Slides</p>
+          <p className="mb-1 text-[12px] font-medium text-gray-700 dark:text-inkd-1">Slides</p>
           <Select
             className="w-full"
             mode="multiple"
@@ -467,12 +467,12 @@ export function PublishDemo() {
       render: (_, r) =>
         r.kind === 'assignment' ? (
           <span className="inline-flex items-center gap-2 align-middle">
-            <IconFileText size={16} className="shrink-0 text-gray-400" />
+            <IconFileText size={16} className="shrink-0 text-gray-400 dark:text-inkd-4" />
             <span className="text-ink-1">{r.name}</span>
           </span>
         ) : (
           <span className="inline-flex items-center gap-2 align-middle">
-            <IconFolder size={18} className="shrink-0 text-gray-400" />
+            <IconFolder size={18} className="shrink-0 text-gray-400 dark:text-inkd-4" />
             <span className="font-semibold text-ink-1">{r.name}</span>
             {r.mode && (
               <Tag
@@ -539,11 +539,11 @@ export function PublishDemo() {
   const legend = (
     <div className="flex shrink-0 items-center gap-3 text-[12px] text-ink-3" aria-label="Legend">
       <span className="inline-flex items-center gap-1">
-        <IconFolder size={14} className="text-gray-400" />
+        <IconFolder size={14} className="text-gray-400 dark:text-inkd-4" />
         repository
       </span>
       <span className="inline-flex items-center gap-1">
-        <IconFileText size={14} className="text-gray-400" />
+        <IconFileText size={14} className="text-gray-400 dark:text-inkd-4" />
         issue
       </span>
     </div>
@@ -552,7 +552,7 @@ export function PublishDemo() {
   const breadcrumb = (
     <div className="flex items-center gap-2 text-[13px] text-ink-2">
       <IconChevronLeft size={16} />
-      <IconFolder size={16} className="text-gray-400" />
+      <IconFolder size={16} className="text-gray-400 dark:text-inkd-4" />
       <span>Repositories</span>
       <span className="text-ink-3">/</span>
       <span className="font-semibold text-ink-1">New repository</span>
@@ -562,7 +562,7 @@ export function PublishDemo() {
   const repoBreadcrumb = (
     <div className="flex items-center gap-2 text-[13px] text-ink-2">
       <IconChevronLeft size={16} />
-      <IconFolder size={16} className="text-gray-400" />
+      <IconFolder size={16} className="text-gray-400 dark:text-inkd-4" />
       <span>Repositories</span>
       <span className="text-ink-3">/</span>
       <span className="font-semibold text-ink-1">{NEW_REPO}</span>
@@ -590,7 +590,7 @@ export function PublishDemo() {
     <Compact>
       <div className="flex items-center gap-3">
         <Input
-          prefix={<IconSearch size={14} className="text-gray-400" />}
+          prefix={<IconSearch size={14} className="text-gray-400 dark:text-inkd-4" />}
           placeholder="Search by title"
           className="w-32"
           readOnly
@@ -660,7 +660,7 @@ export function PublishDemo() {
 
       {s.confirmOpen && (
         <div className="absolute inset-0 z-20 flex items-start justify-center bg-black/45 pt-[110px]">
-          <div className={`w-[340px] rounded-lg bg-white p-5 ${popoverShadow}`}>
+          <div className={`w-[340px] rounded-lg bg-white p-5 dark:bg-panel-hover-dark dark:ring-1 dark:ring-line-2-dark ${popoverShadow}`}>
             <div className="flex gap-3">
               <IconAlertCircleFilled size={20} className="shrink-0 text-[#faad14]" />
               <div>

@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { PlusIcon } from 'lucide-react';
 
 const link =
-  'font-medium text-accent underline decoration-accent/30 underline-offset-4 hover:decoration-accent';
+  'font-medium text-accent underline decoration-accent/30 underline-offset-4 hover:decoration-accent dark:text-[#6BE39B] dark:decoration-[#6BE39B]/30 dark:hover:decoration-[#6BE39B]';
 
 // Facts only: no prices are published, so none are quoted here.
 const QUESTIONS: { q: string; a: ReactNode }[] = [
@@ -71,21 +71,21 @@ export function Faq() {
     <section aria-labelledby="faq-heading" className="mx-auto mt-28 max-w-3xl lg:mt-36">
       <h2
         id="faq-heading"
-        className="text-center text-[2rem] font-bold leading-[1.15] tracking-tight text-ink-0 sm:text-[2.375rem]"
+        className="text-center text-[2rem] font-bold leading-[1.15] tracking-tight text-ink-0 dark:text-inkd-0 sm:text-[2.375rem]"
       >
         Questions
       </h2>
-      <div className="mt-10 border-t border-line">
+      <div className="mt-10 border-t border-line dark:border-line-dark">
         {QUESTIONS.map(({ q, a }) => (
-          <details key={q} className="group border-b border-line">
-            <summary className="flex cursor-pointer list-none items-center justify-between gap-6 py-5 text-[1.0625rem] font-semibold text-ink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent [&::-webkit-details-marker]:hidden">
+          <details key={q} className="group border-b border-line dark:border-line-dark">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-6 py-5 text-[1.0625rem] font-semibold text-ink-0 dark:text-inkd-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent [&::-webkit-details-marker]:hidden">
               {q}
               <PlusIcon
-                className="h-5 w-5 shrink-0 text-ink-3 transition-transform duration-200 group-open:rotate-45"
+                className="h-5 w-5 shrink-0 text-ink-3 dark:text-inkd-3 transition-transform duration-200 group-open:rotate-45"
                 aria-hidden
               />
             </summary>
-            <p className="-mt-1 pb-5 pr-10 text-[1rem] leading-relaxed text-ink-2">{a}</p>
+            <p className="-mt-1 pb-5 pr-10 text-[1rem] leading-relaxed text-ink-2 dark:text-inkd-2">{a}</p>
           </details>
         ))}
       </div>

@@ -8,15 +8,15 @@ interface Props {
 const { emoji, background = 'emerald', size = 'md' } = Astro.props;
 
 const bgColors: Record<string, { bg: string; pattern: string }> = {
-  emerald: { bg: 'bg-emerald-100', pattern: 'rgba(16, 185, 129, 0.15)' },
-  blue: { bg: 'bg-blue-100', pattern: 'rgba(59, 130, 246, 0.15)' },
-  purple: { bg: 'bg-purple-100', pattern: 'rgba(168, 85, 247, 0.15)' },
-  amber: { bg: 'bg-amber-100', pattern: 'rgba(245, 158, 11, 0.15)' },
-  rose: { bg: 'bg-rose-100', pattern: 'rgba(244, 63, 94, 0.15)' },
-  slate: { bg: 'bg-slate-100', pattern: 'rgba(100, 116, 139, 0.15)' },
+  emerald: { bg: 'bg-emerald-100 dark:bg-emerald-950', pattern: 'rgba(16, 185, 129, 0.15)' },
+  blue: { bg: 'bg-blue-100 dark:bg-blue-950', pattern: 'rgba(59, 130, 246, 0.15)' },
+  purple: { bg: 'bg-purple-100 dark:bg-purple-950', pattern: 'rgba(168, 85, 247, 0.15)' },
+  amber: { bg: 'bg-amber-100 dark:bg-amber-950', pattern: 'rgba(245, 158, 11, 0.15)' },
+  rose: { bg: 'bg-rose-100 dark:bg-rose-950', pattern: 'rgba(244, 63, 94, 0.15)' },
+  slate: { bg: 'bg-slate-100 dark:bg-slate-800', pattern: 'rgba(100, 116, 139, 0.15)' },
 };
 
-const defaultColors = { bg: 'bg-gray-100', pattern: 'rgba(156, 163, 175, 0.15)' };
+const defaultColors = { bg: 'bg-gray-100 dark:bg-panel-hover-dark', pattern: 'rgba(156, 163, 175, 0.15)' };
 
 const sizeClasses = {
   sm: 'w-18 h-18 text-3xl rounded-lg',
