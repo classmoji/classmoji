@@ -184,7 +184,7 @@ const SyllabusBotChat = ({
         {/* Course header */}
         <div className="askmoji-course-name">{courseName}</div>
         <div className="askmoji-course-sub">
-          Ask about assignments, deadlines, tokens, or the syllabus.
+          Ask about assignments, deadlines, Extension Tokens, or the syllabus.
         </div>
 
         {/* Hints (empty state) */}

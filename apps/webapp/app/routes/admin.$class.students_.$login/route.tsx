@@ -789,7 +789,7 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
             <SchoolIdField value={student.school_id ?? null} editable={isOwner} />
             <span>·</span>
             <span>
-              {tokenBalance} tokens
+              {tokenBalance} Extension Tokens
               {tokenBalance < 10 && <span className="ml-1 text-red-500">(low)</span>}
             </span>
           </div>

@@ -119,8 +119,8 @@ const OPERATIONS: Record<string, OperationSpec> = {
     units: [
       {
         tasks: ['assign_tokens_to_student'],
-        running: 'Assigning tokens',
-        done: 'Tokens assigned',
+        running: 'Assigning Extension Tokens',
+        done: 'Extension Tokens assigned',
         noun: 'students',
       },
     ],

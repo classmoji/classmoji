@@ -20,11 +20,7 @@ const InlineRow = ({
   children: React.ReactNode;
 }) => (
   <div className="flex items-start gap-3 py-1.5">
-    <Icon
-      size={18}
-      strokeWidth={1.75}
-      className="shrink-0 mt-2.5 text-ink-4"
-    />
+    <Icon size={18} strokeWidth={1.75} className="shrink-0 mt-2.5 text-ink-4" />
     <div className="flex-1 min-w-0">{children}</div>
   </div>
 );
@@ -129,9 +125,7 @@ const AdminTokensNew = ({ loaderData }: Route.ComponentProps) => {
       >
         {/* Gmail-style header */}
         <div className="flex items-center justify-between gap-3 px-5 py-3 bg-stone-50 dark:bg-neutral-800/60 border-b border-line">
-          <span className="text-sm font-semibold text-ink-0">
-            Assign tokens
-          </span>
+          <span className="text-sm font-semibold text-ink-0">Assign Extension Tokens</span>
           <button
             type="button"
             onClick={close}
@@ -245,7 +239,7 @@ const AdminTokensNew = ({ loaderData }: Route.ComponentProps) => {
             disabled={students.length === 0}
             style={{ backgroundColor: '#1f883d', borderColor: '#1f883d' }}
           >
-            {isLoading ? 'Assigning…' : 'Assign tokens'}
+            {isLoading ? 'Assigning…' : 'Assign Extension Tokens'}
           </Button>
         </div>
       </Form>
@@ -256,7 +250,11 @@ const AdminTokensNew = ({ loaderData }: Route.ComponentProps) => {
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
-  const { classroom, userId: _userId, membership } = await requireClassroomAdmin(request, classSlug!, {
+  const {
+    classroom,
+    userId: _userId,
+    membership,
+  } = await requireClassroomAdmin(request, classSlug!, {
     resourceType: 'TOKEN_GRANT',
     action: 'assign_tokens_bulk',
   });
