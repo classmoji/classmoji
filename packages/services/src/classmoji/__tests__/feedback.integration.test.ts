@@ -88,6 +88,24 @@ describe.skipIf(!RUN)('feedback.service (integration)', () => {
     expect(listed[0]).not.toHaveProperty('author_id');
   });
 
+  it('lists who is in each conversation, never the anonymous', async () => {
+    const { id } = await feedback.createPost({
+      authorId: author,
+      title: `Participants ${suite}`,
+      body: 'Faces',
+      isAnonymous: true,
+    });
+    await feedback.addComment({ postId: id, authorId: voter, body: 'Me too' });
+    await feedback.addComment({ postId: id, authorId: admin, body: 'Quietly', isAnonymous: true });
+    await feedback.addComment({ postId: id, authorId: voter, body: 'Again' });
+    const [listed] = await feedback.listPosts({ query: `Participants ${suite}` });
+    // The anonymous author and the anonymous commenter are left out; the
+    // named commenter is counted once.
+    expect(listed?.participants.total).toBe(1);
+    expect(listed?.participants.people.map(p => p.id)).toEqual([voter]);
+    expect(listed?.participants.people[0]).not.toHaveProperty('email');
+  });
+
   it('hides the author of an anonymous comment but lets them manage it', async () => {
     const { id: anonPostId } = await feedback.createPost({
       authorId: author,

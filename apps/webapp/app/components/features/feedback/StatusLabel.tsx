@@ -1,23 +1,7 @@
 import type { FeedbackStatus } from '@prisma/client';
-import type { LucideIcon } from 'lucide-react';
-import {
-  CheckCircle2Icon,
-  CircleDashedIcon,
-  CircleDotIcon,
-  EyeIcon,
-  MessageCircleQuestionIcon,
-} from 'lucide-react';
 import { STATUS_META } from './feedback';
 
-const ICONS: Record<FeedbackStatus, LucideIcon> = {
-  IN_REVIEW: EyeIcon,
-  PLANNED: CircleDashedIcon,
-  IN_PROGRESS: CircleDotIcon,
-  COMPLETED: CheckCircle2Icon,
-  FIXED: CheckCircle2Icon,
-  ANSWERED: MessageCircleQuestionIcon,
-};
-
+/** A status as a coloured badge with its emoji: ◌ Planned, ✓ Fixed… */
 export function StatusLabel({
   status,
   size = 'sm',
@@ -25,15 +9,15 @@ export function StatusLabel({
   status: FeedbackStatus;
   size?: 'sm' | 'md';
 }) {
-  const Icon = ICONS[status];
+  const meta = STATUS_META[status];
   return (
     <span
-      className={`inline-flex items-center gap-1.5 font-semibold ${STATUS_META[status].ink} ${
-        size === 'md' ? 'text-sm' : 'text-[12px]'
+      className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full border font-semibold leading-none ${meta.badge} ${
+        size === 'md' ? 'px-3 py-1.5 text-sm' : 'px-2.5 py-1 text-[12px]'
       }`}
     >
-      <Icon className={size === 'md' ? 'h-[18px] w-[18px]' : 'h-3.5 w-3.5'} aria-hidden />
-      {STATUS_META[status].label}
+      <span aria-hidden>{meta.glyph}</span>
+      {meta.label}
     </span>
   );
 }

@@ -5,6 +5,7 @@ import { ClassmojiService, isFeedbackStatus, type FeedbackSort } from '@classmoj
 import { NewPostDialog } from '~/components/features/feedback/NewPostDialog';
 import { PostListItem } from '~/components/features/feedback/PostListItem';
 import {
+  CATEGORY_EMOJI,
   CATEGORY_FILTER_LABELS,
   CATEGORY_ORDER,
   ALL_STATUSES,
@@ -47,6 +48,8 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     query,
     viewerId,
     scope: 'all',
+    // No status picked means every status, finished posts included.
+    includeCompleted: true,
   });
   return { posts, sort, status, category, query, signedIn: Boolean(viewerId) };
 };
@@ -145,7 +148,16 @@ export default function FeedbackBoard() {
                   : 'border-line text-ink-3 hover:bg-panel-hover hover:text-ink-0'
               }`}
             >
-              {c ? CATEGORY_FILTER_LABELS[c] : 'All'}
+              {c ? (
+                <>
+                  <span aria-hidden className="mr-1">
+                    {CATEGORY_EMOJI[c]}
+                  </span>
+                  {CATEGORY_FILTER_LABELS[c]}
+                </>
+              ) : (
+                'All'
+              )}
             </button>
           ))}
         </div>
@@ -198,7 +210,7 @@ export default function FeedbackBoard() {
               onChange={e => setParam('status', e.target.value || null)}
               className={selectClass}
             >
-              <option value="">All open</option>
+              <option value="">All</option>
               {(category ? STATUSES_BY_CATEGORY[category] : ALL_STATUSES).map(s => (
                 <option key={s} value={s}>
                   {STATUS_META[s].label}
