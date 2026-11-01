@@ -5,6 +5,7 @@ import {
   IconAdjustmentsHorizontal,
   IconChevronDown,
   IconChevronRight,
+  IconDownload,
   IconSearch,
 } from '@tabler/icons-react';
 import { Link, useLocation, useParams } from 'react-router';
@@ -819,6 +820,16 @@ const GradesTable = (props: GradesTableProps) => {
                 Breakpoints
               </button>
             </Popover>
+            {/* A plain link, so the browser downloads the file the route returns. */}
+            <a
+              href={`${base}/grades/export`}
+              download
+              data-tour="grades-export"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-sm font-medium whitespace-nowrap text-white bg-accent hover:bg-accent-hover transition-colors"
+            >
+              <IconDownload size={16} />
+              Export CSV
+            </a>
           </div>
         </div>
       </div>
