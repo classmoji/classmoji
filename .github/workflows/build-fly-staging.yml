@@ -35,7 +35,9 @@ jobs:
           node-version: '22'
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
-      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
+        with:
+          version: 0.5.1
       - name: Build and push staging image
         id: build
         env:
