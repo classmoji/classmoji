@@ -17,6 +17,16 @@
 import { prisma } from '~/utils/db.server';
 import { median } from '~/utils/dashboard';
 import {
+  GROWTH_RANGES,
+  METRIC_DEFINITIONS,
+  type GrowthRange,
+  type GrowthSeries,
+  type KpiKey,
+} from '~/utils/metricDefinitions';
+
+export { GROWTH_DEFINITIONS, GROWTH_RANGES, METRIC_DEFINITIONS } from '~/utils/metricDefinitions';
+export type { GrowthRange, GrowthSeries, KpiKey } from '~/utils/metricDefinitions';
+import {
   REPORTING_TZ,
   calendarPeriods,
   countPerPeriod,
@@ -45,23 +55,6 @@ export const instructorWhere = {
     },
   },
 };
-
-export const METRIC_DEFINITIONS = {
-  weeklyActiveInstructors:
-    'Owners or teachers of a real classroom who used Classmoji themselves this week (Monday start). Impersonation never counts.',
-  weeklyActiveStudents:
-    'Students with an accepted membership in a real classroom who used Classmoji themselves this week.',
-  newInstructors:
-    'People whose first sign-in was this week and who own or teach a real classroom.',
-  activeClassrooms:
-    'Not an example, not archived, status ACTIVE. Locked and unpublished classrooms are shown separately.',
-  submissions:
-    'Repository and issue submissions recorded this week (GitRepoAssignment.closed_at) in real classrooms.',
-  askMoji:
-    'Ask Moji conversations (not quiz chats) where a student or staff member, not an impersonator, sent a message this week.',
-} as const;
-
-export type KpiKey = keyof typeof METRIC_DEFINITIONS;
 
 // ───────── series helpers ─────────
 
@@ -307,7 +300,9 @@ export async function loadAttention(now = new Date()): Promise<AttentionItem[]> 
           name: true,
           updated_at: true,
           git_organization: { select: { login: true } },
-          _count: { select: { memberships: { where: { role: 'STUDENT', has_accepted_invite: true } } } },
+          _count: {
+            select: { memberships: { where: { role: 'STUDENT', has_accepted_invite: true } } },
+          },
         },
       }),
       prisma.importJob.findMany({
@@ -347,7 +342,10 @@ export async function loadAttention(now = new Date()): Promise<AttentionItem[]> 
       prisma.classroom.findMany({
         where: {
           ...ACTIVE_CLASSROOM,
-          created_at: { lt: new Date(now.getTime() - 7 * DAY), gte: new Date(now.getTime() - 45 * DAY) },
+          created_at: {
+            lt: new Date(now.getTime() - 7 * DAY),
+            gte: new Date(now.getTime() - 45 * DAY),
+          },
           modules: { none: { assignments: { some: {} } } },
         },
         select: {
@@ -567,6 +565,8 @@ export const describeAdminAction = (action: string, data: unknown): string => {
       return `turned content delivery ${d.enabled ? 'on' : 'off'} for ${d.changed ?? 0} classrooms`;
     case 'user.view':
       return `opened ${d.targetName ?? 'a person'}'s page`;
+    case 'export':
+      return `exported ${d.rows ?? 0} ${d.list ?? 'rows'} as CSV`;
     case 'classroom.view':
       return `opened ${d.classroomName ?? 'a classroom'}`;
     default:
@@ -575,23 +575,6 @@ export const describeAdminAction = (action: string, data: unknown): string => {
 };
 
 // ───────── Insights ─────────
-
-export type GrowthRange = '30d' | '12w' | '26w' | '52w';
-
-export const GROWTH_RANGES: Record<GrowthRange, { unit: 'day' | 'week'; count: number; label: string }> = {
-  '30d': { unit: 'day', count: 30, label: '30 days' },
-  '12w': { unit: 'week', count: 12, label: '12 weeks' },
-  '26w': { unit: 'week', count: 26, label: '26 weeks' },
-  '52w': { unit: 'week', count: 52, label: '1 year' },
-};
-
-export type GrowthSeries = 'instructors' | 'signups' | 'classrooms';
-
-export const GROWTH_DEFINITIONS: Record<GrowthSeries, string> = {
-  instructors: 'First sign-ins by people who own or teach a real classroom',
-  signups: 'Everyone’s first sign-in (students included)',
-  classrooms: 'Real classrooms created, including ones archived since',
-};
 
 export async function loadGrowth(now: Date, range: GrowthRange) {
   const { unit, count } = GROWTH_RANGES[range];
@@ -792,11 +775,15 @@ export async function loadAdoption(now: Date) {
         AND NOT c."is_example" AND NOT c."is_archived" AND c."status" = 'ACTIVE'
     `,
     count({
-      token_transactions: { some: { type: 'PURCHASE', is_cancelled: false, created_at: { gte: since } } },
+      token_transactions: {
+        some: { type: 'PURCHASE', is_cancelled: false, created_at: { gte: since } },
+      },
     }),
     count({
       forms: {
-        some: { responses: { some: { submission_state: 'SUBMITTED', submitted_at: { gte: since } } } },
+        some: {
+          responses: { some: { submission_state: 'SUBMITTED', submitted_at: { gte: since } } },
+        },
       },
     }),
     count({ modules: { some: { assignments: { some: { type: 'FORM' } } } } }),
@@ -885,7 +872,10 @@ export async function loadOnboardingTimes(now: Date) {
     `,
   ]);
   const summarize = (rows: Array<{ hours: number | null }>) => {
-    const reached = rows.map(r => r.hours).filter((h): h is number => h !== null).map(Number);
+    const reached = rows
+      .map(r => r.hours)
+      .filter((h): h is number => h !== null)
+      .map(Number);
     return {
       total: rows.length,
       reached: reached.length,
@@ -922,9 +912,16 @@ export async function loadAiAndQuizzes(now: Date) {
   }
   const studentAttempts = attempts.filter(a => a.student);
   return {
-    periods: periods.map(p => ({ start: p.start.toISOString(), end: p.end.toISOString(), partial: p.partial })),
+    periods: periods.map(p => ({
+      start: p.start.toISOString(),
+      end: p.end.toISOString(),
+      partial: p.partial,
+    })),
     askMoji: chatWeeks.map(s => s.size),
-    quizStarted: countPerPeriod(studentAttempts.map(a => a.started_at), periods),
+    quizStarted: countPerPeriod(
+      studentAttempts.map(a => a.started_at),
+      periods
+    ),
     quizCompleted: countPerPeriod(
       studentAttempts.filter(a => a.completed_at).map(a => a.completed_at as Date),
       periods

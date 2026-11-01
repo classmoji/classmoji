@@ -219,7 +219,11 @@ export const BarRow = ({
 }) => (
   <li className="grid grid-cols-[10rem_1fr_7rem] items-center gap-3 text-sm">
     <span className="text-ink-1 truncate">{label}</span>
-    <span className="h-2 rounded-full overflow-hidden" style={{ background: 'var(--bar-track)' }} aria-hidden>
+    <span
+      className="h-2 rounded-full overflow-hidden"
+      style={{ background: 'var(--bar-track)' }}
+      aria-hidden
+    >
       <span
         className="block h-full rounded-full"
         style={{

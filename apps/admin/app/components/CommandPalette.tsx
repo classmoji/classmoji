@@ -5,7 +5,13 @@ import { Avatar } from '~/components/ui';
 import { useViewAs } from '~/hooks/useViewAs';
 
 interface Results {
-  people: Array<{ id: string; name: string; login: string | null; domain: string | null; image: string | null }>;
+  people: Array<{
+    id: string;
+    name: string;
+    login: string | null;
+    domain: string | null;
+    image: string | null;
+  }>;
   classrooms: Array<{ slug: string; name: string; archived: boolean; owner: string | null }>;
   posts: Array<{ id: string; title: string; category: string; votes: number }>;
 }
@@ -37,13 +43,7 @@ const PAGES = [
  * ⌘K / Ctrl+K from any page: one search over people, classrooms and feedback,
  * plus page jumps. Enter opens; Shift+Enter on a person starts View as.
  */
-export const CommandPalette = ({
-  open,
-  onClose,
-}: {
-  open: boolean;
-  onClose: () => void;
-}) => {
+export const CommandPalette = ({ open, onClose }: { open: boolean; onClose: () => void }) => {
   const navigate = useNavigate();
   const { viewAs } = useViewAs();
   const [q, setQ] = useState('');
@@ -200,7 +200,6 @@ export const CommandPalette = ({
         aria-modal="true"
         aria-label="Search"
         className="w-full max-w-xl rounded-2xl bg-panel ring-1 ring-line-strong shadow-2xl overflow-hidden"
-        onKeyDown={onKeyDown}
       >
         <div className="flex items-center gap-2.5 px-4 py-3 border-b border-line">
           <IconSearch size={17} className="text-ink-4 shrink-0" />
@@ -208,6 +207,7 @@ export const CommandPalette = ({
             ref={inputRef}
             value={q}
             onChange={e => setQ(e.target.value)}
+            onKeyDown={onKeyDown}
             placeholder="Search people, classrooms, feedback…"
             aria-label="Search"
             role="combobox"
@@ -220,7 +220,12 @@ export const CommandPalette = ({
             <span className="w-3 h-3 rounded-full border-2 border-line-strong border-t-transparent animate-spin" />
           ) : null}
         </div>
-        <div ref={listRef} id="cmdk-list" role="listbox" className="max-h-[50vh] overflow-y-auto py-1">
+        <div
+          ref={listRef}
+          id="cmdk-list"
+          role="listbox"
+          className="max-h-[50vh] overflow-y-auto py-1"
+        >
           {items.length === 0 ? (
             <p className="px-4 py-6 text-sm text-ink-3 text-center">
               {q.trim().length < 2 ? 'Type a name, email, username, slug or id.' : 'Nothing found.'}
@@ -240,6 +245,7 @@ export const CommandPalette = ({
                     id={`cmdk-${i}`}
                     data-index={i}
                     role="option"
+                    tabIndex={-1}
                     aria-selected={i === active}
                     onMouseMove={() => setActive(i)}
                     onClick={e => (e.shiftKey && item.viewAs ? item.viewAs() : item.open())}

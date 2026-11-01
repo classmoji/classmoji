@@ -212,9 +212,9 @@ const PeopleTab = ({ data }: { data: Extract<Data, { people: unknown }> }) => {
                   <td className="py-1.5 pr-3">
                     <span className="flex flex-wrap gap-1">
                       {p.roles.map(r => (
-                        <RoleChip key={r} role={r} />
+                        <RoleChip key={r} of={r} />
                       ))}
-                      {!p.accepted ? <RoleChip role="PENDING" /> : null}
+                      {!p.accepted ? <RoleChip of="PENDING" /> : null}
                     </span>
                   </td>
                   <td className="py-1.5 pr-3 text-ink-2 truncate max-w-[16rem]">

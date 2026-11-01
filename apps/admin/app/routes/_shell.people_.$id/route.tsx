@@ -12,7 +12,11 @@ export const meta = ({ data }: { data?: { person?: { name: string } } }) => [
   { title: data?.person ? `${data.person.name} · Classmoji Admin` : 'Person · Classmoji Admin' },
 ];
 
-const PROVIDER: Record<string, string> = { github: 'Github', gitlab: 'Gitlab', credential: 'Password' };
+const PROVIDER: Record<string, string> = {
+  github: 'Github',
+  gitlab: 'Gitlab',
+  credential: 'Password',
+};
 
 const fmt = (iso: string | null) =>
   iso ? new Date(iso).toLocaleDateString(undefined, { dateStyle: 'medium' }) : '—';
@@ -139,12 +143,12 @@ const Person = () => {
                         <td className="py-1.5 pr-3">
                           <span className="flex flex-wrap gap-1">
                             {c.roles.map(r => (
-                              <RoleChip key={r} role={r} />
+                              <RoleChip key={r} of={r} />
                             ))}
                           </span>
                         </td>
                         <td className="py-1.5 pr-3 text-ink-2">
-                          {c.accepted ? 'accepted' : <RoleChip role="PENDING" />}
+                          {c.accepted ? 'accepted' : <RoleChip of="PENDING" />}
                         </td>
                         <td className="py-1.5 pr-3 text-ink-3 whitespace-nowrap">{fmt(c.since)}</td>
                         <td className="py-1.5 text-right">
@@ -232,9 +236,12 @@ const Person = () => {
         <Panel title="Account">
           <dl className="px-4 pb-3">
             <Field label="Role">
-              {person.role ? <RoleChip role={person.role} /> : '—'}
+              {person.role ? <RoleChip of={person.role} /> : '—'}
               {person.classes ? (
-                <span className="text-ink-3"> in {person.classes} class{person.classes === 1 ? '' : 'es'}</span>
+                <span className="text-ink-3">
+                  {' '}
+                  in {person.classes} class{person.classes === 1 ? '' : 'es'}
+                </span>
               ) : null}
             </Field>
             <Field label="Signs in with">

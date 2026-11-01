@@ -19,7 +19,8 @@ const SEVERITY_BAR: Record<AttentionItem['severity'], string> = {
 const Change = ({ kpi }: { kpi: Kpi }) => {
   if (kpi.previousToDate === null) return null;
   const diff = kpi.value - kpi.previousToDate;
-  if (diff === 0) return <span className="text-[11px] font-semibold text-ink-3">same as last wk</span>;
+  if (diff === 0)
+    return <span className="text-[11px] font-semibold text-ink-3">same as last wk</span>;
   return (
     <span
       className={`text-[11px] font-semibold ${diff > 0 ? 'text-mint-ink' : 'text-rose-ink'}`}
@@ -163,7 +164,10 @@ const Activity = ({ entries }: { entries: HomeData['activity'] }) => (
             <Avatar name={e.actor.name} size={22} />
             <span className="min-w-0 flex-1 truncate text-ink-1">
               {e.actor.id ? (
-                <Link to={`/people/${e.actor.id}`} className="font-semibold text-ink-0 hover:underline">
+                <Link
+                  to={`/people/${e.actor.id}`}
+                  className="font-semibold text-ink-0 hover:underline"
+                >
                   {e.actor.name}
                 </Link>
               ) : (
@@ -194,9 +198,8 @@ const Home = () => {
       <div className="flex flex-wrap items-baseline justify-between gap-3 mt-2">
         <h1 className="text-lg font-semibold text-ink-1">Home</h1>
         <span className="text-xs text-ink-3">
-          Updated{' '}
-          {new Date(data.generatedAt).toLocaleTimeString([], { timeStyle: 'short' })} · weeks start
-          Monday, {data.timeZone.replace('_', ' ')}
+          Updated {new Date(data.generatedAt).toLocaleTimeString([], { timeStyle: 'short' })} ·
+          weeks start Monday, {data.timeZone.replace('_', ' ')}
         </span>
       </div>
 

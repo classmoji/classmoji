@@ -36,7 +36,11 @@ export const healthOf = (s: ClassroomSignals): { health: Health; reasons: string
 export async function loadSignals(
   classrooms: Array<{
     id: string;
-    git_organization: { provider: string; github_installation_id: string | null; gitlab_connection_id: string | null };
+    git_organization: {
+      provider: string;
+      github_installation_id: string | null;
+      gitlab_connection_id: string | null;
+    };
     import_job: { status: string } | null;
   }>
 ): Promise<Map<string, ClassroomSignals>> {
@@ -117,7 +121,8 @@ export async function loadPlans(classroomIds: string[]): Promise<Map<string, 'Pr
   const plans = new Map<string, 'Pro' | 'Free'>(classroomIds.map(id => [id, 'Free']));
   for (const o of owners) {
     const sub = o.user.subscriptions[0];
-    if (sub?.tier === 'PRO' && (!sub.ends_at || sub.ends_at > now)) plans.set(o.classroom_id, 'Pro');
+    if (sub?.tier === 'PRO' && (!sub.ends_at || sub.ends_at > now))
+      plans.set(o.classroom_id, 'Pro');
   }
   return plans;
 }

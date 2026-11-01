@@ -2,8 +2,13 @@ import { useState } from 'react';
 import { Link, useLoaderData, useSearchParams } from 'react-router';
 import { Empty, InfoTip, Panel, withParams } from '~/components/ui';
 import { BarRow, TimeChart } from '~/components/Chart';
-import { formatHours, OTHER_DOMAINS_LABEL, PERSONAL_EMAIL_LABEL, UNKNOWN_COUNTRY } from '~/utils/dashboard';
-import { GROWTH_DEFINITIONS, GROWTH_RANGES, type GrowthSeries } from '~/utils/metrics.server';
+import {
+  formatHours,
+  OTHER_DOMAINS_LABEL,
+  PERSONAL_EMAIL_LABEL,
+  UNKNOWN_COUNTRY,
+} from '~/utils/dashboard';
+import { GROWTH_DEFINITIONS, GROWTH_RANGES, type GrowthSeries } from '~/utils/metricDefinitions';
 import { loadInsights, type InsightsView } from './route.server';
 
 export const loader = loadInsights;
@@ -38,7 +43,9 @@ const Segmented = ({
           preventScrollReset
           aria-current={o.value === value ? 'true' : undefined}
           className={`rounded-md px-3 py-1 transition-colors ${
-            o.value === value ? 'bg-nav-hover text-ink-0 font-medium' : 'text-ink-2 hover:text-ink-0'
+            o.value === value
+              ? 'bg-nav-hover text-ink-0 font-medium'
+              : 'text-ink-2 hover:text-ink-0'
           }`}
         >
           {o.label}
@@ -148,7 +155,10 @@ const Activation = ({ data }: { data: Extract<Data, { view: 'activation' }> }) =
             </div>
           </div>
         </Panel>
-        <Panel title="Time to first steps" description="Last 180 days, with how many got there at all">
+        <Panel
+          title="Time to first steps"
+          description="Last 180 days, with how many got there at all"
+        >
           <div className="grid grid-cols-2 gap-4 px-4 pb-4">
             <div>
               <div className="text-xs text-ink-3">Sign-in → created a classroom</div>
@@ -166,8 +176,9 @@ const Activation = ({ data }: { data: Extract<Data, { view: 'activation' }> }) =
                 {formatHours(times.classroomToAssignment.medianHours)}
               </div>
               <div className="text-xs text-ink-3">
-                median · {times.classroomToAssignment.reached} of {times.classroomToAssignment.total}{' '}
-                ({times.classroomToAssignment.pct ?? 0}%), classes 14+ days old
+                median · {times.classroomToAssignment.reached} of{' '}
+                {times.classroomToAssignment.total} ({times.classroomToAssignment.pct ?? 0}%),
+                classes 14+ days old
               </div>
             </div>
           </div>
@@ -268,7 +279,10 @@ const Adoption = ({ data }: { data: Extract<Data, { view: 'adoption' }> }) => {
               {largest.map(c => (
                 <tr key={c.slug} className="border-t border-line row-hover">
                   <td className="py-2 pr-4">
-                    <Link to={`/classrooms/${encodeURIComponent(c.slug)}`} className="font-medium text-ink-0 hover:underline">
+                    <Link
+                      to={`/classrooms/${encodeURIComponent(c.slug)}`}
+                      className="font-medium text-ink-0 hover:underline"
+                    >
                       {c.name}
                     </Link>
                     <span className="text-xs text-ink-3 ml-2">{c.slug}</span>
@@ -313,7 +327,10 @@ const Audience = ({ data }: { data: Extract<Data, { view: 'audience' }> }) => (
                     {special ? (
                       d.school
                     ) : (
-                      <Link to={`/people?q=${encodeURIComponent(`@${d.school}`)}`} className="hover:underline">
+                      <Link
+                        to={`/people?q=${encodeURIComponent(`@${d.school}`)}`}
+                        className="hover:underline"
+                      >
                         {d.school}
                       </Link>
                     )}

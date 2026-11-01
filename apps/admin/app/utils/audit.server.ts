@@ -8,8 +8,14 @@ import { prisma } from '~/utils/db.server';
  */
 export const platformAudit = (entry: {
   actorId: string;
-  action: 'impersonate' | 'delivery.toggle' | 'delivery.bulk' | 'user.view' | 'classroom.view';
-  targetType: 'user' | 'classroom' | 'classrooms';
+  action:
+    | 'impersonate'
+    | 'delivery.toggle'
+    | 'delivery.bulk'
+    | 'user.view'
+    | 'classroom.view'
+    | 'export';
+  targetType: 'user' | 'users' | 'classroom' | 'classrooms';
   targetId?: string | null;
   classroomId?: string | null;
   data?: Prisma.InputJsonValue;

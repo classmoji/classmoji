@@ -615,8 +615,8 @@ export const auth = betterAuth({
         // right away, unthrottled.
         after: async session => {
           noteSeen(
-            (session as { userId?: string }).userId,
-            (session as { impersonatedBy?: unknown }).impersonatedBy,
+            (session as { userId?: string } | undefined)?.userId,
+            (session as { impersonatedBy?: unknown } | undefined)?.impersonatedBy,
             { force: true }
           );
         },
@@ -811,7 +811,7 @@ export async function getAuthSession(request: Request): Promise<AuthSessionResul
     const userId = session.user.id;
     const cacheKey = `token:${userId}`;
     // Throttled, not awaited; skips impersonated sessions.
-    noteSeen(userId, (session.session as { impersonatedBy?: unknown }).impersonatedBy);
+    noteSeen(userId, (session.session as { impersonatedBy?: unknown } | undefined)?.impersonatedBy);
 
     // 1. Check in-memory cache first
     const cachedToken = getCached<string>(cacheKey);

@@ -11,6 +11,7 @@ import {
   SortHeader,
   TABLE_HEAD,
   useReturnTo,
+  ExportLink,
 } from '~/components/ui';
 import { ViewAsButton } from '~/components/ViewAsButton';
 import { relativeTime } from '~/utils/time';
@@ -24,7 +25,11 @@ const PROVIDER_LABEL: Record<string, string> = { github: 'Github', gitlab: 'Gitl
 
 const fmtDate = (iso: string | null) =>
   iso
-    ? new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+    ? new Date(iso).toLocaleDateString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      })
     : '—';
 
 const People = () => {
@@ -35,6 +40,7 @@ const People = () => {
   return (
     <>
       <PageHeader title="People">
+        <ExportLink />
         <SearchBox
           query={query}
           placeholder="Name, email, git username, id, or @domain…"
@@ -83,7 +89,11 @@ const People = () => {
                       </Link>
                     </td>
                     <td className="py-1.5 pr-3">
-                      {row.role ? <RoleChip role={row.role} /> : <span className="text-ink-4">—</span>}
+                      {row.role ? (
+                        <RoleChip of={row.role} />
+                      ) : (
+                        <span className="text-ink-4">—</span>
+                      )}
                     </td>
                     <td className="py-1.5 pr-3 text-right tabular-nums text-ink-1">
                       {row.classes || '—'}
@@ -98,10 +108,18 @@ const People = () => {
                       className="py-1.5 pr-3 text-ink-2 whitespace-nowrap tabular-nums"
                       title={row.lastSeenAt ?? 'Not seen since tracking began (Oct 31, 2026)'}
                     >
-                      {row.lastSeenAt ? relativeTime(row.lastSeenAt) : <span className="text-ink-4">—</span>}
+                      {row.lastSeenAt ? (
+                        relativeTime(row.lastSeenAt)
+                      ) : (
+                        <span className="text-ink-4">—</span>
+                      )}
                     </td>
                     <td className="py-1.5 pr-3 text-ink-3 whitespace-nowrap">
-                      {row.firstSignInAt ? fmtDate(row.firstSignInAt) : <span className="text-ink-4">never</span>}
+                      {row.firstSignInAt ? (
+                        fmtDate(row.firstSignInAt)
+                      ) : (
+                        <span className="text-ink-4">never</span>
+                      )}
                     </td>
                     <td className="py-1.5 text-right">
                       <ViewAsButton userId={row.id} name={row.name} />

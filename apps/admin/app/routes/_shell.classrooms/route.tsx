@@ -12,6 +12,7 @@ import {
   TABLE_HEAD,
   useReturnTo,
   withParams,
+  ExportLink,
 } from '~/components/ui';
 import { relativeTime } from '~/utils/time';
 import { loadClassrooms } from './route.server';
@@ -46,6 +47,7 @@ const Classrooms = () => {
   return (
     <>
       <PageHeader title="Classrooms">
+        <ExportLink />
         <SearchBox
           query={query}
           placeholder="Name, slug, org, or owner…"

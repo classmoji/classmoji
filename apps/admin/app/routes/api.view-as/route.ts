@@ -26,7 +26,9 @@ export async function action({ request }: ActionFunctionArgs) {
   const form = await request.formData();
   const userId = String(form.get('userId') ?? '');
   const classroomSlug = String(form.get('classroomSlug') ?? '');
-  const reason = String(form.get('reason') ?? '').trim().slice(0, REASON_MAX);
+  const reason = String(form.get('reason') ?? '')
+    .trim()
+    .slice(0, REASON_MAX);
 
   if (!userId) return Response.json({ error: 'No person named.' }, { status: 400 });
   if (userId === admin.id) return Response.json({ error: 'That is you.' }, { status: 400 });

@@ -89,7 +89,10 @@ export const ViewAsButton = ({
         </form>
       ) : null}
       {error && !busy ? (
-        <span role="alert" className="absolute right-0 top-full mt-1 text-[11px] text-red-600 dark:text-red-400 whitespace-nowrap">
+        <span
+          role="alert"
+          className="absolute right-0 top-full mt-1 text-[11px] text-red-600 dark:text-red-400 whitespace-nowrap"
+        >
           {error}
         </span>
       ) : null}

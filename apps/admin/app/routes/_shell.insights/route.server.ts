@@ -1,6 +1,11 @@
 import type { LoaderFunctionArgs } from 'react-router';
 import { requirePlatformAdmin } from '~/utils/db.server';
-import { bucketClassSizes, collapseSchools, countryForDomain, SIZE_BUCKETS } from '~/utils/dashboard';
+import {
+  bucketClassSizes,
+  collapseSchools,
+  countryForDomain,
+  SIZE_BUCKETS,
+} from '~/utils/dashboard';
 import {
   GROWTH_RANGES,
   loadAdoption,

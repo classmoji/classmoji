@@ -97,7 +97,11 @@ export const Empty = ({ title, hint }: { title: string; hint?: string }) => (
 );
 
 export const InfoTip = ({ text }: { text: string }) => (
-  <span title={text} aria-label={text} className="inline-flex text-ink-4 hover:text-ink-2 cursor-help">
+  <span
+    title={text}
+    aria-label={text}
+    className="inline-flex text-ink-4 hover:text-ink-2 cursor-help"
+  >
     <IconInfoCircle size={13} stroke={1.75} />
   </span>
 );
@@ -258,12 +262,25 @@ export const SearchBox = ({
   );
 };
 
+/**
+ * Downloads the list as filtered now (every page, not just this one). A plain
+ * document request, so the loader's CSV response becomes a file.
+ */
+export const ExportLink = () => {
+  const [params] = useSearchParams();
+  const href = withParams(params, { format: 'csv' });
+  return (
+    <a href={href} download className={BTN_XS}>
+      Export CSV
+    </a>
+  );
+};
+
 /** The current path + query, to carry into a detail page's back link. */
 export const useReturnTo = () => {
   const location = useLocation();
   return `${location.pathname}${location.search}`;
 };
-
 
 // ───────── marks ─────────
 
@@ -317,8 +334,8 @@ export const ROLE_LABEL: Record<string, string> = {
   PENDING: 'Pending',
 };
 
-export const RoleChip = ({ role }: { role: string }) => (
-  <span className={ROLE_STYLE[role] ?? 'chip chip-ghost'}>{ROLE_LABEL[role] ?? role}</span>
+export const RoleChip = ({ of }: { of: string }) => (
+  <span className={ROLE_STYLE[of] ?? 'chip chip-ghost'}>{ROLE_LABEL[of] ?? of}</span>
 );
 
 export const StatusChips = ({
@@ -366,7 +383,13 @@ export const Sparkline = ({ values, label }: { values: number[]; label: string }
         fill="var(--ink-0)"
         opacity={0.06}
       />
-      <polyline points={full} fill="none" stroke="var(--ink-0)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+      <polyline
+        points={full}
+        fill="none"
+        stroke="var(--ink-0)"
+        strokeWidth={1.5}
+        vectorEffect="non-scaling-stroke"
+      />
       {tail ? (
         <polyline
           points={tail}

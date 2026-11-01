@@ -4,8 +4,11 @@ import { GIT_IDENTITY } from '@classmoji/database';
 import { displayUsername } from '@classmoji/utils';
 import { prisma, requirePlatformAdmin } from '~/utils/db.server';
 import { distinctClassrooms, emailDomain, highestRole } from '~/utils/people';
+import { platformAudit } from '~/utils/audit.server';
+import { csvResponse, toCsv } from '~/utils/csv';
 
 const PAGE_SIZE = 50;
+const CSV_LIMIT = 10_000;
 const REAL = { is_example: false } as const;
 
 /** Filter chips: '' is the default (people who have signed in). */
@@ -66,7 +69,7 @@ const searchWhere = (q: string): Prisma.UserWhereInput => {
 };
 
 export async function loadPeople({ request }: LoaderFunctionArgs) {
-  await requirePlatformAdmin(request);
+  const { user: admin } = await requirePlatformAdmin(request);
   const url = new URL(request.url);
   const q = (url.searchParams.get('q') ?? '').trim();
   const filterParam = url.searchParams.get('role') ?? '';
@@ -75,6 +78,7 @@ export async function loadPeople({ request }: LoaderFunctionArgs) {
   const sort: SortKey = sortParam in SORTS ? (sortParam as SortKey) : 'seen';
   const dir: Prisma.SortOrder = url.searchParams.get('dir') === 'asc' ? 'asc' : 'desc';
   const page = Math.max(1, Number(url.searchParams.get('page')) || 1);
+  const csv = url.searchParams.get('format') === 'csv';
 
   const search = searchWhere(q);
   const where: Prisma.UserWhereInput = { AND: [search, FILTERS[filter].where] };
@@ -83,8 +87,8 @@ export async function loadPeople({ request }: LoaderFunctionArgs) {
     prisma.user.findMany({
       where,
       orderBy: [...SORTS[sort](dir), { id: 'asc' }],
-      skip: (page - 1) * PAGE_SIZE,
-      take: PAGE_SIZE,
+      skip: csv ? 0 : (page - 1) * PAGE_SIZE,
+      take: csv ? CSV_LIMIT : PAGE_SIZE,
       select: {
         id: true,
         name: true,
@@ -108,6 +112,67 @@ export async function loadPeople({ request }: LoaderFunctionArgs) {
     ),
   ]);
 
+  const rows = users.map(u => {
+    const providers = [
+      ...new Set(
+        (u.accounts ?? [])
+          .map(a => a.provider_id)
+          .filter((p): p is string => p === 'github' || p === 'gitlab')
+      ),
+    ];
+    return {
+      id: u.id,
+      name: u.name ?? displayUsername(u) ?? u.email ?? u.id,
+      login: displayUsername(u),
+      email: u.email,
+      image: u.image,
+      domain: emailDomain(u.email),
+      role: highestRole(u.classroom_memberships),
+      classes: distinctClassrooms(u.classroom_memberships),
+      providers,
+      lastSeenAt: u.last_seen_at?.toISOString() ?? null,
+      firstSignInAt: u.first_sign_in_at?.toISOString() ?? null,
+      createdAt: u.created_at.toISOString(),
+    };
+  });
+
+  if (csv) {
+    // Names and emails leave the app: recorded like any other read of them.
+    await platformAudit({
+      actorId: admin.id,
+      action: 'export',
+      targetType: 'users',
+      data: { list: 'people', rows: rows.length, filter: { q, role: filter } },
+    });
+    return csvResponse(
+      `people-${new Date().toISOString().slice(0, 10)}.csv`,
+      toCsv(
+        [
+          'id',
+          'name',
+          'username',
+          'email',
+          'role',
+          'classes',
+          'providers',
+          'last_seen_at',
+          'first_sign_in_at',
+        ],
+        rows.map(r => [
+          r.id,
+          r.name,
+          r.login,
+          r.email,
+          r.role,
+          r.classes,
+          r.providers.join(' '),
+          r.lastSeenAt,
+          r.firstSignInAt,
+        ])
+      )
+    );
+  }
+
   return {
     query: q,
     filter,
@@ -119,27 +184,6 @@ export async function loadPeople({ request }: LoaderFunctionArgs) {
       label: FILTERS[k].label,
       count: counts[i],
     })),
-    rows: users.map(u => {
-      const providers = [
-        ...new Set(
-          (u.accounts ?? [])
-            .map(a => a.provider_id)
-            .filter((p): p is string => p === 'github' || p === 'gitlab')
-        ),
-      ];
-      return {
-        id: u.id,
-        name: u.name ?? displayUsername(u) ?? u.email ?? u.id,
-        login: displayUsername(u),
-        image: u.image,
-        domain: emailDomain(u.email),
-        role: highestRole(u.classroom_memberships),
-        classes: distinctClassrooms(u.classroom_memberships),
-        providers,
-        lastSeenAt: u.last_seen_at?.toISOString() ?? null,
-        firstSignInAt: u.first_sign_in_at?.toISOString() ?? null,
-        createdAt: u.created_at.toISOString(),
-      };
-    }),
+    rows: rows.map(({ email: _email, ...r }) => r),
   };
 }

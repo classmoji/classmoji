@@ -26,6 +26,16 @@ export const noteSeen = (
   lastWrite.set(userId, now);
   // Bound the map: a long-lived process sees every user eventually.
   if (lastWrite.size > 50_000) lastWrite.clear();
+  // Nothing here may break the request it rides on, synchronously or not.
+  try {
+    write(userId);
+  } catch (error) {
+    lastWrite.delete(userId);
+    console.warn('[auth] noteSeen failed:', error);
+  }
+};
+
+const write = (userId: string) => {
   const prisma = getPrisma();
   // The day row is what weekly-active and retention count; the day is the
   // calendar day in the admin app's reporting zone (REPORTING_TZ there).
