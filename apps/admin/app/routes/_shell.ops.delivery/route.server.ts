@@ -1,4 +1,5 @@
 import { prisma, requirePlatformAdmin } from '~/utils/db.server';
+import { platformAudit } from '~/utils/audit.server';
 import type { ActionFunctionArgs, LoaderFunctionArgs } from 'react-router';
 
 /**
@@ -21,6 +22,11 @@ export interface DeliveryRow {
   orgLogin: string;
   contentRepo: string;
   enabled: boolean;
+  archived: boolean;
+  syncedAt: string | null;
+  syncedCommit: string | null;
+  collab: boolean;
+  checkpointErrors: number;
 }
 
 /** Example classrooms are per-user onboarding sandboxes — noise on this list. */
@@ -33,9 +39,14 @@ const NOT_EXAMPLE = { is_example: false } as const;
  * buttons say "in this list", and a list narrowed by a search while the update
  * quietly hit every classroom on the platform is a confirmation dialog that
  * lies. One function, one answer, both directions.
+ *
+ * Archived classrooms are left out unless `scope=all`: nobody is reading them.
  */
 function searchFilter(request: Request) {
-  const q = (new URL(request.url).searchParams.get('q') ?? '').trim();
+  const params = new URL(request.url).searchParams;
+  const q = (params.get('q') ?? '').trim();
+  const state = params.get('state');
+  const scope = params.get('scope') === 'all' ? 'all' : 'active';
   const search = q
     ? {
         OR: [
@@ -45,15 +56,21 @@ function searchFilter(request: Request) {
         ],
       }
     : {};
-  return { q, where: { ...search, ...NOT_EXAMPLE } };
+  const base = { ...search, ...NOT_EXAMPLE, ...(scope === 'active' ? { is_archived: false } : {}) };
+  const where = {
+    ...base,
+    ...(state === 'on' ? { content_delivery_enabled: true } : {}),
+    ...(state === 'off' ? { content_delivery_enabled: false } : {}),
+  };
+  return { q, state: state === 'on' || state === 'off' ? state : '', scope, base, where };
 }
 
 export async function loadContentDelivery({ request }: LoaderFunctionArgs) {
   await requirePlatformAdmin(request);
 
-  const { q, where } = searchFilter(request);
+  const { q, state, scope, base, where } = searchFilter(request);
 
-  const [classrooms, enabledCount, totalCount] = await Promise.all([
+  const [classrooms, enabledCount, totalCount, baseCount] = await Promise.all([
     prisma.classroom.findMany({
       where,
       orderBy: [{ content_delivery_enabled: 'desc' }, { created_at: 'desc' }],
@@ -63,14 +80,29 @@ export async function loadContentDelivery({ request }: LoaderFunctionArgs) {
         name: true,
         content_repo: true,
         content_delivery_enabled: true,
+        content_assets_synced_at: true,
+        content_assets_synced_commit: true,
+        collab_enabled: true,
+        is_archived: true,
         git_organization: { select: { login: true } },
       },
     }),
     // Both counts are scoped to the SAME filter the rows are, so "12 of 30 on"
     // describes the list in front of you rather than the whole platform.
-    prisma.classroom.count({ where: { ...where, content_delivery_enabled: true } }),
+    prisma.classroom.count({ where: { ...base, content_delivery_enabled: true } }),
     prisma.classroom.count({ where }),
+    prisma.classroom.count({ where: base }),
   ]);
+
+  const checkpointErrors = await prisma.collabDoc.groupBy({
+    by: ['classroom_id'],
+    where: {
+      classroom_id: { in: classrooms.map(c => c.id) },
+      last_checkpoint_error: { not: null },
+    },
+    _count: { _all: true },
+  });
+  const errorsBy = new Map(checkpointErrors.map(e => [e.classroom_id, e._count._all]));
 
   const rows: DeliveryRow[] = classrooms.map(c => ({
     id: c.id,
@@ -79,13 +111,21 @@ export async function loadContentDelivery({ request }: LoaderFunctionArgs) {
     orgLogin: c.git_organization.login,
     contentRepo: c.content_repo,
     enabled: c.content_delivery_enabled,
+    archived: c.is_archived,
+    syncedAt: c.content_assets_synced_at?.toISOString() ?? null,
+    syncedCommit: c.content_assets_synced_commit,
+    collab: c.collab_enabled,
+    checkpointErrors: errorsBy.get(c.id) ?? 0,
   }));
 
   return {
     rows,
     query: q,
+    state,
+    scope,
     enabledCount,
     totalCount,
+    baseCount,
     // Never the values themselves — only whether both are present. A signing
     // secret has no business travelling to a browser, admin session or not.
     envConfigured: Boolean(
@@ -103,7 +143,7 @@ export async function loadContentDelivery({ request }: LoaderFunctionArgs) {
  * The action's own check is the one that decides.
  */
 export async function contentDeliveryAction({ request }: ActionFunctionArgs) {
-  await requirePlatformAdmin(request);
+  const { user: admin } = await requirePlatformAdmin(request);
 
   // Read the body BEFORE anything else touches the request: `searchFilter`
   // reads the URL, which survives, but the body can only be consumed once.
@@ -115,9 +155,18 @@ export async function contentDeliveryAction({ request }: ActionFunctionArgs) {
     if (!classroomId) return { error: 'No classroom named.' };
     const enabled = form.get('enabled') === 'true';
     try {
-      await prisma.classroom.update({
+      const updated = await prisma.classroom.update({
         where: { id: classroomId },
         data: { content_delivery_enabled: enabled },
+        select: { id: true, name: true },
+      });
+      await platformAudit({
+        actorId: admin.id,
+        action: 'delivery.toggle',
+        targetType: 'classroom',
+        targetId: updated.id,
+        classroomId: updated.id,
+        data: { enabled, classroomName: updated.name },
       });
     } catch (error) {
       // P2025 — the row is gone. An admin list is a snapshot, and a classroom
@@ -138,11 +187,17 @@ export async function contentDeliveryAction({ request }: ActionFunctionArgs) {
     // Scoped to the SAME filter the list is showing, because the dialog that
     // asked for this said "in this list". An admin who searched for one course
     // and clicked "Enable for all" must not switch on the whole platform.
-    const { where } = searchFilter(request);
+    const { where, q, state, scope } = searchFilter(request);
     try {
       const { count } = await prisma.classroom.updateMany({
         where: { ...where, content_delivery_enabled: !enabled },
         data: { content_delivery_enabled: enabled },
+      });
+      await platformAudit({
+        actorId: admin.id,
+        action: 'delivery.bulk',
+        targetType: 'classrooms',
+        data: { enabled, changed: count, filter: { q, state, scope } },
       });
       return { ok: true, changed: count };
     } catch (error) {

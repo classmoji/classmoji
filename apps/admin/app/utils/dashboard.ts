@@ -4,44 +4,6 @@
  * queries and hands rows to these.
  */
 
-export interface WeekBin {
-  start: Date;
-  end: Date;
-}
-
-/** `weeks` consecutive 7-day bins ending now, oldest first. */
-export const buildWeeklyBins = (now: Date, weeks: number): WeekBin[] => {
-  const weekMs = 7 * 24 * 60 * 60 * 1000;
-  const bins: WeekBin[] = [];
-  for (let i = weeks - 1; i >= 0; i--) {
-    const end = new Date(now.getTime() - i * weekMs);
-    bins.push({ start: new Date(end.getTime() - weekMs), end });
-  }
-  return bins;
-};
-
-/** `days` consecutive 24-hour bins ending now, oldest first. */
-export const buildDailyBins = (now: Date, days: number): WeekBin[] => {
-  const dayMs = 24 * 60 * 60 * 1000;
-  const bins: WeekBin[] = [];
-  for (let i = days - 1; i >= 0; i--) {
-    const end = new Date(now.getTime() - i * dayMs);
-    bins.push({ start: new Date(end.getTime() - dayMs), end });
-  }
-  return bins;
-};
-
-/** Count timestamps per bin (weekly or daily). Anything outside the window is dropped. */
-export const countByWeek = (timestamps: Date[], bins: WeekBin[]): number[] => {
-  const counts = new Array<number>(bins.length).fill(0);
-  for (const ts of timestamps) {
-    const t = ts.getTime();
-    const idx = bins.findIndex(b => t >= b.start.getTime() && t < b.end.getTime());
-    if (idx >= 0) counts[idx] += 1;
-  }
-  return counts;
-};
-
 /** Mailbox providers: real people, but not a school. */
 const PERSONAL_DOMAINS = new Set([
   'gmail.com',
@@ -71,11 +33,20 @@ export const registrableDomain = (domain: string): string => {
   const labels = domain.trim().toLowerCase().split('.').filter(Boolean);
   if (labels.length <= 2) return labels.join('.');
   const [tld, second] = [labels[labels.length - 1], labels[labels.length - 2]];
+  // US school districts: lausd.k12.ca.us is the district, not "ca.us".
+  if (tld === 'us' && labels.length >= 4 && labels[labels.length - 3] === 'k12') {
+    return labels.slice(-4).join('.');
+  }
+  // Other US locality names (ci.boston.ma.us): keep the locality.
+  if (tld === 'us' && second.length === 2 && labels.length >= 3) {
+    return labels.slice(-3).join('.');
+  }
   const keep = tld.length === 2 && PUBLIC_SECOND_LABELS.has(second) ? 3 : 2;
   return labels.slice(-keep).join('.');
 };
 
 export const PERSONAL_EMAIL_LABEL = 'Personal email';
+export const OTHER_DOMAINS_LABEL = 'Other';
 
 export interface SchoolRow {
   school: string;
@@ -84,8 +55,9 @@ export interface SchoolRow {
 }
 
 /**
- * Fold raw per-domain counts into per-school rows, largest first, with every
- * mailbox provider merged into one trailing "Personal email" row.
+ * Fold raw per-domain counts into per-domain rows, largest first, then one
+ * "Other" row for everything past `limit` (so the table adds up to the total)
+ * and every mailbox provider merged into one trailing "Personal email" row.
  */
 export const collapseSchools = (
   rows: Array<{ domain: string; users: number; instructors: number }>,
@@ -109,9 +81,18 @@ export const collapseSchools = (
     bySchool.set(school, acc);
   }
 
-  const schools = [...bySchool.values()]
-    .sort((a, b) => b.users - a.users || a.school.localeCompare(b.school))
-    .slice(0, limit);
+  const sorted = [...bySchool.values()].sort(
+    (a, b) => b.users - a.users || a.school.localeCompare(b.school)
+  );
+  const schools = sorted.slice(0, limit);
+  const rest = sorted.slice(limit);
+  if (rest.length > 0) {
+    schools.push({
+      school: OTHER_DOMAINS_LABEL,
+      users: rest.reduce((n, r) => n + r.users, 0),
+      instructors: rest.reduce((n, r) => n + r.instructors, 0),
+    });
+  }
   return personal ? [...schools, personal] : schools;
 };
 
@@ -227,7 +208,7 @@ export const SIZE_BUCKETS = [
   { label: '1–10', min: 1, max: 10 },
   { label: '11–30', min: 11, max: 30 },
   { label: '31–100', min: 31, max: 100 },
-  { label: '100+', min: 101, max: Infinity },
+  { label: '101+', min: 101, max: Infinity },
 ] as const;
 
 /** Count classrooms per student-count bucket, in SIZE_BUCKETS order. */
@@ -246,7 +227,7 @@ export const median = (values: number[]): number | null => {
 
 /** "3.5h", "2d", "3w": a duration in hours as one short unit. */
 export const formatHours = (hours: number | null): string => {
-  if (hours === null) return '—';
+  if (hours === null || hours < 0) return '—';
   if (hours < 1) return '<1h';
   if (hours < 48) return `${Math.round(hours)}h`;
   const days = hours / 24;
