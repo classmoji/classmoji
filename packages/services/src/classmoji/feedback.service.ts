@@ -156,6 +156,53 @@ const publicComment = <
 
 // ─────────────────── Reading ───────────────────
 
+/** How many faces the board shows per post; the rest are counted. */
+const PARTICIPANT_FACES = 3;
+
+/**
+ * Who is in each post's conversation, for the board's avatars: the author,
+ * then commenters in the order they first commented. Anonymous posts and
+ * comments are left out entirely, so a face never unmasks them. `total` counts
+ * everyone named, `people` holds the first few.
+ */
+const participantsFor = async (
+  posts: { id: string; author_id: string | null; is_anonymous: boolean }[]
+) => {
+  const result = new Map<
+    string,
+    { people: { id: string; name: string | null; image: string | null }[]; total: number }
+  >();
+  if (posts.length === 0) return result;
+  const rows = await getPrisma().feedbackComment.groupBy({
+    by: ['post_id', 'author_id'],
+    where: { post_id: { in: posts.map(p => p.id) }, is_anonymous: false, author_id: { not: null } },
+    _min: { created_at: true },
+    orderBy: { _min: { created_at: 'asc' } },
+  });
+  const ids = new Map<string, string[]>(
+    posts.map(p => [p.id, p.author_id && !p.is_anonymous ? [p.author_id] : []])
+  );
+  for (const row of rows) {
+    const list = ids.get(row.post_id);
+    if (list && row.author_id && !list.includes(row.author_id)) list.push(row.author_id);
+  }
+  const faceIds = [...new Set([...ids.values()].flatMap(list => list.slice(0, PARTICIPANT_FACES)))];
+  const users = faceIds.length
+    ? await getPrisma().user.findMany({ where: { id: { in: faceIds } }, ...PUBLIC_AUTHOR })
+    : [];
+  const byId = new Map(users.map(u => [u.id, u]));
+  for (const [postId, list] of ids) {
+    result.set(postId, {
+      people: list
+        .slice(0, PARTICIPANT_FACES)
+        .map(id => byId.get(id))
+        .filter((u): u is NonNullable<typeof u> => Boolean(u)),
+      total: list.length,
+    });
+  }
+  return result;
+};
+
 /**
  * Posts for the board. `trending` weighs votes by age (newer rises), the rest
  * sort in the database. `viewerVoted` is filled in when a viewer is signed in.
@@ -223,11 +270,18 @@ export const listPosts = async ({
   const ordered =
     sort === 'trending' ? [...posts].sort((a, b) => trendScore(b) - trendScore(a)) : posts;
 
-  const voted = await votedPostIds(
-    viewerId,
-    ordered.map(p => p.id)
-  );
-  return ordered.map(post => ({ ...publicPost(post, viewerId), viewerVoted: voted.has(post.id) }));
+  const [voted, participants] = await Promise.all([
+    votedPostIds(
+      viewerId,
+      ordered.map(p => p.id)
+    ),
+    participantsFor(ordered),
+  ]);
+  return ordered.map(post => ({
+    ...publicPost(post, viewerId),
+    viewerVoted: voted.has(post.id),
+    participants: participants.get(post.id) ?? { people: [], total: 0 },
+  }));
 };
 
 /** How many posts the viewer wrote and follows, for the board's tabs. */

@@ -23,6 +23,8 @@ export interface FeedbackPostSummary {
   viewerVoted: boolean;
   /** A bug report's first field; the list shows it instead of the full body. */
   bug_what_happened?: string | null;
+  /** The author and commenters (never anonymous ones): the first few, and how many. */
+  participants?: { people: FeedbackAuthor[]; total: number };
 }
 
 export interface FeedbackCommentView {
@@ -63,21 +65,64 @@ export const ALL_STATUSES: FeedbackStatus[] = [
 
 export const STATUS_META: Record<
   FeedbackStatus,
-  { label: string; description: string; ink: string }
+  {
+    label: string;
+    description: string;
+    ink: string;
+    /** The badge: its emoji and colours. */
+    glyph: string;
+    badge: string;
+  }
 > = {
-  IN_REVIEW: { label: 'In review', description: 'Under consideration', ink: 'text-sky-ink' },
-  PLANNED: { label: 'Planned', description: 'Committed and queued', ink: 'text-lilac-ink' },
-  IN_PROGRESS: { label: 'In progress', description: 'Actively being built', ink: 'text-amber-ink' },
-  COMPLETED: { label: 'Completed', description: 'Recently shipped', ink: 'text-mint-ink' },
-  FIXED: { label: 'Fixed', description: 'The fix has shipped', ink: 'text-mint-ink' },
-  ANSWERED: { label: 'Answered', description: 'See the replies', ink: 'text-mint-ink' },
+  IN_REVIEW: {
+    label: 'In review',
+    description: 'Under consideration',
+    ink: 'text-sky-ink',
+    glyph: '🔍',
+    badge: 'bg-sky-bg border-sky-bord text-sky-ink',
+  },
+  PLANNED: {
+    label: 'Planned',
+    description: 'Committed and queued',
+    ink: 'text-lilac-ink',
+    glyph: '◌',
+    badge: 'bg-lilac-bg border-lilac-bord text-lilac-ink',
+  },
+  IN_PROGRESS: {
+    label: 'In progress',
+    description: 'Actively being built',
+    ink: 'text-amber-ink',
+    glyph: '◔',
+    badge: 'bg-amber-bg border-amber-bord text-amber-ink',
+  },
+  COMPLETED: {
+    label: 'Completed',
+    description: 'Recently shipped',
+    ink: 'text-mint-ink',
+    glyph: '✓',
+    badge: 'bg-mint-bg border-mint-bord text-mint-ink',
+  },
+  FIXED: {
+    label: 'Fixed',
+    description: 'The fix has shipped',
+    ink: 'text-mint-ink',
+    glyph: '✓',
+    badge: 'bg-mint-bg border-mint-bord text-mint-ink',
+  },
+  ANSWERED: {
+    label: 'Answered',
+    description: 'See the replies',
+    ink: 'text-mint-ink',
+    glyph: '✓',
+    badge: 'bg-mint-bg border-mint-bord text-mint-ink',
+  },
 };
 
 export const CATEGORY_ORDER: FeedbackCategory[] = ['FEATURE', 'BUG', 'QUESTION'];
 
 export const CATEGORY_EMOJI: Record<FeedbackCategory, string> = {
   FEATURE: '💡',
-  BUG: '🐛',
+  BUG: '🐞',
   QUESTION: '❓',
 };
 
@@ -100,7 +145,7 @@ export const BUG_SECTIONS = [
 
 /** Plural names for the board's type filter. */
 export const CATEGORY_FILTER_LABELS: Record<FeedbackCategory, string> = {
-  FEATURE: 'Feature requests',
+  FEATURE: 'Features',
   BUG: 'Bugs',
   QUESTION: 'Questions',
 };

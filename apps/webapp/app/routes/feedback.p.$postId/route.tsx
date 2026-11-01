@@ -7,6 +7,7 @@ import { LinkedText } from '~/components/features/feedback/LinkedText';
 import { MaintainerBadge } from '~/components/features/feedback/MaintainerBadge';
 import { CommentComposer } from '~/components/features/feedback/CommentComposer';
 import { CommentItem } from '~/components/features/feedback/CommentItem';
+import { ParticipantStack } from '~/components/features/feedback/ParticipantStack';
 import { StatusLabel } from '~/components/features/feedback/StatusLabel';
 import {
   useFeedbackAction,
@@ -102,6 +103,19 @@ export default function FeedbackPostPage() {
 
   const author = authorName(post.author, post.is_anonymous);
 
+  // Everyone named in the conversation: the author, then commenters (replies
+  // too) in the order they first spoke. Anonymous ones are left out.
+  const participants = useMemo(() => {
+    const seen = new Map<string, NonNullable<FeedbackCommentView['author']>>();
+    if (post.author && !post.is_anonymous) seen.set(post.author.id, post.author);
+    const all = (post.comments as FeedbackCommentView[])
+      .flatMap(c => [c, ...(c.replies ?? [])])
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    for (const c of all)
+      if (c.author && !c.is_anonymous && !seen.has(c.author.id)) seen.set(c.author.id, c.author);
+    return [...seen.values()];
+  }, [post.author, post.is_anonymous, post.comments]);
+
   return (
     <div className="mx-auto w-full max-w-[1396px] px-4 pb-24 pt-8 sm:px-6">
       <Link
@@ -178,6 +192,16 @@ export default function FeedbackPostPage() {
                 <span className="text-[12px] font-semibold text-ink-3">Open</span>
               )}
             </div>
+            {participants.length > 1 && (
+              <div className="mt-3 flex items-center gap-2 text-[12px] text-ink-3">
+                <ParticipantStack
+                  people={participants.slice(0, 8)}
+                  total={participants.length}
+                  size={26}
+                />
+                <span>{participants.length} people in this conversation</span>
+              </div>
+            )}
           </div>
         </div>
 
