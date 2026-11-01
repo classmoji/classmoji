@@ -6,7 +6,7 @@ import getPrisma from '@classmoji/database';
 import type { AskMojiAccess } from '@classmoji/services';
 import type { Role } from '@prisma/client';
 import { ClassmojiService } from '@classmoji/services';
-import { noteSeen } from './lastSeen';
+import { noteSeen } from './lastSeen.ts';
 
 // The signing secret and the cookie prefix live in ./secret.ts so that modules
 // which only need to sign something (./siteReturnToken.ts) can share them
