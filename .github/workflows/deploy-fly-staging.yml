@@ -215,7 +215,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
+        with:
+          version: 0.5.1
       - name: Deploy webapp
         run: |
           CONFIG=$(scripts/fly-autostop-config.sh apps/webapp/fly.toml stop)
@@ -239,7 +241,9 @@ jobs:
         with:
           submodules: true
           token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
-      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
+        with:
+          version: 0.5.1
       - name: Deploy ai-agent
         run: |
           CONFIG=$(scripts/fly-autostop-config.sh apps/ai-agent/fly.toml suspend)
@@ -255,7 +259,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
+        with:
+          version: 0.5.1
       - name: Deploy hook-station
         run: |
           # hook-station is the one staging app that must NOT scale to zero: a
@@ -277,7 +283,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
+        with:
+          version: 0.5.1
       - name: Deploy collab
         run: |
           # Like hook-station, collab must NOT scale to zero: open rooms and
@@ -302,7 +310,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
+        with:
+          version: 0.5.1
       - name: Deploy mcp
         run: |
           if flyctl status --app classmoji-mcp-staging >/dev/null 2>&1; then
@@ -330,7 +340,9 @@ jobs:
           node-version: '22'
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
-      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
+        with:
+          version: 0.5.1
       - name: Deploy site
         working-directory: apps/site
         run: |
@@ -350,7 +362,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
+        with:
+          version: 0.5.1
       - name: Deploy slides
         run: |
           CONFIG=$(scripts/fly-autostop-config.sh apps/slides/fly.toml stop)
@@ -366,7 +380,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
+        with:
+          version: 0.5.1
       - name: Deploy pages
         run: |
           CONFIG=$(scripts/fly-autostop-config.sh apps/pages/fly.toml stop)
@@ -382,7 +398,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
+        with:
+          version: 0.5.1
       - name: Deploy admin
         run: |
           CONFIG=$(scripts/fly-autostop-config.sh apps/admin/fly.toml stop)
