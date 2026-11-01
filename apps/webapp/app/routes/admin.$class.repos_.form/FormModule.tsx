@@ -169,6 +169,15 @@ const FormModule = ({
   };
   const removeTest = (index: number) =>
     setAutogradingTests(prev => prev.filter((_, i) => i !== index));
+  // Saving numbers the tests in this order, which is the order they run in.
+  const moveTest = (from: number, to: number) =>
+    setAutogradingTests(prev => {
+      if (from === to || to < 0 || to >= prev.length) return prev;
+      const next = [...prev];
+      const [test] = next.splice(from, 1);
+      next.splice(to, 0, test);
+      return next;
+    });
   const saveTest = () => {
     if (!editingTest.name.trim()) {
       callout.show({ variant: 'error', title: 'Please name the test.' });
@@ -670,6 +679,7 @@ const FormModule = ({
                 tests={autogradingTests}
                 onEdit={openEditTest}
                 onRemove={removeTest}
+                onMove={moveTest}
               />
             </Card>
           }
