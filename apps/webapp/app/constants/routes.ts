@@ -200,7 +200,7 @@ export const routes = {
   // Assessment (continued)
   tokens: {
     link: '/tokens',
-    label: 'Tokens',
+    label: 'Extension Tokens',
     icon: IconCoin,
     roles: ['OWNER', 'STUDENT'],
     category: 'assessment',

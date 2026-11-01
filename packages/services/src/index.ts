@@ -546,6 +546,7 @@ export {
   isFeedbackStatus,
   isFeedbackCategory,
   type FeedbackSort,
+  type FeedbackScope,
   type FeedbackRateKind,
   type RoadmapStatus,
 } from './classmoji/feedback.service.ts';

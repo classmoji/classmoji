@@ -92,7 +92,7 @@ const TokenExtensionPopover = ({
     if (balance === null || balance === undefined) {
       callout.show({
         variant: 'error',
-        title: 'Unable to determine token balance. Please refresh the page.',
+        title: 'Unable to determine your Extension Token balance. Please refresh the page.',
       });
       hide();
       return;
@@ -114,7 +114,7 @@ const TokenExtensionPopover = ({
     if (balance < tokenCost) {
       callout.show({
         variant: 'error',
-        title: `Insufficient tokens. You need ${tokenCost} tokens but only have ${balance}.`,
+        title: `Not enough Extension Tokens. You need ${tokenCost} tokens but only have ${balance}.`,
       });
       hide();
       return;
@@ -163,7 +163,7 @@ const TokenExtensionPopover = ({
                 : 'text-gray-500 dark:text-gray-400'
             }`}
           >
-            Balance: {balance} tokens
+            Balance: {balance} Extension Tokens
           </p>
         )}
         <div className="mt-4">

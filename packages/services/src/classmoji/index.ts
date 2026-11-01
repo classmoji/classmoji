@@ -31,6 +31,7 @@ import * as pageCommentsService from './pageComments.service.ts';
 import * as siteService from './site.service.ts';
 import * as emojiMappingService from './emojiMapping.service.ts';
 import * as helperService from './helper.service.ts';
+import * as gradebookExportService from './gradebookExport.service.ts';
 import * as letterGradeMappingService from './letterGradeMapping.service.ts';
 import * as organizationTagService from './organizationTag.service.ts';
 import * as regradeRequestService from './regradeRequest.service.ts';
@@ -171,6 +172,8 @@ const ClassmojiService = {
   site: siteService,
   emojiMapping: emojiMappingService,
   helper: helperService,
+  // The gradebook as a CSV for an LMS: the web download and the MCP tool.
+  gradebookExport: gradebookExportService,
   letterGradeMapping: letterGradeMappingService,
   organizationTag: organizationTagService,
   regradeRequest: regradeRequestService,

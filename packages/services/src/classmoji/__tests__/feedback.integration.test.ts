@@ -107,6 +107,31 @@ describe.skipIf(!RUN)('feedback.service (integration)', () => {
     expect((await feedback.getPost(anonPostId, voter))?.comments[0]?.viewerIsAuthor).toBe(true);
   });
 
+  it('tags maintainer posts and comments, but never anonymous ones', async () => {
+    const before = process.env.PLATFORM_ADMIN_USER_IDS;
+    process.env.PLATFORM_ADMIN_USER_IDS = `someone-else, ${admin}`;
+    try {
+      const { id } = await feedback.createPost({
+        authorId: admin,
+        title: `Maintainer post ${suite}`,
+        body: 'From the team',
+      });
+      await feedback.addComment({ postId: id, authorId: admin, body: 'Answer' });
+      await feedback.addComment({ postId: id, authorId: admin, body: 'Aside', isAnonymous: true });
+      await feedback.addComment({ postId: id, authorId: voter, body: 'Thanks' });
+
+      const post = await feedback.getPost(id, voter);
+      expect(post?.authorIsMaintainer).toBe(true);
+      const tags = Object.fromEntries(post!.comments.map(c => [c.body, c.authorIsMaintainer]));
+      expect(tags).toEqual({ Answer: true, Aside: false, Thanks: false });
+      const listed = await feedback.listPosts({ query: `Maintainer post ${suite}` });
+      expect(listed[0]?.authorIsMaintainer).toBe(true);
+    } finally {
+      process.env.PLATFORM_ADMIN_USER_IDS = before;
+      if (before === undefined) delete process.env.PLATFORM_ADMIN_USER_IDS;
+    }
+  });
+
   it('keeps vote_count in step and follows on vote', async () => {
     expect(await feedback.togglePostVote(postId, voter)).toEqual({ voted: true, voteCount: 2 });
     expect((await feedback.getPost(postId, voter))?.viewerFollows).toBe(true);
@@ -184,6 +209,35 @@ describe.skipIf(!RUN)('feedback.service (integration)', () => {
     expect(found[0]?.id).toBe(postId);
     expect(found[0]?.viewerVoted).toBe(true);
     expect(found[0]?.author).not.toHaveProperty('email');
+  });
+
+  it('lists only the viewer’s own posts, or the posts they follow', async () => {
+    const { id: own } = await feedback.createPost({
+      authorId: voter,
+      title: `Mine to see ${suite}`,
+      body: 'Mine',
+    });
+
+    const mine = await feedback.listPosts({ scope: 'mine', viewerId: voter, query: suite });
+    expect(mine.map(p => p.id)).toContain(own);
+    expect(mine.map(p => p.id)).not.toContain(postId);
+
+    // The author follows their own post; a voter follows what they voted for.
+    const followed = await feedback.listPosts({
+      scope: 'following',
+      viewerId: voter,
+      query: suite,
+    });
+    expect(followed.map(p => p.id)).toEqual(expect.arrayContaining([own, postId]));
+
+    // Another person's lists never include it; nobody signed in gets nothing.
+    const others = await feedback.listPosts({ scope: 'mine', viewerId: admin, query: suite });
+    expect(others.map(p => p.id)).not.toContain(own);
+    expect(await feedback.listPosts({ scope: 'mine', viewerId: null })).toEqual([]);
+
+    const counts = await feedback.countViewerPosts(voter);
+    expect(counts.mine).toBeGreaterThanOrEqual(1);
+    expect(counts.following).toBeGreaterThanOrEqual(2);
   });
 
   it("gives each type its own statuses, and refuses another type's", async () => {

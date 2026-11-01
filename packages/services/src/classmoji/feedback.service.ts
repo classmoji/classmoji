@@ -49,6 +49,7 @@ export const isStatusForCategory = (status: FeedbackStatus, category: FeedbackCa
   (FEEDBACK_STATUSES_BY_CATEGORY[category] as readonly FeedbackStatus[]).includes(status);
 
 export type FeedbackSort = 'top' | 'new' | 'trending';
+export type FeedbackScope = 'all' | 'mine' | 'following';
 
 const LIMITS = {
   titleMin: 3,
@@ -99,6 +100,19 @@ export const isFeedbackCategory = (value: unknown): value is FeedbackCategory =>
   typeof value === 'string' && (FEEDBACK_CATEGORIES as readonly string[]).includes(value);
 
 /**
+ * Maintainers are the platform admins (`PLATFORM_ADMIN_USER_IDS`); their posts
+ * and comments carry a tag on the board. Never for an anonymous one: the tag
+ * would name who wrote it.
+ */
+const writtenByMaintainer = (authorId: string | null, isAnonymous: boolean) =>
+  !isAnonymous &&
+  Boolean(authorId) &&
+  (process.env.PLATFORM_ADMIN_USER_IDS ?? '')
+    .split(',')
+    .map(id => id.trim())
+    .includes(authorId!);
+
+/**
  * A post as the public sees it: the raw `author_id` never leaves this module,
  * and an anonymous post has no author at all. `viewerIsAuthor` still lets the
  * person who wrote it manage it.
@@ -119,6 +133,7 @@ const publicPost = <
   return {
     ...rest,
     author: post.is_anonymous ? null : post.author,
+    authorIsMaintainer: writtenByMaintainer(author_id, post.is_anonymous),
     viewerIsAuthor: Boolean(viewerId && author_id === viewerId),
   };
 };
@@ -134,6 +149,7 @@ const publicComment = <
   return {
     ...rest,
     author: comment.is_anonymous ? null : comment.author,
+    authorIsMaintainer: writtenByMaintainer(author_id, comment.is_anonymous),
     viewerIsAuthor: Boolean(viewerId && author_id === viewerId),
   };
 };
@@ -155,6 +171,7 @@ export const listPosts = async ({
   query,
   viewerId,
   includeCompleted = false,
+  scope = 'all',
 }: {
   sort?: FeedbackSort;
   status?: FeedbackStatus | null;
@@ -163,17 +180,27 @@ export const listPosts = async ({
   query?: string;
   viewerId?: string | null;
   includeCompleted?: boolean;
+  /**
+   * `mine`: the viewer's own posts (anonymous ones too: only they see this
+   * list). `following`: posts the viewer follows. Both list every status, so a
+   * shipped request stays in view. Nobody signed in has neither.
+   */
+  scope?: FeedbackScope;
 }) => {
+  if (scope !== 'all' && !viewerId) return [];
   const q = query?.trim();
+  const showClosed = includeCompleted || scope !== 'all';
   const posts = await getPrisma().feedbackPost.findMany({
     where: {
       // A duplicate lives on in its original; its link redirects there.
       duplicate_of_id: null,
       ...(category ? { category } : {}),
       // `not` alone would drop untriaged posts (status null) too.
+      ...(scope === 'mine' ? { author_id: viewerId } : {}),
+      ...(scope === 'following' ? { follows: { some: { user_id: viewerId! } } } : {}),
       ...(status
         ? { status }
-        : includeCompleted
+        : showClosed
           ? {}
           : { OR: [{ status: null }, { status: { notIn: CLOSED_STATUSES } }] }),
       ...(q
@@ -201,6 +228,18 @@ export const listPosts = async ({
     ordered.map(p => p.id)
   );
   return ordered.map(post => ({ ...publicPost(post, viewerId), viewerVoted: voted.has(post.id) }));
+};
+
+/** How many posts the viewer wrote and follows, for the board's tabs. */
+export const countViewerPosts = async (viewerId: string) => {
+  const live = { duplicate_of_id: null };
+  const [mine, following] = await Promise.all([
+    getPrisma().feedbackPost.count({ where: { ...live, author_id: viewerId } }),
+    getPrisma().feedbackPost.count({
+      where: { ...live, follows: { some: { user_id: viewerId } } },
+    }),
+  ]);
+  return { mine, following };
 };
 
 const trendScore = (post: { vote_count: number; created_at: Date }) => {

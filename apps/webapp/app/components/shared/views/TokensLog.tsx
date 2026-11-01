@@ -201,9 +201,9 @@ const TokensLog = ({ transactions, students }: TokensLogProps) => {
       locale={{
         emptyText: (
           <div className="text-center py-12 text-gray-500">
-            <div className="font-medium">No token transactions yet</div>
+            <div className="font-medium">No Extension Token activity yet</div>
             <div className="text-sm">
-              Token transactions will appear here once students make purchases or spend tokens
+              Activity will appear here once students receive or spend Extension Tokens
             </div>
           </div>
         ),
