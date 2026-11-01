@@ -2,6 +2,7 @@ import { Link } from 'react-router';
 import { MessageSquareIcon } from 'lucide-react';
 import { plainText } from './LinkedText';
 import { CATEGORY_LABELS, CATEGORY_EMOJI, timeAgo, type FeedbackPostSummary } from './feedback';
+import { ParticipantStack } from './ParticipantStack';
 import { StatusLabel } from './StatusLabel';
 import { useOptimisticVote } from './useFeedbackAction';
 import { VoteButton } from './VoteButton';
@@ -64,8 +65,11 @@ export function PostListItem({ post, signedIn }: { post: FeedbackPostSummary; si
           )}
         </div>
       </div>
-      <div className="hidden min-w-[7rem] justify-end sm:flex">
+      <div className="hidden min-w-[7rem] flex-col items-end gap-1.5 sm:flex">
         {post.status && <StatusLabel status={post.status} />}
+        {post.participants && (
+          <ParticipantStack people={post.participants.people} total={post.participants.total} />
+        )}
       </div>
     </article>
   );
