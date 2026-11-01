@@ -404,6 +404,7 @@ model User {
   page_comments                 PageComment[]
   page_comment_reactions        PageCommentReaction[]
   platform_audit_logs           PlatformAuditLog[]        @relation("PlatformAuditActor")
+  activity_days                 UserActivityDay[]
 
   @@index([last_seen_at])
   @@index([first_sign_in_at])
@@ -1478,6 +1479,21 @@ model AuditLog {
   @@index([user_id])
   @@index([timestamp])
   @@map("audit_logs")
+}
+
+/// One row per person per calendar day (America/New_York) they used the
+/// webapp themselves, written by `noteSeen` (@classmoji/auth). Gives the admin
+/// app weekly-active counts and retention over time, which `last_seen_at`
+/// alone cannot (it only knows the latest visit). No history before Oct 31 2026.
+model UserActivityDay {
+  user_id String
+  day     DateTime @db.Date
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@id([user_id, day])
+  @@index([day])
+  @@map("user_activity_days")
 }
 
 /// What platform admins did in apps/admin: impersonations, content-delivery

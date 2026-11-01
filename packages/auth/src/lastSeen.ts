@@ -1,8 +1,9 @@
 import getPrisma from '@classmoji/database';
 
 /**
- * Records that a person used the app themselves: `last_seen_at` now, and
- * `first_sign_in_at` if this is the first time. The platform admin app reads
+ * Records that a person used the app themselves: `last_seen_at` now,
+ * `first_sign_in_at` if this is the first time, and today's row in
+ * `user_activity_days`. The platform admin app reads
  * both (activity, signups) instead of session rows, which move only when the
  * cookie cache lapses and vanish on sign-out.
  *
@@ -25,10 +26,14 @@ export const noteSeen = (
   lastWrite.set(userId, now);
   // Bound the map: a long-lived process sees every user eventually.
   if (lastWrite.size > 50_000) lastWrite.clear();
-  getPrisma()
-    .$executeRaw`UPDATE "users" SET "last_seen_at" = now(), "first_sign_in_at" = COALESCE("first_sign_in_at", now()) WHERE "id" = ${userId}`
-    .catch((error: unknown) => {
-      lastWrite.delete(userId);
-      console.warn('[auth] noteSeen failed:', error);
-    });
+  const prisma = getPrisma();
+  // The day row is what weekly-active and retention count; the day is the
+  // calendar day in the admin app's reporting zone (REPORTING_TZ there).
+  Promise.all([
+    prisma.$executeRaw`UPDATE "users" SET "last_seen_at" = now(), "first_sign_in_at" = COALESCE("first_sign_in_at", now()) WHERE "id" = ${userId}`,
+    prisma.$executeRaw`INSERT INTO "user_activity_days" ("user_id", "day") VALUES (${userId}, (now() AT TIME ZONE 'America/New_York')::date) ON CONFLICT DO NOTHING`,
+  ]).catch((error: unknown) => {
+    lastWrite.delete(userId);
+    console.warn('[auth] noteSeen failed:', error);
+  });
 };

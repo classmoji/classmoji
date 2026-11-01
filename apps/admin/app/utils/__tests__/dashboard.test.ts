@@ -1,11 +1,10 @@
 import { describe, it, expect } from 'vitest';
 
 import {
-  buildWeeklyBins,
-  countByWeek,
   registrableDomain,
   collapseSchools,
   PERSONAL_EMAIL_LABEL,
+  OTHER_DOMAINS_LABEL,
   countryForDomain,
   rollupCountries,
   bucketClassSizes,
@@ -13,35 +12,6 @@ import {
   formatHours,
   UNKNOWN_COUNTRY,
 } from '../dashboard.ts';
-
-const DAY = 24 * 60 * 60 * 1000;
-
-describe('buildWeeklyBins / countByWeek', () => {
-  it('builds contiguous 7-day bins ending now, oldest first', () => {
-    const now = new Date('2026-09-14T12:00:00Z');
-    const bins = buildWeeklyBins(now, 3);
-    expect(bins).toHaveLength(3);
-    expect(bins[2].end).toEqual(now);
-    expect(bins[0].end).toEqual(bins[1].start);
-    expect(bins[1].end.getTime() - bins[1].start.getTime()).toBe(7 * DAY);
-  });
-
-  it('counts into the right bin and drops anything outside the window', () => {
-    const now = new Date('2026-09-14T12:00:00Z');
-    const bins = buildWeeklyBins(now, 2);
-    const counts = countByWeek(
-      [
-        new Date(now.getTime() - 1 * DAY), // this week
-        new Date(now.getTime() - 8 * DAY), // last week
-        new Date(now.getTime() - 9 * DAY), // last week
-        new Date(now.getTime() - 30 * DAY), // out of window
-        new Date(now.getTime() + 1 * DAY), // future
-      ],
-      bins
-    );
-    expect(counts).toEqual([2, 1]);
-  });
-});
 
 describe('registrableDomain', () => {
   it('collapses subdomains to the institution', () => {
@@ -54,6 +24,12 @@ describe('registrableDomain', () => {
     expect(registrableDomain('cs.ox.ac.uk')).toBe('ox.ac.uk');
     expect(registrableDomain('ox.ac.uk')).toBe('ox.ac.uk');
     expect(registrableDomain('mail.example.co.jp')).toBe('example.co.jp');
+  });
+
+  it('keeps US school districts apart instead of collapsing them to "ca.us"', () => {
+    expect(registrableDomain('lausd.k12.ca.us')).toBe('lausd.k12.ca.us');
+    expect(registrableDomain('mail.sfusd.k12.ca.us')).toBe('sfusd.k12.ca.us');
+    expect(registrableDomain('ci.boston.ma.us')).toBe('boston.ma.us');
   });
 });
 
@@ -73,6 +49,7 @@ describe('collapseSchools', () => {
     expect(rows).toEqual([
       { school: 'ulaval.ca', users: 50, instructors: 3 },
       { school: 'dartmouth.edu', users: 40, instructors: 3 },
+      { school: OTHER_DOMAINS_LABEL, users: 1, instructors: 1 },
       { school: PERSONAL_EMAIL_LABEL, users: 10, instructors: 1 },
     ]);
   });
@@ -120,6 +97,7 @@ describe('bucketClassSizes / median / formatHours', () => {
     expect(median([5])).toBe(5);
     expect(median([1, 2, 3, 4])).toBe(2.5);
     expect(formatHours(null)).toBe('—');
+    expect(formatHours(-3)).toBe('—');
     expect(formatHours(0.4)).toBe('<1h');
     expect(formatHours(30)).toBe('30h');
     expect(formatHours(24 * 5)).toBe('5d');
