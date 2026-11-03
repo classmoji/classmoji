@@ -150,6 +150,31 @@
   }
 }
 
+/* A thread card in the panel, shown from the page-discussion strip under the
+   title (CommentsPanel.tsx adds and removes the class). */
+.pg-thread-flash {
+  border-radius: 0.75rem;
+  animation: pg-thread-flash 1.6s ease-out;
+}
+
+@keyframes pg-thread-flash {
+  0%,
+  35% {
+    box-shadow: 0 0 0 3px var(--pg-comment-flash);
+  }
+  100% {
+    box-shadow: 0 0 0 3px transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pg-thread-flash {
+    animation-duration: 0.01s;
+    animation-delay: 1.2s;
+    box-shadow: 0 0 0 3px var(--pg-comment-flash);
+  }
+}
+
 @media print {
   .pg-comment-bubble,
   .pg-comment-block-button,

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePageComments, type PageCommentsData } from '~/hooks/usePageComments.ts';
 import { CommentsBridge } from './commentsBridge.ts';
 import type { CommentAnchor, CommentResolution } from './commentsPlugin.ts';
+import { shouldRefetch, type RefetchReason } from './refetchPolicy.ts';
 import type { CommentIntent, CommentThread, NewThreadDraft, ReaderComments } from './types.ts';
 
 /**
@@ -41,13 +42,18 @@ export interface PageCommentsController {
   activeThreadId: string | null;
   /** A thread picked in the panel: its block scrolled to and flashed. */
   selectThread: (thread: CommentThread) => void;
+  /**
+   * Open the panel on the Open tab with this thread active; the panel
+   * scrolls its card into view and flashes it (`flash`).
+   */
+  focusThread: (threadId: string) => void;
+  /** The last `focusThread` (a new nonce each time, so a repeat flashes again). */
+  flash: { threadId: string; nonce: number } | null;
   /** Where each thread was found on the page (empty until the host reports). */
   resolution: CommentResolution;
 }
 
 const NO_RESOLUTION: CommentResolution = Object.freeze({});
-/** Window-focus refetches: at most one per this long. */
-const FOCUS_REFETCH_MS = 30_000;
 
 export function usePageCommentsController(
   pageId: string,
@@ -64,6 +70,7 @@ export function usePageCommentsController(
   const [draft, setDraft] = useState<NewThreadDraft | null>(null);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [resolution, setResolution] = useState<CommentResolution>(NO_RESOLUTION);
+  const [flash, setFlash] = useState<{ threadId: string; nonce: number } | null>(null);
 
   // A different page: the panel's state starts over.
   const [seenPage, setSeenPage] = useState(pageId);
@@ -75,6 +82,7 @@ export function usePageCommentsController(
     setDraft(null);
     setActiveThreadId(null);
     setResolution(NO_RESOLUTION);
+    setFlash(null);
   }
 
   const frozen = Boolean(readerComments?.frozen || viewer?.frozen || data.frozen);
@@ -85,39 +93,55 @@ export function usePageCommentsController(
   // open to draw. Resolved threads wait for the panel.
   const openOnLoad = readerComments?.open ?? 0;
   useEffect(() => {
-    if (enabled && openOnLoad > 0) void load({ quiet: true });
+    if (enabled && openOnLoad > 0) void load({ quiet: true }); // reason 'mount': always
     // Once per page (and when comments become available).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageId, enabled]);
 
-  // Back to the tab: others may have written. At most once per
-  // FOCUS_REFETCH_MS: for an owner or teacher each list reads the live page
-  // (collab snapshot or an uncached git read). Panel opens and own actions
-  // still refetch at once.
+  // A panel open or a window focus fetches again only when the list held is
+  // stale (`refetchPolicy.ts`: one freshness rule, whatever fetched it last).
+  // The arrival load above and the refresh after an own action always fetch.
+  const { lastFetchAt } = data;
+  const hasListRef = useRef(threads !== null);
+  hasListRef.current = threads !== null;
+  const refresh = useCallback(
+    (reason: RefetchReason, options?: { quiet?: boolean }) => {
+      if (
+        shouldRefetch({
+          reason,
+          hasList: hasListRef.current,
+          lastFetchAt: lastFetchAt(),
+          now: Date.now(),
+        })
+      ) {
+        void load(options);
+      }
+    },
+    [load, lastFetchAt]
+  );
+
+  // Back to the tab: others may have written.
   const loaded = threads !== null;
-  const lastFocusFetch = useRef(0);
   useEffect(() => {
     if (!enabled) return;
     const onFocus = () => {
       if (!loaded && !panelOpen) return;
-      const now = Date.now();
-      if (now - lastFocusFetch.current < FOCUS_REFETCH_MS) return;
-      lastFocusFetch.current = now;
-      void load({ quiet: true });
+      refresh('focus', { quiet: true });
     };
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
-  }, [enabled, loaded, panelOpen, load]);
+  }, [enabled, loaded, panelOpen, refresh]);
 
   const openPanel = useCallback(() => {
     setPanelOpen(true);
-    void load();
-  }, [load]);
+    refresh('panel');
+  }, [refresh]);
   const closePanel = useCallback(() => {
     setPanelOpen(false);
     setActiveThreadId(null);
     setFocusBlockId(null);
     setDraft(null);
+    setFlash(null);
   }, []);
   const panelOpenRef = useRef(panelOpen);
   panelOpenRef.current = panelOpen;
@@ -132,9 +156,9 @@ export function usePageCommentsController(
       setTab('open');
       setFocusBlockId(null);
       setPanelOpen(true);
-      void load({ quiet: true });
+      refresh('panel', { quiet: true });
     },
-    [load]
+    [refresh]
   );
   const cancelDraft = useCallback(() => setDraft(null), []);
   const draftRef = useRef(draft);
@@ -165,6 +189,20 @@ export function usePageCommentsController(
     [bridge]
   );
 
+  const flashNonce = useRef(0);
+  const focusThread = useCallback(
+    (threadId: string) => {
+      setActiveThreadId(threadId);
+      setFocusBlockId(null);
+      setTab('open');
+      setPanelOpen(true);
+      flashNonce.current += 1;
+      setFlash({ threadId, nonce: flashNonce.current });
+      refresh('panel', { quiet: true });
+    },
+    [refresh]
+  );
+
   // What the host's buttons do (read by the host at call time). Before the
   // publish below, so the host's first report after a publish has them.
   useEffect(() => {
@@ -173,19 +211,19 @@ export function usePageCommentsController(
         setFocusBlockId(blockId);
         setTab('open');
         setPanelOpen(true);
-        void load();
+        refresh('panel');
       },
       openThread: threadId => {
         setActiveThreadId(threadId);
         setFocusBlockId(null);
         setTab('open');
         setPanelOpen(true);
-        void load({ quiet: true });
+        refresh('panel', { quiet: true });
       },
       startThread,
       setResolution,
     };
-  }, [bridge, load, startThread]);
+  }, [bridge, refresh, startThread]);
 
   // What the host draws: every thread located, open ones highlighted;
   // the bubbles from the list once it is in, from the loader's counts before.
@@ -271,6 +309,8 @@ export function usePageCommentsController(
     act,
     activeThreadId,
     selectThread,
+    focusThread,
+    flash,
     resolution,
   };
 }
