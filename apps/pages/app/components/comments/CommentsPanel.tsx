@@ -76,6 +76,7 @@ export function CommentsPanel({ controller, embedded = false }: CommentsPanelPro
     activeThreadId,
     selectThread,
     resolution,
+    flash,
     data,
   } = controller;
 
@@ -125,6 +126,26 @@ export function CommentsPanel({ controller, embedded = false }: CommentsPanelPro
     );
     card?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }, [panelOpen, activeThreadId, threads]);
+
+  // A thread shown from the page (`focusThread`): its card scrolled to and
+  // flashed once the list is in. One attempt per request: a thread not in
+  // the list then (resolved, deleted meanwhile) is not flashed later.
+  const flashed = useRef(0);
+  useEffect(() => {
+    if (!panelOpen || !flash || flashed.current === flash.nonce || threads === null) return;
+    flashed.current = flash.nonce;
+    const card = panelRef.current?.querySelector<HTMLElement>(
+      `[data-thread-id="${CSS.escape(flash.threadId)}"]`
+    );
+    if (!card) return;
+    card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    card.classList.remove('pg-thread-flash');
+    // Restart the animation when the same card is flashed again.
+    void card.offsetWidth;
+    card.classList.add('pg-thread-flash');
+    const done = () => card.classList.remove('pg-thread-flash');
+    card.addEventListener('animationend', done, { once: true });
+  }, [panelOpen, flash, threads, tab]);
 
   const { open, resolved } = useMemo(() => {
     const all = threads ?? [];

@@ -10,6 +10,7 @@ import type { AssetSrcSets } from '~/hooks/useAssetSrcSets.ts';
 import { useReaderSectionsState } from '~/hooks/useReaderSections.tsx';
 import { usePageCommentsController } from '~/components/comments/usePageCommentsController.ts';
 import { CommentsButton, CommentsPanel } from '~/components/comments/CommentsPanel.tsx';
+import { PageDiscussion } from '~/components/comments/PageDiscussion.tsx';
 import { useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense } from 'react';
 import { IconPhoto } from '@tabler/icons-react';
 import { toast } from 'react-toastify';
@@ -1304,6 +1305,12 @@ const PageRoute = () => {
           <span className="inline-block px-2 py-0.5 text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-200 rounded-full mb-2">
             Draft
           </span>
+        )}
+
+        {/* The page's own open threads (page-level), above every host:
+            viewer, git editor and live editor alike. */}
+        {comments && (
+          <PageDiscussion controller={comments} pageLevelOnLoad={readerComments?.pageLevel ?? 0} />
         )}
 
         <div className="mt-2">
