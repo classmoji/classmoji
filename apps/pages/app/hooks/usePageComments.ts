@@ -15,6 +15,8 @@ import type {
  * Nothing is fetched until asked (`load`): the loader only sends counts
  * (plan D10). No realtime (D9): the caller loads on panel open, on window
  * focus, and this hook loads again after each of the reader's own actions.
+ * `lastFetchAt` is when the newest list held here was requested, whatever
+ * asked for it (`refetchPolicy.ts` decides from it whether to ask again).
  * A POST answers with the thread as it is now (null: gone), which replaces
  * the one held here at once; a GET started before that answer is dropped, so
  * a slow list never overwrites a newer action.
@@ -56,7 +58,6 @@ function threadOf(threads: CommentThread[] | null, payload: CommentIntent): stri
 }
 
 export interface PageCommentsData {
-  /** null until the first list has arrived. */
   /** The full list; null until it has been loaded. */
   threads: CommentThread[] | null;
   /**
@@ -67,6 +68,10 @@ export interface PageCommentsData {
   early: CommentThread[];
   viewer: CommentsViewer | null;
   loading: boolean;
+  /** The last list fetch failed (cleared by the next one that succeeds). */
+  failed: boolean;
+  /** When the list held now was requested (ms); null: none on this page yet. */
+  lastFetchAt: () => number | null;
   /** A write came back 403 CLASSROOM_LOCKED: hide every composer. */
   frozen: boolean;
   /** Fetch the list. `quiet`: no toast on failure (background refreshes). */
@@ -80,16 +85,22 @@ export function usePageComments(pageId: string, enabled: boolean): PageCommentsD
   const [early, setEarly] = useState<CommentThread[]>([]);
   const [viewer, setViewer] = useState<CommentsViewer | null>(null);
   const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
   const [frozen, setFrozen] = useState(false);
+  // When the list held was requested, and for which page.
+  const lastFetch = useRef<{ pageId: string; at: number } | null>(null);
 
-  // A different page: nothing of the last one carries over.
+  // A different page: nothing of the last one carries over (the stamp too,
+  // so A → B → back to A starts A over).
   const [seenPage, setSeenPage] = useState(pageId);
   if (seenPage !== pageId) {
     setSeenPage(pageId);
+    lastFetch.current = null;
     setThreads(null);
     setEarly([]);
     setViewer(null);
     setLoading(false);
+    setFailed(false);
     setFrozen(false);
   }
 
@@ -101,6 +112,10 @@ export function usePageComments(pageId: string, enabled: boolean): PageCommentsD
   threadsRef.current = threads;
   const earlyRef = useRef(early);
   earlyRef.current = early;
+  const lastFetchAt = useCallback(
+    () => (lastFetch.current?.pageId === pageRef.current ? lastFetch.current.at : null),
+    []
+  );
   // Bumped by every answered POST and every page change: a list fetched
   // before it is stale.
   const generation = useRef(0);
@@ -123,6 +138,7 @@ export function usePageComments(pageId: string, enabled: boolean): PageCommentsD
       return running.promise;
     }
     const token = {};
+    const requestedAt = Date.now();
     const promise = (async () => {
       setLoading(true);
       try {
@@ -136,14 +152,20 @@ export function usePageComments(pageId: string, enabled: boolean): PageCommentsD
         if (pageRef.current !== page || generation.current !== started) return;
         if (!response.ok || !body || !Array.isArray(body.threads)) {
           if (!quiet) toast.error(response.status === 429 ? SLOW_DOWN : LOAD_FAILED);
+          setFailed(true);
           return;
         }
+        lastFetch.current = { pageId: page, at: requestedAt };
+        setFailed(false);
         setThreads(body.threads);
         setEarly([]);
         setViewer(body.viewer ?? null);
         if (body.viewer?.frozen) setFrozen(true);
       } catch {
-        if (!quiet && pageRef.current === page) toast.error(LOAD_FAILED);
+        if (pageRef.current === page) {
+          if (!quiet) toast.error(LOAD_FAILED);
+          setFailed(true);
+        }
       } finally {
         if (pageRef.current === page) setLoading(false);
         if (inFlight.current?.token === token) inFlight.current = null;
@@ -204,5 +226,5 @@ export function usePageComments(pageId: string, enabled: boolean): PageCommentsD
     [load]
   );
 
-  return { threads, early, viewer, loading, frozen, load, act };
+  return { threads, early, viewer, loading, failed, lastFetchAt, frozen, load, act };
 }
