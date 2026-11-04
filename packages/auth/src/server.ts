@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto';
 import { betterAuth } from 'better-auth';
 import { APIError, createAuthMiddleware, getSession } from 'better-auth/api';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
@@ -367,41 +368,90 @@ function normalizeClientId(value: unknown): string | null {
 }
 
 /**
- * The client id a `/mcp/token` request names — from the request body or from an
- * HTTP Basic `Authorization` header, because better-auth accepts both
- * (node_modules/better-auth/dist/plugins/mcp/index.mjs:240-259).
- *
- * Used only by the Ask Moji refusal hook below. Returns null when no client id
- * is presented at all, which better-auth then refuses on its own (the refresh
- * grant compares the stored row's clientId against it).
+ * One field of a `/mcp/token` body, read the way the grant reads it. For a
+ * FormData body the LAST value wins, not the first: better-auth flattens it with
+ * `Object.fromEntries(body.entries())` (mcp/index.mjs:234), which keeps the last
+ * value for a repeated key, while `FormData.get()` returns the first — so
+ * `client_id=innocent&client_id=classmoji-ask-moji` would have a hook reading
+ * one value and the grant reading the other.
  */
-function tokenRequestClientId(body: unknown, authorization: string | null): string | null {
-  let clientId: unknown;
+function tokenRequestField(body: unknown, key: string): unknown {
   if (typeof FormData !== 'undefined' && body instanceof FormData) {
-    // LAST wins, not first. better-auth flattens a FormData body with
-    // `Object.fromEntries(body.entries())` (mcp/index.mjs:234), which keeps the
-    // last value for a repeated key, while `FormData.get()` returns the first —
-    // so `client_id=innocent&client_id=classmoji-ask-moji` would have this hook
-    // reading one value and the grant reading the other.
-    for (const [key, value] of body.entries()) {
-      if (key === 'client_id') clientId = value;
+    let value: unknown;
+    for (const [k, v] of body.entries()) {
+      if (k === key) value = v;
     }
-  } else if (body && typeof body === 'object') {
-    clientId = (body as Record<string, unknown>).client_id;
+    return value;
   }
-  const fromBody = normalizeClientId(clientId);
-  if (fromBody) return fromBody;
+  if (body && typeof body === 'object') return (body as Record<string, unknown>)[key];
+  return undefined;
+}
 
-  if (authorization?.startsWith('Basic ')) {
-    try {
-      const decoded = Buffer.from(authorization.slice('Basic '.length), 'base64').toString('utf8');
-      const [id] = decoded.split(':');
-      if (id) return id;
-    } catch {
-      return null;
-    }
+/**
+ * The client id and secret a `/mcp/token` request presents, read exactly as the
+ * grant reads them (node_modules/better-auth/dist/plugins/mcp/index.mjs:239-259):
+ * from the body, or from an HTTP Basic header ONLY when the RAW body values of
+ * both are falsy (`!client_id && !client_secret`, :240).
+ *
+ * The choice is made on the raw values and only then normalized. Deciding on
+ * the normalized id instead is a bypass: a JSON `client_id: 0` normalizes to
+ * "0" (no such client, so the checks below wave it through) while the grant
+ * finds it falsy and takes the real client from the Basic header.
+ *
+ * A null client id means none was presented, which the grant then refuses on
+ * its own (it compares the stored row's clientId against it).
+ */
+function tokenRequestCredentials(
+  body: unknown,
+  authorization: string | null
+): { clientId: string | null; secret: string | null } {
+  const rawId = tokenRequestField(body, 'client_id');
+  const rawSecret = tokenRequestField(body, 'client_secret');
+  if (rawId || rawSecret || !authorization?.startsWith('Basic ')) {
+    return { clientId: normalizeClientId(rawId), secret: normalizeClientId(rawSecret) };
   }
-  return null;
+  try {
+    const decoded = Buffer.from(authorization.slice('Basic '.length), 'base64').toString('utf8');
+    const [id, secret] = decoded.split(':');
+    return { clientId: id || null, secret: secret || null };
+  } catch {
+    return { clientId: null, secret: null };
+  }
+}
+
+function secretsEqual(a: string, b: string): boolean {
+  const left = Buffer.from(a, 'utf8');
+  const right = Buffer.from(b, 'utf8');
+  return left.length === right.length && timingSafeEqual(left, right);
+}
+
+/**
+ * The refresh grant of better-auth 1.4.18's mcp plugin (mcp/index.mjs:262-309)
+ * matches the refresh token and the client id and never the client secret, so
+ * a confidential client's refresh token works without its secret. Refuse that
+ * here, as later better-auth releases do: a client registered with a secret
+ * (any type but `public`) must present it, and a disabled client gets nothing.
+ * Public clients have no secret and are unchanged.
+ */
+async function assertRefreshClientAuthenticated(
+  clientId: string | null,
+  secret: string | null
+): Promise<void> {
+  // No client id: the grant refuses it on its own (no token row matches).
+  if (!clientId) return;
+  const client = await getPrisma().oauthApplication.findUnique({
+    where: { clientId },
+    select: { type: true, clientSecret: true, disabled: true },
+  });
+  if (!client) return;
+  const refuse = (description: string) =>
+    new APIError('UNAUTHORIZED', { error: 'invalid_client', error_description: description });
+  if (client.disabled) throw refuse('client is disabled');
+  if (client.type === 'public') return;
+  if (!client.clientSecret || !secret) {
+    throw refuse('client_secret is required for confidential clients');
+  }
+  if (!secretsEqual(client.clientSecret, secret)) throw refuse('invalid client_secret');
 }
 
 export const auth = betterAuth({
@@ -645,13 +695,19 @@ export const auth = betterAuth({
 
       const authorization =
         ctx.request?.headers.get('authorization') ?? ctx.headers?.get('authorization') ?? null;
-      if (tokenRequestClientId(ctx.body, authorization) !== ASK_MOJI_CLIENT_ID) return;
+      const { clientId, secret } = tokenRequestCredentials(ctx.body, authorization);
+      if (clientId === ASK_MOJI_CLIENT_ID) {
+        throw new APIError('UNAUTHORIZED', {
+          error: 'invalid_client',
+          error_description:
+            'This client does not use the token endpoint. Its access tokens are minted per request and cannot be refreshed.',
+        });
+      }
 
-      throw new APIError('UNAUTHORIZED', {
-        error: 'invalid_client',
-        error_description:
-          'This client does not use the token endpoint. Its access tokens are minted per request and cannot be refreshed.',
-      });
+      // Same strict comparison the grant makes before taking its refresh branch.
+      if (tokenRequestField(ctx.body, 'grant_type') === 'refresh_token') {
+        await assertRefreshClientAuthenticated(clientId, secret);
+      }
     }),
   },
   /**
@@ -674,8 +730,20 @@ export const auth = betterAuth({
    * GitHub token the server uses comes from getValidGitHubToken (the
    * githubUserToken service), not from these endpoints. Like every entry
    * here, they are off for HTTP only; in-process `auth.api.*` is unchanged.
+   *
+   * `/sign-in/email-otp` and `/email-otp/check-verification-otp` come with the
+   * emailOTP plugin and nothing calls them: an email code verifies an address
+   * or resets a password here, it never signs anyone in on its own, and no
+   * form checks a code without using it.
    */
-  disabledPaths: ['/mcp/get-session', '/list-sessions', '/get-access-token', '/refresh-token'],
+  disabledPaths: [
+    '/mcp/get-session',
+    '/list-sessions',
+    '/get-access-token',
+    '/refresh-token',
+    '/sign-in/email-otp',
+    '/email-otp/check-verification-otp',
+  ],
   // Password guessing and code guessing are throttled harder than the default
   // (better-auth enables its limiter in production only). Per client IP. Tight
   // on the public Gitlab endpoints too: setup can be run against any
@@ -741,10 +809,12 @@ export const auth = betterAuth({
       // AS discovery document (1.4.18 plugins/mcp reads options.metadata at
       // runtime but MCPOptions omits it, hence the spread); the
       // oidcConfig.metadata below is honored only by the protected-resource
-      // document. Keep both lists identical.
+      // document. Keep both lists identical. The plugin's default algorithm
+      // list also advertises `none` (unsigned tokens); only RS256 is listed.
       ...({
         metadata: {
           scopes_supported: ['openid', 'profile', 'email', 'offline_access', 'read', 'write'],
+          id_token_signing_alg_values_supported: ['RS256'],
         },
       } as Record<string, unknown>),
       oidcConfig: {
@@ -756,8 +826,16 @@ export const auth = betterAuth({
         // fine-grained authorization; scopes only separate read from write.
         scopes: ['read', 'write'],
         consentPage: '/oauth/consent',
+        // PKCE with S256 only, as discovery already advertises. The plugin
+        // defaults to also accepting `plain`, where the challenge IS the
+        // verifier, so a leaked authorize URL would expose the code. In this
+        // version an authorize request with no challenge method counts as
+        // `plain` (mcp/authorize.mjs:78), so this also requires PKCE of every
+        // client, as the MCP authorization spec does.
+        allowPlainCodeChallengeMethod: false,
         metadata: {
           scopes_supported: ['openid', 'profile', 'email', 'offline_access', 'read', 'write'],
+          id_token_signing_alg_values_supported: ['RS256'],
         },
       },
     }),

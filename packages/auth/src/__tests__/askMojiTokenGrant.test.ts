@@ -36,6 +36,8 @@ const OTHER_CLIENT_ID = 'some-other-mcp-client';
 const mocks = vi.hoisted(() => {
   const rows: Record<string, unknown>[] = [];
   const created: Record<string, unknown>[] = [];
+  // Registered OAuth clients (oauth_applications), read by the refresh hook.
+  const apps: Record<string, unknown>[] = [];
   const client: any = {
     oauthAccessToken: {
       findFirst: vi.fn(({ where }: any) =>
@@ -58,6 +60,9 @@ const mocks = vi.hoisted(() => {
     },
     oauthApplication: {
       findFirst: vi.fn(() => Promise.resolve(null)),
+      findUnique: vi.fn(({ where }: any) =>
+        Promise.resolve(apps.find(a => a.clientId === where?.clientId) ?? null)
+      ),
       findMany: vi.fn(() => Promise.resolve([])),
       create: vi.fn(({ data }: any) => Promise.resolve(data)),
       upsert: vi.fn(({ create }: any) => Promise.resolve(create)),
@@ -78,7 +83,7 @@ const mocks = vi.hoisted(() => {
       count: vi.fn(() => Promise.resolve(0)),
     };
   }
-  return { rows, created, client };
+  return { rows, created, apps, client };
 });
 
 vi.mock('@classmoji/database', () => ({ default: () => mocks.client }));
@@ -108,6 +113,7 @@ function tokenRequest(body: Record<string, string>, extraHeaders: Record<string,
 beforeEach(() => {
   mocks.rows.length = 0;
   mocks.created.length = 0;
+  mocks.apps.length = 0;
 });
 
 describe('the Ask Moji client cannot use the token endpoint (refresh grant closed)', () => {
@@ -156,6 +162,38 @@ describe('the Ask Moji client cannot use the token endpoint (refresh grant close
     expect(JSON.stringify(await res.json())).toMatch(/does not use the token endpoint/i);
   });
 
+  // Same falsy-client_id split as in the confidential-client block below, aimed
+  // at the Ask Moji refusal. A live refresh row, so only the hook can refuse.
+  it('REFUSES a JSON client_id of 0 with Ask Moji in a Basic header', async () => {
+    mocks.rows.push({
+      id: 'tok-live',
+      accessToken: 'askmoji_leaked',
+      refreshToken: 'askmoji_leaked_refresh',
+      accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
+      refreshTokenExpiresAt: new Date(Date.now() + 604_800_000),
+      clientId: ASK_MOJI_CLIENT_ID,
+      userId: 'user-1',
+      scopes: 'read',
+    });
+    const basic = Buffer.from(`${ASK_MOJI_CLIENT_ID}:whatever`).toString('base64');
+
+    const res = await auth.handler(
+      new Request(`${BASE}/mcp/token`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Basic ${basic}` },
+        body: JSON.stringify({
+          grant_type: 'refresh_token',
+          refresh_token: 'askmoji_leaked_refresh',
+          client_id: 0,
+        }),
+      })
+    );
+
+    expect(res.status).toBe(401);
+    expect(JSON.stringify(await res.json())).toMatch(/does not use the token endpoint/i);
+    expect(mocks.created).toHaveLength(0);
+  });
+
   it('REFUSES an authorization_code grant for the client too — it uses no grant at all', async () => {
     const res = await auth.handler(
       tokenRequest({
@@ -200,7 +238,7 @@ describe('the Ask Moji client cannot use the token endpoint (refresh grant close
   // through, better-auth mints and the assertions below fail on all three counts.
   //
   // MUTATION: restore `if (typeof clientId === 'string' …)` in
-  // tokenRequestClientId → 200, a fresh 7-day refresh_token, mocks.created === 1.
+  // tokenRequestCredentials → 200, a fresh 7-day refresh_token, mocks.created === 1.
   it('REFUSES an ARRAY-valued client_id, which better-auth would stringify into a match', async () => {
     mocks.rows.push({
       id: 'tok-live',
@@ -360,6 +398,165 @@ describe('the Ask Moji client cannot use the token endpoint (refresh grant close
   });
 });
 
+describe('a confidential client refreshes only with its client secret', () => {
+  const CONFIDENTIAL_ID = 'confidential-client';
+  const PUBLIC_ID = 'public-client';
+  const SECRET = 'the-registered-secret';
+
+  function seedToken(clientId: string, refreshToken: string) {
+    mocks.rows.push({
+      id: `tok-${refreshToken}`,
+      accessToken: `${refreshToken}_access`,
+      refreshToken,
+      accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
+      refreshTokenExpiresAt: new Date(Date.now() + 604_800_000),
+      clientId,
+      userId: 'user-3',
+      scopes: 'openid offline_access read',
+    });
+  }
+
+  beforeEach(() => {
+    mocks.apps.push(
+      { clientId: CONFIDENTIAL_ID, type: 'web', clientSecret: SECRET, disabled: false },
+      { clientId: PUBLIC_ID, type: 'public', clientSecret: '', disabled: false }
+    );
+  });
+
+  // MUTATION: drop the refresh_token branch from hooks.before → 200, a new
+  // token pair minted from a refresh token alone.
+  it('REFUSES a refresh with no client secret', async () => {
+    seedToken(CONFIDENTIAL_ID, 'conf_refresh');
+    const res = await auth.handler(
+      tokenRequest({
+        grant_type: 'refresh_token',
+        refresh_token: 'conf_refresh',
+        client_id: CONFIDENTIAL_ID,
+      })
+    );
+    expect(res.status).toBe(401);
+    expect(JSON.stringify(await res.json())).toMatch(/client_secret is required/);
+    expect(mocks.created).toHaveLength(0);
+  });
+
+  it('REFUSES a refresh with the wrong client secret', async () => {
+    seedToken(CONFIDENTIAL_ID, 'conf_refresh');
+    const res = await auth.handler(
+      tokenRequest({
+        grant_type: 'refresh_token',
+        refresh_token: 'conf_refresh',
+        client_id: CONFIDENTIAL_ID,
+        client_secret: 'not-the-secret',
+      })
+    );
+    expect(res.status).toBe(401);
+    expect(JSON.stringify(await res.json())).toMatch(/invalid client_secret/);
+    expect(mocks.created).toHaveLength(0);
+  });
+
+  it('accepts a refresh with the right client secret in the body', async () => {
+    seedToken(CONFIDENTIAL_ID, 'conf_refresh');
+    const res = await auth.handler(
+      tokenRequest({
+        grant_type: 'refresh_token',
+        refresh_token: 'conf_refresh',
+        client_id: CONFIDENTIAL_ID,
+        client_secret: SECRET,
+      })
+    );
+    expect(res.status).toBe(200);
+    expect(mocks.created).toHaveLength(1);
+  });
+
+  it('accepts a refresh with the client id and secret in a Basic header', async () => {
+    seedToken(CONFIDENTIAL_ID, 'conf_refresh');
+    const basic = Buffer.from(`${CONFIDENTIAL_ID}:${SECRET}`).toString('base64');
+    const res = await auth.handler(
+      tokenRequest(
+        { grant_type: 'refresh_token', refresh_token: 'conf_refresh' },
+        { authorization: `Basic ${basic}` }
+      )
+    );
+    expect(res.status).toBe(200);
+    expect(mocks.created).toHaveLength(1);
+  });
+
+  // better-auth reads the Basic header only when the body names neither a
+  // client id nor a secret, so the hook must not credit a header secret the
+  // grant never sees.
+  it('ignores a Basic secret when the body already names the client', async () => {
+    seedToken(CONFIDENTIAL_ID, 'conf_refresh');
+    const basic = Buffer.from(`${CONFIDENTIAL_ID}:${SECRET}`).toString('base64');
+    const res = await auth.handler(
+      tokenRequest(
+        { grant_type: 'refresh_token', refresh_token: 'conf_refresh', client_id: CONFIDENTIAL_ID },
+        { authorization: `Basic ${basic}` }
+      )
+    );
+    expect(res.status).toBe(401);
+    expect(mocks.created).toHaveLength(0);
+  });
+
+  it('REFUSES a refresh for a disabled client', async () => {
+    mocks.apps.push({ clientId: 'disabled-client', type: 'public', disabled: true });
+    seedToken('disabled-client', 'disabled_refresh');
+    const res = await auth.handler(
+      tokenRequest({
+        grant_type: 'refresh_token',
+        refresh_token: 'disabled_refresh',
+        client_id: 'disabled-client',
+      })
+    );
+    expect(res.status).toBe(401);
+    expect(JSON.stringify(await res.json())).toMatch(/client is disabled/);
+    expect(mocks.created).toHaveLength(0);
+  });
+
+  // A falsy NON-STRING body client_id sends the grant to the Basic header
+  // (it tests the raw value) while its normalized form ("0", "false") names no
+  // client. Only a JSON body can carry one: urlencoded values arrive as strings.
+  //
+  // MUTATION: choose body-vs-Basic on normalizeClientId(rawId) instead of the
+  // raw value in tokenRequestCredentials → 200, a token pair minted with a wrong
+  // secret.
+  it.each([[0], [false]])(
+    'REFUSES a JSON client_id of %s with the real client in a Basic header',
+    async rawId => {
+      seedToken(CONFIDENTIAL_ID, 'conf_refresh');
+      const basic = Buffer.from(`${CONFIDENTIAL_ID}:wrong`).toString('base64');
+      const res = await auth.handler(
+        new Request(`${BASE}/mcp/token`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Basic ${basic}` },
+          body: JSON.stringify({
+            grant_type: 'refresh_token',
+            refresh_token: 'conf_refresh',
+            client_id: rawId,
+          }),
+        })
+      );
+      expect(res.status).toBe(401);
+      expect(JSON.stringify(await res.json())).toMatch(/invalid client_secret/);
+      expect(mocks.created).toHaveLength(0);
+    }
+  );
+
+  // NEGATIVE CONTROL: public clients (PKCE, no secret: Claude Code, most MCP
+  // clients) refresh exactly as before.
+  it('leaves a public client refreshing without a secret', async () => {
+    seedToken(PUBLIC_ID, 'public_refresh');
+    const res = await auth.handler(
+      tokenRequest({
+        grant_type: 'refresh_token',
+        refresh_token: 'public_refresh',
+        client_id: PUBLIC_ID,
+      })
+    );
+    expect(res.status).toBe(200);
+    expect(mocks.created).toHaveLength(1);
+  });
+});
+
 describe('the raw /mcp/get-session endpoint is not reachable over HTTP', () => {
   // MUTATION: remove '/mcp/get-session' from disabledPaths → this returns 200
   // with the whole token row, refresh token included.
@@ -419,5 +616,8 @@ describe('the hook does not get in the way of anything else', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
     expect(body.token_endpoint).toMatch(/\/mcp\/token$/);
+    // Unsigned tokens are not advertised; PKCE is S256 only.
+    expect(body.id_token_signing_alg_values_supported).toEqual(['RS256']);
+    expect(body.code_challenge_methods_supported).toEqual(['S256']);
   });
 });
