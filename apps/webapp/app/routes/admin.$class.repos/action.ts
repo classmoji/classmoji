@@ -34,9 +34,33 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       : undefined;
   if (typeof assignmentId !== 'string' || !assignmentId) return { error: 'Invalid request.' };
 
+  // One audit row per repository action (CLAUDE.md rule 2), named like the
+  // MCP repo tools' rows so both surfaces read together.
+  const auditRepository = (
+    action: 'UPDATE' | 'DELETE',
+    tool: string,
+    metadata: Record<string, unknown> = {}
+  ) =>
+    addClassroomAuditLog({
+      classroomId: classroom.id,
+      userId,
+      role: membership!.role,
+      action,
+      resourceType: 'REPOSITORIES',
+      resourceId: assignmentId,
+      metadata: { tool, ...metadata },
+    });
+
   return namedAction(request, {
     async delete() {
+      const repository = await ClassmojiService.repository.findByIdInClassroom(
+        assignmentId,
+        classroom.id
+      );
       await ClassmojiService.repository.deleteById(assignmentId, classroom.id);
+      await auditRepository('DELETE', 'web:repos.delete', {
+        title: repository?.title ?? null,
+      });
 
       return {
         success: `${terms.Repo} deleted`,
@@ -45,7 +69,15 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     },
 
     async publish() {
-      return publishAssignment(classSlug, classroom.id, assignmentId, userId);
+      const result = await publishAssignment(classSlug, classroom.id, assignmentId, userId);
+      if (!('error' in result)) {
+        const session = 'triggerSession' in result ? result.triggerSession : null;
+        await auditRepository('UPDATE', 'web:repos.publish', {
+          is_published: true,
+          ...(session ? { repos_to_create: session.numReposToCreate / 2 } : {}),
+        });
+      }
+      return result;
     },
 
     // One assignment, plus its repository when that still needs provisioning.
@@ -87,6 +119,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
     async unpublish() {
       await ClassmojiService.repository.setPublished(assignmentId, false, classroom.id);
+      await auditRepository('UPDATE', 'web:repos.unpublish', { is_published: false });
       return { success: `${terms.Repo} unpublished` };
     },
 
@@ -95,6 +128,11 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       const {
         triggerSession: { numReposToCreate, numIssuesToCreate },
       } = res;
+      // The session counts two runs per repo and per issue (Github + database).
+      await auditRepository('UPDATE', 'web:repos.sync', {
+        repos_to_create: numReposToCreate / 2,
+        assignments_to_add: numIssuesToCreate / 2,
+      });
 
       if (numReposToCreate + numIssuesToCreate == 0)
         return {
