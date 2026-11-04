@@ -6,6 +6,7 @@ import { gitTerms } from '~/utils/gitWeb';
 import { publishAssignment, publishAssignmentAndRepository, syncAssignment } from './helpers';
 import { calculateContributions } from './contributions';
 import { ActionTypes } from '~/constants';
+import { addClassroomAuditLog } from '~/utils/helpers';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
@@ -51,7 +52,37 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     // `assignment_id` really is an assignment id here, unlike the repository-
     // scoped actions around it.
     async publishAssignment() {
-      return publishAssignmentAndRepository(classSlug, classroom.id, assignmentId, userId);
+      const result = await publishAssignmentAndRepository(
+        classSlug,
+        classroom.id,
+        assignmentId,
+        userId
+      );
+      if (!('error' in result)) {
+        const session = 'triggerSession' in result ? result.triggerSession : null;
+        await addClassroomAuditLog({
+          classroomId: classroom.id,
+          userId,
+          role: membership!.role,
+          action: 'UPDATE',
+          resourceType: 'ASSIGNMENTS',
+          resourceId: assignmentId,
+          metadata: {
+            tool: 'web:repos.publish_assignment',
+            is_published: true,
+            // Repos provisioned (the assignment arrives with them), or the
+            // assignment queued into repos that already existed (the session
+            // counts two runs per repo).
+            ...(session && session.numReposToCreate > 0
+              ? { repos_to_create: session.numReposToCreate }
+              : {}),
+            ...(session && session.numReposToCreate === 0
+              ? { opened_in_repos: session.numIssuesToCreate / 2 }
+              : {}),
+          },
+        });
+      }
+      return result;
     },
 
     async unpublish() {

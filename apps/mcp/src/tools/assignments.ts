@@ -37,10 +37,7 @@
  *                                  admin.$class.assignments `update`), except
  *                                  is_published on a QUIZ row, which a teacher
  *                                  flips with the rest of a quiz's schedule
- *                                  (TEACHER_ASSIGNMENT_FIELDS). Neither opens
- *                                  issues in student repositories: that is Sync
- *                                  (and the nightly release), as it is on the
- *                                  web.
+ *                                  (TEACHER_ASSIGNMENT_FIELDS).
  *   - module_id (move):            OWNER only on REPO and FORM rows
  *                                  (admin.$class.modules `moveAssignment` →
  *                                  requireClassroomAdmin →
@@ -60,6 +57,16 @@
  * through the repository, so a quiz or form assignment is out of a teacher's
  * reach there, and grades_released on one is OWNER only here.
  *
+ * Release into student repos: on a REPO row, an update that sets is_published
+ * true or moves release_at (and does not unpublish) runs
+ * openAssignmentInExistingRepos (@classmoji/tasks/assignment-release), the one
+ * operation the web's module-card Publish and edit form run too: once the
+ * assignment is released (releasedToRepos) and its repository published, every
+ * existing student/team repo without its submission row gets one (and the
+ * issue, in ISSUE mode), and the assignment is marked published. It creates no
+ * missing repo (web Sync) and never publishes the repository (repo_publish).
+ * assignment_create runs it when the assignment is created published.
+ *
  * Backbone: ClassmojiService.assignment.update — the NOTIFYING path, which on
  * a QUIZ row also writes the quiz's own copy of its due date, weight and status
  * in the same transaction (fires
@@ -68,7 +75,8 @@
  * the same DB write with the notification silently skipped (plan §5.2 gap 7).
  * updateInClassroom (the web path for the date fields) runs the same
  * notifyAfterUpdate, which ignores grader_deadline and release_at: neither
- * schedules anything on write. release_at is read later by the nightly
+ * schedules anything in the service (the release above is the caller's
+ * step, after the write). release_at is also read by the nightly
  * release cron (findReadyForRelease), the repo-provisioning filter, and the
  * student "locked" view; a null release_at is never auto-released.
  *
@@ -87,6 +95,10 @@
 
 import { ClassmojiService } from '@classmoji/services';
 import { ownerOnlyAssignmentFields } from '@classmoji/utils';
+import {
+  openAssignmentInExistingRepos,
+  type OpenAssignmentSkipReason,
+} from '@classmoji/tasks/assignment-release';
 import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
@@ -103,6 +115,67 @@ import {
   scopedNotFound,
   writeAudit,
 } from './shared.ts';
+
+/** What putting an assignment into the existing student repos did, for the response. */
+interface ReleaseOutcome {
+  opened_in_repos: number;
+  release_note?: string;
+  /** The run was refused by Trigger.dev; the write before it stands. */
+  failed?: true;
+}
+
+/**
+ * Put a REPO assignment into the student repos that already exist (see the
+ * header). Called after the write succeeded: a trigger failure is reported in
+ * the outcome, never thrown, so the tool does not fail on a write that landed.
+ */
+async function releaseIntoRepos(
+  classroomId: string,
+  assignmentId: string,
+  isPublished: boolean,
+  releaseAt: Date | string | null
+): Promise<ReleaseOutcome> {
+  try {
+    const { queued, reason } = await openAssignmentInExistingRepos({ classroomId, assignmentId });
+    if (queued > 0 || !reason) return { opened_in_repos: queued };
+    return { opened_in_repos: 0, release_note: releaseNote(reason, isPublished, releaseAt) };
+  } catch (error) {
+    console.error('[mcp] opening an assignment in student repos failed:', error);
+    return {
+      opened_in_repos: 0,
+      failed: true,
+      release_note:
+        'Saved, but it could not be added to student repositories. Retry with assignment_update ' +
+        'is_published true, or use Sync on the web.',
+    };
+  }
+}
+
+function releaseNote(
+  reason: OpenAssignmentSkipReason,
+  isPublished: boolean,
+  releaseAt: Date | string | null
+): string {
+  switch (reason) {
+    case 'repo_unpublished':
+      return (
+        'Not in student repositories: its repository is not published. repo_publish creates ' +
+        'them with every released assignment.'
+      );
+    case 'not_released':
+      return isPublished
+        ? 'Not in student repositories yet: release_at is in the future, and a published ' +
+            'assignment is not released on its own. After release_at, call assignment_update ' +
+            'is_published true.'
+        : releaseAt == null
+          ? 'Not in student repositories: it is an undated draft. Set is_published true to release it.'
+          : 'Not in student repositories yet: release_at is in the future. It is released that day.';
+    case 'none_missing':
+      return 'No existing student repository is missing it.';
+    default:
+      return 'Nothing to add to student repositories for this assignment.';
+  }
+}
 
 /** Prisma unique-violation (P2002) — Assignment is @@unique([repository_id, title]). */
 function isUniqueTitleViolation(error: unknown): boolean {
@@ -146,7 +219,7 @@ function translateMoveError(error: unknown): never {
 
 export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
   name: 'assignment_update',
-  annotations: { destructive: false },
+  annotations: { destructive: false, openWorld: true },
   title: 'Update an assignment',
   description:
     'Updates an assignment (a due-dated, gradeable unit of a module): title, is_published, ' +
@@ -154,9 +227,11 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
     'tokens_per_hour and/or module_id. Owners can update all fields; teachers only ' +
     'grades_released and student_deadline, and on a quiz assignment student_deadline, weight, ' +
     'release_at, closes_at, tokens_per_hour and is_published. title is unique per repository. ' +
-    'is_published shows the assignment to students once its repository is published too; it ' +
-    'opens no issues (Sync does). Releasing grades notifies graded students; moving the ' +
-    'student deadline notifies affected students. release_at is when an unpublished repo ' +
+    'Publishing a repo assignment, or moving its release_at, adds it to existing student ' +
+    'repositories once released and its repository is published (an issue each in ISSUE ' +
+    'mode); opened_in_repos counts them, release_note says why none. Releasing grades ' +
+    'notifies graded students; moving the student deadline notifies affected students. ' +
+    'release_at is when an unpublished repo ' +
     'assignment auto-releases (checked nightly); on a quiz, when a published quiz opens. ' +
     'closes_at (quiz only) stops new attempts. grades_released is refused on a quiz (its ' +
     'score shows at once). Pass null to clear grader_deadline, release_at or closes_at.\n' +
@@ -385,6 +460,7 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
       | 'closes_at'
       | 'tokens_per_hour'
     > = assignment;
+    let release: ReleaseOutcome | null = null;
     if (fields.length > 0) {
       try {
         updated = await ClassmojiService.assignment.update(assignment.id, updates);
@@ -397,13 +473,45 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
         }
         throw error;
       }
+      // Published, or the release date moved: put it into the student repos
+      // that exist (see the header). Never on an unpublish: a past release_at
+      // would re-open and re-publish it at once.
+      if (
+        assignment.type === 'REPO' &&
+        args.is_published !== false &&
+        (args.is_published === true || args.release_at !== undefined)
+      ) {
+        release = await releaseIntoRepos(
+          classroom.classroomId,
+          assignment.id,
+          updated.is_published,
+          updated.release_at ?? null
+        );
+        // A released draft is published by it, and the audit row says so.
+        if (release.opened_in_repos > 0 && !updated.is_published) {
+          updated = { ...updated, is_published: true };
+          values.is_published = true;
+          if (!fields.includes('is_published')) fields.push('is_published');
+        }
+      }
       await writeAudit(ctx, {
         resource_type: 'ASSIGNMENT',
         resource_id: assignment.id,
         action: 'UPDATE',
         // `value` is what keeps two different edits inside audit's 5s dedup window
         // from collapsing into one row; an identical re-send still dedups.
-        data: { tool: 'assignment_update', fields, values, value: JSON.stringify(values) },
+        data: {
+          tool: 'assignment_update',
+          fields,
+          values,
+          value: JSON.stringify(values),
+          ...(release
+            ? {
+                opened_in_repos: release.opened_in_repos,
+                ...(release.failed ? { open_in_repos_failed: true } : {}),
+              }
+            : {}),
+        },
       });
     }
 
@@ -426,6 +534,12 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
         tokens_per_hour: updated.tokens_per_hour,
       },
       ...(movedFromModuleId ? { moved_from_module_id: movedFromModuleId } : {}),
+      ...(release
+        ? {
+            opened_in_repos: release.opened_in_repos,
+            ...(release.release_note ? { release_note: release.release_note } : {}),
+          }
+        : {}),
     });
   },
 };
@@ -448,15 +562,17 @@ interface AssignmentCreateArgs {
 
 export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
   name: 'assignment_create',
-  annotations: { destructive: false },
+  annotations: { destructive: false, openWorld: true },
   title: 'Create an assignment',
   description:
     'Creates a REPO assignment (due-dated, gradeable) in a module, submitting through an ' +
     'existing repository (see list_repos). submission_mode REPO (default): the last push to the ' +
     'student repo before the deadline is the submission, no issue is opened. ISSUE: Classmoji opens an issue (Github or Gitlab) in each ' +
-    'student repo and closing it submits. Owner only. Creating it does NOT provision anything on ' +
-    'the git host — the assignment reaches students only when its repo is published (repo_publish) or ' +
-    'the next release runs. Created as a draft unless is_published is set.',
+    'student repo and closing it submits. Owner only. Created as a draft unless is_published ' +
+    'is set. Created published (and released) in a published repo, it is added to the existing ' +
+    'student repositories (an issue each in ISSUE mode); opened_in_repos counts them, ' +
+    'release_note says why none. It never creates student repositories: repo_publish does, with ' +
+    'every released assignment. A draft goes out when published, or on its release_at day.',
   scope: 'write',
   roles: OWNER_ONLY,
   inputSchema: {
@@ -552,6 +668,13 @@ export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
       throw error;
     }
 
+    // Created published: put it into the student repos that already exist
+    // (see assignment_update's header), after the write and before the audit
+    // row, which records how many it reached.
+    const release = created.is_published
+      ? await releaseIntoRepos(classroom.classroomId, created.id, true, created.release_at ?? null)
+      : null;
+
     await writeAudit(ctx, {
       resource_type: 'ASSIGNMENT',
       resource_id: created.id,
@@ -561,6 +684,12 @@ export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
         repository_id: repository.id,
         title: args.title,
         submission_mode: args.submission_mode ?? 'REPO',
+        ...(release
+          ? {
+              opened_in_repos: release.opened_in_repos,
+              ...(release.failed ? { open_in_repos_failed: true } : {}),
+            }
+          : {}),
       },
     });
 
@@ -578,6 +707,12 @@ export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
         is_published: created.is_published,
         student_deadline: created.student_deadline?.toISOString() ?? null,
       },
+      ...(release
+        ? {
+            opened_in_repos: release.opened_in_repos,
+            ...(release.release_note ? { release_note: release.release_note } : {}),
+          }
+        : {}),
     });
   },
 };
