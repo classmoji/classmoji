@@ -1,8 +1,8 @@
 /**
  * The line of linked pages and decks under a coursework row (dashboard Up next,
- * Assignments page). Rendered on the server, outside the student shell, so a
- * page takes PageLink's new-tab branch; inside the shell PagePeekProvider makes
- * it the peek button (PageLink's own tests cover that).
+ * Assignments page). Pages and decks are plain new-tab links everywhere, the
+ * student shell included: a page opens whole in the pages app, never in the
+ * half-width peek drawer.
  */
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
@@ -37,7 +37,10 @@ describe('CourseworkMaterials', () => {
   it('opens a page in the pages app and a deck in the slides app, both in a new tab', () => {
     const html = render([PAGE, DECK]);
 
-    expect(html).toMatch(/<a href="https:\/\/pages\.test\/intro-101\/p-1" target="_blank"/);
+    expect(html).toMatch(
+      /<a href="https:\/\/pages\.test\/intro-101\/p-1" target="_blank" rel="noreferrer"/
+    );
+    expect(html).not.toContain('<button');
     expect(html).toMatch(/<a href="https:\/\/slides\.test\/s-1" target="_blank" rel="noreferrer"/);
     // The whole title stays readable where the visible one is truncated.
     expect(html).toContain('title="Lab 2 spec"');
