@@ -132,12 +132,13 @@ interface ReleaseOutcome {
 async function releaseIntoRepos(
   classroomId: string,
   assignmentId: string,
-  isPublished: boolean
+  isPublished: boolean,
+  releaseAt: Date | string | null
 ): Promise<ReleaseOutcome> {
   try {
     const { queued, reason } = await openAssignmentInExistingRepos({ classroomId, assignmentId });
     if (queued > 0 || !reason) return { opened_in_repos: queued };
-    return { opened_in_repos: 0, release_note: releaseNote(reason, isPublished) };
+    return { opened_in_repos: 0, release_note: releaseNote(reason, isPublished, releaseAt) };
   } catch (error) {
     console.error('[mcp] opening an assignment in student repos failed:', error);
     return {
@@ -150,7 +151,11 @@ async function releaseIntoRepos(
   }
 }
 
-function releaseNote(reason: OpenAssignmentSkipReason, isPublished: boolean): string {
+function releaseNote(
+  reason: OpenAssignmentSkipReason,
+  isPublished: boolean,
+  releaseAt: Date | string | null
+): string {
   switch (reason) {
     case 'repo_unpublished':
       return (
@@ -162,7 +167,9 @@ function releaseNote(reason: OpenAssignmentSkipReason, isPublished: boolean): st
         ? 'Not in student repositories yet: release_at is in the future, and a published ' +
             'assignment is not released on its own. After release_at, call assignment_update ' +
             'is_published true.'
-        : 'Not in student repositories yet: release_at is in the future. It is released that day.';
+        : releaseAt == null
+          ? 'Not in student repositories: it is an undated draft. Set is_published true to release it.'
+          : 'Not in student repositories yet: release_at is in the future. It is released that day.';
     case 'none_missing':
       return 'No existing student repository is missing it.';
     default:
@@ -212,7 +219,7 @@ function translateMoveError(error: unknown): never {
 
 export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
   name: 'assignment_update',
-  annotations: { destructive: false },
+  annotations: { destructive: false, openWorld: true },
   title: 'Update an assignment',
   description:
     'Updates an assignment (a due-dated, gradeable unit of a module): title, is_published, ' +
@@ -477,10 +484,15 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
         release = await releaseIntoRepos(
           classroom.classroomId,
           assignment.id,
-          updated.is_published
+          updated.is_published,
+          updated.release_at ?? null
         );
-        // A released draft is published by it.
-        if (release.opened_in_repos > 0) updated = { ...updated, is_published: true };
+        // A released draft is published by it, and the audit row says so.
+        if (release.opened_in_repos > 0 && !updated.is_published) {
+          updated = { ...updated, is_published: true };
+          values.is_published = true;
+          if (!fields.includes('is_published')) fields.push('is_published');
+        }
       }
       await writeAudit(ctx, {
         resource_type: 'ASSIGNMENT',
@@ -550,7 +562,7 @@ interface AssignmentCreateArgs {
 
 export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
   name: 'assignment_create',
-  annotations: { destructive: false },
+  annotations: { destructive: false, openWorld: true },
   title: 'Create an assignment',
   description:
     'Creates a REPO assignment (due-dated, gradeable) in a module, submitting through an ' +
@@ -660,7 +672,7 @@ export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
     // (see assignment_update's header), after the write and before the audit
     // row, which records how many it reached.
     const release = created.is_published
-      ? await releaseIntoRepos(classroom.classroomId, created.id, true)
+      ? await releaseIntoRepos(classroom.classroomId, created.id, true, created.release_at ?? null)
       : null;
 
     await writeAudit(ctx, {

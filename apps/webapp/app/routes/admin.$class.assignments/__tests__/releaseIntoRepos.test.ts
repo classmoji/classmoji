@@ -139,6 +139,15 @@ describe('assignments update: when it opens the assignment in existing repos', (
     expect(mocks.updateInClassroom.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.openInRepos.mock.invocationCallOrder[0]
     );
+    expect(mocks.addClassroomAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        classroomId: 'class-1',
+        action: 'UPDATE',
+        resourceType: 'ASSIGNMENTS',
+        resourceId: 'a-1',
+        metadata: expect.objectContaining({ tool: 'web:assignments.update', opened_in_repos: 3 }),
+      })
+    );
   });
 
   it('when a release date is set where there was none', async () => {
@@ -204,6 +213,13 @@ describe('assignments create: when it opens the assignment in existing repos', (
       classroomId: 'class-1',
       assignmentId: 'a-new',
     });
+    expect(mocks.addClassroomAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'CREATE',
+        resourceId: 'a-new',
+        metadata: expect.objectContaining({ tool: 'web:assignments.create' }),
+      })
+    );
   });
 
   it('not when created as a draft', async () => {

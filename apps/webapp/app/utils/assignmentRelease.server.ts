@@ -29,20 +29,24 @@ export const editMayRelease = (
 
 /**
  * Put a just-published (or just-released) REPO assignment into the student
- * repos that already exist, as the module card's Publish does. Returns a note
- * for the toast when that could not be started; null otherwise (including when
- * there was nothing to do: a draft repository, a future release date).
+ * repos that already exist, as the module card's Publish does. `queued` counts
+ * the repos it was queued for (0 when there was nothing to do: a draft
+ * repository, a future release date); `note` is for the toast when it could
+ * not be started.
  */
 export const openInExistingRepos = async (
   classroomId: string,
   assignmentId: string,
   reposWord: string
-): Promise<string | null> => {
+): Promise<{ queued: number; note: string | null }> => {
   try {
-    await openAssignmentInExistingRepos({ classroomId, assignmentId });
-    return null;
+    const { queued } = await openAssignmentInExistingRepos({ classroomId, assignmentId });
+    return { queued, note: null };
   } catch (error: unknown) {
     console.error('[assignments] Opening the assignment in student repos failed:', error);
-    return `It could not be added to student ${reposWord} yet. Use Sync on the repository to try again.`;
+    return {
+      queued: 0,
+      note: `It could not be added to student ${reposWord} yet. Use Sync on the repository to try again.`,
+    };
   }
 };

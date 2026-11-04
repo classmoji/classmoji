@@ -182,13 +182,27 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         );
         // Created published into a published repository: put it into the
         // student repos that already exist, as the module card's Publish does.
-        const note =
+        const release =
           created.type === 'REPO' && created.is_published
             ? await openInExistingRepos(classroom.id, created.id, terms.repos)
             : null;
+        await addClassroomAuditLog({
+          classroomId: classroom.id,
+          userId,
+          role: membership!.role,
+          action: 'CREATE',
+          resourceType: 'ASSIGNMENTS',
+          resourceId: created.id,
+          metadata: {
+            tool: 'web:assignments.create',
+            title: created.title,
+            repository_id: created.repository_id ?? null,
+            ...(release ? { opened_in_repos: release.queued } : {}),
+          },
+        });
         return {
           success: `Assignment "${created.title}" created`,
-          ...(note ? { info: note } : {}),
+          ...(release?.note ? { info: release.note } : {}),
         };
       } catch (error: unknown) {
         console.error('[admin.assignments] Assignment create error:', error);
@@ -212,13 +226,26 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         // Published, or its release date moved: put it into the student repos
         // that already exist (a no-op until it is released and its repository
         // is published).
-        const note =
+        const release =
           target && editMayRelease(target, updates)
             ? await openInExistingRepos(classroom.id, updated.id, terms.repos)
             : null;
+        await addClassroomAuditLog({
+          classroomId: classroom.id,
+          userId,
+          role: membership!.role,
+          action: 'UPDATE',
+          resourceType: 'ASSIGNMENTS',
+          resourceId: updated.id,
+          metadata: {
+            tool: 'web:assignments.update',
+            fields: Object.keys(updates),
+            ...(release ? { opened_in_repos: release.queued } : {}),
+          },
+        });
         return {
           success: `Assignment "${updated.title}" updated`,
-          ...(note ? { info: note } : {}),
+          ...(release?.note ? { info: release.note } : {}),
         };
       } catch (error: unknown) {
         console.error('[admin.assignments] Assignment update error:', error);

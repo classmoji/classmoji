@@ -1482,6 +1482,42 @@ describe('publishing puts a repo assignment into the existing student repos (#38
     expect(published.release_note).toMatch(/is_published true/);
   });
 
+  it('assignment_update clearing release_at on a draft: says it is an undated draft', async () => {
+    mocks.openInRepos.mockResolvedValue({ queued: 0, sessionId: 's-1', reason: 'not_released' });
+
+    const payload = parse(await assignmentUpdateTool.handler({ ...UPDATE, release_at: null }, CTX));
+
+    expect(payload.release_note).toMatch(/undated draft/);
+    expect(payload.release_note).not.toMatch(/released that day/);
+  });
+
+  it('assignment_update releasing a draft: the audit row records the publish', async () => {
+    mocks.openInRepos.mockResolvedValue({ queued: 3, sessionId: 's-1' });
+
+    await assignmentUpdateTool.handler({ ...UPDATE, release_at: '2026-01-01T09:00:00-05:00' }, CTX);
+
+    expect(auditData()).toMatchObject({
+      fields: expect.arrayContaining(['release_at', 'is_published']),
+      values: expect.objectContaining({ is_published: true }),
+      opened_in_repos: 3,
+    });
+  });
+
+  it.each([
+    ['is_published', { is_published: true }],
+    ['release_at', { release_at: '2026-01-01T09:00:00-05:00' }],
+  ])('a TEACHER sending %s on a repo assignment never reaches it', async (_field, args) => {
+    await expect(
+      assignmentUpdateTool.handler({ ...UPDATE, ...args }, TEACHER_CTX)
+    ).rejects.toMatchObject({ kind: 'forbidden' });
+    expect(mocks.openInRepos).not.toHaveBeenCalled();
+  });
+
+  it('both tools are open-world: they can open issues on the git host', () => {
+    expect(assignmentCreateTool.annotations).toMatchObject({ openWorld: true });
+    expect(assignmentUpdateTool.annotations).toMatchObject({ openWorld: true });
+  });
+
   it.each([
     ['weight', { weight: 40 }],
     ['student_deadline', { student_deadline: '2026-07-21T23:59:00-04:00' }],
