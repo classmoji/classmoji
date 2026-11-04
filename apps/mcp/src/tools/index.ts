@@ -113,6 +113,7 @@ import {
 import { formTeamsGetTool, formTeamsRunTool, formTeamsCreateTool } from './formTeams.ts';
 import { askMojiTools } from './askMoji.ts';
 import {
+  fileDownloadUrlTool,
   fileImportUrlTool,
   fileUploadFinishTool,
   fileUploadStartTool,
@@ -221,13 +222,16 @@ export function registerAllTools(): void {
   // pass through the model: file_upload_start hands out one presigned PUT for a
   // staging key, file_import_url fetches server-side under the SSRF rules, and
   // both are placed where the storage router sends them (repo or media).
-  // media_delete is destructive.
+  // media_delete is destructive. file_download_url is the way back out: a
+  // ten-minute signed GET under the content's read gate (page_content_get,
+  // deck_get, media_list), for `curl -o`.
   registerToolDefinition(mediaListTool);
   registerToolDefinition(mediaDeleteTool);
   registerToolDefinition(fileUploadStartTool);
   registerToolDefinition(fileUploadFinishTool);
   registerToolDefinition(fileUploadStatusTool);
   registerToolDefinition(fileImportUrlTool);
+  registerToolDefinition(fileDownloadUrlTool);
 
   // Slides: list (all roles, students published-only) + metadata CRUD
   // (TEACHING_TEAM with the web's creator/allow_team_edit sub-gate)

@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   findInQuiz: vi.fn(),
   findWithMessages: vi.fn(),
   loadTranscript: vi.fn(),
+  messageLimitOf: vi.fn(),
   findUsersByRole: vi.fn(),
   findUsersByRoles: vi.fn(),
   quizzesVisibleOrThrow: vi.fn(),
@@ -49,7 +50,10 @@ vi.mock('@classmoji/services', () => ({
       },
       findWithMessages: (...a: unknown[]) => mocks.findWithMessages(...a),
     },
-    quizChat: { loadTranscriptForViewer: (...a: unknown[]) => mocks.loadTranscript(...a) },
+    quizChat: {
+      loadTranscriptForViewer: (...a: unknown[]) => mocks.loadTranscript(...a),
+      messageLimitOf: (...a: unknown[]) => mocks.messageLimitOf(...a),
+    },
     classroomMembership: {
       findUsersByRole: (...a: unknown[]) => mocks.findUsersByRole(...a),
       findUsersByRoles: (...a: unknown[]) => mocks.findUsersByRoles(...a),
@@ -447,6 +451,7 @@ beforeEach(() => {
   mocks.findUsersByRoles.mockResolvedValue([]);
   mocks.loadTranscript.mockResolvedValue(CHAT_TRANSCRIPT);
   mocks.findWithMessages.mockResolvedValue({ messages: [] });
+  mocks.messageLimitOf.mockResolvedValue({ messagesLeft: 0, endedBy: null });
 });
 
 describe('get_quiz_attempt', () => {
@@ -602,6 +607,33 @@ describe('get_quiz_attempt', () => {
         skipped_by_end: false,
       },
     ]);
+  });
+
+  describe('ended_by', () => {
+    it('says a chat attempt the server submitted at its message limit ended by turn_limit', async () => {
+      mocks.messageLimitOf.mockResolvedValue({ messagesLeft: 0, endedBy: 'turn_limit' });
+
+      const payload = parse(await getQuizAttemptTool.handler(ARGS, CTX));
+
+      expect(mocks.messageLimitOf).toHaveBeenCalledWith(ATTEMPT_ID);
+      expect(payload.attempt.ended_by).toBe('turn_limit');
+    });
+
+    it('is null for a chat attempt the server did not end', async () => {
+      const payload = parse(await getQuizAttemptTool.handler(ARGS, CTX));
+
+      expect(mocks.messageLimitOf).toHaveBeenCalledWith(ATTEMPT_ID);
+      expect(payload.attempt.ended_by).toBeNull();
+    });
+
+    it('is null for a legacy attempt, without reading the message limit', async () => {
+      mocks.findByQuiz.mockResolvedValue([attemptRow({ agent_runtime: 'ai_agent' })]);
+
+      const payload = parse(await getQuizAttemptTool.handler(ARGS, CTX));
+
+      expect(mocks.messageLimitOf).not.toHaveBeenCalled();
+      expect(payload.attempt.ended_by).toBeNull();
+    });
   });
 
   it('shows no grades or results for an attempt still running', async () => {

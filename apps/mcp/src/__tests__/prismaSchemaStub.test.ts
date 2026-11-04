@@ -137,6 +137,16 @@ describe('valid queries', () => {
     expect(prismaCallsFor('gitRepoAssignmentGrader', 'findUnique')).toHaveLength(1);
   });
 
+  it('accepts a groupBy ordered by an aggregate of its own scalar', async () => {
+    await expect(
+      validatingPrisma.feedbackComment.groupBy({
+        by: ['post_id', 'author_id'],
+        _min: { created_at: true },
+        orderBy: { _min: { created_at: 'asc' } },
+      })
+    ).resolves.toEqual([]);
+  });
+
   it('accepts a client-extension computed field in select', async () => {
     await expect(
       validatingPrisma.classroom.findMany({ select: { id: true, num_students: true } })
@@ -257,6 +267,21 @@ describe('unknown field', () => {
     await expect(
       validatingPrisma.page.findMany({ orderBy: { classroom: { nmae: 'asc' } } })
     ).rejects.toThrow('Unknown field `nmae` for orderBy statement on model `Classroom`.');
+  });
+
+  it('rejects a groupBy aggregate ordering on a missing field, and aggregates outside groupBy', async () => {
+    await expect(
+      validatingPrisma.feedbackComment.groupBy({
+        by: ['post_id'],
+        orderBy: { _min: { creatd_at: 'asc' } },
+      })
+    ).rejects.toThrow(
+      'Unknown field `_min.creatd_at` for orderBy statement on model `FeedbackComment`.'
+    );
+
+    await expect(
+      validatingPrisma.feedbackComment.findMany({ orderBy: { _min: { created_at: 'asc' } } })
+    ).rejects.toThrow('Unknown field `_min` for orderBy statement on model `FeedbackComment`.');
   });
 
   it('rejects a misspelled field in data, including inside a nested write', async () => {
