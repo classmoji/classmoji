@@ -19,6 +19,7 @@ import {
 } from '~/components/features/assignments/useOrphanedRepositoryPrompt';
 import { gitTerms } from '~/utils/gitWeb';
 import { loadQuizzesVisible, quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
+import { editMayRelease, openInExistingRepos } from '~/utils/assignmentRelease.server';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -179,7 +180,30 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
           classroom.id,
           assignmentData
         );
-        return { success: `Assignment "${created.title}" created` };
+        // Created published into a published repository: put it into the
+        // student repos that already exist, as the module card's Publish does.
+        const release =
+          created.type === 'REPO' && created.is_published
+            ? await openInExistingRepos(classroom.id, created.id, terms.repos)
+            : null;
+        await addClassroomAuditLog({
+          classroomId: classroom.id,
+          userId,
+          role: membership!.role,
+          action: 'CREATE',
+          resourceType: 'ASSIGNMENTS',
+          resourceId: created.id,
+          metadata: {
+            tool: 'web:assignments.create',
+            title: created.title,
+            repository_id: created.repository_id ?? null,
+            ...(release ? { opened_in_repos: release.queued } : {}),
+          },
+        });
+        return {
+          success: `Assignment "${created.title}" created`,
+          ...(release?.note ? { info: release.note } : {}),
+        };
       } catch (error: unknown) {
         console.error('[admin.assignments] Assignment create error:', error);
         return { error: 'Failed to create assignment. Please try again.' };
@@ -199,7 +223,30 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
           classroom.id,
           updates
         );
-        return { success: `Assignment "${updated.title}" updated` };
+        // Published, or its release date moved: put it into the student repos
+        // that already exist (a no-op until it is released and its repository
+        // is published).
+        const release =
+          target && editMayRelease(target, updates)
+            ? await openInExistingRepos(classroom.id, updated.id, terms.repos)
+            : null;
+        await addClassroomAuditLog({
+          classroomId: classroom.id,
+          userId,
+          role: membership!.role,
+          action: 'UPDATE',
+          resourceType: 'ASSIGNMENTS',
+          resourceId: updated.id,
+          metadata: {
+            tool: 'web:assignments.update',
+            fields: Object.keys(updates),
+            ...(release ? { opened_in_repos: release.queued } : {}),
+          },
+        });
+        return {
+          success: `Assignment "${updated.title}" updated`,
+          ...(release?.note ? { info: release.note } : {}),
+        };
       } catch (error: unknown) {
         console.error('[admin.assignments] Assignment update error:', error);
         return { error: 'Failed to update assignment. Please try again.' };

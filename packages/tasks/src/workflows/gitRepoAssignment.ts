@@ -49,7 +49,7 @@ interface StudentRepositoryRecord {
   project_id?: string | null;
 }
 
-interface CreateGithubRepositoryAssignmentTaskPayload {
+export interface CreateGithubRepositoryAssignmentTaskPayload {
   repoName: string;
   assignment: IssueAssignmentRecord;
   studentRepo: StudentRepositoryRecord;

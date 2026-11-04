@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => ({
   assignmentPublish: vi.fn(),
   quizSourceMaterialAllDraft: vi.fn(),
   quizzesVisibleOrThrow: vi.fn(),
+  openInRepos: vi.fn(),
 }));
 
 vi.mock('@classmoji/services', () => ({
@@ -61,6 +62,10 @@ vi.mock('@classmoji/tasks', () => ({
   default: {
     createRepositoriesTask: { trigger: (...a: unknown[]) => mocks.createRepositoriesTrigger(...a) },
   },
+}));
+
+vi.mock('@classmoji/tasks/assignment-release', () => ({
+  openAssignmentInExistingRepos: (...a: unknown[]) => mocks.openInRepos(...a),
 }));
 
 vi.mock('@trigger.dev/sdk', () => ({
@@ -325,5 +330,72 @@ describe('publishAssignmentAndRepository — a quiz assignment', () => {
     await publishAssignmentAndRepository(CLASSROOM_SLUG, CLASSROOM_ID, 'asg-quiz', 'user-1');
 
     expect(mocks.assignmentPublish).toHaveBeenCalledWith('asg-quiz');
+  });
+});
+
+describe('publishAssignmentAndRepository: a repo assignment in a published repository', () => {
+  const REPO_ASSIGNMENT = {
+    id: 'asg-repo',
+    type: 'REPO',
+    title: 'ECSA: Wordle Mobile',
+    repository_id: REPOSITORY_ID,
+  };
+
+  beforeEach(() => {
+    mocks.findByIdInClassroom.mockResolvedValue(REPO_ASSIGNMENT);
+    mocks.repositoryFindById.mockResolvedValue(repositoryRow({ is_published: true }));
+    mocks.assignmentPublish.mockResolvedValue(undefined);
+  });
+
+  const run = () =>
+    publishAssignmentAndRepository(CLASSROOM_SLUG, CLASSROOM_ID, 'asg-repo', 'user-1') as Promise<{
+      error?: string;
+      success?: string;
+      triggerSession?: { id: string; numReposToCreate: number; numIssuesToCreate: number };
+    }>;
+
+  it('publishes, then opens it in the existing repos through the shared operation', async () => {
+    mocks.openInRepos.mockResolvedValue({ queued: 38, sessionId: 'sess-1' });
+
+    const result = await run();
+
+    expect(mocks.assignmentPublish).toHaveBeenCalledWith('asg-repo');
+    expect(mocks.openInRepos).toHaveBeenCalledWith({
+      classroomId: CLASSROOM_ID,
+      assignmentId: 'asg-repo',
+    });
+    expect(mocks.assignmentPublish.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.openInRepos.mock.invocationCallOrder[0]
+    );
+    // The repository is already out: no repo provisioning.
+    expect(mocks.createRepositoriesTrigger).not.toHaveBeenCalled();
+    expect(result.triggerSession).toEqual({
+      accessToken: 'token-1',
+      id: 'sess-1',
+      numReposToCreate: 0,
+      numIssuesToCreate: 76,
+    });
+    expect(mocks.createPublicToken).toHaveBeenCalledWith({
+      scopes: { read: { tags: ['session_sess-1'] } },
+    });
+  });
+
+  it('says published when there was nothing to open', async () => {
+    mocks.openInRepos.mockResolvedValue({ queued: 0, sessionId: 'sess-1', reason: 'none_missing' });
+
+    const result = await run();
+
+    expect(result).toEqual({ success: 'Assignment "ECSA: Wordle Mobile" published' });
+  });
+
+  it('reports a trigger failure instead of throwing', async () => {
+    mocks.openInRepos.mockRejectedValue(new Error('trigger down'));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await run();
+
+    expect(result.error).toMatch(/Use Sync/);
+    expect(result.triggerSession).toBeUndefined();
+    error.mockRestore();
   });
 });

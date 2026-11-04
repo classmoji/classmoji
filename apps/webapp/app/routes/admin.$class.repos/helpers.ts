@@ -6,6 +6,7 @@ import { nanoid } from 'nanoid';
 import { ClassmojiService } from '@classmoji/services';
 import { releasedToRepos } from '@classmoji/utils';
 import Tasks from '@classmoji/tasks';
+import { openAssignmentInExistingRepos } from '@classmoji/tasks/assignment-release';
 import { gitTerms } from '~/utils/gitWeb';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 
@@ -299,37 +300,34 @@ export const publishAssignmentAndRepository = async (
   // The repository was already published, so publishing this assignment cut no
   // repos and nothing chained into opening its issues. Open them here: only
   // the first assignment on a repository gets them for free, when its repos are
-  // created. Scoped to this assignment so its siblings are left alone.
+  // created. Scoped to this assignment so its siblings are left alone. The
+  // same operation the edit form and the MCP tools run.
   if (assignment.type === 'REPO' && assignment.repository_id) {
-    const sessionId = nanoid();
-    const classroom = await ClassmojiService.classroom.findById(classroomId);
-    const repository = await ClassmojiService.repository.findById(assignment.repository_id);
-    const existingRepos = await ClassmojiService.gitRepo.findByRepository(
-      classroomSlug,
-      assignment.repository_id
-    );
+    let opened;
+    try {
+      opened = await openAssignmentInExistingRepos({ classroomId, assignmentId });
+    } catch (error: unknown) {
+      console.error('[admin.repos] Opening the assignment in student repos failed:', error);
+      const classroom = await ClassmojiService.classroom.findById(classroomId);
+      const terms = gitTerms(classroom?.git_organization?.provider === 'GITLAB');
+      return {
+        error: `Assignment "${assignment.title}" published, but it could not be added to student ${terms.repos}. Use Sync to try again.`,
+      };
+    }
 
-    if (repository && classroom) {
-      const missing = findMissingAssignments(repository as Repository, existingRepos as GitRepo[]);
-      const mine = missing[assignmentId] ? { [assignmentId]: missing[assignmentId] } : {};
-      const numMissing = Object.values(mine).reduce((n, a) => n + a.repos.length, 0);
+    if (opened.queued > 0) {
+      const accessToken = await auth.createPublicToken({
+        scopes: { read: { tags: [`session_${opened.sessionId}`] } },
+      });
 
-      if (numMissing > 0) {
-        await createMissingAssignments(classroom as Classroom, mine, sessionId);
-
-        const accessToken = await auth.createPublicToken({
-          scopes: { read: { tags: [`session_${sessionId}`] } },
-        });
-
-        return {
-          triggerSession: {
-            accessToken,
-            id: sessionId,
-            numReposToCreate: 0,
-            numIssuesToCreate: 2 * numMissing, // gh + cf per issue
-          },
-        };
-      }
+      return {
+        triggerSession: {
+          accessToken,
+          id: opened.sessionId,
+          numReposToCreate: 0,
+          numIssuesToCreate: 2 * opened.queued, // gh + cf per issue
+        },
+      };
     }
   }
 
