@@ -829,6 +829,118 @@ export async function resolveSlideDownloadUrl(
   return { ok: true, url, filename: filename ?? `${asset.sha}.${ext}` };
 }
 
+/** Why a repo file has no signed download URL. */
+export type RepoFileDownloadRefusal =
+  /** The path is not a plain repo path inside the folder it was asked for under. */
+  | 'bad_path'
+  /** The layer is off for this deployment or this classroom: nothing can be signed. */
+  | 'delivery_off'
+  /** The map has no blob row for the path (no such file, or a folder). */
+  | 'not_in_map'
+  /** The signer refused (no extension, an ext it will not take, a wrong-classroom row). */
+  | 'unsignable';
+
+export type RepoFileDownloadResult =
+  | {
+      ok: true;
+      url: string;
+      /** The repo path that was signed, in the map's normalized form. */
+      path: string;
+      filename: string;
+      /** Bytes, from the asset map; null when the map does not know. */
+      sizeBytes: number | null;
+      /** Unix seconds after which the URL stops verifying. */
+      expiresAt: number;
+    }
+  | { ok: false; reason: RepoFileDownloadRefusal };
+
+/**
+ * `path` as a normalized repo path strictly inside `folder`, or null.
+ *
+ * Refuses rather than repairs anything that is not a plain relative path: a
+ * leading `/`, a backslash, a scheme, a query or fragment, a control
+ * character, a `..` segment. `./` and doubled slashes are cosmetic and are
+ * collapsed, as `normalizeRepoRelative` does for every other reference.
+ */
+export function repoPathInFolder(folder: string, path: string): string | null {
+  if (typeof folder !== 'string' || typeof path !== 'string') return null;
+  const base = normalizeRepoRelative(folder);
+  if (!base) return null;
+  if (path.length === 0 || path.length > 1024) return null;
+  // eslint-disable-next-line no-control-regex
+  if (/[\\?#\u0000-\u001f\u007f]/.test(path)) return null;
+  if (path.startsWith('/') || /^[a-z][a-z0-9+.-]*:/i.test(path)) return null;
+  const normalized = normalizeRepoRelative(path);
+  if (!normalized || !normalized.startsWith(`${base}/`)) return null;
+  return normalized;
+}
+
+/**
+ * A file in a page's or deck's folder of the content repo → a ten-minute
+ * save-to-disk URL for it.
+ *
+ * `resolveSlideDownloadUrl` for any file under a folder the caller has already
+ * authorized (the page's `assets/`, a deck's own folder): the same `download`
+ * tier, the same map proof, the same `dl` filename inside the signature. The
+ * folder is the caller's statement of what this viewer may take; `path` must
+ * lie strictly inside it (`repoPathInFolder`), so a request cannot climb out
+ * into another page's folder or the repo root.
+ *
+ * `delivery_off` is a real answer, not a fault: a classroom the layer does not
+ * serve has no Worker and no signer, so there is no URL to hand out.
+ */
+export async function resolveRepoFileDownloadUrl(
+  classroom: ResolveClassroom,
+  req: { folder: string; path: string }
+): Promise<RepoFileDownloadResult> {
+  const path = repoPathInFolder(req.folder, req.path);
+  if (!path) return { ok: false, reason: 'bad_path' };
+
+  const env = deliveryEnvFor({ classroom, tier: DOWNLOAD_TIER });
+  if (!env) return { ok: false, reason: 'delivery_off' };
+
+  await ensureMapBounded(classroom.id);
+
+  // The row read directly rather than through `mappedAssetByPath`, because its
+  // `size` is part of the answer; the proof is still made by `mappedAsset`.
+  const row = await lookupContentAsset(classroom.id, path);
+  if (!row || row.type !== 'blob') return { ok: false, reason: 'not_in_map' };
+  const asset = mappedAsset(classroom.id, path, row);
+
+  const ext = extensionOf(asset.path);
+  if (!ext) return { ok: false, reason: 'unsignable' };
+
+  const filename = normalizeDownloadFilename(path.slice(path.lastIndexOf('/') + 1));
+
+  const url = await mintSigned(
+    classroom,
+    env,
+    asset,
+    DOWNLOAD_TIER,
+    'blob',
+    undefined,
+    (origin, signing) =>
+      signBlobUrl(origin, signing, {
+        sha: asset.sha,
+        ext,
+        ...(filename ? { dl: filename } : {}),
+      })
+  );
+  if (!url) return { ok: false, reason: 'unsignable' };
+
+  const exp = Number(new URL(url).searchParams.get('exp'));
+  const size = row.size;
+
+  return {
+    ok: true,
+    url,
+    path,
+    filename: filename ?? `${asset.sha}.${ext}`,
+    sizeBytes: typeof size === 'number' && size > 0 ? size : null,
+    expiresAt: exp,
+  };
+}
+
 /**
  * A stored reference → the repo path it names, or null when it is not ours.
  *

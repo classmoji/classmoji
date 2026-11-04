@@ -55,6 +55,7 @@ const READS: Record<string, Kind> = {
   page_render: 'none', // course content
   media_list: 'none', // the class's media files (no uploader)
   file_upload_status: 'none', // the caller's own upload
+  file_download_url: 'none', // course content (a page/deck file or class media)
   list_slides: 'none', // course content
   deck_outline: 'none', // course content
   deck_get: 'none', // course content
