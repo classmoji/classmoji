@@ -104,8 +104,9 @@ export const moduleCreateTool: ToolDefinition<ModuleCreateArgs> = {
   title: 'Create a module',
   description:
     'Creates a curriculum module such as "Week 3: Recursion": an ordered list of content ' +
-    '(pages, slides, quizzes, forms) plus the assignments placed in it (assignment_create, or ' +
-    'assignment_update with module_id for an existing one). Created unpublished. Owner only.',
+    '(pages, slides, forms) plus the assignments placed in it (assignment_create, or ' +
+    'assignment_update with module_id for an existing one). A quiz is placed by its own ' +
+    'module_id (quiz_create, quiz_update). Created unpublished. Owner only.',
   scope: 'write',
   roles: OWNER_ONLY,
   inputSchema: {
@@ -676,7 +677,7 @@ export const moduleReorderTool: ToolDefinition<ModuleReorderArgs> = {
     'was left out, and nothing is reordered. Only the order changes; students see the new ' +
     'order at once. It does not move anything between modules: assignment_update with ' +
     'module_id does that (the assignment lands last; reorder afterwards), and module_item_move ' +
-    'moves a page, slide or form likewise. Items of type ' +
+    'moves a page, slide or form likewise; module_item_remove takes one out. Items of type ' +
     'REPOSITORY are legacy rows that cannot be reordered: leave them out of an ITEMS list.',
   scope: 'write',
   roles: OWNER_ONLY,

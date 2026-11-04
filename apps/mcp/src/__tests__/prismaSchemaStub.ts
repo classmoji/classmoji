@@ -232,15 +232,26 @@ function assertSelect(model: DmmfModel, clause: Clause, kind: 'select' | 'includ
   }
 }
 
-function assertOrderBy(model: DmmfModel, clause: Clause): void {
+/** `groupBy` may order by an aggregate of its own scalars: `orderBy: { _min: { created_at: 'asc' } }`. */
+const GROUP_BY_AGGREGATES = new Set(['_avg', '_sum', '_min', '_max']);
+
+function assertOrderBy(model: DmmfModel, clause: Clause, groupBy = false): void {
   if (Array.isArray(clause)) {
-    for (const entry of clause) assertOrderBy(model, entry);
+    for (const entry of clause) assertOrderBy(model, entry, groupBy);
     return;
   }
   if (!isPlainObject(clause)) return;
 
   for (const [key, value] of Object.entries(clause)) {
     if (key === COUNT_KEY) continue; // `orderBy: { relation: { _count: 'desc' } }`
+    if (groupBy && GROUP_BY_AGGREGATES.has(key) && isPlainObject(value)) {
+      for (const inner of Object.keys(value)) {
+        const scalar = fieldOf(model, inner);
+        if (!scalar || scalar.kind === 'object')
+          throw unknownField(model, `${key}.${inner}`, 'orderBy');
+      }
+      continue;
+    }
     const field = fieldOf(model, key);
     if (!field) {
       if (isComputed(model, key)) throw computedFieldMisuse(model, key, 'orderBy');
@@ -347,7 +358,7 @@ function assertReadArgs(model: DmmfModel, args: QueryArgs, method = ''): void {
   assertSelect(model, args?.select, 'select');
   assertSelect(model, args?.include, 'include');
   assertWhere(model, args?.where, UNIQUE_WHERE_METHODS.has(method));
-  assertOrderBy(model, args?.orderBy);
+  assertOrderBy(model, args?.orderBy, method === 'groupBy');
   assertWhere(model, args?.cursor, true);
   assertDistinct(model, args?.by);
   assertDistinct(model, args?.distinct);

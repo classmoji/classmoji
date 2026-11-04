@@ -490,6 +490,9 @@ describe('cross-classroom scoping (S1)', () => {
     // A module is no longer described as a list that holds repos.
     expect(moduleCreateTool.description).not.toMatch(/repos/);
     expect(moduleCreateTool.description).toMatch(/assignment_update with module_id/);
+    // A quiz is no module item: it is placed by its own module_id.
+    expect(moduleCreateTool.description).not.toMatch(/quizzes/);
+    expect(moduleCreateTool.description).toMatch(/quiz is placed by its own module_id/);
   });
 
   it('gives every content item type the identical refusal (FORM is not special)', async () => {
@@ -962,6 +965,8 @@ describe('module_reorder', () => {
     expect(Buffer.byteLength(moduleReorderTool.description, 'utf8')).toBeLessThan(1500);
     expect(moduleReorderTool.description).toMatch(/WHOLE list/);
     expect(moduleReorderTool.description).toMatch(/not its target_id/);
+    expect(moduleReorderTool.description).toMatch(/module_item_move/);
+    expect(moduleReorderTool.description).toMatch(/module_item_remove takes one out/);
   });
 
   it('takes one of three kinds and a non-empty list of uuids', () => {

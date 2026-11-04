@@ -45,9 +45,13 @@
  * the chat shows it, never as text, and never the prompts `findWithMessages`
  * also returns.
  *
- * Not here: how the attempt ended. An attempt past its session deadline is
- * closed, with the results so far, the next time someone opens it in the app;
- * this read leaves it as it is.
+ * How a chat attempt ended (`ended_by`), as the drawer says it
+ * (`quizChat.messageLimitOf`, chat attempts only): 'turn_limit' when the
+ * server submitted it at the message limit, else null (a student's own
+ * submit, a legacy attempt, one still running, or one closed when its session
+ * expired, which messageLimitOf does not single out). An attempt past its
+ * session deadline is closed, with the results so far, the next time someone
+ * opens it in the app; this read leaves it as it is.
  */
 
 import { ClassmojiService } from '@classmoji/services';
@@ -664,7 +668,8 @@ export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
     'review drawer shows it: questions, answers, feedback with each expected_answer (not on ' +
     "the caller's own preview), files read, code submissions, and the button a student used " +
     '(action). Get attempt ids from list_quiz_attempts. Staff previews are flagged ' +
-    'is_staff_preview. The teaching team only; the read is audited.',
+    'is_staff_preview. ended_by: turn_limit when the server submitted a chat attempt at its ' +
+    'message limit, else null. The teaching team only; the read is audited.',
   scope: 'read',
   roles: QUIZ_STAFF,
   inputSchema: {
@@ -751,6 +756,9 @@ export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
     // The transcript as the drawer reads it: staff reading someone else's
     // attempt get each answer's expected_answer; the caller's own attempt (a
     // preview) is read as its owner reads it.
+    // How a chat attempt ended, as the drawer reads it: 'turn_limit' or null.
+    const messageLimit = isChat ? await ClassmojiService.quizChat.messageLimitOf(attempt.id) : null;
+
     let transcript: unknown[] | undefined;
     if (includeTranscript) {
       transcript = isChat
@@ -806,6 +814,7 @@ export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
         status: completed ? 'COMPLETED' : 'IN_PROGRESS',
         started_at: iso(attempt.started_at),
         completed_at: iso(attempt.completed_at),
+        ended_by: messageLimit?.endedBy ?? null,
         // Grades are a completed attempt's only, as on the review page. The
         // grade is the effective one: an adjustment's own emoji, else the AI's.
         grade_emoji: completed ? grade.effective.emoji : null,
