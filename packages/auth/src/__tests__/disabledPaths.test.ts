@@ -67,6 +67,36 @@ describe('disabled better-auth paths', () => {
     expect(res.status).toBe(404);
   });
 
+  it.each([['/sign-in/email-otp'], ['/email-otp/check-verification-otp']])(
+    'answers POST %s with 404',
+    async path => {
+      const res = await auth.handler(
+        new Request(`${BASE}${path}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ email: 'someone@example.com', otp: '123456', type: 'sign-in' }),
+        })
+      );
+      expect(res.status).toBe(404);
+    }
+  );
+
+  // The flows the sign-in page does use stay up: verifying an address and
+  // resetting a password with a code.
+  it.each([['/email-otp/verify-email'], ['/email-otp/reset-password']])(
+    'still routes POST %s',
+    async path => {
+      const res = await auth.handler(
+        new Request(`${BASE}${path}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ email: 'someone@example.com', otp: '123456', password: 'x' }),
+        })
+      );
+      expect(res.status).not.toBe(404);
+    }
+  );
+
   it('leaves the in-process auth.api.getAccessToken and refreshToken in place', async () => {
     // Router-only: the endpoint still runs in-process and answers as it would
     // without a session, not with the router's 404.

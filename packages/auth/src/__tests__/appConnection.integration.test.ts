@@ -264,6 +264,24 @@ describe('connecting an app with an ordinary session', () => {
     expect(res.headers.get('location')).not.toContain(REDIRECT);
   });
 
+  // MUTATION: drop allowPlainCodeChallengeMethod: false from server.ts → both
+  // reach the consent page and store a code.
+  it.each([
+    ['plain PKCE', { code_challenge_method: 'plain' }],
+    ['no PKCE method', { code_challenge_method: '' }],
+  ])('refuses %s and stores no code', async (_label, query) => {
+    const res = await authorize(query);
+
+    expect(res.status).toBe(302);
+    // 1.4.18's redirectErrorURL (mcp/authorize.mjs:8) returns only the query
+    // string, so the Location is relative; the error is what matters.
+    const location = new URL(res.headers.get('location')!, 'http://x');
+    expect(location.pathname).not.toBe('/oauth/consent');
+    expect(location.searchParams.get('error')).toBe('invalid_request');
+    expect(location.searchParams.get('error_description')).toMatch(/code_challenge method/);
+    expect(mocks.state.verifications).toHaveLength(0);
+  });
+
   it('goes to the consent page when the client asked for no prompt', async () => {
     const res = await authorize({ prompt: 'none' });
     expect(new URL(res.headers.get('location')!, 'http://x').pathname).toBe('/oauth/consent');
