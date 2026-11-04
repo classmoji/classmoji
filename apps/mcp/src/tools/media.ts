@@ -651,8 +651,11 @@ export const fileDownloadUrlTool: ToolDefinition<FileDownloadUrlArgs> = {
     if (args.page_id) {
       const page = await loadPageWithRepoInClassroom(args.page_id, ctx);
       // page_content_get's tier: the raw page, locked bodies and all, is for
-      // owners and teachers.
-      if (!(await holdsRole(ctx, ['OWNER', 'TEACHER']))) {
+      // owners and teachers. `roles` (every role held, at or below the Ask Moji
+      // role ceiling) rather than holdsRole, whose membership fallback ignores
+      // the ceiling.
+      const { roles } = requireClassroomCtx(ctx);
+      if (!roles.some(role => role === 'OWNER' || role === 'TEACHER')) {
         throw new ToolError(
           'forbidden',
           'Only owners and teachers can download files from pages',
@@ -713,7 +716,7 @@ export const fileDownloadUrlTool: ToolDefinition<FileDownloadUrlArgs> = {
         filename: result.filename,
         content_type: null,
         size_bytes: result.sizeBytes,
-        expires_at: new Date(result.expiresAt * 1000).toISOString(),
+        expires_at: expiresAtOf(result.url),
       })
     );
   },

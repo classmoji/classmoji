@@ -86,12 +86,16 @@ const MEDIA = {
   allowDownload: false,
 };
 
-function makeCtx(role: 'OWNER' | 'TEACHER' | 'ASSISTANT' | 'STUDENT', classroomId = 'class-1') {
+type Role = 'OWNER' | 'TEACHER' | 'ASSISTANT' | 'STUDENT';
+
+/** `roles`: every role held at or below the role ceiling, highest first (classroomContext). */
+function makeCtx(role: Role, classroomId = 'class-1', roles: Role[] = [role]) {
   return {
     viewer: { userId: 'user-1', clientId: 'c', scopes: new Set(['read']) },
     classroom: {
       classroomId,
       role,
+      roles,
       status: 'ACTIVE',
       membership: { id: 'm-1', role },
       classroom: { ...CLASSROOM, id: classroomId, settings: {} },
@@ -196,9 +200,20 @@ describe('page files', () => {
   });
 
   it('lets a multi-role assistant who is also a teacher through', async () => {
-    mocks.findMembership.mockResolvedValue({ role: 'TEACHER' });
-    await call({ page_id: PAGE_ID, path: 'assets/cover.png' }, ASSISTANT);
+    await call(
+      { page_id: PAGE_ID, path: 'assets/cover.png' },
+      makeCtx('TEACHER', 'class-1', ['TEACHER', 'ASSISTANT'])
+    );
     expect(mocks.resolveRepoFileDownloadUrl).toHaveBeenCalled();
+  });
+
+  it('holds a teacher viewing as an assistant (role ceiling) to the assistant tier', async () => {
+    // The ceiling narrowed `roles` to ASSISTANT; the TEACHER row still exists.
+    mocks.findMembership.mockResolvedValue({ role: 'TEACHER' });
+    await expect(
+      call({ page_id: PAGE_ID, path: 'assets/cover.png' }, makeCtx('ASSISTANT', 'class-1'))
+    ).rejects.toMatchObject({ kind: 'forbidden', code: 'INSUFFICIENT_ROLE' });
+    expect(mocks.resolveRepoFileDownloadUrl).not.toHaveBeenCalled();
   });
 
   it('refuses a page of another classroom with the same not-found', async () => {
