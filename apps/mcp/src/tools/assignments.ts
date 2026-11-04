@@ -455,8 +455,9 @@ export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
     'existing repository (see list_repos). submission_mode REPO (default): the last push to the ' +
     'student repo before the deadline is the submission, no issue is opened. ISSUE: Classmoji opens an issue (Github or Gitlab) in each ' +
     'student repo and closing it submits. Owner only. Creating it does NOT provision anything on ' +
-    'the git host — the assignment reaches students only when its repo is published (repo_publish) or ' +
-    'the next release runs. Created as a draft unless is_published is set.',
+    'the git host — the assignment reaches students when its repo is published (repo_publish), ' +
+    'synced (repo_sync), or included in a future release. ' +
+    'Created as a draft unless is_published is set.',
   scope: 'write',
   roles: OWNER_ONLY,
   inputSchema: {
@@ -645,3 +646,4 @@ export const assignmentDeleteTool: ToolDefinition<AssignmentDeleteArgs> = {
     });
   },
 };
+

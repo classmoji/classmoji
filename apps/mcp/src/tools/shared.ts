@@ -396,9 +396,9 @@ type RepositoryRecord = NonNullable<
 
 /**
  * Load a Repository (an assignment container) and verify its classroom_id.
- * Used as the parent-container S1 check by repo_publish/repo_unpublish and by
- * assignment_create (whose target row does not exist yet, so ownership is
- * re-verified against the parent container instead).
+ * Used as the parent-container S1 check by repo_publish/repo_unpublish/repo_sync
+ * and by assignment_create (whose target row does not exist yet, so ownership
+ * is re-verified against the parent container instead).
  */
 export async function loadRepositoryInClassroom(
   id: string,
@@ -523,3 +523,4 @@ export async function holdsRole(
   );
   return Boolean(membership);
 }
+
