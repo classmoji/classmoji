@@ -164,16 +164,21 @@
 
 /* No room for the gutter (phones, the webapp's side panel, a narrow pane):
    the box moves inside the heading's own box, before its text. The viewer
-   measures the room and sets the attribute (useSectionCheckGutter.ts). */
+   measures the room and sets the attribute (useSectionCheckGutter.ts).
+   A colored heading pads its bar with `padding: 3px 4px !important`
+   (blocknote-overrides), which would beat a plain `padding-left` and leave
+   the box on top of the first letter. So the room is added to that padding
+   (`--heading-pad-left`, 0 when uncolored), with `!important` to win, and
+   the box moves in by the same amount so it sits inside the bar. */
 .pg-reader-sections[data-section-checks='inline']
   .bn-block-content[data-content-type='heading'][data-checkable='true']:has(
     > .pg-section-check:not([hidden])
   ) {
-  padding-left: 32px;
+  padding-left: calc(var(--heading-pad-left, 0px) + 32px) !important;
 }
 
 .pg-reader-sections[data-section-checks='inline'] .pg-section-check {
-  left: -2px;
+  left: calc(var(--heading-pad-left, 0px) - 2px);
 }
 
 /* Tooltip: BlockNote's tooltip colours, above the box. It starts at the box's
