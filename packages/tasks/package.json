@@ -3,6 +3,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./assignment-release": "./src/helpers/openAssignmentInRepos.ts",
     "./browser-run": "./src/helpers/browserRun.ts",
     "./safe-url": "./src/helpers/safeUrlFetch.ts"
   },

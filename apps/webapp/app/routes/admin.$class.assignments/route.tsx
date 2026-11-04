@@ -19,6 +19,7 @@ import {
 } from '~/components/features/assignments/useOrphanedRepositoryPrompt';
 import { gitTerms } from '~/utils/gitWeb';
 import { loadQuizzesVisible, quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
+import { editMayRelease, openInExistingRepos } from '~/utils/assignmentRelease.server';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -179,7 +180,16 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
           classroom.id,
           assignmentData
         );
-        return { success: `Assignment "${created.title}" created` };
+        // Created published into a published repository: put it into the
+        // student repos that already exist, as the module card's Publish does.
+        const note =
+          created.type === 'REPO' && created.is_published
+            ? await openInExistingRepos(classroom.id, created.id, terms.repos)
+            : null;
+        return {
+          success: `Assignment "${created.title}" created`,
+          ...(note ? { info: note } : {}),
+        };
       } catch (error: unknown) {
         console.error('[admin.assignments] Assignment create error:', error);
         return { error: 'Failed to create assignment. Please try again.' };
@@ -199,7 +209,17 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
           classroom.id,
           updates
         );
-        return { success: `Assignment "${updated.title}" updated` };
+        // Published, or its release date moved: put it into the student repos
+        // that already exist (a no-op until it is released and its repository
+        // is published).
+        const note =
+          target && editMayRelease(target, updates)
+            ? await openInExistingRepos(classroom.id, updated.id, terms.repos)
+            : null;
+        return {
+          success: `Assignment "${updated.title}" updated`,
+          ...(note ? { info: note } : {}),
+        };
       } catch (error: unknown) {
         console.error('[admin.assignments] Assignment update error:', error);
         return { error: 'Failed to update assignment. Please try again.' };

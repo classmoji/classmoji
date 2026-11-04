@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   quizzesVisible: vi.fn(),
   membershipFindByClassroomAndUser: vi.fn(),
   auditCreate: vi.fn(),
+  openInRepos: vi.fn(),
 }));
 
 vi.mock('@classmoji/services', () => ({
@@ -45,6 +46,12 @@ vi.mock('@classmoji/services', () => ({
     },
     audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
   },
+}));
+
+// The one release operation the web shares (tested in packages/tasks); here
+// only whether and how the tools call it, and what they report.
+vi.mock('@classmoji/tasks/assignment-release', () => ({
+  openAssignmentInExistingRepos: (...a: unknown[]) => mocks.openInRepos(...a),
 }));
 
 const { assignmentCreateTool, assignmentDeleteTool, assignmentUpdateTool } =
@@ -80,6 +87,7 @@ function parse(result: { content: Array<{ text: string }> }) {
 beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
   mocks.auditCreate.mockResolvedValue(undefined);
+  mocks.openInRepos.mockResolvedValue({ queued: 0, sessionId: 's-1', reason: 'none_missing' });
   mocks.moduleFindById.mockResolvedValue({ id: 'mod-1', classroom_id: 'class-1' });
 });
 
@@ -309,6 +317,9 @@ describe('assignment_update: grader_deadline and release_at', () => {
         grader_deadline: new Date(GRADER).toISOString(),
         release_at: new Date(RELEASE).toISOString(),
       },
+      // release_at moved on a repo assignment: the release into student repos ran.
+      opened_in_repos: 0,
+      release_note: 'No existing student repository is missing it.',
     });
     const audit = mocks.auditCreate.mock.calls[0][0] as { data: unknown };
     expect(audit.data).toEqual({
@@ -319,6 +330,7 @@ describe('assignment_update: grader_deadline and release_at', () => {
         release_at: new Date(RELEASE).toISOString(),
       },
       value: expect.any(String),
+      opened_in_repos: 0,
     });
     // The dedup key: a digest of what was written, so two different edits
     // inside audit's 5s window stay two rows.
@@ -343,6 +355,7 @@ describe('assignment_update: grader_deadline and release_at', () => {
       fields: ['grader_deadline', 'release_at'],
       values: { grader_deadline: null, release_at: null },
       value: expect.any(String),
+      opened_in_repos: 0,
     });
   });
 
@@ -368,6 +381,7 @@ describe('assignment_update: grader_deadline and release_at', () => {
         release_at: new Date(RELEASE).toISOString(),
       },
       value: expect.any(String),
+      opened_in_repos: 0,
     });
   });
 
@@ -1293,5 +1307,232 @@ describe('assignment_delete and a quiz assignment', () => {
       kind: 'not_found',
     });
     expect(mocks.assignmentDeleteById).not.toHaveBeenCalled();
+  });
+});
+
+describe('publishing puts a repo assignment into the existing student repos (#385)', () => {
+  const UPDATE = { classroom: 'org/winter-2025', assignment_id: 'asg-1' };
+  const CREATE = {
+    classroom: 'org/winter-2025',
+    module_id: 'mod-1',
+    repository_id: 'repo-1',
+    title: 'Lab 3',
+  };
+
+  const loaded = (type: 'REPO' | 'QUIZ' | 'FORM', isPublished = false) => ({
+    id: 'asg-1',
+    title: 'Lab 3',
+    type,
+    is_published: isPublished,
+    module_id: 'mod-1',
+    module: { id: 'mod-1', title: 'Week 1', classroom_id: 'class-1' },
+    repository: { classroom_id: 'class-1' },
+  });
+
+  beforeEach(() => {
+    mocks.assignmentFindById.mockResolvedValue(loaded('REPO'));
+    mocks.assignmentUpdate.mockImplementation(
+      async (id: string, data: Record<string, unknown>) => ({
+        id,
+        title: 'Lab 3',
+        is_published: false,
+        student_deadline: null,
+        weight: 50,
+        grades_released: false,
+        grader_deadline: null,
+        release_at: null,
+        ...data,
+      })
+    );
+    mocks.repositoryFindById.mockResolvedValue({ id: 'repo-1', classroom_id: 'class-1' });
+    mocks.assignmentCreate.mockImplementation(async (data: Record<string, unknown>) => ({
+      id: 'asg-new',
+      title: 'Lab 3',
+      module_id: 'mod-1',
+      type: 'REPO',
+      repository_id: 'repo-1',
+      weight: 100,
+      is_extra_credit: false,
+      is_published: false,
+      student_deadline: null,
+      ...data,
+    }));
+    mocks.membershipFindByClassroomAndUser.mockResolvedValue(null);
+  });
+
+  const auditData = () =>
+    (mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> }).data;
+
+  it('assignment_create published: runs it in the authorized classroom and returns the count', async () => {
+    mocks.openInRepos.mockResolvedValue({ queued: 38, sessionId: 's-1' });
+
+    const payload = parse(
+      await assignmentCreateTool.handler(
+        { ...CREATE, is_published: true, submission_mode: 'ISSUE' },
+        CTX
+      )
+    );
+
+    expect(mocks.openInRepos).toHaveBeenCalledTimes(1);
+    expect(mocks.openInRepos).toHaveBeenCalledWith({
+      classroomId: 'class-1',
+      assignmentId: 'asg-new',
+    });
+    // After the write: the row exists before anything is queued for it.
+    expect(mocks.assignmentCreate.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.openInRepos.mock.invocationCallOrder[0]
+    );
+    expect(payload.opened_in_repos).toBe(38);
+    expect(payload.release_note).toBeUndefined();
+    expect(auditData()).toMatchObject({ tool: 'assignment_create', opened_in_repos: 38 });
+  });
+
+  it('assignment_create as a draft: does not run it and reports nothing about repos', async () => {
+    const payload = parse(await assignmentCreateTool.handler(CREATE, CTX));
+
+    expect(mocks.openInRepos).not.toHaveBeenCalled();
+    expect(payload).not.toHaveProperty('opened_in_repos');
+    expect(auditData()).not.toHaveProperty('opened_in_repos');
+  });
+
+  it('assignment_create into an unpublished repository: says to use repo_publish', async () => {
+    mocks.openInRepos.mockResolvedValue({
+      queued: 0,
+      sessionId: 's-1',
+      reason: 'repo_unpublished',
+    });
+
+    const payload = parse(
+      await assignmentCreateTool.handler({ ...CREATE, is_published: true }, CTX)
+    );
+
+    expect(payload.opened_in_repos).toBe(0);
+    expect(payload.release_note).toMatch(/repo_publish/);
+    expect(payload.assignment.is_published).toBe(true);
+  });
+
+  it('assignment_create: a trigger failure is reported, not thrown, after the write landed', async () => {
+    mocks.openInRepos.mockRejectedValue(new Error('trigger down'));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const payload = parse(
+      await assignmentCreateTool.handler({ ...CREATE, is_published: true }, CTX)
+    );
+
+    expect(payload.success).toBe(true);
+    expect(payload.opened_in_repos).toBe(0);
+    expect(payload.release_note).toMatch(/could not be added/);
+    expect(auditData()).toMatchObject({ opened_in_repos: 0, open_in_repos_failed: true });
+    error.mockRestore();
+  });
+
+  it('assignment_update false→true: runs it and returns the count', async () => {
+    mocks.openInRepos.mockResolvedValue({ queued: 7, sessionId: 's-1' });
+
+    const payload = parse(
+      await assignmentUpdateTool.handler({ ...UPDATE, is_published: true }, CTX)
+    );
+
+    expect(mocks.openInRepos).toHaveBeenCalledWith({
+      classroomId: 'class-1',
+      assignmentId: 'asg-1',
+    });
+    expect(mocks.assignmentUpdate.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.openInRepos.mock.invocationCallOrder[0]
+    );
+    expect(payload.opened_in_repos).toBe(7);
+    expect(payload.assignment.is_published).toBe(true);
+    expect(auditData()).toMatchObject({ tool: 'assignment_update', opened_in_repos: 7 });
+  });
+
+  it('assignment_update moving release_at to the past on a draft: runs it, and the draft reads published', async () => {
+    mocks.openInRepos.mockResolvedValue({ queued: 3, sessionId: 's-1' });
+
+    const payload = parse(
+      await assignmentUpdateTool.handler(
+        { ...UPDATE, release_at: '2026-01-01T09:00:00-05:00' },
+        CTX
+      )
+    );
+
+    expect(mocks.openInRepos).toHaveBeenCalledTimes(1);
+    expect(payload.opened_in_repos).toBe(3);
+    // The helper publishes a released draft it put out (as Sync does).
+    expect(payload.assignment.is_published).toBe(true);
+  });
+
+  it('assignment_update with a future release_at: explains when it goes out', async () => {
+    mocks.openInRepos.mockResolvedValue({ queued: 0, sessionId: 's-1', reason: 'not_released' });
+
+    const draft = parse(
+      await assignmentUpdateTool.handler(
+        { ...UPDATE, release_at: '2030-01-01T09:00:00-05:00' },
+        CTX
+      )
+    );
+    expect(draft.opened_in_repos).toBe(0);
+    expect(draft.release_note).toMatch(/released that day/);
+
+    const published = parse(
+      await assignmentUpdateTool.handler(
+        { ...UPDATE, is_published: true, release_at: '2030-01-01T09:00:00-05:00' },
+        CTX
+      )
+    );
+    expect(published.release_note).toMatch(/is_published true/);
+  });
+
+  it.each([
+    ['weight', { weight: 40 }],
+    ['student_deadline', { student_deadline: '2026-07-21T23:59:00-04:00' }],
+    ['title', { title: 'Lab 3a' }],
+    ['grades_released', { grades_released: true }],
+  ])('assignment_update of %s alone does not run it', async (_field, args) => {
+    const payload = parse(await assignmentUpdateTool.handler({ ...UPDATE, ...args }, CTX));
+
+    expect(mocks.openInRepos).not.toHaveBeenCalled();
+    expect(payload).not.toHaveProperty('opened_in_repos');
+    expect(auditData()).not.toHaveProperty('opened_in_repos');
+  });
+
+  it('assignment_update unpublishing never runs it, even with a past release_at', async () => {
+    await assignmentUpdateTool.handler(
+      { ...UPDATE, is_published: false, release_at: '2026-01-01T09:00:00-05:00' },
+      CTX
+    );
+    expect(mocks.openInRepos).not.toHaveBeenCalled();
+  });
+
+  it('assignment_update on a quiz assignment does not run it', async () => {
+    mocks.assignmentFindById.mockResolvedValue({ ...loaded('QUIZ'), quiz_id: 'q-1' });
+    mocks.quizzesVisible.mockResolvedValue(true);
+
+    const payload = parse(
+      await assignmentUpdateTool.handler({ ...UPDATE, is_published: true }, CTX)
+    );
+
+    expect(mocks.openInRepos).not.toHaveBeenCalled();
+    expect(payload).not.toHaveProperty('opened_in_repos');
+  });
+
+  it('assignment_update into an unpublished repository: note points at repo_publish', async () => {
+    mocks.openInRepos.mockResolvedValue({
+      queued: 0,
+      sessionId: 's-1',
+      reason: 'repo_unpublished',
+    });
+
+    const payload = parse(
+      await assignmentUpdateTool.handler({ ...UPDATE, is_published: true }, CTX)
+    );
+
+    expect(payload.opened_in_repos).toBe(0);
+    expect(payload.release_note).toMatch(/repo_publish/);
+  });
+
+  it('assignment_update description no longer says publishing opens no issues', () => {
+    expect(assignmentUpdateTool.description).not.toMatch(/opens no issues/);
+    expect(assignmentCreateTool.description).not.toMatch(/does NOT provision anything/);
+    expect(new TextEncoder().encode(assignmentUpdateTool.description).length).toBeLessThan(1500);
   });
 });
