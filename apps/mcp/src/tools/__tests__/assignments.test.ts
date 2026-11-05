@@ -1422,6 +1422,7 @@ describe('publishing puts a repo assignment into the existing student repos (#38
     expect(payload.success).toBe(true);
     expect(payload.opened_in_repos).toBe(0);
     expect(payload.release_note).toMatch(/could not be added/);
+    expect(payload.release_note).toMatch(/repo_sync/);
     expect(auditData()).toMatchObject({ opened_in_repos: 0, open_in_repos_failed: true });
     error.mockRestore();
   });

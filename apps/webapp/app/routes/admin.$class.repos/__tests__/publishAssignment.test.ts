@@ -68,6 +68,9 @@ vi.mock('@classmoji/tasks/assignment-release', () => ({
   openAssignmentInExistingRepos: (...a: unknown[]) => mocks.openInRepos(...a),
 }));
 
+// Sync's shared helper: not exercised here (syncAssignment.test.ts pins it).
+vi.mock('@classmoji/tasks/repo-sync', () => ({ syncRepository: vi.fn() }));
+
 vi.mock('@trigger.dev/sdk', () => ({
   auth: { createPublicToken: (...a: unknown[]) => mocks.createPublicToken(...a) },
 }));

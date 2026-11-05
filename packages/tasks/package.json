@@ -5,6 +5,7 @@
     ".": "./src/index.ts",
     "./assignment-release": "./src/helpers/openAssignmentInRepos.ts",
     "./browser-run": "./src/helpers/browserRun.ts",
+    "./repo-sync": "./src/helpers/syncRepository.ts",
     "./safe-url": "./src/helpers/safeUrlFetch.ts"
   },
   "scripts": {

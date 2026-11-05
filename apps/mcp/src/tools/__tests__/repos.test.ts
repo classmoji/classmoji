@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   findDependents: vi.fn(),
   deleteIfUnprovisioned: vi.fn(),
   checkTemplate: vi.fn(),
+  syncRepository: vi.fn(),
 }));
 
 vi.mock('@classmoji/services', () => ({
@@ -61,8 +62,14 @@ vi.mock('@classmoji/tasks', () => ({
   },
 }));
 
-const { repoCreateTool, repoPublishTool, repoUpdateTool, repoDeleteTool } =
+vi.mock('@classmoji/tasks/repo-sync', () => ({
+  RepositorySyncNotFoundError: class RepositorySyncNotFoundError extends Error {},
+  syncRepository: (...a: unknown[]) => mocks.syncRepository(...a),
+}));
+
+const { repoCreateTool, repoPublishTool, repoSyncTool, repoUpdateTool, repoDeleteTool } =
   await import('../repos.ts');
+const { RepositorySyncNotFoundError } = await import('@classmoji/tasks/repo-sync');
 
 const CTX: ToolContext = {
   viewer: { userId: 'owner-1', clientId: 'c', scopes: new Set(['read', 'write']) },
@@ -932,5 +939,125 @@ describe('repo tool definitions', () => {
   it('point tag ids at list_tags', () => {
     expect(repoCreateTool.description).toContain('list_tags');
     expect(repoUpdateTool.description).toContain('list_tags');
+  });
+});
+
+/**
+ * repo_sync — the web Sync button over MCP (#385). Both run `syncRepository`
+ * (mocked here; packages/tasks/src/helpers/__tests__/syncRepository.test.ts
+ * pins what it queues). The tool owns the gate, the published check, the
+ * error shape and the audit row.
+ */
+describe('repo_sync', () => {
+  const ARGS = { classroom: 'dev-org/cs1-w26', repository_id: 'repo-1' };
+
+  beforeEach(() => {
+    mocks.repositoryFindById.mockResolvedValue({
+      id: 'repo-1',
+      classroom_id: 'class-1',
+      title: 'Lab 1',
+      type: 'INDIVIDUAL',
+      is_published: true,
+    });
+    mocks.syncRepository.mockResolvedValue({
+      sessionId: 'sess-1',
+      reposToCreate: 2,
+      assignmentsToAdd: 3,
+    });
+  });
+
+  it('is an owner-only write, open-world and not destructive', () => {
+    expect(repoSyncTool.roles).toEqual(['OWNER']);
+    expect(repoSyncTool.roles).not.toContain('TEACHER');
+    expect(repoSyncTool.scope).toBe('write');
+    expect(repoSyncTool.annotations).toEqual({ destructive: false, openWorld: true });
+    expect(Buffer.byteLength(repoSyncTool.description)).toBeLessThan(1500);
+  });
+
+  it('syncs the repository in the authorized classroom, returns the counts and audits them', async () => {
+    const payload = parse(await repoSyncTool.handler(ARGS, CTX));
+
+    expect(mocks.syncRepository).toHaveBeenCalledWith({
+      classroomId: 'class-1',
+      repositoryId: 'repo-1',
+    });
+    expect(payload).toEqual({
+      success: true,
+      repos_to_create: 2,
+      assignments_to_add: 3,
+      message: 'Creating 2 repositories and adding 3 assignments to existing repositories.',
+    });
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({
+      resource_type: 'REPOSITORIES',
+      resource_id: 'repo-1',
+      action: 'UPDATE',
+      data: { tool: 'repo_sync', repos_to_create: 2, assignments_to_add: 3 },
+    });
+  });
+
+  it('says so when nothing was missing (still audited)', async () => {
+    mocks.syncRepository.mockResolvedValue({
+      sessionId: 'sess-1',
+      reposToCreate: 0,
+      assignmentsToAdd: 0,
+    });
+
+    const payload = parse(await repoSyncTool.handler(ARGS, CTX));
+
+    expect(payload).toMatchObject({ repos_to_create: 0, assignments_to_add: 0 });
+    expect(payload.message).toMatch(/^Already in sync/);
+    expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({
+      data: { tool: 'repo_sync', repos_to_create: 0, assignments_to_add: 0 },
+    });
+  });
+
+  it('refuses an unpublished repository, pointing at repo_publish, and syncs nothing', async () => {
+    mocks.repositoryFindById.mockResolvedValue({
+      id: 'repo-1',
+      classroom_id: 'class-1',
+      is_published: false,
+    });
+
+    const call = repoSyncTool.handler(ARGS, CTX);
+    await expect(call).rejects.toMatchObject({ kind: 'invalid_params' });
+    await expect(call).rejects.toThrow(/repo_publish/);
+    expect(mocks.syncRepository).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it("refuses another classroom's repository as not found, and syncs nothing", async () => {
+    mocks.repositoryFindById.mockResolvedValue({
+      id: 'repo-1',
+      classroom_id: 'class-other',
+      is_published: true,
+    });
+
+    await expect(repoSyncTool.handler(ARGS, CTX)).rejects.toMatchObject({ kind: 'not_found' });
+    expect(mocks.syncRepository).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('a trigger failure fails the call with no audit row', async () => {
+    mocks.syncRepository.mockRejectedValue(new Error('Trigger.dev unavailable'));
+
+    const call = repoSyncTool.handler(ARGS, CTX);
+    await expect(call).rejects.toMatchObject({ kind: 'internal' });
+    await expect(call).rejects.toThrow(/Run repo_sync again/);
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it("maps the helper's scope refusal to not found", async () => {
+    mocks.syncRepository.mockRejectedValue(new RepositorySyncNotFoundError());
+
+    await expect(repoSyncTool.handler(ARGS, CTX)).rejects.toMatchObject({ kind: 'not_found' });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe('Sync pointers name repo_sync', () => {
+  it('repo_publish points at repo_sync, not the web', () => {
+    expect(repoPublishTool.description).toContain('repo_sync');
+    expect(repoPublishTool.description).not.toContain('web Sync');
   });
 });
