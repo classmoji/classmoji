@@ -40,6 +40,8 @@ export interface QuizRegradeView {
   lateHours?: number | null;
   /** Staff only, open requests only: the effective score after the late penalty, as emoji. */
   countedEmoji?: string | null;
+  /** Staff only, open requests only: staff waived this student's late penalty on the quiz. */
+  lateWaived?: boolean;
 }
 
 export type RegradeRequestRow = Omit<ServiceRow, 'quiz_attempt' | 'resolved_by'> & {
@@ -135,7 +137,12 @@ export const loadStaffRegradeRows = async ({
     return projected.quiz && late
       ? {
           ...projected,
-          quiz: { ...projected.quiz, lateHours: late.lateHours, countedEmoji: late.countedEmoji },
+          quiz: {
+            ...projected.quiz,
+            lateHours: late.lateHours,
+            countedEmoji: late.countedEmoji,
+            ...(late.lateWaived ? { lateWaived: true } : {}),
+          },
         }
       : projected;
   });

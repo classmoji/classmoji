@@ -293,7 +293,7 @@ function regradeRow(
   r: RegradeRow,
   git: GitWebContext | null,
   scale: EmojiScale,
-  lateness?: { lateHours: number | null; countedEmoji: string | null }
+  lateness?: { lateHours: number | null; countedEmoji: string | null; lateWaived?: boolean }
 ) {
   const submission = r.git_repo_assignment;
   const attempt = r.quiz_attempt;
@@ -346,7 +346,12 @@ function regradeRow(
             original_emoji: grade.adjusted ? grade.original.emoji : null,
             // Staff queue, open requests: as the resolve modal shows them.
             ...(lateness
-              ? { late_hours: lateness.lateHours, counted_emoji: lateness.countedEmoji }
+              ? {
+                  late_hours: lateness.lateHours,
+                  counted_emoji: lateness.countedEmoji,
+                  // Staff waived this student's late penalty on the quiz.
+                  ...(lateness.lateWaived ? { late_override: true } : {}),
+                }
               : {}),
           }
         : null,
@@ -378,7 +383,10 @@ async function regradeRows(
           >[1],
           scale
         )
-      : new Map<string, { lateHours: number | null; countedEmoji: string | null }>();
+      : new Map<
+          string,
+          { lateHours: number | null; countedEmoji: string | null; lateWaived?: boolean }
+        >();
   const git = orgGit(ctx);
   return requests.map(r => regradeRow(r, git, scale, lateness.get(r.id)));
 }

@@ -447,8 +447,11 @@ interface QuizRow extends QuizPlacementSource {
  * the id of its open regrade request, so regrade_create can target any of
  * them.
  *
- * Three narrow reads for the whole list (prices, hours, open requests), never
- * one per quiz.
+ * `late_override`: staff waived this student's late penalty on the quiz
+ * (`QuizLateWaiver`): no attempt is late (`lateHours` 0).
+ *
+ * Four narrow reads for the whole list (prices, hours, waivers, open
+ * requests), never one per quiz.
  */
 async function studentQuizExtensions(ctx: ToolContext, quizzes: QuizRow[], scale: EmojiScale) {
   const { classroomId } = classroomCtx(ctx);
@@ -473,15 +476,20 @@ async function studentQuizExtensions(ctx: ToolContext, quizzes: QuizRow[], scale
         });
   const openRequestOf = new Map(openRequests.map(r => [r.quiz_attempt_id, r.id]));
 
-  const [prices, hours] =
+  const [prices, hours, waived] =
     assignmentIds.length === 0
-      ? [[], new Map<string, number>()]
+      ? [[], new Map<string, number>(), new Set<string>()]
       : await Promise.all([
           getPrisma().assignment.findMany({
             where: { id: { in: assignmentIds }, module: { classroom_id: classroomId } },
             select: { id: true, tokens_per_hour: true },
           }),
           ClassmojiService.quizGradeItems.netQuizExtensionHours({
+            classroomId,
+            studentId: ctx.viewer.userId,
+            assignmentIds,
+          }),
+          ClassmojiService.quizLateWaiver.waivedAssignmentIdsForStudent({
             classroomId,
             studentId: ctx.viewer.userId,
             assignmentIds,
@@ -498,6 +506,7 @@ async function studentQuizExtensions(ctx: ToolContext, quizzes: QuizRow[], scale
           effective_tokens_per_hour: 0,
           extension_hours: 0,
           effective_due_date: q.due_date ?? null,
+          late_override: false,
         };
       }
       const bought = hours.get(a.id) ?? 0;
@@ -506,6 +515,7 @@ async function studentQuizExtensions(ctx: ToolContext, quizzes: QuizRow[], scale
         effective_tokens_per_hour: effectiveTokensPerHour(priceOf.get(a.id), classroomPrice),
         extension_hours: Math.max(0, bought),
         effective_due_date: effectiveDeadline(a.student_deadline, bought),
+        late_override: waived.has(a.id),
       };
     },
     attemptsOf(q: QuizRow) {
@@ -520,6 +530,7 @@ async function studentQuizExtensions(ctx: ToolContext, quizzes: QuizRow[], scale
           ? countingQuizScore(q.attempts, q.grading_strategy, {
               studentDeadline: a.student_deadline,
               extensionHours: hours.get(a.id) ?? 0,
+              lateWaived: waived.has(a.id),
               latePenaltyPerHour: penalty,
               emojiScale: scale,
             })
@@ -572,7 +583,8 @@ export const QUIZZES_DESCRIPTION =
   'published quizzes (closed ones too, as CLOSED), published material and their own attempt ' +
   'summary. For a student each quiz also has assignment_id (what extension_purchase takes), ' +
   'effective_tokens_per_hour (price of one extension hour; 0 = none), extension_hours ' +
-  'bought, effective_due_date (due date plus those hours) and my_attempts: lateHours (hours ' +
+  'bought, effective_due_date (due date plus those hours), late_override (staff waived your ' +
+  'late penalty: lateHours 0, and no extension hours can be bought) and my_attempts: lateHours (hours ' +
   'late of the attempt that counts), current_emoji (its grade before the late penalty), ' +
   'adjusted with original_emoji when staff changed the grade, instructor_comment and ' +
   'instructor_name, and attempts: every attempt (id, attempt_number, completed_at, ' +

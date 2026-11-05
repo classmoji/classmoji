@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   attemptFindMany: vi.fn(),
   tokenGroupBy: vi.fn(),
   emojiFindMany: vi.fn(),
+  waiverFindMany: vi.fn(),
 }));
 
 vi.mock('@classmoji/database', () => ({
@@ -24,6 +25,7 @@ vi.mock('@classmoji/database', () => ({
     quizAttempt: { findMany: (...a: unknown[]) => mocks.attemptFindMany(...a) },
     tokenTransaction: { groupBy: (...a: unknown[]) => mocks.tokenGroupBy(...a) },
     emojiMapping: { findMany: (...a: unknown[]) => mocks.emojiFindMany(...a) },
+    quizLateWaiver: { findMany: (...a: unknown[]) => mocks.waiverFindMany(...a) },
   }),
 }));
 
@@ -52,6 +54,7 @@ beforeEach(() => {
   mocks.attemptFindMany.mockResolvedValue([]);
   mocks.tokenGroupBy.mockResolvedValue([]);
   mocks.emojiFindMany.mockResolvedValue([]);
+  mocks.waiverFindMany.mockResolvedValue([]);
 });
 
 describe('loadQuizGradeItems', () => {
@@ -133,6 +136,53 @@ describe('loadQuizGradeItems', () => {
     });
     // The scale an adjusted attempt is read through is this classroom's own.
     expect(mocks.emojiFindMany.mock.calls[0][0].where).toEqual({ classroom_id: CLASSROOM });
+    expect(mocks.waiverFindMany.mock.calls[0][0].where).toEqual({
+      classroom_id: CLASSROOM,
+      student_id: { in: ['user-1'] },
+      assignment_id: { in: ['asg-1'] },
+    });
+  });
+
+  it('a late waiver counts that student unpenalised and suspends their zero; others keep theirs', async () => {
+    mocks.assignmentFindMany.mockResolvedValue([quizAssignment(1)]);
+    mocks.membershipFindMany.mockResolvedValue([
+      { user_id: 'waived' },
+      { user_id: 'late' },
+      { user_id: 'absent-waived' },
+      { user_id: 'absent' },
+    ]);
+    const attemptOf = (userId: string) => ({
+      id: `att-${userId}`,
+      quiz_id: 'quiz-1',
+      user_id: userId,
+      started_at: new Date('2026-10-03T05:00:00Z'),
+      completed_at: new Date('2026-10-03T06:30:00Z'), // 6 h late
+      partial_credit_percentage: 90,
+      adjusted_emoji: null,
+    });
+    mocks.attemptFindMany.mockResolvedValue([attemptOf('waived'), attemptOf('late')]);
+    mocks.waiverFindMany.mockResolvedValue([
+      { student_id: 'waived', assignment_id: 'asg-1' },
+      { student_id: 'absent-waived', assignment_id: 'asg-1' },
+    ]);
+
+    const items = await loadQuizGradeItems({
+      classroomId: CLASSROOM,
+      quizzesVisible: true,
+      now: NOW,
+    });
+
+    expect(items.get('waived')?.[0]).toMatchObject({
+      grade: 90,
+      late_hours: 0,
+      late_waived: true,
+    });
+    expect(items.get('late')?.[0]).toMatchObject({ grade: 84, late_hours: 6 });
+    expect(items.get('late')?.[0]).not.toHaveProperty('late_waived');
+    // A waiver takes away late penalties, not the zero for not taking the quiz.
+    expect(items.get('absent-waived')?.[0]).toMatchObject({ grade: 0, counts_as_zero: true });
+    expect(items.get('absent-waived')?.[0]).not.toHaveProperty('late_waived');
+    expect(items.get('absent')?.[0]).toMatchObject({ grade: 0, counts_as_zero: true });
   });
 
   it('reads nothing where quizzes are hidden or no user is asked for', async () => {
@@ -167,6 +217,7 @@ describe('loadQuizGradeItems', () => {
     expect(items.size).toBe(0);
     expect(mocks.attemptFindMany).not.toHaveBeenCalled();
     expect(mocks.tokenGroupBy).not.toHaveBeenCalled();
+    expect(mocks.waiverFindMany).not.toHaveBeenCalled();
   });
 
   it('throws when a read fails', async () => {

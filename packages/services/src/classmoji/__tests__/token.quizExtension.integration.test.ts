@@ -228,6 +228,25 @@ describe.skipIf(!RUN)('quiz extension hours (integration)', () => {
     expect(rows).toEqual([]);
   });
 
+  it("refuses while staff waived that student's late penalty, and only that student (#813)", async () => {
+    const waived = await makeStudent();
+    const other = await makeStudent();
+    await grant(waived, 20);
+    await grant(other, 20);
+    const assignment = await makeQuiz();
+    await prisma.quizLateWaiver.create({
+      data: { assignment_id: assignment.id, student_id: waived, classroom_id: classroomId },
+    });
+
+    await expect(buy(waived, assignment.id, 1)).rejects.toThrow(
+      'Extensions are unavailable: a late override is in effect.'
+    );
+    // The classmate on the same quiz still buys hours.
+    await expect(buy(other, assignment.id, 1)).resolves.toMatchObject({ hours_purchased: 1 });
+    const hours = await netQuizExtensionHours({ classroomId, studentId: waived });
+    expect(hours.get(assignment.id) ?? 0).toBe(0);
+  });
+
   it('refunds once, keeping the link, the title and taking the hours back', async () => {
     const student = await makeStudent();
     await grant(student, 20);

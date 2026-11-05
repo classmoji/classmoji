@@ -241,6 +241,12 @@ export {
   QuizAttemptNotFoundError,
   QuizAttemptIncompleteError,
 } from './classmoji/quizAttempt.service.ts';
+// A refused quiz late waiver write (`code`: not_found, not_quiz, not_student).
+export { QuizLateWaiverError } from './classmoji/quizLateWaiver.service.ts';
+export type {
+  QuizLateWaiverErrorCode,
+  SetQuizLateWaiverResult,
+} from './classmoji/quizLateWaiver.service.ts';
 // A refused quiz grade adjustment or quiz regrade action (`code`, `status`).
 export {
   QuizGradeError,

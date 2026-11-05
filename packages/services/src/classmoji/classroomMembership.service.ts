@@ -134,6 +134,8 @@ export const findStudentByLoginInClassroom = async (classroomId: string, login: 
       id: true,
       comment: true,
       letter_grade: true,
+      // Pending or accepted: the report offers no quiz late shield while pending.
+      has_accepted_invite: true,
       user: {
         // `school_id` is owner-only contact info (see
         // apps/webapp/app/utils/studentFields.server.ts). Selected here because

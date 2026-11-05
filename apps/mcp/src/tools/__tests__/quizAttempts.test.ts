@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   findUsersByRole: vi.fn(),
   findUsersByRoles: vi.fn(),
   netHours: vi.fn(),
+  waivedStudents: vi.fn(),
   quizzesVisibleOrThrow: vi.fn(),
   auditCreate: vi.fn(),
   emojiScale: vi.fn(),
@@ -43,6 +44,9 @@ vi.mock('@classmoji/services', () => ({
       findUsersByRoles: (...a: unknown[]) => mocks.findUsersByRoles(...a),
     },
     token: { netQuizExtensionHoursByStudent: (...a: unknown[]) => mocks.netHours(...a) },
+    quizLateWaiver: {
+      waivedStudentIdsForAssignment: (...a: unknown[]) => mocks.waivedStudents(...a),
+    },
     entitlement: { quizzesVisibleOrThrow: (...a: unknown[]) => mocks.quizzesVisibleOrThrow(...a) },
     emojiMapping: { findScaleByClassroomId: (...a: unknown[]) => mocks.emojiScale(...a) },
     audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
@@ -194,6 +198,7 @@ beforeEach(() => {
   mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
   mocks.auditCreate.mockResolvedValue(undefined);
   mocks.netHours.mockResolvedValue(new Map());
+  mocks.waivedStudents.mockResolvedValue(new Set());
   mocks.emojiScale.mockResolvedValue(EMOJI_SCALE);
   mocks.quizFindById.mockResolvedValue(quiz());
   mocks.findByQuiz.mockResolvedValue([]);
@@ -326,6 +331,37 @@ describe('list_quiz_attempts', () => {
     expect(ada.late_hours).toBe(1);
     expect(ada.current_emoji).toBe('eyes');
     expect(ada.counted_emoji).toBe('-1');
+  });
+
+  it('a late waiver: late_hours 0, the raw grade counts, late_override; others keep theirs (#813)', async () => {
+    vi.useFakeTimers({ now: new Date('2026-10-05T12:00:00Z'), toFake: ['Date'] });
+    settings.late_penalty_points_per_hour = 20;
+    mocks.waivedStudents.mockResolvedValue(new Set(['ada', 'bo']));
+    mocks.findByQuiz.mockResolvedValue([
+      attempt('a1', 'ada', '2026-10-02T05:00:00Z', '2026-10-02T06:30:00Z', 80),
+      attempt('b1', 'bo', '2026-10-03T10:00:00Z', null, null),
+    ]);
+
+    const payload = parse(await listQuizAttemptsTool.handler(ARGS, CTX));
+    const row = (id: string) =>
+      payload.students.find((s: { student: { id: string } }) => s.student.id === id);
+
+    expect(mocks.waivedStudents).toHaveBeenCalledWith({
+      classroomId: 'class-1',
+      assignmentId: ASSIGNMENT.id,
+    });
+    expect(row('ada').attempts[0].late_hours).toBe(0);
+    expect(row('ada')).toMatchObject({
+      late_hours: 0,
+      current_emoji: 'eyes',
+      counted_emoji: 'eyes',
+      late_override: true,
+    });
+    // Taking the quiz is not waived: Bo's open attempt past the due date is a zero.
+    expect(row('bo')).toMatchObject({ counts_as_zero: true, late_override: true });
+    // Cy has no waiver: still a zero.
+    expect(row('cy')).toMatchObject({ counts_as_zero: true, late_override: false });
+    vi.useRealTimers();
   });
 
   it('ignores a late penalty that is not a number, as the web does', async () => {

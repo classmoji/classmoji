@@ -288,6 +288,8 @@ export const purchaseExtensionHours = async ({
  *     see it (published, opened, quizzes shown in the classroom). Anything
  *     else reads as not found;
  *   - the payer is a STUDENT of the classroom;
+ *   - staff have not waived that student's late penalty on it
+ *     (`QuizLateWaiver`, the repo's late override);
  *   - it has a due date;
  *   - the price per hour (the assignment's own, else the classroom's
  *     default) is above 0.
@@ -340,7 +342,7 @@ export const purchaseQuizExtensionHours = async ({
     throw new Error('Quiz assignment not found.');
   }
 
-  const [membership, settings] = await Promise.all([
+  const [membership, settings, waiver] = await Promise.all([
     prisma.classroomMembership.findFirst({
       where: { classroom_id: classroomId, user_id: studentId, role: 'STUDENT' },
       select: { id: true },
@@ -349,9 +351,19 @@ export const purchaseQuizExtensionHours = async ({
       where: { classroom_id: classroomId },
       select: { default_tokens_per_hour: true },
     }),
+    // Staff waived this student's late penalty on the quiz (`QuizLateWaiver`).
+    prisma.quizLateWaiver.findFirst({
+      where: { classroom_id: classroomId, assignment_id: assignment.id, student_id: studentId },
+      select: { id: true },
+    }),
   ]);
   if (!membership) {
     throw new Error('Extensions are unavailable: only students buy extension hours.');
+  }
+  // As on a repo submission with a late override: nothing is late, so there
+  // is nothing for hours to buy.
+  if (waiver) {
+    throw new Error('Extensions are unavailable: a late override is in effect.');
   }
   if (!assignment.student_deadline) {
     throw new Error('Extensions are unavailable: this assignment has no deadline.');

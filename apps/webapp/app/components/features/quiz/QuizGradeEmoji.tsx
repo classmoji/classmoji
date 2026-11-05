@@ -68,6 +68,16 @@ export const LateChip = ({ hours }: { hours: number }) => (
   </span>
 );
 
+/** Staff waived this student's late penalty on the quiz (#813): the student report's pill. */
+export const LateWaivedChip = () => (
+  <span
+    data-testid="quiz-late-waived"
+    className="inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded-full bg-gray-500/15 text-gray-700 dark:text-gray-300 whitespace-nowrap"
+  >
+    Late waived
+  </span>
+);
+
 /**
  * What a late quiz grade counts for after the late penalty, beside the grade:
  * "→ 👀" with a tooltip. The quizzes list, the Assignments tab and the

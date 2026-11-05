@@ -264,37 +264,49 @@ const loadStudentResult = async ({
   const { ClassmojiService } = await import('@classmoji/services');
   const assignment = quiz.assignment ?? null;
   const late = ownerIsStudent && assignment?.student_deadline;
-  const [emojiScale, extensionHours, commentBy, requests, ownAttempts] = await Promise.all([
-    ClassmojiService.emojiMapping.findScaleByClassroomId(classroom.id),
-    late
-      ? ClassmojiService.quizGradeItems
-          .netQuizExtensionHours({
-            classroomId: classroom.id,
-            studentId: attempt.user_id,
-            assignmentIds: [assignment.id],
+  const [emojiScale, extensionHours, lateWaived, commentBy, requests, ownAttempts] =
+    await Promise.all([
+      ClassmojiService.emojiMapping.findScaleByClassroomId(classroom.id),
+      late
+        ? ClassmojiService.quizGradeItems
+            .netQuizExtensionHours({
+              classroomId: classroom.id,
+              studentId: attempt.user_id,
+              assignmentIds: [assignment.id],
+            })
+            .then(hours => hours.get(assignment.id) ?? 0)
+        : 0,
+      // Staff waived the late penalty for this student on the quiz.
+      late
+        ? ClassmojiService.quizLateWaiver
+            .waivedAssignmentIdsForStudent({
+              classroomId: classroom.id,
+              studentId: attempt.user_id,
+              assignmentIds: [assignment.id],
+            })
+            .then(waived => waived.has(assignment.id))
+        : false,
+      ownerIsStudent && attempt.instructor_comment && attempt.comment_by_id
+        ? ClassmojiService.user.findById(attempt.comment_by_id)
+        : null,
+      ownerIsStudent
+        ? ClassmojiService.regradeRequest.findMany({
+            quiz_attempt_id: attempt.id,
+            student_id: attempt.user_id,
+            classroom_id: classroom.id,
           })
-          .then(hours => hours.get(assignment.id) ?? 0)
-      : 0,
-    ownerIsStudent && attempt.instructor_comment && attempt.comment_by_id
-      ? ClassmojiService.user.findById(attempt.comment_by_id)
-      : null,
-    ownerIsStudent
-      ? ClassmojiService.regradeRequest.findMany({
-          quiz_attempt_id: attempt.id,
-          student_id: attempt.user_id,
-          classroom_id: classroom.id,
-        })
-      : [],
-    // The student's own attempts on this quiz: which one counts (E15).
-    ownerIsStudent
-      ? ClassmojiService.quizAttempt.findForUserByQuizIds(attempt.user_id, [quiz.id])
-      : [],
-  ]);
+        : [],
+      // The student's own attempts on this quiz: which one counts (E15).
+      ownerIsStudent
+        ? ClassmojiService.quizAttempt.findForUserByQuizIds(attempt.user_id, [quiz.id])
+        : [],
+    ]);
   const penalty: unknown = classroom.settings?.late_penalty_points_per_hour;
   const lateContext = late
     ? {
         studentDeadline: assignment.student_deadline,
         extensionHours: Math.max(0, extensionHours),
+        lateWaived,
         latePenaltyPerHour: typeof penalty === 'number' ? penalty : 0,
       }
     : null;

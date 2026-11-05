@@ -166,6 +166,11 @@ export async function loader({ params, request }: Route.LoaderArgs) {
         attempt: attemptData.attempt,
         studentName,
         canEdit: canMutate(classroom, membership?.role) && !viewerOwnsAttempt,
+        // The late shield is owner or teacher (api.quizLateWaiver.$class's gate).
+        canWaive:
+          (membership?.role === 'OWNER' || membership?.role === 'TEACHER') &&
+          canMutate(classroom, membership?.role) &&
+          !viewerOwnsAttempt,
       })
     : null;
 
@@ -212,6 +217,7 @@ const loadGradePanel = async ({
   attempt,
   studentName,
   canEdit,
+  canWaive,
 }: {
   classroom: { id: string; settings?: { late_penalty_points_per_hour?: unknown } | null };
   quiz: {
@@ -233,6 +239,8 @@ const loadGradePanel = async ({
   studentName: string | null;
   /** The viewer may change things here (classroom status, not their own attempt). */
   canEdit: boolean;
+  /** The viewer may set the late waiver (owner or teacher, and `canEdit`). */
+  canWaive: boolean;
 }) => {
   const { ClassmojiService } = await import('@classmoji/services');
   const assignment = quiz.assignment ?? null;
@@ -252,17 +260,29 @@ const loadGradePanel = async ({
       : null,
   ]);
   const isStudent = Boolean(studentMembership?.has_accepted_invite);
-  // Lateness is a student's, measured from the due date plus the hours they bought.
-  const extensionHours =
+  // Lateness is a student's, measured from the due date plus the hours they
+  // bought, and none at all where staff waived it (`QuizLateWaiver`). The
+  // waiver is read wherever the student has one to show, due date or not.
+  const [extensionHours, lateWaived] = await Promise.all([
     isStudent && assignment?.student_deadline
-      ? ((
-          await ClassmojiService.quizGradeItems.netQuizExtensionHours({
+      ? ClassmojiService.quizGradeItems
+          .netQuizExtensionHours({
             classroomId: classroom.id,
             studentId: attempt.user_id,
             assignmentIds: [assignment.id],
           })
-        ).get(assignment.id) ?? 0)
-      : 0;
+          .then(hours => hours.get(assignment.id) ?? 0)
+      : 0,
+    isStudent && assignment
+      ? ClassmojiService.quizLateWaiver
+          .waivedAssignmentIdsForStudent({
+            classroomId: classroom.id,
+            studentId: attempt.user_id,
+            assignmentIds: [assignment.id],
+          })
+          .then(waived => waived.has(assignment.id))
+      : false,
+  ]);
   const penalty: unknown = classroom.settings?.late_penalty_points_per_hour;
   const grade = attemptGradeView({
     attempt,
@@ -272,6 +292,7 @@ const loadGradePanel = async ({
         ? {
             studentDeadline: assignment.student_deadline,
             extensionHours: Math.max(0, extensionHours),
+            lateWaived,
             latePenaltyPerHour: typeof penalty === 'number' ? penalty : 0,
           }
         : null,
@@ -288,6 +309,11 @@ const loadGradePanel = async ({
     // The request row is the attempt's own; its classroom must be this one.
     openRequest: openRequest && openRequest.classroom_id === classroom.id ? openRequest : null,
     studentName,
+    // The student's late shield on this quiz (#813), a student's attempt only.
+    lateWaiver:
+      isStudent && assignment
+        ? { assignmentId: assignment.id, studentId: attempt.user_id, waived: lateWaived, canWaive }
+        : null,
   });
 };
 

@@ -5,7 +5,8 @@ import dayjs from 'dayjs';
 import { useCallout } from '@classmoji/ui-components';
 import type { StaffAttemptGradePanel } from '~/utils/quizPayloads';
 import Emoji from '~/components/ui/display/Emoji';
-import { LateChip, NeedsRemapChip } from './QuizGradeEmoji';
+import { LateChip, LateWaivedChip, NeedsRemapChip } from './QuizGradeEmoji';
+import { QuizLateWaiverButton } from '~/components/ui/buttons/LateOverrideButton';
 import { QuizEmojiPicker } from './QuizEmojiPicker';
 import {
   QuizResolveFields,
@@ -433,6 +434,29 @@ export function QuizAttemptGradePanel({ panel }: { panel: StaffAttemptGradePanel
     );
   }
 
+  // The late shield (#813): the student's late penalty on this quiz, waived
+  // or not; owners and teachers can flip it, others see its state.
+  const waiver = panel.lateWaiver ?? null;
+  const lateHours = grade?.lateHours ?? 0;
+  const waiverRow =
+    waiver && (waiver.waived || lateHours > 0) ? (
+      <div
+        data-testid="quiz-late-waiver"
+        className="flex items-center gap-3 border-t border-stone-200 px-4 py-2 dark:border-neutral-800"
+      >
+        <span className="w-24 shrink-0 text-sm text-gray-500 dark:text-gray-400">Late</span>
+        {waiver.waived ? <LateWaivedChip /> : <LateChip hours={lateHours} />}
+        {waiver.canWaive && (
+          <QuizLateWaiverButton
+            assignmentId={waiver.assignmentId}
+            studentId={waiver.studentId}
+            waived={waiver.waived}
+            visible={lateHours > 0}
+          />
+        )}
+      </div>
+    ) : null;
+
   return (
     <div
       data-testid="quiz-adjust-panel"
@@ -440,6 +464,7 @@ export function QuizAttemptGradePanel({ panel }: { panel: StaffAttemptGradePanel
     >
       {header}
       {body}
+      {waiverRow}
     </div>
   );
 }
