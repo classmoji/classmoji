@@ -117,7 +117,7 @@ export const GRADES_MINE_DESCRIPTION =
   'many hours late it was (after any hours you bought); adjusted and original_emoji when ' +
   'staff changed it, and instructor_comment with instructor_name; or the emoji for 0 with ' +
   'counts_as_zero when the deadline passed with no attempt; late_override when staff waived ' +
-  'your late penalty (late_hours 0, no zero until you attempt). final_grade {letter}, present once the instructor releases final grades, ' +
+  'your late penalty (late_hours 0; a quiz you never took still counts 0). final_grade {letter}, present once the instructor releases final grades, ' +
   'is your final course grade. Otherwise estimated_grade, present only where the instructor ' +
   'shows it, is the estimate on your dashboard from released grades: {kind:"letter",letter,' +
   'count} or {kind:"emoji",emoji,count}; null when there is none. Students only.';

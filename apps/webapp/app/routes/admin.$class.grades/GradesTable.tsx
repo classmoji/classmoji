@@ -377,16 +377,22 @@ const GradesTable = (props: GradesTableProps) => {
    * "needs remap" chip when that adjustment's emoji left the scale (E17), or
    * Missing (a counted 0). Without one it shows when the quiz opens, or the
    * attempt state (before the deadline, running or unscored). A "waived" chip
-   * follows whatever it shows where staff waived the student's late penalty,
-   * as on a waived repo cell.
+   * follows a finished attempt's grade (or its pending score) where staff
+   * waived the student's late penalty, as on a waived repo cell. Never on
+   * Missing or Not attempted: a waiver takes away late penalties, not the
+   * zero for not taking the quiz.
    */
   const renderQuizCell = (
     student: Student,
     assignment: GradebookAssignment
   ): { body: React.ReactNode; tint: string } => {
+    const item = quizItemOf(student, assignment.id);
+    const finished = activity.quiz[assignment.id]?.[student.id]?.completed === true;
     const waived =
-      quizItemOf(student, assignment.id)?.late_waived === true ||
-      (student.quiz_waived_ids ?? []).includes(assignment.id);
+      item?.late_waived === true ||
+      (!item?.counts_as_zero &&
+        finished &&
+        (student.quiz_waived_ids ?? []).includes(assignment.id));
     const cell = renderQuizCellBody(student, assignment);
     return waived
       ? {

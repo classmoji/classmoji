@@ -839,9 +839,9 @@ describe('listForStudent — QUIZ late hours and extensions', () => {
     });
   });
 
-  it('a late waiver suspends missing until the student attempts (D1)', async () => {
+  it('a late waiver does not waive taking the quiz: no attempt past the due date is still missing', async () => {
     const row = await quizRow({ assignmentOver: DUE_20H_AGO, waived: true });
-    expect(row).toMatchObject({ missing: false, isLateOverride: true, extend: null });
+    expect(row).toMatchObject({ missing: true, isLateOverride: true, extend: null });
     expect(await quizRow({ assignmentOver: DUE_20H_AGO })).toMatchObject({ missing: true });
   });
 

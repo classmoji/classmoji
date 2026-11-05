@@ -91,6 +91,11 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       switch (error.code) {
         case 'not_quiz':
           return refusal('Only a quiz assignment takes a late waiver.', 400);
+        case 'not_late':
+          return refusal(
+            'This student has no late attempt on this quiz, so there is no late penalty to waive.',
+            400
+          );
         case 'self':
           return refusal('You cannot waive your own late penalty.', 403);
         case 'not_student':

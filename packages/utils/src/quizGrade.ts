@@ -17,11 +17,12 @@
  *   - A student with no completed attempt counts 0 once the effective
  *     deadline has passed. One whose completed attempts are all unscored has
  *     no item yet (pending), not a 0.
- *   - A late waiver (`lateWaived`, staff's per-student shield, #813): every
- *     attempt is 0 hours late (`quizLateHours`), and a student with no
- *     attempt is not counted 0 at the deadline (D1: no deadline for them
- *     until they attempt). The deadline itself is unchanged, so the "+Nh
- *     applied" notes and `effectiveDeadline` still read the real one.
+ *   - A late waiver (`lateWaived`, staff's per-student shield, #813) takes
+ *     away late penalties only: every attempt is 0 hours late
+ *     (`quizLateHours`). Taking the quiz is not waived: a student with no
+ *     completed attempt is missing and counts 0 after the deadline exactly as
+ *     without one. The deadline itself is unchanged, so the "+Nh applied"
+ *     notes and `effectiveDeadline` still read the real one.
  *
  * Pure: callers load the attempts (with `adjusted_emoji`), the hours, the
  * classroom penalty and the classroom's emoji scale.
@@ -259,8 +260,8 @@ export interface QuizGradeItemInput<T extends ScorableQuizAttempt> {
   /** Net hours this student bought on the assignment (Σ hours_purchased). */
   extensionHours?: number;
   /**
-   * Staff waived this student's late penalty on the quiz: no attempt is late,
-   * and no missing-work 0 until they attempt (D1).
+   * Staff waived this student's late penalty on the quiz: no attempt is late.
+   * The missing-work 0 is unaffected.
    */
   lateWaived?: boolean;
   latePenaltyPerHour?: number;
@@ -274,9 +275,10 @@ export interface QuizGradeItemInput<T extends ScorableQuizAttempt> {
 /**
  * One STUDENT's grade item for one QUIZ assignment, or null when it has none
  * yet: not open to students, no deadline and no score, before the (extended)
- * deadline with no score, only unscored completed attempts, or no attempt
- * under a late waiver. Call it for students on the roster only; staff
- * attempts are not grades. A waived student's item carries `late_waived`.
+ * deadline with no score, or only unscored completed attempts. Call it for
+ * students on the roster only; staff attempts are not grades. A waived
+ * student's scored item carries `late_waived`; a counted 0 never does (a
+ * waiver takes away late penalties, not the zero for missing work).
  */
 export const quizGradeItem = <T extends ScorableQuizAttempt>({
   assignment,
@@ -297,8 +299,6 @@ export const quizGradeItem = <T extends ScorableQuizAttempt>({
     module_id: assignment.module_id,
     weight: assignment.weight ?? 0,
     is_extra_credit: assignment.is_extra_credit === true,
-    // Only when set, so an item without a waiver keeps its shape.
-    ...(lateWaived ? { late_waived: true } : {}),
   };
 
   const score = countingQuizScore(attempts, gradingStrategy, {
@@ -312,6 +312,8 @@ export const quizGradeItem = <T extends ScorableQuizAttempt>({
   if (score.counting) {
     return {
       ...base,
+      // Only when set, so an item without a waiver keeps its shape.
+      ...(lateWaived ? { late_waived: true } : {}),
       grade: score.grade,
       raw_grade: score.raw_grade,
       counts_as_zero: false,
@@ -326,9 +328,6 @@ export const quizGradeItem = <T extends ScorableQuizAttempt>({
 
   // A completed attempt still waiting for its score: pending, not a zero.
   if (attempts.some(a => a.completed_at != null)) return null;
-
-  // A late waiver suspends the missing-work 0 until the student attempts (D1).
-  if (lateWaived) return null;
 
   const deadline = effectiveDeadline(assignment.student_deadline, extensionHours);
   if (!deadline || toTime(now) <= deadline.getTime()) return null;

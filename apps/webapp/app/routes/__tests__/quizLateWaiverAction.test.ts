@@ -217,6 +217,19 @@ describe('api.quizLateWaiver — scope', () => {
     expect(mocks.addClassroomAuditLog.mock.calls[0][0].metadata.student_id).toBe('student-a');
   });
 
+  it('refuses a waiver ahead of time (no late attempt) with 400 as data, for the toast', async () => {
+    mocks.setQuizLateWaiver.mockRejectedValue(
+      new QuizLateWaiverError('not_late', 'no late attempt')
+    );
+    const { status, body } = unwrap(await post(BODY));
+    expect(status).toBe(400);
+    expect(body).toEqual({
+      action: 'update-quiz-late-waiver',
+      error: 'This student has no late attempt on this quiz, so there is no late penalty to waive.',
+    });
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
   it('answers a non-quiz assignment with 400', async () => {
     mocks.setQuizLateWaiver.mockRejectedValue(new QuizLateWaiverError('not_quiz', 'not a quiz'));
     expect(unwrap(await post(BODY)).status).toBe(400);

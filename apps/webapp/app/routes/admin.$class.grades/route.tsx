@@ -77,8 +77,9 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const studentRows = ClassmojiService.user.findRepositoriesPerStudent(classroom);
 
   // The quizzes on which staff waived each student's late penalty (#813),
-  // student id → assignment ids: the cell's "waived" chip, also on a cell with
-  // no grade item yet (a waived student with no attempt is not counted 0).
+  // student id → assignment ids: the cell's "waived" chip, also on a finished
+  // attempt still waiting for its score (no grade item yet). Taking the quiz
+  // is not waived: a student with no attempt is Missing as anyone else.
   const quizWaivers = Promise.all([studentRows, publishedAssignments, quizzesVisible]).then(
     ([students, assignments, visible]) =>
       visible

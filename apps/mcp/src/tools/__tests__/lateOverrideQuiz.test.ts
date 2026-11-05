@@ -373,6 +373,7 @@ describe('submission_late_override (quiz) — scoping', () => {
     ['not_found', 'not_found'],
     ['not_quiz', 'invalid_params'],
     ['self', 'forbidden'],
+    ['not_late', 'invalid_params'],
   ])("maps the service's %s to %s", async (code, kind) => {
     mocks.setQuizLateWaiver.mockRejectedValue(new QuizLateWaiverError(code));
     await expect(handle({ quiz_id: QUIZ_ID, student_id: STUDENT_A })).rejects.toMatchObject({
@@ -461,5 +462,15 @@ describe('submission_late_override (quiz) — through the registry', () => {
     expect((await call({ ...ARGS, quiz_id: 'nope' })).isError).toBe(true);
     expect((await call({ ...ARGS, student_id: 'nope' })).isError).toBe(true);
     expect(mocks.setQuizLateWaiver).not.toHaveBeenCalled();
+  });
+});
+
+describe('submission_late_override (quiz) — no waiver ahead of time', () => {
+  it('says the student has no late attempt, and writes no audit row', async () => {
+    mocks.setQuizLateWaiver.mockRejectedValue(new QuizLateWaiverError('not_late'));
+    const err = await handle({ quiz_id: QUIZ_ID, student_id: STUDENT_A }).catch(e => e);
+    expect(err).toMatchObject({ kind: 'invalid_params' });
+    expect(err.message).toBe('This student has no late attempt on this quiz');
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 });

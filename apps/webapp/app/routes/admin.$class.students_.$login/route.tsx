@@ -122,7 +122,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
         })
       : new Map<string, GradedItem[]>(),
     // The quizzes on which staff waived this student's late penalty (#813):
-    // the "Late waived" pill, with or without a grade item.
+    // the "Late waived" pill on a finished quiz (scored or not yet) and the
+    // shield's state.
     hasQuizzes
       ? ClassmojiService.quizLateWaiver.waivedAssignmentIdsForStudent({
           classroomId: classroom.id,
@@ -714,24 +715,18 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
         ) : (
           <Pill tone="blue">In progress</Pill>
         );
-        // Not completed yet, under a waiver: its state, then the waiver.
-        if (waived)
-          status = (
-            <span className="inline-flex gap-1.5">
-              {status}
-              <Pill tone="grey">Late waived</Pill>
-            </span>
-          );
       }
-      // The late shield (#813): offered where the quiz is late or counted
-      // missing, and wherever it is waived.
-      if (canWaiveQuizLate && (waived || item?.counts_as_zero || (item?.late_hours ?? 0) > 0)) {
+      // The late shield (#813): offered where the counting attempt is late,
+      // and wherever it is already waived (to restore it). Never on a Missing
+      // or not-attempted row: there is no late penalty to waive.
+      const lateNow = (item?.late_hours ?? 0) > 0;
+      if (canWaiveQuizLate && (waived || lateNow)) {
         actions = (
           <QuizLateWaiverButton
             assignmentId={a.id}
             studentId={student.id}
             waived={waived}
-            visible={item?.counts_as_zero === true || (item?.late_hours ?? 0) > 0}
+            visible={lateNow}
           />
         );
       }

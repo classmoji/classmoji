@@ -402,23 +402,22 @@ describe('late waiver (#813)', () => {
     expect(cleared).not.toHaveProperty('late_waived');
   });
 
-  it('D1: no attempt past the deadline is not a 0 while waived, and is again once cleared', () => {
-    expect(quizGradeItem({ ...base, attempts: [], lateWaived: true })).toBeNull();
-    // An attempt still running changes nothing either.
+  it('a waiver does not waive taking the quiz: no completed attempt past the deadline is a 0', () => {
+    const zero = quizGradeItem({ ...base, attempts: [], lateWaived: true });
+    expect(zero).toMatchObject({ grade: 0, counts_as_zero: true });
+    // The flag is for late penalties; a counted 0 does not carry it.
+    expect(zero).not.toHaveProperty('late_waived');
+    // An attempt still running past the deadline is a 0 too, as without a waiver.
     expect(
       quizGradeItem({
         ...base,
         attempts: [attempt('run', at(150), null, null)],
         lateWaived: true,
       })
-    ).toBeNull();
-    expect(quizGradeItem({ ...base, attempts: [] })).toMatchObject({
-      grade: 0,
-      counts_as_zero: true,
-    });
+    ).toMatchObject({ grade: 0, counts_as_zero: true });
   });
 
-  it('D1: once the waived student attempts, the attempt counts on time', () => {
+  it('a waived student who finishes an attempt late counts it on time', () => {
     const item = quizGradeItem({
       ...base,
       attempts: [attempt('first', at(190), at(191), 80)],

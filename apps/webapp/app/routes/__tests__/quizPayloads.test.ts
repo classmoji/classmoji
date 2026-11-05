@@ -1353,7 +1353,7 @@ describe('quiz results page: lateness', () => {
     });
   });
 
-  it("a late waiver clears one student's lateness and zero, and nobody else's (#813)", async () => {
+  it("a late waiver clears one student's lateness, never a missing attempt's zero, and nobody else's (#813)", async () => {
     mocks.quizFindById.mockResolvedValue({ ...QUIZ_ROW, assignment: assignmentRow() });
     mocks.findUsersByRole.mockResolvedValue([ADA, BABBAGE, LOVELACE]);
     // Ada (48 h late on her second attempt) and Lovelace (no attempt) are
@@ -1372,9 +1372,9 @@ describe('quiz results page: lateness', () => {
       ['a-ada-2', 0],
       ['a-ada-1', 0],
     ]);
-    // D1: no missing-work zero while waived.
+    // Taking the quiz is not waived: no attempt past the due date still counts 0.
     const lovelace = payload.students.find(s => s.userId === LOVELACE.id)!;
-    expect(lovelace).toMatchObject({ lateWaived: true, countsAsZero: false, countedScore: null });
+    expect(lovelace).toMatchObject({ lateWaived: true, countsAsZero: true, countedScore: 0 });
     // Babbage has no waiver.
     const babbage = payload.students.find(s => s.userId === BABBAGE.id)!;
     expect(babbage.lateWaived).toBe(false);

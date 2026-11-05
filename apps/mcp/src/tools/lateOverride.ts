@@ -61,10 +61,13 @@
  * something. The waiver is per (quiz, student), so:
  *   - `student_id` is required; an assignment_id of a QUIZ without one is
  *     refused, never read as "the whole class" (a class-wide waiver is not a
- *     thing staff want, and it would also lift every missing-work zero);
- *   - it may be set before the student is late (a known absence): unlike a
- *     repo submission there is no `not_late` skip, because the waiver covers
- *     attempts not made yet.
+ *     thing staff want);
+ *   - like a repo submission's, it is set only where something is late: the
+ *     service refuses `not_late` (invalid_params here) for a student with no
+ *     completed attempt late past the due date plus their hours. Never ahead
+ *     of time. Clearing is always allowed;
+ *   - it takes away late penalties only: a student with no completed attempt
+ *     still counts 0 after the deadline.
  * Repo-only fields (`git_repo_assignment_id(s)`) never go with student_id.
  */
 
@@ -178,6 +181,9 @@ async function quizLateOverride(args: LateOverrideArgs & { student_id: string },
     if (code === 'not_quiz') {
       throw new ToolError('invalid_params', 'Only a quiz assignment takes a quiz late waiver');
     }
+    if (code === 'not_late') {
+      throw new ToolError('invalid_params', 'This student has no late attempt on this quiz');
+    }
     if (code === 'self') {
       throw new ToolError('forbidden', 'You cannot waive your own late penalty');
     }
@@ -278,10 +284,11 @@ export const submissionLateOverrideTool: ToolDefinition<LateOverrideArgs> = {
     'value are unchanged. late_count: matched submissions past the deadline ignoring any ' +
     'exemption; late_updated_count: the same over the changed ones. Id lists are capped at 100 ' +
     '(ids_truncated); counts are exact. Quiz: quiz_id, or a quiz assignment_id, plus student_id ' +
-    '(required: a quiz waiver is per student, never class-wide). It covers every attempt of ' +
-    "that student's, may be set before they are late, and while set they are never late and not " +
-    'counted missing until they attempt (late_override in list_quiz_attempts). Response: mode ' +
-    'quiz, updated_count 1 or 0.',
+    '(required: a quiz waiver is per student, never class-wide). Setting needs a completed ' +
+    'attempt late past the due date plus bought hours, else invalid_params; never ahead of ' +
+    "time. It covers all that student's attempts: none counts late (late_override in " +
+    'list_quiz_attempts). Not taking the quiz is not waived: no completed attempt still counts ' +
+    '0. Response: mode quiz, updated_count 1 or 0.',
   scope: 'write',
   roles: OWNER_TEACHER,
   inputSchema: {

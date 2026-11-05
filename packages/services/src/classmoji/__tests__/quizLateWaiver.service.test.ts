@@ -13,6 +13,9 @@ const mocks = vi.hoisted(() => ({
   waiverDeleteMany: vi.fn(),
   assignmentFindFirst: vi.fn(),
   membershipFindFirst: vi.fn(),
+  waiverFindFirst: vi.fn(),
+  attemptFindMany: vi.fn(),
+  tokenAggregate: vi.fn(),
 }));
 
 vi.mock('@classmoji/database', () => ({
@@ -21,7 +24,10 @@ vi.mock('@classmoji/database', () => ({
       findMany: (...a: unknown[]) => mocks.waiverFindMany(...a),
       createMany: (...a: unknown[]) => mocks.waiverCreateMany(...a),
       deleteMany: (...a: unknown[]) => mocks.waiverDeleteMany(...a),
+      findFirst: (...a: unknown[]) => mocks.waiverFindFirst(...a),
     },
+    quizAttempt: { findMany: (...a: unknown[]) => mocks.attemptFindMany(...a) },
+    tokenTransaction: { aggregate: (...a: unknown[]) => mocks.tokenAggregate(...a) },
     assignment: { findFirst: (...a: unknown[]) => mocks.assignmentFindFirst(...a) },
     classroomMembership: { findFirst: (...a: unknown[]) => mocks.membershipFindFirst(...a) },
   }),
@@ -37,12 +43,17 @@ const {
 
 const X = 'class-x';
 
+const DUE = new Date('2026-10-01T12:00:00Z');
+const HOUR = 3_600_000;
 const quizAssignment = {
   id: 'asg-1',
   type: 'QUIZ',
   quiz_id: 'quiz-1',
+  student_deadline: DUE,
   quiz: { classroom_id: X },
 };
+/** A completed attempt `hours` after the due date (negative: before it). */
+const doneAt = (hours: number) => ({ completed_at: new Date(DUE.getTime() + hours * HOUR) });
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -51,6 +62,10 @@ beforeEach(() => {
   mocks.membershipFindFirst.mockResolvedValue({ user_id: 'stu-a' });
   mocks.waiverCreateMany.mockResolvedValue({ count: 1 });
   mocks.waiverDeleteMany.mockResolvedValue({ count: 1 });
+  mocks.waiverFindFirst.mockResolvedValue(null);
+  // A completed attempt 10 h late, no hours bought: late without the waiver.
+  mocks.attemptFindMany.mockResolvedValue([doneAt(10)]);
+  mocks.tokenAggregate.mockResolvedValue({ _sum: { hours_purchased: null } });
 });
 
 describe('reads', () => {
@@ -146,7 +161,60 @@ describe('setQuizLateWaiver', () => {
     });
   });
 
-  it('setting an existing waiver changes nothing', async () => {
+  it("reads only this student's completed attempts on this quiz, and their net hours here", async () => {
+    await setQuizLateWaiver(input);
+    expect(mocks.attemptFindMany.mock.calls[0][0].where).toEqual({
+      quiz_id: 'quiz-1',
+      user_id: 'stu-a',
+      completed_at: { not: null },
+    });
+    expect(mocks.tokenAggregate.mock.calls[0][0].where).toEqual({
+      classroom_id: X,
+      assignment_id: 'asg-1',
+      student_id: 'stu-a',
+    });
+  });
+
+  it.each([
+    ['no completed attempt', [], null],
+    ['only on-time attempts', [doneAt(-3), doneAt(0.5)], null],
+    ['a late attempt the hours bought cover', [doneAt(10)], 12],
+  ])(
+    'refuses to set a waiver with %s (not_late): never ahead of time',
+    async (_l, rows, bought) => {
+      mocks.attemptFindMany.mockResolvedValue(rows);
+      mocks.tokenAggregate.mockResolvedValue({ _sum: { hours_purchased: bought } });
+      const err = await setQuizLateWaiver(input).catch(e => e);
+      expect(err).toBeInstanceOf(QuizLateWaiverError);
+      expect(err.code).toBe('not_late');
+      expect(mocks.waiverCreateMany).not.toHaveBeenCalled();
+    }
+  );
+
+  it('sets a waiver when one attempt is late past the hours bought', async () => {
+    mocks.attemptFindMany.mockResolvedValue([doneAt(-1), doneAt(20)]);
+    mocks.tokenAggregate.mockResolvedValue({ _sum: { hours_purchased: 5 } });
+    expect((await setQuizLateWaiver(input)).changed).toBe(true);
+  });
+
+  it('clearing needs no late attempt', async () => {
+    mocks.attemptFindMany.mockResolvedValue([]);
+    expect((await setQuizLateWaiver({ ...input, waived: false })).changed).toBe(true);
+    expect(mocks.attemptFindMany).not.toHaveBeenCalled();
+  });
+
+  it('setting an already-set waiver changes nothing, whatever the attempts now', async () => {
+    mocks.waiverFindFirst.mockResolvedValue({ id: 'w-1' });
+    mocks.attemptFindMany.mockResolvedValue([]);
+    expect(await setQuizLateWaiver(input)).toEqual({
+      changed: false,
+      waived: true,
+      quizId: 'quiz-1',
+    });
+    expect(mocks.waiverCreateMany).not.toHaveBeenCalled();
+  });
+
+  it('a concurrent set that lost the race changes nothing', async () => {
     mocks.waiverCreateMany.mockResolvedValue({ count: 0 });
     expect(await setQuizLateWaiver(input)).toEqual({
       changed: false,

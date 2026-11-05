@@ -6,8 +6,10 @@
  *   - A waiver is keyed by (assignment, student) and covers every attempt that
  *     student makes on the quiz, retakes after it included. While it is set
  *     the student is never late on it (`quizLateHours` in @classmoji/utils
- *     answers 0), and a student with no attempt is not counted 0 at the
- *     deadline (D1); clearing it restores both.
+ *     answers 0); clearing it restores the penalty. It takes away late
+ *     penalties only: taking the quiz is not waived, so a student with no
+ *     completed attempt is missing and counts 0 after the deadline as anyone
+ *     else does.
  *   - Reads come in the three shapes the extension-hour loaders use (one
  *     student × many assignments, many students × one assignment, many ×
  *     many). Every read carries `classroom_id`, so a waiver filed in another
@@ -25,12 +27,20 @@
  *     `setLateOverrideInClassroom`. Impersonation is allowed and recorded
  *     (`impersonated_by` on the row), as the repo shield and the quiz grade
  *     adjustment allow it.
- *   - A waiver may be set before the student is late (a known absence).
+ *   - A waiver is set only on a student with a completed attempt that is late
+ *     without it (past the due date plus the hours they bought): `not_late`
+ *     otherwise. Never ahead of time.
  */
 
 import getPrisma from '@classmoji/database';
+import { lateHours } from '@classmoji/utils';
 
-export type QuizLateWaiverErrorCode = 'not_found' | 'not_quiz' | 'not_student' | 'self';
+export type QuizLateWaiverErrorCode =
+  | 'not_found'
+  | 'not_quiz'
+  | 'not_student'
+  | 'self'
+  | 'not_late';
 
 export class QuizLateWaiverError extends Error {
   code: QuizLateWaiverErrorCode;
@@ -133,7 +143,10 @@ export interface SetQuizLateWaiverResult {
  *   - `not_quiz`: the assignment is not a QUIZ;
  *   - `not_student`: setting, for someone who holds no accepted STUDENT
  *     membership here (clearing skips this, see the header);
- *   - `self`: the student is the actor.
+ *   - `self`: the student is the actor;
+ *   - `not_late`: setting, for a student with no completed attempt that is
+ *     late without the waiver (no waiver ahead of time). Setting a waiver
+ *     that is already set is not refused (`changed: false`).
  *
  * No role check and no audit row: the caller does both (see the header).
  */
@@ -157,7 +170,13 @@ export const setQuizLateWaiver = async ({
     assignmentId
       ? prisma.assignment.findFirst({
           where: { id: assignmentId, module: { classroom_id: classroomId } },
-          select: { id: true, type: true, quiz_id: true, quiz: { select: { classroom_id: true } } },
+          select: {
+            id: true,
+            type: true,
+            quiz_id: true,
+            student_deadline: true,
+            quiz: { select: { classroom_id: true } },
+          },
         })
       : null,
     // Only setting needs the student on the roster now.
@@ -190,6 +209,34 @@ export const setQuizLateWaiver = async ({
   }
 
   if (waived) {
+    // Only a student who is late now, without the waiver: a completed
+    // attempt past the due date plus the hours they bought.
+    const where = {
+      classroom_id: classroomId,
+      assignment_id: assignment.id,
+      student_id: studentId,
+    };
+    const [existing, attempts, hours] = await Promise.all([
+      prisma.quizLateWaiver.findFirst({ where, select: { id: true } }),
+      prisma.quizAttempt.findMany({
+        where: { quiz_id: assignment.quiz_id, user_id: studentId, completed_at: { not: null } },
+        select: { completed_at: true },
+      }),
+      // Net hours bought (purchases minus refunds), as `netQuizExtensionHours`.
+      prisma.tokenTransaction.aggregate({ where, _sum: { hours_purchased: true } }),
+    ]);
+    if (existing) return { changed: false, waived: true, quizId: assignment.quiz_id };
+    const extensionHours = hours._sum.hours_purchased ?? 0;
+    const late = attempts.some(
+      attempt => lateHours(attempt.completed_at, assignment.student_deadline, extensionHours) > 0
+    );
+    if (!late) {
+      throw new QuizLateWaiverError(
+        'not_late',
+        'This student has no late attempt on this quiz, so there is no late penalty to waive'
+      );
+    }
+
     const { count } = await prisma.quizLateWaiver.createMany({
       data: [
         {

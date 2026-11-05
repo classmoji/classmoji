@@ -106,8 +106,8 @@ export const listQuizAttemptsTool: ToolDefinition<ListQuizAttemptsArgs> = {
     "adjusted_emoji left the scale, the AI's grade counts until remapped in Grade settings), " +
     'the attempt that counts, current_emoji (its grade) and ' +
     'counted_emoji (after the late penalty), counts_as_zero (no completed attempt past ' +
-    'the due date), and late_override (late penalty waived: late_hours 0, no zero until they ' +
-    'attempt; set with submission_late_override). Grades are emoji ' +
+    'the due date, waiver or not), and late_override (late penalty waived: late_hours 0; ' +
+    'set with submission_late_override). Grades are emoji ' +
     "on the classroom's own scale (score-N badges on the numeric scale), never numbers. " +
     'staff_previews and former_members (people no longer in the classroom) are kept apart, ' +
     'never late or graded. summary counts the roster. For one attempt and its transcript use ' +
@@ -273,8 +273,8 @@ export const listQuizAttemptsTool: ToolDefinition<ListQuizAttemptsArgs> = {
             : emojiFor(row.countedScore, scale),
         counts_as_zero: row.countsAsZero,
         late_hours: row.lateHours,
-        // Staff waived this student's late penalty: never late, no zero
-        // until they attempt.
+        // Staff waived this student's late penalty: never late. Not taking
+        // the quiz is still a zero (`counts_as_zero`).
         late_override: row.lateWaived,
       };
     };

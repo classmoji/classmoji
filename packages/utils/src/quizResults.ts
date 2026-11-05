@@ -145,9 +145,10 @@ export interface QuizResultStudent {
   countsAsZero: boolean;
   /**
    * Staff waived this student's late penalty on this quiz (`QuizLateWaiver`):
-   * no attempt is late and no missing-work 0 until they attempt. Shown
-   * whether or not the quiz has a due date, so a waiver can always be seen
-   * and cleared.
+   * no attempt is late. Taking the quiz is not waived: with no completed
+   * attempt past the deadline the student still counts 0 (`countsAsZero`).
+   * Shown whether or not the quiz has a due date, so a waiver can always be
+   * seen and cleared.
    */
   lateWaived: boolean;
   bestScore: number | null;

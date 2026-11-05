@@ -179,8 +179,9 @@ describe('loadQuizGradeItems', () => {
     });
     expect(items.get('late')?.[0]).toMatchObject({ grade: 84, late_hours: 6 });
     expect(items.get('late')?.[0]).not.toHaveProperty('late_waived');
-    // D1: no missing-work zero while waived.
-    expect(items.has('absent-waived')).toBe(false);
+    // A waiver takes away late penalties, not the zero for not taking the quiz.
+    expect(items.get('absent-waived')?.[0]).toMatchObject({ grade: 0, counts_as_zero: true });
+    expect(items.get('absent-waived')?.[0]).not.toHaveProperty('late_waived');
     expect(items.get('absent')?.[0]).toMatchObject({ grade: 0, counts_as_zero: true });
   });
 

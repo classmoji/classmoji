@@ -146,7 +146,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   // previews and are never late. A quiz with no due date is never late. Every
   // rostered student has a row, so staff see who has not started and who
   // counts 0. A student staff waived the late penalty for (`QuizLateWaiver`)
-  // is never late and not counted 0 until they attempt; each row says so
+  // is never late (a missing attempt still counts 0); each row says so
   // (`lateWaived`), due date or not, so the waiver can be seen and cleared.
   const assignment = quiz.assignment;
   const penalty: unknown = classroom.settings?.late_penalty_points_per_hour;
@@ -747,10 +747,10 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
               assignmentId={lateWaiver.assignmentId}
               studentId={record.userId}
               waived={record.lateWaived}
-              // Late on some attempt, or counted missing: the zero a waiver
-              // also suspends (D1). Waived rows show it regardless.
+              // Late on some attempt (waived rows show it regardless, to
+              // restore). Never on a Missing or not-started row: taking the
+              // quiz is not waived, and the service refuses `not_late`.
               visible={
-                record.countsAsZero ||
                 (lateHours ?? 0) > 0 ||
                 record.attempts.some(attempt => (attempt.lateHours ?? 0) > 0)
               }

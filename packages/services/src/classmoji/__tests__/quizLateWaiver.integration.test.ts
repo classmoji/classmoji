@@ -7,8 +7,10 @@
  *     a REPO assignment is refused, a non-member, a pending student and an
  *     assistant are refused; every read answers for its own classroom only;
  *   - student A's waiver never applies to student B;
- *   - loadQuizGradeItems: a waived late attempt counts unpenalised, a waived
- *     student with no attempt is not a counted 0 (D1); clearing restores both;
+ *   - loadQuizGradeItems: a waived late attempt counts unpenalised; clearing
+ *     restores the penalty. A waiver is never set ahead of time (`not_late`
+ *     for a student with no late attempt), and taking the quiz is never
+ *     waived: a student with no attempt counts 0 either way;
  *   - the waiver row goes with its assignment (cascade).
  *
  * SAFETY: every fixture is namespaced with a fresh uuid and torn down in
@@ -164,7 +166,8 @@ describe.skipIf(!RUN)('quizLateWaiver (integration)', () => {
       quizId: quizXQuiz,
       moduleId: moduleX,
     } = await makeQuizAssignment(classX, 'Quiz X'));
-    ({ assignmentId: quizY } = await makeQuizAssignment(classY, 'Quiz Y'));
+    let quizYQuiz: string;
+    ({ assignmentId: quizY, quizId: quizYQuiz } = await makeQuizAssignment(classY, 'Quiz Y'));
     const repository = await prisma.repository.create({
       data: { classroom_id: classX, title: `Repo ${suite}`, template: 'tpl', type: 'INDIVIDUAL' },
       select: { id: true },
@@ -186,6 +189,8 @@ describe.skipIf(!RUN)('quizLateWaiver (integration)', () => {
     // 100% ("🔥"), 108 h after the deadline: 108 × 0.5 = 54 points off.
     await completedAttempt(quizXQuiz, late, new Date(deadline.getTime() + 108.5 * H), 100);
     await completedAttempt(quizXQuiz, other, new Date(deadline.getTime() + 108.5 * H), 100);
+    // Y's student is late on Y's quiz, so a waiver can be set on them there.
+    await completedAttempt(quizYQuiz, outsider, new Date(deadline.getTime() + 4.5 * H), 70);
   });
 
   afterAll(async () => {
@@ -269,25 +274,66 @@ describe.skipIf(!RUN)('quizLateWaiver (integration)', () => {
     ).toBe(0);
   });
 
-  it('a pre-emptive waiver suspends the missing-work zero until cleared (D1)', async () => {
+  it('refuses a waiver ahead of time: no attempt, or none late past the hours bought', async () => {
+    await expect(
+      setQuizLateWaiver({
+        classroomId: classX,
+        assignmentId: quizX,
+        studentId: absent,
+        waived: true,
+        actorId: teacher,
+      })
+    ).rejects.toMatchObject({ code: 'not_late' });
+    expect(await prisma.quizLateWaiver.count({ where: { student_id: absent } })).toBe(0);
+    // The absent student still counts 0, as without a waiver.
+    expect(await itemOf(absent)).toMatchObject({ grade: 0, counts_as_zero: true });
+
+    // Hours bought that cover the late attempt: not late, so nothing to waive.
+    const { assignmentId, quizId } = await makeQuizAssignment(classX, 'Covered');
+    await completedAttempt(quizId, other, new Date(deadline.getTime() + 3.5 * H), 80);
+    await prisma.tokenTransaction.create({
+      data: {
+        classroom_id: classX,
+        student_id: other,
+        assignment_id: assignmentId,
+        amount: 0,
+        balance_after: 0,
+        hours_purchased: 5,
+        type: 'PURCHASE',
+      },
+    });
+    await expect(
+      setQuizLateWaiver({
+        classroomId: classX,
+        assignmentId,
+        studentId: other,
+        waived: true,
+        actorId: teacher,
+      })
+    ).rejects.toMatchObject({ code: 'not_late' });
+  });
+
+  it('a waived student with no completed attempt still counts 0 (taking the quiz is not waived)', async () => {
+    // A waiver left on a student whose attempts were since removed.
+    const { assignmentId, quizId } = await makeQuizAssignment(classX, 'Removed');
+    const attemptRow = await completedAttempt(
+      quizId,
+      other,
+      new Date(deadline.getTime() + 10.5 * H),
+      90
+    );
     await setQuizLateWaiver({
       classroomId: classX,
-      assignmentId: quizX,
-      studentId: absent,
+      assignmentId,
+      studentId: other,
       waived: true,
       actorId: teacher,
     });
-    expect(await itemOf(absent)).toBeNull();
-
-    const cleared = await setQuizLateWaiver({
-      classroomId: classX,
-      assignmentId: quizX,
-      studentId: absent,
-      waived: false,
-      actorId: teacher,
-    });
-    expect(cleared).toEqual({ changed: true, waived: false, quizId: quizXQuiz });
-    expect(await itemOf(absent)).toMatchObject({ grade: 0, counts_as_zero: true });
+    await prisma.quizAttempt.delete({ where: { id: attemptRow.id } });
+    const item = (await loadQuizGradeItems({ classroomId: classX, quizzesVisible: true, now }))
+      .get(other)
+      ?.find(row => row.assignment_id === assignmentId);
+    expect(item).toMatchObject({ grade: 0, counts_as_zero: true });
   });
 
   it('clearing restores the penalty; clearing twice changes nothing', async () => {
@@ -340,7 +386,7 @@ describe.skipIf(!RUN)('quizLateWaiver (integration)', () => {
   });
 
   it('a waiver can be cleared after its student left the roster, and only in its classroom', async () => {
-    const { assignmentId } = await makeQuizAssignment(classX, 'Leaver');
+    const { assignmentId, quizId: leaverQuiz } = await makeQuizAssignment(classX, 'Leaver');
     const leaver = await prisma.user.create({
       data: { email: `qlw-leaver-${randomUUID().slice(0, 8)}-${suite}@example.test` },
       select: { id: true },
@@ -355,6 +401,7 @@ describe.skipIf(!RUN)('quizLateWaiver (integration)', () => {
       },
       select: { id: true },
     });
+    await completedAttempt(leaverQuiz, leaver.id, new Date(deadline.getTime() + 5.5 * H), 70);
     const base = { assignmentId, studentId: leaver.id, actorId: teacher };
     await setQuizLateWaiver({ ...base, classroomId: classX, waived: true });
     await prisma.classroomMembership.delete({ where: { id: membership.id } });
@@ -387,6 +434,7 @@ describe.skipIf(!RUN)('quizLateWaiver (integration)', () => {
 
   it('the waiver goes with its assignment', async () => {
     const { assignmentId, quizId } = await makeQuizAssignment(classX, 'Gone');
+    await completedAttempt(quizId, other, new Date(deadline.getTime() + 2.5 * H), 60);
     await setQuizLateWaiver({
       classroomId: classX,
       assignmentId,

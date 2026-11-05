@@ -357,8 +357,8 @@ describe('list_quiz_attempts', () => {
       counted_emoji: 'eyes',
       late_override: true,
     });
-    // D1: Bo's open attempt past the due date is no zero while waived.
-    expect(row('bo')).toMatchObject({ counts_as_zero: false, late_override: true });
+    // Taking the quiz is not waived: Bo's open attempt past the due date is a zero.
+    expect(row('bo')).toMatchObject({ counts_as_zero: true, late_override: true });
     // Cy has no waiver: still a zero.
     expect(row('cy')).toMatchObject({ counts_as_zero: true, late_override: false });
     vi.useRealTimers();

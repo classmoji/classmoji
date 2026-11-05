@@ -154,7 +154,8 @@ export interface StudentCourseworkRow {
   /**
    * A late override waives lateness (and Extend). REPO: the submission's
    * `is_late_override`. QUIZ: staff's late waiver on this student
-   * (`QuizLateWaiver`): `numLateHours` is then 0 and the row is never missing.
+   * (`QuizLateWaiver`): `numLateHours` is then 0. Taking the quiz is not
+   * waived: with no completed attempt the row is overdue and missing as usual.
    */
   isLateOverride: boolean;
   /** The price of one extension hour (the assignment's, else the classroom's); 0 = none sold. */
@@ -562,8 +563,9 @@ export const listForStudent = async ({
       const standing = quizStanding(own, quiz.grading_strategy, emojiScale);
       // Hours bought move this student's due date for every attempt.
       const extensionHours = Math.max(0, quizHours.get(a.id) ?? 0);
-      // Staff waived this student's late penalty here: never late, never
-      // missing (D1), no Extend — what a waived repo submission shows.
+      // Staff waived this student's late penalty here: never late and no
+      // Extend, what a waived repo submission shows. Not taking the quiz is
+      // still overdue and missing.
       const lateWaived = quizWaivers.has(a.id);
       const counting = countingQuizScore(own, quiz.grading_strategy, {
         studentDeadline: a.student_deadline,
@@ -585,8 +587,7 @@ export const listForStudent = async ({
       const due = effectiveDeadline(a.student_deadline, extensionHours);
       // Past the (extended) due date with no completed attempt. Missing only
       // when none is running either: a running attempt reads In progress.
-      const overdue =
-        !lateWaived && !standing.completed && due !== null && now.getTime() > due.getTime();
+      const overdue = !standing.completed && due !== null && now.getTime() > due.getTime();
       const missing = overdue && !standing.inProgress;
       const tokensPerHour = effectiveTokensPerHour(a.tokens_per_hour, classroomTokensPerHour);
       // The row is open to this student (published, past Opens), so what is

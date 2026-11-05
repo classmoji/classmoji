@@ -1586,8 +1586,9 @@ model Quiz {
 
 /// Staff waived the late penalty for one student on one QUIZ assignment (the
 /// quiz's counterpart of `GitRepoAssignment.is_late_override`). It covers
-/// every attempt that student makes on the quiz, and while it is set a
-/// student with no attempt is not counted 0 at the deadline. `classroom_id`
+/// every attempt that student makes on the quiz: none counts late. It takes
+/// away late penalties only (a student with no completed attempt still
+/// counts 0), and is set only on a student with a late attempt. `classroom_id`
 /// is the assignment's classroom, copied in so every read is scoped by
 /// index. Rows outlive the membership; readers count rostered students only.
 model QuizLateWaiver {
