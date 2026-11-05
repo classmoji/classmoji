@@ -103,6 +103,7 @@ import * as chatSharedService from './chatShared.ts';
 import * as studentCourseworkService from './studentCoursework.service.ts';
 import * as quizGradingService from './quizGrading.service.ts';
 import * as quizGradeItemsService from './quizGradeItems.service.ts';
+import * as quizLateWaiverService from './quizLateWaiver.service.ts';
 import * as repositoryImportService from './repositoryImport.service.ts';
 import * as contentImportService from './contentImport.service.ts';
 import * as templateImportService from './templateImport.service.ts';
@@ -230,6 +231,9 @@ const ClassmojiService = {
   // Quiz grades as engine items (`GradedItem`), batched for a classroom's
   // students: what every grade total adds for quizzes.
   quizGradeItems: quizGradeItemsService,
+  // Staff's per-student quiz late waiver (#813): reads in the extension-hour
+  // loaders' shapes, and the scoped set/clear (callers gate and audit).
+  quizLateWaiver: quizLateWaiverService,
   // One row per assignment a student can see, every type, with their own
   // state: the student Assignments page and the dashboard's Up next.
   studentCoursework: studentCourseworkService,
@@ -327,6 +331,7 @@ export {
   quizAttemptService,
   quizSourceMaterialService,
   quizGradeItemsService,
+  quizLateWaiverService,
   studentCourseworkService,
   repositoryImportService,
   contentImportService,

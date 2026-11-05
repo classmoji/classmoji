@@ -116,7 +116,8 @@ export const GRADES_MINE_DESCRIPTION =
   '(a score-N badge on the numeric scale, never a number), before any late penalty, with how ' +
   'many hours late it was (after any hours you bought); adjusted and original_emoji when ' +
   'staff changed it, and instructor_comment with instructor_name; or the emoji for 0 with ' +
-  'counts_as_zero when the deadline passed with no attempt. final_grade {letter}, present once the instructor releases final grades, ' +
+  'counts_as_zero when the deadline passed with no attempt; late_override when staff waived ' +
+  'your late penalty (late_hours 0; a quiz you never took still counts 0). final_grade {letter}, present once the instructor releases final grades, ' +
   'is your final course grade. Otherwise estimated_grade, present only where the instructor ' +
   'shows it, is the estimate on your dashboard from released grades: {kind:"letter",letter,' +
   'count} or {kind:"emoji",emoji,count}; null when there is none. Students only.';
@@ -308,9 +309,15 @@ async function myQuizGrades(ctx: ToolContext) {
     orderBy: [{ student_deadline: 'asc' }, { title: 'asc' }],
   });
   const quizIds = assignments.flatMap(a => (a.quiz_id ? [a.quiz_id] : []));
-  const [attempts, hours, scale] = await Promise.all([
+  const [attempts, hours, waived, scale] = await Promise.all([
     ClassmojiService.quizAttempt.findForUserByQuizIds(studentId, quizIds),
     ClassmojiService.quizGradeItems.netQuizExtensionHours({
+      classroomId,
+      studentId,
+      assignmentIds,
+    }),
+    // The grade loader read the same waivers; the row names them.
+    ClassmojiService.quizLateWaiver.waivedAssignmentIdsForStudent({
       classroomId,
       studentId,
       assignmentIds,
@@ -331,6 +338,7 @@ async function myQuizGrades(ctx: ToolContext) {
             {
               studentDeadline: a.student_deadline,
               extensionHours,
+              lateWaived: waived.has(a.id),
               latePenaltyPerHour: penalty,
               emojiScale: scale,
             }
@@ -386,6 +394,8 @@ async function myQuizGrades(ctx: ToolContext) {
         instructor_name: grade.instructor_name,
         late_hours: score?.late_hours ?? 0,
         counts_as_zero: item.counts_as_zero,
+        // Staff waived this student's late penalty on the quiz.
+        late_override: waived.has(a.id),
         counting_attempt_id: score?.counting_attempt_id ?? null,
         completed_at: score?.counting?.completed_at ?? null,
       },

@@ -63,6 +63,7 @@ import {
   parseQuestionCard,
   parseQuestionComplete,
   quizEvaluationRecord,
+  quizLateHours,
   stripQuestionComplete,
 } from '@classmoji/utils';
 import { buttonActionFor, type QuizUIMessage } from '@classmoji/utils/quiz-agent';
@@ -662,7 +663,9 @@ export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
     'comment_at, comment_by); change either with quiz_attempt_adjust, picking from ' +
     'emoji_scale (the classroom scale, best first; grade_emoji keeps the score). ' +
     'open_regrade_request (id, ' +
-    'student_comment, created_at), focus_percentage, the result of each question (tries, ' +
+    'student_comment, created_at), late_hours (null unless a rostered student finished it ' +
+    'with a due date set), late_override (late penalty waived via submission_late_override: ' +
+    'late_hours 0), focus_percentage, the result of each question (tries, ' +
     'eventually_correct, first_attempt_correct, emoji, brief_feedback), and the evaluation ' +
     '(band, closing feedback). include_transcript: true adds the conversation as the staff ' +
     'review drawer shows it: questions, answers, feedback with each expected_answer (not on ' +
@@ -725,6 +728,41 @@ export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
     ]);
     const nameOf = (id: string) => people.find(p => p.id === id)?.name ?? null;
     const grade = attemptGrade(attempt, scale);
+
+    // Lateness, as list_quiz_attempts and the drawer read it: a rostered
+    // student's, measured from the due date plus the hours they bought, none
+    // at all under staff's late waiver (`late_override`).
+    const assignment = quiz.assignment ?? null;
+    const deadline = assignment?.student_deadline ?? null;
+    const [lateOverride, extensionHours] =
+      student && assignment
+        ? await Promise.all([
+            ClassmojiService.quizLateWaiver
+              .waivedAssignmentIdsForStudent({
+                classroomId,
+                studentId: userId,
+                assignmentIds: [assignment.id],
+              })
+              .then(waived => waived.has(assignment.id)),
+            deadline && attempt.completed_at
+              ? ClassmojiService.quizGradeItems
+                  .netQuizExtensionHours({
+                    classroomId,
+                    studentId: userId,
+                    assignmentIds: [assignment.id],
+                  })
+                  .then(hours => Math.max(0, hours.get(assignment.id) ?? 0))
+              : 0,
+          ])
+        : [false, 0];
+    const lateHours =
+      student && deadline && attempt.completed_at
+        ? quizLateHours(attempt.completed_at, {
+            studentDeadline: deadline,
+            extensionHours,
+            lateWaived: lateOverride,
+          })
+        : null;
 
     const total = Number(attempt.total_duration_ms ?? 0);
     const unfocused = Math.max(0, Number(attempt.unfocused_duration_ms ?? 0));
@@ -840,6 +878,10 @@ export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
               created_at: iso(openRequest.created_at),
             }
           : null,
+        // Null where lateness does not apply (not a rostered student's
+        // completed attempt, or no due date); 0 under the waiver.
+        late_hours: lateHours,
+        late_override: lateOverride,
         focus_percentage:
           Number.isFinite(total) && total > 0
             ? Math.round((Math.max(total - unfocused, 0) / total) * 100)

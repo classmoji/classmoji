@@ -21,6 +21,15 @@ import type { StaffAttemptGradePanel } from '~/utils/quizPayloads';
 
 const callout = vi.hoisted(() => ({ show: vi.fn() }));
 vi.mock('@classmoji/ui-components', () => ({ useCallout: () => callout }));
+// The late shield posts through the app's global fetcher.
+const globalFetcher = vi.hoisted(() => ({ submit: vi.fn(), notify: vi.fn() }));
+vi.mock('~/hooks', async importOriginal => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  useGlobalFetcher: () => ({
+    fetcher: { submit: globalFetcher.submit, data: undefined },
+    notify: globalFetcher.notify,
+  }),
+}));
 vi.mock('~/components/ui/display/Emoji', () => ({
   default: ({ emoji }: { emoji: string }) => <span data-emoji={emoji} />,
 }));
@@ -39,6 +48,7 @@ const panel = (over: Partial<StaffAttemptGradePanel> = {}): StaffAttemptGradePan
     band: null,
     lateHours: null,
     countedEmoji: null,
+    lateWaived: false,
     countsTowardGrade: null,
   },
   adjustedEmoji: null,
@@ -253,5 +263,71 @@ describe('an orphaned adjustment (E17)', () => {
   it('no chip on an adjustment in effect or none', async () => {
     await mount(() => panel({ openRequest: null }));
     expect(byTestId('quiz-grade-needs-remap')).toBeNull();
+  });
+});
+
+describe('the late shield (#813)', () => {
+  const late = (lateHours: number, lateWaived = false) => ({
+    ...panel().grade!,
+    lateHours,
+    lateWaived,
+  });
+  const waiver = (over: Record<string, unknown> = {}) => ({
+    assignmentId: 'asg-1',
+    studentId: 'stu-1',
+    waived: false,
+    canWaive: true,
+    ...over,
+  });
+
+  beforeEach(() => {
+    globalFetcher.submit.mockClear();
+    globalFetcher.notify.mockClear();
+  });
+
+  it('offers an owner or teacher "Waive late penalty" on a late attempt, and posts it', async () => {
+    await mount(() => panel({ openRequest: null, grade: late(6), lateWaiver: waiver() }));
+
+    const row = byTestId('quiz-late-waiver');
+    expect(row?.textContent).toContain('6h late');
+    const button = row?.querySelector('button[aria-label="Waive late penalty"]') ?? null;
+    await click(button);
+
+    expect(globalFetcher.submit).toHaveBeenCalledWith(
+      { assignment_id: 'asg-1', student_id: 'stu-1', waived: true },
+      expect.objectContaining({
+        method: 'post',
+        action: '/api/quizLateWaiver/cs1',
+        encType: 'application/json',
+      })
+    );
+  });
+
+  it('shows "Late waived" with "Restore late penalty" once waived', async () => {
+    await mount(() =>
+      panel({ openRequest: null, grade: late(0, true), lateWaiver: waiver({ waived: true }) })
+    );
+
+    const row = byTestId('quiz-late-waiver');
+    expect(row?.textContent).toContain('Late waived');
+    expect(row?.querySelector('button[aria-label="Restore late penalty"]')).not.toBeNull();
+  });
+
+  it('shows an assistant the state only, never the shield', async () => {
+    await mount(() =>
+      panel({
+        openRequest: null,
+        grade: late(0, true),
+        lateWaiver: waiver({ waived: true, canWaive: false }),
+      })
+    );
+
+    expect(byTestId('quiz-late-waiver')?.textContent).toContain('Late waived');
+    expect(byTestId('quiz-late-waiver')?.querySelector('button')).toBeNull();
+  });
+
+  it('shows nothing for an on-time attempt that is not waived', async () => {
+    await mount(() => panel({ openRequest: null, grade: late(0), lateWaiver: waiver() }));
+    expect(byTestId('quiz-late-waiver')).toBeNull();
   });
 });

@@ -39,6 +39,7 @@ const mocks = vi.hoisted(() => ({
   findLetterGradeMappings: vi.fn(),
   quizzesVisibleOrThrow: vi.fn(),
   loadQuizGradeItems: vi.fn(),
+  waivedByStudent: vi.fn(),
   findAttemptsByQuiz: vi.fn(),
   findGradingStrategies: vi.fn(),
   listResponsesByFormId: vi.fn(),
@@ -94,6 +95,9 @@ vi.mock('@classmoji/services', () => ({
     },
     quizGradeItems: {
       loadQuizGradeItems: (...a: unknown[]) => mocks.loadQuizGradeItems(...a),
+    },
+    quizLateWaiver: {
+      waivedByStudent: (...a: unknown[]) => mocks.waivedByStudent(...a),
     },
   },
 }));
@@ -202,6 +206,7 @@ beforeEach(() => {
   mocks.findLetterGradeMappings.mockResolvedValue([]);
   mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
   mocks.loadQuizGradeItems.mockResolvedValue(new Map());
+  mocks.waivedByStudent.mockResolvedValue(new Map());
   mocks.findAttemptsByQuiz.mockResolvedValue([]);
   mocks.findGradingStrategies.mockResolvedValue({});
   mocks.listResponsesByFormId.mockResolvedValue([]);
@@ -216,7 +221,15 @@ describe('grades loader — the payload carries only what the table renders', ()
     const { students } = await resolveLoader();
     const student = (students as Record<string, unknown>[])[0];
 
-    const expected = ['id', 'name', 'login', 'avatar_url', 'git_repos', 'quiz_items'];
+    const expected = [
+      'id',
+      'name',
+      'login',
+      'avatar_url',
+      'git_repos',
+      'quiz_items',
+      'quiz_waived_ids',
+    ];
     if (role === 'OWNER') expected.push(...CONTACT_FIELDS);
 
     expect(Object.keys(student).sort()).toEqual(expected.sort());
@@ -460,6 +473,7 @@ describe('grades loader — quiz grade items join the totals', () => {
     counting_adjusted: true,
     counting_adjusted_emoji: 'score-80',
     counting_orphaned: false,
+    late_waived: false,
   };
 
   const resolveAll = async () => {
@@ -524,6 +538,19 @@ describe('grades loader — quiz grade items join the totals', () => {
     expect(assignments[0]).toMatchObject({ id: 'a-quiz', release_at: opens });
   });
 
+  it("loads the roster's quiz late waivers in this classroom, onto each row (#813)", async () => {
+    mocks.waivedByStudent.mockResolvedValue(new Map([['student-1', new Set(['a-quiz'])]]));
+
+    const { students } = await resolveAll();
+
+    expect(mocks.waivedByStudent).toHaveBeenCalledExactlyOnceWith({
+      classroomId: 'class-1',
+      studentIds: ['student-1'],
+      assignmentIds: ['a-quiz'],
+    });
+    expect(students[0].quiz_waived_ids).toEqual(['a-quiz']);
+  });
+
   it('gives a student with no item an empty list', async () => {
     mocks.loadQuizGradeItems.mockResolvedValue(new Map([['someone-else', [ITEM]]]));
 
@@ -543,6 +570,9 @@ describe('grades loader — quiz grade items join the totals', () => {
       quizzesVisible: false,
     });
     expect(students[0].quiz_items).toEqual([]);
+    // No waiver is read where quizzes are hidden.
+    expect(mocks.waivedByStudent).not.toHaveBeenCalled();
+    expect(students[0].quiz_waived_ids).toEqual([]);
   });
 
   it('errors instead of dropping quizzes when the visibility lookup fails', async () => {

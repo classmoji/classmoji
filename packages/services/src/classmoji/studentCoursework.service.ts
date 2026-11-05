@@ -37,11 +37,11 @@ import {
   gitWeb,
   effectiveTokensPerHour,
   isClosed,
-  lateHours,
   openToStudents,
   quizStanding,
   quizAttemptGrade,
   quizPercentageEmoji,
+  quizLateHours,
   titleToIdentifier,
   type GitWebContext,
 } from '@classmoji/utils';
@@ -50,6 +50,7 @@ import * as formResponseService from './formResponse.service.ts';
 import * as helperService from './helper.service.ts';
 import * as quizAttemptService from './quizAttempt.service.ts';
 import { netQuizExtensionHours } from './quizGradeItems.service.ts';
+import { waivedAssignmentIdsForStudent } from './quizLateWaiver.service.ts';
 import { findScaleByClassroomId } from './emojiMapping.service.ts';
 
 export type CourseworkType = 'REPO' | 'QUIZ' | 'FORM';
@@ -150,7 +151,12 @@ export interface StudentCourseworkRow {
    * is late up to now; a quiz is late by its counting attempt. 0 otherwise.
    */
   numLateHours: number;
-  /** REPO: a late override waives lateness (and Extend). */
+  /**
+   * A late override waives lateness (and Extend). REPO: the submission's
+   * `is_late_override`. QUIZ: staff's late waiver on this student
+   * (`QuizLateWaiver`): `numLateHours` is then 0. Taking the quiz is not
+   * waived: with no completed attempt the row is overdue and missing as usual.
+   */
   isLateOverride: boolean;
   /** The price of one extension hour (the assignment's, else the classroom's); 0 = none sold. */
   tokensPerHour: number;
@@ -448,6 +454,12 @@ export const listForStudent = async ({
             studentId: userId,
             assignmentIds: assignments.flatMap(a => (a.type === 'QUIZ' ? [a.id] : [])),
           }),
+          // The quizzes on which staff waived this student's late penalty.
+          waivedAssignmentIdsForStudent({
+            classroomId,
+            studentId: userId,
+            assignmentIds: assignments.flatMap(a => (a.type === 'QUIZ' ? [a.id] : [])),
+          }),
         ]).catch(degraded('quiz', context, null))
       : null,
     formIds.length
@@ -472,11 +484,12 @@ export const listForStudent = async ({
   ]);
   const classroomTokensPerHour = settings?.default_tokens_per_hour ?? 0;
   const latePenaltyPerHour = settings?.late_penalty_points_per_hour ?? 0;
-  const [quizzes, attempts, emojiScale, quizHours] = quizJoin ?? [
+  const [quizzes, attempts, emojiScale, quizHours, quizWaivers] = quizJoin ?? [
     [],
     [],
     {} as Record<string, number>,
     new Map<string, number>(),
+    new Set<string>(),
   ];
   const [forms, submittedResponses] = formJoin ?? [[], []];
 
@@ -550,9 +563,14 @@ export const listForStudent = async ({
       const standing = quizStanding(own, quiz.grading_strategy, emojiScale);
       // Hours bought move this student's due date for every attempt.
       const extensionHours = Math.max(0, quizHours.get(a.id) ?? 0);
+      // Staff waived this student's late penalty here: never late and no
+      // Extend, what a waived repo submission shows. Not taking the quiz is
+      // still overdue and missing.
+      const lateWaived = quizWaivers.has(a.id);
       const counting = countingQuizScore(own, quiz.grading_strategy, {
         studentDeadline: a.student_deadline,
         extensionHours,
+        lateWaived,
         latePenaltyPerHour,
         emojiScale,
       });
@@ -588,7 +606,11 @@ export const listForStudent = async ({
       const someAttemptLate = own.some(
         attempt =>
           attempt.completed_at != null &&
-          lateHours(attempt.completed_at, a.student_deadline, extensionHours) > 0
+          quizLateHours(attempt.completed_at, {
+            studentDeadline: a.student_deadline,
+            extensionHours,
+            lateWaived,
+          }) > 0
       );
       // Offered where there is a due date and a price, and the hours can
       // still change something: a new attempt can start, one is running, or
@@ -597,12 +619,13 @@ export const listForStudent = async ({
       const extendable =
         a.student_deadline !== null &&
         tokensPerHour > 0 &&
+        !lateWaived &&
         !(closed && !standing.completed && !standing.inProgress) &&
         (canStart || standing.inProgress !== null || someAttemptLate);
       rows.push({
         ...base,
         numLateHours: counting.late_hours,
-        isLateOverride: false,
+        isLateOverride: lateWaived,
         tokensPerHour,
         extensionHours,
         submittedAt: iso(counting.counting?.completed_at),

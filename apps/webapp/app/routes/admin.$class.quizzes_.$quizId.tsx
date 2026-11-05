@@ -7,9 +7,9 @@ import { IconEye, IconArrowLeft, IconClock, IconTrophy, IconChartBar } from '@ta
 import { TrophyOutlined, PlayCircleOutlined, ClearOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { UserThumbnailView, SectionHeader } from '~/components';
+import { UserThumbnailView, SectionHeader, QuizLateWaiverButton } from '~/components';
 import Emoji from '~/components/ui/display/Emoji';
-import { QuizGradeEmoji } from '~/components/features/quiz/QuizGradeEmoji';
+import { LateWaivedChip, QuizGradeEmoji } from '~/components/features/quiz/QuizGradeEmoji';
 import { useGitWeb } from '~/hooks/useGitWeb';
 import { useAskMojiViewing } from '~/components/features/ask-moji/viewing';
 import { formatDuration } from '~/utils/quizUtils';
@@ -36,9 +36,11 @@ interface StatCardProps {
 
 /**
  * An attempt's late hours: a pill when late, "On time" when not, a dash where
- * lateness does not apply (a staff preview, a quiz with no due date).
+ * lateness does not apply (a staff preview, a quiz with no due date). Under
+ * staff's late waiver, "Late waived" (the student report's pill).
  */
-const LateCell = ({ hours }: { hours: number | null }) => {
+const LateCell = ({ hours, waived = false }: { hours: number | null; waived?: boolean }) => {
+  if (waived) return <LateWaivedChip />;
   if (hours === null) return <span className="text-gray-400 dark:text-gray-500">—</span>;
   if (hours === 0) return <span className="text-xs text-gray-500 dark:text-gray-400">On time</span>;
   return (
@@ -115,12 +117,13 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { ClassmojiService } = await import('@classmoji/services');
   const { addAuditLog, assertClassroomAccess } = await import('~/utils/helpers');
   const { quizzesVisibleOrThrow } = await import('~/utils/classroomProFlag.server');
+  const { canMutate } = await import('~/utils/mutationRefusal.server');
 
   const classSlug = params.class!;
   const quizId = params.quizId!;
 
   // Authenticate and authorize
-  const { userId, classroom } = await assertClassroomAccess({
+  const { userId, classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
@@ -142,16 +145,24 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   // bought, for students on the roster only: anyone else's attempts are
   // previews and are never late. A quiz with no due date is never late. Every
   // rostered student has a row, so staff see who has not started and who
-  // counts 0.
+  // counts 0. A student staff waived the late penalty for (`QuizLateWaiver`)
+  // is never late (a missing attempt still counts 0); each row says so
+  // (`lateWaived`), due date or not, so the waiver can be seen and cleared.
   const assignment = quiz.assignment;
   const penalty: unknown = classroom.settings?.late_penalty_points_per_hour;
   const latePenaltyPerHour = typeof penalty === 'number' ? penalty : 0;
-  const [attempts, roster, extensionHours] = await Promise.all([
+  const [attempts, roster, extensionHours, waived] = await Promise.all([
     // Each user's login is the one on this classroom's git provider.
     ClassmojiService.quizAttempt.findByQuiz(quiz.id, classroom.git_organization?.provider ?? null),
     ClassmojiService.classroomMembership.findUsersByRole(classroom.id, 'STUDENT'),
     assignment?.student_deadline
       ? ClassmojiService.token.netQuizExtensionHoursByStudent({
+          classroomId: classroom.id,
+          assignmentId: assignment.id,
+        })
+      : null,
+    assignment
+      ? ClassmojiService.quizLateWaiver.waivedStudentIdsForAssignment({
           classroomId: classroom.id,
           assignmentId: assignment.id,
         })
@@ -192,10 +203,36 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     emojiScale,
     late,
     roster: { students: roster, assignment: assignment ?? null, now: new Date() },
+    waived,
   });
+
+  // The late shield (#813): the quiz's assignment, and whether this viewer
+  // may set it (owner or teacher where the classroom takes their changes, the
+  // gate of api.quizLateWaiver.$class, which re-checks). Assistants see the
+  // waiver's status only.
+  // `studentIds`: the rows it is offered on: students who accepted their
+  // invite (the service sets waivers on accepted students only), never the
+  // viewer's own row (nobody waives their own penalty; the service refuses).
+  const role = membership?.role;
+  const canWaive = (role === 'OWNER' || role === 'TEACHER') && canMutate(classroom, role);
+  const lateWaiver = assignment
+    ? {
+        assignmentId: assignment.id,
+        canWaive,
+        studentIds: canWaive
+          ? roster
+              .filter(
+                student =>
+                  String(student.id) !== String(userId) && student.has_accepted_invite === true
+              )
+              .map(student => String(student.id))
+          : [],
+      }
+    : null;
 
   return {
     quiz: quizResultsQuizView(quiz),
+    lateWaiver,
     students: quizResultStudentsView(students, emojiScale, regradeAttemptIds),
     stats: quizResultStatsView(students, emojiScale),
     // The viewer's own latest attempt, for resuming or restarting a preview.
@@ -279,7 +316,8 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
 const QuizView = ({ loaderData }: Route.ComponentProps) => {
   const callout = useCallout();
-  const { quiz, students, stats, adminAttempt } = loaderData;
+  const { quiz, students, stats, adminAttempt, lateWaiver } = loaderData;
+  const waivable = new Set(lateWaiver?.studentIds ?? []);
   useAskMojiViewing({ kind: 'quiz', id: quiz.id, title: quiz.name });
   const { terms } = useGitWeb();
   const navigate = useNavigate();
@@ -512,8 +550,9 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
     }
   };
 
-  // Nested table columns for individual attempts
-  const attemptColumns = [
+  // Nested table columns for one student's attempts (`waived`: staff waived
+  // their late penalty, so no attempt of theirs is late).
+  const attemptColumns = (waived: boolean) => [
     {
       title: '#',
       width: 80,
@@ -561,9 +600,11 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
     },
     {
       title: 'Late',
-      width: 90,
+      width: 110,
       dataIndex: 'lateHours',
-      render: (lateHours: number | null) => <LateCell hours={lateHours} />,
+      render: (lateHours: number | null) => (
+        <LateCell hours={lateHours} waived={waived && lateHours !== null} />
+      ),
     },
     {
       title: () => (
@@ -642,7 +683,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
   const expandedRowRender = (student: QuizStudent) => {
     return (
       <Table
-        columns={attemptColumns}
+        columns={attemptColumns(student.lateWaived)}
         dataSource={student.attempts}
         rowKey="id"
         pagination={false}
@@ -696,9 +737,27 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
           Late
         </Tooltip>
       ),
-      width: 110,
+      width: 150,
       dataIndex: 'lateHours',
-      render: (lateHours: number | null) => <LateCell hours={lateHours} />,
+      render: (lateHours: number | null, record: QuizStudent) => (
+        <span className="inline-flex items-center gap-2 whitespace-nowrap">
+          <LateCell hours={lateHours} waived={record.lateWaived} />
+          {lateWaiver?.canWaive && waivable.has(record.userId) && (
+            <QuizLateWaiverButton
+              assignmentId={lateWaiver.assignmentId}
+              studentId={record.userId}
+              waived={record.lateWaived}
+              // Late on some attempt (waived rows show it regardless, to
+              // restore). Never on a Missing or not-started row: taking the
+              // quiz is not waived, and the service refuses `not_late`.
+              visible={
+                (lateHours ?? 0) > 0 ||
+                record.attempts.some(attempt => (attempt.lateHours ?? 0) > 0)
+              }
+            />
+          )}
+        </span>
+      ),
       sorter: (a: QuizStudent, b: QuizStudent) => (a.lateHours ?? -1) - (b.lateHours ?? -1),
     },
     {

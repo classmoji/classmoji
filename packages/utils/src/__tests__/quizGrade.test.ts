@@ -4,6 +4,7 @@ import {
   effectiveDeadline,
   lateHours,
   quizGradeItem,
+  quizLateHours,
   type QuizGradeAssignment,
 } from '../quizGrade.ts';
 import type { ScorableQuizAttempt } from '../quizScore.ts';
@@ -321,6 +322,115 @@ describe('quizGradeItem', () => {
     expect(quizGradeItem({ ...base, attempts, extensionHours: 6 })).toMatchObject({
       grade: 90,
       late_hours: 0,
+    });
+  });
+});
+
+describe('late waiver (#813)', () => {
+  // The issue's case: a 🔥 attempt 108 h late at 0.5 points per hour.
+  const SCALE = { fire: 100, thumbsup: 75, thumbsdown: 25 };
+  const assignment: QuizGradeAssignment = {
+    id: 'asg-1',
+    module_id: 'mod-1',
+    type: 'QUIZ',
+    is_published: true,
+    release_at: null,
+    weight: 10,
+    is_extra_credit: false,
+    student_deadline: DEADLINE,
+  };
+  const base = {
+    assignment,
+    gradingStrategy: 'HIGHEST',
+    latePenaltyPerHour: 0.5,
+    emojiScale: SCALE,
+    quizzesVisible: true,
+    now: at(200),
+  };
+  const lateFire = attempt('late', at(100), at(108, 30), 100);
+
+  it('quizLateHours is 0 under a waiver, lateHours otherwise', () => {
+    expect(quizLateHours(at(108, 30), { studentDeadline: DEADLINE })).toBe(108);
+    expect(quizLateHours(at(108, 30), { studentDeadline: DEADLINE, extensionHours: 8 })).toBe(100);
+    expect(quizLateHours(at(108, 30), { studentDeadline: DEADLINE, lateWaived: true })).toBe(0);
+    expect(quizLateHours(null, { studentDeadline: DEADLINE, lateWaived: true })).toBe(0);
+  });
+
+  it('without a waiver the late attempt is penalised', () => {
+    const score = countingQuizScore([lateFire], 'HIGHEST', {
+      studentDeadline: DEADLINE,
+      latePenaltyPerHour: 0.5,
+      emojiScale: SCALE,
+    });
+    expect(score).toMatchObject({ grade: 46, raw_grade: 100, late_hours: 108 });
+  });
+
+  it('a waived attempt counts unpenalised, 0 hours late', () => {
+    const score = countingQuizScore([lateFire], 'HIGHEST', {
+      studentDeadline: DEADLINE,
+      lateWaived: true,
+      latePenaltyPerHour: 0.5,
+      emojiScale: SCALE,
+    });
+    expect(score).toMatchObject({ grade: 100, raw_grade: 100, late_hours: 0 });
+  });
+
+  it('a waiver covers every attempt, a retake after it included', () => {
+    const retake = attempt('retake', at(150), at(151), 90);
+    const score = countingQuizScore([lateFire, retake], 'MOST_RECENT', {
+      studentDeadline: DEADLINE,
+      lateWaived: true,
+      latePenaltyPerHour: 0.5,
+      emojiScale: SCALE,
+    });
+    expect(score).toMatchObject({ counting_attempt_id: 'retake', grade: 90, late_hours: 0 });
+    // Without the waiver the same retake is 151 h late.
+    const unwaived = countingQuizScore([lateFire, retake], 'MOST_RECENT', {
+      studentDeadline: DEADLINE,
+      latePenaltyPerHour: 0.5,
+      emojiScale: SCALE,
+    });
+    expect(unwaived).toMatchObject({ counting_attempt_id: 'retake', late_hours: 151 });
+  });
+
+  it('the grade item is unpenalised and carries late_waived; clearing restores the penalty', () => {
+    const waived = quizGradeItem({ ...base, attempts: [lateFire], lateWaived: true });
+    expect(waived).toMatchObject({ grade: 100, raw_grade: 100, late_hours: 0, late_waived: true });
+
+    const cleared = quizGradeItem({ ...base, attempts: [lateFire], lateWaived: false });
+    expect(cleared).toMatchObject({ grade: 46, late_hours: 108 });
+    expect(cleared).not.toHaveProperty('late_waived');
+  });
+
+  it('a waiver does not waive taking the quiz: no completed attempt past the deadline is a 0', () => {
+    const zero = quizGradeItem({ ...base, attempts: [], lateWaived: true });
+    expect(zero).toMatchObject({ grade: 0, counts_as_zero: true });
+    // The flag is for late penalties; a counted 0 does not carry it.
+    expect(zero).not.toHaveProperty('late_waived');
+    // An attempt still running past the deadline is a 0 too, as without a waiver.
+    expect(
+      quizGradeItem({
+        ...base,
+        attempts: [attempt('run', at(150), null, null)],
+        lateWaived: true,
+      })
+    ).toMatchObject({ grade: 0, counts_as_zero: true });
+  });
+
+  it('a waived student who finishes an attempt late counts it on time', () => {
+    const item = quizGradeItem({
+      ...base,
+      attempts: [attempt('first', at(190), at(191), 80)],
+      lateWaived: true,
+    });
+    expect(item).toMatchObject({ grade: 80, counts_as_zero: false, late_hours: 0 });
+  });
+
+  it('a non-waived student is unaffected by a waiver given to someone else', () => {
+    // Each student's item is built from their own flag; the default is off.
+    expect(quizGradeItem({ ...base, attempts: [lateFire] })).toMatchObject({
+      grade: 46,
+      late_hours: 108,
     });
   });
 });

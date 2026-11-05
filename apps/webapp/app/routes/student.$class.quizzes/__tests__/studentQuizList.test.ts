@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   quizFindMany: vi.fn(),
   quizzesVisibleOrThrow: vi.fn(),
   netQuizExtensionHours: vi.fn(),
+  waivedAssignmentIdsForStudent: vi.fn(),
   hasRole: vi.fn(),
 }));
 
@@ -56,6 +57,10 @@ vi.mock('@classmoji/services', async () => {
       user: { findById: async () => ({ id: 'stu-ada', login: 'ada' }) },
       quizGradeItems: {
         netQuizExtensionHours: (...a: unknown[]) => mocks.netQuizExtensionHours(...a),
+      },
+      quizLateWaiver: {
+        waivedAssignmentIdsForStudent: (...a: unknown[]) =>
+          mocks.waivedAssignmentIdsForStudent(...a),
       },
       classroomMembership: { hasRole: (...a: unknown[]) => mocks.hasRole(...a) },
       emojiMapping: { findScaleByClassroomId: async () => SCALE },
@@ -188,6 +193,8 @@ beforeEach(() => {
   mocks.quizFindMany.mockResolvedValue([QUIZ_ROW]);
   mocks.netQuizExtensionHours.mockReset();
   mocks.netQuizExtensionHours.mockResolvedValue(new Map());
+  mocks.waivedAssignmentIdsForStudent.mockReset();
+  mocks.waivedAssignmentIdsForStudent.mockResolvedValue(new Set());
   mocks.hasRole.mockReset();
   mocks.hasRole.mockResolvedValue(false);
 });
@@ -278,6 +285,7 @@ describe('student quiz list payload', () => {
       currentOriginalEmoji: null,
       countedEmoji: null,
       currentLateHours: 0,
+      lateWaived: false,
       maxAttempts: 3,
     });
   });
@@ -526,6 +534,30 @@ describe('student quiz list — late attempts and hours bought', () => {
       currentAdjusted: true,
       currentOriginalEmoji: 'sob',
     });
+  });
+
+  it("under staff's late waiver nothing is late and the grade counts unpenalised (#813)", async () => {
+    withPenalty(5);
+    mocks.waivedAssignmentIdsForStudent.mockResolvedValue(new Set(['asg-1']));
+    mocks.quizFindMany.mockResolvedValue([withAssignment([done('late', 5, 90, 5)])]);
+
+    const [quiz] = (await load()).quizzes;
+
+    // Read for this student, in this classroom, on its own assignments.
+    expect(mocks.waivedAssignmentIdsForStudent).toHaveBeenCalledWith({
+      classroomId: 'class-1',
+      studentId: 'stu-ada',
+      assignmentIds: ['asg-1'],
+    });
+    expect(quiz.attempts[0].lateHours).toBe(0);
+    expect(quiz.attemptsSummary).toMatchObject({
+      currentEmoji: '+1',
+      countedEmoji: null,
+      currentLateHours: 0,
+      lateWaived: true,
+    });
+    // The due date shown is still the real one.
+    expect(quiz.dueDate).toEqual(DUE);
   });
 
   it('adds the hours bought to the due date and to every attempt', async () => {

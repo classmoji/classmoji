@@ -405,6 +405,10 @@ model User {
   page_comment_reactions        PageCommentReaction[]
   platform_audit_logs           PlatformAuditLog[]        @relation("PlatformAuditActor")
   activity_days                 UserActivityDay[]
+  /// Quiz late waivers on this user's own work (as the student).
+  quiz_late_waivers             QuizLateWaiver[]          @relation("QuizLateWaiverStudent")
+  /// Quiz late waivers this user (teaching team) set.
+  quiz_late_waivers_created     QuizLateWaiver[]          @relation("QuizLateWaiverCreator")
 
   @@index([last_seen_at])
   @@index([first_sign_in_at])
@@ -653,6 +657,7 @@ model Classroom {
   page_section_unlocks  PageSectionUnlock[]
   ask_moji_feedback     AskMojiFeedback[]
   page_comment_threads  PageCommentThread[]
+  quiz_late_waivers     QuizLateWaiver[]
 
   // Logically redundant now that slug is globally unique, but retained: it is
   // the compound key live upserts select on (githubClassroomImport, example
@@ -1073,6 +1078,8 @@ model Assignment {
   calendarEventLinks   CalendarEventAssignmentLink[]
   // Quiz extension hours bought on this assignment (QUIZ only).
   token_transactions   TokenTransaction[]
+  // Students whose late penalty staff waived on this quiz (QUIZ only).
+  quiz_late_waivers    QuizLateWaiver[]
 
   @@unique([repository_id, title])
   @@index([repository_id])
@@ -1575,6 +1582,33 @@ model Quiz {
   @@index([classroom_id])
   @@index([repository_id])
   @@map("quizzes")
+}
+
+/// Staff waived the late penalty for one student on one QUIZ assignment (the
+/// quiz's counterpart of `GitRepoAssignment.is_late_override`). It covers
+/// every attempt that student makes on the quiz: none counts late. It takes
+/// away late penalties only (a student with no completed attempt still
+/// counts 0), and is set only on a student with a late attempt. `classroom_id`
+/// is the assignment's classroom, copied in so every read is scoped by
+/// index. Rows outlive the membership; readers count rostered students only.
+model QuizLateWaiver {
+  id            String   @id @default(uuid())
+  assignment_id String
+  student_id    String
+  classroom_id  String
+  created_by_id String?
+  created_at    DateTime @default(now())
+
+  assignment Assignment @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
+  student    User       @relation("QuizLateWaiverStudent", fields: [student_id], references: [id], onDelete: Cascade)
+  classroom  Classroom  @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  created_by User?      @relation("QuizLateWaiverCreator", fields: [created_by_id], references: [id], onDelete: SetNull)
+
+  @@unique([assignment_id, student_id])
+  @@index([classroom_id])
+  @@index([student_id])
+  @@index([created_by_id])
+  @@map("quiz_late_waivers")
 }
 
 model QuizAttempt {
