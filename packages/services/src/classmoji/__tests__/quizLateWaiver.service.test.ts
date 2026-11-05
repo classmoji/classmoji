@@ -195,11 +195,36 @@ describe('setQuizLateWaiver', () => {
     expect(mocks.waiverCreateMany).not.toHaveBeenCalled();
   });
 
-  it('someone who is not an accepted STUDENT here is refused, setting or clearing', async () => {
+  it('setting for someone who is not an accepted STUDENT here is refused', async () => {
     mocks.membershipFindFirst.mockResolvedValue(null);
     await expect(setQuizLateWaiver(input)).rejects.toMatchObject({ code: 'not_student' });
+    expect(mocks.waiverCreateMany).not.toHaveBeenCalled();
+  });
+
+  it('clearing works after the student left the roster, scoped all the same', async () => {
+    mocks.membershipFindFirst.mockResolvedValue(null);
+    const result = await setQuizLateWaiver({ ...input, waived: false });
+    expect(result).toEqual({ changed: true, waived: false, quizId: 'quiz-1' });
+    // No roster lookup for a clear; the delete names the classroom.
+    expect(mocks.membershipFindFirst).not.toHaveBeenCalled();
+    expect(mocks.waiverDeleteMany).toHaveBeenCalledWith({
+      where: { classroom_id: X, assignment_id: 'asg-1', student_id: 'stu-a' },
+    });
+  });
+
+  it("clearing still refuses another classroom's assignment", async () => {
+    mocks.assignmentFindFirst.mockResolvedValue(null);
     await expect(setQuizLateWaiver({ ...input, waived: false })).rejects.toMatchObject({
-      code: 'not_student',
+      code: 'not_found',
+    });
+    expect(mocks.waiverDeleteMany).not.toHaveBeenCalled();
+  });
+
+  it('nobody waives or clears their own late penalty', async () => {
+    const self = { ...input, studentId: 'teacher-1', actorId: 'teacher-1' };
+    await expect(setQuizLateWaiver(self)).rejects.toMatchObject({ code: 'self' });
+    await expect(setQuizLateWaiver({ ...self, waived: false })).rejects.toMatchObject({
+      code: 'self',
     });
     expect(mocks.waiverCreateMany).not.toHaveBeenCalled();
     expect(mocks.waiverDeleteMany).not.toHaveBeenCalled();

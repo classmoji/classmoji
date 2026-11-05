@@ -210,11 +210,23 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   // may set it (owner or teacher where the classroom takes their changes, the
   // gate of api.quizLateWaiver.$class, which re-checks). Assistants see the
   // waiver's status only.
+  // `studentIds`: the rows it is offered on: students who accepted their
+  // invite (the service sets waivers on accepted students only), never the
+  // viewer's own row (nobody waives their own penalty; the service refuses).
   const role = membership?.role;
+  const canWaive = (role === 'OWNER' || role === 'TEACHER') && canMutate(classroom, role);
   const lateWaiver = assignment
     ? {
         assignmentId: assignment.id,
-        canWaive: (role === 'OWNER' || role === 'TEACHER') && canMutate(classroom, role),
+        canWaive,
+        studentIds: canWaive
+          ? roster
+              .filter(
+                student =>
+                  String(student.id) !== String(userId) && student.has_accepted_invite === true
+              )
+              .map(student => String(student.id))
+          : [],
       }
     : null;
 
@@ -305,6 +317,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 const QuizView = ({ loaderData }: Route.ComponentProps) => {
   const callout = useCallout();
   const { quiz, students, stats, adminAttempt, lateWaiver } = loaderData;
+  const waivable = new Set(lateWaiver?.studentIds ?? []);
   useAskMojiViewing({ kind: 'quiz', id: quiz.id, title: quiz.name });
   const { terms } = useGitWeb();
   const navigate = useNavigate();
@@ -729,7 +742,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
       render: (lateHours: number | null, record: QuizStudent) => (
         <span className="inline-flex items-center gap-2 whitespace-nowrap">
           <LateCell hours={lateHours} waived={record.lateWaived} />
-          {lateWaiver?.canWaive && (
+          {lateWaiver?.canWaive && waivable.has(record.userId) && (
             <QuizLateWaiverButton
               assignmentId={lateWaiver.assignmentId}
               studentId={record.userId}

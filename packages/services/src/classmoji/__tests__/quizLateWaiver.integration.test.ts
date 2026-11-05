@@ -339,6 +339,52 @@ describe.skipIf(!RUN)('quizLateWaiver (integration)', () => {
     ).toBe(0);
   });
 
+  it('a waiver can be cleared after its student left the roster, and only in its classroom', async () => {
+    const { assignmentId } = await makeQuizAssignment(classX, 'Leaver');
+    const leaver = await prisma.user.create({
+      data: { email: `qlw-leaver-${randomUUID().slice(0, 8)}-${suite}@example.test` },
+      select: { id: true },
+    });
+    userIds.push(leaver.id);
+    const membership = await prisma.classroomMembership.create({
+      data: {
+        classroom_id: classX,
+        user_id: leaver.id,
+        role: 'STUDENT',
+        has_accepted_invite: true,
+      },
+      select: { id: true },
+    });
+    const base = { assignmentId, studentId: leaver.id, actorId: teacher };
+    await setQuizLateWaiver({ ...base, classroomId: classX, waived: true });
+    await prisma.classroomMembership.delete({ where: { id: membership.id } });
+
+    // Setting again now refuses; another classroom cannot clear it.
+    await expect(
+      setQuizLateWaiver({ ...base, classroomId: classX, waived: true })
+    ).rejects.toMatchObject({ code: 'not_student' });
+    await expect(
+      setQuizLateWaiver({ ...base, classroomId: classY, waived: false })
+    ).rejects.toMatchObject({ code: 'not_found' });
+    expect(await prisma.quizLateWaiver.count({ where: { assignment_id: assignmentId } })).toBe(1);
+
+    const cleared = await setQuizLateWaiver({ ...base, classroomId: classX, waived: false });
+    expect(cleared.changed).toBe(true);
+    expect(await prisma.quizLateWaiver.count({ where: { assignment_id: assignmentId } })).toBe(0);
+  });
+
+  it('refuses a waiver on the actor themselves', async () => {
+    await expect(
+      setQuizLateWaiver({
+        classroomId: classX,
+        assignmentId: quizX,
+        studentId: other,
+        waived: true,
+        actorId: other,
+      })
+    ).rejects.toMatchObject({ code: 'self' });
+  });
+
   it('the waiver goes with its assignment', async () => {
     const { assignmentId, quizId } = await makeQuizAssignment(classX, 'Gone');
     await setQuizLateWaiver({

@@ -293,8 +293,18 @@ describe('student report loader — quiz grade items', () => {
     expect(data.quizItems).toEqual([]);
   });
 
+  const acceptedEnrollment = (over: Record<string, unknown> = {}) => ({
+    id: 'm-1',
+    comment: null,
+    letter_grade: null,
+    has_accepted_invite: true,
+    user: { id: 'u-1', name: 'Alice', login: 'alice', school_id: null, image: null },
+    ...over,
+  });
+
   it("loads this student's quiz late waivers in this classroom, for the pill and shield", async () => {
     mocks.waivedAssignmentIdsForStudent.mockResolvedValue(new Set(['a-quiz']));
+    mocks.findStudentByLoginInClassroom.mockResolvedValue(acceptedEnrollment());
 
     const data = await load();
 
@@ -308,7 +318,24 @@ describe('student report loader — quiz grade items', () => {
     expect(data.canWaiveQuizLate).toBe(true);
   });
 
+  it('offers no quiz shield for a student who has not accepted their invite', async () => {
+    mocks.findStudentByLoginInClassroom.mockResolvedValue(
+      acceptedEnrollment({ has_accepted_invite: false })
+    );
+    expect((await load()).canWaiveQuizLate).toBe(false);
+  });
+
+  it("offers no quiz shield on the viewer's own report", async () => {
+    mocks.findStudentByLoginInClassroom.mockResolvedValue(
+      acceptedEnrollment({
+        user: { id: 'staff-1', name: 'Self', login: 'self', school_id: null, image: null },
+      })
+    );
+    expect((await load()).canWaiveQuizLate).toBe(false);
+  });
+
   it('offers no quiz shield where the classroom takes no changes from the viewer', async () => {
+    mocks.findStudentByLoginInClassroom.mockResolvedValue(acceptedEnrollment());
     mocks.requireClassroomStaff.mockResolvedValue({
       userId: 'staff-1',
       classroom: { id: 'c-1', slug: 'cs101', status: 'LOCKED', git_organization: null },

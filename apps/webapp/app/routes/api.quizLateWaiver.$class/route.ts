@@ -2,12 +2,9 @@ import { data as errorResponse } from 'react-router';
 
 import { ClassmojiService, QuizLateWaiverError } from '@classmoji/services';
 import { ActionTypes } from '~/constants';
-import {
-  addClassroomAuditLog,
-  assertClassroomAccess,
-  assertClassroomMutationAllowed,
-} from '~/utils/helpers';
+import { addClassroomAuditLog, assertClassroomAccess } from '~/utils/helpers';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
+import { mutationRefusal } from '~/utils/mutationRefusal.server';
 import { impersonationAuditFields } from '~/routes/admin.$class.ask-moji/impersonation.server';
 import type { Route } from './+types/route';
 
@@ -32,6 +29,15 @@ export const QUIZ_LATE_WAIVER_TOOL = 'web:quiz_late_waiver';
  * classroom's ids read exactly like unknown ones (404). Where the classroom's
  * quizzes are hidden this answers 404 too.
  *
+ * Refusals past the gate come back as DATA (`{ action, error }` with a 4xx),
+ * as the attempt drawer's adjust action returns them (`mutationRefusal`): the
+ * shield posts with `fetcher.submit`, where a thrown Response would swap the
+ * page for its ErrorBoundary, and the global fetcher shows `error` as a toast.
+ * Only the role gate throws, as everywhere (no shield is shown to a role it
+ * refuses).
+ *
+ * Nobody waives their own late penalty (the service's `self`, 403).
+ *
  * Impersonation: allowed and recorded, as the quiz grade adjustment does
  * (`impersonated_by` on the audit row), and as the repo shield (which records
  * nothing) does not refuse either.
@@ -54,20 +60,20 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     attemptedAction: 'set_quiz_late_waiver',
     metadata: { assignment_id: assignmentId || null, student_id: studentId || null },
   });
-  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+  const refusal = (error: string, status: number) =>
+    errorResponse({ action: ActionTypes.UPDATE_QUIZ_LATE_WAIVER, error }, { status });
+
+  const blocked = mutationRefusal(classroom, membership?.role, {
+    action: ActionTypes.UPDATE_QUIZ_LATE_WAIVER,
+  });
+  if (blocked) return blocked;
 
   if (!(await quizzesVisibleOrThrow(classroom.id))) {
-    throw new Response('Not Found', { status: 404 });
+    return refusal('Quizzes are not available in this classroom.', 404);
   }
 
   if (!assignmentId || !studentId || typeof body?.waived !== 'boolean') {
-    return errorResponse(
-      {
-        action: ActionTypes.UPDATE_QUIZ_LATE_WAIVER,
-        error: 'An assignment, a student and a waived value are required.',
-      },
-      { status: 400 }
-    );
+    return refusal('An assignment, a student and a waived value are required.', 400);
   }
   const waived = body.waived;
 
@@ -82,18 +88,16 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     });
   } catch (error) {
     if (error instanceof QuizLateWaiverError) {
-      const notQuiz = error.code === 'not_quiz';
-      return errorResponse(
-        {
-          action: ActionTypes.UPDATE_QUIZ_LATE_WAIVER,
-          error: notQuiz
-            ? 'Only a quiz assignment takes a late waiver.'
-            : error.code === 'not_student'
-              ? 'Student not found for this classroom.'
-              : 'Quiz not found for this classroom.',
-        },
-        { status: notQuiz ? 400 : 404 }
-      );
+      switch (error.code) {
+        case 'not_quiz':
+          return refusal('Only a quiz assignment takes a late waiver.', 400);
+        case 'self':
+          return refusal('You cannot waive your own late penalty.', 403);
+        case 'not_student':
+          return refusal('Student not found for this classroom.', 404);
+        default:
+          return refusal('Quiz not found for this classroom.', 404);
+      }
     }
     throw error;
   }

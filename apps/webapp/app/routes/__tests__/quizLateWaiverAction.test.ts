@@ -10,7 +10,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   role: 'OWNER' as string,
   assertClassroomAccess: vi.fn(),
-  assertClassroomMutationAllowed: vi.fn(),
+  status: 'ACTIVE' as string,
   addClassroomAuditLog: vi.fn(),
   quizzesVisibleOrThrow: vi.fn(),
   impersonationAuditFields: vi.fn(),
@@ -19,7 +19,6 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: (...a: unknown[]) => mocks.assertClassroomAccess(...a),
-  assertClassroomMutationAllowed: (...a: unknown[]) => mocks.assertClassroomMutationAllowed(...a),
   addClassroomAuditLog: (...a: unknown[]) => mocks.addClassroomAuditLog(...a),
 }));
 
@@ -55,7 +54,7 @@ const { QuizLateWaiverError } = (await import('@classmoji/services')) as unknown
 };
 const route = await import('../api.quizLateWaiver.$class/route.ts');
 
-const CLASS_X = { id: 'class-x', slug: 'cs52-26f', status: 'ACTIVE' };
+const CLASS_X = { id: 'class-x', slug: 'cs52-26f' };
 
 const post = (body: Record<string, unknown>, slug = CLASS_X.slug) =>
   route.action({
@@ -80,6 +79,7 @@ const BODY = { assignment_id: 'asg-quiz', student_id: 'student-a', waived: true 
 beforeEach(() => {
   for (const m of Object.values(mocks)) if (typeof m === 'function') m.mockReset();
   mocks.role = 'OWNER';
+  mocks.status = 'ACTIVE';
   // The gate as the real one behaves: the caller's role must be allowed.
   mocks.assertClassroomAccess.mockImplementation(
     async ({ allowedRoles }: { allowedRoles: string[] }) => {
@@ -88,7 +88,7 @@ beforeEach(() => {
       }
       return {
         userId: 'staff-1',
-        classroom: CLASS_X,
+        classroom: { ...CLASS_X, status: mocks.status },
         membership: { id: 'm-1', role: mocks.role },
       };
     }
@@ -125,22 +125,45 @@ describe('api.quizLateWaiver — gate', () => {
     );
   });
 
-  it('applies the classroom mutation rule before any write', async () => {
-    mocks.assertClassroomMutationAllowed.mockImplementation(() => {
-      throw new Response('Locked', { status: 403 });
+  it('returns the classroom mutation refusal as data (a fetcher keeps its page), writing nothing', async () => {
+    mocks.role = 'TEACHER';
+    mocks.status = 'LOCKED';
+    const { status, body } = unwrap(await post(BODY));
+    expect(status).toBe(403);
+    expect(body).toMatchObject({
+      action: 'update-quiz-late-waiver',
+      code: 'CLASSROOM_LOCKED',
+      error: expect.any(String),
     });
-    await expect(post(BODY)).rejects.toMatchObject({ status: 403 });
-    expect(mocks.assertClassroomMutationAllowed).toHaveBeenCalledWith({
-      status: 'ACTIVE',
-      role: 'OWNER',
-    });
+    expect(mocks.setQuizLateWaiver).not.toHaveBeenCalled();
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('lets the owner write in a LOCKED classroom, as the mutation rule does', async () => {
+    mocks.status = 'LOCKED';
+    expect(unwrap(await post(BODY)).status).toBe(200);
+  });
+
+  it('answers 404 as data where the classroom shows no quizzes', async () => {
+    mocks.quizzesVisibleOrThrow.mockResolvedValue(false);
+    const { status, body } = unwrap(await post(BODY));
+    expect(status).toBe(404);
+    expect(body).toMatchObject({ action: 'update-quiz-late-waiver', error: expect.any(String) });
     expect(mocks.setQuizLateWaiver).not.toHaveBeenCalled();
   });
 
-  it('answers 404 where the classroom shows no quizzes', async () => {
-    mocks.quizzesVisibleOrThrow.mockResolvedValue(false);
-    await expect(post(BODY)).rejects.toMatchObject({ status: 404 });
-    expect(mocks.setQuizLateWaiver).not.toHaveBeenCalled();
+  it("refuses a waiver on the caller's own late penalty with 403, as data", async () => {
+    mocks.setQuizLateWaiver.mockRejectedValue(
+      new QuizLateWaiverError('self', 'You cannot waive your own late penalty')
+    );
+    const { status, body } = unwrap(await post({ ...BODY, student_id: 'staff-1' }));
+    expect(status).toBe(403);
+    expect(body.error).toBe('You cannot waive your own late penalty.');
+    // The actor is the session's user, for the service's own check.
+    expect(mocks.setQuizLateWaiver).toHaveBeenCalledWith(
+      expect.objectContaining({ studentId: 'staff-1', actorId: 'staff-1' })
+    );
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 
   it('refuses a malformed body with 400', async () => {

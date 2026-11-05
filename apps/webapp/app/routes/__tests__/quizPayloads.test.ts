@@ -1295,10 +1295,38 @@ describe('quiz results page: lateness', () => {
       membership: { role },
     });
     mocks.quizFindById.mockResolvedValue({ ...QUIZ_ROW, assignment: assignmentRow() });
+    mocks.findUsersByRole.mockResolvedValue([
+      { id: ADA.id, has_accepted_invite: true },
+      { id: BABBAGE.id, has_accepted_invite: true },
+    ]);
 
     const payload = await detailRoute.loader(detailArgs());
 
-    expect(payload.lateWaiver).toEqual({ assignmentId: 'asg-1', canWaive });
+    expect(payload.lateWaiver).toEqual({
+      assignmentId: 'asg-1',
+      canWaive,
+      studentIds: canWaive ? [ADA.id, BABBAGE.id] : [],
+    });
+  });
+
+  it("offers the shield on accepted students only, never on a pending one or the viewer's own row", async () => {
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: TA.id,
+      classroom: CLASSROOM,
+      membership: { role: 'TEACHER' },
+    });
+    mocks.quizFindById.mockResolvedValue({ ...QUIZ_ROW, assignment: assignmentRow() });
+    mocks.findUsersByRole.mockResolvedValue([
+      { id: ADA.id, has_accepted_invite: true },
+      // Pending: on the roster, but no shield.
+      { id: BABBAGE.id, has_accepted_invite: false },
+      // The viewer, also enrolled as a student here.
+      { id: TA.id, has_accepted_invite: true },
+    ]);
+
+    const payload = await detailRoute.loader(detailArgs());
+
+    expect(payload.lateWaiver?.studentIds).toEqual([ADA.id]);
   });
 
   it('has no late shield for a quiz in no module', async () => {

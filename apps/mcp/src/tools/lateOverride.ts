@@ -114,6 +114,9 @@ export const QUIZ_LATE_WAIVER_RESOURCE = 'QUIZ_LATE_WAIVER';
  */
 async function isQuizAssignmentHere(assignmentId: string, ctx: ToolContext): Promise<boolean> {
   try {
+    const { classroomId } = requireClassroomCtx(ctx);
+    // Hidden quizzes leave no trace: the quiz tools' own predicate.
+    if (!(await ClassmojiService.entitlement.quizzesVisibleOrThrow(classroomId))) return false;
     const record = await loadCourseworkAssignmentInClassroom(assignmentId, ctx);
     return record.type === 'QUIZ';
   } catch {
@@ -129,12 +132,15 @@ async function isQuizAssignmentHere(assignmentId: string, ctx: ToolContext): Pro
 async function quizLateOverride(args: LateOverrideArgs & { student_id: string }, ctx: ToolContext) {
   const { classroomId } = requireClassroomCtx(ctx);
 
+  // Either selector, as list_quiz_attempts and quiz_attempt_adjust: a classroom
+  // whose quizzes are hidden (not Pro, switched off, or no AI agent) has none
+  // to name, and says so the same way before anything is looked up.
+  if (!(await ClassmojiService.entitlement.quizzesVisibleOrThrow(classroomId))) {
+    throw new ToolError('forbidden', 'Quizzes are not available in this classroom');
+  }
+
   let assignmentId: string;
   if (args.quiz_id !== undefined) {
-    // As list_quiz_attempts: a classroom whose quizzes are hidden has none to name.
-    if (!(await ClassmojiService.entitlement.quizzesVisibleOrThrow(classroomId))) {
-      throw new ToolError('forbidden', 'Quizzes are not available in this classroom');
-    }
     const quiz = await loadQuizInClassroom(args.quiz_id, ctx);
     if (!quiz.assignment?.id) {
       throw new ToolError(
@@ -148,8 +154,7 @@ async function quizLateOverride(args: LateOverrideArgs & { student_id: string },
     if (assignment.type !== 'QUIZ') {
       throw new ToolError(
         'invalid_params',
-        'student_id goes with a quiz assignment only; for a repo assignment drop student_id ' +
-          '(or name its submissions by git_repo_assignment_id)'
+        'student_id goes with a quiz assignment only; this assignment is not a quiz'
       );
     }
     assignmentId = assignment.id;
@@ -172,6 +177,9 @@ async function quizLateOverride(args: LateOverrideArgs & { student_id: string },
         : undefined;
     if (code === 'not_quiz') {
       throw new ToolError('invalid_params', 'Only a quiz assignment takes a quiz late waiver');
+    }
+    if (code === 'self') {
+      throw new ToolError('forbidden', 'You cannot waive your own late penalty');
     }
     if (code === 'not_student') throw scopedNotFound('Student');
     if (code === 'not_found') throw scopedNotFound('Assignment');

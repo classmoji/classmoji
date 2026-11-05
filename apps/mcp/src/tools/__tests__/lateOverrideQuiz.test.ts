@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   assignmentFindById: vi.fn(),
   quizFindById: vi.fn(),
   quizzesVisible: vi.fn(),
+  quizzesVisibleOrThrow: vi.fn(),
   auditCreate: vi.fn(),
   classroomFindAll: vi.fn(),
   findByClassroomAndUser: vi.fn(),
@@ -42,7 +43,7 @@ vi.mock('@classmoji/services', () => ({
     quiz: { findById: (...a: unknown[]) => mocks.quizFindById(...a) },
     entitlement: {
       quizzesVisible: (...a: unknown[]) => mocks.quizzesVisible(...a),
-      quizzesVisibleOrThrow: (...a: unknown[]) => mocks.quizzesVisible(...a),
+      quizzesVisibleOrThrow: (...a: unknown[]) => mocks.quizzesVisibleOrThrow(...a),
     },
     audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
     classroom: {
@@ -118,6 +119,7 @@ beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
   mocks.auditCreate.mockResolvedValue(undefined);
   mocks.quizzesVisible.mockResolvedValue(true);
+  mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
   // Assignments: a QUIZ and a REPO one in class-1, one QUIZ in class-2.
   mocks.assignmentFindById.mockImplementation(async (id: string) => {
     if (id === QUIZ_ASSIGNMENT) {
@@ -205,12 +207,45 @@ describe('submission_late_override (quiz) — selectors', () => {
     expect(mocks.setQuizLateWaiver).not.toHaveBeenCalled();
   });
 
-  it('refuses quiz_id where the classroom shows no quizzes', async () => {
-    mocks.quizzesVisible.mockResolvedValue(false);
-    await expect(handle({ quiz_id: QUIZ_ID, student_id: STUDENT_A })).rejects.toMatchObject({
-      kind: 'forbidden',
+  it.each([
+    ['quiz_id', { quiz_id: QUIZ_ID }],
+    ['a quiz assignment_id', { assignment_id: QUIZ_ASSIGNMENT }],
+  ])(
+    'refuses %s where the quiz tools hide quizzes, even if the entitlement alone would show them',
+    async (_label, sel) => {
+      // The two predicates differ (no AI agent configured): the quiz tools'
+      // `quizzesVisibleOrThrow` decides, for both selectors, before any lookup.
+      mocks.quizzesVisible.mockResolvedValue(true);
+      mocks.quizzesVisibleOrThrow.mockResolvedValue(false);
+      await expect(handle({ ...sel, student_id: STUDENT_A })).rejects.toMatchObject({
+        kind: 'forbidden',
+      });
+      expect(mocks.assignmentFindById).not.toHaveBeenCalled();
+      expect(mocks.quizFindById).not.toHaveBeenCalled();
+      expect(mocks.setQuizLateWaiver).not.toHaveBeenCalled();
+    }
+  );
+
+  it('answers a hidden quiz assignment_id without student_id as not_found, not "needs student_id"', async () => {
+    mocks.quizzesVisibleOrThrow.mockResolvedValue(false);
+    await expect(handle({ assignment_id: QUIZ_ASSIGNMENT })).rejects.toMatchObject({
+      kind: 'not_found',
     });
-    expect(mocks.setQuizLateWaiver).not.toHaveBeenCalled();
+  });
+
+  it('says a FORM assignment is not a quiz, without naming repo selectors', async () => {
+    mocks.assignmentFindById.mockResolvedValue({
+      id: REPO_ASSIGNMENT,
+      type: 'FORM',
+      module: { classroom_id: 'class-1' },
+      repository: null,
+    });
+    const err = await handle({ assignment_id: REPO_ASSIGNMENT, student_id: STUDENT_A }).catch(
+      e => e
+    );
+    expect(err).toMatchObject({ kind: 'invalid_params' });
+    expect(err.message).toContain('not a quiz');
+    expect(err.message).not.toMatch(/repo/i);
   });
 });
 
@@ -337,6 +372,7 @@ describe('submission_late_override (quiz) — scoping', () => {
   it.each([
     ['not_found', 'not_found'],
     ['not_quiz', 'invalid_params'],
+    ['self', 'forbidden'],
   ])("maps the service's %s to %s", async (code, kind) => {
     mocks.setQuizLateWaiver.mockRejectedValue(new QuizLateWaiverError(code));
     await expect(handle({ quiz_id: QUIZ_ID, student_id: STUDENT_A })).rejects.toMatchObject({

@@ -46,7 +46,11 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const classSlug = params.class!;
   const login = params.login!;
 
-  const { classroom, membership: viewer } = await requireClassroomStaff(request, classSlug, {
+  const {
+    userId: viewerId,
+    classroom,
+    membership: viewer,
+  } = await requireClassroomStaff(request, classSlug, {
     resourceType: 'STUDENT_GRADES_SCREEN',
     action: 'view_student_report',
   });
@@ -223,8 +227,14 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     quizItems,
     quizWaivedIds: [...quizWaived],
     // The quiz late shield is owner or teacher (this page's gate) where the
-    // classroom takes the viewer's changes; api.quizLateWaiver re-checks.
-    canWaiveQuizLate: canMutate(classroom, viewer?.role),
+    // classroom takes the viewer's changes; api.quizLateWaiver re-checks. Not
+    // on the viewer's own report (nobody waives their own penalty), and not
+    // for a student who has not accepted their invite yet (the service sets
+    // waivers on accepted students only).
+    canWaiveQuizLate:
+      canMutate(classroom, viewer?.role) &&
+      String(studentId) !== String(viewerId) &&
+      enrollment.has_accepted_invite === true,
     unopenedQuizIds,
     formStatus,
     emojiMappings,

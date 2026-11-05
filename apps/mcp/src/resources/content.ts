@@ -584,7 +584,7 @@ export const QUIZZES_DESCRIPTION =
   'summary. For a student each quiz also has assignment_id (what extension_purchase takes), ' +
   'effective_tokens_per_hour (price of one extension hour; 0 = none), extension_hours ' +
   'bought, effective_due_date (due date plus those hours), late_override (staff waived your ' +
-  'late penalty: lateHours 0) and my_attempts: lateHours (hours ' +
+  'late penalty: lateHours 0, and no extension hours can be bought) and my_attempts: lateHours (hours ' +
   'late of the attempt that counts), current_emoji (its grade before the late penalty), ' +
   'adjusted with original_emoji when staff changed the grade, instructor_comment and ' +
   'instructor_name, and attempts: every attempt (id, attempt_number, completed_at, ' +

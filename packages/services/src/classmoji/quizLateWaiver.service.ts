@@ -12,18 +12,25 @@
  *     student × many assignments, many students × one assignment, many ×
  *     many). Every read carries `classroom_id`, so a waiver filed in another
  *     classroom never answers here.
- *   - The write checks scope only: the assignment is a QUIZ of this classroom
+ *   - The write checks scope: the assignment is a QUIZ of this classroom
  *     (its module and its quiz both in it, as `loadQuizGradeItems` reads
- *     them), and the student holds an accepted STUDENT membership here.
- *     Callers gate the actor (owner or teacher, the classroom mutation rule,
- *     not while impersonated) and write the audit row, exactly as the repo
- *     shield's callers do around `setLateOverrideInClassroom`.
+ *     them), and, to SET a waiver, the student holds an accepted STUDENT
+ *     membership here. Clearing needs no membership: a waiver left behind by
+ *     a student who has since left the roster can still be removed, and the
+ *     delete is scoped by classroom, assignment and student all the same.
+ *   - Nobody waives their own late penalty (`self`), as staff never grade
+ *     their own quiz attempt (`refuseOwnAttempt` in quizGradeAdjust).
+ *   - Callers gate the actor (owner or teacher, the classroom mutation rule)
+ *     and write the audit row, exactly as the repo shield's callers do around
+ *     `setLateOverrideInClassroom`. Impersonation is allowed and recorded
+ *     (`impersonated_by` on the row), as the repo shield and the quiz grade
+ *     adjustment allow it.
  *   - A waiver may be set before the student is late (a known absence).
  */
 
 import getPrisma from '@classmoji/database';
 
-export type QuizLateWaiverErrorCode = 'not_found' | 'not_quiz' | 'not_student';
+export type QuizLateWaiverErrorCode = 'not_found' | 'not_quiz' | 'not_student' | 'self';
 
 export class QuizLateWaiverError extends Error {
   code: QuizLateWaiverErrorCode;
@@ -124,7 +131,9 @@ export interface SetQuizLateWaiverResult {
  *   - `not_found`: no such assignment in this classroom (another classroom's
  *     id reads exactly like an unknown one);
  *   - `not_quiz`: the assignment is not a QUIZ;
- *   - `not_student`: the student holds no accepted STUDENT membership here.
+ *   - `not_student`: setting, for someone who holds no accepted STUDENT
+ *     membership here (clearing skips this, see the header);
+ *   - `self`: the student is the actor.
  *
  * No role check and no audit row: the caller does both (see the header).
  */
@@ -151,7 +160,8 @@ export const setQuizLateWaiver = async ({
           select: { id: true, type: true, quiz_id: true, quiz: { select: { classroom_id: true } } },
         })
       : null,
-    studentId
+    // Only setting needs the student on the roster now.
+    studentId && waived
       ? prisma.classroomMembership.findFirst({
           where: {
             classroom_id: classroomId,
@@ -172,8 +182,11 @@ export const setQuizLateWaiver = async ({
   if (assignment.quiz?.classroom_id !== classroomId) {
     throw new QuizLateWaiverError('not_found', 'Assignment not found');
   }
-  if (!membership) {
+  if (!studentId || (waived && !membership)) {
     throw new QuizLateWaiverError('not_student', 'Not a student in this classroom');
+  }
+  if (actorId && studentId === actorId) {
+    throw new QuizLateWaiverError('self', 'You cannot waive your own late penalty');
   }
 
   if (waived) {

@@ -30,6 +30,8 @@ const mocks = vi.hoisted(() => ({
   auditCreate: vi.fn(),
   findOpenByQuizAttemptId: vi.fn(),
   userFindMany: vi.fn(),
+  waivedAssignmentIdsForStudent: vi.fn(),
+  netQuizExtensionHours: vi.fn(),
 }));
 
 vi.mock('@classmoji/database', async () => ({
@@ -63,6 +65,12 @@ vi.mock('@classmoji/services', () => ({
     audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
     regradeRequest: {
       findOpenByQuizAttemptId: (...a: unknown[]) => mocks.findOpenByQuizAttemptId(...a),
+    },
+    quizLateWaiver: {
+      waivedAssignmentIdsForStudent: (...a: unknown[]) => mocks.waivedAssignmentIdsForStudent(...a),
+    },
+    quizGradeItems: {
+      netQuizExtensionHours: (...a: unknown[]) => mocks.netQuizExtensionHours(...a),
     },
   },
 }));
@@ -452,6 +460,8 @@ beforeEach(() => {
   mocks.loadTranscript.mockResolvedValue(CHAT_TRANSCRIPT);
   mocks.findWithMessages.mockResolvedValue({ messages: [] });
   mocks.messageLimitOf.mockResolvedValue({ messagesLeft: 0, endedBy: null });
+  mocks.waivedAssignmentIdsForStudent.mockResolvedValue(new Set());
+  mocks.netQuizExtensionHours.mockResolvedValue(new Map());
 });
 
 describe('get_quiz_attempt', () => {
@@ -1269,5 +1279,51 @@ describe('get_quiz_attempt: staff adjustment', () => {
     // One field carries the request; the old bare id is gone.
     expect(payload.attempt).not.toHaveProperty('open_regrade_request_id');
     expect(mocks.userFindMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('get_quiz_attempt: lateness and the late waiver (#813)', () => {
+  // Completed 2026-10-01T10:30Z; due 2026-09-30T10:00Z → 24 h late.
+  const DUE = new Date('2026-09-30T10:00:00Z');
+  const withAssignment = (deadline: Date | null = DUE) =>
+    quiz({ assignment: { id: 'asg-1', student_deadline: deadline } });
+
+  it("measures a rostered student's attempt from the due date plus the hours they bought", async () => {
+    mocks.quizFindById.mockResolvedValue(withAssignment());
+    mocks.netQuizExtensionHours.mockResolvedValue(new Map([['asg-1', 4]]));
+
+    const payload = parse(await getQuizAttemptTool.handler(ARGS, CTX));
+
+    expect(payload.attempt).toMatchObject({ late_hours: 20, late_override: false });
+    expect(mocks.waivedAssignmentIdsForStudent).toHaveBeenCalledWith({
+      classroomId: 'class-1',
+      studentId: 'ada',
+      assignmentIds: ['asg-1'],
+    });
+  });
+
+  it('answers 0 h late and late_override under the waiver', async () => {
+    mocks.quizFindById.mockResolvedValue(withAssignment());
+    mocks.waivedAssignmentIdsForStudent.mockResolvedValue(new Set(['asg-1']));
+
+    const payload = parse(await getQuizAttemptTool.handler(ARGS, CTX));
+
+    expect(payload.attempt).toMatchObject({ late_hours: 0, late_override: true });
+  });
+
+  it('has no lateness for a quiz in no module, with no due date, or for a staff preview', async () => {
+    let payload = parse(await getQuizAttemptTool.handler(ARGS, CTX));
+    expect(payload.attempt).toMatchObject({ late_hours: null, late_override: false });
+
+    mocks.quizFindById.mockResolvedValue(withAssignment(null));
+    payload = parse(await getQuizAttemptTool.handler(ARGS, CTX));
+    expect(payload.attempt).toMatchObject({ late_hours: null });
+
+    mocks.quizFindById.mockResolvedValue(withAssignment());
+    mocks.findUsersByRole.mockResolvedValue([]);
+    mocks.findUsersByRoles.mockResolvedValue([member('ada', 'gitlab-ada', 'Ada Lovelace')]);
+    payload = parse(await getQuizAttemptTool.handler(ARGS, CTX));
+    expect(payload.attempt).toMatchObject({ late_hours: null, late_override: false });
+    expect(mocks.waivedAssignmentIdsForStudent).toHaveBeenCalledTimes(1);
   });
 });
