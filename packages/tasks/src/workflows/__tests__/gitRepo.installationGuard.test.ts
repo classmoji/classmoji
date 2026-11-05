@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   findTeamsByClassroomId: vi.fn(),
   setPublished: vi.fn(),
   findReadyForRelease: vi.fn(),
+  findPublishedReleasedSince: vi.fn(),
   batchTriggerCreateRepo: vi.fn(),
 }));
 
@@ -51,7 +52,10 @@ vi.mock('@classmoji/services', () => ({
     classroom: { findBySlug: (...a: unknown[]) => mocks.findClassroomBySlug(...a) },
     classroomMembership: { findUsersByRole: (...a: unknown[]) => mocks.findUsersByRole(...a) },
     team: { findByClassroomId: (...a: unknown[]) => mocks.findTeamsByClassroomId(...a) },
-    assignment: { findReadyForRelease: (...a: unknown[]) => mocks.findReadyForRelease(...a) },
+    assignment: {
+      findReadyForRelease: (...a: unknown[]) => mocks.findReadyForRelease(...a),
+      findPublishedReleasedSince: (...a: unknown[]) => mocks.findPublishedReleasedSince(...a),
+    },
   },
   HelperService: {},
   ensureClassroomTeam: vi.fn(),
@@ -135,6 +139,7 @@ beforeEach(() => {
     getOrganization: vi.fn().mockResolvedValue({ plan: { name: 'team' } }),
   });
   mocks.batchTriggerCreateRepo.mockResolvedValue({ runs: [] });
+  mocks.findPublishedReleasedSince.mockResolvedValue([]);
 });
 
 describe('create_git_repos with a missing installation id', () => {

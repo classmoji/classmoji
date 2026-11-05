@@ -784,18 +784,20 @@ export const dailyRepositoryAssignmentsReleaseTask = schedules.task({
   retry: { maxAttempts: 1 },
   cron: '1 4 * * *',
   run: async (_payload: ScheduleTaskPayload, { ctx }: GitRepoAssignmentTaskContext) => {
+    const endOfDay = dayjs().endOf('day').toDate();
     const assignmentsToRelease = (await ClassmojiService.assignment.findReadyForRelease(
-      dayjs().endOf('day').toDate()
+      endOfDay
     )) as ReleaseAssignmentRecord[];
 
     logger.debug('Assignments to release', { assignmentsToRelease });
 
+    // No early return: the published assignments below are released on nights
+    // with no drafts too.
     if (assignmentsToRelease.length === 0) {
       logger.info('No assignments to release');
-      return;
+    } else {
+      logger.info('Found assignments to release', { count: assignmentsToRelease.length });
     }
-
-    logger.info('Found assignments to release', { count: assignmentsToRelease.length });
 
     // One installation check per Github org per run. Without it an org whose
     // app was uninstalled spawned one failing create_git_repos run per
@@ -960,6 +962,83 @@ export const dailyRepositoryAssignmentsReleaseTask = schedules.task({
         });
         failures.push(`${classroom.slug}/${repository.title}: ${getErrorMessage(error)}`);
       }
+    }
+
+    // Assignments published ahead of a future release date (#385): the drafts
+    // query above never sees them, so when their date comes they go into the
+    // student repos that already exist here, the way publishing one that is
+    // already released does, on the same clock as the drafts path (the end of
+    // today). Only the last 72 hours: a published row never drops out of a
+    // query on its own, and the window covers one missed night with room for a
+    // late start.
+    // Rows the drafts path just released are left to it, so a student whose run
+    // failed above is not sent a second run tonight.
+    const releasedAbove = new Set(assignmentsToRelease.map(assignment => assignment.id));
+    const publishedToOpen = (
+      (await ClassmojiService.assignment.findPublishedReleasedSince(
+        dayjs().subtract(72, 'hour').toDate(),
+        endOfDay
+      )) as ReleaseAssignmentRecord[]
+    ).filter(assignment => !releasedAbove.has(assignment.id));
+
+    if (publishedToOpen.length > 0) {
+      logger.info('Found published assignments to open in existing repos', {
+        count: publishedToOpen.length,
+      });
+
+      // Imported here, not at the top: the helper imports this file for the
+      // task it queues, and nothing else in this file needs it.
+      const { openAssignmentInExistingRepos } = await import('../helpers/openAssignmentInRepos.ts');
+
+      let opened = 0;
+      let queuedRuns = 0;
+      let skippedNoInstallation = 0;
+      const skipped: Record<string, number> = {};
+
+      for (const assignment of publishedToOpen) {
+        const classroom = assignment.repository.classroom;
+        try {
+          const gitOrg = await checkInstallation(classroom);
+          if (!gitOrg) {
+            skippedNoInstallation++;
+            continue;
+          }
+
+          const result = await openAssignmentInExistingRepos({
+            classroomId: classroom.id,
+            assignmentId: assignment.id,
+            now: endOfDay,
+          });
+          if (result.reason) {
+            skipped[result.reason] = (skipped[result.reason] ?? 0) + 1;
+          } else {
+            opened++;
+            queuedRuns += result.queued;
+            logger.info('Opened published assignment in existing repos', {
+              classroomSlug: classroom.slug,
+              assignmentId: assignment.id,
+              title: assignment.title,
+              queued: result.queued,
+            });
+          }
+        } catch (error: unknown) {
+          logger.error('Opening a published assignment in existing repos failed', {
+            classroomSlug: classroom.slug,
+            assignmentId: assignment.id,
+            title: assignment.title,
+            message: getErrorMessage(error),
+          });
+          failures.push(`${classroom.slug}/${assignment.title}: ${getErrorMessage(error)}`);
+        }
+      }
+
+      logger.info('Published assignments checked', {
+        checked: publishedToOpen.length,
+        opened,
+        queuedRuns,
+        skippedNoInstallation,
+        skipped,
+      });
     }
 
     if (failures.length > 0) {

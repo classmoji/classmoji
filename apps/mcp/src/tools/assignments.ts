@@ -64,7 +64,7 @@
  * assignment is released (releasedToRepos) and its repository published, every
  * existing student/team repo without its submission row gets one (and the
  * issue, in ISSUE mode), and the assignment is marked published. It creates no
- * missing repo (web Sync) and never publishes the repository (repo_publish).
+ * missing repo (repo_sync / web Sync) and never publishes the repository (repo_publish).
  * assignment_create runs it when the assignment is created published.
  *
  * Backbone: ClassmojiService.assignment.update — the NOTIFYING path, which on
@@ -146,7 +146,7 @@ async function releaseIntoRepos(
       failed: true,
       release_note:
         'Saved, but it could not be added to student repositories. Retry with assignment_update ' +
-        'is_published true, or use Sync on the web.',
+        'is_published true, or run repo_sync on its repository.',
     };
   }
 }

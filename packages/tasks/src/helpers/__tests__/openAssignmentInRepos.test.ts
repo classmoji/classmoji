@@ -172,6 +172,26 @@ describe('openAssignmentInExistingRepos', () => {
     expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
   });
 
+  it('releases against the `now` it is given (the nightly end of day), the clock defaulting to the present', async () => {
+    const laterToday = new Date(Date.now() + 60 * 60 * 1000);
+    const endOfDay = new Date(laterToday.getTime() + 60 * 1000);
+    setup(assignmentRow({ is_published: true, release_at: laterToday }));
+
+    // Default clock: not released yet.
+    expect((await open()).reason).toBe('not_released');
+    expect(mocks.batchTrigger).not.toHaveBeenCalled();
+
+    // The cron's clock: released, so opened tonight.
+    const result = await openAssignmentInExistingRepos({
+      classroomId: CLASSROOM_ID,
+      assignmentId: ASSIGNMENT_ID,
+      sessionId: 'sess-1',
+      now: endOfDay,
+    });
+    expect(result).toEqual({ queued: 2, sessionId: 'sess-1' });
+    expect(mocks.batchTrigger).toHaveBeenCalledTimes(1);
+  });
+
   it('queues nothing for an undated draft', async () => {
     setup(assignmentRow({ is_published: false, release_at: null }));
 
