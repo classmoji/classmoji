@@ -1,6 +1,6 @@
 /**
  * The evaluation card in QuizMessageList, rendered to markup. Its data is
- * what QuizAttemptInterface passes (a completed attempt's stored scores); an
+ * what LegacyQuizTranscript passes (a completed attempt's stored scores); an
  * evaluation message alone shows its text in the transcript and no card.
  */
 
@@ -18,10 +18,8 @@ const EVALUATION_MESSAGE = {
 };
 
 describe('QuizMessageList — the evaluation card', () => {
-  it('shows no card from an evaluation message alone, read-only included', () => {
-    const html = renderToStaticMarkup(
-      <QuizMessageList messages={[EVALUATION_MESSAGE]} readOnly isQuizComplete />
-    );
+  it('shows no card from an evaluation message alone', () => {
+    const html = renderToStaticMarkup(<QuizMessageList messages={[EVALUATION_MESSAGE]} />);
 
     expect(html).toContain('Great work!');
     expect(html).not.toContain('Quiz Complete!');
@@ -31,8 +29,6 @@ describe('QuizMessageList — the evaluation card', () => {
     const html = renderToStaticMarkup(
       <QuizMessageList
         messages={[EVALUATION_MESSAGE]}
-        readOnly
-        isQuizComplete
         evaluationData={{
           evaluation: 'GOOD',
           numeric_score: 3,
@@ -67,8 +63,6 @@ describe('QuizMessageList — the evaluation card', () => {
       >
         <QuizMessageList
           messages={[EVALUATION_MESSAGE]}
-          readOnly
-          isQuizComplete
           evaluationData={{
             evaluation: 'GOOD',
             numeric_score: 3,
@@ -118,8 +112,6 @@ describe('QuizMessageList — the evaluation card', () => {
         >
           <QuizMessageList
             messages={[EVALUATION_MESSAGE]}
-            readOnly
-            isQuizComplete
             evaluationData={{ evaluation: 'GOOD', numeric_score: 3, question_results: [] }}
           />
         </QuizResultProvider>
@@ -136,7 +128,7 @@ describe('QuizMessageList — the evaluation card', () => {
     const slots = { grade: null, beforeResults: <div data-testid="staff-adjust-panel" /> };
     const html = renderToStaticMarkup(
       <QuizResultProvider value={slots}>
-        <QuizMessageList messages={[{ id: 'm1', role: 'assistant', content: 'Hi' }]} readOnly />
+        <QuizMessageList messages={[{ id: 'm1', role: 'assistant', content: 'Hi' }]} />
       </QuizResultProvider>
     );
     expect(html).not.toContain('Quiz Complete!');
@@ -148,8 +140,6 @@ describe('QuizMessageList — the evaluation card', () => {
       <QuizResultProvider value={slots}>
         <QuizMessageList
           messages={[EVALUATION_MESSAGE]}
-          readOnly
-          isQuizComplete
           evaluationData={{ evaluation: 'GOOD', numeric_score: 3, question_results: [] }}
         />
       </QuizResultProvider>
@@ -158,14 +148,8 @@ describe('QuizMessageList — the evaluation card', () => {
     expect(card).not.toContain('quiz-result-slots-fallback');
     expect(card.match(/data-testid="staff-adjust-panel"/g)).toHaveLength(1);
 
-    // A running attempt shows none; no slots (a drawer without them) render nothing.
-    const running = renderToStaticMarkup(
-      <QuizResultProvider value={slots}>
-        <QuizMessageList messages={[{ id: 'm1', role: 'assistant', content: 'Hi' }]} />
-      </QuizResultProvider>
-    );
-    expect(running).not.toContain('staff-adjust-panel');
-    expect(renderToStaticMarkup(<QuizMessageList messages={[]} readOnly />)).not.toContain(
+    // No slots (a drawer without them) render nothing.
+    expect(renderToStaticMarkup(<QuizMessageList messages={[]} />)).not.toContain(
       'quiz-result-slots-fallback'
     );
   });

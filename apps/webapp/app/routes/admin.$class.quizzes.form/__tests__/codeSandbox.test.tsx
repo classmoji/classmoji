@@ -3,12 +3,9 @@
  * The quiz form's "Code sandbox questions" switch, MOUNTED in jsdom.
  *
  *   loader: quiz.code_sandbox_enabled → codeSandboxEnabled
- *   shown:  while new attempts of the quiz, as the form has it, run on the
- *           chat runtime (the message limit's rule: runsOnChatRuntime), the
- *           only runtime that offers sandboxes
+ *   shown:  for every quiz (every attempt runs on the chat runtime)
  *   submit: its value, for the owner and teachers and for an assistant alike
  *           (a content setting, not in QUIZ_AUTHOR_SETTING_KEYS)
- *   hidden: nothing is sent, so the saved value is left as it is
  */
 
 import type { ReactNode } from 'react';
@@ -98,11 +95,6 @@ const EXTRA =
   'Lets the quiz ask questions the student answers in an editable code sandbox ' +
   '(HTML/CSS/JS, TypeScript or React).';
 
-type ChatRuntime = { codeAware: boolean; other: boolean };
-const EVERY_QUIZ: ChatRuntime = { codeAware: true, other: true };
-const CODE_AWARE_ONLY: ChatRuntime = { codeAware: true, other: false };
-const NONE: ChatRuntime = { codeAware: false, other: false };
-
 /** The quiz as the loader hands it to the form: a regular (not code-aware) quiz. */
 const formQuiz = (over: Record<string, unknown> = {}) => ({
   id: 'quiz-1',
@@ -128,7 +120,6 @@ let root: Root;
 
 const render = async (
   quiz: Record<string, unknown> | null,
-  chatRuntime: ChatRuntime | undefined,
   { canAuthor = true }: { canAuthor?: boolean } = {}
 ) => {
   await act(async () => {
@@ -155,7 +146,6 @@ const render = async (
               weight: 0,
               isPublished: false,
             },
-            ...(chatRuntime ? { chatRuntime } : {}),
           },
         } as unknown as Parameters<typeof QuizFormDrawer>[0])}
       />
@@ -174,11 +164,6 @@ const clickUpdate = async () => {
   });
 };
 
-const remount = async () => {
-  await act(async () => root.unmount());
-  root = createRoot(container);
-};
-
 beforeEach(() => {
   mocks.submit.mockReset();
   container = document.createElement('div');
@@ -192,8 +177,8 @@ afterEach(async () => {
 });
 
 describe('Code sandbox questions in the quiz form', () => {
-  it('is shown with its label and help text when every quiz runs on the chat runtime', async () => {
-    await render(formQuiz(), EVERY_QUIZ);
+  it('is shown with its label and help text', async () => {
+    await render(formQuiz());
 
     const item = sandboxSwitch()!.closest('.ant-form-item')!;
     expect(item.querySelector('label')?.textContent).toBe('Code sandbox questions');
@@ -203,7 +188,7 @@ describe('Code sandbox questions in the quiz form', () => {
   });
 
   it('sits with the content settings, right after whole-course search', async () => {
-    await render(formQuiz(), EVERY_QUIZ);
+    await render(formQuiz());
 
     const labels = [...container.querySelectorAll('.ant-form-item-label label')].map(
       label => label.textContent
@@ -214,37 +199,22 @@ describe('Code sandbox questions in the quiz form', () => {
   });
 
   it('starts off on a new quiz', async () => {
-    await render(null, EVERY_QUIZ);
+    await render(null);
     expect(sandboxSwitch()!.getAttribute('aria-checked')).toBe('false');
   });
 
-  it('follows the Code-Aware switch when only code-aware quizzes run on the chat runtime', async () => {
-    await render(formQuiz({ repositoryId: 'repo-1' }), CODE_AWARE_ONLY);
-    expect(sandboxSwitch()).toBeNull();
-
-    await act(async () => {
-      codeAwareSwitch().click();
-    });
+  it('is shown whatever the Code-Aware switch says', async () => {
+    await render(formQuiz({ repositoryId: 'repo-1' }));
     expect(sandboxSwitch()).not.toBeNull();
 
     await act(async () => {
       codeAwareSwitch().click();
     });
-    expect(sandboxSwitch()).toBeNull();
-  });
-
-  it('is hidden when no quiz runs on the chat runtime, or the loader sent no reading', async () => {
-    await render(formQuiz({ codeSandboxEnabled: true }), NONE);
-    expect(sandboxSwitch()).toBeNull();
-    expect(container.textContent).not.toContain('Code sandbox questions');
-
-    await remount();
-    await render(formQuiz({ codeSandboxEnabled: true }), undefined);
-    expect(sandboxSwitch()).toBeNull();
+    expect(sandboxSwitch()).not.toBeNull();
   });
 
   it('round-trips: shows the saved value, and the save carries it, then the change', async () => {
-    await render(formQuiz({ codeSandboxEnabled: true }), EVERY_QUIZ);
+    await render(formQuiz({ codeSandboxEnabled: true }));
     expect(sandboxSwitch()!.getAttribute('aria-checked')).toBe('true');
 
     await clickUpdate();
@@ -267,18 +237,10 @@ describe('Code sandbox questions in the quiz form', () => {
     expect(mocks.submit.mock.calls[0][0].codeSandboxEnabled).toBe(false);
   });
 
-  it('sends nothing while hidden, so the saved value stays', async () => {
-    await render(formQuiz({ codeSandboxEnabled: true }), NONE);
-    await clickUpdate();
-
-    await vi.waitFor(() => expect(mocks.submit).toHaveBeenCalledTimes(1));
-    expect(mocks.submit.mock.calls[0][0]).not.toHaveProperty('codeSandboxEnabled');
-  });
-
   it("is an assistant's to change: enabled, and carried in their save", async () => {
     expect(QUIZ_AUTHOR_SETTING_KEYS as readonly string[]).not.toContain('codeSandboxEnabled');
 
-    await render(formQuiz(), EVERY_QUIZ, { canAuthor: false });
+    await render(formQuiz(), { canAuthor: false });
     expect(sandboxSwitch()!.disabled).toBe(false);
 
     await act(async () => {

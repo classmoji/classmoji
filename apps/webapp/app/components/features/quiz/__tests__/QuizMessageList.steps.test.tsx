@@ -1,13 +1,12 @@
 /**
- * How QuizMessageList shows exploration steps, rendered to markup.
+ * How QuizMessageList shows a saved reply's exploration steps, rendered to
+ * markup (a read-only transcript from the retired ai-agent runtime).
  *
- * A quiz that reads its course material through the classmoji MCP server
- * (content_get / content_search / content_list) streams those calls as steps.
- * They get a book icon, and a content_get step names the document it opened
- * ("Checking course material · Semantic HTML"). When every step is a content
- * step (a standard quiz's always are) the headers say so instead of the
- * code-analysis ones ("Exploring code...", "Analyzing your code...",
- * "Code Analysis (N steps)"), which stay for any run that explored code.
+ * A quiz that read its course material through the classmoji MCP server
+ * (content_get / content_search / content_list) saved those calls as steps.
+ * When every step is a content step (a standard quiz's always are) the
+ * collapsed header says so instead of "Code Analysis (N steps)", which stays
+ * for any run that explored code.
  */
 
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -25,10 +24,6 @@ const CONTENT_SEARCH = {
 };
 const READ_FILE = { action: 'Reading src/App.jsx', toolName: 'github_read' };
 
-/** Markup while the quiz is working, with these steps streaming in. */
-const live = (steps: object[]) =>
-  renderToStaticMarkup(<QuizMessageList messages={[]} loading explorationSteps={steps as never} />);
-
 /** Markup of a saved reply that carries these steps. */
 const saved = (steps: object[]) =>
   renderToStaticMarkup(
@@ -43,36 +38,6 @@ const saved = (steps: object[]) =>
       ]}
     />
   );
-
-describe('course-material steps while the quiz works', () => {
-  it('uses neutral headers, a book icon and the document title', () => {
-    const html = live([CONTENT_GET, CONTENT_SEARCH]);
-
-    expect(html).toContain('Looking things up…');
-    expect(html).toContain('Checking course material…');
-    expect(html).toContain('Checking course material · Semantic HTML');
-    expect(html).toContain('Searching the course');
-    expect(html).toContain('aria-label="book"');
-    expect(html).not.toContain('Exploring code');
-    expect(html).not.toContain('Analyzing your code');
-  });
-
-  it('keeps the code headers when the run also explored code', () => {
-    const html = live([READ_FILE, CONTENT_GET]);
-
-    expect(html).toContain('Exploring code...');
-    expect(html).toContain('Analyzing your code...');
-    expect(html).toContain('Checking course material · Semantic HTML');
-    expect(html).toContain('aria-label="book"');
-  });
-
-  it('shows a step without a title as its label alone', () => {
-    const html = live([{ ...CONTENT_GET, title: undefined }]);
-
-    expect(html).toContain('Checking course material<');
-    expect(html).not.toContain(' · ');
-  });
-});
 
 describe('course-material steps on a saved reply', () => {
   it('labels the collapsed list as course material', () => {
@@ -91,5 +56,27 @@ describe('course-material steps on a saved reply', () => {
 
     expect(html).toContain('Code Analysis (2 steps)');
     expect(html).not.toContain('Checked course material');
+  });
+});
+
+describe('a saved reply with quick-action markers', () => {
+  it('shows its text without the markers and offers no buttons to press', () => {
+    const html = renderToStaticMarkup(
+      <QuizMessageList
+        messages={[
+          {
+            id: 'm1',
+            role: 'assistant',
+            content: 'Not quite.\n\n[BUTTON:TRY_AGAIN] [BUTTON:NEXT]',
+          },
+        ]}
+      />
+    );
+
+    expect(html).toContain('Not quite.');
+    expect(html).not.toContain('[BUTTON:');
+    expect(html).not.toContain('Try Again');
+    expect(html).not.toContain('Next →');
+    expect(html).not.toContain('<button');
   });
 });

@@ -1,12 +1,8 @@
 // @vitest-environment jsdom
 /**
- * The quiz form states the per-attempt message limit for a quiz whose new
- * attempts run on the chat runtime, MOUNTED in jsdom:
- *
- *   loader: reads the runtime switch (QUIZ_TRIGGER_RUNTIME) through
- *           runtimeFor, for a code-aware quiz and for any other
- *   shown:  under Max Attempts, with N from the shared constant, only while
- *           the quiz as the form has it would run on the chat runtime
+ * The quiz form states the per-attempt message limit, MOUNTED in jsdom:
+ * under Max Attempts, with N from the shared constant, for every quiz (every
+ * attempt runs on the chat runtime).
  */
 
 import type { ReactNode } from 'react';
@@ -118,10 +114,7 @@ const formQuiz = (over: Record<string, unknown> = {}) => ({
 let container: HTMLDivElement;
 let root: Root;
 
-const render = async (
-  quiz: Record<string, unknown> | null,
-  chatRuntime: { codeAware: boolean; other: boolean } | undefined
-) => {
+const render = async (quiz: Record<string, unknown> | null) => {
   await act(async () => {
     root.render(
       <QuizFormDrawer
@@ -146,7 +139,6 @@ const render = async (
               weight: 0,
               isPublished: false,
             },
-            ...(chatRuntime ? { chatRuntime } : {}),
           },
         } as unknown as Parameters<typeof QuizFormDrawer>[0])}
       />
@@ -170,8 +162,8 @@ afterEach(async () => {
 });
 
 describe('the message limit in the quiz form', () => {
-  it('states N from the shared constant, under Max Attempts, for a quiz on the chat runtime', async () => {
-    await render(formQuiz(), { codeAware: true, other: false });
+  it('states N from the shared constant, under Max Attempts', async () => {
+    await render(formQuiz());
     expect(line()).toBe(LINE);
     expect(line()).toContain(`up to ${MAX_STUDENT_TURNS} messages`);
     // As Max Attempts' help text.
@@ -179,51 +171,28 @@ describe('the message limit in the quiz form', () => {
     expect(item.querySelector('.ant-form-item-extra')?.textContent).toBe(LINE);
   });
 
-  it('follows the Code-Aware switch when only code-aware quizzes run on the chat runtime', async () => {
-    await render(formQuiz({ includeCodeContext: false }), { codeAware: true, other: false });
-    expect(line()).toBeNull();
-
-    await act(async () => {
-      codeAwareSwitch().click();
-    });
+  it('shows it whatever the Code-Aware switch says', async () => {
+    await render(formQuiz({ includeCodeContext: false }));
     expect(line()).toBe(LINE);
 
     await act(async () => {
       codeAwareSwitch().click();
     });
-    expect(line()).toBeNull();
+    expect(line()).toBe(LINE);
   });
 
-  it('needs a linked repository for a quiz to count as code-aware', async () => {
-    await render(formQuiz({ repositoryId: null }), { codeAware: true, other: false });
-    expect(line()).toBeNull();
-  });
-
-  it('shows it for every quiz when every quiz runs on the chat runtime, a new one included', async () => {
-    await render(formQuiz({ includeCodeContext: false, repositoryId: null }), {
-      codeAware: true,
-      other: true,
-    });
+  it('shows it for a quiz with no repository, and for a new quiz', async () => {
+    await render(formQuiz({ includeCodeContext: false, repositoryId: null }));
     expect(line()).toBe(LINE);
 
     await act(async () => root.unmount());
     root = createRoot(container);
-    await render(null, { codeAware: true, other: true });
+    await render(null);
     expect(line()).toBe(LINE);
-  });
-
-  it('shows nothing when no quiz runs on the chat runtime, or the loader sent no reading', async () => {
-    await render(formQuiz(), { codeAware: false, other: false });
-    expect(line()).toBeNull();
-
-    await act(async () => root.unmount());
-    root = createRoot(container);
-    await render(formQuiz(), undefined);
-    expect(line()).toBeNull();
   });
 });
 
-describe('the loader: which quizzes run on the chat runtime', () => {
+describe('the loader', () => {
   const load = async () =>
     (await loader({
       params: { class: CLASS_SLUG },
@@ -239,17 +208,7 @@ describe('the loader: which quizzes run on the chat runtime', () => {
     mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
   });
 
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
-  it.each([
-    ['', { codeAware: false, other: false }],
-    ['off', { codeAware: false, other: false }],
-    ['code_aware', { codeAware: true, other: false }],
-    ['all', { codeAware: true, other: true }],
-  ])('QUIZ_TRIGGER_RUNTIME=%j', async (value, expected) => {
-    vi.stubEnv('QUIZ_TRIGGER_RUNTIME', value);
-    expect((await load()).chatRuntime).toEqual(expected);
+  it('sends no runtime reading: there is one runtime', async () => {
+    expect(await load()).not.toHaveProperty('chatRuntime');
   });
 });

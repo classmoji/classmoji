@@ -95,7 +95,7 @@ vi.mock('~/components', () => ({
   UserThumbnailView: () => null,
   GradeBadge: () => null,
   SectionHeader: () => null,
-  QuizAttemptInterface: () => null,
+  QuizAttemptView: () => null,
 }));
 vi.mock('~/hooks', () => ({
   useRouteDrawer: () => ({ opened: true }),
@@ -857,7 +857,7 @@ describe('student attempt drawer payload', () => {
     expect(payload.attempt.partial_credit_percentage).toBe(80);
   });
 
-  it('sends exactly the keys the drawer and QuizAttemptInterface take', async () => {
+  it('sends exactly the keys the drawer and QuizAttemptView take', async () => {
     mocks.assertClassroomAccess.mockResolvedValue({
       userId: ADA.id,
       classroom: CLASSROOM,

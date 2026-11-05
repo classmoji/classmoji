@@ -1,6 +1,13 @@
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import type { MessageRole, Prisma, Role } from '@prisma/client';
-import { effectivePercentage, isClosed, isReleased, withLogins } from '@classmoji/utils';
+import {
+  effectivePercentage,
+  isClosed,
+  isReleased,
+  isTriggerChatAttempt,
+  QUIZ_CHAT_RUNTIME,
+  withLogins,
+} from '@classmoji/utils';
 import { findScaleByClassroomId, quizScaleForClassroom } from './emojiMapping.service.ts';
 
 // Staff grade adjustments: `ClassmojiService.quizAttempt.adjust` / `revert`.
@@ -1133,8 +1140,7 @@ export const TRIGGER_CHAT_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 export const createNew = async (
   quizId: string,
   userId: string,
-  membership: QuizAttemptMembership,
-  options: { agentRuntime?: 'ai_agent' | 'trigger_chat' } = {}
+  membership: QuizAttemptMembership
 ) => {
   if (!membership) {
     throw new Error('Membership required to create quiz attempt');
@@ -1185,6 +1191,10 @@ export const createNew = async (
   // lock): it no longer blocks a new attempt, and still counts toward
   // max_attempts below. Imported here, not at the top: quizGrading imports
   // this module.
+  //
+  // An unfinished attempt from the retired ai-agent runtime (`ai_agent`) can
+  // never be continued, so it never blocks a new one. It stays unfinished
+  // (read-only) and still counts toward max_attempts below.
   if (!isInstructor) {
     const incompleteAttempts = await getPrisma().quizAttempt.findMany({
       where: {
@@ -1208,6 +1218,7 @@ export const createNew = async (
     if (incompleteAttempts.length > 0) {
       const grading = await import('./quizGrading.service.ts');
       for (const attempt of incompleteAttempts) {
+        if (!isTriggerChatAttempt(attempt)) continue;
         if (!grading.isExpiredOpenAttempt(attempt)) {
           open.push(attempt);
           continue;
@@ -1285,22 +1296,19 @@ export const createNew = async (
   }
   // Instructors can always create attempts (for preview/testing)
 
-  // Create the new attempt. The runtime is stamped here, once: a
-  // `trigger_chat` attempt also records the contract version it is graded
-  // under and the deadline after which it takes no more turns.
+  // Create the new attempt, on the chat runtime (the only one there is now;
+  // the column's `ai_agent` default is what older rows carry). It records the
+  // contract version it is graded under and the deadline after which it takes
+  // no more turns.
   const startedAt = new Date();
   const newAttempt = await getPrisma().quizAttempt.create({
     data: {
       quiz_id: quizId,
       user_id: userId.toString(),
       started_at: startedAt,
-      ...(options.agentRuntime === 'trigger_chat'
-        ? {
-            agent_runtime: 'trigger_chat',
-            contract_version: CONTRACT_VERSION,
-            session_expires_at: new Date(startedAt.getTime() + TRIGGER_CHAT_SESSION_TTL_MS),
-          }
-        : {}),
+      agent_runtime: QUIZ_CHAT_RUNTIME,
+      contract_version: CONTRACT_VERSION,
+      session_expires_at: new Date(startedAt.getTime() + TRIGGER_CHAT_SESSION_TTL_MS),
     },
   });
 

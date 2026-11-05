@@ -28,14 +28,14 @@
  * Then the grant is written on the attempt, the session is started (or
  * re-joined), and its id is stored.
  *
- * The runtime switch (QUIZ_TRIGGER_RUNTIME) is never read here: the attempt's
- * own stamp decides.
+ * The attempt's own runtime stamp decides: an attempt from the retired
+ * ai-agent runtime (`ai_agent`) is read-only and never gets a session.
  */
 import { assertClassroomAccess } from '~/utils/helpers';
 import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
-import { isTriggerChatAttempt } from '~/utils/quizRuntime.server';
+import { isTriggerChatAttempt } from '@classmoji/utils';
 import { closeIfExpired } from '~/utils/quizAttemptExpiry.server';
 import {
   isTriggerConfigured,

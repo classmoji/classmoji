@@ -329,16 +329,15 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
 
   const createNewPreviewAttempt = async (repoName: string | null = null) => {
     try {
-      // Create new attempt with repoName saved to agent_config
-      // QuizAttemptInterface will auto-start and read repoName from agent_config
+      // Create new attempt with repoName saved to agent_config, where the
+      // chat runtime reads it
       const response = await fetch('/api/quiz', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           _action: 'restartQuiz',
           quizId: quiz.id,
-          attemptId: adminAttempt?.id || null, // For cleanup
-          repoName, // Saved to agent_config for QuizAttemptInterface to use
+          repoName, // Saved to agent_config for the chat runtime to use
         }),
       });
 
@@ -357,7 +356,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
         return;
       }
 
-      // Navigate to preview route - QuizAttemptInterface will call startQuiz
+      // Navigate to preview route - the chat starts when its drawer opens
       navigate(`/${rolePrefix}/${classSlug}/quizzes/${quizId}/preview/${result.attemptId}`);
     } catch (error: unknown) {
       console.error('[Preview] Error creating attempt:', error);
@@ -369,7 +368,6 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
   };
 
   // Resume existing attempt - just navigate, quiz continues with existing context
-  // QuizAttemptInterface won't auto-start because messages already exist
   const resumePreviewAttempt = () => {
     navigate(`/${rolePrefix}/${classSlug}/quizzes/${quizId}/preview/${adminAttempt!.id}`);
   };

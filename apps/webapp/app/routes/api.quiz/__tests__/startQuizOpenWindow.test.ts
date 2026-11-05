@@ -23,8 +23,6 @@ const assertAccessMock = vi.fn();
 const quizzesVisibleMock = vi.fn();
 const assertMutationMock = vi.fn();
 const getAuthSessionMock = vi.fn();
-const endQuizSessionMock = vi.fn();
-const initializeQuizViaAgentMock = vi.fn();
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
@@ -59,32 +57,8 @@ vi.mock('~/utils/aiFeatures.server', () => ({
   isAIAgentConfigured: () => true,
 }));
 
-vi.mock('~/utils/backgroundTask.server', () => ({
-  runBackgroundTask: vi.fn(),
-}));
-
-vi.mock('../../student.$class.quizzes/helpers.server', () => ({
-  getInstallationToken: vi.fn(async () => 'install-token'),
-  gitlabProjectAccess: vi.fn(async () => null),
-}));
-
-vi.mock('../../student.$class.quizzes/aiAgent.server', () => ({
-  initializeQuizViaAgent: (...a: unknown[]) => initializeQuizViaAgentMock(...a),
-  sendMessageToAgent: vi.fn(),
-  endQuizSession: (...a: unknown[]) => endQuizSessionMock(...a),
-}));
-
 vi.mock('@classmoji/auth/server', () => ({
   getAuthSession: (...a: unknown[]) => getAuthSessionMock(...a),
-}));
-
-// The per-call MCP read token (quiz source material, Stage 2). Mocked so no
-// test here mints against a real database.
-vi.mock('@classmoji/auth/mcp-token', () => ({
-  mintMcpAccessToken: vi.fn(async () => ({
-    accessToken: 'mcp-token',
-    expiresAt: new Date('2030-01-01T00:00:00.000Z'),
-  })),
 }));
 
 const { action } = await import('../route.ts');
@@ -163,7 +137,6 @@ describe.each(START_PATHS)('api.quiz %s — a quiz that is not open now', (_path
       // No attempt exists to configure, read or start.
       expect(updateAgentConfigMock).not.toHaveBeenCalled();
       expect(findWithMessagesMock).not.toHaveBeenCalled();
-      expect(initializeQuizViaAgentMock).not.toHaveBeenCalled();
     }
   );
 });

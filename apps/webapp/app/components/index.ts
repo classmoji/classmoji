@@ -44,9 +44,9 @@ import GradeLabel from './features/grading/GradeLabel';
 import ProfileDropdown from './features/profile/ProfileDropdown';
 import UserThumbnailView from './features/profile/UserThumbnailView';
 
-// The attempt drawer's body: QuizChat for an attempt on the chat runtime, the
-// legacy QuizAttemptInterface for every other attempt (see QuizAttemptView).
-import QuizAttemptInterface from './features/quiz/QuizAttemptView';
+// The attempt drawer's body: QuizChat for an attempt on the chat runtime, a
+// read-only transcript for one from the retired ai-agent runtime.
+import QuizAttemptView from './features/quiz/QuizAttemptView';
 
 import AvatarGroup from './features/teams/AvatarGroup';
 import TeamThumbnailView from './features/teams/TeamThumbnailView';
@@ -119,7 +119,7 @@ export {
   UserThumbnailView,
 
   // Feature Components - Quiz
-  QuizAttemptInterface,
+  QuizAttemptView,
 
   // Feature Components - Teams
   AvatarGroup,

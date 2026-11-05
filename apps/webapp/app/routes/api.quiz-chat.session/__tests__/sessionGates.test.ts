@@ -261,14 +261,6 @@ describe('api.quiz-chat.session — the happy path', () => {
     );
   });
 
-  it('acts on the attempt stamp, not the runtime switch', async () => {
-    vi.stubEnv('QUIZ_TRIGGER_RUNTIME', 'off');
-
-    const response = await post({ attemptId: ATTEMPT_ID });
-
-    expect(response.status).toBe(200);
-  });
-
   it('treats an attempt with no deadline stamped as open', async () => {
     attemptFindByIdMock.mockResolvedValue(attemptRow({ session_expires_at: null }));
 

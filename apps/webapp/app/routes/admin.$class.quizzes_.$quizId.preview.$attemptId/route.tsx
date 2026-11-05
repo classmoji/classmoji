@@ -2,12 +2,12 @@ import { useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router';
 import { Drawer, ConfigProvider, theme, Modal } from 'antd';
 import { useRouteDrawer, useDarkMode } from '~/hooks';
-import { QuizAttemptInterface } from '~/components';
+import { QuizAttemptView } from '~/components';
 import { useAskMojiAttempt } from '~/components/features/ask-moji/viewing';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { attemptDrawerView, chatActivityView, quizDrawerView } from '~/utils/quizPayloads';
-import { isTriggerChatAttempt } from '~/utils/quizRuntime.server';
+import { isTriggerChatAttempt } from '@classmoji/utils';
 import { closeIfExpired } from '~/utils/quizAttemptExpiry.server';
 import type { Route } from './+types/route';
 
@@ -103,7 +103,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     ? await ClassmojiService.quizChat.messageLimitOf(attemptData.attempt.id)
     : null;
 
-  // Send only what the drawer and QuizAttemptInterface read — see
+  // Send only what the drawer and QuizAttemptView read — see
   // ~/utils/quizPayloads. Both rows arrive joined to much more: the attempt to
   // its user, quiz and classroom; the quiz to every attempt and its user.
   return {
@@ -165,8 +165,9 @@ export default function AdminQuizPreviewDrawer({ loaderData }: Route.ComponentPr
       navigateAway(newAttemptId);
       return;
     }
-    // If quiz is not complete, show confirmation
-    if (!data.readOnly) {
+    // A chat still in progress asks first. An unfinished attempt from the
+    // retired ai-agent runtime is read-only: nothing to leave.
+    if (!data.readOnly && isTriggerChatAttempt(data.attempt)) {
       setShowConfirm(true);
     } else {
       navigateAway();
@@ -210,7 +211,7 @@ export default function AdminQuizPreviewDrawer({ loaderData }: Route.ComponentPr
           },
         }}
       >
-        <QuizAttemptInterface {...data} onClose={handleClose} isVisible={opened} />
+        <QuizAttemptView {...data} onClose={handleClose} isVisible={opened} />
       </Drawer>
 
       <Modal
