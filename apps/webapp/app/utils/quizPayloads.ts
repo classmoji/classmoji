@@ -256,7 +256,11 @@ export const attemptGradeView = ({
   let lateHours: number | null = null;
   let countedEmoji: string | null = null;
   if (late && late.studentDeadline != null) {
-    const score = countingQuizScore([attempt], null, { ...late, emojiScale });
+    // A completed attempt (checked above): its runtime does not change its score.
+    const score = countingQuizScore([{ ...attempt, agent_runtime: null }], null, {
+      ...late,
+      emojiScale,
+    });
     lateHours = lateHoursOf(attempt.completed_at, late.studentDeadline, late.extensionHours);
     countedEmoji = countedEmojiOf(
       grade.effective.percentage,
@@ -634,7 +638,9 @@ export const quizResultStatsView = (
   return {
     totalAttempts: all.length,
     completedAttempts: completed.length,
-    inProgressAttempts: all.length - completed.length,
+    // Running ones only: an unfinished attempt from the retired ai-agent
+    // runtime never finishes, so it is not in progress.
+    inProgressAttempts: all.filter(a => a.open).length,
     completionRate: all.length > 0 ? Math.round((completed.length / all.length) * 1000) / 10 : 0,
     averageEmoji:
       scores.length > 0

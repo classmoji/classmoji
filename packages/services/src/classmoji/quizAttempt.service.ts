@@ -827,6 +827,8 @@ export const findForUserByQuizIds = async (userId: string, quizIds: string[]) =>
       quiz_id: true,
       started_at: true,
       completed_at: true,
+      // Whether an unfinished attempt is still running (`isOpenQuizAttempt`).
+      agent_runtime: true,
       partial_credit_percentage: true,
       adjusted_emoji: true,
     },

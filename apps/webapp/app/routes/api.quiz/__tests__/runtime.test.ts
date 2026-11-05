@@ -16,6 +16,8 @@ const findWithMessagesMock = vi.fn();
 const attemptFindByIdMock = vi.fn();
 const createNewMock = vi.fn();
 const updateDurationsMock = vi.fn();
+const recordModalClosedMock = vi.fn();
+const modalGapMock = vi.fn();
 const auditCreateMock = vi.fn();
 
 const assertAccessMock = vi.fn();
@@ -31,8 +33,8 @@ vi.mock('@classmoji/services', () => ({
       createNew: (...a: unknown[]) => createNewMock(...a),
       updateAgentConfig: vi.fn(),
       updateDurations: (...a: unknown[]) => updateDurationsMock(...a),
-      recordModalClosed: vi.fn(),
-      calculateAndApplyModalGap: vi.fn(),
+      recordModalClosed: (...a: unknown[]) => recordModalClosedMock(...a),
+      calculateAndApplyModalGap: (...a: unknown[]) => modalGapMock(...a),
       deleteAttempt: vi.fn(),
     },
     quizSourceMaterial: { countStartable: vi.fn() },
@@ -110,6 +112,8 @@ beforeEach(() => {
     messages: [],
   }));
   createNewMock.mockResolvedValue({ success: true, attemptId: 'attempt-new' });
+  recordModalClosedMock.mockResolvedValue({});
+  modalGapMock.mockResolvedValue({ gapApplied: false, gapMs: 0 });
   quizzesVisibleMock.mockResolvedValue(true);
   assertMutationMock.mockReturnValue(undefined);
   assertAccessMock.mockResolvedValue({
@@ -237,22 +241,50 @@ describe('api.quiz — the timing actions', () => {
     });
   });
 
-  it('still refuses metrics for a completed ai_agent attempt with 400', async () => {
-    attemptFindByIdMock.mockResolvedValue({
-      ...attemptRow('ai_agent'),
-      completed_at: new Date('2026-09-30T12:00:00Z'),
-    });
+  it.each([
+    ['unfinished', null],
+    ['completed', new Date('2026-09-28T12:00:00Z')],
+  ])('refuses metrics for a %s ai_agent attempt with 409', async (_, completedAt) => {
+    attemptFindByIdMock.mockResolvedValue({ ...attemptRow('ai_agent'), completed_at: completedAt });
     const response = await post({
       _action: 'updateMetrics',
       attemptId: ATTEMPT_ID,
       totalDurationMs: 90_000,
     });
 
-    expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({
-      skipped: true,
-      reason: 'Quiz already completed',
-    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: 'QUIZ_RUNTIME_MISMATCH' });
     expect(updateDurationsMock).not.toHaveBeenCalled();
   });
+
+  it.each(['recordModalClose', 'recordModalOpen'])(
+    '%s answers 409 for an unfinished ai_agent attempt and records nothing',
+    async name => {
+      attemptFindByIdMock.mockResolvedValue(attemptRow('ai_agent'));
+      const response = await post({ _action: name, attemptId: ATTEMPT_ID, totalDurationMs: 1 });
+
+      expect(response.status).toBe(409);
+      expect(recordModalClosedMock).not.toHaveBeenCalled();
+      expect(modalGapMock).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['recordModalClose', 'recordModalOpen'])(
+    "%s still refuses another member's ai_agent attempt with 403 first",
+    async name => {
+      attemptFindByIdMock.mockResolvedValue({ ...attemptRow('ai_agent'), user_id: 'student-2' });
+      const response = await post({ _action: name, attemptId: ATTEMPT_ID });
+
+      expect(response.status).toBe(403);
+    }
+  );
+
+  it.each(['recordModalClose', 'recordModalOpen'])(
+    '%s still works for a chat attempt',
+    async name => {
+      const response = await post({ _action: name, attemptId: ATTEMPT_ID, totalDurationMs: 1 });
+
+      expect(response.status).toBe(200);
+    }
+  );
 });

@@ -19,6 +19,7 @@
  */
 
 import type { QuizEvaluationRecordV2 } from './quizAgent/records.ts';
+import { isOpenQuizAttempt } from './quiz.ts';
 import {
   countingQuizScore,
   lateHours as lateHoursOf,
@@ -110,6 +111,12 @@ export interface QuizResultAttempt {
   id: string;
   started_at: Date | string;
   completed_at: Date | string | null;
+  /**
+   * Still running (`isOpenQuizAttempt`). False for a completed attempt and for
+   * an unfinished one from the retired ai-agent runtime, which never finishes
+   * ("Not finished", never "In progress").
+   */
+  open: boolean;
   /** The effective score: the staff adjustment when there is one, else the AI's. */
   partialCreditScore: number | null;
   firstAttemptScore: number | null;
@@ -157,6 +164,8 @@ export interface QuizResultStudent {
 export interface QuizViewerAttempt {
   id: string;
   completed_at: Date | string | null;
+  /** Still running (`isOpenQuizAttempt`): the preview can be resumed. */
+  open: boolean;
 }
 
 /** The attempt columns this module reads; any other column is ignored. */
@@ -165,6 +174,8 @@ export interface QuizAttemptSource {
   user_id: string;
   started_at: Date | string;
   completed_at: Date | string | null;
+  /** The runtime it was created on. Required, like `ScorableQuizAttempt`. */
+  agent_runtime: string | null;
   total_duration_ms: number | null;
   unfocused_duration_ms: number | null;
   partial_credit_percentage: number | null;
@@ -274,6 +285,7 @@ export const buildQuizResultRows = ({
       id: attempt.id,
       started_at: attempt.started_at,
       completed_at: attempt.completed_at,
+      open: isOpenQuizAttempt(attempt),
       partialCreditScore: score(effectivePercentage(attempt, emojiScale)),
       firstAttemptScore: score(attempt.first_attempt_percentage),
       grade: quizAttemptGrade(attempt, emojiScale),
@@ -383,6 +395,8 @@ export const buildQuizResultRows = ({
 
   return {
     students,
-    viewerAttempt: own ? { id: own.id, completed_at: own.completed_at } : null,
+    viewerAttempt: own
+      ? { id: own.id, completed_at: own.completed_at, open: isOpenQuizAttempt(own) }
+      : null,
   };
 };

@@ -181,6 +181,7 @@ export const loadQuizGradeItems = async ({
         user_id: true,
         started_at: true,
         completed_at: true,
+        agent_runtime: true,
         partial_credit_percentage: true,
         adjusted_emoji: true,
       },

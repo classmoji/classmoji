@@ -119,6 +119,7 @@ const attemptRow = (id: string, over: Record<string, unknown>) => ({
   conversation_id: `${SENTINEL.conversation}-${id}`,
   started_at: new Date('2026-03-01T10:00:00Z'),
   completed_at: null,
+  agent_runtime: 'trigger_chat',
   score: null,
   feedback: SENTINEL.feedback,
   attempt_number: 1,
@@ -265,6 +266,26 @@ describe('student quiz list payload', () => {
     // No grade number is sent (E1): the grade is the classroom's emoji.
     expect('score' in quiz).toBe(false);
     expect(JSON.stringify(quiz.attempts)).not.toContain('partialCreditScore');
+  });
+
+  it('marks an unfinished attempt from the retired ai-agent runtime not_finished, never in_progress', async () => {
+    const legacy = attemptRow('attempt-3', {
+      started_at: new Date('2026-03-03T10:00:00Z'),
+      agent_runtime: 'ai_agent',
+    });
+    mocks.quizFindMany.mockResolvedValue([
+      { ...QUIZ_ROW, attempts: [legacy, IN_PROGRESS, COMPLETED] },
+    ]);
+
+    const [quiz] = (await load()).quizzes;
+
+    expect(quiz.attempts.map(a => [a.id, a.status])).toEqual([
+      ['attempt-3', 'not_finished'],
+      ['attempt-2', 'in_progress'],
+      ['attempt-1', 'completed'],
+    ]);
+    // It still counts toward max_attempts (3): no new attempt.
+    expect(quiz.attemptsSummary).toMatchObject({ count: 3, canCreateNew: false });
   });
 
   it('gives the summary the fields the list reads, maxAttempts included', async () => {

@@ -62,6 +62,7 @@ import {
   parseMessageButtons,
   parseQuestionCard,
   parseQuestionComplete,
+  isOpenQuizAttempt,
   quizEvaluationRecord,
   stripQuestionComplete,
 } from '@classmoji/utils';
@@ -653,7 +654,8 @@ export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
   annotations: { destructive: false, idempotent: true, openWorld: false },
   title: 'Get a quiz attempt',
   description:
-    'One quiz attempt: the student, when it started and completed, grade_emoji and ' +
+    'One quiz attempt: the student, when it started and completed, status (IN_PROGRESS, ' +
+    'COMPLETED, NOT_FINISHED: an old attempt that can no longer finish), grade_emoji and ' +
     "first_attempt_emoji (emoji on the classroom's own scale, score-N badges on the numeric " +
     'scale; never numbers), band, the staff adjustment (adjusted, original_emoji, ' +
     'adjusted_at, adjusted_by; adjustment_orphaned: the stored adjusted_emoji left the ' +
@@ -811,7 +813,13 @@ export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
         on_roster: Boolean(student),
         is_staff_preview: Boolean(staff) && !student,
         is_former_member: !student && !staff,
-        status: completed ? 'COMPLETED' : 'IN_PROGRESS',
+        // NOT_FINISHED: an unfinished attempt from the retired ai-agent
+        // runtime, which can never finish.
+        status: completed
+          ? 'COMPLETED'
+          : isOpenQuizAttempt(attempt)
+            ? 'IN_PROGRESS'
+            : 'NOT_FINISHED',
         started_at: iso(attempt.started_at),
         completed_at: iso(attempt.completed_at),
         ended_by: messageLimit?.endedBy ?? null,

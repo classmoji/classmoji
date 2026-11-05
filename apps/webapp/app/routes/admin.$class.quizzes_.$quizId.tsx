@@ -377,8 +377,9 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
 
     // For code-aware quizzes, show repo selection modal for new attempts only
     if (quiz.include_code_context) {
-      // Check for existing in-progress attempt to determine action
-      if (adminAttempt && !adminAttempt.completed_at) {
+      // Check for existing in-progress attempt to determine action. An
+      // unfinished one from the retired ai-agent runtime can't be resumed.
+      if (adminAttempt?.open) {
         Modal.confirm({
           title: 'Resume or Start New?',
           content:
@@ -404,7 +405,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
       }
     } else {
       // Non-code-aware quiz - proceed without repo selection
-      if (adminAttempt && !adminAttempt.completed_at) {
+      if (adminAttempt?.open) {
         Modal.confirm({
           title: 'Resume or Start New?',
           content:
@@ -533,7 +534,8 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
         if (record.completed_at) {
           return <Tag color="green">Completed</Tag>;
         }
-        return <Tag color="blue">In Progress</Tag>;
+        // An unfinished attempt from the retired ai-agent runtime never finishes.
+        return record.open ? <Tag color="blue">In Progress</Tag> : <Tag>Not finished</Tag>;
       },
     },
     {
@@ -587,7 +589,11 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
       dataIndex: 'focusMetrics',
       render: (focusMetrics: FocusMetrics | null, record: QuizAttempt) => {
         if (!record.completed_at) {
-          return <span className="text-gray-400 dark:text-gray-500 italic">In progress</span>;
+          return (
+            <span className="text-gray-400 dark:text-gray-500 italic">
+              {record.open ? 'In progress' : 'Not finished'}
+            </span>
+          );
         }
         if (!focusMetrics || !focusMetrics.totalMs) {
           return <span className="text-gray-400 dark:text-gray-500 italic">N/A</span>;

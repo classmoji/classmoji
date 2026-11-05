@@ -82,14 +82,18 @@ const iso = (value: Date | string | null | undefined) => {
 
 /**
  * Where a row stands on the quiz: COMPLETED once any attempt is completed,
- * else IN_PROGRESS with an attempt open, else NOT_STARTED.
+ * else IN_PROGRESS with an attempt still running, else NOT_FINISHED when its
+ * only attempts are unfinished ones from the retired ai-agent runtime (they
+ * never finish), else NOT_STARTED.
  */
 const statusOf = (row: QuizResultStudent) =>
   row.attempts.length === 0
     ? ('NOT_STARTED' as const)
     : row.attempts.some(attempt => attempt.completed_at)
       ? ('COMPLETED' as const)
-      : ('IN_PROGRESS' as const);
+      : row.attempts.some(attempt => attempt.open)
+        ? ('IN_PROGRESS' as const)
+        : ('NOT_FINISHED' as const);
 
 export const listQuizAttemptsTool: ToolDefinition<ListQuizAttemptsArgs> = {
   name: 'list_quiz_attempts',
@@ -98,7 +102,8 @@ export const listQuizAttemptsTool: ToolDefinition<ListQuizAttemptsArgs> = {
   description:
     "A quiz's results, as its web results page shows them. students: every student on the " +
     'roster, not-started ones included, each with status (NOT_STARTED, IN_PROGRESS, ' +
-    'COMPLETED), every attempt (id, started_at, completed_at, last_activity while open, ' +
+    'COMPLETED, NOT_FINISHED: only old attempts that can no longer finish), every attempt ' +
+    '(id, started_at, completed_at, open, last_activity while open, ' +
     'grade_emoji, first_attempt_emoji, focus_percentage, late_hours, is_counting; adjusted, ' +
     'original_emoji (the AI grade), adjusted_at, adjusted_by; instructor_comment, ' +
     'comment_at, comment_by; both from quiz_attempt_adjust; adjustment_orphaned: the stored ' +
@@ -223,9 +228,9 @@ export const listQuizAttemptsTool: ToolDefinition<ListQuizAttemptsArgs> = {
       id: attempt.id,
       started_at: iso(attempt.started_at),
       completed_at: iso(attempt.completed_at),
-      ...(attempt.completed_at
-        ? {}
-        : { last_activity: iso(rowsById.get(attempt.id)?.last_activity) }),
+      // Still running; false for an unfinished attempt from the retired runtime.
+      open: attempt.open,
+      ...(attempt.open ? { last_activity: iso(rowsById.get(attempt.id)?.last_activity) } : {}),
       // A completed attempt's grades only, as on the review page; the
       // effective grade is an adjustment's own emoji, else the AI's.
       grade_emoji: attempt.completed_at ? attempt.grade.effective.emoji : null,
@@ -296,6 +301,7 @@ export const listQuizAttemptsTool: ToolDefinition<ListQuizAttemptsArgs> = {
         roster_students: rosterIds.size,
         not_started: withStatus('NOT_STARTED'),
         in_progress: withStatus('IN_PROGRESS'),
+        not_finished: withStatus('NOT_FINISHED'),
         completed: withStatus('COMPLETED'),
         counts_as_zero: students.filter(row => row.countsAsZero).length,
         staff_previews: staffPreviews.length,

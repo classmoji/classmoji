@@ -397,7 +397,8 @@ export default function StudentQuizAttemptDrawer({ loaderData }: Route.Component
   useAskMojiAttempt({
     quizId: data.quiz.id,
     quizName: data.quiz.name,
-    readOnly: data.readOnly,
+    // An attempt from the retired ai-agent runtime is read-only, finished or not.
+    readOnly: data.readOnly || !isTriggerChatAttempt(data.attempt),
     viewerOwnsAttempt: data.viewerOwnsAttempt,
   });
   const { opened } = useRouteDrawer({});

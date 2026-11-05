@@ -27,6 +27,7 @@
  *   final time of an attempt completed within the last ten minutes
  * - recordModalClose: Records when the quiz modal is closed
  * - recordModalOpen: Calculates gap time and adds to unfocused duration when modal reopens
+ * The timing actions answer 409 for an `ai_agent` attempt too.
  */
 import { assertClassroomAccess } from '~/utils/helpers';
 import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
@@ -486,25 +487,13 @@ export async function action({ request }: Route.ActionArgs) {
             });
           }
 
-          // CRITICAL: Reject updates for an already-completed attempt from the
-          // retired ai-agent runtime. A chat attempt is completed by its task after the student's
-          // last message, so its drawer sends the time since then once it sees
-          // the completion; the service takes it only within ten minutes of
-          // the completion, and only ever raises its two durations.
-          if (attempt.completed_at && !isTriggerChatAttempt(attempt)) {
-            return new Response(
-              JSON.stringify({
-                success: false,
-                skipped: true,
-                reason: 'Quiz already completed',
-                completedAt: attempt.completed_at,
-              }),
-              {
-                status: 400,
-                headers: { 'Content-Type': 'application/json' },
-              }
-            );
-          }
+          // An attempt from the retired ai-agent runtime is read-only, finished
+          // or not: it takes no time. A chat attempt is completed by its task
+          // after the student's last message, so its drawer sends the time
+          // since then once it sees the completion; the service takes it only
+          // within ten minutes of the completion, and only ever raises its two
+          // durations.
+          if (!isTriggerChatAttempt(attempt)) return runtimeMismatchResponse();
 
           const metrics = extractDurationMetrics(data);
           const result = await ClassmojiService.quizAttempt.updateDurations(
@@ -558,6 +547,9 @@ export async function action({ request }: Route.ActionArgs) {
             });
           }
 
+          // Read-only: an attempt from the retired ai-agent runtime.
+          if (!isTriggerChatAttempt(attempt)) return runtimeMismatchResponse();
+
           // Extract metrics if provided (for atomic close + metrics update)
           const metrics = extractDurationMetrics(data);
           const hasMetrics = Object.keys(metrics).length > 0;
@@ -606,6 +598,9 @@ export async function action({ request }: Route.ActionArgs) {
               headers: { 'Content-Type': 'application/json' },
             });
           }
+
+          // Read-only: an attempt from the retired ai-agent runtime.
+          if (!isTriggerChatAttempt(attempt)) return runtimeMismatchResponse();
 
           const result = await ClassmojiService.quizAttempt.calculateAndApplyModalGap(
             data.attemptId
