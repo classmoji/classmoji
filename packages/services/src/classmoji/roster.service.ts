@@ -2,7 +2,6 @@ import getPrisma from '@classmoji/database';
 import { parseGitlabId } from '@classmoji/utils';
 import { appUrl, escapeVars, inviteLandingUrl } from '../emails/escape.ts';
 import * as classroomService from './classroom.service.ts';
-import * as classroomMembershipService from './classroomMembership.service.ts';
 import * as classroomInviteService from './classroomInvite.service.ts';
 
 export interface RosterStudentInput {
@@ -21,8 +20,15 @@ export interface RosterEmail {
 }
 
 export interface AddStudentsResult {
+  /** Existing users newly enrolled by this call. */
   addedExistingUsers: number;
   invitedNewUsers: number;
+  /**
+   * Addresses (as the caller typed them) of users who were already students in
+   * this classroom: nothing is written or sent for them, and they are not
+   * counted in `addedExistingUsers`.
+   */
+  alreadyEnrolled: string[];
   /**
    * Composed notification emails for the CALLER to send. Services must not
    * import @classmoji/tasks (tasks already depends on services — importing it
@@ -43,6 +49,13 @@ export interface AddStudentsResult {
  * are enrolled directly (a STUDENT membership with has_accepted_invite=false,
  * pending their GitHub org invite; on Gitlab, active right away when they
  * already have Gitlab, see `activations`); unknown emails get a ClassroomInvite row.
+ * Users who are already students here are left alone and reported in
+ * `alreadyEnrolled` (no email, no activation, not counted as added).
+ *
+ * The memberships and the invites are written in ONE transaction: either both
+ * land or neither does, so a failed invite write can no longer leave students
+ * enrolled with no invites, no audit row and no emails. Emails, activations and
+ * the audit row are the caller's job, after this resolves.
  * Shared by the web "Add Students" action and the MCP roster_add_student tool
  * so both take one code path.
  *
@@ -67,7 +80,17 @@ export const addStudents = async ({
     throw new Error(`[roster] classroom ${classroomId} not found`);
   }
 
-  const emails = students.map(s => s.email.toLowerCase());
+  // One entry per address: the same student listed twice (in any casing) is
+  // one student, enrolled, counted and emailed once.
+  const seen = new Set<string>();
+  const uniqueStudents = students.filter(s => {
+    const key = s.email.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  const emails = uniqueStudents.map(s => s.email.toLowerCase());
   const existingUsers = await getPrisma().user.findMany({
     // Only a verified address identifies a person; an unverified one gets an
     // invite like any unknown address, claimed once they verify it.
@@ -99,7 +122,7 @@ export const addStudents = async ({
 
   const toAddDirectly: Array<RosterStudentInput & { userId: string; userName: string | null }> = [];
   const toInvite: RosterStudentInput[] = [];
-  for (const student of students) {
+  for (const student of uniqueStudents) {
     const existing = existingByEmail.get(student.email.toLowerCase());
     if (existing) {
       toAddDirectly.push({
@@ -112,85 +135,106 @@ export const addStudents = async ({
     }
   }
 
+  const invites = toInvite.map(student => ({
+    school_email: student.email,
+    classroom_id: classroomId,
+    // `name` is optional for the MCP caller but the column is NOT NULL.
+    student_name: student.name ?? '',
+  }));
+
+  // Memberships and invites commit together (#372). Who is already a student
+  // here is read inside the same transaction, so they are neither re-enrolled
+  // nor re-counted.
+  const enrolledUserIds = await getPrisma().$transaction(async tx => {
+    let enrolled = new Set<string>();
+    if (toAddDirectly.length > 0) {
+      const current = await tx.classroomMembership.findMany({
+        where: {
+          classroom_id: classroomId,
+          role: 'STUDENT',
+          user_id: { in: toAddDirectly.map(s => s.userId) },
+        },
+        select: { user_id: true },
+      });
+      enrolled = new Set(current.map(m => m.user_id));
+      const memberships = toAddDirectly
+        .filter(student => !enrolled.has(student.userId))
+        .map(student => ({
+          classroom_id: classroomId,
+          user_id: student.userId,
+          role: 'STUDENT' as const,
+          has_accepted_invite: readyOnGitLab.has(student.userId),
+        }));
+      if (memberships.length > 0) {
+        await tx.classroomMembership.createMany({ data: memberships, skipDuplicates: true });
+      }
+    }
+    if (invites.length > 0) {
+      await classroomInviteService.createManyInvites(invites, tx);
+    }
+    return enrolled;
+  });
+
+  const newlyEnrolled = toAddDirectly.filter(s => !enrolledUserIds.has(s.userId));
+  const alreadyEnrolled = toAddDirectly
+    .filter(s => enrolledUserIds.has(s.userId))
+    .map(s => s.email);
+
   const emailsOut: RosterEmail[] = [];
   const activations: AddStudentsResult['activations'] = [];
 
-  // Enroll existing users directly. On Github they still need to accept the
+  // Existing users just enrolled. On Github they still need to accept the
   // org invite; on Gitlab they are active if they already have Gitlab.
-  if (toAddDirectly.length > 0) {
-    const memberships = toAddDirectly.map(student => ({
-      classroom_id: classroomId,
-      user_id: student.userId,
-      role: 'STUDENT' as const,
-      has_accepted_invite: readyOnGitLab.has(student.userId),
-    }));
-    await classroomMembershipService.createMany(memberships);
-    if (org) {
-      for (const student of toAddDirectly) {
-        const gitlabUsername = readyOnGitLab.get(student.userId);
-        if (gitlabUsername) {
-          activations.push({ login: gitlabUsername, gitOrganizationId: org.id });
-        }
-      }
+  for (const student of newlyEnrolled) {
+    const gitlabUsername = readyOnGitLab.get(student.userId);
+    if (org && gitlabUsername) {
+      activations.push({ login: gitlabUsername, gitOrganizationId: org.id });
     }
-
-    for (const student of toAddDirectly) {
-      emailsOut.push({
-        payload: {
-          to: student.email,
-          template: {
-            id: 'roster-added',
-            // Names and classroom titles are user-authored, and Resend injects
-            // variables raw, so escape before they reach the template.
-            variables: escapeVars({
-              STUDENT_NAME: student.userName || student.name || 'there',
-              CLASSROOM_NAME: classroom.name,
-              APP_URL: appUrl(),
-            }),
-          },
+    emailsOut.push({
+      payload: {
+        to: student.email,
+        template: {
+          id: 'roster-added',
+          // Names and classroom titles are user-authored, and Resend injects
+          // variables raw, so escape before they reach the template.
+          variables: escapeVars({
+            STUDENT_NAME: student.userName || student.name || 'there',
+            CLASSROOM_NAME: classroom.name,
+            APP_URL: appUrl(),
+          }),
         },
-      });
-    }
+      },
+    });
   }
 
-  // Invite unknown emails (claimed when they register).
-  if (toInvite.length > 0) {
-    const invites = toInvite.map(student => ({
-      school_email: student.email,
-      classroom_id: classroomId,
-      // `name` is optional for the MCP caller but the column is NOT NULL.
-      student_name: student.name ?? '',
-    }));
-    await classroomInviteService.createManyInvites(invites);
-
-    for (const student of toInvite) {
-      emailsOut.push({
-        payload: {
-          to: student.email,
-          template: {
-            id: 'roster-invited',
-            // `student.name` is optional and teacher-typed: it previously
-            // rendered "Hi undefined!" when omitted, and was never escaped.
-            variables: escapeVars({
-              STUDENT_NAME: student.name || 'there',
-              CLASSROOM_NAME: classroom.name,
-              PROVIDER_LABEL:
-                classroom.git_organization?.provider === 'GITLAB' ? 'Gitlab' : 'Github',
-              // Carries a signed token for the invited address, which sign-up
-              // accepts as proof of it: the link used to be the same for
-              // everyone, and students retyping a different address at
-              // registration never got their invite.
-              APP_URL: inviteLandingUrl(signInvite(student.email)),
-            }),
-          },
+  // Unknown emails were invited above (claimed when they register).
+  for (const student of toInvite) {
+    emailsOut.push({
+      payload: {
+        to: student.email,
+        template: {
+          id: 'roster-invited',
+          // `student.name` is optional and teacher-typed: it previously
+          // rendered "Hi undefined!" when omitted, and was never escaped.
+          variables: escapeVars({
+            STUDENT_NAME: student.name || 'there',
+            CLASSROOM_NAME: classroom.name,
+            PROVIDER_LABEL: classroom.git_organization?.provider === 'GITLAB' ? 'Gitlab' : 'Github',
+            // Carries a signed token for the invited address, which sign-up
+            // accepts as proof of it: the link used to be the same for
+            // everyone, and students retyping a different address at
+            // registration never got their invite.
+            APP_URL: inviteLandingUrl(signInvite(student.email)),
+          }),
         },
-      });
-    }
+      },
+    });
   }
 
   return {
-    addedExistingUsers: toAddDirectly.length,
+    addedExistingUsers: newlyEnrolled.length,
     invitedNewUsers: toInvite.length,
+    alreadyEnrolled,
     emails: emailsOut,
     activations,
   };

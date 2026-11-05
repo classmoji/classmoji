@@ -90,6 +90,7 @@ describe('roster_add_student', () => {
     mocks.addStudents.mockResolvedValue({
       addedExistingUsers: 1,
       invitedNewUsers: 1,
+      alreadyEnrolled: [],
       emails: [{ payload: { to: 'a@x.edu', template: { id: 'roster-added', variables: {} } } }],
       activations: [],
     });
@@ -115,6 +116,7 @@ describe('roster_add_student', () => {
     mocks.addStudents.mockResolvedValue({
       addedExistingUsers: 0,
       invitedNewUsers: 0,
+      alreadyEnrolled: [],
       emails: [],
       activations: [],
     });
@@ -126,6 +128,7 @@ describe('roster_add_student', () => {
     mocks.addStudents.mockResolvedValue({
       addedExistingUsers: 1,
       invitedNewUsers: 0,
+      alreadyEnrolled: [],
       emails: [{ payload: { to: 'a@x.edu', template: { id: 'roster-added', variables: {} } } }],
       activations: [],
     });
@@ -134,6 +137,43 @@ describe('roster_add_student', () => {
     await expect(rosterAddStudentTool.handler(ARGS, CTX)).rejects.toThrow('trigger down');
     // The audit was written BEFORE the failing email send — mutation not stranded.
     expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports students already in the class separately from added and invited', async () => {
+    mocks.addStudents.mockResolvedValue({
+      addedExistingUsers: 0,
+      invitedNewUsers: 1,
+      alreadyEnrolled: ['a@x.edu'],
+      emails: [{ payload: { to: 'b@x.edu', template: { id: 'roster-invited', variables: {} } } }],
+      activations: [],
+    });
+
+    const payload = parse(await rosterAddStudentTool.handler(ARGS, CTX));
+    expect(payload).toEqual({
+      success: true,
+      added: 0,
+      invited: 1,
+      already_enrolled: ['a@x.edu'],
+      total: 2,
+    });
+    // Only the invitee is emailed; the audit row carries the count, not addresses.
+    expect(mocks.batchTrigger).toHaveBeenCalledWith({
+      emails: [{ to: 'b@x.edu', template: { id: 'roster-invited', variables: {} } }],
+    });
+    const row = mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(row.data).toMatchObject({
+      tool: 'roster_add_student',
+      added: 0,
+      invited: 1,
+      already_enrolled: 1,
+    });
+  });
+
+  it('writes no audit row and sends nothing when the roster write fails', async () => {
+    mocks.addStudents.mockRejectedValue(new Error('invite write failed'));
+    await expect(rosterAddStudentTool.handler(ARGS, CTX)).rejects.toThrow('invite write failed');
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+    expect(mocks.batchTrigger).not.toHaveBeenCalled();
   });
 });
 

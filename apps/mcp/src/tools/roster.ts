@@ -6,10 +6,10 @@
  *
  * ADD mirrors admin.$class.students.add: the DB split + email composition are
  * shared via ClassmojiService.roster.addStudents (extracted so route + tool
- * take one path); this tool triggers the returned emails. It sends REAL emails
- * and is NOT idempotent (calling twice emails twice — the DB writes are
- * skipDuplicates, the emails are not). It does NOT touch GitHub — activation
- * stays student-driven.
+ * take one path); this tool triggers the returned emails. It sends REAL emails.
+ * Students already in the class are skipped (no email, not counted) and listed
+ * in `already_enrolled`; an address with a pending invitation is invited, and
+ * emailed, again. It does NOT touch GitHub — activation stays student-driven.
  *
  * REMOVE triggers the single-source-of-truth remove_user_from_organization
  * task (never reimplemented). Unlike the web action — which forwards a
@@ -48,8 +48,9 @@ export const rosterAddStudentTool: ToolDefinition<RosterAddStudentArgs> = {
     'Adds students to the classroom roster by email (bulk). Owner only. Existing Classmoji users ' +
     'are enrolled immediately (on Github still pending their org invite; on Gitlab active right away ' +
     'if they already have Gitlab, with their repositories created now, else on their first Gitlab sign-in); ' +
-    'unknown emails get an invitation row. Sends a real email to every student — NOT idempotent, ' +
-    'calling twice emails twice.',
+    'unknown emails get an invitation row. Sends a real email to every student it enrolls or invites. ' +
+    'Students already in the class are skipped and listed in already_enrolled; an address with a ' +
+    'pending invitation is emailed again.',
   scope: 'write',
   roles: OWNER_ONLY,
   inputSchema: {
@@ -76,8 +77,9 @@ export const rosterAddStudentTool: ToolDefinition<RosterAddStudentArgs> = {
     });
 
     // Audit BEFORE sending emails: addStudents has already committed the
-    // memberships/invites, so a transient email-service failure must not leave
-    // that mutation un-audited (plan §5.1 — every mutation writes an audit row).
+    // memberships/invites (together, in one transaction), so a transient
+    // email-service failure must not leave that mutation un-audited (plan §5.1
+    // — every mutation writes an audit row).
     await writeAudit(ctx, {
       resource_type: 'STUDENT_ROSTER',
       action: 'CREATE',
@@ -85,6 +87,7 @@ export const rosterAddStudentTool: ToolDefinition<RosterAddStudentArgs> = {
         tool: 'roster_add_student',
         added: result.addedExistingUsers,
         invited: result.invitedNewUsers,
+        already_enrolled: result.alreadyEnrolled.length,
       },
     });
 
@@ -100,6 +103,8 @@ export const rosterAddStudentTool: ToolDefinition<RosterAddStudentArgs> = {
       success: true,
       added: result.addedExistingUsers,
       invited: result.invitedNewUsers,
+      // Addresses of students already in the class: nothing was sent to them.
+      already_enrolled: result.alreadyEnrolled,
       total: args.students.length,
     });
   },
