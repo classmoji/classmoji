@@ -142,42 +142,34 @@ export const addStudents = async ({
     student_name: student.name ?? '',
   }));
 
-  // Memberships and invites commit together (#372). Who is already a student
-  // here is read inside the same transaction, so they are neither re-enrolled
-  // nor re-counted.
-  const enrolledUserIds = await getPrisma().$transaction(async tx => {
-    let enrolled = new Set<string>();
+  // Memberships and invites commit together (#372). Only the rows this call
+  // actually inserted count as newly enrolled: a student already here, or one
+  // a concurrent add enrolled first, is skipped by the unique key and is
+  // neither re-enrolled, re-emailed nor re-counted.
+  const insertedUserIds = await getPrisma().$transaction(async tx => {
+    let inserted = new Set<string>();
     if (toAddDirectly.length > 0) {
-      const current = await tx.classroomMembership.findMany({
-        where: {
-          classroom_id: classroomId,
-          role: 'STUDENT',
-          user_id: { in: toAddDirectly.map(s => s.userId) },
-        },
-        select: { user_id: true },
-      });
-      enrolled = new Set(current.map(m => m.user_id));
-      const memberships = toAddDirectly
-        .filter(student => !enrolled.has(student.userId))
-        .map(student => ({
+      const rows = await tx.classroomMembership.createManyAndReturn({
+        data: toAddDirectly.map(student => ({
           classroom_id: classroomId,
           user_id: student.userId,
           role: 'STUDENT' as const,
           has_accepted_invite: readyOnGitLab.has(student.userId),
-        }));
-      if (memberships.length > 0) {
-        await tx.classroomMembership.createMany({ data: memberships, skipDuplicates: true });
-      }
+        })),
+        skipDuplicates: true,
+        select: { user_id: true },
+      });
+      inserted = new Set(rows.map(row => row.user_id));
     }
     if (invites.length > 0) {
       await classroomInviteService.createManyInvites(invites, tx);
     }
-    return enrolled;
+    return inserted;
   });
 
-  const newlyEnrolled = toAddDirectly.filter(s => !enrolledUserIds.has(s.userId));
+  const newlyEnrolled = toAddDirectly.filter(s => insertedUserIds.has(s.userId));
   const alreadyEnrolled = toAddDirectly
-    .filter(s => enrolledUserIds.has(s.userId))
+    .filter(s => !insertedUserIds.has(s.userId))
     .map(s => s.email);
 
   const emailsOut: RosterEmail[] = [];

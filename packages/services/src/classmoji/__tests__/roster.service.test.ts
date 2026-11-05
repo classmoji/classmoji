@@ -17,14 +17,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const userFindMany = vi.fn();
 const accountFindMany = vi.fn();
-const membershipFindMany = vi.fn();
+/** Users already holding a STUDENT row here: the insert skips them as duplicates. */
+const alreadyIn = new Set<string>();
 const membershipCreateMany = vi.fn();
 const inviteCreateMany = vi.fn();
 const transaction = vi.fn();
 const tx = {
   classroomMembership: {
-    findMany: (...a: unknown[]) => membershipFindMany(...a),
-    createMany: (...a: unknown[]) => membershipCreateMany(...a),
+    createManyAndReturn: (...a: unknown[]) => membershipCreateMany(...a),
   },
   classroomInvite: { createMany: (...a: unknown[]) => inviteCreateMany(...a) },
 };
@@ -47,7 +47,6 @@ beforeEach(() => {
   for (const m of [
     userFindMany,
     accountFindMany,
-    membershipFindMany,
     membershipCreateMany,
     inviteCreateMany,
     transaction,
@@ -56,8 +55,13 @@ beforeEach(() => {
     m.mockReset();
   }
   classroomFindById.mockResolvedValue({ id: 'class-1', name: 'CS1' });
-  membershipFindMany.mockResolvedValue([]);
-  membershipCreateMany.mockResolvedValue({ count: 1 });
+  alreadyIn.clear();
+  // createManyAndReturn with skipDuplicates: returns only the rows it inserted.
+  membershipCreateMany.mockImplementation(({ data }: { data: { user_id: string }[] }) =>
+    Promise.resolve(
+      data.filter(row => !alreadyIn.has(row.user_id)).map(row => ({ user_id: row.user_id }))
+    )
+  );
   inviteCreateMany.mockResolvedValue({ count: 1 });
   // An interactive transaction: run the callback against the tx client; a
   // throw inside it rejects the whole call (Prisma rolls back).
@@ -112,6 +116,7 @@ describe('roster.addStudents', () => {
         },
       ],
       skipDuplicates: true,
+      select: { user_id: true },
     });
     // Unknown email → invite row.
     expect(inviteCreateMany).toHaveBeenCalledWith({
@@ -214,7 +219,7 @@ describe('roster.addStudents', () => {
       { id: 'u-in', email: 'in@x.edu', name: 'In' },
       { id: 'u-new', email: 'fresh@x.edu', name: 'Fresh' },
     ]);
-    membershipFindMany.mockResolvedValue([{ user_id: 'u-in' }]);
+    alreadyIn.add('u-in');
 
     const result = await roster.addStudents({
       classroomId: 'class-1',
@@ -222,14 +227,14 @@ describe('roster.addStudents', () => {
       students: [{ email: 'In@x.edu' }, { email: 'fresh@x.edu' }],
     });
 
-    // The lookup is this classroom's STUDENT rows, read inside the transaction.
-    expect(membershipFindMany).toHaveBeenCalledWith({
-      where: { classroom_id: 'class-1', role: 'STUDENT', user_id: { in: ['u-in', 'u-new'] } },
-      select: { user_id: true },
-    });
+    // Both rows are offered; the unique key skips the one already enrolled.
     expect(membershipCreateMany).toHaveBeenCalledWith({
-      data: [expect.objectContaining({ user_id: 'u-new' })],
+      data: [
+        expect.objectContaining({ user_id: 'u-in' }),
+        expect.objectContaining({ user_id: 'u-new' }),
+      ],
       skipDuplicates: true,
+      select: { user_id: true },
     });
     expect(result.addedExistingUsers).toBe(1);
     expect(result.invitedNewUsers).toBe(0);
@@ -238,9 +243,9 @@ describe('roster.addStudents', () => {
     expect(result.emails.map(e => e.payload.to)).toEqual(['fresh@x.edu']);
   });
 
-  it('writes no membership and sends nothing when everyone is already enrolled', async () => {
+  it('enrolls no one and sends nothing when everyone is already enrolled', async () => {
     userFindMany.mockResolvedValue([{ id: 'u-in', email: 'in@x.edu', name: 'In' }]);
-    membershipFindMany.mockResolvedValue([{ user_id: 'u-in' }]);
+    alreadyIn.add('u-in');
 
     const result = await roster.addStudents({
       classroomId: 'class-1',
@@ -248,7 +253,8 @@ describe('roster.addStudents', () => {
       students: [{ email: 'in@x.edu' }],
     });
 
-    expect(membershipCreateMany).not.toHaveBeenCalled();
+    // The insert ran and wrote nothing new.
+    expect(membershipCreateMany).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({
       addedExistingUsers: 0,
       invitedNewUsers: 0,
@@ -268,7 +274,7 @@ describe('roster.addStudents', () => {
       { id: 'u-in', email: 'in@x.edu', name: 'In' },
       { id: 'u-new', email: 'fresh@x.edu', name: 'Fresh' },
     ]);
-    membershipFindMany.mockResolvedValue([{ user_id: 'u-in' }]);
+    alreadyIn.add('u-in');
     // Both have a gitlab.com account (no instance prefix on the id).
     accountFindMany.mockResolvedValue([
       { user_id: 'u-in', account_id: '11', username: 'in-gl' },
@@ -283,8 +289,12 @@ describe('roster.addStudents', () => {
 
     expect(result.activations).toEqual([{ login: 'fresh-gl', gitOrganizationId: 'org-1' }]);
     expect(membershipCreateMany).toHaveBeenCalledWith({
-      data: [expect.objectContaining({ user_id: 'u-new', has_accepted_invite: true })],
+      data: [
+        expect.objectContaining({ user_id: 'u-in' }),
+        expect.objectContaining({ user_id: 'u-new', has_accepted_invite: true }),
+      ],
       skipDuplicates: true,
+      select: { user_id: true },
     });
   });
 

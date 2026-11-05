@@ -99,6 +99,7 @@ describe('add students action', () => {
       action: 'CREATE',
       resourceType: 'STUDENT_ROSTER',
       metadata: { tool: 'web:students.add', added: 1, invited: 1, already_enrolled: 1 },
+      dedupe: false,
     });
     expect(order).toEqual(['audit', 'emails']);
   });

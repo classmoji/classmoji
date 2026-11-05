@@ -89,6 +89,8 @@ export const rosterAddStudentTool: ToolDefinition<RosterAddStudentArgs> = {
         invited: result.invitedNewUsers,
         already_enrolled: result.alreadyEnrolled.length,
       },
+      // Two batches added a few seconds apart are two roster changes.
+      dedupe: false,
     });
 
     if (result.emails.length > 0) {
