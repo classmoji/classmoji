@@ -23,10 +23,12 @@
  *
  * Scope comes from `classroomId`, the classroom the caller was authorized for:
  * the repository is loaded through it, so an id from another classroom throws
- * `RepositorySyncNotFoundError` before anything is queued. Trigger failures are
- * thrown as they come: a failure queuing repo creation (the first step) leaves
- * nothing written; a later failure leaves the earlier steps queued, and a
- * second sync re-queues whatever is still missing.
+ * `RepositorySyncNotFoundError` before anything is queued. A failure before
+ * anything was queued is thrown as it comes and leaves nothing written. A
+ * failure after something was queued (repo creation queued, then the
+ * assignment runs fail; or the runs queued, then marking them published fails)
+ * is thrown as `RepositorySyncPartialError`, carrying the counts queued so far
+ * so the caller can audit them; a second sync adds only what is still missing.
  *
  * Not a task: Trigger discovers tasks only under `src/workflows`. The webapp and
  * the MCP server import it through the `@classmoji/tasks/repo-sync` subpath.
@@ -46,6 +48,25 @@ export class RepositorySyncNotFoundError extends Error {
   constructor() {
     super('Repository not found in classroom');
     this.name = 'RepositorySyncNotFoundError';
+  }
+}
+
+/**
+ * A trigger failed after part of the sync was queued. The counts say what was
+ * queued before it (the same fields as a successful result); `cause` is the
+ * original failure.
+ */
+export class RepositorySyncPartialError extends Error {
+  readonly sessionId: string;
+  readonly reposToCreate: number;
+  readonly assignmentsToAdd: number;
+
+  constructor(queued: SyncRepositoryResult, cause: unknown) {
+    super('Repository sync was only partly queued', { cause });
+    this.name = 'RepositorySyncPartialError';
+    this.sessionId = queued.sessionId;
+    this.reposToCreate = queued.reposToCreate;
+    this.assignmentsToAdd = queued.assignmentsToAdd;
   }
 }
 
@@ -136,6 +157,7 @@ export const syncRepository = async ({
   // team can own a repo yet, and no repo exists to open an assignment in.
   if (logins === null) return { sessionId, reposToCreate: 0, assignmentsToAdd: 0 };
   if (logins.length > 0) {
+    // Nothing is queued yet, so a failure here is thrown as it comes.
     await createRepositoriesTask.trigger(
       {
         logins,
@@ -168,20 +190,40 @@ export const syncRepository = async ({
       }))
   );
 
+  // From here a failure leaves earlier steps queued: report what was.
+  let queued: SyncRepositoryResult = {
+    sessionId,
+    reposToCreate: logins.length,
+    assignmentsToAdd: 0,
+  };
+  const partly = (error: unknown) =>
+    queued.reposToCreate + queued.assignmentsToAdd > 0
+      ? new RepositorySyncPartialError(queued, error)
+      : error;
+
   if (items.length > 0) {
-    await createGithubRepositoryAssignmentTask.batchTrigger(
-      items as unknown as BatchItems,
-      { concurrencyKey: classroom.slug } as BatchOptions
-    );
+    try {
+      await createGithubRepositoryAssignmentTask.batchTrigger(
+        items as unknown as BatchItems,
+        { concurrencyKey: classroom.slug } as BatchOptions
+      );
+    } catch (error) {
+      throw partly(error);
+    }
+    queued = { ...queued, assignmentsToAdd: items.length };
 
     // An assignment out on student repos is published (a draft whose release
     // date has passed is released by this).
-    await Promise.all(
-      releasedAssignments.map(assignment =>
-        ClassmojiService.assignment.update(assignment.id, { is_published: true })
-      )
-    );
+    try {
+      await Promise.all(
+        releasedAssignments.map(assignment =>
+          ClassmojiService.assignment.update(assignment.id, { is_published: true })
+        )
+      );
+    } catch (error) {
+      throw partly(error);
+    }
   }
 
-  return { sessionId, reposToCreate: logins.length, assignmentsToAdd: items.length };
+  return queued;
 };

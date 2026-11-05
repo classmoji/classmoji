@@ -967,14 +967,16 @@ export const dailyRepositoryAssignmentsReleaseTask = schedules.task({
     // Assignments published ahead of a future release date (#385): the drafts
     // query above never sees them, so when their date comes they go into the
     // student repos that already exist here, the way publishing one that is
-    // already released does. Only the last 48 hours: a published row never
-    // drops out of a query on its own, and the window covers one missed night.
+    // already released does, on the same clock as the drafts path (the end of
+    // today). Only the last 72 hours: a published row never drops out of a
+    // query on its own, and the window covers one missed night with room for a
+    // late start.
     // Rows the drafts path just released are left to it, so a student whose run
     // failed above is not sent a second run tonight.
     const releasedAbove = new Set(assignmentsToRelease.map(assignment => assignment.id));
     const publishedToOpen = (
       (await ClassmojiService.assignment.findPublishedReleasedSince(
-        dayjs().subtract(48, 'hour').toDate(),
+        dayjs().subtract(72, 'hour').toDate(),
         endOfDay
       )) as ReleaseAssignmentRecord[]
     ).filter(assignment => !releasedAbove.has(assignment.id));
@@ -1005,6 +1007,7 @@ export const dailyRepositoryAssignmentsReleaseTask = schedules.task({
           const result = await openAssignmentInExistingRepos({
             classroomId: classroom.id,
             assignmentId: assignment.id,
+            now: endOfDay,
           });
           if (result.reason) {
             skipped[result.reason] = (skipped[result.reason] ?? 0) + 1;

@@ -71,7 +71,11 @@ import { randomUUID } from 'node:crypto';
 import { ClassmojiService } from '@classmoji/services';
 import { gitUsername } from '@classmoji/utils';
 import Tasks from '@classmoji/tasks';
-import { RepositorySyncNotFoundError, syncRepository } from '@classmoji/tasks/repo-sync';
+import {
+  RepositorySyncNotFoundError,
+  RepositorySyncPartialError,
+  syncRepository,
+} from '@classmoji/tasks/repo-sync';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition, ToolContext } from '../mcp/registry.ts';
@@ -320,9 +324,12 @@ interface RepoSyncArgs {
  * lack them. OWNER only, the tier of the repos page action. The helper loads
  * the repository through the authorized classroom; it is also checked here so
  * an unpublished one is refused with a pointer to repo_publish. Awaited: a
- * trigger failure fails the call with no audit row (repo creation may already
- * be queued if a later step failed). Not idempotent: a second call while repos
- * are still being created queues them again.
+ * trigger failure fails the call. A failure before anything was queued writes
+ * no audit row; one after part of the work was queued (`RepositorySyncPartialError`)
+ * still writes the row, `partial: true` with the counts queued so far, and asks
+ * for another run, which adds only what is still missing once the student
+ * repositories exist. Not idempotent: a second call while repos are still being
+ * created queues them again. Every call is its own row (`dedupe: false`).
  */
 export const repoSyncTool: ToolDefinition<RepoSyncArgs> = {
   name: 'repo_sync',
@@ -365,14 +372,33 @@ export const repoSyncTool: ToolDefinition<RepoSyncArgs> = {
     } catch (error) {
       if (error instanceof RepositorySyncNotFoundError) throw scopedNotFound('Repo');
       console.error('[mcp] repo_sync failed:', error);
+      if (error instanceof RepositorySyncPartialError) {
+        await writeAudit(ctx, {
+          resource_type: 'REPOSITORIES',
+          resource_id: repository.id,
+          action: 'UPDATE',
+          data: {
+            tool: 'repo_sync',
+            partial: true,
+            repos_to_create: error.reposToCreate,
+            assignments_to_add: error.assignmentsToAdd,
+          },
+          dedupe: false,
+        });
+        throw new ToolError(
+          'internal',
+          `Sync was only partly queued. Run repo_sync again once the student ${terms.repos} ` +
+            `exist; it adds only what is still missing.`
+        );
+      }
       throw new ToolError(
         'internal',
-        `Sync could not be queued completely. Run repo_sync again; it queues only what is ` +
-          `still missing.`
+        'Sync could not be queued; nothing was changed. Run repo_sync again.'
       );
     }
 
     const { reposToCreate, assignmentsToAdd } = result;
+    // Two syncs a few seconds apart are two actions: never folded into one row.
     await writeAudit(ctx, {
       resource_type: 'REPOSITORIES',
       resource_id: repository.id,
@@ -382,6 +408,7 @@ export const repoSyncTool: ToolDefinition<RepoSyncArgs> = {
         repos_to_create: reposToCreate,
         assignments_to_add: assignmentsToAdd,
       },
+      dedupe: false,
     });
 
     const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;

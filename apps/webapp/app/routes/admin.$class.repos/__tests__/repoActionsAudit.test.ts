@@ -2,7 +2,9 @@
  * The repositories page's actions each write one audit row (CLAUDE.md rule 2):
  * publish, unpublish, sync and delete on a repository, and publishing one
  * assignment from the module card. Rows are bound to the classroom the caller
- * was authorized for, never the body, and a refused publish writes none.
+ * was authorized for, never the body, and a refused publish writes none. A
+ * sync is never deduplicated, and one that fails after queuing part of its
+ * work still writes a `partial` row with what was queued.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -42,6 +44,21 @@ vi.mock('../helpers', () => ({
   syncAssignment: (...a: unknown[]) => mocks.syncAssignment(...a),
 }));
 
+vi.mock('@classmoji/tasks/repo-sync', () => ({
+  RepositorySyncNotFoundError: class RepositorySyncNotFoundError extends Error {},
+  RepositorySyncPartialError: class RepositorySyncPartialError extends Error {
+    readonly sessionId: string;
+    readonly reposToCreate: number;
+    readonly assignmentsToAdd: number;
+    constructor(queued: { sessionId: string; reposToCreate: number; assignmentsToAdd: number }) {
+      super('partly queued');
+      this.sessionId = queued.sessionId;
+      this.reposToCreate = queued.reposToCreate;
+      this.assignmentsToAdd = queued.assignmentsToAdd;
+    }
+  },
+}));
+
 vi.mock('../contributions', () => ({ calculateContributions: vi.fn() }));
 
 vi.mock('~/utils/helpers', () => ({
@@ -49,6 +66,8 @@ vi.mock('~/utils/helpers', () => ({
 }));
 
 const { action } = await import('../action.ts');
+const { RepositorySyncNotFoundError, RepositorySyncPartialError } =
+  await import('@classmoji/tasks/repo-sync');
 
 const run = (name: string, body: Record<string, unknown>) =>
   (action as unknown as (args: { params: object; request: Request }) => Promise<unknown>)({
@@ -120,7 +139,55 @@ describe('repositories page audit rows', () => {
 
     expect(row()).toMatchObject({
       metadata: { tool: 'web:repos.sync', repos_to_create: 2, assignments_to_add: 3 },
+      // Two syncs a few seconds apart are two rows.
+      dedupe: false,
     });
+    expect(row().metadata).not.toHaveProperty('partial');
+  });
+
+  it('sync partly queued: a partial row with what was queued, and a plain error', async () => {
+    mocks.syncAssignment.mockRejectedValue(
+      new RepositorySyncPartialError(
+        { sessionId: 's', reposToCreate: 4, assignmentsToAdd: 0 },
+        new Error('batch down')
+      )
+    );
+
+    const result = await run('sync', { assignment_id: 'repo-1' });
+
+    expect(result).toEqual({ error: 'Sync could not finish. Try again in a minute.' });
+    expect(mocks.addClassroomAuditLog).toHaveBeenCalledTimes(1);
+    expect(row()).toMatchObject({
+      classroomId: 'class-1',
+      action: 'UPDATE',
+      resourceType: 'REPOSITORIES',
+      resourceId: 'repo-1',
+      metadata: {
+        tool: 'web:repos.sync',
+        partial: true,
+        repos_to_create: 4,
+        assignments_to_add: 0,
+      },
+      dedupe: false,
+    });
+  });
+
+  it('sync failing with nothing queued: the same plain error, no row', async () => {
+    mocks.syncAssignment.mockRejectedValue(new Error('Trigger.dev unavailable'));
+
+    const result = await run('sync', { assignment_id: 'repo-1' });
+
+    expect(result).toEqual({ error: 'Sync could not finish. Try again in a minute.' });
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('sync of a repository outside the classroom: not found, no row', async () => {
+    mocks.syncAssignment.mockRejectedValue(new RepositorySyncNotFoundError());
+
+    const result = await run('sync', { assignment_id: 'repo-other' });
+
+    expect(result).toEqual({ error: 'Repository not found.' });
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 
   it('delete: one DELETE row naming the repository it removed', async () => {
@@ -134,6 +201,21 @@ describe('repositories page audit rows', () => {
       resourceId: 'repo-1',
       metadata: { tool: 'web:repos.delete', title: 'lab-1' },
     });
+  });
+
+  it('publishAssignment provisioning repos: counts each repo once', async () => {
+    mocks.publishAssignmentAndRepository.mockResolvedValue({
+      triggerSession: { accessToken: 't', id: 's', numReposToCreate: 50, numIssuesToCreate: 0 },
+    });
+
+    await run('publishAssignment', { assignment_id: 'asg-1' });
+
+    expect(row()).toMatchObject({
+      resourceType: 'ASSIGNMENTS',
+      resourceId: 'asg-1',
+      metadata: { tool: 'web:repos.publish_assignment', repos_to_create: 25 },
+    });
+    expect(row().metadata).not.toHaveProperty('opened_in_repos');
   });
 
   it('publishAssignment: one ASSIGNMENTS row with the repos it reached', async () => {

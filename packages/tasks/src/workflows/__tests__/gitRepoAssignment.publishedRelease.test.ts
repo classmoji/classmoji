@@ -2,15 +2,17 @@
  * The nightly release cron and assignments that were PUBLISHED ahead of a
  * future release date (#385). `findReadyForRelease` sees drafts only, so such
  * an assignment never reached the student repos when its date came. The cron
- * now also asks for published REPO assignments released in the last 48 hours
+ * now also asks for published REPO assignments released in the last 72 hours
  * (on a published repository) and puts each into the existing repos through
  * `openAssignmentInExistingRepos`, the helper every publishing surface uses.
  *
  * Pinned here:
  *  - a published in-window row calls the helper with its classroom and id, on
  *    a night with no drafts at all (the old early return skipped everything);
- *  - the window is the last 48 hours up to the same end of day the drafts
+ *  - the window is the last 72 hours up to the same end of day the drafts
  *    query uses;
+ *  - the helper runs on that same clock (`now` = the end of day), so a row
+ *    released later today is opened tonight, as a draft would be;
  *  - an org whose installation check fails is skipped, checked once, and its
  *    rows never reach the helper; other orgs still go;
  *  - one helper failure does not stop the others and ends the run failed;
@@ -142,10 +144,11 @@ describe('daily release cron: published assignments reaching their release date'
     expect(mocks.openAssignmentInExistingRepos).toHaveBeenCalledWith({
       classroomId: 'class-1',
       assignmentId: 'asg-1',
+      now: expect.any(Date),
     });
   });
 
-  it('asks for the last 48 hours up to the end of day the drafts query uses', async () => {
+  it('asks for the last 72 hours up to the end of day the drafts query uses', async () => {
     const before = Date.now();
     await runCron();
     const after = Date.now();
@@ -155,9 +158,26 @@ describe('daily release cron: published assignments reaching their release date'
     const [draftsUntil] = mocks.findReadyForRelease.mock.calls[0] as [Date];
     expect(until.getTime()).toBe(draftsUntil.getTime());
     const hour = 60 * 60 * 1000;
-    expect(since.getTime()).toBeGreaterThanOrEqual(before - 48 * hour);
-    expect(since.getTime()).toBeLessThanOrEqual(after - 48 * hour);
+    expect(since.getTime()).toBeGreaterThanOrEqual(before - 72 * hour);
+    expect(since.getTime()).toBeLessThanOrEqual(after - 72 * hour);
     expect(until.getTime()).toBeGreaterThanOrEqual(after);
+  });
+
+  it('opens a row released later today tonight: the helper runs on the drafts clock', async () => {
+    const laterToday = assignmentRow('asg-later');
+    laterToday.release_at = new Date(Date.now() + 60 * 1000);
+    mocks.findPublishedReleasedSince.mockResolvedValue([laterToday]);
+
+    await runCron();
+
+    const [draftsUntil] = mocks.findReadyForRelease.mock.calls[0] as [Date];
+    expect(mocks.openAssignmentInExistingRepos).toHaveBeenCalledTimes(1);
+    const [args] = mocks.openAssignmentInExistingRepos.mock.calls[0] as [
+      { classroomId: string; assignmentId: string; now: Date },
+    ];
+    expect(args).toMatchObject({ classroomId: 'class-1', assignmentId: 'asg-later' });
+    expect(args.now.getTime()).toBe(draftsUntil.getTime());
+    expect(args.now.getTime()).toBeGreaterThanOrEqual(laterToday.release_at.getTime());
   });
 
   it('skips an org whose installation check fails, checks it once, and still does the others', async () => {
@@ -182,6 +202,7 @@ describe('daily release cron: published assignments reaching their release date'
     expect(mocks.openAssignmentInExistingRepos).toHaveBeenCalledWith({
       classroomId: 'class-ok',
       assignmentId: 'asg-ok',
+      now: expect.any(Date),
     });
   });
 
@@ -199,6 +220,7 @@ describe('daily release cron: published assignments reaching their release date'
     expect(mocks.openAssignmentInExistingRepos).toHaveBeenLastCalledWith({
       classroomId: 'class-1',
       assignmentId: 'asg-2',
+      now: expect.any(Date),
     });
   });
 
@@ -233,6 +255,7 @@ describe('daily release cron: published assignments reaching their release date'
     expect(mocks.openAssignmentInExistingRepos).toHaveBeenCalledWith({
       classroomId: 'class-1',
       assignmentId: 'asg-published',
+      now: expect.any(Date),
     });
   });
 

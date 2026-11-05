@@ -6,7 +6,8 @@
  * (repo, assignment) runs it queues, with the payloads, tags and concurrency
  * keys these runs have always had, and the real counts it returns. A
  * repository of another classroom is refused before anything runs; nothing
- * missing queues nothing.
+ * missing queues nothing. A failure after something was queued is thrown as
+ * `RepositorySyncPartialError` with the counts queued so far.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -51,7 +52,8 @@ vi.mock('../../workflows/gitRepoAssignment.ts', () => ({
   },
 }));
 
-const { syncRepository, RepositorySyncNotFoundError } = await import('../syncRepository.ts');
+const { syncRepository, RepositorySyncNotFoundError, RepositorySyncPartialError } =
+  await import('../syncRepository.ts');
 
 const CLASSROOM_ID = 'class-1';
 const SLUG = 'cs1-w26';
@@ -166,6 +168,42 @@ describe('syncRepository — individual', () => {
     await expect(sync()).rejects.toThrow('trigger down');
     expect(mocks.batchTrigger).not.toHaveBeenCalled();
     expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
+  });
+
+  it('a failure after repo creation was queued carries what was queued', async () => {
+    const cause = new Error('batch down');
+    mocks.batchTrigger.mockRejectedValue(cause);
+
+    const error = await sync().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(RepositorySyncPartialError);
+    expect(error).toMatchObject({
+      sessionId: 'sess-1',
+      reposToCreate: 1,
+      assignmentsToAdd: 0,
+      cause,
+    });
+    expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
+  });
+
+  it('a failure marking assignments published counts the runs already queued', async () => {
+    mocks.assignmentUpdate.mockRejectedValue(new Error('db down'));
+
+    const error = await sync().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(RepositorySyncPartialError);
+    expect(error).toMatchObject({ reposToCreate: 1, assignmentsToAdd: 1 });
+  });
+
+  it('a failure with nothing queued yet is thrown as it comes', async () => {
+    // Every student has a repo: no creation is queued, so a batch failure
+    // left nothing behind.
+    mocks.findUsersByRole.mockResolvedValue([
+      { id: 'u-has', login: 'has-repo', has_accepted_invite: true },
+    ]);
+    mocks.batchTrigger.mockRejectedValue(new Error('batch down'));
+
+    const error = await sync().catch((e: unknown) => e);
+    expect(error).not.toBeInstanceOf(RepositorySyncPartialError);
+    expect(error).toMatchObject({ message: 'batch down' });
   });
 
   it('nothing missing: zero counts, nothing queued, nothing published', async () => {

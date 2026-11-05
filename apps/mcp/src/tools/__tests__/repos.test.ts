@@ -64,12 +64,24 @@ vi.mock('@classmoji/tasks', () => ({
 
 vi.mock('@classmoji/tasks/repo-sync', () => ({
   RepositorySyncNotFoundError: class RepositorySyncNotFoundError extends Error {},
+  RepositorySyncPartialError: class RepositorySyncPartialError extends Error {
+    readonly sessionId: string;
+    readonly reposToCreate: number;
+    readonly assignmentsToAdd: number;
+    constructor(queued: { sessionId: string; reposToCreate: number; assignmentsToAdd: number }) {
+      super('partly queued');
+      this.sessionId = queued.sessionId;
+      this.reposToCreate = queued.reposToCreate;
+      this.assignmentsToAdd = queued.assignmentsToAdd;
+    }
+  },
   syncRepository: (...a: unknown[]) => mocks.syncRepository(...a),
 }));
 
 const { repoCreateTool, repoPublishTool, repoSyncTool, repoUpdateTool, repoDeleteTool } =
   await import('../repos.ts');
-const { RepositorySyncNotFoundError } = await import('@classmoji/tasks/repo-sync');
+const { RepositorySyncNotFoundError, RepositorySyncPartialError } =
+  await import('@classmoji/tasks/repo-sync');
 
 const CTX: ToolContext = {
   viewer: { userId: 'owner-1', clientId: 'c', scopes: new Set(['read', 'write']) },
@@ -931,7 +943,13 @@ describe('repo tool definitions', () => {
   });
 
   it('keep descriptions under the 1,500 bytes a client will keep', () => {
-    for (const tool of [repoCreateTool, repoUpdateTool, repoDeleteTool, repoPublishTool]) {
+    for (const tool of [
+      repoCreateTool,
+      repoUpdateTool,
+      repoDeleteTool,
+      repoPublishTool,
+      repoSyncTool,
+    ]) {
       expect(new TextEncoder().encode(tool.description).length, tool.name).toBeLessThan(1500);
     }
   });
@@ -994,6 +1012,8 @@ describe('repo_sync', () => {
       action: 'UPDATE',
       data: { tool: 'repo_sync', repos_to_create: 2, assignments_to_add: 3 },
     });
+    // Two syncs a few seconds apart are two rows.
+    expect(mocks.auditCreate.mock.calls[0][1]).toEqual({ dedupe: false });
   });
 
   it('says so when nothing was missing (still audited)', async () => {
@@ -1038,13 +1058,34 @@ describe('repo_sync', () => {
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
-  it('a trigger failure fails the call with no audit row', async () => {
+  it('a trigger failure with nothing queued fails the call with no audit row', async () => {
     mocks.syncRepository.mockRejectedValue(new Error('Trigger.dev unavailable'));
 
     const call = repoSyncTool.handler(ARGS, CTX);
     await expect(call).rejects.toMatchObject({ kind: 'internal' });
     await expect(call).rejects.toThrow(/Run repo_sync again/);
     expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('a partly queued sync is audited as partial with what was queued, then fails', async () => {
+    mocks.syncRepository.mockRejectedValue(
+      new RepositorySyncPartialError(
+        { sessionId: 'sess-1', reposToCreate: 4, assignmentsToAdd: 0 },
+        new Error('batch down')
+      )
+    );
+
+    const call = repoSyncTool.handler(ARGS, CTX);
+    await expect(call).rejects.toMatchObject({ kind: 'internal' });
+    await expect(call).rejects.toThrow(/only partly queued.*Run repo_sync again once/);
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({
+      resource_type: 'REPOSITORIES',
+      resource_id: 'repo-1',
+      action: 'UPDATE',
+      data: { tool: 'repo_sync', partial: true, repos_to_create: 4, assignments_to_add: 0 },
+    });
+    expect(mocks.auditCreate.mock.calls[0][1]).toEqual({ dedupe: false });
   });
 
   it("maps the helper's scope refusal to not found", async () => {
