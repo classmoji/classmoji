@@ -80,6 +80,7 @@ import {
   repoUpdateTool,
   repoDeleteTool,
   repoPublishTool,
+  repoSyncTool,
   repoUnpublishTool,
 } from './repos.ts';
 import { rosterAddStudentTool, rosterRemoveStudentTool } from './roster.ts';
@@ -320,6 +321,7 @@ export function registerAllTools(): void {
   registerToolDefinition(repoUpdateTool);
   registerToolDefinition(repoDeleteTool);
   registerToolDefinition(repoPublishTool);
+  registerToolDefinition(repoSyncTool);
   registerToolDefinition(repoUnpublishTool);
 
   // Classroom settings + lifecycle status (OWNER). The org tool writes

@@ -1,5 +1,7 @@
 /**
- * Repo tools — repo_publish / repo_unpublish (plan §5.2 gap 1 — Phase 3).
+ * Repo tools — repo_publish / repo_unpublish / repo_sync (plan §5.2 gap 1 — Phase 3).
+ * repo_sync runs syncRepository (@classmoji/tasks/repo-sync), the same
+ * operation as the web's Sync button.
  *
  * Tier confirmed against apps/webapp/app/routes/admin.$class.repos/action.ts:
  * requireClassroomAdmin — OWNER only (both publish and unpublish intents).
@@ -69,6 +71,11 @@ import { randomUUID } from 'node:crypto';
 import { ClassmojiService } from '@classmoji/services';
 import { gitUsername } from '@classmoji/utils';
 import Tasks from '@classmoji/tasks';
+import {
+  RepositorySyncNotFoundError,
+  RepositorySyncPartialError,
+  syncRepository,
+} from '@classmoji/tasks/repo-sync';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition, ToolContext } from '../mcp/registry.ts';
@@ -169,7 +176,7 @@ export const repoPublishTool: ToolDefinition<RepoPublishArgs> = {
     'teams; self-formed team repos are created when students form teams). Owner only. ' +
     'Works before anyone has enrolled — publishing an empty classroom marks the repo available ' +
     'and provisions nothing; students who join later get their repos on join. ' +
-    'Re-publishing a previously published repo just restores visibility — use the web Sync to ' +
+    'Re-publishing a previously published repo just restores visibility — use repo_sync to ' +
     'backfill missing repositories.',
   scope: 'write',
   roles: OWNER_ONLY,
@@ -201,7 +208,7 @@ export const repoPublishTool: ToolDefinition<RepoPublishArgs> = {
       return ok({
         success: true,
         is_published: true,
-        message: `${gitTermsFor(ctx).Repo} re-published. Use Sync to update ${gitTermsFor(ctx).repos}.`,
+        message: `${gitTermsFor(ctx).Repo} re-published. Use repo_sync to update ${gitTermsFor(ctx).repos}.`,
       });
     }
 
@@ -301,6 +308,119 @@ export const repoPublishTool: ToolDefinition<RepoPublishArgs> = {
       is_published: true,
       provisioning: { repos_to_create: teams.length },
       message: `${gitTermsFor(ctx).Repo} published. Team ${gitTermsFor(ctx).repos} are being created in the background.`,
+    });
+  },
+};
+
+interface RepoSyncArgs {
+  classroom: string;
+  repository_id: string;
+}
+
+/**
+ * repo_sync — the web Sync button (admin.$class.repos `syncAssignment`): both
+ * run `syncRepository` (@classmoji/tasks/repo-sync), which creates missing
+ * student/team repos and queues released assignments into existing repos that
+ * lack them. OWNER only, the tier of the repos page action. The helper loads
+ * the repository through the authorized classroom; it is also checked here so
+ * an unpublished one is refused with a pointer to repo_publish. Awaited: a
+ * trigger failure fails the call. A failure before anything was queued writes
+ * no audit row; one after part of the work was queued (`RepositorySyncPartialError`)
+ * still writes the row, `partial: true` with the counts queued so far, and asks
+ * for another run, which adds only what is still missing once the student
+ * repositories exist. Not idempotent: a second call while repos are still being
+ * created queues them again. Every call is its own row (`dedupe: false`).
+ */
+export const repoSyncTool: ToolDefinition<RepoSyncArgs> = {
+  name: 'repo_sync',
+  annotations: { destructive: false, openWorld: true },
+  title: 'Sync a repo',
+  description:
+    'Brings a published repo (assignment container) up to date with the class, as the web Sync ' +
+    'button does. Creates the missing git repositories: one per student with an accepted invite ' +
+    'for an individual repo (on Gitlab, only students who connected Gitlab), one per team for a ' +
+    'group repo (teams tagged for it, or self-formed teams once formed). Adds every released ' +
+    'assignment (published, or release_at passed) to existing student repositories that lack it ' +
+    '(an issue in ISSUE mode, the submission row alone in REPO mode) and marks it published. ' +
+    'Work runs in the background; the counts say what was queued. Refuses an unpublished repo: ' +
+    'publish it with repo_publish. Owner only.',
+  scope: 'write',
+  roles: OWNER_ONLY,
+  inputSchema: {
+    classroom: z.string().describe("Classroom reference as 'org/slug'"),
+    repository_id: z.string().uuid().describe('Repository (assignment container) id'),
+  },
+  handler: async (args, ctx) => {
+    const classroom = requireClassroomCtx(ctx);
+    const repository = await loadRepositoryInClassroom(args.repository_id, ctx);
+    const terms = gitTermsFor(ctx);
+
+    if (!repository.is_published) {
+      throw new ToolError(
+        'invalid_params',
+        `${terms.Repo} is not published, so it has nothing to sync. Publish it with repo_publish ` +
+          `(that creates the student ${terms.repos}).`
+      );
+    }
+
+    let result: Awaited<ReturnType<typeof syncRepository>>;
+    try {
+      result = await syncRepository({
+        classroomId: classroom.classroomId,
+        repositoryId: repository.id,
+      });
+    } catch (error) {
+      if (error instanceof RepositorySyncNotFoundError) throw scopedNotFound('Repo');
+      console.error('[mcp] repo_sync failed:', error);
+      if (error instanceof RepositorySyncPartialError) {
+        await writeAudit(ctx, {
+          resource_type: 'REPOSITORIES',
+          resource_id: repository.id,
+          action: 'UPDATE',
+          data: {
+            tool: 'repo_sync',
+            partial: true,
+            repos_to_create: error.reposToCreate,
+            assignments_to_add: error.assignmentsToAdd,
+          },
+          dedupe: false,
+        });
+        throw new ToolError(
+          'internal',
+          `Sync was only partly queued. Run repo_sync again once the student ${terms.repos} ` +
+            `exist; it adds only what is still missing.`
+        );
+      }
+      throw new ToolError(
+        'internal',
+        'Sync could not be queued; nothing was changed. Run repo_sync again.'
+      );
+    }
+
+    const { reposToCreate, assignmentsToAdd } = result;
+    // Two syncs a few seconds apart are two actions: never folded into one row.
+    await writeAudit(ctx, {
+      resource_type: 'REPOSITORIES',
+      resource_id: repository.id,
+      action: 'UPDATE',
+      data: {
+        tool: 'repo_sync',
+        repos_to_create: reposToCreate,
+        assignments_to_add: assignmentsToAdd,
+      },
+      dedupe: false,
+    });
+
+    const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+    return ok({
+      success: true,
+      repos_to_create: reposToCreate,
+      assignments_to_add: assignmentsToAdd,
+      message:
+        reposToCreate === 0 && assignmentsToAdd === 0
+          ? `Already in sync: every ${terms.repo} exists and has every released assignment.`
+          : `Creating ${plural(reposToCreate, terms.repo, terms.repos)} and adding ` +
+            `${plural(assignmentsToAdd, 'assignment', 'assignments')} to existing ${terms.repos}.`,
     });
   },
 };

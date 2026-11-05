@@ -228,6 +228,43 @@ export const findReadyForRelease = async (beforeDate: Date = new Date()) => {
 };
 
 /**
+ * Published REPO assignments whose `release_at` falls in [since, until], on a
+ * published repository: the ones the nightly release puts into the student
+ * repos that already exist (#385). `findReadyForRelease` sees drafts only, so
+ * an assignment published ahead of a future release date never reached the
+ * repos when that date came.
+ *
+ * Bounded on purpose: `is_published: false` is what drops a draft out of the
+ * nightly query once released; a published row has no such flag, so the
+ * window (`since`) is what keeps every past assignment from being re-checked
+ * every night. A draft repository is excluded: it has no student repos, and
+ * its own publish (`createRepositoriesTask`) carries its released assignments.
+ * Same include shape as `findReadyForRelease`.
+ */
+export const findPublishedReleasedSince = async (since: Date, until: Date) => {
+  return getPrisma().assignment.findMany({
+    where: {
+      type: 'REPO',
+      repository_id: { not: null },
+      is_published: true,
+      release_at: { gte: since, lte: until },
+      repository: { is_published: true },
+    },
+    include: {
+      repository: {
+        include: {
+          classroom: {
+            include: {
+              git_organization: true,
+            },
+          },
+        },
+      },
+    },
+  });
+};
+
+/**
  * Find a repository's not-yet-released assignments for an on-demand "release now"
  * (ignores release_at — the caller is forcing immediate release). Optionally
  * limit to specific assignment ids. Uses the same include shape as

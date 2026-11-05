@@ -69,6 +69,12 @@ vi.mock('../admin.$class.repos_.$title/helpers', () => ({
 vi.mock('../admin.$class.repos/contributions', () => ({
   calculateContributions: (...a: unknown[]) => mocks.calculateContributions(...a),
 }));
+// The repos action names the sync errors; the real module loads the Trigger
+// workflows.
+vi.mock('@classmoji/tasks/repo-sync', () => ({
+  RepositorySyncNotFoundError: class RepositorySyncNotFoundError extends Error {},
+  RepositorySyncPartialError: class RepositorySyncPartialError extends Error {},
+}));
 vi.mock('../admin.$class.repos/helpers', () => ({
   publishAssignment: vi.fn(),
   publishAssignmentAndRepository: vi.fn(),

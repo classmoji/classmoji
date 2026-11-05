@@ -62,11 +62,19 @@ export const openAssignmentInExistingRepos = async ({
   classroomId,
   assignmentId,
   sessionId = nanoid(),
+  now = new Date(),
 }: {
   classroomId: string;
   assignmentId: string;
   /** Tags the runs `session_<id>` so a progress view can follow them. */
   sessionId?: string;
+  /**
+   * The release clock: an assignment counts as released once its
+   * `release_at` is at or before this. The nightly release passes the end of
+   * its day, the clock its drafts path uses, so a row released later that day
+   * is opened that night; every other caller keeps the default.
+   */
+  now?: Date;
 }): Promise<OpenAssignmentResult> => {
   const skip = (reason: OpenAssignmentSkipReason): OpenAssignmentResult => ({
     queued: 0,
@@ -88,7 +96,7 @@ export const openAssignmentInExistingRepos = async ({
   // in the run's payload (no includes).
   const assignment = repository.assignments.find(a => a.id === assignmentId);
   if (!assignment) return skip('not_repo');
-  if (!releasedToRepos(assignment, new Date())) return skip('not_released');
+  if (!releasedToRepos(assignment, now)) return skip('not_released');
 
   const classroom = await ClassmojiService.classroom.findById(classroomId);
   if (!classroom) return skip('not_repo');

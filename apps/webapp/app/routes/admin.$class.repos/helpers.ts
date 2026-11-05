@@ -1,4 +1,3 @@
-import _ from 'lodash';
 import invariant from 'tiny-invariant';
 import { auth } from '@trigger.dev/sdk';
 import { nanoid } from 'nanoid';
@@ -7,12 +6,9 @@ import { ClassmojiService } from '@classmoji/services';
 import { releasedToRepos } from '@classmoji/utils';
 import Tasks from '@classmoji/tasks';
 import { openAssignmentInExistingRepos } from '@classmoji/tasks/assignment-release';
+import { syncRepository } from '@classmoji/tasks/repo-sync';
 import { gitTerms } from '~/utils/gitWeb';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
-
-type Classroom = NonNullable<Awaited<ReturnType<typeof ClassmojiService.classroom.findBySlug>>>;
-type Repository = NonNullable<Awaited<ReturnType<typeof ClassmojiService.repository.findById>>>;
-type GitRepo = Awaited<ReturnType<typeof ClassmojiService.gitRepo.findByRepository>>[number];
 
 /**
  * `classroomId` is the classroom the CALLER was authorized for. The classroom is
@@ -334,19 +330,24 @@ export const publishAssignmentAndRepository = async (
   return { success: `Assignment "${assignment.title}" published` };
 };
 
-/** `classroomId` scopes the body-supplied repository — see `publishAssignment`. */
+/**
+ * The Sync button: create missing student/team repos and add released
+ * assignments to repos that lack them (`syncRepository`, shared with MCP
+ * `repo_sync`). `classroomId` scopes the body-supplied repository — see
+ * `publishAssignment`. The counts are doubled for the progress bar, which
+ * counts a Github step and a database step per item.
+ */
 export const syncAssignment = async (
-  classroomSlug: string,
+  _classroomSlug: string,
   classroomId: string,
   repositoryId: string,
   _userId: string | null = null
 ) => {
-  const classroom = await ClassmojiService.classroom.findById(classroomId);
-  const repository = await ClassmojiService.repository.findById(repositoryId);
-  const sessionId = nanoid();
-
-  invariant(repository != null, 'Repository not found');
-  invariant(repository.classroom_id === classroomId, 'Repository not found in classroom');
+  const { sessionId, reposToCreate, assignmentsToAdd } = await syncRepository({
+    classroomId,
+    repositoryId,
+    sessionId: nanoid(),
+  });
 
   const accessToken = await auth.createPublicToken({
     scopes: {
@@ -356,291 +357,12 @@ export const syncAssignment = async (
     },
   });
 
-  let syncResult;
-
-  if (repository!.type === 'INDIVIDUAL') {
-    syncResult = await syncIndividualAssignment(classroomSlug, classroom!, repository!, sessionId);
-  } else if (repository!.team_formation_mode === 'SELF_FORMED') {
-    syncResult = await syncSelfFormedTeamAssignment(
-      classroomSlug,
-      classroom!,
-      repository!,
-      sessionId
-    );
-  } else {
-    syncResult = await syncTeamAssignment(classroomSlug, classroom!, repository!, sessionId);
-  }
-
-  const { numReposToCreate, numIssuesToCreate } = syncResult;
-
   return {
     triggerSession: {
       accessToken,
       id: sessionId,
-      numReposToCreate,
-      numIssuesToCreate,
+      numReposToCreate: reposToCreate * 2,
+      numIssuesToCreate: assignmentsToAdd * 2,
     },
   };
-};
-
-const syncIndividualAssignment = async (
-  classroomSlug: string,
-  classroom: Classroom,
-  repository: Repository,
-  sessionId: string
-) => {
-  // 1. Find students in classroom
-  const students = await ClassmojiService.classroomMembership.findUsersByRole(
-    classroom.id,
-    'STUDENT'
-  );
-
-  // 2. Find existing repos for repository given classroom
-  const existingRepos = await ClassmojiService.gitRepo.findByRepository(
-    classroomSlug,
-    repository.id
-  );
-
-  // 3. Find students with missing repos and create missing repos
-  const studentsWithMissingRepos = students.filter(
-    student =>
-      !existingRepos.find(repo => repo.student_id === student.id) && student.has_accepted_invite
-  );
-
-  if (studentsWithMissingRepos.length) {
-    await Tasks.createRepositoriesTask.trigger(
-      {
-        logins: studentsWithMissingRepos
-          .map(user => user.login || '')
-          .filter(login => login !== ''),
-        assignmentTitle: repository.title,
-        org: classroomSlug,
-        sessionId,
-      },
-      { concurrencyKey: classroomSlug }
-    );
-  }
-  // 4. Find and create missing assignments
-  const missingAssignments = findMissingAssignments(repository, existingRepos);
-
-  const numMissingAssignments = Object.values(missingAssignments).reduce(
-    (acc: number, curr: { repos: unknown[] }) => {
-      return acc + curr.repos.length;
-    },
-    0
-  );
-
-  const numReposToCreate = studentsWithMissingRepos.length * 2; // multiply by 2 to handle gh and cf creation
-  const numIssuesToCreate = 2 * numMissingAssignments;
-
-  await createMissingAssignments(classroom, missingAssignments, sessionId);
-
-  return {
-    numReposToCreate,
-    numIssuesToCreate,
-  };
-};
-
-const syncTeamAssignment = async (
-  classroomSlug: string,
-  classroom: Classroom,
-  repository: Repository,
-  sessionId: string
-) => {
-  // 1. Find teams using tag
-  const teams = await ClassmojiService.organizationTag.findTeamsByTag(repository.tag_id!);
-
-  // 2. Find existing repos for repository given classroom
-  const existingRepos = await ClassmojiService.gitRepo.findByRepository(
-    classroomSlug,
-    repository.id
-  );
-
-  // 3. Find teams with missing repos and create missing repos
-  const teamsWithMissingRepos = teams.filter(
-    team => !existingRepos.find(repo => repo.team_id === team.id)
-  );
-
-  if (teamsWithMissingRepos.length)
-    await Tasks.createRepositoriesTask.trigger(
-      {
-        logins: teamsWithMissingRepos.map(team => team.slug),
-        assignmentTitle: repository.title,
-        org: classroomSlug,
-        sessionId,
-      },
-      { concurrencyKey: classroomSlug }
-    );
-
-  // 4. Find and create missing assignments
-  const missingAssignments = findMissingAssignments(repository, existingRepos);
-  const numMissingAssignments = Object.values(missingAssignments).reduce(
-    (acc: number, curr: { repos: unknown[] }) => {
-      return acc + curr.repos.length;
-    },
-    0
-  );
-
-  const numReposToCreate = teamsWithMissingRepos.length * 2; // multiply by 2 to handle gh and cf creation
-  const numIssuesToCreate = 2 * numMissingAssignments;
-
-  await createMissingAssignments(classroom, missingAssignments, sessionId);
-
-  return {
-    numReposToCreate,
-    numIssuesToCreate,
-  };
-};
-
-const syncSelfFormedTeamAssignment = async (
-  classroomSlug: string,
-  classroom: Classroom,
-  repository: Repository,
-  sessionId: string
-) => {
-  // For self-formed teams, find teams by the repository slug tag
-  const tag = await ClassmojiService.organizationTag.findByClassroomIdAndName(
-    classroom.id,
-    repository.slug!
-  );
-
-  if (!tag) {
-    // No teams have been formed yet
-    return {
-      numReposToCreate: 0,
-      numIssuesToCreate: 0,
-    };
-  }
-
-  // Find teams using the tag
-  const teams = await ClassmojiService.team.findByTagId(classroom.id, tag.id);
-
-  // Find existing repos for repository given classroom
-  const existingRepos = await ClassmojiService.gitRepo.findByRepository(
-    classroomSlug,
-    repository.id
-  );
-
-  // Find teams with missing repos and create missing repos
-  const teamsWithMissingRepos = teams.filter(
-    team => !existingRepos.find(repo => repo.team_id === team.id)
-  );
-
-  if (teamsWithMissingRepos.length)
-    await Tasks.createRepositoriesTask.trigger(
-      {
-        logins: teamsWithMissingRepos.map(team => team.slug),
-        assignmentTitle: repository.title,
-        org: classroomSlug,
-        sessionId,
-      },
-      { concurrencyKey: classroomSlug }
-    );
-
-  // Find and create missing assignments
-  const missingAssignments = findMissingAssignments(repository, existingRepos);
-  const numMissingAssignments = Object.values(missingAssignments).reduce(
-    (acc: number, curr: { repos: unknown[] }) => {
-      return acc + curr.repos.length;
-    },
-    0
-  );
-
-  const numReposToCreate = teamsWithMissingRepos.length * 2;
-  const numIssuesToCreate = 2 * numMissingAssignments;
-
-  await createMissingAssignments(classroom, missingAssignments, sessionId);
-
-  return {
-    numReposToCreate,
-    numIssuesToCreate,
-  };
-};
-
-// Internal helper functions
-const findMissingAssignments = (
-  repository: Repository,
-  repos: GitRepo[]
-): Record<string, MissingAssignmentEntry> => {
-  const keyed = _.keyBy(repository.assignments, 'id');
-  // Add `repos` array to each assignment entry for tracking missing assignments per repo
-  const moduleAssignments = keyed as unknown as Record<string, MissingAssignmentEntry>;
-  _.forEach(moduleAssignments, assignment => (assignment.repos = []));
-
-  // remove assignments not out yet: a future release_at, or an undated draft
-  for (const assignment of Object.values(moduleAssignments)) {
-    const release = assignment as unknown as {
-      release_at: Date | null;
-      is_published: boolean;
-    };
-    if (!releasedToRepos(release, new Date())) {
-      delete moduleAssignments[assignment.id];
-    }
-  }
-
-  repos.forEach((repo: GitRepo) => {
-    const moduleAssignmentIds = Object.keys(moduleAssignments);
-
-    const repoAssignmentIds =
-      repo.assignments?.map((ra: { assignment_id: string }) => ra.assignment_id) || [];
-    const missingAssignmentIds = _.difference(moduleAssignmentIds, repoAssignmentIds);
-
-    missingAssignmentIds.forEach(assignmentId => {
-      const assignment = moduleAssignments[assignmentId];
-      assignment.repos.push(repo);
-    });
-  });
-
-  return moduleAssignments;
-};
-
-interface MissingAssignmentEntry {
-  id: string;
-  repos: GitRepo[];
-  [key: string]: unknown;
-}
-
-const createMissingAssignments = async (
-  classroom: Classroom,
-  missingAssignments: Record<string, MissingAssignmentEntry>,
-  sessionId: string
-) => {
-  const assignmentsData: { payload: Record<string, unknown>; options: { tags: string[] } }[] = [];
-
-  Object.values(missingAssignments).forEach((assignment: MissingAssignmentEntry) => {
-    const { repos, ...assignmentData } = assignment;
-    repos.forEach((repo: GitRepo) => {
-      const payload = {
-        repoName: repo.name,
-        assignment: assignmentData,
-        organization: classroom.git_organization,
-        studentRepo: repo,
-      };
-      assignmentsData.push({
-        payload,
-        // `standalone`: this run is one repo's whole job here, not a step of a
-        // repo being created, so the progress callout counts it as a unit.
-        options: { tags: [`session_${sessionId}`, 'standalone'] },
-      });
-    });
-  });
-
-  if (assignmentsData.length) {
-    Tasks.createGithubRepositoryAssignmentTask.batchTrigger(
-      assignmentsData as unknown as Parameters<
-        typeof Tasks.createGithubRepositoryAssignmentTask.batchTrigger
-      >[0],
-      { concurrencyKey: classroom.slug } as Parameters<
-        typeof Tasks.createGithubRepositoryAssignmentTask.batchTrigger
-      >[1]
-    );
-
-    for (const assignment of Object.values(missingAssignments)) {
-      ClassmojiService.assignment.update((assignment as { id: string }).id, {
-        is_published: true,
-      });
-    }
-  }
-
-  return null;
 };
