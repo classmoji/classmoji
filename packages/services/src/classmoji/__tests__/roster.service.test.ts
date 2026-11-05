@@ -1,16 +1,39 @@
 /**
  * Unit tests for roster.addStudents — the extracted bulk-add logic shared by
  * the web "Add Students" action and the MCP roster_add_student tool. Prisma and
- * the sibling services are mocked; the test pins the existing-vs-invite split,
- * case-insensitive email matching, and that composed emails are RETURNED (the
- * service never triggers them — the caller does).
+ * the classroom service are mocked; the test pins the existing-vs-invite split,
+ * case-insensitive email matching, that composed emails are RETURNED (the
+ * service never triggers them — the caller does), that the memberships and the
+ * invites commit in ONE transaction (#372), and that students already in the
+ * class are skipped and reported.
+ *
+ * The REAL classroomInvite service runs (only Prisma is mocked), so the invite
+ * write is asserted as the row Prisma receives. The membership and invite
+ * models exist ONLY on the transaction client: a write that escaped the
+ * transaction would hit the root client and throw.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const userFindMany = vi.fn();
+const accountFindMany = vi.fn();
+/** Users already holding a STUDENT row here: the insert skips them as duplicates. */
+const alreadyIn = new Set<string>();
+const membershipCreateMany = vi.fn();
+const inviteCreateMany = vi.fn();
+const transaction = vi.fn();
+const tx = {
+  classroomMembership: {
+    createManyAndReturn: (...a: unknown[]) => membershipCreateMany(...a),
+  },
+  classroomInvite: { createMany: (...a: unknown[]) => inviteCreateMany(...a) },
+};
 vi.mock('@classmoji/database', () => ({
-  default: () => ({ user: { findMany: (...a: unknown[]) => userFindMany(...a) } }),
+  default: () => ({
+    user: { findMany: (...a: unknown[]) => userFindMany(...a) },
+    account: { findMany: (...a: unknown[]) => accountFindMany(...a) },
+    $transaction: (...a: unknown[]) => transaction(...a),
+  }),
 }));
 
 const classroomFindById = vi.fn();
@@ -18,26 +41,31 @@ vi.mock('../classroom.service.ts', () => ({
   findById: (...a: unknown[]) => classroomFindById(...a),
 }));
 
-const createMany = vi.fn();
-vi.mock('../classroomMembership.service.ts', () => ({
-  createMany: (...a: unknown[]) => createMany(...a),
-}));
-
-const createManyInvites = vi.fn();
-vi.mock('../classroomInvite.service.ts', () => ({
-  createManyInvites: (...a: unknown[]) => createManyInvites(...a),
-}));
-
 const roster = await import('../roster.service.ts');
 
 beforeEach(() => {
-  userFindMany.mockReset();
-  classroomFindById.mockReset();
-  createMany.mockReset();
-  createManyInvites.mockReset();
+  for (const m of [
+    userFindMany,
+    accountFindMany,
+    membershipCreateMany,
+    inviteCreateMany,
+    transaction,
+    classroomFindById,
+  ]) {
+    m.mockReset();
+  }
   classroomFindById.mockResolvedValue({ id: 'class-1', name: 'CS1' });
-  createMany.mockResolvedValue({ count: 1 });
-  createManyInvites.mockResolvedValue({ count: 1 });
+  alreadyIn.clear();
+  // createManyAndReturn with skipDuplicates: returns only the rows it inserted.
+  membershipCreateMany.mockImplementation(({ data }: { data: { user_id: string }[] }) =>
+    Promise.resolve(
+      data.filter(row => !alreadyIn.has(row.user_id)).map(row => ({ user_id: row.user_id }))
+    )
+  );
+  inviteCreateMany.mockResolvedValue({ count: 1 });
+  // An interactive transaction: run the callback against the tx client; a
+  // throw inside it rejects the whole call (Prisma rolls back).
+  transaction.mockImplementation(async (fn: (client: typeof tx) => unknown) => fn(tx));
 });
 
 describe('roster.addStudents', () => {
@@ -50,9 +78,11 @@ describe('roster.addStudents', () => {
       students: [{ email: 'noname@x.edu' }],
     });
 
-    expect(createManyInvites).toHaveBeenCalledWith([
-      { school_email: 'noname@x.edu', classroom_id: 'class-1', student_name: '' },
-    ]);
+    expect(transaction).toHaveBeenCalledTimes(1);
+    expect(inviteCreateMany).toHaveBeenCalledWith({
+      data: [{ school_email: 'noname@x.edu', classroom_id: 'class-1', student_name: '' }],
+      skipDuplicates: true,
+    });
   });
 
   it('enrolls existing users, invites unknown emails, and returns both email sets', async () => {
@@ -70,19 +100,29 @@ describe('roster.addStudents', () => {
     expect(result.addedExistingUsers).toBe(1);
     expect(result.invitedNewUsers).toBe(1);
 
+    expect(result.alreadyEnrolled).toEqual([]);
+
+    // Both writes went through the one transaction (the models exist only on
+    // the tx client).
+    expect(transaction).toHaveBeenCalledTimes(1);
     // Existing user → membership with has_accepted_invite:false.
-    expect(createMany).toHaveBeenCalledWith([
-      {
-        classroom_id: 'class-1',
-        user_id: 'u-existing',
-        role: 'STUDENT',
-        has_accepted_invite: false,
-      },
-    ]);
+    expect(membershipCreateMany).toHaveBeenCalledWith({
+      data: [
+        {
+          classroom_id: 'class-1',
+          user_id: 'u-existing',
+          role: 'STUDENT',
+          has_accepted_invite: false,
+        },
+      ],
+      skipDuplicates: true,
+      select: { user_id: true },
+    });
     // Unknown email → invite row.
-    expect(createManyInvites).toHaveBeenCalledWith([
-      { school_email: 'new@x.edu', classroom_id: 'class-1', student_name: 'New' },
-    ]);
+    expect(inviteCreateMany).toHaveBeenCalledWith({
+      data: [{ school_email: 'new@x.edu', classroom_id: 'class-1', student_name: 'New' }],
+      skipDuplicates: true,
+    });
 
     // Subjects now live on the Resend templates, so the payload carries a
     // template id plus variables rather than a rendered subject and body.
@@ -150,7 +190,129 @@ describe('roster.addStudents', () => {
 
     expect(result.addedExistingUsers).toBe(1);
     expect(result.invitedNewUsers).toBe(0);
-    expect(createManyInvites).not.toHaveBeenCalled();
+    expect(inviteCreateMany).not.toHaveBeenCalled();
+  });
+
+  it('rejects, sending nothing, when the invite write fails after the memberships (#372)', async () => {
+    // Before, the memberships were committed on their own, so a failed invite
+    // write left students enrolled with no invites, no audit row and no email.
+    userFindMany.mockResolvedValue([{ id: 'u1', email: 'known@x.edu', name: 'K' }]);
+    inviteCreateMany.mockRejectedValue(new Error('invite write failed'));
+
+    await expect(
+      roster.addStudents({
+        classroomId: 'class-1',
+        signInvite: email => `tok(${email})`,
+        students: [{ email: 'known@x.edu' }, { email: 'new@x.edu' }],
+      })
+    ).rejects.toThrow('invite write failed');
+
+    // The membership write happened INSIDE the transaction that rejected, so
+    // Prisma rolls it back; nothing outside the transaction wrote anything.
+    expect(transaction).toHaveBeenCalledTimes(1);
+    expect(membershipCreateMany).toHaveBeenCalledTimes(1);
+    // No result means no emails or activations for the caller to send.
+  });
+
+  it('skips students already in the class: no write, no email, not counted, reported', async () => {
+    userFindMany.mockResolvedValue([
+      { id: 'u-in', email: 'in@x.edu', name: 'In' },
+      { id: 'u-new', email: 'fresh@x.edu', name: 'Fresh' },
+    ]);
+    alreadyIn.add('u-in');
+
+    const result = await roster.addStudents({
+      classroomId: 'class-1',
+      signInvite: email => `tok(${email})`,
+      students: [{ email: 'In@x.edu' }, { email: 'fresh@x.edu' }],
+    });
+
+    // Both rows are offered; the unique key skips the one already enrolled.
+    expect(membershipCreateMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({ user_id: 'u-in' }),
+        expect.objectContaining({ user_id: 'u-new' }),
+      ],
+      skipDuplicates: true,
+      select: { user_id: true },
+    });
+    expect(result.addedExistingUsers).toBe(1);
+    expect(result.invitedNewUsers).toBe(0);
+    // Reported as the owner typed the address.
+    expect(result.alreadyEnrolled).toEqual(['In@x.edu']);
+    expect(result.emails.map(e => e.payload.to)).toEqual(['fresh@x.edu']);
+  });
+
+  it('enrolls no one and sends nothing when everyone is already enrolled', async () => {
+    userFindMany.mockResolvedValue([{ id: 'u-in', email: 'in@x.edu', name: 'In' }]);
+    alreadyIn.add('u-in');
+
+    const result = await roster.addStudents({
+      classroomId: 'class-1',
+      signInvite: email => `tok(${email})`,
+      students: [{ email: 'in@x.edu' }],
+    });
+
+    // The insert ran and wrote nothing new.
+    expect(membershipCreateMany).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      addedExistingUsers: 0,
+      invitedNewUsers: 0,
+      alreadyEnrolled: ['in@x.edu'],
+      emails: [],
+      activations: [],
+    });
+  });
+
+  it('does not activate a Gitlab student who is already enrolled', async () => {
+    classroomFindById.mockResolvedValue({
+      id: 'class-1',
+      name: 'CS1',
+      git_organization: { id: 'org-1', provider: 'GITLAB', gitlab_instance_id: null },
+    });
+    userFindMany.mockResolvedValue([
+      { id: 'u-in', email: 'in@x.edu', name: 'In' },
+      { id: 'u-new', email: 'fresh@x.edu', name: 'Fresh' },
+    ]);
+    alreadyIn.add('u-in');
+    // Both have a gitlab.com account (no instance prefix on the id).
+    accountFindMany.mockResolvedValue([
+      { user_id: 'u-in', account_id: '11', username: 'in-gl' },
+      { user_id: 'u-new', account_id: '12', username: 'fresh-gl' },
+    ]);
+
+    const result = await roster.addStudents({
+      classroomId: 'class-1',
+      signInvite: email => `tok(${email})`,
+      students: [{ email: 'in@x.edu' }, { email: 'fresh@x.edu' }],
+    });
+
+    expect(result.activations).toEqual([{ login: 'fresh-gl', gitOrganizationId: 'org-1' }]);
+    expect(membershipCreateMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({ user_id: 'u-in' }),
+        expect.objectContaining({ user_id: 'u-new', has_accepted_invite: true }),
+      ],
+      skipDuplicates: true,
+      select: { user_id: true },
+    });
+  });
+
+  it('treats the same address listed twice as one student', async () => {
+    userFindMany.mockResolvedValue([]);
+
+    const result = await roster.addStudents({
+      classroomId: 'class-1',
+      signInvite: email => `tok(${email})`,
+      students: [{ email: 'dup@x.edu', name: 'D' }, { email: 'DUP@x.edu' }],
+    });
+
+    expect(result.invitedNewUsers).toBe(1);
+    expect(result.emails).toHaveLength(1);
+    expect(inviteCreateMany).toHaveBeenCalledWith({
+      data: [{ school_email: 'dup@x.edu', classroom_id: 'class-1', student_name: 'D' }],
+      skipDuplicates: true,
+    });
   });
 
   it('throws when the classroom does not exist', async () => {

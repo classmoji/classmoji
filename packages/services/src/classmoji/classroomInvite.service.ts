@@ -4,6 +4,8 @@ import type { Prisma } from '@prisma/client';
 /**
  * Create multiple invites (bulk) - used when instructor uploads roster
  * @param {Object[]} invites - Array of { school_email, student_name, student_id, classroom_id }
+ * @param db - a transaction client, so a caller can commit the invites together
+ *   with its other writes (roster.addStudents writes them with the memberships)
  * @returns {Promise<{count: number}>}
  */
 export const createManyInvites = async (
@@ -12,9 +14,10 @@ export const createManyInvites = async (
     student_name: string;
     student_id?: string;
     classroom_id: string;
-  }[]
+  }[],
+  db: Prisma.TransactionClient = getPrisma()
 ): Promise<{ count: number }> => {
-  return getPrisma().classroomInvite.createMany({
+  return db.classroomInvite.createMany({
     data: invites,
     skipDuplicates: true,
   });
