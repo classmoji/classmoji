@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const assignmentFindUniqueMock = vi.fn();
 const membershipFindFirstMock = vi.fn();
 const settingsFindUniqueMock = vi.fn();
+const waiverFindFirstMock = vi.fn();
 const quizzesVisibleMock = vi.fn();
 const txFindFirstMock = vi.fn();
 const txCreateMock = vi.fn();
@@ -36,6 +37,7 @@ vi.mock('@classmoji/database', () => {
       classroomSettings: {
         findUnique: (...args: unknown[]) => settingsFindUniqueMock(...args),
       },
+      quizLateWaiver: { findFirst: (...args: unknown[]) => waiverFindFirstMock(...args) },
       tokenTransaction,
       $transaction: (
         fn: (tx: { tokenTransaction: typeof tokenTransaction; $executeRaw: unknown }) => unknown
@@ -82,6 +84,7 @@ describe('token.purchaseQuizExtensionHours', () => {
     assignmentFindUniqueMock.mockResolvedValue(quizAssignment());
     membershipFindFirstMock.mockResolvedValue({ id: 'm-1' });
     settingsFindUniqueMock.mockResolvedValue({ default_tokens_per_hour: 2 });
+    waiverFindFirstMock.mockResolvedValue(null);
     quizzesVisibleMock.mockResolvedValue(true);
     txFindFirstMock.mockResolvedValue({ balance_after: 100, created_at: LONG_AGO });
     txCreateMock.mockImplementation((args: { data: Record<string, unknown> }) => ({
@@ -136,6 +139,19 @@ describe('token.purchaseQuizExtensionHours', () => {
       quizAssignment({ closes_at: new Date(NOW.getTime() - HOUR_MS) })
     );
     await expect(purchase(1)).resolves.toBeTruthy();
+  });
+
+  it("refuses while staff waived the student's late penalty, as a repo late override does", async () => {
+    waiverFindFirstMock.mockResolvedValue({ id: 'w-1' });
+    await expect(purchase(2)).rejects.toThrow(
+      'Extensions are unavailable: a late override is in effect.'
+    );
+    // Scoped to this classroom, this quiz assignment and this payer.
+    expect(waiverFindFirstMock).toHaveBeenCalledWith({
+      where: { classroom_id: 'class-1', assignment_id: 'asg-quiz', student_id: 'student-1' },
+      select: { id: true },
+    });
+    expect(txCreateMock).not.toHaveBeenCalled();
   });
 
   it('refuses a quiz with no due date', async () => {

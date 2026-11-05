@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   formFindMany: vi.fn(),
   settingsFindUnique: vi.fn(),
   netQuizExtensionHours: vi.fn(),
+  waivedAssignmentIdsForStudent: vi.fn(),
   pageLinkFindMany: vi.fn(),
   slideLinkFindMany: vi.fn(),
 }));
@@ -42,6 +43,9 @@ vi.mock('../quizAttempt.service.ts', () => ({
 }));
 vi.mock('../quizGradeItems.service.ts', () => ({
   netQuizExtensionHours: (...a: unknown[]) => mocks.netQuizExtensionHours(...a),
+}));
+vi.mock('../quizLateWaiver.service.ts', () => ({
+  waivedAssignmentIdsForStudent: (...a: unknown[]) => mocks.waivedAssignmentIdsForStudent(...a),
 }));
 vi.mock('../formResponse.service.ts', () => ({
   findSubmittedForUserByFormIds: (...a: unknown[]) => mocks.findSubmittedForUserByFormIds(...a),
@@ -157,6 +161,7 @@ beforeEach(() => {
   mocks.quizFindMany.mockResolvedValue([]);
   mocks.formFindMany.mockResolvedValue([]);
   mocks.netQuizExtensionHours.mockResolvedValue(new Map());
+  mocks.waivedAssignmentIdsForStudent.mockResolvedValue(new Set());
 });
 
 describe('listForStudent — which assignments appear', () => {
@@ -716,6 +721,7 @@ describe('listForStudent — QUIZ late hours and extensions', () => {
     quizOver = {} as Record<string, unknown>,
     assignmentOver = {} as Record<string, unknown>,
     hours = 0,
+    waived = false,
     settings = { default_tokens_per_hour: 2, late_penalty_points_per_hour: 0 } as Record<
       string,
       number
@@ -725,6 +731,7 @@ describe('listForStudent — QUIZ late hours and extensions', () => {
     mocks.quizFindMany.mockResolvedValue([quiz('quiz-a-q', quizOver)]);
     mocks.findForUserByQuizIds.mockResolvedValue(attempts);
     mocks.netQuizExtensionHours.mockResolvedValue(new Map(hours ? [['a-q', hours]] : []));
+    mocks.waivedAssignmentIdsForStudent.mockResolvedValue(new Set(waived ? ['a-q'] : []));
     mocks.settingsFindUnique.mockResolvedValue(settings);
     return (await list())[0];
   };
@@ -803,6 +810,39 @@ describe('listForStudent — QUIZ late hours and extensions', () => {
     // Before the due date, or with none: never missing.
     expect((await quizRow()).missing).toBe(false);
     expect((await quizRow({ assignmentOver: { student_deadline: null } })).missing).toBe(false);
+  });
+
+  it("reads this student's late waivers on the classroom's quizzes", async () => {
+    await quizRow();
+    expect(mocks.waivedAssignmentIdsForStudent).toHaveBeenCalledWith({
+      classroomId: 'class-1',
+      studentId: 'stu-1',
+      assignmentIds: ['a-q'],
+    });
+  });
+
+  it('a late waiver: the late attempt counts on time, no Extend, shown as a waived row', async () => {
+    const attempts = [finished('on-time', -2, 70), finished('late', 5, 90)];
+    const settings = { default_tokens_per_hour: 2, late_penalty_points_per_hour: 5 };
+    // Without it, 5 points an hour makes the on-time 70 count.
+    expect(await quizRow({ attempts, assignmentOver: DUE_20H_AGO, settings })).toMatchObject({
+      score: 70,
+      isLateOverride: false,
+    });
+    const waived = await quizRow({ attempts, assignmentOver: DUE_20H_AGO, settings, waived: true });
+    expect(waived).toMatchObject({
+      score: 90,
+      numLateHours: 0,
+      isLateOverride: true,
+      suggestedExtensionHours: 0,
+      extend: null,
+    });
+  });
+
+  it('a late waiver suspends missing until the student attempts (D1)', async () => {
+    const row = await quizRow({ assignmentOver: DUE_20H_AGO, waived: true });
+    expect(row).toMatchObject({ missing: false, isLateOverride: true, extend: null });
+    expect(await quizRow({ assignmentOver: DUE_20H_AGO })).toMatchObject({ missing: true });
   });
 
   it('a completed attempt is never missing, even an unscored one', async () => {

@@ -288,6 +288,39 @@ describe('gradebook quiz cells', () => {
     expect(text(html)).toContain('Not attempted');
     expect(html).not.toContain(MISSING_CHIP);
   });
+
+  it('chips a waived item "waived", as a waived repo cell (#813)', () => {
+    const html = render({
+      emojiMappings: NUMERIC_SCALE,
+      assignments: [quizColumn('a-quiz', 'Recursion')],
+      students: [
+        student('s-1', 'Ada', [item('a-quiz', { grade: 80, late_hours: 0, late_waived: true })]),
+      ],
+    });
+
+    expect(text(cellOf(html))).toContain('waived');
+  });
+
+  it('chips a waived student with no attempt (no item: no zero under D1) "waived" too', () => {
+    const html = render({
+      assignments: [quizColumn('a-quiz', 'Recursion')],
+      students: [{ ...student('s-1', 'Ada', []), quiz_waived_ids: ['a-quiz'] }],
+    });
+
+    const cell = text(cellOf(html));
+    expect(cell).toContain('Not attempted');
+    expect(cell).toContain('waived');
+    expect(html).not.toContain(MISSING_CHIP);
+  });
+
+  it('chips nothing for a student whose waiver is on another quiz', () => {
+    const html = render({
+      assignments: [quizColumn('a-quiz', 'Recursion')],
+      students: [{ ...student('s-1', 'Ada', []), quiz_waived_ids: ['a-other'] }],
+    });
+
+    expect(text(cellOf(html))).not.toContain('waived');
+  });
 });
 
 describe('gradebook row filters', () => {

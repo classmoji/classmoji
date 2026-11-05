@@ -21,7 +21,7 @@ import {
   type LetterGradeMappingEntry,
   type OrganizationSettings,
 } from '@classmoji/utils';
-import { LateOverrideButton } from '~/components';
+import { LateOverrideButton, QuizLateWaiverButton } from '~/components';
 import GradeBadges from '~/components/features/grading/GradeBadges';
 import QuizGradeEmoji from '~/components/features/quiz/QuizGradeEmoji';
 import Emoji from '~/components/ui/display/Emoji';
@@ -29,6 +29,7 @@ import UserAvatar from '~/components/shared/UserAvatar';
 import { ASSIGNMENT_TYPE_META } from '~/components/features/assignments/AssignmentsTable';
 import { addAuditLog, addClassroomAuditLog } from '~/utils/helpers';
 import { requireClassroomStaff, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
+import { canMutate } from '~/utils/mutationRefusal.server';
 import { normalizeSchoolId } from '~/utils/schoolId';
 import { useGitWeb } from '~/hooks/useGitWeb';
 import { lateTileSummary, latePillText, quizScoreNote, repoPointsLost } from './reportLateness';
@@ -102,7 +103,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   // form responses one lookup each.
   const quizIds = assignments.flatMap(a => (a.type === 'QUIZ' && a.quiz ? [a.quiz.id] : []));
   const hasQuizzes = quizIds.length > 0;
-  const [quizAttempts, gradingStrategies, quizItemsByUser] = await Promise.all([
+  const [quizAttempts, gradingStrategies, quizItemsByUser, quizWaived] = await Promise.all([
     hasQuizzes ? ClassmojiService.quizAttempt.findForUserByQuizIds(studentId, quizIds) : [],
     hasQuizzes
       ? ClassmojiService.quiz.findGradingStrategies(quizIds)
@@ -116,6 +117,15 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
           userIds: [studentId],
         })
       : new Map<string, GradedItem[]>(),
+    // The quizzes on which staff waived this student's late penalty (#813):
+    // the "Late waived" pill, with or without a grade item.
+    hasQuizzes
+      ? ClassmojiService.quizLateWaiver.waivedAssignmentIdsForStudent({
+          classroomId: classroom.id,
+          studentId,
+          assignmentIds: assignments.flatMap(a => (a.type === 'QUIZ' ? [a.id] : [])),
+        })
+      : new Set<string>(),
   ]);
   const quizItems: GradedItem[] = (quizItemsByUser.get(studentId) ?? []).map(item => ({
     assignment_id: item.assignment_id,
@@ -132,6 +142,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     counting_adjusted_emoji: item.counting_adjusted_emoji ?? null,
     // The row's "needs remap" chip: an adjustment off the scale (E17).
     counting_orphaned: item.counting_orphaned ?? false,
+    // The "Late waived" pill: staff waived this student's quiz late penalty.
+    late_waived: item.late_waived ?? false,
   }));
   const quizStatus: Record<
     string,
@@ -209,6 +221,10 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     repoAssignments,
     quizStatus,
     quizItems,
+    quizWaivedIds: [...quizWaived],
+    // The quiz late shield is owner or teacher (this page's gate) where the
+    // classroom takes the viewer's changes; api.quizLateWaiver re-checks.
+    canWaiveQuizLate: canMutate(classroom, viewer?.role),
     unopenedQuizIds,
     formStatus,
     emojiMappings,
@@ -442,6 +458,8 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
     repoAssignments: repoAssignmentRows,
     quizStatus,
     quizItems,
+    quizWaivedIds,
+    canWaiveQuizLate,
     unopenedQuizIds,
     formStatus,
     emojiMappings,
@@ -504,6 +522,7 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
     repoAssignments.filter(ra => (ra.grades?.length ?? 0) > 0).length + gradedQuizItems.length;
   // A quiz that has not opened yet is nothing to grade so far.
   const unopened = new Set(unopenedQuizIds);
+  const quizWaived = new Set(quizWaivedIds);
   const gradableCount = assignments.filter(
     a => a.type === 'REPO' || (a.type === 'QUIZ' && !unopened.has(a.id))
   ).length;
@@ -664,6 +683,7 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
       const item = quizItemByAssignment.get(a.id);
       const value = item ? gradedItemValue(item) : null;
       href = a.quiz ? `${base}/quizzes/${a.quiz.id}` : href;
+      const waived = quizWaived.has(a.id) || item?.late_waived === true;
       if (item?.counts_as_zero) {
         // Counts 0, whether or not an attempt is still running.
         status = <Pill tone="red">Missing</Pill>;
@@ -671,6 +691,9 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
         // Hours only: the points a quiz lost are a number, and quiz grades
         // show as emoji (E1).
         status = <Pill tone="amber">{latePillText(item.late_hours, 0)}</Pill>;
+      } else if (waived && q?.completed) {
+        // As a waived repo submission reads in place of "Submitted".
+        status = <Pill tone="grey">Late waived</Pill>;
       } else if (!item && unopened.has(a.id)) {
         status = <Pill tone="grey">Opens {fmt(a.release_at) ?? ''}</Pill>;
       } else {
@@ -680,6 +703,26 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
           <Pill tone="green">Completed</Pill>
         ) : (
           <Pill tone="blue">In progress</Pill>
+        );
+        // Not completed yet, under a waiver: its state, then the waiver.
+        if (waived)
+          status = (
+            <span className="inline-flex gap-1.5">
+              {status}
+              <Pill tone="grey">Late waived</Pill>
+            </span>
+          );
+      }
+      // The late shield (#813): offered where the quiz is late or counted
+      // missing, and wherever it is waived.
+      if (canWaiveQuizLate && (waived || item?.counts_as_zero || (item?.late_hours ?? 0) > 0)) {
+        actions = (
+          <QuizLateWaiverButton
+            assignmentId={a.id}
+            studentId={student.id}
+            waived={waived}
+            visible={item?.counts_as_zero === true || (item?.late_hours ?? 0) > 0}
+          />
         );
       }
       if (item && value !== null) {

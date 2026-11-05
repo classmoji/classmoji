@@ -52,6 +52,11 @@ export interface Student {
    * unscored attempt) adds nothing.
    */
   quiz_items: GradedItem[];
+  /**
+   * The quiz assignments on which staff waived this student's late penalty
+   * (#813): the cell's "waived" chip, with or without a grade item.
+   */
+  quiz_waived_ids?: string[];
   email?: string | null;
   school_id?: string | null;
 }
@@ -371,9 +376,32 @@ const GradesTable = (props: GradesTableProps) => {
    * attempt (D8; on time it shows the emoji staff picked, `quizItemEmoji`), a
    * "needs remap" chip when that adjustment's emoji left the scale (E17), or
    * Missing (a counted 0). Without one it shows when the quiz opens, or the
-   * attempt state (before the deadline, running or unscored).
+   * attempt state (before the deadline, running or unscored). A "waived" chip
+   * follows whatever it shows where staff waived the student's late penalty,
+   * as on a waived repo cell.
    */
   const renderQuizCell = (
+    student: Student,
+    assignment: GradebookAssignment
+  ): { body: React.ReactNode; tint: string } => {
+    const waived =
+      quizItemOf(student, assignment.id)?.late_waived === true ||
+      (student.quiz_waived_ids ?? []).includes(assignment.id);
+    const cell = renderQuizCellBody(student, assignment);
+    return waived
+      ? {
+          body: (
+            <span className="inline-flex items-center gap-1.5">
+              {cell.body}
+              <Chip tone="grey">waived</Chip>
+            </span>
+          ),
+          tint: cell.tint,
+        }
+      : cell;
+  };
+
+  const renderQuizCellBody = (
     student: Student,
     assignment: GradebookAssignment
   ): { body: React.ReactNode; tint: string } => {

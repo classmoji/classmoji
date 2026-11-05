@@ -3,10 +3,12 @@
  * (`calculateStudentFinalGrade` / `calculateGrades`, `items`) counts for
  * quizzes.
  *
- * Five narrow reads in two rounds, whatever the number of quizzes or students:
+ * Narrow reads in two rounds, whatever the number of quizzes or students:
  * the QUIZ assignments, the STUDENT roster, the classroom's late penalty and
  * its emoji scale; then the completed attempts on those quizzes by those
- * students, and the net hours bought per (assignment, student). Each item is
+ * students, the net hours bought per (assignment, student), and the late
+ * waivers staff set per (assignment, student) (`QuizLateWaiver`: not late,
+ * and no missing-work 0 until the student attempts). Each item is
  * `quizGradeItem` from `@classmoji/utils`, the same pure rule every reader
  * uses: an attempt scores its effective percentage (a staff adjustment read
  * through this classroom's scale, else the AI's), then the late penalty.
@@ -23,6 +25,7 @@
 import getPrisma from '@classmoji/database';
 import { openToStudents, quizGradeItem, type GradedItem } from '@classmoji/utils';
 import { findScaleByClassroomId } from './emojiMapping.service.ts';
+import { waivedByStudent } from './quizLateWaiver.service.ts';
 
 export interface LoadQuizGradeItemsInput {
   classroomId: string;
@@ -165,7 +168,7 @@ export const loadQuizGradeItems = async ({
   const quizIds = open.map(a => a.quiz_id);
   const assignmentIds = open.map(a => a.id);
 
-  const [attempts, hours] = await Promise.all([
+  const [attempts, hours, waivers] = await Promise.all([
     prisma.quizAttempt.findMany({
       where: {
         quiz_id: { in: quizIds },
@@ -195,6 +198,7 @@ export const loadQuizGradeItems = async ({
       // Purchases and refunds alike: a refund carries negative hours.
       _sum: { hours_purchased: true },
     }),
+    waivedByStudent({ classroomId, studentIds, assignmentIds }),
   ]);
 
   const key = (a: string, b: string) => `${a}\u0000${b}`;
@@ -226,6 +230,7 @@ export const loadQuizGradeItems = async ({
         gradingStrategy: assignment.quiz?.grading_strategy,
         attempts: attemptsByQuizUser.get(key(assignment.quiz_id, studentId)) ?? [],
         extensionHours: hoursByAssignmentUser.get(key(assignment.id, studentId)) ?? 0,
+        lateWaived: waivers.get(studentId)?.has(assignment.id) === true,
         latePenaltyPerHour,
         emojiScale,
         quizzesVisible,
