@@ -133,6 +133,8 @@ describe('admin.$class.pages.new — audit rows', () => {
       resourceId: 'page-new',
       metadata: { tool: 'web:pages.create_blank', title: 'Week 1' },
     });
+    // The folder is chosen within the classroom the gate resolved.
+    expect(mocks.freePageContentPath).toHaveBeenCalledWith('class-1', 'Week 1');
   });
 
   it('audits an import create under its own tool name', async () => {
@@ -201,6 +203,7 @@ describe('api.pages.batch — audit rows', () => {
         linked_repository_id: null,
       },
     });
+    expect(mocks.freePageContentPath).toHaveBeenCalledWith('class-1', 'Week 2');
   });
 
   it('records the repository a batch page was linked to', async () => {
