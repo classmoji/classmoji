@@ -13,6 +13,7 @@
     ".": "./src/index.ts",
     "./themes": "./src/themes.ts",
     "./repo-limits": "./src/repoLimits.ts",
+    "./return-path": "./src/returnPath.ts",
     "./upload-limit": "./src/uploadLimit.ts",
     "./upload-concurrency": "./src/uploadConcurrency.ts",
     "./quiz-agent": "./src/quizAgent/index.ts",

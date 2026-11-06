@@ -42,6 +42,7 @@ import {
   REPO_REST_MAX_LABEL,
   repoFileTooLargeMessage,
 } from '@classmoji/utils/repo-limits';
+import { isSafeReturnPath, safeReturnPath } from '@classmoji/utils/return-path';
 import {
   UploadTooLargeError,
   readLimitedFormData,
@@ -174,7 +175,9 @@ export const loader = async ({
   if (!slideId) throw new Response('Missing slideId', { status: 400 });
   const url = new URL(request.url);
   const mode = url.searchParams.get('mode');
-  const returnUrl = url.searchParams.get('returnUrl');
+  // The back link's target: a path on this app's own origin, or none (the
+  // back link then keeps its default).
+  const returnUrl = safeReturnPath(url.searchParams.get('returnUrl'), null);
 
   // Fetch slide from database with classroom and git_organization
   const slide = await getPrisma().slide.findUnique({
@@ -2565,10 +2568,13 @@ export default function SlideViewer() {
   useEffect(() => {
     const url = new URL(window.location.href);
     let cleaned = false;
-    // Check if we have a returnUrl from query params
-    if (returnUrl) {
+    // Check if we have a returnUrl from query params (the loader passes on
+    // only a same-origin path; anything else arrives as null)
+    if (isSafeReturnPath(returnUrl)) {
       sessionStorage.setItem('slidesReturnUrl', returnUrl);
-      // Clean the URL by removing the returnUrl param
+    }
+    // Clean the URL by removing the returnUrl param, kept or not
+    if (url.searchParams.has('returnUrl')) {
       url.searchParams.delete('returnUrl');
       cleaned = true;
     }
@@ -2586,9 +2592,10 @@ export default function SlideViewer() {
     if (cleaned) {
       window.history.replaceState({}, '', url.toString());
     }
-    // Set backUrl from sessionStorage (or fall back to webappUrl)
+    // Set backUrl from sessionStorage (or fall back to webappUrl). Checked
+    // again on the way out: the stored value may predate this rule.
     const storedUrl = sessionStorage.getItem('slidesReturnUrl');
-    if (storedUrl) {
+    if (isSafeReturnPath(storedUrl)) {
       setBackUrl(storedUrl);
     }
   }, [returnUrl]);
