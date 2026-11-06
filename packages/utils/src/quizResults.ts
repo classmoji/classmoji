@@ -39,7 +39,18 @@ export interface AttemptQuestionResult {
   attempts: number;
   credit_earned: number;
   eventually_correct: boolean;
+  /**
+   * What the server counted when it recorded the question (staff only; see
+   * `StoredQuestionResultSchema`): present only on results that carry them.
+   */
+  answers_given?: number;
+  messages_sent?: number;
+  hints_used?: number;
 }
+
+/** A stored count, when the entry carries one. */
+const countOf = (value: unknown): number | undefined =>
+  typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined;
 
 /**
  * The stored evaluation record, when the column holds one (`v: 2`). Anything
@@ -83,11 +94,17 @@ export const attemptQuestionResults = (
       typeof r.credit_earned === 'number' &&
       typeof r.eventually_correct === 'boolean'
     ) {
+      const answersGiven = countOf(r.answers_given);
+      const messagesSent = countOf(r.messages_sent);
+      const hintsUsed = countOf(r.hints_used);
       byNumber.set(r.question_num, {
         question_num: r.question_num,
         attempts: r.attempts,
         credit_earned: r.credit_earned,
         eventually_correct: r.eventually_correct,
+        ...(answersGiven !== undefined ? { answers_given: answersGiven } : {}),
+        ...(messagesSent !== undefined ? { messages_sent: messagesSent } : {}),
+        ...(hintsUsed !== undefined ? { hints_used: hintsUsed } : {}),
       });
     }
   }

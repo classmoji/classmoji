@@ -165,6 +165,8 @@ export const cloneQuiz = async (
       course_search_enabled: sourceQuiz.course_search_enabled,
       excluded_paths: sourceQuiz.excluded_paths ?? [],
       code_sandbox_enabled: sourceQuiz.code_sandbox_enabled,
+      hint_cost: sourceQuiz.hint_cost,
+      max_answers: sourceQuiz.max_answers,
       grading_strategy: sourceQuiz.grading_strategy,
       max_attempts: sourceQuiz.max_attempts,
       // Conditionally set status and deadline

@@ -8,7 +8,8 @@
  *
  *   - OWNER and TEACHER create, publish, weight, schedule and delete quizzes
  *     (`QUIZ_AUTHOR_ROLES`), and set how many questions it asks, how many
- *     attempts it allows and which attempt counts (`QUIZ_AUTHOR_SETTING_KEYS`).
+ *     attempts it allows, which attempt counts, what a hint costs and how many
+ *     answers a question takes (`QUIZ_AUTHOR_SETTING_KEYS`).
  *   - ASSISTANT edits a quiz's content (rubric, prompts, source material, the
  *     code-context settings and excluded paths) and its name, and nothing on
  *     the assignment (`QUIZ_EDITOR_ROLES` minus the authors). A save from an
@@ -51,12 +52,15 @@ export const quizAssignmentKeysIn = (input: Record<string, unknown>): string[] =
 /**
  * The keys of a quiz save that only an author may change, beyond the
  * assignment: how many questions the quiz asks, how many attempts it allows,
- * and which attempt counts.
+ * which attempt counts, what a hint costs and how many answers a question
+ * takes (both change how an attempt is scored).
  */
 export const QUIZ_AUTHOR_SETTING_KEYS = [
   'questionCount',
   'maxAttempts',
   'gradingStrategy',
+  'hintCost',
+  'maxAnswers',
 ] as const;
 
 /** The author-only setting keys a quiz save carries (present and not undefined). */

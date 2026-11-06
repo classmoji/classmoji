@@ -26,16 +26,20 @@ import type { Prisma, Role } from '@prisma/client';
 import { gradeToEmoji } from '@classmoji/utils';
 import { quizScaleForClassroom } from './emojiMapping.service.ts';
 import {
+  NEXT_STEP_ACTIONS,
   QuizEvaluationFeedbackSchema,
   QuizEvaluationRecordV2Schema,
   QuestionCardSchema,
   RecordQuestionResultSchema,
+  attemptAnswerRules,
   computeAttemptPercentages,
   deriveResult,
   gradeBandFor,
   replyShowsHint,
   type Answer,
+  type AnswerRules,
   type AttemptProgress,
+  type NextStepAction,
   type PresentQuestionOutput,
   type QuestionResultOutput,
   type QuizEvaluationFeedback,
@@ -85,7 +89,8 @@ export type QuizGradingErrorCode =
   | 'incomplete'
   | 'end_not_confirmed'
   | 'open_question_unrecorded'
-  | 'operation_conflict';
+  | 'operation_conflict'
+  | 'answer_limit';
 
 /** A refused grading write. `message` is written for the model. */
 export class QuizGradingError extends Error {
@@ -127,7 +132,8 @@ export type QuizAttemptEventType =
   | 'result_revised'
   | 'evaluation_completed'
   | 'exploration_completed'
-  | 'turn_refused';
+  | 'turn_refused'
+  | 'answer_offered';
 
 // ─── Shared transaction helpers (also used by quizChat.service) ─────────────
 
@@ -157,6 +163,9 @@ const LOCKED_ATTEMPT_SELECT = {
       status: true,
       // Pinned into `agent_config.codeSandbox` at the first admission (quizChat.service).
       code_sandbox_enabled: true,
+      // Pinned into `agent_config.hintCost` / `maxAnswers` at the first admission.
+      hint_cost: true,
+      max_answers: true,
       classroom: { select: { status: true } },
       // Turn admission reads whether the quiz is still open to a student.
       assignment: { select: { is_published: true, release_at: true } },
@@ -185,6 +194,17 @@ export const attemptQuestionCount = (
     quiz: Pick<LockedAttempt['quiz'], 'question_count'> | null;
   }
 ) => resolveAttemptQuestionCount(attempt.agent_config, attempt.quiz?.question_count);
+
+/**
+ * The hint cost and answer limit the attempt works under (`attemptAnswerRules`):
+ * the values its first admission pinned, the old ones (cost 15, no server
+ * limit) for an attempt pinned before they existed.
+ */
+export const attemptRules = (
+  attempt: Pick<LockedAttempt, 'agent_config'> & {
+    quiz: Pick<LockedAttempt['quiz'], 'hint_cost' | 'max_answers'> | null;
+  }
+): AnswerRules => attemptAnswerRules(attempt.agent_config, attempt.quiz);
 
 export const findEvent = (tx: Tx, attemptId: string, operationId: string) =>
   tx.quizAttemptEvent.findUnique({
@@ -244,6 +264,16 @@ const describeIssues = (error: {
     .map(issue => (issue.path.length ? `${issue.path.join('.')}: ${issue.message}` : issue.message))
     .join('; ');
 
+/** The counts a stored entry carries (`QuestionCounts`), the ones it has. */
+const countsOf = (entry: Record<string, unknown>): Partial<QuestionCounts> => {
+  const out: Partial<QuestionCounts> = {};
+  for (const key of ['answers_given', 'messages_sent', 'hints_used'] as const) {
+    const v = entry[key];
+    if (typeof v === 'number' && Number.isInteger(v) && v >= 0) out[key] = v;
+  }
+  return out;
+};
+
 /**
  * Parse the entries this service writes into `question_results_json`. Entries
  * missing a field are dropped. Only questions 1..`questionCount` are returned,
@@ -278,6 +308,7 @@ export const readStoredResults = (json: unknown, questionCount: number): StoredQ
       brief_feedback: typeof entry.brief_feedback === 'string' ? entry.brief_feedback : '',
       ...(entry.revised === true ? { revised: true as const } : {}),
       ...(entry.skipped_by_end === true ? { skipped_by_end: true as const } : {}),
+      ...countsOf(entry),
       recorded_at: entry.recorded_at,
     });
   }
@@ -505,6 +536,122 @@ export const presentQuestion = (f: Fenced, q: QuestionCard): Promise<PresentQues
     return output;
   });
 
+// ─── offer_next_step ────────────────────────────────────────────────────────
+
+/** What the server counted for one offer_next_step call (its output, less the lead-in). */
+export type OfferedAnswer = {
+  /** This offer is answer `answers_used` to the open question (1 = its first). */
+  answers_used: number;
+  /** The attempt's answer limit; null when it has none (pinned before limits existed). */
+  max_answers: number | null;
+  /** Points off each answer after a hint: for the hint button only, never the model. */
+  hint_cost: number;
+  /** The open question is the attempt's last. */
+  last_question: boolean;
+};
+
+/**
+ * Count one offer_next_step call (the feedback on an answer, and the buttons)
+ * as an answer to the open question: the last one presented, with no result
+ * yet. The task's tool calls this after its own turn checks (no card this
+ * turn, not a hint turn, one offer per turn, never Try again alone).
+ *
+ * The offer is answer k = (the question's `answer_offered` rows) + 1. With a
+ * limit pinned (`maxAnswers`):
+ * - k at or past the limit, with Try again offered: refused (`answer_limit`),
+ *   nothing written: that was the student's last answer, so the model reveals
+ *   the answer and offers Next alone;
+ * - the question already took its last answer (a message after it, say): only
+ *   Next is taken, and nothing is written, as no answer is counted;
+ * - otherwise one `answer_offered` row (question, actions, k), replay-safe by
+ *   the tool call id like every other write here.
+ * With a limit of 1, Try again is never taken. An attempt with no limit
+ * (pinned before limits existed) counts every offer and refuses none.
+ *
+ * Refused too when no question is open (`out_of_order`): an offer answers the
+ * question the student is on.
+ */
+export const offerNextStep = (
+  f: Fenced,
+  o: { actions: readonly NextStepAction[] }
+): Promise<OfferedAnswer> =>
+  inLockedTx(f.attemptId, f.toolCallId, ['answer_offered'], async (tx, attempt) => {
+    requireOpen(attempt);
+    requireFence(attempt, f.fence);
+
+    const actions = [...new Set(o.actions)].filter(a =>
+      (NEXT_STEP_ACTIONS as readonly string[]).includes(a)
+    );
+    if (actions.length === 0 || actions.length !== o.actions.length) {
+      throw new QuizGradingError(
+        'invalid_input',
+        'actions must be ["try_again", "next"] or ["next"], with no repeats.'
+      );
+    }
+    const questionCount = attemptQuestionCount(attempt);
+    const n = attempt.questions_asked ?? 0;
+    const recorded = readStoredResults(attempt.question_results_json, questionCount).some(
+      r => r.question_num === n
+    );
+    if (n < 1 || recorded) {
+      throw new QuizGradingError(
+        'out_of_order',
+        n < 1
+          ? 'No question has been presented yet: present question 1 first.'
+          : `Question ${n} already has its result: the student moved on. Present the next question, or submit the evaluation after the last one.`
+      );
+    }
+
+    const rules = attemptRules(attempt);
+    const max = rules.maxAnswers;
+    const given = (await answerOffers(tx, attempt.id, n)).length;
+    const lastQuestion = n >= questionCount;
+    const result = (answersUsed: number): OfferedAnswer => ({
+      answers_used: answersUsed,
+      max_answers: max,
+      hint_cost: rules.hintCost,
+      last_question: lastQuestion,
+    });
+
+    // The question took its last answer already: what follows is no answer.
+    if (max !== null && given >= max) {
+      if (actions.includes('try_again')) {
+        throw new QuizGradingError(
+          'answer_limit',
+          `The student has used all ${max} of their answers for question ${n}. ` +
+            'Call offer_next_step with actions ["next"] only.'
+        );
+      }
+      return result(given);
+    }
+
+    const k = given + 1;
+    if (max !== null && k >= max && actions.includes('try_again')) {
+      throw new QuizGradingError(
+        'answer_limit',
+        `That was the student's last answer for question ${n} (${max} of ${max}). ` +
+          'Do not offer Try again: explain the answer now (the reveal) in feedback, and call ' +
+          'offer_next_step with actions ["next"] only.'
+      );
+    }
+
+    const output = result(k);
+    await appendEvent(tx, attempt, {
+      type: 'answer_offered',
+      operationId: f.toolCallId,
+      toolCallId: f.toolCallId,
+      fence: f.fence,
+      inputMessageId: f.inputMessageId,
+      runId: f.runId,
+      payload: toJson({ question_num: n, actions, answer: k, output }),
+    });
+    await tx.quizAttempt.update({
+      where: { id: attempt.id },
+      data: { last_activity: new Date() },
+    });
+    return output;
+  });
+
 // ─── record_question_result ─────────────────────────────────────────────────
 
 const sameAnswers = (a: unknown, b: Answer[]) =>
@@ -534,6 +681,44 @@ const floorHintsAtTryAgain = async (
   answers: Answer[]
 ): Promise<Answer[]> => {
   if (answers.length === 0) return answers;
+  const walk = await questionInputs(tx, attempt, questionNum);
+  if (!walk) return answers;
+  let clicks = 0;
+  const floors: number[] = [];
+  for (const input of walk.inputs) {
+    if (input.action === 'try_again') {
+      if (input.id && walk.shown.has(input.id)) clicks += 1;
+    } else if (input.typed) floors.push(clicks);
+  }
+  if (floors.length === 0) return answers;
+  return answers.map((a, k) => {
+    const floor = floors[Math.min(k, floors.length - 1)];
+    return a.hints_before >= floor ? a : { ...a, hints_before: floor };
+  });
+};
+
+/** One admitted input of a question, as `questionInputs` reads it from the journal. */
+type QuestionInput = {
+  /** The student message id (null for the begin action). */
+  id: string | null;
+  action?: 'next' | 'try_again';
+  /** A message the student typed or submitted (no button): it may carry an answer. */
+  typed: boolean;
+};
+
+/**
+ * Question n's admitted inputs, oldest first: the `input_admitted` journal
+ * rows after its card went out and before question n+1's card, and the Try
+ * again clicks among them whose reply showed a hint (`hintsShown`). Null
+ * when question n was never presented. The one walk behind
+ * `floorHintsAtTryAgain` and `questionCounts`, so a click counts the same in
+ * both.
+ */
+const questionInputs = async (
+  tx: Tx,
+  attempt: Pick<LockedAttempt, 'id' | 'conversation_id'>,
+  questionNum: number
+): Promise<{ inputs: QuestionInput[]; shown: Set<string> } | null> => {
   const cards = await tx.quizAttemptEvent.findMany({
     where: { attempt_id: attempt.id, type: 'question_presented' },
     select: { seq: true, payload: true },
@@ -541,9 +726,9 @@ const floorHintsAtTryAgain = async (
   const cardSeq = (n: number) =>
     cards.find(c => isObject(c.payload) && c.payload.question_number === n)?.seq;
   const from = cardSeq(questionNum);
-  if (from === undefined) return answers;
+  if (from === undefined) return null;
   const to = cardSeq(questionNum + 1);
-  const inputs = await tx.quizAttemptEvent.findMany({
+  const rows = await tx.quizAttemptEvent.findMany({
     where: {
       attempt_id: attempt.id,
       type: 'input_admitted',
@@ -552,25 +737,56 @@ const floorHintsAtTryAgain = async (
     orderBy: { seq: 'asc' },
     select: { payload: true, input_message_id: true },
   });
-  const clickIds = inputs.flatMap(i =>
-    isObject(i.payload) && i.payload.action === 'try_again' && i.input_message_id
-      ? [i.input_message_id]
-      : []
-  );
-  const shown = await hintsShown(tx, attempt.conversation_id, clickIds);
-  let clicks = 0;
-  const floors: number[] = [];
-  for (const { payload, input_message_id } of inputs) {
+  const inputs = rows.map(({ payload, input_message_id }): QuestionInput => {
     const p = isObject(payload) ? payload : {};
-    if (p.action === 'try_again') {
-      if (input_message_id && shown.has(input_message_id)) clicks += 1;
-    } else if (p.kind === 'message' && p.action === undefined) floors.push(clicks);
-  }
-  if (floors.length === 0) return answers;
-  return answers.map((a, k) => {
-    const floor = floors[Math.min(k, floors.length - 1)];
-    return a.hints_before >= floor ? a : { ...a, hints_before: floor };
+    const action = p.action === 'next' || p.action === 'try_again' ? p.action : undefined;
+    return {
+      id: input_message_id,
+      ...(action ? { action } : {}),
+      typed: p.kind === 'message' && p.action === undefined,
+    };
   });
+  const clickIds = inputs.flatMap(i => (i.action === 'try_again' && i.id ? [i.id] : []));
+  const shown = await hintsShown(tx, attempt.conversation_id, clickIds);
+  return { inputs, shown };
+};
+
+/** What the server counts for a question when it is recorded (staff only, never graded). */
+export type QuestionCounts = {
+  /** offer_next_step calls the server took for it (`answer_offered`). */
+  answers_given: number;
+  /** Messages the student typed or submitted while it was open (no button clicks). */
+  messages_sent: number;
+  /** Try again clicks whose reply showed a hint (`floorHintsAtTryAgain`'s rule). */
+  hints_used: number;
+};
+
+/** The `answer_offered` rows of question n, oldest first. */
+const answerOffers = (tx: Tx, attemptId: string, questionNum: number) =>
+  tx.quizAttemptEvent.findMany({
+    where: {
+      attempt_id: attemptId,
+      type: 'answer_offered',
+      payload: { path: ['question_num'], equals: questionNum },
+    },
+    orderBy: { seq: 'asc' },
+    select: { id: true },
+  });
+
+/** Question n's counts (all 0 for a question never presented). */
+const questionCounts = async (
+  tx: Tx,
+  attempt: Pick<LockedAttempt, 'id' | 'conversation_id'>,
+  questionNum: number
+): Promise<QuestionCounts> => {
+  const walk = await questionInputs(tx, attempt, questionNum);
+  if (!walk) return { answers_given: 0, messages_sent: 0, hints_used: 0 };
+  return {
+    answers_given: (await answerOffers(tx, attempt.id, questionNum)).length,
+    messages_sent: walk.inputs.filter(i => i.typed).length,
+    hints_used: walk.inputs.filter(i => i.action === 'try_again' && i.id && walk.shown.has(i.id))
+      .length,
+  };
 };
 
 /**
@@ -655,6 +871,11 @@ const writeProjection = async (
  * Each answer's hint count is first raised to the Try again clicks admitted
  * before it whose reply showed a hint (`floorHintsAtTryAgain`); the journal
  * keeps what the model sent as `reported_answers` when that changed anything.
+ * The credit uses the attempt's pinned hint cost (`attemptRules`). The entry
+ * and its journal row also carry the question's counts (`questionCounts`:
+ * answers the server took, typed messages, hints shown), for staff; when the
+ * model's answer list is longer or shorter than the answers taken, the row
+ * keeps the model's count too (`reported_answer_count`).
  *
  * - First record → `result_finalized`.
  * - The same answers again, in any turn (a retried call) → the stored result.
@@ -751,11 +972,16 @@ export const finalizeQuestion = (
         }
       }
 
-      const derived = deriveResult(answers);
+      // Scored with the attempt's pinned hint cost (15 for one pinned before
+      // quizzes set their own).
+      const derived = deriveResult(answers, attemptRules(attempt).hintCost);
       const emoji = gradeToEmoji(
         derived.credit_earned,
         await loadEmojiMappings(tx, attempt.quiz.classroom_id)
       );
+      // What the server counted while the question was open: staff see it,
+      // grading never reads it.
+      const counts = await questionCounts(tx, attempt, question_num);
       const revised = Boolean(latest);
       const entry: StoredQuestionResult = {
         question_num,
@@ -767,6 +993,7 @@ export const finalizeQuestion = (
         emoji,
         brief_feedback,
         ...(revised ? { revised: true as const } : {}),
+        ...counts,
         recorded_at: new Date().toISOString(),
       };
       const output: QuestionResultOutput = {
@@ -790,6 +1017,12 @@ export const finalizeQuestion = (
           answers,
           ...(floored ? { reported_answers: parsed.data.answers } : {}),
           ...derived,
+          ...counts,
+          // The model's own answer count, when it differs from the offers the
+          // server took: both stand in the journal, the model's list scores.
+          ...(answers.length !== counts.answers_given
+            ? { reported_answer_count: answers.length }
+            : {}),
           emoji,
           brief_feedback,
           ...(previous
@@ -1176,6 +1409,9 @@ const fillSkippedByEnd = async (
   const entries: StoredQuestionResult[] = [];
   for (const n of missing) {
     const output: QuestionResultOutput = { question_num: n, emoji, brief_feedback: '' };
+    // The open question may have been answered before the end; the others
+    // were never presented and count nothing.
+    const counts = await questionCounts(tx, attempt, n);
     entries.push({
       question_num: n,
       attempts: derived.tries,
@@ -1186,6 +1422,7 @@ const fillSkippedByEnd = async (
       emoji,
       brief_feedback: '',
       skipped_by_end: true,
+      ...counts,
       recorded_at: recordedAt,
     });
     await appendEvent(tx, attempt, {
@@ -1202,6 +1439,7 @@ const fillSkippedByEnd = async (
         emoji,
         brief_feedback: '',
         skipped_by_end: true,
+        ...counts,
         output,
       }),
     });

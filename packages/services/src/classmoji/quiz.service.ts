@@ -11,6 +11,7 @@ import {
   withLogins,
 } from '@classmoji/utils';
 import { normalizeExcludedPaths } from '@classmoji/utils/quiz-excluded-paths';
+import { checkHintCost, checkMaxAnswers } from '@classmoji/utils/quiz-agent';
 import type { Prisma, QuizGradingStrategy, QuizStatus, Role } from '@prisma/client';
 import * as assignmentService from './assignment.service.ts';
 import { findScaleByClassroomId } from './emojiMapping.service.ts';
@@ -90,6 +91,13 @@ interface QuizCreateInput {
    * saves it off. Each attempt pins it at its first turn.
    */
   codeSandboxEnabled?: boolean;
+  /**
+   * Points off each answer given after a hint (0-50; absent = 15), and the
+   * answers a question takes (1-20; absent = 5). A value out of range is
+   * refused (`invalid_value`). Each attempt pins both at its first turn.
+   */
+  hintCost?: string | number | null;
+  maxAnswers?: string | number | null;
 }
 
 interface QuizUpdateInput {
@@ -119,6 +127,9 @@ interface QuizUpdateInput {
   excludedPaths?: string[];
   /** As on QuizCreateInput: absent = unchanged. Attempts already started keep their pin. */
   codeSandboxEnabled?: boolean;
+  /** As on QuizCreateInput: absent = unchanged. Attempts already started keep their pin. */
+  hintCost?: string | number | null;
+  maxAnswers?: string | number | null;
 }
 
 interface QuizMembership {
@@ -252,6 +263,30 @@ const countInput = (
   return number;
 };
 
+/**
+ * A save's hint cost and answers per question, checked: absent (undefined)
+ * leaves a column alone; anything else must be a whole number in its range
+ * (`checkHintCost` / `checkMaxAnswers`, the form's own rules), else the save
+ * is refused (`invalid_value`) before anything is written.
+ */
+const answerRuleColumns = (data: {
+  hintCost?: string | number | null;
+  maxAnswers?: string | number | null;
+}): { hint_cost?: number; max_answers?: number } => {
+  const columns: { hint_cost?: number; max_answers?: number } = {};
+  if (data.hintCost !== undefined) {
+    const checked = checkHintCost(data.hintCost);
+    if (!checked.ok) throw new QuizAssignmentError('invalid_value', checked.error);
+    columns.hint_cost = checked.value;
+  }
+  if (data.maxAnswers !== undefined) {
+    const checked = checkMaxAnswers(data.maxAnswers);
+    if (!checked.ok) throw new QuizAssignmentError('invalid_value', checked.error);
+    columns.max_answers = checked.value;
+  }
+  return columns;
+};
+
 /** The assignment columns a save changes, after the inputs are checked. */
 interface AssignmentChanges {
   moduleId?: string;
@@ -324,6 +359,7 @@ export const create = async (data: QuizCreateInput) => {
   // Checked before the transaction opens: a bad value writes nothing.
   const excludedPaths =
     data.excludedPaths === undefined ? undefined : excludedPathsToStore(data.excludedPaths);
+  const answerRules = answerRuleColumns(data);
   const now = new Date();
   const changes = assignmentChangesOf(data, now);
   const moduleId = changes.moduleId;
@@ -339,7 +375,7 @@ export const create = async (data: QuizCreateInput) => {
     };
     const quiz = await createQuizRow(
       tx,
-      { ...data, excludedPaths },
+      { ...data, excludedPaths, answerRules },
       {
         due_date: schedule.student_deadline,
         weight: mirroredQuizWeight(schedule.weight),
@@ -378,7 +414,7 @@ export const create = async (data: QuizCreateInput) => {
 /** The quiz's own columns; due date, weight and status come from the assignment. */
 const createQuizRow = (
   tx: Prisma.TransactionClient,
-  data: QuizCreateInput,
+  data: QuizCreateInput & { answerRules: { hint_cost?: number; max_answers?: number } },
   mirror: { due_date: Date | null; weight: number; status: QuizStatus }
 ) =>
   tx.quiz.create({
@@ -398,6 +434,7 @@ const createQuizRow = (
       grading_strategy: data.gradingStrategy || 'HIGHEST',
       course_search_enabled: data.courseSearchEnabled === true,
       code_sandbox_enabled: data.codeSandboxEnabled === true,
+      ...data.answerRules,
       ...(data.excludedPaths !== undefined ? { excluded_paths: data.excludedPaths } : {}),
     },
   });
@@ -441,7 +478,8 @@ class SaveRaceError extends Error {}
  * whose quiz another save moved meanwhile runs again from where it now is.
  */
 export const update = async (quizId: string, data: QuizUpdateInput) => {
-  const updateData: Prisma.QuizUpdateInput = {};
+  // Checked first: a value out of range writes nothing.
+  const updateData: Prisma.QuizUpdateInput = { ...answerRuleColumns(data) };
   const now = new Date();
   const changes = assignmentChangesOf(data, now);
 

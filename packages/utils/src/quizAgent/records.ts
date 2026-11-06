@@ -24,6 +24,17 @@ export const StoredQuestionResultSchema = z.object({
   revised: z.literal(true).optional(),
   /** Recorded as skipped by the server when the student ended the quiz early. */
   skipped_by_end: z.literal(true).optional(),
+  /**
+   * What the server counted for the question when it was recorded, for staff
+   * only (never in `StudentQuestionResultSchema`), never used in grading:
+   * the answers it took (offer_next_step calls), the typed messages the
+   * student sent while it was open (code submissions included), and the
+   * Try again clicks whose reply showed a hint. Absent on results recorded
+   * before they were counted.
+   */
+  answers_given: z.number().int().min(0).optional(),
+  messages_sent: z.number().int().min(0).optional(),
+  hints_used: z.number().int().min(0).optional(),
   recorded_at: z.string(),
 });
 export type StoredQuestionResult = z.infer<typeof StoredQuestionResultSchema>;
@@ -94,7 +105,15 @@ export type QuizEvaluationRecordView = QuizEvaluationRecordStudent &
     question_results: Array<
       StudentQuestionResult &
         Partial<
-          Pick<StoredQuestionResult, 'credit_earned' | 'eventually_correct' | 'first_attempt_correct'>
+          Pick<
+            StoredQuestionResult,
+            | 'credit_earned'
+            | 'eventually_correct'
+            | 'first_attempt_correct'
+            | 'answers_given'
+            | 'messages_sent'
+            | 'hints_used'
+          >
         >
     >;
   };
