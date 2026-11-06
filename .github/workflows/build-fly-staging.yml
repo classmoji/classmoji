@@ -70,6 +70,12 @@ jobs:
               fi
               ;;
           esac
+          # The staging host for allowedActionOrigins (apps/*/actionOrigins.js);
+          # without it the image would carry the production host.
+          case "$SERVICE" in
+            webapp) set -- "$@" --build-arg "ACTION_ORIGIN_HOSTS=staging.classmoji.io" ;;
+            slides) set -- "$@" --build-arg "ACTION_ORIGIN_HOSTS=slides.staging.classmoji.io" ;;
+          esac
           LABEL="staging-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           flyctl deploy --config "apps/${SERVICE}/fly.toml" --dockerfile "$DOCKERFILE" \
             --app "$APP" --remote-only --depot=true --depot-scope=app \
