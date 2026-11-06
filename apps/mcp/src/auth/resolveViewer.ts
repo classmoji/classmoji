@@ -15,12 +15,71 @@
  * enforced here. It also returns `scopes` as a space-delimited string. It also
  * returns ONLY the token row: the owning `oauth_applications` row, and with it
  * the `disabled` kill switch, has to be read separately (see below).
+ *
+ * When either read fails because the token store itself is unavailable (no
+ * database connection, a missing table: see tokenStoreErrors.ts), the result
+ * is a `TokenStoreUnavailableError`, which the route answers with a 503 and
+ * Retry-After. So is a bearer that is not found but has the shape of a token
+ * a newer authorization server issues (`UnsupportedTokenFormatError`, see
+ * `isNewerTokenFormat`). Every other failure stays an `UnauthorizedError` (401).
  */
 
 import getPrisma from '@classmoji/database';
 import { auth } from '@classmoji/auth/server';
 import type { Role } from '@prisma/client';
-import { UnauthorizedError } from '../mcp/errors.ts';
+import {
+  TokenStoreUnavailableError,
+  UnauthorizedError,
+  UnsupportedTokenFormatError,
+} from '../mcp/errors.ts';
+import { isTokenStoreUnavailable } from './tokenStoreErrors.ts';
+
+/**
+ * The bearer string as better-auth's `getMcpSession` reads it
+ * (`Authorization` with its first "Bearer " removed).
+ */
+export function bearerFrom(headers: Headers): string | null {
+  return headers.get('authorization')?.replace('Bearer ', '') || null;
+}
+
+/** The prefix Ask Moji's internal MCP tokens carry (packages/auth/src/mcpToken.ts). */
+export const ASK_MOJI_TOKEN_PREFIX = 'askmoji_';
+
+const JWT_SHAPE = /^[A-Za-z0-9_-]{1,4096}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
+
+/**
+ * Whether an unknown bearer looks like a token issued by the authorization
+ * server's next version, which this version cannot check:
+ *   - a JWT: three base64url segments, the first a JSON header with `alg`
+ *     (the planned move to better-auth 1.7 issues JWT access tokens);
+ *   - an Ask Moji internal token (`askmoji_…`), which that move stores in a
+ *     table of its own.
+ * During that deploy, clients holding such a token can reach this version
+ * for a few minutes; a 503 asks them to try again shortly instead of a 401
+ * that would send them to sign in again.
+ *
+ * Today nothing issues JWTs, so a JWT-shaped bearer presented now gets a 503
+ * instead of a 401 (acceptable: it is no token of ours either way). Ask Moji's
+ * tokens already carry `askmoji_`; one this server cannot find (removed after
+ * expiry, or revoked) likewise gets a 503 instead of a 401, and Ask Moji's
+ * client, which never runs a sign-in flow, simply fails that call either way.
+ */
+export function isNewerTokenFormat(bearer: string): boolean {
+  if (bearer.startsWith(ASK_MOJI_TOKEN_PREFIX)) return true;
+  if (!JWT_SHAPE.test(bearer)) return false;
+  try {
+    const header: unknown = JSON.parse(
+      Buffer.from(bearer.slice(0, bearer.indexOf('.')), 'base64url').toString('utf8')
+    );
+    return (
+      typeof header === 'object' &&
+      header !== null &&
+      typeof (header as { alg?: unknown }).alg === 'string'
+    );
+  } catch {
+    return false;
+  }
+}
 
 export type Scope = 'read' | 'write';
 
@@ -75,12 +134,15 @@ export async function resolveViewer(headers: Headers): Promise<Viewer> {
   let session: McpSessionRow | null = null;
   try {
     session = (await auth.api.getMcpSession({ headers })) as McpSessionRow | null;
-  } catch {
+  } catch (error) {
+    if (isTokenStoreUnavailable(error)) throw new TokenStoreUnavailableError({ cause: error });
     // better-auth throws APIError for malformed requests — treat as unauthenticated.
     throw new UnauthorizedError('Invalid access token');
   }
 
   if (!session) {
+    const bearer = bearerFrom(headers);
+    if (bearer && isNewerTokenFormat(bearer)) throw new UnsupportedTokenFormatError();
     throw new UnauthorizedError('Missing or invalid access token');
   }
 
@@ -108,10 +170,16 @@ export async function resolveViewer(headers: Headers): Promise<Viewer> {
   if (!session.clientId) {
     throw new UnauthorizedError('Access token is not bound to an OAuth client');
   }
-  const application = await getPrisma().oauthApplication.findUnique({
-    where: { clientId: session.clientId },
-    select: { disabled: true },
-  });
+  let application: { disabled: boolean | null } | null;
+  try {
+    application = await getPrisma().oauthApplication.findUnique({
+      where: { clientId: session.clientId },
+      select: { disabled: true },
+    });
+  } catch (error) {
+    if (isTokenStoreUnavailable(error)) throw new TokenStoreUnavailableError({ cause: error });
+    throw error;
+  }
   if (!application) {
     throw new UnauthorizedError('Access token is not bound to an OAuth client');
   }

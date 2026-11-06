@@ -30,7 +30,11 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { MCP_PUBLIC_URL, PROTECTED_RESOURCE_METADATA_PATH } from '../config.ts';
 import { resolveViewer, type Viewer } from '../auth/resolveViewer.ts';
-import { UnauthorizedError } from '../mcp/errors.ts';
+import {
+  TokenStoreUnavailableError,
+  UnauthorizedError,
+  UnsupportedTokenFormatError,
+} from '../mcp/errors.ts';
 import { jsonValueBound, MAX_BODY_JSON_VALUES, ToolInputBudget } from '../mcp/inputLimits.ts';
 import { toolCallBucketKey, tryConsume, TOOL_CALL_RATE_LIMIT } from '../mcp/rateLimit.ts';
 import { buildMcpServer } from '../mcp/registry.ts';
@@ -156,6 +160,28 @@ function sendUnauthorized(reply: FastifyReply, message: string) {
     });
 }
 
+/** Seconds a client is asked to wait when the token could not be checked. */
+export const TOKEN_STORE_RETRY_AFTER_SECONDS = 30;
+
+/**
+ * The token could not be checked at all (the token store is unavailable, or
+ * the token is in a format a newer version of this server reads), so nothing
+ * is known about it: a 503 asking the client to try again, and on purpose NO
+ * `WWW-Authenticate` challenge, which would send it into signing in again
+ * with a token that may be perfectly good.
+ */
+function sendTryAgain(reply: FastifyReply) {
+  return reply
+    .status(503)
+    .header('Retry-After', String(TOKEN_STORE_RETRY_AFTER_SECONDS))
+    .header('Access-Control-Expose-Headers', 'Retry-After')
+    .send({
+      jsonrpc: '2.0',
+      error: { code: -32000, message: 'Service temporarily unavailable: try again shortly' },
+      id: null,
+    });
+}
+
 /** What the onRequest hook learned from the headers, for the handler. */
 interface Authenticated {
   headers: Headers;
@@ -179,6 +205,14 @@ async function authenticate(request: FastifyRequest, reply: FastifyReply) {
     };
     authenticated.set(request, { headers, viewer });
   } catch (error) {
+    if (error instanceof TokenStoreUnavailableError) {
+      request.log.warn({ err: error.cause }, '[mcp] token store unavailable; answering 503');
+      return sendTryAgain(reply);
+    }
+    if (error instanceof UnsupportedTokenFormatError) {
+      request.log.info('[mcp] bearer in a newer token format; answering 503');
+      return sendTryAgain(reply);
+    }
     const message = error instanceof UnauthorizedError ? error.message : 'Authentication failed';
     if (!(error instanceof UnauthorizedError)) request.log.error(error);
     return sendUnauthorized(reply, message);
