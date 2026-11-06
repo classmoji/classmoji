@@ -15,6 +15,29 @@ primary_region = 'iad'
   auto_start_machines = true
   min_machines_running = 1
 
+  # Requests in flight per machine; above hard_limit, Fly's proxy holds new
+  # ones until one finishes. The site's pages are prebuilt files, so real
+  # traffic stays far below it.
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 48
+    hard_limit = 64
+
+  # A machine gets traffic only once this answers 200 (a prebuilt page, served
+  # in a few ms). With the bluegreen strategy below, a release boots a new
+  # machine next to the old one, which keeps serving until the new one passes.
+  # A rollback (`flyctl deploy --image <previous image>`) waits for the same
+  # check; `--strategy immediate` replaces the machine without waiting.
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "15s"
+    timeout = "5s"
+    method = "GET"
+    path = "/"
+
+[deploy]
+  strategy = "bluegreen"
+
 [env]
   PORT = "8080"
 
