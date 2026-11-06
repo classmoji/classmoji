@@ -23,15 +23,15 @@
 }
 
 
-.markdown-wrapper {
-    padding-top: 10px;
+/* Docs content column: 49rem, so the intro paragraph, body text and tables
+   aren't so narrow. The black theme sets 40rem twice, as Starlight's
+   --sl-content-width and as a max-width on .main-pane for pages with a sidebar
+   and a table of contents; both rules are layered, so these win. */
+:root {
+  --sl-content-width: 49rem;
 }
 
-/* The black theme caps the docs content column at 42rem (.main in the theme's
-   TwoColumnContent override), which is what actually controls width here — the
-   Starlight `--sl-content-width` variable has no effect. Widen it so the intro
-   paragraph, body text, and tables aren't so narrow. */
-.container-main .main {
+[data-has-sidebar][data-has-toc] .main-pane {
   max-width: 49rem;
 }
 
