@@ -1,5 +1,5 @@
 import { useRef, useEffect } from 'react';
-import { Space, Avatar, Collapse, Typography, Button } from 'antd';
+import { Space, Avatar, Collapse, Typography } from 'antd';
 import {
   UserOutlined,
   BookOutlined,
@@ -25,7 +25,6 @@ import QuizEvaluation, {
   type EvaluationData,
   type FocusMetrics,
 } from '~/components/ui/display/QuizEvaluation';
-import TypingIndicator from '~/components/ui/feedback/TypingIndicator';
 import QuestionCard from './QuestionCard';
 import ProgressDivider from './ProgressDivider';
 import { QuizResultSlotsFallback } from './QuizResultContext';
@@ -298,25 +297,18 @@ const renderExplorationSteps = (message: ChatMessage, isDarkMode: boolean, isGit
   );
 };
 
-// Render assistant message with markdown and action buttons
-const renderAssistantMessage = (
-  messageContent: string,
-  isDarkMode: boolean,
-  loading: boolean,
-  readOnly: boolean,
-  onQuickAction: ((message: string) => void | Promise<void>) | null,
-  hasBeenAnswered: boolean
-) => {
+// Render an assistant message with markdown. The quick-action markers
+// ([BUTTONS: …]) are stripped: this transcript is read-only, so nothing is
+// offered to press.
+const renderAssistantMessage = (messageContent: string, isDarkMode: boolean) => {
   // First check for question card
   const { hasQuestionCard, questionData, preamble, remainingContent } =
     parseQuestionCard(messageContent);
 
-  // Parse buttons from remaining content (or full content if no question card)
+  // Strip the button markers from the remaining content (or the full content
+  // if there is no question card)
   const contentForButtons = hasQuestionCard ? remainingContent : messageContent;
-  const { cleanContent, buttons } = parseMessageButtons(contentForButtons);
-
-  const canTriggerAction = !loading && !readOnly && typeof onQuickAction === 'function';
-  const baseDisabled = loading || readOnly || typeof onQuickAction !== 'function';
+  const { cleanContent } = parseMessageButtons(contentForButtons);
 
   return (
     <>
@@ -344,35 +336,6 @@ const renderAssistantMessage = (
           {cleanContent}
         </ReactMarkdown>
       )}
-
-      {/* Render action buttons - only show in feedback messages, not with question cards */}
-      {buttons.length > 0 && !hasQuestionCard && (
-        <Space style={{ marginTop: 12 }}>
-          {buttons.includes('TRY_AGAIN') && (
-            <Button
-              size="small"
-              onClick={
-                canTriggerAction
-                  ? () => onQuickAction("I'd like to try answering this question again")
-                  : undefined
-              }
-              disabled={hasBeenAnswered || baseDisabled}
-            >
-              Try Again
-            </Button>
-          )}
-          {buttons.includes('NEXT') && (
-            <Button
-              type="primary"
-              size="small"
-              onClick={canTriggerAction ? () => onQuickAction('next') : undefined}
-              disabled={hasBeenAnswered || baseDisabled}
-            >
-              Next →
-            </Button>
-          )}
-        </Space>
-      )}
     </>
   );
 };
@@ -393,66 +356,46 @@ const renderUserMessage = (messageContent: string, isDarkMode: boolean) => {
 
 interface QuizMessageListProps {
   messages?: ChatMessage[];
-  loading?: boolean;
   isDarkMode?: boolean;
   userLogin?: string | null;
   userImage?: string | null;
-  onQuickAction?: ((message: string) => void | Promise<void>) | null;
-  readOnly?: boolean;
-  showTimestamps?: boolean;
-  explorationSteps?: ExplorationStep[];
-  isQuizComplete?: boolean;
   evaluationData?: EvaluationData | null;
   focusMetrics?: FocusMetrics | null;
-  questionCount?: unknown;
 }
 
+/**
+ * A saved transcript from the retired ai-agent quiz runtime, read-only (see
+ * LegacyQuizTranscript): the messages, each assistant message's collapsed
+ * exploration steps, and the evaluation card when there is one.
+ */
 const QuizMessageList = ({
   messages = [],
-  loading = false,
   isDarkMode = false,
   userLogin = null,
   userImage = null,
-  onQuickAction = null,
-  readOnly = false,
-  showTimestamps: _showTimestamps = false,
-  explorationSteps = [],
-  isQuizComplete: propIsQuizComplete = false,
-  evaluationData: propEvaluationData = null,
+  evaluationData = null,
   focusMetrics = null,
 }: QuizMessageListProps) => {
   const { isGitLab } = useGitWeb();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const evaluationRef = useRef<HTMLDivElement>(null);
 
-  // The evaluation card's data comes from the attempt (QuizAttemptInterface
+  // The evaluation card's data comes from the attempt (LegacyQuizTranscript
   // passes it for a completed attempt only), never from a message.
-  const evaluationData = propEvaluationData;
-  const isQuizComplete = propIsQuizComplete || Boolean(evaluationData);
+  const hasEvaluation = Boolean(evaluationData);
 
-  // Function to scroll to bottom
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
-  // Scroll to bottom when messages change, loading state changes, or new exploration steps stream in
-  // But stop auto-scrolling once quiz is complete to allow free scrolling
+  // Open on the evaluation when there is one, else on the end of the transcript.
   useEffect(() => {
-    if (!isQuizComplete) {
-      scrollToBottom();
-    }
-  }, [messages, loading, isQuizComplete, explorationSteps.length]);
-
-  // In read-only mode, scroll to show evaluation at the top
-  useEffect(() => {
-    if (readOnly && isQuizComplete && evaluationRef.current) {
-      // Use a small delay to ensure DOM is fully rendered
-      const timer = setTimeout(() => {
-        evaluationRef.current?.scrollIntoView({ behavior: 'auto', block: 'start' });
-      }, 100);
-      return () => clearTimeout(timer);
-    }
-  }, [readOnly, isQuizComplete]);
+    // Use a small delay to ensure DOM is fully rendered
+    const timer = setTimeout(() => {
+      if (hasEvaluation && evaluationRef.current) {
+        evaluationRef.current.scrollIntoView({ behavior: 'auto', block: 'start' });
+      } else {
+        messagesEndRef.current?.scrollIntoView?.({ behavior: 'auto' });
+      }
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [hasEvaluation]);
 
   const renderMessage = (message: ChatMessage, messageIndex: number) => {
     // Normalize role to uppercase for comparison (handles both DB enum 'ASSISTANT' and AI API format 'assistant')
@@ -481,14 +424,6 @@ const QuizMessageList = ({
         messageContent = processed.content as string;
       }
     }
-
-    // Check if this question has already been answered (for interactive mode)
-    const hasBeenAnswered =
-      !readOnly &&
-      role === 'ASSISTANT' &&
-      messages
-        .slice(messageIndex + 1)
-        .some((msg: ChatMessage) => msg.role?.toUpperCase() === 'USER');
 
     // Create ProgressDivider element if we have question complete data
     const progressDividerElement = questionCompleteData ? (
@@ -572,14 +507,7 @@ const QuizMessageList = ({
             }}
           >
             {role === 'ASSISTANT'
-              ? renderAssistantMessage(
-                  messageContent,
-                  isDarkMode,
-                  loading,
-                  readOnly,
-                  onQuickAction,
-                  hasBeenAnswered
-                )
+              ? renderAssistantMessage(messageContent, isDarkMode)
               : renderUserMessage(message.content, isDarkMode)}
           </div>
           {role === 'USER' &&
@@ -596,139 +524,37 @@ const QuizMessageList = ({
   };
 
   return (
-    <>
-      <style>{`
-      @keyframes exploration-pulse {
-        0%, 100% { opacity: 1; transform: scale(1); }
-        50% { opacity: 0.5; transform: scale(1.15); }
-      }
-      .exploration-step-active .anticon {
-        animation: exploration-pulse 1.5s ease-in-out infinite;
-        display: inline-block;
-      }
-    `}</style>
-      <div
-        tabIndex={0} // eslint-disable-line -- Keyboard accessibility: allows scrolling with arrow keys
-        role="log"
-        aria-live="polite"
-        aria-label="Quiz conversation"
-        style={{
-          flex: 1,
-          overflowY: 'auto',
-          marginBottom: 16,
-          padding: '0 16px',
-          outline: 'none',
-        }}
-      >
-        {messages.map(renderMessage)}
+    <div
+      tabIndex={0} // eslint-disable-line -- Keyboard accessibility: allows scrolling with arrow keys
+      role="log"
+      aria-label="Quiz conversation"
+      style={{
+        flex: 1,
+        overflowY: 'auto',
+        marginBottom: 16,
+        padding: '0 16px',
+        outline: 'none',
+      }}
+    >
+      {messages.map(renderMessage)}
 
-        {/* Loading indicator */}
-        {loading && (
-          <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: 16 }}>
-            <Space direction="vertical" style={{ width: '100%', maxWidth: '70%' }}>
-              <Space>
-                <Avatar
-                  style={{
-                    backgroundColor: '#fffdf5',
-                    fontSize: '20px',
-                    border: '1px solid #ffd66b',
-                  }}
-                >
-                  📝
-                </Avatar>
-                <div
-                  style={{
-                    padding: '12px 16px',
-                    backgroundColor: isDarkMode ? '#1f2937' : '#fff',
-                    borderRadius: '8px',
-                    border: isDarkMode ? '1px solid #4b5563' : '1px solid #d9d9d9',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                  }}
-                >
-                  <TypingIndicator color="#10b981" />
-                  <Text type="secondary" style={{ marginLeft: 4 }}>
-                    {explorationSteps.length === 0
-                      ? 'Thinking...'
-                      : onlyContentSteps(explorationSteps)
-                        ? 'Looking things up…'
-                        : 'Exploring code...'}
-                  </Text>
-                </div>
-              </Space>
+      {/* Quiz evaluation - rendered in same scroll area as messages */}
+      {evaluationData ? (
+        <div ref={evaluationRef}>
+          <QuizEvaluation
+            evaluationData={evaluationData}
+            focusMetrics={focusMetrics}
+            isDarkMode={isDarkMode}
+          />
+        </div>
+      ) : (
+        // No evaluation record: the drawer's blocks (the staff adjust panel)
+        // still show.
+        <QuizResultSlotsFallback />
+      )}
 
-              {/* Show real-time exploration steps */}
-              {explorationSteps.length > 0 && (
-                <div
-                  style={{
-                    marginLeft: 48,
-                    padding: '8px 12px',
-                    backgroundColor: isDarkMode ? '#111827' : '#f9fafb',
-                    borderRadius: '6px',
-                    border: isDarkMode ? '1px solid #374151' : '1px solid #e5e7eb',
-                    fontSize: '12px',
-                  }}
-                >
-                  <Text
-                    type="secondary"
-                    style={{ fontSize: '11px', fontWeight: 500, display: 'block', marginBottom: 4 }}
-                  >
-                    {onlyContentSteps(explorationSteps) ? (
-                      <>
-                        <BookOutlined style={{ color: '#0d9488' }} /> Checking course material…
-                      </>
-                    ) : (
-                      <>
-                        <RocketOutlined style={{ color: '#3b82f6' }} /> Analyzing your code...
-                      </>
-                    )}
-                  </Text>
-                  {explorationSteps.map((step: ExplorationStep, idx: number) => {
-                    const isLastStep = idx === explorationSteps.length - 1;
-                    return (
-                      <div
-                        key={idx}
-                        style={{
-                          padding: '2px 0',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '6px',
-                        }}
-                      >
-                        <span className={isLastStep ? 'exploration-step-active' : ''}>
-                          {getToolIcon(step.toolName || step.tool, isGitLab)}
-                        </span>
-                        <Text type="secondary" style={{ fontSize: '11px' }}>
-                          {stepLabel(step)}
-                        </Text>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </Space>
-          </div>
-        )}
-
-        {/* Quiz evaluation - rendered in same scroll area as messages */}
-        {isQuizComplete && evaluationData ? (
-          <div ref={evaluationRef}>
-            <QuizEvaluation
-              evaluationData={evaluationData}
-              focusMetrics={focusMetrics}
-              isDarkMode={isDarkMode}
-            />
-          </div>
-        ) : (
-          // A completed attempt with no evaluation record: the drawer's
-          // blocks (the staff adjust panel) still show.
-          (readOnly || isQuizComplete) && <QuizResultSlotsFallback />
-        )}
-
-        <div ref={messagesEndRef} />
-      </div>
-    </>
+      <div ref={messagesEndRef} />
+    </div>
   );
 };
 

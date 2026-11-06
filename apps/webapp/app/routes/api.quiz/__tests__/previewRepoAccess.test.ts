@@ -17,7 +17,6 @@ const createNewMock = vi.fn();
 const updateAgentConfigMock = vi.fn();
 const assertAccessMock = vi.fn();
 const getAuthSessionMock = vi.fn();
-const endQuizSessionMock = vi.fn();
 const reposGetMock = vi.fn();
 const octokitAuths: unknown[] = [];
 
@@ -51,24 +50,8 @@ vi.mock('~/utils/helpers', () => ({
 vi.mock('~/utils/classroomProFlag.server', () => ({ quizzesVisibleOrThrow: async () => true }));
 vi.mock('~/utils/routeAuth.server', () => ({ assertClassroomMutationAllowed: () => undefined }));
 vi.mock('~/utils/aiFeatures.server', () => ({ isAIAgentConfigured: () => true }));
-vi.mock('~/utils/backgroundTask.server', () => ({ runBackgroundTask: vi.fn() }));
-vi.mock('../../student.$class.quizzes/helpers.server', () => ({
-  getInstallationToken: vi.fn(async () => 'install-token'),
-  gitlabProjectAccess: vi.fn(async () => null),
-}));
-vi.mock('../../student.$class.quizzes/aiAgent.server', () => ({
-  initializeQuizViaAgent: vi.fn(),
-  sendMessageToAgent: vi.fn(),
-  endQuizSession: (...a: unknown[]) => endQuizSessionMock(...a),
-}));
 vi.mock('@classmoji/auth/server', () => ({
   getAuthSession: (...a: unknown[]) => getAuthSessionMock(...a),
-}));
-vi.mock('@classmoji/auth/mcp-token', () => ({
-  mintMcpAccessToken: vi.fn(async () => ({
-    accessToken: 'mcp-token',
-    expiresAt: new Date('2030-01-01T00:00:00.000Z'),
-  })),
 }));
 
 const { action } = await import('../route.ts');
@@ -155,8 +138,7 @@ describe("api.quiz restartQuiz: a preview's repository", () => {
       code: 'PREVIEW_REPO_REFUSED',
       message: "Your GitHub account can't open that repository. Pick one you have access to.",
     });
-    // The previous preview keeps running and no attempt is created.
-    expect(endQuizSessionMock).not.toHaveBeenCalled();
+    // No attempt is created.
     expect(createNewMock).not.toHaveBeenCalled();
     expect(updateAgentConfigMock).not.toHaveBeenCalled();
   });

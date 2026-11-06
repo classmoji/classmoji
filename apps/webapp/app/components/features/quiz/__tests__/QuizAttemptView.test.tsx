@@ -1,8 +1,8 @@
 /**
  * QuizAttemptView picks the drawer body by the attempt's runtime stamp: the
- * legacy QuizAttemptInterface, with exactly the props it always had, for every
- * attempt not stamped `trigger_chat`; QuizChat for one that is. QuizChat's
- * module is loaded only when a chat attempt renders (lazy), with a loading
+ * read-only LegacyQuizTranscript for every attempt not stamped `trigger_chat`
+ * (the retired ai-agent runtime); QuizChat for one that is. QuizChat's module
+ * is loaded only when a chat attempt renders (lazy), with a loading
  * placeholder until it arrives.
  */
 
@@ -21,7 +21,7 @@ const renderAll = async (element: ReactElement) => {
   return new Response(prelude as ReadableStream).text();
 };
 
-vi.mock('../QuizAttemptInterface', () => ({
+vi.mock('../LegacyQuizTranscript', () => ({
   default: (props: Record<string, unknown>) => {
     legacyProps.push(props);
     return <div data-testid="legacy" />;
@@ -59,8 +59,8 @@ beforeEach(() => {
 });
 
 describe('QuizAttemptView', () => {
-  it('is what the drawers import as QuizAttemptInterface', () => {
-    expect(components.QuizAttemptInterface).toBe(QuizAttemptView);
+  it('is what the drawers import from ~/components', () => {
+    expect(components.QuizAttemptView).toBe(QuizAttemptView);
   });
 
   it('does not load the chat module for a legacy attempt', () => {
@@ -80,18 +80,22 @@ describe('QuizAttemptView', () => {
     expect(html).not.toContain('data-testid="chat"');
   });
 
-  it('renders the legacy chat for an ai_agent attempt, with its props unchanged', () => {
+  it('renders the read-only transcript for an ai_agent attempt, with only what it reads', () => {
     const attempt = { id: 'attempt-1', agent_runtime: 'ai_agent', completed_at: null };
     const html = renderToStaticMarkup(<QuizAttemptView {...BASE} attempt={attempt} />);
 
     expect(html).toContain('data-testid="legacy"');
     expect(chatProps).toHaveLength(0);
-    expect(legacyProps[0]).toMatchObject({ messages: BASE.messages, attempt, userLogin: 'ada' });
-    expect(legacyProps[0]).not.toHaveProperty('transcript');
-    expect(legacyProps[0]).not.toHaveProperty('viewerOwnsAttempt');
+    expect(legacyProps[0]).toEqual({
+      attempt,
+      messages: BASE.messages,
+      userLogin: 'ada',
+      userImage: null,
+      focusMetrics: null,
+    });
   });
 
-  it('renders the legacy chat for an attempt with no stamp', () => {
+  it('renders the read-only transcript for an attempt with no stamp', () => {
     const html = renderToStaticMarkup(
       <QuizAttemptView {...BASE} attempt={{ id: 'attempt-1', completed_at: null }} />
     );

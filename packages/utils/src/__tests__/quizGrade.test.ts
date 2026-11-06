@@ -23,6 +23,7 @@ const attempt = (
   id,
   started_at: startedAt,
   completed_at: completedAt,
+  agent_runtime: 'trigger_chat',
   partial_credit_percentage: pct,
   adjusted_emoji: null,
 });

@@ -25,6 +25,7 @@
  */
 
 import { gradeToEmoji } from './grades.ts';
+import { isOpenQuizAttempt } from './quiz.ts';
 import { gradeBandFor, type GradeBand } from './quizAgent/grading.ts';
 
 /** A classroom's grading scale: emoji shortcode → grade (0-100). `score-N` keys on the numeric scale. */
@@ -35,6 +36,12 @@ export interface ScorableQuizAttempt {
   id: string;
   started_at: Date | string;
   completed_at: Date | string | null;
+  /**
+   * The runtime it was created on. Required, so a reader cannot take an
+   * unfinished attempt from the retired ai-agent runtime for one in progress
+   * (`isOpenQuizAttempt`).
+   */
+  agent_runtime: string | null;
   /** The AI's score. Never edited by staff. */
   partial_credit_percentage: number | null;
   /**
@@ -255,7 +262,11 @@ export interface QuizStanding<T extends ScorableQuizAttempt> {
   attemptsUsed: number;
   /** At least one attempt has completed, scored or not. */
   completed: boolean;
-  /** The newest attempt that has not completed, if any: the one to resume. */
+  /**
+   * The newest attempt still running (`isOpenQuizAttempt`), if any: the one to
+   * resume. An unfinished attempt from the retired ai-agent runtime is never
+   * this; it is neither running nor completed.
+   */
   inProgress: T | null;
   /** The attempt that counts, or null when no completed attempt is scored. */
   counting: T | null;
@@ -269,7 +280,7 @@ export const quizStanding = <T extends ScorableQuizAttempt>(
   scale: QuizEmojiScale
 ): QuizStanding<T> => {
   const counting = countingQuizAttempt(attempts, gradingStrategy, scale);
-  const running = attempts.filter(a => a.completed_at == null);
+  const running = attempts.filter(isOpenQuizAttempt);
   const inProgress = running.length
     ? running.reduce((newest, a) => (time(a.started_at) > time(newest.started_at) ? a : newest))
     : null;

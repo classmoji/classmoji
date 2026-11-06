@@ -262,25 +262,22 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
 
   // ─── createNew ────────────────────────────────────────────────────────────
 
-  it('createNew stamps the runtime, contract version and a 30-day deadline only for trigger_chat', async () => {
+  it('createNew always stamps trigger_chat, the contract version and a 30-day deadline', async () => {
     const membership = { classroom_id: classroomId, role: 'OWNER', user_id: ownerId };
     const before = Date.now();
-    const chatResult = await createNew(quizId, ownerId, membership, {
-      agentRuntime: 'trigger_chat',
-    });
-    const legacyResult = await createNew(quizId, ownerId, membership);
+    const results = [
+      await createNew(quizId, ownerId, membership),
+      await createNew(quizId, ownerId, membership),
+    ];
 
-    const stamped = await attemptRow(chatResult.attemptId!);
-    expect(stamped.agent_runtime).toBe('trigger_chat');
-    expect(stamped.contract_version).toBe(CONTRACT_VERSION);
-    const ttl = stamped.session_expires_at!.getTime() - before;
-    expect(ttl).toBeGreaterThanOrEqual(30 * 24 * 60 * 60 * 1000 - 5_000);
-    expect(ttl).toBeLessThanOrEqual(30 * 24 * 60 * 60 * 1000 + 5_000);
-
-    const legacy = await attemptRow(legacyResult.attemptId!);
-    expect(legacy.agent_runtime).toBe('ai_agent');
-    expect(legacy.contract_version).toBeNull();
-    expect(legacy.session_expires_at).toBeNull();
+    for (const result of results) {
+      const stamped = await attemptRow(result.attemptId!);
+      expect(stamped.agent_runtime).toBe('trigger_chat');
+      expect(stamped.contract_version).toBe(CONTRACT_VERSION);
+      const ttl = stamped.session_expires_at!.getTime() - before;
+      expect(ttl).toBeGreaterThanOrEqual(30 * 24 * 60 * 60 * 1000 - 5_000);
+      expect(ttl).toBeLessThanOrEqual(30 * 24 * 60 * 60 * 1000 + 5_000);
+    }
   });
 
   // ─── durations on a completed attempt ─────────────────────────────────────
@@ -2823,9 +2820,7 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     });
 
     it('an attempt started while the quiz is open takes turns and submits after it closes', async () => {
-      const started = await createNew(assignedQuizId, studentId, studentMembership(studentId), {
-        agentRuntime: 'trigger_chat',
-      });
+      const started = await createNew(assignedQuizId, studentId, studentMembership(studentId));
       expect(started).toMatchObject({ success: true });
       const attemptId = started.attemptId!;
       // The session route writes the grant before handing out a session.
@@ -2839,11 +2834,10 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
       try {
         // No new attempt starts once it has closed...
         const late = await makeMember('late-student', 'STUDENT');
-        expect(
-          await createNew(assignedQuizId, late, studentMembership(late), {
-            agentRuntime: 'trigger_chat',
-          })
-        ).toMatchObject({ success: false, reason: 'quiz_closed' });
+        expect(await createNew(assignedQuizId, late, studentMembership(late))).toMatchObject({
+          success: false,
+          reason: 'quiz_closed',
+        });
 
         // ...and the one under way goes on to its end.
         for (const n of [1, 2, 3]) {

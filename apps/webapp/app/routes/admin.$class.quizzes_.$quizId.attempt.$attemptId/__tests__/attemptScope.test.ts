@@ -49,7 +49,7 @@ vi.mock('~/hooks', () => ({
   useRouteDrawer: () => ({ opened: true }),
   useDarkMode: () => ({ isDarkMode: false }),
 }));
-vi.mock('~/components', () => ({ QuizAttemptInterface: () => null }));
+vi.mock('~/components', () => ({ QuizAttemptView: () => null }));
 vi.mock('react-router', () => ({
   useLocation: () => ({ pathname: '/admin/cs52-26f/quizzes/quiz-1/attempt/attempt-1' }),
   useNavigate: () => () => {},

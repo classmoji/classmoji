@@ -119,6 +119,7 @@ describe('student report loader — quiz visibility', () => {
         quiz_id: 'quiz-1',
         started_at: new Date('2026-09-03T10:00:00Z'),
         completed_at: null,
+        agent_runtime: 'trigger_chat',
         partial_credit_percentage: null,
       },
       {
@@ -126,6 +127,7 @@ describe('student report loader — quiz visibility', () => {
         quiz_id: 'quiz-1',
         started_at: new Date('2026-09-01T10:00:00Z'),
         completed_at: new Date('2026-09-01T10:30:00Z'),
+        agent_runtime: 'trigger_chat',
         partial_credit_percentage: 80,
       },
     ]);
@@ -147,6 +149,7 @@ describe('student report loader — quiz visibility', () => {
       'a-quiz': {
         attempted: true,
         completed: true,
+        inProgress: true,
         scored: true,
         emoji: 'score-80',
         adjusted: false,
@@ -165,6 +168,7 @@ describe('student report loader — quiz visibility', () => {
         quiz_id: 'quiz-1',
         started_at: new Date('2026-09-03T10:00:00Z'),
         completed_at: null,
+        agent_runtime: 'trigger_chat',
         partial_credit_percentage: null,
       },
     ]);
@@ -175,11 +179,33 @@ describe('student report loader — quiz visibility', () => {
       'a-quiz': {
         attempted: true,
         completed: false,
+        inProgress: true,
         scored: false,
         emoji: null,
         adjusted: false,
         orphaned: false,
       },
+    });
+  });
+
+  it('reports an unfinished attempt from the retired ai-agent runtime as not in progress', async () => {
+    mocks.findForUserByQuizIds.mockResolvedValue([
+      {
+        id: 'legacy',
+        quiz_id: 'quiz-1',
+        started_at: new Date('2026-09-03T10:00:00Z'),
+        completed_at: null,
+        agent_runtime: 'ai_agent',
+        partial_credit_percentage: null,
+      },
+    ]);
+
+    const data = await load();
+
+    expect(data.quizStatus['a-quiz']).toMatchObject({
+      attempted: true,
+      completed: false,
+      inProgress: false,
     });
   });
 

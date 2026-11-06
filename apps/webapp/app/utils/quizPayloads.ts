@@ -14,7 +14,7 @@
  *     for every rostered student with no attempt (not started, or a counted
  *     0 once the deadline has passed).
  *   - `quizDrawerView` / `attemptDrawerView` — the attempt drawers (preview,
- *     staff review, student) and the `QuizAttemptInterface` they render.
+ *     staff review, student) and the `QuizAttemptView` they render.
  *   - `studentQuizAttemptView` / `studentQuizAttemptsSummaryView` — the
  *     student quiz list's attempts table and per-quiz summary. The service
  *     (`quiz.getQuizzesForStudent`) selects the attempt columns the list and
@@ -269,7 +269,11 @@ export const attemptGradeView = ({
   let lateHours: number | null = null;
   let countedEmoji: string | null = null;
   if (late && late.studentDeadline != null) {
-    const score = countingQuizScore([attempt], null, { ...late, emojiScale });
+    // A completed attempt (checked above): its runtime does not change its score.
+    const score = countingQuizScore([{ ...attempt, agent_runtime: null }], null, {
+      ...late,
+      emojiScale,
+    });
     lateHours = quizLateHours(attempt.completed_at, late);
     countedEmoji = countedEmojiOf(
       grade.effective.percentage,
@@ -372,7 +376,7 @@ export const studentQuizRegradeView = (
   };
 };
 
-/** The quiz fields the attempt drawers and `QuizAttemptInterface` read. */
+/** The quiz fields the attempt drawers and `QuizAttemptView` read. */
 export interface QuizDrawerView {
   id: string;
   name: string;
@@ -390,7 +394,7 @@ export const quizDrawerView = (quiz: {
 });
 
 /**
- * The attempt fields `QuizAttemptInterface` reads: identity, timing,
+ * The attempt fields `QuizAttemptView` reads: identity, timing,
  * completion, and a completed attempt's stored per-question results (what the
  * evaluation card shows). Staff views also carry the stored scores; a
  * student's carries no grade number at all (E1): no percentages, no
@@ -408,8 +412,8 @@ export interface AttemptDrawerView {
   /** Each question's recorded result with the emoji stored for it (the classroom's scale). */
   question_results: DrawerQuestionResult[];
   /**
-   * The runtime the attempt was stamped with at creation: `ai_agent` renders
-   * the legacy chat, `trigger_chat` the chat-runtime one.
+   * The runtime the attempt was stamped with at creation: `trigger_chat`
+   * renders the chat; `ai_agent` (the retired runtime) a read-only transcript.
    */
   agent_runtime: 'ai_agent' | 'trigger_chat';
   /**
@@ -648,7 +652,9 @@ export const quizResultStatsView = (
   return {
     totalAttempts: all.length,
     completedAttempts: completed.length,
-    inProgressAttempts: all.length - completed.length,
+    // Running ones only: an unfinished attempt from the retired ai-agent
+    // runtime never finishes, so it is not in progress.
+    inProgressAttempts: all.filter(a => a.open).length,
     completionRate: all.length > 0 ? Math.round((completed.length / all.length) * 1000) / 10 : 0,
     averageEmoji:
       scores.length > 0

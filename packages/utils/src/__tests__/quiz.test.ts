@@ -5,6 +5,9 @@ import {
   parseQuestionComplete,
   completionMessageDisplay,
   redactQuizEvaluationBlocks,
+  isOpenQuizAttempt,
+  isTriggerChatAttempt,
+  isUnfinishedLegacyAttempt,
 } from '../quiz.ts';
 import {
   QuizEvaluationRecordStudentSchema,
@@ -137,8 +140,7 @@ describe('parseQuestionComplete', () => {
   });
 });
 
-
-describe('redactQuizEvaluationBlocks (a student\'s legacy messages, E1)', () => {
+describe("redactQuizEvaluationBlocks (a student's legacy messages, E1)", () => {
   const EVALUATION = {
     quiz_complete: true,
     evaluation: 'GOOD',
@@ -179,8 +181,7 @@ describe('redactQuizEvaluationBlocks (a student\'s legacy messages, E1)', () => 
   });
 
   it('narrows a raw JSON block (nested braces included) and keeps the text after it', () => {
-    const content =
-      '[QUIZ_EVALUATION]\n' + JSON.stringify(EVALUATION) + '\n\nSee you next week.';
+    const content = '[QUIZ_EVALUATION]\n' + JSON.stringify(EVALUATION) + '\n\nSee you next week.';
     const out = redactQuizEvaluationBlocks(content);
     expectNoNumbers(out);
     expect(checkForCompletion(out)).toMatchObject({ quiz_complete: true, evaluation: 'GOOD' });
@@ -191,7 +192,9 @@ describe('redactQuizEvaluationBlocks (a student\'s legacy messages, E1)', () => 
     expect(
       redactQuizEvaluationBlocks('Done.\n[QUIZ_EVALUATION]\n```json\n{"x": 73.37,\n```\nBye')
     ).toBe('Done.\n\nBye');
-    const unclosed = redactQuizEvaluationBlocks('Done.\n[QUIZ_EVALUATION]\n{"partial_credit_percentage": 73.37');
+    const unclosed = redactQuizEvaluationBlocks(
+      'Done.\n[QUIZ_EVALUATION]\n{"partial_credit_percentage": 73.37'
+    );
     expect(unclosed).toBe('Done.');
   });
 
@@ -253,5 +256,40 @@ describe('studentEvaluationRecord (E1)', () => {
   it('reads anything else as no record', () => {
     expect(studentEvaluationRecord(null)).toBeNull();
     expect(studentEvaluationRecord({ v: 1 } as unknown as QuizEvaluationRecordV2)).toBeNull();
+  });
+});
+
+describe('the quiz runtime predicates', () => {
+  const done = new Date('2026-09-28T12:00:00Z');
+
+  it('isTriggerChatAttempt: only the chat stamp', () => {
+    expect(isTriggerChatAttempt({ agent_runtime: 'trigger_chat' })).toBe(true);
+    for (const agent_runtime of ['ai_agent', undefined, null, 'other']) {
+      expect(isTriggerChatAttempt({ agent_runtime })).toBe(false);
+    }
+    expect(isTriggerChatAttempt(null)).toBe(false);
+  });
+
+  it('isOpenQuizAttempt: an unfinished chat attempt only', () => {
+    expect(isOpenQuizAttempt({ agent_runtime: 'trigger_chat', completed_at: null })).toBe(true);
+    expect(isOpenQuizAttempt({ agent_runtime: 'trigger_chat', completed_at: done })).toBe(false);
+    // An unfinished attempt from the retired runtime, or a row read without the column.
+    expect(isOpenQuizAttempt({ agent_runtime: 'ai_agent', completed_at: null })).toBe(false);
+    expect(isOpenQuizAttempt({ completed_at: null })).toBe(false);
+    expect(isOpenQuizAttempt({ agent_runtime: 'ai_agent', completed_at: done })).toBe(false);
+    expect(isOpenQuizAttempt(null)).toBe(false);
+    expect(isOpenQuizAttempt(undefined)).toBe(false);
+  });
+
+  it('isUnfinishedLegacyAttempt: unfinished and not on the chat runtime', () => {
+    expect(isUnfinishedLegacyAttempt({ agent_runtime: 'ai_agent', completed_at: null })).toBe(true);
+    expect(isUnfinishedLegacyAttempt({ completed_at: null })).toBe(true);
+    expect(isUnfinishedLegacyAttempt({ agent_runtime: 'ai_agent', completed_at: done })).toBe(
+      false
+    );
+    expect(isUnfinishedLegacyAttempt({ agent_runtime: 'trigger_chat', completed_at: null })).toBe(
+      false
+    );
+    expect(isUnfinishedLegacyAttempt(null)).toBe(false);
   });
 });

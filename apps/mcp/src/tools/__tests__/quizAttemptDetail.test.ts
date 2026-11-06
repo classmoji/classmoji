@@ -663,6 +663,20 @@ describe('get_quiz_attempt', () => {
     expect(payload.evaluation).toBeNull();
   });
 
+  it('reports an unfinished legacy attempt as NOT_FINISHED, with no grades', async () => {
+    mocks.findByQuiz.mockResolvedValue([
+      attemptRow({ completed_at: null, agent_runtime: 'ai_agent', partial_credit_percentage: 40 }),
+    ]);
+
+    const payload = parse(await getQuizAttemptTool.handler(ARGS, CTX));
+
+    expect(payload.attempt).toMatchObject({
+      status: 'NOT_FINISHED',
+      completed_at: null,
+      grade_emoji: null,
+    });
+  });
+
   it('flags a current staff member’s attempt as a preview, with their login', async () => {
     mocks.findUsersByRole.mockResolvedValue([]);
     mocks.findUsersByRoles.mockResolvedValue([member('ada', 'gitlab-prof', 'Prof Ada')]);

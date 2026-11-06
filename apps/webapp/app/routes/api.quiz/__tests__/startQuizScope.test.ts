@@ -57,32 +57,8 @@ vi.mock('~/utils/aiFeatures.server', () => ({
   isAIAgentConfigured: () => true,
 }));
 
-vi.mock('~/utils/backgroundTask.server', () => ({
-  runBackgroundTask: vi.fn(),
-}));
-
-vi.mock('../../student.$class.quizzes/helpers.server', () => ({
-  getInstallationToken: vi.fn(async () => 'install-token'),
-  gitlabProjectAccess: vi.fn(),
-}));
-
-vi.mock('../../student.$class.quizzes/aiAgent.server', () => ({
-  initializeQuizViaAgent: vi.fn(),
-  sendMessageToAgent: vi.fn(),
-  endQuizSession: vi.fn(),
-}));
-
 vi.mock('@classmoji/auth/server', () => ({
   getAuthSession: (...a: unknown[]) => getAuthSessionMock(...a),
-}));
-
-// The per-call MCP read token (quiz source material, Stage 2). Mocked so no
-// test here mints against a real database.
-vi.mock('@classmoji/auth/mcp-token', () => ({
-  mintMcpAccessToken: vi.fn(async () => ({
-    accessToken: 'mcp-token',
-    expiresAt: new Date('2030-01-01T00:00:00.000Z'),
-  })),
 }));
 
 const { action } = await import('../route.ts');
@@ -105,6 +81,7 @@ const buildAttempt = (id: string, quizId: string, userId: string) => ({
   id,
   quiz_id: quizId,
   user_id: userId,
+  agent_runtime: 'trigger_chat',
   quiz: {
     id: quizId,
     classroom_id: quizId === QUIZ_ID ? 'class-1' : 'class-2',
@@ -141,8 +118,7 @@ describe('api.quiz startQuiz — writes stay inside the authorized classroom', (
       classroom_id: 'class-1',
       classroom: { slug: 'test-class' },
     });
-    // An attempt that already has messages: the action returns its id straight
-    // back, so these tests never reach the ai-agent seam.
+    // A chat attempt: the action returns its id straight back.
     findWithMessagesMock.mockImplementation(async (id: string) => {
       const attempt = ATTEMPTS[id];
       if (!attempt) throw new QuizAttemptNotFoundError('Attempt not found');

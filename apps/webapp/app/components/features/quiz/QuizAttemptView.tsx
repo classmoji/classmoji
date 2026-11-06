@@ -1,16 +1,18 @@
-import { lazy, Suspense, type ComponentProps } from 'react';
+import { lazy, Suspense } from 'react';
 import { Button, Result, Skeleton } from 'antd';
 import { ErrorBoundary } from 'react-error-boundary';
 import { captureBoundaryError } from '~/utils/sentry.client';
+import { isTriggerChatAttempt } from '@classmoji/utils';
 import type { QuizUIMessage } from '@classmoji/utils/quiz-agent';
-import QuizAttemptInterface from './QuizAttemptInterface';
+import LegacyQuizTranscript, { type LegacyQuizTranscriptProps } from './LegacyQuizTranscript';
 import type { QuizChatProps } from './QuizChat';
 
 /**
  * The attempt drawer's body, chosen by the runtime the attempt was stamped
- * with when it was created (`attempt.agent_runtime`): `trigger_chat` renders
- * QuizChat, anything else the legacy QuizAttemptInterface with exactly the
- * props it has always received.
+ * with when it was created (`attempt.agent_runtime`): `trigger_chat` (every
+ * attempt created now) renders QuizChat; anything else is an attempt from the
+ * retired ai-agent runtime and renders LegacyQuizTranscript, read-only
+ * whatever the drawer passes, completed or not.
  *
  * QuizChat is loaded only when a chat attempt renders: it brings the AI SDK
  * and the Trigger chat client, which no other page needs, and this module is
@@ -19,9 +21,17 @@ import type { QuizChatProps } from './QuizChat';
  */
 const QuizChat = lazy(() => import('./QuizChat'));
 
-type LegacyProps = ComponentProps<typeof QuizAttemptInterface>;
-
-export type QuizAttemptViewProps = LegacyProps & {
+export type QuizAttemptViewProps = {
+  quiz: Record<string, unknown>;
+  attempt: Record<string, unknown> | null;
+  /** A legacy attempt's saved messages (a chat attempt sends none). */
+  messages?: LegacyQuizTranscriptProps['messages'];
+  userLogin: string | null;
+  userImage?: string | null;
+  readOnly?: boolean;
+  focusMetrics?: LegacyQuizTranscriptProps['focusMetrics'];
+  isVisible?: boolean;
+  onClose?: (newAttemptId?: string) => void;
   transcript?: QuizUIMessage[] | null;
   viewerOwnsAttempt?: boolean;
   /** A chat attempt's opening was admitted (see QuizChatProps). */
@@ -30,10 +40,12 @@ export type QuizAttemptViewProps = LegacyProps & {
   chatActivity?: QuizChatProps['chatActivity'];
   /** How many more messages an open chat attempt admits (see QuizChatProps). */
   messagesLeft?: number | null;
+  /** What else the drawer loaders send (org, result, …); unread here. */
+  [key: string]: unknown;
 };
 
 export const isChatRuntimeAttempt = (attempt: unknown) =>
-  (attempt as { agent_runtime?: unknown } | null)?.agent_runtime === 'trigger_chat';
+  isTriggerChatAttempt(attempt as { agent_runtime?: unknown } | null);
 
 /** Shown while the chat loads. */
 const QuizChatLoading = () => (
@@ -98,15 +110,15 @@ function QuizAttemptView(props: QuizAttemptViewProps) {
       </ErrorBoundary>
     );
   }
-  const {
-    transcript: _transcript,
-    viewerOwnsAttempt: _owns,
-    chatStarted: _started,
-    chatActivity: _activity,
-    messagesLeft: _messagesLeft,
-    ...legacyProps
-  } = props;
-  return <QuizAttemptInterface {...legacyProps} />;
+  return (
+    <LegacyQuizTranscript
+      attempt={props.attempt}
+      messages={props.messages}
+      userLogin={props.userLogin}
+      userImage={props.userImage ?? null}
+      focusMetrics={props.focusMetrics ?? null}
+    />
+  );
 }
 
 export default QuizAttemptView;
