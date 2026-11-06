@@ -27,6 +27,7 @@ import {
 } from '~/utils/quizPayloads';
 import { impersonatedBy } from '~/routes/admin.$class.ask-moji/impersonation.server';
 import { isTriggerChatAttempt, redactQuizEvaluationBlocks } from '@classmoji/utils';
+import { attemptAnswerRules } from '@classmoji/utils/quiz-agent';
 import { closeIfExpired } from '~/utils/quizAttemptExpiry.server';
 
 export async function loader({ params, request }: Route.LoaderArgs) {
@@ -213,6 +214,10 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     chatActivity: isChatAttempt ? chatActivityView(attemptData.attempt) : null,
     // How many more messages an open chat attempt admits: a count only.
     messagesLeft: messageLimit && !readOnly ? messageLimit.messagesLeft : null,
+    // The answer rules the attempt works under (pinned on it, or the quiz's
+    // own before its first turn): numbers only, for the rules line, the
+    // answer counter and the hint button.
+    answerRules: attemptAnswerRules(attemptData.attempt.agent_config, quiz),
     viewerOwnsAttempt,
     userLogin: attemptData.attempt.user?.login || null,
     userImage: attemptData.attempt.user?.image || null,

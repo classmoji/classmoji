@@ -11,6 +11,7 @@ import {
 } from '../quiz.ts';
 import {
   QuizEvaluationRecordStudentSchema,
+  QuizEvaluationRecordV2Schema,
   studentEvaluationRecord,
   type QuizEvaluationRecordV2,
 } from '../quizAgent/index.ts';
@@ -251,6 +252,33 @@ describe('studentEvaluationRecord (E1)', () => {
       question_results: [{ question_num: 1, attempts: 1, emoji: 'eyes' }],
     });
     expect(JSON.stringify(narrowed)).not.toContain('73.37');
+  });
+
+  it('never gives a student the counts staff see (answers, messages, hints)', () => {
+    const counted = {
+      ...record,
+      question_results: [
+        { ...record.question_results[0], answers_given: 2, messages_sent: 3, hints_used: 1 },
+      ],
+    } as QuizEvaluationRecordV2;
+    expect(QuizEvaluationRecordV2Schema.parse(counted).question_results[0]).toMatchObject({
+      answers_given: 2,
+      messages_sent: 3,
+      hints_used: 1,
+    });
+    const narrowed = studentEvaluationRecord(counted);
+    expect(narrowed?.question_results[0]).toEqual({
+      question_num: 1,
+      attempts: 2,
+      tries: 2,
+      emoji: 'eyes',
+      brief_feedback: 'Close.',
+    });
+    // The live stream's evaluation part goes through the same student schema.
+    const streamed = QuizEvaluationRecordStudentSchema.parse(counted);
+    for (const key of ['answers_given', 'messages_sent', 'hints_used']) {
+      expect(streamed.question_results[0]).not.toHaveProperty(key);
+    }
   });
 
   it('reads anything else as no record', () => {

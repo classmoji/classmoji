@@ -82,7 +82,13 @@ describe('quizAuthorSettingKeysIn', () => {
         gradingStrategy: 'HIGHEST',
       })
     ).toEqual(['questionCount', 'maxAttempts', 'gradingStrategy']);
-    expect(QUIZ_AUTHOR_SETTING_KEYS).toEqual(['questionCount', 'maxAttempts', 'gradingStrategy']);
+    expect(QUIZ_AUTHOR_SETTING_KEYS).toEqual([
+      'questionCount',
+      'maxAttempts',
+      'gradingStrategy',
+      'hintCost',
+      'maxAnswers',
+    ]);
   });
 
   it('leaves the content an assistant edits alone, and ignores undefined', () => {

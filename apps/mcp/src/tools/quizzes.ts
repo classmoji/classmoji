@@ -11,7 +11,7 @@
  *     field (QUIZ_ASSIGNMENT_ARGS: module_id, release_at, due_date, closes_at,
  *     weight, tokens_per_hour, published) or author setting
  *     (QUIZ_AUTHOR_SETTING_ARGS: question_count, max_attempts,
- *     grading_strategy) from a caller who holds neither OWNER nor TEACHER is
+ *     grading_strategy, hint_cost, max_answers) from a caller who holds neither OWNER nor TEACHER is
  *     refused before the quiz is read or written.
  *
  * A quiz is placed in a module by its assignment: quiz_create requires
@@ -53,6 +53,14 @@ import {
   normalizeExcludedPaths,
 } from '@classmoji/utils/quiz-excluded-paths';
 import { MAX_STUDENT_TURNS } from '@classmoji/utils/quiz-agent/limits';
+import {
+  DEFAULT_MAX_ANSWERS,
+  HINT_COST,
+  HINT_COST_MAX,
+  HINT_COST_MIN,
+  MAX_ANSWERS_MAX,
+  MAX_ANSWERS_MIN,
+} from '@classmoji/utils/quiz-agent';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
@@ -121,7 +129,13 @@ const QUIZ_ASSIGNMENT_ARGS = [
  * a quiz author may change (the web form shows them read-only to an
  * assistant): QUIZ_AUTHOR_SETTING_KEYS in @classmoji/utils.
  */
-const QUIZ_AUTHOR_SETTING_ARGS = ['question_count', 'max_attempts', 'grading_strategy'] as const;
+const QUIZ_AUTHOR_SETTING_ARGS = [
+  'question_count',
+  'max_attempts',
+  'grading_strategy',
+  'hint_cost',
+  'max_answers',
+] as const;
 
 /**
  * S1 for a module a quiz is placed in: it must be in the authorized classroom.
@@ -176,6 +190,8 @@ interface QuizRow extends QuizPlacementSource {
   course_search_enabled?: boolean;
   excluded_paths?: string[];
   code_sandbox_enabled?: boolean;
+  hint_cost?: number;
+  max_answers?: number;
 }
 
 /** What quiz.publish returns: the quiz row plus what the publish did. */
@@ -204,6 +220,8 @@ function quizSummary(quiz: QuizRow) {
     question_count: quiz.question_count ?? null,
     max_attempts: quiz.max_attempts ?? null,
     grading_strategy: quiz.grading_strategy ?? null,
+    hint_cost: quiz.hint_cost ?? null,
+    max_answers: quiz.max_answers ?? null,
     include_code_context: quiz.include_code_context ?? false,
     course_search_enabled: quiz.course_search_enabled ?? false,
     excluded_paths: quiz.excluded_paths ?? [],
@@ -247,6 +265,29 @@ const tokensPerHourSchema = z
   );
 
 const moduleIdSchema = z.string().uuid().describe('Module the quiz sits in (see list_modules)');
+
+// Author settings, like question_count (QUIZ_AUTHOR_SETTING_ARGS). Ranges are
+// the quiz form's and the service's (@classmoji/utils/quiz-agent answerRules).
+const hintCostSchema = z
+  .number()
+  .int()
+  .min(HINT_COST_MIN)
+  .max(HINT_COST_MAX)
+  .describe(
+    `Points off each answer a student gives after a hint on that question ` +
+      `(${HINT_COST_MIN}–${HINT_COST_MAX}, default ${HINT_COST}; 0 makes hints free)`
+  );
+
+const maxAnswersSchema = z
+  .number()
+  .int()
+  .min(MAX_ANSWERS_MIN)
+  .max(MAX_ANSWERS_MAX)
+  .describe(
+    `Answers a student may give to one question (${MAX_ANSWERS_MIN}–${MAX_ANSWERS_MAX}, ` +
+      `default ${DEFAULT_MAX_ANSWERS}); after the last one the quiz explains the answer and ` +
+      'moves on'
+  );
 
 const gradingStrategySchema = z
   .enum(['HIGHEST', 'MOST_RECENT', 'FIRST'])
@@ -325,6 +366,8 @@ interface QuizCreateArgs {
   code_sandbox_enabled?: boolean;
   grading_strategy?: 'HIGHEST' | 'MOST_RECENT' | 'FIRST';
   max_attempts?: number;
+  hint_cost?: number;
+  max_answers?: number;
 }
 
 export const quizCreateTool: ToolDefinition<QuizCreateArgs> = {
@@ -387,6 +430,8 @@ export const quizCreateTool: ToolDefinition<QuizCreateArgs> = {
     code_sandbox_enabled: codeSandboxSchema.optional(),
     grading_strategy: gradingStrategySchema.optional(),
     max_attempts: maxAttemptsSchema.optional(),
+    hint_cost: hintCostSchema.optional(),
+    max_answers: maxAnswersSchema.optional(),
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
@@ -438,6 +483,8 @@ export const quizCreateTool: ToolDefinition<QuizCreateArgs> = {
           : {}),
         ...(args.grading_strategy !== undefined ? { gradingStrategy: args.grading_strategy } : {}),
         ...(args.max_attempts !== undefined ? { maxAttempts: args.max_attempts } : {}),
+        ...(args.hint_cost !== undefined ? { hintCost: args.hint_cost } : {}),
+        ...(args.max_answers !== undefined ? { maxAnswers: args.max_answers } : {}),
       })) as QuizRow;
     } catch (error) {
       throw mapQuizAssignmentError(error);
@@ -454,6 +501,9 @@ export const quizCreateTool: ToolDefinition<QuizCreateArgs> = {
         repository_id: repositoryId ?? null,
         // As the row was saved: absent from the call is off.
         code_sandbox_enabled: created.code_sandbox_enabled === true,
+        // Short numbers, as saved (the column defaults when the call has none).
+        hint_cost: created.hint_cost ?? null,
+        max_answers: created.max_answers ?? null,
       },
     });
 
@@ -483,6 +533,8 @@ interface QuizServiceUpdate {
   codeSandboxEnabled?: boolean;
   maxAttempts?: number;
   gradingStrategy?: 'HIGHEST' | 'MOST_RECENT' | 'FIRST';
+  hintCost?: number;
+  maxAnswers?: number;
   assignment?: {
     moduleId?: string;
     releaseAt?: string | null;
@@ -524,6 +576,8 @@ interface QuizUpdateArgs {
   code_sandbox_enabled?: boolean;
   grading_strategy?: 'HIGHEST' | 'MOST_RECENT' | 'FIRST';
   max_attempts?: number;
+  hint_cost?: number;
+  max_answers?: number;
 }
 
 export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
@@ -533,7 +587,8 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
   description:
     'Updates a quiz’s settings and prompts. Owner, teacher or assistant; an assistant may change ' +
     'the content and the name only, not module_id, release_at, due_date, closes_at, weight, ' +
-    'tokens_per_hour, published, question_count, max_attempts or grading_strategy. Requires a ' +
+    'tokens_per_hour, published, question_count, max_attempts, grading_strategy, hint_cost or ' +
+    'max_answers. Requires a ' +
     'Pro subscription and quizzes enabled. Provide at ' +
     'least one field. module_id moves the quiz to another module (a quiz in no module needs one ' +
     'before any of those fields). closes_at stops new attempts (null reopens); published:false ' +
@@ -596,6 +651,8 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
     code_sandbox_enabled: codeSandboxSchema.optional(),
     grading_strategy: gradingStrategySchema.optional(),
     max_attempts: maxAttemptsSchema.optional(),
+    hint_cost: hintCostSchema.optional(),
+    max_answers: maxAnswersSchema.optional(),
   },
   handler: async (args, ctx) => {
     // `status` was replaced; a caller still sending it is told what to use
@@ -640,6 +697,8 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
     set('code_sandbox_enabled', 'codeSandboxEnabled', args.code_sandbox_enabled);
     set('grading_strategy', 'gradingStrategy', args.grading_strategy);
     set('max_attempts', 'maxAttempts', args.max_attempts);
+    set('hint_cost', 'hintCost', args.hint_cost);
+    set('max_answers', 'maxAnswers', args.max_answers);
     setOnAssignment('release_at', 'releaseAt', args.release_at);
     setOnAssignment('due_date', 'dueDate', args.due_date);
     setOnAssignment('closes_at', 'closesAt', args.closes_at);
@@ -677,7 +736,7 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
       throw new ToolError(
         'forbidden',
         'Only the class owner or a teacher can change a quiz’s number of questions, max ' +
-          'attempts or grading strategy',
+          'attempts, grading strategy, hint cost or answers per question',
         'INSUFFICIENT_ROLE'
       );
     }
@@ -725,6 +784,10 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
         ...(args.code_sandbox_enabled !== undefined
           ? { code_sandbox_enabled: args.code_sandbox_enabled }
           : {}),
+        // Short numbers too, as the call set them (the schema took only whole
+        // numbers in range, which the service stores as given).
+        ...(args.hint_cost !== undefined ? { hint_cost: args.hint_cost } : {}),
+        ...(args.max_answers !== undefined ? { max_answers: args.max_answers } : {}),
       },
     });
 

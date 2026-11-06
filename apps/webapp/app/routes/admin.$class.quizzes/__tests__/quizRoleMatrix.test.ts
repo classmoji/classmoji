@@ -160,6 +160,9 @@ const AUTHOR_SETTING_SAVES: Array<[string, Record<string, unknown>]> = [
   ['maxAttempts', { maxAttempts: 2 }],
   ['maxAttempts (0, unlimited)', { maxAttempts: 0 }],
   ['gradingStrategy', { gradingStrategy: 'MOST_RECENT' }],
+  ['hintCost', { hintCost: 10 }],
+  ['hintCost (0, free hints)', { hintCost: 0 }],
+  ['maxAnswers', { maxAnswers: 3 }],
 ];
 
 type Intent = {

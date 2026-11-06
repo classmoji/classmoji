@@ -29,6 +29,7 @@ import {
   MAX_STUDENT_TURNS,
   buildTurnStatus,
   buttonActionFor,
+  quizAnswerRules,
   containsReservedText,
   projectTranscript,
   quizStaffVisibility,
@@ -235,6 +236,11 @@ const ensureConversation = async (tx: Tx, attempt: LockedAttempt): Promise<strin
  * sandbox and the student may submit code, fixed for the attempt's life like
  * its tool schema. An attempt pinned before the switch existed never gets the
  * key, so it never takes a code submission.
+ *
+ * It pins the quiz's answer rules too (`agent_config.hintCost`, `maxAnswers`):
+ * what a hint costs on this attempt and how many answers a question takes.
+ * An attempt pinned before they existed never gets them, so it keeps a hint
+ * cost of 15 and no server answer limit (`attemptAnswerRules`).
  */
 const pinnedAgentConfig = (
   attempt: LockedAttempt,
@@ -243,10 +249,13 @@ const pinnedAgentConfig = (
   const config = isObject(attempt.agent_config) ? attempt.agent_config : {};
   const pinned = config.questionCount;
   if (typeof pinned === 'number' && Number.isInteger(pinned) && pinned > 0) return undefined;
+  const rules = quizAnswerRules(attempt.quiz);
   return toJson({
     ...config,
     questionCount,
     codeSandbox: attempt.quiz.code_sandbox_enabled === true,
+    hintCost: rules.hintCost,
+    maxAnswers: rules.maxAnswers,
   });
 };
 

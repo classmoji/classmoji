@@ -510,6 +510,9 @@ describe('get_quiz_attempt', () => {
         emoji: 'eyes',
         brief_feedback: 'Got it on the second try.',
         skipped_by_end: false,
+        answers_given: null,
+        messages_sent: null,
+        hints_used: null,
       },
       {
         question_num: 2,
@@ -519,6 +522,9 @@ describe('get_quiz_attempt', () => {
         emoji: 'rocket',
         brief_feedback: 'Spot on.',
         skipped_by_end: false,
+        answers_given: null,
+        messages_sent: null,
+        hints_used: null,
       },
     ]);
     expect(payload.evaluation).toEqual({
@@ -606,6 +612,9 @@ describe('get_quiz_attempt', () => {
         emoji: '-1',
         brief_feedback: null,
         skipped_by_end: false,
+        answers_given: null,
+        messages_sent: null,
+        hints_used: null,
       },
       {
         question_num: 2,
@@ -615,8 +624,49 @@ describe('get_quiz_attempt', () => {
         emoji: 'rocket',
         brief_feedback: null,
         skipped_by_end: false,
+        answers_given: null,
+        messages_sent: null,
+        hints_used: null,
       },
     ]);
+  });
+
+  it('carries each question’s counted answers, messages and hints, null where not counted', async () => {
+    mocks.findByQuiz.mockResolvedValue([
+      attemptRow({
+        question_results_json: [
+          {
+            ...STORED_RESULTS[0],
+            answers_given: 2,
+            messages_sent: 3,
+            hints_used: 1,
+          },
+          // Recorded before the counts existed, or with a value that is not one.
+          { ...STORED_RESULTS[1], answers_given: -1, hints_used: 'two' },
+        ],
+      }),
+    ]);
+
+    const payload = parse(await getQuizAttemptTool.handler(ARGS, CTX));
+
+    expect(payload.question_results[0]).toMatchObject({
+      question_num: 1,
+      answers_given: 2,
+      messages_sent: 3,
+      hints_used: 1,
+    });
+    expect(payload.question_results[1]).toMatchObject({
+      question_num: 2,
+      answers_given: null,
+      messages_sent: null,
+      hints_used: null,
+    });
+  });
+
+  it('names the counts in its description', () => {
+    for (const field of ['answers_given', 'messages_sent', 'hints_used']) {
+      expect(getQuizAttemptTool.description).toContain(field);
+    }
   });
 
   describe('ended_by', () => {

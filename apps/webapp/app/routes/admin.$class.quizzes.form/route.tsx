@@ -28,6 +28,16 @@ import {
 import { MAX_STUDENT_TURNS } from '@classmoji/utils/quiz-agent/limits';
 import { QUIZ_MESSAGE_LIMIT_COPY } from '@classmoji/utils/quiz-agent/copy';
 import {
+  DEFAULT_MAX_ANSWERS,
+  HINT_COST,
+  HINT_COST_MAX,
+  HINT_COST_MIN,
+  MAX_ANSWERS_MAX,
+  MAX_ANSWERS_MIN,
+  checkHintCost,
+  checkMaxAnswers,
+} from '@classmoji/utils/quiz-agent';
+import {
   fromPickerValue,
   pickerLabel,
   pickerOptions,
@@ -59,6 +69,29 @@ const validateExcludedPaths = (_rule: unknown, value: string | undefined) => {
   const result = normalizeExcludedPaths(parseExcludedPathsText(value));
   return result.ok ? Promise.resolve() : Promise.reject(new Error(result.error));
 };
+
+/**
+ * Hint cost and answers per question: the quiz service's own checks, so the
+ * message a field shows is the one the server would answer with.
+ */
+const validateWith =
+  (check: (value: unknown) => { ok: true; value: number } | { ok: false; error: string }) =>
+  (_rule: unknown, value: unknown) => {
+    const result = check(value);
+    return result.ok ? Promise.resolve() : Promise.reject(new Error(result.error));
+  };
+const validateHintCost = validateWith(checkHintCost);
+const validateMaxAnswers = validateWith(checkMaxAnswers);
+
+/**
+ * A number input's text as the number it says, so the JSON save posts a
+ * number. Anything else (an empty field above all, which would otherwise read
+ * as 0, a free hint) is kept as typed for the validator to refuse.
+ */
+const toNumberIfNumeric = (value: unknown) =>
+  typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))
+    ? Number(value)
+    : value;
 
 export async function loader({ params, request }: Route.LoaderArgs) {
   const classSlug = params.class!;
@@ -173,6 +206,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       questionCount: found.question_count || 5,
       maxAttempts: found.max_attempts ?? 1,
       gradingStrategy: found.grading_strategy || 'HIGHEST',
+      hintCost: found.hint_cost ?? HINT_COST,
+      maxAnswers: found.max_answers ?? DEFAULT_MAX_ANSWERS,
       includeCodeContext: found.include_code_context || false,
       // In material order, as picker values.
       sourceMaterial: toPickerValues(found.source_material),
@@ -188,7 +223,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     quiz,
     isEditing: Boolean(quizId),
     // Decision 4(b): the owner and teachers edit the Assignment panel, the
-    // number of questions, max attempts and grading strategy; they are
+    // number of questions, max attempts, grading strategy, hint cost and
+    // answers per question; they are
     // read-only for a teaching assistant. The quizzes action enforces it.
     canAuthor,
     isOwner: membership?.role === 'OWNER',
@@ -330,10 +366,16 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
         // saved list is left as it is. So is codeSandboxEnabled, carried in
         // `values` only while its switch is shown.
         const { excludedPaths: excludedPathsText, assignment, ...values } = allValues;
-        // An assistant sees the number of questions, max attempts and grading
-        // strategy read-only, and its save never carries them.
+        // An assistant sees the number of questions, max attempts, grading
+        // strategy, hint cost and answers per question read-only, and its save
+        // never carries them.
         if (!canAuthor) {
           for (const key of QUIZ_AUTHOR_SETTING_KEYS) delete values[key];
+        }
+        // Posted as numbers (the fields normalize what is typed; a value set
+        // before an edit may still be the loader's number or its text).
+        for (const key of ['hintCost', 'maxAnswers'] as const) {
+          if (values[key] !== undefined) values[key] = toNumberIfNumeric(values[key]);
         }
         // The Assignment panel, for the owner and teachers only: an
         // assistant's save never carries an assignment field. A new quiz
@@ -477,6 +519,8 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
                     questionCount: 5,
                     maxAttempts: 1,
                     gradingStrategy: 'HIGHEST',
+                    hintCost: HINT_COST,
+                    maxAnswers: DEFAULT_MAX_ANSWERS,
                     subject: '',
                     difficultyLevel: 'Beginner',
                     includeCodeContext: false,
@@ -664,6 +708,43 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
                           <Option value="MOST_RECENT">Most Recent</Option>
                           <Option value="FIRST">First Attempt Only</Option>
                         </Select>
+                      </Form.Item>
+                    </div>
+
+                    {/* How answers are taken: author settings too, read-only
+                    for a teaching assistant and left out of its save (so not
+                    checked for one either). */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                      <Form.Item
+                        name="hintCost"
+                        label="Hint cost"
+                        normalize={toNumberIfNumeric}
+                        rules={canAuthor ? [{ validator: validateHintCost }] : []}
+                        extra="Points off each answer a student gives after a hint on that question. 0 makes hints free."
+                      >
+                        <Input
+                          type="number"
+                          min={HINT_COST_MIN}
+                          max={HINT_COST_MAX}
+                          disabled={!canAuthor}
+                          data-testid="quiz-hint-cost"
+                        />
+                      </Form.Item>
+
+                      <Form.Item
+                        name="maxAnswers"
+                        label="Answers per question"
+                        normalize={toNumberIfNumeric}
+                        rules={canAuthor ? [{ validator: validateMaxAnswers }] : []}
+                        extra="After the last one the quiz explains the answer and moves on."
+                      >
+                        <Input
+                          type="number"
+                          min={MAX_ANSWERS_MIN}
+                          max={MAX_ANSWERS_MAX}
+                          disabled={!canAuthor}
+                          data-testid="quiz-max-answers"
+                        />
                       </Form.Item>
                     </div>
 

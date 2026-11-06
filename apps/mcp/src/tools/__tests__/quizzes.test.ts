@@ -173,8 +173,8 @@ describe('role tiers', () => {
     }
     expect(quizUpdateTool.description).toContain(
       'an assistant may change the content and the name only, not module_id, release_at, ' +
-        'due_date, closes_at, weight, tokens_per_hour, published, question_count, max_attempts ' +
-        'or grading_strategy'
+        'due_date, closes_at, weight, tokens_per_hour, published, question_count, max_attempts, ' +
+        'grading_strategy, hint_cost or max_answers'
     );
     for (const tool of [quizCreateTool, quizUpdateTool, quizPublishTool, quizDeleteTool]) {
       expect(new TextEncoder().encode(tool.description).length, tool.name).toBeLessThan(1500);
@@ -590,6 +590,153 @@ describe('code_sandbox_enabled (quiz sandbox questions)', () => {
   });
 });
 
+describe('hint_cost and max_answers (answer rules, author settings)', () => {
+  const CREATE = { classroom: 'org/w26', name: 'Q', rubric_prompt: 'r', module_id: MODULE_ID };
+
+  it('quiz_create forwards them as hintCost/maxAnswers, echoes and audits them as saved', async () => {
+    mocks.quizCreate.mockResolvedValue({ ...QUIZ_ROW, hint_cost: 0, max_answers: 3 });
+
+    const payload = parse(
+      await quizCreateTool.handler({ ...CREATE, hint_cost: 0, max_answers: 3 }, CTX)
+    );
+
+    const data = mocks.quizCreate.mock.calls[0][0] as Record<string, unknown>;
+    expect(data).toMatchObject({ hintCost: 0, maxAnswers: 3 });
+    expect(data).not.toHaveProperty('hint_cost');
+    expect(data).not.toHaveProperty('max_answers');
+    expect(payload.quiz).toMatchObject({ hint_cost: 0, max_answers: 3 });
+    const audit = mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(audit.data).toMatchObject({ tool: 'quiz_create', hint_cost: 0, max_answers: 3 });
+  });
+
+  it('quiz_create leaves them out when not given; the audit records the column defaults', async () => {
+    mocks.quizCreate.mockResolvedValue({ ...QUIZ_ROW, hint_cost: 15, max_answers: 5 });
+
+    const payload = parse(await quizCreateTool.handler(CREATE, CTX));
+
+    const data = mocks.quizCreate.mock.calls[0][0] as Record<string, unknown>;
+    expect(data).not.toHaveProperty('hintCost');
+    expect(data).not.toHaveProperty('maxAnswers');
+    expect(payload.quiz).toMatchObject({ hint_cost: 15, max_answers: 5 });
+    const audit = mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(audit.data).toMatchObject({ hint_cost: 15, max_answers: 5 });
+  });
+
+  it('the summary reports null for a row read without the columns', async () => {
+    mocks.quizCreate.mockResolvedValue(QUIZ_ROW);
+
+    const payload = parse(await quizCreateTool.handler(CREATE, CTX));
+
+    expect(payload.quiz.hint_cost).toBeNull();
+    expect(payload.quiz.max_answers).toBeNull();
+  });
+
+  it('quiz_update maps each alone, echoes it and audits the field name with its value', async () => {
+    mocks.quizFindById.mockResolvedValue(QUIZ_ROW);
+    mocks.quizUpdate.mockResolvedValue({ ...QUIZ_ROW, hint_cost: 25, max_answers: 8 });
+
+    const payload = parse(
+      await quizUpdateTool.handler(
+        { classroom: 'org/w26', quiz_id: 'quiz-1', hint_cost: 25, max_answers: 8 },
+        CTX
+      )
+    );
+
+    expect(mocks.quizUpdate.mock.calls[0][1]).toEqual({ hintCost: 25, maxAnswers: 8 });
+    expect(payload.quiz).toMatchObject({ hint_cost: 25, max_answers: 8 });
+    const audit = mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(audit.data).toEqual({
+      tool: 'quiz_update',
+      fields: ['hint_cost', 'max_answers'],
+      hint_cost: 25,
+      max_answers: 8,
+    });
+  });
+
+  it('quiz_update records no value for a call that does not set them', async () => {
+    mocks.quizFindById.mockResolvedValue(QUIZ_ROW);
+    mocks.quizUpdate.mockResolvedValue(QUIZ_ROW);
+
+    await quizUpdateTool.handler({ classroom: 'org/w26', quiz_id: 'quiz-1', name: 'R' }, CTX);
+
+    const audit = mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(audit.data).not.toHaveProperty('hint_cost');
+    expect(audit.data).not.toHaveProperty('max_answers');
+  });
+
+  it('classroom X vs Y: another classroom’s quiz is the same not_found, nothing written', async () => {
+    const notFound = async () =>
+      quizUpdateTool
+        .handler({ classroom: 'org/w26', quiz_id: 'quiz-1', hint_cost: 10, max_answers: 2 }, CTX)
+        .catch((e: unknown) => e);
+
+    mocks.quizFindById.mockResolvedValue({ ...QUIZ_ROW, classroom_id: 'class-2' });
+    const foreign = await notFound();
+    mocks.quizFindById.mockResolvedValue(null);
+    const missing = await notFound();
+
+    expect(foreign).toMatchObject({ kind: 'not_found' });
+    expect((foreign as Error).message).toBe((missing as Error).message);
+    expect(mocks.quizUpdate).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('passes the service’s range refusal on as invalid_params, unaudited', async () => {
+    mocks.quizFindById.mockResolvedValue(QUIZ_ROW);
+    mocks.quizUpdate.mockRejectedValue(
+      quizAssignmentError('invalid_value', 'Hint cost must be a whole number from 0 to 50.')
+    );
+
+    await expect(
+      quizUpdateTool.handler({ classroom: 'org/w26', quiz_id: 'quiz-1', hint_cost: 10 }, CTX)
+    ).rejects.toMatchObject({
+      kind: 'invalid_params',
+      message: 'Hint cost must be a whole number from 0 to 50.',
+    });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('are whole numbers in range in both schemas (0–50 and 1–20), described', () => {
+    for (const tool of [quizCreateTool, quizUpdateTool]) {
+      const schema = z.object(tool.inputSchema);
+      const base = {
+        classroom: 'o/s',
+        quiz_id: '11111111-1111-4111-8111-111111111111',
+        name: 'n',
+        rubric_prompt: 'r',
+        module_id: MODULE_ID,
+      };
+      const parses = (field: string, value: unknown) =>
+        schema.safeParse({ ...base, [field]: value }).success;
+
+      expect(parses('hint_cost', 0), tool.name).toBe(true);
+      expect(parses('hint_cost', 50), tool.name).toBe(true);
+      expect(parses('hint_cost', -1), tool.name).toBe(false);
+      expect(parses('hint_cost', 51), tool.name).toBe(false);
+      expect(parses('hint_cost', 2.5), tool.name).toBe(false);
+      expect(parses('hint_cost', '10'), tool.name).toBe(false);
+      expect(parses('max_answers', 1), tool.name).toBe(true);
+      expect(parses('max_answers', 20), tool.name).toBe(true);
+      expect(parses('max_answers', 0), tool.name).toBe(false);
+      expect(parses('max_answers', 21), tool.name).toBe(false);
+      expect(parses('max_answers', 1.5), tool.name).toBe(false);
+
+      const shape = tool.inputSchema as Record<string, z.ZodTypeAny>;
+      expect(shape.hint_cost.description).toBe(
+        'Points off each answer a student gives after a hint on that question ' +
+          '(0–50, default 15; 0 makes hints free)'
+      );
+      expect(shape.max_answers.description).toBe(
+        'Answers a student may give to one question (1–20, default 5); after the last one ' +
+          'the quiz explains the answer and moves on'
+      );
+      // Annotations unchanged; descriptions under the limit.
+      expect(tool.annotations, tool.name).toEqual({ destructive: false, openWorld: false });
+      expect(Buffer.byteLength(tool.description), tool.name).toBeLessThan(1500);
+    }
+  });
+});
+
 describe('excluded_paths (code-aware quizzes)', () => {
   it('quiz_create forwards the list trimmed, repeats dropped, and echoes it', async () => {
     mocks.quizCreate.mockResolvedValue({
@@ -991,6 +1138,9 @@ describe('quiz_update: an assistant edits content, not the assignment', () => {
     ['max_attempts', 3],
     ['max_attempts', 0],
     ['grading_strategy', 'MOST_RECENT'],
+    ['hint_cost', 10],
+    ['hint_cost', 0],
+    ['max_answers', 3],
   ] as const)(
     'refuses %s (%s), how the quiz is taken and scored, before reading or writing anything',
     async (field, value) => {
@@ -1003,7 +1153,7 @@ describe('quiz_update: an assistant edits content, not the assignment', () => {
         code: 'INSUFFICIENT_ROLE',
         message:
           'Only the class owner or a teacher can change a quiz’s number of questions, max ' +
-          'attempts or grading strategy',
+          'attempts, grading strategy, hint cost or answers per question',
       });
       expect(mocks.quizFindById).not.toHaveBeenCalled();
       expect(mocks.quizUpdate).not.toHaveBeenCalled();
@@ -1015,6 +1165,8 @@ describe('quiz_update: an assistant edits content, not the assignment', () => {
     ['question_count', 7, { questionCount: 7 }],
     ['max_attempts', 3, { maxAttempts: 3 }],
     ['grading_strategy', 'MOST_RECENT', { gradingStrategy: 'MOST_RECENT' }],
+    ['hint_cost', 0, { hintCost: 0 }],
+    ['max_answers', 20, { maxAnswers: 20 }],
   ] as const)('lets a teacher set %s', async (field, value, forwarded) => {
     await quizUpdateTool.handler({ ...BASE, [field]: value }, TEACHER_CTX);
     expect(mocks.quizUpdate).toHaveBeenCalledWith('quiz-1', forwarded);

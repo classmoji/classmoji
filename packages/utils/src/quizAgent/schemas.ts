@@ -13,10 +13,14 @@ import { SANDBOX_FIELD_DESCRIPTION, SandboxSpecSchema } from './sandbox.ts';
  * admission refuses server-reserved text.
  * 3: present_question may carry a sandbox; a student message may be a code
  * submission.
+ * 4: offer_next_step is an answer the server counts (`answer_offered`), refused
+ * with Try again past the attempt's pinned answer limit; its output carries
+ * answers_used, max_answers, hint_cost and last_question; scoring uses the
+ * attempt's pinned hint cost.
  * Stamped only: nothing compares it, so attempts of earlier versions keep
  * taking turns under the current code.
  */
-export const CONTRACT_VERSION = 3;
+export const CONTRACT_VERSION = 4;
 
 export const QuizQuestionSchema = z.object({
   preamble: z
@@ -293,14 +297,42 @@ export type OfferNextStepPart = z.infer<typeof OfferNextStepPartSchema>;
 
 /**
  * offer_next_step's output: the buttons, and the fixed line shown with them,
- * chosen by the server from the buttons and whether the question is the last
- * one (`nextStepLeadIn`). The feedback stays in the input.
+ * chosen by the server from the buttons, whether the question is the last
+ * one and whether this was the student's last allowed answer
+ * (`nextStepLeadIn`). The feedback stays in the input.
+ *
+ * Then what the server counted (`quizGrading.offerNextStep`): this offer is
+ * answer `answers_used` to the open question, of `max_answers` the attempt
+ * allows (null: no server limit, an attempt pinned before limits existed),
+ * at `hint_cost` points per hint (for the hint button's tooltip; never shown
+ * to the model, `offerNextStepModelOutput`), on the last question or not.
+ * Optional: parts saved before the server counted answers have none of them,
+ * and still render.
  */
 export const OfferNextStepOutputSchema = z.object({
   actions: NextStepActionsSchema,
   lead_in: z.string(),
+  answers_used: z.number().int().min(1).optional(),
+  max_answers: z.number().int().min(1).nullable().optional(),
+  hint_cost: z.number().int().min(0).optional(),
+  last_question: z.boolean().optional(),
 });
 export type OfferNextStepOutput = z.infer<typeof OfferNextStepOutputSchema>;
+
+/**
+ * offer_next_step's output as the model reads it, in the turn and in every
+ * later turn's history (the tool's `toModelOutput`, in the task's tool and in
+ * `quizToolDefs`): the output without `hint_cost`. The model is never told
+ * what a hint costs. A part saved before the server counted answers gives the
+ * same JSON the SDK would have sent without this, so its cached prefix holds.
+ */
+export const offerNextStepModelOutput = (output: unknown) => {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) {
+    return { type: 'json' as const, value: output === undefined ? null : JSON.parse(JSON.stringify(output)) };
+  }
+  const { hint_cost: _cost, ...rest } = output as Record<string, unknown>;
+  return { type: 'json' as const, value: JSON.parse(JSON.stringify(rest)) };
+};
 
 /** The ai-agent's ExplorationRequestSchema minus previousFindings/avoidFiles (history comes from the journal). */
 export const ExploreCodebaseSchema = z.object({

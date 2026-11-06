@@ -1,7 +1,8 @@
 import { useEditor, EditorContent } from '@tiptap/react';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import StarterKit from '@tiptap/starter-kit';
 import { Extension } from '@tiptap/core';
+import { Placeholder } from '@tiptap/extensions';
 import { Markdown } from '@tiptap/markdown';
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
 import codemark from 'prosemirror-codemark';
@@ -71,6 +72,11 @@ const ChatEditor = ({
   const [selectedLanguage, setSelectedLanguage] = useState('javascript');
   const [hasContent, setHasContent] = useState(false);
   const { isDarkMode } = useDarkMode();
+  // Read by the Placeholder extension each time it draws, so a new
+  // placeholder (the quiz's answer counter changes it) shows without
+  // recreating the editor.
+  const placeholderRef = useRef(placeholder ?? '');
+  placeholderRef.current = placeholder ?? '';
 
   const editor = useEditor({
     extensions: [
@@ -90,6 +96,7 @@ const ChatEditor = ({
       }),
       CodemarkExtension, // Better cursor handling for inline code
       Markdown,
+      Placeholder.configure({ placeholder: () => placeholderRef.current }),
     ],
     content: '',
     onUpdate: ({ editor }: { editor: { isEmpty: boolean } }) => {
@@ -137,8 +144,14 @@ const ChatEditor = ({
         return true;
       },
     },
-    placeholder, // tiptap Placeholder extension uses this undocumented option
   } as Parameters<typeof useEditor>[0]);
+
+  // Redraw the placeholder when it changes (an empty transaction recomputes
+  // the extension's decorations).
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    editor.view.dispatch(editor.state.tr);
+  }, [editor, placeholder]);
 
   const handleSend = useCallback(() => {
     if (!editor || editor.isEmpty) return;

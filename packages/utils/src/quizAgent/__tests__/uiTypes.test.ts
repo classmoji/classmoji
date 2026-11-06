@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { BUTTON_TEXT, buttonActionFor, quizDataPartSchemas, replyShowsHint } from '../uiTypes.ts';
+import {
+  BUTTON_TEXT,
+  LEGACY_TRY_AGAIN_TEXT,
+  buttonActionFor,
+  quizDataPartSchemas,
+  replyShowsHint,
+} from '../uiTypes.ts';
 import { CodeSubmissionDataSchema, SandboxDataSchema } from '../sandbox.ts';
 import { quizStaffVisibility, quizVisibility } from '../visibility.ts';
 
@@ -9,6 +15,28 @@ describe('buttonActionFor', () => {
     expect(buttonActionFor(`  ${BUTTON_TEXT.try_again.toUpperCase()} `)).toBe('try_again');
     expect(buttonActionFor(BUTTON_TEXT.next)).toBe('next');
     expect(buttonActionFor(' Next ')).toBe('next');
+  });
+
+  it('still takes the hint button\'s earlier text as the click (saved transcripts)', () => {
+    expect(BUTTON_TEXT.try_again).toBe('Give me a hint');
+    expect(buttonActionFor(LEGACY_TRY_AGAIN_TEXT)).toBe('try_again');
+    expect(buttonActionFor(`  ${LEGACY_TRY_AGAIN_TEXT.toUpperCase()}\n`)).toBe('try_again');
+  });
+
+  it('takes a typed "give me a hint" as the hint button, in any case and punctuation', () => {
+    for (const typed of [
+      'give me a hint',
+      'Give me a hint.',
+      '  GIVE ME A HINT  ',
+      'give  me a   hint!',
+      'Give me a hint?',
+      'give me a hint…',
+    ]) {
+      expect(buttonActionFor(typed)).toBe('try_again');
+    }
+    for (const typed of ['give me a hint please', 'can you give me a hint?', 'a hint']) {
+      expect(buttonActionFor(typed)).toBeUndefined();
+    }
   });
 
   it('takes a message that is just "try again" as the Try again button', () => {
