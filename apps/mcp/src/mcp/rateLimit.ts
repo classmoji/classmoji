@@ -24,6 +24,21 @@ export const DEFAULT_RATE_LIMIT: RateLimitConfig = {
   refillPerSecond: 0.5,
 };
 
+/**
+ * Every `tools/call` a user sends, whatever the tool and whether or not it is
+ * refused before reaching it (routes/mcp.ts). Taken before the per-tool bucket
+ * above, which only calls that pass input validation reach. Sized for agents
+ * that call tools in parallel (Ask Moji, Claude Code): bursts of 60, then one
+ * call a second. Tunable here.
+ */
+export const TOOL_CALL_RATE_LIMIT: RateLimitConfig = {
+  capacity: 60,
+  refillPerSecond: 1,
+};
+
+/** The bucket key for a user's tools/call total (cannot collide with `${user}:${tool}`). */
+export const toolCallBucketKey = (userId: string): string => `${userId}:*tools/call`;
+
 interface Bucket {
   tokens: number;
   lastRefillMs: number;

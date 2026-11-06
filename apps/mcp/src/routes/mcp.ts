@@ -13,14 +13,28 @@
  * IncomingMessage/ServerResponse, so we `reply.hijack()` and hand it the raw
  * streams plus Fastify's already-parsed JSON body (malformed JSON is rejected
  * by Fastify with a 400 before this handler runs).
+ *
+ * The bearer token is checked in the route's `onRequest` hook, which Fastify
+ * runs before it reads or parses the body: a request without a valid token is
+ * answered from its headers alone, and only an authenticated request has its
+ * body (up to `MCP_BODY_LIMIT_BYTES`) read and parsed.
+ *
+ * Then the size of what was sent is bounded (the limits are in
+ * mcp/inputLimits.ts): this plugin's JSON parser refuses a body
+ * with more than MAX_BODY_JSON_VALUES values before parsing it, and the
+ * handler gates every `tools/call` (toolCallGate.ts) before the SDK validates
+ * its arguments.
  */
 
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { MCP_PUBLIC_URL, PROTECTED_RESOURCE_METADATA_PATH } from '../config.ts';
-import { resolveViewer } from '../auth/resolveViewer.ts';
+import { resolveViewer, type Viewer } from '../auth/resolveViewer.ts';
 import { UnauthorizedError } from '../mcp/errors.ts';
+import { jsonValueBound, MAX_BODY_JSON_VALUES, ToolInputBudget } from '../mcp/inputLimits.ts';
+import { toolCallBucketKey, tryConsume, TOOL_CALL_RATE_LIMIT } from '../mcp/rateLimit.ts';
 import { buildMcpServer } from '../mcp/registry.ts';
+import { gateToolCalls } from './toolCallGate.ts';
 import { registerAllResources } from '../resources/index.ts';
 import { canonicalTimeZone } from '@classmoji/utils';
 import { normalizeAgentSession } from '@classmoji/collab';
@@ -142,26 +156,89 @@ function sendUnauthorized(reply: FastifyReply, message: string) {
     });
 }
 
-export default async function mcpRoutes(fastify: FastifyInstance) {
+/** What the onRequest hook learned from the headers, for the handler. */
+interface Authenticated {
+  headers: Headers;
+  viewer: Viewer;
+}
+
+const authenticated = new WeakMap<FastifyRequest, Authenticated>();
+
+/**
+ * Resolve the bearer token from the headers alone. As an `onRequest` hook it
+ * runs before Fastify reads the body, so a refused request is answered without
+ * the body ever being parsed.
+ */
+async function authenticate(request: FastifyRequest, reply: FastifyReply) {
+  try {
+    const headers = toFetchHeaders(request);
+    const viewer: Viewer = {
+      ...(await resolveViewer(headers)),
+      timezoneHint: timezoneHintFrom(headers),
+      agentSession: agentSessionFrom(headers),
+    };
+    authenticated.set(request, { headers, viewer });
+  } catch (error) {
+    const message = error instanceof UnauthorizedError ? error.message : 'Authentication failed';
+    if (!(error instanceof UnauthorizedError)) request.log.error(error);
+    return sendUnauthorized(reply, message);
+  }
+}
+
+/** The elements of large tool calls in flight, shared by every request. */
+const sharedToolInputBudget = new ToolInputBudget();
+
+export interface McpRoutesOptions {
+  /** Tests pass their own; the server uses one budget for all requests. */
+  budget?: ToolInputBudget;
+}
+
+export default async function mcpRoutes(fastify: FastifyInstance, opts: McpRoutesOptions = {}) {
+  const budget = opts.budget ?? sharedToolInputBudget;
   // Resource definitions register once alongside route registration
   // (idempotent; tools register in src/index.ts via registerAllTools).
   registerAllResources();
 
-  fastify.post('/mcp', async (request, reply) => {
-    let headers: Headers;
-    let viewer;
-    try {
-      headers = toFetchHeaders(request);
-      viewer = {
-        ...(await resolveViewer(headers)),
-        timezoneHint: timezoneHintFrom(headers),
-        agentSession: agentSessionFrom(headers),
-      };
-    } catch (error) {
-      const message = error instanceof UnauthorizedError ? error.message : 'Authentication failed';
-      if (!(error instanceof UnauthorizedError)) request.log.error(error);
-      return sendUnauthorized(reply, message);
+  // This plugin's JSON parser: Fastify's own (same poisoning rules as the
+  // server), after a count of the body's JSON values on the raw text. A body
+  // over MAX_BODY_JSON_VALUES is refused with a 413 without being parsed; it
+  // still takes a token from the sender's tools/call bucket.
+  const parseJson = fastify.getDefaultJsonParser(
+    fastify.initialConfig.onProtoPoisoning ?? 'error',
+    fastify.initialConfig.onConstructorPoisoning ?? 'error'
+  );
+  fastify.addContentTypeParser('application/json', { parseAs: 'string' }, (request, body, done) => {
+    const text = body as string;
+    if (jsonValueBound(text, MAX_BODY_JSON_VALUES) > MAX_BODY_JSON_VALUES) {
+      const viewer = authenticated.get(request)?.viewer;
+      if (viewer) tryConsume(toolCallBucketKey(viewer.userId), TOOL_CALL_RATE_LIMIT);
+      request.log.warn(
+        {
+          userId: viewer?.userId,
+          clientId: viewer?.clientId,
+          bytes: text.length,
+          limit: MAX_BODY_JSON_VALUES,
+        },
+        '[mcp] request body over the JSON value limit'
+      );
+      const error = Object.assign(
+        new Error(
+          `The request carries more than ${MAX_BODY_JSON_VALUES} JSON values; split the change ` +
+            'into several smaller calls.'
+        ),
+        { statusCode: 413, code: 'MCP_INPUT_TOO_LARGE' }
+      );
+      done(error, undefined);
+      return;
     }
+    parseJson(request, text, done);
+  });
+
+  fastify.post('/mcp', { onRequest: authenticate }, async (request, reply) => {
+    const auth = authenticated.get(request);
+    // The hook either set this or already answered; never serve without it.
+    if (!auth) return sendUnauthorized(reply, 'Authentication failed');
+    const { headers, viewer } = auth;
 
     // The ceiling and the impersonation actor depend on which client the
     // token was issued to, so they are read after the token is resolved.
@@ -183,6 +260,16 @@ export default async function mcpRoutes(fastify: FastifyInstance) {
       });
     }
     viewer.impersonatedBy = impersonatedBy.impersonatedBy;
+
+    // tools/call: rate, size and room in flight, before the SDK validates.
+    const gate = gateToolCalls(request.body, {
+      userId: viewer.userId,
+      clientId: viewer.clientId,
+      log: request.log,
+      budget,
+    });
+    if (!gate.ok) return reply.status(gate.status).send(gate.body);
+    reply.raw.on('close', gate.release);
 
     const server = buildMcpServer(viewer);
     const transport = new StreamableHTTPServerTransport({
