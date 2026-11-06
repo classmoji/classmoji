@@ -11,11 +11,11 @@ import { legacyHeadingIds } from './src/markdown/headingIds.mjs';
 
 // https://astro.build/config
 export default defineConfig({
-  // Pages are pre-built and served as files. Code runs on the Node server for
-  // the contact form (/api/contact) and for the routes Astro adds itself to any
-  // site with an adapter: image resizing (/_image) and server islands
-  // (/_server-islands/*). bodySizeLimit caps every request body those routes
-  // read; the contact form needs well under 100 KB.
+  // Pages are pre-built and served as files; only the contact form
+  // (/api/contact) runs code on the Node server. src/middleware.ts turns off the
+  // unused image and island routes Astro adds to any site with an adapter
+  // (/_image, /_server-islands/*). bodySizeLimit caps request bodies; the
+  // contact form needs well under 100 KB.
   adapter: node({ mode: 'standalone', bodySizeLimit: 256 * 1024 }),
   // Astro 7 strips whitespace the JSX way by default ('jsx'), which glues
   // together inline elements in our templates (nav links, footer links, post
@@ -34,9 +34,6 @@ export default defineConfig({
     // post's Origin with it.
     allowedDomains: [{ hostname: 'classmoji.io', protocol: 'https' }],
     checkOrigin: true,
-    // The site has no server islands. Below the adapter's limit, so an
-    // oversized post to /_server-islands/* gets a 413 instead of a 500.
-    serverIslandBodySizeLimit: 64 * 1024,
   },
   integrations: [
     starlight({
