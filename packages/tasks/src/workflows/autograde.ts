@@ -118,14 +118,30 @@ export async function commitWorkflow(
   }
 }
 
-/** A Trigger token that can only start the ingest task, reusable for a year. */
-function mintIngestTriggerToken(): Promise<string> {
+/**
+ * A Trigger token that can only start the ingest task, reusable for a year.
+ * Minted only when AUTOGRADE_CALLBACK_URL is unset: with it set, workflows post
+ * to hook-station and carry no Trigger credential, and nothing calls this.
+ *
+ * Signed here with the environment's secret key, on purpose. Inside a deployed
+ * task the SDK otherwise has the server mint public tokens with the run's own
+ * token, and the server refuses lifetimes over 30 days, so this year-long token
+ * could not be minted. A credential passed explicitly is used as given (the
+ * SDK skips its run-token selection), so the token is signed locally.
+ */
+async function mintIngestTriggerToken(): Promise<string> {
+  const secretKey = process.env.TRIGGER_SECRET_KEY;
+  if (!secretKey) {
+    throw new Error('TRIGGER_SECRET_KEY is not set, so the autograding token cannot be signed');
+  }
   // multipleUse: trigger tokens are one-time-use by default — but this token is
   // committed into the workflow and used on every push, so it must be reusable.
-  return auth.createTriggerPublicToken(INGEST_TASK_ID, {
-    expirationTime: '1y',
-    multipleUse: true,
-  });
+  return await auth.withAuth({ accessToken: secretKey }, () =>
+    auth.createTriggerPublicToken(INGEST_TASK_ID, {
+      expirationTime: '1y',
+      multipleUse: true,
+    })
+  );
 }
 
 /**
