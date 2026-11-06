@@ -3,7 +3,8 @@
  * the SDK sees them (the numbers are in mcp/inputLimits.ts):
  *
  *   1. one token per tools/call from the caller's tools/call rate bucket, for
- *      every call, including the ones refused below or later by the SDK;
+ *      every call, including the ones refused below or later by the SDK
+ *      (a status poll, POLL_TOOLS, takes none);
  *   2. the element count of each call's `arguments` (and, for a batch, of all
  *      of them together) against MAX_TOOL_INPUT_ELEMENTS;
  *   3. room in the in-flight budget for a call above LIGHT_CALL_ELEMENTS.
@@ -41,6 +42,21 @@ export type GateOutcome =
   | { ok: false; status: number; body: unknown };
 
 const noop: Release = () => {};
+
+/**
+ * Status polls clients are told to repeat every few seconds until an upload
+ * is placed, with the most elements such a poll's arguments carry (`classroom`
+ * and `upload_id`). A poll that small takes no token from the shared
+ * tools/call bucket; its tool's own per-tool limit (registry.ts) still
+ * applies. A call to the same tool with larger arguments is counted like any
+ * other.
+ */
+export const POLL_TOOLS: ReadonlyMap<string, number> = new Map([['file_upload_status', 2]]);
+
+const isPoll = (call: ToolCall): boolean => {
+  const most = POLL_TOOLS.get(call.tool);
+  return most !== undefined && call.elements <= most;
+};
 
 const asMessages = (body: unknown): Message[] =>
   (Array.isArray(body) ? body : [body]).filter(
@@ -100,9 +116,11 @@ export function gateToolCalls(
   const { userId, clientId, log } = ctx;
   const tools = calls.map(c => c.tool);
 
-  // 1. Rate: every call takes a token, so none is free whatever happens next.
+  // 1. Rate: every call takes a token, so none is free whatever happens next;
+  //    only a status poll is left to its own per-tool limit.
   let limited = false;
-  for (let i = 0; i < calls.length; i++) {
+  for (const call of calls) {
+    if (isPoll(call)) continue;
     if (!tryConsume(toolCallBucketKey(userId), TOOL_CALL_RATE_LIMIT)) limited = true;
   }
   if (limited) {

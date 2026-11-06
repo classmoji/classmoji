@@ -26,7 +26,8 @@ export const DEFAULT_RATE_LIMIT: RateLimitConfig = {
 
 /**
  * Every `tools/call` a user sends, whatever the tool and whether or not it is
- * refused before reaching it (routes/mcp.ts). Taken before the per-tool bucket
+ * refused before reaching it (routes/mcp.ts), except a small status poll
+ * (`POLL_TOOLS`, routes/toolCallGate.ts). Taken before the per-tool bucket
  * above, which only calls that pass input validation reach. Sized for agents
  * that call tools in parallel (Ask Moji, Claude Code): bursts of 60, then one
  * call a second. Tunable here.

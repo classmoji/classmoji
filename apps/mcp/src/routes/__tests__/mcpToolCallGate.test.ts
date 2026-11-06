@@ -2,11 +2,13 @@
  * POST /mcp gates every tools/call before the SDK validates it
  * (toolCallGate.ts, numbers in mcp/inputLimits.ts):
  *   - a body with too many JSON values is refused with a 413 without parsing;
- *   - each tools/call takes a token from the caller's tools/call bucket, refused or not;
+ *   - each tools/call takes a token from the caller's tools/call bucket, refused or not
+ *     (a small file_upload_status poll takes none);
  *   - arguments over MAX_TOOL_INPUT_ELEMENTS get a tool error, id kept, nothing built;
  *   - a large call needs room in the in-flight budget, or gets a retry tool error.
  */
 
+import { randomBytes } from 'node:crypto';
 import Fastify from 'fastify';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
@@ -42,6 +44,23 @@ vi.mock('../../mcp/registry.ts', () => ({
       if (mocks.hold) await mocks.hold;
       return { content: [{ type: 'text', text: 'ran' }] };
     });
+    // page_asset_upload's shape: the file travels as one base64 string.
+    server.registerTool(
+      't_upload',
+      { inputSchema: { filename: z.string(), data_base64: z.string() } },
+      async ({ data_base64 }) => {
+        mocks.calls += 1;
+        return { content: [{ type: 'text', text: `received ${data_base64.length}` }] };
+      }
+    );
+    server.registerTool(
+      'file_upload_status',
+      { inputSchema: { classroom: z.string(), upload_id: z.string() } },
+      async () => {
+        mocks.calls += 1;
+        return { content: [{ type: 'text', text: 'placing' }] };
+      }
+    );
     return server;
   }),
 }));
@@ -183,6 +202,33 @@ describe('size', () => {
     await fastify.close();
   });
 
+  it('accepts a body near the size limit made of one long string (a file upload)', async () => {
+    const fastify = await app();
+    const envelope = (data: string) =>
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'upload',
+        method: 'tools/call',
+        params: { name: 't_upload', arguments: { filename: 'photo.png', data_base64: data } },
+      });
+    const room = MCP_BODY_LIMIT_BYTES - envelope('').length - 1024;
+    const data = randomBytes(Math.floor(room / 4) * 3).toString('base64');
+    const body = envelope(data);
+    expect(body.length).toBeGreaterThan(MCP_BODY_LIMIT_BYTES - 2048);
+    expect(body.length).toBeLessThanOrEqual(MCP_BODY_LIMIT_BYTES);
+
+    const res = await post(fastify, body);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      id: 'upload',
+      result: { content: [{ type: 'text', text: `received ${data.length}` }] },
+    });
+    expect(mocks.servers).toBe(1);
+    expect(mocks.calls).toBe(1);
+    await fastify.close();
+  });
+
   it("otherwise parses with Fastify's own rules: malformed JSON is a 400, a poisoned key is refused", async () => {
     const fastify = await app();
     expect((await post(fastify, '{"jsonrpc":')).statusCode).toBe(400);
@@ -213,6 +259,47 @@ describe('rate', () => {
       expect((await post(fastify, big)).statusCode).toBe(413);
     }
     expect(toolError((await post(fastify, call(1))).json()).code).toBe('RATE_LIMITED');
+    await fastify.close();
+  });
+
+  it('leaves file_upload_status polls to their own limit', async () => {
+    const fastify = await app();
+    const poll = (id: number) => ({
+      jsonrpc: '2.0',
+      id,
+      method: 'tools/call',
+      params: { name: 'file_upload_status', arguments: { classroom: 'org/slug', upload_id: 'u' } },
+    });
+    for (let i = 0; i < TOOL_CALL_RATE_LIMIT.capacity + 10; i++) {
+      expect((await post(fastify, poll(i))).json().result).toEqual({
+        content: [{ type: 'text', text: 'placing' }],
+      });
+    }
+
+    // The shared bucket is untouched: a full burst of other calls still runs.
+    for (let i = 0; i < TOOL_CALL_RATE_LIMIT.capacity; i++) {
+      expect((await post(fastify, call(1, i))).json().result.isError).toBeUndefined();
+    }
+    expect(toolError((await post(fastify, call(1))).json()).code).toBe('RATE_LIMITED');
+    await fastify.close();
+  });
+
+  it('counts a file_upload_status call with larger arguments like any other', async () => {
+    const fastify = await app();
+    const padded = (id: number) => ({
+      jsonrpc: '2.0',
+      id,
+      method: 'tools/call',
+      params: {
+        name: 'file_upload_status',
+        arguments: { classroom: 'org/slug', upload_id: 'u', extra: [1, 2, 3] },
+      },
+    });
+    for (let i = 0; i < TOOL_CALL_RATE_LIMIT.capacity; i++) {
+      expect((await post(fastify, padded(i))).json().result.isError).toBeUndefined();
+    }
+    const error = toolError((await post(fastify, padded(99))).json());
+    expect(error).toMatchObject({ error: 'rate_limited', code: 'RATE_LIMITED' });
     await fastify.close();
   });
 
