@@ -6,6 +6,8 @@ import node from '@astrojs/node';
 import react from '@astrojs/react';
 import starlight from '@astrojs/starlight';
 import starlightThemeBlack from 'starlight-theme-black';
+import { satteri } from '@astrojs/markdown-satteri';
+import { legacyHeadingIds } from './src/markdown/headingIds.mjs';
 
 // https://astro.build/config
 export default defineConfig({
@@ -19,6 +21,12 @@ export default defineConfig({
   // together inline elements in our templates (nav links, footer links, post
   // bylines). Keep the HTML-aware compression the site was written for.
   compressHTML: true,
+  // Astro's default Markdown processor, plus heading ids that stay the same as
+  // before Astro 7 so existing links to headings keep working (headingIds.mjs).
+  // Starlight adds its own plugins to this processor.
+  markdown: {
+    processor: satteri({ hastPlugins: [legacyHeadingIds()] }),
+  },
   security: {
     // Fly's proxy talks to the server over http. allowedDomains lets Astro
     // trust the Host and X-Forwarded-Proto it forwards for classmoji.io, so the

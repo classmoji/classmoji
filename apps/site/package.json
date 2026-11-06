@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@ant-design/icons": "5.6.1",
+    "@astrojs/markdown-satteri": "0.4.6",
     "@astrojs/mdx": "8.1.2",
     "@astrojs/node": "11.1.9",
     "@astrojs/react": "7.1.2",
@@ -19,6 +20,7 @@
     "antd": "5.29.3",
     "astro": "7.4.5",
     "framer-motion": "12.34.2",
+    "github-slugger": "2.0.0",
     "lucide-react": "0.563.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",
