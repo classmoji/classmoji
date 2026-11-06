@@ -158,6 +158,7 @@ const askMojiAvailableMock = vi.fn(async (..._a: unknown[]) => ({ available: tru
 vi.mock('@classmoji/services', () => ({
   GitHubProvider: { getUserOctokit: vi.fn() },
   ClassmojiService: {
+    entitlement: { isQuizRuntimeConfigured: () => false },
     subscription: { getCurrent: vi.fn(async () => null) },
     askMojiSession: {
       askMojiRuntimeIsTrigger: () => askMojiRuntime === 'trigger',
@@ -165,8 +166,6 @@ vi.mock('@classmoji/services', () => ({
     },
   },
 }));
-
-vi.mock('~/utils/aiFeatures.server', () => ({ isAIAgentConfigured: () => false }));
 
 // The component tree root.tsx renders; none of it runs in a loader test.
 vi.mock('@ant-design/v5-patch-for-react-19', () => ({}));
@@ -305,13 +304,13 @@ describe('root loader payload', () => {
     const signedIn = await load('/student/test-class/dashboard');
     expect(Object.keys(signedIn).sort()).toEqual(
       [
-        'aiAgentAvailable',
         'askMoji',
         'gitMode',
         'impersonationCookieDomain',
         'impersonationReturnUrl',
         'memberships',
         'organizations',
+        'quizzesAvailable',
         'sentry',
         'session',
         'user',

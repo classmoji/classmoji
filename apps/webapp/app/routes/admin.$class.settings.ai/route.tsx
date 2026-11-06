@@ -27,6 +27,7 @@ import {
   AI_SETTINGS_AUDIT_TOOL,
   INSTRUCTIONS_ERROR_COPY,
   isInstructionsErrorCode,
+  QUIZZES_NOT_SET_UP_COPY,
 } from './aiSettingsCopy';
 import { buildLLMSettingsPayload } from './llmSettingsPayload';
 import { getPlatformAIDefaults } from './platformDefaults.server';
@@ -136,12 +137,17 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     ClassmojiService.entitlement.canUseSyllabusBot(classroom.id),
   ]);
 
+  // Whether this server can run quizzes: they run only on the Trigger chat
+  // runtime.
+  const quizzesAvailable = ClassmojiService.entitlement.isQuizRuntimeConfigured();
+
   // Whether the Ask Moji switch can be used. On the Trigger runtime
   // (ASK_MOJI_RUNTIME=trigger) that is askMojiAvailable, where "switched off
   // for this class" is the one reason the switch itself fixes; on the AI agent
   // runtime it is the agent being configured.
-  const aiAgentAvailable = isAIAgentConfigured();
-  let askMojiToggleAvailable = aiAgentAvailable;
+  const aiAgentConfigured = isAIAgentConfigured();
+  let askMojiToggleAvailable = aiAgentConfigured;
+  let askMojiOnServer = aiAgentConfigured;
   let askMojiUnavailableLine: string | null = null;
   // The one runtime parse (`isAskMojiTriggerRuntime`, through the service).
   // The instructions exist only on the Trigger runtime: the AI agent never
@@ -152,12 +158,22 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       classroomId: classroom.id,
     });
     const reason = availability.available ? null : availability.reason;
+    askMojiOnServer = reason !== 'TRIGGER_NOT_CONFIGURED';
     askMojiToggleAvailable = reason === null || reason === 'NOT_ENABLED';
     // PRO_REQUIRED has the upsell below; NOT_ENABLED is the switch's own state.
     askMojiUnavailableLine =
       reason && reason !== 'NOT_ENABLED' && reason !== 'PRO_REQUIRED'
         ? ASK_MOJI_AVAILABILITY_COPY[reason]
         : null;
+  }
+
+  // Neither AI feature can run on this server: one banner says so. When only
+  // one is missing, its own section says so instead.
+  const aiUnavailable = !quizzesAvailable && !askMojiOnServer;
+  const quizzesUnavailableLine =
+    !quizzesAvailable && !aiUnavailable ? QUIZZES_NOT_SET_UP_COPY : null;
+  if (!askMojiTrigger && !aiAgentConfigured && !aiUnavailable) {
+    askMojiUnavailableLine = ASK_MOJI_AVAILABILITY_COPY.TRIGGER_NOT_CONFIGURED;
   }
 
   // Dynamically fetch available models
@@ -220,7 +236,9 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   return {
     settings: pageSettings,
     allowedModels,
-    aiAgentAvailable,
+    quizzesAvailable,
+    quizzesUnavailableLine,
+    aiUnavailable,
     askMojiToggleAvailable,
     askMojiUnavailableLine,
     askMojiInstructionsShown: askMojiTrigger,
@@ -235,7 +253,9 @@ const SettingsAI = ({ loaderData }: Route.ComponentProps) => {
   const {
     settings,
     allowedModels,
-    aiAgentAvailable,
+    quizzesAvailable,
+    quizzesUnavailableLine,
+    aiUnavailable,
     askMojiToggleAvailable,
     askMojiUnavailableLine,
     askMojiInstructionsShown,
@@ -364,7 +384,7 @@ const SettingsAI = ({ loaderData }: Route.ComponentProps) => {
 
   return (
     <div className="">
-      {!aiAgentAvailable && (
+      {aiUnavailable && (
         <Alert
           message="AI features aren't available on this server"
           type="warning"
@@ -431,11 +451,18 @@ const SettingsAI = ({ loaderData }: Route.ComponentProps) => {
             <Switch
               checked={quizzesOn}
               onChange={handleQuizzesToggle}
-              disabled={!aiAgentAvailable || quizzesProRequired}
+              disabled={!quizzesAvailable || quizzesProRequired}
             />
           </Form.Item>
 
           {quizzesProRequired && proUpsell('AI Quizzes')}
+
+          {quizzesUnavailableLine && (
+            <div className="mb-6 flex items-start gap-2 rounded-lg bg-stone-50 p-3 text-sm text-gray-600 dark:bg-neutral-800 dark:text-gray-400">
+              <IconInfoCircle size={16} className="mt-0.5 shrink-0" />
+              <span>{quizzesUnavailableLine}</span>
+            </div>
+          )}
 
           {subheading('Models')}
           <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-2 xl:grid-cols-3">

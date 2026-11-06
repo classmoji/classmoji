@@ -46,6 +46,9 @@ env:
   GITHUB_WEBHOOK_SECRET: test-webhook-secret
   AI_AGENT_URL: http://localhost:6000
   AI_AGENT_SHARED_SECRET: test-ai-agent-secret
+  # Quizzes show only where Trigger is configured (isQuizRuntimeConfigured
+  # checks presence only). No live spec reaches a Trigger call.
+  TRIGGER_SECRET_KEY: e2e-dummy-not-a-real-key
 
 jobs:
   e2e:

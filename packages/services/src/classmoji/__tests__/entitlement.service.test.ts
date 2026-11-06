@@ -202,21 +202,25 @@ describe('quizzesVisible', () => {
 
 describe('quizzesVisibleOrThrow', () => {
   const env = { ...process.env };
-  const configure = (on: boolean) => {
-    if (on) {
-      process.env.AI_AGENT_URL = 'http://localhost:6000';
-      process.env.AI_AGENT_SHARED_SECRET = 'test-secret';
-    } else {
-      delete process.env.AI_AGENT_URL;
-      delete process.env.AI_AGENT_SHARED_SECRET;
-    }
+  // Quizzes run only on the Trigger chat runtime: its keys decide, never the
+  // retired AI agent's. Every case sets or clears all four explicitly so a
+  // value loaded from a local .env cannot leak in.
+  const configure = (
+    on: boolean,
+    key: 'TRIGGER_SECRET_KEY' | 'TRIGGER_ACCESS_TOKEN' = 'TRIGGER_SECRET_KEY'
+  ) => {
+    delete process.env.TRIGGER_SECRET_KEY;
+    delete process.env.TRIGGER_ACCESS_TOKEN;
+    delete process.env.AI_AGENT_URL;
+    delete process.env.AI_AGENT_SHARED_SECRET;
+    if (on) process.env[key] = 'tr_dev_test';
   };
 
   afterEach(() => {
     process.env = { ...env };
   });
 
-  it('is false without asking the database when the AI agent is not configured', async () => {
+  it('is false without asking the database when the quiz runtime is not configured', async () => {
     configure(false);
     getProStateForClassroomIdMock.mockResolvedValue({ isPro: true });
     findUniqueSettingsMock.mockResolvedValue({ quizzes_enabled: true });
@@ -227,27 +231,50 @@ describe('quizzesVisibleOrThrow', () => {
     expect(findUniqueSettingsMock).not.toHaveBeenCalled();
   });
 
-  it('needs both AI agent variables', async () => {
-    configure(true);
-    delete process.env.AI_AGENT_SHARED_SECRET;
+  it('is false with only the AI agent configured: the agent no longer runs quizzes', async () => {
+    configure(false);
+    process.env.AI_AGENT_URL = 'http://localhost:6000';
+    process.env.AI_AGENT_SHARED_SECRET = 'test-secret';
     getProStateForClassroomIdMock.mockResolvedValue({ isPro: true });
+    findUniqueSettingsMock.mockResolvedValue({ quizzes_enabled: true });
     const { quizzesVisibleOrThrow } = await import('../entitlement.service.ts');
 
     expect(await quizzesVisibleOrThrow(CLASSROOM_ID)).toBe(false);
+    expect(getProStateForClassroomIdMock).not.toHaveBeenCalled();
   });
+
+  it.each(['TRIGGER_SECRET_KEY', 'TRIGGER_ACCESS_TOKEN'] as const)(
+    'answers by Pro and the switch with %s set and the AI agent variables unset',
+    async key => {
+      configure(true, key);
+      expect(process.env.AI_AGENT_URL).toBeUndefined();
+      expect(process.env.AI_AGENT_SHARED_SECRET).toBeUndefined();
+      getProStateForClassroomIdMock.mockResolvedValue({ isPro: true });
+      findUniqueSettingsMock.mockResolvedValue({ quizzes_enabled: true });
+      const { quizzesVisibleOrThrow, isQuizRuntimeConfigured } =
+        await import('../entitlement.service.ts');
+
+      expect(isQuizRuntimeConfigured()).toBe(true);
+      expect(await quizzesVisibleOrThrow(CLASSROOM_ID)).toBe(true);
+      expect(getProStateForClassroomIdMock).toHaveBeenCalledWith(CLASSROOM_ID);
+    }
+  );
 
   it.each([
     [true, true, true],
     [true, false, false],
     [false, true, false],
-  ])('with the agent configured, Pro=%s and switch=%s answer %s', async (isPro, on, expected) => {
-    configure(true);
-    getProStateForClassroomIdMock.mockResolvedValue({ isPro });
-    findUniqueSettingsMock.mockResolvedValue({ quizzes_enabled: on });
-    const { quizzesVisibleOrThrow } = await import('../entitlement.service.ts');
+  ])(
+    'with the quiz runtime configured, Pro=%s and switch=%s answer %s',
+    async (isPro, on, expected) => {
+      configure(true);
+      getProStateForClassroomIdMock.mockResolvedValue({ isPro });
+      findUniqueSettingsMock.mockResolvedValue({ quizzes_enabled: on });
+      const { quizzesVisibleOrThrow } = await import('../entitlement.service.ts');
 
-    expect(await quizzesVisibleOrThrow(CLASSROOM_ID)).toBe(expected);
-  });
+      expect(await quizzesVisibleOrThrow(CLASSROOM_ID)).toBe(expected);
+    }
+  );
 
   it('throws when the Pro lookup fails, never answers false', async () => {
     configure(true);

@@ -68,8 +68,8 @@ export const canUseQuizzes = async (classroomId: string): Promise<EntitlementRes
  * without it shows no trace of quizzes and nothing links to a refusing route.
  *
  * Stored quizzes are untouched; they reappear when the classroom qualifies
- * again. The webapp wraps this as `loadQuizzesVisible`, which also requires the
- * AI agent to be configured and answers false on a failed lookup.
+ * again. `quizzesVisibleOrThrow` below adds the quiz runtime check; the
+ * webapp's `loadQuizzesVisible` wraps that and answers false on a failed lookup.
  */
 export const quizzesVisible = async (classroomId: string): Promise<boolean> => {
   const [{ isPro }, settings] = await Promise.all([
@@ -83,27 +83,29 @@ export const quizzesVisible = async (classroomId: string): Promise<boolean> => {
 };
 
 /**
- * Whether the AI agent service is configured in THIS process: both
- * `AI_AGENT_URL` and `AI_AGENT_SHARED_SECRET` set. Same rule as the webapp's
- * `isAIAgentConfigured` (`~/utils/aiFeatures.server`).
+ * Whether the quiz runtime is configured in THIS process: Trigger.dev keys are
+ * set (`TRIGGER_SECRET_KEY` or `TRIGGER_ACCESS_TOKEN`). Quizzes run only on the
+ * Trigger chat runtime, so without it no quiz can start and none is shown.
+ * Same rule as `isTriggerConfigured` in `askMojiSession.service.ts` and the
+ * webapp's `api.quiz-chat.session/session.server.ts`.
  */
-export const isAIAgentConfigured = (): boolean =>
-  Boolean(process.env.AI_AGENT_URL && process.env.AI_AGENT_SHARED_SECRET);
+export const isQuizRuntimeConfigured = (): boolean =>
+  Boolean(process.env.TRIGGER_SECRET_KEY || process.env.TRIGGER_ACCESS_TOKEN);
 
 /**
- * Whether quizzes are shown in this classroom, as its pages show them: the AI
- * agent is configured AND `quizzesVisible` holds (Pro, not switched off). The
+ * Whether quizzes are shown in this classroom, as its pages show them: the quiz
+ * runtime is configured AND `quizzesVisible` holds (Pro, not switched off). The
  * one answer every grade total (gradebook, student report, leaderboard, MCP
  * grade reads) passes to the quiz grade loader, so a total never counts a quiz
  * its pages hide.
  *
  * A failed lookup THROWS, never answers false: a database blip must not drop
- * every quiz out of a student's total. Same meaning as the webapp's
- * `quizzesVisibleOrThrow` (`~/utils/classroomProFlag.server`). Takes a
- * classroom id the caller has already authorized.
+ * every quiz out of a student's total. The webapp's `quizzesVisibleOrThrow`
+ * (`~/utils/classroomProFlag.server`) delegates here. Takes a classroom id the
+ * caller has already authorized.
  */
 export const quizzesVisibleOrThrow = async (classroomId: string): Promise<boolean> => {
-  if (!isAIAgentConfigured()) return false;
+  if (!isQuizRuntimeConfigured()) return false;
   return quizzesVisible(classroomId);
 };
 

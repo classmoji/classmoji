@@ -1657,9 +1657,9 @@ describe('extension_purchase with assignment_id (quiz)', () => {
       },
     });
 
-    // The service shows quizzes only where the AI agent is configured in the
-    // server's own env (AI_AGENT_URL + AI_AGENT_SHARED_SECRET, read from the
-    // repo .env). A not_found here in this Pro classroom means those are
+    // The service shows quizzes only where the quiz runtime is configured in
+    // the server's own env (TRIGGER_SECRET_KEY or TRIGGER_ACCESS_TOKEN, read
+    // from the repo .env). A not_found here in this Pro classroom means that is
     // missing, not a scoping fault.
     const bought = await callTool(student2, 'extension_purchase', args);
     expect(bought.isError, JSON.stringify(bought.payload)).toBe(false);

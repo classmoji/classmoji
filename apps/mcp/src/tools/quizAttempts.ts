@@ -10,7 +10,7 @@
  *
  * Tier: OWNER, TEACHER and ASSISTANT, as the web page (allowedRoles on the
  * results route). Where the classroom shows no quizzes (not Pro, switched off,
- * or no AI agent) it is refused, as the page 404s there.
+ * or no quiz runtime) it is refused, as the page 404s there.
  *
  * S1: the quiz is resolved through loadQuizInClassroom, so a quiz of another
  * classroom is the same not_found as an unknown id. Everything else is read

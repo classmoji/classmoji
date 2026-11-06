@@ -1,30 +1,26 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 /**
- * AI gating (RW-13): when isAIAgentConfigured() is false, the quiz API must
- * return 503 AFTER passing authorization (so denied access is still audited),
- * never expose AI functionality.
+ * Quiz runtime gating (RW-13): when the quiz runtime (Trigger) is not
+ * configured (`entitlement.isQuizRuntimeConfigured()` is false), the quiz API
+ * must return 503 AFTER passing authorization (so denied access is still
+ * audited), never expose quiz functionality. The retired AI agent's variables
+ * play no part.
  *
- * This is a deterministic unit test: the live dev/test server always has
- * AI_AGENT_URL / AI_AGENT_SHARED_SECRET set, so the unconfigured 503 branch
- * cannot be exercised via Playwright. We mock the auth + quiz-visibility seams
- * and the config probe, then drive the action directly.
+ * A deterministic unit test: we mock the auth + quiz-visibility seams and the
+ * config probe, then drive the action directly.
  *
  * Order: access and mutation gates, then the 503, then quiz visibility. An
- * unconfigured agent answers 503 whatever the plan; a configured one whose
+ * unconfigured runtime answers 503 whatever the plan; a configured one whose
  * classroom cannot see quizzes answers the fixed 403.
  */
 
-const isAIAgentConfiguredMock = vi.fn();
+const isQuizRuntimeConfiguredMock = vi.fn();
 const assertClassroomAccessMock = vi.fn();
 const quizzesVisibleMock = vi.fn();
 const assertClassroomMutationAllowedMock = vi.fn();
 const findWithMessagesMock = vi.fn();
 const attemptFindByIdMock = vi.fn();
-
-vi.mock('~/utils/aiFeatures.server', () => ({
-  isAIAgentConfigured: () => isAIAgentConfiguredMock(),
-}));
 
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: (...a: unknown[]) => assertClassroomAccessMock(...a),
@@ -42,6 +38,7 @@ vi.mock('~/utils/routeAuth.server', () => ({
 // reaches into the (empty) ai-agent submodule or a real DB.
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
+    entitlement: { isQuizRuntimeConfigured: () => isQuizRuntimeConfiguredMock() },
     quiz: { findById: vi.fn() },
     classroom: { findById: vi.fn() },
     quizAttempt: {
@@ -81,8 +78,8 @@ describe('api.quiz AI gating', () => {
     quizzesVisibleMock.mockResolvedValue(true);
   });
 
-  it('returns 503 when the AI agent is not configured (after passing auth)', async () => {
-    isAIAgentConfiguredMock.mockReturnValue(false);
+  it('returns 503 when the quiz runtime is not configured (after passing auth)', async () => {
+    isQuizRuntimeConfiguredMock.mockReturnValue(false);
     const { ClassmojiService } = await import('@classmoji/services');
     (ClassmojiService.quiz.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
       id: 'quiz-1',
@@ -101,8 +98,8 @@ describe('api.quiz AI gating', () => {
     expect(quizzesVisibleMock).not.toHaveBeenCalled();
   });
 
-  it('answers 503, not the visibility 403, when the agent is unconfigured and quizzes are hidden', async () => {
-    isAIAgentConfiguredMock.mockReturnValue(false);
+  it('answers 503, not the visibility 403, when the runtime is unconfigured and quizzes are hidden', async () => {
+    isQuizRuntimeConfiguredMock.mockReturnValue(false);
     quizzesVisibleMock.mockResolvedValue(false);
     const { ClassmojiService } = await import('@classmoji/services');
     (ClassmojiService.quiz.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -117,8 +114,8 @@ describe('api.quiz AI gating', () => {
     expect(quizzesVisibleMock).not.toHaveBeenCalled();
   });
 
-  it('answers the fixed 403 when the agent is configured but quizzes are not visible', async () => {
-    isAIAgentConfiguredMock.mockReturnValue(true);
+  it('answers the fixed 403 when the runtime is configured but quizzes are not visible', async () => {
+    isQuizRuntimeConfiguredMock.mockReturnValue(true);
     quizzesVisibleMock.mockResolvedValue(false);
     const { ClassmojiService } = await import('@classmoji/services');
     (ClassmojiService.quiz.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -139,10 +136,10 @@ describe('api.quiz AI gating', () => {
     expect(quizzesVisibleMock).toHaveBeenCalledWith('c-1');
   });
 
-  it('also gates updateMetrics with 503 when the AI agent is not configured', async () => {
+  it('also gates updateMetrics with 503 when the quiz runtime is not configured', async () => {
     // The config gate sits after resolveOrgContext for ALL actions, not just
     // startQuiz. Prove a second action traverses the same gate.
-    isAIAgentConfiguredMock.mockReturnValue(false);
+    isQuizRuntimeConfiguredMock.mockReturnValue(false);
     attemptFindByIdMock.mockResolvedValue({
       id: 'a-1',
       quiz: { classroom: { slug: 'test-class' }, classroom_id: 'c-1' },
@@ -158,8 +155,8 @@ describe('api.quiz AI gating', () => {
     expect(quizzesVisibleMock).not.toHaveBeenCalled();
   });
 
-  it('does NOT short-circuit with 503 when the AI agent IS configured', async () => {
-    isAIAgentConfiguredMock.mockReturnValue(true);
+  it('does NOT short-circuit with 503 when the quiz runtime IS configured', async () => {
+    isQuizRuntimeConfiguredMock.mockReturnValue(true);
     const { ClassmojiService } = await import('@classmoji/services');
     (ClassmojiService.quiz.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
       id: 'quiz-1',
@@ -173,9 +170,9 @@ describe('api.quiz AI gating', () => {
     );
 
     // The 404 'Attempt not found' is emitted in startQuiz — INSIDE the
-    // post-gate switch, only reachable after isAIAgentConfigured() passes. So
-    // a specific post-gate error (not merely "status !== 503") proves the
-    // configured path actually traverses past the AI gate rather than
+    // post-gate switch, only reachable after isQuizRuntimeConfigured() passes.
+    // So a specific post-gate error (not merely "status !== 503") proves the
+    // configured path actually traverses past the runtime gate rather than
     // short-circuiting earlier.
     expect(res.status).toBe(404);
     expect(await res.json()).toMatchObject({ error: 'Attempt not found' });

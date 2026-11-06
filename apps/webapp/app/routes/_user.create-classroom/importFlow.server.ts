@@ -308,7 +308,7 @@ export async function runClassroomImport({
     }
 
     // Quizzes are copied only into a classroom that shows them: Pro, quizzes
-    // not switched off, and the AI agent configured; the wizard offers them on
+    // not switched off, and the quiz runtime configured; the wizard offers them on
     // the same terms. Decided on the classroom just created, after its owner
     // membership exists and after the settings copy above, so a copied
     // `quizzes_enabled: false` counts. A failed lookup copies none and the

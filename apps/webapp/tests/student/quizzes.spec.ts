@@ -13,11 +13,13 @@ import {
  * Covers the student quiz experience at /student/$org/quizzes: list tabs
  * (Current/Completed/All <button>s) and table headers.
  *
- * The quiz-list LOADER only requires Pro tier (assertProTier) — NOT a reachable
- * ai-agent — so these tests seed a PRO subscription on the classroom owner plus
- * a PUBLISHED quiz and navigate directly to the route. Attempt creation /
- * first-question generation does need the agent and is covered instead by the
- * deterministic action vitest at app/routes/api.quiz/__tests__/startQuiz.test.ts.
+ * The quiz-list LOADER requires quizzes to be visible (Pro, switched on, and
+ * the quiz runtime configured: TRIGGER_SECRET_KEY or TRIGGER_ACCESS_TOKEN in
+ * the server's env) but never calls Trigger, so these tests seed a PRO
+ * subscription on the classroom owner plus a PUBLISHED quiz and navigate
+ * directly to the route. Running a quiz chat does call Trigger and is covered
+ * instead by the deterministic vitests under app/routes/api.quiz/__tests__ and
+ * app/routes/api.quiz-chat.session/__tests__.
  */
 
 const SEEDED_QUIZ_NAME = 'E2E Student Quiz List';
@@ -63,9 +65,7 @@ test.describe('Student Quiz List', () => {
       await expect(page.getByRole('columnheader', { name: new RegExp(header, 'i') })).toBeVisible();
     }
 
-    await expect(
-      page.getByRole('row').filter({ hasText: SEEDED_QUIZ_NAME })
-    ).toBeVisible();
+    await expect(page.getByRole('row').filter({ hasText: SEEDED_QUIZ_NAME })).toBeVisible();
   });
 
   test('Completed tab shows the empty state when there are no attempts', async ({
@@ -79,9 +79,9 @@ test.describe('Student Quiz List', () => {
 test.describe('Student Quiz Navigation', () => {
   test.fixme(
     true,
-    'MISSING: the Quizzes nav item is gated on isProTier AND aiAgentAvailable in CommonLayout. ' +
-      'The ai-agent submodule is empty here (no AI_AGENT_URL), so the nav link stays hidden even ' +
-      'with a PRO subscription. Needs a configured/reachable ai-agent to surface the link.'
+    'MISSING: the Quizzes nav item is gated on isProTier AND quizzesAvailable (the root ' +
+      "loader's quiz runtime check: TRIGGER_SECRET_KEY or TRIGGER_ACCESS_TOKEN) in CommonLayout. " +
+      'Without a Trigger key the nav link stays hidden even with a PRO subscription.'
   );
 
   test('can navigate from dashboard to quizzes', async ({ authenticatedPage: page, testOrg }) => {

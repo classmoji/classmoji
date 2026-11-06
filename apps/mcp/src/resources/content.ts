@@ -29,11 +29,9 @@
  *                     course site still does.
  *   quizzes         — roles OWNER/TEACHER/ASSISTANT/STUDENT, matching the quiz
  *                     routes. Gate order mirrors the routes: role check →
- *                     Pro-tier → quizzes_enabled. NOTE:
- *                     the plan table lists isAIAgentConfigured() as a third
- *                     gate, but neither quiz LIST loader checks it (it only
- *                     gates the attempt/action flow + nav) — route wins, so
- *                     the list resource does not check it. Students get the
+ *                     Pro-tier → quizzes_enabled; for students,
+ *                     entitlement.quizzesVisibleOrThrow, which also requires
+ *                     the quiz runtime (Trigger). Students get the
  *                     published quizzes, closed ones included (as the web
  *                     list), with the
  *                     student route's field allowlist (no
@@ -647,7 +645,7 @@ export const quizzesResource: ResourceDefinition = {
     if (role === 'STUDENT') {
       // A student sees quizzes where the classroom's pages show them: the same
       // predicate extension_purchase and my_grades use (Pro, switched on, and
-      // the AI agent configured). A failed lookup fails the read.
+      // the quiz runtime configured). A failed lookup fails the read.
       if (!(await ClassmojiService.entitlement.quizzesVisibleOrThrow(classroomId))) {
         throw new ToolError('forbidden', 'Quizzes are not available in this classroom');
       }

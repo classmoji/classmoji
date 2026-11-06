@@ -33,7 +33,6 @@
  */
 import { assertClassroomAccess } from '~/utils/helpers';
 import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
-import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { isTriggerChatAttempt } from '@classmoji/utils';
 import { closeIfExpired } from '~/utils/quizAttemptExpiry.server';
@@ -51,7 +50,7 @@ const ALLOWED_ROLES: Role[] = ['STUDENT', 'ASSISTANT', 'TEACHER', 'OWNER'];
 const SESSION_REFUSALS = {
   missingAttempt: { status: 400, body: { message: 'Missing attempt.' } },
   notFound: { status: 404, body: { message: 'Quiz attempt not found.' } },
-  notConfigured: { status: 503, body: { message: 'AI features are not configured.' } },
+  notConfigured: { status: 503, body: { message: 'Quizzes are not configured on this server.' } },
   quizzesUnavailable: {
     status: 403,
     body: {
@@ -147,8 +146,9 @@ export async function action({ request }: Route.ActionArgs) {
       role: access.membership!.role,
     });
 
-    // 3. Configuration, after auth so a denied caller is still audited.
-    if (!isAIAgentConfigured() || !isTriggerConfigured()) {
+    // 3. Configuration (the Trigger chat runtime), after auth so a denied
+    //    caller is still audited.
+    if (!isTriggerConfigured()) {
       return refuse(SESSION_REFUSALS.notConfigured);
     }
 

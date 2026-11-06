@@ -112,11 +112,11 @@ const CommonLayout = ({
     | {
         user?: AppUser | null;
         memberships?: MembershipWithOrganization[];
-        aiAgentAvailable?: boolean;
+        quizzesAvailable?: boolean;
         askMoji?: { runtime?: string; available?: boolean };
       }
     | undefined;
-  const { user, memberships = [], aiAgentAvailable = false } = rootData ?? {};
+  const { user, memberships = [], quizzesAvailable = false } = rootData ?? {};
   // The root loader's `askMojiAvailable` for this classroom (Trigger runtime, a
   // member). The insights entry follows it, like the sidebar button.
   const askMojiAvailable = rootData?.askMoji?.available === true;
@@ -235,7 +235,7 @@ const CommonLayout = ({
     if (item.isProTier && !isProTier && isDemoClassroom === false) return null;
     if (item.link === '/quizzes' && !isProTier && isDemoClassroom === false) return null;
     if (item.link === '/quizzes' && classroom?.settings?.quizzes_enabled === false) return null;
-    if (item.link === '/quizzes' && !aiAgentAvailable) return null;
+    if (item.link === '/quizzes' && !quizzesAvailable) return null;
 
     // Hide slides if disabled in classroom settings
     if (item.link === '/slides' && classroom?.settings?.slides_enabled === false) return null;
@@ -308,7 +308,7 @@ const CommonLayout = ({
     if (item.isProTier && !isProTier && !isDemoClassroom) return false;
     if (item.link === '/quizzes' && !isProTier && !isDemoClassroom) return false;
     if (item.link === '/quizzes' && classroom?.settings?.quizzes_enabled === false) return false;
-    if (item.link === '/quizzes' && !aiAgentAvailable) return false;
+    if (item.link === '/quizzes' && !quizzesAvailable) return false;
     if (item.link === '/slides' && role === 'STUDENT' && hasModules) return false;
 
     // Student navigation visibility toggles (OWNER always retains access).

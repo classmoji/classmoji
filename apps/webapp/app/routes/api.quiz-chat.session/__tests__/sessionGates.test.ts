@@ -16,7 +16,6 @@ const attemptFindByIdMock = vi.fn();
 const auditCreateMock = vi.fn();
 const assertAccessMock = vi.fn();
 const assertMutationMock = vi.fn();
-const isAIAgentConfiguredMock = vi.fn();
 const quizzesVisibleMock = vi.fn();
 const getAuthSessionMock = vi.fn();
 const writeChatGrantMock = vi.fn();
@@ -41,10 +40,6 @@ vi.mock('~/utils/helpers', () => ({
 
 vi.mock('~/utils/routeAuth.server', () => ({
   assertClassroomMutationAllowed: (...a: unknown[]) => assertMutationMock(...a),
-}));
-
-vi.mock('~/utils/aiFeatures.server', () => ({
-  isAIAgentConfigured: () => isAIAgentConfiguredMock(),
 }));
 
 vi.mock('~/utils/classroomProFlag.server', () => ({
@@ -121,7 +116,6 @@ beforeEach(() => {
 
   attemptFindByIdMock.mockResolvedValue(attemptRow());
   assertMutationMock.mockReturnValue(undefined);
-  isAIAgentConfiguredMock.mockReturnValue(true);
   isTriggerConfiguredMock.mockReturnValue(true);
   quizzesVisibleMock.mockResolvedValue(true);
   writeChatGrantMock.mockResolvedValue(undefined);
@@ -304,7 +298,7 @@ describe('api.quiz-chat.session — refusals', () => {
 
     expect(response.status).toBe(403);
     expect(await response.text()).toBe('Forbidden');
-    expect(isAIAgentConfiguredMock).not.toHaveBeenCalled();
+    expect(isTriggerConfiguredMock).not.toHaveBeenCalled();
     expectNothingStarted();
   });
 
@@ -319,25 +313,29 @@ describe('api.quiz-chat.session — refusals', () => {
     expectNothingStarted();
   });
 
-  it('answers 503 after auth when AI is not configured, without consulting visibility', async () => {
-    isAIAgentConfiguredMock.mockReturnValue(false);
+  it('answers 503 after auth when Trigger is not configured, without consulting visibility', async () => {
+    isTriggerConfiguredMock.mockReturnValue(false);
 
     const response = await post({ attemptId: ATTEMPT_ID });
 
     expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      message: 'Quizzes are not configured on this server.',
+    });
     expect(assertAccessMock).toHaveBeenCalledTimes(1);
     expect(assertMutationMock).toHaveBeenCalledTimes(1);
     expect(quizzesVisibleMock).not.toHaveBeenCalled();
     expectNothingStarted();
   });
 
-  it('answers 503 when Trigger is not configured', async () => {
-    isTriggerConfiguredMock.mockReturnValue(false);
+  it('starts the session with the AI agent variables unset: only Trigger is needed', async () => {
+    vi.stubEnv('AI_AGENT_URL', '');
+    vi.stubEnv('AI_AGENT_SHARED_SECRET', '');
 
     const response = await post({ attemptId: ATTEMPT_ID });
 
-    expect(response.status).toBe(503);
-    expectNothingStarted();
+    expect(response.status).toBe(200);
+    expect(startSessionMock).toHaveBeenCalledTimes(1);
   });
 
   it('answers the fixed 403 when quizzes are not visible in the classroom', async () => {
@@ -373,7 +371,6 @@ describe('api.quiz-chat.session — refusals', () => {
       attemptFindByIdMock.mockResolvedValue(attemptRow());
       auditCreateMock.mockResolvedValue(undefined);
       quizzesVisibleMock.mockResolvedValue(true);
-      isAIAgentConfiguredMock.mockReturnValue(true);
       isTriggerConfiguredMock.mockReturnValue(true);
 
       const response = await post({ attemptId: ATTEMPT_ID });

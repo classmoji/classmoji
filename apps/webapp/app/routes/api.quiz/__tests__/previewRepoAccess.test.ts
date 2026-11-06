@@ -31,6 +31,7 @@ vi.mock('@octokit/rest', () => ({
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
+    entitlement: { isQuizRuntimeConfigured: () => true },
     quiz: { findById: (...a: unknown[]) => quizFindByIdMock(...a) },
     quizAttempt: {
       findById: (...a: unknown[]) => attemptFindByIdMock(...a),
@@ -49,7 +50,6 @@ vi.mock('~/utils/helpers', () => ({
 }));
 vi.mock('~/utils/classroomProFlag.server', () => ({ quizzesVisibleOrThrow: async () => true }));
 vi.mock('~/utils/routeAuth.server', () => ({ assertClassroomMutationAllowed: () => undefined }));
-vi.mock('~/utils/aiFeatures.server', () => ({ isAIAgentConfigured: () => true }));
 vi.mock('@classmoji/auth/server', () => ({
   getAuthSession: (...a: unknown[]) => getAuthSessionMock(...a),
 }));
