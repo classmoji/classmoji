@@ -82,7 +82,6 @@
     "@opentelemetry/sdk-trace-base": "^2.12.0",
     "@trigger.dev/build": "4.6.4",
     "@types/async": "^3.2.25",
-    "@types/js-cookie": "^3.0.6",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/lodash": "^4.17.24",
     "@types/node": "^22.18.6",

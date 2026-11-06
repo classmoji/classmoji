@@ -75,16 +75,10 @@ export default async ({ command, mode }) => {
       alias: {
         '.prisma/client/index-browser': '../../node_modules/.prisma/client/index-browser.js',
       },
-      dedupe: ['react', 'react-dom', 'react-router', 'react-router-dom'],
+      dedupe: ['react', 'react-dom', 'react-router'],
     },
     optimizeDeps: {
-      include: [
-        'react',
-        'react-dom',
-        'react-router',
-        'react-router-dom',
-        '@tiptap/extension-code-block-lowlight',
-      ],
+      include: ['react', 'react-dom', 'react-router', '@tiptap/extension-code-block-lowlight'],
       entries: ['./app/root.jsx'],
       exclude: [
         '@classmoji/database',
