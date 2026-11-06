@@ -2,11 +2,9 @@ import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import { isAIAgentConfigured } from '../aiFeatures.server';
 
 /**
- * isAIAgentConfigured() is the single source of truth for AI gating: root.tsx
- * passes its result as `aiAgentAvailable`, and CommonLayout hides the AI nav
- * items (`/quizzes`) when that flag is false. Asserting the util's contract
- * deterministically covers the hidden-nav path that the live (always-configured)
- * server cannot exercise.
+ * isAIAgentConfigured() gates Ask Moji's `ai_agent` runtime only (the
+ * api.syllabus-bot routes and the Ask Moji switch on AI settings). Quizzes do
+ * not read it: they follow `entitlement.isQuizRuntimeConfigured()` (Trigger).
  */
 
 const ORIGINAL_URL = process.env.AI_AGENT_URL;

@@ -31,7 +31,6 @@
  */
 import { assertClassroomAccess } from '~/utils/helpers';
 import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
-import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { isTriggerChatAttempt } from '@classmoji/utils';
 import type { Role } from '@prisma/client';
@@ -324,9 +323,9 @@ export async function action({ request }: Route.ActionArgs) {
       role: access.membership!.role,
     });
 
-    // Check AI agent availability AFTER auth (preserves audit logging)
-    if (!isAIAgentConfigured()) {
-      return new Response(JSON.stringify({ error: 'AI features are not configured' }), {
+    // Check the quiz runtime (Trigger) AFTER auth (preserves audit logging)
+    if (!ClassmojiService.entitlement.isQuizRuntimeConfigured()) {
+      return new Response(JSON.stringify({ error: 'Quizzes are not configured on this server' }), {
         status: 503,
         headers: { 'Content-Type': 'application/json' },
       });

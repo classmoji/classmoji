@@ -36,7 +36,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 
 // Whether quizzes show in the classroom (`entitlement.quizzesVisibleOrThrow`):
-// on, unless a test turns it off. The real one needs Pro and the AI agent env.
+// on, unless a test turns it off. The real one needs Pro and a Trigger key.
 const entitlement = vi.hoisted(() => ({ visible: true }));
 vi.mock('../entitlement.service.ts', async importOriginal => {
   const actual = await importOriginal<typeof import('../entitlement.service.ts')>();

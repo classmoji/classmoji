@@ -60,7 +60,7 @@ test.describe('Student Navigation', () => {
   }) => {
     await expect(page.getByRole('link', { name: 'Dashboard' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Assignments' })).toBeVisible();
-    // Quizzes nav is Pro-tier + AI-agent gated; the FREE-tier seed hides it.
+    // Quizzes nav is Pro-tier + quiz-runtime (Trigger) gated; the FREE-tier seed hides it.
   });
 
   test('can navigate to the assignments page', async ({ authenticatedPage: page, testOrg }) => {

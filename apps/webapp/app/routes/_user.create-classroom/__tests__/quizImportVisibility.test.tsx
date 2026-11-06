@@ -1,26 +1,22 @@
 /**
  * Create-classroom offers quiz import to Pro creators only, and only where the
- * AI agent is configured.
+ * quiz runtime (Trigger) is configured. The retired AI agent's variables play
+ * no part.
  *
  * The new classroom's only owner is its creator, so its Pro state is theirs:
  * the loader reads the creator's current subscription with the same test the
  * classroom resolver applies per owner (tier PRO and still active). Without
- * it, or without the agent, the repository picker has no quiz columns and the
+ * it, or without the quiz runtime, the repository picker has no quiz columns and the
  * review step never mentions quizzes. The action re-decides on the created
  * classroom (action.quizImport.test.ts).
  */
 
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   getCurrent: vi.fn(),
-  isAIAgentConfigured: vi.fn(),
-}));
-
-vi.mock('~/utils/aiFeatures.server', () => ({
-  isAIAgentConfigured: () => mocks.isAIAgentConfigured(),
 }));
 
 vi.mock('@classmoji/auth/server', () => ({
@@ -33,8 +29,12 @@ vi.mock('@classmoji/auth/server', () => ({
 vi.mock('@classmoji/services', async () => {
   const subscription =
     await import('../../../../../../packages/services/src/classmoji/subscription.service.ts');
+  // The real runtime predicate, read from the env each test stubs.
+  const entitlement =
+    await import('../../../../../../packages/services/src/classmoji/entitlement.service.ts');
   return {
     ClassmojiService: {
+      entitlement: { isQuizRuntimeConfigured: entitlement.isQuizRuntimeConfigured },
       user: { findById: vi.fn().mockResolvedValue({ id: 'user-1', login: 'instructor' }) },
       gitOrganization: { syncUserInstallations: vi.fn().mockResolvedValue([]) },
       subscription: {
@@ -108,17 +108,27 @@ const DAY = 24 * 60 * 60 * 1000;
 describe('create-classroom loader — quiz import follows the creator', () => {
   beforeEach(() => {
     mocks.getCurrent.mockReset();
-    mocks.isAIAgentConfigured.mockReset().mockReturnValue(true);
+    vi.unstubAllEnvs();
+    vi.stubEnv('TRIGGER_SECRET_KEY', 'tr_dev_test');
+    vi.stubEnv('TRIGGER_ACCESS_TOKEN', '');
+    vi.stubEnv('AI_AGENT_URL', '');
+    vi.stubEnv('AI_AGENT_SHARED_SECRET', '');
   });
 
-  it('offers it to a creator on an active Pro subscription', async () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('offers it to a creator on an active Pro subscription, with no AI agent variables', async () => {
     mocks.getCurrent.mockResolvedValue({ id: 's-1', tier: 'PRO', ends_at: null });
     expect((await load()).quizzesVisible).toBe(true);
     expect(mocks.getCurrent).toHaveBeenCalledWith('user-1');
   });
 
-  it('withholds it from a Pro creator when the AI agent is not configured', async () => {
-    mocks.isAIAgentConfigured.mockReturnValue(false);
+  it('withholds it from a Pro creator when the quiz runtime is not configured', async () => {
+    vi.stubEnv('TRIGGER_SECRET_KEY', '');
+    vi.stubEnv('AI_AGENT_URL', 'http://localhost:6000');
+    vi.stubEnv('AI_AGENT_SHARED_SECRET', 'test-secret');
     mocks.getCurrent.mockResolvedValue({ id: 's-1', tier: 'PRO', ends_at: null });
     expect((await load()).quizzesVisible).toBe(false);
   });

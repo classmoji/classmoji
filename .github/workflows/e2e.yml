@@ -125,6 +125,15 @@ jobs:
         # a permanent empty shell — which surfaced as a uniform ~13s timeout in
         # every owner-tests spec.
         working-directory: apps/webapp
+        env:
+          # Quizzes show only where Trigger is configured
+          # (isQuizRuntimeConfigured checks presence only), so the server needs a
+          # key. A dummy: the quiz specs never run a chat turn. Every other
+          # Trigger call now goes out and gets a 401 instead of failing locally
+          # (the bulk-add invite email, deck thumbnails, the class import, team
+          # set solves); no spec depends on either outcome. Set here and on the Playwright step only, not
+          # job-wide: the Vitest suites stub fetch and must not see a key.
+          TRIGGER_SECRET_KEY: e2e-dummy-not-a-real-key
         run: |
           ../../node_modules/.bin/react-router-serve build/server/index.js &
           echo "WEBAPP_PID=$!" >> "$GITHUB_ENV"
@@ -146,6 +155,10 @@ jobs:
 
       - name: Run webapp E2E (Playwright)
         working-directory: apps/webapp
+        env:
+          # Same dummy as the server step: tests/regression/ai-gating.spec.ts
+          # reads it in the runner to know which outcome to expect.
+          TRIGGER_SECRET_KEY: e2e-dummy-not-a-real-key
         run: npx playwright test
 
       - name: Run hook-station webhook tests (Vitest)

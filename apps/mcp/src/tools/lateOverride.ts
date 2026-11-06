@@ -136,7 +136,7 @@ async function quizLateOverride(args: LateOverrideArgs & { student_id: string },
   const { classroomId } = requireClassroomCtx(ctx);
 
   // Either selector, as list_quiz_attempts and quiz_attempt_adjust: a classroom
-  // whose quizzes are hidden (not Pro, switched off, or no AI agent) has none
+  // whose quizzes are hidden (not Pro, switched off, or no quiz runtime) has none
   // to name, and says so the same way before anything is looked up.
   if (!(await ClassmojiService.entitlement.quizzesVisibleOrThrow(classroomId))) {
     throw new ToolError('forbidden', 'Quizzes are not available in this classroom');

@@ -155,9 +155,16 @@ vi.mock('@classmoji/auth/secret', () => ({ COOKIE_DOMAIN: null }));
 let askMojiRuntime = 'ai_agent';
 const askMojiAvailableMock = vi.fn(async (..._a: unknown[]) => ({ available: true }));
 
-vi.mock('@classmoji/services', () => ({
+vi.mock('@classmoji/services', async () => ({
   GitHubProvider: { getUserOctokit: vi.fn() },
   ClassmojiService: {
+    // The services barrel is mocked whole (it pulls in the database and every
+    // provider). The quiz runtime answer is the real rule, from the subpath that
+    // carries it alone, so the env cases below test it rather than a copy.
+    entitlement: {
+      isQuizRuntimeConfigured: (await import('@classmoji/services/trigger-config'))
+        .isTriggerConfigured,
+    },
     subscription: { getCurrent: vi.fn(async () => null) },
     askMojiSession: {
       askMojiRuntimeIsTrigger: () => askMojiRuntime === 'trigger',
@@ -165,8 +172,6 @@ vi.mock('@classmoji/services', () => ({
     },
   },
 }));
-
-vi.mock('~/utils/aiFeatures.server', () => ({ isAIAgentConfigured: () => false }));
 
 // The component tree root.tsx renders; none of it runs in a loader test.
 vi.mock('@ant-design/v5-patch-for-react-19', () => ({}));
@@ -200,6 +205,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.unstubAllEnvs();
   vi.stubEnv('SENTRY_DSN', '');
+  // Quizzes off unless a case turns them on, whatever the developer's shell has.
+  vi.stubEnv('TRIGGER_SECRET_KEY', '');
+  vi.stubEnv('TRIGGER_ACCESS_TOKEN', '');
   findUniqueMock.mockImplementation(async (query: { include?: Row; select?: Row }) =>
     project(USER_ROW, query)
   );
@@ -305,13 +313,13 @@ describe('root loader payload', () => {
     const signedIn = await load('/student/test-class/dashboard');
     expect(Object.keys(signedIn).sort()).toEqual(
       [
-        'aiAgentAvailable',
         'askMoji',
         'gitMode',
         'impersonationCookieDomain',
         'impersonationReturnUrl',
         'memberships',
         'organizations',
+        'quizzesAvailable',
         'sentry',
         'session',
         'user',
@@ -336,6 +344,21 @@ describe('root loader payload', () => {
       askMojiEmbed: true,
       sentry: null,
     });
+  });
+
+  it('says quizzes are available with a Trigger key and no AI agent', async () => {
+    vi.stubEnv('TRIGGER_SECRET_KEY', 'tr_dev_test');
+    vi.stubEnv('AI_AGENT_URL', '');
+    vi.stubEnv('AI_AGENT_SHARED_SECRET', '');
+    expect((await load('/student/test-class/dashboard')).quizzesAvailable).toBe(true);
+    vi.unstubAllEnvs();
+  });
+
+  it('says quizzes are unavailable with the AI agent set and no Trigger key', async () => {
+    vi.stubEnv('AI_AGENT_URL', 'http://localhost:6000');
+    vi.stubEnv('AI_AGENT_SHARED_SECRET', 'agent-secret');
+    expect((await load('/student/test-class/dashboard')).quizzesAvailable).toBe(false);
+    vi.unstubAllEnvs();
   });
 
   it('says which Ask Moji to mount, and whether this classroom has it', async () => {

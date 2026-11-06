@@ -71,10 +71,12 @@ async function spawnOnce(
       MCP_PORT: String(PORT),
       MCP_PUBLIC_URL: BASE,
       WEBAPP_URL: 'http://localhost:3000',
-      // Quiz paths check only that the AI agent is configured (never call it
-      // here), and the runner's DATABASE_URL means the repo .env was not read.
-      AI_AGENT_URL: 'http://127.0.0.1:9',
-      AI_AGENT_SHARED_SECRET: 'mcp-integration-placeholder',
+      // Quizzes show only where the quiz runtime (Trigger) is configured, a
+      // presence check; the runner's DATABASE_URL means the repo .env was not
+      // read. A placeholder key, and an API address nothing listens on, so a
+      // tool that does trigger a task fails here instead of calling Trigger.
+      TRIGGER_SECRET_KEY: 'mcp-integration-placeholder',
+      TRIGGER_API_URL: 'http://127.0.0.1:9',
       // LAST, so a caller can override anything above — including credentials
       // the runner's own environment happens to carry.
       ...extraEnv,

@@ -213,7 +213,7 @@ describe('submission_late_override (quiz) — selectors', () => {
   ])(
     'refuses %s where the quiz tools hide quizzes, even if the entitlement alone would show them',
     async (_label, sel) => {
-      // The two predicates differ (no AI agent configured): the quiz tools'
+      // The two predicates differ (no quiz runtime configured): the quiz tools'
       // `quizzesVisibleOrThrow` decides, for both selectors, before any lookup.
       mocks.quizzesVisible.mockResolvedValue(true);
       mocks.quizzesVisibleOrThrow.mockResolvedValue(false);

@@ -1,5 +1,4 @@
 import { ClassmojiService } from '@classmoji/services';
-import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 
 /**
  * Whether a classroom is on Pro, as a bare boolean — the one fact the staff
@@ -30,18 +29,18 @@ export const loadClassroomIsPro = async (classroomId: string): Promise<boolean> 
 };
 
 /**
- * Whether quizzes may appear anywhere in this classroom's UI: the AI agent is
- * configured, and `entitlement.quizzesVisible` (Pro, not switched off) holds.
+ * Whether quizzes may appear anywhere in this classroom's UI: the quiz runtime
+ * (Trigger) is configured, the classroom is Pro and quizzes are not switched
+ * off. Delegates to `entitlement.quizzesVisibleOrThrow`, the answer the
+ * grade totals, calendar, notifications and the MCP use, so a page never shows a quiz a total skips.
  *
  * A failed lookup THROWS. Use this where the answer gates a quiz route or
  * action (a 404 or the 403 refusal): a database blip there must surface as an
  * error, not as "this class has no quizzes". Use `loadQuizzesVisible` to decide
  * what to render. Takes a classroom id the caller has already authorized.
  */
-export const quizzesVisibleOrThrow = async (classroomId: string): Promise<boolean> => {
-  if (!isAIAgentConfigured()) return false;
-  return ClassmojiService.entitlement.quizzesVisible(classroomId);
-};
+export const quizzesVisibleOrThrow = async (classroomId: string): Promise<boolean> =>
+  ClassmojiService.entitlement.quizzesVisibleOrThrow(classroomId);
 
 /**
  * `quizzesVisibleOrThrow` for rendering: loaders filter quiz rows, tags,

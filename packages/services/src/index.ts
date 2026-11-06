@@ -161,6 +161,7 @@ export type {
   UngradedSlotsOutcome,
 } from './helper/index.ts';
 export { waitForRunOutcome } from './helper/runWait.ts';
+export { isTriggerConfigured } from './helper/triggerConfig.ts';
 export type { RunOutcome } from './helper/runWait.ts';
 // A student's coursework rows (Assignments page, dashboard Up next).
 export type {

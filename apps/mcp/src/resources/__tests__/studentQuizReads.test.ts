@@ -951,7 +951,7 @@ describe('list_quizzes for a student: extension fields', () => {
     await quizzesResource.handler(VARS, studentCtx(settings), URI);
     expect(mocks.quizzesVisibleOrThrow).toHaveBeenCalledWith('class-1');
 
-    // Hidden (e.g. no AI agent configured): refused before anything is read.
+    // Hidden (e.g. no quiz runtime configured): refused before anything is read.
     mocks.getQuizzesForStudent.mockClear();
     mocks.quizzesVisibleOrThrow.mockResolvedValue(false);
     await expect(quizzesResource.handler(VARS, studentCtx(settings), URI)).rejects.toMatchObject({

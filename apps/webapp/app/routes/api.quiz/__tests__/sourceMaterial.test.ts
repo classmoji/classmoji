@@ -24,6 +24,7 @@ const quizzesVisibleMock = vi.fn();
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
+    entitlement: { isQuizRuntimeConfigured: () => true },
     quiz: { findById: (...a: unknown[]) => quizFindByIdMock(...a) },
     quizAttempt: {
       createNew: (...a: unknown[]) => createNewMock(...a),
@@ -45,7 +46,6 @@ vi.mock('~/utils/classroomProFlag.server', () => ({
   quizzesVisibleOrThrow: (...a: unknown[]) => quizzesVisibleMock(...a),
 }));
 vi.mock('~/utils/routeAuth.server', () => ({ assertClassroomMutationAllowed: vi.fn() }));
-vi.mock('~/utils/aiFeatures.server', () => ({ isAIAgentConfigured: () => true }));
 vi.mock('@classmoji/auth/server', () => ({
   getAuthSession: vi.fn(async () => ({ token: 'ghu_token', session: {} })),
 }));

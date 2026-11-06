@@ -10,18 +10,24 @@ import {
 } from '../helpers/prisma.helpers';
 
 /**
- * AI feature gating via isAIAgentConfigured() (RW-13).
+ * AI feature gating (RW-13).
  *
- * Returns true iff AI_AGENT_URL and AI_AGENT_SHARED_SECRET are set. When false,
- * api.quiz / api.syllabus-bot return 503 (after auth) and AI nav items hide.
+ * Quizzes run only on the Trigger chat runtime: `entitlement.isQuizRuntimeConfigured()`
+ * is true iff TRIGGER_SECRET_KEY or TRIGGER_ACCESS_TOKEN is set. When false,
+ * api.quiz returns 503 (after auth), quizzes are hidden everywhere and left out
+ * of grade totals, and the Quizzes nav item hides. The AI agent's variables
+ * play no part in quizzes.
  *
- * The dev/test server always has both env vars set, so these E2E tests can only
- * exercise the configured-state (non-503) branch. The UNCONFIGURED branch (503
- * + hidden nav) is covered deterministically by unit tests that mock
- * isAIAgentConfigured() -> false:
+ * Ask Moji's `ai_agent` runtime is gated by isAIAgentConfigured(): true iff
+ * AI_AGENT_URL and AI_AGENT_SHARED_SECRET are set. When false,
+ * api.syllabus-bot returns 503 (after auth).
+ *
+ * The quiz test below asserts whichever branch this server is in. Both
+ * branches are also covered deterministically by unit tests:
  *   - app/routes/api.quiz/__tests__/ai-gating.test.ts
+ *   - packages/services/src/classmoji/__tests__/entitlement.service.test.ts
  *   - app/routes/api.syllabus-bot.$class/__tests__/ai-gating.test.ts
- *   - app/utils/__tests__/aiFeatures.server.test.ts (drives aiAgentAvailable -> nav)
+ *   - app/utils/__tests__/aiFeatures.server.test.ts
  *
  * Ask Moji on the Trigger runtime is gated by askMojiAvailable() instead
  * (ASK_MOJI_RUNTIME=trigger, Trigger configured, an Anthropic key, Pro,
@@ -48,19 +54,31 @@ test.describe('REGRESSION: AI gating still works after TS migration', () => {
     if (quizId) await deleteQuizById(quizId);
   });
 
-  test('with the agent configured, AI endpoints pass the 503 gate', async ({
+  test('the quiz API follows the quiz runtime (Trigger), not the AI agent', async ({
     authenticatedPage: page,
   }) => {
-    expect(process.env.AI_AGENT_URL).toBeTruthy();
-    expect(process.env.AI_AGENT_SHARED_SECRET).toBeTruthy();
+    const quizRuntimeOn = Boolean(
+      process.env.TRIGGER_SECRET_KEY || process.env.TRIGGER_ACCESS_TOKEN
+    );
 
     const quiz = await page.request.post(`/api/quiz`, {
       data: { _action: 'startQuiz', quizId },
     });
-    expect(quiz.status()).toBe(200);
-    await expect(quiz.json()).resolves.toEqual(
-      expect.objectContaining({ attemptId: expect.any(String) })
-    );
+    if (quizRuntimeOn) {
+      expect(quiz.status()).toBe(200);
+      await expect(quiz.json()).resolves.toEqual(
+        expect.objectContaining({ attemptId: expect.any(String) })
+      );
+    } else {
+      expect(quiz.status()).toBe(503);
+    }
+  });
+
+  test('with the agent configured, the Ask Moji (ai_agent) endpoint passes the 503 gate', async ({
+    authenticatedPage: page,
+  }) => {
+    expect(process.env.AI_AGENT_URL).toBeTruthy();
+    expect(process.env.AI_AGENT_SHARED_SECRET).toBeTruthy();
 
     const syllabus = await page.request.get(`/api/syllabus-bot/${TEST_CLASSROOM}`);
     expect(syllabus.status()).toBe(200);

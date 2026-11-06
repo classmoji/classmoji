@@ -2,11 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * Quiz import on create-classroom follows whether the NEW classroom shows
- * quizzes: the AI agent is configured and `entitlement.quizzesVisible` holds
- * (Pro, quizzes not switched off).
+ * quizzes: `entitlement.quizzesVisibleOrThrow` (the quiz runtime is configured,
+ * Pro, quizzes not switched off).
  *
- * The wizard offers "Include Quizzes" to Pro creators only, where the agent is
- * configured, but the flag arrives in the request body, so the action decides
+ * The wizard offers "Include Quizzes" to Pro creators only, where the quiz
+ * runtime is configured, but the flag arrives in the request body, so the
+ * action decides
  * again once the classroom and its owner membership exist, and after the
  * settings copy — a copied `quizzes_enabled: false` counts. Hidden quizzes (or
  * a failed lookup) mean every repository is cloned with `includeQuizzes:
@@ -20,11 +21,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * that phase reuses.
  *
  * `~/utils/classroomProFlag.server` is NOT mocked: the action's answer comes
- * from the real helper, over the agent check and the entitlement service.
+ * from the real helper, over the entitlement service (whose own tests cover the
+ * runtime check).
  */
 
 const mocks = vi.hoisted(() => ({
-  isAIAgentConfigured: vi.fn(),
   getAuthSession: vi.fn(),
   findById: vi.fn(),
   membershipCreate: vi.fn(),
@@ -44,10 +45,6 @@ vi.mock('~/utils/helpers', () => ({
   checkAuth: (fn: (args: unknown) => unknown) => fn,
 }));
 
-vi.mock('~/utils/aiFeatures.server', () => ({
-  isAIAgentConfigured: () => mocks.isAIAgentConfigured(),
-}));
-
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     user: { findById: (...a: unknown[]) => mocks.findById(...a) },
@@ -57,7 +54,7 @@ vi.mock('@classmoji/services', () => ({
       assertCanCreateActive: vi.fn(async () => {}),
       isActiveClassroomLimitError: () => false,
     },
-    entitlement: { quizzesVisible: (...a: unknown[]) => mocks.quizzesVisible(...a) },
+    entitlement: { quizzesVisibleOrThrow: (...a: unknown[]) => mocks.quizzesVisible(...a) },
     classroomConfigImport: {
       importClassroomConfig: (...a: unknown[]) => mocks.importClassroomConfig(...a),
     },
@@ -194,7 +191,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.stubEnv('TRIGGER_SECRET_KEY', '');
   vi.stubEnv('TRIGGER_ACCESS_TOKEN', '');
-  mocks.isAIAgentConfigured.mockReturnValue(true);
   mocks.getAuthSession.mockResolvedValue({ userId: 'user-1', token: 'gh-token' });
   mocks.findById.mockResolvedValue({ id: 'user-1', login: 'instructor' });
   mocks.membershipCreate.mockResolvedValue({});
@@ -235,17 +231,6 @@ describe('create-classroom quiz import', () => {
 
     expect(clonedConfigs()).toEqual(REPOS);
     expect(storedConfigs()).toEqual(REPOS);
-  });
-
-  it('clears includeQuizzes without asking the entitlement when the AI agent is not configured', async () => {
-    mocks.isAIAgentConfigured.mockReturnValue(false);
-
-    const result = await call();
-
-    expect(result.error).toBeUndefined();
-    expect(clonedConfigs()).toEqual(CLEARED);
-    expect(storedConfigs()).toEqual(CLEARED);
-    expect(mocks.quizzesVisible).not.toHaveBeenCalled();
   });
 
   it('decides on the classroom just created, after its owner membership exists', async () => {

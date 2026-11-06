@@ -1696,9 +1696,9 @@ describe('extension_purchase with assignment_id (quiz)', () => {
       },
     });
 
-    // The service shows quizzes only where the AI agent is configured in the
-    // server's own env (startServer sets placeholder AI_AGENT_URL and
-    // AI_AGENT_SHARED_SECRET), and the suite made the classroom Pro.
+    // The service shows quizzes only where the quiz runtime is configured in
+    // the server's own env (startServer sets a placeholder TRIGGER_SECRET_KEY),
+    // and the suite made the classroom Pro.
     const bought = await callTool(student2, 'extension_purchase', args);
     expect(bought.isError, JSON.stringify(bought.payload)).toBe(false);
     expect(bought.payload.assignment_id).toBe(assignment.id);

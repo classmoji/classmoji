@@ -9,8 +9,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ findMany: vi.fn() }));
 
-vi.mock('~/utils/aiFeatures.server', () => ({ isAIAgentConfigured: () => false }));
-
 vi.mock('@classmoji/auth/server', () => ({
   getAuthSession: vi.fn().mockResolvedValue({ userId: 'user-1', token: 'gh-token' }),
   clearRevokedToken: vi.fn(),
@@ -18,6 +16,7 @@ vi.mock('@classmoji/auth/server', () => ({
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
+    entitlement: { isQuizRuntimeConfigured: () => false },
     user: { findById: vi.fn().mockResolvedValue({ id: 'user-1', login: 'instructor' }) },
     gitOrganization: {
       syncUserInstallations: vi.fn().mockResolvedValue([

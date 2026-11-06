@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => ({
   askMojiRuntimeIsTrigger: vi.fn(),
   askMojiAvailable: vi.fn(),
   isAIAgentConfigured: vi.fn(),
+  isQuizRuntimeConfigured: vi.fn(),
   EntitlementError: class ClassroomSettingsEntitlementError extends Error {},
   ValidationError: class ClassroomSettingsValidationError extends Error {
     code: string;
@@ -57,6 +58,7 @@ vi.mock('@classmoji/services', () => ({
       getClassroomSettingsForServer: (...a: unknown[]) => mocks.getClassroomSettingsForServer(...a),
     },
     entitlement: {
+      isQuizRuntimeConfigured: () => mocks.isQuizRuntimeConfigured(),
       canUseSyllabusBot: (...a: unknown[]) => mocks.canUseSyllabusBot(...a),
       canUseQuizzes: (...a: unknown[]) => mocks.canUseQuizzes(...a),
     },
@@ -77,7 +79,8 @@ vi.mock('~/components', () => ({ SettingSection: () => null }));
 vi.mock('~/hooks', () => ({ useGlobalFetcher: () => ({ fetcher: null }) }));
 
 const { action, loader } = await import('../route');
-const { AI_SETTINGS_AUDIT_TOOL, INSTRUCTIONS_ERROR_COPY } = await import('../aiSettingsCopy');
+const { AI_SETTINGS_AUDIT_TOOL, INSTRUCTIONS_ERROR_COPY, QUIZZES_NOT_SET_UP_COPY } =
+  await import('../aiSettingsCopy');
 
 const post = (body: unknown) =>
   action({
@@ -128,6 +131,7 @@ beforeEach(() => {
   mocks.askMojiRuntimeIsTrigger.mockReturnValue(false);
   mocks.askMojiAvailable.mockResolvedValue({ available: true });
   mocks.isAIAgentConfigured.mockReturnValue(true);
+  mocks.isQuizRuntimeConfigured.mockReturnValue(true);
 });
 
 describe('saveAskMojiInstructions', () => {
@@ -302,8 +306,16 @@ describe('loader: Ask Moji switch availability', () => {
     mocks.isAIAgentConfigured.mockReturnValue(false);
     const data = await load();
     expect(data.askMojiToggleAvailable).toBe(false);
-    expect(data.askMojiUnavailableLine).toBeNull();
+    // Quizzes still run, so no banner: Ask Moji's own section says why.
+    expect(data.aiUnavailable).toBe(false);
+    expect(data.askMojiUnavailableLine).toBe(ASK_MOJI_AVAILABILITY_COPY.TRIGGER_NOT_CONFIGURED);
     expect(mocks.askMojiAvailable).not.toHaveBeenCalled();
+  });
+
+  it('has no Ask Moji line when the AI agent is configured', async () => {
+    const data = await load();
+    expect(data.askMojiToggleAvailable).toBe(true);
+    expect(data.askMojiUnavailableLine).toBeNull();
   });
 
   describe('on the Trigger runtime', () => {
@@ -340,6 +352,48 @@ describe('loader: Ask Moji switch availability', () => {
       expect(data.askMojiToggleAvailable).toBe(false);
       expect(data.askMojiUnavailableLine).toBeNull();
     });
+  });
+});
+
+describe('loader: what this server can run', () => {
+  it('keeps quizzes on with the AI agent variables unset when the quiz runtime is configured', async () => {
+    mocks.isAIAgentConfigured.mockReturnValue(false);
+    mocks.askMojiRuntimeIsTrigger.mockReturnValue(true);
+    const data = await load();
+    expect(data.quizzesAvailable).toBe(true);
+    expect(data.quizzesUnavailableLine).toBeNull();
+    expect(data.aiUnavailable).toBe(false);
+  });
+
+  it('marks quizzes unavailable with their own line when only the quiz runtime is missing', async () => {
+    mocks.isQuizRuntimeConfigured.mockReturnValue(false);
+    const data = await load();
+    expect(data.quizzesAvailable).toBe(false);
+    expect(data.quizzesUnavailableLine).toBe(QUIZZES_NOT_SET_UP_COPY);
+    expect(data.aiUnavailable).toBe(false);
+    expect(data.askMojiToggleAvailable).toBe(true);
+  });
+
+  it('shows the one banner, and no per-section line, when neither can run (AI agent runtime)', async () => {
+    mocks.isQuizRuntimeConfigured.mockReturnValue(false);
+    mocks.isAIAgentConfigured.mockReturnValue(false);
+    const data = await load();
+    expect(data.aiUnavailable).toBe(true);
+    expect(data.quizzesUnavailableLine).toBeNull();
+    expect(data.askMojiUnavailableLine).toBeNull();
+  });
+
+  it('shows the banner when Trigger is missing on the Trigger runtime, whatever the AI agent says', async () => {
+    mocks.isQuizRuntimeConfigured.mockReturnValue(false);
+    mocks.askMojiRuntimeIsTrigger.mockReturnValue(true);
+    mocks.askMojiAvailable.mockResolvedValue({
+      available: false,
+      reason: 'TRIGGER_NOT_CONFIGURED',
+    });
+    const data = await load();
+    expect(data.aiUnavailable).toBe(true);
+    expect(data.quizzesUnavailableLine).toBeNull();
+    expect(data.askMojiUnavailableLine).toBeNull();
   });
 });
 

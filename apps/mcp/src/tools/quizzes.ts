@@ -19,7 +19,7 @@
  * (S1, as assignment_create checks it) before the service, which checks it
  * again inside its transaction.
  *
- * TWO EXTRA GATES run in-handler, because the registry pipeline (scope → rate
+ * THREE EXTRA GATES run in-handler, because the registry pipeline (scope → rate
  * limit → role → mutation gate) does not know about them:
  *   1. Pro tier — the web action calls assertProTier before dispatching any
  *      quiz mutation. We call the SAME helper (authz/proTier.ts, a thin
@@ -29,6 +29,12 @@
  *      classroom settings. The web app checks this in the LOADER only, not in
  *      the action; MCP is deliberately stricter, so a classroom that has turned
  *      quizzes off cannot be mutated through this surface either.
+ *   3. the quiz runtime — Trigger configured in this process
+ *      (entitlement.isQuizRuntimeConfigured). Without it the web's quiz
+ *      loader and action answer 404 (quizzesVisibleOrThrow), so nothing here
+ *      creates, changes, publishes (which notifies students) or deletes a
+ *      quiz either; refused with the wording every MCP quiz read uses where
+ *      quizzes are hidden.
  *
  * Backbone: ClassmojiService.quiz.* — the same functions the web action calls.
  * quiz.publish is the ONLY path that notifies students (it publishes the
@@ -79,16 +85,21 @@ import {
 } from './shared.ts';
 
 /**
- * The two quiz-surface gates the registry cannot apply, in the web's order:
- * Pro subscription, then the classroom's quizzes_enabled flag. Settings come
- * from the context the registry already resolved (getClassroomForUI's
+ * The quiz-surface gates the registry cannot apply: Pro subscription, then the
+ * classroom's quizzes_enabled flag, then the quiz runtime. Settings come from
+ * the context the registry already resolved (getClassroomForUI's
  * SAFE_SETTINGS_FIELDS whitelist, which includes quizzes_enabled) — the same
- * values the quizzes read resource gates on, with no extra query.
+ * values the quizzes read resource gates on, with no extra query. Together
+ * they are `entitlement.quizzesVisible`, the predicate the web's quiz action
+ * 404s on, kept apart so Pro and the switch keep their own messages.
  */
 async function assertQuizSurfaceEnabled(ctx: ToolContext): Promise<void> {
   await assertProTier(ctx);
   if (sanitizedSettings(ctx).quizzes_enabled === false) {
     throw new ToolError('forbidden', 'Quizzes are disabled for this classroom');
+  }
+  if (!ClassmojiService.entitlement.isQuizRuntimeConfigured()) {
+    throw new ToolError('forbidden', 'Quizzes are not available in this classroom');
   }
 }
 

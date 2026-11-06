@@ -49,6 +49,7 @@ import * as askMojiChat from './askMojiChat.service.ts';
 import * as askMojiFeedback from './askMojiFeedback.service.ts';
 import * as audit from './audit.service.ts';
 import { canUseSyllabusBot } from './entitlement.service.ts';
+import { isTriggerConfigured } from '../helper/triggerConfig.ts';
 
 /** The Trigger task every Ask Moji conversation runs. */
 export const ASK_MOJI_TASK_ID = 'ask-moji';
@@ -77,9 +78,8 @@ export interface AskMojiAccess {
   highestRole: Role;
 }
 
-/** Whether this deployment can reach Trigger at all. */
-export const isTriggerConfigured = () =>
-  Boolean(process.env.TRIGGER_SECRET_KEY || process.env.TRIGGER_ACCESS_TOKEN);
+/** Whether this deployment can reach Trigger at all (the one shared rule). */
+export { isTriggerConfigured };
 
 /**
  * The rollout switch (`askMojiRuntime`, one parse for every app): `trigger`
