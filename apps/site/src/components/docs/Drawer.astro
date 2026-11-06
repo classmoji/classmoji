@@ -51,6 +51,11 @@ const { siteTitleHref, sidebar } = Astro.locals.starlightRoute;
     all: unset;
   }
 
+  button:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
+  }
+
   [popover] {
     position: fixed;
     top: 0;
@@ -59,6 +64,9 @@ const { siteTitleHref, sidebar } = Astro.locals.starlightRoute;
     height: 100vh;
     display: flex;
     opacity: 0;
+    /* Closed, the sheet and its links leave the Tab order and the
+       accessibility tree; the transition below still fades it out first. */
+    visibility: hidden;
     pointer-events: none;
     align-items: center;
     flex-direction: column;
@@ -77,6 +85,7 @@ const { siteTitleHref, sidebar } = Astro.locals.starlightRoute;
 
   [popover]:popover-open {
     opacity: 1;
+    visibility: visible;
     pointer-events: auto;
   }
 
@@ -93,6 +102,13 @@ const { siteTitleHref, sidebar } = Astro.locals.starlightRoute;
     height: 100vh;
     opacity: 0.1;
     background-color: transparent;
+  }
+
+  /* Full opacity only for its focus ring (it has no background), drawn
+     inside the screen's edge. */
+  .sheet-overlay:focus-visible {
+    opacity: 1;
+    outline-offset: -4px;
   }
 
   .content {

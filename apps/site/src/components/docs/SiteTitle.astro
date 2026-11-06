@@ -87,6 +87,14 @@ import { docsNavLinks } from './navLinks';
     cursor: pointer;
   }
 
+  /* Drawn around the icon: the button's left edge sits under the title
+     wrapper's clip, so a ring on the button itself would lose its left side. */
+  .show-modal:focus-visible > svg {
+    outline: 2px solid currentColor;
+    outline-offset: -2px;
+    border-radius: 4px;
+  }
+
   @media (min-width: 768px) {
     .show-modal {
       display: none;
