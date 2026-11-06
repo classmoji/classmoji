@@ -57,6 +57,37 @@ const gradeIcon = (score: number | undefined) => {
   return <RocketOutlined style={{ fontSize: 24, color: '#faad14' }} />;
 };
 
+type QuestionResultView = QuizEvaluationRecordView['question_results'][number];
+
+/**
+ * What the server counted on a question when it recorded it: the answers it
+ * took, the messages the student typed, the hints shown. Staff only: only
+ * staff's record carries them (a student's record is narrowed by
+ * `QuizEvaluationRecordStudentSchema`, which has none), and a result recorded
+ * before they were counted has none either. Each shows only when present.
+ */
+export function QuestionCounts({ result }: { result: QuestionResultView }) {
+  const items = [
+    ['Answers given', result.answers_given],
+    ['Messages', result.messages_sent],
+    ['Hints used', result.hints_used],
+  ].filter((item): item is [string, number] => typeof item[1] === 'number');
+  if (items.length === 0) return null;
+  return (
+    <div
+      className="mt-1 text-xs text-gray-500 dark:text-gray-400"
+      data-testid="quiz-result-question-counts"
+    >
+      {items.map(([label, value], i) => (
+        <span key={label} className="whitespace-nowrap">
+          {i > 0 ? ' · ' : ''}
+          {label} {value}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function QuizResults({
   evaluation,
   focusMetrics = null,
@@ -243,6 +274,7 @@ function QuizResults({
                   <div className="my-1">
                     <Emoji emoji={result.emoji} fontSize={20} />
                   </div>
+                  <QuestionCounts result={result} />
                   {result.brief_feedback && (
                     <div className="text-xs text-gray-600 dark:text-gray-400">
                       {result.brief_feedback}

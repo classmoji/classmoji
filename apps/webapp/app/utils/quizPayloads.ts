@@ -430,11 +430,17 @@ export interface AttemptDrawerView {
 
 /**
  * A recorded question result with the emoji stored beside it when it was
- * recorded. A student's carries no credit (a per-question percentage) or
- * correctness flag.
+ * recorded. A student's carries no credit (a per-question percentage),
+ * correctness flag, or the server's counts (answers given, messages sent,
+ * hints used: staff only, and only on results recorded once they were counted).
  */
 export type DrawerQuestionResult = Pick<AttemptQuestionResult, 'question_num' | 'attempts'> &
-  Partial<Pick<AttemptQuestionResult, 'credit_earned' | 'eventually_correct'>> & {
+  Partial<
+    Pick<
+      AttemptQuestionResult,
+      'credit_earned' | 'eventually_correct' | 'answers_given' | 'messages_sent' | 'hints_used'
+    >
+  > & {
     emoji: string | null;
   };
 

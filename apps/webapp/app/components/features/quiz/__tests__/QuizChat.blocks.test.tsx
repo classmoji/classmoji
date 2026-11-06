@@ -282,7 +282,7 @@ describe('QuizTranscript — the feedback offer_next_step carries', () => {
     expect(bubbles(root)).toHaveLength(1);
     const [bubble] = bubbles(root);
     expect(bubble.firstElementChild?.getAttribute('data-testid')).toBe('quiz-next-step-lead-in');
-    expect(bubble.textContent).toBe(`${LEAD_IN}Try AgainNext →`);
+    expect(bubble.textContent).toBe(`${LEAD_IN}Try again with hintSkip to next question`);
   });
 });
 

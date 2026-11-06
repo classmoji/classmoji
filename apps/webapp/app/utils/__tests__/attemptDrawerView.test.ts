@@ -163,6 +163,43 @@ describe('attemptDrawerView', () => {
     }
   });
 
+  it("gives staff each question's answers, messages and hints, and a student none of them", () => {
+    const counts = { answers_given: 3, messages_sent: 5, hints_used: 2 };
+    const counted = (n: number) => ({ ...result(n), ...counts });
+    const record = {
+      v: 2,
+      source: 'server',
+      evaluation: 'GOOD',
+      numeric_score: 3,
+      partial_credit_percentage: 100,
+      first_attempt_percentage: 100,
+      question_results: [1, 2, 3].map(n => {
+        const { recorded_at: _at, ...rest } = counted(n);
+        return { ...rest, tries: 1, first_attempt_correct: true, brief_feedback: 'Good.' };
+      }),
+    };
+    const chat = {
+      ...ATTEMPT,
+      agent_runtime: 'trigger_chat',
+      question_results_json: [counted(1), counted(2), counted(3)],
+      evaluation_json: record,
+    };
+
+    const staff = attemptDrawerView(chat, { viewer: 'staff' });
+    expect(staff.question_results.map(r => r.answers_given)).toEqual([3, 3, 3]);
+    expect(staff.question_results[0]).toMatchObject(counts);
+    expect(staff.evaluation_json?.question_results[0]).toMatchObject(counts);
+
+    const student = attemptDrawerView(chat);
+    const text = JSON.stringify(student);
+    for (const key of Object.keys(counts)) expect(text).not.toContain(key);
+    expect(student.question_results[0]).toEqual({
+      question_num: 1,
+      attempts: 1,
+      emoji: 'emoji-1',
+    });
+  });
+
   it('says a completed attempt was submitted at the message limit, and only then', () => {
     const chat = { ...ATTEMPT, agent_runtime: 'trigger_chat' };
     expect(attemptDrawerView(chat, { endedBy: 'turn_limit' }).ended_by).toBe('turn_limit');
