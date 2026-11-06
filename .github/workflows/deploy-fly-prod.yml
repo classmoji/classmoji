@@ -333,8 +333,9 @@ jobs:
     if: always() && needs.changes.outputs.tasks == 'true' && (needs.deploy-webapp.result == 'success' || needs.deploy-webapp.result == 'skipped')
     runs-on: ubuntu-latest
     env:
-      # The CLI the deploy runs. It aborts a CI deploy when an installed
-      # @trigger.dev package is on another version (checked below first).
+      # The CLI the deploy runs. Every installed @trigger.dev package must be
+      # this version (checked below). Stricter than the CLI on purpose: it only
+      # compares the @trigger.dev packages that packages/tasks declares.
       TRIGGER_CLI_VERSION: 4.8.3
     steps:
       - uses: actions/checkout@v4
