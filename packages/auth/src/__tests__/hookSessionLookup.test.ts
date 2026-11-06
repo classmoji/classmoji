@@ -21,6 +21,11 @@ process.env.WEBAPP_URL = 'http://localhost:3000';
 process.env.BETTER_AUTH_SECRET = 'test-secret-that-is-at-least-32-chars!!';
 process.env.PLATFORM_ADMIN_USER_IDS = 'admin-1';
 
+// TODO(better-auth 1.7 bump): this wrapper models the later releases' POST
+// refusal through the endpoint context's `method`. In the bump PR, confirm it
+// against the real 1.7 `api/routes/session.mjs` (and that the hook context
+// still carries the request's method), then drop the wrapper if the real
+// endpoint already refuses POST here.
 const lookups = vi.hoisted(() => ({ methods: [] as unknown[] }));
 
 vi.mock('better-auth/api', async importOriginal => {

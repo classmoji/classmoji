@@ -103,6 +103,17 @@ export function roleIncludesAdmin(role: unknown): boolean {
   return typeof role === 'string' && /admin/i.test(role);
 }
 
+/**
+ * Whether the admin plugin lets this user start "view as" at all, matched
+ * the way its permission check does with our config (`adminUserIds`, and the
+ * default `admin` role named exactly in the comma-separated list). Narrower
+ * than `roleIncludesAdmin`, which decides who may not be viewed as.
+ */
+export function mayViewAs(userId: string, role: unknown): boolean {
+  if (PLATFORM_ADMIN_USER_IDS.includes(userId)) return true;
+  return typeof role === 'string' && role.split(',').some(entry => entry.trim() === 'admin');
+}
+
 /** A platform admin, or a user whose role contains "admin". */
 async function isAdminUser(userId: string): Promise<boolean> {
   if (PLATFORM_ADMIN_USER_IDS.includes(userId)) return true;
@@ -126,9 +137,9 @@ export const VIEW_AS_ADMIN_REFUSED_MESSAGE = "You can't view as another admin.";
  * `z.coerce.string()`, i.e. `String(userId)`, so `["<id>"]` and `<id>` name
  * the same user.
  *
- * The target is checked only for a caller who could view as anyone at all
- * (signed in as an admin by the same rule). Every other caller gets the
- * endpoint's own refusal, the same whoever the target is.
+ * The target is checked only for a caller the endpoint would let view as
+ * anyone (`mayViewAs`). Every other caller gets the endpoint's own refusal,
+ * the same whoever the target is.
  */
 async function refuseViewingAsAnAdmin(ctx: {
   context: { session?: unknown };
@@ -136,8 +147,7 @@ async function refuseViewingAsAnAdmin(ctx: {
   body?: unknown;
 }): Promise<void> {
   const caller = (await lookupSessionForHook(ctx))?.user;
-  if (!caller?.id) return;
-  if (!PLATFORM_ADMIN_USER_IDS.includes(caller.id) && !roleIncludesAdmin(caller.role)) return;
+  if (!caller?.id || !mayViewAs(caller.id, caller.role)) return;
   const targetId = String((ctx.body as { userId?: unknown } | undefined)?.userId);
   if (await isAdminUser(targetId)) {
     throw new APIError('FORBIDDEN', { message: VIEW_AS_ADMIN_REFUSED_MESSAGE });

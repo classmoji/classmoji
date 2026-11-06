@@ -118,9 +118,9 @@ async function cachedSessionCookies(): Promise<string> {
   return `${cookies.get(`${COOKIE_PREFIX}.session_token`) ?? (await sessionTokenCookie())}; ${sessionData}`;
 }
 
-const link = (cookie: string) =>
+const link = (cookie: string, query = '') =>
   auth.handler(
-    new Request(`${BASE}/gitlab-instance/link`, {
+    new Request(`${BASE}/gitlab-instance/link${query}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', origin: 'http://localhost:3000', cookie },
       body: JSON.stringify({ instanceId: 'inst-1', callbackURL: '/settings/connections' }),
@@ -153,5 +153,29 @@ describe('connecting a self-managed Gitlab account', () => {
 
     expect(res.status).toBe(401);
     expect(mocks.oauthClient).not.toHaveBeenCalled();
+  });
+
+  // better-auth's session lookup lets the request's query override the
+  // middleware's options, and `disableCookieCache=` reads as false. The
+  // endpoint takes no query, so the session is read from the database
+  // whatever the query says.
+  it.each([['?disableCookieCache='], ['?disableCookieCache=0&disableRefresh=1']])(
+    'refuses a session gone from the database with the query %s',
+    async query => {
+      const cookie = await cachedSessionCookies();
+      mocks.state.session = null;
+
+      const res = await link(cookie, query);
+
+      expect(res.status).toBe(401);
+      expect(mocks.oauthClient).not.toHaveBeenCalled();
+    }
+  );
+
+  it('still sends a signed-in user on when the request carries a query', async () => {
+    const res = await link(await cachedSessionCookies(), '?disableCookieCache=');
+
+    expect(res.status).toBe(200);
+    expect(mocks.oauthClient).toHaveBeenCalledWith('inst-1');
   });
 });

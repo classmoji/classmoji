@@ -116,7 +116,7 @@ vi.mock('@classmoji/services', () => ({
   },
 }));
 
-const { auth, COOKIE_PREFIX, VIEW_AS_ADMIN_REFUSED_MESSAGE, roleIncludesAdmin } =
+const { auth, COOKIE_PREFIX, VIEW_AS_ADMIN_REFUSED_MESSAGE, mayViewAs, roleIncludesAdmin } =
   await import('../server.ts');
 
 const BASE = 'http://localhost:3000/api/auth';
@@ -181,6 +181,24 @@ describe('roleIncludesAdmin', () => {
     [undefined, false],
   ])('%j → %s', (role, expected) => {
     expect(roleIncludesAdmin(role)).toBe(expected);
+  });
+});
+
+// Who may start "view as" at all: the admin plugin's own check with our
+// config. A platform admin, or the `admin` role named exactly in the list.
+describe('mayViewAs', () => {
+  it.each([
+    ['admin-1', null, true],
+    ['someone', 'admin', true],
+    ['someone', 'user,admin', true],
+    ['someone', 'user, admin', true],
+    ['someone', 'Admin', false],
+    ['someone', 'user,Admin', false],
+    ['someone', 'superadmin', false],
+    ['someone', 'user', false],
+    ['someone', null, false],
+  ])('%s with role %j → %s', (userId, role, expected) => {
+    expect(mayViewAs(userId, role)).toBe(expected);
   });
 });
 
@@ -272,6 +290,22 @@ describe('callers who may not view as anyone', () => {
     expect(adminBody).toEqual(await ordinary.json());
     expect(adminBody.message).not.toBe(VIEW_AS_ADMIN_REFUSED_MESSAGE);
     expect(mocks.client.user.findUnique).not.toHaveBeenCalled();
+  });
+
+  // `user,Admin` is protected as a target (role contains "admin"), but the
+  // admin plugin matches the role name exactly, so it cannot view as anyone.
+  it('signed in with a role that only contains "admin": the same refusal for both', async () => {
+    const token = signIn('role-mixed');
+    const admin = await viewAs(token, { userId: 'admin-2' });
+    const ordinary = await viewAs(token, { userId: 'student-1' });
+
+    expect(admin.status).toBe(403);
+    expect(ordinary.status).toBe(403);
+    const adminBody = await admin.json();
+    expect(adminBody).toEqual(await ordinary.json());
+    expect(adminBody.message).not.toBe(VIEW_AS_ADMIN_REFUSED_MESSAGE);
+    expect(mocks.client.user.findUnique).not.toHaveBeenCalled();
+    expect(mocks.state.created).toHaveLength(0);
   });
 });
 

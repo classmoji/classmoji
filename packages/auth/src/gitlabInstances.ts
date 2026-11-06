@@ -190,6 +190,11 @@ export const gitlabInstances = () =>
         {
           method: 'POST',
           body: z.object({ instanceId: z.string().min(1), ...redirectBody }),
+          // No query: any key is dropped. better-auth's session lookup lets
+          // the request's query override the middleware's options, so this
+          // is what keeps the session read from the database whatever the
+          // query says.
+          query: z.object({}).optional(),
           // The session is read from the database, never the cookie cache
           // (as better-auth's own linkSocial does from 1.7): a session
           // revoked within the cache's lifetime cannot connect an account.
