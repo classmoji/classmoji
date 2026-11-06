@@ -3,9 +3,9 @@ FROM node:24-alpine AS build
 
 WORKDIR /app
 
-# Same npm as CI and the lockfile check (packageManager npm@10.9.0): the npm
+# Same npm as CI and the lockfile check (packageManager npm@10.9.9): the npm
 # bundled with Node 24 (11.x) handles dependency install scripts differently.
-RUN npm install -g npm@10.9.0 --no-audit --no-fund --cache=/tmp/npm-self-cache \
+RUN npm install -g npm@10.9.9 --no-audit --no-fund --cache=/tmp/npm-self-cache \
     && rm -rf /tmp/npm-self-cache
 
 COPY package*.json .npmrc ./

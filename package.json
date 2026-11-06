@@ -105,7 +105,7 @@
     "turbo": "^2.3.3",
     "typescript": "^5.9.2"
   },
-  "packageManager": "npm@10.9.0",
+  "packageManager": "npm@10.9.9",
   "engines": {
     "node": ">=24.0.0"
   },

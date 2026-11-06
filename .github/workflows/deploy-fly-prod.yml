@@ -84,7 +84,7 @@ jobs:
       # Node 24 bundles npm 11, which adds `libc` fields to package-lock.json
       # that the lockfile check rejects; stay on the packageManager npm (10.9).
       - name: Use npm 10.9
-        run: npm install -g npm@10.9.0 && npm --version
+        run: npm install -g npm@10.9.9 && npm --version
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
@@ -120,7 +120,7 @@ jobs:
       # Node 24 bundles npm 11, which adds `libc` fields to package-lock.json
       # that the lockfile check rejects; stay on the packageManager npm (10.9).
       - name: Use npm 10.9
-        run: npm install -g npm@10.9.0 && npm --version
+        run: npm install -g npm@10.9.9 && npm --version
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
@@ -148,7 +148,7 @@ jobs:
       # Node 24 bundles npm 11, which adds `libc` fields to package-lock.json
       # that the lockfile check rejects; stay on the packageManager npm (10.9).
       - name: Use npm 10.9
-        run: npm install -g npm@10.9.0 && npm --version
+        run: npm install -g npm@10.9.9 && npm --version
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
@@ -181,7 +181,7 @@ jobs:
       # Node 24 bundles npm 11, which adds `libc` fields to package-lock.json
       # that the lockfile check rejects; stay on the packageManager npm (10.9).
       - name: Use npm 10.9
-        run: npm install -g npm@10.9.0 && npm --version
+        run: npm install -g npm@10.9.9 && npm --version
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
@@ -212,7 +212,7 @@ jobs:
       # Node 24 bundles npm 11, which adds `libc` fields to package-lock.json
       # that the lockfile check rejects; stay on the packageManager npm (10.9).
       - name: Use npm 10.9
-        run: npm install -g npm@10.9.0 && npm --version
+        run: npm install -g npm@10.9.9 && npm --version
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
@@ -239,7 +239,7 @@ jobs:
       # Node 24 bundles npm 11, which adds `libc` fields to package-lock.json
       # that the lockfile check rejects; stay on the packageManager npm (10.9).
       - name: Use npm 10.9
-        run: npm install -g npm@10.9.0 && npm --version
+        run: npm install -g npm@10.9.9 && npm --version
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
@@ -273,7 +273,7 @@ jobs:
       # Node 24 bundles npm 11, which adds `libc` fields to package-lock.json
       # that the lockfile check rejects; stay on the packageManager npm (10.9).
       - name: Use npm 10.9
-        run: npm install -g npm@10.9.0 && npm --version
+        run: npm install -g npm@10.9.9 && npm --version
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
@@ -307,7 +307,7 @@ jobs:
       # Node 24 bundles npm 11, which adds `libc` fields to package-lock.json
       # that the lockfile check rejects; stay on the packageManager npm (10.9).
       - name: Use npm 10.9
-        run: npm install -g npm@10.9.0 && npm --version
+        run: npm install -g npm@10.9.9 && npm --version
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
@@ -337,7 +337,7 @@ jobs:
       # Node 24 bundles npm 11, which adds `libc` fields to package-lock.json
       # that the lockfile check rejects; stay on the packageManager npm (10.9).
       - name: Use npm 10.9
-        run: npm install -g npm@10.9.0 && npm --version
+        run: npm install -g npm@10.9.9 && npm --version
 
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
