@@ -22,6 +22,7 @@
     "./team-set-metrics": "./src/classmoji/teamSetMetrics.ts",
     "./team-set-problem": "./src/classmoji/teamSetProblem.ts",
     "./team-set-score": "./src/classmoji/teamSetScore.ts",
+    "./trigger-config": "./src/helper/triggerConfig.ts",
     "./import-progress": "./src/classmoji/importProgress.ts",
     "./media/router": "./src/media/storageRouter.ts",
     "./remove-user-payload": "./src/classmoji/removeUserPayload.ts",

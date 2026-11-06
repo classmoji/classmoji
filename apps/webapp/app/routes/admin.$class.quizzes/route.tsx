@@ -138,8 +138,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     attemptedAction: 'view_admin_quizzes',
   });
 
-  // A classroom without quizzes (not Pro, switched off, or no AI agent) has no
-  // quiz screens: the URL answers like any other that names nothing.
+  // A classroom without quizzes (not Pro, switched off, or no quiz runtime on
+  // this server) has no quiz screens: the URL answers like any other that
+  // names nothing.
   if (!(await quizzesVisibleOrThrow(classroom.id))) {
     throw new Response('Not Found', { status: 404 });
   }

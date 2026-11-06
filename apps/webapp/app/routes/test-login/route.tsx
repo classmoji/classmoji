@@ -183,8 +183,9 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   try {
     // DB-first lookup: Check if this token is already stored in an account
     // This avoids GitHub API calls after the first login with each token.
-    // Stored tokens are encrypted with a random IV, so they are compared here
-    // once read back (decrypted), never in the query.
+    // The database layer refuses a filter on a token column (assertNoTokenFilter;
+    // legacy rows may still be enc1-encrypted), so tokens are compared here once
+    // read back, never in the query.
     const storedAccounts = await getPrisma().account.findMany({
       where: { provider_id: 'github', access_token: { not: null } },
       include: { user: true },

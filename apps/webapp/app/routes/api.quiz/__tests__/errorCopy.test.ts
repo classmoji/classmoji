@@ -25,6 +25,7 @@ const assertMutationMock = vi.fn();
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
+    entitlement: { isQuizRuntimeConfigured: () => true },
     quiz: { findById: (...a: unknown[]) => quizFindByIdMock(...a) },
     quizAttempt: {
       findById: (...a: unknown[]) => attemptFindByIdMock(...a),
@@ -47,10 +48,6 @@ vi.mock('~/utils/classroomProFlag.server', () => ({
 
 vi.mock('~/utils/routeAuth.server', () => ({
   assertClassroomMutationAllowed: (...a: unknown[]) => assertMutationMock(...a),
-}));
-
-vi.mock('~/utils/aiFeatures.server', () => ({
-  isAIAgentConfigured: () => true,
 }));
 
 vi.mock('@classmoji/auth/server', () => ({

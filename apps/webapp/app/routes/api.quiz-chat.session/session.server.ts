@@ -16,9 +16,8 @@ export const QUIZ_CHAT_TASK_ID = 'quiz-attempt';
  */
 export const QUIZ_CHAT_TOKEN_TTL = '15m';
 
-/** Whether this deployment can reach Trigger at all. */
-export const isTriggerConfigured = () =>
-  Boolean(process.env.TRIGGER_SECRET_KEY || process.env.TRIGGER_ACCESS_TOKEN);
+/** Whether this deployment can reach Trigger at all (the one shared rule). */
+export { isTriggerConfigured } from '@classmoji/services/trigger-config';
 
 /**
  * Who the session was issued to, written on the attempt before the session

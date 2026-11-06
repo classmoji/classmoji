@@ -32,7 +32,11 @@ import {
   type AskMojiViewingKind,
 } from '@classmoji/utils/ask-moji';
 import { contentVisibility } from './contentSearch.service.ts';
-import { quizzesVisible } from './entitlement.service.ts';
+// `quizzesEntitled`, not `quizzesVisible`: this resolver runs inside the
+// Trigger worker (the `ask-moji` task), whose env need not carry the Trigger
+// key. Ask Moji insights (webapp and MCP) reach it too, but only behind
+// `askMojiAvailable`, which already requires that key, so both answers agree.
+import { quizzesEntitled } from './entitlement.service.ts';
 import { isExpiredOpenAttempt } from './quizGrading.service.ts';
 
 /** A viewing the server checked: what the task may tell the model is open. */
@@ -119,7 +123,7 @@ const resolveAssignment = async (classroomId: string, id: string, role: AskMojiR
   });
   if (!row) return null;
   if (row.repository && row.repository.classroom_id !== classroomId) return null;
-  const visible = row.type === 'QUIZ' ? await quizzesVisible(classroomId) : true;
+  const visible = row.type === 'QUIZ' ? await quizzesEntitled(classroomId) : true;
   if (STAFF.includes(role)) {
     if (!visible) return null;
   } else if (!openToStudents(row, new Date(), { quizzesVisible: visible })) {
@@ -145,7 +149,7 @@ const resolveQuiz = async (classroomId: string, id: string, role: AskMojiRole, u
       assignment: { select: { is_published: true, release_at: true } },
     },
   });
-  if (!row || !(await quizzesVisible(classroomId))) return null;
+  if (!row || !(await quizzesEntitled(classroomId))) return null;
   if (!STAFF.includes(role)) {
     // The student quiz list's rule (quiz.service getQuizzesForStudent, closed
     // quizzes included: a student keeps the quiz they finished).

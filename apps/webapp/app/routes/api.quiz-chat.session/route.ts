@@ -15,8 +15,9 @@
  *   2. the caller is a member of the attempt's classroom with an allowed role
  *      (assertClassroomAccess, audited), and the classroom's status lets that
  *      role act (assertClassroomMutationAllowed)
- *   3. AI features and Trigger are configured (503)
- *   4. quizzes are visible in the classroom (Pro, not switched off; 403)
+ *   3. the quiz runtime (Trigger) is configured (503)
+ *   4. quizzes are visible in the classroom (Pro, not switched off; 403; the
+ *      runtime half of that answer was already checked in 3)
  *   5. the caller owns the attempt, strictly. While an admin views as a
  *      student, the session IS that student's, so their own attempts pass and
  *      no one else's do; staff never get a session for someone else's attempt
@@ -33,7 +34,6 @@
  */
 import { assertClassroomAccess } from '~/utils/helpers';
 import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
-import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
 import { isTriggerChatAttempt } from '@classmoji/utils';
 import { closeIfExpired } from '~/utils/quizAttemptExpiry.server';
@@ -51,7 +51,7 @@ const ALLOWED_ROLES: Role[] = ['STUDENT', 'ASSISTANT', 'TEACHER', 'OWNER'];
 const SESSION_REFUSALS = {
   missingAttempt: { status: 400, body: { message: 'Missing attempt.' } },
   notFound: { status: 404, body: { message: 'Quiz attempt not found.' } },
-  notConfigured: { status: 503, body: { message: 'AI features are not configured.' } },
+  notConfigured: { status: 503, body: { message: 'Quizzes are not configured on this server.' } },
   quizzesUnavailable: {
     status: 403,
     body: {
@@ -147,8 +147,9 @@ export async function action({ request }: Route.ActionArgs) {
       role: access.membership!.role,
     });
 
-    // 3. Configuration, after auth so a denied caller is still audited.
-    if (!isAIAgentConfigured() || !isTriggerConfigured()) {
+    // 3. Configuration (the Trigger chat runtime), after auth so a denied
+    //    caller is still audited.
+    if (!isTriggerConfigured()) {
       return refuse(SESSION_REFUSALS.notConfigured);
     }
 

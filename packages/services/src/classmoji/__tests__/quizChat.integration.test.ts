@@ -106,7 +106,8 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
         },
       ],
     });
-    // quizzesVisible: the classroom's owner holds an active Pro subscription.
+    // quizzesEntitled (turn admission; no Trigger key needed): the classroom's
+    // owner holds an active Pro subscription.
     await prisma.subscription.create({ data: { user_id: ownerId, tier: 'PRO' } });
     // A classroom mapping that differs from the defaults, so the emoji is
     // provably the classroom's.

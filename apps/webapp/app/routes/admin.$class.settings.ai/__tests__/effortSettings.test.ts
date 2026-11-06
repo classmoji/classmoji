@@ -35,6 +35,7 @@ vi.mock('@classmoji/services', () => ({
       getClassroomSettingsForServer: (...a: unknown[]) => mocks.getClassroomSettingsForServer(...a),
     },
     entitlement: {
+      isQuizRuntimeConfigured: () => true,
       canUseSyllabusBot: (...a: unknown[]) => mocks.canUseSyllabusBot(...a),
       canUseQuizzes: (...a: unknown[]) => mocks.canUseQuizzes(...a),
     },

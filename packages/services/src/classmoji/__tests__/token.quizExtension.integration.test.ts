@@ -12,7 +12,7 @@
  *     the balance.
  *   - A row cannot name a submission and an assignment at once.
  *
- * Whether quizzes are shown (Pro, the AI agent configured) is not what this
+ * Whether quizzes are shown (Pro, the quiz runtime configured) is not what this
  * file tests, so that one lookup is faked; everything else is the database.
  *
  * SAFETY: every fixture is namespaced with a fresh uuid and torn down in

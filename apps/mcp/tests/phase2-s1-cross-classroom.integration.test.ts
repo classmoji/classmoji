@@ -2,7 +2,7 @@
  * S1 — cross-classroom scoping (plan §8, CRITICAL), per write family.
  *
  * For EVERY write family, a caller authorized for the dev classroom
- * (classmoji-development/classmoji-dev-winter-2025) aims the tool at a
+ * (classmoji-dev-winter-2025, DEV_REF) aims the tool at a
  * foreign-classroom (dev-org/classmoji-other-class) target UUID. Expected:
  * the UNIFORM `not_found` (identical to the "record does not exist" error, so
  * probes cannot enumerate foreign records), and — asserted in the DB — no
@@ -13,7 +13,7 @@
  * a foreign module/page/calendar-event/regrade-request, so those rows are
  * created here and deleted in afterAll (create-and-clean).
  *
- * Identity discipline: timofei7 (all-roles) is used ONLY where the tool's
+ * Identity discipline: prof-classmoji (all-roles) is used ONLY where the tool's
  * role gate is OWNER-only — the assertion here is cross-classroom rejection
  * (post-role-gate), never role denial.
  */
@@ -29,6 +29,7 @@ import {
   DEV_REF,
   expectScopedNotFound,
   getPrisma,
+  grantTestPro,
   loadFixtures,
   mintToken,
   readResource,
@@ -36,6 +37,7 @@ import {
   startServer,
   type Fixtures,
   type ServerHandle,
+  OWNER_LOGIN,
 } from './helpers.ts';
 
 const prisma = getPrisma();
@@ -46,7 +48,7 @@ let server: ServerHandle;
 let fx: Fixtures;
 
 // Bearer tokens per role (minted once; deleted by value in afterAll).
-let owner: string; // timofei7 — OWNER-only tools
+let owner: string; // prof-classmoji — OWNER-only tools
 let teacher: string; // fake-teacher — OWNER_TEACHER tools
 let ta: string; // fake-ta — teaching-team tools
 let student: string; // fake-student-1 — student tools
@@ -54,6 +56,7 @@ let student: string; // fake-student-1 — student tools
 // Foreign rows created by this file (the seed lacks these targets).
 let foreignModuleId: string;
 let foreignPageId: string;
+let devPageId: string;
 let foreignEventId: string;
 let foreignRegradeId: string;
 let devModuleId: string;
@@ -64,6 +67,7 @@ const S1_TITLES = {
   foreignEvent: 'MCP-S1 Foreign Event',
   devEvent: 'MCP-S1 Dev Event',
   devModule: 'MCP-S1 Dev Module',
+  devPage: 'MCP-S1 Dev Page',
 } as const;
 
 beforeAll(async () => {
@@ -73,7 +77,9 @@ beforeAll(async () => {
   await prisma.module.deleteMany({
     where: { title: { in: [S1_TITLES.foreignModule, S1_TITLES.devModule] } },
   });
-  await prisma.page.deleteMany({ where: { title: S1_TITLES.foreignPage } });
+  await prisma.page.deleteMany({
+    where: { title: { in: [S1_TITLES.foreignPage, S1_TITLES.devPage] } },
+  });
   await prisma.calendarEvent.deleteMany({
     where: { title: { in: [S1_TITLES.foreignEvent, S1_TITLES.devEvent] } },
   });
@@ -82,7 +88,7 @@ beforeAll(async () => {
 
   [owner, teacher, ta, student] = (
     await Promise.all([
-      mintToken({ login: 'timofei7' }),
+      mintToken({ login: OWNER_LOGIN }),
       mintToken({ login: 'fake-teacher' }),
       mintToken({ login: 'fake-ta' }),
       mintToken({ login: 'fake-student-1' }),
@@ -110,6 +116,19 @@ beforeAll(async () => {
   });
   foreignPageId = foreignPage.id;
   cleanup.add('foreign page', () => prisma.page.deleteMany({ where: { id: foreignPageId } }));
+
+  // A valid item for the dev classroom, so module_item_add reaches its scope
+  // checks (a repository is not a module item and is refused before them).
+  const devPage = await prisma.page.create({
+    data: {
+      classroom_id: fx.dev.id,
+      title: S1_TITLES.devPage,
+      content_path: 'pages/mcp-s1-dev-page',
+      created_by: fx.users.owner.id,
+    },
+  });
+  devPageId = devPage.id;
+  cleanup.add('dev page', () => prisma.page.deleteMany({ where: { id: devPageId } }));
 
   const foreignEvent = await prisma.calendarEvent.create({
     data: {
@@ -147,6 +166,10 @@ beforeAll(async () => {
   });
   devModuleId = devModule.id;
   cleanup.add('dev module', () => prisma.module.deleteMany({ where: { id: devModuleId } }));
+
+  // Pro, so the quiz gate passes and a foreign quiz is refused by the scope
+  // check itself, not by quizzes being hidden in a FREE classroom.
+  await grantTestPro(fx.users.owner.id, 's1', cleanup);
 }, 300_000);
 
 afterAll(async () => {
@@ -159,7 +182,7 @@ afterAll(async () => {
         suiteStart,
         Object.values(fx?.users ?? {}).map(u => u.id)
       );
-      await deleteTestNotifications(suiteStart, [fx.dev.id, fx.twin.id, fx.foreign.id]);
+      await deleteTestNotifications(suiteStart, [fx.dev.id, fx.foreign.id]);
       await deleteMintedTokens();
     } finally {
       await server?.stop();
@@ -304,8 +327,8 @@ describe('S1 cross-classroom rejection per write family', () => {
       await callTool(owner, 'module_item_add', {
         classroom: DEV_REF,
         module_id: foreignModuleId,
-        item_type: 'REPOSITORY',
-        target_id: fx.devRepository.id,
+        item_type: 'PAGE',
+        target_id: devPageId,
       }),
       'module_item_add (foreign module)'
     );
@@ -324,8 +347,8 @@ describe('S1 cross-classroom rejection per write family', () => {
       await callTool(owner, 'module_item_add', {
         classroom: DEV_REF,
         module_id: devModuleId,
-        item_type: 'REPOSITORY',
-        target_id: fx.foreignRepository.id,
+        item_type: 'PAGE',
+        target_id: foreignPageId,
       }),
       'module_item_add (foreign target)'
     );

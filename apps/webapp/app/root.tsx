@@ -32,7 +32,6 @@ import { CalloutProvider, CalloutSlot } from '@classmoji/ui-components';
 import OperationProgress from '~/components/features/operations/OperationProgress';
 import { auth, getAuthSession } from '@classmoji/auth/server';
 import { COOKIE_DOMAIN } from '@classmoji/auth/secret';
-import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import type { Route } from './+types/root';
 import type { MembershipWithOrganization, AppUser, Role } from '~/types';
 import { ROOT_USER_INCLUDE } from '~/types';
@@ -349,7 +348,8 @@ const loadRoot = async ({ request }: Route.LoaderArgs) => {
     memberships,
     gitMode,
     session: toClientSession(session),
-    aiAgentAvailable: isAIAgentConfigured(),
+    // Whether this server can run quizzes at all (the Trigger chat runtime).
+    quizzesAvailable: ClassmojiService.entitlement.isQuizRuntimeConfigured(),
     askMoji: await askMojiRootConfig(currentClassroom),
     // Where "Stop viewing" should return to. Only set when apps/admin started
     // this impersonation (it drops the breadcrumb cookie before handing off) —

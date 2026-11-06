@@ -5,8 +5,9 @@
  *   - S1: every tool resolves its target (and any linked repository) against
  *     the ctx classroom, and refuses missing/foreign records with the uniform
  *     scopedNotFound BEFORE any service call.
- *   - The two in-handler gates the registry cannot apply — Pro tier and
- *     quizzes_enabled — deny before mutating.
+ *   - The in-handler gates the registry cannot apply — Pro tier,
+ *     quizzes_enabled and the quiz runtime (a Trigger key in this process) —
+ *     deny before mutating.
  *   - The notification invariant: publishing is quiz.publish's job only, so
  *     the update schema must refuse PUBLISHED (and ARCHIVED, which is not even
  *     in the Prisma enum).
@@ -20,7 +21,7 @@
  * BEFORE the handler runs, so a direct handler call bypasses zod entirely.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { QUIZ_AUTHOR_ROLES, QUIZ_EDITOR_ROLES } from '@classmoji/utils';
 import { MAX_STUDENT_TURNS } from '@classmoji/utils/quiz-agent/limits';
@@ -51,8 +52,13 @@ vi.mock('@classmoji/auth/server', () => ({
   assertProTier: (...a: unknown[]) => mocks.assertProTier(...a),
 }));
 
-vi.mock('@classmoji/services', () => ({
+vi.mock('@classmoji/services', async () => ({
   ClassmojiService: {
+    // The shared Trigger rule itself, so the env decides as in production.
+    entitlement: {
+      isQuizRuntimeConfigured: (await import('@classmoji/services/trigger-config'))
+        .isTriggerConfigured,
+    },
     quiz: {
       create: (...a: unknown[]) => mocks.quizCreate(...a),
       update: (...a: unknown[]) => mocks.quizUpdate(...a),
@@ -144,12 +150,23 @@ function parse(result: { content: Array<{ text: string }> }) {
   return JSON.parse(result.content[0].text);
 }
 
+/** Whether this process has a Trigger key: both set or cleared, so no local .env decides. */
+function setTriggerKey(key: 'TRIGGER_SECRET_KEY' | 'TRIGGER_ACCESS_TOKEN' | null) {
+  vi.stubEnv('TRIGGER_SECRET_KEY', key === 'TRIGGER_SECRET_KEY' ? 'tr_dev_test' : '');
+  vi.stubEnv('TRIGGER_ACCESS_TOKEN', key === 'TRIGGER_ACCESS_TOKEN' ? 'tr_pat_test' : '');
+}
+
 beforeEach(() => {
+  setTriggerKey('TRIGGER_SECRET_KEY');
   for (const m of Object.values(mocks)) m.mockReset();
   mocks.auditCreate.mockResolvedValue(undefined);
   mocks.assertProTier.mockResolvedValue(undefined);
   mocks.membershipFindByClassroomAndUser.mockResolvedValue(null);
   mocks.moduleFindById.mockResolvedValue({ id: MODULE_ID, classroom_id: 'class-1' });
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe('role tiers', () => {
@@ -1419,5 +1436,93 @@ describe('quiz_delete', () => {
     await expect(quizDeleteTool.handler(ARGS, CTX)).rejects.toMatchObject({ kind: 'forbidden' });
     expect(mocks.quizFindById).not.toHaveBeenCalled();
     expect(mocks.quizDelete).not.toHaveBeenCalled();
+  });
+});
+
+describe('the quiz runtime gate (no Trigger key, no quizzes)', () => {
+  const CASES = [
+    {
+      name: 'quiz_create',
+      run: () =>
+        quizCreateTool.handler(
+          { classroom: 'org/w26', name: 'Q', rubric_prompt: 'r', module_id: MODULE_ID },
+          CTX
+        ),
+      write: () => mocks.quizCreate,
+    },
+    {
+      name: 'quiz_update',
+      run: () => quizUpdateTool.handler({ classroom: 'org/w26', quiz_id: 'quiz-1', name: 'R' }, CTX),
+      write: () => mocks.quizUpdate,
+    },
+    {
+      name: 'quiz_publish',
+      run: () => quizPublishTool.handler({ classroom: 'org/w26', quiz_id: 'quiz-1' }, CTX),
+      write: () => mocks.quizPublish,
+    },
+    {
+      name: 'quiz_delete',
+      run: () =>
+        quizDeleteTool.handler(
+          { classroom: 'org/w26', quiz_id: 'quiz-1', confirm: true as const },
+          CTX
+        ),
+      write: () => mocks.quizDelete,
+    },
+  ];
+
+  it.each(CASES)(
+    '$name refuses on Pro with quizzes on when this process has no Trigger key, before any read or write',
+    async ({ run, write }) => {
+      setTriggerKey(null);
+      // Only the retired AI agent configured: it no longer runs quizzes.
+      vi.stubEnv('AI_AGENT_URL', 'http://localhost:6000');
+      vi.stubEnv('AI_AGENT_SHARED_SECRET', 'test-secret');
+      mocks.quizFindById.mockResolvedValue(QUIZ_ROW);
+
+      await expect(run()).rejects.toMatchObject({
+        kind: 'forbidden',
+        message: 'Quizzes are not available in this classroom',
+      });
+      expect(mocks.quizFindById).not.toHaveBeenCalled();
+      expect(mocks.moduleFindById).not.toHaveBeenCalled();
+      expect(write()).not.toHaveBeenCalled();
+      expect(mocks.auditCreate).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['TRIGGER_SECRET_KEY', 'TRIGGER_ACCESS_TOKEN'] as const)(
+    'quiz_create and quiz_publish go through with only %s set',
+    async key => {
+      setTriggerKey(key);
+      mocks.quizCreate.mockResolvedValue(QUIZ_ROW);
+      mocks.quizFindById.mockResolvedValue(QUIZ_ROW);
+      mocks.quizPublish.mockResolvedValue({
+        ...QUIZ_ROW,
+        status: 'PUBLISHED',
+        assignment: { ...ASSIGNMENT, is_published: true },
+        wasPublished: false,
+        notified: true,
+        sourceMaterialAllDraft: false,
+      });
+
+      expect(parse(await CASES[0].run()).success).toBe(true);
+      expect(parse(await CASES[2].run()).success).toBe(true);
+      expect(mocks.quizCreate).toHaveBeenCalledTimes(1);
+      expect(mocks.quizPublish).toHaveBeenCalledWith('quiz-1');
+    }
+  );
+
+  it('keeps the Pro refusal first: a non-Pro classroom without the key still reads "requires Pro"', async () => {
+    setTriggerKey(null);
+    mocks.assertProTier.mockRejectedValue(
+      new Response('This feature requires a Pro subscription', { status: 403 })
+    );
+
+    await expect(CASES[0].run()).rejects.toMatchObject({
+      kind: 'forbidden',
+      message: 'This feature requires a Pro subscription',
+    });
+    expect(mocks.quizCreate).not.toHaveBeenCalled();
   });
 });

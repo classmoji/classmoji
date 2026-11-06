@@ -20,7 +20,6 @@ import { slugify, STEPS } from './utils';
 import { browserTimeZone } from '~/utils/browserTimeZone';
 import ActiveClassLimitModal from '~/components/features/plan/ActiveClassLimitModal';
 import type { ActiveClassLimitData } from '~/components/features/plan/ActiveClassLimitModal';
-import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import type { GitOrganizationOption, ImportSelections } from './types';
 import { loadGitLabOptions } from './gitlabOptions.server';
 import { loadImportableClassrooms } from './importSources.server';
@@ -70,7 +69,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       sides,
       importableClassrooms,
       quizzesVisible:
-        isAIAgentConfigured() &&
+        ClassmojiService.entitlement.isQuizRuntimeConfigured() &&
         subscription.tier === 'PRO' &&
         ClassmojiService.subscription.isSubscriptionActive(subscription),
     };
@@ -229,11 +228,11 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 
   // The new classroom is Pro exactly when its creator is (they are its only
   // owner), so quiz import is offered to Pro creators alone, and only where the
-  // AI agent is configured (as `loadQuizzesVisible` requires). Same Pro test the
-  // classroom resolver applies to each owner's subscription; the action
+  // quiz runtime is configured (as `loadQuizzesVisible` requires). Same Pro test
+  // the classroom resolver applies to each owner's subscription; the action
   // re-decides on the created classroom.
   const quizzesVisible =
-    isAIAgentConfigured() &&
+    ClassmojiService.entitlement.isQuizRuntimeConfigured() &&
     subscription.tier === 'PRO' &&
     ClassmojiService.subscription.isSubscriptionActive(subscription);
 

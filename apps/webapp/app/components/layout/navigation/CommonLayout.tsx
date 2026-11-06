@@ -20,7 +20,7 @@ import { LockedBanner } from '~/components/features/classroom/LockedBanner';
 import ImportProgressBanner, {
   type ImportProgressBannerProps,
 } from '../../features/import/ImportProgressBanner';
-import type { AppUser, MembershipWithOrganization } from '~/types';
+import type { loader as rootLoader } from '~/root';
 
 interface Viewer {
   user: { id: string; name?: string | null; login?: string | null; avatar_url?: string | null };
@@ -108,15 +108,8 @@ const CommonLayout = ({
 
   const { role } = useRole();
   const roleSettings = useRoleSettings();
-  const rootData = useRouteLoaderData('root') as
-    | {
-        user?: AppUser | null;
-        memberships?: MembershipWithOrganization[];
-        aiAgentAvailable?: boolean;
-        askMoji?: { runtime?: string; available?: boolean };
-      }
-    | undefined;
-  const { user, memberships = [], aiAgentAvailable = false } = rootData ?? {};
+  const rootData = useRouteLoaderData<typeof rootLoader>('root');
+  const { user, memberships = [], quizzesAvailable = false } = rootData ?? {};
   // The root loader's `askMojiAvailable` for this classroom (Trigger runtime, a
   // member). The insights entry follows it, like the sidebar button.
   const askMojiAvailable = rootData?.askMoji?.available === true;
@@ -235,7 +228,7 @@ const CommonLayout = ({
     if (item.isProTier && !isProTier && isDemoClassroom === false) return null;
     if (item.link === '/quizzes' && !isProTier && isDemoClassroom === false) return null;
     if (item.link === '/quizzes' && classroom?.settings?.quizzes_enabled === false) return null;
-    if (item.link === '/quizzes' && !aiAgentAvailable) return null;
+    if (item.link === '/quizzes' && !quizzesAvailable) return null;
 
     // Hide slides if disabled in classroom settings
     if (item.link === '/slides' && classroom?.settings?.slides_enabled === false) return null;
@@ -308,7 +301,7 @@ const CommonLayout = ({
     if (item.isProTier && !isProTier && !isDemoClassroom) return false;
     if (item.link === '/quizzes' && !isProTier && !isDemoClassroom) return false;
     if (item.link === '/quizzes' && classroom?.settings?.quizzes_enabled === false) return false;
-    if (item.link === '/quizzes' && !aiAgentAvailable) return false;
+    if (item.link === '/quizzes' && !quizzesAvailable) return false;
     if (item.link === '/slides' && role === 'STUDENT' && hasModules) return false;
 
     // Student navigation visibility toggles (OWNER always retains access).

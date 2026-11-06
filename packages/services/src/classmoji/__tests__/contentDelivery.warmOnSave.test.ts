@@ -37,6 +37,13 @@ vi.mock('../../content/ContentService.ts', () => ({
   },
 }));
 
+// A save also enqueues a thumbnail render through Trigger. Stubbed so the only
+// fetches this suite counts are the warm's, whatever Trigger key the shell has.
+vi.mock('../deckThumbnail.service.ts', () => ({
+  enqueueDeckThumbnail: vi.fn(async () => {}),
+  enqueueClassroomThumbnails: vi.fn(async () => {}),
+}));
+
 /** The asset map, in memory — the save writes it and the warm reads it back. */
 const rows = new Map<string, { sha: string; type: string; size: number }>();
 const key = (classroomId: string, path: string) => `${classroomId}:${path}`;

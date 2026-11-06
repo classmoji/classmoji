@@ -4,7 +4,7 @@
  * boundary, plus the not-a-member branch, assignment_update per-field
  * tiering, roster field tiering, and S2 revocation extended to a WRITE tool.
  *
- * Test-integrity guard (S10): timofei7 holds OWNER+ASSISTANT+STUDENT and
+ * Test-integrity guard (S10): prof-classmoji holds OWNER+ASSISTANT+STUDENT and
  * passes every role gate — it is used ONLY for OWNER-allow paths. Every
  * denial uses a single-role identity, and the first test PROVES the
  * identities are distinct single-role users (modeled on
@@ -28,6 +28,7 @@ import {
   expectForbidden,
   expectScopedNotFound,
   getPrisma,
+  grantTestPro,
   loadFixtures,
   mintToken,
   readResource,
@@ -37,6 +38,7 @@ import {
   type Fixtures,
   type MintedToken,
   type ServerHandle,
+  OWNER_LOGIN,
 } from './helpers.ts';
 
 const prisma = getPrisma();
@@ -46,7 +48,7 @@ const cleanup = new CleanupStack();
 let server: ServerHandle;
 let fx: Fixtures;
 
-let ownerMint: MintedToken; // timofei7 — OWNER-allow paths ONLY
+let ownerMint: MintedToken; // prof-classmoji — OWNER-allow paths ONLY
 let teacherMint: MintedToken; // fake-teacher — TEACHER (single role)
 let taMint: MintedToken; // fake-ta — ASSISTANT (single role)
 let student1Mint: MintedToken; // fake-student-1 — STUDENT (single role)
@@ -65,11 +67,13 @@ let otherOwner: string;
 let tierAssignmentId: string;
 /** Page created for this file (dev classroom, draft). */
 let tierPageId: string;
+let itemPageId: string;
 
 const S4_TITLES = {
   assignment: 'MCP-S4 Tier Assignment',
   page: 'MCP-S4 Tier Page',
   pageRenamed: 'MCP-S4 Tier Page Renamed',
+  itemPage: 'MCP-S4 Module Item Page',
   module: 'MCP-S4 Module',
   moduleRenamed: 'MCP-S4 Module Renamed',
   taEvent: 'MCP-S4 TA Event',
@@ -86,7 +90,10 @@ beforeAll(async () => {
     where: { title: S4_TITLES.assignment, repository: { classroom_id: fx.dev.id } },
   });
   await prisma.page.deleteMany({
-    where: { title: { in: [S4_TITLES.page, S4_TITLES.pageRenamed] }, classroom_id: fx.dev.id },
+    where: {
+      title: { in: [S4_TITLES.page, S4_TITLES.pageRenamed, S4_TITLES.itemPage] },
+      classroom_id: fx.dev.id,
+    },
   });
   await prisma.module.deleteMany({
     where: {
@@ -115,7 +122,7 @@ beforeAll(async () => {
   server = await startServer();
 
   [ownerMint, teacherMint, taMint, student1Mint, student2Mint, otherOwnerMint] = await Promise.all([
-    mintToken({ login: 'timofei7' }),
+    mintToken({ login: OWNER_LOGIN }),
     mintToken({ login: 'fake-teacher' }),
     mintToken({ login: 'fake-ta' }),
     mintToken({ login: 'fake-student-1' }),
@@ -149,13 +156,29 @@ beforeAll(async () => {
       classroom_id: fx.dev.id,
       title: S4_TITLES.page,
       content_path: 'pages/mcp-s4-tier-page',
-      created_by: fx.users.timofei7.id,
+      created_by: fx.users.owner.id,
     },
   });
   tierPageId = tierPage.id;
   cleanup.add('tier page (fallback if page_delete test did not run)', () =>
     prisma.page.deleteMany({ where: { id: tierPageId } })
   );
+
+  // The module tools' item step. Its own page: the page tools later delete the
+  // tier page, which must not be the target of a live module item.
+  const itemPage = await prisma.page.create({
+    data: {
+      classroom_id: fx.dev.id,
+      title: S4_TITLES.itemPage,
+      content_path: 'pages/mcp-s4-module-item-page',
+      created_by: fx.users.owner.id,
+    },
+  });
+  itemPageId = itemPage.id;
+  cleanup.add('module item page', () => prisma.page.deleteMany({ where: { id: itemPageId } }));
+
+  // Quiz resources and quiz extensions are Pro.
+  await grantTestPro(fx.users.owner.id, 's4', cleanup);
 }, 300_000);
 
 afterAll(async () => {
@@ -167,7 +190,7 @@ afterAll(async () => {
         suiteStart,
         Object.values(fx?.users ?? {}).map(u => u.id)
       );
-      await deleteTestNotifications(suiteStart, [fx.dev.id, fx.twin.id, fx.foreign.id]);
+      await deleteTestNotifications(suiteStart, [fx.dev.id, fx.foreign.id]);
       await deleteMintedTokens();
     } finally {
       await server?.stop();
@@ -1037,8 +1060,8 @@ describe('module tools', () => {
     const item = await callTool(owner, 'module_item_add', {
       classroom: DEV_REF,
       module_id: moduleId,
-      item_type: 'REPOSITORY',
-      target_id: fx.devRepository.id,
+      item_type: 'PAGE',
+      target_id: itemPageId,
     });
     expect(item.isError).toBe(false);
     await expectAuditRow({
@@ -1263,6 +1286,23 @@ describe('calendar tools', () => {
 // ─── Pages (OWNER+TEACHER; ASSISTANT excluded) ───────────────────────────────
 
 describe('page tools', () => {
+  // Live editing is on by default, and page_delete then closes the live doc
+  // on a collab server this suite does not run: off for these tests only.
+  let collabWas = true;
+  beforeAll(async () => {
+    ({ collab_enabled: collabWas } = await prisma.classroom.findUniqueOrThrow({
+      where: { id: fx.dev.id },
+      select: { collab_enabled: true },
+    }));
+    await prisma.classroom.update({ where: { id: fx.dev.id }, data: { collab_enabled: false } });
+  });
+  afterAll(async () => {
+    await prisma.classroom.update({
+      where: { id: fx.dev.id },
+      data: { collab_enabled: collabWas },
+    });
+  });
+
   it('ASSISTANT denied; TEACHER updates and deletes', async () => {
     expectForbidden(
       await callTool(ta, 'page_update', {
@@ -1392,7 +1432,7 @@ describe('resource tiers', () => {
       expect(s).not.toHaveProperty('comment');
     }
 
-    // timofei7 holds OWNER+ASSISTANT+STUDENT — this also pins U6: multi-role
+    // prof-classmoji holds OWNER+ASSISTANT+STUDENT — this also pins U6: multi-role
     // callers must DETERMINISTICALLY resolve to their highest matching role
     // (OWNER), never an arbitrary ASSISTANT membership that would drop the
     // OWNER-only fields below.
@@ -1562,11 +1602,10 @@ describe('resource tiers', () => {
     // passes on ANY other failure — including the service throwing, which is
     // exactly how a 500 hid behind this test while the feature was dead.
     //
-    // Success is the correct expectation, not a guess: the fixture classroom is
-    // known Pro-tier with quizzes_enabled, because phase2-behavior asserts the
-    // single-role ASSISTANT reads this same resource without error. TEACHER
-    // carries the same quiz rights, so anything other than success here is a
-    // regression.
+    // Success is the correct expectation, not a guess: this suite's beforeAll
+    // makes the classroom Pro (the owner's PRO subscription), and an ASSISTANT
+    // reads this same resource without error. TEACHER carries the same quiz
+    // rights, so anything other than success here is a regression.
     expect(result.error).toBeUndefined();
     expect(Array.isArray(result.payload!.quizzes)).toBe(true);
 
@@ -1625,7 +1664,7 @@ describe('extension_purchase with assignment_id (quiz)', () => {
     );
 
     const args = { classroom: DEV_REF, assignment_id: assignment.id, hours: 2 };
-    // timofei7 also holds STUDENT, so the role denials use single-role users.
+    // prof-classmoji also holds STUDENT, so the role denials use single-role users.
     expectForbidden(
       await callTool(teacher, 'extension_purchase', args),
       'extension_purchase as teacher',
@@ -1657,10 +1696,9 @@ describe('extension_purchase with assignment_id (quiz)', () => {
       },
     });
 
-    // The service shows quizzes only where the AI agent is configured in the
-    // server's own env (AI_AGENT_URL + AI_AGENT_SHARED_SECRET, read from the
-    // repo .env). A not_found here in this Pro classroom means those are
-    // missing, not a scoping fault.
+    // The service shows quizzes only where the quiz runtime is configured in
+    // the server's own env (startServer sets a placeholder TRIGGER_SECRET_KEY),
+    // and the suite made the classroom Pro.
     const bought = await callTool(student2, 'extension_purchase', args);
     expect(bought.isError, JSON.stringify(bought.payload)).toBe(false);
     expect(bought.payload.assignment_id).toBe(assignment.id);
@@ -1705,7 +1743,8 @@ describe('S2 revocation on the write path', () => {
     const created = await callTool(minted.access_token, 'calendar_event_create', {
       classroom: DEV_REF,
       title: S4_TITLES.revocationEvent,
-      event_type: 'LAB',
+      // Assistants may create office hours only (calendarPolicy).
+      event_type: 'OFFICE_HOURS',
       start_time: '2026-07-23T10:00:00-04:00',
       end_time: '2026-07-23T11:00:00-04:00',
     });

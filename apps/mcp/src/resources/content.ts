@@ -21,7 +21,8 @@
  *                     renders (title, type, due date) — never the quiz or
  *                     form behind it, which may still be a draft. Quiz
  *                     assignments are dropped for every role unless
- *                     entitlement.quizzesVisible (Pro, quizzes on); legacy
+ *                     entitlement.quizzesVisible (quiz runtime configured,
+ *                     Pro, quizzes on); legacy
  *                     QUIZ items are listed for nobody (a quiz is in a
  *                     module through its assignment). Legacy
  *                     REPOSITORY item rows are passed through unchanged: the
@@ -29,11 +30,10 @@
  *                     course site still does.
  *   quizzes         — roles OWNER/TEACHER/ASSISTANT/STUDENT, matching the quiz
  *                     routes. Gate order mirrors the routes: role check →
- *                     Pro-tier → quizzes_enabled. NOTE:
- *                     the plan table lists isAIAgentConfigured() as a third
- *                     gate, but neither quiz LIST loader checks it (it only
- *                     gates the attempt/action flow + nav) — route wins, so
- *                     the list resource does not check it. Students get the
+ *                     Pro-tier → quizzes_enabled → the quiz runtime
+ *                     (Trigger): for students as part of
+ *                     entitlement.quizzesVisibleOrThrow, for staff
+ *                     entitlement.isQuizRuntimeConfigured. Students get the
  *                     published quizzes, closed ones included (as the web
  *                     list), with the
  *                     student route's field allowlist (no
@@ -319,8 +319,9 @@ export const modulesResource: ResourceDefinition = {
       return { enabled: false, modules: [] };
     }
 
-    // Quizzes appear only where quizzes do — the predicate the web app's module
-    // screens filter on too. The answer goes to listForClassroom, which applies
+    // Quizzes appear only where quizzes do (entitlement.quizzesVisible: the
+    // quiz runtime configured, Pro, switched on) — the predicate the web app's
+    // module screens filter on too. The answer goes to listForClassroom, which applies
     // the student-visibility rule to a student's assignments with it
     // (published, past Opens, quizzes shown); staff, who see unpublished rows
     // too, have quiz assignments dropped below where quizzes are hidden.
@@ -593,8 +594,8 @@ export const QUIZZES_DESCRIPTION =
   'grade_emoji, adjusted, original_emoji, instructor_comment, instructor_name, ' +
   'open_regrade_request_id, counts_toward_grade), the ids regrade_create takes. ' +
   "Grades are emoji on the classroom's scale (score-N badges on the " +
-  'numeric scale), never numbers; staff get avg_emoji. Requires a Pro subscription and ' +
-  'quizzes_enabled.';
+  'numeric scale), never numbers; staff get avg_emoji. Requires a Pro subscription, ' +
+  'quizzes_enabled and a server with quizzes set up.';
 
 export const quizzesResource: ResourceDefinition = {
   name: 'quizzes',
@@ -606,7 +607,8 @@ export const quizzesResource: ResourceDefinition = {
   handler: async (vars, ctx) => {
     const { classroomId, role, membership } = classroomCtx(ctx);
 
-    // Gate order mirrors the routes: access (done) → Pro tier → quizzes_enabled.
+    // Gate order mirrors the routes: access (done) → Pro tier → quizzes_enabled,
+    // then the quiz runtime (below, per branch).
     await assertProTier(ctx);
     if (sanitizedSettings(ctx).quizzes_enabled === false) {
       throw new ToolError('forbidden', 'Quizzes are currently disabled for this classroom');
@@ -647,7 +649,7 @@ export const quizzesResource: ResourceDefinition = {
     if (role === 'STUDENT') {
       // A student sees quizzes where the classroom's pages show them: the same
       // predicate extension_purchase and my_grades use (Pro, switched on, and
-      // the AI agent configured). A failed lookup fails the read.
+      // the quiz runtime configured). A failed lookup fails the read.
       if (!(await ClassmojiService.entitlement.quizzesVisibleOrThrow(classroomId))) {
         throw new ToolError('forbidden', 'Quizzes are not available in this classroom');
       }
@@ -673,6 +675,14 @@ export const quizzesResource: ResourceDefinition = {
           my_attempts: extensions.attemptsOf(q),
         })),
       };
+    }
+
+    // Staff: the quiz runtime too (Trigger configured in this process), the
+    // half of entitlement.quizzesVisible the gates above do not cover. Without
+    // it the web's staff quiz screens 404, so this read refuses as the student
+    // branch does, before any quiz is read.
+    if (!ClassmojiService.entitlement.isQuizRuntimeConfigured()) {
+      throw new ToolError('forbidden', 'Quizzes are not available in this classroom');
     }
 
     const [quizzes, scale] = await Promise.all([

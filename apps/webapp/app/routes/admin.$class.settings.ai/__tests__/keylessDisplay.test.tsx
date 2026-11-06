@@ -46,6 +46,7 @@ vi.mock('@classmoji/services', () => ({
 vi.mock('~/utils/aiFeatures.server', () => ({ isAIAgentConfigured: () => true }));
 
 const { default: SettingsAI } = await import('../route');
+const { QUIZZES_NOT_SET_UP_COPY } = await import('../aiSettingsCopy');
 
 const DEFAULT_LABELS = {
   llm_model: 'Claude Sonnet 4.5',
@@ -66,9 +67,11 @@ const MODELS = [
 const render = (
   hasKey: boolean,
   selectValues: Record<string, string | null>,
-  aiAgentAvailable = true,
+  quizzesAvailable = true,
   extra: {
     settings?: Record<string, unknown>;
+    aiUnavailable?: boolean;
+    quizzesUnavailableLine?: string | null;
     quizzesProRequired?: boolean;
     askMojiProRequired?: boolean;
     askMojiToggleAvailable?: boolean;
@@ -86,8 +89,10 @@ const render = (
         ...extra.settings,
       },
       allowedModels: MODELS,
-      aiAgentAvailable,
-      askMojiToggleAvailable: extra.askMojiToggleAvailable ?? aiAgentAvailable,
+      quizzesAvailable,
+      quizzesUnavailableLine: extra.quizzesUnavailableLine ?? null,
+      aiUnavailable: extra.aiUnavailable ?? false,
+      askMojiToggleAvailable: extra.askMojiToggleAvailable ?? true,
       askMojiUnavailableLine: extra.askMojiUnavailableLine ?? null,
       askMojiInstructionsShown: extra.askMojiInstructionsShown ?? true,
       quizzesProRequired: extra.quizzesProRequired ?? false,
@@ -125,17 +130,36 @@ describe('AI settings: keyless display', () => {
   });
 });
 
-describe('AI settings: no AI agent on the server', () => {
+describe('AI settings: what this server can run', () => {
   // Instructors read this; the env vars behind it are an operator's business.
-  it('says AI features are unavailable, naming no env var', () => {
-    const html = render(true, ALL_NULL, false);
+  it('says AI features are unavailable when neither can run, naming no env var', () => {
+    const html = render(true, ALL_NULL, false, {
+      aiUnavailable: true,
+      askMojiToggleAvailable: false,
+    });
 
     expect(html).toContain('AI features aren&#x27;t available on this server');
     expect(html).not.toContain('AI_AGENT');
+    expect(html).not.toContain('TRIGGER');
   });
 
-  it('shows nothing about it when the agent is configured', () => {
-    expect(render(true, ALL_NULL)).not.toContain('available on this server');
+  it('shows nothing about it when both can run', () => {
+    const html = render(true, ALL_NULL);
+    expect(html).not.toContain('available on this server');
+    expect(html).not.toContain('set up on this server');
+  });
+
+  it('disables the quizzes switch with its own line when only quizzes cannot run', () => {
+    const html = render(true, ALL_NULL, false, {
+      quizzesUnavailableLine: QUIZZES_NOT_SET_UP_COPY,
+    });
+
+    expect(html).not.toContain('AI features aren&#x27;t available on this server');
+    expect(html).toContain('Quizzes aren&#x27;t set up on this server.');
+    expect(switches(html)).toEqual([
+      { checked: true, disabled: true },
+      { checked: true, disabled: false },
+    ]);
   });
 });
 
@@ -265,9 +289,10 @@ describe('AI settings: Ask Moji availability', () => {
     ]);
   });
 
-  it('keeps the Ask Moji switch usable while the AI agent is down, when Ask Moji can run', () => {
+  it('keeps the Ask Moji switch usable while quizzes cannot run, when Ask Moji can', () => {
     const html = render(true, ALL_NULL, false, { askMojiToggleAvailable: true });
 
+    expect(switches(html)[0]).toEqual({ checked: true, disabled: true });
     expect(switches(html)[1]).toEqual({ checked: true, disabled: false });
   });
 });

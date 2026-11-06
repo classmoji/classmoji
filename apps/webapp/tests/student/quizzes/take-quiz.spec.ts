@@ -7,7 +7,8 @@ import { Page } from '@playwright/test';
  *
  * Drives the student quiz-taking flow: opening a quiz row, starting/resuming an
  * attempt, the attempt Drawer, and the "Leave Quiz?" confirmation. All fixme'd —
- * the seed is FREE tier with no quizzes and no reachable ai-agent.
+ * the seed is FREE tier with no quizzes, and a running quiz needs a real
+ * Trigger.dev key (the quiz chat runtime), which CI does not have.
  */
 
 const SEEDED_QUIZ_NAME = 'Intro to JavaScript';
@@ -45,7 +46,7 @@ async function startOrResumeQuiz(page: Page, quizName: string) {
 test.describe('Quiz Taking E2E', () => {
   test.fixme(
     true,
-    'MISSING: FREE-tier seed (no PRO subscription) makes /student/$org/quizzes 403; no "Intro to JavaScript" quiz is seeded; real attempt creation needs a reachable ai-agent. Needs PRO subscription + seeded PUBLISHED quiz + ai-agent.'
+    'MISSING: FREE-tier seed (no PRO subscription) makes /student/$org/quizzes 403; no "Intro to JavaScript" quiz is seeded; a running attempt needs the Trigger chat runtime, and CI has only a dummy Trigger key. Needs PRO subscription + seeded PUBLISHED quiz + a real Trigger.dev key.'
   );
 
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
@@ -102,7 +103,7 @@ test.describe('Quiz Attempt Management', () => {
 test.describe('Quiz Interface Controls', () => {
   test.fixme(
     true,
-    'MISSING: FREE-tier seed 403s the quizzes route and no quiz is seeded; the attempt Drawer and "Leave Quiz?" confirmation cannot be reached without a PRO subscription + seeded quiz + ai-agent.'
+    'MISSING: FREE-tier seed 403s the quizzes route and no quiz is seeded; the attempt Drawer and "Leave Quiz?" confirmation cannot be reached without a PRO subscription, a seeded quiz and a real Trigger.dev key.'
   );
 
   test('closing incomplete quiz shows confirmation dialog', async ({
