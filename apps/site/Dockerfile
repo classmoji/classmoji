@@ -3,8 +3,9 @@ FROM node:24-alpine AS build
 
 WORKDIR /app
 
-# Same npm as CI and the lockfile check (packageManager npm@10.9.9): the npm
-# bundled with Node 24 (11.x) handles dependency install scripts differently.
+# One npm everywhere, the packageManager one (10.9.9), as in CI and the
+# lockfile check. Node 24 bundles npm 11, which writes `libc` fields into
+# lockfile entries it re-resolves and warns about dependency install scripts.
 RUN npm install -g npm@10.9.9 --no-audit --no-fund --cache=/tmp/npm-self-cache \
     && rm -rf /tmp/npm-self-cache
 

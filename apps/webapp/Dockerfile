@@ -8,8 +8,9 @@ WORKDIR /app
 
 ENV NODE_OPTIONS="--max-old-space-size=2048"
 
-# Same npm as CI and the lockfile check (packageManager npm@10.9.9): the npm
-# bundled with Node 24 (11.x) handles dependency install scripts differently.
+# One npm everywhere, the packageManager one (10.9.9), as in CI and the
+# lockfile check. Node 24 bundles npm 11, which writes `libc` fields into
+# lockfile entries it re-resolves and warns about dependency install scripts.
 RUN npm install -g npm@10.9.9 --no-audit --no-fund --cache=/tmp/npm-self-cache \
     && rm -rf /tmp/npm-self-cache
 
@@ -73,7 +74,7 @@ WORKDIR /app
 RUN apk add --no-cache openssl libc6-compat
 
 # This stage runs npx too (the CMD below and the fly.toml release_command's
-# `npx prisma migrate deploy`), so it gets the same npm 10.9 as the build.
+# `npx prisma migrate deploy`), so it gets the same npm (10.9.9) as the build.
 RUN npm install -g npm@10.9.9 --no-audit --no-fund --cache=/tmp/npm-self-cache \
     && rm -rf /tmp/npm-self-cache
 

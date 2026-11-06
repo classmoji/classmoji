@@ -50,8 +50,9 @@ jobs:
           node-version: '24'
           cache: 'npm'
 
-      # Node 24 bundles npm 11, which adds `libc` fields to package-lock.json
-      # that the lockfile check rejects; stay on the packageManager npm (10.9).
+      # One npm everywhere, the packageManager one (10.9.9). Node 24 bundles
+      # npm 11, which writes `libc` fields into lockfile entries it re-resolves
+      # and warns about dependency install scripts.
       - name: Use npm 10.9
         run: npm install -g npm@10.9.9 && npm --version
 

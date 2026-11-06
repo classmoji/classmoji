@@ -95,7 +95,9 @@ function requirePrivateAgentsOnDeploy() {
 export default defineConfig({
   project: process.env.TRIGGER_PROJECT_ID || 'proj_ijxcrutouxchmrbjmkkk',
   // Pinned: bare 'node' meant Trigger's default image (Node 21), which is
-  // going away, and it did not match the Node 22 the repo runs everywhere else.
+  // going away. The Fly apps run Node 24; this worker stays on Node 22 until
+  // it moves with the Trigger upgrade, so code bundled here stays Node-22-safe
+  // (see AGENTS.md).
   runtime: 'node-22',
   logLevel: 'log',
   machine: 'small-2x',

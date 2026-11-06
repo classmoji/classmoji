@@ -95,6 +95,7 @@ Conventions:
 
 ## Environments & Deployment
 - Hosted on **Fly.io** with staging and production environments. Production database is on **Neon**.
+- **Node 24 on Fly, Node 22 in Trigger tasks (for now).** Until the Trigger 4.8.3 and ai-agent submodule PRs land, code bundled into Trigger tasks (`packages/tasks` and what it imports: services, utils, database, collab, page-schema, content-signing, and the ai-agent's chat agents) must stay Node-22-safe: no `using`, `RegExp.escape`, `URLPattern`, `Float16Array` or `Error.isError`. `@types/node` stays on 22 until then.
 - **NEVER use Neon MCP tools** unless explicitly asked to debug a production issue.
 - Always work in **feature branches** — never commit to `main` or `staging` directly. The dev service won't start on main/staging branches.
 - Secrets are managed in **Infisical**. When adding a new env var, also add it to:
