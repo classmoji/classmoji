@@ -6,7 +6,7 @@
  * toolkit. Each test FILE spawns its own server on PORT (files run strictly
  * sequentially per vitest.integration.config.ts, so the port never clashes).
  *
- * Identity discipline (plan §8.1 critical guard): timofei7 holds
+ * Identity discipline (plan §8.1 critical guard): prof-classmoji holds
  * OWNER+ASSISTANT+STUDENT and passes EVERY role gate — use it ONLY for
  * OWNER-allow paths. ALL denial assertions use the single-role identities
  * (fake-teacher / fake-ta / fake-student-* / fake-other-*).
@@ -34,9 +34,17 @@ export const BASE = `http://localhost:${PORT}`;
 export const EXPECTED_CHALLENGE = `Bearer resource_metadata="${BASE}/.well-known/oauth-protected-resource"`;
 
 // Composite org/slug references (locked decision 1).
-export const DEV_REF = 'classmoji-development/classmoji-dev-winter-2025';
-export const TWIN_REF = 'dev-org/classmoji-dev-winter-2025';
+//
+// The dev classroom is the one `npm run db:seed` populated, under whatever
+// org it has (a long-lived DB may hold it under a real org rather than the
+// seed's dev-org). DEV_REF is therefore read from the database by
+// loadFixtures().
+export const DEV_SLUG = 'classmoji-dev-winter-2025';
+// Set once by loadFixtures(); importers see it through the live binding.
+export let DEV_REF = '';
 export const FOREIGN_REF = 'dev-org/classmoji-other-class';
+// The seeded all-roles owner (seed-test-user.js): OWNER + ASSISTANT + STUDENT.
+export const OWNER_LOGIN = process.env.TEST_USER_LOGIN || 'prof-classmoji';
 
 // Deferred so the .env load above happens before Prisma is constructed.
 const { default: getPrisma, whereGitUsernameIn } = await import('@classmoji/database');
@@ -63,6 +71,10 @@ async function spawnOnce(
       MCP_PORT: String(PORT),
       MCP_PUBLIC_URL: BASE,
       WEBAPP_URL: 'http://localhost:3000',
+      // Quiz paths check only that the AI agent is configured (never call it
+      // here), and the runner's DATABASE_URL means the repo .env was not read.
+      AI_AGENT_URL: 'http://127.0.0.1:9',
+      AI_AGENT_SHARED_SECRET: 'mcp-integration-placeholder',
       // LAST, so a caller can override anything above — including credentials
       // the runner's own environment happens to carry.
       ...extraEnv,
@@ -293,10 +305,9 @@ export async function waitUntil<T>(
 
 export interface Fixtures {
   dev: { id: string };
-  twin: { id: string };
   foreign: { id: string };
   users: Record<
-    | 'timofei7'
+    | 'owner'
     | 'fake-teacher'
     | 'fake-ta'
     | 'fake-student-1'
@@ -318,10 +329,8 @@ export interface Fixtures {
   releasedAssignment: { id: string; title: string; module_id: string };
   /** 'Other Assignment 1' in the foreign classroom (S1 target). */
   foreignAssignment: { id: string };
-  /** 'hello-world' container in dev (module-item target). */
+  /** 'hello-world' repository in dev (a fixture assignment submits through it). */
   devRepository: { id: string };
-  /** 'other-hello-world' container in the foreign classroom (S1 item target). */
-  foreignRepository: { id: string };
 }
 
 export async function loadFixtures(): Promise<Fixtures> {
@@ -332,14 +341,18 @@ export async function loadFixtures(): Promise<Fixtures> {
       where: { slug, git_organization: { login: org } },
       select: { id: true },
     });
-  const [dev, twin, foreign] = await Promise.all([
-    classroomBy('classmoji-development', 'classmoji-dev-winter-2025'),
-    classroomBy('dev-org', 'classmoji-dev-winter-2025'),
+  const [devRow, foreign] = await Promise.all([
+    prisma.classroom.findUniqueOrThrow({
+      where: { slug: DEV_SLUG },
+      select: { id: true, git_organization: { select: { login: true } } },
+    }),
     classroomBy('dev-org', 'classmoji-other-class'),
   ]);
+  const dev = { id: devRow.id };
+  DEV_REF = `${devRow.git_organization.login}/${DEV_SLUG}`;
 
   const logins = [
-    'timofei7',
+    OWNER_LOGIN,
     'fake-teacher',
     'fake-ta',
     'fake-student-1',
@@ -358,8 +371,12 @@ export async function loadFixtures(): Promise<Fixtures> {
   const users = Object.fromEntries(
     logins.map(login => {
       const row = userRows.find(u => u.accounts.some(a => a.username === login));
-      if (!row) throw new Error(`Seed user '${login}' missing — run npm run db:seed`);
-      return [login, { id: row.id, login }];
+      if (!row) {
+        throw new Error(
+          `Seed user '${login}' missing — run seed.js, then seed-test-user.js (see vitest.integration.config.ts)`
+        );
+      }
+      return [login === OWNER_LOGIN ? 'owner' : login, { id: row.id, login }];
     })
   ) as Fixtures['users'];
 
@@ -387,14 +404,9 @@ export async function loadFixtures(): Promise<Fixtures> {
     where: { classroom_id: dev.id, title: 'hello-world' },
     select: { id: true },
   });
-  const foreignRepository = await prisma.repository.findFirstOrThrow({
-    where: { classroom_id: foreign.id, title: 'other-hello-world' },
-    select: { id: true },
-  });
 
   return {
     dev,
-    twin,
     foreign,
     users,
     teamGra,
@@ -404,8 +416,28 @@ export async function loadFixtures(): Promise<Fixtures> {
     releasedAssignment,
     foreignAssignment,
     devRepository,
-    foreignRepository,
   };
+}
+
+/**
+ * Make the dev classroom Pro for one suite: Pro follows the classroom owner's
+ * subscription, which a fresh seed does not give. The row is tagged per suite,
+ * so a run killed before its cleanup is cleared by the next one.
+ */
+export async function grantTestPro(
+  userId: string,
+  suite: string,
+  cleanup: CleanupStack
+): Promise<void> {
+  const prisma = getPrisma();
+  const tag = `mcp-integration-${suite}`;
+  await prisma.subscription.deleteMany({ where: { stripe_subscription_id: tag } });
+  const subscription = await prisma.subscription.create({
+    data: { user_id: userId, tier: 'PRO', stripe_subscription_id: tag },
+  });
+  cleanup.add(`${suite} PRO subscription`, () =>
+    prisma.subscription.deleteMany({ where: { id: subscription.id } })
+  );
 }
 
 // ─── Cleanup stack (LIFO, error-tolerant) ────────────────────────────────────

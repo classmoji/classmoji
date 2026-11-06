@@ -8,7 +8,7 @@
  * /mcp with bearer tokens minted via POST /dev/mint-token.
  *
  * Identity discipline (plan §8.1 critical guard): assertions use fake-ta /
- * fake-student-* — NEVER prof-classmoji or timofei7, whose OWNER+ASSISTANT+
+ * fake-student-* — NEVER prof-classmoji, whose OWNER+ASSISTANT+
  * STUDENT memberships make every denial assertion vacuously pass.
  *
  * Cleanup targets ONLY rows this file created (minted tokens are tracked by

@@ -5,10 +5,11 @@
  *      REMOVAL per member and restores balances. Fixture ends ungraded.
  *   2. grades_released is the SOLE visibility gate for students: grades-mine
  *      and the repos resource both honor a flip in both directions.
- *   3. Slug-ambiguity regression: the dev DB seeds a same-slug twin classroom
- *      (dev-org/classmoji-dev-winter-2025). org/slug resolution must pick the
- *      right classroom per org, and the slug-keyed guards (modules,
- *      leaderboard) must refuse ambiguity rather than serve the twin's data.
+ *   3. Slug uniqueness: a classroom slug is globally unique (migration
+ *      20260818103726), so the database refuses a second classroom with the
+ *      dev slug and the composite ref resolves to the dev classroom alone.
+ *      (This replaced the same-slug "twin" ambiguity tests, whose fixture the
+ *      database can no longer hold.)
  *   4. Quiz prompt stripping: system_prompt/rubric_prompt are visible to the
  *      quiz staff tier and stripped for students.
  *
@@ -27,15 +28,18 @@ import {
   DEV_REF,
   expectAuditRow,
   getPrisma,
+  grantTestPro,
   loadFixtures,
   mintToken,
   readResource,
+  RESOURCE_NOT_FOUND,
   startServer,
-  TWIN_REF,
+  DEV_SLUG,
   waitUntil,
   type Fixtures,
   type MintedToken,
   type ServerHandle,
+  OWNER_LOGIN,
 } from './helpers.ts';
 
 const prisma = getPrisma();
@@ -53,10 +57,26 @@ let teacher: string;
 let student1: string;
 
 const B_TITLES = {
-  primaryModule: 'MCP-Behavior Primary Module',
-  twinModule: 'MCP-Behavior Twin Module',
   quiz: 'MCP-Behavior Quiz',
 } as const;
+/** A throwaway org for the slug test: nothing else lives under it. */
+const SLUG_PROBE_ORG = {
+  login: 'mcp-behavior-slug-probe',
+  provider_id: '80000095',
+} as const;
+
+/** Drop the probe org, with any classroom the database let through under it. */
+async function removeSlugProbeOrg(): Promise<void> {
+  const org = await prisma.gitOrganization.findUnique({
+    where: {
+      provider_provider_id: { provider: 'GITHUB', provider_id: SLUG_PROBE_ORG.provider_id },
+    },
+    select: { id: true },
+  });
+  if (!org) return;
+  await prisma.classroom.deleteMany({ where: { git_org_id: org.id } });
+  await prisma.gitOrganization.delete({ where: { id: org.id } });
+}
 
 const SECRET_SYSTEM = 'MCP-SECRET-SYSTEM-PROMPT';
 const SECRET_RUBRIC = 'MCP-SECRET-RUBRIC-PROMPT';
@@ -75,9 +95,7 @@ beforeAll(async () => {
   fx = await loadFixtures();
 
   // Defensive pre-clean (re-runnability even after a crashed earlier run).
-  await prisma.module.deleteMany({
-    where: { title: { in: [B_TITLES.primaryModule, B_TITLES.twinModule] } },
-  });
+  await removeSlugProbeOrg();
   await prisma.quiz.deleteMany({ where: { name: B_TITLES.quiz, classroom_id: fx.dev.id } });
   await prisma.assignmentGrade.deleteMany({
     where: { git_repo_assignment_id: fx.teamGra.id },
@@ -89,7 +107,7 @@ beforeAll(async () => {
   server = await startServer();
 
   const [o, t, a, s1] = await Promise.all([
-    mintToken({ login: 'timofei7' }),
+    mintToken({ login: OWNER_LOGIN }),
     mintToken({ login: 'fake-teacher' }),
     mintToken({ login: 'fake-ta' }),
     mintToken({ login: 'fake-student-1' }),
@@ -111,7 +129,7 @@ afterAll(async () => {
         suiteStart,
         Object.values(fx?.users ?? {}).map(u => u.id)
       );
-      await deleteTestNotifications(suiteStart, [fx.dev.id, fx.twin.id, fx.foreign.id]);
+      await deleteTestNotifications(suiteStart, [fx.dev.id, fx.foreign.id]);
       await deleteMintedTokens();
     } finally {
       await server?.stop();
@@ -326,74 +344,61 @@ describe('grades_released gating (locked decision 7)', () => {
   });
 });
 
-// ─── 3. Slug ambiguity (same-slug twin classroom under dev-org) ─────────────
+// ─── 3. Slug uniqueness (no same-slug twin can exist) ───────────────────────
 
-describe('slug ambiguity regression', () => {
-  it('org/slug resolution picks the right classroom per org', async () => {
-    // fake-teacher is a member of BOTH same-slug twins — the composite ref
-    // must resolve each to its own classroom id.
+describe('slug uniqueness', () => {
+  // A different org from the dev classroom's, so only the GLOBAL slug index
+  // can refuse the probe (the per-org one cannot).
+  let probeOrgId: string;
+  beforeAll(async () => {
+    const devOrg = await prisma.classroom.findUniqueOrThrow({
+      where: { id: fx.dev.id },
+      select: { git_org_id: true },
+    });
+    const probeOrg = await prisma.gitOrganization.create({
+      data: {
+        provider: 'GITHUB',
+        provider_id: SLUG_PROBE_ORG.provider_id,
+        login: SLUG_PROBE_ORG.login,
+      },
+    });
+    expect(probeOrg.id).not.toBe(devOrg.git_org_id);
+    probeOrgId = probeOrg.id;
+    cleanup.add('slug probe org (and any classroom the database let through)', () =>
+      removeSlugProbeOrg()
+    );
+  });
+
+  it('refuses a second classroom with the dev slug under another org', async () => {
+    await expect(
+      prisma.classroom.create({
+        data: {
+          git_org_id: probeOrgId,
+          slug: DEV_SLUG,
+          name: 'Slug probe',
+          content_namespace: SLUG_PROBE_ORG.login,
+          content_repo: `content-${SLUG_PROBE_ORG.login}`,
+        },
+      })
+    ).rejects.toMatchObject({ code: 'P2002', meta: { target: ['slug'] } });
+  });
+
+  it('the composite ref resolves to the dev classroom', async () => {
     const devInfo = await readResource(teacher, `classmoji://${DEV_REF}`);
     expect(devInfo.error).toBeUndefined();
     expect(devInfo.payload!.id).toBe(fx.dev.id);
-
-    const twinInfo = await readResource(teacher, `classmoji://${TWIN_REF}`);
-    expect(twinInfo.error).toBeUndefined();
-    expect(twinInfo.payload!.id).toBe(fx.twin.id);
-    expect(devInfo.payload!.id).not.toBe(twinInfo.payload!.id);
   });
 
-  it('slug-keyed guards refuse ambiguity rather than serve the twin (modules)', async () => {
-    await prisma.module.create({
-      data: {
-        classroom_id: fx.dev.id,
-        title: B_TITLES.primaryModule,
-        slug: 'mcp-behavior-primary-module',
-        is_published: true,
-      },
-    });
-    await prisma.module.create({
-      data: {
-        classroom_id: fx.twin.id,
-        title: B_TITLES.twinModule,
-        slug: 'mcp-behavior-twin-module',
-        is_published: true,
-      },
-    });
-    cleanup.add('behavior modules', () =>
-      prisma.module.deleteMany({
-        where: { title: { in: [B_TITLES.primaryModule, B_TITLES.twinModule] } },
-      })
-    );
-
-    // module.listForClassroom resolves by BARE slug — whichever twin it
-    // lands on, the resource must either serve the AUTHORIZED classroom's
-    // modules or refuse with the ambiguity guard. It must NEVER return the
-    // other twin's rows.
-    const checkSide = async (ref: string, mustContain: string, mustNotContain: string) => {
-      const outcome = await readResource(ta, `classmoji://${ref}/modules`);
-      if (outcome.error) {
-        expect(outcome.error.message).toMatch(/ambiguous/i);
-        return 'refused';
-      }
-      const titles = (outcome.payload!.modules as Array<{ title: string }>).map(m => m.title);
-      expect(titles).toContain(mustContain);
-      expect(titles).not.toContain(mustNotContain);
-      return 'served';
-    };
-
-    const devSide = await checkSide(DEV_REF, B_TITLES.primaryModule, B_TITLES.twinModule);
-    const twinSide = await checkSide(TWIN_REF, B_TITLES.twinModule, B_TITLES.primaryModule);
-    // The bare-slug resolver picks ONE twin — the other side must have refused.
-    expect([devSide, twinSide]).toContain('refused');
+  it('a ref naming another org does not resolve to the dev classroom', async () => {
+    const wrongOrg = await readResource(teacher, `classmoji://${SLUG_PROBE_ORG.login}/${DEV_SLUG}`);
+    expect(wrongOrg.payload).toBeUndefined();
+    expect(wrongOrg.error?.code).toBe(RESOURCE_NOT_FOUND);
   });
 
-  it('leaderboard guard: correct classroom or explicit refusal — never a silent twin leak', async () => {
+  it('serves the dev classroom leaderboard without an ambiguity refusal', async () => {
     const outcome = await readResource(owner, `classmoji://${DEV_REF}/leaderboard`);
-    if (outcome.error) {
-      expect(outcome.error.message).toMatch(/ambiguous/i);
-    } else {
-      expect(Array.isArray(outcome.payload!.leaderboard)).toBe(true);
-    }
+    expect(outcome.error).toBeUndefined();
+    expect(Array.isArray(outcome.payload!.leaderboard)).toBe(true);
   });
 });
 
@@ -401,14 +406,8 @@ describe('slug ambiguity regression', () => {
 
 describe('quiz prompt stripping', () => {
   it('staff tier (ASSISTANT) sees prompts; students never do', async () => {
-    // The quiz Pro gate resolves the classroom OWNER's subscription — mint a
-    // temporary PRO row for timofei7 (the dev classroom owner).
-    const subscription = await prisma.subscription.create({
-      data: { user_id: fx.users.timofei7.id, tier: 'PRO' },
-    });
-    cleanup.add('temp PRO subscription', () =>
-      prisma.subscription.deleteMany({ where: { id: subscription.id } })
-    );
+    // The quiz Pro gate resolves the classroom OWNER's subscription.
+    await grantTestPro(fx.users.owner.id, 'behavior', cleanup);
 
     const quiz = await prisma.quiz.create({
       data: {

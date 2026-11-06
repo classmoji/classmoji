@@ -6,7 +6,12 @@ import { defineConfig } from 'vitest/config';
  * generous timeouts, strictly sequential execution (shared port + DB rows).
  *
  * Run with: npx vitest run --config vitest.integration.config.ts
- * Requires: local postgres up (npm run db:start) and seeded (npm run db:seed);
+ * Requires: local postgres up (npm run db:start), seeded with the dev fixtures
+ * AND the E2E users, as CI's e2e job does:
+ *   node packages/database/scripts/seed.js
+ *   node packages/database/scripts/seed-test-user.js   (needs GITHUB_PROF_TOKEN,
+ *     GITHUB_TA_TOKEN, GITHUB_INSTRUCTOR_TOKEN, GITHUB_STUDENT_TOKEN; any
+ *     placeholder value works, see .github/workflows/e2e.yml)
  * DATABASE_URL is read from the repo-root .env when not already set.
  */
 export default defineConfig({
