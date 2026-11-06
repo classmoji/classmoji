@@ -20,6 +20,7 @@ import { titleToIdentifier } from '@classmoji/utils';
 import useStore from '~/store';
 
 import { type AssignmentRowData } from './AssignmentsTable';
+import { groupTemplateOptions, type TemplateRepository } from '~/utils/templateSearch';
 
 /**
  * The kinds this modal creates and edits. Not QUIZ: a quiz and its assignment
@@ -143,15 +144,9 @@ const Section = ({
   </div>
 );
 
-interface TemplateRepository {
-  full_name: string;
-  private: boolean;
-  language: string | null;
-  stargazers_count: number;
-}
-
 // Same endpoint as the Repositories form: the classroom org's repos (public and
-// private) plus public templates anywhere, searched with the installation token.
+// private) first, then public templates anywhere, searched with the
+// installation token.
 const searchTemplates = async (query: string, classSlug: string): Promise<TemplateRepository[]> => {
   try {
     const params = new URLSearchParams({ classroomSlug: classSlug, q: query });
@@ -272,6 +267,20 @@ const AssignmentFormModal = ({
   };
 
   const isRepoCreate = kind === 'REPO' && !isEdit;
+  // Each copy's name, shown under the field it is built from: the title in
+  // push mode, the repository name in issue mode. Never near the template,
+  // which plays no part in it.
+  const showsRepoName = isRepoCreate && repoSource === 'new';
+  const repoNamePreview = showsRepoName ? (
+    <div className="mt-2 flex w-fit flex-wrap items-center gap-2 rounded-lg bg-stone-100 dark:bg-neutral-800 px-3 py-2">
+      <IconArrowRight size={14} className="text-ink-3" aria-hidden />
+      <span className="text-sm text-ink-3">{isTeam ? 'Each team gets' : 'Each student gets'}</span>
+      <code className="rounded-md bg-stone-200/70 dark:bg-neutral-700 px-2 py-0.5 text-sm text-ink-1">
+        {repoSlug}-&lt;
+        {isTeam ? 'team' : web.isGitLab ? 'gitlab-username' : 'github-login'}&gt;
+      </code>
+    </div>
+  ) : undefined;
   const gradingStep = isRepoCreate ? 4 : kind === 'REPO' ? 3 : 2;
   // Opened from a module card, so the module is already settled: it rides in
   // the header as context instead of taking a field.
@@ -507,6 +516,7 @@ const AssignmentFormModal = ({
           name="title"
           label="Assignment title"
           rules={[{ required: true, message: 'Enter a title' }]}
+          extra={namesItsOwnRepo ? undefined : repoNamePreview}
         >
           <Input placeholder="Lab 3: Linked lists" />
         </Form.Item>
@@ -682,7 +692,13 @@ const AssignmentFormModal = ({
                 name="repo_name"
                 label={`${terms.Repo} name`}
                 rules={[{ required: true, message: `Name the ${terms.repo}` }]}
-                extra={`Every assignment that opens ${terms.anIssue} in this ${terms.repo} shares it, so name the container rather than this one assignment.`}
+                extra={
+                  <>
+                    Every assignment that opens {terms.anIssue} in this {terms.repo} shares it, so
+                    name the container rather than this one assignment.
+                    {repoNamePreview}
+                  </>
+                }
               >
                 <Input placeholder="quizzes-2026" />
               </Form.Item>
@@ -718,39 +734,24 @@ const AssignmentFormModal = ({
                     </span>
                   )
                 }
-                options={templateOptions.map(t => ({
-                  value: t.full_name,
-                  label: (
-                    <span className="flex items-center justify-between gap-2">
-                      <span className="flex items-center gap-2">
-                        <span className="font-medium">{t.full_name}</span>
-                        {t.private && (
-                          <Tag color="gold" className="m-0">
-                            Private
-                          </Tag>
-                        )}
-                      </span>
-                      <span className="text-xs text-ink-3">
-                        {Number(t.stargazers_count) > 0 && `⭐${t.stargazers_count} `}
-                        {t.language ?? ''}
-                      </span>
+                options={groupTemplateOptions(templateOptions, t => (
+                  <span className="flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-2">
+                      <span className="font-medium">{t.full_name}</span>
+                      {t.private && (
+                        <Tag color="gold" className="m-0">
+                          Private
+                        </Tag>
+                      )}
                     </span>
-                  ),
-                }))}
+                    <span className="text-xs text-ink-3">
+                      {Number(t.stargazers_count) > 0 && `⭐${t.stargazers_count} `}
+                      {t.language ?? ''}
+                    </span>
+                  </span>
+                ))}
               />
             </Form.Item>
-
-            {/* Derived from the choices above, so it reads last, not as a field. */}
-            <div className="-mt-1 mb-6 flex w-fit flex-wrap items-center gap-2 rounded-lg bg-stone-100 dark:bg-neutral-800 px-3 py-2">
-              <IconArrowRight size={14} className="text-ink-3" aria-hidden />
-              <span className="text-sm text-ink-3">
-                {isTeam ? 'Each team gets' : 'Each student gets'}
-              </span>
-              <code className="rounded-md bg-stone-200/70 dark:bg-neutral-700 px-2 py-0.5 text-sm text-ink-1">
-                {repoSlug}-&lt;
-                {isTeam ? 'team' : web.isGitLab ? 'gitlab-username' : 'github-login'}&gt;
-              </code>
-            </div>
           </>
         ) : (
           <Form.Item

@@ -4,19 +4,10 @@ import { FormItem } from 'react-hook-form-antd';
 import { Select, Input, Spin, Tag } from 'antd';
 import { useDebounce } from '@uidotdev/usehooks';
 import { useGitWeb } from '~/hooks/useGitWeb';
+import { groupTemplateOptions, type TemplateRepository } from '~/utils/templateSearch';
 
-interface TemplateRepository {
-  name: string;
-  full_name: string;
-  description: string | null;
-  updated_at: string | null;
-  private: boolean;
-  language: string | null;
-  stargazers_count: number;
-}
-
-// Search the classroom org's repos (public + private) plus global public repos
-// via the server endpoint, which uses the org installation token. The
+// Search the classroom org's repos (public + private), then public templates
+// anywhere, via the server endpoint, which uses the org installation token. The
 // installation token is never exposed to the browser.
 const getAsyncData = async (query: string, classSlug: string): Promise<TemplateRepository[]> => {
   try {
@@ -116,27 +107,22 @@ const AsyncAutocomplete = ({
                   `Type to search for template ${terms.repos}`
                 )
               }
-              options={(data || []).map(d => ({
-                value: d.full_name,
-                label: (
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium">{d.full_name}</span>
-                      {d.private && (
-                        <Tag color="gold" className="m-0">
-                          Private
-                        </Tag>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2 text-xs text-gray-400">
-                      {Number(d.stargazers_count) > 0 && (
-                        <span>⭐{String(d.stargazers_count)}</span>
-                      )}
-                      {Boolean(d.language) && <span>{String(d.language)}</span>}
-                    </div>
+              options={groupTemplateOptions(data || [], d => (
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium">{d.full_name}</span>
+                    {d.private && (
+                      <Tag color="gold" className="m-0">
+                        Private
+                      </Tag>
+                    )}
                   </div>
-                ),
-              }))}
+                  <div className="flex items-center gap-2 text-xs text-gray-400">
+                    {Number(d.stargazers_count) > 0 && <span>⭐{String(d.stargazers_count)}</span>}
+                    {Boolean(d.language) && <span>{String(d.language)}</span>}
+                  </div>
+                </div>
+              ))}
             />
           </FormItem>
         </div>
