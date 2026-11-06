@@ -279,7 +279,7 @@ describe('quizzes resource source_material (quiz source material)', () => {
     expect(student.quizzes[0]).not.toHaveProperty('excluded_paths');
   });
 
-  it('staff get hint_cost and max_answers, null when the row has none', async () => {
+  it('staff and students get hint_cost and max_answers, null when the row has none', async () => {
     findByClassroom.mockResolvedValue([
       {
         id: 'q1',
@@ -299,6 +299,26 @@ describe('quizzes resource source_material (quiz source material)', () => {
     )) as { quizzes: Array<Record<string, unknown>> };
     expect(staff.quizzes[0]).toMatchObject({ hint_cost: 0, max_answers: 3 });
     expect(staff.quizzes[1]).toMatchObject({ hint_cost: null, max_answers: null });
+
+    // Students too: the quiz chat states both when an attempt starts.
+    getQuizzesForStudent.mockResolvedValue([
+      {
+        id: 'q1',
+        name: 'Quiz 1',
+        status: 'PUBLISHED',
+        weight: 0,
+        question_count: 3,
+        hint_cost: 0,
+        max_answers: 3,
+      },
+    ]);
+    const ctx = studentCtx();
+    (ctx.classroom as unknown as { classroom: { slug: string } }).classroom.slug =
+      'authorized-slug';
+    const student = (await quizzesResource.handler(VARS, ctx, new URL('classmoji://x'))) as {
+      quizzes: Array<Record<string, unknown>>;
+    };
+    expect(student.quizzes[0]).toMatchObject({ hint_cost: 0, max_answers: 3 });
   });
 
   it('staff and students both get code_sandbox_enabled, false when the row has none', async () => {
