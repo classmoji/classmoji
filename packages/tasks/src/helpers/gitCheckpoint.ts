@@ -595,6 +595,8 @@ export async function commitFilesToRemote(input: CommitFilesInput): Promise<Comm
       } catch (error) {
         if (attempts >= maxAttempts || !isNonFastForward(error)) throw error;
         const before = await repo.packCount();
+        // The fully-qualified ref, so the branch name is always read as a
+        // refspec.
         await repo.git([
           'fetch',
           '--depth',
@@ -602,7 +604,7 @@ export async function commitFilesToRemote(input: CommitFilesInput): Promise<Comm
           '--filter=blob:none',
           '--no-tags',
           'origin',
-          branch,
+          `refs/heads/${branch}`,
         ]);
         explicitPacks += (await repo.packCount()) - before;
         const previous = parent;

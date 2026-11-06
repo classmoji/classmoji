@@ -9,6 +9,20 @@ import { ClassmojiService, getGitProvider, type GitLabProvider } from '@classmoj
 type GitOrganizationLike = Parameters<typeof getGitProvider>[0] & { login: string | null };
 
 /**
+ * The template's default branch as a fully-qualified ref, so `git pull` always
+ * reads it as a refspec. (`git pull` hands its refspecs on to `git fetch`
+ * without a `--`, so a separator on the pull itself would not carry over.)
+ * The merge it makes is the same as with the short name.
+ */
+export const branchRef = (branch: string): string => `refs/heads/${branch}`;
+
+/**
+ * `git checkout updates --`: the `--` makes `updates` the branch even when the
+ * repository also holds a top-level file of that name.
+ */
+const UPDATES_BRANCH = ['updates', '--'];
+
+/**
  * The template's HEAD, read through the `template` remote. A template that is
  * gone or unreadable is the instructor's to fix (it was renamed, deleted or made
  * private), so the run stops with that, not git's "repository not found".
@@ -91,7 +105,7 @@ export const updateRepository = async (
       logger.info('Updates branch does not exist, creating it from template');
       await studentGit.checkoutLocalBranch('updates');
     } else {
-      await studentGit.checkout('updates');
+      await studentGit.checkout(UPDATES_BRANCH);
     }
 
     try {
@@ -123,7 +137,11 @@ export const updateRepository = async (
       };
     }
 
-    await studentGit.pull('template', templateDefaultBranch, ['-X', 'theirs', '--no-edit']);
+    await studentGit.pull('template', branchRef(templateDefaultBranch), [
+      '-X',
+      'theirs',
+      '--no-edit',
+    ]);
     await studentGit.push('origin', 'updates', ['--force']);
 
     const { data: repoMeta } = await octokit.rest.repos.get({
@@ -214,7 +232,7 @@ async function updateGitLabRepository(
     await studentGit.addConfig('pull.rebase', 'false');
 
     const branches = await studentGit.branch();
-    if (branches.all.includes('remotes/origin/updates')) await studentGit.checkout('updates');
+    if (branches.all.includes('remotes/origin/updates')) await studentGit.checkout(UPDATES_BRANCH);
     else await studentGit.checkoutLocalBranch('updates');
 
     await studentGit.addRemote('template', remote(`${templateOwner}/${templateRepo}`));
@@ -223,7 +241,7 @@ async function updateGitLabRepository(
     if (!templateDefaultBranch) {
       return { message: 'Template is empty — nothing to sync', prUrl: '', hasChanges: false };
     }
-    await studentGit.pull('template', templateDefaultBranch, [
+    await studentGit.pull('template', branchRef(templateDefaultBranch), [
       '-X',
       'theirs',
       '--no-edit',
