@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 /**
- * The syllabus bot's tier decision.
+ * Ask Moji's (the syllabus bot's) tier decision.
  *
  * The property that matters is NOT "does it say Pro sometimes" — it is that it
  * delegates to `getProStateForClassroomId`, the one function that owns what
@@ -13,7 +13,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
  */
 
 const getProStateForClassroomIdMock = vi.fn();
-const findUniqueConversationMock = vi.fn();
 const findUniqueSettingsMock = vi.fn();
 
 vi.mock('../subscription.service.ts', () => ({
@@ -22,7 +21,6 @@ vi.mock('../subscription.service.ts', () => ({
 
 vi.mock('@classmoji/database', () => ({
   default: () => ({
-    aIConversation: { findUnique: (...a: unknown[]) => findUniqueConversationMock(...a) },
     classroomSettings: { findUnique: (...a: unknown[]) => findUniqueSettingsMock(...a) },
   }),
 }));
@@ -118,39 +116,6 @@ describe('canUseQuizzes', () => {
     const { canUseQuizzes } = await import('../entitlement.service.ts');
 
     expect(await canUseQuizzes(CLASSROOM_ID)).toEqual({
-      allowed: false,
-      reason: 'pro_required',
-    });
-  });
-});
-
-describe('canUseSyllabusBotForConversation', () => {
-  it('resolves the conversation to its classroom and gates on that', async () => {
-    findUniqueConversationMock.mockResolvedValue({ classroom_id: CLASSROOM_ID });
-    getProStateForClassroomIdMock.mockResolvedValue({ isPro: true });
-    const { canUseSyllabusBotForConversation } = await import('../entitlement.service.ts');
-
-    expect(await canUseSyllabusBotForConversation('conv-1')).toEqual({ allowed: true });
-    expect(getProStateForClassroomIdMock).toHaveBeenCalledWith(CLASSROOM_ID);
-  });
-
-  it('denies an unknown conversation as not_found, never as pro_required', async () => {
-    findUniqueConversationMock.mockResolvedValue(null);
-    const { canUseSyllabusBotForConversation } = await import('../entitlement.service.ts');
-
-    expect(await canUseSyllabusBotForConversation('nope')).toEqual({
-      allowed: false,
-      reason: 'not_found',
-    });
-    expect(getProStateForClassroomIdMock).not.toHaveBeenCalled();
-  });
-
-  it('denies when the conversation resolves to a non-Pro classroom', async () => {
-    findUniqueConversationMock.mockResolvedValue({ classroom_id: CLASSROOM_ID });
-    getProStateForClassroomIdMock.mockResolvedValue({ isPro: false });
-    const { canUseSyllabusBotForConversation } = await import('../entitlement.service.ts');
-
-    expect(await canUseSyllabusBotForConversation('conv-1')).toEqual({
       allowed: false,
       reason: 'pro_required',
     });

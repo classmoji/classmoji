@@ -36,7 +36,6 @@ import type { Role } from '@prisma/client';
 import {
   ASK_MOJI_WELCOME,
   isAskMojiRole,
-  isAskMojiTriggerRuntime,
   suggestionsForRole,
   type AskMojiAvailabilityCode,
   type AskMojiRefusalCode,
@@ -81,28 +80,21 @@ export interface AskMojiAccess {
 export const isTriggerConfigured = () =>
   Boolean(process.env.TRIGGER_SECRET_KEY || process.env.TRIGGER_ACCESS_TOKEN);
 
-/**
- * The rollout switch (`askMojiRuntime`, one parse for every app): `trigger`
- * serves Ask Moji on the Trigger runtime; anything else does not.
- */
-export const askMojiRuntimeIsTrigger = () => isAskMojiTriggerRuntime();
-
 export type AskMojiAvailability =
   | { available: true }
   | { available: false; reason: AskMojiAvailabilityCode };
 
 /**
- * Whether Ask Moji runs in this classroom on this runtime, and if not why
+ * Whether Ask Moji runs in this classroom, and if not why
  * (`ASK_MOJI_AVAILABILITY_COPY` has a staff line per reason; members see
- * `ASK_MOJI_COPY.UNAVAILABLE`). In order: the switch (`askMojiRuntime() ===
- * 'trigger'`), Trigger configured, an Anthropic key (the platform's
- * `ANTHROPIC_API_KEY` or the classroom's own), Pro (`canUseSyllabusBot`; a
- * failed lookup reads as not Pro), `syllabus_bot_enabled`.
+ * `ASK_MOJI_COPY.UNAVAILABLE`). In order: Trigger configured, an Anthropic
+ * key (the platform's `ANTHROPIC_API_KEY` or the classroom's own), Pro
+ * (`canUseSyllabusBot`; a failed lookup reads as not Pro),
+ * `syllabus_bot_enabled`.
  */
 export const askMojiAvailable = async (i: {
   classroomId: string;
 }): Promise<AskMojiAvailability> => {
-  if (!askMojiRuntimeIsTrigger()) return { available: false, reason: 'RUNTIME_OFF' };
   if (!isTriggerConfigured()) return { available: false, reason: 'TRIGGER_NOT_CONFIGURED' };
   const settings = await getPrisma().classroomSettings.findUnique({
     where: { classroom_id: i.classroomId },

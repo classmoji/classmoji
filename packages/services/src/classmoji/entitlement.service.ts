@@ -8,7 +8,7 @@ import * as subscriptionService from './subscription.service.ts';
  * does, and every gate delegates to it so they cannot disagree. Quizzes reach
  * it through the webapp's `assertProTier` and the MCP's copy in
  * `apps/mcp/src/resources/content.ts` (and their settings switch through
- * `canUseQuizzes` here); the syllabus bot reaches it through here.
+ * `canUseQuizzes` here); Ask Moji reaches it through here.
  * Reimplementing the tier rules (owner resolution, `ends_at`) in this file
  * would recreate the drift those call sites were consolidated to avoid.
  *
@@ -24,7 +24,7 @@ import * as subscriptionService from './subscription.service.ts';
  * by every user) would otherwise pay.
  */
 
-export type EntitlementDenialReason = 'pro_required' | 'not_found';
+export type EntitlementDenialReason = 'pro_required';
 
 export type EntitlementResult =
   | { allowed: true }
@@ -32,17 +32,16 @@ export type EntitlementResult =
 
 const ALLOWED: EntitlementResult = { allowed: true };
 const PRO_REQUIRED: EntitlementResult = { allowed: false, reason: 'pro_required' };
-const NOT_FOUND: EntitlementResult = { allowed: false, reason: 'not_found' };
 
 /**
- * Whether the syllabus bot may be served for this classroom.
+ * Whether Ask Moji (stored as the syllabus bot) may be served for this
+ * classroom.
  *
  * Pro-only, matching quizzes. Bring-your-own-key is intentionally NOT an access
- * path: `apps/ai-agent/src/llm/services/syllabusBot.js` falls back to the
- * platform key when the classroom key is empty, so "has a key" is not a safe
- * entitlement signal, and a non-empty key is not necessarily a working one. If
- * BYOK ever becomes a deliberate tier it should be designed once across every
- * AI feature — changing it starts here.
+ * path: Ask Moji falls back to the platform key when the classroom key is
+ * empty, so "has a key" is not a safe entitlement signal, and a non-empty key
+ * is not necessarily a working one. If BYOK ever becomes a deliberate tier it
+ * should be designed once across every AI feature — changing it starts here.
  */
 export const canUseSyllabusBot = async (classroomId: string): Promise<EntitlementResult> => {
   const { isPro } = await subscriptionService.getProStateForClassroomId(classroomId);
@@ -50,8 +49,8 @@ export const canUseSyllabusBot = async (classroomId: string): Promise<Entitlemen
 };
 
 /**
- * Whether AI quizzes may be turned on for this classroom. Same rule as the
- * syllabus bot, through the same resolver the webapp's `assertProTier` serves
+ * Whether AI quizzes may be turned on for this classroom. Same rule as Ask
+ * Moji, through the same resolver the webapp's `assertProTier` serves
  * quizzes by, so the settings switch and the quiz routes cannot disagree. A
  * classroom's own key is not an access path here either.
  */
@@ -105,27 +104,4 @@ export const isAIAgentConfigured = (): boolean =>
 export const quizzesVisibleOrThrow = async (classroomId: string): Promise<boolean> => {
   if (!isAIAgentConfigured()) return false;
   return quizzesVisible(classroomId);
-};
-
-/**
- * Same check, addressed by conversation — for the SSE stream route, which only
- * knows a conversation id.
- *
- * An unknown conversation is denied: the stream has no legitimate use for one
- * that does not exist. Reported as 'not_found' rather than 'pro_required' so a
- * data-integrity problem never renders to an owner as "buy Pro".
- */
-export const canUseSyllabusBotForConversation = async (
-  conversationId: string
-): Promise<EntitlementResult> => {
-  const conversation = await getPrisma().aIConversation.findUnique({
-    where: { id: conversationId },
-    select: { classroom_id: true },
-  });
-
-  if (!conversation) {
-    return NOT_FOUND;
-  }
-
-  return canUseSyllabusBot(conversation.classroom_id);
 };

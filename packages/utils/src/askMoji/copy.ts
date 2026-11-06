@@ -39,9 +39,8 @@ export function suggestionsForRole(role: AskMojiRole | string): readonly AskMoji
 }
 
 /**
- * Every fixed line, by code. The first block is today's wording, word for
- * word (the webapp's syllabus-bot route and hook, the ai-agent's error
- * lines); the rest is new with the Trigger runtime.
+ * Every fixed line, by code. The first block is the wording Ask Moji has
+ * always used; the rest came with the chat agent.
  */
 export const ASK_MOJI_COPY = {
   INIT_FAILED: 'Could not start the assistant. Please try again.',
@@ -100,7 +99,6 @@ export const ASK_MOJI_STARTING = 'Reading the course materials…';
  * see `ASK_MOJI_COPY.UNAVAILABLE` whatever the reason.
  */
 export const ASK_MOJI_AVAILABILITY_COPY = {
-  RUNTIME_OFF: "Ask Moji isn't switched on for this server yet.",
   TRIGGER_NOT_CONFIGURED: "Ask Moji isn't set up on this server.",
   NO_API_KEY: 'Ask Moji needs an Anthropic API key: add one in AI settings.',
   PRO_REQUIRED: 'Ask Moji needs a Pro subscription.',

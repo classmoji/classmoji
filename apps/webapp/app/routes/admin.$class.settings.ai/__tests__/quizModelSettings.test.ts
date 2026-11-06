@@ -43,8 +43,7 @@ vi.mock('@classmoji/services', () => ({
       canUseQuizzes: (...a: unknown[]) => mocks.canUseQuizzes(...a),
     },
     askMojiSession: {
-      askMojiRuntimeIsTrigger: () => false,
-      askMojiAvailable: vi.fn(),
+      askMojiAvailable: async () => ({ available: true }),
     },
   },
   ClassroomSettingsEntitlementError: mocks.EntitlementError,

@@ -247,32 +247,23 @@ export type SlideAccessVia =
  *
  * Every condition must hold: let in as a member of the deck's classroom (not
  * as the public or through a share code), an ACCEPTED member of it, Ask Moji
- * switched on for the classroom, the Trigger runtime selected
- * (`triggerRuntime`: the shared `isAskMojiTriggerRuntime()` parse, read by the
- * server module), and a usable webapp origin. This is for the UI only; the
+ * switched on for the classroom, and a usable webapp origin. This is for the UI only; the
  * embed route enforces the real gates.
  */
 export function askMojiHostDecision({
   via,
   acceptedRole,
   botEnabled,
-  triggerRuntime,
   webappUrl,
 }: {
   via: SlideAccessVia | undefined;
   acceptedRole: string | null | undefined;
   botEnabled: boolean | null | undefined;
-  triggerRuntime: boolean;
   webappUrl: string | null | undefined;
 }): { enabled: boolean; origin: string | null } {
   const origin = originOf(webappUrl);
   const memberAccess =
     via === 'membership' || via === 'role' || via === 'ownership' || via === 'team_edit';
-  const enabled =
-    memberAccess &&
-    triggerRuntime &&
-    Boolean(origin) &&
-    Boolean(acceptedRole) &&
-    botEnabled === true;
+  const enabled = memberAccess && Boolean(origin) && Boolean(acceptedRole) && botEnabled === true;
   return enabled ? { enabled: true, origin } : { enabled: false, origin: null };
 }

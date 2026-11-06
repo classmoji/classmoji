@@ -8,9 +8,9 @@
  * strings (better-auth 1.4.18, node_modules/better-auth/dist/plugins/mcp/index.mjs
  * :406-421). There is nothing to sign and nothing to forge, so a row written here
  * validates identically to one minted through the browser — which is exactly what
- * apps/mcp/src/routes/devMint.ts already relies on. The webapp holds the user's
- * session on every Ask Moji turn, so re-minting is free and no browser hop and no
- * refresh grant is ever needed.
+ * apps/mcp/src/routes/devMint.ts already relies on. The caller already knows whose
+ * turn it is on every Ask Moji turn, so re-minting is free and no browser hop and
+ * no refresh grant is ever needed.
  *
  * This couples us to better-auth's plaintext token storage. So does
  * apps/mcp/src/auth/resolveViewer.ts, which reads the row shape directly. A
@@ -128,9 +128,8 @@ function isUniqueConstraintViolation(error: unknown): boolean {
  * the realistic wait is milliseconds and these ceilings exist for the pathological
  * case (a saturated pool, a stalled connection) rather than the normal one.
  *
- * Both FAIL CLOSED. A timeout throws out of `mintMcpAccessToken`, which
- * apps/webapp/app/routes/api.syllabus-bot.$class/route.ts turns into a 500 for
- * that turn. That is the intended outcome: the alternative — proceeding without a
+ * Both FAIL CLOSED. A timeout throws out of `mintMcpAccessToken`, and the turn
+ * that asked for the token fails. That is the intended outcome: the alternative — proceeding without a
  * token, or reusing a previous turn's — is precisely what the per-turn mint
  * exists to prevent. The turn is lost; the next one re-mints.
  */
@@ -170,8 +169,8 @@ async function findReusableToken(client: MintTx, userId: string): Promise<Minted
  * Mint (or reuse) a read-only MCP access token for `userId`.
  *
  * The caller must already have proven the user's identity — this function does no
- * authentication of its own. It is called from an already-authenticated webapp
- * request, once per Ask Moji turn.
+ * authentication of its own. It is called once per agent turn, by a caller that
+ * has already established whose turn it is.
  *
  * @throws if `userId` is empty — minting an unbound token would produce a bearer
  *   that `resolveViewer` rejects anyway, and a silent no-op here would be worse.

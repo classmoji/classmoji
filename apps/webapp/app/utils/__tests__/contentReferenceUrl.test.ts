@@ -86,30 +86,6 @@ describe('platform_docs references', () => {
   });
 });
 
-describe('the chip the widget draws for a reference', () => {
-  /**
-   * WHAT THIS BLOCK NO LONGER DOES.
-   *
-   * It used to grep `SyllabusBotChat.tsx` for `if (!url)` and a `<span>`, which
-   * is a test that the source contains a branch — not a test that a null-URL
-   * reference renders as a label. That markup now lives in
-   * `ContentReferenceChips`, and
-   * `components/features/syllabus-bot/__tests__/ContentReferenceChips.test.tsx`
-   * asserts it against the HTML React actually produces.
-   *
-   * What is left here is the one claim the render test cannot make: the chip's
-   * single class has to be correct in BOTH themes, which is a CSS fact.
-   */
-  it('the chip class is themed by variables the panel redefines in dark mode', () => {
-    const css = readFileSync(
-      new URL('../../components/features/syllabus-bot/styles.css', import.meta.url),
-      'utf8'
-    );
-    expect(css).toMatch(/\.askmoji-ref \{[\s\S]*?var\(--am-ref-bg\)/);
-    expect(css).toMatch(/\.dark \.askmoji-panel/);
-  });
-});
-
 describe('normalizeAssistantText', () => {
   it('collapses an invented <referenced_content> tag to its title', () => {
     expect(

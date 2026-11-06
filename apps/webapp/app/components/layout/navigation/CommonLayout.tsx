@@ -113,12 +113,12 @@ const CommonLayout = ({
         user?: AppUser | null;
         memberships?: MembershipWithOrganization[];
         aiAgentAvailable?: boolean;
-        askMoji?: { runtime?: string; available?: boolean };
+        askMoji?: { available?: boolean };
       }
     | undefined;
   const { user, memberships = [], aiAgentAvailable = false } = rootData ?? {};
-  // The root loader's `askMojiAvailable` for this classroom (Trigger runtime, a
-  // member). The insights entry follows it, like the sidebar button.
+  // The root loader's `askMojiAvailable` for this classroom (for a member).
+  // The insights entry follows it, like the sidebar button.
   const askMojiAvailable = rootData?.askMoji?.available === true;
   const { isProTier: storeIsProTier } = useSubscription();
   const isProTier = isPro ?? storeIsProTier;
@@ -128,9 +128,7 @@ const CommonLayout = ({
   const askMojiActive = useStore(s => s.askMojiActive);
   const setAskMojiOpen = useStore(s => s.setAskMojiOpen);
   // A route that hides Ask Moji (a live quiz attempt) hides its button too.
-  // The Trigger runtime only: the legacy widget's path stays as it was.
-  const askMojiHideRequested = useStore(s => s.askMojiHideCount > 0);
-  const askMojiHidden = askMojiHideRequested && rootData?.askMoji?.runtime === 'trigger';
+  const askMojiHidden = useStore(s => s.askMojiHideCount > 0);
   const { isDarkMode, background: tweaksBackground } = useDarkMode();
 
   // Effective student-nav visibility: prefer the fresh value from the layout

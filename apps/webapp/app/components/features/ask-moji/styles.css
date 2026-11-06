@@ -1,6 +1,5 @@
-/* Ask Moji panel (the Trigger runtime). Own `moji-` prefix: the legacy
-   widget's `askmoji-` styles are loaded alongside until it is deleted. Colours
-   come from the shared tokens (tokens.css), which switch with `.dark`. */
+/* Ask Moji panel. Own `moji-` prefix. Colours come from the shared tokens
+   (tokens.css), which switch with `.dark`. */
 
 .moji-panel {
   --mj-bg: var(--panel);

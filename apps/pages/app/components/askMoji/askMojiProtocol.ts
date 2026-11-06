@@ -166,27 +166,22 @@ export function isAskMojiTarget(target: unknown): boolean {
  * Who gets the launcher, decided on the server from facts the server derived.
  *
  * Every condition must hold: an ACCEPTED member of this classroom, Ask Moji
- * switched on for it, the Trigger runtime selected (`triggerRuntime`: the
- * shared `isAskMojiTriggerRuntime()` parse, read by the server module), a
- * usable webapp origin, and not inside the webapp's own reader frame (it
+ * switched on for it, a usable webapp origin, and not inside the webapp's own reader frame (it
  * shows its own panel). This is for the UI only; the embed route enforces
  * the real gates.
  */
 export function askMojiHostDecision({
   acceptedRole,
   botEnabled,
-  triggerRuntime,
   webappUrl,
   embedded,
 }: {
   acceptedRole: string | null | undefined;
   botEnabled: boolean | null | undefined;
-  triggerRuntime: boolean;
   webappUrl: string | null | undefined;
   embedded: boolean;
 }): { enabled: boolean; origin: string | null } {
   const origin = originOf(webappUrl);
-  const enabled =
-    !embedded && triggerRuntime && Boolean(origin) && Boolean(acceptedRole) && botEnabled === true;
+  const enabled = !embedded && Boolean(origin) && Boolean(acceptedRole) && botEnabled === true;
   return enabled ? { enabled: true, origin } : { enabled: false, origin: null };
 }

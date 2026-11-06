@@ -18,20 +18,20 @@ export interface AskMojiRootConfig {
 const CLASSROOM_PATH = /^\/(student|admin|teacher|assistant)\/([^/]+)/;
 
 /**
- * The webapp's Ask Moji (the Trigger runtime): the floating panel the sidebar
- * button opens. Mounted once in the root, keyed on classroom + view (the URL's
- * role prefix), so moving to another classroom or view is a new panel, while
- * moving between pages of the same one keeps the conversation (and a reply
- * still streaming) as it is.
+ * The webapp's Ask Moji: the floating panel the sidebar button opens. Mounted
+ * once in the root, keyed on classroom + view (the URL's role prefix), so
+ * moving to another classroom or view is a new panel, while moving between
+ * pages of the same one keeps the conversation (and a reply still streaming)
+ * as it is.
  *
  * Shown only when the root loader says Ask Moji is available here; hidden on
  * a route that asks for it (`useHideAskMoji`, a live quiz attempt), without
  * unmounting.
  *
- * Loading: the root lazy-loads this module only on the Trigger runtime where
- * Ask Moji is available, and this module lazy-loads the panel (the AI SDK,
- * the Trigger transport, the Markdown renderer) the first time it opens. The
- * sidebar button needs only the store flags set here.
+ * Loading: the root lazy-loads this module only where Ask Moji is available,
+ * and this module lazy-loads the panel (the AI SDK, the Trigger transport, the
+ * Markdown renderer) the first time it opens. The sidebar button needs only
+ * the store flags set here.
  */
 export default function AskMojiRoot({ config }: { config: AskMojiRootConfig }) {
   const { pathname } = useLocation();

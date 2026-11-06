@@ -12,8 +12,6 @@ export const AI_SETTINGS_AUDIT_TOOL = 'web:settings.ai';
 export const INSTRUCTIONS_ERROR_COPY = {
   INSTRUCTIONS_INVALID: 'Ask Moji instructions must be text.',
   INSTRUCTIONS_TOO_LONG: `Ask Moji instructions can be at most ${INSTRUCTIONS_MAX_CHARS.toLocaleString('en-US')} characters.`,
-  /** Not a validation code: the save was refused because this server's Ask Moji does not read them. */
-  INSTRUCTIONS_UNAVAILABLE: "Ask Moji instructions aren't available on this server.",
 } as const;
 
 /** The validation codes updateSettings may refuse an instructions save with. */

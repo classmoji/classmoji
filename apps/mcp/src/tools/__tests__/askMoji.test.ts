@@ -364,23 +364,20 @@ describe('who may call them', () => {
 // ─── Availability ───────────────────────────────────────────────────────────
 
 describe('availability', () => {
-  it.each(INSIGHT_TOOLS)(
-    '%s: refused while not Pro, switched off or on another runtime',
-    async name => {
-      for (const reason of ['PRO_REQUIRED', 'NOT_ENABLED', 'RUNTIME_OFF', 'NO_API_KEY']) {
-        mocks.askMojiAvailable.mockResolvedValueOnce({ available: false, reason });
-        const result = await call(viewer('owner-x'), name, argsFor(name, 'org/x'));
-        expect(result.isError, reason).toBe(true);
-        expect(body(result)).toMatchObject({ error: 'forbidden', code: reason });
-        expect(typeof body(result).message).toBe('string');
-      }
-      expect(mocks.askMojiAvailable).toHaveBeenCalledWith({ classroomId: 'class-x' });
-      expect(mocks.usage).not.toHaveBeenCalled();
-      expect(mocks.feedbackReview).not.toHaveBeenCalled();
-      expect(mocks.exchange).not.toHaveBeenCalled();
-      expect(rows()).toHaveLength(0);
+  it.each(INSIGHT_TOOLS)('%s: refused while not Pro, switched off or not set up', async name => {
+    for (const reason of ['PRO_REQUIRED', 'NOT_ENABLED', 'TRIGGER_NOT_CONFIGURED', 'NO_API_KEY']) {
+      mocks.askMojiAvailable.mockResolvedValueOnce({ available: false, reason });
+      const result = await call(viewer('owner-x'), name, argsFor(name, 'org/x'));
+      expect(result.isError, reason).toBe(true);
+      expect(body(result)).toMatchObject({ error: 'forbidden', code: reason });
+      expect(typeof body(result).message).toBe('string');
     }
-  );
+    expect(mocks.askMojiAvailable).toHaveBeenCalledWith({ classroomId: 'class-x' });
+    expect(mocks.usage).not.toHaveBeenCalled();
+    expect(mocks.feedbackReview).not.toHaveBeenCalled();
+    expect(mocks.exchange).not.toHaveBeenCalled();
+    expect(rows()).toHaveLength(0);
+  });
 
   it('ask_moji_settings_get answers while unavailable, and says why', async () => {
     mocks.askMojiAvailable.mockResolvedValueOnce({ available: false, reason: 'PRO_REQUIRED' });

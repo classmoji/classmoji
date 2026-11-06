@@ -180,7 +180,6 @@ test.describe('who gets the launcher', () => {
   const on = {
     acceptedRole: 'STUDENT',
     botEnabled: true,
-    triggerRuntime: true,
     webappUrl: 'https://classmoji.io/',
     embedded: false,
   };
@@ -208,10 +207,9 @@ test.describe('who gets the launcher', () => {
     });
   });
 
-  test('not when the classroom has Ask Moji off, or another runtime is selected', () => {
+  test('not when the classroom has Ask Moji off', () => {
     expect(askMojiHostDecision({ ...on, botEnabled: false }).enabled).toBe(false);
     expect(askMojiHostDecision({ ...on, botEnabled: null }).enabled).toBe(false);
-    expect(askMojiHostDecision({ ...on, triggerRuntime: false }).enabled).toBe(false);
   });
 
   test('not without a usable webapp origin', () => {
@@ -255,13 +253,10 @@ test.describe('where the host is mounted', () => {
     expect(LAYOUT).toContain('userId: authData?.userId,');
     expect(LAYOUT).toContain('embedded: isEmbedded,');
     expect(SERVER).toContain('acceptedOnly: true,');
-    // The shared parse, never a local `=== 'trigger'` of the variable.
-    expect(SERVER).toContain('triggerRuntime: isAskMojiTriggerRuntime(),');
-    expect(SERVER).not.toContain('process.env.ASK_MOJI_RUNTIME');
   });
 
   test("the final say is the webapp's availability rule, asked for accepted members only", () => {
-    // Pro, the runtime switch, Trigger, a key and the classroom switch: the
+    // Pro, Trigger, a key and the classroom switch: the
     // same rule the webapp's panel uses, not a copy of it.
     const membership = SERVER.indexOf('await findClassroomRole({');
     const memberGate = SERVER.indexOf('if (!decision.enabled) return DISABLED;', membership);

@@ -73,7 +73,6 @@ const render = (
     askMojiProRequired?: boolean;
     askMojiToggleAvailable?: boolean;
     askMojiUnavailableLine?: string | null;
-    askMojiInstructionsShown?: boolean;
   } = {}
 ) => {
   const props = {
@@ -87,9 +86,8 @@ const render = (
       },
       allowedModels: MODELS,
       aiAgentAvailable,
-      askMojiToggleAvailable: extra.askMojiToggleAvailable ?? aiAgentAvailable,
+      askMojiToggleAvailable: extra.askMojiToggleAvailable ?? true,
       askMojiUnavailableLine: extra.askMojiUnavailableLine ?? null,
-      askMojiInstructionsShown: extra.askMojiInstructionsShown ?? true,
       quizzesProRequired: extra.quizzesProRequired ?? false,
       askMojiProRequired: extra.askMojiProRequired ?? false,
       defaultLabels: DEFAULT_LABELS,
@@ -266,7 +264,7 @@ describe('AI settings: Ask Moji availability', () => {
   });
 
   it('keeps the Ask Moji switch usable while the AI agent is down, when Ask Moji can run', () => {
-    const html = render(true, ALL_NULL, false, { askMojiToggleAvailable: true });
+    const html = render(true, ALL_NULL, false);
 
     expect(switches(html)[1]).toEqual({ checked: true, disabled: false });
   });
@@ -287,11 +285,5 @@ describe('AI settings: Ask Moji instructions', () => {
   it('shows an empty field when there are none', () => {
     const html = render(true, ALL_NULL);
     expect(html).toMatch(/<textarea[^>]*id="syllabus_bot_instructions"[^>]*><\/textarea>/i);
-  });
-
-  it('shows no field and no save off the Trigger runtime', () => {
-    const html = render(true, ALL_NULL, true, { askMojiInstructionsShown: false });
-    expect(html).not.toContain('syllabus_bot_instructions');
-    expect(html).not.toContain('Save instructions');
   });
 });

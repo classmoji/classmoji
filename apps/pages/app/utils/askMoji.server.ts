@@ -4,17 +4,16 @@
  *
  * Derived only from the session user and the classroom row the loader read,
  * never from anything the client sent. In order, cheapest first:
- *   1. no query: signed in, not embedded, the runtime switch, a configured
- *      webapp origin (`askMojiHostDecision`), and the row's own
- *      `syllabus_bot_enabled` when it already says off;
+ *   1. no query: signed in, not embedded, a configured webapp origin
+ *      (`askMojiHostDecision`), and the row's own `syllabus_bot_enabled` when
+ *      it already says off;
  *   2. one query: an ACCEPTED member of this classroom;
  *   3. members only: `askMojiSession.askMojiAvailable`, the webapp's own rule
- *      (runtime, Trigger configured, an Anthropic key, Pro, switched on).
+ *      (Trigger configured, an Anthropic key, Pro, switched on).
  * So a non-member or a classroom without Ask Moji never costs the
  * availability queries. This is for the UI only; the webapp's embed route
  * enforces the real gates.
  */
-import { isAskMojiTriggerRuntime } from '@classmoji/utils/ask-moji';
 import { askMojiHostDecision } from '~/components/askMoji/askMojiProtocol.ts';
 import { findClassroomRole } from '~/utils/classroomRole.server.ts';
 import { ClassmojiService } from '~/utils/db.server.ts';
@@ -39,8 +38,6 @@ export async function askMojiHostData({
   const base = {
     // Availability decides below; this only lets the pure checks run first.
     botEnabled: true,
-    // The one ASK_MOJI_RUNTIME parse every app shares.
-    triggerRuntime: isAskMojiTriggerRuntime(),
     webappUrl: process.env.WEBAPP_URL,
     embedded,
   };

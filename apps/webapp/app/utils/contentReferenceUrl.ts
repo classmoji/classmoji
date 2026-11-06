@@ -1,8 +1,7 @@
 /**
  * Content Reference URL Builder
  *
- * Converts structured content references from the syllabus bot
- * into clickable URLs.
+ * Converts structured content references from Ask Moji into clickable URLs.
  *
  * Routes supported:
  * - {pagesUrl}/{classroomSlug}/{pageId} - External pages app URL
@@ -18,7 +17,7 @@ import { docsUrl } from '@classmoji/utils';
 /**
  * Build a URL for a content reference
  *
- * @param {Object} reference - Content reference from syllabus bot
+ * @param {Object} reference - Content reference from Ask Moji
  * @param {string} reference.referenceType - Type: 'page', 'slides', 'platform_docs'
  * @param {string} reference.contentPath - UUID for page/slides, or doc identifier for platform_docs
  * @param {string} classroomSlug - Classroom slug for URL routing
@@ -100,34 +99,6 @@ export function buildContentReferenceUrl(
       console.warn('[contentReferenceUrl] Unknown reference type:', referenceType);
       return null;
   }
-}
-
-/**
- * Process bot response text to replace content reference JSON with links
- *
- * @param {string} text - Bot response text (may contain JSON content references)
- * @param {Array} references - Parsed content references
- * @param {string} classroomSlug - Classroom slug for URL routing
- * @returns {string} - Text with references replaced by markdown links
- */
-export function processResponseReferences(
-  text: string,
-  references: ContentReferenceInput[] | null,
-  _classroomSlug: string
-) {
-  if (!references || references.length === 0) return text;
-
-  let processedText = text;
-
-  // Remove JSON content reference objects from the text
-  // They appear as: {"type":"content_reference",...}
-  const jsonRegex = /\{"type":\s*"content_reference"[^}]+\}/g;
-  processedText = processedText.replace(jsonRegex, '').trim();
-
-  // References are usually rendered separately in the UI,
-  // so we just clean up the response text here
-
-  return processedText;
 }
 
 /**

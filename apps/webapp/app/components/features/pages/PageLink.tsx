@@ -6,10 +6,10 @@ import { usePagePeek } from './PagePeekProvider';
  *
  * Inside the student/assistant shell (where PagePeekProvider is mounted) it is
  * a button that opens the peek drawer — reading a linked page never navigates
- * away from the tree or calendar you clicked it from. Anywhere else — admin
- * routes, the app-root syllabus-bot overlay — there is no provider and it
- * degrades to exactly the anchor those surfaces rendered before, so converting
- * a shared component does not change admin behaviour.
+ * away from the tree or calendar you clicked it from. Anywhere else (admin
+ * routes, for one) there is no provider and it degrades to exactly the anchor
+ * those surfaces rendered before, so converting a shared component does not
+ * change admin behaviour.
  */
 
 export interface PageLinkProps {

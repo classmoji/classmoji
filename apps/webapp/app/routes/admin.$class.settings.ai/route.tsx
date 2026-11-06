@@ -136,29 +136,20 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     ClassmojiService.entitlement.canUseSyllabusBot(classroom.id),
   ]);
 
-  // Whether the Ask Moji switch can be used. On the Trigger runtime
-  // (ASK_MOJI_RUNTIME=trigger) that is askMojiAvailable, where "switched off
-  // for this class" is the one reason the switch itself fixes; on the AI agent
-  // runtime it is the agent being configured.
+  // The quiz switch needs the AI agent configured.
   const aiAgentAvailable = isAIAgentConfigured();
-  let askMojiToggleAvailable = aiAgentAvailable;
-  let askMojiUnavailableLine: string | null = null;
-  // The one runtime parse (`isAskMojiTriggerRuntime`, through the service).
-  // The instructions exist only on the Trigger runtime: the AI agent never
-  // reads them, so off it the page neither shows nor saves them.
-  const askMojiTrigger = ClassmojiService.askMojiSession.askMojiRuntimeIsTrigger();
-  if (askMojiTrigger) {
-    const availability = await ClassmojiService.askMojiSession.askMojiAvailable({
-      classroomId: classroom.id,
-    });
-    const reason = availability.available ? null : availability.reason;
-    askMojiToggleAvailable = reason === null || reason === 'NOT_ENABLED';
-    // PRO_REQUIRED has the upsell below; NOT_ENABLED is the switch's own state.
-    askMojiUnavailableLine =
-      reason && reason !== 'NOT_ENABLED' && reason !== 'PRO_REQUIRED'
-        ? ASK_MOJI_AVAILABILITY_COPY[reason]
-        : null;
-  }
+  // Whether the Ask Moji switch can be used: askMojiAvailable, where
+  // "switched off for this class" is the one reason the switch itself fixes.
+  const askMojiAvailability = await ClassmojiService.askMojiSession.askMojiAvailable({
+    classroomId: classroom.id,
+  });
+  const askMojiReason = askMojiAvailability.available ? null : askMojiAvailability.reason;
+  const askMojiToggleAvailable = askMojiReason === null || askMojiReason === 'NOT_ENABLED';
+  // PRO_REQUIRED has the upsell below; NOT_ENABLED is the switch's own state.
+  const askMojiUnavailableLine =
+    askMojiReason && askMojiReason !== 'NOT_ENABLED' && askMojiReason !== 'PRO_REQUIRED'
+      ? ASK_MOJI_AVAILABILITY_COPY[askMojiReason]
+      : null;
 
   // Dynamically fetch available models
   const { getAllModels, getModelLabel } = await import('@classmoji/services');
@@ -212,9 +203,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     quizzes_enabled: settings?.quizzes_enabled ?? null,
     syllabus_bot_enabled: settings?.syllabus_bot_enabled ?? null,
     has_anthropic_key: Boolean(apiKey),
-    syllabus_bot_instructions: askMojiTrigger
-      ? (settings?.syllabus_bot_instructions ?? null)
-      : null,
+    syllabus_bot_instructions: settings?.syllabus_bot_instructions ?? null,
   };
 
   return {
@@ -223,7 +212,6 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     aiAgentAvailable,
     askMojiToggleAvailable,
     askMojiUnavailableLine,
-    askMojiInstructionsShown: askMojiTrigger,
     quizzesProRequired: !quizzesEntitlement.allowed,
     askMojiProRequired: !askMojiEntitlement.allowed,
     defaultLabels,
@@ -238,7 +226,6 @@ const SettingsAI = ({ loaderData }: Route.ComponentProps) => {
     aiAgentAvailable,
     askMojiToggleAvailable,
     askMojiUnavailableLine,
-    askMojiInstructionsShown,
     quizzesProRequired,
     askMojiProRequired,
     defaultLabels,
@@ -504,33 +491,30 @@ const SettingsAI = ({ loaderData }: Route.ComponentProps) => {
           </Button>
 
           {/* Not a Form.Item: the instructions save on their own, never with
-              the model and effort choices above. Only on the Trigger
-              runtime, the one that reads them. */}
-          {askMojiInstructionsShown && (
-            <div className="mt-8">
-              {subheading('Instructions')}
-              <label htmlFor="syllabus_bot_instructions" className="mb-2 block text-sm text-ink-2">
-                Classroom instructions for Ask Moji
-              </label>
-              <Input.TextArea
-                id="syllabus_bot_instructions"
-                value={instructions}
-                onChange={event => setInstructions(event.target.value)}
-                maxLength={INSTRUCTIONS_MAX_CHARS}
-                showCount
-                autoSize={{ minRows: 4, maxRows: 14 }}
-              />
-              <p className="mt-6 mb-3 text-xs text-ink-3">Only owners of this class see these.</p>
-              <Button
-                type="primary"
-                htmlType="button"
-                onClick={handleSaveInstructions}
-                disabled={instructions === savedInstructions}
-              >
-                Save instructions
-              </Button>
-            </div>
-          )}
+              the model and effort choices above. */}
+          <div className="mt-8">
+            {subheading('Instructions')}
+            <label htmlFor="syllabus_bot_instructions" className="mb-2 block text-sm text-ink-2">
+              Classroom instructions for Ask Moji
+            </label>
+            <Input.TextArea
+              id="syllabus_bot_instructions"
+              value={instructions}
+              onChange={event => setInstructions(event.target.value)}
+              maxLength={INSTRUCTIONS_MAX_CHARS}
+              showCount
+              autoSize={{ minRows: 4, maxRows: 14 }}
+            />
+            <p className="mt-6 mb-3 text-xs text-ink-3">Only owners of this class see these.</p>
+            <Button
+              type="primary"
+              htmlType="button"
+              onClick={handleSaveInstructions}
+              disabled={instructions === savedInstructions}
+            >
+              Save instructions
+            </Button>
+          </div>
         </SettingSection>
       </Form>
 
@@ -647,13 +631,6 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
 
     async saveAskMojiInstructions() {
-      // Only on the Trigger runtime (the page shows the field nowhere else).
-      if (!ClassmojiService.askMojiSession.askMojiRuntimeIsTrigger()) {
-        return {
-          error: INSTRUCTIONS_ERROR_COPY.INSTRUCTIONS_UNAVAILABLE,
-          action: ActionTypes.SAVE_QUIZ_SETTINGS,
-        };
-      }
       // Only this field. Validated by updateSettings (trimmed, blank clears,
       // at most INSTRUCTIONS_MAX_CHARS); a refusal is a fixed line by code.
       const value = data.syllabus_bot_instructions;

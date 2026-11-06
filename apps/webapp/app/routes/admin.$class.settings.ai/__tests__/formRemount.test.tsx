@@ -138,7 +138,6 @@ const loaderData = (hasKey: boolean) =>
       aiAgentAvailable: true,
       askMojiToggleAvailable: true,
       askMojiUnavailableLine: null,
-      askMojiInstructionsShown: true,
       quizzesProRequired: false,
       askMojiProRequired: false,
       defaultLabels: DEFAULT_LABELS,

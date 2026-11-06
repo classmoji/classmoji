@@ -7,8 +7,8 @@
  * the classroom id the gate resolved, and the review rules take the viewer's
  * role from the gate's membership, never from the request.
  *
- * Where: only where Ask Moji runs (askMojiAvailable: the runtime switch,
- * Trigger, a key, Pro, enabled). Anywhere else the screens are 404, and no
+ * Where: only where Ask Moji runs (askMojiAvailable: Trigger, a key, Pro,
+ * enabled). Anywhere else the screens are 404, and no
  * VIEW row is written.
  *
  * Audit: every read of the classroom's Ask Moji activity is a VIEW row with
