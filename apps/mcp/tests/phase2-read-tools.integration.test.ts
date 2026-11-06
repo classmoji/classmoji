@@ -12,7 +12,7 @@
  * one gated case (roster OWNER-field split), and — the central requirement — a
  * live NO-DRIFT check: the mirror tool payload equals its resource payload.
  *
- * Identity discipline (S10): timofei7 holds OWNER+ASSISTANT+STUDENT and is used
+ * Identity discipline (S10): prof-classmoji holds OWNER+ASSISTANT+STUDENT and is used
  * ONLY for OWNER-allow paths. Every denial uses a single-role identity
  * (fake-teacher / fake-ta / fake-student-1 / fake-other-owner). Reads only — no
  * fixtures created, no cleanup beyond minted tokens.
@@ -32,6 +32,7 @@ import {
   type Fixtures,
   type MintedToken,
   type ServerHandle,
+  OWNER_LOGIN,
 } from './helpers.ts';
 
 const prisma = getPrisma();
@@ -39,7 +40,7 @@ const prisma = getPrisma();
 let server: ServerHandle;
 let fx: Fixtures;
 
-let ownerMint: MintedToken; // timofei7 — OWNER-allow paths ONLY
+let ownerMint: MintedToken; // prof-classmoji — OWNER-allow paths ONLY
 let teacherMint: MintedToken; // fake-teacher — TEACHER (single role)
 let taMint: MintedToken; // fake-ta — ASSISTANT (single role)
 let student1Mint: MintedToken; // fake-student-1 — STUDENT (single role)
@@ -56,7 +57,7 @@ beforeAll(async () => {
   server = await startServer();
 
   [ownerMint, teacherMint, taMint, student1Mint, otherOwnerMint] = await Promise.all([
-    mintToken({ login: 'timofei7' }),
+    mintToken({ login: OWNER_LOGIN }),
     mintToken({ login: 'fake-teacher' }),
     mintToken({ login: 'fake-ta' }),
     mintToken({ login: 'fake-student-1' }),
@@ -207,7 +208,7 @@ describe('get_roster (teaching team; OWNER-only field split)', () => {
       expect(s).not.toHaveProperty('letter_grade');
     }
 
-    // timofei7 (OWNER) sees the OWNER-only fields — proves the tool preserves
+    // prof-classmoji (OWNER) sees the OWNER-only fields — proves the tool preserves
     // the resource's role-conditional field split.
     const ownerRoster = await callTool(owner, 'get_roster', { classroom: DEV_REF });
     expect(ownerRoster.isError).toBe(false);
