@@ -740,7 +740,10 @@ describe('QuizChat when a reply never comes', () => {
   it('a released reply is not stored as running again', async () => {
     const writes: Session[] = [];
     const setItem = window.sessionStorage.setItem.bind(window.sessionStorage);
-    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation((key, value) => {
+    // jsdom's own Storage, not the global: Node 25+ defines a `Storage` of its
+    // own, whose prototype the page's sessionStorage does not use.
+    const storageProto = Object.getPrototypeOf(window.sessionStorage) as Storage;
+    const spy = vi.spyOn(storageProto, 'setItem').mockImplementation((key, value) => {
       writes.push(JSON.parse(value) as Session);
       setItem(key, value);
     });

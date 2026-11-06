@@ -21,7 +21,7 @@ const mocks = vi.hoisted(() => ({
   assertClassroomMutationAllowed: vi.fn(),
   addClassroomAuditLog: vi.fn(),
   createPage: vi.fn(),
-  pageContentPath: vi.fn(),
+  freePageContentPath: vi.fn(),
   ensureContentRepo: vi.fn(),
   processMarkdownImport: vi.fn(),
 }));
@@ -36,7 +36,7 @@ vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     page: {
       createPage: (...a: unknown[]) => mocks.createPage(...a),
-      pageContentPath: (...a: unknown[]) => mocks.pageContentPath(...a),
+      freePageContentPath: (...a: unknown[]) => mocks.freePageContentPath(...a),
       ensureContentRepo: (...a: unknown[]) => mocks.ensureContentRepo(...a),
     },
   },
@@ -105,7 +105,7 @@ beforeEach(() => {
     membership: { id: 'm-1', role: 'OWNER' },
   });
   mocks.createPage.mockResolvedValue({ id: 'page-new', title: 'Week 1' });
-  mocks.pageContentPath.mockReturnValue('pages/week-1');
+  mocks.freePageContentPath.mockResolvedValue('pages/week-1');
   mocks.processMarkdownImport.mockResolvedValue({
     html: '<p>hi</p>',
     imageMap: new Map(),

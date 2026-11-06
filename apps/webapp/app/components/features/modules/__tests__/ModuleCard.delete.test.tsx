@@ -80,6 +80,11 @@ vi.mock('~/components/features/assignments/AssignmentsTable', () => ({
   assignmentTarget: () => null,
 }));
 vi.mock('../AddContentItemModal', () => ({ default: () => null }));
+// Its own useFetcher would be a third call per render and shift the two above
+// onto each other; the unpublish prompt is not under test here.
+vi.mock('~/components/features/assignments/useOrphanedRepositoryPrompt', () => ({
+  useOrphanedRepositoryPrompt: () => {},
+}));
 vi.mock('~/components/features/repositories/useRepositoryActions', () => ({
   useRepositoryActions: () => ({
     confirmPublishAssignment: vi.fn(),

@@ -218,7 +218,12 @@ describe('root loader payload', () => {
 
     const { include } = findUniqueMock.mock.calls[0][0];
     const membershipSelect = include.classroom_memberships.select;
-    expect(Object.keys(membershipSelect).sort()).toEqual(['classroom', 'id', 'role']);
+    expect(Object.keys(membershipSelect).sort()).toEqual([
+      'classroom',
+      'has_accepted_invite',
+      'id',
+      'role',
+    ]);
     expect(membershipSelect.classroom.include.git_organization).toEqual({
       select: { id: true, provider: true, provider_id: true, login: true, base_url: true },
     });
@@ -228,8 +233,14 @@ describe('root loader payload', () => {
     const data = await load('/student/test-class/dashboard');
 
     const [membership] = data.memberships as Array<Row & { organization: Row }>;
-    expect(Object.keys(membership).sort()).toEqual(['classroom', 'id', 'organization', 'role']);
-    expect(membership).toMatchObject({ id: 'mem-1', role: 'STUDENT' });
+    expect(Object.keys(membership).sort()).toEqual([
+      'classroom',
+      'has_accepted_invite',
+      'id',
+      'organization',
+      'role',
+    ]);
+    expect(membership).toMatchObject({ id: 'mem-1', role: 'STUDENT', has_accepted_invite: true });
     expect(membership.organization).toMatchObject({
       id: 'class-1',
       slug: 'test-class',
