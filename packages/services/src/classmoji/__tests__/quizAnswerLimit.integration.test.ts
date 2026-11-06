@@ -497,6 +497,46 @@ describe.skipIf(!RUN)('quiz hint cost and answer limit (integration)', () => {
     expect(studentView).not.toContain('messages_sent');
   });
 
+  it('scores only the answers within the limit; one typed after the reveal never counts', async () => {
+    const quizId = await makeQuiz({ max_answers: 1 });
+    const attemptId = await started(quizId);
+    const a1 = await say(attemptId, 'a wrong answer');
+    await grading.offerNextStep(call(a1), { actions: [...NEXT] });
+    await reply(attemptId, [{ type: 'text', text: 'The answer is X, because…' }]);
+    // The student types the revealed answer instead of clicking Next.
+    const a2 = await say(attemptId, 'X');
+    await grading.offerNextStep(call(a2), { actions: [...NEXT] });
+    const next = await say(attemptId, BUTTON_TEXT.next);
+    const reported: Answer[] = [
+      { level: 'minimal', hints_before: 0 },
+      { level: 'correct', hints_before: 0 },
+    ];
+    await grading.finalizeQuestion(call(next), {
+      question_num: 1,
+      answers: reported,
+      brief_feedback: 'Revealed.',
+    });
+
+    const [stored] = (await attemptRow(attemptId)).question_results_json as Record<
+      string,
+      unknown
+    >[];
+    expect(stored).toMatchObject({
+      credit_earned: 20,
+      tries: 1,
+      eventually_correct: false,
+      answers_given: 1,
+    });
+    const [journal] = await prisma.quizAttemptEvent.findMany({
+      where: { attempt_id: attemptId, type: 'result_finalized' },
+    });
+    expect(journal.payload).toMatchObject({
+      answers: [reported[0]],
+      reported_answers: reported,
+      reported_answer_count: 2,
+    });
+  });
+
   it('counts the open question when the server ends the attempt', async () => {
     const quizId = await makeQuiz();
     const attemptId = await started(quizId);

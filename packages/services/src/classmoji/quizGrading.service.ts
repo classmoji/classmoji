@@ -961,8 +961,20 @@ export const finalizeQuestion = (
       }
 
       // Floored before any comparison, so a re-sent call with the same
-      // counts matches the result stored from it.
-      const answers = await floorHintsAtTryAgain(tx, attempt, question_num, parsed.data.answers);
+      // counts matches the result stored from it. Then cut to the attempt's
+      // answer limit: an answer after the last allowed one (typed after the
+      // reveal) never scores. The model's full list stays in the journal.
+      const floorAnswers = await floorHintsAtTryAgain(
+        tx,
+        attempt,
+        question_num,
+        parsed.data.answers
+      );
+      const { maxAnswers } = attemptRules(attempt);
+      const answers =
+        maxAnswers !== null && floorAnswers.length > maxAnswers
+          ? floorAnswers.slice(0, maxAnswers)
+          : floorAnswers;
       const floored = !sameAnswers(parsed.data.answers, answers);
 
       const history = await tx.quizAttemptEvent.findMany({
@@ -1054,9 +1066,10 @@ export const finalizeQuestion = (
           ...derived,
           ...counts,
           // The model's own answer count, when it differs from the offers the
-          // server took: both stand in the journal, the model's list scores.
-          ...(answers.length !== counts.answers_given
-            ? { reported_answer_count: answers.length }
+          // server took: both stand in the journal; the model's list, cut to
+          // the answer limit, scores.
+          ...(parsed.data.answers.length !== counts.answers_given
+            ? { reported_answer_count: parsed.data.answers.length }
             : {}),
           emoji,
           brief_feedback,

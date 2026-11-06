@@ -129,17 +129,21 @@ describe('openQuestionOf / answerCounterOf', () => {
     expect(answerCounterOf([q1], 1)?.label).toBe('Answer 1 of 1 · last');
   });
 
-  it('shows no counter once a correct answer finishes the question under the limit', () => {
+  it('shows no counter once the question is finished (a correct answer, or the reveal)', () => {
     const correct = [user('u1', 'Answer 1.'), msg('a-o1', 'assistant', [offer('o1', 1, ['next'])])];
     expect(answerCounterOf([q1, ...correct], 3)).toBeNull();
-    // At the limit the question has ended too, and the counter says so.
     const last = [
       ...answered(1),
       ...answered(2),
       user('u3', 'Answer 3.'),
       msg('a-o3', 'assistant', [offer('o3', 3, ['next'])]),
     ];
-    expect(answerCounterOf([q1, ...last], 3)?.label).toBe('No answers left');
+    expect(answerCounterOf([q1, ...last], 3)).toBeNull();
+  });
+
+  it("prefers the limit the server applied over the loader's", () => {
+    // The loader said 5 (the quiz before an edit); the pin and the offers say 3.
+    expect(answerCounterOf([q1, ...answered(1)], 5)?.label).toBe('Answer 2 of 3');
   });
 
   it('starts again at the next card, and has none between a result and that card', () => {
@@ -179,12 +183,14 @@ describe('openQuestionOf / answerCounterOf', () => {
       user('u2', 'B.'),
       msg('a3', 'assistant', [offer('o2')]),
     ];
-    expect(openQuestionOf(legacy)).toEqual({ question: 1, used: 2, finished: false });
+    expect(openQuestionOf(legacy)).toEqual({ question: 1, used: 2, finished: false, max: null });
     expect(answerCounterOf(legacy, 3)?.state).toBe('last');
   });
 
   it('has no counter with no server limit, but the answer placeholder while a question is open', () => {
-    expect(answerCounterOf([q1, ...answered(1)], null)).toEqual({
+    // A legacy attempt: its offers carry no limit either.
+    const legacyAnswered = [user('u1', 'A.'), msg('a-l1', 'assistant', [offer('l1')])];
+    expect(answerCounterOf([q1, ...legacyAnswered], null)).toEqual({
       state: 'open',
       label: null,
       placeholder: ANSWER_PLACEHOLDER.open,
@@ -289,7 +295,9 @@ describe('the live chat', () => {
   });
 
   it('has no counter with no server limit, still the answer placeholder', async () => {
-    await render([q1, ...answered(1)], { answerRules: { hintCost: 15, maxAnswers: null } });
+    await render([q1, user('u1', 'A.'), msg('a-l1', 'assistant', [offer('l1')])], {
+      answerRules: { hintCost: 15, maxAnswers: null },
+    });
     expect(counter()).toBeNull();
     expect(placeholder()).toBe('Type your answer…');
   });

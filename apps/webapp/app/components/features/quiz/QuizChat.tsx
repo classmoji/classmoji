@@ -762,8 +762,9 @@ const hintCostOf = (output: unknown): number | null => {
  */
 export const openQuestionOf = (
   messages: readonly QuizUIMessage[]
-): { question: number; used: number; finished: boolean } | null => {
-  let open: { question: number; used: number; finished: boolean } | null = null;
+): { question: number; used: number; finished: boolean; max: number | null } | null => {
+  let open: { question: number; used: number; finished: boolean; max: number | null } | null =
+    null;
   let furthest = 0;
   let complete = false;
   for (const message of messages) {
@@ -774,18 +775,26 @@ export const openQuestionOf = (
       if (card) {
         if (card.question_number > furthest) {
           furthest = card.question_number;
-          open = { question: card.question_number, used: 0, finished: false };
+          open = { question: card.question_number, used: 0, finished: false, max: null };
         }
       } else if (part.type === 'tool-offer_next_step' && part.state === 'output-available') {
         if (open) {
-          const output = part.output as { answers_used?: unknown; actions?: unknown };
+          const output = part.output as {
+            answers_used?: unknown;
+            actions?: unknown;
+            max_answers?: unknown;
+          };
           const used = output.answers_used;
+          const max = output.max_answers;
           open = {
             question: open.question,
             used: typeof used === 'number' && Number.isInteger(used) ? used : open.used + 1,
             // Next alone: the answer was right, or the answer was given; the
             // question is over until its result is recorded.
             finished: !(Array.isArray(output.actions) && output.actions.includes('try_again')),
+            // The limit the server applied (pinned on the attempt), over the
+            // loader's, which can predate the pin.
+            max: typeof max === 'number' && Number.isInteger(max) ? max : open.max,
           };
         }
       } else if (part.type === 'data-question-result') {
@@ -822,14 +831,16 @@ export const answerCounterOf = (
 ): AnswerCounterView | null => {
   const open = openQuestionOf(messages);
   if (!open) return null;
+  // A finished question (a correct answer, or the answer given at the
+  // limit): no counter beside Next; the lead-in says the rest.
+  if (open.finished) return null;
+  if (open.max !== null) maxAnswers = open.max;
   if (maxAnswers === null) {
     return { state: 'open', label: null, placeholder: ANSWER_PLACEHOLDER.open };
   }
   if (open.used >= maxAnswers) {
     return { state: 'none', label: ANSWER_COUNTER_COPY.none, placeholder: null };
   }
-  // Finished under the limit (a correct answer): no counter beside Next.
-  if (open.finished) return null;
   const k = open.used + 1;
   return k === maxAnswers
     ? {
