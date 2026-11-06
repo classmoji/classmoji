@@ -129,6 +129,19 @@ describe('openQuestionOf / answerCounterOf', () => {
     expect(answerCounterOf([q1], 1)?.label).toBe('Answer 1 of 1 · last');
   });
 
+  it('shows no counter once a correct answer finishes the question under the limit', () => {
+    const correct = [user('u1', 'Answer 1.'), msg('a-o1', 'assistant', [offer('o1', 1, ['next'])])];
+    expect(answerCounterOf([q1, ...correct], 3)).toBeNull();
+    // At the limit the question has ended too, and the counter says so.
+    const last = [
+      ...answered(1),
+      ...answered(2),
+      user('u3', 'Answer 3.'),
+      msg('a-o3', 'assistant', [offer('o3', 3, ['next'])]),
+    ];
+    expect(answerCounterOf([q1, ...last], 3)?.label).toBe('No answers left');
+  });
+
   it('starts again at the next card, and has none between a result and that card', () => {
     const chat = [q1, ...answered(1), ...answered(2), ...answered(3), user('u4', BUTTON_TEXT.next)];
     expect(answerCounterOf([...chat, msg('a4', 'assistant', [result(1)])], 3)).toBeNull();
@@ -166,7 +179,7 @@ describe('openQuestionOf / answerCounterOf', () => {
       user('u2', 'B.'),
       msg('a3', 'assistant', [offer('o2')]),
     ];
-    expect(openQuestionOf(legacy)).toEqual({ question: 1, used: 2 });
+    expect(openQuestionOf(legacy)).toEqual({ question: 1, used: 2, finished: false });
     expect(answerCounterOf(legacy, 3)?.state).toBe('last');
   });
 

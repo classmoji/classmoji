@@ -762,8 +762,8 @@ const hintCostOf = (output: unknown): number | null => {
  */
 export const openQuestionOf = (
   messages: readonly QuizUIMessage[]
-): { question: number; used: number } | null => {
-  let open: { question: number; used: number } | null = null;
+): { question: number; used: number; finished: boolean } | null => {
+  let open: { question: number; used: number; finished: boolean } | null = null;
   let furthest = 0;
   let complete = false;
   for (const message of messages) {
@@ -774,14 +774,18 @@ export const openQuestionOf = (
       if (card) {
         if (card.question_number > furthest) {
           furthest = card.question_number;
-          open = { question: card.question_number, used: 0 };
+          open = { question: card.question_number, used: 0, finished: false };
         }
       } else if (part.type === 'tool-offer_next_step' && part.state === 'output-available') {
         if (open) {
-          const used = (part.output as { answers_used?: unknown }).answers_used;
+          const output = part.output as { answers_used?: unknown; actions?: unknown };
+          const used = output.answers_used;
           open = {
             question: open.question,
             used: typeof used === 'number' && Number.isInteger(used) ? used : open.used + 1,
+            // Next alone: the answer was right, or the answer was given; the
+            // question is over until its result is recorded.
+            finished: !(Array.isArray(output.actions) && output.actions.includes('try_again')),
           };
         }
       } else if (part.type === 'data-question-result') {
@@ -824,6 +828,8 @@ export const answerCounterOf = (
   if (open.used >= maxAnswers) {
     return { state: 'none', label: ANSWER_COUNTER_COPY.none, placeholder: null };
   }
+  // Finished under the limit (a correct answer): no counter beside Next.
+  if (open.finished) return null;
   const k = open.used + 1;
   return k === maxAnswers
     ? {
