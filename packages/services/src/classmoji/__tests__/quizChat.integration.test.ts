@@ -867,6 +867,10 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
         emoji: 'zzz', // the classroom's emoji for 0
         brief_feedback: '',
         skipped_by_end: true,
+        // Never presented: nothing counted.
+        answers_given: 0,
+        messages_sent: 0,
+        hints_used: 0,
       },
     ]);
     expect(record.question_results[0]).not.toHaveProperty('skipped_by_end');
