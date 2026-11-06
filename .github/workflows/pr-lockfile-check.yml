@@ -3,17 +3,22 @@ name: PR Lockfile Check
 # Catches a specific failure mode: external contributors who clone without the
 # private ai-agent submodule can accidentally strip ai-agent's deps from
 # package-lock.json when they run `npm install`. When their PR merges to
-# staging, CI's `npm ci` then fails. This workflow runs BEFORE merge, with the
-# submodule populated, and fails the PR if the committed lockfile is out of
-# sync with the real workspace tree.
+# staging, CI's `npm ci` then fails. This workflow runs BEFORE merge, against
+# a workspace tree that includes ai-agent's package.json, and fails the PR if
+# the committed lockfile is out of sync with it.
 #
-# Uses pull_request_target so secrets (PERSONAL_ACCESS_TOKEN) are available
-# even for fork PRs. We check out the PR head, but use --ignore-scripts on
-# every npm invocation to neutralize lifecycle-script attacks from untrusted
-# package.json changes.
+# The submodule is never checked out. Only ai-agent's package.json is needed,
+# and it comes from one of two places:
+# - Pull requests from branches of this repository: the real package.json at
+#   the ai-agent commit recorded at the PR head, read with a token that can
+#   see the private ai-agent repository.
+# - Pull requests from forks, which get no secrets: a package.json rebuilt
+#   from the apps/ai-agent entry of the base branch's package-lock.json. A
+#   fork can't move the private submodule, so its PR must record the same
+#   ai-agent commit as the base branch.
 
 on:
-  pull_request_target:
+  pull_request:
     branches:
       - dev
       - staging
@@ -25,21 +30,81 @@ on:
       - 'packages/*/package.json'
       - 'apps/ai-agent'
 
+permissions: {}
+
+concurrency:
+  group: pr-lockfile-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   check-lockfile:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
-      - name: Checkout PR head with submodules
+      - name: Checkout PR head without submodules
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-          submodules: true
-          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          submodules: false
           persist-credentials: false
+
+      - name: Fetch ai-agent package.json (pull request from this repository)
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          SUBMODULE_SHA=$(git ls-tree HEAD -- apps/ai-agent | awk '$1 == "160000" && $2 == "commit" { print $3 }')
+          if ! [[ "$SUBMODULE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::apps/ai-agent is not a submodule at the PR head."
+            exit 1
+          fi
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::PERSONAL_ACCESS_TOKEN is not available to this run."
+            exit 1
+          fi
+          echo "ai-agent submodule commit: $SUBMODULE_SHA"
+          mkdir -p apps/ai-agent
+          gh api -H "Accept: application/vnd.github.raw+json" \
+            "repos/classmoji/ai-agent/contents/package.json?ref=${SUBMODULE_SHA}" > apps/ai-agent/package.json
+          jq -e 'type == "object"' apps/ai-agent/package.json > /dev/null
+
+      - name: Rebuild ai-agent package.json from the base branch (pull request from a fork)
+        if: github.event.pull_request.head.repo.full_name != github.repository
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$BASE_REF" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            echo "::error::Unexpected base branch name."
+            exit 1
+          fi
+          git fetch --no-tags --depth=1 origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+          if [ "$(git ls-tree HEAD -- apps/ai-agent)" != "$(git ls-tree "origin/${BASE_REF}" -- apps/ai-agent)" ]; then
+            echo "::error::apps/ai-agent records a different ai-agent commit than ${BASE_REF}. Pull requests from forks can't change the private ai-agent submodule."
+            echo "::error::If ${BASE_REF} has moved it since this branch was created, merge ${BASE_REF} into this branch and keep its apps/ai-agent commit."
+            exit 1
+          fi
+          mkdir -p apps/ai-agent
+          git show "origin/${BASE_REF}:package-lock.json" | jq -e '
+            .packages["apps/ai-agent"] // error("no apps/ai-agent entry in the base lockfile")
+            | {name, version, license, engines, bin, dependencies, devDependencies, optionalDependencies, peerDependencies}
+            | with_entries(select(.value != null))
+          ' > apps/ai-agent/package.json
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
+
+      # The npm version matters: Node 24 bundles npm 11, which adds `libc`
+      # fields to package-lock.json and would report every lockfile written by
+      # npm 10 as out of sync. Pin the npm the rest of CI uses.
+      - name: Pin npm
+        run: |
+          npm install -g npm@10.9.9
+          npm --version
 
       - name: Regenerate lockfile against real workspace tree
         run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund --legacy-peer-deps
