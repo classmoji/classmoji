@@ -1,8 +1,8 @@
 /**
  * The two pure pieces of the AI settings page: the platform defaults behind
  * each "Default: X" (the quiz runtimes' resolver for the quiz models, the
- * shared FALLBACK_MODEL for Ask Moji, a mirror of the ai-agent's fallbacks for
- * the efforts), and the request the form sends on Save.
+ * ask-moji agent's env order for Ask Moji, a mirror of the ai-agent's
+ * fallbacks for the efforts), and the request the form sends on Save.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -84,6 +84,25 @@ describe('getPlatformAIDefaults', () => {
     expect(getPlatformAIDefaults({ LLM_MODEL: 'claude-opus-5-5' }).syllabus_bot_model).toBe(
       'claude-opus-5-5'
     );
+  });
+
+  // The agent skips an env model off the allow-list for the next one, so an
+  // off-list SYLLABUS_BOT_MODEL falls through to an allowed LLM_MODEL.
+  it('skips an off-list or blank SYLLABUS_BOT_MODEL for an allowed LLM_MODEL', () => {
+    expect(
+      getPlatformAIDefaults({
+        SYLLABUS_BOT_MODEL: 'claude-haiku-4-5-20251001',
+        LLM_MODEL: 'claude-opus-5-5',
+      }).syllabus_bot_model
+    ).toBe('claude-opus-5-5');
+    expect(
+      getPlatformAIDefaults({ SYLLABUS_BOT_MODEL: '   ', LLM_MODEL: 'claude-opus-5-5' })
+        .syllabus_bot_model
+    ).toBe('claude-opus-5-5');
+    expect(
+      getPlatformAIDefaults({ SYLLABUS_BOT_MODEL: 'gpt-5', LLM_MODEL: 'claude-haiku-4-5' })
+        .syllabus_bot_model
+    ).toBe(FALLBACK_MODEL);
   });
 
   it('forgives case and whitespace in an effort, and ignores one that is not a level', () => {

@@ -13,7 +13,7 @@ Go to **Settings > AI** and switch on **Enable Ask Moji**. Students and staff th
 
 If the switch is off and can't be turned on, the line under it says why (for example, the server has no Anthropic key yet).
 
-On a self-hosted server, Ask Moji needs Trigger.dev set up and the private `apps/ai-agent` submodule, which provides the Ask Moji task (see [environment variables](/docs/self-hosting/environment-variables)). Without them the switch stays off.
+On a self-hosted server, Ask Moji needs Trigger.dev set up (see [environment variables](/docs/self-hosting/environment-variables)) and the `ask-moji` task deployed to that Trigger.dev project from the private `apps/ai-agent` submodule. Without Trigger.dev the switch stays off. Classmoji doesn't check that the task is deployed, so on a server whose Trigger.dev project lacks it, the switch turns on and Ask Moji shows, but conversations fail to start.
 
 With your classroom's own Anthropic API key (**Settings > AI > API Key**), you can also pick Ask Moji's **Model** and **Effort**. Without one, Ask Moji runs on the platform defaults.
 

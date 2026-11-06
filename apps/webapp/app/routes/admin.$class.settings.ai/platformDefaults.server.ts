@@ -9,9 +9,10 @@
  * allow-list, else FALLBACK_MODEL. Code-aware quizzes fall through the same
  * chain as standard ones.
  *
- * Ask Moji's model is SYLLABUS_BOT_MODEL, then LLM_MODEL. The allow-list
- * applies, as for the quiz slots: the env value runs only when it is allowed,
- * else FALLBACK_MODEL (the ask-moji agent's settings).
+ * Ask Moji's model is the first of SYLLABUS_BOT_MODEL, LLM_MODEL (trimmed)
+ * that is on the allow-list, else FALLBACK_MODEL: one off the list is skipped
+ * for the next, exactly as the ask-moji agent's settings resolve it
+ * (PLATFORM_MODEL_ENVS in apps/ai-agent src/trigger/askMoji/settings.ts).
  *
  * The efforts mirror the ai-agent. If a fallback changes there, change it
  * here: utils/effort.js (resolveEffort: an env value that is not a level is
@@ -19,7 +20,10 @@
  * then low.
  */
 
-import { platformDefaultModel } from '@classmoji/utils/ai-models';
+import { FALLBACK_MODEL, isAllowedModel, platformDefaultModel } from '@classmoji/utils/ai-models';
+
+/** The platform envs, in order, that name Ask Moji's model (as the agent reads them). */
+const ASK_MOJI_MODEL_ENVS = ['SYLLABUS_BOT_MODEL', 'LLM_MODEL'] as const;
 
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 
@@ -46,13 +50,16 @@ export function getPlatformAIDefaults(
   env: Record<string, string | undefined> = process.env
 ): PlatformAIDefaults {
   const quizModel = platformDefaultModel(env.LLM_MODEL);
+  const askMojiModel =
+    ASK_MOJI_MODEL_ENVS.map(name => env[name]?.trim()).find(value => isAllowedModel(value)) ??
+    FALLBACK_MODEL;
   const explorationEffort = effortFromEnv(env.EXPLORATION_EFFORT, 'low');
 
   return {
     llm_model: quizModel,
     code_aware_model: quizModel,
     exploration_model: platformDefaultModel(env.EXPLORATION_MODEL),
-    syllabus_bot_model: platformDefaultModel(env.SYLLABUS_BOT_MODEL?.trim() || env.LLM_MODEL),
+    syllabus_bot_model: askMojiModel,
     question_effort: effortFromEnv(env.QUIZ_QUESTION_EFFORT, 'medium'),
     grading_effort: effortFromEnv(env.QUIZ_GRADING_EFFORT, 'high'),
     exploration_effort:
