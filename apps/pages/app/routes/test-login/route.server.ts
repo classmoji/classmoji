@@ -27,6 +27,14 @@ const ROLE_CONFIG: Record<string, string> = {
  *   /test-login?role=student    - Login as student (uses GITHUB_STUDENT_TOKEN)
  *   /test-login?role=owner&redirect=/slug/pageId - Login and redirect
  */
+/**
+ * A `redirect=` value we will follow: a same-origin absolute path only.
+ * `//host` and `/\\host` are protocol-relative to a browser, so both are refused.
+ */
+function safeRedirectPath(raw: string | null): string {
+  return raw && /^\/(?![/\\])/.test(raw) ? raw : '/';
+}
+
 export const loader = async ({ request }: { request: Request }) => {
   // Belt-and-suspenders (webapp pattern): production always blocks, and outside
   // production the explicit ENABLE_TEST_LOGIN flag is required too. Note the
@@ -39,7 +47,7 @@ export const loader = async ({ request }: { request: Request }) => {
   // Get role and redirect from query params
   const url = new URL(request.url);
   const role = url.searchParams.get('role')?.toLowerCase() || 'admin';
-  const redirectTo = url.searchParams.get('redirect') || '/';
+  const redirectTo = safeRedirectPath(url.searchParams.get('redirect'));
 
   // Validate role
   if (!ROLE_CONFIG[role]) {
@@ -58,13 +66,14 @@ export const loader = async ({ request }: { request: Request }) => {
   try {
     // DB-first lookup: Check if this token is already stored in an account.
     // This avoids GitHub API calls after the first login with each token.
-    let account = await prisma.account.findFirst({
-      where: {
-        provider_id: 'github',
-        access_token: githubToken,
-      },
+    // The database layer refuses a filter on a token column (assertNoTokenFilter;
+    // legacy rows may still be enc1-encrypted), so tokens are compared here once
+    // read back, never in the query.
+    const storedAccounts = await prisma.account.findMany({
+      where: { provider_id: 'github', access_token: { not: null } },
       include: { user: true },
     });
+    let account = storedAccounts.find(a => a.access_token === githubToken) ?? null;
 
     if (!account) {
       // Token not found - need to call GitHub API to get user info

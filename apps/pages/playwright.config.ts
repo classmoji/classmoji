@@ -102,9 +102,20 @@ export default defineConfig({
   },
 
   projects: [
+    // Pure specs: no database, no running stack.
+    {
+      name: 'unit',
+      testMatch: /tests\/unit\/.*\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'] },
+    },
+    // The test classroom is Pro for the e2e run (tests/pro.setup.ts).
+    { name: 'pro-setup', testMatch: /pro\.setup\.ts/, teardown: 'pro-teardown' },
+    { name: 'pro-teardown', testMatch: /pro\.teardown\.ts/ },
     {
       name: 'pages-e2e',
       testMatch: /.*\.spec\.ts/,
+      testIgnore: /tests\/unit\//,
+      dependencies: ['pro-setup'],
       use: {
         ...devices['Desktop Chrome'],
       },
