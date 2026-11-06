@@ -3,6 +3,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { ArrowLeftIcon, EyeIcon, EyeOffIcon, Loader2Icon, MailIcon } from 'lucide-react';
 import { authClient } from '@classmoji/auth/client';
 import { Emoji } from '~/components';
+import { authServerRedirects } from './signInRedirect';
 import { fieldClass, labelClass, optionButton, primaryButton, quietLink } from './signInStyles';
 import siteBackdrop from './site-backdrop.jpg';
 
@@ -124,13 +125,15 @@ const SignInPage = ({
   const onSignIn = (e: FormEvent) => {
     e.preventDefault();
     void run(async () => {
-      const { error: signInError } = await authClient.signIn.email({
+      const { data, error: signInError } = await authClient.signIn.email({
         email,
         password,
         callbackURL,
       });
       if (!signInError) {
-        window.location.href = callbackURL;
+        // The auth client already follows a redirect the server returned
+        // (to callbackURL, or on to an app connection's consent page).
+        if (!authServerRedirects(data)) window.location.href = callbackURL;
         return;
       }
       if (signInError.status === 403) {
@@ -177,12 +180,16 @@ const SignInPage = ({
   const onVerify = (e: FormEvent) => {
     e.preventDefault();
     void run(async () => {
-      const { error: verifyError } = await authClient.emailOtp.verifyEmail({ email, otp: code });
+      const { data, error: verifyError } = await authClient.emailOtp.verifyEmail({
+        email,
+        otp: code,
+      });
       if (verifyError) {
         setError(errorMessage(verifyError));
         return;
       }
-      window.location.href = callbackURL;
+      // As in onSignIn: a redirect the server returned is already followed.
+      if (!authServerRedirects(data)) window.location.href = callbackURL;
     });
   };
 
