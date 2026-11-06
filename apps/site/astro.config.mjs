@@ -24,6 +24,9 @@ export default defineConfig({
   // Astro's default Markdown processor, plus heading ids that stay the same as
   // before Astro 7 so existing links to headings keep working (headingIds.mjs).
   // Starlight adds its own plugins to this processor.
+  // Keep @astrojs/markdown-satteri in package.json at the exact version astro
+  // pins internally (0.4.6 for astro 7.4.5) and move the two together;
+  // otherwise this processor and astro's own come from different copies.
   markdown: {
     processor: satteri({ hastPlugins: [legacyHeadingIds()] }),
   },
