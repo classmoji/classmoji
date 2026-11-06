@@ -16,6 +16,10 @@ name: PR Lockfile Check
 #   from the apps/ai-agent entry of the base branch's package-lock.json. A
 #   fork can't move the private submodule, so its PR must record the same
 #   ai-agent commit as the base branch.
+#
+# Under pull_request this workflow runs from the PR's own copy of it, so the
+# check is advisory: in fork PRs, reviewers should look at any change to this
+# file or to .npmrc.
 
 on:
   pull_request:
@@ -24,6 +28,8 @@ on:
       - staging
       - main
     paths:
+      - '.github/workflows/pr-lockfile-check.yml'
+      - '.npmrc'
       - 'package.json'
       - 'package-lock.json'
       - 'apps/*/package.json'
@@ -90,8 +96,7 @@ jobs:
           mkdir -p apps/ai-agent
           git show "origin/${BASE_REF}:package-lock.json" | jq -e '
             .packages["apps/ai-agent"] // error("no apps/ai-agent entry in the base lockfile")
-            | {name, version, license, engines, bin, dependencies, devDependencies, optionalDependencies, peerDependencies}
-            | with_entries(select(.value != null))
+            | del(.resolved, .link, .extraneous, .dev, .optional, .devOptional, .peer, .inBundle, .integrity)
           ' > apps/ai-agent/package.json
 
       - uses: actions/setup-node@v4
@@ -100,7 +105,8 @@ jobs:
 
       # The npm version matters: Node 24 bundles npm 11, which adds `libc`
       # fields to package-lock.json and would report every lockfile written by
-      # npm 10 as out of sync. Pin the npm the rest of CI uses.
+      # npm 10 as out of sync. One npm everywhere: keep this in step with the
+      # root package.json's `packageManager` and the npm the other workflows pin.
       - name: Pin npm
         run: |
           npm install -g npm@10.9.9
