@@ -21,7 +21,7 @@ import { rolePrefix } from '~/site/tenant.server.ts';
  * webapp cannot import from this app. Re-exported here under the name the
  * builder and the list already import, so neither changed.
  */
-export { publicFormUrlFor } from '@classmoji/services';
+export { galleryUrlFor, publicFormUrlFor } from '@classmoji/services';
 
 /**
  * Where "back" goes from a forms screen: the classroom's FORMS list in the

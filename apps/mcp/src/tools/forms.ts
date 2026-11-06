@@ -71,6 +71,7 @@ import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
 import { assertProTier } from '../authz/proTier.ts';
 import {
   FORMS_STAFF,
+  holdsRole,
   loadFormInClassroom as loadSharedFormInClassroom,
   ok,
   requireClassroomCtx,
@@ -184,6 +185,8 @@ async function withFormRules<T>(run: () => Promise<T>): Promise<T> {
 interface FormRow {
   id: string;
   classroom_id: string;
+  /** Set when the form feeds the org project gallery. */
+  gallery_org_id?: string | null;
   title: string;
   slug: string;
   description?: string | null;
@@ -270,6 +273,7 @@ function formSummary(form: FormRow) {
     allow_multiple: form.allow_multiple ?? false,
     save_partials: form.save_partials ?? false,
     confirmation_email: form.confirmation_email ?? false,
+    gallery: Boolean(form.gallery_org_id),
     created_at: iso(form.created_at),
     updated_at: iso(form.updated_at),
   };
@@ -636,6 +640,7 @@ interface FormUpdateArgs {
   allow_multiple?: boolean;
   save_partials?: boolean;
   confirmation_email?: boolean;
+  gallery?: boolean;
   fields?: unknown;
 }
 
@@ -653,7 +658,11 @@ export const formUpdateTool: ToolDefinition<FormUpdateArgs> = {
     'not reopen it, since the published revision still holds the roster it was built with; and ' +
     'the slug is immutable, so it cannot be ' +
     'set here at all. Editing the draft field list does NOT change what fillers see until you ' +
-    'publish.',
+    'publish. `gallery` (classroom owner only) makes the form feed the org project gallery: its ' +
+    'APPROVED responses (form_gallery_moderate) appear publicly on every class site in the org, ' +
+    'showing only fields that carry a gallery_role. A field’s gallery_role (top-level, ' +
+    'non-identity) is one of title (exactly one), tagline, summary, icon, cover, video, team, ' +
+    'tags, link, detail, or extra (any other answer); unroled answers stay private.',
   scope: 'write',
   roles: FORMS_STAFF,
   inputSchema: {
@@ -701,6 +710,7 @@ export const formUpdateTool: ToolDefinition<FormUpdateArgs> = {
       .boolean()
       .optional()
       .describe('Email the filler a confirmation on submit'),
+    gallery: z.boolean().optional().describe('Feed the org project gallery (classroom owner only)'),
     fields: fieldsArg.optional(),
   },
   handler: async (args, ctx) => {
@@ -733,17 +743,39 @@ export const formUpdateTool: ToolDefinition<FormUpdateArgs> = {
       updates.fields = args.fields;
       changed.push('fields');
     }
+    if (args.gallery !== undefined) changed.push('gallery');
 
     if (changed.length === 0) {
       throw new ToolError('invalid_params', 'Provide at least one field to update');
+    }
+    // One write per call when the gallery flips, so a refused update can never
+    // leave the gallery switched without its audit row.
+    if (args.gallery !== undefined && changed.length > 1) {
+      throw new ToolError('invalid_params', 'Change `gallery` on its own, in a separate call');
     }
 
     // S1 before any write.
     const form = await loadFormInClassroom(args.form_id, ctx);
 
-    const updated = (await withFormRules(() =>
-      ClassmojiService.form.update(form.id, updates)
-    )) as FormRow;
+    // The gallery switch publishes onto every class site in the org, other
+    // instructors' terms included, so it is the owner's (as in the builder).
+    if (args.gallery !== undefined) {
+      if (!(await holdsRole(ctx, ['OWNER']))) {
+        throw new ToolError(
+          'forbidden',
+          'Only the classroom owner can change the project gallery setting.'
+        );
+      }
+      await withFormRules(() =>
+        ClassmojiService.form.setGalleryOrg(form.id, args.gallery === true)
+      );
+    }
+
+    const updated = (
+      Object.keys(updates).length > 0
+        ? await withFormRules(() => ClassmojiService.form.update(form.id, updates))
+        : await loadFormInClassroom(form.id, ctx)
+    ) as FormRow;
 
     await writeAudit(ctx, {
       resource_type: FORMS_RESOURCE,

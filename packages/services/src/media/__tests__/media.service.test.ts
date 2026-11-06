@@ -382,6 +382,23 @@ describe('createUpload', () => {
     });
   });
 
+  it('allows media uploads for a connected GitLab classroom', async () => {
+    prisma.classroom.findUnique.mockImplementation(async ({ select }) => ({
+      content_delivery_enabled: true,
+      content_repo: 'content-repo',
+      git_organization: {
+        login: 'org',
+        provider: 'GITLAB',
+        ...(select.git_organization.select.gitlab_connection_id
+          ? { gitlab_connection_id: 'connection' }
+          : {}),
+      },
+    }));
+    await expect(
+      createUpload({ classroom, userId: 'u', filename: 'a.mp4', sizeBytes: 10 })
+    ).resolves.toMatchObject({ uploadId: 'upload-1' });
+  });
+
   it('refuses a classroom whose content cannot be delivered', async () => {
     // Uploading into a classroom the Worker cannot sign for would store bytes
     // that render as a /missing/ placeholder and nothing else.
@@ -484,6 +501,52 @@ describe('createUpload', () => {
     await expect(
       createUpload({ classroom, userId: 'u', filename: 'a.mp4', sizeBytes: GIB })
     ).rejects.toMatchObject({ code: 'QUOTA_EXCEEDED' });
+  });
+
+  it('limits one gallery uploader across forms while including pending reservations', async () => {
+    prisma.mediaObject.findMany.mockResolvedValue([
+      row({
+        uploaded_by: 'student',
+        gallery_form_id: 'previous-form',
+        status: 'UPLOADING',
+        size_bytes: 950_000_000n,
+      }),
+      row({ uploaded_by: 'other-student', gallery_form_id: 'form', size_bytes: 500_000_000n }),
+    ]);
+    await expect(
+      createUpload({
+        classroom,
+        userId: 'student',
+        filename: 'demo.mp4',
+        sizeBytes: 60_000_000,
+        gallery: { formId: 'form', fieldId: 'video' },
+      })
+    ).rejects.toMatchObject({
+      code: 'QUOTA_EXCEEDED',
+      usedBytes: 950_000_000,
+      quotaBytes: 1_000_000_000,
+    });
+    expect(prisma.mediaObject.create).not.toHaveBeenCalled();
+    expect(sent).toHaveLength(0);
+  });
+
+  it('bounds tiny gallery uploads independently of the byte quota', async () => {
+    prisma.mediaObject.findMany.mockResolvedValue(
+      Array.from({ length: 50 }, () =>
+        row({ uploaded_by: 'student', gallery_form_id: 'form', size_bytes: 10n })
+      )
+    );
+    await expect(
+      createUpload({
+        classroom,
+        userId: 'student',
+        filename: 'a.mp4',
+        sizeBytes: 10,
+        gallery: { formId: 'form', fieldId: 'video' },
+      })
+    ).rejects.toMatchObject({ code: 'QUOTA_EXCEEDED' });
+    expect(prisma.mediaObject.create).not.toHaveBeenCalled();
+    expect(sent).toHaveLength(0);
   });
 
   it('locks the classroom, sums and inserts inside ONE transaction', async () => {

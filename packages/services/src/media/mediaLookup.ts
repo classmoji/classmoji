@@ -41,6 +41,8 @@ export interface MediaRow {
   status: MediaStatus;
   upload_id: string | null;
   uploaded_by: string;
+  gallery_form_id?: string | null;
+  gallery_field_id?: string | null;
   optimise: boolean;
   keep_original: boolean;
   allow_download: boolean;
@@ -340,7 +342,14 @@ export async function listReadyMedia(
   { kind }: { kind?: MediaKind } = {}
 ): Promise<MediaListItem[]> {
   const rows = (await getPrisma().mediaObject.findMany({
-    where: { classroom_id: classroomId, status: 'READY', ...(kind ? { kind } : {}) },
+    where: {
+      classroom_id: classroomId,
+      status: 'READY',
+      // A student's gallery upload is theirs, not course media to embed. By
+      // field, which survives the form's deletion (gallery_form_id does not).
+      gallery_field_id: null,
+      ...(kind ? { kind } : {}),
+    },
     orderBy: { created_at: 'desc' },
     take: MEDIA_LIST_LIMIT,
     select: {

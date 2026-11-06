@@ -46,6 +46,7 @@ export interface PublicFormSummary {
   id: string;
   title: string;
   description: string | null;
+  gallery?: boolean;
 }
 
 export type PublicFormLoad =
@@ -106,7 +107,7 @@ export async function loadPublicForm({
 }): Promise<PublicFormLoad> {
   const classroom = await prisma.classroom.findFirst({
     where: { slug: classroomSlug },
-    select: { id: true, name: true, settings: { select: { theme: true } } },
+    select: { id: true, slug: true, name: true, settings: { select: { theme: true } } },
   });
   if (!classroom) return notFound();
 
@@ -120,6 +121,7 @@ export async function loadPublicForm({
     id: form.id,
     title: form.title,
     description: form.description,
+    gallery: Boolean(form.gallery_org_id),
   };
 
   // ── Access mode, before status ──────────────────────────────────────────
@@ -129,7 +131,7 @@ export async function loadPublicForm({
   // its own module, and this one has no import that could reach a roster.
   if (form.access === 'CLASSROOM') {
     return resolveClassroomForm({
-      classroom: { id: classroom.id },
+      classroom: { id: classroom.id, slug: classroom.slug },
       form,
       theme,
       classroomName,

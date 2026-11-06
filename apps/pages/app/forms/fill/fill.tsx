@@ -1160,10 +1160,15 @@ function ClassroomFill({ data }: { data: ClassroomFillData }) {
 
   return (
     <FormCanvas theme={data.theme} classroomName={data.classroomName}>
-      <FormHeader title={data.form.title} description={data.form.description} />
+      <FormHeader
+        title={data.form.title}
+        description={data.form.description}
+        gallery={data.form.gallery}
+      />
 
       <p className="-mt-4 mb-6 text-xs text-gray-500 dark:text-gray-400">
-        Members of {data.classroomName} only · responses are confidential to the teaching team
+        Members of {data.classroomName} only
+        {data.form.gallery ? '' : ' · responses are confidential to the teaching team'}
       </p>
 
       {blocked ? (
@@ -1266,6 +1271,7 @@ function ClassroomFill({ data }: { data: ClassroomFillData }) {
         </>
       ) : (
         <FormRenderer
+          galleryUpload={data.galleryUpload}
           key={data.revisionId}
           fields={data.fields as FormField[]}
           reviewTargets={data.reviewTargets}
@@ -1568,7 +1574,11 @@ export default function FormFill() {
   if (data.view === 'closed') {
     return (
       <FormCanvas theme={data.theme} classroomName={data.classroomName}>
-        <FormHeader title={data.form.title} description={data.form.description} />
+        <FormHeader
+          title={data.form.title}
+          description={data.form.description}
+          gallery={data.form.gallery}
+        />
         <FormNotice icon="🚪" title="This form is closed">
           <p>
             It is no longer accepting responses. If you think that is a mistake, get in touch with
@@ -1803,7 +1813,11 @@ export default function FormFill() {
   if (result?.state === 'closed') {
     return (
       <FormCanvas theme={data.theme} classroomName={data.classroomName}>
-        <FormHeader title={data.form.title} description={data.form.description} />
+        <FormHeader
+          title={data.form.title}
+          description={data.form.description}
+          gallery={data.form.gallery}
+        />
         <FormNotice icon="🚪" title="This form just closed">
           <p>
             It stopped accepting responses while you were filling it in, so this one was not
@@ -1821,7 +1835,11 @@ export default function FormFill() {
 
   return (
     <FormCanvas theme={data.theme} classroomName={data.classroomName}>
-      <FormHeader title={data.form.title} description={data.form.description} />
+      <FormHeader
+        title={data.form.title}
+        description={data.form.description}
+        gallery={data.form.gallery}
+      />
 
       {stale ? (
         <div
