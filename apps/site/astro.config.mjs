@@ -5,6 +5,7 @@ import mdx from '@astrojs/mdx';
 import node from '@astrojs/node';
 import react from '@astrojs/react';
 import starlight from '@astrojs/starlight';
+import { createInlineSvgUrl } from '@astrojs/starlight/expressive-code';
 import starlightThemeBlack from 'starlight-theme-black';
 import { satteri } from '@astrojs/markdown-satteri';
 import { legacyHeadingIds } from './src/markdown/headingIds.mjs';
@@ -42,18 +43,24 @@ export default defineConfig({
     starlight({
       title: '🍎 classmoji',
       description: 'Documentation for Classmoji - the git-native LMS for CS education',
-      // No SiteTitle override: starlight-theme-black's own SiteTitle renders the
-      // title together with the "Back to main site" link and the mobile menu
-      // button, and an override of ours would drop both.
+      // These keep the docs looking as they did with starlight-theme-black 0.6
+      // (with src/styles/docs-classic.css): the header with "Back to main site"
+      // and the small-screen bottom-sheet menu, the breadcrumb title without
+      // the arrows, the sidebar with "New" badges, the full-width footer bar
+      // with the Privacy and Terms links, chevron previous/next links and the
+      // sun/moon theme switch.
       components: {
-        // The theme's footer line (with the Privacy and Terms links) is ours now.
-        Footer: './src/components/DocsFooter.astro',
+        SiteTitle: './src/components/docs/SiteTitle.astro',
+        PageTitle: './src/components/docs/PageTitle.astro',
+        Sidebar: './src/components/docs/Sidebar.astro',
+        PageFrame: './src/components/docs/PageFrame.astro',
+        Pagination: './src/components/docs/Pagination.astro',
+        ThemeSelect: './src/components/docs/ThemeSelect.astro',
       },
       plugins: [
+        // Header links live in src/components/docs/navLinks.ts: our SiteTitle
+        // and Drawer render them, not the theme.
         starlightThemeBlack({
-          navLinks: [
-            { label: 'Back to main site', link: 'https://classmoji.io' },
-          ],
           docs: { showMarkdownActions: false },
         }),
       ],
@@ -147,8 +154,43 @@ export default defineConfig({
         },
       ],
       customCss: [
+        './src/styles/docs-classic.css',
         './src/styles/starlight.css',
       ],
+      // Code blocks as starlight-theme-black 0.6 set them up. Theme 0.7 picks
+      // other code themes and frame colours; undefined hands those settings
+      // back to Expressive Code's defaults, as 0.6 left them.
+      expressiveCode: {
+        themes: ['github-dark-default', 'github-light-default'],
+        styleOverrides: {
+          codeBackground: 'var(--code-background)',
+          borderWidth: '0px',
+          borderRadius: 'calc(var(--radius) + 4px)',
+          gutterBorderWidth: '0px',
+          borderColor: undefined,
+          gutterBorderColor: undefined,
+          frames: {
+            editorBackground: 'var(--code-background)',
+            terminalBackground: 'var(--code-background)',
+            copyIcon: createInlineSvgUrl(
+              '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"></rect><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path></svg>',
+            ),
+            shadowColor: undefined,
+            editorTabBarBackground: undefined,
+            editorActiveTabBackground: undefined,
+            editorActiveTabIndicatorTopColor: undefined,
+            editorTabBarBorderColor: undefined,
+            editorActiveTabBorderColor: undefined,
+            terminalTitlebarBorderBottomColor: undefined,
+            editorTabBarBorderBottomColor: undefined,
+            editorActiveTabIndicatorBottomColor: undefined,
+          },
+          textMarkers: {
+            markBackground: 'var(--mark-background)',
+            markBorderColor: 'var(--border)',
+          },
+        },
+      },
     }),
     mdx(),
     // React islands: the animated "How it works" demos on the home page.

@@ -1,0 +1,136 @@
+---
+// The light/dark switch as starlight-theme-black 0.6 had it: one button showing
+// a moon in light mode and a sun in dark mode (theme 0.7 cycles through three
+// states behind a half-circle icon).
+---
+
+<starlight-theme-black-select>
+  <button
+    aria-label={Astro.locals.t('themeSelect.accessibleLabel')}
+    aria-live="polite"
+    class="sl-flex button"
+    title={Astro.locals.t('themeSelect.accessibleLabel')}
+    data-variant="ghost"
+  >
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      class="sun"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="4"></circle>
+      <path d="M12 2v2"></path>
+      <path d="M12 20v2"></path>
+      <path d="m4.93 4.93 1.41 1.41"></path>
+      <path d="m17.66 17.66 1.41 1.41"></path>
+      <path d="M2 12h2"></path>
+      <path d="M20 12h2"></path>
+      <path d="m6.34 17.66-1.41 1.41"></path>
+      <path d="m19.07 4.93-1.41 1.41"></path>
+    </svg>
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      class="moon"
+      aria-hidden="true"
+    >
+      <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path>
+    </svg>
+    <span class="sr-only">Toggle theme</span>
+  </button>
+</starlight-theme-black-select>
+
+<style>
+  svg {
+    flex-shrink: 0;
+    width: 1rem;
+    height: 1rem;
+    pointer-events: none;
+  }
+
+  :global([data-theme='light']) svg.sun {
+    display: none;
+  }
+
+  :global([data-theme='dark']) svg.moon {
+    display: none;
+  }
+</style>
+
+{/* Inlined to avoid a flash of the wrong icon; StarlightThemeProvider is Starlight's. */}
+<script is:inline>
+  StarlightThemeProvider.updatePickers();
+</script>
+
+<script>
+  type Theme = 'auto' | 'dark' | 'light';
+
+  /** Key in `localStorage` that Starlight keeps the colour theme preference under. */
+  const storageKey = 'starlight-theme';
+
+  function parseTheme(theme: unknown): Theme {
+    return theme === 'auto' || theme === 'dark' || theme === 'light' ? theme : 'auto';
+  }
+
+  function loadTheme(): Theme {
+    return parseTheme(typeof localStorage !== 'undefined' && localStorage.getItem(storageKey));
+  }
+
+  function storeTheme(theme: Theme): void {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(storageKey, theme === 'light' || theme === 'dark' ? theme : '');
+    }
+  }
+
+  function getPreferredColorScheme(): Theme {
+    return matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  }
+
+  /** Starlight's ThemeProvider defines this global. */
+  const themeProvider = (
+    window as unknown as { StarlightThemeProvider: { updatePickers(theme?: Theme): void } }
+  ).StarlightThemeProvider;
+
+  /** Update the pickers, the document's theme and the stored preference. */
+  function onThemeChange(theme: Theme): void {
+    themeProvider.updatePickers(theme);
+    document.documentElement.dataset.theme = theme === 'auto' ? getPreferredColorScheme() : theme;
+    storeTheme(theme);
+  }
+
+  // Follow the system colour scheme while no choice is stored.
+  matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
+    if (loadTheme() === 'auto') onThemeChange('auto');
+  });
+
+  customElements.define(
+    'starlight-theme-black-select',
+    class StarlightThemeBlackSelect extends HTMLElement {
+      constructor() {
+        super();
+        onThemeChange(loadTheme());
+        const button = this.querySelector('button');
+        button?.addEventListener('click', () => {
+          const theme = parseTheme(document.documentElement.dataset.theme);
+          const newTheme = theme === 'dark' ? 'light' : theme === 'light' ? 'dark' : 'auto';
+          onThemeChange(newTheme);
+          button?.setAttribute('aria-label', `${newTheme} theme`);
+        });
+      }
+    },
+  );
+</script>

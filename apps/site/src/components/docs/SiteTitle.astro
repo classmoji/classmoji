@@ -1,0 +1,100 @@
+---
+// The left side of the docs header as starlight-theme-black 0.6 had it: the
+// title and "Back to main site" on larger screens, and on small screens the
+// hamburger that opens the bottom-sheet menu (Drawer.astro, in PageFrame).
+import Default from '@astrojs/starlight/components/SiteTitle.astro';
+import { docsNavLinks } from './navLinks';
+---
+
+<div class="site-title-wrapper">
+  <Default />
+  <nav class="nav-bar">
+    {docsNavLinks.map((nav) => <a href={nav.link}>{nav.label}</a>)}
+  </nav>
+</div>
+
+<button class="show-modal" popovertargetaction="toggle" popovertarget="drawer">
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    fill="none"
+    viewBox="0 0 24 24"
+    stroke-width="1.5"
+    stroke="currentColor"
+    aria-hidden="true"
+  >
+    <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 9h16.5m-16.5 6.75h16.5"></path>
+  </svg>
+  <span class="sr-only">Toggle Menu</span>
+</button>
+
+<style>
+  .site-title-wrapper {
+    display: none;
+    align-items: center;
+    margin-right: 1rem;
+  }
+
+  @media (min-width: 768px) {
+    .site-title-wrapper {
+      display: flex;
+    }
+  }
+
+  .site-title-wrapper :global(.site-title) {
+    margin-right: 1rem;
+  }
+
+  @media (min-width: 1024px) {
+    .site-title-wrapper :global(.site-title) {
+      margin-right: 1.5rem;
+    }
+  }
+
+  .nav-bar {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+  }
+
+  @media (min-width: 1280px) {
+    .nav-bar {
+      gap: 1.5rem;
+    }
+  }
+
+  .nav-bar a {
+    color: color-mix(in oklab, var(--foreground) 80%, transparent);
+    text-decoration: none;
+    transition-property: color, background-color, border-color, text-decoration-color, fill, stroke;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+    transition-duration: 0.15s;
+  }
+
+  .show-modal {
+    all: unset;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    margin-right: 0.5rem;
+    margin-left: -0.5rem;
+    padding-block: 0.5rem;
+    font-size: 1rem;
+    line-height: 1.5rem;
+    cursor: pointer;
+  }
+
+  @media (min-width: 768px) {
+    .show-modal {
+      display: none;
+    }
+  }
+
+  .show-modal > svg {
+    width: 1.5rem;
+    height: 1.5rem;
+  }
+</style>

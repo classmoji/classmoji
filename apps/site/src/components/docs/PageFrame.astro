@@ -1,0 +1,83 @@
+---
+// Starlight's page frame plus what the docs had with starlight-theme-black 0.6:
+// the full-width footer bar (the theme's footerText line, with the GitHub,
+// Privacy Policy and Terms of Service links; theme 0.7 dropped it) and the
+// bottom-sheet menu for small screens.
+import Default from '@astrojs/starlight/components/PageFrame.astro';
+import Drawer from './Drawer.astro';
+---
+
+<Default>
+  <slot name="header" slot="header" />
+  <slot name="sidebar" slot="sidebar" />
+  <slot />
+</Default>
+
+<Drawer />
+
+<footer class="docs-footer">
+  <div class="docs-footer-container">
+    <p class="docs-footer-text">
+      🍎 Built by educators and students. <a href="https://github.com/classmoji/classmoji"
+        >Contribute on GitHub</a
+      > · <a href="/privacy">Privacy Policy</a> · <a href="/terms">Terms of Service</a>
+    </p>
+  </div>
+</footer>
+
+<style>
+  .docs-footer {
+    /* Above the fixed sidebar, like the old layout's footer. */
+    position: relative;
+    z-index: calc(var(--sl-z-index-menu) + 1);
+    background-color: var(--background);
+    border-top: 1px solid color-mix(in oklab, var(--border) 30%, transparent);
+    padding-block: 1.5rem;
+  }
+
+  :global([data-theme='dark']) .docs-footer {
+    border-color: var(--border);
+  }
+
+  @media (min-width: 768px) {
+    .docs-footer {
+      padding: 0 2rem;
+    }
+  }
+
+  .docs-footer-container {
+    max-width: 1536px;
+    margin-inline: auto;
+    padding: 1rem;
+    /* the faint side lines the old footer had (see docs-classic.css) */
+    border-inline: 3px solid var(--classic-edge);
+  }
+
+  @media (min-width: 1280px) {
+    .docs-footer-container {
+      padding-inline: 1.5rem;
+    }
+  }
+
+  .docs-footer-text {
+    margin: 0;
+    color: var(--muted-foreground);
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    text-align: center;
+    text-wrap: balance;
+  }
+
+  @media (min-width: 768px) {
+    .docs-footer-text {
+      text-align: left;
+    }
+  }
+
+  .docs-footer-text a {
+    color: inherit;
+    font-weight: 500;
+    text-decoration-line: underline;
+    text-underline-offset: 4px;
+  }
+</style>

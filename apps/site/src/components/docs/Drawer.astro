@@ -1,0 +1,174 @@
+---
+// The docs menu on small screens, as starlight-theme-black 0.6 had it: a bottom
+// sheet with Home, the header links and every sidebar group. Opened by the
+// hamburger in SiteTitle.astro (popovertarget="drawer").
+import { docsNavLinks } from './navLinks';
+
+const { siteTitleHref, sidebar } = Astro.locals.starlightRoute;
+---
+
+<div popover="auto" id="drawer">
+  <button class="sheet-overlay" popovertarget="drawer" popovertargetaction="hide" aria-label="Close menu"
+  ></button>
+  <div class="content">
+    <div class="header">
+      <button class="drag-icon" popovertarget="drawer" popovertargetaction="hide" aria-label="Close menu"
+        ><span></span></button
+      >
+    </div>
+    <div class="body">
+      <div class="links-nav">
+        <a href={siteTitleHref}>Home</a>
+        {docsNavLinks.map((nav) => <a href={nav.link}>{nav.label}</a>)}
+      </div>
+
+      <div class="links-docs">
+        {
+          sidebar.map(
+            (entry) =>
+              entry.type !== 'link' && (
+                <div class="container-sidebar-entry">
+                  <h4 class="entry-title">{entry.label}</h4>
+                  {entry.entries.map(
+                    (link) =>
+                      link.type === 'link' && (
+                        <a href={link.href} {...link.attrs}>
+                          {link.label}
+                        </a>
+                      ),
+                  )}
+                </div>
+              ),
+          )
+        }
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+  button {
+    all: unset;
+  }
+
+  [popover] {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    opacity: 0;
+    pointer-events: none;
+    align-items: center;
+    flex-direction: column;
+    justify-content: flex-end;
+    transition: 0.1s linear;
+    z-index: 1000;
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    border: none;
+  }
+
+  [popover]::backdrop {
+    background: rgba(0, 0, 0, 0.8);
+  }
+
+  [popover]:popover-open {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  [popover]:popover-open .content {
+    transform: translateY(0%);
+  }
+
+  .sheet-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: -1;
+    width: 100vw;
+    height: 100vh;
+    opacity: 0.1;
+    background-color: transparent;
+  }
+
+  .content {
+    position: relative;
+    width: 100%;
+    max-width: 1150px;
+    height: 50vh;
+    max-height: 100vh;
+    border-radius: 12px 12px 0 0;
+    background: var(--background);
+    color: var(--foreground);
+    box-shadow: 0 10px 20px rgba(0, 0, 0, 0.03);
+    transform: translateY(100%);
+    transition: 0.3s ease;
+  }
+
+  .header {
+    display: flex;
+    justify-content: center;
+  }
+
+  .header .drag-icon span {
+    display: block;
+    width: 100px;
+    height: 0.1rem;
+    margin-top: 1rem;
+    border-radius: 9999px;
+    background-color: var(--muted);
+  }
+
+  .body {
+    height: 100%;
+    overflow-y: auto;
+    padding: 1.5rem;
+  }
+
+  .body::-webkit-scrollbar {
+    width: 0;
+  }
+
+  .links-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .links-nav a {
+    color: inherit;
+    font-size: 1rem;
+    line-height: 1.5rem;
+    text-decoration: inherit;
+  }
+
+  .links-docs {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .container-sidebar-entry {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding-top: 1.5rem;
+  }
+
+  .entry-title {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 500;
+  }
+
+  .container-sidebar-entry a {
+    color: var(--muted-foreground);
+    font-size: 1rem;
+    line-height: 1.5rem;
+    text-decoration: inherit;
+  }
+</style>
