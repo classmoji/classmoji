@@ -426,6 +426,7 @@ describe('findStudentByLoginInClassroom', () => {
         id: true,
         comment: true,
         letter_grade: true,
+        has_accepted_invite: true,
         user: { select: { id: true, name: true, image: true, school_id: true, ...GIT_IDENTITY } },
       },
     });

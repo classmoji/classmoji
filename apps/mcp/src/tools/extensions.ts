@@ -228,7 +228,8 @@ export const extensionPurchaseTool: ToolDefinition<ExtensionPurchaseArgs> = {
     'takes its hours back. The price per hour is the assignment’s tokens_per_hour, or the ' +
     'classroom’s default when that is null (effective_tokens_per_hour in list_repos and ' +
     'list_quizzes; 0 = no extensions). Nothing but your balance limits how many you buy, so ' +
-    'buy no more hours than you need. An assignment with no deadline has nothing to extend. ' +
+    'buy no more hours than you need. An assignment with no deadline, or one where staff ' +
+    'waived your late penalty (a late override), has nothing to extend. ' +
     'Check your balance with my_tokens first.',
   scope: 'write',
   roles: ['STUDENT'],

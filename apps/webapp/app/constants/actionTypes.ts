@@ -47,6 +47,7 @@ export const ActionTypes = {
 
   ADD_STUDENT: 'add-student',
   UPDATE_LATE_OVERRIDE: 'update-late-override',
+  UPDATE_QUIZ_LATE_WAIVER: 'update-quiz-late-waiver',
   UPDATE_GRADE_RELEASE: 'update-grade-release',
 
   CREATE_CLASSROOM: 'create-classroom',

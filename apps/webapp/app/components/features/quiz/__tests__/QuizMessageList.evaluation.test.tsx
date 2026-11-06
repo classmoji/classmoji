@@ -55,6 +55,7 @@ describe('QuizMessageList — the evaluation card', () => {
             band: { evaluation: 'EXCELLENT', numeric_score: 4 },
             lateHours: 6,
             countedEmoji: '+1',
+            lateWaived: false,
             countsTowardGrade: true,
           },
           headerExtra: <span data-testid="header-extra" />,
@@ -106,6 +107,7 @@ describe('QuizMessageList — the evaluation card', () => {
               band: { evaluation: 'GOOD', numeric_score: 3 },
               lateHours: null,
               countedEmoji: null,
+              lateWaived: false,
               countsTowardGrade,
             },
           }}

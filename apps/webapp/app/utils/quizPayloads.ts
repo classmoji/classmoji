@@ -28,10 +28,10 @@ import {
   attemptQuestionResults,
   countedQuizEmojiMap,
   countingQuizScore,
-  lateHours as lateHoursOf,
   isOrphanedAdjustment,
   quizAttemptGrade,
   quizEvaluationRecord as evaluationRecord,
+  quizLateHours,
   quizPercentageEmoji,
   type AdjustableQuizScore,
   type AttemptQuestionResult,
@@ -128,8 +128,10 @@ export interface StudentQuizAttemptsSummaryView {
   currentOriginalEmoji: string | null;
   /** What it counts for after the late penalty, when that differs; else null. */
   countedEmoji: string | null;
-  /** That attempt's late hours, shown beside the grade. */
+  /** That attempt's late hours, shown beside the grade (0 under a late waiver). */
   currentLateHours: number;
+  /** Staff waived this student's late penalty on the quiz (`QuizLateWaiver`). */
+  lateWaived: boolean;
   maxAttempts: number;
 }
 
@@ -147,6 +149,7 @@ export const studentQuizAttemptsSummaryView = (
     originalEmoji?: string | null;
     countedEmoji?: string | null;
     lateHours?: number;
+    lateWaived?: boolean;
   } = {}
 ): StudentQuizAttemptsSummaryView => ({
   count: summary?.count ?? 0,
@@ -156,6 +159,7 @@ export const studentQuizAttemptsSummaryView = (
   currentOriginalEmoji: current.adjusted === true ? (current.originalEmoji ?? null) : null,
   countedEmoji: current.countedEmoji ?? null,
   currentLateHours: current.lateHours ?? 0,
+  lateWaived: current.lateWaived === true,
   maxAttempts,
 });
 
@@ -165,7 +169,8 @@ export const studentQuizAttemptsSummaryView = (
  * (`countingQuizScore`, a staff adjustment read through `emojiScale`), and the
  * student is shown its grade and late hours. `late` is null where nothing is
  * late: a staff member's preview, or a quiz with no assignment; the pick is
- * then over raw scores. The numbers here stay on the server.
+ * then over raw scores. Under a late waiver (`late.lateWaived`) nothing is
+ * late. The numbers here stay on the server.
  */
 export const studentQuizScoring = <T extends ScorableQuizAttempt>(
   attempts: readonly T[],
@@ -184,8 +189,10 @@ export const studentQuizScoring = <T extends ScorableQuizAttempt>(
     /** What the counting attempt counts for after the late penalty. */
     countedScore: score.grade,
     currentLateHours: score.late_hours,
+    /** Staff waived this student's late penalty on the quiz. */
+    lateWaived: late?.lateWaived === true,
     lateHoursOf: (attempt: Pick<ScorableQuizAttempt, 'completed_at'>) =>
-      late ? lateHoursOf(attempt.completed_at, late.studentDeadline, late.extensionHours) : 0,
+      late ? quizLateHours(attempt.completed_at, late) : 0,
   };
 };
 
@@ -221,6 +228,12 @@ export interface AttemptGradeView {
   band: GradeBand | null;
   lateHours: number | null;
   countedEmoji: string | null;
+  /**
+   * Staff waived this student's late penalty on the quiz (`QuizLateWaiver`):
+   * `lateHours` is 0 and nothing is taken off. False where lateness does not
+   * apply.
+   */
+  lateWaived: boolean;
   /**
    * Whether this attempt is the one whose grade counts (E15): the quiz's
    * grading strategy over effective, late-penalised scores, the gradebook's
@@ -261,7 +274,7 @@ export const attemptGradeView = ({
       ...late,
       emojiScale,
     });
-    lateHours = lateHoursOf(attempt.completed_at, late.studentDeadline, late.extensionHours);
+    lateHours = quizLateHours(attempt.completed_at, late);
     countedEmoji = countedEmojiOf(
       grade.effective.percentage,
       score.grade,
@@ -276,6 +289,7 @@ export const attemptGradeView = ({
     band: grade.effective.band,
     lateHours,
     countedEmoji,
+    lateWaived: late?.lateWaived === true,
     countsTowardGrade: countingAttemptId ? countingAttemptId === attempt.id : null,
   };
 };
@@ -697,6 +711,22 @@ export interface StaffAttemptGradePanel {
     studentName: string | null;
     createdAt: string | null;
   } | null;
+  /**
+   * The late shield (#813) for the attempt's student on the quiz's
+   * assignment; null for a staff preview or a quiz with no assignment.
+   * `canWaive`: the viewer is an owner or teacher and the classroom takes
+   * their changes (else the status shows only).
+   */
+  lateWaiver?: StaffAttemptLateWaiver | null;
+}
+
+/** The attempt drawer's late shield: who, on what, and what the viewer may do. */
+export interface StaffAttemptLateWaiver {
+  assignmentId: string;
+  studentId: string;
+  /** Staff waived this student's late penalty on the quiz. */
+  waived: boolean;
+  canWaive: boolean;
 }
 
 export const staffAttemptGradePanel = ({
@@ -710,6 +740,7 @@ export const staffAttemptGradePanel = ({
   latePenaltyPerHour,
   openRequest,
   studentName,
+  lateWaiver = null,
 }: {
   attempt: {
     id: string;
@@ -732,6 +763,7 @@ export const staffAttemptGradePanel = ({
     created_at?: Date | string | null;
   } | null;
   studentName: string | null;
+  lateWaiver?: StaffAttemptLateWaiver | null;
 }): StaffAttemptGradePanel => ({
   attemptId: attempt.id,
   adjustable,
@@ -754,4 +786,5 @@ export const staffAttemptGradePanel = ({
         createdAt: isoOrNull(openRequest.created_at),
       }
     : null,
+  lateWaiver,
 });

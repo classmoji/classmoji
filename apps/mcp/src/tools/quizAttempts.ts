@@ -3,7 +3,8 @@
  * went, for the teaching team. The rows the admin quiz results page builds
  * (admin.$class.quizzes_.$quizId): the same reads (quizAttempt.findByQuiz, the
  * STUDENT roster, each student's net extension hours when the quiz has a due
- * date, the classroom's late penalty) fed to the same `buildQuizResultRows`
+ * date, the classroom's late penalty, the students staff waived the late
+ * penalty for) fed to the same `buildQuizResultRows`
  * (@classmoji/utils), so a row here is the row the page shows, counted zeros
  * included.
  *
@@ -109,8 +110,9 @@ export const listQuizAttemptsTool: ToolDefinition<ListQuizAttemptsArgs> = {
     'comment_at, comment_by; both from quiz_attempt_adjust; adjustment_orphaned: the stored ' +
     "adjusted_emoji left the scale, the AI's grade counts until remapped in Grade settings), " +
     'the attempt that counts, current_emoji (its grade) and ' +
-    'counted_emoji (after the late penalty), and counts_as_zero (no completed attempt past ' +
-    'the due date). Grades are emoji ' +
+    'counted_emoji (after the late penalty), counts_as_zero (no completed attempt past ' +
+    'the due date, waiver or not), and late_override (late penalty waived: late_hours 0; ' +
+    'set with submission_late_override). Grades are emoji ' +
     "on the classroom's own scale (score-N badges on the numeric scale), never numbers. " +
     'staff_previews and former_members (people no longer in the classroom) are kept apart, ' +
     'never late or graded. summary counts the roster. For one attempt and its transcript use ' +
@@ -137,7 +139,7 @@ export const listQuizAttemptsTool: ToolDefinition<ListQuizAttemptsArgs> = {
     // The results page's reads, the classroom's git provider naming each
     // login, and the staff memberships that tell a preview from a former
     // member's work.
-    const [attempts, roster, staff, extensionHours, scale] = await Promise.all([
+    const [attempts, roster, staff, extensionHours, waived, scale] = await Promise.all([
       ClassmojiService.quizAttempt.findByQuiz(quiz.id, orgProvider(ctx)) as Promise<AttemptRow[]>,
       ClassmojiService.classroomMembership.findUsersByRole(classroomId, 'STUDENT') as Promise<
         Member[]
@@ -147,6 +149,13 @@ export const listQuizAttemptsTool: ToolDefinition<ListQuizAttemptsArgs> = {
       ]) as Promise<Member[]>,
       assignment && deadline
         ? ClassmojiService.token.netQuizExtensionHoursByStudent({
+            classroomId,
+            assignmentId: assignment.id,
+          })
+        : null,
+      // Students whose late penalty staff waived (submission_late_override).
+      assignment
+        ? ClassmojiService.quizLateWaiver.waivedStudentIdsForAssignment({
             classroomId,
             assignmentId: assignment.id,
           })
@@ -171,6 +180,7 @@ export const listQuizAttemptsTool: ToolDefinition<ListQuizAttemptsArgs> = {
             }
           : null,
       roster: { students: roster, assignment, now },
+      waived,
     });
 
     // A member's login and name come from their membership; a former
@@ -268,6 +278,9 @@ export const listQuizAttemptsTool: ToolDefinition<ListQuizAttemptsArgs> = {
             : emojiFor(row.countedScore, scale),
         counts_as_zero: row.countsAsZero,
         late_hours: row.lateHours,
+        // Staff waived this student's late penalty: never late. Not taking
+        // the quiz is still a zero (`counts_as_zero`).
+        late_override: row.lateWaived,
       };
     };
 

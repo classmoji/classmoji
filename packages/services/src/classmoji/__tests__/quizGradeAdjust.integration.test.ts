@@ -1590,7 +1590,11 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
         rows,
         Object.fromEntries(DEFAULT_EMOJI_MAPPINGS.map(m => [m.emoji, m.grade]))
       );
-      expect(lateness.get(request.id)).toEqual({ lateHours: 3, countedEmoji: '-1' });
+      expect(lateness.get(request.id)).toEqual({
+        lateHours: 3,
+        countedEmoji: '-1',
+        lateWaived: false,
+      });
     });
 
     it('reads many requests at once: per student and assignment, bought hours, no assignment, resolved', async () => {
@@ -1621,6 +1625,14 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
       const b1 = await makeAttempt(q1.quizId, studentB, 90, lateBy(3)); // 3 h late
       const b2 = await makeAttempt(q2.quizId, studentB, 90, lateBy(0)); // 0 h late
       const looseAttempt = await makeAttempt(loose.id, studentB, 90, lateBy(10));
+      // Staff waived student A's late penalty on quiz 2 (#813), and a row in
+      // another classroom names student B on quiz 1: not this classroom's.
+      await prisma.quizLateWaiver.create({
+        data: { classroom_id: classX, assignment_id: q2.assignmentId, student_id: studentA },
+      });
+      await prisma.quizLateWaiver.create({
+        data: { classroom_id: classY, assignment_id: q1.assignmentId, student_id: studentB },
+      });
       const ask = async (attemptId: string, student: string) =>
         (
           await regradeRequest.createForQuizAttempt({
@@ -1650,11 +1662,20 @@ describe.skipIf(!RUN)('quiz grade adjustments and quiz regrade requests (integra
       const lateness = await regradeRequest.openQuizRequestLateness(classX, rows, scale);
       // 90 - 5/h. 1 h → 85, a tie between 👍 (90) and 👀 (80) that goes to
       // the higher grade (gradeToEmoji's rule); 3 h → 75 → 👀.
-      expect(lateness.get(ids.a1)).toEqual({ lateHours: 1, countedEmoji: '+1' });
-      expect(lateness.get(ids.a2)).toEqual({ lateHours: 3, countedEmoji: 'eyes' });
-      expect(lateness.get(ids.b1)).toEqual({ lateHours: 3, countedEmoji: 'eyes' });
+      expect(lateness.get(ids.a1)).toEqual({ lateHours: 1, countedEmoji: '+1', lateWaived: false });
+      // Waived: 0 h late, the unpenalised grade counts.
+      expect(lateness.get(ids.a2)).toEqual({ lateHours: 0, countedEmoji: '+1', lateWaived: true });
+      expect(lateness.get(ids.b1)).toEqual({
+        lateHours: 3,
+        countedEmoji: 'eyes',
+        lateWaived: false,
+      });
       // No due date: no lateness at all, not "on time".
-      expect(lateness.get(ids.loose)).toEqual({ lateHours: null, countedEmoji: '+1' });
+      expect(lateness.get(ids.loose)).toEqual({
+        lateHours: null,
+        countedEmoji: '+1',
+        lateWaived: false,
+      });
       expect(lateness.has(ids.b2)).toBe(false);
       expect(lateness.size).toBe(4);
 

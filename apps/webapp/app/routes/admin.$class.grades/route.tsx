@@ -30,6 +30,8 @@ const projectGradedItem = (item: GradedItem): GradedItem => ({
   counting_adjusted_emoji: item.counting_adjusted_emoji ?? null,
   // The cell's "needs remap" chip: an adjustment off the scale (E17).
   counting_orphaned: item.counting_orphaned ?? false,
+  // The cell's "waived" chip: staff waived this student's quiz late penalty.
+  late_waived: item.late_waived ?? false,
 });
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
@@ -68,6 +70,27 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   // grading picker and every quiz cell's emoji.
   const scale = ClassmojiService.emojiMapping.findScaleByClassroomId(classroom.id);
 
+  // Read once: the columns below, and the quiz waivers.
+  const publishedAssignments = ClassmojiService.assignment.listForClassroom(classroom.id, {
+    publishedOnly: true,
+  });
+  const studentRows = ClassmojiService.user.findRepositoriesPerStudent(classroom);
+
+  // The quizzes on which staff waived each student's late penalty (#813),
+  // student id → assignment ids: the cell's "waived" chip, also on a finished
+  // attempt still waiting for its score (no grade item yet). Taking the quiz
+  // is not waived: a student with no attempt is Missing as anyone else.
+  const quizWaivers = Promise.all([studentRows, publishedAssignments, quizzesVisible]).then(
+    ([students, assignments, visible]) =>
+      visible
+        ? ClassmojiService.quizLateWaiver.waivedByStudent({
+            classroomId: classroom.id,
+            studentIds: students.map(student => student.id),
+            assignmentIds: assignments.flatMap(a => (a.type === 'QUIZ' ? [a.id] : [])),
+          })
+        : new Map<string, Set<string>>()
+  );
+
   const promises = {
     emojiMappings: scale,
     // Modules, in course order: the grid groups its columns under them.
@@ -79,25 +102,25 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     // `User` and `ClassroomMembership` rows — which carry contact details, the
     // global better-auth role, ban state and the Stripe customer id — and none
     // of that belongs in a page.
-    students: Promise.all([
-      ClassmojiService.user.findRepositoriesPerStudent(classroom),
-      quizItems,
-    ]).then(([students, itemsByUser]) =>
-      students.map(student => ({
-        id: student.id,
-        name: student.name,
-        login: student.login,
-        // UserThumbnailView reads `avatar_url`; the User column is `image`.
-        // Without the mapping the table rendered no avatars at all.
-        avatar_url: student.image,
-        // Passed through whole and untouched: calculateStudentFinalGrade
-        // walks the nested assignments, grades and token transactions.
-        git_repos: student.git_repos,
-        // Quiz assignments in the totals: the same items the leaderboard and
-        // the student report count.
-        quiz_items: (itemsByUser.get(student.id) ?? []).map(projectGradedItem),
-        ...pickOwnerOnlyContactFields(student, isRealOwner),
-      }))
+    students: Promise.all([studentRows, quizItems, quizWaivers]).then(
+      ([students, itemsByUser, waivers]) =>
+        students.map(student => ({
+          id: student.id,
+          name: student.name,
+          login: student.login,
+          // UserThumbnailView reads `avatar_url`; the User column is `image`.
+          // Without the mapping the table rendered no avatars at all.
+          avatar_url: student.image,
+          // Passed through whole and untouched: calculateStudentFinalGrade
+          // walks the nested assignments, grades and token transactions.
+          git_repos: student.git_repos,
+          // Quiz assignments in the totals: the same items the leaderboard and
+          // the student report count.
+          quiz_items: (itemsByUser.get(student.id) ?? []).map(projectGradedItem),
+          // The quiz assignments staff waived this student's late penalty on.
+          quiz_waived_ids: [...(waivers.get(student.id) ?? [])],
+          ...pickOwnerOnlyContactFields(student, isRealOwner),
+        }))
     ),
     // The table reads exactly one field out of the settings row — the late
     // penalty used by calculateStudentFinalGrade.
@@ -126,30 +149,28 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     // grid (module order, then creation order). Grading weight lives here.
     // Where quizzes are hidden their assignments are no column at all, so the
     // attempt lookups below never run for them either.
-    assignments: Promise.all([
-      ClassmojiService.assignment.listForClassroom(classroom.id, { publishedOnly: true }),
-      quizzesVisible,
-    ]).then(([assignments, showQuizzes]) =>
-      assignments
-        .filter(a => showQuizzes || a.type !== 'QUIZ')
-        .map(a => ({
-          id: a.id,
-          title: a.title,
-          weight: a.weight,
-          is_extra_credit: a.is_extra_credit,
-          type: a.type,
-          module_id: a.module_id,
-          module_title: a.module?.title,
-          repository_id: a.repository_id,
-          quiz_id: a.quiz_id,
-          form_id: a.form_id,
-          student_deadline: a.student_deadline,
-          // A quiz column reads "Opens <date>" until it opens.
-          release_at: a.release_at,
-          created_at: a.created_at,
-          submission_mode: a.submission_mode,
-          grades_released: a.grades_released,
-        }))
+    assignments: Promise.all([publishedAssignments, quizzesVisible]).then(
+      ([assignments, showQuizzes]) =>
+        assignments
+          .filter(a => showQuizzes || a.type !== 'QUIZ')
+          .map(a => ({
+            id: a.id,
+            title: a.title,
+            weight: a.weight,
+            is_extra_credit: a.is_extra_credit,
+            type: a.type,
+            module_id: a.module_id,
+            module_title: a.module?.title,
+            repository_id: a.repository_id,
+            quiz_id: a.quiz_id,
+            form_id: a.form_id,
+            student_deadline: a.student_deadline,
+            // A quiz column reads "Opens <date>" until it opens.
+            release_at: a.release_at,
+            created_at: a.created_at,
+            submission_mode: a.submission_mode,
+            grades_released: a.grades_released,
+          }))
     ),
   };
 

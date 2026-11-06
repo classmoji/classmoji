@@ -80,6 +80,12 @@ export interface GradedItem {
    * AI's grade counts; staff see a "needs remap" chip. Staff surfaces only.
    */
   counting_orphaned?: boolean;
+  /**
+   * Staff waived this student's late penalty on the quiz (`QuizLateWaiver`):
+   * `late_hours` is 0 and `grade` unpenalised. Present (true) only when set;
+   * the gradebook's "waived" chip.
+   */
+  late_waived?: boolean;
 }
 
 /**

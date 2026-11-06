@@ -288,6 +288,72 @@ describe('gradebook quiz cells', () => {
     expect(text(html)).toContain('Not attempted');
     expect(html).not.toContain(MISSING_CHIP);
   });
+
+  it('chips a waived item "waived", as a waived repo cell (#813)', () => {
+    const html = render({
+      emojiMappings: NUMERIC_SCALE,
+      assignments: [quizColumn('a-quiz', 'Recursion')],
+      students: [
+        student('s-1', 'Ada', [item('a-quiz', { grade: 80, late_hours: 0, late_waived: true })]),
+      ],
+    });
+
+    expect(text(cellOf(html))).toContain('waived');
+  });
+
+  it('never chips a Missing cell: taking the quiz is not waived', () => {
+    const html = render({
+      assignments: [quizColumn('a-quiz', 'Recursion')],
+      students: [
+        {
+          ...student('s-1', 'Ada', [
+            item('a-quiz', {
+              grade: 0,
+              raw_grade: 0,
+              counts_as_zero: true,
+              late_hours: 0,
+              counting_raw_percentage: null,
+            }),
+          ]),
+          quiz_waived_ids: ['a-quiz'],
+        },
+      ],
+    });
+
+    const cell = text(cellOf(html));
+    expect(html).toContain(MISSING_CHIP);
+    expect(cell).not.toContain('waived');
+  });
+
+  it('never chips a Not attempted cell', () => {
+    const html = render({
+      assignments: [quizColumn('a-quiz', 'Recursion')],
+      students: [{ ...student('s-1', 'Ada', []), quiz_waived_ids: ['a-quiz'] }],
+    });
+
+    const cell = text(cellOf(html));
+    expect(cell).toContain('Not attempted');
+    expect(cell).not.toContain('waived');
+  });
+
+  it('chips a finished attempt still waiting for its score (no item yet)', () => {
+    const html = render({
+      assignments: [quizColumn('a-quiz', 'Recursion')],
+      students: [{ ...student('s-1', 'Ada', []), quiz_waived_ids: ['a-quiz'] }],
+      activity: { quiz: { 'a-quiz': { 's-1': { completed: true, emoji: null } } }, form: {} },
+    });
+
+    expect(text(cellOf(html))).toContain('waived');
+  });
+
+  it('chips nothing for a student whose waiver is on another quiz', () => {
+    const html = render({
+      assignments: [quizColumn('a-quiz', 'Recursion')],
+      students: [{ ...student('s-1', 'Ada', []), quiz_waived_ids: ['a-other'] }],
+    });
+
+    expect(text(cellOf(html))).not.toContain('waived');
+  });
 });
 
 describe('gradebook row filters', () => {

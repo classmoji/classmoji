@@ -2,7 +2,7 @@
 import ButtonFilter from './ui/buttons/ButtonFilter';
 import ButtonNew from './ui/buttons/ButtonNew';
 import ExternalLink from './ui/buttons/ExternalLink';
-import LateOverrideButton from './ui/buttons/LateOverrideButton';
+import LateOverrideButton, { QuizLateWaiverButton } from './ui/buttons/LateOverrideButton';
 import TableActionButtons from './ui/buttons/TableActionButtons';
 
 import CardContainer from './ui/cards/CardContainer';
@@ -73,6 +73,7 @@ export {
   ButtonNew,
   ExternalLink,
   LateOverrideButton,
+  QuizLateWaiverButton,
   TableActionButtons,
 
   // UI Components - Cards

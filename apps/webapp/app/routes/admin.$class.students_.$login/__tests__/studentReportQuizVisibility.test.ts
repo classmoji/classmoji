@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   findOwnResponse: vi.fn(),
   quizzesVisibleOrThrow: vi.fn(),
   loadQuizGradeItems: vi.fn(),
+  waivedAssignmentIdsForStudent: vi.fn(),
   // No settings row unless a test sets one.
   getClassroomSettingsForServer: vi.fn(),
   findTeamsForStudentInClassroom: vi.fn(),
@@ -26,7 +27,10 @@ vi.mock('~/utils/routeAuth.server', () => ({
   assertClassroomMutationAllowed: vi.fn(),
 }));
 vi.mock('~/utils/helpers', () => ({ addAuditLog: vi.fn(), addClassroomAuditLog: vi.fn() }));
-vi.mock('~/components', () => ({ LateOverrideButton: () => null }));
+vi.mock('~/components', () => ({
+  LateOverrideButton: () => null,
+  QuizLateWaiverButton: () => null,
+}));
 vi.mock('~/components/features/grading/GradeBadges', () => ({ default: () => null }));
 vi.mock('~/components/features/assignments/AssignmentsTable', () => ({
   ASSIGNMENT_TYPE_META: {},
@@ -65,6 +69,9 @@ vi.mock('@classmoji/services', () => ({
     },
     quizGradeItems: {
       loadQuizGradeItems: (...a: unknown[]) => mocks.loadQuizGradeItems(...a),
+    },
+    quizLateWaiver: {
+      waivedAssignmentIdsForStudent: (...a: unknown[]) => mocks.waivedAssignmentIdsForStudent(...a),
     },
     team: {
       findTeamsForStudentInClassroom: (...a: unknown[]) =>
@@ -127,6 +134,7 @@ describe('student report loader — quiz visibility', () => {
     mocks.findOwnResponse.mockResolvedValue(null);
     mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
     mocks.loadQuizGradeItems.mockResolvedValue(new Map());
+    mocks.waivedAssignmentIdsForStudent.mockResolvedValue(new Set());
     mocks.findTeamsForStudentInClassroom.mockResolvedValue([]);
   });
 
@@ -231,6 +239,7 @@ describe('student report loader — quiz grade items', () => {
     counting_adjusted: false,
     counting_adjusted_emoji: null,
     counting_orphaned: false,
+    late_waived: false,
   };
 
   beforeEach(() => {
@@ -253,6 +262,7 @@ describe('student report loader — quiz grade items', () => {
     mocks.findOwnResponse.mockResolvedValue(null);
     mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
     mocks.loadQuizGradeItems.mockResolvedValue(new Map());
+    mocks.waivedAssignmentIdsForStudent.mockResolvedValue(new Set());
   });
 
   it("loads this student's items only, with the classroom's quiz visibility", async () => {
@@ -309,6 +319,60 @@ describe('student report loader — quiz grade items', () => {
     expect(data.quizItems).toEqual([]);
   });
 
+  const acceptedEnrollment = (over: Record<string, unknown> = {}) => ({
+    id: 'm-1',
+    comment: null,
+    letter_grade: null,
+    has_accepted_invite: true,
+    user: { id: 'u-1', name: 'Alice', login: 'alice', school_id: null, image: null },
+    ...over,
+  });
+
+  it("loads this student's quiz late waivers in this classroom, for the pill and shield", async () => {
+    mocks.waivedAssignmentIdsForStudent.mockResolvedValue(new Set(['a-quiz']));
+    mocks.findStudentByLoginInClassroom.mockResolvedValue(acceptedEnrollment());
+
+    const data = await load();
+
+    expect(mocks.waivedAssignmentIdsForStudent).toHaveBeenCalledExactlyOnceWith({
+      classroomId: 'c-1',
+      studentId: 'u-1',
+      assignmentIds: ['a-quiz'],
+    });
+    expect(data.quizWaivedIds).toEqual(['a-quiz']);
+    // A teacher in an ACTIVE classroom may flip the quiz shield.
+    expect(data.canWaiveQuizLate).toBe(true);
+  });
+
+  it('offers no quiz shield for a student who has not accepted their invite', async () => {
+    mocks.findStudentByLoginInClassroom.mockResolvedValue(
+      acceptedEnrollment({ has_accepted_invite: false })
+    );
+    expect((await load()).canWaiveQuizLate).toBe(false);
+  });
+
+  it("offers no quiz shield on the viewer's own report", async () => {
+    mocks.findStudentByLoginInClassroom.mockResolvedValue(
+      acceptedEnrollment({
+        user: { id: 'staff-1', name: 'Self', login: 'self', school_id: null, image: null },
+      })
+    );
+    expect((await load()).canWaiveQuizLate).toBe(false);
+  });
+
+  it('offers no quiz shield where the classroom takes no changes from the viewer', async () => {
+    mocks.findStudentByLoginInClassroom.mockResolvedValue(acceptedEnrollment());
+    mocks.requireClassroomStaff.mockResolvedValue({
+      userId: 'staff-1',
+      classroom: { id: 'c-1', slug: 'cs101', status: 'LOCKED', git_organization: null },
+      membership: { role: 'TEACHER' },
+    });
+
+    const data = await load();
+
+    expect(data.canWaiveQuizLate).toBe(false);
+  });
+
   it('errors instead of dropping quizzes when the visibility lookup fails', async () => {
     mocks.quizzesVisibleOrThrow.mockRejectedValue(new Error('lookup failed'));
 
@@ -335,6 +399,7 @@ describe('student report loader — final-grade release state', () => {
     mocks.findAllAssignmentsForStudent.mockResolvedValue([]);
     mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
     mocks.loadQuizGradeItems.mockResolvedValue(new Map());
+    mocks.waivedAssignmentIdsForStudent.mockResolvedValue(new Set());
   });
 
   it.each([
@@ -373,6 +438,7 @@ describe('student report loader — teams', () => {
     mocks.findAllAssignmentsForStudent.mockResolvedValue([]);
     mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
     mocks.loadQuizGradeItems.mockResolvedValue(new Map());
+    mocks.waivedAssignmentIdsForStudent.mockResolvedValue(new Set());
   });
 
   const github = (username: string) => ({

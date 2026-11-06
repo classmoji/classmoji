@@ -30,6 +30,8 @@ const mocks = vi.hoisted(() => ({
   findUsersByRole: vi.fn(),
   netQuizExtensionHoursByStudent: vi.fn(),
   netQuizExtensionHours: vi.fn(),
+  waivedStudentIdsForAssignment: vi.fn(),
+  waivedAssignmentIdsForStudent: vi.fn(),
   findScaleByClassroomId: vi.fn(),
   regradeFindMany: vi.fn(),
   openQuizRequestAttemptIds: vi.fn(),
@@ -76,6 +78,10 @@ vi.mock('@classmoji/services', () => ({
     },
     quizGradeItems: {
       netQuizExtensionHours: (...a: unknown[]) => mocks.netQuizExtensionHours(...a),
+    },
+    quizLateWaiver: {
+      waivedStudentIdsForAssignment: (...a: unknown[]) => mocks.waivedStudentIdsForAssignment(...a),
+      waivedAssignmentIdsForStudent: (...a: unknown[]) => mocks.waivedAssignmentIdsForStudent(...a),
     },
     emojiMapping: {
       findScaleByClassroomId: (...a: unknown[]) => mocks.findScaleByClassroomId(...a),
@@ -371,6 +377,8 @@ beforeEach(() => {
   mocks.openQuizRequestAttemptIds.mockResolvedValue(new Set());
   mocks.findOpenByQuizAttemptId.mockResolvedValue(null);
   mocks.netQuizExtensionHours.mockResolvedValue(new Map());
+  mocks.waivedStudentIdsForAssignment.mockResolvedValue(new Set());
+  mocks.waivedAssignmentIdsForStudent.mockResolvedValue(new Set());
   // One user's attempts on the quiz, newest first (the counting-attempt read).
   mocks.findForUserByQuizIds.mockImplementation(async (userId: string) =>
     ATTEMPTS.filter(a => a.user_id === userId)
@@ -666,6 +674,7 @@ describe('staff attempt drawer payload', () => {
         band: { evaluation: 'GOOD', numeric_score: 3 },
         lateHours: null,
         countedEmoji: null,
+        lateWaived: false,
         // Staff views do not work it out (E15 is the student's label).
         countsTowardGrade: null,
       },
@@ -685,6 +694,8 @@ describe('staff attempt drawer payload', () => {
         studentName: 'Ada Lovelace',
         createdAt: '2026-03-04T09:00:00.000Z',
       },
+      // A quiz in no module has no late penalty and no shield.
+      lateWaiver: null,
     });
     expectNoSentinels(payload);
   });
@@ -770,8 +781,80 @@ describe('staff attempt drawer payload', () => {
       emoji: 'eyes',
       lateHours: 6,
       countedEmoji: '-1',
+      lateWaived: false,
     });
   });
+
+  it("under the student's late waiver the attempt is 0 h late and counts as graded (#813)", async () => {
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: TA.id,
+      classroom: { ...CLASSROOM, settings: { late_penalty_points_per_hour: 1 } },
+      membership: { role: 'ASSISTANT' },
+    });
+    mocks.quizFindById.mockResolvedValue({
+      ...QUIZ_ROW,
+      assignment: { id: 'asg-1', student_deadline: new Date('2026-03-03T04:20:00Z') },
+    });
+    mocks.findWithMessages.mockResolvedValue(withMessages(ADA_SECOND));
+    mocks.waivedAssignmentIdsForStudent.mockResolvedValue(new Set(['asg-1']));
+
+    const payload = await staffAttemptRoute.loader(attemptArgs('assistant', ADA_SECOND.id));
+
+    // The attempt's own student, in this classroom.
+    expect(mocks.waivedAssignmentIdsForStudent).toHaveBeenCalledWith({
+      classroomId: CLASSROOM.id,
+      studentId: ADA.id,
+      assignmentIds: ['asg-1'],
+    });
+    expect(payload.gradePanel?.grade).toMatchObject({
+      emoji: 'eyes',
+      lateHours: 0,
+      countedEmoji: null,
+      lateWaived: true,
+    });
+    // The "Counted" line follows the pick with nothing taken off.
+    expect(payload.gradePanel?.countedByEmoji).toEqual(
+      Object.fromEntries(Object.keys(SCALE).map(e => [e, e]))
+    );
+    // An assistant sees the waiver's state, never an active shield.
+    expect(payload.gradePanel?.lateWaiver).toEqual({
+      assignmentId: 'asg-1',
+      studentId: ADA.id,
+      waived: true,
+      canWaive: false,
+    });
+  });
+
+  it.each([
+    ['OWNER', 'ACTIVE', true],
+    ['TEACHER', 'ACTIVE', true],
+    ['ASSISTANT', 'ACTIVE', false],
+    ['TEACHER', 'LOCKED', false],
+    ['OWNER', 'LOCKED', true],
+  ])(
+    'offers the late shield to a %s in a %s classroom: %s (#813)',
+    async (role, status, canWaive) => {
+      mocks.assertClassroomAccess.mockResolvedValue({
+        userId: TA.id,
+        classroom: { ...CLASSROOM, status, settings: { late_penalty_points_per_hour: 1 } },
+        membership: { role },
+      });
+      mocks.quizFindById.mockResolvedValue({
+        ...QUIZ_ROW,
+        assignment: { id: 'asg-1', student_deadline: new Date('2026-03-03T04:20:00Z') },
+      });
+      mocks.findWithMessages.mockResolvedValue(withMessages(ADA_SECOND));
+
+      const payload = await staffAttemptRoute.loader(attemptArgs('teacher', ADA_SECOND.id));
+
+      expect(payload.gradePanel?.lateWaiver).toEqual({
+        assignmentId: 'asg-1',
+        studentId: ADA.id,
+        waived: false,
+        canWaive,
+      });
+    }
+  );
 });
 
 describe('student attempt drawer payload', () => {
@@ -990,6 +1073,7 @@ describe('student attempt drawer payload', () => {
         band: { evaluation: 'EXCELLENT', numeric_score: 4 },
         lateHours: null,
         countedEmoji: null,
+        lateWaived: false,
         // Ada's best attempt under HIGHEST (E15).
         countsTowardGrade: true,
       },
@@ -1206,6 +1290,57 @@ describe('quiz results page: lateness', () => {
     expect(ta.lateHours).toBeNull();
   });
 
+  it.each([
+    ['OWNER', 'ACTIVE', true],
+    ['TEACHER', 'ACTIVE', true],
+    ['ASSISTANT', 'ACTIVE', false],
+    ['TEACHER', 'UNPUBLISHED', false],
+  ])('gives a %s in a %s classroom the late shield: %s (#813)', async (role, status, canWaive) => {
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: TA.id,
+      classroom: { ...CLASSROOM, status },
+      membership: { role },
+    });
+    mocks.quizFindById.mockResolvedValue({ ...QUIZ_ROW, assignment: assignmentRow() });
+    mocks.findUsersByRole.mockResolvedValue([
+      { id: ADA.id, has_accepted_invite: true },
+      { id: BABBAGE.id, has_accepted_invite: true },
+    ]);
+
+    const payload = await detailRoute.loader(detailArgs());
+
+    expect(payload.lateWaiver).toEqual({
+      assignmentId: 'asg-1',
+      canWaive,
+      studentIds: canWaive ? [ADA.id, BABBAGE.id] : [],
+    });
+  });
+
+  it("offers the shield on accepted students only, never on a pending one or the viewer's own row", async () => {
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: TA.id,
+      classroom: CLASSROOM,
+      membership: { role: 'TEACHER' },
+    });
+    mocks.quizFindById.mockResolvedValue({ ...QUIZ_ROW, assignment: assignmentRow() });
+    mocks.findUsersByRole.mockResolvedValue([
+      { id: ADA.id, has_accepted_invite: true },
+      // Pending: on the roster, but no shield.
+      { id: BABBAGE.id, has_accepted_invite: false },
+      // The viewer, also enrolled as a student here.
+      { id: TA.id, has_accepted_invite: true },
+    ]);
+
+    const payload = await detailRoute.loader(detailArgs());
+
+    expect(payload.lateWaiver?.studentIds).toEqual([ADA.id]);
+  });
+
+  it('has no late shield for a quiz in no module', async () => {
+    const payload = await detailRoute.loader(detailArgs());
+    expect(payload.lateWaiver).toBeNull();
+  });
+
   it('reads no hours bought for a quiz with no due date, and marks nothing late or missing', async () => {
     mocks.quizFindById.mockResolvedValue({
       ...QUIZ_ROW,
@@ -1223,6 +1358,35 @@ describe('quiz results page: lateness', () => {
       attemptCount: 0,
       countsAsZero: false,
     });
+  });
+
+  it("a late waiver clears one student's lateness, never a missing attempt's zero, and nobody else's (#813)", async () => {
+    mocks.quizFindById.mockResolvedValue({ ...QUIZ_ROW, assignment: assignmentRow() });
+    mocks.findUsersByRole.mockResolvedValue([ADA, BABBAGE, LOVELACE]);
+    // Ada (48 h late on her second attempt) and Lovelace (no attempt) are
+    // waived; a row naming the TA (no STUDENT membership) counts for nothing.
+    mocks.waivedStudentIdsForAssignment.mockResolvedValue(new Set([ADA.id, LOVELACE.id, TA.id]));
+
+    const payload = await detailRoute.loader(detailArgs());
+
+    expect(mocks.waivedStudentIdsForAssignment).toHaveBeenCalledWith({
+      classroomId: CLASSROOM.id,
+      assignmentId: 'asg-1',
+    });
+    const ada = payload.students.find(s => s.userId === ADA.id)!;
+    expect(ada.lateWaived).toBe(true);
+    expect(ada.attempts.map(a => [a.id, a.lateHours])).toEqual([
+      ['a-ada-2', 0],
+      ['a-ada-1', 0],
+    ]);
+    // Taking the quiz is not waived: no attempt past the due date still counts 0.
+    const lovelace = payload.students.find(s => s.userId === LOVELACE.id)!;
+    expect(lovelace).toMatchObject({ lateWaived: true, countsAsZero: true, countedScore: 0 });
+    // Babbage has no waiver.
+    const babbage = payload.students.find(s => s.userId === BABBAGE.id)!;
+    expect(babbage.lateWaived).toBe(false);
+    const ta = payload.students.find(s => s.userId === TA.id)!;
+    expect(ta.lateWaived).toBe(false);
   });
 
   it('lists every rostered student, and counts 0 for those past the due date with nothing completed', async () => {
@@ -1248,6 +1412,7 @@ describe('quiz results page: lateness', () => {
       countedScore: 0,
       lateHours: null,
       countsAsZero: true,
+      lateWaived: false,
       bestScore: null,
       firstAttemptScore: null,
       countingAttemptId: null,

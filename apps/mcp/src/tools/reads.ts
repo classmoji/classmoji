@@ -248,7 +248,8 @@ export const listRegradeRequestsTool = mirrorResourceTool({
     'previous_grade and new_grade (emoji, new once ' +
     'resolved), and the submission or the quiz attempt (quiz_id, quiz_name, attempt_id, ' +
     'attempt_number, current_emoji, adjusted, original_emoji; an open one also late_hours ' +
-    'and counted_emoji, its grade after the late penalty). Grades are emoji, never ' +
+    'and counted_emoji, its grade after the late penalty, and late_override: true when staff ' +
+    'waived the late penalty). Grades are emoji, never ' +
     'numbers; quiz requests only where the classroom shows quizzes. Teaching team only. ' +
     'Resolve them with regrade_resolve.',
 });

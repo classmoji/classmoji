@@ -52,6 +52,8 @@ interface AttemptsSummary {
   currentOriginalEmoji: string | null;
   countedEmoji: string | null;
   currentLateHours: number;
+  /** Staff waived this student's late penalty on the quiz (#813). */
+  lateWaived: boolean;
   canCreateNew: boolean;
   [key: string]: unknown;
 }
@@ -158,14 +160,23 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     membership?.role === 'STUDENT' ||
     (await ClassmojiService.classroomMembership.hasRole(classroom.id, userId, 'STUDENT'));
   const assignmentIds = quizzes.flatMap(quiz => (quiz.assignment ? [quiz.assignment.id] : []));
-  const boughtHours =
+  // The hours bought on each quiz, and the quizzes on which staff waived this
+  // student's late penalty (never late there).
+  const [boughtHours, waivedAssignmentIds] =
     isStudent && assignmentIds.length > 0
-      ? await ClassmojiService.quizGradeItems.netQuizExtensionHours({
-          classroomId: classroom.id,
-          studentId: userId,
-          assignmentIds,
-        })
-      : new Map<string, number>();
+      ? await Promise.all([
+          ClassmojiService.quizGradeItems.netQuizExtensionHours({
+            classroomId: classroom.id,
+            studentId: userId,
+            assignmentIds,
+          }),
+          ClassmojiService.quizLateWaiver.waivedAssignmentIdsForStudent({
+            classroomId: classroom.id,
+            studentId: userId,
+            assignmentIds,
+          }),
+        ])
+      : [new Map<string, number>(), new Set<string>()];
   const penalty: unknown = classroom.settings?.late_penalty_points_per_hour;
   const latePenaltyPerHour = typeof penalty === 'number' ? penalty : 0;
 
@@ -173,11 +184,18 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const transformedQuizzes = quizzes.map(quiz => {
     const extensionHours =
       isStudent && quiz.assignment ? Math.max(0, boughtHours.get(quiz.assignment.id) ?? 0) : 0;
+    const lateWaived =
+      isStudent && quiz.assignment ? waivedAssignmentIds.has(quiz.assignment.id) : false;
     const scoring = studentQuizScoring(
       quiz.attempts || [],
       quiz.grading_strategy,
       isStudent && quiz.assignment
-        ? { studentDeadline: quiz.assignment.student_deadline, extensionHours, latePenaltyPerHour }
+        ? {
+            studentDeadline: quiz.assignment.student_deadline,
+            extensionHours,
+            lateWaived,
+            latePenaltyPerHour,
+          }
         : null,
       emojiScale
     );
@@ -233,6 +251,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
             counting?.scoreEmoji
           ),
           lateHours: scoring.currentLateHours,
+          lateWaived: scoring.lateWaived,
         }
       ),
 
@@ -624,7 +643,9 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
       render: (dueDate: string | null, record: StudentQuiz) => (
         <div className="flex flex-col items-start gap-1">
           <Countdown deadline={dueDate} />
-          {dueDate && record.extensionHours > 0 && (
+          {/* Under staff's late waiver the hours bought change nothing: no
+              note, as on a repo submission with a late override. */}
+          {dueDate && record.extensionHours > 0 && !record.attemptsSummary.lateWaived && (
             <span className="text-xs font-medium px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300">
               +{record.extensionHours}h applied
             </span>

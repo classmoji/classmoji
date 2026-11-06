@@ -22,8 +22,8 @@ import type { QuizEvaluationRecordV2 } from './quizAgent/records.ts';
 import { isOpenQuizAttempt } from './quiz.ts';
 import {
   countingQuizScore,
-  lateHours as lateHoursOf,
   quizGradeItem,
+  quizLateHours,
   type QuizGradeAssignment,
 } from './quizGrade.ts';
 import {
@@ -127,7 +127,8 @@ export interface QuizResultAttempt {
   /**
    * Whole hours past the student's due date (plus the hours they bought), by
    * `completed_at`; null where lateness does not apply (a staff member's or
-   * other non-student's attempt, or a quiz with no due date).
+   * other non-student's attempt, or a quiz with no due date). 0 under a late
+   * waiver.
    */
   lateHours: number | null;
 }
@@ -149,6 +150,14 @@ export interface QuizResultStudent {
    * attempt still running.
    */
   countsAsZero: boolean;
+  /**
+   * Staff waived this student's late penalty on this quiz (`QuizLateWaiver`):
+   * no attempt is late. Taking the quiz is not waived: with no completed
+   * attempt past the deadline the student still counts 0 (`countsAsZero`).
+   * Shown whether or not the quiz has a due date, so a waiver can always be
+   * seen and cleared.
+   */
+  lateWaived: boolean;
   bestScore: number | null;
   firstAttemptScore: number | null;
   countingAttemptId: string | null;
@@ -247,6 +256,7 @@ export const buildQuizResultRows = ({
   emojiScale,
   late = null,
   roster = null,
+  waived = null,
 }: {
   attempts: QuizAttemptSource[];
   /** The classroom's grading scale (`emojiMapping.findScaleByClassroomId`). */
@@ -267,6 +277,13 @@ export const buildQuizResultRows = ({
     assignment: QuizGradeAssignment | null;
     now: Date;
   } | null;
+  /**
+   * The students whose late penalty staff waived on this quiz
+   * (`quizLateWaiver.waivedStudentIdsForAssignment`). Null: nobody. With a
+   * roster, only rostered students' waivers count (staff previews and former
+   * members are never late anyway).
+   */
+  waived?: ReadonlySet<string> | null;
 }): { students: QuizResultStudent[]; viewerAttempt: QuizViewerAttempt | null } => {
   const byStudent = new Map<
     string,
@@ -296,6 +313,9 @@ export const buildQuizResultRows = ({
   }
 
   const rostered = new Set(roster?.students.map(s => String(s.id)) ?? []);
+  // A waiver row outlives the membership: only a rostered student's counts.
+  const isWaived = (userId: string) =>
+    waived?.has(userId) === true && (roster === null || rostered.has(userId));
   // The gradebook's zero rule, for a rostered student's attempts (any state).
   const countsAsZero = (userId: string, sources: QuizAttemptSource[]) => {
     if (!roster?.assignment || !rostered.has(userId)) return false;
@@ -304,6 +324,7 @@ export const buildQuizResultRows = ({
       gradingStrategy,
       attempts: sources,
       extensionHours: late?.extensionHours.get(userId) ?? 0,
+      lateWaived: isWaived(userId),
       latePenaltyPerHour: late?.latePenaltyPerHour ?? 0,
       // This page is shown only where quizzes are.
       quizzesVisible: true,
@@ -321,6 +342,7 @@ export const buildQuizResultRows = ({
         ? {
             studentDeadline: late.studentDeadline,
             extensionHours: late.extensionHours.get(userId) ?? 0,
+            lateWaived: isWaived(userId),
             latePenaltyPerHour: late.latePenaltyPerHour,
             emojiScale,
           }
@@ -335,9 +357,7 @@ export const buildQuizResultRows = ({
     const counting = student.attempts.find(a => a.id === score.counting_attempt_id) ?? null;
     const sorted = [...student.attempts].sort((a, b) => time(b.started_at) - time(a.started_at));
     const lateOf = (attempt: QuizResultAttempt) =>
-      lateContext && attempt.completed_at
-        ? lateHoursOf(attempt.completed_at, lateContext.studentDeadline, lateContext.extensionHours)
-        : null;
+      lateContext && attempt.completed_at ? quizLateHours(attempt.completed_at, lateContext) : null;
 
     const zero = countsAsZero(userId, student.sources);
 
@@ -354,6 +374,7 @@ export const buildQuizResultRows = ({
       countedScore: zero ? 0 : score.grade,
       lateHours: counting && lateContext ? score.late_hours : null,
       countsAsZero: zero,
+      lateWaived: isWaived(userId),
       bestScore:
         completed.length > 0 ? Math.max(...completed.map(a => a.partialCreditScore ?? 0)) : null,
       firstAttemptScore: counting?.firstAttemptScore ?? null,
@@ -379,6 +400,7 @@ export const buildQuizResultRows = ({
         countedScore: zero ? 0 : null,
         lateHours: null,
         countsAsZero: zero,
+        lateWaived: isWaived(userId),
         bestScore: null,
         firstAttemptScore: null,
         countingAttemptId: null,

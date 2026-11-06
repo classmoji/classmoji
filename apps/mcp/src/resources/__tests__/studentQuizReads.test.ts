@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   quizzesVisibleOrThrow: vi.fn(),
   loadQuizGradeItems: vi.fn(),
   netQuizExtensionHours: vi.fn(),
+  waivedAssignmentIdsForStudent: vi.fn(),
   findForUserByQuizIds: vi.fn(),
   findForUser: vi.fn(),
   gradeSummaryForStudent: vi.fn(),
@@ -53,6 +54,9 @@ vi.mock('@classmoji/services', () => ({
     quizGradeItems: {
       loadQuizGradeItems: (...a: unknown[]) => mocks.loadQuizGradeItems(...a),
       netQuizExtensionHours: (...a: unknown[]) => mocks.netQuizExtensionHours(...a),
+    },
+    quizLateWaiver: {
+      waivedAssignmentIdsForStudent: (...a: unknown[]) => mocks.waivedAssignmentIdsForStudent(...a),
     },
     quizAttempt: { findForUserByQuizIds: (...a: unknown[]) => mocks.findForUserByQuizIds(...a) },
     gitRepoAssignment: { findForUser: (...a: unknown[]) => mocks.findForUser(...a) },
@@ -151,6 +155,7 @@ beforeEach(() => {
   mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
   mocks.findForUser.mockResolvedValue([]);
   mocks.netQuizExtensionHours.mockResolvedValue(new Map());
+  mocks.waivedAssignmentIdsForStudent.mockResolvedValue(new Set());
   mocks.findForUserByQuizIds.mockResolvedValue([]);
   mocks.findScaleByClassroomId.mockResolvedValue(SCALE);
 });
@@ -239,6 +244,7 @@ describe('my_grades quiz rows', () => {
         instructor_name: null,
         late_hours: 0,
         counts_as_zero: false,
+        late_override: false,
         counting_attempt_id: 'ontime-80',
         completed_at: at(-1),
       },
@@ -256,10 +262,29 @@ describe('my_grades quiz rows', () => {
         instructor_name: null,
         late_hours: 0,
         counts_as_zero: true,
+        late_override: false,
         counting_attempt_id: null,
         completed_at: null,
       },
     ]);
+  });
+
+  it('names a late waiver on the row it applies to, and only that one (#813)', async () => {
+    arrangeTwoQuizzes();
+    mocks.waivedAssignmentIdsForStudent.mockResolvedValue(new Set([QUIZ_A]));
+
+    const payload = (await gradesMineResource.handler(
+      VARS,
+      studentCtx({ late_penalty_points_per_hour: 4 }),
+      URI
+    )) as Payload;
+
+    expect(payload.quiz_grades?.map(q => [q.assignment_id, q.late_override, q.late_hours])).toEqual(
+      [
+        [QUIZ_A, true, 0],
+        [QUIZ_B, false, 0],
+      ]
+    );
   });
 
   it('measures lateness from the due date plus the hours bought', async () => {
@@ -577,7 +602,8 @@ describe('my_grades final_grade and estimated_grade', () => {
       expect(description).toContain('final_grade');
       expect(description).toContain('estimated_grade');
       expect(description).not.toContain('percent,');
-      expect(description).not.toContain('override');
+      // The letter-grade override never shows (late_override is the quiz late waiver).
+      expect(description).not.toMatch(/(?<!late_)override/);
     }
   });
 });
@@ -899,6 +925,24 @@ describe('list_quizzes for a student: extension fields', () => {
       countingAttemptId: 'late-90',
       lateHours: 2,
     });
+  });
+
+  it("under staff's late waiver the quiz says late_override and nothing is late (#813)", async () => {
+    arrangeList();
+    mocks.waivedAssignmentIdsForStudent.mockResolvedValue(new Set([QUIZ_A]));
+
+    const { quizzes } = (await quizzesResource.handler(VARS, studentCtx(settings), URI)) as {
+      quizzes: Row[];
+    };
+
+    // The caller's own waivers, in this classroom.
+    expect(mocks.waivedAssignmentIdsForStudent).toHaveBeenCalledWith({
+      classroomId: 'class-1',
+      studentId: 'stu-1',
+      assignmentIds: expect.arrayContaining([QUIZ_A]),
+    });
+    expect(quizzes[0]).toMatchObject({ late_override: true });
+    expect(quizzes[0].my_attempts).toMatchObject({ lateHours: 0 });
   });
 
   it('gates the list on the predicate the totals use', async () => {

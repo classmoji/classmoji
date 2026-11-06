@@ -28,8 +28,8 @@
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import {
   QUIZ_REGRADE_REPLY_MAX_LENGTH,
-  lateHours as lateHoursOf,
   quizAttemptGrade,
+  quizLateHours,
   quizPercentageEmoji,
   withLogins,
   type QuizAttemptGrade,
@@ -41,6 +41,7 @@ import { findScaleByClassroomId } from './emojiMapping.service.ts';
 import { quizzesVisibleOrThrow } from './entitlement.service.ts';
 import * as notificationService from './notification.service.ts';
 import { netQuizExtensionHoursByStudent } from './quizGradeItems.service.ts';
+import { waivedByStudent } from './quizLateWaiver.service.ts';
 import {
   QuizGradeError,
   acceptedRoleIn,
@@ -207,8 +208,11 @@ export interface QuizRequestLateness {
   /**
    * The attempt's whole hours past its due date plus the hours the student
    * bought; null when the quiz has no due date (no assignment, or none set).
+   * 0 under a late waiver.
    */
   lateHours: number | null;
+  /** Staff waived this student's late penalty on the quiz (`QuizLateWaiver`). */
+  lateWaived: boolean;
   /** The attempt's grade now after the late penalty, as the classroom's emoji. */
   countedEmoji: string | null;
 }
@@ -217,7 +221,8 @@ export interface QuizRequestLateness {
  * request id → lateness, for the OPEN quiz requests among `rows` (what the
  * staff resolve modal's "Counted" line and the MCP queue show). Lateness is
  * measured against the quiz's own assignment in `classroomId`, pushed out by
- * the hours the student bought on it; the penalty is the classroom's.
+ * the hours the student bought on it, and never late where staff waived the
+ * student's late penalty on it; the penalty is the classroom's.
  */
 /** The request fields `openQuizRequestLateness` reads (a `findMany` row fits). */
 export interface LatenessRequestRow {
@@ -247,9 +252,10 @@ export const openQuizRequestLateness = async (
       )
     ),
   ];
-  // Three reads for the whole list: the penalty, the due dates (only this
-  // classroom's assignments) and the hours each student bought on each.
-  const [settings, assignments, bought] = await Promise.all([
+  // Four reads for the whole list: the penalty, the due dates (only this
+  // classroom's assignments), the hours each student bought on each, and the
+  // late waivers staff set.
+  const [settings, assignments, bought, waivers] = await Promise.all([
     getPrisma().classroomSettings.findUnique({
       where: { classroom_id: classroomId },
       select: { late_penalty_points_per_hour: true },
@@ -265,6 +271,7 @@ export const openQuizRequestLateness = async (
       studentIds: open.map(r => r.student_id),
       assignmentIds,
     }),
+    waivedByStudent({ classroomId, studentIds: open.map(r => r.student_id), assignmentIds }),
   ]);
   const penalty = Number(settings?.late_penalty_points_per_hour ?? 0) || 0;
   const deadlineOf = new Map(assignments.map(a => [a.id, a.student_deadline]));
@@ -272,18 +279,22 @@ export const openQuizRequestLateness = async (
     const attempt = row.quiz_attempt!;
     const assignmentId = attempt.quiz.assignment?.id ?? null;
     const deadline = assignmentId ? (deadlineOf.get(assignmentId) ?? null) : null;
+    const lateWaived = assignmentId
+      ? waivers.get(row.student_id)?.has(assignmentId) === true
+      : false;
     const late =
       assignmentId && deadline
-        ? lateHoursOf(
-            attempt.completed_at,
-            deadline,
-            Math.max(0, bought.get(row.student_id)?.get(assignmentId) ?? 0)
-          )
+        ? quizLateHours(attempt.completed_at, {
+            studentDeadline: deadline,
+            extensionHours: Math.max(0, bought.get(row.student_id)?.get(assignmentId) ?? 0),
+            lateWaived,
+          })
         : null;
     // The penalty comes off the effective score itself (D2), not off its emoji.
     const { effective } = quizAttemptGrade(attempt, scale);
     result.set(row.id, {
       lateHours: late,
+      lateWaived,
       countedEmoji:
         late !== null && late > 0 && effective.percentage !== null
           ? quizPercentageEmoji(Math.max(0, effective.percentage - late * penalty), scale)
