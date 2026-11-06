@@ -10,7 +10,7 @@
  *    repositories hosted anywhere. Each result carries its `group`; the
  *    pickers show them under "Your templates" and "Public templates".
  *
- * Only OWNER and ASSISTANT roles can access this endpoint.
+ * Only the teaching team (OWNER, TEACHER, ASSISTANT) can access this endpoint.
  */
 import { Octokit } from '@octokit/rest';
 import getPrisma from '@classmoji/database';
@@ -210,6 +210,7 @@ async function searchTemplateRepos(
   };
 
   return orderTemplateResults({
+    orgLogin,
     orgItems: items(orgResult),
     publicItems: items(publicResult),
     excluded,

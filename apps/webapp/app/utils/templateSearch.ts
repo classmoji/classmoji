@@ -32,16 +32,20 @@ const GROUP_ORDER: TemplateGroup[] = ['class', 'public'];
 
 /**
  * Merge the org search and the public search into one ordered list. A repo in
- * both (the org's public repos) keeps its org entry; repos in `excluded`
- * (Classmoji's generated student and team repos) are dropped. Within a group
- * the search's own order (most recently updated) is kept.
+ * both (the org's public repos) keeps its org entry, and an org repo that only
+ * the public search returned (the org search failed) still counts as the
+ * class's own. Repos in `excluded` (Classmoji's generated student and team
+ * repos) are dropped. Within a group the search's own order (most recently
+ * updated) is kept.
  */
 export function orderTemplateResults({
+  orgLogin,
   orgItems,
   publicItems,
   excluded,
   limit,
 }: {
+  orgLogin: string;
   orgItems: Omit<TemplateRepository, 'group'>[];
   publicItems: Omit<TemplateRepository, 'group'>[];
   excluded: Set<string>;
@@ -58,8 +62,15 @@ export function orderTemplateResults({
 
   const rank = (r: TemplateRepository) => (r.private ? 0 : 2) + (r.is_template ? 0 : 1);
   // Array.prototype.sort is stable, so ties keep the search order.
-  const own = take(orgItems, 'class').sort((a, b) => rank(a) - rank(b));
-  const elsewhere = take(publicItems, 'public');
+  const inOrg = (r: { full_name: string }) =>
+    r.full_name.toLowerCase().startsWith(`${orgLogin.toLowerCase()}/`);
+  const own = take([...orgItems, ...publicItems.filter(inOrg)], 'class').sort(
+    (a, b) => rank(a) - rank(b)
+  );
+  const elsewhere = take(
+    publicItems.filter(r => !inOrg(r)),
+    'public'
+  );
   return [...own, ...elsewhere].slice(0, limit);
 }
 
