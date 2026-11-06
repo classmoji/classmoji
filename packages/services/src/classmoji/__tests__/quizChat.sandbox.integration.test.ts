@@ -302,8 +302,8 @@ describe.skipIf(!RUN)('quiz chat: code sandbox questions (integration)', () => {
   // ─── the pin ──────────────────────────────────────────────────────────────
 
   it("pins the quiz's switch at the first admission, and never changes it after", async () => {
-    // Attempts that may carry sandboxes are stamped with contract 3.
-    expect(CONTRACT_VERSION).toBe(3);
+    // Attempts that may carry sandboxes are stamped with contract 3 or later.
+    expect(CONTRACT_VERSION).toBeGreaterThanOrEqual(3);
     const on = await newAttempt();
     await begin(on);
     expect((await attemptRow(on)).agent_config).toMatchObject({

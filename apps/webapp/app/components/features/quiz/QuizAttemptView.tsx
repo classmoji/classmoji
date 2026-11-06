@@ -40,6 +40,8 @@ export type QuizAttemptViewProps = {
   chatActivity?: QuizChatProps['chatActivity'];
   /** How many more messages an open chat attempt admits (see QuizChatProps). */
   messagesLeft?: number | null;
+  /** The answer rules the attempt works under (see QuizChatProps). */
+  answerRules?: QuizChatProps['answerRules'];
   /** What else the drawer loaders send (org, result, …); unread here. */
   [key: string]: unknown;
 };
@@ -79,6 +81,7 @@ function QuizAttemptView(props: QuizAttemptViewProps) {
       chatStarted,
       chatActivity,
       messagesLeft,
+      answerRules,
       readOnly,
       userLogin,
       userImage,
@@ -100,6 +103,7 @@ function QuizAttemptView(props: QuizAttemptViewProps) {
             chatStarted={chatStarted === true}
             chatActivity={chatActivity ?? null}
             messagesLeft={typeof messagesLeft === 'number' ? messagesLeft : null}
+            answerRules={answerRules ?? null}
             readOnly={Boolean(readOnly)}
             userLogin={userLogin ?? null}
             userImage={userImage ?? null}

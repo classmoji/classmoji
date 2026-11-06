@@ -97,25 +97,40 @@ export type QuizUIMessage = UIMessage<QuizMessageMetadata, QuizDataParts, QuizUI
 export type QuizUIMessagePart = QuizUIMessage['parts'][number];
 export type QuizUIMessageChunk = UIMessageChunk<QuizMessageMetadata, QuizDataParts>;
 
-/** The fixed text a button click sends as the student's message. */
+/**
+ * The fixed text a button click sends as the student's message. The hint
+ * button ("Try again with hint") sends "Give me a hint"; it sent
+ * `LEGACY_TRY_AGAIN_TEXT` before, which still counts as the click.
+ */
 export const BUTTON_TEXT = {
-  try_again: "I'd like to try answering this question again",
+  try_again: 'Give me a hint',
   next: 'next',
 } as const;
 
-/** A message that is just "try again", with any trailing punctuation. */
-const TYPED_TRY_AGAIN = /^try\s+again[.!?…]*$/;
+/** What the hint button sent before it was relabelled; saved transcripts carry it. */
+export const LEGACY_TRY_AGAIN_TEXT = "I'd like to try answering this question again";
+
+/**
+ * A message that is just "try again" or "give me a hint", in any case, with
+ * any trailing punctuation.
+ */
+const TYPED_TRY_AGAIN = /^(?:try\s+again|give\s+me\s+a\s+hint)[.!?…]*$/;
 
 /**
  * The button a student message's text names: a button's text, trimmed and in
- * any case (a typed "Next" is the Next button), or a message that is just
- * "try again" (trailing punctuation allowed), which the prompt takes as a Try
- * again click too. Admission tags the message with it; the chat reads it to
- * know that a message used up the buttons.
+ * any case (a typed "Next" is the Next button), the hint button's earlier
+ * text, or a message that is just "try again" or "give me a hint" (trailing
+ * punctuation allowed), which the prompt takes as a hint request too.
+ * Admission tags the message with it; the chat reads it to know that a
+ * message used up the buttons.
  */
 export function buttonActionFor(text: string): 'next' | 'try_again' | undefined {
   const typed = text.trim().toLowerCase();
-  if (typed === BUTTON_TEXT.try_again.toLowerCase() || TYPED_TRY_AGAIN.test(typed)) {
+  if (
+    typed === BUTTON_TEXT.try_again.toLowerCase() ||
+    typed === LEGACY_TRY_AGAIN_TEXT.toLowerCase() ||
+    TYPED_TRY_AGAIN.test(typed)
+  ) {
     return 'try_again';
   }
   if (typed === BUTTON_TEXT.next.toLowerCase()) return 'next';
@@ -145,25 +160,38 @@ export function replyShowsHint(parts: readonly unknown[]): boolean {
   );
 }
 
-/** The fixed line shown with the buttons (the previous runtime's wording). */
+/** The fixed line shown with the buttons. */
 export const NEXT_STEP_LEAD_IN = {
   /** Next only, with another question to come. */
   next: 'Ready for the next question?',
   /** Next only, on the last question: moving on shows the results. */
   results: 'Ready to see your results?',
-  /** Try again and Next. */
-  try_again_or_next: 'Would you like to try again or move on?',
+  /** Try again and Next: the question is still open. */
+  try_again_or_next: 'Answer again below, or try again with a hint.',
+  /** Next only, after the student's last allowed answer, with another question to come. */
+  last_answer_next:
+    'That was your last answer for this question. Ready for the next question?',
+  /** Next only, after the last allowed answer on the last question. */
+  last_answer_results: 'That was your last answer for this question. Ready to see your results?',
 } as const;
 
 /**
  * The lead-in for a set of buttons, or null for a set that has none (Try
  * again alone: the student can always move on, so it is never offered).
+ * `lastAnswer`: the offer follows the student's last allowed answer to the
+ * question (`answers_used >= max_answers`), so Next alone says so.
  */
 export function nextStepLeadIn(
   actions: readonly ('next' | 'try_again')[],
-  isLastQuestion: boolean
+  isLastQuestion: boolean,
+  lastAnswer = false
 ): string | null {
   if (!actions.includes('next')) return null;
   if (actions.includes('try_again')) return NEXT_STEP_LEAD_IN.try_again_or_next;
+  if (lastAnswer) {
+    return isLastQuestion
+      ? NEXT_STEP_LEAD_IN.last_answer_results
+      : NEXT_STEP_LEAD_IN.last_answer_next;
+  }
   return isLastQuestion ? NEXT_STEP_LEAD_IN.results : NEXT_STEP_LEAD_IN.next;
 }

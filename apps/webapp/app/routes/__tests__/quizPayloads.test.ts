@@ -613,6 +613,7 @@ describe('staff attempt drawer payload', () => {
     expect(payload.messages).toHaveLength(1);
     expect(Object.keys(payload).sort()).toEqual(
       [
+        'answerRules',
         'attempt',
         'chatActivity',
         'chatStarted',
@@ -959,6 +960,7 @@ describe('student attempt drawer payload', () => {
 
     expect(Object.keys(payload).sort()).toEqual(
       [
+        'answerRules',
         'attempt',
         'chatActivity',
         'chatStarted',
@@ -978,6 +980,9 @@ describe('student attempt drawer payload', () => {
       ].sort()
     );
     expect(Object.keys(payload.quiz).sort()).toEqual(['id', 'name', 'question_count']);
+    // The rules the attempt works under, numbers only: not pinned yet, so the
+    // quiz's own (its column defaults here).
+    expect(payload.answerRules).toEqual({ hintCost: 15, maxAnswers: 5 });
     expect(Object.keys(payload.attempt).sort()).toEqual(
       [
         'agent_runtime',

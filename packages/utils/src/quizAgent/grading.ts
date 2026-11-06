@@ -25,11 +25,16 @@ export const ANSWER_LEVEL_CREDIT = {
   no_attempt: 0,
 } as const satisfies Record<AnswerLevel, number>;
 
-/** Points taken off an answer for each hint the student had before giving it. */
+/**
+ * Points taken off an answer for each hint the student had before giving it,
+ * by default: a quiz sets its own (`Quiz.hint_cost`, pinned per attempt), and
+ * an attempt pinned before that existed keeps this one (answerRules.ts).
+ */
 export const HINT_COST = 15;
 
-export const scoreAnswer = (a: Answer): number =>
-  Math.max(ANSWER_LEVEL_CREDIT[a.level] - HINT_COST * a.hints_before, 0);
+/** An answer's credit: its level's, less `hintCost` for each hint before it, never below 0. */
+export const scoreAnswer = (a: Answer, hintCost: number = HINT_COST): number =>
+  Math.max(ANSWER_LEVEL_CREDIT[a.level] - hintCost * a.hints_before, 0);
 
 export type DerivedQuestionResult = {
   credit_earned: number;
@@ -39,17 +44,22 @@ export type DerivedQuestionResult = {
 };
 
 /**
- * A question's result from every answer the student gave to it, in order.
- * The best answer counts; an empty list (skipped) scores 0. The first attempt is
- * correct only when the first answer is correct with no hint before it.
+ * A question's result from every answer the student gave to it, in order,
+ * with the attempt's hint cost (`HINT_COST` unless the attempt pinned its
+ * own). The best answer counts; an empty list (skipped) scores 0. The first
+ * attempt is correct only when the first answer is correct with no hint
+ * before it.
  */
-export function deriveResult(answers: readonly Answer[]): DerivedQuestionResult {
+export function deriveResult(
+  answers: readonly Answer[],
+  hintCost: number = HINT_COST
+): DerivedQuestionResult {
   if (answers.length === 0) {
     return { credit_earned: 0, tries: 0, eventually_correct: false, first_attempt_correct: false };
   }
   const first = answers[0];
   return {
-    credit_earned: Math.max(...answers.map(scoreAnswer)),
+    credit_earned: Math.max(...answers.map(a => scoreAnswer(a, hintCost))),
     tries: answers.length,
     eventually_correct: answers.some(a => a.level === 'correct'),
     first_attempt_correct: first.level === 'correct' && first.hints_before === 0,

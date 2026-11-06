@@ -2,7 +2,9 @@
  * The quiz agent's fixed tool set, without executes: the typed UI parts,
  * message validation, and the chat agent's `tools` option (which the SDK uses
  * to convert stored messages, never to call the model). They carry no
- * descriptions: the model never reads these definitions. The quiz agent's
+ * descriptions: the model never reads these definitions (offer_next_step's
+ * `toModelOutput` is the one thing here the SDK applies to the model's
+ * history). The quiz agent's
  * task builds its own tools, with their executes and descriptions, and passes
  * those to `streamText`.
  * AI SDK v7 requires `outputSchema` on a tool without `execute`.
@@ -22,6 +24,7 @@ import {
   QuizEvaluationFeedbackSchema,
   CodeAwareSandboxQuizQuestionSchema,
   RecordQuestionResultSchema,
+  offerNextStepModelOutput,
 } from './schemas.ts';
 
 // The widest input (the optional `code_quote` and `sandbox`), so the typed
@@ -38,10 +41,12 @@ const record_question_result = tool({
 });
 
 // The stored part's input: `feedback` is optional here, for parts saved before
-// it was added. The task's own tool (the model's) requires it.
+// it was added. The task's own tool (the model's) requires it. Converting a
+// stored part for the model drops `hint_cost`, as the task's tool does.
 const offer_next_step = tool({
   inputSchema: OfferNextStepPartSchema,
   outputSchema: OfferNextStepOutputSchema,
+  toModelOutput: ({ output }) => offerNextStepModelOutput(output),
 });
 
 const submit_quiz_evaluation = tool({

@@ -140,6 +140,8 @@ beforeEach(() => {
     name: 'Week 1',
     repository_id: 'repo-1',
     code_sandbox_enabled: false,
+    hint_cost: 15,
+    max_answers: 5,
     // quiz.create writes the quiz's assignment in the same transaction.
     assignment: { module_id: 'mod-1', is_published: false },
   });
@@ -170,6 +172,8 @@ describe('admin quizzes action — audit rows', () => {
         repository_id: 'repo-1',
         module_id: 'mod-1',
         code_sandbox_enabled: false,
+        hint_cost: 15,
+        max_answers: 5,
       },
     });
   });
@@ -250,6 +254,143 @@ describe('admin quizzes action — audit rows', () => {
       role: 'ASSISTANT',
       metadata: { code_sandbox_enabled: true },
     });
+  });
+
+  it('records the hint cost and answers per question on a created quiz as saved', async () => {
+    mocks.create.mockResolvedValue({
+      id: 'quiz-new',
+      name: 'Week 1',
+      repository_id: null,
+      code_sandbox_enabled: false,
+      hint_cost: 0,
+      max_answers: 12,
+      assignment: { module_id: 'mod-1', is_published: false },
+    });
+
+    await submit({
+      _action: 'createQuiz',
+      name: 'Week 1',
+      hintCost: 0,
+      maxAnswers: 12,
+      assignment: { moduleId: 'mod-1' },
+    });
+
+    expect(mocks.create.mock.calls[0][0]).toMatchObject({ hintCost: 0, maxAnswers: 12 });
+    expect(auditEntry().metadata).toMatchObject({
+      tool: 'web:quizzes.create',
+      hint_cost: 0,
+      max_answers: 12,
+    });
+  });
+
+  it('records the hint cost and answers per question on an update, as numbers', async () => {
+    // An older client's numeric text is stored as the number it says.
+    await submit({ _action: 'updateQuiz', id: 'quiz-1', hintCost: '20', maxAnswers: 3 });
+
+    expect(auditEntry().metadata).toEqual({
+      tool: 'web:quizzes.update',
+      fields: ['hintCost', 'maxAnswers'],
+      hint_cost: 20,
+      max_answers: 3,
+    });
+  });
+
+  it('records no hint cost or answers per question for an update that does not carry them', async () => {
+    await submit({ _action: 'updateQuiz', id: 'quiz-1', name: 'R' });
+
+    expect(auditEntry().metadata).not.toHaveProperty('hint_cost');
+    expect(auditEntry().metadata).not.toHaveProperty('max_answers');
+  });
+
+  it.each([
+    ['hintCost', 51, 'Hint cost must be a whole number from 0 to 50.'],
+    ['maxAnswers', 0, 'Answers per question must be a whole number from 1 to 20.'],
+  ])(
+    'answers 400 with the service’s message for %s out of range, unaudited',
+    async (key, value, message) => {
+      mocks.update.mockRejectedValue(
+        Object.assign(new Error(message), {
+          name: 'QuizAssignmentError',
+          code: 'invalid_value',
+          status: 400,
+        })
+      );
+
+      const response = (await submit({
+        _action: 'updateQuiz',
+        id: 'quiz-1',
+        [key]: value,
+      })) as Response;
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: message });
+      expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+    }
+  );
+
+  it('answers 400 for a created quiz out of range, creating and auditing nothing', async () => {
+    mocks.create.mockRejectedValue(
+      Object.assign(new Error('Hint cost must be a whole number from 0 to 50.'), {
+        name: 'QuizAssignmentError',
+        code: 'invalid_value',
+        status: 400,
+      })
+    );
+
+    const response = (await submit({
+      _action: 'createQuiz',
+      name: 'Week 1',
+      hintCost: -5,
+      assignment: { moduleId: 'mod-1' },
+    })) as Response;
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: 'Hint cost must be a whole number from 0 to 50.',
+    });
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['hintCost', { hintCost: 10 }],
+    ['maxAnswers', { maxAnswers: 3 }],
+  ])('refuses an assistant’s save carrying %s with 403, writing nothing', async (_key, fields) => {
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: 'ta-1',
+      classroom: CLASSROOM,
+      membership: { id: 'm-2', role: 'ASSISTANT' },
+    });
+
+    const response = (await submit({
+      _action: 'updateQuiz',
+      id: 'quiz-1',
+      name: 'R',
+      ...fields,
+    })) as Response;
+
+    expect(response.status).toBe(403);
+    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('refuses hintCost on another classroom’s quiz like an unknown one, writing nothing', async () => {
+    mocks.findById.mockResolvedValue({ id: FOREIGN_QUIZ, classroom_id: 'other-class' });
+    const foreign = (await submit({
+      _action: 'updateQuiz',
+      id: FOREIGN_QUIZ,
+      hintCost: 10,
+    })) as Response;
+    mocks.findById.mockResolvedValue(null);
+    const missing = (await submit({
+      _action: 'updateQuiz',
+      id: FOREIGN_QUIZ,
+      hintCost: 10,
+    })) as Response;
+
+    expect(foreign.status).toBe(404);
+    expect(await foreign.json()).toEqual(await missing.json());
+    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 
   it('audits an updateQuiz that carries the Assignment panel with its field names', async () => {

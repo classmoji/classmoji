@@ -1566,6 +1566,13 @@ model Quiz {
   /// when an attempt starts and pinned on it (agent_config), so a change
   /// affects only attempts that start afterwards. Off by default.
   code_sandbox_enabled  Boolean             @default(false)
+  /// Points taken off every answer a student gives to a question after a hint
+  /// on it (0-50). Pinned on each attempt at its first turn (agent_config).
+  hint_cost             Int                 @default(15)
+  /// How many answers a student may give to one question (1-20); after the
+  /// last one the quiz explains the answer and moves on. Pinned on each attempt
+  /// at its first turn (agent_config).
+  max_answers           Int                 @default(5)
   created_at            DateTime            @default(now())
   updated_at            DateTime            @default(now()) @updatedAt
 

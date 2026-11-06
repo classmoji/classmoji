@@ -9,6 +9,8 @@ import type { ChatTransport, UIMessageChunk } from 'ai';
 import { useChatActions, useTriggerChatTransport } from '@trigger.dev/sdk/chat/react';
 import type { ChatSessionPersistedState } from '@trigger.dev/sdk/chat';
 import {
+  ANSWER_COUNTER_COPY,
+  ANSWER_PLACEHOLDER,
   CodeSubmissionInputSchema,
   MAX_SUBMISSION_FILE_CHARS,
   MAX_SUBMISSION_TOTAL_CHARS,
@@ -18,10 +20,13 @@ import {
   QUIZ_MESSAGE_LIMIT_COPY,
   QUIZ_REFUSAL_COPY,
   QUIZ_REFUSAL_COPY_BY_KIND,
+  NEXT_STEP_LEAD_IN,
+  answerRulesLine,
   buttonActionFor,
   openSandboxOf,
   replyShowsHint,
   sandboxId,
+  type AnswerRules,
   type CodeSubmissionInput,
   type NextStepAction,
   type QuizEvaluationRecordView,
@@ -137,6 +142,12 @@ const { Text } = Typography;
  * submits the attempt, its session closes with that turn, and the chat
  * refreshes into the results. An attempt the server submitted at the limit
  * says so above its results.
+ *
+ * The answer rules (the attempt's, computed by the server: `answerRules`): the
+ * live chat opens with them as one line (`answerRulesLine`), and while a
+ * question is open the composer counts its answers against the limit
+ * (`answerCounterOf`, from the offers' `answers_used`), with a placeholder to
+ * match. A hint uses no answer. The hint button shows what a hint costs.
  */
 
 export type QuizChatStatus = 'streaming' | 'ready' | 'complete';
@@ -173,6 +184,12 @@ export interface QuizChatProps {
    * when the loader read it; null when unknown or the attempt is complete.
    */
   messagesLeft?: number | null;
+  /**
+   * The answer rules the attempt works under, computed by the server
+   * (`attemptAnswerRules`: pinned on the attempt, or the quiz's own before
+   * its first turn): the rules line, the answer counter and its limit.
+   */
+  answerRules?: AnswerRules | null;
   readOnly?: boolean;
   userLogin?: string | null;
   userImage?: string | null;
@@ -677,6 +694,167 @@ export const buttonSetsOf = (
 export const liveButtonsOf = (messages: readonly QuizUIMessage[]): LiveButtons | null =>
   buttonSetsOf(messages).live;
 
+/** Where a question card puts the quiz: its number, of how many. */
+export type CardPosition = { question_number: number; total_questions: number };
+
+/** The question card a part shows, when it is an accepted one. */
+const cardPositionOf = (part: QuizPart): CardPosition | null =>
+  part.type === 'tool-present_question' &&
+  part.state === 'output-available' &&
+  !isFailedToolPart(part)
+    ? { question_number: part.output.question_number, total_questions: part.output.total_questions }
+    : null;
+
+/** The furthest card of `before` and the cards in `parts` (as `buttonSetsOf` counts them). */
+const furthestCard = (before: CardPosition | null, parts: readonly QuizPart[]) =>
+  parts.reduce<CardPosition | null>((card, part) => {
+    const next = cardPositionOf(part);
+    return next && (!card || next.question_number >= card.question_number) ? next : card;
+  }, before);
+
+/**
+ * For each message (as shown), the furthest question card before it: the
+ * question its buttons follow, for a part that does not say whether it is
+ * the last one.
+ */
+export const cardsBefore = (messages: readonly QuizUIMessage[]): (CardPosition | null)[] => {
+  let card: CardPosition | null = null;
+  return messages.map(message => {
+    const atStart = card;
+    if (!message.metadata?.hidden) card = furthestCard(card, visibleParts(message));
+    return atStart;
+  });
+};
+
+const isLastCard = (card: CardPosition | null) =>
+  card !== null && card.question_number >= card.total_questions;
+
+/**
+ * Whether an offer follows the quiz's last question: its output's
+ * `last_question`; for a part saved before the server sent it, a results
+ * lead-in, or else the card it follows (an open offer's lead-in does not say).
+ */
+export const offerOnLastQuestion = (output: unknown, card: CardPosition | null): boolean => {
+  const o = (output ?? {}) as { last_question?: unknown; lead_in?: unknown };
+  if (typeof o.last_question === 'boolean') return o.last_question;
+  if (
+    o.lead_in === NEXT_STEP_LEAD_IN.results ||
+    o.lead_in === NEXT_STEP_LEAD_IN.last_answer_results
+  ) {
+    return true;
+  }
+  return isLastCard(card);
+};
+
+/** What a hint costs on the offer's question, when its output says (absent on older parts). */
+const hintCostOf = (output: unknown): number | null => {
+  const cost = (output as { hint_cost?: unknown } | null)?.hint_cost;
+  return typeof cost === 'number' && Number.isInteger(cost) && cost >= 0 ? cost : null;
+};
+
+/**
+ * The open question and the answers counted to it: the furthest accepted
+ * question card with no (non-revised) result yet, and the `answers_used` of
+ * the latest accepted offer after it (an offer saved without it counts one
+ * more than the one before). A card shown again keeps the count; a hint
+ * brings no offer, so it uses no answer. Null when no card has come, the
+ * question has its result, or the evaluation is in.
+ */
+export const openQuestionOf = (
+  messages: readonly QuizUIMessage[]
+): { question: number; used: number; finished: boolean; max: number | null } | null => {
+  let open: { question: number; used: number; finished: boolean; max: number | null } | null =
+    null;
+  let furthest = 0;
+  let complete = false;
+  for (const message of messages) {
+    if (message.metadata?.hidden || message.role !== 'assistant') continue;
+    for (const part of visibleParts(message)) {
+      if (isFailedToolPart(part)) continue;
+      const card = cardPositionOf(part);
+      if (card) {
+        if (card.question_number > furthest) {
+          furthest = card.question_number;
+          open = { question: card.question_number, used: 0, finished: false, max: null };
+        }
+      } else if (part.type === 'tool-offer_next_step' && part.state === 'output-available') {
+        if (open) {
+          const output = part.output as {
+            answers_used?: unknown;
+            actions?: unknown;
+            max_answers?: unknown;
+          };
+          const used = output.answers_used;
+          const max = output.max_answers;
+          open = {
+            question: open.question,
+            used: typeof used === 'number' && Number.isInteger(used) ? used : open.used + 1,
+            // Next alone: the answer was right, or the answer was given; the
+            // question is over until its result is recorded.
+            finished: !(Array.isArray(output.actions) && output.actions.includes('try_again')),
+            // The limit the server applied (pinned on the attempt), over the
+            // loader's, which can predate the pin.
+            max: typeof max === 'number' && Number.isInteger(max) ? max : open.max,
+          };
+        }
+      } else if (part.type === 'data-question-result') {
+        if (!part.data.revised && open && part.data.question_num === open.question) open = null;
+      } else if (isEvaluationPart(part)) {
+        complete = true;
+      }
+    }
+  }
+  return complete ? null : open;
+};
+
+/** The answer counter beside the composer, and the composer's placeholder. */
+export interface AnswerCounterView {
+  /**
+   * `answer`: answer k of N; `last`: the last allowed answer; `none`: no
+   * answers left; `open`: a question is open, with no server limit (legacy).
+   */
+  state: 'answer' | 'last' | 'none' | 'open';
+  /** The counter's text; null when there is no counter (no limit). */
+  label: string | null;
+  /** The composer's placeholder; null for the default one. */
+  placeholder: string | null;
+}
+
+/**
+ * The answer counter for the chat as it stands (`openQuestionOf`), against the
+ * attempt's limit (`maxAnswers`, from the server; null: none). Null when no
+ * question is open.
+ */
+export const answerCounterOf = (
+  messages: readonly QuizUIMessage[],
+  maxAnswers: number | null
+): AnswerCounterView | null => {
+  const open = openQuestionOf(messages);
+  if (!open) return null;
+  // A finished question (a correct answer, or the answer given at the
+  // limit): no counter beside Next; the lead-in says the rest.
+  if (open.finished) return null;
+  if (open.max !== null) maxAnswers = open.max;
+  if (maxAnswers === null) {
+    return { state: 'open', label: null, placeholder: ANSWER_PLACEHOLDER.open };
+  }
+  if (open.used >= maxAnswers) {
+    return { state: 'none', label: ANSWER_COUNTER_COPY.none, placeholder: null };
+  }
+  const k = open.used + 1;
+  return k === maxAnswers
+    ? {
+        state: 'last',
+        label: ANSWER_COUNTER_COPY.last(maxAnswers),
+        placeholder: ANSWER_PLACEHOLDER.last,
+      }
+    : {
+        state: 'answer',
+        label: ANSWER_COUNTER_COPY.answer(k, maxAnswers),
+        placeholder: ANSWER_PLACEHOLDER.open,
+      };
+};
+
 /** A student message that is a code submission. */
 const isSubmissionMessage = (message: QuizUIMessage) =>
   message.role === 'user' && submissionOf(visibleParts(message)) !== null;
@@ -1100,6 +1278,11 @@ interface PartContext {
    * null (none, or it renders under the bubble on a narrow screen).
    */
   cardSandbox?: ((index: number) => ReactNode) | null;
+  /**
+   * The furthest question card before the part at this index (`cardsBefore`):
+   * the question an offer's buttons follow, when its output does not say.
+   */
+  cardAt?: ((index: number) => CardPosition | null) | null;
 }
 
 /** One part inside the assistant's bubble, by type (`index`: its place in the visible parts). */
@@ -1191,6 +1374,8 @@ export function AssistantPart({
             <NextStepButtons
               actions={part.output.actions}
               leadIn={leadInOf(part.output)}
+              hintCost={hintCostOf(part.output)}
+              lastQuestion={offerOnLastQuestion(part.output, ctx.cardAt?.(index) ?? null)}
               disabled={ctx.buttonsDisabled || ctx.liveOffer !== index}
               onAction={ctx.onButton}
             />
@@ -1311,6 +1496,11 @@ interface TranscriptProps {
   messagesLeft?: number | null;
   /** The live chat's code sandbox controls; absent, every sandbox is frozen. */
   sandboxControls?: SandboxControls | null;
+  /**
+   * The quiz's answer rules as one line (`answerRulesLine`), at the top of
+   * the student's live chat; absent in saved and staff views.
+   */
+  rulesLine?: string | null;
 }
 
 const UserAvatar = ({ login, image }: { login: string | null; image: string | null }) =>
@@ -1339,6 +1529,7 @@ export function QuizTranscript({
   endedAtLimit = false,
   messagesLeft = null,
   sandboxControls = null,
+  rulesLine = null,
 }: TranscriptProps) {
   const endRef = useRef<HTMLDivElement>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
@@ -1349,6 +1540,9 @@ export function QuizTranscript({
   // The one set of buttons that can still be clicked, if any, and the
   // replies that end with the Next button alone (the hints).
   const { live, hintReplies } = buttonSetsOf(shown);
+  // The question each message's buttons follow, for parts that do not say
+  // whether it is the last one.
+  const cardsAtStart = cardsBefore(shown);
   // The code sandboxes, read from the messages as shown (`sandboxView`): the
   // shared rule's positions are this list's indexes and visible parts'.
   const narrow = useNarrowLayout();
@@ -1461,6 +1655,14 @@ export function QuizTranscript({
       aria-label="Quiz conversation"
       className="flex-1 overflow-y-auto px-4 pb-4 outline-none"
     >
+      {rulesLine && (
+        <p
+          className="mb-4 text-center text-xs text-gray-500 dark:text-gray-400"
+          data-testid="quiz-answer-rules"
+        >
+          {rulesLine}
+        </p>
+      )}
       {shown.map((message, index) => {
         const parts = visibleParts(message);
         if (message.role === 'user') {
@@ -1513,7 +1715,10 @@ export function QuizTranscript({
 
         const isStreamingThis = busy && message === lastMessage;
         const messageAt = index;
+        const cardAt = (partAt: number) =>
+          furthestCard(cardsAtStart[index] ?? null, parts.slice(0, partAt));
         const ctx: PartContext = {
+          cardAt,
           isDarkMode,
           streaming: isStreamingThis,
           buttonsDisabled: busy || status === 'complete' || !onButton,
@@ -1637,6 +1842,10 @@ export function QuizTranscript({
                       {blockIndex === hintBubble && (
                         <NextStepButtons
                           actions={HINT_ACTIONS}
+                          // After a hint the question is still open: moving
+                          // on skips it.
+                          open
+                          lastQuestion={isLastCard(cardAt(parts.length))}
                           disabled={ctx.buttonsDisabled || !hintLive}
                           onAction={onButton}
                         />
@@ -1948,6 +2157,7 @@ function LiveQuizChat({
   chatStarted = false,
   chatActivity = null,
   messagesLeft = null,
+  answerRules = null,
   userLogin,
   userImage,
   focusMetrics,
@@ -2422,6 +2632,10 @@ function LiveQuizChat({
   // again, and begin is sent again only for an attempt with no opening, one
   // whose opening was lost, or one this tab began.
   const retryStart = startedAtOpen && !openingLost && !beganHere ? join : begin;
+  // The quiz's rules, one line at the top of the chat, and the answer counter
+  // beside the composer, both from the rules the server computed.
+  const rulesLine = answerRules ? answerRulesLine(answerRules) : null;
+  const counter = canSend ? answerCounterOf(shown, answerRules?.maxAnswers ?? null) : null;
 
   return (
     <div
@@ -2446,6 +2660,7 @@ function LiveQuizChat({
           endedAtLimit={endedAtLimit}
           messagesLeft={left}
           sandboxControls={sandboxControls}
+          rulesLine={rulesLine}
         />
       </div>
 
@@ -2453,6 +2668,21 @@ function LiveQuizChat({
           session without an evaluation leaves it in place, inert. */}
       {!complete && (
         <div className="mt-4 border-t border-[#f0f0f0] pt-4 dark:border-gray-700">
+          {counter?.label && (
+            <div className="mb-2 flex justify-end">
+              <span
+                data-testid="quiz-answer-counter"
+                data-state={counter.state}
+                className={
+                  counter.state === 'last'
+                    ? 'text-xs font-medium text-amber-600 dark:text-amber-400'
+                    : 'text-xs text-gray-500 dark:text-gray-400'
+                }
+              >
+                {counter.label}
+              </span>
+            </div>
+          )}
           <div
             data-testid="quiz-editor"
             className={canSend && !capturing ? undefined : 'pointer-events-none opacity-50'}
@@ -2464,7 +2694,7 @@ function LiveQuizChat({
               placeholder={
                 sessionClosed || refusedForGood
                   ? "This quiz can't continue right now."
-                  : EDITOR_PLACEHOLDER
+                  : (counter?.placeholder ?? EDITOR_PLACEHOLDER)
               }
               sendButtonTestId="quiz-send"
             />

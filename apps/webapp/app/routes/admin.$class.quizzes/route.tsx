@@ -395,6 +395,9 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         module_id: newQuiz.assignment?.module_id ?? null,
         // As the row was saved: a create without the switch saves it off.
         code_sandbox_enabled: newQuiz.code_sandbox_enabled === true,
+        // Short numbers, as saved (the column defaults when the body has none).
+        hint_cost: newQuiz.hint_cost,
+        max_answers: newQuiz.max_answers,
       });
       const warning = newQuiz.assignment?.is_published
         ? await publishedDraftWarning(newQuiz.id)
@@ -411,8 +414,9 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     async updateQuiz() {
       // A teaching assistant saves content and the name; any assignment field
       // in the body (module, opens, due, closes, weight, tokens, published, or
-      // the old flat due date, weight and status), or the number of
-      // questions, max attempts or grading strategy, refuses the whole save.
+      // the old flat due date, weight and status), or an author setting (the
+      // number of questions, max attempts, grading strategy, hint cost or
+      // answers per question), refuses the whole save.
       if (
         !canAuthor &&
         (quizAssignmentKeysIn(data).length > 0 || quizAuthorSettingKeysIn(data).length > 0)
@@ -442,6 +446,10 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         ...(data.codeSandboxEnabled !== undefined
           ? { code_sandbox_enabled: data.codeSandboxEnabled === true }
           : {}),
+        // Short numbers too, as stored: the service took them only as whole
+        // numbers in range (a number or its text), so Number() is the value.
+        ...(data.hintCost !== undefined ? { hint_cost: Number(data.hintCost) } : {}),
+        ...(data.maxAnswers !== undefined ? { max_answers: Number(data.maxAnswers) } : {}),
       });
       const warning =
         data.assignment?.isPublished === true ? await publishedDraftWarning(data.id) : {};

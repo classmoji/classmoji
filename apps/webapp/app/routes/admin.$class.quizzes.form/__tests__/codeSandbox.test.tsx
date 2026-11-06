@@ -107,6 +107,8 @@ const formQuiz = (over: Record<string, unknown> = {}) => ({
   questionCount: 5,
   maxAttempts: 1,
   gradingStrategy: 'HIGHEST',
+  hintCost: 15,
+  maxAnswers: 5,
   includeCodeContext: false,
   sourceMaterial: [],
   courseSearchEnabled: false,

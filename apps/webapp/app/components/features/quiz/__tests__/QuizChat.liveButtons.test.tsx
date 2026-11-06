@@ -416,7 +416,8 @@ describe('the Next after a hint', () => {
   });
 
   it('is not added to a reply to anything but a Try again click', async () => {
-    await render([...answered, user('u2', 'Give me a hint'), hint()]);
+    // ("Give me a hint" is the hint button's own text now: it is the click.)
+    await render([...answered, user('u2', 'Can I have a clue?'), hint()]);
     expect(buttonSets()).toEqual([true]);
     await render([msg('a1', 'assistant', [card(1)]), user('u1', 'Is it flexbox?'), hint('a2')]);
     expect(buttonSets()).toEqual([]);

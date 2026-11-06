@@ -2,8 +2,10 @@ import { asSchema, type FlexibleSchema } from 'ai';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
   BUTTON_TEXT,
+  LEGACY_TRY_AGAIN_TEXT,
   NEXT_STEP_LEAD_IN,
   nextStepLeadIn,
+  offerNextStepModelOutput,
   OfferNextStepOutputSchema,
   CodeAwareQuizQuestionSchema,
   CodeQuoteSchema,
@@ -193,24 +195,38 @@ describe('OfferNextStepSchema', () => {
 });
 
 describe('the lead-in shown with the buttons', () => {
-  it('uses the previous wording', () => {
+  it('uses the fixed wording', () => {
     expect(NEXT_STEP_LEAD_IN).toEqual({
       next: 'Ready for the next question?',
       results: 'Ready to see your results?',
-      try_again_or_next: 'Would you like to try again or move on?',
+      try_again_or_next: 'Answer again below, or try again with a hint.',
+      last_answer_next:
+        'That was your last answer for this question. Ready for the next question?',
+      last_answer_results:
+        'That was your last answer for this question. Ready to see your results?',
     });
   });
 
-  it('picks it from the buttons and whether the question is the last one', () => {
+  it('picks it from the buttons, the last question and the last answer', () => {
     expect(nextStepLeadIn(['next'], false)).toBe('Ready for the next question?');
     expect(nextStepLeadIn(['next'], true)).toBe('Ready to see your results?');
     expect(nextStepLeadIn(['try_again', 'next'], false)).toBe(
-      'Would you like to try again or move on?'
+      'Answer again below, or try again with a hint.'
     );
     expect(nextStepLeadIn(['next', 'try_again'], true)).toBe(
-      'Would you like to try again or move on?'
+      'Answer again below, or try again with a hint.'
     );
     expect(nextStepLeadIn(['try_again'], false)).toBeNull();
+    expect(nextStepLeadIn(['next'], false, true)).toBe(
+      'That was your last answer for this question. Ready for the next question?'
+    );
+    expect(nextStepLeadIn(['next'], true, true)).toBe(
+      'That was your last answer for this question. Ready to see your results?'
+    );
+    // Try again is never offered past the limit; the line follows the buttons.
+    expect(nextStepLeadIn(['try_again', 'next'], false, true)).toBe(
+      'Answer again below, or try again with a hint.'
+    );
   });
 
   it('is part of the output, not the input', () => {
@@ -234,6 +250,60 @@ describe('the lead-in shown with the buttons', () => {
     expect(
       OfferNextStepOutputSchema.parse({ feedback: 'Yes.', actions: ['next'], lead_in: 'x' })
     ).toEqual({ actions: ['next'], lead_in: 'x' });
+  });
+
+  it('carries what the server counted, and a saved part without it still parses', () => {
+    const counted = {
+      actions: ['try_again', 'next'],
+      lead_in: 'Answer again below, or try again with a hint.',
+      answers_used: 2,
+      max_answers: 5,
+      hint_cost: 15,
+      last_question: false,
+    };
+    expect(OfferNextStepOutputSchema.parse(counted)).toEqual(counted);
+    expect(
+      OfferNextStepOutputSchema.parse({ ...counted, max_answers: null }).max_answers
+    ).toBeNull();
+    expect(OfferNextStepOutputSchema.safeParse({ ...counted, answers_used: 0 }).success).toBe(
+      false
+    );
+    expect(OfferNextStepOutputSchema.safeParse({ ...counted, hint_cost: -1 }).success).toBe(false);
+  });
+});
+
+describe('offerNextStepModelOutput (the model never reads the hint cost)', () => {
+  it('drops hint_cost and keeps the rest', () => {
+    expect(
+      offerNextStepModelOutput({
+        actions: ['next'],
+        lead_in: 'x',
+        answers_used: 5,
+        max_answers: 5,
+        hint_cost: 30,
+        last_question: true,
+      })
+    ).toEqual({
+      type: 'json',
+      value: { actions: ['next'], lead_in: 'x', answers_used: 5, max_answers: 5, last_question: true },
+    });
+  });
+
+  it("gives a saved part without the counts the SDK's own JSON, byte for byte", () => {
+    const saved = { actions: ['try_again', 'next'], lead_in: 'Would you like to try again or move on?' };
+    const out = offerNextStepModelOutput(saved);
+    expect(out.type).toBe('json');
+    expect(JSON.stringify(out.value)).toBe(JSON.stringify(saved));
+  });
+
+  it('is what the stored tool definition converts history with', async () => {
+    const toModel = quizToolDefs.offer_next_step.toModelOutput!;
+    const out = await toModel({
+      toolCallId: 'c1',
+      input: { actions: ['next'] },
+      output: { actions: ['next'], lead_in: 'x', hint_cost: 0 },
+    });
+    expect(out).toEqual({ type: 'json', value: { actions: ['next'], lead_in: 'x' } });
   });
 });
 
@@ -596,10 +666,8 @@ describe('quizToolDefs', () => {
 });
 
 describe('BUTTON_TEXT', () => {
-  it('matches the legacy button messages', () => {
-    expect(BUTTON_TEXT).toEqual({
-      try_again: "I'd like to try answering this question again",
-      next: 'next',
-    });
+  it('is what the buttons send', () => {
+    expect(BUTTON_TEXT).toEqual({ try_again: 'Give me a hint', next: 'next' });
+    expect(LEGACY_TRY_AGAIN_TEXT).toBe("I'd like to try answering this question again");
   });
 });

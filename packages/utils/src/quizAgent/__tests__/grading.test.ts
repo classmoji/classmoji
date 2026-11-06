@@ -56,6 +56,30 @@ describe('scoreAnswer', () => {
   });
 });
 
+describe('scoreAnswer and deriveResult with a quiz\'s own hint cost', () => {
+  it('takes 0, 15 or 50 points off per hint', () => {
+    const after = (hints: number) => ({ level: 'correct' as const, hints_before: hints });
+    expect(scoreAnswer(after(2), 0)).toBe(100);
+    expect(scoreAnswer(after(2), 15)).toBe(70);
+    expect(scoreAnswer(after(2), 50)).toBe(0);
+    expect(scoreAnswer(after(1), 50)).toBe(50);
+    expect(scoreAnswer(after(1))).toBe(scoreAnswer(after(1), HINT_COST));
+  });
+
+  it('scores the best answer with the cost given', () => {
+    const answers = [
+      { level: 'partly_right' as const, hints_before: 0 },
+      { level: 'correct' as const, hints_before: 1 },
+    ];
+    expect(deriveResult(answers, 0).credit_earned).toBe(100);
+    expect(deriveResult(answers, 15).credit_earned).toBe(85);
+    expect(deriveResult(answers, 50).credit_earned).toBe(50);
+    expect(deriveResult(answers).credit_earned).toBe(85);
+    // The first attempt does not depend on the cost.
+    expect(deriveResult(answers, 0).first_attempt_correct).toBe(false);
+  });
+});
+
 describe('deriveResult', () => {
   it('scores an empty answer list (skipped) as 0', () => {
     expect(deriveResult([])).toEqual({
