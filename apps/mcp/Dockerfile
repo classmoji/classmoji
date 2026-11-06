@@ -9,6 +9,11 @@ WORKDIR /app
 # Build host only (4 GB): this stage's ENV does not reach the runtime image.
 ENV NODE_OPTIONS="--max-old-space-size=2048"
 
+# Same npm as CI and the lockfile check (packageManager npm@10.9.0): the npm
+# bundled with Node 24 (11.x) handles dependency install scripts differently.
+RUN npm install -g npm@10.9.0 --no-audit --no-fund --cache=/tmp/npm-self-cache \
+    && rm -rf /tmp/npm-self-cache
+
 # Manifests only, so the npm ci layer stays cached until deps actually change.
 COPY package.json package-lock.json .npmrc ./
 COPY apps/admin/package.json apps/admin/

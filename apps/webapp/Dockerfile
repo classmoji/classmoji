@@ -8,6 +8,11 @@ WORKDIR /app
 
 ENV NODE_OPTIONS="--max-old-space-size=2048"
 
+# Same npm as CI and the lockfile check (packageManager npm@10.9.0): the npm
+# bundled with Node 24 (11.x) handles dependency install scripts differently.
+RUN npm install -g npm@10.9.0 --no-audit --no-fund --cache=/tmp/npm-self-cache \
+    && rm -rf /tmp/npm-self-cache
+
 # Manifests only, so the npm ci layer stays cached until deps actually change.
 COPY package.json package-lock.json .npmrc ./
 COPY apps/admin/package.json apps/admin/
@@ -66,6 +71,11 @@ FROM node:24-alpine
 WORKDIR /app
 
 RUN apk add --no-cache openssl libc6-compat
+
+# This stage runs npx too (the CMD below and the fly.toml release_command's
+# `npx prisma migrate deploy`), so it gets the same npm 10.9 as the build.
+RUN npm install -g npm@10.9.0 --no-audit --no-fund --cache=/tmp/npm-self-cache \
+    && rm -rf /tmp/npm-self-cache
 
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./
