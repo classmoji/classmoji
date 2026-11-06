@@ -279,6 +279,28 @@ describe('quizzes resource source_material (quiz source material)', () => {
     expect(student.quizzes[0]).not.toHaveProperty('excluded_paths');
   });
 
+  it('staff get hint_cost and max_answers, null when the row has none', async () => {
+    findByClassroom.mockResolvedValue([
+      {
+        id: 'q1',
+        name: 'Quiz 1',
+        status: 'DRAFT',
+        weight: 0,
+        question_count: 3,
+        hint_cost: 0,
+        max_answers: 3,
+      },
+      { id: 'q2', name: 'Quiz 2', status: 'DRAFT', weight: 0, question_count: 3 },
+    ]);
+    const staff = (await quizzesResource.handler(
+      VARS,
+      ownerCtx({ quizzes_enabled: true }),
+      new URL('classmoji://x')
+    )) as { quizzes: Array<Record<string, unknown>> };
+    expect(staff.quizzes[0]).toMatchObject({ hint_cost: 0, max_answers: 3 });
+    expect(staff.quizzes[1]).toMatchObject({ hint_cost: null, max_answers: null });
+  });
+
   it('staff and students both get code_sandbox_enabled, false when the row has none', async () => {
     findByClassroom.mockResolvedValue([
       {

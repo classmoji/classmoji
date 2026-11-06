@@ -387,6 +387,8 @@ interface QuizRow extends QuizPlacementSource {
   course_search_enabled?: boolean;
   excluded_paths?: string[];
   code_sandbox_enabled?: boolean;
+  hint_cost?: number;
+  max_answers?: number;
   repository_id?: string | null;
   source_material?: Array<{
     kind: string;
@@ -681,6 +683,10 @@ export const quizzesResource: ResourceDefinition = {
         rubric_prompt: q.rubric_prompt ?? null,
         // Staff only, like the prompts: quiz configuration.
         excluded_paths: q.excluded_paths ?? [],
+        // How answers are taken: points off each answer after a hint, and
+        // answers per question.
+        hint_cost: q.hint_cost ?? null,
+        max_answers: q.max_answers ?? null,
         // Null = the classroom's default_tokens_per_hour.
         tokens_per_hour: q.assignment?.tokens_per_hour ?? null,
         attempts_count: q.attemptsCount ?? 0,
