@@ -1,5 +1,5 @@
 import { reactRouter } from '@react-router/dev/vite';
-import { defineConfig } from 'vite';
+import { defaultClientConditions, defaultServerConditions, defineConfig } from 'vite';
 import tsconfigPaths from 'vite-tsconfig-paths';
 import tailwindcss from '@tailwindcss/vite';
 
@@ -41,6 +41,15 @@ export default async ({ command, mode }) => {
     ssr: {
       // BlockNote + Mantine have CSS imports that Vite must process during SSR
       noExternal: [/^@blocknote\//, /^@mantine\//],
+    },
+    // Vite 6's default conditions, stated here. The React Router plugin reads
+    // them from the `vite` it resolves, the repo root's Vite 5, which has none,
+    // and Vite 6 treats the list it gets as a replacement: the client would
+    // lose `browser`, `@sentry/react-router` would not resolve, and no page
+    // would hydrate under server.ts. Vite merges these with the plugin's.
+    environments: {
+      client: { resolve: { conditions: [...defaultClientConditions] } },
+      ssr: { resolve: { conditions: [...defaultServerConditions] } },
     },
     resolve: {
       alias: {
