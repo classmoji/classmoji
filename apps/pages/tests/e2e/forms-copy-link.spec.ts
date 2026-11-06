@@ -32,8 +32,8 @@ import { getTestClassroomSlug, getTestPrisma } from '../helpers';
  * the real function, in the process, with no server involved: `tests/unit` is
  * for the decisions that are pure, and this one is not.
  *
- * The fixture is INSERT-ONLY on subscriptions. The dev seed already gives both
- * owners an active PRO, so "not on PRO" cannot be arranged by leaving things
+ * The fixture is INSERT-ONLY on subscriptions. The run already gives the test
+ * classroom's owners an active PRO (tests/pro.setup.ts), so "not on PRO" cannot be arranged by leaving things
  * alone — but it must also not be arranged by editing somebody's rows. Instead
  * a newer FREE subscription is added for every accepted owner, which is what
  * `getProStateForClassroomId` reads (each owner's newest row, any active PRO
