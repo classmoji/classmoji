@@ -20,6 +20,7 @@ import { titleToIdentifier } from '@classmoji/utils';
 import useStore from '~/store';
 
 import { type AssignmentRowData } from './AssignmentsTable';
+import { groupTemplateOptions, type TemplateRepository } from '~/utils/templateSearch';
 
 /**
  * The kinds this modal creates and edits. Not QUIZ: a quiz and its assignment
@@ -143,15 +144,9 @@ const Section = ({
   </div>
 );
 
-interface TemplateRepository {
-  full_name: string;
-  private: boolean;
-  language: string | null;
-  stargazers_count: number;
-}
-
 // Same endpoint as the Repositories form: the classroom org's repos (public and
-// private) plus public templates anywhere, searched with the installation token.
+// private) first, then public templates anywhere, searched with the
+// installation token.
 const searchTemplates = async (query: string, classSlug: string): Promise<TemplateRepository[]> => {
   try {
     const params = new URLSearchParams({ classroomSlug: classSlug, q: query });
@@ -718,25 +713,22 @@ const AssignmentFormModal = ({
                     </span>
                   )
                 }
-                options={templateOptions.map(t => ({
-                  value: t.full_name,
-                  label: (
-                    <span className="flex items-center justify-between gap-2">
-                      <span className="flex items-center gap-2">
-                        <span className="font-medium">{t.full_name}</span>
-                        {t.private && (
-                          <Tag color="gold" className="m-0">
-                            Private
-                          </Tag>
-                        )}
-                      </span>
-                      <span className="text-xs text-ink-3">
-                        {Number(t.stargazers_count) > 0 && `⭐${t.stargazers_count} `}
-                        {t.language ?? ''}
-                      </span>
+                options={groupTemplateOptions(templateOptions, t => (
+                  <span className="flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-2">
+                      <span className="font-medium">{t.full_name}</span>
+                      {t.private && (
+                        <Tag color="gold" className="m-0">
+                          Private
+                        </Tag>
+                      )}
                     </span>
-                  ),
-                }))}
+                    <span className="text-xs text-ink-3">
+                      {Number(t.stargazers_count) > 0 && `⭐${t.stargazers_count} `}
+                      {t.language ?? ''}
+                    </span>
+                  </span>
+                ))}
               />
             </Form.Item>
 

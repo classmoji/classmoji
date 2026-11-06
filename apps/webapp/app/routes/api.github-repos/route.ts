@@ -5,10 +5,10 @@
  * repos are visible without exposing the token to the browser):
  *  - No `q`: lists the org's repos (most recently updated). Used by the
  *    code-aware quiz preview repo picker.
- *  - With `q`: template search. Merges global public results with the
- *    classroom org's repos (public + private) so instructors can pick a private
- *    template that lives in their org, while still finding public templates
- *    hosted anywhere. Used by the assignment template picker.
+ *  - With `q`: template search. The classroom org's repos (public + private)
+ *    first, so instructors find their own templates, then public template
+ *    repositories hosted anywhere. Each result carries its `group`; the
+ *    pickers show them under "Your templates" and "Public templates".
  *
  * Only OWNER and ASSISTANT roles can access this endpoint.
  */
@@ -17,21 +17,11 @@ import getPrisma from '@classmoji/database';
 import { GitLabProvider, getGitProvider } from '@classmoji/services';
 import { repoNamespace } from '@classmoji/utils';
 import { assertClassroomAccess } from '~/utils/helpers';
+import { orderTemplateResults, type TemplateRepository } from '~/utils/templateSearch';
 import { getInstallationToken } from '~/routes/student.$class.quizzes/helpers.server';
 import type { Route } from './+types/route';
 
 const SEARCH_LIMIT = 50;
-
-interface RepoSearchItem {
-  name: string;
-  ref?: string;
-  full_name: string;
-  description: string | null;
-  updated_at: string | null | undefined;
-  private: boolean;
-  language: string | null;
-  stargazers_count: number;
-}
 
 export async function loader({ request }: Route.LoaderArgs) {
   const url = new URL(request.url);
@@ -136,7 +126,7 @@ export async function loader({ request }: Route.LoaderArgs) {
 async function listGitLabTemplates(
   gitOrg: Parameters<typeof getGitProvider>[0] & { id: string; login: string },
   query: string
-): Promise<RepoSearchItem[]> {
+): Promise<TemplateRepository[]> {
   const provider = getGitProvider(gitOrg) as GitLabProvider;
   const [projects, generated] = await Promise.all([
     provider.listGroupProjects(gitOrg.login, query.length >= 2 ? query : ''),
@@ -171,58 +161,58 @@ async function listGitLabTemplates(
       private: p.visibility !== 'public',
       language: null,
       stargazers_count: p.star_count ?? 0,
+      group: 'class' as const,
     }));
 }
 
 /**
- * Run two name searches and merge them: any public repo on GitHub, plus repos
- * in the classroom org (public + private, visible to the installation token).
- * Deduped by full_name (the org's public repos match both queries). Repos in
- * `excluded` (Classmoji-generated student/team repos) are filtered out.
+ * Run two name searches: repos in the classroom org (public + private, visible
+ * to the installation token), and public template repositories anywhere on
+ * GitHub (`template:true`, so ordinary public repos that happen to share a word
+ * with the query stay out). Ordered and deduped by `orderTemplateResults`.
  */
 async function searchTemplateRepos(
   octokit: Octokit,
   query: string,
   orgLogin: string,
   excluded: Set<string>
-): Promise<RepoSearchItem[]> {
-  const [publicResult, orgResult] = await Promise.allSettled([
-    octokit.rest.search.repos({
-      q: `${query} in:name is:public`,
-      sort: 'updated',
-      order: 'desc',
-      per_page: SEARCH_LIMIT,
-    }),
+): Promise<TemplateRepository[]> {
+  const [orgResult, publicResult] = await Promise.allSettled([
     octokit.rest.search.repos({
       q: `${query} in:name org:${orgLogin}`,
       sort: 'updated',
       order: 'desc',
       per_page: SEARCH_LIMIT,
     }),
+    octokit.rest.search.repos({
+      q: `${query} in:name is:public template:true`,
+      sort: 'updated',
+      order: 'desc',
+      per_page: SEARCH_LIMIT,
+    }),
   ]);
 
-  const merged = new Map<string, RepoSearchItem>();
-
-  // Org results first so private repos win the dedupe and surface at the top.
-  for (const result of [orgResult, publicResult]) {
+  const items = (result: typeof orgResult) => {
     if (result.status !== 'fulfilled') {
       console.error('[api.github-repos] Template search query failed:', result.reason);
-      continue;
+      return [];
     }
-    for (const r of result.value.data.items) {
-      if (merged.has(r.full_name)) continue;
-      if (excluded.has(r.full_name.toLowerCase())) continue;
-      merged.set(r.full_name, {
-        name: r.name,
-        full_name: r.full_name,
-        description: r.description,
-        updated_at: r.updated_at,
-        private: r.private,
-        language: r.language ?? null,
-        stargazers_count: r.stargazers_count ?? 0,
-      });
-    }
-  }
+    return result.value.data.items.map(r => ({
+      name: r.name,
+      full_name: r.full_name,
+      description: r.description,
+      updated_at: r.updated_at,
+      private: r.private,
+      is_template: r.is_template ?? false,
+      language: r.language ?? null,
+      stargazers_count: r.stargazers_count ?? 0,
+    }));
+  };
 
-  return Array.from(merged.values()).slice(0, SEARCH_LIMIT);
+  return orderTemplateResults({
+    orgItems: items(orgResult),
+    publicItems: items(publicResult),
+    excluded,
+    limit: SEARCH_LIMIT,
+  });
 }
