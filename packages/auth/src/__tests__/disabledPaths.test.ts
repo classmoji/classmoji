@@ -81,21 +81,25 @@ describe('disabled better-auth paths', () => {
     }
   );
 
-  // The flows the sign-in page does use stay up: verifying an address and
-  // resetting a password with a code.
-  it.each([['/email-otp/verify-email'], ['/email-otp/reset-password']])(
-    'still routes POST %s',
-    async path => {
-      const res = await auth.handler(
-        new Request(`${BASE}${path}`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ email: 'someone@example.com', otp: '123456', password: 'x' }),
-        })
-      );
-      expect(res.status).not.toBe(404);
-    }
-  );
+  // The flows the sign-in page does use stay up: verifying an address,
+  // requesting a reset code and resetting a password with it. The deprecated
+  // /forget-password/email-otp stays up too, for pages loaded before the
+  // sign-in page moved to /email-otp/request-password-reset.
+  it.each([
+    ['/email-otp/verify-email'],
+    ['/email-otp/reset-password'],
+    ['/email-otp/request-password-reset'],
+    ['/forget-password/email-otp'],
+  ])('still routes POST %s', async path => {
+    const res = await auth.handler(
+      new Request(`${BASE}${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: 'someone@example.com', otp: '123456', password: 'x' }),
+      })
+    );
+    expect(res.status).not.toBe(404);
+  });
 
   it('leaves the in-process auth.api.getAccessToken and refreshToken in place', async () => {
     // Router-only: the endpoint still runs in-process and answers as it would
@@ -115,5 +119,13 @@ describe('disabled better-auth paths', () => {
   it('still serves /get-session', async () => {
     const res = await auth.handler(new Request(`${BASE}/get-session`));
     expect(res.status).toBe(200);
+  });
+});
+
+describe('reset-code rate limits', () => {
+  it('limits both paths that mail a reset code to 3 a minute per client', () => {
+    const rules = auth.options.rateLimit?.customRules ?? {};
+    expect(rules['/email-otp/request-password-reset']).toEqual({ window: 60, max: 3 });
+    expect(rules['/forget-password/email-otp']).toEqual({ window: 60, max: 3 });
   });
 });

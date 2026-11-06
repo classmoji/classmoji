@@ -22,11 +22,22 @@ import {
 } from './secret.ts';
 import { ASK_MOJI_CLIENT_ID } from './mcpToken.ts';
 import { GITLAB_INSTANCE_CALLBACK_PATH, gitlabInstances } from './gitlabInstances.ts';
-import { applyAppConnectionRules, type AppConnectionSession } from './appConnectionGuard.ts';
+import {
+  applyAppConnectionRules,
+  IMPERSONATE_USER_PATH,
+  type AppConnectionSession,
+} from './appConnectionGuard.ts';
 import { mapGitHubProfile, mapGitLabProfile, onAccountCreated } from './providerProfile.ts';
 
 export { AUTH_SECRET, COOKIE_PREFIX };
 export { CONNECT_APP_VIEWING_AS_MESSAGE } from './appConnectionGuard.ts';
+
+/** The session `lookupSessionForHook` returns: what the hooks below read of it. */
+type HookSession =
+  | (NonNullable<AppConnectionSession> & {
+      user?: { id?: string; role?: string | null } | null;
+    })
+  | null;
 
 /**
  * The current session, read from inside `hooks.before` the way better-auth's
@@ -35,22 +46,28 @@ export { CONNECT_APP_VIEWING_AS_MESSAGE } from './appConnectionGuard.ts';
  * caller can tell a failed lookup from no session; and the lookup leaves no
  * trace on the request (no session refresh, and `ctx.context.session` is put
  * back), so the endpoint then runs exactly as it would have.
+ *
+ * The lookup is always made as a GET, whatever the method of the request the
+ * hook runs for: from better-auth 1.5 the get-session endpoint refuses POST
+ * (METHOD_NOT_ALLOWED) unless `session.deferSessionRefresh` is set, and a
+ * hook's context carries the request's own method. 1.4.18 ignores it.
  */
 async function lookupSessionForHook(ctx: {
   context: { session?: unknown };
   headers?: Headers;
-}): Promise<AppConnectionSession> {
+}): Promise<HookSession> {
   const previous = ctx.context.session;
   try {
     const result = await (getSession() as unknown as (c: unknown) => Promise<unknown>)({
       ...ctx,
+      method: 'GET',
       asResponse: false,
       headers: ctx.headers,
       returnHeaders: false,
       returnStatus: false,
       query: { disableRefresh: true },
     });
-    return (result ?? null) as AppConnectionSession;
+    return (result ?? null) as HookSession;
   } finally {
     ctx.context.session = previous;
   }
@@ -76,6 +93,56 @@ export const PLATFORM_ADMIN_USER_IDS: string[] = (process.env.PLATFORM_ADMIN_USE
   .split(',')
   .map(id => id.trim())
   .filter(Boolean);
+
+/**
+ * Whether a `User.role` value (better-auth's admin plugin field, a
+ * comma-separated list) names an admin role: any value that contains "admin",
+ * in any case, so `admin`, `Admin` and `user,admin` all count.
+ */
+export function roleIncludesAdmin(role: unknown): boolean {
+  return typeof role === 'string' && /admin/i.test(role);
+}
+
+/** A platform admin, or a user whose role contains "admin". */
+async function isAdminUser(userId: string): Promise<boolean> {
+  if (PLATFORM_ADMIN_USER_IDS.includes(userId)) return true;
+  const user = await getPrisma().user.findUnique({
+    where: { id: userId },
+    select: { role: true },
+  });
+  return roleIncludesAdmin(user?.role);
+}
+
+export const VIEW_AS_ADMIN_REFUSED_MESSAGE = "You can't view as another admin.";
+
+/**
+ * "View as" (the admin plugin's /admin/impersonate-user) never targets an
+ * admin: neither a platform admin nor a user whose role contains "admin".
+ * Run from `hooks.before` on that path only, so a refusal comes before the
+ * endpoint writes anything; `databaseHooks.session.create.before` holds the
+ * same rule for any session created with `impersonatedBy`.
+ *
+ * The target id is read the way the endpoint reads it: its body schema is
+ * `z.coerce.string()`, i.e. `String(userId)`, so `["<id>"]` and `<id>` name
+ * the same user.
+ *
+ * The target is checked only for a caller who could view as anyone at all
+ * (signed in as an admin by the same rule). Every other caller gets the
+ * endpoint's own refusal, the same whoever the target is.
+ */
+async function refuseViewingAsAnAdmin(ctx: {
+  context: { session?: unknown };
+  headers?: Headers;
+  body?: unknown;
+}): Promise<void> {
+  const caller = (await lookupSessionForHook(ctx))?.user;
+  if (!caller?.id) return;
+  if (!PLATFORM_ADMIN_USER_IDS.includes(caller.id) && !roleIncludesAdmin(caller.role)) return;
+  const targetId = String((ctx.body as { userId?: unknown } | undefined)?.userId);
+  if (await isAdminUser(targetId)) {
+    throw new APIError('FORBIDDEN', { message: VIEW_AS_ADMIN_REFUSED_MESSAGE });
+  }
+}
 
 // Signed sign-in-return tokens for public course sites. Re-exported from the
 // server entry for callers already importing from here; site code that must not
@@ -565,8 +632,11 @@ export const auth = betterAuth({
       userAgent: 'user_agent',
       createdAt: 'created_at',
       updatedAt: 'updated_at',
-      impersonatedBy: 'impersonated_by',
-    } as Record<string, string>,
+      // The admin plugin's `impersonatedBy` keeps its own name: Prisma's
+      // field is `impersonatedBy` (@map("impersonated_by")). These `fields`
+      // rename core fields only; plugin fields are renamed through the
+      // plugin's `schema` option (see admin() below).
+    },
     // The provider the session signed in with: its GitLab/Github mode.
     additionalFields: {
       sign_in_provider: { type: 'string', required: false, input: false },
@@ -607,13 +677,11 @@ export const auth = betterAuth({
     },
     // better-auth's `email` is users.email: the verified contact/school email,
     // also the password sign-in email. Git usernames live on Account.
+    // Core fields only; the admin plugin's ban fields are mapped in admin().
     fields: {
       createdAt: 'created_at',
       updatedAt: 'updated_at',
-      // Admin plugin fields
-      banReason: 'ban_reason',
-      banExpires: 'ban_expires_at',
-    } as Record<string, string>,
+    },
   },
   verification: {
     modelName: 'Verification',
@@ -644,7 +712,8 @@ export const auth = betterAuth({
    * match on the cookie header. It does no session lookup, UNLESS the request
    * carries the saved-authorization cookie (`oidc_login_prompt`, set by
    * /mcp/authorize while signed out and short-lived), in which case the rules
-   * look the session up once.
+   * look the session up once, or it is /admin/impersonate-user, where the
+   * "view as" rule reads the caller's session and the target's role.
    */
   databaseHooks: {
     session: {
@@ -653,6 +722,15 @@ export const auth = betterAuth({
         // is `/callback/:id`). That provider is the session's mode: a GitLab
         // session is shown only GitLab classrooms and GitLab identity.
         before: async (session, ctx) => {
+          // "View as" never targets an admin (see refuseViewingAsAnAdmin),
+          // whichever path creates the impersonated session.
+          const { impersonatedBy, userId } = session as {
+            impersonatedBy?: unknown;
+            userId?: unknown;
+          };
+          if (impersonatedBy && (await isAdminUser(String(userId)))) {
+            throw new APIError('FORBIDDEN', { message: VIEW_AS_ADMIN_REFUSED_MESSAGE });
+          }
           // A self-managed GitLab signs in through its own callback path.
           if (ctx?.path === GITLAB_INSTANCE_CALLBACK_PATH) {
             return { data: { ...session, sign_in_provider: 'GITLAB' } };
@@ -685,6 +763,10 @@ export const auth = betterAuth({
   hooks: {
     before: createAuthMiddleware(async ctx => {
       if (ctx.path !== '/mcp/token') {
+        // "View as" never targets an admin. Refused before the
+        // app-connection rules below, which still run for this path when
+        // it is allowed.
+        if (ctx.path === IMPERSONATE_USER_PATH) await refuseViewingAsAnAdmin(ctx);
         // Connecting apps: the consent page is always shown, and no app is
         // connected while viewing as another user (./appConnectionGuard.ts).
         // Every other path returns after string comparisons and one anchored
@@ -759,6 +841,8 @@ export const auth = betterAuth({
       '/email-otp/send-verification-otp': { window: 60, max: 3 },
       '/email-otp/verify-email': { window: 60, max: 5 },
       '/email-otp/reset-password': { window: 60, max: 5 },
+      '/email-otp/request-password-reset': { window: 60, max: 3 },
+      // The deprecated path of the same request, kept until it is disabled.
       '/forget-password/email-otp': { window: 60, max: 3 },
     },
   },
@@ -788,9 +872,19 @@ export const auth = betterAuth({
       // state — and unlike `role`, nothing in the app can write it, so there is
       // no in-app path to escalate into platform admin.
       adminUserIds: PLATFORM_ADMIN_USER_IDS,
-      // `allowImpersonatingAdmins` is deliberately left off (defaults false):
-      // better-auth then refuses admin-on-admin takeover, which closes the
-      // escalation path of impersonating a peer admin to inherit their access.
+      // "View as" never targets an admin: neither a platform admin nor a
+      // user whose role contains "admin". `allowImpersonatingAdmins` stays
+      // off (the default), but it is not what enforces that: from
+      // better-auth 1.5 a caller listed in `adminUserIds` may impersonate an
+      // admin whatever it says. The rule is ours, in `hooks.before`
+      // (refuseViewingAsAnAdmin) and `databaseHooks.session.create.before`.
+      //
+      // The plugin's own fields keep better-auth's names unless mapped here
+      // (`user.fields` above does not apply to them). Prisma calls the ban
+      // fields `ban_reason` and `ban_expires_at`.
+      schema: {
+        user: { fields: { banReason: 'ban_reason', banExpires: 'ban_expires_at' } },
+      },
     }),
     // OAuth 2.1 authorization server for MCP clients (discovery, dynamic client
     // registration, PKCE, consent, DB-backed access/refresh tokens). The MCP

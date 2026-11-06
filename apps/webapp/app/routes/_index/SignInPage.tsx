@@ -199,7 +199,7 @@ const SignInPage = ({
   const onForgot = (e: FormEvent) => {
     e.preventDefault();
     void run(async () => {
-      const { error: sendError } = await authClient.forgetPassword.emailOtp({ email });
+      const { error: sendError } = await authClient.emailOtp.requestPasswordReset({ email });
       if (sendError) {
         setError(errorMessage(sendError));
         return;
