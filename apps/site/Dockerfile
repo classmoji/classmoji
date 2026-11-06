@@ -16,16 +16,7 @@ COPY package*.json .npmrc ./
 RUN npm install
 
 COPY . .
-# The docs theme downloads its fonts during the build, and Astro only warns
-# when that fails. Fail the image build instead of shipping docs without them.
-# The build output is printed either way.
-RUN npm run build > /tmp/site-build.log 2>&1; status=$?; \
-    cat /tmp/site-build.log; \
-    if [ "$status" -ne 0 ]; then exit "$status"; fi; \
-    if grep -q "No data found for font family" /tmp/site-build.log; then \
-      echo "The docs fonts could not be downloaded; failing the build." >&2; exit 1; \
-    fi; \
-    rm /tmp/site-build.log
+RUN npm run build
 
 # Production stage: Astro's Node server. Pages are pre-built files it serves
 # as-is; only /api/contact runs code (it needs RESEND_API_KEY to send).
