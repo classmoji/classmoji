@@ -172,7 +172,9 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const aiUnavailable = !quizzesAvailable && !askMojiOnServer;
   const quizzesUnavailableLine =
     !quizzesAvailable && !aiUnavailable ? QUIZZES_NOT_SET_UP_COPY : null;
-  if (!askMojiTrigger && !aiAgentConfigured && !aiUnavailable) {
+  if (aiUnavailable) {
+    askMojiUnavailableLine = null;
+  } else if (!askMojiTrigger && !aiAgentConfigured) {
     askMojiUnavailableLine = ASK_MOJI_AVAILABILITY_COPY.TRIGGER_NOT_CONFIGURED;
   }
 

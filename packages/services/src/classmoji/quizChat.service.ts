@@ -47,7 +47,7 @@ import {
   type SandboxMessage,
   type SandboxProgress,
 } from '@classmoji/utils/quiz-agent';
-import { quizzesVisible } from './entitlement.service.ts';
+import { quizzesEntitled } from './entitlement.service.ts';
 import {
   CLIENT_MESSAGE_ID_PATTERN,
   MIN_TURN_INTERVAL_MS,
@@ -263,7 +263,12 @@ const pinnedAgentConfig = (
 const pinsCodeSandbox = (config: unknown): boolean =>
   isObject(config) && config.codeSandbox === true;
 
-/** Entitlement read before the row lock: it uses its own connection. */
+/**
+ * Entitlement read before the row lock: it uses its own connection.
+ * `quizzesEntitled`, not `quizzesVisible`: this runs inside the Trigger worker
+ * (the quiz runtime itself), whose env need not carry the Trigger key the web
+ * and MCP processes are judged by.
+ */
 const preflight = async (attemptId: string) => {
   const attempt = await getPrisma().quizAttempt.findUnique({
     where: { id: attemptId },
@@ -272,7 +277,7 @@ const preflight = async (attemptId: string) => {
   if (!attempt) throw new QuizChatRefusal('permanent', 'attempt_not_found');
   let visible: boolean;
   try {
-    visible = await quizzesVisible(attempt.quiz.classroom_id);
+    visible = await quizzesEntitled(attempt.quiz.classroom_id);
   } catch {
     // A failed lookup is not a verdict; the next turn tries again.
     throw new QuizChatRefusal('temporary', 'quizzes_unavailable');

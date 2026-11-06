@@ -393,6 +393,7 @@ describe('loader: what this server can run', () => {
     const data = await load();
     expect(data.aiUnavailable).toBe(true);
     expect(data.quizzesUnavailableLine).toBeNull();
+    expect(data.askMojiUnavailableLine).toBeNull();
   });
 });
 

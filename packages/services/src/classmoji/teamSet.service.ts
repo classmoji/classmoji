@@ -107,6 +107,7 @@ import type {
 } from '@prisma/client';
 
 import { getGitHubProvider } from '../git/index.ts';
+import { isTriggerConfigured } from '../helper/triggerConfig.ts';
 import {
   FIELD_TYPE_REGISTRY,
   flattenFields,
@@ -316,13 +317,6 @@ const TERMINAL_STATUSES: ReadonlySet<TeamSetRunStatus> = new Set([
   'FAILED',
   'CANCELED',
 ]);
-
-/**
- * Background work needs Trigger.dev. The same predicate the webapp's
- * create-classroom action uses; there is no shared copy in this package.
- */
-const isTriggerConfigured = (): boolean =>
-  Boolean(process.env.TRIGGER_SECRET_KEY || process.env.TRIGGER_ACCESS_TOKEN);
 
 // ─── Errors ─────────────────────────────────────────────────────────────────
 

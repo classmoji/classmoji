@@ -21,7 +21,6 @@ const getAuthSessionMock = vi.fn();
 const writeChatGrantMock = vi.fn();
 const recordTriggerSessionMock = vi.fn();
 const startSessionMock = vi.fn();
-const isTriggerConfiguredMock = vi.fn();
 const readRuntimeStateMock = vi.fn();
 const closeExpiredMock = vi.fn();
 
@@ -50,8 +49,9 @@ vi.mock('@classmoji/auth/server', () => ({
   getAuthSession: (...a: unknown[]) => getAuthSessionMock(...a),
 }));
 
-vi.mock('../session.server', () => ({
-  isTriggerConfigured: () => isTriggerConfiguredMock(),
+// The real shared Trigger rule: each test sets the env it runs under.
+vi.mock('../session.server', async () => ({
+  isTriggerConfigured: (await import('@classmoji/services/trigger-config')).isTriggerConfigured,
   writeChatGrant: (...a: unknown[]) => writeChatGrantMock(...a),
   recordTriggerSession: (...a: unknown[]) => recordTriggerSessionMock(...a),
   startQuizChatSession: (...a: unknown[]) => startSessionMock(...a),
@@ -107,6 +107,12 @@ const signInAs = (
   });
 };
 
+/** Whether this deployment has a Trigger key: both set or cleared, so no local .env decides. */
+const setTriggerKey = (key: 'TRIGGER_SECRET_KEY' | 'TRIGGER_ACCESS_TOKEN' | null) => {
+  vi.stubEnv('TRIGGER_SECRET_KEY', key === 'TRIGGER_SECRET_KEY' ? 'tr_dev_test' : '');
+  vi.stubEnv('TRIGGER_ACCESS_TOKEN', key === 'TRIGGER_ACCESS_TOKEN' ? 'tr_pat_test' : '');
+};
+
 let errorSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
@@ -116,7 +122,7 @@ beforeEach(() => {
 
   attemptFindByIdMock.mockResolvedValue(attemptRow());
   assertMutationMock.mockReturnValue(undefined);
-  isTriggerConfiguredMock.mockReturnValue(true);
+  setTriggerKey('TRIGGER_SECRET_KEY');
   quizzesVisibleMock.mockResolvedValue(true);
   writeChatGrantMock.mockResolvedValue(undefined);
   recordTriggerSessionMock.mockResolvedValue(undefined);
@@ -298,7 +304,17 @@ describe('api.quiz-chat.session — refusals', () => {
 
     expect(response.status).toBe(403);
     expect(await response.text()).toBe('Forbidden');
-    expect(isTriggerConfiguredMock).not.toHaveBeenCalled();
+    expectNothingStarted();
+  });
+
+  it('answers the access refusal, not the 503, when Trigger is also unset: access runs first', async () => {
+    setTriggerKey(null);
+    assertAccessMock.mockRejectedValue(new Response('Forbidden', { status: 403 }));
+
+    const response = await post({ attemptId: ATTEMPT_ID });
+
+    expect(response.status).toBe(403);
+    expect(await response.text()).toBe('Forbidden');
     expectNothingStarted();
   });
 
@@ -314,7 +330,10 @@ describe('api.quiz-chat.session — refusals', () => {
   });
 
   it('answers 503 after auth when Trigger is not configured, without consulting visibility', async () => {
-    isTriggerConfiguredMock.mockReturnValue(false);
+    setTriggerKey(null);
+    // Only the retired AI agent configured: it no longer runs quizzes.
+    vi.stubEnv('AI_AGENT_URL', 'http://localhost:6000');
+    vi.stubEnv('AI_AGENT_SHARED_SECRET', 'test-secret');
 
     const response = await post({ attemptId: ATTEMPT_ID });
 
@@ -328,15 +347,19 @@ describe('api.quiz-chat.session — refusals', () => {
     expectNothingStarted();
   });
 
-  it('starts the session with the AI agent variables unset: only Trigger is needed', async () => {
-    vi.stubEnv('AI_AGENT_URL', '');
-    vi.stubEnv('AI_AGENT_SHARED_SECRET', '');
+  it.each(['TRIGGER_SECRET_KEY', 'TRIGGER_ACCESS_TOKEN'] as const)(
+    'starts the session with only %s and the AI agent variables unset: only Trigger is needed',
+    async key => {
+      setTriggerKey(key);
+      vi.stubEnv('AI_AGENT_URL', '');
+      vi.stubEnv('AI_AGENT_SHARED_SECRET', '');
 
-    const response = await post({ attemptId: ATTEMPT_ID });
+      const response = await post({ attemptId: ATTEMPT_ID });
 
-    expect(response.status).toBe(200);
-    expect(startSessionMock).toHaveBeenCalledTimes(1);
-  });
+      expect(response.status).toBe(200);
+      expect(startSessionMock).toHaveBeenCalledTimes(1);
+    }
+  );
 
   it('answers the fixed 403 when quizzes are not visible in the classroom', async () => {
     quizzesVisibleMock.mockResolvedValue(false);
@@ -371,7 +394,6 @@ describe('api.quiz-chat.session — refusals', () => {
       attemptFindByIdMock.mockResolvedValue(attemptRow());
       auditCreateMock.mockResolvedValue(undefined);
       quizzesVisibleMock.mockResolvedValue(true);
-      isTriggerConfiguredMock.mockReturnValue(true);
 
       const response = await post({ attemptId: ATTEMPT_ID });
 

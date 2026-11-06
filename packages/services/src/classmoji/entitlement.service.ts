@@ -1,5 +1,6 @@
 import getPrisma from '@classmoji/database';
 import * as subscriptionService from './subscription.service.ts';
+import { isTriggerConfigured } from '../helper/triggerConfig.ts';
 
 /**
  * Plan entitlement for AI features, shared by every app.
@@ -61,17 +62,42 @@ export const canUseQuizzes = async (classroomId: string): Promise<EntitlementRes
 };
 
 /**
- * Whether quizzes may appear in this classroom at all: Pro, and not switched
- * off in its settings. Every surface that lists, counts, links or schedules a
- * quiz (modules, dashboards, calendars and feeds, gradebook, notifications, the
- * public course site, MCP reads) filters on this one answer, so a classroom
- * without it shows no trace of quizzes and nothing links to a refusing route.
+ * Whether quizzes may appear in this classroom at all: the quiz runtime is
+ * configured in this process (`isQuizRuntimeConfigured`), the classroom is
+ * Pro, and quizzes are not switched off in its settings. Every surface that
+ * lists, counts, links or schedules a quiz (modules, dashboards, calendars and
+ * feeds, gradebook, notifications, the public course site, MCP reads and
+ * writes) filters on this one answer, so a classroom without it shows no trace
+ * of quizzes and nothing links to a refusing route. No Trigger key, no
+ * quizzes anywhere.
+ *
+ * Without the runtime it answers false before any database read. A failed
+ * lookup THROWS, never answers false: a database blip must not drop every quiz
+ * out of a student's total. The webapp's `loadQuizzesVisible`
+ * (`~/utils/classroomProFlag.server`) is the rendering wrapper that answers
+ * false on a failed lookup instead.
  *
  * Stored quizzes are untouched; they reappear when the classroom qualifies
- * again. `quizzesVisibleOrThrow` below adds the quiz runtime check; the
- * webapp's `loadQuizzesVisible` wraps that and answers false on a failed lookup.
+ * again. Takes a classroom id the caller has already authorized.
+ *
+ * Code running INSIDE a Trigger worker uses `quizzesEntitled` instead.
  */
 export const quizzesVisible = async (classroomId: string): Promise<boolean> => {
+  if (!isQuizRuntimeConfigured()) return false;
+  return quizzesEntitled(classroomId);
+};
+
+/**
+ * The classroom half of `quizzesVisible`, with no runtime check: Pro, and not
+ * switched off in its settings. A failed lookup throws.
+ *
+ * ONLY for code that runs inside a Trigger worker (the quiz chat task's
+ * per-turn admission, Ask Moji's viewing resolver). The worker IS the quiz
+ * runtime, and its process env may lack the Trigger key the web and MCP
+ * processes are judged by, so asking `quizzesVisible` there would refuse every
+ * turn. Everywhere else, use `quizzesVisible`.
+ */
+export const quizzesEntitled = async (classroomId: string): Promise<boolean> => {
   const [{ isPro }, settings] = await Promise.all([
     subscriptionService.getProStateForClassroomId(classroomId),
     getPrisma().classroomSettings.findUnique({
@@ -84,30 +110,20 @@ export const quizzesVisible = async (classroomId: string): Promise<boolean> => {
 
 /**
  * Whether the quiz runtime is configured in THIS process: Trigger.dev keys are
- * set (`TRIGGER_SECRET_KEY` or `TRIGGER_ACCESS_TOKEN`). Quizzes run only on the
+ * set (`isTriggerConfigured`, the one shared rule). Quizzes run only on the
  * Trigger chat runtime, so without it no quiz can start and none is shown.
- * Same rule as `isTriggerConfigured` in `askMojiSession.service.ts` and the
- * webapp's `api.quiz-chat.session/session.server.ts`.
  */
-export const isQuizRuntimeConfigured = (): boolean =>
-  Boolean(process.env.TRIGGER_SECRET_KEY || process.env.TRIGGER_ACCESS_TOKEN);
+export const isQuizRuntimeConfigured = (): boolean => isTriggerConfigured();
 
 /**
- * Whether quizzes are shown in this classroom, as its pages show them: the quiz
- * runtime is configured AND `quizzesVisible` holds (Pro, not switched off). The
- * one answer every grade total (gradebook, student report, leaderboard, MCP
- * grade reads) passes to the quiz grade loader, so a total never counts a quiz
- * its pages hide.
- *
- * A failed lookup THROWS, never answers false: a database blip must not drop
- * every quiz out of a student's total. The webapp's `quizzesVisibleOrThrow`
- * (`~/utils/classroomProFlag.server`) delegates here. Takes a classroom id the
- * caller has already authorized.
+ * The same answer as `quizzesVisible`, under the name the grade totals
+ * (gradebook, student report, leaderboard, MCP grade reads) and the quiz
+ * routes call it by; it says at the call site that a failed lookup throws.
+ * The webapp's `quizzesVisibleOrThrow` (`~/utils/classroomProFlag.server`)
+ * delegates here.
  */
-export const quizzesVisibleOrThrow = async (classroomId: string): Promise<boolean> => {
-  if (!isQuizRuntimeConfigured()) return false;
-  return quizzesVisible(classroomId);
-};
+export const quizzesVisibleOrThrow = (classroomId: string): Promise<boolean> =>
+  quizzesVisible(classroomId);
 
 /**
  * Same check, addressed by conversation — for the SSE stream route, which only

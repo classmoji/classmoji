@@ -79,9 +79,9 @@ test.describe('Student Quiz List', () => {
 test.describe('Student Quiz Navigation', () => {
   test.fixme(
     true,
-    'MISSING: the Quizzes nav item is gated on isProTier AND quizzesAvailable (the root ' +
-      "loader's quiz runtime check: TRIGGER_SECRET_KEY or TRIGGER_ACCESS_TOKEN) in CommonLayout. " +
-      'Without a Trigger key the nav link stays hidden even with a PRO subscription.'
+    'MISSING: the Quizzes nav item is gated on isProTier AND quizzesAvailable in CommonLayout. ' +
+      'CI now sets a Trigger key, so quizzesAvailable holds, but this describe seeds no PRO ' +
+      'subscription (unlike Student Quiz List), so the nav link stays hidden.'
   );
 
   test('can navigate from dashboard to quizzes', async ({ authenticatedPage: page, testOrg }) => {

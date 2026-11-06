@@ -15,8 +15,9 @@
  *   2. the caller is a member of the attempt's classroom with an allowed role
  *      (assertClassroomAccess, audited), and the classroom's status lets that
  *      role act (assertClassroomMutationAllowed)
- *   3. AI features and Trigger are configured (503)
- *   4. quizzes are visible in the classroom (Pro, not switched off; 403)
+ *   3. the quiz runtime (Trigger) is configured (503)
+ *   4. quizzes are visible in the classroom (Pro, not switched off; 403; the
+ *      runtime half of that answer was already checked in 3)
  *   5. the caller owns the attempt, strictly. While an admin views as a
  *      student, the session IS that student's, so their own attempts pass and
  *      no one else's do; staff never get a session for someone else's attempt

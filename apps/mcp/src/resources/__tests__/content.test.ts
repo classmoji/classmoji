@@ -35,7 +35,7 @@
  * decisions run for real against hand-built rows.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ToolError } from '../../mcp/errors.ts';
 import type { ToolContext } from '../../mcp/registry.ts';
 
@@ -59,7 +59,7 @@ vi.mock('@classmoji/auth/server', () => ({
   assertProTier: (...a: unknown[]) => assertProTier(...a),
 }));
 
-vi.mock('@classmoji/services', () => ({
+vi.mock('@classmoji/services', async () => ({
   ClassmojiService: {
     classroom: { findBySlug: (...a: unknown[]) => findBySlug(...a) },
     quiz: {
@@ -67,7 +67,12 @@ vi.mock('@classmoji/services', () => ({
       getQuizzesForStudent: (...a: unknown[]) => getQuizzesForStudent(...a),
     },
     calendar: { getClassroomCalendar: (...a: unknown[]) => getClassroomCalendar(...a) },
-    entitlement: { quizzesVisibleOrThrow: (...a: unknown[]) => quizzesVisibleOrThrow(...a) },
+    entitlement: {
+      quizzesVisibleOrThrow: (...a: unknown[]) => quizzesVisibleOrThrow(...a),
+      // The shared Trigger rule itself, so the env decides as in production.
+      isQuizRuntimeConfigured: (await import('@classmoji/services/trigger-config'))
+        .isTriggerConfigured,
+    },
     emojiMapping: { findScaleByClassroomId: () => findScaleByClassroomId() },
   },
 }));
@@ -108,7 +113,18 @@ function studentCtx(): ToolContext {
   } as unknown as ToolContext;
 }
 
+/** Whether this process has a Trigger key: both set or cleared, so no local .env decides. */
+function setTriggerKey(key: 'TRIGGER_SECRET_KEY' | 'TRIGGER_ACCESS_TOKEN' | null) {
+  vi.stubEnv('TRIGGER_SECRET_KEY', key === 'TRIGGER_SECRET_KEY' ? 'tr_dev_test' : '');
+  vi.stubEnv('TRIGGER_ACCESS_TOKEN', key === 'TRIGGER_ACCESS_TOKEN' ? 'tr_pat_test' : '');
+}
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 beforeEach(() => {
+  setTriggerKey('TRIGGER_SECRET_KEY');
   findBySlug.mockReset();
   assertProTier.mockReset();
   assertProTier.mockResolvedValue(undefined);
@@ -170,6 +186,64 @@ describe('quizzes resource Pro gate (A3)', () => {
 
     expect(err).not.toBeInstanceOf(ToolError);
     expect((err as Error).message).toBe('connection reset');
+    expect(findByClassroom).not.toHaveBeenCalled();
+  });
+});
+
+describe('quizzes resource quiz runtime gate (no Trigger key, no quizzes)', () => {
+  const QUIZ = { id: 'q1', name: 'Quiz 1', status: 'PUBLISHED', weight: 1, question_count: 3 };
+
+  it('refuses staff on Pro with quizzes on when this process has no Trigger key, before reading quizzes', async () => {
+    setTriggerKey(null);
+    // Only the retired AI agent configured: it no longer runs quizzes.
+    vi.stubEnv('AI_AGENT_URL', 'http://localhost:6000');
+    vi.stubEnv('AI_AGENT_SHARED_SECRET', 'test-secret');
+    findByClassroom.mockResolvedValue([QUIZ]);
+
+    const err = await quizzesResource
+      .handler(VARS, ownerCtx({ quizzes_enabled: true }), new URL('classmoji://x'))
+      .catch(e => e);
+
+    expect(err).toBeInstanceOf(ToolError);
+    expect((err as ToolError).kind).toBe('forbidden');
+    // The student branch's wording where quizzes are hidden.
+    expect((err as ToolError).message).toBe('Quizzes are not available in this classroom');
+    expect(findByClassroom).not.toHaveBeenCalled();
+  });
+
+  it.each(['TRIGGER_SECRET_KEY', 'TRIGGER_ACCESS_TOKEN'] as const)(
+    'serves staff with only %s set',
+    async key => {
+      setTriggerKey(key);
+      findByClassroom.mockResolvedValue([QUIZ]);
+
+      const result = (await quizzesResource.handler(
+        VARS,
+        ownerCtx({ quizzes_enabled: true }),
+        new URL('classmoji://x')
+      )) as { quizzes: Array<{ id: string }> };
+
+      expect(result.quizzes.map(q => q.id)).toEqual(['q1']);
+    }
+  );
+
+  it('keeps the Pro and switch refusals ahead of it', async () => {
+    setTriggerKey(null);
+
+    const disabled = await quizzesResource
+      .handler(VARS, ownerCtx({ quizzes_enabled: false }), new URL('classmoji://x'))
+      .catch(e => e);
+    expect((disabled as ToolError).message).toBe(
+      'Quizzes are currently disabled for this classroom'
+    );
+
+    assertProTier.mockRejectedValue(
+      new Response('This feature requires a Pro subscription', { status: 403 })
+    );
+    const notPro = await quizzesResource
+      .handler(VARS, ownerCtx({ quizzes_enabled: true }), new URL('classmoji://x'))
+      .catch(e => e);
+    expect((notPro as ToolError).message).toBe('This feature requires a Pro subscription');
     expect(findByClassroom).not.toHaveBeenCalled();
   });
 });

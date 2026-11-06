@@ -22,11 +22,9 @@ import {
 import Tasks from '@classmoji/tasks';
 import getPrisma from '@classmoji/database';
 import { quizzesVisibleOrThrow } from '~/utils/classroomProFlag.server';
+// Background work needs Trigger.dev; without it the async phases can't run.
+import { isTriggerConfigured } from '@classmoji/services/trigger-config';
 import { resolveSourceAccess, SOURCE_ROLES, API_KEYS_STRIPPED_WARNING } from './sourceAccess';
-
-/** Background work needs Trigger.dev; without it the async phases can't run. */
-const isTriggerConfigured = () =>
-  Boolean(process.env.TRIGGER_SECRET_KEY || process.env.TRIGGER_ACCESS_TOKEN);
 
 /**
  * Cap on the import pre-flight's token mint.

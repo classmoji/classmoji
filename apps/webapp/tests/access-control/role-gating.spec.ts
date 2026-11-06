@@ -95,8 +95,9 @@ test.describe('Access Control: an assistant cannot reach the /admin namespace', 
 
   // The other half — an assistant REACHING quiz management at /assistant — is
   // deliberately not asserted here: the quizzes screen sits behind a Pro-tier
-  // and an AI-agent gate that this suite's seed classroom does not guarantee,
-  // so the assertion would be testing the seed rather than the prefix.
+  // and a quiz-runtime (Trigger) gate that this suite's seed classroom and
+  // server do not guarantee, so the assertion would be testing the seed rather
+  // than the prefix.
 
   test('an assistant no longer reaches the grades screen at any prefix (403)', async ({
     authenticatedPage: page,

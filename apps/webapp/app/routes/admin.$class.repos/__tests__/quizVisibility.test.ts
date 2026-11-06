@@ -2,8 +2,8 @@
  * The repositories pages carry the assignment editor's context: every
  * assignment in the classroom, the quizzes it could bind, and which are bound
  * already. Where the classroom's quizzes are hidden (not Pro, switched off, or
- * no AI agent) none of that names a quiz — no QUIZ assignment row, no quiz
- * candidate, no bound quiz id.
+ * no quiz runtime on this server) none of that names a quiz — no QUIZ
+ * assignment row, no quiz candidate, no bound quiz id.
  *
  * Three loaders: the list under /admin, the list under /assistant (and
  * /teacher, which re-exports it), and the repository page shared by /admin

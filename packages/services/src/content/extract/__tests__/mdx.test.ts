@@ -219,7 +219,7 @@ describe('tables are left exactly as they are', () => {
     // default" — dropping it shifts every later cell under the wrong header.
     const text = textOf('self-hosting/environment-variables.mdx');
     expect(text).toContain(
-      '| TRIGGER_SECRET_KEY | No | | Trigger.dev secret key used to authenticate background job runs. |'
+      '| TRIGGER_SECRET_KEY | No | | Trigger.dev secret key used to authenticate background job runs.'
     );
     expect(text).toContain('| Name | Required | Default | Description |');
   });

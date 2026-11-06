@@ -30,9 +30,9 @@ export const loadClassroomIsPro = async (classroomId: string): Promise<boolean> 
 
 /**
  * Whether quizzes may appear anywhere in this classroom's UI: the quiz runtime
- * (Trigger) is configured, and `entitlement.quizzesVisible` (Pro, not switched
- * off) holds. Delegates to `entitlement.quizzesVisibleOrThrow`, the answer the
- * grade totals and the MCP use, so a page never shows a quiz a total skips.
+ * (Trigger) is configured, the classroom is Pro and quizzes are not switched
+ * off. Delegates to `entitlement.quizzesVisibleOrThrow`, the answer the
+ * grade totals, calendar, notifications and the MCP use, so a page never shows a quiz a total skips.
  *
  * A failed lookup THROWS. Use this where the answer gates a quiz route or
  * action (a 404 or the 403 refusal): a database blip there must surface as an

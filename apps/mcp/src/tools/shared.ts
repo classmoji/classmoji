@@ -200,7 +200,8 @@ export async function loadAssignmentInClassroom(
  * row straddling two classrooms is refused rather than served.
  *
  * A QUIZ assignment is not_found where the classroom shows no quizzes
- * (`entitlement.quizzesVisible`), the predicate list_modules drops it on: a tool
+ * (`entitlement.quizzesVisible`: quiz runtime configured, Pro, quizzes on), the
+ * predicate list_modules drops it on: a tool
  * must not name a row no read surface lists.
  */
 export async function loadCourseworkAssignmentInClassroom(

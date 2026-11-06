@@ -20,7 +20,7 @@ import { LockedBanner } from '~/components/features/classroom/LockedBanner';
 import ImportProgressBanner, {
   type ImportProgressBannerProps,
 } from '../../features/import/ImportProgressBanner';
-import type { AppUser, MembershipWithOrganization } from '~/types';
+import type { loader as rootLoader } from '~/root';
 
 interface Viewer {
   user: { id: string; name?: string | null; login?: string | null; avatar_url?: string | null };
@@ -108,14 +108,7 @@ const CommonLayout = ({
 
   const { role } = useRole();
   const roleSettings = useRoleSettings();
-  const rootData = useRouteLoaderData('root') as
-    | {
-        user?: AppUser | null;
-        memberships?: MembershipWithOrganization[];
-        quizzesAvailable?: boolean;
-        askMoji?: { runtime?: string; available?: boolean };
-      }
-    | undefined;
+  const rootData = useRouteLoaderData<typeof rootLoader>('root');
   const { user, memberships = [], quizzesAvailable = false } = rootData ?? {};
   // The root loader's `askMojiAvailable` for this classroom (Trigger runtime, a
   // member). The insights entry follows it, like the sidebar button.
