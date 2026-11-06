@@ -157,6 +157,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     {
       attempted: boolean;
       completed: boolean;
+      /** An attempt is still running (an unfinished legacy one is not). */
+      inProgress: boolean;
       /** The counting attempt has a score, shown or not (no grading scale). */
       scored: boolean;
       emoji: string | null;
@@ -179,6 +181,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
         quizStatus[a.id] = {
           attempted: standing.attemptsUsed > 0,
           completed: standing.completed,
+          inProgress: standing.inProgress !== null,
           scored: standing.counting !== null,
           emoji: grade?.effective.emoji ?? null,
           adjusted: grade?.adjusted ?? false,
@@ -712,8 +715,11 @@ const StudentReport = ({ loaderData }: Route.ComponentProps) => {
           <Pill tone="grey">Not attempted</Pill>
         ) : q.completed ? (
           <Pill tone="green">Completed</Pill>
-        ) : (
+        ) : q.inProgress ? (
           <Pill tone="blue">In progress</Pill>
+        ) : (
+          // Only unfinished attempts from the retired ai-agent runtime.
+          <Pill tone="grey">Not finished</Pill>
         );
       }
       // The late shield (#813): offered where the counting attempt is late,

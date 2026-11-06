@@ -3,6 +3,7 @@ import {
   countingQuizAttempt,
   effectivePercentage,
   isClosed,
+  isOpenQuizAttempt,
   quizAttemptGrade,
   isReleased,
   mirroredQuizStatus,
@@ -829,6 +830,8 @@ const STUDENT_ATTEMPT_SELECT = {
   attempt_number: true,
   started_at: true,
   completed_at: true,
+  // An unfinished attempt is running only on the chat runtime (`isOpenQuizAttempt`).
+  agent_runtime: true,
   score: true,
   feedback: true,
   session_status: true,
@@ -991,7 +994,13 @@ export const getQuizzesForStudent = async (
       return {
         ...attempt,
         attemptNumber,
-        status: isCompleted ? 'completed' : 'in_progress',
+        // `not_finished`: an unfinished attempt from the retired ai-agent
+        // runtime, which can never be resumed (read-only).
+        status: isCompleted
+          ? 'completed'
+          : isOpenQuizAttempt(attempt)
+            ? 'in_progress'
+            : 'not_finished',
         focusMetrics,
         partialCreditScore,
         firstAttemptScore,

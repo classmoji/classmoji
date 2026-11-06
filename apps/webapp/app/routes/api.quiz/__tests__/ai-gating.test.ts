@@ -20,6 +20,7 @@ const assertClassroomAccessMock = vi.fn();
 const quizzesVisibleMock = vi.fn();
 const assertClassroomMutationAllowedMock = vi.fn();
 const findWithMessagesMock = vi.fn();
+const attemptFindByIdMock = vi.fn();
 
 vi.mock('~/utils/aiFeatures.server', () => ({
   isAIAgentConfigured: () => isAIAgentConfiguredMock(),
@@ -37,42 +38,23 @@ vi.mock('~/utils/routeAuth.server', () => ({
   assertClassroomMutationAllowed: (...a: unknown[]) => assertClassroomMutationAllowedMock(...a),
 }));
 
-vi.mock('~/utils/backgroundTask.server', () => ({
-  runBackgroundTask: vi.fn(),
-}));
-
 // The action lazily imports these; stub them so importing the route never
 // reaches into the (empty) ai-agent submodule or a real DB.
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     quiz: { findById: vi.fn() },
     classroom: { findById: vi.fn() },
-    quizAttempt: { findWithMessages: (...a: unknown[]) => findWithMessagesMock(...a) },
+    quizAttempt: {
+      findById: (...a: unknown[]) => attemptFindByIdMock(...a),
+      findWithMessages: (...a: unknown[]) => findWithMessagesMock(...a),
+    },
   },
   // The action destructures this alongside ClassmojiService to tell "no such
   // attempt" apart from a query that failed for another reason.
   QuizAttemptNotFoundError: class QuizAttemptNotFoundError extends Error {},
 }));
-vi.mock('../../student.$class.quizzes/helpers.server', () => ({
-  getInstallationToken: vi.fn(),
-  gitlabProjectAccess: vi.fn(),
-}));
-vi.mock('../../student.$class.quizzes/aiAgent.server', () => ({
-  initializeQuizViaAgent: vi.fn(),
-  sendMessageToAgent: vi.fn(),
-  endQuizSession: vi.fn(),
-}));
 vi.mock('@classmoji/auth/server', () => ({
   getAuthSession: vi.fn().mockResolvedValue({ token: null, session: null }),
-}));
-
-// The per-call MCP read token (quiz source material, Stage 2). Mocked so no
-// test here mints against a real database.
-vi.mock('@classmoji/auth/mcp-token', () => ({
-  mintMcpAccessToken: vi.fn(async () => ({
-    accessToken: 'mcp-token',
-    expiresAt: new Date('2030-01-01T00:00:00.000Z'),
-  })),
 }));
 
 const { action } = await import('../route.ts');
@@ -157,18 +139,18 @@ describe('api.quiz AI gating', () => {
     expect(quizzesVisibleMock).toHaveBeenCalledWith('c-1');
   });
 
-  it('also gates sendMessage with 503 when the AI agent is not configured', async () => {
+  it('also gates updateMetrics with 503 when the AI agent is not configured', async () => {
     // The config gate sits after resolveOrgContext for ALL actions, not just
     // startQuiz. Prove a second action traverses the same gate.
     isAIAgentConfiguredMock.mockReturnValue(false);
-    findWithMessagesMock.mockResolvedValue({
-      attempt: {
-        quiz: { classroom: { slug: 'test-class' }, classroom_id: 'c-1', quiz_id: 'quiz-1' },
-        quiz_id: 'quiz-1',
-      },
+    attemptFindByIdMock.mockResolvedValue({
+      id: 'a-1',
+      quiz: { classroom: { slug: 'test-class' }, classroom_id: 'c-1' },
+      quiz_id: 'quiz-1',
+      user_id: 'student-1',
     });
 
-    const res = await action(postQuiz({ _action: 'sendMessage', attemptId: 'a-1', content: 'hi' }));
+    const res = await action(postQuiz({ _action: 'updateMetrics', attemptId: 'a-1' }));
 
     expect(res.status).toBe(503);
     expect(await res.json()).toMatchObject({ error: expect.stringMatching(/not configured/i) });
@@ -186,9 +168,11 @@ describe('api.quiz AI gating', () => {
     });
     findWithMessagesMock.mockResolvedValue(null);
 
-    const res = await action(postQuiz({ _action: 'startQuiz', quizId: 'quiz-1', attemptId: 'a-1' }));
+    const res = await action(
+      postQuiz({ _action: 'startQuiz', quizId: 'quiz-1', attemptId: 'a-1' })
+    );
 
-    // The 404 'Attempt not found' is emitted at route.ts:325 — INSIDE the
+    // The 404 'Attempt not found' is emitted in startQuiz — INSIDE the
     // post-gate switch, only reachable after isAIAgentConfigured() passes. So
     // a specific post-gate error (not merely "status !== 503") proves the
     // configured path actually traverses past the AI gate rather than

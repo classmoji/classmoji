@@ -2,6 +2,36 @@
  * Quiz-related utility functions shared across the application
  */
 
+/**
+ * The runtime every quiz attempt is created on (`quiz_attempts.agent_runtime`):
+ * the Trigger.dev chat task. Older rows carry `ai_agent`, the retired ai-agent
+ * WebSocket runtime; those attempts are read-only (never started, continued or
+ * resumed), whether or not they were completed.
+ */
+export const QUIZ_CHAT_RUNTIME = 'trigger_chat';
+
+/** Whether an attempt runs on the chat runtime (every attempt created now does). */
+export const isTriggerChatAttempt = (
+  attempt: { agent_runtime?: unknown } | null | undefined
+): boolean => attempt?.agent_runtime === QUIZ_CHAT_RUNTIME;
+
+/**
+ * Whether an attempt is still running: not completed, and on the chat
+ * runtime. An unfinished attempt from the retired ai-agent runtime can never
+ * finish, so it is not open: it reads as ended, not finished (never "In
+ * Progress" or "Resume"). It is not completed either: it has no score and
+ * still counts toward max_attempts. Use this wherever "not completed" would
+ * otherwise be read as "running".
+ */
+export const isOpenQuizAttempt = (
+  attempt: { agent_runtime?: unknown; completed_at?: unknown } | null | undefined
+): boolean => Boolean(attempt) && attempt!.completed_at == null && isTriggerChatAttempt(attempt);
+
+/** Not completed and never will be: an unfinished attempt from the retired ai-agent runtime. */
+export const isUnfinishedLegacyAttempt = (
+  attempt: { agent_runtime?: unknown; completed_at?: unknown } | null | undefined
+): boolean => Boolean(attempt) && attempt!.completed_at == null && !isTriggerChatAttempt(attempt);
+
 export interface QuestionProgress {
   questionNumber: number;
   totalQuestions: number | null;

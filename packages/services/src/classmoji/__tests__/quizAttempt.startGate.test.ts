@@ -13,7 +13,11 @@
  *
  * A student's own attempts are checked first: an unfinished attempt is
  * offered for resuming, and a used-up attempt count is reported as such,
- * before the quiz's schedule is looked at.
+ * before the quiz's schedule is looked at. An unfinished attempt from the
+ * retired ai-agent runtime (`ai_agent`, or no stamp) can never be resumed, so
+ * it is never offered and never blocks; it still counts toward max_attempts.
+ *
+ * Every attempt is created on the chat runtime (`trigger_chat`).
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -179,7 +183,9 @@ describe('createNew — a student and a quiz with no assignment', () => {
 
 describe("createNew — a student's own attempts come first", () => {
   it('offers an unfinished attempt for resuming, whatever the quiz schedule says', async () => {
-    mocks.attemptFindMany.mockResolvedValue([{ id: 'attempt-0', started_at: past() }]);
+    mocks.attemptFindMany.mockResolvedValue([
+      { id: 'attempt-0', started_at: past(), agent_runtime: 'trigger_chat', completed_at: null },
+    ]);
     for (const [, assignment] of NOT_OPEN) {
       mocks.quizFindUnique.mockResolvedValue(quiz({ assignment: assignment() }));
 
@@ -190,6 +196,44 @@ describe("createNew — a student's own attempts come first", () => {
         canResume: true,
       });
     }
+    expect(mocks.attemptCreate).not.toHaveBeenCalled();
+  });
+
+  it('never offers an unfinished ai_agent attempt: a new one starts, on the chat runtime', async () => {
+    mocks.quizFindUnique.mockResolvedValue(quiz({ max_attempts: 3 }));
+    mocks.attemptCount.mockResolvedValue(2);
+    mocks.attemptCreate.mockResolvedValue({ id: 'attempt-new' });
+    for (const legacy of [
+      { id: 'attempt-0', started_at: past(), agent_runtime: 'ai_agent', completed_at: null },
+      // A row read with no stamp is the column default, ai_agent.
+      { id: 'attempt-1', started_at: past(), completed_at: null },
+    ]) {
+      mocks.attemptFindMany.mockResolvedValue([legacy]);
+      mocks.attemptCreate.mockClear();
+
+      await expect(start()).resolves.toMatchObject({
+        success: true,
+        attemptId: 'attempt-new',
+        // The legacy attempts still count.
+        attemptCount: 3,
+      });
+      expect(mocks.attemptCreate).toHaveBeenCalledExactlyOnceWith({
+        data: expect.objectContaining({ agent_runtime: 'trigger_chat' }),
+      });
+    }
+  });
+
+  it('still counts unfinished ai_agent attempts toward max_attempts', async () => {
+    mocks.quizFindUnique.mockResolvedValue(quiz({ max_attempts: 2 }));
+    mocks.attemptCount.mockResolvedValue(2);
+    mocks.attemptFindMany.mockResolvedValue([
+      { id: 'attempt-0', started_at: past(), agent_runtime: 'ai_agent', completed_at: null },
+    ]);
+
+    await expect(start()).resolves.toMatchObject({
+      success: false,
+      reason: 'max_attempts_reached',
+    });
     expect(mocks.attemptCreate).not.toHaveBeenCalled();
   });
 

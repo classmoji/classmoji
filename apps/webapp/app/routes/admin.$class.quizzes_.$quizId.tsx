@@ -367,16 +367,15 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
 
   const createNewPreviewAttempt = async (repoName: string | null = null) => {
     try {
-      // Create new attempt with repoName saved to agent_config
-      // QuizAttemptInterface will auto-start and read repoName from agent_config
+      // Create new attempt with repoName saved to agent_config, where the
+      // chat runtime reads it
       const response = await fetch('/api/quiz', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           _action: 'restartQuiz',
           quizId: quiz.id,
-          attemptId: adminAttempt?.id || null, // For cleanup
-          repoName, // Saved to agent_config for QuizAttemptInterface to use
+          repoName, // Saved to agent_config for the chat runtime to use
         }),
       });
 
@@ -395,7 +394,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
         return;
       }
 
-      // Navigate to preview route - QuizAttemptInterface will call startQuiz
+      // Navigate to preview route - the chat starts when its drawer opens
       navigate(`/${rolePrefix}/${classSlug}/quizzes/${quizId}/preview/${result.attemptId}`);
     } catch (error: unknown) {
       console.error('[Preview] Error creating attempt:', error);
@@ -407,7 +406,6 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
   };
 
   // Resume existing attempt - just navigate, quiz continues with existing context
-  // QuizAttemptInterface won't auto-start because messages already exist
   const resumePreviewAttempt = () => {
     navigate(`/${rolePrefix}/${classSlug}/quizzes/${quizId}/preview/${adminAttempt!.id}`);
   };
@@ -417,8 +415,9 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
 
     // For code-aware quizzes, show repo selection modal for new attempts only
     if (quiz.include_code_context) {
-      // Check for existing in-progress attempt to determine action
-      if (adminAttempt && !adminAttempt.completed_at) {
+      // Check for existing in-progress attempt to determine action. An
+      // unfinished one from the retired ai-agent runtime can't be resumed.
+      if (adminAttempt?.open) {
         Modal.confirm({
           title: 'Resume or Start New?',
           content:
@@ -444,7 +443,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
       }
     } else {
       // Non-code-aware quiz - proceed without repo selection
-      if (adminAttempt && !adminAttempt.completed_at) {
+      if (adminAttempt?.open) {
         Modal.confirm({
           title: 'Resume or Start New?',
           content:
@@ -574,7 +573,8 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
         if (record.completed_at) {
           return <Tag color="green">Completed</Tag>;
         }
-        return <Tag color="blue">In Progress</Tag>;
+        // An unfinished attempt from the retired ai-agent runtime never finishes.
+        return record.open ? <Tag color="blue">In Progress</Tag> : <Tag>Not finished</Tag>;
       },
     },
     {
@@ -630,7 +630,11 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
       dataIndex: 'focusMetrics',
       render: (focusMetrics: FocusMetrics | null, record: QuizAttempt) => {
         if (!record.completed_at) {
-          return <span className="text-gray-400 dark:text-gray-500 italic">In progress</span>;
+          return (
+            <span className="text-gray-400 dark:text-gray-500 italic">
+              {record.open ? 'In progress' : 'Not finished'}
+            </span>
+          );
         }
         if (!focusMetrics || !focusMetrics.totalMs) {
           return <span className="text-gray-400 dark:text-gray-500 italic">N/A</span>;

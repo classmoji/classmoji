@@ -62,6 +62,7 @@ import {
   parseMessageButtons,
   parseQuestionCard,
   parseQuestionComplete,
+  isOpenQuizAttempt,
   quizEvaluationRecord,
   quizLateHours,
   stripQuestionComplete,
@@ -654,11 +655,12 @@ export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
   annotations: { destructive: false, idempotent: true, openWorld: false },
   title: 'Get a quiz attempt',
   description:
-    'One quiz attempt: the student, when it started and completed, grade_emoji and ' +
+    'One quiz attempt: the student, when it started and completed, status (IN_PROGRESS, ' +
+    'COMPLETED, NOT_FINISHED: an old attempt that cannot finish), grade_emoji and ' +
     "first_attempt_emoji (emoji on the classroom's own scale, score-N badges on the numeric " +
     'scale; never numbers), band, the staff adjustment (adjusted, original_emoji, ' +
     'adjusted_at, adjusted_by; adjustment_orphaned: the stored adjusted_emoji left the ' +
-    "scale, the AI's grade counts until remapped in Grade settings) and the comment to the " +
+    "scale, the AI's grade counts until remapped) and the comment to the " +
     'student (instructor_comment, ' +
     'comment_at, comment_by); change either with quiz_attempt_adjust, picking from ' +
     'emoji_scale (the classroom scale, best first; grade_emoji keeps the score). ' +
@@ -668,11 +670,11 @@ export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
     'late_hours 0), focus_percentage, the result of each question (tries, ' +
     'eventually_correct, first_attempt_correct, emoji, brief_feedback), and the evaluation ' +
     '(band, closing feedback). include_transcript: true adds the conversation as the staff ' +
-    'review drawer shows it: questions, answers, feedback with each expected_answer (not on ' +
+    'drawer shows it: questions, answers, feedback with each expected_answer (not on ' +
     "the caller's own preview), files read, code submissions, and the button a student used " +
     '(action). Get attempt ids from list_quiz_attempts. Staff previews are flagged ' +
-    'is_staff_preview. ended_by: turn_limit when the server submitted a chat attempt at its ' +
-    'message limit, else null. The teaching team only; the read is audited.',
+    'is_staff_preview. ended_by: turn_limit when the server submitted it at its message ' +
+    'limit, else null. The teaching team only; the read is audited.',
   scope: 'read',
   roles: QUIZ_STAFF,
   inputSchema: {
@@ -849,7 +851,13 @@ export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
         on_roster: Boolean(student),
         is_staff_preview: Boolean(staff) && !student,
         is_former_member: !student && !staff,
-        status: completed ? 'COMPLETED' : 'IN_PROGRESS',
+        // NOT_FINISHED: an unfinished attempt from the retired ai-agent
+        // runtime, which can never finish.
+        status: completed
+          ? 'COMPLETED'
+          : isOpenQuizAttempt(attempt)
+            ? 'IN_PROGRESS'
+            : 'NOT_FINISHED',
         started_at: iso(attempt.started_at),
         completed_at: iso(attempt.completed_at),
         ended_by: messageLimit?.endedBy ?? null,

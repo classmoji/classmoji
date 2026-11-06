@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { data as reply, useLocation, useNavigate, useParams } from 'react-router';
 import { Drawer, ConfigProvider, theme, Modal } from 'antd';
 import { useRouteDrawer, useDarkMode } from '~/hooks';
-import { QuizAttemptInterface } from '~/components';
+import { QuizAttemptView } from '~/components';
 import { useAskMojiAttempt } from '~/components/features/ask-moji/viewing';
 import {
   QuizResultProvider,
@@ -26,7 +26,7 @@ import {
 } from '~/utils/quizPayloads';
 import { impersonatedBy } from '~/routes/admin.$class.ask-moji/impersonation.server';
 import { resolveQuizRequest } from '~/routes/assistant.$class_.regrade-requests/resolveQuizRegrade.server';
-import { isTriggerChatAttempt } from '~/utils/quizRuntime.server';
+import { isTriggerChatAttempt } from '@classmoji/utils';
 import { closeIfExpired } from '~/utils/quizAttemptExpiry.server';
 import type { Route } from './+types/route';
 
@@ -174,7 +174,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       })
     : null;
 
-  // 10. Send only what the drawer and QuizAttemptInterface read — see
+  // 10. Send only what the drawer and QuizAttemptView read — see
   // ~/utils/quizPayloads. Both rows arrive joined to much more: the attempt to
   // its user, quiz and classroom; the quiz to every attempt and its user.
   return {
@@ -413,7 +413,8 @@ export default function AdminQuizAttemptViewDrawer({ loaderData }: Route.Compone
   useAskMojiAttempt({
     quizId: data.quiz.id,
     quizName: data.quiz.name,
-    readOnly: data.readOnly,
+    // An attempt from the retired ai-agent runtime is read-only, finished or not.
+    readOnly: data.readOnly || !isTriggerChatAttempt(data.attempt),
     viewerOwnsAttempt: data.viewerOwnsAttempt,
   });
   const { opened } = useRouteDrawer({});
@@ -460,8 +461,9 @@ export default function AdminQuizAttemptViewDrawer({ loaderData }: Route.Compone
   };
 
   const handleClose = () => {
-    // If quiz is not complete, show confirmation
-    if (!data.readOnly) {
+    // A chat still in progress asks first. An unfinished attempt from the
+    // retired ai-agent runtime is read-only: nothing to leave.
+    if (!data.readOnly && isTriggerChatAttempt(data.attempt)) {
       setShowConfirm(true);
     } else {
       navigateAway();
@@ -508,7 +510,7 @@ export default function AdminQuizAttemptViewDrawer({ loaderData }: Route.Compone
         }}
       >
         <QuizResultProvider value={slots}>
-          <QuizAttemptInterface {...data} onClose={handleClose} isVisible={opened} />
+          <QuizAttemptView {...data} onClose={handleClose} isVisible={opened} />
         </QuizResultProvider>
       </Drawer>
 

@@ -274,11 +274,12 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 /**
  * Which tab a quiz sits in. Done means a completed attempt, or a closed quiz
  * with nothing left to resume — the same split the Assignments page makes, so
- * a closed quiz never reads as still to do.
+ * a closed quiz never reads as still to do. An unfinished attempt from the
+ * retired ai-agent runtime (`not_finished`) can't be resumed.
  */
 const isDone = (quiz: StudentQuiz) =>
   quiz.attempts.some(a => a.status === 'completed') ||
-  (quiz.closed && !quiz.attempts.some(a => a.status !== 'completed'));
+  (quiz.closed && !quiz.attempts.some(a => a.status === 'in_progress'));
 
 export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
   const { terms } = useGitWeb();
@@ -442,7 +443,9 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
               </Space>
             );
           }
-          return <Badge status="processing" text="In Progress" />;
+          if (status === 'in_progress') return <Badge status="processing" text="In Progress" />;
+          // An unfinished attempt from the retired ai-agent runtime: read-only.
+          return <Badge status="default" text="Not finished" />;
         },
       },
       {
@@ -469,7 +472,13 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
         render: (_: unknown, record: QuizAttempt) => {
           // An unfinished attempt has no settled duration or focus share yet;
           // showing one reads as a finished attempt spent unfocused.
-          if (record.status !== 'completed') return <Text type="secondary">In progress</Text>;
+          if (record.status !== 'completed') {
+            return (
+              <Text type="secondary">
+                {record.status === 'in_progress' ? 'In progress' : 'Not finished'}
+              </Text>
+            );
+          }
           if (!record.focusMetrics) return <Text type="secondary">-</Text>;
 
           const { percentage, focusedMs, totalMs } = record.focusMetrics;
@@ -500,8 +509,14 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
         dataIndex: 'completed_at',
         key: 'completed',
         width: 150,
-        render: (completedAt: string | null) => {
-          if (!completedAt) return <Text type="secondary">In Progress</Text>;
+        render: (completedAt: string | null, record: QuizAttempt) => {
+          if (!completedAt) {
+            return (
+              <Text type="secondary">
+                {record.status === 'in_progress' ? 'In Progress' : 'Not finished'}
+              </Text>
+            );
+          }
           // Handle different date formats
           const date = dayjs(completedAt);
           if (!date.isValid()) {
@@ -516,9 +531,16 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
         key: 'actions',
         width: 200,
         render: (_: unknown, record: QuizAttempt) => {
-          const buttonText = record.status === 'completed' ? 'Review' : 'Resume';
+          // Resume only a running attempt; an unfinished one from the retired
+          // ai-agent runtime opens its read-only transcript.
+          const buttonText =
+            record.status === 'completed'
+              ? 'Review'
+              : record.status === 'in_progress'
+                ? 'Resume'
+                : 'View';
           const buttonIcon =
-            record.status === 'completed' ? <CheckCircleOutlined /> : <PlayCircleOutlined />;
+            record.status === 'in_progress' ? <PlayCircleOutlined /> : <CheckCircleOutlined />;
 
           return (
             <Button

@@ -960,9 +960,24 @@ describe.skipIf(!RUN)('ask moji trigger runtime (integration)', () => {
         title: `Quiz ${suite}`,
       });
 
+      // An unfinished attempt from the retired ai-agent runtime (the column
+      // default) is not being taken: the quiz still resolves for its owner.
+      const legacy = await prisma.quizAttempt.create({
+        data: { quiz_id: quiz.id, user_id: userA, agent_runtime: 'ai_agent' },
+      });
+      expect(await resolveAs('STUDENT', { kind: 'quiz', id: quiz.id })).toMatchObject({
+        kind: 'quiz',
+      });
+      await prisma.quizAttempt.delete({ where: { id: legacy.id } });
+
       // An open attempt hides the quiz from its taker, whatever the role.
       const attempt = await prisma.quizAttempt.create({
-        data: { quiz_id: quiz.id, user_id: userA },
+        data: {
+          quiz_id: quiz.id,
+          user_id: userA,
+          agent_runtime: 'trigger_chat',
+          session_expires_at: new Date(Date.now() + 86_400_000),
+        },
       });
       expect(await resolveAs('STUDENT', { kind: 'quiz', id: quiz.id })).toBeNull();
       expect(await resolveAs('STUDENT', { kind: 'quiz', id: quiz.id }, userB)).toMatchObject({

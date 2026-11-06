@@ -571,9 +571,7 @@ describe.skipIf(!RUN)('expired chat attempts (integration)', () => {
     await halfway(expired);
     await expire(expired);
 
-    const second = await createNew(cappedQuizId, studentA, studentMembership(studentA), {
-      agentRuntime: 'trigger_chat',
-    });
+    const second = await createNew(cappedQuizId, studentA, studentMembership(studentA));
     expect(second).toMatchObject({ success: true, attemptCount: 2, maxAttempts: 2 });
 
     const closed = await attemptRow(expired);
@@ -589,11 +587,7 @@ describe.skipIf(!RUN)('expired chat attempts (integration)', () => {
     expect(audit.user_id).toBe(studentA);
 
     // The new attempt is open and within its deadline: it is offered to resume.
-    expect(
-      await createNew(cappedQuizId, studentA, studentMembership(studentA), {
-        agentRuntime: 'trigger_chat',
-      })
-    ).toMatchObject({
+    expect(await createNew(cappedQuizId, studentA, studentMembership(studentA))).toMatchObject({
       success: false,
       reason: 'incomplete_attempt_exists',
       existingAttemptId: second.attemptId,
@@ -602,39 +596,50 @@ describe.skipIf(!RUN)('expired chat attempts (integration)', () => {
 
     // Once it expires too, it is closed, and the cap counts both.
     await expire(second.attemptId!);
-    expect(
-      await createNew(cappedQuizId, studentA, studentMembership(studentA), {
-        agentRuntime: 'trigger_chat',
-      })
-    ).toMatchObject({ success: false, reason: 'max_attempts_reached', attemptCount: 2 });
+    expect(await createNew(cappedQuizId, studentA, studentMembership(studentA))).toMatchObject({
+      success: false,
+      reason: 'max_attempts_reached',
+      attemptCount: 2,
+    });
     expect((await attemptRow(second.attemptId!)).completed_at).not.toBeNull();
   });
 
-  it('createNew still offers an open ai-agent attempt for resuming, whatever its stamp says', async () => {
-    const legacy = await newAttempt({
-      runtime: 'ai_agent',
-      expiresAt: new Date(Date.now() - HOUR),
-    });
-    const result = await createNew(quizId, studentB, studentMembership(studentB));
-    // Student B's createNew sees only B's attempts; A's legacy one is A's.
-    expect(result).toMatchObject({ success: true });
-    await prisma.quizAttempt.delete({ where: { id: result.attemptId! } });
-
-    const legacyB = await newAttempt({
+  it('createNew never offers an unfinished ai-agent attempt: it starts a new one, leaves the old one as it was, and counts it', async () => {
+    // Both stamps of the retired runtime: with a deadline (past or none).
+    const legacyPast = await newAttempt({
+      quiz: cappedQuizId,
       user: studentB,
       runtime: 'ai_agent',
       expiresAt: new Date(Date.now() - HOUR),
     });
-    expect(await createNew(quizId, studentB, studentMembership(studentB))).toMatchObject({
-      success: false,
-      reason: 'incomplete_attempt_exists',
-      existingAttemptId: legacyB,
+    const legacyNone = await newAttempt({
+      quiz: cappedQuizId,
+      user: studentB,
+      runtime: 'ai_agent',
+      expiresAt: null,
     });
-    for (const id of [legacy, legacyB]) {
-      expect((await attemptRow(id)).completed_at).toBeNull();
-      expect(await auditRows(id)).toHaveLength(0);
-    }
-    await prisma.quizAttempt.deleteMany({ where: { id: { in: [legacy, legacyB] } } });
+
+    // max_attempts is 2 and both legacy attempts count: no room for a third.
+    expect(await createNew(cappedQuizId, studentB, studentMembership(studentB))).toMatchObject({
+      success: false,
+      reason: 'max_attempts_reached',
+      attemptCount: 2,
+    });
+    await prisma.quizAttempt.delete({ where: { id: legacyNone } });
+
+    // One legacy attempt left, unfinished: a new attempt starts, on the chat runtime.
+    const started = await createNew(cappedQuizId, studentB, studentMembership(studentB));
+    expect(started).toMatchObject({ success: true, attemptCount: 2, maxAttempts: 2 });
+    expect((await attemptRow(started.attemptId!)).agent_runtime).toBe('trigger_chat');
+
+    // The legacy attempt is untouched: still unfinished, nothing journaled or audited.
+    expect((await attemptRow(legacyPast)).completed_at).toBeNull();
+    expect(await events(legacyPast)).toHaveLength(0);
+    expect(await auditRows(legacyPast)).toHaveLength(0);
+
+    await prisma.quizAttempt.deleteMany({
+      where: { id: { in: [legacyPast, started.attemptId!] } },
+    });
   });
 
   it("createNew closes only the caller's own expired attempts on that quiz", async () => {
@@ -647,9 +652,7 @@ describe.skipIf(!RUN)('expired chat attempts (integration)', () => {
       expiresAt: new Date(Date.now() - HOUR),
     });
 
-    const started = await createNew(quizId, studentA, studentMembership(studentA), {
-      agentRuntime: 'trigger_chat',
-    });
+    const started = await createNew(quizId, studentA, studentMembership(studentA));
     // A may have older attempts here from earlier tests; none is open.
     expect(started).toMatchObject({ success: true });
 

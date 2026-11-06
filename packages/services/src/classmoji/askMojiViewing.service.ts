@@ -23,7 +23,7 @@
  * Reads only; writes nothing and audits nothing.
  */
 import getPrisma from '@classmoji/database';
-import { openToStudents } from '@classmoji/utils';
+import { isOpenQuizAttempt, openToStudents } from '@classmoji/utils';
 import {
   AskMojiViewingSchema,
   MAX_SLIDE_INDEX,
@@ -156,12 +156,16 @@ const resolveQuiz = async (classroomId: string, id: string, role: AskMojiRole, u
       : row.status === 'PUBLISHED' || row.status === 'CLOSED';
     if (!listed) return null;
   }
-  // Never while the asker is taking it, whatever the role.
+  // Never while the asker is taking it, whatever the role. An unfinished
+  // attempt from the retired ai-agent runtime is not being taken: it can
+  // never be continued (`isOpenQuizAttempt`).
   const open = await prisma.quizAttempt.findMany({
     where: { quiz_id: row.id, user_id: userId, completed_at: null },
     select: { agent_runtime: true, completed_at: true, session_expires_at: true },
   });
-  if (open.some(attempt => !isExpiredOpenAttempt(attempt))) return null;
+  if (open.some(attempt => isOpenQuizAttempt(attempt) && !isExpiredOpenAttempt(attempt))) {
+    return null;
+  }
   return { kind: 'quiz', id: row.id, title: row.name } satisfies ResolvedViewing;
 };
 

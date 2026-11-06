@@ -7,6 +7,7 @@ import { TableActionButtons, EditableCell, ButtonNew } from '~/components';
 import { ClassmojiService, QuizAccessError } from '@classmoji/services';
 import {
   canAuthorQuiz,
+  isOpenQuizAttempt,
   quizAssignmentKeysIn,
   quizAuthorSettingKeysIn,
   quizPercentageEmoji,
@@ -173,11 +174,13 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     let attemptStatus = null;
 
     if (adminAttempt) {
-      if (adminAttempt.completed_at) {
-        attemptStatus = 'completed';
-      } else {
-        attemptStatus = 'in_progress';
-      }
+      // `not_finished`: an unfinished attempt from the retired ai-agent
+      // runtime, which can't be resumed.
+      attemptStatus = adminAttempt.completed_at
+        ? 'completed'
+        : isOpenQuizAttempt(adminAttempt)
+          ? 'in_progress'
+          : 'not_finished';
     }
 
     const assignment = quiz.assignment;

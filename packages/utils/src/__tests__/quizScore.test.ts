@@ -10,6 +10,7 @@ const attempt = (
   id,
   started_at: new Date(startedAt),
   completed_at: completedAt ? new Date(completedAt) : null,
+  agent_runtime: 'trigger_chat',
   partial_credit_percentage: pct,
   adjusted_emoji: null,
 });
@@ -97,6 +98,26 @@ describe('quizStanding', () => {
     expect(standing.inProgress?.id).toBe('newer');
     expect(standing.completed).toBe(false);
     expect(standing.score).toBeNull();
+  });
+
+  it('never resumes an unfinished attempt from the retired ai-agent runtime, but counts it', () => {
+    const legacy = {
+      ...attempt('legacy', '2026-09-05T10:00:00Z', null, null),
+      agent_runtime: 'ai_agent',
+    };
+    const alone = quizStanding([legacy], 'HIGHEST', {});
+    expect(alone.inProgress).toBeNull();
+    expect(alone.completed).toBe(false);
+    expect(alone.attemptsUsed).toBe(1);
+
+    // Beside an older running chat attempt, the chat attempt is the one to resume.
+    const chat = attempt('chat', '2026-09-01T10:00:00Z', null, null);
+    expect(quizStanding([chat, legacy], 'HIGHEST', {}).inProgress?.id).toBe('chat');
+    // Beside a completed attempt, the completed one counts as before.
+    const both = quizStanding([legacy, A2], 'MOST_RECENT', {});
+    expect(both.counting?.id).toBe('a2');
+    expect(both.inProgress).toBeNull();
+    expect(both.attemptsUsed).toBe(2);
   });
 
   it('says nothing was attempted for no attempts', () => {

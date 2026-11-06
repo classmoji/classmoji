@@ -98,12 +98,14 @@ const attempt = (
   quizId: string,
   startedHoursAgo: number,
   completed: boolean,
-  pct: number | null
+  pct: number | null,
+  agentRuntime: string = 'trigger_chat'
 ) => ({
   id,
   quiz_id: quizId,
   started_at: at(-startedHoursAgo),
   completed_at: completed ? at(-startedHoursAgo + 1) : null,
+  agent_runtime: agentRuntime,
   partial_credit_percentage: pct,
 });
 
@@ -642,6 +644,47 @@ describe('listForStudent — QUIZ rows', () => {
     });
   });
 
+  it('is Not started, with Start, beside an unfinished attempt from the retired ai-agent runtime', async () => {
+    const row = await quizRow([attempt('legacy', 'quiz-a-q', 30, false, null, 'ai_agent')]);
+
+    expect(row).toMatchObject({
+      status: 'NOT_STARTED',
+      done: false,
+      // It still counts toward max_attempts (2).
+      attemptsUsed: 1,
+      action: { kind: 'START_QUIZ', quizId: 'quiz-a-q' },
+    });
+  });
+
+  it('offers no Start once unfinished legacy attempts use up max_attempts', async () => {
+    const row = await quizRow([
+      attempt('legacy-2', 'quiz-a-q', 20, false, null, 'ai_agent'),
+      attempt('legacy-1', 'quiz-a-q', 30, false, null, 'ai_agent'),
+    ]);
+
+    expect(row).toMatchObject({ status: 'NOT_STARTED', attemptsUsed: 2, action: null });
+  });
+
+  it('is missing past its due date with only an unfinished legacy attempt', async () => {
+    const row = await quizRow(
+      [attempt('legacy', 'quiz-a-q', 30, false, null, 'ai_agent')],
+      {},
+      { student_deadline: at(-2) }
+    );
+
+    expect(row).toMatchObject({ status: 'NOT_STARTED', missing: true });
+  });
+
+  it('is Closed, with no extension offered, when closed with only an unfinished legacy attempt', async () => {
+    const row = await quizRow(
+      [attempt('legacy', 'quiz-a-q', 30, false, null, 'ai_agent')],
+      {},
+      { student_deadline: at(-48), closes_at: at(-1) }
+    );
+
+    expect(row).toMatchObject({ status: 'CLOSED', done: true, action: null, extend: null });
+  });
+
   it('is Completed with the counting score, a running retake beside it', async () => {
     const row = await quizRow(
       [attempt('retake', 'quiz-a-q', 1, false, null), attempt('done', 'quiz-a-q', 30, true, 88)],
@@ -742,6 +785,7 @@ describe('listForStudent — QUIZ late hours and extensions', () => {
     quiz_id: 'quiz-a-q',
     started_at: new Date(at(-20).getTime() + lateBy * HOUR - HOUR),
     completed_at: new Date(at(-20).getTime() + lateBy * HOUR + 10 * 60_000),
+    agent_runtime: 'trigger_chat',
     partial_credit_percentage: pct,
   });
   const DUE_20H_AGO = { student_deadline: at(-20) };

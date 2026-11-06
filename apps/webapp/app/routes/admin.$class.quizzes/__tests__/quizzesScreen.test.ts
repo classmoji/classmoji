@@ -425,6 +425,7 @@ describe('quiz list loader — the viewer’s own attempt', () => {
     id: 'attempt-own',
     user_id: viewer.id,
     completed_at: null,
+    agent_runtime: 'trigger_chat',
     partial_credit_percentage: null,
     agent_config: { instructorRepoName: 'SENTINEL-REPO' },
     user: viewer,
@@ -452,6 +453,18 @@ describe('quiz list loader — the viewer’s own attempt', () => {
     expect(payload.quizzes[0].attemptStatus).toBe('in_progress');
     const serialized = JSON.stringify(payload);
     for (const sentinel of SENTINELS) expect(serialized).not.toContain(sentinel);
+  });
+
+  it('reads an unfinished preview from the retired ai-agent runtime as not finished', async () => {
+    mocks.findByClassroom.mockResolvedValue([
+      serviceQuiz({ attempts: [{ ...ownAttempt, agent_runtime: 'ai_agent' }], attemptsCount: 1 }),
+    ]);
+    const payload = await route.loader({
+      params: { class: CLASS_SLUG },
+      request: new Request(`http://localhost/assistant/${CLASS_SLUG}/quizzes`),
+    } as never);
+
+    expect(payload.quizzes[0].attemptStatus).toBe('not_finished');
   });
 
   it('answers 404 where the classroom’s quizzes are hidden, and lists nothing', async () => {

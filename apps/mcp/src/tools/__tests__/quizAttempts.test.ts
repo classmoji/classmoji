@@ -156,6 +156,7 @@ const attempt = (
   user_id: userId,
   started_at: at(startedAt),
   completed_at: completedAt ? at(completedAt) : null,
+  agent_runtime: 'trigger_chat',
   last_activity: completedAt ? null : at(startedAt),
   partial_credit_percentage: score,
   first_attempt_percentage: score,
@@ -261,6 +262,7 @@ describe('list_quiz_attempts', () => {
       roster_students: 3,
       not_started: 2,
       in_progress: 0,
+      not_finished: 0,
       completed: 1,
       counts_as_zero: 0,
       staff_previews: 0,
@@ -314,6 +316,24 @@ describe('list_quiz_attempts', () => {
       late_hours: null,
     });
     expect(payload.summary.in_progress).toBe(1);
+  });
+
+  it('reports a student whose only attempt is an unfinished legacy one as NOT_FINISHED, not IN_PROGRESS', async () => {
+    mocks.findByQuiz.mockResolvedValue([
+      attempt('legacy', 'bo', '2026-09-20T10:00:00Z', null, null, { agent_runtime: 'ai_agent' }),
+      attempt('a1', 'ada', '2026-10-01T10:00:00Z', null, null),
+    ]);
+
+    const payload = parse(await listQuizAttemptsTool.handler(ARGS, CTX));
+    const bo = payload.students.find((s: { student: { id: string } }) => s.student.id === 'bo');
+    const ada = payload.students.find((s: { student: { id: string } }) => s.student.id === 'ada');
+
+    expect(bo).toMatchObject({ status: 'NOT_FINISHED', attempt_count: 1 });
+    expect(bo.attempts[0]).toMatchObject({ id: 'legacy', open: false, completed_at: null });
+    expect(bo.attempts[0]).not.toHaveProperty('last_activity');
+    expect(ada).toMatchObject({ status: 'IN_PROGRESS' });
+    expect(ada.attempts[0]).toMatchObject({ open: true });
+    expect(payload.summary).toMatchObject({ in_progress: 1, not_finished: 1 });
   });
 
   it('charges the late penalty to counted_emoji and keeps current_emoji raw', async () => {

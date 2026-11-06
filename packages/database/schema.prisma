@@ -1633,8 +1633,9 @@ model QuizAttempt {
   session_status            String?   @default("active")
   codebase_path             String?
   agent_config              Json?
-  /// Which runtime serves this attempt: ai_agent | trigger_chat. Stamped once at
-  /// creation; picks the renderer and the endpoints that may act on the attempt.
+  /// Which runtime serves this attempt, stamped once at creation: trigger_chat for
+  /// every attempt created now; ai_agent (the default) on rows from the retired
+  /// ai-agent runtime, which are read-only.
   agent_runtime             String    @default("ai_agent")
   /// Tool-schema, prompt and grading-policy bundle the attempt is graded under.
   contract_version          Int?

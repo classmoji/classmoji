@@ -101,7 +101,7 @@ vi.mock('~/components', () => ({
   UserThumbnailView: () => null,
   GradeBadge: () => null,
   SectionHeader: () => null,
-  QuizAttemptInterface: () => null,
+  QuizAttemptView: () => null,
 }));
 vi.mock('~/hooks', () => ({
   useRouteDrawer: () => ({ opened: true }),
@@ -150,7 +150,7 @@ const staffAttemptRoute =
   await import('../admin.$class.quizzes_.$quizId.attempt.$attemptId/route.tsx');
 const studentAttemptRoute =
   await import('../student.$class.quizzes.$quizId.attempt.$attemptId/route.tsx');
-const { buildQuizResultRows, staffAttemptGradePanel, attemptGradeView } =
+const { buildQuizResultRows, staffAttemptGradePanel, attemptGradeView, quizResultStatsView } =
   await import('~/utils/quizPayloads');
 
 /** The classroom's grading scale (emoji → grade), best first, as `findScaleByClassroomId` returns it. */
@@ -228,6 +228,7 @@ const attemptRow = (
   over: Partial<{
     started_at: Date;
     completed_at: Date | null;
+    agent_runtime: string;
     partial_credit_percentage: number | null;
     first_attempt_percentage: number | null;
     total_duration_ms: number | null;
@@ -246,6 +247,7 @@ const attemptRow = (
   conversation_id: `conv-${id}`,
   started_at: new Date('2026-03-01T10:00:00Z'),
   completed_at: null as Date | null,
+  agent_runtime: 'ai_agent' as string,
   score: null,
   feedback: SENTINEL.feedback,
   attempt_number: 1,
@@ -277,9 +279,13 @@ const ADA_SECOND = attemptRow('a-ada-2', ADA, {
   total_duration_ms: 1000,
   unfocused_duration_ms: 250,
 });
-const TA_PREVIEW = attemptRow('a-ta', TA, { started_at: new Date('2026-03-02T12:00:00Z') });
+const TA_PREVIEW = attemptRow('a-ta', TA, {
+  started_at: new Date('2026-03-02T12:00:00Z'),
+  agent_runtime: 'trigger_chat',
+});
 const BABBAGE_OPEN = attemptRow('a-babbage', BABBAGE, {
   started_at: new Date('2026-03-02T10:00:00Z'),
+  agent_runtime: 'trigger_chat',
 });
 const ADA_FIRST = attemptRow('a-ada-1', ADA, {
   started_at: new Date('2026-03-01T10:00:00Z'),
@@ -420,6 +426,7 @@ describe('quiz results page payload', () => {
           'id',
           'isCounting',
           'lateHours',
+          'open',
           'partialCreditScore',
           'regradeRequested',
           'started_at',
@@ -444,7 +451,7 @@ describe('quiz results page payload', () => {
   });
 
   it("narrows the viewer's own attempt to what resuming a preview needs", () => {
-    expect(payload.adminAttempt).toEqual({ id: TA_PREVIEW.id, completed_at: null });
+    expect(payload.adminAttempt).toEqual({ id: TA_PREVIEW.id, completed_at: null, open: true });
   });
 
   it('carries no sentinel anywhere in the serialized payload', () => {
@@ -940,7 +947,7 @@ describe('student attempt drawer payload', () => {
     expect(payload.attempt.partial_credit_percentage).toBe(80);
   });
 
-  it('sends exactly the keys the drawer and QuizAttemptInterface take', async () => {
+  it('sends exactly the keys the drawer and QuizAttemptView take', async () => {
     mocks.assertClassroomAccess.mockResolvedValue({
       userId: ADA.id,
       classroom: CLASSROOM,
@@ -1473,6 +1480,46 @@ describe('quiz results page: lateness', () => {
 });
 
 // ─── The grading-strategy rules, directly ───────────────────────────────────
+
+describe('an unfinished attempt from the retired ai-agent runtime on the results page', () => {
+  const LEGACY_OPEN = attemptRow('a-babbage-legacy', BABBAGE, {
+    started_at: new Date('2026-03-02T09:00:00Z'),
+    agent_runtime: 'ai_agent',
+  });
+  const TA_LEGACY = attemptRow('a-ta-legacy', TA, {
+    started_at: new Date('2026-03-02T13:00:00Z'),
+    agent_runtime: 'ai_agent',
+  });
+
+  it('is not open, not in progress in the stats, and still counted as an attempt', () => {
+    const { students } = buildQuizResultRows({
+      attempts: [ADA_SECOND, BABBAGE_OPEN, LEGACY_OPEN, ADA_FIRST],
+      gradingStrategy: 'HIGHEST',
+      viewerId: 'nobody',
+      emojiScale: SCALE,
+    });
+    const babbage = students.find(s => s.userId === BABBAGE.id)!;
+    expect(babbage.attempts.map(a => [a.id, a.open])).toEqual([
+      [BABBAGE_OPEN.id, true],
+      [LEGACY_OPEN.id, false],
+    ]);
+    expect(quizResultStatsView(students, SCALE)).toMatchObject({
+      totalAttempts: 4,
+      completedAttempts: 2,
+      inProgressAttempts: 1,
+    });
+  });
+
+  it('is never offered to the viewer for resuming as a preview', () => {
+    const { viewerAttempt } = buildQuizResultRows({
+      attempts: [TA_LEGACY],
+      gradingStrategy: 'HIGHEST',
+      viewerId: TA.id,
+      emojiScale: SCALE,
+    });
+    expect(viewerAttempt).toEqual({ id: TA_LEGACY.id, completed_at: null, open: false });
+  });
+});
 
 describe('buildQuizResultRows', () => {
   const rows = (gradingStrategy: string) =>

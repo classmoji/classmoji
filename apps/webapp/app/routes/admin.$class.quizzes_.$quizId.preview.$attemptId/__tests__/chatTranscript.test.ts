@@ -43,7 +43,7 @@ vi.mock('~/hooks', () => ({
   useRouteDrawer: () => ({ opened: true }),
   useDarkMode: () => ({ isDarkMode: false }),
 }));
-vi.mock('~/components', () => ({ QuizAttemptInterface: () => null }));
+vi.mock('~/components', () => ({ QuizAttemptView: () => null }));
 vi.mock('react-router', () => ({
   useLocation: () => ({ pathname: '/x' }),
   useNavigate: () => () => {},
