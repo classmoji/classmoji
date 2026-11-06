@@ -324,8 +324,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # The CLI the deploy runs. Every installed @trigger.dev package must be
-      # this version (checked below). Stricter than the CLI on purpose: it only
-      # compares the @trigger.dev packages that packages/tasks declares.
+      # this version (checked below). Stricter than the CLI on purpose: the CLI
+      # itself only compares the @trigger.dev packages that packages/tasks
+      # declares.
       TRIGGER_CLI_VERSION: 4.8.3
     steps:
       - uses: actions/checkout@v4
