@@ -47,7 +47,7 @@ There is an unspoken assumption that giving conventional grades will accomplish 
 
 But the evidence says they’re surprisingly bad at all three.
 
-1. **Grades (aka a stick) are poor motivation.** Some more effective techniques would be: make assignments more interesting, but damn that is hard; peer accountability through showing student work to their peers or peer reviews, surprisingly effective, at the end of the day we are social animals and care what our friends think; various reward systems such as praise -- research says that praise is more effective than money (and I'm assuming more effective than a grade).
+1. **Grades (aka a stick) are poor motivation.** Some more effective techniques would be: make assignments more interesting, but damn that is hard; peer accountability through showing student work to their peers or peer reviews, surprisingly effective, at the end of the day we are social animals and care what our friends think; various reward systems such as praise — research says that praise is more effective than money (and I'm assuming more effective than a grade).
 
 2. **Grades are lazy feedback.** Does getting a B+ or a 93 really help a student understand what they need to do to learn? Nope, constructive, actionable narrative feedback is much better. In the software industry, specific pull request reviews are how we grow and learn, can we do that in class?
 
@@ -91,7 +91,7 @@ Recent studies confirm that expressive feedback, including emoji, can make instr
 
 ## Other Pedagogical Features in Classmoji
 
-- ⏳ **Soft late penalties** – Reduces the panic that can drive academic dishonesty and encourages honest submissions. When I first started teaching my mentor said "give them a 0 at 12:01am -- it keeps the median down". Talk about perverse incentives. We all need deadlines, but let's think about how to make them helpful to learning. In Classmoji we encourage soft penalties that can be bought out with earned tokens.
+- ⏳ **Soft late penalties** – Reduces the panic that can drive academic dishonesty and encourages honest submissions. When I first started teaching my mentor said "give them a 0 at 12:01am — it keeps the median down". Talk about perverse incentives. We all need deadlines, but let's think about how to make them helpful to learning. In Classmoji we encourage soft penalties that can be bought out with earned tokens.
 - 🎮 **Gamified extra credit** – How can you earn some tokens to give you more leeway on assignments. Students earn tokens to “buy back” late penalties or offset quiz grades, making extra effort feel rewarding. Extra effort is also the only way to show true mastery and get that 🔥.
 - 🧑‍🤝‍🧑 **TA load balancing** – Leaderboards and tracking to keep teaching teams engaged and fair. We auto assign grades, allow graders to pitch in and help each other, and a little bit of social pressure to keep on track with grading deadlines.
 - 🤖 **(Now live) AI interactive quizzes** – Automated, adaptive questioning inspired by the benefits of oral exams. Research shows oral-style assessment can reduce plagiarism, verify understanding, and build communication skills ([Fenton, 2025](https://doi.org/10.3102/0013189X251333638))—our AI-driven version aims to deliver these benefits at scale.

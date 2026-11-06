@@ -9,27 +9,44 @@ import starlightThemeBlack from 'starlight-theme-black';
 
 // https://astro.build/config
 export default defineConfig({
-  // Pages stay pre-built and static; only routes that opt out of prerendering
-  // (the contact form's /api/contact) run on the Node server.
-  adapter: node({ mode: 'standalone' }),
-  // Astro's origin check would compare the visitor's https origin with the
-  // http address the server sees behind Fly's proxy and refuse every post. The
-  // only on-demand route is the contact form, which writes to our own inbox and
-  // has its own honeypot and rate limit, so there is nothing for it to guard.
-  security: { checkOrigin: false },
+  // Pages are pre-built and served as files. Code runs on the Node server for
+  // the contact form (/api/contact) and for the routes Astro adds itself to any
+  // site with an adapter: image resizing (/_image) and server islands
+  // (/_server-islands/*). bodySizeLimit caps every request body those routes
+  // read; the contact form needs well under 100 KB.
+  adapter: node({ mode: 'standalone', bodySizeLimit: 256 * 1024 }),
+  // Astro 7 strips whitespace the JSX way by default ('jsx'), which glues
+  // together inline elements in our templates (nav links, footer links, post
+  // bylines). Keep the HTML-aware compression the site was written for.
+  compressHTML: true,
+  security: {
+    // Fly's proxy talks to the server over http. allowedDomains lets Astro
+    // trust the Host and X-Forwarded-Proto it forwards for classmoji.io, so the
+    // request URL is https://classmoji.io/... and checkOrigin can compare a form
+    // post's Origin with it.
+    allowedDomains: [{ hostname: 'classmoji.io', protocol: 'https' }],
+    checkOrigin: true,
+    // The site has no server islands. Below the adapter's limit, so an
+    // oversized post to /_server-islands/* gets a 413 instead of a 500.
+    serverIslandBodySizeLimit: 64 * 1024,
+  },
   integrations: [
     starlight({
       title: '🍎 classmoji',
       description: 'Documentation for Classmoji - the git-native LMS for CS education',
+      // No SiteTitle override: starlight-theme-black's own SiteTitle renders the
+      // title together with the "Back to main site" link and the mobile menu
+      // button, and an override of ours would drop both.
       components: {
-        SiteTitle: './src/components/SiteTitle.astro',
+        // The theme's footer line (with the Privacy and Terms links) is ours now.
+        Footer: './src/components/DocsFooter.astro',
       },
       plugins: [
         starlightThemeBlack({
           navLinks: [
             { label: 'Back to main site', link: 'https://classmoji.io' },
           ],
-          footerText: '🍎 Built by educators and students. [Contribute on GitHub](https://github.com/classmoji/classmoji) · [Privacy Policy](/privacy) · [Terms of Service](/terms)',
+          docs: { showMarkdownActions: false },
         }),
       ],
       sidebar: [

@@ -16,7 +16,8 @@ COPY . .
 RUN npm run build
 
 # Production stage: Astro's Node server. Pages are pre-built files it serves
-# as-is; only /api/contact runs code. It needs RESEND_API_KEY to send.
+# as-is. Code runs for /api/contact (needs RESEND_API_KEY to send) and for the
+# routes Astro adds to every server build: /_image and /_server-islands/*.
 FROM node:24-alpine
 
 WORKDIR /app
