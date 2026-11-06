@@ -569,7 +569,12 @@ export type OfferedAnswer = {
  * (pinned before limits existed) counts every offer and refuses none.
  *
  * Refused too when no question is open (`out_of_order`): an offer answers the
- * question the student is on.
+ * question the student is on; and in a turn the student opened with Try
+ * again (`invalid_input`): that turn is a hint, never an answer.
+ *
+ * One answer per admitted student message: a turn run again for the same
+ * message (a redelivery after a run that took its offer and saved no reply)
+ * gets that offer's count back, and nothing new is written.
  */
 export const offerNextStep = (
   f: Fenced,
@@ -602,9 +607,19 @@ export const offerNextStep = (
       );
     }
 
+    // A hint turn ends with a question, never an offer (the task refuses it
+    // first; this holds it for any caller): a hint is not an answer.
+    if ((await admittedAction(tx, attempt.id, f.inputMessageId)) === 'try_again') {
+      throw new QuizGradingError(
+        'invalid_input',
+        'This is a hint turn: write the hint as your reply text, with no offer_next_step.'
+      );
+    }
+
     const rules = attemptRules(attempt);
     const max = rules.maxAnswers;
-    const given = (await answerOffers(tx, attempt.id, n)).length;
+    const rows = await answerOffers(tx, attempt.id, n);
+    const given = rows.length;
     const lastQuestion = n >= questionCount;
     const result = (answersUsed: number): OfferedAnswer => ({
       answers_used: answersUsed,
@@ -623,6 +638,26 @@ export const offerNextStep = (
         );
       }
       return result(given);
+    }
+
+    // One answer per student message: a re-run of a turn (the message
+    // redelivered after a run that took its offer but saved no reply) is
+    // the same answer, not another one. Its count stands; nothing is written.
+    const earlier = f.inputMessageId
+      ? rows.find(r => r.input_message_id === f.inputMessageId)
+      : undefined;
+    if (earlier) {
+      const answer = isObject(earlier.payload) ? earlier.payload.answer : undefined;
+      const k = typeof answer === 'number' ? answer : given;
+      if (max !== null && k >= max && actions.includes('try_again')) {
+        throw new QuizGradingError(
+          'answer_limit',
+          `That was the student's last answer for question ${n} (${max} of ${max}). ` +
+            'Do not offer Try again: explain the answer now (the reveal) in feedback, and call ' +
+            'offer_next_step with actions ["next"] only.'
+        );
+      }
+      return result(k);
     }
 
     const k = given + 1;
@@ -770,7 +805,7 @@ const answerOffers = (tx: Tx, attemptId: string, questionNum: number) =>
       payload: { path: ['question_num'], equals: questionNum },
     },
     orderBy: { seq: 'asc' },
-    select: { id: true },
+    select: { id: true, input_message_id: true, payload: true },
   });
 
 /** Question n's counts (all 0 for a question never presented). */

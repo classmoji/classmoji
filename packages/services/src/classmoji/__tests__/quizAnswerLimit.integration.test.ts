@@ -354,6 +354,47 @@ describe.skipIf(!RUN)('quiz hint cost and answer limit (integration)', () => {
     });
   });
 
+  it('counts one answer per student message when a turn runs again for it', async () => {
+    const quizId = await makeQuiz({ max_answers: 2 });
+    const attemptId = await started(quizId);
+    const id = msgId();
+    const first = await say(attemptId, 'my answer', id);
+    expect(await grading.offerNextStep(call(first), { actions: [...TRY] })).toMatchObject({
+      answers_used: 1,
+    });
+    // The run took the offer but saved no reply: the message is redelivered
+    // and its turn runs again, with a new fence and a new tool call.
+    const again = await chat.admitStudentMessage({
+      attemptId,
+      message: { id, text: 'my answer' },
+      runId,
+    });
+    expect(again.status).toBe('redelivered');
+    const rerun = { attemptId, fence: again.fence, inputMessageId: id, runId };
+    expect(await grading.offerNextStep(call(rerun), { actions: [...TRY] })).toMatchObject({
+      answers_used: 1,
+      max_answers: 2,
+    });
+    expect(await offers(attemptId)).toHaveLength(1);
+
+    // The next message is the last answer.
+    const last = await say(attemptId, 'second answer');
+    expect(
+      (await refusalOf(grading.offerNextStep(call(last), { actions: [...TRY] })))?.code
+    ).toBe('answer_limit');
+  });
+
+  it('never counts an offer in a hint turn', async () => {
+    const quizId = await makeQuiz();
+    const attemptId = await started(quizId);
+    await grading.offerNextStep(call(await say(attemptId, 'a')), { actions: [...TRY] });
+    const hint = await say(attemptId, BUTTON_TEXT.try_again);
+    expect(
+      (await refusalOf(grading.offerNextStep(call(hint), { actions: [...TRY] })))?.code
+    ).toBe('invalid_input');
+    expect(await offers(attemptId)).toHaveLength(1);
+  });
+
   it('refuses a stale turn and a malformed action list', async () => {
     const quizId = await makeQuiz();
     const attemptId = await started(quizId);
