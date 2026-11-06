@@ -740,23 +740,30 @@ describe('QuizChat when a reply never comes', () => {
   it('a released reply is not stored as running again', async () => {
     const writes: Session[] = [];
     const setItem = window.sessionStorage.setItem.bind(window.sessionStorage);
-    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation((key, value) => {
+    // jsdom's own Storage, not the global: newer Node (26 here) defines a
+    // `Storage` of its own, whose prototype the page's sessionStorage does not use.
+    const storageProto = Object.getPrototypeOf(window.sessionStorage) as Storage;
+    const spy = vi.spyOn(storageProto, 'setItem').mockImplementation((key, value) => {
       writes.push(JSON.parse(value) as Session);
       setItem(key, value);
     });
-    sendStreams = [controlled(), controlled()];
-    await render();
-    await stall();
-    const quietAt = writes.length;
+    try {
+      sendStreams = [controlled(), controlled()];
+      await render();
+      await stall();
+      const quietAt = writes.length;
 
-    await sendText(NUDGE);
-    await advance(10);
-    expect(sends).toHaveLength(2);
-    // After the quiet, only the new message's send says a reply is running.
-    const running = writes.slice(quietAt).filter(w => w.isStreaming);
-    expect(running.length).toBeGreaterThan(0);
-    expect(running.every(w => w.activeInputSeq === 2)).toBe(true);
-    spy.mockRestore();
+      await sendText(NUDGE);
+      await advance(10);
+      expect(sends).toHaveLength(2);
+      // After the quiet, only the new message's send says a reply is running.
+      const running = writes.slice(quietAt).filter(w => w.isStreaming);
+      expect(running.length).toBeGreaterThan(0);
+      expect(running.every(w => w.activeInputSeq === 2)).toBe(true);
+    } finally {
+      // On jsdom's prototype it would outlive a failed assertion otherwise.
+      spy.mockRestore();
+    }
   });
 
   it('a message sent as a quiet reply comes back waits for it, then goes', async () => {

@@ -20,7 +20,9 @@ import type { CourseworkRow } from '../useCourseworkDrag';
 type Result = { success?: string; error?: string };
 
 // The card calls useFetcher twice per render, module writes first, then
-// assignment deletes; its modals, which have their own, are mocked out.
+// assignment deletes; its modals and the unpublish prompt, which have their
+// own, are mocked out. A third call would swap the two on every render and
+// loop, so the mock stops a runaway with a message instead.
 const fetchers = vi.hoisted(() => {
   const make = () => ({ submit: vi.fn(), state: 'idle', data: undefined as Result | undefined });
   return { module: make(), assignment: make(), calls: 0 };
@@ -29,7 +31,14 @@ const confirm = vi.hoisted(() => vi.fn());
 const router = vi.hoisted(() => ({ pathname: '/admin/cs52/modules', navigate: vi.fn() }));
 
 vi.mock('react-router', () => ({
-  useFetcher: () => (fetchers.calls++ % 2 === 0 ? fetchers.module : fetchers.assignment),
+  useFetcher: () => {
+    if (fetchers.calls > 500) {
+      throw new Error(
+        'ModuleCard made more useFetcher calls than the two fetchers this test expects'
+      );
+    }
+    return fetchers.calls++ % 2 === 0 ? fetchers.module : fetchers.assignment;
+  },
   useLocation: () => ({ pathname: router.pathname }),
   useNavigate: () => router.navigate,
 }));
@@ -80,6 +89,9 @@ vi.mock('~/components/features/assignments/AssignmentsTable', () => ({
   assignmentTarget: () => null,
 }));
 vi.mock('../AddContentItemModal', () => ({ default: () => null }));
+vi.mock('~/components/features/assignments/useOrphanedRepositoryPrompt', () => ({
+  useOrphanedRepositoryPrompt: () => {},
+}));
 vi.mock('~/components/features/repositories/useRepositoryActions', () => ({
   useRepositoryActions: () => ({
     confirmPublishAssignment: vi.fn(),

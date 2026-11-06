@@ -28,7 +28,7 @@
  * here pin that specifically: role decides, prefix does not.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   assertClassroomAccess: vi.fn(),
@@ -124,6 +124,16 @@ const asTeacher = () =>
     classroom: CLASSROOM,
     membership: { role: 'TEACHER' },
   });
+
+// The first import of a route module transforms its whole tree (antd and the
+// rest), which under a full parallel run can take longer than one test's
+// timeout. Load both up front, with a budget of their own.
+beforeAll(async () => {
+  await Promise.all([
+    import('../assistant.$class_.repos/route.tsx'),
+    import('../student.$class.modules/route.tsx'),
+  ]);
+}, 60_000);
 
 beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();

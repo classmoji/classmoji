@@ -318,6 +318,8 @@ describe('QuizChat in a second tab during the opening', () => {
     expect(query('quiz-error')).toBeNull();
   });
 
+  // Five minutes of fake time yield to the real event loop once per fired
+  // timer (hundreds of times); on a busy machine that alone passes 5 s.
   it('offers begin again only once nothing has been saved for the whole wait', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval'] });
     sessionAnswer = { status: 200, body: { publicAccessToken: 'pat-join', resumeCursor: '42' } };
@@ -346,7 +348,7 @@ describe('QuizChat in a second tab during the opening', () => {
       await vi.advanceTimersByTimeAsync(50);
     });
     expect(begins()).toHaveLength(1);
-  });
+  }, 30_000);
 });
 
 describe('QuizChat when begin is refused because the quiz has already started', () => {
