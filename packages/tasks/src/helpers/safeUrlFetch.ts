@@ -366,7 +366,7 @@ type LookupCallback = (
 /**
  * A `dns.lookup`-shaped function that answers only `pinned.address`, and only
  * for `expectedHost`. Node's socket layer calls it with `options.all === true`
- * when happy-eyeballs (`autoSelectFamily`, on by default in Node 22) is in
+ * when happy-eyeballs (`autoSelectFamily`, on by default in Node 24) is in
  * play, and without it otherwise; the two want different callback shapes.
  *
  * A request for any other hostname is an error rather than a silent answer:

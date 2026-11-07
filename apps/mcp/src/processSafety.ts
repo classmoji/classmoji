@@ -1,7 +1,7 @@
 /**
  * Process-level safety nets (S5: "never a crashed process").
  *
- * A detached promise rejection would, under Node 22's default
+ * A detached promise rejection would, under Node 24's default
  * unhandledRejection policy, terminate the process. These handlers keep the
  * resource server serving on a stray rejection and exit cleanly (after a
  * best-effort close) only on a truly uncaught exception, where process state

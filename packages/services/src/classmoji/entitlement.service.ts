@@ -92,9 +92,9 @@ export const quizzesVisible = async (classroomId: string): Promise<boolean> => {
  *
  * ONLY for code that runs inside a Trigger worker (the quiz chat task's
  * per-turn admission, Ask Moji's viewing resolver). The worker IS the quiz
- * runtime, and its process env may lack the Trigger key the web and MCP
- * processes are judged by, so asking `quizzesVisible` there would refuse every
- * turn. Everywhere else, use `quizzesVisible`.
+ * runtime, so whether the runtime is configured is not the question there
+ * (Trigger.dev sets `TRIGGER_SECRET_KEY` in every run's environment).
+ * Everywhere else, use `quizzesVisible`.
  */
 export const quizzesEntitled = async (classroomId: string): Promise<boolean> => {
   const [{ isPro }, settings] = await Promise.all([

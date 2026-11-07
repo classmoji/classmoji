@@ -173,7 +173,9 @@ EOF
   # Step 7: Run npm install
   echo -e "${GREEN}[7/8] Installing dependencies (this may take a minute)...${CLEAR}"
   cd "$worktree_dir"
-  npm install --silent
+  # The packageManager npm (10.9.9), as CI uses. Node 24 bundles npm 11,
+  # which writes `libc` fields into lockfile entries it re-resolves.
+  npx -y npm@10.9.9 install --silent
   echo -e "  ✅ Dependencies installed"
 
   # Step 8: Generate Prisma client

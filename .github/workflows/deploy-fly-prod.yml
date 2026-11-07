@@ -31,29 +31,75 @@ jobs:
         with:
           filters: |
             webapp:
+              - 'package.json'
+              - 'package-lock.json'
+              - '.npmrc'
+              - '.dockerignore'
+              # The image builds with turbo, which reads it.
+              - 'turbo.json'
+              - '.github/workflows/deploy-fly-prod.yml'
               - 'apps/webapp/**'
               - 'packages/**'
             hook-station:
+              - 'package.json'
+              - 'package-lock.json'
+              - '.npmrc'
+              - '.dockerignore'
+              - '.github/workflows/deploy-fly-prod.yml'
               - 'apps/hook-station/**'
               - 'packages/**'
             collab:
+              - 'package.json'
+              - 'package-lock.json'
+              - '.npmrc'
+              - '.dockerignore'
+              - '.github/workflows/deploy-fly-prod.yml'
               - 'apps/collab/**'
               - 'packages/**'
             mcp:
+              - 'package.json'
+              - 'package-lock.json'
+              - '.npmrc'
+              - '.dockerignore'
+              - '.github/workflows/deploy-fly-prod.yml'
               - 'apps/mcp/**'
               - 'packages/**'
             site:
+              - '.github/workflows/deploy-fly-prod.yml'
               - 'apps/site/**'
             slides:
+              - 'package.json'
+              - 'package-lock.json'
+              - '.npmrc'
+              - '.dockerignore'
+              # The image builds with turbo, which reads it.
+              - 'turbo.json'
+              - '.github/workflows/deploy-fly-prod.yml'
               - 'apps/slides/**'
               - 'packages/**'
             pages:
+              - 'package.json'
+              - 'package-lock.json'
+              - '.npmrc'
+              - '.dockerignore'
+              # The image builds with turbo, which reads it.
+              - 'turbo.json'
+              - '.github/workflows/deploy-fly-prod.yml'
               - 'apps/pages/**'
               - 'packages/**'
             admin:
+              - 'package.json'
+              - 'package-lock.json'
+              - '.npmrc'
+              - '.dockerignore'
+              # The image builds with turbo, which reads it.
+              - 'turbo.json'
+              - '.github/workflows/deploy-fly-prod.yml'
               - 'apps/admin/**'
               - 'packages/**'
             tasks:
+              - 'package-lock.json'
+              - '.github/workflows/deploy-fly-prod.yml'
               - 'packages/tasks/**'
               # Holds the quiz and Ask Moji chat agents' tasks (a pointer bump
               # redeploys).
@@ -73,6 +119,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.webapp == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -111,6 +158,7 @@ jobs:
     # migration before non-webapp services come up with new code.
     if: always() && needs.changes.outputs.hook-station == 'true' && (needs.deploy-webapp.result == 'success' || needs.deploy-webapp.result == 'skipped')
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -140,6 +188,7 @@ jobs:
     needs: [changes, deploy-webapp, deploy-trigger]
     if: always() && needs.changes.outputs.collab == 'true' && (needs.deploy-webapp.result == 'success' || needs.deploy-webapp.result == 'skipped') && (needs.deploy-trigger.result == 'success' || needs.deploy-trigger.result == 'skipped')
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -174,6 +223,7 @@ jobs:
     needs: [changes, deploy-webapp]
     if: always() && needs.changes.outputs.mcp == 'true' && (needs.deploy-webapp.result == 'success' || needs.deploy-webapp.result == 'skipped')
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -206,6 +256,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.site == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -234,6 +285,7 @@ jobs:
     needs: [changes, deploy-webapp]
     if: always() && needs.changes.outputs.slides == 'true' && (needs.deploy-webapp.result == 'success' || needs.deploy-webapp.result == 'skipped')
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -270,6 +322,7 @@ jobs:
     needs: [changes, deploy-webapp]
     if: always() && needs.changes.outputs.pages == 'true' && (needs.deploy-webapp.result == 'success' || needs.deploy-webapp.result == 'skipped')
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -305,6 +358,7 @@ jobs:
     needs: [changes, deploy-webapp]
     if: always() && needs.changes.outputs.admin == 'true' && (needs.deploy-webapp.result == 'success' || needs.deploy-webapp.result == 'skipped')
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -332,10 +386,12 @@ jobs:
     needs: [changes, deploy-webapp]
     if: always() && needs.changes.outputs.tasks == 'true' && (needs.deploy-webapp.result == 'success' || needs.deploy-webapp.result == 'skipped')
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       # The CLI the deploy runs. Every installed @trigger.dev package must be
-      # this version (checked below). Stricter than the CLI on purpose: it only
-      # compares the @trigger.dev packages that packages/tasks declares.
+      # this version (checked below). Stricter than the CLI on purpose: the CLI
+      # itself only compares the @trigger.dev packages that packages/tasks
+      # declares.
       TRIGGER_CLI_VERSION: 4.8.3
     steps:
       - uses: actions/checkout@v4

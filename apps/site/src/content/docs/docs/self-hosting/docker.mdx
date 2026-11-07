@@ -45,6 +45,15 @@ Build any app from the repo root, passing the app's Dockerfile:
 docker build -f apps/webapp/Dockerfile -t classmoji-webapp .
 ```
 
+If a proxy in front of the webapp or slides terminates TLS (most reverse proxies and load balancers do), build those two images with the public host each one is served from, or their forms won't submit:
+
+```bash
+docker build -f apps/webapp/Dockerfile --build-arg ACTION_ORIGIN_HOSTS=classmoji.example.edu -t classmoji-webapp .
+docker build -f apps/slides/Dockerfile --build-arg ACTION_ORIGIN_HOSTS=slides.classmoji.example.edu -t classmoji-slides .
+```
+
+`ACTION_ORIGIN_HOSTS` takes exact host names, comma-separated, with no scheme, port or wildcard. It is read when the image is built, not when the container starts, so a new host means a new build.
+
 Then run it with the environment variables that app needs. Because there's no bundled orchestration, you're responsible for networking the services together, supplying secrets, and putting a reverse proxy in front. Compose, Kubernetes, or a PaaS all work.
 
 ### The supported path today: Fly.io
