@@ -50,8 +50,10 @@ export default defineConfig({
       // and the small-screen bottom-sheet menu, the breadcrumb title without
       // the arrows, the sidebar with "New" badges, the full-width footer bar
       // with the Privacy and Terms links, chevron previous/next links and the
-      // sun/moon theme switch.
+      // sun/moon theme switch. Head is Starlight's own, without the theme's
+      // preloads of fonts the docs do not use.
       components: {
+        Head: './src/components/docs/Head.astro',
         SiteTitle: './src/components/docs/SiteTitle.astro',
         PageTitle: './src/components/docs/PageTitle.astro',
         Sidebar: './src/components/docs/Sidebar.astro',
