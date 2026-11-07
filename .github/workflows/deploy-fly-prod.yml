@@ -332,6 +332,11 @@ jobs:
     needs: [changes, deploy-webapp]
     if: always() && needs.changes.outputs.tasks == 'true' && (needs.deploy-webapp.result == 'success' || needs.deploy-webapp.result == 'skipped')
     runs-on: ubuntu-latest
+    env:
+      # The CLI the deploy runs. Every installed @trigger.dev package must be
+      # this version (checked below). Stricter than the CLI on purpose: it only
+      # compares the @trigger.dev packages that packages/tasks declares.
+      TRIGGER_CLI_VERSION: 4.8.3
     steps:
       - uses: actions/checkout@v4
         with:
@@ -365,9 +370,30 @@ jobs:
             exit 1
           fi
 
+      - name: Check every installed @trigger.dev package is the CLI's version
+        run: |
+          npm ls --all --json --legacy-peer-deps 2>/dev/null | node -e '
+            const want = process.env.TRIGGER_CLI_VERSION;
+            const seen = new Set();
+            const walk = n => {
+              for (const [k, v] of Object.entries((n && n.dependencies) || {})) {
+                if (k.startsWith("@trigger.dev/") && v.version) seen.add(k + "@" + v.version);
+                walk(v);
+              }
+            };
+            walk(JSON.parse(require("fs").readFileSync(0, "utf8")));
+            const all = [...seen].sort();
+            console.log("@trigger.dev packages: " + (all.join(" ") || "none"));
+            const off = all.filter(p => p.slice(p.lastIndexOf("@") + 1) !== want);
+            if (!want || all.length === 0 || off.length > 0) {
+              console.log("::error::Every installed @trigger.dev package must be " + want + ", the CLI version this job deploys with; off: " + (off.join(" ") || "none found"));
+              process.exit(1);
+            }
+          '
+
       - name: Deploy to Trigger.dev
         working-directory: packages/tasks
-        run: npx trigger.dev@4.6.4 deploy --push
+        run: npx trigger.dev@$TRIGGER_CLI_VERSION deploy --push
         env:
           TRIGGER_ACCESS_TOKEN: ${{ secrets.TRIGGER_ACCESS_TOKEN }}
           INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
