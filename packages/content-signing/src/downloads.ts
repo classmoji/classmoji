@@ -58,7 +58,7 @@ const ZWJ = '\u200d';
  * forger nothing the visible characters do not already give. Variation
  * selectors (U+FE0F and friends) are Mn rather than Cf and never reach here.
  *
- * `\p{Cf}` needs the `u` flag; both targets — workerd and Node 22 — are V8.
+ * `\p{Cf}` needs the `u` flag; both targets — workerd and Node 24 — are V8.
  */
 const INVISIBLE_FORMAT = /[\p{Cf}\u2028\u2029]/u;
 
