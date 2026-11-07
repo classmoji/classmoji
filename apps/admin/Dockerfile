@@ -2,11 +2,17 @@
 # ======================
 # Build stage
 # ======================
-FROM node:22-alpine AS build
+FROM node:24-alpine AS build
 
 WORKDIR /app
 
 ENV NODE_OPTIONS="--max-old-space-size=2048"
+
+# One npm everywhere, the packageManager one (10.9.9), as in CI and the
+# lockfile check. Node 24 bundles npm 11, which writes `libc` fields into
+# lockfile entries it re-resolves and warns about dependency install scripts.
+RUN npm install -g npm@10.9.9 --no-audit --no-fund --cache=/tmp/npm-self-cache \
+    && rm -rf /tmp/npm-self-cache
 
 # Manifests only, so the npm ci layer stays cached until deps actually change.
 COPY package.json package-lock.json .npmrc ./
@@ -55,7 +61,7 @@ RUN npx turbo run admin:build
 # ======================
 # Production stage
 # ======================
-FROM node:22-alpine
+FROM node:24-alpine
 
 WORKDIR /app
 

@@ -7,7 +7,7 @@ Classmoji ships a production Dockerfile for every app, so you can build and run 
 
 ### What ships in the repo
 
-- **A production Dockerfile per app**: `webapp`, `slides`, `pages`, `hook-station`, and `site`. Each builds on Node 22 Alpine, generates the Prisma client at build time, and builds the app.
+- **A production Dockerfile per app**: `webapp`, `slides`, `pages`, `hook-station`, and `site`. Each builds on Node 24 Alpine, generates the Prisma client at build time, and builds the app.
 - **A root `docker-compose.yml`, for local development only**. It runs Postgres only. It does not run the webapp, slides, pages, hook-station, or site. `npm run db:start` is just `docker compose up -d`.
 
 There is no compose or Kubernetes file that wires all the services together for production. You bring your own.

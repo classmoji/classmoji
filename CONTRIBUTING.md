@@ -6,7 +6,7 @@ We especially encourage student contributors — this project was built for CS e
 
 ## Stack
 
-React Router v7 (framework mode), Prisma, PostgreSQL, TailwindCSS, Node 22+. Monorepo via npm workspaces + Turbo.
+React Router v7 (framework mode), Prisma, PostgreSQL, TailwindCSS, Node 24+. Monorepo via npm workspaces + Turbo.
 
 ## Local setup
 

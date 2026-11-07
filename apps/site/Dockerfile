@@ -1,7 +1,13 @@
 # Build stage for Astro
-FROM node:22-alpine AS build
+FROM node:24-alpine AS build
 
 WORKDIR /app
+
+# One npm everywhere, the packageManager one (10.9.9), as in CI and the
+# lockfile check. Node 24 bundles npm 11, which writes `libc` fields into
+# lockfile entries it re-resolves and warns about dependency install scripts.
+RUN npm install -g npm@10.9.9 --no-audit --no-fund --cache=/tmp/npm-self-cache \
+    && rm -rf /tmp/npm-self-cache
 
 COPY package*.json .npmrc ./
 RUN npm install
@@ -11,7 +17,7 @@ RUN npm run build
 
 # Production stage: Astro's Node server. Pages are pre-built files it serves
 # as-is; only /api/contact runs code. It needs RESEND_API_KEY to send.
-FROM node:22-alpine
+FROM node:24-alpine
 
 WORKDIR /app
 

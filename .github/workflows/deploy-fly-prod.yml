@@ -80,7 +80,12 @@ jobs:
           token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
+      # One npm everywhere, the packageManager one (10.9.9). Node 24 bundles
+      # npm 11, which writes `libc` fields into lockfile entries it re-resolves
+      # and warns about dependency install scripts.
+      - name: Use npm 10.9
+        run: npm install -g npm@10.9.9 && npm --version
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
@@ -112,7 +117,12 @@ jobs:
           token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
+      # One npm everywhere, the packageManager one (10.9.9). Node 24 bundles
+      # npm 11, which writes `libc` fields into lockfile entries it re-resolves
+      # and warns about dependency install scripts.
+      - name: Use npm 10.9
+        run: npm install -g npm@10.9.9 && npm --version
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
@@ -136,7 +146,12 @@ jobs:
           token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
+      # One npm everywhere, the packageManager one (10.9.9). Node 24 bundles
+      # npm 11, which writes `libc` fields into lockfile entries it re-resolves
+      # and warns about dependency install scripts.
+      - name: Use npm 10.9
+        run: npm install -g npm@10.9.9 && npm --version
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
@@ -165,7 +180,12 @@ jobs:
           token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
+      # One npm everywhere, the packageManager one (10.9.9). Node 24 bundles
+      # npm 11, which writes `libc` fields into lockfile entries it re-resolves
+      # and warns about dependency install scripts.
+      - name: Use npm 10.9
+        run: npm install -g npm@10.9.9 && npm --version
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
@@ -192,7 +212,12 @@ jobs:
           token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
+      # One npm everywhere, the packageManager one (10.9.9). Node 24 bundles
+      # npm 11, which writes `libc` fields into lockfile entries it re-resolves
+      # and warns about dependency install scripts.
+      - name: Use npm 10.9
+        run: npm install -g npm@10.9.9 && npm --version
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
@@ -215,7 +240,12 @@ jobs:
           token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
+      # One npm everywhere, the packageManager one (10.9.9). Node 24 bundles
+      # npm 11, which writes `libc` fields into lockfile entries it re-resolves
+      # and warns about dependency install scripts.
+      - name: Use npm 10.9
+        run: npm install -g npm@10.9.9 && npm --version
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
@@ -245,7 +275,12 @@ jobs:
           token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
+      # One npm everywhere, the packageManager one (10.9.9). Node 24 bundles
+      # npm 11, which writes `libc` fields into lockfile entries it re-resolves
+      # and warns about dependency install scripts.
+      - name: Use npm 10.9
+        run: npm install -g npm@10.9.9 && npm --version
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
@@ -275,7 +310,12 @@ jobs:
           token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
+      # One npm everywhere, the packageManager one (10.9.9). Node 24 bundles
+      # npm 11, which writes `libc` fields into lockfile entries it re-resolves
+      # and warns about dependency install scripts.
+      - name: Use npm 10.9
+        run: npm install -g npm@10.9.9 && npm --version
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
@@ -299,8 +339,14 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           cache: 'npm'
+
+      # One npm everywhere, the packageManager one (10.9.9). Node 24 bundles
+      # npm 11, which writes `libc` fields into lockfile entries it re-resolves
+      # and warns about dependency install scripts.
+      - name: Use npm 10.9
+        run: npm install -g npm@10.9.9 && npm --version
 
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
