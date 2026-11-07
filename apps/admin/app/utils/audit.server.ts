@@ -9,7 +9,7 @@ import { prisma } from '~/utils/db.server';
 export const platformAudit = (entry: {
   actorId: string;
   action:
-    | 'impersonate'
+    | 'impersonate.request'
     | 'delivery.toggle'
     | 'delivery.bulk'
     | 'user.view'

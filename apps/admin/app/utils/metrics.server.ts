@@ -557,8 +557,18 @@ export async function loadLatestActivity(limit = 10): Promise<ActivityEntry[]> {
 export const describeAdminAction = (action: string, data: unknown): string => {
   const d = (data ?? {}) as Record<string, unknown>;
   switch (action) {
+    // From before the auth server recorded View as: written when it was asked for.
     case 'impersonate':
       return `viewed as ${d.targetName ?? 'someone'}${d.classroomName ? ` in ${d.classroomName}` : ''}`;
+    case 'impersonate.request':
+      return `asked to view as ${d.targetName ?? 'someone'}${d.classroomName ? ` in ${d.classroomName}` : ''}`;
+    case 'impersonate.start':
+      return `started viewing as ${d.targetName ?? 'someone'}`;
+    case 'impersonate.end':
+      if (d.path === '/admin/stop-impersonating')
+        return `stopped viewing as ${d.targetName ?? 'someone'}`;
+      if (d.path === '/sign-out') return `signed out while viewing as ${d.targetName ?? 'someone'}`;
+      return `stopped viewing as ${d.targetName ?? 'someone'} (the session ended)`;
     case 'delivery.toggle':
       return `turned content delivery ${d.enabled ? 'on' : 'off'} for ${d.classroomName ?? 'a classroom'}`;
     case 'delivery.bulk':

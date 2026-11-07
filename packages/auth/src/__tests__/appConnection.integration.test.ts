@@ -79,7 +79,7 @@ const mocks = vi.hoisted(() => {
     count: vi.fn(() => Promise.resolve(0)),
   });
   const client: any = {};
-  for (const model of ['account', 'oauthAccessToken']) client[model] = noop();
+  for (const model of ['account', 'oauthAccessToken', 'platformAuditLog']) client[model] = noop();
   client.user = {
     ...noop(),
     findFirst: vi.fn(({ where }: any) =>

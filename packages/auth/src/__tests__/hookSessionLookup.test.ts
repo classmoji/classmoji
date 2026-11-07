@@ -78,6 +78,7 @@ const mocks = vi.hoisted(() => {
     'oauthAccessToken',
     'oauthApplication',
     'oauthConsent',
+    'platformAuditLog',
   ]) {
     client[model] = noop();
   }

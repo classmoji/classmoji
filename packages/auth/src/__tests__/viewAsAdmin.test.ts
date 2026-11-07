@@ -63,7 +63,13 @@ const mocks = vi.hoisted(() => {
     count: vi.fn(() => Promise.resolve(0)),
   });
   const client: any = {};
-  for (const model of ['account', 'verification', 'oauthAccessToken', 'oauthApplication']) {
+  for (const model of [
+    'account',
+    'verification',
+    'oauthAccessToken',
+    'oauthApplication',
+    'platformAuditLog',
+  ]) {
     client[model] = noop();
   }
   client.user = {
@@ -79,6 +85,10 @@ const mocks = vi.hoisted(() => {
     ...noop(),
     findFirst: vi.fn(({ where }: any) =>
       Promise.resolve(state.sessions.find(row => row.token === where?.token) ?? null)
+    ),
+    // better-auth reads the row it is about to delete, for the delete hooks.
+    findMany: vi.fn(({ where }: any) =>
+      Promise.resolve(state.sessions.filter(row => row.token === where?.token))
     ),
     create: vi.fn(({ data }: any) => {
       const row = { id: `sess-new-${state.created.length}`, ...data };
@@ -433,5 +443,144 @@ describe('linking or unlinking a sign-in account while viewing as someone', () =
 
     // The endpoint lists the user's accounts before unlinking one.
     expect(mocks.client.account.findMany).toHaveBeenCalled();
+  });
+});
+
+describe('auditing View as on the server (PlatformAuditLog)', () => {
+  const auditRows = () =>
+    mocks.client.platformAuditLog.create.mock.calls.map(([args]: any[]) => args.data);
+
+  async function stop(viewingToken: string, adminToken: string) {
+    return auth.handler(
+      new Request(`${BASE}/admin/stop-impersonating`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          origin: 'http://localhost:3000',
+          cookie: [
+            await signedCookie(`${COOKIE_PREFIX}.session_token`, viewingToken),
+            await signedCookie(`${COOKIE_PREFIX}.admin_session`, `${adminToken}:`),
+          ].join('; '),
+        },
+        body: '{}',
+      })
+    );
+  }
+
+  it('writes one start row when View as starts and one end row when it stops', async () => {
+    const adminToken = signIn('admin-1');
+
+    expect((await viewAs(adminToken, { userId: 'owner-1' })).status).toBe(200);
+    const viewing = mocks.state.created[0]!;
+    expect(auditRows()).toEqual([
+      {
+        actor_id: 'admin-1',
+        action: 'impersonate.start',
+        target_type: 'user',
+        target_id: 'owner-1',
+        data: expect.objectContaining({
+          tool: 'auth:view_as.start',
+          sessionId: viewing.id,
+          path: '/admin/impersonate-user',
+        }),
+      },
+    ]);
+
+    expect((await stop(viewing.token, adminToken)).status).toBe(200);
+    expect(auditRows()).toHaveLength(2);
+    expect(auditRows()[1]).toEqual({
+      actor_id: 'admin-1',
+      action: 'impersonate.end',
+      target_type: 'user',
+      target_id: 'owner-1',
+      data: expect.objectContaining({
+        tool: 'auth:view_as.end',
+        sessionId: viewing.id,
+        path: '/admin/stop-impersonating',
+      }),
+    });
+  });
+
+  it('writes no row for a refused start', async () => {
+    const res = await viewAs(signIn('admin-1'), { userId: 'admin-2' });
+    expect(res.status).toBe(403);
+
+    const roleAdmin = await viewAs(signIn('role-admin'), { userId: 'student-1' });
+    expect(roleAdmin.status).toBe(403);
+
+    // The database hook's own refusal, with no endpoint in front of it.
+    await expect(
+      (await auth.$context).internalAdapter.createSession('student-1', false, {
+        impersonatedBy: 'role-admin',
+      })
+    ).rejects.toMatchObject({ statusCode: 403 });
+
+    expect(mocks.client.platformAuditLog.create).not.toHaveBeenCalled();
+  });
+
+  it("writes no row for an ordinary session's sign-in or sign-out", async () => {
+    await (await auth.$context).internalAdapter.createSession('owner-1', false);
+    const token = signIn('owner-1');
+    const res = await auth.handler(
+      new Request(`${BASE}/sign-out`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          origin: 'http://localhost:3000',
+          cookie: await signedCookie(`${COOKIE_PREFIX}.session_token`, token),
+        },
+        body: '{}',
+      })
+    );
+
+    expect(res.status).toBe(200);
+    expect(mocks.client.platformAuditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('writes an end row when the viewing-as session signs out', async () => {
+    const adminToken = signIn('admin-1');
+    await viewAs(adminToken, { userId: 'owner-1' });
+    const viewing = mocks.state.created[0]!;
+
+    const res = await auth.handler(
+      new Request(`${BASE}/sign-out`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          origin: 'http://localhost:3000',
+          cookie: await signedCookie(`${COOKIE_PREFIX}.session_token`, viewing.token),
+        },
+        body: '{}',
+      })
+    );
+
+    expect(res.status).toBe(200);
+    expect(auditRows().map((row: any) => [row.action, row.data.path])).toEqual([
+      ['impersonate.start', '/admin/impersonate-user'],
+      ['impersonate.end', '/sign-out'],
+    ]);
+  });
+
+  it('still stops when the end row cannot be written', async () => {
+    const adminToken = signIn('admin-1');
+    await viewAs(adminToken, { userId: 'owner-1' });
+    const viewing = mocks.state.created[0]!;
+    mocks.client.platformAuditLog.create.mockRejectedValueOnce(new Error('database down'));
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const res = await stop(viewing.token, adminToken);
+
+    expect(res.status).toBe(200);
+    expect(mocks.state.sessions.some(s => s.token === viewing.token)).toBe(false);
+    errors.mockRestore();
+  });
+
+  it('does not hand out a View as session whose start cannot be written', async () => {
+    mocks.client.platformAuditLog.create.mockRejectedValueOnce(new Error('database down'));
+
+    const res = await viewAs(signIn('admin-1'), { userId: 'owner-1' });
+
+    expect(res.status).toBeGreaterThanOrEqual(500);
+    expect(res.headers.getSetCookie().join(';')).not.toContain(`${COOKIE_PREFIX}.session_token=`);
   });
 });

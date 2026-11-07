@@ -305,6 +305,51 @@ export async function isViewingAsAnotherUser(headers: Headers): Promise<boolean>
   return Boolean((stored?.session as { impersonatedBy?: unknown } | undefined)?.impersonatedBy);
 }
 
+/** The session row fields "View as" auditing reads. */
+interface ViewAsSessionRow {
+  id?: string;
+  userId?: string;
+  impersonatedBy?: string | null;
+  expiresAt?: Date | string;
+}
+
+/**
+ * One PlatformAuditLog row for "View as" starting (`impersonate.start`, from
+ * `databaseHooks.session.create.after`) or ending (`impersonate.end`, from
+ * `session.delete.after`), whichever app or path started or ended it. Actor:
+ * the platform admin (`impersonatedBy`); target: the viewed user; `data`: the
+ * session id, the viewed user's name as the admin app shows it, and the auth
+ * path that did it. apps/admin's own `impersonate.request` row (written when
+ * an admin asks to view as someone there) keeps the reason and classroom.
+ */
+async function recordViewAs(
+  action: 'impersonate.start' | 'impersonate.end',
+  session: ViewAsSessionRow,
+  path: string | undefined
+): Promise<void> {
+  const targetId = String(session.userId);
+  const target = await getPrisma().user.findUnique({
+    where: { id: targetId },
+    select: { name: true, email: true },
+  });
+  const expiresAt = session.expiresAt ? new Date(session.expiresAt).toISOString() : null;
+  await getPrisma().platformAuditLog.create({
+    data: {
+      actor_id: String(session.impersonatedBy),
+      action,
+      target_type: 'user',
+      target_id: targetId,
+      data: {
+        tool: action === 'impersonate.start' ? 'auth:view_as.start' : 'auth:view_as.end',
+        sessionId: session.id ? String(session.id) : null,
+        targetName: target?.name ?? target?.email ?? targetId,
+        path: path ?? null,
+        ...(action === 'impersonate.start' ? { expiresAt } : {}),
+      },
+    },
+  });
+}
+
 // Signed sign-in-return tokens for public course sites. Re-exported from the
 // server entry for callers already importing from here; site code that must not
 // pull in betterAuth/Prisma should import '@classmoji/auth/site-return'.
@@ -910,13 +955,28 @@ export const auth = betterAuth({
           return { data: { ...session, sign_in_provider: id.toUpperCase() } };
         },
         // A real sign-in (not "View as"): stamp first sign-in and last seen
-        // right away, unthrottled.
-        after: async session => {
-          noteSeen(
-            (session as { userId?: string } | undefined)?.userId,
-            (session as { impersonatedBy?: unknown } | undefined)?.impersonatedBy,
-            { force: true }
-          );
+        // right away, unthrottled. "View as": record that it started.
+        after: async (session, ctx) => {
+          const row = session as ViewAsSessionRow | undefined;
+          noteSeen(row?.userId, row?.impersonatedBy, { force: true });
+          // Awaited, and allowed to fail the request: the endpoint sets the
+          // session cookie only after this returns, so a start that can't be
+          // recorded is never handed to the browser.
+          if (row?.impersonatedBy) await recordViewAs('impersonate.start', row, ctx?.path);
+        },
+      },
+      delete: {
+        // "View as" ended: stopped, signed out, or its expired row cleaned up
+        // (better-auth passes the deleted row). Never fails the deletion: a
+        // session must still end when its row can't be recorded.
+        after: async (session, ctx) => {
+          const row = session as ViewAsSessionRow | undefined;
+          if (!row?.impersonatedBy) return;
+          try {
+            await recordViewAs('impersonate.end', row, ctx?.path);
+          } catch (error) {
+            console.error('[auth] View as end not recorded', error);
+          }
         },
       },
     },
