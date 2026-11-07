@@ -265,9 +265,9 @@ const pinsCodeSandbox = (config: unknown): boolean =>
 
 /**
  * Entitlement read before the row lock: it uses its own connection.
- * `quizzesEntitled`, not `quizzesVisible`: this runs inside the Trigger worker
- * (the quiz runtime itself), whose env need not carry the Trigger key the web
- * and MCP processes are judged by.
+ * `quizzesEntitled`, not `quizzesVisible`: this runs inside the Trigger worker,
+ * the quiz runtime itself, so whether the runtime is configured is not the
+ * question here.
  */
 const preflight = async (attemptId: string) => {
   const attempt = await getPrisma().quizAttempt.findUnique({
