@@ -15,13 +15,13 @@ primary_region = 'iad'
   auto_start_machines = true
   min_machines_running = 1
 
-  # Requests in flight per machine; above hard_limit, Fly's proxy holds new
-  # ones until one finishes. The site's pages are prebuilt files, so real
-  # traffic stays far below it.
+  # Concurrency is counted per request. There is no hard_limit, Fly's default,
+  # so the proxy never queues or refuses requests for this app. soft_limit only
+  # steers traffic between machines (and starts a stopped one, when there is
+  # one); with one machine it changes nothing.
   [http_service.concurrency]
     type = "requests"
     soft_limit = 48
-    hard_limit = 64
 
   # A machine gets traffic only once this answers 200 (a prebuilt page, served
   # in a few ms). With the bluegreen strategy below, a release boots a new
