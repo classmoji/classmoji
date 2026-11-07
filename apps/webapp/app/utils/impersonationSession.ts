@@ -36,3 +36,12 @@ export const GITLAB_CONNECT_IMPERSONATION_MESSAGE =
 
 export const CLASSROOM_REMOVE_IMPERSONATION_MESSAGE =
   "Removing a classroom isn't available while viewing as another user.";
+
+/**
+ * Settings and registration: no password, email or other account detail is
+ * changed while viewing as another user, since it would be theirs. Those
+ * actions check with `isViewingAsAnotherUser` (@classmoji/auth/server), which
+ * reads the session from both the cookie cache and the database.
+ */
+export const ACCOUNT_DETAILS_IMPERSONATION_MESSAGE =
+  "Changing account details isn't available while viewing as another user.";

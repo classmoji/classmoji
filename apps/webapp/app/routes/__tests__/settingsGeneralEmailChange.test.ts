@@ -10,6 +10,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   requireAuth: vi.fn(),
+  isViewingAs: vi.fn(),
+  setPassword: vi.fn(),
   userFindFirst: vi.fn(),
   userUpdate: vi.fn(),
   sendCode: vi.fn(),
@@ -18,6 +20,8 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@classmoji/auth/server', () => ({
   requireAuth: (...a: unknown[]) => mocks.requireAuth(...a),
+  isViewingAsAnotherUser: (...a: unknown[]) => mocks.isViewingAs(...a),
+  auth: { api: { setPassword: (...a: unknown[]) => mocks.setPassword(...a) } },
 }));
 vi.mock('@classmoji/database', () => ({
   default: () => ({
@@ -34,6 +38,7 @@ vi.mock('~/utils/emailVerification.server', () => ({
 vi.mock('~/store', () => ({ default: () => ({ user: null }) }));
 
 const { action } = await import('../_user.settings.general/route');
+const { ACCOUNT_DETAILS_IMPERSONATION_MESSAGE } = await import('~/utils/impersonationSession');
 
 const post = (body: Record<string, unknown>) =>
   action({
@@ -49,6 +54,8 @@ const post = (body: Record<string, unknown>) =>
 beforeEach(() => {
   Object.values(mocks).forEach(m => m.mockReset());
   mocks.requireAuth.mockResolvedValue({ userId: 'me' });
+  mocks.isViewingAs.mockResolvedValue(false);
+  mocks.setPassword.mockResolvedValue({ status: true });
   mocks.userFindFirst.mockResolvedValue(null);
   mocks.consumeCode.mockResolvedValue(true);
   mocks.sendCode.mockResolvedValue({ sent: true });
@@ -147,5 +154,42 @@ describe('settings.general action: change email', () => {
     await expect(post({ intent: 'send-code', email: 'new@school.edu' })).rejects.toBeInstanceOf(
       Response
     );
+  });
+});
+
+describe('settings.general action: set password', () => {
+  it('adds a password through better-auth with the request headers', async () => {
+    expect(await post({ intent: 'set-password', password: 'long-enough' })).toEqual({
+      passwordSet: true,
+    });
+    expect(mocks.setPassword).toHaveBeenCalledTimes(1);
+    expect(mocks.setPassword.mock.calls[0][0].body).toEqual({ newPassword: 'long-enough' });
+  });
+});
+
+describe('settings.general action: while viewing as another user', () => {
+  beforeEach(() => {
+    mocks.isViewingAs.mockResolvedValue(true);
+  });
+
+  it.each([
+    { intent: 'set-password', password: 'long-enough' },
+    { intent: 'send-code', email: 'new@school.edu' },
+    { intent: 'change-email', email: 'new@school.edu', code: '123456' },
+    { intent: 'update-school-id', school_id: 'F004567' },
+  ])('refuses $intent and changes nothing', async body => {
+    expect(await post(body)).toEqual({ error: ACCOUNT_DETAILS_IMPERSONATION_MESSAGE });
+    expect(mocks.setPassword).not.toHaveBeenCalled();
+    expect(mocks.sendCode).not.toHaveBeenCalled();
+    expect(mocks.consumeCode).not.toHaveBeenCalled();
+    expect(mocks.userUpdate).not.toHaveBeenCalled();
+    expect(mocks.userFindFirst).not.toHaveBeenCalled();
+  });
+
+  it('asks with the request headers, after the session check', async () => {
+    await post({ intent: 'send-code', email: 'new@school.edu' });
+    const [headers] = mocks.isViewingAs.mock.calls[0];
+    expect(headers).toBeInstanceOf(Headers);
+    expect(mocks.requireAuth).toHaveBeenCalledTimes(1);
   });
 });
