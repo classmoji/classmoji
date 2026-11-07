@@ -49,9 +49,31 @@ describe('withoutSessionTokens', () => {
     expect(out.headers.get('content-type')).toContain('application/json');
   });
 
-  it('returns /admin/list-user-sessions with each row minus its token field', async () => {
+  it.each(['/admin/impersonate-user', '/admin/stop-impersonating'])(
+    'returns %s with the session row minus its token field, headers kept',
+    async path => {
+      const out = await withoutSessionTokens(
+        new Request(`${BASE}${path}`, { method: 'POST' }),
+        jsonResponse({ session: { ...SESSION, impersonatedBy: 'admin-1' }, user: USER })
+      );
+
+      expect(out.status).toBe(200);
+      expect(await out.json()).toEqual({
+        session: {
+          id: 'sess-1',
+          userId: 'user-1',
+          expiresAt: '2030-01-01T00:00:00.000Z',
+          impersonatedBy: 'admin-1',
+        },
+        user: USER,
+      });
+      expect(out.headers.getSetCookie()).toHaveLength(2);
+    }
+  );
+
+  it('trims a { sessions } list on a trimmed path the same way', async () => {
     const out = await withoutSessionTokens(
-      new Request(`${BASE}/admin/list-user-sessions`, { method: 'POST' }),
+      new Request(`${BASE}/get-session`),
       jsonResponse({ sessions: [SESSION, { ...SESSION, id: 'sess-2', token: 'value-2' }] })
     );
 
@@ -70,6 +92,12 @@ describe('withoutSessionTokens', () => {
   it('leaves every other path, an error and a non-JSON response as they are', async () => {
     const other = jsonResponse({ session: SESSION });
     expect(await withoutSessionTokens(new Request(`${BASE}/sign-in/social`), other)).toBe(other);
+
+    // Off over HTTP (disabledPaths); no longer on the list.
+    const listed = jsonResponse({ sessions: [SESSION] });
+    expect(
+      await withoutSessionTokens(new Request(`${BASE}/admin/list-user-sessions`), listed)
+    ).toBe(listed);
 
     const error = jsonResponse({ message: 'nope' }, { status: 401 });
     expect(await withoutSessionTokens(new Request(`${BASE}/get-session`), error)).toBe(error);

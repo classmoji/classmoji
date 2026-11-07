@@ -7,7 +7,7 @@ import { IconId, IconInfoCircle } from '@tabler/icons-react';
 
 import type { Route } from './+types/route';
 import { Logo } from '@classmoji/ui-components';
-import { getAuthSession } from '@classmoji/auth/server';
+import { getAuthSession, isViewingAsAnotherUser } from '@classmoji/auth/server';
 import getPrisma, { GIT_IDENTITY, whereGitUsername } from '@classmoji/database';
 import { generateId, gitUsername } from '@classmoji/utils';
 import { safeReturnPath } from '@classmoji/utils/return-path';
@@ -19,6 +19,7 @@ import {
 } from '~/utils/emailVerification.server';
 import { verifyInviteToken, inviteTokenMatchesEmail } from '@classmoji/auth/invite-token';
 import { normalizeEmail, INVALID_EMAIL_MESSAGE } from '~/utils/email';
+import { ACCOUNT_DETAILS_IMPERSONATION_MESSAGE } from '~/utils/impersonationSession';
 
 /** Where to go once registered: a same-site path from `?next=`, else the picker. */
 const safeNext = (value: unknown): string => safeReturnPath(value, '/select-organization');
@@ -541,6 +542,11 @@ export const action = async ({ request }: Route.ActionArgs) => {
   // to arbitrary addresses or probe/burn them.
   const authData = await getAuthSession(request);
   if (!authData?.userId) return redirect('/');
+  // Registering writes the user's email, name and school id: never while a
+  // platform admin is viewing as them. Both session reads are checked.
+  if (await isViewingAsAnotherUser(request.headers)) {
+    return { error: ACCOUNT_DETAILS_IMPERSONATION_MESSAGE };
+  }
 
   const formData = await request.json();
   const { intent } = formData;

@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   getAuthSession: vi.fn(),
+  isViewingAs: vi.fn(),
   sendCode: vi.fn(),
   isCodeValid: vi.fn(),
   consumeCode: vi.fn(),
@@ -21,6 +22,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@classmoji/auth/server', () => ({
   getAuthSession: (...a: unknown[]) => mocks.getAuthSession(...a),
+  isViewingAsAnotherUser: (...a: unknown[]) => mocks.isViewingAs(...a),
 }));
 vi.mock('@classmoji/database', () => ({
   default: () => ({
@@ -51,6 +53,7 @@ vi.mock('~/utils/emailVerification.server', () => ({
 }));
 
 const { action } = await import('../registration/route');
+const { ACCOUNT_DETAILS_IMPERSONATION_MESSAGE } = await import('~/utils/impersonationSession');
 
 const post = (body: Record<string, unknown>) =>
   action({
@@ -68,6 +71,7 @@ const INVALID = { error: 'Please enter a valid email address.' };
 beforeEach(() => {
   Object.values(mocks).forEach(m => m.mockReset());
   mocks.getAuthSession.mockResolvedValue({ userId: 'me' });
+  mocks.isViewingAs.mockResolvedValue(false);
   mocks.isCodeValid.mockResolvedValue(true);
   mocks.consumeCode.mockResolvedValue(true);
   mocks.userFindFirst.mockResolvedValue(null);
@@ -193,4 +197,23 @@ describe('registration action: session', () => {
       expect(mocks.consumeCode).not.toHaveBeenCalled();
     }
   );
+});
+
+describe('registration action: while viewing as another user', () => {
+  beforeEach(() => {
+    mocks.isViewingAs.mockResolvedValue(true);
+  });
+
+  it.each([
+    { intent: 'send-code', email: 'new@school.edu' },
+    { intent: 'verify-code', email: 'new@school.edu', code: '123456' },
+    { intent: 'register', email: 'new@school.edu', code: '123456', name: 'Someone' },
+  ])('refuses $intent and changes nothing', async body => {
+    expect(await post(body)).toEqual({ error: ACCOUNT_DETAILS_IMPERSONATION_MESSAGE });
+    expect(mocks.sendCode).not.toHaveBeenCalled();
+    expect(mocks.isCodeValid).not.toHaveBeenCalled();
+    expect(mocks.consumeCode).not.toHaveBeenCalled();
+    expect(mocks.userUpdate).not.toHaveBeenCalled();
+    expect(mocks.subscriptionCount).not.toHaveBeenCalled();
+  });
 });

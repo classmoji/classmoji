@@ -58,6 +58,7 @@ vi.mock('~/utils/routeAuth.server', () => ({
   requireClassroomTeachingTeam: vi.fn(),
   requireClassroomAdmin: vi.fn(),
   assertClassroomMutationAllowed: vi.fn(),
+  mayViewAs: vi.fn(),
 }));
 vi.mock('~/utils/helpers', () => ({ waitForRunCompletion: vi.fn() }));
 
@@ -84,7 +85,11 @@ const ASSISTANT_ROW = row({});
 
 const ALL_ROWS = [OWNER_ROW, TEACHER_ROW, ASSISTANT_ROW];
 
-const renderScreen = (props: { staff: Record<string, unknown>[]; canManage: boolean }) =>
+const renderScreen = (props: {
+  staff: Record<string, unknown>[];
+  canManage: boolean;
+  canViewAs?: boolean;
+}) =>
   renderToStaticMarkup(
     createElement(
       MemoryRouter,
@@ -194,8 +199,17 @@ describe('Teaching Staff screen with canManage=true', () => {
     // The list used to offer it on ASSISTANT alone while the drawer offered it
     // for TEACHER too, so the same person had it in one place and not the
     // other. Teacher in both is the intent.
-    expect(renderScreen({ staff: [ASSISTANT_ROW], canManage: true })).toContain('View as');
-    expect(renderScreen({ staff: [TEACHER_ROW], canManage: true })).toContain('View as');
+    const viewAs = { canManage: true, canViewAs: true };
+    expect(renderScreen({ staff: [ASSISTANT_ROW], ...viewAs })).toContain('View as');
+    expect(renderScreen({ staff: [TEACHER_ROW], ...viewAs })).toContain('View as');
+    expect(renderScreen({ staff: [OWNER_ROW], ...viewAs })).not.toContain('View as');
+  });
+
+  it('offers "View as" only when the loader says the viewer may (platform admins)', () => {
+    const html = renderScreen({ staff: ALL_ROWS, canManage: true, canViewAs: false });
+
+    expect(html).toContain('Remove');
+    expect(html).not.toContain('View as');
   });
 
   it('offers no "View as" on an owner row', () => {

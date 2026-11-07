@@ -7,6 +7,10 @@ import {
   safeReturnTo,
   type GitLabConnectState,
 } from '~/utils/gitlabConnect.server';
+import {
+  GITLAB_CONNECT_IMPERSONATION_MESSAGE,
+  isImpersonatingSession,
+} from '~/utils/impersonationSession';
 import type { Route } from './+types/route';
 
 /**
@@ -27,9 +31,16 @@ async function finish(returnTo: string, outcome: string) {
  * GET /connect/gitlab/callback: GitLab's redirect after the user approves (or
  * declines) the connection. Verifies the round trip belongs to this browser and
  * this user, exchanges the code, and stores the connection.
+ *
+ * Not while viewing as another user: the connection would be stored on their
+ * account. Refused before the code is exchanged, so nothing is stored.
  */
 export const loader = async ({ request }: Route.LoaderArgs) => {
-  const { userId } = await requireAuth(request);
+  const authData = await requireAuth(request);
+  if (isImpersonatingSession(authData)) {
+    throw new Response(GITLAB_CONNECT_IMPERSONATION_MESSAGE, { status: 403 });
+  }
+  const { userId } = authData;
   const url = new URL(request.url);
   const saved = (await gitlabConnectCookie.parse(
     request.headers.get('Cookie')

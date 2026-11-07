@@ -9,4 +9,5 @@ export {
   requireClassroomStaff,
   requireClassroomTeachingTeam,
   requireClassroomMember,
+  mayViewAs,
 } from '@classmoji/auth/server';

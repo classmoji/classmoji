@@ -15,7 +15,7 @@ import UngradedChoice from './UngradedChoice';
 
 import { useGlobalFetcher, useDisclosure } from '~/hooks';
 import { ActionTypes } from '~/constants';
-import { requireClassroomTeachingTeam } from '~/utils/routeAuth.server';
+import { mayViewAs, requireClassroomTeachingTeam } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
 /**
@@ -73,7 +73,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   // MUTATIONS in this route stay OWNER-only and carry their own gate — see
   // ./action.ts. A layout loader never gates a leaf action, so widening this
   // read must not be read as widening anything else.
-  const { classroom, membership } = await requireClassroomTeachingTeam(request, classSlug, {
+  const { classroom, membership, userId } = await requireClassroomTeachingTeam(request, classSlug, {
     resourceType: 'TEACHING_STAFF',
     action: 'view_staff',
   });
@@ -91,6 +91,9 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   // (404). NARROWING ONLY: the prefix can subtract authority, never add it.
   const isAdminPrefix = new URL(request.url).pathname.startsWith('/admin/');
   const canManage = isOwner && isAdminPrefix;
+  // "View as" is for platform admins only; the auth server refuses anyone
+  // else, so the button is not offered to them.
+  const canViewAs = canManage && mayViewAs(userId);
 
   // One query per role rather than findUsersByRoles: that helper de-duplicates
   // by user id and drops the role, and this screen needs the role on every row.
@@ -121,7 +124,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     ? await ClassmojiService.gitRepoAssignmentGrader.countUngradedSlotsByGrader(classroom.id)
     : {};
 
-  return { staff: staffByRole.flat(), canManage, ungradedByUser };
+  return { staff: staffByRole.flat(), canManage, canViewAs, ungradedByUser };
 };
 
 const GRADER_ROLES: readonly StaffRole[] = ['ASSISTANT', 'TEACHER'];
@@ -166,7 +169,7 @@ interface PendingRemoval {
 }
 
 const AdminStaff = ({ loaderData }: Route.ComponentProps) => {
-  const { staff, canManage, ungradedByUser = {} } = loaderData;
+  const { staff, canManage, canViewAs = false, ungradedByUser = {} } = loaderData;
   const { fetcher, notify } = useGlobalFetcher();
   const [pendingRemoval, setPendingRemoval] = useState<PendingRemoval | null>(null);
   const [ungradedChoice, setUngradedChoice] = useState<UngradedChoiceValue>('reassign');
@@ -372,8 +375,8 @@ const AdminStaff = ({ loaderData }: Route.ComponentProps) => {
                   {/* Same roles the drawer offers it for: an owner viewing as
                       another owner would be looking at their own shell, and
                       the impersonation prefix only has an assistant and a
-                      teacher form. */}
-                  {member.role !== 'OWNER' && (
+                      teacher form. Platform admins only (canViewAs). */}
+                  {canViewAs && member.role !== 'OWNER' && (
                     <div
                       onClick={e => {
                         e.stopPropagation();

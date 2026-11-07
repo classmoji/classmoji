@@ -1,7 +1,8 @@
 /**
  * The webapp's better-auth handler (api.auth.$): session responses leave
  * without their rows' `token` field, with better-auth's status and headers
- * (Set-Cookie included); every other response passes through as sent.
+ * (Set-Cookie included), View as start and stop included; every other
+ * response passes through as sent.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -46,32 +47,36 @@ describe('api.auth.$ — session responses', () => {
     expect(res.headers.getSetCookie()).toHaveLength(2);
   });
 
-  it('serves /admin/list-user-sessions rows without the token field', async () => {
-    handler.mockResolvedValue(
-      betterAuthResponse({ sessions: [{ id: 'sess-1', token: 'value-1', userId: 'user-1' }] })
-    );
-
-    const res = (await route.action({
-      request: new Request(`${BASE}/admin/list-user-sessions`, {
-        method: 'POST',
-        body: JSON.stringify({ userId: 'user-1' }),
-        headers: { 'content-type': 'application/json' },
-      }),
-    } as never)) as Response;
-
-    expect(await res.json()).toEqual({ sessions: [{ id: 'sess-1', userId: 'user-1' }] });
-  });
-
-  it('passes sign-out and impersonation responses through as sent', async () => {
-    for (const path of ['/sign-out', '/admin/impersonate-user', '/admin/stop-impersonating']) {
-      const sent = betterAuthResponse({ success: true });
-      handler.mockResolvedValue(sent);
+  it.each(['/admin/impersonate-user', '/admin/stop-impersonating'])(
+    'serves %s without the token field, keeping the cookies',
+    async path => {
+      handler.mockResolvedValue(
+        betterAuthResponse({
+          session: { id: 'sess-1', token: 'value-1', userId: 'user-1' },
+          user: { id: 'user-1' },
+        })
+      );
 
       const res = (await route.action({
         request: new Request(`${BASE}${path}`, { method: 'POST' }),
       } as never)) as Response;
 
-      expect(res).toBe(sent);
+      expect(await res.json()).toEqual({
+        session: { id: 'sess-1', userId: 'user-1' },
+        user: { id: 'user-1' },
+      });
+      expect(res.headers.getSetCookie()).toHaveLength(2);
     }
+  );
+
+  it('passes sign-out through as sent', async () => {
+    const sent = betterAuthResponse({ success: true });
+    handler.mockResolvedValue(sent);
+
+    const res = (await route.action({
+      request: new Request(`${BASE}/sign-out`, { method: 'POST' }),
+    } as never)) as Response;
+
+    expect(res).toBe(sent);
   });
 });

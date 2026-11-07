@@ -22,6 +22,10 @@
  *   impersonation, `session.impersonatedBy`), the session is that user's, so a
  *   code issued now would connect an app acting as them. Both endpoints refuse.
  *   A denial (`accept: false`) issues nothing and goes through.
+ *   The session passed in (`lookupSession`) is the viewing-as one if either
+ *   the cookie cache or the database row is viewing as someone (server.ts,
+ *   lookupViewAsSessionForHook), so the rules hold whichever one the
+ *   endpoint then reads.
  *
  * - The mcp plugin's after-hook (plugins/mcp/index.mjs:146-178) resumes a saved
  *   `oidc_login_prompt` cookie, an authorization started while signed out, on

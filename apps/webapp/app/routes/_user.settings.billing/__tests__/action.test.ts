@@ -22,6 +22,8 @@ const updateUserMock = vi.fn();
 const getAuthSessionMock = vi.fn();
 const getCurrentMock = vi.fn();
 const recordEventMock = vi.fn();
+const isViewingAsMock = vi.fn();
+const getStatusMock = vi.fn();
 
 vi.mock('@classmoji/services', async () => {
   // The real price rule, so these tests still prove where the price comes from.
@@ -36,6 +38,9 @@ vi.mock('@classmoji/services', async () => {
       billing: {
         checkoutPriceId: () => checkoutPriceId(),
         recordEvent: (...a: unknown[]) => recordEventMock(...a),
+        getStatus: (...a: unknown[]) => getStatusMock(...a),
+        featureText: (label: string, value: unknown) => `${label}: ${String(value)}`,
+        proFeatures: () => [{ label: 'Quizzes', pro: true }],
       },
     },
     StripeService: {
@@ -49,6 +54,7 @@ vi.mock('@classmoji/services', async () => {
 
 vi.mock('@classmoji/auth/server', () => ({
   getAuthSession: (...a: unknown[]) => getAuthSessionMock(...a),
+  isViewingAsAnotherUser: (...a: unknown[]) => isViewingAsMock(...a),
 }));
 
 // The action touches none of the component's UI seams; stub what importing
@@ -60,7 +66,14 @@ vi.mock('@classmoji/ui-components', () => ({
   useCallout: () => ({ show: vi.fn() }),
 }));
 
-const { action } = await import('../route.tsx');
+const { action, loader } = await import('../route.tsx');
+const { BILLING_IMPERSONATION_MESSAGE } = await import('~/utils/impersonationSession');
+
+// Signed in as oneself unless a test says otherwise.
+beforeEach(() => {
+  isViewingAsMock.mockReset();
+  isViewingAsMock.mockResolvedValue(false);
+});
 
 const post = (name: string, body: Record<string, unknown> = {}) =>
   ({
@@ -207,7 +220,10 @@ describe('billing action — createBillingPortalSession', () => {
     getCurrentMock.mockResolvedValue({ stripe_subscription_id: 'sub_own' });
 
     await action(
-      post('createBillingPortalSession', { flow: 'subscription_cancel', subscriptionId: 'sub_other' })
+      post('createBillingPortalSession', {
+        flow: 'subscription_cancel',
+        subscriptionId: 'sub_other',
+      })
     );
 
     expect(getCurrentMock).toHaveBeenCalledWith('user-1');
@@ -312,5 +328,71 @@ describe('billing action — saving the new Stripe customer', () => {
 
     await expect(action(post('createCheckoutSession'))).rejects.toThrow('db down');
     expect(createCheckoutSessionMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('billing while viewing as another user', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubEnv('STRIPE_PRO_PRICE_ID', 'price_from_env');
+    isViewingAsMock.mockResolvedValue(true);
+    getAuthSessionMock.mockResolvedValue({ userId: 'user-1' });
+    findByIdMock.mockResolvedValue({ id: 'user-1', name: 'Tim', email: 'tim@example.com' });
+    getCurrentMock.mockResolvedValue({ stripe_subscription_id: 'sub_own' });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it.each([
+    ['createCheckoutSession', {}],
+    ['createBillingPortalSession', {}],
+    ['createBillingPortalSession', { flow: 'payment_method_update' }],
+    ['createBillingPortalSession', { flow: 'subscription_cancel' }],
+  ])('refuses %s %j without reaching Stripe or the user row', async (name, body) => {
+    const args = post(name, body);
+
+    const result = await action(args);
+
+    expect(result).toEqual({ error: BILLING_IMPERSONATION_MESSAGE });
+    expect(isViewingAsMock).toHaveBeenCalledWith(args.request.headers);
+    expect(createCustomerMock).not.toHaveBeenCalled();
+    expect(createCheckoutSessionMock).not.toHaveBeenCalled();
+    expect(createBillingPortalSessionMock).not.toHaveBeenCalled();
+    expect(updateUserMock).not.toHaveBeenCalled();
+    expect(recordEventMock).not.toHaveBeenCalled();
+    expect(findByIdMock).not.toHaveBeenCalled();
+  });
+
+  it('still opens checkout and the portal for the user themselves', async () => {
+    isViewingAsMock.mockResolvedValue(false);
+    findByIdMock.mockResolvedValue({ id: 'user-1', stripe_customer_id: 'cus_existing' });
+    createCheckoutSessionMock.mockResolvedValue({ url: 'https://checkout.stripe.test/session' });
+    createBillingPortalSessionMock.mockResolvedValue({ url: 'https://portal.stripe.test/session' });
+
+    expect(await action(post('createCheckoutSession'))).toEqual({
+      checkoutSessionUrl: 'https://checkout.stripe.test/session',
+    });
+    expect(await action(post('createBillingPortalSession'))).toEqual({
+      billingPortalSessionUrl: 'https://portal.stripe.test/session',
+    });
+  });
+
+  it('still shows the plan on the page', async () => {
+    getStatusMock.mockResolvedValue({
+      tier: 'PRO',
+      isComped: false,
+      billing: { status: 'active' },
+      proPriceCents: 500,
+      features: [{ label: 'Pages', free: true }],
+    });
+
+    const data = await loader({
+      request: new Request('http://localhost/settings/billing'),
+    } as unknown as Parameters<typeof loader>[0]);
+
+    expect(getStatusMock).toHaveBeenCalledWith('user-1');
+    expect(data).toMatchObject({ tier: 'PRO', billing: { status: 'active' }, proPriceCents: 500 });
   });
 });
