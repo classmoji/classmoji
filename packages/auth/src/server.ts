@@ -1305,6 +1305,10 @@ export const auth = betterAuth({
    * creates a session (`emailVerification.autoSignInAfterVerification`); the
    * sign-in page's verify step goes straight on to the app.
    *
+   * `/forget-password/email-otp` is off too: it is the emailOTP plugin's
+   * deprecated path for asking for a reset code. The sign-in page asks at
+   * `/email-otp/request-password-reset`, and nothing calls the old path.
+   *
    * The admin plugin's endpoints are off too, all but "View as" start and stop
    * (/admin/impersonate-user, /admin/stop-impersonating), the only ones any app
    * calls (apps/admin useViewAs, the webapp's Staff pages and its
@@ -1318,6 +1322,7 @@ export const auth = betterAuth({
     '/verify-password',
     '/sign-in/email-otp',
     '/email-otp/check-verification-otp',
+    '/forget-password/email-otp',
     ...ADMIN_PATHS_NOT_USED,
   ],
   // Password guessing and code guessing are throttled harder than the default
@@ -1336,8 +1341,6 @@ export const auth = betterAuth({
       '/email-otp/verify-email': { window: 60, max: 5 },
       '/email-otp/reset-password': { window: 60, max: 5 },
       '/email-otp/request-password-reset': { window: 60, max: 3 },
-      // The deprecated path of the same request, kept until it is disabled.
-      '/forget-password/email-otp': { window: 60, max: 3 },
     },
   },
   plugins: [

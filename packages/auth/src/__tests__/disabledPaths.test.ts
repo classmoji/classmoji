@@ -93,14 +93,11 @@ describe('disabled better-auth paths', () => {
   );
 
   // The flows the sign-in page does use stay up: verifying an address,
-  // requesting a reset code and resetting a password with it. The deprecated
-  // /forget-password/email-otp stays up too, for pages loaded before the
-  // sign-in page moved to /email-otp/request-password-reset.
+  // requesting a reset code and resetting a password with it.
   it.each([
     ['/email-otp/verify-email'],
     ['/email-otp/reset-password'],
     ['/email-otp/request-password-reset'],
-    ['/forget-password/email-otp'],
   ])('still routes POST %s', async path => {
     const res = await auth.handler(
       new Request(`${BASE}${path}`, {
@@ -322,10 +319,80 @@ describe('/email-otp/send-verification-otp', () => {
   });
 });
 
+describe('the deprecated reset-code path (/forget-password/email-otp)', () => {
+  const USER = {
+    id: 'u1',
+    name: 'U',
+    email: 'someone@example.com',
+    emailVerified: true,
+    image: null,
+    created_at: new Date(),
+    updated_at: new Date(),
+  };
+
+  beforeEach(() => {
+    mocks.sendAuthOtp.mockClear();
+    (mocks.client.user.findFirst as ReturnType<typeof vi.fn>).mockImplementation(
+      async ({ where }: { where?: { email?: string } }) =>
+        where?.email === USER.email ? USER : null
+    );
+  });
+  afterEach(() => {
+    (mocks.client.user.findFirst as ReturnType<typeof vi.fn>).mockImplementation(async () => null);
+  });
+
+  it('answers POST with 404 and mails no code', async () => {
+    const res = await auth.handler(
+      new Request(`${BASE}/forget-password/email-otp`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'http://localhost:3000' },
+        body: JSON.stringify({ email: USER.email }),
+      })
+    );
+
+    expect(res.status).toBe(404);
+    expect(mocks.sendAuthOtp).not.toHaveBeenCalled();
+  });
+
+  it('would mail a code for that address if it were routed (control: in-process)', async () => {
+    await expect(
+      auth.api.forgetPasswordEmailOTP({ body: { email: USER.email }, headers: new Headers() })
+    ).resolves.toMatchObject({ success: true });
+    expect(mocks.sendAuthOtp).toHaveBeenCalledWith(
+      USER.email,
+      expect.any(String),
+      'forget-password'
+    );
+  });
+
+  it('leaves the path the sign-in page uses mailing the code', async () => {
+    const res = await auth.handler(
+      new Request(`${BASE}/email-otp/request-password-reset`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'http://localhost:3000' },
+        body: JSON.stringify({ email: USER.email }),
+      })
+    );
+
+    expect(res.status).toBe(200);
+    expect(mocks.sendAuthOtp).toHaveBeenCalledWith(
+      USER.email,
+      expect.any(String),
+      'forget-password'
+    );
+  });
+});
+
 describe('reset-code rate limits', () => {
-  it('limits both paths that mail a reset code to 3 a minute per client', () => {
+  it('limits the path that mails a reset code to 3 a minute per client', () => {
     const rules = auth.options.rateLimit?.customRules ?? {};
     expect(rules['/email-otp/request-password-reset']).toEqual({ window: 60, max: 3 });
-    expect(rules['/forget-password/email-otp']).toEqual({ window: 60, max: 3 });
+  });
+
+  it('keeps no rate rule for a path the router turns off', () => {
+    const rules = auth.options.rateLimit?.customRules ?? {};
+    const disabled = auth.options.disabledPaths ?? [];
+    expect(disabled).toContain('/forget-password/email-otp');
+    expect(Object.keys(rules).filter(path => disabled.includes(path))).toEqual([]);
   });
 });
