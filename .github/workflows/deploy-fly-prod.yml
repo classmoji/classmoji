@@ -31,26 +31,61 @@ jobs:
         with:
           filters: |
             webapp:
+              - 'package.json'
+              - 'package-lock.json'
+              - '.npmrc'
+              - '.dockerignore'
+              - '.github/workflows/deploy-fly-prod.yml'
               - 'apps/webapp/**'
               - 'packages/**'
             hook-station:
+              - 'package.json'
+              - 'package-lock.json'
+              - '.npmrc'
+              - '.dockerignore'
+              - '.github/workflows/deploy-fly-prod.yml'
               - 'apps/hook-station/**'
               - 'packages/**'
             collab:
+              - 'package.json'
+              - 'package-lock.json'
+              - '.npmrc'
+              - '.dockerignore'
+              - '.github/workflows/deploy-fly-prod.yml'
               - 'apps/collab/**'
               - 'packages/**'
             mcp:
+              - 'package.json'
+              - 'package-lock.json'
+              - '.npmrc'
+              - '.dockerignore'
+              - '.github/workflows/deploy-fly-prod.yml'
               - 'apps/mcp/**'
               - 'packages/**'
             site:
               - 'apps/site/**'
             slides:
+              - 'package.json'
+              - 'package-lock.json'
+              - '.npmrc'
+              - '.dockerignore'
+              - '.github/workflows/deploy-fly-prod.yml'
               - 'apps/slides/**'
               - 'packages/**'
             pages:
+              - 'package.json'
+              - 'package-lock.json'
+              - '.npmrc'
+              - '.dockerignore'
+              - '.github/workflows/deploy-fly-prod.yml'
               - 'apps/pages/**'
               - 'packages/**'
             admin:
+              - 'package.json'
+              - 'package-lock.json'
+              - '.npmrc'
+              - '.dockerignore'
+              - '.github/workflows/deploy-fly-prod.yml'
               - 'apps/admin/**'
               - 'packages/**'
             tasks:
