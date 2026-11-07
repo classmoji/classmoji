@@ -3,7 +3,7 @@
  * server.ts), through the same `auth.handler` every app mounts.
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 process.env.WEBAPP_URL = 'http://localhost:3000';
 process.env.BETTER_AUTH_SECRET = 'test-secret-that-is-at-least-32-chars!!';
@@ -30,7 +30,11 @@ const mocks = vi.hoisted(() => {
       count: vi.fn(() => Promise.resolve(0)),
     };
   }
-  return { client };
+  // better-auth looks some models up by their schema name.
+  client.Verification = client.verification;
+  client.User = client.user;
+  const sendAuthOtp = vi.fn(async () => {});
+  return { client, sendAuthOtp };
 });
 
 vi.mock('@classmoji/database', () => ({ default: () => mocks.client }));
@@ -41,10 +45,11 @@ vi.mock('@classmoji/services', () => ({
     classroomMembership: { findByClassroomAndUser: vi.fn() },
     githubUserToken: { getGitHubTokenForUser: vi.fn(async () => null) },
     subscription: { getProStateForClassroomId: vi.fn() },
+    authEmail: { sendAuthOtp: mocks.sendAuthOtp },
   },
 }));
 
-const { auth, ADMIN_PATHS_NOT_USED } = await import('../server.ts');
+const { auth, ADMIN_PATHS_NOT_USED, UNSUPPORTED_CODE_TYPE_MESSAGE } = await import('../server.ts');
 
 const BASE = 'http://localhost:3000/api/auth';
 
@@ -173,6 +178,59 @@ describe("the admin plugin's endpoints", () => {
     );
     // No session in this call: the endpoint's own 401, not the router's 404.
     expect(error).toMatchObject({ statusCode: 401 });
+  });
+});
+
+describe('/email-otp/send-verification-otp', () => {
+  const USER = {
+    id: 'u1',
+    name: 'U',
+    email: 'someone@example.com',
+    emailVerified: false,
+    image: null,
+    created_at: new Date(),
+    updated_at: new Date(),
+  };
+  const send = (type: string) =>
+    auth.handler(
+      new Request(`${BASE}/email-otp/send-verification-otp`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'http://localhost:3000' },
+        body: JSON.stringify({ email: USER.email, type }),
+      })
+    );
+
+  beforeEach(() => {
+    mocks.sendAuthOtp.mockClear();
+    (mocks.client.user.findFirst as ReturnType<typeof vi.fn>).mockImplementation(
+      async ({ where }: { where?: { email?: string } }) =>
+        where?.email === USER.email ? USER : null
+    );
+  });
+  afterEach(() => {
+    (mocks.client.user.findFirst as ReturnType<typeof vi.fn>).mockImplementation(async () => null);
+  });
+
+  it.each([['forget-password'], ['sign-in'], ['anything-else']])(
+    'refuses type %s with a 400 and sends nothing',
+    async type => {
+      const res = await send(type);
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ message: UNSUPPORTED_CODE_TYPE_MESSAGE });
+      expect(mocks.sendAuthOtp).not.toHaveBeenCalled();
+    }
+  );
+
+  it('still sends an email-verification code', async () => {
+    const res = await send('email-verification');
+
+    expect(res.status).toBe(200);
+    expect(mocks.sendAuthOtp).toHaveBeenCalledWith(
+      USER.email,
+      expect.any(String),
+      'email-verification'
+    );
   });
 });
 

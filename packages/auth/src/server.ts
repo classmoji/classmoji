@@ -188,6 +188,15 @@ export const ACCOUNT_LINK_PATHS: ReadonlySet<string> = new Set([
   '/unlink-account',
 ]);
 
+/**
+ * The emailOTP plugin's "send a code" endpoint. Its body's `type` may be
+ * email-verification, sign-in or forget-password; the sign-in page only ever
+ * sends email-verification there, and `hooks.before` refuses the others.
+ */
+export const SEND_VERIFICATION_OTP_PATH = '/email-otp/send-verification-otp';
+
+export const UNSUPPORTED_CODE_TYPE_MESSAGE = 'Unsupported code type.';
+
 export const ACCOUNT_LINK_VIEWING_AS_MESSAGE =
   "Connecting or removing a sign-in account isn't available while viewing as another user.";
 
@@ -839,6 +848,14 @@ export const auth = betterAuth({
         // No sign-in account is linked or unlinked while viewing as another
         // user. The session is looked up on these three paths only.
         if (ACCOUNT_LINK_PATHS.has(ctx.path)) await refuseAccountLinkWhileViewingAs(ctx);
+        // This path sends address-verification codes only; a reset code has
+        // its own path (/email-otp/request-password-reset).
+        if (
+          ctx.path === SEND_VERIFICATION_OTP_PATH &&
+          (ctx.body as { type?: unknown } | undefined)?.type !== 'email-verification'
+        ) {
+          throw new APIError('BAD_REQUEST', { message: UNSUPPORTED_CODE_TYPE_MESSAGE });
+        }
         // Connecting apps: the consent page is always shown, and no app is
         // connected while viewing as another user (./appConnectionGuard.ts).
         // Every other path returns after string comparisons and one anchored
