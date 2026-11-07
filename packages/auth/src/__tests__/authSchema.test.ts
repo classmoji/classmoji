@@ -28,7 +28,9 @@ import { getAuthTables } from 'better-auth/db';
 
 process.env.WEBAPP_URL = 'http://localhost:3000';
 process.env.BETTER_AUTH_SECRET = 'test-secret-that-is-at-least-32-chars!!';
-// Read only when a query is made, and none is.
+// Read only when a query is made, and none is by these tests. (oauth-provider
+// tries to seed its resource row at boot and logs that it could not: expected
+// here, with no database behind the URL.)
 process.env.DATABASE_URL ??= 'postgresql://unused:unused@127.0.0.1:1/unused';
 
 vi.mock('@classmoji/services', () => ({

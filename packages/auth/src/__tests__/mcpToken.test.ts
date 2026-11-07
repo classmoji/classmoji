@@ -12,11 +12,9 @@
  *
  * What these pin, in order of how much it would cost to get wrong:
  *
- *   1. the minted row can NEVER be refreshed. `refreshTokenExpiresAt` is stamped
- *      in the past, which is what makes better-auth's refresh grant
- *      (plugins/mcp/index.mjs:262-309 — refresh token + client id, never a client
- *      secret) refuse it. A live refresh token here would turn a leaked one-hour
- *      bearer into an indefinitely renewable seven-day credential;
+ *   1. the minted row can NEVER be refreshed: `refreshTokenExpiresAt` is stamped
+ *      in the past. (The authorization server never reads this table either,
+ *      and refuses the Ask Moji client id: ./askMojiTokenGrant.test.ts.);
  *   2. the token is read-only. apps/mcp registers tools by scope, so a `write`
  *      here would put write tools in `tools/list` for a chat client;
  *   3. the reuse floor, which is what stops one row per chat turn, and which must

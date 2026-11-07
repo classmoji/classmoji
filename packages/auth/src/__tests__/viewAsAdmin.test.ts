@@ -9,9 +9,10 @@
  *
  * Two layers, each tested on its own:
  *   (a) `hooks.before` refuses the request before the endpoint runs, with its
- *       own messages (1.4.18's endpoint also refuses admin targets, with
- *       "You cannot impersonate admins"; from 1.5 it lets an `adminUserIds`
- *       caller through, so the message tells the layers apart);
+ *       own messages (better-auth 1.4's endpoint refused admin targets
+ *       itself, with "You cannot impersonate admins"; from 1.5, 1.7.18
+ *       included, it lets an `adminUserIds` caller through, so the message
+ *       tells the layers apart);
  *   (b) `databaseHooks.session.create.before` refuses any session created
  *       with `impersonatedBy` by someone who is not a platform admin, or for
  *       an admin, whatever path creates it.
