@@ -971,6 +971,25 @@ export const auth = betterAuth({
           if (row?.impersonatedBy) await recordViewAs('impersonate.start', row, ctx?.path);
         },
       },
+      update: {
+        // A "View as" session keeps the expiry it was created with
+        // (impersonationSessionDuration): a database read that is due a
+        // refresh (session.updateAge) would otherwise move it to
+        // session.expiresIn from now. Only that refresh updates a session row
+        // here, and it puts the row it read on `ctx.context.session` first
+        // (better-auth api/routes/session.mjs). The refresh still runs, with the
+        // same expiry, so the read returns the session and sets its cookie
+        // with the time left. Other sessions are left to refresh as usual.
+        before: async (data, ctx) => {
+          const current = (
+            ctx?.context as
+              | { session?: { session?: { impersonatedBy?: unknown; expiresAt?: unknown } } | null }
+              | undefined
+          )?.session?.session;
+          if (!current?.impersonatedBy || !current.expiresAt) return;
+          return { data: { ...data, expiresAt: current.expiresAt as Date } };
+        },
+      },
       delete: {
         // "View as" ended: stopped, signed out, or its expired row cleaned up
         // (better-auth passes the deleted row). Never fails the deletion: a

@@ -502,6 +502,56 @@ describe('starting to view as someone', () => {
   });
 });
 
+describe('the expiry of a View as session', () => {
+  const read = async (token: string) =>
+    auth.handler(
+      new Request(`${BASE}/get-session?disableCookieCache=true`, {
+        headers: { cookie: await tokenCookie(token) },
+      })
+    );
+  const maxAge = (res: Response) =>
+    Number(
+      res.headers
+        .getSetCookie()
+        .find(c => c.startsWith(`${COOKIE_PREFIX}.session_token=`))
+        ?.match(/Max-Age=(\d+)/i)?.[1]
+    );
+  const updatedExpiry = () =>
+    (mocks.client.session.update.mock.calls.at(-1)?.[0] as any)?.data?.expires_at as Date;
+
+  // The browser keeps the dont_remember cookie while viewing as someone,
+  // which skips the refresh; a request without it reaches the refresh.
+  it('stays put on a database read without dont_remember that is due a refresh', async () => {
+    addSession(VIEWING_TOKEN, 'student-1', 'admin-1', 3_600_000);
+    const expiresAt = mocks.state.sessions[0]!.expires_at as Date;
+
+    const res = await read(VIEWING_TOKEN);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      session: { userId: 'student-1', impersonatedBy: 'admin-1' },
+      user: { id: 'student-1' },
+    });
+    expect(mocks.client.session.update).toHaveBeenCalledTimes(1);
+    expect(updatedExpiry().getTime()).toBe(expiresAt.getTime());
+    // The cookie is set again with the time the session has left.
+    expect(maxAge(res)).toBeGreaterThan(3_500);
+    expect(maxAge(res)).toBeLessThanOrEqual(3_600);
+  });
+
+  it('still extends an ordinary session that is due a refresh', async () => {
+    addSession('token-due', 'admin-1', null, 2 * 86_400_000);
+
+    const res = await read('token-due');
+
+    expect(res.status).toBe(200);
+    expect(mocks.client.session.update).toHaveBeenCalledTimes(1);
+    const sevenDays = 7 * 86_400_000;
+    expect(updatedExpiry().getTime()).toBeGreaterThan(Date.now() + sevenDays - 60_000);
+    expect(maxAge(res)).toBeGreaterThan(sevenDays / 1000 - 60);
+  });
+});
+
 describe('isViewingAsAnotherUser', () => {
   it('is true for every viewing-as jar and false for the own jar and no session', async () => {
     const j = await jars();
