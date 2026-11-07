@@ -69,8 +69,11 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
+      # An exact version, the one the last green deploy used (0.44.9, prod run
+      # 40053064558), so a deploy does not pick up whatever was published last.
+      # Move it on deliberately.
       - name: Install Infisical CLI
-        run: npm install -g @infisical/cli
+        run: npm install -g @infisical/cli@0.44.9
 
       # Secrets are pushed AFTER the deploy, and that order is required:
       # `wrangler secret bulk` targets an existing Worker script, so on a
