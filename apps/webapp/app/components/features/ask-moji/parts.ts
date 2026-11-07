@@ -59,7 +59,7 @@ const httpUrl = (raw: unknown): string | null => {
  * The source chips: only `cite_content` calls whose output is available and
  * says `ok: true` (the server checked the citation for this viewer), never
  * the model's input alone. The title is the server's. The link is built by
- * the same helper the old widget used, from the server's type and id/path;
+ * `buildContentReferenceUrl`, from the server's type and id/path;
  * the server's own `url` only when that helper has none and it is http(s).
  * One chip per target.
  */

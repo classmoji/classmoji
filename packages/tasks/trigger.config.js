@@ -55,8 +55,8 @@ function teamSetSolverPythonOptions() {
 }
 
 /**
- * The quiz chat agent's tasks (`quiz-attempt`, `explore-repo`) live in the
- * private ai-agent submodule. Trigger.dev registers only task files inside this
+ * The chat agents' tasks (`quiz-attempt`, `ask-moji`) live in
+ * the private ai-agent submodule. Trigger.dev registers only task files inside this
  * project, so `src/private-agents` re-exports them (`@classmoji/ai-agent/trigger`),
  * and `dirs` lists it only when the submodule's entry exists: a checkout
  * without the submodule (or with one from before the tasks moved) builds and
@@ -74,7 +74,7 @@ const hasPrivateAgents = existsSync(privateAgentsEntry);
 
 /**
  * Refuses a deployed build without the private agents: deploying it would
- * remove `quiz-attempt` and `explore-repo` from the environment. Runs from
+ * remove `quiz-attempt` and `ask-moji` from the environment. Runs from
  * `build.extensions` only, which the deployed worker never sees, so the throw
  * reaches the CLI (CI and a manual `trigger:deploy` alike), never a run.
  * `trigger dev` (target "dev") starts without them.
@@ -85,7 +85,7 @@ function requirePrivateAgentsOnDeploy() {
     onBuildStart(context) {
       if (context.target === 'dev' || hasPrivateAgents) return;
       throw new Error(
-        `[private-agents] ${privateAgentsEntry} is missing, so this ${context.target} build would ship without the quiz-attempt and ask-moji chat agents and the explore-repo task. ` +
+        `[private-agents] ${privateAgentsEntry} is missing, so this ${context.target} build would ship without the quiz-attempt and ask-moji chat agents. ` +
           'Populate the ai-agent submodule (git submodule update --init apps/ai-agent) at a commit that has src/trigger, then build again.'
       );
     },

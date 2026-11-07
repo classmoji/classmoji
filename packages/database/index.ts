@@ -44,8 +44,8 @@ export {
 // ─── OAuth tokens at rest ────────────────────────────────────────────────────
 //
 // OAuth tokens (sign-in accounts, Gitlab connections) are stored as plain
-// text. Encryption at rest was switched off: other readers (the ai-agent
-// service) read the columns directly, and a lost BETTER_AUTH_SECRET would have
+// text. Encryption at rest was switched off: other readers (the since-retired
+// ai-agent service) read the columns directly, and a lost BETTER_AUTH_SECRET would have
 // made every stored token unreadable. Values written while it was on carry the
 // `enc1:` prefix and are still decrypted on read (keyed off BETTER_AUTH_SECRET);
 // the decryptOAuthTokens script turns them back into plain text.
@@ -60,8 +60,8 @@ function tokenKey(): Buffer {
   const secret = process.env.BETTER_AUTH_SECRET;
   // Never the public development key in production: tokens written with it are
   // as good as plain text, and ones written with the real key would read back
-  // as null. Every process that touches tokens (webapp, workers, hook-station,
-  // ai-agent) needs BETTER_AUTH_SECRET.
+  // as null. Every process that touches tokens (webapp, Trigger workers,
+  // hook-station, ...) needs BETTER_AUTH_SECRET.
   if (!secret && process.env.NODE_ENV === 'production') {
     throw new Error('BETTER_AUTH_SECRET is not set: encrypted OAuth tokens cannot be read');
   }

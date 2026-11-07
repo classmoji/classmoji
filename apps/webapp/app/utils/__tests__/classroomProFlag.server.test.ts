@@ -47,9 +47,7 @@ afterEach(() => {
 });
 
 describe('quizzesVisibleOrThrow', () => {
-  it('reads no AI agent variable: with them unset it answers what the service answers', async () => {
-    vi.stubEnv('AI_AGENT_URL', '');
-    vi.stubEnv('AI_AGENT_SHARED_SECRET', '');
+  it('answers what the service answers, for both names', async () => {
     mocks.quizzesVisibleOrThrow.mockResolvedValue(true);
 
     await expect(quizzesVisibleOrThrow(CLASSROOM_ID)).resolves.toBe(true);

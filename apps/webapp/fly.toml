@@ -43,7 +43,7 @@ primary_region = 'iad'
 # baseline. On 2026-09-28 ten concurrent quiz takers (each open quiz page
 # revalidates every 1.5 s while waiting) drained the 2x bucket in about nine
 # minutes; throttled, it timed out 5 s Prisma transactions and missed the
-# ai-agent's Socket.IO pings. Dedicated cores have no burst cliff.
+# (since retired) ai-agent service's Socket.IO pings. Dedicated cores have no burst cliff.
 [[vm]]
   memory = '4gb'
   cpu_kind = 'performance'

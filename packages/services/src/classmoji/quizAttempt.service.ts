@@ -84,39 +84,6 @@ interface StoredQuizQuestionResult extends QuizQuestionResultInput {
   recorded_at: string;
 }
 
-interface CodeAwareQuizAttempt {
-  id: string;
-  quiz: {
-    repository_id: string | null;
-    classroom_id: string;
-    system_prompt: string | null;
-    rubric_prompt: string | null;
-    question_count: number | null;
-    subject: string | null;
-    difficulty_level: string | null;
-  };
-}
-
-interface CodeAwareQuizRepository {
-  name: string;
-}
-
-interface CodeAwareQuizClassroom {
-  slug: string;
-  git_organization?: {
-    github_installation_id: string | null;
-  } | null;
-}
-
-interface QuizAgentConfig {
-  systemPrompt: string;
-}
-
-interface QuizOpeningResult {
-  response?: string | null;
-  explorationSteps?: Prisma.InputJsonArray | null;
-}
-
 const isJsonObject = (
   value: Prisma.JsonValue | Prisma.InputJsonValue | null | undefined
 ): value is Prisma.JsonObject =>
@@ -173,10 +140,11 @@ const toStoredQuizQuestionResultJson = (
 });
 
 /**
- * How many questions an attempt asks. The ai-agent stores the quiz's question
- * count in `agent_config` when the attempt starts and keeps asking that many
- * even if the quiz is edited afterwards, so that value decides. An attempt the
- * ai-agent has not started yet falls back to the quiz's own count.
+ * How many questions an attempt asks. The first admitted chat turn pins the
+ * quiz's question count in `agent_config` (`quizChat`), and the attempt keeps
+ * asking that many even if the quiz is edited afterwards, so that value
+ * decides. An attempt with no admitted turn yet falls back to the quiz's own
+ * count.
  */
 export const resolveAttemptQuestionCount = (
   agentConfig: Prisma.JsonValue | null | undefined,
@@ -344,8 +312,8 @@ export const findById = async (attemptId: string) => {
   );
 };
 
-// Bridge function: saves messages to AIConversation (which ai-agent also uses)
-// This allows webapp to save initial messages before ai-agent SSE connects
+// Saves a message to the attempt's AIConversation (the transcript store),
+// creating and linking the conversation on first use.
 export const addMessage = async (
   attemptId: string,
   role: string,
@@ -401,7 +369,7 @@ export const addMessage = async (
 };
 
 export const getMessages = async (attemptId: string) => {
-  // All messages are stored in AIConversation (ai-agent owns persistence)
+  // All messages are stored in AIConversation (written through quizChat)
   // The relation is: QuizAttempt.conversation_id -> AIConversation.id
   const conversation = await getPrisma().aIConversation.findFirst({
     where: { quiz_attempt: { id: attemptId } },
@@ -936,13 +904,13 @@ export const deleteAttempt = async (attemptId: string) => {
 };
 
 /**
- * Transcript copy for a quiz reply the ai-agent failed to produce, matching
- * what api.quiz saves for one today.
+ * Transcript copy for a quiz reply the retired ai-agent runtime failed to
+ * produce (its `AGENT_FAILURE` / `GENERAL_FAILURE` rows).
  */
 const AGENT_FAILURE_REPLY = "That reply couldn't be finished. Please send your message again.";
 
 /**
- * ai-agent codes whose saved text is the ai-agent's own copy for students.
+ * Retired ai-agent runtime codes whose saved text is its own copy for students.
  * Older API_ERROR rows hold lines that describe the upstream failure ("the AI
  * service is temporarily busy"), so they read as the fixed line.
  */
@@ -951,14 +919,14 @@ const STUDENT_FACING_AGENT_CODES = ['BUDGET_EXCEEDED', 'turn_in_progress'];
 type TranscriptFields = { content: string; metadata: Prisma.JsonValue | null };
 
 /**
- * A failed-reply row as the transcript shows it. Older rows saved the
- * ai-agent's raw error as `content` and again as `metadata.errorMessage`;
- * newer ones save fixed copy and `{ errorType, code }`. Both read the same
- * here: the saved text only for a student-facing code, the fixed line
- * otherwise, and no metadata beyond the type and code. A GENERAL_FAILURE row
- * (api.quiz's sendMessage failed outside the ai-agent call) reads as the fixed
- * line too, whatever older copy it was saved with. Every other row passes
- * through unchanged.
+ * A failed-reply row as the transcript shows it. Older rows saved the retired
+ * ai-agent runtime's raw error as `content` and again as
+ * `metadata.errorMessage`; newer ones save fixed copy and `{ errorType, code }`.
+ * Both read the same here: the saved text only for a student-facing code, the
+ * fixed line otherwise, and no metadata beyond the type and code. A
+ * GENERAL_FAILURE row (the retired api.quiz sendMessage failed outside the
+ * agent call) reads as the fixed line too, whatever older copy it was saved
+ * with. Every other row passes through unchanged.
  */
 const toTranscriptFields = ({ content, metadata }: TranscriptFields): TranscriptFields => {
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
@@ -984,7 +952,7 @@ export const findWithMessages = async (attemptId: string) => {
     throw new QuizAttemptNotFoundError();
   }
 
-  // All messages are stored in AIConversation (ai-agent owns persistence)
+  // All messages are stored in AIConversation (written through quizChat)
   const conversation = await getPrisma().aIConversation.findFirst({
     where: { quiz_attempt: { id: attemptId } },
     include: {
@@ -1016,21 +984,6 @@ export const findWithMessages = async (attemptId: string) => {
     // Include classroom settings for LLM configuration
     classroomSettings: attempt.quiz.classroom?.settings,
   };
-};
-
-// Function to increment the questions asked counter
-export const incrementQuestionsAsked = async (attemptId: string) => {
-  const attempt = await getPrisma().quizAttempt.findUnique({
-    where: { id: attemptId }, // UUID string, no BigInt conversion needed
-    select: { questions_asked: true },
-  });
-
-  return getPrisma().quizAttempt.update({
-    where: { id: attemptId }, // UUID string, no BigInt conversion needed
-    data: {
-      questions_asked: (attempt?.questions_asked ?? 0) + 1,
-    },
-  });
 };
 
 // Update agent_config field for an attempt
@@ -1321,129 +1274,6 @@ export const createNew = async (
     maxAttempts: maxAttempts,
     attemptId: newAttempt.id,
     newAttempt: true,
-  };
-};
-
-/**
- * Initialize a code-aware quiz by cloning the student's gitRepo and generating opening message
- * @param {Object} attempt - The quiz attempt object with quiz and assignment info
- * @param {string} userId - The user ID
- * @param {Object} codebaseManager - The codebase manager instance
- * @param {Function} getInstallationToken - Function to get GitHub installation token
- * @param {Function} createQuizAgent - Function to create quiz agent config
- * @param {Function} generateQuizResponse - Function to generate quiz response
- * @returns {Promise<{codebasePath: string, openingMessage: string, explorationSteps: Array}>}
- */
-export const initializeCodeAwareQuiz = async (
-  attempt: CodeAwareQuizAttempt,
-  userId: string,
-  codebaseManager: {
-    cloneForAttempt: (
-      attemptId: string,
-      orgLogin: string,
-      repoName: string,
-      accessToken: string
-    ) => Promise<string>;
-  },
-  getInstallationToken: (installationId: string | null | undefined) => Promise<string>,
-  createQuizAgent: (
-    codebasePath: string,
-    options: {
-      systemPrompt: string | null;
-      rubricPrompt: string | null;
-      questionCount: number;
-      subject: string | null;
-      difficultyLevel: string | null;
-    },
-    attemptId: string
-  ) => QuizAgentConfig,
-  generateQuizResponse: (
-    agentConfig: QuizAgentConfig,
-    conversationHistory: unknown[],
-    systemPrompt: string,
-    questionsAsked: number,
-    questionCount: number
-  ) => Promise<QuizOpeningResult>,
-  findStudentRepository: (
-    repositoryId: string | null,
-    userId: string
-  ) => Promise<CodeAwareQuizRepository | null>,
-  findClassroomById: (classroomId: string) => Promise<CodeAwareQuizClassroom>,
-  addMessage: (
-    attemptId: string,
-    role: string,
-    content: string,
-    hasQuestion?: boolean,
-    metadata?: Prisma.InputJsonValue | null
-  ) => Promise<unknown>,
-  incrementQuestionsAsked: (attemptId: string) => Promise<unknown>
-) => {
-  // Find student's gitRepo
-  const repo = await findStudentRepository(attempt.quiz.repository_id, userId);
-  if (!repo) {
-    throw new Error('No gitRepo found for this repository');
-  }
-
-  // Get classroom and GitHub token
-  const classroom = await findClassroomById(attempt.quiz.classroom_id);
-  const githubToken = await getInstallationToken(
-    classroom.git_organization?.github_installation_id
-  );
-
-  // Clone gitRepo
-  const codebasePath = await codebaseManager.cloneForAttempt(
-    attempt.id.toString(),
-    classroom.slug,
-    repo.name,
-    githubToken
-  );
-
-  // Create agent configuration
-  const agentConfig = createQuizAgent(
-    codebasePath,
-    {
-      systemPrompt: attempt.quiz.system_prompt,
-      rubricPrompt: attempt.quiz.rubric_prompt,
-      questionCount: attempt.quiz.question_count || 5,
-      subject: attempt.quiz.subject,
-      difficultyLevel: attempt.quiz.difficulty_level,
-    },
-    attempt.id
-  );
-
-  // Generate opening message
-  const openingResult = await generateQuizResponse(
-    agentConfig,
-    [], // Empty conversation history
-    agentConfig.systemPrompt,
-    0, // No questions asked yet
-    attempt.quiz.question_count || 5
-  );
-
-  if (!openingResult || !openingResult.response) {
-    throw new Error('Agent returned empty response');
-  }
-
-  const openingMessage = openingResult.response;
-  const hasQuestion = openingMessage.includes('?');
-
-  // Store with exploration metadata if available
-  const openingMetadata =
-    openingResult.explorationSteps && openingResult.explorationSteps.length > 0
-      ? { explorationSteps: openingResult.explorationSteps }
-      : null;
-
-  // Save opening message
-  await addMessage(attempt.id, 'ASSISTANT', openingMessage, hasQuestion, openingMetadata);
-
-  if (hasQuestion) {
-    await incrementQuestionsAsked(attempt.id);
-  }
-
-  return {
-    codebasePath,
-    openingMessage,
-    explorationSteps: openingResult.explorationSteps || [],
   };
 };
 

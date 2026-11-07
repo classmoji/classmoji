@@ -184,7 +184,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       endedBy: messageLimit?.endedBy ?? null,
       viewer: 'staff',
     }),
-    // Use unified messages from getAttemptWithMessages (ai-agent owns persistence)
+    // Use unified messages from getAttemptWithMessages (the AIConversation transcript)
     messages: isChatAttempt ? [] : attemptData.messages || [],
     transcript,
     // The opening was admitted (its hidden row is stored), even when its reply

@@ -46,7 +46,7 @@ jobs:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         run: |
           case "$SERVICE" in
-            webapp|ai-agent|hook-station|collab|mcp|pages|slides|admin) ;;
+            webapp|hook-station|collab|mcp|pages|slides|admin) ;;
             *) echo "Unsupported staging service: $SERVICE" >&2; exit 1 ;;
           esac
           APP="classmoji-${SERVICE}-staging"
@@ -55,9 +55,6 @@ jobs:
             exit 0
           fi
           DOCKERFILE="apps/${SERVICE}/Dockerfile"
-          if [ "$SERVICE" = ai-agent ]; then
-            DOCKERFILE=scripts/docker/ai-agent.staging.Dockerfile
-          fi
           # Browser apps upload source maps to Sentry when the secret exists;
           # without it the image builds exactly as before.
           set --

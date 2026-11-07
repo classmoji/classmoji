@@ -25,7 +25,7 @@ import { isTriggerConfigured } from '../helper/triggerConfig.ts';
  * by every user) would otherwise pay.
  */
 
-export type EntitlementDenialReason = 'pro_required' | 'not_found';
+export type EntitlementDenialReason = 'pro_required';
 
 export type EntitlementResult =
   | { allowed: true }
@@ -33,15 +33,14 @@ export type EntitlementResult =
 
 const ALLOWED: EntitlementResult = { allowed: true };
 const PRO_REQUIRED: EntitlementResult = { allowed: false, reason: 'pro_required' };
-const NOT_FOUND: EntitlementResult = { allowed: false, reason: 'not_found' };
 
 /**
  * Whether the syllabus bot may be served for this classroom.
  *
  * Pro-only, matching quizzes. Bring-your-own-key is intentionally NOT an access
- * path: `apps/ai-agent/src/llm/services/syllabusBot.js` falls back to the
- * platform key when the classroom key is empty, so "has a key" is not a safe
- * entitlement signal, and a non-empty key is not necessarily a working one. If
+ * path: Ask Moji falls back to the platform key when the classroom key is
+ * empty, so "has a key" is not a safe entitlement signal, and a non-empty key
+ * is not necessarily a working one. If
  * BYOK ever becomes a deliberate tier it should be designed once across every
  * AI feature — changing it starts here.
  */
@@ -124,26 +123,3 @@ export const isQuizRuntimeConfigured = (): boolean => isTriggerConfigured();
  */
 export const quizzesVisibleOrThrow = (classroomId: string): Promise<boolean> =>
   quizzesVisible(classroomId);
-
-/**
- * Same check, addressed by conversation — for the SSE stream route, which only
- * knows a conversation id.
- *
- * An unknown conversation is denied: the stream has no legitimate use for one
- * that does not exist. Reported as 'not_found' rather than 'pro_required' so a
- * data-integrity problem never renders to an owner as "buy Pro".
- */
-export const canUseSyllabusBotForConversation = async (
-  conversationId: string
-): Promise<EntitlementResult> => {
-  const conversation = await getPrisma().aIConversation.findUnique({
-    where: { id: conversationId },
-    select: { classroom_id: true },
-  });
-
-  if (!conversation) {
-    return NOT_FOUND;
-  }
-
-  return canUseSyllabusBot(conversation.classroom_id);
-};

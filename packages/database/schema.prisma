@@ -690,9 +690,9 @@ model ClassroomSettings {
   show_pages                   Boolean  @default(true)
   show_repos                   Boolean  @default(true)
   // Ask Moji's model and reasoning effort (low|medium|high|xhigh|max). Null =
-  // the platform default (the ai-agent's SYLLABUS_BOT_MODEL and
-  // SYLLABUS_BOT_EFFORT). Only a classroom with its own key can set these on
-  // the settings page; the ai-agent drops effort for a model that takes none.
+  // the platform default (SYLLABUS_BOT_MODEL and SYLLABUS_BOT_EFFORT on the
+  // Trigger.dev ask-moji task). Only a classroom with its own key can set these
+  // on the settings page; the task ignores them for a classroom without one.
   syllabus_bot_model           String?
   syllabus_bot_effort          String?
   // The owner's instructions Ask Moji follows (under the platform's rules), at
@@ -710,15 +710,15 @@ model ClassroomSettings {
   anthropic_api_key            String?
   code_aware_model             String?
   // Model for the code-aware quiz's repository-exploration sub-agent. Null =
-  // the platform EXPLORATION_MODEL. Runs in a Trigger.dev task on the platform
-  // Anthropic key, not anthropic_api_key above.
+  // the platform EXPLORATION_MODEL. Runs inside the quiz attempt on the same
+  // key as the attempt: anthropic_api_key above when set, else the platform's.
   exploration_model            String?
   // Reasoning effort per quiz phase: question and conversation turns (both quiz
   // types), final grading (both), and the exploration excerpt call. One of
-  // low|medium|high|xhigh|max; null = the platform default (the ai-agent's
-  // QUIZ_QUESTION_EFFORT, QUIZ_GRADING_EFFORT, EXPLORATION_EFFORT). Only a
-  // classroom with its own key can set these on the settings page; the ai-agent
-  // honors what is stored and drops it for a model that takes no effort.
+  // low|medium|high|xhigh|max; null = the platform default
+  // (QUIZ_QUESTION_EFFORT, QUIZ_GRADING_EFFORT, EXPLORATION_EFFORT on the
+  // Trigger.dev quiz tasks). Only a classroom with its own key can set these on
+  // the settings page; the tasks ignore them for a classroom without one.
   question_effort              String?
   grading_effort               String?
   exploration_effort           String?

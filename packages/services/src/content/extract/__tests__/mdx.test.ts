@@ -280,13 +280,13 @@ describe('markdown syntax becomes prose', () => {
   it('strips emphasis ONLY at word boundaries, so an identifier in plain prose survives', () => {
     // The code-span protection does not cover this: an env var named in running
     // prose without backticks reaches the emphasis rules unprotected, and a
-    // blanket `_` strip turns `AI_AGENT_URL` into `AIAGENTURL` — a name that
-    // matches nothing anyone can search for.
+    // blanket `_` strip turns `TRIGGER_SECRET_KEY` into `TRIGGERSECRETKEY` — a
+    // name that matches nothing anyone can search for.
     const result = extractMdxText(
-      '---\ntitle: Test\ndescription: d\n---\n\nSet AI_AGENT_URL and *also* __both__ of _these_ to enable it.\n'
+      '---\ntitle: Test\ndescription: d\n---\n\nSet TRIGGER_SECRET_KEY and *also* __both__ of _these_ to enable it.\n'
     );
     expect(result.ok).toBe(true);
-    expect(result.text).toContain('AI_AGENT_URL');
+    expect(result.text).toContain('TRIGGER_SECRET_KEY');
     expect(result.text).toContain('also');
     expect(result.text).not.toContain('*also*');
     expect(result.text).toContain('these');

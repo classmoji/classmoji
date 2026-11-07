@@ -196,7 +196,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       endedBy: messageLimit?.endedBy ?? null,
       viewer,
     }),
-    // Use unified messages from getAttemptWithMessages (ai-agent owns persistence)
+    // Use unified messages from getAttemptWithMessages (the AIConversation transcript)
     messages:
       viewer === 'student'
         ? messages.map(m =>

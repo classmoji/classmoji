@@ -313,7 +313,7 @@ describe('contract additions', () => {
     expect(ASK_MOJI_INSIGHT_DEFAULT_WEEKS).toBeLessThanOrEqual(INSIGHT_MAX_WEEKS);
     expect(ASK_MOJI_COPY.BUSY_ELSEWHERE).toBe('Ask Moji is answering in another window.');
     expect(Object.keys(ASK_MOJI_AVAILABILITY_COPY).sort()).toEqual(
-      ['NOT_ENABLED', 'NO_API_KEY', 'PRO_REQUIRED', 'RUNTIME_OFF', 'TRIGGER_NOT_CONFIGURED'].sort()
+      ['NOT_ENABLED', 'NO_API_KEY', 'PRO_REQUIRED', 'TRIGGER_NOT_CONFIGURED'].sort()
     );
     expect(AskMojiUsageSchema.safeParse({ ...serverOnlyAssistant.usage, extra: 1 }).success).toBe(
       false

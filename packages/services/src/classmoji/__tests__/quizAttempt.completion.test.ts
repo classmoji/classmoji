@@ -3,8 +3,8 @@
  *
  * An attempt completes once it has a recorded result for every question it
  * asks (1..N); until then completion raises QuizAttemptIncompleteError and
- * nothing is written. N is the count the ai-agent stored in `agent_config`
- * when the attempt started, else the quiz's own `question_count`. Only results
+ * nothing is written. N is the count pinned in `agent_config` when the
+ * attempt's first turn was admitted, else the quiz's own `question_count`. Only results
  * for questions 1..N count toward completion and the score. An attempt that is
  * already complete stays as it is.
  *

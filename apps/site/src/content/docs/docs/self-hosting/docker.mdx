@@ -7,8 +7,8 @@ Classmoji ships a production Dockerfile for every app, so you can build and run 
 
 ### What ships in the repo
 
-- **A production Dockerfile per app**: `webapp`, `slides`, `pages`, `hook-station`, `site`, and `ai-agent`. Each builds on Node 22 Alpine, generates the Prisma client at build time, and builds the app.
-- **A root `docker-compose.yml`, for local development only**. It runs Postgres, plus an optional `ai-agent` service behind a profile. It does not run the webapp, slides, pages, hook-station, or site. `npm run db:start` is just `docker compose up -d`.
+- **A production Dockerfile per app**: `webapp`, `slides`, `pages`, `hook-station`, and `site`. Each builds on Node 22 Alpine, generates the Prisma client at build time, and builds the app.
+- **A root `docker-compose.yml`, for local development only**. It runs Postgres only. It does not run the webapp, slides, pages, hook-station, or site. `npm run db:start` is just `docker compose up -d`.
 
 There is no compose or Kubernetes file that wires all the services together for production. You bring your own.
 
@@ -19,7 +19,7 @@ There is no compose or Kubernetes file that wires all the services together for 
 - **slides** and **pages**: companion apps for presentations and content
 - **hook-station**: receives Github and Stripe webhooks
 - **site**: this marketing and docs site (optional)
-- **ai-agent**: optional, only needed for Ask Moji on the `ai_agent` runtime (quizzes, and Ask Moji on the `trigger` runtime, run on the background jobs instead). It lives in a private module and may be unavailable to you.
+- **background jobs** (Trigger.dev, `packages/tasks`): also run quizzes and Ask Moji as chat agents. Those two agents live in a private module and may be unavailable to you; without it, a background-jobs deploy refuses to build, so quizzes and Ask Moji cannot run.
 
 ### Database
 
@@ -57,7 +57,6 @@ npm run fly:slides
 npm run fly:pages
 npm run fly:hooks
 npm run fly:site
-npm run fly:ai
 ```
 
 The webapp's release command runs database migrations on each deploy.

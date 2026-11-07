@@ -185,7 +185,6 @@ EOF
   local webapp_port=$((3000 + port_id * 10))
   local api_port=$((5000 + port_id * 10))
   local hook_port=$((4001 + port_id * 10))
-  local quiz_port=$((6000 + port_id * 10))
   local slides_port=$((6500 + port_id * 10))
 
   echo ""
@@ -201,7 +200,6 @@ EOF
   echo -e "  Webapp:     http://localhost:$webapp_port"
   echo -e "  API:        http://localhost:$api_port"
   echo -e "  Hook:       http://localhost:$hook_port"
-  echo -e "  Quiz Agent: http://localhost:$quiz_port"
   echo -e "  Slides:     http://localhost:$slides_port"
   echo ""
   echo -e "${YELLOW}To start developing:${CLEAR}"
@@ -345,10 +343,8 @@ cmd_env() {
   echo "  WEBAPP_PORT=$WEBAPP_PORT"
   echo "  API_PORT=$API_PORT"
   echo "  HOOK_PORT=$HOOK_PORT"
-  echo "  QUIZ_AGENT_PORT=$QUIZ_AGENT_PORT"
   echo "  SLIDES_PORT=$SLIDES_PORT"
   echo "  WEBAPP_URL=$WEBAPP_URL"
-  echo "  QUIZ_AGENT_URL=$QUIZ_AGENT_URL"
   echo "  SLIDES_URL=$SLIDES_URL"
   if [ -f ".devport" ]; then
     source .devport

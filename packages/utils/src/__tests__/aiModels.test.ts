@@ -93,8 +93,8 @@ describe('isAllowedModel', () => {
   });
 });
 
-// The one rule both quiz runtimes apply (the ai-agent and the Trigger.dev
-// quiz tasks import this function), so these are their parity tests.
+// The one rule the Trigger.dev chat tasks apply (they import this function),
+// so these are their parity tests.
 describe('pickQuizModel', () => {
   const NAMES = { setting: 'llm_model', env: 'LLM_MODEL' };
   const OFF_LIST = 'claude-haiku-4-5-20251001';

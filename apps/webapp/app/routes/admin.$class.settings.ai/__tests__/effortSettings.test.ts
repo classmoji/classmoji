@@ -40,8 +40,7 @@ vi.mock('@classmoji/services', () => ({
       canUseQuizzes: (...a: unknown[]) => mocks.canUseQuizzes(...a),
     },
     askMojiSession: {
-      askMojiRuntimeIsTrigger: () => false,
-      askMojiAvailable: vi.fn(),
+      askMojiAvailable: async () => ({ available: true }),
     },
   },
   ClassroomSettingsEntitlementError: mocks.EntitlementError,
@@ -50,7 +49,6 @@ vi.mock('@classmoji/services', () => ({
   getModelLabel: (id: string) => `label:${id}`,
 }));
 
-vi.mock('~/utils/aiFeatures.server', () => ({ isAIAgentConfigured: () => true }));
 vi.mock('~/components', () => ({ SettingSection: () => null }));
 vi.mock('~/hooks', () => ({ useGlobalFetcher: () => ({ fetcher: null }) }));
 
@@ -369,9 +367,8 @@ describe('loader', () => {
       quizzes_enabled: true,
       syllabus_bot_enabled: false,
       has_anthropic_key: true,
-      // This file runs on the AI agent runtime, which never reads them
-      // (askMojiSettings.test.ts covers the Trigger runtime).
-      syllabus_bot_instructions: null,
+      // The owner's own instructions (this page is owner-only).
+      syllabus_bot_instructions: 'Owner text',
     });
     expect(data).not.toHaveProperty('organization');
   });

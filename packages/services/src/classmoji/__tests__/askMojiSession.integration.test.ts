@@ -122,7 +122,6 @@ describe.skipIf(!RUN)('ask moji session module (integration)', () => {
   });
 
   beforeEach(async () => {
-    process.env.ASK_MOJI_RUNTIME = 'trigger';
     process.env.TRIGGER_SECRET_KEY = 'tr_test_x';
     process.env.ANTHROPIC_API_KEY = 'sk-test';
     trigger.startCalls.length = 0;
@@ -170,12 +169,6 @@ describe.skipIf(!RUN)('ask moji session module (integration)', () => {
 
   describe('availability', () => {
     it('names each reason, in order', async () => {
-      process.env.ASK_MOJI_RUNTIME = 'ai_agent';
-      expect(await session.askMojiAvailable({ classroomId: classX })).toEqual({
-        available: false,
-        reason: 'RUNTIME_OFF',
-      });
-      process.env.ASK_MOJI_RUNTIME = 'trigger';
       delete process.env.TRIGGER_SECRET_KEY;
       delete process.env.TRIGGER_ACCESS_TOKEN;
       expect(await session.askMojiAvailable({ classroomId: classX })).toEqual({

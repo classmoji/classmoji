@@ -33,7 +33,6 @@ vi.mock('@classmoji/services', () => ({
       findWithMessages: (...a: unknown[]) => findWithMessagesMock(...a),
       createNew: (...a: unknown[]) => createNewMock(...a),
       updateAgentConfig: vi.fn(),
-      incrementQuestionsAsked: vi.fn(),
     },
     gitRepo: { findByStudent: vi.fn() },
     aiConversation: { addMessage: vi.fn() },

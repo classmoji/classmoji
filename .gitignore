@@ -9,7 +9,6 @@ node_modules
 .agents/
 .mcp.json
 .cursor
-.codebases
 .devport
 .dev-context
 .vscode
