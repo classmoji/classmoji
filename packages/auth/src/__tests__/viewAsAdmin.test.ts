@@ -88,7 +88,11 @@ const mocks = vi.hoisted(() => {
     ),
     // better-auth reads the row it is about to delete, for the delete hooks.
     findMany: vi.fn(({ where }: any) =>
-      Promise.resolve(state.sessions.filter(row => row.token === where?.token))
+      Promise.resolve(
+        state.sessions.filter(row =>
+          where?.user_id !== undefined ? row.user_id === where.user_id : row.token === where?.token
+        )
+      )
     ),
     create: vi.fn(({ data }: any) => {
       const row = { id: `sess-new-${state.created.length}`, ...data };
@@ -107,7 +111,11 @@ const mocks = vi.hoisted(() => {
     deleteMany: vi.fn(({ where }: any) => {
       const before = state.sessions.length;
       state.sessions = state.sessions.filter(s =>
-        where?.id !== undefined ? s.id !== where.id : s.token !== where?.token
+        where?.id !== undefined
+          ? s.id !== where.id
+          : where?.user_id !== undefined
+            ? s.user_id !== where.user_id
+            : s.token !== where?.token
       );
       return Promise.resolve({ count: before - state.sessions.length });
     }),
@@ -501,6 +509,7 @@ describe('auditing View as on the server (PlatformAuditLog)', () => {
         tool: 'auth:view_as.end',
         sessionId: viewing.id,
         path: '/admin/stop-impersonating',
+        endedBy: 'admin',
       }),
     });
   });
@@ -563,6 +572,72 @@ describe('auditing View as on the server (PlatformAuditLog)', () => {
       ['impersonate.start', '/admin/impersonate-user'],
       ['impersonate.end', '/sign-out'],
     ]);
+    expect(auditRows()[1].data.endedBy).toBe('admin');
+  });
+
+  it('records the viewed user as the one who ended it when they sign out their own sessions', async () => {
+    const adminToken = signIn('admin-1');
+    await viewAs(adminToken, { userId: 'owner-1' });
+    const viewing = mocks.state.created[0]!;
+    const ownerToken = signIn('owner-1');
+
+    const res = await auth.handler(
+      new Request(`${BASE}/revoke-sessions`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          origin: 'http://localhost:3000',
+          cookie: await signedCookie(`${COOKIE_PREFIX}.session_token`, ownerToken),
+        },
+        body: '{}',
+      })
+    );
+
+    expect(res.status).toBe(200);
+    expect(mocks.state.sessions.some(s => s.token === viewing.token)).toBe(false);
+    expect(auditRows()).toHaveLength(2);
+    expect(auditRows()[1]).toMatchObject({
+      actor_id: 'admin-1',
+      action: 'impersonate.end',
+      target_id: 'owner-1',
+      data: { sessionId: viewing.id, path: '/revoke-sessions', endedBy: 'user' },
+    });
+  });
+
+  it('records the system as the one who ended it when its expired row is cleaned up', async () => {
+    const adminToken = signIn('admin-1');
+    await viewAs(adminToken, { userId: 'owner-1' });
+    const viewing = mocks.state.created[0]!;
+    viewing.expires_at = new Date(Date.now() - 1_000);
+
+    const res = await auth.handler(
+      new Request(`${BASE}/get-session`, {
+        headers: { cookie: await signedCookie(`${COOKIE_PREFIX}.session_token`, viewing.token) },
+      })
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toBeNull();
+    expect(mocks.state.sessions.some(s => s.token === viewing.token)).toBe(false);
+    expect(auditRows()[1]).toMatchObject({
+      action: 'impersonate.end',
+      data: { path: '/get-session', endedBy: 'system' },
+    });
+  });
+
+  it('records the system when a stop finds the viewing row already expired', async () => {
+    const adminToken = signIn('admin-1');
+    await viewAs(adminToken, { userId: 'owner-1' });
+    const viewing = mocks.state.created[0]!;
+    viewing.expires_at = new Date(Date.now() - 1_000);
+
+    await stop(viewing.token, adminToken);
+
+    expect(mocks.state.sessions.some(s => s.token === viewing.token)).toBe(false);
+    expect(auditRows()[1]).toMatchObject({
+      action: 'impersonate.end',
+      data: { path: '/admin/stop-impersonating', endedBy: 'system' },
+    });
   });
 
   it('still stops when the end row cannot be written', async () => {

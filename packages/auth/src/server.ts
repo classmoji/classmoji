@@ -339,6 +339,57 @@ function viewAsEndRowId(sessionId: string): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+/**
+ * Who ended a "View as" session, recorded on its end row as `data.endedBy`
+ * (the row's actor stays the platform admin, as on the start row):
+ *   - 'system': the row had expired; better-auth removes an expired row when
+ *     a request reads it.
+ *   - 'admin': the platform admin, who holds the viewing session. Stop
+ *     (/admin/stop-impersonating) and /sign-out delete the session the
+ *     request was made with, and any request made with a viewing session is
+ *     the admin's.
+ *   - 'user': the viewed user, from a session of their own (/revoke-sessions,
+ *     /revoke-session, /revoke-other-sessions, /change-password signing out
+ *     other sessions) or, signed out, by resetting their password with a code
+ *     sent to their address (revokeSessionsOnPasswordReset).
+ *   - null when none of these applies.
+ *
+ * `ctx` is the endpoint's: its `path` and the session it read
+ * (`ctx.context.session`). The expiry is checked first: a stop or a read of
+ * an expired row removes it under the request's own path and session.
+ */
+type ViewAsEndedBy = 'admin' | 'user' | 'system' | null;
+
+const ENDS_OWN_SESSION_PATHS: ReadonlySet<string> = new Set([
+  '/admin/stop-impersonating',
+  '/sign-out',
+]);
+
+const PASSWORD_RESET_PATHS: ReadonlySet<string> = new Set([
+  '/reset-password',
+  '/email-otp/reset-password',
+]);
+
+function viewAsEndedBy(
+  row: ViewAsSessionRow,
+  ctx: { path?: string; context?: { session?: unknown } } | null | undefined
+): ViewAsEndedBy {
+  if (row.expiresAt && new Date(row.expiresAt).getTime() <= Date.now()) return 'system';
+  if (ctx?.path && ENDS_OWN_SESSION_PATHS.has(ctx.path)) return 'admin';
+  const current = ctx?.context?.session as
+    | { session?: { impersonatedBy?: unknown } | null; user?: { id?: unknown } | null }
+    | null
+    | undefined;
+  const by = current?.session?.impersonatedBy || current?.user?.id;
+  if (by) {
+    if (String(by) === String(row.impersonatedBy)) return 'admin';
+    if (String(by) === String(row.userId)) return 'user';
+    return null;
+  }
+  if (ctx?.path && PASSWORD_RESET_PATHS.has(ctx.path)) return 'user';
+  return null;
+}
+
 /** Whether a Prisma write failed on a unique key (a row with that key exists). */
 const isDuplicateKeyError = (error: unknown): boolean =>
   (error as { code?: unknown } | null)?.code === 'P2002';
@@ -350,13 +401,15 @@ const isDuplicateKeyError = (error: unknown): boolean =>
  * app or path started or ended it. Actor: the platform admin
  * (`impersonatedBy`); target: the viewed user; `data`: the session id, the
  * viewed user's name as the admin app shows it, and the auth path that did
- * it. apps/admin's own `impersonate.request` row (written when an admin asks
- * to view as someone there) keeps the reason and classroom.
+ * it; on an end row, who ended it (viewAsEndedBy). apps/admin's own
+ * `impersonate.request` row (written when an admin asks to view as someone
+ * there) keeps the reason and classroom.
  */
 async function recordViewAs(
   action: 'impersonate.start' | 'impersonate.end',
   session: ViewAsSessionRow,
-  path: string | undefined
+  path: string | undefined,
+  endedBy: ViewAsEndedBy = null
 ): Promise<void> {
   const targetId = String(session.userId);
   const target = await getPrisma().user.findUnique({
@@ -378,7 +431,7 @@ async function recordViewAs(
         sessionId: session.id ? String(session.id) : null,
         targetName: target?.name ?? target?.email ?? targetId,
         path: path ?? null,
-        ...(action === 'impersonate.start' ? { expiresAt } : {}),
+        ...(action === 'impersonate.start' ? { expiresAt } : { endedBy }),
       },
     },
   });
@@ -1034,16 +1087,17 @@ export const auth = betterAuth({
         },
       },
       delete: {
-        // "View as" ended: stopped, signed out, or its expired row cleaned up
-        // (better-auth passes the deleted row). Never fails the deletion: a
-        // session must still end when its row can't be recorded. A duplicate
-        // key means another delete of the same session, running at the same
-        // time, has already recorded the end (viewAsEndRowId).
+        // "View as" ended: stopped, signed out, ended by the viewed user, or
+        // its expired row cleaned up (better-auth passes the deleted row; who
+        // ended it: viewAsEndedBy). Never fails the deletion: a session must
+        // still end when its row can't be recorded. A duplicate key means
+        // another delete of the same session, running at the same time, has
+        // already recorded the end (viewAsEndRowId).
         after: async (session, ctx) => {
           const row = session as ViewAsSessionRow | undefined;
           if (!row?.impersonatedBy) return;
           try {
-            await recordViewAs('impersonate.end', row, ctx?.path);
+            await recordViewAs('impersonate.end', row, ctx?.path, viewAsEndedBy(row, ctx));
           } catch (error) {
             if (isDuplicateKeyError(error)) return;
             console.error('[auth] View as end not recorded', error);
