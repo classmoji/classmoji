@@ -51,11 +51,17 @@ type HookSession =
  * hook runs for: from better-auth 1.5 the get-session endpoint refuses POST
  * (METHOD_NOT_ALLOWED) unless `session.deferSessionRefresh` is set, and a
  * hook's context carries the request's own method. 1.4.18 ignores it.
+ *
+ * `fromDatabase` reads the session row the `session_token` cookie names,
+ * skipping the `session_data` cookie cache.
  */
-async function lookupSessionForHook(ctx: {
-  context: { session?: unknown };
-  headers?: Headers;
-}): Promise<HookSession> {
+async function lookupSessionForHook(
+  ctx: {
+    context: { session?: unknown };
+    headers?: Headers;
+  },
+  { fromDatabase = false }: { fromDatabase?: boolean } = {}
+): Promise<HookSession> {
   const previous = ctx.context.session;
   try {
     const result = await (getSession() as unknown as (c: unknown) => Promise<unknown>)({
@@ -65,12 +71,52 @@ async function lookupSessionForHook(ctx: {
       headers: ctx.headers,
       returnHeaders: false,
       returnStatus: false,
-      query: { disableRefresh: true },
+      query: fromDatabase
+        ? { disableRefresh: true, disableCookieCache: true }
+        : { disableRefresh: true },
     });
     return (result ?? null) as HookSession;
   } finally {
     ctx.context.session = previous;
   }
+}
+
+/**
+ * The request's session read both ways better-auth reads it: from the
+ * `session_data` cookie cache (the default), and from the database row the
+ * `session_token` cookie names (`disableCookieCache`). They are separate
+ * cookies and need not describe the same session (api/routes/session.mjs).
+ * Endpoints differ in which one they read, and several take
+ * `?disableCookieCache` from the request's query, so a rule about "view as"
+ * holds only if it holds for both.
+ *
+ * Read one after the other, never together: each lookup puts
+ * `ctx.context.session` back when it finishes, and two at once would restore
+ * each other's value.
+ */
+async function lookupBothSessionsForHook(ctx: {
+  context: { session?: unknown };
+  headers?: Headers;
+}): Promise<{ cached: HookSession; stored: HookSession }> {
+  const cached = await lookupSessionForHook(ctx);
+  const stored = await lookupSessionForHook(ctx, { fromDatabase: true });
+  return { cached, stored };
+}
+
+/**
+ * The session the "view as" rules judge: whichever of the two reads is a
+ * platform admin viewing as another user (`impersonatedBy`), else the
+ * database one (else the cached one, when the row is gone but its cache is
+ * still within its own expiry). So a rule that refuses while viewing as
+ * someone refuses when either read says so.
+ */
+async function lookupViewAsSessionForHook(ctx: {
+  context: { session?: unknown };
+  headers?: Headers;
+}): Promise<HookSession> {
+  const { cached, stored } = await lookupBothSessionsForHook(ctx);
+  if (cached?.session?.impersonatedBy) return cached;
+  return stored ?? cached;
 }
 
 /**
@@ -158,6 +204,10 @@ export const VIEW_AS_PLATFORM_ADMINS_ONLY_MESSAGE =
  * not a platform admin is refused before the target is looked up, so the
  * answer is the same whoever the target is.
  *
+ * The caller is read both ways (lookupBothSessionsForHook): each read that
+ * names a user must name a platform admin who is not already viewing as
+ * someone.
+ *
  * The target id is read the way the endpoint reads it: its body schema is
  * `z.coerce.string()`, i.e. `String(userId)`, so `["<id>"]` and `<id>` name
  * the same user.
@@ -167,9 +217,10 @@ async function refuseViewingAsAnAdmin(ctx: {
   headers?: Headers;
   body?: unknown;
 }): Promise<void> {
-  const caller = (await lookupSessionForHook(ctx))?.user;
-  if (!caller?.id) return;
-  if (!mayViewAs(caller.id)) {
+  const { cached, stored } = await lookupBothSessionsForHook(ctx);
+  const callers = [cached, stored].filter(read => read?.user?.id);
+  if (callers.length === 0) return;
+  if (callers.some(read => read?.session?.impersonatedBy || !mayViewAs(String(read?.user?.id)))) {
     throw new APIError('FORBIDDEN', { message: VIEW_AS_PLATFORM_ADMINS_ONLY_MESSAGE });
   }
   const targetId = String((ctx.body as { userId?: unknown } | undefined)?.userId);
@@ -201,17 +252,57 @@ export const ACCOUNT_LINK_VIEWING_AS_MESSAGE =
   "Connecting or removing a sign-in account isn't available while viewing as another user.";
 
 /**
+ * better-auth's own endpoints that change the signed-in user's password,
+ * profile (name, image, school_id) or sessions. Exact paths, so
+ * /admin/stop-impersonating is not among them.
+ */
+export const ACCOUNT_CHANGE_PATHS: ReadonlySet<string> = new Set([
+  '/change-password',
+  '/update-user',
+  '/revoke-session',
+  '/revoke-sessions',
+  '/revoke-other-sessions',
+]);
+
+export const ACCOUNT_CHANGE_VIEWING_AS_MESSAGE =
+  "Changing a password, profile or sessions isn't available while viewing as another user.";
+
+/**
  * While a platform admin views as another user the session is that user's, so
  * a sign-in account linked or unlinked now would be added to or removed from
- * their account. Run from `hooks.before` on ACCOUNT_LINK_PATHS only.
+ * their account, and a password, profile or session change would be made to
+ * it. Run from `hooks.before` on ACCOUNT_LINK_PATHS and ACCOUNT_CHANGE_PATHS
+ * only. Refuses when either session read is viewing as someone
+ * (lookupViewAsSessionForHook).
  */
-async function refuseAccountLinkWhileViewingAs(ctx: {
-  context: { session?: unknown };
-  headers?: Headers;
-}): Promise<void> {
-  if ((await lookupSessionForHook(ctx))?.session?.impersonatedBy) {
-    throw new APIError('FORBIDDEN', { message: ACCOUNT_LINK_VIEWING_AS_MESSAGE });
+async function refuseWhileViewingAs(
+  ctx: { context: { session?: unknown }; headers?: Headers },
+  message: string
+): Promise<void> {
+  if ((await lookupViewAsSessionForHook(ctx))?.session?.impersonatedBy) {
+    throw new APIError('FORBIDDEN', { message });
   }
+}
+
+/**
+ * Whether this request's session is a platform admin viewing as another user,
+ * by either session read: the cookie cache or the database row (see
+ * lookupBothSessionsForHook). For route actions that change the signed-in
+ * user's credentials or email, which must refuse in both cases: some of what
+ * they call reads one, some the other.
+ *
+ * Both reads skip the session refresh. Not for use inside better-auth hooks:
+ * `auth.api.getSession` runs `hooks.before` itself; hooks use
+ * lookupViewAsSessionForHook.
+ */
+export async function isViewingAsAnotherUser(headers: Headers): Promise<boolean> {
+  const cached = await auth.api.getSession({ headers, query: { disableRefresh: true } });
+  if ((cached?.session as { impersonatedBy?: unknown } | undefined)?.impersonatedBy) return true;
+  const stored = await auth.api.getSession({
+    headers,
+    query: { disableRefresh: true, disableCookieCache: true },
+  });
+  return Boolean((stored?.session as { impersonatedBy?: unknown } | undefined)?.impersonatedBy);
 }
 
 // Signed sign-in-return tokens for public course sites. Re-exported from the
@@ -782,10 +873,11 @@ export const auth = betterAuth({
    * match on the cookie header. It does no session lookup, UNLESS the request
    * carries the saved-authorization cookie (`oidc_login_prompt`, set by
    * /mcp/authorize while signed out and short-lived), in which case the rules
-   * look the session up once, or it is /admin/impersonate-user, where the
-   * "view as" rule reads the caller's session and the target's role, or one of
-   * ACCOUNT_LINK_PATHS, where it reads whether the session is viewing as
-   * someone.
+   * look the session up, or it is /admin/impersonate-user, where the "view as"
+   * rule reads the caller's session and the target's role, or one of
+   * ACCOUNT_LINK_PATHS or ACCOUNT_CHANGE_PATHS, where it reads whether the
+   * session is viewing as someone. Each of these reads the session twice,
+   * from the cookie cache and from the database (lookupBothSessionsForHook).
    */
   databaseHooks: {
     session: {
@@ -845,9 +937,15 @@ export const auth = betterAuth({
         // app-connection rules below, which still run for this path when
         // it is allowed.
         if (ctx.path === IMPERSONATE_USER_PATH) await refuseViewingAsAnAdmin(ctx);
-        // No sign-in account is linked or unlinked while viewing as another
-        // user. The session is looked up on these three paths only.
-        if (ACCOUNT_LINK_PATHS.has(ctx.path)) await refuseAccountLinkWhileViewingAs(ctx);
+        // No sign-in account is linked or unlinked, and no password, profile
+        // or session is changed, while viewing as another user. The session
+        // is looked up on these paths only.
+        if (ACCOUNT_LINK_PATHS.has(ctx.path)) {
+          await refuseWhileViewingAs(ctx, ACCOUNT_LINK_VIEWING_AS_MESSAGE);
+        }
+        if (ACCOUNT_CHANGE_PATHS.has(ctx.path)) {
+          await refuseWhileViewingAs(ctx, ACCOUNT_CHANGE_VIEWING_AS_MESSAGE);
+        }
         // This path sends address-verification codes only; a reset code has
         // its own path (/email-otp/request-password-reset).
         if (
@@ -860,8 +958,9 @@ export const auth = betterAuth({
         // connected while viewing as another user (./appConnectionGuard.ts).
         // Every other path returns after string comparisons and one anchored
         // cookie-header match, with no session lookup unless the request
-        // carries the saved-authorization cookie (oidc_login_prompt).
-        return applyAppConnectionRules(ctx, () => lookupSessionForHook(ctx));
+        // carries the saved-authorization cookie (oidc_login_prompt). Viewing
+        // as someone by either session read counts.
+        return applyAppConnectionRules(ctx, () => lookupViewAsSessionForHook(ctx));
       }
 
       const authorization =

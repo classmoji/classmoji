@@ -171,7 +171,8 @@ describe('the hook session lookup on a POST request', () => {
       error: 'access_denied',
       error_description: CONNECT_APP_VIEWING_AS_MESSAGE,
     });
-    expect(lookups.methods).toEqual(['GET']);
+    // Two lookups, one from the cookie cache and one from the database.
+    expect(lookups.methods).toEqual(['GET', 'GET']);
   });
 
   it('lets approving consent through to the endpoint for an ordinary session', async () => {
