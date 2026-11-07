@@ -25,6 +25,7 @@ import { GITLAB_INSTANCE_CALLBACK_PATH, gitlabInstances } from './gitlabInstance
 import {
   applyAppConnectionRules,
   IMPERSONATE_USER_PATH,
+  type AppConnectionContextChange,
   type AppConnectionSession,
 } from './appConnectionGuard.ts';
 import { mapGitHubProfile, mapGitLabProfile, onAccountCreated } from './providerProfile.ts';
@@ -814,6 +815,165 @@ async function assertRefreshClientAuthenticated(
   if (!secretsEqual(client.clientSecret, secret)) throw refuse('invalid client_secret');
 }
 
+/**
+ * better-auth 1.4.18's token endpoint, served by the mcp plugin. Only the
+ * legacy token branch of `hooks.before` (guardLegacyMcpTokenRequest) runs on
+ * it; every rule in BEFORE_HOOK_RULES leaves it out.
+ */
+export const LEGACY_MCP_TOKEN_PATH = '/mcp/token';
+
+/**
+ * The legacy token branch of `hooks.before`, on LEGACY_MCP_TOKEN_PATH only.
+ *
+ * SECURITY (plan P1-2): the Ask Moji client never uses the token endpoint.
+ * Its access tokens are minted directly, one per chat turn, by
+ * `mintMcpAccessToken` (./mcpToken.ts): there is no authorization-code
+ * exchange and no refresh. Leaving the grant reachable would be an
+ * escalation: better-auth's refresh grant
+ * (node_modules/better-auth/dist/plugins/mcp/index.mjs:262-309) verifies the
+ * refresh token and the client id and NEVER a client secret, so anyone
+ * holding a leaked one-hour Ask Moji bearer could trade it for an
+ * indefinitely renewable seven-day credential. The minted row already carries
+ * an already-expired refresh token; this is the explicit, client-specific
+ * refusal on top of it, so the protection does not rest on one column value.
+ * A confidential client's refresh must also present its secret, and a
+ * disabled client gets nothing (assertRefreshClientAuthenticated).
+ */
+async function guardLegacyMcpTokenRequest(ctx: {
+  body?: unknown;
+  headers?: Headers;
+  request?: Request;
+}): Promise<void> {
+  const authorization =
+    ctx.request?.headers.get('authorization') ?? ctx.headers?.get('authorization') ?? null;
+  const { clientId, secret } = tokenRequestCredentials(ctx.body, authorization);
+  if (clientId === ASK_MOJI_CLIENT_ID) {
+    throw new APIError('UNAUTHORIZED', {
+      error: 'invalid_client',
+      error_description:
+        'This client does not use the token endpoint. Its access tokens are minted per request and cannot be refreshed.',
+    });
+  }
+
+  // Same strict comparison the grant makes before taking its refresh branch.
+  if (tokenRequestField(ctx.body, 'grant_type') === 'refresh_token') {
+    await assertRefreshClientAuthenticated(clientId, secret);
+  }
+}
+
+/** The parts of the `hooks.before` context the rules in BEFORE_HOOK_RULES read. */
+export interface BeforeHookContext {
+  path?: string;
+  context: { session?: unknown };
+  headers?: Headers;
+  query?: Record<string, unknown>;
+  body?: unknown;
+}
+
+/**
+ * The paths a `hooks.before` rule runs on: exactly the paths listed (`only`),
+ * or every path but the ones listed (`allExcept`).
+ */
+export type BeforeHookPaths =
+  | { readonly only: ReadonlySet<string> }
+  | { readonly allExcept: ReadonlySet<string> };
+
+/** One rule of `hooks.before` (see BEFORE_HOOK_RULES). */
+export interface BeforeHookRule {
+  /** Names the rule in tests (__tests__/beforeHookRules.test.ts). */
+  readonly name: string;
+  readonly paths: BeforeHookPaths;
+  /**
+   * Throws an APIError to refuse the request, or returns nothing, or returns
+   * a context change for better-auth to merge before the endpoint runs.
+   */
+  run(ctx: BeforeHookContext): Promise<AppConnectionContextChange | undefined | void>;
+}
+
+/** Whether a `hooks.before` rule runs on this path (BeforeHookRule.paths). */
+export function beforeHookRuleCovers(rule: BeforeHookRule, path: string | undefined): boolean {
+  if ('only' in rule.paths) return path !== undefined && rule.paths.only.has(path);
+  return path === undefined || !rule.paths.allExcept.has(path);
+}
+
+/**
+ * The rules `hooks.before` applies, in this order, each on the paths it
+ * lists, and nothing else decides where a rule runs: no rule sits inside
+ * another test of the path, so taking a branch out of the hook (such as the
+ * legacy token branch) can't take a rule off a path. Every rule's paths are
+ * pinned path by path in __tests__/beforeHookRules.test.ts.
+ *
+ * The order matters on /admin/impersonate-user: who may view as whom is
+ * decided before the app-connection rule acts on a saved authorization. Only
+ * the last rule returns a context change; a rule added later that returns one
+ * too has to say how the two combine (applyBeforeHookRules keeps the last).
+ */
+export const BEFORE_HOOK_RULES: readonly BeforeHookRule[] = [
+  {
+    // "View as" is started only by a platform admin and never targets an
+    // admin (refuseViewingAsAnAdmin). The app-connection rule still runs on
+    // this path when the start is allowed.
+    name: 'view-as-caller-and-target',
+    paths: { only: new Set([IMPERSONATE_USER_PATH]) },
+    run: ctx => refuseViewingAsAnAdmin(ctx),
+  },
+  {
+    // No sign-in account is linked or unlinked while viewing as another user.
+    name: 'account-link-while-viewing-as',
+    paths: { only: ACCOUNT_LINK_PATHS },
+    run: ctx => refuseWhileViewingAs(ctx, ACCOUNT_LINK_VIEWING_AS_MESSAGE),
+  },
+  {
+    // No password, profile or session is changed while viewing as another user.
+    name: 'account-change-while-viewing-as',
+    paths: { only: ACCOUNT_CHANGE_PATHS },
+    run: ctx => refuseWhileViewingAs(ctx, ACCOUNT_CHANGE_VIEWING_AS_MESSAGE),
+  },
+  {
+    // This path sends address-verification codes only; a reset code has its
+    // own path (/email-otp/request-password-reset).
+    name: 'send-code-type',
+    paths: { only: new Set([SEND_VERIFICATION_OTP_PATH]) },
+    run: async ctx => {
+      if ((ctx.body as { type?: unknown } | undefined)?.type !== 'email-verification') {
+        throw new APIError('BAD_REQUEST', { message: UNSUPPORTED_CODE_TYPE_MESSAGE });
+      }
+    },
+  },
+  {
+    // Connecting apps: the consent page is always shown, and no app is
+    // connected while viewing as another user (./appConnectionGuard.ts).
+    // On every path, because a saved authorization (the oidc_login_prompt
+    // cookie) is resumed by any response that sets a session cookie. A path
+    // other than the two authorization endpoints returns after string
+    // comparisons and one anchored cookie-header match, with no session
+    // lookup unless the request carries that cookie. Viewing as someone by
+    // either session read counts. Not on LEGACY_MCP_TOKEN_PATH, which sets
+    // no session cookie and has its own branch; the exception goes with that
+    // branch.
+    name: 'app-connection',
+    paths: { allExcept: new Set([LEGACY_MCP_TOKEN_PATH]) },
+    run: ctx => applyAppConnectionRules(ctx, () => lookupViewAsSessionForHook(ctx)),
+  },
+];
+
+/**
+ * Runs, in order, every rule of BEFORE_HOOK_RULES whose paths include this
+ * request's path. Returns the context change of the last rule that returned
+ * one, for better-auth to merge.
+ */
+async function applyBeforeHookRules(
+  ctx: BeforeHookContext
+): Promise<AppConnectionContextChange | undefined> {
+  let change: AppConnectionContextChange | undefined;
+  for (const rule of BEFORE_HOOK_RULES) {
+    if (!beforeHookRuleCovers(rule, ctx.path)) continue;
+    const result = await rule.run(ctx);
+    if (result) change = result;
+  }
+  return change;
+}
+
 export const auth = betterAuth({
   basePath: '/api/auth',
   baseURL: process.env.WEBAPP_URL,
@@ -984,33 +1144,6 @@ export const auth = betterAuth({
       updatedAt: 'updated_at',
     },
   },
-  /**
-   * SECURITY (plan P1-2): the Ask Moji client never uses the token endpoint.
-   *
-   * Its access tokens are minted directly, one per chat turn, by
-   * `mintMcpAccessToken` (./mcpToken.ts) — there is no authorization-code
-   * exchange and no refresh. Leaving the grant reachable would be an
-   * escalation: better-auth's refresh grant
-   * (node_modules/better-auth/dist/plugins/mcp/index.mjs:262-309) verifies the
-   * refresh token and the client id and NEVER a client secret, so anyone
-   * holding a leaked one-hour Ask Moji bearer could trade it for an indefinitely
-   * renewable seven-day credential. The minted row already carries an
-   * already-expired refresh token; this is the explicit, client-specific
-   * refusal on top of it, so the protection does not rest on one column value.
-   *
-   * This hook runs before EVERY endpoint (better-auth gives user hooks a
-   * `() => true` matcher — dist/api/to-auth-endpoints.mjs:159-170), including
-   * hot in-process `auth.api.*` calls, so the non-matching path must stay
-   * cheap: string comparisons plus, for the app-connection rules, one anchored
-   * match on the cookie header. It does no session lookup, UNLESS the request
-   * carries the saved-authorization cookie (`oidc_login_prompt`, set by
-   * /mcp/authorize while signed out and short-lived), in which case the rules
-   * look the session up, or it is /admin/impersonate-user, where the "view as"
-   * rule reads the caller's session and the target's role, or one of
-   * ACCOUNT_LINK_PATHS or ACCOUNT_CHANGE_PATHS, where it reads whether the
-   * session is viewing as someone. Each of these reads the session twice,
-   * from the cookie cache and from the database (lookupBothSessionsForHook).
-   */
   databaseHooks: {
     session: {
       create: {
@@ -1115,54 +1248,29 @@ export const auth = betterAuth({
       },
     },
   },
+  /**
+   * Runs before EVERY endpoint (better-auth gives user hooks a `() => true`
+   * matcher, dist/api/to-auth-endpoints.mjs:159-170), including hot
+   * in-process `auth.api.*` calls, so a path no rule needs must stay cheap:
+   * set lookups, plus the app-connection rule's string comparisons and one
+   * anchored match on the cookie header. The session is looked up only on
+   * /admin/impersonate-user (the caller's session and the target's role),
+   * ACCOUNT_LINK_PATHS and ACCOUNT_CHANGE_PATHS (whether the session is
+   * viewing as someone), the two authorization endpoints (/mcp/authorize, and
+   * /oauth2/consent when approving), and any request that carries the
+   * saved-authorization cookie (`oidc_login_prompt`, set by /mcp/authorize
+   * while signed out and short-lived). Each of these reads the session twice,
+   * from the cookie cache and from the database (lookupBothSessionsForHook).
+   *
+   * Two parts, neither nested in the other:
+   *   1. LEGACY_MCP_TOKEN_PATH only: guardLegacyMcpTokenRequest. better-auth
+   *      1.4.18 only; it goes with the mcp plugin's 1.4.18 options.
+   *   2. BEFORE_HOOK_RULES, in order, each rule on the paths it lists.
+   */
   hooks: {
     before: createAuthMiddleware(async ctx => {
-      if (ctx.path !== '/mcp/token') {
-        // "View as" never targets an admin. Refused before the
-        // app-connection rules below, which still run for this path when
-        // it is allowed.
-        if (ctx.path === IMPERSONATE_USER_PATH) await refuseViewingAsAnAdmin(ctx);
-        // No sign-in account is linked or unlinked, and no password, profile
-        // or session is changed, while viewing as another user. The session
-        // is looked up on these paths only.
-        if (ACCOUNT_LINK_PATHS.has(ctx.path)) {
-          await refuseWhileViewingAs(ctx, ACCOUNT_LINK_VIEWING_AS_MESSAGE);
-        }
-        if (ACCOUNT_CHANGE_PATHS.has(ctx.path)) {
-          await refuseWhileViewingAs(ctx, ACCOUNT_CHANGE_VIEWING_AS_MESSAGE);
-        }
-        // This path sends address-verification codes only; a reset code has
-        // its own path (/email-otp/request-password-reset).
-        if (
-          ctx.path === SEND_VERIFICATION_OTP_PATH &&
-          (ctx.body as { type?: unknown } | undefined)?.type !== 'email-verification'
-        ) {
-          throw new APIError('BAD_REQUEST', { message: UNSUPPORTED_CODE_TYPE_MESSAGE });
-        }
-        // Connecting apps: the consent page is always shown, and no app is
-        // connected while viewing as another user (./appConnectionGuard.ts).
-        // Every other path returns after string comparisons and one anchored
-        // cookie-header match, with no session lookup unless the request
-        // carries the saved-authorization cookie (oidc_login_prompt). Viewing
-        // as someone by either session read counts.
-        return applyAppConnectionRules(ctx, () => lookupViewAsSessionForHook(ctx));
-      }
-
-      const authorization =
-        ctx.request?.headers.get('authorization') ?? ctx.headers?.get('authorization') ?? null;
-      const { clientId, secret } = tokenRequestCredentials(ctx.body, authorization);
-      if (clientId === ASK_MOJI_CLIENT_ID) {
-        throw new APIError('UNAUTHORIZED', {
-          error: 'invalid_client',
-          error_description:
-            'This client does not use the token endpoint. Its access tokens are minted per request and cannot be refreshed.',
-        });
-      }
-
-      // Same strict comparison the grant makes before taking its refresh branch.
-      if (tokenRequestField(ctx.body, 'grant_type') === 'refresh_token') {
-        await assertRefreshClientAuthenticated(clientId, secret);
-      }
+      if (ctx.path === LEGACY_MCP_TOKEN_PATH) await guardLegacyMcpTokenRequest(ctx);
+      return applyBeforeHookRules(ctx);
     }),
   },
   /**
