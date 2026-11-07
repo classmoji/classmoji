@@ -42,7 +42,7 @@ import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { ClassmojiService } from '@classmoji/services';
 import { ASK_MOJI_CLIENT_ID } from '@classmoji/auth/mcp-token';
 import type { Role } from '@prisma/client';
-import type { ZodRawShape } from 'zod';
+import { z, type ZodRawShape } from 'zod';
 import type { Viewer } from '../auth/resolveViewer.ts';
 import { resolveClassroomContext, type ClassroomContext } from '../authz/classroomContext.ts';
 import { assertMutationAllowed, canEnterClassroom, withinRoleCeiling } from '../authz/pure.ts';
@@ -50,6 +50,8 @@ import { ToolError, type ToolErrorKind } from './errors.ts';
 import { DEFAULT_RATE_LIMIT, tryConsume, type RateLimitConfig } from './rateLimit.ts';
 import { localizePayload, localizeToolResult, renderZone } from './localTimes.ts';
 import { auditRead, type ReadAudit } from './audit.ts';
+import { withBoundedIssues } from './boundedIssues.ts';
+import { MAX_TOOL_INPUT_ELEMENTS, type HandlerTracker } from './inputLimits.ts';
 
 export type Scope = 'read' | 'write';
 
@@ -341,7 +343,43 @@ export function hiddenFromClient(name: string, viewer: Pick<Viewer, 'clientId'>)
   return normalized.startsWith(ASK_MOJI_TOOL_PREFIX) || ASK_MOJI_HIDDEN_TOOLS.has(normalized);
 }
 
-function wrapHandler(def: ToolDefinition<never>, viewer: Viewer) {
+/**
+ * What a tool answers, without running, when its request is already gone (the
+ * response has closed, or the SDK aborted the request). No client receives it.
+ */
+const REQUEST_CLOSED_RESULT: ToolResult = {
+  isError: true,
+  content: [
+    {
+      type: 'text',
+      text: JSON.stringify({
+        error: 'cancelled',
+        message: 'The request closed before the tool ran.',
+      }),
+    },
+  ],
+};
+
+function wrapHandler(def: ToolDefinition<never>, viewer: Viewer, tracker?: HandlerTracker) {
+  const run = runHandler(def, viewer);
+  return async (
+    args: Record<string, unknown>,
+    extra?: { signal?: AbortSignal }
+  ): Promise<ToolResult> => {
+    // The SDK aborts a request's signal when its transport closes; the tracker
+    // refuses once the response has closed. Either way the answer could not
+    // be sent, so the tool does not run.
+    if (extra?.signal?.aborted) return REQUEST_CLOSED_RESULT;
+    if (tracker && !tracker.enter()) return REQUEST_CLOSED_RESULT;
+    try {
+      return await run(args);
+    } finally {
+      tracker?.exit();
+    }
+  };
+}
+
+function runHandler(def: ToolDefinition<never>, viewer: Viewer) {
   return async (args: Record<string, unknown>): Promise<ToolResult> => {
     try {
       // 1. Scope and client (defense in depth — registration already filters
@@ -578,10 +616,38 @@ export const SERVER_INSTRUCTIONS =
   "weekday) and compare against `now_local` for 'today'/'tonight'/'this week'. Never state a " +
   'raw UTC clock time to a user as if it were local.';
 
-export function buildMcpServer(viewer: Viewer): McpServer {
+/**
+ * The zod object each tool's input is validated with: the same `z.object(shape)`
+ * the SDK would build from the raw shape, reporting a bounded set of issues
+ * (boundedIssues.ts). Built once per tool and shared, read-only, by every
+ * request's server. An empty shape is passed through as it is: the SDK builds
+ * those with zod 4 mini, and they have nothing to report anyway.
+ */
+const inputSchemas = new Map<string, ZodRawShape | z.ZodObject<ZodRawShape>>();
+
+function inputSchemaFor(def: ToolDefinition<never>): ZodRawShape | z.ZodObject<ZodRawShape> {
+  let schema = inputSchemas.get(def.name);
+  if (!schema) {
+    schema =
+      Object.keys(def.inputSchema).length === 0
+        ? def.inputSchema
+        : withBoundedIssues(z.object(def.inputSchema));
+    inputSchemas.set(def.name, schema);
+  }
+  return schema;
+}
+
+/**
+ * One request's server. `tracker` (routes/mcp.ts) counts the tool handlers the
+ * request runs, so its in-flight reservation is held until they return.
+ */
+export function buildMcpServer(viewer: Viewer, tracker?: HandlerTracker): McpServer {
+  // MAX_TOOL_INPUT_ELEMENTS is applied first by the route (routes/mcp.ts),
+  // which answers over-limit calls before they get here; the SDK's own check
+  // stays as a second line for any path that reaches the server directly.
   const server = new McpServer(
     { name: 'classmoji-mcp', version: '0.1.0' },
-    { instructions: SERVER_INSTRUCTIONS }
+    { instructions: SERVER_INSTRUCTIONS, maxToolInputElements: MAX_TOOL_INPUT_ELEMENTS }
   );
   for (const def of toolDefinitions.values()) {
     if (!viewer.scopes.has(def.scope)) continue;
@@ -591,10 +657,10 @@ export function buildMcpServer(viewer: Viewer): McpServer {
       {
         title: def.title,
         description: def.description,
-        inputSchema: def.inputSchema,
+        inputSchema: inputSchemaFor(def),
         annotations: { title: def.title, ...toolAnnotations(def) },
       },
-      wrapHandler(def, viewer) as never
+      wrapHandler(def, viewer, tracker) as never
     );
   }
 

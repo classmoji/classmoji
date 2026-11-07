@@ -1,0 +1,12 @@
+---
+// starlight-theme-black 0.7's Sidebar, rendering our SidebarSublist (with the
+// sidebar look of theme 0.6) instead of the theme's.
+import SidebarPersister from '@astrojs/starlight/components/SidebarPersister.astro';
+import SidebarSublist from './SidebarSublist.astro';
+
+const { sidebar } = Astro.locals.starlightRoute;
+---
+
+<SidebarPersister>
+  <SidebarSublist sublist={sidebar} />
+</SidebarPersister>

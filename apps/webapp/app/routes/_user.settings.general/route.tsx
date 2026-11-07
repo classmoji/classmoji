@@ -6,7 +6,7 @@ import { IconId } from '@tabler/icons-react';
 
 import useStore from '~/store';
 import { useCallout } from '@classmoji/ui-components';
-import { auth, requireAuth } from '@classmoji/auth/server';
+import { auth, isViewingAsAnotherUser, requireAuth } from '@classmoji/auth/server';
 import { authClient } from '@classmoji/auth/client';
 import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
@@ -16,6 +16,7 @@ import {
 } from '~/utils/emailVerification.server';
 import { normalizeSchoolId, SCHOOL_ID_MAX_LENGTH } from '~/utils/schoolId';
 import { normalizeEmail, INVALID_EMAIL_MESSAGE } from '~/utils/email';
+import { ACCOUNT_DETAILS_IMPERSONATION_MESSAGE } from '~/utils/impersonationSession';
 import type { Route } from './+types/route';
 
 const MIN_PASSWORD_LENGTH = 8;
@@ -32,9 +33,18 @@ const MIN_PASSWORD_LENGTH = 8;
  *    (a Github sign-up). Changing an existing password happens client-side
  *    through better-auth, which checks the current one.
  * The Github account's own email is never touched here.
+ *
+ * None of them runs while a platform admin is viewing as this user: a
+ * password, email or school id set then would be the viewed user's. The check
+ * reads the session from both the cookie cache and the database, since
+ * set-password's setPassword reads the database and the others use the
+ * cached session's user.
  */
 export const action = async ({ request }: Route.ActionArgs) => {
   const { userId } = await requireAuth(request);
+  if (await isViewingAsAnotherUser(request.headers)) {
+    return { error: ACCOUNT_DETAILS_IMPERSONATION_MESSAGE };
+  }
   const body = (await request.json()) as {
     intent?: string;
     email?: unknown;

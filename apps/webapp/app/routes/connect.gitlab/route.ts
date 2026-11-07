@@ -9,6 +9,10 @@ import {
   type GitLabConnectState,
 } from '~/utils/gitlabConnect.server';
 import { gitlabInstanceForUser } from '~/utils/gitlabInstance.server';
+import {
+  GITLAB_CONNECT_IMPERSONATION_MESSAGE,
+  isImpersonatingSession,
+} from '~/utils/impersonationSession';
 import type { Route } from './+types/route';
 
 /**
@@ -18,9 +22,16 @@ import type { Route } from './+types/route';
  *
  * The grant is on the instance the user signs in with (their school's GitLab,
  * or gitlab.com), through that instance's OAuth application.
+ *
+ * Not while viewing as another user: the session is theirs, so the connection
+ * would be stored on their account (the callback refuses too).
  */
 export const loader = async ({ request }: Route.LoaderArgs) => {
-  const { userId } = await requireAuth(request);
+  const authData = await requireAuth(request);
+  if (isImpersonatingSession(authData)) {
+    throw new Response(GITLAB_CONNECT_IMPERSONATION_MESSAGE, { status: 403 });
+  }
+  const { userId } = authData;
   const instanceId = (await gitlabInstanceForUser(userId)) ?? null;
   let client;
   try {

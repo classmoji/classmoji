@@ -1,0 +1,113 @@
+---
+// The docs sidebar list: theme 0.7's markup (which its mobile menu and
+// Starlight's sidebar state rely on) with theme 0.6's look: larger, darker
+// group titles, full-width links, and badges that show their text.
+import type { StarlightRouteData } from '@astrojs/starlight/route-data';
+
+interface Props {
+  sublist: StarlightRouteData['sidebar'];
+  nested?: boolean;
+}
+
+const { sublist, nested } = Astro.props;
+---
+
+<ul class:list={{ 'top-level': !nested }}>
+  {
+    sublist.map((entry, index) =>
+      entry.type === 'link' ? (
+        <li>
+          <a
+            href={entry.href}
+            aria-current={entry.isCurrent && 'page'}
+            class:list={['entry-link', entry.attrs.class]}
+            {...entry.attrs}
+          >
+            {entry.label}
+            {entry.badge && <span class="entry-badge">{entry.badge.text}</span>}
+          </a>
+        </li>
+      ) : (
+        <li class:list={['container-sidebar-entry', { first: index === 0 && !nested }]}>
+          <h4 class="entry-title">{entry.label}</h4>
+          <Astro.self sublist={entry.entries} nested />
+        </li>
+      ),
+    )
+  }
+</ul>
+
+<style>
+  ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .top-level {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    padding-top: 2rem;
+    padding-bottom: 2rem;
+  }
+
+  .container-sidebar-entry {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .container-sidebar-entry > ul {
+    display: grid;
+    grid-auto-flow: row;
+    grid-auto-rows: max-content;
+    gap: 0.125rem;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+  }
+
+  .entry-title {
+    margin: 0;
+    color: var(--foreground);
+    font-weight: 600;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 6px;
+  }
+
+  .entry-link {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    height: 2rem;
+    padding: 0 0.5rem;
+    border-radius: 0.5rem;
+    color: inherit;
+    font-size: 0.875rem;
+    font-weight: 500;
+    line-height: 1.25rem;
+    text-decoration: inherit;
+    text-underline-offset: 2px;
+  }
+
+  .entry-link[aria-current='page'] {
+    background-color: var(--accent);
+  }
+
+  .entry-link:hover {
+    color: var(--accent-foreground);
+    background-color: var(--accent);
+  }
+
+  .entry-badge {
+    margin-left: 0.5rem;
+    padding: 0.125rem 0.375rem;
+    border-radius: 6px;
+    background-color: rgb(173 250 29);
+    color: rgb(0 0 0);
+    font-size: 0.75rem;
+    line-height: 1;
+  }
+</style>

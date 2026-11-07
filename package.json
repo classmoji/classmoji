@@ -67,7 +67,7 @@
   },
   "dependencies": {
     "@infisical/sdk": "^5.0.2",
-    "@trigger.dev/sdk": "4.6.4",
+    "@trigger.dev/sdk": "4.8.3",
     "dayjs": "^1.11.13",
     "dotenv": "^16.4.5",
     "highlight.js": "^11.11.1",
@@ -80,12 +80,11 @@
     "@eslint/js": "^9.36.0",
     "@opentelemetry/core": "^2.12.0",
     "@opentelemetry/sdk-trace-base": "^2.12.0",
-    "@trigger.dev/build": "4.6.4",
+    "@trigger.dev/build": "4.8.3",
     "@types/async": "^3.2.25",
-    "@types/js-cookie": "^3.0.6",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/lodash": "^4.17.24",
-    "@types/node": "^22.18.6",
+    "@types/node": "^24.19.2",
     "@types/papaparse": "^5.5.2",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
@@ -105,9 +104,9 @@
     "turbo": "^2.3.3",
     "typescript": "^5.9.2"
   },
-  "packageManager": "npm@10.9.0",
+  "packageManager": "npm@10.9.9",
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=24.0.0"
   },
   "overrides": {
     "p-map": "^4.0.0",

@@ -33,9 +33,10 @@ import {
 } from '@classmoji/utils/ask-moji';
 import { contentVisibility } from './contentSearch.service.ts';
 // `quizzesEntitled`, not `quizzesVisible`: this resolver runs inside the
-// Trigger worker (the `ask-moji` task), whose env need not carry the Trigger
-// key. Ask Moji insights (webapp and MCP) reach it too, but only behind
-// `askMojiAvailable`, which already requires that key, so both answers agree.
+// Trigger worker (the `ask-moji` task), which is the quiz runtime itself, so
+// whether the runtime is configured is not the question there. Ask Moji
+// insights (webapp and MCP) reach it too, but only behind `askMojiAvailable`,
+// which already requires the Trigger key, so both answers agree.
 import { quizzesEntitled } from './entitlement.service.ts';
 import { isExpiredOpenAttempt } from './quizGrading.service.ts';
 

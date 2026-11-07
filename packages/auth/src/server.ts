@@ -1,4 +1,4 @@
-import { timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { betterAuth } from 'better-auth';
 import { APIError, createAuthMiddleware, getSession } from 'better-auth/api';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
@@ -22,11 +22,22 @@ import {
 } from './secret.ts';
 import { ASK_MOJI_CLIENT_ID } from './mcpToken.ts';
 import { GITLAB_INSTANCE_CALLBACK_PATH, gitlabInstances } from './gitlabInstances.ts';
-import { applyAppConnectionRules, type AppConnectionSession } from './appConnectionGuard.ts';
+import {
+  applyAppConnectionRules,
+  IMPERSONATE_USER_PATH,
+  type AppConnectionSession,
+} from './appConnectionGuard.ts';
 import { mapGitHubProfile, mapGitLabProfile, onAccountCreated } from './providerProfile.ts';
 
 export { AUTH_SECRET, COOKIE_PREFIX };
 export { CONNECT_APP_VIEWING_AS_MESSAGE } from './appConnectionGuard.ts';
+
+/** The session `lookupSessionForHook` returns: what the hooks below read of it. */
+type HookSession =
+  | (NonNullable<AppConnectionSession> & {
+      user?: { id?: string; role?: string | null } | null;
+    })
+  | null;
 
 /**
  * The current session, read from inside `hooks.before` the way better-auth's
@@ -35,25 +46,77 @@ export { CONNECT_APP_VIEWING_AS_MESSAGE } from './appConnectionGuard.ts';
  * caller can tell a failed lookup from no session; and the lookup leaves no
  * trace on the request (no session refresh, and `ctx.context.session` is put
  * back), so the endpoint then runs exactly as it would have.
+ *
+ * The lookup is always made as a GET, whatever the method of the request the
+ * hook runs for: from better-auth 1.5 the get-session endpoint refuses POST
+ * (METHOD_NOT_ALLOWED) unless `session.deferSessionRefresh` is set, and a
+ * hook's context carries the request's own method. 1.4.18 ignores it.
+ *
+ * `fromDatabase` reads the session row the `session_token` cookie names,
+ * skipping the `session_data` cookie cache.
  */
-async function lookupSessionForHook(ctx: {
-  context: { session?: unknown };
-  headers?: Headers;
-}): Promise<AppConnectionSession> {
+async function lookupSessionForHook(
+  ctx: {
+    context: { session?: unknown };
+    headers?: Headers;
+  },
+  { fromDatabase = false }: { fromDatabase?: boolean } = {}
+): Promise<HookSession> {
   const previous = ctx.context.session;
   try {
     const result = await (getSession() as unknown as (c: unknown) => Promise<unknown>)({
       ...ctx,
+      method: 'GET',
       asResponse: false,
       headers: ctx.headers,
       returnHeaders: false,
       returnStatus: false,
-      query: { disableRefresh: true },
+      query: fromDatabase
+        ? { disableRefresh: true, disableCookieCache: true }
+        : { disableRefresh: true },
     });
-    return (result ?? null) as AppConnectionSession;
+    return (result ?? null) as HookSession;
   } finally {
     ctx.context.session = previous;
   }
+}
+
+/**
+ * The request's session read both ways better-auth reads it: from the
+ * `session_data` cookie cache (the default), and from the database row the
+ * `session_token` cookie names (`disableCookieCache`). They are separate
+ * cookies and need not describe the same session (api/routes/session.mjs).
+ * Endpoints differ in which one they read, and several take
+ * `?disableCookieCache` from the request's query, so a rule about "view as"
+ * holds only if it holds for both.
+ *
+ * Read one after the other, never together: each lookup puts
+ * `ctx.context.session` back when it finishes, and two at once would restore
+ * each other's value.
+ */
+async function lookupBothSessionsForHook(ctx: {
+  context: { session?: unknown };
+  headers?: Headers;
+}): Promise<{ cached: HookSession; stored: HookSession }> {
+  const cached = await lookupSessionForHook(ctx);
+  const stored = await lookupSessionForHook(ctx, { fromDatabase: true });
+  return { cached, stored };
+}
+
+/**
+ * The session the "view as" rules judge: whichever of the two reads is a
+ * platform admin viewing as another user (`impersonatedBy`), else the
+ * database one (else the cached one, when the row is gone but its cache is
+ * still within its own expiry). So a rule that refuses while viewing as
+ * someone refuses when either read says so.
+ */
+async function lookupViewAsSessionForHook(ctx: {
+  context: { session?: unknown };
+  headers?: Headers;
+}): Promise<HookSession> {
+  const { cached, stored } = await lookupBothSessionsForHook(ctx);
+  if (cached?.session?.impersonatedBy) return cached;
+  return stored ?? cached;
 }
 
 /**
@@ -76,6 +139,303 @@ export const PLATFORM_ADMIN_USER_IDS: string[] = (process.env.PLATFORM_ADMIN_USE
   .split(',')
   .map(id => id.trim())
   .filter(Boolean);
+
+/**
+ * Whether a `User.role` value (better-auth's admin plugin field, a
+ * comma-separated list) names an admin role: any value that contains "admin",
+ * in any case, so `admin`, `Admin` and `user,admin` all count.
+ */
+export function roleIncludesAdmin(role: unknown): boolean {
+  return typeof role === 'string' && /admin/i.test(role);
+}
+
+/**
+ * Whether this user may start "view as": platform admins only
+ * (`PLATFORM_ADMIN_USER_IDS`), whatever their `role`. The admin plugin on its
+ * own would also let a user whose role is `admin` in; `hooks.before`
+ * (refuseViewingAsAnAdmin) and `databaseHooks.session.create.before` hold
+ * this rule. Pages read it to decide whether to offer "View as".
+ */
+export function mayViewAs(userId: string): boolean {
+  return PLATFORM_ADMIN_USER_IDS.includes(userId);
+}
+
+/** A platform admin, or a user whose role contains "admin". */
+async function isAdminUser(userId: string): Promise<boolean> {
+  if (PLATFORM_ADMIN_USER_IDS.includes(userId)) return true;
+  const user = await getPrisma().user.findUnique({
+    where: { id: userId },
+    select: { role: true },
+  });
+  return roleIncludesAdmin(user?.role);
+}
+
+export const VIEW_AS_ADMIN_REFUSED_MESSAGE = "You can't view as another admin.";
+
+/** The admin plugin's endpoints no app calls; `disabledPaths` turns them off. */
+export const ADMIN_PATHS_NOT_USED = [
+  '/admin/set-role',
+  '/admin/get-user',
+  '/admin/create-user',
+  '/admin/update-user',
+  '/admin/list-users',
+  '/admin/list-user-sessions',
+  '/admin/unban-user',
+  '/admin/ban-user',
+  '/admin/revoke-user-session',
+  '/admin/revoke-user-sessions',
+  '/admin/remove-user',
+  '/admin/set-user-password',
+  '/admin/has-permission',
+] as const;
+
+export const VIEW_AS_PLATFORM_ADMINS_ONLY_MESSAGE =
+  'Only platform admins can view as another user.';
+
+/**
+ * "View as" (the admin plugin's /admin/impersonate-user) is started only by a
+ * platform admin (`mayViewAs`), and never targets an admin: neither a
+ * platform admin nor a user whose role contains "admin". Run from
+ * `hooks.before` on that path only, so a refusal comes before the endpoint
+ * writes anything; `databaseHooks.session.create.before` holds the same rules
+ * for any session created with `impersonatedBy`.
+ *
+ * A signed-out request gets the endpoint's own 401. A signed-in caller who is
+ * not a platform admin is refused before the target is looked up, so the
+ * answer is the same whoever the target is.
+ *
+ * The caller is read both ways (lookupBothSessionsForHook). The database read
+ * must name a platform admin who is not already viewing as someone: the
+ * endpoint itself may read the cookie cache, which outlives a session row that
+ * has been signed out or revoked for up to its maxAge. When the cache names a
+ * user too, it must be the same user, and the same rules hold for it.
+ *
+ * The target id is read the way the endpoint reads it: its body schema is
+ * `z.coerce.string()`, i.e. `String(userId)`, so `["<id>"]` and `<id>` name
+ * the same user.
+ */
+async function refuseViewingAsAnAdmin(ctx: {
+  context: { session?: unknown };
+  headers?: Headers;
+  body?: unknown;
+}): Promise<void> {
+  const { cached, stored } = await lookupBothSessionsForHook(ctx);
+  const callers = [cached, stored].filter(read => read?.user?.id);
+  if (callers.length === 0) return;
+  if (
+    !stored?.user?.id ||
+    (cached?.user?.id && String(cached.user.id) !== String(stored.user.id)) ||
+    callers.some(read => read?.session?.impersonatedBy || !mayViewAs(String(read?.user?.id)))
+  ) {
+    throw new APIError('FORBIDDEN', { message: VIEW_AS_PLATFORM_ADMINS_ONLY_MESSAGE });
+  }
+  const targetId = String((ctx.body as { userId?: unknown } | undefined)?.userId);
+  if (await isAdminUser(targetId)) {
+    throw new APIError('FORBIDDEN', { message: VIEW_AS_ADMIN_REFUSED_MESSAGE });
+  }
+}
+
+/**
+ * Linking a sign-in account (better-auth's /link-social, the gitlabInstances
+ * plugin's /gitlab-instance/link) or unlinking one (/unlink-account).
+ */
+export const ACCOUNT_LINK_PATHS: ReadonlySet<string> = new Set([
+  '/link-social',
+  '/gitlab-instance/link',
+  '/unlink-account',
+]);
+
+/**
+ * The emailOTP plugin's "send a code" endpoint. Its body's `type` may be
+ * email-verification, sign-in or forget-password; the sign-in page only ever
+ * sends email-verification there, and `hooks.before` refuses the others.
+ */
+export const SEND_VERIFICATION_OTP_PATH = '/email-otp/send-verification-otp';
+
+export const UNSUPPORTED_CODE_TYPE_MESSAGE = 'Unsupported code type.';
+
+export const ACCOUNT_LINK_VIEWING_AS_MESSAGE =
+  "Connecting or removing a sign-in account isn't available while viewing as another user.";
+
+/**
+ * better-auth's own endpoints that change the signed-in user's password,
+ * profile (name, image, school_id) or sessions. Exact paths, so
+ * /admin/stop-impersonating is not among them.
+ */
+export const ACCOUNT_CHANGE_PATHS: ReadonlySet<string> = new Set([
+  '/change-password',
+  '/update-user',
+  '/revoke-session',
+  '/revoke-sessions',
+  '/revoke-other-sessions',
+]);
+
+export const ACCOUNT_CHANGE_VIEWING_AS_MESSAGE =
+  "Changing a password, profile or sessions isn't available while viewing as another user.";
+
+/**
+ * While a platform admin views as another user the session is that user's, so
+ * a sign-in account linked or unlinked now would be added to or removed from
+ * their account, and a password, profile or session change would be made to
+ * it. Run from `hooks.before` on ACCOUNT_LINK_PATHS and ACCOUNT_CHANGE_PATHS
+ * only. Refuses when either session read is viewing as someone
+ * (lookupViewAsSessionForHook).
+ */
+async function refuseWhileViewingAs(
+  ctx: { context: { session?: unknown }; headers?: Headers },
+  message: string
+): Promise<void> {
+  if ((await lookupViewAsSessionForHook(ctx))?.session?.impersonatedBy) {
+    throw new APIError('FORBIDDEN', { message });
+  }
+}
+
+/**
+ * Whether this request's session is a platform admin viewing as another user,
+ * by either session read: the cookie cache or the database row (see
+ * lookupBothSessionsForHook). For route actions that change the signed-in
+ * user's credentials or email, which must refuse in both cases: some of what
+ * they call reads one, some the other.
+ *
+ * Both reads skip the session refresh. Not for use inside better-auth hooks:
+ * `auth.api.getSession` runs `hooks.before` itself; hooks use
+ * lookupViewAsSessionForHook.
+ */
+export async function isViewingAsAnotherUser(headers: Headers): Promise<boolean> {
+  const cached = await auth.api.getSession({ headers, query: { disableRefresh: true } });
+  if ((cached?.session as { impersonatedBy?: unknown } | undefined)?.impersonatedBy) return true;
+  const stored = await auth.api.getSession({
+    headers,
+    query: { disableRefresh: true, disableCookieCache: true },
+  });
+  return Boolean((stored?.session as { impersonatedBy?: unknown } | undefined)?.impersonatedBy);
+}
+
+/** The session row fields "View as" auditing reads. */
+interface ViewAsSessionRow {
+  id?: string;
+  userId?: string;
+  impersonatedBy?: string | null;
+  expiresAt?: Date | string;
+}
+
+/**
+ * The id of a "View as" session's end row: the same for every attempt to
+ * write it, so the primary key holds one end row per session. Two deletes of
+ * one session at once (Stop sent twice, Stop alongside a sign-out) each read
+ * the row before either removes it, and each runs `session.delete.after`; the
+ * second write then fails with a duplicate key (P2002) instead of adding a
+ * second row. UUID-shaped (RFC 9562 version 8), from a SHA-256 of the session
+ * id.
+ */
+function viewAsEndRowId(sessionId: string): string {
+  const bytes = createHash('sha256')
+    .update(`impersonate.end:${sessionId}`)
+    .digest()
+    .subarray(0, 16);
+  bytes[6] = (bytes[6]! & 0x0f) | 0x80;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/**
+ * Who ended a "View as" session, recorded on its end row as `data.endedBy`
+ * (the row's actor stays the platform admin, as on the start row):
+ *   - 'system': the row had expired; better-auth removes an expired row when
+ *     a request reads it.
+ *   - 'admin': the platform admin, who holds the viewing session. Stop
+ *     (/admin/stop-impersonating) and /sign-out delete the session the
+ *     request was made with, and any request made with a viewing session is
+ *     the admin's.
+ *   - 'user': the viewed user, from a session of their own (/revoke-sessions,
+ *     /revoke-session, /revoke-other-sessions, /change-password signing out
+ *     other sessions) or, signed out, by resetting their password with a code
+ *     sent to their address (revokeSessionsOnPasswordReset).
+ *   - null when none of these applies.
+ *
+ * `ctx` is the endpoint's: its `path` and the session it read
+ * (`ctx.context.session`). The expiry is checked first: a stop or a read of
+ * an expired row removes it under the request's own path and session.
+ */
+type ViewAsEndedBy = 'admin' | 'user' | 'system' | null;
+
+const ENDS_OWN_SESSION_PATHS: ReadonlySet<string> = new Set([
+  '/admin/stop-impersonating',
+  '/sign-out',
+]);
+
+const PASSWORD_RESET_PATHS: ReadonlySet<string> = new Set([
+  '/reset-password',
+  '/email-otp/reset-password',
+]);
+
+function viewAsEndedBy(
+  row: ViewAsSessionRow,
+  ctx: { path?: string; context?: { session?: unknown } } | null | undefined
+): ViewAsEndedBy {
+  if (row.expiresAt && new Date(row.expiresAt).getTime() <= Date.now()) return 'system';
+  if (ctx?.path && ENDS_OWN_SESSION_PATHS.has(ctx.path)) return 'admin';
+  const current = ctx?.context?.session as
+    | { session?: { impersonatedBy?: unknown } | null; user?: { id?: unknown } | null }
+    | null
+    | undefined;
+  const by = current?.session?.impersonatedBy || current?.user?.id;
+  if (by) {
+    if (String(by) === String(row.impersonatedBy)) return 'admin';
+    if (String(by) === String(row.userId)) return 'user';
+    return null;
+  }
+  if (ctx?.path && PASSWORD_RESET_PATHS.has(ctx.path)) return 'user';
+  return null;
+}
+
+/** Whether a Prisma write failed on a unique key (a row with that key exists). */
+const isDuplicateKeyError = (error: unknown): boolean =>
+  (error as { code?: unknown } | null)?.code === 'P2002';
+
+/**
+ * One PlatformAuditLog row for "View as" starting (`impersonate.start`, from
+ * `databaseHooks.session.create.after`) or ending (`impersonate.end`, from
+ * `session.delete.after`, at most one per session: viewAsEndRowId), whichever
+ * app or path started or ended it. Actor: the platform admin
+ * (`impersonatedBy`); target: the viewed user; `data`: the session id, the
+ * viewed user's name as the admin app shows it, and the auth path that did
+ * it; on an end row, who ended it (viewAsEndedBy). apps/admin's own
+ * `impersonate.request` row (written when an admin asks to view as someone
+ * there) keeps the reason and classroom.
+ */
+async function recordViewAs(
+  action: 'impersonate.start' | 'impersonate.end',
+  session: ViewAsSessionRow,
+  path: string | undefined,
+  endedBy: ViewAsEndedBy = null
+): Promise<void> {
+  const targetId = String(session.userId);
+  const target = await getPrisma().user.findUnique({
+    where: { id: targetId },
+    select: { name: true, email: true },
+  });
+  const expiresAt = session.expiresAt ? new Date(session.expiresAt).toISOString() : null;
+  await getPrisma().platformAuditLog.create({
+    data: {
+      ...(action === 'impersonate.end' && session.id
+        ? { id: viewAsEndRowId(String(session.id)) }
+        : {}),
+      actor_id: String(session.impersonatedBy),
+      action,
+      target_type: 'user',
+      target_id: targetId,
+      data: {
+        tool: action === 'impersonate.start' ? 'auth:view_as.start' : 'auth:view_as.end',
+        sessionId: session.id ? String(session.id) : null,
+        targetName: target?.name ?? target?.email ?? targetId,
+        path: path ?? null,
+        ...(action === 'impersonate.start' ? { expiresAt } : { endedBy }),
+      },
+    },
+  });
+}
 
 // Signed sign-in-return tokens for public course sites. Re-exported from the
 // server entry for callers already importing from here; site code that must not
@@ -565,8 +925,11 @@ export const auth = betterAuth({
       userAgent: 'user_agent',
       createdAt: 'created_at',
       updatedAt: 'updated_at',
-      impersonatedBy: 'impersonated_by',
-    } as Record<string, string>,
+      // The admin plugin's `impersonatedBy` keeps its own name: Prisma's
+      // field is `impersonatedBy` (@map("impersonated_by")). These `fields`
+      // rename core fields only; plugin fields are renamed through the
+      // plugin's `schema` option (see admin() below).
+    },
     // The provider the session signed in with: its GitLab/Github mode.
     additionalFields: {
       sign_in_provider: { type: 'string', required: false, input: false },
@@ -607,13 +970,11 @@ export const auth = betterAuth({
     },
     // better-auth's `email` is users.email: the verified contact/school email,
     // also the password sign-in email. Git usernames live on Account.
+    // Core fields only; the admin plugin's ban fields are mapped in admin().
     fields: {
       createdAt: 'created_at',
       updatedAt: 'updated_at',
-      // Admin plugin fields
-      banReason: 'ban_reason',
-      banExpires: 'ban_expires_at',
-    } as Record<string, string>,
+    },
   },
   verification: {
     modelName: 'Verification',
@@ -644,7 +1005,11 @@ export const auth = betterAuth({
    * match on the cookie header. It does no session lookup, UNLESS the request
    * carries the saved-authorization cookie (`oidc_login_prompt`, set by
    * /mcp/authorize while signed out and short-lived), in which case the rules
-   * look the session up once.
+   * look the session up, or it is /admin/impersonate-user, where the "view as"
+   * rule reads the caller's session and the target's role, or one of
+   * ACCOUNT_LINK_PATHS or ACCOUNT_CHANGE_PATHS, where it reads whether the
+   * session is viewing as someone. Each of these reads the session twice,
+   * from the cookie cache and from the database (lookupBothSessionsForHook).
    */
   databaseHooks: {
     session: {
@@ -653,6 +1018,21 @@ export const auth = betterAuth({
         // is `/callback/:id`). That provider is the session's mode: a GitLab
         // session is shown only GitLab classrooms and GitLab identity.
         before: async (session, ctx) => {
+          // "View as" is started only by a platform admin and never targets
+          // an admin (see refuseViewingAsAnAdmin), whichever path creates the
+          // impersonated session.
+          const { impersonatedBy, userId } = session as {
+            impersonatedBy?: unknown;
+            userId?: unknown;
+          };
+          if (impersonatedBy) {
+            if (!mayViewAs(String(impersonatedBy))) {
+              throw new APIError('FORBIDDEN', { message: VIEW_AS_PLATFORM_ADMINS_ONLY_MESSAGE });
+            }
+            if (await isAdminUser(String(userId))) {
+              throw new APIError('FORBIDDEN', { message: VIEW_AS_ADMIN_REFUSED_MESSAGE });
+            }
+          }
           // A self-managed GitLab signs in through its own callback path.
           if (ctx?.path === GITLAB_INSTANCE_CALLBACK_PATH) {
             return { data: { ...session, sign_in_provider: 'GITLAB' } };
@@ -662,13 +1042,66 @@ export const auth = betterAuth({
           return { data: { ...session, sign_in_provider: id.toUpperCase() } };
         },
         // A real sign-in (not "View as"): stamp first sign-in and last seen
-        // right away, unthrottled.
-        after: async session => {
-          noteSeen(
-            (session as { userId?: string } | undefined)?.userId,
-            (session as { impersonatedBy?: unknown } | undefined)?.impersonatedBy,
-            { force: true }
-          );
+        // right away, unthrottled. "View as": record that it started.
+        after: async (session, ctx) => {
+          const row = session as ViewAsSessionRow | undefined;
+          noteSeen(row?.userId, row?.impersonatedBy, { force: true });
+          // Awaited, and allowed to fail the request: the endpoint sets the
+          // session cookie only after this returns, so a start that can't be
+          // recorded is never handed to the browser. The row it was written
+          // for is removed first, so no View as session is left that has no
+          // start row. Removed through Prisma, not better-auth, so the delete
+          // hook does not record an end for it.
+          if (!row?.impersonatedBy) return;
+          try {
+            await recordViewAs('impersonate.start', row, ctx?.path);
+          } catch (error) {
+            if (row.id) {
+              await getPrisma()
+                .session.deleteMany({ where: { id: String(row.id) } })
+                .catch(removeError =>
+                  console.error('[auth] View as session not removed', removeError)
+                );
+            }
+            throw error;
+          }
+        },
+      },
+      update: {
+        // A "View as" session keeps the expiry it was created with
+        // (impersonationSessionDuration): a database read that is due a
+        // refresh (session.updateAge) would otherwise move it to
+        // session.expiresIn from now. Only that refresh updates a session row
+        // here, and it puts the row it read on `ctx.context.session` first
+        // (better-auth api/routes/session.mjs). The refresh still runs, with the
+        // same expiry, so the read returns the session and sets its cookie
+        // with the time left. Other sessions are left to refresh as usual.
+        before: async (data, ctx) => {
+          const current = (
+            ctx?.context as
+              | { session?: { session?: { impersonatedBy?: unknown; expiresAt?: unknown } } | null }
+              | undefined
+          )?.session?.session;
+          if (!current?.impersonatedBy || !current.expiresAt) return;
+          return { data: { ...data, expiresAt: current.expiresAt as Date } };
+        },
+      },
+      delete: {
+        // "View as" ended: stopped, signed out, ended by the viewed user, or
+        // its expired row cleaned up (better-auth passes the deleted row; who
+        // ended it: viewAsEndedBy). Never fails the deletion: a session must
+        // still end when its row can't be recorded. A duplicate key means
+        // another delete of the same session, running at the same time, has
+        // already recorded the end (viewAsEndRowId).
+        after: async (session, ctx) => {
+          const row = session as ViewAsSessionRow | undefined;
+          if (!row?.impersonatedBy) return;
+          try {
+            await recordViewAs('impersonate.end', row, ctx?.path, viewAsEndedBy(row, ctx));
+          } catch (error) {
+            if (isDuplicateKeyError(error)) return;
+            console.error('[auth] View as end not recorded', error);
+          }
         },
       },
     },
@@ -685,12 +1118,34 @@ export const auth = betterAuth({
   hooks: {
     before: createAuthMiddleware(async ctx => {
       if (ctx.path !== '/mcp/token') {
+        // "View as" never targets an admin. Refused before the
+        // app-connection rules below, which still run for this path when
+        // it is allowed.
+        if (ctx.path === IMPERSONATE_USER_PATH) await refuseViewingAsAnAdmin(ctx);
+        // No sign-in account is linked or unlinked, and no password, profile
+        // or session is changed, while viewing as another user. The session
+        // is looked up on these paths only.
+        if (ACCOUNT_LINK_PATHS.has(ctx.path)) {
+          await refuseWhileViewingAs(ctx, ACCOUNT_LINK_VIEWING_AS_MESSAGE);
+        }
+        if (ACCOUNT_CHANGE_PATHS.has(ctx.path)) {
+          await refuseWhileViewingAs(ctx, ACCOUNT_CHANGE_VIEWING_AS_MESSAGE);
+        }
+        // This path sends address-verification codes only; a reset code has
+        // its own path (/email-otp/request-password-reset).
+        if (
+          ctx.path === SEND_VERIFICATION_OTP_PATH &&
+          (ctx.body as { type?: unknown } | undefined)?.type !== 'email-verification'
+        ) {
+          throw new APIError('BAD_REQUEST', { message: UNSUPPORTED_CODE_TYPE_MESSAGE });
+        }
         // Connecting apps: the consent page is always shown, and no app is
         // connected while viewing as another user (./appConnectionGuard.ts).
         // Every other path returns after string comparisons and one anchored
         // cookie-header match, with no session lookup unless the request
-        // carries the saved-authorization cookie (oidc_login_prompt).
-        return applyAppConnectionRules(ctx, () => lookupSessionForHook(ctx));
+        // carries the saved-authorization cookie (oidc_login_prompt). Viewing
+        // as someone by either session read counts.
+        return applyAppConnectionRules(ctx, () => lookupViewAsSessionForHook(ctx));
       }
 
       const authorization =
@@ -731,18 +1186,31 @@ export const auth = betterAuth({
    * githubUserToken service), not from these endpoints. Like every entry
    * here, they are off for HTTP only; in-process `auth.api.*` is unchanged.
    *
+   * `/verify-password` is off too: nothing calls it, and better-auth's
+   * `scope: "server"` on it does not keep it off the HTTP router. Off for HTTP
+   * only, like the rest; in-process `auth.api.verifyPassword` still works.
+   *
    * `/sign-in/email-otp` and `/email-otp/check-verification-otp` come with the
    * emailOTP plugin and nothing calls them: an email code verifies an address
-   * or resets a password here, it never signs anyone in on its own, and no
-   * form checks a code without using it.
+   * or resets a password here, and no form checks a code without using it.
+   * Verifying an address does sign its user in: `/email-otp/verify-email`
+   * creates a session (`emailVerification.autoSignInAfterVerification`); the
+   * sign-in page's verify step goes straight on to the app.
+   *
+   * The admin plugin's endpoints are off too, all but "View as" start and stop
+   * (/admin/impersonate-user, /admin/stop-impersonating), the only ones any app
+   * calls (apps/admin useViewAs, the webapp's Staff pages and its
+   * ImpersonationBanner). apps/admin reads people and classrooms through Prisma.
    */
   disabledPaths: [
     '/mcp/get-session',
     '/list-sessions',
     '/get-access-token',
     '/refresh-token',
+    '/verify-password',
     '/sign-in/email-otp',
     '/email-otp/check-verification-otp',
+    ...ADMIN_PATHS_NOT_USED,
   ],
   // Password guessing and code guessing are throttled harder than the default
   // (better-auth enables its limiter in production only). Per client IP. Tight
@@ -759,12 +1227,15 @@ export const auth = betterAuth({
       '/email-otp/send-verification-otp': { window: 60, max: 3 },
       '/email-otp/verify-email': { window: 60, max: 5 },
       '/email-otp/reset-password': { window: 60, max: 5 },
+      '/email-otp/request-password-reset': { window: 60, max: 3 },
+      // The deprecated path of the same request, kept until it is disabled.
       '/forget-password/email-otp': { window: 60, max: 3 },
     },
   },
   plugins: [
     // 6-digit codes for verifying a password account's email and for
-    // resetting a password. Never a way to sign up or sign in on its own.
+    // resetting a password. Never a way to sign up (`disableSignUp`); a
+    // verified address signs its user in (see disabledPaths above).
     emailOTP({
       otpLength: 6,
       expiresIn: 10 * 60,
@@ -780,17 +1251,28 @@ export const auth = betterAuth({
     gitlabInstances(),
     admin({
       impersonationSessionDuration: 60 * 60, // 1 hour
-      // Allow users with 'admin' role to impersonate
-      // OWNER users need to have role='admin' set in the database
+      // The plugin's admin role. "View as" is for platform admins only
+      // (mayViewAs), whatever a user's role: a role of 'admin' does not
+      // let anyone view as others, and nothing in the app sets one.
       adminRoles: ['admin'],
       // Platform admins, by user id, from the environment. better-auth checks
       // this list BEFORE the role lookup, so it needs no migration and no DB
       // state — and unlike `role`, nothing in the app can write it, so there is
       // no in-app path to escalate into platform admin.
       adminUserIds: PLATFORM_ADMIN_USER_IDS,
-      // `allowImpersonatingAdmins` is deliberately left off (defaults false):
-      // better-auth then refuses admin-on-admin takeover, which closes the
-      // escalation path of impersonating a peer admin to inherit their access.
+      // "View as" never targets an admin: neither a platform admin nor a
+      // user whose role contains "admin". `allowImpersonatingAdmins` stays
+      // off (the default), but it is not what enforces that: from
+      // better-auth 1.5 a caller listed in `adminUserIds` may impersonate an
+      // admin whatever it says. The rule is ours, in `hooks.before`
+      // (refuseViewingAsAnAdmin) and `databaseHooks.session.create.before`.
+      //
+      // The plugin's own fields keep better-auth's names unless mapped here
+      // (`user.fields` above does not apply to them). Prisma calls the ban
+      // fields `ban_reason` and `ban_expires_at`.
+      schema: {
+        user: { fields: { banReason: 'ban_reason', banExpires: 'ban_expires_at' } },
+      },
     }),
     // OAuth 2.1 authorization server for MCP clients (discovery, dynamic client
     // registration, PKCE, consent, DB-backed access/refresh tokens). The MCP

@@ -45,6 +45,21 @@ function streamOf(count: number, size: number): ReadableStream<Uint8Array> {
   });
 }
 
+/** A stream over `bytes`, handed over `size` bytes at a time. */
+function streamOfBytes(bytes: Uint8Array, size: number): ReadableStream<Uint8Array> {
+  let at = 0;
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (at >= bytes.byteLength) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(bytes.slice(at, at + size));
+      at += size;
+    },
+  });
+}
+
 test.describe('the declared size', () => {
   test('is read when the client sends one', () => {
     expect(declaredBodyBytes(new Headers({ 'content-length': '2048' }))).toBe(2048);
@@ -101,7 +116,17 @@ test.describe('reading with a limit', () => {
   test('refuses an over-cap multipart body', async () => {
     const form = new FormData();
     form.set('file', new File([new Uint8Array(4096)], 'lecture.pdf'), 'lecture.pdf');
-    const request = new Request('https://slides.test/cs52/new', { method: 'POST', body: form });
+    // Serialised first and sent as a stream, the way a real upload reaches the
+    // route. A FormData body would also trip a Node 24 undici issue: once the
+    // read is cancelled at the cap, undici still enqueues and throws outside
+    // the test.
+    const encoded = new Response(form);
+    const request = new Request('https://slides.test/cs52/new', {
+      method: 'POST',
+      headers: { 'content-type': encoded.headers.get('content-type') ?? '' },
+      body: streamOfBytes(new Uint8Array(await encoded.arrayBuffer()), 1024),
+      duplex: 'half',
+    } as RequestInit);
 
     await expect(readLimitedFormData(request, 512)).rejects.toBeInstanceOf(UploadTooLargeError);
   });

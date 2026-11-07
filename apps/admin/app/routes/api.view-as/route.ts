@@ -3,10 +3,13 @@ import { prisma, requirePlatformAdmin } from '~/utils/db.server';
 import { platformAudit } from '~/utils/audit.server';
 
 /**
- * Step one of "View as": records who is about to be impersonated, where, and
- * why, and answers with the webapp path to land on. The browser then starts
- * the better-auth impersonation itself (it needs the admin's cookie) and goes
- * there.
+ * Step one of "View as": records that the admin asked to view as someone,
+ * where, and why (`impersonate.request`), and answers with the webapp path to
+ * land on. The browser then starts the better-auth impersonation itself (it
+ * needs the admin's cookie) and goes there. Whether it started, and when it
+ * ended, the auth server records itself (`impersonate.start` and
+ * `impersonate.end`, packages/auth/src/server.ts), for every app that starts
+ * View as; this row keeps the reason and classroom only this app knows.
  *
  * Everything that decides the landing comes from the database, never from the
  * request: the classroom's slug is looked up, and the role is the target's
@@ -55,7 +58,7 @@ export async function action({ request }: ActionFunctionArgs) {
 
   await platformAudit({
     actorId: admin.id,
-    action: 'impersonate',
+    action: 'impersonate.request',
     targetType: 'user',
     targetId: target.id,
     classroomId: classroom?.id ?? null,

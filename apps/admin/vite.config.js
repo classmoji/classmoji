@@ -11,7 +11,7 @@ export default () => {
       alias: {
         '.prisma/client/index-browser': '../../node_modules/.prisma/client/index-browser.js',
       },
-      dedupe: ['react', 'react-dom', 'react-router', 'react-router-dom'],
+      dedupe: ['react', 'react-dom', 'react-router'],
     },
     // Vite 6's default conditions, stated here: the React Router plugin reads
     // them from the repo root's Vite 5, which has none, and server.ts's Vite 6
@@ -22,7 +22,7 @@ export default () => {
       ssr: { resolve: { conditions: [...defaultServerConditions] } },
     },
     optimizeDeps: {
-      include: ['react', 'react-dom', 'react-router', 'react-router-dom'],
+      include: ['react', 'react-dom', 'react-router'],
       entries: ['./app/root.tsx'],
       // Server-only. Leaving these in triggers a mid-session dep
       // re-optimization whose reload can transiently fail to resolve

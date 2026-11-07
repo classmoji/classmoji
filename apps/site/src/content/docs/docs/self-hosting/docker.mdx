@@ -7,7 +7,7 @@ Classmoji ships a production Dockerfile for every app, so you can build and run 
 
 ### What ships in the repo
 
-- **A production Dockerfile per app**: `webapp`, `slides`, `pages`, `hook-station`, and `site`. Each builds on Node 22 Alpine, generates the Prisma client at build time, and builds the app.
+- **A production Dockerfile per app**: `webapp`, `slides`, `pages`, `hook-station`, and `site`. Each builds on Node 24 Alpine, generates the Prisma client at build time, and builds the app.
 - **A root `docker-compose.yml`, for local development only**. It runs Postgres only. It does not run the webapp, slides, pages, hook-station, or site. `npm run db:start` is just `docker compose up -d`.
 
 There is no compose or Kubernetes file that wires all the services together for production. You bring your own.
@@ -44,6 +44,15 @@ Build any app from the repo root, passing the app's Dockerfile:
 ```bash
 docker build -f apps/webapp/Dockerfile -t classmoji-webapp .
 ```
+
+If a proxy in front of the webapp or slides terminates TLS (most reverse proxies and load balancers do), build those two images with the public host each one is served from, or their forms won't submit:
+
+```bash
+docker build -f apps/webapp/Dockerfile --build-arg ACTION_ORIGIN_HOSTS=classmoji.example.edu -t classmoji-webapp .
+docker build -f apps/slides/Dockerfile --build-arg ACTION_ORIGIN_HOSTS=slides.classmoji.example.edu -t classmoji-slides .
+```
+
+`ACTION_ORIGIN_HOSTS` takes exact host names, comma-separated, with no scheme, port or wildcard. It is read when the image is built, not when the container starts, so a new host means a new build.
 
 Then run it with the environment variables that app needs. Because there's no bundled orchestration, you're responsible for networking the services together, supplying secrets, and putting a reverse proxy in front. Compose, Kubernetes, or a PaaS all work.
 

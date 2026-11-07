@@ -1,0 +1,84 @@
+---
+// Docs page title as it looked with starlight-theme-black 0.6: a "Docs > Page"
+// breadcrumb, the title and the description, without the previous/next arrows
+// theme 0.7 puts beside the title (the page still ends with them).
+const {
+  entry: {
+    data: { title, template, description },
+  },
+} = Astro.locals.starlightRoute;
+---
+
+{
+  template === 'doc' && (
+    <div class="breadcrumb">
+      <div class="truncate">Docs</div>
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        width="24"
+        height="24"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true"
+      >
+        <path d="m9 18 6-6-6-6" />
+      </svg>
+      <div class="current">{title}</div>
+    </div>
+  )
+}
+
+{/* Starlight's skip link and table of contents point at this id. */}
+<h1 id="_top">{title}</h1>
+{description && <p>{description}</p>}
+
+<style>
+  .breadcrumb {
+    color: var(--muted-foreground);
+    line-height: 1;
+    font-size: 0.875rem;
+    align-items: center;
+    display: flex;
+    margin-bottom: 1rem;
+  }
+
+  .truncate {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .breadcrumb svg {
+    width: 0.875rem;
+    height: 0.875rem;
+    margin-left: 0.5rem;
+  }
+
+  .current {
+    color: var(--foreground);
+    margin-left: 0.5rem;
+  }
+
+  h1 {
+    color: var(--foreground);
+    letter-spacing: -0.025em;
+    font-weight: 700;
+    font-size: 1.875rem;
+    line-height: 2.25rem;
+    scroll-margin: 5rem;
+    margin: 0;
+  }
+
+  p {
+    margin: 0;
+    margin-top: 0.5rem;
+    color: var(--muted-foreground);
+    font-size: 1rem;
+    line-height: 1.5rem;
+    text-wrap: balance;
+  }
+</style>

@@ -31,5 +31,27 @@ export const GITHUB_CLEANUP_IMPERSONATION_MESSAGE =
 // The same string the server-side refusal sends, from one place.
 export { CONNECT_APP_VIEWING_AS_MESSAGE as CONNECT_APP_IMPERSONATION_MESSAGE } from '@classmoji/auth/app-connection';
 
+export const GITLAB_CONNECT_IMPERSONATION_MESSAGE =
+  "Connecting Gitlab isn't available while viewing as another user.";
+
 export const CLASSROOM_REMOVE_IMPERSONATION_MESSAGE =
   "Removing a classroom isn't available while viewing as another user.";
+
+/**
+ * Settings and registration: no password, email or other account detail is
+ * changed while viewing as another user, since it would be theirs. Those
+ * actions check with `isViewingAsAnotherUser` (@classmoji/auth/server), which
+ * reads the session from both the cookie cache and the database.
+ */
+export const ACCOUNT_DETAILS_IMPERSONATION_MESSAGE =
+  "Changing account details isn't available while viewing as another user.";
+
+/**
+ * Billing (Settings → Billing): no checkout or billing portal is opened while
+ * viewing as another user, since it would be for their plan and their Stripe
+ * customer. The page still shows the plan. The actions check with
+ * `isViewingAsAnotherUser` (@classmoji/auth/server), as the settings actions
+ * above do.
+ */
+export const BILLING_IMPERSONATION_MESSAGE =
+  "Billing isn't available while viewing as another user.";

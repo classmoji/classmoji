@@ -1,19 +1,26 @@
 /**
  * Session responses as the browser gets them over HTTP.
  *
- * better-auth's `/get-session` answers `{ session, user }` and the admin
- * plugin's `/admin/list-user-sessions` answers `{ sessions }`; each session
- * row carries its `token`. The browser authenticates with the session cookie
- * and reads no `token` field, so the apps' auth handlers pass these responses
- * through `withoutSessionTokens`, which drops that field and keeps the status
- * and every header (Set-Cookie included) as better-auth sent them.
+ * better-auth's `/get-session` and the admin plugin's View as start and stop
+ * (`/admin/impersonate-user`, `/admin/stop-impersonating`) answer
+ * `{ session, user }`; the session row carries its `token`. The browser
+ * authenticates with the session cookie and reads no `token` field (the
+ * webapp's Staff pages, its ImpersonationBanner and apps/admin's useViewAs
+ * read only `error`), so the apps' auth handlers pass these responses through
+ * `withoutSessionTokens`, which drops that field and keeps the status and
+ * every header (Set-Cookie included) as better-auth sent them. A `{ sessions }`
+ * list is trimmed the same way.
  *
  * In-process calls (`auth.api.getSession`) never go through a handler and are
  * unaffected.
  */
 
 /** The endpoints (under better-auth's basePath) whose sessions are trimmed. */
-const TRIMMED_PATHS = ['/api/auth/get-session', '/api/auth/admin/list-user-sessions'];
+const TRIMMED_PATHS = [
+  '/api/auth/get-session',
+  '/api/auth/admin/impersonate-user',
+  '/api/auth/admin/stop-impersonating',
+];
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 

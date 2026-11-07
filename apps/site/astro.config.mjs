@@ -5,31 +5,67 @@ import mdx from '@astrojs/mdx';
 import node from '@astrojs/node';
 import react from '@astrojs/react';
 import starlight from '@astrojs/starlight';
+import { createInlineSvgUrl } from '@astrojs/starlight/expressive-code';
 import starlightThemeBlack from 'starlight-theme-black';
+import { satteri } from '@astrojs/markdown-satteri';
+import { legacyHeadingIds } from './src/markdown/headingIds.mjs';
 
 // https://astro.build/config
 export default defineConfig({
-  // Pages stay pre-built and static; only routes that opt out of prerendering
-  // (the contact form's /api/contact) run on the Node server.
-  adapter: node({ mode: 'standalone' }),
-  // Astro's origin check would compare the visitor's https origin with the
-  // http address the server sees behind Fly's proxy and refuse every post. The
-  // only on-demand route is the contact form, which writes to our own inbox and
-  // has its own honeypot and rate limit, so there is nothing for it to guard.
-  security: { checkOrigin: false },
+  // Pages are pre-built and served as files; only the contact form
+  // (/api/contact) runs code on the Node server. src/middleware.ts turns off the
+  // unused image and island routes Astro adds to any site with an adapter
+  // (/_image, /_server-islands/*). bodySizeLimit caps request bodies. The
+  // contact form's largest post is about 50 KB: every field at its maxlength
+  // in 3-byte characters, URL-encoded by a browser without JavaScript (the
+  // page's own script posts multipart, about 17 KB at most).
+  adapter: node({ mode: 'standalone', bodySizeLimit: 64 * 1024 }),
+  // Astro 7 strips whitespace the JSX way by default ('jsx'), which glues
+  // together inline elements in our templates (nav links, footer links, post
+  // bylines). Keep the HTML-aware compression the site was written for.
+  compressHTML: true,
+  // Astro's default Markdown processor, plus heading ids that stay the same as
+  // before Astro 7 so existing links to headings keep working (headingIds.mjs).
+  // Starlight adds its own plugins to this processor.
+  // Keep @astrojs/markdown-satteri in package.json at the exact version astro
+  // pins internally (0.4.6 for astro 7.4.5) and move the two together;
+  // otherwise this processor and astro's own come from different copies.
+  markdown: {
+    processor: satteri({ hastPlugins: [legacyHeadingIds()] }),
+  },
+  security: {
+    // Fly's proxy talks to the server over http. allowedDomains lets Astro
+    // trust the Host and X-Forwarded-Proto it forwards for classmoji.io, so the
+    // request URL is https://classmoji.io/... and checkOrigin can compare a form
+    // post's Origin with it.
+    allowedDomains: [{ hostname: 'classmoji.io', protocol: 'https' }],
+    checkOrigin: true,
+  },
   integrations: [
     starlight({
       title: '🍎 classmoji',
       description: 'Documentation for Classmoji - the git-native LMS for CS education',
+      // These keep the docs looking as they did with starlight-theme-black 0.6
+      // (with src/styles/docs-classic.css): the header with "Back to main site"
+      // and the small-screen bottom-sheet menu, the breadcrumb title without
+      // the arrows, the sidebar with "New" badges, the full-width footer bar
+      // with the Privacy and Terms links, chevron previous/next links and the
+      // sun/moon theme switch. Head is Starlight's own, without the theme's
+      // preloads of fonts the docs do not use.
       components: {
-        SiteTitle: './src/components/SiteTitle.astro',
+        Head: './src/components/docs/Head.astro',
+        SiteTitle: './src/components/docs/SiteTitle.astro',
+        PageTitle: './src/components/docs/PageTitle.astro',
+        Sidebar: './src/components/docs/Sidebar.astro',
+        PageFrame: './src/components/docs/PageFrame.astro',
+        Pagination: './src/components/docs/Pagination.astro',
+        ThemeSelect: './src/components/docs/ThemeSelect.astro',
       },
       plugins: [
+        // Header links live in src/components/docs/navLinks.ts: our SiteTitle
+        // and Drawer render them, not the theme.
         starlightThemeBlack({
-          navLinks: [
-            { label: 'Back to main site', link: 'https://classmoji.io' },
-          ],
-          footerText: '🍎 Built by educators and students. [Contribute on GitHub](https://github.com/classmoji/classmoji) · [Privacy Policy](/privacy) · [Terms of Service](/terms)',
+          docs: { showMarkdownActions: false },
         }),
       ],
       sidebar: [
@@ -122,8 +158,43 @@ export default defineConfig({
         },
       ],
       customCss: [
+        './src/styles/docs-classic.css',
         './src/styles/starlight.css',
       ],
+      // Code blocks as starlight-theme-black 0.6 set them up. Theme 0.7 picks
+      // other code themes and frame colours; undefined hands those settings
+      // back to Expressive Code's defaults, as 0.6 left them.
+      expressiveCode: {
+        themes: ['github-dark-default', 'github-light-default'],
+        styleOverrides: {
+          codeBackground: 'var(--code-background)',
+          borderWidth: '0px',
+          borderRadius: 'calc(var(--radius) + 4px)',
+          gutterBorderWidth: '0px',
+          borderColor: undefined,
+          gutterBorderColor: undefined,
+          frames: {
+            editorBackground: 'var(--code-background)',
+            terminalBackground: 'var(--code-background)',
+            copyIcon: createInlineSvgUrl(
+              '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"></rect><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path></svg>',
+            ),
+            shadowColor: undefined,
+            editorTabBarBackground: undefined,
+            editorActiveTabBackground: undefined,
+            editorActiveTabIndicatorTopColor: undefined,
+            editorTabBarBorderColor: undefined,
+            editorActiveTabBorderColor: undefined,
+            terminalTitlebarBorderBottomColor: undefined,
+            editorTabBarBorderBottomColor: undefined,
+            editorActiveTabIndicatorBottomColor: undefined,
+          },
+          textMarkers: {
+            markBackground: 'var(--mark-background)',
+            markBorderColor: 'var(--border)',
+          },
+        },
+      },
     }),
     mdx(),
     // React islands: the animated "How it works" demos on the home page.

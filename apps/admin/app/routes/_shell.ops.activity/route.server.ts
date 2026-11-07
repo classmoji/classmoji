@@ -8,7 +8,9 @@ const PAGE_SIZE = 50;
 /** Filter chips. Page views are kept but hidden by default: they are the noise. */
 const KINDS = {
   '': { label: 'Changes', where: { action: { notIn: ['user.view', 'classroom.view'] } } },
-  impersonate: { label: 'View as', where: { action: 'impersonate' } },
+  // `impersonate` rows are from before the auth server recorded View as:
+  // written when the admin asked, here, not when it started.
+  impersonate: { label: 'View as', where: { action: { startsWith: 'impersonate' } } },
   delivery: { label: 'Content delivery', where: { action: { startsWith: 'delivery.' } } },
   views: { label: 'Page views', where: { action: { in: ['user.view', 'classroom.view'] } } },
   all: { label: 'Everything', where: {} },

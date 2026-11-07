@@ -4,15 +4,25 @@ import { ClassmojiService } from '@classmoji/services';
 import {
   gitlabConnectCookie,
   gitlabConnectRedirectUri,
+  safeReturnTo,
   type GitLabConnectState,
 } from '~/utils/gitlabConnect.server';
+import {
+  GITLAB_CONNECT_IMPERSONATION_MESSAGE,
+  isImpersonatingSession,
+} from '~/utils/impersonationSession';
 import type { Route } from './+types/route';
 
-/** Land back on `returnTo` with `?gitlab=<outcome>`, clearing the round-trip cookie. */
+/**
+ * Land back on `returnTo` with `?gitlab=<outcome>`, clearing the round-trip
+ * cookie. The path is checked before and after the param is added, so what is
+ * sent is always a path on this app (a cookie set before the current rule
+ * still carries the value it was given then).
+ */
 async function finish(returnTo: string, outcome: string) {
-  const url = new URL(returnTo, 'http://placeholder');
+  const url = new URL(safeReturnTo(returnTo), 'http://placeholder');
   url.searchParams.set('gitlab', outcome);
-  return redirect(`${url.pathname}${url.search}`, {
+  return redirect(safeReturnTo(`${url.pathname}${url.search}`), {
     headers: { 'Set-Cookie': await gitlabConnectCookie.serialize('', { maxAge: 0 }) },
   });
 }
@@ -21,9 +31,16 @@ async function finish(returnTo: string, outcome: string) {
  * GET /connect/gitlab/callback: GitLab's redirect after the user approves (or
  * declines) the connection. Verifies the round trip belongs to this browser and
  * this user, exchanges the code, and stores the connection.
+ *
+ * Not while viewing as another user: the connection would be stored on their
+ * account. Refused before the code is exchanged, so nothing is stored.
  */
 export const loader = async ({ request }: Route.LoaderArgs) => {
-  const { userId } = await requireAuth(request);
+  const authData = await requireAuth(request);
+  if (isImpersonatingSession(authData)) {
+    throw new Response(GITLAB_CONNECT_IMPERSONATION_MESSAGE, { status: 403 });
+  }
+  const { userId } = authData;
   const url = new URL(request.url);
   const saved = (await gitlabConnectCookie.parse(
     request.headers.get('Cookie')

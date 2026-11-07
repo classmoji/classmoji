@@ -47,10 +47,11 @@ export default async ({ command, mode }) => {
       // In production builds, bundle what lives in apps/webapp/node_modules (packages
       // npm doesn't hoist to the root): the Dockerfile only copies root node_modules
       // into the image, so anything left external must resolve there at runtime.
-      // - @trigger.dev/react-hooks and the @trigger.dev/core it pulls in are
-      //   webapp-local (root core is an older version), and so are that core's own
-      //   deps listed after it; each must be bundled or the image loads the wrong
-      //   copy or none at all (zod-validation-error/v4 is missing from root).
+      // - @trigger.dev/react-hooks and the @trigger.dev/core it pulls in, with that
+      //   core's own deps listed after it: npm nests them in apps/webapp whenever
+      //   another workspace pins a different Trigger.dev version (all pins are the
+      //   same today, so they sit at the root). Bundled, the image never loads the
+      //   wrong copy or none at all when they are nested again.
       // - @trigger.dev/sdk must stay EXTERNAL: root has it together with its own
       //   nested node_modules, which only Node's resolution from the sdk's real
       //   location finds. Bundling it cuts it off from those.
@@ -75,16 +76,10 @@ export default async ({ command, mode }) => {
       alias: {
         '.prisma/client/index-browser': '../../node_modules/.prisma/client/index-browser.js',
       },
-      dedupe: ['react', 'react-dom', 'react-router', 'react-router-dom'],
+      dedupe: ['react', 'react-dom', 'react-router'],
     },
     optimizeDeps: {
-      include: [
-        'react',
-        'react-dom',
-        'react-router',
-        'react-router-dom',
-        '@tiptap/extension-code-block-lowlight',
-      ],
+      include: ['react', 'react-dom', 'react-router', '@tiptap/extension-code-block-lowlight'],
       entries: ['./app/root.jsx'],
       exclude: [
         '@classmoji/database',

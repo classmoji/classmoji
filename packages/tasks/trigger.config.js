@@ -20,9 +20,9 @@ import { fileURLToPath } from 'node:url';
  * read of a path resolved from this file's location would run inside the
  * deployed container, where that path does not exist.
  *
- * `requirements`, NOT `requirementsFile`. In @trigger.dev/python 4.6.4 the
- * requirementsFile branch emits `COPY ./python/requirements.txt .` followed by
- * `pip install -r ./python/requirements.txt`; the COPY lands the file at
+ * `requirements`, NOT `requirementsFile`. In @trigger.dev/python (still in
+ * 4.8.3) the requirementsFile branch emits `COPY ./python/requirements.txt .`
+ * followed by `pip install -r ./python/requirements.txt`; the COPY lands the file at
  * `./requirements.txt`, so a nested requirements file cannot be opened and the
  * image build fails (triggerdotdev/trigger.dev#1843). The `requirements` branch
  * writes the list to a file and installs it in one working directory. The file
@@ -36,9 +36,10 @@ import { fileURLToPath } from 'node:url';
  * python/README.md) and is set only when that interpreter exists, so a checkout
  * without the venv still loads this config; the solve task then fails its runs
  * with `engine_error` rather than the whole dev worker refusing to start.
- * Deployed images ignore it and use the extension's /opt/venv. (The 4.6.4 CLI
- * snapshots dev run environments before the extension sets it, so the solve
- * task also falls back to the venv itself — `useLocalVenvIfUnset`.)
+ * Deployed images ignore it and use the extension's /opt/venv. (The CLI, as of
+ * 4.6.4, snapshots dev run environments before the extension sets it in
+ * `onBuildComplete`, so the solve task also falls back to the venv itself —
+ * `useLocalVenvIfUnset`.)
  */
 function teamSetSolverPythonOptions() {
   const pythonDir = join(dirname(fileURLToPath(import.meta.url)), 'python');
@@ -94,9 +95,11 @@ function requirePrivateAgentsOnDeploy() {
 
 export default defineConfig({
   project: process.env.TRIGGER_PROJECT_ID || 'proj_ijxcrutouxchmrbjmkkk',
-  // Pinned: bare 'node' meant Trigger's default image (Node 21), which is
-  // going away, and it did not match the Node 22 the repo runs everywhere else.
-  runtime: 'node-22',
+  // Pinned to a Node major, the one the rest of the repo runs (Node 24): unset
+  // or bare 'node' follows Trigger's current Node LTS, so a CLI upgrade alone
+  // could move the worker to another major. Deploys on Trigger's
+  // node:24-bookworm image.
+  runtime: 'node-24',
   logLevel: 'log',
   machine: 'small-2x',
   maxDuration: 900,
@@ -186,7 +189,7 @@ export default defineConfig({
         packages: ['bash', 'git', 'git-lfs'],
       }),
       // For `media-video-process`. No version: the extension installs Debian's
-      // `ffmpeg` package — on the node-22 image (bookworm) that is 5.1.x, a
+      // `ffmpeg` package — on the node-24 image (bookworm) that is 5.1.x, a
       // fixed release with libx264 and the native aac/mjpeg encoders. (Version
       // '7' would pull johnvansickle's static `ffmpeg-git`, i.e. whatever git
       // master is on build day.) Sets FFMPEG_PATH / FFPROBE_PATH in deployed

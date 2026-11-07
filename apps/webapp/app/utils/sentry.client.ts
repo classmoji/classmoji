@@ -8,7 +8,7 @@
  * the root document carries a `#sentry-config` block, i.e. `SENTRY_DSN` is set.
  */
 import type { ErrorInfo } from 'react';
-import { isRouteErrorResponse, type unstable_ClientInstrumentation } from 'react-router';
+import { isRouteErrorResponse, type ClientInstrumentation } from 'react-router';
 import {
   captureException,
   captureReactException,
@@ -42,13 +42,13 @@ const firstReport = (error: unknown): boolean => {
  * apps share one Sentry project, so every event is tagged with its app.
  *
  * Returns React Router's instrumentation for `HydratedRouter`'s
- * `unstable_instrumentations`: navigations are then named by their full route
+ * `instrumentations`: navigations are then named by their full route
  * pattern (`/admin/:class/assignments/:id`) rather than the last route's own
  * segment. It reports no errors itself (captureRouteError does, once).
  */
 export const initSentry = (
   app: 'webapp' | 'pages' | 'slides'
-): { instrumentations: unstable_ClientInstrumentation[] } | null => {
+): { instrumentations: ClientInstrumentation[] } | null => {
   const config = parseSentryConfig(document.getElementById(SENTRY_CONFIG_ELEMENT_ID)?.textContent);
   if (!config) return null;
   init({
@@ -71,7 +71,7 @@ type RouterWindow = Window & {
 
 /**
  * The current route pattern, built the way React Router builds
- * `unstable_pattern`, for errors that arrive without one (ErrorBoundaries).
+ * `pattern`, for errors that arrive without one (ErrorBoundaries).
  */
 const currentRoutePattern = (): string | undefined => {
   const matches = (window as RouterWindow).__reactRouterDataRouter?.state.matches;
@@ -100,7 +100,7 @@ const isOpaqueServerError = (error: unknown): boolean =>
  */
 export const captureRouteError = (
   error: unknown,
-  info?: { errorInfo?: ErrorInfo; unstable_pattern?: string }
+  info?: { errorInfo?: ErrorInfo; pattern?: string }
 ): void => {
   if (!enabled) return;
   if (isRouteErrorResponse(error) && error.status < 500) return;
@@ -114,7 +114,7 @@ export const captureRouteError = (
       ? inner
       : new Error(`Route error response ${response.status} ${response.statusText}`.trim())
     : error;
-  const route = info?.unstable_pattern ?? currentRoutePattern();
+  const route = info?.pattern ?? currentRoutePattern();
 
   withScope(scope => {
     if (route) scope.setTag('route', route);

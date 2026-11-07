@@ -13,7 +13,6 @@ import {
   isRouteErrorResponse,
   type ShouldRevalidateFunction,
 } from 'react-router';
-import axios from 'axios';
 
 import React, { lazy, Suspense, useEffect } from 'react';
 import dayjs from 'dayjs';
@@ -480,10 +479,13 @@ const App = ({ loaderData }: Route.ComponentProps) => {
       return;
     }
     let cancelled = false;
-    axios
-      .get(`/api/get-org-subscription?orgLogin=${classroom.slug}`)
+    fetch(`/api/get-org-subscription?orgLogin=${classroom.slug}`)
       .then(response => {
-        if (!cancelled) setSubscription(response.data);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      })
+      .then(subscription => {
+        if (!cancelled) setSubscription(subscription);
       })
       .catch(() => {
         if (!cancelled) setSubscription(null);

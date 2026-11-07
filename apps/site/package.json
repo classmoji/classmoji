@@ -10,24 +10,25 @@
   },
   "dependencies": {
     "@ant-design/icons": "5.6.1",
-    "@astrojs/mdx": "^4.3.13",
-    "@astrojs/node": "9.5.5",
-    "@astrojs/react": "4.4.2",
-    "@astrojs/starlight": "^0.37.6",
+    "@astrojs/markdown-satteri": "0.4.6",
+    "@astrojs/mdx": "8.1.2",
+    "@astrojs/node": "11.1.9",
+    "@astrojs/react": "7.1.2",
+    "@astrojs/starlight": "0.42.8",
     "@tabler/icons-react": "2.47.0",
-    "@tailwindcss/vite": "^4.1.18",
+    "@tailwindcss/vite": "4.3.4",
     "antd": "5.29.3",
-    "astro": "^5.16.5",
+    "astro": "7.4.5",
     "framer-motion": "12.34.2",
+    "github-slugger": "2.0.0",
     "lucide-react": "0.563.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "starlight-theme-black": "^0.6.0",
-    "tailwindcss": "^4.1.18"
+    "starlight-theme-black": "0.7.1",
+    "tailwindcss": "4.3.4"
   },
   "devDependencies": {
     "@types/react": "19.2.14",
-    "@types/react-dom": "19.2.3",
-    "vite": "^6.4.1"
+    "@types/react-dom": "19.2.3"
   }
 }

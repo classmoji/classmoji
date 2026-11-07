@@ -2,11 +2,17 @@
 # ======================
 # Build stage
 # ======================
-FROM node:22-alpine AS build
+FROM node:24-alpine AS build
 
 WORKDIR /app
 
 ENV NODE_OPTIONS="--max-old-space-size=2048"
+
+# One npm everywhere, the packageManager one (10.9.9), as in CI and the
+# lockfile check. Node 24 bundles npm 11, which writes `libc` fields into
+# lockfile entries it re-resolves and warns about dependency install scripts.
+RUN npm install -g npm@10.9.9 --no-audit --no-fund --cache=/tmp/npm-self-cache \
+    && rm -rf /tmp/npm-self-cache
 
 # Manifests only, so the npm ci layer stays cached until deps actually change.
 COPY package.json package-lock.json .npmrc ./
@@ -48,6 +54,12 @@ RUN ./node_modules/.bin/prisma generate --schema packages/database/schema.prisma
 
 COPY . .
 
+# The host baked into allowedActionOrigins (apps/webapp/actionOrigins.js). The
+# staging image build passes staging.classmoji.io; unset means the production
+# host.
+ARG ACTION_ORIGIN_HOSTS
+ENV ACTION_ORIGIN_HOSTS=${ACTION_ORIGIN_HOSTS}
+
 # Build the web app. With the SENTRY_AUTH_TOKEN build secret (CI deploys) the
 # build uploads its source maps to Sentry and deletes them; without it (or
 # empty) the build is unchanged. A secret mount never lands in an image layer.
@@ -61,11 +73,16 @@ RUN --mount=type=secret,id=SENTRY_AUTH_TOKEN \
 # ======================
 # Production stage
 # ======================
-FROM node:22-alpine
+FROM node:24-alpine
 
 WORKDIR /app
 
 RUN apk add --no-cache openssl libc6-compat
+
+# This stage runs npx too (the CMD below and the fly.toml release_command's
+# `npx prisma migrate deploy`), so it gets the same npm (10.9.9) as the build.
+RUN npm install -g npm@10.9.9 --no-audit --no-fund --cache=/tmp/npm-self-cache \
+    && rm -rf /tmp/npm-self-cache
 
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./

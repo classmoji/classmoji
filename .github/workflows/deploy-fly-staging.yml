@@ -35,6 +35,8 @@ jobs:
               - 'package-lock.json'
               - '.npmrc'
               - '.dockerignore'
+              # The image builds with turbo, which reads it.
+              - 'turbo.json'
               - '.github/workflows/deploy-fly-staging.yml'
               - '.github/workflows/build-fly-staging.yml'
               - 'apps/webapp/**'
@@ -67,12 +69,15 @@ jobs:
               - 'apps/mcp/**'
               - 'packages/**'
             site:
+              - '.github/workflows/deploy-fly-staging.yml'
               - 'apps/site/**'
             slides:
               - 'package.json'
               - 'package-lock.json'
               - '.npmrc'
               - '.dockerignore'
+              # The image builds with turbo, which reads it.
+              - 'turbo.json'
               - '.github/workflows/deploy-fly-staging.yml'
               - '.github/workflows/build-fly-staging.yml'
               - 'apps/slides/**'
@@ -82,6 +87,8 @@ jobs:
               - 'package-lock.json'
               - '.npmrc'
               - '.dockerignore'
+              # The image builds with turbo, which reads it.
+              - 'turbo.json'
               - '.github/workflows/deploy-fly-staging.yml'
               - '.github/workflows/build-fly-staging.yml'
               - 'apps/pages/**'
@@ -91,11 +98,15 @@ jobs:
               - 'package-lock.json'
               - '.npmrc'
               - '.dockerignore'
+              # The image builds with turbo, which reads it.
+              - 'turbo.json'
               - '.github/workflows/deploy-fly-staging.yml'
               - '.github/workflows/build-fly-staging.yml'
               - 'apps/admin/**'
               - 'packages/**'
             tasks:
+              - 'package-lock.json'
+              - '.github/workflows/deploy-fly-staging.yml'
               - 'packages/tasks/**'
               # Holds the quiz and Ask Moji chat agents' tasks (a pointer bump
               # redeploys).
@@ -291,7 +302,12 @@ jobs:
           token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
+      # One npm everywhere, the packageManager one (10.9.9). Node 24 bundles
+      # npm 11, which writes `libc` fields into lockfile entries it re-resolves
+      # and warns about dependency install scripts.
+      - name: Use npm 10.9
+        run: npm install -g npm@10.9.9 && npm --version
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
@@ -368,6 +384,12 @@ jobs:
     if: always() && !cancelled() && needs.changes.outputs.tasks == 'true' && (needs.deploy-webapp.result == 'success' || (needs.changes.outputs.webapp != 'true' && needs.deploy-webapp.result == 'skipped'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # The CLI the deploy runs. Every installed @trigger.dev package must be
+      # this version (checked below). Stricter than the CLI on purpose: the CLI
+      # itself only compares the @trigger.dev packages that packages/tasks
+      # declares.
+      TRIGGER_CLI_VERSION: 4.8.3
     steps:
       - uses: actions/checkout@v4
         with:
@@ -377,8 +399,14 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           cache: 'npm'
+
+      # One npm everywhere, the packageManager one (10.9.9). Node 24 bundles
+      # npm 11, which writes `libc` fields into lockfile entries it re-resolves
+      # and warns about dependency install scripts.
+      - name: Use npm 10.9
+        run: npm install -g npm@10.9.9 && npm --version
 
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
@@ -395,9 +423,30 @@ jobs:
             exit 1
           fi
 
+      - name: Check every installed @trigger.dev package is the CLI's version
+        run: |
+          npm ls --all --json --legacy-peer-deps 2>/dev/null | node -e '
+            const want = process.env.TRIGGER_CLI_VERSION;
+            const seen = new Set();
+            const walk = n => {
+              for (const [k, v] of Object.entries((n && n.dependencies) || {})) {
+                if (k.startsWith("@trigger.dev/") && v.version) seen.add(k + "@" + v.version);
+                walk(v);
+              }
+            };
+            walk(JSON.parse(require("fs").readFileSync(0, "utf8")));
+            const all = [...seen].sort();
+            console.log("@trigger.dev packages: " + (all.join(" ") || "none"));
+            const off = all.filter(p => p.slice(p.lastIndexOf("@") + 1) !== want);
+            if (!want || all.length === 0 || off.length > 0) {
+              console.log("::error::Every installed @trigger.dev package must be " + want + ", the CLI version this job deploys with; off: " + (off.join(" ") || "none found"));
+              process.exit(1);
+            }
+          '
+
       - name: Deploy to Trigger.dev
         working-directory: packages/tasks
-        run: npx trigger.dev@4.6.4 deploy --push -e staging
+        run: npx trigger.dev@$TRIGGER_CLI_VERSION deploy --push -e staging
         env:
           TRIGGER_ACCESS_TOKEN: ${{ secrets.TRIGGER_ACCESS_TOKEN }}
           INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}

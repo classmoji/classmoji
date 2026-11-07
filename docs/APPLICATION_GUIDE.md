@@ -1122,7 +1122,7 @@ async function assertClassroomAccess({
 ### Development Setup
 
 **Prerequisites**
-- Node.js 22+
+- Node.js 24+
 - Docker (for PostgreSQL)
 - GitHub account (for OAuth testing)
 

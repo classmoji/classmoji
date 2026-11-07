@@ -9,6 +9,9 @@ export const meta = () => [{ title: 'Activity log · Classmoji Admin' }];
 
 const ACTION_CHIP: Record<string, { label: string; className: string }> = {
   impersonate: { label: 'View as', className: 'chip chip-submitted' },
+  'impersonate.request': { label: 'View as (asked)', className: 'chip chip-ghost' },
+  'impersonate.start': { label: 'View as', className: 'chip chip-submitted' },
+  'impersonate.end': { label: 'View as ended', className: 'chip chip-ghost' },
   'delivery.toggle': { label: 'Delivery', className: 'chip chip-lect' },
   'delivery.bulk': { label: 'Delivery (bulk)', className: 'chip chip-lect' },
   'user.view': { label: 'Opened person', className: 'chip chip-ghost' },

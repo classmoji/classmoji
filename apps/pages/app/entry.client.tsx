@@ -15,7 +15,7 @@ startTransition(() => {
     <StrictMode>
       <HydratedRouter
         onError={sentry ? captureRouteError : undefined}
-        unstable_instrumentations={sentry?.instrumentations}
+        instrumentations={sentry?.instrumentations}
       />
     </StrictMode>,
     sentry ? { onRecoverableError: captureRecoverableError } : undefined

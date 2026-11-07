@@ -94,13 +94,21 @@ const remoteHeads = async (bare: string) =>
 
 beforeAll(() => {
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'template-push-')));
-  // Route the token URLs createRepository builds to the local bare repos.
-  for (const key of ['GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0']) {
+  // Route the token URLs createRepository builds to the local bare repos,
+  // through the global git config of a temporary HOME. Not GIT_CONFIG_* env
+  // vars: simple-git (4+) removes every ambient GIT_* variable from the git
+  // processes it starts, but leaves HOME and XDG_CONFIG_HOME alone.
+  const home = path.join(root, 'home');
+  fs.mkdirSync(home);
+  fs.writeFileSync(
+    path.join(home, '.gitconfig'),
+    `[url "file://${root}/github/"]\n\tinsteadOf = https://x-access-token:${TOKEN}@github.com/\n`
+  );
+  for (const key of ['HOME', 'XDG_CONFIG_HOME']) {
     savedEnv[key] = process.env[key];
   }
-  process.env.GIT_CONFIG_COUNT = '1';
-  process.env.GIT_CONFIG_KEY_0 = `url.file://${root}/github/.insteadOf`;
-  process.env.GIT_CONFIG_VALUE_0 = `https://x-access-token:${TOKEN}@github.com/`;
+  process.env.HOME = home;
+  process.env.XDG_CONFIG_HOME = path.join(home, '.config');
   originalCwd = process.cwd;
   process.cwd = () => root;
 });

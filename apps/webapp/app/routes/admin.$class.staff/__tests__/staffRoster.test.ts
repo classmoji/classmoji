@@ -29,12 +29,14 @@ const mocks = vi.hoisted(() => ({
   removeStaff: vi.fn(),
   waitForRunCompletion: vi.fn(),
   countUngradedSlotsByGrader: vi.fn(),
+  mayViewAs: vi.fn(),
 }));
 
 vi.mock('~/utils/routeAuth.server', () => ({
   requireClassroomTeachingTeam: (...a: unknown[]) => mocks.requireClassroomTeachingTeam(...a),
   requireClassroomAdmin: (...a: unknown[]) => mocks.requireClassroomAdmin(...a),
   assertClassroomMutationAllowed: (...a: unknown[]) => mocks.assertClassroomMutationAllowed(...a),
+  mayViewAs: (...a: unknown[]) => mocks.mayViewAs(...a),
 }));
 
 vi.mock('@classmoji/services', () => ({
@@ -146,6 +148,8 @@ beforeEach(() => {
   // One call per role; the loader queries OWNER, TEACHER and ASSISTANT in turn.
   mocks.findUsersByRole.mockResolvedValue([RAW_STAFF_ROW]);
   mocks.countUngradedSlotsByGrader.mockResolvedValue({ 'user-1': 9 });
+  // The real rule is PLATFORM_ADMIN_USER_IDS; here one id stands for it.
+  mocks.mayViewAs.mockImplementation((userId: unknown) => userId === 'platform-admin-1');
   mocks.requireClassroomTeachingTeam.mockResolvedValue({
     userId: 'ta-1',
     classroom: CLASSROOM,
@@ -363,6 +367,46 @@ describe('staff loader — canManage', () => {
     // Narrowing only. An assistant on /admin is still not an owner.
     const data = await adminRoute.loader(loaderArgs(`/admin/${CLASS_SLUG}/staff`));
     expect(data.canManage).toBe(false);
+  });
+});
+
+// ─── "View as" ───────────────────────────────────────────────────────────────
+
+describe('staff loader — canViewAs', () => {
+  const asPlatformAdminOwner = () =>
+    mocks.requireClassroomTeachingTeam.mockResolvedValue({
+      userId: 'platform-admin-1',
+      classroom: CLASSROOM,
+      membership: { id: 'm-1', role: 'OWNER' },
+    });
+
+  it('is false for an OWNER who is not a platform admin', async () => {
+    asOwner();
+    const data = await adminRoute.loader(loaderArgs(`/admin/${CLASS_SLUG}/staff`));
+
+    expect(data.canManage).toBe(true);
+    expect(data.canViewAs).toBe(false);
+    expect(mocks.mayViewAs).toHaveBeenCalledWith('owner-1');
+  });
+
+  it('is true for a platform admin who owns the classroom, on /admin', async () => {
+    asPlatformAdminOwner();
+    const data = await adminRoute.loader(loaderArgs(`/admin/${CLASS_SLUG}/staff`));
+
+    expect(data.canViewAs).toBe(true);
+  });
+
+  it('is false for a platform admin on a read-only prefix', async () => {
+    asPlatformAdminOwner();
+    const data = await teacherRoute.loader(loaderArgs(`/teacher/${CLASS_SLUG}/staff`));
+
+    expect(data.canViewAs).toBe(false);
+  });
+
+  it('is false for an ASSISTANT', async () => {
+    const data = await adminRoute.loader(loaderArgs(`/admin/${CLASS_SLUG}/staff`));
+
+    expect(data.canViewAs).toBe(false);
   });
 });
 
