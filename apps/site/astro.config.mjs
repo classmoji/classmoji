@@ -15,9 +15,11 @@ export default defineConfig({
   // Pages are pre-built and served as files; only the contact form
   // (/api/contact) runs code on the Node server. src/middleware.ts turns off the
   // unused image and island routes Astro adds to any site with an adapter
-  // (/_image, /_server-islands/*). bodySizeLimit caps request bodies; the
-  // contact form needs well under 100 KB.
-  adapter: node({ mode: 'standalone', bodySizeLimit: 256 * 1024 }),
+  // (/_image, /_server-islands/*). bodySizeLimit caps request bodies. The
+  // contact form's largest post is about 50 KB: every field at its maxlength
+  // in 3-byte characters, URL-encoded by a browser without JavaScript (the
+  // page's own script posts multipart, about 17 KB at most).
+  adapter: node({ mode: 'standalone', bodySizeLimit: 64 * 1024 }),
   // Astro 7 strips whitespace the JSX way by default ('jsx'), which glues
   // together inline elements in our templates (nav links, footer links, post
   // bylines). Keep the HTML-aware compression the site was written for.
