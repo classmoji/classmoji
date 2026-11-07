@@ -12,6 +12,7 @@
  * DECISIONS under test (pure gates, ordering) all run for real.
  */
 
+import { readFileSync } from 'node:fs';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -40,6 +41,7 @@ vi.mock('@classmoji/services', () => ({
 
 const { buildMcpServer, registerResourceDefinition, registerToolDefinition, toolAnnotations } =
   await import('../registry.ts');
+const { countJsonElements, MAX_TOOL_INPUT_ELEMENTS } = await import('../inputLimits.ts');
 const { resetRateLimits } = await import('../rateLimit.ts');
 
 /** Minimal def stub — toolAnnotations only reads `.scope` and `.annotations`. */
@@ -55,6 +57,8 @@ function annotationsOf(
 const throwingHandlerError = new Error('secret internal detail: db password is hunter2');
 let writeHandlerCalls = 0;
 let readerStateCalls = 0;
+let bulkHandlerCalls = 0;
+let stringsHandlerCalls = 0;
 
 beforeAll(() => {
   registerToolDefinition({
@@ -252,6 +256,40 @@ beforeAll(() => {
     inputSchema: { classroom: z.string().optional() },
     handler: async () => ({ content: [{ type: 'text', text: 'never' }] }),
   });
+
+  // page_content_apply-shaped arguments, with a schema that accepts any ops,
+  // for the tool-input size limit. No roles, so `classroom` is just data.
+  registerToolDefinition<{ ops: unknown[] }>({
+    name: 't_bulk_ops',
+    title: 'Bulk ops',
+    description: 'accepts page_content_apply-shaped arguments of any size',
+    scope: 'write',
+    roles: null,
+    inputSchema: {
+      classroom: z.string(),
+      page_id: z.string(),
+      expected_sha: z.string().optional(),
+      ops: z.array(z.unknown()),
+    },
+    handler: async args => {
+      bulkHandlerCalls += 1;
+      return { content: [{ type: 'text', text: `ops:${args.ops.length}` }] };
+    },
+  });
+
+  // A schema that fails once per bad element, for the bounded messages.
+  registerToolDefinition<{ items: string[] }>({
+    name: 't_strings',
+    title: 'Strings',
+    description: 'accepts an array of strings',
+    scope: 'read',
+    roles: null,
+    inputSchema: { items: z.array(z.string()) },
+    handler: async () => {
+      stringsHandlerCalls += 1;
+      return { content: [{ type: 'text', text: 'ok' }] };
+    },
+  });
 });
 
 // ─── Harness ─────────────────────────────────────────────────────────────────
@@ -323,6 +361,8 @@ beforeEach(() => {
   findByUserId.mockReset();
   writeHandlerCalls = 0;
   readerStateCalls = 0;
+  bulkHandlerCalls = 0;
+  stringsHandlerCalls = 0;
 });
 
 // ─── Registration validation ────────────────────────────────────────────────
@@ -828,6 +868,136 @@ describe('server instructions', () => {
     expect(instructions).toMatch(/now_local/);
     expect(instructions).toMatch(/Never state a raw UTC clock time/);
     expect(instructions.length).toBeLessThan(400);
+  });
+});
+
+// ─── Tool input size limit (maxToolInputElements) ──────────────────────────
+
+/** A page fixture from the repo, as its content.json `blocks`. */
+function fixtureBlocks(relativePath: string): unknown[] {
+  const url = new URL(`../../../../../${relativePath}`, import.meta.url);
+  return (JSON.parse(readFileSync(url, 'utf8')) as { blocks: unknown[] }).blocks;
+}
+
+/**
+ * page_content_apply arguments of `ops` insert ops of 400 top-level blocks,
+ * tiled from a fixture's top-level blocks (children come along).
+ */
+function pageBatch(blocks: unknown[], ops: number) {
+  let next = 0;
+  return {
+    classroom: 'org/slug',
+    page_id: '00000000-0000-0000-0000-000000000000',
+    expected_sha: 'x',
+    ops: Array.from({ length: ops }, () => ({
+      op: 'insert',
+      position: { at: 'end' },
+      blocks: Array.from({ length: 400 }, () => structuredClone(blocks[next++ % blocks.length])),
+    })),
+  };
+}
+
+/** Array elements plus object members, recursively: the SDK's own count. */
+function countElements(value: unknown): number {
+  let count = 0;
+  const stack: unknown[] = [value];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (node === null || typeof node !== 'object') continue;
+    const children = Array.isArray(node) ? node : Object.values(node);
+    for (const child of children) {
+      count += 1;
+      if (child !== null && typeof child === 'object') stack.push(child);
+    }
+  }
+  return count;
+}
+
+// The route answers over-limit calls before the SDK sees them
+// (routes/__tests__/mcpToolCallGate.test.ts); these drive the SDK's own check,
+// which stays as the second line.
+describe('tool input size limit (the SDK check)', () => {
+  const KITCHEN_SINK = 'packages/page-schema/src/__tests__/fixtures/kitchen-sink.content.json';
+
+  it('is 25,000 elements, and counts the way the route does', () => {
+    expect(MAX_TOOL_INPUT_ELEMENTS).toBe(25_000);
+    const args = pageBatch(fixtureBlocks(KITCHEN_SINK), 2);
+    expect(countJsonElements(args)).toBe(countElements(args));
+  });
+
+  it('lets a large page through: 800 top-level blocks of the kitchen-sink fixture', async () => {
+    const args = pageBatch(fixtureBlocks(KITCHEN_SINK), 2);
+    expect(countElements(args)).toBe(18_959);
+
+    const client = await connectClient(makeViewer(['write']));
+    const result = await callTool(client, 't_bulk_ops', args);
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content[0].text).toBe('ops:2');
+    expect(bulkHandlerCalls).toBe(1);
+  });
+
+  it('refuses arguments over the limit before validation, naming the limit', async () => {
+    const args = pageBatch(fixtureBlocks(KITCHEN_SINK), 3);
+    expect(countElements(args)).toBe(28_383);
+
+    const client = await connectClient(makeViewer(['write']));
+    const result = await callTool(client, 't_bulk_ops', args);
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(
+      /Invalid arguments for tool t_bulk_ops: arguments contain more than the maximum of 25000 elements/
+    );
+    expect(bulkHandlerCalls).toBe(0);
+  });
+
+  it('counts elements, not bytes: an array of 25,000 numbers is refused', async () => {
+    const client = await connectClient(makeViewer(['write']));
+    const result = await callTool(client, 't_bulk_ops', {
+      classroom: 'org/slug',
+      page_id: 'p',
+      ops: [Array.from({ length: MAX_TOOL_INPUT_ELEMENTS }, () => 0)],
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/more than the maximum of 25000 elements/);
+    expect(bulkHandlerCalls).toBe(0);
+  });
+});
+
+describe('validation messages are bounded', () => {
+  it('reports at most 20 issues in at most 4 KB, and how many more there were', async () => {
+    const client = await connectClient(makeViewer(['read']));
+    const result = await callTool(client, 't_strings', {
+      items: Array.from({ length: 5_000 }, (_, i) => i),
+    });
+
+    expect(result.isError).toBe(true);
+    const text = result.content[0].text;
+    expect(text.length).toBeLessThanOrEqual(4_096);
+    expect(text).toMatch(
+      /^MCP error -32602: Input validation error: Invalid arguments for tool t_strings:/
+    );
+    expect(text.match(/Expected string, received number at items\[\d+\]/g)).toHaveLength(20);
+    expect(text).toContain('…and 4980 more validation issues not shown');
+    expect(stringsHandlerCalls).toBe(0);
+  });
+
+  it('leaves a short message unchanged', async () => {
+    const client = await connectClient(makeViewer(['read']));
+    const result = await callTool(client, 't_strings', { items: [1] });
+
+    expect(result.content[0].text).toBe(
+      'MCP error -32602: Input validation error: Invalid arguments for tool t_strings: ' +
+        'Expected string, received number at items[0]'
+    );
+  });
+
+  it('still accepts valid input', async () => {
+    const client = await connectClient(makeViewer(['read']));
+    const result = await callTool(client, 't_strings', { items: ['a', 'b'] });
+    expect(result.isError).toBeFalsy();
+    expect(stringsHandlerCalls).toBe(1);
   });
 });
 

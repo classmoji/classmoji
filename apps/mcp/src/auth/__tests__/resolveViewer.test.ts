@@ -23,8 +23,13 @@
  * the test instead of production.
  */
 
+import { Prisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { UnauthorizedError } from '../../mcp/errors.ts';
+import {
+  TokenStoreUnavailableError,
+  UnauthorizedError,
+  UnsupportedTokenFormatError,
+} from '../../mcp/errors.ts';
 
 const getMcpSession = vi.fn();
 
@@ -36,7 +41,7 @@ vi.mock('@classmoji/database', async () =>
   (await import('../../__tests__/prismaSchemaStub.ts')).databaseModuleMock()
 );
 
-const { resolveViewer } = await import('../resolveViewer.ts');
+const { bearerFrom, isNewerTokenFormat, resolveViewer } = await import('../resolveViewer.ts');
 const { prismaCallsFor, resetPrismaStub, setPrismaRows } =
   await import('../../__tests__/prismaSchemaStub.ts');
 
@@ -205,5 +210,147 @@ describe('resolveViewer', () => {
       await expect(resolveViewer(HEADERS)).rejects.toThrow(UnauthorizedError);
       expect(applicationLookups()).toHaveLength(0);
     });
+  });
+
+  describe('token store unavailable → TokenStoreUnavailableError (503), never a 401', () => {
+    const clientVersion = '6.19.3';
+    // The shapes getMcpSession throws (observed against a local Postgres).
+    const tableMissing = new Prisma.PrismaClientKnownRequestError(
+      'The table `public.oauth_access_tokens` does not exist in the current database.',
+      { code: 'P2021', clientVersion }
+    );
+    const connectionClosed = new Prisma.PrismaClientKnownRequestError(
+      'Server has closed the connection.',
+      { code: 'P1017', clientVersion }
+    );
+    const cannotConnect = new Prisma.PrismaClientInitializationError(
+      "Can't reach database server at `127.0.0.1:5432`",
+      clientVersion
+    );
+
+    it.each([
+      ['a missing table', tableMissing],
+      ['a dropped connection', connectionClosed],
+      ['no connection at all', cannotConnect],
+    ])('when the token lookup fails with %s', async (_label, error) => {
+      getMcpSession.mockRejectedValue(error);
+
+      const failure = await resolveViewer(HEADERS).catch((e: unknown) => e);
+      expect(failure).toBeInstanceOf(TokenStoreUnavailableError);
+      expect(failure).not.toBeInstanceOf(UnauthorizedError);
+      expect((failure as Error).cause).toBe(error);
+    });
+
+    it('when the application lookup fails because the store is unavailable', async () => {
+      getMcpSession.mockResolvedValue(validRow());
+      applicationRow(() => {
+        throw new Prisma.PrismaClientKnownRequestError("Can't reach database server", {
+          code: 'P1001',
+          clientVersion,
+        });
+      });
+
+      await expect(resolveViewer(HEADERS)).rejects.toThrow(TokenStoreUnavailableError);
+    });
+
+    it('but an application lookup failing for any other reason is passed on unchanged', async () => {
+      const other = new Prisma.PrismaClientKnownRequestError('Inconsistent column data', {
+        code: 'P2023',
+        clientVersion,
+      });
+      getMcpSession.mockResolvedValue(validRow());
+      applicationRow(() => {
+        throw other;
+      });
+
+      // Not classified: the route answers it like today (401, logged).
+      await expect(resolveViewer(HEADERS)).rejects.toBe(other);
+    });
+
+    it('a token lookup failing for any other reason is still a 401', async () => {
+      getMcpSession.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+          code: 'P2002',
+          clientVersion,
+        })
+      );
+      await expect(resolveViewer(HEADERS)).rejects.toThrow(UnauthorizedError);
+
+      getMcpSession.mockRejectedValue(new Error("Can't reach database server"));
+      await expect(resolveViewer(HEADERS)).rejects.toThrow(UnauthorizedError);
+    });
+
+    it('an invalid, unknown or expired token is still a 401 while the store is up', async () => {
+      getMcpSession.mockResolvedValue(null);
+      await expect(resolveViewer(HEADERS)).rejects.toThrow(UnauthorizedError);
+
+      getMcpSession.mockResolvedValue(
+        validRow({ accessTokenExpiresAt: new Date(Date.now() - 1_000) })
+      );
+      await expect(resolveViewer(HEADERS)).rejects.toThrow(UnauthorizedError);
+    });
+  });
+
+  describe('a token in a newer format → UnsupportedTokenFormatError (503)', () => {
+    const b64 = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
+    const jwt = (header: unknown) => `${b64(header)}.${b64({ sub: 'u1' })}.c2lnbmF0dXJl`;
+    const bearer = (token: string) => new Headers({ authorization: `Bearer ${token}` });
+
+    it('a JWT that is not found', async () => {
+      getMcpSession.mockResolvedValue(null);
+      const failure = await resolveViewer(bearer(jwt({ alg: 'EdDSA', typ: 'JWT' }))).catch(
+        (e: unknown) => e
+      );
+      expect(failure).toBeInstanceOf(UnsupportedTokenFormatError);
+      expect(failure).not.toBeInstanceOf(UnauthorizedError);
+    });
+
+    it('an Ask Moji token that is not found', async () => {
+      getMcpSession.mockResolvedValue(null);
+      await expect(resolveViewer(bearer('askmoji_abc123'))).rejects.toThrow(
+        UnsupportedTokenFormatError
+      );
+    });
+
+    it('but not three segments that are not a JWT header, nor an opaque token', async () => {
+      getMcpSession.mockResolvedValue(null);
+      for (const token of [
+        jwt({ typ: 'JWT' }), // no alg
+        `${b64('just a string')}.x.y`,
+        'not-base64!.x.y',
+        'a.b', // two segments
+        'opaque-token-value',
+        'Askmoji_abc', // prefix is case-sensitive
+      ]) {
+        await expect(resolveViewer(bearer(token)), token).rejects.toThrow(UnauthorizedError);
+      }
+      await expect(resolveViewer(new Headers())).rejects.toThrow(UnauthorizedError);
+    });
+
+    it('never for a token that is found: its expiry and client are checked', async () => {
+      getMcpSession.mockResolvedValue(
+        validRow({ accessTokenExpiresAt: new Date(Date.now() - 1_000) })
+      );
+      await expect(resolveViewer(bearer('askmoji_known'))).rejects.toThrow(/expired/i);
+
+      getMcpSession.mockResolvedValue(validRow());
+      const viewer = await resolveViewer(bearer('askmoji_known'));
+      expect(viewer.userId).toBe('user-1');
+    });
+  });
+});
+
+describe('isNewerTokenFormat', () => {
+  it('reads the bearer the way better-auth does', () => {
+    expect(bearerFrom(new Headers({ authorization: 'Bearer abc' }))).toBe('abc');
+    expect(bearerFrom(new Headers())).toBeNull();
+  });
+
+  it('recognizes a JWT header and the Ask Moji prefix only', () => {
+    const header = Buffer.from('{"alg":"RS256"}').toString('base64url');
+    expect(isNewerTokenFormat(`${header}.e30.sig`)).toBe(true);
+    expect(isNewerTokenFormat('askmoji_x')).toBe(true);
+    expect(isNewerTokenFormat(`${header}.e30.`)).toBe(false);
+    expect(isNewerTokenFormat('random')).toBe(false);
   });
 });
