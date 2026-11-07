@@ -45,3 +45,13 @@ export const CLASSROOM_REMOVE_IMPERSONATION_MESSAGE =
  */
 export const ACCOUNT_DETAILS_IMPERSONATION_MESSAGE =
   "Changing account details isn't available while viewing as another user.";
+
+/**
+ * Billing (Settings → Billing): no checkout or billing portal is opened while
+ * viewing as another user, since it would be for their plan and their Stripe
+ * customer. The page still shows the plan. The actions check with
+ * `isViewingAsAnotherUser` (@classmoji/auth/server), as the settings actions
+ * above do.
+ */
+export const BILLING_IMPERSONATION_MESSAGE =
+  "Billing isn't available while viewing as another user.";

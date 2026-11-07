@@ -8,7 +8,8 @@ import { useCallout } from '@classmoji/ui-components';
 import FreePlans from './FreePlans';
 import ProBilling from './ProBilling';
 import type { PortalFlow } from './ProBilling';
-import { getAuthSession } from '@classmoji/auth/server';
+import { getAuthSession, isViewingAsAnotherUser } from '@classmoji/auth/server';
+import { BILLING_IMPERSONATION_MESSAGE } from '~/utils/impersonationSession';
 import type { Route } from './+types/route';
 
 /** `data.tool` / `source` for every billing event written from this page. */
@@ -114,7 +115,16 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
   );
 };
 
+/**
+ * Checkout and the billing portal. Both refuse while a platform admin is
+ * viewing as another user, by either session read: they would open that
+ * user's portal or start a checkout that writes a Stripe customer onto their
+ * row.
+ */
 export const action = async ({ request }: Route.ActionArgs) => {
+  if (await isViewingAsAnotherUser(request.headers)) {
+    return { error: BILLING_IMPERSONATION_MESSAGE };
+  }
   const body = ((await request.json().catch(() => ({}))) ?? {}) as { flow?: unknown };
   const authData = await getAuthSession(request);
   const userId = authData!.userId;
