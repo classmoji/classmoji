@@ -967,8 +967,23 @@ export const auth = betterAuth({
           noteSeen(row?.userId, row?.impersonatedBy, { force: true });
           // Awaited, and allowed to fail the request: the endpoint sets the
           // session cookie only after this returns, so a start that can't be
-          // recorded is never handed to the browser.
-          if (row?.impersonatedBy) await recordViewAs('impersonate.start', row, ctx?.path);
+          // recorded is never handed to the browser. The row it was written
+          // for is removed first, so no View as session is left that has no
+          // start row. Removed through Prisma, not better-auth, so the delete
+          // hook does not record an end for it.
+          if (!row?.impersonatedBy) return;
+          try {
+            await recordViewAs('impersonate.start', row, ctx?.path);
+          } catch (error) {
+            if (row.id) {
+              await getPrisma()
+                .session.deleteMany({ where: { id: String(row.id) } })
+                .catch(removeError =>
+                  console.error('[auth] View as session not removed', removeError)
+                );
+            }
+            throw error;
+          }
         },
       },
       update: {

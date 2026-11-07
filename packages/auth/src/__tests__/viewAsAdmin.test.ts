@@ -106,7 +106,9 @@ const mocks = vi.hoisted(() => {
     }),
     deleteMany: vi.fn(({ where }: any) => {
       const before = state.sessions.length;
-      state.sessions = state.sessions.filter(s => s.token !== where?.token);
+      state.sessions = state.sessions.filter(s =>
+        where?.id !== undefined ? s.id !== where.id : s.token !== where?.token
+      );
       return Promise.resolve({ count: before - state.sessions.length });
     }),
   };
@@ -582,5 +584,36 @@ describe('auditing View as on the server (PlatformAuditLog)', () => {
 
     expect(res.status).toBeGreaterThanOrEqual(500);
     expect(res.headers.getSetCookie().join(';')).not.toContain(`${COOKIE_PREFIX}.session_token=`);
+  });
+
+  it('removes the View as session row whose start cannot be written, and records no end', async () => {
+    mocks.client.platformAuditLog.create.mockRejectedValueOnce(new Error('database down'));
+
+    const res = await viewAs(signIn('admin-1'), { userId: 'owner-1' });
+
+    expect(res.status).toBeGreaterThanOrEqual(500);
+    const created = mocks.state.created[0]!;
+    expect(created).toMatchObject({ user_id: 'owner-1', impersonatedBy: 'admin-1' });
+    expect(mocks.client.session.deleteMany).toHaveBeenCalledWith({ where: { id: created.id } });
+    expect(mocks.state.sessions.filter(s => s.impersonatedBy)).toEqual([]);
+    // The admin's own session stays.
+    expect(mocks.state.sessions.map(s => s.user_id)).toEqual(['admin-1']);
+    // Only the failed start was attempted: no end row for the removed session.
+    expect(
+      mocks.client.platformAuditLog.create.mock.calls.map(([args]: any[]) => args.data.action)
+    ).toEqual(['impersonate.start']);
+  });
+
+  it('still fails the start when the row cannot be removed either', async () => {
+    mocks.client.platformAuditLog.create.mockRejectedValueOnce(new Error('database down'));
+    mocks.client.session.deleteMany.mockRejectedValueOnce(new Error('database down'));
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const res = await viewAs(signIn('admin-1'), { userId: 'owner-1' });
+
+    expect(res.status).toBeGreaterThanOrEqual(500);
+    expect(res.headers.getSetCookie().join(';')).not.toContain(`${COOKIE_PREFIX}.session_token=`);
+    expect(errors).toHaveBeenCalledWith('[auth] View as session not removed', expect.any(Error));
+    errors.mockRestore();
   });
 });
