@@ -17,10 +17,16 @@ type GitOrganizationLike = Parameters<typeof getGitProvider>[0] & { login: strin
 export const branchRef = (branch: string): string => `refs/heads/${branch}`;
 
 /**
- * `git checkout updates --`: the `--` makes `updates` the branch even when the
- * repository also holds a top-level file of that name.
+ * The `updates` branch, by full ref names only, so a tag or a top-level file
+ * also named `updates` can never stand in for it:
+ * - checkout: `git checkout -B updates refs/remotes/origin/updates --` puts
+ *   the local branch at the remote's copy (`git checkout updates` would land
+ *   on a tag of that name, detached, and `git switch` refuses one);
+ * - push: `refs/heads/updates:refs/heads/updates` (a bare `updates` would
+ *   push the tag, or match both and fail).
  */
-const UPDATES_BRANCH = ['updates', '--'];
+const CHECKOUT_UPDATES_FROM_ORIGIN = ['-B', 'updates', 'refs/remotes/origin/updates', '--'];
+const PUSH_UPDATES = 'refs/heads/updates:refs/heads/updates';
 
 /**
  * The template's HEAD, read through the `template` remote. A template that is
@@ -97,15 +103,14 @@ export const updateRepository = async (
     await studentGit.addConfig('user.email', 'hello@classmoji.com');
     await studentGit.addConfig('pull.rebase', 'false');
 
+    // A fresh clone has no local `updates`; the remote's copy is the one an
+    // earlier update left.
     const branches = await studentGit.branch();
-    const updatesBranchExists =
-      branches.all.includes('updates') || branches.all.includes('remotes/origin/updates');
-
-    if (!updatesBranchExists) {
+    if (!branches.all.includes('remotes/origin/updates')) {
       logger.info('Updates branch does not exist, creating it from template');
       await studentGit.checkoutLocalBranch('updates');
     } else {
-      await studentGit.checkout(UPDATES_BRANCH);
+      await studentGit.checkout(CHECKOUT_UPDATES_FROM_ORIGIN);
     }
 
     try {
@@ -142,7 +147,7 @@ export const updateRepository = async (
       'theirs',
       '--no-edit',
     ]);
-    await studentGit.push('origin', 'updates', ['--force']);
+    await studentGit.push('origin', PUSH_UPDATES, ['--force']);
 
     const { data: repoMeta } = await octokit.rest.repos.get({
       owner: orgLogin,
@@ -232,8 +237,11 @@ async function updateGitLabRepository(
     await studentGit.addConfig('pull.rebase', 'false');
 
     const branches = await studentGit.branch();
-    if (branches.all.includes('remotes/origin/updates')) await studentGit.checkout(UPDATES_BRANCH);
-    else await studentGit.checkoutLocalBranch('updates');
+    if (branches.all.includes('remotes/origin/updates')) {
+      await studentGit.checkout(CHECKOUT_UPDATES_FROM_ORIGIN);
+    } else {
+      await studentGit.checkoutLocalBranch('updates');
+    }
 
     await studentGit.addRemote('template', remote(`${templateOwner}/${templateRepo}`));
     const templateSymref = await readTemplateHead(studentGit, `${templateOwner}/${templateRepo}`);
@@ -248,7 +256,7 @@ async function updateGitLabRepository(
       '--allow-unrelated-histories',
     ]);
     // ci.skip: the update branch is not a student's push to test.
-    await studentGit.push('origin', 'updates', ['--force', '-o', 'ci.skip']);
+    await studentGit.push('origin', PUSH_UPDATES, ['--force', '-o', 'ci.skip']);
 
     const defaultBranch = await provider.getDefaultBranch(owner, repoName);
     const description = `${prDescription}\n\n---\n\n## Template Update\n\nThis brings the latest changes from the template repository.\n\n### To merge\n\n1. Review the changes in the "Changes" tab\n2. Click "Merge"\n3. If conflicts occur, resolve them in your editor`;

@@ -77,11 +77,18 @@ const commitFile = async (git: SimpleGit, dir: string, name: string, body: strin
  *
  * `updatesFile`: the student's `main` also holds a top-level file named
  * `updates`, and an earlier update left an `updates` branch on the remote.
+ * `updatesBranch`: an earlier update left an `updates` branch on the remote.
+ * `updatesTag`: the student's repository also holds a tag named `updates`.
  */
 const setUp = async (
   repo: string,
   branch: string,
-  { host = 'github', updatesFile = false }: { host?: Host; updatesFile?: boolean } = {}
+  {
+    host = 'github',
+    updatesFile = false,
+    updatesBranch = false,
+    updatesTag = false,
+  }: { host?: Host; updatesFile?: boolean; updatesBranch?: boolean; updatesTag?: boolean } = {}
 ) => {
   const work = path.join(root, 'work', repo);
   fs.mkdirSync(work, { recursive: true });
@@ -103,7 +110,11 @@ const setUp = async (
   await commitFile(student, studentWork, 'mine.txt', 'student work\n');
   if (updatesFile) await commitFile(student, studentWork, 'updates', 'notes\n');
   await student.push('origin', 'main');
-  if (updatesFile) await student.push('origin', 'main:refs/heads/updates');
+  if (updatesFile || updatesBranch) await student.push('origin', 'main:refs/heads/updates');
+  if (updatesTag) {
+    await student.raw(['tag', 'updates']);
+    await student.push('origin', 'refs/tags/updates');
+  }
 
   await commitFile(git, work, 'new.txt', 'from the template\n');
   const templateBare = path.join(root, host, TEMPLATE_OWNER, `${repo}.git`);
@@ -120,6 +131,9 @@ const filesOn = async (bare: string, branch: string) =>
     .split('\n')
     .filter(Boolean)
     .sort();
+
+const tagCommit = async (bare: string, tag: string) =>
+  (await run(bare).raw(['rev-parse', `refs/tags/${tag}`])).trim();
 
 const lastSubject = async (bare: string, branch: string) =>
   (await run(bare).raw(['log', '-1', '--format=%s', branchRef(branch)])).trim();
@@ -221,6 +235,45 @@ describe('updateRepository', TIMEOUT, () => {
       'updates',
     ]);
     expect(await lastSubject(studentBare, 'updates')).toMatch(/^Merge branch 'main' of /);
+  });
+});
+
+describe('updateRepository with a tag named updates', TIMEOUT, () => {
+  it('updates the existing updates branch, not the tag', async () => {
+    const { studentBare } = await setUp('lab6', 'main', { updatesBranch: true, updatesTag: true });
+    const tagBefore = await tagCommit(studentBare, 'updates');
+
+    const result = await update('lab6');
+
+    expect(result).toMatchObject({ hasChanges: true, prUrl: 'https://pr' });
+    expect(await filesOn(studentBare, 'updates')).toEqual(['README.md', 'mine.txt', 'new.txt']);
+    expect(await lastSubject(studentBare, 'updates')).toMatch(/^Merge branch 'main' of /);
+    expect(await tagCommit(studentBare, 'updates')).toBe(tagBefore);
+  });
+
+  it('creates the updates branch on a first update', async () => {
+    const { studentBare } = await setUp('lab7', 'main', { updatesTag: true });
+    const tagBefore = await tagCommit(studentBare, 'updates');
+
+    await update('lab7');
+
+    expect(await filesOn(studentBare, 'updates')).toEqual(['README.md', 'mine.txt', 'new.txt']);
+    expect(await tagCommit(studentBare, 'updates')).toBe(tagBefore);
+  });
+
+  it('updates the existing updates branch on Gitlab, not the tag', async () => {
+    const { studentBare } = await setUp('lab8', 'main', {
+      host: 'gitlab',
+      updatesBranch: true,
+      updatesTag: true,
+    });
+    const tagBefore = await tagCommit(studentBare, 'updates');
+
+    const result = await update('lab8', 'gitlab');
+
+    expect(result).toMatchObject({ hasChanges: true, prUrl: 'https://mr' });
+    expect(await filesOn(studentBare, 'updates')).toEqual(['README.md', 'mine.txt', 'new.txt']);
+    expect(await tagCommit(studentBare, 'updates')).toBe(tagBefore);
   });
 });
 
