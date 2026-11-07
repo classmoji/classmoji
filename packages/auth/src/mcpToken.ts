@@ -98,7 +98,7 @@ export interface MintedMcpToken {
 /** The subset of the Prisma client this module uses — also what tests stand in for. */
 type MintClient = Pick<
   PrismaClient,
-  'oauthAccessToken' | 'oauthApplication' | '$executeRaw' | '$transaction'
+  'legacyOauthAccessToken' | 'legacyOauthApplication' | '$executeRaw' | '$transaction'
 >;
 type MintTx = Omit<MintClient, '$transaction'>;
 
@@ -152,7 +152,7 @@ function advisoryLockKey(userId: string): bigint {
 /** A live, reusable token for this user, or null. */
 async function findReusableToken(client: MintTx, userId: string): Promise<MintedMcpToken | null> {
   const floor = new Date(Date.now() + REUSE_FLOOR_SECONDS * 1000);
-  const existing = await client.oauthAccessToken.findFirst({
+  const existing = await client.legacyOauthAccessToken.findFirst({
     where: {
       userId,
       clientId: ASK_MOJI_CLIENT_ID,
@@ -225,7 +225,7 @@ export async function mintMcpAccessToken(userId: string): Promise<MintedMcpToken
     // formality: a P2002 from some OTHER unique constraint would leave no row,
     // and that error must still surface.
     try {
-      await client.oauthApplication.upsert({
+      await client.legacyOauthApplication.upsert({
         where: { clientId: ASK_MOJI_CLIENT_ID },
         update: {},
         create: {
@@ -241,7 +241,7 @@ export async function mintMcpAccessToken(userId: string): Promise<MintedMcpToken
       });
     } catch (error: unknown) {
       if (!isUniqueConstraintViolation(error)) throw error;
-      const existing = await client.oauthApplication.findUnique({
+      const existing = await client.legacyOauthApplication.findUnique({
         where: { clientId: ASK_MOJI_CLIENT_ID },
       });
       if (!existing) throw error;
@@ -257,7 +257,7 @@ export async function mintMcpAccessToken(userId: string): Promise<MintedMcpToken
     // than the whole client so concurrent mints never contend on the same rows;
     // growth stays bounded at one stale row per user who stops using Ask Moji,
     // cleared the moment they come back.
-    await client.oauthAccessToken.deleteMany({
+    await client.legacyOauthAccessToken.deleteMany({
       where: {
         clientId: ASK_MOJI_CLIENT_ID,
         userId,
@@ -266,7 +266,7 @@ export async function mintMcpAccessToken(userId: string): Promise<MintedMcpToken
     });
 
     const expiresAt = new Date(now + TOKEN_TTL_SECONDS * 1000);
-    const created = await client.oauthAccessToken.create({
+    const created = await client.legacyOauthAccessToken.create({
       data: {
         accessToken: `askmoji_${randomBytes(32).toString('base64url')}`,
         // The column is NOT NULL and @unique, so a value must be written. It is

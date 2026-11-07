@@ -41,7 +41,7 @@ const mocks = vi.hoisted(() => {
   const state: {
     table: FakeTokenRow[];
     onTransaction: (() => void) | null;
-    /** What `oauthApplication.findUnique` reports after a P2002 — the row the winner wrote. */
+    /** What `legacyOauthApplication.findUnique` reports after a P2002 — the row the winner wrote. */
     application: Record<string, unknown> | null;
     /** The options object `$transaction` was actually called with. */
     transactionOptions: unknown;
@@ -106,12 +106,12 @@ const mocks = vi.hoisted(() => {
     };
 
   const client: any = {
-    oauthAccessToken: {
+    legacyOauthAccessToken: {
       findFirst: record('findFirst', findFirst),
       create: record('create', create),
       deleteMany: record('deleteMany', deleteMany),
     },
-    oauthApplication: {
+    legacyOauthApplication: {
       upsert: record('upsert', upsert),
       findUnique: record('appFindUnique', appFindUnique),
     },

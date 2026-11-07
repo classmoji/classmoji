@@ -800,7 +800,7 @@ async function assertRefreshClientAuthenticated(
 ): Promise<void> {
   // No client id: the grant refuses it on its own (no token row matches).
   if (!clientId) return;
-  const client = await getPrisma().oauthApplication.findUnique({
+  const client = await getPrisma().legacyOauthApplication.findUnique({
     where: { clientId },
     select: { type: true, clientSecret: true, disabled: true },
   });

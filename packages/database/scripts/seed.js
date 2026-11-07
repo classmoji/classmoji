@@ -387,7 +387,7 @@ async function main() {
   // `disabled` is the operator kill switch — flipping it to true revokes every
   // Ask Moji token at once (apps/mcp/src/auth/resolveViewer.ts). The mint helper
   // upserts with `update: {}` so re-minting never flips it back.
-  const askMojiClient = await prisma.oauthApplication.upsert({
+  const askMojiClient = await prisma.legacyOauthApplication.upsert({
     where: { clientId: 'classmoji-ask-moji' },
     update: {},
     create: {
@@ -399,6 +399,30 @@ async function main() {
       disabled: false,
     },
   });
+
+  // The same two Classmoji-owned client ids on the OAuth server
+  // (better-auth 1.7, `oauth2_clients`), reserved as disabled clients with no
+  // grants, redirect URIs or secret, so no OAuth client can ever carry them.
+  // The migration that creates the table inserts them too; `update` keeps an
+  // existing row disabled.
+  for (const [clientId, name] of [
+    ['classmoji-ask-moji', 'Ask Moji'],
+    ['classmoji-dev-mint', 'Classmoji dev mint'],
+  ]) {
+    await prisma.oauthClient.upsert({
+      where: { clientId },
+      update: { disabled: true },
+      create: {
+        clientId,
+        name,
+        disabled: true,
+        redirectUris: [],
+        grantTypes: [],
+        responseTypes: [],
+        tokenEndpointAuthMethod: 'client_secret_basic',
+      },
+    });
+  }
 
   // ── Foreign classroom ───────────────────────────────────────────────────
   // classmoji-other-class: none of the test identities are members — exercises
