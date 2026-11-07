@@ -185,6 +185,38 @@ describe('commitFilesToRemote', () => {
     expect(result.lazyFetches).toBe(0);
   });
 
+  it('rebuilds on a default branch whose name begins with --', async () => {
+    const BRANCH = '--release';
+    sh(['--git-dir', remote, 'update-ref', `refs/heads/${BRANCH}`, 'refs/heads/main']);
+    sh(['--git-dir', remote, 'symbolic-ref', 'HEAD', `refs/heads/${BRANCH}`]);
+    sh(['--git-dir', remote, 'update-ref', '-d', 'refs/heads/main']);
+
+    const result = await commitFilesToRemote({
+      remoteUrl,
+      files: [{ path: 'pages/intro/content.json', content: 'ours' }],
+      message: 'ours\n',
+      author: ID,
+      beforePush: async ({ attempt }) => {
+        if (attempt !== 1) return;
+        writeFileSync(path.join(work, 'outside.txt'), 'uploaded');
+        sh(['add', '-A'], work);
+        sh(['commit', '-m', 'outside'], work);
+        sh(['push', 'origin', `HEAD:refs/heads/${BRANCH}`], work);
+      },
+    });
+
+    expect(result.branch).toBe(BRANCH);
+    expect(result.pushed).toBe(true);
+    expect(result.attempts).toBe(2);
+    const ref = `refs/heads/${BRANCH}`;
+    expect(sh(['--git-dir', remote, 'rev-parse', ref])).toBe(result.commit);
+    expect(remoteFile('pages/intro/content.json', ref)).toBe('ours');
+    expect(remoteFile('outside.txt', ref)).toBe('uploaded');
+    expect(sh(['--git-dir', remote, 'log', '-1', '--format=%s', `${result.commit}^`])).toBe(
+      'outside'
+    );
+  });
+
   it('gives up after maxAttempts rejections and leaves the remote as the others left it', async () => {
     let n = 0;
     const attempt = commitFilesToRemote({

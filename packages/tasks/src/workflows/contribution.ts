@@ -36,7 +36,7 @@ async function cloneRepo(
   await simpleGit().clone(remote, dir);
 }
 
-async function calculateContributions(dir: string): Promise<string> {
+export async function calculateContributions(dir: string): Promise<string> {
   const git = simpleGit();
   await git.cwd(dir);
 
@@ -48,9 +48,10 @@ async function calculateContributions(dir: string): Promise<string> {
 
   const authorCounts: Record<string, number> = {};
 
-  // Get blame information for each file
+  // Get blame information for each file. `--` before the name: a file name
+  // is always read as a path.
   for (const file of fileList) {
-    const blame = await git.raw(['blame', '--line-porcelain', file]);
+    const blame = await git.raw(['blame', '--line-porcelain', '--', file]);
     const authors = blame.match(/^author (.*)$/gm); // Extract authors from the blame output
 
     if (authors) {
