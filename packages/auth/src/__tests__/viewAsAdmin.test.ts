@@ -2,17 +2,19 @@
    accepts whatever argument shape better-auth's adapter passes. */
 /**
  * "View as" (better-auth admin impersonation, POST /admin/impersonate-user)
- * never targets an admin: neither a platform admin (PLATFORM_ADMIN_USER_IDS)
- * nor a user whose role contains "admin". Through the REAL exported `auth`,
- * over `auth.handler`; only Prisma and the service layer are stood in.
+ * is started only by a platform admin (PLATFORM_ADMIN_USER_IDS), whatever a
+ * user's role, and never targets an admin: neither a platform admin nor a
+ * user whose role contains "admin". Through the REAL exported `auth`, over
+ * `auth.handler`; only Prisma and the service layer are stood in.
  *
  * Two layers, each tested on its own:
  *   (a) `hooks.before` refuses the request before the endpoint runs, with its
- *       own message (1.4.18's endpoint also refuses admin targets, with
+ *       own messages (1.4.18's endpoint also refuses admin targets, with
  *       "You cannot impersonate admins"; from 1.5 it lets an `adminUserIds`
  *       caller through, so the message tells the layers apart);
  *   (b) `databaseHooks.session.create.before` refuses any session created
- *       with `impersonatedBy` for an admin, whatever path creates it.
+ *       with `impersonatedBy` by someone who is not a platform admin, or for
+ *       an admin, whatever path creates it.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -116,8 +118,14 @@ vi.mock('@classmoji/services', () => ({
   },
 }));
 
-const { auth, COOKIE_PREFIX, VIEW_AS_ADMIN_REFUSED_MESSAGE, mayViewAs, roleIncludesAdmin } =
-  await import('../server.ts');
+const {
+  auth,
+  COOKIE_PREFIX,
+  VIEW_AS_ADMIN_REFUSED_MESSAGE,
+  VIEW_AS_PLATFORM_ADMINS_ONLY_MESSAGE,
+  mayViewAs,
+  roleIncludesAdmin,
+} = await import('../server.ts');
 
 const BASE = 'http://localhost:3000/api/auth';
 
@@ -184,21 +192,19 @@ describe('roleIncludesAdmin', () => {
   });
 });
 
-// Who may start "view as" at all: the admin plugin's own check with our
-// config. A platform admin, or the `admin` role named exactly in the list.
+// Who may start "view as" at all: platform admins only, by id. A user's role
+// plays no part (role-admin's role is `admin`).
 describe('mayViewAs', () => {
   it.each([
-    ['admin-1', null, true],
-    ['someone', 'admin', true],
-    ['someone', 'user,admin', true],
-    ['someone', 'user, admin', true],
-    ['someone', 'Admin', false],
-    ['someone', 'user,Admin', false],
-    ['someone', 'superadmin', false],
-    ['someone', 'user', false],
-    ['someone', null, false],
-  ])('%s with role %j → %s', (userId, role, expected) => {
-    expect(mayViewAs(userId, role)).toBe(expected);
+    ['admin-1', true],
+    ['admin-2', true],
+    ['12345', true],
+    ['role-admin', false],
+    ['role-mixed', false],
+    ['owner-1', false],
+    ['', false],
+  ])('%j → %s', (userId, expected) => {
+    expect(mayViewAs(userId)).toBe(expected);
   });
 });
 
@@ -223,14 +229,6 @@ describe('a platform admin viewing as someone (hooks.before)', () => {
     ['a number', 12345],
   ])('reads the target id sent as %s the way the endpoint does', async (_label, userId) => {
     const res = await viewAs(signIn('admin-1'), { userId });
-
-    expect(res.status).toBe(403);
-    expect(await res.json()).toMatchObject({ message: VIEW_AS_ADMIN_REFUSED_MESSAGE });
-    expect(mocks.state.created).toHaveLength(0);
-  });
-
-  it('is refused for a caller whose role is admin, too', async () => {
-    const res = await viewAs(signIn('role-admin'), { userId: 'admin-1' });
 
     expect(res.status).toBe(403);
     expect(await res.json()).toMatchObject({ message: VIEW_AS_ADMIN_REFUSED_MESSAGE });
@@ -268,8 +266,8 @@ describe('a platform admin viewing as someone (hooks.before)', () => {
 });
 
 describe('callers who may not view as anyone', () => {
-  // The target is checked only for a caller the endpoint would let through,
-  // so the answer is the endpoint's own and the same for an admin target.
+  // Only a platform admin's target is looked up, so every other caller gets
+  // the same answer whoever the target is.
   it('signed out: the same 401 for an admin target and an ordinary one', async () => {
     const admin = await viewAs(null, { userId: 'admin-2' });
     const ordinary = await viewAs(null, { userId: 'owner-1' });
@@ -288,8 +286,25 @@ describe('callers who may not view as anyone', () => {
     expect(ordinary.status).toBe(403);
     const adminBody = await admin.json();
     expect(adminBody).toEqual(await ordinary.json());
-    expect(adminBody.message).not.toBe(VIEW_AS_ADMIN_REFUSED_MESSAGE);
+    expect(adminBody.message).toBe(VIEW_AS_PLATFORM_ADMINS_ONLY_MESSAGE);
     expect(mocks.client.user.findUnique).not.toHaveBeenCalled();
+  });
+
+  // The admin plugin on its own lets a user whose role is `admin` view as
+  // anyone who is not an admin.
+  it('signed in with the admin role but not a platform admin: the same refusal for both', async () => {
+    const token = signIn('role-admin');
+    const admin = await viewAs(token, { userId: 'admin-1' });
+    const ordinary = await viewAs(token, { userId: 'student-1' });
+
+    expect(admin.status).toBe(403);
+    expect(ordinary.status).toBe(403);
+    const adminBody = await admin.json();
+    expect(adminBody).toEqual(await ordinary.json());
+    expect(adminBody.message).toBe(VIEW_AS_PLATFORM_ADMINS_ONLY_MESSAGE);
+    expect(mocks.client.user.findUnique).not.toHaveBeenCalled();
+    expect(endpointLookedUp('student-1')).toBe(false);
+    expect(mocks.state.created).toHaveLength(0);
   });
 
   // `user,Admin` is protected as a target (role contains "admin"), but the
@@ -303,7 +318,7 @@ describe('callers who may not view as anyone', () => {
     expect(ordinary.status).toBe(403);
     const adminBody = await admin.json();
     expect(adminBody).toEqual(await ordinary.json());
-    expect(adminBody.message).not.toBe(VIEW_AS_ADMIN_REFUSED_MESSAGE);
+    expect(adminBody.message).toBe(VIEW_AS_PLATFORM_ADMINS_ONLY_MESSAGE);
     expect(mocks.client.user.findUnique).not.toHaveBeenCalled();
     expect(mocks.state.created).toHaveLength(0);
   });
@@ -326,6 +341,17 @@ describe('creating an impersonated session (databaseHooks.session.create.before)
     await expect(createSession(target, 'admin-1')).rejects.toMatchObject({
       statusCode: 403,
       body: { message: VIEW_AS_ADMIN_REFUSED_MESSAGE },
+    });
+    expect(mocks.state.created).toHaveLength(0);
+  });
+
+  it.each([
+    ['a user whose role is admin', 'role-admin'],
+    ['an ordinary user', 'owner-1'],
+  ])('is refused when the viewer is %s, not a platform admin', async (_label, viewer) => {
+    await expect(createSession('student-1', viewer)).rejects.toMatchObject({
+      statusCode: 403,
+      body: { message: VIEW_AS_PLATFORM_ADMINS_ONLY_MESSAGE },
     });
     expect(mocks.state.created).toHaveLength(0);
   });

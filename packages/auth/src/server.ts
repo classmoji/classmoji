@@ -104,14 +104,14 @@ export function roleIncludesAdmin(role: unknown): boolean {
 }
 
 /**
- * Whether the admin plugin lets this user start "view as" at all, matched
- * the way its permission check does with our config (`adminUserIds`, and the
- * default `admin` role named exactly in the comma-separated list). Narrower
- * than `roleIncludesAdmin`, which decides who may not be viewed as.
+ * Whether this user may start "view as": platform admins only
+ * (`PLATFORM_ADMIN_USER_IDS`), whatever their `role`. The admin plugin on its
+ * own would also let a user whose role is `admin` in; `hooks.before`
+ * (refuseViewingAsAnAdmin) and `databaseHooks.session.create.before` hold
+ * this rule. Pages read it to decide whether to offer "View as".
  */
-export function mayViewAs(userId: string, role: unknown): boolean {
-  if (PLATFORM_ADMIN_USER_IDS.includes(userId)) return true;
-  return typeof role === 'string' && role.split(',').some(entry => entry.trim() === 'admin');
+export function mayViewAs(userId: string): boolean {
+  return PLATFORM_ADMIN_USER_IDS.includes(userId);
 }
 
 /** A platform admin, or a user whose role contains "admin". */
@@ -126,20 +126,24 @@ async function isAdminUser(userId: string): Promise<boolean> {
 
 export const VIEW_AS_ADMIN_REFUSED_MESSAGE = "You can't view as another admin.";
 
+export const VIEW_AS_PLATFORM_ADMINS_ONLY_MESSAGE =
+  'Only platform admins can view as another user.';
+
 /**
- * "View as" (the admin plugin's /admin/impersonate-user) never targets an
- * admin: neither a platform admin nor a user whose role contains "admin".
- * Run from `hooks.before` on that path only, so a refusal comes before the
- * endpoint writes anything; `databaseHooks.session.create.before` holds the
- * same rule for any session created with `impersonatedBy`.
+ * "View as" (the admin plugin's /admin/impersonate-user) is started only by a
+ * platform admin (`mayViewAs`), and never targets an admin: neither a
+ * platform admin nor a user whose role contains "admin". Run from
+ * `hooks.before` on that path only, so a refusal comes before the endpoint
+ * writes anything; `databaseHooks.session.create.before` holds the same rules
+ * for any session created with `impersonatedBy`.
+ *
+ * A signed-out request gets the endpoint's own 401. A signed-in caller who is
+ * not a platform admin is refused before the target is looked up, so the
+ * answer is the same whoever the target is.
  *
  * The target id is read the way the endpoint reads it: its body schema is
  * `z.coerce.string()`, i.e. `String(userId)`, so `["<id>"]` and `<id>` name
  * the same user.
- *
- * The target is checked only for a caller the endpoint would let view as
- * anyone (`mayViewAs`). Every other caller gets the endpoint's own refusal,
- * the same whoever the target is.
  */
 async function refuseViewingAsAnAdmin(ctx: {
   context: { session?: unknown };
@@ -147,7 +151,10 @@ async function refuseViewingAsAnAdmin(ctx: {
   body?: unknown;
 }): Promise<void> {
   const caller = (await lookupSessionForHook(ctx))?.user;
-  if (!caller?.id || !mayViewAs(caller.id, caller.role)) return;
+  if (!caller?.id) return;
+  if (!mayViewAs(caller.id)) {
+    throw new APIError('FORBIDDEN', { message: VIEW_AS_PLATFORM_ADMINS_ONLY_MESSAGE });
+  }
   const targetId = String((ctx.body as { userId?: unknown } | undefined)?.userId);
   if (await isAdminUser(targetId)) {
     throw new APIError('FORBIDDEN', { message: VIEW_AS_ADMIN_REFUSED_MESSAGE });
@@ -732,14 +739,20 @@ export const auth = betterAuth({
         // is `/callback/:id`). That provider is the session's mode: a GitLab
         // session is shown only GitLab classrooms and GitLab identity.
         before: async (session, ctx) => {
-          // "View as" never targets an admin (see refuseViewingAsAnAdmin),
-          // whichever path creates the impersonated session.
+          // "View as" is started only by a platform admin and never targets
+          // an admin (see refuseViewingAsAnAdmin), whichever path creates the
+          // impersonated session.
           const { impersonatedBy, userId } = session as {
             impersonatedBy?: unknown;
             userId?: unknown;
           };
-          if (impersonatedBy && (await isAdminUser(String(userId)))) {
-            throw new APIError('FORBIDDEN', { message: VIEW_AS_ADMIN_REFUSED_MESSAGE });
+          if (impersonatedBy) {
+            if (!mayViewAs(String(impersonatedBy))) {
+              throw new APIError('FORBIDDEN', { message: VIEW_AS_PLATFORM_ADMINS_ONLY_MESSAGE });
+            }
+            if (await isAdminUser(String(userId))) {
+              throw new APIError('FORBIDDEN', { message: VIEW_AS_ADMIN_REFUSED_MESSAGE });
+            }
           }
           // A self-managed GitLab signs in through its own callback path.
           if (ctx?.path === GITLAB_INSTANCE_CALLBACK_PATH) {
@@ -874,8 +887,9 @@ export const auth = betterAuth({
     gitlabInstances(),
     admin({
       impersonationSessionDuration: 60 * 60, // 1 hour
-      // Allow users with 'admin' role to impersonate
-      // OWNER users need to have role='admin' set in the database
+      // The plugin's admin role. "View as" is for platform admins only
+      // (mayViewAs), whatever a user's role: a role of 'admin' does not
+      // let anyone view as others, and nothing in the app sets one.
       adminRoles: ['admin'],
       // Platform admins, by user id, from the environment. better-auth checks
       // this list BEFORE the role lookup, so it needs no migration and no DB

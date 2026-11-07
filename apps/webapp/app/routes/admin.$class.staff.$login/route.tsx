@@ -6,9 +6,9 @@ import { IconX, IconUserSearch, IconClock } from '@tabler/icons-react';
 import { useRouteDrawer, useDarkMode } from '~/hooks';
 import { ClassmojiService } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
-import { RequireRole, StatsCard, Emoji } from '~/components';
+import { StatsCard, Emoji } from '~/components';
 import UserAvatar from '~/components/shared/UserAvatar';
-import { requireClassroomAdmin } from '~/utils/routeAuth.server';
+import { mayViewAs, requireClassroomAdmin } from '~/utils/routeAuth.server';
 import { resolveHighestMembership } from '@classmoji/auth/server';
 import { addAuditLog } from '~/utils/helpers';
 import { authClient } from '@classmoji/auth/client';
@@ -42,7 +42,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
   // OWNER-only, deliberately narrower than the list page's loader: this is the
   // detail drawer, and widening the list read must never widen this.
-  const { classroom } = await requireClassroomAdmin(request, classSlug!, {
+  const { classroom, userId } = await requireClassroomAdmin(request, classSlug!, {
     resourceType: 'TEACHING_STAFF',
     action: 'view_staff_member',
   });
@@ -136,11 +136,14 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     },
     assignmentsByRepository,
     stats: staffProgress,
+    // "View as" is for platform admins only; the auth server refuses anyone
+    // else, so the button is not offered to them.
+    canViewAs: mayViewAs(userId),
   };
 };
 
 const AdminStaffDrawer = ({ loaderData }: Route.ComponentProps) => {
-  const { staffMember, membership, assignmentsByRepository, stats } = loaderData;
+  const { staffMember, membership, assignmentsByRepository, stats, canViewAs } = loaderData;
   const { close, opened, width } = useRouteDrawer({});
   const { isDarkMode } = useDarkMode();
   const navigate = useNavigate();
@@ -295,7 +298,7 @@ const AdminStaffDrawer = ({ loaderData }: Route.ComponentProps) => {
                 </div>
               </div>
             </div>
-            <RequireRole roles={['OWNER']}>
+            {canViewAs && (
               <Button
                 type="primary"
                 icon={<IconUserSearch size={16} />}
@@ -304,7 +307,7 @@ const AdminStaffDrawer = ({ loaderData }: Route.ComponentProps) => {
               >
                 View as
               </Button>
-            </RequireRole>
+            )}
           </div>
         </Card>
 
