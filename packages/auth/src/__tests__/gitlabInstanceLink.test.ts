@@ -65,7 +65,11 @@ const mocks = vi.hoisted(() => {
   return { state, client, oauthClient };
 });
 
-vi.mock('@classmoji/database', () => ({ default: () => mocks.client }));
+vi.mock('@classmoji/database', async () => {
+  const { standInClient } = await import('./support/prismaStandIn.ts');
+  const client = standInClient(mocks.client);
+  return { default: () => client };
+});
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     user: { findById: vi.fn(), findByLogin: vi.fn() },

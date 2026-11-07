@@ -5,14 +5,17 @@
  *
  *   - the rules, by name and in order;
  *   - each rule's declared paths, against the list here;
- *   - every endpoint path this better-auth declares, each with exactly the
- *     rules that run on it;
+ *   - every endpoint path this better-auth declares, written out, and each
+ *     with exactly the rules that run on it;
  *   - through the real `auth.handler`, the rules the hook actually runs for a
  *     request, so the hook can't stop going by the declared paths.
  *
- * The lists below are written out, not read from server.ts, on purpose. A
- * change to a rule's paths, a new rule, or a better-auth upgrade that adds or
- * renames an endpoint must change this file too.
+ * The lists below are written out, not read from server.ts or better-auth,
+ * on purpose. A change to a rule's paths, a new rule, or a better-auth
+ * upgrade that adds, removes or renames an endpoint must change this file
+ * too, and whoever changes it decides which rules the new path needs.
+ * Baselined on better-auth 1.7.18 with @better-auth/mcp, oauth-provider,
+ * cimd and the jwt plugin.
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -22,15 +25,7 @@ process.env.BETTER_AUTH_SECRET = 'test-secret-that-is-at-least-32-chars!!';
 
 const mocks = vi.hoisted(() => {
   const client: Record<string, Record<string, unknown>> = {};
-  for (const model of [
-    'user',
-    'session',
-    'account',
-    'verification',
-    'oauthAccessToken',
-    'oauthApplication',
-    'oauthConsent',
-  ]) {
+  for (const model of ['user', 'session', 'account', 'verification']) {
     client[model] = {
       findFirst: vi.fn(() => Promise.resolve(null)),
       findUnique: vi.fn(() => Promise.resolve(null)),
@@ -49,7 +44,11 @@ const mocks = vi.hoisted(() => {
   return { client, sendAuthOtp: vi.fn(async () => {}) };
 });
 
-vi.mock('@classmoji/database', () => ({ default: () => mocks.client }));
+vi.mock('@classmoji/database', async () => {
+  const { standInClient } = await import('./support/prismaStandIn.ts');
+  const client = standInClient(mocks.client);
+  return { default: () => client };
+});
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     user: { findById: vi.fn(), findByLogin: vi.fn() },
@@ -61,8 +60,7 @@ vi.mock('@classmoji/services', () => ({
   },
 }));
 
-const { auth, BEFORE_HOOK_RULES, beforeHookRuleCovers, LEGACY_MCP_TOKEN_PATH } =
-  await import('../server.ts');
+const { auth, BEFORE_HOOK_RULES, beforeHookRuleCovers } = await import('../server.ts');
 
 /**
  * Every rule, in the order the hook runs them, with the paths it must run on:
@@ -71,7 +69,12 @@ const { auth, BEFORE_HOOK_RULES, beforeHookRuleCovers, LEGACY_MCP_TOKEN_PATH } =
 const EXPECTED_RULES: ReadonlyArray<
   { name: string; only: readonly string[] } | { name: string; everyPathBut: readonly string[] }
 > = [
+  { name: 'register-no-backchannel-logout', only: ['/oauth2/register'] },
+  { name: 'register-open', only: ['/oauth2/register'] },
+  { name: 'oauth-resource', only: ['/oauth2/authorize', '/oauth2/token'] },
+  { name: 'oauth-offline-access', only: ['/oauth2/authorize'] },
   { name: 'view-as-caller-and-target', only: ['/admin/impersonate-user'] },
+  { name: 'view-as-no-app-connection', only: ['/admin/impersonate-user'] },
   {
     name: 'account-link-while-viewing-as',
     only: ['/link-social', '/gitlab-instance/link', '/unlink-account'],
@@ -87,10 +90,97 @@ const EXPECTED_RULES: ReadonlyArray<
     ],
   },
   { name: 'send-code-type', only: ['/email-otp/send-verification-otp'] },
-  // Every path: a saved authorization is resumed by any response that sets a
-  // session cookie. Not better-auth 1.4.18's token endpoint, which has its
-  // own branch in the hook.
-  { name: 'app-connection', everyPathBut: ['/mcp/token'] },
+  // The three endpoints that can issue a code. A saved authorization is
+  // resumed by oauth-provider dispatching /oauth2/authorize, which runs the
+  // hook with that path.
+  { name: 'app-connection', only: ['/oauth2/authorize', '/oauth2/consent', '/oauth2/continue'] },
+];
+
+/** Every endpoint the router can serve (auth.api less server-only ones), written out. */
+const EXPECTED_DECLARED_PATHS = [
+  '/account-info',
+  '/admin/ban-user',
+  '/admin/create-user',
+  '/admin/get-user',
+  '/admin/has-permission',
+  '/admin/impersonate-user',
+  '/admin/list-user-sessions',
+  '/admin/list-users',
+  '/admin/remove-user',
+  '/admin/revoke-user-session',
+  '/admin/revoke-user-sessions',
+  '/admin/set-role',
+  '/admin/set-user-password',
+  '/admin/stop-impersonating',
+  '/admin/unban-user',
+  '/admin/update-user',
+  '/callback/:id',
+  '/change-email',
+  '/change-password',
+  '/delete-user',
+  '/delete-user/callback',
+  '/email-otp/change-email',
+  '/email-otp/check-verification-otp',
+  '/email-otp/request-email-change',
+  '/email-otp/request-password-reset',
+  '/email-otp/reset-password',
+  '/email-otp/send-verification-otp',
+  '/email-otp/verify-email',
+  '/error',
+  '/forget-password/email-otp',
+  '/get-access-token',
+  '/get-session',
+  '/gitlab-instance/callback',
+  '/gitlab-instance/link',
+  '/gitlab-instance/setup',
+  '/gitlab-instance/sign-in',
+  '/jwks',
+  '/link-social',
+  '/list-accounts',
+  '/list-sessions',
+  '/oauth2/authorize',
+  '/oauth2/client/rotate-keys',
+  '/oauth2/client/rotate-secret',
+  '/oauth2/consent',
+  '/oauth2/continue',
+  '/oauth2/create-client',
+  '/oauth2/delete-client',
+  '/oauth2/delete-consent',
+  '/oauth2/end-session',
+  '/oauth2/end-session/confirm',
+  '/oauth2/get-client',
+  '/oauth2/get-clients',
+  '/oauth2/get-consent',
+  '/oauth2/get-consents',
+  '/oauth2/introspect',
+  '/oauth2/public-client',
+  '/oauth2/public-client-prelogin',
+  '/oauth2/register',
+  '/oauth2/revoke',
+  '/oauth2/token',
+  '/oauth2/update-client',
+  '/oauth2/update-consent',
+  '/oauth2/userinfo',
+  '/ok',
+  '/refresh-token',
+  '/request-password-reset',
+  '/reset-password',
+  '/reset-password/:token',
+  '/revoke-other-sessions',
+  '/revoke-session',
+  '/revoke-sessions',
+  '/send-verification-email',
+  '/sign-in/email',
+  '/sign-in/email-otp',
+  '/sign-in/social',
+  '/sign-out',
+  '/sign-up/email',
+  '/token',
+  '/unlink-account',
+  '/update-session',
+  '/update-user',
+  '/verify-email',
+  '/verify-password',
 ];
 
 const expectedRulesFor = (path: string) =>
@@ -116,12 +206,23 @@ const ruleNamed = (name: string) => {
 const DECLARED = Object.values(auth.api as Record<string, unknown>)
   .map(
     e =>
-      e as { path?: unknown; options?: { method?: unknown; metadata?: { SERVER_ONLY?: unknown } } }
+      e as {
+        path?: unknown;
+        options?: {
+          method?: unknown;
+          metadata?: { SERVER_ONLY?: unknown; allowedMediaTypes?: readonly string[] };
+        };
+      }
   )
   .filter(e => typeof e?.path === 'string' && !e.options?.metadata?.SERVER_ONLY)
   .map(e => ({
     path: e.path as string,
     method: String([e.options?.method].flat()[0] ?? 'GET'),
+    // oauth-provider's endpoints that take form bodies only (token, authorize POST).
+    formOnly: Boolean(
+      e.options?.metadata?.allowedMediaTypes?.length &&
+      !e.options.metadata.allowedMediaTypes.includes('application/json')
+    ),
   }));
 const DECLARED_PATHS = [...new Set(DECLARED.map(e => e.path))].sort();
 
@@ -174,6 +275,10 @@ describe('the hooks.before rules', () => {
     for (const path of listed) expect(DECLARED_PATHS).toContain(path);
   });
 
+  it('knows every endpoint this better-auth declares, and no other', () => {
+    expect(DECLARED_PATHS).toEqual([...EXPECTED_DECLARED_PATHS].sort());
+  });
+
   it('gives every declared path exactly its rules, in order', () => {
     expect(DECLARED_PATHS.length).toBeGreaterThan(50);
     const actual = Object.fromEntries(DECLARED_PATHS.map(path => [path, actualRulesFor(path)]));
@@ -181,9 +286,16 @@ describe('the hooks.before rules', () => {
     expect(actual).toEqual(expected);
   });
 
-  it('leaves the legacy token endpoint to its own branch', () => {
-    expect(LEGACY_MCP_TOKEN_PATH).toBe('/mcp/token');
-    expect(actualRulesFor(LEGACY_MCP_TOKEN_PATH)).toEqual([]);
+  it('runs no rule on the token-issuing path but the resource rule', () => {
+    expect(actualRulesFor('/oauth2/token')).toEqual(['oauth-resource']);
+  });
+
+  it('runs the authorize rules in the order their changes build on each other', () => {
+    expect(actualRulesFor('/oauth2/authorize')).toEqual([
+      'oauth-resource',
+      'oauth-offline-access',
+      'app-connection',
+    ]);
   });
 });
 
@@ -204,26 +316,35 @@ describe('the hook, through auth.handler', () => {
         ran.push(rule.name);
       });
     }
-    const method = DECLARED.find(e => e.path === path)?.method ?? 'POST';
+    const endpoint = DECLARED.find(e => e.path === path);
+    const method = endpoint?.method ?? 'POST';
+    const form = endpoint?.formOnly && method !== 'GET';
     await auth.handler(
       new Request(`http://localhost:3000/api/auth${path}`, {
         method,
         headers: {
           origin: 'http://localhost:3000',
-          ...(method === 'GET' ? {} : { 'content-type': 'application/json' }),
+          ...(method === 'GET'
+            ? {}
+            : {
+                'content-type': form ? 'application/x-www-form-urlencoded' : 'application/json',
+              }),
         },
-        ...(method === 'GET' ? {} : { body: JSON.stringify({}) }),
+        ...(method === 'GET' ? {} : { body: form ? '' : JSON.stringify({}) }),
       })
     );
     return ran;
   }
 
-  // Every path a rule lists, the legacy token path, and a few others.
+  /** The router answers a disabled path with 404 before any hook runs. */
+  const DISABLED = new Set<string>(auth.options.disabledPaths ?? []);
+
+  // Every path a rule lists, and a few others.
   const PATHS = [
     ...new Set([
       ...EXPECTED_RULES.flatMap(rule => ('only' in rule ? rule.only : rule.everyPathBut)),
-      '/mcp/authorize',
-      '/oauth2/consent',
+      '/oauth2/revoke',
+      '/jwks',
       '/admin/stop-impersonating',
       '/get-session',
       '/sign-out',
@@ -233,6 +354,11 @@ describe('the hook, through auth.handler', () => {
   ];
 
   it.each(PATHS.map(path => [path]))('runs exactly the expected rules for %s', async path => {
-    expect(await rulesRunFor(path)).toEqual(expectedRulesFor(path));
+    expect(await rulesRunFor(path)).toEqual(DISABLED.has(path) ? [] : expectedRulesFor(path));
+  });
+
+  it('includes a path the router turns off (/oauth2/continue), whose rules hold in-process', () => {
+    expect(DISABLED.has('/oauth2/continue')).toBe(true);
+    expect(actualRulesFor('/oauth2/continue')).toEqual(['app-connection']);
   });
 });

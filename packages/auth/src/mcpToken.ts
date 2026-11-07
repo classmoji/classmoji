@@ -4,39 +4,28 @@
  *
  * WHY A ROW IS WRITTEN DIRECTLY INSTEAD OF DRIVING THE OAUTH FLOW
  * ---------------------------------------------------------------
- * better-auth's MCP access tokens are opaque, unsigned, plaintext-stored 32-char
- * strings (better-auth 1.4.18, node_modules/better-auth/dist/plugins/mcp/index.mjs
- * :406-421). There is nothing to sign and nothing to forge, so a row written here
- * validates identically to one minted through the browser — which is exactly what
- * apps/mcp/src/routes/devMint.ts already relies on. The webapp holds the user's
- * session on every Ask Moji turn, so re-minting is free and no browser hop and no
- * refresh grant is ever needed.
+ * The token is an opaque random string with a row in the 1.4-era token table
+ * (`oauth_access_tokens`, Prisma `LegacyOauthAccessToken`), which
+ * apps/mcp/src/auth/resolveViewer.ts reads to resolve it, as it does for
+ * apps/mcp/src/routes/devMint.ts. The webapp or Trigger task holds the user's
+ * identity on every Ask Moji turn, so re-minting is free and no browser hop
+ * and no refresh grant is ever needed. Both files read and write that row
+ * shape; they move to `mcp_internal_tokens` together.
  *
- * This couples us to better-auth's plaintext token storage. So does
- * apps/mcp/src/auth/resolveViewer.ts, which reads the row shape directly. A
- * better-auth upgrade must re-verify BOTH files together.
- *
- * WHY THE MINTED TOKEN CAN NEVER BE REFRESHED (three independent layers)
- * ---------------------------------------------------------------------
+ * WHY THE MINTED TOKEN CAN NEVER BE REFRESHED
+ * -------------------------------------------
  * `oauth_access_tokens.refresh_token` is NOT NULL and @unique, so a row cannot be
- * created without one. A live refresh token here would be a real escalation: the
- * refresh grant (index.mjs:262-309) checks the refresh token and the client id and
- * *never* a client secret, so anyone holding a leaked one-hour Ask Moji bearer
- * could read the whole token row back out of `/mcp/get-session` (index.mjs:636-653
- * returns the entire row, expiry unchecked) and trade its refresh token for a
- * fresh seven-day renewable credential, indefinitely. The three layers that stop
- * that, all of which must be removed before the attack works again:
+ * created without one. It is never a working refresh token:
  *
- *   1. HERE — `refreshTokenExpiresAt` is stamped in the PAST, so the refresh grant
- *      refuses the row with `invalid_grant` (index.mjs:283-286). The value itself
- *      is random, so it is not guessable either.
- *   2. packages/auth/src/server.ts — a `hooks.before` middleware rejects every
- *      `/mcp/token` grant that names this client id, refresh or otherwise.
- *   3. packages/auth/src/server.ts — `disabledPaths` 404s the raw
- *      `/mcp/get-session` HTTP endpoint, so the row (and the refresh token in it)
- *      is not readable by an external caller at all. apps/mcp calls
- *      `auth.api.getMcpSession` IN-PROCESS, which does not pass through the HTTP
- *      router, so MCP token validation is untouched.
+ *   1. HERE — `refreshTokenExpiresAt` is stamped in the PAST, and the value is
+ *      random (`askmoji-norefresh_…`).
+ *   2. The authorization server (better-auth 1.7's oauth-provider, ./server.ts)
+ *      never reads this table: its token endpoint looks refresh tokens up in
+ *      `oauth2_refresh_tokens`, and the migration that created that table copied
+ *      none of this client's rows.
+ *   3. `classmoji-ask-moji` is reserved there as a DISABLED client, so the token
+ *      endpoint refuses any grant that names it
+ *      (__tests__/askMojiTokenGrant.test.ts).
  *
  * WHAT THIS TOKEN DOES *NOT* CONFINE (intended v1 behaviour — finding 15)
  * ----------------------------------------------------------------------
@@ -63,8 +52,8 @@ import type { Prisma, PrismaClient } from '@prisma/client';
 /**
  * The OAuth client every Ask Moji token is issued to. Seeded by
  * packages/database/scripts/seed.js and upserted here so a fresh environment
- * works without a seed run. `OauthAccessToken.clientId` FKs
- * `OauthApplication.clientId`, and `Viewer.clientId`
+ * works without a seed run. `LegacyOauthAccessToken.clientId` FKs
+ * `LegacyOauthApplication.clientId`, and `Viewer.clientId`
  * (apps/mcp/src/auth/resolveViewer.ts:69) is how the MCP tells an Ask Moji call
  * from a Claude.ai-connector call.
  */

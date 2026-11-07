@@ -143,7 +143,7 @@ async function authorizeUrl(
   additionalData: Record<string, unknown>,
   link?: { email: string; userId: string }
 ) {
-  const { state, codeVerifier } = await generateState(ctx, link, additionalData);
+  const { state, codeVerifier } = await generateState(ctx, { link, additionalData });
   const url = await createAuthorizationURL({
     id: 'gitlab',
     options: { clientId: client.clientId, clientSecret: client.clientSecret },
@@ -414,7 +414,7 @@ export const gitlabInstances = () =>
           // signed-in user who started the round trip, instead of signing in.
           if (state.link) {
             const adapter = ctx.context.internalAdapter;
-            const existing = await adapter.findAccountByProviderId(accountId, 'gitlab');
+            const existing = await adapter.findAccountByKey({ providerId: 'gitlab', accountId });
             if (existing && existing.userId !== state.link.userId) {
               return fail('account_already_linked_to_different_user');
             }

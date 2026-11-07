@@ -7,10 +7,9 @@
  * Same document as the root form; see that route for the public-by-spec note.
  */
 
-import { auth } from '@classmoji/auth/server';
-import { oAuthDiscoveryMetadata } from 'better-auth/plugins';
+import { auth, oauthProviderAuthServerMetadata } from '@classmoji/auth/server';
 import type { LoaderFunctionArgs } from 'react-router';
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  return oAuthDiscoveryMetadata(auth)(request);
+  return oauthProviderAuthServerMetadata(auth)(request);
 }

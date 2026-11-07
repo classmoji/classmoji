@@ -1,92 +1,72 @@
-/* eslint-disable @typescript-eslint/no-explicit-any -- the Prisma / better-auth
-   stand-ins below deliberately accept whatever argument shape the code under test
-   passes, so the assertions read the REAL call arguments rather than a typed guess. */
+/* eslint-disable @typescript-eslint/no-explicit-any -- the Prisma stand-in below
+   accepts whatever argument shape better-auth's adapter passes. */
 /**
- * Integration test for the two hardening measures in ./server.ts that make an
- * Ask Moji bearer token non-renewable (plan P1-2, security review finding).
+ * Who may use the authorization server's token endpoint (/oauth2/token,
+ * better-auth 1.7.18's oauth-provider through @better-auth/mcp), through the
+ * REAL exported `auth` over `auth.handler`; only Prisma and the service layer
+ * are stood in. The issuing side, on a real database, is in
+ * ./oauth2.integration.test.ts.
  *
- * This drives the REAL exported `auth` — real better-auth router, real mcp
- * plugin, real `hooks.before`, real `disabledPaths` — over `auth.handler`, the
- * same entry point apps/webapp and apps/admin mount at `/api/auth/*`. Only
- * Prisma and the service layer are stood in, because the behaviour under test
- * is routing and authorization, not storage.
+ *   - The Classmoji-owned client ids (Ask Moji, the dev mint) are reserved as
+ *     disabled clients, so no grant ever names them, and an Ask Moji token
+ *     (minted directly, never through this server) is no refresh token here.
+ *   - A confidential client refreshes only with its secret, presented the way
+ *     it registered; a disabled client gets nothing.
  *
- * THE ATTACK THIS CLOSES. better-auth 1.4.18's refresh grant
- * (node_modules/better-auth/dist/plugins/mcp/index.mjs:262-309) verifies the
- * refresh token and the client id and NEVER a client secret, and issues a fresh
- * seven-day refresh credential each time. `/mcp/get-session` (:636-653) hands
- * back the ENTIRE `oauth_access_tokens` row — refresh token included, expiry
- * unchecked — to anyone presenting the access token. Chained, a leaked one-hour
- * Ask Moji bearer becomes an indefinitely renewable credential. Three layers
- * stop it; this file covers two of them (the third, the already-expired
- * `refreshTokenExpiresAt`, is pinned in ./mcpToken.test.ts).
- *
- * The negative controls matter as much as the refusals: a different OAuth
- * client must still be able to use the token endpoint, or we have not hardened
- * Ask Moji, we have broken the Claude.ai connector.
+ * oauth-provider authenticates the client before it looks the refresh token
+ * up (`handleRefreshTokenGrant` → `validateClientCredentials`), so an unknown
+ * refresh token that answers `invalid_grant` shows the client got through,
+ * and `invalid_client` shows it did not.
  */
 
+import { createHash } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 process.env.WEBAPP_URL = 'http://localhost:3000';
 process.env.BETTER_AUTH_SECRET = 'test-secret-that-is-at-least-32-chars!!';
 
-const OTHER_CLIENT_ID = 'some-other-mcp-client';
+const hashed = (value: string) => createHash('sha256').update(value).digest('base64url');
 
 const mocks = vi.hoisted(() => {
-  const rows: Record<string, unknown>[] = [];
-  const created: Record<string, unknown>[] = [];
-  // Registered OAuth clients (oauth_applications), read by the refresh hook.
-  const apps: Record<string, unknown>[] = [];
-  const client: any = {
-    oauthAccessToken: {
-      findFirst: vi.fn(({ where }: any) =>
-        Promise.resolve(
-          rows.find(r =>
-            Object.entries(where ?? {}).every(([k, v]) => (r as Record<string, unknown>)[k] === v)
-          ) ?? null
-        )
-      ),
-      findMany: vi.fn(() => Promise.resolve([])),
-      create: vi.fn(({ data }: any) => {
-        const row = { id: `tok-${created.length}`, ...data };
-        created.push(row);
-        return Promise.resolve(row);
-      }),
-      update: vi.fn(({ data }: any) => Promise.resolve(data)),
-      delete: vi.fn(() => Promise.resolve({})),
-      deleteMany: vi.fn(() => Promise.resolve({ count: 0 })),
-      count: vi.fn(() => Promise.resolve(0)),
-    },
-    oauthApplication: {
-      findFirst: vi.fn(() => Promise.resolve(null)),
-      findUnique: vi.fn(({ where }: any) =>
-        Promise.resolve(apps.find(a => a.clientId === where?.clientId) ?? null)
-      ),
-      findMany: vi.fn(() => Promise.resolve([])),
-      create: vi.fn(({ data }: any) => Promise.resolve(data)),
-      upsert: vi.fn(({ create }: any) => Promise.resolve(create)),
-      update: vi.fn(({ data }: any) => Promise.resolve(data)),
-      delete: vi.fn(() => Promise.resolve({})),
-      count: vi.fn(() => Promise.resolve(0)),
-    },
+  const clients: Record<string, any>[] = [];
+  const refreshTokens: Record<string, any>[] = [];
+  const noop = () => ({
+    findFirst: vi.fn(() => Promise.resolve(null)),
+    findUnique: vi.fn(() => Promise.resolve(null)),
+    findMany: vi.fn(() => Promise.resolve([])),
+    create: vi.fn(({ data }: any) => Promise.resolve(data)),
+    update: vi.fn(({ data }: any) => Promise.resolve(data)),
+    updateMany: vi.fn(() => Promise.resolve({ count: 0 })),
+    delete: vi.fn(() => Promise.resolve({})),
+    deleteMany: vi.fn(() => Promise.resolve({ count: 0 })),
+    count: vi.fn(() => Promise.resolve(0)),
+  });
+  const client: any = {};
+  for (const model of ['user', 'session', 'account', 'verification']) client[model] = noop();
+  client.oauthClient = {
+    ...noop(),
+    findFirst: vi.fn(({ where }: any) =>
+      Promise.resolve(clients.find(c => c.clientId === where?.clientId) ?? null)
+    ),
   };
-  // Every other model better-auth may touch resolves to "nothing here".
-  for (const model of ['user', 'session', 'account', 'verification', 'oauthConsent']) {
-    client[model] = {
-      findFirst: vi.fn(() => Promise.resolve(null)),
-      findMany: vi.fn(() => Promise.resolve([])),
-      create: vi.fn(({ data }: any) => Promise.resolve(data)),
-      update: vi.fn(({ data }: any) => Promise.resolve(data)),
-      delete: vi.fn(() => Promise.resolve({})),
-      deleteMany: vi.fn(() => Promise.resolve({ count: 0 })),
-      count: vi.fn(() => Promise.resolve(0)),
-    };
-  }
-  return { rows, created, apps, client };
+  client.oauthRefreshToken = {
+    ...noop(),
+    findFirst: vi.fn(({ where }: any) =>
+      Promise.resolve(refreshTokens.find(t => t.token === where?.token) ?? null)
+    ),
+  };
+  client.Session = client.session;
+  client.User = client.user;
+  client.Account = client.account;
+  client.Verification = client.verification;
+  return { client, clients, refreshTokens };
 });
 
-vi.mock('@classmoji/database', () => ({ default: () => mocks.client }));
+vi.mock('@classmoji/database', async () => {
+  const { standInClient } = await import('./support/prismaStandIn.ts');
+  const client = standInClient(mocks.client);
+  return { default: () => client };
+});
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     user: { findById: vi.fn(), findByLogin: vi.fn() },
@@ -101,523 +81,198 @@ const { auth } = await import('../server.ts');
 const { ASK_MOJI_CLIENT_ID } = await import('../mcpToken.ts');
 
 const BASE = 'http://localhost:3000/api/auth';
+const DEV_MINT_CLIENT_ID = 'classmoji-dev-mint';
+const CONFIDENTIAL_SECRET = 'confidential-secret-value';
 
-function tokenRequest(body: Record<string, string>, extraHeaders: Record<string, string> = {}) {
-  return new Request(`${BASE}/mcp/token`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded', ...extraHeaders },
-    body: new URLSearchParams(body).toString(),
+/** A client row as oauth-provider reads it. */
+const clientRow = (over: Record<string, unknown>) => ({
+  id: `row-${String(over.clientId)}`,
+  clientSecret: null,
+  disabled: false,
+  redirectUris: ['http://localhost:9999/callback'],
+  grantTypes: ['authorization_code', 'refresh_token'],
+  responseTypes: ['code'],
+  scopes: ['openid', 'profile', 'email', 'offline_access', 'read', 'write'],
+  tokenEndpointAuthMethod: 'none',
+  createdAt: new Date(),
+  updatedAt: new Date(),
+  ...over,
+});
+
+/** The two reserved rows, as the migration and the seed write them. */
+const reservedRow = (clientId: string) =>
+  clientRow({
+    clientId,
+    disabled: true,
+    redirectUris: [],
+    grantTypes: [],
+    responseTypes: [],
+    scopes: [],
+    tokenEndpointAuthMethod: 'client_secret_basic',
   });
+
+function tokenRequest(body: Record<string, string>, headers: Record<string, string> = {}) {
+  return auth.handler(
+    new Request(`${BASE}/oauth2/token`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded', ...headers },
+      body: new URLSearchParams(body).toString(),
+    })
+  );
+}
+
+const basic = (id: string, secret: string) =>
+  `Basic ${Buffer.from(`${encodeURIComponent(id)}:${encodeURIComponent(secret)}`).toString('base64')}`;
+
+async function errorOf(res: Response): Promise<string | undefined> {
+  return ((await res.json()) as { error?: string }).error;
 }
 
 beforeEach(() => {
-  mocks.rows.length = 0;
-  mocks.created.length = 0;
-  mocks.apps.length = 0;
+  mocks.clients.length = 0;
+  mocks.refreshTokens.length = 0;
+  mocks.clients.push(
+    reservedRow(ASK_MOJI_CLIENT_ID),
+    reservedRow(DEV_MINT_CLIENT_ID),
+    clientRow({ clientId: 'public-client' }),
+    clientRow({
+      clientId: 'confidential-client',
+      clientSecret: hashed(CONFIDENTIAL_SECRET),
+      tokenEndpointAuthMethod: 'client_secret_basic',
+    }),
+    clientRow({
+      clientId: 'disabled-client',
+      clientSecret: hashed(CONFIDENTIAL_SECRET),
+      tokenEndpointAuthMethod: 'client_secret_basic',
+      disabled: true,
+    })
+  );
+  vi.clearAllMocks();
 });
 
-describe('the Ask Moji client cannot use the token endpoint (refresh grant closed)', () => {
-  // MUTATION: delete the hooks.before block in server.ts → this passes with 200
-  // and a fresh 7-day refresh_token, i.e. the escalation is back.
-  it('REFUSES a refresh grant naming the Ask Moji client', async () => {
-    // A live refresh token for the Ask Moji client — the worst case, where the
-    // already-expired-refresh defence in mintMcpAccessToken has been undone.
-    mocks.rows.push({
-      id: 'tok-live',
-      accessToken: 'askmoji_leaked',
-      refreshToken: 'askmoji_leaked_refresh',
-      accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
-      refreshTokenExpiresAt: new Date(Date.now() + 604_800_000),
-      clientId: ASK_MOJI_CLIENT_ID,
-      userId: 'user-1',
-      scopes: 'read',
-    });
-
-    const res = await auth.handler(
-      tokenRequest({
-        grant_type: 'refresh_token',
-        refresh_token: 'askmoji_leaked_refresh',
-        client_id: ASK_MOJI_CLIENT_ID,
-      })
-    );
-
-    expect(res.status).toBe(401);
-    const body = await res.json();
-    expect(JSON.stringify(body)).toMatch(/does not use the token endpoint/i);
-    // Nothing was minted.
-    expect(mocks.created).toHaveLength(0);
-  });
-
-  it('REFUSES it when the client id arrives in a Basic authorization header instead', async () => {
-    const basic = Buffer.from(`${ASK_MOJI_CLIENT_ID}:whatever`).toString('base64');
-
-    const res = await auth.handler(
-      tokenRequest(
-        { grant_type: 'refresh_token', refresh_token: 'askmoji_leaked_refresh' },
-        { authorization: `Basic ${basic}` }
-      )
-    );
-
-    expect(res.status).toBe(401);
-    expect(JSON.stringify(await res.json())).toMatch(/does not use the token endpoint/i);
-  });
-
-  // Same falsy-client_id split as in the confidential-client block below, aimed
-  // at the Ask Moji refusal. A live refresh row, so only the hook can refuse.
-  it('REFUSES a JSON client_id of 0 with Ask Moji in a Basic header', async () => {
-    mocks.rows.push({
-      id: 'tok-live',
-      accessToken: 'askmoji_leaked',
-      refreshToken: 'askmoji_leaked_refresh',
-      accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
-      refreshTokenExpiresAt: new Date(Date.now() + 604_800_000),
-      clientId: ASK_MOJI_CLIENT_ID,
-      userId: 'user-1',
-      scopes: 'read',
-    });
-    const basic = Buffer.from(`${ASK_MOJI_CLIENT_ID}:whatever`).toString('base64');
-
-    const res = await auth.handler(
-      new Request(`${BASE}/mcp/token`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Basic ${basic}` },
-        body: JSON.stringify({
-          grant_type: 'refresh_token',
-          refresh_token: 'askmoji_leaked_refresh',
-          client_id: 0,
-        }),
-      })
-    );
-
-    expect(res.status).toBe(401);
-    expect(JSON.stringify(await res.json())).toMatch(/does not use the token endpoint/i);
-    expect(mocks.created).toHaveLength(0);
-  });
-
-  it('REFUSES an authorization_code grant for the client too — it uses no grant at all', async () => {
-    const res = await auth.handler(
-      tokenRequest({
-        grant_type: 'authorization_code',
-        code: 'anything',
-        client_id: ASK_MOJI_CLIENT_ID,
-      })
-    );
-
-    expect(res.status).toBe(401);
-    expect(JSON.stringify(await res.json())).toMatch(/does not use the token endpoint/i);
-  });
-
-  it('REFUSES a JSON-bodied request just as it refuses a form-encoded one', async () => {
-    const res = await auth.handler(
-      new Request(`${BASE}/mcp/token`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          grant_type: 'refresh_token',
-          refresh_token: 'x',
-          client_id: ASK_MOJI_CLIENT_ID,
-        }),
-      })
-    );
-
-    expect(res.status).toBe(401);
-    expect(JSON.stringify(await res.json())).toMatch(/does not use the token endpoint/i);
-  });
-
-  // The `typeof clientId === 'string'` bypass (defence-in-depth review finding).
-  //
-  // better-auth does not type-check the presented client id, it coerces it:
-  // `token.clientId !== client_id?.toString()` (mcp/index.mjs:278). A JSON body
-  // reaches the endpoint as parsed JSON, so a ONE-ELEMENT ARRAY stringifies to
-  // the bare client id and matches the stored row — while a string-only check in
-  // our hook sees a non-string, returns null, and waves it through.
-  //
-  // The seeded row here carries a LIVE refresh token on purpose: the
-  // already-expired-refresh layer in mintMcpAccessToken is switched off, so the
-  // only thing that can produce a 401 is the hook itself. If the hook lets this
-  // through, better-auth mints and the assertions below fail on all three counts.
-  //
-  // MUTATION: restore `if (typeof clientId === 'string' …)` in
-  // tokenRequestCredentials → 200, a fresh 7-day refresh_token, mocks.created === 1.
-  it('REFUSES an ARRAY-valued client_id, which better-auth would stringify into a match', async () => {
-    mocks.rows.push({
-      id: 'tok-live',
-      accessToken: 'askmoji_leaked',
-      refreshToken: 'askmoji_leaked_refresh',
-      accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
-      // NOT expired — the hook is the only defence left standing.
-      refreshTokenExpiresAt: new Date(Date.now() + 604_800_000),
-      clientId: ASK_MOJI_CLIENT_ID,
-      userId: 'user-1',
-      scopes: 'read',
-    });
-
-    const res = await auth.handler(
-      new Request(`${BASE}/mcp/token`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          grant_type: 'refresh_token',
-          refresh_token: 'askmoji_leaked_refresh',
-          client_id: [ASK_MOJI_CLIENT_ID],
-        }),
-      })
-    );
-
-    expect(res.status).toBe(401);
-    const body = await res.json();
-    expect(JSON.stringify(body)).toMatch(/does not use the token endpoint/i);
-    expect(JSON.stringify(body)).toMatch(/invalid_client/);
-    // Nothing was minted — the refusal happened before better-auth's grant ran.
-    expect(mocks.created).toHaveLength(0);
-  });
-
-  // The same coercion, one step further from a string: better-auth would compare
-  // against `String(…)` of whatever arrived, so a nested array flattens too.
-  it('REFUSES a nested-array client_id for the same reason', async () => {
-    mocks.rows.push({
-      id: 'tok-live-2',
-      accessToken: 'askmoji_leaked2',
-      refreshToken: 'askmoji_leaked_refresh2',
-      accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
-      refreshTokenExpiresAt: new Date(Date.now() + 604_800_000),
-      clientId: ASK_MOJI_CLIENT_ID,
-      userId: 'user-1',
-      scopes: 'read',
-    });
-
-    const res = await auth.handler(
-      new Request(`${BASE}/mcp/token`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          grant_type: 'refresh_token',
-          refresh_token: 'askmoji_leaked_refresh2',
-          client_id: [[ASK_MOJI_CLIENT_ID]],
-        }),
-      })
-    );
-
-    expect(res.status).toBe(401);
-    expect(JSON.stringify(await res.json())).toMatch(/does not use the token endpoint/i);
-    expect(mocks.created).toHaveLength(0);
-  });
-
-  // A FormData body reaches the endpoint only through an in-process
-  // `auth.api.mcpToken({ body })` call, but better-auth flattens it with
-  // `Object.fromEntries(body.entries())` — LAST value wins — while
-  // `FormData.get()` returns the FIRST. Reading it the other way round would let
-  // a repeated key split the hook's view from the grant's.
-  //
-  // MUTATION: change the FormData loop back to `body.get('client_id')` → the
-  // hook reads 'innocent-client', returns early, and this throws nothing.
-  it('REFUSES a repeated FormData client_id whose LAST value names Ask Moji', async () => {
-    const form = new FormData();
-    form.append('grant_type', 'refresh_token');
-    form.append('refresh_token', 'askmoji_leaked_refresh');
-    form.append('client_id', 'innocent-client');
-    form.append('client_id', ASK_MOJI_CLIENT_ID);
-
-    // In-process, so the refusal arrives as a thrown APIError rather than a
-    // Response. Its payload is on `.body` (better-call puts the JSON body there;
-    // `.message` is empty because this APIError carries no `message` key).
-    const err = await auth.api
-      .mcpOAuthToken({
-        body: form as unknown as Record<string, unknown>,
-        headers: new Headers(),
-      })
-      .then(
-        () => null,
-        (e: unknown) => e as { status?: string; body?: Record<string, string> }
-      );
-
-    expect(err).not.toBeNull();
-    expect(err?.status).toBe('UNAUTHORIZED');
-    expect(err?.body?.error).toBe('invalid_client');
-    expect(err?.body?.error_description).toMatch(/does not use the token endpoint/i);
-    expect(mocks.created).toHaveLength(0);
-  });
-
-  // NEGATIVE CONTROL: an array-valued client id for ANOTHER client must still be
-  // left alone — the normalization must not turn the hook into a blanket refusal.
-  it('leaves an array-valued client_id for another client working', async () => {
-    mocks.rows.push({
-      id: 'tok-other',
-      accessToken: 'other_access',
-      refreshToken: 'other_refresh',
-      accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
-      refreshTokenExpiresAt: new Date(Date.now() + 604_800_000),
-      clientId: OTHER_CLIENT_ID,
-      userId: 'user-2',
-      scopes: 'read write',
-    });
-
-    const res = await auth.handler(
-      new Request(`${BASE}/mcp/token`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          grant_type: 'refresh_token',
-          refresh_token: 'other_refresh',
-          client_id: [OTHER_CLIENT_ID],
-        }),
-      })
-    );
-
-    expect(res.status).toBe(200);
-    expect(mocks.created).toHaveLength(1);
-  });
-
-  // NEGATIVE CONTROL: the refusal is client-specific. Break this and we have
-  // not hardened Ask Moji, we have broken every other MCP client.
-  it('leaves another client’s refresh grant working', async () => {
-    mocks.rows.push({
-      id: 'tok-other',
-      accessToken: 'other_access',
-      refreshToken: 'other_refresh',
-      accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
-      refreshTokenExpiresAt: new Date(Date.now() + 604_800_000),
-      clientId: OTHER_CLIENT_ID,
-      userId: 'user-2',
-      scopes: 'read write',
-    });
-
-    const res = await auth.handler(
-      tokenRequest({
-        grant_type: 'refresh_token',
-        refresh_token: 'other_refresh',
-        client_id: OTHER_CLIENT_ID,
-      })
-    );
-
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as Record<string, string>;
-    expect(body.access_token).toBeTruthy();
-    expect(body.refresh_token).toBeTruthy();
-    expect(mocks.created).toHaveLength(1);
-  });
-});
-
-describe('a confidential client refreshes only with its client secret', () => {
-  const CONFIDENTIAL_ID = 'confidential-client';
-  const PUBLIC_ID = 'public-client';
-  const SECRET = 'the-registered-secret';
-
-  function seedToken(clientId: string, refreshToken: string) {
-    mocks.rows.push({
-      id: `tok-${refreshToken}`,
-      accessToken: `${refreshToken}_access`,
-      refreshToken,
-      accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
-      refreshTokenExpiresAt: new Date(Date.now() + 604_800_000),
-      clientId,
-      userId: 'user-3',
-      scopes: 'openid offline_access read',
-    });
-  }
-
-  beforeEach(() => {
-    mocks.apps.push(
-      { clientId: CONFIDENTIAL_ID, type: 'web', clientSecret: SECRET, disabled: false },
-      { clientId: PUBLIC_ID, type: 'public', clientSecret: '', disabled: false }
-    );
-  });
-
-  // MUTATION: drop the refresh_token branch from hooks.before → 200, a new
-  // token pair minted from a refresh token alone.
-  it('REFUSES a refresh with no client secret', async () => {
-    seedToken(CONFIDENTIAL_ID, 'conf_refresh');
-    const res = await auth.handler(
-      tokenRequest({
-        grant_type: 'refresh_token',
-        refresh_token: 'conf_refresh',
-        client_id: CONFIDENTIAL_ID,
-      })
-    );
-    expect(res.status).toBe(401);
-    expect(JSON.stringify(await res.json())).toMatch(/client_secret is required/);
-    expect(mocks.created).toHaveLength(0);
-  });
-
-  it('REFUSES a refresh with the wrong client secret', async () => {
-    seedToken(CONFIDENTIAL_ID, 'conf_refresh');
-    const res = await auth.handler(
-      tokenRequest({
-        grant_type: 'refresh_token',
-        refresh_token: 'conf_refresh',
-        client_id: CONFIDENTIAL_ID,
-        client_secret: 'not-the-secret',
-      })
-    );
-    expect(res.status).toBe(401);
-    expect(JSON.stringify(await res.json())).toMatch(/invalid client_secret/);
-    expect(mocks.created).toHaveLength(0);
-  });
-
-  it('accepts a refresh with the right client secret in the body', async () => {
-    seedToken(CONFIDENTIAL_ID, 'conf_refresh');
-    const res = await auth.handler(
-      tokenRequest({
-        grant_type: 'refresh_token',
-        refresh_token: 'conf_refresh',
-        client_id: CONFIDENTIAL_ID,
-        client_secret: SECRET,
-      })
-    );
-    expect(res.status).toBe(200);
-    expect(mocks.created).toHaveLength(1);
-  });
-
-  it('accepts a refresh with the client id and secret in a Basic header', async () => {
-    seedToken(CONFIDENTIAL_ID, 'conf_refresh');
-    const basic = Buffer.from(`${CONFIDENTIAL_ID}:${SECRET}`).toString('base64');
-    const res = await auth.handler(
-      tokenRequest(
-        { grant_type: 'refresh_token', refresh_token: 'conf_refresh' },
-        { authorization: `Basic ${basic}` }
-      )
-    );
-    expect(res.status).toBe(200);
-    expect(mocks.created).toHaveLength(1);
-  });
-
-  // better-auth reads the Basic header only when the body names neither a
-  // client id nor a secret, so the hook must not credit a header secret the
-  // grant never sees.
-  it('ignores a Basic secret when the body already names the client', async () => {
-    seedToken(CONFIDENTIAL_ID, 'conf_refresh');
-    const basic = Buffer.from(`${CONFIDENTIAL_ID}:${SECRET}`).toString('base64');
-    const res = await auth.handler(
-      tokenRequest(
-        { grant_type: 'refresh_token', refresh_token: 'conf_refresh', client_id: CONFIDENTIAL_ID },
-        { authorization: `Basic ${basic}` }
-      )
-    );
-    expect(res.status).toBe(401);
-    expect(mocks.created).toHaveLength(0);
-  });
-
-  it('REFUSES a refresh for a disabled client', async () => {
-    mocks.apps.push({ clientId: 'disabled-client', type: 'public', disabled: true });
-    seedToken('disabled-client', 'disabled_refresh');
-    const res = await auth.handler(
-      tokenRequest({
-        grant_type: 'refresh_token',
-        refresh_token: 'disabled_refresh',
-        client_id: 'disabled-client',
-      })
-    );
-    expect(res.status).toBe(401);
-    expect(JSON.stringify(await res.json())).toMatch(/client is disabled/);
-    expect(mocks.created).toHaveLength(0);
-  });
-
-  // A falsy NON-STRING body client_id sends the grant to the Basic header
-  // (it tests the raw value) while its normalized form ("0", "false") names no
-  // client. Only a JSON body can carry one: urlencoded values arrive as strings.
-  //
-  // MUTATION: choose body-vs-Basic on normalizeClientId(rawId) instead of the
-  // raw value in tokenRequestCredentials → 200, a token pair minted with a wrong
-  // secret.
-  it.each([[0], [false]])(
-    'REFUSES a JSON client_id of %s with the real client in a Basic header',
-    async rawId => {
-      seedToken(CONFIDENTIAL_ID, 'conf_refresh');
-      const basic = Buffer.from(`${CONFIDENTIAL_ID}:wrong`).toString('base64');
-      const res = await auth.handler(
-        new Request(`${BASE}/mcp/token`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', authorization: `Basic ${basic}` },
-          body: JSON.stringify({
-            grant_type: 'refresh_token',
-            refresh_token: 'conf_refresh',
-            client_id: rawId,
-          }),
-        })
-      );
-      expect(res.status).toBe(401);
-      expect(JSON.stringify(await res.json())).toMatch(/invalid client_secret/);
-      expect(mocks.created).toHaveLength(0);
+describe('the Classmoji-owned client ids', () => {
+  it.each([[ASK_MOJI_CLIENT_ID], [DEV_MINT_CLIENT_ID]])(
+    'refuse every grant naming %s (a disabled client)',
+    async clientId => {
+      for (const body of [
+        { grant_type: 'refresh_token', refresh_token: 'askmoji-norefresh_abc' },
+        {
+          grant_type: 'authorization_code',
+          code: 'any-code',
+          redirect_uri: 'http://localhost:9999/callback',
+          code_verifier: 'v'.repeat(43),
+        },
+      ] as Record<string, string>[]) {
+        const res = await tokenRequest({ ...body, client_id: clientId });
+        expect(res.status).toBeGreaterThanOrEqual(400);
+        expect(await errorOf(res)).toBe('invalid_client');
+      }
+      expect(mocks.client.oauthRefreshToken.create).not.toHaveBeenCalled();
     }
   );
 
-  // NEGATIVE CONTROL: public clients (PKCE, no secret: Claude Code, most MCP
-  // clients) refresh exactly as before.
+  it('do not let an Ask Moji token be refreshed through another client', async () => {
+    // An Ask Moji token is never a refresh token on this server: the migration
+    // copies none of the reserved clients' rows.
+    const res = await tokenRequest({
+      grant_type: 'refresh_token',
+      refresh_token: 'askmoji-norefresh_abc',
+      client_id: 'public-client',
+    });
+    expect(await errorOf(res)).toBe('invalid_grant');
+    expect(mocks.client.oauthRefreshToken.create).not.toHaveBeenCalled();
+  });
+
+  it('cannot start an authorization either', async () => {
+    const url = new URL(`${BASE}/oauth2/authorize`);
+    for (const [k, v] of Object.entries({
+      client_id: ASK_MOJI_CLIENT_ID,
+      response_type: 'code',
+      redirect_uri: 'http://localhost:9999/callback',
+      code_challenge: 'x'.repeat(43),
+      code_challenge_method: 'S256',
+    })) {
+      url.searchParams.set(k, v);
+    }
+    const res = await auth.handler(new Request(url));
+    const location = res.headers.get('location') ?? '';
+    expect(location).toContain('error=client_disabled');
+  });
+
+  // With no grant types the provider still assumes authorization_code
+  // (`clientAllowsGrant`), so the disabled flag is what holds these ids.
+  it('rely on the disabled flag: the same row enabled would be served', async () => {
+    mocks.clients[0] = { ...reservedRow(ASK_MOJI_CLIENT_ID), disabled: false };
+    const res = await tokenRequest({
+      grant_type: 'refresh_token',
+      refresh_token: 'unknown',
+      client_id: ASK_MOJI_CLIENT_ID,
+      client_secret: 'anything',
+    });
+    // Past the disabled check, refused only for its (absent) secret.
+    expect(await res.clone().text()).not.toContain('client is disabled');
+  });
+});
+
+describe('a confidential client refreshes only with its secret', () => {
+  const refresh = (headers: Record<string, string> = {}, body: Record<string, string> = {}) =>
+    tokenRequest(
+      { grant_type: 'refresh_token', refresh_token: 'not-a-known-token', ...body },
+      headers
+    );
+
+  it('refuses a refresh with no client secret', async () => {
+    const res = await refresh({}, { client_id: 'confidential-client' });
+    expect(await errorOf(res)).toBe('invalid_client');
+  });
+
+  it('refuses a refresh with the wrong client secret', async () => {
+    const res = await refresh({ authorization: basic('confidential-client', 'wrong') });
+    expect(await errorOf(res)).toBe('invalid_client');
+  });
+
+  it('refuses the secret in the body when the client registered for Basic', async () => {
+    const res = await refresh(
+      {},
+      { client_id: 'confidential-client', client_secret: CONFIDENTIAL_SECRET }
+    );
+    expect(await errorOf(res)).toBe('invalid_client');
+  });
+
+  it('lets the right secret through to the refresh token check', async () => {
+    const res = await refresh({ authorization: basic('confidential-client', CONFIDENTIAL_SECRET) });
+    expect(await errorOf(res)).toBe('invalid_grant');
+  });
+
+  it('refuses a disabled client, secret or not', async () => {
+    const res = await refresh({ authorization: basic('disabled-client', CONFIDENTIAL_SECRET) });
+    expect(await errorOf(res)).toBe('invalid_client');
+    expect(await refresh({}, { client_id: 'disabled-client' }).then(errorOf)).toBe(
+      'invalid_client'
+    );
+  });
+
   it('leaves a public client refreshing without a secret', async () => {
-    seedToken(PUBLIC_ID, 'public_refresh');
-    const res = await auth.handler(
-      tokenRequest({
-        grant_type: 'refresh_token',
-        refresh_token: 'public_refresh',
-        client_id: PUBLIC_ID,
-      })
-    );
-    expect(res.status).toBe(200);
-    expect(mocks.created).toHaveLength(1);
+    const res = await refresh({}, { client_id: 'public-client' });
+    expect(await errorOf(res)).toBe('invalid_grant');
   });
-});
 
-describe('the raw /mcp/get-session endpoint is not reachable over HTTP', () => {
-  // MUTATION: remove '/mcp/get-session' from disabledPaths → this returns 200
-  // with the whole token row, refresh token included.
-  it('404s a GET with a valid bearer token', async () => {
-    mocks.rows.push({
-      id: 'tok-live',
-      accessToken: 'askmoji_leaked',
-      refreshToken: 'askmoji_leaked_refresh',
-      accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
-      refreshTokenExpiresAt: new Date(Date.now() + 604_800_000),
-      clientId: ASK_MOJI_CLIENT_ID,
+  it('refuses a refresh token issued to another client', async () => {
+    mocks.refreshTokens.push({
+      id: 'rt-1',
+      token: hashed('public-clients-token'),
+      clientId: 'public-client',
       userId: 'user-1',
-      scopes: 'read',
+      scopes: ['read', 'offline_access'],
+      resources: [],
+      expiresAt: new Date(Date.now() + 86_400_000),
+      createdAt: new Date(),
     });
-
-    const res = await auth.handler(
-      new Request(`${BASE}/mcp/get-session`, {
-        headers: { authorization: 'Bearer askmoji_leaked' },
-      })
+    const res = await refresh(
+      { authorization: basic('confidential-client', CONFIDENTIAL_SECRET) },
+      { refresh_token: 'public-clients-token' }
     );
-
-    expect(res.status).toBe(404);
-    expect(await res.text()).not.toMatch(/askmoji_leaked_refresh/);
-  });
-
-  // The MCP resource server calls getMcpSession IN-PROCESS
-  // (apps/mcp/src/auth/resolveViewer.ts:42), which never touches the HTTP
-  // router. Disabling the path must not touch that — otherwise every MCP
-  // request 401s.
-  it('leaves the in-process auth.api.getMcpSession working', async () => {
-    mocks.rows.push({
-      id: 'tok-live',
-      accessToken: 'askmoji_ok',
-      refreshToken: 'askmoji_ok_refresh',
-      accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
-      refreshTokenExpiresAt: new Date(Date.now() - 1_000),
-      clientId: ASK_MOJI_CLIENT_ID,
-      userId: 'user-1',
-      scopes: 'read',
-    });
-
-    const session = (await auth.api.getMcpSession({
-      headers: new Headers({ authorization: 'Bearer askmoji_ok' }),
-    })) as Record<string, unknown> | null;
-
-    expect(session).not.toBeNull();
-    expect(session?.userId).toBe('user-1');
-    expect(session?.scopes).toBe('read');
-  });
-});
-
-describe('the hook does not get in the way of anything else', () => {
-  it('leaves OAuth discovery reachable', async () => {
-    const res = await auth.handler(
-      new Request(`${BASE}/.well-known/oauth-authorization-server`, { method: 'GET' })
-    );
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as Record<string, unknown>;
-    expect(body.token_endpoint).toMatch(/\/mcp\/token$/);
-    // Unsigned tokens are not advertised; PKCE is S256 only.
-    expect(body.id_token_signing_alg_values_supported).toEqual(['RS256']);
-    expect(body.code_challenge_methods_supported).toEqual(['S256']);
+    expect(await errorOf(res)).toBe('invalid_grant');
+    expect(mocks.client.oauthRefreshToken.create).not.toHaveBeenCalled();
   });
 });

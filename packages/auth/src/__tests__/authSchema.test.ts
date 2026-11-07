@@ -107,10 +107,40 @@ describe('better-auth schema vs the generated Prisma client', () => {
     );
   });
 
-  // From 1.7.3 every auth call awaits the same check first and throws
-  // SchemaMismatchError on a mismatch. With no session cookie this makes no
-  // query, so it passes on 1.4.18 and trips on a later release that finds a
-  // problem the comparison above missed.
+  it('compares every table the authorization server and its signing keys use', () => {
+    const expected = expectedSchema();
+    expect([...expected.keys()].sort()).toEqual(
+      [
+        'account',
+        'jwks',
+        'oauthAccessToken',
+        'oauthClient',
+        'oauthClientAssertion',
+        'oauthClientResource',
+        'oauthConsent',
+        'oauthRefreshToken',
+        'oauthResource',
+        'session',
+        'user',
+        'verification',
+      ].sort()
+    );
+  });
+
+  // better-auth runs the same comparison itself (the Prisma adapter's
+  // `findPrismaSchemaProblems`) when the client it is given carries Prisma's
+  // data model, and awaits it before every auth call. The client is the
+  // app's, through ./prismaForAuth.ts; the check must still be registered on
+  // it, and clean.
+  it('registers better-auth’s own startup check on the client it is given, and passes it', async () => {
+    const ctx = await auth.$context;
+    expect(typeof ctx.checkSchema).toBe('function');
+    // Throws SchemaMismatchError on a mismatch.
+    await ctx.checkSchema!();
+  });
+
+  // Every auth call awaits that check first and throws SchemaMismatchError on
+  // a mismatch. With no session cookie this makes no query.
   it('answers a session lookup without a schema error', async () => {
     await expect(auth.api.getSession({ headers: new Headers() })).resolves.toBeNull();
   });

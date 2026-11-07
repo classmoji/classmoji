@@ -6,12 +6,12 @@
  * /oauth2/consent) and starting to view as someone (POST
  * /admin/impersonate-user).
  *
- * From better-auth 1.5 the get-session endpoint refuses POST with
- * METHOD_NOT_ALLOWED unless `session.deferSessionRefresh` is set, and a
- * hook's context carries the request's own method. 1.4.18 ignores the
- * method, so the endpoint is wrapped here to apply the later rule: the
- * lookup must ask as a GET, or approving consent fails with the guard's 503
- * and "view as" with a 405.
+ * better-auth 1.7's get-session endpoint refuses POST with METHOD_NOT_ALLOWED
+ * unless `session.deferSessionRefresh` is set (api/routes/session.mjs:35-37),
+ * and a hook's context carries the request's own method. So the lookup must
+ * ask as a GET, or approving consent fails with the guard's 503 and "view as"
+ * with a 405. Against the real endpoint: the first test shows it refuses a
+ * POST, the rest that the hook's lookups still answer on POST requests.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -20,29 +20,6 @@ import { serializeSignedCookie } from 'better-call';
 process.env.WEBAPP_URL = 'http://localhost:3000';
 process.env.BETTER_AUTH_SECRET = 'test-secret-that-is-at-least-32-chars!!';
 process.env.PLATFORM_ADMIN_USER_IDS = 'admin-1';
-
-// TODO(better-auth 1.7 bump): this wrapper models the later releases' POST
-// refusal through the endpoint context's `method`. In the bump PR, confirm it
-// against the real 1.7 `api/routes/session.mjs` (and that the hook context
-// still carries the request's method), then drop the wrapper if the real
-// endpoint already refuses POST here.
-const lookups = vi.hoisted(() => ({ methods: [] as unknown[] }));
-
-vi.mock('better-auth/api', async importOriginal => {
-  const actual = await importOriginal<typeof import('better-auth/api')>();
-  return {
-    ...actual,
-    getSession: (...args: unknown[]) => {
-      const endpoint = (actual.getSession as (...a: unknown[]) => any)(...args);
-      const asLaterReleases = async (context: { method?: unknown }) => {
-        lookups.methods.push(context?.method);
-        if (context?.method === 'POST') throw new actual.APIError('METHOD_NOT_ALLOWED');
-        return endpoint(context);
-      };
-      return Object.assign(asLaterReleases, endpoint);
-    },
-  };
-});
 
 const mocks = vi.hoisted(() => {
   const state = { sessions: [] as Record<string, any>[], created: [] as Record<string, any>[] };
@@ -72,14 +49,7 @@ const mocks = vi.hoisted(() => {
     count: vi.fn(() => Promise.resolve(0)),
   });
   const client: any = {};
-  for (const model of [
-    'account',
-    'verification',
-    'oauthAccessToken',
-    'oauthApplication',
-    'oauthConsent',
-    'platformAuditLog',
-  ]) {
+  for (const model of ['account', 'verification', 'platformAuditLog']) {
     client[model] = noop();
   }
   client.user = {
@@ -107,7 +77,11 @@ const mocks = vi.hoisted(() => {
   return { state, client };
 });
 
-vi.mock('@classmoji/database', () => ({ default: () => mocks.client }));
+vi.mock('@classmoji/database', async () => {
+  const { standInClient } = await import('./support/prismaStandIn.ts');
+  const client = standInClient(mocks.client);
+  return { default: () => client };
+});
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     user: { findById: vi.fn(), findByLogin: vi.fn() },
@@ -158,33 +132,36 @@ async function post(path: string, token: string, body: unknown) {
 beforeEach(() => {
   mocks.state.sessions = [];
   mocks.state.created = [];
-  lookups.methods = [];
 });
 
 describe('the hook session lookup on a POST request', () => {
+  it('needs the GET: the get-session endpoint itself refuses a POST', async () => {
+    const token = signIn('owner-1');
+    const res = await post('/get-session', token, {});
+    expect(res.status).toBe(405);
+  });
+
   it('refuses approving consent while viewing as someone with access_denied, not a 503', async () => {
     const token = signIn('owner-1', 'admin-1');
 
-    const res = await post('/oauth2/consent', token, { accept: true, consent_code: 'any' });
+    const res = await post('/oauth2/consent', token, { accept: true });
 
     expect(res.status).toBe(403);
     expect(await res.json()).toMatchObject({
       error: 'access_denied',
       error_description: CONNECT_APP_VIEWING_AS_MESSAGE,
     });
-    // Two lookups, one from the cookie cache and one from the database.
-    expect(lookups.methods).toEqual(['GET', 'GET']);
   });
 
   it('lets approving consent through to the endpoint for an ordinary session', async () => {
     const token = signIn('owner-1');
 
-    const res = await post('/oauth2/consent', token, { accept: true, consent_code: 'unknown' });
+    const res = await post('/oauth2/consent', token, { accept: true });
 
-    // The endpoint's own answer for a consent code it does not know.
+    // The endpoint's own answer for a consent with no signed query.
     expect(res.status).not.toBe(503);
     expect(res.status).not.toBe(405);
-    expect(lookups.methods[0]).toBe('GET');
+    expect(res.status).not.toBe(403);
   });
 
   it('starts viewing as an ordinary user', async () => {
@@ -196,6 +173,5 @@ describe('the hook session lookup on a POST request', () => {
     expect(mocks.state.created).toEqual([
       expect.objectContaining({ user_id: 'owner-1', impersonatedBy: 'admin-1' }),
     ]);
-    expect(lookups.methods[0]).toBe('GET');
   });
 });

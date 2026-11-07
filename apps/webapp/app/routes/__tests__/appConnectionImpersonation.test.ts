@@ -27,7 +27,7 @@ vi.mock('@classmoji/auth/server', () => ({
 
 vi.mock('@classmoji/database', () => ({
   default: () => ({
-    oauthApplication: { findUnique: (...a: unknown[]) => mocks.findApplication(...a) },
+    oauthClient: { findUnique: (...a: unknown[]) => mocks.findApplication(...a) },
   }),
 }));
 
@@ -62,11 +62,11 @@ describe('both apps hand /api/auth/* to the shared auth handler', () => {
     ['apps/admin', adminAuthRoute],
   ] as const;
 
-  it.each(routes)('%s passes /mcp/authorize through unchanged', async (_app, route) => {
+  it.each(routes)('%s passes /oauth2/authorize through unchanged', async (_app, route) => {
     const upstream = new Response(null, { status: 302 });
     mocks.handler.mockResolvedValue(upstream);
     const request = new Request(
-      'http://localhost/api/auth/mcp/authorize?client_id=c1&response_type=code&prompt=none'
+      'http://localhost/api/auth/oauth2/authorize?client_id=c1&response_type=code&prompt=none'
     );
 
     const response = await route.loader({ request } as unknown as Parameters<
@@ -87,7 +87,7 @@ describe('both apps hand /api/auth/* to the shared auth handler', () => {
       const request = new Request('http://localhost/api/auth/oauth2/consent', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ accept: true, consent_code: 'x' }),
+        body: JSON.stringify({ accept: true, oauth_query: 'x' }),
       });
 
       const response = await route.action({ request } as unknown as Parameters<

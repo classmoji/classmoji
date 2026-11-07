@@ -127,7 +127,11 @@ const mocks = vi.hoisted(() => {
   return { state, users, client };
 });
 
-vi.mock('@classmoji/database', () => ({ default: () => mocks.client }));
+vi.mock('@classmoji/database', async () => {
+  const { standInClient } = await import('./support/prismaStandIn.ts');
+  const client = standInClient(mocks.client);
+  return { default: () => client };
+});
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     user: { findById: vi.fn(), findByLogin: vi.fn() },
@@ -449,7 +453,11 @@ describe('linking or unlinking a sign-in account while viewing as someone', () =
   });
 
   it('lets a normal session reach the unlink endpoint itself', async () => {
-    await post('/unlink-account', signIn('student-1'), { providerId: 'github' });
+    // better-auth 1.7 names the account by id as well as provider.
+    await post('/unlink-account', signIn('student-1'), {
+      providerId: 'github',
+      accountId: 'gh-1',
+    });
 
     // The endpoint lists the user's accounts before unlinking one.
     expect(mocks.client.account.findMany).toHaveBeenCalled();

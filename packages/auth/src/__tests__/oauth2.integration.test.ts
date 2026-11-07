@@ -1,7 +1,12 @@
 /**
- * The OAuth 2.1 server's tables on a real Postgres:
- * packages/database/migrations/20261107180000_oauth2_provider_tables over the
- * legacy (better-auth 1.4 `mcp` plugin) rows it copies.
+ * The OAuth 2.1 server on a real Postgres:
+ *   - packages/database/migrations/20261107180000_oauth2_provider_tables over
+ *     the legacy (better-auth 1.4 `mcp` plugin) rows it copies;
+ *   - then the REAL exported `auth` (../server.ts) on that database, over
+ *     `auth.handler`: the authorization code and refresh grants end to end,
+ *     the tokens they issue, the copied refresh tokens and client secrets, and
+ *     the app connections a password change or a ban ends. Only the service
+ *     layer is stood in.
  *
  * Needs a throwaway database: set OAUTH_IT_DATABASE_URL to a Postgres URL on
  * localhost whose database name ends in `_it`. The test empties its `public`
@@ -25,10 +30,26 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PrismaClient } from '@prisma/client';
+import { serializeSignedCookie } from 'better-call';
 
 const DATABASE_URL = process.env.OAUTH_IT_DATABASE_URL;
+// The auth instance (imported once the migration has run) uses this database.
+if (DATABASE_URL) process.env.DATABASE_URL = DATABASE_URL;
+process.env.WEBAPP_URL = 'http://localhost:3000';
+process.env.BETTER_AUTH_SECRET = 'test-secret-that-is-at-least-32-chars!!';
+
+vi.mock('@classmoji/services', () => ({
+  ClassmojiService: {
+    user: { findById: vi.fn(), findByLogin: vi.fn() },
+    classroom: { findBySlug: vi.fn(), getClassroomForUI: (c: unknown) => c },
+    classroomMembership: { findByClassroomAndUser: vi.fn() },
+    githubUserToken: { getGitHubTokenForUser: vi.fn(async () => null) },
+    subscription: { getProStateForClassroomId: vi.fn() },
+    authEmail: { sendAuthOtp: vi.fn(async () => {}) },
+  },
+}));
 const MIGRATION = '20261107180000_oauth2_provider_tables';
 const DATABASE_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../../../database');
 const PRISMA_CLI = createRequire(import.meta.url).resolve('prisma/build/index.js');
@@ -65,6 +86,7 @@ const LEGACY_FIXTURE = [
     ('tok-web-live', 'acc-web-live', 'ref-web-live', now() - interval '1 hour', now() + interval '3 days', 'webclient', 'u-2', 'read write', '2026-11-03T00:00:00Z', '2026-11-03T00:00:00Z'),
     ('tok-web-nouser', 'acc-web-nouser', 'ref-web-nouser', now() - interval '1 hour', now() + interval '3 days', 'webclient', NULL, 'read', '2026-11-03T00:00:00Z', '2026-11-03T00:00:00Z'),
     ('tok-cursor-live', 'acc-cursor-live', 'ref-cursor-live', now() - interval '1 hour', now() + interval '2 days', 'cursorclient', 'u-1', 'read', '2026-11-04T00:00:00Z', '2026-11-04T00:00:00Z'),
+    ('tok-off-live', 'acc-off-live', 'ref-off', now() - interval '1 hour', now() + interval '2 days', 'offclient', 'u-3', 'read', '2026-11-04T00:00:00Z', '2026-11-04T00:00:00Z'),
     ('tok-askmoji', 'askmoji_aaa', 'askmoji-norefresh_aaa', now() + interval '30 minutes', now() - interval '1 second', 'classmoji-ask-moji', 'u-3', 'read', '2026-11-05T00:00:00Z', '2026-11-05T00:00:00Z'),
     ('tok-askmoji-live', 'askmoji_bbb', 'askmoji-live-refresh', now() + interval '30 minutes', now() + interval '5 days', 'classmoji-ask-moji', 'u-3', 'read', '2026-11-05T00:00:00Z', '2026-11-05T00:00:00Z')`,
 ];
@@ -176,7 +198,7 @@ describe.skipIf(!DATABASE_URL)('the oauth2 migration (real Postgres)', () => {
   it('leaves the legacy tables as they were', async () => {
     expect(await db.legacyOauthApplication.count()).toBe(6);
     expect(await db.legacyOauthConsent.count()).toBe(5);
-    expect(await db.legacyOauthAccessToken.count()).toBe(8);
+    expect(await db.legacyOauthAccessToken.count()).toBe(9);
     expect(
       (await db.legacyOauthApplication.findUnique({ where: { clientId: 'webclient' } }))
         ?.clientSecret
@@ -275,6 +297,7 @@ describe.skipIf(!DATABASE_URL)('the oauth2 migration (real Postgres)', () => {
     const tokens = await db.oauthRefreshToken.findMany({ orderBy: { id: 'asc' } });
     expect(tokens.map(t => [t.id, t.clientId, t.userId, [...t.scopes].sort()])).toEqual([
       ['tok-cursor-live', 'cursorclient', 'u-1', ['offline_access', 'read']],
+      ['tok-off-live', 'offclient', 'u-3', ['offline_access', 'read']],
       ['tok-pub-live', 'pubclient', 'u-1', ['offline_access', 'openid', 'read', 'write']],
       ['tok-pub-live2', 'pubclient', 'u-1', ['offline_access', 'read', 'write']],
       ['tok-web-live', 'webclient', 'u-2', ['offline_access', 'read', 'write']],
@@ -313,5 +336,483 @@ describe.skipIf(!DATABASE_URL)('the oauth2 migration (real Postgres)', () => {
     // `_page_slug_repairs` is an older migration's work table that
     // schema.prisma never described; nothing else may differ.
     expect(statements).toEqual(['DROP TABLE "_page_slug_repairs";']);
+  });
+});
+
+describe.skipIf(!DATABASE_URL)('the authorization server (real Postgres)', () => {
+  type Auth = typeof import('../server.ts');
+  let server: Auth;
+  let db: PrismaClient;
+  let ownCookie: string;
+  const BASE = 'http://localhost:3000/api/auth';
+  const PUBLIC_REDIRECT = 'http://localhost:33418/callback';
+  const WEB_SECRET = 'websecret-plaintext-abc';
+
+  /** The JWT's claims, unverified (verifyJwt checks the signature). */
+  const claimsOf = (jwt: string) =>
+    JSON.parse(Buffer.from(jwt.split('.')[1]!, 'base64url').toString('utf8')) as Record<
+      string,
+      unknown
+    >;
+
+  async function verifyJwt(jwt: string, audience: string) {
+    // eslint's resolver misses this subpath export; TypeScript resolves it.
+    // eslint-disable-next-line import/no-unresolved
+    const { verifyJwsAccessToken } = await import('better-auth/oauth2');
+    return verifyJwsAccessToken(jwt, {
+      jwksFetch: async () => {
+        const res = await server.auth.handler(new Request(`${BASE}/jwks`));
+        return res.json();
+      },
+      verifyOptions: { issuer: server.AUTH_ISSUER, audience },
+    });
+  }
+
+  const pkce = () => {
+    const verifier = `v-${Math.random().toString(36).slice(2)}-${'x'.repeat(40)}`;
+    return {
+      verifier,
+      challenge: createHash('sha256').update(verifier).digest('base64url'),
+    };
+  };
+
+  const basic = (id: string, secret: string) =>
+    `Basic ${Buffer.from(`${encodeURIComponent(id)}:${encodeURIComponent(secret)}`).toString('base64')}`;
+
+  async function token(body: Record<string, string>, headers: Record<string, string> = {}) {
+    const res = await server.auth.handler(
+      new Request(`${BASE}/oauth2/token`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded', ...headers },
+        body: new URLSearchParams(body).toString(),
+      })
+    );
+    return { status: res.status, body: (await res.json()) as Record<string, any> };
+  }
+
+  /**
+   * Authorize (always through the consent page), approve, and exchange the
+   * code. `params` override the authorize query; `exchange` adds to the token
+   * request.
+   */
+  async function connect({
+    clientId = 'pubclient',
+    redirectUri = PUBLIC_REDIRECT,
+    params = {},
+    exchange = {},
+    headers = {},
+    cookie = ownCookie,
+  }: {
+    clientId?: string;
+    redirectUri?: string;
+    params?: Record<string, string>;
+    exchange?: Record<string, string>;
+    headers?: Record<string, string>;
+    cookie?: string;
+  } = {}) {
+    const { verifier, challenge } = pkce();
+    const query = new URLSearchParams({
+      client_id: clientId,
+      response_type: 'code',
+      redirect_uri: redirectUri,
+      scope: 'read write',
+      state: 'st',
+      code_challenge: challenge,
+      code_challenge_method: 'S256',
+      ...params,
+    });
+    const authorize = await server.auth.handler(
+      new Request(`${BASE}/oauth2/authorize?${query}`, { headers: { cookie } })
+    );
+    const location = authorize.headers.get('location') ?? '';
+    expect(new URL(location, 'http://localhost:3000').pathname).toBe('/oauth/consent');
+    const signedQuery = new URL(location, 'http://localhost:3000').searchParams.toString();
+    const consent = await server.auth.handler(
+      new Request(`${BASE}/oauth2/consent`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          origin: 'http://localhost:3000',
+          cookie,
+        },
+        body: JSON.stringify({ accept: true, oauth_query: signedQuery }),
+      })
+    );
+    const { url } = (await consent.json()) as { url: string };
+    const code = new URL(url).searchParams.get('code');
+    expect(code).toBeTruthy();
+    return token(
+      {
+        grant_type: 'authorization_code',
+        code: code!,
+        redirect_uri: redirectUri,
+        client_id: clientId,
+        code_verifier: verifier,
+        ...exchange,
+      },
+      headers
+    );
+  }
+
+  beforeAll(async () => {
+    db = new PrismaClient({ datasourceUrl: DATABASE_URL });
+    server = await import('../server.ts');
+    await db.session.create({
+      data: {
+        id: 'it-session-u1',
+        token: 'it-session-token-u1',
+        user_id: 'u-1',
+        expires_at: new Date(Date.now() + 86_400_000),
+      },
+    });
+    ownCookie = (
+      await serializeSignedCookie(
+        `${server.COOKIE_PREFIX}.session_token`,
+        'it-session-token-u1',
+        process.env.BETTER_AUTH_SECRET!
+      )
+    ).split(';')[0]!;
+  }, 120_000);
+
+  afterAll(async () => {
+    await db?.$disconnect();
+  });
+
+  it('seeds the MCP resource at boot', async () => {
+    // A first request lets init finish.
+    await server.auth.handler(new Request(`${BASE}/ok`));
+    expect(
+      await db.oauthResource.findUnique({ where: { identifier: server.MCP_RESOURCE } })
+    ).toBeTruthy();
+  });
+
+  // The copied 1.4 grants first: a later test's refresh-token reuse ends
+  // the (pubclient, u-1) family, copied rows included.
+  it('refreshes a copied 1.4 refresh token, and gives it the MCP resource', async () => {
+    const res = await token({
+      grant_type: 'refresh_token',
+      refresh_token: 'ref-pub-live2',
+      client_id: 'pubclient',
+    });
+    expect(res.status).toBe(200);
+    expect(claimsOf(res.body.access_token)).toMatchObject({
+      aud: server.MCP_RESOURCE,
+      azp: 'pubclient',
+      sub: 'u-1',
+    });
+    expect(
+      (await db.oauthRefreshToken.findUnique({ where: { id: 'tok-pub-live2' } }))?.resources
+    ).toEqual([server.MCP_RESOURCE]);
+  });
+
+  it("refreshes a copied confidential client's token with its secret (hashed as 1.7 expects)", async () => {
+    const without = await token({
+      grant_type: 'refresh_token',
+      refresh_token: 'ref-web-live',
+      client_id: 'webclient',
+    });
+    expect(without.body.error).toBe('invalid_client');
+
+    const res = await token(
+      { grant_type: 'refresh_token', refresh_token: 'ref-web-live' },
+      { authorization: basic('webclient', WEB_SECRET) }
+    );
+    expect(res.status).toBe(200);
+    expect(claimsOf(res.body.access_token)).toMatchObject({ azp: 'webclient', sub: 'u-2' });
+  });
+
+  it('refuses a copied token of a disabled client', async () => {
+    const res = await token(
+      { grant_type: 'refresh_token', refresh_token: 'ref-off' },
+      { authorization: basic('offclient', 'offsecret') }
+    );
+    expect(res.body.error).toBe('invalid_client');
+  });
+
+  it('never refreshes an Ask Moji token', async () => {
+    for (const clientId of ['classmoji-ask-moji', 'pubclient']) {
+      const res = await token({
+        grant_type: 'refresh_token',
+        refresh_token: 'askmoji-live-refresh',
+        client_id: clientId,
+      });
+      expect(res.status).not.toBe(200);
+      expect(res.body.error).toBe(clientId === 'pubclient' ? 'invalid_grant' : 'invalid_client');
+    }
+  });
+
+  it('issues a JWT for the MCP resource when the client names no resource', async () => {
+    const res = await connect();
+
+    expect(res.status).toBe(200);
+    const { access_token, refresh_token, scope } = res.body;
+    expect(access_token.split('.')).toHaveLength(3);
+    const claims = claimsOf(access_token);
+    expect(claims).toMatchObject({
+      aud: server.MCP_RESOURCE,
+      iss: 'http://localhost:3000',
+      azp: 'pubclient',
+      sub: 'u-1',
+    });
+    await expect(verifyJwt(access_token, server.MCP_RESOURCE)).resolves.toMatchObject({
+      sub: 'u-1',
+    });
+    // offline_access was asked for on the client's behalf, so it may refresh.
+    expect(scope.split(' ')).toEqual(expect.arrayContaining(['read', 'write', 'offline_access']));
+    expect(typeof refresh_token).toBe('string');
+    // No opaque access token row: a JWT has none.
+    expect(await db.oauthAccessToken.count()).toBe(0);
+    // Stored hashed, for the one resource.
+    const row = await db.oauthRefreshToken.findUnique({ where: { token: hashed(refresh_token) } });
+    expect(row).toMatchObject({
+      clientId: 'pubclient',
+      userId: 'u-1',
+      resources: [server.MCP_RESOURCE],
+    });
+  });
+
+  it('accepts the bare origin with a trailing slash on authorize, exchange and refresh', async () => {
+    const slashed = `${new URL(server.MCP_RESOURCE).origin}/`;
+    const res = await connect({
+      params: { resource: slashed },
+      exchange: { resource: slashed },
+    });
+    expect(res.status).toBe(200);
+    expect(claimsOf(res.body.access_token).aud).toBe(server.MCP_RESOURCE);
+
+    const refreshed = await token({
+      grant_type: 'refresh_token',
+      refresh_token: res.body.refresh_token,
+      client_id: 'pubclient',
+      resource: slashed,
+    });
+    expect(refreshed.status).toBe(200);
+    expect(claimsOf(refreshed.body.access_token).aud).toBe(server.MCP_RESOURCE);
+  });
+
+  it('refuses a resource that is not the MCP server', async () => {
+    const res = await token({
+      grant_type: 'refresh_token',
+      refresh_token: (await connect()).body.refresh_token,
+      client_id: 'pubclient',
+      resource: 'https://elsewhere.example/mcp',
+    });
+    expect(res.body.error).toBe('invalid_target');
+  });
+
+  it('gives a registered client with only authorization_code a refresh token', async () => {
+    const reg = await server.auth.handler(
+      new Request(`${BASE}/oauth2/register`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          client_name: 'SDK-style client',
+          redirect_uris: ['http://127.0.0.1:4567/cb'],
+          grant_types: ['authorization_code'],
+          token_endpoint_auth_method: 'none',
+        }),
+      })
+    );
+    expect(reg.status).toBe(201);
+    const { client_id } = (await reg.json()) as { client_id: string };
+
+    const res = await connect({ clientId: client_id, redirectUri: 'http://127.0.0.1:4567/cb' });
+
+    expect(res.status).toBe(200);
+    expect(typeof res.body.refresh_token).toBe('string');
+  });
+
+  it('rotates refresh tokens, replays within 30 s, and ends the family after', async () => {
+    const first = await connect();
+    const r1 = first.body.refresh_token as string;
+
+    const rotated = await token({
+      grant_type: 'refresh_token',
+      refresh_token: r1,
+      client_id: 'pubclient',
+    });
+    expect(rotated.status).toBe(200);
+    const r2 = rotated.body.refresh_token as string;
+    expect(r2).not.toBe(r1);
+
+    // Within the reuse interval the same response comes back.
+    const replay = await token({
+      grant_type: 'refresh_token',
+      refresh_token: r1,
+      client_id: 'pubclient',
+    });
+    expect(replay.status).toBe(200);
+    expect(replay.body.refresh_token).toBe(r2);
+
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 31_000 });
+    try {
+      const late = await token({
+        grant_type: 'refresh_token',
+        refresh_token: r1,
+        client_id: 'pubclient',
+      });
+      expect(late.body.error).toBe('invalid_grant');
+      // The whole family for (client, user) is gone, the rotated one too.
+      const after = await token({
+        grant_type: 'refresh_token',
+        refresh_token: r2,
+        client_id: 'pubclient',
+      });
+      expect(after.body.error).toBe('invalid_grant');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('lets one of two parallel refreshes rotate', async () => {
+    const { refresh_token } = (await connect()).body;
+    const [a, b] = await Promise.all([
+      token({ grant_type: 'refresh_token', refresh_token, client_id: 'pubclient' }),
+      token({ grant_type: 'refresh_token', refresh_token, client_id: 'pubclient' }),
+    ]);
+    const issued = [a, b].filter(r => r.status === 200).map(r => r.body.refresh_token);
+    expect(issued.length).toBeGreaterThanOrEqual(1);
+    // One rotation: any second answer is the replay of the first.
+    expect(new Set(issued).size).toBe(1);
+  });
+
+  it('exchanges a code once, even in parallel', async () => {
+    const { verifier, challenge } = pkce();
+    const query = new URLSearchParams({
+      client_id: 'pubclient',
+      response_type: 'code',
+      redirect_uri: PUBLIC_REDIRECT,
+      scope: 'read',
+      code_challenge: challenge,
+      code_challenge_method: 'S256',
+    });
+    const authorize = await server.auth.handler(
+      new Request(`${BASE}/oauth2/authorize?${query}`, { headers: { cookie: ownCookie } })
+    );
+    const signedQuery = new URL(authorize.headers.get('location')!, 'http://x').searchParams;
+    const consent = await server.auth.handler(
+      new Request(`${BASE}/oauth2/consent`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          origin: 'http://localhost:3000',
+          cookie: ownCookie,
+        },
+        body: JSON.stringify({ accept: true, oauth_query: signedQuery.toString() }),
+      })
+    );
+    const code = new URL(((await consent.json()) as { url: string }).url).searchParams.get('code')!;
+    const exchange = () =>
+      token({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: PUBLIC_REDIRECT,
+        client_id: 'pubclient',
+        code_verifier: verifier,
+      });
+    const results = await Promise.all([exchange(), exchange()]);
+    expect(results.filter(r => r.status === 200)).toHaveLength(1);
+  });
+
+  describe('ending app connections', () => {
+    const grantsOf = async (userId: string) => ({
+      refresh: await db.oauthRefreshToken.count({ where: { userId } }),
+      consents: await db.oauthConsent.count({ where: { userId } }),
+    });
+    const revokeRows = (userId: string) =>
+      db.platformAuditLog.findMany({ where: { action: 'oauth_grants.revoke', target_id: userId } });
+
+    it('a password reset ends them, with one audit row', async () => {
+      await connect();
+      expect((await grantsOf('u-1')).refresh).toBeGreaterThan(0);
+      const ctx = await server.auth.$context;
+      await ctx.internalAdapter.createVerificationValue({
+        identifier: 'reset-password:it-reset-token',
+        value: 'u-1',
+        expiresAt: new Date(Date.now() + 600_000),
+      });
+
+      const res = await server.auth.handler(
+        new Request(`${BASE}/reset-password`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', origin: 'http://localhost:3000' },
+          body: JSON.stringify({ newPassword: 'a-new-password-1', token: 'it-reset-token' }),
+        })
+      );
+
+      expect(res.status).toBe(200);
+      expect(await grantsOf('u-1')).toEqual({ refresh: 0, consents: 0 });
+      const rows = await revokeRows('u-1');
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        actor_id: 'u-1',
+        target_type: 'user',
+        data: expect.objectContaining({
+          tool: 'auth:oauth_grants.revoke',
+          reason: 'password_reset',
+        }),
+      });
+    });
+
+    it('a password change that signs out other sessions ends them; one that keeps them does not', async () => {
+      // u-1 now has a password ('a-new-password-1') and a fresh session.
+      await db.session.create({
+        data: {
+          id: 'it-session-u1-b',
+          token: 'it-session-token-u1-b',
+          user_id: 'u-1',
+          expires_at: new Date(Date.now() + 86_400_000),
+        },
+      });
+      const cookie = (
+        await serializeSignedCookie(
+          `${server.COOKIE_PREFIX}.session_token`,
+          'it-session-token-u1-b',
+          process.env.BETTER_AUTH_SECRET!
+        )
+      ).split(';')[0]!;
+      const change = (body: Record<string, unknown>) =>
+        server.auth.handler(
+          new Request(`${BASE}/change-password`, {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              origin: 'http://localhost:3000',
+              cookie,
+            },
+            body: JSON.stringify(body),
+          })
+        );
+
+      await connect({ cookie });
+      const kept = await change({
+        currentPassword: 'a-new-password-1',
+        newPassword: 'a-new-password-2',
+      });
+      expect(kept.status).toBe(200);
+      expect((await grantsOf('u-1')).refresh).toBeGreaterThan(0);
+
+      const ended = await change({
+        currentPassword: 'a-new-password-2',
+        newPassword: 'a-new-password-3',
+        revokeOtherSessions: true,
+      });
+      expect(ended.status).toBe(200);
+      expect(await grantsOf('u-1')).toEqual({ refresh: 0, consents: 0 });
+      expect((await revokeRows('u-1')).map(r => (r.data as { reason?: string }).reason)).toEqual(
+        expect.arrayContaining(['password_change'])
+      );
+    });
+
+    it('a ban ends them', async () => {
+      // u-2 holds the copied webclient grant.
+      expect((await grantsOf('u-2')).consents).toBeGreaterThan(0);
+      const ctx = await server.auth.$context;
+      await ctx.internalAdapter.updateUser('u-2', { banned: true });
+      expect(await grantsOf('u-2')).toEqual({ refresh: 0, consents: 0 });
+      expect((await revokeRows('u-2')).map(r => (r.data as { reason?: string }).reason)).toEqual([
+        'ban',
+      ]);
+    });
   });
 });

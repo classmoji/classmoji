@@ -5,6 +5,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { serializeSignedCookie } from 'better-call';
+// eslint's resolver misses this subpath export; TypeScript resolves it.
+// eslint-disable-next-line import/no-unresolved
 import { hashPassword } from 'better-auth/crypto';
 
 process.env.WEBAPP_URL = 'http://localhost:3000';
@@ -12,15 +14,7 @@ process.env.BETTER_AUTH_SECRET = 'test-secret-that-is-at-least-32-chars!!';
 
 const mocks = vi.hoisted(() => {
   const client: Record<string, Record<string, unknown>> = {};
-  for (const model of [
-    'user',
-    'session',
-    'account',
-    'verification',
-    'oauthAccessToken',
-    'oauthApplication',
-    'oauthConsent',
-  ]) {
+  for (const model of ['user', 'session', 'account', 'verification']) {
     client[model] = {
       findFirst: vi.fn(() => Promise.resolve(null)),
       findUnique: vi.fn(() => Promise.resolve(null)),
@@ -41,7 +35,11 @@ const mocks = vi.hoisted(() => {
   return { client, sendAuthOtp };
 });
 
-vi.mock('@classmoji/database', () => ({ default: () => mocks.client }));
+vi.mock('@classmoji/database', async () => {
+  const { standInClient } = await import('./support/prismaStandIn.ts');
+  const client = standInClient(mocks.client);
+  return { default: () => client };
+});
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     user: { findById: vi.fn(), findByLogin: vi.fn() },
@@ -53,9 +51,41 @@ vi.mock('@classmoji/services', () => ({
   },
 }));
 
-const { auth, ADMIN_PATHS_NOT_USED, COOKIE_PREFIX, UNSUPPORTED_CODE_TYPE_MESSAGE } = await import(
-  '../server.ts'
-);
+const {
+  auth,
+  ADMIN_PATHS_NOT_USED,
+  COOKIE_PREFIX,
+  OAUTH_PATHS_NOT_USED,
+  UNSUPPORTED_CODE_TYPE_MESSAGE,
+} = await import('../server.ts');
+
+/** Every endpoint this better-auth declares, with its first method and whether it is server-only. */
+const DECLARED = Object.values(auth.api as Record<string, unknown>)
+  .map(
+    e =>
+      e as { path?: unknown; options?: { method?: unknown; metadata?: { SERVER_ONLY?: unknown } } }
+  )
+  .filter(e => typeof e?.path === 'string')
+  .map(e => ({
+    path: e.path as string,
+    method: String([e.options?.method].flat()[0] ?? 'GET'),
+    serverOnly: Boolean(e.options?.metadata?.SERVER_ONLY),
+  }));
+const methodOf = (path: string) => DECLARED.find(e => e.path === path && !e.serverOnly)?.method;
+
+/** One request through the router, as a signed-out browser on the webapp would send it. */
+const routed = (path: string, method = methodOf(path) ?? 'POST') =>
+  auth.handler(
+    new Request(`http://localhost:3000/api/auth${path}`, {
+      method,
+      headers: {
+        origin: 'http://localhost:3000',
+        cookie: 'classmoji.session_token=x',
+        ...(method === 'GET' ? {} : { 'content-type': 'application/json' }),
+      },
+      ...(method === 'GET' ? {} : { body: JSON.stringify({}) }),
+    })
+  );
 
 const BASE = 'http://localhost:3000/api/auth';
 
@@ -77,6 +107,15 @@ describe('disabled better-auth paths', () => {
     );
     expect(res.status).toBe(404);
   });
+
+  // better-auth 1.7's session edit and the email-OTP email change.
+  it.each([['/update-session'], ['/email-otp/request-email-change'], ['/email-otp/change-email']])(
+    'answers %s with 404',
+    async path => {
+      expect(methodOf(path)).toBeDefined();
+      expect((await routed(path)).status).toBe(404);
+    }
+  );
 
   it.each([['/sign-in/email-otp'], ['/email-otp/check-verification-otp']])(
     'answers POST %s with 404',
@@ -115,7 +154,7 @@ describe('disabled better-auth paths', () => {
     expect(typeof auth.api.getAccessToken).toBe('function');
     expect(typeof auth.api.refreshToken).toBe('function');
     const error = await auth.api
-      .getAccessToken({ body: { providerId: 'github' }, headers: new Headers() })
+      .getAccessToken({ body: { accountId: 'acct-1' }, headers: new Headers() })
       .then(
         () => null,
         (e: unknown) => e
@@ -136,6 +175,7 @@ describe('/verify-password', () => {
     [mocks.client.session!, 'findFirst'],
     [mocks.client.user!, 'findFirst'],
     [mocks.client.account!, 'findMany'],
+    [mocks.client.account!, 'findFirst'],
   ] as const;
   const originals = replaced.map(([model, key]) => model[key]);
   afterEach(() => {
@@ -166,17 +206,18 @@ describe('/verify-password', () => {
         updated_at: now,
       })
     );
-    mocks.client.account!.findMany = vi.fn(async () => [
-      {
-        id: 'acct-1',
-        user_id: 'user-1',
-        account_id: 'user-1',
-        provider_id: 'credential',
-        password: await hashPassword(PASSWORD),
-        created_at: now,
-        updated_at: now,
-      },
-    ]);
+    const credential = {
+      id: 'acct-1',
+      user_id: 'user-1',
+      account_id: 'user-1',
+      provider_id: 'credential',
+      password: await hashPassword(PASSWORD),
+      created_at: now,
+      updated_at: now,
+    };
+    // better-auth 1.7 reads the credential account with findFirst.
+    mocks.client.account!.findMany = vi.fn(async () => [credential]);
+    mocks.client.account!.findFirst = vi.fn(async () => credential);
     const cookie = (
       await serializeSignedCookie(
         `${COOKIE_PREFIX}.session_token`,
@@ -213,11 +254,12 @@ describe('/verify-password', () => {
 });
 
 describe("the admin plugin's endpoints", () => {
-  /** Every admin-plugin endpoint this better-auth version serves, with its method. */
-  const adminEndpoints = Object.values(auth.api as Record<string, unknown>)
-    .map(e => e as { path?: unknown; options?: { method?: unknown } })
-    .filter(e => typeof e?.path === 'string' && e.path.startsWith('/admin/'))
-    .map(e => ({ path: e.path as string, method: String(e.options?.method) }));
+  /**
+   * Every `/admin/*` endpoint this better-auth version serves over HTTP, with
+   * its method. oauth-provider adds `/admin/oauth2/*` endpoints too, all
+   * server-only (the router never serves them); they are checked below.
+   */
+  const adminEndpoints = DECLARED.filter(e => e.path.startsWith('/admin/') && !e.serverOnly);
   const KEPT = ['/admin/impersonate-user', '/admin/stop-impersonating'];
 
   it('turns off every one but View as start and stop', () => {
@@ -226,6 +268,24 @@ describe("the admin plugin's endpoints", () => {
       adminEndpoints.map(e => e.path).sort()
     );
   });
+
+  // A served `/admin/*` path this list doesn't know fails the test above; a
+  // server-only one must stay server-only and unrouted.
+  const serverOnlyAdmin = DECLARED.filter(e => e.path.startsWith('/admin/') && e.serverOnly);
+
+  it('leaves only server-only endpoints under /admin/oauth2', () => {
+    expect(serverOnlyAdmin.length).toBe(9);
+    for (const e of DECLARED.filter(d => d.path.startsWith('/admin/oauth2/'))) {
+      expect([e.path, e.serverOnly]).toEqual([e.path, true]);
+    }
+  });
+
+  it.each(serverOnlyAdmin.map(e => [e.path.replace(/:[a-z_]+/g, 'x'), e.method] as const))(
+    'answers %s (%s, server-only) with 404',
+    async (path, method) => {
+      expect((await routed(path, method)).status).toBe(404);
+    }
+  );
 
   it.each(ADMIN_PATHS_NOT_USED.map(path => [path]))('answers %s with 404', async path => {
     const method = adminEndpoints.find(e => e.path === path)?.method ?? 'POST';
@@ -263,6 +323,57 @@ describe("the admin plugin's endpoints", () => {
     );
     // No session in this call: the endpoint's own 401, not the router's 404.
     expect(error).toMatchObject({ statusCode: 401 });
+  });
+});
+
+describe("the authorization server's endpoints", () => {
+  it('turns off only paths this better-auth declares', () => {
+    for (const path of OAUTH_PATHS_NOT_USED)
+      expect([path, methodOf(path)]).not.toEqual([path, undefined]);
+  });
+
+  it.each(OAUTH_PATHS_NOT_USED.map(path => [path]))('answers %s with 404', async path => {
+    expect((await routed(path)).status).toBe(404);
+  });
+
+  // The flows MCP clients and the consent page use stay up.
+  it.each([
+    ['/oauth2/authorize'],
+    ['/oauth2/token'],
+    ['/oauth2/register'],
+    ['/oauth2/consent'],
+    ['/oauth2/revoke'],
+    ['/jwks'],
+  ])('still routes %s', async path => {
+    expect((await routed(path)).status).not.toBe(404);
+  });
+
+  it("serves nothing under the 1.4 mcp plugin's paths", async () => {
+    for (const path of ['/mcp/authorize', '/mcp/token', '/mcp/register', '/mcp/get-session']) {
+      expect(DECLARED.some(e => e.path === path)).toBe(false);
+      expect(
+        (
+          await routed(
+            path,
+            path === '/mcp/authorize' || path === '/mcp/get-session' ? 'GET' : 'POST'
+          )
+        ).status
+      ).toBe(404);
+    }
+  });
+
+  it('leaves the in-process endpoints in place (consents, a session JWT)', async () => {
+    // No session in these calls: each endpoint's own 401, not the router's 404.
+    const consents = await (auth.api as any).getOAuthConsents({ headers: new Headers() }).then(
+      () => null,
+      (e: unknown) => e
+    );
+    expect(consents).toMatchObject({ statusCode: 401 });
+    const token = await (auth.api as any).getToken({ headers: new Headers() }).then(
+      () => null,
+      (e: unknown) => e
+    );
+    expect(token).toMatchObject({ statusCode: 401 });
   });
 });
 

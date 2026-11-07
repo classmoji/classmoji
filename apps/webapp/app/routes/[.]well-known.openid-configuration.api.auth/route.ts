@@ -6,10 +6,9 @@
  * Same document at every standard location; public by spec.
  */
 
-import { auth } from '@classmoji/auth/server';
-import { oAuthDiscoveryMetadata } from 'better-auth/plugins';
+import { auth, oauthProviderOpenIdConfigMetadata } from '@classmoji/auth/server';
 import type { LoaderFunctionArgs } from 'react-router';
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  return oAuthDiscoveryMetadata(auth)(request);
+  return oauthProviderOpenIdConfigMetadata(auth)(request);
 }

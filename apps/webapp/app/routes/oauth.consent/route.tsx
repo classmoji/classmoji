@@ -58,7 +58,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     throw new Response('Missing consent_code or client_id', { status: 400 });
   }
 
-  const application = await getPrisma().oauthApplication.findUnique({
+  const application = await getPrisma().oauthClient.findUnique({
     where: { clientId },
     select: { name: true, icon: true },
   });
