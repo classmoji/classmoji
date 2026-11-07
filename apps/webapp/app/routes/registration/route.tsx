@@ -10,6 +10,7 @@ import { Logo } from '@classmoji/ui-components';
 import { getAuthSession } from '@classmoji/auth/server';
 import getPrisma, { GIT_IDENTITY, whereGitUsername } from '@classmoji/database';
 import { generateId, gitUsername } from '@classmoji/utils';
+import { safeReturnPath } from '@classmoji/utils/return-path';
 import { ClassmojiService } from '@classmoji/services';
 import {
   sendEmailVerificationCode,
@@ -20,8 +21,7 @@ import { verifyInviteToken, inviteTokenMatchesEmail } from '@classmoji/auth/invi
 import { normalizeEmail, INVALID_EMAIL_MESSAGE } from '~/utils/email';
 
 /** Where to go once registered: a same-site path from `?next=`, else the picker. */
-const safeNext = (value: string | null | undefined): string =>
-  value && value.startsWith('/') && !value.startsWith('//') ? value : '/select-organization';
+const safeNext = (value: unknown): string => safeReturnPath(value, '/select-organization');
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const authData = await getAuthSession(request);

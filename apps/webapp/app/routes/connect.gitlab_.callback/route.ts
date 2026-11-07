@@ -4,15 +4,21 @@ import { ClassmojiService } from '@classmoji/services';
 import {
   gitlabConnectCookie,
   gitlabConnectRedirectUri,
+  safeReturnTo,
   type GitLabConnectState,
 } from '~/utils/gitlabConnect.server';
 import type { Route } from './+types/route';
 
-/** Land back on `returnTo` with `?gitlab=<outcome>`, clearing the round-trip cookie. */
+/**
+ * Land back on `returnTo` with `?gitlab=<outcome>`, clearing the round-trip
+ * cookie. The path is checked before and after the param is added, so what is
+ * sent is always a path on this app (a cookie set before the current rule
+ * still carries the value it was given then).
+ */
 async function finish(returnTo: string, outcome: string) {
-  const url = new URL(returnTo, 'http://placeholder');
+  const url = new URL(safeReturnTo(returnTo), 'http://placeholder');
   url.searchParams.set('gitlab', outcome);
-  return redirect(`${url.pathname}${url.search}`, {
+  return redirect(safeReturnTo(`${url.pathname}${url.search}`), {
     headers: { 'Set-Cookie': await gitlabConnectCookie.serialize('', { maxAge: 0 }) },
   });
 }

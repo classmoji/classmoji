@@ -1,5 +1,6 @@
 import { createCookie } from 'react-router';
 import { AUTH_SECRET } from '@classmoji/auth/server';
+import { safeReturnPath } from '@classmoji/utils/return-path';
 
 /**
  * Round-trip state for "Connect GitLab" (the GitLab counterpart of installing
@@ -29,7 +30,5 @@ export const gitlabConnectRedirectUri = () =>
 
 /** Only same-app paths; the connect flow never sends anyone off-site. */
 export function safeReturnTo(value: string | null): string {
-  return value && value.startsWith('/') && !value.startsWith('//')
-    ? value
-    : '/create-classroom?provider=gitlab';
+  return safeReturnPath(value, '/create-classroom?provider=gitlab');
 }
