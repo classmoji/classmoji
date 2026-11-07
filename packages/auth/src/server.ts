@@ -204,9 +204,11 @@ export const VIEW_AS_PLATFORM_ADMINS_ONLY_MESSAGE =
  * not a platform admin is refused before the target is looked up, so the
  * answer is the same whoever the target is.
  *
- * The caller is read both ways (lookupBothSessionsForHook): each read that
- * names a user must name a platform admin who is not already viewing as
- * someone.
+ * The caller is read both ways (lookupBothSessionsForHook). The database read
+ * must name a platform admin who is not already viewing as someone: the
+ * endpoint itself may read the cookie cache, which outlives a session row that
+ * has been signed out or revoked for up to its maxAge. When the cache names a
+ * user too, it must be the same user, and the same rules hold for it.
  *
  * The target id is read the way the endpoint reads it: its body schema is
  * `z.coerce.string()`, i.e. `String(userId)`, so `["<id>"]` and `<id>` name
@@ -220,7 +222,11 @@ async function refuseViewingAsAnAdmin(ctx: {
   const { cached, stored } = await lookupBothSessionsForHook(ctx);
   const callers = [cached, stored].filter(read => read?.user?.id);
   if (callers.length === 0) return;
-  if (callers.some(read => read?.session?.impersonatedBy || !mayViewAs(String(read?.user?.id)))) {
+  if (
+    !stored?.user?.id ||
+    (cached?.user?.id && String(cached.user.id) !== String(stored.user.id)) ||
+    callers.some(read => read?.session?.impersonatedBy || !mayViewAs(String(read?.user?.id)))
+  ) {
     throw new APIError('FORBIDDEN', { message: VIEW_AS_PLATFORM_ADMINS_ONLY_MESSAGE });
   }
   const targetId = String((ctx.body as { userId?: unknown } | undefined)?.userId);

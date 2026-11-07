@@ -21,7 +21,7 @@ import { serializeSignedCookie } from 'better-call';
 
 process.env.WEBAPP_URL = 'http://localhost:3000';
 process.env.BETTER_AUTH_SECRET = 'test-secret-that-is-at-least-32-chars!!';
-process.env.PLATFORM_ADMIN_USER_IDS = 'admin-1';
+process.env.PLATFORM_ADMIN_USER_IDS = 'admin-1,admin-2';
 
 const mocks = vi.hoisted(() => {
   const user = (id: string, role: string | null = null) => ({
@@ -37,6 +37,7 @@ const mocks = vi.hoisted(() => {
   });
   const users: Record<string, Record<string, unknown>> = {
     'admin-1': user('admin-1'),
+    'admin-2': user('admin-2'),
     'student-1': user('student-1'),
     'role-admin': user('role-admin', 'admin'),
   };
@@ -452,6 +453,52 @@ describe('starting to view as someone', () => {
     expect(mocks.state.created).toEqual([
       expect.objectContaining({ user_id: 'student-1', impersonatedBy: 'admin-1' }),
     ]);
+  });
+
+  // The endpoint reads the cookie cache, which a platform admin's browser
+  // keeps after the session row is gone (signed out elsewhere, revoked).
+  it("is refused for a platform admin's cache whose session row is gone", async () => {
+    const j = await jars();
+    mocks.state.sessions = mocks.state.sessions.filter(s => s.token !== ADMIN_TOKEN);
+
+    const cached = await auth.api.getSession({
+      headers: new Headers({ cookie: j.own }),
+      query: { disableRefresh: true },
+    });
+    expect(cached?.user.id).toBe('admin-1');
+
+    const res = await post('/admin/impersonate-user', j.own, { userId: 'student-1' });
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ message: VIEW_AS_PLATFORM_ADMINS_ONLY_MESSAGE });
+    expect(mocks.state.created).toHaveLength(0);
+    expect(mocks.client.platformAuditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('is refused when the cache and the database read name two different platform admins', async () => {
+    addSession(ADMIN_TOKEN, 'admin-1', null, 7 * 86_400_000);
+    addSession('token-admin-2', 'admin-2', null, 7 * 86_400_000);
+    const otherAdminCache = await cacheCookieFor('token-admin-2');
+    vi.clearAllMocks();
+
+    for (const cookie of [
+      `${await tokenCookie(ADMIN_TOKEN)}; ${otherAdminCache}`,
+      `${await tokenCookie('token-admin-2')}; ${await cacheCookieFor(ADMIN_TOKEN)}`,
+    ]) {
+      const res = await post('/admin/impersonate-user', cookie, { userId: 'student-1' });
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({ message: VIEW_AS_PLATFORM_ADMINS_ONLY_MESSAGE });
+    }
+    expect(mocks.state.created).toHaveLength(0);
+  });
+
+  it("leaves a request with neither read to the endpoint's own 401", async () => {
+    const res = await post('/admin/impersonate-user', await tokenCookie('token-no-such-row'), {
+      userId: 'student-1',
+    });
+
+    expect(res.status).toBe(401);
+    expect(mocks.state.created).toHaveLength(0);
   });
 });
 
