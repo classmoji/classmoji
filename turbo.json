@@ -21,7 +21,13 @@
     "build": {
       "outputs": []
     },
-    "web:build": {},
+    // ACTION_ORIGIN_HOSTS picks the host baked into allowedActionOrigins
+    // (apps/*/actionOrigins.js). turbo hands a task only the variables named
+    // here, so without it a staging image build would quietly get the
+    // production host.
+    "web:build": {
+      "env": ["ACTION_ORIGIN_HOSTS"]
+    },
     "web:dev": {
       "persistent": true,
       "cache": false
@@ -72,7 +78,10 @@
       "persistent": true,
       "cache": false
     },
-    "slides:build": {},
+    // See web:build.
+    "slides:build": {
+      "env": ["ACTION_ORIGIN_HOSTS"]
+    },
     "slides:start": {
       "dependsOn": ["^db:generate"]
     },

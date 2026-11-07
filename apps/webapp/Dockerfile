@@ -54,6 +54,12 @@ RUN ./node_modules/.bin/prisma generate --schema packages/database/schema.prisma
 
 COPY . .
 
+# The host baked into allowedActionOrigins (apps/webapp/actionOrigins.js). The
+# staging image build passes staging.classmoji.io; unset means the production
+# host.
+ARG ACTION_ORIGIN_HOSTS
+ENV ACTION_ORIGIN_HOSTS=${ACTION_ORIGIN_HOSTS}
+
 # Build the web app. With the SENTRY_AUTH_TOKEN build secret (CI deploys) the
 # build uploads its source maps to Sentry and deletes them; without it (or
 # empty) the build is unchanged. A secret mount never lands in an image layer.

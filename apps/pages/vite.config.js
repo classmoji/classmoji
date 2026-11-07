@@ -58,7 +58,7 @@ export default async ({ command, mode }) => {
       // yjs too: two copies in one bundle break live editing ("Yjs was
       // already imported") — the editor's fragment and the provider's document
       // would come from different copies.
-      dedupe: ['react', 'react-dom', 'react-router', 'react-router-dom', 'yjs'],
+      dedupe: ['react', 'react-dom', 'react-router', 'yjs'],
     },
     optimizeDeps: {
       // Pre-bundle the heavy editor deps on startup. Without this they're
@@ -69,7 +69,6 @@ export default async ({ command, mode }) => {
         'react',
         'react-dom',
         'react-router',
-        'react-router-dom',
         '@mantine/core',
         '@tabler/icons-react',
         'use-local-storage-state',
