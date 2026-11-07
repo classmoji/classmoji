@@ -2,7 +2,7 @@
  * Environment configuration for the MCP resource server.
  *
  * Port 8100 was chosen to avoid the ports used by the rest of the dev stack
- * (webapp 3000, hook-station 4001, ai-agent 6000, slides 6500, pages 7100,
+ * (webapp 3000, hook-station 4001, slides 6500, pages 7100,
  * postgres 5433 — see .dev-context).
  */
 

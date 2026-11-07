@@ -1,22 +1,17 @@
 /**
- * Fixed values of the AI settings page: the audit surface name, the quizzes
- * section's server line, and the lines a refused instructions save shows, by
- * validation code (`ClassroomSettingsValidationError.code` from updateSettings).
+ * Fixed values of the AI settings page: the audit surface name and the lines a
+ * refused instructions save shows, by validation code
+ * (`ClassroomSettingsValidationError.code` from updateSettings).
  */
 import { INSTRUCTIONS_MAX_CHARS } from '@classmoji/utils/ask-moji/limits';
 
 /** The audit `data.tool` of every save on the AI settings page. */
 export const AI_SETTINGS_AUDIT_TOOL = 'web:settings.ai';
 
-/** The quizzes section's line when this server cannot run quizzes (no Trigger). */
-export const QUIZZES_NOT_SET_UP_COPY = "Quizzes aren't set up on this server.";
-
 /** The fixed lines for a refused instructions save, by validation code. */
 export const INSTRUCTIONS_ERROR_COPY = {
   INSTRUCTIONS_INVALID: 'Ask Moji instructions must be text.',
   INSTRUCTIONS_TOO_LONG: `Ask Moji instructions can be at most ${INSTRUCTIONS_MAX_CHARS.toLocaleString('en-US')} characters.`,
-  /** Not a validation code: the save was refused because this server's Ask Moji does not read them. */
-  INSTRUCTIONS_UNAVAILABLE: "Ask Moji instructions aren't available on this server.",
 } as const;
 
 /** The validation codes updateSettings may refuse an instructions save with. */

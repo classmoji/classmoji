@@ -1,7 +1,7 @@
 /**
  * The AI settings page, asserted against RENDERED MARKUP: without a classroom
  * key every select shows its platform default, never a stored value (the
- * ai-agent ignores stored values without a key), and every select is disabled.
+ * agents ignore stored values without a key), and every select is disabled.
  */
 
 import type { ReactNode } from 'react';
@@ -43,10 +43,8 @@ vi.mock('@classmoji/services', () => ({
   ClassroomSettingsEntitlementError: class extends Error {},
   ClassroomSettingsValidationError: class extends Error {},
 }));
-vi.mock('~/utils/aiFeatures.server', () => ({ isAIAgentConfigured: () => true }));
 
 const { default: SettingsAI } = await import('../route');
-const { QUIZZES_NOT_SET_UP_COPY } = await import('../aiSettingsCopy');
 
 const DEFAULT_LABELS = {
   llm_model: 'Claude Sonnet 4.5',
@@ -67,16 +65,13 @@ const MODELS = [
 const render = (
   hasKey: boolean,
   selectValues: Record<string, string | null>,
-  quizzesAvailable = true,
+  aiAvailable = true,
   extra: {
     settings?: Record<string, unknown>;
-    aiUnavailable?: boolean;
-    quizzesUnavailableLine?: string | null;
     quizzesProRequired?: boolean;
     askMojiProRequired?: boolean;
     askMojiToggleAvailable?: boolean;
     askMojiUnavailableLine?: string | null;
-    askMojiInstructionsShown?: boolean;
   } = {}
 ) => {
   const props = {
@@ -89,12 +84,9 @@ const render = (
         ...extra.settings,
       },
       allowedModels: MODELS,
-      quizzesAvailable,
-      quizzesUnavailableLine: extra.quizzesUnavailableLine ?? null,
-      aiUnavailable: extra.aiUnavailable ?? false,
+      aiUnavailable: !aiAvailable,
       askMojiToggleAvailable: extra.askMojiToggleAvailable ?? true,
       askMojiUnavailableLine: extra.askMojiUnavailableLine ?? null,
-      askMojiInstructionsShown: extra.askMojiInstructionsShown ?? true,
       quizzesProRequired: extra.quizzesProRequired ?? false,
       askMojiProRequired: extra.askMojiProRequired ?? false,
       defaultLabels: DEFAULT_LABELS,
@@ -132,34 +124,23 @@ describe('AI settings: keyless display', () => {
 
 describe('AI settings: what this server can run', () => {
   // Instructors read this; the env vars behind it are an operator's business.
-  it('says AI features are unavailable when neither can run, naming no env var', () => {
-    const html = render(true, ALL_NULL, false, {
-      aiUnavailable: true,
-      askMojiToggleAvailable: false,
-    });
+  it('says AI features are unavailable without Trigger, naming no env var', () => {
+    const html = render(true, ALL_NULL, false, { askMojiToggleAvailable: false });
 
     expect(html).toContain('AI features aren&#x27;t available on this server');
-    expect(html).not.toContain('AI_AGENT');
     expect(html).not.toContain('TRIGGER');
+    // The banner alone: no section repeats it.
+    expect(html).not.toContain('set up on this server');
+    expect(switches(html)).toEqual([
+      { checked: true, disabled: true },
+      { checked: true, disabled: true },
+    ]);
   });
 
   it('shows nothing about it when both can run', () => {
     const html = render(true, ALL_NULL);
     expect(html).not.toContain('available on this server');
     expect(html).not.toContain('set up on this server');
-  });
-
-  it('disables the quizzes switch with its own line when only quizzes cannot run', () => {
-    const html = render(true, ALL_NULL, false, {
-      quizzesUnavailableLine: QUIZZES_NOT_SET_UP_COPY,
-    });
-
-    expect(html).not.toContain('AI features aren&#x27;t available on this server');
-    expect(html).toContain('Quizzes aren&#x27;t set up on this server.');
-    expect(switches(html)).toEqual([
-      { checked: true, disabled: true },
-      { checked: true, disabled: false },
-    ]);
   });
 });
 
@@ -279,21 +260,14 @@ describe('AI settings: Ask Moji availability', () => {
   it('disables only the Ask Moji switch where Ask Moji cannot run, with its line', () => {
     const html = render(true, ALL_NULL, true, {
       askMojiToggleAvailable: false,
-      askMojiUnavailableLine: "Ask Moji isn't set up on this server.",
+      askMojiUnavailableLine: 'Ask Moji needs an Anthropic API key: add one in AI settings.',
     });
 
-    expect(html).toContain('Ask Moji isn&#x27;t set up on this server.');
+    expect(html).toContain('Ask Moji needs an Anthropic API key: add one in AI settings.');
     expect(switches(html)).toEqual([
       { checked: true, disabled: false },
       { checked: true, disabled: true },
     ]);
-  });
-
-  it('keeps the Ask Moji switch usable while quizzes cannot run, when Ask Moji can', () => {
-    const html = render(true, ALL_NULL, false, { askMojiToggleAvailable: true });
-
-    expect(switches(html)[0]).toEqual({ checked: true, disabled: true });
-    expect(switches(html)[1]).toEqual({ checked: true, disabled: false });
   });
 });
 
@@ -312,11 +286,5 @@ describe('AI settings: Ask Moji instructions', () => {
   it('shows an empty field when there are none', () => {
     const html = render(true, ALL_NULL);
     expect(html).toMatch(/<textarea[^>]*id="syllabus_bot_instructions"[^>]*><\/textarea>/i);
-  });
-
-  it('shows no field and no save off the Trigger runtime', () => {
-    const html = render(true, ALL_NULL, true, { askMojiInstructionsShown: false });
-    expect(html).not.toContain('syllabus_bot_instructions');
-    expect(html).not.toContain('Save instructions');
   });
 });

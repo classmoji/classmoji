@@ -203,8 +203,9 @@ export {
 } from './classmoji/quizAssignment.service.ts';
 export type { QuizAssignmentErrorCode } from './classmoji/quizAssignment.service.ts';
 // Quiz source material: the linked pages and decks a quiz is about. The
-// ai-agent reads them through `ClassmojiService.quizSourceMaterial.load`; the
-// flat names are for callers that want the functions and types directly.
+// Trigger.dev quiz task reads them through
+// `ClassmojiService.quizSourceMaterial.load`; the flat names are for callers
+// that want the functions and types directly.
 export {
   loadQuizSourceMaterial,
   countStartableSourceMaterial,

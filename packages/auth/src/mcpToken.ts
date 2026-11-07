@@ -128,8 +128,7 @@ function isUniqueConstraintViolation(error: unknown): boolean {
  * the realistic wait is milliseconds and these ceilings exist for the pathological
  * case (a saturated pool, a stalled connection) rather than the normal one.
  *
- * Both FAIL CLOSED. A timeout throws out of `mintMcpAccessToken`, which
- * apps/webapp/app/routes/api.syllabus-bot.$class/route.ts turns into a 500 for
+ * Both FAIL CLOSED. A timeout throws out of `mintMcpAccessToken`, which fails
  * that turn. That is the intended outcome: the alternative — proceeding without a
  * token, or reusing a previous turn's — is precisely what the per-turn mint
  * exists to prevent. The turn is lost; the next one re-mints.

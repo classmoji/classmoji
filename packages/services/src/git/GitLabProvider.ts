@@ -463,7 +463,8 @@ export class GitLabProvider extends GitProvider {
       body: {
         name: 'classmoji-content-delivery',
         // Read-only: the API (content delivery, code exploration) and git
-        // clone over https (the AI agent's local code-aware mode).
+        // over https (`read_repository`; its one user, the retired ai-agent
+        // service's local code-aware mode, is gone).
         scopes: ['read_api', 'read_repository'],
         access_level: REPORTER_ACCESS_LEVEL,
         expires_at: expiresOn,

@@ -365,9 +365,9 @@ describe('who may call them', () => {
 
 describe('availability', () => {
   it.each(INSIGHT_TOOLS)(
-    '%s: refused while not Pro, switched off or on another runtime',
+    '%s: refused while not Pro, switched off, without a key or without Trigger',
     async name => {
-      for (const reason of ['PRO_REQUIRED', 'NOT_ENABLED', 'RUNTIME_OFF', 'NO_API_KEY']) {
+      for (const reason of ['PRO_REQUIRED', 'NOT_ENABLED', 'NO_API_KEY', 'TRIGGER_NOT_CONFIGURED']) {
         mocks.askMojiAvailable.mockResolvedValueOnce({ available: false, reason });
         const result = await call(viewer('owner-x'), name, argsFor(name, 'org/x'));
         expect(result.isError, reason).toBe(true);

@@ -58,7 +58,6 @@ vi.mock('@classmoji/services', () => ({
   ClassroomSettingsEntitlementError: class extends Error {},
   ClassroomSettingsValidationError: class extends Error {},
 }));
-vi.mock('~/utils/aiFeatures.server', () => ({ isAIAgentConfigured: () => true }));
 
 // antd's Form.Item lays out with Row/Col, whose responsive observer needs it.
 Object.defineProperty(window, 'matchMedia', {
@@ -135,12 +134,9 @@ const loaderData = (hasKey: boolean) =>
         syllabus_bot_instructions: null,
       },
       allowedModels: ALLOWED,
-      quizzesAvailable: true,
-      quizzesUnavailableLine: null,
       aiUnavailable: false,
       askMojiToggleAvailable: true,
       askMojiUnavailableLine: null,
-      askMojiInstructionsShown: true,
       quizzesProRequired: false,
       askMojiProRequired: false,
       defaultLabels: DEFAULT_LABELS,

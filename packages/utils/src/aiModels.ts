@@ -32,9 +32,9 @@ export const isAllowedModel = (id: string | null | undefined): id is string =>
 
 /**
  * The model a slot runs when the classroom names none: the platform's env value
- * (trimmed) when it is allowed, else FALLBACK_MODEL. Both quiz runtimes (the
- * ai-agent and the Trigger.dev quiz tasks) and the "Default: X" on the AI
- * settings page read it, so they name the same model.
+ * (trimmed) when it is allowed, else FALLBACK_MODEL. The Trigger.dev chat
+ * tasks and the "Default: X" on the AI settings page read it, so they name the
+ * same model.
  */
 export function platformDefaultModel(envValue: string | null | undefined): string {
   const id = typeof envValue === 'string' ? envValue.trim() : '';
@@ -56,11 +56,10 @@ export type QuizModelPick = {
 
 /**
  * One quiz model slot (standard or code-aware quiz, exploration, the prompt
- * assistant), the one rule both quiz runtimes apply — the ai-agent and the
- * Trigger.dev quiz tasks: the classroom's choice when it is allowed, else the
- * platform's env value when it is allowed, else FALLBACK_MODEL. Values are
- * trimmed, a dated id of an allowed model is allowed, and a blank value names
- * nothing (it is not recorded as a fallback).
+ * assistant), the one rule the Trigger.dev chat tasks apply: the classroom's
+ * choice when it is allowed, else the platform's env value when it is allowed,
+ * else FALLBACK_MODEL. Values are trimmed, a dated id of an allowed model is
+ * allowed, and a blank value names nothing (it is not recorded as a fallback).
  *
  * The caller gates the classroom's choice on its key first and passes
  * undefined for a classroom without one.

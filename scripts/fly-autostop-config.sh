@@ -13,7 +13,7 @@
 # Usage: scripts/fly-autostop-config.sh <path/to/fly.toml> [stop|suspend]
 #   stop     — machine is fully stopped; cold start is a full boot (default)
 #   suspend  — memory snapshot is kept; wakes faster, for heavier/long-lived
-#              services (ai-agent). Fly falls back to stop if it can't suspend.
+#              services. Fly falls back to stop if it can't suspend.
 #
 # Prints the generated config's path; deploy it with `flyctl deploy --config <path>`.
 

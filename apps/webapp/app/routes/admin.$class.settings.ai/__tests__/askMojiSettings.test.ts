@@ -1,6 +1,6 @@
 /**
  * AI settings: the owner's Ask Moji instructions, the audit row every save
- * writes, and the Ask Moji switch's availability on the Trigger runtime.
+ * writes, and the Ask Moji switch's availability.
  *
  *   - Instructions are owner-only to read and write (the page's gate), saved
  *     by their own action that writes that one field through updateSettings,
@@ -9,9 +9,8 @@
  *     with the instructions' length and never their text, never a key's
  *     value, and `impersonated_by` while an admin views as the owner. A
  *     refused save writes none.
- *   - With ASK_MOJI_RUNTIME=trigger the switch follows askMojiAvailable.
- *   - The instructions exist only on the Trigger runtime: off it the loader
- *     sends none and the save is refused without a write.
+ *   - The switch follows askMojiAvailable.
+ *   - Without Trigger neither AI feature runs: one banner, no section line.
  *   - Every save is its own row (`dedupe: false`).
  */
 
@@ -29,9 +28,7 @@ const mocks = vi.hoisted(() => ({
   canUseSyllabusBot: vi.fn(),
   canUseQuizzes: vi.fn(),
   getAllModels: vi.fn(),
-  askMojiRuntimeIsTrigger: vi.fn(),
   askMojiAvailable: vi.fn(),
-  isAIAgentConfigured: vi.fn(),
   isQuizRuntimeConfigured: vi.fn(),
   EntitlementError: class ClassroomSettingsEntitlementError extends Error {},
   ValidationError: class ClassroomSettingsValidationError extends Error {
@@ -63,7 +60,6 @@ vi.mock('@classmoji/services', () => ({
       canUseQuizzes: (...a: unknown[]) => mocks.canUseQuizzes(...a),
     },
     askMojiSession: {
-      askMojiRuntimeIsTrigger: () => mocks.askMojiRuntimeIsTrigger(),
       askMojiAvailable: (...a: unknown[]) => mocks.askMojiAvailable(...a),
     },
   },
@@ -72,15 +68,11 @@ vi.mock('@classmoji/services', () => ({
   getAllModels: (...a: unknown[]) => mocks.getAllModels(...a),
   getModelLabel: (id: string) => `label:${id}`,
 }));
-vi.mock('~/utils/aiFeatures.server', () => ({
-  isAIAgentConfigured: () => mocks.isAIAgentConfigured(),
-}));
 vi.mock('~/components', () => ({ SettingSection: () => null }));
 vi.mock('~/hooks', () => ({ useGlobalFetcher: () => ({ fetcher: null }) }));
 
 const { action, loader } = await import('../route');
-const { AI_SETTINGS_AUDIT_TOOL, INSTRUCTIONS_ERROR_COPY, QUIZZES_NOT_SET_UP_COPY } =
-  await import('../aiSettingsCopy');
+const { AI_SETTINGS_AUDIT_TOOL, INSTRUCTIONS_ERROR_COPY } = await import('../aiSettingsCopy');
 
 const post = (body: unknown) =>
   action({
@@ -128,23 +120,11 @@ beforeEach(() => {
   mocks.canUseSyllabusBot.mockResolvedValue({ allowed: true });
   mocks.canUseQuizzes.mockResolvedValue({ allowed: true });
   mocks.getAllModels.mockResolvedValue({ anthropic: [] });
-  mocks.askMojiRuntimeIsTrigger.mockReturnValue(false);
   mocks.askMojiAvailable.mockResolvedValue({ available: true });
-  mocks.isAIAgentConfigured.mockReturnValue(true);
   mocks.isQuizRuntimeConfigured.mockReturnValue(true);
 });
 
 describe('saveAskMojiInstructions', () => {
-  beforeEach(() => mocks.askMojiRuntimeIsTrigger.mockReturnValue(true));
-
-  it('is refused off the Trigger runtime, writing and auditing nothing', async () => {
-    mocks.askMojiRuntimeIsTrigger.mockReturnValue(false);
-    const result = await saveInstructions('Be brief.');
-    expect(result.error).toBe(INSTRUCTIONS_ERROR_COPY.INSTRUCTIONS_UNAVAILABLE);
-    expect(mocks.updateSettings).not.toHaveBeenCalled();
-    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
-  });
-
   it('is gated to the OWNER of the classroom, and to the mutation rule', async () => {
     await saveInstructions('Be brief.');
     expect(mocks.assertClassroomAccess).toHaveBeenCalledWith(
@@ -302,115 +282,55 @@ describe('every AI settings save is audited', () => {
 });
 
 describe('loader: Ask Moji switch availability', () => {
-  it('follows the AI agent on the AI agent runtime, without asking askMojiAvailable', async () => {
-    mocks.isAIAgentConfigured.mockReturnValue(false);
+  it('asks askMojiAvailable for the gated classroom', async () => {
     const data = await load();
-    expect(data.askMojiToggleAvailable).toBe(false);
-    // Quizzes still run, so no banner: Ask Moji's own section says why.
-    expect(data.aiUnavailable).toBe(false);
-    expect(data.askMojiUnavailableLine).toBe(ASK_MOJI_AVAILABILITY_COPY.TRIGGER_NOT_CONFIGURED);
-    expect(mocks.askMojiAvailable).not.toHaveBeenCalled();
+    expect(mocks.askMojiAvailable).toHaveBeenCalledWith({ classroomId: 'c1' });
+    expect(data.askMojiToggleAvailable).toBe(true);
+    expect(data.askMojiUnavailableLine).toBeNull();
   });
 
-  it('has no Ask Moji line when the AI agent is configured', async () => {
+  it('keeps the switch usable when Ask Moji is only switched off', async () => {
+    mocks.askMojiAvailable.mockResolvedValue({ available: false, reason: 'NOT_ENABLED' });
     const data = await load();
     expect(data.askMojiToggleAvailable).toBe(true);
     expect(data.askMojiUnavailableLine).toBeNull();
   });
 
-  describe('on the Trigger runtime', () => {
-    beforeEach(() => mocks.askMojiRuntimeIsTrigger.mockReturnValue(true));
+  it('disables the switch without an Anthropic key, with its staff line', async () => {
+    mocks.askMojiAvailable.mockResolvedValue({ available: false, reason: 'NO_API_KEY' });
+    const data = await load();
+    expect(data.askMojiToggleAvailable).toBe(false);
+    expect(data.askMojiUnavailableLine).toBe(ASK_MOJI_AVAILABILITY_COPY.NO_API_KEY);
+  });
 
-    it('asks askMojiAvailable for the gated classroom, whatever the AI agent says', async () => {
-      mocks.isAIAgentConfigured.mockReturnValue(false);
-      const data = await load();
-      expect(mocks.askMojiAvailable).toHaveBeenCalledWith({ classroomId: 'c1' });
-      expect(data.askMojiToggleAvailable).toBe(true);
-      expect(data.askMojiUnavailableLine).toBeNull();
-    });
-
-    it('keeps the switch usable when Ask Moji is only switched off', async () => {
-      mocks.askMojiAvailable.mockResolvedValue({ available: false, reason: 'NOT_ENABLED' });
-      const data = await load();
-      expect(data.askMojiToggleAvailable).toBe(true);
-      expect(data.askMojiUnavailableLine).toBeNull();
-    });
-
-    it.each(['RUNTIME_OFF', 'TRIGGER_NOT_CONFIGURED', 'NO_API_KEY'] as const)(
-      'disables the switch for %s, with its staff line',
-      async reason => {
-        mocks.askMojiAvailable.mockResolvedValue({ available: false, reason });
-        const data = await load();
-        expect(data.askMojiToggleAvailable).toBe(false);
-        expect(data.askMojiUnavailableLine).toBe(ASK_MOJI_AVAILABILITY_COPY[reason]);
-      }
-    );
-
-    it('disables the switch without Pro and leaves the line to the upsell', async () => {
-      mocks.askMojiAvailable.mockResolvedValue({ available: false, reason: 'PRO_REQUIRED' });
-      const data = await load();
-      expect(data.askMojiToggleAvailable).toBe(false);
-      expect(data.askMojiUnavailableLine).toBeNull();
-    });
+  it('disables the switch without Pro and leaves the line to the upsell', async () => {
+    mocks.askMojiAvailable.mockResolvedValue({ available: false, reason: 'PRO_REQUIRED' });
+    const data = await load();
+    expect(data.askMojiToggleAvailable).toBe(false);
+    expect(data.askMojiUnavailableLine).toBeNull();
   });
 });
 
 describe('loader: what this server can run', () => {
-  it('keeps quizzes on with the AI agent variables unset when the quiz runtime is configured', async () => {
-    mocks.isAIAgentConfigured.mockReturnValue(false);
-    mocks.askMojiRuntimeIsTrigger.mockReturnValue(true);
+  it('shows no banner when Trigger is configured', async () => {
     const data = await load();
-    expect(data.quizzesAvailable).toBe(true);
-    expect(data.quizzesUnavailableLine).toBeNull();
     expect(data.aiUnavailable).toBe(false);
   });
 
-  it('marks quizzes unavailable with their own line when only the quiz runtime is missing', async () => {
+  it('shows the one banner, and no Ask Moji line, without Trigger', async () => {
     mocks.isQuizRuntimeConfigured.mockReturnValue(false);
-    const data = await load();
-    expect(data.quizzesAvailable).toBe(false);
-    expect(data.quizzesUnavailableLine).toBe(QUIZZES_NOT_SET_UP_COPY);
-    expect(data.aiUnavailable).toBe(false);
-    expect(data.askMojiToggleAvailable).toBe(true);
-  });
-
-  it('shows the one banner, and no per-section line, when neither can run (AI agent runtime)', async () => {
-    mocks.isQuizRuntimeConfigured.mockReturnValue(false);
-    mocks.isAIAgentConfigured.mockReturnValue(false);
-    const data = await load();
-    expect(data.aiUnavailable).toBe(true);
-    expect(data.quizzesUnavailableLine).toBeNull();
-    expect(data.askMojiUnavailableLine).toBeNull();
-  });
-
-  it('shows the banner when Trigger is missing on the Trigger runtime, whatever the AI agent says', async () => {
-    mocks.isQuizRuntimeConfigured.mockReturnValue(false);
-    mocks.askMojiRuntimeIsTrigger.mockReturnValue(true);
     mocks.askMojiAvailable.mockResolvedValue({
       available: false,
       reason: 'TRIGGER_NOT_CONFIGURED',
     });
     const data = await load();
     expect(data.aiUnavailable).toBe(true);
-    expect(data.quizzesUnavailableLine).toBeNull();
+    expect(data.askMojiToggleAvailable).toBe(false);
     expect(data.askMojiUnavailableLine).toBeNull();
   });
 });
 
 describe('loader: the instructions', () => {
-  beforeEach(() => mocks.askMojiRuntimeIsTrigger.mockReturnValue(true));
-
-  it('are neither shown nor sent off the Trigger runtime', async () => {
-    mocks.askMojiRuntimeIsTrigger.mockReturnValue(false);
-    mocks.getClassroomSettingsForServer.mockResolvedValue({
-      anthropic_api_key: null,
-      syllabus_bot_instructions: 'Owner text',
-    });
-    const data = await load();
-    expect(data.askMojiInstructionsShown).toBe(false);
-    expect(data.settings.syllabus_bot_instructions).toBeNull();
-  });
-
   it('reaches the owner page only through the OWNER gate', async () => {
     mocks.getClassroomSettingsForServer.mockResolvedValue({
       anthropic_api_key: null,
@@ -420,7 +340,6 @@ describe('loader: the instructions', () => {
     expect(mocks.assertClassroomAccess).toHaveBeenCalledWith(
       expect.objectContaining({ allowedRoles: ['OWNER'] })
     );
-    expect(data.askMojiInstructionsShown).toBe(true);
     expect(data.settings.syllabus_bot_instructions).toBe('Owner text');
   });
 

@@ -47,11 +47,10 @@ import { FetcherContext, UserContext } from '~/contexts';
 import RenderErrorBoundary from './components/ErrorBoundary';
 
 /**
- * Ask Moji on the Trigger runtime: its own chunk, loaded only where it is
- * available (it loads the panel itself on the first open).
+ * Ask Moji: its own chunk, loaded only where it is available (it loads the
+ * panel itself on the first open).
  */
 const AskMojiRoot = lazy(() => import('./components/features/ask-moji/AskMojiRoot'));
-import { SyllabusBotRoot } from './components/features/syllabus-bot';
 import { isAskMojiEmbedPath } from './components/features/ask-moji/paths';
 import type { AskMojiRootConfig } from './components/features/ask-moji/AskMojiRoot';
 import { askMojiHostUrls } from '~/utils/askMojiHosts.server';
@@ -177,20 +176,15 @@ export const shouldRevalidate: ShouldRevalidateFunction = ({
   defaultShouldRevalidate;
 
 /**
- * Which Ask Moji the root mounts, and whether the classroom in the URL has it.
- * `ASK_MOJI_RUNTIME=trigger` mounts the new panel (shown only where
- * `askMojiAvailable` says so, for a member: `classroom` is one of the user's
- * own memberships); anything else keeps the legacy widget, which asks its own
- * route.
+ * Whether the classroom in the URL has Ask Moji: the panel is mounted only
+ * where `askMojiAvailable` says so, for a member (`classroom` is one of the
+ * user's own memberships).
  */
 const askMojiRootConfig = async (
   classroom: { id: string; name?: string | null } | undefined
-): Promise<AskMojiRootConfig & { runtime: 'trigger' | 'ai_agent' }> => {
-  const runtime = ClassmojiService.askMojiSession.askMojiRuntimeIsTrigger()
-    ? 'trigger'
-    : 'ai_agent';
+): Promise<AskMojiRootConfig> => {
   let available = false;
-  if (runtime === 'trigger' && classroom) {
+  if (classroom) {
     try {
       available = (
         await ClassmojiService.askMojiSession.askMojiAvailable({ classroomId: classroom.id })
@@ -200,7 +194,6 @@ const askMojiRootConfig = async (
     }
   }
   return {
-    runtime,
     available,
     courseName: classroom?.name ?? null,
     // Null in production when unset (no localhost guess): chips to that app are labels.
@@ -619,16 +612,11 @@ const App = ({ loaderData }: Route.ComponentProps) => {
                       </>
                     )}
                     <Outlet />
-                    {!embed &&
-                      (askMoji?.runtime === 'trigger' ? (
-                        askMoji.available && (
-                          <Suspense fallback={null}>
-                            <AskMojiRoot config={askMoji} />
-                          </Suspense>
-                        )
-                      ) : (
-                        <SyllabusBotRoot />
-                      ))}
+                    {!embed && askMoji?.available && (
+                      <Suspense fallback={null}>
+                        <AskMojiRoot config={askMoji} />
+                      </Suspense>
+                    )}
                     {!embed && <OnboardingTour />}
                     {!embed && <InClassroomTour />}
                     <ScrollRestoration />

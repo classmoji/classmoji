@@ -199,8 +199,8 @@ export const RecordQuestionResultSchema = z.object({
 export type RecordQuestionResult = z.infer<typeof RecordQuestionResultSchema>;
 
 /**
- * Port of the ai-agent's QuizEvaluationFeedbackSchema: the model supplies the
- * feedback text only; scores come from the recorded results.
+ * Ported from the retired WebSocket runtime's QuizEvaluationFeedbackSchema: the
+ * model supplies the feedback text only; scores come from the recorded results.
  */
 export const QuizEvaluationFeedbackSchema = z.object({
   final_acknowledgment: z
@@ -334,7 +334,7 @@ export const offerNextStepModelOutput = (output: unknown) => {
   return { type: 'json' as const, value: JSON.parse(JSON.stringify(rest)) };
 };
 
-/** The ai-agent's ExplorationRequestSchema minus previousFindings/avoidFiles (history comes from the journal). */
+/** The retired WebSocket runtime's ExplorationRequestSchema minus previousFindings/avoidFiles (history comes from the journal). */
 export const ExploreCodebaseSchema = z.object({
   purpose: z
     .enum(['check_current', 'prepare_next'])

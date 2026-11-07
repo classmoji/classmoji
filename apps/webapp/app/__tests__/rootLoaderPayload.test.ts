@@ -152,7 +152,6 @@ vi.mock('@classmoji/auth/server', () => ({
 
 vi.mock('@classmoji/auth/secret', () => ({ COOKIE_DOMAIN: null }));
 
-let askMojiRuntime = 'ai_agent';
 const askMojiAvailableMock = vi.fn(async (..._a: unknown[]) => ({ available: true }));
 
 vi.mock('@classmoji/services', async () => ({
@@ -167,7 +166,6 @@ vi.mock('@classmoji/services', async () => ({
     },
     subscription: { getCurrent: vi.fn(async () => null) },
     askMojiSession: {
-      askMojiRuntimeIsTrigger: () => askMojiRuntime === 'trigger',
       askMojiAvailable: (...a: unknown[]) => askMojiAvailableMock(...a),
     },
   },
@@ -181,7 +179,6 @@ vi.mock('@classmoji/ui-components', () => ({
 }));
 vi.mock('~/components/features/operations/OperationProgress', () => ({ default: () => null }));
 vi.mock('~/components/ErrorBoundary', () => ({ default: () => null }));
-vi.mock('~/components/features/syllabus-bot', () => ({ SyllabusBotRoot: () => null }));
 // The root reads only the pure path check and lazy-loads AskMojiRoot (never
 // rendered here), so nothing of Ask Moji's panel needs mocking.
 vi.mock('~/components/features/onboarding', () => ({
@@ -346,33 +343,33 @@ describe('root loader payload', () => {
     });
   });
 
-  it('says quizzes are available with a Trigger key and no AI agent', async () => {
+  it('says quizzes are available with a Trigger key', async () => {
     vi.stubEnv('TRIGGER_SECRET_KEY', 'tr_dev_test');
-    vi.stubEnv('AI_AGENT_URL', '');
-    vi.stubEnv('AI_AGENT_SHARED_SECRET', '');
     expect((await load('/student/test-class/dashboard')).quizzesAvailable).toBe(true);
     vi.unstubAllEnvs();
   });
 
-  it('says quizzes are unavailable with the AI agent set and no Trigger key', async () => {
-    vi.stubEnv('AI_AGENT_URL', 'http://localhost:6000');
-    vi.stubEnv('AI_AGENT_SHARED_SECRET', 'agent-secret');
+  it('says quizzes are unavailable without a Trigger key', async () => {
+    vi.stubEnv('TRIGGER_SECRET_KEY', '');
+    vi.stubEnv('TRIGGER_ACCESS_TOKEN', '');
     expect((await load('/student/test-class/dashboard')).quizzesAvailable).toBe(false);
     vi.unstubAllEnvs();
   });
 
-  it('says which Ask Moji to mount, and whether this classroom has it', async () => {
-    askMojiRuntime = 'ai_agent';
+  it('says whether this classroom has Ask Moji, as askMojiAvailable answers', async () => {
+    const askMoji = (await load('/student/test-class/dashboard')).askMoji;
+    expect(askMoji).toMatchObject({ available: true });
+    expect(askMoji).not.toHaveProperty('runtime');
+    expect(askMojiAvailableMock).toHaveBeenCalledTimes(1);
+
+    // Hidden wherever the one gate says no (here: no Trigger key).
+    askMojiAvailableMock.mockResolvedValueOnce({
+      available: false,
+      reason: 'TRIGGER_NOT_CONFIGURED',
+    } as never);
     expect((await load('/student/test-class/dashboard')).askMoji).toMatchObject({
-      runtime: 'ai_agent',
       available: false,
     });
-    expect(askMojiAvailableMock).not.toHaveBeenCalled();
-
-    askMojiRuntime = 'trigger';
-    const askMoji = (await load('/student/test-class/dashboard')).askMoji;
-    expect(askMoji).toMatchObject({ runtime: 'trigger', available: true });
-    expect(askMojiAvailableMock).toHaveBeenCalledTimes(1);
 
     // Not a classroom of theirs: never asked, never available.
     askMojiAvailableMock.mockClear();
@@ -380,11 +377,9 @@ describe('root loader payload', () => {
       available: false,
     });
     expect(askMojiAvailableMock).not.toHaveBeenCalled();
-    askMojiRuntime = 'ai_agent';
   });
 
   it('production never hands the panel a localhost pages or slides URL', async () => {
-    askMojiRuntime = 'trigger';
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('PAGES_URL', '');
     vi.stubEnv('SLIDES_URL', '');
@@ -399,7 +394,6 @@ describe('root loader payload', () => {
       slidesUrl: 'https://slides.example.org',
     });
     vi.unstubAllEnvs();
-    askMojiRuntime = 'ai_agent';
   });
 
   it('hands the browser the Sentry DSN and environment only, and nothing without a DSN', async () => {

@@ -44,8 +44,7 @@ vi.mock('@classmoji/services', () => ({
       canUseQuizzes: (...a: unknown[]) => mocks.canUseQuizzes(...a),
     },
     askMojiSession: {
-      askMojiRuntimeIsTrigger: () => false,
-      askMojiAvailable: vi.fn(),
+      askMojiAvailable: async () => ({ available: true }),
     },
   },
   ClassroomSettingsEntitlementError: mocks.EntitlementError,
@@ -54,7 +53,6 @@ vi.mock('@classmoji/services', () => ({
   getModelLabel: (id: string) => `label:${id}`,
 }));
 
-vi.mock('~/utils/aiFeatures.server', () => ({ isAIAgentConfigured: () => true }));
 vi.mock('~/components', () => ({ SettingSection: () => null }));
 vi.mock('~/hooks', () => ({ useGlobalFetcher: () => ({ fetcher: null }) }));
 

@@ -8,8 +8,8 @@
  *   - `setQuizSourceMaterial` — the write the quiz form makes, inside the quiz's
  *     own transaction (quiz.service create/update).
  *   - `loadQuizSourceMaterial` (`load`) — the full text of each linked document
- *     AS THE ATTEMPT'S USER MAY SEE IT, budgeted for a prompt. The ai-agent calls
- *     it at attempt start and again on session recovery.
+ *     AS THE ATTEMPT'S USER MAY SEE IT, budgeted for a prompt. The Trigger.dev
+ *     quiz chat task calls it when it builds a turn's context.
  *   - `countStartableSourceMaterial` (`countStartable`) — the cheap pre-check the
  *     webapp runs before creating an attempt: how many linked documents would
  *     reach the prompt for this user, without reading any text.
@@ -273,7 +273,7 @@ export function applyMaterialBudget(
 // ─── Shared reads ──────────────────────────────────────────────────────────
 
 /**
- * Ids arrive from other services and a WebSocket payload. Prisma DROPS an
+ * Ids arrive from other services and task payloads. Prisma DROPS an
  * `undefined` from a `where`, which would widen a quiz-scoped read to the whole
  * classroom, so anything that is not a non-empty string is refused up front.
  */
@@ -702,6 +702,6 @@ export async function listSourceMaterialOptions(
 }
 
 // Short names for the `ClassmojiService.quizSourceMaterial` namespace, which is
-// how the ai-agent and the webapp call these.
+// how the Trigger.dev quiz task and the webapp call these.
 export const load = loadQuizSourceMaterial;
 export const countStartable = countStartableSourceMaterial;

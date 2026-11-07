@@ -103,34 +103,6 @@ export function buildContentReferenceUrl(
 }
 
 /**
- * Process bot response text to replace content reference JSON with links
- *
- * @param {string} text - Bot response text (may contain JSON content references)
- * @param {Array} references - Parsed content references
- * @param {string} classroomSlug - Classroom slug for URL routing
- * @returns {string} - Text with references replaced by markdown links
- */
-export function processResponseReferences(
-  text: string,
-  references: ContentReferenceInput[] | null,
-  _classroomSlug: string
-) {
-  if (!references || references.length === 0) return text;
-
-  let processedText = text;
-
-  // Remove JSON content reference objects from the text
-  // They appear as: {"type":"content_reference",...}
-  const jsonRegex = /\{"type":\s*"content_reference"[^}]+\}/g;
-  processedText = processedText.replace(jsonRegex, '').trim();
-
-  // References are usually rendered separately in the UI,
-  // so we just clean up the response text here
-
-  return processedText;
-}
-
-/**
  * Strip the inline citation markup the model sometimes invents despite being
  * told to cite by plain title. Seen in the wild:
  *   <referenced_content id="…" type="page" title="T">T</referenced_content>
