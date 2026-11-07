@@ -1,5 +1,5 @@
 # Build stage for Astro
-FROM node:22-alpine AS build
+FROM node:24-alpine AS build
 
 WORKDIR /app
 
@@ -11,7 +11,7 @@ RUN npm run build
 
 # Production stage: Astro's Node server. Pages are pre-built files it serves
 # as-is; only /api/contact runs code. It needs RESEND_API_KEY to send.
-FROM node:22-alpine
+FROM node:24-alpine
 
 WORKDIR /app
 

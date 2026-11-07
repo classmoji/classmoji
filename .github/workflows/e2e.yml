@@ -72,8 +72,13 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           cache: npm
+
+      # Node 24 bundles npm 11, which adds `libc` fields to package-lock.json
+      # that the lockfile check rejects; stay on the packageManager npm (10.9).
+      - name: Use npm 10.9
+        run: npm install -g npm@10.9.0 && npm --version
 
       - name: Install dependencies
         run: npm ci
