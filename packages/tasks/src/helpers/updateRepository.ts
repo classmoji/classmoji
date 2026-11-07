@@ -29,6 +29,14 @@ const CHECKOUT_UPDATES_FROM_ORIGIN = ['-B', 'updates', 'refs/remotes/origin/upda
 const PUSH_UPDATES = 'refs/heads/updates:refs/heads/updates';
 
 /**
+ * The student repository is cloned without its tags: an update needs only
+ * the branches, and a tag can't then share a name with
+ * `refs/remotes/origin/updates` (git would call the checkout's start point
+ * ambiguous and stop).
+ */
+const CLONE_OPTIONS = ['--no-tags'];
+
+/**
  * The template's HEAD, read through the `template` remote. A template that is
  * gone or unreadable is the instructor's to fix (it was renamed, deleted or made
  * private), so the run stops with that, not git's "repository not found".
@@ -96,7 +104,7 @@ export const updateRepository = async (
       fs.rmSync(localPath, { recursive: true, force: true });
     }
 
-    await git.clone(studentRepoUrl, localPath);
+    await git.clone(studentRepoUrl, localPath, CLONE_OPTIONS);
     const studentGit = simpleGit(localPath);
 
     await studentGit.addConfig('user.name', 'Classmoji Bot');
@@ -230,7 +238,7 @@ async function updateGitLabRepository(
   const git = simpleGit();
   try {
     if (fs.existsSync(localPath)) fs.rmSync(localPath, { recursive: true, force: true });
-    await git.clone(remote(`${owner}/${repoName}`), localPath);
+    await git.clone(remote(`${owner}/${repoName}`), localPath, CLONE_OPTIONS);
     const studentGit = simpleGit(localPath);
     await studentGit.addConfig('user.name', 'Classmoji Bot');
     await studentGit.addConfig('user.email', 'hello@classmoji.com');

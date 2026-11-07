@@ -135,6 +135,21 @@ const filesOn = async (bare: string, branch: string) =>
 const tagCommit = async (bare: string, tag: string) =>
   (await run(bare).raw(['rev-parse', `refs/tags/${tag}`])).trim();
 
+/**
+ * Tag the student repository with `name`, on a commit of the student's own
+ * (`other.txt`) that is on no branch.
+ */
+const pushStudentTag = async (studentBare: string, repo: string, name: string) => {
+  const dir = path.join(root, 'work', `${repo}-tag`);
+  await run(root).clone(studentBare, dir);
+  const git = run(dir);
+  await git.addConfig('user.name', 'Student');
+  await git.addConfig('user.email', 'student@example.com');
+  await commitFile(git, dir, 'other.txt', 'not for updates\n');
+  await git.raw(['tag', name]);
+  await git.push('origin', `refs/tags/${name}`);
+};
+
 const lastSubject = async (bare: string, branch: string) =>
   (await run(bare).raw(['log', '-1', '--format=%s', branchRef(branch)])).trim();
 
@@ -274,6 +289,36 @@ describe('updateRepository with a tag named updates', TIMEOUT, () => {
     expect(result).toMatchObject({ hasChanges: true, prUrl: 'https://mr' });
     expect(await filesOn(studentBare, 'updates')).toEqual(['README.md', 'mine.txt', 'new.txt']);
     expect(await tagCommit(studentBare, 'updates')).toBe(tagBefore);
+  });
+});
+
+// The clone takes no tags, so a tag whose name is a full remote-branch ref
+// can't make `refs/remotes/origin/updates` ambiguous for the checkout.
+describe('updateRepository with a tag named refs/remotes/origin/updates', TIMEOUT, () => {
+  it.each(['github', 'gitlab'] as const)(
+    'updates the existing updates branch on %s, leaving the tag as it was',
+    async host => {
+      const repo = `lab9-${host}`;
+      const { studentBare } = await setUp(repo, 'main', { host, updatesBranch: true });
+      await pushStudentTag(studentBare, repo, 'refs/remotes/origin/updates');
+      const tagBefore = await tagCommit(studentBare, 'refs/remotes/origin/updates');
+
+      const result = await update(repo, host);
+
+      expect(result).toMatchObject({ hasChanges: true });
+      expect(await filesOn(studentBare, 'updates')).toEqual(['README.md', 'mine.txt', 'new.txt']);
+      expect(await lastSubject(studentBare, 'updates')).toMatch(/^Merge branch 'main' of /);
+      expect(await tagCommit(studentBare, 'refs/remotes/origin/updates')).toBe(tagBefore);
+    }
+  );
+
+  it('creates the updates branch on a first update', async () => {
+    const { studentBare } = await setUp('lab10', 'main');
+    await pushStudentTag(studentBare, 'lab10', 'refs/remotes/origin/updates');
+
+    await update('lab10');
+
+    expect(await filesOn(studentBare, 'updates')).toEqual(['README.md', 'mine.txt', 'new.txt']);
   });
 });
 
