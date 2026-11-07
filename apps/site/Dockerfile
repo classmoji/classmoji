@@ -9,6 +9,9 @@ WORKDIR /app
 RUN npm install -g npm@10.9.9 --no-audit --no-fund --cache=/tmp/npm-self-cache \
     && rm -rf /tmp/npm-self-cache
 
+# No lockfile here: the before= date in .npmrc freezes the transitive versions
+# this install picks. Move that date on deliberately, with a re-test, when
+# updating the site's dependencies.
 COPY package*.json .npmrc ./
 RUN npm install
 
@@ -16,7 +19,8 @@ COPY . .
 RUN npm run build
 
 # Production stage: Astro's Node server. Pages are pre-built files it serves
-# as-is; only /api/contact runs code. It needs RESEND_API_KEY to send.
+# as-is; only /api/contact runs code (it needs RESEND_API_KEY to send).
+# src/middleware.ts turns off the unused image and island routes.
 FROM node:24-alpine
 
 WORKDIR /app
