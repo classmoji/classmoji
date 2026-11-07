@@ -491,6 +491,8 @@ describe('auditing View as on the server (PlatformAuditLog)', () => {
     expect((await stop(viewing.token, adminToken)).status).toBe(200);
     expect(auditRows()).toHaveLength(2);
     expect(auditRows()[1]).toEqual({
+      // One end row per session: its id comes from the session id.
+      id: expect.stringMatching(/^[0-9a-f-]{36}$/),
       actor_id: 'admin-1',
       action: 'impersonate.end',
       target_type: 'user',
@@ -575,6 +577,79 @@ describe('auditing View as on the server (PlatformAuditLog)', () => {
     expect(res.status).toBe(200);
     expect(mocks.state.sessions.some(s => s.token === viewing.token)).toBe(false);
     errors.mockRestore();
+  });
+
+  // Stop sent twice (a double click, two tabs): both requests read the
+  // viewing row before either deletes it, and each runs the delete hook.
+  it('writes one end row when two stops of the same session run at once', async () => {
+    const adminToken = signIn('admin-1');
+    await viewAs(adminToken, { userId: 'owner-1' });
+    const viewing = { ...mocks.state.created[0]! };
+    const stored = new Map<string, Record<string, unknown>>();
+    const create = mocks.client.platformAuditLog.create;
+    const findFirst = mocks.client.session.findFirst;
+    const findMany = mocks.client.session.findMany;
+    const originals = [create, findFirst, findMany].map(fn => fn.getMockImplementation());
+    create.mockImplementation(({ data }: any) => {
+      if (data.id && stored.has(data.id)) {
+        return Promise.reject(
+          Object.assign(new Error('Unique constraint failed'), { code: 'P2002' })
+        );
+      }
+      stored.set(data.id ?? `row-${stored.size}`, data);
+      return Promise.resolve(data);
+    });
+    // The row as both requests read it, before either deleted it.
+    const stale = (where: any) => (where?.token === viewing.token ? viewing : null);
+    findFirst.mockImplementation(({ where }: any) =>
+      Promise.resolve(
+        stale(where) ?? mocks.state.sessions.find(r => r.token === where?.token) ?? null
+      )
+    );
+    findMany.mockImplementation(({ where }: any) =>
+      Promise.resolve(
+        stale(where) ? [viewing] : mocks.state.sessions.filter(r => r.token === where?.token)
+      )
+    );
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const results = await Promise.all([
+        stop(viewing.token, adminToken),
+        stop(viewing.token, adminToken),
+      ]);
+
+      expect(results.map(r => r.status)).toEqual([200, 200]);
+      const endWrites = create.mock.calls
+        .map(([args]: any[]) => args.data)
+        .filter((data: any) => data.action === 'impersonate.end');
+      expect(endWrites).toHaveLength(2);
+      expect(endWrites[0].id).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+      );
+      expect(endWrites[1].id).toBe(endWrites[0].id);
+      // The start was written before this stand-in; one end row was kept.
+      expect([...stored.values()].map((data: any) => data.action)).toEqual(['impersonate.end']);
+      // The duplicate is expected, not an error.
+      expect(errors).not.toHaveBeenCalled();
+    } finally {
+      [create, findFirst, findMany].forEach((fn, i) => fn.mockImplementation(originals[i]!));
+      errors.mockRestore();
+    }
+  });
+
+  it('gives each session its own end row id', async () => {
+    const adminToken = signIn('admin-1');
+    for (const userId of ['owner-1', 'student-1']) {
+      await viewAs(adminToken, { userId });
+      const viewing = mocks.state.created.at(-1)!;
+      expect((await stop(viewing.token, adminToken)).status).toBe(200);
+    }
+
+    const ids = auditRows()
+      .filter((data: any) => data.action === 'impersonate.end')
+      .map((data: any) => data.id);
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
   });
 
   it('does not hand out a View as session whose start cannot be written', async () => {

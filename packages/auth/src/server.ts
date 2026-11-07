@@ -1,4 +1,4 @@
-import { timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { betterAuth } from 'better-auth';
 import { APIError, createAuthMiddleware, getSession } from 'better-auth/api';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
@@ -320,13 +320,38 @@ interface ViewAsSessionRow {
 }
 
 /**
+ * The id of a "View as" session's end row: the same for every attempt to
+ * write it, so the primary key holds one end row per session. Two deletes of
+ * one session at once (Stop sent twice, Stop alongside a sign-out) each read
+ * the row before either removes it, and each runs `session.delete.after`; the
+ * second write then fails with a duplicate key (P2002) instead of adding a
+ * second row. UUID-shaped (RFC 9562 version 8), from a SHA-256 of the session
+ * id.
+ */
+function viewAsEndRowId(sessionId: string): string {
+  const bytes = createHash('sha256')
+    .update(`impersonate.end:${sessionId}`)
+    .digest()
+    .subarray(0, 16);
+  bytes[6] = (bytes[6]! & 0x0f) | 0x80;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/** Whether a Prisma write failed on a unique key (a row with that key exists). */
+const isDuplicateKeyError = (error: unknown): boolean =>
+  (error as { code?: unknown } | null)?.code === 'P2002';
+
+/**
  * One PlatformAuditLog row for "View as" starting (`impersonate.start`, from
  * `databaseHooks.session.create.after`) or ending (`impersonate.end`, from
- * `session.delete.after`), whichever app or path started or ended it. Actor:
- * the platform admin (`impersonatedBy`); target: the viewed user; `data`: the
- * session id, the viewed user's name as the admin app shows it, and the auth
- * path that did it. apps/admin's own `impersonate.request` row (written when
- * an admin asks to view as someone there) keeps the reason and classroom.
+ * `session.delete.after`, at most one per session: viewAsEndRowId), whichever
+ * app or path started or ended it. Actor: the platform admin
+ * (`impersonatedBy`); target: the viewed user; `data`: the session id, the
+ * viewed user's name as the admin app shows it, and the auth path that did
+ * it. apps/admin's own `impersonate.request` row (written when an admin asks
+ * to view as someone there) keeps the reason and classroom.
  */
 async function recordViewAs(
   action: 'impersonate.start' | 'impersonate.end',
@@ -341,6 +366,9 @@ async function recordViewAs(
   const expiresAt = session.expiresAt ? new Date(session.expiresAt).toISOString() : null;
   await getPrisma().platformAuditLog.create({
     data: {
+      ...(action === 'impersonate.end' && session.id
+        ? { id: viewAsEndRowId(String(session.id)) }
+        : {}),
       actor_id: String(session.impersonatedBy),
       action,
       target_type: 'user',
@@ -1008,13 +1036,16 @@ export const auth = betterAuth({
       delete: {
         // "View as" ended: stopped, signed out, or its expired row cleaned up
         // (better-auth passes the deleted row). Never fails the deletion: a
-        // session must still end when its row can't be recorded.
+        // session must still end when its row can't be recorded. A duplicate
+        // key means another delete of the same session, running at the same
+        // time, has already recorded the end (viewAsEndRowId).
         after: async (session, ctx) => {
           const row = session as ViewAsSessionRow | undefined;
           if (!row?.impersonatedBy) return;
           try {
             await recordViewAs('impersonate.end', row, ctx?.path);
           } catch (error) {
+            if (isDuplicateKeyError(error)) return;
             console.error('[auth] View as end not recorded', error);
           }
         },
