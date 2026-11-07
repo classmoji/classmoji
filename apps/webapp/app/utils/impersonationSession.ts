@@ -31,5 +31,8 @@ export const GITHUB_CLEANUP_IMPERSONATION_MESSAGE =
 // The same string the server-side refusal sends, from one place.
 export { CONNECT_APP_VIEWING_AS_MESSAGE as CONNECT_APP_IMPERSONATION_MESSAGE } from '@classmoji/auth/app-connection';
 
+export const GITLAB_CONNECT_IMPERSONATION_MESSAGE =
+  "Connecting Gitlab isn't available while viewing as another user.";
+
 export const CLASSROOM_REMOVE_IMPERSONATION_MESSAGE =
   "Removing a classroom isn't available while viewing as another user.";
