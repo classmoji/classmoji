@@ -16,6 +16,10 @@ const errorText = (error: unknown): string =>
  * OOM-killed. Blobs above `core.bigFileThreshold` are streamed and never
  * delta-compressed, and the window and caches are bounded. The pushed objects
  * are the same; only how git packs them on the wire changes.
+ *
+ * Passed as `-c` settings on purpose: simple-git (4+) removes every ambient
+ * GIT_* environment variable from the git processes it starts, so git settings
+ * given through the environment would be dropped without a word.
  */
 export const LOW_MEMORY_GIT_CONFIG = [
   'core.bigFileThreshold=32m',
