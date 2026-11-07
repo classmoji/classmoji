@@ -21,9 +21,10 @@
  *
  * Then the size of what was sent is bounded (the limits are in
  * mcp/inputLimits.ts): this plugin's JSON parser refuses a body
- * with more than MAX_BODY_JSON_VALUES values before parsing it, and the
- * handler gates every `tools/call` (toolCallGate.ts) before the SDK validates
- * its arguments.
+ * with more than MAX_BODY_JSON_VALUES values before parsing it, the handler
+ * refuses a batch that carries more than one request other than `tools/call`
+ * (batchCarriesOtherRequests), and it gates every `tools/call`
+ * (toolCallGate.ts) before the SDK validates its arguments.
  */
 
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -133,6 +134,27 @@ export function isInitializeRequest(body: unknown): boolean {
       typeof message === 'object' &&
       (message as { method?: unknown }).method === 'initialize'
   );
+}
+
+/**
+ * Whether a JSON-RPC batch (an array body) carries more than one request other
+ * than `tools/call`. The MCP spec (2025-06-18) dropped JSON-RPC batching; only
+ * tool calls, which the gate meters, may still arrive together. A request is a
+ * message with a `method` and an `id`; a message without an `id` is a
+ * notification, which gets no answer, so it is not counted. A single message
+ * is never a batch.
+ */
+export function batchCarriesOtherRequests(body: unknown): boolean {
+  if (!Array.isArray(body)) return false;
+  let others = 0;
+  for (const message of body) {
+    if (!message || typeof message !== 'object') continue;
+    const { method, id } = message as { method?: unknown; id?: unknown };
+    if (method === undefined || method === 'tools/call' || id === undefined) continue;
+    others += 1;
+    if (others > 1) return true;
+  }
+  return false;
 }
 
 /** RFC 9728 §5.1: challenge advertises where our protected-resource metadata lives. */
@@ -294,6 +316,24 @@ export default async function mcpRoutes(fastify: FastifyInstance, opts: McpRoute
       });
     }
     viewer.impersonatedBy = impersonatedBy.impersonatedBy;
+
+    // Batches: tool calls only, plus at most one other request.
+    if (batchCarriesOtherRequests(request.body)) {
+      request.log.warn(
+        { userId: viewer.userId, clientId: viewer.clientId },
+        '[mcp] batch with more than one request other than tools/call refused'
+      );
+      return reply.status(400).send({
+        jsonrpc: '2.0',
+        error: {
+          code: -32600,
+          message:
+            'Invalid Request: a batch may carry at most one request other than tools/call; ' +
+            'send the others one per POST.',
+        },
+        id: null,
+      });
+    }
 
     // tools/call: rate, size and room in flight, before the SDK validates.
     const gate = gateToolCalls(request.body, {

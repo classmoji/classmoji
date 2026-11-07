@@ -5,7 +5,8 @@
  *   - each tools/call takes a token from the caller's tools/call bucket, refused or not
  *     (a small file_upload_status poll takes none);
  *   - arguments over MAX_TOOL_INPUT_ELEMENTS get a tool error, id kept, nothing built;
- *   - a large call needs room in the in-flight budget, or gets a retry tool error.
+ *   - a large call needs room in the in-flight budget, or gets a retry tool error;
+ *   - a batch may carry tool calls plus at most one other request, else a 400.
  */
 
 import { randomBytes } from 'node:crypto';
@@ -66,7 +67,7 @@ vi.mock('../../mcp/registry.ts', () => ({
 }));
 vi.mock('../../resources/index.ts', () => ({ registerAllResources: vi.fn() }));
 
-const { default: mcpRoutes } = await import('../mcp.ts');
+const { default: mcpRoutes, batchCarriesOtherRequests } = await import('../mcp.ts');
 
 const logLines: Array<Record<string, unknown>> = [];
 
@@ -314,6 +315,130 @@ describe('rate', () => {
     mocks.userId = 'u2';
     expect((await post(fastify, call(1))).json().result.isError).toBeUndefined();
     await fastify.close();
+  });
+});
+
+describe('batches', () => {
+  const list = (id: number | string | null) => ({ jsonrpc: '2.0', id, method: 'tools/list' });
+
+  it.each([2, 3, 100])(
+    'refuses a batch of %i tools/list with a 400, before any server is built',
+    async n => {
+      const fastify = await app();
+      const res = await post(
+        fastify,
+        Array.from({ length: n }, (_, i) => list(i + 1))
+      );
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({
+        jsonrpc: '2.0',
+        id: null,
+        error: { code: -32600, message: expect.stringContaining('other than tools/call') },
+      });
+      expect(mocks.servers).toBe(0);
+      expect(
+        logLines.find(
+          l => l.msg === '[mcp] batch with more than one request other than tools/call refused'
+        )
+      ).toMatchObject({ userId: 'u1', clientId: 'c' });
+      await fastify.close();
+    }
+  );
+
+  it('refuses a batch with two other requests next to its tool calls', async () => {
+    const fastify = await app();
+    const res = await post(fastify, [
+      call(1, 1),
+      { jsonrpc: '2.0', id: 2, method: 'resources/list' },
+      { jsonrpc: '2.0', id: 3, method: 'ping' },
+    ]);
+
+    expect(res.statusCode).toBe(400);
+    expect(mocks.servers).toBe(0);
+    expect(mocks.calls).toBe(0);
+    await fastify.close();
+  });
+
+  it('passes a batch of tools/call through to the gate', async () => {
+    const fastify = await app();
+    const res = await post(fastify, [call(1, 'a'), call(1, 'b')]);
+
+    expect(res.statusCode).toBe(200);
+    const answers = res.json();
+    expect(answers).toHaveLength(2);
+    for (const answer of answers) {
+      expect(answer.result).toEqual({ content: [{ type: 'text', text: 'ran' }] });
+    }
+    expect(mocks.calls).toBe(2);
+    await fastify.close();
+  });
+
+  it("a batch of tools/call over the rate limit gets the gate's refusal", async () => {
+    const fastify = await app();
+    const res = await post(
+      fastify,
+      Array.from({ length: TOOL_CALL_RATE_LIMIT.capacity + 1 }, (_, i) => call(1, i))
+    );
+
+    expect(res.statusCode).toBe(200);
+    const answers = res.json();
+    expect(answers).toHaveLength(TOOL_CALL_RATE_LIMIT.capacity + 1);
+    expect(toolError(answers[0]).code).toBe('RATE_LIMITED');
+    expect(mocks.servers).toBe(0);
+    await fastify.close();
+  });
+
+  it('lets one other request and any notifications ride along with tool calls', async () => {
+    const fastify = await app();
+    const res = await post(fastify, [
+      call(1, 1),
+      list(2),
+      { jsonrpc: '2.0', method: 'notifications/initialized' },
+      { jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 9 } },
+    ]);
+
+    expect(res.statusCode).toBe(200);
+    const answers = res.json();
+    expect(answers).toHaveLength(2);
+    expect(answers.find((a: { id: number }) => a.id === 2).result.tools).toBeDefined();
+    expect(mocks.calls).toBe(1);
+    await fastify.close();
+  });
+
+  it('still answers a single tools/list', async () => {
+    const fastify = await app();
+    const res = await post(fastify, list(7));
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ id: 7, result: { tools: expect.any(Array) } });
+    await fastify.close();
+  });
+
+  it.each([
+    ['a single message', list(1), false],
+    ['one other request', [list(1)], false],
+    ['two other requests', [list(1), list(2)], true],
+    ['two other requests, one with a null id', [list(1), list(null)], true],
+    ['tool calls only', [call(1, 1), call(1, 2), call(1, 3)], false],
+    [
+      'notifications only',
+      [
+        { jsonrpc: '2.0', method: 'notifications/initialized' },
+        { jsonrpc: '2.0', method: 'notifications/initialized' },
+      ],
+      false,
+    ],
+    [
+      'responses only',
+      [
+        { jsonrpc: '2.0', id: 1, result: {} },
+        { jsonrpc: '2.0', id: 2, result: {} },
+      ],
+      false,
+    ],
+  ])('batchCarriesOtherRequests: %s', (_label, body, expected) => {
+    expect(batchCarriesOtherRequests(body)).toBe(expected);
   });
 });
 
