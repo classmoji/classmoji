@@ -1063,8 +1063,10 @@ export const auth = betterAuth({
    *
    * `/sign-in/email-otp` and `/email-otp/check-verification-otp` come with the
    * emailOTP plugin and nothing calls them: an email code verifies an address
-   * or resets a password here, it never signs anyone in on its own, and no
-   * form checks a code without using it.
+   * or resets a password here, and no form checks a code without using it.
+   * Verifying an address does sign its user in: `/email-otp/verify-email`
+   * creates a session (`emailVerification.autoSignInAfterVerification`); the
+   * sign-in page's verify step goes straight on to the app.
    *
    * The admin plugin's endpoints are off too, all but "View as" start and stop
    * (/admin/impersonate-user, /admin/stop-impersonating), the only ones any app
@@ -1102,7 +1104,8 @@ export const auth = betterAuth({
   },
   plugins: [
     // 6-digit codes for verifying a password account's email and for
-    // resetting a password. Never a way to sign up or sign in on its own.
+    // resetting a password. Never a way to sign up (`disableSignUp`); a
+    // verified address signs its user in (see disabledPaths above).
     emailOTP({
       otpLength: 6,
       expiresIn: 10 * 60,
