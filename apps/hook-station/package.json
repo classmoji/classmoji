@@ -22,7 +22,7 @@
     "@classmoji/utils": "*",
     "@octokit/webhooks": "^14.1.1",
     "@trigger.dev/sdk": "4.6.4",
-    "fastify": "^5.1.0",
+    "fastify": "^5.12.8",
     "fastify-raw-body": "^5.0.0"
   },
   "devDependencies": {
