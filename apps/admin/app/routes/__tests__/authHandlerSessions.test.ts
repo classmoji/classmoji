@@ -1,7 +1,8 @@
 /**
  * The admin app's better-auth handler (api.auth.$): session responses leave
  * without their rows' `token` field, with better-auth's status and headers
- * (Set-Cookie included); impersonation responses pass through as sent.
+ * (Set-Cookie included), View as start included; other responses pass
+ * through as sent.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -38,9 +39,10 @@ describe('admin api.auth.$ — session responses', () => {
     expect(res.headers.getSetCookie()).toEqual(['classmoji.session_token=abc; Path=/; HttpOnly']);
   });
 
-  it('passes an impersonation start through as sent', async () => {
-    const sent = betterAuthResponse({ user: { id: 'user-1' } });
-    handler.mockResolvedValue(sent);
+  it('serves a View as start without the token field, keeping the cookie', async () => {
+    handler.mockResolvedValue(
+      betterAuthResponse({ session: { id: 'sess-2', token: 'value-2' }, user: { id: 'user-1' } })
+    );
 
     const res = (await route.action({
       request: new Request(`${BASE}/admin/impersonate-user`, {
@@ -48,6 +50,18 @@ describe('admin api.auth.$ — session responses', () => {
         body: JSON.stringify({ userId: 'user-1' }),
         headers: { 'content-type': 'application/json' },
       }),
+    } as never)) as Response;
+
+    expect(await res.json()).toEqual({ session: { id: 'sess-2' }, user: { id: 'user-1' } });
+    expect(res.headers.getSetCookie()).toEqual(['classmoji.session_token=abc; Path=/; HttpOnly']);
+  });
+
+  it('passes other responses through as sent', async () => {
+    const sent = betterAuthResponse({ success: true });
+    handler.mockResolvedValue(sent);
+
+    const res = (await route.action({
+      request: new Request(`${BASE}/sign-out`, { method: 'POST' }),
     } as never)) as Response;
 
     expect(res).toBe(sent);
