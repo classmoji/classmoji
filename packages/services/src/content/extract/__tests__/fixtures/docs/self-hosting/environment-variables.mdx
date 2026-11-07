@@ -12,6 +12,7 @@ description: All environment variables required to run Classmoji
 | `WEBAPP_URL` | Yes | | Public base URL of the main web app (e.g. `http://localhost:3000`). |
 | `SLIDES_URL` | Yes | | Public base URL of the slides service. |
 | `PAGES_URL` | Yes | | Public base URL of the pages service. |
+| `ACTION_ORIGIN_HOSTS` | Behind a TLS proxy | the hosted service's host | A **build argument** of the webapp and slides images, not a runtime variable: the public host name the app is served from (the host in `WEBAPP_URL` or `SLIDES_URL`), exact names, comma-separated. Behind a proxy that terminates TLS, the app accepts form submissions only from these hosts. See [Building an image yourself](/docs/self-hosting/docker#building-an-image-yourself). |
 
 ### Github integration
 
