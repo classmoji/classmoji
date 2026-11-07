@@ -14,6 +14,7 @@
     "./oauth-redirect": "./src/oauthRedirect.ts",
     "./secret": "./src/secret.ts",
     "./mcp-token": "./src/mcpToken.ts",
+    "./mcp-resource": "./src/mcpResource.ts",
     "./site-return": "./src/siteReturnToken.ts",
     "./invite-token": "./src/inviteToken.ts",
     "./app-connection": "./src/appConnectionMessages.ts",
