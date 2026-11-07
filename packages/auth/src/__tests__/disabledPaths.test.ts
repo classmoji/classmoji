@@ -44,7 +44,7 @@ vi.mock('@classmoji/services', () => ({
   },
 }));
 
-const { auth } = await import('../server.ts');
+const { auth, ADMIN_PATHS_NOT_USED } = await import('../server.ts');
 
 const BASE = 'http://localhost:3000/api/auth';
 
@@ -119,6 +119,60 @@ describe('disabled better-auth paths', () => {
   it('still serves /get-session', async () => {
     const res = await auth.handler(new Request(`${BASE}/get-session`));
     expect(res.status).toBe(200);
+  });
+});
+
+describe("the admin plugin's endpoints", () => {
+  /** Every admin-plugin endpoint this better-auth version serves, with its method. */
+  const adminEndpoints = Object.values(auth.api as Record<string, unknown>)
+    .map(e => e as { path?: unknown; options?: { method?: unknown } })
+    .filter(e => typeof e?.path === 'string' && e.path.startsWith('/admin/'))
+    .map(e => ({ path: e.path as string, method: String(e.options?.method) }));
+  const KEPT = ['/admin/impersonate-user', '/admin/stop-impersonating'];
+
+  it('turns off every one but View as start and stop', () => {
+    expect(adminEndpoints.length).toBeGreaterThan(KEPT.length);
+    expect([...ADMIN_PATHS_NOT_USED, ...KEPT].sort()).toEqual(
+      adminEndpoints.map(e => e.path).sort()
+    );
+  });
+
+  it.each(ADMIN_PATHS_NOT_USED.map(path => [path]))('answers %s with 404', async path => {
+    const method = adminEndpoints.find(e => e.path === path)?.method ?? 'POST';
+    const res = await auth.handler(
+      new Request(`${BASE}${path}`, {
+        method,
+        headers: {
+          origin: 'http://localhost:3000',
+          cookie: 'classmoji.session_token=x',
+          ...(method === 'GET' ? {} : { 'content-type': 'application/json' }),
+        },
+        ...(method === 'GET' ? {} : { body: JSON.stringify({ userId: 'u1', role: 'admin' }) }),
+      })
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it.each(KEPT.map(path => [path]))('still routes POST %s', async path => {
+    const res = await auth.handler(
+      new Request(`${BASE}${path}`, {
+        method: 'POST',
+        headers: { origin: 'http://localhost:3000', 'content-type': 'application/json' },
+        body: JSON.stringify({ userId: 'u1' }),
+      })
+    );
+    // No session: the endpoint's own refusal, not the router's 404.
+    expect(res.status).not.toBe(404);
+    expect(res.status).toBe(401);
+  });
+
+  it('leaves the in-process auth.api admin endpoints in place', async () => {
+    const error = await auth.api.listUsers({ query: {}, headers: new Headers() }).then(
+      () => null,
+      (e: unknown) => e
+    );
+    // No session in this call: the endpoint's own 401, not the router's 404.
+    expect(error).toMatchObject({ statusCode: 401 });
   });
 });
 

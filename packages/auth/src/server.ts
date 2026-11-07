@@ -126,6 +126,23 @@ async function isAdminUser(userId: string): Promise<boolean> {
 
 export const VIEW_AS_ADMIN_REFUSED_MESSAGE = "You can't view as another admin.";
 
+/** The admin plugin's endpoints no app calls; `disabledPaths` turns them off. */
+export const ADMIN_PATHS_NOT_USED = [
+  '/admin/set-role',
+  '/admin/get-user',
+  '/admin/create-user',
+  '/admin/update-user',
+  '/admin/list-users',
+  '/admin/list-user-sessions',
+  '/admin/unban-user',
+  '/admin/ban-user',
+  '/admin/revoke-user-session',
+  '/admin/revoke-user-sessions',
+  '/admin/remove-user',
+  '/admin/set-user-password',
+  '/admin/has-permission',
+] as const;
+
 export const VIEW_AS_PLATFORM_ADMINS_ONLY_MESSAGE =
   'Only platform admins can view as another user.';
 
@@ -840,6 +857,11 @@ export const auth = betterAuth({
    * emailOTP plugin and nothing calls them: an email code verifies an address
    * or resets a password here, it never signs anyone in on its own, and no
    * form checks a code without using it.
+   *
+   * The admin plugin's endpoints are off too, all but "View as" start and stop
+   * (/admin/impersonate-user, /admin/stop-impersonating), the only ones any app
+   * calls (apps/admin useViewAs, the webapp's Staff pages and its
+   * ImpersonationBanner). apps/admin reads people and classrooms through Prisma.
    */
   disabledPaths: [
     '/mcp/get-session',
@@ -848,6 +870,7 @@ export const auth = betterAuth({
     '/refresh-token',
     '/sign-in/email-otp',
     '/email-otp/check-verification-otp',
+    ...ADMIN_PATHS_NOT_USED,
   ],
   // Password guessing and code guessing are throttled harder than the default
   // (better-auth enables its limiter in production only). Per client IP. Tight
