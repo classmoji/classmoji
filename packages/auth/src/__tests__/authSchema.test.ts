@@ -129,9 +129,8 @@ describe('better-auth schema vs the generated Prisma client', () => {
 
   // better-auth runs the same comparison itself (the Prisma adapter's
   // `findPrismaSchemaProblems`) when the client it is given carries Prisma's
-  // data model, and awaits it before every auth call. The client is the
-  // app's, through ./prismaForAuth.ts; the check must still be registered on
-  // it, and clean.
+  // data model, and awaits it before every auth call. It must be registered
+  // on the app's client, and clean.
   it('registers better-auth’s own startup check on the client it is given, and passes it', async () => {
     const ctx = await auth.$context;
     expect(typeof ctx.checkSchema).toBe('function');

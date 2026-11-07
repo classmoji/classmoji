@@ -45,7 +45,6 @@ import {
   type OAuthRuleContext,
 } from './oauthRequestRules.ts';
 import { AUTH_ISSUER, MCP_RESOURCE } from './mcpResource.ts';
-import { prismaForAuth } from './prismaForAuth.ts';
 import { mapGitHubProfile, mapGitLabProfile, onAccountCreated } from './providerProfile.ts';
 
 export { AUTH_SECRET, COOKIE_PREFIX };
@@ -1079,10 +1078,14 @@ const JWT_PLUGIN_OPTIONS = {
  */
 const MCP_PLUGIN_OPTIONS: Parameters<typeof mcp>[0] = {
   resource: MCP_RESOURCE,
-  // The resource row oauth-provider seeds at boot. Its scopes are listed:
-  // Prisma reads an unset list column as `[]`, which the provider takes as
-  // "no scope allowed for this resource" (`resolveResourcePolicy`), where
-  // null would mean "any". `merge` keeps a row seeded earlier in line.
+  // The resource row oauth-provider seeds at boot, with its scopes listed.
+  // Unlisted, the provider would write null for them, which Prisma refuses
+  // for a list column ("must not be null"); and Prisma reads an unset list
+  // column back as `[]`, which the provider takes as "no scope allowed for
+  // this resource" (`resolveResourcePolicy`), where null means "any". The
+  // same goes for every list the provider reads: a row it does not write
+  // itself (the migration's) lists them. `merge` keeps a row seeded earlier
+  // in line with this one.
   resources: [
     { identifier: MCP_RESOURCE, name: 'Classmoji MCP server', allowedScopes: OAUTH_SCOPES },
   ],
@@ -1129,9 +1132,7 @@ export const auth = betterAuth({
     Boolean(o)
   ),
   secret: AUTH_SECRET,
-  // The app's Prisma client, with list columns never written as null
-  // (./prismaForAuth.ts): oauth-provider writes null for an unset list.
-  database: prismaAdapter(prismaForAuth(getPrisma()), {
+  database: prismaAdapter(getPrisma(), {
     provider: 'postgresql',
   }),
   socialProviders: {

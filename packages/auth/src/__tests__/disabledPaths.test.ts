@@ -327,24 +327,64 @@ describe("the admin plugin's endpoints", () => {
 });
 
 describe("the authorization server's endpoints", () => {
+  // Written out, not read from server.ts: dropping a path from the server's
+  // list must fail here.
+  const OFF = [
+    '/oauth2/create-client',
+    '/oauth2/get-client',
+    '/oauth2/get-clients',
+    '/oauth2/update-client',
+    '/oauth2/delete-client',
+    '/oauth2/client/rotate-secret',
+    '/oauth2/client/rotate-keys',
+    '/oauth2/get-consent',
+    '/oauth2/get-consents',
+    '/oauth2/update-consent',
+    '/oauth2/delete-consent',
+    '/oauth2/end-session',
+    '/oauth2/end-session/confirm',
+    '/oauth2/userinfo',
+    '/oauth2/introspect',
+    '/oauth2/public-client',
+    '/oauth2/public-client-prelogin',
+    '/oauth2/continue',
+    '/token',
+  ];
+  const KEPT = [
+    '/oauth2/authorize',
+    '/oauth2/token',
+    '/oauth2/register',
+    '/oauth2/consent',
+    '/oauth2/revoke',
+    '/jwks',
+  ];
+
+  it('turns off exactly the written-out list', () => {
+    expect([...OAUTH_PATHS_NOT_USED].sort()).toEqual([...OFF].sort());
+  });
+
+  // A new `/oauth2/*` endpoint from an upgrade fails here until someone
+  // decides whether it is kept or turned off.
+  it('knows every /oauth2 endpoint the router could serve', () => {
+    const served = DECLARED.filter(e => e.path.startsWith('/oauth2/') && !e.serverOnly).map(
+      e => e.path
+    );
+    expect([...new Set(served)].sort()).toEqual(
+      [...OFF, ...KEPT].filter(p => p.startsWith('/oauth2/')).sort()
+    );
+  });
+
   it('turns off only paths this better-auth declares', () => {
     for (const path of OAUTH_PATHS_NOT_USED)
       expect([path, methodOf(path)]).not.toEqual([path, undefined]);
   });
 
-  it.each(OAUTH_PATHS_NOT_USED.map(path => [path]))('answers %s with 404', async path => {
+  it.each(OFF.map(path => [path]))('answers %s with 404', async path => {
     expect((await routed(path)).status).toBe(404);
   });
 
   // The flows MCP clients and the consent page use stay up.
-  it.each([
-    ['/oauth2/authorize'],
-    ['/oauth2/token'],
-    ['/oauth2/register'],
-    ['/oauth2/consent'],
-    ['/oauth2/revoke'],
-    ['/jwks'],
-  ])('still routes %s', async path => {
+  it.each(KEPT.map(path => [path]))('still routes %s', async path => {
     expect((await routed(path)).status).not.toBe(404);
   });
 
