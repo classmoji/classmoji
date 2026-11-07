@@ -15,23 +15,15 @@ import {
  * Quizzes run only on the Trigger chat runtime: `entitlement.isQuizRuntimeConfigured()`
  * is true iff TRIGGER_SECRET_KEY or TRIGGER_ACCESS_TOKEN is set. When false,
  * api.quiz returns 503 (after auth), quizzes are hidden everywhere and left out
- * of grade totals, and the Quizzes nav item hides. The AI agent's variables
- * play no part in quizzes.
- *
- * Ask Moji's `ai_agent` runtime is gated by isAIAgentConfigured(): true iff
- * AI_AGENT_URL and AI_AGENT_SHARED_SECRET are set. When false,
- * api.syllabus-bot returns 503 (after auth).
+ * of grade totals, and the Quizzes nav item hides.
  *
  * The quiz test below asserts whichever branch this server is in. Both
  * branches are also covered deterministically by unit tests:
  *   - app/routes/api.quiz/__tests__/ai-gating.test.ts
  *   - packages/services/src/classmoji/__tests__/entitlement.service.test.ts
- *   - app/routes/api.syllabus-bot.$class/__tests__/ai-gating.test.ts
- *   - app/utils/__tests__/aiFeatures.server.test.ts
  *
- * Ask Moji on the Trigger runtime is gated by askMojiAvailable() instead
- * (ASK_MOJI_RUNTIME=trigger, Trigger configured, an Anthropic key, Pro,
- * syllabus_bot_enabled). Its insights page (/admin|/teacher/:class/ask-moji)
+ * Ask Moji runs on Trigger too, gated by askMojiAvailable() (Trigger
+ * configured, an Anthropic key, Pro, syllabus_bot_enabled). Its insights page (/admin|/teacher/:class/ask-moji)
  * is 404 and its nav entry hidden wherever that is false. Every reason is
  * covered by unit tests that mock it:
  *   - app/routes/admin.$class.ask-moji/__tests__/insights.test.ts
@@ -54,7 +46,7 @@ test.describe('REGRESSION: AI gating still works after TS migration', () => {
     if (quizId) await deleteQuizById(quizId);
   });
 
-  test('the quiz API follows the quiz runtime (Trigger), not the AI agent', async ({
+  test('the quiz API follows the quiz runtime (Trigger)', async ({
     authenticatedPage: page,
   }) => {
     const quizRuntimeOn = Boolean(
@@ -74,20 +66,7 @@ test.describe('REGRESSION: AI gating still works after TS migration', () => {
     }
   });
 
-  test('with the agent configured, the Ask Moji (ai_agent) endpoint passes the 503 gate', async ({
-    authenticatedPage: page,
-  }) => {
-    expect(process.env.AI_AGENT_URL).toBeTruthy();
-    expect(process.env.AI_AGENT_SHARED_SECRET).toBeTruthy();
-
-    const syllabus = await page.request.get(`/api/syllabus-bot/${TEST_CLASSROOM}`);
-    expect(syllabus.status()).toBe(200);
-    await expect(syllabus.json()).resolves.toEqual(
-      expect.objectContaining({ enabled: expect.any(Boolean), orgName: expect.any(String) })
-    );
-  });
-
-  test('the admin dashboard renders for a configured agent (sanity, not an AI-nav assertion)', async ({
+  test('the admin dashboard renders (sanity, not an AI-nav assertion)', async ({
     authenticatedPage: page,
   }) => {
     await page.goto(`/admin/${TEST_CLASSROOM}/dashboard`);
@@ -98,19 +77,18 @@ test.describe('REGRESSION: AI gating still works after TS migration', () => {
   });
 });
 
-/** Whether this server can run Ask Moji on the Trigger runtime at all. */
-const askMojiRuntimeOn = () =>
-  process.env.ASK_MOJI_RUNTIME === 'trigger' &&
+/** Whether this server can run Ask Moji at all: Trigger and a platform Anthropic key. */
+const askMojiServerOn = () =>
   Boolean(process.env.TRIGGER_SECRET_KEY || process.env.TRIGGER_ACCESS_TOKEN) &&
   Boolean(process.env.ANTHROPIC_API_KEY);
 
 test.describe('REGRESSION: Ask Moji insights follow askMojiAvailable', () => {
-  test('without the Trigger runtime, the insights page is 404 under both prefixes and has no nav entry', async ({
+  test('without Trigger, the insights page is 404 under both prefixes and has no nav entry', async ({
     authenticatedPage: page,
   }) => {
     test.skip(
-      process.env.ASK_MOJI_RUNTIME === 'trigger',
-      'Ask Moji runs on the Trigger runtime here; the unavailable branch is unit-tested'
+      Boolean(process.env.TRIGGER_SECRET_KEY || process.env.TRIGGER_ACCESS_TOKEN),
+      'Trigger is configured here; the unavailable branch is unit-tested'
     );
     await ensureClassroomProTier(TEST_CLASSROOM);
 
@@ -126,12 +104,12 @@ test.describe('REGRESSION: Ask Moji insights follow askMojiAvailable', () => {
     await expect(page.getByRole('link', { name: 'Ask Moji Insights' })).toHaveCount(0);
   });
 
-  test.describe('on the Trigger runtime', () => {
+  test.describe('with Trigger and an Anthropic key', () => {
     let classroomId: string | null = null;
     let wasEnabled: boolean | null = null;
 
     test.beforeAll(async () => {
-      if (!askMojiRuntimeOn()) return;
+      if (!askMojiServerOn()) return;
       await ensureClassroomProTier(TEST_CLASSROOM);
       const classroom = await getClassroomBySlug(TEST_CLASSROOM);
       classroomId = classroom.id;
@@ -154,10 +132,7 @@ test.describe('REGRESSION: Ask Moji insights follow askMojiAvailable', () => {
     test('the insights page is 404 while Ask Moji is switched off, and loads once it is on', async ({
       authenticatedPage: page,
     }) => {
-      test.skip(
-        !askMojiRuntimeOn(),
-        'needs ASK_MOJI_RUNTIME=trigger, Trigger and an Anthropic key'
-      );
+      test.skip(!askMojiServerOn(), 'needs Trigger and an Anthropic key');
       const prisma = getTestPrisma();
 
       await prisma.classroomSettings.update({

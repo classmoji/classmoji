@@ -356,7 +356,7 @@ export async function withRenderPage<T>(
     });
     await context.addCookies([session.cookie]);
     // No socket of any kind: a still frame needs none, and deck scripts could
-    // otherwise reach local services (collab, ai-agent) from a dev browser.
+    // otherwise reach local services (collab) from a dev browser.
     await context.routeWebSocket(/.*/, ws => ws.close());
     if (current.backend === 'local') await guardContext(context, [session.origin]);
     const page = await context.newPage();

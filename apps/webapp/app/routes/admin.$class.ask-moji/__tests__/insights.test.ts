@@ -233,7 +233,7 @@ describe.each([
     );
   });
 
-  it.each(['RUNTIME_OFF', 'TRIGGER_NOT_CONFIGURED', 'NO_API_KEY', 'PRO_REQUIRED', 'NOT_ENABLED'])(
+  it.each(['TRIGGER_NOT_CONFIGURED', 'NO_API_KEY', 'PRO_REQUIRED', 'NOT_ENABLED'])(
     'is 404 where Ask Moji is unavailable (%s), reading and auditing nothing',
     async reason => {
       mocks.askMojiAvailable.mockResolvedValue({ available: false, reason });

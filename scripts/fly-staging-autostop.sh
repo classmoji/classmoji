@@ -18,11 +18,10 @@ set -euo pipefail
 DRY_RUN=false
 [ "${1:-}" = "--dry-run" ] && DRY_RUN=true
 
-# app:mode — ai-agent suspends (memory snapshot) so its WebSocket/LLM workload
-# wakes fast; everything else does a full stop.
+# app:mode — `suspend` keeps a memory snapshot (faster wake), `stop` is a full
+# stop.
 APPS=(
   "classmoji-webapp-staging:stop"
-  "classmoji-ai-agent-staging:suspend"
   "classmoji-hook-station-staging:stop"
   "classmoji-mcp-staging:stop"
   "classmoji-pages-staging:stop"

@@ -1,6 +1,6 @@
 /**
- * The quiz chat agent's tasks (`quiz-attempt`, `explore-repo`), which live in
- * the private ai-agent submodule (apps/ai-agent/src/trigger). Trigger.dev only
+ * The chat agents' tasks (`quiz-attempt`, `ask-moji`), which
+ * live in the private ai-agent submodule (apps/ai-agent/src/trigger). Trigger.dev only
  * registers task files inside this project, so this one-line entry re-exports
  * them from here.
  *

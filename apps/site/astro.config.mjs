@@ -131,8 +131,8 @@ export default defineConfig({
   ],
   server: {
     // Round and easy to remember, and clear of every other app: the webapp is
-    // on 3000, hook on 4001, quiz agent 6000, slides 6500, pages 7100, admin
-    // 7500, MCP 8100, each shifted by `DEVPORT_ID * 10` in a worktree.
+    // on 3000, hook on 4001, slides 6500, pages 7100, admin 7500, collab
+    // 7700, MCP 8100, each shifted by `DEVPORT_ID * 10` in a worktree.
     //
     // Not 4000: that is the local webhook fanout the Smee tunnels post to, and
     // a site dev server sitting on it swallows every Github push event.

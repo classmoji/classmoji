@@ -195,9 +195,6 @@ describe('quizzes resource quiz runtime gate (no Trigger key, no quizzes)', () =
 
   it('refuses staff on Pro with quizzes on when this process has no Trigger key, before reading quizzes', async () => {
     setTriggerKey(null);
-    // Only the retired AI agent configured: it no longer runs quizzes.
-    vi.stubEnv('AI_AGENT_URL', 'http://localhost:6000');
-    vi.stubEnv('AI_AGENT_SHARED_SECRET', 'test-secret');
     findByClassroom.mockResolvedValue([QUIZ]);
 
     const err = await quizzesResource

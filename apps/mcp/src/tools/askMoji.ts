@@ -5,9 +5,8 @@
  * TIERS (the web's):
  *   - ask_moji_usage / ask_moji_feedback_list / ask_moji_exchange_get:
  *     OWNER+TEACHER, the insights pages' gate. Each refuses unless Ask Moji is
- *     available in the classroom (`askMojiSession.askMojiAvailable`: the
- *     runtime switch, Trigger configured, an Anthropic key, Pro,
- *     `syllabus_bot_enabled`), before any read, and each successful call is
+ *     available in the classroom (`askMojiSession.askMojiAvailable`: Trigger
+ *     configured, an Anthropic key, Pro, `syllabus_bot_enabled`), before any read, and each successful call is
  *     one VIEW row (`auditRead`): they read students' questions and activity.
  *   - ask_moji_settings_get: OWNER only, like the web AI settings page, which
  *     loads for the owner with Ask Moji off or without Pro (the toggles are

@@ -4,8 +4,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
  * Quiz runtime gating (RW-13): when the quiz runtime (Trigger) is not
  * configured (`entitlement.isQuizRuntimeConfigured()` is false), the quiz API
  * must return 503 AFTER passing authorization (so denied access is still
- * audited), never expose quiz functionality. The retired AI agent's variables
- * play no part.
+ * audited), never expose quiz functionality.
  *
  * A deterministic unit test: we mock the auth + quiz-visibility seams and the
  * config probe, then drive the action directly.
@@ -68,10 +67,6 @@ const postQuiz = (body: Record<string, unknown>) =>
 describe('api.quiz AI gating', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // No AI agent in any case: the outcomes below (a configured runtime passing
-    // the gate included) must not depend on a developer's shell having one.
-    vi.stubEnv('AI_AGENT_URL', '');
-    vi.stubEnv('AI_AGENT_SHARED_SECRET', '');
     // Pass the authorization + visibility gates so only the config check decides.
     assertClassroomAccessMock.mockResolvedValue({
       userId: 'student-1',

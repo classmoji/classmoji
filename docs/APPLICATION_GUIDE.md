@@ -48,20 +48,18 @@
 - Remix-style route-based architecture
 
 **Backend Services**
-- **AI Agent** (`apps/ai-agent`): Unified WebSocket microservice for AI-powered features (quizzes, syllabus bot)
 - **Hook Station** (`apps/hook-station`): Webhook listener for GitHub and Stripe events
 - **Web App** (`apps/webapp`): Main React application
 
 **Data & Storage**
 - PostgreSQL database with Prisma ORM
-- Trigger.dev for background task processing
+- Trigger.dev for background task processing, and the AI chat agents (quizzes, Ask Moji)
 - Environment variables via `.env` file
 
 **Integrations**
 - GitHub OAuth & GitHub App
 - Stripe for subscriptions
-- OpenAI & Anthropic for AI quizzes
-- Claude Agent SDK for code-aware quizzes
+- Anthropic Claude for AI quizzes and Ask Moji
 
 ### Service Architecture
 
@@ -75,22 +73,16 @@
                     │   (Webhooks)    │◄──── Stripe Webhooks
                     └────────┬────────┘
                              │
-                    ┌────────▼────────┐
-                    │  Trigger.dev    │
-                    │ (Background)    │
-                    └────────┬────────┘
+                    ┌────────▼────────┐     ┌─────────────────┐
+                    │  Trigger.dev    │────►│  Claude (quiz,  │
+                    │ (Background,    │     │  Ask Moji chat  │
+                    │  chat agents)   │     │  agents)        │
+                    └────────┬────────┘     └─────────────────┘
                              │
 ┌─────────────┐                              ┌──────────────┐
 │  React App  │◄────────────────────────────►│  PostgreSQL  │
 │  (webapp)   │                              │  (Database)  │
-└──────┬──────┘                              └──────────────┘
-       │
-       │ WebSocket
-       ▼
-┌─────────────┐     ┌─────────────────┐
-│  AI Agent   │────►│  Claude Agent   │
-│ (WebSocket) │     │      SDK        │
-└─────────────┘     └─────────────────┘
+└─────────────┘                              └──────────────┘
 ```
 
 ### Monorepo Structure
@@ -99,12 +91,11 @@
 classmoji/
 ├── apps/
 │   ├── webapp/          # React Router 7 frontend
-│   ├── ai-agent/        # WebSocket AI microservice (quiz, syllabus bot)
+│   ├── ai-agent/        # Private submodule: the quiz and Ask Moji Trigger.dev chat agents
 │   ├── hook-station/    # Webhook listener
 │   └── docs/            # Documentation
 ├── packages/
 │   ├── database/        # Prisma schema & migrations
-│   ├── llm/             # Centralized LLM functionality
 │   ├── services/        # Shared business logic
 │   ├── utils/           # Shared utilities
 │   └── tasks/           # Trigger.dev workflows
@@ -391,103 +382,13 @@ A classroom grades on one of two scales. Either way every grade is stored as a n
 
 ### 4. Quiz System
 
-The platform offers two distinct quiz modes, both centralized in `@classflow/llm` package.
+Every quiz attempt runs as the Trigger.dev chat task `quiz-attempt` on Anthropic Claude. The webapp creates the attempt (`api.quiz`) and mints a session token (`api.quiz-chat.session`); the browser then talks to the task directly. The task code lives in the private `apps/ai-agent` submodule (`src/trigger/quiz/`) and is deployed with `packages/tasks`. Without Trigger.dev configured, quizzes are hidden.
 
-#### A. Standard Quiz Mode (LangChain-based)
+A **code-aware** quiz also explores the student's repository, through the quiz task's `explore_codebase` tool, which reads it over the GitHub API (no clone) inside the attempt's run and picks the excerpts the questions are built on.
 
-**Overview**
-- Conversational AI-powered assessments
-- Uses OpenAI GPT-4 or Anthropic Claude via LangChain
-- Traditional chat-based quiz format
+Attempts stamped `agent_runtime = 'ai_agent'` come from the retired WebSocket runtime; they are read-only transcripts.
 
-**Configuration** ([quiz-settings.jsx](apps/webapp/app/routes/admin.$org.settings.quizzes/quiz-settings.jsx))
-- Choose LLM provider (OpenAI/Anthropic)
-- Select model (gpt-4, claude-3-opus, etc.)
-- Configure temperature (0.0-1.0)
-- Set max tokens
-- Use org API key or system defaults
-
-**Features**
-- Custom system prompts and rubrics
-- Configurable question count
-- Difficulty levels and subject tags
-- Due date enforcement
-- Auto-grading with structured evaluation
-
-**Flow**
-```
-Student starts quiz
-  ↓
-webapp/action.server.js
-  ↓
-@classflow/llm (StandardQuizService)
-  ↓
-LangChain API (OpenAI/Anthropic)
-  ↓
-Response displayed in chat interface
-```
-
-#### B. Code-Aware Quiz Mode (Agent SDK-based)
-
-**Revolutionary Feature**: AI explores student's actual GitHub repository before asking questions.
-
-**How It Works**
-1. **Repository Cloning**
-   - Student's GitHub repo cloned to secure sandbox
-   - Path validation and security constraints applied
-
-2. **Code Exploration** ([agent-sdk provider](apps/ai-agent/src/llm/providers/agent-sdk/))
-   - Claude Agent SDK with file access tools:
-     - `Read`: Read file contents
-     - `Grep`: Search code for patterns
-     - `Glob`: Find files by pattern
-     - `Bash`: Execute commands (limited)
-
-3. **Real-Time Streaming**
-   - Exploration steps streamed to student via WebSocket
-   - Student sees what AI is examining
-   - "Looking at your code..." messages
-
-4. **Evidence-Based Questions**
-   - Questions based on actual code implementation
-   - References specific files and line numbers
-   - Context-aware follow-ups
-
-**Example Exploration**
-```
-🔍 Exploring your repository...
-📂 Found src/components/Button.tsx
-📖 Reading implementation...
-🔎 Searching for event handlers...
-
-Question: I notice you're using inline arrow functions in your
-Button component at line 42. Can you explain the performance
-implications of this approach?
-```
-
-**Security Features**
-- Sandboxed execution environment
-- Path validation (can't access system files)
-- Limited command execution
-- No network access from sandbox
-- Automatic cleanup after quiz
-
-**Flow**
-```
-Student starts code-aware quiz
-  ↓
-webapp/action.server.js
-  ↓
-WebSocket connection to ai-agent
-  ↓
-@classflow/llm (CodeAwareQuizService)
-  ↓
-Claude Agent SDK + cloned repository
-  ↓
-Real-time exploration steps → WebSocket → Student UI
-```
-
-#### Quiz Features (Both Modes)
+#### Quiz Features
 
 **Quiz Configuration**
 - Title, description, and instructions
@@ -514,10 +415,8 @@ Real-time exploration steps → WebSocket → Student UI
 
 #### File Locations
 
-- LLM code: [apps/ai-agent/src/llm/](apps/ai-agent/src/llm/) (private submodule; `packages/llm` no longer exists)
-  - Agent SDK provider: [apps/ai-agent/src/llm/providers/agent-sdk/](apps/ai-agent/src/llm/providers/agent-sdk/)
-  - Quiz evaluation schema: [apps/ai-agent/src/llm/schemas/quizEvaluation.js](apps/ai-agent/src/llm/schemas/quizEvaluation.js)
-- AI agent service: [apps/ai-agent/](apps/ai-agent/)
+- Chat agent tasks: [apps/ai-agent/src/trigger/](apps/ai-agent/src/trigger/) (private submodule; `packages/llm` no longer exists)
+- Session token: [apps/webapp/app/routes/api.quiz-chat.session/](apps/webapp/app/routes/api.quiz-chat.session/)
 - Quiz routes: [apps/webapp/app/routes/student.$org.quizzes/](apps/webapp/app/routes/student.$org.quizzes/)
 - Quiz settings: [apps/webapp/app/routes/admin.$org.settings.quizzes/](apps/webapp/app/routes/admin.$org.settings.quizzes/)
 
@@ -902,10 +801,7 @@ User actions are tracked via the built-in audit logging system (`addAuditLog` / 
 
 4. **Quizzes** ([quiz-settings.jsx](apps/webapp/app/routes/admin.$org.settings.quizzes/quiz-settings.jsx))
    - Enable/disable quizzes
-   - LLM provider (OpenAI/Anthropic)
-   - Model selection
-   - Temperature and max tokens
-   - Organization API keys
+   - Model and effort selection (with the classroom's own Anthropic key)
    - Code-aware quiz configuration
 
 5. **Teams** ([team-settings.jsx](apps/webapp/app/routes/admin.$org.settings.teams/team-settings.jsx))
@@ -1081,49 +977,7 @@ AuditLog
 
 ### LLM Architecture
 
-LLM code lives in the private `ai-agent` submodule at [apps/ai-agent/src/llm/](apps/ai-agent/src/llm/) (`QuizService`, Agent SDK provider, quiz evaluation schema); `packages/llm` no longer exists. The webapp never calls a model directly: it talks to the AI agent over WebSocket, and the public-facing exports (`getAllModels`, `examplePrompts`) come from `@classmoji/services`.
-
-### WebSocket Architecture
-
-**AI Agent Service** ([apps/ai-agent/](apps/ai-agent/))
-
-```javascript
-// WebSocket server for real-time quiz communication
-const wss = new WebSocketServer({ port: 8080 });
-
-wss.on('connection', (ws) => {
-  ws.on('message', async (message) => {
-    const { type, payload } = JSON.parse(message);
-
-    switch (type) {
-      case 'START_QUIZ':
-        // Initialize quiz session
-        // Clone repository if code-aware
-        // Start Agent SDK exploration
-        break;
-
-      case 'SEND_MESSAGE':
-        // Student response
-        // Process with LLM
-        // Stream exploration steps
-        break;
-
-      case 'END_QUIZ':
-        // Finalize and grade
-        // Cleanup sandbox
-        break;
-    }
-  });
-});
-```
-
-**WebSocket Message Types**
-- `START_QUIZ`: Initialize quiz session
-- `SEND_MESSAGE`: Student sends answer
-- `RECEIVE_MESSAGE`: AI sends question
-- `EXPLORATION_STEP`: Code exploration update
-- `END_QUIZ`: Complete quiz session
-- `ERROR`: Error occurred
+LLM code lives in the private `ai-agent` submodule as Trigger.dev tasks ([apps/ai-agent/src/trigger/](apps/ai-agent/src/trigger/): `quiz-attempt`, `ask-moji`), deployed with `packages/tasks`; `packages/llm` no longer exists and there is no separate AI service. The webapp never calls a model directly: it mints chat session tokens (`api.quiz-chat.session`, `api.ask-moji.$class.*`) and the browser talks to the Trigger.dev chat task. The public-facing exports (`getAllModels`, `examplePrompts`) come from `@classmoji/services`.
 
 ### Authentication & Authorization
 
@@ -1201,13 +1055,8 @@ async function assertClassroomAccess({
 - Webhook signature verification
 
 **Code-Aware Quiz Security**
-- Sandboxed execution environment
-- Path validation (no system file access)
-- Limited command execution
-- No network access from sandbox
-- Automatic cleanup after quiz
-- Repository size limits
-- Timeout enforcement
+- The quiz's `explore_codebase` tool reads the repository over the GitHub API; nothing is cloned or executed
+- Path validation (excluded paths are never read)
 
 ### Known Security Concerns
 
@@ -1313,7 +1162,6 @@ npm run dev
 
 # Individual services
 npm run web:dev          # React webapp on :3000
-npm run ai-agent:dev     # AI agent on :6000
 npm run hook:dev         # Hook station on :3001
 npm run trigger:dev      # Trigger.dev workflows
 
@@ -1353,8 +1201,7 @@ STRIPE_SECRET_KEY="sk_test_..."
 STRIPE_WEBHOOK_SECRET="whsec_..."
 STRIPE_PRO_PRICE_ID="price_..."
 
-# LLM Providers (System defaults)
-OPENAI_API_KEY="sk-..."
+# Anthropic (platform default key for quizzes and Ask Moji)
 ANTHROPIC_API_KEY="sk-ant-..."
 
 # JWT
@@ -1416,11 +1263,10 @@ npx playwright test --debug
 ```
 Load Balancer
   ├── webapp (Vercel/Netlify)
-  ├── ai-agent (Railway/Fly.io)
   └── hook-station (Railway/Fly.io)
 
 Database: PostgreSQL (Neon/Supabase)
-Background: Trigger.dev (cloud)
+Background: Trigger.dev (cloud; also runs the quiz and Ask Moji chat agents)
 Secrets: Environment variables
 ```
 
@@ -1434,7 +1280,7 @@ Secrets: Environment variables
 - [ ] Set `SENTRY_DSN` in Infisical (`prod`/`sta`; synced to the webapp, pages and slides Fly apps) for browser error tracking
 - [ ] Test webhook delivery
 - [ ] Verify GitHub OAuth redirect URLs
-- [ ] Test quiz agent WebSocket connection
+- [ ] Test a quiz attempt end to end (Trigger.dev chat task)
 
 ### Monitoring & Logging
 
@@ -1480,9 +1326,9 @@ Secrets: Environment variables
    - Familiar environment for CS students
    - Contribution tracking for group work
 
-5. **Multi-Tier LLM Support** 🧠
-   - Use OpenAI or Anthropic
-   - Organization API keys or system defaults
+5. **AI Quizzes on Claude** 🧠
+   - Anthropic Claude via Trigger.dev chat agents
+   - Classroom API keys or system defaults
    - Standard and code-aware quiz modes
    - Flexible configuration per quiz
 
@@ -1566,12 +1412,11 @@ apps/
     admin.$org/                   # Admin dashboard
     student.$org/                 # Student dashboard
     admin.$org.settings*/         # Settings pages
-  ai-agent/src/                   # AI WebSocket service (quiz, syllabus bot)
+  ai-agent/src/trigger/           # Quiz and Ask Moji chat agents (private submodule)
   hook-station/src/webhooks/      # GitHub & Stripe webhooks
 
 packages/
   database/prisma/schema.prisma   # Database schema
-  llm/src/                        # LLM functionality
   services/src/                   # Shared services
   utils/src/                      # Shared utilities
   tasks/src/workflows/            # Trigger.dev tasks

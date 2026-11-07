@@ -16,7 +16,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       webapp: ${{ steps.filter.outputs.webapp == 'true' || github.event_name == 'workflow_dispatch' }}
-      ai-agent: ${{ steps.filter.outputs.ai-agent == 'true' || github.event_name == 'workflow_dispatch' }}
       hook-station: ${{ steps.filter.outputs.hook-station == 'true' || github.event_name == 'workflow_dispatch' }}
       collab: ${{ steps.filter.outputs.collab == 'true' || github.event_name == 'workflow_dispatch' }}
       mcp: ${{ steps.filter.outputs.mcp == 'true' || github.event_name == 'workflow_dispatch' }}
@@ -39,17 +38,6 @@ jobs:
               - '.github/workflows/deploy-fly-staging.yml'
               - '.github/workflows/build-fly-staging.yml'
               - 'apps/webapp/**'
-              - 'packages/**'
-            ai-agent:
-              - 'package.json'
-              - 'package-lock.json'
-              - '.npmrc'
-              - '.dockerignore'
-              - '.github/workflows/deploy-fly-staging.yml'
-              - '.github/workflows/build-fly-staging.yml'
-              - 'scripts/docker/ai-agent.staging.Dockerfile'
-              - 'apps/ai-agent'
-              - 'apps/ai-agent/**'
               - 'packages/**'
             hook-station:
               - 'package.json'
@@ -109,7 +97,8 @@ jobs:
               - 'packages/**'
             tasks:
               - 'packages/tasks/**'
-              # Holds the quiz chat agent's tasks (a pointer bump redeploys).
+              # Holds the quiz and Ask Moji chat agents' tasks (a pointer bump
+              # redeploys).
               - 'apps/ai-agent'
               - 'apps/ai-agent/**'
               - 'packages/database/**'
@@ -123,8 +112,8 @@ jobs:
               - 'packages/page-schema/**'
 
   # Build images before the migration barrier; only rollouts wait for webapp.
-  # At most six monorepo builds: admin takes ai-agent's slot when it finishes,
-  # collab takes hook-station's.
+  # At most six monorepo builds: collab takes hook-station's slot when it
+  # finishes.
   build-webapp:
     needs: changes
     if: needs.changes.outputs.webapp == 'true'
@@ -135,16 +124,6 @@ jobs:
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       PERSONAL_ACCESS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
       SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-
-  build-ai-agent:
-    needs: changes
-    if: needs.changes.outputs.ai-agent == 'true'
-    uses: ./.github/workflows/build-fly-staging.yml
-    with:
-      service: ai-agent
-    secrets:
-      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-      PERSONAL_ACCESS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
 
   build-hook-station:
     needs: changes
@@ -199,8 +178,8 @@ jobs:
       SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
 
   build-admin:
-    needs: [changes, build-ai-agent]
-    if: always() && !cancelled() && needs.changes.outputs.admin == 'true'
+    needs: changes
+    if: needs.changes.outputs.admin == 'true'
     uses: ./.github/workflows/build-fly-staging.yml
     with:
       service: admin
@@ -227,31 +206,6 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
   # Each rollout requires its image and the successful webapp migration barrier.
-  deploy-ai-agent:
-    needs: [changes, deploy-webapp, build-ai-agent]
-    # Always wait on deploy-webapp so that any pending Prisma migration
-    # (run by the webapp's release_command) has applied before non-webapp
-    # services come up with new code that targets the new schema.
-    # `always()` lets this run even when deploy-webapp was skipped.
-    if: always() && !cancelled() && needs.build-ai-agent.result == 'success' && needs.build-ai-agent.outputs.image != '' && (needs.deploy-webapp.result == 'success' || (needs.changes.outputs.webapp != 'true' && needs.deploy-webapp.result == 'skipped'))
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
-      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
-        with:
-          version: 0.5.1
-      - name: Deploy ai-agent
-        run: |
-          CONFIG=$(scripts/fly-autostop-config.sh apps/ai-agent/fly.toml suspend)
-          flyctl deploy --config "$CONFIG" --image "$IMAGE" --app classmoji-ai-agent-staging
-        env:
-          IMAGE: ${{ needs.build-ai-agent.outputs.image }}
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-
   deploy-hook-station:
     needs: [changes, deploy-webapp, build-hook-station]
     if: always() && !cancelled() && needs.build-hook-station.result == 'success' && needs.build-hook-station.outputs.image != '' && (needs.deploy-webapp.result == 'success' || (needs.changes.outputs.webapp != 'true' && needs.deploy-webapp.result == 'skipped'))

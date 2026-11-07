@@ -6,16 +6,15 @@
  * the slide row the loader read, never from anything the client sent. In
  * order, cheapest first:
  *   1. no query: signed in, the deck has a classroom, let in as a member (never
- *      public or share-code access), the runtime switch, a configured webapp
- *      origin (`askMojiHostDecision`);
+ *      public or share-code access), a configured webapp origin
+ *      (`askMojiHostDecision`);
  *   2. one query: an ACCEPTED member of the deck's classroom;
  *   3. members only: `askMojiSession.askMojiAvailable`, the webapp's own rule
- *      (runtime, Trigger configured, an Anthropic key, Pro, switched on).
+ *      (Trigger configured, an Anthropic key, Pro, switched on).
  * So a non-member never costs the availability queries. This is for the UI
  * only; the webapp's embed route enforces the real gates.
  */
 import { ClassmojiService } from '@classmoji/services';
-import { isAskMojiTriggerRuntime } from '@classmoji/utils/ask-moji';
 import { findClassroomRole } from '@classmoji/auth/classroom-role';
 
 import { askMojiHostDecision, type SlideAccessVia } from '~/components/askMoji/askMojiProtocol';
@@ -46,8 +45,6 @@ export async function askMojiHostData({
   const classroomSlug = slide.classroom?.slug;
   const base = {
     via: accessGrantedVia,
-    // The one ASK_MOJI_RUNTIME parse every app shares.
-    triggerRuntime: isAskMojiTriggerRuntime(),
     webappUrl: process.env.WEBAPP_URL,
     // Availability decides below; this only lets the pure checks run first.
     botEnabled: true,

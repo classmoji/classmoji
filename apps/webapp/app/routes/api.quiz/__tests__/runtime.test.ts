@@ -134,15 +134,6 @@ describe('api.quiz — new attempts', () => {
     expect(createNewMock).toHaveBeenCalledWith(QUIZ_ID, STUDENT, MEMBERSHIP);
   });
 
-  it('reads no runtime switch: a leftover QUIZ_TRIGGER_RUNTIME changes nothing', async () => {
-    for (const value of ['off', 'code_aware', 'all', '']) {
-      vi.stubEnv('QUIZ_TRIGGER_RUNTIME', value);
-      createNewMock.mockClear();
-      await post({ _action: 'restartQuiz', quizId: QUIZ_ID });
-      expect(createNewMock).toHaveBeenCalledWith(QUIZ_ID, STUDENT, MEMBERSHIP);
-    }
-  });
-
   it('startQuiz without an attempt id creates one and answers its id', async () => {
     const response = await post({ _action: 'startQuiz', quizId: QUIZ_ID });
 

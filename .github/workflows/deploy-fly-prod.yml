@@ -16,7 +16,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       webapp: ${{ steps.filter.outputs.webapp == 'true' || github.event_name == 'workflow_dispatch' }}
-      ai-agent: ${{ steps.filter.outputs.ai-agent == 'true' || github.event_name == 'workflow_dispatch' }}
       hook-station: ${{ steps.filter.outputs.hook-station == 'true' || github.event_name == 'workflow_dispatch' }}
       collab: ${{ steps.filter.outputs.collab == 'true' || github.event_name == 'workflow_dispatch' }}
       mcp: ${{ steps.filter.outputs.mcp == 'true' || github.event_name == 'workflow_dispatch' }}
@@ -33,10 +32,6 @@ jobs:
           filters: |
             webapp:
               - 'apps/webapp/**'
-              - 'packages/**'
-            ai-agent:
-              - 'apps/ai-agent'
-              - 'apps/ai-agent/**'
               - 'packages/**'
             hook-station:
               - 'apps/hook-station/**'
@@ -60,7 +55,8 @@ jobs:
               - 'packages/**'
             tasks:
               - 'packages/tasks/**'
-              # Holds the quiz chat agent's tasks (a pointer bump redeploys).
+              # Holds the quiz and Ask Moji chat agents' tasks (a pointer bump
+              # redeploys).
               - 'apps/ai-agent'
               - 'apps/ai-agent/**'
               - 'packages/database/**'
@@ -103,32 +99,10 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
 
-  deploy-ai-agent:
+  deploy-hook-station:
     needs: [changes, deploy-webapp]
     # Wait on deploy-webapp so its Prisma release_command applies any pending
     # migration before non-webapp services come up with new code.
-    if: always() && needs.changes.outputs.ai-agent == 'true' && (needs.deploy-webapp.result == 'success' || needs.deploy-webapp.result == 'skipped')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Heal package-lock.json against submodule workspaces
-        run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
-      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
-        with:
-          version: 0.5.1
-      - name: Deploy ai-agent
-        run: flyctl deploy --config apps/ai-agent/fly.toml --dockerfile apps/ai-agent/Dockerfile --remote-only
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-
-  deploy-hook-station:
-    needs: [changes, deploy-webapp]
     if: always() && needs.changes.outputs.hook-station == 'true' && (needs.deploy-webapp.result == 'success' || needs.deploy-webapp.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
@@ -319,7 +293,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: true  # ai-agent is a submodule, might be needed by tasks
+          submodules: true  # the ai-agent submodule holds the chat agents' Trigger tasks
           token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
 
       - name: Setup Node.js

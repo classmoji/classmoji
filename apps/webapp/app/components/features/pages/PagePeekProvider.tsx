@@ -43,8 +43,7 @@ interface PagePeekContextValue {
 const PagePeekContext = createContext<PagePeekContextValue | null>(null);
 
 /**
- * Null when no provider is mounted (admin routes, the syllabus-bot overlay at
- * the app root). Callers fall back to their ordinary link, so a surface shared
+ * Null when no provider is mounted (admin routes). Callers fall back to their ordinary link, so a surface shared
  * with admin keeps working untouched.
  */
 export const usePagePeek = () => useContext(PagePeekContext);

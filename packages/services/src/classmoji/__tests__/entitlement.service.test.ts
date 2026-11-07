@@ -13,7 +13,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
  */
 
 const getProStateForClassroomIdMock = vi.fn();
-const findUniqueConversationMock = vi.fn();
 const findUniqueSettingsMock = vi.fn();
 
 vi.mock('../subscription.service.ts', () => ({
@@ -22,7 +21,6 @@ vi.mock('../subscription.service.ts', () => ({
 
 vi.mock('@classmoji/database', () => ({
   default: () => ({
-    aIConversation: { findUnique: (...a: unknown[]) => findUniqueConversationMock(...a) },
     classroomSettings: { findUnique: (...a: unknown[]) => findUniqueSettingsMock(...a) },
   }),
 }));
@@ -124,42 +122,9 @@ describe('canUseQuizzes', () => {
   });
 });
 
-describe('canUseSyllabusBotForConversation', () => {
-  it('resolves the conversation to its classroom and gates on that', async () => {
-    findUniqueConversationMock.mockResolvedValue({ classroom_id: CLASSROOM_ID });
-    getProStateForClassroomIdMock.mockResolvedValue({ isPro: true });
-    const { canUseSyllabusBotForConversation } = await import('../entitlement.service.ts');
-
-    expect(await canUseSyllabusBotForConversation('conv-1')).toEqual({ allowed: true });
-    expect(getProStateForClassroomIdMock).toHaveBeenCalledWith(CLASSROOM_ID);
-  });
-
-  it('denies an unknown conversation as not_found, never as pro_required', async () => {
-    findUniqueConversationMock.mockResolvedValue(null);
-    const { canUseSyllabusBotForConversation } = await import('../entitlement.service.ts');
-
-    expect(await canUseSyllabusBotForConversation('nope')).toEqual({
-      allowed: false,
-      reason: 'not_found',
-    });
-    expect(getProStateForClassroomIdMock).not.toHaveBeenCalled();
-  });
-
-  it('denies when the conversation resolves to a non-Pro classroom', async () => {
-    findUniqueConversationMock.mockResolvedValue({ classroom_id: CLASSROOM_ID });
-    getProStateForClassroomIdMock.mockResolvedValue({ isPro: false });
-    const { canUseSyllabusBotForConversation } = await import('../entitlement.service.ts');
-
-    expect(await canUseSyllabusBotForConversation('conv-1')).toEqual({
-      allowed: false,
-      reason: 'pro_required',
-    });
-  });
-});
-
-// Quizzes run only on the Trigger chat runtime: its keys decide, never the
-// retired AI agent's. Every case sets or clears all four explicitly so a value
-// loaded from a local .env cannot leak in.
+// Quizzes run only on the Trigger chat runtime: its keys decide. Every case
+// sets or clears both explicitly so a value loaded from a local .env cannot
+// leak in.
 const env = { ...process.env };
 const configure = (
   on: boolean,
@@ -167,8 +132,6 @@ const configure = (
 ) => {
   delete process.env.TRIGGER_SECRET_KEY;
   delete process.env.TRIGGER_ACCESS_TOKEN;
-  delete process.env.AI_AGENT_URL;
-  delete process.env.AI_AGENT_SHARED_SECRET;
   if (on) process.env[key] = 'tr_dev_test';
 };
 
@@ -256,25 +219,10 @@ describe.each(['quizzesVisible', 'quizzesVisibleOrThrow'] as const)('%s', name =
     expect(findUniqueSettingsMock).not.toHaveBeenCalled();
   });
 
-  it('is false with only the AI agent configured: the agent no longer runs quizzes', async () => {
-    configure(false);
-    process.env.AI_AGENT_URL = 'http://localhost:6000';
-    process.env.AI_AGENT_SHARED_SECRET = 'test-secret';
-    getProStateForClassroomIdMock.mockResolvedValue({ isPro: true });
-    findUniqueSettingsMock.mockResolvedValue({ quizzes_enabled: true });
-    const visible = await load();
-
-    expect(await visible(CLASSROOM_ID)).toBe(false);
-    expect(getProStateForClassroomIdMock).not.toHaveBeenCalled();
-    expect(findUniqueSettingsMock).not.toHaveBeenCalled();
-  });
-
   it.each(['TRIGGER_SECRET_KEY', 'TRIGGER_ACCESS_TOKEN'] as const)(
-    'answers by Pro and the switch with %s set and the AI agent variables unset',
+    'answers by Pro and the switch with %s set',
     async key => {
       configure(true, key);
-      expect(process.env.AI_AGENT_URL).toBeUndefined();
-      expect(process.env.AI_AGENT_SHARED_SECRET).toBeUndefined();
       getProStateForClassroomIdMock.mockResolvedValue({ isPro: true });
       findUniqueSettingsMock.mockResolvedValue({ quizzes_enabled: true });
       const visible = await load();
@@ -338,8 +286,6 @@ describe('isQuizRuntimeConfigured', () => {
     const { isTriggerConfigured } = await import('../../helper/triggerConfig.ts');
 
     configure(false);
-    process.env.AI_AGENT_URL = 'http://localhost:6000';
-    process.env.AI_AGENT_SHARED_SECRET = 'test-secret';
     expect(isQuizRuntimeConfigured()).toBe(false);
     expect(isTriggerConfigured()).toBe(false);
 

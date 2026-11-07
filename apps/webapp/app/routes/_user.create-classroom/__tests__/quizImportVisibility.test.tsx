@@ -1,7 +1,6 @@
 /**
  * Create-classroom offers quiz import to Pro creators only, and only where the
- * quiz runtime (Trigger) is configured. The retired AI agent's variables play
- * no part.
+ * quiz runtime (Trigger) is configured.
  *
  * The new classroom's only owner is its creator, so its Pro state is theirs:
  * the loader reads the creator's current subscription with the same test the
@@ -111,15 +110,13 @@ describe('create-classroom loader — quiz import follows the creator', () => {
     vi.unstubAllEnvs();
     vi.stubEnv('TRIGGER_SECRET_KEY', 'tr_dev_test');
     vi.stubEnv('TRIGGER_ACCESS_TOKEN', '');
-    vi.stubEnv('AI_AGENT_URL', '');
-    vi.stubEnv('AI_AGENT_SHARED_SECRET', '');
   });
 
   afterEach(() => {
     vi.unstubAllEnvs();
   });
 
-  it('offers it to a creator on an active Pro subscription, with no AI agent variables', async () => {
+  it('offers it to a creator on an active Pro subscription', async () => {
     mocks.getCurrent.mockResolvedValue({ id: 's-1', tier: 'PRO', ends_at: null });
     expect((await load()).quizzesVisible).toBe(true);
     expect(mocks.getCurrent).toHaveBeenCalledWith('user-1');
@@ -127,8 +124,6 @@ describe('create-classroom loader — quiz import follows the creator', () => {
 
   it('withholds it from a Pro creator when the quiz runtime is not configured', async () => {
     vi.stubEnv('TRIGGER_SECRET_KEY', '');
-    vi.stubEnv('AI_AGENT_URL', 'http://localhost:6000');
-    vi.stubEnv('AI_AGENT_SHARED_SECRET', 'test-secret');
     mocks.getCurrent.mockResolvedValue({ id: 's-1', tier: 'PRO', ends_at: null });
     expect((await load()).quizzesVisible).toBe(false);
   });

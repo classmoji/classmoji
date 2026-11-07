@@ -4,7 +4,6 @@ import { join } from 'path';
 export interface DevContext {
   webappUrl: string;
   apiUrl: string;
-  quizAgentUrl: string;
   /**
    * The pages app's origin. The webapp does not serve pages, slides or forms
    * itself — it only LINKS to them — so any spec asserting one of those hrefs
@@ -53,7 +52,6 @@ export function getDevContext(): DevContext {
     // baseURL would silently fail every authenticated spec (cookies never apply).
     const webappMatch = content.match(/Webapp:\s+(https?:\/\/[^\s]+)/);
     const apiMatch = content.match(/API:\s+(http:\/\/localhost:\d+)/);
-    const quizAgentMatch = content.match(/Quiz Agent:\s+(http:\/\/localhost:\d+)/);
     const pagesMatch = content.match(/Pages:\s+(https?:\/\/[^\s]+)/);
     const dbMatch = content.match(/URL:\s+(postgresql:\/\/[^\s]+)/);
     const devportMatch = content.match(/DEVPORT_NAME=(\S+)/);
@@ -61,7 +59,6 @@ export function getDevContext(): DevContext {
     return {
       webappUrl: webappMatch?.[1] || process.env.WEBAPP_URL || 'http://localhost:3000',
       apiUrl: apiMatch?.[1] || process.env.API_URL || 'http://localhost:5000',
-      quizAgentUrl: quizAgentMatch?.[1] || process.env.QUIZ_AGENT_URL || 'http://localhost:6000',
       // .dev-context first: a devport moves the pages app off 7100, and the
       // webapp process was started from that same file's ports.
       pagesUrl: pagesMatch?.[1] || process.env.PAGES_URL || PAGES_URL_DEFAULT,
@@ -74,7 +71,6 @@ export function getDevContext(): DevContext {
   return {
     webappUrl: process.env.WEBAPP_URL || 'http://localhost:3000',
     apiUrl: process.env.API_URL || 'http://localhost:5000',
-    quizAgentUrl: process.env.QUIZ_AGENT_URL || 'http://localhost:6000',
     pagesUrl: process.env.PAGES_URL || PAGES_URL_DEFAULT,
     databaseUrl: process.env.DATABASE_URL || '',
     devportName: process.env.DEVPORT_NAME || 'ci',

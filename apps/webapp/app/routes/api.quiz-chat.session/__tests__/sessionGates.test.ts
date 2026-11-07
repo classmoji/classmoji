@@ -331,9 +331,6 @@ describe('api.quiz-chat.session — refusals', () => {
 
   it('answers 503 after auth when Trigger is not configured, without consulting visibility', async () => {
     setTriggerKey(null);
-    // Only the retired AI agent configured: it no longer runs quizzes.
-    vi.stubEnv('AI_AGENT_URL', 'http://localhost:6000');
-    vi.stubEnv('AI_AGENT_SHARED_SECRET', 'test-secret');
 
     const response = await post({ attemptId: ATTEMPT_ID });
 
@@ -348,11 +345,9 @@ describe('api.quiz-chat.session — refusals', () => {
   });
 
   it.each(['TRIGGER_SECRET_KEY', 'TRIGGER_ACCESS_TOKEN'] as const)(
-    'starts the session with only %s and the AI agent variables unset: only Trigger is needed',
+    'starts the session with only %s: only Trigger is needed',
     async key => {
       setTriggerKey(key);
-      vi.stubEnv('AI_AGENT_URL', '');
-      vi.stubEnv('AI_AGENT_SHARED_SECRET', '');
 
       const response = await post({ attemptId: ATTEMPT_ID });
 
