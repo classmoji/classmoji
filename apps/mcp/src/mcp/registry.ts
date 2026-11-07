@@ -51,7 +51,7 @@ import { DEFAULT_RATE_LIMIT, tryConsume, type RateLimitConfig } from './rateLimi
 import { localizePayload, localizeToolResult, renderZone } from './localTimes.ts';
 import { auditRead, type ReadAudit } from './audit.ts';
 import { withBoundedIssues } from './boundedIssues.ts';
-import { MAX_TOOL_INPUT_ELEMENTS } from './inputLimits.ts';
+import { MAX_TOOL_INPUT_ELEMENTS, type HandlerTracker } from './inputLimits.ts';
 
 export type Scope = 'read' | 'write';
 
@@ -343,7 +343,43 @@ export function hiddenFromClient(name: string, viewer: Pick<Viewer, 'clientId'>)
   return normalized.startsWith(ASK_MOJI_TOOL_PREFIX) || ASK_MOJI_HIDDEN_TOOLS.has(normalized);
 }
 
-function wrapHandler(def: ToolDefinition<never>, viewer: Viewer) {
+/**
+ * What a tool answers, without running, when its request is already gone (the
+ * response has closed, or the SDK aborted the request). No client receives it.
+ */
+const REQUEST_CLOSED_RESULT: ToolResult = {
+  isError: true,
+  content: [
+    {
+      type: 'text',
+      text: JSON.stringify({
+        error: 'cancelled',
+        message: 'The request closed before the tool ran.',
+      }),
+    },
+  ],
+};
+
+function wrapHandler(def: ToolDefinition<never>, viewer: Viewer, tracker?: HandlerTracker) {
+  const run = runHandler(def, viewer);
+  return async (
+    args: Record<string, unknown>,
+    extra?: { signal?: AbortSignal }
+  ): Promise<ToolResult> => {
+    // The SDK aborts a request's signal when its transport closes; the tracker
+    // refuses once the response has closed. Either way the answer could not
+    // be sent, so the tool does not run.
+    if (extra?.signal?.aborted) return REQUEST_CLOSED_RESULT;
+    if (tracker && !tracker.enter()) return REQUEST_CLOSED_RESULT;
+    try {
+      return await run(args);
+    } finally {
+      tracker?.exit();
+    }
+  };
+}
+
+function runHandler(def: ToolDefinition<never>, viewer: Viewer) {
   return async (args: Record<string, unknown>): Promise<ToolResult> => {
     try {
       // 1. Scope and client (defense in depth — registration already filters
@@ -601,7 +637,11 @@ function inputSchemaFor(def: ToolDefinition<never>): ZodRawShape | z.ZodObject<Z
   return schema;
 }
 
-export function buildMcpServer(viewer: Viewer): McpServer {
+/**
+ * One request's server. `tracker` (routes/mcp.ts) counts the tool handlers the
+ * request runs, so its in-flight reservation is held until they return.
+ */
+export function buildMcpServer(viewer: Viewer, tracker?: HandlerTracker): McpServer {
   // MAX_TOOL_INPUT_ELEMENTS is applied first by the route (routes/mcp.ts),
   // which answers over-limit calls before they get here; the SDK's own check
   // stays as a second line for any path that reaches the server directly.
@@ -620,7 +660,7 @@ export function buildMcpServer(viewer: Viewer): McpServer {
         inputSchema: inputSchemaFor(def),
         annotations: { title: def.title, ...toolAnnotations(def) },
       },
-      wrapHandler(def, viewer) as never
+      wrapHandler(def, viewer, tracker) as never
     );
   }
 

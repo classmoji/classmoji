@@ -138,3 +138,49 @@ export class ToolInputBudget {
     return userId === undefined ? this.total : (this.byUser.get(userId) ?? 0);
   }
 }
+
+/**
+ * A request's tool handlers, counted by `wrapHandler` (registry.ts) around
+ * each one it runs. `enter` answers false once the request's response has
+ * closed: the result could not be sent any more, so the handler is not run.
+ */
+export interface HandlerTracker {
+  enter(): boolean;
+  exit(): void;
+}
+
+/**
+ * Holds `release` until the request's response has closed AND every tool
+ * handler the request started has returned, so a reservation lasts as long as
+ * the work it covers, also when the client leaves before that work ends.
+ * `close` goes on the response's 'close' event and `tracker` to
+ * `buildMcpServer`. A call the SDK refuses before its handler starts is
+ * released by `close` alone.
+ */
+export function releaseWhenSettled(release: Release): {
+  tracker: HandlerTracker;
+  close: () => void;
+} {
+  let running = 0;
+  let closed = false;
+  const settle = () => {
+    if (closed && running === 0) release();
+  };
+  return {
+    tracker: {
+      enter: () => {
+        if (closed) return false;
+        running += 1;
+        return true;
+      },
+      exit: () => {
+        running -= 1;
+        settle();
+      },
+    },
+    close: () => {
+      closed = true;
+      settle();
+    },
+  };
+}

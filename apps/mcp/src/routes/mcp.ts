@@ -36,7 +36,12 @@ import {
   UnauthorizedError,
   UnsupportedTokenFormatError,
 } from '../mcp/errors.ts';
-import { jsonValueBound, MAX_BODY_JSON_VALUES, ToolInputBudget } from '../mcp/inputLimits.ts';
+import {
+  jsonValueBound,
+  MAX_BODY_JSON_VALUES,
+  releaseWhenSettled,
+  ToolInputBudget,
+} from '../mcp/inputLimits.ts';
 import { toolCallBucketKey, tryConsume, TOOL_CALL_RATE_LIMIT } from '../mcp/rateLimit.ts';
 import { buildMcpServer } from '../mcp/registry.ts';
 import { gateToolCalls } from './toolCallGate.ts';
@@ -343,9 +348,13 @@ export default async function mcpRoutes(fastify: FastifyInstance, opts: McpRoute
       budget,
     });
     if (!gate.ok) return reply.status(gate.status).send(gate.body);
-    reply.raw.on('close', gate.release);
+    // The reservation is held until the response has closed AND every tool
+    // handler this request started has returned, so a client that leaves
+    // early does not free it while its call still runs.
+    const work = releaseWhenSettled(gate.release);
+    reply.raw.on('close', work.close);
 
-    const server = buildMcpServer(viewer);
+    const server = buildMcpServer(viewer, work.tracker);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined, // stateless
       enableJsonResponse: true, // plain JSON responses (no SSE stream needed per-request)
