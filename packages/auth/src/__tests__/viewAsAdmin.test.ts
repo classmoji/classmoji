@@ -119,6 +119,7 @@ vi.mock('@classmoji/services', () => ({
 }));
 
 const {
+  ACCOUNT_LINK_VIEWING_AS_MESSAGE,
   auth,
   COOKIE_PREFIX,
   VIEW_AS_ADMIN_REFUSED_MESSAGE,
@@ -367,5 +368,70 @@ describe('creating an impersonated session (databaseHooks.session.create.before)
     await createSession('admin-2');
     expect(mocks.state.created).toEqual([expect.objectContaining({ user_id: 'admin-2' })]);
     expect(mocks.client.user.findUnique).not.toHaveBeenCalled();
+  });
+});
+
+describe('linking or unlinking a sign-in account while viewing as someone', () => {
+  /** A session for `userId` that platform admin `admin-1` is viewing as. */
+  function viewingAs(userId: string): string {
+    const token = `viewing-${userId}`;
+    mocks.state.sessions.push({
+      id: `sess-viewing-${userId}`,
+      token,
+      user_id: userId,
+      expires_at: new Date(Date.now() + 3_600_000),
+      created_at: new Date(),
+      updated_at: new Date(),
+      ip_address: null,
+      user_agent: null,
+      impersonatedBy: 'admin-1',
+    });
+    return token;
+  }
+
+  async function post(path: string, token: string, body: unknown) {
+    return auth.handler(
+      new Request(`${BASE}${path}`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          origin: 'http://localhost:3000',
+          cookie: await signedCookie(`${COOKIE_PREFIX}.session_token`, token),
+        },
+        body: JSON.stringify(body),
+      })
+    );
+  }
+
+  const PATHS: Array<[string, Record<string, unknown>]> = [
+    ['/link-social', { provider: 'github', callbackURL: '/settings/connections' }],
+    [
+      '/gitlab-instance/link',
+      { instanceId: 'inst-1', callbackURL: '/settings', errorCallbackURL: '/settings' },
+    ],
+    ['/unlink-account', { providerId: 'github' }],
+  ];
+
+  it.each(PATHS)('refuses %s with a 403', async (path, body) => {
+    const res = await post(path, viewingAs('student-1'), body);
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ message: ACCOUNT_LINK_VIEWING_AS_MESSAGE });
+    expect(mocks.client.account.findMany).not.toHaveBeenCalled();
+    expect(mocks.client.account.create).not.toHaveBeenCalled();
+    expect(mocks.client.account.delete).not.toHaveBeenCalled();
+  });
+
+  it.each(PATHS)('leaves %s to its endpoint for a normal session', async (path, body) => {
+    const res = await post(path, signIn('student-1'), body);
+
+    expect(await res.text()).not.toContain(ACCOUNT_LINK_VIEWING_AS_MESSAGE);
+  });
+
+  it('lets a normal session reach the unlink endpoint itself', async () => {
+    await post('/unlink-account', signIn('student-1'), { providerId: 'github' });
+
+    // The endpoint lists the user's accounts before unlinking one.
+    expect(mocks.client.account.findMany).toHaveBeenCalled();
   });
 });

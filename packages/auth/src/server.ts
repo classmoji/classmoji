@@ -178,6 +178,33 @@ async function refuseViewingAsAnAdmin(ctx: {
   }
 }
 
+/**
+ * Linking a sign-in account (better-auth's /link-social, the gitlabInstances
+ * plugin's /gitlab-instance/link) or unlinking one (/unlink-account).
+ */
+export const ACCOUNT_LINK_PATHS: ReadonlySet<string> = new Set([
+  '/link-social',
+  '/gitlab-instance/link',
+  '/unlink-account',
+]);
+
+export const ACCOUNT_LINK_VIEWING_AS_MESSAGE =
+  "Connecting or removing a sign-in account isn't available while viewing as another user.";
+
+/**
+ * While a platform admin views as another user the session is that user's, so
+ * a sign-in account linked or unlinked now would be added to or removed from
+ * their account. Run from `hooks.before` on ACCOUNT_LINK_PATHS only.
+ */
+async function refuseAccountLinkWhileViewingAs(ctx: {
+  context: { session?: unknown };
+  headers?: Headers;
+}): Promise<void> {
+  if ((await lookupSessionForHook(ctx))?.session?.impersonatedBy) {
+    throw new APIError('FORBIDDEN', { message: ACCOUNT_LINK_VIEWING_AS_MESSAGE });
+  }
+}
+
 // Signed sign-in-return tokens for public course sites. Re-exported from the
 // server entry for callers already importing from here; site code that must not
 // pull in betterAuth/Prisma should import '@classmoji/auth/site-return'.
@@ -747,7 +774,9 @@ export const auth = betterAuth({
    * carries the saved-authorization cookie (`oidc_login_prompt`, set by
    * /mcp/authorize while signed out and short-lived), in which case the rules
    * look the session up once, or it is /admin/impersonate-user, where the
-   * "view as" rule reads the caller's session and the target's role.
+   * "view as" rule reads the caller's session and the target's role, or one of
+   * ACCOUNT_LINK_PATHS, where it reads whether the session is viewing as
+   * someone.
    */
   databaseHooks: {
     session: {
@@ -807,6 +836,9 @@ export const auth = betterAuth({
         // app-connection rules below, which still run for this path when
         // it is allowed.
         if (ctx.path === IMPERSONATE_USER_PATH) await refuseViewingAsAnAdmin(ctx);
+        // No sign-in account is linked or unlinked while viewing as another
+        // user. The session is looked up on these three paths only.
+        if (ACCOUNT_LINK_PATHS.has(ctx.path)) await refuseAccountLinkWhileViewingAs(ctx);
         // Connecting apps: the consent page is always shown, and no app is
         // connected while viewing as another user (./appConnectionGuard.ts).
         // Every other path returns after string comparisons and one anchored
