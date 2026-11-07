@@ -1086,6 +1086,10 @@ export const auth = betterAuth({
    * githubUserToken service), not from these endpoints. Like every entry
    * here, they are off for HTTP only; in-process `auth.api.*` is unchanged.
    *
+   * `/verify-password` is off too: nothing calls it, and better-auth's
+   * `scope: "server"` on it does not keep it off the HTTP router. Off for HTTP
+   * only, like the rest; in-process `auth.api.verifyPassword` still works.
+   *
    * `/sign-in/email-otp` and `/email-otp/check-verification-otp` come with the
    * emailOTP plugin and nothing calls them: an email code verifies an address
    * or resets a password here, and no form checks a code without using it.
@@ -1103,6 +1107,7 @@ export const auth = betterAuth({
     '/list-sessions',
     '/get-access-token',
     '/refresh-token',
+    '/verify-password',
     '/sign-in/email-otp',
     '/email-otp/check-verification-otp',
     ...ADMIN_PATHS_NOT_USED,

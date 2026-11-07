@@ -4,6 +4,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { serializeSignedCookie } from 'better-call';
+import { hashPassword } from 'better-auth/crypto';
 
 process.env.WEBAPP_URL = 'http://localhost:3000';
 process.env.BETTER_AUTH_SECRET = 'test-secret-that-is-at-least-32-chars!!';
@@ -33,6 +35,8 @@ const mocks = vi.hoisted(() => {
   // better-auth looks some models up by their schema name.
   client.Verification = client.verification;
   client.User = client.user;
+  client.Session = client.session;
+  client.Account = client.account;
   const sendAuthOtp = vi.fn(async () => {});
   return { client, sendAuthOtp };
 });
@@ -49,7 +53,9 @@ vi.mock('@classmoji/services', () => ({
   },
 }));
 
-const { auth, ADMIN_PATHS_NOT_USED, UNSUPPORTED_CODE_TYPE_MESSAGE } = await import('../server.ts');
+const { auth, ADMIN_PATHS_NOT_USED, COOKIE_PREFIX, UNSUPPORTED_CODE_TYPE_MESSAGE } = await import(
+  '../server.ts'
+);
 
 const BASE = 'http://localhost:3000/api/auth';
 
@@ -124,6 +130,88 @@ describe('disabled better-auth paths', () => {
   it('still serves /get-session', async () => {
     const res = await auth.handler(new Request(`${BASE}/get-session`));
     expect(res.status).toBe(200);
+  });
+});
+
+describe('/verify-password', () => {
+  const PASSWORD = 'correct-horse-battery-1';
+  const replaced = [
+    [mocks.client.session!, 'findFirst'],
+    [mocks.client.user!, 'findFirst'],
+    [mocks.client.account!, 'findMany'],
+  ] as const;
+  const originals = replaced.map(([model, key]) => model[key]);
+  afterEach(() => {
+    replaced.forEach(([model, key], i) => (model[key] = originals[i]));
+  });
+
+  /** A signed-in password user, as Prisma returns the rows better-auth reads. */
+  async function passwordUser(): Promise<Headers> {
+    const now = new Date();
+    mocks.client.session!.findFirst = vi.fn(() =>
+      Promise.resolve({
+        id: 'sess-1',
+        token: 'token-1',
+        user_id: 'user-1',
+        expires_at: new Date(Date.now() + 86_400_000),
+        created_at: now,
+        updated_at: now,
+        impersonatedBy: null,
+      })
+    );
+    mocks.client.user!.findFirst = vi.fn(() =>
+      Promise.resolve({
+        id: 'user-1',
+        name: 'User',
+        email: 'user@example.edu',
+        emailVerified: true,
+        created_at: now,
+        updated_at: now,
+      })
+    );
+    mocks.client.account!.findMany = vi.fn(async () => [
+      {
+        id: 'acct-1',
+        user_id: 'user-1',
+        account_id: 'user-1',
+        provider_id: 'credential',
+        password: await hashPassword(PASSWORD),
+        created_at: now,
+        updated_at: now,
+      },
+    ]);
+    const cookie = (
+      await serializeSignedCookie(
+        `${COOKIE_PREFIX}.session_token`,
+        'token-1',
+        process.env.BETTER_AUTH_SECRET!
+      )
+    ).split(';')[0]!;
+    return new Headers({ cookie });
+  }
+
+  it('answers POST /verify-password with 404', async () => {
+    const headers = await passwordUser();
+    headers.set('content-type', 'application/json');
+    const res = await auth.handler(
+      new Request(`${BASE}/verify-password`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ password: PASSWORD }),
+      })
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it('still verifies a password in-process (auth.api.verifyPassword)', async () => {
+    const headers = await passwordUser();
+
+    await expect(
+      auth.api.verifyPassword({ body: { password: PASSWORD }, headers })
+    ).resolves.toEqual({ status: true });
+    await expect(
+      auth.api.verifyPassword({ body: { password: 'not-the-password' }, headers })
+    ).rejects.toMatchObject({ statusCode: 400 });
   });
 });
 
