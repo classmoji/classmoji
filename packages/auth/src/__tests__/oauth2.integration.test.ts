@@ -1778,7 +1778,7 @@ describe.skipIf(!DATABASE_URL)(
         where: { action: 'sign_up.unverified_reset', target_id: userId },
       });
 
-    it('signed up first by someone else: that password no longer signs in', async () => {
+    it('a repeated sign-up removes the first password', async () => {
       const email = 'a2-first@example.org';
       expect((await signUp(email, 'first-password-1')).status).toBe(200);
       const user = await userOf(email);
@@ -1929,6 +1929,69 @@ describe.skipIf(!DATABASE_URL)(
       expect((await userOf('a2-github@example.org')).image).toBe(
         'https://avatars.example.org/g.png'
       );
+      expect(await resetRows(user.id)).toEqual([]);
+    });
+
+    it('three repeated sign-ups at once remove the password once, with one audit row', async () => {
+      const email = 'a2-race@example.org';
+      expect((await signUp(email, 'first-password-1')).status).toBe(200);
+      const user = await userOf(email);
+
+      const answers = await Promise.all([1, 2, 3].map(i => signUp(email, `race-password-${i}x`)));
+
+      expect(answers.map(a => a.status)).toEqual([200, 200, 200]);
+      expect(await passwordsOf(user.id)).toBe(0);
+      expect((await resetRows(user.id)).map(r => r.data)).toEqual([
+        expect.objectContaining({ passwordsRemoved: 1 }),
+      ]);
+    });
+
+    it('a repeated sign-up racing the verification never ends the sign-in the verification made', async () => {
+      // Sent together, the verification a few milliseconds later each round:
+      // either the reset runs first (the designed case: the password goes,
+      // then the verification signs the owner in), or the verification does
+      // and the reset finds a verified account and changes nothing. Either
+      // way the account ends verified and signed in.
+      for (const delay of [0, 4, 8, 12, 16, 20, 24, 28]) {
+        const email = `a2-verify-race-${delay}@example.org`;
+        expect((await signUp(email, 'owner-password-1')).status).toBe(200);
+        const code = await codeFor(email, 'email-verification');
+        const user = await userOf(email);
+
+        const [, verified] = await Promise.all([
+          signUp(email, 'other-password-1'),
+          new Promise(resolve => setTimeout(resolve, delay)).then(() =>
+            post('/email-otp/verify-email', { email, otp: code })
+          ),
+        ]);
+
+        expect(verified.status, `delay ${delay}`).toBe(200);
+        expect((await userOf(email)).emailVerified, `delay ${delay}`).toBe(true);
+        expect(await db.session.count({ where: { user_id: user.id } }), `delay ${delay}`).toBe(1);
+        for (const row of await resetRows(user.id)) {
+          expect((row.data as { sessionsEnded: number }).sessionsEnded, `delay ${delay}`).toBe(0);
+        }
+      }
+    });
+
+    it('a failed audit write still leaves the reset in place, and the sign-up answers as usual', async () => {
+      const email = 'a2-audit-fails@example.org';
+      expect((await signUp(email, 'first-password-1', { school_id: 'F00009' })).status).toBe(200);
+      const user = await userOf(email);
+      await db.$executeRawUnsafe(`
+        CREATE OR REPLACE FUNCTION it_refuse_reset_row() RETURNS trigger AS $$
+        BEGIN RAISE EXCEPTION 'audit write refused'; END $$ LANGUAGE plpgsql`);
+      await db.$executeRawUnsafe(`
+        CREATE TRIGGER it_refuse_reset_row BEFORE INSERT ON platform_audit_logs
+        FOR EACH ROW WHEN (NEW.action = 'sign_up.unverified_reset')
+        EXECUTE FUNCTION it_refuse_reset_row()`);
+      try {
+        expect((await signUp(email, 'second-password-1')).status).toBe(200);
+      } finally {
+        await db.$executeRawUnsafe('DROP TRIGGER it_refuse_reset_row ON platform_audit_logs');
+      }
+      expect(await passwordsOf(user.id)).toBe(0);
+      expect((await userOf(email)).school_id).toBeNull();
       expect(await resetRows(user.id)).toEqual([]);
     });
 

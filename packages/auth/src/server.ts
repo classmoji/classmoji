@@ -890,37 +890,64 @@ export async function revokeOAuthGrants(
  * nothing from it, and calls this (`emailAndPassword.onExistingUserSignUp`,
  * better-auth 1.7.18 api/routes/sign-up.mjs:192-203).
  *
- * When that account's address is not verified yet and it has a password, the
- * password, the profile picture and the School ID came with an earlier
- * sign-up that nobody has confirmed. Whoever verifies the address would be
- * signed into the account (`autoSignInAfterVerification`) and keep them. So
- * the password is removed, the account's sessions end, and the picture and
- * School ID are cleared; whoever verifies the address then sets a password
- * with Forgot password (the sign-up page's code screen points there). An
- * account with no password (a Github or Gitlab user still in registration) or
- * a verified one is left as it is.
+ * When that account's address is not verified yet and it has a password,
+ * that password, the profile picture and the School ID came from a sign-up
+ * nobody has confirmed, so they are removed and the account's sessions end;
+ * whoever verifies the address then sets a password with Forgot password (the
+ * sign-up page's code screen points there). An account with no password (a
+ * Github or Gitlab user still in registration) or a verified one is left as
+ * it is.
  *
- * Through better-auth's internal adapter, so the session delete hook records
- * the end of a "View as" session among them (viewAsEndedBy: 'system'). One
- * PlatformAuditLog row (`sign_up.unverified_reset`), with counts only.
- * Failures propagate: the sign-up then answers with an error rather than
- * leaving the password in place unnoticed.
+ * The account is read again when it is changed, not taken from better-auth's
+ * read at the start of the sign-up: one transaction clears the picture and
+ * School ID only while the account is still unverified and has a password
+ * (which locks the user row, so a verification arriving meanwhile waits for
+ * it), removes the passwords, and lists the account's sessions. Those
+ * sessions then end through better-auth's internal adapter, so the session
+ * delete hook records the end of a "View as" session among them
+ * (viewAsEndedBy: 'system'); a session created after the transaction (the
+ * verification's own sign-in) is not among them. Last, one PlatformAuditLog
+ * row (`sign_up.unverified_reset`) with the counts of what was removed and
+ * ended; none when another sign-up for the same address removed the
+ * passwords first.
+ *
+ * better-auth runs this hook inside a try/catch (`runInBackgroundOrAwait`)
+ * and only logs a failure: the sign-up answers as usual either way. A failure
+ * in the transaction changes nothing; one after it leaves what was already
+ * done in place (the audit row comes last, outside the transaction, so a
+ * failed audit write never puts the password back).
  */
 async function resetUnverifiedPasswordAccount(user: {
   id: string;
   emailVerified?: boolean | null;
 }): Promise<void> {
   if (user.emailVerified) return;
-  const { internalAdapter } = await auth.$context;
-  const passwords = (await internalAdapter.findAccounts(user.id)).filter(
-    account => account.providerId === 'credential'
-  );
-  if (passwords.length === 0) return;
-  for (const account of passwords) await internalAdapter.deleteAccount(account.id);
-  const sessions = await getPrisma().session.count({ where: { user_id: user.id } });
-  await internalAdapter.deleteUserSessions(user.id);
-  await internalAdapter.updateUser(user.id, { image: null, school_id: null });
-  await getPrisma().platformAuditLog.create({
+  const prisma = getPrisma();
+  const { passwordsRemoved, sessionTokens } = await prisma.$transaction(async tx => {
+    const cleared = await tx.user.updateMany({
+      where: {
+        id: user.id,
+        emailVerified: false,
+        accounts: { some: { provider_id: 'credential' } },
+      },
+      data: { image: null, school_id: null },
+    });
+    if (cleared.count === 0) return { passwordsRemoved: 0, sessionTokens: [] };
+    const { count } = await tx.account.deleteMany({
+      where: { user_id: user.id, provider_id: 'credential' },
+    });
+    if (count === 0) return { passwordsRemoved: 0, sessionTokens: [] };
+    const sessions = await tx.session.findMany({
+      where: { user_id: user.id },
+      select: { token: true },
+    });
+    return { passwordsRemoved: count, sessionTokens: sessions.map(session => session.token) };
+  });
+  if (passwordsRemoved === 0) return;
+  if (sessionTokens.length > 0) {
+    await (await auth.$context).internalAdapter.deleteSessions(sessionTokens);
+  }
+  await prisma.platformAuditLog.create({
     data: {
       actor_id: null,
       action: 'sign_up.unverified_reset',
@@ -929,8 +956,8 @@ async function resetUnverifiedPasswordAccount(user: {
       data: {
         tool: 'auth:sign_up.unverified_reset',
         path: SIGN_UP_EMAIL_PATH,
-        passwordsRemoved: passwords.length,
-        sessionsEnded: sessions,
+        passwordsRemoved,
+        sessionsEnded: sessionTokens.length,
         cleared: ['image', 'school_id'],
       },
     },
