@@ -19,7 +19,7 @@ import {
   pushLfsObjects,
   usesLfs,
 } from './templatePush.ts';
-import { readNewRepo } from './gitRetry.ts';
+import { githubRateLimit, readNewRepo } from './gitRetry.ts';
 
 // Public fallback template used when an instructor's configured template repo has
 // no commits. An empty repo can't seed a student/team repo (the clone lands on an
@@ -70,6 +70,16 @@ export interface CreateRepositoryPayload {
  */
 export const isHalfInitialised = (heads: Map<string, string>): boolean =>
   heads.size === 2 && heads.has('main') && heads.has('feedback');
+
+/**
+ * A repository with exactly the three branches set-up leaves: `main`,
+ * `feedback` and `updates`. Either set-up finished, or a previous run stopped
+ * after pushing `updates` but before protecting it (Github throttling the
+ * protect call, say). Its branch protection and Feedback pull request are
+ * made sure of (`finishSetupSteps`), never its branches rewritten.
+ */
+export const hasAllSetupBranches = (heads: Map<string, string>): boolean =>
+  heads.size === 3 && heads.has('main') && heads.has('feedback') && heads.has('updates');
 
 interface SetupTarget {
   gitProvider: ReturnType<typeof getGitProvider>;
@@ -134,6 +144,10 @@ const openFeedbackPullRequest = async (
       feedbackMessage(terms)
     );
   } catch (error: unknown) {
+    // Throttling is not a refusal: fail the attempt so it is retried later
+    // (retryOnGitBlip) and the resumed run opens the pull request, instead of
+    // the student silently getting a repository without one.
+    if (githubRateLimit(error)) throw error;
     logger.warn(`Could not open the Feedback pull request on ${gitOrgLogin}/${repoName}`, {
       error: error instanceof Error ? error.message : String(error),
     });
@@ -141,25 +155,46 @@ const openFeedbackPullRequest = async (
 };
 
 /**
+ * The API-only steps after `updates` exists: protect `updates` (paid Github
+ * plans, every Gitlab) and let Gitlab Developers push to `main`. Both are safe
+ * to repeat, so a resumed run simply does them again.
+ */
+const protectSetupBranches = async ({
+  gitProvider,
+  gitOrgLogin,
+  repoName,
+  organizationGithubPlan,
+  provider,
+}: SetupTarget): Promise<void> => {
+  if (provider === 'GITLAB' || organizationGithubPlan !== 'free') {
+    await gitProvider.protectBranch(gitOrgLogin, repoName, 'updates');
+  }
+  if (provider === 'GITLAB') {
+    await (gitProvider as GitLabProvider).allowDeveloperPushes(gitOrgLogin, repoName, 'main');
+  }
+};
+
+/**
+ * Make sure a repository that has all its set-up branches also has the rest:
+ * the Feedback pull request (only if none exists) and branch protection. No
+ * clone and no push, so student work is never touched.
+ */
+const finishSetupSteps = async (target: SetupTarget): Promise<void> => {
+  await openFeedbackPullRequest(target, { unlessOneExists: true });
+  await protectSetupBranches(target);
+};
+
+/**
  * Branch `updates` off the checked-out `main` and protect it: on paid plans on
  * Github, on every plan on Gitlab. Gitlab also protects `main` for Maintainers
  * only, and students are Developers, so they are let push to it.
  */
-const pushUpdatesBranch = async (
-  repoGit: SimpleGit,
-  { gitProvider, gitOrgLogin, repoName, organizationGithubPlan, provider, setupPush }: SetupTarget
-): Promise<void> => {
+const pushUpdatesBranch = async (repoGit: SimpleGit, target: SetupTarget): Promise<void> => {
   await repoGit.checkoutLocalBranch('updates');
-  await repoGit.push('origin', 'updates', ['--set-upstream', ...setupPush]);
-
-  if (provider === 'GITLAB' || organizationGithubPlan !== 'free') {
-    await gitProvider.protectBranch(gitOrgLogin, repoName, 'updates');
-  }
-
-  if (provider === 'GITLAB') {
-    await (gitProvider as GitLabProvider).allowDeveloperPushes(gitOrgLogin, repoName, 'main');
-  }
-
+  await repoGit.push('origin', 'updates', ['--set-upstream', ...target.setupPush]);
+  // If this throws (throttled), the retry finds all three branches and
+  // `finishSetupSteps` protects them, instead of skipping the repository.
+  await protectSetupBranches(target);
   await repoGit.checkout('main');
 };
 
@@ -306,6 +341,11 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
     const heads = parseRemoteHeads(remoteHeads);
     if (isHalfInitialised(heads)) {
       await finishHalfInitialisedRepo(setupTarget, { studentRepoUrl, localPath, heads });
+      return repoId;
+    }
+    if (hasAllSetupBranches(heads)) {
+      logger.info(`${gitOrgLogin}/${repoName} has all its branches; making sure set-up finished`);
+      await finishSetupSteps(setupTarget);
       return repoId;
     }
     const resumableMain = heads.size === 1 ? (heads.get('main') ?? null) : null;

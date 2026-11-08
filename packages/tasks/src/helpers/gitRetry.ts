@@ -12,6 +12,8 @@
  * github.com, a push dropped halfway, Github answering 5xx, and Octokit errors
  * that carry no status at all. A missing template, a permission Github refuses
  * or a deleted assignment is not a blip and still fails at its first attempt.
+ * Github throttling (a 429, or a 403 naming a rate limit) is retried too, at
+ * the time Github asks for: see `githubRateLimit`.
  */
 import { isTransientDatabaseError } from './databaseRetry.ts';
 import { isRepoNotFound } from './gitErrors.ts';
@@ -93,16 +95,110 @@ export const GIT_BLIP_RETRY = {
   randomize: true,
 };
 
+/** Github's words for being throttled: secondary limits, primary exhaustion, abuse detection. */
+const RATE_LIMIT_MESSAGE = /secondary rate limit|rate limit exceeded|abuse detection/i;
+
+type HeaderBag = Record<string, unknown> | undefined;
+
+function headerOf(headers: HeaderBag, name: string): string | undefined {
+  const value = headers?.[name];
+  return value === undefined || value === null ? undefined : String(value);
+}
+
+export interface GithubRateLimit {
+  /** How long Github asked us to wait, in ms, or null when it did not say. */
+  waitMs: number | null;
+}
+
+/**
+ * Is this Github throttling us? A 429, or a 403 that names a rate limit, carries
+ * `retry-after`, or reports `x-ratelimit-remaining: 0` (Github answers
+ * secondary limits with either status). An ordinary permission 403 is NOT a
+ * rate limit and still fails at once. Follows `cause` like isTransientGitError.
+ */
+export function githubRateLimit(
+  error: unknown,
+  now = Date.now(),
+  depth = 0
+): GithubRateLimit | null {
+  if (!error || typeof error !== 'object' || depth > 3) return null;
+  const e = error as {
+    status?: unknown;
+    message?: unknown;
+    cause?: unknown;
+    response?: { headers?: HeaderBag; data?: { message?: unknown } };
+  };
+  // Octokit lower-cases response header names.
+  const headers = e.response?.headers;
+  const message = [e.message, e.response?.data?.message]
+    .filter((m): m is string => typeof m === 'string')
+    .join(' ');
+  const retryAfter = headerOf(headers, 'retry-after');
+  const remaining = headerOf(headers, 'x-ratelimit-remaining');
+  const reset = headerOf(headers, 'x-ratelimit-reset');
+
+  const throttled =
+    e.status === 429 ||
+    (e.status === 403 &&
+      (RATE_LIMIT_MESSAGE.test(message) || retryAfter !== undefined || remaining === '0'));
+  if (!throttled) return githubRateLimit(e.cause, now, depth + 1);
+
+  // `retry-after` is seconds; `x-ratelimit-reset` is UTC epoch seconds.
+  const afterSeconds = retryAfter !== undefined ? Number(retryAfter) : NaN;
+  if (Number.isFinite(afterSeconds) && afterSeconds >= 0) return { waitMs: afterSeconds * 1000 };
+  const resetSeconds = remaining === '0' && reset !== undefined ? Number(reset) : NaN;
+  if (Number.isFinite(resetSeconds)) return { waitMs: Math.max(0, resetSeconds * 1000 - now) };
+  return { waitMs: null };
+}
+
+/** Github says to wait at least a minute when a secondary limit gives no `retry-after`. */
+export const RATE_LIMIT_MIN_WAIT_MS = 60_000;
+/** Backoff ceiling when Github gave no wait of its own; its own wait is never shortened. */
+export const RATE_LIMIT_MAX_BACKOFF_MS = 15 * 60_000;
+/** Spread so the runs one limit stopped together do not all come back in the same second. */
+export const RATE_LIMIT_JITTER_MS = 30_000;
+
+/**
+ * When to retry a throttled attempt: Github's own wait if it gave one, never
+ * under a backoff that starts at 1 minute and doubles each attempt (1, 2, 4,
+ * 8 min, capped at 15), plus up to 30s of jitter. Scheduled by Trigger.dev, not
+ * slept in the run, so the attempt gives back its queue slot while it waits.
+ */
+export function rateLimitRetryAt(
+  limit: GithubRateLimit,
+  attempt: number,
+  now = Date.now(),
+  random: () => number = Math.random
+): Date {
+  const backoff = Math.min(
+    RATE_LIMIT_MIN_WAIT_MS * 2 ** Math.max(0, attempt - 1),
+    RATE_LIMIT_MAX_BACKOFF_MS
+  );
+  const wait = Math.max(limit.waitMs ?? 0, backoff);
+  return new Date(now + wait + Math.floor(random() * RATE_LIMIT_JITTER_MS));
+}
+
 /**
  * Spread into a task config: `task({ id, ...retryOnGitBlip, run })`. A database
- * blip is let through too, since these tasks also write their rows.
+ * blip is let through too, since these tasks also write their rows. Github
+ * throttling is retried at the time it asks for (`rateLimitRetryAt`) instead of
+ * on the outage schedule; the attempt limit (5) still applies.
  */
 export const retryOnGitBlip = {
   retry: GIT_BLIP_RETRY,
-  catchError: async ({ error }: { error: unknown }) =>
-    isTransientGitError(error) || isTransientDatabaseError(error)
+  catchError: async ({
+    error,
+    ctx,
+  }: {
+    error: unknown;
+    ctx?: { attempt?: { number?: number } };
+  }) => {
+    const limit = githubRateLimit(error);
+    if (limit) return { retryAt: rateLimitRetryAt(limit, ctx?.attempt?.number ?? 1) };
+    return isTransientGitError(error) || isTransientDatabaseError(error)
       ? undefined
-      : { skipRetrying: true },
+      : { skipRetrying: true };
+  },
 };
 
 /** Waits between reads of a repository Github has only just created: about 30s in all. */

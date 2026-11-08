@@ -321,7 +321,7 @@ describe('createRepository', () => {
     expect(provider.getAccessToken).toHaveBeenCalledTimes(1);
   });
 
-  it('leaves a fully set-up repository alone', async () => {
+  it('leaves a fully set-up repository branches alone, only making sure of protection', async () => {
     const { dir, git } = await makeTemplate('done', [1000]);
     await publish(dir, 'instructor', 'done');
     const target = await emptyStudentRepo('done-ed');
@@ -329,12 +329,69 @@ describe('createRepository', () => {
       await git.push(target, `+master:refs/heads/${branch}`);
     }
     const before = await remoteHeads(target);
+    provider.listPulls.mockResolvedValue({ data: [{ number: 7 }] });
 
     await create('done-ed', 'done');
 
     expect(await remoteHeads(target)).toEqual(before);
     expect(provider.createPullRequest).not.toHaveBeenCalled();
-    expect(provider.listPulls).not.toHaveBeenCalled();
+    expect(provider.protectBranch).toHaveBeenCalledWith(ORG, 'done-ed', 'updates');
+  });
+
+  /**
+   * A run that pushed `updates` and was then throttled on the protect call
+   * used to leave a repository the retry skipped as "already has branches":
+   * `updates` was never protected.
+   */
+  it('finishes protection on retry after the protect call was throttled', async () => {
+    const { dir } = await makeTemplate('throttled', [1000]);
+    await publish(dir, 'instructor', 'throttled');
+    const target = await emptyStudentRepo('throttled-fe');
+    const secondaryLimit = Object.assign(
+      new Error('You have exceeded a secondary rate limit. Please wait a few minutes.'),
+      { name: 'HttpError', status: 403 }
+    );
+    provider.protectBranch.mockRejectedValueOnce(secondaryLimit);
+
+    await expect(create('throttled-fe', 'throttled')).rejects.toBe(secondaryLimit);
+    const afterFirst = await remoteHeads(target);
+    expect([...afterFirst.keys()].sort()).toEqual(['feedback', 'main', 'updates']);
+
+    provider.listPulls.mockResolvedValue({ data: [{ number: 1 }] });
+    provider.createPullRequest.mockClear();
+    await expect(create('throttled-fe', 'throttled')).resolves.toBe('42');
+
+    expect(await remoteHeads(target)).toEqual(afterFirst);
+    expect(provider.protectBranch).toHaveBeenCalledTimes(2);
+    expect(provider.createPullRequest).not.toHaveBeenCalled();
+  });
+
+  it('fails the attempt when the Feedback pull request is throttled, instead of skipping it', async () => {
+    const { dir } = await makeTemplate('prlimit', [1000]);
+    await publish(dir, 'instructor', 'prlimit');
+    await emptyStudentRepo('prlimit-gu');
+    const tooMany = Object.assign(new Error('API rate limit exceeded'), {
+      name: 'HttpError',
+      status: 429,
+    });
+    provider.createPullRequest.mockRejectedValueOnce(tooMany);
+
+    await expect(create('prlimit-gu', 'prlimit')).rejects.toBe(tooMany);
+  });
+
+  it('still gives the student the repository when the Feedback pull request is refused', async () => {
+    const { dir } = await makeTemplate('prrefused', [1000]);
+    await publish(dir, 'instructor', 'prrefused');
+    await emptyStudentRepo('prrefused-ha');
+    provider.createPullRequest.mockRejectedValueOnce(
+      Object.assign(new Error('Validation Failed: No commits between feedback and main'), {
+        name: 'HttpError',
+        status: 422,
+      })
+    );
+
+    await expect(create('prrefused-ha', 'prrefused')).resolves.toBe('42');
+    expect(provider.protectBranch).toHaveBeenCalledWith(ORG, 'prrefused-ha', 'updates');
   });
 
   it('leaves a repository with branches it did not make alone', async () => {
