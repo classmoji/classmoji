@@ -253,6 +253,12 @@ describe('an internal token', () => {
       expect(await failureOf(bearer(TOKEN))).toBeInstanceOf(UnauthorizedError);
     });
 
+    it('refuses a token bound to a session that is not a View as session', async () => {
+      tokenRow(bound({ impersonated_by: null }));
+      sessionRow(liveSession({ impersonatedBy: null }));
+      expect(await failureOf(bearer(TOKEN))).toBeInstanceOf(UnauthorizedError);
+    });
+
     it('answers 503 when the session read fails because the store is unavailable', async () => {
       tokenRow(bound());
       sessionRow(() => {
