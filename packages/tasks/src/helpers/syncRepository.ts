@@ -37,6 +37,7 @@
 import { nanoid } from 'nanoid';
 import { ClassmojiService } from '@classmoji/services';
 import { releasedToRepos } from '@classmoji/utils';
+import { publishAssignment } from './publishAssignment.ts';
 import { createRepositoriesTask } from '../workflows/gitRepo.ts';
 import {
   createGithubRepositoryAssignmentTask,
@@ -215,11 +216,7 @@ export const syncRepository = async ({
     // An assignment out on student repos is published (a draft whose release
     // date has passed is released by this).
     try {
-      await Promise.all(
-        releasedAssignments.map(assignment =>
-          ClassmojiService.assignment.update(assignment.id, { is_published: true })
-        )
-      );
+      await Promise.all(releasedAssignments.map(assignment => publishAssignment(assignment.id)));
     } catch (error) {
       throw partly(error);
     }

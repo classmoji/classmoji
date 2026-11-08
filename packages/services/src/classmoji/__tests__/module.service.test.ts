@@ -514,48 +514,64 @@ describe('addItem', () => {
 });
 
 describe('reorderItems', () => {
+  const txItemFindMany = vi.fn();
+  const txItemUpdate = vi.fn();
+  const tx = {
+    $queryRaw: queryRaw,
+    moduleItem: { findMany: txItemFindMany, update: txItemUpdate },
+  };
+  beforeEach(() => {
+    transaction.mockImplementation(async (run: (client: typeof tx) => unknown) => run(tx));
+  });
+
   it('sets each item position to its index, scoped to the module', async () => {
-    itemFindMany.mockResolvedValue([{ id: 'a' }, { id: 'b' }, { id: 'c' }]);
-    transaction.mockResolvedValue([]);
+    txItemFindMany.mockResolvedValue([{ id: 'a' }, { id: 'b' }, { id: 'c' }]);
     await reorderItems('mod1', ['b', 'a', 'c']);
 
-    expect(itemFindMany).toHaveBeenCalledWith({
+    expect(txItemFindMany).toHaveBeenCalledWith({
       // Legacy REPOSITORY and QUIZ items are not in the content list and keep
       // their positions; only content items take part in the exact-set check.
       where: { module_id: 'mod1', item_type: { notIn: ['REPOSITORY', 'QUIZ'] } },
       select: { id: true },
     });
-    expect(itemUpdate).toHaveBeenNthCalledWith(1, {
-      where: { id: 'b', module_id: 'mod1' },
-      data: { position: 0 },
-    });
-    expect(itemUpdate).toHaveBeenNthCalledWith(2, {
-      where: { id: 'a', module_id: 'mod1' },
-      data: { position: 1 },
-    });
-    expect(itemUpdate).toHaveBeenNthCalledWith(3, {
-      where: { id: 'c', module_id: 'mod1' },
-      data: { position: 2 },
-    });
+    expect(txItemUpdate.mock.calls.map(call => call[0])).toEqual([
+      { where: { id: 'b', module_id: 'mod1' }, data: { position: 0 } },
+      { where: { id: 'a', module_id: 'mod1' }, data: { position: 1 } },
+      { where: { id: 'c', module_id: 'mod1' }, data: { position: 2 } },
+    ]);
     expect(transaction).toHaveBeenCalledOnce();
   });
 
-  it('rejects incomplete item order payloads', async () => {
-    itemFindMany.mockResolvedValue([{ id: 'a' }, { id: 'b' }]);
+  // #567: a move into the module locks its row; without the same lock a
+  // reorder read the item set, the move landed, and the reorder's writes left
+  // two items on one position.
+  it('locks the module row before reading the items it checks', async () => {
+    txItemFindMany.mockResolvedValue([{ id: 'a' }, { id: 'b' }]);
+    await reorderItems('mod1', ['b', 'a']);
+
+    expect(queryRaw).toHaveBeenCalledOnce();
+    expect(queryRaw.mock.calls[0][1]).toBe('mod1');
+    expect(queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      txItemFindMany.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('rejects incomplete item order payloads, writing nothing', async () => {
+    txItemFindMany.mockResolvedValue([{ id: 'a' }, { id: 'b' }]);
 
     await expect(reorderItems('mod1', ['b'])).rejects.toThrow(
       'Ordered item ids must match module items'
     );
-    expect(transaction).not.toHaveBeenCalled();
+    expect(txItemUpdate).not.toHaveBeenCalled();
   });
 
-  it('rejects duplicate item ids in order payloads', async () => {
-    itemFindMany.mockResolvedValue([{ id: 'a' }, { id: 'b' }]);
+  it('rejects duplicate item ids in order payloads, writing nothing', async () => {
+    txItemFindMany.mockResolvedValue([{ id: 'a' }, { id: 'b' }]);
 
     await expect(reorderItems('mod1', ['a', 'a'])).rejects.toThrow(
       'Ordered item ids must match module items'
     );
-    expect(transaction).not.toHaveBeenCalled();
+    expect(txItemUpdate).not.toHaveBeenCalled();
   });
 });
 
@@ -693,11 +709,11 @@ describe('moveItemToModule', () => {
     // Both modules are in the classroom.
     moduleFindFirst.mockResolvedValue({ id: 'scoped' });
     itemUpdate.mockResolvedValue({});
-    // The reorder hands over a batch of writes; the compaction an interactive
-    // transaction that runs against the client it is given.
+    // The reorder and the compaction are interactive transactions that run
+    // against the client they are given (the reorder locks the module row).
     transaction.mockImplementation(async (work: unknown) =>
       typeof work === 'function'
-        ? work({ moduleItem: { findMany: itemFindMany, update: itemUpdate } })
+        ? work({ $queryRaw: queryRaw, moduleItem: { findMany: itemFindMany, update: itemUpdate } })
         : Promise.all(work as unknown[])
     );
   });

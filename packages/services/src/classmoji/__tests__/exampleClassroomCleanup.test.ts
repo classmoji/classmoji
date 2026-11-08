@@ -1,13 +1,15 @@
 /**
- * Unit tests for deleteAbandonedExampleClassrooms. Prisma is mocked; the test
- * pins the age cutoff, the two "used" signals that keep a sandbox (a completed
- * tour, any audit row), and that the delete is scoped to is_example rows.
+ * Unit tests for deleteAbandonedExampleClassrooms: every example classroom
+ * older than the cutoff goes, used or not; one with media is purged from R2
+ * first, and kept for the next run if that purge fails. Prisma and the media
+ * store are mocked.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const classroomFindMany = vi.fn();
 const classroomDeleteMany = vi.fn();
+const purgeClassroomMedia = vi.fn();
 
 vi.mock('@classmoji/database', () => ({
   default: () => ({
@@ -18,75 +20,80 @@ vi.mock('@classmoji/database', () => ({
   }),
 }));
 
+vi.mock('../../media/index.ts', () => ({
+  purgeClassroomMedia: (...a: unknown[]) => purgeClassroomMedia(...a),
+}));
+
 const { deleteAbandonedExampleClassrooms } = await import('../exampleClassroom.service.ts');
 
 const DAY = 24 * 60 * 60 * 1000;
 const now = new Date('2026-09-16T12:00:00Z');
+const sandbox = (id: string, media = 0) => ({ id, _count: { media_objects: media } });
 
 beforeEach(() => {
-  classroomFindMany.mockReset();
-  classroomDeleteMany.mockReset();
-  classroomDeleteMany.mockResolvedValue({ count: 0 });
+  vi.clearAllMocks();
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+  classroomDeleteMany.mockImplementation(async ({ where }: { where: { id: unknown } }) => ({
+    count: typeof where.id === 'string' ? 1 : (where.id as { in: string[] }).in.length,
+  }));
+  purgeClassroomMedia.mockResolvedValue(undefined);
 });
 
 describe('deleteAbandonedExampleClassrooms', () => {
-  it('only considers example classrooms older than the cutoff', async () => {
+  it('only considers example classrooms older than the cutoff (3 days by default)', async () => {
     classroomFindMany.mockResolvedValue([]);
-    await deleteAbandonedExampleClassrooms({ olderThanDays: 30, now });
+    await deleteAbandonedExampleClassrooms({ now });
     const where = classroomFindMany.mock.calls[0][0].where;
     expect(where.is_example).toBe(true);
-    expect(where.created_at.lt).toEqual(new Date(now.getTime() - 30 * DAY));
+    expect(where.created_at.lt).toEqual(new Date(now.getTime() - 3 * DAY));
   });
 
-  it('deletes the untouched ones and keeps any with a finished tour or an audit row', async () => {
-    classroomFindMany.mockResolvedValue([
-      { id: 'untouched', memberships: [{ tour_completed_at: null }], _count: { audit_logs: 0 } },
-      { id: 'toured', memberships: [{ tour_completed_at: now }], _count: { audit_logs: 0 } },
-      { id: 'edited', memberships: [{ tour_completed_at: null }], _count: { audit_logs: 3 } },
-      { id: 'ownerless', memberships: [], _count: { audit_logs: 0 } },
-    ]);
+  it('deletes every one of them, however much it was used', async () => {
+    classroomFindMany.mockResolvedValue([sandbox('a'), sandbox('b'), sandbox('c')]);
 
     const report = await deleteAbandonedExampleClassrooms({ now });
 
-    expect(report).toEqual({ candidates: 4, deleted: 2, kept: 2 });
+    expect(report).toEqual({ candidates: 3, deleted: 3, kept: 0 });
     expect(classroomDeleteMany).toHaveBeenCalledWith({
-      where: { id: { in: ['untouched', 'ownerless'] }, is_example: true },
+      where: { id: { in: ['a', 'b', 'c'] }, is_example: true },
+    });
+    expect(purgeClassroomMedia).not.toHaveBeenCalled();
+  });
+
+  it("purges a sandbox's media from R2 before deleting it", async () => {
+    classroomFindMany.mockResolvedValue([sandbox('with-media', 2)]);
+
+    const report = await deleteAbandonedExampleClassrooms({ now });
+
+    expect(report).toEqual({ candidates: 1, deleted: 1, kept: 0 });
+    expect(purgeClassroomMedia).toHaveBeenCalledWith('with-media');
+    expect(purgeClassroomMedia.mock.invocationCallOrder[0]).toBeLessThan(
+      classroomDeleteMany.mock.invocationCallOrder[0]
+    );
+    expect(classroomDeleteMany).toHaveBeenCalledWith({
+      where: { id: 'with-media', is_example: true },
     });
   });
 
-  it('keeps a sandbox that holds any media, which this sweep does not purge', async () => {
-    classroomFindMany.mockResolvedValue([
-      {
-        id: 'with-media',
-        memberships: [{ tour_completed_at: null }],
-        _count: { audit_logs: 0, media_objects: 1 },
-      },
-      {
-        id: 'untouched',
-        memberships: [{ tour_completed_at: null }],
-        _count: { audit_logs: 0, media_objects: 0 },
-      },
-    ]);
+  it('keeps one whose media purge fails, for the next run, and deletes the rest', async () => {
+    classroomFindMany.mockResolvedValue([sandbox('plain'), sandbox('stuck', 1)]);
+    purgeClassroomMedia.mockRejectedValueOnce(new Error('R2 down'));
 
     const report = await deleteAbandonedExampleClassrooms({ now });
 
     expect(report).toEqual({ candidates: 2, deleted: 1, kept: 1 });
+    expect(classroomDeleteMany).toHaveBeenCalledTimes(1);
     expect(classroomDeleteMany).toHaveBeenCalledWith({
-      where: { id: { in: ['untouched'] }, is_example: true },
-    });
-    expect(classroomFindMany.mock.calls[0][0].select._count.select).toMatchObject({
-      media_objects: true,
+      where: { id: { in: ['plain'] }, is_example: true },
     });
   });
 
-  it('does not issue a delete when nothing qualifies', async () => {
-    classroomFindMany.mockResolvedValue([
-      { id: 'toured', memberships: [{ tour_completed_at: now }], _count: { audit_logs: 0 } },
-    ]);
+  it('deletes nothing when there is nothing old enough', async () => {
+    classroomFindMany.mockResolvedValue([]);
     expect(await deleteAbandonedExampleClassrooms({ now })).toEqual({
-      candidates: 1,
+      candidates: 0,
       deleted: 0,
-      kept: 1,
+      kept: 0,
     });
     expect(classroomDeleteMany).not.toHaveBeenCalled();
   });

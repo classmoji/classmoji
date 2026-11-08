@@ -29,6 +29,7 @@
 import getPrisma from '@classmoji/database';
 import { canonicalTimeZone, defaultContentRepoName } from '@classmoji/utils';
 import { createWithUniqueClassroomSlug } from './classroomSlug.ts';
+import { purgeClassroomMedia } from '../media/index.ts';
 
 const EXAMPLE_ORG = {
   provider: 'GITHUB' as const,
@@ -477,36 +478,33 @@ function buildExampleSandbox(args: {
 // ───────── cleanup ─────────
 
 /**
- * How long an untouched sandbox lives. Provisioning is idempotent and on
+ * How long a sandbox lives, used or not. Provisioning is idempotent and on
  * demand, so deleting one costs the owner nothing but a second or two the
  * next time they click "Take a tour".
  */
 export const ABANDONED_EXAMPLE_AGE_DAYS = 3;
 
 export interface ExampleCleanupReport {
-  /** Sandboxes old enough to be considered. */
+  /** Sandboxes older than the cutoff. */
   candidates: number;
-  /** Of those, deleted: nobody finished the tour in them and nothing was ever done in them. */
+  /** Of those, deleted. */
   deleted: number;
-  /** Of those, kept: a completed tour or at least one audit-logged action. */
+  /** Of those, kept for now: their media purge failed (retried next run). */
   kept: number;
 }
 
 /**
- * Delete example classrooms nobody used.
+ * Delete every example classroom older than the cutoff, whatever happened in
+ * it. A sandbox is a tour prop, not a course: nothing done in one is kept, and
+ * "Take a tour" makes a fresh one. (Counting "used" sandboxes kept all of them:
+ * an admin rollout and the tour's own page views wrote audit rows into each.)
  *
- * "Used" is either signal the sandbox can carry: the owner finished the
- * in-classroom tour there (`tour_completed_at` on their OWNER membership), or
- * any action was audit-logged against it. A sandbox with neither, older than
- * the cutoff, is the one that was provisioned and never opened. The row delete
- * cascades through memberships, repositories, git repos, grades, and audit
- * rows, exactly as the danger-zone delete does for a real classroom; there is
- * no Github side to clean because the sandbox org has no installation.
- *
- * A sandbox with ANY media row is counted as used and kept. Media objects live
- * in R2, the cascade would drop the only rows naming them, and this sweep does
- * not purge the bucket the way `classroom.deleteById` does — so it simply never
- * deletes a classroom that has any.
+ * The row delete cascades through memberships, repositories, git repos,
+ * grades, and audit rows, as the danger-zone delete does for a real
+ * classroom; there is no Github side to clean because the sandbox org has no
+ * installation. A sandbox holding media goes through `purgeClassroomMedia`
+ * first, as `classroom.deleteById` does, so no R2 object is left unnamed; one
+ * whose purge fails stays until the next run.
  */
 export async function deleteAbandonedExampleClassrooms(
   options: { olderThanDays?: number; now?: Date } = {}
@@ -518,26 +516,30 @@ export async function deleteAbandonedExampleClassrooms(
 
   const candidates = await prisma.classroom.findMany({
     where: { is_example: true, created_at: { lt: cutoff } },
-    select: {
-      id: true,
-      memberships: { where: { role: 'OWNER' }, select: { tour_completed_at: true } },
-      _count: { select: { audit_logs: true, media_objects: true } },
-    },
+    select: { id: true, _count: { select: { media_objects: true } } },
   });
 
-  const abandoned = candidates
-    .filter(c => c.memberships.every(m => m.tour_completed_at === null))
-    .filter(c => c._count.audit_logs === 0)
-    .filter(c => (c._count.media_objects ?? 0) === 0)
-    .map(c => c.id);
-
-  if (abandoned.length > 0) {
-    await prisma.classroom.deleteMany({ where: { id: { in: abandoned }, is_example: true } });
+  const plain = candidates.filter(c => (c._count.media_objects ?? 0) === 0).map(c => c.id);
+  let deleted = 0;
+  if (plain.length > 0) {
+    const result = await prisma.classroom.deleteMany({
+      where: { id: { in: plain }, is_example: true },
+    });
+    deleted += result.count;
   }
 
-  return {
-    candidates: candidates.length,
-    deleted: abandoned.length,
-    kept: candidates.length - abandoned.length,
-  };
+  for (const c of candidates.filter(c => (c._count.media_objects ?? 0) > 0)) {
+    try {
+      await purgeClassroomMedia(c.id);
+      await prisma.classroom.deleteMany({ where: { id: c.id, is_example: true } });
+      deleted += 1;
+    } catch (error: unknown) {
+      console.error('[exampleClassroom] media purge failed; kept until next run', {
+        classroomId: c.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return { candidates: candidates.length, deleted, kept: candidates.length - deleted };
 }

@@ -1,0 +1,53 @@
+name: Close issues on staging merge
+
+# GitHub closes the issues a PR names ("Fixes #123") only when the PR merges
+# into the default branch (main). Our PRs merge into staging, and the
+# staging -> main promotion carries commit messages, not PR descriptions, so
+# those issues stayed open after the fix shipped. This closes them when the PR
+# merges into staging.
+#
+# `pull_request_target` runs this file from the base branch, so a PR can't
+# change it, and no PR code is checked out or run. The PR description reaches
+# the shell through `env:` only, never through `${{ }}` inside the script.
+# Only a merged PR (a maintainer's decision) triggers anything.
+
+on:
+  pull_request_target:
+    types: [closed]
+    branches: [staging]
+
+permissions:
+  issues: write
+
+jobs:
+  close-linked-issues:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close issues named with a closing keyword
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          # GitHub's closing keywords, then "#123" (same-repo references only).
+          numbers=$(printf '%s\n' "$PR_BODY" \
+            | grep -oiE '\b(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved):?[[:space:]]+#[0-9]+' \
+            | grep -oE '[0-9]+$' | sort -un || true)
+          if [ -z "$numbers" ]; then
+            echo "No linked issues in PR #$PR_NUMBER."
+            exit 0
+          fi
+          for n in $numbers; do
+            # Skip pull requests and anything already closed or missing.
+            info=$(gh api "repos/$REPO/issues/$n" --jq '[.state, (.pull_request != null)] | @tsv' 2>/dev/null) || {
+              echo "#$n: not found, skipped"; continue; }
+            state=$(printf '%s' "$info" | cut -f1)
+            is_pr=$(printf '%s' "$info" | cut -f2)
+            if [ "$is_pr" = "true" ]; then echo "#$n: a pull request, skipped"; continue; fi
+            if [ "$state" != "open" ]; then echo "#$n: already $state"; continue; fi
+            gh issue close "$n" --repo "$REPO" --reason completed \
+              --comment "Fixed by #$PR_NUMBER, merged into staging."
+            echo "#$n: closed"
+          done

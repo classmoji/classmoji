@@ -1,6 +1,6 @@
 import { prisma } from '~/utils/db.server';
 
-export type Health = 'critical' | 'warning' | 'ok';
+export type Health = 'critical' | 'ok';
 
 export interface ClassroomSignals {
   id: string;
@@ -15,21 +15,16 @@ export interface ClassroomSignals {
 }
 
 /**
- * The same rules Home's Needs attention uses, per classroom: broken = the
- * Github App is missing, an import failed, or checkpoints are failing; stuck =
- * at least 5 students and 30% of the roster have not accepted.
+ * What is the platform's to fix in a classroom: a failed import, or live
+ * editing that can't save to git (checkpoint errors). Whether the owner
+ * installed the Github App or students accepted their invites is the
+ * class's own business, shown on the classroom page but never a problem.
  */
 export const healthOf = (s: ClassroomSignals): { health: Health; reasons: string[] } => {
   const reasons: string[] = [];
-  if (s.provider === 'GITHUB' && !s.hasInstallation) reasons.push('Github App not installed');
   if (s.importFailed) reasons.push('Import failed');
   if (s.checkpointErrors > 0) reasons.push(`${s.checkpointErrors} checkpoint error(s)`);
-  if (reasons.length) return { health: 'critical', reasons };
-  const total = s.accepted + s.pending;
-  if (s.pending >= 5 && s.pending * 10 >= total * 3) {
-    return { health: 'warning', reasons: [`${s.pending} students haven't accepted`] };
-  }
-  return { health: 'ok', reasons };
+  return reasons.length ? { health: 'critical', reasons } : { health: 'ok', reasons };
 };
 
 /** Signals for many classrooms in a handful of grouped queries. */

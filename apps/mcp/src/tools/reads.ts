@@ -151,9 +151,11 @@ export const myClassroomsTool = mirrorResourceTool({
   name: 'my_classrooms',
   title: 'My identity & classrooms',
   description:
-    'Returns the authenticated user (id, login, name), granted scopes, and every classroom ' +
-    "membership as 'org/slug' with role, status, and archive flags. Call this first to discover " +
-    "the 'org/slug' classroom reference every other tool needs. Takes no arguments.",
+    'Returns the authenticated user (id, login, name), granted scopes, and every classroom as ' +
+    "'org/slug': one entry per classroom, with every role held there in `roles` (highest first; " +
+    '`role` is the highest), status, and archive flags. Call this first to discover the ' +
+    "'org/slug' classroom reference every other tool needs. whoami returns the same plus " +
+    'example questions to offer the user. Takes no arguments.',
 });
 
 export const getClassroomInfoTool = mirrorResourceTool({
@@ -304,8 +306,11 @@ export const listCalendarTool = mirrorResourceTool({
   name: 'list_calendar',
   title: 'List calendar (current month)',
   description:
-    "Calendar events for the current month in the classroom's time zone — recurring events " +
-    'expanded, assignment deadlines merged in. Use list_calendar_range for another window. Event ' +
+    "Calendar events for the current month's grid in the classroom's time zone: whole weeks, " +
+    'so it starts a few days before the 1st and ends a few days after the last day, like the ' +
+    'month view. `range` gives the exact window; leave out events outside the month when the ' +
+    'user asks about the month itself. Recurring events expanded, assignment deadlines merged ' +
+    'in. Use list_calendar_range for another window. Event ' +
     'times and deadlines have a `<field>_local` rendering in that zone; quote those, not raw UTC. ' +
     'Any member; ' +
     'staff reads also include ' +

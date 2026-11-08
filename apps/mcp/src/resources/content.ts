@@ -922,8 +922,9 @@ export const calendarResource: ResourceDefinition = {
   uriTemplate: 'classmoji://{org}/{slug}/calendar',
   title: 'Calendar (current month)',
   description:
-    'Calendar events for the current month — recurring events expanded, assignment deadlines ' +
-    'merged in. Use …/calendar/{start}/{end} (ISO dates) for another range.',
+    "Calendar events for the current month's grid: whole weeks, so a few days either side of " +
+    'the month (`range` gives the exact window) — recurring events expanded, assignment ' +
+    'deadlines merged in. Use …/calendar/{start}/{end} (ISO dates) for another range.',
   scope: 'read',
   roles: MEMBER,
   handler: async (_vars, ctx) => {

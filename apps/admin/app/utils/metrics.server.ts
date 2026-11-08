@@ -125,20 +125,27 @@ interface ActivityRow {
   student: boolean;
 }
 
+// Who teaches and who studies is read once, as two sets, instead of two
+// membership lookups for every (day, user) row of the window.
 const activityRows = (fromDay: string) => prisma.$queryRaw<ActivityRow[]>`
+  WITH teaching AS (
+    SELECT DISTINCT m."user_id"
+    FROM "classroom_memberships" m JOIN "classrooms" c ON c."id" = m."classroom_id"
+    WHERE m."role" IN ('OWNER', 'TEACHER') AND m."has_accepted_invite" AND NOT c."is_example"
+  ),
+  students AS (
+    SELECT DISTINCT m."user_id"
+    FROM "classroom_memberships" m JOIN "classrooms" c ON c."id" = m."classroom_id"
+    WHERE m."role" = 'STUDENT' AND m."has_accepted_invite" AND NOT c."is_example"
+  )
   SELECT d."day"::text AS day, d."user_id",
-    EXISTS (
-      SELECT 1 FROM "classroom_memberships" m JOIN "classrooms" c ON c."id" = m."classroom_id"
-      WHERE m."user_id" = d."user_id" AND m."role" IN ('OWNER', 'TEACHER')
-        AND m."has_accepted_invite" AND NOT c."is_example"
-    ) AS teaching,
-    EXISTS (
-      SELECT 1 FROM "classroom_memberships" m JOIN "classrooms" c ON c."id" = m."classroom_id"
-      WHERE m."user_id" = d."user_id" AND m."role" = 'STUDENT'
-        AND m."has_accepted_invite" AND NOT c."is_example"
-    ) AS student
+    (t."user_id" IS NOT NULL) AS teaching,
+    (s."user_id" IS NOT NULL) AS student
   FROM "user_activity_days" d
+  LEFT JOIN teaching t ON t."user_id" = d."user_id"
+  LEFT JOIN students s ON s."user_id" = d."user_id"
   WHERE d."day" >= ${fromDay}::date
+    AND (t."user_id" IS NOT NULL OR s."user_id" IS NOT NULL)
 `;
 
 interface ConversationDayRow {
@@ -261,202 +268,6 @@ export async function loadKpis(now = new Date(), weeks = 8): Promise<Kpi[]> {
     kpi('submissions', 'Submissions', subs),
     kpi('askMoji', 'Ask Moji chats', chats),
   ];
-}
-
-// ───────── Home: needs attention ─────────
-
-export type Severity = 'critical' | 'warning' | 'info';
-
-export interface AttentionItem {
-  id: string;
-  severity: Severity;
-  /** Bold lead: the classroom, person or thing. */
-  subject: string;
-  detail: string;
-  /** People affected, for ordering (students in the classroom, etc.). */
-  affected: number;
-  since: string | null;
-  href: string;
-  action: string;
-  /** For "View as" items: who to impersonate and where to land. */
-  viewAs?: { userId: string; classroomSlug: string; role: string };
-}
-
-const SEVERITY_RANK: Record<Severity, number> = { critical: 0, warning: 1, info: 2 };
-
-export async function loadAttention(now = new Date()): Promise<AttentionItem[]> {
-  const DAY = 24 * 60 * 60 * 1000;
-  const [missingApp, failedImports, checkpointErrors, inviteBacklog, stalled, untriagedBugs] =
-    await Promise.all([
-      // Github classrooms whose org has no App installation: every repo
-      // operation fails. Gitlab classrooms are out of scope for now.
-      prisma.classroom.findMany({
-        where: {
-          ...ACTIVE_CLASSROOM,
-          git_organization: { provider: 'GITHUB', github_installation_id: null },
-        },
-        select: {
-          slug: true,
-          name: true,
-          updated_at: true,
-          git_organization: { select: { login: true } },
-          _count: {
-            select: { memberships: { where: { role: 'STUDENT', has_accepted_invite: true } } },
-          },
-        },
-      }),
-      prisma.importJob.findMany({
-        where: { status: 'FAILED', classroom: { is_example: false, is_archived: false } },
-        select: {
-          updated_at: true,
-          phase: true,
-          classroom: { select: { slug: true, name: true } },
-        },
-      }),
-      prisma.$queryRaw<
-        Array<{ slug: string; name: string; docs: bigint; since: Date; error: string }>
-      >`
-        SELECT c."slug", c."name", count(*)::bigint AS docs,
-          min(d."last_checkpoint_at") AS since,
-          (array_agg(d."last_checkpoint_error" ORDER BY d."last_checkpoint_at" DESC))[1] AS error
-        FROM "collab_docs" d JOIN "classrooms" c ON c."id" = d."classroom_id"
-        WHERE d."last_checkpoint_error" IS NOT NULL AND NOT c."is_example" AND NOT c."is_archived"
-        GROUP BY c."slug", c."name"
-      `,
-      // Many students who have not accepted the Github invite after 3 days.
-      prisma.$queryRaw<
-        Array<{ slug: string; name: string; pending: bigint; total: bigint; oldest: Date }>
-      >`
-        SELECT c."slug", c."name",
-          count(*) FILTER (WHERE NOT m."has_accepted_invite")::bigint AS pending,
-          count(*)::bigint AS total,
-          min(m."created_at") FILTER (WHERE NOT m."has_accepted_invite") AS oldest
-        FROM "classroom_memberships" m JOIN "classrooms" c ON c."id" = m."classroom_id"
-        WHERE m."role" = 'STUDENT' AND NOT c."is_example" AND NOT c."is_archived" AND c."status" = 'ACTIVE'
-        GROUP BY c."slug", c."name"
-        HAVING count(*) FILTER (WHERE NOT m."has_accepted_invite" AND m."created_at" < ${new Date(now.getTime() - 3 * DAY)}) >= 5
-          AND count(*) FILTER (WHERE NOT m."has_accepted_invite") * 10 >= count(*) * 3
-      `,
-      // New classrooms (7–45 days old) with no assignment yet: the onboarding
-      // step people most often stall on.
-      prisma.classroom.findMany({
-        where: {
-          ...ACTIVE_CLASSROOM,
-          created_at: {
-            lt: new Date(now.getTime() - 7 * DAY),
-            gte: new Date(now.getTime() - 45 * DAY),
-          },
-          modules: { none: { assignments: { some: {} } } },
-        },
-        select: {
-          slug: true,
-          name: true,
-          created_at: true,
-          memberships: {
-            where: { role: 'OWNER', has_accepted_invite: true },
-            orderBy: { created_at: 'asc' },
-            take: 1,
-            select: { user: { select: { id: true, name: true } } },
-          },
-        },
-      }),
-      prisma.feedbackPost.findMany({
-        where: {
-          category: 'BUG',
-          status: null,
-          duplicate_of_id: null,
-          created_at: { lt: new Date(now.getTime() - 2 * DAY) },
-        },
-        select: { created_at: true },
-        orderBy: { created_at: 'asc' },
-      }),
-    ]);
-
-  const items: AttentionItem[] = [];
-
-  for (const c of missingApp) {
-    items.push({
-      id: `app:${c.slug}`,
-      severity: 'critical',
-      subject: c.name,
-      detail: `Github App not installed on ${c.git_organization.login}. Repository operations fail for ${c._count.memberships} student${c._count.memberships === 1 ? '' : 's'}.`,
-      affected: c._count.memberships,
-      since: null,
-      href: `/classrooms/${encodeURIComponent(c.slug)}`,
-      action: 'Open',
-    });
-  }
-  for (const j of failedImports) {
-    items.push({
-      id: `import:${j.classroom.slug}`,
-      severity: 'critical',
-      subject: j.classroom.name,
-      detail: `Classroom import failed${j.phase ? ` during ${j.phase}` : ''}.`,
-      affected: 0,
-      since: j.updated_at.toISOString(),
-      href: `/classrooms/${encodeURIComponent(j.classroom.slug)}`,
-      action: 'Open',
-    });
-  }
-  for (const r of checkpointErrors) {
-    const docs = Number(r.docs);
-    items.push({
-      id: `checkpoint:${r.slug}`,
-      severity: 'critical',
-      subject: r.name,
-      detail: `Live-editing checkpoint failing for ${docs} document${docs === 1 ? '' : 's'}: ${truncate(r.error, 90)}`,
-      affected: docs,
-      since: r.since?.toISOString() ?? null,
-      href: `/classrooms/${encodeURIComponent(r.slug)}`,
-      action: 'Open',
-    });
-  }
-  for (const r of inviteBacklog) {
-    const pending = Number(r.pending);
-    items.push({
-      id: `invites:${r.slug}`,
-      severity: 'warning',
-      subject: r.name,
-      detail: `${pending} of ${Number(r.total)} students haven't accepted the Github invite.`,
-      affected: pending,
-      since: r.oldest?.toISOString() ?? null,
-      href: `/classrooms/${encodeURIComponent(r.slug)}?people=pending`,
-      action: 'Open',
-    });
-  }
-  for (const c of stalled) {
-    const owner = c.memberships[0]?.user;
-    items.push({
-      id: `stalled:${c.slug}`,
-      severity: 'info',
-      subject: owner?.name ?? c.name,
-      detail: `Created ${c.name} ${Math.round((now.getTime() - c.created_at.getTime()) / DAY)} days ago, no assignment yet.`,
-      affected: 0,
-      since: c.created_at.toISOString(),
-      href: `/classrooms/${encodeURIComponent(c.slug)}`,
-      action: owner ? 'View as' : 'Open',
-      viewAs: owner ? { userId: owner.id, classroomSlug: c.slug, role: 'OWNER' } : undefined,
-    });
-  }
-  if (untriagedBugs.length > 0) {
-    items.push({
-      id: 'bugs',
-      severity: 'warning',
-      subject: `${untriagedBugs.length} bug report${untriagedBugs.length === 1 ? '' : 's'}`,
-      detail: 'without a status for more than 2 days.',
-      affected: untriagedBugs.length,
-      since: untriagedBugs[0].created_at.toISOString(),
-      href: '/feedback?category=BUG',
-      action: 'Triage',
-    });
-  }
-
-  return items.sort(
-    (a, b) =>
-      SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity] ||
-      b.affected - a.affected ||
-      (a.since ?? '').localeCompare(b.since ?? '')
-  );
 }
 
 const truncate = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);

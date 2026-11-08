@@ -356,6 +356,25 @@ describe('gh-create_git_repo — repository deleted meanwhile', () => {
     expect(mocks.addAssignment).not.toHaveBeenCalled();
   });
 
+  // Prod, Nov 2026: the assignment was deleted while the run was queued; its
+  // submission row was skipped, then marking it published failed with P2025.
+  it('finishes when an assignment is deleted before it is marked published', async () => {
+    mocks.assignmentUpdate.mockRejectedValueOnce(
+      Object.assign(new Error('No record was found for an update.'), { code: 'P2025' })
+    );
+    await expect(
+      runCreateRepository([assignment('a-1', true), assignment('a-2', true)])
+    ).resolves.not.toThrow();
+    expect(mocks.assignmentUpdate).toHaveBeenCalledWith('a-2', { is_published: true });
+  });
+
+  it('still fails when marking an assignment published fails otherwise', async () => {
+    mocks.assignmentUpdate.mockRejectedValueOnce(new Error('connection reset'));
+    await expect(runCreateRepository([assignment('a-1', true)])).rejects.toThrow(
+      'connection reset'
+    );
+  });
+
   it('still throws any other database error as it was', async () => {
     mocks.gitRepoCreate.mockRejectedValueOnce(new Error('unique constraint'));
     await expect(runCreateRepository([assignment('a-1', true)], true)).rejects.toThrow(

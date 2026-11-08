@@ -1457,6 +1457,8 @@ model GitRepoAssignment {
   @@unique([git_repo_id, assignment_id])
   @@index([git_repo_id])
   @@index([assignment_id])
+  // The admin dashboard counts submissions per week by closed_at.
+  @@index([closed_at])
   @@map("git_repo_assignments")
 }
 

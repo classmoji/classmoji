@@ -21,7 +21,7 @@ export const loader = loadClassrooms;
 
 export const meta = () => [{ title: 'Classrooms · Classmoji Admin' }];
 
-const HEALTH_TONE = { critical: 'critical', warning: 'warning', ok: 'ok' } as const;
+const HEALTH_TONE = { critical: 'critical', ok: 'ok' } as const;
 
 const Classrooms = () => {
   const { rows, total, page, pageSize, query, statusFilters, problems } =

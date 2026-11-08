@@ -155,6 +155,47 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       console.error('Failed to claim pending classroom invites:', error);
     }
 
+    // An invite link whose address is not one of theirs (they registered
+    // first, with another address): the signed token proves they read the
+    // invited inbox, as it does at registration, so claim the one invite it
+    // names (#849). Only while that invite still exists (revoked or claimed
+    // means nothing happens), and never while viewing as someone.
+    const impersonatingForInvite = !!(
+      authData.session as { session?: { impersonatedBy?: string | null } } | undefined
+    )?.session?.impersonatedBy;
+    if (invite && !impersonatingForInvite) {
+      try {
+        const result = await ClassmojiService.classroomInvite.claimInviteByToken(
+          typedUser.id,
+          invite
+        );
+        if (result.claimed) {
+          await ClassmojiService.audit.create(
+            {
+              user_id: typedUser.id,
+              classroom_id: result.classroomId,
+              role: 'STUDENT',
+              action: 'CREATE',
+              resource_type: 'CLASSROOM_MEMBERSHIP',
+              resource_id: result.membershipId,
+              data: { tool: 'web:roster.invite_token' },
+            },
+            { dedupe: false }
+          );
+          const refreshedUser = await ClassmojiService.user.findById(typedUser.id, {
+            includeMemberships: true,
+          });
+          if (refreshedUser) {
+            user = refreshedUser;
+            typedUser = user as AppUser;
+            typedUser.memberships = (typedUser.memberships ?? []) as SelectOrganizationMembership[];
+          }
+        }
+      } catch (error) {
+        console.error('Failed to claim the invite link:', error);
+      }
+    }
+
     // GitLab courses have no second invite to accept (on Github, "pending"
     // means the Github org invite is still open), so a pending GitLab-course
     // membership becomes active as soon as the student has GitLab connected.
@@ -262,11 +303,15 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     }
 
     // A registered user arriving from an invite link whose address is not one
-    // of theirs: the invite will not claim, so tell them why and where to fix it.
+    // of theirs, and whose token claimed nothing (expired, revoked, claimed by
+    // someone else, or viewing as): tell them why and where to fix it.
     const sameAddress = (a: string | null | undefined) =>
       !!a && !!inviteEmail && a.toLowerCase() === inviteEmail.toLowerCase();
+    // Not for a member of the invite's classroom: that invite is done (this
+    // load just claimed it, or an earlier one did).
     const inviteEmailMismatch =
       inviteEmail &&
+      !(typedUser.memberships ?? []).some(m => m.organization?.id === invite?.classroomId) &&
       !sameAddress(typedUser.email) &&
       !gitAccounts.some(account => sameAddress(account.email))
         ? inviteEmail

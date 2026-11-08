@@ -1,20 +1,14 @@
-import { useState } from 'react';
-import { Link, useLoaderData } from 'react-router';
+import { Suspense } from 'react';
+import { Await, Link, useLoaderData } from 'react-router';
 import { Avatar, Empty, InfoTip, Panel, Sparkline } from '~/components/ui';
-import { ViewAsButton } from '~/components/ViewAsButton';
+import { InsightsSections } from '~/components/InsightsSections';
 import { relativeTime } from '~/utils/time';
-import type { AttentionItem, Kpi } from '~/utils/metrics.server';
+import type { Kpi } from '~/utils/metrics.server';
 import { loadHome, type HomeData } from './route.server';
 
 export const loader = loadHome;
 
 export const meta = () => [{ title: 'Home · Classmoji Admin' }];
-
-const SEVERITY_BAR: Record<AttentionItem['severity'], string> = {
-  critical: 'var(--rose-ink)',
-  warning: 'var(--amber-ink)',
-  info: 'var(--sky-ink)',
-};
 
 const Change = ({ kpi }: { kpi: Kpi }) => {
   if (kpi.previousToDate === null) return null;
@@ -55,92 +49,17 @@ const KpiTile = ({ kpi }: { kpi: Kpi }) => (
   </div>
 );
 
-const FILTERS: Array<{ value: AttentionItem['severity'] | ''; label: string }> = [
-  { value: '', label: 'All' },
-  { value: 'critical', label: 'Broken' },
-  { value: 'warning', label: 'Stuck' },
-  { value: 'info', label: 'Onboarding' },
-];
-
-const Attention = ({ items }: { items: AttentionItem[] }) => {
-  const [filter, setFilter] = useState<AttentionItem['severity'] | ''>('');
-  const shown = filter ? items.filter(i => i.severity === filter) : items;
-  return (
-    <Panel
-      title="Needs attention"
-      description={
-        items.length
-          ? `${items.length} open · broken first, then by people affected`
-          : 'Nothing open'
-      }
-      aside={
-        items.length ? (
-          <div className="flex flex-wrap gap-1.5">
-            {FILTERS.map(f => (
-              <button
-                key={f.value || 'all'}
-                type="button"
-                aria-pressed={filter === f.value}
-                onClick={() => setFilter(f.value)}
-                className={`rounded-full border px-2.5 py-0.5 text-xs font-medium ${
-                  filter === f.value
-                    ? 'bg-ink-0 text-panel border-ink-0'
-                    : 'border-line text-ink-2 hover:text-ink-0'
-                }`}
-              >
-                {f.label}
-              </button>
-            ))}
-          </div>
-        ) : null
-      }
-    >
-      {shown.length === 0 ? (
-        <Empty
-          title={items.length ? 'Nothing in this group' : 'All clear'}
-          hint={items.length ? undefined : 'No broken installs, stuck classes or untriaged bugs.'}
-        />
-      ) : (
-        <ul>
-          {shown.map(item => (
-            <li
-              key={item.id}
-              className="flex items-center gap-3 px-4 py-2.5 border-t border-line text-sm"
-            >
-              <span
-                aria-hidden
-                className="w-1.5 self-stretch rounded-full shrink-0"
-                style={{ background: SEVERITY_BAR[item.severity] }}
-              />
-              <span className="min-w-0 flex-1 text-ink-1">
-                <b className="font-semibold text-ink-0">{item.subject}</b> — {item.detail}
-              </span>
-              {item.since ? (
-                <span className="text-xs text-ink-4 tabular-nums whitespace-nowrap">
-                  {relativeTime(item.since)}
-                </span>
-              ) : null}
-              {item.viewAs ? (
-                <ViewAsButton
-                  userId={item.viewAs.userId}
-                  name={item.subject}
-                  classroomSlug={item.viewAs.classroomSlug}
-                />
-              ) : (
-                <Link
-                  to={item.href}
-                  className="rounded-md border border-line px-2.5 py-1 text-xs font-medium text-ink-1 hover:bg-nav-hover whitespace-nowrap"
-                >
-                  {item.action}
-                </Link>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-    </Panel>
-  );
-};
+const KpiPlaceholders = () => (
+  <>
+    {Array.from({ length: 6 }, (_, i) => (
+      <div
+        key={i}
+        aria-hidden
+        className="rounded-xl border border-line bg-panel px-3.5 py-3 h-[104px] animate-pulse"
+      />
+    ))}
+  </>
+);
 
 const Activity = ({ entries }: { entries: HomeData['activity'] }) => (
   <Panel
@@ -204,14 +123,32 @@ const Home = () => {
       </div>
 
       <div className="grid gap-3 grid-cols-2 md:grid-cols-3 xl:grid-cols-6">
-        {data.kpis.map(k => (
-          <KpiTile key={k.key} kpi={k} />
-        ))}
+        {/* Streamed: the slowest queries on the page (route.server.ts). */}
+        <Suspense fallback={<KpiPlaceholders />}>
+          <Await
+            resolve={data.kpis}
+            errorElement={
+              <div className="col-span-full text-xs text-ink-3">
+                {"The weekly numbers couldn't load. Reload to try again."}
+              </div>
+            }
+          >
+            {kpis => kpis.map(k => <KpiTile key={k.key} kpi={k} />)}
+          </Await>
+        </Suspense>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] items-start">
-        <Attention items={data.attention} />
-        <Activity entries={data.activity} />
+        <InsightsSections
+          range={data.range}
+          growth={data.growth}
+          activation={data.activation}
+          adoption={data.adoption}
+          audience={data.audience}
+        />
+        <div className="xl:sticky xl:top-4">
+          <Activity entries={data.activity} />
+        </div>
       </div>
     </div>
   );

@@ -4,7 +4,6 @@ import { signOut } from '@classmoji/auth/client';
 import { COOKIE_DOMAIN } from '@classmoji/auth/secret';
 import { IconLogout, IconSearch } from '@tabler/icons-react';
 import { prisma, requirePlatformAdmin } from '~/utils/db.server';
-import { loadAttention } from '~/utils/metrics.server';
 import { CommandPalette } from '~/components/CommandPalette';
 import type { LoaderFunctionArgs, ShouldRevalidateFunction } from 'react-router';
 
@@ -20,22 +19,16 @@ import type { LoaderFunctionArgs, ShouldRevalidateFunction } from 'react-router'
  * on its own.
  */
 
-/**
- * Badge counts are cheap to read but the attention rules are not: cache them
- * for a minute per process so tab-to-tab navigation stays fast.
- */
-let badgeCache: { at: number; attention: number; bugs: number } | null = null;
+/** The Feedback tab's badge: bug reports without a status, cached a minute per process. */
+let badgeCache: { at: number; bugs: number } | null = null;
 const BADGE_TTL_MS = 60_000;
 
 const loadBadges = async () => {
   if (badgeCache && Date.now() - badgeCache.at < BADGE_TTL_MS) return badgeCache;
-  const [attention, bugs] = await Promise.all([
-    loadAttention().then(items => items.length),
-    prisma.feedbackPost.count({
-      where: { category: 'BUG', status: null, duplicate_of_id: null },
-    }),
-  ]);
-  badgeCache = { at: Date.now(), attention, bugs };
+  const bugs = await prisma.feedbackPost.count({
+    where: { category: 'BUG', status: null, duplicate_of_id: null },
+  });
+  badgeCache = { at: Date.now(), bugs };
   return badgeCache;
 };
 
@@ -48,7 +41,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     // Scope for the "View as" return breadcrumb: the session cookie's own
     // resolution, so it reaches the webapp exactly when the session does.
     cookieDomain: COOKIE_DOMAIN,
-    badges: { home: badges.attention, feedback: badges.bugs },
+    badges: { feedback: badges.bugs },
   };
 }
 
@@ -64,16 +57,14 @@ export const shouldRevalidate: ShouldRevalidateFunction = ({
 };
 
 const TABS = [
-  { to: '/', label: 'Home', end: true, badge: 'home' as const },
+  { to: '/', label: 'Home', end: true },
   { to: '/people', label: 'People', end: false },
   { to: '/classrooms', label: 'Classrooms', end: false },
-  { to: '/insights', label: 'Insights', end: false },
   { to: '/feedback', label: 'Feedback', end: false, badge: 'feedback' as const },
   { to: '/ops', label: 'Ops', end: false },
 ];
 
 const BADGE_TITLE = {
-  home: 'Open items in Needs attention',
   feedback: 'Bug reports without a status',
 };
 
