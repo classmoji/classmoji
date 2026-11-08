@@ -221,7 +221,8 @@ function toFetchHeaders(request: FastifyRequest): Headers {
 }
 
 function sendUnauthorized(reply: FastifyReply, message: string) {
-  // Same shape better-auth's withMcpAuth returns (JSON-RPC error + challenge).
+  // A JSON-RPC error body with the challenge header (WWW_AUTHENTICATE_VALUE),
+  // which names the protected-resource metadata clients discover from.
   return reply
     .status(401)
     .header('WWW-Authenticate', WWW_AUTHENTICATE_VALUE)

@@ -250,11 +250,13 @@ model Verification {
 // The OAuth tables of better-auth 1.4's `mcp` plugin, kept as they were while
 // the 1.7 tables below take over (2026-11): untouched by the migration that
 // copies their clients, consents and live refresh tokens into the 1.7 tables,
-// so a rollback to the previous release still finds them. Nothing in this
-// release reads them; Classmoji's own tokens are McpInternalToken rows, and
-// revokeOAuthGrants (packages/auth/src/server.ts) deletes a user's rows here
-// too, so a rollback does not bring an ended connection back. A later
-// migration drops them. The Prisma models are
+// so a rollback to the previous release still finds them. In this release
+// the catch-up script (packages/database/scripts/catchUpOauth2Grants.ts)
+// reads the rows written after that migration, and revokeOAuthGrants
+// (packages/auth/src/server.ts) deletes a user's rows here too, so neither a
+// rollback nor the catch-up brings an ended connection back. Classmoji's own
+// tokens are McpInternalToken rows. A later migration drops them. The Prisma
+// models are
 // renamed (`Legacy*`) because better-auth 1.7 uses the names `oauthAccessToken`
 // and `oauthConsent` for tables of another shape; the tables keep their names.
 

@@ -1634,17 +1634,22 @@ export const auth = betterAuth({
       },
       update: {
         // A "View as" session keeps the expiry it was created with
-        // (impersonationSessionDuration): a database read that is due a
-        // refresh (session.updateAge) would otherwise move it to
-        // session.expiresIn from now. Only that refresh updates a session row
-        // here, and it puts the row it read on `ctx.context.session` first
-        // (better-auth 1.7.18 api/routes/session.mjs:153-154, then :199). The
-        // refresh still runs, with the same expiry, so the read returns the
-        // session; the session cookie it sets lasts session.expiresIn
-        // (:203-206), but the session, and its cookie cache, end with the
-        // row. Other sessions are left to refresh as usual. better-auth hands
-        // this hook the update it was asked for, not one a plugin's own hook
-        // changed (db/with-hooks.mjs:54); no plugin here has one.
+        // (impersonationSessionDuration). Starting View as sets the
+        // `dont_remember` cookie (better-auth 1.7.18
+        // plugins/admin/routes.mjs:615, impersonateUser), and the session read
+        // refreshes no session while that cookie is sent
+        // (api/routes/session.mjs:170). So this covers a read of a View as
+        // session without it: a read that is due a refresh
+        // (session.updateAge) would otherwise move the expiry to
+        // session.expiresIn from now. That refresh is the only update of a
+        // session row here, and it puts the row it read on
+        // `ctx.context.session` first (session.mjs:153-154, then :199). It
+        // still runs, with the same expiry, so the read returns the session;
+        // the cookie it sets lasts session.expiresIn (:214), but the session,
+        // and its cookie cache, end with the row. Other sessions refresh as
+        // usual. better-auth hands this hook the update it was asked for, not
+        // one a plugin's own hook changed (db/with-hooks.mjs:54); no plugin
+        // here has one.
         before: async (data, ctx) => {
           const current = (
             ctx?.context as
@@ -1691,11 +1696,9 @@ export const auth = betterAuth({
       update: {
         // A banned user's app connections end with their sessions. Nothing
         // in the app bans anyone today (the admin plugin's ban endpoint is
-        // off). A revocation that fails throws here, and the admin plugin's
-        // ban writes `banned` before it deletes the user's sessions
-        // (better-auth 1.7.18 plugins/admin/routes.mjs, banUser), so that
-        // failure also leaves the sessions in place. Whoever turns banning on
-        // should catch and log the failure here for a ban, rather than throw.
+        // off). Whoever turns banning on: catch and log a failed revocation
+        // here for a ban, so the ban still goes on to end the user's
+        // sessions.
         after: async (user, ctx) => {
           const row = user as { id?: unknown; banned?: unknown };
           if (row.banned !== true || !row.id) return;

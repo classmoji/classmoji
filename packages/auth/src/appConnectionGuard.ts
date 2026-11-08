@@ -131,8 +131,12 @@ export function authorizeParameterChange(
 
 /**
  * `prompt` with `consent` in it: the values sent, in order, less `none`, plus
- * `consent`. `login` stays, so a client that asks for a fresh sign-in still
- * gets one; the resume after sign-in removes only `login`.
+ * `consent`. `login` stays in it, and the provider then sends the user to
+ * the sign-in page (`loginPage`, `/`) with the signed query. A signed-out
+ * user signs in there and the authorization resumes (the new sign-in meets
+ * `login`). The sign-in page's loader sends a user who is already signed in
+ * to `/select-organization` (or its `redirect` parameter), so for them that
+ * request ends there, not at the consent page.
  */
 export function promptWithConsent(prompt: unknown): string {
   const values = typeof prompt === 'string' ? prompt.split(' ').filter(Boolean) : [];
