@@ -894,6 +894,11 @@ export const reorderInModuleTx = async (
   });
   if (!module) throw new Error('Module not found in classroom');
 
+  // The module row lock a move into or out of this module takes (#567), so
+  // the assignment set checked below is the one written: a move can't land
+  // between the read and the writes and leave two assignments on one position.
+  await tx.$queryRaw`SELECT id FROM modules WHERE id = ${moduleId} FOR UPDATE`;
+
   const existing = await tx.assignment.findMany({
     where: { module_id: moduleId },
     select: { id: true },

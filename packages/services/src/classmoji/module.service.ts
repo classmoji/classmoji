@@ -621,30 +621,34 @@ export const reorderItems = async (
   orderedItemIds: string[],
   classroomId?: string
 ) => {
-  const prisma = getPrisma();
   if (classroomId) await assertModuleInClassroom(moduleId, classroomId);
 
-  // Legacy REPOSITORY and QUIZ items are not part of the content list (a quiz
-  // is placed by its assignment), so the caller orders only the content
-  // items; those rows keep their positions.
-  const existingItems = await prisma.moduleItem.findMany({
-    where: { module_id: moduleId, item_type: { notIn: LEGACY_ITEM_TYPES } },
-    select: { id: true },
-  });
-  assertSameSet(
-    existingItems.map(item => item.id),
-    orderedItemIds,
-    'Ordered item ids must match module items'
-  );
+  await getPrisma().$transaction(async tx => {
+    // The module row lock a move into or out of this module takes (#567), so
+    // the item set checked below is the one written: a move can't land
+    // between the read and the writes and leave two items on one position.
+    await tx.$queryRaw`SELECT id FROM modules WHERE id = ${moduleId} FOR UPDATE`;
 
-  await prisma.$transaction(
-    orderedItemIds.map((id, index) =>
-      prisma.moduleItem.update({
+    // Legacy REPOSITORY and QUIZ items are not part of the content list (a
+    // quiz is placed by its assignment), so the caller orders only the
+    // content items; those rows keep their positions.
+    const existingItems = await tx.moduleItem.findMany({
+      where: { module_id: moduleId, item_type: { notIn: LEGACY_ITEM_TYPES } },
+      select: { id: true },
+    });
+    assertSameSet(
+      existingItems.map(item => item.id),
+      orderedItemIds,
+      'Ordered item ids must match module items'
+    );
+
+    for (const [index, id] of orderedItemIds.entries()) {
+      await tx.moduleItem.update({
         where: { id, module_id: moduleId },
         data: { position: index },
-      })
-    )
-  );
+      });
+    }
+  });
 };
 
 /**
