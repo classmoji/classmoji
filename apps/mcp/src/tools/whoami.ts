@@ -1,45 +1,33 @@
 /**
  * `whoami` — trivial identity tool proving the enforcement pipeline
  * end-to-end (Phase 1b). Scope 'read', any authenticated user (roles: null).
- * Returns the caller's identity plus a summary of classroom memberships,
- * addressed in the composite `org/slug` form every other tool accepts.
+ * Returns the caller's identity, their classrooms (one entry per classroom,
+ * see memberships.ts) addressed in the composite `org/slug` form every other
+ * tool accepts, and role-tailored example questions.
  */
 
 import { ClassmojiService } from '@classmoji/services';
 import { gitUsername } from '@classmoji/utils';
 import type { ToolDefinition } from '../mcp/registry.ts';
 import { buildSuggestions } from '../suggestions.ts';
-
-interface MembershipSummary {
-  classroom: string;
-  name: string;
-  role: string;
-  status: string;
-  is_archived: boolean;
-}
+import { summarizeMemberships } from '../memberships.ts';
 
 export const whoamiTool: ToolDefinition<Record<string, never>> = {
   name: 'whoami',
   title: 'Who am I',
   description:
-    'Returns the authenticated user (id, login, name), the scopes granted to this token, a ' +
-    'summary of classroom memberships, and role-tailored example questions to offer the user. ' +
-    "Classrooms are addressed as 'org/slug' — use those references with other tools.",
+    'Returns the authenticated user (id, login, name), the scopes granted to this token, their ' +
+    'classrooms (one entry per classroom, every role held there in `roles`), and ' +
+    'role-tailored example questions to offer the user. my_classrooms returns the same ' +
+    'identity and classrooms without the example questions. Classrooms are addressed as ' +
+    "'org/slug' — use those references with other tools.",
   scope: 'read',
   roles: null,
   inputSchema: {},
   handler: async (_args, { viewer }) => {
     const user = await ClassmojiService.user.findById(viewer.userId);
-    // One entry per membership row (a user can hold several roles per classroom).
     const classrooms = await ClassmojiService.classroom.findByUserId(viewer.userId);
-
-    const memberships: MembershipSummary[] = classrooms.map(c => ({
-      classroom: `${c.git_organization?.login ?? 'unknown'}/${c.slug}`,
-      name: c.name,
-      role: c.membership.role,
-      status: c.status,
-      is_archived: c.is_archived,
-    }));
+    const memberships = summarizeMemberships(classrooms);
 
     const result = {
       userId: viewer.userId,

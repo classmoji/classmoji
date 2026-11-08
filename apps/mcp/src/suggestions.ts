@@ -1,6 +1,6 @@
 /**
  * Role-tailored conversation starters returned by the identity surface
- * (`whoami` tool + `me` resource / `my_classrooms` mirror). These are advisory
+ * (the `whoami` tool; `me` / `my_classrooms` leave them out, #846). These are advisory
  * example prompts an assistant can offer the user — they map to capabilities
  * the read/write tools already expose, tailored to the roles the caller
  * actually holds somewhere (staff vs student). Purely cosmetic: they gate
