@@ -32,7 +32,7 @@ export function useViewAs() {
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const viewAs = async (target: { userId: string; classroomSlug?: string; reason?: string }) => {
+  const viewAs = async (target: { userId: string; classroomSlug?: string }) => {
     if (!shell) return;
     setPendingId(target.userId);
     setError(null);
@@ -40,7 +40,6 @@ export function useViewAs() {
       const body = new FormData();
       body.set('userId', target.userId);
       if (target.classroomSlug) body.set('classroomSlug', target.classroomSlug);
-      if (target.reason) body.set('reason', target.reason);
       const res = await fetch('/api/view-as', { method: 'POST', body });
       const data = (await res.json()) as { landing?: string; error?: string };
       if (!res.ok || !data.landing) throw new Error(data.error ?? 'Could not start View as.');

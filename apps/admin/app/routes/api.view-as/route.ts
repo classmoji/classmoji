@@ -4,12 +4,14 @@ import { platformAudit } from '~/utils/audit.server';
 
 /**
  * Step one of "View as": records that the admin asked to view as someone,
- * where, and why (`impersonate.request`), and answers with the webapp path to
+ * and where (`impersonate.request`), and answers with the webapp path to
  * land on. The browser then starts the better-auth impersonation itself (it
  * needs the admin's cookie) and goes there. Whether it started, and when it
  * ended, the auth server records itself (`impersonate.start` and
  * `impersonate.end`, packages/auth/src/server.ts), for every app that starts
- * View as; this row keeps the reason and classroom only this app knows.
+ * View as; this row keeps the classroom only this app knows. (It no longer
+ * asks for a reason; older rows may still carry one, and the activity log
+ * shows it.)
  *
  * Everything that decides the landing comes from the database, never from the
  * request: the classroom's slug is looked up, and the role is the target's
@@ -22,16 +24,12 @@ const LANDING: Record<(typeof ROLE_ORDER)[number], (slug: string) => string> = {
   ASSISTANT: slug => `/assistant/${slug}`,
   STUDENT: slug => `/student/${slug}`,
 };
-const REASON_MAX = 200;
 
 export async function action({ request }: ActionFunctionArgs) {
   const { user: admin } = await requirePlatformAdmin(request);
   const form = await request.formData();
   const userId = String(form.get('userId') ?? '');
   const classroomSlug = String(form.get('classroomSlug') ?? '');
-  const reason = String(form.get('reason') ?? '')
-    .trim()
-    .slice(0, REASON_MAX);
 
   if (!userId) return Response.json({ error: 'No person named.' }, { status: 400 });
   if (userId === admin.id) return Response.json({ error: 'That is you.' }, { status: 400 });
@@ -65,7 +63,6 @@ export async function action({ request }: ActionFunctionArgs) {
     data: {
       targetName: target.name ?? target.email ?? target.id,
       ...(classroom ? { classroomName: classroom.name } : {}),
-      ...(reason ? { reason } : {}),
     },
   });
 
