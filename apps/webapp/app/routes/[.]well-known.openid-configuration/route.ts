@@ -13,12 +13,19 @@
  */
 
 import { auth, oauthProviderOpenIdConfigMetadata } from '@classmoji/auth/server';
-import { corsPreflightResponse, OAUTH_CORS_HEADERS } from '@classmoji/auth/oauth-http';
+import {
+  corsPreflightResponse,
+  OAUTH_CORS_HEADERS,
+  withoutUnsupportedMetadata,
+} from '@classmoji/auth/oauth-http';
 import type { LoaderFunctionArgs } from 'react-router';
 
 // Readable from any origin, without credentials (a browser-based client's
 // discovery); OPTIONS is a CORS preflight (@classmoji/auth/oauth-http).
 export async function loader({ request }: LoaderFunctionArgs) {
   if (request.method === 'OPTIONS') return corsPreflightResponse();
-  return oauthProviderOpenIdConfigMetadata(auth, { headers: OAUTH_CORS_HEADERS })(request);
+  // Without the DPoP keys: no token is DPoP-bound (@classmoji/auth/oauth-http).
+  return withoutUnsupportedMetadata(
+    await oauthProviderOpenIdConfigMetadata(auth, { headers: OAUTH_CORS_HEADERS })(request)
+  );
 }

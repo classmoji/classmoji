@@ -70,7 +70,10 @@ const EXPECTED_RULES: ReadonlyArray<
   { name: string; only: readonly string[] } | { name: string; everyPathBut: readonly string[] }
 > = [
   { name: 'register-no-backchannel-logout', only: ['/oauth2/register'] },
+  { name: 'register-no-dpop', only: ['/oauth2/register'] },
   { name: 'register-open', only: ['/oauth2/register'] },
+  { name: 'authorize-no-dpop', only: ['/oauth2/authorize'] },
+  { name: 'token-no-dpop-proof', only: ['/oauth2/token'] },
   { name: 'oauth-resource', only: ['/oauth2/authorize', '/oauth2/token'] },
   { name: 'oauth-offline-access', only: ['/oauth2/authorize'] },
   { name: 'view-as-caller-and-target', only: ['/admin/impersonate-user'] },
@@ -286,12 +289,13 @@ describe('the hooks.before rules', () => {
     expect(actual).toEqual(expected);
   });
 
-  it('runs no rule on the token-issuing path but the resource rule', () => {
-    expect(actualRulesFor('/oauth2/token')).toEqual(['oauth-resource']);
+  it('runs no rule on the token-issuing path but the DPoP and resource rules', () => {
+    expect(actualRulesFor('/oauth2/token')).toEqual(['token-no-dpop-proof', 'oauth-resource']);
   });
 
   it('runs the authorize rules in the order their changes build on each other', () => {
     expect(actualRulesFor('/oauth2/authorize')).toEqual([
+      'authorize-no-dpop',
       'oauth-resource',
       'oauth-offline-access',
       'app-connection',

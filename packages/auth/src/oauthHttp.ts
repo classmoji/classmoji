@@ -99,3 +99,39 @@ export function withCorsHeaders(response: Response): Response {
     headers,
   });
 }
+
+/**
+ * Whether a discovery document key names something the server does not
+ * offer, so the webapp's `/.well-known/*` routes leave it out: every `dpop_*`
+ * key (DPoP-bound tokens are not issued; ./oauthRequestRules.ts). oauth-provider
+ * always writes `dpop_signing_alg_values_supported`, and no option removes it.
+ */
+export const isUnsupportedMetadataKey = (key: string): boolean => key.startsWith('dpop_');
+
+/**
+ * A discovery document's response without the keys isUnsupportedMetadataKey
+ * names, keeping its status and headers (CORS, caching); `content-length` is
+ * dropped, since the body changes. Anything but a 200 JSON object is returned
+ * unchanged.
+ */
+export async function withoutUnsupportedMetadata(response: Response): Promise<Response> {
+  if (response.status !== 200) return response;
+  if (!(response.headers.get('content-type') ?? '').includes('json')) return response;
+  let document: unknown;
+  try {
+    document = await response.clone().json();
+  } catch {
+    return response;
+  }
+  if (!document || typeof document !== 'object' || Array.isArray(document)) return response;
+  const kept = Object.fromEntries(
+    Object.entries(document).filter(([key]) => !isUnsupportedMetadataKey(key))
+  );
+  const headers = new Headers(response.headers);
+  headers.delete('content-length');
+  return new Response(JSON.stringify(kept), {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}

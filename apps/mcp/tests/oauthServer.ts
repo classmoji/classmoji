@@ -17,7 +17,7 @@
  * BETTER_AUTH_SECRET, or both processes' development fallback.
  */
 
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, generateKeyPairSync, randomBytes, sign } from 'node:crypto';
 import { serializeSignedCookie } from 'better-call';
 import { expect } from 'vitest';
 import { BASE, getPrisma } from './helpers.ts';
@@ -73,16 +73,48 @@ export interface IssuedTokens {
   scope: string;
 }
 
-/** POST /oauth2/token with a form body. */
-export async function tokenRequest(body: Record<string, string>) {
+/** POST /oauth2/token with a form body (and any other headers, a DPoP proof say). */
+export async function tokenRequest(
+  body: Record<string, string>,
+  headers: Record<string, string> = {}
+) {
   const res = await auth.handler(
     new Request(`${AS}/oauth2/token`, {
       method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      headers: { 'content-type': 'application/x-www-form-urlencoded', ...headers },
       body: new URLSearchParams(body).toString(),
     })
   );
-  return { status: res.status, body: (await res.json()) as IssuedTokens & { error?: string } };
+  return {
+    status: res.status,
+    body: (await res.json()) as IssuedTokens & { error?: string; token_type?: string },
+  };
+}
+
+/** The token endpoint's URL, a DPoP proof's `htu`. */
+export const TOKEN_ENDPOINT = `${AS}/oauth2/token`;
+
+/**
+ * A DPoP key (RFC 9449, ES256): a function that signs a proof for POST to
+ * `htu`, as a client that uses DPoP sends with each token request.
+ */
+export function dpopProofs(): (htu: string) => string {
+  const { publicKey, privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+  const { kty, crv, x, y } = publicKey.export({ format: 'jwk' });
+  const b64 = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
+  return htu => {
+    const input = `${b64({ typ: 'dpop+jwt', alg: 'ES256', jwk: { kty, crv, x, y } })}.${b64({
+      jti: randomBytes(16).toString('hex'),
+      htm: 'POST',
+      htu,
+      iat: Math.floor(Date.now() / 1000),
+    })}`;
+    const signature = sign('sha256', Buffer.from(input), {
+      key: privateKey,
+      dsaEncoding: 'ieee-p1363',
+    });
+    return `${input}.${signature.toString('base64url')}`;
+  };
 }
 
 /**
@@ -92,8 +124,9 @@ export async function tokenRequest(body: Record<string, string>) {
 export async function connectApp(
   clientId: string,
   cookie: string,
-  scope = 'read write'
-): Promise<IssuedTokens> {
+  scope = 'read write',
+  exchangeHeaders: Record<string, string> = {}
+): Promise<IssuedTokens & { token_type?: string }> {
   const verifier = randomBytes(32).toString('base64url');
   const query = new URLSearchParams({
     client_id: clientId,
@@ -121,13 +154,16 @@ export async function connectApp(
   const code = new URL(url).searchParams.get('code');
   expect(code, 'consent gives a code').toBeTruthy();
 
-  const { status, body } = await tokenRequest({
-    grant_type: 'authorization_code',
-    code: code!,
-    redirect_uri: REDIRECT_URI,
-    client_id: clientId,
-    code_verifier: verifier,
-  });
+  const { status, body } = await tokenRequest(
+    {
+      grant_type: 'authorization_code',
+      code: code!,
+      redirect_uri: REDIRECT_URI,
+      client_id: clientId,
+      code_verifier: verifier,
+    },
+    exchangeHeaders
+  );
   expect(status, `token exchange: ${JSON.stringify(body)}`).toBe(200);
   return body;
 }

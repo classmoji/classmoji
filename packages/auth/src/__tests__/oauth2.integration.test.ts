@@ -33,7 +33,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, generateKeyPairSync, randomUUID, sign } from 'node:crypto';
 import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -643,6 +643,218 @@ describe.skipIf(!DATABASE_URL)('the authorization server (real Postgres)', () =>
       resource: 'https://elsewhere.example/mcp',
     });
     expect(res.body.error).toBe('invalid_target');
+  });
+
+  describe('a resource other than the MCP server', () => {
+    const USERINFO = `${BASE}/oauth2/userinfo`;
+
+    /** /oauth2/authorize for pubclient with `resource` (one value per entry). */
+    const authorizeNaming = (...resources: string[]) => {
+      const query = new URLSearchParams({
+        client_id: 'pubclient',
+        response_type: 'code',
+        redirect_uri: PUBLIC_REDIRECT,
+        scope: 'read write',
+        state: 'st',
+        code_challenge: pkce().challenge,
+        code_challenge_method: 'S256',
+      });
+      for (const resource of resources) query.append('resource', resource);
+      return server.auth.handler(
+        new Request(`${BASE}/oauth2/authorize?${query}`, { headers: { cookie: ownCookie } })
+      );
+    };
+
+    it.each([
+      ['the userinfo URL', () => [USERINFO]],
+      ['the userinfo URL and the MCP resource', () => [USERINFO, server.MCP_RESOURCE]],
+      ['another server', () => ['https://elsewhere.example/mcp']],
+    ])('is refused at authorize: %s', async (_label, resources) => {
+      const consentsBefore = await db.oauthConsent.count();
+      const res = await authorizeNaming(...resources());
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({
+        error: 'invalid_target',
+        error_description: server.RESOURCE_REFUSED_MESSAGE,
+      });
+      expect(res.headers.get('location')).toBeNull();
+      expect(await db.oauthConsent.count()).toBe(consentsBefore);
+    });
+
+    it('still lets the MCP resource named twice through', async () => {
+      const res = await authorizeNaming(server.MCP_RESOURCE, server.MCP_RESOURCE);
+      expect(res.status).toBe(302);
+      expect(new URL(res.headers.get('location')!, 'http://localhost:3000').pathname).toBe(
+        '/oauth/consent'
+      );
+    });
+
+    it('is refused at the token endpoint for a grant issued for the MCP resource', async () => {
+      // So nothing on the token side needs the authorize rule: the provider
+      // checks the requested resource against what the code or refresh token
+      // was issued for.
+      const { verifier, challenge } = pkce();
+      const query = new URLSearchParams({
+        client_id: 'pubclient',
+        response_type: 'code',
+        redirect_uri: PUBLIC_REDIRECT,
+        scope: 'read write',
+        code_challenge: challenge,
+        code_challenge_method: 'S256',
+      });
+      const authorize = await server.auth.handler(
+        new Request(`${BASE}/oauth2/authorize?${query}`, { headers: { cookie: ownCookie } })
+      );
+      const signed = new URL(authorize.headers.get('location')!, 'http://localhost:3000');
+      const consent = await server.auth.handler(
+        new Request(`${BASE}/oauth2/consent`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            origin: 'http://localhost:3000',
+            cookie: ownCookie,
+          },
+          body: JSON.stringify({ accept: true, oauth_query: signed.searchParams.toString() }),
+        })
+      );
+      const code = new URL(((await consent.json()) as { url: string }).url).searchParams.get(
+        'code'
+      )!;
+      const exchange = await token({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: PUBLIC_REDIRECT,
+        client_id: 'pubclient',
+        code_verifier: verifier,
+        resource: USERINFO,
+      });
+      expect(exchange.body.error).toBe('invalid_target');
+
+      const refresh = await token({
+        grant_type: 'refresh_token',
+        refresh_token: (await connect()).body.refresh_token,
+        client_id: 'pubclient',
+        resource: USERINFO,
+      });
+      expect(refresh.body.error).toBe('invalid_target');
+    });
+  });
+
+  describe('DPoP: no token is bound to a key', () => {
+    /** A DPoP proof (RFC 9449) for POST `htu`, signed with `key` (ES256). */
+    const proofKey = () => {
+      const { publicKey, privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+      const { kty, crv, x, y } = publicKey.export({ format: 'jwk' });
+      const b64 = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
+      return (htu: string) => {
+        const input = `${b64({ typ: 'dpop+jwt', alg: 'ES256', jwk: { kty, crv, x, y } })}.${b64({
+          jti: randomUUID(),
+          htm: 'POST',
+          htu,
+          iat: Math.floor(Date.now() / 1000),
+        })}`;
+        const signature = sign('sha256', Buffer.from(input), {
+          key: privateKey,
+          dsaEncoding: 'ieee-p1363',
+        });
+        return `${input}.${signature.toString('base64url')}`;
+      };
+    };
+    const TOKEN_URL = `${BASE}/oauth2/token`;
+
+    it('a client that sends a proof gets a Bearer token, and refreshes with or without one', async () => {
+      const proof = proofKey();
+      const res = await connect({ headers: { dpop: proof(TOKEN_URL) } });
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(res.body.token_type).toBe('Bearer');
+      expect(claimsOf(res.body.access_token)).not.toHaveProperty('cnf');
+      await expect(verifyJwt(res.body.access_token, server.MCP_RESOURCE)).resolves.toBeTruthy();
+
+      const withProof = await token(
+        {
+          grant_type: 'refresh_token',
+          refresh_token: res.body.refresh_token,
+          client_id: 'pubclient',
+        },
+        { dpop: proof(TOKEN_URL) }
+      );
+      expect(withProof.status, JSON.stringify(withProof.body)).toBe(200);
+      expect(withProof.body.token_type).toBe('Bearer');
+      expect(claimsOf(withProof.body.access_token)).not.toHaveProperty('cnf');
+
+      const without = await token({
+        grant_type: 'refresh_token',
+        refresh_token: withProof.body.refresh_token,
+        client_id: 'pubclient',
+      });
+      expect(without.status, JSON.stringify(without.body)).toBe(200);
+      expect(without.body.token_type).toBe('Bearer');
+    });
+
+    it('registration refuses a client asking for DPoP-bound tokens, and stores nothing', async () => {
+      const before = await db.oauthClient.count();
+      const register = (fields: Record<string, unknown>) =>
+        server.auth.handler(
+          new Request(`${BASE}/oauth2/register`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              client_name: 'DPoP client',
+              redirect_uris: ['http://127.0.0.1:4568/cb'],
+              token_endpoint_auth_method: 'none',
+              ...fields,
+            }),
+          })
+        );
+      const refused = await register({ dpop_bound_access_tokens: true });
+      expect(refused.status).toBe(400);
+      expect(await refused.json()).toMatchObject({
+        error: 'invalid_client_metadata',
+        error_description: server.DPOP_REFUSED_MESSAGE,
+      });
+      expect(await db.oauthClient.count()).toBe(before);
+      expect((await register({ dpop_bound_access_tokens: false })).status).toBe(201);
+    });
+
+    it('authorization refuses a code bound to a DPoP key (dpop_jkt)', async () => {
+      const query = new URLSearchParams({
+        client_id: 'pubclient',
+        response_type: 'code',
+        redirect_uri: PUBLIC_REDIRECT,
+        scope: 'read write',
+        code_challenge: pkce().challenge,
+        code_challenge_method: 'S256',
+        dpop_jkt: 'A'.repeat(43),
+      });
+      const res = await server.auth.handler(
+        new Request(`${BASE}/oauth2/authorize?${query}`, { headers: { cookie: ownCookie } })
+      );
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({
+        error: 'invalid_request',
+        error_description: server.DPOP_REFUSED_MESSAGE,
+      });
+    });
+
+    it('the discovery documents advertise no DPoP', async () => {
+      const { withoutUnsupportedMetadata } = await import('../oauthHttp.ts');
+      const request = () => new Request('http://localhost:3000/.well-known/openid-configuration');
+      for (const serve of [
+        () => server.oauthProviderAuthServerMetadata(server.auth)(request()),
+        () => server.oauthProviderOpenIdConfigMetadata(server.auth)(request()),
+      ]) {
+        const served = await serve();
+        const raw = (await served.clone().json()) as Record<string, unknown>;
+        // What oauth-provider writes, and the reason the routes filter it.
+        expect(raw).toHaveProperty('dpop_signing_alg_values_supported');
+        const doc = (await (await withoutUnsupportedMetadata(served)).json()) as Record<
+          string,
+          unknown
+        >;
+        expect(Object.keys(doc).filter(key => key.startsWith('dpop'))).toEqual([]);
+        expect(doc).toMatchObject({ issuer: server.AUTH_ISSUER, token_endpoint: TOKEN_URL });
+      }
+    });
   });
 
   it('keeps better-auth’s global limit on token, authorize and register: the 101st request in 10 s from one address is refused', async () => {

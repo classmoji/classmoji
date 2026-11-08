@@ -37,12 +37,15 @@ import {
   type BeforeHookContextChange,
 } from './appConnectionGuard.ts';
 import {
+  dpopProofIgnored,
   OAUTH_REGISTER_PATH,
   OAUTH_SCOPES,
   OAUTH_TOKEN_PATH,
   offlineAccessChange,
   openRegistrationChange,
   refuseBackchannelLogout,
+  refuseDpopBoundAuthorization,
+  refuseDpopBoundRegistration,
   resourceParamChange,
   type OAuthRuleContext,
 } from './oauthRequestRules.ts';
@@ -52,7 +55,12 @@ import { mapGitHubProfile, mapGitLabProfile, onAccountCreated } from './provider
 export { AUTH_SECRET, COOKIE_PREFIX };
 export { CONNECT_APP_VIEWING_AS_MESSAGE } from './appConnectionGuard.ts';
 export { AUTH_ISSUER, MCP_RESOURCE } from './mcpResource.ts';
-export { BACKCHANNEL_LOGOUT_REFUSED_MESSAGE, OAUTH_SCOPES } from './oauthRequestRules.ts';
+export {
+  BACKCHANNEL_LOGOUT_REFUSED_MESSAGE,
+  DPOP_REFUSED_MESSAGE,
+  OAUTH_SCOPES,
+  RESOURCE_REFUSED_MESSAGE,
+} from './oauthRequestRules.ts';
 // The authorization server's discovery documents, for the webapp's root
 // `/.well-known/*` routes (better-auth serves them only under its basePath).
 export {
@@ -969,14 +977,33 @@ export const BEFORE_HOOK_RULES: readonly BeforeHookRule[] = [
     run: async ctx => refuseBackchannelLogout(ctx),
   },
   {
+    // Client registration takes no DPoP-bound access tokens.
+    name: 'register-no-dpop',
+    paths: { only: new Set([OAUTH_REGISTER_PATH]) },
+    run: async ctx => refuseDpopBoundRegistration(ctx),
+  },
+  {
     // Client registration is open registration, signed in or not.
     name: 'register-open',
     paths: { only: new Set([OAUTH_REGISTER_PATH]) },
     run: async ctx => openRegistrationChange(ctx),
   },
   {
+    // No code is bound to a DPoP key.
+    name: 'authorize-no-dpop',
+    paths: { only: new Set([OAUTH_AUTHORIZE_PATH]) },
+    run: async ctx => refuseDpopBoundAuthorization(ctx),
+  },
+  {
+    // The token endpoint reads no DPoP proof, so every token is a Bearer one.
+    name: 'token-no-dpop-proof',
+    paths: { only: new Set([OAUTH_TOKEN_PATH]) },
+    run: async ctx => dpopProofIgnored(ctx),
+  },
+  {
     // Every authorization and token request names the MCP resource, so every
-    // access token is a JWT for it.
+    // access token is a JWT for it; an authorization naming another resource
+    // is refused.
     name: 'oauth-resource',
     paths: { only: new Set([OAUTH_AUTHORIZE_PATH, OAUTH_TOKEN_PATH]) },
     run: ctx => resourceParamChange(ctx),

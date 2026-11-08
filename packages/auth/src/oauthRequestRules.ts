@@ -4,12 +4,14 @@
  * `hooks.before` (./server.ts BEFORE_HOOK_RULES):
  *
  *   - Client registration (/oauth2/register) is always open registration: it
- *     takes no back-channel logout endpoint, and a session cookie on the
- *     request is not read.
+ *     takes no back-channel logout endpoint and no DPoP-bound tokens, and a
+ *     session cookie on the request is not read.
  *   - Every authorization and token request names the MCP resource, so every
  *     access token is a JWT for it (resourceParamChange).
  *   - An authorization request whose client may refresh asks for
  *     `offline_access` (offlineAccessChange).
+ *   - No token is bound to a DPoP key (refuseDpopBoundAuthorization,
+ *     dpopProofIgnored).
  *
  * Line references are to @better-auth/oauth-provider 1.7.18,
  * dist/authorize-*.mjs and dist/utils-*.mjs.
@@ -83,6 +85,59 @@ export function refuseBackchannelLogout(ctx: OAuthRuleContext): void {
 }
 
 /**
+ * DPoP (RFC 9449) is not used: the MCP server takes bearer tokens only
+ * (`bearer_methods_supported: header`) and refuses a token bound to a key
+ * (`cnf`). oauth-provider binds a token whenever a request carries a proof or
+ * the client or the code asks for one, and has no option that turns that off
+ * (`resolveDpopTokenBinding`, :1810-1835). So:
+ *   - registration refuses a client that asks for DPoP-bound tokens
+ *     (refuseDpopBoundRegistration);
+ *   - authorization refuses `dpop_jkt`, which would bind the code
+ *     (refuseDpopBoundAuthorization);
+ *   - the token endpoint reads no proof (dpopProofIgnored), so a client that
+ *     sends one gets a Bearer token, which RFC 9449 §5 says the client then
+ *     uses as one;
+ *   - the discovery documents do not advertise DPoP (./oauthHttp.ts
+ *     withoutUnsupportedMetadata).
+ * A client known by its Client ID Metadata Document that demands DPoP-bound
+ * tokens is refused at the token endpoint ("DPoP proof header is required"):
+ * an error, not a token the MCP server would refuse.
+ */
+export const DPOP_REFUSED_MESSAGE = 'DPoP-bound access tokens are not supported.';
+
+export function refuseDpopBoundRegistration(ctx: OAuthRuleContext): void {
+  const body = isRecord(ctx.body) ? ctx.body : {};
+  if (body.dpop_bound_access_tokens === true) {
+    throw new APIError('BAD_REQUEST', {
+      error: 'invalid_client_metadata',
+      error_description: DPOP_REFUSED_MESSAGE,
+    });
+  }
+}
+
+export function refuseDpopBoundAuthorization(ctx: OAuthRuleContext): void {
+  if (ctx.path !== OAUTH_AUTHORIZE_PATH) return;
+  const jkt = authorizeParameters(ctx).dpop_jkt;
+  if (jkt !== undefined && jkt !== null) {
+    throw new APIError('BAD_REQUEST', {
+      error: 'invalid_request',
+      error_description: DPOP_REFUSED_MESSAGE,
+    });
+  }
+}
+
+/**
+ * The token endpoint reads no DPoP proof: the `dpop` header is set to `''`,
+ * which the provider takes as no proof (`getDpopProofJwt`, :1250-1251). A
+ * hook can't delete a header (better-auth merges hook headers with `set`), so
+ * it blanks it, as register-open does with `cookie`.
+ */
+export function dpopProofIgnored(ctx: OAuthRuleContext): BeforeHookContextChange | undefined {
+  if (ctx.path !== OAUTH_TOKEN_PATH || !ctx.headers?.get('dpop')) return undefined;
+  return { context: { headers: new Headers({ dpop: '' }) } };
+}
+
+/**
  * Registration never reads the caller's session. With a session,
  * oauth-provider would treat it as a signed-in user creating a client of
  * their own (`registerEndpoint`: `assertClientPrivileges(..., "create")`),
@@ -94,6 +149,8 @@ export function openRegistrationChange(ctx: OAuthRuleContext): BeforeHookContext
   if (!ctx.headers?.get('cookie')) return undefined;
   return { context: { headers: new Headers({ cookie: '' }) } };
 }
+
+export const RESOURCE_REFUSED_MESSAGE = 'The only resource is the Classmoji MCP server.';
 
 /** Whether two `resource` values are the same (strings, or lists of them). */
 function sameResourceParam(a: unknown, b: unknown): boolean {
@@ -122,7 +179,15 @@ export const storedRefreshToken = (token: string): string =>
  *   - the bare origin, with or without a trailing slash (MCP SDK releases up
  *     to 1.30 send that), or the resource with one → the MCP resource, since
  *     the provider compares `resource` by exact string (:1006-1021).
- * Anything else is left for the provider to refuse (`invalid_target`).
+ * At /oauth2/authorize anything else is refused (400 `invalid_target`): a
+ * list naming another resource too, and the userinfo URL, which the provider
+ * would otherwise accept (it skips that identifier when it checks resources,
+ * :808-809) and issue a token for. So no consent or code names a resource
+ * other than the MCP one. At /oauth2/token anything else is left for the
+ * provider, which checks it against what the code or refresh token was
+ * issued for. A `resource` repeated in a token request's form body reaches
+ * the provider as sent: it re-reads the raw form after the hooks
+ * (:7464-7466).
  *
  * A refresh token with no resources (one copied from the 1.4 tables, which
  * had none) is given the MCP resource before the refresh runs: Prisma reads
@@ -135,6 +200,12 @@ export async function resourceParamChange(
   if (ctx.path === OAUTH_AUTHORIZE_PATH) {
     const sent = authorizeParameters(ctx).resource;
     const resource = canonicalMcpResourceParam(sent);
+    if (resource !== MCP_RESOURCE) {
+      throw new APIError('BAD_REQUEST', {
+        error: 'invalid_target',
+        error_description: RESOURCE_REFUSED_MESSAGE,
+      });
+    }
     return sameResourceParam(resource, sent)
       ? undefined
       : authorizeParameterChange(ctx, { resource });

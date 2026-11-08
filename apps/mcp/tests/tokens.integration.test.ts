@@ -37,9 +37,11 @@ import {
 const {
   AUTH_ISSUER,
   MCP_RESOURCE,
+  TOKEN_ENDPOINT,
   claimsOf,
   connectApp,
   deleteIssuedGrants,
+  dpopProofs,
   registerClient,
   sessionCookie,
   tokenRequest,
@@ -145,6 +147,36 @@ describe('an access token from the OAuth server', () => {
     expect(status, JSON.stringify(body)).toBe(200);
     expect(claimsOf(body.access_token)).toMatchObject({ aud: MCP_RESOURCE, sub: student });
     expect(await whoami(body.access_token)).toBe(student);
+  });
+
+  it('is a Bearer token the server accepts when the client sent a DPoP proof, and refreshes with or without one', async () => {
+    // A client that uses DPoP (RFC 9449) sends a proof with each token
+    // request; the OAuth server reads none, so it answers with a Bearer
+    // token, which the client then uses as one (§5).
+    const proof = dpopProofs();
+    const clientId = await registerClient();
+    const issued = await connectApp(clientId, await sessionCookie(student), 'read write', {
+      dpop: proof(TOKEN_ENDPOINT),
+    });
+    expect(issued.token_type).toBe('Bearer');
+    expect(claimsOf(issued.access_token)).not.toHaveProperty('cnf');
+    expect(await whoami(issued.access_token)).toBe(student);
+
+    const withProof = await tokenRequest(
+      { grant_type: 'refresh_token', refresh_token: issued.refresh_token!, client_id: clientId },
+      { dpop: proof(TOKEN_ENDPOINT) }
+    );
+    expect(withProof.status, JSON.stringify(withProof.body)).toBe(200);
+    expect(withProof.body.token_type).toBe('Bearer');
+    expect(await whoami(withProof.body.access_token)).toBe(student);
+
+    const without = await tokenRequest({
+      grant_type: 'refresh_token',
+      refresh_token: withProof.body.refresh_token!,
+      client_id: clientId,
+    });
+    expect(without.status, JSON.stringify(without.body)).toBe(200);
+    expect(await whoami(without.body.access_token)).toBe(student);
   });
 
   describe('revoking at the server takes effect on the next request', () => {

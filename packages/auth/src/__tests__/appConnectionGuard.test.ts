@@ -16,9 +16,14 @@ import {
 } from '../appConnectionGuard.ts';
 import {
   BACKCHANNEL_LOGOUT_REFUSED_MESSAGE,
+  dpopProofIgnored,
+  DPOP_REFUSED_MESSAGE,
   offlineAccessChange,
   openRegistrationChange,
   refuseBackchannelLogout,
+  refuseDpopBoundAuthorization,
+  refuseDpopBoundRegistration,
+  RESOURCE_REFUSED_MESSAGE,
   resourceParamChange,
   storedRefreshToken,
 } from '../oauthRequestRules.ts';
@@ -190,6 +195,54 @@ describe('registration rules', () => {
   });
 });
 
+describe('DPoP rules', () => {
+  const refused = (error: string) =>
+    expect.objectContaining({
+      statusCode: 400,
+      body: expect.objectContaining({ error, error_description: DPOP_REFUSED_MESSAGE }),
+    });
+
+  it('refuse a registration asking for DPoP-bound tokens, and let one without through', () => {
+    const register = (fields: Record<string, unknown>) => ({
+      path: '/oauth2/register',
+      body: { redirect_uris: ['https://client.example/cb'], ...fields },
+      context: {},
+    });
+    expect(() => refuseDpopBoundRegistration(register({ dpop_bound_access_tokens: true }))).toThrow(
+      refused('invalid_client_metadata')
+    );
+    for (const fields of [{}, { dpop_bound_access_tokens: false }]) {
+      expect(() => refuseDpopBoundRegistration(register(fields))).not.toThrow();
+    }
+  });
+
+  it('refuse an authorization naming a DPoP key (query or body), and let one without through', () => {
+    const jkt = 'x'.repeat(43);
+    for (const request of [
+      authorize({ query: { client_id: 'c1', dpop_jkt: jkt } }),
+      authorize({ method: 'POST', query: {}, body: { client_id: 'c1', dpop_jkt: jkt } }),
+    ]) {
+      expect(() => refuseDpopBoundAuthorization({ ...request, context: {} })).toThrow(
+        refused('invalid_request')
+      );
+    }
+    expect(() => refuseDpopBoundAuthorization({ ...authorize(), context: {} })).not.toThrow();
+  });
+
+  it('blank a DPoP proof on the token request, and leave a request without one alone', () => {
+    expect(
+      dpopProofIgnored({
+        path: '/oauth2/token',
+        headers: new Headers({ dpop: 'eyJ.eyJ.sig' }),
+        context: {},
+      })?.context.headers?.get('dpop')
+    ).toBe('');
+    expect(
+      dpopProofIgnored({ path: '/oauth2/token', headers: new Headers(), context: {} })
+    ).toBeUndefined();
+  });
+});
+
 describe('the resource rule', () => {
   it('fills in the resource on authorize (query or body) when none is sent', async () => {
     await expect(resourceParamChange({ ...authorize(), context: {} })).resolves.toEqual({
@@ -215,7 +268,7 @@ describe('the resource rule', () => {
     }
   });
 
-  it('leaves the resource itself, and anything else, as sent', async () => {
+  it('leaves the resource itself as sent, and one named twice as one', async () => {
     await expect(
       resourceParamChange({
         ...authorize({ query: { client_id: 'c1', resource: MCP_RESOURCE } }),
@@ -224,7 +277,44 @@ describe('the resource rule', () => {
     ).resolves.toBeUndefined();
     await expect(
       resourceParamChange({
-        ...authorize({ query: { client_id: 'c1', resource: 'https://elsewhere.example/mcp' } }),
+        ...authorize({ query: { client_id: 'c1', resource: [MCP_RESOURCE, MCP_RESOURCE] } }),
+        context: {},
+      })
+    ).resolves.toEqual({ context: { query: { resource: MCP_RESOURCE } } });
+  });
+
+  it.each([
+    ['another server', 'https://elsewhere.example/mcp'],
+    ['the userinfo URL', 'http://localhost:3000/api/auth/oauth2/userinfo'],
+    [
+      'the userinfo URL with the MCP resource',
+      ['http://localhost:3000/api/auth/oauth2/userinfo', MCP_RESOURCE],
+    ],
+    ['the MCP resource with another server', [MCP_RESOURCE, 'https://elsewhere.example/mcp']],
+  ])('refuses an authorization naming %s', async (_label, resource) => {
+    for (const request of [
+      authorize({ query: { client_id: 'c1', resource } }),
+      authorize({ method: 'POST', query: {}, body: { client_id: 'c1', resource } }),
+    ]) {
+      await expect(resourceParamChange({ ...request, context: {} })).rejects.toMatchObject({
+        statusCode: 400,
+        body: expect.objectContaining({
+          error: 'invalid_target',
+          error_description: RESOURCE_REFUSED_MESSAGE,
+        }),
+      });
+    }
+  });
+
+  it('leaves another resource on a token request for the provider to check', async () => {
+    await expect(
+      resourceParamChange({
+        path: '/oauth2/token',
+        body: {
+          grant_type: 'authorization_code',
+          code: 'x',
+          resource: 'https://elsewhere.example/mcp',
+        },
         context: {},
       })
     ).resolves.toBeUndefined();

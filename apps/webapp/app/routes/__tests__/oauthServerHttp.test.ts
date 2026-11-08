@@ -17,7 +17,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   handler: vi.fn<(request: Request) => Promise<Response>>(),
-  serverConfig: vi.fn(async () => ({ issuer: 'http://localhost:3000', token_endpoint: 'x' })),
+  // What oauth-provider writes, DPoP keys included.
+  serverConfig: vi.fn(async () => ({
+    issuer: 'http://localhost:3000',
+    token_endpoint: 'x',
+    dpop_signing_alg_values_supported: ['EdDSA', 'ES256'],
+    dpop_bound_access_tokens_required: false,
+  })),
 }));
 
 vi.mock('@classmoji/auth/server', async () => {
@@ -207,7 +213,7 @@ describe('the discovery documents', () => {
     } as never)) as Response;
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ issuer: 'http://localhost:3000' });
+    expect(await res.json()).toEqual({ issuer: 'http://localhost:3000', token_endpoint: 'x' });
     expect(res.headers.get('access-control-allow-origin')).toBe('*');
     expect(res.headers.get('access-control-allow-credentials')).toBeNull();
     // oauth-provider's own caching header stays.
