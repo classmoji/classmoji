@@ -833,6 +833,13 @@ async function getValidGitHubToken(userId: string): Promise<GitHubTokenResult | 
  * someone else may have been using the account. One PlatformAuditLog row
  * (`oauth_grants.revoke`) when anything was deleted; counts only.
  *
+ * The user's rows in the better-auth 1.4 tables go too (`oauth_access_tokens`,
+ * which hold the 1.4 refresh tokens, and `oauth_consents`), while those tables
+ * exist: the previous release still reads them after a rollback, and the
+ * catch-up script (packages/database/scripts/catchUpOauth2Grants.ts) copies
+ * what it finds there, so a connection ended here must not be left in them.
+ * All in one transaction.
+ *
  * Throws if a deletion fails, so the request reports the failure rather than
  * leaving connections in place unnoticed.
  */
@@ -842,10 +849,21 @@ export async function revokeOAuthGrants(
   { actorId = null, path = null }: { actorId?: string | null; path?: string | null } = {}
 ): Promise<void> {
   const prisma = getPrisma();
-  const refreshTokens = await prisma.oauthRefreshToken.deleteMany({ where: { userId } });
-  const accessTokens = await prisma.oauthAccessToken.deleteMany({ where: { userId } });
-  const consents = await prisma.oauthConsent.deleteMany({ where: { userId } });
-  if (refreshTokens.count + accessTokens.count + consents.count === 0) return;
+  const [refreshTokens, accessTokens, consents, legacyTokens, legacyConsents] =
+    await prisma.$transaction([
+      prisma.oauthRefreshToken.deleteMany({ where: { userId } }),
+      prisma.oauthAccessToken.deleteMany({ where: { userId } }),
+      prisma.oauthConsent.deleteMany({ where: { userId } }),
+      prisma.legacyOauthAccessToken.deleteMany({ where: { userId } }),
+      prisma.legacyOauthConsent.deleteMany({ where: { userId } }),
+    ]);
+  const deleted =
+    refreshTokens.count +
+    accessTokens.count +
+    consents.count +
+    legacyTokens.count +
+    legacyConsents.count;
+  if (deleted === 0) return;
   await prisma.platformAuditLog.create({
     data: {
       actor_id: actorId,
@@ -859,6 +877,8 @@ export async function revokeOAuthGrants(
         refreshTokens: refreshTokens.count,
         accessTokens: accessTokens.count,
         consents: consents.count,
+        legacyTokens: legacyTokens.count,
+        legacyConsents: legacyConsents.count,
       },
     },
   });

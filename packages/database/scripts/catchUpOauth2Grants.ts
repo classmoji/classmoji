@@ -5,25 +5,35 @@
  *
  *   DATABASE_URL='postgresql://…' node packages/database/scripts/catchUpOauth2Grants.ts           # dry run
  *   DATABASE_URL='postgresql://…' node packages/database/scripts/catchUpOauth2Grants.ts --write   # insert
+ *   … --since 2026-11-09T14:03:12.345Z [--write]   # a later run: rows created since then
  *
  * (Node 24+ runs the file as it is; `npx tsx` works too.)
  *
- * WHY. The migration runs in the webapp's release_command. Until every app
- * that serves auth (the webapp and apps/admin) runs better-auth 1.7, machines
- * still on 1.4 keep writing legacy rows: clients registered at the old
- * endpoint, refresh tokens issued or rotated by the old token endpoint (1.4
- * rotates by creating a new row; it never changes or deletes one), consents
- * given on the old consent page. Run this once, after both the webapp and
- * the admin deploys have finished.
+ * WHY. The migration runs in the webapp's release_command. Until every
+ * webapp machine runs better-auth 1.7, machines still on 1.4 keep writing
+ * legacy rows: clients registered at the old endpoint, refresh tokens issued
+ * or rotated by the old token endpoint (1.4 rotates by creating a new row; it
+ * never changes or deletes one), consents given on the old consent page. Run
+ * it once the webapp deploy has finished (MCP clients reach the OAuth
+ * endpoints on the webapp's origin only). After a rollback to the previous
+ * release, the old release writes legacy rows again; once the release is
+ * back on 1.7, run it again with `--since` set to the previous run's start.
  *
- * WHAT IT COPIES. The legacy rows created at or after the migration's start:
- * `started_at` of its applied row in `_prisma_migrations`, to the millisecond
- * (legacy `created_at` has milliseconds). Nothing the migration could have
- * seen is looked at again, so a row 1.7 has deleted since (a password
- * change, a ban, a refresh-token reuse) is never put back. They go through
- * the migration's own statements 1–3:
+ * WHAT IT COPIES. The legacy rows created at or after its watermark: by
+ * default the migration's start (`started_at` of its applied row in
+ * `_prisma_migrations`), or with `--since <ISO timestamp>` that time, which
+ * may not be earlier than the migration's start nor later than this run's
+ * own. Both to the millisecond (legacy `created_at` has milliseconds). Each
+ * run prints its own start (`run started …`, `runStartedAt` in the RESULT
+ * line), the value the next run passes. Rows older than the watermark are not
+ * looked at again, so a row 1.7 has deleted since (a refresh-token reuse
+ * ending its family) is never put back; a run with the default watermark
+ * after an earlier run would read the earlier run's window again, so pass
+ * `--since`. (A password change, a reset and a ban also delete the user's
+ * legacy rows: packages/auth/src/server.ts revokeOAuthGrants.) They go
+ * through the migration's own statements 1–3:
  *   - clients: every one but the two Classmoji-owned ids; legacy id kept;
- *     `public` → `none` with no secret, any other type → client_secret_basic
+ *     no owner; `public` → `none` with no secret, any other type → client_secret_basic
  *     with the secret as SHA-256 base64url without padding; redirect URIs
  *     split on commas; the server's scope list written out;
  *   - consents: one per (client, user) with a given consent or a live
@@ -60,7 +70,9 @@
  * nothing.
  *
  * REFUSES, writing nothing, when: DATABASE_URL is not set (no .env is read);
- * the migration has no single applied row; the file differs from what ran;
+ * `--since` is not an ISO timestamp with a time zone, or falls before the
+ * migration's start or after this run's; the migration has no single applied
+ * row; the file differs from what ran;
  * a row to insert collides with a row already there under another id (a
  * client id, a refresh-token hash or a consent id), which the migration could
  * not have produced. Use Neon's direct (not -pooler) URL: temporary tables
@@ -98,6 +110,9 @@ const TARGETS = ['oauth2_clients', 'oauth2_consents', 'oauth2_refresh_tokens'] a
 type Target = (typeof TARGETS)[number];
 
 const SINCE = '(SELECT w."since" FROM pg_temp."catch_up_window" w)';
+
+/** `--since`'s form: an ISO 8601 timestamp with a time zone, to the millisecond at most. */
+const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})$/;
 
 /**
  * The rows to insert into each real table, from what the statements put in
@@ -146,7 +161,10 @@ interface Result {
   mode: 'dry-run' | 'write';
   database: string;
   migrationStartedAt: string;
+  /** This run's start: what the next run passes as `--since`. */
+  runStartedAt: string;
   since: string;
+  sinceFrom: 'migration' | 'option';
   window: Record<(typeof LEGACY)[number], number>;
   clientsAlreadyCopied: number;
   produced: Record<Target, number>;
@@ -189,6 +207,7 @@ function describeUrl(url: string): string {
 async function run(
   tx: Prisma.TransactionClient,
   write: boolean,
+  since: Date | null,
   statements: { target: Target; sql: string }[],
   fileChecksum: string
 ): Promise<Result> {
@@ -209,6 +228,13 @@ async function run(
       ` (Postgres ${server!.version}, TimeZone ${server!.timezone}; this run uses UTC)`
   );
   await exec(`SET LOCAL TimeZone = 'UTC'`);
+  const [started] = await rows<{ runStartedAt: Date }>(
+    `SELECT date_trunc('milliseconds', transaction_timestamp()) AS "runStartedAt"`
+  );
+  const runStartedAt = started!.runStartedAt;
+  console.log(
+    `run started ${runStartedAt.toISOString()} (pass it as --since to a later run of this script)`
+  );
 
   const applied = await rows<{ checksum: string; started_at: Date; since: Date }>(
     `SELECT "checksum", "started_at",
@@ -232,7 +258,20 @@ async function run(
   console.log(
     `migration ${MIGRATION}: started ${migration.started_at.toISOString()}; the file matches its recorded checksum`
   );
-  console.log(`window: legacy rows created at or after ${migration.since.toISOString()}`);
+  if (since && since.getTime() < migration.since.getTime()) {
+    throw new Refusal(
+      `--since ${since.toISOString()} is before the migration's start ` +
+        `(${migration.since.toISOString()}): the migration copied those rows itself`
+    );
+  }
+  if (since && since.getTime() > runStartedAt.getTime()) {
+    throw new Refusal(`--since ${since.toISOString()} is after this run's start`);
+  }
+  const watermark = since ?? migration.since;
+  console.log(
+    `window: legacy rows created at or after ${watermark.toISOString()}` +
+      (since ? ' (--since)' : " (the migration's start)")
+  );
 
   if (write) {
     await exec(`SET LOCAL lock_timeout = '10s'`);
@@ -240,11 +279,11 @@ async function run(
   }
 
   // Every DDL first: a dry run turns READ ONLY right after.
-  await exec(
-    `CREATE TEMP TABLE "catch_up_window" ON COMMIT DROP AS
-     SELECT date_trunc('milliseconds', "started_at" AT TIME ZONE 'UTC')::timestamp(3) AS "since"
-     FROM public."_prisma_migrations"
-     WHERE "migration_name" = '${MIGRATION}' AND "finished_at" IS NOT NULL AND "rolled_back_at" IS NULL`
+  await exec(`CREATE TEMP TABLE "catch_up_window" ("since" timestamp(3) NOT NULL) ON COMMIT DROP`);
+  await tx.$executeRawUnsafe(
+    `INSERT INTO pg_temp."catch_up_window" ("since")
+     VALUES (date_trunc('milliseconds', $1::timestamptz AT TIME ZONE 'UTC'))`,
+    watermark.toISOString()
   );
   for (const name of SHADOWED) {
     await exec(`CREATE TEMP TABLE "${name}" (LIKE public."${name}" INCLUDING ALL) ON COMMIT DROP`);
@@ -330,7 +369,9 @@ async function run(
     mode: write ? 'write' : 'dry-run',
     database: server!.database!,
     migrationStartedAt: migration.started_at.toISOString(),
-    since: migration.since.toISOString(),
+    runStartedAt: runStartedAt.toISOString(),
+    since: watermark.toISOString(),
+    sinceFrom: since ? 'option' : 'migration',
     window: inWindow,
     clientsAlreadyCopied,
     produced,
@@ -383,17 +424,41 @@ function report(result: Result): void {
   console.log(`RESULT ${JSON.stringify(result)}`);
 }
 
+const USAGE =
+  "usage: DATABASE_URL='postgresql://…' node packages/database/scripts/catchUpOauth2Grants.ts " +
+  '[--since <ISO timestamp>] [--write]';
+
+/** `--write` and `--since <ISO timestamp>`, or the usage error to print. */
+function parseArgs(args: string[]): { write: boolean; since: Date | null } | { error: string } {
+  let write = false;
+  let since: Date | null = null;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === '--write' && !write) {
+      write = true;
+    } else if (arg === '--since' && !since) {
+      const value = args[++i];
+      if (!value || !ISO_TIMESTAMP.test(value) || Number.isNaN(Date.parse(value))) {
+        return {
+          error: `--since needs an ISO timestamp with a time zone (got ${value ?? 'nothing'})`,
+        };
+      }
+      since = new Date(value);
+    } else {
+      return { error: `unknown argument(s): ${args.slice(i).join(' ')}` };
+    }
+  }
+  return { write, since };
+}
+
 async function main(): Promise<number> {
-  const args = process.argv.slice(2);
-  const unknown = args.filter(arg => arg !== '--write');
-  if (unknown.length) {
-    console.error(`unknown argument(s): ${unknown.join(' ')}`);
-    console.error(
-      "usage: DATABASE_URL='postgresql://…' node packages/database/scripts/catchUpOauth2Grants.ts [--write]"
-    );
+  const parsed = parseArgs(process.argv.slice(2));
+  if ('error' in parsed) {
+    console.error(parsed.error);
+    console.error(USAGE);
     return 2;
   }
-  const write = args.includes('--write');
+  const { write, since } = parsed;
   const url = process.env.DATABASE_URL;
   if (!url) {
     console.error('DATABASE_URL must be set for this command; no .env file is read.');
@@ -403,6 +468,7 @@ async function main(): Promise<number> {
   console.log(
     write ? 'mode: WRITE (one transaction)' : 'mode: dry run (read-only; pass --write to insert)'
   );
+  if (since) console.log(`--since ${since.toISOString()}`);
 
   const file = readFileSync(MIGRATION_FILE);
   const fileChecksum = createHash('sha256').update(file).digest('hex');
@@ -413,7 +479,7 @@ async function main(): Promise<number> {
   try {
     const result = await prisma.$transaction(
       async tx => {
-        const outcome = await run(tx, write, statements, fileChecksum);
+        const outcome = await run(tx, write, since, statements, fileChecksum);
         if (!write) throw new DryRunDone(outcome);
         return outcome;
       },

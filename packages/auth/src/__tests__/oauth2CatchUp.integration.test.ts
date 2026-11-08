@@ -131,7 +131,9 @@ type CatchUp = {
   stderr: string;
   result?: {
     mode: string;
+    runStartedAt: string;
     since: string;
+    sinceFrom: string;
     window: Record<string, number>;
     clientsAlreadyCopied: number;
     produced: Record<string, number>;
@@ -204,6 +206,7 @@ function legacyRows(base: Date, t: Date) {
       ('u-1', 'u1@example.org', 'User One'),
       ('u-2', 'u2@example.org', 'User Two'),
       ('u-3', 'u3@example.org', 'User Three'),
+      ('u-4', 'u4@example.org', 'User Four'),
       ('u-del', 'udel@example.org', 'User Deleted')`,
     `INSERT INTO "oauth_applications" ("id", "name", "icon", "metadata", "client_id", "client_secret", "redirect_urls", "type", "disabled", "user_id", "created_at", "updated_at") VALUES
       ('app-pub', 'Claude Code', NULL, NULL, 'pubclient', '', 'http://localhost:33418/callback,http://127.0.0.1:33418/callback', 'public', false, NULL, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z'),
@@ -231,7 +234,8 @@ function legacyRows(base: Date, t: Date) {
       ('w-consent-wpub-u1-a', 'wpubclient', 'u-1', 'read', true, ${at(12)}, ${at(12)}),
       ('w-consent-wpub-u1-b', 'wpubclient', 'u-1', 'read write offline_access', true, ${at(13)}, ${at(13)}),
       ('w-consent-wweb-u2-denied', 'wwebclient', 'u-2', 'read', false, ${at(14)}, ${at(14)}),
-      ('w-consent-askmoji', 'classmoji-ask-moji', 'u-3', 'read', true, ${at(15)}, ${at(15)})`,
+      ('w-consent-askmoji', 'classmoji-ask-moji', 'u-3', 'read', true, ${at(15)}, ${at(15)}),
+      ('w-consent-pub-u4', 'pubclient', 'u-4', 'read write', true, ${at(16)}, ${at(16)})`,
     `INSERT INTO "oauth_access_tokens" ("id", "access_token", "refresh_token", "access_token_expires_at", "refresh_token_expires_at", "client_id", "user_id", "scopes", "created_at", "updated_at") VALUES
       ('w-tok-pub-u1-rot', 'acc-w1', 'ref-w-pub-u1-rot', ${accessLive}, ${live}, 'pubclient', 'u-1', 'openid read write offline_access', ${at(20)}, ${at(20)}),
       ('w-tok-pub-u2', 'acc-w2', 'ref-w-pub-u2', ${accessLive}, ${live}, 'pubclient', 'u-2', 'read', ${at(21)}, ${at(21)}),
@@ -241,7 +245,8 @@ function legacyRows(base: Date, t: Date) {
       ('w-tok-nouser', 'acc-w6', 'ref-w-nouser', ${accessLive}, ${live}, 'wwebclient', NULL, 'read', ${at(25)}, ${at(25)}),
       ('w-tok-askmoji', 'askmoji_w', 'askmoji-live-w', ${accessLive}, ${live}, 'classmoji-ask-moji', 'u-3', 'read', ${at(26)}, ${at(26)}),
       ('w-tok-devmint', 'acc-w8', 'ref-w-devmint', ${accessLive}, ${live}, 'classmoji-dev-mint', 'u-3', 'read', ${at(27)}, ${at(27)}),
-      ('w-tok-del', 'acc-w9', 'ref-w-del', ${accessLive}, ${live}, 'pubclient', 'u-del', 'read', ${at(28)}, ${at(28)})`,
+      ('w-tok-del', 'acc-w9', 'ref-w-del', ${accessLive}, ${live}, 'pubclient', 'u-del', 'read', ${at(28)}, ${at(28)}),
+      ('w-tok-pub-u4', 'acc-w10', 'ref-w-pub-u4', ${accessLive}, ${live}, 'pubclient', 'u-4', 'read write', ${at(29)}, ${at(29)})`,
     // A refresh token whose user is then deleted: the legacy foreign key
     // takes the token with it.
     `DELETE FROM "users" WHERE "id" = 'u-del'`,
@@ -340,10 +345,12 @@ describe.skipIf(!CX_URL)('the CX-2 catch-up (real Postgres)', () => {
     prisma(['migrate', 'deploy', '--schema', all], REF_URL!);
 
     // 1.7 machines serve while 1.4 ones still do: a migrated token is
-    // refreshed (a JWT exists for (pubclient, u-1)); u-2 changes their
-    // password, which ends their migrated (webclient, u-2) grant; an app
-    // connection is approved for (webclient, u-1) (a 1.7 consent, on a whole
-    // second).
+    // refreshed (a JWT exists for (pubclient, u-1)), and then that family
+    // ends (refresh-token reuse: oauth-provider deletes the pair's refresh
+    // tokens, invalidateRefreshFamily, and leaves the 1.4 rows); u-2 changes
+    // their password, which ends their migrated (webclient, u-2) grant, the
+    // 1.4 rows included; an app connection is approved for (webclient, u-1)
+    // (a 1.7 consent, on a whole second).
     server = await import('../server.ts');
     await server.auth.handler(new Request(`${BASE}/ok`));
     const refreshed = await token({
@@ -353,17 +360,26 @@ describe.skipIf(!CX_URL)('the CX-2 catch-up (real Postgres)', () => {
     });
     expect(refreshed.status).toBe(200);
     jwtBefore = refreshed.body.access_token;
+    await cx.$executeRawUnsafe(
+      `DELETE FROM "oauth2_refresh_tokens" WHERE "client_id" = 'pubclient' AND "user_id" = 'u-1'`
+    );
     expect(await cx.oauthConsent.findUnique({ where: { id: 'consent-web-u2' } })).toBeTruthy();
     await server.revokeOAuthGrants('u-2', 'password_change');
     expect(await cx.oauthRefreshToken.count({ where: { userId: 'u-2' } })).toBe(0);
     expect(await cx.oauthConsent.count({ where: { userId: 'u-2' } })).toBe(0);
+    expect(await cx.legacyOauthAccessToken.count({ where: { userId: 'u-2' } })).toBe(0);
+    expect(await cx.legacyOauthConsent.count({ where: { userId: 'u-2' } })).toBe(0);
     await cx.$executeRawUnsafe(
       `INSERT INTO "oauth2_consents" ("id", "client_id", "user_id", "scopes", "created_at", "updated_at")
        VALUES ('consent-17-web-u1', 'webclient', 'u-1', ARRAY['read'], date_trunc('second', now()), date_trunc('second', now()))`
     );
 
-    // A 1.4 machine during the deploy.
+    // A 1.4 machine during the deploy; then u-4, who connected on it, resets
+    // their password on a 1.7 machine.
     for (const statement of rows.window) await cx.$executeRawUnsafe(statement);
+    await server.revokeOAuthGrants('u-4', 'password_reset');
+    expect(await cx.legacyOauthAccessToken.count({ where: { userId: 'u-4' } })).toBe(0);
+    expect(await cx.legacyOauthConsent.count({ where: { userId: 'u-4' } })).toBe(0);
   }, 600_000);
 
   afterAll(async () => {
@@ -453,7 +469,9 @@ describe.skipIf(!CX_URL)('the CX-2 catch-up (real Postgres)', () => {
       mode: 'dry-run',
       database: new URL(CX_URL!).pathname.slice(1),
       migrationStartedAt: watermark.toISOString(),
+      runStartedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
       since: watermark.toISOString(),
+      sinceFrom: 'migration',
       // The deleted user's token went with the user (legacy foreign key).
       window: { oauth_applications: 3, oauth_consents: 6, oauth_access_tokens: 8 },
       clientsAlreadyCopied: 0,
@@ -657,18 +675,30 @@ describe.skipIf(!CX_URL)('the CX-2 catch-up (real Postgres)', () => {
   });
 
   it('never puts back a copied grant that 1.7 has deleted since', async () => {
-    // tok-web-u2 and consent-web-u2 were copied by the migration and deleted
-    // by u-2's password change; their legacy rows are still there, but older
-    // than the migration.
-    expect(json(afterWrite.oauth2_refresh_tokens!).map(r => r.id)).not.toContain('tok-web-u2');
+    // tok-pub-u1 was copied by the migration and its family ended on 1.7;
+    // its legacy row is still there, but older than the migration.
+    const tokens = json(afterWrite.oauth2_refresh_tokens!).map(r => r.id);
+    expect(tokens).not.toContain('tok-pub-u1');
+    expect(json(afterWrite.oauth_access_tokens!).map(r => r.id)).toContain('tok-pub-u1');
+    // u-2's password change ended the migrated (webclient, u-2) grant, and
+    // its legacy rows with it.
+    expect(tokens).not.toContain('tok-web-u2');
     expect(json(afterWrite.oauth2_consents!).map(c => `${c.client_id}/${c.user_id}`)).not.toContain(
       'webclient/u-2'
     );
-    expect(json(afterWrite.oauth_access_tokens!).map(r => r.id)).toContain('tok-web-u2');
-    expect(json(afterWrite.oauth_consents!).map(c => c.id)).toContain('consent-web-u2');
-    // The reported gap (b2-cx2-catchup.md): a token a 1.4 machine issued in
-    // the window, before that password change, is copied like any other.
-    expect(json(afterWrite.oauth2_refresh_tokens!).map(r => r.id)).toContain('w-tok-pub-u2');
+    // A token a 1.4 machine issued for u-2 after that change is copied like
+    // any other.
+    expect(tokens).toContain('w-tok-pub-u2');
+  });
+
+  it('copies nothing of a user whose password was reset after a 1.4 machine connected them', async () => {
+    for (const table of ['oauth2_refresh_tokens', 'oauth2_consents']) {
+      expect(
+        json(afterWrite[table]!).filter(r => r.user_id === 'u-4'),
+        table
+      ).toEqual([]);
+    }
+    expect(json(afterWrite.oauth_access_tokens!).map(r => r.id)).not.toContain('w-tok-pub-u4');
   });
 
   it('run again: inserts nothing and changes nothing', async () => {
@@ -743,5 +773,116 @@ describe.skipIf(!CX_URL)('the CX-2 catch-up (real Postgres)', () => {
       client_id: 'pubclient',
     });
     expect(expired.status).not.toBe(200);
+  });
+
+  describe('a later run, after a rollback and a roll-forward (--since)', () => {
+    // The previous release served for a while (1.4 wrote rows again), then
+    // 1.7 came back. Meanwhile 1.7 had ended a family the first run had
+    // caught up: (wpubclient, u-1), refreshed above, then reused.
+    let rollbackAt: Date;
+    let previousRun: string;
+
+    beforeAll(async () => {
+      previousRun = firstWrite.result!.runStartedAt;
+      await cx.$executeRawUnsafe(
+        `DELETE FROM "oauth2_refresh_tokens" WHERE "client_id" = 'wpubclient' AND "user_id" = 'u-1'`
+      );
+      rollbackAt = new Date(Math.max(Date.now(), Date.parse(previousRun) + 1));
+      const at = (ms: number) => lit(new Date(rollbackAt.getTime() + ms));
+      const live = lit(new Date(Date.now() + 5 * DAY));
+      for (const statement of [
+        `INSERT INTO "oauth_applications" ("id", "name", "client_id", "client_secret", "redirect_urls", "type", "disabled", "created_at", "updated_at") VALUES
+          ('app-rb-pub', 'Registered during the rollback', 'rbclient', '', 'http://127.0.0.1:44200/callback', 'public', false, ${at(1)}, ${at(1)})`,
+        `INSERT INTO "oauth_consents" ("id", "client_id", "user_id", "scopes", "consent_given", "created_at", "updated_at") VALUES
+          ('rb-consent-u1', 'rbclient', 'u-1', 'read write offline_access', true, ${at(2)}, ${at(2)})`,
+        `INSERT INTO "oauth_access_tokens" ("id", "access_token", "refresh_token", "access_token_expires_at", "refresh_token_expires_at", "client_id", "user_id", "scopes", "created_at", "updated_at") VALUES
+          ('rb-tok-u1', 'acc-rb1', 'ref-rb-u1', ${live}, ${live}, 'rbclient', 'u-1', 'read write', ${at(3)}, ${at(3)}),
+          ('rb-tok-wweb-u3', 'acc-rb2', 'ref-rb-wweb-u3', ${live}, ${live}, 'wwebclient', 'u-3', 'read write', ${at(4)}, ${at(4)})`,
+      ]) {
+        await cx.$executeRawUnsafe(statement);
+      }
+    });
+
+    it('without --since, would read the first run’s window again and bring back what 1.7 ended', () => {
+      const control = catchUp([]);
+      expect(control.status, control.stderr).toBe(0);
+      expect(control.result).toMatchObject({
+        sinceFrom: 'migration',
+        // w-tok-wpub-u1 again, beside the two rollback tokens.
+        insert: { oauth2_clients: 1, oauth2_consents: 1, oauth2_refresh_tokens: 3 },
+      });
+    });
+
+    it('with the previous run’s start, copies the rollback’s rows and nothing 1.7 ended', async () => {
+      const before = await snapshot(cx);
+      const dry = catchUp(['--since', previousRun]);
+      expect(dry.status, dry.stderr).toBe(0);
+      expect(dry.stdout).toContain(
+        `window: legacy rows created at or after ${previousRun} (--since)`
+      );
+      expect(dry.result).toMatchObject({
+        mode: 'dry-run',
+        since: previousRun,
+        sinceFrom: 'option',
+        window: { oauth_applications: 1, oauth_consents: 1, oauth_access_tokens: 2 },
+        insert: { oauth2_clients: 1, oauth2_consents: 1, oauth2_refresh_tokens: 2 },
+      });
+      expect(await snapshot(cx)).toEqual(before);
+
+      const write = catchUp(['--since', previousRun, '--write']);
+      expect(write.status, write.stderr).toBe(0);
+      expect(write.result?.insert).toEqual(dry.result?.insert);
+      const after = await snapshot(cx);
+      for (const [table, rows] of Object.entries(before)) {
+        expect(added(after[table]!, rows), table).toEqual([]);
+      }
+      const tokens = json(added(before.oauth2_refresh_tokens!, after.oauth2_refresh_tokens!));
+      expect(tokens.map(r => r.id).sort()).toEqual(['rb-tok-u1', 'rb-tok-wweb-u3']);
+      expect(json(after.oauth2_refresh_tokens!).map(r => r.id)).not.toContain('w-tok-wpub-u1');
+      expect(json(added(before.oauth2_consents!, after.oauth2_consents!)).map(c => c.id)).toEqual([
+        'rb-consent-u1',
+      ]);
+
+      // Again with the same --since: nothing more.
+      const again = catchUp(['--since', previousRun, '--write']);
+      expect(again.result?.insert).toEqual({
+        oauth2_clients: 0,
+        oauth2_consents: 0,
+        oauth2_refresh_tokens: 0,
+      });
+
+      // The rollback's token refreshes on 1.7 to a JWT the MCP accepts.
+      const res = await token({
+        grant_type: 'refresh_token',
+        refresh_token: 'ref-rb-u1',
+        client_id: 'rbclient',
+      });
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(claimsOf(res.body.access_token)).toMatchObject({ azp: 'rbclient', sub: 'u-1' });
+      expect(await consentAccepts(res.body.access_token)).toBe(true);
+    });
+
+    it('refuses a --since before the migration’s start or after the run’s, writing nothing', async () => {
+      const before = await snapshot(cx);
+      const early = catchUp(['--since', '2026-01-01T00:00:00Z', '--write']);
+      expect(early.status).toBe(1);
+      expect(early.stderr).toContain("is before the migration's start");
+      const late = catchUp(['--since', '2999-01-01T00:00:00.000Z', '--write']);
+      expect(late.status).toBe(1);
+      expect(late.stderr).toContain("is after this run's start");
+      expect(await snapshot(cx)).toEqual(before);
+    });
+
+    it.each([
+      [['--since']],
+      [['--since', 'yesterday']],
+      [['--since', '2026-11-09T10:00:00']],
+      [['--since', '2026-11-09T10:00:00.1234Z']],
+      [['--since', '2026-11-09T10:00:00Z', '--since', '2026-11-09T10:00:00Z']],
+    ])('refuses %j before connecting (usage)', args => {
+      const run = catchUp(args);
+      expect(run.status).toBe(2);
+      expect(run.stdout).not.toContain('connected');
+    });
   });
 });

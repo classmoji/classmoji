@@ -1301,12 +1301,16 @@ describe.skipIf(!DATABASE_URL)('the authorization server (real Postgres)', () =>
     const grantsOf = async (userId: string) => ({
       refresh: await db.oauthRefreshToken.count({ where: { userId } }),
       consents: await db.oauthConsent.count({ where: { userId } }),
+      legacyTokens: await db.legacyOauthAccessToken.count({ where: { userId } }),
+      legacyConsents: await db.legacyOauthConsent.count({ where: { userId } }),
     });
+    const NONE = { refresh: 0, consents: 0, legacyTokens: 0, legacyConsents: 0 };
     const revokeRows = (userId: string) =>
       db.platformAuditLog.findMany({ where: { action: 'oauth_grants.revoke', target_id: userId } });
 
     it('a password reset ends them, with one audit row', async () => {
       await connect();
+      expect(await grantsOf('u-1')).toMatchObject({ legacyTokens: 4, legacyConsents: 3 });
       expect((await grantsOf('u-1')).refresh).toBeGreaterThan(0);
       const ctx = await server.auth.$context;
       await ctx.internalAdapter.createVerificationValue({
@@ -1324,7 +1328,8 @@ describe.skipIf(!DATABASE_URL)('the authorization server (real Postgres)', () =>
       );
 
       expect(res.status).toBe(200);
-      expect(await grantsOf('u-1')).toEqual({ refresh: 0, consents: 0 });
+      // The user's 1.4 rows too: a rollback must not bring them back.
+      expect(await grantsOf('u-1')).toEqual(NONE);
       const rows = await revokeRows('u-1');
       expect(rows).toHaveLength(1);
       expect(rows[0]).toMatchObject({
@@ -1333,8 +1338,32 @@ describe.skipIf(!DATABASE_URL)('the authorization server (real Postgres)', () =>
         data: expect.objectContaining({
           tool: 'auth:oauth_grants.revoke',
           reason: 'password_reset',
+          legacyTokens: 4,
+          legacyConsents: 3,
         }),
       });
+    });
+
+    it('ends the 1.4 rows when the 1.7 ones are already gone, with an audit row', async () => {
+      // u-3's copied grant (offclient) gone from the 1.7 tables, its 1.4 rows
+      // still there (and two Ask Moji rows of the old mint).
+      await db.oauthRefreshToken.deleteMany({ where: { userId: 'u-3' } });
+      await db.oauthConsent.deleteMany({ where: { userId: 'u-3' } });
+      expect(await grantsOf('u-3')).toEqual({ ...NONE, legacyTokens: 3, legacyConsents: 2 });
+
+      await server.revokeOAuthGrants('u-3', 'password_reset', { actorId: 'u-3' });
+
+      expect(await grantsOf('u-3')).toEqual(NONE);
+      expect((await revokeRows('u-3')).map(r => r.data)).toEqual([
+        expect.objectContaining({
+          reason: 'password_reset',
+          refreshTokens: 0,
+          accessTokens: 0,
+          consents: 0,
+          legacyTokens: 3,
+          legacyConsents: 2,
+        }),
+      ]);
     });
 
     it('a password change that signs out other sessions ends them; one that keeps them does not', async () => {
@@ -1381,7 +1410,7 @@ describe.skipIf(!DATABASE_URL)('the authorization server (real Postgres)', () =>
         revokeOtherSessions: true,
       });
       expect(ended.status).toBe(200);
-      expect(await grantsOf('u-1')).toEqual({ refresh: 0, consents: 0 });
+      expect(await grantsOf('u-1')).toEqual(NONE);
       expect((await revokeRows('u-1')).map(r => (r.data as { reason?: string }).reason)).toEqual(
         expect.arrayContaining(['password_change'])
       );
@@ -1392,7 +1421,7 @@ describe.skipIf(!DATABASE_URL)('the authorization server (real Postgres)', () =>
       expect((await grantsOf('u-2')).consents).toBeGreaterThan(0);
       const ctx = await server.auth.$context;
       await ctx.internalAdapter.updateUser('u-2', { banned: true });
-      expect(await grantsOf('u-2')).toEqual({ refresh: 0, consents: 0 });
+      expect(await grantsOf('u-2')).toEqual(NONE);
       expect((await revokeRows('u-2')).map(r => (r.data as { reason?: string }).reason)).toEqual([
         'ban',
       ]);
