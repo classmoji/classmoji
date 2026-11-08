@@ -74,6 +74,24 @@
   height: 100%;
 }
 
+/* Reveal's scroll view (phones: below its scrollActivationWidth it adds
+   .reveal-scroll to <body>) stacks every slide as a page and scrolls <body>.
+   A fixed, full-height container adds nothing to <body>'s scroll height, so
+   the pages were clipped: nothing scrolled past slide 1 and a slide hash
+   could not be reached (#763). In that view the container joins the page
+   flow and the wrappers size to their pages. */
+.reveal-scroll .reveal-container {
+  position: static;
+  inset: auto;
+  height: auto;
+}
+
+.reveal-scroll .reveal-container .reveal,
+.reveal-scroll .reveal-editor-layout,
+.reveal-scroll .reveal-editor-layout .reveal-slide-area {
+  height: auto;
+}
+
 /* Loading and error states */
 .reveal-loading,
 .reveal-error {

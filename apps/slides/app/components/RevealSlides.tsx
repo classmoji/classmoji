@@ -21,6 +21,22 @@ import {
   stripRevealQueryConfig,
 } from '~/utils/revealHardening';
 import { isAskMojiTarget } from '~/components/askMoji/askMojiProtocol';
+import { hashForSlide, scrollToSlidePage, slideForHash } from '~/utils/scrollViewHash';
+
+/**
+ * In reveal's scroll view (phones), scroll to the slide `hash` names (#763).
+ * The fixed navbar's height comes off, so the slide starts below it.
+ */
+function showHashSlideInScrollView(deck: RevealApi, hash: string): void {
+  if (!deck.isScrollView?.() || !hash) return;
+  const root = deck.getSlidesElement();
+  const viewport = deck.getViewportElement?.() ?? document.body;
+  const slide = root ? slideForHash(hash, root) : null;
+  if (!slide) return;
+  const container = viewport.querySelector('.reveal-container');
+  const navbar = container ? parseFloat(getComputedStyle(container).paddingTop) || 0 : 0;
+  scrollToSlidePage(viewport, slide, navbar);
+}
 
 // Built-in Reveal.js themes (exported for use in SlideToolbar)
 export const BUILTIN_THEMES = [
@@ -415,6 +431,9 @@ const RevealSlides = forwardRef(function RevealSlides(
     let mounted = true;
     let resizeObserver: ResizeObserver | null = null;
     let layoutRaf = 0;
+    let userScrolled = false;
+    let onHashChange: (() => void) | null = null;
+    let removeScrollListeners: (() => void) | null = null;
 
     // rAF-debounced re-layout: collapse a burst of geometry changes to a
     // single deck.layout() per frame. Guarded by revealRef.current, which the
@@ -465,6 +484,11 @@ const RevealSlides = forwardRef(function RevealSlides(
       // NOTE: When editing, we exclude RevealHighlight plugin so code stays as plain text
       // This allows clean contenteditable editing. Re-highlighting happens on blur via
       // CodeBlockProperties or when saving/viewing.
+      // The hash the reader opened, read before reveal starts: in its scroll
+      // view reveal's first, early jump lands near the top, marks slide 1
+      // current and rewrites the hash before the layout settles (#763).
+      const openedHash = window.location.hash;
+
       const deck = new Reveal(deckRef.current, {
         hash: true,
         history: true,
@@ -582,20 +606,65 @@ const RevealSlides = forwardRef(function RevealSlides(
       // or replaced by a remount between scheduling and firing.
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
-          if (revealRef.current === deck) deck.layout();
+          if (revealRef.current === deck) {
+            deck.layout();
+            showHashSlideInScrollView(deck, openedHash);
+          }
         });
       });
       if (typeof document !== 'undefined' && document.fonts?.ready) {
         document.fonts.ready.then(() => {
-          if (revealRef.current === deck) deck.layout();
+          if (revealRef.current === deck) {
+            deck.layout();
+            if (!userScrolled) showHashSlideInScrollView(deck, openedHash);
+          }
         });
       }
+
+      // Phones (reveal's scroll view): reveal's own jump to the hash lands
+      // before the layout settles, or a page off (scrollViewHash.ts, #763),
+      // so the slide the opened hash named is scrolled to here once the layout
+      // settles, and the new one on each hash change. Not once the reader has
+      // scrolled on their own.
+      const markScrolled = () => {
+        userScrolled = true;
+      };
+      window.addEventListener('wheel', markScrolled, { passive: true, once: true });
+      window.addEventListener('touchmove', markScrolled, { passive: true, once: true });
+      onHashChange = () => {
+        if (revealRef.current === deck) showHashSlideInScrollView(deck, window.location.hash);
+      };
+      window.addEventListener('hashchange', onHashChange);
+      // reveal writes no hash while its scroll view scrolls, so a link copied
+      // on a phone would point at the slide it was opened on. Keep the URL on
+      // the current slide, replacing the entry (no history step per slide,
+      // and no hashchange).
+      deck.on(
+        'slidechanged',
+        (event: { indexh?: number; indexv?: number; currentSlide?: Element }) => {
+          if (revealRef.current !== deck || !deck.isScrollView?.()) return;
+          const hash = hashForSlide(
+            event.currentSlide ?? null,
+            event.indexh ?? 0,
+            event.indexv ?? 0
+          );
+          if (hash !== window.location.hash) {
+            window.history.replaceState(window.history.state, '', hash);
+          }
+        }
+      );
+      removeScrollListeners = () => {
+        window.removeEventListener('wheel', markScrolled);
+        window.removeEventListener('touchmove', markScrolled);
+      };
     };
 
     initReveal();
 
     return () => {
       mounted = false;
+      if (onHashChange) window.removeEventListener('hashchange', onHashChange);
+      removeScrollListeners?.();
       if (layoutRaf) cancelAnimationFrame(layoutRaf);
       if (resizeObserver) {
         resizeObserver.disconnect();

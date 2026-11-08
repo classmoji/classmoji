@@ -168,3 +168,92 @@ export const claimPendingInvites = async (
 
   return { claimed: classroomIds.length, classroomIds };
 };
+
+/**
+ * Claim the one invite a verified roster-invite token names, for a signed-in
+ * user whose own addresses do not include the invited one (#849).
+ *
+ * The token proves its holder could read the invited inbox (see
+ * `@classmoji/auth/invite-token`); registration already accepts it in place of
+ * a code. A student who registered first, with another address, gets the same
+ * proof applied one step later, instead of being stranded on the picker.
+ *
+ * Only the invite row for `(email, classroomId)` is claimed, and only while it
+ * still exists: the row is deleted first, inside the transaction, so a revoked
+ * or already-claimed invite (by this user or anyone else) enrols nobody, and
+ * two concurrent claims cannot both win. The caller verifies the token, gates
+ * impersonation and audits.
+ *
+ * Returns the classroom and new membership's id when this call claimed it.
+ */
+export const claimInviteByToken = async (
+  userId: string,
+  invite: { email: string; classroomId: string }
+): Promise<{ claimed: false } | { claimed: true; classroomId: string; membershipId: string }> => {
+  const prisma = getPrisma();
+  const email = invite.email.trim();
+  if (!email || !invite.classroomId) return { claimed: false };
+
+  return prisma.$transaction(async tx => {
+    // Every casing of the address in that classroom: `school_email` is stored
+    // as typed, but a mailbox is one mailbox.
+    const rows = await tx.classroomInvite.findMany({
+      where: {
+        classroom_id: invite.classroomId,
+        school_email: { equals: email, mode: 'insensitive' },
+      },
+      select: { id: true, student_name: true },
+    });
+    if (rows.length === 0) return { claimed: false as const };
+
+    // Delete first: a concurrent claim that read the same rows deletes none
+    // and stops here.
+    const { count } = await tx.classroomInvite.deleteMany({
+      where: { id: { in: rows.map(row => row.id) } },
+    });
+    if (count === 0) return { claimed: false as const };
+
+    const user = await tx.user.findUnique({
+      where: { id: userId },
+      select: {
+        name: true,
+        accounts: { where: { provider_id: 'github' }, select: { username: true } },
+      },
+    });
+    if (!user) throw new Error('User not found');
+
+    // Same naming rule as claimPendingInvites.
+    const rosterName = rows.map(row => row.student_name.trim()).find(Boolean);
+    const hasOwnName =
+      !!user.name?.trim() && !user.accounts.some(account => account.username === user.name);
+    if (rosterName && !hasOwnName) {
+      await tx.user.update({ where: { id: userId }, data: { name: rosterName } });
+    }
+
+    // An existing membership (any role) stays as it is; the invite is still
+    // consumed, as claimPendingInvites does with skipDuplicates.
+    const membership = await tx.classroomMembership.upsert({
+      where: {
+        classroom_id_user_id_role: {
+          classroom_id: invite.classroomId,
+          user_id: userId,
+          role: 'STUDENT',
+        },
+      },
+      create: {
+        classroom_id: invite.classroomId,
+        user_id: userId,
+        role: 'STUDENT',
+        has_accepted_invite: false,
+      },
+      update: {},
+      select: { id: true },
+    });
+
+    return {
+      claimed: true as const,
+      classroomId: invite.classroomId,
+      membershipId: membership.id,
+    };
+  });
+};

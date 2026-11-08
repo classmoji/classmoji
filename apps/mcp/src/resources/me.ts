@@ -11,37 +11,31 @@
 import { ClassmojiService } from '@classmoji/services';
 import { gitUsername } from '@classmoji/utils';
 import type { ResourceDefinition } from '../mcp/registry.ts';
-import { buildSuggestions } from '../suggestions.ts';
+import { summarizeMemberships } from '../memberships.ts';
 
 export const meResource: ResourceDefinition = {
   name: 'me',
   uriTemplate: 'classmoji://me',
   title: 'My identity & classrooms',
   description:
-    'The authenticated user (id, login, name), granted scopes, every classroom membership ' +
-    '(one row per role) with status and archive flags, and role-tailored example questions to ' +
-    "offer the user. Classrooms are addressed as 'org/slug' in all other resource URIs.",
+    'The authenticated user (id, login, name), granted scopes, and every classroom membership: ' +
+    'one entry per classroom, with every role held there in `roles` (highest first; `role` is ' +
+    "the highest), status and archive flags. Classrooms are addressed as 'org/slug' in all " +
+    'other resource URIs.',
   scope: 'read',
   roles: null,
   handler: async (_vars, { viewer }) => {
     const user = await ClassmojiService.user.findById(viewer.userId);
-    // One entry per membership row (a user can hold several roles per classroom).
     const classrooms = await ClassmojiService.classroom.findByUserId(viewer.userId);
 
+    // The full list, one entry per classroom. The example questions are
+    // `whoami`'s, so this and its `my_classrooms` mirror don't repeat it.
     return {
       userId: viewer.userId,
       login: gitUsername(user),
       name: user?.name ?? null,
       scopes: [...viewer.scopes],
-      memberships: classrooms.map(c => ({
-        classroom: `${c.git_organization?.login ?? 'unknown'}/${c.slug}`,
-        name: c.name,
-        role: c.membership.role,
-        status: c.status,
-        is_archived: c.is_archived,
-      })),
-      // Role-tailored conversation starters (cosmetic; from the roles held).
-      suggestions: buildSuggestions(classrooms.map(c => c.membership.role)),
+      memberships: summarizeMemberships(classrooms),
     };
   },
 };

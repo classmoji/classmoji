@@ -19,13 +19,15 @@ describe('healthOf', () => {
   it('is ok by default', () => {
     expect(healthOf(base).health).toBe('ok');
   });
-  it('is critical when the Github App is missing, never for a Gitlab class', () => {
-    expect(healthOf({ ...base, hasInstallation: false }).health).toBe('critical');
-    expect(healthOf({ ...base, provider: 'GITLAB', hasInstallation: false }).health).toBe('ok');
+  it("is critical for the platform's problems: a failed import or checkpoint errors", () => {
+    expect(healthOf({ ...base, importFailed: true })).toEqual({
+      health: 'critical',
+      reasons: ['Import failed'],
+    });
+    expect(healthOf({ ...base, checkpointErrors: 2 }).reasons).toEqual(['2 checkpoint error(s)']);
   });
-  it('warns on a pending backlog only past both thresholds', () => {
-    expect(healthOf({ ...base, accepted: 20, pending: 5 }).health).toBe('ok'); // 20%
-    expect(healthOf({ ...base, accepted: 10, pending: 5 }).health).toBe('warning'); // 33%
-    expect(healthOf({ ...base, accepted: 2, pending: 4 }).health).toBe('ok'); // < 5
+  it("never flags the class's own choices: no Github App, students who haven't accepted", () => {
+    expect(healthOf({ ...base, hasInstallation: false }).health).toBe('ok');
+    expect(healthOf({ ...base, accepted: 2, pending: 18 }).health).toBe('ok');
   });
 });

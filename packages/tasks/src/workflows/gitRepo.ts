@@ -21,13 +21,16 @@ import { updateRepository, type UpdateRepositoryPayload } from '../helpers/updat
 import { createRepository, type CreateRepositoryPayload } from '../helpers/createRepository.ts';
 import { provisionAutogradeWorkflowForRepo } from './autograde.ts';
 import { reportFailureReason, reportStatus } from '../helpers/progress.ts';
+import { publishAssignment } from '../helpers/publishAssignment.ts';
 import { ensureGitInstallation, GitAppNotInstalledError } from '../helpers/gitInstallation.ts';
 import { withDatabaseRetry } from '../helpers/databaseRetry.ts';
 import { isTransientGitError, retryOnGitBlip } from '../helpers/gitRetry.ts';
 import {
   appPermissionDeniedMessage,
   githubAccountGoneMessage,
+  githubAccountSuspendedMessage,
   isAppPermissionDenied,
+  isUserSuspended,
   isForeignKeyViolation,
   isRepoNotFound,
   repositoryDeletedMessage,
@@ -367,8 +370,13 @@ export const createRepositoriesTask = task({
 
 export const createRepositoryTask = task({
   id: 'gh-create_git_repo',
+  // Per classroom (the batch passes `concurrencyKey: org`). Was 6: 90 days of
+  // production (Nov 2026) showed ~19s per repo, no Github rate limiting, and
+  // big classes waiting in the queue (170 repos took 9 minutes). 8 keeps an
+  // org's content-creating writes around 50-75/min, under Github's ~80/min
+  // secondary limit; throttling, if it comes, is retried (retryOnGitBlip).
   queue: {
-    concurrencyLimit: 6,
+    concurrencyLimit: 8,
   },
   // Copying a multi-gigabyte template (an Unreal project, say) is a full
   // download plus an upload in several parts; the project-wide 15 minutes is
@@ -556,7 +564,7 @@ export const createRepositoryTask = task({
 
         if (!normalizedPayload.provisionOnly) {
           for (const assignment of filteredAssignments) {
-            await ClassmojiService.assignment.update(assignment.id, { is_published: true });
+            await publishAssignment(assignment.id);
           }
         }
       }
@@ -694,6 +702,13 @@ export const addCollaboratorsToRepo = async (payload: AddCollaboratorsToRepoTask
       await reportFailureReason('permission_denied');
       const org = payload.classroom.git_organization.login ?? 'the organization';
       throw new AbortTaskRunError(appPermissionDeniedMessage(org, payload.repoName));
+    }
+    // Github suspended the student's account: no retry changes that.
+    if (isUserSuspended(error)) {
+      await reportFailureReason('github_account_suspended');
+      throw new AbortTaskRunError(
+        githubAccountSuspendedMessage(payload.student?.login ?? null, payload.repoName)
+      );
     }
     throw error;
   }

@@ -89,6 +89,8 @@ vi.mock('@classmoji/auth/server', () => ({
   })),
   clearRevokedToken: vi.fn(),
 }));
+// The browser auth client: the page's buttons use it, the loader never does.
+vi.mock('@classmoji/auth/client', () => ({ authClient: {} }));
 vi.mock('@classmoji/auth/invite-token', () => ({ verifyInviteToken: vi.fn(() => null) }));
 vi.mock('~/utils/helpers', () => ({ checkAuth: (fn: unknown) => fn }));
 vi.mock('@classmoji/services', () => ({
@@ -100,7 +102,11 @@ vi.mock('@classmoji/services', () => ({
       assertCanCreateActive: vi.fn(async () => {}),
       isActiveClassroomLimitError: () => false,
     },
-    classroomInvite: { claimPendingInvites: vi.fn(async () => ({ claimed: 0 })) },
+    classroomInvite: {
+      claimPendingInvites: vi.fn(async () => ({ claimed: 0 })),
+      claimInviteByToken: vi.fn(async () => ({ claimed: false })),
+    },
+    audit: { create: vi.fn(async () => null) },
   },
   GitHubProvider: { getUserOctokit: vi.fn() },
   getGitProvider: vi.fn(),
@@ -256,5 +262,120 @@ describe('select-organization before a Github or Gitlab account is connected', (
     const data = await runLoader();
 
     expect(data).toEqual({ needsGithub: true, linkError: null });
+  });
+});
+
+/**
+ * #849: a student who registered first, with an address other than the
+ * invited one, opens the invite link. The verified token claims that one
+ * invite.
+ */
+describe('select-organization with an invite link for another address', () => {
+  const TOKEN = { email: 'ada@school.edu', classroomId: 'class-x' };
+  const runWithInvite = async () =>
+    (await loader({
+      request: new Request('http://localhost/select-organization?invite=tok'),
+    } as unknown as Parameters<typeof loader>[0])) as Record<string, unknown>;
+
+  beforeEach(async () => {
+    const { verifyInviteToken } = await import('@classmoji/auth/invite-token');
+    vi.mocked(verifyInviteToken).mockReturnValue(TOKEN);
+  });
+
+  it('claims the invite, audits it, and shows no mismatch', async () => {
+    const { ClassmojiService } = await import('@classmoji/services');
+    vi.mocked(ClassmojiService.classroomInvite.claimInviteByToken).mockResolvedValueOnce({
+      claimed: true,
+      classroomId: 'class-x',
+      membershipId: 'mem-x',
+    });
+    findById.mockResolvedValueOnce(SERVICE_USER).mockResolvedValueOnce({
+      ...SERVICE_USER,
+      memberships: [
+        ...SERVICE_USER.memberships,
+        {
+          ...SERVICE_USER.memberships[0],
+          id: 'mem-x',
+          classroom_id: 'class-x',
+          has_accepted_invite: false,
+          organization: { ...SERVICE_USER.memberships[0].organization, id: 'class-x' },
+        },
+      ],
+    });
+
+    const data = await runWithInvite();
+
+    expect(ClassmojiService.classroomInvite.claimInviteByToken).toHaveBeenCalledWith(
+      'user-1',
+      TOKEN
+    );
+    expect(ClassmojiService.audit.create).toHaveBeenCalledWith(
+      {
+        user_id: 'user-1',
+        classroom_id: 'class-x',
+        role: 'STUDENT',
+        action: 'CREATE',
+        resource_type: 'CLASSROOM_MEMBERSHIP',
+        resource_id: 'mem-x',
+        data: { tool: 'web:roster.invite_token' },
+      },
+      { dedupe: false }
+    );
+    // No address in the audit row.
+    expect(JSON.stringify(vi.mocked(ClassmojiService.audit.create).mock.calls)).not.toContain(
+      'ada@school.edu'
+    );
+    expect(data.memberships).toHaveLength(2);
+    expect(data.inviteEmailMismatch).toBeNull();
+  });
+
+  it('keeps the mismatch callout when the invite is gone, and audits nothing', async () => {
+    const { ClassmojiService } = await import('@classmoji/services');
+
+    const data = await runWithInvite();
+
+    expect(ClassmojiService.audit.create).not.toHaveBeenCalled();
+    expect(data.inviteEmailMismatch).toBe('ada@school.edu');
+  });
+
+  it('shows no callout to someone already in the invited classroom', async () => {
+    findById.mockResolvedValue({
+      ...SERVICE_USER,
+      memberships: [
+        {
+          ...SERVICE_USER.memberships[0],
+          classroom_id: 'class-x',
+          organization: { ...SERVICE_USER.memberships[0].organization, id: 'class-x' },
+        },
+      ],
+    });
+
+    const data = await runWithInvite();
+
+    expect(data.inviteEmailMismatch).toBeNull();
+  });
+
+  it('claims nothing for an expired or invalid token', async () => {
+    const { verifyInviteToken } = await import('@classmoji/auth/invite-token');
+    const { ClassmojiService } = await import('@classmoji/services');
+    vi.mocked(verifyInviteToken).mockReturnValue(null);
+
+    await runWithInvite();
+
+    expect(ClassmojiService.classroomInvite.claimInviteByToken).not.toHaveBeenCalled();
+  });
+
+  it('claims nothing while viewing as someone', async () => {
+    const { getAuthSession } = await import('@classmoji/auth/server');
+    const { ClassmojiService } = await import('@classmoji/services');
+    vi.mocked(getAuthSession).mockResolvedValueOnce({
+      userId: 'user-1',
+      token: 'ghu_token',
+      session: { session: { id: 'sess-1', impersonatedBy: 'admin-1' } },
+    } as never);
+
+    await runWithInvite();
+
+    expect(ClassmojiService.classroomInvite.claimInviteByToken).not.toHaveBeenCalled();
   });
 });

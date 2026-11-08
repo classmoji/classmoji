@@ -81,7 +81,6 @@ const DeliveryToggle = ({ enabled }: { enabled: boolean }) => {
 
 const HealthStrip = ({ data }: { data: Data }) => {
   const h = data.health;
-  const total = h.accepted + h.pending;
   return (
     <Panel
       title="Health"
@@ -94,8 +93,8 @@ const HealthStrip = ({ data }: { data: Data }) => {
               installed on {data.org.login}
             </Tile>
           ) : (
-            <Tile tone="critical" title="Github App missing">
-              Repository operations fail. The owner reinstalls it from Settings.
+            <Tile tone="neutral" title="No Github App">
+              {"The owner's choice; Classmoji can't create repositories here until it's installed."}
             </Tile>
           )
         ) : (
@@ -103,10 +102,7 @@ const HealthStrip = ({ data }: { data: Data }) => {
             {h.hasInstallation ? 'connected' : 'no connection'}
           </Tile>
         )}
-        <Tile
-          tone={h.pending >= 5 && h.pending * 10 >= total * 3 ? 'warning' : 'neutral'}
-          title={`${h.accepted} students`}
-        >
+        <Tile tone="neutral" title={`${h.accepted} students`}>
           {h.pending ? `${h.pending} haven't accepted` : 'everyone accepted'} · {h.staff} staff
         </Tile>
         <Tile tone="neutral" title="Content sync">
