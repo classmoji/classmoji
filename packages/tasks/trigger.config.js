@@ -93,6 +93,53 @@ function requirePrivateAgentsOnDeploy() {
   };
 }
 
+/**
+ * The Postgres major the `db-backup` task's pg_dump/pg_restore/psql come
+ * from. Match it to production's server (Neon) when that is upgraded: pg_dump
+ * refuses a server NEWER than itself, and a dump from a newer pg_dump may not
+ * restore into the older Postgres used locally and in CI (both 16).
+ */
+const POSTGRES_CLIENT_MAJOR = 16;
+
+/**
+ * Installs `postgresql-client-<major>` from the PostgreSQL project's own apt
+ * repository (PGDG): Debian bookworm, the node-24 image's base, ships only 15.
+ * Its binaries are called by absolute path (`PG_DUMP_PATH` …) so Debian's
+ * pg_wrapper never picks a different version. Like aptGet/ffmpeg, it does
+ * nothing for `trigger dev`, which uses the client on PATH.
+ */
+function postgresClient(major) {
+  const bin = `/usr/lib/postgresql/${major}/bin`;
+  return {
+    name: 'classmoji-postgres-client',
+    onBuildComplete(context) {
+      if (context.target === 'dev') return;
+      context.addLayer({
+        id: 'postgres-client',
+        image: {
+          instructions: [
+            'RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && ' +
+              'install -d /usr/share/postgresql-common/pgdg && ' +
+              'curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc && ' +
+              'echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(. /etc/os-release && echo $VERSION_CODENAME)-pgdg main" > /etc/apt/sources.list.d/pgdg.list && ' +
+              `apt-get update && apt-get install -y --no-install-recommends postgresql-client-${major} && ` +
+              `${bin}/pg_dump --version && ` +
+              'apt-get clean && rm -rf /var/lib/apt/lists/*',
+          ],
+        },
+        deploy: {
+          env: {
+            PG_DUMP_PATH: `${bin}/pg_dump`,
+            PG_RESTORE_PATH: `${bin}/pg_restore`,
+            PSQL_PATH: `${bin}/psql`,
+          },
+          override: true,
+        },
+      });
+    },
+  };
+}
+
 export default defineConfig({
   project: process.env.TRIGGER_PROJECT_ID || 'proj_ijxcrutouxchmrbjmkkk',
   // Pinned to a Node major, the one the rest of the repo runs (Node 24): unset
@@ -195,6 +242,8 @@ export default defineConfig({
       // master is on build day.) Sets FFMPEG_PATH / FFPROBE_PATH in deployed
       // images; it does nothing for `trigger dev`, which uses ffmpeg on PATH.
       ffmpeg(),
+      // For `db-backup` (pg_dump, pg_restore --list, psql).
+      postgresClient(POSTGRES_CLIENT_MAJOR),
       pythonExtension(teamSetSolverPythonOptions()),
       syncEnvVars(async ctx => {
         // Skip sync if credentials not available (allows local dev without Infisical)
