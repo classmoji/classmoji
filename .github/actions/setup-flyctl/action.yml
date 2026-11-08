@@ -1,0 +1,71 @@
+name: Set up flyctl
+description: Installs flyctl with superfly/flyctl-actions/setup-flyctl, retrying the whole action when it fails.
+
+# The superfly action downloads flyctl from the GitHub release and tries that
+# download three times, 10-20 s apart. When the release download keeps
+# answering 502/503/504, all three tries fail and the job skips its deploy.
+# This runs the action up to three times, 15 s and then 30 s apart.
+#
+# One failed run of the action can take about 6.5 minutes (each 504 arrives
+# after a 120 s wait), so callers cap this step with `timeout-minutes: 15`:
+# a setup that runs long fails the job before `flyctl deploy` starts, instead
+# of the job timeout cancelling a deploy halfway.
+
+inputs:
+  version:
+    description: The flyctl version to install.
+    required: false
+    default: '0.5.1'
+
+runs:
+  using: composite
+  steps:
+    - name: Install flyctl (attempt 1 of 3)
+      id: attempt1
+      continue-on-error: true
+      uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
+      with:
+        version: ${{ inputs.version }}
+
+    - name: Wait before attempt 2
+      if: steps.attempt1.outcome == 'failure'
+      shell: bash
+      run: |
+        echo "::warning title=flyctl setup::Attempt 1 of 3 failed; trying again in 15 s."
+        sleep 15
+
+    - name: Install flyctl (attempt 2 of 3)
+      id: attempt2
+      if: steps.attempt1.outcome == 'failure'
+      continue-on-error: true
+      uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
+      with:
+        version: ${{ inputs.version }}
+
+    - name: Wait before attempt 3
+      if: steps.attempt2.outcome == 'failure'
+      shell: bash
+      run: |
+        echo "::warning title=flyctl setup::Attempt 2 of 3 failed; trying again in 30 s."
+        sleep 30
+
+    - name: Install flyctl (attempt 3 of 3)
+      id: attempt3
+      if: steps.attempt2.outcome == 'failure'
+      continue-on-error: true
+      uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
+      with:
+        version: ${{ inputs.version }}
+
+    - name: Fail after three attempts
+      if: steps.attempt3.outcome == 'failure'
+      shell: bash
+      env:
+        FLYCTL_VERSION: ${{ inputs.version }}
+      run: |
+        echo "::error title=flyctl setup failed::Could not install flyctl $FLYCTL_VERSION after 3 attempts; see the errors above."
+        exit 1
+
+    - name: Check flyctl
+      shell: bash
+      run: flyctl version

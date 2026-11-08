@@ -6,10 +6,10 @@ description: Let Claude (and other AI assistants) act on your classroom through 
 The Classmoji **MCP server** lets an AI assistant — Claude, or any Model Context Protocol client — work with your classroom on your behalf: read your roster, grades, assignments, and calendar, and take actions like grading submissions, resolving regrades, and managing pages, modules, and tokens.
 
 :::note
-The AI acts **as you**, with **exactly your permissions** in each classroom — the same role rules the web app enforces. It can't see or do anything you couldn't already do yourself, and you can disconnect at any time.
+The AI acts **as you**, with **exactly your permissions** in each classroom — the same role rules the web app enforces. It can't see or do anything you couldn't already do yourself. You can end its access at any time: remove the app in the app itself, or change your password (see [Managing access](#managing-access)).
 :::
 
-You sign in once with your normal Classmoji (GitHub) account and approve a consent screen; no API keys to copy or manage.
+You sign in with your normal Classmoji account and approve access on a consent screen, each time you connect an app. There are no API keys to copy or manage.
 
 ## The server URL
 
@@ -24,7 +24,7 @@ That's the only value you need for any client. When a client connects, it discov
 1. In **claude.ai** (or the Claude desktop app), open **Settings → Connectors**.
 2. Click **Add custom connector**.
 3. Paste the server URL `https://mcp.classmoji.io/mcp` and click **Add**.
-4. Click **Connect** on the new connector. You'll be sent to Classmoji to sign in with GitHub and approve access (read and write). When it's done, the connector shows **Connected**.
+4. Click **Connect** on the new connector. You'll be sent to Classmoji to sign in and approve access (read and write). When it's done, the connector shows **Connected**.
 5. In a chat, click the **+** in the message box → **Connectors**, and toggle **Classmoji** on for that conversation. Claude can now use your classroom's tools.
 
 :::note
@@ -94,8 +94,17 @@ Zed prompts you to authenticate automatically the first time it connects.
 **MCP Inspector** (for testing) — run `npx @modelcontextprotocol/inspector`, set **Transport Type** to **Streamable HTTP**, enter the server URL, and click **Connect** to run the OAuth flow interactively.
 
 :::note
-For any other MCP client: point it at `https://mcp.classmoji.io/mcp`. A spec-compliant client discovers the sign-in flow on its own (RFC 9728 / OAuth 2.1 with PKCE), registers itself, and opens a browser for you to sign in to Classmoji and approve access — no manual app registration needed.
+For any other MCP client: point it at `https://mcp.classmoji.io/mcp`. A client that follows the MCP specification finds the sign-in on its own and opens a browser for you to sign in to Classmoji and approve access. Nobody has to register the app with Classmoji first.
 :::
+
+### How an app identifies itself
+
+Classmoji accepts both ways an MCP client can tell Classmoji who it is:
+
+- **A client metadata document**: the app is known by a web address its maker publishes, which describes the app. Claude Code connects this way. The consent screen then also shows that address's site (for Claude Code, *From claude.ai*), which is the part Classmoji can check.
+- **Dynamic registration**: the app registers itself the first time it connects. claude.ai, Claude Desktop and most other tools connect this way. The consent screen shows the name the app gave itself.
+
+You don't choose between them; the app does.
 
 ## What you can do
 
@@ -108,4 +117,8 @@ Staff-only surfaces (rosters, grading, the leaderboard, quiz attempts) require t
 
 ## Managing access
 
-Every action the AI takes is recorded in your classroom's audit log, just like an action in the web app. To revoke access, remove the connector (in Claude, **Settings → Connectors**; in Claude Code, `claude mcp logout classmoji` or **Clear authentication** in the `/mcp` menu) — the access is cut off immediately.
+Every action the AI takes is recorded in your classroom's audit log, just like an action in the web app.
+
+To disconnect an app, remove it in the app: in Claude, **Settings → Connectors**; in Claude Code, `claude mcp logout classmoji` or **Clear authentication** in the `/mcp` menu. The app forgets its sign-in, and to use Classmoji again you connect and approve it again. An access token the app had already received stays valid until it expires, at most an hour later.
+
+Classmoji also ends every app connection on your account when your password is reset, and when you change your password in **Settings**. Classmoji checks a connection on every request an app makes, so one that has ended stops working on the app's next request; each app then asks you to sign in and approve it again.

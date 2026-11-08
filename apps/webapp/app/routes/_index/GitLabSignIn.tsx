@@ -5,6 +5,11 @@ import { authClient } from '@classmoji/auth/client';
 import GitLabIcon from '~/components/ui/display/gitlab.svg';
 import type { GitLabChoice, GitLabSignInOptions } from './gitlabSignIn.server';
 import { optionButton } from './signInStyles';
+import {
+  dropAppConnectionQuery,
+  EXPIRED_APP_CONNECTION_MESSAGE,
+  isExpiredAppConnection,
+} from './signInRedirect';
 
 /** The last GitLab signed in with on this browser, so it is one click next time. */
 const STORAGE_KEY = 'classmoji:gitlab-instance';
@@ -73,29 +78,55 @@ export default function GitLabSignIn({
   );
   const [busy, setBusy] = useState(false);
 
+  /** Says why a sign-in didn't start, under the address field (opened, with this host in it). */
+  const showFailure = (choice: GitLabChoice, text: string) => {
+    setChoosing(true);
+    setHostInput(hostLabel(choice.host));
+    setStatus({ kind: 'error', text });
+    setBusy(false);
+  };
+
+  /**
+   * An app connection's signed query that has expired is refused with every
+   * request that carries it: it is taken out of the address, so the next
+   * attempt signs in without it (see signInRedirect.ts).
+   */
+  const expired = (choice: GitLabChoice, error: unknown) => {
+    if (!isExpiredAppConnection(error)) return false;
+    dropAppConnectionQuery();
+    showFailure(choice, EXPIRED_APP_CONNECTION_MESSAGE);
+    return true;
+  };
+
   const signIn = async (choice: GitLabChoice, { retried = false } = {}) => {
     setBusy(true);
     setStatus(null);
     remember(choice);
     if (choice.id === null) {
-      await authClient.signIn.social({ provider: 'gitlab', callbackURL, errorCallbackURL: '/' });
+      // On success the auth client goes on to gitlab.com by itself.
+      const { error } = await authClient.signIn.social({
+        provider: 'gitlab',
+        callbackURL,
+        errorCallbackURL: '/',
+      });
+      if (error && !expired(choice, error)) showFailure(choice, 'Could not start Gitlab sign-in.');
       return;
     }
     try {
-      const response = await fetch('/api/auth/gitlab-instance/sign-in', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ instanceId: choice.id, callbackURL, errorCallbackURL: '/' }),
-      });
-      const body = (await response.json().catch(() => null)) as {
-        url?: string;
-        message?: string;
-      } | null;
-      if (response.ok && body?.url) {
-        window.location.href = body.url;
+      // Through the auth client, so an app connection in progress travels
+      // with the sign-in (`oauth_query`, @classmoji/auth/client).
+      const { data, error } = await authClient.$fetch<{ url?: string }>(
+        '/gitlab-instance/sign-in',
+        {
+          method: 'POST',
+          body: { instanceId: choice.id, callbackURL, errorCallbackURL: '/' },
+        }
+      );
+      if (!error && data?.url) {
+        window.location.href = data.url;
         return;
       }
+      if (expired(choice, error)) return;
       // A remembered instance that was removed, re-registered, turned off or
       // is waiting for approval: forget it and say where its host stands now.
       remember(null);
@@ -106,7 +137,7 @@ export default function GitLabSignIn({
         await checkHost(choice.host, { retried: true });
         return;
       }
-      setStatus({ kind: 'error', text: body?.message ?? 'Could not start Gitlab sign-in.' });
+      setStatus({ kind: 'error', text: error?.message ?? 'Could not start Gitlab sign-in.' });
     } catch {
       setStatus({ kind: 'error', text: 'Could not start Gitlab sign-in.' });
     }

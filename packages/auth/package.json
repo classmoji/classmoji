@@ -12,8 +12,10 @@
     "./predicates": "./src/predicates.ts",
     "./classroom-role": "./src/classroomRole.ts",
     "./oauth-redirect": "./src/oauthRedirect.ts",
+    "./oauth-http": "./src/oauthHttp.ts",
     "./secret": "./src/secret.ts",
     "./mcp-token": "./src/mcpToken.ts",
+    "./mcp-resource": "./src/mcpResource.ts",
     "./site-return": "./src/siteReturnToken.ts",
     "./invite-token": "./src/inviteToken.ts",
     "./app-connection": "./src/appConnectionMessages.ts",
@@ -21,10 +23,13 @@
     "./session-response": "./src/sessionResponse.ts"
   },
   "dependencies": {
+    "@better-auth/cimd": "1.7.18",
+    "@better-auth/mcp": "1.7.18",
+    "@better-auth/oauth-provider": "1.7.18",
     "@classmoji/database": "*",
     "@classmoji/services": "*",
     "@classmoji/utils": "*",
-    "better-auth": "1.4.18",
+    "better-auth": "1.7.18",
     "zod": "^3.25.76"
   },
   "devDependencies": {

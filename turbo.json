@@ -142,6 +142,10 @@
         // E2E_* names below.
         "CONTENT_INDEX_INTEGRATION",
         "DOCS_INDEX_INTEGRATION",
+        // packages/auth's real-database suites (the OAuth server, the CX-2
+        // catch-up): the same quiet skip without them.
+        "OAUTH_IT_DATABASE_URL",
+        "OAUTH_CATCHUP_IT_DATABASE_URL",
         "E2E_TARGET",
         "E2E_PAGES_URL",
         "E2E_SLIDES_URL",
@@ -157,6 +161,10 @@
     },
     "test:integration": {
       "cache": false,
+      // apps/mcp's suites: which bearer they run on (internal or jwt), whether
+      // the Trigger-backed tools' success paths run, and the server's port.
+      // Unnamed here, a value set on the command line never reaches them.
+      "env": ["MCP_IT_TOKEN_KIND", "MCP_IT_TRIGGER_TASKS", "MCP_IT_PORT"],
       "outputs": []
     },
     "web:test": {

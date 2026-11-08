@@ -28,10 +28,29 @@ if (!process.env.DATABASE_URL) {
 }
 
 // Ports 8100 (dev default) and 8101–8103 are reserved by Phase-1 work; the
-// Phase-2 matrix owns 8104.
-export const PORT = 8104;
+// Phase-2 matrix owns 8104. MCP_IT_PORT moves every suite to a port of the
+// runner's choosing (the files run one at a time, so they can share it).
+export const PORT = Number(process.env.MCP_IT_PORT) || 8104;
 export const BASE = `http://localhost:${PORT}`;
-export const EXPECTED_CHALLENGE = `Bearer resource_metadata="${BASE}/.well-known/oauth-protected-resource"`;
+export const EXPECTED_CHALLENGE = `Bearer resource_metadata="${BASE}/.well-known/oauth-protected-resource", scope="read write"`;
+
+/**
+ * Which kind of token `mintToken` hands out:
+ *   - `internal` (default): the dev mint's internal token
+ *     (`mcp_internal_tokens`, POST /dev/mint-token);
+ *   - `jwt` (MCP_IT_TOKEN_KIND=jwt): a real access token from the OAuth server,
+ *     run in this process (./oauthServer.ts), through a registered client and
+ *     an approved consent. The role-matrix and cross-classroom suites run in
+ *     both modes.
+ */
+export const TOKEN_KIND: 'internal' | 'jwt' =
+  process.env.MCP_IT_TOKEN_KIND === 'jwt' ? 'jwt' : 'internal';
+// A misspelled kind would otherwise run the internal mode and look like a JWT run.
+if (![undefined, '', 'internal', 'jwt'].includes(process.env.MCP_IT_TOKEN_KIND)) {
+  throw new Error(
+    `MCP_IT_TOKEN_KIND must be "internal" or "jwt" (got ${process.env.MCP_IT_TOKEN_KIND})`
+  );
+}
 
 // Composite org/slug references (locked decision 1).
 //
@@ -47,7 +66,12 @@ export const FOREIGN_REF = 'dev-org/classmoji-other-class';
 export const OWNER_LOGIN = process.env.TEST_USER_LOGIN || 'prof-classmoji';
 
 // Deferred so the .env load above happens before Prisma is constructed.
-const { default: getPrisma, whereGitUsernameIn } = await import('@classmoji/database');
+const {
+  default: getPrisma,
+  whereGitUsername,
+  whereGitUsernameIn,
+} = await import('@classmoji/database');
+const { hashInternalToken } = await import('@classmoji/auth/mcp-token');
 export { getPrisma };
 
 // ─── Server lifecycle ────────────────────────────────────────────────────────
@@ -176,7 +200,22 @@ export interface MintOptions {
 /** Tokens minted through this helper, tracked by value for precise cleanup. */
 export const mintedTokens: string[] = [];
 
+/** The OAuth server helpers, imported only when a suite needs real access tokens. */
+export const oauthServer = () => import('./oauthServer.ts');
+
 export async function mintToken({ login, scopes, expiresInSeconds }: MintOptions) {
+  if (TOKEN_KIND === 'jwt') {
+    expect(expiresInSeconds, 'the OAuth server issues live tokens only').toBeUndefined();
+    const user = await getPrisma().user.findFirst({
+      where: whereGitUsername(login),
+      select: { id: true },
+    });
+    expect(user, `seed user '${login}' missing`).toBeTruthy();
+    const { issueAccessToken } = await oauthServer();
+    const access_token = await issueAccessToken(user!.id, scopes ?? ['read', 'write']);
+    mintedTokens.push(access_token);
+    return { access_token, user_id: user!.id, login };
+  }
   const res = await fetch(`${BASE}/dev/mint-token`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -188,12 +227,31 @@ export async function mintToken({ login, scopes, expiresInSeconds }: MintOptions
   return body;
 }
 
-/** Delete ONLY the token rows this run minted (tracked by value). */
+/** Delete ONLY the tokens this run minted (internal rows by hash; issued grants). */
 export async function deleteMintedTokens(): Promise<void> {
-  if (mintedTokens.length === 0) return;
-  await getPrisma().oauthAccessToken.deleteMany({
-    where: { accessToken: { in: mintedTokens.splice(0) } },
-  });
+  const tokens = mintedTokens.splice(0);
+  const internal = tokens.filter(t => t.startsWith('askmoji_'));
+  if (internal.length > 0) {
+    await getPrisma().mcpInternalToken.deleteMany({
+      where: { token_hash: { in: internal.map(hashInternalToken) } },
+    });
+  }
+  if (tokens.length > internal.length) await (await oauthServer()).deleteIssuedGrants();
+}
+
+/**
+ * Revoke a token minted through `mintToken`, the way it is revoked for real:
+ * an internal token's row is deleted; an access token's app is disconnected
+ * (its consent deleted). How many rows went (1 when it was live).
+ */
+export async function revokeToken(token: string): Promise<number> {
+  if (token.startsWith('askmoji_')) {
+    const { count } = await getPrisma().mcpInternalToken.deleteMany({
+      where: { token_hash: hashInternalToken(token) },
+    });
+    return count;
+  }
+  return (await oauthServer()).disconnectApp(token);
 }
 
 // ─── JSON-RPC plumbing ───────────────────────────────────────────────────────

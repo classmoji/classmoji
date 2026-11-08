@@ -10,7 +10,7 @@
  * client (no query is made) and repeats the comparison the same way:
  *
  *   - models matched by name with the first letter lowercased
- *     (`oauthApplication` is Prisma's `OauthApplication`);
+ *     (`oauthClient` is Prisma's `OauthClient`);
  *   - every field better-auth writes (`fieldName`, else its key) plus `id`
  *     must be a scalar field of that model;
  *   - a required scalar field better-auth never writes must have a default.
@@ -28,7 +28,9 @@ import { getAuthTables } from 'better-auth/db';
 
 process.env.WEBAPP_URL = 'http://localhost:3000';
 process.env.BETTER_AUTH_SECRET = 'test-secret-that-is-at-least-32-chars!!';
-// Read only when a query is made, and none is.
+// Read only when a query is made, and none is by these tests. (oauth-provider
+// tries to seed its resource row at boot and logs that it could not: expected
+// here, with no database behind the URL.)
 process.env.DATABASE_URL ??= 'postgresql://unused:unused@127.0.0.1:1/unused';
 
 vi.mock('@classmoji/services', () => ({
@@ -107,10 +109,39 @@ describe('better-auth schema vs the generated Prisma client', () => {
     );
   });
 
-  // From 1.7.3 every auth call awaits the same check first and throws
-  // SchemaMismatchError on a mismatch. With no session cookie this makes no
-  // query, so it passes on 1.4.18 and trips on a later release that finds a
-  // problem the comparison above missed.
+  it('compares every table the authorization server and its signing keys use', () => {
+    const expected = expectedSchema();
+    expect([...expected.keys()].sort()).toEqual(
+      [
+        'account',
+        'jwks',
+        'oauthAccessToken',
+        'oauthClient',
+        'oauthClientAssertion',
+        'oauthClientResource',
+        'oauthConsent',
+        'oauthRefreshToken',
+        'oauthResource',
+        'session',
+        'user',
+        'verification',
+      ].sort()
+    );
+  });
+
+  // better-auth runs the same comparison itself (the Prisma adapter's
+  // `findPrismaSchemaProblems`) when the client it is given carries Prisma's
+  // data model, and awaits it before every auth call. It must be registered
+  // on the app's client, and clean.
+  it('registers better-auth’s own startup check on the client it is given, and passes it', async () => {
+    const ctx = await auth.$context;
+    expect(typeof ctx.checkSchema).toBe('function');
+    // Throws SchemaMismatchError on a mismatch.
+    await ctx.checkSchema!();
+  });
+
+  // Every auth call awaits that check first and throws SchemaMismatchError on
+  // a mismatch. With no session cookie this makes no query.
   it('answers a session lookup without a schema error', async () => {
     await expect(auth.api.getSession({ headers: new Headers() })).resolves.toBeNull();
   });

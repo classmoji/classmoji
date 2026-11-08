@@ -1,7 +1,7 @@
 name: MCP Devmint Guard
 
 # S8: apps/mcp has a dev-only token-mint endpoint (POST /dev/mint-token) that
-# mints real oauth_access_tokens rows for seeded users. It must never be able
+# mints real MCP tokens (mcp_internal_tokens rows) for seeded users. It must never be able
 # to ship. It is double-gated — registered and served only when
 # NODE_ENV === 'development' AND ENABLE_TEST_LOGIN === 'true' — mirroring the
 # webapp's test-login route. This workflow fails the PR if:

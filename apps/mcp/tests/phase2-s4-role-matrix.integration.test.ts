@@ -33,6 +33,7 @@ import {
   mintToken,
   readResource,
   RESOURCE_FORBIDDEN,
+  revokeToken,
   rpcRaw,
   startServer,
   type Fixtures,
@@ -1754,11 +1755,9 @@ describe('S2 revocation on the write path', () => {
       prisma.calendarEvent.deleteMany({ where: { id: eventId } })
     );
 
-    // Revoke by deleting the token row mid-flight…
-    const deleted = await prisma.oauthAccessToken.deleteMany({
-      where: { accessToken: minted.access_token },
-    });
-    expect(deleted.count).toBe(1);
+    // Revoke mid-flight: the internal token's row goes, or the app the
+    // access token was issued to is disconnected (helpers.revokeToken)…
+    expect(await revokeToken(minted.access_token)).toBe(1);
 
     // …and the SAME token is rejected on the next write immediately.
     const res = await rpcRaw(minted.access_token, 'tools/call', {

@@ -6,10 +6,20 @@
  * Same document at every standard location; public by spec.
  */
 
-import { auth } from '@classmoji/auth/server';
-import { oAuthDiscoveryMetadata } from 'better-auth/plugins';
+import { auth, oauthProviderOpenIdConfigMetadata } from '@classmoji/auth/server';
+import {
+  corsPreflightResponse,
+  OAUTH_CORS_HEADERS,
+  withoutUnsupportedMetadata,
+} from '@classmoji/auth/oauth-http';
 import type { LoaderFunctionArgs } from 'react-router';
 
+// Readable from any origin, without credentials (a browser-based client's
+// discovery); OPTIONS is a CORS preflight (@classmoji/auth/oauth-http).
 export async function loader({ request }: LoaderFunctionArgs) {
-  return oAuthDiscoveryMetadata(auth)(request);
+  if (request.method === 'OPTIONS') return corsPreflightResponse();
+  // Without the DPoP keys: no token is DPoP-bound (@classmoji/auth/oauth-http).
+  return withoutUnsupportedMetadata(
+    await oauthProviderOpenIdConfigMetadata(auth, { headers: OAUTH_CORS_HEADERS })(request)
+  );
 }

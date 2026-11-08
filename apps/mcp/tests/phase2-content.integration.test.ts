@@ -517,8 +517,8 @@ describe.skipIf(!RUN)(`${SUITE} — content tools — visibility (no embedding c
     // NOT /dev/mint-token. That endpoint is test-only scaffolding, so a suite
     // built on it proves the three tools are reachable by a token shape no user
     // ever holds. This is the real production path — `mintMcpAccessToken`, the
-    // function the webapp calls on every Ask Moji turn, writing a real
-    // oauth_access_tokens row against the real Ask Moji application.
+    // function the Ask Moji and quiz tasks call on every turn, writing a real
+    // mcp_internal_tokens row for the Ask Moji client.
     const minted = await mintMcpAccessToken(ids.studentUser);
     mintedTokens.push(minted.accessToken); // tracked for the same teardown
 

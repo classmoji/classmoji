@@ -226,8 +226,10 @@ model Session {
   created_at       DateTime @default(now())
   updated_at       DateTime @default(now()) @updatedAt
 
-  user                 User  @relation("SessionUser", fields: [user_id], references: [id], onDelete: Cascade)
-  impersonated_by_user User? @relation("ImpersonatedBy", fields: [impersonatedBy], references: [id])
+  user                  User                @relation("SessionUser", fields: [user_id], references: [id], onDelete: Cascade)
+  impersonated_by_user  User?               @relation("ImpersonatedBy", fields: [impersonatedBy], references: [id])
+  oauth2_refresh_tokens OauthRefreshToken[]
+  oauth2_access_tokens  OauthAccessToken[]
 
   @@index([user_id])
   @@map("sessions")
@@ -245,12 +247,20 @@ model Verification {
   @@map("verifications")
 }
 
-// OAuth provider tables for the BetterAuth `mcp` plugin (OAuth 2.1 authorization
-// server for MCP clients). Field names must stay camelCase — the mcp plugin does
-// not support field-name remapping (its schema is fixed) — so we use @map/@@map
-// to keep the underlying tables/columns snake_case per repo convention.
+// The OAuth tables of better-auth 1.4's `mcp` plugin, kept as they were while
+// the 1.7 tables below take over (2026-11): untouched by the migration that
+// copies their clients, consents and live refresh tokens into the 1.7 tables,
+// so a rollback to the previous release still finds them. In this release
+// the catch-up script (packages/database/scripts/catchUpOauth2Grants.ts)
+// reads the rows written after that migration, and revokeOAuthGrants
+// (packages/auth/src/server.ts) deletes a user's rows here too, so neither a
+// rollback nor the catch-up brings an ended connection back. Classmoji's own
+// tokens are McpInternalToken rows. A later migration drops them. The Prisma
+// models are
+// renamed (`Legacy*`) because better-auth 1.7 uses the names `oauthAccessToken`
+// and `oauthConsent` for tables of another shape; the tables keep their names.
 
-model OauthApplication {
+model LegacyOauthApplication {
   id           String   @id @default(uuid())
   name         String
   icon         String?
@@ -264,15 +274,15 @@ model OauthApplication {
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @default(now()) @updatedAt @map("updated_at")
 
-  user          User?              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  access_tokens OauthAccessToken[]
-  consents      OauthConsent[]
+  user          User?                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  access_tokens LegacyOauthAccessToken[]
+  consents      LegacyOauthConsent[]
 
   @@index([userId])
   @@map("oauth_applications")
 }
 
-model OauthAccessToken {
+model LegacyOauthAccessToken {
   id                    String   @id @default(uuid())
   accessToken           String   @unique @map("access_token")
   refreshToken          String   @unique @map("refresh_token")
@@ -284,15 +294,15 @@ model OauthAccessToken {
   createdAt             DateTime @default(now()) @map("created_at")
   updatedAt             DateTime @default(now()) @updatedAt @map("updated_at")
 
-  application OauthApplication @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
-  user        User?            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  application LegacyOauthApplication @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
+  user        User?                  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([clientId])
   @@index([userId])
   @@map("oauth_access_tokens")
 }
 
-model OauthConsent {
+model LegacyOauthConsent {
   id           String   @id @default(uuid())
   clientId     String   @map("client_id")
   userId       String   @map("user_id")
@@ -301,12 +311,235 @@ model OauthConsent {
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @default(now()) @updatedAt @map("updated_at")
 
-  application OauthApplication @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
-  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  application LegacyOauthApplication @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
+  user        User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([clientId])
   @@index([userId])
   @@map("oauth_consents")
+}
+
+// The OAuth 2.1 authorization server for MCP clients: better-auth 1.7's
+// oauth-provider plugin (through @better-auth/mcp and @better-auth/cimd) and
+// the jwt plugin's signing keys. Fields and model names are better-auth's
+// (`auth generate` against the options in packages/auth/src/server.ts), so
+// they stay camelCase, with @map/@@map giving snake_case columns and tables;
+// the tables are `oauth2_*` so they never clash with the legacy `oauth_*`
+// ones above. better-auth checks these models against its own schema at
+// startup and refuses auth requests on a mismatch
+// (packages/auth/src/__tests__/authSchema.test.ts pins it).
+// Secrets and tokens are stored hashed (SHA-256, base64url): client secrets,
+// refresh tokens and opaque access tokens. Access tokens issued for the MCP
+// resource are JWTs and have no row.
+
+model OauthClient {
+  id                               String    @id @default(uuid())
+  clientId                         String    @unique @map("client_id")
+  clientSecret                     String?   @map("client_secret")
+  clientDiscoveryId                String?   @map("client_discovery_id")
+  disabled                         Boolean?  @default(false)
+  skipConsent                      Boolean?  @map("skip_consent")
+  enableEndSession                 Boolean?  @map("enable_end_session")
+  subjectType                      String?   @map("subject_type")
+  scopes                           String[]
+  clientCredentialsScopes          String[]  @default([]) @map("client_credentials_scopes")
+  userId                           String?   @map("user_id")
+  createdAt                        DateTime? @default(now()) @map("created_at")
+  updatedAt                        DateTime? @default(now()) @map("updated_at")
+  name                             String?
+  uri                              String?
+  icon                             String?
+  contacts                         String[]
+  tos                              String?
+  policy                           String?
+  softwareId                       String?   @map("software_id")
+  softwareVersion                  String?   @map("software_version")
+  softwareStatement                String?   @map("software_statement")
+  redirectUris                     String[]  @map("redirect_uris")
+  postLogoutRedirectUris           String[]  @map("post_logout_redirect_uris")
+  backchannelLogoutUri             String?   @map("backchannel_logout_uri")
+  backchannelLogoutSessionRequired Boolean?  @map("backchannel_logout_session_required")
+  tokenEndpointAuthMethod          String?   @map("token_endpoint_auth_method")
+  applicationType                  String?   @map("application_type")
+  jwks                             String?
+  jwksUri                          String?   @map("jwks_uri")
+  grantTypes                       String[]  @map("grant_types")
+  responseTypes                    String[]  @map("response_types")
+  requirePKCE                      Boolean?  @map("require_pkce")
+  dpopBoundAccessTokens            Boolean?  @default(false) @map("dpop_bound_access_tokens")
+  referenceId                      String?   @map("reference_id")
+  metadata                         Json?
+
+  user            User?                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clientResources OauthClientResource[]
+  refreshTokens   OauthRefreshToken[]
+  accessTokens    OauthAccessToken[]
+  consents        OauthConsent[]
+
+  @@index([userId])
+  @@map("oauth2_clients")
+}
+
+model OauthResource {
+  id                            String    @id @default(uuid())
+  identifier                    String    @unique
+  name                          String
+  accessTokenTtl                Int?      @map("access_token_ttl")
+  refreshTokenTtl               Int?      @map("refresh_token_ttl")
+  signingAlgorithm              String?   @map("signing_algorithm")
+  signingKeyId                  String?   @map("signing_key_id")
+  allowedScopes                 String[]  @map("allowed_scopes")
+  customClaims                  Json?     @map("custom_claims")
+  dpopBoundAccessTokensRequired Boolean?  @default(false) @map("dpop_bound_access_tokens_required")
+  disabled                      Boolean?  @default(false)
+  createdAt                     DateTime? @default(now()) @map("created_at")
+  updatedAt                     DateTime? @default(now()) @map("updated_at")
+  policyVersion                 Int?      @default(1) @map("policy_version")
+  metadata                      Json?
+
+  clientResources OauthClientResource[]
+
+  @@map("oauth2_resources")
+}
+
+model OauthClientResource {
+  id         String    @id @default(uuid())
+  clientId   String    @map("client_id")
+  resourceId String    @map("resource_id")
+  metadata   Json?
+  createdAt  DateTime? @default(now()) @map("created_at")
+
+  client   OauthClient   @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
+  resource OauthResource @relation(fields: [resourceId], references: [identifier], onDelete: Cascade)
+
+  @@unique([clientId, resourceId])
+  @@index([clientId])
+  @@index([resourceId])
+  @@map("oauth2_client_resources")
+}
+
+model OauthRefreshToken {
+  id                      String    @id @default(uuid())
+  token                   String    @unique
+  clientId                String    @map("client_id")
+  sessionId               String?   @map("session_id")
+  userId                  String    @map("user_id")
+  referenceId             String?   @map("reference_id")
+  authorizationCodeId     String?   @map("authorization_code_id")
+  resources               String[]
+  requestedUserInfoClaims String[]  @map("requested_user_info_claims")
+  expiresAt               DateTime  @map("expires_at")
+  createdAt               DateTime  @default(now()) @map("created_at")
+  revoked                 DateTime?
+  rotatedAt               DateTime? @map("rotated_at")
+  rotationReplayResponse  String?   @map("rotation_replay_response")
+  rotationReplayExpiresAt DateTime? @map("rotation_replay_expires_at")
+  authTime                DateTime? @map("auth_time")
+  confirmation            Json?
+  scopes                  String[]
+
+  client       OauthClient        @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
+  session      Session?           @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  user         User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessTokens OauthAccessToken[]
+
+  @@index([clientId])
+  @@index([sessionId])
+  @@index([userId])
+  @@index([authorizationCodeId])
+  @@map("oauth2_refresh_tokens")
+}
+
+model OauthAccessToken {
+  id                      String    @id @default(uuid())
+  token                   String    @unique
+  clientId                String    @map("client_id")
+  sessionId               String?   @map("session_id")
+  userId                  String?   @map("user_id")
+  referenceId             String?   @map("reference_id")
+  authorizationCodeId     String?   @map("authorization_code_id")
+  resources               String[]
+  requestedUserInfoClaims String[]  @map("requested_user_info_claims")
+  refreshId               String?   @map("refresh_id")
+  expiresAt               DateTime  @map("expires_at")
+  createdAt               DateTime  @default(now()) @map("created_at")
+  revoked                 DateTime?
+  confirmation            Json?
+  scopes                  String[]
+
+  client       OauthClient        @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
+  session      Session?           @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  user         User?              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshToken OauthRefreshToken? @relation(fields: [refreshId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+  @@index([sessionId])
+  @@index([userId])
+  @@index([authorizationCodeId])
+  @@index([refreshId])
+  @@map("oauth2_access_tokens")
+}
+
+model OauthConsent {
+  id                      String   @id @default(uuid())
+  clientId                String   @map("client_id")
+  userId                  String?  @map("user_id")
+  referenceId             String?  @map("reference_id")
+  resources               String[]
+  requestedUserInfoClaims String[] @map("requested_user_info_claims")
+  scopes                  String[]
+  createdAt               DateTime @default(now()) @map("created_at")
+  updatedAt               DateTime @default(now()) @map("updated_at")
+
+  client OauthClient @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
+  user   User?       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+  @@index([userId])
+  @@map("oauth2_consents")
+}
+
+model OauthClientAssertion {
+  id        String   @id @default(uuid())
+  expiresAt DateTime @map("expires_at")
+
+  @@map("oauth2_client_assertions")
+}
+
+// The jwt plugin's signing keys (private keys encrypted with the auth secret).
+model Jwks {
+  id         String    @id @default(uuid())
+  publicKey  String    @map("public_key")
+  privateKey String    @map("private_key")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  expiresAt  DateTime? @map("expires_at")
+  alg        String?
+  crv        String?
+
+  @@map("jwks")
+}
+
+// MCP bearer tokens Classmoji mints itself, never through the OAuth server:
+// one per Ask Moji or quiz turn (client `classmoji-ask-moji`) and the dev mint
+// (`classmoji-dev-mint`). Only the SHA-256 of the token is stored. A token
+// minted while a platform admin views as someone names that View as session
+// and its admin. Both client ids are also reserved as disabled OauthClient
+// rows, so no OAuth client can carry them.
+model McpInternalToken {
+  id                       String   @id @default(uuid())
+  token_hash               String   @unique
+  client_id                String
+  user_id                  String
+  scopes                   String[]
+  expires_at               DateTime
+  impersonation_session_id String?
+  impersonated_by          String?
+  created_at               DateTime @default(now())
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id, client_id])
+  @@map("mcp_internal_tokens")
 }
 
 // ============================================================================
@@ -377,9 +610,14 @@ model User {
   contributor_links             GitRepoContributorLink[]
   notifications                 Notification[]
   notification_preference       NotificationPreference?
-  oauth_applications            OauthApplication[]
-  oauth_access_tokens           OauthAccessToken[]
-  oauth_consents                OauthConsent[]
+  legacy_oauth_applications     LegacyOauthApplication[]
+  legacy_oauth_access_tokens    LegacyOauthAccessToken[]
+  legacy_oauth_consents         LegacyOauthConsent[]
+  oauth2_clients                OauthClient[]
+  oauth2_refresh_tokens         OauthRefreshToken[]
+  oauth2_access_tokens          OauthAccessToken[]
+  oauth2_consents               OauthConsent[]
+  mcp_internal_tokens           McpInternalToken[]
   forms_created                 Form[]
   form_responses                FormResponse[]            @relation("FormResponseRespondent")
   /// Rows this user typed in on somebody else's behalf — see FormResponse.added_by.

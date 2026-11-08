@@ -7,8 +7,9 @@
  *
  * Calls the MCP server's dev mint (`POST /dev/mint-token`, registered only
  * when NODE_ENV=development and ENABLE_TEST_LOGIN=true), so the dev stack
- * must be running. The token is a real oauth_access_tokens row; it expires
- * after `hours` (default 12) and is printed once.
+ * must be running. The token is a real internal MCP token (an
+ * `mcp_internal_tokens` row, stored hashed); it expires after `hours`
+ * (default 12) and is printed once.
  */
 import { CLASSROOM_REF } from './constants.ts';
 

@@ -1,8 +1,9 @@
 /**
  * isTokenStoreUnavailable — which token-lookup failures are "try again later"
  * (503) rather than "sign in again" (401). Built from the real Prisma error
- * classes, with the shapes better-auth's getMcpSession was observed to throw
- * against a local Postgres: a renamed table (P2021), a renamed column (P2022),
+ * classes, with the shapes the token lookups were observed to throw against a
+ * local Postgres (first through better-auth 1.4's token read, the same Prisma
+ * client): a renamed table (P2021), a renamed column (P2022),
  * the server stopped under a connected client (P1017, then P1001), and the
  * server down before the first query (PrismaClientInitializationError).
  * Anything not on the allowlist must stay a 401.

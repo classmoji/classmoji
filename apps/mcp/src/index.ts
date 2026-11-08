@@ -2,10 +2,12 @@
  * Classmoji MCP server — standalone OAuth-protected MCP resource server.
  *
  * Topology (plan §3): the webapp is the OAuth 2.1 authorization server
- * (better-auth mcp() plugin at /api/auth); this service is the resource
- * server. Bearer tokens are validated in-process and DB-backed via the
- * resolveViewer seam (src/auth/resolveViewer.ts), so revocation is
- * immediate (S2).
+ * (better-auth's oauth-provider through @better-auth/mcp, at /api/auth); this
+ * service is the resource server. Bearer tokens are checked in process by the
+ * resolveViewer seam (src/auth/resolveViewer.ts): an access token's
+ * signature, then its client, user and consent in the database, so
+ * disconnecting an app, disabling a client or banning a user takes effect on
+ * the next request.
  *
  * Endpoints:
  *   POST /mcp                                   — stateless Streamable HTTP MCP endpoint
@@ -15,26 +17,19 @@
  */
 
 import Fastify, { type FastifyError } from 'fastify';
-import { MCP_BODY_LIMIT_BYTES } from './bodyLimit.ts';
 import { MCP_PORT, MCP_PUBLIC_URL, WEBAPP_URL } from './config.ts';
 import { registerProcessSafetyNets } from './processSafety.ts';
 import devMintRoutes from './routes/devMint.ts';
 import mcpRoutes from './routes/mcp.ts';
 import wellKnownRoutes from './routes/wellKnown.ts';
+import { mcpServerOptions } from './serverOptions.ts';
 import { registerAllTools } from './tools/index.ts';
 
 // Register tool definitions once at startup (validates the manifest).
 registerAllTools();
 
-const fastify = Fastify({
-  logger: true,
-  /**
-   * Bigger than Fastify's 1 MiB default so the tools that take large payloads
-   * can refuse them with their own, readable errors. See `bodyLimit.ts`, which
-   * page_asset_upload also derives its file cap from.
-   */
-  bodyLimit: MCP_BODY_LIMIT_BYTES,
-});
+// Body limit and request timeout: see serverOptions.ts.
+const fastify = Fastify(mcpServerOptions());
 
 // S5 process-level safety nets: a stray detached promise rejection (from any
 // code path that does not await its promise) must not crash the server.

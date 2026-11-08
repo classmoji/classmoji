@@ -9,9 +9,10 @@
  *
  * Two layers, each tested on its own:
  *   (a) `hooks.before` refuses the request before the endpoint runs, with its
- *       own messages (1.4.18's endpoint also refuses admin targets, with
- *       "You cannot impersonate admins"; from 1.5 it lets an `adminUserIds`
- *       caller through, so the message tells the layers apart);
+ *       own messages (better-auth 1.4's endpoint refused admin targets
+ *       itself, with "You cannot impersonate admins"; from 1.5, 1.7.18
+ *       included, it lets an `adminUserIds` caller through, so the message
+ *       tells the layers apart);
  *   (b) `databaseHooks.session.create.before` refuses any session created
  *       with `impersonatedBy` by someone who is not a platform admin, or for
  *       an admin, whatever path creates it.
@@ -127,7 +128,11 @@ const mocks = vi.hoisted(() => {
   return { state, users, client };
 });
 
-vi.mock('@classmoji/database', () => ({ default: () => mocks.client }));
+vi.mock('@classmoji/database', async () => {
+  const { standInClient } = await import('./support/prismaStandIn.ts');
+  const client = standInClient(mocks.client);
+  return { default: () => client };
+});
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     user: { findById: vi.fn(), findByLogin: vi.fn() },
@@ -280,6 +285,29 @@ describe('a platform admin viewing as someone (hooks.before)', () => {
         body: '{}',
       })
     );
+    expect(stop.status).toBe(200);
+    expect(await stop.json()).toMatchObject({ user: { id: 'admin-1' } });
+    expect(mocks.state.sessions.some(s => s.token === viewing)).toBe(false);
+  });
+
+  it('stops for a POST with no body and no content type (the webapp banner’s Stop)', async () => {
+    const adminToken = signIn('admin-1');
+    expect((await viewAs(adminToken, { userId: 'owner-1' })).status).toBe(200);
+    const viewing = mocks.state.created[0]!.token as string;
+
+    const stop = await auth.handler(
+      new Request(`${BASE}/admin/stop-impersonating`, {
+        method: 'POST',
+        headers: {
+          origin: 'http://localhost:3000',
+          cookie: [
+            await signedCookie(`${COOKIE_PREFIX}.session_token`, viewing),
+            await signedCookie(`${COOKIE_PREFIX}.admin_session`, `${adminToken}:`),
+          ].join('; '),
+        },
+      })
+    );
+
     expect(stop.status).toBe(200);
     expect(await stop.json()).toMatchObject({ user: { id: 'admin-1' } });
     expect(mocks.state.sessions.some(s => s.token === viewing)).toBe(false);
@@ -449,7 +477,11 @@ describe('linking or unlinking a sign-in account while viewing as someone', () =
   });
 
   it('lets a normal session reach the unlink endpoint itself', async () => {
-    await post('/unlink-account', signIn('student-1'), { providerId: 'github' });
+    // better-auth 1.7 names the account by id as well as provider.
+    await post('/unlink-account', signIn('student-1'), {
+      providerId: 'github',
+      accountId: 'gh-1',
+    });
 
     // The endpoint lists the user's accounts before unlinking one.
     expect(mocks.client.account.findMany).toHaveBeenCalled();

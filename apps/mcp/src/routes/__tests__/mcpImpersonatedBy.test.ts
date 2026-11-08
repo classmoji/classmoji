@@ -1,27 +1,38 @@
 /**
- * The `X-Classmoji-Impersonated-By` header: the Ask Moji task sends the
- * actor's user id on every request of a conversation that runs under
- * impersonation, and the route carries it on the viewer as `impersonatedBy`
- * (written as `impersonated_by` into every audit row, see readAudit.test.ts).
- * It is read only from the Ask Moji OAuth client; another client's header is
- * ignored, whatever its value. From Ask Moji, a value that is not a plain id
- * is refused with a 400 before any server is built.
+ * The View as admin on an Ask Moji request (`impersonatedBy`, written as
+ * `impersonated_by` into every audit row, see readAudit.test.ts).
+ *
+ * It comes from the TOKEN: the internal token's row names the View as session
+ * and its admin (auth/internalToken.ts checks the session still lives). The
+ * Ask Moji task also sends `X-Classmoji-Impersonated-By`; from Ask Moji (an
+ * internal token of the Ask Moji client), a header that is not a plain id, or
+ * that names someone other than the token's admin (or anyone, for a token
+ * minted outside View as), is refused with a 400 before any server is built.
+ * Every other request's header is ignored, whatever its value, and it gets no
+ * admin.
  */
 
 import Fastify from 'fastify';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { ASK_MOJI_CLIENT_ID } from '@classmoji/auth/mcp-token';
+import { ASK_MOJI_CLIENT_ID, DEV_MINT_CLIENT_ID } from '@classmoji/auth/mcp-token';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Viewer } from '../../auth/resolveViewer.ts';
+
+type TokenOf = Pick<Viewer, 'tokenKind' | 'clientId' | 'impersonatedBy'>;
 
 const mocks = vi.hoisted(() => ({
-  clientId: 'classmoji-ask-moji' as string | null,
+  token: {} as {
+    tokenKind?: 'internal' | 'jwt';
+    clientId: string | null;
+    impersonatedBy?: string | null;
+  },
   viewers: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock('../../auth/resolveViewer.ts', () => ({
   resolveViewer: vi.fn(async () => ({
     userId: 'u1',
-    clientId: mocks.clientId,
+    ...mocks.token,
     scopes: new Set(['read']),
   })),
 }));
@@ -39,52 +50,76 @@ const {
   IMPERSONATED_BY_HEADER,
 } = await import('../mcp.ts');
 
-const OTHER_CLIENT = 'claude-ai-connector';
+/** Ask Moji's own turn, and one minted under admin-1's View as session. */
+const ASK_MOJI: TokenOf = {
+  tokenKind: 'internal',
+  clientId: ASK_MOJI_CLIENT_ID,
+  impersonatedBy: null,
+};
+const ASK_MOJI_VIEW_AS: TokenOf = { ...ASK_MOJI, impersonatedBy: 'admin-1' };
+/** Requests that are not Ask Moji's, some of them claiming an admin. */
+const OTHERS: Array<[string, TokenOf]> = [
+  ['an OAuth client', { tokenKind: 'jwt', clientId: 'claude-ai-connector', impersonatedBy: null }],
+  ['a JWT naming the Ask Moji client', { tokenKind: 'jwt', clientId: ASK_MOJI_CLIENT_ID }],
+  ['the dev mint', { tokenKind: 'internal', clientId: DEV_MINT_CLIENT_ID, impersonatedBy: 'x' }],
+  ['no token kind', { clientId: ASK_MOJI_CLIENT_ID, impersonatedBy: 'admin-1' }],
+];
 const BAD_VALUES = ['', 'admin 1', 'a/b', 'a.b', 'a:b', '<script>', 'x'.repeat(65), '%41'];
 
 const headersWith = (value?: string) =>
   new Headers(value === undefined ? {} : { [IMPERSONATED_BY_HEADER]: value });
 
 describe('impersonatedByFrom', () => {
-  it('reads an id from the Ask Moji client', () => {
-    for (const id of ['admin-1', 'cuid_abc123', 'A', 'x'.repeat(64)]) {
-      expect(impersonatedByFrom(headersWith(id), ASK_MOJI_CLIENT_ID)).toEqual({
-        ok: true,
-        impersonatedBy: id,
-      });
-    }
+  it('takes the admin from the token, with or without the header', () => {
+    expect(impersonatedByFrom(headersWith('admin-1'), ASK_MOJI_VIEW_AS)).toEqual({
+      ok: true,
+      impersonatedBy: 'admin-1',
+    });
+    expect(impersonatedByFrom(headersWith(), ASK_MOJI_VIEW_AS)).toEqual({
+      ok: true,
+      impersonatedBy: 'admin-1',
+    });
   });
 
-  it('no header from Ask Moji means no impersonation', () => {
-    expect(impersonatedByFrom(headersWith(), ASK_MOJI_CLIENT_ID)).toEqual({
-      ok: true,
-      impersonatedBy: null,
-    });
+  it('no header and no admin on the token means no View as', () => {
+    expect(impersonatedByFrom(headersWith(), ASK_MOJI)).toEqual({ ok: true, impersonatedBy: null });
+  });
+
+  it('refuses a header that names another admin than the token’s', () => {
+    const result = impersonatedByFrom(headersWith('admin-2'), ASK_MOJI_VIEW_AS);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.message).toContain('does not match the token');
+  });
+
+  it('refuses a header naming an admin for a token minted outside View as', () => {
+    for (const id of ['admin-1', 'cuid_abc123', 'A', 'x'.repeat(64)]) {
+      const result = impersonatedByFrom(headersWith(id), ASK_MOJI);
+      expect(result.ok, id).toBe(false);
+    }
   });
 
   it('refuses a value from Ask Moji that is not an id', () => {
     for (const bad of BAD_VALUES) {
-      const result = impersonatedByFrom(headersWith(bad), ASK_MOJI_CLIENT_ID);
-      expect(result.ok, JSON.stringify(bad)).toBe(false);
-      if (!result.ok) expect(result.message).toContain('X-Classmoji-Impersonated-By');
+      for (const token of [ASK_MOJI, ASK_MOJI_VIEW_AS]) {
+        const result = impersonatedByFrom(headersWith(bad), token);
+        expect(result.ok, JSON.stringify(bad)).toBe(false);
+        if (!result.ok) expect(result.message).toContain('X-Classmoji-Impersonated-By');
+      }
     }
   });
 
-  it('ignores the header from any other client, valid or not', () => {
+  it.each(OTHERS)('ignores the header from %s and gives no admin', (_label, token) => {
     for (const value of ['admin-1', 'a/b', '']) {
-      expect(impersonatedByFrom(headersWith(value), OTHER_CLIENT)).toEqual({
-        ok: true,
-        impersonatedBy: null,
-      });
-      expect(impersonatedByFrom(headersWith(value), null)).toEqual({
+      expect(impersonatedByFrom(headersWith(value), token)).toEqual({
         ok: true,
         impersonatedBy: null,
       });
     }
+    expect(impersonatedByFrom(headersWith(), token)).toEqual({ ok: true, impersonatedBy: null });
   });
 });
 
-describe('POST /mcp with an impersonation actor', () => {
+describe('POST /mcp with a View as admin', () => {
   async function app() {
     const fastify = Fastify();
     await fastify.register(mcpRoutes);
@@ -106,18 +141,21 @@ describe('POST /mcp with an impersonation actor', () => {
 
   beforeEach(() => {
     mocks.viewers.length = 0;
-    mocks.clientId = ASK_MOJI_CLIENT_ID;
+    mocks.token = { ...ASK_MOJI_VIEW_AS };
   });
 
-  it('carries the Ask Moji actor on the viewer', async () => {
+  it('carries the token’s admin on the viewer', async () => {
     const fastify = await app();
-    const res = await post(fastify, 'admin-1');
-    expect(res.statusCode).toBe(200);
-    expect(mocks.viewers.at(-1)).toMatchObject({ userId: 'u1', impersonatedBy: 'admin-1' });
+    for (const header of ['admin-1', undefined]) {
+      const res = await post(fastify, header);
+      expect(res.statusCode).toBe(200);
+      expect(mocks.viewers.at(-1)).toMatchObject({ userId: 'u1', impersonatedBy: 'admin-1' });
+    }
     await fastify.close();
   });
 
-  it('sets no actor when Ask Moji sends none', async () => {
+  it('sets no admin for Ask Moji’s own turn', async () => {
+    mocks.token = { ...ASK_MOJI };
     const fastify = await app();
     const res = await post(fastify);
     expect(res.statusCode).toBe(200);
@@ -125,23 +163,25 @@ describe('POST /mcp with an impersonation actor', () => {
     await fastify.close();
   });
 
-  it('refuses an invalid Ask Moji value before building a server', async () => {
+  it('refuses a header that is not an id, or not the token’s admin, before building a server', async () => {
     const fastify = await app();
-    for (const bad of ['a/b', 'admin 1', 'x'.repeat(65), ['admin-1', 'admin-2']]) {
+    for (const bad of ['a/b', 'admin 1', 'x'.repeat(65), ['admin-1', 'admin-2'], 'admin-2']) {
       const res = await post(fastify, bad);
       expect(res.statusCode, JSON.stringify(bad)).toBe(400);
       const body = res.json();
       expect(body.error.code).toBe(-32600);
       expect(body.error.message).toContain('X-Classmoji-Impersonated-By');
     }
+    mocks.token = { ...ASK_MOJI };
+    expect((await post(fastify, 'admin-1')).statusCode).toBe(400);
     expect(mocks.viewers).toHaveLength(0);
     await fastify.close();
   });
 
-  it('ignores the header from another client', async () => {
-    mocks.clientId = OTHER_CLIENT;
+  it.each(OTHERS)('ignores the header from %s', async (_label, token) => {
+    mocks.token = { ...token };
     const fastify = await app();
-    for (const value of ['admin-1', 'a/b']) {
+    for (const value of ['admin-1', 'a/b', undefined]) {
       const res = await post(fastify, value);
       expect(res.statusCode).toBe(200);
       expect(mocks.viewers.at(-1)?.impersonatedBy).toBeNull();

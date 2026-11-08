@@ -114,6 +114,9 @@ jobs:
               # content-checkpoint renders live docs with these.
               - 'packages/collab/**'
               - 'packages/page-schema/**'
+              # The chat agents mint their MCP tokens with this package
+              # (@classmoji/auth/mcp-token), which apps/mcp checks them with.
+              - 'packages/auth/**'
 
   deploy-webapp:
     needs: changes
@@ -135,9 +138,8 @@ jobs:
         run: npm install -g npm@10.9.9 && npm --version
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
-      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
-        with:
-          version: 0.5.1
+      - uses: ./.github/actions/setup-flyctl
+        timeout-minutes: 15
       - name: Deploy webapp
         run: |
           # Source maps go to Sentry only when the secret exists; without it
@@ -174,9 +176,8 @@ jobs:
         run: npm install -g npm@10.9.9 && npm --version
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
-      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
-        with:
-          version: 0.5.1
+      - uses: ./.github/actions/setup-flyctl
+        timeout-minutes: 15
       - name: Deploy hook-station
         run: flyctl deploy --config apps/hook-station/fly.toml --dockerfile apps/hook-station/Dockerfile --remote-only
         env:
@@ -204,9 +205,8 @@ jobs:
         run: npm install -g npm@10.9.9 && npm --version
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
-      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
-        with:
-          version: 0.5.1
+      - uses: ./.github/actions/setup-flyctl
+        timeout-minutes: 15
       - name: Deploy collab
         run: |
           # Single instance (apps/collab/fly.toml): --ha=false makes the first
@@ -239,9 +239,8 @@ jobs:
         run: npm install -g npm@10.9.9 && npm --version
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
-      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
-        with:
-          version: 0.5.1
+      - uses: ./.github/actions/setup-flyctl
+        timeout-minutes: 15
       - name: Deploy mcp
         run: |
           if flyctl status --app classmoji-mcp >/dev/null 2>&1; then
@@ -272,9 +271,8 @@ jobs:
         run: npm install -g npm@10.9.9 && npm --version
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
-      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
-        with:
-          version: 0.5.1
+      - uses: ./.github/actions/setup-flyctl
+        timeout-minutes: 15
       - name: Deploy site
         working-directory: apps/site
         run: flyctl deploy --remote-only
@@ -301,9 +299,8 @@ jobs:
         run: npm install -g npm@10.9.9 && npm --version
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
-      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
-        with:
-          version: 0.5.1
+      - uses: ./.github/actions/setup-flyctl
+        timeout-minutes: 15
       - name: Deploy slides
         run: |
           # Source maps go to Sentry only when the secret exists; without it
@@ -338,9 +335,8 @@ jobs:
         run: npm install -g npm@10.9.9 && npm --version
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
-      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
-        with:
-          version: 0.5.1
+      - uses: ./.github/actions/setup-flyctl
+        timeout-minutes: 15
       - name: Deploy pages
         run: |
           # Source maps go to Sentry only when the secret exists; without it
@@ -374,9 +370,8 @@ jobs:
         run: npm install -g npm@10.9.9 && npm --version
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
-      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
-        with:
-          version: 0.5.1
+      - uses: ./.github/actions/setup-flyctl
+        timeout-minutes: 15
       - name: Deploy admin
         run: flyctl deploy --config apps/admin/fly.toml --dockerfile apps/admin/Dockerfile --remote-only
         env:
