@@ -1149,3 +1149,214 @@ describe.skipIf(!DATABASE_URL)('signing in to resume an app connection (real Pos
     ).toEqual({ user_id: user.id });
   });
 });
+
+describe.skipIf(!DATABASE_URL)(
+  'a sign-up for an address that already has an account (real Postgres)',
+  () => {
+    type Auth = typeof import('../server.ts');
+    let server: Auth;
+    let db: PrismaClient;
+    const BASE = 'http://localhost:3000/api/auth';
+
+    beforeAll(async () => {
+      db = new PrismaClient({ datasourceUrl: DATABASE_URL });
+      server = await import('../server.ts');
+    }, 120_000);
+
+    afterAll(async () => {
+      await db?.$disconnect();
+    });
+
+    const post = (path: string, body: unknown) =>
+      server.auth.handler(
+        new Request(`${BASE}${path}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', origin: 'http://localhost:3000' },
+          body: JSON.stringify(body),
+        })
+      );
+
+    const signUp = (email: string, password: string, extra: Record<string, unknown> = {}) =>
+      post('/sign-up/email', { name: 'Someone', email, password, ...extra });
+
+    const signIn = (email: string, password: string) =>
+      post('/sign-in/email', { email, password });
+
+    /** Mails a code of `type` to `email` and returns it. */
+    async function codeFor(
+      email: string,
+      type: 'email-verification' | 'forget-password'
+    ): Promise<string> {
+      const res =
+        type === 'email-verification'
+          ? await post('/email-otp/send-verification-otp', { email, type })
+          : await post('/email-otp/request-password-reset', { email });
+      expect(res.status).toBe(200);
+      return services.sentCodes.filter(c => c.email === email && c.type === type).at(-1)!.otp;
+    }
+
+    const userOf = (email: string) => db.user.findFirstOrThrow({ where: { email } });
+    const passwordsOf = (userId: string) =>
+      db.account.count({ where: { user_id: userId, provider_id: 'credential' } });
+    const resetRows = (userId: string) =>
+      db.platformAuditLog.findMany({
+        where: { action: 'sign_up.unverified_reset', target_id: userId },
+      });
+
+    it('signed up first by someone else: that password no longer signs in', async () => {
+      const email = 'a2-first@example.org';
+      expect((await signUp(email, 'first-password-1')).status).toBe(200);
+      const user = await userOf(email);
+
+      const second = await signUp(email, 'second-password-1');
+
+      // Answered as a new sign-up would be.
+      expect(second.status).toBe(200);
+      expect(await passwordsOf(user.id)).toBe(0);
+      expect((await signIn(email, 'first-password-1')).status).toBe(401);
+      // Neither does the second one: a sign-up for an existing address stores nothing.
+      expect((await signIn(email, 'second-password-1')).status).toBe(401);
+      expect(await resetRows(user.id)).toEqual([
+        expect.objectContaining({
+          actor_id: null,
+          target_type: 'user',
+          target_id: user.id,
+          data: {
+            tool: 'auth:sign_up.unverified_reset',
+            path: '/sign-up/email',
+            passwordsRemoved: 1,
+            sessionsEnded: 0,
+            cleared: ['image', 'school_id'],
+          },
+        }),
+      ]);
+    });
+
+    it('the owner of the address, after a repeated sign-up, verifies it and sets a password with Forgot password', async () => {
+      const email = 'a2-owner@example.org';
+      expect((await signUp(email, 'owner-password-1')).status).toBe(200);
+      const code = await codeFor(email, 'email-verification');
+      expect((await signUp(email, 'other-password-1')).status).toBe(200);
+      expect((await signIn(email, 'owner-password-1')).status).toBe(401);
+
+      // The code still verifies the address, and signs its owner in.
+      const verified = await post('/email-otp/verify-email', { email, otp: code });
+      expect(verified.status).toBe(200);
+      expect(verified.headers.getSetCookie().join(';')).toContain(
+        `${server.COOKIE_PREFIX}.session_token=`
+      );
+
+      const reset = await post('/email-otp/reset-password', {
+        email,
+        otp: await codeFor(email, 'forget-password'),
+        password: 'owner-password-2',
+      });
+      expect(reset.status).toBe(200);
+      expect((await signIn(email, 'owner-password-2')).status).toBe(200);
+    });
+
+    it('clears the picture and School ID the first sign-up gave the account', async () => {
+      const email = 'a2-profile@example.org';
+      await signUp(email, 'first-password-1', {
+        image: 'https://pictures.example.org/a.png',
+        school_id: 'F00001',
+      });
+      const before = await userOf(email);
+      expect(before).toMatchObject({ image: 'https://pictures.example.org/a.png', school_id: 'F00001' });
+
+      await signUp(email, 'second-password-1', {
+        image: 'https://pictures.example.org/b.png',
+        school_id: 'F00002',
+      });
+
+      expect(await userOf(email)).toMatchObject({ image: null, school_id: null, emailVerified: false });
+    });
+
+    it('ends the account’s sessions, and a "View as" session among them gets its end row', async () => {
+      const email = 'a2-sessions@example.org';
+      await signUp(email, 'first-password-1');
+      const user = await userOf(email);
+      await db.session.createMany({
+        data: [
+          {
+            id: 'a2-own',
+            token: 'a2-own-token',
+            user_id: user.id,
+            expires_at: new Date(Date.now() + 86_400_000),
+          },
+          {
+            id: 'a2-viewing',
+            token: 'a2-viewing-token',
+            user_id: user.id,
+            impersonatedBy: 'u-1',
+            expires_at: new Date(Date.now() + 3_600_000),
+          },
+        ],
+      });
+
+      await signUp(email, 'second-password-1');
+
+      expect(await db.session.count({ where: { user_id: user.id } })).toBe(0);
+      const ends = await db.platformAuditLog.findMany({
+        where: { action: 'impersonate.end', target_id: user.id },
+      });
+      expect(ends).toEqual([
+        expect.objectContaining({
+          actor_id: 'u-1',
+          data: expect.objectContaining({
+            sessionId: 'a2-viewing',
+            path: '/sign-up/email',
+            endedBy: 'system',
+          }),
+        }),
+      ]);
+      expect((await resetRows(user.id))[0]?.data).toMatchObject({ sessionsEnded: 2 });
+    });
+
+    it('leaves a Github user still in registration as they are: nothing removed, still signed in', async () => {
+      const user = await db.user.create({
+        data: {
+          id: 'a2-github-user',
+          email: 'a2-github@example.org',
+          name: 'Github User',
+          image: 'https://avatars.example.org/g.png',
+          emailVerified: false,
+        },
+      });
+      await db.account.create({
+        data: {
+          id: 'a2-github-account',
+          user_id: user.id,
+          provider_id: 'github',
+          account_id: '909090',
+        },
+      });
+      await db.session.create({
+        data: {
+          id: 'a2-github-session',
+          token: 'a2-github-token',
+          user_id: user.id,
+          expires_at: new Date(Date.now() + 86_400_000),
+        },
+      });
+
+      expect((await signUp('a2-github@example.org', 'some-password-1')).status).toBe(200);
+
+      expect(await db.account.count({ where: { user_id: user.id } })).toBe(1);
+      expect(await db.session.count({ where: { user_id: user.id } })).toBe(1);
+      expect((await userOf('a2-github@example.org')).image).toBe('https://avatars.example.org/g.png');
+      expect(await resetRows(user.id)).toEqual([]);
+    });
+
+    it('leaves a verified account as it is', async () => {
+      // Verified (and signed in with) above.
+      const user = await userOf('a2-owner@example.org');
+
+      expect((await signUp('a2-owner@example.org', 'another-password-1')).status).toBe(200);
+
+      expect(await passwordsOf(user.id)).toBe(1);
+      expect((await signIn('a2-owner@example.org', 'owner-password-2')).status).toBe(200);
+      expect(await resetRows(user.id)).toHaveLength(1);
+    });
+  }
+);

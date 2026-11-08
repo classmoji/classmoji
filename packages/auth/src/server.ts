@@ -422,7 +422,8 @@ function viewAsEndRowId(sessionId: string): string {
  * Who ended a "View as" session, recorded on its end row as `data.endedBy`
  * (the row's actor stays the platform admin, as on the start row):
  *   - 'system': the row had expired; better-auth removes an expired row when
- *     a request reads it.
+ *     a request reads it. Or a sign-up for the viewed user's unverified
+ *     address ended it (resetUnverifiedPasswordAccount).
  *   - 'admin': the platform admin, who holds the viewing session. Stop
  *     (/admin/stop-impersonating) and /sign-out delete the session the
  *     request was made with, and any request made with a viewing session is
@@ -449,11 +450,15 @@ const PASSWORD_RESET_PATHS: ReadonlySet<string> = new Set([
   '/email-otp/reset-password',
 ]);
 
+/** The email sign-up endpoint (resetUnverifiedPasswordAccount runs on it). */
+export const SIGN_UP_EMAIL_PATH = '/sign-up/email';
+
 function viewAsEndedBy(
   row: ViewAsSessionRow,
   ctx: { path?: string; context?: { session?: unknown } } | null | undefined
 ): ViewAsEndedBy {
   if (row.expiresAt && new Date(row.expiresAt).getTime() <= Date.now()) return 'system';
+  if (ctx?.path === SIGN_UP_EMAIL_PATH) return 'system';
   if (ctx?.path && ENDS_OWN_SESSION_PATHS.has(ctx.path)) return 'admin';
   const current = ctx?.context?.session as
     | { session?: { impersonatedBy?: unknown } | null; user?: { id?: unknown } | null }
@@ -819,6 +824,59 @@ export async function revokeOAuthGrants(
   });
 }
 
+/**
+ * A sign-up for an address that already has an account. better-auth answers
+ * it the way it answers a new sign-up (`requireEmailVerification`), stores
+ * nothing from it, and calls this (`emailAndPassword.onExistingUserSignUp`,
+ * better-auth 1.7.18 api/routes/sign-up.mjs:192-203).
+ *
+ * When that account's address is not verified yet and it has a password, the
+ * password, the profile picture and the School ID came with an earlier
+ * sign-up that nobody has confirmed. Whoever verifies the address would be
+ * signed into the account (`autoSignInAfterVerification`) and keep them. So
+ * the password is removed, the account's sessions end, and the picture and
+ * School ID are cleared; whoever verifies the address then sets a password
+ * with Forgot password (the sign-up page's code screen points there). An
+ * account with no password (a Github or Gitlab user still in registration) or
+ * a verified one is left as it is.
+ *
+ * Through better-auth's internal adapter, so the session delete hook records
+ * the end of a "View as" session among them (viewAsEndedBy: 'system'). One
+ * PlatformAuditLog row (`sign_up.unverified_reset`), with counts only.
+ * Failures propagate: the sign-up then answers with an error rather than
+ * leaving the password in place unnoticed.
+ */
+async function resetUnverifiedPasswordAccount(user: {
+  id: string;
+  emailVerified?: boolean | null;
+}): Promise<void> {
+  if (user.emailVerified) return;
+  const { internalAdapter } = await auth.$context;
+  const passwords = (await internalAdapter.findAccounts(user.id)).filter(
+    account => account.providerId === 'credential'
+  );
+  if (passwords.length === 0) return;
+  for (const account of passwords) await internalAdapter.deleteAccount(account.id);
+  const sessions = await getPrisma().session.count({ where: { user_id: user.id } });
+  await internalAdapter.deleteUserSessions(user.id);
+  await internalAdapter.updateUser(user.id, { image: null, school_id: null });
+  await getPrisma().platformAuditLog.create({
+    data: {
+      actor_id: null,
+      action: 'sign_up.unverified_reset',
+      target_type: 'user',
+      target_id: user.id,
+      data: {
+        tool: 'auth:sign_up.unverified_reset',
+        path: SIGN_UP_EMAIL_PATH,
+        passwordsRemoved: passwords.length,
+        sessionsEnded: sessions,
+        cleared: ['image', 'school_id'],
+      },
+    },
+  });
+}
+
 /** The parts of the `hooks.before` context the rules in BEFORE_HOOK_RULES read. */
 export interface BeforeHookContext extends OAuthRuleContext {
   path?: string;
@@ -1178,6 +1236,11 @@ export const auth = betterAuth({
     // api/routes/password.mjs:164, plugins/email-otp/routes.mjs:583).
     onPasswordReset: async ({ user }) => {
       await revokeOAuthGrants(String(user.id), 'password_reset', { actorId: String(user.id) });
+    },
+    // A sign-up for an address that already has an account
+    // (resetUnverifiedPasswordAccount).
+    onExistingUserSignUp: async ({ user }) => {
+      await resetUnverifiedPasswordAccount(user);
     },
   },
   emailVerification: {

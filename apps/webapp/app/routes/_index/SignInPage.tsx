@@ -117,6 +117,8 @@ const SignInPage = ({
     oauthError ? (OAUTH_ERRORS[oauthError] ?? 'Sign-in failed. Please try again.') : null
   );
   const [notice, setNotice] = useState<string | null>(null);
+  // The code screen was reached by signing up (not by signing in unverified).
+  const [verifyAfterSignUp, setVerifyAfterSignUp] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const go = (next: Mode, message: string | null = null) => {
@@ -170,6 +172,7 @@ const SignInPage = ({
       }
       if (signInError.status === 403) {
         // Unverified: a fresh code was just mailed.
+        setVerifyAfterSignUp(false);
         go('verify', `We sent a code to ${email}. Enter it to finish signing in.`);
         return;
       }
@@ -205,6 +208,7 @@ const SignInPage = ({
         fail(sendError);
         return;
       }
+      setVerifyAfterSignUp(true);
       go('verify', `We sent a 6-digit code to ${email}.`);
     });
   };
@@ -564,6 +568,21 @@ const SignInPage = ({
                         >
                           Send a new code
                         </button>
+                        {/* A sign-up for an address that already has an account keeps
+                            no password from it (@classmoji/auth/server,
+                            resetUnverifiedPasswordAccount). */}
+                        {verifyAfterSignUp && (
+                          <p className="text-center text-xs leading-relaxed text-ink-3">
+                            Already have an account with this email?{' '}
+                            <button
+                              type="button"
+                              className={quietLink}
+                              onClick={() => go('forgot')}
+                            >
+                              Reset your password
+                            </button>
+                          </p>
+                        )}
                       </form>
                     )}
 
