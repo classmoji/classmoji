@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest';
 import {
   calendarPeriods,
   countPerPeriod,
+  dayStart,
   startOfDay,
   startOfWeek,
   formatWeekRange,
@@ -90,5 +91,22 @@ describe('formatting', () => {
     expect(relativeTime('2026-10-31T17:58:00Z', now)).toBe('2 min');
     expect(relativeTime('2026-10-31T15:00:00Z', now)).toBe('3 hours');
     expect(relativeTime('2026-10-28T18:00:00Z', now)).toBe('3 days');
+  });
+});
+
+describe('dayStart cache', () => {
+  it('returns the same instant for the same day, as a fresh Date each time', () => {
+    const a = dayStart('2026-11-01', 'America/New_York');
+    const b = dayStart('2026-11-01', 'America/New_York');
+    expect(a.getTime()).toBe(b.getTime());
+    expect(a).not.toBe(b);
+    a.setTime(0); // a caller changing its copy leaves the cache alone
+    expect(dayStart('2026-11-01', 'America/New_York').getTime()).toBe(b.getTime());
+  });
+
+  it('keeps zones apart', () => {
+    expect(dayStart('2026-11-01', 'America/New_York').getTime()).not.toBe(
+      dayStart('2026-11-01', 'Europe/Paris').getTime()
+    );
   });
 });
