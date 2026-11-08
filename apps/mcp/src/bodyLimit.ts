@@ -2,7 +2,7 @@
  * The largest request body the MCP server accepts — Fastify's `bodyLimit`.
  *
  * Its own module, with no imports, because two places need the same number:
- * `index.ts` hands it to Fastify, and `page_asset_upload` derives its file cap
+ * `serverOptions.ts` hands it to Fastify, and `page_asset_upload` derives its file cap
  * from it (a tool cap above what the body can carry would never get to fire —
  * Fastify would answer a bare 413 first, with no MCP error in it).
  *

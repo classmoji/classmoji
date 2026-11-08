@@ -1,5 +1,7 @@
 /**
- * Limits on what one POST /mcp may carry, applied in this order:
+ * Limits on what one POST /mcp may carry, applied in this order (before any
+ * of them, while the body is still arriving, its bytes count against the
+ * in-flight body budget, bodyBudget.ts):
  *
  *   1. Before the body is parsed (routes/mcp.ts JSON parser): a body whose raw
  *      text carries more than MAX_BODY_JSON_VALUES JSON values is refused

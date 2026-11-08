@@ -19,6 +19,13 @@
  * answered from its headers alone, and only an authenticated request has its
  * body (up to `MCP_BODY_LIMIT_BYTES`) read and parsed.
  *
+ * While the body arrives, its bytes are counted in the in-flight body budget
+ * (mcp/bodyBudget.ts) before Fastify keeps them: against its user's allowance
+ * and the server's total, and against the large-body allowance too once it
+ * reaches SMALL_BODY_BYTES. No room → 429 (the user's allowance) or 503 (the
+ * server's), with Retry-After. The bytes are held until the response has
+ * closed and the request's tool handlers have returned.
+ *
  * Then the size of what was sent is bounded (the limits are in
  * mcp/inputLimits.ts): this plugin's JSON parser refuses a body
  * with more than MAX_BODY_JSON_VALUES values before parsing it, the handler
@@ -28,9 +35,23 @@
  */
 
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type {
+  FastifyError,
+  FastifyInstance,
+  FastifyReply,
+  FastifyRequest,
+  RequestPayload,
+} from 'fastify';
 import { MCP_PUBLIC_URL, PROTECTED_RESOURCE_METADATA_PATH } from '../config.ts';
 import { resolveViewer, type Viewer } from '../auth/resolveViewer.ts';
+import {
+  BODY_BUDGET_RETRY_AFTER_SECONDS,
+  BodyBudgetRefusal,
+  BodyBytesBudget,
+  countedBody,
+  type BodyLimit,
+  type BodyReservation,
+} from '../mcp/bodyBudget.ts';
 import {
   TokenStoreUnavailableError,
   UnauthorizedError,
@@ -209,10 +230,38 @@ function sendTryAgain(reply: FastifyReply) {
     });
 }
 
-/** What the onRequest hook learned from the headers, for the handler. */
+const BODY_BUDGET_REFUSALS: Record<BodyLimit, { status: number; message: string }> = {
+  user: {
+    status: 429,
+    message: 'Too many requests from this account are in progress: retry in a few seconds.',
+  },
+  server: {
+    status: 503,
+    message: 'Service temporarily busy: retry in a few seconds.',
+  },
+};
+
+/** A body the budget had no room for. */
+function sendBodyBudgetRefusal(reply: FastifyReply, limit: BodyLimit) {
+  const refusal = BODY_BUDGET_REFUSALS[limit];
+  reply
+    .status(refusal.status)
+    .header('Retry-After', String(BODY_BUDGET_RETRY_AFTER_SECONDS))
+    .header('Access-Control-Expose-Headers', 'Retry-After')
+    .send({ jsonrpc: '2.0', error: { code: -32000, message: refusal.message }, id: null });
+}
+
+/** A request's body bytes, until the handler hands them on (`claimed`). */
+interface HeldBody {
+  reservation: BodyReservation;
+  claimed: boolean;
+}
+
+/** What the onRequest hooks learned from the headers, for the handler. */
 interface Authenticated {
   headers: Headers;
   viewer: Viewer;
+  body?: HeldBody;
 }
 
 const authenticated = new WeakMap<FastifyRequest, Authenticated>();
@@ -249,16 +298,70 @@ async function authenticate(request: FastifyRequest, reply: FastifyReply) {
 /** The elements of large tool calls in flight, shared by every request. */
 const sharedToolInputBudget = new ToolInputBudget();
 
+/** The bytes of request bodies in flight, shared by every request. */
+const sharedBodyBudget = new BodyBytesBudget();
+
 export interface McpRoutesOptions {
   /** Tests pass their own; the server uses one budget for all requests. */
   budget?: ToolInputBudget;
+  /** Likewise for the bytes of request bodies in flight. */
+  bodyBudget?: BodyBytesBudget;
 }
 
 export default async function mcpRoutes(fastify: FastifyInstance, opts: McpRoutesOptions = {}) {
   const budget = opts.budget ?? sharedToolInputBudget;
+  const bodyBudget = opts.bodyBudget ?? sharedBodyBudget;
   // Resource definitions register once alongside route registration
   // (idempotent; tools register in src/index.ts via registerAllTools).
   registerAllResources();
+
+  /**
+   * preParsing, after `authenticate`: count the body's bytes as they arrive,
+   * before Fastify keeps them (mcp/bodyBudget.ts). Held until the response
+   * closes, unless the handler takes them over first.
+   */
+  const countBody = async (
+    request: FastifyRequest,
+    reply: FastifyReply,
+    payload: RequestPayload
+  ) => {
+    const auth = authenticated.get(request);
+    if (!auth) return payload; // `authenticate` has answered
+    // The client left while its token was checked. Fastify still runs this
+    // hook, but the response's 'close' has already fired, so a release
+    // attached now would never run: end the request here instead.
+    if (request.raw.destroyed || reply.raw.destroyed) {
+      reply.hijack();
+      return payload;
+    }
+    const held: HeldBody = { reservation: bodyBudget.open(auth.viewer.userId), claimed: false };
+    auth.body = held;
+    reply.raw.on('close', () => {
+      if (!held.claimed) held.reservation.release();
+    });
+    return countedBody(payload, held.reservation);
+  };
+
+  /**
+   * The route's error handler: a body the budget refused partway gets its
+   * JSON-RPC refusal with Retry-After (Fastify has already set
+   * `Connection: close`). Every other error goes on to the server's handler.
+   */
+  const answerBodyRefusal = (error: FastifyError, request: FastifyRequest, reply: FastifyReply) => {
+    if (!(error instanceof BodyBudgetRefusal)) throw error;
+    const viewer = authenticated.get(request)?.viewer;
+    request.log.warn(
+      {
+        userId: viewer?.userId,
+        clientId: viewer?.clientId,
+        limit: error.limit,
+        inFlight: bodyBudget.inFlight(),
+        large: bodyBudget.largeInFlight(),
+      },
+      '[mcp] no room for the request body; asked to retry'
+    );
+    sendBodyBudgetRefusal(reply, error.limit);
+  };
 
   // This plugin's JSON parser: Fastify's own (same poisoning rules as the
   // server), after a count of the body's JSON values on the raw text. A body
@@ -295,7 +398,12 @@ export default async function mcpRoutes(fastify: FastifyInstance, opts: McpRoute
     parseJson(request, text, done);
   });
 
-  fastify.post('/mcp', { onRequest: authenticate }, async (request, reply) => {
+  const routeHooks = {
+    onRequest: authenticate,
+    preParsing: countBody,
+    errorHandler: answerBodyRefusal,
+  };
+  fastify.post('/mcp', routeHooks, async (request, reply) => {
     const auth = authenticated.get(request);
     // The hook either set this or already answered; never serve without it.
     if (!auth) return sendUnauthorized(reply, 'Authentication failed');
@@ -348,10 +456,16 @@ export default async function mcpRoutes(fastify: FastifyInstance, opts: McpRoute
       budget,
     });
     if (!gate.ok) return reply.status(gate.status).send(gate.body);
-    // The reservation is held until the response has closed AND every tool
-    // handler this request started has returned, so a client that leaves
-    // early does not free it while its call still runs.
-    const work = releaseWhenSettled(gate.release);
+    // The reservations (the gate's elements, the body's bytes) are held until
+    // the response has closed AND every tool handler this request started has
+    // returned, so a client that leaves early does not free them while its
+    // call still runs.
+    const body = auth.body;
+    if (body) body.claimed = true;
+    const work = releaseWhenSettled(() => {
+      gate.release();
+      body?.reservation.release();
+    });
     reply.raw.on('close', work.close);
 
     const server = buildMcpServer(viewer, work.tracker);
