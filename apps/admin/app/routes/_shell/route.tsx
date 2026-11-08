@@ -4,7 +4,7 @@ import { signOut } from '@classmoji/auth/client';
 import { COOKIE_DOMAIN } from '@classmoji/auth/secret';
 import { IconLogout, IconSearch } from '@tabler/icons-react';
 import { prisma, requirePlatformAdmin } from '~/utils/db.server';
-import { loadAttention } from '~/utils/metrics.server';
+import { loadAttentionCached } from '~/utils/metrics.server';
 import { CommandPalette } from '~/components/CommandPalette';
 import type { LoaderFunctionArgs, ShouldRevalidateFunction } from 'react-router';
 
@@ -22,7 +22,9 @@ import type { LoaderFunctionArgs, ShouldRevalidateFunction } from 'react-router'
 
 /**
  * Badge counts are cheap to read but the attention rules are not: cache them
- * for a minute per process so tab-to-tab navigation stays fast.
+ * for a minute per process so tab-to-tab navigation stays fast. The attention
+ * list itself is shared with Home (`loadAttentionCached`), so a Home load
+ * computes it once.
  */
 let badgeCache: { at: number; attention: number; bugs: number } | null = null;
 const BADGE_TTL_MS = 60_000;
@@ -30,7 +32,7 @@ const BADGE_TTL_MS = 60_000;
 const loadBadges = async () => {
   if (badgeCache && Date.now() - badgeCache.at < BADGE_TTL_MS) return badgeCache;
   const [attention, bugs] = await Promise.all([
-    loadAttention().then(items => items.length),
+    loadAttentionCached().then(items => items.length),
     prisma.feedbackPost.count({
       where: { category: 'BUG', status: null, duplicate_of_id: null },
     }),

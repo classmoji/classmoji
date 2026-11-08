@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Link, useLoaderData } from 'react-router';
+import { Suspense, useState } from 'react';
+import { Await, Link, useLoaderData } from 'react-router';
 import { Avatar, Empty, InfoTip, Panel, Sparkline } from '~/components/ui';
 import { ViewAsButton } from '~/components/ViewAsButton';
 import { relativeTime } from '~/utils/time';
@@ -53,6 +53,18 @@ const KpiTile = ({ kpi }: { kpi: Kpi }) => (
       <div className="text-xs text-ink-3 mt-1.5">{kpi.sub || 'this week'}</div>
     )}
   </div>
+);
+
+const KpiPlaceholders = () => (
+  <>
+    {Array.from({ length: 6 }, (_, i) => (
+      <div
+        key={i}
+        aria-hidden
+        className="rounded-xl border border-line bg-panel px-3.5 py-3 h-[104px] animate-pulse"
+      />
+    ))}
+  </>
 );
 
 const FILTERS: Array<{ value: AttentionItem['severity'] | ''; label: string }> = [
@@ -204,9 +216,19 @@ const Home = () => {
       </div>
 
       <div className="grid gap-3 grid-cols-2 md:grid-cols-3 xl:grid-cols-6">
-        {data.kpis.map(k => (
-          <KpiTile key={k.key} kpi={k} />
-        ))}
+        {/* Streamed: the slowest queries on the page (route.server.ts). */}
+        <Suspense fallback={<KpiPlaceholders />}>
+          <Await
+            resolve={data.kpis}
+            errorElement={
+              <div className="col-span-full text-xs text-ink-3">
+                The weekly numbers couldn't load. Reload to try again.
+              </div>
+            }
+          >
+            {kpis => kpis.map(k => <KpiTile key={k.key} kpi={k} />)}
+          </Await>
+        </Suspense>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] items-start">

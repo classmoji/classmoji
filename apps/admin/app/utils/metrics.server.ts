@@ -125,20 +125,27 @@ interface ActivityRow {
   student: boolean;
 }
 
+// Who teaches and who studies is read once, as two sets, instead of two
+// membership lookups for every (day, user) row of the window.
 const activityRows = (fromDay: string) => prisma.$queryRaw<ActivityRow[]>`
+  WITH teaching AS (
+    SELECT DISTINCT m."user_id"
+    FROM "classroom_memberships" m JOIN "classrooms" c ON c."id" = m."classroom_id"
+    WHERE m."role" IN ('OWNER', 'TEACHER') AND m."has_accepted_invite" AND NOT c."is_example"
+  ),
+  students AS (
+    SELECT DISTINCT m."user_id"
+    FROM "classroom_memberships" m JOIN "classrooms" c ON c."id" = m."classroom_id"
+    WHERE m."role" = 'STUDENT' AND m."has_accepted_invite" AND NOT c."is_example"
+  )
   SELECT d."day"::text AS day, d."user_id",
-    EXISTS (
-      SELECT 1 FROM "classroom_memberships" m JOIN "classrooms" c ON c."id" = m."classroom_id"
-      WHERE m."user_id" = d."user_id" AND m."role" IN ('OWNER', 'TEACHER')
-        AND m."has_accepted_invite" AND NOT c."is_example"
-    ) AS teaching,
-    EXISTS (
-      SELECT 1 FROM "classroom_memberships" m JOIN "classrooms" c ON c."id" = m."classroom_id"
-      WHERE m."user_id" = d."user_id" AND m."role" = 'STUDENT'
-        AND m."has_accepted_invite" AND NOT c."is_example"
-    ) AS student
+    (t."user_id" IS NOT NULL) AS teaching,
+    (s."user_id" IS NOT NULL) AS student
   FROM "user_activity_days" d
+  LEFT JOIN teaching t ON t."user_id" = d."user_id"
+  LEFT JOIN students s ON s."user_id" = d."user_id"
   WHERE d."day" >= ${fromDay}::date
+    AND (t."user_id" IS NOT NULL OR s."user_id" IS NOT NULL)
 `;
 
 interface ConversationDayRow {
@@ -289,7 +296,10 @@ export async function loadAttention(now = new Date()): Promise<AttentionItem[]> 
   const [missingApp, failedImports, checkpointErrors, inviteBacklog, stalled, untriagedBugs] =
     await Promise.all([
       // Github classrooms whose org has no App installation: every repo
-      // operation fails. Gitlab classrooms are out of scope for now.
+      // operation fails. Not one imported from Github Classroom: those are
+      // often kept for the roster and grades, with no repository work through
+      // Classmoji (classroomHealth's rule too). Gitlab classrooms are out of
+      // scope for now.
       prisma.classroom.findMany({
         where: {
           ...ACTIVE_CLASSROOM,
@@ -461,6 +471,27 @@ export async function loadAttention(now = new Date()): Promise<AttentionItem[]> 
 }
 
 const truncate = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+
+/**
+ * Needs attention, computed at most once a minute per process and shared:
+ * the shell's tab badge and Home's list both read it, and a Home load used to
+ * run every rule twice (the badge, then the page). Concurrent callers share
+ * the one computation in flight.
+ */
+const ATTENTION_TTL_MS = 60_000;
+let attentionCache: { at: number; items: Promise<AttentionItem[]> } | null = null;
+
+export function loadAttentionCached(): Promise<AttentionItem[]> {
+  const now = Date.now();
+  if (attentionCache && now - attentionCache.at < ATTENTION_TTL_MS) return attentionCache.items;
+  const items = loadAttention(new Date(now));
+  attentionCache = { at: now, items };
+  // A failed computation is not cached: the next caller tries again.
+  items.catch(() => {
+    if (attentionCache?.items === items) attentionCache = null;
+  });
+  return items;
+}
 
 // ───────── Home: latest activity ─────────
 
