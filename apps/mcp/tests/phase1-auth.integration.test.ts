@@ -31,7 +31,9 @@ if (!process.env.DATABASE_URL) {
   process.loadEnvFile(path.join(REPO_ROOT, '.env'));
 }
 
-const PORT = 8103;
+// MCP_IT_PORT moves every suite to a port of the runner's choosing (the files
+// run one at a time, so they can share it).
+const PORT = Number(process.env.MCP_IT_PORT) || 8103;
 const BASE = `http://localhost:${PORT}`;
 const EXPECTED_CHALLENGE = `Bearer resource_metadata="${BASE}/.well-known/oauth-protected-resource", scope="read write"`;
 /** The MCP resource: the URL clients connect to, and the audience of their tokens. */

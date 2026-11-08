@@ -21,6 +21,9 @@
  *
  *   OAUTH_IT_DATABASE_URL=postgresql://…@localhost:5433/classmoji_b2_it npm test
  *
+ * from packages/auth, or `npm run test` from the root (turbo's `test` task
+ * passes the variable on).
+ *
  * Setup, in order:
  *   1. every migration before this one, then the legacy fixture below;
  *   2. this migration with a failing statement added before its COMMIT: the

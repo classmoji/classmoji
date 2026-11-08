@@ -28,8 +28,9 @@ if (!process.env.DATABASE_URL) {
 }
 
 // Ports 8100 (dev default) and 8101–8103 are reserved by Phase-1 work; the
-// Phase-2 matrix owns 8104.
-export const PORT = 8104;
+// Phase-2 matrix owns 8104. MCP_IT_PORT moves every suite to a port of the
+// runner's choosing (the files run one at a time, so they can share it).
+export const PORT = Number(process.env.MCP_IT_PORT) || 8104;
 export const BASE = `http://localhost:${PORT}`;
 export const EXPECTED_CHALLENGE = `Bearer resource_metadata="${BASE}/.well-known/oauth-protected-resource", scope="read write"`;
 
@@ -44,6 +45,12 @@ export const EXPECTED_CHALLENGE = `Bearer resource_metadata="${BASE}/.well-known
  */
 export const TOKEN_KIND: 'internal' | 'jwt' =
   process.env.MCP_IT_TOKEN_KIND === 'jwt' ? 'jwt' : 'internal';
+// A misspelled kind would otherwise run the internal mode and look like a JWT run.
+if (![undefined, '', 'internal', 'jwt'].includes(process.env.MCP_IT_TOKEN_KIND)) {
+  throw new Error(
+    `MCP_IT_TOKEN_KIND must be "internal" or "jwt" (got ${process.env.MCP_IT_TOKEN_KIND})`
+  );
+}
 
 // Composite org/slug references (locked decision 1).
 //
