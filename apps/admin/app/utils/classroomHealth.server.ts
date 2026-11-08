@@ -6,6 +6,12 @@ export interface ClassroomSignals {
   id: string;
   provider: string;
   hasInstallation: boolean;
+  /**
+   * Imported from Github Classroom (`github_classroom_id` set). Such a class
+   * is often kept for its roster and grades, with no repository work through
+   * Classmoji, so a missing Github App is not a problem there.
+   */
+  githubClassroomImport: boolean;
   importFailed: boolean;
   checkpointErrors: number;
   accepted: number;
@@ -16,12 +22,15 @@ export interface ClassroomSignals {
 
 /**
  * The same rules Home's Needs attention uses, per classroom: broken = the
- * Github App is missing, an import failed, or checkpoints are failing; stuck =
- * at least 5 students and 30% of the roster have not accepted.
+ * Github App is missing (not for a class imported from Github Classroom), an
+ * import failed, or checkpoints are failing; stuck = at least 5 students and
+ * 30% of the roster have not accepted.
  */
 export const healthOf = (s: ClassroomSignals): { health: Health; reasons: string[] } => {
   const reasons: string[] = [];
-  if (s.provider === 'GITHUB' && !s.hasInstallation) reasons.push('Github App not installed');
+  if (s.provider === 'GITHUB' && !s.hasInstallation && !s.githubClassroomImport) {
+    reasons.push('Github App not installed');
+  }
   if (s.importFailed) reasons.push('Import failed');
   if (s.checkpointErrors > 0) reasons.push(`${s.checkpointErrors} checkpoint error(s)`);
   if (reasons.length) return { health: 'critical', reasons };
@@ -36,6 +45,7 @@ export const healthOf = (s: ClassroomSignals): { health: Health; reasons: string
 export async function loadSignals(
   classrooms: Array<{
     id: string;
+    github_classroom_id: number | null;
     git_organization: {
       provider: string;
       github_installation_id: string | null;
@@ -72,6 +82,7 @@ export async function loadSignals(
         c.git_organization.provider === 'GITLAB'
           ? Boolean(c.git_organization.gitlab_connection_id)
           : Boolean(c.git_organization.github_installation_id),
+      githubClassroomImport: c.github_classroom_id !== null,
       importFailed: c.import_job?.status === 'FAILED',
       checkpointErrors: 0,
       accepted: 0,

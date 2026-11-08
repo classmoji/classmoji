@@ -293,6 +293,7 @@ export async function loadAttention(now = new Date()): Promise<AttentionItem[]> 
       prisma.classroom.findMany({
         where: {
           ...ACTIVE_CLASSROOM,
+          github_classroom_id: null,
           git_organization: { provider: 'GITHUB', github_installation_id: null },
         },
         select: {
