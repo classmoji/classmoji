@@ -4,6 +4,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./logo": "./src/Logo/index.ts",
     "./sandpack": "./src/Sandpack/index.ts",
     "./upload": "./src/upload/index.ts",
     "./media-options": "./src/mediaOptions/index.ts",

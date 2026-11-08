@@ -1,6 +1,15 @@
-import { useLoaderData, redirect, Outlet, useLocation, useNavigate, useParams } from 'react-router';
+import {
+  useLoaderData,
+  useRouteLoaderData,
+  redirect,
+  Outlet,
+  useLocation,
+  useNavigate,
+  useParams,
+} from 'react-router';
 import { useEffect, useRef, useState } from 'react';
 import { gitUsername } from '@classmoji/utils';
+import { webappClassUrl } from '@classmoji/utils/webapp-links';
 import useLocalStorageState from 'use-local-storage-state';
 
 import {
@@ -19,6 +28,8 @@ import { headerImageRefs, withResolvedHeaderImages } from '~/utils/headerImages.
 
 import PagesLayout from '~/components/layout/PagesLayout.tsx';
 import PagesSidebar from '~/components/layout/PagesSidebar.tsx';
+import TopBar from '~/components/layout/TopBar.tsx';
+import type { PagesUser } from '~/types/pages.ts';
 import AskMojiHost from '~/components/askMoji/AskMojiHost.tsx';
 import { pageTitle, pageViewing } from '~/components/askMoji/askMojiProtocol.ts';
 
@@ -155,6 +166,14 @@ export const loader = async ({
     embedded: isEmbedded,
   });
 
+  // The top bar's way back: the Classmoji logo to the webapp, the class name to
+  // this class's dashboard in the reader's own role tree (from the role resolved
+  // above, never the client). A link target only: the webapp gates the route.
+  const webappUrl = process.env.WEBAPP_URL || 'http://localhost:3000';
+  const classHomeUrl = membership
+    ? webappClassUrl(webappUrl, membership.role, classroom.slug, 'dashboard')
+    : null;
+
   return {
     view,
     isEmbedded,
@@ -194,6 +213,8 @@ export const loader = async ({
         : null,
     })),
     membership: membership ? { role: membership.role } : null,
+    webappUrl,
+    classHomeUrl,
     askMojiEnabled: askMoji.askMojiEnabled,
     askMojiOrigin: askMoji.askMojiOrigin,
   };
@@ -373,9 +394,13 @@ const ClassroomLayout = () => {
     classroom,
     pages,
     membership,
+    webappUrl,
+    classHomeUrl,
     askMojiEnabled,
     askMojiOrigin,
   } = useLoaderData<typeof loader>();
+  // The signed-in reader, for the top bar's avatar; the root loader already has it.
+  const rootData = useRouteLoaderData('root') as { user?: PagesUser | null } | undefined;
   const params = useParams();
   const navigate = useNavigate();
   const location = useLocation();
@@ -507,7 +532,15 @@ const ClassroomLayout = () => {
   return (
     <PagesLayout
       collapsed={collapsed}
-      onMobileMenuClick={() => setMobileOpen(true)}
+      topBar={
+        <TopBar
+          classroom={classroom}
+          webappUrl={webappUrl}
+          classHomeUrl={classHomeUrl}
+          user={rootData?.user ?? null}
+          onMenuClick={() => setMobileOpen(true)}
+        />
+      }
       sidebar={
         <PagesSidebar
           pages={pages}

@@ -198,8 +198,10 @@ export function CommentsPanel({ controller, embedded = false }: CommentsPanelPro
         }}
         className={`fixed z-[45] flex flex-col overflow-hidden bg-stone-50 shadow-xl ring-1 ring-stone-200 dark:bg-[#141414] dark:ring-neutral-800 max-md:inset-x-0 max-md:bottom-0 max-md:h-[72dvh] max-md:rounded-t-2xl md:right-4 md:w-[min(380px,calc(100vw-2rem))] md:rounded-2xl ${
           // Embedded: no header above; and clear of the live-status pill
-          // floating in the bottom-right corner (route.tsx).
-          embedded ? 'md:top-4 md:bottom-16' : 'md:top-14 md:bottom-4'
+          // floating in the bottom-right corner (route.tsx). Full page: below
+          // the top bar (3rem) and the page header (3rem), so the header's
+          // buttons, the comments toggle among them, stay reachable.
+          embedded ? 'md:top-4 md:bottom-16' : 'md:top-[6.5rem] md:bottom-4'
         }`}
       >
         <div className="flex items-center gap-2 border-b border-stone-200 px-4 py-2.5 dark:border-neutral-800">
