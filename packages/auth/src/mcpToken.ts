@@ -1,31 +1,33 @@
 /**
- * mintMcpAccessToken — the per-user MCP bearer token Ask Moji carries
- * (plan §4.4, task P1-2).
+ * mintMcpAccessToken — the per-turn MCP bearer token Ask Moji and the quiz
+ * agent carry (plan §4.4, task P1-2; Batch 2 task B).
  *
- * WHY A ROW IS WRITTEN DIRECTLY INSTEAD OF DRIVING THE OAUTH FLOW
- * ---------------------------------------------------------------
- * The token is an opaque random string with a row in the 1.4-era token table
- * (`oauth_access_tokens`, Prisma `LegacyOauthAccessToken`), which
- * apps/mcp/src/auth/resolveViewer.ts reads to resolve it, as it does for
- * apps/mcp/src/routes/devMint.ts. The webapp or Trigger task holds the user's
- * identity on every Ask Moji turn, so re-minting is free and no browser hop
- * and no refresh grant is ever needed. Both files read and write that row
- * shape; they move to `mcp_internal_tokens` together.
+ * WHY CLASSMOJI MINTS THESE ITSELF INSTEAD OF DRIVING THE OAUTH FLOW
+ * ------------------------------------------------------------------
+ * The Trigger task holds the user's identity on every turn (the conversation's
+ * row), so it can mint a fresh token per turn with no browser hop and no
+ * refresh grant. The token is an opaque random string (`askmoji_…`) with a row
+ * in `mcp_internal_tokens` (Prisma `McpInternalToken`), which
+ * apps/mcp/src/auth/resolveViewer.ts reads to resolve it. Only the SHA-256 of
+ * the token is stored (`hashInternalToken`); the raw value is returned once,
+ * to the caller that minted it, and never written anywhere.
  *
- * WHY THE MINTED TOKEN CAN NEVER BE REFRESHED
- * -------------------------------------------
- * `oauth_access_tokens.refresh_token` is NOT NULL and @unique, so a row cannot be
- * created without one. It is never a working refresh token:
+ * These tokens never meet the OAuth server (better-auth's oauth-provider,
+ * ./server.ts): it does not read this table, issues no refresh token for it,
+ * and reserves `classmoji-ask-moji` and `classmoji-dev-mint` as DISABLED
+ * clients, so no OAuth client can carry either id
+ * (__tests__/askMojiTokenGrant.test.ts). apps/mcp honours Ask Moji's role
+ * ceiling and impersonation headers only for an internal token of this client.
  *
- *   1. HERE — `refreshTokenExpiresAt` is stamped in the PAST, and the value is
- *      random (`askmoji-norefresh_…`).
- *   2. The authorization server (better-auth 1.7's oauth-provider, ./server.ts)
- *      never reads this table: its token endpoint looks refresh tokens up in
- *      `oauth2_refresh_tokens`, and the migration that created that table copied
- *      none of this client's rows.
- *   3. `classmoji-ask-moji` is reserved there as a DISABLED client, so the token
- *      endpoint refuses any grant that names it
- *      (__tests__/askMojiTokenGrant.test.ts).
+ * VIEW AS
+ * -------
+ * A turn that runs while a platform admin views as the user passes that View
+ * as session's id. The mint reads the session row and refuses unless it is a
+ * live View as session of this user; the token then names the session and its
+ * admin (`impersonated_by`, from the session row, never from the caller).
+ * apps/mcp refuses the token once that session is gone or expired, so a turn's
+ * lookups stop when View as ends, and the admin it records is the one the
+ * session names.
  *
  * WHAT THIS TOKEN DOES *NOT* CONFINE (intended v1 behaviour — finding 15)
  * ----------------------------------------------------------------------
@@ -50,59 +52,68 @@ import getPrisma from '@classmoji/database';
 import type { Prisma, PrismaClient } from '@prisma/client';
 
 /**
- * The OAuth client every Ask Moji token is issued to. Seeded by
- * packages/database/scripts/seed.js and upserted here so a fresh environment
- * works without a seed run. `LegacyOauthAccessToken.clientId` FKs
- * `LegacyOauthApplication.clientId`, and `Viewer.clientId`
- * (apps/mcp/src/auth/resolveViewer.ts:69) is how the MCP tells an Ask Moji call
- * from a Claude.ai-connector call.
+ * The client every Ask Moji and quiz-agent token names. apps/mcp tells an
+ * Ask Moji call from an OAuth client's by it (`Viewer.clientId`), together
+ * with the token being an internal one.
  */
 export const ASK_MOJI_CLIENT_ID = 'classmoji-ask-moji';
 
-/**
- * Space-delimited, matching the column's format. READ ONLY on purpose:
- * apps/mcp/src/mcp/registry.ts:428 filters at REGISTRATION, so a write tool is
- * never registered for this token and never appears in `tools/list`. The model
- * cannot be talked into calling a tool that is absent.
- */
-export const ASK_MOJI_SCOPES = 'read';
+/** The client apps/mcp's development-only token mint (routes/devMint.ts) names. */
+export const DEV_MINT_CLIENT_ID = 'classmoji-dev-mint';
 
-/** Matches better-auth's own `accessTokenExpiresIn` default (index.mjs:124). */
+/** The two client ids only Classmoji mints for; reserved, disabled, on the OAuth server. */
+export const INTERNAL_CLIENT_IDS: readonly string[] = [ASK_MOJI_CLIENT_ID, DEV_MINT_CLIENT_ID];
+
+/**
+ * The prefix every internal token carries, whichever client it names (the
+ * row's `client_id` says which). apps/mcp looks a bearer up in
+ * `mcp_internal_tokens` only when it has this prefix.
+ */
+export const INTERNAL_TOKEN_PREFIX = 'askmoji_';
+
+/**
+ * READ ONLY on purpose: apps/mcp/src/mcp/registry.ts filters at REGISTRATION,
+ * so a write tool is never registered for this token and never appears in
+ * `tools/list`. The model cannot be talked into calling a tool that is absent.
+ */
+export const ASK_MOJI_SCOPES: readonly string[] = ['read'];
+
+/** An hour, as the OAuth server's access tokens. A turn uses its token for minutes. */
 export const TOKEN_TTL_SECONDS = 3600;
-
-/**
- * A live token with more than this left is handed back instead of minting a new
- * one. This is what keeps `oauth_access_tokens` from growing one row per chat
- * turn — it bounds minting to roughly one row per user per hour. The floor also
- * means a token handed to a turn always has at least five minutes of life, so a
- * long tool call cannot expire mid-flight.
- */
-export const REUSE_FLOOR_SECONDS = 300;
 
 export interface MintedMcpToken {
   accessToken: string;
   expiresAt: Date;
 }
 
+export interface MintMcpTokenOptions {
+  /**
+   * The View as session the turn runs under (the conversation grant's
+   * `impersonation.session_id`), when it runs under one. Null or absent: the
+   * user's own turn.
+   */
+  impersonationSessionId?: string | null;
+}
+
+/**
+ * How an internal token is stored and looked up: SHA-256 over its UTF-8
+ * bytes, base64url without padding.
+ */
+export function hashInternalToken(token: string): string {
+  return createHash('sha256').update(token, 'utf8').digest('base64url');
+}
+
+/** A new random internal token (256 bits). */
+export function newInternalToken(): string {
+  return `${INTERNAL_TOKEN_PREFIX}${randomBytes(32).toString('base64url')}`;
+}
+
 /** The subset of the Prisma client this module uses — also what tests stand in for. */
 type MintClient = Pick<
   PrismaClient,
-  'legacyOauthAccessToken' | 'legacyOauthApplication' | '$executeRaw' | '$transaction'
+  'mcpInternalToken' | 'session' | '$executeRaw' | '$transaction'
 >;
 type MintTx = Omit<MintClient, '$transaction'>;
-
-/**
- * Prisma's unique-constraint violation. Duck-typed on `code` rather than
- * `instanceof Prisma.PrismaClientKnownRequestError` so this holds for whatever
- * the generated client actually throws (the class identity differs between the
- * library and binary query engines, and across a re-generate), and so the tests
- * can drive it without constructing a real Prisma error.
- */
-function isUniqueConstraintViolation(error: unknown): boolean {
-  return (
-    typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'P2002'
-  );
-}
 
 /**
  * Prisma interactive-transaction limits, set explicitly instead of inheriting
@@ -113,14 +124,13 @@ function isUniqueConstraintViolation(error: unknown): boolean {
  * which here means how long it may sit in `pg_advisory_xact_lock`. The lock is
  * keyed per USER, so the only contention that can ever queue on it is one
  * person's own concurrent turns: several tabs open on the same chat, or a
- * conversation resumed in parallel. Each holder runs four short statements, so
- * the realistic wait is milliseconds and these ceilings exist for the pathological
- * case (a saturated pool, a stalled connection) rather than the normal one.
+ * conversation resumed in parallel. Each holder runs a few short statements,
+ * so the realistic wait is milliseconds and these ceilings exist for the
+ * pathological case (a saturated pool, a stalled connection) rather than the
+ * normal one.
  *
  * Both FAIL CLOSED. A timeout throws out of `mintMcpAccessToken`, which fails
- * that turn. That is the intended outcome: the alternative — proceeding without a
- * token, or reusing a previous turn's — is precisely what the per-turn mint
- * exists to prevent. The turn is lost; the next one re-mints.
+ * that turn. The turn is lost; the next one re-mints.
  */
 const TRANSACTION_OPTIONS = { maxWait: 5000, timeout: 10000 } as const;
 
@@ -128,61 +138,67 @@ const TRANSACTION_OPTIONS = { maxWait: 5000, timeout: 10000 } as const;
  * A stable 64-bit key for `pg_advisory_xact_lock`, derived from the client id and
  * the user id so two users never contend with each other.
  *
- * An advisory lock rather than the repo's usual `SELECT … FOR UPDATE` idiom
- * (packages/services/src/classmoji/classroomMembership.service.ts:405) because
- * there is no row that represents "this user's Ask Moji token" until we create
- * one — that is the whole race. Locking the `users` row instead would serialize
- * token minting against unrelated profile writes.
+ * It serializes one user's mints, so the hygiene delete and the insert of two
+ * racing turns never interleave. An advisory lock rather than the repo's usual
+ * `SELECT … FOR UPDATE` idiom (packages/services/src/classmoji/classroomMembership.service.ts:405)
+ * because no row represents "this user's Ask Moji tokens"; locking the `users`
+ * row instead would serialize token minting against unrelated profile writes.
  */
 function advisoryLockKey(userId: string): bigint {
   return createHash('sha256').update(`${ASK_MOJI_CLIENT_ID}:${userId}`).digest().readBigInt64BE(0);
 }
 
-/** A live, reusable token for this user, or null. */
-async function findReusableToken(client: MintTx, userId: string): Promise<MintedMcpToken | null> {
-  const floor = new Date(Date.now() + REUSE_FLOOR_SECONDS * 1000);
-  const existing = await client.legacyOauthAccessToken.findFirst({
-    where: {
-      userId,
-      clientId: ASK_MOJI_CLIENT_ID,
-      scopes: ASK_MOJI_SCOPES,
-      accessTokenExpiresAt: { gt: floor },
-    },
-    orderBy: { accessTokenExpiresAt: 'desc' },
+/**
+ * The View as binding for a turn: the session's admin, after checking the
+ * session row is a live View as session of this user. Throws otherwise, so a
+ * turn whose View as has ended gets no token rather than an unbound one.
+ */
+async function viewAsBinding(
+  client: MintTx,
+  userId: string,
+  sessionId: string,
+  now: number
+): Promise<string> {
+  const session = await client.session.findUnique({
+    where: { id: sessionId },
+    select: { user_id: true, impersonatedBy: true, expires_at: true },
   });
-  if (!existing) return null;
-  return { accessToken: existing.accessToken, expiresAt: existing.accessTokenExpiresAt };
+  if (
+    !session ||
+    session.user_id !== userId ||
+    !session.impersonatedBy ||
+    session.expires_at.getTime() <= now
+  ) {
+    throw new Error('mintMcpAccessToken: the View as session is not a live session of this user');
+  }
+  return session.impersonatedBy;
 }
 
 /**
- * Mint (or reuse) a read-only MCP access token for `userId`.
+ * Mint a read-only MCP access token for `userId`, one per turn.
  *
  * The caller must already have proven the user's identity — this function does no
- * authentication of its own. It is called from an already-authenticated webapp
- * request, once per Ask Moji turn.
+ * authentication of its own. It is called by the Ask Moji and quiz Trigger
+ * tasks, for the user id on the conversation's row.
  *
- * @throws if `userId` is empty — minting an unbound token would produce a bearer
- *   that `resolveViewer` rejects anyway, and a silent no-op here would be worse.
+ * @throws if `userId` is empty (a token bound to nobody would only be refused),
+ *   or if `impersonationSessionId` names no live View as session of this user.
  */
-export async function mintMcpAccessToken(userId: string): Promise<MintedMcpToken> {
+export async function mintMcpAccessToken(
+  userId: string,
+  options: MintMcpTokenOptions = {}
+): Promise<MintedMcpToken> {
   if (!userId) {
     throw new Error('mintMcpAccessToken: userId is required');
   }
+  const impersonationSessionId = options.impersonationSessionId || null;
 
   const prisma = getPrisma() as MintClient;
-
-  // Fast path, outside any transaction: the overwhelmingly common case is a
-  // second turn of a conversation whose token is still comfortably alive.
-  const reusable = await findReusableToken(prisma, userId);
-  if (reusable) return reusable;
 
   return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const client = tx as unknown as MintTx;
 
-    // Serialize this user's mints. Two turns racing here (two tabs, or a
-    // conversation resumed in parallel) would otherwise BOTH miss the read above
-    // and BOTH create a row — the access tokens are random, so no unique
-    // constraint would catch it.
+    // Serialize this user's mints (see advisoryLockKey).
     //
     // `$executeRaw`, not `$queryRaw`: `pg_advisory_xact_lock` returns `void`,
     // and Prisma's `$queryRaw` fails deserializing a void column ("Failed to
@@ -190,86 +206,37 @@ export async function mintMcpAccessToken(userId: string): Promise<MintedMcpToken
     await (tx as unknown as MintClient)
       .$executeRaw`SELECT pg_advisory_xact_lock(${advisoryLockKey(userId)})`;
 
-    // Double-checked: whoever held the lock first may have just minted the token
-    // this call was about to create. Reuse theirs.
-    const raced = await findReusableToken(client, userId);
-    if (raced) return raced;
-
-    // Idempotent. `update: {}` on purpose: if an operator has flipped
-    // `disabled: true` as a kill switch (resolveViewer refuses a disabled
-    // application), minting must not quietly turn Ask Moji back on.
-    //
-    // WHY THIS UPSERT CAN STILL RACE (and why the catch below is not paranoia).
-    // The advisory lock above is keyed per USER, which is what keeps one
-    // person's tabs from minting two tokens — but it deliberately does NOT
-    // serialize different users. This row is shared by all of them. In a fresh
-    // environment that has never seeded, TWO users' first-ever turns can reach
-    // this line at the same moment: Prisma's upsert is a read-then-write, both
-    // read "no row", both insert, and the loser takes a P2002 on the unique
-    // `clientId`. That would fail a legitimate turn with a 500 on nothing worse
-    // than bad luck at first boot.
-    //
-    // The row the loser failed to create is exactly the row it wanted, so
-    // re-read to confirm it is there and carry on. The re-read is not a
-    // formality: a P2002 from some OTHER unique constraint would leave no row,
-    // and that error must still surface.
-    try {
-      await client.legacyOauthApplication.upsert({
-        where: { clientId: ASK_MOJI_CLIENT_ID },
-        update: {},
-        create: {
-          name: 'Ask Moji',
-          clientId: ASK_MOJI_CLIENT_ID,
-          clientSecret: '', // never used — no authorization-code flow runs for this client
-          redirectUrls: '', // never used — no browser redirect
-          // NOT 'public'. Nothing reads this on the direct-mint path, but 'public'
-          // means "no client secret required" if the real flow is ever wired up.
-          type: 'confidential',
-          disabled: false,
-        },
-      });
-    } catch (error: unknown) {
-      if (!isUniqueConstraintViolation(error)) throw error;
-      const existing = await client.legacyOauthApplication.findUnique({
-        where: { clientId: ASK_MOJI_CLIENT_ID },
-      });
-      if (!existing) throw error;
-      // Someone else created it a moment ago. Note that we do NOT inspect
-      // `disabled` here, for the same reason `update: {}` above does not write
-      // it: whether the application is enabled is resolveViewer's call at use
-      // time, not this function's at mint time.
-    }
-
     const now = Date.now();
+    const impersonatedBy = impersonationSessionId
+      ? await viewAsBinding(client, userId, impersonationSessionId, now)
+      : null;
 
     // Hygiene: this user's dead Ask Moji rows go now. Scoped to the user rather
     // than the whole client so concurrent mints never contend on the same rows;
-    // growth stays bounded at one stale row per user who stops using Ask Moji,
-    // cleared the moment they come back.
-    await client.legacyOauthAccessToken.deleteMany({
+    // a user keeps at most the tokens of the last hour's turns, and one who
+    // stops using Ask Moji leaves those until they come back.
+    await client.mcpInternalToken.deleteMany({
       where: {
-        clientId: ASK_MOJI_CLIENT_ID,
-        userId,
-        accessTokenExpiresAt: { lte: new Date(now) },
+        client_id: ASK_MOJI_CLIENT_ID,
+        user_id: userId,
+        expires_at: { lte: new Date(now) },
       },
     });
 
+    const accessToken = newInternalToken();
     const expiresAt = new Date(now + TOKEN_TTL_SECONDS * 1000);
-    const created = await client.legacyOauthAccessToken.create({
+    await client.mcpInternalToken.create({
       data: {
-        accessToken: `askmoji_${randomBytes(32).toString('base64url')}`,
-        // The column is NOT NULL and @unique, so a value must be written. It is
-        // random (unguessable) AND already expired (unusable) — see the module
-        // docblock: a live refresh token here is a privilege escalation.
-        refreshToken: `askmoji-norefresh_${randomBytes(32).toString('base64url')}`,
-        accessTokenExpiresAt: expiresAt,
-        refreshTokenExpiresAt: new Date(now - 1000),
-        clientId: ASK_MOJI_CLIENT_ID,
-        userId,
-        scopes: ASK_MOJI_SCOPES,
+        token_hash: hashInternalToken(accessToken),
+        client_id: ASK_MOJI_CLIENT_ID,
+        user_id: userId,
+        scopes: [...ASK_MOJI_SCOPES],
+        expires_at: expiresAt,
+        impersonation_session_id: impersonationSessionId,
+        impersonated_by: impersonatedBy,
       },
     });
 
-    return { accessToken: created.accessToken, expiresAt: created.accessTokenExpiresAt };
+    return { accessToken, expiresAt };
   }, TRANSACTION_OPTIONS);
 }

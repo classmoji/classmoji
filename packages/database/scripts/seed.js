@@ -373,38 +373,15 @@ async function main() {
     students: studentUsers.slice(0, 2),
   });
 
-  // ── Ask Moji OAuth client ───────────────────────────────────────────────
-  // Ask Moji calls the MCP with a per-user bearer token minted directly by
-  // `mintMcpAccessToken` (packages/auth/src/mcpToken.ts). `oauth_access_tokens
-  // .client_id` is an FK to this row, and `Viewer.clientId` is how the MCP tells
-  // an Ask Moji call from a Claude.ai-connector call.
-  //
-  // Only `client_id` is load-bearing: no authorization-code flow ever runs for
-  // this client, so the secret and the redirect URLs stay empty. `type` is
-  // 'confidential' rather than 'public' because 'public' would mean "no client
-  // secret required" if anyone ever wired the real flow up.
-  //
-  // `disabled` is the operator kill switch — flipping it to true revokes every
-  // Ask Moji token at once (apps/mcp/src/auth/resolveViewer.ts). The mint helper
-  // upserts with `update: {}` so re-minting never flips it back.
-  const askMojiClient = await prisma.legacyOauthApplication.upsert({
-    where: { clientId: 'classmoji-ask-moji' },
-    update: {},
-    create: {
-      name: 'Ask Moji',
-      clientId: 'classmoji-ask-moji',
-      clientSecret: '',
-      redirectUrls: '',
-      type: 'confidential',
-      disabled: false,
-    },
-  });
-
-  // The same two Classmoji-owned client ids on the OAuth server
-  // (better-auth 1.7, `oauth2_clients`), reserved as disabled clients with no
-  // grants, redirect URIs or secret, so no OAuth client can ever carry them.
-  // The migration that creates the table inserts them too; `update` keeps an
-  // existing row disabled.
+  // ── Classmoji-owned MCP client ids ──────────────────────────────────────
+  // Ask Moji (and the quiz agent) call the MCP with per-turn tokens Classmoji
+  // mints itself (`mintMcpAccessToken`, packages/auth/src/mcpToken.ts, client
+  // `classmoji-ask-moji`), and apps/mcp's dev mint does the same for
+  // `classmoji-dev-mint`. Those tokens live in `mcp_internal_tokens` and never
+  // touch the OAuth server (better-auth 1.7, `oauth2_clients`), where both ids
+  // are reserved as disabled clients with no grants, redirect URIs or secret,
+  // so no OAuth client can ever carry them. The migration that creates the
+  // table inserts them too; `update` keeps an existing row disabled.
   for (const [clientId, name] of [
     ['classmoji-ask-moji', 'Ask Moji'],
     ['classmoji-dev-mint', 'Classmoji dev mint'],
@@ -443,7 +420,7 @@ async function main() {
   console.log(
     `   Foreign:     ${otherClassroom.slug} (own owner/student — no test-identity members)`
   );
-  console.log(`   OAuth app:   ${askMojiClient.clientId} (Ask Moji → MCP, enabled)`);
+  console.log('   OAuth:       classmoji-ask-moji, classmoji-dev-mint reserved (disabled)');
   console.log(`\nSign in via GitHub OAuth → auto-join as OWNER + ASSISTANT + STUDENT.`);
   console.log(`Your student data (graded Part 1 + open Part 2) is created on first login.`);
 }
