@@ -31,7 +31,8 @@ export type FailureReason =
   | 'template_not_found'
   | 'github_unreachable'
   | 'repository_deleted'
-  | 'github_account_gone';
+  | 'github_account_gone'
+  | 'github_account_suspended';
 
 export const reportFailureReason = async (reason: FailureReason) => {
   try {

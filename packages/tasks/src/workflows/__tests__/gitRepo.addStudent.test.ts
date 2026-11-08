@@ -150,6 +150,21 @@ describe('adding a student to their Github repo', () => {
     });
   });
 
+  it('stops with a clear message when Github has suspended the account', async () => {
+    mocks.addCollaborator.mockRejectedValueOnce(
+      httpError(
+        422,
+        'Validation Failed: {"resource":"Repository","code":"custom","message":"User is suspended"}'
+      )
+    );
+
+    await expect(add()).rejects.toMatchObject({
+      name: 'AbortTaskRunError',
+      message: expect.stringContaining('Github has suspended the account ada'),
+    });
+    expect(mocks.currentGithubLogin).not.toHaveBeenCalled();
+  });
+
   it('rethrows other Github errors without a lookup', async () => {
     mocks.addCollaborator.mockRejectedValueOnce(httpError(500, 'Server Error'));
 

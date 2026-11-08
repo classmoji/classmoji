@@ -27,7 +27,9 @@ import { isTransientGitError, retryOnGitBlip } from '../helpers/gitRetry.ts';
 import {
   appPermissionDeniedMessage,
   githubAccountGoneMessage,
+  githubAccountSuspendedMessage,
   isAppPermissionDenied,
+  isUserSuspended,
   isForeignKeyViolation,
   isRepoNotFound,
   repositoryDeletedMessage,
@@ -694,6 +696,13 @@ export const addCollaboratorsToRepo = async (payload: AddCollaboratorsToRepoTask
       await reportFailureReason('permission_denied');
       const org = payload.classroom.git_organization.login ?? 'the organization';
       throw new AbortTaskRunError(appPermissionDeniedMessage(org, payload.repoName));
+    }
+    // Github suspended the student's account: no retry changes that.
+    if (isUserSuspended(error)) {
+      await reportFailureReason('github_account_suspended');
+      throw new AbortTaskRunError(
+        githubAccountSuspendedMessage(payload.student?.login ?? null, payload.repoName)
+      );
     }
     throw error;
   }

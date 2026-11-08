@@ -22,6 +22,16 @@ export function isAppPermissionDenied(error: unknown): boolean {
 }
 
 /**
+ * Github's 422 when the account being added as a collaborator is suspended by
+ * Github. Only Github (or the student, by appealing) can lift it.
+ */
+export function isUserSuspended(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const e = error as { status?: unknown; message?: unknown };
+  return e.status === 422 && typeof e.message === 'string' && /user is suspended/i.test(e.message);
+}
+
+/**
  * git's answer when a remote repository does not exist or cannot be read. With
  * `repo` (owner/name), only when git names that repository: a run that reads
  * several (the template, the student repository it just created) must not blame
@@ -53,6 +63,13 @@ export const githubAccountGoneMessage = (login: string | null, repoName: string)
   `Github no longer has the account ${login ? `${login} ` : ''}that this student signed in ` +
   `with, so they could not be given access to ${repoName}. The student should sign in to ` +
   `Classmoji with the Github account they use now, then run Sync on the repository.`;
+
+/** What to tell the instructor when Github has suspended the student's account. */
+export const githubAccountSuspendedMessage = (login: string | null, repoName: string): string =>
+  `Github has suspended the account ${login ? `${login} ` : ''}that this student signed in ` +
+  `with, so they could not be given access to ${repoName}. The student should sign in to ` +
+  `Classmoji with a Github account in good standing (or get the suspension lifted), then ` +
+  `run Sync on the repository.`;
 
 /** A Prisma foreign-key violation (P2003), matched by code (the client class isn't imported here). */
 export const isForeignKeyViolation = (error: unknown): boolean =>

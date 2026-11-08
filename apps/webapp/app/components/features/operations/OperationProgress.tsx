@@ -297,6 +297,10 @@ const REASON_COPY = (label: string): Record<string, { title: string; fix?: strin
     title: 'Student account gone',
     fix: 'The student must sign in with their current account, then Sync.',
   },
+  github_account_suspended: {
+    title: 'Student account suspended',
+    fix: 'The student must sign in with an account in good standing, then Sync.',
+  },
   timed_out: { title: 'Took too long' },
   unknown: { title: 'Something went wrong' },
 });

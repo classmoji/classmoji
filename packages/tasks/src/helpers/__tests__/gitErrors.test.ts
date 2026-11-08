@@ -3,6 +3,7 @@ import {
   appPermissionDeniedMessage,
   isAppPermissionDenied,
   isRepoNotFound,
+  isUserSuspended,
   templateNotFoundMessage,
 } from '../gitErrors.ts';
 import { isTransientGitError } from '../gitRetry.ts';
@@ -89,5 +90,24 @@ describe('messages', () => {
     );
     expect(appPermissionDeniedMessage('esih-classroom', 'tp2-ada')).toContain('run Sync');
     expect(templateNotFoundMessage('acme/tp3-template')).toContain('acme/tp3-template');
+  });
+});
+
+describe('isUserSuspended', () => {
+  it('recognises Github refusing a suspended collaborator', () => {
+    expect(
+      isUserSuspended(
+        httpError(
+          422,
+          'Validation Failed: {"resource":"Repository","code":"custom","message":"User is suspended"} - https://docs.github.com/rest/reference/repos#add-a-repository-collaborator'
+        )
+      )
+    ).toBe(true);
+  });
+
+  it('does not take other errors for it', () => {
+    expect(isUserSuspended(httpError(422, 'Validation Failed'))).toBe(false);
+    expect(isUserSuspended(httpError(403, 'User is suspended'))).toBe(false);
+    expect(isUserSuspended(null)).toBe(false);
   });
 });
