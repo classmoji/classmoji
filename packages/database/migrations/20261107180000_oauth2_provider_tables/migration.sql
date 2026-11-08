@@ -10,8 +10,10 @@
 -- Copied into the 1.7 tables, so connected apps keep working without a new
 -- sign-in:
 --   1. every client except the two Classmoji-owned ids (classmoji-ask-moji,
---      classmoji-dev-mint), keeping its id, client id, name, icon, owner and
---      disabled flag. A public client (`type` public) authenticates with
+--      classmoji-dev-mint), keeping its id, client id, name, icon and
+--      disabled flag, with no owner (1.7 gives a client's owner nothing, and
+--      deleting the owner's account would take every user's connection to
+--      the client with it). A public client (`type` public) authenticates with
 --      `none` and keeps no secret; any other client authenticates with
 --      `client_secret_basic` and keeps its secret as better-auth 1.7 stores
 --      one: SHA-256, base64url without padding. `redirect_urls` was a
@@ -35,10 +37,17 @@
 --      types, redirect URIs or secret, so no OAuth client can ever carry
 --      them.
 --
--- mcp_internal_tokens holds the MCP bearer tokens Classmoji mints itself;
--- nothing writes it yet.
+-- mcp_internal_tokens holds the MCP bearer tokens Classmoji mints itself
+-- (Ask Moji's and the quiz agent's per-turn tokens, and the dev mint's),
+-- stored hashed.
+--
+-- The time zone is UTC for this transaction: the timestamp columns have no
+-- time zone, and the copies compare with and write CURRENT_TIMESTAMP, which
+-- would otherwise be the session's local time.
 
 BEGIN;
+
+SET LOCAL TIME ZONE 'UTC';
 
 -- CreateTable
 CREATE TABLE "oauth2_clients" (
@@ -329,7 +338,7 @@ SELECT
     COALESCE(a."disabled", false),
     a."name",
     a."icon",
-    a."user_id",
+    NULL,
     string_to_array(a."redirect_urls", ','),
     CASE WHEN a."type" = 'public' THEN 'none' ELSE 'client_secret_basic' END,
     CASE

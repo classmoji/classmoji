@@ -29,7 +29,8 @@
  *   2. this migration with a failing statement added before its COMMIT: the
  *      deploy must fail and leave none of its tables behind;
  *   3. `prisma migrate resolve --rolled-back` (the runbook step), then the
- *      real migration through `prisma migrate deploy`.
+ *      real migration through `prisma migrate deploy`, with the database's
+ *      time zone set to Asia/Tokyo meanwhile.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -222,9 +223,17 @@ describe.skipIf(!DATABASE_URL)('the oauth2 migration (real Postgres)', () => {
     afterFailedDeploy = { tables, legacyApplications, recorded };
 
     // The runbook: mark the failed attempt rolled back, then deploy again.
+    // On a database whose time zone is east of UTC: the migration writes
+    // its timestamps in UTC whatever the server's setting.
     const real = migrationsCopy(join(work, 'real'), { through: 'all' });
     prisma(['migrate', 'resolve', '--rolled-back', MIGRATION, '--schema', real]);
-    prisma(['migrate', 'deploy', '--schema', real]);
+    const database = new URL(DATABASE_URL!).pathname.slice(1);
+    await db.$executeRawUnsafe(`ALTER DATABASE "${database}" SET timezone TO 'Asia/Tokyo'`);
+    try {
+      prisma(['migrate', 'deploy', '--schema', real]);
+    } finally {
+      await db.$executeRawUnsafe(`ALTER DATABASE "${database}" RESET timezone`);
+    }
   }, 300_000);
 
   afterAll(async () => {
@@ -304,7 +313,9 @@ describe.skipIf(!DATABASE_URL)('the oauth2 migration (real Postgres)', () => {
       applicationType: 'web',
       clientSecret: hashed('websecret-plaintext-abc'),
       icon: 'https://claude.ai/icon.png',
-      userId: 'u-2',
+      // No owner: 1.7 gives a client's owner nothing, and the owner's account
+      // deletion would take every user's connection to it along (cascade).
+      userId: null,
       disabled: false,
       metadata: null,
     });
@@ -332,9 +343,11 @@ describe.skipIf(!DATABASE_URL)('the oauth2 migration (real Postgres)', () => {
     ]);
     // The newest consent row's id is kept.
     expect(consents.find(c => c.clientId === 'pubclient')!.id).toBe('consent-new');
-    // Created at migration time, so no JWT can predate it.
+    // Created at migration time, so no JWT can predate it; in UTC, though
+    // the database's time zone was Asia/Tokyo (not nine hours ahead).
     for (const consent of consents) {
       expect(Date.now() - consent.createdAt.getTime()).toBeLessThan(10 * 60 * 1000);
+      expect(consent.createdAt.getTime()).toBeLessThanOrEqual(Date.now());
     }
   });
 

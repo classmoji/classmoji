@@ -555,7 +555,7 @@ describe.skipIf(!CX_URL)('the CX-2 catch-up (real Postgres)', () => {
       client_secret: hashed('wwebsecret-plain-xyz'),
       token_endpoint_auth_method: 'client_secret_basic',
       application_type: 'web',
-      user_id: 'u-3',
+      user_id: null,
       metadata: null,
     });
     const [rot] = await tableRows(cx, 'oauth2_refresh_tokens', `"id" = 'w-tok-pub-u1-rot'`);
