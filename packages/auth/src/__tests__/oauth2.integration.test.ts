@@ -6,7 +6,13 @@
  *     `auth.handler`: the authorization code and refresh grants end to end,
  *     the tokens they issue, the copied refresh tokens and client secrets, and
  *     the app connections a password change or a ban ends. Only the service
- *     layer is stood in.
+ *     layer is stood in;
+ *   - on the same database: the sign-ins that resume an app connection
+ *     (email, email verification, Github and gitlab.com state, a
+ *     self-managed Gitlab's round trip, with its setup and link states), and a
+ *     sign-up for an address that already has an account
+ *     (resetUnverifiedPasswordAccount). They live here because a second
+ *     real-database file would reset the same schema while this one runs.
  *
  * Needs a throwaway database: set OAUTH_IT_DATABASE_URL to a Postgres URL on
  * localhost whose database name ends in `_it`. The test empties its `public`
