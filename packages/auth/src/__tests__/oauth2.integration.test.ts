@@ -36,7 +36,10 @@
 import { execFileSync } from 'node:child_process';
 import { createHash, generateKeyPairSync, randomUUID, sign } from 'node:crypto';
 import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
+import type { LookupAddress } from 'node:dns';
+import { createServer as createHttpServer, type Server as HttpServer } from 'node:http';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -96,6 +99,29 @@ vi.mock('@classmoji/services', () => ({
     },
   },
 }));
+/**
+ * The CIMD plugin's transport (`@better-auth/cimd/node`, what ../server.ts
+ * passes it), wrapped: every call is counted, and a test may serve the
+ * document itself (`serve`); otherwise the real transport runs.
+ */
+const cimdTransport = vi.hoisted(() => ({
+  calls: [] as string[],
+  serve: null as null | ((url: URL, init?: RequestInit) => Promise<Response>),
+}));
+vi.mock('@better-auth/cimd/node', async importOriginal => {
+  const real = await importOriginal<typeof import('@better-auth/cimd/node')>();
+  return {
+    ...real,
+    fetchClientMetadataResource: (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      cimdTransport.calls.push(url.href);
+      return cimdTransport.serve
+        ? cimdTransport.serve(url, init)
+        : real.fetchClientMetadataResource(input, init);
+    },
+  };
+});
+
 const MIGRATION = '20261107180000_oauth2_provider_tables';
 const DATABASE_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../../../database');
 const PRISMA_CLI = createRequire(import.meta.url).resolve('prisma/build/index.js');
@@ -544,6 +570,18 @@ describe.skipIf(!DATABASE_URL)('the authorization server (real Postgres)', () =>
     ).toBeTruthy();
   });
 
+  /**
+   * The MCP server's own check of an access token
+   * (apps/mcp/src/auth/jwtAccessToken.ts): the signature and claims, then the
+   * client, the user and the consent for (azp, sub), all read from this
+   * database. Here the client and consent are what the migration wrote.
+   */
+  async function mcpAccepts(jwt: string) {
+    const { resolveJwtAccessToken } =
+      await import('../../../../apps/mcp/src/auth/jwtAccessToken.ts');
+    return resolveJwtAccessToken(jwt);
+  }
+
   // The copied 1.4 grants first: a later test's refresh-token reuse ends
   // the (pubclient, u-1) family, copied rows included.
   it('refreshes a copied 1.4 refresh token, and gives it the MCP resource', async () => {
@@ -561,6 +599,14 @@ describe.skipIf(!DATABASE_URL)('the authorization server (real Postgres)', () =>
     expect(
       (await db.oauthRefreshToken.findUnique({ where: { id: 'tok-pub-live2' } }))?.resources
     ).toEqual([server.MCP_RESOURCE]);
+    // The MCP server accepts it: the copied client, and the consent the
+    // migration wrote (two 1.4 consents merged, created at the migration, in
+    // UTC on a database set to Asia/Tokyo).
+    await expect(mcpAccepts(res.body.access_token)).resolves.toMatchObject({
+      tokenKind: 'jwt',
+      userId: 'u-1',
+      clientId: 'pubclient',
+    });
   });
 
   it("refreshes a copied confidential client's token with its secret (hashed as 1.7 expects)", async () => {
@@ -577,6 +623,11 @@ describe.skipIf(!DATABASE_URL)('the authorization server (real Postgres)', () =>
     );
     expect(res.status).toBe(200);
     expect(claimsOf(res.body.access_token)).toMatchObject({ azp: 'webclient', sub: 'u-2' });
+    // A consent the migration made from the live token alone (no 1.4 consent).
+    await expect(mcpAccepts(res.body.access_token)).resolves.toMatchObject({
+      userId: 'u-2',
+      clientId: 'webclient',
+    });
   });
 
   it('refuses a copied token of a disabled client', async () => {
@@ -1035,6 +1086,167 @@ describe.skipIf(!DATABASE_URL)('the authorization server (real Postgres)', () =>
     expect(results.filter(r => r.status === 200)).toHaveLength(1);
   });
 
+  describe('a client known by its metadata document (CIMD)', () => {
+    const DOC_PATH = '/oauth/client.json';
+    const CLIENT_ID = `https://cimd-client.example.org${DOC_PATH}`;
+    const REDIRECT_URI = 'http://127.0.0.1:33418/callback';
+    const dns = createRequire(import.meta.url)('node:dns') as typeof import('node:dns');
+    /** The document's server, on 127.0.0.1, and what reached it. */
+    let docServer: HttpServer;
+    let docPort: number;
+    const docRequests: { method: string; path: string; accept: string | null }[] = [];
+    let connections = 0;
+
+    /** /oauth2/authorize for `clientId`, by u-1; the provider's answer. */
+    const authorize = (clientId: string) =>
+      server.auth.handler(
+        new Request(
+          `${BASE}/oauth2/authorize?${new URLSearchParams({
+            client_id: clientId,
+            response_type: 'code',
+            redirect_uri: REDIRECT_URI,
+            scope: 'read write',
+            state: 'st',
+            code_challenge: pkce().challenge,
+            code_challenge_method: 'S256',
+          })}`,
+          { headers: { cookie: ownCookie } }
+        )
+      );
+    const toConsent = (res: Response) =>
+      new URL(res.headers.get('location') ?? '/', 'http://localhost:3000').pathname ===
+      '/oauth/consent';
+
+    beforeAll(async () => {
+      docServer = createHttpServer((req, res) => {
+        docRequests.push({
+          method: req.method ?? '',
+          path: req.url ?? '',
+          accept: req.headers.accept ?? null,
+        });
+        if (req.url !== DOC_PATH) return void res.writeHead(404).end();
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            client_id: CLIENT_ID,
+            client_name: 'CIMD test client',
+            redirect_uris: [REDIRECT_URI],
+            token_endpoint_auth_method: 'none',
+            grant_types: ['authorization_code', 'refresh_token'],
+            response_types: ['code'],
+          })
+        );
+      });
+      docServer.on('connection', () => connections++);
+      await new Promise<void>(done => docServer.listen(0, '127.0.0.1', done));
+      docPort = (docServer.address() as AddressInfo).port;
+    });
+
+    afterAll(async () => {
+      cimdTransport.serve = null;
+      await new Promise(done => docServer.close(done));
+    });
+
+    it('registers a client from its document, fetched over a socket, and connects it', async () => {
+      // The real transport connects only to public addresses
+      // (cimdTransport.test.ts), so the document's URL is fetched from the
+      // server above; the plugin's fetch, checks and storage are the real ones.
+      cimdTransport.serve = (url, init) =>
+        fetch(`http://127.0.0.1:${docPort}${url.pathname}${url.search}`, {
+          headers: init?.headers,
+          signal: init?.signal,
+          redirect: 'manual',
+        });
+      try {
+        const res = await connect({ clientId: CLIENT_ID, redirectUri: REDIRECT_URI });
+        expect(res.status, JSON.stringify(res.body)).toBe(200);
+        expect(docRequests).toEqual([
+          { method: 'GET', path: DOC_PATH, accept: 'application/json' },
+        ]);
+        expect(claimsOf(res.body.access_token)).toMatchObject({
+          aud: server.MCP_RESOURCE,
+          azp: CLIENT_ID,
+          sub: 'u-1',
+        });
+        await expect(mcpAccepts(res.body.access_token)).resolves.toMatchObject({
+          clientId: CLIENT_ID,
+          userId: 'u-1',
+        });
+        // Stored as the document describes it, owned by nobody.
+        expect(await db.oauthClient.findUnique({ where: { clientId: CLIENT_ID } })).toMatchObject({
+          clientDiscoveryId: 'cimd',
+          name: 'CIMD test client',
+          tokenEndpointAuthMethod: 'none',
+          redirectUris: [REDIRECT_URI],
+          userId: null,
+        });
+        const refreshed = await token({
+          grant_type: 'refresh_token',
+          refresh_token: res.body.refresh_token,
+          client_id: CLIENT_ID,
+        });
+        expect(refreshed.status, JSON.stringify(refreshed.body)).toBe(200);
+        expect(claimsOf(refreshed.body.access_token)).toMatchObject({ azp: CLIENT_ID });
+      } finally {
+        cimdTransport.serve = null;
+      }
+    });
+
+    it("refuses a document host whose address is this machine: the server's transport connects nowhere", async () => {
+      // A public-looking name answered with 127.0.0.1, for both lookup APIs:
+      // a transport that fetched without checking would reach the server above.
+      const host = 'cimd-loopback.example.org';
+      const clientId = `https://${host}:${docPort}${DOC_PATH}`;
+      const loopback: LookupAddress = { address: '127.0.0.1', family: 4 };
+      const original = { lookup: dns.lookup, promises: dns.promises.lookup };
+      dns.promises.lookup = (async (name: string, options: unknown) =>
+        name === host
+          ? [loopback]
+          : original.promises(name, options as never)) as typeof dns.promises.lookup;
+      dns.lookup = ((...args: unknown[]) => {
+        const [name, options] = args;
+        if (name !== host) return (original.lookup as (...a: unknown[]) => void)(...args);
+        const cb = args.at(-1) as (...a: unknown[]) => void;
+        const all = typeof options === 'object' && (options as { all?: boolean }).all;
+        return all ? cb(null, [loopback]) : cb(null, loopback.address, loopback.family);
+      }) as typeof dns.lookup;
+      syncBuiltinESMExports();
+      const before = {
+        calls: cimdTransport.calls.length,
+        connections,
+        requests: docRequests.length,
+      };
+      let res: Response;
+      try {
+        res = await authorize(clientId);
+      } finally {
+        dns.lookup = original.lookup;
+        dns.promises.lookup = original.promises;
+        syncBuiltinESMExports();
+      }
+      expect(toConsent(res)).toBe(false);
+      expect(res.status).toBeGreaterThanOrEqual(300);
+      // The server's own transport was asked, and refused before connecting.
+      expect(cimdTransport.calls.slice(before.calls)).toEqual([clientId]);
+      expect(connections).toBe(before.connections);
+      expect(docRequests).toHaveLength(before.requests);
+      expect(await db.oauthClient.findUnique({ where: { clientId } })).toBeNull();
+    });
+
+    it('refuses a document URL on a loopback or private address before fetching it', async () => {
+      for (const host of [`127.0.0.1:${docPort}`, '10.0.0.7', 'localhost']) {
+        const clientId = `https://${host}${DOC_PATH}`;
+        const before = { calls: cimdTransport.calls.length, connections };
+        const res = await authorize(clientId);
+        expect(toConsent(res), host).toBe(false);
+        expect(res.status, host).toBeGreaterThanOrEqual(300);
+        expect(cimdTransport.calls, host).toHaveLength(before.calls);
+        expect(connections, host).toBe(before.connections);
+        expect(await db.oauthClient.findUnique({ where: { clientId } }), host).toBeNull();
+      }
+    });
+  });
+
   describe('approving an app connection writes one audit row', () => {
     const REDIRECT = 'http://127.0.0.1:47123/cb';
     let clientId: string;
@@ -1221,6 +1433,31 @@ describe.skipIf(!DATABASE_URL)('the authorization server (real Postgres)', () =>
       const tampered = (await signedQueryFor(ownCookie)).replace('scope=read', 'scope=openid');
       const res = await answer(ownCookie, tampered, true);
       expect(res.status).toBeGreaterThanOrEqual(400);
+      expect(await grantRows()).toHaveLength(before);
+    });
+
+    it('an approval whose row cannot be written answers 500, and the client gets no code', async () => {
+      const signed = await signedQueryFor(ownCookie);
+      const before = (await grantRows()).length;
+      await db.$executeRawUnsafe(`
+        CREATE OR REPLACE FUNCTION it_refuse_grant_row() RETURNS trigger AS $$
+        BEGIN RAISE EXCEPTION 'audit write refused'; END $$ LANGUAGE plpgsql`);
+      await db.$executeRawUnsafe(`
+        CREATE TRIGGER it_refuse_grant_row BEFORE INSERT ON platform_audit_logs
+        FOR EACH ROW WHEN (NEW.action = 'oauth.consent.grant')
+        EXECUTE FUNCTION it_refuse_grant_row()`);
+      let res: Response;
+      try {
+        res = await answer(ownCookie, signed, true);
+      } finally {
+        await db.$executeRawUnsafe('DROP TRIGGER it_refuse_grant_row ON platform_audit_logs');
+      }
+      expect(res.status).toBe(500);
+      // The consent page reads the client's redirect from `url`: none, so no
+      // code reaches the client.
+      const text = await res.text();
+      expect(text).not.toContain('"url"');
+      expect(text).not.toMatch(/[?&]code=/);
       expect(await grantRows()).toHaveLength(before);
     });
 
@@ -1971,6 +2208,78 @@ describe.skipIf(!DATABASE_URL)(
         for (const row of await resetRows(user.id)) {
           expect((row.data as { sessionsEnded: number }).sessionsEnded, `delay ${delay}`).toBe(0);
         }
+      }
+    });
+
+    it('a verification that waits on the reset keeps the sign-in it makes; the earlier session ends', async () => {
+      // The window made wide: the reset's password delete sleeps inside its
+      // transaction (the user row is locked by then), and the verification is
+      // sent once it does, so it waits on that row; and the step after the
+      // transaction that ends the sessions waits too, so the verification's
+      // own session exists by the time it runs. Only the sessions the
+      // transaction listed end.
+      const sleep = (ms: number) => new Promise(done => setTimeout(done, ms));
+      await db.$executeRawUnsafe(`
+        CREATE OR REPLACE FUNCTION it_slow_password_delete() RETURNS trigger AS $$
+        BEGIN PERFORM pg_sleep(0.5); RETURN OLD; END $$ LANGUAGE plpgsql`);
+      await db.$executeRawUnsafe(`
+        CREATE TRIGGER it_slow_password_delete BEFORE DELETE ON accounts
+        FOR EACH ROW WHEN (OLD.provider_id = 'credential')
+        EXECUTE FUNCTION it_slow_password_delete()`);
+      const adapter = (await server.auth.$context).internalAdapter;
+      const spies = (['deleteSessions', 'deleteUserSessions'] as const).map(name => {
+        const original = adapter[name].bind(adapter) as (...args: unknown[]) => Promise<unknown>;
+        return vi.spyOn(adapter, name).mockImplementation((async (...args: unknown[]) => {
+          await sleep(300);
+          return original(...args);
+        }) as never);
+      });
+      /** Until the reset's transaction is in its (slow) password delete. */
+      const resetSleeping = async () => {
+        for (const started = Date.now(); Date.now() - started < 10_000; await sleep(5)) {
+          const [{ n }] = await db.$queryRawUnsafe<{ n: number }[]>(
+            `SELECT count(*)::int AS n FROM pg_stat_activity
+             WHERE datname = current_database() AND wait_event = 'PgSleep'
+               AND query ILIKE '%DELETE FROM%accounts%'`
+          );
+          if (n > 0) return;
+        }
+        throw new Error('the reset never reached its password delete');
+      };
+      try {
+        const email = 'a2-verify-waits@example.org';
+        expect((await signUp(email, 'owner-password-1')).status).toBe(200);
+        const code = await codeFor(email, 'email-verification');
+        const user = await userOf(email);
+        const earlier = await db.session.create({
+          data: {
+            token: `a2-earlier-${randomUUID()}`,
+            user_id: user.id,
+            expires_at: new Date(Date.now() + 3_600_000),
+          },
+        });
+
+        const repeated = signUp(email, 'other-password-1');
+        await resetSleeping();
+        const verified = await post('/email-otp/verify-email', { email, otp: code });
+        expect((await repeated).status).toBe(200);
+
+        expect(verified.status).toBe(200);
+        // The round hit the window: the reset removed the password and ended
+        // the session that was there, and the verification then went through.
+        expect((await resetRows(user.id)).map(r => r.data)).toEqual([
+          expect.objectContaining({ passwordsRemoved: 1, sessionsEnded: 1 }),
+        ]);
+        expect((await userOf(email)).emailVerified).toBe(true);
+        expect(await passwordsOf(user.id)).toBe(0);
+        const sessions = await db.session.findMany({ where: { user_id: user.id } });
+        expect(sessions.map(s => s.id)).not.toContain(earlier.id);
+        // The verification's own sign-in.
+        expect(sessions).toHaveLength(1);
+        expect(verified.headers.getSetCookie().join(';')).toContain(sessions[0]!.token);
+      } finally {
+        for (const spy of spies) spy.mockRestore();
+        await db.$executeRawUnsafe('DROP TRIGGER IF EXISTS it_slow_password_delete ON accounts');
       }
     });
 
