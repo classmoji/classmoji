@@ -23,8 +23,9 @@ export const dbBackupTask = schedules.task({
   // retry. Each attempt writes under its own key (see backupKey).
   retry: { maxAttempts: 3, minTimeoutInMs: 60_000, maxTimeoutInMs: 300_000, factor: 2 },
   queue: { concurrencyLimit: 1 },
-  // Generous until a real production dump has been timed.
-  maxDuration: 3600,
+  // A full production dump took 34 s (34 MB) in Nov 2026; this leaves room
+  // for a much bigger database and a slow upload.
+  maxDuration: 900,
   run: async (_payload, { ctx, signal }) => {
     if (ctx.environment.type !== 'PRODUCTION') {
       logger.warn('db-backup runs only in production; skipping', {

@@ -94,22 +94,28 @@ function requirePrivateAgentsOnDeploy() {
 }
 
 /**
- * The Postgres major the `db-backup` task's pg_dump/pg_restore/psql come
- * from. Match it to production's server (Neon) when that is upgraded: pg_dump
- * refuses a server NEWER than itself, and a dump from a newer pg_dump may not
- * restore into the older Postgres used locally and in CI (both 16).
+ * The Postgres majors the `db-backup` task carries a client for. Each run asks
+ * the server its major and uses that client (`clientFor` in
+ * src/helpers/dbBackup.ts): pg_dump refuses a server newer than itself, and a
+ * dump from a newer pg_dump may not restore into the server's own version. So
+ * a Neon upgrade to any major listed here needs no change; production was on
+ * 16 when this was written. Newest last: its psql asks the version.
  */
-const POSTGRES_CLIENT_MAJOR = 16;
+const POSTGRES_CLIENT_MAJORS = [16, 17, 18];
 
 /**
- * Installs `postgresql-client-<major>` from the PostgreSQL project's own apt
- * repository (PGDG): Debian bookworm, the node-24 image's base, ships only 15.
- * Its binaries are called by absolute path (`PG_DUMP_PATH` …) so Debian's
- * pg_wrapper never picks a different version. Like aptGet/ffmpeg, it does
- * nothing for `trigger dev`, which uses the client on PATH.
+ * Installs `postgresql-client-<major>` for each major from the PostgreSQL
+ * project's own apt repository (PGDG): Debian bookworm, the node-24 image's
+ * base, ships only 15. Binaries are called by absolute path under
+ * `/usr/lib/postgresql/<major>/bin`, so Debian's pg_wrapper never picks one.
+ * Like aptGet/ffmpeg, it does nothing for `trigger dev`, which uses the
+ * client on PATH.
  */
-function postgresClient(major) {
-  const bin = `/usr/lib/postgresql/${major}/bin`;
+function postgresClient(majors) {
+  const root = '/usr/lib/postgresql';
+  const newest = Math.max(...majors);
+  const packages = majors.map(major => `postgresql-client-${major}`).join(' ');
+  const check = majors.map(major => `${root}/${major}/bin/pg_dump --version`).join(' && ');
   return {
     name: 'classmoji-postgres-client',
     onBuildComplete(context) {
@@ -122,16 +128,15 @@ function postgresClient(major) {
               'install -d /usr/share/postgresql-common/pgdg && ' +
               'curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc && ' +
               'echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(. /etc/os-release && echo $VERSION_CODENAME)-pgdg main" > /etc/apt/sources.list.d/pgdg.list && ' +
-              `apt-get update && apt-get install -y --no-install-recommends postgresql-client-${major} && ` +
-              `${bin}/pg_dump --version && ` +
+              `apt-get update && apt-get install -y --no-install-recommends ${packages} && ` +
+              `${check} && ` +
               'apt-get clean && rm -rf /var/lib/apt/lists/*',
           ],
         },
         deploy: {
           env: {
-            PG_DUMP_PATH: `${bin}/pg_dump`,
-            PG_RESTORE_PATH: `${bin}/pg_restore`,
-            PSQL_PATH: `${bin}/psql`,
+            PG_BIN_ROOT: root,
+            PSQL_PATH: `${root}/${newest}/bin/psql`,
           },
           override: true,
         },
@@ -243,7 +248,7 @@ export default defineConfig({
       // images; it does nothing for `trigger dev`, which uses ffmpeg on PATH.
       ffmpeg(),
       // For `db-backup` (pg_dump, pg_restore --list, psql).
-      postgresClient(POSTGRES_CLIENT_MAJOR),
+      postgresClient(POSTGRES_CLIENT_MAJORS),
       pythonExtension(teamSetSolverPythonOptions()),
       syncEnvVars(async ctx => {
         // Skip sync if credentials not available (allows local dev without Infisical)

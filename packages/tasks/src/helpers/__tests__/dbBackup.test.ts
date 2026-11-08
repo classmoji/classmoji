@@ -21,7 +21,9 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   backupKey,
+  clientFor,
   manifestKeyFor,
+  parseServerVersion,
   readBackupConfig,
   redact,
   runDbBackup,
@@ -41,6 +43,7 @@ const config: BackupConfig = {
   secretAccessKey: 'secret',
   bucket: 'classmoji-db-backups-prod',
   minBytes: 10,
+  pgBinRoot: null,
   pgDumpPath: 'pg_dump',
   pgRestorePath: 'pg_restore',
   psqlPath: 'psql',
@@ -60,22 +63,30 @@ interface FakeOptions {
   listResult?: CommandResult;
   upload?: BackupDeps['upload'];
   storedBytes?: number | null;
+  serverVersionOut?: string;
+  installed?: string[];
 }
 
 function fakeDeps(options: FakeOptions = {}) {
-  const { dumpBytes = 64, dumpResult = ok(), listResult = ok('toc') } = options;
+  const {
+    dumpBytes = 64,
+    dumpResult = ok(),
+    listResult = ok('toc'),
+    serverVersionOut = '160009 16.9\n',
+  } = options;
   const calls: string[] = [];
   let dir = '';
   const run = vi.fn(async (command: string, args: string[]) => {
+    calls.push(`exec ${command}${args[0] === '--version' ? ' --version' : ''}`);
     if (args[0] === '--version') return ok('pg_dump (PostgreSQL) 16.15');
-    if (command === 'psql') return ok('16.9\n');
-    if (command === 'pg_dump') {
+    if (command.endsWith('psql')) return ok(serverVersionOut);
+    if (command.endsWith('pg_dump')) {
       const file = args.find(a => a.startsWith('--file='))!.slice('--file='.length);
       await writeFile(file, Buffer.alloc(dumpBytes, 1));
       calls.push('dump');
       return dumpResult;
     }
-    if (command === 'pg_restore') {
+    if (command.endsWith('pg_restore')) {
       calls.push('list');
       return listResult;
     }
@@ -100,6 +111,7 @@ function fakeDeps(options: FakeOptions = {}) {
     putManifest,
     now: () => new Date((tick += 1000)),
     tempDir: async () => (dir = await mkdtemp(join(tmpdir(), 'db-backup-test-'))),
+    exists: async path => (options.installed ?? []).includes(path),
   };
   return { deps, calls, run, upload, putManifest, dir: () => dir };
 }
@@ -120,8 +132,10 @@ describe('readBackupConfig', () => {
       DB_BACKUP_R2_BUCKET: 'b',
       DB_BACKUP_MIN_BYTES: '5',
       PG_DUMP_PATH: '/usr/lib/postgresql/16/bin/pg_dump',
+      PG_BIN_ROOT: '/usr/lib/postgresql',
     });
     expect(c.minBytes).toBe(5);
+    expect(c.pgBinRoot).toBe('/usr/lib/postgresql');
     expect(c.pgDumpPath).toBe('/usr/lib/postgresql/16/bin/pg_dump');
     expect(c.pgRestorePath).toBe('pg_restore');
   });
@@ -151,6 +165,49 @@ describe('keys', () => {
   });
 });
 
+describe('server version and client', () => {
+  it('reads the major from server_version_num', () => {
+    expect(parseServerVersion('160015 16.15 (f37ae9a)\n')).toEqual({
+      major: 16,
+      serverVersion: '16.15 (f37ae9a)',
+    });
+    expect(parseServerVersion('170002 17.2')).toEqual({ major: 17, serverVersion: '17.2' });
+    expect(() => parseServerVersion('')).toThrow('unreadable server version');
+  });
+
+  const inImage = { ...config, pgBinRoot: '/usr/lib/postgresql' };
+  const has =
+    (...paths: string[]) =>
+    async (p: string) =>
+      paths.includes(p);
+
+  it("uses the image's client for the server's major", async () => {
+    await expect(
+      clientFor(
+        inImage,
+        17,
+        has('/usr/lib/postgresql/17/bin/pg_dump', '/usr/lib/postgresql/17/bin/pg_restore')
+      )
+    ).resolves.toEqual({
+      pgDump: '/usr/lib/postgresql/17/bin/pg_dump',
+      pgRestore: '/usr/lib/postgresql/17/bin/pg_restore',
+    });
+  });
+
+  it('says what to change when the image has no client for that major', async () => {
+    await expect(clientFor(inImage, 19, has())).rejects.toThrow(
+      'runs Postgres 19, but the image has no client for it; add it to POSTGRES_CLIENT_MAJORS'
+    );
+  });
+
+  it('uses the configured paths outside the image', async () => {
+    await expect(clientFor(config, 16, has())).resolves.toEqual({
+      pgDump: 'pg_dump',
+      pgRestore: 'pg_restore',
+    });
+  });
+});
+
 describe('redact', () => {
   it('removes the connection string and any password-bearing URL', () => {
     expect(redact(`connection to ${URL} failed`, URL)).toBe('connection to <database-url> failed');
@@ -163,7 +220,7 @@ describe('runDbBackup', () => {
     const f = fakeDeps();
     const manifest = await runDbBackup({ config, runId: 'run_1', attempt: 2, deps: f.deps });
 
-    expect(f.calls).toEqual([
+    expect(f.calls.filter(c => !c.startsWith('exec'))).toEqual([
       'dump',
       'list',
       'upload prod/2026-11-09T101704Z-run_1-a2.dump',
@@ -182,6 +239,25 @@ describe('runDbBackup', () => {
     });
     expect(f.putManifest.mock.calls[0][2]).toEqual(manifest);
     expect(existsSync(f.dir())).toBe(false);
+  });
+
+  it("dumps with the client matching the server's major", async () => {
+    const f = fakeDeps({
+      serverVersionOut: '170004 17.4\n',
+      installed: ['/pg/17/bin/pg_dump', '/pg/17/bin/pg_restore'],
+    });
+    await runDbBackup({
+      config: { ...config, pgBinRoot: '/pg', psqlPath: '/pg/18/bin/psql' },
+      runId: 'r',
+      attempt: 1,
+      deps: f.deps,
+    });
+    expect(f.calls.filter(c => c.startsWith('exec'))).toEqual([
+      'exec /pg/18/bin/psql',
+      'exec /pg/17/bin/pg_dump --version',
+      'exec /pg/17/bin/pg_dump',
+      'exec /pg/17/bin/pg_restore',
+    ]);
   });
 
   it('dumps in custom format without ever prompting for a password', async () => {

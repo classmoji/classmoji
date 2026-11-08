@@ -26,18 +26,22 @@ Trigger.dev state, Postgres roles. Restoring it brings back the database only.
 
 ## One-time setup
 
-1. **Read-only role.** In the Neon SQL editor on the production branch, as the
-   database owner (create it by SQL, not in the console: console roles get
-   `neon_superuser`):
+1. **Read-only role.** Done on 2026-11-08: `db_backup` exists on production
+   and its direct URL is `DB_BACKUP_DATABASE_URL` in Infisical prod. To
+   recreate it, in the Neon SQL editor as the database owner (by SQL, not in
+   the console: console roles get `neon_superuser`):
 
    ```sql
    CREATE ROLE db_backup WITH LOGIN PASSWORD '<long random password>';
-   GRANT CONNECT ON DATABASE neondb TO db_backup;  -- the production database's name
+   GRANT CONNECT ON DATABASE neondb TO db_backup;
    GRANT pg_read_all_data TO db_backup;
+   -- 40 production tables have row-level security on with no policies (deny
+   -- all but the owner); without this pg_dump fails on them. Still read-only.
+   ALTER ROLE db_backup BYPASSRLS;
    ```
 
    Its connection string must be the **direct** endpoint (host without
-   `-pooler`), with `?sslmode=require`.
+   `-pooler`), with the owner URL's `sslmode`/`channel_binding` parameters.
 
 2. **R2 token.** Cloudflare dashboard → R2 → Manage API tokens → Create
    Account API token: permission **Object Read & Write**, applied to
@@ -70,17 +74,18 @@ Trigger.dev state, Postgres roles. Restoring it brings back the database only.
    monitor emails only when no backup finished.
 
 6. **First run.** After the deploy, Trigger.dev dashboard → Production →
-   `db-backup` → Test (any payload). Check the run log (bytes, seconds), that
-   the dump and manifest are in the bucket, and that it fits: **every
-   Trigger.dev machine has 10 GB of disk**, so a dump nearing ~5 GB needs a
-   streamed upload instead. Then set `maxDuration` (now 3600 s) to a few
-   times the measured time. Then do a test restore (below).
+   `db-backup` → Test (any payload). Check the run log and that the dump and
+   its manifest are in the bucket, then do a test restore (below). Measured
+   from a laptop on 2026-11-08: a full production dump is **34 MB in 34 s**
+   (226 MB database, 96 tables). Every Trigger.dev machine has 10 GB of disk;
+   `maxDuration` is 900 s.
 
 ## Restoring
 
 Needs the four `DB_BACKUP_R2_*` variables in the environment and `pg_restore`
-/ `psql` **16 or newer** (`brew install libpq` and add its `bin` to PATH, or
-set `PG_RESTORE_PATH` / `PSQL_PATH`).
+/ `psql` at least as new as the dump's `pgDumpVersion` (in its manifest;
+`brew install libpq` and add its `bin` to PATH, or set `PG_RESTORE_PATH` /
+`PSQL_PATH`).
 
 ```bash
 # what is there (finished backups only, oldest first)
@@ -119,10 +124,11 @@ production.
 
 ## Changing things
 
-- **Postgres upgrade on Neon:** bump `POSTGRES_CLIENT_MAJOR` in
-  `packages/tasks/trigger.config.js` in the same change. pg_dump refuses a
-  server newer than itself, so a Neon upgrade without it fails every backup
-  (the monitor will email).
+- **Postgres upgrade on Neon:** nothing to do for 16, 17 or 18: the image
+  carries all three clients and each run uses the server's major. For a newer
+  major, add it to `POSTGRES_CLIENT_MAJORS` in `packages/tasks/trigger.config.js`
+  (until then every backup fails and the monitor emails). Restoring a dump
+  then needs a local `pg_restore` and Postgres of that major.
 - **Retention:** the bucket's lifecycle rule, not code. The lock (7 days) must
   stay shorter than the lifecycle rule.
 - **Schedule:** `cron` in `dbBackup.ts`; move the monitor's cron in

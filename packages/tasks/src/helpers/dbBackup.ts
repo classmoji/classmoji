@@ -1,6 +1,6 @@
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { access, constants, mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -33,8 +33,11 @@ import { headBytes, sha256File, uploadFile, type MediaStore } from './r2Objects.
 
 export const BACKUP_PREFIX = 'prod/';
 
-/** Smaller than this is not a real production dump (an empty schema is ~100 KB). */
-export const DEFAULT_MIN_BYTES = 1024 * 1024;
+/**
+ * Smaller than this is not a real production dump. An empty schema is
+ * ~300 KB; production's first full dump (Nov 2026) was 33 MB.
+ */
+export const DEFAULT_MIN_BYTES = 10 * 1024 * 1024;
 
 export interface BackupConfig {
   databaseUrl: string;
@@ -43,8 +46,16 @@ export interface BackupConfig {
   secretAccessKey: string;
   bucket: string;
   minBytes: number;
+  /**
+   * `/usr/lib/postgresql` in the deployed image, which carries one client per
+   * supported major (`postgresClient()` in trigger.config.js): each run uses
+   * `<root>/<server major>/bin`. Null under `trigger dev`, which uses the
+   * paths below (PATH by default).
+   */
+  pgBinRoot: string | null;
   pgDumpPath: string;
   pgRestorePath: string;
+  /** Any version works here: it only asks the server for its version. */
   psqlPath: string;
 }
 
@@ -77,6 +88,7 @@ export function readBackupConfig(env: NodeJS.ProcessEnv = process.env): BackupCo
     minBytes: Number.isFinite(minBytes) && minBytes >= 0 ? minBytes : DEFAULT_MIN_BYTES,
     // Set in the deployed image by `postgresClient()` in trigger.config.js;
     // `trigger dev` uses whatever is on PATH.
+    pgBinRoot: env.PG_BIN_ROOT || null,
     pgDumpPath: env.PG_DUMP_PATH || 'pg_dump',
     pgRestorePath: env.PG_RESTORE_PATH || 'pg_restore',
     psqlPath: env.PSQL_PATH || 'psql',
@@ -183,6 +195,7 @@ export interface BackupDeps {
   putManifest: (store: MediaStore, key: string, manifest: BackupManifest) => Promise<void>;
   now: () => Date;
   tempDir: () => Promise<string>;
+  exists: (path: string) => Promise<boolean>;
 }
 
 async function putManifestObject(store: MediaStore, key: string, manifest: BackupManifest) {
@@ -206,6 +219,11 @@ export function defaultDeps(config: BackupConfig): BackupDeps {
     putManifest: putManifestObject,
     now: () => new Date(),
     tempDir: () => mkdtemp(join(tmpdir(), 'db-backup-')),
+    exists: path =>
+      access(path, constants.X_OK).then(
+        () => true,
+        () => false
+      ),
   };
 }
 
@@ -213,6 +231,40 @@ function failure(step: string, result: CommandResult, config: BackupConfig): Err
   const how = result.signal ? `signal ${result.signal}` : `exit ${result.code}`;
   const tail = redact(result.stderr.trim(), config.databaseUrl);
   return new Error(`[db-backup] ${step} failed (${how})${tail ? `: ${tail}` : ''}`);
+}
+
+export const SERVER_VERSION_SQL =
+  "SELECT current_setting('server_version_num') || ' ' || current_setting('server_version')";
+
+/** `160015 16.15 (f37ae9a)` → major 16, version `16.15 (f37ae9a)`. */
+export function parseServerVersion(output: string): { major: number; serverVersion: string } {
+  const match = /^\s*(\d{5,6})\s+(.+?)\s*$/.exec(output);
+  if (!match) throw new Error(`[db-backup] unreadable server version: ${output.slice(0, 80)}`);
+  return { major: Math.floor(Number(match[1]) / 10000), serverVersion: match[2] };
+}
+
+/**
+ * The pg_dump/pg_restore matching the server's major. pg_dump refuses a
+ * newer server, and a dump from a newer pg_dump may not restore into the
+ * server's own version, so the image carries one client per major and each
+ * run takes the server's. A major the image lacks fails with what to change,
+ * instead of an opaque spawn error.
+ */
+export async function clientFor(
+  config: BackupConfig,
+  major: number,
+  exists: (path: string) => Promise<boolean>
+): Promise<{ pgDump: string; pgRestore: string }> {
+  if (!config.pgBinRoot) return { pgDump: config.pgDumpPath, pgRestore: config.pgRestorePath };
+  const bin = `${config.pgBinRoot}/${major}/bin`;
+  const client = { pgDump: `${bin}/pg_dump`, pgRestore: `${bin}/pg_restore` };
+  if (!(await exists(client.pgDump)) || !(await exists(client.pgRestore))) {
+    throw new Error(
+      `[db-backup] the server runs Postgres ${major}, but the image has no client for it; ` +
+        'add it to POSTGRES_CLIENT_MAJORS in packages/tasks/trigger.config.js and redeploy'
+    );
+  }
+  return client;
 }
 
 /**
@@ -236,22 +288,23 @@ export async function runDbBackup({
 }): Promise<BackupManifest> {
   const dir = await deps.tempDir();
   try {
-    const versionOut = await deps.run(config.pgDumpPath, ['--version'], signal);
-    if (versionOut.code !== 0) throw failure('pg_dump --version', versionOut, config);
-    const pgDumpVersion = versionOut.stdout.trim();
-
     const serverOut = await deps.run(
       config.psqlPath,
-      ['--no-psqlrc', '-tA', '-c', 'SHOW server_version', config.databaseUrl],
+      ['--no-psqlrc', '-tA', '-c', SERVER_VERSION_SQL, config.databaseUrl],
       signal
     );
     if (serverOut.code !== 0) throw failure('reading the server version', serverOut, config);
-    const serverVersion = serverOut.stdout.trim();
+    const { major, serverVersion } = parseServerVersion(serverOut.stdout);
+
+    const client = await clientFor(config, major, deps.exists);
+    const versionOut = await deps.run(client.pgDump, ['--version'], signal);
+    if (versionOut.code !== 0) throw failure('pg_dump --version', versionOut, config);
+    const pgDumpVersion = versionOut.stdout.trim();
 
     const file = join(dir, 'backup.dump');
     const startedAt = deps.now();
     const dump = await deps.run(
-      config.pgDumpPath,
+      client.pgDump,
       ['--format=custom', '--no-password', `--file=${file}`, `--dbname=${config.databaseUrl}`],
       signal
     );
@@ -266,7 +319,7 @@ export async function runDbBackup({
 
     // Reads the archive's table of contents end to end: a truncated or
     // corrupt file fails here, before anything is uploaded.
-    const list = await deps.run(config.pgRestorePath, ['--list', file], signal);
+    const list = await deps.run(client.pgRestore, ['--list', file], signal);
     if (list.code !== 0) throw failure('pg_restore --list', list, config);
 
     const sha256 = await deps.hash(file);
