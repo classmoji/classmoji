@@ -1,4 +1,4 @@
-import { assess, dumpKeyFor, newestManifestKey, PREFIX } from './check.js';
+import { assess, newestBackup } from './check.js';
 
 /**
  * Daily check that the production database backup ran (README.md). It lives
@@ -9,29 +9,19 @@ import { assess, dumpKeyFor, newestManifestKey, PREFIX } from './check.js';
  * Secrets: RESEND_API_KEY, ALERT_EMAIL (comma-separated). Var: ALERT_FROM.
  */
 
-async function listKeys(bucket) {
-  const keys = [];
+async function listObjects(bucket) {
+  const objects = [];
   let cursor;
   do {
-    const page = await bucket.list({ prefix: PREFIX, cursor });
-    for (const object of page.objects) keys.push(object.key);
+    const page = await bucket.list({ cursor });
+    for (const object of page.objects) objects.push({ key: object.key, size: object.size });
     cursor = page.truncated ? page.cursor : undefined;
   } while (cursor);
-  return keys;
+  return objects;
 }
 
 async function check(env, now) {
-  const manifestKey = newestManifestKey(await listKeys(env.BACKUPS));
-  if (!manifestKey) return assess({ manifest: null, dumpBytes: null, now });
-  const object = await env.BACKUPS.get(manifestKey);
-  let manifest = null;
-  try {
-    manifest = object ? JSON.parse(await object.text()) : null;
-  } catch {
-    return { ok: false, problem: `The newest backup manifest (${manifestKey}) is not valid JSON.` };
-  }
-  const dump = await env.BACKUPS.head(dumpKeyFor(manifestKey));
-  return { ...assess({ manifest, dumpBytes: dump ? dump.size : null, now }), manifestKey };
+  return assess({ backup: newestBackup(await listObjects(env.BACKUPS)), now });
 }
 
 async function alert(env, problem) {
@@ -66,7 +56,7 @@ export default {
     const result = await check(env, new Date());
     if (result.ok) {
       // eslint-disable-next-line no-console -- the one success line in the Worker logs
-      console.log(`backup ok: ${result.manifestKey}, ${result.ageHours.toFixed(1)}h old`);
+      console.log(`backup ok: ${result.key}, ${result.ageHours.toFixed(1)}h old`);
       return;
     }
     console.error(`backup problem: ${result.problem}`);
