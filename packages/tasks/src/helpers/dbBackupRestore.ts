@@ -1,6 +1,6 @@
 import { GetObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 
-import { BACKUP_PREFIX, type BackupManifest } from './dbBackup.ts';
+import { BACKUP_KEY_PATTERN, type BackupManifest } from './dbBackup.ts';
 import type { MediaStore } from './r2Objects.ts';
 
 /**
@@ -67,7 +67,7 @@ export interface BackupEntry {
 export function finishedBackups(keys: string[]): BackupEntry[] {
   const present = new Set(keys);
   return keys
-    .filter(key => key.startsWith(BACKUP_PREFIX) && key.endsWith('.manifest.json'))
+    .filter(key => BACKUP_KEY_PATTERN.test(key) && key.endsWith('.manifest.json'))
     .map(manifestKey => ({
       manifestKey,
       dumpKey: manifestKey.slice(0, -'.manifest.json'.length) + '.dump',
@@ -83,7 +83,6 @@ export async function listKeys(store: MediaStore): Promise<string[]> {
     const page = await store.client.send(
       new ListObjectsV2Command({
         Bucket: store.bucket,
-        Prefix: BACKUP_PREFIX,
         ContinuationToken: token,
       })
     );

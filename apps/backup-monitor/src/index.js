@@ -1,4 +1,4 @@
-import { assess, dumpKeyFor, newestManifestKey, PREFIX } from './check.js';
+import { assess, dumpKeyFor, newestManifestKey } from './check.js';
 
 /**
  * Daily check that the production database backup ran (README.md). It lives
@@ -13,7 +13,7 @@ async function listKeys(bucket) {
   const keys = [];
   let cursor;
   do {
-    const page = await bucket.list({ prefix: PREFIX, cursor });
+    const page = await bucket.list({ cursor });
     for (const object of page.objects) keys.push(object.key);
     cursor = page.truncated ? page.cursor : undefined;
   } while (cursor);

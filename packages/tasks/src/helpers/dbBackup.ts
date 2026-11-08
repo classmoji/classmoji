@@ -31,7 +31,14 @@ import { headBytes, sha256File, uploadFile, type MediaStore } from './r2Objects.
  * deletes anything.
  */
 
-export const BACKUP_PREFIX = 'prod/';
+/**
+ * A backup's file names at the bucket root: `<UTC start>-<run id>-a<attempt>`
+ * plus `.dump` or `.manifest.json`. The monitor (apps/backup-monitor) and the
+ * restore script count only names of this shape, so anything else put in the
+ * bucket is never mistaken for a backup.
+ */
+export const BACKUP_KEY_PATTERN =
+  /^\d{4}-\d{2}-\d{2}T\d{6}Z-[A-Za-z0-9_-]+-a\d+\.(?:dump|manifest\.json)$/;
 
 /**
  * Smaller than this is not a real production dump. An empty schema is
@@ -123,7 +130,7 @@ export function backupKey(startedAt: Date, runId: string, attempt: number): stri
   const safeRun = runId.replace(/[^A-Za-z0-9_-]/g, '');
   if (!safeRun) throw new Error('[db-backup] empty run id');
   if (!Number.isInteger(attempt) || attempt < 1) throw new Error('[db-backup] bad attempt');
-  return `${BACKUP_PREFIX}${stampOf(startedAt)}-${safeRun}-a${attempt}.dump`;
+  return `${stampOf(startedAt)}-${safeRun}-a${attempt}.dump`;
 }
 
 export function manifestKeyFor(dumpKey: string): string {

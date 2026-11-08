@@ -11,23 +11,25 @@ import { checkRestoreTarget, finishedBackups } from '../dbBackupRestore.ts';
 describe('finishedBackups', () => {
   it('keeps only dumps with a manifest, oldest first', () => {
     const keys = [
-      'prod/2026-11-10T101700Z-run_b-a1.manifest.json',
-      'prod/2026-11-10T101700Z-run_b-a1.dump',
+      '2026-11-10T101700Z-run_b-a1.manifest.json',
+      '2026-11-10T101700Z-run_b-a1.dump',
       // attempt 1 of run_c never finished: no manifest
-      'prod/2026-11-11T101700Z-run_c-a1.dump',
-      'prod/2026-11-11T101900Z-run_c-a2.dump',
-      'prod/2026-11-11T101900Z-run_c-a2.manifest.json',
-      'prod/2026-11-09T101700Z-run_a-a1.dump',
-      'prod/2026-11-09T101700Z-run_a-a1.manifest.json',
+      '2026-11-11T101700Z-run_c-a1.dump',
+      '2026-11-11T101900Z-run_c-a2.dump',
+      '2026-11-11T101900Z-run_c-a2.manifest.json',
+      '2026-11-09T101700Z-run_a-a1.dump',
+      '2026-11-09T101700Z-run_a-a1.manifest.json',
       // a manifest whose dump is gone is not a backup either
-      'prod/2026-11-08T101700Z-run_z-a1.manifest.json',
-      'elsewhere/2026-11-12T101700Z-run_x-a1.manifest.json',
-      'elsewhere/2026-11-12T101700Z-run_x-a1.dump',
+      '2026-11-08T101700Z-run_z-a1.manifest.json',
+      // other files in the bucket are never backups
+      'test/2026-11-12T101700Z-run_x-a1.manifest.json',
+      'test/2026-11-12T101700Z-run_x-a1.dump',
+      'notes.manifest.json',
     ];
     expect(finishedBackups(keys).map(b => b.dumpKey)).toEqual([
-      'prod/2026-11-09T101700Z-run_a-a1.dump',
-      'prod/2026-11-10T101700Z-run_b-a1.dump',
-      'prod/2026-11-11T101900Z-run_c-a2.dump',
+      '2026-11-09T101700Z-run_a-a1.dump',
+      '2026-11-10T101700Z-run_b-a1.dump',
+      '2026-11-11T101900Z-run_c-a2.dump',
     ]);
   });
 });

@@ -7,7 +7,9 @@
  * finish (see packages/tasks/src/helpers/dbBackup.ts).
  */
 
-export const PREFIX = 'prod/';
+/** Same as BACKUP_KEY_PATTERN in packages/tasks/src/helpers/dbBackup.ts: backups live at the bucket root. */
+export const BACKUP_KEY_PATTERN =
+  /^\d{4}-\d{2}-\d{2}T\d{6}Z-[A-Za-z0-9_-]+-a\d+\.(?:dump|manifest\.json)$/;
 
 /**
  * Hours since the newest backup's dump STARTED before it counts as stale.
@@ -18,7 +20,9 @@ export const MAX_AGE_HOURS = 26;
 
 /** The newest manifest key under the prefix, or null. Keys sort by UTC stamp. */
 export function newestManifestKey(keys) {
-  const manifests = keys.filter(k => k.startsWith(PREFIX) && k.endsWith('.manifest.json')).sort();
+  const manifests = keys
+    .filter(k => BACKUP_KEY_PATTERN.test(k) && k.endsWith('.manifest.json'))
+    .sort();
   return manifests.length ? manifests[manifests.length - 1] : null;
 }
 

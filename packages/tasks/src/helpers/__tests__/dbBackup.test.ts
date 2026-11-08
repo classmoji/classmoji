@@ -20,6 +20,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  BACKUP_KEY_PATTERN,
   backupKey,
   clientFor,
   manifestKeyFor,
@@ -146,22 +147,30 @@ describe('keys', () => {
 
   it('is sortable and colon-free', () => {
     expect(stampOf(at)).toBe('2026-11-09T101703Z');
-    expect(backupKey(at, 'run_abc', 1)).toBe('prod/2026-11-09T101703Z-run_abc-a1.dump');
+    expect(backupKey(at, 'run_abc', 1)).toBe('2026-11-09T101703Z-run_abc-a1.dump');
   });
 
   it('differs for every attempt of the same run', () => {
     expect(backupKey(at, 'run_abc', 1)).not.toBe(backupKey(at, 'run_abc', 2));
   });
 
-  it('cannot be steered out of the prefix', () => {
-    expect(backupKey(at, '../../etc/x', 1)).toBe('prod/2026-11-09T101703Z-etcx-a1.dump');
+  it('stays a single file name at the bucket root, whatever the run id', () => {
+    expect(backupKey(at, '../../etc/x', 1)).toBe('2026-11-09T101703Z-etcx-a1.dump');
     expect(() => backupKey(at, '///', 1)).toThrow('empty run id');
     expect(() => backupKey(at, 'run', 0)).toThrow('bad attempt');
   });
 
+  it('matches the name pattern the monitor and restore script look for', () => {
+    const key = backupKey(at, 'run_abc', 3);
+    expect(BACKUP_KEY_PATTERN.test(key)).toBe(true);
+    expect(BACKUP_KEY_PATTERN.test(manifestKeyFor(key))).toBe(true);
+    expect(BACKUP_KEY_PATTERN.test(`prod/${key}`)).toBe(false);
+    expect(BACKUP_KEY_PATTERN.test('notes.txt')).toBe(false);
+  });
+
   it('puts the manifest beside its dump', () => {
-    expect(manifestKeyFor('prod/x-a1.dump')).toBe('prod/x-a1.manifest.json');
-    expect(() => manifestKeyFor('prod/x')).toThrow('not a dump key');
+    expect(manifestKeyFor('x-a1.dump')).toBe('x-a1.manifest.json');
+    expect(() => manifestKeyFor('x')).toThrow('not a dump key');
   });
 });
 
@@ -223,12 +232,12 @@ describe('runDbBackup', () => {
     expect(f.calls.filter(c => !c.startsWith('exec'))).toEqual([
       'dump',
       'list',
-      'upload prod/2026-11-09T101704Z-run_1-a2.dump',
-      'manifest prod/2026-11-09T101704Z-run_1-a2.manifest.json',
+      'upload 2026-11-09T101704Z-run_1-a2.dump',
+      'manifest 2026-11-09T101704Z-run_1-a2.manifest.json',
     ]);
     expect(manifest).toMatchObject({
       version: 1,
-      key: 'prod/2026-11-09T101704Z-run_1-a2.dump',
+      key: '2026-11-09T101704Z-run_1-a2.dump',
       bytes: 64,
       sha256: 'abc123',
       startedAt: '2026-11-09T10:17:04.456Z',

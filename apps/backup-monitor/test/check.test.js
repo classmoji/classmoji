@@ -6,18 +6,20 @@ import { assess, dumpKeyFor, newestManifestKey } from '../src/check.js';
 
 const now = new Date('2026-11-10T16:17:00Z');
 
-test('picks the newest manifest, ignoring unfinished dumps and other prefixes', () => {
+test('picks the newest manifest, ignoring unfinished dumps and anything not at the bucket root', () => {
   const keys = [
-    'prod/2026-11-09T101700Z-run_a-a1.manifest.json',
-    'prod/2026-11-09T101700Z-run_a-a1.dump',
-    'prod/2026-11-10T101700Z-run_b-a1.dump',
-    'other/2026-11-11T101700Z-run_c-a1.manifest.json',
+    '2026-11-09T101700Z-run_a-a1.manifest.json',
+    '2026-11-09T101700Z-run_a-a1.dump',
+    '2026-11-10T101700Z-run_b-a1.dump',
+    'test/2026-11-11T101700Z-run_c-a1.manifest.json',
+    'prod/2026-11-12T101700Z-run_d-a1.manifest.json',
+    'notes.manifest.json',
   ];
-  assert.equal(newestManifestKey(keys), 'prod/2026-11-09T101700Z-run_a-a1.manifest.json');
+  assert.equal(newestManifestKey(keys), '2026-11-09T101700Z-run_a-a1.manifest.json');
   assert.equal(newestManifestKey([]), null);
   assert.equal(
-    dumpKeyFor('prod/2026-11-09T101700Z-run_a-a1.manifest.json'),
-    'prod/2026-11-09T101700Z-run_a-a1.dump'
+    dumpKeyFor('2026-11-09T101700Z-run_a-a1.manifest.json'),
+    '2026-11-09T101700Z-run_a-a1.dump'
   );
 });
 

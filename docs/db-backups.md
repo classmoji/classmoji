@@ -14,7 +14,7 @@ first: it is faster and loses nothing.
 | Freshness check | Worker `classmoji-backup-monitor` (`apps/backup-monitor`), daily at **16:17 UTC**, emails if the newest finished backup started more than 26 hours ago |
 | Restore         | `packages/tasks/src/scripts/restoreBackup.ts`                                                                                                          |
 
-Each run writes `prod/<UTC start>-<run id>-a<attempt>.dump` (`pg_dump
+Each run writes `<UTC start>-<run id>-a<attempt>.dump` at the bucket root (`pg_dump
 --format=custom`, read back with `pg_restore --list` before upload), then
 `….manifest.json` beside it (size, SHA-256, pg_dump and server versions, start
 time). **A dump without a manifest did not finish**; the monitor and the
@@ -91,7 +91,7 @@ Needs the four `DB_BACKUP_R2_*` variables in the environment and `pg_restore`
 # what is there (finished backups only, oldest first)
 npx tsx packages/tasks/src/scripts/restoreBackup.ts --list
 
-# restore the newest (or --key prod/…dump) into a NEW, EMPTY local database
+# restore the newest (or --key <name>.dump) into a NEW, EMPTY local database
 createdb -h localhost -p <port> restore_test     # port: see .dev-context
 npx tsx packages/tasks/src/scripts/restoreBackup.ts --target postgresql://<user>:<pass>@localhost:<port>/restore_test
 
