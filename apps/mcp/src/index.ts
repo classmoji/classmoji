@@ -15,26 +15,19 @@
  */
 
 import Fastify, { type FastifyError } from 'fastify';
-import { MCP_BODY_LIMIT_BYTES } from './bodyLimit.ts';
 import { MCP_PORT, MCP_PUBLIC_URL, WEBAPP_URL } from './config.ts';
 import { registerProcessSafetyNets } from './processSafety.ts';
 import devMintRoutes from './routes/devMint.ts';
 import mcpRoutes from './routes/mcp.ts';
 import wellKnownRoutes from './routes/wellKnown.ts';
+import { mcpServerOptions } from './serverOptions.ts';
 import { registerAllTools } from './tools/index.ts';
 
 // Register tool definitions once at startup (validates the manifest).
 registerAllTools();
 
-const fastify = Fastify({
-  logger: true,
-  /**
-   * Bigger than Fastify's 1 MiB default so the tools that take large payloads
-   * can refuse them with their own, readable errors. See `bodyLimit.ts`, which
-   * page_asset_upload also derives its file cap from.
-   */
-  bodyLimit: MCP_BODY_LIMIT_BYTES,
-});
+// Body limit and request timeout: see serverOptions.ts.
+const fastify = Fastify(mcpServerOptions());
 
 // S5 process-level safety nets: a stray detached promise rejection (from any
 // code path that does not await its promise) must not crash the server.
