@@ -1,0 +1,16 @@
+{
+  // Daily check that the production database backup exists (README.md).
+  // Deploy: npx wrangler@4 deploy --config apps/backup-monitor/wrangler.jsonc
+  "name": "classmoji-backup-monitor",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-01",
+  "account_id": "a653a8f645101f2c08cceb8f644be6d9",
+  // No HTTP surface: it only runs on its schedule.
+  "workers_dev": false,
+  "preview_urls": false,
+  // 16:17 UTC: six hours after the 10:17 UTC backup, its retries long done.
+  "triggers": { "crons": ["17 16 * * *"] },
+  "r2_buckets": [{ "binding": "BACKUPS", "bucket_name": "classmoji-db-backups-prod" }],
+  "vars": { "ALERT_FROM": "Classmoji <hello@classmoji.io>" },
+  "observability": { "enabled": true },
+}

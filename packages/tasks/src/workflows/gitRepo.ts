@@ -370,8 +370,13 @@ export const createRepositoriesTask = task({
 
 export const createRepositoryTask = task({
   id: 'gh-create_git_repo',
+  // Per classroom (the batch passes `concurrencyKey: org`). Was 6: 90 days of
+  // production (Nov 2026) showed ~19s per repo, no Github rate limiting, and
+  // big classes waiting in the queue (170 repos took 9 minutes). 8 keeps an
+  // org's content-creating writes around 50-75/min, under Github's ~80/min
+  // secondary limit; throttling, if it comes, is retried (retryOnGitBlip).
   queue: {
-    concurrencyLimit: 6,
+    concurrencyLimit: 8,
   },
   // Copying a multi-gigabyte template (an Unreal project, say) is a full
   // download plus an upload in several parts; the project-wide 15 minutes is
