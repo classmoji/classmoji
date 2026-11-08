@@ -1539,8 +1539,9 @@ export const auth = betterAuth({
    * Endpoints no app calls are off for HTTP: `disabledPaths` 404s them in
    * better-auth's HTTP router (better-auth 1.7.18 api/index.mjs:168-170),
    * which every app that mounts `auth.handler` goes through
-   * (apps/webapp/app/routes/api.auth.$.ts, apps/admin/app/routes/api.auth.$.ts).
-   * In-process `auth.api.*` calls bypass the router and still work.
+   * (apps/webapp/app/routes/api.auth.$.ts, apps/admin/app/routes/api.auth.$.ts;
+   * apps/admin hands it only View as start and sign-out, and answers 404 to
+   * the rest). In-process `auth.api.*` calls bypass the router and still work.
    *
    * `/list-sessions` is off: no app lists a user's own sessions. So are
    * `/get-access-token` and `/refresh-token`: no client calls them, and the

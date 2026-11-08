@@ -1,33 +1,51 @@
 import { auth } from '@classmoji/auth/server';
-import { rejectUnsafeDynamicClientRegistration } from '@classmoji/auth/oauth-redirect';
 import { withoutSessionTokens } from '@classmoji/auth/session-response';
 import type { LoaderFunctionArgs, ActionFunctionArgs } from 'react-router';
 
 /**
- * better-auth handler for this origin.
+ * better-auth on this origin, for the calls apps/admin makes itself and
+ * nothing else.
  *
- * Needed because `authClient` sets `baseURL` to `window.location.origin`, so
- * calls from this app (notably `admin.impersonateUser`) post here rather than to
- * the webapp. It is the same `auth` instance over the same database, secret and
- * cookie prefix, so sessions minted here are immediately valid on the webapp —
- * that is what makes cross-app impersonation work.
+ * `authClient` sets `baseURL` to `window.location.origin`, so this app's auth
+ * calls post here rather than to the webapp. It is the same `auth` instance
+ * over the same database, secret and cookie prefix, so a session started here
+ * is valid on the webapp at once: that is what makes cross-app "View as"
+ * work. `ADMIN_URL` must be in better-auth's `trustedOrigins` (see
+ * packages/auth/src/server.ts) or every request here is refused on origin.
  *
- * `ADMIN_URL` must be in better-auth's `trustedOrigins` (see
- * packages/auth/src/server.ts) or every request here is rejected on origin.
+ * The calls, exactly as the client sends them (@classmoji/auth/client):
+ *   - POST /api/auth/admin/impersonate-user: View as (hooks/useViewAs.ts);
+ *   - POST /api/auth/sign-out: Sign out and Switch account (routes/_shell,
+ *     root.tsx).
+ * Nothing here reads the session over HTTP (no `useSession`; the loaders
+ * read it in process), and View as is stopped on the webapp
+ * (ImpersonationBanner). Every other path, and these paths by another
+ * method, answers 404 before better-auth runs: the authorization server's
+ * endpoints, its discovery documents and the rest of better-auth are served
+ * on the webapp only. The match is on the URL's path as better-auth would
+ * route it (exact, case-sensitive; `..` is already resolved by the URL), so
+ * no spelling of another path gets through.
  *
  * Session responses leave without their rows' `token` field (see
  * @classmoji/auth/session-response).
- *
- * The DCR guard is NOT optional: this handler inherits the mcp plugin's
- * `/mcp/register` and `/oauth2/register` endpoints, so without it this origin
- * reopens the `javascript:` redirect_uri XSS the webapp closed.
  */
-export async function loader({ request }: LoaderFunctionArgs) {
+const ADMIN_AUTH_CALLS: ReadonlyMap<string, string> = new Map([
+  ['/api/auth/admin/impersonate-user', 'POST'],
+  ['/api/auth/sign-out', 'POST'],
+]);
+
+async function handle(request: Request): Promise<Response> {
+  const { pathname } = new URL(request.url);
+  if (ADMIN_AUTH_CALLS.get(pathname) !== request.method) {
+    return new Response('Not Found', { status: 404 });
+  }
   return withoutSessionTokens(request, await auth.handler(request));
 }
 
+export async function loader({ request }: LoaderFunctionArgs) {
+  return handle(request);
+}
+
 export async function action({ request }: ActionFunctionArgs) {
-  const rejection = await rejectUnsafeDynamicClientRegistration(request);
-  if (rejection) return rejection;
-  return withoutSessionTokens(request, await auth.handler(request));
+  return handle(request);
 }
