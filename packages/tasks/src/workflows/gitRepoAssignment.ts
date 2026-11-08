@@ -18,6 +18,7 @@ import { createRepositoriesTask } from './gitRepo.ts';
 import { ensureGitInstallation, GitAppNotInstalledError } from '../helpers/gitInstallation.ts';
 import { retryOnDatabaseBlip, withDatabaseRetry } from '../helpers/databaseRetry.ts';
 import { retryOnGitBlip } from '../helpers/gitRetry.ts';
+import { publishAssignment } from '../helpers/publishAssignment.ts';
 import { nanoid } from 'nanoid';
 import dayjs from 'dayjs';
 
@@ -1160,7 +1161,7 @@ export const releaseAssignmentsNowTask = task({
       if (payloads.length > 0) {
         await createGithubRepositoryAssignmentTask.batchTriggerAndWait(payloads);
       }
-      await ClassmojiService.assignment.update(assignment.id, { is_published: true });
+      await publishAssignment(assignment.id);
     }
   },
 });

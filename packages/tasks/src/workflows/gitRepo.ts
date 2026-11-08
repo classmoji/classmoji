@@ -21,6 +21,7 @@ import { updateRepository, type UpdateRepositoryPayload } from '../helpers/updat
 import { createRepository, type CreateRepositoryPayload } from '../helpers/createRepository.ts';
 import { provisionAutogradeWorkflowForRepo } from './autograde.ts';
 import { reportFailureReason, reportStatus } from '../helpers/progress.ts';
+import { publishAssignment } from '../helpers/publishAssignment.ts';
 import { ensureGitInstallation, GitAppNotInstalledError } from '../helpers/gitInstallation.ts';
 import { withDatabaseRetry } from '../helpers/databaseRetry.ts';
 import { isTransientGitError, retryOnGitBlip } from '../helpers/gitRetry.ts';
@@ -558,7 +559,7 @@ export const createRepositoryTask = task({
 
         if (!normalizedPayload.provisionOnly) {
           for (const assignment of filteredAssignments) {
-            await ClassmojiService.assignment.update(assignment.id, { is_published: true });
+            await publishAssignment(assignment.id);
           }
         }
       }
