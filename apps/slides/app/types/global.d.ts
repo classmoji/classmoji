@@ -20,6 +20,10 @@ interface RevealApi {
   getCurrentSlide(): HTMLElement;
   getSlidesElement(): HTMLElement | null;
   getRevealElement?(): HTMLElement | null;
+  /** The element reveal scrolls in its scroll view (<body> for a full-page deck). */
+  getViewportElement?(): HTMLElement | null;
+  /** True while reveal shows the deck as scrolling pages (phones). */
+  isScrollView?(): boolean;
   getScale(): number;
   configure(options: Record<string, unknown>): void;
 }
