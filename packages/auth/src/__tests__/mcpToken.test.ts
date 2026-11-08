@@ -84,21 +84,31 @@ const mocks = vi.hoisted(() => {
       return fn(...args);
     };
 
-  const client: any = {
+  /**
+   * The same table over two handles: the client the module gets, and the
+   * transaction client `$transaction` hands its callback. Calls through the
+   * transaction are recorded as `tx.<name>`, so a read or write made through
+   * the outer client instead (outside the transaction and its lock) shows.
+   */
+  const handle = (prefix: string): any => ({
     mcpInternalToken: {
-      create: record('create', create),
-      deleteMany: record('deleteMany', deleteMany),
+      create: record(`${prefix}create`, create),
+      deleteMany: record(`${prefix}deleteMany`, deleteMany),
     },
-    session: { findUnique: record('session.findUnique', sessionFindUnique) },
-    $executeRaw: record('$executeRaw', executeRaw),
+    session: { findUnique: record(`${prefix}session.findUnique`, sessionFindUnique) },
+    $executeRaw: record(`${prefix}$executeRaw`, executeRaw),
+  });
+  const tx = handle('tx.');
+  const client: any = {
+    ...handle(''),
     $transaction: async (fn: (tx: unknown) => Promise<unknown>, options?: unknown) => {
       calls.push('$transaction');
       state.transactionOptions = options;
-      return fn(client);
+      return fn(tx);
     },
   };
 
-  return { calls, state, create, deleteMany, sessionFindUnique, executeRaw, client };
+  return { calls, state, create, deleteMany, sessionFindUnique, executeRaw, client, tx };
 });
 
 vi.mock('@classmoji/database', () => ({ default: () => mocks.client }));
@@ -237,15 +247,17 @@ describe('mintMcpAccessToken — under View as', () => {
     });
   });
 
-  it('reads the session under the lock, before anything is written', async () => {
+  // MUTATION: read the session through getPrisma() (outside the transaction
+  // and its lock) → 'session.findUnique' instead of 'tx.session.findUnique'.
+  it('reads the session under the lock, through the transaction, before anything is written', async () => {
     viewAsSession();
     await mintMcpAccessToken(USER, { impersonationSessionId: 'sess-1' });
     expect(mocks.calls).toEqual([
       '$transaction',
-      '$executeRaw',
-      'session.findUnique',
-      'deleteMany',
-      'create',
+      'tx.$executeRaw',
+      'tx.session.findUnique',
+      'tx.deleteMany',
+      'tx.create',
     ]);
   });
 
@@ -293,11 +305,12 @@ describe('mintMcpAccessToken — hygiene', () => {
 });
 
 describe('mintMcpAccessToken — concurrency', () => {
-  // MUTATION: delete the $executeRaw advisory lock → fails.
-  it('takes a per-user advisory lock before it deletes and creates', async () => {
+  // MUTATION: delete the $executeRaw advisory lock → fails; take it, delete
+  // or create through the outer client → fails.
+  it('takes a per-user advisory lock before it deletes and creates, all in the transaction', async () => {
     await mintMcpAccessToken(USER);
 
-    expect(mocks.calls).toEqual(['$transaction', '$executeRaw', 'deleteMany', 'create']);
+    expect(mocks.calls).toEqual(['$transaction', 'tx.$executeRaw', 'tx.deleteMany', 'tx.create']);
     const [strings, key] = mocks.executeRaw.mock.calls[0] as unknown as [
       TemplateStringsArray,
       unknown,
