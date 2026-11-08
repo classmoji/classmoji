@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Link, useLoaderData, useSearchParams } from 'react-router';
+import { Suspense, useState, type ReactNode } from 'react';
+import { Await, Link, useLoaderData, useSearchParams } from 'react-router';
 import { Empty, InfoTip, Panel, withParams } from '~/components/ui';
 import { BarRow, TimeChart } from '~/components/Chart';
 import {
@@ -9,13 +9,13 @@ import {
   UNKNOWN_COUNTRY,
 } from '~/utils/dashboard';
 import { GROWTH_DEFINITIONS, GROWTH_RANGES, type GrowthSeries } from '~/utils/metricDefinitions';
-import { loadInsights, type InsightsView } from './route.server';
+import { loadInsights, type InsightsSection, type InsightsView } from './route.server';
 
 export const loader = loadInsights;
 
 export const meta = () => [{ title: 'Insights · Classmoji Admin' }];
 
-type Data = Awaited<ReturnType<typeof loadInsights>>;
+type Data = InsightsSection;
 
 const VIEW_LABELS: Record<InsightsView, string> = {
   growth: 'Growth',
@@ -350,35 +350,68 @@ const Audience = ({ data }: { data: Extract<Data, { view: 'audience' }> }) => (
   </Panel>
 );
 
+/** A section while its data loads, or if it fails. */
+const Section = ({
+  view,
+  resolve,
+  children,
+}: {
+  view: InsightsView;
+  resolve: Promise<InsightsSection>;
+  children: (data: InsightsSection) => ReactNode;
+}) => (
+  <section aria-labelledby={`insights-${view}`} className="space-y-3">
+    <h2 id={`insights-${view}`} className="text-sm font-semibold text-ink-2">
+      {VIEW_LABELS[view]}
+    </h2>
+    <Suspense
+      fallback={
+        <Panel title={VIEW_LABELS[view]} description="Loading…">
+          <div className="h-40 animate-pulse rounded-lg bg-nav-hover m-4" aria-hidden />
+        </Panel>
+      }
+    >
+      <Await
+        resolve={resolve}
+        errorElement={
+          <Panel title={VIEW_LABELS[view]}>
+            <Empty title="Couldn't load this section" hint="Reload the page to try again." />
+          </Panel>
+        }
+      >
+        {children}
+      </Await>
+    </Suspense>
+  </section>
+);
+
 const Insights = () => {
   const data = useLoaderData<typeof loader>();
-  const showRange = data.view === 'growth' || data.view === 'activation';
   return (
-    <div className="space-y-4">
+    <div className="space-y-8">
       <div className="flex flex-wrap items-center justify-between gap-3 mt-2">
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-lg font-semibold text-ink-1">Insights</h1>
-          <Segmented
-            param="view"
-            value={data.view}
-            options={(Object.keys(VIEW_LABELS) as InsightsView[]).map(v => ({
-              value: v,
-              label: VIEW_LABELS[v],
-            }))}
-          />
-        </div>
-        {showRange ? (
+        <h1 className="text-lg font-semibold text-ink-1">Insights</h1>
+        <div className="flex items-center gap-2 text-xs text-ink-3">
+          <span>Growth and activation over</span>
           <Segmented
             param="range"
             value={data.range}
             options={Object.entries(GROWTH_RANGES).map(([value, r]) => ({ value, label: r.label }))}
           />
-        ) : null}
+        </div>
       </div>
-      {data.view === 'growth' ? <Growth data={data} /> : null}
-      {data.view === 'activation' ? <Activation data={data} /> : null}
-      {data.view === 'adoption' ? <Adoption data={data} /> : null}
-      {data.view === 'audience' ? <Audience data={data} /> : null}
+      <Section view="growth" resolve={data.growth}>
+        {d => (d.view === 'growth' ? <Growth data={d} /> : null)}
+      </Section>
+      <Section view="activation" resolve={data.activation}>
+        {d => (d.view === 'activation' ? <Activation data={d} /> : null)}
+      </Section>
+      <Section view="adoption" resolve={data.adoption}>
+        {d => (d.view === 'adoption' ? <Adoption data={d} /> : null)}
+      </Section>
+      <Section view="audience" resolve={data.audience}>
+        {d => (d.view === 'audience' ? <Audience data={d} /> : null)}
+      </Section>
     </div>
   );
 };
