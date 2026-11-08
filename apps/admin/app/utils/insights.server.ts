@@ -1,5 +1,3 @@
-import type { LoaderFunctionArgs } from 'react-router';
-import { requirePlatformAdmin } from '~/utils/db.server';
 import {
   bucketClassSizes,
   collapseSchools,
@@ -68,23 +66,20 @@ export type InsightsSection =
   | Awaited<ReturnType<typeof loadAdoptionSection>>
   | Awaited<ReturnType<typeof loadAudienceSection>>;
 
-/**
- * Every section on one page. They load at once, each streamed (the page
- * renders right away and a section fills in when its queries finish), so a
- * slow section doesn't hold up the others.
- */
-export async function loadInsights({ request }: LoaderFunctionArgs) {
-  await requirePlatformAdmin(request);
-  const url = new URL(request.url);
+/** The range Growth and Activation read, from `?range=` (12 weeks by default). */
+export const insightsRange = (url: URL): GrowthRange => {
   const rangeParam = url.searchParams.get('range') ?? '';
-  const range: GrowthRange = rangeParam in GROWTH_RANGES ? (rangeParam as GrowthRange) : '12w';
-  const now = new Date();
+  return rangeParam in GROWTH_RANGES ? (rangeParam as GrowthRange) : '12w';
+};
 
-  return {
-    range,
-    growth: loadGrowthSection(now, range),
-    activation: loadActivationSection(now, range),
-    adoption: loadAdoptionSection(now, range),
-    audience: loadAudienceSection(range),
-  };
-}
+/**
+ * Every Insights section, started at once and returned as promises for the
+ * page to stream: it renders right away, and a slow section doesn't hold up
+ * the others.
+ */
+export const loadInsightsSections = (now: Date, range: GrowthRange) => ({
+  growth: loadGrowthSection(now, range),
+  activation: loadActivationSection(now, range),
+  adoption: loadAdoptionSection(now, range),
+  audience: loadAudienceSection(range),
+});

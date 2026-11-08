@@ -32,7 +32,6 @@ const PAGES = [
   { to: '/', label: 'Home' },
   { to: '/people', label: 'People' },
   { to: '/classrooms', label: 'Classrooms' },
-  { to: '/insights', label: 'Insights' },
   { to: '/feedback', label: 'Feedback' },
   { to: '/ops/delivery', label: 'Ops · Content delivery' },
   { to: '/ops/activity', label: 'Ops · Activity log' },

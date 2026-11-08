@@ -75,7 +75,6 @@ export async function loadClassrooms({ request }: LoaderFunctionArgs) {
         name: true,
         created_at: true,
         is_example: true,
-        github_classroom_id: true,
         git_organization: {
           select: { provider: true, github_installation_id: true, gitlab_connection_id: true },
         },

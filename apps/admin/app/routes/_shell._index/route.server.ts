@@ -1,27 +1,29 @@
 import type { LoaderFunctionArgs } from 'react-router';
 import { requirePlatformAdmin } from '~/utils/db.server';
-import { loadAttentionCached, loadKpis, loadLatestActivity } from '~/utils/metrics.server';
+import { insightsRange, loadInsightsSections } from '~/utils/insights.server';
+import { loadKpis, loadLatestActivity } from '~/utils/metrics.server';
 import { REPORTING_TZ } from '~/utils/time';
 
 /**
- * Home: what needs doing, then how the week is going. Growth reporting lives
- * on Insights; nothing here is a chart you can only look at.
+ * Home: how the week is going (the KPI tiles), the growth reports (Growth,
+ * Activation, Adoption, Email domains) and the latest activity.
  *
- * The KPI tiles are the slow part (eight weeks of activity, submissions and
- * Ask Moji chats), so they stream: the page renders with Needs attention
- * (shared with the tab badge, a minute old at most) and the latest activity,
- * and the tiles fill in.
+ * The tiles and reports are the slow part, so they stream: the page renders
+ * with the activity feed, and each block fills in when its queries finish.
  */
 export async function loadHome({ request }: LoaderFunctionArgs) {
   await requirePlatformAdmin(request);
   const now = new Date();
+  const range = insightsRange(new URL(request.url));
   const kpis = loadKpis(now);
-  const [attention, activity] = await Promise.all([loadAttentionCached(), loadLatestActivity(10)]);
+  const insights = loadInsightsSections(now, range);
+  const activity = await loadLatestActivity(10);
   return {
     generatedAt: now.toISOString(),
     timeZone: REPORTING_TZ,
+    range,
     kpis,
-    attention,
+    ...insights,
     activity,
   };
 }
