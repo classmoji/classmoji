@@ -289,6 +289,29 @@ describe('a platform admin viewing as someone (hooks.before)', () => {
     expect(await stop.json()).toMatchObject({ user: { id: 'admin-1' } });
     expect(mocks.state.sessions.some(s => s.token === viewing)).toBe(false);
   });
+
+  it('stops for a POST with no body and no content type (the webapp banner’s Stop)', async () => {
+    const adminToken = signIn('admin-1');
+    expect((await viewAs(adminToken, { userId: 'owner-1' })).status).toBe(200);
+    const viewing = mocks.state.created[0]!.token as string;
+
+    const stop = await auth.handler(
+      new Request(`${BASE}/admin/stop-impersonating`, {
+        method: 'POST',
+        headers: {
+          origin: 'http://localhost:3000',
+          cookie: [
+            await signedCookie(`${COOKIE_PREFIX}.session_token`, viewing),
+            await signedCookie(`${COOKIE_PREFIX}.admin_session`, `${adminToken}:`),
+          ].join('; '),
+        },
+      })
+    );
+
+    expect(stop.status).toBe(200);
+    expect(await stop.json()).toMatchObject({ user: { id: 'admin-1' } });
+    expect(mocks.state.sessions.some(s => s.token === viewing)).toBe(false);
+  });
 });
 
 describe('callers who may not view as anyone', () => {

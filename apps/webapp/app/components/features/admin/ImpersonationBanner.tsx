@@ -2,7 +2,6 @@ import { Button } from 'antd';
 import { IconUserOff } from '@tabler/icons-react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
-import { authClient } from '@classmoji/auth/client';
 import { clearImpersonationReturn, takeImpersonationReturn } from '~/utils/impersonationReturn';
 
 interface ImpersonationBannerProps {
@@ -22,6 +21,27 @@ interface ImpersonationBannerProps {
    * matching domain. Null in bare development (host-only cookies).
    */
   impersonationCookieDomain?: string | null;
+}
+
+/**
+ * Stop viewing as: a plain POST with no body. Not through the auth client:
+ * on a page whose address carries the signed query of an app authorization
+ * (the consent page, say), the auth client adds it to every POST
+ * (`oauthProviderClient`), and better-auth then either refuses the stop (an
+ * expired query) or tries to resume that authorization with the admin's own
+ * session after the stop already happened, and answers with an error.
+ */
+export const STOP_VIEWING_AS_PATH = '/api/auth/admin/stop-impersonating';
+
+async function stopViewingAs(): Promise<void> {
+  const res = await fetch(STOP_VIEWING_AS_PATH, { method: 'POST', credentials: 'include' });
+  if (res.ok) return;
+  const body = (await res.json().catch(() => null)) as { message?: unknown } | null;
+  throw new Error(
+    typeof body?.message === 'string' && body.message
+      ? body.message
+      : 'Failed to stop impersonating'
+  );
 }
 
 /** Name must match apps/admin's `ORIGIN_COOKIE`. */
@@ -52,11 +72,7 @@ const ImpersonationBanner = ({
   const handleStopImpersonating = async () => {
     setStopping(true);
     try {
-      const { error } = await authClient.admin.stopImpersonating();
-
-      if (error) {
-        throw new Error(error.message || 'Failed to stop impersonating');
-      }
+      await stopViewingAs();
 
       // Clear the breadcrumb apps/admin dropped before handing off. It carries
       // max-age=3600, so leaving it set would make the NEXT impersonation --
