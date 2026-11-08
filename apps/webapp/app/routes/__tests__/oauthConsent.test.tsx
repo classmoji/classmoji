@@ -302,6 +302,20 @@ describe('consent page', () => {
     );
   });
 
+  it('wraps a long client name with no spaces in the heading and the request line', async () => {
+    const name = 'N'.repeat(200);
+    await render({ ...READY, clientName: name });
+
+    const heading = container.querySelector('h1')!;
+    expect(heading.textContent).toBe(`Authorize ${name}`);
+    expect(heading.classList).toContain('break-words');
+    const line = [...container.querySelectorAll('p')].find(p =>
+      p.textContent?.includes('wants to access your Classmoji account')
+    )!;
+    expect(line.textContent).toContain(name);
+    expect(line.classList).toContain('break-words');
+  });
+
   it('shows "can\'t connect" with what to do, and no buttons, for a request that does not check out', async () => {
     await render({ state: 'invalid' });
 

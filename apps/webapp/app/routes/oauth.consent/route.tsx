@@ -166,7 +166,7 @@ const ConsentForm = ({
           <img src={clientIcon} alt="" className="h-10 w-10 rounded-md object-cover" />
         )}
         <div className="min-w-0">
-          <h1 className="text-lg font-semibold text-gray-800 dark:text-gray-100">
+          <h1 className="text-lg font-semibold text-gray-800 dark:text-gray-100 break-words">
             Authorize {clientName}
           </h1>
           {clientHost && (
@@ -177,7 +177,7 @@ const ConsentForm = ({
         </div>
       </div>
 
-      <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+      <p className="text-sm text-gray-600 dark:text-gray-400 mb-4 break-words">
         <span className="font-medium">{clientName}</span> wants to access your Classmoji account
         {userLogin ? ` (${userLogin})` : ''} with the following permissions:
       </p>
