@@ -418,6 +418,24 @@ describe('the signed query the consent page checks (verifiedAuthorizationQuery)'
     expect(await verifiedAuthorizationQuery(`?${query}`)).toBeNull();
   });
 
+  // The consent page sends a signed-out visitor to sign in with its own
+  // signed query (routes/oauth.consent): the sign-in brings them back.
+  it('signing in with it comes back to the consent page', async () => {
+    const signed = await verifiedAuthorizationQuery(await consentSearch());
+
+    const res = await post('/sign-in/email', null, {
+      email: 'owner@example.edu',
+      password: PASSWORD,
+      oauth_query: `${signed}`,
+    });
+
+    expect(res.status).toBe(200);
+    const { url } = (await res.json()) as { url: string };
+    const target = new URL(url, 'http://localhost:3000');
+    expect(target.pathname).toBe('/oauth/consent');
+    expect(target.searchParams.get('client_id')).toBe(CLIENT_ID);
+  });
+
   it('refuses one that has expired', async () => {
     const search = await consentSearch();
     vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 11 * 60 * 1000 });
