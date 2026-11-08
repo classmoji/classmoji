@@ -131,9 +131,13 @@ type CatchUp = {
   stderr: string;
   result?: {
     mode: string;
+    migrationStartedAt: string;
+    migrationAppliedAt: string;
     runStartedAt: string;
+    lastRunStartedAt: string | null;
     since: string;
     sinceFrom: string;
+    recordId: string | null;
     window: Record<string, number>;
     clientsAlreadyCopied: number;
     produced: Record<string, number>;
@@ -175,6 +179,21 @@ async function snapshot(db: PrismaClient): Promise<Record<string, string[]>> {
 
 const added = (before: string[], after: string[]) => after.filter(row => !before.includes(row));
 const json = (rows: string[]) => rows.map(row => JSON.parse(row) as Record<string, any>);
+
+/** The tables that gained rows between two snapshots, with how many. */
+const gainedRows = (before: Record<string, string[]>, after: Record<string, string[]>) =>
+  Object.fromEntries(
+    Object.keys(after)
+      .map(table => [table, added(before[table] ?? [], after[table]!).length])
+      .filter(([, n]) => n)
+  );
+
+/** The rows the script's --write runs recorded (RECORD), oldest first. */
+const recordedRuns = (db: PrismaClient) =>
+  db.platformAuditLog.findMany({
+    where: { action: 'oauth.catch_up.run' },
+    orderBy: { created_at: 'asc' },
+  });
 
 /** The rows of one table as JSON objects (to_jsonb), ordered. */
 async function tableRows(db: PrismaClient, table: string, where = 'true') {
@@ -266,7 +285,17 @@ describe.skipIf(!CX_URL)('the CX-2 catch-up (real Postgres)', () => {
   let afterWrite: Record<string, string[]>;
   let firstWrite: CatchUp;
   let writeStartedAt: number;
+  /** The newest refresh token of each caught-up grant refreshed on 1.7 below. */
+  const rotated: Record<string, string> = {};
   const BASE = 'http://localhost:3000/api/auth';
+
+  /** The start of the latest recorded run: the default watermark of the next. */
+  const latestRunStart = async () => {
+    const starts = (await recordedRuns(cx)).map(
+      r => (r.data as { runStartedAt: string }).runStartedAt
+    );
+    return starts.sort().at(-1);
+  };
 
   const claimsOf = (jwt: string) =>
     JSON.parse(Buffer.from(jwt.split('.')[1]!, 'base64url').toString('utf8')) as Record<
@@ -465,13 +494,21 @@ describe.skipIf(!CX_URL)('the CX-2 catch-up (real Postgres)', () => {
     expect(run.stdout).toContain('mode: dry run');
     expect(run.stdout).toContain('dry run: transaction_read_only = on');
     expect(run.stdout).toContain('nothing was written');
+    // Which watermark, and where it comes from.
+    expect(run.stdout).toContain('last recorded run: none');
+    expect(run.stdout).toContain(
+      `window: legacy rows created at or after ${watermark.toISOString()} (the migration's first start)`
+    );
     expect(run.result).toEqual({
       mode: 'dry-run',
       database: new URL(CX_URL!).pathname.slice(1),
       migrationStartedAt: watermark.toISOString(),
+      migrationAppliedAt: watermark.toISOString(),
       runStartedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+      lastRunStartedAt: null,
       since: watermark.toISOString(),
       sinceFrom: 'migration',
+      recordId: null,
       // The deleted user's token went with the user (legacy foreign key).
       window: { oauth_applications: 3, oauth_consents: 6, oauth_access_tokens: 8 },
       clientsAlreadyCopied: 0,
@@ -502,13 +539,32 @@ describe.skipIf(!CX_URL)('the CX-2 catch-up (real Postgres)', () => {
     for (const [table, rows] of Object.entries(beforeWrite)) {
       expect(added(afterWrite[table]!, rows), table).toEqual([]);
     }
-    // Only the three tables gain rows; the legacy tables are only read.
-    const gained = Object.fromEntries(
-      Object.keys(afterWrite)
-        .map(table => [table, added(beforeWrite[table] ?? [], afterWrite[table]!).length])
-        .filter(([, n]) => n)
-    );
-    expect(gained).toEqual({ oauth2_clients: 2, oauth2_consents: 3, oauth2_refresh_tokens: 4 });
+    // Only the three tables gain rows, and the audit log the run's record;
+    // the legacy tables are only read.
+    expect(gainedRows(beforeWrite, afterWrite)).toEqual({
+      oauth2_clients: 2,
+      oauth2_consents: 3,
+      oauth2_refresh_tokens: 4,
+      platform_audit_logs: 1,
+    });
+    // The record: what ran, from when, and what it inserted.
+    const runs = await recordedRuns(cx);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({
+      id: firstWrite.result!.recordId,
+      actor_id: null,
+      action: 'oauth.catch_up.run',
+      target_type: 'oauth_grants',
+      target_id: null,
+      data: {
+        tool: 'script:oauth.catch_up',
+        migration: MIGRATION,
+        runStartedAt: firstWrite.result!.runStartedAt,
+        since: watermark.toISOString(),
+        sinceFrom: 'migration',
+        inserted: { oauth2_clients: 2, oauth2_consents: 3, oauth2_refresh_tokens: 4 },
+      },
+    });
 
     const clients = json(added(beforeWrite.oauth2_clients!, afterWrite.oauth2_clients!));
     expect(clients.map(c => [c.id, c.client_id]).sort()).toEqual([
@@ -701,16 +757,78 @@ describe.skipIf(!CX_URL)('the CX-2 catch-up (real Postgres)', () => {
     expect(json(afterWrite.oauth_access_tokens!).map(r => r.id)).not.toContain('w-tok-pub-u4');
   });
 
-  it('run again: inserts nothing and changes nothing', async () => {
+  it('run again: starts where the recorded run started, inserts nothing, records itself', async () => {
+    const previous = firstWrite.result!.runStartedAt;
+    const dry = catchUp([]);
+    expect(dry.status, dry.stderr).toBe(0);
+    expect(dry.stdout).toContain(
+      `window: legacy rows created at or after ${previous} (the last recorded run, platform_audit_logs ${firstWrite.result!.recordId})`
+    );
+    expect(dry.result).toMatchObject({
+      lastRunStartedAt: previous,
+      since: previous,
+      sinceFrom: 'last-run',
+      window: { oauth_applications: 0, oauth_consents: 0, oauth_access_tokens: 0 },
+      insert: { oauth2_clients: 0, oauth2_consents: 0, oauth2_refresh_tokens: 0 },
+    });
+    expect(await snapshot(cx)).toEqual(afterWrite);
+
+    const write = catchUp(['--write']);
+    expect(write.status, write.stderr).toBe(0);
+    expect(write.result).toMatchObject({ since: previous, sinceFrom: 'last-run' });
+    const after = await snapshot(cx);
+    // Only its record.
+    expect(gainedRows(afterWrite, after)).toEqual({ platform_audit_logs: 1 });
+    for (const [table, rows] of Object.entries(afterWrite)) {
+      expect(added(after[table]!, rows), table).toEqual([]);
+    }
+    expect(await latestRunStart()).toBe(write.result!.runStartedAt);
+  });
+
+  it('refuses a --since earlier than the last recorded run unless --allow-earlier-since', async () => {
+    const before = await snapshot(cx);
     for (const args of [[], ['--write']]) {
-      const run = catchUp(args);
-      expect(run.status, run.stderr).toBe(0);
-      expect(run.result).toMatchObject({
-        clientsAlreadyCopied: 2,
-        produced: { oauth2_clients: 0, oauth2_consents: 5, oauth2_refresh_tokens: 4 },
-        insert: { oauth2_clients: 0, oauth2_consents: 0, oauth2_refresh_tokens: 0 },
-      });
-      expect(await snapshot(cx)).toEqual(afterWrite);
+      const run = catchUp(['--since', watermark.toISOString(), ...args]);
+      expect(run.status).toBe(1);
+      expect(run.stderr).toContain("is before the last recorded run's start");
+      expect(run.stdout).not.toContain('RESULT');
+    }
+    expect(await snapshot(cx)).toEqual(before);
+
+    // With the flag, the first run's own window again: all of it is there, so
+    // nothing is inserted (the insert-if-missing rules).
+    const again = catchUp(['--since', watermark.toISOString(), '--allow-earlier-since']);
+    expect(again.status, again.stderr).toBe(0);
+    expect(again.result).toMatchObject({
+      sinceFrom: 'option',
+      clientsAlreadyCopied: 2,
+      produced: { oauth2_clients: 0, oauth2_consents: 5, oauth2_refresh_tokens: 4 },
+      insert: { oauth2_clients: 0, oauth2_consents: 0, oauth2_refresh_tokens: 0 },
+    });
+    expect(await snapshot(cx)).toEqual(before);
+  });
+
+  it('refuses, writing nothing, when a recorded run has no valid start', async () => {
+    await cx.platformAuditLog.create({
+      data: {
+        id: 'catch-up-run-bad',
+        action: 'oauth.catch_up.run',
+        target_type: 'oauth_grants',
+        data: { runStartedAt: 'not a time' },
+      },
+    });
+    const before = await snapshot(cx);
+    try {
+      for (const args of [[], ['--write']]) {
+        const run = catchUp(args);
+        expect(run.status).toBe(1);
+        expect(run.stderr).toContain(
+          'the recorded run platform_audit_logs catch-up-run-bad has no valid runStartedAt'
+        );
+      }
+      expect(await snapshot(cx)).toEqual(before);
+    } finally {
+      await cx.platformAuditLog.delete({ where: { id: 'catch-up-run-bad' } });
     }
   });
 
@@ -730,6 +848,7 @@ describe.skipIf(!CX_URL)('the CX-2 catch-up (real Postgres)', () => {
     await expect(verifyJwt(pub.body.access_token)).resolves.toMatchObject({ sub: 'u-1' });
     expect(await consentAccepts(pub.body.access_token)).toBe(true);
     expect(typeof pub.body.refresh_token).toBe('string');
+    rotated['wpubclient/u-1'] = pub.body.refresh_token;
     // The token endpoint's rule gave the copied row its resource.
     expect(
       (await cx.oauthRefreshToken.findUnique({ where: { id: 'w-tok-wpub-u1' } }))?.resources
@@ -775,18 +894,80 @@ describe.skipIf(!CX_URL)('the CX-2 catch-up (real Postgres)', () => {
     expect(expired.status).not.toBe(200);
   });
 
-  describe('a later run, after a rollback and a roll-forward (--since)', () => {
+  it('a default re-run puts back nothing 1.7 has ended (refresh-token reuse, /oauth2/revoke)', async () => {
+    const refresh = (refreshToken: string, clientId: string) =>
+      token({ grant_type: 'refresh_token', refresh_token: refreshToken, client_id: clientId });
+    const family = (clientId: string, userId: string) =>
+      cx.oauthRefreshToken.count({ where: { clientId, userId } });
+
+    // Reuse: the caught-up token, rotated above, presented again after the
+    // 30 s reuse interval. oauth-provider ends the family (every refresh
+    // token of the pair, the caught-up row included); the 1.4 row stays.
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 31_000 });
+    try {
+      expect((await refresh('ref-w-pub-u2', 'pubclient')).body.error).toBe('invalid_grant');
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(await family('pubclient', 'u-2')).toBe(0);
+    // Revocation: the client revokes its current refresh token at
+    // /oauth2/revoke, then presents it again; that ends the family too.
+    const revoke = await server.auth.handler(
+      new Request(`${BASE}/oauth2/revoke`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          token: rotated['wpubclient/u-1']!,
+          token_type_hint: 'refresh_token',
+          client_id: 'wpubclient',
+        }).toString(),
+      })
+    );
+    expect(revoke.status).toBe(200);
+    expect((await refresh(rotated['wpubclient/u-1']!, 'wpubclient')).body.error).toBe(
+      'invalid_grant'
+    );
+    expect(await family('wpubclient', 'u-1')).toBe(0);
+    for (const id of ['w-tok-pub-u2', 'w-tok-wpub-u1']) {
+      expect(await cx.legacyOauthAccessToken.count({ where: { id } }), id).toBe(1);
+    }
+
+    // A run over the first window would copy both families back.
+    const control = catchUp(['--since', watermark.toISOString(), '--allow-earlier-since']);
+    expect(control.status, control.stderr).toBe(0);
+    expect(control.result?.insert).toEqual({
+      oauth2_clients: 0,
+      oauth2_consents: 0,
+      oauth2_refresh_tokens: 2,
+    });
+
+    // The default starts at the last recorded run: nothing to copy.
+    const before = await snapshot(cx);
+    for (const args of [[], ['--write']]) {
+      const run = catchUp(args);
+      expect(run.status, run.stderr).toBe(0);
+      expect(run.result).toMatchObject({
+        sinceFrom: 'last-run',
+        insert: { oauth2_clients: 0, oauth2_consents: 0, oauth2_refresh_tokens: 0 },
+      });
+    }
+    expect(gainedRows(before, await snapshot(cx))).toEqual({ platform_audit_logs: 1 });
+    // Both stay ended.
+    expect((await refresh('ref-w-pub-u2', 'pubclient')).body.error).toBe('invalid_grant');
+    expect((await refresh('ref-w-wpub-u1', 'wpubclient')).body.error).toBe('invalid_grant');
+    expect(await family('pubclient', 'u-2')).toBe(0);
+    expect(await family('wpubclient', 'u-1')).toBe(0);
+  });
+
+  describe('a later run, after a rollback and a roll-forward', () => {
     // The previous release served for a while (1.4 wrote rows again), then
-    // 1.7 came back. Meanwhile 1.7 had ended a family the first run had
-    // caught up: (wpubclient, u-1), refreshed above, then reused.
+    // 1.7 came back. Meanwhile 1.7 had ended two families the first run had
+    // caught up (the test above).
     let rollbackAt: Date;
     let previousRun: string;
 
     beforeAll(async () => {
-      previousRun = firstWrite.result!.runStartedAt;
-      await cx.$executeRawUnsafe(
-        `DELETE FROM "oauth2_refresh_tokens" WHERE "client_id" = 'wpubclient' AND "user_id" = 'u-1'`
-      );
+      previousRun = (await latestRunStart())!;
       rollbackAt = new Date(Math.max(Date.now(), Date.parse(previousRun) + 1));
       const at = (ms: number) => lit(new Date(rollbackAt.getTime() + ms));
       const live = lit(new Date(Date.now() + 5 * DAY));
@@ -803,33 +984,29 @@ describe.skipIf(!CX_URL)('the CX-2 catch-up (real Postgres)', () => {
       }
     });
 
-    it('without --since, would read the first run’s window again and bring back what 1.7 ended', () => {
-      const control = catchUp([]);
-      expect(control.status, control.stderr).toBe(0);
-      expect(control.result).toMatchObject({
-        sinceFrom: 'migration',
-        // w-tok-wpub-u1 again, beside the two rollback tokens.
-        insert: { oauth2_clients: 1, oauth2_consents: 1, oauth2_refresh_tokens: 3 },
-      });
-    });
-
-    it('with the previous run’s start, copies the rollback’s rows and nothing 1.7 ended', async () => {
+    it('by default, copies the rollback’s rows and nothing 1.7 ended', async () => {
       const before = await snapshot(cx);
-      const dry = catchUp(['--since', previousRun]);
+      const dry = catchUp([]);
       expect(dry.status, dry.stderr).toBe(0);
       expect(dry.stdout).toContain(
-        `window: legacy rows created at or after ${previousRun} (--since)`
+        `window: legacy rows created at or after ${previousRun} (the last recorded run, platform_audit_logs `
       );
       expect(dry.result).toMatchObject({
         mode: 'dry-run',
         since: previousRun,
-        sinceFrom: 'option',
+        sinceFrom: 'last-run',
         window: { oauth_applications: 1, oauth_consents: 1, oauth_access_tokens: 2 },
         insert: { oauth2_clients: 1, oauth2_consents: 1, oauth2_refresh_tokens: 2 },
       });
+      // The same with that start given as --since.
+      const given = catchUp(['--since', previousRun]);
+      expect(given.stdout).toContain(
+        `window: legacy rows created at or after ${previousRun} (--since)`
+      );
+      expect(given.result).toMatchObject({ sinceFrom: 'option', insert: dry.result!.insert });
       expect(await snapshot(cx)).toEqual(before);
 
-      const write = catchUp(['--since', previousRun, '--write']);
+      const write = catchUp(['--write']);
       expect(write.status, write.stderr).toBe(0);
       expect(write.result?.insert).toEqual(dry.result?.insert);
       const after = await snapshot(cx);
@@ -838,13 +1015,15 @@ describe.skipIf(!CX_URL)('the CX-2 catch-up (real Postgres)', () => {
       }
       const tokens = json(added(before.oauth2_refresh_tokens!, after.oauth2_refresh_tokens!));
       expect(tokens.map(r => r.id).sort()).toEqual(['rb-tok-u1', 'rb-tok-wweb-u3']);
-      expect(json(after.oauth2_refresh_tokens!).map(r => r.id)).not.toContain('w-tok-wpub-u1');
+      const ids = json(after.oauth2_refresh_tokens!).map(r => r.id);
+      expect(ids).not.toContain('w-tok-wpub-u1');
+      expect(ids).not.toContain('w-tok-pub-u2');
       expect(json(added(before.oauth2_consents!, after.oauth2_consents!)).map(c => c.id)).toEqual([
         'rb-consent-u1',
       ]);
 
-      // Again with the same --since: nothing more.
-      const again = catchUp(['--since', previousRun, '--write']);
+      // Again: nothing more.
+      const again = catchUp(['--write']);
       expect(again.result?.insert).toEqual({
         oauth2_clients: 0,
         oauth2_consents: 0,
@@ -864,12 +1043,14 @@ describe.skipIf(!CX_URL)('the CX-2 catch-up (real Postgres)', () => {
 
     it('refuses a --since before the migration’s start or after the run’s, writing nothing', async () => {
       const before = await snapshot(cx);
-      const early = catchUp(['--since', '2026-01-01T00:00:00Z', '--write']);
-      expect(early.status).toBe(1);
-      expect(early.stderr).toContain("is before the migration's start");
-      const late = catchUp(['--since', '2999-01-01T00:00:00.000Z', '--write']);
-      expect(late.status).toBe(1);
-      expect(late.stderr).toContain("is after this run's start");
+      for (const flag of [[], ['--allow-earlier-since']]) {
+        const early = catchUp(['--since', '2026-01-01T00:00:00Z', ...flag, '--write']);
+        expect(early.status).toBe(1);
+        expect(early.stderr).toContain("is before the migration's start");
+        const late = catchUp(['--since', '2999-01-01T00:00:00.000Z', ...flag, '--write']);
+        expect(late.status).toBe(1);
+        expect(late.stderr).toContain("is after this run's start");
+      }
       expect(await snapshot(cx)).toEqual(before);
     });
 
@@ -879,6 +1060,9 @@ describe.skipIf(!CX_URL)('the CX-2 catch-up (real Postgres)', () => {
       [['--since', '2026-11-09T10:00:00']],
       [['--since', '2026-11-09T10:00:00.1234Z']],
       [['--since', '2026-11-09T10:00:00Z', '--since', '2026-11-09T10:00:00Z']],
+      [['--allow-earlier-since']],
+      [['--allow-earlier-since', '--write']],
+      [['--since', '2026-11-09T10:00:00Z', '--allow-earlier-since', '--allow-earlier-since']],
     ])('refuses %j before connecting (usage)', args => {
       const run = catchUp(args);
       expect(run.status).toBe(2);
@@ -886,3 +1070,133 @@ describe.skipIf(!CX_URL)('the CX-2 catch-up (real Postgres)', () => {
     });
   });
 });
+
+/**
+ * The migration committed, but Prisma did not record it as finished; the
+ * runbook then marks it applied (`prisma migrate resolve --applied`), which
+ * records a NEW row whose start is the time of the resolve. The 1.4 rows
+ * written between the migration and the resolve must still be copied.
+ * Runs after the suite above (which it resets the catch-up database for).
+ */
+describe.skipIf(!CX_URL)(
+  'the CX-2 catch-up after `migrate resolve --applied` (real Postgres)',
+  () => {
+    let cx: PrismaClient;
+    let work: string;
+    let firstStart: Date;
+    let resolveStart: Date;
+
+    beforeAll(async () => {
+      assertThrowawayDatabase(CX_URL!);
+      cx = new PrismaClient({ datasourceUrl: CX_URL });
+      await cx.$executeRawUnsafe('DROP SCHEMA IF EXISTS public CASCADE');
+      await cx.$executeRawUnsafe('CREATE SCHEMA public');
+      work = mkdtempSync(join(tmpdir(), 'oauth2-catchup-resolve-it-'));
+      const all = join(DATABASE_DIR, 'schema.prisma');
+      const live = lit(new Date(Date.now() + 5 * DAY));
+
+      prisma(['migrate', 'deploy', '--schema', migrationsBefore(join(work, 'before'))], CX_URL!);
+      for (const statement of [
+        `INSERT INTO "users" ("id", "email", "name") VALUES ('r-1', 'r1@example.org', 'Resolve One')`,
+        `INSERT INTO "oauth_applications" ("id", "name", "client_id", "client_secret", "redirect_urls", "type", "disabled", "created_at", "updated_at") VALUES
+        ('app-r-pre', 'Before the migration', 'r-preclient', '', 'http://127.0.0.1:44300/callback', 'public', false, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')`,
+        `INSERT INTO "oauth_access_tokens" ("id", "access_token", "refresh_token", "access_token_expires_at", "refresh_token_expires_at", "client_id", "user_id", "scopes", "created_at", "updated_at") VALUES
+        ('r-tok-pre', 'acc-r-pre', 'ref-r-pre', ${live}, ${live}, 'r-preclient', 'r-1', 'read write', '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')`,
+      ]) {
+        await cx.$executeRawUnsafe(statement);
+      }
+      prisma(['migrate', 'deploy', '--schema', all], CX_URL!);
+      // What a failure of Prisma's own bookkeeping after the COMMIT leaves:
+      // the tables and copies are there, the row is not marked finished.
+      await cx.$executeRawUnsafe(
+        `UPDATE "_prisma_migrations" SET "finished_at" = NULL, "applied_steps_count" = 0
+       WHERE "migration_name" = '${MIGRATION}'`
+      );
+      [{ started_at: firstStart }] = await cx.$queryRawUnsafe<{ started_at: Date }[]>(
+        `SELECT "started_at" FROM "_prisma_migrations" WHERE "migration_name" = '${MIGRATION}'`
+      );
+
+      // A 1.4 machine between the migration and the resolve.
+      const between = (ms: number) => lit(new Date(firstStart.getTime() + ms));
+      for (const statement of [
+        `INSERT INTO "oauth_applications" ("id", "name", "client_id", "client_secret", "redirect_urls", "type", "disabled", "created_at", "updated_at") VALUES
+        ('app-r-between', 'Between', 'r-betweenclient', '', 'http://127.0.0.1:44301/callback', 'public', false, ${between(1)}, ${between(1)})`,
+        `INSERT INTO "oauth_consents" ("id", "client_id", "user_id", "scopes", "consent_given", "created_at", "updated_at") VALUES
+        ('r-consent-between', 'r-betweenclient', 'r-1', 'read write offline_access', true, ${between(2)}, ${between(2)})`,
+        `INSERT INTO "oauth_access_tokens" ("id", "access_token", "refresh_token", "access_token_expires_at", "refresh_token_expires_at", "client_id", "user_id", "scopes", "created_at", "updated_at") VALUES
+        ('r-tok-between', 'acc-r-between', 'ref-r-between', ${live}, ${live}, 'r-betweenclient', 'r-1', 'read write', ${between(3)}, ${between(3)})`,
+      ]) {
+        await cx.$executeRawUnsafe(statement);
+      }
+
+      prisma(['migrate', 'resolve', '--applied', MIGRATION, '--schema', all], CX_URL!);
+      [{ started_at: resolveStart }] = await cx.$queryRawUnsafe<{ started_at: Date }[]>(
+        `SELECT "started_at" FROM "_prisma_migrations"
+       WHERE "migration_name" = '${MIGRATION}' AND "rolled_back_at" IS NULL`
+      );
+      // And one after it: a rotation of the pre-migration grant.
+      await cx.$executeRawUnsafe(
+        `INSERT INTO "oauth_access_tokens" ("id", "access_token", "refresh_token", "access_token_expires_at", "refresh_token_expires_at", "client_id", "user_id", "scopes", "created_at", "updated_at") VALUES
+        ('r-tok-after', 'acc-r-after', 'ref-r-after', ${live}, ${live}, 'r-preclient', 'r-1', 'read write', ${lit(new Date(resolveStart.getTime() + 1))}, ${lit(new Date(resolveStart.getTime() + 1))})`
+      );
+    }, 600_000);
+
+    afterAll(async () => {
+      await cx?.$disconnect();
+      if (work) rmSync(work, { recursive: true, force: true });
+    });
+
+    it('is recorded as Prisma records a resolve: the first row rolled back, a new one started at the resolve', async () => {
+      const rows = await cx.$queryRawUnsafe<
+        { started_at: Date; finished_at: Date | null; rolled_back_at: Date | null; steps: number }[]
+      >(
+        `SELECT "started_at", "finished_at", "rolled_back_at", "applied_steps_count" AS "steps"
+       FROM "_prisma_migrations" WHERE "migration_name" = '${MIGRATION}' ORDER BY "started_at"`
+      );
+      expect(rows).toHaveLength(2);
+      expect(rows[0]).toMatchObject({ started_at: firstStart, finished_at: null });
+      expect(rows[0]!.rolled_back_at).not.toBeNull();
+      expect(rows[1]).toMatchObject({
+        started_at: resolveStart,
+        finished_at: resolveStart,
+        steps: 0,
+      });
+      expect(resolveStart.getTime()).toBeGreaterThan(firstStart.getTime() + 3);
+    });
+
+    it('starts at the first attempt, so the rows written before the resolve are copied', async () => {
+      const dry = catchUp([]);
+      expect(dry.status, dry.stderr).toBe(0);
+      expect(dry.stdout).toContain('2 row(s) in _prisma_migrations');
+      expect(dry.stdout).toContain('(recorded by migrate resolve --applied)');
+      expect(dry.result).toMatchObject({
+        migrationStartedAt: firstStart.toISOString(),
+        migrationAppliedAt: resolveStart.toISOString(),
+        since: firstStart.toISOString(),
+        sinceFrom: 'migration',
+        window: { oauth_applications: 1, oauth_consents: 1, oauth_access_tokens: 2 },
+        // The pre-migration pair already has the consent the migration made.
+        insert: { oauth2_clients: 1, oauth2_consents: 1, oauth2_refresh_tokens: 2 },
+      });
+      // That start is a --since the script accepts.
+      const given = catchUp(['--since', firstStart.toISOString()]);
+      expect(given.status, given.stderr).toBe(0);
+      expect(given.result?.insert).toEqual(dry.result?.insert);
+
+      const write = catchUp(['--write']);
+      expect(write.status, write.stderr).toBe(0);
+      expect(write.result?.insert).toEqual(dry.result?.insert);
+      expect(
+        (await cx.oauthRefreshToken.findMany({ where: { userId: 'r-1' }, select: { id: true } }))
+          .map(r => r.id)
+          .sort()
+      ).toEqual(['r-tok-after', 'r-tok-between', 'r-tok-pre']);
+      expect(
+        await cx.oauthClient.count({
+          where: { clientId: { in: ['r-preclient', 'r-betweenclient'] } },
+        })
+      ).toBe(2);
+      expect(await cx.oauthConsent.count({ where: { userId: 'r-1' } })).toBe(2);
+    });
+  }
+);

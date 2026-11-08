@@ -5,7 +5,7 @@
  *
  *   DATABASE_URL='postgresql://…' node packages/database/scripts/catchUpOauth2Grants.ts           # dry run
  *   DATABASE_URL='postgresql://…' node packages/database/scripts/catchUpOauth2Grants.ts --write   # insert
- *   … --since 2026-11-09T14:03:12.345Z [--write]   # a later run: rows created since then
+ *   … --since 2026-11-09T14:03:12.345Z [--write]   # rows created since then
  *
  * (Node 24+ runs the file as it is; `npx tsx` works too.)
  *
@@ -17,21 +17,29 @@
  * it once the webapp deploy has finished (MCP clients reach the OAuth
  * endpoints on the webapp's origin only). After a rollback to the previous
  * release, the old release writes legacy rows again; once the release is
- * back on 1.7, run it again with `--since` set to the previous run's start.
+ * back on 1.7, run it again: by default it starts where the last recorded
+ * run started.
  *
- * WHAT IT COPIES. The legacy rows created at or after its watermark: by
- * default the migration's start (`started_at` of its applied row in
- * `_prisma_migrations`), or with `--since <ISO timestamp>` that time, which
- * may not be earlier than the migration's start nor later than this run's
- * own. Both to the millisecond (legacy `created_at` has milliseconds). Each
- * run prints its own start (`run started …`, `runStartedAt` in the RESULT
- * line), the value the next run passes. Rows older than the watermark are not
- * looked at again, so a row 1.7 has deleted since (a refresh-token reuse
- * ending its family) is never put back; a run with the default watermark
- * after an earlier run would read the earlier run's window again, so pass
- * `--since`. (A password change, a reset and a ban also delete the user's
- * legacy rows: packages/auth/src/server.ts revokeOAuthGrants.) They go
- * through the migration's own statements 1–3:
+ * WHAT IT COPIES. The legacy rows created at or after its watermark, to the
+ * millisecond (legacy `created_at` has milliseconds):
+ *   - by default, the start of the last run recorded in platform_audit_logs
+ *     (see RECORD), or, before any run, the migration's first start: the
+ *     earliest `started_at` among its `_prisma_migrations` rows, rolled-back
+ *     ones included (`migrate resolve --applied` records a new row whose
+ *     `started_at` is the time of the resolve, while the copy ran at the first
+ *     attempt);
+ *   - with `--since <ISO timestamp>`, that time. It may not be earlier than
+ *     the migration's first start nor later than this run's own start, and
+ *     not earlier than the last recorded run's start unless
+ *     `--allow-earlier-since` is given.
+ * Rows older than the watermark are not looked at again, so a row 1.7 has
+ * deleted since an earlier run read it (refresh-token reuse or a revocation
+ * at /oauth2/revoke ending its family) is not put back. (A password change, a
+ * reset and a ban also delete the user's legacy rows:
+ * packages/auth/src/server.ts revokeOAuthGrants.) Every run prints the
+ * watermark it uses and where it comes from, and its own start (`run started
+ * …`, `runStartedAt` in the RESULT line). They go through the migration's own
+ * statements 1–3:
  *   - clients: every one but the two Classmoji-owned ids; legacy id kept;
  *     no owner; `public` → `none` with no secret, any other type → client_secret_basic
  *     with the secret as SHA-256 base64url without padding; redirect URIs
@@ -69,21 +77,30 @@
  * consent for this pair" still holds at commit. Running it again inserts
  * nothing.
  *
+ * RECORD. Every --write run inserts one platform_audit_logs row in the same
+ * transaction: action `oauth.catch_up.run`, no actor, `data` = { tool,
+ * migration, runStartedAt, since, sinceFrom, inserted (per table) }. The
+ * latest `runStartedAt` among those rows is the next run's default watermark.
+ *
  * REFUSES, writing nothing, when: DATABASE_URL is not set (no .env is read);
  * `--since` is not an ISO timestamp with a time zone, or falls before the
- * migration's start or after this run's; the migration has no single applied
- * row; the file differs from what ran;
+ * migration's first start, after this run's start, or (without
+ * `--allow-earlier-since`) before the last recorded run's start; the
+ * migration has no single applied row; the file differs from what ran; a
+ * recorded run has no valid `runStartedAt`;
  * a row to insert collides with a row already there under another id (a
  * client id, a refresh-token hash or a consent id), which the migration could
  * not have produced. Use Neon's direct (not -pooler) URL: temporary tables
  * need one session for the whole transaction. Never prints a token or secret.
  */
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { Prisma, PrismaClient } from '@prisma/client';
 
 const MIGRATION = '20261107180000_oauth2_provider_tables';
+/** The platform_audit_logs action of a --write run (RECORD). */
+const RUN_ACTION = 'oauth.catch_up.run';
 const MIGRATION_FILE = fileURLToPath(
   new URL(`../migrations/${MIGRATION}/migration.sql`, import.meta.url)
 );
@@ -160,11 +177,18 @@ class DryRunDone extends Error {
 interface Result {
   mode: 'dry-run' | 'write';
   database: string;
+  /** The earliest `started_at` among the migration's `_prisma_migrations` rows. */
   migrationStartedAt: string;
-  /** This run's start: what the next run passes as `--since`. */
+  /** `started_at` of its applied row. */
+  migrationAppliedAt: string;
+  /** This run's start: a later run's default watermark once recorded. */
   runStartedAt: string;
+  /** The latest recorded run's start, if any run is recorded. */
+  lastRunStartedAt: string | null;
   since: string;
-  sinceFrom: 'migration' | 'option';
+  sinceFrom: 'migration' | 'last-run' | 'option';
+  /** The platform_audit_logs row this run wrote (--write only). */
+  recordId: string | null;
   window: Record<(typeof LEGACY)[number], number>;
   clientsAlreadyCopied: number;
   produced: Record<Target, number>;
@@ -204,10 +228,31 @@ function describeUrl(url: string): string {
   return `${parsed.hostname}:${parsed.port || '5432'}/${database} as ${user}`;
 }
 
+/** The latest recorded run (RECORD), or null when none is. */
+async function lastRecordedRun(
+  rows: <T>(sql: string, ...values: unknown[]) => Promise<T[]>
+): Promise<{ id: string; startedAt: Date } | null> {
+  const recorded = await rows<{ id: string; runStartedAt: string | null }>(
+    `SELECT "id", "data"->>'runStartedAt' AS "runStartedAt"
+     FROM public."platform_audit_logs" WHERE "action" = $1`,
+    RUN_ACTION
+  );
+  let last: { id: string; startedAt: Date } | null = null;
+  for (const { id, runStartedAt } of recorded) {
+    const at = runStartedAt && ISO_TIMESTAMP.test(runStartedAt) ? Date.parse(runStartedAt) : NaN;
+    if (Number.isNaN(at)) {
+      throw new Refusal(`the recorded run platform_audit_logs ${id} has no valid runStartedAt`);
+    }
+    if (!last || at > last.startedAt.getTime()) last = { id, startedAt: new Date(at) };
+  }
+  return last;
+}
+
 async function run(
   tx: Prisma.TransactionClient,
   write: boolean,
   since: Date | null,
+  allowEarlierSince: boolean,
   statements: { target: Target; sql: string }[],
   fileChecksum: string
 ): Promise<Result> {
@@ -232,17 +277,27 @@ async function run(
     `SELECT date_trunc('milliseconds', transaction_timestamp()) AS "runStartedAt"`
   );
   const runStartedAt = started!.runStartedAt;
-  console.log(
-    `run started ${runStartedAt.toISOString()} (pass it as --since to a later run of this script)`
-  );
+  console.log(`run started ${runStartedAt.toISOString()} (a later run's default watermark)`);
 
-  const applied = await rows<{ checksum: string; started_at: Date; since: Date }>(
-    `SELECT "checksum", "started_at",
+  // Every row Prisma keeps for the migration: a failed attempt (later marked
+  // rolled back), the attempt that applied it, or the row
+  // `migrate resolve --applied` adds (started_at = finished_at, no steps).
+  const attempts = await rows<{
+    checksum: string;
+    started_at: Date;
+    finished_at: Date | null;
+    rolled_back_at: Date | null;
+    applied_steps_count: number;
+    since: Date;
+  }>(
+    `SELECT "checksum", "started_at", "finished_at", "rolled_back_at", "applied_steps_count",
             date_trunc('milliseconds', "started_at" AT TIME ZONE 'UTC') AS "since"
      FROM public."_prisma_migrations"
-     WHERE "migration_name" = $1 AND "finished_at" IS NOT NULL AND "rolled_back_at" IS NULL`,
+     WHERE "migration_name" = $1
+     ORDER BY "started_at", "id"`,
     MIGRATION
   );
+  const applied = attempts.filter(a => a.finished_at !== null && a.rolled_back_at === null);
   if (applied.length !== 1) {
     throw new Refusal(
       `${MIGRATION}: expected one applied row in _prisma_migrations, found ${applied.length}`
@@ -255,23 +310,55 @@ async function run(
         `(file ${fileChecksum}, recorded ${migration.checksum})`
     );
   }
+  // The copy ran at the first attempt that committed, which is never earlier
+  // than the first row; a later row may be the resolve's.
+  const migrationStart = attempts[0]!.since;
+  const resolvedApplied =
+    migration.applied_steps_count === 0 &&
+    migration.finished_at!.getTime() === migration.started_at.getTime();
   console.log(
-    `migration ${MIGRATION}: started ${migration.started_at.toISOString()}; the file matches its recorded checksum`
+    `migration ${MIGRATION}: ${attempts.length} row(s) in _prisma_migrations, the first started ` +
+      `${attempts[0]!.started_at.toISOString()}; the applied one started ` +
+      `${migration.started_at.toISOString()}` +
+      (resolvedApplied ? ' (recorded by migrate resolve --applied)' : '') +
+      '; the file matches its recorded checksum'
   );
-  if (since && since.getTime() < migration.since.getTime()) {
+
+  const lastRun = await lastRecordedRun(rows);
+  console.log(
+    lastRun
+      ? `last recorded run: started ${lastRun.startedAt.toISOString()} (platform_audit_logs ${lastRun.id})`
+      : 'last recorded run: none'
+  );
+  if (since && since.getTime() < migrationStart.getTime()) {
     throw new Refusal(
       `--since ${since.toISOString()} is before the migration's start ` +
-        `(${migration.since.toISOString()}): the migration copied those rows itself`
+        `(${migrationStart.toISOString()}): the migration copied those rows itself`
     );
   }
   if (since && since.getTime() > runStartedAt.getTime()) {
     throw new Refusal(`--since ${since.toISOString()} is after this run's start`);
   }
-  const watermark = since ?? migration.since;
-  console.log(
-    `window: legacy rows created at or after ${watermark.toISOString()}` +
-      (since ? ' (--since)' : " (the migration's start)")
-  );
+  if (since && lastRun && since.getTime() < lastRun.startedAt.getTime() && !allowEarlierSince) {
+    throw new Refusal(
+      `--since ${since.toISOString()} is before the last recorded run's start ` +
+        `(${lastRun.startedAt.toISOString()}, platform_audit_logs ${lastRun.id}): a run from an ` +
+        'earlier time reads again what that run read, and copies back any of it that 1.7 has ' +
+        'ended since. Leave --since out to start at that run, or add --allow-earlier-since'
+    );
+  }
+  let watermark: Date;
+  let sinceFrom: Result['sinceFrom'];
+  let source: string;
+  if (since) {
+    [watermark, sinceFrom, source] = [since, 'option', '--since'];
+  } else if (lastRun && lastRun.startedAt.getTime() > migrationStart.getTime()) {
+    [watermark, sinceFrom] = [lastRun.startedAt, 'last-run'];
+    source = `the last recorded run, platform_audit_logs ${lastRun.id}`;
+  } else {
+    [watermark, sinceFrom, source] = [migrationStart, 'migration', "the migration's first start"];
+  }
+  console.log(`window: legacy rows created at or after ${watermark.toISOString()} (${source})`);
 
   if (write) {
     await exec(`SET LOCAL lock_timeout = '10s'`);
@@ -365,13 +452,39 @@ async function run(
     }
   }
 
+  // RECORD: this run, for the next one's default watermark (and the audit log).
+  let recordId: string | null = null;
+  if (write) {
+    recordId = randomUUID();
+    const recorded = await tx.$executeRawUnsafe(
+      `INSERT INTO public."platform_audit_logs" ("id", "actor_id", "action", "target_type", "target_id", "data")
+       VALUES ($1, NULL, $2, 'oauth_grants', NULL, $3::jsonb)`,
+      recordId,
+      RUN_ACTION,
+      JSON.stringify({
+        tool: 'script:oauth.catch_up',
+        migration: MIGRATION,
+        runStartedAt: runStartedAt.toISOString(),
+        since: watermark.toISOString(),
+        sinceFrom,
+        inserted: insert,
+      })
+    );
+    if (recorded !== 1)
+      throw new Refusal(`platform_audit_logs: expected one row, wrote ${recorded}`);
+    console.log(`recorded this run: platform_audit_logs ${recordId} (${RUN_ACTION})`);
+  }
+
   return {
     mode: write ? 'write' : 'dry-run',
     database: server!.database!,
-    migrationStartedAt: migration.started_at.toISOString(),
+    migrationStartedAt: migrationStart.toISOString(),
+    migrationAppliedAt: migration.started_at.toISOString(),
     runStartedAt: runStartedAt.toISOString(),
+    lastRunStartedAt: lastRun ? lastRun.startedAt.toISOString() : null,
     since: watermark.toISOString(),
-    sinceFrom: since ? 'option' : 'migration',
+    sinceFrom,
+    recordId,
     window: inWindow,
     clientsAlreadyCopied,
     produced,
@@ -426,16 +539,25 @@ function report(result: Result): void {
 
 const USAGE =
   "usage: DATABASE_URL='postgresql://…' node packages/database/scripts/catchUpOauth2Grants.ts " +
-  '[--since <ISO timestamp>] [--write]';
+  '[--since <ISO timestamp> [--allow-earlier-since]] [--write]';
 
-/** `--write` and `--since <ISO timestamp>`, or the usage error to print. */
-function parseArgs(args: string[]): { write: boolean; since: Date | null } | { error: string } {
+interface Args {
+  write: boolean;
+  since: Date | null;
+  allowEarlierSince: boolean;
+}
+
+/** `--write`, `--since <ISO timestamp>` and `--allow-earlier-since`, or the usage error to print. */
+function parseArgs(args: string[]): Args | { error: string } {
   let write = false;
   let since: Date | null = null;
+  let allowEarlierSince = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
     if (arg === '--write' && !write) {
       write = true;
+    } else if (arg === '--allow-earlier-since' && !allowEarlierSince) {
+      allowEarlierSince = true;
     } else if (arg === '--since' && !since) {
       const value = args[++i];
       if (!value || !ISO_TIMESTAMP.test(value) || Number.isNaN(Date.parse(value))) {
@@ -448,7 +570,8 @@ function parseArgs(args: string[]): { write: boolean; since: Date | null } | { e
       return { error: `unknown argument(s): ${args.slice(i).join(' ')}` };
     }
   }
-  return { write, since };
+  if (allowEarlierSince && !since) return { error: '--allow-earlier-since needs --since' };
+  return { write, since, allowEarlierSince };
 }
 
 async function main(): Promise<number> {
@@ -458,7 +581,7 @@ async function main(): Promise<number> {
     console.error(USAGE);
     return 2;
   }
-  const { write, since } = parsed;
+  const { write, since, allowEarlierSince } = parsed;
   const url = process.env.DATABASE_URL;
   if (!url) {
     console.error('DATABASE_URL must be set for this command; no .env file is read.');
@@ -468,7 +591,11 @@ async function main(): Promise<number> {
   console.log(
     write ? 'mode: WRITE (one transaction)' : 'mode: dry run (read-only; pass --write to insert)'
   );
-  if (since) console.log(`--since ${since.toISOString()}`);
+  if (since) {
+    console.log(
+      `--since ${since.toISOString()}${allowEarlierSince ? ' --allow-earlier-since' : ''}`
+    );
+  }
 
   const file = readFileSync(MIGRATION_FILE);
   const fileChecksum = createHash('sha256').update(file).digest('hex');
@@ -479,7 +606,7 @@ async function main(): Promise<number> {
   try {
     const result = await prisma.$transaction(
       async tx => {
-        const outcome = await run(tx, write, since, statements, fileChecksum);
+        const outcome = await run(tx, write, since, allowEarlierSince, statements, fileChecksum);
         if (!write) throw new DryRunDone(outcome);
         return outcome;
       },
