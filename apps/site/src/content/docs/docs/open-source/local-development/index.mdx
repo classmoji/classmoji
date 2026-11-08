@@ -47,6 +47,12 @@ Adding `upstream` lets you pull in future changes from the main repo with `git f
 cp .env.example .env
 ```
 
+Then turn on local auto-registration in `.env`, so your first sign-in skips the registration form and joins the seeded dev classroom:
+
+```bash
+ENABLE_DEV_AUTO_REGISTER="true"
+```
+
 :::note
 Whenever you manually edit `.env`, restart the dev server for changes to take effect: stop it with `Ctrl+C` and run it again.
 :::
@@ -101,7 +107,11 @@ Open `http://localhost:3000` — you'll be taken to a setup wizard because `SETU
 
 <Screenshot src={newSmeeImg} alt="GitHub App creation page on GitHub" />
 
-After the wizard completes, the GitHub App values are automatically written to your `.env` and the setup flag is cleared. Restart the dev server as prompted, then sign in with your GitHub account. You'll be automatically added to the dev classroom as Owner, TA, and Student.
+After the wizard completes, the GitHub App values are automatically written to your `.env` and the setup flag is cleared. Restart the dev server as prompted, then sign in with your GitHub account. With `ENABLE_DEV_AUTO_REGISTER="true"` (step 2), you'll be automatically added to the dev classroom as Owner, TA, and Student.
+
+:::note
+Auto-registration runs only on your first sign-in. If you signed in before turning it on and don't see the dev classroom, run `npm run db:reset` (it reseeds the database), then sign in again.
+:::
 
 <Screenshot src={classroomsImg} alt="Dev classroom showing Owner, TA, and Student roles" frame url="localhost:3000/select-organization" />
 
