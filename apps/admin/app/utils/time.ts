@@ -22,18 +22,35 @@ export interface Period {
 }
 
 /** Wall-clock parts of an instant in `tz`. */
+/**
+ * One formatter per time zone. Building an Intl.DateTimeFormat is the
+ * expensive part of reading local parts, and Home reads them for every
+ * activity row: constructing one per call blocked the admin server's only
+ * thread for seconds per load (React's stream timed out, health checks
+ * failed).
+ */
+const formatters = new Map<string, Intl.DateTimeFormat>();
+const formatterFor = (tz: string): Intl.DateTimeFormat => {
+  let fmt = formatters.get(tz);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      weekday: 'short',
+    });
+    formatters.set(tz, fmt);
+  }
+  return fmt;
+};
+
 const partsIn = (instant: Date, tz: string) => {
-  const fmt = new Intl.DateTimeFormat('en-US', {
-    timeZone: tz,
-    hourCycle: 'h23',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    weekday: 'short',
-  });
+  const fmt = formatterFor(tz);
   const out: Record<string, string> = {};
   for (const p of fmt.formatToParts(instant)) out[p.type] = p.value;
   return {
@@ -179,7 +196,21 @@ export const localDate = (instant: Date, tz = REPORTING_TZ): string => {
   return `${p.year}-${String(p.month).padStart(2, '0')}-${String(p.day).padStart(2, '0')}`;
 };
 
-/** The instant a 'YYYY-MM-DD' calendar day starts, in `tz`. */
-export const dayStart = (date: string, tz = REPORTING_TZ): Date =>
-  // Noon UTC falls on the same calendar date everywhere from UTC-11 to UTC+11.
-  startOfDay(new Date(`${date}T12:00:00Z`), tz);
+/**
+ * The instant a 'YYYY-MM-DD' calendar day starts, in `tz`. Remembered per
+ * (day, zone): callers pass the same few dozen days for thousands of rows.
+ * A fresh Date is returned each time, so a caller may not change the cached one.
+ */
+const dayStarts = new Map<string, number>();
+const DAY_START_CACHE_MAX = 10_000;
+export const dayStart = (date: string, tz = REPORTING_TZ): Date => {
+  const key = `${tz}|${date}`;
+  let t = dayStarts.get(key);
+  if (t === undefined) {
+    // Noon UTC falls on the same calendar date everywhere from UTC-11 to UTC+11.
+    t = startOfDay(new Date(`${date}T12:00:00Z`), tz).getTime();
+    if (dayStarts.size >= DAY_START_CACHE_MAX) dayStarts.clear();
+    dayStarts.set(key, t);
+  }
+  return new Date(t);
+};
