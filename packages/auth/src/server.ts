@@ -1691,7 +1691,11 @@ export const auth = betterAuth({
       update: {
         // A banned user's app connections end with their sessions. Nothing
         // in the app bans anyone today (the admin plugin's ban endpoint is
-        // off); this holds for any path that does.
+        // off). A revocation that fails throws here, and the admin plugin's
+        // ban writes `banned` before it deletes the user's sessions
+        // (better-auth 1.7.18 plugins/admin/routes.mjs, banUser), so that
+        // failure also leaves the sessions in place. Whoever turns banning on
+        // should catch and log the failure here for a ban, rather than throw.
         after: async (user, ctx) => {
           const row = user as { id?: unknown; banned?: unknown };
           if (row.banned !== true || !row.id) return;
