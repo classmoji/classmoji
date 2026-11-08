@@ -35,7 +35,7 @@ export const dbBackupTask = schedules.task({
     }
 
     const config = readBackupConfig();
-    const manifest = await runDbBackup({
+    const backup = await runDbBackup({
       config,
       runId: ctx.run.id,
       attempt: ctx.attempt.number,
@@ -43,13 +43,13 @@ export const dbBackupTask = schedules.task({
       deps: defaultDeps(config),
     });
     logger.info('db-backup uploaded', {
-      key: manifest.key,
-      bytes: manifest.bytes,
-      sha256: manifest.sha256,
-      serverVersion: manifest.serverVersion,
-      pgDumpVersion: manifest.pgDumpVersion,
-      seconds: (Date.parse(manifest.finishedAt) - Date.parse(manifest.startedAt)) / 1000,
+      key: backup.key,
+      bytes: backup.bytes,
+      sha256: backup.sha256,
+      serverVersion: backup.serverVersion,
+      pgDumpVersion: backup.pgDumpVersion,
+      seconds: (Date.parse(backup.finishedAt) - Date.parse(backup.startedAt)) / 1000,
     });
-    return { skipped: false as const, key: manifest.key, bytes: manifest.bytes };
+    return { skipped: false as const, key: backup.key, bytes: backup.bytes };
   },
 });

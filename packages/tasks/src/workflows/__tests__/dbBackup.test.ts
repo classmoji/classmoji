@@ -55,7 +55,7 @@ describe('db-backup task', () => {
   it('backs up in production under this run and attempt', async () => {
     readBackupConfig.mockReturnValue({ bucket: 'b' });
     runDbBackup.mockResolvedValue({
-      key: 'prod/k.dump',
+      key: 'k.dump',
       bytes: 9,
       startedAt: '2026-11-09T10:17:00.000Z',
       finishedAt: '2026-11-09T10:19:00.000Z',
@@ -67,7 +67,7 @@ describe('db-backup task', () => {
     expect(runDbBackup).toHaveBeenCalledWith(
       expect.objectContaining({ runId: 'run_123', attempt: 2, config: { bucket: 'b' } })
     );
-    expect(result).toEqual({ skipped: false, key: 'prod/k.dump', bytes: 9 });
+    expect(result).toEqual({ skipped: false, key: 'k.dump', bytes: 9 });
   });
 
   it('fails the run when production is missing its settings', async () => {
