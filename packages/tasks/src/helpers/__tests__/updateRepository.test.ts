@@ -346,3 +346,27 @@ describe('updateRepository on Gitlab', TIMEOUT, () => {
     ]);
   });
 });
+
+// Github refuses a pull request from a branch with no new commits ("No commits
+// between main and updates"), so an update the student already merged is a
+// no-op, not a failure.
+describe('updateRepository when the student already has the template changes', TIMEOUT, () => {
+  it.each(['github', 'gitlab'] as const)('opens nothing on %s', async host => {
+    const repo = `lab11-${host}`;
+    const { studentBare } = await setUp(repo, 'main', { host });
+    await update(repo, host);
+    // The student merges the update into main.
+    await run(studentBare).raw(['update-ref', 'refs/heads/main', 'refs/heads/updates']);
+    vi.clearAllMocks();
+    const updatesBefore = (await run(studentBare).raw(['rev-parse', 'refs/heads/updates'])).trim();
+
+    const result = await update(repo, host);
+
+    expect(result).toMatchObject({ hasChanges: false, prUrl: '' });
+    expect(octokit.rest.pulls.create).not.toHaveBeenCalled();
+    expect(provider.createPullRequest).not.toHaveBeenCalled();
+    expect((await run(studentBare).raw(['rev-parse', 'refs/heads/updates'])).trim()).toBe(
+      updatesBefore
+    );
+  });
+});

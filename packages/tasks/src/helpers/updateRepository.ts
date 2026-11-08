@@ -37,6 +37,29 @@ const PUSH_UPDATES = 'refs/heads/updates:refs/heads/updates';
 const CLONE_OPTIONS = ['--no-tags'];
 
 /**
+ * Whether the local `updates` branch (checked out, template just pulled in)
+ * holds any commit the student's default branch lacks. When it holds none
+ * (the student already merged every template change), there is nothing to
+ * propose: Github refuses a pull request with "No commits between main and
+ * updates", so the update stops here as a no-op instead of failing.
+ */
+const hasCommitsAhead = async (studentGit: SimpleGit, defaultBranch: string): Promise<boolean> => {
+  const count = await studentGit.raw([
+    'rev-list',
+    '--count',
+    `refs/remotes/origin/${defaultBranch}..HEAD`,
+    '--',
+  ]);
+  return Number(count.trim()) > 0;
+};
+
+const NOTHING_TO_UPDATE: UpdateRepositoryResult = {
+  message: 'Already up to date with the template',
+  prUrl: '',
+  hasChanges: false,
+};
+
+/**
  * The template's HEAD, read through the `template` remote. A template that is
  * gone or unreadable is the instructor's to fix (it was renamed, deleted or made
  * private), so the run stops with that, not git's "repository not found".
@@ -155,12 +178,17 @@ export const updateRepository = async (
       'theirs',
       '--no-edit',
     ]);
-    await studentGit.push('origin', PUSH_UPDATES, ['--force']);
 
     const { data: repoMeta } = await octokit.rest.repos.get({
       owner: orgLogin,
       repo: repoName,
     });
+    if (!(await hasCommitsAhead(studentGit, repoMeta.default_branch))) {
+      logger.info(`${orgLogin}/${repoName} already has the template's changes; no PR needed`);
+      return NOTHING_TO_UPDATE;
+    }
+
+    await studentGit.push('origin', PUSH_UPDATES, ['--force']);
 
     const { data: existingPRs } = await octokit.rest.pulls.list({
       owner: orgLogin,
@@ -263,10 +291,17 @@ async function updateGitLabRepository(
       '--no-edit',
       '--allow-unrelated-histories',
     ]);
-    // ci.skip: the update branch is not a student's push to test.
-    await studentGit.push('origin', PUSH_UPDATES, ['--force', '-o', 'ci.skip']);
 
     const defaultBranch = await provider.getDefaultBranch(owner, repoName);
+    if (!(await hasCommitsAhead(studentGit, defaultBranch))) {
+      logger.info(
+        `${owner}/${repoName} already has the template's changes; no merge request needed`
+      );
+      return NOTHING_TO_UPDATE;
+    }
+
+    // ci.skip: the update branch is not a student's push to test.
+    await studentGit.push('origin', PUSH_UPDATES, ['--force', '-o', 'ci.skip']);
     const description = `${prDescription}\n\n---\n\n## Template Update\n\nThis brings the latest changes from the template repository.\n\n### To merge\n\n1. Review the changes in the "Changes" tab\n2. Click "Merge"\n3. If conflicts occur, resolve them in your editor`;
     const existing = await provider.findOpenMergeRequest(owner, repoName, 'updates', defaultBranch);
     const url = existing
