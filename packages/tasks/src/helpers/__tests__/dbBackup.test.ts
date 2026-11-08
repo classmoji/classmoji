@@ -4,9 +4,9 @@
  *  - nothing is uploaded unless pg_dump exited 0, the file is big enough and
  *    `pg_restore --list` reads it back (a locked bucket keeps a bad upload for
  *    7 days);
- *  - the manifest, the success marker, is written only after the dump is in
- *    the bucket at the right size;
- *  - every attempt gets its own key, so a retry never hits a locked object;
+ *  - the dump is uploaded as one file carrying its checksum and versions as
+ *    metadata, and the run fails unless R2 then holds it at the right size;
+ *  - every attempt gets its own name, so a retry never hits a locked object;
  *  - the database URL (with its password) never reaches an error message;
  *  - the temp dump is always removed.
  *
@@ -22,13 +22,14 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   BACKUP_KEY_PATTERN,
   backupKey,
+  backupMetadata,
   clientFor,
-  manifestKeyFor,
   parseServerVersion,
   readBackupConfig,
   redact,
   runDbBackup,
   stampOf,
+  startedAtOf,
   type BackupConfig,
   type BackupDeps,
   type CommandResult,
@@ -64,6 +65,8 @@ interface FakeOptions {
   listResult?: CommandResult;
   upload?: BackupDeps['upload'];
   storedBytes?: number | null;
+  /** When the fake clock starts: a retry starts at least a minute after the attempt before it. */
+  startAt?: string;
   serverVersionOut?: string;
   installed?: string[];
 }
@@ -99,22 +102,18 @@ function fakeDeps(options: FakeOptions = {}) {
         calls.push(`upload ${key}`);
       })
   );
-  const putManifest = vi.fn(async (_s: MediaStore, key: string, _m: unknown) => {
-    calls.push(`manifest ${key}`);
-  });
-  let tick = Date.parse('2026-11-09T10:17:03.456Z');
+  let tick = Date.parse(options.startAt ?? '2026-11-09T10:17:03.456Z');
   const deps: BackupDeps = {
     run: run as unknown as BackupDeps['run'],
     store: { client: {} as MediaStore['client'], bucket: config.bucket },
     upload: upload as unknown as BackupDeps['upload'],
     head: vi.fn(async () => ('storedBytes' in options ? options.storedBytes! : dumpBytes)),
     hash: vi.fn(async () => 'abc123'),
-    putManifest,
     now: () => new Date((tick += 1000)),
     tempDir: async () => (dir = await mkdtemp(join(tmpdir(), 'db-backup-test-'))),
     exists: async path => (options.installed ?? []).includes(path),
   };
-  return { deps, calls, run, upload, putManifest, dir: () => dir };
+  return { deps, calls, run, upload, dir: () => dir };
 }
 
 describe('readBackupConfig', () => {
@@ -145,32 +144,44 @@ describe('readBackupConfig', () => {
 describe('keys', () => {
   const at = new Date('2026-11-09T10:17:03.456Z');
 
-  it('is sortable and colon-free', () => {
+  it('is the UTC second the dump started: sortable, colon-free, one file at the root', () => {
     expect(stampOf(at)).toBe('2026-11-09T101703Z');
-    expect(backupKey(at, 'run_abc', 1)).toBe('2026-11-09T101703Z-run_abc-a1.dump');
-  });
-
-  it('differs for every attempt of the same run', () => {
-    expect(backupKey(at, 'run_abc', 1)).not.toBe(backupKey(at, 'run_abc', 2));
-  });
-
-  it('stays a single file name at the bucket root, whatever the run id', () => {
-    expect(backupKey(at, '../../etc/x', 1)).toBe('2026-11-09T101703Z-etcx-a1.dump');
-    expect(() => backupKey(at, '///', 1)).toThrow('empty run id');
-    expect(() => backupKey(at, 'run', 0)).toThrow('bad attempt');
+    expect(backupKey(at)).toBe('2026-11-09T101703Z.dump');
+    expect(startedAtOf('2026-11-09T101703Z.dump')?.toISOString()).toBe('2026-11-09T10:17:03.000Z');
+    expect(startedAtOf('notes.txt')).toBeNull();
   });
 
   it('matches the name pattern the monitor and restore script look for', () => {
-    const key = backupKey(at, 'run_abc', 3);
-    expect(BACKUP_KEY_PATTERN.test(key)).toBe(true);
-    expect(BACKUP_KEY_PATTERN.test(manifestKeyFor(key))).toBe(true);
-    expect(BACKUP_KEY_PATTERN.test(`prod/${key}`)).toBe(false);
+    expect(BACKUP_KEY_PATTERN.test(backupKey(at))).toBe(true);
+    expect(BACKUP_KEY_PATTERN.test(`prod/${backupKey(at)}`)).toBe(false);
+    expect(BACKUP_KEY_PATTERN.test('2026-11-09T101703Z.manifest.json')).toBe(false);
     expect(BACKUP_KEY_PATTERN.test('notes.txt')).toBe(false);
   });
+});
 
-  it('puts the manifest beside its dump', () => {
-    expect(manifestKeyFor('x-a1.dump')).toBe('x-a1.manifest.json');
-    expect(() => manifestKeyFor('x')).toThrow('not a dump key');
+describe('backupMetadata', () => {
+  it('stores the checksum, times and versions as plain ASCII', () => {
+    expect(
+      backupMetadata({
+        key: 'k.dump',
+        bytes: 1,
+        sha256: 'abc',
+        startedAt: '2026-11-09T10:17:03.000Z',
+        finishedAt: '2026-11-09T10:17:37.000Z',
+        pgDumpVersion: 'pg_dump (PostgreSQL) 16.15 (Debian 16.15-1.pgdg12+2)',
+        serverVersion: '16.15 (f37ae9a) – neon',
+        runId: 'run_1',
+        attempt: 2,
+      })
+    ).toEqual({
+      sha256: 'abc',
+      'started-at': '2026-11-09T10:17:03.000Z',
+      'dump-finished-at': '2026-11-09T10:17:37.000Z',
+      'pg-dump-version': 'pg_dump (PostgreSQL) 16.15 (Debian 16.15-1.pgdg12+2)',
+      'server-version': '16.15 (f37ae9a) ? neon',
+      'run-id': 'run_1',
+      attempt: '2',
+    });
   });
 });
 
@@ -225,19 +236,17 @@ describe('redact', () => {
 });
 
 describe('runDbBackup', () => {
-  it('dumps, checks, uploads, then writes the manifest last', async () => {
+  it('dumps, checks, then uploads one file with its details as metadata', async () => {
     const f = fakeDeps();
-    const manifest = await runDbBackup({ config, runId: 'run_1', attempt: 2, deps: f.deps });
+    const info = await runDbBackup({ config, runId: 'run_1', attempt: 2, deps: f.deps });
 
     expect(f.calls.filter(c => !c.startsWith('exec'))).toEqual([
       'dump',
       'list',
-      'upload 2026-11-09T101704Z-run_1-a2.dump',
-      'manifest 2026-11-09T101704Z-run_1-a2.manifest.json',
+      'upload 2026-11-09T101704Z.dump',
     ]);
-    expect(manifest).toMatchObject({
-      version: 1,
-      key: '2026-11-09T101704Z-run_1-a2.dump',
+    expect(info).toMatchObject({
+      key: '2026-11-09T101704Z.dump',
       bytes: 64,
       sha256: 'abc123',
       startedAt: '2026-11-09T10:17:04.456Z',
@@ -246,7 +255,8 @@ describe('runDbBackup', () => {
       runId: 'run_1',
       attempt: 2,
     });
-    expect(f.putManifest.mock.calls[0][2]).toEqual(manifest);
+    const options = f.upload.mock.calls[0][5] as { metadata: Record<string, string> };
+    expect(options.metadata).toEqual(backupMetadata(info));
     expect(existsSync(f.dir())).toBe(false);
   });
 
@@ -286,7 +296,6 @@ describe('runDbBackup', () => {
     expect(error.message).toContain('<database-url>');
     expect(error.message).not.toContain('s3cret-pass');
     expect(f.upload).not.toHaveBeenCalled();
-    expect(f.putManifest).not.toHaveBeenCalled();
     expect(existsSync(f.dir())).toBe(false);
   });
 
@@ -306,7 +315,7 @@ describe('runDbBackup', () => {
     expect(f.upload).not.toHaveBeenCalled();
   });
 
-  it('writes no manifest when the upload fails', async () => {
+  it('fails, and still cleans up, when the upload fails', async () => {
     const f = fakeDeps({
       upload: async () => {
         throw new Error('network down');
@@ -315,19 +324,17 @@ describe('runDbBackup', () => {
     await expect(runDbBackup({ config, runId: 'r', attempt: 1, deps: f.deps })).rejects.toThrow(
       'network down'
     );
-    expect(f.putManifest).not.toHaveBeenCalled();
     expect(existsSync(f.dir())).toBe(false);
   });
 
-  it('writes no manifest when R2 holds a different size', async () => {
+  it('fails when R2 holds a different size', async () => {
     const f = fakeDeps({ storedBytes: 12 });
     await expect(runDbBackup({ config, runId: 'r', attempt: 1, deps: f.deps })).rejects.toThrow(
       'R2 reports 12'
     );
-    expect(f.putManifest).not.toHaveBeenCalled();
   });
 
-  it('retries under a new key after an upload that committed but reported failure', async () => {
+  it('retries under a new name after an upload that committed but reported failure', async () => {
     // Attempt 1: the object lands in R2, but the response is lost.
     const written = new Set<string>();
     const lockedUpload: BackupDeps['upload'] = async (_s, key) => {
@@ -340,9 +347,10 @@ describe('runDbBackup', () => {
       'socket hang up'
     );
 
-    const second = fakeDeps({ upload: lockedUpload });
-    const manifest = await runDbBackup({ config, runId: 'r', attempt: 2, deps: second.deps });
-    expect(manifest.key).toMatch(/-a2\.dump$/);
+    // Trigger retries a minute or more later, so the dump starts at a new second.
+    const second = fakeDeps({ upload: lockedUpload, startAt: '2026-11-09T10:18:33.456Z' });
+    const info = await runDbBackup({ config, runId: 'r', attempt: 2, deps: second.deps });
+    expect(info.key).toBe('2026-11-09T101834Z.dump');
     expect(written.size).toBe(2);
   });
 });

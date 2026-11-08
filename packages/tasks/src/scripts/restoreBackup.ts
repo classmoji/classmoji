@@ -7,9 +7,8 @@
  *   npx tsx packages/tasks/src/scripts/restoreBackup.ts --target <postgres-url> [--key <dump key>]
  *   npx tsx packages/tasks/src/scripts/restoreBackup.ts --download <dir> [--key <dump key>]
  *
- * Without `--key` it takes the newest backup that finished (has a manifest).
- * Every download is checked against its manifest's size and SHA-256 before it
- * is used.
+ * Without `--key` it takes the newest backup. Every download is checked
+ * against the size and SHA-256 stored with it before it is used.
  *
  * The target must be EMPTY (no tables) and local, unless `--allow-remote`
  * (a disaster restore into a brand-new database). Never restore over
@@ -31,9 +30,9 @@ import { backupStore, redact, runCommand, type BackupConfig } from '../helpers/d
 import {
   USER_TABLES_SQL,
   checkRestoreTarget,
-  finishedBackups,
+  listBackups,
   listKeys,
-  readManifest,
+  readBackupInfo,
 } from '../helpers/dbBackupRestore.ts';
 import { downloadToFile, sha256File } from '../helpers/r2Objects.ts';
 
@@ -64,11 +63,11 @@ const store = backupStore({
 const pgRestore = process.env.PG_RESTORE_PATH || 'pg_restore';
 const psql = process.env.PSQL_PATH || 'psql';
 
-const backups = finishedBackups(await listKeys(store));
+const backups = listBackups(await listKeys(store));
 
 if (process.argv.includes('--list')) {
-  if (!backups.length) console.log('No finished backups.');
-  for (const b of backups) console.log(b.dumpKey);
+  if (!backups.length) console.log('No backups.');
+  for (const key of backups) console.log(key);
   process.exit(0);
 }
 
@@ -76,10 +75,8 @@ const target = arg('--target');
 const downloadDir = arg('--download');
 if (!target && !downloadDir) fail('pass --list, --target <postgres-url> or --download <dir>');
 
-const chosen = arg('--key')
-  ? backups.find(b => b.dumpKey === arg('--key'))
-  : backups[backups.length - 1];
-if (!chosen) fail(arg('--key') ? `no finished backup ${arg('--key')}` : 'no finished backups');
+const chosen = arg('--key') ? backups.find(key => key === arg('--key')) : backups.at(-1);
+if (!chosen) fail(arg('--key') ? `no backup ${arg('--key')}` : 'no backups');
 
 if (target) {
   const check = checkRestoreTarget(target, process.argv.includes('--allow-remote'));
@@ -91,19 +88,19 @@ if (target) {
   }
 }
 
-const manifest = await readManifest(store, chosen.manifestKey);
+const backup = await readBackupInfo(store, chosen);
 const workDir = downloadDir
   ? (await mkdir(downloadDir, { recursive: true }), downloadDir)
   : await mkdtemp(join(tmpdir(), 'db-restore-'));
-const file = join(workDir, chosen.dumpKey.split('/').pop() ?? 'backup.dump');
+const file = join(workDir, chosen);
 
 // Errors in here are thrown, not `fail()`ed: process.exit would skip the
 // `finally` and leave a copy of the database in the temp directory.
 try {
-  console.log(`[restore] downloading ${chosen.dumpKey} (${manifest.bytes} bytes)`);
-  await downloadToFile(store, chosen.dumpKey, file, manifest.bytes);
+  console.log(`[restore] downloading ${chosen} (${backup.bytes} bytes)`);
+  await downloadToFile(store, chosen, file, backup.bytes);
   const sha256 = await sha256File(file);
-  if (sha256 !== manifest.sha256) throw new Error(`checksum mismatch for ${chosen.dumpKey}`);
+  if (sha256 !== backup.sha256) throw new Error(`checksum mismatch for ${chosen}`);
   console.log(`[restore] verified sha256 ${sha256}`);
 
   if (target) {
@@ -120,7 +117,7 @@ try {
     if (restore.code !== 0) {
       throw new Error(`pg_restore failed: ${redact(restore.stderr.trim(), target)}`);
     }
-    console.log(`[restore] restored ${chosen.dumpKey} (dumped ${manifest.startedAt})`);
+    console.log(`[restore] restored ${chosen} (dumped ${backup.startedAt})`);
   } else {
     console.log(`[restore] saved ${file}`);
   }

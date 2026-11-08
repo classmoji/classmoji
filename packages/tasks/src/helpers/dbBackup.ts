@@ -1,4 +1,4 @@
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { S3Client } from '@aws-sdk/client-s3';
 import { spawn } from 'node:child_process';
 import { access, constants, mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -8,7 +8,8 @@ import { headBytes, sha256File, uploadFile, type MediaStore } from './r2Objects.
 
 /**
  * Daily off-site backup of the production database: `pg_dump` to a temp file,
- * check it, upload it to its own R2 bucket, then write a manifest beside it.
+ * check it, upload it to its own R2 bucket as ONE file,
+ * `2026-11-09T101703Z.dump`, with its details as object metadata.
  *
  * ## Why these choices
  *
@@ -16,13 +17,15 @@ import { headBytes, sha256File, uploadFile, type MediaStore } from './r2Objects.
  *   already completed, and the bucket lock then keeps that broken object for 7
  *   days. Here nothing is uploaded until `pg_dump` has exited 0 and
  *   `pg_restore --list` has read the archive back.
- * - **A new key per ATTEMPT.** The bucket lock refuses overwrites, so a retry
- *   that reused the key of an object a previous attempt managed to write would
- *   fail forever. `<started>-<runId>-a<attempt>` never repeats.
- * - **The manifest is the success marker.** It is written last, so a dump with
- *   no manifest is an attempt that did not finish; the freshness monitor
- *   (`apps/backup-monitor`) and the restore script only trust dumps that have
- *   one.
+ * - **Named by the dump's start time.** The bucket lock refuses overwrites, so
+ *   every attempt needs its own name; each attempt starts pg_dump at its own
+ *   moment (retries are at least a minute apart), so the UTC second is enough.
+ * - **No separate success marker.** An R2 upload is atomic: the object appears
+ *   only once the upload completes, and a failed one never does (unfinished
+ *   multipart uploads are aborted after a day). So every `.dump` in the bucket
+ *   is whole. Its SHA-256, size and versions travel with it as metadata
+ *   (`BACKUP_METADATA`), read by the restore script; the monitor
+ *   (`apps/backup-monitor`) needs only the name's timestamp.
  * - **Its own bucket and token** (`DB_BACKUP_R2_*`), never the media ones: a
  *   leaked token for one bucket reaches nothing in the other.
  *
@@ -32,13 +35,26 @@ import { headBytes, sha256File, uploadFile, type MediaStore } from './r2Objects.
  */
 
 /**
- * A backup's file names at the bucket root: `<UTC start>-<run id>-a<attempt>`
- * plus `.dump` or `.manifest.json`. The monitor (apps/backup-monitor) and the
- * restore script count only names of this shape, so anything else put in the
- * bucket is never mistaken for a backup.
+ * A backup's name at the bucket root: the UTC second pg_dump started, then
+ * `.dump`. The monitor (apps/backup-monitor) and the restore script count only
+ * names of this shape, so anything else put in the bucket is never mistaken
+ * for a backup.
  */
-export const BACKUP_KEY_PATTERN =
-  /^\d{4}-\d{2}-\d{2}T\d{6}Z-[A-Za-z0-9_-]+-a\d+\.(?:dump|manifest\.json)$/;
+export const BACKUP_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{6}Z\.dump$/;
+
+/**
+ * The object metadata each backup carries (`x-amz-meta-<name>`, lower case,
+ * ASCII). Set at upload: the bucket lock forbids rewriting it later.
+ */
+export const BACKUP_METADATA = {
+  sha256: 'sha256',
+  startedAt: 'started-at',
+  finishedAt: 'dump-finished-at',
+  pgDumpVersion: 'pg-dump-version',
+  serverVersion: 'server-version',
+  runId: 'run-id',
+  attempt: 'attempt',
+} as const;
 
 /**
  * Smaller than this is not a real production dump. An empty schema is
@@ -125,21 +141,21 @@ export function stampOf(date: Date): string {
     .replace(/:/g, '');
 }
 
-/** Unique per attempt, so a retry never collides with a locked object. */
-export function backupKey(startedAt: Date, runId: string, attempt: number): string {
-  const safeRun = runId.replace(/[^A-Za-z0-9_-]/g, '');
-  if (!safeRun) throw new Error('[db-backup] empty run id');
-  if (!Number.isInteger(attempt) || attempt < 1) throw new Error('[db-backup] bad attempt');
-  return `${stampOf(startedAt)}-${safeRun}-a${attempt}.dump`;
+/** `2026-11-09T101703Z.dump`: when pg_dump started, to the second. */
+export function backupKey(startedAt: Date): string {
+  return `${stampOf(startedAt)}.dump`;
 }
 
-export function manifestKeyFor(dumpKey: string): string {
-  if (!dumpKey.endsWith('.dump')) throw new Error(`[db-backup] not a dump key: ${dumpKey}`);
-  return dumpKey.slice(0, -'.dump'.length) + '.manifest.json';
+/** `2026-11-09T101703Z.dump` → that instant, or null for any other name. */
+export function startedAtOf(key: string): Date | null {
+  const m = /^(\d{4}-\d{2}-\d{2})T(\d{2})(\d{2})(\d{2})Z\.dump$/.exec(key);
+  if (!m) return null;
+  const date = new Date(`${m[1]}T${m[2]}:${m[3]}:${m[4]}Z`);
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
-export interface BackupManifest {
-  version: 1;
+/** What a backup is, as returned by a run (and stored as its metadata). */
+export interface BackupInfo {
   key: string;
   bytes: number;
   sha256: string;
@@ -150,6 +166,20 @@ export interface BackupManifest {
   serverVersion: string;
   runId: string;
   attempt: number;
+}
+
+/** The object metadata for a backup: printable ASCII only, as S3 requires. */
+export function backupMetadata(info: BackupInfo): Record<string, string> {
+  const ascii = (value: string) => value.replace(/[^\x20-\x7e]/g, '?');
+  return {
+    [BACKUP_METADATA.sha256]: info.sha256,
+    [BACKUP_METADATA.startedAt]: info.startedAt,
+    [BACKUP_METADATA.finishedAt]: info.finishedAt,
+    [BACKUP_METADATA.pgDumpVersion]: ascii(info.pgDumpVersion),
+    [BACKUP_METADATA.serverVersion]: ascii(info.serverVersion),
+    [BACKUP_METADATA.runId]: ascii(info.runId),
+    [BACKUP_METADATA.attempt]: String(info.attempt),
+  };
 }
 
 /** Replaces the connection string (password and all) wherever it appears. */
@@ -199,21 +229,9 @@ export interface BackupDeps {
   upload: typeof uploadFile;
   head: typeof headBytes;
   hash: typeof sha256File;
-  putManifest: (store: MediaStore, key: string, manifest: BackupManifest) => Promise<void>;
   now: () => Date;
   tempDir: () => Promise<string>;
   exists: (path: string) => Promise<boolean>;
-}
-
-async function putManifestObject(store: MediaStore, key: string, manifest: BackupManifest) {
-  await store.client.send(
-    new PutObjectCommand({
-      Bucket: store.bucket,
-      Key: key,
-      Body: JSON.stringify(manifest, null, 2),
-      ContentType: 'application/json',
-    })
-  );
 }
 
 export function defaultDeps(config: BackupConfig): BackupDeps {
@@ -223,7 +241,6 @@ export function defaultDeps(config: BackupConfig): BackupDeps {
     upload: uploadFile,
     head: headBytes,
     hash: sha256File,
-    putManifest: putManifestObject,
     now: () => new Date(),
     tempDir: () => mkdtemp(join(tmpdir(), 'db-backup-')),
     exists: path =>
@@ -275,10 +292,9 @@ export async function clientFor(
 }
 
 /**
- * One backup attempt. Resolves with the manifest once the dump AND its
- * manifest are in the bucket; throws on anything else, leaving at most an
- * orphan dump without a manifest (ignored by everything that reads backups,
- * removed by the 90-day rule).
+ * One backup attempt. Resolves once the dump is in the bucket at its full size
+ * with its metadata; throws on anything else, having uploaded nothing (or,
+ * if only the final size check fails, a dump the 90-day rule removes).
  */
 export async function runDbBackup({
   config,
@@ -292,7 +308,7 @@ export async function runDbBackup({
   attempt: number;
   signal?: AbortSignal;
   deps: BackupDeps;
-}): Promise<BackupManifest> {
+}): Promise<BackupInfo> {
   const dir = await deps.tempDir();
   try {
     const serverOut = await deps.run(
@@ -330,17 +346,8 @@ export async function runDbBackup({
     if (list.code !== 0) throw failure('pg_restore --list', list, config);
 
     const sha256 = await deps.hash(file);
-    const key = backupKey(startedAt, runId, attempt);
-    await deps.upload(deps.store, key, file, size, 'application/octet-stream');
-
-    const stored = await deps.head(deps.store, key);
-    if (stored !== size) {
-      throw new Error(`[db-backup] uploaded ${size} bytes but R2 reports ${stored} for ${key}`);
-    }
-
-    const manifest: BackupManifest = {
-      version: 1,
-      key,
+    const info: BackupInfo = {
+      key: backupKey(startedAt),
       bytes: size,
       sha256,
       startedAt: startedAt.toISOString(),
@@ -350,8 +357,17 @@ export async function runDbBackup({
       runId,
       attempt,
     };
-    await deps.putManifest(deps.store, manifestKeyFor(key), manifest);
-    return manifest;
+    await deps.upload(deps.store, info.key, file, size, 'application/octet-stream', {
+      metadata: backupMetadata(info),
+    });
+
+    const stored = await deps.head(deps.store, info.key);
+    if (stored !== size) {
+      throw new Error(
+        `[db-backup] uploaded ${size} bytes but R2 reports ${stored} for ${info.key}`
+      );
+    }
+    return info;
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

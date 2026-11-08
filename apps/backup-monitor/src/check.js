@@ -1,15 +1,14 @@
 /**
- * Is the newest finished database backup recent enough? Pure, so it is tested
- * without R2 (`node --test apps/backup-monitor/test/*.test.js`).
+ * Is the newest database backup recent enough? Pure, so it is tested without
+ * R2 (`node --test apps/backup-monitor/test/*.test.js`).
  *
- * A backup counts only when its manifest exists AND its dump is in the bucket
- * at the manifest's size: a dump without a manifest is an attempt that did not
- * finish (see packages/tasks/src/helpers/dbBackup.ts).
+ * A backup is one object at the bucket root named for the UTC second its dump
+ * started, e.g. `2026-11-09T101703Z.dump` (packages/tasks/src/helpers/dbBackup.ts).
+ * R2 uploads are atomic, so every such object is a whole backup.
  */
 
-/** Same as BACKUP_KEY_PATTERN in packages/tasks/src/helpers/dbBackup.ts: backups live at the bucket root. */
-export const BACKUP_KEY_PATTERN =
-  /^\d{4}-\d{2}-\d{2}T\d{6}Z-[A-Za-z0-9_-]+-a\d+\.(?:dump|manifest\.json)$/;
+/** Same as BACKUP_KEY_PATTERN in packages/tasks/src/helpers/dbBackup.ts. */
+export const BACKUP_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{6}Z\.dump$/;
 
 /**
  * Hours since the newest backup's dump STARTED before it counts as stale.
@@ -18,43 +17,44 @@ export const BACKUP_KEY_PATTERN =
  */
 export const MAX_AGE_HOURS = 26;
 
-/** The newest manifest key under the prefix, or null. Keys sort by UTC stamp. */
-export function newestManifestKey(keys) {
-  const manifests = keys
-    .filter(k => BACKUP_KEY_PATTERN.test(k) && k.endsWith('.manifest.json'))
-    .sort();
-  return manifests.length ? manifests[manifests.length - 1] : null;
+/** Below this a dump is not a real production backup (the first was 33 MB). */
+export const MIN_BYTES = 10 * 1024 * 1024;
+
+/** The newest backup among listed objects ({ key, size }), or null. Names sort by time. */
+export function newestBackup(objects) {
+  const backups = objects.filter(o => BACKUP_KEY_PATTERN.test(o.key));
+  backups.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  return backups.length ? backups[backups.length - 1] : null;
 }
 
-export function dumpKeyFor(manifestKey) {
-  return manifestKey.slice(0, -'.manifest.json'.length) + '.dump';
+/** `2026-11-09T101703Z.dump` → that instant. */
+export function startedAtOf(key) {
+  const m = /^(\d{4}-\d{2}-\d{2})T(\d{2})(\d{2})(\d{2})Z\.dump$/.exec(key);
+  return m ? new Date(`${m[1]}T${m[2]}:${m[3]}:${m[4]}Z`) : null;
 }
 
 /**
- * @param {{ manifest: { startedAt?: string, bytes?: number } | null, dumpBytes: number | null, now: Date }} input
- * @returns {{ ok: true, ageHours: number } | { ok: false, problem: string }}
+ * @param {{ backup: { key: string, size: number } | null, now: Date }} input
+ * @returns {{ ok: true, ageHours: number, key: string } | { ok: false, problem: string }}
  */
-export function assess({ manifest, dumpBytes, now }) {
-  if (!manifest) return { ok: false, problem: 'No finished database backup exists in the bucket.' };
-  const started = Date.parse(manifest.startedAt ?? '');
-  if (!Number.isFinite(started)) {
-    return { ok: false, problem: 'The newest backup manifest has no readable startedAt.' };
+export function assess({ backup, now }) {
+  if (!backup) return { ok: false, problem: 'No database backup exists in the bucket.' };
+  const started = startedAtOf(backup.key);
+  if (!started || Number.isNaN(started.getTime())) {
+    return { ok: false, problem: `The newest backup has an unreadable name: ${backup.key}.` };
   }
-  if (dumpBytes === null) {
-    return { ok: false, problem: 'The newest backup manifest has no dump beside it.' };
-  }
-  if (dumpBytes !== manifest.bytes) {
+  if (backup.size < MIN_BYTES) {
     return {
       ok: false,
-      problem: `The newest dump is ${dumpBytes} bytes but its manifest says ${manifest.bytes}.`,
+      problem: `The newest backup (${backup.key}) is only ${backup.size} bytes.`,
     };
   }
-  const ageHours = (now.getTime() - started) / 3_600_000;
+  const ageHours = (now.getTime() - started.getTime()) / 3_600_000;
   if (ageHours > MAX_AGE_HOURS) {
     return {
       ok: false,
       problem: `The newest database backup started ${ageHours.toFixed(1)} hours ago (limit ${MAX_AGE_HOURS}).`,
     };
   }
-  return { ok: true, ageHours };
+  return { ok: true, ageHours, key: backup.key };
 }

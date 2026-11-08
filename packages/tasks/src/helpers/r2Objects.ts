@@ -97,6 +97,8 @@ export const PART_TRIES = 4;
 export interface TransferOptions {
   /** Wait before try `n + 1` after try `n` failed. Tests pass `() => 0`. */
   retryDelayMs?: (failedTry: number) => number;
+  /** S3 user metadata stored with the object (`x-amz-meta-*`), set at upload. */
+  metadata?: Record<string, string>;
 }
 
 /** 0.5–1 s, 1–1.5 s, 2–2.5 s: exponential with jitter. */
@@ -221,6 +223,7 @@ export async function uploadFile(
             Body: createReadStream(file),
             ContentLength: sizeBytes,
             ContentType: contentType,
+            Metadata: options.metadata,
           })
         ),
       options
@@ -229,7 +232,12 @@ export async function uploadFile(
   }
 
   const created = await client.send(
-    new CreateMultipartUploadCommand({ Bucket: bucket, Key: key, ContentType: contentType })
+    new CreateMultipartUploadCommand({
+      Bucket: bucket,
+      Key: key,
+      ContentType: contentType,
+      Metadata: options.metadata,
+    })
   );
   const uploadId = created.UploadId;
   if (!uploadId) throw new Error(`media: no upload id for ${key}`);

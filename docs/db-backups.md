@@ -6,19 +6,21 @@ and for mistakes found after Neon's own restore window. For everyday mistakes
 (a bad migration, a deleted row this week) use Neon's point-in-time restore
 first: it is faster and loses nothing.
 
-| What            | Where                                                                                                                                                  |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Backup task     | `db-backup`, Trigger.dev **production** only, daily at **10:17 UTC** (`packages/tasks/src/workflows/dbBackup.ts`, logic in `src/helpers/dbBackup.ts`)  |
-| Bucket          | `classmoji-db-backups-prod` (Cloudflare account "Classmoji", ENAM)                                                                                     |
-| Retention       | each dump deleted after **90 days**; nothing can delete one younger than **7 days** (bucket lock); unfinished uploads aborted after 1 day              |
-| Freshness check | Worker `classmoji-backup-monitor` (`apps/backup-monitor`), daily at **16:17 UTC**, emails if the newest finished backup started more than 26 hours ago |
-| Restore         | `packages/tasks/src/scripts/restoreBackup.ts`                                                                                                          |
+| What            | Where                                                                                                                                                 |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Backup task     | `db-backup`, Trigger.dev **production** only, daily at **10:17 UTC** (`packages/tasks/src/workflows/dbBackup.ts`, logic in `src/helpers/dbBackup.ts`) |
+| Bucket          | `classmoji-db-backups-prod` (Cloudflare account "Classmoji", ENAM)                                                                                    |
+| Retention       | each dump deleted after **90 days**; nothing can delete one younger than **7 days** (bucket lock); unfinished uploads aborted after 1 day             |
+| Freshness check | Worker `classmoji-backup-monitor` (`apps/backup-monitor`), daily at **16:17 UTC**, emails if the newest backup started more than 26 hours ago         |
+| Restore         | `packages/tasks/src/scripts/restoreBackup.ts`                                                                                                         |
 
-Each run writes `<UTC start>-<run id>-a<attempt>.dump` at the bucket root (`pg_dump
---format=custom`, read back with `pg_restore --list` before upload), then
-`….manifest.json` beside it (size, SHA-256, pg_dump and server versions, start
-time). **A dump without a manifest did not finish**; the monitor and the
-restore script ignore it. Dumps are not encrypted (decided): the bucket token
+Each run writes **one file** at the bucket root, named for the UTC second the
+dump started: `2026-11-09T101703Z.dump` (`pg_dump --format=custom`, read back
+with `pg_restore --list` before upload). Its SHA-256, start and finish times,
+pg_dump and server versions, run id and attempt are stored on the file as
+object metadata (`x-amz-meta-*`, shown under the object's details in the
+dashboard). R2 uploads are atomic, so every `.dump` in the bucket is a whole
+backup; the monitor and the restore script ignore files with any other name. Dumps are not encrypted (decided): the bucket token
 is the protection, so keep it scoped to this bucket.
 
 What a dump does NOT contain: git repositories (Github/Gitlab), media in R2,
@@ -74,8 +76,8 @@ Trigger.dev state, Postgres roles. Restoring it brings back the database only.
    monitor emails only when no backup finished.
 
 6. **First run.** After the deploy, Trigger.dev dashboard → Production →
-   `db-backup` → Test (any payload). Check the run log and that the dump and
-   its manifest are in the bucket, then do a test restore (below). Measured
+   `db-backup` → Test (any payload). Check the run log and that the dump is
+   in the bucket, then do a test restore (below). Measured
    from a laptop on 2026-11-08: a full production dump is **34 MB in 34 s**
    (226 MB database, 96 tables). Every Trigger.dev machine has 10 GB of disk;
    `maxDuration` is 900 s.
@@ -83,7 +85,7 @@ Trigger.dev state, Postgres roles. Restoring it brings back the database only.
 ## Restoring
 
 Needs the four `DB_BACKUP_R2_*` variables in the environment and `pg_restore`
-/ `psql` at least as new as the dump's `pgDumpVersion` (in its manifest;
+/ `psql` at least as new as the dump's `pg-dump-version` (in its metadata;
 `brew install libpq` and add its `bin` to PATH, or set `PG_RESTORE_PATH` /
 `PSQL_PATH`).
 
@@ -99,7 +101,7 @@ npx tsx packages/tasks/src/scripts/restoreBackup.ts --target postgresql://<user>
 npx tsx packages/tasks/src/scripts/restoreBackup.ts --download ./backup
 ```
 
-Every download is checked against its manifest's size and SHA-256. The
+Every download is checked against the size and SHA-256 stored with it. The
 restore runs `pg_restore --no-owner --no-privileges --exit-on-error
 --single-transaction`: it completes or leaves the target empty. The script
 refuses a target that has tables, and any non-local host unless
