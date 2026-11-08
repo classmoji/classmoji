@@ -4,7 +4,7 @@ import { APIError, createAuthMiddleware, getSession, isAPIError } from 'better-a
 import { prismaAdapter } from 'better-auth/adapters/prisma';
 import { admin, emailOTP, jwt } from 'better-auth/plugins';
 import { mcp } from '@better-auth/mcp';
-import { verifyOAuthQueryParams } from '@better-auth/oauth-provider';
+import { getOAuthProviderState, verifyOAuthQueryParams } from '@better-auth/oauth-provider';
 import { cimd } from '@better-auth/cimd';
 // eslint's resolver misses this subpath export; TypeScript resolves it.
 // eslint-disable-next-line import/no-unresolved
@@ -29,6 +29,7 @@ import {
 import { GITLAB_INSTANCE_CALLBACK_PATH, gitlabInstances } from './gitlabInstances.ts';
 import {
   APP_CONNECTION_PATHS,
+  OAUTH_CONSENT_PATH,
   applyAppConnectionRules,
   IMPERSONATE_USER_PATH,
   OAUTH_AUTHORIZE_PATH,
@@ -61,7 +62,9 @@ export {
 
 // The resource server's check of the access tokens this server signs
 // (apps/mcp/src/auth/jwtAccessToken.ts), against the keys `auth.api.getJwks`
-// reads in process.
+// reads in process. eslint's resolver misses this subpath export; TypeScript
+// resolves it.
+// eslint-disable-next-line import/no-unresolved
 export { verifyJwsAccessToken } from 'better-auth/oauth2';
 
 /** The session `lookupSessionForHook` returns: what the hooks below read of it. */
@@ -1103,17 +1106,28 @@ async function applyBeforeHookRules(
   return change ? { context: change } : undefined;
 }
 
-/**
- * `hooks.after`: a password change that signs out the user's other sessions
- * also ends their app connections (revokeOAuthGrants), once the change has
- * succeeded.
- */
-async function applyAfterHookRules(ctx: {
+/** What `hooks.after` reads of a request. */
+interface AfterHookContext {
   path?: string;
   body?: unknown;
   context: { session?: unknown; returned?: unknown };
-}): Promise<void> {
-  if (ctx.path !== '/change-password') return;
+}
+
+/**
+ * `hooks.after`, once an endpoint has answered:
+ *   - a password change that signs out the user's other sessions also ends
+ *     their app connections (revokeOAuthGrants);
+ *   - an approved app connection writes its audit row (recordConsentGrant).
+ * A before-hook refusal ends the request before either runs (better-auth
+ * 1.7.18 api/dispatch.mjs, `dispatchAuthEndpoint`).
+ */
+async function applyAfterHookRules(ctx: AfterHookContext): Promise<void> {
+  if (ctx.path === '/change-password') return endGrantsAfterPasswordChange(ctx);
+  if (ctx.path === OAUTH_CONSENT_PATH) return recordConsentGrant(ctx);
+}
+
+/** A password change with `revokeOtherSessions` that succeeded ends the user's app connections. */
+async function endGrantsAfterPasswordChange(ctx: AfterHookContext): Promise<void> {
   if ((ctx.body as { revokeOtherSessions?: unknown } | undefined)?.revokeOtherSessions !== true) {
     return;
   }
@@ -1122,7 +1136,89 @@ async function applyAfterHookRules(ctx: {
   if (!userId) return;
   await revokeOAuthGrants(String(userId), 'password_change', {
     actorId: String(userId),
-    path: ctx.path,
+    path: ctx.path ?? null,
+  });
+}
+
+/**
+ * One PlatformAuditLog row (`oauth.consent.grant`) when a user approves
+ * connecting an app and the approval goes through: `/oauth2/consent` with
+ * `accept: true` saved the consent and handed the app an authorization code
+ * (the answer's `url` carries `code`). The provider saves the consent before
+ * it issues the code, so a code means the consent row was created or
+ * updated by this request. A denial, a refused approval (viewing as someone)
+ * and an approval that failed write nothing.
+ *
+ * Every approval that issues a code writes a row, a re-approval with the same
+ * scopes too: the consent page is shown for every connection, and each
+ * approval hands the app a new code and a new refresh-token family, so it is
+ * a new grant of access even when the consent row only had its time updated.
+ *
+ * `data`: the client id and name, the scopes the consent now holds, the
+ * consent's id, the user and actor ids the endpoint acted for, and whether
+ * that session was viewing as someone (approval is refused then, so this is
+ * always false). The client id comes from the authorization
+ * query the provider verified for this request (getOAuthProviderState), not
+ * from the request body. No codes, tokens or secrets. A failed write fails
+ * the request, so no approval goes unrecorded.
+ */
+async function recordConsentGrant(ctx: AfterHookContext): Promise<void> {
+  if ((ctx.body as { accept?: unknown } | undefined)?.accept !== true) return;
+  const returned = ctx.context.returned;
+  if (!returned || isAPIError(returned)) return;
+  const url = (returned as { url?: unknown }).url;
+  if (typeof url !== 'string') return;
+  let code: string | null;
+  try {
+    code = new URL(url).searchParams.get('code');
+  } catch {
+    return;
+  }
+  if (!code) return;
+
+  const session = ctx.context.session as {
+    user?: { id?: unknown };
+    session?: { impersonatedBy?: unknown };
+  } | null;
+  const userId = typeof session?.user?.id === 'string' ? session.user.id : null;
+  if (!userId) return;
+  const verified = await getOAuthProviderState();
+  const clientId = verified?.query ? new URLSearchParams(verified.query).get('client_id') : null;
+  if (!clientId) return;
+
+  const prisma = getPrisma();
+  const [client, consent] = await Promise.all([
+    prisma.oauthClient.findUnique({ where: { clientId }, select: { name: true } }),
+    prisma.oauthConsent.findFirst({
+      where: { clientId, userId },
+      orderBy: { updatedAt: 'desc' },
+      select: { id: true, scopes: true },
+    }),
+  ]);
+  if (!consent) return;
+  const impersonatedBy =
+    typeof session?.session?.impersonatedBy === 'string' && session.session.impersonatedBy
+      ? session.session.impersonatedBy
+      : null;
+  const actorId = impersonatedBy ?? userId;
+  await prisma.platformAuditLog.create({
+    data: {
+      actor_id: actorId,
+      action: 'oauth.consent.grant',
+      target_type: 'user',
+      target_id: userId,
+      data: {
+        tool: 'auth:oauth.consent.grant',
+        path: ctx.path ?? null,
+        clientId,
+        clientName: client?.name ?? null,
+        scopes: consent.scopes,
+        consentId: consent.id,
+        userId,
+        actorId,
+        viewingAs: impersonatedBy !== null,
+      },
+    },
   });
 }
 
@@ -1531,6 +1627,10 @@ export const auth = betterAuth({
    * (oauth-resource).
    *
    * One part: BEFORE_HOOK_RULES, in order, each rule on the paths it lists.
+   *
+   * `after` (applyAfterHookRules) acts on two paths only: /change-password
+   * (ending app connections) and /oauth2/consent (the audit row of an
+   * approved connection).
    */
   hooks: {
     before: createAuthMiddleware(async ctx =>

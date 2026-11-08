@@ -756,6 +756,196 @@ describe.skipIf(!DATABASE_URL)('the authorization server (real Postgres)', () =>
     expect(results.filter(r => r.status === 200)).toHaveLength(1);
   });
 
+  describe('approving an app connection writes one audit row', () => {
+    const REDIRECT = 'http://127.0.0.1:47123/cb';
+    let clientId: string;
+
+    /** The consent page's signed query for a new authorization by `cookie`'s user. */
+    async function signedQueryFor(cookie: string): Promise<string> {
+      const { challenge } = pkce();
+      const query = new URLSearchParams({
+        client_id: clientId,
+        response_type: 'code',
+        redirect_uri: REDIRECT,
+        scope: 'read write',
+        state: 'st',
+        code_challenge: challenge,
+        code_challenge_method: 'S256',
+      });
+      const res = await server.auth.handler(
+        new Request(`${BASE}/oauth2/authorize?${query}`, { headers: { cookie } })
+      );
+      const location = new URL(res.headers.get('location') ?? '', 'http://localhost:3000');
+      expect(location.pathname).toBe('/oauth/consent');
+      return location.searchParams.toString();
+    }
+
+    const answer = (cookie: string, oauthQuery: string, accept: boolean) =>
+      server.auth.handler(
+        new Request(`${BASE}/oauth2/consent`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', origin: 'http://localhost:3000', cookie },
+          body: JSON.stringify({ accept, oauth_query: oauthQuery }),
+        })
+      );
+
+    const grantRows = () =>
+      db.platformAuditLog.findMany({
+        where: { action: 'oauth.consent.grant', data: { path: ['clientId'], equals: clientId } },
+        orderBy: { created_at: 'asc' },
+      });
+
+    beforeAll(async () => {
+      const reg = await server.auth.handler(
+        new Request(`${BASE}/oauth2/register`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            client_name: 'Audit test client',
+            redirect_uris: [REDIRECT],
+            token_endpoint_auth_method: 'none',
+          }),
+        })
+      );
+      expect(reg.status).toBe(201);
+      ({ client_id: clientId } = (await reg.json()) as { client_id: string });
+    });
+
+    it('approve: exactly one row, naming the client, the scopes and the user', async () => {
+      const res = await answer(ownCookie, await signedQueryFor(ownCookie), true);
+      const { url } = (await res.json()) as { url: string };
+      const code = new URL(url).searchParams.get('code');
+      expect(code).toBeTruthy();
+
+      const rows = await grantRows();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        actor_id: 'u-1',
+        target_type: 'user',
+        target_id: 'u-1',
+        data: {
+          tool: 'auth:oauth.consent.grant',
+          path: '/oauth2/consent',
+          clientId,
+          clientName: 'Audit test client',
+          userId: 'u-1',
+          actorId: 'u-1',
+          viewingAs: false,
+        },
+      });
+      const consent = await db.oauthConsent.findFirstOrThrow({
+        where: { clientId, userId: 'u-1' },
+      });
+      expect((rows[0]!.data as { scopes: string[] }).scopes).toEqual(consent.scopes);
+      expect(consent.scopes).toEqual(expect.arrayContaining(['read', 'write', 'offline_access']));
+      expect((rows[0]!.data as { consentId: string }).consentId).toBe(consent.id);
+      // No code, token or secret in the row.
+      expect(JSON.stringify(rows[0])).not.toContain(code!);
+    });
+
+    it('a re-approval with the same scopes writes another row (a new code, a new grant)', async () => {
+      const consent = await db.oauthConsent.findFirstOrThrow({
+        where: { clientId, userId: 'u-1' },
+      });
+      const res = await answer(ownCookie, await signedQueryFor(ownCookie), true);
+      expect(res.status).toBe(200);
+      const rows = await grantRows();
+      expect(rows).toHaveLength(2);
+      // The same consent row, updated in place.
+      expect(rows[1]!.data).toMatchObject({ userId: 'u-1', consentId: consent.id });
+      expect(await db.oauthConsent.count({ where: { clientId, userId: 'u-1' } })).toBe(1);
+    });
+
+    it('deny: no row', async () => {
+      const before = (await grantRows()).length;
+      const res = await answer(ownCookie, await signedQueryFor(ownCookie), false);
+      const { url } = (await res.json()) as { url: string };
+      expect(new URL(url).searchParams.get('error')).toBe('access_denied');
+      expect(await grantRows()).toHaveLength(before);
+    });
+
+    it('an approval refused while viewing as someone: no row, no code', async () => {
+      await db.session.create({
+        data: {
+          id: 'it-session-u1-viewas',
+          token: 'it-session-token-u1-viewas',
+          user_id: 'u-1',
+          impersonatedBy: 'u-2',
+          expires_at: new Date(Date.now() + 3_600_000),
+        },
+      });
+      const viewingAs = (
+        await serializeSignedCookie(
+          `${server.COOKIE_PREFIX}.session_token`,
+          'it-session-token-u1-viewas',
+          process.env.BETTER_AUTH_SECRET!
+        )
+      ).split(';')[0]!;
+      const before = (await grantRows()).length;
+
+      const res = await answer(viewingAs, await signedQueryFor(ownCookie), true);
+
+      expect(res.status).toBe(403);
+      expect(await grantRows()).toHaveLength(before);
+      await db.session.delete({ where: { id: 'it-session-u1-viewas' } });
+    });
+
+    it('an approval that must sign in again first (prompt=login): no row, no code', async () => {
+      // The session is older than the request, so the provider sends the
+      // user to sign in instead of saving the consent; an earlier consent of
+      // this client and user exists.
+      const { challenge } = pkce();
+      const query = new URLSearchParams({
+        client_id: clientId,
+        response_type: 'code',
+        redirect_uri: REDIRECT,
+        scope: 'read write',
+        state: 'st',
+        prompt: 'login',
+        code_challenge: challenge,
+        code_challenge_method: 'S256',
+      });
+      const authorize = await server.auth.handler(
+        new Request(`${BASE}/oauth2/authorize?${query}`, { headers: { cookie: ownCookie } })
+      );
+      const signed = new URL(authorize.headers.get('location') ?? '', 'http://localhost:3000')
+        .searchParams;
+      expect(signed.get('sig')).toBeTruthy();
+      const before = (await grantRows()).length;
+
+      const res = await answer(ownCookie, signed.toString(), true);
+
+      const { url } = (await res.json()) as { url?: string };
+      expect(url && new URL(url, 'http://localhost:3000').searchParams.get('code')).toBeFalsy();
+      expect(await grantRows()).toHaveLength(before);
+    });
+
+    it('an approval that fails after the consent is saved (client disabled meanwhile): no row', async () => {
+      const signed = await signedQueryFor(ownCookie);
+      await db.oauthClient.update({ where: { clientId }, data: { disabled: true } });
+      const before = (await grantRows()).length;
+      try {
+        const res = await answer(ownCookie, signed, true);
+        const { url } = (await res.json()) as { url: string };
+        // The provider saves the consent before it re-runs the authorization,
+        // which then fails: an error, no code.
+        expect(new URL(url).searchParams.get('error')).toBe('client_disabled');
+        expect(new URL(url).searchParams.get('code')).toBeNull();
+        expect(await grantRows()).toHaveLength(before);
+      } finally {
+        await db.oauthClient.update({ where: { clientId }, data: { disabled: false } });
+      }
+    });
+
+    it('an approval the server refuses (a changed query): no row', async () => {
+      const before = (await grantRows()).length;
+      const tampered = (await signedQueryFor(ownCookie)).replace('scope=read', 'scope=openid');
+      const res = await answer(ownCookie, tampered, true);
+      expect(res.status).toBeGreaterThanOrEqual(400);
+      expect(await grantRows()).toHaveLength(before);
+    });
+  });
+
   describe('ending app connections', () => {
     const grantsOf = async (userId: string) => ({
       refresh: await db.oauthRefreshToken.count({ where: { userId } }),
