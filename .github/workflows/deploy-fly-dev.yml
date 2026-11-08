@@ -90,9 +90,8 @@ jobs:
         run: npm install -g npm@10.9.9 && npm --version
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
-      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
-        with:
-          version: 0.5.1
+      - uses: ./.github/actions/setup-flyctl
+        timeout-minutes: 15
       - name: Deploy webapp
         run: |
           CONFIG=$(scripts/fly-autostop-config.sh apps/webapp/fly.toml stop)
@@ -121,9 +120,8 @@ jobs:
         run: npm install -g npm@10.9.9 && npm --version
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
-      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
-        with:
-          version: 0.5.1
+      - uses: ./.github/actions/setup-flyctl
+        timeout-minutes: 15
       - name: Deploy hook-station
         run: |
           CONFIG=$(scripts/fly-autostop-config.sh apps/hook-station/fly.toml stop)
@@ -150,9 +148,8 @@ jobs:
         run: npm install -g npm@10.9.9 && npm --version
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
-      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
-        with:
-          version: 0.5.1
+      - uses: ./.github/actions/setup-flyctl
+        timeout-minutes: 15
       - name: Deploy collab
         run: |
           # No scale-to-zero wrapper (unlike the other dev apps): open rooms
@@ -186,9 +183,8 @@ jobs:
         run: npm install -g npm@10.9.9 && npm --version
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
-      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
-        with:
-          version: 0.5.1
+      - uses: ./.github/actions/setup-flyctl
+        timeout-minutes: 15
       - name: Deploy mcp
         run: |
           if flyctl status --app classmoji-mcp-dev >/dev/null 2>&1; then
@@ -219,9 +215,8 @@ jobs:
         run: npm install -g npm@10.9.9 && npm --version
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
-      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
-        with:
-          version: 0.5.1
+      - uses: ./.github/actions/setup-flyctl
+        timeout-minutes: 15
       - name: Deploy site
         working-directory: apps/site
         run: |
@@ -253,9 +248,8 @@ jobs:
         run: npm install -g npm@10.9.9 && npm --version
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
-      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
-        with:
-          version: 0.5.1
+      - uses: ./.github/actions/setup-flyctl
+        timeout-minutes: 15
       - name: Deploy slides
         run: |
           CONFIG=$(scripts/fly-autostop-config.sh apps/slides/fly.toml stop)
@@ -282,9 +276,8 @@ jobs:
         run: npm install -g npm@10.9.9 && npm --version
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
-      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
-        with:
-          version: 0.5.1
+      - uses: ./.github/actions/setup-flyctl
+        timeout-minutes: 15
       - name: Deploy pages
         run: |
           CONFIG=$(scripts/fly-autostop-config.sh apps/pages/fly.toml stop)
@@ -311,9 +304,8 @@ jobs:
         run: npm install -g npm@10.9.9 && npm --version
       - name: Heal package-lock.json against submodule workspaces
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
-      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
-        with:
-          version: 0.5.1
+      - uses: ./.github/actions/setup-flyctl
+        timeout-minutes: 15
       - name: Deploy admin
         run: |
           CONFIG=$(scripts/fly-autostop-config.sh apps/admin/fly.toml stop)
