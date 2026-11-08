@@ -82,9 +82,14 @@ describe('the View as banner’s Stop', () => {
     expect(new URL(String(url), window.location.origin).pathname).toBe(
       '/api/auth/admin/stop-impersonating'
     );
-    // No body: nothing carries the page's signed query.
-    expect(init?.body).toBeUndefined();
-    expect(init).toEqual({ method: 'POST', credentials: 'include' });
+    // An empty JSON body: better-auth refuses a POST that isn't JSON (415),
+    // and nothing carries the page's signed query.
+    expect(init).toEqual({
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
     expect(navigate).toHaveBeenCalledWith('/admin/cs101/staff');
   });
 

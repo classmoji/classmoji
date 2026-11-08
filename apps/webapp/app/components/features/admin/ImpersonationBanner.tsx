@@ -24,7 +24,7 @@ interface ImpersonationBannerProps {
 }
 
 /**
- * Stop viewing as: a plain POST with no body. Not through the auth client:
+ * Stop viewing as: a plain JSON POST with an empty body. Not through the auth client:
  * on a page whose address carries the signed query of an app authorization
  * (the consent page, say), the auth client adds it to every POST
  * (`oauthProviderClient`), and better-auth then either refuses the stop (an
@@ -34,7 +34,14 @@ interface ImpersonationBannerProps {
 export const STOP_VIEWING_AS_PATH = '/api/auth/admin/stop-impersonating';
 
 async function stopViewingAs(): Promise<void> {
-  const res = await fetch(STOP_VIEWING_AS_PATH, { method: 'POST', credentials: 'include' });
+  // better-auth accepts a POST only as JSON (415 otherwise). An empty object,
+  // not the page's signed query, which the auth client would add.
+  const res = await fetch(STOP_VIEWING_AS_PATH, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'content-type': 'application/json' },
+    body: '{}',
+  });
   if (res.ok) return;
   const body = (await res.json().catch(() => null)) as { message?: unknown } | null;
   throw new Error(
