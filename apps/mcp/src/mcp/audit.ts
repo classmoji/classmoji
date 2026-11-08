@@ -13,8 +13,9 @@
  * anything from the payload.
  *
  * Every row a request writes, through either path, carries `impersonated_by`
- * (the actor's user id) when the Ask Moji client says the conversation runs
- * under impersonation (`Viewer.impersonatedBy`, routes/mcp.ts).
+ * (the platform admin's user id) when the request's Ask Moji token was
+ * minted under View as (`Viewer.impersonatedBy`: the admin the token's row
+ * names, routes/mcp.ts).
  */
 
 import { ClassmojiService } from '@classmoji/services';

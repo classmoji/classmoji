@@ -2,10 +2,12 @@
  * Classmoji MCP server — standalone OAuth-protected MCP resource server.
  *
  * Topology (plan §3): the webapp is the OAuth 2.1 authorization server
- * (better-auth mcp() plugin at /api/auth); this service is the resource
- * server. Bearer tokens are validated in-process and DB-backed via the
- * resolveViewer seam (src/auth/resolveViewer.ts), so revocation is
- * immediate (S2).
+ * (better-auth's oauth-provider through @better-auth/mcp, at /api/auth); this
+ * service is the resource server. Bearer tokens are checked in process by the
+ * resolveViewer seam (src/auth/resolveViewer.ts): an access token's
+ * signature, then its client, user and consent in the database, so
+ * disconnecting an app, disabling a client or banning a user takes effect on
+ * the next request.
  *
  * Endpoints:
  *   POST /mcp                                   — stateless Streamable HTTP MCP endpoint

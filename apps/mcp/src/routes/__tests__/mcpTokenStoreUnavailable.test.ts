@@ -4,17 +4,15 @@
  * error, and WITHOUT a WWW-Authenticate challenge: that header is what sends
  * an MCP client into signing in again. A token that was checked and found
  * invalid still gets the 401 challenge. Either way the body is not parsed.
+ * (What counts as unavailable, including the signing keys, is resolveViewer's
+ * call: resolveViewer.test.ts and jwksStoreUnavailable.test.ts.)
  */
 
 import Fastify from 'fastify';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Prisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  TokenStoreUnavailableError,
-  UnauthorizedError,
-  UnsupportedTokenFormatError,
-} from '../../mcp/errors.ts';
+import { TokenStoreUnavailableError, UnauthorizedError } from '../../mcp/errors.ts';
 
 const mocks = vi.hoisted(() => ({ resolveViewer: vi.fn(), servers: 0 }));
 
@@ -86,21 +84,6 @@ describe('token store unavailable', () => {
     await fastify.close();
   });
 
-  it('answers a token in a newer format the same way: 503, Retry-After, no challenge', async () => {
-    mocks.resolveViewer.mockRejectedValue(new UnsupportedTokenFormatError());
-    const { fastify, preParsing } = await app();
-
-    const res = await post(fastify);
-
-    expect(res.statusCode).toBe(503);
-    expect(res.headers['retry-after']).toBe('30');
-    expect(res.headers['www-authenticate']).toBeUndefined();
-    expect(res.json().error.message).toBe('Service temporarily unavailable: try again shortly');
-    expect(preParsing).not.toHaveBeenCalled();
-    expect(mocks.servers).toBe(0);
-    await fastify.close();
-  });
-
   it('still answers an invalid token with the 401 challenge', async () => {
     mocks.resolveViewer.mockRejectedValue(new UnauthorizedError('Access token expired'));
     const { fastify, preParsing } = await app();
@@ -108,7 +91,9 @@ describe('token store unavailable', () => {
     const res = await post(fastify);
 
     expect(res.statusCode).toBe(401);
-    expect(res.headers['www-authenticate']).toMatch(/^Bearer resource_metadata=/);
+    expect(res.headers['www-authenticate']).toMatch(
+      /^Bearer resource_metadata="[^"]+\/\.well-known\/oauth-protected-resource", scope="read write"$/
+    );
     expect(res.headers['retry-after']).toBeUndefined();
     expect(res.json().error.message).toBe('Unauthorized: Access token expired');
     expect(preParsing).not.toHaveBeenCalled();

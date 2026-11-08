@@ -59,6 +59,11 @@ export {
   oauthProviderOpenIdConfigMetadata,
 } from '@better-auth/oauth-provider';
 
+// The resource server's check of the access tokens this server signs
+// (apps/mcp/src/auth/jwtAccessToken.ts), against the keys `auth.api.getJwks`
+// reads in process.
+export { verifyJwsAccessToken } from 'better-auth/oauth2';
+
 /** The session `lookupSessionForHook` returns: what the hooks below read of it. */
 type HookSession =
   | (NonNullable<AppConnectionSession> & {

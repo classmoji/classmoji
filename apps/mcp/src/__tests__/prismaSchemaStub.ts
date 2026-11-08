@@ -538,6 +538,11 @@ export function createValidatingPrisma(initialRows: PrismaRows = {}): Validating
       // Let `await prisma` and structural probes fall through instead of
       // being mistaken for a model named `then`.
       if (prop === 'then' || prop === 'toJSON' || prop === 'constructor') return undefined;
+      // A generated client's internals (`_runtimeDataModel`, which
+      // better-auth's Prisma adapter reads when an auth instance is built over
+      // this stub): absent, as for a client that stands in for one. Never a
+      // model name.
+      if (prop.startsWith('_')) return undefined;
 
       if (prop === '$extends') return () => prisma;
       if (prop in topLevel) return topLevel[prop];

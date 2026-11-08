@@ -12,7 +12,8 @@
  * STUDENT memberships make every denial assertion vacuously pass.
  *
  * Cleanup targets ONLY rows this file created (minted tokens are tracked by
- * accessToken value) — sibling agents mint their own dev tokens concurrently.
+ * value and deleted by their hash) — sibling agents mint their own dev tokens
+ * concurrently.
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -32,10 +33,13 @@ if (!process.env.DATABASE_URL) {
 
 const PORT = 8103;
 const BASE = `http://localhost:${PORT}`;
-const EXPECTED_CHALLENGE = `Bearer resource_metadata="${BASE}/.well-known/oauth-protected-resource"`;
+const EXPECTED_CHALLENGE = `Bearer resource_metadata="${BASE}/.well-known/oauth-protected-resource", scope="read write"`;
+/** The MCP resource: the URL clients connect to, and the audience of their tokens. */
+const RESOURCE = `${BASE}/mcp`;
 
 // Deferred so the .env load above happens before Prisma is constructed.
 const { default: getPrisma } = await import('@classmoji/database');
+const { hashInternalToken } = await import('@classmoji/auth/mcp-token');
 
 let server: ChildProcess | null = null;
 let serverOutput = '';
@@ -138,12 +142,12 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  // Delete ONLY the token rows this file minted (tracked by value); the shared
-  // 'classmoji-dev-mint' oauth application row is left for sibling agents.
+  // Delete ONLY the token rows this file minted (tracked by value, deleted
+  // by hash).
   try {
     if (mintedTokens.length > 0) {
-      await getPrisma().oauthAccessToken.deleteMany({
-        where: { accessToken: { in: mintedTokens } },
+      await getPrisma().mcpInternalToken.deleteMany({
+        where: { token_hash: { in: mintedTokens.map(hashInternalToken) } },
       });
     }
   } finally {
@@ -169,8 +173,9 @@ describe('liveness + metadata', () => {
     const res = await fetch(`${BASE}/.well-known/oauth-protected-resource`);
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
-    // `resource` must be the RESOURCE SERVER origin (not the webapp/AS).
-    expect(body.resource).toBe(BASE);
+    // `resource` is the MCP endpoint on THIS server (not the webapp/AS): the
+    // URL clients connect to, and the audience every access token names.
+    expect(body.resource).toBe(RESOURCE);
     expect(body.authorization_servers).toEqual(['http://localhost:3000']);
     expect(body.scopes_supported).toEqual(['read', 'write']);
     expect(body.bearer_methods_supported).toEqual(['header']);
@@ -188,7 +193,7 @@ describe('liveness + metadata', () => {
     const rootDoc = (await root.json()) as Record<string, unknown>;
     const pathDoc = (await pathAware.json()) as Record<string, unknown>;
     expect(pathDoc).toEqual(rootDoc);
-    expect(pathDoc.resource).toBe(BASE);
+    expect(pathDoc.resource).toBe(RESOURCE);
   });
 });
 
@@ -274,9 +279,9 @@ describe('S2 — immediate revocation', () => {
     const before = await rpc(minted.access_token, 'tools/list');
     expect(before.error).toBeUndefined();
 
-    // …revoke by deleting the oauth_access_tokens row mid-test…
-    const deleted = await getPrisma().oauthAccessToken.deleteMany({
-      where: { accessToken: minted.access_token },
+    // …revoke by deleting its mcp_internal_tokens row mid-test…
+    const deleted = await getPrisma().mcpInternalToken.deleteMany({
+      where: { token_hash: hashInternalToken(minted.access_token) },
     });
     expect(deleted.count).toBe(1);
 

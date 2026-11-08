@@ -3,26 +3,22 @@
  * metadata for THIS resource server, pointing MCP clients at the webapp as
  * the authorization server.
  *
- * Deliberately NOT better-auth's `oAuthProtectedResourceMetadata(auth)`
- * helper: that helper derives `resource` from the auth instance's baseURL —
- * i.e. the WEBAPP origin (verified in better-auth 1.4.18,
- * node_modules/better-auth/dist/plugins/mcp/index.mjs:71-87) — which is the
- * wrong resource identifier for a standalone resource server. We emit the
- * document ourselves with `resource` = MCP_PUBLIC_URL. Scopes mirror the
- * mcp() plugin config in packages/auth/src/server.ts (read/write on top of
- * the fixed identity scopes).
+ * Written here rather than taken from the OAuth server, which describes the
+ * webapp's origin: the resource is MCP_RESOURCE (`<MCP_PUBLIC_URL>/mcp`, the
+ * URL clients connect to and the `aud` the OAuth server issues tokens for),
+ * and the authorization server is AUTH_ISSUER, the webapp's origin and the
+ * issuer it signs with. Both come from packages/auth/src/mcpResource.ts, the
+ * same values the OAuth server uses. Scopes are the two this server checks;
+ * the identity scopes and `offline_access` are the OAuth server's own.
  */
 
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import { MCP_PUBLIC_URL, PROTECTED_RESOURCE_METADATA_PATH, WEBAPP_URL } from '../config.ts';
+import { AUTH_ISSUER, MCP_RESOURCE, PROTECTED_RESOURCE_METADATA_PATH } from '../config.ts';
 
 export default async function wellKnownRoutes(fastify: FastifyInstance) {
   const metadata = {
-    resource: MCP_PUBLIC_URL,
-    // better-auth serves the AS metadata under the webapp origin
-    // (…/api/auth/.well-known/oauth-authorization-server) and advertises
-    // the bare origin as its issuer — match that self-description here.
-    authorization_servers: [new URL(WEBAPP_URL).origin],
+    resource: MCP_RESOURCE,
+    authorization_servers: [AUTH_ISSUER],
     scopes_supported: ['read', 'write'],
     bearer_methods_supported: ['header'],
   };
