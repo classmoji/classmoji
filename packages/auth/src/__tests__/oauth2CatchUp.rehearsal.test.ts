@@ -8,10 +8,13 @@
  * Not a regular test: skipped unless OAUTH_REHEARSAL_DATABASE_URL is set.
  * It resets nothing. It does write to that database, as the 1.7 server
  * does: booting seeds the MCP resource row, the first token signs with a new
- * key (`jwks`), and the grant rotates the token it is given. Point it at the
- * rehearsal branch only.
+ * key (`jwks`), and the grant rotates the token it is given. So it refuses,
+ * before the server module is loaded, unless OAUTH_REHEARSAL_DATABASE_NAME
+ * names the URL's database, the host is this machine or a Neon endpoint, and
+ * the database holds the rehearsal's own user (./support/rehearsalTarget.ts).
  *
  *   OAUTH_REHEARSAL_DATABASE_URL='<branch direct URL>' \
+ *   OAUTH_REHEARSAL_DATABASE_NAME='<its database name, e.g. neondb>' \
  *   OAUTH_REHEARSAL_CLIENT_ID='<client id>' \
  *   OAUTH_REHEARSAL_REFRESH_TOKEN='<legacy plaintext refresh token>' \
  *   [OAUTH_REHEARSAL_CLIENT_SECRET='<secret, for a confidential client>'] \
@@ -20,9 +23,9 @@
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PrismaClient } from '@prisma/client';
+import { REHEARSAL_MARKER_USER_ID, assertRehearsalTarget } from './support/rehearsalTarget.ts';
 
 const URL_ = process.env.OAUTH_REHEARSAL_DATABASE_URL;
-if (URL_) process.env.DATABASE_URL = URL_;
 process.env.WEBAPP_URL = 'http://localhost:3000';
 process.env.BETTER_AUTH_SECRET = 'test-secret-that-is-at-least-32-chars!!';
 
@@ -50,8 +53,21 @@ describe.skipIf(!URL_)('CX-2 rehearsal: refresh a caught-up token', () => {
   beforeAll(async () => {
     expect(clientId, 'OAUTH_REHEARSAL_CLIENT_ID').not.toBe('');
     expect(refreshToken, 'OAUTH_REHEARSAL_REFRESH_TOKEN').not.toBe('');
-    const target = new URL(URL_!);
-    console.log(`rehearsal database: ${target.hostname}${target.pathname}`);
+    const target = await assertRehearsalTarget(
+      URL_,
+      process.env.OAUTH_REHEARSAL_DATABASE_NAME,
+      async () => {
+        const probe = new PrismaClient({ datasourceUrl: URL_ });
+        try {
+          return (await probe.user.count({ where: { id: REHEARSAL_MARKER_USER_ID } })) === 1;
+        } finally {
+          await probe.$disconnect();
+        }
+      }
+    );
+    console.log(`rehearsal database: ${target.host}/${target.database}`);
+    // Only now: once loaded, the server module reads and writes DATABASE_URL.
+    process.env.DATABASE_URL = URL_;
     db = new PrismaClient({ datasourceUrl: URL_ });
     server = await import('../server.ts');
   }, 120_000);
