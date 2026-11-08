@@ -60,11 +60,11 @@ Trigger.dev state, Postgres roles. Restoring it brings back the database only.
 
    They reach the worker on the next Trigger.dev production deploy.
 
-4. **Monitor secrets** (the Worker is deployed; it cannot email without them):
+4. **Monitor secrets.** Done on 2026-11-08: `RESEND_API_KEY` (piped from
+   Infisical prod) and `ALERT_EMAIL` = `hello@classmoji.io`. To change them:
 
    ```bash
    npx wrangler login
-   npx wrangler secret put RESEND_API_KEY --config apps/backup-monitor/wrangler.jsonc
    npx wrangler secret put ALERT_EMAIL --config apps/backup-monitor/wrangler.jsonc   # comma-separated
    ```
 
