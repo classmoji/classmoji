@@ -55,8 +55,8 @@
  * Impersonation: the MCP has no session to inspect, and needs none. A write
  * tool needs an OAuth token with the `write` scope, and better-auth refuses to
  * issue one while a platform admin is viewing as someone
- * (`packages/auth/src/appConnectionGuard.ts`: /mcp/authorize and
- * /oauth2/consent). Ask Moji's minted tokens are read-only
+ * (`packages/auth/src/appConnectionGuard.ts`: /oauth2/authorize,
+ * /oauth2/consent and /oauth2/continue). Ask Moji's minted tokens are read-only
  * (`ASK_MOJI_SCOPES`), so this tool is never even listed for them.
  */
 

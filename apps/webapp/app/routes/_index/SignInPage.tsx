@@ -3,7 +3,12 @@ import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { ArrowLeftIcon, EyeIcon, EyeOffIcon, Loader2Icon, MailIcon } from 'lucide-react';
 import { authClient } from '@classmoji/auth/client';
 import { Emoji } from '~/components';
-import { authServerRedirects } from './signInRedirect';
+import {
+  authServerRedirects,
+  dropAppConnectionQuery,
+  EXPIRED_APP_CONNECTION_MESSAGE,
+  isExpiredAppConnection,
+} from './signInRedirect';
 import { fieldClass, labelClass, optionButton, primaryButton, quietLink } from './signInStyles';
 import siteBackdrop from './site-backdrop.jpg';
 
@@ -11,7 +16,8 @@ import siteBackdrop from './site-backdrop.jpg';
 type Mode = 'providers' | 'sign-in' | 'sign-up' | 'verify' | 'forgot' | 'reset';
 
 interface SignInPageProps {
-  handleGitHubLogin: () => void;
+  /** Starts Github sign-in; resolves with the auth client's error, if any. */
+  handleGitHubLogin: () => Promise<{ error?: unknown } | void>;
   /** Where to land after signing in (already validated by the loader). */
   callbackURL: string;
   /** A better-auth OAuth error code from `?error=`, if the last attempt failed. */
@@ -27,6 +33,8 @@ interface SignInPageProps {
   /** Shown above the card (the development quick logins). */
   children?: ReactNode;
 }
+
+const SIGN_IN_AGAIN = "Sign-in didn't go through. Please try again.";
 
 /**
  * better-auth (and the Gitlab instance plugin) send a failed sign-in back here
@@ -45,6 +53,12 @@ const OAUTH_ERRORS: Record<string, string> = {
     'Gitlab rejected that Application ID or Secret, or the callback URL on the application does not match. Check them and try again.',
   gitlab_setup_failed: 'Could not save that Gitlab. Try again.',
   email_is_missing: 'Your Gitlab account has no email address Classmoji can read.',
+  // A sign-in round trip the auth server can't match to the one it started
+  // (better-auth's OAuth state), and the Gitlab instance plugin's own code.
+  state_mismatch: SIGN_IN_AGAIN,
+  state_not_found: SIGN_IN_AGAIN,
+  state_invalid: SIGN_IN_AGAIN,
+  please_restart_the_process: SIGN_IN_AGAIN,
 };
 
 /** Where "closing" the sign-in goes when there's no page to return to. */
@@ -103,6 +117,8 @@ const SignInPage = ({
     oauthError ? (OAUTH_ERRORS[oauthError] ?? 'Sign-in failed. Please try again.') : null
   );
   const [notice, setNotice] = useState<string | null>(null);
+  // The code screen was reached by signing up (not by signing in unverified).
+  const [verifyAfterSignUp, setVerifyAfterSignUp] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const go = (next: Mode, message: string | null = null) => {
@@ -122,6 +138,24 @@ const SignInPage = ({
     }
   };
 
+  // An app connection's signed query that has expired is refused with every
+  // request that carries it, so it is taken out of the address and the next
+  // attempt signs in without it (see signInRedirect.ts).
+  const fail = (failure: unknown) => {
+    if (isExpiredAppConnection(failure)) {
+      dropAppConnectionQuery();
+      setError(EXPIRED_APP_CONNECTION_MESSAGE);
+      return;
+    }
+    setError(errorMessage(failure as Parameters<typeof errorMessage>[0]));
+  };
+
+  const onGitHub = () =>
+    run(async () => {
+      const result = await handleGitHubLogin();
+      if (result?.error) fail(result.error);
+    });
+
   const onSignIn = (e: FormEvent) => {
     e.preventDefault();
     void run(async () => {
@@ -138,10 +172,11 @@ const SignInPage = ({
       }
       if (signInError.status === 403) {
         // Unverified: a fresh code was just mailed.
+        setVerifyAfterSignUp(false);
         go('verify', `We sent a code to ${email}. Enter it to finish signing in.`);
         return;
       }
-      setError(errorMessage(signInError));
+      fail(signInError);
     });
   };
 
@@ -160,7 +195,7 @@ const SignInPage = ({
         ...(schoolId.trim() ? { school_id: schoolId.trim() } : {}),
       } as Parameters<typeof authClient.signUp.email>[0]);
       if (signUpError) {
-        setError(errorMessage(signUpError));
+        fail(signUpError);
         return;
       }
       // Sign-up sends no code by itself (see emailVerification in
@@ -170,9 +205,10 @@ const SignInPage = ({
         type: 'email-verification',
       });
       if (sendError) {
-        setError(errorMessage(sendError));
+        fail(sendError);
         return;
       }
+      setVerifyAfterSignUp(true);
       go('verify', `We sent a 6-digit code to ${email}.`);
     });
   };
@@ -185,7 +221,7 @@ const SignInPage = ({
         otp: code,
       });
       if (verifyError) {
-        setError(errorMessage(verifyError));
+        fail(verifyError);
         return;
       }
       // As in onSignIn: a redirect the server returned is already followed.
@@ -199,7 +235,7 @@ const SignInPage = ({
         email,
         type: 'email-verification',
       });
-      if (sendError) setError(errorMessage(sendError));
+      if (sendError) fail(sendError);
       else setNotice(`We sent a new code to ${email}.`);
     });
 
@@ -208,7 +244,7 @@ const SignInPage = ({
     void run(async () => {
       const { error: sendError } = await authClient.emailOtp.requestPasswordReset({ email });
       if (sendError) {
-        setError(errorMessage(sendError));
+        fail(sendError);
         return;
       }
       go('reset', `If ${email} has an account, we sent it a code.`);
@@ -224,7 +260,7 @@ const SignInPage = ({
         password,
       });
       if (resetError) {
-        setError(errorMessage(resetError));
+        fail(resetError);
         return;
       }
       setPassword('');
@@ -350,7 +386,12 @@ const SignInPage = ({
                   <div className="mt-8">
                     {messages}
                     <div className="flex flex-col gap-3">
-                      <button type="button" onClick={handleGitHubLogin} className={optionButton}>
+                      <button
+                        type="button"
+                        onClick={onGitHub}
+                        disabled={busy}
+                        className={optionButton}
+                      >
                         <svg viewBox="0 0 16 16" aria-hidden className="h-4 w-4 fill-current">
                           <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
                         </svg>
@@ -527,6 +568,21 @@ const SignInPage = ({
                         >
                           Send a new code
                         </button>
+                        {/* A sign-up for an address that already has an account keeps
+                            no password from it (@classmoji/auth/server,
+                            resetUnverifiedPasswordAccount). */}
+                        {verifyAfterSignUp && (
+                          <p className="text-center text-xs leading-relaxed text-ink-3">
+                            Already have an account with this email?{' '}
+                            <button
+                              type="button"
+                              className={quietLink}
+                              onClick={() => go('forgot')}
+                            >
+                              Reset your password
+                            </button>
+                          </p>
+                        )}
                       </form>
                     )}
 

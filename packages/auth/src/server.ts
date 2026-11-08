@@ -1,8 +1,14 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { betterAuth } from 'better-auth';
-import { APIError, createAuthMiddleware, getSession } from 'better-auth/api';
+import { APIError, createAuthMiddleware, getSession, isAPIError } from 'better-auth/api';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
-import { admin, emailOTP, mcp } from 'better-auth/plugins';
+import { admin, emailOTP, jwt } from 'better-auth/plugins';
+import { mcp } from '@better-auth/mcp';
+import { getOAuthProviderState, verifyOAuthQueryParams } from '@better-auth/oauth-provider';
+import { cimd } from '@better-auth/cimd';
+// eslint's resolver misses this subpath export; TypeScript resolves it.
+// eslint-disable-next-line import/no-unresolved
+import { fetchClientMetadataResource } from '@better-auth/cimd/node';
 import getPrisma from '@classmoji/database';
 import type { AskMojiAccess } from '@classmoji/services';
 import type { Role } from '@prisma/client';
@@ -20,17 +26,55 @@ import {
   COOKIE_PREFIX,
   sessionTokenFromCookieHeader,
 } from './secret.ts';
-import { ASK_MOJI_CLIENT_ID } from './mcpToken.ts';
 import { GITLAB_INSTANCE_CALLBACK_PATH, gitlabInstances } from './gitlabInstances.ts';
 import {
+  APP_CONNECTION_PATHS,
+  OAUTH_CONSENT_PATH,
   applyAppConnectionRules,
   IMPERSONATE_USER_PATH,
+  OAUTH_AUTHORIZE_PATH,
   type AppConnectionSession,
+  type BeforeHookContextChange,
 } from './appConnectionGuard.ts';
+import {
+  dpopProofIgnored,
+  OAUTH_REGISTER_PATH,
+  OAUTH_SCOPES,
+  OAUTH_TOKEN_PATH,
+  offlineAccessChange,
+  openRegistrationChange,
+  refuseBackchannelLogout,
+  refuseDpopBoundAuthorization,
+  refuseDpopBoundRegistration,
+  resourceParamChange,
+  type OAuthRuleContext,
+} from './oauthRequestRules.ts';
+import { AUTH_ISSUER, MCP_RESOURCE } from './mcpResource.ts';
+import { DCR_CLIENT_NAME_MAX } from './oauthRedirect.ts';
 import { mapGitHubProfile, mapGitLabProfile, onAccountCreated } from './providerProfile.ts';
 
 export { AUTH_SECRET, COOKIE_PREFIX };
 export { CONNECT_APP_VIEWING_AS_MESSAGE } from './appConnectionGuard.ts';
+export { AUTH_ISSUER, MCP_RESOURCE } from './mcpResource.ts';
+export {
+  BACKCHANNEL_LOGOUT_REFUSED_MESSAGE,
+  DPOP_REFUSED_MESSAGE,
+  OAUTH_SCOPES,
+  RESOURCE_REFUSED_MESSAGE,
+} from './oauthRequestRules.ts';
+// The authorization server's discovery documents, for the webapp's root
+// `/.well-known/*` routes (better-auth serves them only under its basePath).
+export {
+  oauthProviderAuthServerMetadata,
+  oauthProviderOpenIdConfigMetadata,
+} from '@better-auth/oauth-provider';
+
+// The resource server's check of the access tokens this server signs
+// (apps/mcp/src/auth/jwtAccessToken.ts), against the keys `auth.api.getJwks`
+// reads in process. eslint's resolver misses this subpath export; TypeScript
+// resolves it.
+// eslint-disable-next-line import/no-unresolved
+export { verifyJwsAccessToken } from 'better-auth/oauth2';
 
 /** The session `lookupSessionForHook` returns: what the hooks below read of it. */
 type HookSession =
@@ -41,16 +85,17 @@ type HookSession =
 
 /**
  * The current session, read from inside `hooks.before` the way better-auth's
- * own `getSessionFromCtx` does (api/routes/session.mjs:242-259), with two
- * differences: an error is thrown rather than read as "signed out", so the
- * caller can tell a failed lookup from no session; and the lookup leaves no
- * trace on the request (no session refresh, and `ctx.context.session` is put
- * back), so the endpoint then runs exactly as it would have.
+ * own `getSessionFromCtx` does (better-auth 1.7.18 api/routes/session.mjs:
+ * 242-259), with two differences: an error is thrown rather than read as
+ * "signed out", so the caller can tell a failed lookup from no session; and
+ * the lookup leaves no trace on the request (no session refresh, and
+ * `ctx.context.session` is put back), so the endpoint then runs exactly as it
+ * would have.
  *
  * The lookup is always made as a GET, whatever the method of the request the
- * hook runs for: from better-auth 1.5 the get-session endpoint refuses POST
- * (METHOD_NOT_ALLOWED) unless `session.deferSessionRefresh` is set, and a
- * hook's context carries the request's own method. 1.4.18 ignores it.
+ * hook runs for: the get-session endpoint refuses POST (METHOD_NOT_ALLOWED)
+ * unless `session.deferSessionRefresh` is set (session.mjs:35-37), and a
+ * hook's context carries the request's own method.
  *
  * `fromDatabase` reads the session row the `session_token` cookie names,
  * skipping the `session_data` cookie cache.
@@ -84,11 +129,12 @@ async function lookupSessionForHook(
 /**
  * The request's session read both ways better-auth reads it: from the
  * `session_data` cookie cache (the default), and from the database row the
- * `session_token` cookie names (`disableCookieCache`). They are separate
- * cookies and need not describe the same session (api/routes/session.mjs).
- * Endpoints differ in which one they read, and several take
- * `?disableCookieCache` from the request's query, so a rule about "view as"
- * holds only if it holds for both.
+ * `session_token` cookie names (`disableCookieCache`). Endpoints differ in
+ * which one they read, and several take `?disableCookieCache` from the
+ * request's query, so a rule about "view as" holds only if it holds for both.
+ * The cache is used only when its session's token is the `session_token`
+ * cookie's (session.mjs:57), but it is not checked against the row: it
+ * outlives a row that was signed out or revoked for up to its maxAge.
  *
  * Read one after the other, never together: each lookup puts
  * `ctx.context.session` back when it finishes, and two at once would restore
@@ -104,20 +150,31 @@ async function lookupBothSessionsForHook(ctx: {
 }
 
 /**
- * The session the "view as" rules judge: whichever of the two reads is a
- * platform admin viewing as another user (`impersonatedBy`), else the
- * database one (else the cached one, when the row is gone but its cache is
- * still within its own expiry). So a rule that refuses while viewing as
- * someone refuses when either read says so.
+ * Every session a "view as" rule judges, in this order:
+ *   1. the one the request is already acting for (`ctx.context.session`).
+ *      On a request a client sends it is not set yet when `hooks.before`
+ *      runs; on a request better-auth dispatches itself it may be. The
+ *      oauth-provider resumes a saved authorization after a sign-in by
+ *      dispatching /oauth2/authorize with `ctx.context.session` set to the
+ *      session that sign-in just created, while the request's cookies are
+ *      still the caller's (@better-auth/oauth-provider 1.7.18
+ *      authorize-*.mjs:7209-7219; better-auth api/dispatch.mjs:196-206);
+ *   2. the cookie cache read, and 3. the database read
+ *      (lookupBothSessionsForHook).
+ * A rule that refuses while viewing as someone refuses when any of them is a
+ * platform admin viewing as another user (`impersonatedBy`).
  */
-async function lookupViewAsSessionForHook(ctx: {
+async function lookupViewAsSessionsForHook(ctx: {
   context: { session?: unknown };
   headers?: Headers;
-}): Promise<HookSession> {
+}): Promise<HookSession[]> {
+  const inFlight = (ctx.context.session ?? null) as HookSession;
   const { cached, stored } = await lookupBothSessionsForHook(ctx);
-  if (cached?.session?.impersonatedBy) return cached;
-  return stored ?? cached;
+  return [inFlight, cached, stored];
 }
+
+const isViewingAs = (sessions: readonly HookSession[]) =>
+  sessions.some(read => read?.session?.impersonatedBy);
 
 /**
  * Platform admins, by User.id, from `PLATFORM_ADMIN_USER_IDS` (comma-separated).
@@ -187,6 +244,46 @@ export const ADMIN_PATHS_NOT_USED = [
   '/admin/remove-user',
   '/admin/set-user-password',
   '/admin/has-permission',
+] as const;
+
+/**
+ * The authorization server's endpoints (oauth-provider, and the jwt plugin's
+ * `/token`) that no client or page uses; `disabledPaths` turns them off.
+ *   - client management (create, read, list, update, delete, rotate): clients
+ *     register themselves at /oauth2/register or by a Client ID Metadata
+ *     Document, and `clientPrivileges` refuses the rest anyway;
+ *   - consents (read, list, update, delete): a user's own connections are
+ *     shown and removed by Classmoji's own pages and tools;
+ *   - end-session (RP-initiated logout), userinfo and introspection: the MCP
+ *     server verifies access tokens itself, and nothing signs out through a
+ *     client;
+ *   - the public client lookups and /oauth2/continue: the consent page reads
+ *     the client on the server, and no account-selection, sign-up or
+ *     post-sign-in page is configured to continue from;
+ *   - `/token` (a session's JWT): nothing asks for one.
+ * Kept: /oauth2/authorize, /oauth2/consent, /oauth2/token, /oauth2/register,
+ * /oauth2/revoke, `/jwks` and the discovery documents.
+ */
+export const OAUTH_PATHS_NOT_USED = [
+  '/oauth2/create-client',
+  '/oauth2/get-client',
+  '/oauth2/get-clients',
+  '/oauth2/update-client',
+  '/oauth2/delete-client',
+  '/oauth2/client/rotate-secret',
+  '/oauth2/client/rotate-keys',
+  '/oauth2/get-consent',
+  '/oauth2/get-consents',
+  '/oauth2/update-consent',
+  '/oauth2/delete-consent',
+  '/oauth2/end-session',
+  '/oauth2/end-session/confirm',
+  '/oauth2/userinfo',
+  '/oauth2/introspect',
+  '/oauth2/public-client',
+  '/oauth2/public-client-prelogin',
+  '/oauth2/continue',
+  '/token',
 ] as const;
 
 export const VIEW_AS_PLATFORM_ADMINS_ONLY_MESSAGE =
@@ -278,14 +375,14 @@ export const ACCOUNT_CHANGE_VIEWING_AS_MESSAGE =
  * a sign-in account linked or unlinked now would be added to or removed from
  * their account, and a password, profile or session change would be made to
  * it. Run from `hooks.before` on ACCOUNT_LINK_PATHS and ACCOUNT_CHANGE_PATHS
- * only. Refuses when either session read is viewing as someone
- * (lookupViewAsSessionForHook).
+ * only. Refuses when any session read is viewing as someone
+ * (lookupViewAsSessionsForHook).
  */
 async function refuseWhileViewingAs(
   ctx: { context: { session?: unknown }; headers?: Headers },
   message: string
 ): Promise<void> {
-  if ((await lookupViewAsSessionForHook(ctx))?.session?.impersonatedBy) {
+  if (isViewingAs(await lookupViewAsSessionsForHook(ctx))) {
     throw new APIError('FORBIDDEN', { message });
   }
 }
@@ -299,7 +396,7 @@ async function refuseWhileViewingAs(
  *
  * Both reads skip the session refresh. Not for use inside better-auth hooks:
  * `auth.api.getSession` runs `hooks.before` itself; hooks use
- * lookupViewAsSessionForHook.
+ * lookupViewAsSessionsForHook.
  */
 export async function isViewingAsAnotherUser(headers: Headers): Promise<boolean> {
   const cached = await auth.api.getSession({ headers, query: { disableRefresh: true } });
@@ -309,6 +406,28 @@ export async function isViewingAsAnotherUser(headers: Headers): Promise<boolean>
     query: { disableRefresh: true, disableCookieCache: true },
   });
   return Boolean((stored?.session as { impersonatedBy?: unknown } | undefined)?.impersonatedBy);
+}
+
+/**
+ * The signed query an authorization sent the browser with (to the consent
+ * page, or to sign in), read from that page's address: the parameters its
+ * `ba_param` entries name, plus `sig` and `ba_param`. That is what the auth
+ * client sends as `oauth_query` (@better-auth/oauth-provider 1.7.18
+ * dist/client.mjs, buildSignedOAuthQuery), so a parameter the page added
+ * itself is left out. Returned only when its signature and expiry check out
+ * against the secret oauth-provider signs with (`verifyOAuthQueryParams`,
+ * `(await auth.$context).secret`); null otherwise.
+ */
+export async function verifiedAuthorizationQuery(search: string): Promise<URLSearchParams | null> {
+  const params = new URLSearchParams(search);
+  const named = new Set(params.getAll('ba_param'));
+  if (!params.has('sig') || named.size === 0) return null;
+  const signed = new URLSearchParams();
+  for (const [key, value] of params) {
+    if (key === 'sig' || key === 'ba_param' || named.has(key)) signed.append(key, value);
+  }
+  const { secret } = await auth.$context;
+  return (await verifyOAuthQueryParams(signed.toString(), secret)) ? signed : null;
 }
 
 /** The session row fields "View as" auditing reads. */
@@ -343,7 +462,8 @@ function viewAsEndRowId(sessionId: string): string {
  * Who ended a "View as" session, recorded on its end row as `data.endedBy`
  * (the row's actor stays the platform admin, as on the start row):
  *   - 'system': the row had expired; better-auth removes an expired row when
- *     a request reads it.
+ *     a request reads it. Or a sign-up for the viewed user's unverified
+ *     address ended it (resetUnverifiedPasswordAccount).
  *   - 'admin': the platform admin, who holds the viewing session. Stop
  *     (/admin/stop-impersonating) and /sign-out delete the session the
  *     request was made with, and any request made with a viewing session is
@@ -370,11 +490,15 @@ const PASSWORD_RESET_PATHS: ReadonlySet<string> = new Set([
   '/email-otp/reset-password',
 ]);
 
+/** The email sign-up endpoint (resetUnverifiedPasswordAccount runs on it). */
+export const SIGN_UP_EMAIL_PATH = '/sign-up/email';
+
 function viewAsEndedBy(
   row: ViewAsSessionRow,
   ctx: { path?: string; context?: { session?: unknown } } | null | undefined
 ): ViewAsEndedBy {
   if (row.expiresAt && new Date(row.expiresAt).getTime() <= Date.now()) return 'system';
+  if (ctx?.path === SIGN_UP_EMAIL_PATH) return 'system';
   if (ctx?.path && ENDS_OWN_SESSION_PATHS.has(ctx.path)) return 'admin';
   const current = ctx?.context?.session as
     | { session?: { impersonatedBy?: unknown } | null; user?: { id?: unknown } | null }
@@ -700,119 +824,576 @@ async function getValidGitHubToken(userId: string): Promise<GitHubTokenResult | 
 }
 
 /**
- * Coerce a presented `client_id` to the string better-auth will actually compare
- * against, so this hook and the grant below can never read one request two ways.
+ * Ends every app connection a user has: their OAuth refresh tokens, consents
+ * and opaque access tokens on the authorization server are deleted. The next
+ * refresh then fails (`invalid_grant`), and the MCP server, which requires a
+ * consent for every access token it accepts, refuses the access tokens
+ * already issued. Run when the user's password is reset or changed with
+ * other sessions signed out, and when the user is banned: each of those means
+ * someone else may have been using the account. One PlatformAuditLog row
+ * (`oauth_grants.revoke`) when anything was deleted; counts only.
  *
- * WHY NOT `typeof x === 'string'` (the obvious version, and a real bypass).
- * better-auth compares `token.clientId !== client_id?.toString()`
- * (node_modules/better-auth/dist/plugins/mcp/index.mjs:278) — `toString()`, not a
- * type check. A JSON body is handed to the endpoint as parsed JSON
- * (node_modules/better-call/dist/utils.mjs:25), so `{"client_id":
- * ["classmoji-ask-moji"]}` arrives as a one-element ARRAY whose `toString()` is
- * the bare client id. A string-only check here returns null, the refusal hook
- * returns early, and better-auth then happily matches the row — the refresh grant
- * this hook exists to close, reopened by a pair of brackets.
+ * The user's rows in the better-auth 1.4 tables go too (`oauth_access_tokens`,
+ * which hold the 1.4 refresh tokens, and `oauth_consents`), while those tables
+ * exist: the previous release still reads them after a rollback, and the
+ * catch-up script (packages/database/scripts/catchUpOauth2Grants.ts) copies
+ * what it finds there, so a connection ended here must not be left in them.
+ * All in one transaction.
  *
- * So: normalize exactly as better-auth does. A value whose `toString()` is absent,
- * throws, or is not a string can never equal the stored `clientId` either, so
- * null (no refusal, and no match downstream) is the right answer for those.
+ * Throws if a deletion fails, so the request reports the failure rather than
+ * leaving connections in place unnoticed.
  */
-function normalizeClientId(value: unknown): string | null {
-  if (value === null || value === undefined) return null;
-  try {
-    const asString = (value as { toString?: () => unknown }).toString?.();
-    return typeof asString === 'string' && asString.length > 0 ? asString : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * One field of a `/mcp/token` body, read the way the grant reads it. For a
- * FormData body the LAST value wins, not the first: better-auth flattens it with
- * `Object.fromEntries(body.entries())` (mcp/index.mjs:234), which keeps the last
- * value for a repeated key, while `FormData.get()` returns the first — so
- * `client_id=innocent&client_id=classmoji-ask-moji` would have a hook reading
- * one value and the grant reading the other.
- */
-function tokenRequestField(body: unknown, key: string): unknown {
-  if (typeof FormData !== 'undefined' && body instanceof FormData) {
-    let value: unknown;
-    for (const [k, v] of body.entries()) {
-      if (k === key) value = v;
-    }
-    return value;
-  }
-  if (body && typeof body === 'object') return (body as Record<string, unknown>)[key];
-  return undefined;
-}
-
-/**
- * The client id and secret a `/mcp/token` request presents, read exactly as the
- * grant reads them (node_modules/better-auth/dist/plugins/mcp/index.mjs:239-259):
- * from the body, or from an HTTP Basic header ONLY when the RAW body values of
- * both are falsy (`!client_id && !client_secret`, :240).
- *
- * The choice is made on the raw values and only then normalized. Deciding on
- * the normalized id instead is a bypass: a JSON `client_id: 0` normalizes to
- * "0" (no such client, so the checks below wave it through) while the grant
- * finds it falsy and takes the real client from the Basic header.
- *
- * A null client id means none was presented, which the grant then refuses on
- * its own (it compares the stored row's clientId against it).
- */
-function tokenRequestCredentials(
-  body: unknown,
-  authorization: string | null
-): { clientId: string | null; secret: string | null } {
-  const rawId = tokenRequestField(body, 'client_id');
-  const rawSecret = tokenRequestField(body, 'client_secret');
-  if (rawId || rawSecret || !authorization?.startsWith('Basic ')) {
-    return { clientId: normalizeClientId(rawId), secret: normalizeClientId(rawSecret) };
-  }
-  try {
-    const decoded = Buffer.from(authorization.slice('Basic '.length), 'base64').toString('utf8');
-    const [id, secret] = decoded.split(':');
-    return { clientId: id || null, secret: secret || null };
-  } catch {
-    return { clientId: null, secret: null };
-  }
-}
-
-function secretsEqual(a: string, b: string): boolean {
-  const left = Buffer.from(a, 'utf8');
-  const right = Buffer.from(b, 'utf8');
-  return left.length === right.length && timingSafeEqual(left, right);
-}
-
-/**
- * The refresh grant of better-auth 1.4.18's mcp plugin (mcp/index.mjs:262-309)
- * matches the refresh token and the client id and never the client secret, so
- * a confidential client's refresh token works without its secret. Refuse that
- * here, as later better-auth releases do: a client registered with a secret
- * (any type but `public`) must present it, and a disabled client gets nothing.
- * Public clients have no secret and are unchanged.
- */
-async function assertRefreshClientAuthenticated(
-  clientId: string | null,
-  secret: string | null
+export async function revokeOAuthGrants(
+  userId: string,
+  reason: 'password_reset' | 'password_change' | 'ban',
+  { actorId = null, path = null }: { actorId?: string | null; path?: string | null } = {}
 ): Promise<void> {
-  // No client id: the grant refuses it on its own (no token row matches).
-  if (!clientId) return;
-  const client = await getPrisma().oauthApplication.findUnique({
-    where: { clientId },
-    select: { type: true, clientSecret: true, disabled: true },
+  const prisma = getPrisma();
+  const [refreshTokens, accessTokens, consents, legacyTokens, legacyConsents] =
+    await prisma.$transaction([
+      prisma.oauthRefreshToken.deleteMany({ where: { userId } }),
+      prisma.oauthAccessToken.deleteMany({ where: { userId } }),
+      prisma.oauthConsent.deleteMany({ where: { userId } }),
+      prisma.legacyOauthAccessToken.deleteMany({ where: { userId } }),
+      prisma.legacyOauthConsent.deleteMany({ where: { userId } }),
+    ]);
+  const deleted =
+    refreshTokens.count +
+    accessTokens.count +
+    consents.count +
+    legacyTokens.count +
+    legacyConsents.count;
+  if (deleted === 0) return;
+  await prisma.platformAuditLog.create({
+    data: {
+      actor_id: actorId,
+      action: 'oauth_grants.revoke',
+      target_type: 'user',
+      target_id: userId,
+      data: {
+        tool: 'auth:oauth_grants.revoke',
+        reason,
+        path,
+        refreshTokens: refreshTokens.count,
+        accessTokens: accessTokens.count,
+        consents: consents.count,
+        legacyTokens: legacyTokens.count,
+        legacyConsents: legacyConsents.count,
+      },
+    },
   });
-  if (!client) return;
-  const refuse = (description: string) =>
-    new APIError('UNAUTHORIZED', { error: 'invalid_client', error_description: description });
-  if (client.disabled) throw refuse('client is disabled');
-  if (client.type === 'public') return;
-  if (!client.clientSecret || !secret) {
-    throw refuse('client_secret is required for confidential clients');
-  }
-  if (!secretsEqual(client.clientSecret, secret)) throw refuse('invalid client_secret');
 }
+
+/**
+ * A sign-up for an address that already has an account. better-auth answers
+ * it the way it answers a new sign-up (`requireEmailVerification`), stores
+ * nothing from it, and calls this (`emailAndPassword.onExistingUserSignUp`,
+ * better-auth 1.7.18 api/routes/sign-up.mjs:192-203).
+ *
+ * When that account's address is not verified yet and it has a password,
+ * that password, the profile picture and the School ID came from a sign-up
+ * nobody has confirmed, so they are removed and the account's sessions end;
+ * whoever verifies the address then sets a password with Forgot password (the
+ * sign-up page's code screen points there). An account with no password (a
+ * Github or Gitlab user still in registration) or a verified one is left as
+ * it is.
+ *
+ * The account is read again when it is changed, not taken from better-auth's
+ * read at the start of the sign-up: one transaction clears the picture and
+ * School ID only while the account is still unverified and has a password
+ * (which locks the user row, so a verification arriving meanwhile waits for
+ * it), removes the passwords, and lists the account's sessions. Those
+ * sessions then end through better-auth's internal adapter, so the session
+ * delete hook records the end of a "View as" session among them
+ * (viewAsEndedBy: 'system'); a session created after the transaction (the
+ * verification's own sign-in) is not among them. Last, one PlatformAuditLog
+ * row (`sign_up.unverified_reset`) with the counts of what was removed and
+ * ended; none when another sign-up for the same address removed the
+ * passwords first.
+ *
+ * better-auth runs this hook inside a try/catch (`runInBackgroundOrAwait`)
+ * and only logs a failure: the sign-up answers as usual either way. A failure
+ * in the transaction changes nothing; one after it leaves what was already
+ * done in place (the audit row comes last, outside the transaction, so a
+ * failed audit write never puts the password back).
+ */
+async function resetUnverifiedPasswordAccount(user: {
+  id: string;
+  emailVerified?: boolean | null;
+}): Promise<void> {
+  if (user.emailVerified) return;
+  const prisma = getPrisma();
+  const { passwordsRemoved, sessionTokens } = await prisma.$transaction(async tx => {
+    const cleared = await tx.user.updateMany({
+      where: {
+        id: user.id,
+        emailVerified: false,
+        accounts: { some: { provider_id: 'credential' } },
+      },
+      data: { image: null, school_id: null },
+    });
+    if (cleared.count === 0) return { passwordsRemoved: 0, sessionTokens: [] };
+    const { count } = await tx.account.deleteMany({
+      where: { user_id: user.id, provider_id: 'credential' },
+    });
+    if (count === 0) return { passwordsRemoved: 0, sessionTokens: [] };
+    const sessions = await tx.session.findMany({
+      where: { user_id: user.id },
+      select: { token: true },
+    });
+    return { passwordsRemoved: count, sessionTokens: sessions.map(session => session.token) };
+  });
+  if (passwordsRemoved === 0) return;
+  if (sessionTokens.length > 0) {
+    await (await auth.$context).internalAdapter.deleteSessions(sessionTokens);
+  }
+  await prisma.platformAuditLog.create({
+    data: {
+      actor_id: null,
+      action: 'sign_up.unverified_reset',
+      target_type: 'user',
+      target_id: user.id,
+      data: {
+        tool: 'auth:sign_up.unverified_reset',
+        path: SIGN_UP_EMAIL_PATH,
+        passwordsRemoved,
+        sessionsEnded: sessionTokens.length,
+        cleared: ['image', 'school_id'],
+      },
+    },
+  });
+}
+
+/** The parts of the `hooks.before` context the rules in BEFORE_HOOK_RULES read. */
+export interface BeforeHookContext extends OAuthRuleContext {
+  path?: string;
+  method?: string;
+  headers?: Headers;
+  query?: Record<string, unknown>;
+  body?: unknown;
+  /** Set by oauth-provider on its own dispatches of /oauth2/authorize. */
+  authorizeSettings?: unknown;
+}
+
+/**
+ * The paths a `hooks.before` rule runs on: exactly the paths listed (`only`),
+ * or every path but the ones listed (`allExcept`).
+ */
+export type BeforeHookPaths =
+  | { readonly only: ReadonlySet<string> }
+  | { readonly allExcept: ReadonlySet<string> };
+
+/** One rule of `hooks.before` (see BEFORE_HOOK_RULES). */
+export interface BeforeHookRule {
+  /** Names the rule in tests (__tests__/beforeHookRules.test.ts). */
+  readonly name: string;
+  readonly paths: BeforeHookPaths;
+  /**
+   * Throws an APIError to refuse the request, or returns nothing, or returns
+   * a context change for better-auth to merge before the endpoint runs.
+   */
+  run(ctx: BeforeHookContext): Promise<BeforeHookContextChange | undefined | void>;
+}
+
+/** Whether a `hooks.before` rule runs on this path (BeforeHookRule.paths). */
+export function beforeHookRuleCovers(rule: BeforeHookRule, path: string | undefined): boolean {
+  if ('only' in rule.paths) return path !== undefined && rule.paths.only.has(path);
+  return path === undefined || !rule.paths.allExcept.has(path);
+}
+
+export const VIEW_AS_WHILE_CONNECTING_MESSAGE =
+  "View as can't be started in the middle of connecting an app.";
+
+/**
+ * The rules `hooks.before` applies, in this order, each on the paths it
+ * lists, and nothing else decides where a rule runs: no rule sits inside
+ * another test of the path. Every rule's paths are pinned path by path in
+ * __tests__/beforeHookRules.test.ts.
+ *
+ * Order matters in two places:
+ *   - /oauth2/authorize: the resource and `offline_access` are settled before
+ *     the app-connection rule judges the request and adds `prompt=consent`;
+ *     each rule sees the changes the ones before it made, and the changes are
+ *     merged (applyBeforeHookRules).
+ *   - /admin/impersonate-user: who may view as whom is decided first.
+ */
+export const BEFORE_HOOK_RULES: readonly BeforeHookRule[] = [
+  {
+    // Client registration takes no back-channel logout endpoint.
+    name: 'register-no-backchannel-logout',
+    paths: { only: new Set([OAUTH_REGISTER_PATH]) },
+    run: async ctx => refuseBackchannelLogout(ctx),
+  },
+  {
+    // Client registration takes no DPoP-bound access tokens.
+    name: 'register-no-dpop',
+    paths: { only: new Set([OAUTH_REGISTER_PATH]) },
+    run: async ctx => refuseDpopBoundRegistration(ctx),
+  },
+  {
+    // Client registration is open registration, signed in or not.
+    name: 'register-open',
+    paths: { only: new Set([OAUTH_REGISTER_PATH]) },
+    run: async ctx => openRegistrationChange(ctx),
+  },
+  {
+    // No code is bound to a DPoP key.
+    name: 'authorize-no-dpop',
+    paths: { only: new Set([OAUTH_AUTHORIZE_PATH]) },
+    run: async ctx => refuseDpopBoundAuthorization(ctx),
+  },
+  {
+    // The token endpoint reads no DPoP proof, so every token is a Bearer one.
+    name: 'token-no-dpop-proof',
+    paths: { only: new Set([OAUTH_TOKEN_PATH]) },
+    run: async ctx => dpopProofIgnored(ctx),
+  },
+  {
+    // Every authorization and token request names the MCP resource, so every
+    // access token is a JWT for it; an authorization naming another resource
+    // is refused.
+    name: 'oauth-resource',
+    paths: { only: new Set([OAUTH_AUTHORIZE_PATH, OAUTH_TOKEN_PATH]) },
+    run: ctx => resourceParamChange(ctx),
+  },
+  {
+    // A client that may refresh is asked for `offline_access`.
+    name: 'oauth-offline-access',
+    paths: { only: new Set([OAUTH_AUTHORIZE_PATH]) },
+    run: ctx => offlineAccessChange(ctx),
+  },
+  {
+    // "View as" is started only by a platform admin and never targets an
+    // admin (refuseViewingAsAnAdmin).
+    name: 'view-as-caller-and-target',
+    paths: { only: new Set([IMPERSONATE_USER_PATH]) },
+    run: ctx => refuseViewingAsAnAdmin(ctx),
+  },
+  {
+    // Starting "view as" never resumes an app connection. oauth-provider
+    // stores a signed `oauth_query` from any request body that carries one,
+    // and resumes /oauth2/authorize for the session the response sets
+    // (@better-auth/oauth-provider 1.7.18 authorize-*.mjs:7172-7221). The
+    // app-connection rule refuses that resume too; this refuses the start.
+    // Only on this path: the resumed /oauth2/authorize itself still carries
+    // `oauth_query` in its body (:7114-7120).
+    name: 'view-as-no-app-connection',
+    paths: { only: new Set([IMPERSONATE_USER_PATH]) },
+    run: async ctx => {
+      if ((ctx.body as { oauth_query?: unknown } | undefined)?.oauth_query) {
+        throw new APIError('FORBIDDEN', {
+          error: 'access_denied',
+          message: VIEW_AS_WHILE_CONNECTING_MESSAGE,
+        });
+      }
+    },
+  },
+  {
+    // No sign-in account is linked or unlinked while viewing as another user.
+    name: 'account-link-while-viewing-as',
+    paths: { only: ACCOUNT_LINK_PATHS },
+    run: ctx => refuseWhileViewingAs(ctx, ACCOUNT_LINK_VIEWING_AS_MESSAGE),
+  },
+  {
+    // No password, profile or session is changed while viewing as another user.
+    name: 'account-change-while-viewing-as',
+    paths: { only: ACCOUNT_CHANGE_PATHS },
+    run: ctx => refuseWhileViewingAs(ctx, ACCOUNT_CHANGE_VIEWING_AS_MESSAGE),
+  },
+  {
+    // This path sends address-verification codes only; a reset code has its
+    // own path (/email-otp/request-password-reset).
+    name: 'send-code-type',
+    paths: { only: new Set([SEND_VERIFICATION_OTP_PATH]) },
+    run: async ctx => {
+      if ((ctx.body as { type?: unknown } | undefined)?.type !== 'email-verification') {
+        throw new APIError('BAD_REQUEST', { message: UNSUPPORTED_CODE_TYPE_MESSAGE });
+      }
+    },
+  },
+  {
+    // Connecting apps: the consent page is always shown, and no app is
+    // connected while viewing as another user (./appConnectionGuard.ts). On
+    // the three endpoints that can issue a code. An authorization saved
+    // across a sign-in is resumed by oauth-provider dispatching
+    // /oauth2/authorize, and so are consent and continue; `hooks.before` runs
+    // on each such dispatch with that path (better-auth api/dispatch.mjs:204,
+    // 211-212), so no other path needs the rule.
+    name: 'app-connection',
+    paths: { only: APP_CONNECTION_PATHS },
+    run: ctx => applyAppConnectionRules(ctx, () => lookupViewAsSessionsForHook(ctx)),
+  },
+];
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+/** Two context changes as one: the later one's keys win. */
+function mergeContextChange(
+  earlier: BeforeHookContextChange['context'] | undefined,
+  later: BeforeHookContextChange['context']
+): BeforeHookContextChange['context'] {
+  const merged: BeforeHookContextChange['context'] = { ...earlier };
+  if (later.query) merged.query = { ...earlier?.query, ...later.query };
+  if (later.body) merged.body = { ...earlier?.body, ...later.body };
+  if (later.headers) {
+    const headers = new Headers(earlier?.headers);
+    later.headers.forEach((value, key) => headers.set(key, value));
+    merged.headers = headers;
+  }
+  return merged;
+}
+
+/** The request as the next rule sees it, with a change applied. */
+function withContextChange(
+  ctx: BeforeHookContext,
+  change: BeforeHookContextChange['context']
+): BeforeHookContext {
+  const next: BeforeHookContext = { ...ctx };
+  if (change.query) next.query = { ...ctx.query, ...change.query };
+  if (change.body) next.body = { ...(isRecord(ctx.body) ? ctx.body : {}), ...change.body };
+  if (change.headers) {
+    const headers = new Headers(ctx.headers);
+    change.headers.forEach((value, key) => headers.set(key, value));
+    next.headers = headers;
+  }
+  return next;
+}
+
+/**
+ * Runs, in order, every rule of BEFORE_HOOK_RULES whose paths include this
+ * request's path, each on the request as the rules before it changed it.
+ * Returns their changes merged (later keys win), for better-auth to merge
+ * over the request.
+ */
+async function applyBeforeHookRules(
+  ctx: BeforeHookContext
+): Promise<BeforeHookContextChange | undefined> {
+  let change: BeforeHookContextChange['context'] | undefined;
+  let current = ctx;
+  for (const rule of BEFORE_HOOK_RULES) {
+    if (!beforeHookRuleCovers(rule, current.path)) continue;
+    const result = await rule.run(current);
+    if (!result) continue;
+    change = mergeContextChange(change, result.context);
+    current = withContextChange(current, result.context);
+  }
+  return change ? { context: change } : undefined;
+}
+
+/** What `hooks.after` reads of a request. */
+interface AfterHookContext {
+  path?: string;
+  body?: unknown;
+  context: { session?: unknown; returned?: unknown };
+}
+
+/**
+ * `hooks.after`, once an endpoint has answered:
+ *   - a password change that signs out the user's other sessions also ends
+ *     their app connections (revokeOAuthGrants);
+ *   - an approved app connection writes its audit row (recordConsentGrant).
+ * A before-hook refusal ends the request before either runs (better-auth
+ * 1.7.18 api/dispatch.mjs, `dispatchAuthEndpoint`).
+ */
+async function applyAfterHookRules(ctx: AfterHookContext): Promise<void> {
+  if (ctx.path === '/change-password') return endGrantsAfterPasswordChange(ctx);
+  if (ctx.path === OAUTH_CONSENT_PATH) return recordConsentGrant(ctx);
+}
+
+/** A password change with `revokeOtherSessions` that succeeded ends the user's app connections. */
+async function endGrantsAfterPasswordChange(ctx: AfterHookContext): Promise<void> {
+  if ((ctx.body as { revokeOtherSessions?: unknown } | undefined)?.revokeOtherSessions !== true) {
+    return;
+  }
+  if (ctx.context.returned === undefined || isAPIError(ctx.context.returned)) return;
+  const userId = (ctx.context.session as { user?: { id?: unknown } } | null | undefined)?.user?.id;
+  if (!userId) return;
+  await revokeOAuthGrants(String(userId), 'password_change', {
+    actorId: String(userId),
+    path: ctx.path ?? null,
+  });
+}
+
+/** The longest client name an `oauth.consent.grant` row keeps: what registration accepts. */
+export const CONSENT_AUDIT_CLIENT_NAME_MAX = DCR_CLIENT_NAME_MAX;
+
+/** `name` cut to CONSENT_AUDIT_CLIENT_NAME_MAX UTF-16 units, never inside a surrogate pair. */
+function auditClientName(name: string | null | undefined): string | null {
+  if (typeof name !== 'string') return null;
+  if (name.length <= CONSENT_AUDIT_CLIENT_NAME_MAX) return name;
+  const cut = name.slice(0, CONSENT_AUDIT_CLIENT_NAME_MAX);
+  const last = cut.charCodeAt(cut.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
+}
+
+/**
+ * One PlatformAuditLog row (`oauth.consent.grant`) when a user approves
+ * connecting an app and the approval goes through: `/oauth2/consent` with
+ * `accept: true` saved the consent and handed the app an authorization code
+ * (the answer's `url` carries `code`). The provider saves the consent before
+ * it issues the code, so a code means the consent row was created or
+ * updated by this request. A denial, a refused approval (viewing as someone)
+ * and an approval that failed write nothing.
+ *
+ * Every approval that issues a code writes a row, a re-approval with the same
+ * scopes too: the consent page is shown for every connection, and each
+ * approval hands the app a new code and a new refresh-token family, so it is
+ * a new grant of access even when the consent row only had its time updated.
+ *
+ * `data`: the client id and name, the scopes the consent now holds, the
+ * consent's id, the user and actor ids the endpoint acted for, and whether
+ * that session was viewing as someone (approval is refused then, so this is
+ * always false). The client id comes from the authorization
+ * query the provider verified for this request (getOAuthProviderState), not
+ * from the request body. The client's name is cut to
+ * CONSENT_AUDIT_CLIENT_NAME_MAX characters: a client registers its own name.
+ * No codes, tokens or secrets. A failed write fails the request, so no
+ * approval goes unrecorded.
+ */
+async function recordConsentGrant(ctx: AfterHookContext): Promise<void> {
+  if ((ctx.body as { accept?: unknown } | undefined)?.accept !== true) return;
+  const returned = ctx.context.returned;
+  if (!returned || isAPIError(returned)) return;
+  const url = (returned as { url?: unknown }).url;
+  if (typeof url !== 'string') return;
+  let code: string | null;
+  try {
+    code = new URL(url).searchParams.get('code');
+  } catch {
+    return;
+  }
+  if (!code) return;
+
+  const session = ctx.context.session as {
+    user?: { id?: unknown };
+    session?: { impersonatedBy?: unknown };
+  } | null;
+  const userId = typeof session?.user?.id === 'string' ? session.user.id : null;
+  if (!userId) return;
+  const verified = await getOAuthProviderState();
+  const clientId = verified?.query ? new URLSearchParams(verified.query).get('client_id') : null;
+  if (!clientId) return;
+
+  const prisma = getPrisma();
+  const [client, consent] = await Promise.all([
+    prisma.oauthClient.findUnique({ where: { clientId }, select: { name: true } }),
+    prisma.oauthConsent.findFirst({
+      where: { clientId, userId },
+      orderBy: { updatedAt: 'desc' },
+      select: { id: true, scopes: true },
+    }),
+  ]);
+  if (!consent) return;
+  const impersonatedBy =
+    typeof session?.session?.impersonatedBy === 'string' && session.session.impersonatedBy
+      ? session.session.impersonatedBy
+      : null;
+  const actorId = impersonatedBy ?? userId;
+  await prisma.platformAuditLog.create({
+    data: {
+      actor_id: actorId,
+      action: 'oauth.consent.grant',
+      target_type: 'user',
+      target_id: userId,
+      data: {
+        tool: 'auth:oauth.consent.grant',
+        path: ctx.path ?? null,
+        clientId,
+        clientName: auditClientName(client?.name),
+        scopes: consent.scopes,
+        consentId: consent.id,
+        userId,
+        actorId,
+        viewingAs: impersonatedBy !== null,
+      },
+    },
+  });
+}
+
+/**
+ * The jwt plugin: the keys that sign the authorization server's access tokens
+ * (EdDSA by default; private keys encrypted with the auth secret), served at
+ * `/jwks`. The issuer is pinned to the webapp's origin, where MCP clients
+ * discover the server, rather than better-auth's base URL plus `/api/auth`.
+ * Keys rotate every 90 days; a retired key keeps verifying for the default 30
+ * days. No `set-auth-jwt` header on get-session: nothing reads one.
+ */
+const JWT_PLUGIN_OPTIONS = {
+  jwt: { issuer: AUTH_ISSUER },
+  jwks: { rotationInterval: 90 * 24 * 60 * 60 },
+  disableSettingJwtHeader: true,
+};
+
+/**
+ * The OAuth 2.1 authorization server for MCP clients
+ * (@better-auth/mcp's `mcp()`, which configures @better-auth/oauth-provider):
+ *   - one protected resource, MCP_RESOURCE; every token is issued for it
+ *     (BEFORE_HOOK_RULES oauth-resource), as a JWT the MCP server verifies;
+ *   - sign-in at the landing page, consent at /oauth/consent (the
+ *     app-connection rule shows it for every authorization);
+ *   - authorization code (PKCE S256 only) and refresh tokens; no client
+ *     credentials. Access tokens last an hour; refresh tokens 30 days, rotated
+ *     on use, a rotated one still answering with the same response for 30
+ *     seconds (a retried refresh), any later reuse ending that client's
+ *     tokens for the user;
+ *   - open dynamic client registration (`infer` decides native or web from
+ *     the redirect URIs), and Client ID Metadata Documents (cimd() below);
+ *   - `clientPrivileges` refuses every client-management action to every
+ *     session; registration is open registration (BEFORE_HOOK_RULES
+ *     register-open);
+ *   - every client may ask for every resource (one resource, so no
+ *     per-client resource links; clients copied from the 1.4 tables have
+ *     none);
+ *   - client secrets and tokens stored hashed (the defaults, stated).
+ */
+const MCP_PLUGIN_OPTIONS: Parameters<typeof mcp>[0] = {
+  resource: MCP_RESOURCE,
+  // The resource row oauth-provider seeds at boot, with its scopes listed.
+  // Unlisted, the provider would write null for them, which Prisma refuses
+  // for a list column ("must not be null"); and Prisma reads an unset list
+  // column back as `[]`, which the provider takes as "no scope allowed for
+  // this resource" (`resolveResourcePolicy`), where null means "any". The
+  // same goes for every list the provider reads: a row it does not write
+  // itself (the migration's) lists them. `merge` keeps a row seeded earlier
+  // in line with this one.
+  resources: [
+    { identifier: MCP_RESOURCE, name: 'Classmoji MCP server', allowedScopes: OAUTH_SCOPES },
+  ],
+  resourceSeedMode: 'merge',
+  loginPage: '/',
+  consentPage: '/oauth/consent',
+  scopes: OAUTH_SCOPES,
+  grantTypes: ['authorization_code', 'refresh_token'],
+  accessTokenExpiresIn: 60 * 60,
+  refreshTokenExpiresIn: 30 * 24 * 60 * 60,
+  refreshTokenReuseInterval: 30,
+  allowDynamicClientRegistration: true,
+  allowUnauthenticatedClientRegistration: true,
+  clientRegistrationDefaultApplicationType: 'infer',
+  clientPrivileges: () => false,
+  enforcePerClientResources: false,
+  storeClientSecret: 'hashed',
+  storeTokens: 'hashed',
+  // Token, authorize and register keep better-auth's global limit (100 per
+  // 10 s per client address), as on better-auth 1.4. oauth-provider's own
+  // limits for them (20, 30 and 5 per minute per address) are off: a class
+  // connecting at once from one campus network, and claude.ai's servers
+  // exchanging and refreshing for every user from a few addresses, would hit
+  // them. Revoke keeps the provider's 30 per minute (1.4 had no revoke).
+  rateLimit: { token: false, authorize: false, register: false },
+};
+
+/**
+ * Client ID Metadata Documents: a client whose id is an HTTPS URL is known by
+ * the document at that URL (Claude Code's is). Fetched with
+ * @better-auth/cimd's Node transport, which resolves the host once, requires
+ * public addresses, pins the connection and follows no redirects.
+ */
+const CIMD_PLUGIN_OPTIONS: Parameters<typeof cimd>[0] = {
+  fetchClientMetadataResource,
+  metadataProfile: 'mcp-2026-07-28',
+};
 
 export const auth = betterAuth({
   basePath: '/api/auth',
@@ -870,6 +1451,17 @@ export const auth = betterAuth({
     minPasswordLength: 8,
     autoSignIn: false,
     revokeSessionsOnPasswordReset: true,
+    // A reset (by link or by code) also ends the user's app connections.
+    // Called once the new password is in place (better-auth 1.7.18
+    // api/routes/password.mjs:164, plugins/email-otp/routes.mjs:583).
+    onPasswordReset: async ({ user }) => {
+      await revokeOAuthGrants(String(user.id), 'password_reset', { actorId: String(user.id) });
+    },
+    // A sign-up for an address that already has an account
+    // (resetUnverifiedPasswordAccount).
+    onExistingUserSignUp: async ({ user }) => {
+      await resetUnverifiedPasswordAccount(user);
+    },
   },
   emailVerification: {
     // Codes go through the emailOTP plugin (it overrides the default link
@@ -984,33 +1576,6 @@ export const auth = betterAuth({
       updatedAt: 'updated_at',
     },
   },
-  /**
-   * SECURITY (plan P1-2): the Ask Moji client never uses the token endpoint.
-   *
-   * Its access tokens are minted directly, one per chat turn, by
-   * `mintMcpAccessToken` (./mcpToken.ts) — there is no authorization-code
-   * exchange and no refresh. Leaving the grant reachable would be an
-   * escalation: better-auth's refresh grant
-   * (node_modules/better-auth/dist/plugins/mcp/index.mjs:262-309) verifies the
-   * refresh token and the client id and NEVER a client secret, so anyone
-   * holding a leaked one-hour Ask Moji bearer could trade it for an indefinitely
-   * renewable seven-day credential. The minted row already carries an
-   * already-expired refresh token; this is the explicit, client-specific
-   * refusal on top of it, so the protection does not rest on one column value.
-   *
-   * This hook runs before EVERY endpoint (better-auth gives user hooks a
-   * `() => true` matcher — dist/api/to-auth-endpoints.mjs:159-170), including
-   * hot in-process `auth.api.*` calls, so the non-matching path must stay
-   * cheap: string comparisons plus, for the app-connection rules, one anchored
-   * match on the cookie header. It does no session lookup, UNLESS the request
-   * carries the saved-authorization cookie (`oidc_login_prompt`, set by
-   * /mcp/authorize while signed out and short-lived), in which case the rules
-   * look the session up, or it is /admin/impersonate-user, where the "view as"
-   * rule reads the caller's session and the target's role, or one of
-   * ACCOUNT_LINK_PATHS or ACCOUNT_CHANGE_PATHS, where it reads whether the
-   * session is viewing as someone. Each of these reads the session twice,
-   * from the cookie cache and from the database (lookupBothSessionsForHook).
-   */
   databaseHooks: {
     session: {
       create: {
@@ -1069,13 +1634,22 @@ export const auth = betterAuth({
       },
       update: {
         // A "View as" session keeps the expiry it was created with
-        // (impersonationSessionDuration): a database read that is due a
-        // refresh (session.updateAge) would otherwise move it to
-        // session.expiresIn from now. Only that refresh updates a session row
-        // here, and it puts the row it read on `ctx.context.session` first
-        // (better-auth api/routes/session.mjs). The refresh still runs, with the
-        // same expiry, so the read returns the session and sets its cookie
-        // with the time left. Other sessions are left to refresh as usual.
+        // (impersonationSessionDuration). Starting View as sets the
+        // `dont_remember` cookie (better-auth 1.7.18
+        // plugins/admin/routes.mjs:615, impersonateUser), and the session read
+        // refreshes no session while that cookie is sent
+        // (api/routes/session.mjs:170). So this covers a read of a View as
+        // session without it: a read that is due a refresh
+        // (session.updateAge) would otherwise move the expiry to
+        // session.expiresIn from now. That refresh is the only update of a
+        // session row here, and it puts the row it read on
+        // `ctx.context.session` first (session.mjs:153-154, then :199). It
+        // still runs, with the same expiry, so the read returns the session;
+        // the cookie it sets lasts session.expiresIn (:214), but the session,
+        // and its cookie cache, end with the row. Other sessions refresh as
+        // usual. better-auth hands this hook the update it was asked for, not
+        // one a plugin's own hook changed (db/with-hooks.mjs:54); no plugin
+        // here has one.
         before: async (data, ctx) => {
           const current = (
             ctx?.context as
@@ -1083,7 +1657,11 @@ export const auth = betterAuth({
               | undefined
           )?.session?.session;
           if (!current?.impersonatedBy || !current.expiresAt) return;
-          return { data: { ...data, expiresAt: current.expiresAt as Date } };
+          // A Date from the row; a string if it ever came from the cookie
+          // cache (its payload is JSON).
+          return {
+            data: { ...data, expiresAt: new Date(current.expiresAt as string | Date) },
+          };
         },
       },
       delete: {
@@ -1114,103 +1692,112 @@ export const auth = betterAuth({
         },
       },
     },
+    user: {
+      update: {
+        // A banned user's app connections end with their sessions. Nothing
+        // in the app bans anyone today (the admin plugin's ban endpoint is
+        // off). Whoever turns banning on: catch and log a failed revocation
+        // here for a ban, so the ban still goes on to end the user's
+        // sessions.
+        after: async (user, ctx) => {
+          const row = user as { id?: unknown; banned?: unknown };
+          if (row.banned !== true || !row.id) return;
+          const actor = (
+            ctx?.context as { session?: { user?: { id?: unknown } } | null } | undefined
+          )?.session?.user?.id;
+          await revokeOAuthGrants(String(row.id), 'ban', {
+            actorId: actor ? String(actor) : null,
+            path: ctx?.path ?? null,
+          });
+        },
+      },
+    },
   },
+  /**
+   * `before` runs before EVERY endpoint (better-auth gives user hooks a
+   * `() => true` matcher, better-auth 1.7.18 api/dispatch.mjs:143-150),
+   * including hot in-process `auth.api.*` calls and the endpoints
+   * oauth-provider dispatches itself, so a path no rule needs must stay
+   * cheap: set lookups only. It runs before every plugin's own before-hooks
+   * (dispatch.mjs:143-168). The session is looked up only on
+   * /admin/impersonate-user (the caller's session and the target's role),
+   * ACCOUNT_LINK_PATHS and ACCOUNT_CHANGE_PATHS (whether the session is
+   * viewing as someone), and the authorizing endpoints /oauth2/authorize,
+   * /oauth2/consent (when approving) and /oauth2/continue. Each of these
+   * reads it from the cookie cache and from the database
+   * (lookupBothSessionsForHook). /oauth2/authorize also reads the client
+   * (oauth-offline-access), and /oauth2/token the presented refresh token
+   * (oauth-resource).
+   *
+   * One part: BEFORE_HOOK_RULES, in order, each rule on the paths it lists.
+   *
+   * `after` (applyAfterHookRules) acts on two paths only: /change-password
+   * (ending app connections) and /oauth2/consent (the audit row of an
+   * approved connection).
+   */
   hooks: {
-    before: createAuthMiddleware(async ctx => {
-      if (ctx.path !== '/mcp/token') {
-        // "View as" never targets an admin. Refused before the
-        // app-connection rules below, which still run for this path when
-        // it is allowed.
-        if (ctx.path === IMPERSONATE_USER_PATH) await refuseViewingAsAnAdmin(ctx);
-        // No sign-in account is linked or unlinked, and no password, profile
-        // or session is changed, while viewing as another user. The session
-        // is looked up on these paths only.
-        if (ACCOUNT_LINK_PATHS.has(ctx.path)) {
-          await refuseWhileViewingAs(ctx, ACCOUNT_LINK_VIEWING_AS_MESSAGE);
-        }
-        if (ACCOUNT_CHANGE_PATHS.has(ctx.path)) {
-          await refuseWhileViewingAs(ctx, ACCOUNT_CHANGE_VIEWING_AS_MESSAGE);
-        }
-        // This path sends address-verification codes only; a reset code has
-        // its own path (/email-otp/request-password-reset).
-        if (
-          ctx.path === SEND_VERIFICATION_OTP_PATH &&
-          (ctx.body as { type?: unknown } | undefined)?.type !== 'email-verification'
-        ) {
-          throw new APIError('BAD_REQUEST', { message: UNSUPPORTED_CODE_TYPE_MESSAGE });
-        }
-        // Connecting apps: the consent page is always shown, and no app is
-        // connected while viewing as another user (./appConnectionGuard.ts).
-        // Every other path returns after string comparisons and one anchored
-        // cookie-header match, with no session lookup unless the request
-        // carries the saved-authorization cookie (oidc_login_prompt). Viewing
-        // as someone by either session read counts.
-        return applyAppConnectionRules(ctx, () => lookupViewAsSessionForHook(ctx));
-      }
-
-      const authorization =
-        ctx.request?.headers.get('authorization') ?? ctx.headers?.get('authorization') ?? null;
-      const { clientId, secret } = tokenRequestCredentials(ctx.body, authorization);
-      if (clientId === ASK_MOJI_CLIENT_ID) {
-        throw new APIError('UNAUTHORIZED', {
-          error: 'invalid_client',
-          error_description:
-            'This client does not use the token endpoint. Its access tokens are minted per request and cannot be refreshed.',
-        });
-      }
-
-      // Same strict comparison the grant makes before taking its refresh branch.
-      if (tokenRequestField(ctx.body, 'grant_type') === 'refresh_token') {
-        await assertRefreshClientAuthenticated(clientId, secret);
-      }
+    before: createAuthMiddleware(async ctx =>
+      applyBeforeHookRules(ctx as unknown as BeforeHookContext)
+    ),
+    after: createAuthMiddleware(async ctx => {
+      await applyAfterHookRules(ctx as unknown as Parameters<typeof applyAfterHookRules>[0]);
     }),
   },
   /**
-   * SECURITY (plan P1-2): `/mcp/get-session` returns the ENTIRE
-   * `oauth_access_tokens` row for whatever bearer is presented — refresh token
-   * included, expiry unchecked (mcp/index.mjs:636-653). That turns any leaked
-   * access token into a read of the credential material behind it.
+   * Endpoints no app calls are off for HTTP: `disabledPaths` 404s them in
+   * better-auth's HTTP router (better-auth 1.7.18 api/index.mjs:168-170),
+   * which every app that mounts `auth.handler` goes through
+   * (apps/webapp/app/routes/api.auth.$.ts, apps/admin/app/routes/api.auth.$.ts;
+   * apps/admin hands it only View as start and sign-out, and answers 404 to
+   * the rest). In-process `auth.api.*` calls bypass the router and still work.
    *
-   * `disabledPaths` 404s the path in better-auth's HTTP router
-   * (dist/api/index.mjs:154-157), which every app that mounts `auth.handler`
-   * goes through (apps/webapp/app/routes/api.auth.$.ts,
-   * apps/admin/app/routes/api.auth.$.ts). It does NOT affect in-process
-   * `auth.api.getMcpSession`, which bypasses the router — and that is the only
-   * caller we have: apps/mcp/src/auth/resolveViewer.ts:42. Nothing in the OAuth
-   * flow uses this endpoint; it exists for better-auth's own `withMcpAuth`
-   * helper, which we do not use.
-   *
-   * `/list-sessions` is off too: no app lists a user's own sessions. So are
+   * `/list-sessions` is off: no app lists a user's own sessions. So are
    * `/get-access-token` and `/refresh-token`: no client calls them, and the
    * GitHub token the server uses comes from getValidGitHubToken (the
-   * githubUserToken service), not from these endpoints. Like every entry
-   * here, they are off for HTTP only; in-process `auth.api.*` is unchanged.
+   * githubUserToken service), not from these endpoints.
    *
    * `/verify-password` is off too: nothing calls it, and better-auth's
-   * `scope: "server"` on it does not keep it off the HTTP router. Off for HTTP
-   * only, like the rest; in-process `auth.api.verifyPassword` still works.
+   * `scope: "server"` on it does not keep it off the HTTP router.
+   *
+   * `/update-session` (which edits the session's own fields) is off: nothing
+   * calls it.
    *
    * `/sign-in/email-otp` and `/email-otp/check-verification-otp` come with the
    * emailOTP plugin and nothing calls them: an email code verifies an address
    * or resets a password here, and no form checks a code without using it.
    * Verifying an address does sign its user in: `/email-otp/verify-email`
    * creates a session (`emailVerification.autoSignInAfterVerification`); the
-   * sign-in page's verify step goes straight on to the app.
+   * sign-in page's verify step goes straight on to the app. So are the
+   * plugin's email-change pair (`/email-otp/request-email-change`,
+   * `/email-otp/change-email`): the settings page changes an email its own
+   * way.
+   *
+   * `/forget-password/email-otp` is off too: it is the emailOTP plugin's
+   * deprecated path for asking for a reset code. The sign-in page asks at
+   * `/email-otp/request-password-reset`, and nothing calls the old path.
    *
    * The admin plugin's endpoints are off too, all but "View as" start and stop
    * (/admin/impersonate-user, /admin/stop-impersonating), the only ones any app
    * calls (apps/admin useViewAs, the webapp's Staff pages and its
    * ImpersonationBanner). apps/admin reads people and classrooms through Prisma.
+   *
+   * And the authorization server's endpoints no client or page uses
+   * (OAUTH_PATHS_NOT_USED). It keeps authorize, consent, token, register and
+   * revoke, its discovery documents and the jwt plugin's `/jwks`.
    */
   disabledPaths: [
-    '/mcp/get-session',
     '/list-sessions',
     '/get-access-token',
     '/refresh-token',
     '/verify-password',
+    '/update-session',
     '/sign-in/email-otp',
     '/email-otp/check-verification-otp',
+    '/email-otp/request-email-change',
+    '/email-otp/change-email',
+    '/forget-password/email-otp',
     ...ADMIN_PATHS_NOT_USED,
+    ...OAUTH_PATHS_NOT_USED,
   ],
   // Password guessing and code guessing are throttled harder than the default
   // (better-auth enables its limiter in production only). Per client IP. Tight
@@ -1228,8 +1815,6 @@ export const auth = betterAuth({
       '/email-otp/verify-email': { window: 60, max: 5 },
       '/email-otp/reset-password': { window: 60, max: 5 },
       '/email-otp/request-password-reset': { window: 60, max: 3 },
-      // The deprecated path of the same request, kept until it is disabled.
-      '/forget-password/email-otp': { window: 60, max: 3 },
     },
   },
   plugins: [
@@ -1274,53 +1859,11 @@ export const auth = betterAuth({
         user: { fields: { banReason: 'ban_reason', banExpires: 'ban_expires_at' } },
       },
     }),
-    // OAuth 2.1 authorization server for MCP clients (discovery, dynamic client
-    // registration, PKCE, consent, DB-backed access/refresh tokens). The MCP
-    // resource server (apps/mcp) validates bearer tokens via auth.api.getMcpSession.
-    //
-    // SECURITY: better-auth 1.4.18's Dynamic Client Registration schema is
-    // `redirect_uris: z.array(z.string())` with no scheme validation, and this
-    // plugin exposes no option/hook to constrain it. To stop `javascript:`/
-    // `data:` redirect_uris from being registered (open-redirect -> consent-page
-    // XSS), the DCR endpoints are guarded in the route that delegates to
-    // `auth.handler` — see apps/webapp/app/routes/api.auth.$.ts. The consent
-    // screen additionally validates the redirect target at the sink.
-    mcp({
-      loginPage: '/', // the landing page is the sign-in page
-      // getMCPProviderMetadata merges only this top-level metadata into the
-      // AS discovery document (1.4.18 plugins/mcp reads options.metadata at
-      // runtime but MCPOptions omits it, hence the spread); the
-      // oidcConfig.metadata below is honored only by the protected-resource
-      // document. Keep both lists identical. The plugin's default algorithm
-      // list also advertises `none` (unsigned tokens); only RS256 is listed.
-      ...({
-        metadata: {
-          scopes_supported: ['openid', 'profile', 'email', 'offline_access', 'read', 'write'],
-          id_token_signing_alg_values_supported: ['RS256'],
-        },
-      } as Record<string, unknown>),
-      oidcConfig: {
-        // Required by the OIDCOptions type; the plugin overrides it with the
-        // top-level loginPage at runtime, so keep the two identical.
-        loginPage: '/',
-        // Merged with the plugin's fixed identity scopes
-        // (openid, profile, email, offline_access). Per-classroom roles do the
-        // fine-grained authorization; scopes only separate read from write.
-        scopes: ['read', 'write'],
-        consentPage: '/oauth/consent',
-        // PKCE with S256 only, as discovery already advertises. The plugin
-        // defaults to also accepting `plain`, where the challenge IS the
-        // verifier, so a leaked authorize URL would expose the code. In this
-        // version an authorize request with no challenge method counts as
-        // `plain` (mcp/authorize.mjs:78), so this also requires PKCE of every
-        // client, as the MCP authorization spec does.
-        allowPlainCodeChallengeMethod: false,
-        metadata: {
-          scopes_supported: ['openid', 'profile', 'email', 'offline_access', 'read', 'write'],
-          id_token_signing_alg_values_supported: ['RS256'],
-        },
-      },
-    }),
+    // The OAuth 2.1 authorization server for MCP clients, after the plugins
+    // above (their database hooks run first, in plugin order):
+    jwt(JWT_PLUGIN_OPTIONS),
+    mcp(MCP_PLUGIN_OPTIONS),
+    cimd(CIMD_PLUGIN_OPTIONS),
   ],
 });
 

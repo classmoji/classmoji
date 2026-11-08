@@ -7,7 +7,9 @@
  * better-auth's built-in `gitlab` provider.
  *
  * Endpoints (under /api/auth):
- *  - POST /gitlab-instance/sign-in  { instanceId, callbackURL, errorCallbackURL }
+ *  - POST /gitlab-instance/sign-in  { instanceId, callbackURL, errorCallbackURL, oauth_query? }
+ *    `oauth_query`: the signed query of an MCP client's authorization; the
+ *    callback that signs the user in then resumes it, as `/sign-in/social` does.
  *  - POST /gitlab-instance/setup    { host, clientId, clientSecret, callbackURL, errorCallbackURL }
  *    Registers a new instance. Nothing is stored until the OAuth round trip
  *    with those credentials succeeds, which proves they work and that the
@@ -22,7 +24,13 @@
  * in the account id (`<instance id>:<gitlab user id>`; see scopeGitlabId).
  */
 
-import { APIError, createAuthEndpoint, sensitiveSessionMiddleware } from 'better-auth/api';
+import {
+  addOAuthServerContext,
+  APIError,
+  createAuthEndpoint,
+  sensitiveSessionMiddleware,
+} from 'better-auth/api';
+import { getOAuthProviderState } from '@better-auth/oauth-provider';
 // eslint's resolver misses these subpath exports; TypeScript resolves them.
 // eslint-disable-next-line import/no-unresolved
 import { setSessionCookie } from 'better-auth/cookies';
@@ -143,7 +151,7 @@ async function authorizeUrl(
   additionalData: Record<string, unknown>,
   link?: { email: string; userId: string }
 ) {
-  const { state, codeVerifier } = await generateState(ctx, link, additionalData);
+  const { state, codeVerifier } = await generateState(ctx, { link, additionalData });
   const url = await createAuthorizationURL({
     id: 'gitlab',
     options: { clientId: client.clientId, clientSecret: client.clientSecret },
@@ -154,6 +162,29 @@ async function authorizeUrl(
     scopes: SIGN_IN_SCOPES,
   });
   return url.toString();
+}
+
+/**
+ * A sign-in that resumes an MCP client's authorization: the sign-in page sends
+ * the authorization's signed query as `oauth_query`, which oauth-provider's
+ * before-hook verifies and keeps for this request (getOAuthProviderState). For
+ * `/sign-in/social` the provider also puts it in the OAuth state's server
+ * context, so the callback that signs the user in resumes the authorization;
+ * it does that for no other path (@better-auth/oauth-provider 1.7.18
+ * authorize-*.mjs:7172-7195). This does the same for a self-managed Gitlab,
+ * with the same keys the provider's resume reads back (`query`, and
+ * `signedQueryIssuedAtMs`, :6883 and :7206). Called before generateState,
+ * which embeds the server context in the state.
+ */
+async function carryAuthorizationIntoState(): Promise<void> {
+  const pending = await getOAuthProviderState();
+  if (!pending?.query) return;
+  await addOAuthServerContext({
+    query: pending.query,
+    ...(pending.signedQueryIssuedAt
+      ? { signedQueryIssuedAtMs: pending.signedQueryIssuedAt.getTime() }
+      : {}),
+  });
 }
 
 function refuse(error: unknown): never {
@@ -169,7 +200,14 @@ export const gitlabInstances = () =>
         '/gitlab-instance/sign-in',
         {
           method: 'POST',
-          body: z.object({ instanceId: z.string().min(1), ...redirectBody }),
+          body: z.object({
+            instanceId: z.string().min(1),
+            ...redirectBody,
+            // The signed query of an authorization this sign-in resumes
+            // (carryAuthorizationIntoState); oauth-provider's before-hook
+            // verifies it before this endpoint runs.
+            oauth_query: z.string().optional(),
+          }),
         },
         async ctx => {
           let client;
@@ -178,6 +216,7 @@ export const gitlabInstances = () =>
           } catch (error: unknown) {
             refuse(error);
           }
+          await carryAuthorizationIntoState();
           const url = await authorizeUrl(ctx, client, {
             gitlabInstanceId: client.instanceId,
           });
@@ -414,7 +453,7 @@ export const gitlabInstances = () =>
           // signed-in user who started the round trip, instead of signing in.
           if (state.link) {
             const adapter = ctx.context.internalAdapter;
-            const existing = await adapter.findAccountByProviderId(accountId, 'gitlab');
+            const existing = await adapter.findAccountByKey({ providerId: 'gitlab', accountId });
             if (existing && existing.userId !== state.link.userId) {
               return fail('account_already_linked_to_different_user');
             }

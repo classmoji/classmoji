@@ -1,6 +1,8 @@
 /**
- * Which failures of the token lookup mean "the token store is unavailable"
- * rather than "this token is not valid".
+ * Which failures of a token check's reads mean "the token store is
+ * unavailable" rather than "this token is not valid": the internal token
+ * lookup, the signing-key read and the access-token liveness reads
+ * (internalToken.ts, jwtAccessToken.ts).
  *
  * resolveViewer answers the first with a 503 + Retry-After (try again later)
  * and everything else with a 401 (sign in again). The two must never be
@@ -25,9 +27,11 @@
  * Duck-typed on `name` and `code`/`errorCode` rather than `instanceof`, like
  * packages/tasks' `isTransientDatabaseError`: the generated client's class
  * identity is not stable across engines and re-generates. `cause` is followed
- * a few levels, so a wrapped Prisma error still counts. better-auth 1.4.18's
- * Prisma adapter rethrows the client's error unwrapped (prisma-adapter.mjs
- * `findOne` → `findFirst`), so the top level is the common case.
+ * a few levels, so a wrapped Prisma error still counts. The liveness reads
+ * call Prisma directly, and the signing-key read (`auth.api.getJwks()`,
+ * better-auth 1.7.18's jwt plugin through @better-auth/prisma-adapter)
+ * surfaces the client's error unwrapped (jwksStoreUnavailable.test.ts), so
+ * the top level is the common case.
  */
 
 const UNAVAILABLE_CODES = new Set(['P1001', 'P1002', 'P1008', 'P1017', 'P2021', 'P2022', 'P2024']);

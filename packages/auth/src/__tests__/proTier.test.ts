@@ -33,7 +33,14 @@ vi.mock('better-auth/adapters/prisma', () => ({ prismaAdapter: () => ({}) }));
 vi.mock('better-auth/plugins', () => ({
   admin: () => ({}),
   emailOTP: () => ({}),
-  mcp: () => ({}),
+  jwt: () => ({}),
+}));
+vi.mock('@better-auth/mcp', () => ({ mcp: () => ({}) }));
+vi.mock('@better-auth/cimd', () => ({ cimd: () => ({}) }));
+vi.mock('@better-auth/cimd/node', () => ({ fetchClientMetadataResource: () => null }));
+vi.mock('@better-auth/oauth-provider', () => ({
+  oauthProviderAuthServerMetadata: () => () => new Response(),
+  oauthProviderOpenIdConfigMetadata: () => () => new Response(),
 }));
 vi.mock('@classmoji/database', () => ({ default: () => ({}) }));
 

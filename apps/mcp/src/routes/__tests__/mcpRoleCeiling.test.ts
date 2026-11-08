@@ -1,25 +1,33 @@
 /**
  * The `X-Classmoji-Role-Ceiling` header: Ask Moji sends the view the chat was
  * opened in, and the route carries it on the viewer as `roleCeiling`. It is
- * read only from the Ask Moji OAuth client; another client's header is
- * ignored, whatever its value. From Ask Moji, a value that is not exactly one
- * role is refused with a 400 before any server is built.
+ * read only from Ask Moji: an INTERNAL token of the Ask Moji client
+ * (isAskMojiRequest). Every other request's header is ignored, whatever its
+ * value: an OAuth access token's (even one that names the Ask Moji client),
+ * the dev mint's, or a viewer with no token kind. From Ask Moji, a value that
+ * is not exactly one role is refused with a 400 before any server is built.
  */
 
 import Fastify from 'fastify';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { ASK_MOJI_CLIENT_ID } from '@classmoji/auth/mcp-token';
+import { ASK_MOJI_CLIENT_ID, DEV_MINT_CLIENT_ID } from '@classmoji/auth/mcp-token';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Viewer } from '../../auth/resolveViewer.ts';
+
+type TokenOf = Pick<Viewer, 'tokenKind' | 'clientId'>;
 
 const mocks = vi.hoisted(() => ({
-  clientId: 'classmoji-ask-moji' as string | null,
+  token: { tokenKind: 'internal', clientId: 'classmoji-ask-moji' } as {
+    tokenKind?: 'internal' | 'jwt';
+    clientId: string | null;
+  },
   viewers: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock('../../auth/resolveViewer.ts', () => ({
   resolveViewer: vi.fn(async () => ({
     userId: 'u1',
-    clientId: mocks.clientId,
+    ...mocks.token,
     scopes: new Set(['read']),
   })),
 }));
@@ -31,42 +39,55 @@ vi.mock('../../mcp/registry.ts', () => ({
 }));
 vi.mock('../../resources/index.ts', () => ({ registerAllResources: vi.fn() }));
 
-const { default: mcpRoutes, roleCeilingFrom, ROLE_CEILING_HEADER } = await import('../mcp.ts');
+const {
+  default: mcpRoutes,
+  isAskMojiRequest,
+  roleCeilingFrom,
+  ROLE_CEILING_HEADER,
+} = await import('../mcp.ts');
 
-const OTHER_CLIENT = 'claude-ai-connector';
+const ASK_MOJI: TokenOf = { tokenKind: 'internal', clientId: ASK_MOJI_CLIENT_ID };
+/** Every request that is not Ask Moji's. */
+const OTHERS: Array<[string, TokenOf]> = [
+  ['an OAuth client', { tokenKind: 'jwt', clientId: 'claude-ai-connector' }],
+  ['a JWT naming the Ask Moji client', { tokenKind: 'jwt', clientId: ASK_MOJI_CLIENT_ID }],
+  ['the dev mint', { tokenKind: 'internal', clientId: DEV_MINT_CLIENT_ID }],
+  ['no token kind', { clientId: ASK_MOJI_CLIENT_ID }],
+  ['no client', { tokenKind: 'internal', clientId: null }],
+];
 
 const headersWith = (value?: string) =>
   new Headers(value === undefined ? {} : { [ROLE_CEILING_HEADER]: value });
 
+describe('isAskMojiRequest', () => {
+  it('is true only for an internal token of the Ask Moji client', () => {
+    expect(isAskMojiRequest(ASK_MOJI)).toBe(true);
+    for (const [label, token] of OTHERS) expect(isAskMojiRequest(token), label).toBe(false);
+  });
+});
+
 describe('roleCeilingFrom', () => {
-  it('reads each of the four roles from the Ask Moji client', () => {
+  it('reads each of the four roles from Ask Moji', () => {
     for (const role of ['STUDENT', 'ASSISTANT', 'TEACHER', 'OWNER']) {
-      expect(roleCeilingFrom(headersWith(role), ASK_MOJI_CLIENT_ID)).toEqual({
-        ok: true,
-        ceiling: role,
-      });
+      expect(roleCeilingFrom(headersWith(role), ASK_MOJI)).toEqual({ ok: true, ceiling: role });
     }
   });
 
   it('no header from Ask Moji means no ceiling', () => {
-    expect(roleCeilingFrom(headersWith(), ASK_MOJI_CLIENT_ID)).toEqual({ ok: true, ceiling: null });
+    expect(roleCeilingFrom(headersWith(), ASK_MOJI)).toEqual({ ok: true, ceiling: null });
   });
 
   it('refuses a value from Ask Moji that is not exactly one role', () => {
     for (const bad of ['', 'student', 'Student', 'ADMIN', 'NONE', 'STUDENT, OWNER']) {
-      const result = roleCeilingFrom(headersWith(bad), ASK_MOJI_CLIENT_ID);
+      const result = roleCeilingFrom(headersWith(bad), ASK_MOJI);
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.message).toContain('X-Classmoji-Role-Ceiling');
     }
   });
 
-  it('ignores the header from any other client, valid or not', () => {
+  it.each(OTHERS)('ignores the header from %s, valid or not', (_label, token) => {
     for (const value of ['STUDENT', 'OWNER', 'garbage', '']) {
-      expect(roleCeilingFrom(headersWith(value), OTHER_CLIENT)).toEqual({
-        ok: true,
-        ceiling: null,
-      });
-      expect(roleCeilingFrom(headersWith(value), null)).toEqual({ ok: true, ceiling: null });
+      expect(roleCeilingFrom(headersWith(value), token)).toEqual({ ok: true, ceiling: null });
     }
   });
 });
@@ -93,7 +114,7 @@ describe('POST /mcp with a role ceiling', () => {
 
   beforeEach(() => {
     mocks.viewers.length = 0;
-    mocks.clientId = ASK_MOJI_CLIENT_ID;
+    mocks.token = { ...ASK_MOJI };
   });
 
   it('carries an Ask Moji ceiling on the viewer', async () => {
@@ -125,8 +146,8 @@ describe('POST /mcp with a role ceiling', () => {
     await fastify.close();
   });
 
-  it('ignores the header from another client', async () => {
-    mocks.clientId = OTHER_CLIENT;
+  it.each(OTHERS)('ignores the header from %s', async (_label, token) => {
+    mocks.token = { ...token };
     const fastify = await app();
     for (const value of ['STUDENT', 'garbage']) {
       const res = await post(fastify, value);

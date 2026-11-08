@@ -7,21 +7,21 @@
  * NODE_ENV alone is not enough — a production misconfiguration (forgetting
  * NODE_ENV=production) would otherwise expose a mint-as-anyone backdoor.
  *
- * Mints a real oauth_access_tokens row for a seeded user so tests can drive
- * POST /mcp with a bearer token without the browser OAuth dance. Accepts a
- * negative expiresInSeconds to mint an already-expired token (for the
- * expiry-rejection test).
+ * Mints an internal token (a real `mcp_internal_tokens` row, client
+ * `classmoji-dev-mint`, stored hashed like Ask Moji's: packages/auth/src/mcpToken.ts)
+ * for a seeded user, so tests can drive POST /mcp with a bearer token
+ * without the browser OAuth dance. Accepts a negative expiresInSeconds to
+ * mint an already-expired token (for the expiry-rejection test).
  *
  * Body: { login?: string, userId?: string, scopes?: string[], expiresInSeconds?: number }
  */
 
-import { randomBytes } from 'node:crypto';
 import getPrisma from '@classmoji/database';
+import { DEV_MINT_CLIENT_ID, hashInternalToken, newInternalToken } from '@classmoji/auth/mcp-token';
 import { gitUsername } from '@classmoji/utils';
 import { ClassmojiService } from '@classmoji/services';
 import type { FastifyInstance } from 'fastify';
 
-const DEV_MINT_CLIENT_ID = 'classmoji-dev-mint';
 const VALID_SCOPES = new Set(['read', 'write', 'openid', 'profile', 'email', 'offline_access']);
 
 interface MintBody {
@@ -62,32 +62,15 @@ export default async function devMintRoutes(fastify: FastifyInstance) {
         .send({ error: `User not found — run 'npm run db:seed' for test users` });
     }
 
-    const prisma = getPrisma();
-    // The token row FKs oauth_applications.client_id — keep one dev app around.
-    await prisma.oauthApplication.upsert({
-      where: { clientId: DEV_MINT_CLIENT_ID },
-      update: {},
-      create: {
-        name: 'Classmoji Dev Token Mint',
-        clientId: DEV_MINT_CLIENT_ID,
-        clientSecret: '',
-        redirectUrls: '',
-        type: 'public',
-        disabled: false,
-      },
-    });
-
-    const now = Date.now();
-    const accessTokenExpiresAt = new Date(now + expiresInSeconds * 1000);
-    const token = await prisma.oauthAccessToken.create({
+    const accessToken = newInternalToken();
+    const accessTokenExpiresAt = new Date(Date.now() + expiresInSeconds * 1000);
+    await getPrisma().mcpInternalToken.create({
       data: {
-        accessToken: `dev-${randomBytes(24).toString('hex')}`,
-        refreshToken: `dev-refresh-${randomBytes(24).toString('hex')}`,
-        accessTokenExpiresAt,
-        refreshTokenExpiresAt: new Date(now + 30 * 24 * 60 * 60 * 1000),
-        clientId: DEV_MINT_CLIENT_ID,
-        userId: user.id,
-        scopes: scopes.join(' '),
+        token_hash: hashInternalToken(accessToken),
+        client_id: DEV_MINT_CLIENT_ID,
+        user_id: user.id,
+        scopes,
+        expires_at: accessTokenExpiresAt,
       },
     });
 
@@ -95,7 +78,7 @@ export default async function devMintRoutes(fastify: FastifyInstance) {
     request.log.warn({ login: userLogin, scopes, expiresInSeconds }, '[mcp] dev token minted');
 
     return reply.status(201).send({
-      access_token: token.accessToken,
+      access_token: accessToken,
       user_id: user.id,
       login: userLogin,
       scopes,

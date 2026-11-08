@@ -60,15 +60,3 @@ export class TokenStoreUnavailableError extends Error {
     this.name = 'TokenStoreUnavailableError';
   }
 }
-
-/**
- * The bearer was not found and has the shape of a token this server version
- * does not read (see `isNewerTokenFormat` in auth/resolveViewer.ts): answered
- * like `TokenStoreUnavailableError`, 503 + Retry-After, no challenge.
- */
-export class UnsupportedTokenFormatError extends Error {
-  constructor() {
-    super('Token format not read by this server version');
-    this.name = 'UnsupportedTokenFormatError';
-  }
-}

@@ -3,10 +3,14 @@
 /**
  * The "view as" rules in `hooks.before` read the request's session two ways:
  * from the `session_data` cookie cache and from the database row the
- * `session_token` cookie names. They are separate cookies and need not
- * describe the same session, and endpoints differ in which one they read
+ * `session_token` cookie names, and endpoints differ in which one they read
  * (several take `?disableCookieCache` from the query). Each rule refuses when
  * either read is viewing as someone.
+ *
+ * better-auth 1.7 uses the cache only when its session's token is the
+ * `session_token` cookie's (api/routes/session.mjs:57), so a jar whose two
+ * cookies name different sessions is read as the token's session both ways.
+ * 1.4 read them independently; the mixed jars below pin the 1.7 reading.
  *
  * Through the REAL exported `auth`, over `auth.handler`; only Prisma and the
  * service layer are stood in. The cookie jars:
@@ -99,30 +103,6 @@ const mocks = vi.hoisted(() => {
       return Promise.resolve({ count: before - state.sessions.length });
     }),
   };
-  // A registered MCP client, so a resumed authorization would look it up.
-  client.oauthApplication = {
-    ...noop(),
-    findFirst: vi.fn(({ where }: any) =>
-      Promise.resolve(
-        where?.clientId === 'test-client'
-          ? {
-              id: 'app-1',
-              name: 'Test client',
-              icon: null,
-              metadata: null,
-              clientId: 'test-client',
-              clientSecret: null,
-              redirectUrls: 'http://localhost:9999/callback',
-              type: 'public',
-              disabled: false,
-              userId: null,
-              createdAt: new Date(),
-              updatedAt: new Date(),
-            }
-          : null
-      )
-    ),
-  };
   client.Session = client.session;
   client.User = client.user;
   client.Account = client.account;
@@ -130,7 +110,11 @@ const mocks = vi.hoisted(() => {
   return { state, users, client };
 });
 
-vi.mock('@classmoji/database', () => ({ default: () => mocks.client }));
+vi.mock('@classmoji/database', async () => {
+  const { standInClient } = await import('./support/prismaStandIn.ts');
+  const client = standInClient(mocks.client);
+  return { default: () => client };
+});
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     user: { findById: vi.fn(), findByLogin: vi.fn() },
@@ -216,31 +200,17 @@ async function post(path: string, cookie: string, body: unknown = {}) {
   );
 }
 
-const savedAuthorization = () =>
-  signed(
-    'oidc_login_prompt',
-    JSON.stringify({
-      client_id: 'test-client',
-      response_type: 'code',
-      redirect_uri: 'http://localhost:9999/callback',
-      scope: 'openid read',
-      state: 'client-state',
-      code_challenge: 'x'.repeat(43),
-      code_challenge_method: 'S256',
-      prompt: 'consent',
-    })
-  );
-
 beforeEach(() => {
   mocks.state.sessions = [];
   mocks.state.created = [];
   vi.clearAllMocks();
 });
 
-const VIEWING_JARS = ['viewingAs', 'tokenMixed', 'cacheMixed'] as const;
+// The jars whose session_token names the viewing-as session.
+const VIEWING_JARS = ['viewingAs', 'tokenMixed'] as const;
 
 describe('the two session reads', () => {
-  it('can describe different sessions for one cookie header', async () => {
+  it("ignore a cache whose token isn't the session cookie's", async () => {
     const j = await jars();
     const read = async (cookie: string, disableCookieCache: boolean) =>
       (
@@ -250,14 +220,19 @@ describe('the two session reads', () => {
         })
       )?.user.id;
 
+    // Both reads are the token's session, whichever cache rides along.
     expect([await read(j.tokenMixed, false), await read(j.tokenMixed, true)]).toEqual([
-      'admin-1',
+      'student-1',
       'student-1',
     ]);
     expect([await read(j.cacheMixed, false), await read(j.cacheMixed, true)]).toEqual([
-      'student-1',
+      'admin-1',
       'admin-1',
     ]);
+    // A matching cache is still used: no database read for it.
+    mocks.client.session.findFirst.mockClear();
+    expect(await read(j.viewingAs, false)).toBe('student-1');
+    expect(mocks.client.session.findFirst).not.toHaveBeenCalled();
   });
 });
 
@@ -265,8 +240,8 @@ describe('linking or unlinking a sign-in account', () => {
   const LINK_PATHS: Array<[string, Record<string, unknown>]> = [
     ['/link-social?disableCookieCache=true', { provider: 'github', callbackURL: '/settings' }],
     ['/link-social', { provider: 'github', callbackURL: '/settings' }],
-    ['/unlink-account?disableCookieCache=true', { providerId: 'github' }],
-    ['/unlink-account', { providerId: 'github' }],
+    ['/unlink-account?disableCookieCache=true', { providerId: 'github', accountId: 'gh-1' }],
+    ['/unlink-account', { providerId: 'github', accountId: 'gh-1' }],
     [
       '/gitlab-instance/link',
       { instanceId: 'inst-1', callbackURL: '/settings', errorCallbackURL: '/settings' },
@@ -295,16 +270,41 @@ describe('linking or unlinking a sign-in account', () => {
     expect(await res.text()).not.toContain(ACCOUNT_LINK_VIEWING_AS_MESSAGE);
   });
 
+  // The admin's own token with the viewing-as session's cache: better-auth
+  // reads the token's session, so the endpoint acts on the admin's own
+  // account and never on the viewed user's.
+  it.each(LINK_PATHS)(
+    "leaves %s acting on the admin's own account for the cacheMixed jar",
+    async (path, body) => {
+      const j = await jars();
+
+      const res = await post(path, j.cacheMixed, body);
+
+      expect(await res.text()).not.toContain(ACCOUNT_LINK_VIEWING_AS_MESSAGE);
+      const accountReads = mocks.client.account.findMany.mock.calls.map(
+        ([args]: any[]) => args?.where?.user_id
+      );
+      expect(accountReads).not.toContain('student-1');
+      expect(mocks.client.account.delete).not.toHaveBeenCalled();
+    }
+  );
+
   it('lets the own jar reach the unlink endpoint, and adds no session cookie of its own', async () => {
     const j = await jars();
 
     const res = await post('/unlink-account?disableCookieCache=true', j.own, {
       providerId: 'github',
+      accountId: 'gh-1',
     });
 
     // The endpoint lists the user's accounts before unlinking one.
     expect(mocks.client.account.findMany).toHaveBeenCalled();
-    expect(res.headers.getSetCookie()).toEqual([]);
+    // No session_token cookie: the hook's reads refresh nothing. (better-auth
+    // 1.7's own read for the endpoint sets the session_data cache again after
+    // a database read.)
+    expect(
+      res.headers.getSetCookie().filter(c => c.startsWith(`${COOKIE_PREFIX}.session_token=`))
+    ).toEqual([]);
   });
 });
 
@@ -337,6 +337,24 @@ describe('changing a password, profile or sessions', () => {
     });
   }
 
+  // The admin's own token with the viewing-as session's cache: the change,
+  // if made, is the admin's own.
+  it.each(CHANGE_PATHS)(
+    'leaves %s acting on the admin for the cacheMixed jar',
+    async (path, body) => {
+      const j = await jars();
+
+      const res = await post(path, j.cacheMixed, body);
+
+      expect(await res.text()).not.toContain(ACCOUNT_CHANGE_VIEWING_AS_MESSAGE);
+      for (const [args] of mocks.client.user.update.mock.calls as any[]) {
+        expect(args?.where?.id).toBe('admin-1');
+      }
+      // The viewing-as session is left alone.
+      expect(mocks.state.sessions.some(s => s.token === VIEWING_TOKEN)).toBe(true);
+    }
+  );
+
   it('lets the own jar change its own name', async () => {
     const j = await jars();
 
@@ -365,7 +383,6 @@ describe('connecting an app', () => {
 
       const res = await post('/oauth2/consent?disableCookieCache=true', j[jar], {
         accept: true,
-        consent_code: 'any-consent-code',
       });
 
       expect(res.status).toBe(403);
@@ -377,58 +394,29 @@ describe('connecting an app', () => {
     });
   }
 
+  // The admin's own token with the viewing-as session's cache: approving is
+  // the admin's own, and writes nothing for the viewed user.
+  it('leaves approving consent to the admin for the cacheMixed jar', async () => {
+    const j = await jars();
+
+    const res = await post('/oauth2/consent?disableCookieCache=true', j.cacheMixed, {
+      accept: true,
+    });
+
+    expect(await res.text()).not.toContain(CONNECT_APP_VIEWING_AS_MESSAGE);
+    for (const [args] of mocks.client.oauthConsent.create.mock.calls as any[]) {
+      expect(args?.data?.userId).toBe('admin-1');
+    }
+  });
+
   it('lets the own jar through to the consent endpoint', async () => {
     const j = await jars();
 
     const res = await post('/oauth2/consent?disableCookieCache=true', j.own, {
       accept: true,
-      consent_code: 'unknown-consent-code',
     });
 
     expect(await res.text()).not.toContain(CONNECT_APP_VIEWING_AS_MESSAGE);
-  });
-
-  // The mcp plugin's after-hook resumes a saved authorization on any response
-  // that sets a session cookie. The session_token cookie is set again when
-  // /get-session refreshes a database-read session that is due for it.
-  it('resumes a saved authorization for an ordinary session that is refreshed (control)', async () => {
-    addSession('token-due', 'admin-1', null, 2 * 86_400_000);
-    const cookie = `${await tokenCookie('token-due')}; ${await savedAuthorization()}`;
-
-    const res = await auth.handler(
-      new Request(`${BASE}/get-session?disableCookieCache=true`, { headers: { cookie } })
-    );
-
-    expect(res.status).toBe(302);
-    expect(new URL(res.headers.get('location')!, 'http://x').pathname).toBe('/oauth/consent');
-    expect(mocks.client.oauthApplication.findFirst).toHaveBeenCalled();
-  });
-
-  it('does not resume it for the token-mixed jar when the database read refreshes the session', async () => {
-    const j = await jars();
-    const cookie = `${j.tokenMixed}; ${await savedAuthorization()}`;
-
-    const res = await auth.handler(
-      new Request(`${BASE}/get-session?disableCookieCache=true`, { headers: { cookie } })
-    );
-
-    expect(res.status).toBe(200);
-    expect(res.headers.get('location')).toBeNull();
-    expect(mocks.client.oauthApplication.findFirst).not.toHaveBeenCalled();
-    expect(mocks.client.verification.create).not.toHaveBeenCalled();
-    // The session cookie was set again, so the after-hook's trigger was met.
-    expect(res.headers.get('set-cookie') ?? '').toContain(`${COOKIE_PREFIX}.session_token=`);
-  });
-
-  it('does not resume it for the cache-mixed jar on a profile update', async () => {
-    const j = await jars();
-    const cookie = `${j.cacheMixed}; ${await savedAuthorization()}`;
-
-    const res = await post('/update-user', cookie, { name: 'Renamed' });
-
-    expect(res.status).toBe(403);
-    expect(mocks.client.oauthApplication.findFirst).not.toHaveBeenCalled();
-    expect(mocks.client.verification.create).not.toHaveBeenCalled();
   });
 });
 
@@ -436,12 +424,25 @@ describe('starting to view as someone', () => {
   it('is refused for a caller whose two reads are not both a platform admin not viewing as anyone', async () => {
     const j = await jars();
 
-    for (const cookie of [j.viewingAs, j.tokenMixed, j.cacheMixed]) {
+    for (const cookie of [j.viewingAs, j.tokenMixed]) {
       const res = await post('/admin/impersonate-user', cookie, { userId: 'student-1' });
       expect(res.status).toBe(403);
       expect(await res.json()).toMatchObject({ message: VIEW_AS_PLATFORM_ADMINS_ONLY_MESSAGE });
     }
     expect(mocks.state.created).toHaveLength(0);
+  });
+
+  // The admin's own token with the viewing-as session's cache: the start is
+  // the token's admin's, from their own session.
+  it('uses the session the token names for the cacheMixed jar', async () => {
+    const j = await jars();
+
+    const res = await post('/admin/impersonate-user', j.cacheMixed, { userId: 'student-1' });
+
+    expect(res.status).toBe(200);
+    expect(mocks.state.created).toEqual([
+      expect.objectContaining({ user_id: 'student-1', impersonatedBy: 'admin-1' }),
+    ]);
   });
 
   it('works for the own jar', async () => {
@@ -475,21 +476,26 @@ describe('starting to view as someone', () => {
     expect(mocks.client.platformAuditLog.create).not.toHaveBeenCalled();
   });
 
-  it('is refused when the cache and the database read name two different platform admins', async () => {
+  // A cache naming another platform admin is ignored: the start is the
+  // token's admin's.
+  it("starts as the token's admin when the cache names another platform admin", async () => {
     addSession(ADMIN_TOKEN, 'admin-1', null, 7 * 86_400_000);
     addSession('token-admin-2', 'admin-2', null, 7 * 86_400_000);
     const otherAdminCache = await cacheCookieFor('token-admin-2');
+    const adminCache = await cacheCookieFor(ADMIN_TOKEN);
     vi.clearAllMocks();
 
-    for (const cookie of [
-      `${await tokenCookie(ADMIN_TOKEN)}; ${otherAdminCache}`,
-      `${await tokenCookie('token-admin-2')}; ${await cacheCookieFor(ADMIN_TOKEN)}`,
-    ]) {
+    for (const [cookie, admin] of [
+      [`${await tokenCookie(ADMIN_TOKEN)}; ${otherAdminCache}`, 'admin-1'],
+      [`${await tokenCookie('token-admin-2')}; ${adminCache}`, 'admin-2'],
+    ] as const) {
+      mocks.state.created = [];
       const res = await post('/admin/impersonate-user', cookie, { userId: 'student-1' });
-      expect(res.status).toBe(403);
-      expect(await res.json()).toMatchObject({ message: VIEW_AS_PLATFORM_ADMINS_ONLY_MESSAGE });
+      expect(res.status).toBe(200);
+      expect(mocks.state.created).toEqual([
+        expect.objectContaining({ user_id: 'student-1', impersonatedBy: admin }),
+      ]);
     }
-    expect(mocks.state.created).toHaveLength(0);
   });
 
   it("leaves a request with neither read to the endpoint's own 401", async () => {
@@ -535,8 +541,49 @@ describe('the expiry of a View as session', () => {
     expect(mocks.client.session.update).toHaveBeenCalledTimes(1);
     expect(updatedExpiry().getTime()).toBe(expiresAt.getTime());
     // The cookie is set again with the time the session has left.
-    expect(maxAge(res)).toBeGreaterThan(3_500);
-    expect(maxAge(res)).toBeLessThanOrEqual(3_600);
+    // better-auth 1.7 sets the session cookie again for session.expiresIn
+    // (api/routes/session.mjs:203-206), whatever the row's expiry; the
+    // session ends with its row, which the next test pins.
+    expect(maxAge(res)).toBe(7 * 86_400);
+  });
+
+  it('ends at its pinned expiry, whatever the cookie says', async () => {
+    addSession(VIEWING_TOKEN, 'student-1', 'admin-1', 3_600_000);
+    const res = await read(VIEWING_TOKEN);
+    expect(res.status).toBe(200);
+    const cache = res.headers
+      .getSetCookie()
+      .map(header => header.split(';')[0]!)
+      .find(p => p.startsWith(`${COOKIE_PREFIX}.session_data=`));
+    const cookie = [await tokenCookie(VIEWING_TOKEN), ...(cache ? [cache] : [])].join('; ');
+
+    vi.useFakeTimers({ now: Date.now() + 3_600_000 + 1_000 });
+    try {
+      const later = await auth.api.getSession({
+        headers: new Headers({ cookie }),
+        query: { disableRefresh: true },
+      });
+      expect(later).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A refresh made by an endpoint's own session read (sessionMiddleware), not
+  // by /get-session: the expiry is pinned there too.
+  it('stays put on a nested read that is due a refresh (/list-accounts)', async () => {
+    addSession(VIEWING_TOKEN, 'student-1', 'admin-1', 3_600_000);
+    const expiresAt = mocks.state.sessions[0]!.expires_at as Date;
+
+    const res = await auth.handler(
+      new Request(`${BASE}/list-accounts`, {
+        headers: { cookie: await tokenCookie(VIEWING_TOKEN) },
+      })
+    );
+
+    expect(res.status).toBe(200);
+    expect(mocks.client.session.update).toHaveBeenCalledTimes(1);
+    expect(updatedExpiry().getTime()).toBe(expiresAt.getTime());
   });
 
   it('still extends an ordinary session that is due a refresh', async () => {
@@ -559,7 +606,8 @@ describe('isViewingAsAnotherUser', () => {
 
     expect(await check(j.viewingAs)).toBe(true);
     expect(await check(j.tokenMixed)).toBe(true);
-    expect(await check(j.cacheMixed)).toBe(true);
+    // The admin's own token: the viewing-as cache beside it is not read.
+    expect(await check(j.cacheMixed)).toBe(false);
     expect(await check(j.own)).toBe(false);
     expect(await check('')).toBe(false);
     // Neither read refreshes the session.

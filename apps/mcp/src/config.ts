@@ -6,51 +6,32 @@
  * postgres 5433 — see .dev-context).
  */
 
-const stripTrailingSlash = (url: string): string => url.replace(/\/+$/, '');
+import { AUTH_ISSUER, MCP_PUBLIC_ORIGIN, MCP_RESOURCE } from '@classmoji/auth/mcp-resource';
 
-/**
- * Validate an absolute http(s) URL, throwing at boot on a schemeless or
- * malformed value. The resource identifier advertised in RFC 9728
- * protected-resource metadata and WWW-Authenticate challenges MUST be an
- * absolute origin; a schemeless value ('mcp.example.com', 'localhost:8100')
- * silently produces broken metadata clients cannot resolve.
- */
-const requireHttpUrl = (value: string, varName: string): string => {
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
-    throw new Error(`[mcp] ${varName} must be an absolute http(s) URL, got: ${value}`);
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error(`[mcp] ${varName} must use http:// or https://, got: ${value}`);
-  }
-  return stripTrailingSlash(value);
-};
+const stripTrailingSlash = (url: string): string => url.replace(/\/+$/, '');
 
 export const MCP_PORT = Number(process.env.MCP_PORT) || 8100;
 
 /**
- * Public origin of THIS resource server. Advertised as `resource` in the
- * RFC 9728 protected-resource metadata and referenced from WWW-Authenticate
- * challenges. Must be the externally reachable URL in production.
+ * Public origin of THIS resource server (`MCP_PUBLIC_URL`, an origin only;
+ * `http://localhost:<MCP_PORT>` outside production, required in it). The
+ * shared module (packages/auth/src/mcpResource.ts) validates it at import, so
+ * a schemeless or malformed value fails at boot. WWW-Authenticate challenges
+ * point at the protected-resource metadata under it.
  */
-export const MCP_PUBLIC_URL = requireHttpUrl(
-  process.env.MCP_PUBLIC_URL || `http://localhost:${MCP_PORT}`,
-  'MCP_PUBLIC_URL'
-);
+export const MCP_PUBLIC_URL = MCP_PUBLIC_ORIGIN;
 
 /**
- * Origin of the OAuth authorization server (the webapp running the
- * better-auth `mcp()` plugin at basePath /api/auth).
+ * The MCP resource identifier, `<MCP_PUBLIC_URL>/mcp`: the `resource` the
+ * protected-resource metadata advertises, and the `aud` every OAuth access
+ * token must name. One value with the OAuth server's (packages/auth).
  */
+export { MCP_RESOURCE };
+
+/** The OAuth server's issuer: the webapp's origin, the `iss` of every access token. */
+export { AUTH_ISSUER };
+
+/** The webapp's base URL, for links into it (feedback posts). */
 export const WEBAPP_URL = stripTrailingSlash(process.env.WEBAPP_URL || 'http://localhost:3000');
 
 export const PROTECTED_RESOURCE_METADATA_PATH = '/.well-known/oauth-protected-resource';
-
-if (process.env.NODE_ENV === 'production' && !process.env.MCP_PUBLIC_URL) {
-  throw new Error(
-    '[mcp] MCP_PUBLIC_URL is required in production — it is the resource identifier ' +
-      'advertised in OAuth protected-resource metadata and WWW-Authenticate challenges.'
-  );
-}

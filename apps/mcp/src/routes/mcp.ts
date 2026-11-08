@@ -52,11 +52,7 @@ import {
   type BodyLimit,
   type BodyReservation,
 } from '../mcp/bodyBudget.ts';
-import {
-  TokenStoreUnavailableError,
-  UnauthorizedError,
-  UnsupportedTokenFormatError,
-} from '../mcp/errors.ts';
+import { TokenStoreUnavailableError, UnauthorizedError } from '../mcp/errors.ts';
 import {
   jsonValueBound,
   MAX_BODY_JSON_VALUES,
@@ -86,18 +82,31 @@ export function timezoneHintFrom(headers: Headers): string | null {
 }
 
 /**
+ * Whether the request is Ask Moji's: an internal token (one Classmoji minted,
+ * auth/internalToken.ts) of the Ask Moji client. Only such a request's role
+ * ceiling and View as headers are read. An OAuth access token can never name
+ * that client: its id is reserved, and auth/jwtAccessToken.ts refuses it.
+ */
+export function isAskMojiRequest(viewer: Pick<Viewer, 'tokenKind' | 'clientId'>): boolean {
+  return viewer.tokenKind === 'internal' && viewer.clientId === ASK_MOJI_CLIENT_ID;
+}
+
+/**
  * Ask Moji's role ceiling: the view (`viewAs`) the chat was opened in, so a
- * user who holds several roles resolves at or below it. Read only from the
- * Ask Moji client; every other client's header is ignored, whatever its value.
- * Unlike the zone hint it changes authorization, so a value from Ask Moji
- * that is not exactly one role is refused instead of dropped.
+ * user who holds several roles resolves at or below it. Read only from Ask
+ * Moji (isAskMojiRequest); every other request's header is ignored, whatever
+ * its value. Unlike the zone hint it changes authorization, so a value from
+ * Ask Moji that is not exactly one role is refused instead of dropped.
  */
 export const ROLE_CEILING_HEADER = 'x-classmoji-role-ceiling';
 
 export type RoleCeilingResult = { ok: true; ceiling: Role | null } | { ok: false; message: string };
 
-export function roleCeilingFrom(headers: Headers, clientId: string | null): RoleCeilingResult {
-  if (clientId !== ASK_MOJI_CLIENT_ID) return { ok: true, ceiling: null };
+export function roleCeilingFrom(
+  headers: Headers,
+  viewer: Pick<Viewer, 'tokenKind' | 'clientId'>
+): RoleCeilingResult {
+  if (!isAskMojiRequest(viewer)) return { ok: true, ceiling: null };
   const value = headers.get(ROLE_CEILING_HEADER);
   if (value === null) return { ok: true, ceiling: null };
   const ceiling = parseRoleCeiling(value);
@@ -109,12 +118,14 @@ export function roleCeilingFrom(headers: Headers, clientId: string | null): Role
 }
 
 /**
- * Who is viewing as the user, when an Ask Moji conversation runs under
- * impersonation: the actor's user id, which the Ask Moji task sends on every
- * request of such a conversation. Read only from the Ask Moji client, like the
- * role ceiling; every other client's header is ignored, whatever its value.
- * It is written into audit rows, so a value from Ask Moji that is not a plain
- * id is refused instead of dropped.
+ * Who is viewing as the user, when an Ask Moji turn runs under View as: the
+ * platform admin the token's row names (the mint read it from the View as
+ * session, packages/auth/src/mcpToken.ts), never the header alone. The Ask
+ * Moji task also sends the admin's id on every request of such a turn; a
+ * header that is not a plain id, or that names someone other than the
+ * token's admin (or anyone, for a token minted outside View as), is refused.
+ * Every other request's header is ignored, whatever its value, and it gets no
+ * admin. The value is written into audit rows.
  */
 export const IMPERSONATED_BY_HEADER = 'x-classmoji-impersonated-by';
 
@@ -126,16 +137,25 @@ export type ImpersonatedByResult =
 
 export function impersonatedByFrom(
   headers: Headers,
-  clientId: string | null
+  viewer: Pick<Viewer, 'tokenKind' | 'clientId' | 'impersonatedBy'>
 ): ImpersonatedByResult {
-  if (clientId !== ASK_MOJI_CLIENT_ID) return { ok: true, impersonatedBy: null };
+  if (!isAskMojiRequest(viewer)) return { ok: true, impersonatedBy: null };
+  const bound = viewer.impersonatedBy ?? null;
   const value = headers.get(IMPERSONATED_BY_HEADER);
-  if (value === null) return { ok: true, impersonatedBy: null };
-  if (IMPERSONATED_BY_PATTERN.test(value)) return { ok: true, impersonatedBy: value };
-  return {
-    ok: false,
-    message: 'Invalid X-Classmoji-Impersonated-By header: expected a user id',
-  };
+  if (value === null) return { ok: true, impersonatedBy: bound };
+  if (!IMPERSONATED_BY_PATTERN.test(value)) {
+    return {
+      ok: false,
+      message: 'Invalid X-Classmoji-Impersonated-By header: expected a user id',
+    };
+  }
+  if (value !== bound) {
+    return {
+      ok: false,
+      message: 'Invalid X-Classmoji-Impersonated-By header: it does not match the token',
+    };
+  }
+  return { ok: true, impersonatedBy: bound };
 }
 
 /** The Streamable HTTP session header. */
@@ -183,8 +203,13 @@ export function batchCarriesOtherRequests(body: unknown): boolean {
   return false;
 }
 
-/** RFC 9728 §5.1: challenge advertises where our protected-resource metadata lives. */
-const WWW_AUTHENTICATE_VALUE = `Bearer resource_metadata="${MCP_PUBLIC_URL}${PROTECTED_RESOURCE_METADATA_PATH}"`;
+/**
+ * RFC 9728 §5.1: the challenge says where our protected-resource metadata
+ * lives, plus the scopes to ask for, which the MCP authorization spec
+ * (2026-07-28) says a server SHOULD send. Never `offline_access` (the spec
+ * says SHOULD NOT): the OAuth server adds it for a client that may refresh.
+ */
+export const WWW_AUTHENTICATE_VALUE = `Bearer resource_metadata="${MCP_PUBLIC_URL}${PROTECTED_RESOURCE_METADATA_PATH}", scope="read write"`;
 
 function toFetchHeaders(request: FastifyRequest): Headers {
   const headers = new Headers();
@@ -196,7 +221,8 @@ function toFetchHeaders(request: FastifyRequest): Headers {
 }
 
 function sendUnauthorized(reply: FastifyReply, message: string) {
-  // Same shape better-auth's withMcpAuth returns (JSON-RPC error + challenge).
+  // A JSON-RPC error body with the challenge header (WWW_AUTHENTICATE_VALUE),
+  // which names the protected-resource metadata clients discover from.
   return reply
     .status(401)
     .header('WWW-Authenticate', WWW_AUTHENTICATE_VALUE)
@@ -212,11 +238,10 @@ function sendUnauthorized(reply: FastifyReply, message: string) {
 export const TOKEN_STORE_RETRY_AFTER_SECONDS = 30;
 
 /**
- * The token could not be checked at all (the token store is unavailable, or
- * the token is in a format a newer version of this server reads), so nothing
- * is known about it: a 503 asking the client to try again, and on purpose NO
- * `WWW-Authenticate` challenge, which would send it into signing in again
- * with a token that may be perfectly good.
+ * The token could not be checked at all (the token store or the signing keys
+ * could not be read), so nothing is known about it: a 503 asking the client
+ * to try again, and on purpose NO `WWW-Authenticate` challenge, which would
+ * send it into signing in again with a token that may be perfectly good.
  */
 function sendTryAgain(reply: FastifyReply) {
   return reply
@@ -283,10 +308,6 @@ async function authenticate(request: FastifyRequest, reply: FastifyReply) {
   } catch (error) {
     if (error instanceof TokenStoreUnavailableError) {
       request.log.warn({ err: error.cause }, '[mcp] token store unavailable; answering 503');
-      return sendTryAgain(reply);
-    }
-    if (error instanceof UnsupportedTokenFormatError) {
-      request.log.info('[mcp] bearer in a newer token format; answering 503');
       return sendTryAgain(reply);
     }
     const message = error instanceof UnauthorizedError ? error.message : 'Authentication failed';
@@ -409,9 +430,9 @@ export default async function mcpRoutes(fastify: FastifyInstance, opts: McpRoute
     if (!auth) return sendUnauthorized(reply, 'Authentication failed');
     const { headers, viewer } = auth;
 
-    // The ceiling and the impersonation actor depend on which client the
-    // token was issued to, so they are read after the token is resolved.
-    const roleCeiling = roleCeilingFrom(headers, viewer.clientId);
+    // The ceiling and the View as admin depend on which token the request
+    // carries, so they are read after the token is resolved.
+    const roleCeiling = roleCeilingFrom(headers, viewer);
     if (!roleCeiling.ok) {
       return reply.status(400).send({
         jsonrpc: '2.0',
@@ -420,7 +441,7 @@ export default async function mcpRoutes(fastify: FastifyInstance, opts: McpRoute
       });
     }
     viewer.roleCeiling = roleCeiling.ceiling;
-    const impersonatedBy = impersonatedByFrom(headers, viewer.clientId);
+    const impersonatedBy = impersonatedByFrom(headers, viewer);
     if (!impersonatedBy.ok) {
       return reply.status(400).send({
         jsonrpc: '2.0',

@@ -114,6 +114,9 @@ jobs:
               # content-checkpoint renders live docs with these.
               - 'packages/collab/**'
               - 'packages/page-schema/**'
+              # The chat agents mint their MCP tokens with this package
+              # (@classmoji/auth/mcp-token), which apps/mcp checks them with.
+              - 'packages/auth/**'
 
   deploy-webapp:
     needs: changes

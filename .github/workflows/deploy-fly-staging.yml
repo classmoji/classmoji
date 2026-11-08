@@ -121,6 +121,9 @@ jobs:
               # content-checkpoint renders live docs with these.
               - 'packages/collab/**'
               - 'packages/page-schema/**'
+              # The chat agents mint their MCP tokens with this package
+              # (@classmoji/auth/mcp-token), which apps/mcp checks them with.
+              - 'packages/auth/**'
 
   # Build images before the migration barrier; only rollouts wait for webapp.
   # At most six monorepo builds: collab takes hook-station's slot when it
