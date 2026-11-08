@@ -83,9 +83,10 @@ const Index = ({ loaderData }: Route.ComponentProps) => {
   // Use BetterAuth client for OAuth flow. `redirectPath` was validated in the
   // loader; it is null unless it is a safe relative path.
   const callbackURL = redirectPath ?? '/select-organization';
-  const handleGitHubLogin = async () => {
-    await authClient.signIn.social({ provider: 'github', callbackURL, errorCallbackURL: '/' });
-  };
+  // On success the auth client goes on to Github by itself; an error comes
+  // back for the sign-in page to show.
+  const handleGitHubLogin = () =>
+    authClient.signIn.social({ provider: 'github', callbackURL, errorCallbackURL: '/' });
   const gitlabSignIn = gitlab.enabled ? (
     <GitLabSignIn options={gitlab} callbackURL={callbackURL} />
   ) : null;

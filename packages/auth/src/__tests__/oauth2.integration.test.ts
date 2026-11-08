@@ -39,6 +39,18 @@ const DATABASE_URL = process.env.OAUTH_IT_DATABASE_URL;
 if (DATABASE_URL) process.env.DATABASE_URL = DATABASE_URL;
 process.env.WEBAPP_URL = 'http://localhost:3000';
 process.env.BETTER_AUTH_SECRET = 'test-secret-that-is-at-least-32-chars!!';
+// Github and gitlab.com sign-in are registered from these (read at import).
+process.env.GITHUB_CLIENT_ID = 'it-github-client';
+process.env.GITHUB_CLIENT_SECRET = 'it-github-secret';
+process.env.GITLAB_CLIENT_ID = 'it-gitlab-client';
+process.env.GITLAB_CLIENT_SECRET = 'it-gitlab-secret';
+
+const services = vi.hoisted(() => ({
+  /** Every code the auth server mailed, newest last. */
+  sentCodes: [] as { email: string; otp: string; type: string }[],
+  /** A self-managed Gitlab's answers, by URL (gitlabFetch). */
+  gitlab: new Map<string, unknown>(),
+}));
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
@@ -47,7 +59,31 @@ vi.mock('@classmoji/services', () => ({
     classroomMembership: { findByClassroomAndUser: vi.fn() },
     githubUserToken: { getGitHubTokenForUser: vi.fn(async () => null) },
     subscription: { getProStateForClassroomId: vi.fn() },
-    authEmail: { sendAuthOtp: vi.fn(async () => {}) },
+    authEmail: {
+      sendAuthOtp: vi.fn(async (email: string, otp: string, type: string) => {
+        services.sentCodes.push({ email, otp, type });
+      }),
+    },
+    gitlabInstance: {
+      oauthClient: vi.fn(async (instanceId: string) => ({
+        instanceId,
+        host: 'https://gitlab.example.edu',
+        clientId: 'gl-client',
+        clientSecret: 'gl-secret',
+      })),
+      probe: vi.fn(async (host: string) => `https://${host}`),
+      findByHost: vi.fn(async () => null),
+      encryptSecret: vi.fn((secret: string) => `sealed:${secret}`),
+      decryptSecret: vi.fn((sealed: string) => sealed.replace(/^sealed:/, '')),
+      create: vi.fn(async () => ({})),
+      notifyAdminsOfRequest: vi.fn(async () => {}),
+      gitlabFetch: vi.fn(async (url: string) => {
+        const answer = services.gitlab.get(url);
+        return answer === undefined
+          ? new Response('not found', { status: 404 })
+          : Response.json(answer);
+      }),
+    },
   },
 }));
 const MIGRATION = '20261107180000_oauth2_provider_tables';
@@ -814,5 +850,302 @@ describe.skipIf(!DATABASE_URL)('the authorization server (real Postgres)', () =>
         'ban',
       ]);
     });
+  });
+});
+
+describe.skipIf(!DATABASE_URL)('signing in to resume an app connection (real Postgres)', () => {
+  type Auth = typeof import('../server.ts');
+  let server: Auth;
+  let db: PrismaClient;
+  let gitlabInstance: Record<string, ReturnType<typeof vi.fn>>;
+  const BASE = 'http://localhost:3000/api/auth';
+  const GITLAB = 'https://gitlab.example.edu';
+
+  beforeAll(async () => {
+    db = new PrismaClient({ datasourceUrl: DATABASE_URL });
+    server = await import('../server.ts');
+    const { ClassmojiService } = await import('@classmoji/services');
+    gitlabInstance = ClassmojiService.gitlabInstance as unknown as typeof gitlabInstance;
+  }, 120_000);
+
+  afterAll(async () => {
+    await db?.$disconnect();
+  });
+
+  /** An authorization started while signed out: the signed query the sign-in page gets. */
+  async function signedOutAuthorization(): Promise<string> {
+    const query = new URLSearchParams({
+      client_id: 'pubclient',
+      response_type: 'code',
+      redirect_uri: 'http://localhost:33418/callback',
+      scope: 'read write',
+      state: 'client-state',
+      code_challenge: 'x'.repeat(43),
+      code_challenge_method: 'S256',
+    });
+    const res = await server.auth.handler(new Request(`${BASE}/oauth2/authorize?${query}`));
+    const location = new URL(res.headers.get('location') ?? '', 'http://localhost:3000');
+    expect(location.pathname).toBe('/');
+    expect(location.searchParams.get('sig')).toBeTruthy();
+    return location.searchParams.toString();
+  }
+
+  const post = (path: string, body: unknown, cookie?: string) =>
+    server.auth.handler(
+      new Request(`${BASE}${path}`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          origin: 'http://localhost:3000',
+          ...(cookie ? { cookie } : {}),
+        },
+        body: JSON.stringify(body),
+      })
+    );
+
+  /** The cookies a response sets, as a request's cookie header. */
+  const cookiesOf = (res: Response) =>
+    res.headers
+      .getSetCookie()
+      .map(c => c.split(';')[0]!)
+      .join('; ');
+
+  /** Where an answer sends the browser is the consent page, for the same authorization. */
+  function expectConsentPage(url: string | null | undefined) {
+    const target = new URL(url ?? '', 'http://localhost:3000');
+    expect(target.pathname).toBe('/oauth/consent');
+    expect(target.searchParams.get('client_id')).toBe('pubclient');
+    expect(target.searchParams.get('state')).toBe('client-state');
+    expect(target.searchParams.get('prompt')).toBe('consent');
+  }
+
+  /** The OAuth state a sign-in stored (database state), by the `state` of its authorize URL. */
+  async function storedState(authorizeUrl: string) {
+    const state = new URL(authorizeUrl).searchParams.get('state');
+    const row = await db.verification.findFirst({ where: { identifier: `auth-state:${state}` } });
+    expect(row, 'the OAuth state is stored').toBeTruthy();
+    return JSON.parse(row!.value) as Record<string, any>;
+  }
+
+  /**
+   * A self-managed Gitlab's half of the round trip: what its token and user
+   * endpoints answer, then its redirect back to the callback with the code,
+   * from the browser that started (its state cookie), as a navigation.
+   */
+  async function gitlabCallback(
+    start: Response,
+    profile: Record<string, unknown>,
+    host = GITLAB
+  ): Promise<Response> {
+    expect(start.status).toBe(200);
+    const { url } = (await start.clone().json()) as { url: string };
+    expect(new URL(url).origin).toBe(host);
+    services.gitlab.set(`${host}/oauth/token`, {
+      access_token: `gl-access-${String(profile.id)}`,
+      token_type: 'bearer',
+      expires_in: 7200,
+      scope: 'read_user',
+    });
+    services.gitlab.set(`${host}/api/v4/user`, { state: 'active', locked: false, ...profile });
+    const state = new URL(url).searchParams.get('state');
+    return server.auth.handler(
+      new Request(`${BASE}/gitlab-instance/callback?code=gl-code&state=${state}`, {
+        headers: { cookie: cookiesOf(start), 'sec-fetch-mode': 'navigate', accept: 'text/html' },
+      })
+    );
+  }
+
+  it('an email verification code resumes it at the consent page', async () => {
+    const email = 'resume-verify@example.org';
+    const signUp = await post('/sign-up/email', {
+      name: 'Resume Verify',
+      email,
+      password: 'resume-password-1',
+    });
+    expect(signUp.status).toBe(200);
+    const sent = await post('/email-otp/send-verification-otp', {
+      email,
+      type: 'email-verification',
+    });
+    expect(sent.status).toBe(200);
+    const { otp } = services.sentCodes.filter(c => c.email === email).at(-1)!;
+
+    const res = await post('/email-otp/verify-email', {
+      email,
+      otp,
+      oauth_query: await signedOutAuthorization(),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { redirect?: boolean; url?: string };
+    expect(body.redirect).toBe(true);
+    expectConsentPage(body.url);
+  });
+
+  it('an email and password sign-in resumes it at the consent page', async () => {
+    // Verified by the test above.
+    const res = await post('/sign-in/email', {
+      email: 'resume-verify@example.org',
+      password: 'resume-password-1',
+      oauth_query: await signedOutAuthorization(),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { redirect?: boolean; url?: string };
+    expect(body.redirect).toBe(true);
+    expectConsentPage(body.url);
+  });
+
+  it.each([['github'], ['gitlab']])(
+    '%s sign-in carries it across the provider round trip (OAuth state)',
+    async provider => {
+      const oauthQuery = await signedOutAuthorization();
+
+      const res = await post('/sign-in/social', {
+        provider,
+        callbackURL: '/select-organization',
+        oauth_query: oauthQuery,
+      });
+
+      expect(res.status).toBe(200);
+      const { url } = (await res.json()) as { url: string };
+      const carried = new URLSearchParams((await storedState(url)).serverContext?.query);
+      // The authorization, without its signature (oauth-provider's own form).
+      expect(carried.get('client_id')).toBe('pubclient');
+      expect(carried.get('state')).toBe('client-state');
+      expect(carried.has('sig')).toBe(false);
+    }
+  );
+
+  it('a self-managed Gitlab sign-in carries it across the round trip and resumes it', async () => {
+    const oauthQuery = await signedOutAuthorization();
+    const start = await post('/gitlab-instance/sign-in', {
+      instanceId: 'inst-it',
+      callbackURL: '/select-organization',
+      errorCallbackURL: '/',
+      oauth_query: oauthQuery,
+    });
+    const { url } = (await start.clone().json()) as { url: string };
+    const stored = await storedState(url);
+    expect(stored.gitlabInstanceId).toBe('inst-it');
+    expect(new URLSearchParams(stored.serverContext?.query).get('client_id')).toBe('pubclient');
+
+    const res = await gitlabCallback(start, {
+      id: 4242,
+      username: 'resume-gl',
+      name: 'Resume Gitlab',
+      email: 'resume-gl@example.org',
+    });
+
+    // Signed in, and on to the consent page rather than the callbackURL.
+    expect(res.status).toBe(302);
+    expect(cookiesOf(res)).toContain(`${server.COOKIE_PREFIX}.session_token=`);
+    expectConsentPage(res.headers.get('location'));
+    expect(
+      await db.account.count({ where: { provider_id: 'gitlab', account_id: 'inst-it:4242' } })
+    ).toBe(1);
+  });
+
+  it('a self-managed Gitlab sign-in without one goes to its callbackURL (instance in the state)', async () => {
+    const start = await post('/gitlab-instance/sign-in', {
+      instanceId: 'inst-it',
+      callbackURL: '/select-organization',
+      errorCallbackURL: '/',
+    });
+    const { url } = (await start.clone().json()) as { url: string };
+    expect((await storedState(url)).serverContext).toBeUndefined();
+    gitlabInstance.oauthClient!.mockClear();
+
+    const res = await gitlabCallback(start, {
+      id: 4343,
+      username: 'plain-gl',
+      name: 'Plain Gitlab',
+      email: 'plain-gl@example.org',
+    });
+
+    expect(res.status).toBe(302);
+    expect(new URL(res.headers.get('location')!).pathname).toBe('/select-organization');
+    // The callback resolved the instance the sign-in named.
+    expect(gitlabInstance.oauthClient).toHaveBeenCalledWith('inst-it');
+  });
+
+  it('a Gitlab setup carries its pending instance across the round trip', async () => {
+    gitlabInstance.create!.mockClear();
+    const start = await post('/gitlab-instance/setup', {
+      host: 'gitlab.setup.example.edu',
+      clientId: 'setup-client',
+      clientSecret: 'setup-secret',
+      note: 'CS 1',
+      callbackURL: '/gitlab/setup',
+      errorCallbackURL: '/gitlab/setup',
+    });
+    const { url } = (await start.clone().json()) as { url: string };
+    // The secret rides the state sealed.
+    expect((await storedState(url)).gitlabSetup).toMatchObject({
+      host: 'https://gitlab.setup.example.edu',
+      clientId: 'setup-client',
+      clientSecret: 'sealed:setup-secret',
+      note: 'CS 1',
+    });
+
+    const res = await gitlabCallback(
+      start,
+      { id: 77, username: 'setup-gl', name: 'Setup', email: 'setup-gl@example.org' },
+      'https://gitlab.setup.example.edu'
+    );
+
+    expect(res.status).toBe(302);
+    const next = new URL(res.headers.get('location')!);
+    expect(`${next.pathname}${next.search}`).toBe('/gitlab/setup?gitlab_setup=pending');
+    expect(gitlabInstance.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        host: 'https://gitlab.setup.example.edu',
+        clientId: 'setup-client',
+        clientSecret: 'setup-secret',
+      })
+    );
+    expect(cookiesOf(res)).not.toContain(`${server.COOKIE_PREFIX}.session_token=`);
+  });
+
+  it('Connect Gitlab carries the signed-in user across the round trip', async () => {
+    const user = await db.user.findFirstOrThrow({ where: { email: 'resume-verify@example.org' } });
+    await db.session.create({
+      data: {
+        id: 'it-session-link',
+        token: 'it-session-token-link',
+        user_id: user.id,
+        expires_at: new Date(Date.now() + 86_400_000),
+      },
+    });
+    const cookie = (
+      await serializeSignedCookie(
+        `${server.COOKIE_PREFIX}.session_token`,
+        'it-session-token-link',
+        process.env.BETTER_AUTH_SECRET!
+      )
+    ).split(';')[0]!;
+    const start = await post(
+      '/gitlab-instance/link',
+      { instanceId: 'inst-it', callbackURL: '/settings/connections' },
+      cookie
+    );
+    const { url } = (await start.clone().json()) as { url: string };
+    expect((await storedState(url)).link).toMatchObject({ userId: user.id, email: user.email });
+
+    const res = await gitlabCallback(start, {
+      id: 5151,
+      username: 'linked-gl',
+      name: 'Linked',
+      email: 'linked-gl@example.org',
+    });
+
+    expect(res.status).toBe(302);
+    expect(new URL(res.headers.get('location')!).pathname).toBe('/settings/connections');
+    expect(
+      await db.account.findFirst({
+        where: { provider_id: 'gitlab', account_id: 'inst-it:5151' },
+        select: { user_id: true },
+      })
+    ).toEqual({ user_id: user.id });
   });
 });
