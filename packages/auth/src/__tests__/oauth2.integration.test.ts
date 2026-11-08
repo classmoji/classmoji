@@ -645,6 +645,57 @@ describe.skipIf(!DATABASE_URL)('the authorization server (real Postgres)', () =>
     expect(res.body.error).toBe('invalid_target');
   });
 
+  it('keeps better-auth’s global limit on token, authorize and register: the 101st request in 10 s from one address is refused', async () => {
+    const ctx = await server.auth.$context;
+    const enabled = ctx.rateLimit.enabled;
+    ctx.rateLimit.enabled = true;
+    const run = Date.now();
+    try {
+      const requests: Record<string, (ip: string) => Request> = {
+        token: ip =>
+          new Request(`${BASE}/oauth2/token`, {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/x-www-form-urlencoded',
+              'x-forwarded-for': ip,
+            },
+            body: new URLSearchParams({
+              grant_type: 'refresh_token',
+              refresh_token: 'not-a-token',
+              client_id: 'pubclient',
+            }).toString(),
+          }),
+        authorize: ip =>
+          new Request(`${BASE}/oauth2/authorize?client_id=no-such-client&response_type=code`, {
+            headers: { 'x-forwarded-for': ip },
+          }),
+        register: ip =>
+          new Request(`${BASE}/oauth2/register`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', 'x-forwarded-for': ip },
+            body: JSON.stringify({ redirect_uris: 'not a list' }),
+          }),
+      };
+      let n = 0;
+      for (const [name, request] of Object.entries(requests)) {
+        // An address of its own for each endpoint and each run (the limiter's
+        // memory store lives as long as the process).
+        n += 1;
+        const ip = `198.51.100.${(run + n) % 250}`;
+        const statuses: number[] = [];
+        for (let i = 0; i < 101; i++)
+          statuses.push((await server.auth.handler(request(ip))).status);
+        expect(
+          statuses.slice(0, 100).filter(status => status === 429),
+          name
+        ).toEqual([]);
+        expect(statuses[100], name).toBe(429);
+      }
+    } finally {
+      ctx.rateLimit.enabled = enabled;
+    }
+  });
+
   it('gives a registered client with only authorization_code a refresh token', async () => {
     const reg = await server.auth.handler(
       new Request(`${BASE}/oauth2/register`, {

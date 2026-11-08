@@ -1286,6 +1286,13 @@ const MCP_PLUGIN_OPTIONS: Parameters<typeof mcp>[0] = {
   enforcePerClientResources: false,
   storeClientSecret: 'hashed',
   storeTokens: 'hashed',
+  // Token, authorize and register keep better-auth's global limit (100 per
+  // 10 s per client address), as on better-auth 1.4. oauth-provider's own
+  // limits for them (20, 30 and 5 per minute per address) are off: a class
+  // connecting at once from one campus network, and claude.ai's servers
+  // exchanging and refreshing for every user from a few addresses, would hit
+  // them. Revoke keeps the provider's 30 per minute (1.4 had no revoke).
+  rateLimit: { token: false, authorize: false, register: false },
 };
 
 /**
