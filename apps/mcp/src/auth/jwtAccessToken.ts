@@ -4,6 +4,7 @@
  * here on every request, before the body is read (routes/mcp.ts).
  *
  * THE TOKEN
+ *   - a protected header that is a JSON object naming its key (`kid`);
  *   - signed by one of the server's keys, read in process with
  *     `auth.api.getJwks()` (the `jwks` table) and cached by core's verifier
  *     under JWKS_CACHE_KEY: five minutes, and refetched (at most every 30 s)
@@ -83,7 +84,30 @@ const TOKEN_REFUSED_CODES = new Set([
   'ERR_JWKS_NO_MATCHING_KEY',
   'ERR_JOSE_ALG_NOT_ALLOWED',
   'ERR_JOSE_NOT_SUPPORTED',
+  // More than one key in the set fits the token's header. A token the server
+  // signed names its key (`kid`, checked first), so this is not one of them.
+  'ERR_JWKS_MULTIPLE_MATCHING_KEYS',
 ]);
+
+/**
+ * The token's protected header names its key: a JSON object with a string
+ * `kid`. The OAuth server signs with the jwt plugin, which always sets `kid`
+ * to the key's id. Checked before the verifier, which would otherwise throw
+ * an error with no code for a header that is not JSON.
+ */
+function namesItsKey(bearer: string): boolean {
+  let header: unknown;
+  try {
+    header = JSON.parse(
+      Buffer.from(bearer.slice(0, bearer.indexOf('.')), 'base64url').toString('utf8')
+    );
+  } catch {
+    return false;
+  }
+  if (!header || typeof header !== 'object' || Array.isArray(header)) return false;
+  const kid = (header as { kid?: unknown }).kid;
+  return typeof kid === 'string' && kid.length > 0;
+}
 
 const codeOf = (error: unknown): unknown =>
   error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined;
@@ -100,6 +124,7 @@ async function read<T>(query: () => Promise<T>): Promise<T> {
 
 /** The token's verified claims, or the error that says why not. */
 async function verifiedClaims(bearer: string): Promise<Record<string, unknown>> {
+  if (!namesItsKey(bearer)) throw new UnauthorizedError('Invalid access token');
   try {
     return await verifyJwsAccessToken(bearer, {
       jwksFetch: fetchJwks,

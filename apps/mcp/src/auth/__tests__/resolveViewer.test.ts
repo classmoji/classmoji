@@ -438,6 +438,30 @@ describe('a JWT access token', () => {
     await refused(signed(claims({ cnf: { jkt: 'thumbprint' } })));
   });
 
+  it('refuses a token whose header is not a JSON object naming its key, before any key read', async () => {
+    const payload = b64(claims());
+    const signature = signed(claims()).split('.')[2];
+    for (const header of [
+      'aaaa', // not JSON
+      b64('[1]'), // JSON, not an object
+      b64('null'),
+      b64({ alg: 'EdDSA', typ: 'at+jwt' }), // no kid
+      b64({ alg: 'EdDSA', typ: 'at+jwt', kid: 7 }),
+      b64({ alg: 'EdDSA', typ: 'at+jwt', kid: '' }),
+    ]) {
+      const failure = await failureOf(bearer(`${header}.${payload}.${signature}`));
+      expect(failure, header).toBeInstanceOf(UnauthorizedError);
+    }
+    expect(await failureOf(bearer('aaaa.bbbb.cccc'))).toBeInstanceOf(UnauthorizedError);
+    expect(mocks.getJwks).not.toHaveBeenCalled();
+  });
+
+  it('refuses a token that more than one of the keys fits', async () => {
+    const twin = keyPair(SERVER_KEY.kid);
+    serveKeys(SERVER_KEY, twin);
+    expect(await failureOf(bearer(signed(claims())))).toBeInstanceOf(UnauthorizedError);
+  });
+
   it('refuses a token signed with no algorithm (alg none)', async () => {
     const token = `${b64({ alg: 'none', typ: 'at+jwt' })}.${b64(claims())}.`;
     await refused(token);
