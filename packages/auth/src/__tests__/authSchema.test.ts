@@ -10,7 +10,7 @@
  * client (no query is made) and repeats the comparison the same way:
  *
  *   - models matched by name with the first letter lowercased
- *     (`oauthApplication` is Prisma's `OauthApplication`);
+ *     (`oauthClient` is Prisma's `OauthClient`);
  *   - every field better-auth writes (`fieldName`, else its key) plus `id`
  *     must be a scalar field of that model;
  *   - a required scalar field better-auth never writes must have a default.
