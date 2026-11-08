@@ -1250,6 +1250,38 @@ describe.skipIf(!DATABASE_URL)('the authorization server (real Postgres)', () =>
       // Cut at 200 UTF-16 units, but never inside the emoji's surrogate pair.
       expect((row!.data as { clientName: string }).clientName).toBe('N'.repeat(199));
     });
+
+    it('refuses an approval from another origin, or from none, once the origin check is on', async () => {
+      // vitest runs with NODE_ENV=test, where better-auth skips its origin
+      // check (context/create-context.mjs, `skipOriginCheck`); the check reads
+      // the flag on every request.
+      const ctx = (await server.auth.$context) as unknown as { skipOriginCheck: unknown };
+      const skipped = ctx.skipOriginCheck;
+      ctx.skipOriginCheck = false;
+      try {
+        const signed = await signedQueryFor(ownCookie);
+        const before = (await grantRows()).length;
+        const approve = (headers: Record<string, string>) =>
+          server.auth.handler(
+            new Request(`${BASE}/oauth2/consent`, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json', cookie: ownCookie, ...headers },
+              body: JSON.stringify({ accept: true, oauth_query: signed }),
+            })
+          );
+        expect((await approve({ origin: 'https://elsewhere.example' })).status).toBe(403);
+        expect((await approve({ origin: 'https://sub.localhost:3000' })).status).toBe(403);
+        expect((await approve({})).status).toBe(403);
+        expect(await grantRows()).toHaveLength(before);
+
+        const same = await approve({ origin: 'http://localhost:3000' });
+        expect(same.status).toBe(200);
+        const { url } = (await same.json()) as { url: string };
+        expect(new URL(url).searchParams.get('code')).toBeTruthy();
+      } finally {
+        ctx.skipOriginCheck = skipped;
+      }
+    });
   });
 
   describe('ending app connections', () => {
