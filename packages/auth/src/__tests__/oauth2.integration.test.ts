@@ -1210,6 +1210,46 @@ describe.skipIf(!DATABASE_URL)('the authorization server (real Postgres)', () =>
       expect(res.status).toBeGreaterThanOrEqual(400);
       expect(await grantRows()).toHaveLength(before);
     });
+
+    it('keeps at most 200 characters of the client’s name in the row', async () => {
+      // Registered straight through auth.handler: the webapp's registration
+      // guard (@classmoji/auth/oauth-redirect) caps the name, a client stored
+      // another way (a copied 1.4 client) may not be.
+      const reg = await server.auth.handler(
+        new Request(`${BASE}/oauth2/register`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            client_name: `${'N'.repeat(199)}😀${'M'.repeat(100)}`,
+            redirect_uris: [REDIRECT],
+            token_endpoint_auth_method: 'none',
+          }),
+        })
+      );
+      expect(reg.status).toBe(201);
+      const { client_id: longNamed } = (await reg.json()) as { client_id: string };
+      const { challenge } = pkce();
+      const query = new URLSearchParams({
+        client_id: longNamed,
+        response_type: 'code',
+        redirect_uri: REDIRECT,
+        scope: 'read',
+        code_challenge: challenge,
+        code_challenge_method: 'S256',
+      });
+      const authorize = await server.auth.handler(
+        new Request(`${BASE}/oauth2/authorize?${query}`, { headers: { cookie: ownCookie } })
+      );
+      const signed = new URL(authorize.headers.get('location') ?? '', 'http://localhost:3000');
+      const res = await answer(ownCookie, signed.searchParams.toString(), true);
+      expect(res.status).toBe(200);
+
+      const [row] = await db.platformAuditLog.findMany({
+        where: { action: 'oauth.consent.grant', data: { path: ['clientId'], equals: longNamed } },
+      });
+      // Cut at 200 UTF-16 units, but never inside the emoji's surrogate pair.
+      expect((row!.data as { clientName: string }).clientName).toBe('N'.repeat(199));
+    });
   });
 
   describe('ending app connections', () => {

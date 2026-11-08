@@ -50,6 +50,7 @@ import {
   type OAuthRuleContext,
 } from './oauthRequestRules.ts';
 import { AUTH_ISSUER, MCP_RESOURCE } from './mcpResource.ts';
+import { DCR_CLIENT_NAME_MAX } from './oauthRedirect.ts';
 import { mapGitHubProfile, mapGitLabProfile, onAccountCreated } from './providerProfile.ts';
 
 export { AUTH_SECRET, COOKIE_PREFIX };
@@ -1167,6 +1168,18 @@ async function endGrantsAfterPasswordChange(ctx: AfterHookContext): Promise<void
   });
 }
 
+/** The longest client name an `oauth.consent.grant` row keeps: what registration accepts. */
+export const CONSENT_AUDIT_CLIENT_NAME_MAX = DCR_CLIENT_NAME_MAX;
+
+/** `name` cut to CONSENT_AUDIT_CLIENT_NAME_MAX UTF-16 units, never inside a surrogate pair. */
+function auditClientName(name: string | null | undefined): string | null {
+  if (typeof name !== 'string') return null;
+  if (name.length <= CONSENT_AUDIT_CLIENT_NAME_MAX) return name;
+  const cut = name.slice(0, CONSENT_AUDIT_CLIENT_NAME_MAX);
+  const last = cut.charCodeAt(cut.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
+}
+
 /**
  * One PlatformAuditLog row (`oauth.consent.grant`) when a user approves
  * connecting an app and the approval goes through: `/oauth2/consent` with
@@ -1186,8 +1199,10 @@ async function endGrantsAfterPasswordChange(ctx: AfterHookContext): Promise<void
  * that session was viewing as someone (approval is refused then, so this is
  * always false). The client id comes from the authorization
  * query the provider verified for this request (getOAuthProviderState), not
- * from the request body. No codes, tokens or secrets. A failed write fails
- * the request, so no approval goes unrecorded.
+ * from the request body. The client's name is cut to
+ * CONSENT_AUDIT_CLIENT_NAME_MAX characters: a client registers its own name.
+ * No codes, tokens or secrets. A failed write fails the request, so no
+ * approval goes unrecorded.
  */
 async function recordConsentGrant(ctx: AfterHookContext): Promise<void> {
   if ((ctx.body as { accept?: unknown } | undefined)?.accept !== true) return;
@@ -1238,7 +1253,7 @@ async function recordConsentGrant(ctx: AfterHookContext): Promise<void> {
         tool: 'auth:oauth.consent.grant',
         path: ctx.path ?? null,
         clientId,
-        clientName: client?.name ?? null,
+        clientName: auditClientName(client?.name),
         scopes: consent.scopes,
         consentId: consent.id,
         userId,

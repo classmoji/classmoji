@@ -8,7 +8,9 @@
  *   - token, registration, revocation and the signing keys answer any origin
  *     (CORS, no credentials), errors included, and a preflight is answered
  *     without reaching better-auth; nothing else gets the headers;
- *   - the four discovery routes answer any origin too, preflight included.
+ *   - the four discovery routes answer any origin too, preflight included,
+ *     and leave out every DPoP key oauth-provider writes;
+ *   - a registration over the size limits is refused before better-auth.
  * better-auth itself is stood in (auth.handler, and the two endpoints the
  * discovery helpers read); the helpers are oauth-provider's own.
  */
@@ -130,6 +132,20 @@ describe('client registration', () => {
       expect(mocks.handler).not.toHaveBeenCalled();
     }
   );
+
+  it('refuses one whose client_name is over the size limit before better-auth', async () => {
+    const res = await send('/api/auth/oauth2/register', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        client_name: 'N'.repeat(201),
+        redirect_uris: ['https://ok.example/cb'],
+      }),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: 'invalid_client_metadata' });
+    expect(mocks.handler).not.toHaveBeenCalled();
+  });
 
   it('hands a native app scheme on to better-auth', async () => {
     mocks.handler.mockResolvedValue(json({ client_id: 'new' }, 201));

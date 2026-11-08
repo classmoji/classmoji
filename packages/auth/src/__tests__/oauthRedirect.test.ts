@@ -4,9 +4,13 @@
  * registration refuses a client naming one before better-auth stores it.
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
+  DCR_BODY_MAX_BYTES,
+  DCR_CLIENT_NAME_MAX,
   DCR_REGISTER_PATH,
+  DCR_URI_FIELDS,
+  DCR_URI_MAX,
   DENIED_REDIRECT_SCHEMES,
   isAllowedRedirectTarget,
   rejectUnsafeDynamicClientRegistration,
@@ -104,6 +108,79 @@ describe('rejectUnsafeDynamicClientRegistration', () => {
     ['a body that is not JSON', 'not json'],
   ])('leaves %s to better-auth', async (_label, body) => {
     expect(await rejectUnsafeDynamicClientRegistration(register(body))).toBeNull();
+  });
+
+  describe('sizes', () => {
+    const ok = 'https://client.example/cb';
+    const tooLarge = async (request: Request) => {
+      const res = await rejectUnsafeDynamicClientRegistration(request);
+      expect(res?.status).toBe(400);
+      expect(await res!.json()).toMatchObject({ error: 'invalid_client_metadata' });
+    };
+
+    it('lets a registration at every limit through', async () => {
+      const fields = Object.fromEntries(
+        DCR_URI_FIELDS.map(field => [
+          field,
+          `https://client.example/${'u'.repeat(DCR_URI_MAX - 'https://client.example/'.length)}`,
+        ])
+      );
+      for (const value of Object.values(fields)) expect(value.length).toBe(DCR_URI_MAX);
+      expect(
+        await rejectUnsafeDynamicClientRegistration(
+          register({
+            client_name: 'N'.repeat(DCR_CLIENT_NAME_MAX),
+            redirect_uris: [`${ok}?${'q'.repeat(DCR_URI_MAX - ok.length - 1)}`],
+            ...fields,
+          })
+        )
+      ).toBeNull();
+    });
+
+    it('refuses a client_name over the limit', async () => {
+      await tooLarge(
+        register({ client_name: 'N'.repeat(DCR_CLIENT_NAME_MAX + 1), redirect_uris: [ok] })
+      );
+    });
+
+    it.each(DCR_URI_FIELDS)('refuses a %s over the limit', async field => {
+      await tooLarge(
+        register({ redirect_uris: [ok], [field]: `https://c.example/${'u'.repeat(DCR_URI_MAX)}` })
+      );
+    });
+
+    it.each(['redirect_uris', 'post_logout_redirect_uris'])(
+      'refuses a URI in %s over the limit',
+      async field => {
+        await tooLarge(
+          register({ redirect_uris: [ok], [field]: [ok, `${ok}?${'q'.repeat(DCR_URI_MAX)}`] })
+        );
+      }
+    );
+
+    it('refuses a body over the limit, by its declared length before reading it', async () => {
+      const request = new Request(`${ORIGIN}${DCR_REGISTER_PATH}`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'content-length': String(DCR_BODY_MAX_BYTES + 1),
+        },
+        body: JSON.stringify({ redirect_uris: [ok] }),
+      });
+      const clone = vi.spyOn(request, 'clone');
+      await tooLarge(request);
+      expect(clone).not.toHaveBeenCalled();
+    });
+
+    it('refuses a body over the limit without a declared length (many fields)', async () => {
+      const contacts = Array.from(
+        { length: 300 },
+        (_, i) => `person${i}@${'x'.repeat(60)}.example`
+      );
+      const body = JSON.stringify({ redirect_uris: [ok], contacts });
+      expect(body.length).toBeGreaterThan(DCR_BODY_MAX_BYTES);
+      await tooLarge(register(body));
+    });
   });
 
   // The 1.4 path is mapped to the registration path before the guard runs
