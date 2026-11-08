@@ -108,6 +108,44 @@ describe('an access token from the OAuth server', () => {
     expect(names).toContain('page_comment_create'); // a write tool: `write` was granted
   });
 
+  it('writes the client and no View as admin on the audit row of a staff read', async () => {
+    const clientId = await registerClient();
+    const { access_token } = await connectApp(clientId, await sessionCookie(ta));
+    expect(claimsOf(access_token).azp).toBe(clientId);
+
+    // With a View as header: read only from an Ask Moji token, so ignored here.
+    const res = await fetch(`${BASE}/mcp`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        authorization: `Bearer ${access_token}`,
+        'x-classmoji-impersonated-by': fx.users['fake-teacher'].id,
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'get_roster', arguments: { classroom: DEV_REF } },
+      }),
+    });
+    expect(res.status).toBe(200);
+    const envelope = (await res.json()) as { result?: { isError?: boolean } };
+    expect(envelope.result?.isError).toBeFalsy();
+
+    const rows = await prisma.auditLog.findMany({
+      where: {
+        user_id: ta,
+        action: 'VIEW',
+        timestamp: { gte: suiteStart },
+        data: { path: ['client_id'], equals: clientId },
+      },
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.data).toMatchObject({ tool: 'get_roster', via: 'mcp', client_id: clientId });
+    expect(rows[0]!.data).not.toHaveProperty('impersonated_by');
+  });
+
   it('is served when the client also asked for openid (the audience is then a list)', async () => {
     const clientId = await registerClient();
     const { access_token } = await connectApp(
