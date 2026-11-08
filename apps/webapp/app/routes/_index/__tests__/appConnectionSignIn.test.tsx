@@ -240,18 +240,20 @@ describe('a signed authorization that has expired', () => {
 });
 
 describe('a sign-in round trip the auth server could not match', () => {
-  it.each([['state_mismatch'], ['state_not_found'], ['state_invalid'], ['please_restart_the_process']])(
-    '?error=%s gets its own sentence',
-    code => {
-      const html = renderToStaticMarkup(
-        <SignInPage
-          handleGitHubLogin={async () => {}}
-          callbackURL="/select-organization"
-          oauthError={code}
-        />
-      );
-      expect(html).toContain('Sign-in didn&#x27;t go through. Please try again.');
-      expect(html).not.toContain('Sign-in failed. Please try again.');
-    }
-  );
+  it.each([
+    ['state_mismatch'],
+    ['state_not_found'],
+    ['state_invalid'],
+    ['please_restart_the_process'],
+  ])('?error=%s gets its own sentence', code => {
+    const html = renderToStaticMarkup(
+      <SignInPage
+        handleGitHubLogin={async () => {}}
+        callbackURL="/select-organization"
+        oauthError={code}
+      />
+    );
+    expect(html).toContain('Sign-in didn&#x27;t go through. Please try again.');
+    expect(html).not.toContain('Sign-in failed. Please try again.');
+  });
 });

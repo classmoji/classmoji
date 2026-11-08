@@ -65,7 +65,9 @@ beforeEach(async () => {
   document.body.appendChild(container);
   root = createRoot(container);
   await act(async () =>
-    root.render(<SignInPage handleGitHubLogin={async () => {}} callbackURL="/select-organization" />)
+    root.render(
+      <SignInPage handleGitHubLogin={async () => {}} callbackURL="/select-organization" />
+    )
   );
   await click('Continue with email');
   await shown('#auth-email');

@@ -1179,8 +1179,7 @@ describe.skipIf(!DATABASE_URL)(
     const signUp = (email: string, password: string, extra: Record<string, unknown> = {}) =>
       post('/sign-up/email', { name: 'Someone', email, password, ...extra });
 
-    const signIn = (email: string, password: string) =>
-      post('/sign-in/email', { email, password });
+    const signIn = (email: string, password: string) => post('/sign-in/email', { email, password });
 
     /** Mails a code of `type` to `email` and returns it. */
     async function codeFor(
@@ -1262,14 +1261,21 @@ describe.skipIf(!DATABASE_URL)(
         school_id: 'F00001',
       });
       const before = await userOf(email);
-      expect(before).toMatchObject({ image: 'https://pictures.example.org/a.png', school_id: 'F00001' });
+      expect(before).toMatchObject({
+        image: 'https://pictures.example.org/a.png',
+        school_id: 'F00001',
+      });
 
       await signUp(email, 'second-password-1', {
         image: 'https://pictures.example.org/b.png',
         school_id: 'F00002',
       });
 
-      expect(await userOf(email)).toMatchObject({ image: null, school_id: null, emailVerified: false });
+      expect(await userOf(email)).toMatchObject({
+        image: null,
+        school_id: null,
+        emailVerified: false,
+      });
     });
 
     it('ends the account’s sessions, and a "View as" session among them gets its end row', async () => {
@@ -1344,7 +1350,9 @@ describe.skipIf(!DATABASE_URL)(
 
       expect(await db.account.count({ where: { user_id: user.id } })).toBe(1);
       expect(await db.session.count({ where: { user_id: user.id } })).toBe(1);
-      expect((await userOf('a2-github@example.org')).image).toBe('https://avatars.example.org/g.png');
+      expect((await userOf('a2-github@example.org')).image).toBe(
+        'https://avatars.example.org/g.png'
+      );
       expect(await resetRows(user.id)).toEqual([]);
     });
 
