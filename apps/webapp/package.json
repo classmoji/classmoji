@@ -107,7 +107,6 @@
     "zustand": "^4.5.6"
   },
   "devDependencies": {
-    "@hookform/devtools": "^4.3.1",
     "@playwright/test": "^1.57.0",
     "@react-router/dev": "^7.18.5",
     "@react-router/fs-routes": "^7.18.5",

@@ -62,8 +62,7 @@
     "fly:hooks": "fly deploy --config apps/hook-station/fly.toml --dockerfile apps/hook-station/Dockerfile --no-cache",
     "fly:pages": "fly deploy --config apps/pages/fly.toml --dockerfile apps/pages/Dockerfile --no-cache",
     "fly:admin": "fly deploy --config apps/admin/fly.toml --dockerfile apps/admin/Dockerfile --no-cache",
-    "cleanup:github-teams": "dotenv -e .env -- node scripts/cleanup-github-teams.js",
-    "commit": "cz"
+    "cleanup:github-teams": "dotenv -e .env -- node scripts/cleanup-github-teams.js"
   },
   "dependencies": {
     "@infisical/sdk": "^5.0.2",
@@ -88,9 +87,7 @@
     "@types/papaparse": "^5.5.2",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
-    "commitizen": "^4.3.1",
     "concurrently": "^9.2.0",
-    "cz-conventional-changelog": "^3.3.0",
     "dotenv-cli": "^7.3.0",
     "eslint": "^9.36.0",
     "eslint-config-prettier": "^10.1.8",
@@ -111,10 +108,5 @@
   "overrides": {
     "p-map": "^4.0.0",
     "protobufjs": "^7.5.8"
-  },
-  "config": {
-    "commitizen": {
-      "path": "cz-conventional-changelog"
-    }
   }
 }
