@@ -10,7 +10,9 @@
  * The same goes for connecting an app (MCP OAuth consent): the access token it
  * issues would act as the viewed user. That refusal is server-side in the
  * shared better-auth hook (packages/auth/src/appConnectionGuard.ts); the
- * consent page uses this helper only to explain it and turn Approve off.
+ * consent page explains it and turns Approve off, reading the session both
+ * ways (`isViewingAsAnotherUser`, @classmoji/auth/server) and showing the
+ * message below.
  *
  * Takes the `getAuthSession` result; for a bare better-auth session
  * (`auth.api.getSession`), pass `{ session }`. Pure, so both loaders and

@@ -26,7 +26,8 @@
  *     re-dispatch carries is read first);
  *   - a viewing-as session presented through the cookie cache is refused too.
  * And client registration is open registration, signed in or not, with no
- * back-channel logout.
+ * back-channel logout, at /oauth2/register and at the 1.4 path the webapp
+ * maps to it.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -198,7 +199,9 @@ const {
   CONNECT_APP_VIEWING_AS_MESSAGE,
   MCP_RESOURCE,
   VIEW_AS_WHILE_CONNECTING_MESSAGE,
+  verifiedAuthorizationQuery,
 } = await import('../server.ts');
+const { withLegacyMcpPathMapped } = await import('../oauthHttp.ts');
 
 const BASE = 'http://localhost:3000/api/auth';
 const SECRET = process.env.BETTER_AUTH_SECRET!;
@@ -371,6 +374,61 @@ describe('connecting an app with an ordinary session', () => {
   });
 });
 
+describe('the signed query the consent page checks (verifiedAuthorizationQuery)', () => {
+  const consentSearch = async () => {
+    const res = await authorize({}, await signIn('owner-1'));
+    return new URL(res.headers.get('location')!, 'http://localhost:3000').search;
+  };
+
+  it('checks out as the provider signed it, without parameters the page added', async () => {
+    const search = await consentSearch();
+
+    const signed = await verifiedAuthorizationQuery(`${search}&utm_source=mail`);
+
+    expect(signed?.toString()).toBe(new URLSearchParams(search).toString());
+    expect(signed?.has('utm_source')).toBe(false);
+    expect(signed?.get('client_id')).toBe(CLIENT_ID);
+  });
+
+  it('is what the consent endpoint takes as oauth_query', async () => {
+    const cookie = await signIn('owner-1');
+    const signed = await verifiedAuthorizationQuery(await consentSearch());
+
+    const res = await post('/oauth2/consent', cookie, { accept: true, oauth_query: `${signed}` });
+
+    expect(res.status).toBe(200);
+    expect(
+      new URL(((await res.json()) as { url: string }).url).searchParams.get('code')
+    ).toBeTruthy();
+  });
+
+  it.each([
+    ['a changed scope', (q: URLSearchParams) => q.set('scope', 'read write admin')],
+    [
+      'a changed redirect URI',
+      (q: URLSearchParams) => q.set('redirect_uri', 'https://x.example/cb'),
+    ],
+    ['a removed parameter', (q: URLSearchParams) => q.delete('state')],
+    ['no signature', (q: URLSearchParams) => q.delete('sig')],
+    ['no list of signed names', (q: URLSearchParams) => q.delete('ba_param')],
+    ['a second signature', (q: URLSearchParams) => q.append('sig', q.get('sig')!)],
+  ])('refuses one with %s', async (_label, change) => {
+    const query = new URLSearchParams(await consentSearch());
+    change(query);
+    expect(await verifiedAuthorizationQuery(`?${query}`)).toBeNull();
+  });
+
+  it('refuses one that has expired', async () => {
+    const search = await consentSearch();
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 11 * 60 * 1000 });
+    try {
+      expect(await verifiedAuthorizationQuery(search)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('connecting an app while viewing as another user', () => {
   it('refuses authorization and stores no code', async () => {
     const res = await authorize({}, await signIn('owner-1', 'admin-1'));
@@ -510,20 +568,26 @@ describe('starting to view as someone in the middle of connecting an app', () =>
   });
 });
 
-describe('client registration', () => {
-  const register = (body: Record<string, unknown>, cookie?: string) =>
+describe.each([
+  ['/oauth2/register'],
+  // The 1.4 path, which the webapp maps to it (../oauthHttp.ts).
+  ['/mcp/register'],
+])('client registration at %s', path => {
+  const register = async (body: Record<string, unknown>, cookie?: string) =>
     auth.handler(
-      new Request(`${BASE}/oauth2/register`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', ...(cookie ? { cookie } : {}) },
-        body: JSON.stringify({
-          client_name: 'Some MCP client',
-          redirect_uris: ['http://127.0.0.1:33418/callback'],
-          token_endpoint_auth_method: 'none',
-          grant_types: ['authorization_code'],
-          ...body,
-        }),
-      })
+      await withLegacyMcpPathMapped(
+        new Request(`${BASE}${path}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', ...(cookie ? { cookie } : {}) },
+          body: JSON.stringify({
+            client_name: 'Some MCP client',
+            redirect_uris: ['http://127.0.0.1:33418/callback'],
+            token_endpoint_auth_method: 'none',
+            grant_types: ['authorization_code'],
+            ...body,
+          }),
+        })
+      )
     );
 
   it('registers an open client, signed in or not, owned by no one', async () => {

@@ -4,6 +4,7 @@ import { APIError, createAuthMiddleware, getSession, isAPIError } from 'better-a
 import { prismaAdapter } from 'better-auth/adapters/prisma';
 import { admin, emailOTP, jwt } from 'better-auth/plugins';
 import { mcp } from '@better-auth/mcp';
+import { verifyOAuthQueryParams } from '@better-auth/oauth-provider';
 import { cimd } from '@better-auth/cimd';
 // eslint's resolver misses this subpath export; TypeScript resolves it.
 // eslint-disable-next-line import/no-unresolved
@@ -388,6 +389,28 @@ export async function isViewingAsAnotherUser(headers: Headers): Promise<boolean>
     query: { disableRefresh: true, disableCookieCache: true },
   });
   return Boolean((stored?.session as { impersonatedBy?: unknown } | undefined)?.impersonatedBy);
+}
+
+/**
+ * The signed query an authorization sent the browser with (to the consent
+ * page, or to sign in), read from that page's address: the parameters its
+ * `ba_param` entries name, plus `sig` and `ba_param`. That is what the auth
+ * client sends as `oauth_query` (@better-auth/oauth-provider 1.7.18
+ * dist/client.mjs, buildSignedOAuthQuery), so a parameter the page added
+ * itself is left out. Returned only when its signature and expiry check out
+ * against the secret oauth-provider signs with (`verifyOAuthQueryParams`,
+ * `(await auth.$context).secret`); null otherwise.
+ */
+export async function verifiedAuthorizationQuery(search: string): Promise<URLSearchParams | null> {
+  const params = new URLSearchParams(search);
+  const named = new Set(params.getAll('ba_param'));
+  if (!params.has('sig') || named.size === 0) return null;
+  const signed = new URLSearchParams();
+  for (const [key, value] of params) {
+    if (key === 'sig' || key === 'ba_param' || named.has(key)) signed.append(key, value);
+  }
+  const { secret } = await auth.$context;
+  return (await verifyOAuthQueryParams(signed.toString(), secret)) ? signed : null;
 }
 
 /** The session row fields "View as" auditing reads. */

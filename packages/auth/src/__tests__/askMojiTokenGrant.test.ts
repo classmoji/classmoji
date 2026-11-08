@@ -13,6 +13,10 @@
  *   - A confidential client refreshes only with its secret, presented the way
  *     it registered; a disabled client gets nothing.
  *
+ * Each case runs at /oauth2/token and at the 1.4 path /mcp/token, which the
+ * webapp maps to it (../oauthHttp.ts, withLegacyMcpPathMapped): a client that
+ * kept the old discovery document gets the same answers.
+ *
  * oauth-provider authenticates the client before it looks the refresh token
  * up (`handleRefreshTokenGrant` → `validateClientCredentials`), so an unknown
  * refresh token that answers `invalid_grant` shows the client got through,
@@ -79,6 +83,7 @@ vi.mock('@classmoji/services', () => ({
 
 const { auth } = await import('../server.ts');
 const { ASK_MOJI_CLIENT_ID } = await import('../mcpToken.ts');
+const { withLegacyMcpPathMapped } = await import('../oauthHttp.ts');
 
 const BASE = 'http://localhost:3000/api/auth';
 const DEV_MINT_CLIENT_ID = 'classmoji-dev-mint';
@@ -111,9 +116,17 @@ const reservedRow = (clientId: string) =>
     tokenEndpointAuthMethod: 'client_secret_basic',
   });
 
+/** The token endpoint path the cases below use (see describe.each at the end). */
+let tokenPath = '/oauth2/token';
+
+/** A request as the webapp hands it on: a 1.4 path mapped first. */
+async function handled(request: Request) {
+  return auth.handler(await withLegacyMcpPathMapped(request));
+}
+
 function tokenRequest(body: Record<string, string>, headers: Record<string, string> = {}) {
-  return auth.handler(
-    new Request(`${BASE}/oauth2/token`, {
+  return handled(
+    new Request(`${BASE}${tokenPath}`, {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded', ...headers },
       body: new URLSearchParams(body).toString(),
@@ -150,129 +163,140 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe('the Classmoji-owned client ids', () => {
-  it.each([[ASK_MOJI_CLIENT_ID], [DEV_MINT_CLIENT_ID]])(
-    'refuse every grant naming %s (a disabled client)',
-    async clientId => {
-      for (const body of [
-        { grant_type: 'refresh_token', refresh_token: 'askmoji-norefresh_abc' },
-        {
-          grant_type: 'authorization_code',
-          code: 'any-code',
-          redirect_uri: 'http://localhost:9999/callback',
-          code_verifier: 'v'.repeat(43),
-        },
-      ] as Record<string, string>[]) {
-        const res = await tokenRequest({ ...body, client_id: clientId });
-        expect(res.status).toBeGreaterThanOrEqual(400);
-        expect(await errorOf(res)).toBe('invalid_client');
+describe.each([
+  ['/oauth2/token', '/oauth2/authorize'],
+  ['/mcp/token', '/mcp/authorize'],
+])('at %s', (token, authorize) => {
+  beforeEach(() => {
+    tokenPath = token;
+  });
+
+  describe('the Classmoji-owned client ids', () => {
+    it.each([[ASK_MOJI_CLIENT_ID], [DEV_MINT_CLIENT_ID]])(
+      'refuse every grant naming %s (a disabled client)',
+      async clientId => {
+        for (const body of [
+          { grant_type: 'refresh_token', refresh_token: 'askmoji-norefresh_abc' },
+          {
+            grant_type: 'authorization_code',
+            code: 'any-code',
+            redirect_uri: 'http://localhost:9999/callback',
+            code_verifier: 'v'.repeat(43),
+          },
+        ] as Record<string, string>[]) {
+          const res = await tokenRequest({ ...body, client_id: clientId });
+          expect(res.status).toBeGreaterThanOrEqual(400);
+          expect(await errorOf(res)).toBe('invalid_client');
+        }
+        expect(mocks.client.oauthRefreshToken.create).not.toHaveBeenCalled();
       }
+    );
+
+    it('do not let an Ask Moji token be refreshed through another client', async () => {
+      // An Ask Moji token is never a refresh token on this server: the migration
+      // copies none of the reserved clients' rows.
+      const res = await tokenRequest({
+        grant_type: 'refresh_token',
+        refresh_token: 'askmoji-norefresh_abc',
+        client_id: 'public-client',
+      });
+      expect(await errorOf(res)).toBe('invalid_grant');
       expect(mocks.client.oauthRefreshToken.create).not.toHaveBeenCalled();
-    }
-  );
-
-  it('do not let an Ask Moji token be refreshed through another client', async () => {
-    // An Ask Moji token is never a refresh token on this server: the migration
-    // copies none of the reserved clients' rows.
-    const res = await tokenRequest({
-      grant_type: 'refresh_token',
-      refresh_token: 'askmoji-norefresh_abc',
-      client_id: 'public-client',
     });
-    expect(await errorOf(res)).toBe('invalid_grant');
-    expect(mocks.client.oauthRefreshToken.create).not.toHaveBeenCalled();
-  });
 
-  it('cannot start an authorization either', async () => {
-    const url = new URL(`${BASE}/oauth2/authorize`);
-    for (const [k, v] of Object.entries({
-      client_id: ASK_MOJI_CLIENT_ID,
-      response_type: 'code',
-      redirect_uri: 'http://localhost:9999/callback',
-      code_challenge: 'x'.repeat(43),
-      code_challenge_method: 'S256',
-    })) {
-      url.searchParams.set(k, v);
-    }
-    const res = await auth.handler(new Request(url));
-    const location = res.headers.get('location') ?? '';
-    expect(location).toContain('error=client_disabled');
-  });
-
-  // With no grant types the provider still assumes authorization_code
-  // (`clientAllowsGrant`), so the disabled flag is what holds these ids.
-  it('rely on the disabled flag: the same row enabled would be served', async () => {
-    mocks.clients[0] = { ...reservedRow(ASK_MOJI_CLIENT_ID), disabled: false };
-    const res = await tokenRequest({
-      grant_type: 'refresh_token',
-      refresh_token: 'unknown',
-      client_id: ASK_MOJI_CLIENT_ID,
-      client_secret: 'anything',
+    it('cannot start an authorization either', async () => {
+      const url = new URL(`${BASE}${authorize}`);
+      for (const [k, v] of Object.entries({
+        client_id: ASK_MOJI_CLIENT_ID,
+        response_type: 'code',
+        redirect_uri: 'http://localhost:9999/callback',
+        code_challenge: 'x'.repeat(43),
+        code_challenge_method: 'S256',
+      })) {
+        url.searchParams.set(k, v);
+      }
+      const res = await handled(new Request(url));
+      const location = res.headers.get('location') ?? '';
+      expect(location).toContain('error=client_disabled');
     });
-    // Past the disabled check, refused only for its (absent) secret.
-    expect(await res.clone().text()).not.toContain('client is disabled');
-  });
-});
 
-describe('a confidential client refreshes only with its secret', () => {
-  const refresh = (headers: Record<string, string> = {}, body: Record<string, string> = {}) =>
-    tokenRequest(
-      { grant_type: 'refresh_token', refresh_token: 'not-a-known-token', ...body },
-      headers
-    );
-
-  it('refuses a refresh with no client secret', async () => {
-    const res = await refresh({}, { client_id: 'confidential-client' });
-    expect(await errorOf(res)).toBe('invalid_client');
-  });
-
-  it('refuses a refresh with the wrong client secret', async () => {
-    const res = await refresh({ authorization: basic('confidential-client', 'wrong') });
-    expect(await errorOf(res)).toBe('invalid_client');
-  });
-
-  it('refuses the secret in the body when the client registered for Basic', async () => {
-    const res = await refresh(
-      {},
-      { client_id: 'confidential-client', client_secret: CONFIDENTIAL_SECRET }
-    );
-    expect(await errorOf(res)).toBe('invalid_client');
-  });
-
-  it('lets the right secret through to the refresh token check', async () => {
-    const res = await refresh({ authorization: basic('confidential-client', CONFIDENTIAL_SECRET) });
-    expect(await errorOf(res)).toBe('invalid_grant');
-  });
-
-  it('refuses a disabled client, secret or not', async () => {
-    const res = await refresh({ authorization: basic('disabled-client', CONFIDENTIAL_SECRET) });
-    expect(await errorOf(res)).toBe('invalid_client');
-    expect(await refresh({}, { client_id: 'disabled-client' }).then(errorOf)).toBe(
-      'invalid_client'
-    );
-  });
-
-  it('leaves a public client refreshing without a secret', async () => {
-    const res = await refresh({}, { client_id: 'public-client' });
-    expect(await errorOf(res)).toBe('invalid_grant');
-  });
-
-  it('refuses a refresh token issued to another client', async () => {
-    mocks.refreshTokens.push({
-      id: 'rt-1',
-      token: hashed('public-clients-token'),
-      clientId: 'public-client',
-      userId: 'user-1',
-      scopes: ['read', 'offline_access'],
-      resources: [],
-      expiresAt: new Date(Date.now() + 86_400_000),
-      createdAt: new Date(),
+    // With no grant types the provider still assumes authorization_code
+    // (`clientAllowsGrant`), so the disabled flag is what holds these ids.
+    it('rely on the disabled flag: the same row enabled would be served', async () => {
+      mocks.clients[0] = { ...reservedRow(ASK_MOJI_CLIENT_ID), disabled: false };
+      const res = await tokenRequest({
+        grant_type: 'refresh_token',
+        refresh_token: 'unknown',
+        client_id: ASK_MOJI_CLIENT_ID,
+        client_secret: 'anything',
+      });
+      // Past the disabled check, refused only for its (absent) secret.
+      expect(await res.clone().text()).not.toContain('client is disabled');
     });
-    const res = await refresh(
-      { authorization: basic('confidential-client', CONFIDENTIAL_SECRET) },
-      { refresh_token: 'public-clients-token' }
-    );
-    expect(await errorOf(res)).toBe('invalid_grant');
-    expect(mocks.client.oauthRefreshToken.create).not.toHaveBeenCalled();
+  });
+
+  describe('a confidential client refreshes only with its secret', () => {
+    const refresh = (headers: Record<string, string> = {}, body: Record<string, string> = {}) =>
+      tokenRequest(
+        { grant_type: 'refresh_token', refresh_token: 'not-a-known-token', ...body },
+        headers
+      );
+
+    it('refuses a refresh with no client secret', async () => {
+      const res = await refresh({}, { client_id: 'confidential-client' });
+      expect(await errorOf(res)).toBe('invalid_client');
+    });
+
+    it('refuses a refresh with the wrong client secret', async () => {
+      const res = await refresh({ authorization: basic('confidential-client', 'wrong') });
+      expect(await errorOf(res)).toBe('invalid_client');
+    });
+
+    it('refuses the secret in the body when the client registered for Basic', async () => {
+      const res = await refresh(
+        {},
+        { client_id: 'confidential-client', client_secret: CONFIDENTIAL_SECRET }
+      );
+      expect(await errorOf(res)).toBe('invalid_client');
+    });
+
+    it('lets the right secret through to the refresh token check', async () => {
+      const res = await refresh({
+        authorization: basic('confidential-client', CONFIDENTIAL_SECRET),
+      });
+      expect(await errorOf(res)).toBe('invalid_grant');
+    });
+
+    it('refuses a disabled client, secret or not', async () => {
+      const res = await refresh({ authorization: basic('disabled-client', CONFIDENTIAL_SECRET) });
+      expect(await errorOf(res)).toBe('invalid_client');
+      expect(await refresh({}, { client_id: 'disabled-client' }).then(errorOf)).toBe(
+        'invalid_client'
+      );
+    });
+
+    it('leaves a public client refreshing without a secret', async () => {
+      const res = await refresh({}, { client_id: 'public-client' });
+      expect(await errorOf(res)).toBe('invalid_grant');
+    });
+
+    it('refuses a refresh token issued to another client', async () => {
+      mocks.refreshTokens.push({
+        id: 'rt-1',
+        token: hashed('public-clients-token'),
+        clientId: 'public-client',
+        userId: 'user-1',
+        scopes: ['read', 'offline_access'],
+        resources: [],
+        expiresAt: new Date(Date.now() + 86_400_000),
+        createdAt: new Date(),
+      });
+      const res = await refresh(
+        { authorization: basic('confidential-client', CONFIDENTIAL_SECRET) },
+        { refresh_token: 'public-clients-token' }
+      );
+      expect(await errorOf(res)).toBe('invalid_grant');
+      expect(mocks.client.oauthRefreshToken.create).not.toHaveBeenCalled();
+    });
   });
 });

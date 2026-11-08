@@ -12,6 +12,7 @@
     "./predicates": "./src/predicates.ts",
     "./classroom-role": "./src/classroomRole.ts",
     "./oauth-redirect": "./src/oauthRedirect.ts",
+    "./oauth-http": "./src/oauthHttp.ts",
     "./secret": "./src/secret.ts",
     "./mcp-token": "./src/mcpToken.ts",
     "./mcp-resource": "./src/mcpResource.ts",
