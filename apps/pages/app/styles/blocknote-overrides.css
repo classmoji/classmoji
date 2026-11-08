@@ -342,6 +342,9 @@
     [data-background-color="gray"]
   ) {
   --heading-pad-top: 3px;
+  /* Read by the inline tick box (page-sections.css), which adds its room to
+     this padding: the `!important` here would otherwise drop it. */
+  --heading-pad-left: 4px;
   padding: 3px 4px !important;
   border-radius: 0 !important;
 }
