@@ -12,6 +12,9 @@ import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import { addClassroomAuditLog, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import ModuleCard, { type ModuleCardData } from '~/components/features/modules/ModuleCard';
+import { itemLabel } from '~/components/features/modules/moduleItemMeta';
+import { normalizeModuleQuery, searchModule } from '~/components/features/modules/moduleSearch';
+import { assignmentTarget } from '~/components/features/assignments/AssignmentsTable';
 import {
   useCourseworkDrag,
   type CourseworkMove,
@@ -300,15 +303,8 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
  * assignments and content in place. Nothing needs the module detail page.
  */
 const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
-  const {
-    modules,
-    candidates,
-    repositories,
-    slidesUrl,
-    boundFormIds,
-    tags,
-    quizzesVisible,
-  } = loaderData;
+  const { modules, candidates, repositories, slidesUrl, boundFormIds, tags, quizzesVisible } =
+    loaderData;
   const { class: classSlug } = useParams();
   const orderFetcher = useFetcher<{ success?: string; error?: string }>();
   // The module the last coursework drag landed in: its card shows how the
@@ -344,12 +340,43 @@ const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
     !searching && canEdit
   );
 
+  // Search by title: the module's own, or any row it shows — a content item's
+  // title, or an assignment's title and the repository, quiz or form it submits
+  // through (moduleSearch.ts). A module matched by its title shows all its rows;
+  // one matched by rows shows just those, opened.
+  const matches = useMemo(() => {
+    const q = normalizeModuleQuery(query);
+    const out = new Map<string, { items: Set<string>; assignments: Set<string> } | null>();
+    if (!q) return out;
+    for (const m of cards) {
+      const result = searchModule(
+        {
+          title: m.title,
+          // Legacy REPOSITORY items are never shown, so they never match.
+          items: m.items.filter(i => i.item_type !== 'REPOSITORY'),
+          assignments: m.assignments,
+        },
+        q,
+        item => [itemLabel(item)],
+        a => [a.title, assignmentTarget(a)]
+      );
+      if (!result) continue;
+      out.set(
+        m.id,
+        result.wholeModule
+          ? null
+          : {
+              items: new Set(result.items.map(i => i.id)),
+              assignments: new Set(result.assignments.map(a => a.id)),
+            }
+      );
+    }
+    return out;
+  }, [cards, query]);
+
   const filtered = useMemo(
-    () =>
-      searching
-        ? drag.ordered.filter(m => m.title.toLowerCase().includes(query.trim().toLowerCase()))
-        : drag.ordered,
-    [drag.ordered, query, searching]
+    () => (searching ? drag.ordered.filter(m => matches.has(m.id)) : drag.ordered),
+    [drag.ordered, matches, searching]
   );
 
   // The rows every card holds, in one place: a page or an assignment dragged
@@ -382,10 +409,12 @@ const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
     );
   };
 
+  // Rows are dragged into a full list's order; a search hides some of each
+  // card's rows, so row dragging is off while searching, like module dragging.
   const coursework = useCourseworkDrag({
     lists,
     onMove: submitMove,
-    enabled: canEdit,
+    enabled: canEdit && !searching,
     result: moveResult,
   });
   const allCollapsed = filtered.length > 0 && filtered.every(m => collapsed.has(m.id));
@@ -409,16 +438,19 @@ const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
           <SearchInput
             query={query}
             setQuery={setQuery}
-            placeholder="Search by title"
+            placeholder="Search modules and items"
             className="flex-1 min-w-0 sm:grow-0 sm:basis-56"
           />
-          <Button
-            onClick={() =>
-              setCollapsed(allCollapsed ? new Set() : new Set(filtered.map(m => m.id)))
-            }
-          >
-            {allCollapsed ? 'Expand all' : 'Collapse all'}
-          </Button>
+          {/* Matches are always shown open, so collapsing waits for the search to clear. */}
+          {!searching && (
+            <Button
+              onClick={() =>
+                setCollapsed(allCollapsed ? new Set() : new Set(filtered.map(m => m.id)))
+              }
+            >
+              {allCollapsed ? 'Expand all' : 'Collapse all'}
+            </Button>
+          )}
           <RequireRole roles={['OWNER']}>
             <ButtonNew action={() => setFormOpen(true)}>New module</ButtonNew>
           </RequireRole>
@@ -429,11 +461,15 @@ const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
           <ModuleCard
             key={m.id}
             module={m}
+            searchMatch={searching ? matches.get(m.id) : null}
             index={drag.ordered.indexOf(m)}
             classSlug={classSlug!}
             slidesUrl={slidesUrl}
-            expanded={!collapsed.has(m.id)}
-            onToggle={() => toggle(m.id)}
+            // A match is shown open, whatever was collapsed before the search.
+            expanded={searching || !collapsed.has(m.id)}
+            onToggle={() => {
+              if (!searching) toggle(m.id);
+            }}
             candidates={candidates}
             repositories={repositories}
             boundFormIds={formSet}
@@ -451,11 +487,13 @@ const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
         {filtered.length === 0 && (
           <div className="rounded-2xl bg-panel ring-1 ring-line text-center py-12 text-gray-500">
             <div className="font-medium">
-              {query ? `No modules found matching '${query}'` : 'No modules yet'}
+              {searching ? `Nothing matches '${query.trim()}'` : 'No modules yet'}
             </div>
             <div className="text-sm">
-              {query
-                ? 'Try adjusting your search terms.'
+              {searching
+                ? `Search looks at the titles of modules, assignments, ${
+                    quizzesVisible ? 'pages, slides, quizzes and forms' : 'pages, slides and forms'
+                  }.`
                 : 'A module is a unit of your course. Add one, then add assignments, pages and slides to it.'}
             </div>
           </div>

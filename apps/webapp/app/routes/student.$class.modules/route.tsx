@@ -8,6 +8,8 @@ import { assertClassroomAccess } from '~/utils/helpers';
 import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import type { ModuleTreeNode } from '~/components/features/modules/ReadOnlyModulesTree';
 import StudentModuleCard from '~/components/features/modules/StudentModuleCard';
+import SearchInput from '~/components/ui/inputs/SearchInput';
+import { normalizeModuleQuery, searchModule } from '~/components/features/modules/moduleSearch';
 import {
   buildAssignmentLeaf,
   resourceLeaves,
@@ -334,6 +336,7 @@ const StudentModules = ({ loaderData }: Route.ComponentProps) => {
   // return below.
   const rolePrefix = useLocation().pathname.split('/')[1];
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [query, setQuery] = useState('');
   const gitCtx = useGitContext();
 
   if (!loaderData.enabled) {
@@ -373,19 +376,52 @@ const StudentModules = ({ loaderData }: Route.ComponentProps) => {
     isStaff,
     selfFormedByRepositoryId,
   };
-  const allCollapsed = modules.length > 0 && modules.every(m => collapsed.has(m.id));
+  // Search by title: a module's own, or any row it shows (moduleSearch.ts).
+  // These are the titles the rows display; drafts and unpublished items never
+  // reach a student, so nothing hidden can match.
+  const q = normalizeModuleQuery(query);
+  const searching = q.length > 0;
+  const shown = modules.flatMap(m => {
+    const result = searchModule(
+      m,
+      q,
+      item => {
+        if (item.item_type === 'PAGE') return [item.page?.title];
+        if (item.item_type === 'SLIDE') return [item.slide?.title];
+        if (item.item_type === 'FORM') return [item.form?.title];
+        return []; // REPOSITORY / QUIZ items are not shown as rows here
+      },
+      // QUIZ and FORM assignments show a row only with their target loaded.
+      a => ((a.type === 'QUIZ' && !a.quiz) || (a.type === 'FORM' && !a.form) ? [] : [a.title])
+    );
+    return result ? [{ ...m, items: result.items, assignments: result.assignments }] : [];
+  });
+  const allCollapsed = shown.length > 0 && shown.every(m => collapsed.has(m.id));
 
   return (
     <div className="min-h-full">
-      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+      <div className="flex flex-col gap-3 mt-2 mb-4 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-lg font-semibold text-ink-1">Modules</h1>
-        {modules.length > 1 && (
-          <Button
-            size="small"
-            onClick={() => setCollapsed(allCollapsed ? new Set() : new Set(modules.map(m => m.id)))}
-          >
-            {allCollapsed ? 'Expand all' : 'Collapse all'}
-          </Button>
+        {modules.length > 0 && (
+          <div className="flex items-center gap-3">
+            <SearchInput
+              query={query}
+              setQuery={setQuery}
+              placeholder="Search modules and items"
+              className="flex-1 min-w-0 sm:grow-0 sm:basis-56"
+            />
+            {/* Matches are always shown open, so collapsing waits for the search to clear. */}
+            {modules.length > 1 && !searching && (
+              <Button
+                size="small"
+                onClick={() =>
+                  setCollapsed(allCollapsed ? new Set() : new Set(shown.map(m => m.id)))
+                }
+              >
+                {allCollapsed ? 'Expand all' : 'Collapse all'}
+              </Button>
+            )}
+          </div>
         )}
       </div>
 
@@ -396,27 +432,37 @@ const StudentModules = ({ loaderData }: Route.ComponentProps) => {
             Modules will appear here once your instructor publishes them.
           </p>
         </div>
+      ) : shown.length === 0 ? (
+        <div className="rounded-2xl bg-panel ring-1 ring-line text-center py-12 text-gray-500">
+          <div className="font-medium">Nothing matches &lsquo;{query.trim()}&rsquo;</div>
+          <div className="text-sm">
+            Search looks at the titles of modules, assignments, pages, slides and forms.
+          </div>
+        </div>
       ) : (
         <div className="flex flex-col gap-3">
-          {modules.map((m, index) => (
+          {shown.map(m => (
             <StudentModuleCard
               key={m.id}
               module={m}
-              index={index}
+              // The module's number in the course, not in the search results.
+              index={modules.findIndex(full => full.id === m.id)}
               leaves={buildModuleLeaves(
                 m,
                 raByAssignmentId as Record<string, AnyRepoAssignment>,
                 ctx
               )}
-              expanded={!collapsed.has(m.id)}
-              onToggle={() =>
+              // A match is shown open, whatever was collapsed before the search.
+              expanded={searching || !collapsed.has(m.id)}
+              onToggle={() => {
+                if (searching) return;
                 setCollapsed(prev => {
                   const next = new Set(prev);
                   if (next.has(m.id)) next.delete(m.id);
                   else next.add(m.id);
                   return next;
-                })
-              }
+                });
+              }}
               isStaff={isStaff}
             />
           ))}
