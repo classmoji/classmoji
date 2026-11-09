@@ -3,10 +3,9 @@
  *
  * The starter fixture is driven off the REAL legacy generator
  * (apps/slides/app/utils/slideHelpers.server.ts). The importer fixture is a
- * hand-built replica of slidesComImporter.server.ts's generateSlideHtml output
- * (that function is module-private and its module pulls JSZip/prisma,
- * so driving it directly from a services unit test is not
- * feasible; the byte shape below mirrors it exactly). The canonical editor
+ * hand-built replica of the former slides.com importer's generateSlideHtml
+ * output (the importer has since been removed; decks it wrote still exist, so
+ * the byte shape below, which mirrors it exactly, stays). The canonical editor
  * fixture mirrors $slideId/route.tsx generateSlideHtml.
  */
 

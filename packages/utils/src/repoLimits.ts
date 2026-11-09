@@ -2,8 +2,8 @@
  * repoLimits.ts — how large one file committed to a course repository may be.
  *
  * One number, read by every surface that puts a file into a content repo: page
- * assets and covers, deck images, file slides, page imports, the slides.com
- * import, the MCP asset tool, and the client-side checks in front of each. It
+ * assets and covers, deck images, file slides, page imports, the MCP asset
+ * tool, and the client-side checks in front of each. It
  * lives here rather than in `@classmoji/services` because the browser needs it
  * too (a dialog that refuses a 60 MB file before sending it), and this module
  * has no imports at all, so a client bundle that reaches for it pulls in
@@ -81,12 +81,12 @@ export function exceedsRepoFileLimit(bytes: number): boolean {
 }
 
 /**
- * 150 MiB — the most one import upload may send: a slides.com export ZIP (the
- * slides app's import route and its client-side check) and a page import body
- * (the webapp). Not a repository limit — nothing this size is committed whole;
- * each file inside is checked against `REPO_REST_MAX_BYTES` (or routed to
- * media) — but a bound on what one request may make the server buffer. One
- * number, so the route and the dialog in front of it can never disagree.
+ * 150 MiB — the most one import upload may send: a page import body (the
+ * webapp). The name is historical: it was first the cap on the slides.com
+ * export ZIP, an import since removed. Not a repository limit — nothing this
+ * size is committed whole; each file inside is checked against
+ * `REPO_REST_MAX_BYTES` (or routed to media) — but a bound on what one request
+ * may make the server buffer.
  */
 export const SLIDES_IMPORT_MAX_BYTES = 150 * MIB;
 

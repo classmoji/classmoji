@@ -233,8 +233,8 @@ export function isContentDeliveryEnabled(
  * upload is stored as its raw.githubusercontent.com URL; a private repo there
  * would turn every image into a broken link. (Legacy CONTENT may also reference
  * `{org}.github.io` on an old repo that already has a GitHub Pages site — a
- * new repo never gets one.) Both repo-creation sites (page.service, the slides.com
- * importer) ask this one function so they cannot drift apart.
+ * new repo never gets one.) Content repos are created in one place
+ * (page.service), which asks this function.
  *
  * Asked ONLY at creation: flipping the flag later does not revisit an existing
  * repo's visibility.

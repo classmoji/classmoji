@@ -128,7 +128,7 @@ export async function enqueueDeckThumbnail(
  *
  * ## What this is for
  *
- * A THEME edit — a custom-theme CSS write, a snippet, a `saveTheme` — changes
+ * A THEME edit — a custom-theme CSS write, a snippet — changes
  * how every deck in the classroom LOOKS without changing a byte of any deck's
  * own files. The render task's idempotence check asks "has this deck's
  * `index.html` moved?", which is the right question for a save and exactly the

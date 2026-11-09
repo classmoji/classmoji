@@ -23,9 +23,9 @@ import { VideoRefusal } from './videoPlan.ts';
  * ## Why a client here and not the services' one
  *
  * The services' `r2Client()` is not exported (its module is the AWS SDK
- * boundary of the lazily loaded write half), and nothing there moves a FILE:
- * `putMediaObject` takes a Buffer, which for a 3 GB rendition is exactly what
- * this job must not do (plan §12.6). So this builds the same client from the
+ * boundary of the lazily loaded write half), and nothing there moves a FILE
+ * from disk: holding a 3 GB rendition in a Buffer is exactly what this job
+ * must not do (plan §12.6). So this builds the same client from the
  * same four env vars with the same settings — see `r2Client.ts` for why each
  * one is there — and does a plain S3 multipart upload off read streams.
  *

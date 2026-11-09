@@ -41,7 +41,6 @@ test.describe('creating a file slide from media', () => {
 
 test.describe('a capability lookup that fails', () => {
   const HELPER = source('../../app/utils/uploadCapability.server.ts');
-  const IMPORT_PAGE = source('../../app/routes/import/route.tsx');
 
   test('is null with a warning, never a failed loader', () => {
     const body = HELPER.slice(HELPER.indexOf('export async function loadUploadCapability'));
@@ -56,14 +55,12 @@ test.describe('a capability lookup that fails', () => {
     expect(VIEWER_SOURCE).toContain("loadUploadCapability(slide.classroom, 'deck editor')");
     expect(NEW_SOURCE).toContain("loadUploadCapability(classroom, 'new slide')");
     expect(REPLACE_SOURCE).toContain("loadUploadCapability(slide.classroom, 'replace slide file')");
-    expect(IMPORT_PAGE).toContain("loadUploadCapability(classroom, 'slides.com import')");
-    for (const text of [VIEWER_SOURCE, NEW_SOURCE, REPLACE_SOURCE, IMPORT_PAGE]) {
+    for (const text of [VIEWER_SOURCE, NEW_SOURCE, REPLACE_SOURCE]) {
       expect(text).not.toContain('ClassmojiService.media.uploadCapabilityFor(');
     }
     // The null answer is read as "no media" wherever a loader looks inside it.
     expect(NEW_SOURCE).toContain('uploadCapability?.media');
     expect(REPLACE_SOURCE).toContain('uploadCapability?.media');
-    expect(IMPORT_PAGE).toContain('videosToMedia: uploadCapability?.media != null');
   });
 });
 

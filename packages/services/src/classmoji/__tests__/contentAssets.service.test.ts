@@ -77,7 +77,6 @@ vi.mock('../../git/index.ts', () => ({
 
 const {
   syncContentAssets,
-  syncContentAssetsForRepo,
   recordFolderTreesAfterCommit,
   lookupContentAssetsBySha,
   ensureContentAssets,
@@ -581,51 +580,6 @@ describe('contentAssets.service', () => {
 
       expect(found.size).toBe(0);
       expect(getTree).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('syncContentAssetsForRepo', () => {
-    it('syncs the classroom that owns the repo', async () => {
-      // What a theme save needs. A theme is delivered by the SHA of its TREE,
-      // so until the map is rebuilt every deck keeps signing the PREVIOUS tree
-      // and the edge keeps serving the previous CSS — the author reloads and
-      // their change has not taken.
-      getTree.mockResolvedValue({ sha: 'r', truncated: false, entries: [] });
-
-      const result = await syncContentAssetsForRepo('dartmouth-cs', 'content-cs101', 'theme-save');
-
-      expect(classroomFindFirst).toHaveBeenCalledWith({
-        where: { content_repo: 'content-cs101', git_organization: { login: 'dartmouth-cs' } },
-        select: { id: true },
-      });
-      expect(result?.mode).toBe('full');
-    });
-
-    it('no-ops for a repo no classroom claims as its content repo', async () => {
-      classroomFindFirst.mockResolvedValue(null);
-
-      await expect(
-        syncContentAssetsForRepo('someone-else', 'other-repo', 'theme-save')
-      ).resolves.toBeNull();
-      expect(getTree).not.toHaveBeenCalled();
-    });
-
-    it('resolves null instead of throwing when the sync fails', async () => {
-      // It runs AFTER a commit that already reached GitHub. A save that
-      // succeeded must never be reported as failed because a cache could not
-      // be refreshed.
-      getTree.mockRejectedValue(new Error('API rate limit exceeded'));
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
-      await expect(
-        syncContentAssetsForRepo('dartmouth-cs', 'content-cs101', 'theme-save')
-      ).resolves.toBeNull();
-
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining('theme-save sync failed for dartmouth-cs/content-cs101'),
-        expect.any(Error)
-      );
-      warn.mockRestore();
     });
   });
 

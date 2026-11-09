@@ -25,8 +25,7 @@ import {
 
 /**
  * The most one page import may send: the shared import upload cap
- * (`SLIDES_IMPORT_MAX_BYTES`, 150 MiB), the same bound as the slides.com ZIP
- * import — one number, so the two imports can never drift apart. A page's
+ * (`SLIDES_IMPORT_MAX_BYTES`, 150 MiB; the name is historical). A page's
  * markdown and images arrive in one request, so this is a cap on the whole
  * page, while each image separately stays under `REPO_REST_MAX_BYTES`.
  */

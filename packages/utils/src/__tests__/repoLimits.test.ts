@@ -42,7 +42,7 @@ describe('repo file limit', () => {
 });
 
 describe('import upload cap', () => {
-  // The slides.com ZIP route, its dialog and the page import body all read this.
+  // The webapp's page import body reads this.
   it('is 150 MiB, and reads as 150 MB', () => {
     expect(SLIDES_IMPORT_MAX_BYTES).toBe(150 * 1024 * 1024);
     expect(SLIDES_IMPORT_MAX_LABEL).toBe('150 MB');

@@ -5,7 +5,6 @@ import {
   DeleteObjectCommand,
   HeadObjectCommand,
   ListObjectsV2Command,
-  PutObjectCommand,
   S3Client,
   UploadPartCommand,
 } from '@aws-sdk/client-s3';
@@ -165,9 +164,9 @@ export const VIDEO_ENQUEUE_FAILED_REASON = 'Optimising could not be started for 
 
 /**
  * Called once an object has become READY — by EVERY path that makes one:
- * `completeUpload` (the browser), `putMediaObject` (the slides.com import),
- * `placeIntoMedia` (an agent upload finished into media, and a URL import,
- * which places through the same function), and the class-to-class copy.
+ * `completeUpload` (the browser), `placeIntoMedia` (an agent upload finished
+ * into media, and a URL import, which places through the same function), and
+ * the class-to-class copy.
  *
  * For a VIDEO row with `optimise` set it claims the row for processing
  * (`processing` NONE → PENDING, conditional on the row still READY) and
@@ -299,10 +298,8 @@ export function requireClient(): { client: S3Client; bucket: string } {
 }
 
 /**
- * Every check `createUpload` makes, and the reservation, in its fixed order —
- * shared with `putMediaObject`, the server-side single-shot write, so the two
- * doors into media cannot disagree about who may store what. See
- * `createUpload` for the order and why it is the contract.
+ * Every check `createUpload` makes, and the reservation, in its fixed order.
+ * See `createUpload` for the order and why it is the contract.
  *
  * Returns the minted id, the `orig.{ext}` key it will be written at, the
  * classification, and the row as written. The row is UPLOADING — a reservation
@@ -1438,128 +1435,6 @@ export async function purgeClassroomMedia(classroomId: string): Promise<{ delete
 }
 
 /**
- * Above this, `putMediaObject` writes in parts rather than one PUT. R2's single
- * PUT goes to 5 GiB, but a 2 GiB body in one request is a 2 GiB retry when a
- * connection drops, and the parts reuse the browser path's `PART_SIZE_BYTES`.
- */
-export const SINGLE_PUT_MAX_BYTES = 100 * 1024 * 1024;
-
-/**
- * Store bytes the SERVER already holds — the slides.com import's videos on Pro,
- * where the file arrived inside a ZIP rather than from a browser.
- *
- * Every rule `createUpload` applies, in the same order and from the same code
- * (`reserveUpload`): kind, `USE_REPO` unless `explicit`, Pro, delivery (the
- * deployment's signing half included), the per-file ceiling, and the quota
- * reserved under the classroom lock BEFORE a byte is written. Then one
- * `PutObject` at `m/{classroom}/{id}/orig.{ext}` with the server-assigned type
- * and the exact length — or a multipart upload in `PART_SIZE_BYTES` parts above
- * `SINGLE_PUT_MAX_BYTES` — a `HeadObject` size check, and READY only from
- * UPLOADING, exactly as `completeUpload` ends.
- *
- * A write or a verification that fails tombstones the reservation (from
- * UPLOADING only) and removes whatever may have landed, then throws — the
- * caller decides what a failed file means for its import.
- */
-export async function putMediaObject({
-  classroom,
-  userId,
-  filename,
-  bytes,
-  options = {},
-}: {
-  classroom: MediaClassroom;
-  userId: string;
-  filename: string;
-  bytes: Buffer;
-  options?: MediaOptions;
-}): Promise<{ mediaId: string; ref: string }> {
-  const { client, bucket } = requireClient();
-  const sizeBytes = bytes.length;
-  const {
-    mediaId,
-    key,
-    classified,
-    row: reserved,
-  } = await reserveUpload({
-    classroom,
-    userId,
-    filename,
-    sizeBytes,
-    options,
-  });
-
-  try {
-    if (sizeBytes <= SINGLE_PUT_MAX_BYTES) {
-      await client.send(
-        new PutObjectCommand({
-          Bucket: bucket,
-          Key: key,
-          Body: bytes,
-          ContentType: classified.contentType,
-          ContentLength: sizeBytes,
-        })
-      );
-    } else {
-      await putInParts(client, bucket, key, mediaId, bytes, classified.contentType);
-    }
-  } catch (error) {
-    if (await markDeleted(mediaId, 'UPLOADING')) {
-      await deleteObjectsQuietly(client, bucket, [key]);
-    }
-    throw error;
-  }
-
-  const actual = await verifiedSize(client, bucket, key);
-  if (actual !== sizeBytes) {
-    if (await markDeleted(mediaId, 'UPLOADING')) {
-      await deleteObjectsQuietly(client, bucket, [key]);
-    }
-    if (actual === null) {
-      throw new MediaError('VERIFY_FAILED', 'The file could not be verified after writing it');
-    }
-    throw new MediaError('SIZE_MISMATCH', `Wrote ${actual} bytes but ${sizeBytes} were expected`);
-  }
-
-  const readyAt = new Date();
-  let count: number;
-  try {
-    ({ count } = await getPrisma().mediaObject.updateMany({
-      where: { id: mediaId, status: 'UPLOADING' },
-      data: { status: 'READY', ready_at: readyAt, upload_id: null, processing: 'NONE' },
-    }));
-  } catch (error) {
-    // The bytes are written and the flip to READY failed. Whether it landed is
-    // asked, not assumed: a lost response looks exactly like a failed write.
-    const outcome = await afterFailedReadyFlip(classroom.id, mediaId, 'UPLOADING');
-    if (outcome !== 'ready') {
-      if (outcome === 'released') await deleteObjectsQuietly(client, bucket, [key]);
-      throw error;
-    }
-    count = 1;
-  }
-  if (count === 0) {
-    // Deleted from Settings → Media while the write ran: nothing will serve it.
-    await deleteObjectsQuietly(client, bucket, [key]);
-    throw new MediaError('NOT_FOUND', 'This file was deleted before it finished writing');
-  }
-
-  // Built in memory, the way `completeUpload` does, rather than read back: the
-  // row is READY and the bytes are served whatever happens next, so nothing
-  // after the flip may throw, and a video must always reach `onMediaReady`
-  // (which never throws) — a failed re-read would have skipped its job.
-  const ready: MediaRow = {
-    ...reserved,
-    status: 'READY',
-    ready_at: readyAt,
-    upload_id: null,
-    processing: 'NONE',
-  };
-  await onMediaReady(toMediaRecord(ready));
-  return { mediaId, ref: mediaRef(mediaId) };
-}
-
-/**
  * What to do with bytes already written when the flip to READY threw.
  *
  *   - `'ready'`    — the flip landed after all (its response was lost): the
@@ -1593,64 +1468,5 @@ export async function afterFailedReadyFlip(
     return (await markDeleted(mediaId, from)) ? 'released' : 'unknown';
   } catch {
     return 'unknown';
-  }
-}
-
-/**
- * The multipart half of `putMediaObject`. The upload id is written onto the
- * row while it is open, so a delete or a classroom purge can abort it — the
- * same bookkeeping a browser upload has.
- */
-async function putInParts(
-  client: S3Client,
-  bucket: string,
-  key: string,
-  mediaId: string,
-  bytes: Buffer,
-  contentType: string
-): Promise<void> {
-  const created = await client.send(
-    new CreateMultipartUploadCommand({ Bucket: bucket, Key: key, ContentType: contentType })
-  );
-  const uploadId = created.UploadId;
-  if (!uploadId) throw new MediaError('BAD_STATE', 'R2 did not return an upload id');
-  await getPrisma().mediaObject.updateMany({
-    where: { id: mediaId, status: 'UPLOADING' },
-    data: { upload_id: uploadId },
-  });
-
-  try {
-    const parts: { PartNumber: number; ETag: string }[] = [];
-    const partCount = partCountFor(bytes.length);
-    for (let partNumber = 1; partNumber <= partCount; partNumber += 1) {
-      const start = (partNumber - 1) * PART_SIZE_BYTES;
-      const body = bytes.subarray(start, start + partLengthFor(bytes.length, partNumber));
-      const result = await client.send(
-        new UploadPartCommand({
-          Bucket: bucket,
-          Key: key,
-          UploadId: uploadId,
-          PartNumber: partNumber,
-          Body: body,
-          ContentLength: body.length,
-        })
-      );
-      if (!result.ETag)
-        throw new MediaError('BAD_STATE', `R2 returned no etag for part ${partNumber}`);
-      parts.push({ PartNumber: partNumber, ETag: result.ETag });
-    }
-    await assembleWithOneRetry(() =>
-      client.send(
-        new CompleteMultipartUploadCommand({
-          Bucket: bucket,
-          Key: key,
-          UploadId: uploadId,
-          MultipartUpload: { Parts: parts },
-        })
-      )
-    );
-  } catch (error) {
-    await abortQuietly(client, bucket, key, uploadId);
-    throw error;
   }
 }
