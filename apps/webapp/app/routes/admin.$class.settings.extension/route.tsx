@@ -1,7 +1,7 @@
 import { Button, Form, Input } from 'antd';
 import { useState } from 'react';
 
-import { namedAction } from 'remix-utils/named-action';
+import { namedAction } from '~/utils/namedAction.server';
 
 import { ClassmojiService } from '@classmoji/services';
 import { SettingSection } from '~/components';

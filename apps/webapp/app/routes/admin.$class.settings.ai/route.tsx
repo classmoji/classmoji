@@ -3,7 +3,7 @@ import { useParams } from 'react-router';
 import { Form, Switch, Input, Select, Button, Modal, Badge, Alert, Divider } from 'antd';
 import { IconInfoCircle } from '@tabler/icons-react';
 
-import { namedAction } from 'remix-utils/named-action';
+import { namedAction } from '~/utils/namedAction.server';
 
 import {
   ClassmojiService,

@@ -1,7 +1,7 @@
 import { Spin } from 'antd';
 import { useFetcher, useLocation } from 'react-router';
 import { useEffect, useState, useRef } from 'react';
-import { namedAction } from 'remix-utils/named-action';
+import { namedAction } from '~/utils/namedAction.server';
 
 import { ClassmojiService, StripeService } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';

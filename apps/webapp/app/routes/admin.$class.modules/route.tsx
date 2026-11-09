@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useFetcher, useLocation, useParams } from 'react-router';
 import { Button } from 'antd';
-import { namedAction } from 'remix-utils/named-action';
+import { namedAction } from '~/utils/namedAction.server';
 import { IconPlus } from '@tabler/icons-react';
 
 import { SearchInput, ButtonNew, RequireRole } from '~/components';

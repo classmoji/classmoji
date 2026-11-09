@@ -1,4 +1,4 @@
-import { namedAction } from 'remix-utils/named-action';
+import { namedAction } from '~/utils/namedAction.server';
 import { useLocation, useNavigate, useParams } from 'react-router';
 import type { ShouldRevalidateFunctionArgs } from 'react-router';
 import { IconChevronLeft, IconFolder } from '@tabler/icons-react';

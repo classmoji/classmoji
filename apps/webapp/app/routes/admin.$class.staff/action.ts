@@ -1,4 +1,4 @@
-import { namedAction } from 'remix-utils/named-action';
+import { namedAction } from '~/utils/namedAction.server';
 
 import {
   ClassmojiService,
