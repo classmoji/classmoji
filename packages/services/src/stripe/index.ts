@@ -1,8 +1,22 @@
 import Stripe from 'stripe';
 
+/**
+ * The Stripe API version every request is sent with. It is the version the
+ * installed SDK is built for (stripe 23.1.0 → 2026-10-28.endive), and the two
+ * move together: the SDK types `apiVersion` as its own version only, so a
+ * stripe bump that changes it fails typecheck here until this line is updated
+ * on purpose. Webhook payloads follow the endpoint's version in the Stripe
+ * dashboard, not this one.
+ */
+const STRIPE_API_VERSION = '2026-10-28.endive';
+
 let _stripe: Stripe | null = null;
 const stripe = (): Stripe => {
-  if (!_stripe) _stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string);
+  if (!_stripe) {
+    _stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
+      apiVersion: STRIPE_API_VERSION,
+    });
+  }
   return _stripe;
 };
 

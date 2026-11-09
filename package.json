@@ -72,8 +72,7 @@
     "highlight.js": "^11.11.1",
     "lodash": "^4.17.21",
     "lowlight": "^3.3.0",
-    "nanoid": "^5.0.7",
-    "stripe": "^18.3.0"
+    "nanoid": "^5.0.7"
   },
   "devDependencies": {
     "@eslint/js": "^9.36.0",

@@ -587,6 +587,131 @@ describe('stripe webhook route', () => {
     });
   });
 
+  describe('flexible billing mode', () => {
+    // Subscriptions created on Stripe API 2025-09-30.clover or later default to
+    // flexible billing mode. Their payloads keep the period end only on the
+    // subscription item, and a portal cancel sets `cancel_at` to the period end
+    // while leaving `cancel_at_period_end` false.
+    const flexSub = (periodEnd: number, overrides: Record<string, unknown> = {}) =>
+      proSub({
+        id: 'sub_flex',
+        billing_mode: { type: 'flexible', flexible: null, updated_at: periodEnd - 30 * 86400 },
+        cancel_at: null,
+        cancel_at_period_end: false,
+        canceled_at: null,
+        ended_at: null,
+        cancellation_details: { comment: null, feedback: null, reason: null },
+        items: {
+          object: 'list',
+          data: [{ id: 'si_1', price: { id: PRO_PRICE_ID }, current_period_end: periodEnd }],
+        },
+        ...overrides,
+      });
+
+    it('created: grants open-ended PRO', async () => {
+      const periodEnd = dayjs().add(30, 'day').unix();
+      constructWebhookEvent.mockReturnValue({
+        id: 'evt_flex_created',
+        type: 'customer.subscription.created',
+        data: { object: flexSub(periodEnd) },
+      });
+      userFindBy.mockResolvedValue({ id: 'user-1' });
+      subFindBy.mockResolvedValue(null);
+      subGetCurrent.mockResolvedValue(null);
+
+      const app = await buildApp();
+      const res = await post(app, {}, { 'stripe-signature': 'sig' });
+
+      expect(res.statusCode).toBe(200);
+      expect(subCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          user_id: 'user-1',
+          tier: 'PRO',
+          stripe_subscription_id: 'sub_flex',
+          ends_at: null,
+        })
+      );
+    });
+
+    it('updated: a portal cancel (cancel_at set, cancel_at_period_end false) ends at cancel_at', async () => {
+      const periodEnd = dayjs().add(21, 'day').unix();
+      const canceledAt = dayjs().unix();
+      constructWebhookEvent.mockReturnValue({
+        id: 'evt_flex_cancel',
+        type: 'customer.subscription.updated',
+        data: {
+          object: flexSub(periodEnd, {
+            cancel_at: periodEnd,
+            canceled_at: canceledAt,
+            cancellation_details: { comment: null, feedback: null, reason: 'cancellation_requested' },
+          }),
+        },
+      });
+      subFindBy.mockResolvedValue({ id: 'sub-cur', user_id: 'user-1' });
+
+      const app = await buildApp();
+      const res = await post(app, {}, { 'stripe-signature': 'sig' });
+
+      expect(res.statusCode).toBe(200);
+      expect(subUpdate).toHaveBeenCalledWith('sub-cur', {
+        ends_at: dayjs.unix(periodEnd).toDate(),
+        cancelled_at: dayjs.unix(canceledAt).toDate(),
+        cancellation_reason: 'cancellation_requested',
+      });
+      expect(billingRecord).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'PLAN_UPDATED',
+          data: expect.objectContaining({ ends_at: dayjs.unix(periodEnd).toDate().toISOString() }),
+        })
+      );
+      // Still PRO until the term runs out: `deleted` is what demotes.
+      expect(subCreate).not.toHaveBeenCalled();
+    });
+
+    it('updated: undoing the cancel clears the end date', async () => {
+      constructWebhookEvent.mockReturnValue({
+        id: 'evt_flex_uncancel',
+        type: 'customer.subscription.updated',
+        data: { object: flexSub(dayjs().add(21, 'day').unix()) },
+      });
+      subFindBy.mockResolvedValue({ id: 'sub-cur', user_id: 'user-1' });
+
+      const app = await buildApp();
+      await post(app, {}, { 'stripe-signature': 'sig' });
+
+      expect(subUpdate).toHaveBeenCalledWith('sub-cur', {
+        ends_at: null,
+        cancelled_at: null,
+        cancellation_reason: null,
+      });
+    });
+
+    it('deleted: closes the row at ended_at and creates the FREE successor', async () => {
+      const periodEnd = dayjs().subtract(1, 'hour').unix();
+      constructWebhookEvent.mockReturnValue({
+        id: 'evt_flex_deleted',
+        type: 'customer.subscription.deleted',
+        data: {
+          object: flexSub(periodEnd, {
+            status: 'canceled',
+            cancel_at: periodEnd,
+            canceled_at: periodEnd - 86400,
+            ended_at: periodEnd,
+          }),
+        },
+      });
+      subFindBy.mockResolvedValue({ id: 'sub-internal', user_id: 'user-1' });
+
+      const app = await buildApp();
+      await post(app, {}, { 'stripe-signature': 'sig' });
+
+      expect(subUpdate).toHaveBeenCalledWith('sub-internal', {
+        ends_at: dayjs.unix(periodEnd).toDate(),
+      });
+      expect(subCreate).toHaveBeenCalledWith({ user_id: 'user-1', tier: 'FREE' });
+    });
+  });
+
   it('subscription.deleted: closes the PRO row AND creates the FREE successor', async () => {
     // The successor is what actually demotes the account: `getCurrent` returns
     // the newest row, so without it the newest row stays {tier:'PRO'} forever.
