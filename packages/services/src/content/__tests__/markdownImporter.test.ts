@@ -128,3 +128,89 @@ describe('markdown import: Gitlab images', () => {
     ]);
   });
 });
+
+describe('markdown import: emoji callouts', () => {
+  const TEXT = 'remember to save your work before you close the editor window';
+  const callout = (emoji: string, text = TEXT) =>
+    `<div class="callout" style="align-items: flex-start;"><span class="callout-emoji">${emoji}</span><span>${text}</span></div>`;
+  const importHtml = async (markdown: string) =>
+    (
+      await processMarkdownImport(markdown, [], {
+        org: 'o',
+        repo: 'r',
+        contentPath: 'pages/p',
+        assetsFolder: 'pages/p/assets',
+      })
+    ).html;
+  const calloutCount = (html: string) => (html.match(/class="callout"/g) ?? []).length;
+
+  it('a paragraph, a blank line, then a callout', async () => {
+    const html = await importHtml(`Intro paragraph.\n\n💡: ${TEXT}`);
+    expect(html).toContain('<p>Intro paragraph.</p>');
+    expect(html).toContain(callout('💡'));
+    expect(calloutCount(html)).toBe(1);
+  });
+
+  it('a callout after three or more blank lines (the empty-paragraph spacer)', async () => {
+    const html = await importHtml(`Intro text\n\n\n\n💡: ${TEXT}`);
+    expect(html).toContain('<p></p>');
+    expect(html).toContain(callout('💡'));
+    expect(html).not.toContain('<p>💡');
+  });
+
+  it('a callout after a Notion toggle and a blank line', async () => {
+    const html = await importHtml(`- ❓ Q?\n\n    Answer body\n\n⚠️: ${TEXT}`);
+    expect(html).toContain('<details><summary>❓ Q?</summary>');
+    expect(html).toContain(callout('⚠️'));
+    expect(html).not.toContain('<p>⚠️');
+  });
+
+  it('a callout after a raw <pre> block keeps the block untouched', async () => {
+    const html = await importHtml(`<pre>\n  keep   spacing\n</pre>\n\n💡: ${TEXT}`);
+    expect(html).toContain('<pre>\n  keep   spacing\n</pre>');
+    expect(html).toContain(callout('💡'));
+  });
+
+  it('an HTML block that ends a quote or the page gets no extra line', () => {
+    expect(convertMarkdownToHtml('> <div>x</div>')).toBe(
+      '<blockquote>\n<div>x</div></blockquote>\n'
+    );
+    expect(convertMarkdownToHtml('text\n\n<div>x</div>')).toBe('<p>text</p>\n<div>x</div>');
+  });
+
+  it('every callout emoji', async () => {
+    const emojis = [
+      '💻',
+      '🚀',
+      '❓',
+      '💡',
+      '⚠️',
+      '📝',
+      '✅',
+      '❌',
+      '🔥',
+      '📌',
+      '👉',
+      '🎯',
+      '📚',
+      '🛠️',
+      '🔔',
+      '⭐',
+    ];
+    const html = await importHtml(emojis.map(e => `${e}: ${TEXT}`).join('\n\n'));
+    expect(calloutCount(html)).toBe(emojis.length);
+    for (const e of emojis) expect(html).toContain(callout(e));
+  });
+
+  it('a short legend line stays a paragraph', async () => {
+    const html = await importHtml('💻 : run in Terminal');
+    expect(calloutCount(html)).toBe(0);
+    expect(html).toContain('<p>💻 : run in Terminal</p>');
+  });
+
+  it('an emoji in the middle of a paragraph stays a paragraph', async () => {
+    const html = await importHtml(`Text with 💡: in the middle ${TEXT}`);
+    expect(calloutCount(html)).toBe(0);
+    expect(html).toContain(`<p>Text with 💡: in the middle ${TEXT}</p>`);
+  });
+});
