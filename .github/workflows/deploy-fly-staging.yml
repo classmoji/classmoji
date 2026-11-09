@@ -22,7 +22,6 @@ jobs:
       site: ${{ steps.filter.outputs.site == 'true' || github.event_name == 'workflow_dispatch' }}
       slides: ${{ steps.filter.outputs.slides == 'true' || github.event_name == 'workflow_dispatch' }}
       pages: ${{ steps.filter.outputs.pages == 'true' || github.event_name == 'workflow_dispatch' }}
-      admin: ${{ steps.filter.outputs.admin == 'true' || github.event_name == 'workflow_dispatch' }}
       tasks: ${{ steps.filter.outputs.tasks == 'true' || github.event_name == 'workflow_dispatch' }}
     steps:
       - uses: actions/checkout@v4
@@ -92,17 +91,6 @@ jobs:
               - '.github/workflows/deploy-fly-staging.yml'
               - '.github/workflows/build-fly-staging.yml'
               - 'apps/pages/**'
-              - 'packages/**'
-            admin:
-              - 'package.json'
-              - 'package-lock.json'
-              - '.npmrc'
-              - '.dockerignore'
-              # The image builds with turbo, which reads it.
-              - 'turbo.json'
-              - '.github/workflows/deploy-fly-staging.yml'
-              - '.github/workflows/build-fly-staging.yml'
-              - 'apps/admin/**'
               - 'packages/**'
             tasks:
               - 'package-lock.json'
@@ -190,16 +178,6 @@ jobs:
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       PERSONAL_ACCESS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
       SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-
-  build-admin:
-    needs: changes
-    if: needs.changes.outputs.admin == 'true'
-    uses: ./.github/workflows/build-fly-staging.yml
-    with:
-      service: admin
-    secrets:
-      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-      PERSONAL_ACCESS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
 
   deploy-webapp:
     needs: [changes, build-webapp]
@@ -355,23 +333,6 @@ jobs:
           flyctl deploy --config "$CONFIG" --image "$IMAGE" --app classmoji-pages-staging
         env:
           IMAGE: ${{ needs.build-pages.outputs.image }}
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-
-  deploy-admin:
-    needs: [changes, deploy-webapp, build-admin]
-    if: always() && !cancelled() && needs.build-admin.result == 'success' && needs.build-admin.outputs.image != '' && (needs.deploy-webapp.result == 'success' || (needs.changes.outputs.webapp != 'true' && needs.deploy-webapp.result == 'skipped'))
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup-flyctl
-        timeout-minutes: 15
-      - name: Deploy admin
-        run: |
-          CONFIG=$(scripts/fly-autostop-config.sh apps/admin/fly.toml stop)
-          flyctl deploy --config "$CONFIG" --image "$IMAGE" --app classmoji-admin-staging
-        env:
-          IMAGE: ${{ needs.build-admin.outputs.image }}
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
   deploy-trigger:
