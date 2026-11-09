@@ -26,6 +26,7 @@ export * from './repoNames.ts';
 export * from './subdomains.ts';
 export * from './debounce.ts';
 export * from './processSafety.ts';
+export * from './runtime.ts';
 export * from './roomStateStore.ts';
 export * from './blockAssetRefs.ts';
 export * from './naturalSort.ts';

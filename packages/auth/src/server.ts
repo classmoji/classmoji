@@ -13,6 +13,7 @@ import getPrisma from '@classmoji/database';
 import type { AskMojiAccess } from '@classmoji/services';
 import type { Role } from '@prisma/client';
 import { ClassmojiService } from '@classmoji/services';
+import { clientIpHeader } from '@classmoji/utils';
 import { noteSeen } from './lastSeen.ts';
 
 // The signing secret and the cookie prefix live in ./secret.ts so that modules
@@ -1528,11 +1529,13 @@ export const auth = betterAuth({
     },
   },
   advanced: {
-    // Whose IP a request is (rate limits, sessions). On Fly, Fly-Client-IP is
-    // written by the proxy and can't be forged, unlike the first entry of
+    // Whose IP a request is (rate limits, sessions). The platform's own
+    // header, chosen by runtime (never by which header is present): on Fly,
+    // Fly-Client-IP, written by the proxy; on Cloudflare Workers,
+    // CF-Connecting-IP. Either can't be forged, unlike the first entry of
     // X-Forwarded-For, which the client controls.
     ...(process.env.NODE_ENV === 'production'
-      ? { ipAddress: { ipAddressHeaders: ['fly-client-ip'] } }
+      ? { ipAddress: { ipAddressHeaders: [clientIpHeader()] } }
       : {}),
     database: {
       generateId: 'uuid',

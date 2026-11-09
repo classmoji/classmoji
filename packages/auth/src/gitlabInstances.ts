@@ -48,6 +48,7 @@ import * as z from 'zod';
 import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
 import { scopeGitlabId } from '@classmoji/utils';
+import { clientIp } from './clientIp.ts';
 import { mapGitLabProfile } from './providerProfile.ts';
 
 export const GITLAB_INSTANCE_CALLBACK_PATH = '/gitlab-instance/callback';
@@ -110,18 +111,6 @@ async function exchangeCode(
     scopes: data.scope ? data.scope.split(/[ ,]+/).filter(Boolean) : [],
     idToken: data.id_token,
   };
-}
-
-/**
- * The client IP of a request: Fly-Client-IP in production (written by Fly's
- * proxy, not forgeable), else the first X-Forwarded-For entry (local dev).
- */
-function clientIp(headers: Headers | undefined): string | null {
-  if (!headers) return null;
-  const fly = headers.get('fly-client-ip');
-  if (fly) return fly.trim();
-  if (process.env.NODE_ENV === 'production') return null;
-  return headers.get('x-forwarded-for')?.split(',')[0]?.trim() || null;
 }
 
 /** Open (unapproved) setup requests allowed at once, overall and per requester. */
