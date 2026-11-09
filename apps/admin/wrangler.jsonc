@@ -41,8 +41,8 @@
         {
           "binding": "HYPERDRIVE",
           // The `classmoji-staging` Hyperdrive config (unpooled staging Neon
-          // endpoint, caching off). Filled in when it is created.
-          "id": "HYPERDRIVE_ID_STAGING"
+          // endpoint, caching off).
+          "id": "25a3117abef74bcd97f283184a730e5f"
         }
       ],
       "vars": {
