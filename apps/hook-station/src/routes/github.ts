@@ -1,5 +1,4 @@
-import { Webhooks } from '@octokit/webhooks';
-import type { WebhookEvent } from '@octokit/webhooks-types';
+import { Webhooks, type EmitterWebhookEvent } from '@octokit/webhooks';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import Tasks from '@classmoji/tasks';
 import getPrisma from '@classmoji/database';
@@ -20,6 +19,9 @@ if (!githubWebhookSecret) {
 const webhooks = new Webhooks({
   secret: githubWebhookSecret,
 });
+
+/** Any Github webhook payload (the union of every event's payload type). */
+type WebhookEvent = EmitterWebhookEvent['payload'];
 
 /**
  * Handlers keyed `${X-GitHub-Event}.${action}`.

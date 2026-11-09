@@ -86,7 +86,6 @@ export default async ({ command, mode }) => {
         '@classmoji/services',
         '@prisma/client',
         'octokit',
-        '@octokit/auth-app',
         'stripe',
         'nanoid',
         'dotenv',

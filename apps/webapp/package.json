@@ -39,7 +39,7 @@
     "@hookform/resolvers": "^3.9.0",
     "@lexical/react": "^0.31.0",
     "@mantine/hooks": "^7.6.0",
-    "@octokit/rest": "^20.0.2",
+    "@octokit/rest": "^22.0.1",
     "@react-router/node": "^7.18.5",
     "@react-router/serve": "^7.18.5",
     "@sentry/react-router": "^10.76.2",
