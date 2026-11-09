@@ -39,7 +39,7 @@ vi.mock('~/components/features/modules/studentTree', () => ({
   resourceLeaves: () => [],
 }));
 vi.mock('react-router', () => ({ useLocation: () => ({ pathname: '/student/cs52-26f/modules' }) }));
-vi.mock('antd', () => ({ Button: () => null }));
+vi.mock('antd', () => ({ Button: () => null, Input: () => null }));
 
 const { loader } = await import('../route.tsx');
 

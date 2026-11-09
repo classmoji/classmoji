@@ -81,6 +81,12 @@ type WriteResult = {
 
 interface ModuleCardProps {
   module: ModuleCardData;
+  /**
+   * A search on the page that matched some of this module's rows (not its
+   * title): only those rows show. Absent when not searching, or when the
+   * module's own title matched.
+   */
+  searchMatch?: { items: Set<string>; assignments: Set<string> } | null;
   index: number;
   classSlug: string;
   slidesUrl: string;
@@ -295,6 +301,7 @@ const ItemRow = ({
  */
 const ModuleCard = ({
   module,
+  searchMatch = null,
   index,
   classSlug,
   slidesUrl,
@@ -342,8 +349,17 @@ const ModuleCard = ({
   // there, since they are a pre-assignment pointer nobody renders now.
   const contentItems = coursework.content.items as ModuleItemLike[];
   const assignments = coursework.assignments.items as AssignmentRowData[];
+  // A search that matched rows rather than the module's title shows only those
+  // rows (moduleSearch.ts). Indexes below stay those of the full lists.
+  const shownContent = searchMatch
+    ? contentItems.filter(i => searchMatch.items.has(i.id))
+    : contentItems;
+  const shownAssignments = searchMatch
+    ? assignments.filter(a => searchMatch.assignments.has(a.id))
+    : assignments;
   const ownsCoursework = assignments.length > 0;
-  const itemCount = assignments.length + contentItems.length;
+  // While searching, the count is of the rows shown, as on the student card.
+  const itemCount = shownAssignments.length + shownContent.length;
 
   // The line shows the latest write to come back, whichever fetcher sent it —
   // the card's own two, or the page's drag into this card: an error stays up
@@ -692,8 +708,9 @@ const ModuleCard = ({
           )}
 
           <ul className="flex flex-col">
-            {contentItems.length > 0 && <GroupHeading>Content</GroupHeading>}
-            {contentItems.map((item, itemIndex) => {
+            {shownContent.length > 0 && <GroupHeading>Content</GroupHeading>}
+            {shownContent.map(item => {
+              const itemIndex = contentItems.indexOf(item);
               const meta = TYPE_META[item.item_type];
               const { label, published } = describeItem(item);
               const edit = () => {
@@ -725,13 +742,14 @@ const ModuleCard = ({
                       key: 'up',
                       label: 'Move up',
                       icon: <IconArrowUp size={15} />,
-                      disabled: itemIndex === 0 || busy,
+                      // A neighbour may be hidden by the search: no moves until it clears.
+                      disabled: itemIndex === 0 || busy || !!searchMatch,
                     },
                     {
                       key: 'down',
                       label: 'Move down',
                       icon: <IconArrowDown size={15} />,
-                      disabled: itemIndex === contentItems.length - 1 || busy,
+                      disabled: itemIndex === contentItems.length - 1 || busy || !!searchMatch,
                     },
                     { type: 'divider' as const },
                     removeItem,
@@ -747,8 +765,8 @@ const ModuleCard = ({
                 />
               );
             })}
-            {assignments.length > 0 && <GroupHeading>Assignments</GroupHeading>}
-            {assignments.map(a => {
+            {shownAssignments.length > 0 && <GroupHeading>Assignments</GroupHeading>}
+            {shownAssignments.map(a => {
               // Publish is a property of the repository the assignment submits
               // through, so only REPO assignments with one can offer it. Its
               // published state comes from the classroom's repository list.
