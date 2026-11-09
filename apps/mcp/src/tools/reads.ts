@@ -223,7 +223,12 @@ export const getSubmissionTool = mirrorResourceTool({
     'One submission (a GitRepoAssignment) with its grades, graders, extension_hours (net of ' +
     'refunds), is_late (past student_deadline plus extension_hours, submitted or not, unlike ' +
     'the dashboard late count, which counts submitted work only) and analytics snapshot if ' +
-    'present. Teaching team only. `submission_id` comes from list_submissions; it is also the ' +
+    'present; num_late_hours (submitted work, net of extension_hours); assignment weight, ' +
+    'is_extra_credit and module_title; team_members on a team submission; submitted_commit ' +
+    "(push mode: the student's newest commit by closed_at, else by the deadline plus " +
+    'extension_hours); autograding (the run on that commit, else the latest by that time; ' +
+    'advisory, never a grade); open_regrade_request (resolve it with regrade_resolve) or ' +
+    'null. Teaching team only. `submission_id` comes from list_submissions; it is also the ' +
     'id that grade_add, grade_remove, grader_assign, and submission_late_override consume.',
   extraInput: {
     submission_id: submissionIdSchema().describe('Submission (GitRepoAssignment) id'),

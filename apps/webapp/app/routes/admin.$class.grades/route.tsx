@@ -1,4 +1,4 @@
-import { Await, Outlet } from 'react-router';
+import { Await, type ShouldRevalidateFunctionArgs } from 'react-router';
 import { Suspense } from 'react';
 import { Skeleton } from 'antd';
 
@@ -170,8 +170,28 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
             created_at: a.created_at,
             submission_mode: a.submission_mode,
             grades_released: a.grades_released,
+            // INDIVIDUAL or GROUP: the Teams view shows GROUP columns only.
+            repository_type: a.repository?.type ?? null,
           }))
     ),
+    // Open regrade requests, ids only: repo ones by submission id (the cell
+    // and the grading walk), quiz ones by assignment then student (the cell's
+    // link to the request).
+    openRegrades: quizzesVisible.then(includeQuizzes =>
+      ClassmojiService.regradeRequest.openForGradebook(classroom.id, { includeQuizzes })
+    ),
+    // The Teams view's rows: each team by id and name, with the ids of its
+    // members on the student roster (no one else's id is sent), and only
+    // teams that have such a member. Names come from the student rows above.
+    teams: Promise.all([
+      ClassmojiService.team.findMemberIdsByClassroomId(classroom.id),
+      studentRows,
+    ]).then(([teams, students]) => {
+      const rostered = new Set(students.map(student => student.id));
+      return teams
+        .map(team => ({ ...team, member_ids: team.member_ids.filter(id => rostered.has(id)) }))
+        .filter(team => team.member_ids.length > 0);
+    }),
   };
 
   // Quiz and form assignments have no submission row; their per-student state
@@ -256,12 +276,43 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   };
 };
 
+/** `/<prefix>/<class>/grades` for a gradebook URL or one of its panel URLs, else null. */
+const gradebookBase = (pathname: string) =>
+  /^(\/[^/]+\/[^/]+\/grades)(?:\/submissions\/[^/]+)?\/?$/.exec(pathname)?.[1] ?? null;
+
+/**
+ * Opening, walking and closing the submission panel is a path change under
+ * the gradebook with the same search params: the gradebook's data has not
+ * changed, so its (heavy) loader is skipped. Anything else keeps the default:
+ * a submission (a grade, a regrade resolution) or a revalidation still
+ * reloads it.
+ */
+export const shouldRevalidate = ({
+  currentUrl,
+  nextUrl,
+  formMethod,
+  defaultShouldRevalidate,
+}: ShouldRevalidateFunctionArgs) => {
+  const from = gradebookBase(currentUrl.pathname);
+  if (
+    !formMethod &&
+    from !== null &&
+    from === gradebookBase(nextUrl.pathname) &&
+    currentUrl.pathname !== nextUrl.pathname &&
+    currentUrl.search === nextUrl.search
+  ) {
+    return false;
+  }
+  return defaultShouldRevalidate;
+};
+
 const Grades = ({ loaderData }: Route.ComponentProps) => {
   const { allData, finalGradesReleased, canReleaseFinalGrades } = loaderData;
 
   return (
     <>
-      <Outlet />
+      {/* The submission panel (child route) renders from inside GradesTable,
+          which hands it the grading walk. */}
       <Suspense
         fallback={
           <div className="min-h-full">
@@ -270,7 +321,15 @@ const Grades = ({ loaderData }: Route.ComponentProps) => {
           </div>
         }
       >
-        <Await resolve={allData} errorElement={null}>
+        <Await
+          resolve={allData}
+          errorElement={
+            <div className="text-center py-12 text-gray-500 dark:text-gray-400">
+              <div className="font-medium">The gradebook could not be loaded</div>
+              <div className="text-sm">Reload the page to try again.</div>
+            </div>
+          }
+        >
           {([
             resolvedEmojiMappings,
             resolvedModules,
@@ -279,6 +338,8 @@ const Grades = ({ loaderData }: Route.ComponentProps) => {
             resolvedLetterGradeMappings,
             resolvedMemberships,
             resolvedAssignments,
+            resolvedOpenRegrades,
+            resolvedTeams,
             resolvedActivity,
           ]) => (
             <GradesTable
@@ -298,6 +359,10 @@ const Grades = ({ loaderData }: Route.ComponentProps) => {
               }
               memberships={resolvedMemberships as Parameters<typeof GradesTable>[0]['memberships']}
               activity={resolvedActivity as Parameters<typeof GradesTable>[0]['activity']}
+              openRegrades={
+                resolvedOpenRegrades as Parameters<typeof GradesTable>[0]['openRegrades']
+              }
+              teams={resolvedTeams as Parameters<typeof GradesTable>[0]['teams']}
               finalGradesReleased={finalGradesReleased}
               canReleaseFinalGrades={canReleaseFinalGrades}
             />
