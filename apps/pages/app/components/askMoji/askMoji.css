@@ -92,8 +92,9 @@
   display: none;
   position: fixed;
   z-index: var(--askmoji-z);
-  /* Below the page header, so its buttons stay reachable. */
-  top: 3.5rem;
+  /* Below the top bar (3rem) and the page header (3rem), so the header's
+   * buttons stay reachable. */
+  top: 6.5rem;
   right: 1rem;
   bottom: 1rem;
   width: min(420px, calc(100vw - 2rem));

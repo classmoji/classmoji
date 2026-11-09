@@ -1,6 +1,15 @@
-import { useLoaderData, redirect, Outlet, useLocation, useNavigate, useParams } from 'react-router';
+import {
+  useLoaderData,
+  useRouteLoaderData,
+  redirect,
+  Outlet,
+  useLocation,
+  useNavigate,
+  useParams,
+} from 'react-router';
 import { useEffect, useRef, useState } from 'react';
 import { gitUsername } from '@classmoji/utils';
+import { webappClassUrl } from '@classmoji/utils/webapp-links';
 import useLocalStorageState from 'use-local-storage-state';
 
 import {
@@ -19,6 +28,9 @@ import { headerImageRefs, withResolvedHeaderImages } from '~/utils/headerImages.
 
 import PagesLayout from '~/components/layout/PagesLayout.tsx';
 import PagesSidebar from '~/components/layout/PagesSidebar.tsx';
+import TopBar from '~/components/layout/TopBar.tsx';
+import { CAME_FROM_PARAM, cameFromPath, cameFromStorageKey } from '~/utils/cameFrom.ts';
+import type { PagesUser } from '~/types/pages.ts';
 import AskMojiHost from '~/components/askMoji/AskMojiHost.tsx';
 import { pageTitle, pageViewing } from '~/components/askMoji/askMojiProtocol.ts';
 
@@ -155,6 +167,14 @@ export const loader = async ({
     embedded: isEmbedded,
   });
 
+  // The top bar's way back: the Classmoji logo to the webapp, the class name to
+  // this class's dashboard in the reader's own role tree (from the role resolved
+  // above, never the client). A link target only: the webapp gates the route.
+  const webappUrl = process.env.WEBAPP_URL || 'http://localhost:3000';
+  const classHomeUrl = membership
+    ? webappClassUrl(webappUrl, membership.role, classroom.slug, 'dashboard')
+    : null;
+
   return {
     view,
     isEmbedded,
@@ -194,6 +214,8 @@ export const loader = async ({
         : null,
     })),
     membership: membership ? { role: membership.role } : null,
+    webappUrl,
+    classHomeUrl,
     askMojiEnabled: askMoji.askMojiEnabled,
     askMojiOrigin: askMoji.askMojiOrigin,
   };
@@ -373,9 +395,13 @@ const ClassroomLayout = () => {
     classroom,
     pages,
     membership,
+    webappUrl,
+    classHomeUrl,
     askMojiEnabled,
     askMojiOrigin,
   } = useLoaderData<typeof loader>();
+  // The signed-in reader, for the top bar's avatar; the root loader already has it.
+  const rootData = useRouteLoaderData('root') as { user?: PagesUser | null } | undefined;
   const params = useParams();
   const navigate = useNavigate();
   const location = useLocation();
@@ -400,6 +426,35 @@ const ClassroomLayout = () => {
 
   const canEdit = !!(membership && ['OWNER', 'TEACHER'].includes(membership.role));
   const currentPageId = params.pageId;
+
+  // The webapp page this tab was opened from (`?from=`, added by the webapp's
+  // links; see utils/cameFrom.ts). Kept per tab in sessionStorage so it outlives
+  // moving between pages here, then dropped from the address bar. The class
+  // name goes back there; without one, to the class dashboard. Members only.
+  const [cameFrom, setCameFrom] = useState<string | null>(null);
+  useEffect(() => {
+    if (isEmbedded || framed || typeof window === 'undefined') return;
+    const key = cameFromStorageKey(classroom.slug);
+    const url = new URL(window.location.href);
+    const fromParam = cameFromPath(url.searchParams.get(CAME_FROM_PARAM), classroom.slug);
+    let stored: string | null = null;
+    try {
+      if (fromParam) window.sessionStorage.setItem(key, fromParam);
+      stored = cameFromPath(window.sessionStorage.getItem(key), classroom.slug);
+    } catch {
+      stored = fromParam; // storage blocked: still honour this landing's value
+    }
+    setCameFrom(stored);
+    if (url.searchParams.has(CAME_FROM_PARAM)) {
+      url.searchParams.delete(CAME_FROM_PARAM);
+      window.history.replaceState(
+        window.history.state,
+        '',
+        `${url.pathname}${url.search}${url.hash}`
+      );
+    }
+  }, [classroom.slug, isEmbedded, framed]);
+  const classLinkUrl = classHomeUrl && cameFrom ? `${webappUrl}${cameFrom}` : classHomeUrl;
 
   // Keyboard shortcut: Cmd/Ctrl+B to toggle sidebar
   useEffect(() => {
@@ -507,7 +562,15 @@ const ClassroomLayout = () => {
   return (
     <PagesLayout
       collapsed={collapsed}
-      onMobileMenuClick={() => setMobileOpen(true)}
+      topBar={
+        <TopBar
+          classroom={classroom}
+          webappUrl={webappUrl}
+          classHomeUrl={classLinkUrl}
+          user={rootData?.user ?? null}
+          onMenuClick={() => setMobileOpen(true)}
+        />
+      }
       sidebar={
         <PagesSidebar
           pages={pages}

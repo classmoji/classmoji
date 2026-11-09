@@ -63,6 +63,8 @@ export interface PagesUser {
   id: string;
   login: string | null;
   name?: string | null;
+  /** The displayed avatar (`users.image`): the Github one, else Gitlab's. */
+  image?: string | null;
   classroom_memberships?: Array<{
     role: string;
     classroom: { slug: string; name: string };

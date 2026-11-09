@@ -1,42 +1,37 @@
 import React from 'react';
-import { IconMenu2 } from '@tabler/icons-react';
 
 /**
- * PagesLayout - Main layout wrapper with sidebar and content area
+ * PagesLayout - Main layout wrapper: top bar, sidebar and content area
  *
- * Provides a fixed sidebar that can collapse/expand with smooth transitions.
- * On mobile, sidebar becomes an overlay with backdrop.
- * Content area adjusts margin based on sidebar state.
+ * The top bar runs across the full width; below it a fixed sidebar that can
+ * collapse/expand with smooth transitions. On mobile, the sidebar becomes an
+ * overlay with backdrop (opened from the top bar's menu button). The content
+ * area scrolls on its own and adjusts its margin to the sidebar state.
  */
 interface PagesLayoutProps {
   children: React.ReactNode;
+  topBar: React.ReactNode;
   sidebar: React.ReactNode;
   collapsed: boolean;
-  onMobileMenuClick: () => void;
 }
 
-const PagesLayout = ({ children, sidebar, collapsed, onMobileMenuClick }: PagesLayoutProps) => {
+const PagesLayout = ({ children, topBar, sidebar, collapsed }: PagesLayoutProps) => {
   return (
-    <div className="flex h-screen overflow-hidden bg-white dark:bg-[#191919]">
-      {/* Sidebar */}
-      {sidebar}
+    <div className="flex flex-col h-screen overflow-hidden bg-white dark:bg-[#191919]">
+      {topBar}
 
-      {/* Main content area */}
-      <div
-        className={`flex-1 overflow-y-auto transition-all duration-200 ease-in-out ${
-          collapsed ? 'md:ml-16' : 'md:ml-60'
-        }`}
-      >
-        {/* Mobile menu button */}
-        <button
-          onClick={onMobileMenuClick}
-          className="md:hidden fixed top-4 left-4 z-40 p-2 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700"
-          aria-label="Open menu"
+      <div className="flex flex-1 min-h-0">
+        {/* Sidebar (fixed, below the top bar) */}
+        {sidebar}
+
+        {/* Main content area */}
+        <div
+          className={`flex-1 overflow-y-auto transition-all duration-200 ease-in-out ${
+            collapsed ? 'md:ml-16' : 'md:ml-60'
+          }`}
         >
-          <IconMenu2 size={20} className="text-gray-700 dark:text-gray-300" />
-        </button>
-
-        {children}
+          {children}
+        </div>
       </div>
     </div>
   );

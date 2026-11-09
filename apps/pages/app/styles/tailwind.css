@@ -2,6 +2,9 @@
 /* The shared video upload options (`@classmoji/ui-components/media-options`)
  * ship their own stylesheet; this app renders them in the video dialog. */
 @import '@classmoji/ui-components/styles/media-options.css';
+/* The shared Classmoji logo (the top bar) is styled with utilities, and the
+ * package lives outside this app, where Tailwind does not look by itself. */
+@source '../../../../packages/ui-components/src/Logo';
 
 /* Drive `dark:` from the theme CLASS, not `prefers-color-scheme`.
  *

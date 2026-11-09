@@ -342,6 +342,12 @@ const App = () => {
           href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&display=swap"
           rel="stylesheet"
         />
+        {/* The Classmoji wordmark's font, for the top bar's logo. App documents
+            only: class sites never show the bar. */}
+        <link
+          href="https://fonts.googleapis.com/css2?family=Fredoka:wght@600&display=swap"
+          rel="stylesheet"
+        />
         {/* Flash-free dark mode: honour an explicit `?theme=` (the webapp's
             resolved appearance when embedded), else follow system preference. */}
         <script dangerouslySetInnerHTML={{ __html: APP_DARK_MODE_SCRIPT }} />

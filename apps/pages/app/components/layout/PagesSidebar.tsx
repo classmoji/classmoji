@@ -25,7 +25,6 @@ import { toast } from 'react-toastify';
  * - onMobileClose: Function - close callback for mobile
  */
 import type { PageSummary, ClassroomSummary } from '~/types/pages.ts';
-import gitlabLogo from '~/components/ui/gitlab.svg';
 
 interface PagesSidebarProps {
   pages: PageSummary[];
@@ -94,30 +93,18 @@ const PagesSidebar = ({
 
       {/* Sidebar */}
       <div
-        className={`fixed left-0 top-0 h-screen bg-[#f7f8fa] dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800 transition-all duration-200 ease-in-out flex flex-col z-50 ${
+        className={`fixed left-0 top-12 bottom-0 bg-[#f7f8fa] dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800 transition-all duration-200 ease-in-out flex flex-col z-50 ${
           collapsed ? 'w-16' : 'w-60'
         } ${mobileOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}
       >
-        {/* Header with collapse toggle */}
+        {/* Header with collapse toggle. The class name lives in the top bar. */}
         <div
-          className={`h-12 flex items-center ${collapsed ? 'justify-center' : 'justify-between'} px-4 border-b border-gray-200 dark:border-gray-800`}
+          className={`h-11 flex-shrink-0 flex items-center ${collapsed ? 'justify-center' : 'justify-between'} pl-5 pr-3`}
         >
           {!collapsed && (
-            <div className="flex items-center gap-2 min-w-0">
-              {/* Gitlab groups have no avatar we can build: show the Gitlab logo. */}
-              {classroom.git_organization?.avatar_url || classroom.avatar_url ? (
-                <img
-                  src={(classroom.git_organization?.avatar_url || classroom.avatar_url) as string}
-                  alt={classroom.git_organization?.login || classroom.name}
-                  className="h-6 w-6 rounded-full border-2 border-gray-200 dark:border-gray-600 flex-shrink-0"
-                />
-              ) : classroom.git_organization?.provider === 'GITLAB' ? (
-                <img src={gitlabLogo} alt="Gitlab" className="h-6 w-6 flex-shrink-0" />
-              ) : null}
-              <h2 className="font-semibold text-gray-900 dark:text-white truncate">
-                {classroom.name}
-              </h2>
-            </div>
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+              Pages
+            </h2>
           )}
           <button
             onClick={onToggleCollapse}
@@ -134,7 +121,7 @@ const PagesSidebar = ({
         </div>
 
         {/* Content area - page list */}
-        <div className="flex-1 overflow-y-auto p-2">
+        <div className="flex-1 overflow-y-auto px-2 pb-2">
           {pages.length === 0 ? (
             <div className="text-gray-500 dark:text-gray-400 text-sm text-center py-8">
               {collapsed ? (
