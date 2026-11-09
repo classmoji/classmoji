@@ -1,0 +1,89 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  // apps/admin as a Cloudflare Worker (BUILD_TARGET=cloudflare; the Fly build
+  // ignores this file). Built with the Cloudflare Vite plugin, which flattens
+  // ONE environment into build/server/wrangler.json, so the environment is
+  // picked at BUILD time with CLOUDFLARE_ENV (see the admin:*:cf scripts and
+  // .github/workflows/deploy-cloudflare-staging.yml), and deploys run against
+  // that generated file.
+  //
+  // Deliberately NOT a deployed name, and deliberately bindingless (the
+  // content worker's convention): a build or deploy without an environment
+  // lands on a throwaway Worker nothing routes to, and answers 503 for want of
+  // a HYPERDRIVE binding, instead of overwriting staging or production.
+  "name": "classmoji-admin-unconfigured",
+  "main": "./workers/app.ts",
+  "compatibility_date": "2026-10-20",
+  // process.env is populated from vars and secrets (on by default with
+  // nodejs_compat at this date): the shared packages read process.env.
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "observability": {
+    "enabled": true
+  },
+  "upload_source_maps": true,
+
+  // Secrets are not declared here. CI pushes an allowlist of them from
+  // Infisical (`sta` for staging) with `wrangler secret bulk` after each
+  // deploy; the list is in .github/workflows/deploy-cloudflare-staging.yml.
+  // None of them may also appear in `vars` below (the names would collide).
+  "env": {
+    "staging": {
+      "name": "classmoji-admin-staging",
+      "placement": { "mode": "smart" },
+      "routes": [
+        {
+          "pattern": "admin.staging.classmoji.io",
+          "custom_domain": true
+        }
+      ],
+      "hyperdrive": [
+        {
+          "binding": "HYPERDRIVE",
+          // The `classmoji-staging` Hyperdrive config (unpooled staging Neon
+          // endpoint, caching off). Filled in when it is created.
+          "id": "HYPERDRIVE_ID_STAGING"
+        }
+      ],
+      "vars": {
+        "NODE_ENV": "production",
+        "ADMIN_URL": "https://admin.staging.classmoji.io",
+        "WEBAPP_URL": "https://staging.classmoji.io",
+        "SITE_BASE_DOMAIN": "staging.classmoji.io",
+        // Staging's cookies must not shadow production's on .classmoji.io; a
+        // wrong prefix silently signs everyone out (Fly-only secret until now).
+        "COOKIE_PREFIX": "classmoji-staging"
+      },
+      "observability": {
+        "enabled": true
+      }
+    },
+
+    // Unused until the production cutover; Fly serves admin.classmoji.io.
+    "production": {
+      "name": "classmoji-admin",
+      "placement": { "mode": "smart" },
+      "routes": [
+        {
+          "pattern": "admin.classmoji.io",
+          "custom_domain": true
+        }
+      ],
+      "hyperdrive": [
+        {
+          "binding": "HYPERDRIVE",
+          "id": "HYPERDRIVE_ID_PRODUCTION"
+        }
+      ],
+      "vars": {
+        "NODE_ENV": "production",
+        "ADMIN_URL": "https://admin.classmoji.io",
+        "WEBAPP_URL": "https://app.classmoji.io",
+        "SITE_BASE_DOMAIN": "classmoji.io"
+      },
+      "observability": {
+        "enabled": true
+      }
+    }
+  }
+}

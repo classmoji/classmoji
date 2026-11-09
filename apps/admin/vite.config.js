@@ -5,7 +5,20 @@ import tailwindcss from '@tailwindcss/vite';
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 7500;
 
-export default () => {
+// BUILD_TARGET=cloudflare builds the app as a Cloudflare Worker
+// (workers/app.ts, wrangler.jsonc). Anything else is the Fly/Node build,
+// exactly as before: the Cloudflare plugins are not even loaded.
+const CLOUDFLARE = process.env.BUILD_TARGET === 'cloudflare';
+
+export default async () => {
+  const workerPlugins = CLOUDFLARE
+    ? await (async () => {
+        const { cloudflare } = await import('@cloudflare/vite-plugin');
+        const { classmojiWorkerSwaps } = await import('@classmoji/workers/vite');
+        return [classmojiWorkerSwaps(), cloudflare({ viteEnvironment: { name: 'ssr' } })];
+      })()
+    : [];
+
   return defineConfig({
     resolve: {
       alias: {
@@ -17,9 +30,11 @@ export default () => {
     // them from the repo root's Vite 5, which has none, and server.ts's Vite 6
     // would otherwise resolve with ["development"] only (no `browser`). See
     // apps/pages/vite.config.js. Vite 5 builds ignore `environments`.
+    // On Workers the Cloudflare plugin sets the ssr conditions (`workerd`
+    // first); a `node` condition here would leak into the Worker.
     environments: {
       client: { resolve: { conditions: [...defaultClientConditions] } },
-      ssr: { resolve: { conditions: [...defaultServerConditions] } },
+      ...(CLOUDFLARE ? {} : { ssr: { resolve: { conditions: [...defaultServerConditions] } } }),
     },
     optimizeDeps: {
       include: ['react', 'react-dom', 'react-router'],
@@ -34,7 +49,7 @@ export default () => {
         'octokit',
       ],
     },
-    plugins: [tailwindcss(), reactRouter(), tsconfigPaths()],
+    plugins: [tailwindcss(), ...workerPlugins, reactRouter(), tsconfigPaths()],
     server: {
       port: PORT,
       host: '0.0.0.0',
