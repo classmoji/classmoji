@@ -26,6 +26,8 @@
  * transport it is given), so they are not repeated here; the signal it passes
  * is honoured and the body is handed back as a stream for it to cap.
  */
+// eslint's resolver misses this subpath export; TypeScript resolves it.
+// eslint-disable-next-line import/no-unresolved
 import { isPublicRoutableHost } from '@better-auth/core/utils/host';
 import type { ClientMetadataResourceFetch } from '@better-auth/oauth-provider';
 
