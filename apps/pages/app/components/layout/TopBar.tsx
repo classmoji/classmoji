@@ -10,9 +10,9 @@ interface TopBarProps {
   /** The webapp's origin: the Classmoji logo goes there. */
   webappUrl: string;
   /**
-   * The classroom's dashboard in the webapp, in the viewer's own role tree.
-   * Null for a reader who is not a member (a public page): the class name is
-   * then plain text, since there is no classroom of theirs to go back to.
+   * Where the class name takes a member: the webapp page this tab was opened
+   * from, else the class dashboard in their own role tree. Null for a reader who
+   * is not a member (a public page).
    */
   classHomeUrl: string | null;
   user: Pick<PagesUser, 'name' | 'login' | 'image'> | null;
@@ -34,6 +34,11 @@ const initialsOf = (text: string | null | undefined): string => {
  * class name back to that class, and where the reader is now.
  */
 const TopBar = ({ classroom, webappUrl, classHomeUrl, user, onMenuClick }: TopBarProps) => {
+  // Signed out: the class name and a "Sign in" button go to the webapp's sign-in
+  // page. A signed-in non-member gets plain text: signing in again would change
+  // nothing for them.
+  const signInHref = !user && !classHomeUrl ? `${webappUrl}/` : null;
+  const classHref = classHomeUrl ?? signInHref;
   const classAvatar = classroom.git_organization?.avatar_url || classroom.avatar_url || null;
   const isGitLab = classroom.git_organization?.provider === 'GITLAB';
   const userName = user?.name || user?.login || null;
@@ -84,9 +89,9 @@ const TopBar = ({ classroom, webappUrl, classHomeUrl, user, onMenuClick }: TopBa
             /
           </span>
 
-          {classHomeUrl ? (
+          {classHref ? (
             <a
-              href={classHomeUrl}
+              href={classHref}
               className="flex items-center gap-1.5 min-w-0 rounded-md px-1.5 py-0.5 font-semibold text-gray-900 hover:bg-gray-100 dark:text-white dark:hover:bg-gray-800"
             >
               {classLabel}
@@ -127,6 +132,15 @@ const TopBar = ({ classroom, webappUrl, classHomeUrl, user, onMenuClick }: TopBa
             </span>
           )}
         </span>
+      )}
+
+      {signInHref && (
+        <a
+          href={signInHref}
+          className="flex-shrink-0 rounded-md px-3 py-1.5 text-sm font-medium text-gray-700 ring-1 ring-gray-200 hover:bg-gray-50 dark:text-gray-200 dark:ring-gray-700 dark:hover:bg-gray-800"
+        >
+          Sign in
+        </a>
       )}
     </div>
   );

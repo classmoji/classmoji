@@ -21,6 +21,7 @@ import ImportProgressBanner, {
   type ImportProgressBannerProps,
 } from '../../features/import/ImportProgressBanner';
 import type { loader as rootLoader } from '~/root';
+import { usePagesFromParam } from '~/components/features/pages/usePagesFromParam';
 
 interface Viewer {
   user: { id: string; name?: string | null; login?: string | null; avatar_url?: string | null };
@@ -80,7 +81,7 @@ const CommonLayout = ({
   children,
   recentViewers = [],
   groupViewersByRole = false,
-  pagesUrl: _pagesUrl = 'http://localhost:7100',
+  pagesUrl = 'http://localhost:7100',
   navVisibility,
   importBanner = null,
   isPro,
@@ -94,6 +95,10 @@ const CommonLayout = ({
   const params = useParams();
 
   const location = useLocation();
+
+  // Links into the pages app carry the page the reader is on, so its top bar
+  // can bring them back here.
+  usePagesFromParam(pagesUrl);
   const { pathname } = location;
 
   // The page content scrolls inside an inner overflow-auto div, so the
