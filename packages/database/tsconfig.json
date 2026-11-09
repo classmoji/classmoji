@@ -5,6 +5,7 @@
     "index.ts",
     "gitIdentity.ts",
     "requestScope.ts",
+    "requestContext.ts",
     "pgAdapter.ts",
     "scripts/**/*.ts",
     "__tests__/**/*.ts",

@@ -21,7 +21,8 @@
     "./gitIdentity": "./gitIdentity.ts",
     "./seed-fixtures": "./scripts/seed-fixtures.js",
     "./pg-adapter": "./pgAdapter.ts",
-    "./worker-client": "./generated/worker/client.ts"
+    "./worker-client": "./generated/worker/client.ts",
+    "./wait-until": "./requestContext.ts"
   },
   "dependencies": {
     "@classmoji/utils": "*",

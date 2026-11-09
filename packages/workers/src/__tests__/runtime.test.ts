@@ -8,13 +8,21 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const db = vi.hoisted(() => ({
   runs: [] as unknown[],
   adapters: [] as { connectionString: string }[],
+  waitUntils: [] as (((p: Promise<unknown>) => void) | undefined)[],
 }));
 
 vi.mock('@classmoji/database', () => ({
-  runWithPrisma: vi.fn(async (adapter: unknown, fn: () => Promise<unknown>) => {
-    db.runs.push(adapter);
-    return fn();
-  }),
+  runWithPrisma: vi.fn(
+    async (
+      adapter: unknown,
+      fn: () => Promise<unknown>,
+      options?: { waitUntil?: (p: Promise<unknown>) => void }
+    ) => {
+      db.runs.push(adapter);
+      db.waitUntils.push(options?.waitUntil);
+      return fn();
+    }
+  ),
 }));
 vi.mock('@classmoji/database/pg-adapter', () => ({
   PrismaPg: class {
@@ -33,6 +41,8 @@ const ctx = { waitUntil: vi.fn(), passThroughOnException: vi.fn() };
 beforeEach(() => {
   db.runs.length = 0;
   db.adapters.length = 0;
+  db.waitUntils.length = 0;
+  ctx.waitUntil.mockReset();
 });
 
 describe('createWorkerHandler', () => {
@@ -48,6 +58,18 @@ describe('createWorkerHandler', () => {
     expect(db.adapters).toEqual([{ connectionString: 'postgres://hyperdrive/db' }]);
     expect(db.runs).toEqual([db.adapters[0]]);
     expect(requestHandler).toHaveBeenCalledWith(request, { cloudflare: { env, ctx } });
+  });
+
+  it("gives the run the request's ctx.waitUntil", async () => {
+    const handler = createWorkerHandler(async () => new Response('ok'));
+    await handler.fetch(
+      new Request('https://a/'),
+      { HYPERDRIVE: { connectionString: 'pg://h' } },
+      ctx
+    );
+    const work = Promise.resolve();
+    db.waitUntils[0]?.(work);
+    expect(ctx.waitUntil).toHaveBeenCalledWith(work);
   });
 
   it('builds a new adapter for every request', async () => {

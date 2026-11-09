@@ -13,20 +13,35 @@ import { AsyncLocalStorage } from 'node:async_hooks';
  *
  * Kept free of Prisma so it can be tested on Node with any factory.
  */
+export interface RequestScopeOptions {
+  /** The request's `ctx.waitUntil`: keeps work alive after the response. */
+  waitUntil?: (promise: Promise<unknown>) => void;
+}
+
 export interface RequestScope<Client extends object, Adapter> {
   /** Forwards every access to the running request's client; throws outside one. */
   readonly client: Client;
   /** Runs `fn` with a fresh client on `adapter` as the current one. */
-  run<T>(adapter: Adapter, fn: () => Promise<T>): Promise<T>;
+  run<T>(adapter: Adapter, fn: () => Promise<T>, options?: RequestScopeOptions): Promise<T>;
+  /**
+   * Hands `promise` to the running request's `waitUntil`. Returns false (and
+   * does nothing) outside a request or when the run was given none.
+   */
+  waitUntil(promise: Promise<unknown>): boolean;
+}
+
+interface Store<Client> {
+  client: Client;
+  waitUntil?: (promise: Promise<unknown>) => void;
 }
 
 export function createRequestScope<Client extends object, Adapter>(
   createClient: (adapter: Adapter) => Client
 ): RequestScope<Client, Adapter> {
-  const storage = new AsyncLocalStorage<Client>();
+  const storage = new AsyncLocalStorage<Store<Client>>();
 
   const current = (prop: PropertyKey): Client => {
-    const client = storage.getStore();
+    const client = storage.getStore()?.client;
     if (!client) {
       throw new Error(
         `[database] Prisma used outside a request (property ${String(prop)}). On Workers every ` +
@@ -58,6 +73,13 @@ export function createRequestScope<Client extends object, Adapter>(
     // No explicit disconnect: a streamed response can still be reading after
     // `fn` resolves, and the runtime closes the request's sockets when the
     // request ends.
-    run: (adapter, fn) => storage.run(createClient(adapter), fn),
+    run: (adapter, fn, options = {}) =>
+      storage.run({ client: createClient(adapter), waitUntil: options.waitUntil }, fn),
+    waitUntil(promise) {
+      const waitUntil = storage.getStore()?.waitUntil;
+      if (!waitUntil) return false;
+      waitUntil(promise);
+      return true;
+    },
   };
 }

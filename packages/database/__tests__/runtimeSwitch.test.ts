@@ -68,6 +68,13 @@ describe('on Node', () => {
     const db = await import('../index.ts');
     expect(() => db.runWithPrisma({ name: 'x' }, async () => {})).toThrow(/Workers only/);
   });
+
+  it('waitUntil does nothing and builds no request scope', async () => {
+    const db = await import('../index.ts');
+    const work = Promise.resolve();
+    expect(db.waitUntil(work)).toBeUndefined();
+    expect(fake.constructed).toHaveLength(1);
+  });
 });
 
 describe('on Cloudflare Workers', () => {
@@ -101,5 +108,23 @@ describe('on Cloudflare Workers', () => {
       { adapter: { name: 'a' } },
       { adapter: { name: 'b' } },
     ]);
+  });
+
+  it("waitUntil hands work to the running request's ctx.waitUntil, and only inside one", async () => {
+    const db = await import('../index.ts');
+    // The subpath auth uses is the same scope.
+    const subpath = await import('../requestContext.ts');
+    const handed: Promise<unknown>[] = [];
+    const work = Promise.resolve('w');
+    db.waitUntil(Promise.resolve('outside'));
+    await db.runWithPrisma(
+      { name: 'a' },
+      async () => {
+        db.waitUntil(work);
+        subpath.waitUntil(work);
+      },
+      { waitUntil: promise => handed.push(promise) }
+    );
+    expect(handed).toEqual([work, work]);
   });
 });

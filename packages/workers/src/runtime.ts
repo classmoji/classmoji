@@ -58,7 +58,11 @@ export function createWorkerHandler<Env extends ClassmojiWorkerEnv>(
         return new Response('Service misconfigured', { status: 503 });
       }
       const adapter = new PrismaPg({ connectionString });
-      return runWithPrisma(adapter, () => requestHandler(request, { cloudflare: { env, ctx } }));
+      // `waitUntil()` from @classmoji/database hands work to this request's
+      // ctx.waitUntil, so un-awaited writes outlive the response.
+      return runWithPrisma(adapter, () => requestHandler(request, { cloudflare: { env, ctx } }), {
+        waitUntil: promise => ctx.waitUntil(promise),
+      });
     },
   };
 }

@@ -2,7 +2,8 @@ import { createDecipheriv, createHash } from 'node:crypto';
 import { PrismaClient, Prisma } from '@prisma/client';
 import dayjs, { type Dayjs } from 'dayjs';
 import { createOneShotShutdown, DEFAULT_AVATAR_URL, isWorkerd } from '@classmoji/utils';
-import { createRequestScope, type RequestScope } from './requestScope.ts';
+import { workerScope as sharedWorkerScope } from './requestContext.ts';
+import type { RequestScope, RequestScopeOptions } from './requestScope.ts';
 
 interface TokenTransaction {
   hours_purchased?: number | null;
@@ -332,22 +333,27 @@ const disconnectPrisma = async () => {
 export const IS_WORKERD = isWorkerd();
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-let requestScope: RequestScope<PrismaClient, any> | null = null;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const workerScope = (): RequestScope<PrismaClient, any> =>
-  (requestScope ??= createRequestScope(createPrismaClient));
+const workerScope = (): RequestScope<PrismaClient, any> => sharedWorkerScope(createPrismaClient);
+
+export { waitUntil } from './requestContext.ts';
 
 /**
  * Workers only: run `fn` with a fresh Prisma client on `adapter` (a driver
  * adapter, e.g. PrismaPg over Hyperdrive) as the client getPrisma() hands
- * out. Throws on Node, where the process-wide client is the only one.
+ * out, and `options.waitUntil` (the request's ctx.waitUntil) as what
+ * `waitUntil()` hands work to. Throws on Node, where the process-wide client
+ * is the only one.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function runWithPrisma<T>(adapter: any, fn: () => Promise<T>): Promise<T> {
+export function runWithPrisma<T>(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  adapter: any,
+  fn: () => Promise<T>,
+  options?: RequestScopeOptions
+): Promise<T> {
   if (!IS_WORKERD) {
     throw new Error('[database] runWithPrisma is for Cloudflare Workers only');
   }
-  return workerScope().run(adapter, fn);
+  return workerScope().run(adapter, fn, options);
 }
 
 if (IS_WORKERD) {

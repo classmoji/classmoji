@@ -91,4 +91,46 @@ describe('createRequestScope', () => {
     await later;
     expect(() => s.client.name).toThrow(/outside a request/);
   });
+
+  describe('waitUntil', () => {
+    it('does nothing outside a request', () => {
+      const s = scope();
+      expect(s.waitUntil(Promise.resolve())).toBe(false);
+    });
+
+    it("hands work to the running request's waitUntil", async () => {
+      const s = scope();
+      const handed: Promise<unknown>[] = [];
+      const work = Promise.resolve('done');
+      const result = await s.run('a', async () => s.waitUntil(work), {
+        waitUntil: promise => handed.push(promise),
+      });
+      expect(result).toBe(true);
+      expect(handed).toEqual([work]);
+    });
+
+    it('does nothing in a request run without one', async () => {
+      const s = scope();
+      await expect(s.run('a', async () => s.waitUntil(Promise.resolve()))).resolves.toBe(false);
+    });
+
+    it('keeps concurrent requests apart', async () => {
+      const s = scope();
+      const seen: Record<string, number> = { a: 0, b: 0 };
+      await Promise.all(
+        ['a', 'b'].map(name =>
+          s.run(
+            name,
+            async () => {
+              await tick();
+              s.waitUntil(Promise.resolve());
+              s.waitUntil(Promise.resolve());
+            },
+            { waitUntil: () => (seen[name] += name === 'a' ? 1 : 10) }
+          )
+        )
+      );
+      expect(seen).toEqual({ a: 2, b: 20 });
+    });
+  });
 });
