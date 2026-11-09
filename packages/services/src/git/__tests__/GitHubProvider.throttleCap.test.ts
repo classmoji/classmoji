@@ -1,7 +1,7 @@
 /**
  * The throttling plugin's automatic retry is capped on ordinary clients: a
  * rate-limited WRITE is retried once, and only when GitHub asks for 60 s or
- * less. Anything longer surfaces as the 403 at once, so it reaches our own
+ * less. Anything longer surfaces as the 403 or 429 at once, so it reaches our own
  * bounded retry (ContentService.uploadBatch) instead of the plugin sleeping
  * e.g. 300 s inside a user request. Reads keep the umbrella's behaviour.
  */
