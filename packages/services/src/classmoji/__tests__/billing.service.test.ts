@@ -128,6 +128,38 @@ describe('summarizeSubscription', () => {
     expect(summary.email).toBeNull();
   });
 
+  it('flexible billing mode: a portal cancel (cancel_at, not cancel_at_period_end) ends at cancel_at', () => {
+    // Subscriptions created on Stripe API 2025-09-30.clover or later are in
+    // flexible billing mode; a portal cancel there sets `cancel_at` to the
+    // period end and leaves `cancel_at_period_end` false.
+    const summary = billing.summarizeSubscription({
+      status: 'active',
+      billing_mode: { type: 'flexible', flexible: null },
+      cancel_at: 1800000000,
+      cancel_at_period_end: false,
+      canceled_at: 1797500000,
+      items: { data: [{ price: { unit_amount: 2000 }, current_period_end: 1800000000 }] },
+      customer: 'cus_1',
+    } as never);
+
+    expect(summary.endsAt).toBe(1800000000);
+    expect(summary.currentPeriodEnd).toBe(1800000000);
+  });
+
+  it('flexible billing mode: no cancellation means no end date', () => {
+    const summary = billing.summarizeSubscription({
+      status: 'active',
+      billing_mode: { type: 'flexible', flexible: null },
+      cancel_at: null,
+      cancel_at_period_end: false,
+      items: { data: [{ price: { unit_amount: 2000 }, current_period_end: 1800000000 }] },
+      customer: 'cus_1',
+    } as never);
+
+    expect(summary.endsAt).toBeNull();
+    expect(summary.currentPeriodEnd).toBe(1800000000);
+  });
+
   it('falls back to the customer’s default card', () => {
     const summary = billing.summarizeSubscription({
       status: 'active',
