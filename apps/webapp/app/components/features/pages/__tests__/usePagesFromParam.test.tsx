@@ -3,7 +3,12 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
-import { pagesHrefWithFrom, pagesOriginOf, usePagesFromParam } from '../usePagesFromParam';
+import {
+  pagesFromReferer,
+  pagesHrefWithFrom,
+  pagesOriginOf,
+  usePagesFromParam,
+} from '../usePagesFromParam';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -39,6 +44,25 @@ describe('pagesHrefWithFrom', () => {
     expect(pagesHrefWithFrom('https://github.com/x', PAGES, '/a')).toBeNull();
     expect(pagesHrefWithFrom('https://slides.example.org/s-1', PAGES, '/a')).toBeNull();
     expect(pagesHrefWithFrom('not a url', PAGES, '/a')).toBeNull();
+  });
+});
+
+describe('pagesFromReferer (the editor hand-off redirect)', () => {
+  const req = 'https://app.example.org/admin/cs1/pages/p-1.data';
+
+  it('uses the same-host page that linked here', () => {
+    expect(pagesFromReferer(req, 'https://app.example.org/admin/cs1/modules?open=m-2', 'cs1')).toBe(
+      '/admin/cs1/modules?open=m-2'
+    );
+  });
+
+  it("falls back to the role's page list without a usable same-host referer", () => {
+    expect(pagesFromReferer(req, null, 'cs1')).toBe('/admin/cs1/pages');
+    expect(pagesFromReferer(req, 'https://evil.test/admin/cs1/x', 'cs1')).toBe('/admin/cs1/pages');
+    expect(pagesFromReferer(req, 'not a url', 'cs1')).toBe('/admin/cs1/pages');
+    expect(pagesFromReferer('https://app.example.org/teacher/cs1/pages/p-1', null, 'cs1')).toBe(
+      '/teacher/cs1/pages'
+    );
   });
 });
 

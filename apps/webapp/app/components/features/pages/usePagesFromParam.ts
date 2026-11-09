@@ -40,6 +40,30 @@ export function pagesHrefWithFrom(href: string, pagesOrigin: string, from: strin
   return url.toString();
 }
 
+/**
+ * `from` for a server redirect into the pages app (the editor hand-off at
+ * `/{admin|teacher}/{class}/pages/{id}`, which a client click never reaches as a
+ * pages-host link): the same-host `Referer`, i.e. the webapp page that linked
+ * there, else that role's page list, where those links live. Path and query
+ * only; the pages app re-validates it.
+ */
+export function pagesFromReferer(
+  requestUrl: string,
+  referer: string | null,
+  classSlug: string
+): string {
+  const here = new URL(requestUrl);
+  const fallback = `/${here.pathname.split('/')[1]}/${classSlug}/pages`;
+  if (!referer) return fallback;
+  try {
+    const from = new URL(referer);
+    if (from.host !== here.host) return fallback;
+    return `${from.pathname}${from.search}`;
+  } catch {
+    return fallback;
+  }
+}
+
 /** The origin of the pages app URL, or null when it is unset or malformed. */
 export function pagesOriginOf(pagesUrl: string | null | undefined): string | null {
   if (!pagesUrl) return null;
