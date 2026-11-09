@@ -46,7 +46,7 @@
     "highlight.js": "^11.11.1",
     "isbot": "^4",
     "jszip": "^3.10.1",
-    "marked": "^12.0.2",
+    "marked": "^18.1.3",
     "morgan": "^1.12.1",
     "qrcode.react": "^4.2.0",
     "react": "^19.1.1",

@@ -37,6 +37,6 @@ export function hasVisibleSlides(fragment: DocumentFragment): boolean {
  * same lists (remove mode), then inserted as nodes.
  */
 export function renderSpeakerNotes(target: Element, markdown: string): void {
-  const html = marked.parse(markdown, { breaks: true, gfm: true, async: false }) as string;
+  const html = marked.parse(markdown, { breaks: true, gfm: true, async: false });
   target.replaceChildren(sanitizeNotesHtml(html, target.ownerDocument));
 }
