@@ -45,7 +45,6 @@ const PROXY_SOURCE = source('../../app/routes/content.$org.$repo.$/route.tsx');
 const REPLACE_SOURCE = source('../../app/routes/$classroomSlug.$slideId.replace/route.tsx');
 const LINK_SOURCE = source('../../app/routes/$classroomSlug.$slideId.link/route.tsx');
 const NEW_SOURCE = source('../../app/routes/$classroomSlug.new/route.tsx');
-const IMPORT_SOURCE = source('../../app/routes/api.slides.import.start/route.ts');
 const INDEX_SOURCE = source('../../app/routes/_index/route.tsx');
 const FOLLOW_SOURCE = source('../../app/routes/$slideId_.follow/route.tsx');
 const PRESENT_SOURCE = source('../../app/routes/$slideId_.present/route.tsx');
@@ -445,21 +444,6 @@ test.describe('the upload endpoints', () => {
     // empty deck and reported success.
     expect(NEW_SOURCE).toContain('SLIDE_SOURCES.includes(rawSource as SlideSource)');
     expect(NEW_SOURCE).not.toContain("formData.get('source') ?? 'blank'");
-  });
-
-  test('the import endpoint checks a session and meters the body', () => {
-    // The classroom arrives as a form field, so its own gate cannot run first —
-    // but a session can, and the 150 MB cap must be enforced while the body
-    // streams rather than trusted to `Content-Length`.
-    const session = IMPORT_SOURCE.indexOf('await getAuthSession(request)');
-    const read = IMPORT_SOURCE.indexOf('await readLimitedFormData(');
-
-    expect(session).toBeGreaterThan(-1);
-    expect(read).toBeGreaterThan(-1);
-    expect(session).toBeLessThan(read);
-    // And nothing reads the body the unmetered way. (The header comment names
-    // `request.formData()` to explain why, so this looks for the CALL.)
-    expect(IMPORT_SOURCE).not.toContain('await request.formData()');
   });
 
   test('the deck editor action authorizes before it reads the body, and meters it', () => {

@@ -516,10 +516,9 @@ export default function SlidesAdmin({ loaderData }: Route.ComponentProps) {
       <div className="flex items-center justify-between gap-3 mt-2 mb-4">
         <h1 className="text-lg font-semibold text-ink-1">Slides</h1>
         <div className="flex items-center gap-3">
-          {/* One button, because there is now one screen behind it: the slides
+          {/* One button, because there is one screen behind it: the slides
               app's New Slide page is the source picker — start a blank deck,
-              upload a file, paste a link, or import a Slides.com export, which
-              is where the second button used to go. */}
+              upload a file, or paste a link. */}
           <Button
             type="primary"
             icon={<IconPlus size={16} />}

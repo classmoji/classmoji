@@ -1238,7 +1238,7 @@ async function mapWithLimit<T>(
  *
  * This is the PRIMARY writer, not a backstop. The save hooks cover a document
  * the moment somebody edits it; everything else — the push webhook, the
- * importers, the migration scripts, the slides.com importer, and every document
+ * importers, the migration scripts, and every document
  * that simply has not been touched since this shipped — arrives here. Its first
  * run is the backfill.
  *

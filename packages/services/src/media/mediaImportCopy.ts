@@ -771,8 +771,7 @@ async function copyOne({
   } catch (error) {
     // The copies are in place and the flip to READY failed. Whether it landed
     // is asked, not assumed — a lost response looks exactly like a failed
-    // write — the way `putMediaObject` asks. Loaded here, not at the top, for
-    // the reason `discard` gives.
+    // write. Loaded here, not at the top, for the reason `discard` gives.
     //
     // Under a derived id the row is read first: it may not be this attempt's
     // any more, and `afterFailedReadyFlip` tombstones whatever UPLOADING row it

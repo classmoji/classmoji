@@ -10,8 +10,6 @@
  *     the classroom's content repo. Students download it under its original
  *     name; there is no viewer.
  *   - **Link a URL** — an external `https:` destination the slide redirects to.
- *   - **Slides.com export** — hands off to `/import`, which already owns the
- *     ZIP pipeline.
  *
  * ## Where each one lands
  *
@@ -34,7 +32,7 @@
  *
  * ## Why the picker is links and a search param
  *
- * The four cards used to be `<button type="button">` driven by `useState`, so
+ * The cards used to be `<button type="button">` driven by `useState`, so
  * until this route's JavaScript had loaded and hydrated they did nothing at all
  * — measured at about ten seconds on a cold staging machine, during which
  * "Upload a file" is a control that looks ready and is not. The selection lives
@@ -91,10 +89,10 @@ import { useMediaUpload } from '~/hooks/useMediaUpload';
 import { useDiscardRefusedUpload } from '~/hooks/useDiscardRefusedUpload';
 import { formatGigabytes, mediaFailureMessage, slideFileTarget } from '~/utils/mediaUpload';
 
-/** The four things the picker offers. `import` is a link, not a form. */
+/** The three things the picker offers, each a form on this screen. */
 type SlideSource = 'blank' | 'file' | 'link';
 
-/** The three the FORM posts, named once so the action can refuse anything else. */
+/** What the FORM posts, named once so the action can refuse anything else. */
 const SLIDE_SOURCES: readonly SlideSource[] = ['blank', 'file', 'link'];
 
 /**
@@ -188,7 +186,6 @@ export const loader = async ({
       classroomSlug,
       'slides'
     ),
-    importUrl: `/import?class=${encodeURIComponent(classroomSlug)}`,
     // The upload policy, handed to the client rather than imported there:
     // `@classmoji/services/slides` is the deck engine (and cheerio with it), and
     // it must never be reachable from a component. The server still re-checks
@@ -482,11 +479,10 @@ const HELP_CLASS = 'mt-2 text-xs leading-relaxed text-[var(--ink-3)]';
 /**
  * One card in the picker. Always an anchor, never a button.
  *
- * `source` gives a picker choice, which links to this same screen with a
+ * `source` gives the picker choice, which links to this same screen with a
  * different `?source=` — so it works with no JavaScript at all and becomes a
- * client-side navigation once hydrated. `href` gives the one card that leaves
- * (the slides.com import). The selected state is `aria-current` rather than
- * `aria-pressed` because the URL, not a toggle, is what holds it.
+ * client-side navigation once hydrated. The selected state is `aria-current`
+ * rather than `aria-pressed` because the URL, not a toggle, is what holds it.
  *
  * While a submission is in flight every card is inert in the same three ways
  * the Cancel links are: not clickable, out of the tab order, announced as
@@ -497,16 +493,13 @@ function SourceOption({
   description,
   selected,
   source,
-  href,
   disabled,
 }: {
   title: string;
   description: string;
   selected?: boolean;
-  /** A picker choice: navigates to `?source=…` on this same route. */
-  source?: SlideSource;
-  /** A card that goes somewhere else entirely. */
-  href?: string;
+  /** The picker choice: navigates to `?source=…` on this same route. */
+  source: SlideSource;
   /** Frozen while a submission is in flight, so the form cannot change under it. */
   disabled?: boolean;
 }) {
@@ -537,17 +530,9 @@ function SourceOption({
     </>
   );
 
-  if (href) {
-    return (
-      <a href={href} className={className} {...inert}>
-        {body}
-      </a>
-    );
-  }
-
   return (
-    // `replace`, because picking between the four cards is one decision and not
-    // four history entries to back out of; `preventScrollReset`, because the
+    // `replace`, because picking between the cards is one decision and not a
+    // history entry per click to back out of; `preventScrollReset`, because the
     // picker is at the top and the form below it should not jump.
     <Link
       to={`?source=${source}`}
@@ -614,7 +599,6 @@ function NewSlideForm() {
     contentNamespace,
     source,
     slidesListUrl,
-    importUrl,
     upload,
   } = useLoaderData<typeof loader>();
   const navigation = useNavigation();
@@ -749,7 +733,7 @@ function NewSlideForm() {
           <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-[var(--ink-3)]">
             Where do these slides come from?
           </p>
-          <div className="grid gap-2 sm:grid-cols-2">
+          <div className="grid gap-2 sm:grid-cols-3">
             <SourceOption
               title="Start blank"
               description="A new deck you write in the editor"
@@ -769,12 +753,6 @@ function NewSlideForm() {
               description="Point at slides that live somewhere else"
               selected={source === 'link'}
               source="link"
-              disabled={isSubmitting}
-            />
-            <SourceOption
-              title="Slides.com export"
-              description="Import a .zip exported from slides.com"
-              href={importUrl}
               disabled={isSubmitting}
             />
           </div>

@@ -7,8 +7,9 @@
  *
  * Unifies the three historical generators:
  *   - editor canonical  (apps/slides/app/routes/$slideId/route.tsx generateSlideHtml)
- *   - slides.com import (apps/slides/app/utils/slidesComImporter.server.ts —
- *     light/dark media link pair, 960/700/center:false, sl-block override style)
+ *   - slides.com import (the former slides.com importer, since removed; its
+ *     decks remain — light/dark media link pair, 960/700/center:false,
+ *     sl-block override style)
  *   - starter template  (apps/slides/app/utils/slideHelpers.server.ts —
  *     monokai via the reveal plugin path, inline style, no data-theme)
  *

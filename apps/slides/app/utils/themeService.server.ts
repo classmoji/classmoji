@@ -1,12 +1,14 @@
 /**
  * Theme Service
  *
- * Manages shared slide themes stored in `.slidesthemes/` in the content repository.
- * Allows reusing theme CSS/fonts across multiple slide presentations.
+ * Resolves the URLs of a shared slide theme stored as a folder in
+ * `.slidesthemes/<name>/` of the content repository (`theme.json`, `lib/`
+ * CSS, optional `custom-theme.css`). Those folders were written by the former
+ * slides.com importer; decks that reference one (`data-theme="shared:<name>"`)
+ * still render through `getThemeUrls`.
  */
 
 import { ContentService } from '@classmoji/content';
-import { ClassmojiService } from '@classmoji/services';
 
 const THEMES_FOLDER = '.slidesthemes';
 
@@ -22,154 +24,6 @@ const THEMES_FOLDER = '.slidesthemes';
 function getBaseUrl(org: string, repoName: string): string {
   // Return relative URL - will be resolved against slides service origin
   return `/content/${org}/${repoName}`;
-}
-
-/**
- * List all saved themes for an organization
- * @param {string} org - Organization login
- * @param {string} repoName - Content repository name
- * @returns {Promise<Array<{name: string, bodyClasses: string}>>}
- */
-export async function listSavedThemes(org: string, repoName: string) {
-  try {
-    // Through ContentService, which resolves the org (Github or Gitlab) from the
-    // login and the content repo together.
-    const contents = await ContentService.listFolder({
-      orgLogin: org,
-      repo: repoName,
-      path: THEMES_FOLDER,
-    });
-
-    // Get theme.json from each theme folder
-    const themes = [];
-    for (const item of contents) {
-      if (item.type === 'dir') {
-        try {
-          const manifestFile = await ContentService.getContent({
-            orgLogin: org,
-            repo: repoName,
-            path: `${THEMES_FOLDER}/${item.name}/theme.json`,
-          });
-          if (!manifestFile) throw new Error('no theme.json');
-          const manifest = JSON.parse(manifestFile.content);
-          themes.push({
-            name: item.name,
-            bodyClasses: manifest.bodyClasses || '',
-          });
-        } catch (error: unknown) {
-          // Skip themes without valid manifest
-          const message = error instanceof Error ? error.message : String(error);
-          console.warn(`Skipping theme ${item.name}: ${message}`);
-        }
-      }
-    }
-
-    return themes.sort((a, b) => a.name.localeCompare(b.name));
-  } catch (error: unknown) {
-    console.error('Error listing themes:', error);
-    return [];
-  }
-}
-
-/**
- * Save a theme to the shared themes folder
- * @param {Object} options
- * @param {string} options.org - Organization login
- * @param {string} options.repoName - Content repository name
- * @param {string} options.themeName - Theme folder name (slug)
- * @param {string} options.bodyClasses - Body classes for the theme
- * @param {string} [options.customThemeCss] - Custom theme CSS content
- * @param {Array<{path: string, content: string, encoding: string}>} options.libFiles - Lib folder files
- * @param {string} [options.classroomId] - Classroom whose deck cards this theme changes
- * @returns {Promise<{themePath: string, filesUploaded: number}>}
- */
-export async function saveTheme({
-  org,
-  repoName,
-  themeName,
-  bodyClasses,
-  customThemeCss,
-  libFiles,
-  classroomId,
-  onProgress,
-}: {
-  org: string;
-  repoName: string;
-  themeName: string;
-  bodyClasses: string;
-  customThemeCss?: string;
-  libFiles: Array<{ path: string; content: string; encoding: 'utf-8' | 'base64' }>;
-  /** Optional only because a repo can be written without one; pass it if you have it. */
-  classroomId?: string | null;
-  onProgress?: (progress: { current: number; total: number; filename?: string }) => void;
-}) {
-  const themePath = `${THEMES_FOLDER}/${themeName}`;
-
-  // Minimal manifest - just store body classes
-  const manifest = { bodyClasses };
-
-  // Collect all files to upload
-  const files: Array<{ path: string; content: string; encoding: 'utf-8' | 'base64' }> = [
-    {
-      path: `${themePath}/theme.json`,
-      content: JSON.stringify(manifest, null, 2),
-      encoding: 'utf-8',
-    },
-    // Lib files go under theme folder
-    ...libFiles.map(file => ({
-      path: `${themePath}/${file.path}`,
-      content: file.content,
-      encoding: file.encoding,
-    })),
-  ];
-
-  // Add custom theme CSS if present
-  if (customThemeCss?.trim()) {
-    files.push({
-      path: `${themePath}/custom-theme.css`,
-      content: customThemeCss,
-      encoding: 'utf-8',
-    });
-  }
-
-  const result = await ContentService.uploadBatch({
-    orgLogin: org,
-    repo: repoName,
-    files,
-    message: `Save shared theme: ${themeName}`,
-    onProgress,
-  });
-
-  // A theme is delivered by the SHA of its TREE, so a save that does not
-  // refresh the asset map leaves every deck in the classroom signing the
-  // PREVIOUS tree — the edge keeps handing back the old CSS until a push
-  // webhook or the nightly sweep catches up. Full mode, because no per-file
-  // update can produce a tree SHA.
-  //
-  // AWAITED, and the ordering is the point. The only caller is the slides.com
-  // zip importer, which runs fire-and-forget behind an SSE progress stream and
-  // writes its deck rows immediately after this returns — so nothing is
-  // blocking on a user's request here, and the map has to be level with the new
-  // theme BEFORE the decks that reference it exist. Never throws: the commit
-  // already reached GitHub and the save has succeeded whatever the cache does.
-  await ClassmojiService.contentAssets.syncContentAssetsForRepo(org, repoName, 'theme-save');
-
-  // Every card in the classroom is now a picture of the OLD theme. The render
-  // task's "has this deck changed?" check cannot see that — a theme edit moves
-  // no byte inside any deck — so these go out with `force`.
-  //
-  // Not awaited and unable to fail the save, exactly like the sync above is
-  // unable to: the commit has already reached GitHub, and whether the cards
-  // catch up is not this function's problem.
-  void ClassmojiService.deckThumbnail.enqueueClassroomThumbnails(classroomId, {
-    themeName,
-    force: true,
-  });
-
-  return {
-    themePath,
-    filesUploaded: result.filesUploaded,
-  };
 }
 
 /**
@@ -217,31 +71,4 @@ export async function getThemeUrls(org: string, repoName: string, themeName: str
     customThemeUrl,
     bodyClasses: manifest.bodyClasses,
   };
-}
-
-/**
- * Check if a theme name already exists
- * @param {string} org - Organization login
- * @param {string} repoName - Content repository name
- * @param {string} themeName - Theme name to check
- * @returns {Promise<boolean>}
- */
-export async function themeExists(
-  org: string,
-  repoName: string,
-  themeName: string
-): Promise<boolean> {
-  const themes = await listSavedThemes(org, repoName);
-  return themes.some(t => t.name === themeName);
-}
-
-/**
- * Generate a slug from a display name
- */
-export function generateThemeSlug(displayName: string): string {
-  return displayName
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 50);
 }

@@ -8,7 +8,7 @@ import { ClassmojiService } from '@classmoji/services';
  * The save hooks index a document the moment somebody edits it, and they are
  * the fast path — but they only ever see documents somebody edits. Everything
  * else arrives here: the push webhook (which records assets and warms nothing),
- * the slides.com importer, the two migration scripts, and — the largest
+ * the two migration scripts, and — the largest
  * category by a wide margin — every document in the fleet that simply has not
  * been saved since the index shipped. Its first run IS the backfill.
  *
