@@ -1,6 +1,45 @@
-import { marked, type MarkedOptions } from 'marked';
+import { Marked, type Token } from 'marked';
 // eslint-disable-next-line import/namespace
 import * as prettier from 'prettier';
+
+/**
+ * Ends the line after every block of raw HTML that another block follows,
+ * in `tokens` and in the blocks nested in them.
+ */
+function endHtmlBlockLines(tokens: Token[]): void {
+  tokens.forEach((token, i) => {
+    if (
+      token.type === 'html' &&
+      token.block &&
+      i < tokens.length - 1 &&
+      !token.text.endsWith('\n')
+    ) {
+      token.text += '\n';
+    }
+    if (token.type === 'list') {
+      for (const item of token.items) endHtmlBlockLines(item.tokens);
+    } else if ('tokens' in token && Array.isArray(token.tokens)) {
+      endHtmlBlockLines(token.tokens);
+    }
+  });
+}
+
+/**
+ * The importer's own marked (the shared `marked` instance is left alone).
+ * Since marked 18 a block of raw HTML no longer keeps the blank lines after
+ * it, so the next block was written on the same line
+ * (`<details>…</details><p>💡: …</p>`). `processEmojiCallouts` and its
+ * `<pre>` tracking read the HTML line by line, so each such block ends its
+ * line again here.
+ */
+const importerMarked = new Marked({
+  hooks: {
+    processAllTokens(tokens) {
+      endHtmlBlockLines(tokens);
+      return tokens;
+    },
+  },
+});
 
 /**
  * Format code blocks in markdown using Prettier
@@ -420,11 +459,11 @@ export function processToggleLists(markdown: string): string {
         if (innerContent.length > 0 && innerContent.some(l => l.trim() !== '')) {
           // Convert inner content back to markdown, then to HTML
           const innerMarkdown = innerContent.join('\n').trim();
-          const toggleMarkedOptions = {
+          const innerHtml = importerMarked.parse(innerMarkdown, {
             breaks: false, // Don't convert single newlines to <br> - breaks code blocks
             gfm: true,
-          } satisfies MarkedOptions;
-          const innerHtml = marked(innerMarkdown, toggleMarkedOptions) as unknown as string;
+            async: false,
+          });
 
           // Base64 encode the inner HTML to preserve it through DOM parsing
           // This prevents the browser from modifying the HTML structure
@@ -459,11 +498,7 @@ export function convertMarkdownToHtml(markdown: string): string {
   // Two or more blank lines = one empty paragraph for spacing
   processed = processed.replace(/\n{3,}/g, '\n\n<p></p>\n\n');
 
-  const markedOptions = {
-    breaks: true,
-    gfm: true,
-  } satisfies MarkedOptions;
-  let html = marked(processed, markedOptions) as unknown as string;
+  let html = importerMarked.parse(processed, { breaks: true, gfm: true, async: false });
 
   // Remove trailing newlines inside <code> blocks (marked adds them, causing empty lines)
   html = html.replace(/(<code[^>]*>)([\s\S]*?)(<\/code>)/g, (match, open, content, close) => {
