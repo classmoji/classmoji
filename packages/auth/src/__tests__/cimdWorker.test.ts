@@ -5,7 +5,9 @@
  * redirect, honour the caller's abort signal, and hand the body back as a
  * stream so the caller's 5120-byte cap and 5 s timeout apply to it.
  *
- * `fetch` is mocked: nothing here touches the network.
+ * `fetch` is mocked, and the Node transport is only asked about URLs it
+ * refuses before any DNS lookup (plain http, IPv4 literals, `localhost` from
+ * the hosts file), so nothing here touches the network.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 // eslint's resolver misses this subpath export; TypeScript resolves it.
@@ -32,24 +34,25 @@ afterEach(() => {
 });
 
 describe('refuses what the Node transport refuses, without fetching', () => {
+  // The last column: also ask the Node transport (offline cases only).
   it.each([
-    ['http://client.example.com/oauth/client.json', 'plain http', /HTTPS/],
-    ['https://127.0.0.1/c.json', 'loopback', /public-routable/],
-    ['https://[::1]/c.json', 'loopback (IPv6)', /public-routable/],
-    ['https://localhost/c.json', 'the name localhost', /public-routable/],
-    ['https://app.localhost/c.json', 'a .localhost name', /public-routable/],
-    ['https://10.1.2.3/c.json', 'private', /public-routable/],
-    ['https://192.168.0.10/c.json', 'private', /public-routable/],
-    ['https://169.254.169.254/c.json', 'link-local (cloud metadata)', /public-routable/],
-    ['https://metadata.google.internal/c.json', 'cloud metadata name', /public-routable/],
-    ['https://100.64.0.1/c.json', 'shared address space', /public-routable/],
-    ['https://[::ffff:127.0.0.1]/c.json', 'IPv4-mapped loopback', /public-routable/],
-  ])('%s (%s)', async (url, _kind, reason) => {
+    ['http://client.example.com/oauth/client.json', 'plain http', /HTTPS/, true],
+    ['https://127.0.0.1/c.json', 'loopback', /public-routable/, true],
+    ['https://[::1]/c.json', 'loopback (IPv6)', /public-routable/, false],
+    ['https://localhost/c.json', 'the name localhost', /public-routable/, true],
+    ['https://app.localhost/c.json', 'a .localhost name', /public-routable/, false],
+    ['https://10.1.2.3/c.json', 'private', /public-routable/, true],
+    ['https://192.168.0.10/c.json', 'private', /public-routable/, true],
+    ['https://169.254.169.254/c.json', 'link-local (cloud metadata)', /public-routable/, true],
+    ['https://metadata.google.internal/c.json', 'cloud metadata name', /public-routable/, false],
+    ['https://100.64.0.1/c.json', 'shared address space', /public-routable/, true],
+    ['https://[::ffff:127.0.0.1]/c.json', 'IPv4-mapped loopback', /public-routable/, false],
+  ])('%s (%s)', async (url, _kind, reason, askNode) => {
     const calls = mockFetch(() => new Response('{}'));
     await expect(workerTransport(url)).rejects.toThrow(reason);
     expect(calls).toHaveLength(0);
-    // The Node transport refuses the same URL (by DNS answer for names).
-    await expect(nodeTransport(url)).rejects.toThrow();
+    // The Node transport refuses the same URL.
+    if (askNode) await expect(nodeTransport(url)).rejects.toThrow();
   });
 
   it.each(['POST', 'PUT', 'DELETE'])('the %s method', async method => {
