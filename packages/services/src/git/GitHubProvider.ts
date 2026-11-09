@@ -61,18 +61,22 @@ type ThrottleHandler = (
 
 /**
  * Whether the throttling plugin should wait `retryAfter` seconds and retry a
- * request GitHub refused with a 403 rate limit (plugin-throttling 8.x calls
- * these hooks for 403s only; a 429 goes to the retry plugin instead).
+ * request GitHub refused with a rate limit. The plugin calls these hooks for a
+ * 403 or a 429 that it recognises as one: a message naming the secondary limit
+ * (`retryAfter` from `retry-after`, else 60 s), or `x-ratelimit-remaining: 0`
+ * (`retryAfter` until `x-ratelimit-reset`). Any other 403/429 never reaches
+ * them and is thrown to the caller as it came.
  *
  * The umbrella's own hooks retry once, however long GitHub asks for — on a
  * secondary limit that can be 300 s, on a primary limit up to an hour, all of
  * it asleep inside a user's request. Writes are capped: retried once, and only
  * when the wait is at most `THROTTLE_MAX_WRITE_RETRY_AFTER_S`. A longer wait
- * surfaces the 403 to the caller at once: `uploadBatch` has its own bounded
- * retry (which throws rather than wait past 120 s), and any other caller gets
- * the error instead of a stalled request. Reads (GET/HEAD) keep the umbrella's behaviour: retried
- * once, whatever the wait. GraphQL is a POST and so counts as a write, as it
- * does in the plugin's own write limiter.
+ * surfaces the 403/429 to the caller at once: `uploadBatch` has its own bounded
+ * retry (which throws rather than wait past 120 s), a Trigger task's
+ * `retryOnGitBlip` schedules the next attempt for when GitHub asked, and any
+ * other caller gets the error instead of a stalled request. Reads (GET/HEAD)
+ * keep the umbrella's behaviour: retried once, whatever the wait. GraphQL is a
+ * POST and so counts as a write, as it does in the plugin's own write limiter.
  */
 const shouldRetryThrottled =
   (kind: string): ThrottleHandler =>
@@ -96,13 +100,27 @@ export const throttleHandlers: {
 };
 
 /**
+ * The retry plugin's own `doNotRetry` list, plus 429.
+ *
+ * The throttling plugin is the one retry policy for rate limits: it honours
+ * `retry-after` and asks `throttleHandlers`. Left on its defaults, the retry
+ * plugin would also retry a 429 three times at 1/4/9 s, ignoring
+ * `retry-after`, and since it runs inside the throttling plugin it would do so
+ * on every throttling attempt: one secondary-limit 429 became eight requests
+ * over about 30 s. 5xx and network failures are still retried by it.
+ */
+export const CAPPED_DO_NOT_RETRY = [400, 401, 403, 404, 410, 422, 429, 451];
+
+/**
  * The Octokit every ordinary client here is built on: the umbrella's, with its
  * throttling hooks replaced by `throttleHandlers` so a rate-limited write is
- * never slept on for more than a minute. `defaults` replaces `throttle`
- * wholesale, so both hooks must be given.
+ * never slept on for more than a minute, and rate limits left to the throttling
+ * plugin alone (`CAPPED_DO_NOT_RETRY`). `defaults` replaces `throttle` and
+ * `retry` wholesale, so both hooks and the whole list must be given.
  */
 export const CappedOctokit = Octokit.defaults({
   throttle: throttleHandlers,
+  retry: { doNotRetry: CAPPED_DO_NOT_RETRY },
 });
 
 /**

@@ -114,3 +114,84 @@ describe('the capped client (getUserOctokit)', () => {
     expect(error).toMatchObject({ status: 403 });
   }, 10_000);
 });
+
+const respond = (status: number, message: string, headers: Record<string, string> = {}) =>
+  vi.fn(
+    async () =>
+      new Response(JSON.stringify({ message }), {
+        status,
+        headers: { 'content-type': 'application/json', ...headers },
+      })
+  );
+
+const failure = (promise: Promise<unknown>) => promise.then(() => null).catch((e: unknown) => e);
+
+// A 429 goes through the throttling plugin only (it honours `retry-after`);
+// the retry plugin's blind 1/4/9 s retries are off for it (CAPPED_DO_NOT_RETRY),
+// so a rate limit is never retried by both. Without that it was 8 requests here.
+describe('the capped client on a 429', () => {
+  it('retries a secondary-limit read once, after retry-after, and no more', async () => {
+    const fetch = respond(429, 'You have exceeded a secondary rate limit', { 'retry-after': '1' });
+    const octokit = GitHubProvider.getUserOctokit('ghu_token');
+
+    const startedAt = Date.now();
+    const error = await failure(
+      octokit.request('GET /repos/{owner}/{repo}', { owner: 'o', repo: 'r', request: { fetch } })
+    );
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(900);
+    // Headers intact for the caller's own policy (retryOnGitBlip, uploadBatch).
+    expect(error).toMatchObject({ status: 429, response: { headers: { 'retry-after': '1' } } });
+  }, 10_000);
+
+  it('throws a secondary-limit write refused for 300 s at once', async () => {
+    const fetch = respond(429, 'You have exceeded a secondary rate limit', {
+      'retry-after': '300',
+    });
+    const octokit = GitHubProvider.getUserOctokit('ghu_token');
+
+    const startedAt = Date.now();
+    const error = await failure(
+      octokit.request('POST /repos/{owner}/{repo}/git/blobs', {
+        owner: 'o',
+        repo: 'r',
+        content: 'x',
+        request: { fetch },
+      })
+    );
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(Date.now() - startedAt).toBeLessThan(3_000);
+    expect(error).toMatchObject({ status: 429 });
+  });
+
+  it('throws a 429 the throttling plugin does not recognise as a rate limit, unretried', async () => {
+    const fetch = respond(429, 'Too Many Requests');
+    const octokit = GitHubProvider.getUserOctokit('ghu_token');
+
+    const error = await failure(
+      octokit.request('GET /repos/{owner}/{repo}', { owner: 'o', repo: 'r', request: { fetch } })
+    );
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(error).toMatchObject({ status: 429 });
+  });
+
+  it('still retries a 5xx through the retry plugin', async () => {
+    const fetch = respond(502, 'Bad Gateway');
+    const octokit = GitHubProvider.getUserOctokit('ghu_token');
+
+    // One retry (waits 1 s) instead of the default three (1 + 4 + 9 s).
+    const error = await failure(
+      octokit.request('GET /repos/{owner}/{repo}', {
+        owner: 'o',
+        repo: 'r',
+        request: { fetch, retries: 1 },
+      })
+    );
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(error).toMatchObject({ status: 502 });
+  }, 10_000);
+});
