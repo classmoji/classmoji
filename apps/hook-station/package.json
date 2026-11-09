@@ -24,7 +24,7 @@
     "@trigger.dev/sdk": "4.8.3",
     "fastify": "^5.12.8",
     "fastify-raw-body": "^5.0.0",
-    "stripe": "^23.1.0"
+    "stripe": "23.1.0"
   },
   "devDependencies": {
     "dayjs": "^1.11.20",
