@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { ChevronDownIcon, ServerIcon } from 'lucide-react';
 import { authClient } from '@classmoji/auth/client';
+import { captureHandledError } from '~/utils/sentry.client';
 import GitLabIcon from '~/components/ui/display/gitlab.svg';
 import type { GitLabChoice, GitLabSignInOptions } from './gitlabSignIn.server';
 import { optionButton } from './signInStyles';
@@ -104,12 +105,19 @@ export default function GitLabSignIn({
     remember(choice);
     if (choice.id === null) {
       // On success the auth client goes on to gitlab.com by itself.
-      const { error } = await authClient.signIn.social({
-        provider: 'gitlab',
-        callbackURL,
-        errorCallbackURL: '/',
-      });
-      if (error && !expired(choice, error)) showFailure(choice, 'Could not start Gitlab sign-in.');
+      try {
+        const { error } = await authClient.signIn.social({
+          provider: 'gitlab',
+          callbackURL,
+          errorCallbackURL: '/',
+        });
+        if (error && !expired(choice, error))
+          showFailure(choice, 'Could not start Gitlab sign-in.');
+      } catch (failure) {
+        // No response at all (offline, a dropped connection).
+        captureHandledError(failure, 'sign-in');
+        showFailure(choice, 'Could not start Gitlab sign-in.');
+      }
       return;
     }
     try {
@@ -262,10 +270,7 @@ export default function GitLabSignIn({
                 </div>
 
                 {status?.kind === 'unknown' && (
-                  <p
-                    id="gitlab-host-status"
-                    className="mt-2 text-xs leading-relaxed text-ink-2"
-                  >
+                  <p id="gitlab-host-status" className="mt-2 text-xs leading-relaxed text-ink-2">
                     {hostLabel(status.host)} isn&apos;t connected to Classmoji yet. Students: ask
                     your instructor for the class sign-in link. Instructors and Gitlab admins:{' '}
                     <a
