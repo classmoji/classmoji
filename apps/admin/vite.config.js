@@ -32,7 +32,6 @@ export default () => {
         '@classmoji/services',
         '@prisma/client',
         'octokit',
-        '@octokit/auth-app',
       ],
     },
     plugins: [tailwindcss(), reactRouter(), tsconfigPaths()],

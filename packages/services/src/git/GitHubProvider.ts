@@ -1,5 +1,4 @@
 import { App, Octokit } from 'octokit';
-import { createAppAuth } from '@octokit/auth-app';
 import { createHmac, timingSafeEqual } from 'crypto';
 import jwt from 'jsonwebtoken';
 import { GitProvider, type RepoPagesInfo } from './GitProvider.ts';
@@ -119,6 +118,17 @@ function generateGitHubJWT(): string {
     iss: process.env.GITHUB_APP_ID,
   };
   return jwt.sign(payload, privateKey as string, { algorithm: 'RS256' });
+}
+
+/**
+ * A Github id from an Octokit response, as a number. Octokit types int64 ids as
+ * `number | bigint` because it parses JSON with json-with-bigint, which returns
+ * a BigInt only for integers above 2^53. Github's ids (users, issues, pull
+ * requests, invitations) are around 10^9–10^10, so at runtime this is always a
+ * number already and `Number` changes nothing; it only narrows the type.
+ */
+function githubId(id: number | bigint): number {
+  return Number(id);
 }
 
 /** An Octokit rejection carrying GitHub's 404 — "absent", not "broken". */
@@ -957,7 +967,7 @@ export class GitHubProvider extends GitProvider {
       title,
       body,
     });
-    return { id: data.id, number: data.number, url: data.html_url };
+    return { id: githubId(data.id), number: data.number, url: data.html_url };
   }
 
   // ─── Issues ────────────────────────────────────────────────────────────────
@@ -1024,7 +1034,7 @@ export class GitHubProvider extends GitProvider {
       repo,
       issue_number: issueNumber,
     });
-    return { id: data.id, number: data.number, url: data.html_url, state: data.state };
+    return { id: githubId(data.id), number: data.number, url: data.html_url, state: data.state };
   }
 
   /**
@@ -1487,7 +1497,8 @@ export class GitHubProvider extends GitProvider {
       { owner: org, repo, username, permission }
     );
     if (status !== 201 || !data) return null;
-    return { id: data.id, inviteeId: data.invitee?.id ?? null };
+    const inviteeId = data.invitee?.id;
+    return { id: githubId(data.id), inviteeId: inviteeId == null ? null : githubId(inviteeId) };
   }
 
   /** Withdraw a pending invitation to a repository. */
@@ -1998,18 +2009,5 @@ export class GitHubProvider extends GitProvider {
       Octokit: ImmediateOctokit,
     });
     return app.octokit;
-  }
-
-  /**
-   * Get the GitHub App auth instance for OAuth flows
-   * @returns {Object} createAppAuth instance
-   */
-  static getAppAuth() {
-    return createAppAuth({
-      appId: process.env.GITHUB_APP_ID!,
-      privateKey: privateKey!,
-      clientId: process.env.GITHUB_CLIENT_ID!,
-      clientSecret: process.env.GITHUB_CLIENT_SECRET!,
-    });
   }
 }
