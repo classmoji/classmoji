@@ -6,8 +6,10 @@
  */
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import {
+  CLASSMOJI_BOT_EMAIL,
   extendedDeadlineMs,
   isPastDeadlineIgnoringOverride,
+  isStudentCommit,
   repoNamespace,
   withLogins,
 } from '@classmoji/utils';
@@ -476,7 +478,9 @@ export const recordPush = async (gitRepoId: string, pushedAt: Date) => {
  * into a student repo (see packages/tasks createRepository). Its commits are
  * never a student's push.
  */
-export const CLASSMOJI_BOT_EMAIL = 'hello@classmoji.com';
+// Defined beside the commit rule in @classmoji/utils (`isStudentCommit`); kept
+// exported here for the callers that import it from the services.
+export { CLASSMOJI_BOT_EMAIL };
 
 /**
  * A push-mode submission row created for a repo that already holds work: the
@@ -516,12 +520,7 @@ export const recordExistingPush = async (gitRepoAssignmentId: string) => {
   const commits = await getGitProvider(gitOrg).listCommits(owner, row.git_repo.name, {
     maxCommits: 10,
   });
-  const createdAt = new Date(row.git_repo.created_at).getTime();
-  const own = commits.find(c => {
-    if (c.author_login?.endsWith('[bot]')) return false;
-    if (c.author_email?.toLowerCase() === CLASSMOJI_BOT_EMAIL) return false;
-    return new Date(c.ts).getTime() > createdAt;
-  });
+  const own = commits.find(c => isStudentCommit(c, row.git_repo.created_at));
   if (!own) return null;
   const pushedAt = new Date(own.ts);
 

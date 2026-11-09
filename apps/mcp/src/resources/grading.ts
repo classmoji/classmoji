@@ -20,11 +20,15 @@
  */
 
 import {
+  gitWeb,
   isPastDeadlineIgnoringOverride,
   netExtensionHours,
+  submissionCutoffMs,
+  submissionLateHours,
+  submittedCommit,
   type GitWebContext,
 } from '@classmoji/utils';
-import getPrisma from '@classmoji/database';
+import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
 import { ToolError } from '../mcp/errors.ts';
 import type { ResourceDefinition, ToolContext } from '../mcp/registry.ts';
@@ -38,6 +42,7 @@ import {
   graderRefs,
   issueUrl,
   orgGit,
+  orgProvider,
   publicUser,
   repoUrl,
   type SubmissionLike,
@@ -202,7 +207,12 @@ export const submissionResource: ResourceDefinition = {
     'One submission (GitRepoAssignment) with its grades, graders, extension_hours (net of ' +
     'refunds), is_late (past student_deadline plus extension_hours, submitted or not, unlike ' +
     'the dashboard late count, which counts submitted work only) and analytics snapshot if ' +
-    'present. Teaching team only. submissionId comes from the grading-queue resource.',
+    'present; num_late_hours (submitted work, net of extension_hours); assignment weight, ' +
+    'is_extra_credit and module_title; team_members on a team submission; submitted_commit ' +
+    "(push mode: the student's newest commit by closed_at, else by the deadline plus " +
+    'extension_hours); autograding (the run on that commit, else the latest by that time; ' +
+    'advisory, never a grade); open_regrade_request (or null). Teaching team only. ' +
+    'submissionId comes from the grading-queue resource.',
   scope: 'read',
   roles: TEACHING_TEAM,
   auditRead: {
@@ -219,25 +229,151 @@ export const submissionResource: ResourceDefinition = {
     const submission = (await getPrisma().gitRepoAssignment.findFirst({
       where: { id: vars.submissionId, git_repo: { classroom_id: classroomId } },
       include: {
-        assignment: true,
-        git_repo: { include: { student: true, team: true, repository: true } },
+        assignment: { include: { module: { select: { title: true } } } },
+        git_repo: {
+          include: {
+            student: true,
+            // A team's members, by public identity only (publicUser below).
+            team: {
+              include: {
+                memberships: {
+                  select: {
+                    user: { select: { id: true, name: true, image: true, ...GIT_IDENTITY } },
+                  },
+                },
+              },
+            },
+            repository: true,
+          },
+        },
         grades: { include: { grader: true } },
         graders: { include: { grader: true } },
         // Purchased extension hours, for queueRow's lateness fields.
         token_transactions: { select: { hours_purchased: true } },
         analytics_snapshot: true,
+        // The open request, as the gradebook's submission panel shows it.
+        regrade_requests: {
+          where: { status: 'IN_REVIEW' },
+          orderBy: { created_at: 'desc' },
+          take: 1,
+          select: { id: true, student_comment: true, previous_grade: true, created_at: true },
+        },
       },
-    })) as (SubmissionLike & { analytics_snapshot?: unknown }) | null;
+    })) as
+      | (SubmissionLike & {
+          analytics_snapshot?: { commits?: unknown } | null;
+          regrade_requests?: Array<{
+            id: string;
+            student_comment: string | null;
+            previous_grade: string[];
+            created_at: Date;
+          }>;
+        })
+      | null;
 
     if (!submission) {
       throw new ToolError('not_found', `Submission '${vars.submissionId}' not found`);
     }
 
     const git = orgGit(ctx);
+    const repo = submission.git_repo as {
+      id?: string;
+      name?: string | null;
+      created_at?: Date | string | null;
+      team?: { memberships?: Array<{ user: Parameters<typeof publicUser>[0] }> } | null;
+    } | null;
+    const assignment = submission.assignment as
+      | (NonNullable<SubmissionLike['assignment']> & {
+          weight?: number;
+          is_extra_credit?: boolean;
+          module?: { title?: string | null } | null;
+        })
+      | null
+      | undefined;
+    const repoName = repo?.name ?? null;
+    // The gradebook panel's rules: the work is read at the submission time,
+    // else the deadline plus extension hours; the commit is the student's own.
+    const cutoff = {
+      closed_at: submission.closed_at,
+      student_deadline: assignment?.student_deadline,
+      token_transactions: submission.token_transactions,
+    };
+    const commit =
+      assignment?.submission_mode === 'REPO'
+        ? submittedCommit(submission.analytics_snapshot?.commits, {
+            ...cutoff,
+            repo_created_at: repo?.created_at,
+          })
+        : null;
+    // Same rule as autogradingResult.findForSubmission (the panel's read): the
+    // run on the submitted commit, else the latest reported by the cutoff.
+    const cutoffMs = submissionCutoffMs(cutoff);
+    const autograding = repo?.id
+      ? ((commit
+          ? await getPrisma().autogradingResult.findFirst({
+              where: { git_repo_id: repo.id, commit_sha: commit.sha },
+              orderBy: { reported_at: 'desc' },
+            })
+          : null) ??
+        (await getPrisma().autogradingResult.findFirst({
+          where: {
+            git_repo_id: repo.id,
+            ...(cutoffMs === null ? {} : { reported_at: { lte: new Date(cutoffMs) } }),
+          },
+          orderBy: { reported_at: 'desc' },
+        })))
+      : null;
+    const provider = orgProvider(ctx);
+    const openRequest = submission.regrade_requests?.[0] ?? null;
+
+    const row = queueRow(submission, git);
     return {
-      ...queueRow(submission, git),
-      git_repo_name: (submission.git_repo as { name?: string | null } | null)?.name ?? null,
+      ...row,
+      // What the panel shows beside the title, and the late hours it shows
+      // once the work is in (they count to now before that).
+      assignment: row.assignment
+        ? {
+            ...row.assignment,
+            weight: assignment?.weight ?? null,
+            is_extra_credit: assignment?.is_extra_credit ?? false,
+            module_title: assignment?.module?.title ?? null,
+          }
+        : null,
+      num_late_hours: submission.closed_at
+        ? submissionLateHours({
+            closed_at: submission.closed_at,
+            assignment: assignment ?? null,
+            token_transactions: submission.token_transactions,
+          })
+        : null,
+      git_repo_name: repoName,
+      // Logins on the classroom's provider (Gitlab usernames on a Gitlab class).
+      team_members: repo?.team
+        ? (repo.team.memberships ?? []).map(m => publicUser(m.user, provider))
+        : null,
       analytics_snapshot: submission.analytics_snapshot ?? null,
+      submitted_commit: commit,
+      autograding: autograding
+        ? {
+            conclusion: autograding.conclusion,
+            passed_tests: autograding.passed_tests,
+            total_tests: autograding.total_tests,
+            commit_sha: autograding.commit_sha,
+            reported_at: autograding.reported_at,
+            run_url:
+              git?.login && repoName && autograding.run_id
+                ? gitWeb(git).actionsRun(repoName, autograding.run_id)
+                : null,
+          }
+        : null,
+      open_regrade_request: openRequest
+        ? {
+            id: openRequest.id,
+            student_comment: openRequest.student_comment ?? null,
+            previous_grade: openRequest.previous_grade,
+            created_at: openRequest.created_at,
+          }
+        : null,
     };
   },
 };

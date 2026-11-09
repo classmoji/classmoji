@@ -3,4 +3,5 @@
 // roles they admit. One intent inside the action is OWNER only: releasing or
 // hiding final grades (`set-final-grades-released`) carries its own
 // requireClassroomAdmin gate, so a teacher posting it here is refused.
-export { loader, action, default } from '../admin.$class.grades/route';
+// `shouldRevalidate` skips the loader while the submission panel opens and walks.
+export { loader, action, shouldRevalidate, default } from '../admin.$class.grades/route';
