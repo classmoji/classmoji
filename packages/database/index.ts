@@ -1,7 +1,8 @@
 import { createDecipheriv, createHash } from 'node:crypto';
 import { PrismaClient, Prisma } from '@prisma/client';
 import dayjs, { type Dayjs } from 'dayjs';
-import { createOneShotShutdown, DEFAULT_AVATAR_URL } from '@classmoji/utils';
+import { createOneShotShutdown, DEFAULT_AVATAR_URL, isWorkerd } from '@classmoji/utils';
+import { createRequestScope, type RequestScope } from './requestScope.ts';
 
 interface TokenTransaction {
   hours_purchased?: number | null;
@@ -150,8 +151,18 @@ const tokenResults = Object.fromEntries(
   ])
 );
 
-function createPrismaClient() {
-  const basePrisma = new PrismaClient();
+/**
+ * A Prisma client with classmoji's extensions. On Node with no adapter (the
+ * engine reads DATABASE_URL); on Workers with the request's driver adapter
+ * (`runWithPrisma`).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function createPrismaClient(adapter?: any): PrismaClient {
+  const basePrisma = adapter
+    ? // The adapter option exists only on the Workers client's types.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      new (PrismaClient as any)({ adapter })
+    : new PrismaClient();
 
   // Prisma's $extends type system doesn't fully support relation fields in `needs`
   // under strict mode. These computed fields work correctly at runtime.
@@ -309,7 +320,39 @@ const disconnectPrisma = async () => {
   }
 };
 
-if (typeof window === 'undefined') {
+// ─── Cloudflare Workers ──────────────────────────────────────────────────────
+//
+// On workerd a connection belongs to the request that opened it, so there is
+// no client at import and no process handlers: every request runs inside
+// runWithPrisma(adapter, fn) (@classmoji/workers/runtime), and getPrisma()
+// returns a stand-in that forwards to the running request's client (see
+// requestScope.ts). Off workerd nothing below runs and nothing is created.
+
+/** True on Cloudflare Workers (read once, at import). */
+export const IS_WORKERD = isWorkerd();
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let requestScope: RequestScope<PrismaClient, any> | null = null;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const workerScope = (): RequestScope<PrismaClient, any> =>
+  (requestScope ??= createRequestScope(createPrismaClient));
+
+/**
+ * Workers only: run `fn` with a fresh Prisma client on `adapter` (a driver
+ * adapter, e.g. PrismaPg over Hyperdrive) as the client getPrisma() hands
+ * out. Throws on Node, where the process-wide client is the only one.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function runWithPrisma<T>(adapter: any, fn: () => Promise<T>): Promise<T> {
+  if (!IS_WORKERD) {
+    throw new Error('[database] runWithPrisma is for Cloudflare Workers only');
+  }
+  return workerScope().run(adapter, fn);
+}
+
+if (IS_WORKERD) {
+  _prisma = workerScope().client;
+} else if (typeof window === 'undefined') {
   _prisma = createPrismaClient();
 
   const gracefulShutdown = async (signal: string) => {

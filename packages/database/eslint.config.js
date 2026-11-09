@@ -5,11 +5,17 @@ export default [
   ...nodeConfig,
   ...typescriptConfig,
   {
-    ignores: ['migrations/**', 'prisma/generated/**'],
+    ignores: ['migrations/**', 'prisma/generated/**', 'generated/**'],
   },
   {
     rules: {
       'no-console': 'off',
+    },
+  },
+  {
+    files: ['vitest.config.ts'],
+    rules: {
+      'import/no-unresolved': 'off',
     },
   },
 ];

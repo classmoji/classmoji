@@ -3,6 +3,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "db:deploy": "prisma migrate deploy",
     "db:generate": "prisma generate",
     "db:reset": "prisma migrate reset --force",
@@ -18,17 +19,22 @@
   "exports": {
     ".": "./index.ts",
     "./gitIdentity": "./gitIdentity.ts",
-    "./seed-fixtures": "./scripts/seed-fixtures.js"
+    "./seed-fixtures": "./scripts/seed-fixtures.js",
+    "./pg-adapter": "./pgAdapter.ts",
+    "./worker-client": "./generated/worker/client.ts"
   },
   "dependencies": {
     "@classmoji/utils": "*",
+    "@prisma/adapter-pg": "6.19.3",
     "@prisma/client": "^6.6.0",
-    "dayjs": "^1.11.13"
+    "dayjs": "^1.11.13",
+    "pg": "8.23.1"
   },
   "prisma": {
     "seed": "node ./scripts/seed.js"
   },
   "devDependencies": {
-    "prisma": "^6.6.0"
+    "prisma": "^6.6.0",
+    "vitest": "^4.1.5"
   }
 }
