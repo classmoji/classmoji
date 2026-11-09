@@ -23,6 +23,13 @@ export const WORKER_SWAPS: Readonly<Record<string, string>> = {
   '@better-auth/cimd/node': '@classmoji/auth/cimd-worker',
 };
 
+/**
+ * Stubbed in every Workers build. `pg-native` is pg's optional libpq binding:
+ * a native addon that can never load on workerd. pg reaches it only when
+ * NODE_PG_FORCE_NATIVE is set, but a development build keeps the require.
+ */
+export const DEFAULT_WORKER_STUBS: readonly string[] = ['pg-native'];
+
 export interface WorkerStub {
   /** The module specifier to replace, exactly as imported. */
   id: string;
@@ -64,7 +71,7 @@ export function stubModuleSource(id: string, exportNames: string[] = []): string
 export function classmojiWorkerSwaps(options: ClassmojiWorkerSwapsOptions = {}): Plugin {
   const environment = options.environment ?? 'ssr';
   const stubs = new Map<string, string[]>();
-  for (const stub of options.stubs ?? []) {
+  for (const stub of [...DEFAULT_WORKER_STUBS, ...(options.stubs ?? [])]) {
     const { id, exports = [] } = typeof stub === 'string' ? { id: stub } : stub;
     stubModuleSource(id, exports); // validates the names up front
     stubs.set(id, exports);

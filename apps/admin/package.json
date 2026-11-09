@@ -6,6 +6,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "admin:dev": "node --experimental-strip-types server.ts",
+    "admin:dev:cf": "NODE_ENV=development BUILD_TARGET=cloudflare CLOUDFLARE_ENV=dev react-router build && wrangler dev -c build/server/wrangler.json --port ${PORT:-7500}",
     "admin:build": "react-router build",
     "admin:build:cf": "BUILD_TARGET=cloudflare react-router build",
     "admin:start": "NODE_ENV=production node --experimental-strip-types server.ts",
@@ -47,7 +48,7 @@
     "vite": "^6.4.5",
     "vite-tsconfig-paths": "^4.3.2",
     "vitest": "^4.1.5",
-    "wrangler": "4.153.0"
+    "wrangler": "4.152.0"
   },
   "engines": {
     "node": ">=24.0.0"

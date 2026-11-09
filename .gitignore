@@ -23,6 +23,9 @@ packages/tasks/repos/
 apps/pages/build
 apps/admin/build
 apps/admin/.wrangler
+# wrangler dev secrets (any Worker)
+.dev.vars
+.dev.vars.*
 
 # Local GitHub Classroom export dumps (contain real student logins; used only as local import fixtures)
 /classrooms/

@@ -4,8 +4,8 @@
   // ignores this file). Built with the Cloudflare Vite plugin, which flattens
   // ONE environment into build/server/wrangler.json, so the environment is
   // picked at BUILD time with CLOUDFLARE_ENV (see the admin:*:cf scripts and
-  // .github/workflows/deploy-cloudflare-staging.yml), and deploys run against
-  // that generated file.
+  // the deploy-admin-worker job in .github/workflows/deploy-fly-staging.yml),
+  // and deploys run against that generated file.
   //
   // Deliberately NOT a deployed name, and deliberately bindingless (the
   // content worker's convention): a build or deploy without an environment
@@ -13,7 +13,9 @@
   // a HYPERDRIVE binding, instead of overwriting staging or production.
   "name": "classmoji-admin-unconfigured",
   "main": "./workers/app.ts",
-  "compatibility_date": "2026-10-20",
+  // At most the date the pinned workerd (1.20261019.1, via wrangler 4.152.0)
+  // supports, or local runs warn and fall back.
+  "compatibility_date": "2026-10-19",
   // process.env is populated from vars and secrets (on by default with
   // nodejs_compat at this date): the shared packages read process.env.
   "compatibility_flags": ["nodejs_compat"],
@@ -25,9 +27,39 @@
 
   // Secrets are not declared here. CI pushes an allowlist of them from
   // Infisical (`sta` for staging) with `wrangler secret bulk` after each
-  // deploy; the list is in .github/workflows/deploy-cloudflare-staging.yml.
+  // deploy; the list is in .github/workflows/deploy-fly-staging.yml
+  // (deploy-admin-worker).
   // None of them may also appear in `vars` below (the names would collide).
   "env": {
+    // LOCAL ONLY (`npm run admin:dev:cf`: builds with CLOUDFLARE_ENV=dev and
+    // runs the build under `wrangler dev`, i.e. on workerd; no HMR, rerun it
+    // after a change. Vite's dev server on workerd fails on a CommonJS
+    // dependency, so use `npm run admin:dev` for day-to-day work). Never
+    // deployed: no routes and workers_dev off. The database is the local
+    // Postgres, given to Hyperdrive's local emulation through the environment:
+    //
+    //   CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE=postgresql://… \
+    //     npm run admin:dev:cf -w apps/admin
+    //
+    // (use the DATABASE_URL from .dev-context). Secrets, if a page needs one,
+    // go in apps/admin/.dev.vars (gitignored).
+    "dev": {
+      "name": "classmoji-admin-dev",
+      "workers_dev": false,
+      "hyperdrive": [
+        {
+          "binding": "HYPERDRIVE",
+          // Not a real config: local runs use the connection string above.
+          "id": "local-dev-only"
+        }
+      ],
+      "version_metadata": { "binding": "CF_VERSION_METADATA" },
+      "vars": {
+        "ADMIN_URL": "http://localhost:7500",
+        "WEBAPP_URL": "http://localhost:3000"
+      }
+    },
+
     "staging": {
       "name": "classmoji-admin-staging",
       "placement": { "mode": "smart" },
@@ -45,6 +77,9 @@
           "id": "25a3117abef74bcd97f283184a730e5f"
         }
       ],
+      // /health reports the version id (x-worker-version) so CI can tell
+      // the new deploy is the one answering.
+      "version_metadata": { "binding": "CF_VERSION_METADATA" },
       "vars": {
         "NODE_ENV": "production",
         "ADMIN_URL": "https://admin.staging.classmoji.io",
@@ -75,6 +110,7 @@
           "id": "HYPERDRIVE_ID_PRODUCTION"
         }
       ],
+      "version_metadata": { "binding": "CF_VERSION_METADATA" },
       "vars": {
         "NODE_ENV": "production",
         "ADMIN_URL": "https://admin.classmoji.io",

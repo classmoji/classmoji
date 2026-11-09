@@ -107,6 +107,14 @@ describe('classmojiWorkerSwaps', () => {
     expect(load('/some/real/file.ts')).toBeNull();
   });
 
+  it('always stubs pg-native (a native addon) in the Worker only', async () => {
+    const { resolveId } = hooks();
+    await expect(resolveId(context('ssr'), 'pg-native', '/x.ts')).resolves.toBe(
+      '\0classmoji-worker-stub:pg-native'
+    );
+    await expect(resolveId(context('client'), 'pg-native', '/x.ts')).resolves.toBeNull();
+  });
+
   it('refuses invalid stub export names', () => {
     expect(() => stubModuleSource('x', ['not valid'])).toThrow(/not a valid export name/);
     expect(() => classmojiWorkerSwaps({ stubs: [{ id: 'x', exports: ['default'] }] })).toThrow();
