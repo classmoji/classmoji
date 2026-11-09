@@ -3,6 +3,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { ArrowLeftIcon, EyeIcon, EyeOffIcon, Loader2Icon, MailIcon } from 'lucide-react';
 import { authClient } from '@classmoji/auth/client';
 import { Emoji } from '~/components';
+import { captureHandledError } from '~/utils/sentry.client';
 import {
   authServerRedirects,
   dropAppConnectionQuery,
@@ -130,14 +131,16 @@ const SignInPage = ({
   };
 
   // The auth client returns a refusal as `{ error }`; it throws only when no
-  // response came back at all (offline, a dropped connection, a deploy
-  // restarting the server), so a throw means the request never got through.
+  // response came back at all (offline, a dropped connection), so a throw
+  // means the request never got through. Still reported, so a throw from a
+  // bug of ours is not hidden behind that line.
   const run = async (work: () => Promise<void>) => {
     setBusy(true);
     setError(null);
     try {
       await work();
-    } catch {
+    } catch (failure) {
+      captureHandledError(failure, 'sign-in');
       setError(UNREACHABLE);
     } finally {
       setBusy(false);
