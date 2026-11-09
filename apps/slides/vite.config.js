@@ -66,7 +66,6 @@ export default async ({ command, mode }) => {
         '@classmoji/services',
         '@prisma/client',
         'octokit',
-        '@octokit/auth-app',
       ],
     },
     plugins: [tailwindcss(), reactRouter(), tsconfigPaths(), ...sentryPlugins],

@@ -408,16 +408,15 @@ function rateLimitWait(error: unknown, retry: number, now: number): number | 'to
  * the process's writes one a second, which is inside GitHub's 80 a minute.
  *
  * `retries: 0` switches off the Octokit retry plugin for this request so this
- * loop is the one retry policy. Left on, the plugin answers a 429 with three
- * more requests at 1/4/9 s — ignoring `Retry-After`, at the moment GitHub is
- * asking for fewer requests — and only then would this see it. The 5xx retry
- * the plugin gave these calls is kept here, on the same 1/4/9 s schedule.
- * Other 4xx (409, 413, …) are not retried; they will not change on a retry.
+ * loop is the one 5xx policy, on the plugin's own 1/4/9 s schedule. (The retry
+ * plugin never retries a 429 or 403 on these clients: see `CAPPED_DO_NOT_RETRY`
+ * in GitHubProvider.) Other 4xx (409, 413, …) are not retried; they will not
+ * change on a retry.
  *
- * On a 403 rate limit the throttling plugin may have waited and retried once
- * before this sees the error — only when GitHub asked for 60 s or less (see
- * `throttleHandlers` in GitHubProvider). A longer wait reaches this loop at
- * once, which waits it out up to `RATE_LIMIT_MAX_WAIT_MS` or throws.
+ * On a 403 or 429 rate limit the throttling plugin may have waited and retried
+ * once before this sees the error — only when GitHub asked for 60 s or less
+ * (see `throttleHandlers` in GitHubProvider). A longer wait reaches this loop
+ * at once, which waits it out up to `RATE_LIMIT_MAX_WAIT_MS` or throws.
  *
  * Kept apart from `#withGitRetry`: that one retries the whole ref-read → tree
  * → commit → ref sequence when the branch moved underneath it; this retries a
