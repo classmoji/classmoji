@@ -324,6 +324,48 @@ export const findOpenByAssignmentId = async (
 };
 
 /**
+ * The open (IN_REVIEW) requests of a classroom, by where the gradebook shows
+ * them: repo requests by submission id, quiz requests by assignment id then
+ * student id. Ids only. Quiz requests only when `includeQuizzes` (the
+ * classroom shows quizzes); the newest request wins where a target has two.
+ */
+export const openForGradebook = async (
+  classroomId: string,
+  { includeQuizzes }: { includeQuizzes: boolean }
+): Promise<{
+  submissions: Record<string, string>;
+  quizzes: Record<string, Record<string, string>>;
+}> => {
+  const rows = await getPrisma().regradeRequest.findMany({
+    where: {
+      classroom_id: classroomId,
+      status: 'IN_REVIEW',
+      ...(includeQuizzes ? {} : { quiz_attempt_id: null }),
+    },
+    select: {
+      id: true,
+      git_repo_assignment_id: true,
+      quiz_attempt: {
+        select: { user_id: true, quiz: { select: { assignment: { select: { id: true } } } } },
+      },
+    },
+    orderBy: { created_at: 'asc' },
+  });
+  const submissions: Record<string, string> = {};
+  const quizzes: Record<string, Record<string, string>> = {};
+  for (const row of rows) {
+    if (row.git_repo_assignment_id) {
+      submissions[row.git_repo_assignment_id] = row.id;
+      continue;
+    }
+    const assignmentId = row.quiz_attempt?.quiz?.assignment?.id;
+    if (!assignmentId || !row.quiz_attempt) continue;
+    (quizzes[assignmentId] ??= {})[row.quiz_attempt.user_id] = row.id;
+  }
+  return { submissions, quizzes };
+};
+
+/**
  * The attempts of one quiz in a classroom that have an open (IN_REVIEW)
  * regrade request: their ids only, for a list that marks them.
  */

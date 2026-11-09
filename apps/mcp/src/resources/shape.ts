@@ -160,13 +160,17 @@ interface UserLike extends WithGitAccounts {
   image?: string | null;
 }
 
-/** Public identity only — mirrors the student teams view's narrow select. */
-export function publicUser(user: UserLike | null | undefined) {
+/**
+ * Public identity only — mirrors the student teams view's narrow select.
+ * `provider` picks whose username is the login (the classroom's; Github by
+ * default).
+ */
+export function publicUser(user: UserLike | null | undefined, provider?: string | null) {
   if (!user) return null;
   return {
     id: user.id,
     name: user.name ?? null,
-    login: gitUsername(user),
+    login: gitUsername(user, provider ?? 'GITHUB'),
     avatar: user.image ?? null,
   };
 }

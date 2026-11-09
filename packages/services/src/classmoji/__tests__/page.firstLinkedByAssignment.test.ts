@@ -47,4 +47,19 @@ describe('page.findFirstLinkedByAssignmentIds', () => {
       })
     );
   });
+
+  it("counts only the given classroom's pages, in the query", async () => {
+    pageLinkFindManyMock.mockResolvedValue([
+      { assignment_id: 'a1', page: { id: 'p2', title: 'Lab 1 FAQ' } },
+    ]);
+
+    const result = await findFirstLinkedByAssignmentIds(['a1'], { classroomId: 'class-x' });
+
+    expect(result).toEqual({ a1: { id: 'p2', title: 'Lab 1 FAQ' } });
+    expect(pageLinkFindManyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { assignment_id: { in: ['a1'] }, page: { classroom_id: 'class-x' } },
+      })
+    );
+  });
 });

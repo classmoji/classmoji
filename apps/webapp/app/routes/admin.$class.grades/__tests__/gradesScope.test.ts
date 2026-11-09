@@ -43,6 +43,8 @@ const mocks = vi.hoisted(() => ({
   findAttemptsByQuiz: vi.fn(),
   findGradingStrategies: vi.fn(),
   listResponsesByFormId: vi.fn(),
+  openForGradebook: vi.fn(),
+  findTeamsByClassroomId: vi.fn(),
 }));
 
 vi.mock('~/utils/routeAuth.server', () => ({
@@ -98,6 +100,12 @@ vi.mock('@classmoji/services', () => ({
     },
     quizLateWaiver: {
       waivedByStudent: (...a: unknown[]) => mocks.waivedByStudent(...a),
+    },
+    regradeRequest: {
+      openForGradebook: (...a: unknown[]) => mocks.openForGradebook(...a),
+    },
+    team: {
+      findMemberIdsByClassroomId: (...a: unknown[]) => mocks.findTeamsByClassroomId(...a),
     },
   },
 }));
@@ -210,6 +218,8 @@ beforeEach(() => {
   mocks.findAttemptsByQuiz.mockResolvedValue([]);
   mocks.findGradingStrategies.mockResolvedValue({});
   mocks.listResponsesByFormId.mockResolvedValue([]);
+  mocks.openForGradebook.mockResolvedValue({ submissions: {}, quizzes: {} });
+  mocks.findTeamsByClassroomId.mockResolvedValue([]);
 });
 
 // ─── Loader: exactly what leaves the server ──────────────────────────────────
@@ -349,7 +359,11 @@ describe('grades loader — quiz columns appear only where quizzes are visible',
     const resolved = (await allData) as unknown[];
     return {
       assignments: resolved[6] as Array<{ id: string; type: string }>,
-      activity: resolved[7] as { quiz: Record<string, unknown>; form: Record<string, unknown> },
+      // Activity is always the last slot.
+      activity: resolved[resolved.length - 1] as {
+        quiz: Record<string, unknown>;
+        form: Record<string, unknown>;
+      },
     };
   };
 
@@ -832,4 +846,113 @@ describe('grades action — releasing final grades', () => {
       expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
     }
   );
+});
+
+// ─── Loader: open regrade requests and teams ─────────────────────────────────
+
+describe('grades loader — open regrade requests and teams', () => {
+  /** The payload slots after the columns: open requests, teams, then activity. */
+  const resolveExtras = async () => {
+    const { allData } = await route.loader(loaderArgs());
+    const resolved = (await allData) as unknown[];
+    return {
+      assignments: resolved[6] as Array<Record<string, unknown>>,
+      openRegrades: resolved[7] as {
+        submissions: Record<string, string>;
+        quizzes: Record<string, Record<string, string>>;
+      },
+      teams: resolved[8] as Array<Record<string, unknown>>,
+    };
+  };
+
+  it('reads open requests for the gated classroom, with quiz ones only where quizzes show', async () => {
+    mocks.openForGradebook.mockResolvedValue({
+      submissions: { 'sub-1': 'req-1' },
+      quizzes: {},
+    });
+
+    const { openRegrades } = await resolveExtras();
+
+    expect(mocks.openForGradebook).toHaveBeenCalledWith('class-1', { includeQuizzes: true });
+    expect(openRegrades).toEqual({ submissions: { 'sub-1': 'req-1' }, quizzes: {} });
+
+    mocks.quizzesVisibleOrThrow.mockResolvedValue(false);
+    await resolveExtras();
+    expect(mocks.openForGradebook).toHaveBeenLastCalledWith('class-1', { includeQuizzes: false });
+  });
+
+  it('sends each team with its rostered members only, and drops teams without one', async () => {
+    mocks.findTeamsByClassroomId.mockResolvedValue([
+      // student-1 is on the roster; staff-9 is a team member but not a student.
+      { id: 'team-1', name: 'Rockets', member_ids: ['student-1', 'staff-9'] },
+      { id: 'team-2', name: 'Staff only', member_ids: ['staff-9'] },
+      { id: 'team-3', name: 'Empty', member_ids: [] },
+    ]);
+
+    const { teams } = await resolveExtras();
+
+    expect(mocks.findTeamsByClassroomId).toHaveBeenCalledWith('class-1');
+    expect(teams).toEqual([{ id: 'team-1', name: 'Rockets', member_ids: ['student-1'] }]);
+  });
+
+  it("adds each column's repository type, for the Teams view's columns", async () => {
+    mocks.listForClassroom.mockResolvedValue([
+      {
+        id: 'a-group',
+        title: 'Project',
+        type: 'REPO',
+        repository_id: 'r-1',
+        repository: { id: 'r-1', type: 'GROUP' },
+        module: { title: 'W1' },
+      },
+      { id: 'a-quiz', title: 'Quiz', type: 'QUIZ', quiz_id: 'q-1', module: { title: 'W1' } },
+    ]);
+
+    const { assignments } = await resolveExtras();
+
+    expect(assignments.map(a => [a.id, a.repository_type])).toEqual([
+      ['a-group', 'GROUP'],
+      ['a-quiz', null],
+    ]);
+  });
+});
+
+// ─── shouldRevalidate: the submission panel never reloads the gradebook ──────
+
+describe('grades shouldRevalidate', () => {
+  const args = (from: string, to: string, extra: Record<string, unknown> = {}) =>
+    ({
+      currentUrl: new URL(`http://localhost${from}`),
+      nextUrl: new URL(`http://localhost${to}`),
+      defaultShouldRevalidate: true,
+      ...extra,
+    }) as unknown as Parameters<typeof route.shouldRevalidate>[0];
+
+  it.each([
+    ['opening the panel', '/admin/c/grades', '/admin/c/grades/submissions/s1'],
+    ['walking to the next', '/admin/c/grades/submissions/s1', '/admin/c/grades/submissions/s2'],
+    ['closing it', '/teacher/c/grades/submissions/s1?q=x', '/teacher/c/grades?q=x'],
+  ])('skips the loader when %s', (_, from, to) => {
+    expect(route.shouldRevalidate(args(from, to))).toBe(false);
+  });
+
+  it.each([
+    [
+      'a submission (grade, regrade)',
+      '/admin/c/grades/submissions/s1',
+      '/admin/c/grades/submissions/s1',
+      { formMethod: 'POST' },
+    ],
+    [
+      'a revalidation of the same URL',
+      '/admin/c/grades/submissions/s1',
+      '/admin/c/grades/submissions/s1',
+      {},
+    ],
+    ['changed search params', '/admin/c/grades', '/admin/c/grades/submissions/s1?x=1', {}],
+    ['another classroom', '/admin/c/grades', '/admin/d/grades/submissions/s1', {}],
+    ['leaving the gradebook', '/admin/c/grades', '/admin/c/students', {}],
+  ])('keeps the default on %s', (_, from, to, extra) => {
+    expect(route.shouldRevalidate(args(from, to, extra))).toBe(true);
+  });
 });

@@ -89,6 +89,22 @@ export const findByClassroomId = async (classroomId: string) => {
   return withLogins(teams.sort(sortNaturallyBy(team => team.name)));
 };
 
+/**
+ * A classroom's teams with their members' user ids only, in the same human
+ * order as `findByClassroomId`: the gradebook's Teams view.
+ */
+export const findMemberIdsByClassroomId = async (classroomId: string) => {
+  const teams = await getPrisma().team.findMany({
+    where: { classroom_id: classroomId },
+    select: { id: true, name: true, memberships: { select: { user_id: true } } },
+  });
+  return teams.sort(sortNaturallyBy(team => team.name)).map(team => ({
+    id: team.id,
+    name: team.name,
+    member_ids: team.memberships.map(m => m.user_id),
+  }));
+};
+
 export const findBySlugAndClassroomId = async (slug: string, classroomId: string) => {
   return withLogins(
     await getPrisma().team.findUnique({

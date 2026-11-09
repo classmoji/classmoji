@@ -57,3 +57,27 @@ export const findLatestByGitRepoIds = async (
   }
   return latest;
 };
+
+/**
+ * The result to show beside one submission: the run on the submitted commit
+ * when there is one, else the latest run reported by the submission's cutoff
+ * (its submission time, else the deadline plus extension hours;
+ * `submissionCutoffMs`). Null when no run qualifies, so a run on later work is
+ * never shown as the submission's.
+ */
+export const findForSubmission = async (
+  gitRepoId: string,
+  { sha, cutoff }: { sha: string | null; cutoff: Date | null }
+) => {
+  if (sha) {
+    const onSubmitted = await getPrisma().autogradingResult.findFirst({
+      where: { git_repo_id: gitRepoId, commit_sha: sha },
+      orderBy: { reported_at: 'desc' },
+    });
+    if (onSubmitted) return onSubmitted;
+  }
+  return getPrisma().autogradingResult.findFirst({
+    where: { git_repo_id: gitRepoId, ...(cutoff ? { reported_at: { lte: cutoff } } : {}) },
+    orderBy: { reported_at: 'desc' },
+  });
+};
