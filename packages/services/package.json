@@ -52,6 +52,7 @@
     "marked": "^15.0.4",
     "octokit": "^3.1.2",
     "prettier": "^3.6.2",
+    "stripe": "23.1.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {
