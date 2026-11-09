@@ -20,6 +20,8 @@ export interface HyperdriveBinding {
 /** What every classmoji Worker is bound to; the rest of `env` is vars and secrets. */
 export interface ClassmojiWorkerEnv {
   HYPERDRIVE?: HyperdriveBinding;
+  /** The version metadata binding: which Worker version is answering. */
+  CF_VERSION_METADATA?: { id: string; tag?: string; timestamp?: string };
   [key: string]: unknown;
 }
 
