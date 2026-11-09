@@ -1,6 +1,6 @@
 import { Link } from 'react-router';
 import dayjs from 'dayjs';
-import { useHydrated } from 'remix-utils/use-hydrated';
+import { useHydrated } from '~/hooks/useHydrated';
 import { IconArrowRight } from '@tabler/icons-react';
 import { IconGithub } from '@classmoji/ui-components';
 import { GitlabLogo } from '~/components/ui/display/GitlabLogo';

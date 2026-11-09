@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button, Checkbox, Modal } from 'antd';
 
-import { namedAction } from 'remix-utils/named-action';
+import { namedAction } from '~/utils/namedAction.server';
 import { redirect, useParams } from 'react-router';
 import type { ShouldRevalidateFunctionArgs } from 'react-router';
 

@@ -5,7 +5,7 @@ import dayjs from 'dayjs';
 import { IconChevronLeft, IconDotsVertical, IconRobot } from '@tabler/icons-react';
 import { Link, Outlet, redirect, useLocation, useNavigate, useSearchParams } from 'react-router';
 import { useMemo, useState } from 'react';
-import { namedAction } from 'remix-utils/named-action';
+import { namedAction } from '~/utils/namedAction.server';
 
 import { ClassmojiService, HelperService } from '@classmoji/services';
 import { SearchInput } from '~/components';

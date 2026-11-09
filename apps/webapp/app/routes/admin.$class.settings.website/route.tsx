@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useFetcher, useParams } from 'react-router';
 import { Button, Input, Popconfirm, Select, Switch, Tooltip } from 'antd';
 import { IconCrown, IconExternalLink } from '@tabler/icons-react';
-import { namedAction } from 'remix-utils/named-action';
+import { namedAction } from '~/utils/namedAction.server';
 
 import { ClassmojiService, FlyCertService, isFlyCertsConfigured } from '@classmoji/services';
 import { SettingSection } from '~/components';

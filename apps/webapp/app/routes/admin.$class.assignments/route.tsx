@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useFetcher, useNavigate, useParams } from 'react-router';
 import { Button, Select } from 'antd';
 import { IconPlus } from '@tabler/icons-react';
-import { namedAction } from 'remix-utils/named-action';
+import { namedAction } from '~/utils/namedAction.server';
 import { titleToIdentifier } from '@classmoji/utils';
 
 import { SearchInput } from '~/components';

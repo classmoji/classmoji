@@ -1,5 +1,5 @@
 import { data as errorResponse } from 'react-router';
-import { namedAction } from 'remix-utils/named-action';
+import { namedAction } from '~/utils/namedAction.server';
 
 import { auth, tasks } from '@trigger.dev/sdk';
 import { nanoid } from 'nanoid';

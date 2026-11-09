@@ -3,7 +3,7 @@ import { IconCoin, IconUsers, IconInfoCircle } from '@tabler/icons-react';
 
 import { useState, useEffect } from 'react';
 import { auth } from '@trigger.dev/sdk';
-import { namedAction } from 'remix-utils/named-action';
+import { namedAction } from '~/utils/namedAction.server';
 import { nanoid } from 'nanoid';
 
 import { ClassmojiService } from '@classmoji/services';

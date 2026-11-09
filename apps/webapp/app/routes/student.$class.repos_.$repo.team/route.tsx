@@ -2,7 +2,7 @@ import { Button, Card, Input, List, Avatar, Tag, Empty } from 'antd';
 import { IconUsers, IconUserPlus, IconLogout, IconPlus } from '@tabler/icons-react';
 import { useState, useEffect, useContext } from 'react';
 import { useFetcher, Link } from 'react-router';
-import { namedAction } from 'remix-utils/named-action';
+import { namedAction } from '~/utils/namedAction.server';
 import type { Route } from './+types/route';
 import { ClassmojiService, getGitProvider, isReservedSlug } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';

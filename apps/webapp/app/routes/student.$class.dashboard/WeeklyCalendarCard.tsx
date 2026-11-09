@@ -1,6 +1,6 @@
 import { Link } from 'react-router';
 import dayjs from 'dayjs';
-import { useHydrated } from 'remix-utils/use-hydrated';
+import { useHydrated } from '~/hooks/useHydrated';
 import { IconArrowRight } from '@tabler/icons-react';
 import { getEventTypeLightBg, getEventTypeDarkText } from '~/components/features/calendar/utils';
 import type { CalendarEventWithLinks } from '~/components/features/calendar/types';
