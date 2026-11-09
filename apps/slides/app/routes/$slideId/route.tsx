@@ -731,9 +731,9 @@ export const loader = async ({
  * saved here and not recorded serves its PREVIOUS bytes until the push webhook
  * lands — the author edits a theme, reloads, and sees the old one.
  *
- * `themeService.saveSharedTheme` handles the folder case differently, and has
- * to: a shared theme is addressed by its FOLDER's tree sha, so it runs a full
- * sync. These paths are flat files, so their own blob sha is the whole answer.
+ * A folder-based shared theme would need a full sync instead: it is addressed
+ * by its FOLDER's tree sha. Nothing here writes one; these paths are flat
+ * files, so their own blob sha is the whole answer.
  *
  * Never throws — the file is already committed, and the next sync writes the
  * same row.

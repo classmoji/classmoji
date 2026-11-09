@@ -7,9 +7,9 @@
  * its questions are generated from, in `order`). The MCP resource-link tools
  * come through here — same precedent as roster.service.ts, staff.service.ts
  * and teamAdmin.service.ts. It is not the only writer of these tables: the
- * repository form route, page.service.linkPage, the slides importer and the
- * quiz form (quizSourceMaterial.setQuizSourceMaterial) all create links of
- * their own and do not come through here.
+ * repository form route, page.service.linkPage and the quiz form
+ * (quizSourceMaterial.setQuizSourceMaterial) all create links of their own and
+ * do not come through here.
  *
  * Three rules run through every function here:
  *

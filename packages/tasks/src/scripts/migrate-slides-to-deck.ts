@@ -38,7 +38,7 @@ import { DeckParseError, parseDeckHtml } from '@classmoji/services/slides';
 
 // Small inter-item pause so a large classroom doesn't hammer the GitHub API —
 // mirrors the rate-limit-friendliness idiom used elsewhere in this repo for
-// sequential per-item GitHub operations (e.g. slidesComImporter.server.ts).
+// sequential per-item GitHub operations (e.g. the former slides.com importer).
 const DELAY_MS = 150;
 
 function sleep(ms: number): Promise<void> {

@@ -2,10 +2,10 @@
  * uploadLimit.ts — refuse an over-sized upload BEFORE it is in memory.
  *
  * `request.formData()` reads the whole multipart body into memory and only then
- * hands back a `File` whose `.size` you can check. For the 150 MB slides.com
- * ZIP that was tolerable because the route is rare and staff-only; for slide
- * files it is the difference between a 413 and a process that has just
- * allocated whatever an unauthenticated stranger felt like sending.
+ * hands back a `File` whose `.size` you can check. On a rare, staff-only route
+ * that might be tolerable; for slide files it is the difference between a 413
+ * and a process that has just allocated whatever an unauthenticated stranger
+ * felt like sending.
  *
  * So two gates, in this order:
  *
