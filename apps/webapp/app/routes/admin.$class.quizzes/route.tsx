@@ -21,7 +21,7 @@ import {
   scheduledLabel,
   type QuizListStatus,
 } from './quizList';
-import { namedAction } from 'remix-utils/named-action';
+import { namedAction } from '~/utils/namedAction.server';
 import {
   addClassroomAuditLog,
   assertClassroomAccess,

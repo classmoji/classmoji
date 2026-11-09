@@ -22,7 +22,7 @@ import {
   type QuizResultAttemptView as QuizAttempt,
   type QuizResultStudentView as QuizStudent,
 } from '~/utils/quizPayloads';
-import { namedAction } from 'remix-utils/named-action';
+import { namedAction } from '~/utils/namedAction.server';
 import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 
 dayjs.extend(relativeTime);

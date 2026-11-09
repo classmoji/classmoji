@@ -1,5 +1,5 @@
 import { Form, Switch } from 'antd';
-import { namedAction } from 'remix-utils/named-action';
+import { namedAction } from '~/utils/namedAction.server';
 
 import { ClassmojiService, ClassroomSettingsValidationError } from '@classmoji/services';
 import { listTimeZones } from '@classmoji/utils';

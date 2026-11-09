@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useFetcher, useNavigate } from 'react-router';
-import { namedAction } from 'remix-utils/named-action';
+import { namedAction } from '~/utils/namedAction.server';
 import { Button, Input, Modal, Form, Radio, Select } from 'antd';
 import type { ButtonProps } from 'antd';
 

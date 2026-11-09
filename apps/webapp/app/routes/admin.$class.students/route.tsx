@@ -1,5 +1,5 @@
 import { Outlet, useNavigate, useParams } from 'react-router';
-import { namedAction } from 'remix-utils/named-action';
+import { namedAction } from '~/utils/namedAction.server';
 import invariant from 'tiny-invariant';
 import { tasks } from '@trigger.dev/sdk';
 import { useState, useMemo, useId } from 'react';

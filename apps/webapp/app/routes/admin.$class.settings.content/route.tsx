@@ -2,7 +2,7 @@ import { useParams } from 'react-router';
 import { Button, Form, Modal, Switch } from 'antd';
 import { IconExternalLink } from '@tabler/icons-react';
 
-import { namedAction } from 'remix-utils/named-action';
+import { namedAction } from '~/utils/namedAction.server';
 
 import { ClassmojiService, ClassroomSettingsEntitlementError } from '@classmoji/services';
 import getPrisma from '@classmoji/database';

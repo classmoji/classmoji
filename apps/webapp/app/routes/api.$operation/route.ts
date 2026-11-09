@@ -1,6 +1,6 @@
 import { tasks } from '@trigger.dev/sdk';
 import { data } from 'react-router';
-import { namedAction } from 'remix-utils/named-action';
+import { namedAction } from '~/utils/namedAction.server';
 import { getAuthSession } from '@classmoji/auth/server';
 
 import { ClassmojiService } from '@classmoji/services';

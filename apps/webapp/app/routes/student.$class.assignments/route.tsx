@@ -2,7 +2,7 @@ import { Suspense } from 'react';
 import { gitContextFor } from '~/utils/gitWeb';
 import { Await } from 'react-router';
 import { Skeleton } from 'antd';
-import { namedAction } from 'remix-utils/named-action';
+import { namedAction } from '~/utils/namedAction.server';
 import {
   ClassmojiService,
   type LinkedMaterial,

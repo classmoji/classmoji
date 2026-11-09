@@ -75,7 +75,7 @@ const CLASSROOM = { id: 'class-1', slug: CLASS_SLUG, status: 'ACTIVE' };
 
 /**
  * The fetcher posts JSON and names the branch in the query string
- * (`action: '?/createStaff'`), which is how remix-utils' namedAction routes it.
+ * (`action: '?/createStaff'`), which is how namedAction routes it.
  */
 const runRaw = (name: string, body: string, method = 'POST') =>
   action({
