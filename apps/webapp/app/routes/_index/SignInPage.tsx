@@ -35,6 +35,7 @@ interface SignInPageProps {
 }
 
 const SIGN_IN_AGAIN = "Sign-in didn't go through. Please try again.";
+const UNREACHABLE = 'Could not reach Classmoji. Check your connection and try again.';
 
 /**
  * better-auth (and the Gitlab instance plugin) send a failed sign-in back here
@@ -128,11 +129,16 @@ const SignInPage = ({
     setCode('');
   };
 
+  // The auth client returns a refusal as `{ error }`; it throws only when no
+  // response came back at all (offline, a dropped connection, a deploy
+  // restarting the server), so a throw means the request never got through.
   const run = async (work: () => Promise<void>) => {
     setBusy(true);
     setError(null);
     try {
       await work();
+    } catch {
+      setError(UNREACHABLE);
     } finally {
       setBusy(false);
     }
