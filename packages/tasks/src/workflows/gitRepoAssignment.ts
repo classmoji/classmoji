@@ -779,6 +779,10 @@ export const repositoryAssignmentDeletedHandlerTask = task({
   },
 });
 
+// The one hourly run a day that logs a missing Github App as an error (04:01
+// UTC, the hour the job ran when it was nightly).
+const MISSING_INSTALLATION_REPORT_HOUR_UTC = 4;
+
 export const dailyRepositoryAssignmentsReleaseTask = schedules.task({
   id: 'daily_git_repo_assignments_release',
   // Runs again on its schedule, and that next run is the retry.
@@ -791,10 +795,15 @@ export const dailyRepositoryAssignmentsReleaseTask = schedules.task({
   // night, taking everything due by the end of that UTC day: hours early).
   // The id keeps its "daily" name: renaming it would register a new schedule.
   cron: '1 * * * *',
-  run: async (_payload: ScheduleTaskPayload, { ctx }: GitRepoAssignmentTaskContext) => {
+  run: async (payload: ScheduleTaskPayload, { ctx }: GitRepoAssignmentTaskContext) => {
     // One clock for the whole run: the drafts query, the published query and
     // the helper's release check all read it.
     const now = new Date();
+    // The scheduled hour, not the clock: a run that starts late still counts
+    // as the hour it was scheduled for.
+    const scheduledAt = payload?.timestamp ? new Date(payload.timestamp) : now;
+    const reportMissingInstallation =
+      scheduledAt.getUTCHours() === MISSING_INSTALLATION_REPORT_HOUR_UTC;
     const assignmentsToRelease = (await ClassmojiService.assignment.findReadyForRelease(
       now
     )) as ReleaseAssignmentRecord[];
@@ -821,12 +830,20 @@ export const dailyRepositoryAssignmentsReleaseTask = schedules.task({
         check = ensureGitInstallation(gitOrg).catch((error: unknown) => {
           const message = getErrorMessage(error);
           if (error instanceof GitAppNotInstalledError) {
-            logger.error('Skipping assignment release: Github App not installed', {
+            // An uninstalled app stays uninstalled for weeks. As an error on
+            // every hourly run that was 24 identical errors a day per org, so
+            // it is an error once a day and an info line the other 23 runs.
+            const detail = {
               org: gitOrg.login,
               classroomSlug: classroom.slug,
               status: error.status,
               message,
-            });
+            };
+            if (reportMissingInstallation) {
+              logger.error('Skipping assignment release: Github App not installed', detail);
+            } else {
+              logger.info('Skipping assignment release: Github App not installed', detail);
+            }
           } else {
             logger.warn('Skipping assignment release: installation check failed', {
               org: gitOrg.login,
