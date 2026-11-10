@@ -154,7 +154,7 @@ const enqueueEmails = async ({
     const classroom = classroomId
       ? await getPrisma().classroom.findUnique({
           where: { id: classroomId },
-          select: { name: true },
+          select: { name: true, slug: true },
         })
       : null;
 
@@ -174,6 +174,7 @@ const enqueueEmails = async ({
         type,
         title,
         classroomName: classroom?.name ?? null,
+        classroomSlug: classroom?.slug ?? null,
         resourceType,
         resourceId,
         recipientName: user.name ?? null,

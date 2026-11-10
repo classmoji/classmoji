@@ -157,7 +157,7 @@ export const buildAssignmentLeaf = (
   const teamAction =
     selfFormed && teamHref && !(selfFormed.deadlinePassed && !selfFormed.hasTeam) ? (
       <Link to={teamHref} className="btn btn-sm text-ink-0! hover:text-ink-0!">
-        {selfFormed.hasTeam ? 'View team' : 'Form a team'}
+        {selfFormed.hasTeam ? 'View team' : 'Join a team'}
       </Link>
     ) : null;
   const teamStatus =

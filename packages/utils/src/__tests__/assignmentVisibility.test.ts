@@ -4,6 +4,8 @@ import {
   openToStudents,
   releasedToRepos,
   type AssignmentVisibilityInput,
+  scheduledForStudents,
+  studentReposDue,
 } from '../assignmentVisibility.ts';
 
 const NOW = new Date('2026-10-01T12:00:00Z');
@@ -144,5 +146,87 @@ describe('releasedToRepos', () => {
 
   it('holds a scheduled assignment until its date', () => {
     expect(releasedToRepos({ release_at: FUTURE, is_published: true }, NOW)).toBe(false);
+  });
+});
+
+describe('scheduledForStudents: published, ready, release date still ahead', () => {
+  const NOW = new Date('2026-11-09T12:00:00Z');
+  const LATER = new Date('2026-11-10T19:00:00Z');
+  const EARLIER = new Date('2026-11-08T19:00:00Z');
+  const ctx = { quizzesVisible: true };
+  const repo = (over: Record<string, unknown> = {}) => ({
+    type: 'REPO',
+    is_published: true,
+    release_at: LATER as Date | null,
+    repository: { is_published: true },
+    ...over,
+  });
+
+  it('a published repo assignment on a published repository, releasing later', () => {
+    expect(scheduledForStudents(repo(), NOW, ctx)).toBe(true);
+  });
+
+  it('not once the date has passed, nor without a date', () => {
+    expect(scheduledForStudents(repo({ release_at: EARLIER }), NOW, ctx)).toBe(false);
+    expect(scheduledForStudents(repo({ release_at: NOW }), NOW, ctx)).toBe(false);
+    expect(scheduledForStudents(repo({ release_at: null }), NOW, ctx)).toBe(false);
+  });
+
+  it('not a draft, and not on a draft repository', () => {
+    expect(scheduledForStudents(repo({ is_published: false }), NOW, ctx)).toBe(false);
+    expect(scheduledForStudents(repo({ repository: { is_published: false } }), NOW, ctx)).toBe(
+      false
+    );
+  });
+
+  it('a quiz only where quizzes are visible; a form only when it is not a draft', () => {
+    const quiz = { type: 'QUIZ', is_published: true, release_at: LATER };
+    expect(scheduledForStudents(quiz, NOW, ctx)).toBe(true);
+    expect(scheduledForStudents(quiz, NOW, { quizzesVisible: false })).toBe(false);
+    const form = (status: string) => ({
+      type: 'FORM',
+      is_published: true,
+      release_at: LATER,
+      form: { status },
+    });
+    expect(scheduledForStudents(form('OPEN'), NOW, ctx)).toBe(true);
+    expect(scheduledForStudents(form('DRAFT'), NOW, ctx)).toBe(false);
+  });
+});
+
+describe('studentReposDue: repos are made at the first release', () => {
+  const NOW = new Date('2026-11-09T12:00:00Z');
+  const LATER = new Date('2026-11-10T19:00:00Z');
+  const EARLIER = new Date('2026-11-08T19:00:00Z');
+
+  it('a repository with no assignments is due as soon as it is published', () => {
+    expect(studentReposDue([], NOW)).toBe(true);
+  });
+
+  it('not while every assignment is scheduled or an undated draft', () => {
+    expect(
+      studentReposDue(
+        [
+          { is_published: true, release_at: LATER },
+          { is_published: false, release_at: LATER },
+          { is_published: false, release_at: null },
+        ],
+        NOW
+      )
+    ).toBe(false);
+  });
+
+  it('once one is released: published without a date, or its date passed', () => {
+    expect(studentReposDue([{ is_published: true, release_at: null }], NOW)).toBe(true);
+    expect(studentReposDue([{ is_published: false, release_at: EARLIER }], NOW)).toBe(true);
+    expect(
+      studentReposDue(
+        [
+          { is_published: true, release_at: LATER },
+          { is_published: true, release_at: EARLIER },
+        ],
+        NOW
+      )
+    ).toBe(true);
   });
 });

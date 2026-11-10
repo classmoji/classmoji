@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import dayjs from 'dayjs';
 import { Link, useParams } from 'react-router';
 import { motion, useReducedMotion } from 'framer-motion';
@@ -11,6 +11,7 @@ import { CommitCount } from '~/components/features/analytics';
 import {
   CourseworkStatusPill,
   CourseworkTypeTag,
+  opensLabel,
 } from '~/components/features/assignments/CourseworkTags';
 import CourseworkMaterials, {
   type CourseworkMaterial,
@@ -28,7 +29,7 @@ const NOTE_TONE = {
 /** The Current / Completed split: a done row is submitted, completed or closed. */
 export type AssignmentStatus = 'current' | 'completed';
 
-type TabKey = 'current' | 'completed' | 'all';
+type TabKey = 'current' | 'scheduled' | 'completed' | 'all';
 
 /** A coursework row with the published pages and decks linked to its assignment. */
 /** A coursework row as the page receives it: no quiz percentage (`score`), only its emoji (E1). */
@@ -42,10 +43,17 @@ interface AssignmentsTabsCardProps {
   balance: number;
   /** The tab shown first; Current unless said otherwise. */
   initialTab?: TabKey;
+  /**
+   * An assignment to show: its tab is opened and its row scrolled to and
+   * marked. Where a notification's link lands (`?assignment=<id>`).
+   */
+  focusAssignmentId?: string | null;
 }
 
 const TAB_ORDER: { key: TabKey; label: string }[] = [
   { key: 'current', label: 'Current' },
+  // Shown only when something is scheduled.
+  { key: 'scheduled', label: 'Scheduled' },
   { key: 'completed', label: 'Completed' },
   { key: 'all', label: 'All' },
 ];
@@ -57,6 +65,7 @@ const moduleTypeLabel: Record<string, string> = {
 
 const emptyCopy: Record<TabKey, string> = {
   current: 'No current assignments. You’re all caught up.',
+  scheduled: 'Nothing scheduled.',
   completed: 'Nothing completed yet.',
   all: 'No assignments yet.',
 };
@@ -101,31 +110,49 @@ const AssignmentsTabsCard = ({
   rows,
   balance,
   initialTab = 'current',
+  focusAssignmentId = null,
 }: AssignmentsTabsCardProps) => {
   const web = useGitWeb();
-  const [active, setActive] = useState<TabKey>(initialTab);
   const reducedMotion = useReducedMotion();
   const { class: classSlug } = useParams();
 
-  // An untracked row (a PUBLIC form, open or closed) is neither still to do
-  // nor done for this student: it is listed under All only.
-  const tabOf = (row: CourseworkRow): AssignmentStatus | null =>
-    !row.tracked ? null : row.done ? 'completed' : 'current';
+  // A scheduled row (published, opening later) has its own tab. Any other
+  // untracked row (a PUBLIC form, open or closed) is neither still to do nor
+  // done for this student: it is listed under All only.
+  const tabOf = (row: CourseworkRow): Exclude<TabKey, 'all'> | null =>
+    row.status === 'SCHEDULED'
+      ? 'scheduled'
+      : !row.tracked
+        ? null
+        : row.done
+          ? 'completed'
+          : 'current';
+
+  const focused = focusAssignmentId
+    ? (rows.find(r => r.assignmentId === focusAssignmentId) ?? null)
+    : null;
+  const [active, setActive] = useState<TabKey>(focused ? (tabOf(focused) ?? 'all') : initialTab);
+  const focusedRow = useRef<HTMLTableRowElement | null>(null);
+  useEffect(() => {
+    focusedRow.current?.scrollIntoView({ block: 'center' });
+  }, []);
 
   const counts: Record<TabKey, number> = {
     current: rows.filter(r => tabOf(r) === 'current').length,
+    scheduled: rows.filter(r => tabOf(r) === 'scheduled').length,
     completed: rows.filter(r => tabOf(r) === 'completed').length,
     all: rows.length,
   };
+  const tabs = TAB_ORDER.filter(tab => tab.key !== 'scheduled' || counts.scheduled > 0);
 
   const filtered = active === 'all' ? rows : rows.filter(r => tabOf(r) === active);
 
   return (
     <div className="h-full flex flex-col">
       <div data-tour="assignments-tabs" className="flex -mb-px relative">
-        {TAB_ORDER.map(({ key, label }, idx) => {
+        {tabs.map(({ key, label }, idx) => {
           const isActive = key === active;
-          const baseZ = TAB_ORDER.length - idx;
+          const baseZ = tabs.length - idx;
           const zStyle = { zIndex: isActive ? 10 : baseZ };
           return (
             <button
@@ -182,7 +209,12 @@ const AssignmentsTabsCard = ({
               <tbody>
                 {filtered.map(row => {
                   // Only a row still to do counts down to (or past) its date.
-                  const tab = tabOf(row) ?? 'completed';
+                  // One that has not opened, or is not in the student's repo
+                  // yet, shows the plain date: nothing is overdue on it.
+                  const unopened = row.status === 'SCHEDULED' || row.status === 'PREPARING';
+                  const tab: AssignmentStatus =
+                    !unopened && tabOf(row) === 'current' ? 'current' : 'completed';
+                  const isFocused = row.assignmentId === focusAssignmentId;
                   const repo = row.repo;
                   const canRequestRegrade =
                     !!repo && row.done && repo.gradesReleased && !!classSlug;
@@ -217,7 +249,10 @@ const AssignmentsTabsCard = ({
                   return (
                     <tr
                       key={row.assignmentId}
-                      className="border-b last:border-b-0 border-stone-100 dark:border-neutral-800/70 hover:bg-stone-50/70 dark:hover:bg-neutral-800/40 transition-colors align-top"
+                      ref={isFocused ? focusedRow : undefined}
+                      className={`border-b last:border-b-0 border-stone-100 dark:border-neutral-800/70 hover:bg-stone-50/70 dark:hover:bg-neutral-800/40 transition-colors align-top ${
+                        isFocused ? 'bg-indigo-50/70 dark:bg-indigo-500/10' : ''
+                      }`}
                     >
                       <td className="px-4 py-3">
                         <CourseworkTypeTag type={row.type} />
@@ -280,6 +315,13 @@ const AssignmentsTabsCard = ({
                               >
                                 <CourseworkStatusPill status={row.status} />
                               </motion.span>
+                            ) : row.status === 'SCHEDULED' ? (
+                              <CourseworkStatusPill
+                                status={row.status}
+                                label={opensLabel(row.opensAt)}
+                              />
+                            ) : row.status === 'PREPARING' && row.teamHref ? (
+                              <CourseworkStatusPill status={row.status} label="Needs a team" />
                             ) : (
                               <CourseworkStatusPill status={row.status} />
                             )}
@@ -361,7 +403,14 @@ const AssignmentsTabsCard = ({
                         )}
                       </td>
                       <td className="px-4 py-3 text-right whitespace-nowrap">
-                        {extendTarget || canRequestRegrade ? (
+                        {row.teamHref ? (
+                          <Link
+                            to={row.teamHref}
+                            className="btn btn-sm btn-primary text-white! hover:text-white!"
+                          >
+                            Join a team
+                          </Link>
+                        ) : extendTarget || canRequestRegrade ? (
                           <span className="inline-flex items-center justify-end gap-3">
                             {extendTarget && (
                               <TokenExtensionPopover

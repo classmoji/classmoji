@@ -294,6 +294,46 @@ describe('repo_publish — publishing before students enrol', () => {
     expect(mocks.createRepositoriesTrigger).not.toHaveBeenCalled();
   });
 
+  it('creates no repositories while every assignment on the repo is still to be released', async () => {
+    const LATER = new Date('2999-01-01T19:00:00.000Z');
+    mocks.repositoryFindById.mockResolvedValue(
+      repositoryRow({ assignments: [{ id: 'a-1', is_published: true, release_at: LATER }] })
+    );
+    mocks.findUsersByRole.mockResolvedValue([{ id: 'u-1', login: 'student-a' }]);
+
+    const result = await repoPublishTool.handler(PUBLISH_ARGS, CTX);
+
+    expect(mocks.createRepositoriesTrigger).not.toHaveBeenCalled();
+    expect(mocks.setPublished).toHaveBeenCalledWith('repo-1', true, 'class-1');
+    expect(parse(result as { content: Array<{ text: string }> })).toMatchObject({
+      success: true,
+      is_published: true,
+      provisioning: { repos_to_create: 0, waiting_for_release: true },
+    });
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.auditCreate.mock.calls[0][0]).toMatchObject({
+      resource_id: 'repo-1',
+      action: 'UPDATE',
+      data: {
+        tool: 'repo_publish',
+        is_published: true,
+        provisioning_triggered: false,
+        waiting_for_release: true,
+      },
+    });
+  });
+
+  it('creates them once an assignment on the repo is released', async () => {
+    mocks.repositoryFindById.mockResolvedValue(
+      repositoryRow({ assignments: [{ id: 'a-1', is_published: true, release_at: null }] })
+    );
+    mocks.findUsersByRole.mockResolvedValue([{ id: 'u-1', login: 'student-a' }]);
+
+    await repoPublishTool.handler(PUBLISH_ARGS, CTX);
+
+    expect(mocks.createRepositoriesTrigger).toHaveBeenCalledTimes(1);
+  });
+
   it('still fans out normally when students are enrolled (no regression)', async () => {
     mocks.findUsersByRole.mockResolvedValue([
       { id: 'u-1', login: 'student-a' },

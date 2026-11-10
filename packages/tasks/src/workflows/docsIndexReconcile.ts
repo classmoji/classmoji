@@ -41,8 +41,8 @@ import { ClassmojiService } from '@classmoji/services';
 /**
  * 06:10 UTC daily.
  *
- * Clear of all six existing crons (`15 3`, `1 4`, `40 4`, `25 5`, `45 5`,
- * `50 5`) and twenty-five minutes after `content-index-reconcile`. With
+ * Clear of the five daily crons (`15 3`, `40 4`, `25 5`, `45 5`, `50 5`;
+ * the assignment release runs hourly at minute 1) and twenty-five minutes after `content-index-reconcile`. With
  * `maxDuration: 900` an ordinary on-time overlap is unlikely — but a delayed
  * run and a manual backfill both remain possible, which is what the shared
  * queue and the advisory lock are actually for. The gap is hygiene, not a

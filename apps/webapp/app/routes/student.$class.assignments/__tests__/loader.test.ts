@@ -106,6 +106,8 @@ describe('student assignments loader', () => {
       gitOrgLogin: 'test-org',
       git: expect.objectContaining({ login: 'test-org' }),
       assignments: [{ id: 'listed' }],
+      // Scheduled and still-being-set-up work is listed too.
+      includeUnopened: true,
     });
   });
 

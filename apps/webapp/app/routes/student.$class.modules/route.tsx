@@ -4,6 +4,8 @@ import { useLocation } from 'react-router';
 import { Button } from 'antd';
 import type { Route } from './+types/route';
 import { ClassmojiService } from '@classmoji/services';
+import { isReleased } from '@classmoji/utils';
+import { CourseworkStatusPill, opensLabel } from '~/components/features/assignments/CourseworkTags';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import type { ModuleTreeNode } from '~/components/features/modules/ReadOnlyModulesTree';
@@ -41,31 +43,57 @@ const docView = (doc: { id: string; title: string; is_draft: boolean }) => ({
  * these fields leave the loader. Pages and decks attached to an assignment
  * are listed for students only once published, as on every student surface.
  */
-const moduleView = (m: ListedModule, isStaff: boolean) => ({
+const moduleView = (
+  m: ListedModule,
+  isStaff: boolean,
+  /** The assignments already in the viewer's own (or their team's) repo. */
+  inViewersRepo: ReadonlySet<string>,
+  now: Date
+) => ({
   id: m.id,
   title: m.title,
   description: m.description,
   is_published: m.is_published,
-  assignments: m.assignments.map(a => ({
-    id: a.id,
-    type: a.type,
-    title: a.title,
-    is_published: a.is_published,
-    grades_released: a.grades_released,
-    student_deadline: a.student_deadline,
-    // A quiz takes no new attempt from its assignment's close date on.
-    closes_at: a.closes_at,
-    repository_id: a.repository_id,
-    repository: a.repository ? { id: a.repository.id, type: a.repository.type } : null,
-    quiz: a.quiz ? { id: a.quiz.id } : null,
-    form: a.form ? { id: a.form.id, slug: a.form.slug, status: a.form.status } : null,
-    pages: (a.pages ?? []).flatMap(link =>
-      link.page && (isStaff || !link.page.is_draft) ? [{ page: docView(link.page) }] : []
-    ),
-    slides: (a.slides ?? []).flatMap(link =>
-      link.slide && (isStaff || !link.slide.is_draft) ? [{ slide: docView(link.slide) }] : []
-    ),
-  })),
+  assignments: m.assignments.map(a => {
+    // A student's view of an assignment that has not reached them yet, the
+    // same two states the Assignments page shows. Scheduled: its release date
+    // is ahead (a REPO one already in their repo is simply open). Preparing: a
+    // released REPO assignment not in their repo yet. Staff see neither.
+    const inRepo = a.type === 'REPO' && inViewersRepo.has(a.id);
+    const released = isReleased(a.release_at, now);
+    const opensAt = !isStaff && !released && !inRepo ? a.release_at : null;
+    const preparing = !isStaff && a.type === 'REPO' && released && !inRepo;
+    // Until it opens a scheduled assignment is its title and dates, no more:
+    // no quiz or form to open, no attached page or deck.
+    const scheduled = opensAt !== null;
+    return {
+      id: a.id,
+      type: a.type,
+      title: a.title,
+      is_published: a.is_published,
+      grades_released: a.grades_released,
+      student_deadline: a.student_deadline,
+      opens_at: opensAt,
+      preparing,
+      // A quiz takes no new attempt from its assignment's close date on.
+      closes_at: a.closes_at,
+      repository_id: a.repository_id,
+      repository: a.repository ? { id: a.repository.id, type: a.repository.type } : null,
+      quiz: a.quiz && !scheduled ? { id: a.quiz.id } : null,
+      form:
+        a.form && !scheduled ? { id: a.form.id, slug: a.form.slug, status: a.form.status } : null,
+      pages: scheduled
+        ? []
+        : (a.pages ?? []).flatMap(link =>
+            link.page && (isStaff || !link.page.is_draft) ? [{ page: docView(link.page) }] : []
+          ),
+      slides: scheduled
+        ? []
+        : (a.slides ?? []).flatMap(link =>
+            link.slide && (isStaff || !link.slide.is_draft) ? [{ slide: docView(link.slide) }] : []
+          ),
+    };
+  }),
   items: m.items.map(item => ({
     id: item.id,
     item_type: item.item_type,
@@ -138,10 +166,16 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     ClassmojiService.module.listForClassroom(classSlug, {
       includeUnpublished: isStaff,
       quizzesVisible: true,
+      // A student also gets what opens later, listed as "Opens Tue 2:00 PM"
+      // (moduleView sends its title and dates only), as on Assignments.
+      includeScheduled: true,
     }),
     ClassmojiService.helper.findAllAssignmentsForStudent(userId, classSlug),
     loadQuizzesVisible(classroom.id),
   ]);
+
+  const now = new Date();
+  const inViewersRepo = new Set(repoAssignments.map(ra => ra.assignment_id));
 
   // A classroom without quizzes (not Pro, or switched off) shows no trace of
   // them, staff preview included: its quiz assignments and quiz items never
@@ -155,7 +189,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
           assignments: m.assignments.filter(a => a.type !== 'QUIZ'),
           items: m.items.filter(item => item.item_type !== 'QUIZ'),
         }))
-  ).map(m => moduleView(m, isStaff));
+  ).map(m => moduleView(m, isStaff, inViewersRepo, now));
 
   // Self-formed group repos: the viewer's team state per repository, so the
   // assignment row can send them to the team page. Students have no
@@ -225,6 +259,19 @@ const buildModuleLeaves = (
   const leaves: ModuleTreeNode[] = [];
 
   for (const a of module.assignments) {
+    // Not open yet: its title, when it opens and when it is due. No link.
+    if (a.opens_at) {
+      leaves.push({
+        key: `assignment-${a.id}`,
+        kind: a.type === 'REPO' ? 'assignment' : 'resource',
+        resourceIcon: a.type === 'QUIZ' ? 'quiz' : a.type === 'FORM' ? 'form' : undefined,
+        level: 0,
+        name: a.title,
+        submissionNode: <CourseworkStatusPill status="SCHEDULED" label={opensLabel(a.opens_at)} />,
+        dueText: a.student_deadline ? new Date(a.student_deadline).toLocaleDateString() : undefined,
+      });
+      continue;
+    }
     if (a.type === 'REPO') {
       // The row itself is the link; the nested "Open issue" action and the
       // attached-resource children belong to the deeper staff tree only.
@@ -232,8 +279,19 @@ const buildModuleLeaves = (
       // A self-formed group assignment keeps its team action: it is the only
       // way from this page to the team page.
       const keepAction = !!(a.repository_id && ctx.selfFormedByRepositoryId?.[a.repository_id]);
+      // Released but not in the viewer's repo yet: "Being set up", unless the
+      // row already says what is missing (no team yet).
+      const selfFormed = a.repository_id
+        ? ctx.selfFormedByRepositoryId?.[a.repository_id]
+        : undefined;
+      const beingSetUp = a.preparing && !(selfFormed && !selfFormed.hasTeam);
       leaves.push({
         ...leaf,
+        submissionNode: beingSetUp ? (
+          <CourseworkStatusPill status="PREPARING" />
+        ) : (
+          leaf.submissionNode
+        ),
         actionNode: keepAction ? leaf.actionNode : undefined,
         children: undefined,
       });

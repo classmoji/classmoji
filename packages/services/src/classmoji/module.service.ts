@@ -1,5 +1,5 @@
 import getPrisma from '@classmoji/database';
-import { openToStudents, titleToIdentifier } from '@classmoji/utils';
+import { openToStudents, scheduledForStudents, titleToIdentifier } from '@classmoji/utils';
 import { ModuleItemType, type Prisma } from '@prisma/client';
 
 interface ModuleWriteInput {
@@ -271,13 +271,19 @@ export const findById = async (id: string) => {
  * published modules and published items, and only the assignments the
  * student-visibility rule admits (`openToStudents`, which reads
  * `quizzesVisible` for quiz assignments); the teaching team sees everything.
+ *
+ * `includeScheduled` also keeps, for students, the assignments that are ready
+ * except for a `release_at` still ahead (`scheduledForStudents`), so the
+ * student Modules page can list them as "Opens Tue 2:00 PM". The caller must
+ * then send only their title and dates: the rows returned are whole.
  */
 export const listForClassroom = async (
   classroomSlug: string,
   {
     includeUnpublished = false,
     quizzesVisible = false,
-  }: { includeUnpublished?: boolean; quizzesVisible?: boolean } = {}
+    includeScheduled = false,
+  }: { includeUnpublished?: boolean; quizzesVisible?: boolean; includeScheduled?: boolean } = {}
 ) => {
   const classroomId = await findClassroomIdBySlug(classroomSlug);
   if (!classroomId) return [];
@@ -312,7 +318,11 @@ export const listForClassroom = async (
   return modulesWithScopedItems.map(m => ({
     ...m,
     items: m.items.filter(isItemPublished),
-    assignments: (m.assignments ?? []).filter(a => openToStudents(a, now, { quizzesVisible })),
+    assignments: (m.assignments ?? []).filter(
+      a =>
+        openToStudents(a, now, { quizzesVisible }) ||
+        (includeScheduled && scheduledForStudents(a, now, { quizzesVisible }))
+    ),
   }));
 };
 

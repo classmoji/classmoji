@@ -69,7 +69,7 @@
 import { gitTermsFor } from '../resources/shape.ts';
 import { randomUUID } from 'node:crypto';
 import { ClassmojiService } from '@classmoji/services';
-import { gitUsername } from '@classmoji/utils';
+import { gitUsername, studentReposDue } from '@classmoji/utils';
 import Tasks from '@classmoji/tasks';
 import {
   RepositorySyncNotFoundError,
@@ -161,6 +161,12 @@ function triggerRepoProvisioning(
     });
 }
 
+/** What `studentReposDue` reads off each of a repository's assignments. */
+interface ReleaseDated {
+  release_at?: Date | null;
+  is_published?: boolean | null;
+}
+
 interface RepoPublishArgs {
   classroom: string;
   repository_id: string;
@@ -173,7 +179,12 @@ export const repoPublishTool: ToolDefinition<RepoPublishArgs> = {
   description:
     'Publishes a repo (assignment container) to students and provisions their git repositories ' +
     'in the background (per-student for individual repos, per-team for instructor-assigned ' +
-    'teams; self-formed team repos are created when students form teams). Owner only. ' +
+    'teams; self-formed team repos are created when students form teams). Student ' +
+    'repositories are created only once an assignment on the repo is released (published ' +
+    'with no release_at, or its release_at has passed) or when it has no assignments: ' +
+    'while every assignment is scheduled or a draft, publishing announces the repo, ' +
+    'provisioning.waiting_for_release is true, and the repositories are created when the ' +
+    'first assignment opens (checked hourly). Owner only. ' +
     'Works before anyone has enrolled — publishing an empty classroom marks the repo available ' +
     'and provisions nothing; students who join later get their repos on join. ' +
     'Re-publishing a previously published repo just restores visibility — use repo_sync to ' +
@@ -216,6 +227,37 @@ export const repoPublishTool: ToolDefinition<RepoPublishArgs> = {
     // per student in the background provisioning run.
     await assertUsableTemplate(repository.template, classroom.classroomId);
 
+    // Student repos are made when the repository's first assignment is
+    // released (`studentReposDue`; `create_git_repos` holds the same rule, so
+    // a run triggered here would create nothing). Web parity
+    // (publishAssignment): publish, queue nothing, and say when they come.
+    const waitingForRelease = async () => {
+      const assignments = (repository as { assignments?: ReleaseDated[] }).assignments ?? [];
+      if (studentReposDue(assignments, new Date())) return null;
+      await ClassmojiService.repository.setPublished(repository.id, true, classroom.classroomId);
+      await audit({
+        is_published: true,
+        provisioning_triggered: false,
+        waiting_for_release: true,
+      });
+      const nextRelease = assignments
+        .map(assignment => assignment.release_at)
+        .filter((date): date is Date => date != null && new Date(date).getTime() > Date.now())
+        .sort((a, b) => new Date(a).getTime() - new Date(b).getTime())[0];
+      return ok({
+        success: true,
+        is_published: true,
+        provisioning: {
+          repos_to_create: 0,
+          waiting_for_release: true,
+          first_release_at: nextRelease ?? null,
+        },
+        message:
+          `${gitTermsFor(ctx).Repo} published. Student ${gitTermsFor(ctx).repos} are created ` +
+          'when its first assignment opens; until then students see the assignment as scheduled.',
+      });
+    };
+
     if (repository.type === 'INDIVIDUAL') {
       const students = await ClassmojiService.classroomMembership.findUsersByRole(
         classroom.classroomId,
@@ -240,6 +282,9 @@ export const repoPublishTool: ToolDefinition<RepoPublishArgs> = {
           message: `${gitTermsFor(ctx).Repo} published. Student ${gitTermsFor(ctx).repos} are created as students join.`,
         });
       }
+
+      const waiting = await waitingForRelease();
+      if (waiting) return waiting;
 
       const sessionId = randomUUID();
       triggerRepoProvisioning(logins, repository.title, classroomSlug, sessionId);
@@ -287,6 +332,9 @@ export const repoPublishTool: ToolDefinition<RepoPublishArgs> = {
         message: `${gitTermsFor(ctx).Repo} published. Team ${gitTermsFor(ctx).repos} are created once teams exist.`,
       });
     }
+
+    const waiting = await waitingForRelease();
+    if (waiting) return waiting;
 
     const sessionId = randomUUID();
     triggerRepoProvisioning(

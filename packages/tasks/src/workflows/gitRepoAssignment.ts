@@ -783,11 +783,20 @@ export const dailyRepositoryAssignmentsReleaseTask = schedules.task({
   id: 'daily_git_repo_assignments_release',
   // Runs again on its schedule, and that next run is the retry.
   retry: { maxAttempts: 1 },
-  cron: '1 4 * * *',
+  // One run at a time: a release that outlasts the hour (a large class) is
+  // not joined by the next run releasing the same drafts.
+  queue: { concurrencyLimit: 1 },
+  // Every hour, releasing only what is due by now, so an assignment opens
+  // within the hour of the time its instructor chose (it used to be once a
+  // night, taking everything due by the end of that UTC day: hours early).
+  // The id keeps its "daily" name: renaming it would register a new schedule.
+  cron: '1 * * * *',
   run: async (_payload: ScheduleTaskPayload, { ctx }: GitRepoAssignmentTaskContext) => {
-    const endOfDay = dayjs().endOf('day').toDate();
+    // One clock for the whole run: the drafts query, the published query and
+    // the helper's release check all read it.
+    const now = new Date();
     const assignmentsToRelease = (await ClassmojiService.assignment.findReadyForRelease(
-      endOfDay
+      now
     )) as ReleaseAssignmentRecord[];
 
     logger.debug('Assignments to release', { assignmentsToRelease });
@@ -968,17 +977,18 @@ export const dailyRepositoryAssignmentsReleaseTask = schedules.task({
     // Assignments published ahead of a future release date (#385): the drafts
     // query above never sees them, so when their date comes they go into the
     // student repos that already exist here, the way publishing one that is
-    // already released does, on the same clock as the drafts path (the end of
-    // today). Only the last 72 hours: a published row never drops out of a
-    // query on its own, and the window covers one missed night with room for a
-    // late start.
+    // already released does, on the same clock as the drafts path (this
+    // run's `now`). Only the last 72 hours: a published row never drops out of
+    // a query on its own, and the window covers missed runs with room to
+    // spare. A row is checked again every hour of that window; the helper
+    // queues nothing once every repo has it.
     // Rows the drafts path just released are left to it, so a student whose run
-    // failed above is not sent a second run tonight.
+    // failed above is not sent a second run in this one.
     const releasedAbove = new Set(assignmentsToRelease.map(assignment => assignment.id));
     const publishedToOpen = (
       (await ClassmojiService.assignment.findPublishedReleasedSince(
-        dayjs().subtract(72, 'hour').toDate(),
-        endOfDay
+        dayjs(now).subtract(72, 'hour').toDate(),
+        now
       )) as ReleaseAssignmentRecord[]
     ).filter(assignment => !releasedAbove.has(assignment.id));
 
@@ -1008,7 +1018,7 @@ export const dailyRepositoryAssignmentsReleaseTask = schedules.task({
           const result = await openAssignmentInExistingRepos({
             classroomId: classroom.id,
             assignmentId: assignment.id,
-            now: endOfDay,
+            now,
           });
           if (result.reason) {
             skipped[result.reason] = (skipped[result.reason] ?? 0) + 1;

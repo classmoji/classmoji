@@ -485,10 +485,13 @@ const ModuleCard = ({
   // its own modal; a quiz opens the quiz form with this module chosen (a quiz
   // and its assignment are one thing); a page or slide deck is placed in the
   // module's reading order.
+  // The first group is named for what it adds: every entry in it creates an
+  // assignment, and "Repository" alone read as something else (an instructor
+  // looking for "Assignment" did not find it).
   const addItemMenu: MenuProps['items'] = [
     {
       type: 'group',
-      label: 'Submissions',
+      label: 'Assignment',
       children: [
         {
           key: 'ASSIGNMENT_REPO',

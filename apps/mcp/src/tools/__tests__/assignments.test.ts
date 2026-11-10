@@ -1472,7 +1472,7 @@ describe('publishing puts a repo assignment into the existing student repos (#38
       )
     );
     expect(draft.opened_in_repos).toBe(0);
-    expect(draft.release_note).toMatch(/released that day/);
+    expect(draft.release_note).toMatch(/released within the hour/);
 
     const published = parse(
       await assignmentUpdateTool.handler(
@@ -1480,7 +1480,9 @@ describe('publishing puts a repo assignment into the existing student repos (#38
         CTX
       )
     );
-    expect(published.release_note).toMatch(/is_published true/);
+    // A published one opens on its own at release_at: nothing to call again.
+    expect(published.release_note).toMatch(/opens within the hour of release_at/);
+    expect(published.release_note).not.toMatch(/is_published true/);
   });
 
   it('assignment_update clearing release_at on a draft: says it is an undated draft', async () => {

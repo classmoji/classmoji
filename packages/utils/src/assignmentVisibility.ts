@@ -60,6 +60,25 @@ export const releasedToRepos = (
     : isReleased(assignment.release_at, now);
 
 /**
+ * Whether a repository's student (or team) repos should exist now. They are
+ * made when its first assignment is released, not when the repository is
+ * published: a repo made ahead of the release date hands students the starter
+ * code (and, in push mode, the whole assignment) before it opens.
+ *
+ * A repository with no assignments is handed out as it is, so its repos are
+ * due as soon as it is published. One whose assignments are all scheduled for
+ * later, or all undated drafts, waits; the release job, Publish and Sync make
+ * the repos once one of them is released.
+ */
+export const studentReposDue = (
+  assignments: ReadonlyArray<{
+    release_at?: Date | string | null;
+    is_published?: boolean | null;
+  }>,
+  now: Date | number
+) => assignments.length === 0 || assignments.some(a => releasedToRepos(a, now));
+
+/**
  * Whether a close date has passed: from `closes_at` on, no new attempt can
  * start. An empty one means "never closes".
  */
@@ -84,6 +103,38 @@ export const openToStudents = (
         !!assignment.form &&
         assignment.form.status !== 'DRAFT'
       );
+    default:
+      return false;
+  }
+};
+
+/**
+ * Whether a student is shown the assignment as scheduled: everything about it
+ * is ready for them (published, and what `openToStudents` asks of its type)
+ * except that its `release_at` is still ahead. Such a row carries its title,
+ * when it opens and when it is due, and nothing else: no link, no
+ * instructions, no materials.
+ *
+ * `openToStudents` is left as it was, so a REPO assignment can be both: it has
+ * always been listed from the moment it is published, and its release date
+ * decides only when it reaches the student's repo. The Assignments page and
+ * the Modules page read this to say "Opens Tue 2pm" instead of showing it as
+ * open (or not at all).
+ */
+export const scheduledForStudents = (
+  assignment: AssignmentVisibilityInput,
+  now: Date | number,
+  { quizzesVisible }: AssignmentVisibilityContext
+): boolean => {
+  if (!assignment.is_published || isReleased(assignment.release_at, now)) return false;
+
+  switch (assignment.type) {
+    case 'REPO':
+      return assignment.repository?.is_published === true;
+    case 'QUIZ':
+      return quizzesVisible;
+    case 'FORM':
+      return !!assignment.form && assignment.form.status !== 'DRAFT';
     default:
       return false;
   }

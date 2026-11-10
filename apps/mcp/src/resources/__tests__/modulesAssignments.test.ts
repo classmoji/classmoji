@@ -30,6 +30,7 @@ import type { ToolContext } from '../../mcp/registry.ts';
 const mocks = vi.hoisted(() => ({
   listForClassroom: vi.fn(),
   quizzesVisible: vi.fn(),
+  findForUser: vi.fn(),
 }));
 
 vi.mock('@classmoji/auth/server', () => ({ assertProTier: vi.fn() }));
@@ -38,6 +39,8 @@ vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     module: { listForClassroom: (...a: unknown[]) => mocks.listForClassroom(...a) },
     entitlement: { quizzesVisible: (...a: unknown[]) => mocks.quizzesVisible(...a) },
+    // The caller's own submission rows (a student read only).
+    gitRepoAssignment: { findForUser: (...a: unknown[]) => mocks.findForUser(...a) },
   },
 }));
 
@@ -164,6 +167,8 @@ const assignmentIds = (payload: Payload) => payload.modules.map(m => m.assignmen
 beforeEach(() => {
   mocks.listForClassroom.mockReset().mockResolvedValue(MODULES);
   mocks.quizzesVisible.mockReset().mockResolvedValue(true);
+  // The student already has the lab in their repository.
+  mocks.findForUser.mockReset().mockResolvedValue([{ assignment: { id: 'a-lab' } }]);
 });
 
 describe('modules read — assignments', () => {
@@ -221,6 +226,7 @@ describe('modules read — assignments', () => {
       expect(mocks.listForClassroom).toHaveBeenLastCalledWith('w26', {
         includeUnpublished: true,
         quizzesVisible: true,
+        includeScheduled: true,
       });
       expect(payload.modules[0].assignments[0], role).toHaveProperty('is_published', true);
     }
@@ -233,6 +239,7 @@ describe('modules read — assignments', () => {
     expect(mocks.listForClassroom).toHaveBeenLastCalledWith('w26', {
       includeUnpublished: false,
       quizzesVisible: true,
+      includeScheduled: true,
     });
 
     mocks.quizzesVisible.mockResolvedValue(false);
@@ -240,6 +247,7 @@ describe('modules read — assignments', () => {
     expect(mocks.listForClassroom).toHaveBeenLastCalledWith('w26', {
       includeUnpublished: false,
       quizzesVisible: false,
+      includeScheduled: true,
     });
   });
 
@@ -269,6 +277,8 @@ describe('modules read — assignments', () => {
         title: 'Starterpack: Getting started with Vite',
         type: 'REPO',
         student_deadline: DEADLINE,
+        availability: 'OPEN',
+        opens_at: null,
         materials: [],
       },
       {
@@ -276,6 +286,8 @@ describe('modules read — assignments', () => {
         title: 'React quiz',
         type: 'QUIZ',
         student_deadline: DEADLINE,
+        availability: 'OPEN',
+        opens_at: null,
         materials: [],
       },
       {
@@ -283,6 +295,8 @@ describe('modules read — assignments', () => {
         title: 'Team preferences',
         type: 'FORM',
         student_deadline: DEADLINE,
+        availability: 'OPEN',
+        opens_at: null,
         materials: [],
       },
     ]);
@@ -390,5 +404,84 @@ describe('modules read — linked pages and decks', () => {
         expect(text, `${role} ${leak}`).not.toContain(leak);
       }
     }
+  });
+});
+
+describe('modules read — what has not reached the student yet', () => {
+  const LATER = new Date('2999-01-01T19:00:00.000Z');
+  const withDocs = {
+    ...LAB,
+    pages: [
+      {
+        page: { id: 'p-spec', title: 'Lab spec', is_draft: false, classroom_id: 'class-1' },
+      },
+    ],
+    slides: [],
+  };
+  const only = (assignments: unknown[]) =>
+    mocks.listForClassroom.mockResolvedValue([{ ...MODULES[0], assignments }]);
+
+  it('a scheduled assignment is its title, dates and when it opens: no materials', async () => {
+    only([
+      { ...withDocs, release_at: LATER },
+      { ...QUIZ, is_published: true, release_at: LATER },
+      { ...FORM, release_at: LATER },
+    ]);
+    mocks.findForUser.mockResolvedValue([]);
+
+    const { assignments } = (await read('STUDENT')).modules[0];
+
+    for (const a of assignments) {
+      expect(a, a.id).toMatchObject({ availability: 'SCHEDULED', opens_at: LATER, materials: [] });
+      expect(Object.keys(a).sort(), a.id).toEqual(
+        ['availability', 'id', 'materials', 'opens_at', 'student_deadline', 'title', 'type'].sort()
+      );
+    }
+    expect(JSON.stringify(assignments)).not.toContain('p-spec');
+  });
+
+  it('a repo assignment already in the caller’s repository is open, whatever its release date', async () => {
+    only([{ ...withDocs, release_at: LATER }]);
+    mocks.findForUser.mockResolvedValue([{ assignment: { id: 'a-lab' } }]);
+
+    const [lab] = (await read('STUDENT')).modules[0].assignments;
+
+    expect(lab).toMatchObject({ availability: 'OPEN', opens_at: null });
+    expect(lab.materials).toEqual([{ type: 'PAGE', id: 'p-spec', title: 'Lab spec' }]);
+  });
+
+  it('a released repo assignment not in the caller’s repository yet is PREPARING', async () => {
+    only([LAB, { ...QUIZ, is_published: true }, FORM]);
+    mocks.findForUser.mockResolvedValue([]);
+
+    const { assignments } = (await read('STUDENT')).modules[0];
+
+    expect(assignments.map(a => [a.type, a.availability])).toEqual([
+      ['REPO', 'PREPARING'],
+      ['QUIZ', 'OPEN'],
+      ['FORM', 'OPEN'],
+    ]);
+  });
+
+  it('reads only the caller’s own submission rows, in the authorized classroom', async () => {
+    await read('STUDENT');
+
+    expect(mocks.findForUser).toHaveBeenCalledTimes(1);
+    expect(mocks.findForUser).toHaveBeenCalledWith({
+      git_repo: {
+        classroom_id: 'class-1',
+        OR: [{ student_id: 'user-1' }, { team: { memberships: { some: { user_id: 'user-1' } } } }],
+      },
+    });
+  });
+
+  it('staff get neither field, and no submission rows are read for them', async () => {
+    only([{ ...LAB, release_at: LATER }]);
+
+    const [lab] = (await read('OWNER')).modules[0].assignments;
+
+    expect(lab).not.toHaveProperty('availability');
+    expect(lab).not.toHaveProperty('opens_at');
+    expect(mocks.findForUser).not.toHaveBeenCalled();
   });
 });

@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   classroomFindById: vi.fn(),
   gitRepoFindByRepository: vi.fn(),
   batchTrigger: vi.fn(),
+  syncRepository: vi.fn(),
 }));
 
 vi.mock('@classmoji/services', () => ({
@@ -39,6 +40,10 @@ vi.mock('../../workflows/gitRepoAssignment.ts', () => ({
   createGithubRepositoryAssignmentTask: {
     batchTrigger: (...a: unknown[]) => mocks.batchTrigger(...a),
   },
+}));
+
+vi.mock('../syncRepository.ts', () => ({
+  syncRepository: (...a: unknown[]) => mocks.syncRepository(...a),
 }));
 
 const { openAssignmentInExistingRepos } = await import('../openAssignmentInRepos.ts');
@@ -172,24 +177,73 @@ describe('openAssignmentInExistingRepos', () => {
     expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
   });
 
-  it('releases against the `now` it is given (the nightly end of day), the clock defaulting to the present', async () => {
+  it('releases against the `now` it is given (the hourly release passes its own), the clock defaulting to the present', async () => {
     const laterToday = new Date(Date.now() + 60 * 60 * 1000);
-    const endOfDay = new Date(laterToday.getTime() + 60 * 1000);
+    const afterRelease = new Date(laterToday.getTime() + 60 * 1000);
     setup(assignmentRow({ is_published: true, release_at: laterToday }));
 
     // Default clock: not released yet.
     expect((await open()).reason).toBe('not_released');
     expect(mocks.batchTrigger).not.toHaveBeenCalled();
 
-    // The cron's clock: released, so opened tonight.
+    // A clock past the release date: released, so opened.
     const result = await openAssignmentInExistingRepos({
       classroomId: CLASSROOM_ID,
       assignmentId: ASSIGNMENT_ID,
       sessionId: 'sess-1',
-      now: endOfDay,
+      now: afterRelease,
     });
     expect(result).toEqual({ queued: 2, sessionId: 'sess-1' });
     expect(mocks.batchTrigger).toHaveBeenCalledTimes(1);
+  });
+
+  it('a repository with no repos yet: the first release makes them through Sync', async () => {
+    setup(assignmentRow());
+    mocks.gitRepoFindByRepository.mockResolvedValue([]);
+    mocks.syncRepository.mockResolvedValue({
+      sessionId: 'sess-1',
+      reposToCreate: 6,
+      assignmentsToAdd: 0,
+    });
+
+    expect(await open()).toEqual({ queued: 6, sessionId: 'sess-1' });
+    expect(mocks.syncRepository).toHaveBeenCalledWith({
+      classroomId: CLASSROOM_ID,
+      repositoryId: 'repo-1',
+      sessionId: 'sess-1',
+    });
+    // The repos arrive with the assignment in them: no run on a repo here.
+    expect(mocks.batchTrigger).not.toHaveBeenCalled();
+    expect(mocks.assignmentUpdate).toHaveBeenCalledWith(ASSIGNMENT_ID, { is_published: true });
+  });
+
+  it('no repos and nobody to make one for: nothing queued, nothing published', async () => {
+    setup(assignmentRow());
+    mocks.gitRepoFindByRepository.mockResolvedValue([]);
+    mocks.syncRepository.mockResolvedValue({
+      sessionId: 'sess-1',
+      reposToCreate: 0,
+      assignmentsToAdd: 0,
+    });
+
+    expect((await open()).reason).toBe('none_missing');
+    expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
+  });
+
+  it('a scheduled assignment never reaches Sync, repos or not', async () => {
+    setup(assignmentRow({ release_at: new Date(Date.now() + 60 * 60 * 1000) }));
+    mocks.gitRepoFindByRepository.mockResolvedValue([]);
+
+    expect((await open()).reason).toBe('not_released');
+    expect(mocks.syncRepository).not.toHaveBeenCalled();
+  });
+
+  it('a repository that has repos keeps the old rule: Sync is not called', async () => {
+    setup(assignmentRow());
+
+    await open();
+
+    expect(mocks.syncRepository).not.toHaveBeenCalled();
   });
 
   it('queues nothing for an undated draft', async () => {

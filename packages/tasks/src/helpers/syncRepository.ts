@@ -3,7 +3,9 @@
  *
  * Two things a repository can be missing after it was published:
  *   - student or team repos: students who joined (and accepted) since, teams
- *     tagged or formed since. These are created through `create_git_repos`.
+ *     tagged or formed since. These are created through `create_git_repos`,
+ *     and only once the repository's first assignment is released (or it has
+ *     none): see `studentReposDue`.
  *   - assignments: a released assignment (published, or a draft whose
  *     `release_at` has passed) that an existing repo has no submission row for.
  *     Each is queued as one `gh-create_git_repo_assignment` run (an issue in
@@ -36,7 +38,7 @@
 
 import { nanoid } from 'nanoid';
 import { ClassmojiService } from '@classmoji/services';
-import { releasedToRepos } from '@classmoji/utils';
+import { releasedToRepos, studentReposDue } from '@classmoji/utils';
 import { publishAssignment } from './publishAssignment.ts';
 import { createRepositoriesTask } from '../workflows/gitRepo.ts';
 import {
@@ -152,8 +154,14 @@ export const syncRepository = async ({
     repository.id
   );
 
-  // 1. Repos nobody has yet.
-  const logins = await missingOwners(classroom, repository, existingRepos);
+  // 1. Repos nobody has yet. None while every assignment on the repository is
+  // still to be released (`studentReposDue`): the repos are made at the first
+  // release, and a sync before it must not hand out the starter code early.
+  // `create_git_repos` holds the same rule; it is read here too so the counts
+  // reported say what was really queued.
+  const logins = studentReposDue(repository.assignments, new Date())
+    ? await missingOwners(classroom, repository, existingRepos)
+    : [];
   // A self-formed repository before its first team has nothing to sync: no
   // team can own a repo yet, and no repo exists to open an assignment in.
   if (logins === null) return { sessionId, reposToCreate: 0, assignmentsToAdd: 0 };
