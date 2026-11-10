@@ -3,7 +3,7 @@ import { auth } from '@trigger.dev/sdk';
 import { nanoid } from 'nanoid';
 
 import { ClassmojiService } from '@classmoji/services';
-import { releasedToRepos } from '@classmoji/utils';
+import { releasedToRepos, studentReposDue } from '@classmoji/utils';
 import Tasks from '@classmoji/tasks';
 import { openAssignmentInExistingRepos } from '@classmoji/tasks/assignment-release';
 import { syncRepository } from '@classmoji/tasks/repo-sync';
@@ -74,6 +74,39 @@ export const publishAssignment = async (
     );
     if (!templateCheck.ok) return { error: templateCheck.error };
 
+    // Student repos are made when the repository's first assignment is
+    // released (`studentReposDue`; `create_git_repos` holds the same rule).
+    // While every assignment on it is scheduled or a draft, publishing only
+    // announces it: there is no repo creation to show progress for, so say
+    // when the repos will come instead.
+    const settings = (classroom as { settings?: { timezone?: string | null } | null } | null)
+      ?.settings;
+    const courseTimeZone = settings?.timezone || null;
+    const publishedAheadOfRelease = async () => {
+      if (studentReposDue(repository.assignments, new Date())) return null;
+      await ClassmojiService.repository.setPublished(repositoryId, true, classroomId);
+      const nextRelease = repository.assignments
+        .map(assignment => assignment.release_at)
+        .filter((date): date is Date => date != null && date.getTime() > Date.now())
+        .sort((a, b) => a.getTime() - b.getTime())[0];
+      return withNotes({
+        success: `${terms.Repo} published! Student ${terms.repos} are created when its first assignment opens.`,
+        info: nextRelease
+          ? `The first one is scheduled to open ${nextRelease.toLocaleString('en-US', {
+              weekday: 'short',
+              month: 'short',
+              day: 'numeric',
+              hour: 'numeric',
+              minute: '2-digit',
+              timeZoneName: 'short',
+              // The course's own time zone where it has set one; the server's
+              // (named in the text) otherwise.
+              ...(courseTimeZone ? { timeZone: courseTimeZone } : {}),
+            })}. Until then students see it as scheduled.`
+          : 'Publish an assignment on it to open it to students.',
+      });
+    };
+
     let skippedNoGitLab = 0;
     let numReposToCreate = 0;
     let numIssuesToCreate = 0;
@@ -119,6 +152,9 @@ export const publishAssignment = async (
           unassigned
         );
       }
+
+      const waiting = await publishedAheadOfRelease();
+      if (waiting) return waiting;
 
       numReposToCreate = studentList.length;
       numIssuesToCreate =
@@ -171,6 +207,9 @@ export const publishAssignment = async (
           unassigned
         );
       }
+
+      const waiting = await publishedAheadOfRelease();
+      if (waiting) return waiting;
 
       numReposToCreate = teams.length;
       numIssuesToCreate =
@@ -251,10 +290,25 @@ export const publishAssignmentAndRepository = async (
   }
 
   let repoResult: Awaited<ReturnType<typeof publishAssignment>> | null = null;
+  let assignmentPublished = false;
 
   if (assignment.type === 'REPO' && assignment.repository_id) {
     const repository = await ClassmojiService.repository.findById(assignment.repository_id);
     if (repository && !repository.is_published) {
+      // The assignment is published before its repository, not after: student
+      // repos are made only once an assignment on the repository is released
+      // (`studentReposDue`), and the repository publish reads that from the
+      // database. Published second, an undated assignment would still be a
+      // draft when the repos are decided, and none would be made. The
+      // template is checked first, so a repository that cannot be published
+      // still leaves the assignment a draft.
+      const templateCheck = await ClassmojiService.repository.checkTemplate(
+        repository.template,
+        classroomId
+      );
+      if (!templateCheck.ok) return { error: templateCheck.error };
+      await ClassmojiService.assignment.publish(assignmentId);
+      assignmentPublished = true;
       repoResult = await publishAssignment(
         classroomSlug,
         classroomId,
@@ -271,7 +325,7 @@ export const publishAssignmentAndRepository = async (
 
   // A quiz's assignment publishes through the one quiz publish function
   // (assignment.publish routes it), which tells the class once.
-  await ClassmojiService.assignment.publish(assignmentId);
+  if (!assignmentPublished) await ClassmojiService.assignment.publish(assignmentId);
 
   // The quiz screens' warning, on this publish path too: a quiz whose every
   // linked source document is still a draft cannot be started yet.
@@ -327,7 +381,13 @@ export const publishAssignmentAndRepository = async (
     }
   }
 
-  return { success: `Assignment "${assignment.title}" published` };
+  // Published ahead of its release date, with its repository: say when it
+  // opens (the repository publish's note) rather than only "published".
+  const note = repoResult && 'info' in repoResult ? repoResult.info : undefined;
+  return {
+    success: `Assignment "${assignment.title}" published`,
+    ...(note ? { info: note } : {}),
+  };
 };
 
 /**

@@ -5,6 +5,8 @@ interface EmailContext {
   type: NotificationType;
   title: string;
   classroomName: string | null;
+  /** The classroom's slug, for a button that opens the thing itself. */
+  classroomSlug?: string | null;
   resourceType: string;
   resourceId: string;
   recipientName: string | null;
@@ -80,11 +82,42 @@ const regradeSubject = (ctx: EmailContext): { name: string; quiz: boolean } => {
   };
 };
 
-/** Where the email's button goes: the post itself for feedback, else the app. */
-const actionUrlFor = (ctx: EmailContext): string =>
-  ctx.type === 'FEEDBACK_STATUS_CHANGED' || ctx.type === 'FEEDBACK_REPLY'
-    ? `${appUrl()}/feedback/p/${encodeURIComponent(ctx.resourceId)}`
+/**
+ * The student page a notice is about, as a path in the app, or null where the
+ * email has no better place to send its reader than the app itself. Only the
+ * notices sent to students about an assignment or its repository: the same
+ * destinations the bell uses (`notificationLinks.ts` in the webapp).
+ */
+const studentPathFor = (ctx: EmailContext): string | null => {
+  if (!ctx.classroomSlug) return null;
+  const base = `/student/${encodeURIComponent(ctx.classroomSlug)}`;
+  const assignmentPath = (id: string) => `${base}/assignments?assignment=${encodeURIComponent(id)}`;
+  if (ctx.type === 'ASSIGNMENT_DUE_DATE_CHANGED' && ctx.resourceType === 'assignment') {
+    return assignmentPath(ctx.resourceId);
+  }
+  if (ctx.type === 'REPOSITORY_PUBLISHED' && ctx.resourceType === 'repository') {
+    const assignmentId = ctx.metadata?.assignment_id;
+    return typeof assignmentId === 'string' && assignmentId
+      ? assignmentPath(assignmentId)
+      : `${base}/repos`;
+  }
+  return null;
+};
+
+/**
+ * Where the email's button goes: the post itself for feedback; the assignment
+ * for a student's assignment and repository notices, through `/?redirect=` so
+ * a reader who is signed out lands there after signing in; else the app.
+ */
+const actionUrlFor = (ctx: EmailContext): string => {
+  if (ctx.type === 'FEEDBACK_STATUS_CHANGED' || ctx.type === 'FEEDBACK_REPLY') {
+    return `${appUrl()}/feedback/p/${encodeURIComponent(ctx.resourceId)}`;
+  }
+  const path = studentPathFor(ctx);
+  return path
+    ? `${appUrl()}/?redirect=${encodeURIComponent(path)}`
     : `${appUrl()}/select-organization`;
+};
 
 const formatDate = (value: unknown): string | null => {
   if (!value) return null;
@@ -162,9 +195,7 @@ const bodyFor = (ctx: EmailContext): string => {
     case 'FEEDBACK_STATUS_CHANGED': {
       const note = statusNote(ctx);
       return `<p style="margin-top:0;${note ? '' : ' margin-bottom:0;'}"><strong>${title}</strong>, a post you follow on the Classmoji feedback board, is now <strong>${escapeHtml(statusLabel(ctx))}</strong>.</p>${
-        note
-          ? `<p style="margin-bottom:0; white-space:pre-line;">${escapeHtml(note)}</p>`
-          : ''
+        note ? `<p style="margin-bottom:0; white-space:pre-line;">${escapeHtml(note)}</p>` : ''
       }`;
     }
     case 'FEEDBACK_REPLY':

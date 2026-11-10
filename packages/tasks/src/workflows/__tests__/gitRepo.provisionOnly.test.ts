@@ -83,6 +83,16 @@ vi.mock('@classmoji/services', () => ({
 
 vi.mock('@classmoji/utils', () => ({
   // The real rule: which assignments a new repo gets is what these tests pin.
+  studentReposDue: (
+    assignments: { release_at?: Date | string | null; is_published?: boolean | null }[],
+    now: Date
+  ) =>
+    assignments.length === 0 ||
+    assignments.some(a =>
+      a.release_at == null
+        ? a.is_published === true
+        : new Date(a.release_at).getTime() <= now.getTime()
+    ),
   releasedToRepos: (
     a: { release_at?: Date | string | null; is_published?: boolean | null },
     now: Date
@@ -241,6 +251,64 @@ describe('create_git_repos — repository publish side effect', () => {
     ];
     expect(reposData).toHaveLength(1);
     expect(reposData[0].payload.provisionOnly).toBe(true);
+  });
+});
+
+describe('create_git_repos: repos wait for the first released assignment', () => {
+  const FUTURE = new Date('2999-01-01T00:00:00Z');
+
+  it('creates nothing while every assignment is scheduled, and still publishes the repository', async () => {
+    mocks.findBySlugAndTitle.mockResolvedValue(repositoryRow([assignment('a-1', true, FUTURE)]));
+
+    const result = await runCreateRepositories();
+
+    expect(result).toEqual({ created: 0, deferred: true });
+    expect(mocks.batchTriggerCreateRepo).not.toHaveBeenCalled();
+    // Nothing on Github is touched for a deferred run.
+    expect(mocks.getOrganization).not.toHaveBeenCalled();
+    expect(mocks.setPublished).toHaveBeenCalledWith('repo-1', true, 'class-1');
+  });
+
+  it('creates nothing for undated drafts', async () => {
+    mocks.findBySlugAndTitle.mockResolvedValue(repositoryRow([assignment('a-1', false, null)]));
+
+    expect(await runCreateRepositories()).toEqual({ created: 0, deferred: true });
+    expect(mocks.batchTriggerCreateRepo).not.toHaveBeenCalled();
+  });
+
+  it('a joining student gets no repo and publishes nothing while it waits', async () => {
+    mocks.findBySlugAndTitle.mockResolvedValue(repositoryRow([assignment('a-1', true, FUTURE)]));
+
+    expect(await runCreateRepositories(true)).toEqual({ created: 0, deferred: true });
+    expect(mocks.batchTriggerCreateRepo).not.toHaveBeenCalled();
+    expect(mocks.setPublished).not.toHaveBeenCalled();
+  });
+
+  it('a joining student does not open a draft whose date has passed: the release job does', async () => {
+    mocks.findBySlugAndTitle.mockResolvedValue(repositoryRow([assignment('a-1', false, PAST)]));
+
+    expect(await runCreateRepositories(true)).toEqual({ created: 0, deferred: true });
+    // The same repository on an instructor-driven run is due.
+    await runCreateRepositories();
+    expect(mocks.batchTriggerCreateRepo).toHaveBeenCalledTimes(1);
+  });
+
+  it('creates the repos once one assignment is released, others still scheduled', async () => {
+    mocks.findBySlugAndTitle.mockResolvedValue(
+      repositoryRow([assignment('a-1', true, PAST), assignment('a-2', true, FUTURE)])
+    );
+
+    await runCreateRepositories();
+
+    expect(mocks.batchTriggerCreateRepo).toHaveBeenCalledTimes(1);
+  });
+
+  it('creates the repos of a repository with no assignments at publish', async () => {
+    mocks.findBySlugAndTitle.mockResolvedValue(repositoryRow([]));
+
+    await runCreateRepositories();
+
+    expect(mocks.batchTriggerCreateRepo).toHaveBeenCalledTimes(1);
   });
 });
 

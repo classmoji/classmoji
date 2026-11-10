@@ -57,7 +57,12 @@
 
 import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
-import { countingQuizScore, effectiveDeadline, effectiveTokensPerHour } from '@classmoji/utils';
+import {
+  countingQuizScore,
+  effectiveDeadline,
+  effectiveTokensPerHour,
+  isReleased,
+} from '@classmoji/utils';
 import type { ResourceDefinition, ToolContext } from '../mcp/registry.ts';
 import { emojiFor, loadQuizEmojiScale, studentQuizGradeView } from '../tools/quizGradeEmoji.ts';
 import {
@@ -123,7 +128,7 @@ export const GRADES_MINE_DESCRIPTION =
   'count} or {kind:"emoji",emoji,count}; null when there is none. Students only.';
 
 /** The viewer's own GitRepoAssignments in this classroom (individual + team). */
-async function findMySubmissions(ctx: ToolContext): Promise<SubmissionLike[]> {
+export async function findMySubmissions(ctx: ToolContext): Promise<SubmissionLike[]> {
   const { classroomId } = classroomCtx(ctx);
   // Same service call the webapp's helper uses, but scoped by classroom_id
   // instead of slug (slug is ambiguous across git orgs).
@@ -146,7 +151,8 @@ export const reposResource: ResourceDefinition = {
     'Assignment containers ("repos") with their due-dated assignments. Staff see all incl. ' +
     'unpublished, each assignment with the module_id it belongs to; students see published-only ' +
     'containers they have a git repo for, with their own submission status per assignment ' +
-    '(grades only after release).',
+    '(grades only after release) and its `availability` (OPEN, SCHEDULED with `opens_at`, or ' +
+    'PREPARING: released, not in their repository yet).',
   scope: 'read',
   roles: MEMBER,
   handler: async (_vars, ctx) => {
@@ -228,6 +234,7 @@ export const reposResource: ResourceDefinition = {
       submissions.map(s => s.git_repo?.repository_id).filter(Boolean)
     );
     const byAssignment = new Map(submissions.map(s => [s.assignment?.id, s]));
+    const now = new Date();
 
     return {
       enabled: true,
@@ -248,6 +255,15 @@ export const reposResource: ResourceDefinition = {
               weight: a.weight,
               is_extra_credit: a.is_extra_credit ?? false,
               student_deadline: a.student_deadline ?? null,
+              // Where it stands for the caller, as list_modules reports it:
+              // in their repository (OPEN), opening later (SCHEDULED, with
+              // opens_at), or released and not in their repository yet.
+              availability: mine
+                ? 'OPEN'
+                : isReleased(a.release_at, now)
+                  ? 'PREPARING'
+                  : 'SCHEDULED',
+              opens_at: !mine && !isReleased(a.release_at, now) ? (a.release_at ?? null) : null,
               grades_released: a.grades_released,
               ...price(a.tokens_per_hour),
               my_submission: mine

@@ -1,6 +1,6 @@
 import { Suspense } from 'react';
 import { gitContextFor } from '~/utils/gitWeb';
-import { Await } from 'react-router';
+import { Await, useSearchParams } from 'react-router';
 import { Skeleton } from 'antd';
 import { namedAction } from '~/utils/namedAction.server';
 import {
@@ -58,6 +58,10 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
             gitOrgLogin,
             git: gitContextFor(classroom),
             assignments,
+            // Also what has not opened yet ("Opens Tue 2:00 PM") and what is
+            // released but not in the student's repo yet, so this page and
+            // the Modules page list the same work.
+            includeUnopened: true,
           })
         )
         .catch((error): StudentCourseworkRow[] => {
@@ -72,11 +76,14 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     // looking: staff opening this page see what their students see, drafts
     // left out (the Modules page is where staff see those). A failed read is
     // logged and leaves the rows without them.
-    const materials = coursework.length
+    // None for a scheduled row: until it opens it shows its title and dates
+    // only.
+    const opened = coursework.filter(row => row.status !== 'SCHEDULED');
+    const materials = opened.length
       ? await ClassmojiService.studentCoursework
           .linkedMaterials(
             classroom.id,
-            coursework.map(row => row.assignmentId)
+            opened.map(row => row.assignmentId)
           )
           .catch((error): Map<string, LinkedMaterial[]> => {
             console.error('[student assignments] linked materials failed', context, error);
@@ -112,6 +119,9 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
 const StudentAssignments = ({ loaderData }: Route.ComponentProps) => {
   const { data } = loaderData;
+  // `?assignment=<id>`: where a notification's link lands.
+  const [searchParams] = useSearchParams();
+  const focusAssignmentId = searchParams.get('assignment');
 
   return (
     <div className="min-h-full">
@@ -126,7 +136,11 @@ const StudentAssignments = ({ loaderData }: Route.ComponentProps) => {
                 classroomSubtitle={d.classroomSubtitle}
                 counts={d.counts}
               />
-              <AssignmentsTabsCard rows={d.rows} balance={d.balance} />
+              <AssignmentsTabsCard
+                rows={d.rows}
+                balance={d.balance}
+                focusAssignmentId={focusAssignmentId}
+              />
             </div>
           )}
         </Await>

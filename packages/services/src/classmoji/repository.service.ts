@@ -482,6 +482,21 @@ export const deleteIfUnprovisioned = async (
  * @param {string} classroomId - UUID of the authorized Classroom
  * @returns {Promise<Object>}
  */
+/**
+ * Whether the classroom has a published repository that no published
+ * assignment submits through: one handed out as it is. Its copies appear on no
+ * Assignments row, so the student Repositories page is the only place that
+ * lists them, and the student nav shows that entry only when this is true.
+ */
+export const hasStandalonePublished = async (classroomId: string) =>
+  (await getPrisma().repository.count({
+    where: {
+      classroom_id: classroomId,
+      is_published: true,
+      assignments: { none: { is_published: true } },
+    },
+  })) > 0;
+
 export const setPublished = async (id: string, isPublished: boolean, classroomId: string) => {
   // Before the read as well as the write: an unusable id would make the lookup
   // below return an arbitrary repository in the classroom, and the notification
@@ -514,12 +529,24 @@ export const setPublished = async (id: string, isPublished: boolean, classroomId
         select: { provider: true },
       });
       const { Repo } = gitTerms(org?.provider === 'GITLAB');
+      // Where the notice leads: the assignment submitted through this
+      // repository (a published one first), on the student's Assignments
+      // page. A repository handed out without an assignment has none, and the
+      // notice leads to their repositories instead.
+      const assignment = isPublished
+        ? await getPrisma().assignment.findFirst({
+            where: { repository_id: mod.id },
+            orderBy: [{ is_published: 'desc' }, { created_at: 'asc' }],
+            select: { id: true },
+          })
+        : null;
       await notificationService.createNotifications({
         type: isPublished ? 'REPOSITORY_PUBLISHED' : 'REPOSITORY_UNPUBLISHED',
         classroomId: mod.classroom_id,
         recipientUserIds: studentIds,
         resourceType: 'repository',
         resourceId: mod.id,
+        ...(assignment ? { metadata: { assignment_id: assignment.id } } : {}),
         title: isPublished
           ? `${Repo} published: ${mod.title}`
           : `${Repo} unpublished: ${mod.title}`,

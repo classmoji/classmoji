@@ -16,6 +16,7 @@ import type { ToolContext } from '../../mcp/registry.ts';
 const mocks = vi.hoisted(() => ({
   listForClassroom: vi.fn(),
   quizzesVisible: vi.fn(),
+  findForUser: vi.fn(),
 }));
 
 vi.mock('@classmoji/auth/server', () => ({ assertProTier: vi.fn() }));
@@ -24,6 +25,8 @@ vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     module: { listForClassroom: (...a: unknown[]) => mocks.listForClassroom(...a) },
     entitlement: { quizzesVisible: (...a: unknown[]) => mocks.quizzesVisible(...a) },
+    // The caller's own submission rows (a student read only).
+    gitRepoAssignment: { findForUser: (...a: unknown[]) => mocks.findForUser(...a) },
   },
 }));
 
@@ -80,6 +83,7 @@ const itemIds = (payload: Payload) => payload.modules.map(m => m.items.map(i => 
 beforeEach(() => {
   mocks.listForClassroom.mockReset().mockResolvedValue(MODULES);
   mocks.quizzesVisible.mockReset().mockResolvedValue(true);
+  mocks.findForUser.mockReset().mockResolvedValue([]);
 });
 
 describe('modules read — quiz items', () => {
@@ -121,6 +125,7 @@ describe('modules read — quiz items', () => {
     expect(mocks.listForClassroom).toHaveBeenCalledWith('w26', {
       includeUnpublished: false,
       quizzesVisible: false,
+      includeScheduled: true,
     });
   });
 });

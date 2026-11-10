@@ -1,5 +1,5 @@
 /**
- * The nightly release cron and assignments that were PUBLISHED ahead of a
+ * The hourly release cron and assignments that were PUBLISHED ahead of a
  * future release date (#385). `findReadyForRelease` sees drafts only, so such
  * an assignment never reached the student repos when its date came. The cron
  * now also asks for published REPO assignments released in the last 72 hours
@@ -8,11 +8,12 @@
  *
  * Pinned here:
  *  - a published in-window row calls the helper with its classroom and id, on
- *    a night with no drafts at all (the old early return skipped everything);
- *  - the window is the last 72 hours up to the same end of day the drafts
- *    query uses;
- *  - the helper runs on that same clock (`now` = the end of day), so a row
- *    released later today is opened tonight, as a draft would be;
+ *    a run with no drafts at all (the old early return skipped everything);
+ *  - the window is the last 72 hours up to now, the same clock the drafts
+ *    query uses: nothing due later today is asked for (it used to run once
+ *    a night up to the end of the day, opening assignments hours early);
+ *  - the helper runs on that same clock, so one run reads one time;
+ *  - the schedule is hourly, one run at a time;
  *  - an org whose installation check fails is skipped, checked once, and its
  *    rows never reach the helper; other orgs still go;
  *  - one helper failure does not stop the others and ends the run failed;
@@ -134,8 +135,8 @@ beforeEach(() => {
   mocks.createRepositoriesTriggerAndWait.mockResolvedValue({ ok: true });
 });
 
-describe('daily release cron: published assignments reaching their release date', () => {
-  it('opens a published in-window assignment in existing repos on a night with no drafts', async () => {
+describe('hourly release cron: published assignments reaching their release date', () => {
+  it('opens a published in-window assignment in existing repos on a run with no drafts', async () => {
     mocks.findPublishedReleasedSince.mockResolvedValue([assignmentRow('asg-1')]);
 
     await runCron();
@@ -148,7 +149,16 @@ describe('daily release cron: published assignments reaching their release date'
     });
   });
 
-  it('asks for the last 72 hours up to the end of day the drafts query uses', async () => {
+  it('runs every hour, one run at a time', () => {
+    const config = dailyRepositoryAssignmentsReleaseTask as unknown as {
+      cron: string;
+      queue: { concurrencyLimit: number };
+    };
+    expect(config.cron).toBe('1 * * * *');
+    expect(config.queue).toEqual({ concurrencyLimit: 1 });
+  });
+
+  it('asks for the last 72 hours up to now, the clock the drafts query uses', async () => {
     const before = Date.now();
     await runCron();
     const after = Date.now();
@@ -158,26 +168,26 @@ describe('daily release cron: published assignments reaching their release date'
     const [draftsUntil] = mocks.findReadyForRelease.mock.calls[0] as [Date];
     expect(until.getTime()).toBe(draftsUntil.getTime());
     const hour = 60 * 60 * 1000;
-    expect(since.getTime()).toBeGreaterThanOrEqual(before - 72 * hour);
-    expect(since.getTime()).toBeLessThanOrEqual(after - 72 * hour);
-    expect(until.getTime()).toBeGreaterThanOrEqual(after);
+    expect(since.getTime()).toBe(until.getTime() - 72 * hour);
+    // Now, not the end of the day: nothing due later today is released early.
+    expect(until.getTime()).toBeGreaterThanOrEqual(before);
+    expect(until.getTime()).toBeLessThanOrEqual(after);
   });
 
-  it('opens a row released later today tonight: the helper runs on the drafts clock', async () => {
-    const laterToday = assignmentRow('asg-later');
-    laterToday.release_at = new Date(Date.now() + 60 * 1000);
-    mocks.findPublishedReleasedSince.mockResolvedValue([laterToday]);
+  it('gives the helper the clock the queries ran on, never a later one', async () => {
+    mocks.findPublishedReleasedSince.mockResolvedValue([assignmentRow('asg-1')]);
 
+    const before = Date.now();
     await runCron();
+    const after = Date.now();
 
     const [draftsUntil] = mocks.findReadyForRelease.mock.calls[0] as [Date];
-    expect(mocks.openAssignmentInExistingRepos).toHaveBeenCalledTimes(1);
     const [args] = mocks.openAssignmentInExistingRepos.mock.calls[0] as [
       { classroomId: string; assignmentId: string; now: Date },
     ];
-    expect(args).toMatchObject({ classroomId: 'class-1', assignmentId: 'asg-later' });
     expect(args.now.getTime()).toBe(draftsUntil.getTime());
-    expect(args.now.getTime()).toBeGreaterThanOrEqual(laterToday.release_at.getTime());
+    expect(args.now.getTime()).toBeGreaterThanOrEqual(before);
+    expect(args.now.getTime()).toBeLessThanOrEqual(after);
   });
 
   it('skips an org whose installation check fails, checks it once, and still does the others', async () => {

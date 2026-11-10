@@ -57,6 +57,7 @@ import {
   effectiveTokensPerHour,
   gitUsername,
   isRealCalendarDate,
+  isReleased,
   localDayRange,
   localMonthGridRange,
   type ScorableQuizAttempt,
@@ -82,6 +83,7 @@ import {
   sanitizedSettings,
   type QuizPlacementSource,
 } from './shape.ts';
+import { findMySubmissions } from './repos.ts';
 
 // ─── pages ───────────────────────────────────────────────────────────────────
 
@@ -163,6 +165,7 @@ interface ModuleAssignmentRow {
   is_extra_credit?: boolean;
   is_published: boolean;
   student_deadline?: Date | null;
+  release_at?: Date | null;
   repository?: { id: string; title?: string | null } | null;
   quiz?: { id: string; name?: string | null } | null;
   form?: { id: string; title?: string | null } | null;
@@ -256,7 +259,11 @@ function assignmentMaterials(assignment: ModuleAssignmentRow, staff: boolean, cl
  *
  * A STUDENT gets what their module row renders and nothing else: the
  * assignment's own id and title, its type, its due date and the published
- * pages and decks linked to it (`materials`). Not the target: the
+ * pages and decks linked to it (`materials`), plus where it stands for them
+ * (`availability`), as the web Modules and Assignments pages show it:
+ * SCHEDULED, published with its release date ahead (`opens_at` says when; no
+ * materials until then); PREPARING, a released REPO assignment not in their
+ * repository yet; OPEN otherwise. Not the target: the
  * service's student filter (`openToStudents`) already leaves out an assignment
  * whose quiz or form is a draft, but the target's own name is still not what a
  * student's module row shows. Not weight, extra credit or submission mode
@@ -275,20 +282,44 @@ function assignmentMaterials(assignment: ModuleAssignmentRow, staff: boolean, cl
 function moduleAssignmentSummary(
   assignment: ModuleAssignmentRow,
   staff: boolean,
-  classroomId: string
+  classroomId: string,
+  /** STUDENT only: the assignments already in the caller's own (or team's) repository. */
+  inMyRepo: ReadonlySet<string> = new Set(),
+  now: Date = new Date()
 ) {
   const base = {
     id: assignment.id,
     title: assignment.title,
     type: assignment.type,
     student_deadline: assignment.student_deadline ?? null,
+  };
+  if (!staff) {
+    const inRepo = assignment.type === 'REPO' && inMyRepo.has(assignment.id);
+    const released = isReleased(assignment.release_at, now);
+    if (!released && !inRepo) {
+      return {
+        ...base,
+        availability: 'SCHEDULED' as const,
+        opens_at: assignment.release_at ?? null,
+        materials: [],
+      };
+    }
+    return {
+      ...base,
+      availability:
+        assignment.type === 'REPO' && !inRepo ? ('PREPARING' as const) : ('OPEN' as const),
+      opens_at: null,
+      materials: assignmentMaterials(assignment, staff, classroomId),
+    };
+  }
+  const staffBase = {
+    ...base,
     materials: assignmentMaterials(assignment, staff, classroomId),
   };
-  if (!staff) return base;
 
   const target = assignment.repository ?? assignment.quiz ?? assignment.form ?? null;
   return {
-    ...base,
+    ...staffBase,
     target_id: target?.id ?? null,
     target_title:
       assignment.repository?.title ?? assignment.quiz?.name ?? assignment.form?.title ?? null,
@@ -307,7 +338,9 @@ export const modulesResource: ResourceDefinition = {
     'Ordered curriculum modules, each with its content items (pages, slides, forms) and ' +
     'the assignments that belong to it (REPO, QUIZ or FORM, in display order). Students see ' +
     'published modules, items and assignments only, each assignment by title, type, due ' +
-    'date and its published linked pages/decks (`materials`); staff also see unpublished, ' +
+    'date, its published linked pages/decks (`materials`) and `availability`: SCHEDULED ' +
+    '(published, opens at `opens_at`; no materials yet), PREPARING (a released repo ' +
+    'assignment not in their repository yet) or OPEN; staff also see unpublished, ' +
     'with each assignment’s target, grading fields and draft materials flagged is_draft. ' +
     'Returns {enabled:false} when the classroom hides modules (show_modules).',
   scope: 'read',
@@ -327,10 +360,24 @@ export const modulesResource: ResourceDefinition = {
     // too, have quiz assignments dropped below where quizzes are hidden.
     const staff = isStaff(role);
     const quizzesVisible = await ClassmojiService.entitlement.quizzesVisible(classroomId);
-    const modules = (await ClassmojiService.module.listForClassroom(vars.slug, {
-      includeUnpublished: staff,
-      quizzesVisible,
-    })) as ModuleRow[];
+    const [listed, mySubmissions] = await Promise.all([
+      ClassmojiService.module.listForClassroom(vars.slug, {
+        includeUnpublished: staff,
+        quizzesVisible,
+        // A student also gets what opens later, as SCHEDULED (title and dates).
+        includeScheduled: true,
+      }),
+      // The caller's own submission rows, to tell a repo assignment that is in
+      // their repository from one that is not yet. Read for a student only.
+      staff ? Promise.resolve([]) : findMySubmissions(ctx),
+    ]);
+    const modules = listed as ModuleRow[];
+    const inMyRepo = new Set(
+      mySubmissions.flatMap(submission =>
+        submission.assignment?.id ? [submission.assignment.id] : []
+      )
+    );
+    const now = new Date();
 
     // listForClassroom resolves by BARE slug. The slug is globally unique
     // (schema.prisma: `slug String @unique`), so it agrees with the authorized
@@ -360,7 +407,7 @@ export const modulesResource: ResourceDefinition = {
           .map((item, index) => moduleItemSummary(item, index)),
         assignments: (m.assignments ?? [])
           .filter(a => quizzesVisible || a.type !== 'QUIZ')
-          .map(a => moduleAssignmentSummary(a, staff, classroomId)),
+          .map(a => moduleAssignmentSummary(a, staff, classroomId, inMyRepo, now)),
       })),
     };
   },
