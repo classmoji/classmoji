@@ -15,7 +15,7 @@ import { assertClassroomAccess } from '~/utils/helpers';
 import { loadQuizzesVisible } from '~/utils/classroomProFlag.server';
 import { courseworkMaterials } from '~/utils/courseworkMaterials.server';
 import WeeklyCalendarCard, { type WeekEvent } from './WeeklyCalendarCard';
-import UpNextCard, { type DashboardRepoRow, type UpNextRow } from './UpNextCard';
+import UpNextCard, { type ComingUpRow, type DashboardRepoRow, type UpNextRow } from './UpNextCard';
 import { eventFetchWindow, startOfWeek } from './week';
 import RetroTabsCard, {
   type FeedbackItem,
@@ -32,6 +32,8 @@ interface DashboardData {
    * each with the published pages and decks linked to its assignment.
    */
   upNext: UpNextRow[];
+  /** Published work that has not opened, or is still being set up; at most three. */
+  comingUp: ComingUpRow[];
   /** Staff previewing the dashboard start a quiz from the quiz list instead. */
   viewerIsStudent: boolean;
   /** Whether the class has any published assignment; the Assignments link hides otherwise. */
@@ -151,6 +153,9 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
             git: gitContextFor(classroom),
             repoSubmissions: allRepoAssignments,
             assignments: assignmentListing,
+            // Also what opens later and what is still being set up, for the
+            // card's "Coming up" lines (never Up next: nothing to do yet).
+            includeUnopened: true,
           })
           .catch((error): StudentCourseworkRow[] => {
             console.error('[student dashboard] coursework read failed', courseworkContext, error);
@@ -219,6 +224,24 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       ...row,
       materials: courseworkMaterials(materials.get(row.assignmentId), classSlug),
     }));
+
+    // What the student cannot open yet, as the Assignments page lists it:
+    // being set up first (it is already released), then by opening time.
+    const comingUp: ComingUpRow[] = coursework
+      .filter(row => row.status === 'PREPARING' || row.status === 'SCHEDULED')
+      .sort((a, b) => {
+        if (a.status !== b.status) return a.status === 'PREPARING' ? -1 : 1;
+        return (a.opensAt ?? '').localeCompare(b.opensAt ?? '') || a.title.localeCompare(b.title);
+      })
+      .slice(0, 3)
+      .map(row => ({
+        assignmentId: row.assignmentId,
+        type: row.type,
+        title: row.title,
+        moduleTitle: row.module.title,
+        opensAt: row.opensAt ?? null,
+        teamHref: row.teamHref ?? null,
+      }));
 
     const weekEvents: WeekEvent[] = (weekEventsRaw as Array<Record<string, unknown>>).map(e => ({
       id: String(e.id),
@@ -333,6 +356,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       weekStart: weekStart.format('YYYY-MM-DD'),
       weekEvents,
       upNext,
+      comingUp,
       viewerIsStudent: membership?.role === 'STUDENT',
       feedback,
       team,
@@ -370,6 +394,7 @@ const StudentDashboard = ({ loaderData }: Route.ComponentProps) => {
               </div>
               <UpNextCard
                 rows={d.upNext}
+                comingUp={d.comingUp}
                 classSlug={slug}
                 viewerIsStudent={d.viewerIsStudent}
                 hasAssignments={d.hasAssignments}

@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   waivedAssignmentIdsForStudent: vi.fn(),
   pageLinkFindMany: vi.fn(),
   slideLinkFindMany: vi.fn(),
+  findSelfFormedForStudent: vi.fn(),
 }));
 
 vi.mock('@classmoji/database', () => ({
@@ -37,6 +38,9 @@ vi.mock('@classmoji/database', () => ({
 }));
 vi.mock('../helper.service.ts', () => ({
   findAllAssignmentsForStudent: (...a: unknown[]) => mocks.findAllAssignmentsForStudent(...a),
+}));
+vi.mock('../team.service.ts', () => ({
+  findSelfFormedForStudent: (...a: unknown[]) => mocks.findSelfFormedForStudent(...a),
 }));
 vi.mock('../quizAttempt.service.ts', () => ({
   findForUserByQuizIds: (...a: unknown[]) => mocks.findForUserByQuizIds(...a),
@@ -316,6 +320,168 @@ describe('listForStudent — which assignments appear', () => {
     const rows = await list();
 
     expect(rows.map(r => r.assignmentId).sort()).toEqual(['q-1', 'r-1']);
+  });
+});
+
+describe('listForStudent — work the student cannot open yet (includeUnopened)', () => {
+  const listAll = (over: Record<string, unknown> = {}) =>
+    listForStudent({
+      classroomId: 'class-1',
+      classroomSlug: 'intro-101',
+      userId: 'stu-1',
+      quizzesVisible: true,
+      gitOrgLogin: 'intro-101-org',
+      includeUnopened: true,
+      now: NOW,
+      ...over,
+    });
+
+  beforeEach(() => {
+    mocks.findSelfFormedForStudent.mockResolvedValue([]);
+  });
+
+  it('lists a published repo assignment with its release date ahead as scheduled', async () => {
+    mocks.listForClassroom.mockResolvedValue([
+      assignment('r-1', 'REPO', { release_at: at(26), student_deadline: at(200) }),
+    ]);
+
+    const [row, ...rest] = await listAll();
+
+    expect(rest).toEqual([]);
+    expect(row).toMatchObject({
+      assignmentId: 'r-1',
+      type: 'REPO',
+      title: 'Assignment r-1',
+      status: 'SCHEDULED',
+      opensAt: at(26).toISOString(),
+      deadline: at(200).toISOString(),
+      tracked: false,
+      done: false,
+    });
+  });
+
+  it('a scheduled row carries no link, action, repository or grade', async () => {
+    mocks.listForClassroom.mockResolvedValue([
+      assignment('r-1', 'REPO', { release_at: at(26) }),
+      assignment('q-1', 'QUIZ', { release_at: at(26) }),
+      assignment('f-1', 'FORM', { release_at: at(26) }),
+    ]);
+
+    const rows = await listAll();
+
+    expect(rows.map(r => [r.assignmentId, r.status]).sort()).toEqual([
+      ['f-1', 'SCHEDULED'],
+      ['q-1', 'SCHEDULED'],
+      ['r-1', 'SCHEDULED'],
+    ]);
+    for (const row of rows) {
+      expect(row.href).toBeNull();
+      expect(row.action).toBeNull();
+      expect(row.extend).toBeNull();
+      expect(row.repo).toBeUndefined();
+      expect(row.score).toBeNull();
+      expect(row.teamHref ?? null).toBeNull();
+    }
+    // Nothing was read about the quiz or the form themselves.
+    expect(mocks.quizFindMany).not.toHaveBeenCalled();
+    expect(mocks.formFindMany).not.toHaveBeenCalled();
+  });
+
+  it('lists nothing scheduled that is not ready besides its date', async () => {
+    mocks.listForClassroom.mockResolvedValue([
+      // Its repository is still a draft.
+      assignment('r-draft-repo', 'REPO', {
+        release_at: at(26),
+        repository: { is_published: false },
+      }),
+      // A draft form.
+      assignment('f-draft', 'FORM', { release_at: at(26), form: { status: 'DRAFT' } }),
+      // Not published.
+      assignment('q-unpublished', 'QUIZ', { release_at: at(26), is_published: false }),
+    ]);
+
+    expect(await listAll()).toEqual([]);
+    // And no scheduled quiz where the classroom has no quizzes.
+    mocks.listForClassroom.mockResolvedValue([assignment('q-1', 'QUIZ', { release_at: at(26) })]);
+    expect(await listAll({ quizzesVisible: false })).toEqual([]);
+  });
+
+  it('a released repo assignment not in the repo yet is being set up, and counts as owed', async () => {
+    mocks.listForClassroom.mockResolvedValue([
+      assignment('r-now', 'REPO', { release_at: at(-1) }),
+      assignment('r-undated', 'REPO'),
+    ]);
+
+    const rows = await listAll();
+
+    expect(rows.map(r => [r.assignmentId, r.status, r.tracked])).toEqual(
+      expect.arrayContaining([
+        ['r-now', 'PREPARING', true],
+        ['r-undated', 'PREPARING', true],
+      ])
+    );
+    expect(rows.every(r => r.href === null && r.action === null && !r.repo)).toBe(true);
+    expect(mocks.findSelfFormedForStudent).not.toHaveBeenCalled();
+  });
+
+  it('sends a student without a team to the team page of a self-formed group repository', async () => {
+    const group = { is_published: true, type: 'GROUP', team_formation_mode: 'SELF_FORMED' };
+    mocks.listForClassroom.mockResolvedValue([
+      assignment('r-noteam', 'REPO', { repository: { ...group, slug: 'final' } }),
+      assignment('r-team', 'REPO', { repository: { ...group, slug: 'midterm' } }),
+    ]);
+    mocks.findSelfFormedForStudent.mockResolvedValue([
+      { repository: { slug: 'final' }, team: null },
+      { repository: { slug: 'midterm' }, team: { id: 'team-1' } },
+    ]);
+
+    const rows = await listAll();
+
+    expect(mocks.findSelfFormedForStudent).toHaveBeenCalledWith('class-1', 'stu-1');
+    expect(rows.find(r => r.assignmentId === 'r-noteam')?.teamHref).toBe(
+      '/student/intro-101/repos/final/team'
+    );
+    expect(rows.find(r => r.assignmentId === 'r-team')?.teamHref).toBeNull();
+  });
+
+  it('a repo assignment already in the repo is an ordinary row, whatever its release date', async () => {
+    mocks.listForClassroom.mockResolvedValue([assignment('r-1', 'REPO', { release_at: at(26) })]);
+    mocks.findAllAssignmentsForStudent.mockResolvedValue([submission('ra-1', 'r-1')]);
+
+    const [row] = await listAll();
+
+    expect(row.status).toBe('NOT_SUBMITTED');
+    expect(row.repo?.gitRepoAssignmentId).toBe('ra-1');
+  });
+
+  it("reads only the asking student's rows and teams", async () => {
+    mocks.listForClassroom.mockResolvedValue([
+      assignment('r-1', 'REPO', {
+        repository: {
+          is_published: true,
+          type: 'GROUP',
+          team_formation_mode: 'SELF_FORMED',
+          slug: 'final',
+        },
+      }),
+    ]);
+
+    await listAll({ userId: 'stu-2', classroomId: 'class-2', classroomSlug: 'other-202' });
+
+    expect(mocks.findAllAssignmentsForStudent).toHaveBeenCalledWith('stu-2', 'other-202');
+    expect(mocks.findSelfFormedForStudent).toHaveBeenCalledWith('class-2', 'stu-2');
+    const [query] = mocks.listForClassroom.mock.calls[0];
+    expect(query.where.module).toEqual({ classroom_id: 'class-2' });
+  });
+
+  it('without the flag none of these rows exist', async () => {
+    mocks.listForClassroom.mockResolvedValue([
+      assignment('r-scheduled', 'REPO', { release_at: at(26) }),
+      assignment('r-released', 'REPO'),
+      assignment('q-scheduled', 'QUIZ', { release_at: at(26) }),
+    ]);
+
+    expect(await list()).toEqual([]);
   });
 });
 

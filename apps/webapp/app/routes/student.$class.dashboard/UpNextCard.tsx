@@ -5,8 +5,8 @@ import { IconArrowRight } from '@tabler/icons-react';
 import { IconGithub } from '@classmoji/ui-components';
 import { GitlabLogo } from '~/components/ui/display/GitlabLogo';
 import { useGitWeb } from '~/hooks/useGitWeb';
-import type { StudentCourseworkRow } from '@classmoji/services';
-import { CourseworkTypeTag } from '~/components/features/assignments/CourseworkTags';
+import type { CourseworkType, StudentCourseworkRow } from '@classmoji/services';
+import { CourseworkTypeTag, opensLabel } from '~/components/features/assignments/CourseworkTags';
 import CourseworkMaterials, {
   type CourseworkMaterial,
 } from '~/components/features/assignments/CourseworkMaterials';
@@ -21,6 +21,20 @@ import { useStartQuiz } from '~/components/features/quiz/useStartQuiz';
 export type UpNextRow = Omit<StudentCourseworkRow, 'repo' | 'score'> & {
   materials: CourseworkMaterial[];
 };
+
+/**
+ * Published work the student cannot open yet: scheduled (`opensAt`), or
+ * released and still being set up in their repository (`opensAt` null), where
+ * `teamHref` is set if what is missing is a team. Title and time only.
+ */
+export interface ComingUpRow {
+  assignmentId: string;
+  type: CourseworkType;
+  title: string;
+  moduleTitle: string;
+  opensAt: string | null;
+  teamHref: string | null;
+}
 
 /**
  * A repository row, shown instead of coursework in a class with no published
@@ -40,6 +54,8 @@ export interface DashboardRepoRow {
 interface UpNextCardProps {
   /** What the student still owes, soonest due first (studentCoursework.upNext). */
   rows: UpNextRow[];
+  /** Listed under the rows, muted: nothing to do on them yet. */
+  comingUp?: ComingUpRow[];
   classSlug: string;
   /**
    * Staff previewing this dashboard start a quiz from the quiz list, which
@@ -84,6 +100,7 @@ const secondaryButton =
 
 const UpNextCard = ({
   rows,
+  comingUp = [],
   classSlug,
   viewerIsStudent,
   hasAssignments = true,
@@ -149,12 +166,16 @@ const UpNextCard = ({
       <h2 className="text-xs font-semibold tracking-[0.18em] text-ink-4">UP NEXT</h2>
 
       {rows.length === 0 ? (
-        <div className="flex-1 flex flex-col items-center justify-center text-center py-10">
+        <div
+          className={`flex flex-col items-center justify-center text-center ${
+            comingUp.length > 0 ? 'py-6' : 'flex-1 py-10'
+          }`}
+        >
           <div className="text-sm font-medium text-ink-1">Nothing due</div>
           <div className="text-sm text-ink-3">You’re all caught up.</div>
         </div>
       ) : (
-        <ul className="mt-3 flex-1 flex flex-col">
+        <ul className={`mt-3 flex flex-col ${comingUp.length > 0 ? '' : 'flex-1'}`}>
           {rows.map(row => {
             const due =
               row.deadline && hydrated
@@ -185,6 +206,38 @@ const UpNextCard = ({
             );
           })}
         </ul>
+      )}
+
+      {comingUp.length > 0 && (
+        <div className="mt-3 flex-1">
+          <h3 className="text-xs font-semibold tracking-[0.18em] text-ink-4">COMING UP</h3>
+          <ul className="mt-1 flex flex-col">
+            {comingUp.map(row => (
+              <li
+                key={row.assignmentId}
+                className="flex flex-wrap items-center gap-x-3 gap-y-1.5 py-2.5 border-b border-line/60 last:border-0"
+              >
+                <CourseworkTypeTag type={row.type} />
+                <div className="flex-1 min-w-[9rem]">
+                  <div className="text-sm font-medium text-ink-1 truncate">{row.title}</div>
+                  <div className="text-xs text-ink-3 truncate">{row.moduleTitle}</div>
+                </div>
+                {row.teamHref ? (
+                  <Link
+                    to={row.teamHref}
+                    className="btn btn-sm btn-primary text-white! hover:text-white!"
+                  >
+                    Join a team
+                  </Link>
+                ) : (
+                  <span className="text-xs whitespace-nowrap text-ink-2">
+                    {row.opensAt ? (hydrated ? opensLabel(row.opensAt) : '') : 'Being set up'}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {hasAssignments && (

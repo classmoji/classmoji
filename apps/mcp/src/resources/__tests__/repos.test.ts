@@ -222,4 +222,47 @@ describe('repos resource', () => {
       expect(payload.repositories[0], field).not.toHaveProperty(field);
     }
   });
+
+  it('tells a student where each assignment stands for them', async () => {
+    const LATER = new Date('2999-01-01T19:00:00.000Z');
+    const assignment = (id: string, releaseAt: Date | null) => ({
+      id,
+      title: id,
+      weight: 10,
+      is_published: true,
+      grades_released: false,
+      tokens_per_hour: null,
+      release_at: releaseAt,
+    });
+    findPublished.mockResolvedValue([
+      {
+        ...REPO_ROW,
+        assignments: [
+          assignment('in-repo', LATER),
+          assignment('scheduled', LATER),
+          assignment('released', null),
+        ],
+      },
+    ]);
+    findForUser.mockResolvedValue([
+      {
+        id: 'sub-1',
+        status: 'OPEN',
+        assignment: { id: 'in-repo' },
+        git_repo: { repository_id: 'repo-1', name: 'workshop-team-a' },
+        grades: [],
+        graders: [],
+      },
+    ]);
+
+    const payload = (await reposResource.handler(VARS, ctxFor('STUDENT'), URI)) as ReposPayload;
+    const rows = payload.repositories[0].assignments as Array<Record<string, unknown>>;
+
+    expect(rows.map(a => [a.id, a.availability, a.opens_at])).toEqual([
+      // Already in their repository: open, whatever its release date.
+      ['in-repo', 'OPEN', null],
+      ['scheduled', 'SCHEDULED', LATER],
+      ['released', 'PREPARING', null],
+    ]);
+  });
 });

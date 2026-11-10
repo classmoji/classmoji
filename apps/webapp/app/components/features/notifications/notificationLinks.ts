@@ -68,10 +68,21 @@ export const notificationLink = (
         ? `/${prefix}/${slug}/quizzes`
         : `/${prefix}/${slug}/quizzes/${n.resource_id}`;
     case 'assignment':
-      // Only the student route tree has an assignments list page.
-      return prefix === 'student' ? `/${prefix}/${slug}/assignments` : `/${prefix}/${slug}`;
-    case 'repository':
-      return `/${prefix}/${slug}/repos`;
+      // Only the student route tree has an assignments list page; it opens on
+      // the assignment the notice is about.
+      return prefix === 'student'
+        ? `/${prefix}/${slug}/assignments?assignment=${encodeURIComponent(n.resource_id)}`
+        : `/${prefix}/${slug}`;
+    case 'repository': {
+      // A student is sent to the assignment submitted through the repository
+      // (`metadata.assignment_id`, set when it was published): that page says
+      // when it opens and links to their copy. Without one the repository was
+      // handed out as it is, and their repositories list is where it shows.
+      const assignmentId = (n.metadata as { assignment_id?: unknown } | null)?.assignment_id;
+      return prefix === 'student' && typeof assignmentId === 'string' && assignmentId
+        ? `/${prefix}/${slug}/assignments?assignment=${encodeURIComponent(assignmentId)}`
+        : `/${prefix}/${slug}/repos`;
+    }
     case 'page':
       return `/${prefix}/${slug}/pages/${n.resource_id}`;
     case 'git_repo_assignment':

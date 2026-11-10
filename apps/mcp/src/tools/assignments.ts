@@ -76,7 +76,7 @@
  * updateInClassroom (the web path for the date fields) runs the same
  * notifyAfterUpdate, which ignores grader_deadline and release_at: neither
  * schedules anything in the service (the release above is the caller's
- * step, after the write). release_at is also read by the nightly
+ * step, after the write). release_at is also read by the hourly
  * release cron (findReadyForRelease), the repo-provisioning filter, and the
  * student "locked" view; a null release_at is never auto-released.
  *
@@ -164,12 +164,12 @@ function releaseNote(
       );
     case 'not_released':
       return isPublished
-        ? 'Not in student repositories yet: release_at is in the future, and a published ' +
-            'assignment is not released on its own. After release_at, call assignment_update ' +
-            'is_published true.'
+        ? 'Not in student repositories yet: release_at is in the future. It opens within the ' +
+            'hour of release_at (student repositories are created then if none exist yet); ' +
+            'until then students see it as scheduled.'
         : releaseAt == null
           ? 'Not in student repositories: it is an undated draft. Set is_published true to release it.'
-          : 'Not in student repositories yet: release_at is in the future. It is released that day.';
+          : 'Not in student repositories yet: release_at is in the future. It is released within the hour of it.';
     case 'none_missing':
       return 'No existing student repository is missing it.';
     default:
@@ -231,8 +231,8 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
     'repositories once released and its repository is published (an issue each in ISSUE ' +
     'mode); opened_in_repos counts them, release_note says why none. Releasing grades ' +
     'notifies graded students; moving the student deadline notifies affected students. ' +
-    'release_at is when an unpublished repo ' +
-    'assignment auto-releases (checked nightly); on a quiz, when a published quiz opens. ' +
+    'release_at is when a repo assignment opens in ' +
+    'student repos (checked hourly); on a quiz, when a published quiz opens. ' +
     'closes_at (quiz only) stops new attempts. grades_released is refused on a quiz (its ' +
     'score shows at once). Pass null to clear grader_deadline, release_at or closes_at.\n' +
     'module_id MOVES the assignment to the end of another module (see list_modules; ' +
@@ -571,8 +571,10 @@ export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
     'student repo and closing it submits. Owner only. Created as a draft unless is_published ' +
     'is set. Created published (and released) in a published repo, it is added to the existing ' +
     'student repositories (an issue each in ISSUE mode); opened_in_repos counts them, ' +
-    'release_note says why none. It never creates student repositories: repo_publish does, with ' +
-    'every released assignment. A draft goes out when published, or on its release_at day.',
+    'release_note says why none. Student repositories are created by repo_publish with every ' +
+    'released assignment, or here when the repo is published and has none yet because this is ' +
+    'its first released assignment. A draft goes out when published, or within the hour of ' +
+    'its release_at.',
   scope: 'write',
   roles: OWNER_ONLY,
   inputSchema: {

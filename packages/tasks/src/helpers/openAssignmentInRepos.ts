@@ -12,8 +12,13 @@
  * Every publishing surface calls this one function: the module card's Publish
  * (admin.$class.repos `publishAssignmentAndRepository`), the assignment edit
  * form (admin.$class.assignments create/update) and MCP assignment_create /
- * assignment_update. It never creates a missing student repo (that is Sync)
- * and never publishes the repository (that is repo_publish / the repos page).
+ * assignment_update, and the hourly release for an assignment published ahead
+ * of its date. It never publishes the repository (that is repo_publish / the
+ * repos page). It creates student repos in one case only: the repository has
+ * none at all, because they were waiting for its first release
+ * (`studentReposDue`) and this assignment is that release. Then it hands over
+ * to Sync, which makes the repos with the assignment in them. A repository
+ * that has repos keeps the old rule: a student still without one is Sync's.
  *
  * Scope comes from `classroomId`, the classroom the caller was authorized for:
  * the assignment is loaded through its module's classroom and the repository
@@ -27,6 +32,7 @@
 import { nanoid } from 'nanoid';
 import { ClassmojiService } from '@classmoji/services';
 import { releasedToRepos } from '@classmoji/utils';
+import { syncRepository } from './syncRepository.ts';
 import {
   createGithubRepositoryAssignmentTask,
   type CreateGithubRepositoryAssignmentTaskPayload,
@@ -44,7 +50,11 @@ export type OpenAssignmentSkipReason =
   | 'none_missing';
 
 export interface OpenAssignmentResult {
-  /** Runs queued, one per student or team repo. */
+  /**
+   * Runs queued, one per student or team repo; or, where the repository had
+   * no repos yet, the repos queued for creation (each arrives with the
+   * assignment).
+   */
   queued: number;
   sessionId: string;
   reason?: OpenAssignmentSkipReason;
@@ -70,9 +80,9 @@ export const openAssignmentInExistingRepos = async ({
   sessionId?: string;
   /**
    * The release clock: an assignment counts as released once its
-   * `release_at` is at or before this. The nightly release passes the end of
-   * its day, the clock its drafts path uses, so a row released later that day
-   * is opened that night; every other caller keeps the default.
+   * `release_at` is at or before this. The hourly release passes the clock
+   * its queries ran on, so one run reads one time; every other caller keeps
+   * the default.
    */
   now?: Date;
 }): Promise<OpenAssignmentResult> => {
@@ -102,6 +112,16 @@ export const openAssignmentInExistingRepos = async ({
   if (!classroom) return skip('not_repo');
 
   const repos = await ClassmojiService.gitRepo.findByRepository(classroom.slug, repository.id);
+  // No repo at all: they were waiting for this, the repository's first
+  // release. Sync makes them, each with its released assignments, and marks
+  // those published; a repository nobody can own a repo of yet (a self-formed
+  // one before its first team) queues nothing.
+  if (repos.length === 0) {
+    const synced = await syncRepository({ classroomId, repositoryId: repository.id, sessionId });
+    if (synced.reposToCreate === 0) return skip('none_missing');
+    await ClassmojiService.assignment.update(assignmentId, { is_published: true });
+    return { queued: synced.reposToCreate, sessionId };
+  }
   const missing = repos.filter(
     repo => !repo.assignments?.some(row => row.assignment_id === assignmentId)
   );

@@ -10,6 +10,7 @@ import {
 import {
   gitTerms,
   releasedToRepos,
+  studentReposDue,
   titleToIdentifier,
   resolveTemplateRef,
   repoNamespace,
@@ -218,6 +219,33 @@ export const createRepositoriesTask = task({
 
     if (!repository || !loadedClassroom || !loadedClassroom.git_organization.login) {
       throw new Error(`Unable to load repository or classroom for ${org}/${assignmentTitle}`);
+    }
+
+    // Student repos are made when the repository's first assignment is
+    // released, not when it is published (`studentReposDue`): until then a
+    // student would hold the starter code of work that has not opened. Decided
+    // here, the one task every surface creates repos through (Publish, Sync,
+    // the release job, MCP, a student joining), so none can run ahead of it.
+    // Publishing still publishes: the repository is announced now and its
+    // repos follow at the release. A joiner counts published assignments
+    // only, as below: releasing a draft is not theirs to do.
+    const allAssignments = repository.assignments ?? [];
+    const reposDue = provisionOnly
+      ? allAssignments.length === 0 ||
+        allAssignments.some(
+          assignment => assignment.is_published === true && releasedToRepos(assignment, new Date())
+        )
+      : studentReposDue(allAssignments, new Date());
+    if (!reposDue) {
+      logger.info('No assignment released yet; student repos wait for the first release', {
+        classroomSlug: org,
+        repositoryId: repository.id,
+        requested: uniqueLogins.length,
+      });
+      if (!provisionOnly) {
+        await ClassmojiService.repository.setPublished(repository.id, true, loadedClassroom.id);
+      }
+      return { created: 0, deferred: true };
     }
 
     // A Github org whose installation id went NULL is repaired here, ONCE, before

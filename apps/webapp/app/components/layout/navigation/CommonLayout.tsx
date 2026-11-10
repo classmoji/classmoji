@@ -46,6 +46,8 @@ interface NavVisibility {
   hasPages?: boolean;
   /** Whether the class has any published assignment; hides the student Assignments tab. */
   hasAssignments?: boolean;
+  /** Whether a repository is handed out without an assignment; else students get no Repositories tab. */
+  hasStandaloneRepos?: boolean;
 }
 
 interface CommonLayoutProps {
@@ -147,6 +149,7 @@ const CommonLayout = ({
   const hasPages = navVisibility?.hasPages ?? true;
   // And for Assignments (a student-only entry): no published assignment, no tab.
   const hasAssignments = navVisibility?.hasAssignments ?? true;
+  const hasStandaloneRepos = navVisibility?.hasStandaloneRepos ?? true;
 
   const themeColors = getThemeByKey(classroom?.settings?.theme);
   const themeBackground = isDarkMode ? themeColors.darkBackground : themeColors.background;
@@ -247,6 +250,9 @@ const CommonLayout = ({
     // one Pages entry that replaced them.
     if (item.link === '/pages' && role !== 'OWNER' && (!showPages || !hasPages)) return null;
     if (item.link === '/assignments' && role === 'STUDENT' && !hasAssignments) return null;
+    // A student's repositories are on their assignments; the list is only for
+    // one handed out without an assignment.
+    if (item.link === '/repos' && role === 'STUDENT' && !hasStandaloneRepos) return null;
     if (item.link === '/ask-moji' && !askMojiAvailable) return null;
 
     // Gitlab calls repositories projects.
@@ -311,6 +317,7 @@ const CommonLayout = ({
     if (item.link === '/modules' && role !== 'OWNER' && (!showModules || !hasModules)) return false;
     if (item.link === '/pages' && role !== 'OWNER' && (!showPages || !hasPages)) return false;
     if (item.link === '/assignments' && role === 'STUDENT' && !hasAssignments) return false;
+    if (item.link === '/repos' && role === 'STUDENT' && !hasStandaloneRepos) return false;
     if (item.link === '/ask-moji' && !askMojiAvailable) return false;
 
     return true;
