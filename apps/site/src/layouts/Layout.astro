@@ -10,6 +10,12 @@ const {
   title = 'Classmoji - an open source alternative to Github Classroom',
   description = 'An open source alternative to Github Classroom that teaches where the code lives. Spin up a Github repository for every assignment, with automated workflows, slides, and pages.',
 } = Astro.props;
+
+// The page's one address: the apex (www and http redirect there) with the
+// trailing slash the served URL has (a page is dist/<path>/index.html, and
+// the slash-less form redirects to it). Starlight emits its own for /docs.
+const path = Astro.url.pathname.endsWith('/') ? Astro.url.pathname : `${Astro.url.pathname}/`;
+const canonical = Astro.site ? new URL(path, Astro.site).href : undefined;
 ---
 
 <!doctype html>
@@ -19,6 +25,8 @@ const {
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content={description} />
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+    {canonical && <link rel="canonical" href={canonical} />}
+    {canonical && <meta property="og:url" content={canonical} />}
 
     <!-- Fonts: Mona Sans (UI/body, via fontsource CDN) + Noto Sans (logo wordmark, Google) -->
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />

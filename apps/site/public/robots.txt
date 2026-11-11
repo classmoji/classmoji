@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://classmoji.io/sitemap-index.xml
