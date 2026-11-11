@@ -16,7 +16,7 @@
  * The few exceptions are listed in ALLOWED.
  */
 
-import { inputCapOf } from '@classmoji/utils/input-caps';
+import { capArray, capElements, capKeys, inputCapOf } from '@classmoji/utils/input-caps';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
@@ -187,5 +187,55 @@ describe('arrays and records in client input', () => {
 
   it('lists no exception the walk no longer meets', () => {
     expect([...ALLOWED].filter(where => !findings.includes(where))).toEqual([]);
+  });
+});
+
+describe('the walk itself', () => {
+  /** What the walk flags in `schema`, left out of the real findings above. */
+  function flagged(schema: z.ZodType): string[] {
+    const start = findings.length;
+    walk(schema as unknown as Node, 'probe', new Set());
+    return findings.splice(start);
+  }
+
+  it('flags an array with no maximum, or one checked only after a refinement', () => {
+    expect(flagged(z.object({ a: z.array(z.string()) }))).toEqual(['probe.a (array)']);
+    expect(flagged(z.array(z.string()).min(1))).toEqual(['probe (array)']);
+    expect(
+      flagged(
+        z
+          .array(z.string())
+          .refine(() => true)
+          .max(3)
+      )
+    ).toEqual(['probe (array)']);
+  });
+
+  it('passes an array with a leading maximum, however it is wrapped', () => {
+    expect(
+      flagged(
+        z
+          .array(z.string())
+          .max(3)
+          .refine(() => true)
+      )
+    ).toEqual([]);
+    expect(flagged(z.array(z.string()).min(1).max(3).optional())).toEqual([]);
+    expect(flagged(capArray(z.array(z.string()).max(3), 3).nullish())).toEqual([]);
+  });
+
+  it('flags a record unless capKeys checks it first', () => {
+    const record = () => z.record(z.string(), z.number());
+    expect(flagged(z.object({ r: record() }))).toEqual(['probe.r (record)']);
+    expect(flagged(z.object({ r: capKeys(record(), 5).optional() }))).toEqual([]);
+    expect(
+      flagged(
+        capKeys(
+          record().refine(() => true),
+          5
+        )
+      )
+    ).toEqual([]);
+    expect(flagged(capElements(record(), 50))).toEqual(['probe (record)']);
   });
 });

@@ -300,6 +300,12 @@ describe('wrapHandler', () => {
 
     expect(state.checkedStarted).toBe(0);
     expect(tracker.enter).not.toHaveBeenCalled();
+
+    // The same call, not cancelled, runs the tool once its check passes.
+    const done = await client.callTool({ name: CHECKED, arguments: { value: 'x' } });
+    expect(done.isError).toBeFalsy();
+    expect(state.checkedStarted).toBe(1);
+    expect(tracker.enter).toHaveBeenCalledTimes(1);
     state.checkHold = null;
     await client.close();
   });

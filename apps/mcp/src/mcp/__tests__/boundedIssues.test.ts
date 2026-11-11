@@ -118,7 +118,7 @@ describe('refusals through the SDK', () => {
     return text;
   }
 
-  it('bounds 24,000 bad elements (480,000 issues) to the first 20 and a count', async () => {
+  it('cuts 24,000 bad elements to the first 20 problems and a count', async () => {
     const text = await refusal('t_items', { items: Array.from({ length: 24_000 }, () => ({})) });
     expect(text.match(/items\.\d+\.field_\d+: /g)).toHaveLength(MAX_REPORTED_ISSUES);
     expect(text).toMatch(/, …and 479980 more validation issues not shown$/);
@@ -138,9 +138,15 @@ describe('refusals through the SDK', () => {
     expect(text.length).toBeLessThan(400);
   });
 
-  it('answers a check that fails deep inside nested arrays with bounded text', async () => {
-    const text = await refusal('t_grid', { grid: [Array.from({ length: 24_000 }, () => ({}))] });
-    expect(text.length).toBeLessThanOrEqual(MAX_REPLY_CHARS);
+  it('answers nested arrays zod cannot finish checking with fixed text', async () => {
+    // zod throws on this input (its issues are gathered with one spread per
+    // array); the wrapper answers it as it answers any validation that throws.
+    const value = { grid: [Array.from({ length: 24_000 }, () => ({}))] };
+    expect(() => z.object({ grid: z.array(z.array(twentyFields())) }).safeParse(value)).toThrow(
+      RangeError
+    );
+    const text = await refusal('t_grid', value);
+    expect(text).toBe(`${PREFIX} t_grid: ${UNCHECKED_ARGUMENTS_MESSAGE}`);
   });
 
   it('answers a validation that throws with fixed text, not the error', async () => {
