@@ -94,7 +94,7 @@
       }
     },
 
-    // Unused until the production cutover; Fly serves admin.classmoji.io.
+    // Deployed by deploy-admin-worker in .github/workflows/deploy-fly-prod.yml.
     "production": {
       "name": "classmoji-admin",
       "placement": { "mode": "smart" },
@@ -107,7 +107,9 @@
       "hyperdrive": [
         {
           "binding": "HYPERDRIVE",
-          "id": "HYPERDRIVE_ID_PRODUCTION"
+          // The `classmoji-production` Hyperdrive config (unpooled production
+          // Neon endpoint, caching off, at most 20 origin connections).
+          "id": "a8b8464c51904a2c89a8db6ba2ff8c52"
         }
       ],
       "version_metadata": { "binding": "CF_VERSION_METADATA" },
