@@ -60,6 +60,10 @@ function cloudflareSite() {
 
 // https://astro.build/config
 export default defineConfig({
+  // The canonical origin, for every build (staging's copy points crawlers at
+  // the real page): canonical links and og:url on every page, and Starlight's
+  // sitemap (dist/client/sitemap-index.xml).
+  site: 'https://classmoji.io',
   // Pages are pre-built and served as files; only the contact form
   // (/api/contact) runs code on the server. src/middleware.ts turns off the
   // unused image and island routes Astro adds to any site with an adapter
