@@ -37,7 +37,9 @@ import {
   gitWeb,
   effectiveTokensPerHour,
   isClosed,
+  isReleased,
   openToStudents,
+  scheduledForStudents,
   quizStanding,
   quizAttemptGrade,
   quizPercentageEmoji,
@@ -48,6 +50,7 @@ import {
 import { pagesUrl } from '../emails/escape.ts';
 import * as formResponseService from './formResponse.service.ts';
 import * as helperService from './helper.service.ts';
+import * as teamService from './team.service.ts';
 import * as quizAttemptService from './quizAttempt.service.ts';
 import { netQuizExtensionHours } from './quizGradeItems.service.ts';
 import { waivedAssignmentIdsForStudent } from './quizLateWaiver.service.ts';
@@ -59,8 +62,15 @@ export type CourseworkType = 'REPO' | 'QUIZ' | 'FORM';
  * Where a row stands for this student. REPO rows use NOT_SUBMITTED/SUBMITTED;
  * QUIZ rows NOT_STARTED/IN_PROGRESS/COMPLETED/CLOSED; FORM rows
  * NOT_SUBMITTED/SUBMITTED/CLOSED.
+ *
+ * Two more, only for a caller that asks for them (`includeUnopened`):
+ * SCHEDULED, any type, published with its `release_at` still ahead ("Opens
+ * Tue 2pm"); and PREPARING, a REPO assignment that is released but not in this
+ * student's repo yet (the repo is being made, or they have no team).
  */
 export type CourseworkStatus =
+  | 'SCHEDULED'
+  | 'PREPARING'
   | 'NOT_SUBMITTED'
   | 'SUBMITTED'
   | 'NOT_STARTED'
@@ -113,6 +123,13 @@ export interface StudentCourseworkRow {
   deadline: string | null;
   /** Null for a PUBLIC form that is still open: no per-student state exists. */
   status: CourseworkStatus | null;
+  /** SCHEDULED rows: when the assignment opens (ISO). Absent otherwise. */
+  opensAt?: string | null;
+  /**
+   * PREPARING rows of a self-formed group repository the student has no team
+   * for: where they form or join one. Absent otherwise.
+   */
+  teamHref?: string | null;
   /**
    * False for a PUBLIC form: it records no student, so it has no per-student
    * state. Such a row is listed (under All only), never counted toward
@@ -220,6 +237,13 @@ export interface ListForStudentInput {
    * absent.
    */
   assignments?: CourseworkAssignment[];
+  /**
+   * Also list what the student cannot open yet: SCHEDULED rows (published,
+   * `release_at` ahead) and PREPARING rows (a released REPO assignment not in
+   * their repo yet). Off by default, so a caller that only wants open work
+   * gets exactly the rows it always got.
+   */
+  includeUnopened?: boolean;
   now?: Date;
 }
 
@@ -375,7 +399,15 @@ export const listPublishedAssignments = (classroomId: string) =>
       quiz_id: true,
       form_id: true,
       module: { select: { id: true, title: true } },
-      repository: { select: { is_published: true } },
+      repository: {
+        select: {
+          is_published: true,
+          // Where a student without a team forms one (a PREPARING row).
+          type: true,
+          slug: true,
+          team_formation_mode: true,
+        },
+      },
       form: { select: { status: true } },
     },
   });
@@ -403,6 +435,43 @@ const degraded =
     return empty;
   };
 
+/**
+ * A row for work the student cannot open yet. It carries the assignment's
+ * title, module, due date and, when scheduled, the time it opens, and nothing
+ * else: no link, no action, no repository, no grades. Untracked, so it counts
+ * toward no progress and is never Up next.
+ */
+const unopenedRow = (
+  a: CourseworkAssignment,
+  status: 'SCHEDULED' | 'PREPARING'
+): StudentCourseworkRow => ({
+  assignmentId: a.id,
+  type: a.type as CourseworkType,
+  title: a.title,
+  module: { id: a.module.id, title: a.module.title },
+  isExtraCredit: a.is_extra_credit,
+  deadline: iso(a.student_deadline),
+  status,
+  opensAt: status === 'SCHEDULED' ? iso(a.release_at) : null,
+  tracked: false,
+  done: false,
+  score: null,
+  scoredAt: null,
+  numLateHours: 0,
+  isLateOverride: false,
+  tokensPerHour: 0,
+  extensionHours: 0,
+  submittedAt: null,
+  missing: false,
+  suggestedExtensionHours: 0,
+  extend: null,
+  attemptsUsed: null,
+  maxAttempts: null,
+  href: null,
+  external: false,
+  action: null,
+});
+
 export const listForStudent = async ({
   classroomId,
   classroomSlug,
@@ -412,11 +481,17 @@ export const listForStudent = async ({
   git = null,
   repoSubmissions: givenSubmissions,
   assignments: givenAssignments,
+  includeUnopened = false,
   now = new Date(),
 }: ListForStudentInput): Promise<StudentCourseworkRow[]> => {
-  const assignments = (givenAssignments ?? (await listPublishedAssignments(classroomId))).filter(
-    a => openToStudents(a, now, { quizzesVisible })
-  );
+  const published = givenAssignments ?? (await listPublishedAssignments(classroomId));
+  const assignments = published.filter(a => openToStudents(a, now, { quizzesVisible }));
+  // Quizzes and forms whose Opens date is ahead. (A scheduled REPO assignment
+  // is already in `assignments`: it is listed from publish, and its branch
+  // below reads the date.)
+  const scheduled = includeUnopened
+    ? published.filter(a => a.type !== 'REPO' && scheduledForStudents(a, now, { quizzesVisible }))
+    : [];
 
   const quizIds = assignments.flatMap(a => (a.type === 'QUIZ' && a.quiz_id ? [a.quiz_id] : []));
   const formIds = assignments.flatMap(a => (a.type === 'FORM' && a.form_id ? [a.form_id] : []));
@@ -506,7 +581,30 @@ export const listForStudent = async ({
   const submittedFormIds = new Set(submittedResponses.map(r => r.form_id));
   const pagesBase = pagesUrl();
 
+  // Self-formed group repositories this student has no team for, so a released
+  // assignment not in a repo yet can say "Join a team" rather than "being set
+  // up". Read only where such a row can exist.
+  const teamlessSlugs = new Set<string>();
+  if (
+    includeUnopened &&
+    assignments.some(
+      a =>
+        a.type === 'REPO' &&
+        !submissionByAssignment.has(a.id) &&
+        a.repository?.type === 'GROUP' &&
+        a.repository.team_formation_mode === 'SELF_FORMED'
+    )
+  ) {
+    const selfFormed = await teamService
+      .findSelfFormedForStudent(classroomId, userId)
+      .catch(degraded('self-formed teams', context, []));
+    for (const entry of selfFormed) {
+      if (!entry.team && entry.repository.slug) teamlessSlugs.add(entry.repository.slug);
+    }
+  }
+
   const rows: StudentCourseworkRow[] = [];
+  for (const a of scheduled) rows.push(unopenedRow(a, 'SCHEDULED'));
   for (const a of assignments) {
     const base = {
       assignmentId: a.id,
@@ -521,8 +619,30 @@ export const listForStudent = async ({
 
     if (a.type === 'REPO') {
       const ra = submissionByAssignment.get(a.id);
-      // No submission row yet: no student repo to open, so no row (as before).
-      if (!ra) continue;
+      if (!ra) {
+        // Not in this student's repo yet. For a caller that lists only open
+        // work that is no row (as before). Otherwise it is one of two: its
+        // release date is still ahead, or it is released and the repo (or the
+        // student's team) is not there yet.
+        if (!includeUnopened) continue;
+        if (!isReleased(a.release_at, now)) {
+          rows.push(unopenedRow(a, 'SCHEDULED'));
+          continue;
+        }
+        const repository = a.repository;
+        const needsTeam =
+          repository?.type === 'GROUP' &&
+          repository.team_formation_mode === 'SELF_FORMED' &&
+          !!repository.slug &&
+          teamlessSlugs.has(repository.slug);
+        rows.push({
+          ...unopenedRow(a, 'PREPARING'),
+          // Released work the student owes: counted, unlike a scheduled row.
+          tracked: true,
+          teamHref: needsTeam ? `/student/${classroomSlug}/repos/${repository.slug}/team` : null,
+        });
+        continue;
+      }
       const { repo, late } = repoFields(ra, gitOrgLogin, git, now, classroomTokensPerHour);
       const href = repo.issueUrl ?? repo.repoUrl;
       const submitted = ra.status === 'CLOSED';

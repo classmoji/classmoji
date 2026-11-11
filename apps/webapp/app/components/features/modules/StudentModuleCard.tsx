@@ -42,8 +42,9 @@ const kindOf = (node: ModuleTreeNode): { label: string; icon: Icon } => {
 };
 
 // Assignment rows share one grid with their header: icon, title, status, due, grade, action.
+// The status column fits the longest pill, a scheduled row's "Opens Tue, Nov 10, 10:21 PM".
 const ASSIGNMENT_GRID =
-  'grid grid-cols-[18px_minmax(0,1fr)_9rem_6rem_6rem_7rem] items-center gap-3';
+  'grid grid-cols-[18px_minmax(0,1fr)_13.5rem_6rem_6rem_7rem] items-center gap-3';
 
 /** Which heading a leaf sits under: assignments, quizzes and forms are assignments. */
 const groupOf = (node: ModuleTreeNode): 'Assignments' | 'Content' =>

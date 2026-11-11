@@ -221,6 +221,29 @@ describe('syncRepository — individual', () => {
     expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
   });
 
+  it('creates no repo while every assignment is still to be released', async () => {
+    setRepository({
+      assignments: [
+        { id: 'asg-3', title: 'Part 3', is_published: true, release_at: FUTURE },
+        { id: 'asg-4', title: 'Part 4', is_published: false, release_at: null },
+      ],
+    });
+    mocks.gitRepoFindByRepository.mockResolvedValue([]);
+
+    expect(await sync()).toEqual({ sessionId: 'sess-1', reposToCreate: 0, assignmentsToAdd: 0 });
+    expect(mocks.reposTrigger).not.toHaveBeenCalled();
+    expect(mocks.batchTrigger).not.toHaveBeenCalled();
+    expect(mocks.assignmentUpdate).not.toHaveBeenCalled();
+  });
+
+  it('creates the repos of a repository with no assignments', async () => {
+    setRepository({ assignments: [] });
+    mocks.gitRepoFindByRepository.mockResolvedValue([]);
+
+    expect(await sync()).toMatchObject({ reposToCreate: 2, assignmentsToAdd: 0 });
+    expect(mocks.reposTrigger).toHaveBeenCalledTimes(1);
+  });
+
   it('generates a session id when none is given', async () => {
     const result = await syncRepository({ classroomId: CLASSROOM_ID, repositoryId: 'repo-1' });
     expect(result.sessionId).toEqual(expect.any(String));

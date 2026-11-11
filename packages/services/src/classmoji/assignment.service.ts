@@ -198,6 +198,15 @@ export const findUpcoming = async (classroomId: string, afterDate: Date = new Da
 
 /**
  * Find Assignments ready for release
+ *
+ * Leaves out a draft the release job could do nothing with: its repository is
+ * unpublished and has nobody to make a repo for (an individual repository in a
+ * classroom with no students, or a team repository with no tag). The job only
+ * logged it and moved on, so it came back on every run, for months. It is
+ * picked up again on the first run after a student joins or a tag is set.
+ * A draft on a PUBLISHED repository is always returned: the job publishes it
+ * even with nobody enrolled, so students who join later get it.
+ *
  * @param {Date} [beforeDate] - Only include assignments to release before this date
  * @returns {Promise<Object[]>}
  */
@@ -211,6 +220,18 @@ export const findReadyForRelease = async (beforeDate: Date = new Date()) => {
       is_published: false,
       release_at: {
         lte: beforeDate,
+      },
+      NOT: {
+        repository: {
+          is_published: false,
+          OR: [
+            {
+              type: 'INDIVIDUAL',
+              classroom: { memberships: { none: { role: 'STUDENT' } } },
+            },
+            { type: { not: 'INDIVIDUAL' }, tag_id: null },
+          ],
+        },
       },
     },
     include: {
@@ -229,15 +250,15 @@ export const findReadyForRelease = async (beforeDate: Date = new Date()) => {
 
 /**
  * Published REPO assignments whose `release_at` falls in [since, until], on a
- * published repository: the ones the nightly release puts into the student
+ * published repository: the ones the hourly release puts into the student
  * repos that already exist (#385). `findReadyForRelease` sees drafts only, so
  * an assignment published ahead of a future release date never reached the
  * repos when that date came.
  *
  * Bounded on purpose: `is_published: false` is what drops a draft out of the
- * nightly query once released; a published row has no such flag, so the
+ * hourly query once released; a published row has no such flag, so the
  * window (`since`) is what keeps every past assignment from being re-checked
- * every night. A draft repository is excluded: it has no student repos, and
+ * every run forever. A draft repository is excluded: it has no student repos, and
  * its own publish (`createRepositoriesTask`) carries its released assignments.
  * Same include shape as `findReadyForRelease`.
  */

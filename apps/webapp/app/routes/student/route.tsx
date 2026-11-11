@@ -59,11 +59,14 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       });
     }
 
-    const [hasModules, hasAssignments] = await Promise.all([
+    const [hasModules, hasAssignments, hasStandaloneRepos] = await Promise.all([
       // Students only see published modules — hide the tab when there are none.
       ClassmojiService.module.hasModulesForClassroom(classSlug),
       // Likewise Assignments, for a class run on repositories alone.
       ClassmojiService.studentCoursework.hasPublishedAssignments(classroom.id),
+      // Repositories shows only for a repository handed out without an
+      // assignment: every other one is reached from its assignment.
+      ClassmojiService.repository.hasStandalonePublished(classroom.id),
     ]);
 
     return {
@@ -75,6 +78,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
         hasModules,
         hasPages: pagesNav.hasPages,
         hasAssignments,
+        hasStandaloneRepos,
       },
     };
   } catch {

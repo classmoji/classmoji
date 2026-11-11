@@ -213,12 +213,38 @@ describe('daily release cron with a missing installation id', () => {
     },
   });
 
-  const runCron = (): Promise<unknown> =>
+  const runCron = (payload: unknown = {}): Promise<unknown> =>
     (
       gitRepoAssignment.dailyRepositoryAssignmentsReleaseTask as unknown as {
         run: (p: unknown, ctx: unknown) => Promise<unknown>;
       }
-    ).run({}, { ctx: { run: { tags: [] } } });
+    ).run(payload, { ctx: { run: { tags: [] } } });
+
+  // The job is hourly and an uninstalled app stays uninstalled for weeks: an
+  // error on every run was 24 identical errors a day per org.
+  it('logs the missing app as an error on the 04:01 UTC run only', async () => {
+    const { logger } = await import('@trigger.dev/sdk');
+    const skipLines = (fn: unknown) =>
+      vi
+        .mocked(fn as (...a: unknown[]) => void)
+        .mock.calls.filter(([message]) => String(message).includes('Github App not installed'));
+    mocks.findReadyForRelease.mockResolvedValue([releaseRow('repo-1', 'Lab 1 Getting Started')]);
+    mocks.repairInstallation.mockResolvedValue({ status: 'not-installed' });
+
+    vi.mocked(logger.error).mockClear();
+    vi.mocked(logger.info).mockClear();
+    await runCron({ timestamp: new Date('2026-11-10T12:01:00Z') });
+    expect(skipLines(logger.error)).toHaveLength(0);
+    expect(skipLines(logger.info)).toHaveLength(1);
+    expect(createRepositoriesTriggerAndWait).not.toHaveBeenCalled();
+
+    vi.mocked(logger.error).mockClear();
+    vi.mocked(logger.info).mockClear();
+    await runCron({ timestamp: new Date('2026-11-10T04:01:00Z') });
+    expect(skipLines(logger.error)).toHaveLength(1);
+    expect(skipLines(logger.info)).toHaveLength(0);
+    expect(createRepositoriesTriggerAndWait).not.toHaveBeenCalled();
+  });
 
   it('checks the org once and triggers no repo creation when the app is not installed', async () => {
     mocks.findReadyForRelease.mockResolvedValue([

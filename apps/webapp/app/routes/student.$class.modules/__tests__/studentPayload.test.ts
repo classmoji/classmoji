@@ -68,6 +68,10 @@ const KEYS = {
     'is_published',
     'grades_released',
     'student_deadline',
+    // When a scheduled assignment opens, and whether a released one is still
+    // being set up in the viewer's repository. Both are about the viewer only.
+    'opens_at',
+    'preparing',
     'closes_at',
     'repository_id',
     'repository',
@@ -403,5 +407,83 @@ describe('student modules loader — drafts and grades', () => {
     findAllAssignmentsMock.mockResolvedValue([submissionRow(true)]);
     const after = await load();
     expect(after.raByAssignmentId['asg-repo'].grades).toEqual([{ id: 'grade-1', emoji: 'heart' }]);
+  });
+});
+
+describe('student modules loader — work that has not reached the student yet', () => {
+  const LATER = new Date('2999-01-01T19:00:00Z');
+  const withRelease = (releaseAt: Date | null) => ({
+    ...MODULE,
+    assignments: MODULE.assignments.map(a => ({ ...a, release_at: releaseAt })),
+  });
+  const byId = (data: Awaited<ReturnType<typeof load>>, id: string) =>
+    data.modules[0].assignments.find(a => a.id === id)!;
+
+  it('a scheduled assignment is its title and dates: no quiz, form, page or deck', async () => {
+    listForClassroomMock.mockResolvedValue([withRelease(LATER)]);
+    findAllAssignmentsMock.mockResolvedValue([]);
+
+    const data = await load();
+
+    for (const id of ['asg-repo', 'asg-quiz', 'asg-form']) {
+      const a = byId(data, id);
+      expect(a.opens_at).toEqual(LATER);
+      expect(a.preparing).toBe(false);
+      expect(a.quiz).toBeNull();
+      expect(a.form).toBeNull();
+      expect(a.pages).toEqual([]);
+      expect(a.slides).toEqual([]);
+    }
+    const sent = JSON.stringify(data.modules[0].assignments);
+    expect(sent).not.toContain('page-live');
+    expect(sent).not.toContain('deck-live');
+    expect(sent).not.toContain('quiz-1');
+    expect(sent).not.toContain('check-in');
+    expect(sent).not.toContain('Instructions');
+  });
+
+  it('a repo assignment already in the viewer’s repo is open, whatever its release date', async () => {
+    listForClassroomMock.mockResolvedValue([withRelease(LATER)]);
+    // submissionRow is the viewer's row for asg-repo.
+
+    const repo = byId(await load(), 'asg-repo');
+
+    expect(repo.opens_at).toBeNull();
+    expect(repo.preparing).toBe(false);
+    expect(repo.pages).toHaveLength(1);
+  });
+
+  it('a released repo assignment not in the viewer’s repo yet is being set up', async () => {
+    findAllAssignmentsMock.mockResolvedValue([]);
+
+    const data = await load();
+
+    expect(byId(data, 'asg-repo')).toMatchObject({ opens_at: null, preparing: true });
+    // Only a repo assignment waits on a repository.
+    expect(byId(data, 'asg-quiz').preparing).toBe(false);
+    expect(byId(data, 'asg-form').preparing).toBe(false);
+  });
+
+  it('reads the viewer’s own rows to decide, nobody else’s', async () => {
+    await load();
+
+    expect(findAllAssignmentsMock).toHaveBeenCalledWith('student-1', CLASS_SLUG);
+  });
+
+  it('the teaching team sees neither state', async () => {
+    assertAccessMock.mockResolvedValue({
+      userId: 'teacher-1',
+      classroom: { id: 'class-1', slug: CLASS_SLUG, settings: {} },
+      membership: { role: 'TEACHER' },
+    });
+    listForClassroomMock.mockResolvedValue([withRelease(LATER)]);
+    findAllAssignmentsMock.mockResolvedValue([]);
+
+    const data = await load();
+
+    for (const id of ['asg-repo', 'asg-quiz', 'asg-form']) {
+      expect(byId(data, id)).toMatchObject({ opens_at: null, preparing: false });
+    }
+    expect(byId(data, 'asg-quiz').quiz).toEqual({ id: 'quiz-1' });
   });
 });

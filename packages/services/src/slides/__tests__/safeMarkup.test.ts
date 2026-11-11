@@ -284,8 +284,11 @@ describe('sanitizer: deck markup that stays', () => {
       box: { left: 0, top: 0, width: 100, height: 100 },
       source: '<p>hi</p>',
     });
-    // Kept as is: the same tree, as the parser serializes it.
-    expect(server(block)).toBe(serialized(block));
+    // Kept as is: the same tree, nothing removed. Compared through one
+    // serializer: cheerio's parse5 writes `<` and `>` in attribute values
+    // as they are, the DOM's (jsdom 30, current browsers) as `&lt;`/`&gt;`.
+    expect(serialized(server(block))).toBe(serialized(block));
+    expect(sanitizeServerResult(block).changes).toBe(0);
     expect(both(block)).toContain('srcdoc=');
   });
 

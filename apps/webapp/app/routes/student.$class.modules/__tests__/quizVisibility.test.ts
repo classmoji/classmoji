@@ -176,6 +176,8 @@ describe('modules loader — quizzes appear only when the classroom has them', (
       expect(listForClassroomMock).toHaveBeenCalledWith(CLASS_SLUG, {
         includeUnpublished: false,
         quizzesVisible: true,
+        // What opens later is listed too, as "Opens Tue 2:00 PM".
+        includeScheduled: true,
       });
     }
   );

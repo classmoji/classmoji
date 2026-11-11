@@ -254,6 +254,8 @@ describe('student dashboard loader — Up next', () => {
       git: expect.objectContaining({ login: 'test-org' }),
       repoSubmissions: submissions,
       assignments: [{ id: 'listed' }],
+      // For the card's "Coming up" lines.
+      includeUnopened: true,
     });
     // One read of the submissions, shared with the coursework rows.
     expect(findAllAssignmentsMock).toHaveBeenCalledTimes(1);

@@ -1,5 +1,5 @@
 /**
- * `findPublishedReleasedSince`: what the nightly release cron opens in the
+ * `findPublishedReleasedSince`: what the hourly release cron opens in the
  * student repos that already exist (#385). It must select a PUBLISHED REPO
  * assignment released inside [since, until] on a PUBLISHED repository, and
  * nothing else: not one released before the window (or every past assignment

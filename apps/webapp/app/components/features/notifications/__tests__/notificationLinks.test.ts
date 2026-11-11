@@ -68,8 +68,27 @@ describe('notificationLink — the teacher prefix', () => {
   it('falls back to the class root for an assignment, which only students list', () => {
     expect(notificationLink(notification('assignment'), ['TEACHER'])).toBe(`/teacher/${SLUG}`);
     expect(notificationLink(notification('assignment'), ['STUDENT'])).toBe(
-      `/student/${SLUG}/assignments`
+      `/student/${SLUG}/assignments?assignment=res-1`
     );
+  });
+
+  it('sends a student from a repository notice to the assignment submitted through it', () => {
+    const published = {
+      ...notification('repository', { type: 'REPOSITORY_PUBLISHED' }),
+      metadata: { assignment_id: 'asg 1' },
+    } as unknown as Parameters<typeof notificationLink>[0];
+
+    expect(notificationLink(published, ['STUDENT'])).toBe(
+      `/student/${SLUG}/assignments?assignment=asg%201`
+    );
+    // Staff still land on the repositories they manage.
+    expect(notificationLink(published, ['TEACHER'])).toBe(`/teacher/${SLUG}/repos`);
+  });
+
+  it('sends a student to their repositories when the repository has no assignment', () => {
+    expect(
+      notificationLink(notification('repository', { type: 'REPOSITORY_PUBLISHED' }), ['STUDENT'])
+    ).toBe(`/student/${SLUG}/repos`);
   });
 });
 

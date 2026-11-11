@@ -26,6 +26,13 @@ export interface NavVisibility {
    * default-to-shown contract as hasModules.
    */
   hasAssignments?: boolean;
+  /**
+   * Whether the classroom has a published repository with no published
+   * assignment. A student reaches every other repository from its assignment
+   * (the Assignments page or the module), so their Repositories entry shows
+   * only for these. Same default-to-shown contract as hasModules.
+   */
+  hasStandaloneRepos?: boolean;
 }
 
 export const DEFAULT_NAV_VISIBILITY: NavVisibility = {
@@ -34,6 +41,7 @@ export const DEFAULT_NAV_VISIBILITY: NavVisibility = {
   hasModules: true,
   hasPages: true,
   hasAssignments: true,
+  hasStandaloneRepos: true,
 };
 
 // Settings arrive loosely typed (sanitized to Record<string, unknown>), so the

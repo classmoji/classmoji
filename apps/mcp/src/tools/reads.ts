@@ -204,7 +204,9 @@ export const listReposTool = mirrorResourceTool({
     'project template repo_update edits, and each assignment’s module_id (assignment_update ' +
     'moves it); students see published-only repositories they ' +
     'have a git repo for, with their own submission status per assignment (grades only after ' +
-    'release). Each assignment has tokens_per_hour (its own extension price; null = follows the ' +
+    'release) and its availability (OPEN; SCHEDULED, opening at opens_at; or PREPARING, ' +
+    'released but not in their repository yet). A repository whose assignments are all still ' +
+    'scheduled has no student repositories yet, so it is not listed: see list_modules. Each assignment has tokens_per_hour (its own extension price; null = follows the ' +
     "classroom's default) and effective_tokens_per_hour (what one extension hour costs). Any member.",
 });
 
@@ -301,7 +303,9 @@ export const listModulesTool = mirrorResourceTool({
     'teacher moves a quiz with quiz_update module_id. Staff see ' +
     'unpublished modules, items and assignments too, and for each assignment the repository, ' +
     'quiz or form it points at (target_id), weight and publish state. Students see published ' +
-    'ones only, each assignment by title, type and due date. Every assignment lists its linked ' +
+    'ones only, each assignment by title, type, due date and availability: OPEN, SCHEDULED ' +
+    '(published, opens at opens_at, no materials yet) or PREPARING (a released repo ' +
+    'assignment not in their repository yet). Every assignment lists its linked ' +
     'pages/decks as `materials` ({type, id, title}; students published only, staff all with ' +
     'is_draft). Returns {enabled:false} when the classroom hides modules. Any member.',
 });
