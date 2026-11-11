@@ -28,7 +28,10 @@
    which suits the classroom UI but not an admin console full of numbers. This
    app reads as neutral gray instead: white panels on an off-white page, gray
    hairlines and hover fills. Same tokens, overridden here; nothing else about
-   the design system changes, and dark mode keeps its (already neutral) values. */
+   the design system changes. Dark mode gets the same treatment: neutral
+   near-black instead of the webapp's blue-black. The dark selector must match
+   tokens.css's `html.dark, html[data-theme='dark']` exactly: a bare `.dark` is
+   less specific and loses to it, which silently kept the blue values. */
 :root {
   --bg-page: #fafafa;
   --paper: #fafafa;
@@ -37,7 +40,8 @@
   --line-cool: #e4e4e7;
   --line-strong: #d4d4d8;
 }
-.dark {
+html.dark,
+html[data-theme='dark'] {
   --bg-page: #0a0a0a;
   --paper: #0a0a0a;
   --panel: #131316;

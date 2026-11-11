@@ -10,6 +10,7 @@ import {
   useRouteLoaderData,
 } from 'react-router';
 import { signOut } from '@classmoji/auth/client';
+import { THEME_SCRIPT, useSystemTheme } from '~/hooks/useSystemTheme';
 
 import '@fontsource-variable/mona-sans';
 import '~/styles/tailwind.css';
@@ -25,48 +26,29 @@ export const loader = () => ({
   webappUrl: process.env.WEBAPP_URL ?? 'http://localhost:3000',
 });
 
-/**
- * Pre-paint theme script. Runs before first paint so the page never flashes
- * light-then-dark.
- *
- * Deliberately simpler than the webapp's: that one reads the `cm-tweaks`
- * localStorage blob written by its Tweaks panel (accent picker, UI scale,
- * contrast). This app has no Tweaks panel, so it just follows the OS and fixes
- * the accent at the Classmoji green defined in tokens.css.
- */
-const THEME_SCRIPT = `
-(function () {
-  try {
-    var mq = window.matchMedia('(prefers-color-scheme: dark)');
-    var apply = function (isDark) {
-      var root = document.documentElement;
-      root.setAttribute('data-theme', isDark ? 'dark' : 'light');
-      root.classList.toggle('dark', isDark);
-    };
-    apply(mq.matches);
-    mq.addEventListener('change', function (e) { apply(e.matches); });
-  } catch (e) {}
-})();
-`;
-
-const Document = ({ children }: { children: React.ReactNode }) => (
-  <html lang="en" suppressHydrationWarning>
-    <head>
-      <meta charSet="utf-8" />
-      <meta name="viewport" content="width=device-width, initial-scale=1" />
-      {/* Internal tool with account-takeover powers — keep it out of indexes. */}
-      <meta name="robots" content="noindex, nofollow" />
-      <Meta />
-      <Links />
-      <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
-    </head>
-    <body suppressHydrationWarning>
-      {children}
-      <ScrollRestoration />
-      <Scripts />
-    </body>
-  </html>
-);
+const Document = ({ children }: { children: React.ReactNode }) => {
+  // Follows the OS color scheme; see ~/hooks/useSystemTheme for why the
+  // pre-paint script needs this companion.
+  useSystemTheme();
+  return (
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <meta charSet="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        {/* Internal tool with account-takeover powers — keep it out of indexes. */}
+        <meta name="robots" content="noindex, nofollow" />
+        <Meta />
+        <Links />
+        <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
+      </head>
+      <body suppressHydrationWarning>
+        {children}
+        <ScrollRestoration />
+        <Scripts />
+      </body>
+    </html>
+  );
+};
 
 const App = () => (
   <Document>
