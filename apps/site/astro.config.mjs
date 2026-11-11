@@ -1,4 +1,5 @@
 import { defineConfig } from 'astro/config';
+import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'url';
 import tailwindcss from '@tailwindcss/vite';
 import mdx from '@astrojs/mdx';
@@ -10,16 +11,71 @@ import starlightThemeBlack from 'starlight-theme-black';
 import { satteri } from '@astrojs/markdown-satteri';
 import { legacyHeadingIds } from './src/markdown/headingIds.mjs';
 
+// Two builds of the same site:
+// - Fly (the default, production today): Astro's Node server, apps/site/Dockerfile.
+// - Cloudflare Workers (BUILD_TARGET=cloudflare; staging today): the
+//   @astrojs/cloudflare adapter, which is NOT in package.json. It is installed
+//   on top of a standalone copy of the site by cloudflare/install.sh (see
+//   there for why), so this file loads it only in that branch, and the Fly
+//   build never resolves it. CLOUDFLARE_ENV picks the wrangler.jsonc
+//   environment at build time (dev, staging).
+const isCloudflare = process.env.BUILD_TARGET === 'cloudflare';
+const cloudflareEnv = isCloudflare ? process.env.CLOUDFLARE_ENV ?? '' : '';
+const cloudflareAdapter = isCloudflare ? (await import('@astrojs/cloudflare')).default : null;
+
+/**
+ * Cloudflare builds only: /health (version id for CI's smoke check) and, on
+ * staging, a noindex header on every static file, appended to
+ * dist/client/_headers. The adapter PREPENDS its immutable /_astro/* rule to
+ * that file in its own astro:build:done, so the two hooks may run in either
+ * order; cloudflare/check-build.mjs asserts both rules. The 404 page the
+ * Worker serves comes from the static files too, so it gets the header from
+ * this rule (src/middleware.ts covers what the Worker renders itself).
+ */
+function cloudflareSite() {
+  let clientDir;
+  return {
+    name: 'classmoji:cloudflare-site',
+    hooks: {
+      'astro:config:setup': ({ injectRoute }) => {
+        injectRoute({
+          pattern: '/health',
+          entrypoint: './src/cloudflare/health.ts',
+          prerender: false,
+        });
+      },
+      'astro:config:done': ({ config }) => {
+        clientDir = config.build.client; // dist/client: the static files and _headers
+      },
+      'astro:build:done': async () => {
+        if (cloudflareEnv !== 'staging') return;
+        const headersPath = new URL('./_headers', clientDir);
+        const existing = await readFile(headersPath, 'utf8').catch(() => '');
+        const rule = '/*\n  X-Robots-Tag: noindex\n';
+        await writeFile(headersPath, `${existing}${existing && !existing.endsWith('\n') ? '\n' : ''}${rule}`);
+      },
+    },
+  };
+}
+
 // https://astro.build/config
 export default defineConfig({
   // Pages are pre-built and served as files; only the contact form
-  // (/api/contact) runs code on the Node server. src/middleware.ts turns off the
+  // (/api/contact) runs code on the server. src/middleware.ts turns off the
   // unused image and island routes Astro adds to any site with an adapter
   // (/_image, /_server-islands/*). bodySizeLimit caps request bodies. The
   // contact form's largest post is about 50 KB: every field at its maxlength
   // in 3-byte characters, URL-encoded by a browser without JavaScript (the
-  // page's own script posts multipart, about 17 KB at most).
-  adapter: node({ mode: 'standalone', bodySizeLimit: 64 * 1024 }),
+  // page's own script posts multipart, about 17 KB at most). The contact route
+  // caps its body at the same size itself, which is the only cap on Workers.
+  //
+  // Cloudflare: pages prerender in Node at build time (as on Fly; the Worker
+  // only runs /api/contact and /health), images are optimized at build time,
+  // and there are no sessions (otherwise the adapter adds a KV binding).
+  adapter: isCloudflare
+    ? cloudflareAdapter({ prerenderEnvironment: 'node', imageService: 'compile' })
+    : node({ mode: 'standalone', bodySizeLimit: 64 * 1024 }),
+  ...(isCloudflare ? { session: false } : {}),
   // Astro 7 strips whitespace the JSX way by default ('jsx'), which glues
   // together inline elements in our templates (nav links, footer links, post
   // bylines). Keep the HTML-aware compression the site was written for.
@@ -45,6 +101,9 @@ export default defineConfig({
     starlight({
       title: '🍎 classmoji',
       description: 'Documentation for Classmoji - the git-native LMS for CS education',
+      // The site's (and the app's) icon. Starlight's default is /favicon.svg,
+      // which the site does not have, so the docs pages had no icon.
+      favicon: '/favicon.ico',
       // These keep the docs looking as they did with starlight-theme-black 0.6
       // (with src/styles/docs-classic.css): the header with "Back to main site"
       // and the small-screen bottom-sheet menu, the breadcrumb title without
@@ -199,6 +258,7 @@ export default defineConfig({
     mdx(),
     // React islands: the animated "How it works" demos on the home page.
     react(),
+    ...(isCloudflare ? [cloudflareSite()] : []),
   ],
   server: {
     // Round and easy to remember, and clear of every other app: the webapp is
@@ -212,9 +272,21 @@ export default defineConfig({
   },
   vite: {
     plugins: [tailwindcss()],
+    // Build-time constants for the server code (declared in src/env.d.ts):
+    // which runtime the contact route runs on, and the wrangler environment
+    // (only 'staging' adds noindex headers).
+    define: {
+      __CF_BUILD__: JSON.stringify(isCloudflare),
+      __SITE_ENV__: JSON.stringify(cloudflareEnv),
+    },
     resolve: {
       alias: {
         '~': fileURLToPath(new URL('./src', import.meta.url)),
+        // The Node build has no `cloudflare:workers`; the contact route reads
+        // its bindings from it only on Workers.
+        ...(isCloudflare
+          ? {}
+          : { 'cloudflare:workers': fileURLToPath(new URL('./src/cloudflare/workers-stub.ts', import.meta.url)) }),
       },
     },
   }
