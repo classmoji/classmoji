@@ -1,6 +1,7 @@
 import { Form, Link, useLoaderData, useSearchParams } from 'react-router';
 import { Empty, FilterChips, Pager, Sheet, TABLE_HEAD } from '~/components/ui';
-import { relativeTime } from '~/utils/time';
+import { useNow } from '~/hooks/useNow';
+import { formatDateTime, relativeTime } from '~/utils/time';
 import { loadActivity } from './route.server';
 
 export const loader = loadActivity;
@@ -23,6 +24,7 @@ const ActivityLog = () => {
   const { rows, total, page, pageSize, kinds, actors, actor } = useLoaderData<typeof loader>();
   const [params] = useSearchParams();
   const keep = [...params.entries()].filter(([k]) => k !== 'actor' && k !== 'page');
+  const now = useNow();
 
   return (
     <Sheet className="min-h-[calc(100vh-14rem)]">
@@ -78,9 +80,9 @@ const ActivityLog = () => {
                   <tr key={r.id} className="border-t border-line row-hover">
                     <td
                       className="py-1.5 pr-3 text-ink-3 whitespace-nowrap tabular-nums"
-                      title={new Date(r.at).toLocaleString()}
+                      title={formatDateTime(r.at)}
                     >
-                      {relativeTime(r.at)}
+                      {relativeTime(r.at, now)}
                     </td>
                     <td className="py-1.5 pr-3 whitespace-nowrap">
                       {r.actor ? (

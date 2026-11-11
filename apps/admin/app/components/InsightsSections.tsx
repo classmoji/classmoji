@@ -10,6 +10,7 @@ import {
 } from '~/utils/dashboard';
 import { GROWTH_DEFINITIONS, GROWTH_RANGES, type GrowthSeries } from '~/utils/metricDefinitions';
 import type { GrowthRange } from '~/utils/metricDefinitions';
+import { formatDate, formatNumber } from '~/utils/time';
 import type { InsightsSection, InsightsView } from '~/utils/insights.server';
 
 type Data = InsightsSection;
@@ -71,7 +72,7 @@ const Growth = ({ data }: { data: Extract<Data, { view: 'growth' }> }) => {
           <InfoTip text={GROWTH_DEFINITIONS[series]} />
         </span>
       }
-      description={`${total.toLocaleString()} ${SERIES_LABELS[series].noun} in the last ${GROWTH_RANGES[data.range].label}`}
+      description={`${formatNumber(total)} ${SERIES_LABELS[series].noun} in the last ${GROWTH_RANGES[data.range].label}`}
       aside={
         <div className="inline-flex rounded-lg border border-line p-0.5 text-sm">
           {(Object.keys(SERIES_LABELS) as GrowthSeries[]).map(s => (
@@ -112,7 +113,7 @@ const Activation = ({ data }: { data: Extract<Data, { view: 'activation' }> }) =
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)] items-start">
       <Panel
         title="Instructor activation"
-        description={`Everyone whose first sign-in was since ${new Date(funnel.from).toLocaleDateString()} and who isn't only a student · n = ${funnel.cohortSize}`}
+        description={`Everyone whose first sign-in was since ${formatDate(funnel.from)} and who isn't only a student · n = ${funnel.cohortSize}`}
       >
         {funnel.cohortSize === 0 ? (
           <Empty title="No one in this cohort" hint="Pick a longer range." />
@@ -300,7 +301,7 @@ const Adoption = ({ data }: { data: Extract<Data, { view: 'adoption' }> }) => {
 const Audience = ({ data }: { data: Extract<Data, { view: 'audience' }> }) => (
   <Panel
     title="Email domains"
-    description={`${data.totalUsers.toLocaleString()} people who have signed in, by their email's domain. Country is a guess from the domain ending; .com/.org schools show as Unknown.`}
+    description={`${formatNumber(data.totalUsers)} people who have signed in, by their email's domain. Country is a guess from the domain ending; .com/.org schools show as Unknown.`}
   >
     {data.domains.length === 0 ? (
       <Empty title="No emails yet" />
@@ -335,7 +336,7 @@ const Audience = ({ data }: { data: Extract<Data, { view: 'audience' }> }) => (
                   <td className="py-2 pr-4 text-ink-2">
                     {special || d.country === UNKNOWN_COUNTRY ? '—' : d.country}
                   </td>
-                  <td className="py-2 pr-4 text-right tabular-nums">{d.users.toLocaleString()}</td>
+                  <td className="py-2 pr-4 text-right tabular-nums">{formatNumber(d.users)}</td>
                   <td className="py-2 text-right tabular-nums">{d.instructors}</td>
                 </tr>
               );

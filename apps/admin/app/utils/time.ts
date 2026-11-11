@@ -171,8 +171,14 @@ export const formatWeekRange = (startIso: string, endIso: string, tz = REPORTING
   return `${a} – ${b}`;
 };
 
-/** "2 min", "3 hours", "Yesterday", "Oct 3": how long ago, for activity columns. */
-export const relativeTime = (iso: string | null, now = new Date()): string => {
+/**
+ * "2 min", "3 hours", "3 days", "Oct 3": how long ago, for activity columns.
+ *
+ * `now` is required on purpose. In a component, pass `useNow()`: the server
+ * and the browser render the same text only if they measure from the same
+ * instant (see ~/hooks/useNow).
+ */
+export const relativeTime = (iso: string | null, now: Date): string => {
   if (!iso) return '—';
   const ms = now.getTime() - new Date(iso).getTime();
   if (ms < 60_000) return 'just now';
@@ -182,13 +188,58 @@ export const relativeTime = (iso: string | null, now = new Date()): string => {
   if (h < 24) return `${h} hour${h === 1 ? '' : 's'}`;
   const d = Math.round(h / 24);
   if (d < 14) return `${d} day${d === 1 ? '' : 's'}`;
-  return new Date(iso).toLocaleDateString('en-US', {
+  const sameYear = partsIn(new Date(iso), REPORTING_TZ).year === partsIn(now, REPORTING_TZ).year;
+  return formatDate(iso, {
     month: 'short',
     day: 'numeric',
-    year: new Date(iso).getFullYear() === now.getFullYear() ? undefined : 'numeric',
-    timeZone: REPORTING_TZ,
+    year: sameYear ? undefined : 'numeric',
   });
 };
+
+/**
+ * Format an instant as en-US in REPORTING_TZ, the zone every admin number is
+ * reported in.
+ *
+ * Never call toLocaleString/toLocaleDateString/toLocaleTimeString without a
+ * locale and a zone in render code: the server (a Worker, in UTC, en-US) and
+ * the browser (the viewer's zone and locale) then render different text,
+ * hydration fails, and React re-renders the whole document on the client.
+ * Formatters are cached per options: building one is the expensive part
+ * (see formatterFor above).
+ */
+const dateFormatters = new Map<string, Intl.DateTimeFormat>();
+export const formatDate = (
+  value: string | number | Date,
+  options: Intl.DateTimeFormatOptions = { dateStyle: 'medium' }
+): string => {
+  const key = JSON.stringify(options);
+  let fmt = dateFormatters.get(key);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat('en-US', { ...options, timeZone: REPORTING_TZ });
+    dateFormatters.set(key, fmt);
+  }
+  return fmt.format(new Date(value));
+};
+
+/**
+ * "Nov 10, 2026, 10:07 PM EST": a full timestamp, zone named.
+ *
+ * Joined by hand from a date-only and a time-only format. One format with
+ * both date and time fields is joined differently by engine: ", " in workerd
+ * and V8, " at " in JavaScriptCore (Safari), which would fail hydration
+ * again. Each half on its own comes out the same in all three.
+ */
+const TIME_WITH_ZONE: Intl.DateTimeFormatOptions = {
+  hour: 'numeric',
+  minute: '2-digit',
+  timeZoneName: 'short',
+};
+export const formatDateTime = (value: string | number | Date): string =>
+  `${formatDate(value)}, ${formatDate(value, TIME_WITH_ZONE)}`;
+
+/** "1,234": numbers always in en-US, for the same reason as formatDate. */
+const numberFormat = new Intl.NumberFormat('en-US');
+export const formatNumber = (n: number): string => numberFormat.format(n);
 
 /** 'YYYY-MM-DD' of the calendar day containing `instant`, in `tz`. */
 export const localDate = (instant: Date, tz = REPORTING_TZ): string => {

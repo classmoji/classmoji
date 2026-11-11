@@ -6,6 +6,7 @@
 import { Form, Link, useLocation, useSearchParams } from 'react-router';
 import { IconInfoCircle, IconSearch } from '@tabler/icons-react';
 import { useDebouncedSearch } from '~/hooks/useDebouncedSearch';
+import { formatNumber } from '~/utils/time';
 
 // ───────── URL helpers ─────────
 
@@ -137,7 +138,7 @@ export const FilterChips = ({ param, options }: { param: string; options: ChipOp
             {o.label}
             {o.count !== undefined ? (
               <span className={`ml-1 tabular-nums ${on ? 'opacity-70' : 'text-ink-4'}`}>
-                {o.count.toLocaleString()}
+                {formatNumber(o.count)}
               </span>
             ) : null}
           </Link>
@@ -196,7 +197,7 @@ export const Pager = ({
   return (
     <div className="flex items-center justify-between pt-3 px-1 text-xs text-ink-3">
       <span className="tabular-nums">
-        {from.toLocaleString()}–{to.toLocaleString()} of {total.toLocaleString()}
+        {formatNumber(from)}–{formatNumber(to)} of {formatNumber(total)}
       </span>
       <div className="flex gap-1.5">
         {page > 1 ? (
