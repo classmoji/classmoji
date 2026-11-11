@@ -1,0 +1,84 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  // apps/site (classmoji.io marketing + docs) as a Cloudflare Worker
+  // (BUILD_TARGET=cloudflare; the Fly build ignores this file). The
+  // @astrojs/cloudflare adapter builds with the Cloudflare Vite plugin, which
+  // flattens ONE environment into dist/server/wrangler.json, so the
+  // environment is picked at BUILD time with CLOUDFLARE_ENV (see
+  // cloudflare/build.sh and the deploy-site-worker job in
+  // .github/workflows/deploy-fly-staging.yml), and deploys and `wrangler dev`
+  // run against that generated file (`-c dist/server/wrangler.json`).
+  //
+  // `main` and the ASSETS binding (dist/client) are injected by the adapter.
+  // Every page is a static file: a request matching one never runs the
+  // Worker. The Worker answers /api/contact, /health and the 404 page.
+  // `not_found_handling` stays at its default: set, it would send navigation
+  // requests (a no-JS form post among them) to the assets and never to the
+  // Worker.
+  //
+  // Deliberately NOT a deployed name, and bindingless (apps/admin's
+  // convention): a build or deploy without an environment lands on a
+  // throwaway Worker nothing routes to.
+  "name": "classmoji-site-unconfigured",
+  // At most the date the pinned workerd (1.20261019.1, via wrangler 4.152.0)
+  // supports, or local runs warn and fall back.
+  "compatibility_date": "2026-10-19",
+  // process.env is populated from vars and secrets (on by default with
+  // nodejs_compat at this date): the contact route reads RESEND_API_KEY there.
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "observability": {
+    "enabled": true
+  },
+
+  // Secrets are not declared here. CI pushes RESEND_API_KEY from Infisical
+  // (`sta` for staging) with `wrangler secret bulk` after each deploy (the
+  // deploy-site-worker job). Locally, wrangler reads .dev.vars next to the
+  // config it runs, i.e. dist/server/.dev.vars (gitignored with dist/; a
+  // rebuild removes it), if you want the form to send.
+  //
+  // No production environment yet: classmoji.io is still served by Fly
+  // (apps/site/fly.toml). The production switch adds env.production with the
+  // classmoji.io and www routes together with its DNS step; a `wrangler deploy`
+  // with a custom-domain route takes over an existing DNS record without
+  // asking, so the route must not exist before that step.
+  "env": {
+    // LOCAL ONLY: `CLOUDFLARE_ENV=dev npm run build:cf`, then
+    // `npx wrangler dev -c dist/server/wrangler.json` in the build copy (see
+    // cloudflare/build.sh). Never deployed: no routes and workers_dev off.
+    "dev": {
+      "name": "classmoji-site-dev",
+      "workers_dev": false,
+      "ratelimits": [
+        { "name": "CONTACT_RATE_LIMIT", "namespace_id": "2611001", "simple": { "limit": 3, "period": 60 } },
+        { "name": "CONTACT_RATE_LIMIT_GLOBAL", "namespace_id": "2611002", "simple": { "limit": 10, "period": 60 } }
+      ],
+      "version_metadata": { "binding": "CF_VERSION_METADATA" }
+    },
+
+    "staging": {
+      "name": "classmoji-site-staging",
+      "routes": [
+        {
+          "pattern": "site.staging.classmoji.io",
+          "custom_domain": true
+        }
+      ],
+      // The contact form's limits beyond the in-memory hourly one (per
+      // isolate): 3 a minute per address (IPv6 by its /64), 10 a minute for
+      // the whole site. Counted per Cloudflare location, which is enough to
+      // stop a flood from eating the Resend quota. Namespace ids are ours to
+      // pick; unique per limiter in the account.
+      "ratelimits": [
+        { "name": "CONTACT_RATE_LIMIT", "namespace_id": "2611101", "simple": { "limit": 3, "period": 60 } },
+        { "name": "CONTACT_RATE_LIMIT_GLOBAL", "namespace_id": "2611102", "simple": { "limit": 10, "period": 60 } }
+      ],
+      // /health reports the version id (x-worker-version) so CI can tell
+      // the new deploy is the one answering.
+      "version_metadata": { "binding": "CF_VERSION_METADATA" },
+      "observability": {
+        "enabled": true
+      }
+    }
+  }
+}
