@@ -681,3 +681,12 @@ describe('feedback_delete', () => {
     expect(prismaCallsFor('feedbackPost', 'update')).toHaveLength(0);
   });
 });
+
+describe('feedback_write title length', () => {
+  it('counts characters the way the service does (an emoji is two)', () => {
+    const title = feedbackWriteTool.inputSchema.title;
+    expect(title.safeParse('🎉🎉').success).toBe(true);
+    expect(title.safeParse('ab').success).toBe(false);
+    expect(title.safeParse('x'.repeat(121)).success).toBe(false);
+  });
+});

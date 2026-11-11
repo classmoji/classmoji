@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { toJSONSchema } from 'zod/v4-mini';
-import { isoDateTime, uuidString } from '../zodFormats.ts';
+import { isoDateTime, minUtf16Length, uuidString } from '../zodFormats.ts';
 
 /**
  * What each helper accepts is what our dates and ids were validated with
@@ -120,5 +120,29 @@ describe('uuidString', () => {
       format: 'uuid',
       description: 'Id',
     });
+  });
+});
+
+describe('minUtf16Length', () => {
+  const query = () => minUtf16Length(z.string().max(500), 2);
+
+  it('counts the way JavaScript does: one emoji is two', () => {
+    expect(query().safeParse('🐍').success).toBe(true);
+    expect(query().safeParse('ab').success).toBe(true);
+    expect(query().safeParse('a').success).toBe(false);
+    expect(query().safeParse('').success).toBe(false);
+    expect(minUtf16Length(z.string(), 3).safeParse('🎉🎉').success).toBe(true);
+  });
+
+  it('refuses with the issue .min() raises, and keeps the schema’s other checks', () => {
+    const issues = (r: z.ZodSafeParseResult<string>) => (r.success ? [] : r.error.issues);
+    expect(issues(query().safeParse('a'))).toEqual(issues(z.string().min(2).safeParse('a')));
+    expect(issues(query().safeParse('x'.repeat(501)))[0]?.code).toBe('too_big');
+  });
+
+  it('publishes minLength like .min()', () => {
+    expect(published({ q: query().describe('Q') }).properties.q).toEqual(
+      published({ q: z.string().min(2).max(500).describe('Q') }).properties.q
+    );
   });
 });

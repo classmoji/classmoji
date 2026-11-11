@@ -12,6 +12,10 @@
  *   requires seconds and an `HH:MM` offset. Published as
  *   `format: date-time`, with no pattern.
  *
+ * And `minUtf16Length()`: a minimum length counted the way JavaScript counts
+ * (UTF-16 units). zod 4's `.min()` counts code points, so `.min(2)` would
+ * refuse one emoji, which a `.length` check accepts.
+ *
  * Functions, so each use is its own schema instance (a JSON Schema export can
  * publish a schema met twice in one tool as a `$ref`).
  *
@@ -42,4 +46,25 @@ export function uuidString() {
  */
 export function isoDateTime() {
   return z.stringFormat('datetime', value => DATETIME_WITH_OFFSET.test(value));
+}
+
+/**
+ * `schema` with at least `min` UTF-16 units (JavaScript's `.length`: an emoji
+ * is 2), where zod 4's `.min()` would count code points. Published as
+ * `minLength`, and refused with the issue `.min()` raises.
+ */
+export function minUtf16Length<T extends z.ZodString>(schema: T, min: number): T {
+  return schema
+    .check(payload => {
+      if (payload.value.length < min) {
+        payload.issues.push({
+          code: 'too_small',
+          origin: 'string',
+          minimum: min,
+          inclusive: true,
+          input: payload.value,
+        });
+      }
+    })
+    .meta({ minLength: min }) as T;
 }

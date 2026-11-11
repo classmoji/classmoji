@@ -1403,3 +1403,12 @@ describe('the schemas the registry publishes', () => {
     );
   });
 });
+
+describe('content_search query length', () => {
+  it('takes a two-character query, one emoji included, and refuses one character', () => {
+    const query = contentSearchTool.inputSchema.query;
+    expect(query.safeParse('🐍').success).toBe(true);
+    expect(query.safeParse('db').success).toBe(true);
+    expect(query.safeParse('d').success).toBe(false);
+  });
+});

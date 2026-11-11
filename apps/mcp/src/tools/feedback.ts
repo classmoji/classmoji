@@ -26,7 +26,7 @@
  */
 
 import { z } from 'zod';
-import { uuidString } from '@classmoji/utils/zod-formats';
+import { minUtf16Length, uuidString } from '@classmoji/utils/zod-formats';
 import {
   ClassmojiService,
   FEEDBACK_CATEGORIES,
@@ -311,7 +311,9 @@ export const feedbackWriteTool: ToolDefinition<WriteArgs> = {
     action: z.enum(['post', 'comment', 'vote', 'follow']).describe('What to do'),
     // The service's own limits (it trims and collapses whitespace first, and
     // caps comments at 3000), so a title it would refuse never spends a token.
-    title: z.string().min(3).max(120).optional().describe('post: the title (3 to 120 characters)'),
+    title: minUtf16Length(z.string().max(120), 3)
+      .optional()
+      .describe('post: the title (3 to 120 characters)'),
     body: z
       .string()
       .max(5000)
