@@ -22,6 +22,10 @@ apps/slides/build/
 packages/tasks/repos/
 apps/pages/build
 apps/admin/build
+apps/admin/.wrangler
+# wrangler dev secrets (any Worker)
+.dev.vars
+.dev.vars.*
 
 # Local GitHub Classroom export dumps (contain real student logins; used only as local import fixtures)
 /classrooms/
@@ -35,3 +39,6 @@ apps/*/fly.autostop.generated.toml
 # Local Python venv for the team-set solver (packages/tasks/python)
 packages/tasks/python/.venv/
 __pycache__/
+
+# Prisma's Workers client (packages/database/schema.prisma, generator workerClient)
+packages/database/generated/

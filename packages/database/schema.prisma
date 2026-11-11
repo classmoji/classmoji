@@ -2,6 +2,19 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// The client Cloudflare Workers builds use instead of `@prisma/client`
+// (`classmojiWorkerSwaps` in @classmoji/workers/vite aliases it in): no query
+// engine binary, a WASM query compiler, and a driver adapter per request
+// (`runWithPrisma` in index.ts). Node services never load it; Dockerfiles and
+// the Trigger build generate only `client` (`--generator client`).
+generator workerClient {
+  provider     = "prisma-client"
+  output       = "./generated/worker"
+  runtime      = "workerd"
+  moduleFormat = "esm"
+  engineType   = "client"
+}
+
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")

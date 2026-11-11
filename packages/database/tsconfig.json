@@ -1,4 +1,14 @@
 {
   "extends": "../../tsconfig.base.json",
-  "include": ["index.js", "index.ts", "gitIdentity.ts", "scripts/**/*.ts"]
+  "include": [
+    "index.js",
+    "index.ts",
+    "gitIdentity.ts",
+    "requestScope.ts",
+    "requestContext.ts",
+    "pgAdapter.ts",
+    "scripts/**/*.ts",
+    "__tests__/**/*.ts",
+    "vitest.config.ts"
+  ]
 }

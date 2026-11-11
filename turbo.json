@@ -108,7 +108,15 @@
     "admin:start": {
       "dependsOn": ["^db:generate"]
     },
-    "db:generate": {},
+    // Never cached: prisma generate writes the Node client to the root
+    // node_modules/.prisma (outside the package, so turbo can't restore it)
+    // and the Workers client to packages/database/generated. A cache hit used
+    // to restore neither, leaving a stale client and a missing
+    // generated/worker (admin's Cloudflare build fails without it). It takes
+    // a few seconds.
+    "db:generate": {
+      "cache": false
+    },
     "db:start": {},
     "db:deploy": {
       "cache": false

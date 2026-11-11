@@ -234,6 +234,9 @@ export default defineConfig({
       prismaExtension({
         schema: '../database/schema.prisma',
         mode: 'legacy',
+        // Only the Node client. schema.prisma's `workerClient` generator is
+        // the Cloudflare Workers client, which the worker never loads.
+        clientGenerator: 'client',
       }),
       aptGet({
         // git-lfs: `gh-create_git_repo` copies templates that keep their

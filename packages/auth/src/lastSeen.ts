@@ -1,4 +1,7 @@
 import getPrisma from '@classmoji/database';
+// eslint's resolver misses this subpath export; TypeScript resolves it.
+// eslint-disable-next-line import/no-unresolved
+import { waitUntil } from '@classmoji/database/wait-until';
 
 /**
  * Records that a person used the app themselves: `last_seen_at` now,
@@ -10,7 +13,9 @@ import getPrisma from '@classmoji/database';
  * Never for an impersonated session: an admin viewing as someone is not that
  * person being active. Throttled per process to one write per user every
  * THROTTLE_MS, and never awaited by callers: a failed write must not fail a
- * request.
+ * request. On Cloudflare Workers the write is handed to the request's
+ * waitUntil, or the runtime could cancel it once the response is sent while
+ * the throttle already counts it as done.
  */
 const THROTTLE_MS = 10 * 60 * 1000;
 const lastWrite = new Map<string, number>();
@@ -39,11 +44,12 @@ const write = (userId: string) => {
   const prisma = getPrisma();
   // The day row is what weekly-active and retention count; the day is the
   // calendar day in the admin app's reporting zone (REPORTING_TZ there).
-  Promise.all([
+  const writes = Promise.all([
     prisma.$executeRaw`UPDATE "users" SET "last_seen_at" = now(), "first_sign_in_at" = COALESCE("first_sign_in_at", now()) WHERE "id" = ${userId}`,
     prisma.$executeRaw`INSERT INTO "user_activity_days" ("user_id", "day") VALUES (${userId}, (now() AT TIME ZONE 'America/New_York')::date) ON CONFLICT DO NOTHING`,
   ]).catch((error: unknown) => {
     lastWrite.delete(userId);
     console.warn('[auth] noteSeen failed:', error);
   });
+  waitUntil(writes);
 };
