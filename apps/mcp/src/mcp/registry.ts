@@ -36,13 +36,17 @@
  * 'read'); they get the identical enforcement pipeline.
  */
 
-import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { UriTemplate } from '@modelcontextprotocol/sdk/shared/uriTemplate.js';
-import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
+import {
+  McpServer,
+  ProtocolError,
+  ProtocolErrorCode,
+  ResourceTemplate,
+  UriTemplate,
+} from '@modelcontextprotocol/server';
 import { ClassmojiService } from '@classmoji/services';
 import { ASK_MOJI_CLIENT_ID } from '@classmoji/auth/mcp-token';
 import type { Role } from '@prisma/client';
-import { z, type ZodRawShape } from 'zod';
+import type { z } from 'zod';
 import type { Viewer } from '../auth/resolveViewer.ts';
 import { resolveClassroomContext, type ClassroomContext } from '../authz/classroomContext.ts';
 import { assertMutationAllowed, canEnterClassroom, withinRoleCeiling } from '../authz/pure.ts';
@@ -50,7 +54,7 @@ import { ToolError, type ToolErrorKind } from './errors.ts';
 import { DEFAULT_RATE_LIMIT, tryConsume, type RateLimitConfig } from './rateLimit.ts';
 import { localizePayload, localizeToolResult, renderZone } from './localTimes.ts';
 import { auditRead, type ReadAudit } from './audit.ts';
-import { withBoundedIssues } from './boundedIssues.ts';
+import { toolInputSchema, type ToolInputSchema } from './toolInputSchema.ts';
 import { MAX_TOOL_INPUT_ELEMENTS, type HandlerTracker } from './inputLimits.ts';
 
 export type Scope = 'read' | 'write';
@@ -86,7 +90,7 @@ export interface ToolDefinition<Args = Record<string, unknown>> {
    * route-derived tiers from plan §4.2 — never guess.
    */
   roles: readonly Role[] | null;
-  /** Zod raw shape (v1.x SDK registerTool style). */
+  /** One zod schema per argument; registered as `z.object(shape)` (toolInputSchema.ts). */
   inputSchema: ToolInputShape;
   /**
    * MCP behavioral hints surfaced to clients (tools/list `annotations`).
@@ -137,8 +141,9 @@ export interface ToolDefinition<Args = Record<string, unknown>> {
  *
  * Error mapping for resource reads (there is no `isError` result shape for
  * resources, so failures become JSON-RPC errors — see RESOURCE_ERROR_CODES):
- *   invalid_params → -32602, not_found → -32002 (MCP resource-not-found),
- *   forbidden → -32003, rate_limited → -32005, internal → -32603.
+ *   invalid_params → -32602, not_found → -32602 (the MCP spec's code for an
+ *   unknown resource; data.kind says 'not_found'), forbidden → -32003,
+ *   rate_limited → -32005, internal → -32603.
  */
 export interface ResourceDefinition {
   /** Unique resource name (snake/kebab, e.g. 'roster'). */
@@ -367,12 +372,12 @@ function wrapHandler(def: ToolDefinition<never>, viewer: Viewer, tracker?: Handl
   const run = runHandler(def, viewer);
   return async (
     args: Record<string, unknown>,
-    extra?: { signal?: AbortSignal }
+    ctx?: { mcpReq?: { signal?: AbortSignal } }
   ): Promise<ToolResult> => {
-    // The SDK aborts a request's signal when its transport closes; the tracker
-    // refuses once the response has closed. Either way the answer could not
-    // be sent, so the tool does not run.
-    if (extra?.signal?.aborted) return REQUEST_CLOSED_RESULT;
+    // The SDK aborts a request's signal (ctx.mcpReq.signal) when its transport
+    // closes; the tracker refuses once the response has closed. Either way
+    // the answer could not be sent, so the tool does not run.
+    if (ctx?.mcpReq?.signal?.aborted) return REQUEST_CLOSED_RESULT;
     if (tracker && !tracker.enter()) return REQUEST_CLOSED_RESULT;
     try {
       return await run(args);
@@ -439,18 +444,20 @@ function runHandler(def: ToolDefinition<never>, viewer: Viewer) {
 
 /** JSON-RPC error codes for resource-read failures (see ResourceDefinition doc). */
 const RESOURCE_ERROR_CODES: Record<ToolErrorKind, number> = {
-  invalid_params: ErrorCode.InvalidParams,
-  not_found: -32002, // MCP convention: resource not found
+  invalid_params: ProtocolErrorCode.InvalidParams,
+  // The MCP spec answers an unknown resource with -32602 (the SDK sends any
+  // -32002 as -32602 too); data.kind still says 'not_found'.
+  not_found: ProtocolErrorCode.InvalidParams,
   forbidden: -32003,
   rate_limited: -32005,
-  internal: ErrorCode.InternalError,
+  internal: ProtocolErrorCode.InternalError,
 };
 
-/** Serialize a caught error into an McpError (resources have no isError result). */
-function toResourceError(error: unknown, resourceName: string): McpError {
-  if (error instanceof McpError) return error;
+/** Serialize a caught error into a ProtocolError (resources have no isError result). */
+function toResourceError(error: unknown, resourceName: string): ProtocolError {
+  if (error instanceof ProtocolError) return error;
   if (error instanceof ToolError) {
-    return new McpError(RESOURCE_ERROR_CODES[error.kind], error.message, {
+    return new ProtocolError(RESOURCE_ERROR_CODES[error.kind], error.message, {
       kind: error.kind,
       ...(error.code ? { code: error.code } : {}),
       ...(error.data ?? {}),
@@ -458,7 +465,7 @@ function toResourceError(error: unknown, resourceName: string): McpError {
   }
   // Unknown failure: log server-side, return a generic message (no internals).
   console.error(`[mcp] unhandled error in resource '${resourceName}':`, error);
-  return new McpError(ErrorCode.InternalError, 'Internal server error');
+  return new ProtocolError(ProtocolErrorCode.InternalError, 'Internal server error');
 }
 
 /** Coerce SDK template variables (string | string[]) to plain strings. */
@@ -620,21 +627,17 @@ export const SERVER_INSTRUCTIONS =
   'raw UTC clock time to a user as if it were local.';
 
 /**
- * The zod object each tool's input is validated with: the same `z.object(shape)`
- * the SDK would build from the raw shape, reporting a bounded set of issues
- * (boundedIssues.ts). Built once per tool and shared, read-only, by every
- * request's server. An empty shape is passed through as it is: the SDK builds
- * those with zod 4 mini, and they have nothing to report anyway.
+ * The schema each tool's input is registered with: `z.object(shape)`, behind
+ * a Standard Schema that reports a bounded set of issues and publishes its
+ * JSON Schema built once (toolInputSchema.ts). Built once per tool and
+ * shared, read-only, by every request's server; an empty shape too.
  */
-const inputSchemas = new Map<string, ZodRawShape | z.ZodObject<ZodRawShape>>();
+const inputSchemas = new Map<string, ToolInputSchema>();
 
-function inputSchemaFor(def: ToolDefinition<never>): ZodRawShape | z.ZodObject<ZodRawShape> {
+function inputSchemaFor(def: ToolDefinition<never>): ToolInputSchema {
   let schema = inputSchemas.get(def.name);
   if (!schema) {
-    schema =
-      Object.keys(def.inputSchema).length === 0
-        ? def.inputSchema
-        : withBoundedIssues(z.object(def.inputSchema));
+    schema = toolInputSchema(def.inputSchema);
     inputSchemas.set(def.name, schema);
   }
   return schema;

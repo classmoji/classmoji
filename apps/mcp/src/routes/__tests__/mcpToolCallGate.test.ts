@@ -11,7 +11,7 @@
 
 import { randomBytes } from 'node:crypto';
 import Fastify from 'fastify';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MCP_BODY_LIMIT_BYTES } from '../../bodyLimit.ts';
@@ -40,15 +40,19 @@ vi.mock('../../mcp/registry.ts', () => ({
   buildMcpServer: vi.fn(() => {
     mocks.servers += 1;
     const server = new McpServer({ name: 'test', version: '0' });
-    server.registerTool('t_any', { inputSchema: { items: z.array(z.unknown()) } }, async () => {
-      mocks.calls += 1;
-      if (mocks.hold) await mocks.hold;
-      return { content: [{ type: 'text', text: 'ran' }] };
-    });
+    server.registerTool(
+      't_any',
+      { inputSchema: z.object({ items: z.array(z.unknown()) }) },
+      async () => {
+        mocks.calls += 1;
+        if (mocks.hold) await mocks.hold;
+        return { content: [{ type: 'text', text: 'ran' }] };
+      }
+    );
     // page_asset_upload's shape: the file travels as one base64 string.
     server.registerTool(
       't_upload',
-      { inputSchema: { filename: z.string(), data_base64: z.string() } },
+      { inputSchema: z.object({ filename: z.string(), data_base64: z.string() }) },
       async ({ data_base64 }) => {
         mocks.calls += 1;
         return { content: [{ type: 'text', text: `received ${data_base64.length}` }] };
@@ -56,7 +60,7 @@ vi.mock('../../mcp/registry.ts', () => ({
     );
     server.registerTool(
       'file_upload_status',
-      { inputSchema: { classroom: z.string(), upload_id: z.string() } },
+      { inputSchema: z.object({ classroom: z.string(), upload_id: z.string() }) },
       async () => {
         mocks.calls += 1;
         return { content: [{ type: 'text', text: 'placing' }] };

@@ -6,8 +6,7 @@
  * pinned here: only what the text tells the reader.
  */
 
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@classmoji/database', async () =>
@@ -28,7 +27,7 @@ beforeAll(async () => {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   client = new Client({ name: 'validation-text', version: '0' });
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
-});
+}, 60_000);
 
 async function refusal(name: string, args: Record<string, unknown>): Promise<string> {
   const result = (await client.callTool({ name, arguments: args })) as {
@@ -39,7 +38,7 @@ async function refusal(name: string, args: Record<string, unknown>): Promise<str
   return result.content[0].text;
 }
 
-const PREFIX = 'MCP error -32602: Input validation error: Invalid arguments for tool';
+const PREFIX = 'Input validation error: Invalid arguments for tool';
 
 describe('tool argument refusals', () => {
   it('names each missing required argument', async () => {

@@ -1328,8 +1328,8 @@ describe('the schemas the registry publishes', () => {
   let listed: Array<{ name: string; description?: string; inputSchema: Record<string, unknown> }>;
 
   beforeAll(async () => {
-    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
-    const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+    const { Client } = await import('@modelcontextprotocol/client');
+    const { InMemoryTransport } = await import('@modelcontextprotocol/server');
 
     for (const tool of [contentSearchTool, contentListTool, contentGetTool]) {
       registerToolDefinition(tool as unknown as ToolDefinition<never>);

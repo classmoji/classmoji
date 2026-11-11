@@ -9,8 +9,7 @@
  * packages/services/src/classmoji/__tests__/quizLateWaiver.*.test.ts.
  */
 
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ToolContext, ToolDefinition } from '../../mcp/registry.ts';
 

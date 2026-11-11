@@ -538,12 +538,13 @@ describe('S1 cross-classroom rejection per write family', () => {
 // ─── Read-side S1 (bonus): the submission resource scopes in the query ──────
 
 describe('S1 read-side: submission resource', () => {
-  it('a foreign submission id resolves to resource not_found (-32002)', async () => {
+  it('a foreign submission id resolves to resource not_found (-32602, kind not_found)', async () => {
     const outcome = await readResource(
       ta,
       `classmoji://${DEV_REF}/submissions/${fx.foreignGra.id}`
     );
     expect(outcome.payload).toBeUndefined();
     expect(outcome.error?.code).toBe(RESOURCE_NOT_FOUND);
+    expect(outcome.error?.data).toMatchObject({ kind: 'not_found' });
   });
 });

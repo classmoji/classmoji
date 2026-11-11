@@ -17,7 +17,7 @@
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
 import { connect, type AddressInfo, type Socket } from 'node:net';
 import Fastify from 'fastify';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer } from '@modelcontextprotocol/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MCP_BODY_LIMIT_BYTES } from '../../bodyLimit.ts';
 

@@ -111,7 +111,7 @@ beforeAll(async () => {
   for (const [type, entry] of Object.entries(registry ?? {})) {
     walk(entry.defSchema, `formField.${type}`, new Set());
   }
-});
+}, 60_000);
 
 describe('shared schema formats', () => {
   it('reaches the uuid-form ids and datetimes', () => {

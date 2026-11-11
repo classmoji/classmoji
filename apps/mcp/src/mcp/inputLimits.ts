@@ -17,7 +17,7 @@
  *      No room → a tool error asking to retry shortly.
  *   4. In the SDK: the same MAX_TOOL_INPUT_ELEMENTS (`maxToolInputElements`,
  *      registry.ts), and validation messages cut to a bounded size
- *      (`withBoundedIssues`, boundedIssues.ts).
+ *      (`boundedValidate`, boundedIssues.ts, through toolInputSchema.ts).
  *
  * Real inputs stay far below the element limit: the largest page fixture in
  * the repo is 904 elements (62 blocks, ~14.6 elements per block), so 25,000 is

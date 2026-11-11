@@ -30,7 +30,7 @@
  *     team_tag_add's tag_ids take ids. Teaching team, like list_teaching_team.
  */
 
-import { UriTemplate } from '@modelcontextprotocol/sdk/shared/uriTemplate.js';
+import { UriTemplate } from '@modelcontextprotocol/server';
 import { ClassmojiService } from '@classmoji/services';
 import { gitUsername, type WithGitAccounts } from '@classmoji/utils';
 import { IssueStatus, type Role } from '@prisma/client';

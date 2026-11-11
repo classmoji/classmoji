@@ -12,8 +12,7 @@
  * clients see for a submission id: a string with the id pattern.
  */
 
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import type { z } from 'zod';
 import type { ToolDefinition } from '../../mcp/registry.ts';
