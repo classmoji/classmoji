@@ -69,10 +69,12 @@ describe('isoDateTime', () => {
     const result = isoDateTime().safeParse('2026-11-12T17:00:00');
     expect(result.success).toBe(false);
     expect(result.error?.issues).toEqual([
-      { code: 'invalid_format', format: 'datetime', path: [], message: 'Invalid ISO datetime' },
+      { code: 'invalid_format', format: 'datetime', path: [], message: 'Invalid datetime' },
     ]);
     const missing = z.object({ at: isoDateTime() }).safeParse({});
     expect(missing.error?.issues[0]).toMatchObject({ code: 'invalid_type', path: ['at'] });
+    expect(missing.error?.issues[0].message).not.toBe('Invalid datetime');
+    expect(isoDateTime().safeParse(5).error?.issues[0].message).not.toBe('Invalid datetime');
   });
 
   it('publishes format date-time and no pattern, described, optional or nullable', () => {
@@ -107,11 +109,11 @@ describe('uuidString', () => {
   it('calls a malformed id a uuid, and a missing one missing', () => {
     expect(uuidString().safeParse('not-an-id').error?.issues[0]).toMatchObject({
       code: 'invalid_format',
-      message: 'Invalid UUID',
+      message: 'Invalid uuid',
     });
     const missing = z.object({ id: uuidString() }).safeParse({});
     expect(missing.error?.issues[0].code).toBe('invalid_type');
-    expect(missing.error?.issues[0].message).not.toBe('Invalid UUID');
+    expect(missing.error?.issues[0].message).not.toBe('Invalid uuid');
   });
 
   it('publishes format uuid', () => {
@@ -138,6 +140,22 @@ describe('minUtf16Length', () => {
     const issues = (r: z.ZodSafeParseResult<string>) => (r.success ? [] : r.error.issues);
     expect(issues(query().safeParse('a'))).toEqual(issues(z.string().min(2).safeParse('a')));
     expect(issues(query().safeParse('x'.repeat(501)))[0]?.code).toBe('too_big');
+  });
+
+  it('does not stop a parent refinement, as .min() does not', () => {
+    const refined = (q: z.ZodString) => {
+      let ran = 0;
+      const schema = z.object({ q, n: z.number() }).refine(() => {
+        ran++;
+        return false;
+      }, 'parent refinement');
+      const result = schema.safeParse({ q: 'a', n: 1 });
+      return { ran, messages: result.error?.issues.map(issue => issue.message) };
+    };
+    const ours = refined(minUtf16Length(z.string(), 2));
+    expect(ours).toEqual(refined(z.string().min(2)));
+    expect(ours.ran).toBe(1);
+    expect(ours.messages).toContain('parent refinement');
   });
 
   it('publishes minLength like .min()', () => {

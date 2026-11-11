@@ -32,20 +32,27 @@ import { z } from 'zod';
 const DATETIME_WITH_OFFSET =
   /^((\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-((0[13578]|1[02])-(0[1-9]|[12]\d|3[01])|(0[469]|11)-(0[1-9]|[12]\d|30)|(02)-(0[1-9]|1\d|2[0-8])))T([01]\d|2[0-3]):[0-5]\d(:[0-5]\d(\.\d+)?)?(Z|([+-]\d{2}:?\d{2}))$/;
 
-/** A uuid-form id: any 8-4-4-4-12 hex string (`z.guid()`), refused as "Invalid UUID". */
+/**
+ * A uuid-form id: any 8-4-4-4-12 hex string (`z.guid()`). A malformed one is
+ * refused as "Invalid uuid", the words used before zod 4; a missing or
+ * non-string one with zod's own message.
+ */
 export function uuidString() {
   return z.guid({
-    error: issue => (issue.code === 'invalid_format' ? 'Invalid UUID' : undefined),
+    error: issue => (issue.code === 'invalid_format' ? 'Invalid uuid' : undefined),
   });
 }
 
 /**
  * An ISO 8601 date and time with `Z` or an offset (seconds optional). A
- * refusal is the `invalid_format` issue zod raises for a datetime ("Invalid
- * ISO datetime").
+ * malformed one is refused with the `invalid_format` issue zod raises for a
+ * datetime, worded "Invalid datetime" as before zod 4; a missing or
+ * non-string one with zod's own message.
  */
 export function isoDateTime() {
-  return z.stringFormat('datetime', value => DATETIME_WITH_OFFSET.test(value));
+  return z.stringFormat('datetime', value => DATETIME_WITH_OFFSET.test(value), {
+    error: issue => (issue.code === 'invalid_format' ? 'Invalid datetime' : undefined),
+  });
 }
 
 /**
@@ -57,12 +64,15 @@ export function minUtf16Length<T extends z.ZodString>(schema: T, min: number): T
   return schema
     .check(payload => {
       if (payload.value.length < min) {
+        // Not aborting, as .min()'s own issue: checks after it, and a parent
+        // object's refinements, still run.
         payload.issues.push({
           code: 'too_small',
           origin: 'string',
           minimum: min,
           inclusive: true,
           input: payload.value,
+          continue: true,
         });
       }
     })
