@@ -22,7 +22,8 @@ vi.mock('@classmoji/database', async () =>
 type Node = {
   _zod: {
     def: Record<string, any>;
-    traits: Set<string>;
+    /** Absent on a check given as a plain function (`.check(fn)`). */
+    traits?: Set<string>;
     optin?: string;
   };
   safeParse: (value: unknown) => { success: boolean };
@@ -43,7 +44,7 @@ function walk(node: Node | undefined, where: string, path: Set<Node>) {
   const def = node._zod.def;
   const kinds = [node, ...((def.checks ?? []) as Node[])];
   for (const kind of kinds) {
-    const traits = kind._zod.traits;
+    const traits = kind._zod.traits ?? new Set<string>();
     if (traits.has('$ZodGUID')) found.uuidString++;
     if (traits.has('$ZodUUID')) found.strictUuid.push(where);
     if (traits.has('$ZodISODateTime')) found.zodDateTime.push(where);
