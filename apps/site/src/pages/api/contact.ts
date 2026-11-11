@@ -88,7 +88,7 @@ export const POST: APIRoute = async ({ request, clientAddress }) => {
     bindings: env as ContactBindings,
   });
   if (limited) {
-    return reply(request, 429, { ok: false, error: 'Too many messages. Try again in an hour.' });
+    return reply(request, 429, { ok: false, error: 'Too many messages. Try again later.' });
   }
 
   const apiKey = process.env.RESEND_API_KEY;
