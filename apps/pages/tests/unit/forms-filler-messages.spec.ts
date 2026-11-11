@@ -7,6 +7,7 @@ import {
   type FormField,
 } from '@classmoji/services/form-contract';
 import { coerceAnswers, friendlyErrorMap } from '../../app/components/forms/answerCoerce.ts';
+import { answersResolver } from '../../app/components/forms/answersResolver.ts';
 
 /**
  * The words a person filling in a public form reads when an answer is
@@ -36,7 +37,7 @@ const optionIds = (field: FormField) => (field.options as Array<{ id: string }>)
 function clientMessage(field: FormField, raw: Record<string, unknown>): string | undefined {
   const result = z
     .object({ answers: buildResponseSchema(definition.fields) })
-    .safeParse({ answers: coerceAnswers(definition.fields, raw) }, { errorMap: friendlyErrorMap });
+    .safeParse({ answers: coerceAnswers(definition.fields, raw) }, { error: friendlyErrorMap });
   if (result.success) return undefined;
   return result.error.issues.find(issue => issue.path[1] === field.id)?.message;
 }
@@ -87,6 +88,35 @@ test.describe('the words a form filler reads', () => {
       'Not an option of this field'
     );
     expect(clientMessage(agree, valid())).toBeUndefined();
+  });
+
+  test('the renderer’s resolver applies the same sentences', async () => {
+    const resolver = answersResolver<{ answers: Record<string, unknown> }>(
+      z.object({ answers: buildResponseSchema(definition.fields) }),
+      definition.fields
+    );
+    const { [fullName.id]: _gone, ...noName } = valid();
+    const result = await resolver(
+      { answers: { ...noName, [agree.id]: false, [email.id]: 'not an address' } },
+      undefined,
+      { fields: {}, shouldUseNativeValidation: false }
+    );
+    const errors = (result.errors as { answers?: Record<string, { message?: string }> }).answers;
+    expect({
+      agree: errors?.[agree.id]?.message,
+      fullName: errors?.[fullName.id]?.message,
+      email: errors?.[email.id]?.message,
+    }).toEqual({
+      agree: 'You need to agree to continue.',
+      fullName: 'This one is required.',
+      email: 'That does not look like an email address.',
+    });
+
+    const ok = await resolver({ answers: valid() }, undefined, {
+      fields: {},
+      shouldUseNativeValidation: false,
+    });
+    expect(ok.errors).toEqual({});
   });
 
   test('from the server, the refusal names the field and keeps our messages', () => {

@@ -97,7 +97,11 @@ export const DECK_OPS_LIMITS = {
 
 const ATTRS_CAP_MESSAGE = `A slide has at most ${DECK_OPS_LIMITS.MAX_ATTRS} attributes`;
 
-const attrsSchema = capKeys(z.record(z.string()), DECK_OPS_LIMITS.MAX_ATTRS, ATTRS_CAP_MESSAGE);
+const attrsSchema = capKeys(
+  z.record(z.string(), z.string()),
+  DECK_OPS_LIMITS.MAX_ATTRS,
+  ATTRS_CAP_MESSAGE
+);
 
 /**
  * What an agent writing slide html needs to know beyond plain HTML: the
@@ -218,7 +222,11 @@ export const deckOpSchema = z.discriminatedUnion('op', [
       .optional()
       .describe('Speaker notes HTML; null or empty string removes the notes'),
     hidden: z.boolean().optional(),
-    attrs: capKeys(z.record(z.string().nullable()), DECK_OPS_LIMITS.MAX_ATTRS, ATTRS_CAP_MESSAGE)
+    attrs: capKeys(
+      z.record(z.string(), z.string().nullable()),
+      DECK_OPS_LIMITS.MAX_ATTRS,
+      ATTRS_CAP_MESSAGE
+    )
       .nullable()
       .optional()
       .describe(

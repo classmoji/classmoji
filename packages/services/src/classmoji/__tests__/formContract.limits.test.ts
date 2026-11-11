@@ -73,7 +73,7 @@ describe('form answer size caps', () => {
     const big = parseFormDefinition(many).fields;
     const error = errorOf(() => parseAnswers(big, {}));
     expect(error.code).toBe(FORM_ANSWERS_INVALID);
-    expect(error.message.match(/: Required/g)).toHaveLength(20);
+    expect(big.filter(field => error.message.includes(`${field.id}: `))).toHaveLength(20);
     expect(error.message.endsWith('; …and 10 more')).toBe(true);
   });
 

@@ -760,45 +760,63 @@ function optionList(ids: readonly string[], labels: ProblemLabels): string {
 
 const capitalize = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1);
 
-/** What a zod issue says, as words (a refine's own message is already one). */
-function issueWords(issue: z.ZodIssue): string {
+/** The value at `path` inside `root`, or undefined when any step is absent. */
+function valueAt(root: unknown, path: readonly PropertyKey[]): unknown {
+  let node = root;
+  for (const key of path) {
+    if (node === null || typeof node !== 'object') return undefined;
+    node = (node as Record<PropertyKey, unknown>)[key];
+  }
+  return node;
+}
+
+/**
+ * What a zod issue says, as words (a refine's own message is already one).
+ * `root` is the value that was parsed: a value of the wrong kind is "missing"
+ * when nothing is at its path.
+ */
+function issueWords(issue: z.ZodIssue, root: unknown): string {
   switch (issue.code) {
     case 'custom':
       return issue.message;
     case 'invalid_type':
-      return issue.received === 'undefined' ? 'is missing' : 'has a value of the wrong kind';
+      return valueAt(root, issue.path) === undefined
+        ? 'is missing'
+        : 'has a value of the wrong kind';
     case 'too_small': {
       const bound = issue.inclusive ? Number(issue.minimum) : Number(issue.minimum) + 1;
-      if (issue.type === 'array')
+      if (issue.origin === 'array')
         return issue.exact ? `needs exactly ${bound}` : `needs at least ${bound}`;
-      if (issue.type === 'string')
+      if (issue.origin === 'string')
         return bound <= 1 ? 'is empty' : `is shorter than ${bound} characters`;
       return `must be at least ${bound}`;
     }
     case 'too_big': {
       const bound = issue.inclusive ? Number(issue.maximum) : Number(issue.maximum) - 1;
-      if (issue.type === 'array')
+      if (issue.origin === 'array')
         return issue.exact ? `needs exactly ${bound}` : `has more than ${bound}`;
-      if (issue.type === 'string') return `is longer than ${bound} characters`;
+      if (issue.origin === 'string') return `is longer than ${bound} characters`;
       return `must be at most ${bound}`;
     }
     case 'not_multiple_of':
-      return `must be a multiple of ${String(issue.multipleOf)}`;
-    case 'invalid_enum_value':
-      return 'isn’t one of the allowed values';
-    case 'invalid_literal':
-      return 'isn’t the allowed value';
-    case 'invalid_union_discriminator':
-      return 'isn’t one of the allowed kinds';
+      return `must be a multiple of ${String(issue.divisor)}`;
+    case 'invalid_value':
+      // An enum's values, or a literal's one value.
+      return issue.values.length === 1
+        ? 'isn’t the allowed value'
+        : 'isn’t one of the allowed values';
     case 'invalid_union':
-      return 'doesn’t match any allowed form';
+      // A discriminated union names its discriminator when no option has the value.
+      return 'discriminator' in issue && issue.discriminator !== undefined
+        ? 'isn’t one of the allowed kinds'
+        : 'doesn’t match any allowed form';
     case 'unrecognized_keys':
       return issue.keys.length === 1
         ? 'has a setting that isn’t recognized'
         : `has ${issue.keys.length} settings that aren’t recognized`;
-    case 'invalid_string':
+    case 'invalid_format':
       // A regex's own message is one of ours (the rule id's).
-      return issue.validation === 'regex' ? issue.message : 'isn’t in the expected format';
+      return issue.format === 'regex' ? issue.message : 'isn’t in the expected format';
     default:
       return 'isn’t valid';
   }
@@ -809,11 +827,7 @@ function issueWords(issue: z.ZodIssue): string {
  * (read from `root`, the object the path is into), an option by its label,
  * a pin by its kind, a setting by its name.
  */
-function issueSubject(
-  path: readonly (string | number)[],
-  root: unknown,
-  labels: ProblemLabels
-): string {
+function issueSubject(path: readonly PropertyKey[], root: unknown, labels: ProblemLabels): string {
   const [head, second, third] = path;
   if (head === 'options' && typeof second === 'string') {
     return `Settings of ${optionList([second], labels)}`;
@@ -845,7 +859,7 @@ function issueSubject(
 }
 
 /** The setting inside the subject a path ends at ("smallest", "cost of each rank"), if any. */
-function issueDetail(path: readonly (string | number)[]): string | null {
+function issueDetail(path: readonly PropertyKey[]): string | null {
   const at = path.indexOf('params');
   if (at >= 0 && typeof path[at + 1] === 'string') {
     return PARAM_WORDS[path[at + 1] as keyof TeamSetRuleParams] ?? 'a setting';
@@ -881,8 +895,8 @@ function issuesToProblems(
     // An unknown key is named in the path only.
     const keys = issue.code === 'unrecognized_keys' ? [issue.keys.join(',')] : [];
     return {
-      path: [prefix, ...issue.path, ...keys].join('.'),
-      text: `${subject}${detail ? ` (${detail})` : ''}: ${issueWords(issue)}.`,
+      path: [prefix, ...issue.path, ...keys].map(String).join('.'),
+      text: `${subject}${detail ? ` (${detail})` : ''}: ${issueWords(issue, root)}.`,
     };
   });
 }

@@ -249,7 +249,7 @@ test.describe('multiselect exclusive options', () => {
       .object({ answers: buildResponseSchema(definition.fields) })
       .safeParse(
         { answers: coerceAnswers(definition.fields, { [question.id]: [woman, preferNot] }) },
-        { errorMap: friendlyErrorMap }
+        { error: friendlyErrorMap }
       );
     expect(client.success).toBe(false);
     expect(

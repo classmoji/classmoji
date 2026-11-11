@@ -180,7 +180,7 @@ export const calendarEventCreateTool: ToolDefinition<CalendarEventCreateArgs> = 
     meeting_link: meetingLinkSchema.optional(),
     is_recurring: z.boolean().optional().describe('Whether the event repeats'),
     recurrence_rule: z
-      .record(z.unknown())
+      .record(z.string(), z.unknown())
       .optional()
       .describe('Recurrence rule JSON (required when is_recurring)'),
   },

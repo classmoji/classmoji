@@ -47,16 +47,23 @@ describe('capArray', () => {
     const plain = z.array(z.number()).max(3);
     const capped = capArray(z.array(z.number()).max(3), 3);
     const four = [1, 2, 3, 4];
-    const messages = (r: z.SafeParseReturnType<unknown, unknown>) =>
-      r.success ? [] : r.error.issues.map(i => [i.code, i.message]);
+    const issues = (r: z.ZodSafeParseResult<unknown>) => (r.success ? [] : r.error.issues);
+    const messages = (r: z.ZodSafeParseResult<unknown>) => issues(r).map(i => [i.code, i.message]);
 
-    expect(messages(capped.safeParse(four))).toEqual(messages(plain.safeParse(four)));
-    const errorMap: z.ZodErrorMap = (i, ctx) =>
-      i.code === 'too_big' ? { message: `at most ${i.maximum}` } : { message: ctx.defaultError };
-    expect(messages(capped.safeParse(four, { errorMap }))).toEqual([['too_big', 'at most 3']]);
+    expect(issues(capped.safeParse(four))).toEqual(issues(plain.safeParse(four)));
+    expect(issues(capped.safeParse(four, { reportInput: true }))).toEqual(
+      issues(plain.safeParse(four, { reportInput: true }))
+    );
+    const error: z.ZodErrorMap = i => (i.code === 'too_big' ? `at most ${i.maximum}` : undefined);
+    expect(issues(capped.safeParse(four, { error }))).toEqual(
+      issues(plain.safeParse(four, { error }))
+    );
+    expect(messages(capped.safeParse(four, { error }))).toEqual([['too_big', 'at most 3']]);
 
     const named = capArray(z.array(z.number()).max(3, 'Pick at most 3'), 3, 'Pick at most 3');
-    expect(messages(named.safeParse(four))).toEqual([['too_big', 'Pick at most 3']]);
+    const namedPlain = z.array(z.number()).max(3, 'Pick at most 3');
+    expect(issues(named.safeParse(four))).toEqual(issues(namedPlain.safeParse(four)));
+    expect(messages(named.safeParse(four, { error }))).toEqual([['too_big', 'Pick at most 3']]);
   });
 
   it('passes arrays within the cap, and other values, to the schema unchanged', () => {
@@ -77,22 +84,23 @@ describe('capArray', () => {
 });
 
 describe('capKeys', () => {
-  it('refuses an object with too many keys with one issue, before its values are parsed', () => {
+  it('refuses an object with too many keys with one issue, before its values are parsed', async () => {
     const { calls, schema } = counted();
-    const capped = capKeys(z.record(schema), 5, 'at most 5 keys');
+    const capped = capKeys(z.record(z.string(), schema), 5, 'at most 5 keys');
     const big = Object.fromEntries(Array.from({ length: 100_000 }, (_, i) => [`k${i}`, 'x']));
 
-    const result = capped.safeParse(big);
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues).toHaveLength(1);
-      expect(result.error.issues[0].message).toBe('at most 5 keys');
+    for (const result of [capped.safeParse(big), await capped.safeParseAsync(big)]) {
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues).toHaveLength(1);
+        expect(result.error.issues[0].message).toBe('at most 5 keys');
+      }
     }
     expect(calls.n).toBe(0);
   });
 
   it('passes objects within the cap, arrays and non-objects to the schema unchanged', () => {
-    const capped = capKeys(z.record(z.number()), 2);
+    const capped = capKeys(z.record(z.string(), z.number()), 2);
     expect(capped.parse({ a: 1, b: 2 })).toEqual({ a: 1, b: 2 });
     expect(capped.safeParse([1, 2, 3]).success).toBe(false);
     expect(capped.safeParse(null).success).toBe(false);
@@ -100,14 +108,15 @@ describe('capKeys', () => {
 });
 
 describe('capElements', () => {
-  it('refuses a value over the element budget with one issue', () => {
+  it('refuses a value over the element budget with one issue', async () => {
     const { calls, schema } = counted();
     const capped = capElements(z.array(z.array(schema)), 1_000);
     const nested = Array.from({ length: 400 }, () => Array.from({ length: 400 }, () => 'x'));
 
-    const result = capped.safeParse(nested);
-    expect(result.success).toBe(false);
-    if (!result.success) expect(result.error.issues).toHaveLength(1);
+    for (const result of [capped.safeParse(nested), await capped.safeParseAsync(nested)]) {
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error.issues).toHaveLength(1);
+    }
     expect(calls.n).toBe(0);
   });
 

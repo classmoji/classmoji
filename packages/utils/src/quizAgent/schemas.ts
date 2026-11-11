@@ -208,9 +208,7 @@ export const QuizEvaluationFeedbackSchema = z.object({
     .min(1, 'final_acknowledgment must not be empty')
     .describe('Your closing words, shown above the results: brief, warm, honest.'),
   quiz_complete: z
-    .literal(true, {
-      errorMap: () => ({ message: 'quiz_complete must be true to submit evaluation' }),
-    })
+    .literal(true, { error: 'quiz_complete must be true to submit evaluation' })
     .describe('Must be true to indicate quiz completion'),
   ended_early: z
     .boolean()

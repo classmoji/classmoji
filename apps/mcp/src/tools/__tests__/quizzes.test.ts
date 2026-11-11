@@ -146,6 +146,17 @@ const QUIZ_ROW = {
   attempts: [{ id: 'att-1', user: { id: 'stu-1', name: 'Alice', email: 'a@x.edu' } }],
 };
 
+/** An argument's description as the tool publishes it (its JSON Schema). */
+function publishedDescription(
+  tool: { inputSchema: Record<string, z.ZodType> },
+  field: string
+): string | undefined {
+  const json = z.toJSONSchema(z.object(tool.inputSchema), { target: 'draft-7', io: 'input' }) as {
+    properties: Record<string, { description?: string }>;
+  };
+  return json.properties[field]?.description;
+}
+
 function parse(result: { content: Array<{ text: string }> }) {
   return JSON.parse(result.content[0].text);
 }
@@ -594,9 +605,7 @@ describe('code_sandbox_enabled (quiz sandbox questions)', () => {
           code_sandbox_enabled: 'yes',
         }).success
       ).toBe(false);
-      expect(
-        (tool.inputSchema as Record<string, z.ZodTypeAny>).code_sandbox_enabled.description
-      ).toBe(
+      expect(publishedDescription(tool, 'code_sandbox_enabled')).toBe(
         'Let the AI attach an editable code sandbox (HTML/CSS/JS, TypeScript or React) to ' +
           'questions answered in code (default false)'
       );
@@ -738,12 +747,11 @@ describe('hint_cost and max_answers (answer rules, author settings)', () => {
       expect(parses('max_answers', 21), tool.name).toBe(false);
       expect(parses('max_answers', 1.5), tool.name).toBe(false);
 
-      const shape = tool.inputSchema as Record<string, z.ZodTypeAny>;
-      expect(shape.hint_cost.description).toBe(
+      expect(publishedDescription(tool, 'hint_cost')).toBe(
         'Points off each answer a student gives after a hint on that question ' +
           '(0–50, default 15; 0 makes hints free)'
       );
-      expect(shape.max_answers.description).toBe(
+      expect(publishedDescription(tool, 'max_answers')).toBe(
         'Answers a student may give to one question (1–20, default 5); after the last one ' +
           'the quiz explains the answer and moves on'
       );

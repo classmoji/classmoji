@@ -34,8 +34,8 @@ import { UriTemplate } from '@modelcontextprotocol/sdk/shared/uriTemplate.js';
 import { ClassmojiService } from '@classmoji/services';
 import { gitUsername, type WithGitAccounts } from '@classmoji/utils';
 import { IssueStatus, type Role } from '@prisma/client';
-import { z, type ZodRawShape } from 'zod';
-import type { ResourceDefinition, ToolDefinition } from '../mcp/registry.ts';
+import { z } from 'zod';
+import type { ResourceDefinition, ToolDefinition, ToolInputShape } from '../mcp/registry.ts';
 import { parseClassroomRef } from '../authz/pure.ts';
 import type { ClassroomContext } from '../authz/classroomContext.ts';
 import { idArgs, type ReadAudit } from '../mcp/audit.ts';
@@ -78,7 +78,7 @@ interface MirrorConfig {
   title: string;
   description: string;
   /** Zod inputs beyond `classroom` (e.g. submission_id, calendar start/end). */
-  extraInput?: ZodRawShape;
+  extraInput?: ToolInputShape;
   /** Map validated args → the resource's non-org/slug URI-template variables. */
   buildVars?: (args: Record<string, unknown>) => Record<string, string>;
 }
@@ -107,7 +107,7 @@ function mirrorResourceTool(config: MirrorConfig): ToolDefinition {
   const template = new UriTemplate(resource.uriTemplate);
   const audit = resource.auditRead;
 
-  const inputSchema: ZodRawShape = {
+  const inputSchema: ToolInputShape = {
     ...(classroomScoped
       ? { classroom: z.string().describe("Classroom reference as 'org/slug'") }
       : {}),

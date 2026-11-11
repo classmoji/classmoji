@@ -507,8 +507,12 @@ describe('meeting_link validation', () => {
   it.each([calendarEventCreateTool, calendarEventUpdateTool])(
     '$name keeps the url check, which publishes the field as format uri',
     tool => {
-      const field = tool.inputSchema.meeting_link as z.ZodOptional<z.ZodEffects<z.ZodString>>;
-      expect(field.unwrap().innerType().isURL).toBe(true);
+      const json = z.toJSONSchema(z.object(tool.inputSchema), {
+        target: 'draft-7',
+        io: 'input',
+      }) as { properties: Record<string, { format?: string }> };
+      expect(json.properties.meeting_link.format).toBe('uri');
+      expect(tool.inputSchema.meeting_link.safeParse('not a url').success).toBe(false);
     }
   );
 });

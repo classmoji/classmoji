@@ -354,7 +354,11 @@ describe('forms tool definitions', () => {
    */
   it('documents identity_question, exclusive and options_from on the field list', () => {
     for (const tool of [formCreateTool, formUpdateTool]) {
-      const text = (tool.inputSchema.fields as z.ZodTypeAny).description ?? '';
+      const json = z.toJSONSchema(z.object(tool.inputSchema), {
+        target: 'draft-7',
+        io: 'input',
+      }) as { properties: Record<string, { description?: string }> };
+      const text = json.properties.fields.description ?? '';
       expect(text).toContain('identity_question');
       expect(text).toContain('exclusive');
       expect(text).toContain('options_from');

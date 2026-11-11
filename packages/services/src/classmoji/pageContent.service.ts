@@ -1276,7 +1276,7 @@ export const PAGE_OPS_LIMITS = {
 const BLOCK_KEYS_MESSAGE = `A block has at most ${PAGE_OPS_LIMITS.MAX_BLOCK_KEYS} keys`;
 // One record for every use, as before the caps (the MCP tools/list renders
 // shared schemas as $refs); the described copy is update's.
-const pageBlockRecord = z.record(z.unknown());
+const pageBlockRecord = z.record(z.string(), z.unknown());
 const pageBlockBodySchema = capKeys(
   pageBlockRecord,
   PAGE_OPS_LIMITS.MAX_BLOCK_KEYS,

@@ -68,7 +68,11 @@ describe('page block op size caps', () => {
     const result = pageBlockOpsPayloadSchema.safeParse(justOver);
     refusedOnce(result);
     if (!result.success) {
-      expect(result.error.issues[0].message).toBe('Array must contain at most 400 element(s)');
+      expect(result.error.issues[0]).toMatchObject({
+        code: 'too_big',
+        origin: 'array',
+        maximum: PAGE_OPS_LIMITS.MAX_OPS,
+      });
     }
   });
 

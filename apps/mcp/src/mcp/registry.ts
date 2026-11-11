@@ -55,6 +55,9 @@ import { MAX_TOOL_INPUT_ELEMENTS, type HandlerTracker } from './inputLimits.ts';
 
 export type Scope = 'read' | 'write';
 
+/** A tool's input as a zod raw shape: one zod schema per argument. */
+export type ToolInputShape = Record<string, z.ZodType>;
+
 /** Context handed to every handler after the enforcement pipeline passes. */
 export interface ToolContext {
   viewer: Viewer;
@@ -84,7 +87,7 @@ export interface ToolDefinition<Args = Record<string, unknown>> {
    */
   roles: readonly Role[] | null;
   /** Zod raw shape (v1.x SDK registerTool style). */
-  inputSchema: ZodRawShape;
+  inputSchema: ToolInputShape;
   /**
    * MCP behavioral hints surfaced to clients (tools/list `annotations`).
    * `readOnlyHint` is derived from `scope` automatically — do NOT set it here.

@@ -30,7 +30,7 @@ function rendered(issue: z.ZodIssue): string {
   if (issue.path.length === 0) return issue.message;
   const path = issue.path.reduce<string>((acc, seg, index) => {
     if (index === 0) return String(seg);
-    return typeof seg === 'number' ? `${acc}[${seg}]` : `${acc}.${seg}`;
+    return typeof seg === 'number' ? `${acc}[${seg}]` : `${acc}.${String(seg)}`;
   }, '');
   return `${issue.message} at ${path}`;
 }

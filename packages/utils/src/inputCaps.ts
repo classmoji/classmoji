@@ -4,7 +4,8 @@
  *
  * `capArray`, `capKeys` and `capElements` count a value first, in a
  * `z.preprocess` step that ends the parse with one issue when the value is
- * over its cap. Within the cap, the wrapped schema parses it as before.
+ * over its cap (an issue raised before a pipe stops it: the wrapped schema
+ * never runs). Within the cap, the wrapped schema parses it as before.
  *
  * The wrapped schema is what a JSON Schema export (the MCP `tools/list`)
  * describes: a preprocess step is invisible there. `capArray` expects a
@@ -64,12 +65,11 @@ export function capArray<T extends z.ZodTypeAny>(schema: T, max: number, message
   return z.preprocess((value, ctx) => {
     if (Array.isArray(value) && value.length > max) {
       ctx.addIssue({
-        code: z.ZodIssueCode.too_big,
+        code: 'too_big',
+        origin: 'array',
         maximum: max,
-        type: 'array',
         inclusive: true,
-        exact: false,
-        fatal: true,
+        input: value,
         ...(message === undefined ? {} : { message }),
       });
     }
@@ -90,11 +90,7 @@ export function capKeys<T extends z.ZodTypeAny>(schema: T, max: number, message?
       !Array.isArray(value) &&
       hasMoreKeysThan(value, max)
     ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: message ?? `Expected at most ${max} keys`,
-        fatal: true,
-      });
+      ctx.addIssue({ code: 'custom', message: message ?? `Expected at most ${max} keys` });
     }
     return value;
   }, schema);
@@ -109,9 +105,8 @@ export function capElements<T extends z.ZodTypeAny>(schema: T, max: number, mess
   return z.preprocess((value, ctx) => {
     if (value !== null && typeof value === 'object' && countJsonElements(value, max) > max) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: 'custom',
         message: message ?? `Too large: at most ${max} array elements and object members`,
-        fatal: true,
       });
     }
     return value;
@@ -143,7 +138,7 @@ export const MAX_SHOWN_ISSUES_TEXT_CHARS = 4_000;
 const cut = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}…` : text);
 
 /** An issue's path as `a.b.0`, with long or deep paths cut. */
-export function issuePath(path: ReadonlyArray<string | number>): string {
+export function issuePath(path: ReadonlyArray<PropertyKey>): string {
   const shown = path
     .slice(0, MAX_SHOWN_PATH_SEGMENTS)
     .map(segment => cut(String(segment), MAX_SHOWN_PATH_SEGMENT_CHARS));

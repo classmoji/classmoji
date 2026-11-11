@@ -243,7 +243,7 @@ function fieldDispatch(allowed: () => string[], where = 'in a form'): z.ZodTypeA
     }
     const result = entry.defSchema.safeParse(raw);
     if (!result.success) {
-      for (const issue of result.error.issues) ctx.addIssue(issue);
+      for (const issue of result.error.issues) ctx.addIssue({ ...issue });
       return z.NEVER;
     }
     // Mint the field id here rather than in each per-type schema: it is the one
@@ -616,7 +616,7 @@ const oneOf = (options: FormOption[]) => {
  * limits. `capacity` is how many the list can hold, which bounds the cap.
  */
 const pickList = (
-  item: z.ZodTypeAny,
+  item: z.ZodType<string>,
   field: { required: boolean; min_selections?: number; max_selections?: number },
   capacity: number
 ) => {
@@ -1193,7 +1193,7 @@ function optionListsOf(field: FormField): FormOption[][] {
 function safeParseOrNull<T extends z.ZodTypeAny>(
   schema: T,
   value: unknown
-): z.SafeParseReturnType<z.input<T>, z.output<T>> | null {
+): z.ZodSafeParseResult<z.output<T>> | null {
   try {
     return schema.safeParse(value);
   } catch {
