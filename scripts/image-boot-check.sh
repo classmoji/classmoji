@@ -19,9 +19,10 @@
 #                     staged image files are removed at the end, the logs kept
 #   IMAGE_CHECK_ROOT  the checkout to check (default: the one holding this
 #                     script)
-#   The app's environment comes from .env (as in development) plus
-#   NODE_ENV=production and its own URLs on the ports above; DATABASE_URL
-#   from the caller wins over .env's.
+#   DATABASE_URL      required: the database the apps may connect to while they
+#                     start (a devport's, never one you would mind them reading)
+#   The rest of the app's environment comes from .env (as in development),
+#   plus NODE_ENV=production and its own URLs on the ports above.
 #
 # Exit status: 0 when every app answered, 1 otherwise. Logs stay in
 # $IMAGE_CHECK_DIR/logs.
@@ -48,6 +49,10 @@ done
 PORT_BASE="${IMAGE_CHECK_PORT:-19100}"
 WAIT="${IMAGE_CHECK_WAIT:-180}"
 CALLER_DATABASE_URL="${DATABASE_URL:-}"
+if [ -z "$CALLER_DATABASE_URL" ]; then
+  echo "set DATABASE_URL to the database the apps may use while they start" >&2
+  exit 2
+fi
 if [ -z "${IMAGE_CHECK_DIR:-}" ]; then
   IMAGE_CHECK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/image-boot-check.XXXXXX")"
 fi
@@ -115,7 +120,7 @@ set -a
 # shellcheck disable=SC1091
 [ -f .env ] && . ./.env
 set +a
-[ -n "$CALLER_DATABASE_URL" ] && export DATABASE_URL="$CALLER_DATABASE_URL"
+export DATABASE_URL="$CALLER_DATABASE_URL"
 export NODE_ENV=production
 export HOST=127.0.0.1
 
