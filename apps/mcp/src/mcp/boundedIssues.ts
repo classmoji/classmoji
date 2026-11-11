@@ -8,18 +8,18 @@
  * for every failing element, and one issue's message or path can be as long
  * as the input (an object's unknown keys, a record key).
  *
- * `boundedValidate` wraps a `validate` so the SDK gets back at most
+ * `boundedValidate` validates with a zod schema so the SDK gets back at most
  * MAX_REPORTED_ISSUES issues, each cut (`boundIssue` from
  * @classmoji/utils/input-caps: message, path segments and their length),
  * within MAX_ISSUES_TEXT_CHARS in all, plus one saying how many were left
- * out. A `validate` that throws is answered with one fixed issue, never with
- * the error's own text. This bounds the text the caller gets back, not what
- * zod allocates while parsing: the element limits in inputLimits.ts do that.
+ * out. A parse that throws is answered with one fixed issue, never with the
+ * error's own text. This bounds the text the caller gets back, not what zod
+ * allocates while parsing: the element limits in inputLimits.ts do that.
  */
 
 import { boundIssue, MAX_SHOWN_ISSUES, MAX_SHOWN_PATH_SEGMENTS } from '@classmoji/utils/input-caps';
 import type { StandardSchemaV1 } from '@modelcontextprotocol/server';
-import type { z } from 'zod';
+import { z } from 'zod';
 
 type Issue = StandardSchemaV1.Issue;
 type Result<T> = StandardSchemaV1.Result<T>;
@@ -71,26 +71,35 @@ export function boundIssues(issues: ReadonlyArray<Issue>): Issue[] {
   return kept;
 }
 
+function unchecked(error: unknown): Result<never> {
+  console.warn(
+    '[mcp] tool input validation threw:',
+    error instanceof Error ? error.name : typeof error
+  );
+  return { issues: [{ message: UNCHECKED_ARGUMENTS_MESSAGE }] };
+}
+
+function bounded<T>(parsed: z.ZodSafeParseResult<T>): Result<T> {
+  return parsed.success ? { value: parsed.data } : { issues: boundIssues(parsed.error.issues) };
+}
+
 /**
- * `validate`, returning a bounded set of issues (`boundIssues`), and one
- * fixed issue if it throws. Awaited, so an asynchronous check's issues are
- * bounded too.
+ * A Standard Schema `validate` for `schema`: a bounded set of issues
+ * (`boundIssues`), and one fixed issue if the parse throws. It parses
+ * synchronously, once; only a schema with an asynchronous check (zod throws
+ * its async error) is parsed again asynchronously, and those issues are
+ * bounded too. (zod's own `validate` retries any throw asynchronously, so a
+ * check that throws would run twice.)
  */
 export function boundedValidate<T>(
-  validate: StandardSchemaV1.Props<unknown, T>['validate']
-): (value: unknown) => Promise<Result<T>> {
-  return async value => {
-    let result: Result<T>;
+  schema: z.ZodType<T>
+): (value: unknown) => Result<T> | Promise<Result<T>> {
+  return value => {
     try {
-      result = await validate(value);
+      return bounded(schema.safeParse(value));
     } catch (error) {
-      console.warn(
-        '[mcp] tool input validation threw:',
-        error instanceof Error ? error.name : typeof error
-      );
-      return { issues: [{ message: UNCHECKED_ARGUMENTS_MESSAGE }] };
+      if (!(error instanceof z.core.$ZodAsyncError)) return unchecked(error);
     }
-    if (!result.issues || result.issues.length === 0) return result;
-    return { issues: boundIssues(result.issues) };
+    return schema.safeParseAsync(value).then(bounded, unchecked);
   };
 }

@@ -24,7 +24,7 @@
  * file's rev, team-set rule ids) is always kept.
  */
 
-import type { StandardSchemaV1, StandardSchemaWithJSON } from '@modelcontextprotocol/server';
+import type { StandardSchemaWithJSON } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { boundedValidate } from './boundedIssues.ts';
 
@@ -180,15 +180,12 @@ export function toolArguments<Shape extends Record<string, z.ZodType>>(shape: Sh
 /** The schema a tool with these arguments is registered with (see above). */
 export function toolInputSchema(shape: Record<string, z.ZodType>): ToolInputSchema {
   const object = toolArguments(shape);
-  const standard = object['~standard'];
   return {
     '~standard': {
       version: 1,
       vendor: 'classmoji',
-      validate: boundedValidate(
-        standard.validate as StandardSchemaV1.Props<unknown, Record<string, unknown>>['validate']
-      ),
-      jsonSchema: cachedConverter(standard.jsonSchema),
+      validate: boundedValidate<Record<string, unknown>>(object),
+      jsonSchema: cachedConverter(object['~standard'].jsonSchema),
     },
   };
 }

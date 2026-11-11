@@ -289,7 +289,8 @@ describe('wrapHandler', () => {
       { name: CHECKED, arguments: { value: 'x' } },
       { signal: controller.signal }
     );
-    // zod's Standard Schema validate tries a sync parse first, so the check may start twice.
+    // The arguments are parsed synchronously first; an asynchronous check makes zod
+    // parse again asynchronously, so this check starts twice.
     await vi.waitFor(() => expect(state.checking).toBeGreaterThan(0));
     controller.abort('the caller left');
     await expect(call).rejects.toThrow();

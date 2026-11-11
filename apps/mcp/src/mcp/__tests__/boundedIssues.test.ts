@@ -79,6 +79,7 @@ const twentyFields = () =>
 describe('refusals through the SDK', () => {
   let client: Client;
   const ran: string[] = [];
+  let throwingChecks = 0;
 
   beforeAll(async () => {
     const server = new McpServer(
@@ -96,6 +97,7 @@ describe('refusals through the SDK', () => {
     tool('t_grid', { grid: z.array(z.array(twentyFields())) });
     tool('t_throws', {
       value: z.string().check(() => {
+        throwingChecks++;
         throw new Error('internal detail that must not reach the caller');
       }),
     });
@@ -150,10 +152,12 @@ describe('refusals through the SDK', () => {
     expect(text).toBe(`${PREFIX} t_grid: ${UNCHECKED_ARGUMENTS_MESSAGE}`);
   });
 
-  it('answers a validation that throws with fixed text, not the error', async () => {
+  it('answers a validation that throws with fixed text, not the error, having run it once', async () => {
+    throwingChecks = 0;
     const text = await refusal('t_throws', { value: 'x' });
     expect(text).toBe(`${PREFIX} t_throws: ${UNCHECKED_ARGUMENTS_MESSAGE}`);
     expect(text).not.toContain('internal detail');
+    expect(throwingChecks).toBe(1);
   });
 
   it("bounds an asynchronous check's issues too", async () => {

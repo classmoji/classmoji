@@ -101,8 +101,7 @@ describe('the MCP route on the wire', () => {
     const res = await post([INIT]);
     expect(res.statusCode).toBe(200);
     expect(res.headers[SESSION_HEADER]).toMatch(/^[0-9a-f-]{36}$/);
-    // The SDK answers a batch holding one request with that one answer, not
-    // an array of one (as the 1.x SDK did).
+    // One answer, not an array of one: the SDK's rule, in 1.x as in 2.x.
     expect(res.json()).toMatchObject({
       jsonrpc: '2.0',
       id: 1,
