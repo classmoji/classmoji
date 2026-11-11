@@ -553,12 +553,40 @@ jobs:
 
           npx wrangler secret bulk "$BULK_SECRETS" -c build/server/wrangler.json
 
+      # `secret bulk` makes and deploys ANOTHER version (the deploy's code with
+      # the new secrets), so the version to expect is the one deployed now,
+      # not the deploy step's. It must carry the deploy step's code: its
+      # deployment is the secret change made on top of that version.
+      - name: Read the live version
+        id: live
+        working-directory: apps/admin
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DEPLOYED: ${{ steps.deploy.outputs.version_id }}
+        run: |
+          set -euo pipefail
+          npx wrangler deployments status -c build/server/wrangler.json --json > status.json
+          VERSION_ID="$(node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            const status = JSON.parse(readFileSync("status.json", "utf8"));
+            const live = (status.versions ?? []).filter(v => v.percentage === 100);
+            const fail = m => { console.error(`::error::${m}`); process.exit(1); };
+            if (live.length !== 1) fail(`expected one version at 100%, got ${JSON.stringify(status.versions)}`);
+            const id = live[0].version_id;
+            const bySecret = status.annotations?.["workers/triggered_by"] === "secret";
+            if (id !== process.env.DEPLOYED && !bySecret) fail(`live version ${id} is neither the deploy (${process.env.DEPLOYED}) nor its secret change`);
+            console.log(id);
+          ')"
+          echo "Live version: $VERSION_ID (deploy step made $DEPLOYED)"
+          echo "version_id=$VERSION_ID" >> "$GITHUB_OUTPUT"
+
       # The new version must be the one answering, not just something: /health
       # carries the Worker's version id (CF_VERSION_METADATA) in
       # x-worker-version. Runs after the secrets, which the Worker needs to load.
       - name: Smoke check admin.staging.classmoji.io
         env:
-          EXPECTED: ${{ steps.deploy.outputs.version_id }}
+          EXPECTED: ${{ steps.live.outputs.version_id }}
         run: |
           set -uo pipefail
           for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
