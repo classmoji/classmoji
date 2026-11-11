@@ -34,6 +34,7 @@
 
 import { AssignGradersError, ClassmojiService, HelperService } from '@classmoji/services';
 import { z } from 'zod';
+import { uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
 import {
@@ -86,10 +87,9 @@ export const graderAssignTool: ToolDefinition<GraderArgs> = {
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     git_repo_assignment_id: submissionIdSchema().describe('Submission (GitRepoAssignment) id'),
-    grader_id: z
-      .string()
-      .uuid()
-      .describe('User id of the grader (an ASSISTANT or TEACHER with is_grader)'),
+    grader_id: uuidString().describe(
+      'User id of the grader (an ASSISTANT or TEACHER with is_grader)'
+    ),
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
@@ -153,7 +153,7 @@ export const graderUnassignTool: ToolDefinition<GraderArgs> = {
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     git_repo_assignment_id: submissionIdSchema().describe('Submission (GitRepoAssignment) id'),
-    grader_id: z.string().uuid().describe('User id of the currently assigned grader'),
+    grader_id: uuidString().describe('User id of the currently assigned grader'),
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
@@ -222,15 +222,13 @@ export const graderAssignBulkTool: ToolDefinition<GraderAssignBulkArgs> = {
   roles: OWNER_ONLY,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    assignment_id: z.string().uuid().describe('Assignment whose submissions get graders'),
+    assignment_id: uuidString().describe('Assignment whose submissions get graders'),
     method: z
       .enum(['RANDOM', 'EXISTING'])
       .describe(
         'RANDOM = even round-robin over is_grader assistants and teachers; EXISTING = copy the grader mapping from template_assignment_id'
       ),
-    template_assignment_id: z
-      .string()
-      .uuid()
+    template_assignment_id: uuidString()
       .optional()
       .describe('Assignment to copy grader assignments from (required when method=EXISTING)'),
   },

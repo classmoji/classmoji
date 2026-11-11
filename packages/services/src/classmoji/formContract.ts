@@ -40,6 +40,7 @@
  */
 
 import { z } from 'zod';
+import { uuidString } from '@classmoji/utils/zod-formats';
 import { capArray, issueText } from '@classmoji/utils/input-caps';
 
 /**
@@ -145,7 +146,7 @@ const optionInput = z.union([
   labelText,
   z
     .object({
-      id: z.string().uuid().optional(),
+      id: uuidString().optional(),
       label: labelText,
       description: helpText.optional(),
       /**
@@ -266,7 +267,7 @@ function fieldDispatch(allowed: () => string[], where = 'in a form'): z.ZodTypeA
 
 /** Shared head of every INPUT field (display blocks have their own shape). */
 const inputFieldBase = {
-  id: z.string().uuid().optional(),
+  id: uuidString().optional(),
   label: labelText,
   help: helpText.optional(),
   description: helpText.optional(),
@@ -322,7 +323,7 @@ const dropdownDef = z
     ...inputFieldBase,
     type: z.literal('dropdown'),
     options: optionList(0).default([]),
-    options_from: z.string().uuid().optional(),
+    options_from: uuidString().optional(),
   })
   .strict()
   .superRefine((field, ctx) => {
@@ -508,8 +509,8 @@ const repeatGroupDef = z
         scope: z
           .object({
             by: z.enum(['tag', 'repository', 'classroom']),
-            tag_id: z.string().uuid().optional(),
-            repository_id: z.string().uuid().optional(),
+            tag_id: uuidString().optional(),
+            repository_id: uuidString().optional(),
           })
           .strict()
           .superRefine((scope, ctx) => {
@@ -550,12 +551,12 @@ const repeatGroupDef = z
 // Display blocks carry no answer, so they have no `required` and never appear
 // in a response schema. Their prose is `text`.
 const headingDef = z
-  .object({ id: z.string().uuid().optional(), type: z.literal('heading'), text: labelText })
+  .object({ id: uuidString().optional(), type: z.literal('heading'), text: labelText })
   .strict();
 
 const paragraphDef = z
   .object({
-    id: z.string().uuid().optional(),
+    id: uuidString().optional(),
     type: z.literal('paragraph'),
     text: helpText.min(1),
   })
@@ -563,7 +564,7 @@ const paragraphDef = z
 
 const bannerDef = z
   .object({
-    id: z.string().uuid().optional(),
+    id: uuidString().optional(),
     type: z.literal('banner'),
     text: helpText.min(1),
     tone: z.enum(['info', 'warning']).default('info'),

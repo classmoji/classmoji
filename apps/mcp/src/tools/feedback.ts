@@ -26,6 +26,7 @@
  */
 
 import { z } from 'zod';
+import { uuidString } from '@classmoji/utils/zod-formats';
 import {
   ClassmojiService,
   FEEDBACK_CATEGORIES,
@@ -49,7 +50,7 @@ const DEFAULT_LIMIT = 25;
 const MAX_LIMIT = 100;
 const EXCERPT_CHARS = 200;
 
-const idArg = (what: string) => z.string().uuid().describe(what);
+const idArg = (what: string) => uuidString().describe(what);
 
 /** The post's page on the web board. */
 const postUrl = (postId: string) => `${WEBAPP_URL}/feedback/p/${encodeURIComponent(postId)}`;

@@ -22,6 +22,7 @@
 import { slideService } from '@classmoji/services/slides';
 import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
+import { uuidString } from '@classmoji/utils/zod-formats';
 import { closeLiveDocBeforeDelete } from '../collab/lifecycle.ts';
 import { notifyMetaChanged } from '../collab/client.ts';
 import { ToolError } from '../mcp/errors.ts';
@@ -215,7 +216,7 @@ export const slideUpdateTool: ToolDefinition<SlideUpdateArgs> = {
   roles: TEACHING_TEAM,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    slide_id: z.string().uuid().describe('Slide id (any kind)'),
+    slide_id: uuidString().describe('Slide id (any kind)'),
     title: z
       .string()
       .min(1)
@@ -303,7 +304,7 @@ export const slideDeleteTool: ToolDefinition<SlideDeleteArgs> = {
   roles: TEACHING_TEAM,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    slide_id: z.string().uuid().describe('Slide deck id'),
+    slide_id: uuidString().describe('Slide deck id'),
   },
   handler: async (args, ctx) => {
     const slide = await loadSlideInClassroom(args.slide_id, ctx);

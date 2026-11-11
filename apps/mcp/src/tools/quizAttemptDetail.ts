@@ -69,6 +69,7 @@ import {
 } from '@classmoji/utils';
 import { buttonActionFor, type QuizUIMessage } from '@classmoji/utils/quiz-agent';
 import { z } from 'zod';
+import { uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
 import { orgProvider } from '../resources/shape.ts';
@@ -697,8 +698,8 @@ export const getQuizAttemptTool: ToolDefinition<GetQuizAttemptArgs> = {
   roles: QUIZ_STAFF,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    quiz_id: z.string().uuid().describe('Quiz id (see list_quizzes)'),
-    attempt_id: z.string().uuid().describe('Attempt id (see list_quiz_attempts)'),
+    quiz_id: uuidString().describe('Quiz id (see list_quizzes)'),
+    attempt_id: uuidString().describe('Attempt id (see list_quiz_attempts)'),
     include_transcript: z
       .boolean()
       .optional()

@@ -15,6 +15,7 @@
 
 import { ClassmojiService } from '@classmoji/services';
 import { z } from 'zod';
+import { uuidString } from '@classmoji/utils/zod-formats';
 import type { ToolDefinition } from '../mcp/registry.ts';
 import { ok, OWNER_ONLY, requireClassroomCtx, scopedNotFound, writeAudit } from './shared.ts';
 
@@ -36,7 +37,7 @@ export const tokenGrantTool: ToolDefinition<TokenGrantArgs> = {
   roles: OWNER_ONLY,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    student_id: z.string().uuid().describe('User id of the student'),
+    student_id: uuidString().describe('User id of the student'),
     amount: z.number().int().positive().max(10000).describe('Tokens to grant (positive integer)'),
     description: z.string().max(500).optional().describe('Reason shown in the ledger'),
   },

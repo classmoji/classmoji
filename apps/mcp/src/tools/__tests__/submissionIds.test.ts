@@ -4,7 +4,7 @@
  * GitRepoAssignment.id defaults to a uuid, but ISSUE-mode provisioning
  * (packages/tasks cf-create_git_repo_assignment) sets it to the GitHub issue
  * id, a string of digits (id == provider_id, e.g. "5482151816"); REPO-mode rows
- * keep the uuid. Tools used to validate these ids with `.uuid()`, which refused
+ * keep the uuid. Tools used to validate these ids as uuids, which refused
  * every ISSUE-mode submission. Every submission-id input now uses the shared
  * `submissionIdSchema`. This file pins:
  *   1. the schema itself, including a numeric id sent as a JSON number;

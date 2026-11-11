@@ -68,6 +68,7 @@ import {
   MAX_ANSWERS_MIN,
 } from '@classmoji/utils/quiz-agent';
 import { z } from 'zod';
+import { isoDateTime, uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
 import { assertProTier } from '../authz/proTier.ts';
@@ -275,7 +276,7 @@ const tokensPerHourSchema = z
     "Extension tokens per extension hour; null = the classroom's default_tokens_per_hour, 0 = no extensions"
   );
 
-const moduleIdSchema = z.string().uuid().describe('Module the quiz sits in (see list_modules)');
+const moduleIdSchema = uuidString().describe('Module the quiz sits in (see list_modules)');
 
 // Author settings, like question_count (QUIZ_AUTHOR_SETTING_ARGS). Ranges are
 // the quiz form's and the service's (@classmoji/utils/quiz-agent answerRules).
@@ -341,20 +342,17 @@ function excludedPathsArg(value: string[] | undefined): string[] | undefined {
   return result.value;
 }
 
-const dueDateSchema = z
-  .string()
-  .datetime({ offset: true })
-  .describe('Due date (ISO 8601, e.g. 2026-07-20T23:59:00-04:00); late after it');
+const dueDateSchema = isoDateTime().describe(
+  'Due date (ISO 8601, e.g. 2026-07-20T23:59:00-04:00); late after it'
+);
 
-const releaseAtSchema = z
-  .string()
-  .datetime({ offset: true })
-  .describe('Opens (ISO 8601): students see it from then on, once published');
+const releaseAtSchema = isoDateTime().describe(
+  'Opens (ISO 8601): students see it from then on, once published'
+);
 
-const closesAtSchema = z
-  .string()
-  .datetime({ offset: true })
-  .describe('Closes (ISO 8601): no new attempt from then on; one under way may finish');
+const closesAtSchema = isoDateTime().describe(
+  'Closes (ISO 8601): no new attempt from then on; one under way may finish'
+);
 
 interface QuizCreateArgs {
   classroom: string;
@@ -415,9 +413,7 @@ export const quizCreateTool: ToolDefinition<QuizCreateArgs> = {
       .max(20000)
       .optional()
       .describe('Extra instructions steering the AI’s persona/behavior during the quiz'),
-    repository_id: z
-      .string()
-      .uuid()
+    repository_id: uuidString()
       .optional()
       .describe('Repo (assignment container) this quiz is about — required for code context'),
     release_at: releaseAtSchema.optional(),
@@ -612,7 +608,7 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
   roles: QUIZ_STAFF,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    quiz_id: z.string().uuid().describe('Quiz id'),
+    quiz_id: uuidString().describe('Quiz id'),
     name: z.string().min(1).max(200).optional().describe('Quiz name'),
     rubric_prompt: z
       .string()
@@ -625,9 +621,7 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
       .max(20000)
       .optional()
       .describe('Extra instructions steering the AI’s persona/behavior during the quiz'),
-    repository_id: z
-      .string()
-      .uuid()
+    repository_id: uuidString()
       .nullable()
       .optional()
       .describe('Repo (assignment container) this quiz is about; null unlinks it'),
@@ -830,7 +824,7 @@ export const quizPublishTool: ToolDefinition<QuizPublishArgs> = {
   roles: QUIZ_AUTHORS,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    quiz_id: z.string().uuid().describe('Quiz id'),
+    quiz_id: uuidString().describe('Quiz id'),
   },
   handler: async (args, ctx) => {
     await assertQuizSurfaceEnabled(ctx);
@@ -912,7 +906,7 @@ export const quizDeleteTool: ToolDefinition<QuizDeleteArgs> = {
   roles: QUIZ_AUTHORS,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    quiz_id: z.string().uuid().describe('Quiz id'),
+    quiz_id: uuidString().describe('Quiz id'),
     confirm: z
       .literal(true)
       .describe('Must be true — acknowledges that all student attempts are deleted with the quiz'),

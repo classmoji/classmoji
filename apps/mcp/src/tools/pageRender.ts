@@ -15,6 +15,7 @@
 import { ClassmojiService } from '@classmoji/services';
 import type { ViewAt } from '@classmoji/services/render-contract';
 import { z } from 'zod';
+import { uuidString } from '@classmoji/utils/zod-formats';
 import { liveSha, liveStateFor } from '../collab/client.ts';
 import { ToolError } from '../mcp/errors.ts';
 import { tryConsume } from '../mcp/rateLimit.ts';
@@ -290,7 +291,7 @@ export const pageRenderTool: ToolDefinition<PageRenderArgs> = {
   roles: OWNER_TEACHER,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    page_id: z.string().uuid().describe('Page id'),
+    page_id: uuidString().describe('Page id'),
     at: z
       .enum(['main', 'live', 'preview'])
       .optional()

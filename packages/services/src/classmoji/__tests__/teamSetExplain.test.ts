@@ -2297,6 +2297,7 @@ function importsOf(file: string): { spec: string; type: boolean }[] {
 /** Workspace modules the scan follows like relative ones (they must be pure too). */
 const FOLLOWED: Record<string, string> = {
   '@classmoji/utils/input-caps': resolve(HERE, '../../../../utils/src/inputCaps.ts'),
+  '@classmoji/utils/zod-formats': resolve(HERE, '../../../../utils/src/zodFormats.ts'),
 };
 
 const FORBIDDEN = [
@@ -2335,6 +2336,7 @@ describe('import scan', () => {
         'teamSetConfig.ts',
         'teamSetExplain.ts',
         'teamSetProblem.ts',
+        'zodFormats.ts',
       ])
     );
     for (const name of names) expect(name).not.toMatch(/\.service\.ts$/);

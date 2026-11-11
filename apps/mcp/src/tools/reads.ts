@@ -35,6 +35,7 @@ import { ClassmojiService } from '@classmoji/services';
 import { gitUsername, type WithGitAccounts } from '@classmoji/utils';
 import { IssueStatus, type Role } from '@prisma/client';
 import { z } from 'zod';
+import { uuidString } from '@classmoji/utils/zod-formats';
 import type { ResourceDefinition, ToolDefinition, ToolInputShape } from '../mcp/registry.ts';
 import { parseClassroomRef } from '../authz/pure.ts';
 import type { ClassroomContext } from '../authz/classroomContext.ts';
@@ -393,15 +394,11 @@ export const listSubmissionsTool: ToolDefinition<ListSubmissionsArgs> = {
   },
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    repository_id: z
-      .string()
-      .uuid()
+    repository_id: uuidString()
       .optional()
       .describe('Filter to one assignment container (Repository) id'),
-    assignment_id: z.string().uuid().optional().describe('Filter to one Assignment id'),
-    grader_id: z
-      .string()
-      .uuid()
+    assignment_id: uuidString().optional().describe('Filter to one Assignment id'),
+    grader_id: uuidString()
       .optional()
       .describe('Filter to submissions this grader (user id) is assigned to'),
     status: z
@@ -603,8 +600,8 @@ export const gradingReportTool: ToolDefinition<GradingReportArgs> = {
   },
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    assignment_id: z.string().uuid().optional().describe('Limit the report to one Assignment id'),
-    grader_id: z.string().uuid().optional().describe('Limit the report to one grader (user id)'),
+    assignment_id: uuidString().optional().describe('Limit the report to one Assignment id'),
+    grader_id: uuidString().optional().describe('Limit the report to one grader (user id)'),
   },
   handler: async (args, ctx) => {
     const { classroomId } = requireClassroomCtx(ctx);

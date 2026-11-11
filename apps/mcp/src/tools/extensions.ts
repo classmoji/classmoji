@@ -29,6 +29,7 @@
 import { ClassmojiService } from '@classmoji/services';
 import { openToStudents } from '@classmoji/utils';
 import { z } from 'zod';
+import { uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
 import {
@@ -238,9 +239,7 @@ export const extensionPurchaseTool: ToolDefinition<ExtensionPurchaseArgs> = {
     git_repo_assignment_id: submissionIdSchema()
       .optional()
       .describe('Your submission (GitRepoAssignment) id, for a repository assignment'),
-    assignment_id: z
-      .string()
-      .uuid()
+    assignment_id: uuidString()
       .optional()
       .describe('A quiz assignment id (assignment_id in list_quizzes)'),
     hours: z.number().int().positive().max(1000).describe('Extension hours to purchase'),

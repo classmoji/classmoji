@@ -77,6 +77,7 @@ import {
   syncRepository,
 } from '@classmoji/tasks/repo-sync';
 import { z } from 'zod';
+import { isoDateTime, uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition, ToolContext } from '../mcp/registry.ts';
 import { orgProvider } from '../resources/shape.ts';
@@ -193,7 +194,7 @@ export const repoPublishTool: ToolDefinition<RepoPublishArgs> = {
   roles: OWNER_ONLY,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    repository_id: z.string().uuid().describe('Repository (assignment container) id'),
+    repository_id: uuidString().describe('Repository (assignment container) id'),
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
@@ -396,7 +397,7 @@ export const repoSyncTool: ToolDefinition<RepoSyncArgs> = {
   roles: OWNER_ONLY,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    repository_id: z.string().uuid().describe('Repository (assignment container) id'),
+    repository_id: uuidString().describe('Repository (assignment container) id'),
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
@@ -491,7 +492,7 @@ export const repoUnpublishTool: ToolDefinition<RepoUnpublishArgs> = {
   roles: OWNER_ONLY,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    repository_id: z.string().uuid().describe('Repository (assignment container) id'),
+    repository_id: uuidString().describe('Repository (assignment container) id'),
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
@@ -561,20 +562,14 @@ export const repoCreateTool: ToolDefinition<RepoCreateArgs> = {
       .optional()
       .describe('Individual or group repo (default INDIVIDUAL)'),
     description: z.string().max(2000).optional(),
-    tag_id: z
-      .string()
-      .uuid()
+    tag_id: uuidString()
       .optional()
       .describe('Team tag id from list_tags (GROUP with instructor-assigned teams)'),
     team_formation_mode: z
       .enum(['INSTRUCTOR', 'SELF_FORMED'])
       .optional()
       .describe('GROUP only (default INSTRUCTOR)'),
-    team_formation_deadline: z
-      .string()
-      .datetime({ offset: true })
-      .optional()
-      .describe('GROUP only (ISO 8601)'),
+    team_formation_deadline: isoDateTime().optional().describe('GROUP only (ISO 8601)'),
     // min 2: the web form's team-size input floor.
     max_team_size: z.number().int().min(2).optional().describe('GROUP only (at least 2)'),
     project_template_id: z
@@ -775,7 +770,7 @@ export const repoUpdateTool: ToolDefinition<RepoUpdateArgs> = {
   roles: OWNER_ONLY,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    repository_id: z.string().uuid().describe('Repository (assignment container) id'),
+    repository_id: uuidString().describe('Repository (assignment container) id'),
     description: z.string().max(2000).nullable().optional(),
     template: z
       .string()
@@ -784,16 +779,9 @@ export const repoUpdateTool: ToolDefinition<RepoUpdateArgs> = {
       .optional()
       .describe('GitHub template repo name students are provisioned from'),
     type: z.enum(['INDIVIDUAL', 'GROUP']).optional(),
-    tag_id: z
-      .string()
-      .uuid()
-      .nullable()
-      .optional()
-      .describe('Team tag id from list_tags (GROUP only)'),
+    tag_id: uuidString().nullable().optional().describe('Team tag id from list_tags (GROUP only)'),
     team_formation_mode: z.enum(['INSTRUCTOR', 'SELF_FORMED']).optional().describe('GROUP only'),
-    team_formation_deadline: z
-      .string()
-      .datetime({ offset: true })
+    team_formation_deadline: isoDateTime()
       .nullable()
       .optional()
       .describe('GROUP only (ISO 8601); null clears it'),
@@ -1014,7 +1002,7 @@ export const repoDeleteTool: ToolDefinition<RepoDeleteArgs> = {
   roles: OWNER_ONLY,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    repository_id: z.string().uuid().describe('Repository (assignment container) id'),
+    repository_id: uuidString().describe('Repository (assignment container) id'),
     confirm: z
       .literal(true)
       .describe('Must be true — acknowledges its assignments are deleted with it'),

@@ -25,6 +25,7 @@
 import { ClassmojiService } from '@classmoji/services';
 import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
+import { uuidString } from '@classmoji/utils/zod-formats';
 import { closeLiveDocBeforeDelete, notifyLiveMetaChanged } from '../collab/lifecycle.ts';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
@@ -156,7 +157,7 @@ export const pageUpdateTool: ToolDefinition<PageUpdateArgs> = {
   roles: OWNER_TEACHER,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    page_id: z.string().uuid().describe('Page id'),
+    page_id: uuidString().describe('Page id'),
     title: z.string().min(1).max(200).optional().describe('New title (unique per classroom)'),
     width: z.number().int().min(1).max(4).optional().describe('Layout width (1–4, default 2)'),
     is_draft: z
@@ -241,7 +242,7 @@ export const pageDeleteTool: ToolDefinition<PageDeleteArgs> = {
   roles: OWNER_TEACHER,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    page_id: z.string().uuid().describe('Page id'),
+    page_id: uuidString().describe('Page id'),
   },
   handler: async (args, ctx) => {
     const page = await loadPageInClassroom(args.page_id, ctx);

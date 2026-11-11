@@ -34,6 +34,7 @@
 import { ClassmojiService } from '@classmoji/services';
 import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
+import { uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
 import {
@@ -222,7 +223,7 @@ export const mediaDeleteTool: ToolDefinition<MediaDeleteArgs> = {
   roles: TEACHING_TEAM,
   inputSchema: {
     classroom: classroomArg,
-    media_id: z.string().uuid().describe('Media id (from media_list)'),
+    media_id: uuidString().describe('Media id (from media_list)'),
   },
   handler: async (args, ctx) => {
     const { classroomId } = requireClassroomCtx(ctx);
@@ -275,8 +276,8 @@ export const fileUploadStartTool: ToolDefinition<FileUploadStartArgs> = {
   roles: TEACHING_TEAM,
   inputSchema: {
     classroom: classroomArg,
-    page_id: z.string().uuid().optional().describe('Page to add the file to'),
-    slide_id: z.string().uuid().optional().describe('Slide deck to add the file to'),
+    page_id: uuidString().optional().describe('Page to add the file to'),
+    slide_id: uuidString().optional().describe('Slide deck to add the file to'),
     folder: folderArg,
     filename: z
       .string()
@@ -344,7 +345,7 @@ export const fileUploadFinishTool: ToolDefinition<UploadIdArgs> = {
   roles: TEACHING_TEAM,
   inputSchema: {
     classroom: classroomArg,
-    upload_id: z.string().uuid().describe('upload_id from file_upload_start'),
+    upload_id: uuidString().describe('upload_id from file_upload_start'),
   },
   handler: async (args, ctx) => {
     const { classroomId } = requireClassroomCtx(ctx);
@@ -383,7 +384,7 @@ export const fileUploadStatusTool: ToolDefinition<UploadIdArgs> = {
   rateLimit: { capacity: 30, refillPerSecond: 1 },
   inputSchema: {
     classroom: classroomArg,
-    upload_id: z.string().uuid().describe('upload_id from file_upload_start or file_import_url'),
+    upload_id: uuidString().describe('upload_id from file_upload_start or file_import_url'),
   },
   handler: async (args, ctx) => {
     const { classroomId } = requireClassroomCtx(ctx);
@@ -440,8 +441,8 @@ export const fileImportUrlTool: ToolDefinition<FileImportUrlArgs> = {
   roles: TEACHING_TEAM,
   inputSchema: {
     classroom: classroomArg,
-    page_id: z.string().uuid().optional().describe('Page to add the file to'),
-    slide_id: z.string().uuid().optional().describe('Slide deck to add the file to'),
+    page_id: uuidString().optional().describe('Page to add the file to'),
+    slide_id: uuidString().optional().describe('Slide deck to add the file to'),
     folder: folderArg,
     url: z
       .string()
@@ -594,9 +595,9 @@ export const fileDownloadUrlTool: ToolDefinition<FileDownloadUrlArgs> = {
   roles: TEACHING_TEAM,
   inputSchema: {
     classroom: classroomArg,
-    page_id: z.string().uuid().optional().describe('Page whose assets folder holds the file'),
-    slide_id: z.string().uuid().optional().describe('Slide deck whose folder holds the file'),
-    media_id: z.string().uuid().optional().describe('Media id (from media_list)'),
+    page_id: uuidString().optional().describe('Page whose assets folder holds the file'),
+    slide_id: uuidString().optional().describe('Slide deck whose folder holds the file'),
+    media_id: uuidString().optional().describe('Media id (from media_list)'),
     path: z
       .string()
       .min(1)

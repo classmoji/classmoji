@@ -51,6 +51,7 @@
  */
 
 import { z } from 'zod';
+import { isoDateTime, uuidString } from '@classmoji/utils/zod-formats';
 import {
   FORM_LIMITS,
   isIdentityQuestion,
@@ -268,7 +269,7 @@ export const TEAM_SET_JOB_PARAMS: Readonly<
 
 export const TeamSetRuleSchema = z
   .object({
-    field_id: z.string().uuid(),
+    field_id: uuidString(),
     job: z.enum(TEAM_SET_JOBS),
     strength: z.enum(TEAM_SET_STRENGTHS),
     weight: z.number().int().min(1).max(10).default(DEFAULT_RULE_WEIGHT),
@@ -290,9 +291,9 @@ const pinId = z.string().min(1).max(40);
 const pinReason = z.string().max(200).optional();
 
 /** Provenance stamps: set by the service on save (stampProvenance), never by a patch. */
-const stampBy = z.string().uuid();
+const stampBy = uuidString();
 const stampVia = z.enum(TEAM_SET_STAMP_VIA);
-const stampAt = z.string().datetime({ offset: true });
+const stampAt = isoDateTime();
 
 /** Who added the pin, from where, when. Absent on pins saved before stamps existed. */
 const pinStamps = {
@@ -305,7 +306,7 @@ const TogetherPin = z
   .object({
     id: pinId,
     kind: z.literal('together'),
-    user_ids: z.array(z.string().uuid()).min(2).max(12),
+    user_ids: z.array(uuidString()).min(2).max(12),
     reason: pinReason,
     ...pinStamps,
   })
@@ -314,7 +315,7 @@ const ApartPin = z
   .object({
     id: pinId,
     kind: z.literal('apart'),
-    user_ids: z.array(z.string().uuid()).length(2),
+    user_ids: z.array(uuidString()).length(2),
     reason: pinReason,
     ...pinStamps,
   })
@@ -323,7 +324,7 @@ const OnOptionPin = z
   .object({
     id: pinId,
     kind: z.literal('on_option'),
-    user_id: z.string().uuid(),
+    user_id: uuidString(),
     option_id: z.string(),
     reason: pinReason,
     ...pinStamps,
@@ -333,7 +334,7 @@ const NotOptionsPin = z
   .object({
     id: pinId,
     kind: z.literal('not_options'),
-    user_id: z.string().uuid(),
+    user_id: uuidString(),
     option_ids: z.array(z.string()).min(1).max(100),
     reason: pinReason,
     ...pinStamps,
@@ -366,7 +367,7 @@ const GroupingSchema = z.discriminatedUnion('mode', [
   z
     .object({
       mode: z.literal('by_option'),
-      field_id: z.string().uuid(),
+      field_id: uuidString(),
       teams_per_option: z.number().int().min(1).max(20).default(1),
     })
     .strict(),
@@ -499,7 +500,7 @@ const RuleParamsPatchSchema = z
 /** Keyed by (field_id, job). strength is required only when the rule is NEW. */
 const RuleUpsertSchema = z
   .object({
-    field_id: z.string().uuid(),
+    field_id: uuidString(),
     job: z.enum(TEAM_SET_JOBS),
     strength: z.enum(TEAM_SET_STRENGTHS).optional(),
     weight: z.number().int().min(1).max(10).optional(),
@@ -507,9 +508,7 @@ const RuleUpsertSchema = z
   })
   .strict();
 
-const RuleRefSchema = z
-  .object({ field_id: z.string().uuid(), job: z.enum(TEAM_SET_JOBS) })
-  .strict();
+const RuleRefSchema = z.object({ field_id: uuidString(), job: z.enum(TEAM_SET_JOBS) }).strict();
 
 /**
  * Merges over the option's settings; `null` clears that one setting (open →

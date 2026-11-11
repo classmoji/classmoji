@@ -119,6 +119,7 @@ import {
   withoutRetiredKeys,
 } from '@classmoji/services/team-set-config';
 import { z } from 'zod';
+import { uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
 import { assertProTier } from '../authz/proTier.ts';
@@ -1379,7 +1380,7 @@ const PATCH_HELP = {
 // ─── Shared input schemas ───────────────────────────────────────────────────
 
 const classroomArg = z.string().describe("Classroom reference as 'org/slug'");
-const formIdArg = z.string().uuid().describe('Form id');
+const formIdArg = uuidString().describe('Form id');
 // Factories, not shared instances: the JSON Schema conversion turns a schema
 // object used twice in one tool into a `$ref`, which some clients can't read.
 const setRefSchema = () => z.string().min(1).max(100);
@@ -1520,7 +1521,7 @@ export const formTeamsGetTool: ToolDefinition<FormTeamsGetArgs> = {
       .optional()
       .describe('With run: include the members of each team (default true)'),
     compare_with: runRefSchema().optional().describe('With run: the run to compare it with'),
-    person: z.string().uuid().optional().describe('With run: a student’s user id'),
+    person: uuidString().optional().describe('With run: a student’s user id'),
   },
   handler: async (args, ctx) => {
     await assertProTier(ctx);
