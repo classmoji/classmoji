@@ -9,8 +9,8 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 const [dir, environment] = process.argv.slice(2);
-if (!dir || !['dev', 'staging'].includes(environment)) {
-  console.error('usage: check-build.mjs <site copy> <dev|staging>');
+if (!dir || !['dev', 'staging', 'production'].includes(environment)) {
+  console.error('usage: check-build.mjs <site copy> <dev|staging|production>');
   process.exit(2);
 }
 
@@ -23,13 +23,12 @@ const config = existsSync(configPath) ? JSON.parse(readFileSync(configPath, 'utf
 if (!config) {
   fail(`${configPath} is missing (was this a BUILD_TARGET=cloudflare build?)`);
 } else {
-  const name = `classmoji-site-${environment}`;
+  const name = environment === 'production' ? 'classmoji-site' : `classmoji-site-${environment}`;
   if (config.name !== name) fail(`built for ${config.name}, not ${name} (CLOUDFLARE_ENV=${environment}?)`);
 
   const routes = JSON.stringify(config.routes ?? []);
-  const expectedRoutes = environment === 'staging'
-    ? JSON.stringify([{ pattern: 'site.staging.classmoji.io', custom_domain: true }])
-    : '[]';
+  const host = { staging: 'site.staging.classmoji.io', production: 'classmoji.io' }[environment];
+  const expectedRoutes = host ? JSON.stringify([{ pattern: host, custom_domain: true }]) : '[]';
   if (routes !== expectedRoutes) fail(`routes are ${routes}, expected exactly ${expectedRoutes}`);
   if (config.route) fail(`a single "route" is set (${config.route}); only "routes" is expected`);
   if (config.workers_dev !== false) fail(`workers_dev is ${config.workers_dev}, expected false`);

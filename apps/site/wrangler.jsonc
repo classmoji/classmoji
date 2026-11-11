@@ -37,11 +37,11 @@
   // config it runs, i.e. dist/server/.dev.vars (gitignored with dist/; a
   // rebuild removes it), if you want the form to send.
   //
-  // No production environment yet: classmoji.io is still served by Fly
-  // (apps/site/fly.toml). The production switch adds env.production with the
-  // classmoji.io and www routes together with its DNS step; a `wrangler deploy`
-  // with a custom-domain route takes over an existing DNS record without
-  // asking, so the route must not exist before that step.
+  // Production (classmoji.io) is deployed by deploy-site-worker in
+  // .github/workflows/deploy-fly-prod.yml. A `wrangler deploy` with a
+  // custom-domain route takes over an existing DNS record without asking, so
+  // a new hostname is added here only together with its DNS step.
+  // www.classmoji.io is not attached (it had no working certificate on Fly).
   "env": {
     // LOCAL ONLY: `CLOUDFLARE_ENV=dev npm run build:cf`, then
     // `npx wrangler dev -c dist/server/wrangler.json` in the build copy (see
@@ -75,6 +75,26 @@
       ],
       // /health reports the version id (x-worker-version) so CI can tell
       // the new deploy is the one answering.
+      "version_metadata": { "binding": "CF_VERSION_METADATA" },
+      "observability": {
+        "enabled": true
+      }
+    },
+
+    // classmoji.io. Indexable: the noindex rule and header are staging-only.
+    "production": {
+      "name": "classmoji-site",
+      "routes": [
+        {
+          "pattern": "classmoji.io",
+          "custom_domain": true
+        }
+      ],
+      // Same limits as staging, in namespaces of their own.
+      "ratelimits": [
+        { "name": "CONTACT_RATE_LIMIT", "namespace_id": "2611201", "simple": { "limit": 3, "period": 60 } },
+        { "name": "CONTACT_RATE_LIMIT_GLOBAL", "namespace_id": "2611202", "simple": { "limit": 10, "period": 60 } }
+      ],
       "version_metadata": { "binding": "CF_VERSION_METADATA" },
       "observability": {
         "enabled": true
