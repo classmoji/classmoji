@@ -1,7 +1,23 @@
 import type { APIRoute } from 'astro';
+// On Cloudflare the Worker's bindings; the Node build aliases this module to
+// an empty stub (astro.config.mjs), so `env` is {} there and unused.
+import { env } from 'cloudflare:workers';
+import {
+  clientIp,
+  createMemoryLimiter,
+  limiterKey,
+  overLimit,
+  parseForm,
+  readCappedBody,
+  type ContactBindings,
+  type Runtime,
+} from '../../lib/contactGuard';
 
 // The one route on this site that runs on the server; every page is still static.
 export const prerender = false;
+
+// Fixed at build time (astro.config.mjs): Fly's Node server or a Cloudflare Worker.
+const RUNTIME: Runtime = __CF_BUILD__ ? 'workerd' : 'node';
 
 const TO = 'hello@classmoji.io';
 const FROM = 'Classmoji <hello@classmoji.io>';
@@ -9,23 +25,9 @@ const FROM = 'Classmoji <hello@classmoji.io>';
 const LIMITS = { name: 120, email: 254, school: 160, message: 5000 };
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// A few messages per address per hour. In memory, so it resets on deploy and is
-// per machine; the site runs on one, and this only has to stop casual floods.
-const WINDOW_MS = 60 * 60 * 1000;
-const MAX_PER_WINDOW = 5;
-const recent = new Map<string, number[]>();
-
-function rateLimited(ip: string): boolean {
-  const now = Date.now();
-  const hits = (recent.get(ip) ?? []).filter(t => now - t < WINDOW_MS);
-  if (hits.length >= MAX_PER_WINDOW) {
-    recent.set(ip, hits);
-    return true;
-  }
-  hits.push(now);
-  recent.set(ip, hits);
-  return false;
-}
+// A few messages per address per hour, in memory (per machine on Fly, per
+// isolate on Workers, where the rate-limit bindings add per-minute limits).
+const memory = createMemoryLimiter({ max: 5, windowMs: 60 * 60 * 1000 });
 
 const escapeHtml = (value: string) =>
   value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
@@ -41,9 +43,16 @@ function reply(request: Request, status: number, body: { ok: boolean; error?: st
 }
 
 export const POST: APIRoute = async ({ request, clientAddress }) => {
+  // Capped before parsing, on both runtimes (the Node adapter's bodySizeLimit
+  // is the same size; Workers has no such limit of its own).
+  const body = await readCappedBody(request).catch(() => null);
+  if (body === 'too-large') {
+    return reply(request, 413, { ok: false, error: 'That message is too long.' });
+  }
   let form: FormData;
   try {
-    form = await request.formData();
+    if (!body) throw new Error('unreadable body');
+    form = await parseForm(body, request.headers.get('content-type'));
   } catch {
     return reply(request, 400, { ok: false, error: 'Could not read the form.' });
   }
@@ -71,9 +80,15 @@ export const POST: APIRoute = async ({ request, clientAddress }) => {
     return reply(request, 400, { ok: false, error: 'That message is too long.' });
   }
 
-  const ip = request.headers.get('fly-client-ip') ?? clientAddress ?? 'unknown';
-  if (rateLimited(ip)) {
-    return reply(request, 429, { ok: false, error: 'Too many messages. Try again in an hour.' });
+  const key = limiterKey(clientIp(RUNTIME, request.headers, () => clientAddress));
+  const limited = await overLimit({
+    runtime: RUNTIME,
+    key,
+    memory,
+    bindings: env as ContactBindings,
+  });
+  if (limited) {
+    return reply(request, 429, { ok: false, error: 'Too many messages. Try again later.' });
   }
 
   const apiKey = process.env.RESEND_API_KEY;

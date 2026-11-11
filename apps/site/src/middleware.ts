@@ -7,9 +7,28 @@ import { defineMiddleware } from 'astro:middleware';
 // reaches them; `astro dev` still uses /_image.
 const UNUSED_ROUTES = new Set(['/_image', '/_server-islands/[name]']);
 
-export const onRequest = defineMiddleware((context, next) => {
-  if (import.meta.env.PROD && UNUSED_ROUTES.has(context.routePattern)) {
-    return new Response(null, { status: 404 });
+// The staging Worker (site.staging.classmoji.io) must stay out of search
+// results. Static files get the header from dist/client/_headers
+// (astro.config.mjs); this covers what the Worker answers itself. A build-time
+// constant only: this file also loads in Node while pages prerender.
+const NOINDEX = __CF_BUILD__ && __SITE_ENV__ === 'staging';
+
+function noindex(response: Response): Response {
+  if (!NOINDEX) return response;
+  try {
+    response.headers.set('X-Robots-Tag', 'noindex');
+    return response;
+  } catch {
+    // Immutable headers (a fetched response): copy it.
+    const copy = new Response(response.body, response);
+    copy.headers.set('X-Robots-Tag', 'noindex');
+    return copy;
   }
-  return next();
+}
+
+export const onRequest = defineMiddleware(async (context, next) => {
+  if (import.meta.env.PROD && UNUSED_ROUTES.has(context.routePattern)) {
+    return noindex(new Response(null, { status: 404 }));
+  }
+  return noindex(await next());
 });

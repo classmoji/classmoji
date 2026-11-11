@@ -251,33 +251,242 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
-  deploy-site:
+  # The site runs as a Cloudflare Worker on classmoji.io; the Fly app
+  # classmoji-site is kept scaled to zero as the way back (restore its DNS
+  # records and `flyctl deploy` it with apps/site/Dockerfile).
+  deploy-site-worker:
     needs: changes
     if: needs.changes.outputs.site == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Read-only token: the job talks to Cloudflare and Infisical with their
+    # own credentials and never writes back to the repo. The build reads it
+    # (GITHUB_TOKEN) only for the star count in the header.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: true
-          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
-      - uses: actions/setup-node@v4
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: '24'
-      # One npm everywhere, the packageManager one (10.9.9). Node 24 bundles
-      # npm 11, which writes `libc` fields into lockfile entries it re-resolves
-      # and warns about dependency install scripts.
+
+      # One npm everywhere, the packageManager one (see deploy-cloudflare-staging.yml).
       - name: Use npm 10.9
         run: npm install -g npm@10.9.9 && npm --version
-      - name: Heal package-lock.json against submodule workspaces
-        run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
-      - uses: ./.github/actions/setup-flyctl
-        timeout-minutes: 15
-      - name: Deploy site
-        working-directory: apps/site
-        run: flyctl deploy --remote-only
+
+      # The copy is outside the checkout, so npm treats it as its own project
+      # (inside, `npm install` would act on the workspace root). install.sh
+      # fails on a second wrangler/workerd or a vite other than the site's 8.
+      - name: Install the site (standalone copy)
+        run: |
+          cp -R apps/site "$RUNNER_TEMP/site"
+          apps/site/cloudflare/install.sh "$RUNNER_TEMP/site"
+
+      # The contact route's guards (client address, rate limits, body cap).
+      # vitest is not a site dependency either; the version the root pins.
+      - name: Test the site
+        working-directory: ${{ runner.temp }}/site
+        run: npx --yes vitest@4.1.12 run
+
+      # The environment is chosen at BUILD time: the Cloudflare Vite plugin
+      # flattens env.production into dist/server/wrangler.json, and every
+      # wrangler call below reads that file. check-build.mjs asserts its name,
+      # its routes (exactly classmoji.io), the two rate-limit bindings, no KV
+      # or Images binding, NO noindex rule in dist/client/_headers, and that
+      # the GITHUB_TOKEN value is not in dist.
+      - name: Build the site Worker
+        working-directory: ${{ runner.temp }}/site
         env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          BUILD_TARGET: cloudflare
+          CLOUDFLARE_ENV: production
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          npx astro build
+          node "$GITHUB_WORKSPACE/apps/site/cloudflare/check-build.mjs" . production
+
+      - name: Deploy site Worker
+        id: deploy
+        working-directory: ${{ runner.temp }}/site
+        run: |
+          set -euo pipefail
+          npx wrangler deploy -c dist/server/wrangler.json | tee deploy.log
+          VERSION_ID="$(grep -oE 'Current Version ID: [0-9a-f-]{36}' deploy.log | awk '{print $4}')"
+          [ -n "$VERSION_ID" ] || { echo "::error::no version id in the wrangler deploy output"; exit 1; }
+          echo "version_id=$VERSION_ID" >> "$GITHUB_OUTPUT"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      # The version deploy-cloudflare-staging.yml pins, moved on together.
+      - name: Install Infisical CLI
+        run: npm install -g @infisical/cli@0.44.9
+
+      # After the deploy: `wrangler secret bulk` needs the script to exist.
+      # The site reads ONE secret, RESEND_API_KEY (the contact form; the
+      # production key, which platform mail shares). Infisical `prod` holds every
+      # service's secrets, so only that key is pushed. Without it the form
+      # answers 503 ("email us instead"), so it is required. Names only in
+      # logs, never values.
+      - name: Sync secrets from Infisical
+        working-directory: ${{ runner.temp }}/site
+        env:
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          INFISICAL_PROJECT_ID: e9a6487c-350e-41e7-8bba-2d95ca5934a6
+          INFISICAL_HOST: https://app.infisical.com
+          INFISICAL_DISABLE_UPDATE_CHECK: 'true'
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+
+          RAW_SECRETS="$(mktemp)"
+          BULK_SECRETS="$(mktemp)"
+          trap 'rm -f "$RAW_SECRETS" "$BULK_SECRETS"' EXIT
+
+          INFISICAL_TOKEN="$(infisical login \
+            --method=universal-auth \
+            --client-id="$INFISICAL_CLIENT_ID" \
+            --client-secret="$INFISICAL_CLIENT_SECRET" \
+            --silent --plain)"
+          export INFISICAL_TOKEN
+
+          EXPORT_STDERR="$(mktemp)"
+          infisical export \
+            --env=prod \
+            --path=/ \
+            --projectId="$INFISICAL_PROJECT_ID" \
+            --format=json --silent > "$RAW_SECRETS" 2> "$EXPORT_STDERR" || {
+              echo "::error::infisical export failed:"; cat "$EXPORT_STDERR"; exit 1; }
+          [ -s "$EXPORT_STDERR" ] && { echo "infisical export stderr:"; cat "$EXPORT_STDERR"; }
+          rm -f "$EXPORT_STDERR"
+
+          node --input-type=module -e '
+            import { readFileSync, writeFileSync } from "node:fs";
+            const [raw, out, configPath] = process.argv.slice(1);
+            const required = ["RESEND_API_KEY"];
+
+            const text = readFileSync(raw, "utf8");
+            const start = Math.min(...["[", "{"].map(c => text.indexOf(c)).filter(i => i >= 0));
+            let parsed;
+            try {
+              if (!Number.isFinite(start)) throw new Error("no JSON opener");
+              parsed = JSON.parse(text.slice(start));
+            } catch (error) {
+              const head = text.split("\n")[0].slice(0, 80).replace(/\S{12,}/g, "<redacted>");
+              console.error(`::error::Infisical export was not valid JSON (${text.length} bytes, ${error.message}). First line: ${JSON.stringify(head)}`);
+              process.exit(1);
+            }
+            const secrets = Array.isArray(parsed)
+              ? Object.fromEntries(parsed.map(entry => [entry.key, entry.value]))
+              : parsed;
+            const valueOf = key => (typeof secrets[key] === "string" ? secrets[key] : "");
+            const isSet = key => valueOf(key).trim().length > 0;
+
+            const vars = Object.keys(JSON.parse(readFileSync(configPath, "utf8")).vars ?? {});
+            const problems = [];
+            const clashing = required.filter(key => vars.includes(key));
+            const missing = required.filter(key => !isSet(key));
+            const unexpanded = required.filter(key => isSet(key) && /\$\{/.test(valueOf(key)));
+            if (clashing.length) problems.push(`names also set as wrangler vars: ${clashing.join(", ")}.`);
+            if (missing.length) problems.push(`is missing or blank: ${missing.join(", ")}. The contact form would answer 503.`);
+            if (unexpanded.length) problems.push(`has unexpanded references: ${unexpanded.join(", ")}.`);
+            if (problems.length) {
+              for (const problem of problems) console.error(`::error::Infisical / (prod) ${problem}`);
+              process.exit(1);
+            }
+
+            writeFileSync(out, JSON.stringify(Object.fromEntries(required.map(key => [key, secrets[key]]))));
+            console.log(`Verified ${required.length} secret(s) from Infisical (${required.join(", ")}).`);
+          ' "$RAW_SECRETS" "$BULK_SECRETS" dist/server/wrangler.json
+
+          npx wrangler secret bulk "$BULK_SECRETS" -c dist/server/wrangler.json
+
+      # `secret bulk` makes and deploys ANOTHER version (the deploy's code with
+      # the new secret), so the version to expect is the one deployed now, not
+      # the deploy step's (deploy-admin-worker explains the check).
+      - name: Read the live version
+        id: live
+        working-directory: ${{ runner.temp }}/site
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DEPLOYED: ${{ steps.deploy.outputs.version_id }}
+        run: |
+          set -euo pipefail
+          npx wrangler deployments status -c dist/server/wrangler.json --json > status.json
+          VERSION_ID="$(node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            const status = JSON.parse(readFileSync("status.json", "utf8"));
+            const live = (status.versions ?? []).filter(v => v.percentage === 100);
+            const fail = m => { console.error(`::error::${m}`); process.exit(1); };
+            if (live.length !== 1) fail(`expected one version at 100%, got ${JSON.stringify(status.versions)}`);
+            const id = live[0].version_id;
+            const bySecret = status.annotations?.["workers/triggered_by"] === "secret";
+            if (id !== process.env.DEPLOYED && !bySecret) fail(`live version ${id} is neither the deploy (${process.env.DEPLOYED}) nor its secret change`);
+            console.log(id);
+          ')"
+          echo "Live version: $VERSION_ID (deploy step made $DEPLOYED)"
+          echo "version_id=$VERSION_ID" >> "$GITHUB_OUTPUT"
+
+      # The new version must be the one answering: /health carries the
+      # Worker's version id (CF_VERSION_METADATA) in x-worker-version. Then
+      # the rest of the site: a static page and a 404, neither with an
+      # X-Robots-Tag (production must stay indexable);
+      # the server build is not served; and the contact route answers. The
+      # POST fills the honeypot field, so it succeeds without sending mail.
+      - name: Smoke check classmoji.io
+        env:
+          EXPECTED: ${{ steps.live.outputs.version_id }}
+          SITE: https://classmoji.io
+        run: |
+          set -uo pipefail
+          header() { printf '%s' "$1" | tr -d '\r' | awk -F': ' -v name="$2" 'tolower($1)==name {print $2}'; }
+          status() { printf '%s' "$1" | head -1 | awk '{print $2}'; }
+
+          ready=""
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            HEADERS="$(curl -sS -o /dev/null -D - --max-time 15 "$SITE/health" || true)"
+            STATUS="$(status "$HEADERS")"
+            SERVED="$(header "$HEADERS" x-worker-version)"
+            if [ "$STATUS" = "200" ] && [ "$SERVED" = "$EXPECTED" ]; then
+              echo "$SITE/health: 200 from version $SERVED"
+              ready=1
+              break
+            fi
+            echo "attempt $attempt: status ${STATUS:-none}, version ${SERVED:-none} (want $EXPECTED)"
+            sleep 10
+          done
+          [ -n "$ready" ] || { echo "::error::$SITE is not serving version $EXPECTED"; exit 1; }
+
+          failed=0
+          check() { # path, expected status (production: never X-Robots-Tag)
+            local headers status robots
+            headers="$(curl -sS -o /dev/null -D - --max-time 15 "$SITE$1" || true)"
+            status="$(status "$headers")"
+            robots="$(header "$headers" x-robots-tag)"
+            if [ "$status" != "$2" ] || [ -n "$robots" ]; then
+              echo "::error::$SITE$1: status ${status:-none} (want $2), X-Robots-Tag '${robots}'"
+              failed=1
+            else
+              echo "$SITE$1: $status${robots:+, X-Robots-Tag $robots}"
+            fi
+          }
+          check / 200
+          check /docs/instructors/roster/ 200
+          check /this-page-does-not-exist 404
+          check /server/wrangler.json 404
+
+          CONTACT="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
+            -H "Origin: $SITE" -H 'Accept: application/json' \
+            --data 'website=smoke-check&name=CI&email=ci@example.com&message=smoke' "$SITE/api/contact" || true)"
+          if [ "$CONTACT" = "200" ]; then echo "$SITE/api/contact (honeypot): 200"; else
+            echo "::error::$SITE/api/contact (honeypot): $CONTACT, want 200"; failed=1; fi
+          exit "$failed"
 
   deploy-slides:
     needs: [changes, deploy-webapp]
