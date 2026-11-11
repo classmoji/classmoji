@@ -2294,6 +2294,11 @@ function importsOf(file: string): { spec: string; type: boolean }[] {
   return found;
 }
 
+/** Workspace modules the scan follows like relative ones (they must be pure too). */
+const FOLLOWED: Record<string, string> = {
+  '@classmoji/utils/input-caps': resolve(HERE, '../../../../utils/src/inputCaps.ts'),
+};
+
 const FORBIDDEN = [
   /^node:/,
   /prisma/i,
@@ -2317,6 +2322,7 @@ describe('import scan', () => {
           expect(spec, `${file} imports ${spec}`).not.toMatch(pattern);
         if (type) continue; // erased at build
         if (spec.startsWith('.')) queue.push(resolve(dirname(file), spec));
+        else if (FOLLOWED[spec]) queue.push(FOLLOWED[spec]);
         else bare.add(spec);
       }
     }
@@ -2325,6 +2331,7 @@ describe('import scan', () => {
     expect(names).toEqual(
       expect.arrayContaining([
         'formContract.ts',
+        'inputCaps.ts',
         'teamSetConfig.ts',
         'teamSetExplain.ts',
         'teamSetProblem.ts',

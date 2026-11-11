@@ -13,7 +13,7 @@
  * `classmoji` dev database (the house rule; see forms.integration.test.ts).
  */
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { convertToModelMessages } from 'ai';
 
@@ -25,7 +25,7 @@ const RUN = Boolean(DATABASE_URL) && isLocal && !isSharedDevDb;
 const getPrisma = (await import('@classmoji/database')).default;
 const grading = await import('../quizGrading.service.ts');
 const chat = await import('../quizChat.service.ts');
-const { BUTTON_TEXT, CONTRACT_VERSION, renderSubmissionForModel } =
+const { BUTTON_TEXT, CodeSubmissionInputSchema, CONTRACT_VERSION, renderSubmissionForModel } =
   await import('@classmoji/utils/quiz-agent');
 
 type Answer = {
@@ -431,11 +431,27 @@ describe.skipIf(!RUN)('quiz chat: code sandbox questions (integration)', () => {
       submission({ files: { '/index.js': 'changed' } }),
       submission({ files: { ...submission().files, '/extra.js': 'x' } }),
       submission({ files: STARTER }),
+      { ...submission(), errors: Array.from({ length: 300_000 }, () => ({})) },
       'just text',
       null,
     ];
     for (const s of cases) {
       expect(await codeOf(submit(attemptId, s))).toBe('invalid_submission');
+    }
+    await expectNothingWritten(attemptId, before);
+  });
+
+  it('refuses invalid_submission when checking the submission throws', async () => {
+    const { attemptId } = await withCard();
+    const before = await countsOf(attemptId);
+    const spy = vi.spyOn(CodeSubmissionInputSchema, 'safeParse').mockImplementationOnce(() => {
+      throw new Error('parse failed');
+    });
+    try {
+      expect(await codeOf(submit(attemptId, submission()))).toBe('invalid_submission');
+      expect(spy).toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
     }
     await expectNothingWritten(attemptId, before);
   });

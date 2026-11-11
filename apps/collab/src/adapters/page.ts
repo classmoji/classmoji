@@ -52,6 +52,7 @@ import {
   type PageBlock,
 } from './pageDoc.ts';
 import { findBlockElement, pageCursor } from './pageCursor.ts';
+import { parseOpsPayload } from './parseOps.ts';
 
 const pageContent = ClassmojiService.pageContent;
 type BlockOp = Parameters<typeof pageContent.applyBlockOps>[1][number];
@@ -431,9 +432,9 @@ export function createPageAdapter(
     },
 
     parseOps(raw) {
-      const parsed = pageContent.pageBlockOpsPayloadSchema.safeParse(raw);
+      const parsed = parseOpsPayload(pageContent.pageBlockOpsPayloadSchema, raw);
       if (!parsed.success) {
-        throw new CollabHttpError(400, { error: 'invalid-ops', issues: parsed.error.issues });
+        throw new CollabHttpError(400, { error: 'invalid-ops', issues: parsed.issues });
       }
       return parsed.data;
     },

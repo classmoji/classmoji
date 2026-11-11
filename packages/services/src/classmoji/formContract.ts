@@ -4,7 +4,7 @@
  * PURE MODULE. Imported by the server services AND by browser code (the builder
  * and the renderer in apps/pages), so it must stay free of anything Node- or
  * Prisma-shaped:
- *   - zod is the only import;
+ *   - zod, and @classmoji/utils/input-caps (zod only), are the only imports;
  *   - ids are minted with `globalThis.crypto.randomUUID()`, never `node:crypto`;
  *   - byte sizes are measured with `TextEncoder`, never `Buffer`.
  * Reach it through the package subpath `@classmoji/services/form-contract` —
@@ -40,6 +40,7 @@
  */
 
 import { z } from 'zod';
+import { capArray, issueText } from '@classmoji/utils/input-caps';
 
 /**
  * Bumped when a stored definition's shape changes in a way older readers can
@@ -622,13 +623,18 @@ const pickList = (
   const floor = field.min_selections ?? 0;
   const ceiling = Math.min(field.max_selections ?? capacity, capacity);
   const required = field.required ? Math.max(1, floor) : 0;
-  return z
-    .array(item)
-    .min(required, `Pick at least ${required}`)
-    .max(ceiling, `Pick at most ${ceiling}`)
-    .refine(values => field.required || values.length === 0 || values.length >= floor, {
-      message: `Pick at least ${floor}, or none`,
-    });
+  // The length is checked before the picks are (capArray), so an oversized
+  // list is one issue.
+  return capArray(
+    z
+      .array(item)
+      .min(required, `Pick at least ${required}`)
+      .max(ceiling, `Pick at most ${ceiling}`),
+    ceiling,
+    `Pick at most ${ceiling}`
+  ).refine(values => field.required || values.length === 0 || values.length >= floor, {
+    message: `Pick at least ${floor}, or none`,
+  });
 };
 
 // ─── The registry ───────────────────────────────────────────────────────────
@@ -795,13 +801,15 @@ export const FIELD_TYPE_REGISTRY = {
     // Ranks are positional: index 0 is the first choice. Each option may be
     // used once — the constraint Fillout could only express as a warning banner.
     answerSchema: field =>
-      z
-        .array(oneOf(field.options))
-        .min(field.required ? field.ranks : 0)
-        .max(field.ranks)
-        .refine(values => new Set(values).size === values.length, {
-          message: 'Each option may be ranked once',
-        }),
+      capArray(
+        z
+          .array(oneOf(field.options))
+          .min(field.required ? field.ranks : 0)
+          .max(field.ranks),
+        field.ranks
+      ).refine(values => new Set(values).size === values.length, {
+        message: 'Each option may be ranked once',
+      }),
   } satisfies FieldTypeSpec<z.infer<typeof rankedChoiceDef>>,
 
   matrix: {
@@ -1179,6 +1187,21 @@ function optionListsOf(field: FormField): FormOption[][] {
 }
 
 /**
+ * `schema.safeParse(value)`, or null when the parse throws: callers refuse it
+ * with their usual code.
+ */
+function safeParseOrNull<T extends z.ZodTypeAny>(
+  schema: T,
+  value: unknown
+): z.SafeParseReturnType<z.input<T>, z.output<T>> | null {
+  try {
+    return schema.safeParse(value);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Validate and NORMALIZE a field definition. The return value is what belongs
  * in FormRevision.fields — ids minted, options expanded to objects, defaults
  * filled in, linked dropdown options copied from their source.
@@ -1186,11 +1209,17 @@ function optionListsOf(field: FormField): FormOption[][] {
  * @throws Error with code FORM_DEFINITION_INVALID / FORM_DEFINITION_TOO_LARGE.
  */
 export function parseFormDefinition(input: unknown): FormDefinition {
-  const parsed = definitionSchema.safeParse(input);
+  const parsed = safeParseOrNull(definitionSchema, input);
+  if (!parsed) {
+    throw formContractError(
+      FORM_DEFINITION_INVALID,
+      'Invalid form definition: it could not be checked.'
+    );
+  }
   if (!parsed.success) {
     throw formContractError(
       FORM_DEFINITION_INVALID,
-      `Invalid form definition: ${parsed.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; ')}`,
+      `Invalid form definition: ${issueText(parsed.error.issues)}`,
       { issues: parsed.error.issues }
     );
   }
@@ -1357,11 +1386,14 @@ export function parseAnswers(
     );
   }
 
-  const parsed = buildResponseSchema(fields, ctx).safeParse(answers);
+  const parsed = safeParseOrNull(buildResponseSchema(fields, ctx), answers);
+  if (!parsed) {
+    throw formContractError(FORM_ANSWERS_INVALID, 'Invalid answers: they could not be checked.');
+  }
   if (!parsed.success) {
     throw formContractError(
       FORM_ANSWERS_INVALID,
-      `Invalid answers: ${parsed.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; ')}`,
+      `Invalid answers: ${issueText(parsed.error.issues)}`,
       { issues: parsed.error.issues }
     );
   }

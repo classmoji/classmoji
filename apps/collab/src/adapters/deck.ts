@@ -77,6 +77,7 @@ import {
 import { LOCK_TAKEOVER_IDLE_MS } from '@classmoji/collab';
 
 import { deckView, itemHash, type ItemView } from '@classmoji/collab/hash';
+import { parseOpsPayload } from './parseOps.ts';
 
 import {
   CollabHttpError,
@@ -506,9 +507,9 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
   }
 
   parseOps(raw: unknown): DeckOp[] {
-    const parsed = deckOpsPayloadSchema.safeParse(raw);
+    const parsed = parseOpsPayload(deckOpsPayloadSchema, raw);
     if (!parsed.success) {
-      throw new CollabHttpError(400, { error: 'invalid-ops', issues: parsed.error.issues });
+      throw new CollabHttpError(400, { error: 'invalid-ops', issues: parsed.issues });
     }
     return parsed.data;
   }

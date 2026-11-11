@@ -16,6 +16,7 @@
     "./return-path": "./src/returnPath.ts",
     "./upload-limit": "./src/uploadLimit.ts",
     "./upload-concurrency": "./src/uploadConcurrency.ts",
+    "./input-caps": "./src/inputCaps.ts",
     "./quiz-agent": "./src/quizAgent/index.ts",
     "./quiz-agent/limits": "./src/quizAgent/limits.ts",
     "./quiz-agent/copy": "./src/quizAgent/copy.ts",

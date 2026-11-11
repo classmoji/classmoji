@@ -897,8 +897,16 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
       } catch {
         rawOps = undefined; // invalid JSON → schema rejects → typed 400 below
       }
-      const parsed = ClassmojiService.pageContent.pageBlockOpsPayloadSchema.safeParse(rawOps);
-      if (!parsed.success) {
+      // A parse that throws is answered like one that fails.
+      let parsed: ReturnType<
+        typeof ClassmojiService.pageContent.pageBlockOpsPayloadSchema.safeParse
+      > | null = null;
+      try {
+        parsed = ClassmojiService.pageContent.pageBlockOpsPayloadSchema.safeParse(rawOps);
+      } catch {
+        parsed = null;
+      }
+      if (!parsed?.success) {
         // `code` makes the client auto-fall-back to ONE whole-document save
         // (its code-keyed fallback effect), which needs no base to replay.
         return Response.json(

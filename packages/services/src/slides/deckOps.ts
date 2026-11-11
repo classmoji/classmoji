@@ -25,6 +25,12 @@ import * as cheerio from 'cheerio';
 import type { Element } from 'domhandler';
 import { z } from 'zod';
 import {
+  capArray,
+  capElements,
+  capKeys,
+  MAX_OPS_PAYLOAD_ELEMENTS,
+} from '@classmoji/utils/input-caps';
+import {
   BLOCK_ID_ATTR,
   HTML_BLOCK_FRAME_STYLE,
   blockMarkup,
@@ -69,7 +75,29 @@ export const MAX_SLIDE_HTML = MAX_SLIDE_HTML_LENGTH;
 
 // ─── Op schemas ──────────────────────────────────────────────────────────────
 
-const attrsSchema = z.record(z.string());
+/**
+ * Size caps on deck ops, each checked before what it caps is parsed
+ * (`capArray`, `capKeys`, `capElements` from @classmoji/utils/input-caps).
+ * Real slides carry a handful of section attributes; the largest real deck
+ * measured has under 50 top-level slides.
+ */
+export const DECK_OPS_LIMITS = {
+  /** Ops in one editor save. */
+  MAX_OPS: 400,
+  /** Slides in one insert op, and child slides in one new stack. */
+  MAX_INSERT_SLIDES: 20,
+  MAX_NEW_CHILDREN: 20,
+  /** Ids in one reorder op: the top-level slides of a deck. */
+  MAX_ORDER: 1_000,
+  /** Section attributes on one slide. */
+  MAX_ATTRS: 64,
+  /** Array elements and object members in one editor save, all ops together. */
+  MAX_PAYLOAD_ELEMENTS: MAX_OPS_PAYLOAD_ELEMENTS,
+} as const;
+
+const ATTRS_CAP_MESSAGE = `A slide has at most ${DECK_OPS_LIMITS.MAX_ATTRS} attributes`;
+
+const attrsSchema = capKeys(z.record(z.string()), DECK_OPS_LIMITS.MAX_ATTRS, ATTRS_CAP_MESSAGE);
 
 /**
  * What an agent writing slide html needs to know beyond plain HTML: the
@@ -101,10 +129,10 @@ const newSlideSchema = z
     notes: z.string().max(50_000).optional(),
     hidden: z.boolean().optional(),
     attrs: attrsSchema.optional(),
-    children: z
-      .array(newChildSlideSchema)
-      .min(1)
-      .max(20)
+    children: capArray(
+      z.array(newChildSlideSchema).min(1).max(DECK_OPS_LIMITS.MAX_NEW_CHILDREN),
+      DECK_OPS_LIMITS.MAX_NEW_CHILDREN
+    )
       .optional()
       .describe(
         'Create a vertical stack: the slide becomes a container holding these child slides ' +
@@ -190,8 +218,7 @@ export const deckOpSchema = z.discriminatedUnion('op', [
       .optional()
       .describe('Speaker notes HTML; null or empty string removes the notes'),
     hidden: z.boolean().optional(),
-    attrs: z
-      .record(z.string().nullable())
+    attrs: capKeys(z.record(z.string().nullable()), DECK_OPS_LIMITS.MAX_ATTRS, ATTRS_CAP_MESSAGE)
       .nullable()
       .optional()
       .describe(
@@ -205,7 +232,10 @@ export const deckOpSchema = z.discriminatedUnion('op', [
   }),
   z.object({
     op: z.literal('insert'),
-    slides: z.array(newSlideSchema).min(1).max(20),
+    slides: capArray(
+      z.array(newSlideSchema).min(1).max(DECK_OPS_LIMITS.MAX_INSERT_SLIDES),
+      DECK_OPS_LIMITS.MAX_INSERT_SLIDES
+    ),
     position: positionSchema,
   }),
   z.object({
@@ -219,10 +249,10 @@ export const deckOpSchema = z.discriminatedUnion('op', [
   }),
   z.object({
     op: z.literal('reorder'),
-    order: z
-      .array(z.string().min(1))
-      .min(1)
-      .describe('The complete new top-level slide order (a permutation of current top-level ids)'),
+    order: capArray(
+      z.array(z.string().min(1)).min(1).max(DECK_OPS_LIMITS.MAX_ORDER),
+      DECK_OPS_LIMITS.MAX_ORDER
+    ).describe('The complete new top-level slide order (a permutation of current top-level ids)'),
   }),
   z.object({
     op: z.literal('set_theme'),
@@ -271,9 +301,13 @@ export type DeckOp = z.infer<typeof deckOpSchema>;
 /**
  * Payload schema for the slides editor's ops-shaped save (a JSON array of
  * ops). More generous than deck_apply's 25-op cap — an editor session can
- * touch many slides between saves.
+ * touch many slides between saves. The whole payload is counted first
+ * (`MAX_PAYLOAD_ELEMENTS`), then the op count.
  */
-export const deckOpsPayloadSchema = z.array(deckOpSchema).min(1).max(400);
+export const deckOpsPayloadSchema = capElements(
+  capArray(z.array(deckOpSchema).min(1).max(DECK_OPS_LIMITS.MAX_OPS), DECK_OPS_LIMITS.MAX_OPS),
+  DECK_OPS_LIMITS.MAX_PAYLOAD_ELEMENTS
+);
 
 // ─── Errors / lookup helpers ─────────────────────────────────────────────────
 
