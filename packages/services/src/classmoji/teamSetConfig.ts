@@ -51,6 +51,7 @@
  */
 
 import { z } from 'zod';
+import { capKeys } from '@classmoji/utils/input-caps';
 import { isoDateTime, uuidString } from '@classmoji/utils/zod-formats';
 import {
   FORM_LIMITS,
@@ -200,12 +201,15 @@ const RULE_ID = new RegExp(
 );
 const RuleIdSchema = z.string().regex(RULE_ID, { message: 'is not a rule of a question' });
 
-/** Per answer: 'a' = rule_a counts more for that person, 'b' = rule_b does, 'none' = no change. */
-const PriorityAnswersSchema = z
-  .record(z.string().min(1).max(64), z.enum(['a', 'b', 'none']))
-  .refine(answers => Object.keys(answers).length <= FORM_LIMITS.MAX_OPTIONS + 2, {
-    message: `lists more than ${FORM_LIMITS.MAX_OPTIONS + 2} answers`,
-  });
+/**
+ * Per answer: 'a' = rule_a counts more for that person, 'b' = rule_b does,
+ * 'none' = no change. The answer count is checked before the answers are.
+ */
+const PriorityAnswersSchema = capKeys(
+  z.record(z.string().min(1).max(64), z.enum(['a', 'b', 'none'])),
+  FORM_LIMITS.MAX_OPTIONS + 2,
+  `lists more than ${FORM_LIMITS.MAX_OPTIONS + 2} answers`
+);
 export type TeamSetPriorityAnswer = 'a' | 'b' | 'none';
 
 const PriorityShiftSchema = z.number().int().min(10).max(90).multipleOf(10);
