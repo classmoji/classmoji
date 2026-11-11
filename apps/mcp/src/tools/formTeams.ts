@@ -119,6 +119,7 @@ import {
   withoutRetiredKeys,
 } from '@classmoji/services/team-set-config';
 import { z } from 'zod';
+import { boundIssue, issuePath } from '@classmoji/utils/input-caps';
 import { uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
@@ -1784,9 +1785,10 @@ function parsePatch(raw: Record<string, unknown>): TeamSetConfigPatch {
     }
     return parsed.data;
   }
+  // Each cut where it repeats the input (message, path segments).
   const problems = parsed.error.issues
     .slice(0, MAX_PATCH_PROBLEMS)
-    .map(issue => `${['patch', ...issue.path].join('.')}: ${issue.message}`);
+    .map(issue => `${issuePath(['patch', ...issue.path])}: ${boundIssue(issue).message}`);
   const more = parsed.error.issues.length - problems.length;
   throw new ToolError(
     'invalid_params',

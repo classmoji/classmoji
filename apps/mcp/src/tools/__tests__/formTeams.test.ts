@@ -651,6 +651,21 @@ describe('role tiers (through the registry)', () => {
     expect(problems[10]).toBe('…and 5 more');
   });
 
+  it('cuts a long key in the listed path', async () => {
+    const id = 'x'.repeat(10_000);
+    const error = (await formTeamsRunTool
+      .handler(
+        { classroom: 'org/w26', form_id: FORM_ID, patch: { options: { [id]: { open: 5 } } } },
+        CTX
+      )
+      .catch(e => e)) as ToolError;
+    expect(error.code).toBe('invalid_config');
+    const problems = error.data?.problems as string[];
+    expect(problems).toHaveLength(1);
+    expect(problems[0].startsWith(`patch.options.${'x'.repeat(64)}….open: `)).toBe(true);
+    expect(problems[0].length).toBeLessThan(400);
+  });
+
   it('carries a realistic patch (rules, pins, options) through to saveConfig', async () => {
     asMember('TEACHER');
     const client = await connect();

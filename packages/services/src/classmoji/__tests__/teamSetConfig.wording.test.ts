@@ -120,9 +120,32 @@ describe('team-set problem wording', () => {
           ],
         },
       },
-      `patch.rules.upsert.0.params.answers.${'k'.repeat(65)}`,
+      // The key is cut where the problem shows where it is.
+      `patch.rules.upsert.0.params.answers.${'k'.repeat(64)}…`,
     ],
   ])('%s', (text, patch, path) => {
     expect(problemsOf(patch)).toEqual({ problems: [text], paths: [path] });
+  });
+
+  it('lists the first 20 problems, then how many more there were', () => {
+    const options = Object.fromEntries(
+      Array.from({ length: 30 }, (_, i) => [`o${i}`, { open: 5 }])
+    );
+    const { problems, paths } = problemsOf({ options });
+    expect(problems).toHaveLength(21);
+    expect(problems.slice(0, 20)).toEqual(
+      Array(20).fill('Settings of an option (runs): has a value of the wrong kind.')
+    );
+    expect(problems[20]).toBe('…and 10 more problems.');
+    expect(paths.slice(0, 2)).toEqual(['patch.options.o0.open', 'patch.options.o1.open']);
+    expect(paths[20]).toBe('');
+  });
+
+  it('cuts a long option id in the path, and still words the problem from the full one', () => {
+    const id = 'x'.repeat(10_000);
+    expect(problemsOf({ options: { [id]: { open: 5 } } })).toEqual({
+      problems: ['Settings of an option (runs): has a value of the wrong kind.'],
+      paths: [`patch.options.${'x'.repeat(64)}….open`],
+    });
   });
 });

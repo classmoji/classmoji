@@ -51,7 +51,7 @@
  */
 
 import { z } from 'zod';
-import { capKeys } from '@classmoji/utils/input-caps';
+import { boundIssue, capKeys, MAX_SHOWN_ISSUES } from '@classmoji/utils/input-caps';
 import { isoDateTime, uuidString } from '@classmoji/utils/zod-formats';
 import {
   FORM_LIMITS,
@@ -893,7 +893,10 @@ function issueDetail(path: readonly PropertyKey[]): string | null {
 /**
  * zod issues as problems: "Team size (largest): must be at most 50." —
  * `prefix` ('patch' or 'config') starts each path; `root` is the object the
- * paths are into, so a rule can be named by its question.
+ * paths are into, so a rule can be named by its question. The first
+ * MAX_SHOWN_ISSUES, each with what it repeats from the input cut
+ * (`boundIssue`: message, path segments, listed keys), then one problem about
+ * the setup saying how many more there were.
  */
 function issuesToProblems(
   issues: z.ZodIssue[],
@@ -902,17 +905,26 @@ function issuesToProblems(
   fields?: readonly FormField[]
 ): TeamSetConfigProblem[] {
   const labels = problemLabels(fields);
-  return issues.map(issue => {
+  const problems = issues.slice(0, MAX_SHOWN_ISSUES).map(issue => {
+    // Named and worded from the issue as zod gave it (a path is read into
+    // `root`); what is shown of the input, from the bounded one.
+    const shown = boundIssue(issue);
     // A refine's message already says what it is about.
     const detail = issue.code === 'custom' ? null : issueDetail(issue.path);
     const subject = issueSubject(issue.path, root, labels);
     // An unknown key is named in the path only.
-    const keys = issue.code === 'unrecognized_keys' ? [issue.keys.join(',')] : [];
+    const keys = shown.code === 'unrecognized_keys' ? [shown.keys.join(',')] : [];
+    const words = issueWords({ ...issue, message: shown.message } as z.ZodIssue, root);
     return {
-      path: [prefix, ...issue.path, ...keys].map(String).join('.'),
-      text: `${subject}${detail ? ` (${detail})` : ''}: ${issueWords(issue, root)}.`,
+      path: [prefix, ...shown.path, ...keys].map(String).join('.'),
+      text: `${subject}${detail ? ` (${detail})` : ''}: ${words}.`,
     };
   });
+  const more = issues.length - problems.length;
+  if (more > 0) {
+    problems.push({ path: '', text: `…and ${more} more problem${more === 1 ? '' : 's'}.` });
+  }
+  return problems;
 }
 
 /**
