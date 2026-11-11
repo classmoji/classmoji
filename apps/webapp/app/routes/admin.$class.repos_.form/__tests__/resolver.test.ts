@@ -1,7 +1,7 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import dayjs from 'dayjs';
 import { describe, expect, it } from 'vitest';
-import { makeSchema } from '../schema.ts';
+import { makeSchema, newRepositoryFormValues } from '../schema.ts';
 
 /** What the form hands react-hook-form's resolver on submit. */
 const submitted = {
@@ -26,6 +26,21 @@ describe('the repository form resolver', () => {
     const { errors, values } = await resolve({ ...submitted, title: '', template: '' });
     expect(values).toEqual({});
     expect(errors).toMatchObject({
+      title: { message: 'Assignment must have a title.' },
+      template: { message: 'A template repository must be selected.' },
+    });
+  });
+
+  it('refuses an untouched new form in the same words', async () => {
+    const { errors, values } = await resolve(newRepositoryFormValues('cs101'));
+    expect(values).toEqual({});
+    expect(errors).toMatchObject({
+      title: { message: 'Assignment must have a title.' },
+      template: { message: 'A template repository must be selected.' },
+    });
+    // A title or template that is null reads the same.
+    const nulls = await resolve({ ...submitted, title: null, template: null });
+    expect(nulls.errors).toMatchObject({
       title: { message: 'Assignment must have a title.' },
       template: { message: 'A template repository must be selected.' },
     });

@@ -22,7 +22,7 @@ import { useDisclosure } from '@mantine/hooks';
 
 import AsyncAutocomplete from './AsyncAutocomplete';
 import ProjectTemplateSelect from './ProjectTemplateSelect';
-import { makeSchema } from './schema';
+import { makeSchema, newRepositoryFormValues } from './schema';
 import { useGlobalFetcher } from '~/hooks';
 
 import { useRepositoryFormStore } from './store';
@@ -208,16 +208,7 @@ const FormModule = ({
     organization: classroom?.slug,
   };
 
-  const newFormUpdateValues = {
-    organization: classroom?.slug,
-    type: 'INDIVIDUAL',
-    description: '',
-    team_formation_mode: 'INSTRUCTOR',
-    team_formation_deadline: null,
-    max_team_size: null,
-    project_template_id: null,
-    project_template_title: null,
-  };
+  const newFormUpdateValues = newRepositoryFormValues(classroom?.slug);
 
   const defaultValues = isNew ? newFormUpdateValues : updateFormDefaultValues;
   // The form's fields are typed from its default values (the FormItems take
