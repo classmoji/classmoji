@@ -15,6 +15,7 @@
     { "path": "./packages/services" },
     { "path": "./packages/tasks" },
     { "path": "./packages/ui-components" },
-    { "path": "./packages/utils" }
+    { "path": "./packages/utils" },
+    { "path": "./packages/workers" }
   ]
 }

@@ -15,7 +15,12 @@ import { isIP } from 'node:net';
 import { tasks } from '@trigger.dev/sdk';
 import getPrisma from '@classmoji/database';
 import { escapeHtml, appUrl } from '../emails/escape.ts';
-import { GITLAB_COM, GITLAB_PROJECTS_SUBGROUP, normalizeGitlabHost } from '@classmoji/utils';
+import {
+  GITLAB_COM,
+  GITLAB_PROJECTS_SUBGROUP,
+  isWorkerd,
+  normalizeGitlabHost,
+} from '@classmoji/utils';
 
 export interface GitLabOAuthClient {
   /** Null for the default instance. */
@@ -339,10 +344,6 @@ async function guardedRequest(
   url: URL,
   init: { method: string; headers: Record<string, string>; body?: string; signal?: AbortSignal }
 ): Promise<Response> {
-  const [{ request: httpsRequest }, { request: httpRequest }] = await Promise.all([
-    import('node:https'),
-    import('node:http'),
-  ]);
   const checkAddresses = !allowHttp();
   if (checkAddresses && url.protocol !== 'https:') {
     throw new GitLabInstanceError(
@@ -358,6 +359,24 @@ async function guardedRequest(
       `${url.hostname} is a private address; refusing to connect`
     );
   }
+  // Cloudflare Workers: node:https there refuses a `lookup` option
+  // (ERR_OPTION_NOT_IMPLEMENTED), and none is needed: a Worker's fetch()
+  // cannot reach private or loopback addresses, whatever a name resolves to.
+  // One hop, as below: redirects come back to gitlabFetch.
+  if (isWorkerd()) {
+    const timeout = AbortSignal.timeout(30_000);
+    return fetch(url, {
+      method: init.method,
+      headers: init.headers,
+      body: init.body,
+      signal: init.signal ? AbortSignal.any([init.signal, timeout]) : timeout,
+      redirect: 'manual',
+    });
+  }
+  const [{ request: httpsRequest }, { request: httpRequest }] = await Promise.all([
+    import('node:https'),
+    import('node:http'),
+  ]);
   const request = url.protocol === 'https:' ? httpsRequest : httpRequest;
   return new Promise<Response>((resolve, reject) => {
     const req = request(

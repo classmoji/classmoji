@@ -191,6 +191,9 @@ jobs:
       PERSONAL_ACCESS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
       SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
 
+  # Build only: staging's admin runs as a Cloudflare Worker
+  # (deploy-admin-worker below), but production still deploys this image from
+  # deploy-fly-prod.yml until the cutover, so staging keeps proving it builds.
   build-admin:
     needs: changes
     if: needs.changes.outputs.admin == 'true'
@@ -357,22 +360,220 @@ jobs:
           IMAGE: ${{ needs.build-pages.outputs.image }}
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
-  deploy-admin:
-    needs: [changes, deploy-webapp, build-admin]
-    if: always() && !cancelled() && needs.build-admin.result == 'success' && needs.build-admin.outputs.image != '' && (needs.deploy-webapp.result == 'success' || (needs.changes.outputs.webapp != 'true' && needs.deploy-webapp.result == 'skipped'))
+  # apps/admin on staging is a Cloudflare Worker (admin.staging.classmoji.io),
+  # built with BUILD_TARGET=cloudflare. It deploys after the webapp, like
+  # every Fly app: the webapp's release_command runs the migrations, and a
+  # Worker built against the new schema must not serve before they land.
+  deploy-admin-worker:
+    needs: [changes, deploy-webapp]
+    if: always() && !cancelled() && needs.changes.outputs.admin == 'true' && (needs.deploy-webapp.result == 'success' || (needs.changes.outputs.webapp != 'true' && needs.deploy-webapp.result == 'skipped'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Read-only token: the job talks to Cloudflare and Infisical with their
+    # own credentials and never writes back to the repo.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup-flyctl
-        timeout-minutes: 15
-      - name: Deploy admin
+        with:
+          submodules: true
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      # One npm everywhere, the packageManager one (see deploy-cloudflare-staging.yml).
+      - name: Use npm 10.9
+        run: npm install -g npm@10.9.9 && npm --version
+
+      - name: Heal package-lock.json against submodule workspaces
+        run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      # Both clients: the Node one (tests) and the Workers one, which
+      # @classmoji/workers/vite swaps in for @prisma/client.
+      - name: Generate Prisma clients
+        run: ./node_modules/.bin/prisma generate --schema packages/database/schema.prisma
+
+      - name: Test the Workers glue and admin
         run: |
-          CONFIG=$(scripts/fly-autostop-config.sh apps/admin/fly.toml stop)
-          flyctl deploy --config "$CONFIG" --image "$IMAGE" --app classmoji-admin-staging
+          npm run test -w packages/workers
+          npm run test -w packages/database
+          npm run test -w apps/admin
+
+      # The environment is chosen at BUILD time: the Cloudflare Vite plugin
+      # flattens env.staging into build/server/wrangler.json, and every
+      # wrangler call below reads that file.
+      - name: Build the admin Worker
+        working-directory: apps/admin
         env:
-          IMAGE: ${{ needs.build-admin.outputs.image }}
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          BUILD_TARGET: cloudflare
+          CLOUDFLARE_ENV: staging
+          NODE_ENV: production
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: |
+          npx react-router build
+          node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            const config = JSON.parse(readFileSync("build/server/wrangler.json", "utf8"));
+            const fail = message => { console.error(`::error::${message}`); process.exit(1); };
+            if (config.name !== "classmoji-admin-staging") fail(`built for ${config.name}, not classmoji-admin-staging`);
+            const hyperdrive = (config.hyperdrive ?? []).find(h => h.binding === "HYPERDRIVE");
+            if (!hyperdrive || !/^[0-9a-f]{32}$/.test(hyperdrive.id ?? "")) {
+              fail("env.staging in apps/admin/wrangler.jsonc has no real Hyperdrive id (still the placeholder?)");
+            }
+            console.log(`Built ${config.name}: ${Object.keys(config.vars ?? {}).length} vars, Hyperdrive bound.`);
+          '
+
+      - name: Deploy admin Worker
+        id: deploy
+        working-directory: apps/admin
+        run: |
+          set -euo pipefail
+          npx wrangler deploy -c build/server/wrangler.json | tee deploy.log
+          VERSION_ID="$(grep -oE 'Current Version ID: [0-9a-f-]{36}' deploy.log | awk '{print $4}')"
+          [ -n "$VERSION_ID" ] || { echo "::error::no version id in the wrangler deploy output"; exit 1; }
+          echo "version_id=$VERSION_ID" >> "$GITHUB_OUTPUT"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      # The version deploy-cloudflare-staging.yml pins, moved on together.
+      - name: Install Infisical CLI
+        run: npm install -g @infisical/cli@0.44.9
+
+      # After the deploy: `wrangler secret bulk` needs the script to exist
+      # (the content worker's job explains the short window this leaves).
+      # Admin reads the shared root of Infisical `sta`, which holds every
+      # service's secrets, so only an ALLOWLIST is pushed: the env reads the
+      # admin bundle can reach (checked under wrangler dev and against the
+      # built bundle). Keys outside it are ignored, not errors. Required keys
+      # must be present and non-blank; optional ones are pushed only when set.
+      # Names only in logs, never values.
+      - name: Sync secrets from Infisical
+        working-directory: apps/admin
+        env:
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          INFISICAL_PROJECT_ID: e9a6487c-350e-41e7-8bba-2d95ca5934a6
+          INFISICAL_HOST: https://app.infisical.com
+          INFISICAL_DISABLE_UPDATE_CHECK: 'true'
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+
+          RAW_SECRETS="$(mktemp)"
+          BULK_SECRETS="$(mktemp)"
+          trap 'rm -f "$RAW_SECRETS" "$BULK_SECRETS"' EXIT
+
+          INFISICAL_TOKEN="$(infisical login \
+            --method=universal-auth \
+            --client-id="$INFISICAL_CLIENT_ID" \
+            --client-secret="$INFISICAL_CLIENT_SECRET" \
+            --silent --plain)"
+          export INFISICAL_TOKEN
+
+          EXPORT_STDERR="$(mktemp)"
+          infisical export \
+            --env=sta \
+            --path=/ \
+            --projectId="$INFISICAL_PROJECT_ID" \
+            --format=json --silent > "$RAW_SECRETS" 2> "$EXPORT_STDERR" || {
+              echo "::error::infisical export failed:"; cat "$EXPORT_STDERR"; exit 1; }
+          [ -s "$EXPORT_STDERR" ] && { echo "infisical export stderr:"; cat "$EXPORT_STDERR"; }
+          rm -f "$EXPORT_STDERR"
+
+          node --input-type=module -e '
+            import { readFileSync, writeFileSync } from "node:fs";
+            const [raw, out, configPath] = process.argv.slice(1);
+            // Read at module load in production; the Worker answers 500 for
+            // every request without them (checked under wrangler dev).
+            // PLATFORM_ADMIN_USER_IDS empty means nobody gets in.
+            const required = ["BETTER_AUTH_SECRET", "MCP_PUBLIC_URL", "PLATFORM_ADMIN_USER_IDS"];
+            // Read by code admin reaches; each feature degrades without its key.
+            const optional = [
+              "GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET",
+              "GITLAB_CLIENT_ID", "GITLAB_CLIENT_SECRET", "GITLAB_URL", "GITLAB_ISSUER",
+              "GITLAB_WEBHOOK_URL", "GITLAB_WEBHOOK_SECRET",
+              "CONTENT_SIGNING_SECRET", "CONTENT_DELIVERY_ORIGIN",
+              "CLASSMOJI_EGRESS_IPS",
+              // Gitlab approval emails are queued as a Trigger.dev task.
+              "TRIGGER_SECRET_KEY",
+            ];
+            const allowed = [...required, ...optional];
+
+            const text = readFileSync(raw, "utf8");
+            const start = Math.min(...["[", "{"].map(c => text.indexOf(c)).filter(i => i >= 0));
+            let parsed;
+            try {
+              if (!Number.isFinite(start)) throw new Error("no JSON opener");
+              parsed = JSON.parse(text.slice(start));
+            } catch (error) {
+              const head = text.split("\n")[0].slice(0, 80).replace(/\S{12,}/g, "<redacted>");
+              console.error(`::error::Infisical export was not valid JSON (${text.length} bytes, ${error.message}). First line: ${JSON.stringify(head)}`);
+              process.exit(1);
+            }
+            const secrets = Array.isArray(parsed)
+              ? Object.fromEntries(parsed.map(entry => [entry.key, entry.value]))
+              : parsed;
+            const valueOf = key => (typeof secrets[key] === "string" ? secrets[key] : "");
+            const isSet = key => valueOf(key).trim().length > 0;
+            const UNEXPANDED = /\$\{/;
+
+            // A secret and a var of the same name collide on deploy.
+            const vars = Object.keys(JSON.parse(readFileSync(configPath, "utf8")).vars ?? {});
+            const clashing = allowed.filter(key => vars.includes(key));
+            const missing = required.filter(key => !isSet(key));
+            const unexpanded = allowed.filter(key => isSet(key) && UNEXPANDED.test(valueOf(key)));
+
+            const problems = [];
+            if (clashing.length) problems.push(`allowlist names also set as wrangler vars: ${clashing.join(", ")}.`);
+            if (missing.length) problems.push(`is missing or blank: ${missing.join(", ")}. The Worker would fail every request.`);
+            if (unexpanded.length) problems.push(`has unexpanded references: ${unexpanded.join(", ")}.`);
+            if (problems.length) {
+              for (const problem of problems) console.error(`::error::Infisical / (sta) ${problem}`);
+              process.exit(1);
+            }
+
+            // Values go through untouched, as for the content worker; `secret
+            // bulk` never deletes, so a key cleared in Infisical stays on the
+            // Worker until `wrangler secret delete`.
+            const pushing = allowed.filter(isSet);
+            writeFileSync(out, JSON.stringify(Object.fromEntries(pushing.map(key => [key, secrets[key]]))));
+            const skipped = optional.filter(key => !isSet(key));
+            console.log(`Verified ${pushing.length} secrets from Infisical (${pushing.join(", ")}).`);
+            if (skipped.length) console.log(`Not set in Infisical, not pushed: ${skipped.join(", ")}.`);
+          ' "$RAW_SECRETS" "$BULK_SECRETS" build/server/wrangler.json
+
+          npx wrangler secret bulk "$BULK_SECRETS" -c build/server/wrangler.json
+
+      # The new version must be the one answering, not just something: /health
+      # carries the Worker's version id (CF_VERSION_METADATA) in
+      # x-worker-version. Runs after the secrets, which the Worker needs to load.
+      - name: Smoke check admin.staging.classmoji.io
+        env:
+          EXPECTED: ${{ steps.deploy.outputs.version_id }}
+        run: |
+          set -uo pipefail
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            HEADERS="$(curl -sS -o /dev/null -D - --max-time 15 https://admin.staging.classmoji.io/health || true)"
+            STATUS="$(printf '%s' "$HEADERS" | head -1 | awk '{print $2}')"
+            SERVED="$(printf '%s' "$HEADERS" | tr -d '\r' | awk -F': ' 'tolower($1)=="x-worker-version" {print $2}')"
+            if [ "$STATUS" = "200" ] && [ "$SERVED" = "$EXPECTED" ]; then
+              echo "admin.staging.classmoji.io/health: 200 from version $SERVED"
+              exit 0
+            fi
+            echo "attempt $attempt: status ${STATUS:-none}, version ${SERVED:-none} (want $EXPECTED)"
+            sleep 10
+          done
+          echo "::error::admin.staging.classmoji.io is not serving version $EXPECTED"
+          exit 1
 
   deploy-trigger:
     needs: [changes, deploy-webapp]

@@ -27,7 +27,8 @@
     "./agents/limits": "./src/agents/limits.ts",
     "./ai-models": "./src/aiModels.ts",
     "./sentry": "./src/sentry.ts",
-    "./webapp-links": "./src/webappLinks.ts"
+    "./webapp-links": "./src/webappLinks.ts",
+    "./runtime": "./src/runtime.ts"
   },
   "dependencies": {
     "ai": "7.0.122",

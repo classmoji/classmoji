@@ -6,8 +6,11 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "admin:dev": "node --experimental-strip-types server.ts",
+    "admin:dev:cf": "NODE_ENV=development BUILD_TARGET=cloudflare CLOUDFLARE_ENV=dev react-router build && wrangler dev -c build/server/wrangler.json --port ${PORT:-7500}",
     "admin:build": "react-router build",
+    "admin:build:cf": "BUILD_TARGET=cloudflare react-router build",
     "admin:start": "NODE_ENV=production node --experimental-strip-types server.ts",
+    "admin:deploy:staging": "BUILD_TARGET=cloudflare CLOUDFLARE_ENV=staging react-router build && wrangler deploy -c build/server/wrangler.json",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "test": "vitest run"
@@ -18,6 +21,7 @@
     "@classmoji/services": "*",
     "@classmoji/ui-components": "*",
     "@classmoji/utils": "*",
+    "@classmoji/workers": "*",
     "@fontsource-variable/mona-sans": "^5.2.8",
     "@react-router/express": "^7.18.5",
     "@react-router/node": "^7.18.5",
@@ -31,6 +35,7 @@
     "react-router": "^7.18.5"
   },
   "devDependencies": {
+    "@cloudflare/vite-plugin": "1.65.0",
     "@react-router/dev": "^7.18.5",
     "@react-router/fs-routes": "^7.18.5",
     "@tailwindcss/vite": "^4.1.18",
@@ -42,7 +47,8 @@
     "typescript": "^5.9.2",
     "vite": "^6.4.5",
     "vite-tsconfig-paths": "^4.3.2",
-    "vitest": "^4.1.5"
+    "vitest": "^4.1.5",
+    "wrangler": "4.152.0"
   },
   "engines": {
     "node": ">=24.0.0"

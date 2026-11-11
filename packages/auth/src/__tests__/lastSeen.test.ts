@@ -71,3 +71,36 @@ describe('noteSeen', () => {
     warn.mockRestore();
   });
 });
+
+describe('noteSeen on Cloudflare Workers', () => {
+  it("hands its writes to the request's waitUntil", async () => {
+    vi.stubGlobal('navigator', { userAgent: 'Cloudflare-Workers' });
+    try {
+      const noteSeen = await load();
+
+      // eslint-disable-next-line import/no-unresolved -- subpath export; TypeScript resolves it
+      const { workerScope } = await import('@classmoji/database/wait-until');
+      const handed: Promise<unknown>[] = [];
+      await workerScope(() => ({})).run('adapter', async () => noteSeen('u1', null), {
+        waitUntil: promise => handed.push(promise),
+      });
+      expect(executeRaw).toHaveBeenCalledTimes(2);
+      expect(handed).toHaveLength(1);
+      await expect(handed[0]).resolves.toEqual([1, 1]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('hands nothing anywhere off Workers', async () => {
+    const noteSeen = await load();
+    // eslint-disable-next-line import/no-unresolved -- subpath export; TypeScript resolves it
+    const { workerScope } = await import('@classmoji/database/wait-until');
+    const handed: Promise<unknown>[] = [];
+    await workerScope(() => ({})).run('adapter', async () => noteSeen('u2', null), {
+      waitUntil: promise => handed.push(promise),
+    });
+    expect(executeRaw).toHaveBeenCalledTimes(2);
+    expect(handed).toHaveLength(0);
+  });
+});

@@ -38,6 +38,7 @@ COPY packages/services/package.json packages/services/
 COPY packages/tasks/package.json packages/tasks/
 COPY packages/ui-components/package.json packages/ui-components/
 COPY packages/utils/package.json packages/utils/
+COPY packages/workers/package.json packages/workers/
 
 # Keep the Docker install layer cached, but use a fresh npm download cache on
 # a cache miss. Unpacking the populated cache exhausted the 4 GB build host.
@@ -47,7 +48,8 @@ RUN NODE_OPTIONS=--max-old-space-size=1024 npm ci --legacy-peer-deps --no-audit 
 
 # Generate Prisma client at build time
 COPY packages/database/schema.prisma packages/database/
-RUN ./node_modules/.bin/prisma generate --schema packages/database/schema.prisma
+# Only the Node client (`client`); `workerClient` is for Cloudflare Workers builds.
+RUN ./node_modules/.bin/prisma generate --schema packages/database/schema.prisma --generator client
 
 COPY . .
 
