@@ -147,20 +147,39 @@ export function issuePath(path: ReadonlyArray<PropertyKey>): string {
 }
 
 /**
- * The first `MAX_SHOWN_ISSUES` issues, each message and path cut, plus a last
- * entry saying how many more there were. What a caller returns or attaches
- * when it hands issues on.
+ * One issue with everything that can grow with the input cut: its message,
+ * its path (segment count and each segment's length), the unrecognized keys
+ * it lists (the first `MAX_SHOWN_ISSUES`, each cut), and no union branches
+ * (an `invalid_union` keeps an empty `errors`).
  */
-export function boundIssues(issues: ReadonlyArray<z.ZodIssue>): z.ZodIssue[] {
-  const kept = issues.slice(0, MAX_SHOWN_ISSUES).map(issue => ({
-    ...issue,
+export function boundIssue(issue: z.ZodIssue): z.ZodIssue {
+  const { keys, errors, ...rest } = issue as z.ZodIssue & { keys?: unknown; errors?: unknown };
+  return {
+    ...rest,
+    ...(Array.isArray(keys)
+      ? {
+          keys: keys
+            .slice(0, MAX_SHOWN_ISSUES)
+            .map(key => cut(String(key), MAX_SHOWN_PATH_SEGMENT_CHARS)),
+        }
+      : {}),
+    ...(errors === undefined ? {} : { errors: [] }),
     path: issue.path
       .slice(0, MAX_SHOWN_PATH_SEGMENTS)
       .map(segment =>
         typeof segment === 'string' ? cut(segment, MAX_SHOWN_PATH_SEGMENT_CHARS) : segment
       ),
     message: cut(issue.message, MAX_SHOWN_ISSUE_MESSAGE_CHARS),
-  })) as z.ZodIssue[];
+  } as z.ZodIssue;
+}
+
+/**
+ * The first `MAX_SHOWN_ISSUES` issues, each bounded (`boundIssue`), plus a
+ * last entry saying how many more there were. What a caller returns or
+ * attaches when it hands issues on.
+ */
+export function boundIssues(issues: ReadonlyArray<z.ZodIssue>): z.ZodIssue[] {
+  const kept = issues.slice(0, MAX_SHOWN_ISSUES).map(boundIssue);
   const more = issues.length - kept.length;
   if (more > 0) {
     kept.push({ code: z.ZodIssueCode.custom, path: [], message: `…and ${more} more` });

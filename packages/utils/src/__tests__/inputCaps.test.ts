@@ -180,4 +180,35 @@ describe('boundIssues', () => {
     const issues = [issue('a', ['x']), issue('b', ['y', 0])];
     expect(boundIssues(issues)).toEqual(issues);
   });
+
+  it('cuts the unknown keys an issue lists, and a long path segment', () => {
+    const keys = Array.from({ length: 5_000 }, (_, i) => `${'k'.repeat(300)}${i}`);
+    const parsed = z
+      .object({ position: z.object({ after: z.string() }).strict() })
+      .safeParse({ position: { after: 'a', ...Object.fromEntries(keys.map(k => [k, 1])) } });
+    expect(parsed.success).toBe(false);
+    if (parsed.success) return;
+    const unknown = parsed.error.issues.find(i => i.code === 'unrecognized_keys')!;
+    expect(unknown.keys).toHaveLength(5_000);
+
+    const [bounded] = boundIssues([unknown]);
+    const kept = (bounded as { keys: string[] }).keys;
+    expect(kept).toHaveLength(MAX_SHOWN_ISSUES);
+    for (const key of kept) expect(key.length).toBeLessThanOrEqual(65);
+    expect(bounded.message.length).toBeLessThanOrEqual(MAX_SHOWN_ISSUE_MESSAGE_CHARS + 1);
+    expect(JSON.stringify(bounded).length).toBeLessThan(3_000);
+
+    const [long] = boundIssues([issue('x', ['y'.repeat(1_000), 0])]);
+    expect(long.path).toEqual([`${'y'.repeat(64)}…`, 0]);
+  });
+
+  it('keeps no union branches', () => {
+    const parsed = z.union([z.string(), z.number()]).safeParse(true);
+    expect(parsed.success).toBe(false);
+    if (parsed.success) return;
+    expect(parsed.error.issues[0].code).toBe('invalid_union');
+    const [bounded] = boundIssues(parsed.error.issues);
+    expect(bounded.code).toBe('invalid_union');
+    expect((bounded as { errors: unknown[] }).errors).toEqual([]);
+  });
 });
