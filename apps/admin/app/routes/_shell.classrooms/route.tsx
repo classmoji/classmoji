@@ -14,7 +14,8 @@ import {
   withParams,
   ExportLink,
 } from '~/components/ui';
-import { relativeTime } from '~/utils/time';
+import { useNow } from '~/hooks/useNow';
+import { formatDate, relativeTime } from '~/utils/time';
 import { loadClassrooms } from './route.server';
 
 export const loader = loadClassrooms;
@@ -30,6 +31,7 @@ const Classrooms = () => {
   const from = encodeURIComponent(useReturnTo());
   const problemsOn = params.get('health') === 'problems';
   const provider = params.get('provider') ?? '';
+  const now = useNow();
 
   const toggle = (on: boolean, label: string, to: string) => (
     <Link
@@ -144,7 +146,7 @@ const Classrooms = () => {
                     <td className="py-1.5 pr-3 text-right tabular-nums text-ink-2">{row.staff}</td>
                     <td className="py-1.5 pr-3 text-ink-2 whitespace-nowrap">
                       {row.lastActivity ? (
-                        relativeTime(row.lastActivity)
+                        relativeTime(row.lastActivity, now)
                       ) : (
                         <span className="text-ink-4">—</span>
                       )}
@@ -160,11 +162,7 @@ const Classrooms = () => {
                       )}
                     </td>
                     <td className="py-1.5 text-ink-3 whitespace-nowrap">
-                      {new Date(row.createdAt).toLocaleDateString(undefined, {
-                        month: 'short',
-                        day: 'numeric',
-                        year: 'numeric',
-                      })}
+                      {formatDate(row.createdAt)}
                     </td>
                   </tr>
                 ))}

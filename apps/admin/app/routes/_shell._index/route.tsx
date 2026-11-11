@@ -2,7 +2,8 @@ import { Suspense } from 'react';
 import { Await, Link, useLoaderData } from 'react-router';
 import { Avatar, Empty, InfoTip, Panel, Sparkline } from '~/components/ui';
 import { InsightsSections } from '~/components/InsightsSections';
-import { relativeTime } from '~/utils/time';
+import { useNow } from '~/hooks/useNow';
+import { formatDate, formatNumber, relativeTime } from '~/utils/time';
 import type { Kpi } from '~/utils/metrics.server';
 import { loadHome, type HomeData } from './route.server';
 
@@ -18,10 +19,10 @@ const Change = ({ kpi }: { kpi: Kpi }) => {
   return (
     <span
       className={`text-[11px] font-semibold ${diff > 0 ? 'text-mint-ink' : 'text-rose-ink'}`}
-      title={`Last week by this point: ${kpi.previousToDate.toLocaleString()}`}
+      title={`Last week by this point: ${formatNumber(kpi.previousToDate)}`}
     >
       {diff > 0 ? '+' : '−'}
-      {Math.abs(diff).toLocaleString()} vs last wk
+      {formatNumber(Math.abs(diff))} vs last wk
     </span>
   );
 };
@@ -34,7 +35,7 @@ const KpiTile = ({ kpi }: { kpi: Kpi }) => (
     </div>
     <div className="mt-0.5 flex flex-wrap items-baseline gap-x-2">
       <span className="text-xl font-semibold text-ink-0 tabular-nums">
-        {kpi.value.toLocaleString()}
+        {formatNumber(kpi.value)}
       </span>
       <Change kpi={kpi} />
     </div>
@@ -61,54 +62,57 @@ const KpiPlaceholders = () => (
   </>
 );
 
-const Activity = ({ entries }: { entries: HomeData['activity'] }) => (
-  <Panel
-    title="Latest activity"
-    description="First sign-ins, new classrooms, admin actions, feedback"
-    aside={
-      <Link to="/ops/activity" className="text-xs text-ink-3 hover:text-ink-1">
-        Admin log →
-      </Link>
-    }
-  >
-    {entries.length === 0 ? (
-      <Empty title="Nothing yet" />
-    ) : (
-      <ul>
-        {entries.map((e, i) => (
-          <li
-            key={`${e.at}-${i}`}
-            className="flex items-center gap-2.5 px-4 py-2 border-t border-line text-sm min-w-0"
-          >
-            <Avatar name={e.actor.name} size={22} />
-            <span className="min-w-0 flex-1 truncate text-ink-1">
-              {e.actor.id ? (
-                <Link
-                  to={`/people/${e.actor.id}`}
-                  className="font-semibold text-ink-0 hover:underline"
-                >
-                  {e.actor.name}
-                </Link>
-              ) : (
-                <b className="font-semibold text-ink-0">{e.actor.name}</b>
-              )}{' '}
-              {e.href ? (
-                <Link to={e.href} className="hover:underline">
-                  {e.text}
-                </Link>
-              ) : (
-                e.text
-              )}
-            </span>
-            <span className="text-xs text-ink-4 tabular-nums whitespace-nowrap">
-              {relativeTime(e.at)}
-            </span>
-          </li>
-        ))}
-      </ul>
-    )}
-  </Panel>
-);
+const Activity = ({ entries }: { entries: HomeData['activity'] }) => {
+  const now = useNow();
+  return (
+    <Panel
+      title="Latest activity"
+      description="First sign-ins, new classrooms, admin actions, feedback"
+      aside={
+        <Link to="/ops/activity" className="text-xs text-ink-3 hover:text-ink-1">
+          Admin log →
+        </Link>
+      }
+    >
+      {entries.length === 0 ? (
+        <Empty title="Nothing yet" />
+      ) : (
+        <ul>
+          {entries.map((e, i) => (
+            <li
+              key={`${e.at}-${i}`}
+              className="flex items-center gap-2.5 px-4 py-2 border-t border-line text-sm min-w-0"
+            >
+              <Avatar name={e.actor.name} size={22} />
+              <span className="min-w-0 flex-1 truncate text-ink-1">
+                {e.actor.id ? (
+                  <Link
+                    to={`/people/${e.actor.id}`}
+                    className="font-semibold text-ink-0 hover:underline"
+                  >
+                    {e.actor.name}
+                  </Link>
+                ) : (
+                  <b className="font-semibold text-ink-0">{e.actor.name}</b>
+                )}{' '}
+                {e.href ? (
+                  <Link to={e.href} className="hover:underline">
+                    {e.text}
+                  </Link>
+                ) : (
+                  e.text
+                )}
+              </span>
+              <span className="text-xs text-ink-4 tabular-nums whitespace-nowrap">
+                {relativeTime(e.at, now)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Panel>
+  );
+};
 
 const Home = () => {
   const data = useLoaderData<typeof loader>();
@@ -117,8 +121,8 @@ const Home = () => {
       <div className="flex flex-wrap items-baseline justify-between gap-3 mt-2">
         <h1 className="text-lg font-semibold text-ink-1">Home</h1>
         <span className="text-xs text-ink-3">
-          Updated {new Date(data.generatedAt).toLocaleTimeString([], { timeStyle: 'short' })} ·
-          weeks start Monday, {data.timeZone.replace('_', ' ')}
+          Updated {formatDate(data.generatedAt, { timeStyle: 'short' })} · weeks start Monday,{' '}
+          {data.timeZone.replace('_', ' ')}
         </span>
       </div>
 

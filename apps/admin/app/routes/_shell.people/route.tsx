@@ -14,7 +14,8 @@ import {
   ExportLink,
 } from '~/components/ui';
 import { ViewAsButton } from '~/components/ViewAsButton';
-import { relativeTime } from '~/utils/time';
+import { useNow } from '~/hooks/useNow';
+import { formatDate, relativeTime } from '~/utils/time';
 import { loadPeople } from './route.server';
 
 export const loader = loadPeople;
@@ -23,17 +24,11 @@ export const meta = () => [{ title: 'People · Classmoji Admin' }];
 
 const PROVIDER_LABEL: Record<string, string> = { github: 'Github', gitlab: 'Gitlab' };
 
-const fmtDate = (iso: string | null) =>
-  iso
-    ? new Date(iso).toLocaleDateString(undefined, {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-      })
-    : '—';
+const fmtDate = (iso: string | null) => (iso ? formatDate(iso) : '—');
 
 const People = () => {
   const { rows, total, page, pageSize, query, filters } = useLoaderData<typeof loader>();
+  const now = useNow();
   const returnTo = useReturnTo();
   const from = encodeURIComponent(returnTo);
 
@@ -109,7 +104,7 @@ const People = () => {
                       title={row.lastSeenAt ?? 'Not seen since tracking began (Oct 31, 2026)'}
                     >
                       {row.lastSeenAt ? (
-                        relativeTime(row.lastSeenAt)
+                        relativeTime(row.lastSeenAt, now)
                       ) : (
                         <span className="text-ink-4">—</span>
                       )}

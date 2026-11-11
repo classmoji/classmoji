@@ -10,6 +10,7 @@ import {
   TABLE_HEAD,
   withParams,
 } from '~/components/ui';
+import { useNow } from '~/hooks/useNow';
 import { relativeTime } from '~/utils/time';
 import { feedbackAction, loadFeedback, type Category } from './route.server';
 
@@ -187,6 +188,7 @@ const MergeControl = ({ post, data }: { post: NonNullable<Data['selected']>; dat
 const Detail = ({ data }: { data: Data }) => {
   const post = data.selected;
   const [params] = useSearchParams();
+  const now = useNow();
   if (!post) {
     return (
       <Sheet className="self-start">
@@ -222,7 +224,7 @@ const Detail = ({ data }: { data: Data }) => {
           ) : (
             'Anonymous'
           )}{' '}
-          · {relativeTime(post.createdAt)} · {post.votes} vote{post.votes === 1 ? '' : 's'}
+          · {relativeTime(post.createdAt, now)} · {post.votes} vote{post.votes === 1 ? '' : 's'}
         </p>
         {bugParts.length ? (
           <dl className="space-y-2 text-sm">
@@ -327,7 +329,7 @@ const Detail = ({ data }: { data: Data }) => {
                     <span className="font-medium text-ink-1">{c.who}</span>
                   )}
                   {c.maintainer ? <span className="chip chip-inprog ml-1.5">team</span> : null} ·{' '}
-                  {relativeTime(c.at)}
+                  {relativeTime(c.at, now)}
                 </div>
                 <p className="text-ink-1 whitespace-pre-wrap">{c.body}</p>
               </li>
@@ -344,6 +346,7 @@ const Detail = ({ data }: { data: Data }) => {
 const Feedback = () => {
   const data = useLoaderData<typeof loader>();
   const [params] = useSearchParams();
+  const now = useNow();
 
   return (
     <>
@@ -423,7 +426,7 @@ const Feedback = () => {
                   {data.posts.map(p => {
                     const stale =
                       !p.lastReplyAt &&
-                      Date.now() - new Date(p.createdAt).getTime() > 7 * 86_400_000;
+                      now.getTime() - new Date(p.createdAt).getTime() > 7 * 86_400_000;
                     return (
                       <tr
                         key={p.id}
@@ -467,10 +470,10 @@ const Feedback = () => {
                         <td
                           className={`py-1.5 pr-3 whitespace-nowrap ${stale ? 'text-rose-ink' : 'text-ink-3'}`}
                         >
-                          {p.lastReplyAt ? relativeTime(p.lastReplyAt) : 'none'}
+                          {p.lastReplyAt ? relativeTime(p.lastReplyAt, now) : 'none'}
                         </td>
                         <td className="py-1.5 text-ink-3 whitespace-nowrap">
-                          {relativeTime(p.createdAt)}
+                          {relativeTime(p.createdAt, now)}
                         </td>
                       </tr>
                     );

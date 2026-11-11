@@ -3,7 +3,8 @@ import { Link, useLoaderData } from 'react-router';
 import { IconCopy } from '@tabler/icons-react';
 import { Avatar, BTN_XS, Empty, PageHeader, Panel, RoleChip, StatusChips } from '~/components/ui';
 import { ViewAsButton } from '~/components/ViewAsButton';
-import { relativeTime } from '~/utils/time';
+import { useNow } from '~/hooks/useNow';
+import { formatDate, relativeTime } from '~/utils/time';
 import { loadPerson } from './route.server';
 
 export const loader = loadPerson;
@@ -18,8 +19,7 @@ const PROVIDER: Record<string, string> = {
   credential: 'Password',
 };
 
-const fmt = (iso: string | null) =>
-  iso ? new Date(iso).toLocaleDateString(undefined, { dateStyle: 'medium' }) : '—';
+const fmt = (iso: string | null) => (iso ? formatDate(iso) : '—');
 
 const CopyId = ({ id }: { id: string }) => {
   const [copied, setCopied] = useState(false);
@@ -51,6 +51,7 @@ const Field = ({ label, children }: { label: string; children: React.ReactNode }
 );
 
 const Person = () => {
+  const now = useNow();
   const {
     back,
     person,
@@ -84,7 +85,7 @@ const Person = () => {
                 {person.email ?? 'no email'}
                 {person.email ? (person.emailVerified ? ' · verified' : ' · not verified') : ''} ·
                 first sign-in {person.firstSignInAt ? fmt(person.firstSignInAt) : 'never'} · last
-                seen {person.lastSeenAt ? relativeTime(person.lastSeenAt) : '—'}
+                seen {person.lastSeenAt ? relativeTime(person.lastSeenAt, now) : '—'}
               </span>
             </span>
           </span>
@@ -209,7 +210,7 @@ const Person = () => {
                       }}
                     />
                     <span className="text-xs text-ink-4 tabular-nums pt-0.5">
-                      {relativeTime(h.at)}
+                      {relativeTime(h.at, now)}
                     </span>
                     <span className="text-ink-1 min-w-0">
                       {h.text}
@@ -273,7 +274,7 @@ const Person = () => {
                 ? 'none waiting'
                 : invites.map(i => (
                     <span key={i.classroom.slug} className="block">
-                      {i.classroom.name} · {relativeTime(i.createdAt)}
+                      {i.classroom.name} · {relativeTime(i.createdAt, now)}
                     </span>
                   ))}
             </Field>
