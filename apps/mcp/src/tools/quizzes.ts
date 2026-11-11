@@ -342,17 +342,13 @@ function excludedPathsArg(value: string[] | undefined): string[] | undefined {
   return result.value;
 }
 
-const dueDateSchema = isoDateTime().describe(
-  'Due date (ISO 8601, e.g. 2026-07-20T23:59:00-04:00); late after it'
-);
+const DUE_DATE_TEXT = 'Due date (ISO 8601, e.g. 2026-07-20T23:59:00-04:00); late after it';
+const RELEASE_AT_TEXT = 'Opens (ISO 8601): students see it from then on, once published';
+const CLOSES_AT_TEXT = 'Closes (ISO 8601): no new attempt from then on; one under way may finish';
 
-const releaseAtSchema = isoDateTime().describe(
-  'Opens (ISO 8601): students see it from then on, once published'
-);
-
-const closesAtSchema = isoDateTime().describe(
-  'Closes (ISO 8601): no new attempt from then on; one under way may finish'
-);
+const dueDateSchema = isoDateTime().describe(DUE_DATE_TEXT);
+const releaseAtSchema = isoDateTime().describe(RELEASE_AT_TEXT);
+const closesAtSchema = isoDateTime().describe(CLOSES_AT_TEXT);
 
 interface QuizCreateArgs {
   classroom: string;
@@ -627,10 +623,11 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
       .describe('Repo (assignment container) this quiz is about; null unlinks it'),
     module_id: moduleIdSchema.optional(),
     // Nullable here but not on quiz_create: an update has an existing value to
-    // clear.
-    release_at: releaseAtSchema.nullable().optional(),
-    due_date: dueDateSchema.nullable().optional(),
-    closes_at: closesAtSchema.nullable().optional(),
+    // clear. Described again after .nullable(), so the field itself carries
+    // the text, not only its date branch.
+    release_at: releaseAtSchema.nullable().describe(RELEASE_AT_TEXT).optional(),
+    due_date: dueDateSchema.nullable().describe(DUE_DATE_TEXT).optional(),
+    closes_at: closesAtSchema.nullable().describe(CLOSES_AT_TEXT).optional(),
     weight: weightSchema.optional(),
     tokens_per_hour: tokensPerHourSchema.optional(),
     published: z

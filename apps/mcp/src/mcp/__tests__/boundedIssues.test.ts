@@ -18,6 +18,7 @@ import {
 import { MAX_TOOL_INPUT_ELEMENTS } from '../inputLimits.ts';
 import {
   toolInputSchema,
+  withoutSafeIntegerBounds,
   withoutZodFormatPatterns,
   zodFormatPatterns,
 } from '../toolInputSchema.ts';
@@ -173,9 +174,12 @@ describe('refusals through the SDK', () => {
 
 type Json = unknown;
 
+const SAFE = Number.MAX_SAFE_INTEGER;
+
 /**
  * Where `ours` differs from `reference`, except a `pattern` that zod wrote
- * for the node's `format` and that `ours` left out.
+ * for the node's `format`, and a `maximum` or `minimum` of exactly
+ * ±MAX_SAFE_INTEGER, that `ours` left out.
  */
 function differences(reference: Json, ours: Json, at = '$'): string[] {
   if (
@@ -199,10 +203,28 @@ function differences(reference: Json, ours: Json, at = '$'): string[] {
       )
         continue;
     }
+    if (
+      (key === 'maximum' || key === 'minimum') &&
+      !(key in b) &&
+      Math.abs(a[key] as number) === SAFE
+    ) {
+      continue;
+    }
     if (!(key in a) || !(key in b)) out.push(`${at}.${key}`);
     else out.push(...differences(a[key], b[key], `${at}.${key}`));
   }
   return out;
+}
+
+/** Every numeric `maximum`/`minimum` in `json`. */
+function boundsIn(json: Json, found: number[] = []): number[] {
+  if (json === null || typeof json !== 'object') return found;
+  const node = json as Record<string, Json>;
+  for (const key of ['maximum', 'minimum']) {
+    if (typeof node[key] === 'number') found.push(node[key] as number);
+  }
+  for (const child of Object.values(node)) boundsIn(child, found);
+  return found;
 }
 
 function patternsIn(json: Json, found: string[] = []): string[] {
@@ -239,7 +261,7 @@ describe('every real tool', () => {
     return new Map(tools.map(t => [t.name, t.inputSchema]));
   }
 
-  it("publishes zod's input schema of the strict arguments, leaving out only zod's own format patterns", async () => {
+  it("publishes zod's input schema of the strict arguments, leaving out only zod's own format patterns and safe-integer bounds", async () => {
     const ours = await listTools(buildMcpServer(viewer as never));
     const reference = new McpServer({ name: 'reference', version: '0' });
     for (const def of toolDefs) {
@@ -264,6 +286,20 @@ describe('every real tool', () => {
       expect(after, name).toEqual(before.filter(p => !builtIn.has(p)));
     }
     expect(dropped).toBeGreaterThan(50);
+
+    // zod writes ±MAX_SAFE_INTEGER for an integer with no bound of its own;
+    // none is listed, and every other bound is.
+    let bounds = 0;
+    for (const [name, schema] of expected) {
+      const listed = boundsIn(ours.get(name));
+      expect(
+        listed.filter(n => Math.abs(n) === SAFE),
+        name
+      ).toEqual([]);
+      expect(listed, name).toEqual(boundsIn(schema).filter(n => Math.abs(n) !== SAFE));
+      bounds += boundsIn(schema).length - listed.length;
+    }
+    expect(bounds).toBeGreaterThan(10);
   });
 
   it('keeps the patterns tools set themselves', async () => {
@@ -295,6 +331,31 @@ describe('every real tool', () => {
     const properties = json.properties as Record<string, Record<string, unknown>>;
     expect(Object.isFrozen(properties.id)).toBe(true);
     expect(properties.id).toEqual({ type: 'string', format: 'uuid' });
+  });
+
+  it('strips only a bound of exactly ±MAX_SAFE_INTEGER, from schemas, not data', () => {
+    const json = {
+      type: 'object',
+      properties: {
+        count: { type: 'integer', minimum: 0, maximum: SAFE },
+        signed: { type: 'integer', minimum: -SAFE, maximum: SAFE },
+        own: { type: 'integer', minimum: 1, maximum: SAFE - 1 },
+        maximum: { type: 'integer', maximum: 10 },
+        options: { type: 'object', default: { maximum: SAFE } },
+        either: { anyOf: [{ type: 'integer', maximum: SAFE }, { type: 'null' }] },
+      },
+    };
+    expect(withoutSafeIntegerBounds(structuredClone(json))).toEqual({
+      type: 'object',
+      properties: {
+        count: { type: 'integer', minimum: 0 },
+        signed: { type: 'integer' },
+        own: { type: 'integer', minimum: 1, maximum: SAFE - 1 },
+        maximum: { type: 'integer', maximum: 10 },
+        options: { type: 'object', default: { maximum: SAFE } },
+        either: { anyOf: [{ type: 'integer' }, { type: 'null' }] },
+      },
+    });
   });
 
   it("strips nothing it is not sure is zod's", () => {

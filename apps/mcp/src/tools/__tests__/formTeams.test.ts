@@ -579,7 +579,8 @@ describe('role tiers (through the registry)', () => {
    *       them, sizes, notes, non_respondents and priority.
    *   strict arguments:               6,261 B (each object now lists
    *                                   additionalProperties: false)
-   * The ceiling leaves ~140 B for wording fixes, not for another argument.
+   *   safe-integer bounds left out:   6,153 B
+   * The ceiling leaves room for wording fixes, not for another argument.
    */
   const TEAM_SET_MANIFEST_CEILING = 6_400;
 

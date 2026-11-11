@@ -12,8 +12,9 @@
  * - publishes zod's JSON Schema built once per tool and target, not once per
  *   tools/list (the SDK converts on every listing, and a server is built per
  *   request), with zod's own pattern for a string format left out
- *   (`withoutZodFormatPatterns`). The result is frozen and shared by every
- *   request.
+ *   (`withoutZodFormatPatterns`) and the safe-integer bounds zod writes for
+ *   an integer with no bound of its own left out (`withoutSafeIntegerBounds`).
+ *   The result is frozen and shared by every request.
  *
  * The pattern rule: zod writes the regular expression it checks a format
  * with next to the format (`format: "uuid"` and a 76-character pattern, and
@@ -99,6 +100,45 @@ export function withoutZodFormatPatterns<T>(json: T): T {
   return json;
 }
 
+/** Keywords whose values are data, not schemas: not walked for bounds. */
+const DATA_KEYWORDS = new Set(['default', 'const', 'enum', 'examples']);
+/** Keywords whose values map names to schemas (a key there is a name). */
+const SCHEMA_MAPS = new Set(['properties', 'patternProperties', '$defs', 'definitions']);
+
+/**
+ * `json` without a `maximum` or `minimum` that is exactly
+ * ±Number.MAX_SAFE_INTEGER (in place): what zod writes for `.int()` with no
+ * bound of its own on that side. A bound a schema sets itself, however
+ * large, stays; so does a property named "maximum".
+ */
+export function withoutSafeIntegerBounds<T>(json: T): T {
+  const schemas: unknown[] = [json];
+  while (schemas.length > 0) {
+    const node = schemas.pop();
+    if (node === null || typeof node !== 'object') continue;
+    if (Array.isArray(node)) {
+      schemas.push(...node);
+      continue;
+    }
+    const schema = node as JsonObject;
+    for (const keyword of ['maximum', 'minimum'] as const) {
+      const bound = schema[keyword];
+      if (typeof bound === 'number' && Math.abs(bound) === Number.MAX_SAFE_INTEGER) {
+        delete schema[keyword];
+      }
+    }
+    for (const [keyword, value] of Object.entries(schema)) {
+      if (DATA_KEYWORDS.has(keyword)) continue;
+      if (SCHEMA_MAPS.has(keyword) && value !== null && typeof value === 'object') {
+        schemas.push(...Object.values(value));
+      } else {
+        schemas.push(value);
+      }
+    }
+  }
+  return json;
+}
+
 function deepFreeze<T>(value: T): T {
   if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
     Object.freeze(value);
@@ -116,7 +156,9 @@ function cachedConverter(
     const key = `${io} ${options.target} ${JSON.stringify(options.libraryOptions ?? null)}`;
     let json = built.get(key);
     if (!json) {
-      json = deepFreeze(withoutZodFormatPatterns(convert[io](options as never)));
+      json = deepFreeze(
+        withoutSafeIntegerBounds(withoutZodFormatPatterns(convert[io](options as never)))
+      );
       built.set(key, json);
     }
     return json;

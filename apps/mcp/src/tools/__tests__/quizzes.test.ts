@@ -1531,3 +1531,27 @@ describe('the quiz runtime gate (no Trigger key, no quizzes)', () => {
     expect(mocks.quizCreate).not.toHaveBeenCalled();
   });
 });
+
+describe('the date arguments', () => {
+  it('are described on the field itself, nullable on quiz_update', () => {
+    const texts = {
+      release_at: 'Opens (ISO 8601): students see it from then on, once published',
+      due_date: 'Due date (ISO 8601, e.g. 2026-07-20T23:59:00-04:00); late after it',
+      closes_at: 'Closes (ISO 8601): no new attempt from then on; one under way may finish',
+    };
+    for (const tool of [quizCreateTool, quizUpdateTool]) {
+      for (const [field, text] of Object.entries(texts)) {
+        expect(publishedDescription(tool, field), `${tool.name}.${field}`).toBe(text);
+      }
+    }
+    expect(
+      toolArguments(quizUpdateTool.inputSchema).safeParse({
+        classroom: 'o/s',
+        quiz_id: '11111111-1111-4111-8111-111111111111',
+        release_at: null,
+        due_date: null,
+        closes_at: null,
+      }).success
+    ).toBe(true);
+  });
+});
