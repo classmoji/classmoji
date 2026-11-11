@@ -90,7 +90,7 @@ export interface ToolDefinition<Args = Record<string, unknown>> {
    * route-derived tiers from plan §4.2 — never guess.
    */
   roles: readonly Role[] | null;
-  /** One zod schema per argument; registered as `z.object(shape)` (toolInputSchema.ts). */
+  /** One zod schema per argument; registered as `toolArguments(shape)`, strict (toolInputSchema.ts). */
   inputSchema: ToolInputShape;
   /**
    * MCP behavioral hints surfaced to clients (tools/list `annotations`).
@@ -627,10 +627,11 @@ export const SERVER_INSTRUCTIONS =
   'raw UTC clock time to a user as if it were local.';
 
 /**
- * The schema each tool's input is registered with: `z.object(shape)`, behind
- * a Standard Schema that reports a bounded set of issues and publishes its
- * JSON Schema built once (toolInputSchema.ts). Built once per tool and
- * shared, read-only, by every request's server; an empty shape too.
+ * The schema each tool's input is registered with: `toolArguments(shape)`
+ * (strict: an undeclared key is refused), behind a Standard Schema that
+ * reports a bounded set of issues and publishes its JSON Schema built once
+ * (toolInputSchema.ts). Built once per tool and shared, read-only, by every
+ * request's server; an empty shape too.
  */
 const inputSchemas = new Map<string, ToolInputSchema>();
 

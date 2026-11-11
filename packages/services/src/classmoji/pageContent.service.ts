@@ -1287,8 +1287,13 @@ const pageBlockPositionSchema = z.union([
   z.object({ at: z.enum(['start', 'end']) }).strict(),
 ]);
 
+/**
+ * One block op. Each op refuses a key it does not declare, so a misspelled
+ * one is an error rather than ignored; a block's own fields sit in a record
+ * and take any key.
+ */
 export const pageBlockOpSchema = z.discriminatedUnion('op', [
-  z.object({
+  z.strictObject({
     op: z.literal('update'),
     id: z.string().min(1),
     block: capKeys(
@@ -1297,7 +1302,7 @@ export const pageBlockOpSchema = z.discriminatedUnion('op', [
       BLOCK_KEYS_MESSAGE
     ),
   }),
-  z.object({
+  z.strictObject({
     op: z.literal('insert'),
     blocks: capArray(
       z.array(pageBlockBodySchema).min(1).max(PAGE_OPS_LIMITS.MAX_INSERT_BLOCKS),
@@ -1305,16 +1310,16 @@ export const pageBlockOpSchema = z.discriminatedUnion('op', [
     ),
     position: pageBlockPositionSchema,
   }),
-  z.object({
+  z.strictObject({
     op: z.literal('move'),
     id: z.string().min(1),
     position: pageBlockPositionSchema,
   }),
-  z.object({
+  z.strictObject({
     op: z.literal('delete'),
     id: z.string().min(1),
   }),
-  z.object({
+  z.strictObject({
     op: z.literal('replace_all'),
     blocks: capArray(
       z.array(pageBlockBodySchema).max(PAGE_OPS_LIMITS.MAX_REPLACE_ALL_BLOCKS),

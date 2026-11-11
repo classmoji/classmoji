@@ -1251,7 +1251,7 @@ export const formResponseCreateTool: ToolDefinition<FormResponseCreateArgs> = {
       ),
     responses: z
       .array(
-        z.object({
+        z.strictObject({
           email: z
             .string()
             .email()

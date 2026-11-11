@@ -19,6 +19,7 @@
 import { capArray, capElements, capKeys, inputCapOf } from '@classmoji/utils/input-caps';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
+import { toolArguments } from '../toolInputSchema.ts';
 
 vi.mock('@classmoji/database', async () =>
   (await import('../../__tests__/prismaSchemaStub.ts')).databaseModuleMock()
@@ -141,7 +142,7 @@ beforeAll(async () => {
   const { listToolDefinitions } = await import('../registry.ts');
   registerAllTools();
   for (const tool of listToolDefinitions()) {
-    walk(z.object(tool.inputSchema) as unknown as Node, `tool ${tool.name}`, new Set());
+    walk(toolArguments(tool.inputSchema) as unknown as Node, `tool ${tool.name}`, new Set());
   }
 
   const { ClassmojiService } = await import('@classmoji/services');

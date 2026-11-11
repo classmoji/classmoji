@@ -160,7 +160,7 @@ const staffAddShape = {
 };
 
 /** staffAddShape + the OWNER-only confirm rule. Exported so tests pin the gate. */
-export const staffAddArgsSchema = z.object(staffAddShape).superRefine((args, ctx) => {
+export const staffAddArgsSchema = z.strictObject(staffAddShape).superRefine((args, ctx) => {
   if (args.role === 'OWNER' && args.confirm !== true) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -406,7 +406,7 @@ function describeUngraded(outcome: UngradedSlotsOutcome) {
 }
 
 /** Exported so tests pin the confirm gate. */
-export const staffRemoveArgsSchema = z.object(staffRemoveShape);
+export const staffRemoveArgsSchema = z.strictObject(staffRemoveShape);
 
 type StaffRemoveTool = ToolDefinition<StaffRemoveArgs>;
 

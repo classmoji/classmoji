@@ -530,7 +530,7 @@ export const calendarEventLinksSetTool: ToolDefinition<CalendarEventLinksSetArgs
     slide_ids: linkIdsSchema('Slide deck'),
     assignment_ids: linkIdsSchema('Assignment'),
     featured: z
-      .object({
+      .strictObject({
         kind: z.enum(FEATURED_LINK_KINDS),
         id: uuidString(),
       })

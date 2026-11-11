@@ -577,9 +577,11 @@ describe('role tiers (through the registry)', () => {
    *   release 2 (MCP parity):        6,068 B (descriptions 918 / 1,145 / 785)
    *     + compare_with, person, copy_from, revert_to_run and the texts for
    *       them, sizes, notes, non_respondents and priority.
-   * The ceiling leaves ~180 B for wording fixes, not for another argument.
+   *   strict arguments:               6,261 B (each object now lists
+   *                                   additionalProperties: false)
+   * The ceiling leaves ~140 B for wording fixes, not for another argument.
    */
-  const TEAM_SET_MANIFEST_CEILING = 6_250;
+  const TEAM_SET_MANIFEST_CEILING = 6_400;
 
   it('keeps the three tools’ manifest (name + description + schema) under its ceiling', async () => {
     asMember('OWNER');

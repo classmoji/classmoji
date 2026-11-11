@@ -239,13 +239,13 @@ describe('every real tool', () => {
     return new Map(tools.map(t => [t.name, t.inputSchema]));
   }
 
-  it("publishes zod's input schema, leaving out only zod's own format patterns", async () => {
+  it("publishes zod's input schema of the strict arguments, leaving out only zod's own format patterns", async () => {
     const ours = await listTools(buildMcpServer(viewer as never));
     const reference = new McpServer({ name: 'reference', version: '0' });
     for (const def of toolDefs) {
       reference.registerTool(
         def.name,
-        { description: def.description, inputSchema: z.object(def.inputSchema) },
+        { description: def.description, inputSchema: z.strictObject(def.inputSchema) },
         async () => ({ content: [] })
       );
     }

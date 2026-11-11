@@ -13,7 +13,7 @@
  */
 
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { z } from 'zod';
+import { toolArguments } from '../toolInputSchema.ts';
 
 vi.mock('@classmoji/database', async () =>
   (await import('../../__tests__/prismaSchemaStub.ts')).databaseModuleMock()
@@ -90,7 +90,7 @@ beforeAll(async () => {
   const { listToolDefinitions } = await import('../registry.ts');
   registerAllTools();
   for (const tool of listToolDefinitions()) {
-    walk(z.object(tool.inputSchema) as unknown as Node, tool.name, new Set());
+    walk(toolArguments(tool.inputSchema) as unknown as Node, tool.name, new Set());
   }
   const modules: Record<string, Record<string, unknown>> = {
     quizAgent: await import('@classmoji/utils/quiz-agent'),

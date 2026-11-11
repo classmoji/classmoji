@@ -2,8 +2,10 @@
  * A tool's input schema as the MCP server registers it.
  *
  * The SDK takes any Standard Schema that also publishes a JSON Schema. A
- * tool's arguments are the zod object `z.object(shape)`; `toolInputSchema`
- * puts a Standard Schema of our own in front of it that
+ * tool's arguments are the zod object `toolArguments(shape)`, which refuses
+ * a key the tool does not declare (a misspelled argument is an error that
+ * names it, not silently dropped); `toolInputSchema` puts a Standard Schema
+ * of our own in front of it that
  *
  * - validates with zod and reports a bounded set of issues
  *   (`boundedValidate`, boundedIssues.ts), and
@@ -124,9 +126,18 @@ function cachedConverter(
 
 export type ToolInputSchema = StandardSchemaWithJSON<Record<string, unknown>>;
 
+/**
+ * A tool's arguments as one zod object: strict, so an undeclared key is
+ * refused (`unrecognized_keys`, naming it). Its JSON Schema says so with
+ * `additionalProperties: false`.
+ */
+export function toolArguments<Shape extends Record<string, z.ZodType>>(shape: Shape) {
+  return z.strictObject(shape);
+}
+
 /** The schema a tool with these arguments is registered with (see above). */
 export function toolInputSchema(shape: Record<string, z.ZodType>): ToolInputSchema {
-  const object = z.object(shape);
+  const object = toolArguments(shape);
   const standard = object['~standard'];
   return {
     '~standard': {

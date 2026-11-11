@@ -210,8 +210,13 @@ const blockBoxPatchSchema = z
 const blockSlideSchema = z.string().min(1).describe('Id of the slide holding the block');
 const existingBlockIdSchema = blockIdSchema.describe('data-cm-block-id, from deck_outline');
 
+/**
+ * One deck op. Each op refuses a key it does not declare, so a misspelled
+ * one (`note`, `codeTheme`) is an error rather than a silent no-op; `attrs`
+ * is a record and takes any attribute name.
+ */
 export const deckOpSchema = z.discriminatedUnion('op', [
-  z.object({
+  z.strictObject({
     op: z.literal('update'),
     id: z.string().min(1),
     html: z.string().max(200_000).optional().describe(SLIDE_HTML_DESCRIPTION),
@@ -238,7 +243,7 @@ export const deckOpSchema = z.discriminatedUnion('op', [
       .optional()
       .describe('true = attrs replaces the whole record instead of merging'),
   }),
-  z.object({
+  z.strictObject({
     op: z.literal('insert'),
     slides: capArray(
       z.array(newSlideSchema).min(1).max(DECK_OPS_LIMITS.MAX_INSERT_SLIDES),
@@ -246,23 +251,23 @@ export const deckOpSchema = z.discriminatedUnion('op', [
     ),
     position: positionSchema,
   }),
-  z.object({
+  z.strictObject({
     op: z.literal('move'),
     id: z.string().min(1),
     position: positionSchema,
   }),
-  z.object({
+  z.strictObject({
     op: z.literal('delete'),
     id: z.string().min(1),
   }),
-  z.object({
+  z.strictObject({
     op: z.literal('reorder'),
     order: capArray(
       z.array(z.string().min(1)).min(1).max(DECK_OPS_LIMITS.MAX_ORDER),
       DECK_OPS_LIMITS.MAX_ORDER
     ).describe('The complete new top-level slide order (a permutation of current top-level ids)'),
   }),
-  z.object({
+  z.strictObject({
     op: z.literal('set_theme'),
     theme: z.string().max(120).optional(),
     code_theme: z
@@ -271,7 +276,7 @@ export const deckOpSchema = z.discriminatedUnion('op', [
       .regex(/^[\w.-]+$/)
       .optional(),
   }),
-  z.object({
+  z.strictObject({
     op: z.literal('block_add'),
     slide: blockSlideSchema,
     type: z.enum(['html', 'svg', 'iframe']).describe(BLOCK_TYPE_DESCRIPTION),
@@ -281,7 +286,7 @@ export const deckOpSchema = z.discriminatedUnion('op', [
     rev: blockRevSchema.optional().describe(BLOCK_REV_DESCRIPTION),
     block_id: blockIdSchema.optional().describe('Id for the new block; minted when omitted'),
   }),
-  z.object({
+  z.strictObject({
     op: z.literal('block_update'),
     slide: blockSlideSchema,
     block_id: existingBlockIdSchema,
@@ -290,7 +295,7 @@ export const deckOpSchema = z.discriminatedUnion('op', [
     src: z.string().max(2_000).optional().describe('New src (html and iframe), as for block_add'),
     rev: blockRevSchema.optional().describe(BLOCK_REV_DESCRIPTION),
   }),
-  z.object({
+  z.strictObject({
     op: z.literal('block_delete'),
     slide: blockSlideSchema,
     block_id: existingBlockIdSchema,

@@ -58,7 +58,7 @@ export const rosterAddStudentTool: ToolDefinition<RosterAddStudentArgs> = {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     students: z
       .array(
-        z.object({
+        z.strictObject({
           email: z.string().email().describe('Student email'),
           name: z.string().min(1).max(200).optional().describe('Student name'),
         })

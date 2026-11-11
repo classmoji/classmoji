@@ -26,6 +26,7 @@ import { z } from 'zod';
 import { QUIZ_AUTHOR_ROLES, QUIZ_EDITOR_ROLES } from '@classmoji/utils';
 import { MAX_STUDENT_TURNS } from '@classmoji/utils/quiz-agent/limits';
 import type { ToolContext } from '../../mcp/registry.ts';
+import { toolArguments } from '../../mcp/toolInputSchema.ts';
 
 const mocks = vi.hoisted(() => ({
   quizCreate: vi.fn(),
@@ -283,7 +284,7 @@ describe('quiz_create', () => {
   });
 
   it('requires module_id in the schema', () => {
-    const schema = z.object(quizCreateTool.inputSchema);
+    const schema = toolArguments(quizCreateTool.inputSchema);
     const { module_id: _moduleId, ...withoutModule } = ARGS;
     expect(schema.safeParse(withoutModule).success).toBe(false);
     expect(schema.safeParse({ ...ARGS, module_id: 'not-a-uuid' }).success).toBe(false);
@@ -367,7 +368,7 @@ describe('quiz_create', () => {
   });
 
   it('enforces the service clamps in the schema (question_count, max_attempts, weight)', () => {
-    const schema = z.object(quizCreateTool.inputSchema);
+    const schema = toolArguments(quizCreateTool.inputSchema);
     const base = { classroom: 'org/w26', name: 'Q', rubric_prompt: 'r', module_id: MODULE_ID };
 
     expect(schema.safeParse({ ...base, question_count: 0 }).success).toBe(false);
@@ -447,7 +448,7 @@ describe('course_search_enabled (quiz source material, Stage 2 tier)', () => {
 
   it('is a boolean in both schemas and neither tool takes source material', () => {
     for (const tool of [quizCreateTool, quizUpdateTool]) {
-      const schema = z.object(tool.inputSchema);
+      const schema = toolArguments(tool.inputSchema);
       expect(tool.inputSchema).toHaveProperty('course_search_enabled');
       expect(tool.inputSchema).not.toHaveProperty('source_material');
       expect(
@@ -594,7 +595,7 @@ describe('code_sandbox_enabled (quiz sandbox questions)', () => {
 
   it('is a boolean in both schemas, described, and the annotations are unchanged', () => {
     for (const tool of [quizCreateTool, quizUpdateTool]) {
-      const schema = z.object(tool.inputSchema);
+      const schema = toolArguments(tool.inputSchema);
       expect(tool.inputSchema).toHaveProperty('code_sandbox_enabled');
       expect(
         schema.safeParse({
@@ -724,14 +725,12 @@ describe('hint_cost and max_answers (answer rules, author settings)', () => {
 
   it('are whole numbers in range in both schemas (0–50 and 1–20), described', () => {
     for (const tool of [quizCreateTool, quizUpdateTool]) {
-      const schema = z.object(tool.inputSchema);
-      const base = {
-        classroom: 'o/s',
-        quiz_id: '11111111-1111-4111-8111-111111111111',
-        name: 'n',
-        rubric_prompt: 'r',
-        module_id: MODULE_ID,
-      };
+      const schema = toolArguments(tool.inputSchema);
+      // Each tool's own required arguments: an undeclared one is refused.
+      const base =
+        tool === quizCreateTool
+          ? { classroom: 'o/s', name: 'n', rubric_prompt: 'r', module_id: MODULE_ID }
+          : { classroom: 'o/s', quiz_id: '11111111-1111-4111-8111-111111111111' };
       const parses = (field: string, value: unknown) =>
         schema.safeParse({ ...base, [field]: value }).success;
 
@@ -1460,7 +1459,8 @@ describe('the quiz runtime gate (no Trigger key, no quizzes)', () => {
     },
     {
       name: 'quiz_update',
-      run: () => quizUpdateTool.handler({ classroom: 'org/w26', quiz_id: 'quiz-1', name: 'R' }, CTX),
+      run: () =>
+        quizUpdateTool.handler({ classroom: 'org/w26', quiz_id: 'quiz-1', name: 'R' }, CTX),
       write: () => mocks.quizUpdate,
     },
     {
