@@ -71,6 +71,57 @@ describe('team-set problem wording', () => {
       'patch.pins.add.0.kind',
     ],
     ['The setup: has a setting that isn’t recognized.', { teamsize: 3 }, 'patch.teamsize'],
+    // An enum value that is absent or not a string reads as a missing value
+    // or one of the wrong kind, not as a value outside the list.
+    [
+      'A rule (job): is missing.',
+      { rules: { upsert: [{ field_id: FIELD, strength: 'prefer' }] } },
+      'patch.rules.upsert.0.job',
+    ],
+    [
+      'A rule (job): is missing.',
+      { rules: { remove: [{ field_id: FIELD }] } },
+      'patch.rules.remove.0.job',
+    ],
+    [
+      'A rule (job): has a value of the wrong kind.',
+      { rules: { upsert: [{ field_id: FIELD, job: null }] } },
+      'patch.rules.upsert.0.job',
+    ],
+    [
+      'The rank rule on a question (strength): has a value of the wrong kind.',
+      { rules: { upsert: [{ field_id: FIELD, job: 'rank', strength: null }] } },
+      'patch.rules.upsert.0.strength',
+    ],
+    [
+      'People who didn’t answer: has a value of the wrong kind.',
+      { non_respondents: 5 },
+      'patch.non_respondents',
+    ],
+    [
+      'Settings of an option (runs): has a value of the wrong kind.',
+      { options: { o1: { open: 5 } } },
+      'patch.options.o1.open',
+    ],
+    // A record key that fails its own rule reads as that rule does.
+    [
+      'The priority rule on a question (what each answer favors): is empty.',
+      {
+        rules: { upsert: [{ field_id: FIELD, job: 'priority', params: { answers: { '': 'a' } } }] },
+      },
+      'patch.rules.upsert.0.params.answers.',
+    ],
+    [
+      'The priority rule on a question (what each answer favors): is longer than 64 characters.',
+      {
+        rules: {
+          upsert: [
+            { field_id: FIELD, job: 'priority', params: { answers: { ['k'.repeat(65)]: 'a' } } },
+          ],
+        },
+      },
+      `patch.rules.upsert.0.params.answers.${'k'.repeat(65)}`,
+    ],
   ])('%s', (text, patch, path) => {
     expect(problemsOf(patch)).toEqual({ problems: [text], paths: [path] });
   });

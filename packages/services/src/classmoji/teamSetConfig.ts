@@ -803,11 +803,22 @@ function issueWords(issue: z.ZodIssue, root: unknown): string {
     }
     case 'not_multiple_of':
       return `must be a multiple of ${String(issue.divisor)}`;
-    case 'invalid_value':
-      // An enum's values, or a literal's one value.
-      return issue.values.length === 1
-        ? 'isn’t the allowed value'
-        : 'isn’t one of the allowed values';
+    case 'invalid_value': {
+      // A literal's one value, or an enum's values. zod reports an enum value
+      // that is absent or not a string here too, not as invalid_type: worded
+      // as invalid_type is.
+      if (issue.values.length === 1) return 'isn’t the allowed value';
+      const value = valueAt(root, issue.path);
+      if (value === undefined) return 'is missing';
+      if (typeof value !== 'string' && issue.values.every(v => typeof v === 'string')) {
+        return 'has a value of the wrong kind';
+      }
+      return 'isn’t one of the allowed values';
+    }
+    case 'invalid_key':
+      // A record key that fails its own schema: that schema's words ("is
+      // empty", "is longer than 64 characters").
+      return issue.issues[0] ? issueWords(issue.issues[0], undefined) : 'isn’t valid';
     case 'invalid_union':
       // A discriminated union names its discriminator when no option has the value.
       return 'discriminator' in issue && issue.discriminator !== undefined
