@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act } from 'react';
-import { hydrateRoot } from 'react-dom/client';
+import { hydrateRoot, type Root } from 'react-dom/client';
 import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -26,15 +26,20 @@ beforeEach(() => {
   })) as unknown as typeof window.matchMedia;
 });
 
-afterEach(() => {
+let root: Root | null = null;
+
+afterEach(async () => {
+  await act(async () => root?.unmount());
+  root = null;
   document.documentElement.className = '';
+  document.documentElement.removeAttribute('data-theme');
 });
 
 // The root renders the whole document, as apps/admin/app/root.tsx does.
 const Page = ({ text }: { text: string }) => {
   useSystemTheme();
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <head />
       <body>
         <p>{text}</p>
@@ -59,7 +64,7 @@ describe('useSystemTheme', () => {
     const recovered: unknown[] = [];
 
     await act(async () => {
-      hydrateRoot(document, <Page text="Updated 1:00 PM" />, {
+      root = hydrateRoot(document, <Page text="Updated 1:00 PM" />, {
         onRecoverableError: e => recovered.push(e),
       });
     });
@@ -74,7 +79,7 @@ describe('useSystemTheme', () => {
   it('follows the OS when it switches between light and dark', async () => {
     loadServerPage('same');
     await act(async () => {
-      hydrateRoot(document, <Page text="same" />);
+      root = hydrateRoot(document, <Page text="same" />);
     });
     expect(document.documentElement.classList.contains('dark')).toBe(true);
 
