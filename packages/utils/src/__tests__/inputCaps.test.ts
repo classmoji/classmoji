@@ -6,6 +6,7 @@ import {
   capElements,
   capKeys,
   countJsonElements,
+  inputCapOf,
   issueText,
   MAX_SHOWN_ISSUE_MESSAGE_CHARS,
   MAX_SHOWN_ISSUES,
@@ -210,5 +211,34 @@ describe('boundIssues', () => {
     const [bounded] = boundIssues(parsed.error.issues);
     expect(bounded.code).toBe('invalid_union');
     expect((bounded as { errors: unknown[] }).errors).toEqual([]);
+  });
+});
+
+describe('inputCapOf', () => {
+  it('names the cap a schema checks first, through optional, nullish and refine', () => {
+    const list = capArray(z.array(z.string()).max(3), 3);
+    expect(inputCapOf(list)).toEqual({ kind: 'array', max: 3 });
+    const refined = list.refine(values => values.length !== 2);
+    expect(inputCapOf(refined)).toEqual({ kind: 'array', max: 3 });
+    expect(inputCapOf(list.optional()._zod.def.innerType)).toEqual({ kind: 'array', max: 3 });
+    expect(inputCapOf(capKeys(z.record(z.string(), z.number()), 8))).toEqual({
+      kind: 'keys',
+      max: 8,
+    });
+    expect(inputCapOf(capElements(z.object({}), 100))).toEqual({ kind: 'elements', max: 100 });
+  });
+
+  it('is undefined for any other schema, a plain preprocess included', () => {
+    expect(inputCapOf(z.array(z.string()).max(3))).toBeUndefined();
+    expect(inputCapOf(z.preprocess(value => value, z.string()))).toBeUndefined();
+    expect(inputCapOf(z.string().pipe(z.string()))).toBeUndefined();
+    expect(inputCapOf(null)).toBeUndefined();
+  });
+
+  it('still refuses with the same issue', () => {
+    const parsed = capKeys(z.record(z.string(), z.number()), 2).safeParse({ a: 1, b: 2, c: 3 });
+    expect(parsed.success).toBe(false);
+    if (!parsed.success)
+      expect(parsed.error.issues.map(i => i.message)).toEqual(['Expected at most 2 keys']);
   });
 });

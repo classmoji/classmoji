@@ -55,6 +55,44 @@ function hasMoreKeysThan(value: object, max: number): boolean {
   return false;
 }
 
+/** What `capArray`, `capKeys` or `capElements` checks before its schema runs. */
+export interface InputCap {
+  kind: 'array' | 'keys' | 'elements';
+  max: number;
+}
+
+/**
+ * Each cap's preprocess step, by its function: a schema keeps it through
+ * `.optional()`, `.refine()` and the like, which copy the schema but not the
+ * function.
+ */
+const capSteps = new WeakMap<object, InputCap>();
+
+function capStep<T extends z.ZodTypeAny>(
+  cap: InputCap,
+  check: (value: unknown, ctx: z.RefinementCtx) => void,
+  schema: T
+) {
+  const step = (value: unknown, ctx: z.RefinementCtx) => {
+    check(value, ctx);
+    return value;
+  };
+  capSteps.set(step, cap);
+  return z.preprocess(step, schema);
+}
+
+/**
+ * The cap `schema` checks first, when it was built by `capArray`, `capKeys`
+ * or `capElements` (for tests that walk schemas), else undefined.
+ */
+export function inputCapOf(schema: unknown): InputCap | undefined {
+  const def = (schema as { _zod?: { def?: Record<string, unknown> } } | null)?._zod?.def;
+  if (def?.type !== 'pipe') return undefined;
+  const step = (def.in as { _zod?: { def?: { transform?: unknown } } } | undefined)?._zod?.def
+    ?.transform;
+  return typeof step === 'function' ? capSteps.get(step) : undefined;
+}
+
 /**
  * `schema`, refusing an array longer than `max` before its elements are
  * parsed. The issue is the one `.max(max, message)` raises (same code, data
@@ -62,19 +100,22 @@ function hasMoreKeysThan(value: object, max: number): boolean {
  * Anything that is not an array goes to `schema` unchanged.
  */
 export function capArray<T extends z.ZodTypeAny>(schema: T, max: number, message?: string) {
-  return z.preprocess((value, ctx) => {
-    if (Array.isArray(value) && value.length > max) {
-      ctx.addIssue({
-        code: 'too_big',
-        origin: 'array',
-        maximum: max,
-        inclusive: true,
-        input: value,
-        ...(message === undefined ? {} : { message }),
-      });
-    }
-    return value;
-  }, schema);
+  return capStep(
+    { kind: 'array', max },
+    (value, ctx) => {
+      if (Array.isArray(value) && value.length > max) {
+        ctx.addIssue({
+          code: 'too_big',
+          origin: 'array',
+          maximum: max,
+          inclusive: true,
+          input: value,
+          ...(message === undefined ? {} : { message }),
+        });
+      }
+    },
+    schema
+  );
 }
 
 /**
@@ -83,17 +124,20 @@ export function capArray<T extends z.ZodTypeAny>(schema: T, max: number, message
  * `schema` unchanged.
  */
 export function capKeys<T extends z.ZodTypeAny>(schema: T, max: number, message?: string) {
-  return z.preprocess((value, ctx) => {
-    if (
-      value !== null &&
-      typeof value === 'object' &&
-      !Array.isArray(value) &&
-      hasMoreKeysThan(value, max)
-    ) {
-      ctx.addIssue({ code: 'custom', message: message ?? `Expected at most ${max} keys` });
-    }
-    return value;
-  }, schema);
+  return capStep(
+    { kind: 'keys', max },
+    (value, ctx) => {
+      if (
+        value !== null &&
+        typeof value === 'object' &&
+        !Array.isArray(value) &&
+        hasMoreKeysThan(value, max)
+      ) {
+        ctx.addIssue({ code: 'custom', message: message ?? `Expected at most ${max} keys` });
+      }
+    },
+    schema
+  );
 }
 
 /**
@@ -102,15 +146,18 @@ export function capKeys<T extends z.ZodTypeAny>(schema: T, max: number, message?
  * limit on the value as a whole, beside the caps on its parts.
  */
 export function capElements<T extends z.ZodTypeAny>(schema: T, max: number, message?: string) {
-  return z.preprocess((value, ctx) => {
-    if (value !== null && typeof value === 'object' && countJsonElements(value, max) > max) {
-      ctx.addIssue({
-        code: 'custom',
-        message: message ?? `Too large: at most ${max} array elements and object members`,
-      });
-    }
-    return value;
-  }, schema);
+  return capStep(
+    { kind: 'elements', max },
+    (value, ctx) => {
+      if (value !== null && typeof value === 'object' && countJsonElements(value, max) > max) {
+        ctx.addIssue({
+          code: 'custom',
+          message: message ?? `Too large: at most ${max} array elements and object members`,
+        });
+      }
+    },
+    schema
+  );
 }
 
 /**
