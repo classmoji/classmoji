@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { useFetcher, useRevalidator } from 'react-router';
 import { useCallout } from '@classmoji/ui-components';
-import { useForm, type Control, type FieldValues } from 'react-hook-form';
+import { useForm, type Control, type FieldValues, type Resolver } from 'react-hook-form';
 import { FormItem } from 'react-hook-form-antd';
 import {
   Form,
@@ -219,15 +219,23 @@ const FormModule = ({
     project_template_title: null,
   };
 
+  const defaultValues = isNew ? newFormUpdateValues : updateFormDefaultValues;
+  // The form's fields are typed from its default values (the FormItems take
+  // that Control). @hookform/resolvers 5 types a resolver from its schema, so
+  // it is cast to the form's type, as the pages form renderer does.
+  type RepositoryFormValues = typeof defaultValues;
+
   const {
     control,
     handleSubmit,
     watch,
     setValue,
     formState: { errors },
-  } = useForm({
-    resolver: zodResolver(makeSchema(`A template ${terms.repo} must be selected.`)),
-    defaultValues: isNew ? newFormUpdateValues : updateFormDefaultValues,
+  } = useForm<RepositoryFormValues>({
+    resolver: zodResolver(
+      makeSchema(`A template ${terms.repo} must be selected.`)
+    ) as unknown as Resolver<RepositoryFormValues>,
+    defaultValues,
   });
 
   const type = watch('type');
