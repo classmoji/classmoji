@@ -58,7 +58,12 @@ describe("present_question's JSON schema", () => {
       properties: { files: Record<string, unknown> };
     };
     const { description: _description, ...files } = schema.properties.files;
-    expect(files).toEqual({ type: 'object', additionalProperties: { type: 'string' } });
-    expect(JSON.stringify(schema)).not.toMatch(/propertyNames|"pattern"/);
+    // zod 4 names the key type of every record; `{ type: 'string' }` asks nothing of a key.
+    expect(files).toEqual({
+      type: 'object',
+      propertyNames: { type: 'string' },
+      additionalProperties: { type: 'string' },
+    });
+    expect(JSON.stringify(schema)).not.toMatch(/"pattern"|patternProperties/);
   });
 });
