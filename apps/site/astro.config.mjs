@@ -101,6 +101,9 @@ export default defineConfig({
     starlight({
       title: '🍎 classmoji',
       description: 'Documentation for Classmoji - the git-native LMS for CS education',
+      // The site's (and the app's) icon. Starlight's default is /favicon.svg,
+      // which the site does not have, so the docs pages had no icon.
+      favicon: '/favicon.ico',
       // These keep the docs looking as they did with starlight-theme-black 0.6
       // (with src/styles/docs-classic.css): the header with "Back to main site"
       // and the small-screen bottom-sheet menu, the breadcrumb title without
