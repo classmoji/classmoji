@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Form, Link, useActionData, useFetcher, useLoaderData, useNavigation } from 'react-router';
 import { IconAlertTriangle } from '@tabler/icons-react';
 import { FilterChips, SearchBox } from '~/components/ui';
+import { useNow } from '~/hooks/useNow';
 import { relativeTime } from '~/utils/time';
 import { contentDeliveryAction, loadContentDelivery } from './route.server';
 import type { DeliveryRow } from './route.server';
@@ -144,6 +145,7 @@ const ContentDelivery = () => {
     useLoaderData<typeof loader>();
   const navigation = useNavigation();
   const actionData = useActionData<{ error?: string; ok?: boolean; changed?: number }>();
+  const now = useNow();
   const [confirming, setConfirming] = useState<BulkIntent | null>(null);
 
   const bulkIntent = navigation.formData?.get('intent');
@@ -273,7 +275,7 @@ const ContentDelivery = () => {
                     <td className="py-1.5 pr-4 text-ink-2">{row.orgLogin}</td>
                     <td className="py-1.5 pr-4 text-ink-2 whitespace-nowrap">
                       {row.syncedAt ? (
-                        relativeTime(row.syncedAt)
+                        relativeTime(row.syncedAt, now)
                       ) : (
                         <span className="text-ink-4">never</span>
                       )}

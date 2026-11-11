@@ -21,9 +21,13 @@ export const meta = () => [{ title: 'Admin · Classmoji' }];
  * Deliberately auth-free: it runs before every child loader, including the ones
  * that throw 401/403, so the ErrorBoundary below still has a webapp URL to send
  * a rejected visitor to.
+ *
+ * `now` is the instant the server rendered at: ~/hooks/useNow hands it to
+ * "how long ago" text while hydrating, so both renders say the same thing.
  */
 export const loader = () => ({
   webappUrl: process.env.WEBAPP_URL ?? 'http://localhost:3000',
+  now: Date.now(),
 });
 
 const Document = ({ children }: { children: React.ReactNode }) => {

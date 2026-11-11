@@ -92,6 +92,13 @@ describe('formatting', () => {
     expect(relativeTime('2026-10-31T15:00:00Z', now)).toBe('3 hours');
     expect(relativeTime('2026-10-28T18:00:00Z', now)).toBe('3 days');
   });
+
+  it('relativeTime names the year by the reporting zone, not UTC', () => {
+    const now = new Date('2027-02-05T15:00:00Z');
+    // 11:30 PM on Dec 31 in New York, already Jan 1 2027 in UTC.
+    expect(relativeTime('2027-01-01T04:30:00Z', now)).toBe('Dec 31, 2026');
+    expect(relativeTime('2027-01-10T15:00:00Z', now)).toBe('Jan 10');
+  });
 });
 
 describe('dayStart cache', () => {

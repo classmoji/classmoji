@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { formatPeriodLabel, formatWeekRange } from '~/utils/time';
+import { formatNumber, formatPeriodLabel, formatWeekRange } from '~/utils/time';
 
 export interface ChartPeriod {
   start: string;
@@ -85,7 +85,7 @@ export const TimeChart = ({
               stroke={t === 0 ? 'var(--line-strong)' : 'var(--line)'}
             />
             <text x={PAD.left - 8} y={y(t) + 4} fontSize={11} fill="var(--ink-4)" textAnchor="end">
-              {t.toLocaleString()}
+              {formatNumber(t)}
             </text>
           </g>
         ))}
@@ -123,7 +123,7 @@ export const TimeChart = ({
               fill="var(--ink-3)"
               textAnchor="end"
             >
-              {values[n - 1].toLocaleString()} so far
+              {formatNumber(values[n - 1])} so far
             </text>
           </>
         ) : null}
@@ -176,7 +176,7 @@ export const TimeChart = ({
             {periods[hover].partial ? ' (so far)' : ''}
           </div>
           <div className="text-ink-2 tabular-nums">
-            {values[hover].toLocaleString()} {noun}
+            {formatNumber(values[hover])} {noun}
           </div>
         </div>
       ) : null}
@@ -192,7 +192,7 @@ export const TimeChart = ({
                     {label(i)}
                     {p.partial ? ' (so far)' : ''}
                   </td>
-                  <td className="tabular-nums text-ink-0">{values[i].toLocaleString()}</td>
+                  <td className="tabular-nums text-ink-0">{formatNumber(values[i])}</td>
                 </tr>
               ))}
             </tbody>

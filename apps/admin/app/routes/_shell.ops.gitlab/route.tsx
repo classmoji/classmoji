@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { useFetcher, useLoaderData } from 'react-router';
 import { gitLabInstancesAction, loadGitLabInstances } from './route.server';
 import type { InstanceRow } from './route.server';
+import { useNow } from '~/hooks/useNow';
+import { formatDate, formatDateTime } from '~/utils/time';
 
 export const loader = loadGitLabInstances;
 export const action = gitLabInstancesAction;
@@ -151,8 +153,9 @@ const PendingRequest = ({ row }: { row: InstanceRow }) => {
   const decide = useFetcher<{ error?: string; ok?: boolean }>();
   const r = row.requester;
   const hostname = new URL(row.host).hostname;
+  const now = useNow();
   const ageDays = r.since
-    ? Math.floor((Date.now() - new Date(r.since).getTime()) / 86_400_000)
+    ? Math.floor((now.getTime() - new Date(r.since).getTime()) / 86_400_000)
     : null;
   const busy = decide.state !== 'idle';
   return (
@@ -167,7 +170,7 @@ const PendingRequest = ({ row }: { row: InstanceRow }) => {
           {hostname}
         </a>
         <div className="text-xs text-ink-3">
-          requested {new Date(row.createdAt).toLocaleString()} by{' '}
+          requested {formatDateTime(row.createdAt)} by{' '}
           {[r.name, r.username ? `@${r.username}` : null].filter(Boolean).join(' ') || 'unknown'}
           {r.email ? ` (${r.email})` : ''}
         </div>
@@ -288,9 +291,7 @@ const GitLabInstances = () => {
                       >
                         {new URL(row.host).host}
                       </a>
-                      <div className="text-ink-3 text-xs">
-                        since {new Date(row.createdAt).toLocaleDateString()}
-                      </div>
+                      <div className="text-ink-3 text-xs">since {formatDate(row.createdAt)}</div>
                     </td>
                     <td className="py-2.5 pr-4 text-ink-2">
                       {row.createdBy ?? row.requester.name ?? row.requester.email ?? 'Unknown'}

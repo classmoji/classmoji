@@ -12,7 +12,8 @@ import {
   withParams,
 } from '~/components/ui';
 import { ViewAsButton } from '~/components/ViewAsButton';
-import { relativeTime } from '~/utils/time';
+import { useNow } from '~/hooks/useNow';
+import { formatDate, relativeTime } from '~/utils/time';
 import { classroomAction, loadClassroom, type ClassroomTab } from './route.server';
 
 export const loader = loadClassroom;
@@ -81,6 +82,7 @@ const DeliveryToggle = ({ enabled }: { enabled: boolean }) => {
 
 const HealthStrip = ({ data }: { data: Data }) => {
   const h = data.health;
+  const now = useNow();
   return (
     <Panel
       title="Health"
@@ -107,7 +109,7 @@ const HealthStrip = ({ data }: { data: Data }) => {
         </Tile>
         <Tile tone="neutral" title="Content sync">
           {h.contentSyncedAt
-            ? `full sync ${relativeTime(h.contentSyncedAt)}`
+            ? `full sync ${relativeTime(h.contentSyncedAt, now)}`
             : 'never fully synced'}
           {h.contentSyncedCommit ? ` · ${h.contentSyncedCommit.slice(0, 7)}` : ''}
         </Tile>
@@ -122,7 +124,7 @@ const HealthStrip = ({ data }: { data: Data }) => {
           {h.checkpointError
             ? h.checkpointError.slice(0, 80)
             : h.lastCheckpointAt
-              ? `last checkpoint ${relativeTime(h.lastCheckpointAt)}`
+              ? `last checkpoint ${relativeTime(h.lastCheckpointAt, now)}`
               : `${h.collabDocs} documents`}
         </Tile>
         <Tile tone="neutral" title={`Content delivery ${h.delivery ? 'on' : 'off'}`}>
@@ -134,11 +136,11 @@ const HealthStrip = ({ data }: { data: Data }) => {
             title={`Import ${h.importJob.status.toLowerCase()}`}
           >
             {h.importJob.phase ? `${h.importJob.phase} · ` : ''}
-            {relativeTime(h.importJob.at)}
+            {relativeTime(h.importJob.at, now)}
           </Tile>
         ) : (
           <Tile tone="neutral" title="Last activity">
-            {h.lastActivity ? relativeTime(h.lastActivity) : 'none recorded'}
+            {h.lastActivity ? relativeTime(h.lastActivity, now) : 'none recorded'}
           </Tile>
         )}
       </div>
@@ -148,6 +150,7 @@ const HealthStrip = ({ data }: { data: Data }) => {
 
 const PeopleTab = ({ data }: { data: Extract<Data, { people: unknown }> }) => {
   const { people, classroom } = data;
+  const now = useNow();
   const [params] = useSearchParams();
   const keep = [...params.entries()].filter(([k]) => k !== 'pq');
   return (
@@ -218,13 +221,13 @@ const PeopleTab = ({ data }: { data: Extract<Data, { people: unknown }> }) => {
                   </td>
                   <td className="py-1.5 pr-3 text-ink-2 whitespace-nowrap">
                     {p.lastSeenAt ? (
-                      relativeTime(p.lastSeenAt)
+                      relativeTime(p.lastSeenAt, now)
                     ) : (
                       <span className="text-ink-4">—</span>
                     )}
                   </td>
                   <td className="py-1.5 pr-3 text-ink-3 whitespace-nowrap">
-                    {relativeTime(p.joinedAt)}
+                    {relativeTime(p.joinedAt, now)}
                   </td>
                   <td className="py-1.5 text-right">
                     {p.accepted ? (
@@ -274,7 +277,7 @@ const CourseworkTab = ({ data }: { data: Extract<Data, { coursework: unknown }> 
                     </td>
                     <td className="py-1.5 pr-3 text-ink-3 whitespace-nowrap">
                       {a.deadline
-                        ? `due ${new Date(a.deadline).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`
+                        ? `due ${formatDate(a.deadline, { month: 'short', day: 'numeric' })}`
                         : 'no deadline'}
                     </td>
                     <td className="py-1.5 text-right tabular-nums text-ink-2 whitespace-nowrap">
@@ -290,8 +293,9 @@ const CourseworkTab = ({ data }: { data: Extract<Data, { coursework: unknown }> 
     </div>
   );
 
-const ActivityTab = ({ data }: { data: Extract<Data, { activity: unknown }> }) =>
-  data.activity.length === 0 ? (
+const ActivityTab = ({ data }: { data: Extract<Data, { activity: unknown }> }) => {
+  const now = useNow();
+  return data.activity.length === 0 ? (
     <Empty title="Nothing recorded" hint="Changes made in this classroom show up here." />
   ) : (
     <ol className="px-4 py-3">
@@ -305,7 +309,7 @@ const ActivityTab = ({ data }: { data: Extract<Data, { activity: unknown }> }) =
             className="absolute -left-[4px] top-3 w-[7px] h-[7px] rounded-full"
             style={{ background: a.admin ? 'var(--amber-ink)' : 'var(--line-strong)' }}
           />
-          <span className="text-xs text-ink-4 tabular-nums pt-0.5">{relativeTime(a.at)}</span>
+          <span className="text-xs text-ink-4 tabular-nums pt-0.5">{relativeTime(a.at, now)}</span>
           <span className="text-ink-1">
             {a.actor ? (
               <Link to={`/people/${a.actor.id}`} className="font-medium text-ink-0 hover:underline">
@@ -321,6 +325,7 @@ const ActivityTab = ({ data }: { data: Extract<Data, { activity: unknown }> }) =
       ))}
     </ol>
   );
+};
 
 const ClassroomDetail = () => {
   const data = useLoaderData<typeof loader>();
@@ -365,8 +370,7 @@ const ClassroomDetail = () => {
               ) : (
                 classroom.contentRepo
               )}{' '}
-              · created{' '}
-              {new Date(classroom.createdAt).toLocaleDateString(undefined, { dateStyle: 'medium' })}
+              · created {formatDate(classroom.createdAt)}
               {classroom.creator ? (
                 <>
                   {' '}
