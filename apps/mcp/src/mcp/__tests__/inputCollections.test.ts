@@ -8,11 +8,13 @@
  *   `.refine()` placed before the `.max()` would make zod parse every element
  *   first;
  * - a record sits inside `capKeys` (@classmoji/utils/input-caps): zod has no
- *   size check for records.
+ *   size check for records. An object with a typed `.catchall()` is one too:
+ *   each extra key is parsed with it.
  *
  * Walked: every MCP tool's input, the page and deck ops payloads the editors
- * save, every form field's answer, a quiz's code submission, and the team-set
- * config and patch (form_teams_run's `patch` and the teams page parse them).
+ * save, a form definition and every form field's answer, a quiz's code
+ * submission, and the team-set config and patch (form_teams_run's `patch` and
+ * the teams page parse them).
  * The few exceptions are listed in ALLOWED.
  */
 
@@ -33,12 +35,16 @@ const ALLOWED = new Set([
   'tool calendar_event_create.recurrence_rule (record)',
   'tool form_response_create.responses[].answers (record)',
   'tool form_teams_run.patch (record)',
+  'form definition|0 (array)',
+  'form definition|1.fields (array)',
   'team-set patch.options (record)',
   'team-set config.options (record)',
 ]);
 
 const findings: string[] = [];
 const seen = { arrays: 0, records: 0, capped: 0 };
+/** Every array and record the walk met, by where. */
+const reached: string[] = [];
 
 /** zod 4's rule (`util.sizeCaps`): the leading length/size checks that set a maximum. */
 function leadingMax(def: Def): boolean {
@@ -57,23 +63,34 @@ function walk(node: Node | undefined, where: string, path: Set<Node>, keysCapped
   switch (def.type) {
     case 'array':
       seen.arrays++;
+      reached.push(where);
       if (leadingMax(def)) seen.capped++;
       else findings.push(`${where} (array)`);
       walk(def.element, `${where}[]`, path);
       return;
     case 'record':
       seen.records++;
+      reached.push(where);
       if (keysCapped) seen.capped++;
       else findings.push(`${where} (record)`);
       walk(def.keyType, `${where}{key}`, path);
       walk(def.valueType, `${where}{}`, path);
       return;
-    case 'object':
+    case 'object': {
       for (const [key, value] of Object.entries(def.shape as Record<string, Node>)) {
         walk(value, `${where}.${key}`, path);
       }
+      // A strict object's catchall is never, a loose one's unknown: neither
+      // parses an extra key. Any other catchall parses each one, as a record.
+      const catchall = (def.catchall as Node | undefined)?._zod.def.type;
+      if (catchall && !['never', 'unknown', 'any'].includes(catchall)) {
+        seen.records++;
+        if (keysCapped) seen.capped++;
+        else findings.push(`${where} (catchall)`);
+      }
       walk(def.catchall, `${where}.*`, path);
       return;
+    }
     case 'pipe': {
       const cap = inputCapOf(node);
       walk(def.in, where, path);
@@ -154,8 +171,12 @@ beforeAll(async () => {
   const { deckOpsPayloadSchema } = await import('@classmoji/services/slides/ops');
   walk(deckOpsPayloadSchema as unknown as Node, 'deck ops', new Set());
 
-  const { buildResponseSchema, FIELD_TYPE_REGISTRY } =
+  const { buildResponseSchema, definitionSchema, FIELD_TYPE_REGISTRY } =
     await import('@classmoji/services/form-contract');
+  walk(definitionSchema as unknown as Node, 'form definition', new Set());
+  for (const [type, spec] of Object.entries(FIELD_TYPE_REGISTRY)) {
+    walk((spec as { defSchema: Node }).defSchema, `form field ${type}`, new Set());
+  }
   const fields = fieldOfEachType();
   const answering = Object.entries(FIELD_TYPE_REGISTRY).filter(
     ([, spec]) => (spec as { kind: string }).kind === 'input'
@@ -180,6 +201,16 @@ describe('arrays and records in client input', () => {
     expect(seen.arrays).toBeGreaterThan(40);
     expect(seen.records).toBeGreaterThan(10);
     expect(seen.capped).toBeGreaterThan(40);
+    // Inside each field type's definition too (a definition's fields are
+    // parsed by type at run time, so each type is walked on its own).
+    expect(reached).toEqual(
+      expect.arrayContaining([
+        'form definition.fields',
+        'form field dropdown.options',
+        'form field matrix.matrix.rows',
+        'form field repeat_group.fields',
+      ])
+    );
   });
 
   it('caps every one before its elements are parsed, or lists it', () => {
@@ -238,5 +269,13 @@ describe('the walk itself', () => {
       )
     ).toEqual([]);
     expect(flagged(capElements(record(), 50))).toEqual(['probe (record)']);
+  });
+
+  it('flags an object with a typed catchall unless capKeys checks it first; not a strict one', () => {
+    const typed = () => z.object({ a: z.string() }).catchall(z.number());
+    expect(flagged(z.object({ o: typed() }))).toEqual(['probe.o (catchall)']);
+    expect(flagged(capKeys(typed(), 5))).toEqual([]);
+    expect(flagged(z.strictObject({ a: z.string() }))).toEqual([]);
+    expect(flagged(z.looseObject({ a: z.string() }))).toEqual([]);
   });
 });

@@ -956,7 +956,8 @@ const definitionInput = z.union([
     .strict(),
 ]);
 
-const definitionSchema = definitionInput.pipe(
+/** A form definition as staff send it (the builder, MCP form_create and form_update). */
+export const definitionSchema = definitionInput.pipe(
   z.object({
     definition_version: z.literal(DEFINITION_VERSION),
     fields: z.array(fieldSchema).max(FORM_LIMITS.MAX_FIELDS),
