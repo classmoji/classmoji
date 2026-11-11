@@ -85,12 +85,20 @@ if [ "$SKIP_BUILD" -eq 0 ]; then
     script="$(build_script "$app")"
     [ -z "$script" ] && continue
     echo "build $app ($script)"
-    if ! npm run "$script" >"$LOGS/build-$app.log" 2>&1; then
+    # --force: these turbo tasks declare no outputs, so a cache hit would
+    # replay the log and leave build/ as it was.
+    if ! npm run "$script" -- --force >"$LOGS/build-$app.log" 2>&1; then
       echo "FAIL $app: build failed (see $LOGS/build-$app.log)"
       exit 1
     fi
   done
 fi
+for app in "${APPS[@]}"; do
+  if [ -n "$(build_script "$app")" ] && [ ! -d "apps/$app/build/server" ]; then
+    echo "FAIL $app: no build output in apps/$app/build (build it, or drop --skip-build)"
+    exit 1
+  fi
+done
 
 # --- 2. what every image holds: root node_modules, packages/, root files ---
 echo "stage $STAGE"
