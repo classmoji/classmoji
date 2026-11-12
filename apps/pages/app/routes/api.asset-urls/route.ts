@@ -1,7 +1,12 @@
 import { ClassmojiService } from '~/utils/db.server.ts';
 import { assertPageAccess } from '~/utils/auth.server.ts';
 import { assetResolveContext, resolveDocumentAssets } from '~/utils/assetRefs.server.ts';
-import { resolvableAssetRefs, ASSET_URLS_MAX_REFS } from '~/utils/liveAssets.ts';
+import { readCappedBody } from '~/utils/originCheck.server.ts';
+import {
+  resolvableAssetRefs,
+  ASSET_URLS_BODY_MAX_BYTES,
+  ASSET_URLS_MAX_REFS,
+} from '~/utils/liveAssets.ts';
 
 /**
  * Display URLs for asset references a live editor has never seen.
@@ -19,15 +24,20 @@ import { resolvableAssetRefs, ASSET_URLS_MAX_REFS } from '~/utils/liveAssets.ts'
  * inside this classroom's content repository, and a `media://` id is looked up
  * scoped to this classroom (another classroom's id resolves to the same
  * placeholder an unknown one does). Only references are accepted — absolute
- * URLs, `data:` and `blob:` are dropped — and a batch is capped.
+ * URLs, `data:` and `blob:` are dropped — and a batch is capped, as is the
+ * request (`ASSET_URLS_BODY_MAX_BYTES`, read through the byte-counting reader).
  */
 export const action = async ({ request }: { request: Request }) => {
   if (request.method !== 'POST') {
     return Response.json({ error: 'Method not allowed' }, { status: 405 });
   }
+  const text = await readCappedBody(request, ASSET_URLS_BODY_MAX_BYTES);
+  if (text === null) {
+    return Response.json({ error: 'That request is too large.' }, { status: 413 });
+  }
   let body: { pageId?: unknown; refs?: unknown };
   try {
-    body = (await request.json()) as { pageId?: unknown; refs?: unknown };
+    body = JSON.parse(text) as { pageId?: unknown; refs?: unknown };
   } catch {
     return Response.json({ error: 'Expected JSON' }, { status: 400 });
   }

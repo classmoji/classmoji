@@ -30,6 +30,7 @@ import { signInviteToken } from '@classmoji/auth/invite-token';
 import Tasks from '@classmoji/tasks';
 import { tasks } from '@trigger.dev/sdk';
 import { z } from 'zod';
+import { uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
 import { ok, OWNER_ONLY, requireClassroomCtx, scopedNotFound, writeAudit } from './shared.ts';
@@ -57,7 +58,7 @@ export const rosterAddStudentTool: ToolDefinition<RosterAddStudentArgs> = {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     students: z
       .array(
-        z.object({
+        z.strictObject({
           email: z.string().email().describe('Student email'),
           name: z.string().min(1).max(200).optional().describe('Student name'),
         })
@@ -137,7 +138,7 @@ export const rosterRemoveStudentTool: ToolDefinition<RosterRemoveStudentArgs> = 
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     student_login: z.string().min(1).optional().describe('The student Classmoji login'),
-    user_id: z.string().uuid().optional().describe('The student user id (alternative to login)'),
+    user_id: uuidString().optional().describe('The student user id (alternative to login)'),
     confirm: z
       .literal(true)
       .describe('Must be true — acknowledges this can remove the student from the Github org'),

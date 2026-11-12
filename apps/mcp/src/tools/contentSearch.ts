@@ -65,6 +65,7 @@
  */
 
 import { z } from 'zod';
+import { minUtf16Length } from '@classmoji/utils/zod-formats';
 import getPrisma from '@classmoji/database';
 import {
   ClassmojiService,
@@ -380,11 +381,9 @@ export const contentSearchTool: ToolDefinition<ContentSearchArgs> = {
   roles: MEMBER,
   inputSchema: {
     classroom: classroomArg,
-    query: z
-      .string()
-      .min(2)
-      .max(500)
-      .describe('What to look for, in plain language (a question works well)'),
+    query: minUtf16Length(z.string().max(500), 2).describe(
+      'What to look for, in plain language (a question works well)'
+    ),
     scope: scopeArg.optional(),
     kind: kindArg.optional(),
     limit: z

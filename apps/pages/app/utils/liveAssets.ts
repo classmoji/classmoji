@@ -17,9 +17,21 @@
 /** The most references one request carries (the route caps it too). */
 export const ASSET_URLS_MAX_REFS = 100;
 
+/** The longest reference worth asking about, in characters. */
+export const ASSET_REF_MAX_LENGTH = 2048;
+
+/**
+ * The most a request to the route may send: a full batch of the longest
+ * references, each character in the six bytes JSON may write it in
+ * (`\u0001`), with its quotes and comma, plus 1 KiB for the page id and the
+ * brackets. Every batch this resolver builds fits.
+ */
+export const ASSET_URLS_BODY_MAX_BYTES =
+  ASSET_URLS_MAX_REFS * (ASSET_REF_MAX_LENGTH * 6 + 3) + 1024;
+
 /** A reference worth asking the server about: a repo path or `media://`. */
 export function isResolvableRef(ref: unknown): ref is string {
-  if (typeof ref !== 'string' || !ref || ref.length > 2048) return false;
+  if (typeof ref !== 'string' || !ref || ref.length > ASSET_REF_MAX_LENGTH) return false;
   if (ref.startsWith('media://')) return true;
   // Absolute URLs, data:, blob: and protocol-relative URLs are already URLs.
   if (/^[a-z][a-z0-9+.-]*:/i.test(ref) || ref.startsWith('//')) return false;

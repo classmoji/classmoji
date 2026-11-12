@@ -393,6 +393,7 @@ describe('slug uniqueness', () => {
     const wrongOrg = await readResource(teacher, `classmoji://${SLUG_PROBE_ORG.login}/${DEV_SLUG}`);
     expect(wrongOrg.payload).toBeUndefined();
     expect(wrongOrg.error?.code).toBe(RESOURCE_NOT_FOUND);
+    expect(wrongOrg.error?.data).toMatchObject({ kind: 'not_found' });
   });
 
   it('serves the dev classroom leaderboard without an ambiguity refusal', async () => {

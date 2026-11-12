@@ -20,6 +20,7 @@ import {
   schemaContextFor,
   type RepeatResolution,
 } from './formTeamResolver.ts';
+import { boundIssue, issuePath, MAX_SHOWN_ISSUES } from '@classmoji/utils/input-caps';
 import { escapeVars, pagesUrl } from '../emails/escape.ts';
 import { fieldsOf } from './form.service.ts';
 import { Prisma } from '@prisma/client';
@@ -1925,15 +1926,33 @@ export async function createResponses({
     } catch (error) {
       const thrown = error as { code?: string; message?: string; issues?: ThrownIssue[] };
       if (thrown.issues && thrown.issues.length > 0) {
-        for (const issue of thrown.issues) {
+        // At most MAX_SHOWN_ISSUES entries per row, each issue cut by
+        // `boundIssue` (message, path, listed keys), then one entry saying how
+        // many more there were.
+        const listed: CreateResponseIssue[] = [];
+        let notListed = 0;
+        for (const thrownIssue of thrown.issues) {
+          const room = MAX_SHOWN_ISSUES - listed.length;
+          const keyCount =
+            thrownIssue.code === 'unrecognized_keys' ? (thrownIssue.keys?.length ?? 0) : 1;
+          if (room <= 0) {
+            notListed += keyCount;
+            continue;
+          }
+          const issue = boundIssue({
+            ...thrownIssue,
+            path: thrownIssue.path ?? [],
+            message: thrownIssue.message ?? 'Invalid.',
+          } as unknown as Parameters<typeof boundIssue>[0]) as ThrownIssue;
           // A wrong or stale field uuid. Zod reports this ONCE for the whole
           // object with an empty path and the offending keys in `keys`, which
           // would otherwise reach the caller as `path: ''` naming nothing —
           // useless for the one mistake most likely to produce it. One issue
           // per key, each naming the key it is about.
           if (issue.code === 'unrecognized_keys') {
-            for (const key of issue.keys ?? []) {
-              issues.push({
+            const shown = (issue.keys ?? []).slice(0, room);
+            for (const key of shown) {
+              listed.push({
                 code: 'unrecognized_keys',
                 field_id: key,
                 label: undefined,
@@ -1941,19 +1960,28 @@ export async function createResponses({
                 message: `No field ${key} on this form — field ids come from form_get.`,
               });
             }
+            notListed += keyCount - shown.length;
             continue;
           }
           const first = issue.path?.[0];
           const fieldId = typeof first === 'string' && labels.has(first) ? first : undefined;
           const label = fieldId ? labels.get(fieldId) : undefined;
-          issues.push({
+          listed.push({
             code: issue.code ?? FORM_ANSWERS_INVALID,
             ...(fieldId ? { field_id: fieldId } : {}),
             ...(label ? { label } : {}),
-            path: (issue.path ?? []).join('.'),
+            path: issuePath(thrownIssue.path ?? []),
             message: issue.message ?? 'Invalid.',
           });
         }
+        if (notListed > 0) {
+          listed.push({
+            code: FORM_ANSWERS_INVALID,
+            path: 'answers',
+            message: `…and ${notListed} more.`,
+          });
+        }
+        issues.push(...listed);
       } else {
         // FORM_ANSWERS_TOO_LARGE and anything else the contract raises without
         // zod issues behind it — reported about the answer set as a whole.

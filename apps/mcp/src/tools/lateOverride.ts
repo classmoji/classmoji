@@ -73,6 +73,7 @@
 
 import { ClassmojiService } from '@classmoji/services';
 import { z } from 'zod';
+import { uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
 import {
@@ -302,17 +303,13 @@ export const submissionLateOverrideTool: ToolDefinition<LateOverrideArgs> = {
       .max(LATE_OVERRIDE_MAX_IDS)
       .optional()
       .describe(`Several submission ids (1–${LATE_OVERRIDE_MAX_IDS})`),
-    assignment_id: z
-      .string()
-      .uuid()
+    assignment_id: uuidString()
       .optional()
       .describe(
         'A repo Assignment (every submission of it), or a quiz Assignment (with student_id)'
       ),
-    quiz_id: z.string().uuid().optional().describe('A quiz (see list_quizzes); needs student_id'),
-    student_id: z
-      .string()
-      .uuid()
+    quiz_id: uuidString().optional().describe('A quiz (see list_quizzes); needs student_id'),
+    student_id: uuidString()
       .optional()
       .describe('Quiz mode: the student whose late penalty to waive or restore'),
     is_late_override: z.boolean().describe('true = exempt from late penalties, false = clear'),

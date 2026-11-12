@@ -115,6 +115,8 @@ export default [
         '@classmoji/utils/ask-moji/copy',
         '@classmoji/utils/ask-moji/limits',
         '@classmoji/utils/ai-models',
+        '@classmoji/utils/input-caps',
+        '@classmoji/utils/zod-formats',
         '@classmoji/content-signing',
         '@classmoji/tasks',
         // A package `exports` subpath, which the lint resolver does not read.

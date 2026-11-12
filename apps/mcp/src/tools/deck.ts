@@ -76,6 +76,7 @@ import { appFrameHosts } from '@classmoji/services/slides/frame-refs';
 import { ClassmojiService, ContentService } from '@classmoji/services';
 import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
+import { uuidString } from '@classmoji/utils/zod-formats';
 import {
   CollabRequestError,
   actorFor,
@@ -416,7 +417,7 @@ export const deckOutlineTool: ToolDefinition<DeckOutlineArgs> = {
   roles: TEACHING_TEAM,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    slide_id: z.string().uuid().describe('Slide deck id'),
+    slide_id: uuidString().describe('Slide deck id'),
     at: z
       .enum(['main', 'preview'])
       .optional()
@@ -510,7 +511,7 @@ export const deckGetTool: ToolDefinition<DeckGetArgs> = {
   roles: TEACHING_TEAM,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    slide_id: z.string().uuid().describe('Slide deck id'),
+    slide_id: uuidString().describe('Slide deck id'),
     slide_ids: z
       .array(z.string().min(1))
       .min(1)
@@ -807,7 +808,7 @@ export const deckApplyTool: ToolDefinition<DeckApplyArgs> = {
   roles: TEACHING_TEAM,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    slide_id: z.string().uuid().describe('Slide deck id'),
+    slide_id: uuidString().describe('Slide deck id'),
     expected_sha: z
       .string()
       .min(1)
@@ -1261,7 +1262,7 @@ export const deckPreviewAcceptTool: ToolDefinition<DeckPreviewAcceptArgs> = {
   roles: TEACHING_TEAM,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    slide_id: z.string().uuid().describe('Slide deck id'),
+    slide_id: uuidString().describe('Slide deck id'),
     resolutions: z
       .array(
         z
@@ -1446,7 +1447,7 @@ export const deckPreviewDiscardTool: ToolDefinition<DeckPreviewArgs> = {
   roles: TEACHING_TEAM,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    slide_id: z.string().uuid().describe('Slide deck id'),
+    slide_id: uuidString().describe('Slide deck id'),
   },
   handler: async (args, ctx) => {
     const slide = await loadSlideInClassroom(args.slide_id, ctx);

@@ -47,6 +47,7 @@ import {
   type QuizResultStudent,
 } from '@classmoji/utils';
 import { z } from 'zod';
+import { uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
 import { orgProvider, sanitizedSettings } from '../resources/shape.ts';
@@ -121,7 +122,7 @@ export const listQuizAttemptsTool: ToolDefinition<ListQuizAttemptsArgs> = {
   roles: QUIZ_STAFF,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    quiz_id: z.string().uuid().describe('Quiz id (see list_quizzes)'),
+    quiz_id: uuidString().describe('Quiz id (see list_quizzes)'),
   },
   handler: async (args, ctx) => {
     const { classroomId } = requireClassroomCtx(ctx);

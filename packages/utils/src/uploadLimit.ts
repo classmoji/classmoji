@@ -166,8 +166,68 @@ function streamOfChunks(chunks: Uint8Array[]): ReadableStream<Uint8Array> {
   });
 }
 
+export const MULTIPART_FORM = 'multipart/form-data';
+export const URLENCODED_FORM = 'application/x-www-form-urlencoded';
+
 /**
- * `request.formData()`, with the two gates above in front of it.
+ * The form type a `Content-Type` names: its media type (the part before any
+ * `;`, trimmed and lowercased) when that is exactly one of the two form types,
+ * null otherwise. A route that picks a body limit by form type asks this, so
+ * the limit and `readLimitedFormData` read the header the same way.
+ */
+export function formMediaType(
+  contentType: string | null
+): typeof MULTIPART_FORM | typeof URLENCODED_FORM | null {
+  const mediaType = (contentType ?? '').split(';')[0].trim().toLowerCase();
+  return mediaType === MULTIPART_FORM || mediaType === URLENCODED_FORM ? mediaType : null;
+}
+
+/**
+ * The most fields a url-encoded form read through `readLimitedFormData` may
+ * carry. The largest form the apps post names one field per selected response
+ * (a form's responses export); a deck save sends six. Multipart parts are not
+ * counted: the byte limit bounds those.
+ */
+export const FORM_FIELDS_MAX = 10_000;
+
+const AMPERSAND = 0x26;
+
+/**
+ * Whether url-encoded `chunks` hold more than `maxFields` fields, counted as
+ * the `&`-separated pairs the parser splits them into. An `&` inside a value
+ * is percent-encoded, so every literal one is a separator.
+ */
+export function moreFormFieldsThan(chunks: Uint8Array[], maxFields: number): boolean {
+  let separators = 0;
+  for (const chunk of chunks) {
+    for (let at = chunk.indexOf(AMPERSAND); at !== -1; at = chunk.indexOf(AMPERSAND, at + 1)) {
+      separators += 1;
+      if (separators >= maxFields) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * The `Content-Type` the parser is handed: only one this module classified.
+ *
+ * A header may list several types (`a, b`), and the parser reads the last one
+ * it understands, which need not be the one before the first `;`. So a
+ * url-encoded form is handed over as exactly that type (the one whose fields
+ * were counted), a multipart one as sent only when it lists a single type, and
+ * anything else as no type at all, which the parser refuses.
+ */
+function parserContentType(contentType: string | null): string | null {
+  const formType = formMediaType(contentType);
+  if (formType === URLENCODED_FORM) return URLENCODED_FORM;
+  if (formType === MULTIPART_FORM && contentType && !contentType.includes(',')) return contentType;
+  return null;
+}
+
+/**
+ * `request.formData()`, with the two gates above in front of it, and for a
+ * url-encoded body a third: at most `FORM_FIELDS_MAX` fields, counted on the
+ * raw bytes before anything is parsed.
  *
  * Re-parsed out of a `Response` rather than a second `Request` on purpose: a
  * `Request` built around a stream needs `duplex: 'half'` and carries the
@@ -181,8 +241,9 @@ function streamOfChunks(chunks: Uint8Array[]): ReadableStream<Uint8Array> {
  * of a 35 MB upload at once, on top of the file part the parser then produces.
  * Draining the list releases our references as the parser takes them.
  *
- * Throws `UploadTooLargeError` for an over-cap body. Everything else — a
- * truncated part, a missing boundary — comes out of the parser unchanged.
+ * Throws `UploadTooLargeError` for an over-cap body or one with too many
+ * fields. Everything else — a truncated part, a missing boundary, a type that
+ * is not exactly one form type — comes out of the parser unchanged.
  */
 export async function readLimitedFormData(request: Request, maxBytes: number): Promise<FormData> {
   if (declaredBodyTooLarge(request.headers, maxBytes)) {
@@ -196,8 +257,43 @@ export async function readLimitedFormData(request: Request, maxBytes: number): P
   if (!body) return request.formData();
 
   const { chunks } = await readLimitedChunks(body, maxBytes);
-  const contentType = request.headers.get('content-type');
+  const contentType = parserContentType(request.headers.get('content-type'));
+  if (contentType === URLENCODED_FORM && moreFormFieldsThan(chunks, FORM_FIELDS_MAX)) {
+    chunks.length = 0;
+    throw new UploadTooLargeError(maxBytes);
+  }
   return new Response(streamOfChunks(chunks), {
     headers: contentType ? { 'Content-Type': contentType } : {},
   }).formData();
+}
+
+/**
+ * True when `text` is longer than `maxBytes` once encoded as UTF-8.
+ *
+ * Every UTF-16 unit is at least one byte and at most three, so the length
+ * alone decides most texts; only one in between is encoded to be counted.
+ */
+export function textOverBytes(text: string, maxBytes: number): boolean {
+  if (text.length > maxBytes) return true;
+  if (text.length * 3 <= maxBytes) return false;
+  return new TextEncoder().encode(text).byteLength > maxBytes;
+}
+
+/**
+ * The most a form field holding a list of ids or file paths may carry: the
+ * merge choices a conflict chooser posts back (`[{ id, choose }]`, one per
+ * conflicting block or slide) and the images a deck editor deletes. It holds
+ * 8,000 choices or 1,000 paths of 500 bytes, and is read with
+ * `parseJsonWithin`.
+ */
+export const ID_LIST_MAX_BYTES = 512 * 1024;
+
+/**
+ * `JSON.parse` for a field that may hold at most `maxBytes`. A longer text is
+ * refused with `UploadTooLargeError` before any of it is parsed; text that is
+ * not JSON throws the parser's own error.
+ */
+export function parseJsonWithin(text: string, maxBytes: number): unknown {
+  if (textOverBytes(text, maxBytes)) throw new UploadTooLargeError(maxBytes);
+  return JSON.parse(text);
 }

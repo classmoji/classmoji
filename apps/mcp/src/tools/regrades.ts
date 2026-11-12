@@ -54,6 +54,7 @@ import { ClassmojiService } from '@classmoji/services';
 import { QUIZ_REGRADE_REPLY_MAX_LENGTH } from '@classmoji/utils';
 import { runs, tasks } from '@trigger.dev/sdk';
 import { z } from 'zod';
+import { uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
 import {
@@ -200,9 +201,7 @@ export const regradeCreateTool: ToolDefinition<RegradeCreateArgs> = {
     git_repo_assignment_id: submissionIdSchema()
       .optional()
       .describe('Your submission (GitRepoAssignment) id; or give quiz_attempt_id'),
-    quiz_attempt_id: z
-      .string()
-      .uuid()
+    quiz_attempt_id: uuidString()
       .optional()
       .describe('Your completed quiz attempt id; or give git_repo_assignment_id'),
     comment: z.string().min(1).max(2000).describe('Why the work should be regraded'),
@@ -437,7 +436,7 @@ export const regradeResolveTool: ToolDefinition<RegradeResolveArgs> = {
   roles: TEACHING_TEAM,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    regrade_request_id: z.string().uuid().describe('RegradeRequest id'),
+    regrade_request_id: uuidString().describe('RegradeRequest id'),
     resolution: z.enum(['APPROVED', 'DENIED']).describe('The resolution status'),
     emoji: z
       .string()

@@ -38,14 +38,22 @@ import {
   type MergeResolution,
 } from '@classmoji/services/slides';
 import {
+  DOCUMENT_SAVE_MAX_BYTES,
+  DOCUMENT_SAVE_MAX_LABEL,
   REPO_REST_MAX_BYTES,
   REPO_REST_MAX_LABEL,
   repoFileTooLargeMessage,
 } from '@classmoji/utils/repo-limits';
 import { isSafeReturnPath, safeReturnPath } from '@classmoji/utils/return-path';
 import {
+  ID_LIST_MAX_BYTES,
+  MULTIPART_FORM,
+  MULTIPART_OVERHEAD_BYTES,
   UploadTooLargeError,
+  formMediaType,
+  parseJsonWithin,
   readLimitedFormData,
+  textOverBytes,
   uploadBodyLimit,
 } from '@classmoji/utils/upload-limit';
 import { SandpackRenderer } from '@classmoji/ui-components/sandpack';
@@ -798,21 +806,35 @@ async function forgetThemeFiles(
 const DECK_TOO_LARGE_MESSAGE = `This deck is larger than the ${REPO_REST_MAX_LABEL} your course repository accepts`;
 
 /**
+ * The same, for a save over the deck's own cap (`DOCUMENT_SAVE_MAX_BYTES`):
+ * its HTML, its ops, or the request carrying them. No full stop, as above.
+ */
+const DECK_SAVE_TOO_LARGE_MESSAGE = `This deck is larger than the ${DOCUMENT_SAVE_MAX_LABEL} a deck can hold`;
+
+/**
  * The most the deck editor's action reads of a request body.
  *
  * Two shapes arrive here. The image upload is multipart and carries one file,
  * so its cap is the repository's per-file ceiling plus the multipart envelope.
  * Every other intent — the deck save above all — is a url-encoded form whose
- * largest field is the deck's HTML, and percent-encoding can inflate markup up
- * to about three times (every `<`, `>`, `"` and space), so that shape gets
- * three times the same ceiling: room for any deck the repository could store,
- * and still a bound.
+ * largest field is the deck's HTML or its ops, at most
+ * `DOCUMENT_SAVE_MAX_BYTES`, and percent-encoding can inflate markup up to
+ * about three times (every `<`, `>`, `"` and space), so that shape gets three
+ * times the save cap plus slack for the other fields. The action refuses any
+ * other intent sent as multipart, so the file's cap is the upload's alone.
  */
 function deckActionBodyLimit(request: Request): number {
-  const contentType = request.headers.get('content-type') ?? '';
-  return contentType.includes('multipart/form-data')
+  return isMultipart(request)
     ? uploadBodyLimit(REPO_REST_MAX_BYTES)
-    : 3 * REPO_REST_MAX_BYTES;
+    : 3 * DOCUMENT_SAVE_MAX_BYTES + MULTIPART_OVERHEAD_BYTES;
+}
+
+/**
+ * Whether the request's media type is multipart (the image upload's shape),
+ * read the way `readLimitedFormData` reads it.
+ */
+function isMultipart(request: Request): boolean {
+  return formMediaType(request.headers.get('content-type')) === MULTIPART_FORM;
 }
 
 export const action = async ({
@@ -860,8 +882,7 @@ export const action = async ({
       // The image upload is the only multipart intent, and its client settles
       // its pending promise on `intent: 'upload-image'` — which the unread body
       // can no longer tell us, so it is named here.
-      const multipart = (request.headers.get('content-type') ?? '').includes('multipart/form-data');
-      if (multipart) {
+      if (isMultipart(request)) {
         return data(
           { intent: 'upload-image' as const, error: repoFileTooLargeMessage() },
           { status: 413 }
@@ -872,11 +893,18 @@ export const action = async ({
       // — lets a changes-only save fall back to ONE whole-deck save (its ops can
       // outweigh the document they describe); a whole-deck save that is still
       // too large shows the sentence.
-      return data({ error: DECK_TOO_LARGE_MESSAGE, tooLarge: true }, { status: 413 });
+      return data({ error: DECK_SAVE_TOO_LARGE_MESSAGE, tooLarge: true }, { status: 413 });
     }
     throw error;
   }
   const intent = formData.get('intent');
+
+  // The image upload is the one multipart intent, and the only one whose body
+  // may be file-sized. Any other intent sent that way is refused before any
+  // other field is read.
+  if (isMultipart(request) && intent !== 'upload-image') {
+    return data({ error: 'Invalid action' }, { status: 400 });
+  }
 
   // This action is the DECK EDITOR's action, whole and entire: themes,
   // snippets, deck images, the deck read, the preview branch — and the
@@ -1638,8 +1666,9 @@ export const action = async ({
   // Delete orphaned images
   if (intent === 'delete-images') {
     try {
-      const pathsJson = formData.get('paths') as string;
-      const paths = JSON.parse(pathsJson);
+      const pathsJson = formData.get('paths');
+      const paths =
+        typeof pathsJson === 'string' ? parseJsonWithin(pathsJson, ID_LIST_MAX_BYTES) : null;
 
       if (!Array.isArray(paths) || paths.length === 0) {
         return { error: 'No images to delete' };
@@ -1738,7 +1767,7 @@ export const action = async ({
     const rawLiveResolutions = formData.get('resolutions');
     if (typeof rawLiveResolutions === 'string' && rawLiveResolutions) {
       try {
-        const parsed = JSON.parse(rawLiveResolutions);
+        const parsed = parseJsonWithin(rawLiveResolutions, ID_LIST_MAX_BYTES);
         if (!Array.isArray(parsed) || parsed.length === 0) throw new Error('empty');
         liveResolutions = parsed;
       } catch {
@@ -1784,7 +1813,7 @@ export const action = async ({
     const rawResolutions = formData.get('resolutions');
     if (typeof rawResolutions === 'string' && rawResolutions) {
       try {
-        const parsed = JSON.parse(rawResolutions);
+        const parsed = parseJsonWithin(rawResolutions, ID_LIST_MAX_BYTES);
         if (!Array.isArray(parsed) || parsed.length === 0) {
           throw new Error('resolutions must be a non-empty array');
         }
@@ -1900,7 +1929,7 @@ export const action = async ({
   const rawSaveResolutions = formData.get('resolutions');
   if (typeof rawSaveResolutions === 'string' && rawSaveResolutions) {
     try {
-      const parsed = JSON.parse(rawSaveResolutions);
+      const parsed = parseJsonWithin(rawSaveResolutions, ID_LIST_MAX_BYTES);
       if (!Array.isArray(parsed) || parsed.length === 0) {
         throw new Error('resolutions must be a non-empty array');
       }
@@ -1966,10 +1995,17 @@ export const action = async ({
       return opsFallback('Ops saves need a deck-sourced base token — use a full-document save.');
     }
 
+    // Counted before they are parsed: ops over the save cap, malformed ops and
+    // a check that throws all take the whole-doc fallback.
     let ops;
     try {
-      ops = deckOpsPayloadSchema.parse(JSON.parse(rawOps));
-    } catch {
+      ops = deckOpsPayloadSchema.parse(parseJsonWithin(rawOps, DOCUMENT_SAVE_MAX_BYTES));
+    } catch (error: unknown) {
+      // One line per refusal: where, and the error's class.
+      console.warn(
+        '[slides] deck save: ops refused:',
+        error instanceof Error ? error.name : typeof error
+      );
       return opsFallback('Malformed ops payload — use a full-document save.');
     }
 
@@ -2057,6 +2093,11 @@ export const action = async ({
 
   // ── Whole-document save (Phase 4b dual-write; also the ops fallback) ──────
   const htmlContent = formData.get('content') as string;
+  // The deck is counted before it is parsed. No `tooLarge`: a whole-deck save
+  // is the fallback, and a retry would carry the same deck.
+  if (typeof htmlContent === 'string' && textOverBytes(htmlContent, DOCUMENT_SAVE_MAX_BYTES)) {
+    return data({ error: DECK_SAVE_TOO_LARGE_MESSAGE }, { status: 413 });
+  }
 
   try {
     // Parse the editor's posted `<div class="slides">` wrapper into
@@ -2712,9 +2753,23 @@ export default function SlideViewer() {
   const saveSuccess = fetcher.data?.success;
   const saveError = fetcher.data?.error;
 
+  // The intent of the submission in flight (null for a deck save, which sends
+  // none). A body over the action's limit is refused before its intent is
+  // read, so that answer names none; this says what it answers.
+  const submittedIntentRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (fetcher.state !== 'submitting') return;
+    const intent = fetcher.formData?.get('intent');
+    submittedIntentRef.current = typeof intent === 'string' ? intent : null;
+  }, [fetcher.state, fetcher.formData]);
+
   // Handle fetcher responses
   useEffect(() => {
-    if (fetcher.data?.intent === 'fetch-latest' && fetcher.data?.content) {
+    if (fetcher.data?.tooLarge && !fetcher.data?.intent && submittedIntentRef.current) {
+      // A theme, snippet or other intent over the limit, not a deck save: its
+      // sentence, and none of the deck save's handling below.
+      toast.error(`Couldn't save: ${fetcher.data.error}.`);
+    } else if (fetcher.data?.intent === 'fetch-latest' && fetcher.data?.content) {
       // Got fresh content from GitHub API - enter edit mode with it
       setEditableContent(fetcher.data.content);
       // This read is skipCache and can be AHEAD of the loader (someone else

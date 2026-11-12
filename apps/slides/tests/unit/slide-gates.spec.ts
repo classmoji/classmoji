@@ -45,6 +45,7 @@ const PROXY_SOURCE = source('../../app/routes/content.$org.$repo.$/route.tsx');
 const REPLACE_SOURCE = source('../../app/routes/$classroomSlug.$slideId.replace/route.tsx');
 const LINK_SOURCE = source('../../app/routes/$classroomSlug.$slideId.link/route.tsx');
 const NEW_SOURCE = source('../../app/routes/$classroomSlug.new/route.tsx');
+const DELETE_SOURCE = source('../../app/routes/$classroomSlug.$slideId.delete/route.tsx');
 const INDEX_SOURCE = source('../../app/routes/_index/route.tsx');
 const FOLLOW_SOURCE = source('../../app/routes/$slideId_.follow/route.tsx');
 const PRESENT_SOURCE = source('../../app/routes/$slideId_.present/route.tsx');
@@ -459,6 +460,30 @@ test.describe('the upload endpoints', () => {
     expect(action).not.toContain('await request.formData()');
   });
 
+  test('the delete action authorizes before it reads the body, and meters it', () => {
+    const action = DELETE_SOURCE.slice(DELETE_SOURCE.indexOf('export const action'));
+    const gate = action.indexOf('await assertSlideAccess(');
+    const classroom = action.indexOf(
+      "return { error: 'Slide does not belong to this classroom' };"
+    );
+    const read = action.indexOf('await readLimitedFormData(request, DELETE_FORM_MAX_BYTES)');
+
+    for (const at of [gate, classroom, read]) expect(at).toBeGreaterThan(-1);
+    expect(gate).toBeLessThan(read);
+    expect(classroom).toBeLessThan(read);
+    expect(read).toBeLessThan(action.indexOf("formData.get('deleteTheme')"));
+    expect(action).not.toContain('await request.formData()');
+  });
+
+  test('the upload routes tell an upload by its exact media type', () => {
+    for (const routeSource of [NEW_SOURCE, REPLACE_SOURCE]) {
+      const check = routeSource.slice(routeSource.indexOf('function isMultipartUpload('));
+      expect(check.slice(0, check.indexOf('\n}'))).toContain(
+        "return formMediaType(request.headers.get('content-type')) === MULTIPART_FORM;"
+      );
+    }
+  });
+
   test('a duplicated deck records every copied file in the asset map, rewrites last', () => {
     const duplicate = INDEX_SOURCE.slice(INDEX_SOURCE.indexOf("if (intent === 'duplicate')"));
     expect(duplicate).toContain('for (const entry of [...(copiedEntries ?? []), ...written])');
@@ -470,12 +495,15 @@ test.describe('the upload endpoints', () => {
     expect(VIEWER_SOURCE).toContain(
       'const DECK_TOO_LARGE_MESSAGE = `This deck is larger than the ${REPO_REST_MAX_LABEL} your course repository accepts`;'
     );
+    expect(VIEWER_SOURCE).toContain(
+      'const DECK_SAVE_TOO_LARGE_MESSAGE = `This deck is larger than the ${DOCUMENT_SAVE_MAX_LABEL} a deck can hold`;'
+    );
     // `tooLarge`, never `code`: the client answers any `code` with a whole-deck
     // re-submit, so a whole-deck save that carried one would loop.
     expect(action).toContain(
-      'return data({ error: DECK_TOO_LARGE_MESSAGE, tooLarge: true }, { status: 413 });'
+      'return data({ error: DECK_SAVE_TOO_LARGE_MESSAGE, tooLarge: true }, { status: 413 });'
     );
-    expect(action).not.toMatch(/DECK_TOO_LARGE_MESSAGE,\s*code:/);
+    expect(action).not.toMatch(/DECK_(SAVE_)?TOO_LARGE_MESSAGE,\s*code:/);
     // GitHub's own refusal carries no flag — a retry would be refused again.
     expect(
       action.match(/return data\(\{ error: DECK_TOO_LARGE_MESSAGE \}, \{ status: 413 \}\);/g)
@@ -483,7 +511,10 @@ test.describe('the upload endpoints', () => {
   });
 
   test('the editor retries a too-large changes-only save once, as a whole deck', () => {
-    const branch = VIEWER_SOURCE.slice(VIEWER_SOURCE.indexOf('fetcher.data?.tooLarge &&'));
+    const branch = VIEWER_SOURCE.slice(
+      VIEWER_SOURCE.indexOf('} else if (fetcher.data?.tooLarge && lastPostedOpsRef.current') +
+        '} else if ('.length
+    );
     expect(
       branch.startsWith(
         'fetcher.data?.tooLarge && lastPostedOpsRef.current && lastPostedContentRef.current'

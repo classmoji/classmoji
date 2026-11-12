@@ -6,7 +6,6 @@ import {
   type UseFormSetValue,
   type UseFormWatch,
 } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import {
   buildResponseSchema,
@@ -16,13 +15,13 @@ import {
 } from '@classmoji/services/form-contract';
 
 import { FieldShell } from './FormPreview.tsx';
+import { answersResolver } from './answersResolver.ts';
 import { isDisplayField, unhandledFieldType } from './fieldTypes.ts';
 import {
   answerableFields,
   coerceAnswers,
   defaultAnswers,
   exclusiveSelection,
-  friendlyErrorMap,
   identityPlan,
   type IdentityPlan,
 } from './answerCoerce.ts';
@@ -363,33 +362,11 @@ export default function FormRenderer({
     [fields, needsIdentityInputs, reviewTargets]
   );
 
-  /**
-   * Coerce, then hand to zodResolver. The order matters: the contract's schemas
-   * describe stored shapes (a number is a number), and every DOM input produces
-   * a string.
-   */
-  const resolver = useMemo<Resolver<FormValues>>(() => {
-    /**
-     * `friendlyErrorMap` turns the contract's developer-facing messages into
-     * ones a person filling in a waitlist can act on — applied at the point
-     * each issue is raised rather than in a post-pass, so nested paths (a
-     * matrix row, a repeat group's inner field) get it too.
-     *
-     * The cast is to `ParseParams`, which zod declares with every field
-     * required even though `safeParseAsync` treats them all as optional and
-     * fills in `path` and `async` itself. Passing an error map alone is the
-     * documented usage; the type simply does not describe it.
-     */
-    const parseOptions = { errorMap: friendlyErrorMap } as Partial<z.ParseParams> as z.ParseParams;
-    const zod = zodResolver(schema, parseOptions) as unknown as Resolver<FormValues>;
-    return async (values, context, options) => {
-      const coerced = {
-        ...values,
-        answers: coerceAnswers(fields, (values.answers ?? {}) as Record<string, unknown>),
-      } as FormValues;
-      return zod(coerced, context, options);
-    };
-  }, [schema, fields]);
+  /** Coerce, then validate under the friendly error map (`answersResolver`). */
+  const resolver = useMemo<Resolver<FormValues>>(
+    () => answersResolver<FormValues>(schema, fields),
+    [schema, fields]
+  );
 
   /**
    * The form's values for a given draft — `{}` for "no draft yet", which is

@@ -10,8 +10,7 @@
  */
 
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { ASK_MOJI_CLIENT_ID } from '@classmoji/auth/mcp-token';
 import type { Role } from '@prisma/client';
 import { z } from 'zod';

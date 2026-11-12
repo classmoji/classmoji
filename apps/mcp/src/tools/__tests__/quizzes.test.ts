@@ -26,6 +26,7 @@ import { z } from 'zod';
 import { QUIZ_AUTHOR_ROLES, QUIZ_EDITOR_ROLES } from '@classmoji/utils';
 import { MAX_STUDENT_TURNS } from '@classmoji/utils/quiz-agent/limits';
 import type { ToolContext } from '../../mcp/registry.ts';
+import { toolArguments } from '../../mcp/toolInputSchema.ts';
 
 const mocks = vi.hoisted(() => ({
   quizCreate: vi.fn(),
@@ -145,6 +146,17 @@ const QUIZ_ROW = {
   include_code_context: false,
   attempts: [{ id: 'att-1', user: { id: 'stu-1', name: 'Alice', email: 'a@x.edu' } }],
 };
+
+/** An argument's description as the tool publishes it (its JSON Schema). */
+function publishedDescription(
+  tool: { inputSchema: Record<string, z.ZodType> },
+  field: string
+): string | undefined {
+  const json = z.toJSONSchema(z.object(tool.inputSchema), { target: 'draft-7', io: 'input' }) as {
+    properties: Record<string, { description?: string }>;
+  };
+  return json.properties[field]?.description;
+}
 
 function parse(result: { content: Array<{ text: string }> }) {
   return JSON.parse(result.content[0].text);
@@ -272,7 +284,7 @@ describe('quiz_create', () => {
   });
 
   it('requires module_id in the schema', () => {
-    const schema = z.object(quizCreateTool.inputSchema);
+    const schema = toolArguments(quizCreateTool.inputSchema);
     const { module_id: _moduleId, ...withoutModule } = ARGS;
     expect(schema.safeParse(withoutModule).success).toBe(false);
     expect(schema.safeParse({ ...ARGS, module_id: 'not-a-uuid' }).success).toBe(false);
@@ -356,7 +368,7 @@ describe('quiz_create', () => {
   });
 
   it('enforces the service clamps in the schema (question_count, max_attempts, weight)', () => {
-    const schema = z.object(quizCreateTool.inputSchema);
+    const schema = toolArguments(quizCreateTool.inputSchema);
     const base = { classroom: 'org/w26', name: 'Q', rubric_prompt: 'r', module_id: MODULE_ID };
 
     expect(schema.safeParse({ ...base, question_count: 0 }).success).toBe(false);
@@ -436,7 +448,7 @@ describe('course_search_enabled (quiz source material, Stage 2 tier)', () => {
 
   it('is a boolean in both schemas and neither tool takes source material', () => {
     for (const tool of [quizCreateTool, quizUpdateTool]) {
-      const schema = z.object(tool.inputSchema);
+      const schema = toolArguments(tool.inputSchema);
       expect(tool.inputSchema).toHaveProperty('course_search_enabled');
       expect(tool.inputSchema).not.toHaveProperty('source_material');
       expect(
@@ -583,7 +595,7 @@ describe('code_sandbox_enabled (quiz sandbox questions)', () => {
 
   it('is a boolean in both schemas, described, and the annotations are unchanged', () => {
     for (const tool of [quizCreateTool, quizUpdateTool]) {
-      const schema = z.object(tool.inputSchema);
+      const schema = toolArguments(tool.inputSchema);
       expect(tool.inputSchema).toHaveProperty('code_sandbox_enabled');
       expect(
         schema.safeParse({
@@ -594,9 +606,7 @@ describe('code_sandbox_enabled (quiz sandbox questions)', () => {
           code_sandbox_enabled: 'yes',
         }).success
       ).toBe(false);
-      expect(
-        (tool.inputSchema as Record<string, z.ZodTypeAny>).code_sandbox_enabled.description
-      ).toBe(
+      expect(publishedDescription(tool, 'code_sandbox_enabled')).toBe(
         'Let the AI attach an editable code sandbox (HTML/CSS/JS, TypeScript or React) to ' +
           'questions answered in code (default false)'
       );
@@ -715,14 +725,12 @@ describe('hint_cost and max_answers (answer rules, author settings)', () => {
 
   it('are whole numbers in range in both schemas (0–50 and 1–20), described', () => {
     for (const tool of [quizCreateTool, quizUpdateTool]) {
-      const schema = z.object(tool.inputSchema);
-      const base = {
-        classroom: 'o/s',
-        quiz_id: '11111111-1111-4111-8111-111111111111',
-        name: 'n',
-        rubric_prompt: 'r',
-        module_id: MODULE_ID,
-      };
+      const schema = toolArguments(tool.inputSchema);
+      // Each tool's own required arguments: an undeclared one is refused.
+      const base =
+        tool === quizCreateTool
+          ? { classroom: 'o/s', name: 'n', rubric_prompt: 'r', module_id: MODULE_ID }
+          : { classroom: 'o/s', quiz_id: '11111111-1111-4111-8111-111111111111' };
       const parses = (field: string, value: unknown) =>
         schema.safeParse({ ...base, [field]: value }).success;
 
@@ -738,12 +746,11 @@ describe('hint_cost and max_answers (answer rules, author settings)', () => {
       expect(parses('max_answers', 21), tool.name).toBe(false);
       expect(parses('max_answers', 1.5), tool.name).toBe(false);
 
-      const shape = tool.inputSchema as Record<string, z.ZodTypeAny>;
-      expect(shape.hint_cost.description).toBe(
+      expect(publishedDescription(tool, 'hint_cost')).toBe(
         'Points off each answer a student gives after a hint on that question ' +
           '(0–50, default 15; 0 makes hints free)'
       );
-      expect(shape.max_answers.description).toBe(
+      expect(publishedDescription(tool, 'max_answers')).toBe(
         'Answers a student may give to one question (1–20, default 5); after the last one ' +
           'the quiz explains the answer and moves on'
       );
@@ -1452,7 +1459,8 @@ describe('the quiz runtime gate (no Trigger key, no quizzes)', () => {
     },
     {
       name: 'quiz_update',
-      run: () => quizUpdateTool.handler({ classroom: 'org/w26', quiz_id: 'quiz-1', name: 'R' }, CTX),
+      run: () =>
+        quizUpdateTool.handler({ classroom: 'org/w26', quiz_id: 'quiz-1', name: 'R' }, CTX),
       write: () => mocks.quizUpdate,
     },
     {
@@ -1521,5 +1529,29 @@ describe('the quiz runtime gate (no Trigger key, no quizzes)', () => {
       message: 'This feature requires a Pro subscription',
     });
     expect(mocks.quizCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe('the date arguments', () => {
+  it('are described on the field itself, nullable on quiz_update', () => {
+    const texts = {
+      release_at: 'Opens (ISO 8601): students see it from then on, once published',
+      due_date: 'Due date (ISO 8601, e.g. 2026-07-20T23:59:00-04:00); late after it',
+      closes_at: 'Closes (ISO 8601): no new attempt from then on; one under way may finish',
+    };
+    for (const tool of [quizCreateTool, quizUpdateTool]) {
+      for (const [field, text] of Object.entries(texts)) {
+        expect(publishedDescription(tool, field), `${tool.name}.${field}`).toBe(text);
+      }
+    }
+    expect(
+      toolArguments(quizUpdateTool.inputSchema).safeParse({
+        classroom: 'o/s',
+        quiz_id: '11111111-1111-4111-8111-111111111111',
+        release_at: null,
+        due_date: null,
+        closes_at: null,
+      }).success
+    ).toBe(true);
   });
 });

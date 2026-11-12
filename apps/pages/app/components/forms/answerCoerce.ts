@@ -321,51 +321,50 @@ export function coerceAnswers(
  * Rewrite the handful of zod messages a FILLER can actually trigger.
  *
  * Zod's defaults are written for the developer who wrote the schema — "Invalid
- * literal value, expected true", "String must contain at least 1 character(s)"
- * — and the person reading them here is filling in a waitlist. It is applied as
- * a zod `errorMap` rather than as a post-pass over the resolver's output, so
- * the friendly text is produced at the point the issue is raised and every
- * consumer of the schema gets it, nested paths included.
+ * input: expected true", "Too small: expected string to have >=1 characters"
+ * — and the person reading them here is filling in a waitlist. It is passed as
+ * the parse's error map (`{ error: friendlyErrorMap }`) rather than applied as a
+ * post-pass over the resolver's output, so the friendly text is produced at the
+ * point the issue is raised and every consumer of the schema gets it, nested
+ * paths included.
  *
- * Everything not listed falls through to `ctx.defaultError`: a slightly
- * technical message is better than a confidently wrong friendly one, and the
- * contract's own custom messages ("Each option may be ranked once") are already
- * written for a human.
+ * Everything not listed returns undefined and keeps zod's own message: a
+ * slightly technical message is better than a confidently wrong friendly one,
+ * and the contract's own custom messages ("Each option may be ranked once") are
+ * already written for a human (a schema's own message outranks this map).
  *
  * "Required" is three different issues underneath, which is why this reads the
- * ISSUE rather than its text: an absent key is `invalid_type` with
- * `received: 'undefined'`, an empty text box is `too_small` with a minimum of
- * 1, and an untouched multiselect is `too_small` on an array. All three mean
- * the same thing to the person looking at the blank field.
+ * ISSUE rather than its text: an absent key is `invalid_type` with no input, an
+ * empty text box is `too_small` with a minimum of 1, and an untouched
+ * multiselect is `too_small` on an array. All three mean the same thing to the
+ * person looking at the blank field.
  */
-export const friendlyErrorMap: z.ZodErrorMap = (issue, ctx) => {
+export const friendlyErrorMap: z.ZodErrorMap = issue => {
   // The acknowledgment switch: `z.literal(true)`, so "no" is not an answer.
-  if (issue.code === z.ZodIssueCode.invalid_literal) {
-    return { message: 'You need to agree to continue.' };
+  if (issue.code === 'invalid_value' && issue.inst instanceof z.core.$ZodLiteral) {
+    return 'You need to agree to continue.';
   }
 
-  if (issue.code === z.ZodIssueCode.invalid_type) {
-    if (issue.received === 'undefined' || issue.received === 'null') {
-      return { message: 'This one is required.' };
-    }
-    if (issue.expected === 'number') return { message: 'Enter a number.' };
+  if (issue.code === 'invalid_type') {
+    if (issue.input === undefined || issue.input === null) return 'This one is required.';
+    if (issue.expected === 'number') return 'Enter a number.';
   }
 
-  if (issue.code === z.ZodIssueCode.too_small) {
+  if (issue.code === 'too_small') {
     return Number(issue.minimum) <= 1
-      ? { message: 'This one is required.' }
-      : { message: `Choose at least ${issue.minimum}.` };
+      ? 'This one is required.'
+      : `Choose at least ${String(issue.minimum)}.`;
   }
 
-  if (issue.code === z.ZodIssueCode.too_big) {
-    return { message: `Choose at most ${issue.maximum}.` };
+  if (issue.code === 'too_big') {
+    return `Choose at most ${String(issue.maximum)}.`;
   }
 
-  if (issue.code === z.ZodIssueCode.invalid_string && issue.validation === 'email') {
-    return { message: 'That does not look like an email address.' };
+  if (issue.code === 'invalid_format' && issue.format === 'email') {
+    return 'That does not look like an email address.';
   }
 
-  return { message: ctx.defaultError };
+  return undefined;
 };
 
 // ─── Identity ───────────────────────────────────────────────────────────────

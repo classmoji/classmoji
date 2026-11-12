@@ -13,6 +13,7 @@
  * reserved-text rule, so schemas.ts can build on it without a cycle.
  */
 import { z } from 'zod';
+import { capArray, capKeys } from '../inputCaps.ts';
 import {
   MAX_CONSOLE_LINE_CHARS,
   MAX_CONSOLE_LINES,
@@ -293,12 +294,28 @@ const checkSubmissionFiles = (s: { files: Record<string, string> }, ctx: z.Refin
  * `MAX_SUBMISSION_TOTAL_CHARS`, `MAX_CONSOLE_LINES`, `MAX_CONSOLE_LINE_CHARS`)
  * are checked here; that the files are exactly the open sandbox's is the
  * server's check, against its own rows.
+ *
+ * `files`, `console` and `errors` are counted before their entries are parsed
+ * (`capKeys`, `capArray`): a submission over a count cap is refused with one
+ * issue. Only here, the input schema: stored parts are read with
+ * `CodeSubmissionDataSchema`, which must not gain caps.
  */
 export const CodeSubmissionInputSchema = z
   .object({
     ...submissionFields,
-    console: z.array(ConsoleLineSchema.strict()).max(MAX_CONSOLE_LINES),
-    errors: z.array(SubmissionErrorSchema.strict()).max(MAX_SUBMISSION_ERRORS),
+    files: capKeys(
+      submissionFields.files,
+      MAX_SANDBOX_FILES,
+      `files must hold 1 to ${MAX_SANDBOX_FILES} files`
+    ),
+    console: capArray(
+      z.array(ConsoleLineSchema.strict()).max(MAX_CONSOLE_LINES),
+      MAX_CONSOLE_LINES
+    ),
+    errors: capArray(
+      z.array(SubmissionErrorSchema.strict()).max(MAX_SUBMISSION_ERRORS),
+      MAX_SUBMISSION_ERRORS
+    ),
   })
   .strict()
   .superRefine(checkSubmissionFiles);

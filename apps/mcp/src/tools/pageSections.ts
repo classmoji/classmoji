@@ -61,6 +61,7 @@
  */
 
 import { z } from 'zod';
+import { uuidString } from '@classmoji/utils/zod-formats';
 import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
 import {
@@ -508,7 +509,7 @@ export async function pageTextForViewer(
 
 // ─── page_sections_status ───────────────────────────────────────────────────
 
-const pageIdArg = z.string().uuid().describe('Page id (from list_pages or content_list)');
+const pageIdArg = uuidString().describe('Page id (from list_pages or content_list)');
 
 /** A BlockNote block id (the service's own shape: letters, digits, - and _, ≤ 64). */
 const blockIdArg = (description: string) =>

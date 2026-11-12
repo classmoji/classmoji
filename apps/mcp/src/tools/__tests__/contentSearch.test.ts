@@ -1328,8 +1328,8 @@ describe('the schemas the registry publishes', () => {
   let listed: Array<{ name: string; description?: string; inputSchema: Record<string, unknown> }>;
 
   beforeAll(async () => {
-    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
-    const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+    const { Client } = await import('@modelcontextprotocol/client');
+    const { InMemoryTransport } = await import('@modelcontextprotocol/server');
 
     for (const tool of [contentSearchTool, contentListTool, contentGetTool]) {
       registerToolDefinition(tool as unknown as ToolDefinition<never>);
@@ -1401,5 +1401,14 @@ describe('the schemas the registry publishes', () => {
     expect(String(toolNamed('content_search').description)).toMatch(
       /NOT the same as "nothing found"/
     );
+  });
+});
+
+describe('content_search query length', () => {
+  it('takes a two-character query, one emoji included, and refuses one character', () => {
+    const query = contentSearchTool.inputSchema.query;
+    expect(query.safeParse('🐍').success).toBe(true);
+    expect(query.safeParse('db').success).toBe(true);
+    expect(query.safeParse('d').success).toBe(false);
   });
 });

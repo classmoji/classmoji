@@ -1245,8 +1245,8 @@ describe('the block guide reaches tools/list', () => {
   it('deck_apply carries it in the op fields; file_upload_start in one line; all under budget', async () => {
     const { buildMcpServer, registerToolDefinition } = await import('../../mcp/registry.ts');
     const { fileUploadStartTool, fileImportUrlTool } = await import('../media.ts');
-    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
-    const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+    const { Client } = await import('@modelcontextprotocol/client');
+    const { InMemoryTransport } = await import('@modelcontextprotocol/server');
     for (const tool of [
       deckApplyTool,
       deckOutlineTool,

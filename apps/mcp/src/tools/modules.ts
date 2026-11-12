@@ -55,6 +55,7 @@ import { ClassmojiService } from '@classmoji/services';
 import { withHiddenRows } from '@classmoji/utils';
 import type { ModuleItemType } from '@prisma/client';
 import { z } from 'zod';
+import { uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
 import { assertProTier } from '../authz/proTier.ts';
@@ -160,7 +161,7 @@ export const moduleUpdateTool: ToolDefinition<ModuleUpdateArgs> = {
   roles: OWNER_ONLY,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    module_id: z.string().uuid().describe('Module id'),
+    module_id: uuidString().describe('Module id'),
     title: z.string().min(1).max(200).describe('New title'),
     description: z.string().max(2000).optional().describe('New description (omit to clear)'),
   },
@@ -207,7 +208,7 @@ export const modulePublishTool: ToolDefinition<ModulePublishArgs> = {
   roles: OWNER_ONLY,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    module_id: z.string().uuid().describe('Module id'),
+    module_id: uuidString().describe('Module id'),
     published: z.boolean().describe('true to publish, false to unpublish'),
   },
   handler: async (args, ctx) => {
@@ -281,7 +282,7 @@ export const moduleItemAddTool: ToolDefinition<ModuleItemAddArgs> = {
   roles: OWNER_ONLY,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    module_id: z.string().uuid().describe('Module id'),
+    module_id: uuidString().describe('Module id'),
     item_type: z
       .enum(['PAGE', 'REPOSITORY', 'QUIZ', 'SLIDE', 'FORM'])
       .describe(
@@ -289,7 +290,7 @@ export const moduleItemAddTool: ToolDefinition<ModuleItemAddArgs> = {
           'module, move its assignment with assignment_update module_id. QUIZ is refused: use ' +
           'quiz_create or quiz_update with module_id.'
       ),
-    target_id: z.string().uuid().describe('Id of the page/slide/form to link'),
+    target_id: uuidString().describe('Id of the page/slide/form to link'),
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
@@ -390,7 +391,7 @@ export const moduleItemRemoveTool: ToolDefinition<ModuleItemRemoveArgs> = {
   roles: OWNER_ONLY,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    item_id: z.string().uuid().describe('Module item id (the `id` on an item in list_modules)'),
+    item_id: uuidString().describe('Module item id (the `id` on an item in list_modules)'),
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
@@ -442,8 +443,8 @@ export const moduleItemMoveTool: ToolDefinition<ModuleItemMoveArgs> = {
   roles: OWNER_ONLY,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    item_id: z.string().uuid().describe('Module item id (the `id` on an item in list_modules)'),
-    module_id: z.string().uuid().describe('Module to move the item into'),
+    item_id: uuidString().describe('Module item id (the `id` on an item in list_modules)'),
+    module_id: uuidString().describe('Module to move the item into'),
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
@@ -503,7 +504,7 @@ export const moduleDeleteTool: ToolDefinition<ModuleDeleteArgs> = {
   roles: OWNER_ONLY,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    module_id: z.string().uuid().describe('Module id (see list_modules)'),
+    module_id: uuidString().describe('Module id (see list_modules)'),
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
@@ -686,13 +687,11 @@ export const moduleReorderTool: ToolDefinition<ModuleReorderArgs> = {
     kind: z
       .enum(['ASSIGNMENTS', 'ITEMS', 'MODULES'])
       .describe('Which list to reorder: a module’s ASSIGNMENTS or ITEMS, or the MODULES'),
-    module_id: z
-      .string()
-      .uuid()
+    module_id: uuidString()
       .optional()
       .describe('The module whose list is reordered. Required for ASSIGNMENTS and ITEMS'),
     ordered_ids: z
-      .array(z.string().uuid())
+      .array(uuidString())
       .min(1)
       .max(500)
       .describe('Every id of the list, once each, in the new order (first = top)'),

@@ -13,7 +13,7 @@
  */
 
 import Fastify from 'fastify';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer } from '@modelcontextprotocol/server';
 import { ASK_MOJI_CLIENT_ID, DEV_MINT_CLIENT_ID } from '@classmoji/auth/mcp-token';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Viewer } from '../../auth/resolveViewer.ts';

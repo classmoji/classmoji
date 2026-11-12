@@ -101,6 +101,7 @@ import {
 } from '@classmoji/tasks/assignment-release';
 import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
+import { isoDateTime, uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
 import {
@@ -244,7 +245,7 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
   roles: OWNER_TEACHER,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    assignment_id: z.string().uuid().describe('Assignment id'),
+    assignment_id: uuidString().describe('Assignment id'),
     title: z
       .string()
       .trim()
@@ -258,9 +259,7 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
       .describe(
         'Publish (true) or unpublish (false) the assignment. Owner only, or a teacher on a quiz'
       ),
-    student_deadline: z
-      .string()
-      .datetime({ offset: true })
+    student_deadline: isoDateTime()
       .optional()
       .describe('New student deadline (ISO 8601, e.g. 2026-07-20T23:59:00-04:00)'),
     // 0 is a real weight: a practice quiz or an ungraded check-in.
@@ -271,23 +270,17 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
       .describe('Whether grades for this assignment are visible to students'),
     // Nullable, unlike on assignment_create: the web edit form clears either
     // date by sending null (AssignmentFormModal toIso → updateInClassroom).
-    grader_deadline: z
-      .string()
-      .datetime({ offset: true })
+    grader_deadline: isoDateTime()
       .nullable()
       .optional()
       .describe('Grader due date (ISO 8601); null clears it. Owner only'),
-    release_at: z
-      .string()
-      .datetime({ offset: true })
+    release_at: isoDateTime()
       .nullable()
       .optional()
       .describe(
         'Auto-release date (ISO 8601); null clears it. Owner only, or a teacher on a quiz assignment'
       ),
-    closes_at: z
-      .string()
-      .datetime({ offset: true })
+    closes_at: isoDateTime()
       .nullable()
       .optional()
       .describe('Quiz only: no new attempt from then on (ISO 8601); null reopens it'),
@@ -300,9 +293,7 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
       .describe(
         "Extension tokens per extension hour; null = the classroom's default_tokens_per_hour, 0 = no extensions"
       ),
-    module_id: z
-      .string()
-      .uuid()
+    module_id: uuidString()
       .optional()
       .describe(
         'Module to move the assignment into (see list_modules). Owner only; a quiz moves with quiz_update'
@@ -579,11 +570,8 @@ export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
   roles: OWNER_ONLY,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    module_id: z.string().uuid().describe('Module the assignment belongs to (see list_modules)'),
-    repository_id: z
-      .string()
-      .uuid()
-      .describe('Repository students submit through (see list_repos)'),
+    module_id: uuidString().describe('Module the assignment belongs to (see list_modules)'),
+    repository_id: uuidString().describe('Repository students submit through (see list_repos)'),
     submission_mode: z
       .enum(['ISSUE', 'REPO'])
       .optional()
@@ -598,16 +586,10 @@ export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
       .optional()
       .describe('Extra credit: adds to the course grade without adding to its denominator'),
     description: z.string().max(10000).optional(),
-    student_deadline: z
-      .string()
-      .datetime({ offset: true })
+    student_deadline: isoDateTime()
       .optional()
       .describe('Student due date (ISO 8601, e.g. 2026-07-20T23:59:00-04:00)'),
-    grader_deadline: z
-      .string()
-      .datetime({ offset: true })
-      .optional()
-      .describe('Grader due date (ISO 8601)'),
+    grader_deadline: isoDateTime().optional().describe('Grader due date (ISO 8601)'),
     tokens_per_hour: z
       .number()
       .int()
@@ -617,11 +599,7 @@ export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
       .describe(
         "Extension token cost per extension hour; omit or null to use the classroom's default_tokens_per_hour, 0 = no extensions"
       ),
-    release_at: z
-      .string()
-      .datetime({ offset: true })
-      .optional()
-      .describe('Auto-release date (ISO 8601)'),
+    release_at: isoDateTime().optional().describe('Auto-release date (ISO 8601)'),
     is_published: z.boolean().optional().describe('Publish immediately (default false = draft)'),
   },
   handler: async (args, ctx) => {
@@ -740,7 +718,7 @@ export const assignmentDeleteTool: ToolDefinition<AssignmentDeleteArgs> = {
   roles: OWNER_ONLY,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    assignment_id: z.string().uuid().describe('Assignment id'),
+    assignment_id: uuidString().describe('Assignment id'),
   },
   handler: async (args, ctx) => {
     // A quiz's assignment is part of the quiz: refused by name, where the

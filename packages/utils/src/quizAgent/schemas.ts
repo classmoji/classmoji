@@ -4,6 +4,7 @@
  * webapp (rendering). No server imports: this reaches the client bundle.
  */
 import { z } from 'zod';
+import { minUtf16Length } from '../zodFormats.ts';
 import { ANSWER_LEVELS } from './grading.ts';
 import { SANDBOX_FIELD_DESCRIPTION, SandboxSpecSchema } from './sandbox.ts';
 
@@ -208,9 +209,7 @@ export const QuizEvaluationFeedbackSchema = z.object({
     .min(1, 'final_acknowledgment must not be empty')
     .describe('Your closing words, shown above the results: brief, warm, honest.'),
   quiz_complete: z
-    .literal(true, {
-      errorMap: () => ({ message: 'quiz_complete must be true to submit evaluation' }),
-    })
+    .literal(true, { error: 'quiz_complete must be true to submit evaluation' })
     .describe('Must be true to indicate quiz completion'),
   ended_early: z
     .boolean()
@@ -400,11 +399,9 @@ export type ContentGetInput = z.infer<typeof ContentGetSchema>;
 
 /** `content_search`: what to look for in the course material, in plain language. */
 export const ContentSearchSchema = z.object({
-  query: z
-    .string()
-    .min(2)
-    .max(500)
-    .describe('What to look for, in plain language (a question works well)'),
+  query: minUtf16Length(z.string().max(500), 2).describe(
+    'What to look for, in plain language (a question works well)'
+  ),
 });
 export type ContentSearchInput = z.infer<typeof ContentSearchSchema>;
 

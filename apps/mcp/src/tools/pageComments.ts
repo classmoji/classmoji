@@ -44,6 +44,7 @@
  */
 
 import { z } from 'zod';
+import { uuidString } from '@classmoji/utils/zod-formats';
 import { ClassmojiService } from '@classmoji/services';
 import {
   blockText,
@@ -423,9 +424,9 @@ export async function openCommentFields(
 // ─── Arguments ──────────────────────────────────────────────────────────────
 
 const classroomArg = z.string().describe("Classroom reference as 'org/slug'");
-const pageIdArg = z.string().uuid().describe('Page id (from list_pages or content_list)');
-const threadIdArg = z.string().uuid().describe('Thread id, from page_comments_list');
-const commentIdArg = z.string().uuid().describe('Comment id, from page_comments_list');
+const pageIdArg = uuidString().describe('Page id (from list_pages or content_list)');
+const threadIdArg = uuidString().describe('Thread id, from page_comments_list');
+const commentIdArg = uuidString().describe('Comment id, from page_comments_list');
 // The service trims, normalizes line endings and enforces 1–4000 characters.
 const bodyArg = z
   .string()

@@ -11,6 +11,7 @@
  */
 
 import net from 'node:net';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import Fastify from 'fastify';
 import { z } from 'zod';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -20,6 +21,10 @@ const state = vi.hoisted(() => ({
   hold: null as Promise<void> | null,
   started: 0,
   running: 0,
+  /** probe_checked: its argument check waits on this, counted while it waits. */
+  checkHold: null as Promise<void> | null,
+  checking: 0,
+  checkedStarted: 0,
 }));
 
 vi.mock('../../auth/resolveViewer.ts', () => ({
@@ -38,8 +43,28 @@ const { releaseWhenSettled, ToolInputBudget } = await import('../../mcp/inputLim
 const { resetRateLimits } = await import('../../mcp/rateLimit.ts');
 
 const TOOL = 'probe_hold';
+const CHECKED = 'probe_checked';
 
 beforeAll(() => {
+  registerToolDefinition<{ value: string }>({
+    name: CHECKED,
+    title: 'Probe checked',
+    description: 'its argument check waits until the test lets it finish',
+    scope: 'read',
+    roles: null,
+    inputSchema: {
+      value: z.string().refine(async () => {
+        state.checking += 1;
+        if (state.checkHold) await state.checkHold;
+        return true;
+      }),
+    },
+    handler: async () => {
+      state.checkedStarted += 1;
+      return { content: [{ type: 'text', text: 'ran' }] };
+    },
+  });
+
   registerToolDefinition<{ items: number[] }>({
     name: TOOL,
     title: 'Probe hold',
@@ -208,7 +233,7 @@ describe('wrapHandler', () => {
   it('does not run a tool whose request was already aborted', async () => {
     const result = await handlerOf(buildMcpServer(viewer))(
       { items: [1] },
-      { signal: AbortSignal.abort() }
+      { mcpReq: { signal: AbortSignal.abort() } }
     );
 
     expect(result.isError).toBe(true);
@@ -219,7 +244,7 @@ describe('wrapHandler', () => {
     const tracker = { enter: vi.fn(() => false), exit: vi.fn() };
     const result = await handlerOf(buildMcpServer(viewer, tracker))(
       { items: [1] },
-      { signal: new AbortController().signal }
+      { mcpReq: { signal: new AbortController().signal } }
     );
 
     expect(result.isError).toBe(true);
@@ -231,7 +256,7 @@ describe('wrapHandler', () => {
     const tracker = { enter: vi.fn(() => true), exit: vi.fn() };
     const pending = handlerOf(buildMcpServer(viewer, tracker))(
       { items: [1, 2] },
-      { signal: new AbortController().signal }
+      { mcpReq: { signal: new AbortController().signal } }
     );
 
     await vi.waitFor(() => expect(state.running).toBe(1));
@@ -240,5 +265,49 @@ describe('wrapHandler', () => {
     free();
     expect((await pending).isError).toBeUndefined();
     expect(tracker.exit).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not run a tool whose call a client cancelled while its arguments were checked', async () => {
+    let release!: () => void;
+    state.checkHold = new Promise<void>(resolve => (release = resolve));
+    state.checking = 0;
+    state.checkedStarted = 0;
+    const tracker = { enter: vi.fn(() => true), exit: vi.fn() };
+    const server = buildMcpServer(viewer, tracker);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'cancel', version: '0' });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    let cancelled = false;
+    const deliver = serverTransport.onmessage!;
+    serverTransport.onmessage = (message, extra) => {
+      deliver(message, extra);
+      if ((message as { method?: string }).method === 'notifications/cancelled') cancelled = true;
+    };
+
+    const controller = new AbortController();
+    const call = client.callTool(
+      { name: CHECKED, arguments: { value: 'x' } },
+      { signal: controller.signal }
+    );
+    // The arguments are parsed synchronously first; an asynchronous check makes zod
+    // parse again asynchronously, so this check starts twice.
+    await vi.waitFor(() => expect(state.checking).toBeGreaterThan(0));
+    controller.abort('the caller left');
+    await expect(call).rejects.toThrow();
+    await vi.waitFor(() => expect(cancelled).toBe(true));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    release();
+    await new Promise(resolve => setTimeout(resolve, 20));
+
+    expect(state.checkedStarted).toBe(0);
+    expect(tracker.enter).not.toHaveBeenCalled();
+
+    // The same call, not cancelled, runs the tool once its check passes.
+    const done = await client.callTool({ name: CHECKED, arguments: { value: 'x' } });
+    expect(done.isError).toBeFalsy();
+    expect(state.checkedStarted).toBe(1);
+    expect(tracker.enter).toHaveBeenCalledTimes(1);
+    state.checkHold = null;
+    await client.close();
   });
 });

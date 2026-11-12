@@ -1,18 +1,25 @@
 import { redirect } from 'react-router';
 import { gitWeb } from '@classmoji/utils';
 import {
+  DOCUMENT_SAVE_MAX_BYTES,
+  DOCUMENT_SAVE_MAX_LABEL,
   REPO_REST_MAX_BYTES,
-  REPO_REST_MAX_LABEL,
   repoFileTooLargeMessage,
 } from '@classmoji/utils/repo-limits';
 import {
+  ID_LIST_MAX_BYTES,
+  MULTIPART_FORM,
   MULTIPART_OVERHEAD_BYTES,
   UploadTooLargeError,
   declaredBodyTooLarge,
+  formMediaType,
+  parseJsonWithin,
   readLimitedBody,
   readLimitedFormData,
+  textOverBytes,
   uploadBodyLimit,
 } from '@classmoji/utils/upload-limit';
+import { OPS_MALFORMED_ANSWER, readCanonicalSaveOps } from '~/utils/saveOps.server.ts';
 import { uploadRefusalStatus } from '@classmoji/services';
 import { ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
 import { pageMutationBlocked } from '~/utils/auth.server.ts';
@@ -86,18 +93,19 @@ import {
 /**
  * The most a JSON request to the page action may send.
  *
- * The largest one is a whole-document save, which carries the page's
- * `content.json` — itself at most `REPO_REST_MAX_BYTES`, the most the
- * repository will commit — as a STRING inside the JSON body. Escaping that
- * string adds a backslash before every quote, and BlockNote JSON is mostly
- * quotes and short values, so the body is allowed twice the file plus slack
- * for the other fields: room for any page the repository could store, and
- * still a bound.
+ * The largest one is a save, which carries the page's `content.json` (or the
+ * ops that change it) — at most `DOCUMENT_SAVE_MAX_BYTES` — as a STRING inside
+ * the JSON body. Escaping that string adds a backslash before every quote, and
+ * BlockNote JSON is mostly quotes and short values, so the body is allowed
+ * twice the document plus slack for the other fields.
  */
-const PAGE_JSON_BODY_MAX_BYTES = 2 * REPO_REST_MAX_BYTES + MULTIPART_OVERHEAD_BYTES;
+const PAGE_JSON_BODY_MAX_BYTES = 2 * DOCUMENT_SAVE_MAX_BYTES + MULTIPART_OVERHEAD_BYTES;
 
-/** What a person reads when a save is over that. */
-const PAGE_TOO_LARGE_MESSAGE = `This page is larger than the ${REPO_REST_MAX_LABEL} your course repository accepts.`;
+/**
+ * What a person reads when a save is over that, or its document is. It is
+ * sent with `tooLarge: true`, which is how the editor knows to show it.
+ */
+const PAGE_TOO_LARGE_MESSAGE = `This page is larger than the ${DOCUMENT_SAVE_MAX_LABEL} a page can hold.`;
 
 /**
  * The JSON body, read through the byte-counting reader. Throws
@@ -726,11 +734,12 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
   const blocked = pageMutationBlocked(page.classroom, role);
   if (blocked) return blocked;
 
-  // Support both JSON and multipart form data (for file uploads)
-  const contentType = request.headers.get('content-type') || '';
+  // Support both JSON and multipart form data (for file uploads). The media
+  // type is read the way `readLimitedFormData` reads it, so the upload limit
+  // goes only to a body that is parsed as multipart.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- form/JSON data has dynamic shape
   let data: Record<string, any>, formData: FormData | undefined;
-  if (contentType.includes('multipart/form-data')) {
+  if (formMediaType(request.headers.get('content-type')) === MULTIPART_FORM) {
     // The one multipart intent is the cover upload: it takes an upload slot
     // like every other file upload in this app (released by `action`).
     if (!acquireUploadSlot()) {
@@ -759,7 +768,7 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
       data = await readPageJsonBody(request);
     } catch (error: unknown) {
       if (error instanceof UploadTooLargeError) {
-        return Response.json({ error: PAGE_TOO_LARGE_MESSAGE }, { status: 413 });
+        return Response.json({ error: PAGE_TOO_LARGE_MESSAGE, tooLarge: true }, { status: 413 });
       }
       throw error;
     }
@@ -816,7 +825,9 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
       if (data.resolutions != null) {
         try {
           const parsed =
-            typeof data.resolutions === 'string' ? JSON.parse(data.resolutions) : data.resolutions;
+            typeof data.resolutions === 'string'
+              ? parseJsonWithin(data.resolutions, ID_LIST_MAX_BYTES)
+              : data.resolutions;
           if (Array.isArray(parsed)) resolutions = parsed;
         } catch {
           return Response.json(
@@ -867,7 +878,9 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
     if (data.resolutions != null) {
       try {
         const parsed =
-          typeof data.resolutions === 'string' ? JSON.parse(data.resolutions) : data.resolutions;
+          typeof data.resolutions === 'string'
+            ? parseJsonWithin(data.resolutions, ID_LIST_MAX_BYTES)
+            : data.resolutions;
         if (!Array.isArray(parsed) || parsed.length === 0) {
           throw new Error('resolutions must be a non-empty array');
         }
@@ -884,35 +897,25 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
 
     // Ops save: the client posts a block-op diff against the document at
     // base_sha instead of the whole document (untouched blocks never
-    // transmit). Presence of `ops` selects the path. The op vocabulary is
-    // validated against the service's single-source zod schema (op cap 400) so
-    // a structurally malformed payload is a typed 400 the client recovers from
-    // by falling back to a full-document save — never a raw TypeError → 500
-    // (plan §7 P8).
+    // transmit). Presence of `ops` selects the path. The ops are counted
+    // before they are parsed, then validated against the service's
+    // single-source zod schema (op cap 400), so ops that are too large or
+    // malformed (or a check that throws) are a typed 400 the client recovers
+    // from by falling back to a full-document save — never a raw TypeError →
+    // 500 (plan §7 P8).
+    //
+    // Defense in depth: the same read strips any signed URL back to its repo
+    // path BEFORE it can be committed. An ops save carries only the blocks
+    // that changed — which is exactly where a just-uploaded image's display
+    // URL would be. A pass that throws takes the same 400.
     let saveOps: unknown[] | null = null;
     if (data.ops != null) {
-      let rawOps: unknown;
-      try {
-        rawOps = typeof data.ops === 'string' ? JSON.parse(data.ops) : data.ops;
-      } catch {
-        rawOps = undefined; // invalid JSON → schema rejects → typed 400 below
-      }
-      const parsed = ClassmojiService.pageContent.pageBlockOpsPayloadSchema.safeParse(rawOps);
-      if (!parsed.success) {
-        // `code` makes the client auto-fall-back to ONE whole-document save
-        // (its code-keyed fallback effect), which needs no base to replay.
-        return Response.json(
-          {
-            error: 'Malformed ops payload — retrying as a full-document save',
-            code: 'OPS_MALFORMED',
-          },
-          { status: 400 }
-        );
-      }
-      // Defense in depth: strip any signed URL back to its repo path BEFORE it
-      // can be committed. An ops save carries only the blocks that changed —
-      // which is exactly where a just-uploaded image's display URL would be.
-      saveOps = await canonicalizeOpsAssets(actionAssetCtx, parsed.data);
+      saveOps = await readCanonicalSaveOps(
+        data.ops,
+        ClassmojiService.pageContent.pageBlockOpsPayloadSchema,
+        ops => canonicalizeOpsAssets(actionAssetCtx, ops)
+      );
+      if (!saveOps) return Response.json(OPS_MALFORMED_ANSWER, { status: 400 });
     }
 
     try {
@@ -976,7 +979,14 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
         mergedWithConcurrent = mergeResult.concurrent;
         mergedDocument = mergeResult.document;
       } else {
-        // ── Whole-document save (7.5 path, unchanged) ─────────────────────
+        // ── Whole-document save (7.5 path) ────────────────────────────────
+        // The document is counted before it is parsed.
+        if (
+          typeof data.content === 'string' &&
+          textOverBytes(data.content, DOCUMENT_SAVE_MAX_BYTES)
+        ) {
+          return Response.json({ error: PAGE_TOO_LARGE_MESSAGE, tooLarge: true }, { status: 413 });
+        }
         const blocks = await canonicalizeDocumentAssets(
           actionAssetCtx,
           JSON.parse(data.content as string)
@@ -1115,7 +1125,9 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
     if (data.resolutions != null) {
       try {
         const parsed =
-          typeof data.resolutions === 'string' ? JSON.parse(data.resolutions) : data.resolutions;
+          typeof data.resolutions === 'string'
+            ? parseJsonWithin(data.resolutions, ID_LIST_MAX_BYTES)
+            : data.resolutions;
         if (!Array.isArray(parsed) || parsed.length === 0) {
           throw new Error('resolutions must be a non-empty array');
         }

@@ -66,6 +66,7 @@
 import { ClassmojiService } from '@classmoji/services';
 import { withoutAnswers } from '@classmoji/services/form-contract';
 import { z } from 'zod';
+import { isoDateTime, uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
 import { assertProTier } from '../authz/proTier.ts';
@@ -388,7 +389,7 @@ function identityDisclosure(identityIds: Set<string>, include: boolean | undefin
 // ─── Shared input schemas ───────────────────────────────────────────────────
 
 const classroomArg = z.string().describe("Classroom reference as 'org/slug'");
-const formIdArg = z.string().uuid().describe('Form id');
+const formIdArg = uuidString().describe('Form id');
 
 /**
  * The field list, deliberately typed loosely.
@@ -683,9 +684,7 @@ export const formUpdateTool: ToolDefinition<FormUpdateArgs> = {
       .nullable()
       .optional()
       .describe('Maximum verified responses; null = uncapped'),
-    closes_at: z
-      .string()
-      .datetime({ offset: true })
+    closes_at: isoDateTime()
       .nullable()
       .optional()
       .describe('When the form stops accepting responses (ISO 8601); null clears it'),
@@ -1102,7 +1101,7 @@ export const formResponseGetTool: ToolDefinition<FormResponseGetArgs> = {
   inputSchema: {
     classroom: classroomArg,
     form_id: formIdArg,
-    response_id: z.string().uuid().describe('Response id, from list_form_responses'),
+    response_id: uuidString().describe('Response id, from list_form_responses'),
     include_identity_answers: includeIdentityAnswersArg,
   },
   handler: async (args, ctx) => {
@@ -1244,9 +1243,7 @@ export const formResponseCreateTool: ToolDefinition<FormResponseCreateArgs> = {
   inputSchema: {
     classroom: classroomArg,
     form_id: formIdArg,
-    revision_id: z
-      .string()
-      .uuid()
+    revision_id: uuidString()
       .optional()
       .describe(
         'From form_get. When given, the form must still be on this revision or the call fails ' +
@@ -1254,7 +1251,7 @@ export const formResponseCreateTool: ToolDefinition<FormResponseCreateArgs> = {
       ),
     responses: z
       .array(
-        z.object({
+        z.strictObject({
           email: z
             .string()
             .email()
@@ -1270,13 +1267,7 @@ export const formResponseCreateTool: ToolDefinition<FormResponseCreateArgs> = {
               'Keyed by field id from form_get, contract-shaped: real numbers, real booleans, ' +
                 'option ids not labels. Validated exactly as the fill page validates.'
             ),
-          submitted_at: z
-            .string()
-            // `offset: true` because the service parses this with `new Date`,
-            // which honours an offset; refusing "…+02:00" would force callers
-            // to convert a real signup time by hand. Date-only strings are
-            // still refused — a queue position needs a time.
-            .datetime({ offset: true })
+          submitted_at: isoDateTime()
             .optional()
             .describe(
               'ISO 8601 date-time, with Z or an offset. Orders the responses list. Defaults to ' +
@@ -1460,7 +1451,7 @@ export const formResponseUpdateTool: ToolDefinition<FormResponseUpdateArgs> = {
   inputSchema: {
     classroom: classroomArg,
     form_id: formIdArg,
-    response_id: z.string().uuid().describe('Response id, from list_form_responses'),
+    response_id: uuidString().describe('Response id, from list_form_responses'),
     staff_status: z
       .string()
       .max(200)

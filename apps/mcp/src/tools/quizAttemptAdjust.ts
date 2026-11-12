@@ -32,6 +32,7 @@
 import getPrisma from '@classmoji/database';
 import { ClassmojiService, type QuizAdjustResult } from '@classmoji/services';
 import { z } from 'zod';
+import { uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
 import {
@@ -114,8 +115,8 @@ export const quizAttemptAdjustTool: ToolDefinition<QuizAttemptAdjustArgs> = {
   roles: QUIZ_STAFF,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    quiz_id: z.string().uuid().describe('Quiz id (see list_quizzes)'),
-    attempt_id: z.string().uuid().describe('Attempt id (see list_quiz_attempts)'),
+    quiz_id: uuidString().describe('Quiz id (see list_quizzes)'),
+    attempt_id: uuidString().describe('Attempt id (see list_quiz_attempts)'),
     emoji: z
       .string()
       .min(1)

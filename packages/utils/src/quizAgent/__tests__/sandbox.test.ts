@@ -302,6 +302,39 @@ describe('CodeSubmissionInputSchema', () => {
     ).toBe(false);
   });
 
+  it('counts files, console lines and errors before it parses them', () => {
+    // About 1 MiB each, the most one chat message carries.
+    const oversized = [
+      { ...input, errors: Array.from({ length: 300_000 }, () => ({})) },
+      { ...input, console: Array.from({ length: 600_000 }, () => ({})) },
+      { ...input, console: Array.from({ length: 500_000 }, () => 1) },
+      {
+        ...input,
+        files: Object.fromEntries(Array.from({ length: 100_000 }, (_, i) => [`/f${i}.js`, 1])),
+      },
+    ];
+    for (const value of oversized) {
+      const result = CodeSubmissionInputSchema.safeParse(value);
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error.issues).toHaveLength(1);
+    }
+    const tooManyFiles = CodeSubmissionInputSchema.safeParse({
+      ...input,
+      files: Object.fromEntries(Array.from({ length: 6 }, (_, i) => [`/f${i}.js`, 'x'])),
+    });
+    expect(tooManyFiles.success).toBe(false);
+    if (!tooManyFiles.success) {
+      expect(tooManyFiles.error.issues.map(i => [i.path, i.message])).toEqual([
+        [['files'], 'files must hold 1 to 5 files'],
+      ]);
+    }
+    // Within the counts, the parse is what it was.
+    const fiftyLines = Array.from({ length: 50 }, () => ({ method: 'log' as const, text: 'x' }));
+    expect(CodeSubmissionInputSchema.safeParse({ ...input, console: fiftyLines }).success).toBe(
+      true
+    );
+  });
+
   it('stores the server fields with the input (part), and shows them optionally (data)', () => {
     expect(CodeSubmissionPartSchema.safeParse(part()).success).toBe(true);
     expect(CodeSubmissionPartSchema.safeParse(input).success).toBe(false);

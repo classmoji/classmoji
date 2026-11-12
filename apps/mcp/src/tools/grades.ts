@@ -21,6 +21,7 @@
 import { ClassmojiService, HelperService } from '@classmoji/services';
 import { gitUsername } from '@classmoji/utils';
 import { z } from 'zod';
+import { uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
 import {
@@ -137,7 +138,7 @@ export const gradeRemoveTool: ToolDefinition<GradeRemoveArgs> = {
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     git_repo_assignment_id: submissionIdSchema().describe('Submission (GitRepoAssignment) id'),
-    grade_id: z.string().uuid().describe('AssignmentGrade id to remove'),
+    grade_id: uuidString().describe('AssignmentGrade id to remove'),
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);

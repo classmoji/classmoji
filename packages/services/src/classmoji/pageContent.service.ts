@@ -2,6 +2,12 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import getPrisma from '@classmoji/database';
 import { collectBlockAssetRefs, mapBlockAssetRefs } from '@classmoji/utils';
+import {
+  capArray,
+  capElements,
+  capKeys,
+  MAX_OPS_PAYLOAD_ELEMENTS,
+} from '@classmoji/utils/input-caps';
 import { ContentService } from '../content/ContentService.ts';
 import { recordContentAsset, resolveContentBranch } from './contentAssets.service.ts';
 import { extractOwnRepoPath } from './contentRefs.ts';
@@ -1248,35 +1254,77 @@ export type BlockPosition = { after: string } | { at: 'start' | 'end' };
  * import server code into the browser bundle, so its BlockOp type is a
  * hand-kept structural twin that stays assignable to this one.
  */
-const pageBlockBodySchema = z.record(z.unknown());
+/**
+ * Size caps on block ops, each checked before what it caps is parsed
+ * (`capArray`, `capKeys`, `capElements` from @classmoji/utils/input-caps).
+ * BlockNote blocks have five keys (id, type, props, content, children); the
+ * largest real page measured has about 620 top-level blocks.
+ */
+export const PAGE_OPS_LIMITS = {
+  /** Ops in one editor save. */
+  MAX_OPS: 400,
+  /** Blocks in one insert op. */
+  MAX_INSERT_BLOCKS: 400,
+  /** Top-level blocks in one replace_all op: three times the largest real page. */
+  MAX_REPLACE_ALL_BLOCKS: 2_000,
+  /** Keys on one block object. */
+  MAX_BLOCK_KEYS: 32,
+  /** Array elements and object members in one editor save, all ops together. */
+  MAX_PAYLOAD_ELEMENTS: MAX_OPS_PAYLOAD_ELEMENTS,
+} as const;
+
+const BLOCK_KEYS_MESSAGE = `A block has at most ${PAGE_OPS_LIMITS.MAX_BLOCK_KEYS} keys`;
+// One record for every use, as before the caps (the MCP tools/list renders
+// shared schemas as $refs); the described copy is update's.
+const pageBlockRecord = z.record(z.string(), z.unknown());
+const pageBlockBodySchema = capKeys(
+  pageBlockRecord,
+  PAGE_OPS_LIMITS.MAX_BLOCK_KEYS,
+  BLOCK_KEYS_MESSAGE
+);
 const pageBlockPositionSchema = z.union([
   z.object({ after: z.string().min(1) }).strict(),
   z.object({ at: z.enum(['start', 'end']) }).strict(),
 ]);
 
+/**
+ * One block op. Each op refuses a key it does not declare, so a misspelled
+ * one is an error rather than ignored; a block's own fields sit in a record
+ * and take any key.
+ */
 export const pageBlockOpSchema = z.discriminatedUnion('op', [
-  z.object({
+  z.strictObject({
     op: z.literal('update'),
     id: z.string().min(1),
-    block: pageBlockBodySchema.describe('Full replacement block (its id is preserved)'),
+    block: capKeys(
+      pageBlockRecord.describe('Full replacement block (its id is preserved)'),
+      PAGE_OPS_LIMITS.MAX_BLOCK_KEYS,
+      BLOCK_KEYS_MESSAGE
+    ),
   }),
-  z.object({
+  z.strictObject({
     op: z.literal('insert'),
-    blocks: z.array(pageBlockBodySchema).min(1).max(400),
+    blocks: capArray(
+      z.array(pageBlockBodySchema).min(1).max(PAGE_OPS_LIMITS.MAX_INSERT_BLOCKS),
+      PAGE_OPS_LIMITS.MAX_INSERT_BLOCKS
+    ),
     position: pageBlockPositionSchema,
   }),
-  z.object({
+  z.strictObject({
     op: z.literal('move'),
     id: z.string().min(1),
     position: pageBlockPositionSchema,
   }),
-  z.object({
+  z.strictObject({
     op: z.literal('delete'),
     id: z.string().min(1),
   }),
-  z.object({
+  z.strictObject({
     op: z.literal('replace_all'),
-    blocks: z.array(pageBlockBodySchema),
+    blocks: capArray(
+      z.array(pageBlockBodySchema).max(PAGE_OPS_LIMITS.MAX_REPLACE_ALL_BLOCKS),
+      PAGE_OPS_LIMITS.MAX_REPLACE_ALL_BLOCKS
+    ),
   }),
 ]);
 
@@ -1284,9 +1332,13 @@ export type BlockOp = z.infer<typeof pageBlockOpSchema>;
 
 /**
  * Payload schema for the editor's ops-shaped save (a JSON array of ops). The
- * MCP tool applies a tighter `.max(25)` in its own inputSchema.
+ * MCP tool applies a tighter `.max(25)` in its own inputSchema. The whole
+ * payload is counted first (`MAX_PAYLOAD_ELEMENTS`), then the op count.
  */
-export const pageBlockOpsPayloadSchema = z.array(pageBlockOpSchema).min(1).max(400);
+export const pageBlockOpsPayloadSchema = capElements(
+  capArray(z.array(pageBlockOpSchema).min(1).max(PAGE_OPS_LIMITS.MAX_OPS), PAGE_OPS_LIMITS.MAX_OPS),
+  PAGE_OPS_LIMITS.MAX_PAYLOAD_ELEMENTS
+);
 
 /** Collect every id in the tree (incl. nested children). */
 function collectBlockIds(blocks: BlockNode[], out = new Set<string>()): Set<string> {
