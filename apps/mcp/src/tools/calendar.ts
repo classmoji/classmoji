@@ -80,15 +80,18 @@ interface CalendarEventCreateArgs {
 }
 
 /**
- * A meeting link is one http(s) URL. `.url()` keeps `format: uri` in the
- * published schema; the refinement adds what it does not check — the scheme,
- * and whitespace, which the URL parser would otherwise encode into the path.
+ * A meeting link is one http(s) URL. The refinement checks what `.url()` does
+ * not — the scheme, and whitespace, which the URL parser would otherwise
+ * encode into the path. It runs first, on the value as sent: `.url()` passes
+ * on the value trimmed and without tabs or newlines, so a link followed by
+ * text on its next line would reach a later check as one URL. `.url()` keeps
+ * `format: uri` in the published schema.
  */
 const meetingLinkSchema = z
   .string()
-  .url()
   .max(500)
   .refine(isMeetingLinkUrl, MEETING_LINK_MESSAGE)
+  .url()
   .describe('Meeting URL (http or https)');
 
 /**

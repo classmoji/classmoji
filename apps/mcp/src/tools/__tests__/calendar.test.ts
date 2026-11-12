@@ -70,6 +70,7 @@ const { ASSISTANT_EVENT_TYPE_MESSAGE, MEETING_LINK_MESSAGE } =
 
 const { calendarEventCreateTool, calendarEventLinksSetTool, calendarEventUpdateTool } =
   await import('../calendar.ts');
+const { toolInputSchema } = await import('../../mcp/toolInputSchema.ts');
 
 /** OWNER context (skips the assistant own-events sub-gate cleanly). */
 const CTX: ToolContext = {
@@ -482,6 +483,14 @@ describe('meeting_link validation', () => {
     );
   });
 
+  /** Text after a link on its next line, or a tab or newline inside one. */
+  const JOINED = [
+    'https://zoom.us/j/123\nhttps://meet.google.com/abc-defg-hij',
+    'https://zoom.us/j/123?pwd=x\nMeetingID:123',
+    'https://zoom.us/j/1\t23',
+    'https://zo\nom.us/j/123',
+  ];
+
   it.each(tools)('$name refuses anything else', ({ schema, base }) => {
     for (const meeting_link of [
       `Join Zoom Meeting ${ZOOM} Meeting ID: 912 3456 7890`,
@@ -492,11 +501,34 @@ describe('meeting_link validation', () => {
       'mailto:ta@example.edu',
       'ftp://files.example.edu/x',
       'zoom.us/j/1',
+      ...JOINED,
     ]) {
       const result = schema.safeParse({ ...base, meeting_link });
       expect(result.success, meeting_link).toBe(false);
     }
   });
+
+  it.each([calendarEventCreateTool, calendarEventUpdateTool])(
+    '$name refuses a link with text on its next line, as the server checks it',
+    async tool => {
+      const base =
+        tool === calendarEventCreateTool
+          ? tools[0].base
+          : { classroom: 'org/winter-2025', event_id: '00000000-0000-4000-8000-000000000001' };
+      const validate = toolInputSchema(tool.inputSchema)['~standard'].validate;
+      for (const meeting_link of JOINED) {
+        const result = await validate({ ...base, meeting_link });
+        expect('issues' in result && result.issues, JSON.stringify(meeting_link)).toBeTruthy();
+        const messages = 'issues' in result ? (result.issues ?? []).map(i => i.message) : [];
+        expect(messages).toContain(MEETING_LINK_MESSAGE);
+      }
+      // A link with only surrounding whitespace is still taken, trimmed.
+      for (const meeting_link of [` ${ZOOM} `, `${ZOOM}\n`]) {
+        const result = await validate({ ...base, meeting_link });
+        expect('value' in result && result.value.meeting_link).toBe(ZOOM);
+      }
+    }
+  );
 
   it.each(tools)('$name says what to enter', ({ schema, base }) => {
     const result = schema.safeParse({ ...base, meeting_link: 'mailto:ta@example.edu' });
@@ -513,6 +545,15 @@ describe('meeting_link validation', () => {
       }) as { properties: Record<string, { format?: string }> };
       expect(json.properties.meeting_link.format).toBe('uri');
       expect(tool.inputSchema.meeting_link.safeParse('not a url').success).toBe(false);
+      const listed = toolInputSchema(tool.inputSchema)['~standard'].jsonSchema.input({
+        target: 'draft-2020-12',
+      }) as { properties: Record<string, unknown> };
+      expect(listed.properties.meeting_link).toEqual({
+        type: 'string',
+        maxLength: 500,
+        format: 'uri',
+        description: 'Meeting URL (http or https)',
+      });
     }
   );
 });
