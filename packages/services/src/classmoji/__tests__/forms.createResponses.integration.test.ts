@@ -474,6 +474,34 @@ describe.skipIf(!RUN)('formResponse.createResponses (integration)', () => {
     expect(await rowsOf(formId)).toHaveLength(0);
   });
 
+  it('lists 20 unknown keys at most, each cut, then how many more', async () => {
+    const { formId, revisionId, nameId } = await makeOpenForm();
+    const unknown = Object.fromEntries(
+      Array.from({ length: 30 }, (_, i) => [`${i}-${'k'.repeat(200)}`, 'x'])
+    );
+
+    const report = await responseService.createResponses({
+      formId,
+      revisionId,
+      addedBy: ownerId,
+      audit: descriptor(),
+      responses: [
+        { email: addr('many-keys'), answers: { ...answersFor(nameId, 'Fine'), ...unknown } },
+      ],
+    });
+
+    expect(report.outcome).toBe('rejected');
+    const issues = report.rows[0].issues ?? [];
+    expect(issues).toHaveLength(21);
+    issues.slice(0, 20).forEach((issue, i) => {
+      const cut = `${`${i}-${'k'.repeat(200)}`.slice(0, 64)}…`;
+      expect(issue).toMatchObject({ code: 'unrecognized_keys', field_id: cut, path: cut });
+      expect(issue.message).toBe(`No field ${cut} on this form — field ids come from form_get.`);
+    });
+    expect(issues[20]).toMatchObject({ path: 'answers', message: '…and 10 more.' });
+    expect(await rowsOf(formId)).toHaveLength(0);
+  });
+
   it('marks a malformed address invalid', async () => {
     const { formId, revisionId, nameId } = await makeOpenForm();
     const report = await responseService.createResponses({
