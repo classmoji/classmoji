@@ -11,6 +11,9 @@ import { hashPassword } from 'better-auth/crypto';
 
 process.env.WEBAPP_URL = 'http://localhost:3000';
 process.env.BETTER_AUTH_SECRET = 'test-secret-that-is-at-least-32-chars!!';
+// A Github app, so a social sign-in answers with its redirect.
+process.env.GITHUB_CLIENT_ID = 'test-github-client';
+process.env.GITHUB_CLIENT_SECRET = 'test-github-secret';
 
 const mocks = vi.hoisted(() => {
   const client: Record<string, Record<string, unknown>> = {};
@@ -545,5 +548,69 @@ describe('reset-code rate limits', () => {
     const disabled = auth.options.disabledPaths ?? [];
     expect(disabled).toContain('/forget-password/email-otp');
     expect(Object.keys(rules).filter(path => disabled.includes(path))).toEqual([]);
+  });
+});
+
+describe('sign-in rate limits', () => {
+  it('lets a class on one network start a Github or Gitlab sign-in together', () => {
+    const rules = auth.options.rateLimit?.customRules ?? {};
+    expect(rules['/sign-in/social']).toEqual({ window: 10, max: 100 });
+  });
+
+  it('keeps the password and code rules as they were', () => {
+    const rules = auth.options.rateLimit?.customRules ?? {};
+    expect(rules['/sign-in/email']).toEqual({ window: 60, max: 5 });
+    expect(rules['/sign-up/email']).toEqual({ window: 60, max: 3 });
+    expect(rules['/email-otp/send-verification-otp']).toEqual({ window: 60, max: 3 });
+    expect(rules['/email-otp/verify-email']).toEqual({ window: 60, max: 5 });
+    expect(rules['/email-otp/reset-password']).toEqual({ window: 60, max: 5 });
+    expect(rules['/email-otp/request-password-reset']).toEqual({ window: 60, max: 3 });
+  });
+
+  it('refuses none of 30 social sign-ins from one address in 10 s, and the 6th password sign-in in a minute', async () => {
+    const ctx = await auth.$context;
+    const enabled = ctx.rateLimit.enabled;
+    ctx.rateLimit.enabled = true;
+    // Addresses of their own for each run: the limiter's memory store lives as
+    // long as the process.
+    const run = Date.now();
+    const post = (path: string, ip: string, body: unknown) =>
+      auth.handler(
+        new Request(`${BASE}${path}`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            origin: 'http://localhost:3000',
+            'x-forwarded-for': ip,
+          },
+          body: JSON.stringify(body),
+        })
+      );
+    try {
+      const socialIp = `203.0.113.${run % 250}`;
+      const social: number[] = [];
+      for (let i = 0; i < 30; i++) {
+        const res = await post('/sign-in/social', socialIp, {
+          provider: 'github',
+          callbackURL: '/',
+        });
+        social.push(res.status);
+      }
+      expect(social).toEqual(Array(30).fill(200));
+
+      const emailIp = `198.51.100.${run % 250}`;
+      const email: number[] = [];
+      for (let i = 0; i < 6; i++) {
+        const res = await post('/sign-in/email', emailIp, {
+          email: 'student@example.edu',
+          password: 'wrong-password',
+        });
+        email.push(res.status);
+      }
+      expect(email.slice(0, 5)).not.toContain(429);
+      expect(email[5]).toBe(429);
+    } finally {
+      ctx.rateLimit.enabled = enabled;
+    }
   });
 });
