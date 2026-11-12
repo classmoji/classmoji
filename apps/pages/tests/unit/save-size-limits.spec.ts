@@ -173,3 +173,14 @@ test.describe('a whole-document save is counted before it is parsed', () => {
     );
   });
 });
+
+test.describe('merge choices are counted before they are parsed', () => {
+  test('every resolutions text the action reads goes through the id list cap', () => {
+    const reads = ACTION_SOURCE.match(
+      /typeof data\.resolutions === 'string'\s+\? parseJsonWithin\(data\.resolutions, ID_LIST_MAX_BYTES\)/g
+    );
+    // The live preview accept, the save, and the preview accept.
+    expect(reads).toHaveLength(3);
+    expect(ACTION_SOURCE).not.toContain('JSON.parse(data.resolutions)');
+  });
+});

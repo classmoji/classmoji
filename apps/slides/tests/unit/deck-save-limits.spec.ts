@@ -14,7 +14,12 @@ import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
 import { deckOpsPayloadSchema } from '@classmoji/services/slides/ops';
 import { DOCUMENT_SAVE_MAX_BYTES } from '@classmoji/utils/repo-limits';
-import { UploadTooLargeError, parseJsonWithin, textOverBytes } from '@classmoji/utils/upload-limit';
+import {
+  ID_LIST_MAX_BYTES,
+  UploadTooLargeError,
+  parseJsonWithin,
+  textOverBytes,
+} from '@classmoji/utils/upload-limit';
 
 const VIEWER_SOURCE = readFileSync(
   fileURLToPath(new URL('../../app/routes/$slideId/route.tsx', import.meta.url)),
@@ -125,5 +130,40 @@ test.describe('the limits against real-size decks', () => {
     expect(
       textOverBytes(deckHtmlOfAtLeast(DOCUMENT_SAVE_MAX_BYTES + 1), DOCUMENT_SAVE_MAX_BYTES)
     ).toBe(true);
+  });
+});
+
+test.describe('the deck action reads only the image upload as multipart', () => {
+  test('any other intent sent as multipart is refused before a field is read', () => {
+    const intentAt = ACTION.indexOf("const intent = formData.get('intent');");
+    const refusal = ACTION.indexOf(
+      "if (isMultipart(request) && intent !== 'upload-image') {\n    return data({ error: 'Invalid action' }, { status: 400 });"
+    );
+    expect(intentAt).toBeGreaterThan(-1);
+    expect(refusal).toBeGreaterThan(intentAt);
+    // Nothing between reading the body and the refusal reads another field.
+    const between = ACTION.slice(ACTION.indexOf('readLimitedFormData(request'), refusal);
+    expect(between.match(/formData\.get\(/g)).toHaveLength(1);
+    expect(refusal).toBeLessThan(ACTION.indexOf('if (!isDeckSlide(slide)) {'));
+  });
+
+  test('the multipart cap and the refusal read the same content type', () => {
+    const limit = VIEWER_SOURCE.slice(VIEWER_SOURCE.indexOf('function deckActionBodyLimit('));
+    expect(limit.slice(0, limit.indexOf('\n}'))).toContain('return isMultipart(request)');
+    expect(ACTION).not.toContain("includes('multipart/form-data')");
+  });
+});
+
+test.describe('the deck action counts id lists before it parses them', () => {
+  test('merge choices and image paths are read within the id list cap', () => {
+    for (const raw of ['pathsJson', 'rawLiveResolutions', 'rawResolutions', 'rawSaveResolutions']) {
+      expect(ACTION).toContain(`parseJsonWithin(${raw}, ID_LIST_MAX_BYTES)`);
+      expect(ACTION).not.toContain(`JSON.parse(${raw})`);
+    }
+  });
+
+  test('a list over the cap is refused before it is parsed', () => {
+    const over = JSON.stringify([{ id: 'x'.repeat(ID_LIST_MAX_BYTES), choose: 'ours' }]);
+    expect(() => parseJsonWithin(over, ID_LIST_MAX_BYTES)).toThrow(UploadTooLargeError);
   });
 });

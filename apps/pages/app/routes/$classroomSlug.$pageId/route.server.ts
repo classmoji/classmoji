@@ -7,9 +7,11 @@ import {
   repoFileTooLargeMessage,
 } from '@classmoji/utils/repo-limits';
 import {
+  ID_LIST_MAX_BYTES,
   MULTIPART_OVERHEAD_BYTES,
   UploadTooLargeError,
   declaredBodyTooLarge,
+  parseJsonWithin,
   readLimitedBody,
   readLimitedFormData,
   textOverBytes,
@@ -817,7 +819,9 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
       if (data.resolutions != null) {
         try {
           const parsed =
-            typeof data.resolutions === 'string' ? JSON.parse(data.resolutions) : data.resolutions;
+            typeof data.resolutions === 'string'
+              ? parseJsonWithin(data.resolutions, ID_LIST_MAX_BYTES)
+              : data.resolutions;
           if (Array.isArray(parsed)) resolutions = parsed;
         } catch {
           return Response.json(
@@ -868,7 +872,9 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
     if (data.resolutions != null) {
       try {
         const parsed =
-          typeof data.resolutions === 'string' ? JSON.parse(data.resolutions) : data.resolutions;
+          typeof data.resolutions === 'string'
+            ? parseJsonWithin(data.resolutions, ID_LIST_MAX_BYTES)
+            : data.resolutions;
         if (!Array.isArray(parsed) || parsed.length === 0) {
           throw new Error('resolutions must be a non-empty array');
         }
@@ -1108,7 +1114,9 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
     if (data.resolutions != null) {
       try {
         const parsed =
-          typeof data.resolutions === 'string' ? JSON.parse(data.resolutions) : data.resolutions;
+          typeof data.resolutions === 'string'
+            ? parseJsonWithin(data.resolutions, ID_LIST_MAX_BYTES)
+            : data.resolutions;
         if (!Array.isArray(parsed) || parsed.length === 0) {
           throw new Error('resolutions must be a non-empty array');
         }

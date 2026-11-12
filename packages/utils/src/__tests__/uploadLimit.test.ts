@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { UploadTooLargeError, parseJsonWithin, textOverBytes } from '../uploadLimit.ts';
+import {
+  ID_LIST_MAX_BYTES,
+  UploadTooLargeError,
+  parseJsonWithin,
+  textOverBytes,
+} from '../uploadLimit.ts';
 import { DOCUMENT_SAVE_MAX_BYTES, DOCUMENT_SAVE_MAX_LABEL } from '../repoLimits.ts';
 
 const utf8 = (text: string) => new TextEncoder().encode(text).byteLength;
@@ -64,5 +69,34 @@ describe('the document save cap', () => {
   it('is 4 MB', () => {
     expect(DOCUMENT_SAVE_MAX_BYTES).toBe(4 * 1024 * 1024);
     expect(DOCUMENT_SAVE_MAX_LABEL).toBe('4 MB');
+  });
+});
+
+describe('the id list cap', () => {
+  const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+
+  it('holds a choice for every block a page op may replace, many times over', () => {
+    // Merge choices as the chooser posts them, one per conflicting block or slide.
+    const choices = Array.from({ length: 8_000 }, (_, n) => ({ id: uuid(n), choose: 'theirs' }));
+    const text = JSON.stringify(choices);
+    expect(parseJsonWithin(text, ID_LIST_MAX_BYTES)).toHaveLength(8_000);
+  });
+
+  it('holds a thousand image paths of 500 bytes', () => {
+    const paths = Array.from(
+      { length: 1_000 },
+      (_, n) => `slides/deck/images/${String(n).padStart(4, '0')}-${'x'.repeat(472)}.png`
+    );
+    expect(paths.every(path => utf8(path) === 500)).toBe(true);
+    expect(parseJsonWithin(JSON.stringify(paths), ID_LIST_MAX_BYTES)).toHaveLength(1_000);
+  });
+
+  it('refuses a list one byte over it before parsing it', () => {
+    const text = JSON.stringify(['x'.repeat(ID_LIST_MAX_BYTES - 3)]);
+    expect(utf8(text)).toBe(ID_LIST_MAX_BYTES + 1);
+    const parse = vi.spyOn(JSON, 'parse');
+    expect(() => parseJsonWithin(text, ID_LIST_MAX_BYTES)).toThrow(UploadTooLargeError);
+    expect(parse).not.toHaveBeenCalled();
+    parse.mockRestore();
   });
 });

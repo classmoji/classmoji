@@ -46,6 +46,7 @@ import {
 } from '@classmoji/utils/repo-limits';
 import { isSafeReturnPath, safeReturnPath } from '@classmoji/utils/return-path';
 import {
+  ID_LIST_MAX_BYTES,
   MULTIPART_OVERHEAD_BYTES,
   UploadTooLargeError,
   parseJsonWithin,
@@ -817,13 +818,18 @@ const DECK_SAVE_TOO_LARGE_MESSAGE = `This deck is larger than the ${DOCUMENT_SAV
  * largest field is the deck's HTML or its ops, at most
  * `DOCUMENT_SAVE_MAX_BYTES`, and percent-encoding can inflate markup up to
  * about three times (every `<`, `>`, `"` and space), so that shape gets three
- * times the save cap plus slack for the other fields.
+ * times the save cap plus slack for the other fields. The action refuses any
+ * other intent sent as multipart, so the file's cap is the upload's alone.
  */
 function deckActionBodyLimit(request: Request): number {
-  const contentType = request.headers.get('content-type') ?? '';
-  return contentType.includes('multipart/form-data')
+  return isMultipart(request)
     ? uploadBodyLimit(REPO_REST_MAX_BYTES)
     : 3 * DOCUMENT_SAVE_MAX_BYTES + MULTIPART_OVERHEAD_BYTES;
+}
+
+/** Whether the request says its body is multipart (the image upload's shape). */
+function isMultipart(request: Request): boolean {
+  return (request.headers.get('content-type') ?? '').includes('multipart/form-data');
 }
 
 export const action = async ({
@@ -871,8 +877,7 @@ export const action = async ({
       // The image upload is the only multipart intent, and its client settles
       // its pending promise on `intent: 'upload-image'` — which the unread body
       // can no longer tell us, so it is named here.
-      const multipart = (request.headers.get('content-type') ?? '').includes('multipart/form-data');
-      if (multipart) {
+      if (isMultipart(request)) {
         return data(
           { intent: 'upload-image' as const, error: repoFileTooLargeMessage() },
           { status: 413 }
@@ -888,6 +893,13 @@ export const action = async ({
     throw error;
   }
   const intent = formData.get('intent');
+
+  // The image upload is the one multipart intent, and the only one whose body
+  // may be file-sized. Any other intent sent that way is refused before any
+  // other field is read.
+  if (isMultipart(request) && intent !== 'upload-image') {
+    return data({ error: 'Invalid action' }, { status: 400 });
+  }
 
   // This action is the DECK EDITOR's action, whole and entire: themes,
   // snippets, deck images, the deck read, the preview branch — and the
@@ -1649,8 +1661,9 @@ export const action = async ({
   // Delete orphaned images
   if (intent === 'delete-images') {
     try {
-      const pathsJson = formData.get('paths') as string;
-      const paths = JSON.parse(pathsJson);
+      const pathsJson = formData.get('paths');
+      const paths =
+        typeof pathsJson === 'string' ? parseJsonWithin(pathsJson, ID_LIST_MAX_BYTES) : null;
 
       if (!Array.isArray(paths) || paths.length === 0) {
         return { error: 'No images to delete' };
@@ -1749,7 +1762,7 @@ export const action = async ({
     const rawLiveResolutions = formData.get('resolutions');
     if (typeof rawLiveResolutions === 'string' && rawLiveResolutions) {
       try {
-        const parsed = JSON.parse(rawLiveResolutions);
+        const parsed = parseJsonWithin(rawLiveResolutions, ID_LIST_MAX_BYTES);
         if (!Array.isArray(parsed) || parsed.length === 0) throw new Error('empty');
         liveResolutions = parsed;
       } catch {
@@ -1795,7 +1808,7 @@ export const action = async ({
     const rawResolutions = formData.get('resolutions');
     if (typeof rawResolutions === 'string' && rawResolutions) {
       try {
-        const parsed = JSON.parse(rawResolutions);
+        const parsed = parseJsonWithin(rawResolutions, ID_LIST_MAX_BYTES);
         if (!Array.isArray(parsed) || parsed.length === 0) {
           throw new Error('resolutions must be a non-empty array');
         }
@@ -1911,7 +1924,7 @@ export const action = async ({
   const rawSaveResolutions = formData.get('resolutions');
   if (typeof rawSaveResolutions === 'string' && rawSaveResolutions) {
     try {
-      const parsed = JSON.parse(rawSaveResolutions);
+      const parsed = parseJsonWithin(rawSaveResolutions, ID_LIST_MAX_BYTES);
       if (!Array.isArray(parsed) || parsed.length === 0) {
         throw new Error('resolutions must be a non-empty array');
       }

@@ -215,6 +215,15 @@ export function textOverBytes(text: string, maxBytes: number): boolean {
 }
 
 /**
+ * The most a form field holding a list of ids or file paths may carry: the
+ * merge choices a conflict chooser posts back (`[{ id, choose }]`, one per
+ * conflicting block or slide) and the images a deck editor deletes. It holds
+ * 8,000 choices or 1,000 paths of 500 bytes, and is read with
+ * `parseJsonWithin`.
+ */
+export const ID_LIST_MAX_BYTES = 512 * 1024;
+
+/**
  * `JSON.parse` for a field that may hold at most `maxBytes`. A longer text is
  * refused with `UploadTooLargeError` before any of it is parsed; text that is
  * not JSON throws the parser's own error.
