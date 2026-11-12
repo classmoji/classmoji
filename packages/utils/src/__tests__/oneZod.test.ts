@@ -1,5 +1,6 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 /**
@@ -44,8 +45,12 @@ describe('one zod', () => {
   it('the zod this package loads is the root copy, on zod 4', () => {
     const require = createRequire(import.meta.url);
     const resolved = require.resolve('zod/package.json');
-    const root = new URL('../../../../node_modules/zod/package.json', import.meta.url).pathname;
-    expect(resolved).toBe(root);
+    // File paths, not a URL's pathname: a checkout path with a space or other
+    // percent-encoded character must still compare equal.
+    const root = fileURLToPath(
+      new URL('../../../../node_modules/zod/package.json', import.meta.url)
+    );
+    expect(realpathSync(resolved)).toBe(realpathSync(root));
     expect(major((require('zod/package.json') as LockPackage).version)).toBe(4);
   });
 });
