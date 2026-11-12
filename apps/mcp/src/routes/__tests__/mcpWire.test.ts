@@ -126,6 +126,16 @@ describe('the MCP route on the wire', () => {
     expect(state.calls).toEqual([]);
   });
 
+  it('answers a tool that was never registered with a JSON-RPC -32602 error', async () => {
+    const res = await post(call('wire_never_registered', { classroom: 'c1' }));
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body).toMatchObject({ jsonrpc: '2.0', id: 7, error: { code: -32602 } });
+    expect(body.error.message).toContain('wire_never_registered');
+    expect(body).not.toHaveProperty('result');
+    expect(state.calls).toEqual([]);
+  });
+
   it('runs a tool without arguments called with none, with {} as its arguments', async () => {
     const body = (await post(call('wire_read'))).json();
     expect(body).toMatchObject({
