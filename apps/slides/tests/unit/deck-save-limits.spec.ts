@@ -167,3 +167,35 @@ test.describe('the deck action counts id lists before it parses them', () => {
     expect(() => parseJsonWithin(over, ID_LIST_MAX_BYTES)).toThrow(UploadTooLargeError);
   });
 });
+
+test.describe('the deck editor shows a size refusal of any intent', () => {
+  const EFFECT = VIEWER_SOURCE.slice(VIEWER_SOURCE.indexOf('// Handle fetcher responses'));
+
+  test('it remembers the intent of the submission in flight', () => {
+    const capture = VIEWER_SOURCE.slice(
+      VIEWER_SOURCE.indexOf('const submittedIntentRef = useRef<string | null>(null);')
+    );
+    expect(capture.length).toBeLessThan(VIEWER_SOURCE.length);
+    const body = capture.slice(0, capture.indexOf('}, [fetcher.state, fetcher.formData]);'));
+    expect(body).toContain("if (fetcher.state !== 'submitting') return;");
+    expect(body).toContain("const intent = fetcher.formData?.get('intent');");
+    expect(body).toContain(
+      "submittedIntentRef.current = typeof intent === 'string' ? intent : null;"
+    );
+  });
+
+  test('a refusal of anything but a deck save is shown first, and never re-sends the deck', () => {
+    const branch =
+      'if (fetcher.data?.tooLarge && !fetcher.data?.intent && submittedIntentRef.current) {';
+    const at = EFFECT.indexOf(branch);
+    expect(at).toBeGreaterThan(-1);
+    // It is the first branch, ahead of the deck save's fallback on the same flag.
+    expect(at).toBeLessThan(EFFECT.indexOf("if (fetcher.data?.intent === 'fetch-latest'"));
+    expect(at).toBeLessThan(
+      EFFECT.indexOf('} else if (fetcher.data?.tooLarge && lastPostedOpsRef.current')
+    );
+    const taken = EFFECT.slice(at, EFFECT.indexOf('} else if', at));
+    expect(taken).toContain("toast.error(`Couldn't save: ${fetcher.data.error}.`);");
+    expect(taken).not.toContain('fetcher.submit(');
+  });
+});

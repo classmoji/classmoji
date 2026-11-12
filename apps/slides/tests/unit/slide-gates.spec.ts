@@ -486,7 +486,10 @@ test.describe('the upload endpoints', () => {
   });
 
   test('the editor retries a too-large changes-only save once, as a whole deck', () => {
-    const branch = VIEWER_SOURCE.slice(VIEWER_SOURCE.indexOf('fetcher.data?.tooLarge &&'));
+    const branch = VIEWER_SOURCE.slice(
+      VIEWER_SOURCE.indexOf('} else if (fetcher.data?.tooLarge && lastPostedOpsRef.current') +
+        '} else if ('.length
+    );
     expect(
       branch.startsWith(
         'fetcher.data?.tooLarge && lastPostedOpsRef.current && lastPostedContentRef.current'

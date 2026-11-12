@@ -2743,9 +2743,23 @@ export default function SlideViewer() {
   const saveSuccess = fetcher.data?.success;
   const saveError = fetcher.data?.error;
 
+  // The intent of the submission in flight (null for a deck save, which sends
+  // none). A body over the action's limit is refused before its intent is
+  // read, so that answer names none; this says what it answers.
+  const submittedIntentRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (fetcher.state !== 'submitting') return;
+    const intent = fetcher.formData?.get('intent');
+    submittedIntentRef.current = typeof intent === 'string' ? intent : null;
+  }, [fetcher.state, fetcher.formData]);
+
   // Handle fetcher responses
   useEffect(() => {
-    if (fetcher.data?.intent === 'fetch-latest' && fetcher.data?.content) {
+    if (fetcher.data?.tooLarge && !fetcher.data?.intent && submittedIntentRef.current) {
+      // A theme, snippet or other intent over the limit, not a deck save: its
+      // sentence, and none of the deck save's handling below.
+      toast.error(`Couldn't save: ${fetcher.data.error}.`);
+    } else if (fetcher.data?.intent === 'fetch-latest' && fetcher.data?.content) {
       // Got fresh content from GitHub API - enter edit mode with it
       setEditableContent(fetcher.data.content);
       // This read is skipCache and can be AHEAD of the loader (someone else
