@@ -54,6 +54,8 @@ export interface SaveFetcherData {
   live?: boolean;
   /** The refusal's sentence, when it has one. */
   message?: string;
+  /** The save was refused for its size; `error` is the sentence to show. */
+  tooLarge?: boolean;
 }
 
 export interface SaveMergeReport {
@@ -111,4 +113,14 @@ export function deriveSaveConflict(
  */
 export function isCodeFallbackRefusal(data: SaveFetcherData | undefined): boolean {
   return Boolean(data?.code) && !data?.conflict;
+}
+
+/**
+ * The sentence to show beside the failed status when a save was refused for
+ * its size: the server's own, sent with `tooLarge`. Null for any other answer,
+ * whose text comes from wherever the save failed, so the header's status is
+ * all it shows.
+ */
+export function saveTooLargeNotice(data: SaveFetcherData | undefined): string | null {
+  return data?.tooLarge && typeof data.error === 'string' && data.error ? data.error : null;
 }

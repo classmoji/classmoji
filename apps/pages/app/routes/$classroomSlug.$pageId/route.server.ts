@@ -99,7 +99,10 @@ import {
  */
 const PAGE_JSON_BODY_MAX_BYTES = 2 * DOCUMENT_SAVE_MAX_BYTES + MULTIPART_OVERHEAD_BYTES;
 
-/** What a person reads when a save is over that, or its document is. */
+/**
+ * What a person reads when a save is over that, or its document is. It is
+ * sent with `tooLarge: true`, which is how the editor knows to show it.
+ */
 const PAGE_TOO_LARGE_MESSAGE = `This page is larger than the ${DOCUMENT_SAVE_MAX_LABEL} a page can hold.`;
 
 /**
@@ -762,7 +765,7 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
       data = await readPageJsonBody(request);
     } catch (error: unknown) {
       if (error instanceof UploadTooLargeError) {
-        return Response.json({ error: PAGE_TOO_LARGE_MESSAGE }, { status: 413 });
+        return Response.json({ error: PAGE_TOO_LARGE_MESSAGE, tooLarge: true }, { status: 413 });
       }
       throw error;
     }
@@ -974,7 +977,7 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
           typeof data.content === 'string' &&
           textOverBytes(data.content, DOCUMENT_SAVE_MAX_BYTES)
         ) {
-          return Response.json({ error: PAGE_TOO_LARGE_MESSAGE }, { status: 413 });
+          return Response.json({ error: PAGE_TOO_LARGE_MESSAGE, tooLarge: true }, { status: 413 });
         }
         const blocks = await canonicalizeDocumentAssets(
           actionAssetCtx,

@@ -151,7 +151,7 @@ test.describe('a whole-document save is counted before it is parsed', () => {
     expect(check).toBeGreaterThan(-1);
     expect(parse).toBeGreaterThan(check);
     expect(ACTION_SOURCE.slice(check, parse)).toContain(
-      'return Response.json({ error: PAGE_TOO_LARGE_MESSAGE }, { status: 413 });'
+      'return Response.json({ error: PAGE_TOO_LARGE_MESSAGE, tooLarge: true }, { status: 413 });'
     );
     expect(ACTION_SOURCE).toContain(
       'const PAGE_TOO_LARGE_MESSAGE = `This page is larger than the ${DOCUMENT_SAVE_MAX_LABEL} a page can hold.`;'
@@ -182,5 +182,27 @@ test.describe('merge choices are counted before they are parsed', () => {
     // The live preview accept, the save, and the preview accept.
     expect(reads).toHaveLength(3);
     expect(ACTION_SOURCE).not.toContain('JSON.parse(data.resolutions)');
+  });
+});
+
+test.describe('a save refused for its size shows its sentence', () => {
+  test('both size refusals carry the flag the editor reads', () => {
+    const answers = ACTION_SOURCE.match(/Response\.json\(\{ error: PAGE_TOO_LARGE_MESSAGE[^)]*\)/g);
+    expect(answers).toHaveLength(2);
+    for (const answer of answers ?? []) {
+      expect(answer).toBe(
+        'Response.json({ error: PAGE_TOO_LARGE_MESSAGE, tooLarge: true }, { status: 413 })'
+      );
+    }
+  });
+
+  test('the editor shows the sentence once per answer, beside the failed status', () => {
+    const effect = EDITOR_SOURCE.slice(
+      EDITOR_SOURCE.indexOf('if (fetcher.data?.code && !fetcher.data?.conflict) return;')
+    );
+    const branch = effect.slice(0, effect.indexOf("setSaveStatus('error');"));
+    expect(branch).toContain('const notice = saveTooLargeNotice(fetcher.data);');
+    expect(branch).toContain('if (notice && toastedSaveRef.current !== fetcher.data) {');
+    expect(branch).toContain('toast.error(notice);');
   });
 });

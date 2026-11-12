@@ -20,6 +20,7 @@ import {
   deriveSaveMergeReport,
   deriveSaveConflict,
   isCodeFallbackRefusal,
+  saveTooLargeNotice,
   type SaveBaseline,
   type SaveFetcherData,
 } from '../../app/routes/$classroomSlug.$pageId/saveState.ts';
@@ -104,5 +105,26 @@ test.describe('isCodeFallbackRefusal (P9)', () => {
     expect(isCodeFallbackRefusal({ error: 'boom' })).toBe(false);
     expect(isCodeFallbackRefusal({ success: true, sha: 'sha-1' })).toBe(false);
     expect(isCodeFallbackRefusal(undefined)).toBe(false);
+  });
+});
+
+// ─── A save refused for its size shows the server's sentence ─────────────────
+
+test.describe('saveTooLargeNotice', () => {
+  const SENTENCE = 'This page is larger than the 4 MB a page can hold.';
+
+  test('the sentence of a save refused for its size', () => {
+    expect(saveTooLargeNotice({ error: SENTENCE, tooLarge: true })).toBe(SENTENCE);
+  });
+
+  test('nothing for any other failure, a fallback in flight, or success', () => {
+    // A failure without the flag keeps the header's status alone: its text
+    // comes from wherever the save failed.
+    expect(saveTooLargeNotice({ error: 'Request failed' })).toBeNull();
+    expect(saveTooLargeNotice({ error: 'x', code: 'OPS_MALFORMED' })).toBeNull();
+    expect(saveTooLargeNotice({ conflict: true, message: 'changed' })).toBeNull();
+    expect(saveTooLargeNotice({ tooLarge: true })).toBeNull();
+    expect(saveTooLargeNotice({ success: true, sha: 'sha-1' })).toBeNull();
+    expect(saveTooLargeNotice(undefined)).toBeNull();
   });
 });
