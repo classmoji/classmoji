@@ -42,3 +42,35 @@ export function readSaveOps<T>(raw: unknown, schema: OpsSchema<T>): T | null {
     return null;
   }
 }
+
+/**
+ * The ops of an ops save, read with `readSaveOps` and then passed through
+ * `canonicalize` (the route's asset pass), or null when either step fails. A
+ * pass that throws is answered like ops that cannot be read, so the editor
+ * falls back to one whole-document save.
+ */
+export async function readCanonicalSaveOps<T>(
+  raw: unknown,
+  schema: OpsSchema<T>,
+  canonicalize: (ops: T) => Promise<T>
+): Promise<T | null> {
+  const ops = readSaveOps(raw, schema);
+  if (ops === null) return null;
+  try {
+    return await canonicalize(ops);
+  } catch (error: unknown) {
+    logOpsRefusal(error);
+    return null;
+  }
+}
+
+/**
+ * One line for ops refused because reading them threw: where, and the error's
+ * class. Never the ops, and never the error's text, which can quote them.
+ */
+function logOpsRefusal(error: unknown): void {
+  console.warn(
+    '[pages] page save: ops refused:',
+    error instanceof Error ? error.name : typeof error
+  );
+}

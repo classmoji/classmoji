@@ -17,7 +17,7 @@ import {
   textOverBytes,
   uploadBodyLimit,
 } from '@classmoji/utils/upload-limit';
-import { OPS_MALFORMED_ANSWER, readSaveOps } from '~/utils/saveOps.server.ts';
+import { OPS_MALFORMED_ANSWER, readCanonicalSaveOps } from '~/utils/saveOps.server.ts';
 import { uploadRefusalStatus } from '@classmoji/services';
 import { ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
 import { pageMutationBlocked } from '~/utils/auth.server.ts';
@@ -900,14 +900,19 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
     // malformed (or a check that throws) are a typed 400 the client recovers
     // from by falling back to a full-document save — never a raw TypeError →
     // 500 (plan §7 P8).
+    //
+    // Defense in depth: the same read strips any signed URL back to its repo
+    // path BEFORE it can be committed. An ops save carries only the blocks
+    // that changed — which is exactly where a just-uploaded image's display
+    // URL would be. A pass that throws takes the same 400.
     let saveOps: unknown[] | null = null;
     if (data.ops != null) {
-      const ops = readSaveOps(data.ops, ClassmojiService.pageContent.pageBlockOpsPayloadSchema);
-      if (!ops) return Response.json(OPS_MALFORMED_ANSWER, { status: 400 });
-      // Defense in depth: strip any signed URL back to its repo path BEFORE it
-      // can be committed. An ops save carries only the blocks that changed —
-      // which is exactly where a just-uploaded image's display URL would be.
-      saveOps = await canonicalizeOpsAssets(actionAssetCtx, ops);
+      saveOps = await readCanonicalSaveOps(
+        data.ops,
+        ClassmojiService.pageContent.pageBlockOpsPayloadSchema,
+        ops => canonicalizeOpsAssets(actionAssetCtx, ops)
+      );
+      if (!saveOps) return Response.json(OPS_MALFORMED_ANSWER, { status: 400 });
     }
 
     try {

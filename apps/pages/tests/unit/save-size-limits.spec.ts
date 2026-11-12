@@ -15,7 +15,11 @@ import { test, expect } from '@playwright/test';
 import { ClassmojiService } from '@classmoji/services';
 import { DOCUMENT_SAVE_MAX_BYTES } from '@classmoji/utils/repo-limits';
 import { textOverBytes } from '@classmoji/utils/upload-limit';
-import { OPS_MALFORMED_ANSWER, readSaveOps } from '../../app/utils/saveOps.server.ts';
+import {
+  OPS_MALFORMED_ANSWER,
+  readCanonicalSaveOps,
+  readSaveOps,
+} from '../../app/utils/saveOps.server.ts';
 import { isCodeFallbackRefusal } from '../../app/routes/$classroomSlug.$pageId/saveState.ts';
 
 const source = (relative: string) =>
@@ -118,13 +122,18 @@ test.describe('an ops save is counted before it is parsed', () => {
 });
 
 test.describe('the page action answers unreadable ops so the editor falls back', () => {
-  test('it reads ops only through readSaveOps, and answers null with OPS_MALFORMED', () => {
+  test('it reads ops only through readCanonicalSaveOps, and answers null with OPS_MALFORMED', () => {
+    const read = ACTION_SOURCE.indexOf('saveOps = await readCanonicalSaveOps(');
+    expect(read).toBeGreaterThan(-1);
+    const call = ACTION_SOURCE.slice(read, ACTION_SOURCE.indexOf(');', read));
+    expect(call).toContain('data.ops,');
+    expect(call).toContain('ClassmojiService.pageContent.pageBlockOpsPayloadSchema,');
+    expect(call).toContain('ops => canonicalizeOpsAssets(actionAssetCtx, ops)');
     expect(ACTION_SOURCE).toContain(
-      'const ops = readSaveOps(data.ops, ClassmojiService.pageContent.pageBlockOpsPayloadSchema);'
+      'if (!saveOps) return Response.json(OPS_MALFORMED_ANSWER, { status: 400 });'
     );
-    expect(ACTION_SOURCE).toContain(
-      'if (!ops) return Response.json(OPS_MALFORMED_ANSWER, { status: 400 });'
-    );
+    // The asset pass runs only inside that read.
+    expect(ACTION_SOURCE.match(/canonicalizeOpsAssets\(/g)).toHaveLength(1);
     expect(ACTION_SOURCE).not.toMatch(/JSON\.parse\(data\.ops\)/);
     expect(OPS_MALFORMED_ANSWER.code).toBe('OPS_MALFORMED');
   });
@@ -204,5 +213,37 @@ test.describe('a save refused for its size shows its sentence', () => {
     expect(branch).toContain('const notice = saveTooLargeNotice(fetcher.data);');
     expect(branch).toContain('if (notice && toastedSaveRef.current !== fetcher.data) {');
     expect(branch).toContain('toast.error(notice);');
+  });
+});
+
+test.describe('ops whose asset pass throws take the whole-page fallback', () => {
+  const text = JSON.stringify([
+    {
+      op: 'insert',
+      blocks: [{ type: 'image', props: { url: 'images/a.png' } }],
+      position: { at: 'end' },
+    },
+  ]);
+
+  test('a pass that throws is answered like ops that cannot be read', async () => {
+    // Control: the schema takes these ops.
+    expect(readSaveOps(text, schema)).toHaveLength(1);
+    let passes = 0;
+    const throwing = async (): Promise<never> => {
+      passes += 1;
+      throw new RangeError('pass failed');
+    };
+    expect(await readCanonicalSaveOps(text, schema, throwing)).toBeNull();
+    expect(passes).toBe(1);
+  });
+
+  test('ops the asset pass reads come back from it', async () => {
+    const seen: unknown[] = [];
+    const ops = await readCanonicalSaveOps(text, schema, async parsed => {
+      seen.push(parsed);
+      return parsed;
+    });
+    expect(ops).toHaveLength(1);
+    expect(seen).toEqual([ops]);
   });
 });
