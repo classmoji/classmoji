@@ -36,6 +36,7 @@ const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
   if (body._action === 'recordModalOpen') {
     return new Promise((resolve, reject) => {
       settleOpen = { resolve, reject };
+      init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
     });
   }
   return Promise.resolve({ ok: true, json: async () => ({ success: true }) });
@@ -238,6 +239,53 @@ describe('useAttemptTime after a resume with a gap', () => {
       totalDurationMs: LOADED.totalMs + 5_000,
       unfocusedDurationMs: LOADED.unfocusedMs,
     });
+  });
+
+  it('holds the final count of an attempt completed before the open is answered', async () => {
+    await render({ active: true, isVisible: true });
+    await advance(20_000);
+    await render({ active: false, isVisible: true });
+    // The stopped clock lacks the gap: nothing is sent yet.
+    expect(posted('updateMetrics')).toHaveLength(0);
+
+    settleOpen!.resolve(openAnswer(stored));
+    await flushPromises();
+    expect(posted('updateMetrics')).toHaveLength(1);
+    expect(posted('updateMetrics')[0]).toMatchObject({
+      totalDurationMs: stored.total_duration_ms,
+      unfocusedDurationMs: stored.unfocused_duration_ms,
+    });
+    expect(latest!.finalMetrics).toMatchObject({ totalMs: stored.total_duration_ms });
+  });
+
+  it('stops waiting for an open that never answers', async () => {
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation(ms => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), ms);
+      return controller.signal;
+    });
+    await render({ active: true, isVisible: true });
+    await advance(9_000);
+    expect(posted('updateMetrics')).toHaveLength(0);
+
+    await advance(1_000);
+    await flushPromises();
+    // The checkpoint held since 5 s goes as soon as the wait gives up.
+    expect(posted('updateMetrics').at(-1)).toMatchObject({
+      totalDurationMs: LOADED.totalMs + 10_000,
+      unfocusedDurationMs: LOADED.unfocusedMs,
+    });
+  });
+
+  it('sends nothing when the open is answered after the drawer is gone', async () => {
+    await render({ active: true, isVisible: true });
+    await advance(10_000);
+    await act(async () => root.unmount());
+    const before = posts.length;
+    settleOpen!.resolve(openAnswer(stored));
+    await flushPromises();
+    expect(posts.length).toBe(before);
+    root = createRoot(container);
   });
 
   it('still sends checkpoints when the open answers without durations', async () => {

@@ -1970,6 +1970,9 @@ const postQuizAction = (payload: Record<string, unknown>, preferBeacon = false) 
   }).catch(() => {});
 };
 
+/** How long the drawer waits for the open's answer before counting without it. */
+const OPEN_ANSWER_TIMEOUT_MS = 10_000;
+
 /** The stored durations an api.quiz answer carries, when it carries both. */
 const storedDurationsOf = (answer: unknown): { totalMs: number; unfocusedMs: number } | null => {
   const durations = (answer as { durations?: Record<string, unknown> } | null)?.durations;
@@ -2011,6 +2014,15 @@ export function useAttemptTime({
   // waiting goes once the answer is in.
   const openSettledRef = useRef(false);
   const updateHeldRef = useRef(false);
+  // The completion's final count waits for it too (see below).
+  const finalHeldRef = useRef(false);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const sendUpdate = useCallback(
     (preferBeacon = false) => {
@@ -2057,8 +2069,11 @@ export function useAttemptTime({
   // A gap since the drawer was last closed counts as time away (server side):
   // the answer carries the stored durations with it, and the clock counts on
   // from them. Checkpoints go once it is in, whatever it is.
+  // A stalled answer gives up after OPEN_ANSWER_TIMEOUT_MS, so nothing is
+  // held for the whole session.
   const sendUpdateRef = useRef(sendUpdate);
   sendUpdateRef.current = sendUpdate;
+  const sendFinalRef = useRef<() => void>(() => {});
   const openedRef = useRef(false);
   useEffect(() => {
     if (!active || openedRef.current) return;
@@ -2067,14 +2082,23 @@ export function useAttemptTime({
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ _action: 'recordModalOpen', attemptId }),
+      signal:
+        typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+          ? AbortSignal.timeout(OPEN_ANSWER_TIMEOUT_MS)
+          : undefined,
     })
       .then(response => (response.ok ? response.json() : null))
       .catch(() => null)
       .then(answer => {
+        openSettledRef.current = true;
+        // Gone already: its close carried the time.
+        if (!mountedRef.current) return;
         const stored = storedDurationsOf(answer);
         if (stored) raiseToRef.current(stored.totalMs, stored.unfocusedMs);
-        openSettledRef.current = true;
-        if (updateHeldRef.current) {
+        if (finalHeldRef.current) {
+          finalHeldRef.current = false;
+          sendFinalRef.current();
+        } else if (updateHeldRef.current) {
           updateHeldRef.current = false;
           sendUpdateRef.current();
         }
@@ -2131,11 +2155,10 @@ export function useAttemptTime({
   const wasActiveRef = useRef(active);
   const finalSentRef = useRef(false);
   const [finalMetrics, setFinalMetrics] = useState<ResultsFocusMetrics | null>(null);
-  useEffect(() => {
-    const completedNow = wasActiveRef.current && !active;
-    wasActiveRef.current = active;
-    if (!completedNow || finalSentRef.current) return;
-    finalSentRef.current = true;
+  // Before the open's answer the stopped clock lacks the gap the server
+  // added, so the final count waits for it (the answer then raises the
+  // stopped clock and sends this).
+  const sendFinal = () => {
     const snapshot = getMetricsSnapshot();
     if (!snapshot) return;
     const focusedMs = Math.max(0, snapshot.totalMs - snapshot.unfocusedMs);
@@ -2156,7 +2179,19 @@ export function useAttemptTime({
       unfocusedDurationMs: unfocusedMs,
     });
     lastSentRef.current = { totalMs: snapshot.totalMs, unfocusedMs };
-  }, [active, attemptId, getMetricsSnapshot]);
+  };
+  sendFinalRef.current = sendFinal;
+  useEffect(() => {
+    const completedNow = wasActiveRef.current && !active;
+    wasActiveRef.current = active;
+    if (!completedNow || finalSentRef.current) return;
+    finalSentRef.current = true;
+    if (!openSettledRef.current) {
+      finalHeldRef.current = true;
+      return;
+    }
+    sendFinalRef.current();
+  }, [active]);
 
   /** Save the time so far now (before the attempt completes); the final count once it has. */
   return { flush: sendUpdate, finalMetrics };
