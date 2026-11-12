@@ -432,7 +432,7 @@ export function createPageAdapter(
     },
 
     parseOps(raw) {
-      const parsed = parseOpsPayload(pageContent.pageBlockOpsPayloadSchema, raw);
+      const parsed = parseOpsPayload(pageContent.pageBlockOpsPayloadSchema, raw, 'page ops');
       if (!parsed.success) {
         throw new CollabHttpError(400, { error: 'invalid-ops', issues: parsed.issues });
       }

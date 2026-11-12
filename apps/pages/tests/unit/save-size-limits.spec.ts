@@ -109,6 +109,33 @@ test.describe('an ops save is counted before it is parsed', () => {
     expect(readSaveOps(JSON.stringify([{ op: 'delete', id: 'a' }]), throwing)).toBeNull();
   });
 
+  test('each refusal that threw is logged by where and the error class only', () => {
+    const lines: string[] = [];
+    const real = console.warn;
+    console.warn = (...args: unknown[]) => lines.push(args.map(String).join(' '));
+    try {
+      const throwing = {
+        safeParse: (value: unknown): never => {
+          throw new RangeError(`check failed on ${JSON.stringify(value)}`);
+        },
+      };
+      const ops = JSON.stringify([{ op: 'delete', id: 'SENTINEL-OPS-7f3a' }]);
+      expect(readSaveOps(ops, throwing)).toBeNull();
+      expect(readSaveOps('[{"op":"SENTINEL-OPS-7f3a"', schema)).toBeNull();
+      expect(readSaveOps(opsTextOf(DOCUMENT_SAVE_MAX_BYTES + 1), schema)).toBeNull();
+      // Refused without a throw: no line.
+      expect(readSaveOps(JSON.stringify([{ op: 'rename', id: 'a' }]), schema)).toBeNull();
+    } finally {
+      console.warn = real;
+    }
+    expect(lines).toEqual([
+      '[pages] page save: ops refused: RangeError',
+      '[pages] page save: ops refused: SyntaxError',
+      '[pages] page save: ops refused: UploadTooLargeError',
+    ]);
+    expect(lines.join('\n')).not.toContain('SENTINEL');
+  });
+
   test('a page the size of the largest real one saves as ops', () => {
     const blocks = pageOfAtLeast(LARGEST_REAL_PAGE_BYTES);
     const ops = [];

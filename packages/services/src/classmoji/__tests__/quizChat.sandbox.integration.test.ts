@@ -445,13 +445,19 @@ describe.skipIf(!RUN)('quiz chat: code sandbox questions (integration)', () => {
     const { attemptId } = await withCard();
     const before = await countsOf(attemptId);
     const spy = vi.spyOn(CodeSubmissionInputSchema, 'safeParse').mockImplementationOnce(() => {
-      throw new Error('parse failed');
+      throw new TypeError('parse failed SENTINEL-QUIZ-7f3a');
     });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       expect(await codeOf(submit(attemptId, submission()))).toBe('invalid_submission');
       expect(spy).toHaveBeenCalled();
+      // Logged by where and the error class only.
+      const lines = warn.mock.calls.map(call => call.map(String).join(' '));
+      expect(lines).toContain('[quiz-chat] code submission check threw: TypeError');
+      expect(lines.join('\n')).not.toContain('SENTINEL');
     } finally {
       spy.mockRestore();
+      warn.mockRestore();
     }
     await expectNothingWritten(attemptId, before);
   });

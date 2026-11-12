@@ -31,14 +31,16 @@ export function readSaveOps<T>(raw: unknown, schema: OpsSchema<T>): T | null {
   if (typeof raw === 'string') {
     try {
       value = parseJsonWithin(raw, DOCUMENT_SAVE_MAX_BYTES);
-    } catch {
+    } catch (error: unknown) {
+      logOpsRefusal(error);
       return null;
     }
   }
   try {
     const parsed = schema.safeParse(value);
     return parsed.success ? (parsed.data as T) : null;
-  } catch {
+  } catch (error: unknown) {
+    logOpsRefusal(error);
     return null;
   }
 }
@@ -65,8 +67,9 @@ export async function readCanonicalSaveOps<T>(
 }
 
 /**
- * One line for ops refused because reading them threw: where, and the error's
- * class. Never the ops, and never the error's text, which can quote them.
+ * One line for ops refused because reading them threw (too large, not JSON, a
+ * check or the asset pass that threw): where, and the error's class. Never the
+ * ops, and never the error's text, which can quote them.
  */
 function logOpsRefusal(error: unknown): void {
   console.warn(

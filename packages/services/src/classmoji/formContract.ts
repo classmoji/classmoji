@@ -1190,15 +1190,21 @@ function optionListsOf(field: FormField): FormOption[][] {
 
 /**
  * `schema.safeParse(value)`, or null when the parse throws: callers refuse it
- * with their usual code.
+ * with their usual code. A throw is logged as one line naming `label` and the
+ * error's class, never the value or the error's text, which can quote it.
  */
 function safeParseOrNull<T extends z.ZodTypeAny>(
   schema: T,
-  value: unknown
+  value: unknown,
+  label: string
 ): z.ZodSafeParseResult<z.output<T>> | null {
   try {
     return schema.safeParse(value);
-  } catch {
+  } catch (error: unknown) {
+    console.warn(
+      `[forms] ${label} check threw:`,
+      error instanceof Error ? error.name : typeof error
+    );
     return null;
   }
 }
@@ -1211,7 +1217,7 @@ function safeParseOrNull<T extends z.ZodTypeAny>(
  * @throws Error with code FORM_DEFINITION_INVALID / FORM_DEFINITION_TOO_LARGE.
  */
 export function parseFormDefinition(input: unknown): FormDefinition {
-  const parsed = safeParseOrNull(definitionSchema, input);
+  const parsed = safeParseOrNull(definitionSchema, input, 'form definition');
   if (!parsed) {
     throw formContractError(
       FORM_DEFINITION_INVALID,
@@ -1388,7 +1394,7 @@ export function parseAnswers(
     );
   }
 
-  const parsed = safeParseOrNull(buildResponseSchema(fields, ctx), answers);
+  const parsed = safeParseOrNull(buildResponseSchema(fields, ctx), answers, 'form answers');
   if (!parsed) {
     throw formContractError(FORM_ANSWERS_INVALID, 'Invalid answers: they could not be checked.');
   }

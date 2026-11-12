@@ -507,7 +507,7 @@ export class DeckAdapter implements CollabAdapter<'deck', DeckOp> {
   }
 
   parseOps(raw: unknown): DeckOp[] {
-    const parsed = parseOpsPayload(deckOpsPayloadSchema, raw);
+    const parsed = parseOpsPayload(deckOpsPayloadSchema, raw, 'deck ops');
     if (!parsed.success) {
       throw new CollabHttpError(400, { error: 'invalid-ops', issues: parsed.issues });
     }

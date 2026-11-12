@@ -74,7 +74,7 @@ test.describe('the deck action', () => {
     expect(parse).toBeGreaterThan(-1);
     const after = ACTION.slice(parse);
     expect(after.slice(0, after.indexOf('\n    }\n'))).toContain(
-      "} catch {\n      return opsFallback('Malformed ops payload — use a full-document save.');"
+      "} catch (error: unknown) {\n      // One line per refusal: where, and the error's class.\n      console.warn(\n        '[slides] deck save: ops refused:',\n        error instanceof Error ? error.name : typeof error\n      );\n      return opsFallback('Malformed ops payload — use a full-document save.');"
     );
     expect(ACTION).not.toContain('JSON.parse(rawOps)');
     // The fallback's `code` is what makes the editor re-send the whole deck once.

@@ -1995,7 +1995,12 @@ export const action = async ({
     let ops;
     try {
       ops = deckOpsPayloadSchema.parse(parseJsonWithin(rawOps, DOCUMENT_SAVE_MAX_BYTES));
-    } catch {
+    } catch (error: unknown) {
+      // One line per refusal: where, and the error's class.
+      console.warn(
+        '[slides] deck save: ops refused:',
+        error instanceof Error ? error.name : typeof error
+      );
       return opsFallback('Malformed ops payload — use a full-document save.');
     }
 
