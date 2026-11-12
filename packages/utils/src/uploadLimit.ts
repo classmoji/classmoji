@@ -201,3 +201,25 @@ export async function readLimitedFormData(request: Request, maxBytes: number): P
     headers: contentType ? { 'Content-Type': contentType } : {},
   }).formData();
 }
+
+/**
+ * True when `text` is longer than `maxBytes` once encoded as UTF-8.
+ *
+ * Every UTF-16 unit is at least one byte and at most three, so the length
+ * alone decides most texts; only one in between is encoded to be counted.
+ */
+export function textOverBytes(text: string, maxBytes: number): boolean {
+  if (text.length > maxBytes) return true;
+  if (text.length * 3 <= maxBytes) return false;
+  return new TextEncoder().encode(text).byteLength > maxBytes;
+}
+
+/**
+ * `JSON.parse` for a field that may hold at most `maxBytes`. A longer text is
+ * refused with `UploadTooLargeError` before any of it is parsed; text that is
+ * not JSON throws the parser's own error.
+ */
+export function parseJsonWithin(text: string, maxBytes: number): unknown {
+  if (textOverBytes(text, maxBytes)) throw new UploadTooLargeError(maxBytes);
+  return JSON.parse(text);
+}

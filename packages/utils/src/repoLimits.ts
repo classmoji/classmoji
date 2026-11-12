@@ -92,3 +92,15 @@ export const SLIDES_IMPORT_MAX_BYTES = 150 * MIB;
 
 /** The import cap as a person reads it — `150 MB`. */
 export const SLIDES_IMPORT_MAX_LABEL = formatMegabytes(SLIDES_IMPORT_MAX_BYTES);
+
+/**
+ * 4 MiB — the most one page or deck save may carry: the whole document (a
+ * page's `content.json`, a deck's slides HTML) or its changes (ops). Each is
+ * counted before it is parsed, and the save routes size their request bodies
+ * from it.
+ */
+// Over 20 times the largest real page (64 KiB) and deck (186 KiB), measured 2026-11-11.
+export const DOCUMENT_SAVE_MAX_BYTES = 4 * MIB;
+
+/** The save cap as a person reads it — `4 MB`. */
+export const DOCUMENT_SAVE_MAX_LABEL = formatMegabytes(DOCUMENT_SAVE_MAX_BYTES);

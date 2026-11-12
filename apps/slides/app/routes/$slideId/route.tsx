@@ -38,14 +38,19 @@ import {
   type MergeResolution,
 } from '@classmoji/services/slides';
 import {
+  DOCUMENT_SAVE_MAX_BYTES,
+  DOCUMENT_SAVE_MAX_LABEL,
   REPO_REST_MAX_BYTES,
   REPO_REST_MAX_LABEL,
   repoFileTooLargeMessage,
 } from '@classmoji/utils/repo-limits';
 import { isSafeReturnPath, safeReturnPath } from '@classmoji/utils/return-path';
 import {
+  MULTIPART_OVERHEAD_BYTES,
   UploadTooLargeError,
+  parseJsonWithin,
   readLimitedFormData,
+  textOverBytes,
   uploadBodyLimit,
 } from '@classmoji/utils/upload-limit';
 import { SandpackRenderer } from '@classmoji/ui-components/sandpack';
@@ -798,21 +803,27 @@ async function forgetThemeFiles(
 const DECK_TOO_LARGE_MESSAGE = `This deck is larger than the ${REPO_REST_MAX_LABEL} your course repository accepts`;
 
 /**
+ * The same, for a save over the deck's own cap (`DOCUMENT_SAVE_MAX_BYTES`):
+ * its HTML, its ops, or the request carrying them. No full stop, as above.
+ */
+const DECK_SAVE_TOO_LARGE_MESSAGE = `This deck is larger than the ${DOCUMENT_SAVE_MAX_LABEL} a deck can hold`;
+
+/**
  * The most the deck editor's action reads of a request body.
  *
  * Two shapes arrive here. The image upload is multipart and carries one file,
  * so its cap is the repository's per-file ceiling plus the multipart envelope.
  * Every other intent — the deck save above all — is a url-encoded form whose
- * largest field is the deck's HTML, and percent-encoding can inflate markup up
- * to about three times (every `<`, `>`, `"` and space), so that shape gets
- * three times the same ceiling: room for any deck the repository could store,
- * and still a bound.
+ * largest field is the deck's HTML or its ops, at most
+ * `DOCUMENT_SAVE_MAX_BYTES`, and percent-encoding can inflate markup up to
+ * about three times (every `<`, `>`, `"` and space), so that shape gets three
+ * times the save cap plus slack for the other fields.
  */
 function deckActionBodyLimit(request: Request): number {
   const contentType = request.headers.get('content-type') ?? '';
   return contentType.includes('multipart/form-data')
     ? uploadBodyLimit(REPO_REST_MAX_BYTES)
-    : 3 * REPO_REST_MAX_BYTES;
+    : 3 * DOCUMENT_SAVE_MAX_BYTES + MULTIPART_OVERHEAD_BYTES;
 }
 
 export const action = async ({
@@ -872,7 +883,7 @@ export const action = async ({
       // — lets a changes-only save fall back to ONE whole-deck save (its ops can
       // outweigh the document they describe); a whole-deck save that is still
       // too large shows the sentence.
-      return data({ error: DECK_TOO_LARGE_MESSAGE, tooLarge: true }, { status: 413 });
+      return data({ error: DECK_SAVE_TOO_LARGE_MESSAGE, tooLarge: true }, { status: 413 });
     }
     throw error;
   }
@@ -1966,9 +1977,11 @@ export const action = async ({
       return opsFallback('Ops saves need a deck-sourced base token — use a full-document save.');
     }
 
+    // Counted before they are parsed: ops over the save cap, malformed ops and
+    // a check that throws all take the whole-doc fallback.
     let ops;
     try {
-      ops = deckOpsPayloadSchema.parse(JSON.parse(rawOps));
+      ops = deckOpsPayloadSchema.parse(parseJsonWithin(rawOps, DOCUMENT_SAVE_MAX_BYTES));
     } catch {
       return opsFallback('Malformed ops payload — use a full-document save.');
     }
@@ -2057,6 +2070,11 @@ export const action = async ({
 
   // ── Whole-document save (Phase 4b dual-write; also the ops fallback) ──────
   const htmlContent = formData.get('content') as string;
+  // The deck is counted before it is parsed. No `tooLarge`: a whole-deck save
+  // is the fallback, and a retry would carry the same deck.
+  if (typeof htmlContent === 'string' && textOverBytes(htmlContent, DOCUMENT_SAVE_MAX_BYTES)) {
+    return data({ error: DECK_SAVE_TOO_LARGE_MESSAGE }, { status: 413 });
+  }
 
   try {
     // Parse the editor's posted `<div class="slides">` wrapper into

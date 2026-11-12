@@ -470,12 +470,15 @@ test.describe('the upload endpoints', () => {
     expect(VIEWER_SOURCE).toContain(
       'const DECK_TOO_LARGE_MESSAGE = `This deck is larger than the ${REPO_REST_MAX_LABEL} your course repository accepts`;'
     );
+    expect(VIEWER_SOURCE).toContain(
+      'const DECK_SAVE_TOO_LARGE_MESSAGE = `This deck is larger than the ${DOCUMENT_SAVE_MAX_LABEL} a deck can hold`;'
+    );
     // `tooLarge`, never `code`: the client answers any `code` with a whole-deck
     // re-submit, so a whole-deck save that carried one would loop.
     expect(action).toContain(
-      'return data({ error: DECK_TOO_LARGE_MESSAGE, tooLarge: true }, { status: 413 });'
+      'return data({ error: DECK_SAVE_TOO_LARGE_MESSAGE, tooLarge: true }, { status: 413 });'
     );
-    expect(action).not.toMatch(/DECK_TOO_LARGE_MESSAGE,\s*code:/);
+    expect(action).not.toMatch(/DECK_(SAVE_)?TOO_LARGE_MESSAGE,\s*code:/);
     // GitHub's own refusal carries no flag — a retry would be refused again.
     expect(
       action.match(/return data\(\{ error: DECK_TOO_LARGE_MESSAGE \}, \{ status: 413 \}\);/g)
