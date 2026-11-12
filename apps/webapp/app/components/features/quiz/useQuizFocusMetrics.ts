@@ -79,30 +79,35 @@ export function useQuizFocusMetrics({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attemptId]);
 
-  // Update base values when server reports higher values (e.g., after modal gap calculation)
-  // CRITICAL: Must reset sessionStartRef to prevent double-counting time already in the base
+  /**
+   * Stored values from the server (the gap added on open, a refreshed
+   * attempt): each one above this tracker's count now replaces it, and its
+   * running segment counts on from now (the time so far is in the stored
+   * value). A value at or below the count is a write this tab already made,
+   * and changes nothing. Total and unfocused are raised independently.
+   */
+  const raiseTo = useCallback(
+    (totalMs: number | null | undefined, unfocusedMs: number | null | undefined) => {
+      const total = sanitizeInputValue(totalMs);
+      const unfocused = sanitizeInputValue(unfocusedMs);
+      const current = getMetricsSnapshot();
+      const now = Date.now();
+      if (total > current.totalMs) {
+        baseTotalRef.current = total;
+        if (sessionStartRef.current !== null) sessionStartRef.current = now;
+      }
+      if (unfocused > current.unfocusedMs) {
+        baseUnfocusedRef.current = unfocused;
+        if (unfocusedStartRef.current !== null) unfocusedStartRef.current = now;
+      }
+    },
+    [getMetricsSnapshot]
+  );
+
+  // A revalidated attempt can carry higher stored values.
   useEffect(() => {
-    const sanitizedTotal = sanitizeInputValue(initialTotalMs);
-    const sanitizedUnfocused = sanitizeInputValue(initialUnfocusedMs);
-
-    const totalIncreased = sanitizedTotal > baseTotalRef.current;
-    const unfocusedIncreased = sanitizedUnfocused > baseUnfocusedRef.current;
-
-    if (totalIncreased) {
-      baseTotalRef.current = sanitizedTotal;
-    }
-    if (unfocusedIncreased) {
-      baseUnfocusedRef.current = sanitizedUnfocused;
-    }
-
-    // If base was updated from server (e.g., modal gap applied), reset session start
-    // to prevent double-counting the elapsed time already absorbed into the base.
-    // Without this reset, getMetricsSnapshot() would add (now - originalSessionStart)
-    // to a base that already includes that time, inflating the total.
-    if ((totalIncreased || unfocusedIncreased) && sessionStartRef.current !== null) {
-      sessionStartRef.current = Date.now();
-    }
-  }, [initialTotalMs, initialUnfocusedMs]);
+    raiseTo(initialTotalMs, initialUnfocusedMs);
+  }, [initialTotalMs, initialUnfocusedMs, raiseTo]);
 
   // Main effect: Start session and set up event listeners
   useEffect(() => {
@@ -176,5 +181,6 @@ export function useQuizFocusMetrics({
   return {
     getMetricsSnapshot,
     finalizeCurrentSession,
+    raiseTo,
   };
 }

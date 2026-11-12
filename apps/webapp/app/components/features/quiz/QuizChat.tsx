@@ -1970,7 +1970,16 @@ const postQuizAction = (payload: Record<string, unknown>, preferBeacon = false) 
   }).catch(() => {});
 };
 
-function useAttemptTime({
+/** The stored durations an api.quiz answer carries, when it carries both. */
+const storedDurationsOf = (answer: unknown): { totalMs: number; unfocusedMs: number } | null => {
+  const durations = (answer as { durations?: Record<string, unknown> } | null)?.durations;
+  const totalMs = Number(durations?.total_duration_ms);
+  const unfocusedMs = Number(durations?.unfocused_duration_ms);
+  if (!durations || !Number.isFinite(totalMs) || !Number.isFinite(unfocusedMs)) return null;
+  return { totalMs, unfocusedMs };
+};
+
+export function useAttemptTime({
   attemptId,
   active,
   isVisible,
@@ -1983,7 +1992,7 @@ function useAttemptTime({
   initialTotalMs: number;
   initialUnfocusedMs: number;
 }) {
-  const { getMetricsSnapshot, finalizeCurrentSession } = useQuizFocusMetrics({
+  const { getMetricsSnapshot, finalizeCurrentSession, raiseTo } = useQuizFocusMetrics({
     isActive: active,
     attemptId,
     initialTotalMs,
@@ -1994,10 +2003,22 @@ function useAttemptTime({
   activeRef.current = active;
   const finalizeRef = useRef(finalizeCurrentSession);
   finalizeRef.current = finalizeCurrentSession;
+  const raiseToRef = useRef(raiseTo);
+  raiseToRef.current = raiseTo;
+  // Checkpoints wait for the open's answer: until the clock carries the gap
+  // the server added, it is below the stored totals, and the server (which
+  // only ever raises them) would drop every checkpoint. One asked for while
+  // waiting goes once the answer is in.
+  const openSettledRef = useRef(false);
+  const updateHeldRef = useRef(false);
 
   const sendUpdate = useCallback(
     (preferBeacon = false) => {
       if (!activeRef.current) return;
+      if (!openSettledRef.current) {
+        updateHeldRef.current = true;
+        return;
+      }
       const snapshot = getMetricsSnapshot();
       if (!snapshot) return;
       const previous = lastSentRef.current;
@@ -2033,12 +2054,31 @@ function useAttemptTime({
     );
   }, [attemptId]);
 
-  // A gap since the drawer was last closed counts as time away (server side).
+  // A gap since the drawer was last closed counts as time away (server side):
+  // the answer carries the stored durations with it, and the clock counts on
+  // from them. Checkpoints go once it is in, whatever it is.
+  const sendUpdateRef = useRef(sendUpdate);
+  sendUpdateRef.current = sendUpdate;
   const openedRef = useRef(false);
   useEffect(() => {
     if (!active || openedRef.current) return;
     openedRef.current = true;
-    postQuizAction({ _action: 'recordModalOpen', attemptId });
+    fetch('/api/quiz', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ _action: 'recordModalOpen', attemptId }),
+    })
+      .then(response => (response.ok ? response.json() : null))
+      .catch(() => null)
+      .then(answer => {
+        const stored = storedDurationsOf(answer);
+        if (stored) raiseToRef.current(stored.totalMs, stored.unfocusedMs);
+        openSettledRef.current = true;
+        if (updateHeldRef.current) {
+          updateHeldRef.current = false;
+          sendUpdateRef.current();
+        }
+      });
   }, [active, attemptId]);
 
   // A checkpoint soon after opening, then every 30 seconds.
