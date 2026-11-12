@@ -7,8 +7,9 @@
  */
 
 import { useState } from 'react';
-import { useLoaderData, useNavigation, Form, redirect, useActionData } from 'react-router';
+import { useLoaderData, useNavigation, Form, data, redirect, useActionData } from 'react-router';
 import { assertSlideAccess } from '@classmoji/auth/server';
+import { UploadTooLargeError, readLimitedFormData } from '@classmoji/utils/upload-limit';
 import { closeLiveDeck, liveEditingEnv } from '~/utils/collab/collab.server';
 import { isMediaBackedFileSlide, slideService } from '@classmoji/services/slides';
 import { useUser } from '~/root';
@@ -98,6 +99,9 @@ export const loader = async ({
   };
 };
 
+/** The most the confirmation form may send: it carries one field. */
+const DELETE_FORM_MAX_BYTES = 64 * 1024;
+
 export const action = async ({
   request,
   params,
@@ -107,9 +111,6 @@ export const action = async ({
 }) => {
   const { classroomSlug, slideId } = params;
   if (!classroomSlug || !slideId) return { error: 'Missing parameters' };
-  const formData = await request.formData();
-
-  const deleteTheme = formData.get('deleteTheme') === 'true';
 
   // Authorization: require edit permission to delete slides
   const { slide, membership } = await assertSlideAccess({
@@ -122,6 +123,19 @@ export const action = async ({
   if ((slide as { classroom?: { slug?: string } }).classroom?.slug !== classroomSlug) {
     return { error: 'Slide does not belong to this classroom' };
   }
+
+  // The form is one field, read only now, after the gate above, and through the
+  // byte-counting reader.
+  let formData: FormData;
+  try {
+    formData = await readLimitedFormData(request, DELETE_FORM_MAX_BYTES);
+  } catch (error: unknown) {
+    if (error instanceof UploadTooLargeError) {
+      return data({ error: 'That request is too large.' }, { status: 413 });
+    }
+    throw error;
+  }
+  const deleteTheme = formData.get('deleteTheme') === 'true';
 
   // A deck edited live is closed on the collab server first, so nobody keeps
   // typing into a deck that is about to disappear. Best effort: the delete

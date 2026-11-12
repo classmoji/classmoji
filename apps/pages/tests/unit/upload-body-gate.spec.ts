@@ -87,6 +87,20 @@ test.describe('page uploads read the body after the gate', () => {
     expect(action).not.toContain('await request.formData()');
   });
 
+  test('the page action gives the upload limit only to a multipart media type', () => {
+    const action = PAGE_ACTION_SOURCE.slice(
+      PAGE_ACTION_SOURCE.indexOf('async function pageAction')
+    );
+    const branch = action.indexOf(
+      "if (formMediaType(request.headers.get('content-type')) === MULTIPART_FORM) {"
+    );
+    const read = action.indexOf('await readLimitedFormData(request, uploadBodyLimit(');
+
+    for (const at of [branch, read]) expect(at).toBeGreaterThan(-1);
+    expect(branch).toBeLessThan(read);
+    expect(PAGE_ACTION_SOURCE).not.toContain("includes('multipart/form-data')");
+  });
+
   test('the page action reads a JSON save capped, after the same gates', () => {
     const action = PAGE_ACTION_SOURCE.slice(PAGE_ACTION_SOURCE.indexOf('export const action'));
     const status = action.indexOf('pageMutationBlocked(page.classroom, role)');

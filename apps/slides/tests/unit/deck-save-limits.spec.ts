@@ -152,6 +152,14 @@ test.describe('the deck action reads only the image upload as multipart', () => 
     expect(limit.slice(0, limit.indexOf('\n}'))).toContain('return isMultipart(request)');
     expect(ACTION).not.toContain("includes('multipart/form-data')");
   });
+
+  test('the multipart check reads the exact media type, as the form reader does', () => {
+    const check = VIEWER_SOURCE.slice(VIEWER_SOURCE.indexOf('function isMultipart('));
+    expect(check.slice(0, check.indexOf('\n}'))).toContain(
+      "return formMediaType(request.headers.get('content-type')) === MULTIPART_FORM;"
+    );
+    expect(VIEWER_SOURCE).not.toContain("includes('multipart/form-data')");
+  });
 });
 
 test.describe('the deck action counts id lists before it parses them', () => {

@@ -8,9 +8,11 @@ import {
 } from '@classmoji/utils/repo-limits';
 import {
   ID_LIST_MAX_BYTES,
+  MULTIPART_FORM,
   MULTIPART_OVERHEAD_BYTES,
   UploadTooLargeError,
   declaredBodyTooLarge,
+  formMediaType,
   parseJsonWithin,
   readLimitedBody,
   readLimitedFormData,
@@ -732,11 +734,12 @@ async function pageAction({ params, request }: PageActionArgs, slot: { held: boo
   const blocked = pageMutationBlocked(page.classroom, role);
   if (blocked) return blocked;
 
-  // Support both JSON and multipart form data (for file uploads)
-  const contentType = request.headers.get('content-type') || '';
+  // Support both JSON and multipart form data (for file uploads). The media
+  // type is read the way `readLimitedFormData` reads it, so the upload limit
+  // goes only to a body that is parsed as multipart.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- form/JSON data has dynamic shape
   let data: Record<string, any>, formData: FormData | undefined;
-  if (contentType.includes('multipart/form-data')) {
+  if (formMediaType(request.headers.get('content-type')) === MULTIPART_FORM) {
     // The one multipart intent is the cover upload: it takes an upload slot
     // like every other file upload in this app (released by `action`).
     if (!acquireUploadSlot()) {

@@ -47,8 +47,10 @@ import {
 import { isSafeReturnPath, safeReturnPath } from '@classmoji/utils/return-path';
 import {
   ID_LIST_MAX_BYTES,
+  MULTIPART_FORM,
   MULTIPART_OVERHEAD_BYTES,
   UploadTooLargeError,
+  formMediaType,
   parseJsonWithin,
   readLimitedFormData,
   textOverBytes,
@@ -827,9 +829,12 @@ function deckActionBodyLimit(request: Request): number {
     : 3 * DOCUMENT_SAVE_MAX_BYTES + MULTIPART_OVERHEAD_BYTES;
 }
 
-/** Whether the request says its body is multipart (the image upload's shape). */
+/**
+ * Whether the request's media type is multipart (the image upload's shape),
+ * read the way `readLimitedFormData` reads it.
+ */
 function isMultipart(request: Request): boolean {
-  return (request.headers.get('content-type') ?? '').includes('multipart/form-data');
+  return formMediaType(request.headers.get('content-type')) === MULTIPART_FORM;
 }
 
 export const action = async ({

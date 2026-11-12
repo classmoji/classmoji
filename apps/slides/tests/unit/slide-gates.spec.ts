@@ -45,6 +45,7 @@ const PROXY_SOURCE = source('../../app/routes/content.$org.$repo.$/route.tsx');
 const REPLACE_SOURCE = source('../../app/routes/$classroomSlug.$slideId.replace/route.tsx');
 const LINK_SOURCE = source('../../app/routes/$classroomSlug.$slideId.link/route.tsx');
 const NEW_SOURCE = source('../../app/routes/$classroomSlug.new/route.tsx');
+const DELETE_SOURCE = source('../../app/routes/$classroomSlug.$slideId.delete/route.tsx');
 const INDEX_SOURCE = source('../../app/routes/_index/route.tsx');
 const FOLLOW_SOURCE = source('../../app/routes/$slideId_.follow/route.tsx');
 const PRESENT_SOURCE = source('../../app/routes/$slideId_.present/route.tsx');
@@ -457,6 +458,30 @@ test.describe('the upload endpoints', () => {
     expect(read).toBeGreaterThan(-1);
     expect(gate).toBeLessThan(read);
     expect(action).not.toContain('await request.formData()');
+  });
+
+  test('the delete action authorizes before it reads the body, and meters it', () => {
+    const action = DELETE_SOURCE.slice(DELETE_SOURCE.indexOf('export const action'));
+    const gate = action.indexOf('await assertSlideAccess(');
+    const classroom = action.indexOf(
+      "return { error: 'Slide does not belong to this classroom' };"
+    );
+    const read = action.indexOf('await readLimitedFormData(request, DELETE_FORM_MAX_BYTES)');
+
+    for (const at of [gate, classroom, read]) expect(at).toBeGreaterThan(-1);
+    expect(gate).toBeLessThan(read);
+    expect(classroom).toBeLessThan(read);
+    expect(read).toBeLessThan(action.indexOf("formData.get('deleteTheme')"));
+    expect(action).not.toContain('await request.formData()');
+  });
+
+  test('the upload routes tell an upload by its exact media type', () => {
+    for (const routeSource of [NEW_SOURCE, REPLACE_SOURCE]) {
+      const check = routeSource.slice(routeSource.indexOf('function isMultipartUpload('));
+      expect(check.slice(0, check.indexOf('\n}'))).toContain(
+        "return formMediaType(request.headers.get('content-type')) === MULTIPART_FORM;"
+      );
+    }
   });
 
   test('a duplicated deck records every copied file in the asset map, rewrites last', () => {
