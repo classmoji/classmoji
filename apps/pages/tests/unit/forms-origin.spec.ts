@@ -21,8 +21,9 @@ import {
  * because "the helper says no" and "the endpoint says no" are different claims.
  *
  * Runs in the Playwright runner with no browser and no dev stack, like
- * `forms-paths.spec.ts` — both modules are deliberately import-free so they can
- * be tested as the pure decisions they are.
+ * `forms-paths.spec.ts` — both modules import nothing but web APIs and
+ * `@classmoji/utils/upload-limit`, so they can be tested as the pure decisions
+ * they are.
  */
 
 const request = (
@@ -120,5 +121,55 @@ test.describe('readCappedBody', () => {
     const justOver = '✓'.repeat(Math.ceil(MAX_SUBMISSION_BYTES / 3) + 1);
     expect(justOver.length).toBeLessThan(MAX_SUBMISSION_BYTES);
     expect(await readCappedBody(withBody(justOver))).toBeNull();
+  });
+
+  test('a body with no declared length is read only up to the cap', async () => {
+    // Sent in chunks with no Content-Length, and never ending: the read stops
+    // once the count passes the cap, and the stream is cancelled.
+    const chunk = new Uint8Array(16 * 1024).fill(0x78);
+    let pulled = 0;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += chunk.byteLength;
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const streamed = new Request('https://pages.classmoji.io/cs52/forms/w', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body,
+      duplex: 'half',
+    } as RequestInit);
+    expect(streamed.headers.get('content-length')).toBeNull();
+    expect(await readCappedBody(streamed)).toBeNull();
+    expect(cancelled).toBe(true);
+    expect(pulled).toBeLessThanOrEqual(MAX_SUBMISSION_BYTES + 4 * chunk.byteLength);
+  });
+
+  test('a body with no declared length inside the cap is read whole', async () => {
+    const text = '{"answers":{"a":"✓"}}';
+    const bytes = new TextEncoder().encode(text);
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes.slice(0, 5));
+        controller.enqueue(bytes.slice(5));
+        controller.close();
+      },
+    });
+    const streamed = new Request('https://pages.classmoji.io/cs52/forms/w', {
+      method: 'POST',
+      body,
+      duplex: 'half',
+    } as RequestInit);
+    expect(await readCappedBody(streamed)).toBe(text);
+  });
+
+  test('a request with no body reads as empty', async () => {
+    const empty = new Request('https://pages.classmoji.io/cs52/forms/w', { method: 'POST' });
+    expect(await readCappedBody(empty)).toBe('');
   });
 });
