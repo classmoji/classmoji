@@ -197,7 +197,7 @@ const AMPERSAND = 0x26;
  * the `&`-separated pairs the parser splits them into. An `&` inside a value
  * is percent-encoded, so every literal one is a separator.
  */
-function moreFieldsThan(chunks: Uint8Array[], maxFields: number): boolean {
+export function moreFormFieldsThan(chunks: Uint8Array[], maxFields: number): boolean {
   let separators = 0;
   for (const chunk of chunks) {
     for (let at = chunk.indexOf(AMPERSAND); at !== -1; at = chunk.indexOf(AMPERSAND, at + 1)) {
@@ -258,7 +258,7 @@ export async function readLimitedFormData(request: Request, maxBytes: number): P
 
   const { chunks } = await readLimitedChunks(body, maxBytes);
   const contentType = parserContentType(request.headers.get('content-type'));
-  if (contentType === URLENCODED_FORM && moreFieldsThan(chunks, FORM_FIELDS_MAX)) {
+  if (contentType === URLENCODED_FORM && moreFormFieldsThan(chunks, FORM_FIELDS_MAX)) {
     chunks.length = 0;
     throw new UploadTooLargeError(maxBytes);
   }

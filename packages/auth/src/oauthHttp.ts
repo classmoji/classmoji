@@ -1,10 +1,22 @@
 /**
  * The authorization server over HTTP, as the webapp serves it: the 1.4 paths
- * MCP clients may still call, and CORS for the endpoints browser-based
- * clients call from another origin.
+ * MCP clients may still call, CORS for the endpoints browser-based clients
+ * call from another origin, and the limits on a form body.
  *
- * Dependency-free (no betterAuth, no Prisma), like ./oauthRedirect.ts.
+ * Dependency-free (no betterAuth, no Prisma), like ./oauthRedirect.ts; the
+ * upload-limit helpers use web APIs only.
  */
+
+import {
+  FORM_FIELDS_MAX,
+  MULTIPART_FORM,
+  URLENCODED_FORM,
+  UploadTooLargeError,
+  declaredBodyTooLarge,
+  formMediaType,
+  moreFormFieldsThan,
+  readLimitedBody,
+} from '@classmoji/utils/upload-limit';
 
 /**
  * The 1.4 mcp plugin's endpoints, and the oauth-provider endpoint each one is
@@ -35,6 +47,68 @@ export async function withLegacyMcpPathMapped(request: Request): Promise<Request
     method: request.method,
     headers: request.headers,
     body: hasBody ? await request.arrayBuffer() : undefined,
+    signal: request.signal,
+  });
+}
+
+/**
+ * The most a form body sent to better-auth may hold. The largest real one is a
+ * token request: an authorization code, its PKCE verifier, the redirect URI,
+ * the client id (a metadata document URL) or secret and the resource, well
+ * under 4 KB; a refresh or revocation request is smaller.
+ */
+export const AUTH_FORM_BODY_MAX_BYTES = 64 * 1024;
+
+/** better-call's own test for a JSON body, which it reads before any form type. */
+const JSON_MEDIA_TYPE = /^application\/([a-z0-9.+-]*\+)?json/i;
+
+const formTooLarge = () =>
+  new Response(
+    JSON.stringify({
+      error: 'invalid_request',
+      error_description:
+        `A form sent here is at most ${AUTH_FORM_BODY_MAX_BYTES} bytes ` +
+        `and ${FORM_FIELDS_MAX} fields.`,
+    }),
+    { status: 413, headers: { 'Content-Type': 'application/json' } }
+  );
+
+/**
+ * `request` with its form body read through the byte-counting reader, for
+ * better-auth to parse; or a 413 to answer instead.
+ *
+ * better-auth parses a form body itself (better-call's `getBody`) whenever the
+ * `Content-Type` mentions a form type and is not JSON, so that is the test
+ * here. Such a body may hold at most AUTH_FORM_BODY_MAX_BYTES and
+ * FORM_FIELDS_MAX fields, counted before anything is parsed. The request is
+ * rebuilt around the bytes read, with the same method and headers; a
+ * url-encoded one is labelled exactly that, so it is parsed as the form that
+ * was counted. Any other request is returned unchanged, its body unread.
+ */
+export async function withFormBodyLimited(request: Request): Promise<Request | Response> {
+  const contentType = request.headers.get('content-type');
+  const lowered = (contentType ?? '').toLowerCase();
+  const parsedAsForm =
+    !JSON_MEDIA_TYPE.test(lowered) &&
+    (lowered.includes(URLENCODED_FORM) || lowered.includes(MULTIPART_FORM));
+  if (!request.body || !parsedAsForm) return request;
+
+  if (declaredBodyTooLarge(request.headers, AUTH_FORM_BODY_MAX_BYTES)) return formTooLarge();
+  let bytes: Uint8Array<ArrayBuffer>;
+  try {
+    bytes = await readLimitedBody(request.body, AUTH_FORM_BODY_MAX_BYTES);
+  } catch (error: unknown) {
+    if (error instanceof UploadTooLargeError) return formTooLarge();
+    throw error;
+  }
+  if (moreFormFieldsThan([bytes], FORM_FIELDS_MAX)) return formTooLarge();
+
+  const headers = new Headers(request.headers);
+  if (formMediaType(contentType) === URLENCODED_FORM) headers.set('content-type', URLENCODED_FORM);
+  return new Request(request.url, {
+    method: request.method,
+    headers,
+    body: bytes,
     signal: request.signal,
   });
 }

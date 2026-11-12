@@ -10,7 +10,8 @@
  *     without reaching better-auth; nothing else gets the headers;
  *   - the four discovery routes answer any origin too, preflight included,
  *     and leave out every DPoP key oauth-provider writes;
- *   - a registration over the size limits is refused before better-auth.
+ *   - a registration over the size limits is refused before better-auth;
+ *   - a form body over the size or field limit is refused before better-auth.
  * better-auth itself is stood in (auth.handler, and the two endpoints the
  * discovery helpers read); the helpers are oauth-provider's own.
  */
@@ -217,6 +218,57 @@ describe('CORS', () => {
     const res = await send('/api/auth/oauth2/consent', { method: 'OPTIONS' });
     expect(mocks.handler).toHaveBeenCalledOnce();
     expect(res.headers.get('access-control-allow-origin')).toBeNull();
+  });
+});
+
+describe('a form body', () => {
+  const URLENCODED = 'application/x-www-form-urlencoded';
+  const fieldsOf = (count: number) => Array.from({ length: count }, () => 'a=1').join('&');
+
+  it('of a token request reaches better-auth as it was sent', async () => {
+    const body = new URLSearchParams({
+      grant_type: 'authorization_code',
+      code: 'c'.repeat(64),
+      redirect_uri: 'http://localhost:54321/callback',
+      client_id: 'https://client.example/oauth/client-metadata.json',
+      code_verifier: 'v'.repeat(128),
+      resource: 'https://mcp.example/mcp',
+    }).toString();
+    await send('/api/auth/oauth2/token', {
+      method: 'POST',
+      headers: { 'content-type': URLENCODED },
+      body,
+    });
+
+    expect(mocks.handler).toHaveBeenCalledOnce();
+    const handed = mocks.handler.mock.calls[0]![0];
+    expect(handed.headers.get('content-type')).toBe(URLENCODED);
+    expect(await handed.text()).toBe(body);
+  });
+
+  it.each([['/api/auth/oauth2/token'], ['/api/auth/mcp/token']])(
+    'with more than 10,000 fields is refused on %s before better-auth, readable by a browser client',
+    async path => {
+      const res = await send(path, {
+        method: 'POST',
+        headers: { 'content-type': URLENCODED },
+        body: fieldsOf(10_001),
+      });
+      expect(res.status).toBe(413);
+      expect(await res.json()).toMatchObject({ error: 'invalid_request' });
+      expect(res.headers.get('access-control-allow-origin')).toBe('*');
+      expect(mocks.handler).not.toHaveBeenCalled();
+    }
+  );
+
+  it('over the size limit is refused on a sign-in before better-auth', async () => {
+    const res = await send('/api/auth/sign-in/email', {
+      method: 'POST',
+      headers: { 'content-type': URLENCODED },
+      body: 'email='.padEnd(64 * 1024 + 1, 'x'),
+    });
+    expect(res.status).toBe(413);
+    expect(mocks.handler).not.toHaveBeenCalled();
   });
 });
 
