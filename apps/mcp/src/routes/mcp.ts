@@ -9,7 +9,7 @@
  * tells one person's agent sessions apart in live editing (presence, colour,
  * label). It authorizes nothing; see agentSessionFrom.
  *
- * The SDK's StreamableHTTPServerTransport works on Node's raw
+ * The SDK's NodeStreamableHTTPServerTransport works on Node's raw
  * IncomingMessage/ServerResponse, so we `reply.hijack()` and hand it the raw
  * streams plus Fastify's already-parsed JSON body (malformed JSON is rejected
  * by Fastify with a 400 before this handler runs).
@@ -34,7 +34,7 @@
  * (toolCallGate.ts) before the SDK validates its arguments.
  */
 
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
 import type {
   FastifyError,
   FastifyInstance,
@@ -490,7 +490,7 @@ export default async function mcpRoutes(fastify: FastifyInstance, opts: McpRoute
     reply.raw.on('close', work.close);
 
     const server = buildMcpServer(viewer, work.tracker);
-    const transport = new StreamableHTTPServerTransport({
+    const transport = new NodeStreamableHTTPServerTransport({
       sessionIdGenerator: undefined, // stateless
       enableJsonResponse: true, // plain JSON responses (no SSE stream needed per-request)
     });

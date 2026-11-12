@@ -30,8 +30,7 @@
 
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { z } from 'zod';
 import { ToolError } from '../../mcp/errors.ts';
 import type { ToolContext, ToolDefinition } from '../../mcp/registry.ts';
@@ -578,9 +577,12 @@ describe('role tiers (through the registry)', () => {
    *   release 2 (MCP parity):        6,068 B (descriptions 918 / 1,145 / 785)
    *     + compare_with, person, copy_from, revert_to_run and the texts for
    *       them, sizes, notes, non_respondents and priority.
-   * The ceiling leaves ~180 B for wording fixes, not for another argument.
+   *   strict arguments:               6,261 B (each object now lists
+   *                                   additionalProperties: false)
+   *   safe-integer bounds left out:   6,153 B
+   * The ceiling leaves room for wording fixes, not for another argument.
    */
-  const TEAM_SET_MANIFEST_CEILING = 6_250;
+  const TEAM_SET_MANIFEST_CEILING = 6_400;
 
   it('keeps the three tools’ manifest (name + description + schema) under its ceiling', async () => {
     asMember('OWNER');
@@ -647,6 +649,21 @@ describe('role tiers (through the registry)', () => {
     const problems = error.data?.problems as string[];
     expect(problems).toHaveLength(11);
     expect(problems[10]).toBe('…and 5 more');
+  });
+
+  it('cuts a long key in the listed path', async () => {
+    const id = 'x'.repeat(10_000);
+    const error = (await formTeamsRunTool
+      .handler(
+        { classroom: 'org/w26', form_id: FORM_ID, patch: { options: { [id]: { open: 5 } } } },
+        CTX
+      )
+      .catch(e => e)) as ToolError;
+    expect(error.code).toBe('invalid_config');
+    const problems = error.data?.problems as string[];
+    expect(problems).toHaveLength(1);
+    expect(problems[0].startsWith(`patch.options.${'x'.repeat(64)}….open: `)).toBe(true);
+    expect(problems[0].length).toBeLessThan(400);
   });
 
   it('carries a realistic patch (rules, pins, options) through to saveConfig', async () => {

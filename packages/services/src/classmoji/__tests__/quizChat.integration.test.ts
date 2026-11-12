@@ -721,6 +721,34 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     feedback_effort_note: 'Kept going.',
   };
 
+  it('says which evaluation field it refuses, in the words the model reads', async () => {
+    const attemptId = await newAttempt();
+    let turn: Turn = await begin(attemptId);
+    for (const n of [1, 2, 3]) {
+      turn = await completeQuestion(attemptId, turn, n, [{ level: 'correct', hints_before: 0 }]);
+    }
+    const refusal = async (changed: Record<string, unknown>) => {
+      try {
+        await grading.completeWithEvaluation(call(turn), {
+          source: 'model',
+          feedback: { ...feedback, ...changed } as typeof feedback,
+        });
+      } catch (error) {
+        return { code: (error as { code?: string }).code, message: (error as Error).message };
+      }
+      throw new Error('expected the evaluation to be refused');
+    };
+    expect(await refusal({ quiz_complete: false })).toEqual({
+      code: 'invalid_input',
+      message: 'Invalid evaluation: quiz_complete: quiz_complete must be true to submit evaluation',
+    });
+    expect(await refusal({ final_acknowledgment: '' })).toEqual({
+      code: 'invalid_input',
+      message: 'Invalid evaluation: final_acknowledgment: final_acknowledgment must not be empty',
+    });
+    expect((await attemptRow(attemptId)).completed_at).toBeNull();
+  });
+
   it('completes only with every question recorded, from the stored scores, once', async () => {
     const attemptId = await newAttempt();
     let turn: Turn = await begin(attemptId);

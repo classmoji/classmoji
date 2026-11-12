@@ -10,6 +10,7 @@
  */
 
 import { z } from 'zod';
+import { uuidString } from '@classmoji/utils/zod-formats';
 import { DECK_SLIDE_SIZE, type CursorRequest } from '@classmoji/collab';
 import {
   CollabRequestError,
@@ -124,7 +125,7 @@ export const pageCursorSetTool: ToolDefinition<PageCursorSetArgs> = {
   roles: OWNER_TEACHER,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    page_id: z.string().uuid().describe('Page id'),
+    page_id: uuidString().describe('Page id'),
     block_id: z.string().min(1).max(200).describe('Block to put the caret in'),
     ...pointShape,
     select_to: z
@@ -190,7 +191,7 @@ export const deckCursorSetTool: ToolDefinition<DeckCursorSetArgs> = {
   roles: TEACHING_TEAM,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    slide_id: z.string().uuid().describe('Slide deck id'),
+    slide_id: uuidString().describe('Slide deck id'),
     slide: z.string().min(1).max(200).describe('Id of the slide to point at (from deck_outline)'),
     x: z
       .number()

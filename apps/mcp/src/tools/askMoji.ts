@@ -31,6 +31,7 @@ import {
   INSIGHT_MAX_WEEKS,
 } from '@classmoji/utils/ask-moji/limits';
 import { z } from 'zod';
+import { isoDateTime } from '@classmoji/utils/zod-formats';
 import { idArgs } from '../mcp/audit.ts';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
@@ -240,9 +241,7 @@ export const askMojiFeedbackListTool: ToolDefinition<FeedbackListArgs> = {
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     rating: z.enum(['UP', 'DOWN']).optional().describe('Only this rating'),
-    since: z
-      .string()
-      .datetime({ offset: true })
+    since: isoDateTime()
       .optional()
       .describe('Only ratings made at or after this ISO 8601 date-time'),
     limit: z

@@ -68,7 +68,7 @@ export const FORMS_STAFF = OWNER_TEACHER;
  * cf-create_git_repo_assignment) sets the row id to the GitHub issue id, a
  * string of digits (id == provider_id, e.g. "5482151816"). REPO-mode rows,
  * seeds and the example classroom keep the generated uuid. An id is one or the
- * other, so `.uuid()` alone would reject every ISSUE-mode submission.
+ * other, so a uuid rule alone would reject every ISSUE-mode submission.
  */
 export const SUBMISSION_ID_PATTERN =
   /^(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9]+)$/;
@@ -77,7 +77,7 @@ export const SUBMISSION_ID_PATTERN =
  * A submission id argument: a non-empty string of at most 64 characters, a
  * uuid or all digits. Every tool input naming a GitRepoAssignment uses this;
  * ids of other records (users, assignments, grades, regrade requests) are
- * uuids and keep `.uuid()`. Lookups compare the id as a plain string inside the
+ * uuids and keep `z.guid()`. Lookups compare the id as a plain string inside the
  * classroom scope, so the shape changes nothing downstream.
  *
  * A numeric id looks like a number, so a client may send it as a JSON number

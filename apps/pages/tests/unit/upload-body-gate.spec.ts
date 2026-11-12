@@ -87,6 +87,20 @@ test.describe('page uploads read the body after the gate', () => {
     expect(action).not.toContain('await request.formData()');
   });
 
+  test('the page action gives the upload limit only to a multipart media type', () => {
+    const action = PAGE_ACTION_SOURCE.slice(
+      PAGE_ACTION_SOURCE.indexOf('async function pageAction')
+    );
+    const branch = action.indexOf(
+      "if (formMediaType(request.headers.get('content-type')) === MULTIPART_FORM) {"
+    );
+    const read = action.indexOf('await readLimitedFormData(request, uploadBodyLimit(');
+
+    for (const at of [branch, read]) expect(at).toBeGreaterThan(-1);
+    expect(branch).toBeLessThan(read);
+    expect(PAGE_ACTION_SOURCE).not.toContain("includes('multipart/form-data')");
+  });
+
   test('the page action reads a JSON save capped, after the same gates', () => {
     const action = PAGE_ACTION_SOURCE.slice(PAGE_ACTION_SOURCE.indexOf('export const action'));
     const status = action.indexOf('pageMutationBlocked(page.classroom, role)');
@@ -95,9 +109,9 @@ test.describe('page uploads read the body after the gate', () => {
     for (const at of [status, read]) expect(at).toBeGreaterThan(-1);
     expect(status).toBeLessThan(read);
     expect(action).not.toContain('await request.json()');
-    // Twice the repository's file cap: the document rides as an escaped string.
+    // Twice the document save cap: the document rides as an escaped string.
     expect(PAGE_ACTION_SOURCE).toContain(
-      'const PAGE_JSON_BODY_MAX_BYTES = 2 * REPO_REST_MAX_BYTES + MULTIPART_OVERHEAD_BYTES;'
+      'const PAGE_JSON_BODY_MAX_BYTES = 2 * DOCUMENT_SAVE_MAX_BYTES + MULTIPART_OVERHEAD_BYTES;'
     );
     expect(PAGE_ACTION_SOURCE).toContain(
       'const bytes = await readLimitedBody(request.body, PAGE_JSON_BODY_MAX_BYTES);'

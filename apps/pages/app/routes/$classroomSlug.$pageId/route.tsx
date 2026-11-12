@@ -71,6 +71,7 @@ import {
   deriveSaveMergeReport,
   deriveSaveConflict,
   fetcherMatchesPage,
+  saveTooLargeNotice,
   type SaveBaseline,
   type SaveFetcherData,
 } from './saveState.ts';
@@ -303,6 +304,9 @@ const PageRoute = () => {
   // every save submission; deliberately NOT cleared on navigation (a stale
   // stamp keeps the gate closed on the new page until it saves).
   const saveReportPageIdRef = useRef(page.id);
+  // The save answer whose size sentence was last shown: the completion effect
+  // below re-runs on other changes, and each answer is shown once.
+  const toastedSaveRef = useRef<unknown>(null);
   const fetcherData = fetcher.data as SaveFetcherData | undefined;
   const fetcherMatches = fetcherMatchesPage(saveReportPageIdRef.current, page.id);
   // Phase 7.5: a stale save's 3-way merge hit true collisions — the per-unit
@@ -656,6 +660,12 @@ const PageRoute = () => {
       // effect above — keep showing 'saving' for the recovery round-trip, not
       // 'error' (the two effects fire in the same commit).
       if (fetcher.data?.code && !fetcher.data?.conflict) return;
+      // A save refused for its size says so, beside the failed status.
+      const notice = saveTooLargeNotice(fetcher.data);
+      if (notice && toastedSaveRef.current !== fetcher.data) {
+        toastedSaveRef.current = fetcher.data;
+        toast.error(notice);
+      }
       // Conflict (409) keeps hasUnsavedChanges true — the chooser/banner
       // offers a way out; the editor content is preserved until the user
       // decides.

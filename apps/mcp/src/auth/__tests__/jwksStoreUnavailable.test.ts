@@ -14,7 +14,7 @@
 
 import { generateKeyPairSync, sign } from 'node:crypto';
 import Fastify from 'fastify';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer } from '@modelcontextprotocol/server';
 import { describe, expect, it, vi } from 'vitest';
 
 // Before anything builds the Prisma client or the auth instance.

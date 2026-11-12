@@ -595,8 +595,19 @@ const checkedMessage = (
     throw new QuizChatRefusal('temporary', 'invalid_message');
   }
   if (message && 'submission' in message) {
-    const parsed = CodeSubmissionInputSchema.safeParse(message.submission);
-    if (!parsed.success) throw new QuizChatRefusal('temporary', 'invalid_submission');
+    // A parse that throws is refused like one that fails, and logged by its
+    // class only (never the submission, or the error's text, which can quote it).
+    let parsed: ReturnType<typeof CodeSubmissionInputSchema.safeParse> | null = null;
+    try {
+      parsed = CodeSubmissionInputSchema.safeParse(message.submission);
+    } catch (error: unknown) {
+      console.warn(
+        '[quiz-chat] code submission check threw:',
+        error instanceof Error ? error.name : typeof error
+      );
+      parsed = null;
+    }
+    if (!parsed?.success) throw new QuizChatRefusal('temporary', 'invalid_submission');
     if (containsReservedText(reservedCheckText(parsed.data))) {
       throw new QuizChatRefusal('temporary', 'reserved_code');
     }

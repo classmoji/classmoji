@@ -45,6 +45,7 @@ import {
 } from '@classmoji/services/calendar-policy';
 import type { EventType, Prisma } from '@prisma/client';
 import { z } from 'zod';
+import { isoDateTime, uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
 import {
@@ -79,15 +80,18 @@ interface CalendarEventCreateArgs {
 }
 
 /**
- * A meeting link is one http(s) URL. `.url()` keeps `format: uri` in the
- * published schema; the refinement adds what it does not check — the scheme,
- * and whitespace, which the URL parser would otherwise encode into the path.
+ * A meeting link is one http(s) URL. The refinement checks what `.url()` does
+ * not — the scheme, and whitespace, which the URL parser would otherwise
+ * encode into the path. It runs first, on the value as sent: `.url()` passes
+ * on the value trimmed and without tabs or newlines, so a link followed by
+ * text on its next line would reach a later check as one URL. `.url()` keeps
+ * `format: uri` in the published schema.
  */
 const meetingLinkSchema = z
   .string()
-  .url()
   .max(500)
   .refine(isMeetingLinkUrl, MEETING_LINK_MESSAGE)
+  .url()
   .describe('Meeting URL (http or https)');
 
 /**
@@ -173,14 +177,14 @@ export const calendarEventCreateTool: ToolDefinition<CalendarEventCreateArgs> = 
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     title: z.string().min(1).max(200).describe('Event title'),
     event_type: z.enum(EVENT_TYPES).describe('Kind of event'),
-    start_time: z.string().datetime({ offset: true }).describe('Start (ISO 8601)'),
-    end_time: z.string().datetime({ offset: true }).describe('End (ISO 8601)'),
+    start_time: isoDateTime().describe('Start (ISO 8601)'),
+    end_time: isoDateTime().describe('End (ISO 8601)'),
     description: z.string().max(2000).optional(),
     location: z.string().max(200).optional(),
     meeting_link: meetingLinkSchema.optional(),
     is_recurring: z.boolean().optional().describe('Whether the event repeats'),
     recurrence_rule: z
-      .record(z.unknown())
+      .record(z.string(), z.unknown())
       .optional()
       .describe('Recurrence rule JSON (required when is_recurring)'),
   },
@@ -255,18 +259,16 @@ export const calendarEventUpdateTool: ToolDefinition<CalendarEventUpdateArgs> = 
   roles: TEACHING_TEAM,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    event_id: z.string().uuid().describe('CalendarEvent id'),
+    event_id: uuidString().describe('CalendarEvent id'),
     title: z.string().min(1).max(200).optional(),
     event_type: z.enum(EVENT_TYPES).optional(),
-    start_time: z.string().datetime({ offset: true }).optional(),
-    end_time: z.string().datetime({ offset: true }).optional(),
+    start_time: isoDateTime().optional(),
+    end_time: isoDateTime().optional(),
     description: z.string().max(2000).optional(),
     location: z.string().max(200).optional(),
     meeting_link: meetingLinkSchema.optional(),
     edit_scope: z.enum(EDIT_SCOPES).optional().describe('Required for recurring events'),
-    occurrence_date: z
-      .string()
-      .datetime({ offset: true })
+    occurrence_date: isoDateTime()
       .optional()
       .describe('The occurrence being edited (required for recurring events)'),
   },
@@ -382,11 +384,9 @@ export const calendarEventDeleteTool: ToolDefinition<CalendarEventDeleteArgs> = 
   roles: TEACHING_TEAM,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    event_id: z.string().uuid().describe('CalendarEvent id'),
+    event_id: uuidString().describe('CalendarEvent id'),
     edit_scope: z.enum(EDIT_SCOPES).optional().describe('Required for recurring events'),
-    occurrence_date: z
-      .string()
-      .datetime({ offset: true })
+    occurrence_date: isoDateTime()
       .optional()
       .describe('The occurrence being deleted (required for recurring events)'),
   },
@@ -483,7 +483,7 @@ const dedupeIds = (ids: string[] | undefined): string[] | undefined =>
 
 const linkIdsSchema = (noun: string) =>
   z
-    .array(z.string().uuid())
+    .array(uuidString())
     .max(MAX_LINKS_PER_KIND)
     .optional()
     .describe(
@@ -523,10 +523,8 @@ export const calendarEventLinksSetTool: ToolDefinition<CalendarEventLinksSetArgs
   roles: TEACHING_TEAM,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    event_id: z.string().uuid().describe('CalendarEvent id'),
-    occurrence_date: z
-      .string()
-      .datetime({ offset: true })
+    event_id: uuidString().describe('CalendarEvent id'),
+    occurrence_date: isoDateTime()
       .optional()
       .describe(
         'Required when list_calendar gives the event an occurrence_date (a recurring event): that value, unchanged'
@@ -535,9 +533,9 @@ export const calendarEventLinksSetTool: ToolDefinition<CalendarEventLinksSetArgs
     slide_ids: linkIdsSchema('Slide deck'),
     assignment_ids: linkIdsSchema('Assignment'),
     featured: z
-      .object({
+      .strictObject({
         kind: z.enum(FEATURED_LINK_KINDS),
-        id: z.string().uuid(),
+        id: uuidString(),
       })
       .nullable()
       .optional()

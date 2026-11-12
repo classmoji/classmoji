@@ -17,6 +17,7 @@
 import { getDeckPreviewStatus, type DeckJson } from '@classmoji/services/slides';
 import type { ViewAt } from '@classmoji/services/render-contract';
 import { z } from 'zod';
+import { uuidString } from '@classmoji/utils/zod-formats';
 import { liveSha, liveStateFor } from '../collab/client.ts';
 import { ToolError } from '../mcp/errors.ts';
 import { tryConsume } from '../mcp/rateLimit.ts';
@@ -275,7 +276,7 @@ export const deckRenderTool: ToolDefinition<DeckRenderArgs> = {
   roles: TEACHING_TEAM,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    slide_id: z.string().uuid().describe('Slide deck id'),
+    slide_id: uuidString().describe('Slide deck id'),
     slide_ids: z
       .array(z.string().min(1))
       .min(1)

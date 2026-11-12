@@ -4,7 +4,7 @@
  * PURE MODULE. Imported by the server services AND by browser code (the builder
  * and the renderer in apps/pages), so it must stay free of anything Node- or
  * Prisma-shaped:
- *   - zod is the only import;
+ *   - zod, and @classmoji/utils/input-caps (zod only), are the only imports;
  *   - ids are minted with `globalThis.crypto.randomUUID()`, never `node:crypto`;
  *   - byte sizes are measured with `TextEncoder`, never `Buffer`.
  * Reach it through the package subpath `@classmoji/services/form-contract` —
@@ -40,6 +40,8 @@
  */
 
 import { z } from 'zod';
+import { uuidString } from '@classmoji/utils/zod-formats';
+import { capArray, issueText } from '@classmoji/utils/input-caps';
 
 /**
  * Bumped when a stored definition's shape changes in a way older readers can
@@ -144,7 +146,7 @@ const optionInput = z.union([
   labelText,
   z
     .object({
-      id: z.string().uuid().optional(),
+      id: uuidString().optional(),
       label: labelText,
       description: helpText.optional(),
       /**
@@ -242,7 +244,7 @@ function fieldDispatch(allowed: () => string[], where = 'in a form'): z.ZodTypeA
     }
     const result = entry.defSchema.safeParse(raw);
     if (!result.success) {
-      for (const issue of result.error.issues) ctx.addIssue(issue);
+      for (const issue of result.error.issues) ctx.addIssue({ ...issue });
       return z.NEVER;
     }
     // Mint the field id here rather than in each per-type schema: it is the one
@@ -265,7 +267,7 @@ function fieldDispatch(allowed: () => string[], where = 'in a form'): z.ZodTypeA
 
 /** Shared head of every INPUT field (display blocks have their own shape). */
 const inputFieldBase = {
-  id: z.string().uuid().optional(),
+  id: uuidString().optional(),
   label: labelText,
   help: helpText.optional(),
   description: helpText.optional(),
@@ -321,7 +323,7 @@ const dropdownDef = z
     ...inputFieldBase,
     type: z.literal('dropdown'),
     options: optionList(0).default([]),
-    options_from: z.string().uuid().optional(),
+    options_from: uuidString().optional(),
   })
   .strict()
   .superRefine((field, ctx) => {
@@ -507,8 +509,8 @@ const repeatGroupDef = z
         scope: z
           .object({
             by: z.enum(['tag', 'repository', 'classroom']),
-            tag_id: z.string().uuid().optional(),
-            repository_id: z.string().uuid().optional(),
+            tag_id: uuidString().optional(),
+            repository_id: uuidString().optional(),
           })
           .strict()
           .superRefine((scope, ctx) => {
@@ -549,12 +551,12 @@ const repeatGroupDef = z
 // Display blocks carry no answer, so they have no `required` and never appear
 // in a response schema. Their prose is `text`.
 const headingDef = z
-  .object({ id: z.string().uuid().optional(), type: z.literal('heading'), text: labelText })
+  .object({ id: uuidString().optional(), type: z.literal('heading'), text: labelText })
   .strict();
 
 const paragraphDef = z
   .object({
-    id: z.string().uuid().optional(),
+    id: uuidString().optional(),
     type: z.literal('paragraph'),
     text: helpText.min(1),
   })
@@ -562,7 +564,7 @@ const paragraphDef = z
 
 const bannerDef = z
   .object({
-    id: z.string().uuid().optional(),
+    id: uuidString().optional(),
     type: z.literal('banner'),
     text: helpText.min(1),
     tone: z.enum(['info', 'warning']).default('info'),
@@ -615,20 +617,25 @@ const oneOf = (options: FormOption[]) => {
  * limits. `capacity` is how many the list can hold, which bounds the cap.
  */
 const pickList = (
-  item: z.ZodTypeAny,
+  item: z.ZodType<string>,
   field: { required: boolean; min_selections?: number; max_selections?: number },
   capacity: number
 ) => {
   const floor = field.min_selections ?? 0;
   const ceiling = Math.min(field.max_selections ?? capacity, capacity);
   const required = field.required ? Math.max(1, floor) : 0;
-  return z
-    .array(item)
-    .min(required, `Pick at least ${required}`)
-    .max(ceiling, `Pick at most ${ceiling}`)
-    .refine(values => field.required || values.length === 0 || values.length >= floor, {
-      message: `Pick at least ${floor}, or none`,
-    });
+  // The length is checked before the picks are (capArray), so an oversized
+  // list is one issue.
+  return capArray(
+    z
+      .array(item)
+      .min(required, `Pick at least ${required}`)
+      .max(ceiling, `Pick at most ${ceiling}`),
+    ceiling,
+    `Pick at most ${ceiling}`
+  ).refine(values => field.required || values.length === 0 || values.length >= floor, {
+    message: `Pick at least ${floor}, or none`,
+  });
 };
 
 // ─── The registry ───────────────────────────────────────────────────────────
@@ -795,13 +802,15 @@ export const FIELD_TYPE_REGISTRY = {
     // Ranks are positional: index 0 is the first choice. Each option may be
     // used once — the constraint Fillout could only express as a warning banner.
     answerSchema: field =>
-      z
-        .array(oneOf(field.options))
-        .min(field.required ? field.ranks : 0)
-        .max(field.ranks)
-        .refine(values => new Set(values).size === values.length, {
-          message: 'Each option may be ranked once',
-        }),
+      capArray(
+        z
+          .array(oneOf(field.options))
+          .min(field.required ? field.ranks : 0)
+          .max(field.ranks),
+        field.ranks
+      ).refine(values => new Set(values).size === values.length, {
+        message: 'Each option may be ranked once',
+      }),
   } satisfies FieldTypeSpec<z.infer<typeof rankedChoiceDef>>,
 
   matrix: {
@@ -947,7 +956,8 @@ const definitionInput = z.union([
     .strict(),
 ]);
 
-const definitionSchema = definitionInput.pipe(
+/** A form definition as staff send it (the builder, MCP form_create and form_update). */
+export const definitionSchema = definitionInput.pipe(
   z.object({
     definition_version: z.literal(DEFINITION_VERSION),
     fields: z.array(fieldSchema).max(FORM_LIMITS.MAX_FIELDS),
@@ -1179,6 +1189,27 @@ function optionListsOf(field: FormField): FormOption[][] {
 }
 
 /**
+ * `schema.safeParse(value)`, or null when the parse throws: callers refuse it
+ * with their usual code. A throw is logged as one line naming `label` and the
+ * error's class, never the value or the error's text, which can quote it.
+ */
+function safeParseOrNull<T extends z.ZodTypeAny>(
+  schema: T,
+  value: unknown,
+  label: string
+): z.ZodSafeParseResult<z.output<T>> | null {
+  try {
+    return schema.safeParse(value);
+  } catch (error: unknown) {
+    console.warn(
+      `[forms] ${label} check threw:`,
+      error instanceof Error ? error.name : typeof error
+    );
+    return null;
+  }
+}
+
+/**
  * Validate and NORMALIZE a field definition. The return value is what belongs
  * in FormRevision.fields — ids minted, options expanded to objects, defaults
  * filled in, linked dropdown options copied from their source.
@@ -1186,11 +1217,17 @@ function optionListsOf(field: FormField): FormOption[][] {
  * @throws Error with code FORM_DEFINITION_INVALID / FORM_DEFINITION_TOO_LARGE.
  */
 export function parseFormDefinition(input: unknown): FormDefinition {
-  const parsed = definitionSchema.safeParse(input);
+  const parsed = safeParseOrNull(definitionSchema, input, 'form definition');
+  if (!parsed) {
+    throw formContractError(
+      FORM_DEFINITION_INVALID,
+      'Invalid form definition: it could not be checked.'
+    );
+  }
   if (!parsed.success) {
     throw formContractError(
       FORM_DEFINITION_INVALID,
-      `Invalid form definition: ${parsed.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; ')}`,
+      `Invalid form definition: ${issueText(parsed.error.issues)}`,
       { issues: parsed.error.issues }
     );
   }
@@ -1357,11 +1394,14 @@ export function parseAnswers(
     );
   }
 
-  const parsed = buildResponseSchema(fields, ctx).safeParse(answers);
+  const parsed = safeParseOrNull(buildResponseSchema(fields, ctx), answers, 'form answers');
+  if (!parsed) {
+    throw formContractError(FORM_ANSWERS_INVALID, 'Invalid answers: they could not be checked.');
+  }
   if (!parsed.success) {
     throw formContractError(
       FORM_ANSWERS_INVALID,
-      `Invalid answers: ${parsed.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; ')}`,
+      `Invalid answers: ${issueText(parsed.error.issues)}`,
       { issues: parsed.error.issues }
     );
   }

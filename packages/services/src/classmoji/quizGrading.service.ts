@@ -258,10 +258,12 @@ const storedOutput = <T>(event: { payload: Prisma.JsonValue }): T =>
   (isObject(event.payload) ? event.payload.output : undefined) as T;
 
 const describeIssues = (error: {
-  issues: { path: (string | number)[]; message: string }[];
+  issues: readonly { path: readonly PropertyKey[]; message: string }[];
 }): string =>
   error.issues
-    .map(issue => (issue.path.length ? `${issue.path.join('.')}: ${issue.message}` : issue.message))
+    .map(issue =>
+      issue.path.length ? `${issue.path.map(String).join('.')}: ${issue.message}` : issue.message
+    )
     .join('; ');
 
 /** The counts a stored entry carries (`QuestionCounts`), the ones it has. */

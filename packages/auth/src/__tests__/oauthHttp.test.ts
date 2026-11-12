@@ -7,6 +7,9 @@
  */
 
 import { describe, expect, it } from 'vitest';
+// A namespace import, so the form body cases fail on their own assertions on a
+// tree without the helper rather than taking the whole file down.
+import * as oauthHttp from '../oauthHttp.ts';
 import {
   corsPreflightResponse,
   isOAuthCorsPreflight,
@@ -129,5 +132,109 @@ describe('CORS for the endpoints browser-based clients call', () => {
   ])('leaves an answer on %s as it is', path => {
     const sent = new Response('{}');
     expect(withOAuthCors(new Request(`${ORIGIN}${path}`), sent)).toBe(sent);
+  });
+});
+
+describe('withFormBodyLimited', () => {
+  const URLENCODED = 'application/x-www-form-urlencoded';
+  const limited = (request: Request) => oauthHttp.withFormBodyLimited(request);
+  const tokenPost = (body: BodyInit, contentType = URLENCODED, init: RequestInit = {}) =>
+    new Request(`${ORIGIN}/api/auth/oauth2/token`, {
+      method: 'POST',
+      headers: { 'content-type': contentType, authorization: 'Basic eDp5', origin: ORIGIN },
+      body,
+      ...init,
+    });
+  const fieldsOf = (count: number) => Array.from({ length: count }, () => 'a=1').join('&');
+
+  // The real shapes: an authorization code exchange with PKCE from a client
+  // named by its metadata document, a refresh and a revocation.
+  const REAL_FORMS = {
+    'an authorization code exchange': new URLSearchParams({
+      grant_type: 'authorization_code',
+      code: 'c'.repeat(64),
+      redirect_uri: 'http://localhost:54321/callback',
+      client_id: 'https://client.example/oauth/client-metadata.json',
+      code_verifier: 'v'.repeat(128),
+      resource: 'https://mcp.example/mcp',
+    }).toString(),
+    'a refresh': new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: 'r'.repeat(64),
+      client_id: 'https://client.example/oauth/client-metadata.json',
+      resource: 'https://mcp.example/mcp',
+    }).toString(),
+    'a revocation': new URLSearchParams({
+      token: 't'.repeat(64),
+      token_type_hint: 'refresh_token',
+    }).toString(),
+  };
+
+  it.each(Object.entries(REAL_FORMS))(
+    'hands %s on with its method, headers and body',
+    async (_, body) => {
+      const handed = await limited(tokenPost(body));
+      expect(handed).toBeInstanceOf(Request);
+      const request = handed as Request;
+      expect(request.url).toBe(`${ORIGIN}/api/auth/oauth2/token`);
+      expect(request.method).toBe('POST');
+      expect(request.headers.get('authorization')).toBe('Basic eDp5');
+      expect(request.headers.get('origin')).toBe(ORIGIN);
+      expect(request.headers.get('content-type')).toBe(URLENCODED);
+      expect(await request.text()).toBe(body);
+    }
+  );
+
+  it('labels a url-encoded form exactly that, whatever parameters it was sent with', async () => {
+    const handed = (await limited(
+      tokenPost('grant_type=x', 'application/x-www-form-urlencoded; charset=UTF-8')
+    )) as Request;
+    expect(handed.headers.get('content-type')).toBe(URLENCODED);
+  });
+
+  it('refuses a form of more than 10,000 fields with a 413', async () => {
+    const answer = await limited(tokenPost(fieldsOf(10_001)));
+    expect(answer).toBeInstanceOf(Response);
+    expect((answer as Response).status).toBe(413);
+    expect(await (answer as Response).json()).toMatchObject({ error: 'invalid_request' });
+  });
+
+  it('hands on a form of 10,000 fields', async () => {
+    expect(await limited(tokenPost(fieldsOf(10_000)))).toBeInstanceOf(Request);
+  });
+
+  it('counts the fields of any body better-auth would parse as a form', async () => {
+    for (const contentType of [
+      'multipart/form-data; boundary=b, application/x-www-form-urlencoded',
+      'multipart/form-data, application/x-www-form-urlencoded',
+      'text/plain; x=application/x-www-form-urlencoded',
+    ]) {
+      const answer = await limited(tokenPost(fieldsOf(10_001), contentType));
+      expect((answer as Response).status).toBe(413);
+    }
+  });
+
+  it('refuses a form body over the size limit, declared or not', async () => {
+    const over = 'a='.padEnd(64 * 1024 + 1, 'x');
+    expect(((await limited(tokenPost(over))) as Response).status).toBe(413);
+
+    const bytes = new TextEncoder().encode(over);
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes);
+        controller.close();
+      },
+    });
+    const chunked = tokenPost(stream, URLENCODED, { duplex: 'half' } as RequestInit);
+    expect(((await limited(chunked)) as Response).status).toBe(413);
+  });
+
+  it('returns any other request as it is, its body unread', async () => {
+    const json = tokenPost(JSON.stringify({ redirect_uris: [] }), 'application/json');
+    expect(await limited(json)).toBe(json);
+    expect(json.bodyUsed).toBe(false);
+
+    const get = new Request(`${ORIGIN}/api/auth/jwks`);
+    expect(await limited(get)).toBe(get);
   });
 });

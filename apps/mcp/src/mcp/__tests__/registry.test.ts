@@ -14,8 +14,7 @@
 
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { z } from 'zod';
 import type { Viewer } from '../../auth/resolveViewer.ts';
 
@@ -313,6 +312,36 @@ async function connectClient(viewer: Viewer) {
   return client;
 }
 
+/**
+ * One JSON-RPC request to a fresh server for `viewer`, after initialize, over
+ * the in-memory transport without the SDK client: the answer as it is sent.
+ */
+async function rawRequest(viewer: Viewer, method: string, params: object = {}) {
+  const server = buildMcpServer(viewer);
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const answers = new Map<number, (message: unknown) => void>();
+  clientTransport.onmessage = message => {
+    const id = (message as { id?: unknown }).id;
+    if (typeof id === 'number') answers.get(id)?.(message);
+  };
+  await server.connect(serverTransport);
+  await clientTransport.start();
+  const send = (id: number, method: string, params: object) =>
+    new Promise(resolve => {
+      answers.set(id, resolve);
+      void clientTransport.send({ jsonrpc: '2.0', id, method, params } as never);
+    });
+  await send(1, 'initialize', {
+    protocolVersion: '2025-11-25',
+    capabilities: {},
+    clientInfo: { name: 'raw', version: '0' },
+  });
+  await clientTransport.send({ jsonrpc: '2.0', method: 'notifications/initialized' } as never);
+  const answer = await send(2, method, params);
+  await clientTransport.close();
+  return answer;
+}
+
 interface ToolCallResult {
   isError?: boolean;
   content: Array<{ type: string; text: string }>;
@@ -422,10 +451,16 @@ describe('registerToolDefinition validation', () => {
 describe('scope-filtered registration (S7)', () => {
   it('a token with only identity scopes sees ZERO tools', async () => {
     // With no read/write scope, NO tool is registered, so the McpServer never
-    // advertises the `tools` capability at all — tools/list is -32601 Method
-    // not found (SDK 1.29 behavior). Either way the surface is empty (S7).
-    const client = await connectClient(makeViewer(['openid', 'profile', 'email']));
-    await expect(client.listTools()).rejects.toMatchObject({ code: -32601 });
+    // advertises the `tools` capability at all: on the wire, tools/list is
+    // -32601 Method not found. (The SDK client turns that into an empty list.)
+    // Either way the surface is empty (S7).
+    const viewer = makeViewer(['openid', 'profile', 'email']);
+    const answer = await rawRequest(viewer, 'tools/list');
+    expect(answer).toMatchObject({ jsonrpc: '2.0', error: { code: -32601 } });
+    expect(answer).not.toHaveProperty('result');
+
+    const client = await connectClient(viewer);
+    expect((await client.listTools()).tools).toEqual([]);
   });
 
   it('a read-only token sees read tools but no write tools', async () => {
@@ -975,11 +1010,11 @@ describe('validation messages are bounded', () => {
     expect(result.isError).toBe(true);
     const text = result.content[0].text;
     expect(text.length).toBeLessThanOrEqual(4_096);
-    expect(text).toMatch(
-      /^MCP error -32602: Input validation error: Invalid arguments for tool t_strings:/
+    expect(text).toMatch(/^Input validation error: Invalid arguments for tool t_strings: /);
+    expect(text.match(/items\.\d+: Invalid input: expected string, received number/g)).toHaveLength(
+      20
     );
-    expect(text.match(/Expected string, received number at items\[\d+\]/g)).toHaveLength(20);
-    expect(text).toContain('…and 4980 more validation issues not shown');
+    expect(text).toMatch(/, …and 4980 more validation issues not shown$/);
     expect(stringsHandlerCalls).toBe(0);
   });
 
@@ -988,8 +1023,8 @@ describe('validation messages are bounded', () => {
     const result = await callTool(client, 't_strings', { items: [1] });
 
     expect(result.content[0].text).toBe(
-      'MCP error -32602: Input validation error: Invalid arguments for tool t_strings: ' +
-        'Expected string, received number at items[0]'
+      'Input validation error: Invalid arguments for tool t_strings: ' +
+        'items.0: Invalid input: expected string, received number'
     );
   });
 

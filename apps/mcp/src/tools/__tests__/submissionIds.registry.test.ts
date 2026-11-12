@@ -5,14 +5,14 @@
  * manifest (tools/index.ts, which includes the resource-mirrored read tools),
  * walks every input whose key names a submission, and asserts the schema takes
  * a numeric (ISSUE-mode) id and a uuid. A new tool that declares a submission
- * id with `.uuid()` fails here without anyone having to add it to a list.
+ * id as a uuid alone (`z.guid()`) fails here without anyone having to add it to a
+ * list.
  *
  * It also reads the schemas the registry PUBLISHES over MCP, to pin what
  * clients see for a submission id: a string with the id pattern.
  */
 
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import type { z } from 'zod';
 import type { ToolDefinition } from '../../mcp/registry.ts';

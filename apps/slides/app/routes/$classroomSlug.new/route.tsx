@@ -68,7 +68,9 @@ import { webappClassUrl } from '~/utils/webappLinks';
 import { loadUploadCapability } from '~/utils/uploadCapability.server';
 import { mediaUnusedBySlides } from '~/utils/uploadedMedia.server';
 import {
+  MULTIPART_FORM,
   UploadTooLargeError,
+  formMediaType,
   readLimitedFormData,
   uploadBodyLimit,
 } from '@classmoji/utils/upload-limit';
@@ -247,9 +249,7 @@ function messageFor(error: unknown, fallback: string): string {
  * because two big uploads are in flight.
  */
 function isMultipartUpload(request: Request): boolean {
-  return (request.headers.get('content-type') ?? '')
-    .toLowerCase()
-    .startsWith('multipart/form-data');
+  return formMediaType(request.headers.get('content-type')) === MULTIPART_FORM;
 }
 
 export const action = async ({

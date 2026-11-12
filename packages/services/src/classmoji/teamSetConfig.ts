@@ -51,6 +51,8 @@
  */
 
 import { z } from 'zod';
+import { boundIssue, capKeys, MAX_SHOWN_ISSUES } from '@classmoji/utils/input-caps';
+import { isoDateTime, uuidString } from '@classmoji/utils/zod-formats';
 import {
   FORM_LIMITS,
   isIdentityQuestion,
@@ -199,12 +201,15 @@ const RULE_ID = new RegExp(
 );
 const RuleIdSchema = z.string().regex(RULE_ID, { message: 'is not a rule of a question' });
 
-/** Per answer: 'a' = rule_a counts more for that person, 'b' = rule_b does, 'none' = no change. */
-const PriorityAnswersSchema = z
-  .record(z.string().min(1).max(64), z.enum(['a', 'b', 'none']))
-  .refine(answers => Object.keys(answers).length <= FORM_LIMITS.MAX_OPTIONS + 2, {
-    message: `lists more than ${FORM_LIMITS.MAX_OPTIONS + 2} answers`,
-  });
+/**
+ * Per answer: 'a' = rule_a counts more for that person, 'b' = rule_b does,
+ * 'none' = no change. The answer count is checked before the answers are.
+ */
+const PriorityAnswersSchema = capKeys(
+  z.record(z.string().min(1).max(64), z.enum(['a', 'b', 'none'])),
+  FORM_LIMITS.MAX_OPTIONS + 2,
+  `lists more than ${FORM_LIMITS.MAX_OPTIONS + 2} answers`
+);
 export type TeamSetPriorityAnswer = 'a' | 'b' | 'none';
 
 const PriorityShiftSchema = z.number().int().min(10).max(90).multipleOf(10);
@@ -268,7 +273,7 @@ export const TEAM_SET_JOB_PARAMS: Readonly<
 
 export const TeamSetRuleSchema = z
   .object({
-    field_id: z.string().uuid(),
+    field_id: uuidString(),
     job: z.enum(TEAM_SET_JOBS),
     strength: z.enum(TEAM_SET_STRENGTHS),
     weight: z.number().int().min(1).max(10).default(DEFAULT_RULE_WEIGHT),
@@ -290,9 +295,9 @@ const pinId = z.string().min(1).max(40);
 const pinReason = z.string().max(200).optional();
 
 /** Provenance stamps: set by the service on save (stampProvenance), never by a patch. */
-const stampBy = z.string().uuid();
+const stampBy = uuidString();
 const stampVia = z.enum(TEAM_SET_STAMP_VIA);
-const stampAt = z.string().datetime({ offset: true });
+const stampAt = isoDateTime();
 
 /** Who added the pin, from where, when. Absent on pins saved before stamps existed. */
 const pinStamps = {
@@ -305,7 +310,7 @@ const TogetherPin = z
   .object({
     id: pinId,
     kind: z.literal('together'),
-    user_ids: z.array(z.string().uuid()).min(2).max(12),
+    user_ids: z.array(uuidString()).min(2).max(12),
     reason: pinReason,
     ...pinStamps,
   })
@@ -314,7 +319,7 @@ const ApartPin = z
   .object({
     id: pinId,
     kind: z.literal('apart'),
-    user_ids: z.array(z.string().uuid()).length(2),
+    user_ids: z.array(uuidString()).length(2),
     reason: pinReason,
     ...pinStamps,
   })
@@ -323,7 +328,7 @@ const OnOptionPin = z
   .object({
     id: pinId,
     kind: z.literal('on_option'),
-    user_id: z.string().uuid(),
+    user_id: uuidString(),
     option_id: z.string(),
     reason: pinReason,
     ...pinStamps,
@@ -333,7 +338,7 @@ const NotOptionsPin = z
   .object({
     id: pinId,
     kind: z.literal('not_options'),
-    user_id: z.string().uuid(),
+    user_id: uuidString(),
     option_ids: z.array(z.string()).min(1).max(100),
     reason: pinReason,
     ...pinStamps,
@@ -366,7 +371,7 @@ const GroupingSchema = z.discriminatedUnion('mode', [
   z
     .object({
       mode: z.literal('by_option'),
-      field_id: z.string().uuid(),
+      field_id: uuidString(),
       teams_per_option: z.number().int().min(1).max(20).default(1),
     })
     .strict(),
@@ -499,7 +504,7 @@ const RuleParamsPatchSchema = z
 /** Keyed by (field_id, job). strength is required only when the rule is NEW. */
 const RuleUpsertSchema = z
   .object({
-    field_id: z.string().uuid(),
+    field_id: uuidString(),
     job: z.enum(TEAM_SET_JOBS),
     strength: z.enum(TEAM_SET_STRENGTHS).optional(),
     weight: z.number().int().min(1).max(10).optional(),
@@ -507,9 +512,7 @@ const RuleUpsertSchema = z
   })
   .strict();
 
-const RuleRefSchema = z
-  .object({ field_id: z.string().uuid(), job: z.enum(TEAM_SET_JOBS) })
-  .strict();
+const RuleRefSchema = z.object({ field_id: uuidString(), job: z.enum(TEAM_SET_JOBS) }).strict();
 
 /**
  * Merges over the option's settings; `null` clears that one setting (open →
@@ -760,45 +763,74 @@ function optionList(ids: readonly string[], labels: ProblemLabels): string {
 
 const capitalize = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1);
 
-/** What a zod issue says, as words (a refine's own message is already one). */
-function issueWords(issue: z.ZodIssue): string {
+/** The value at `path` inside `root`, or undefined when any step is absent. */
+function valueAt(root: unknown, path: readonly PropertyKey[]): unknown {
+  let node = root;
+  for (const key of path) {
+    if (node === null || typeof node !== 'object') return undefined;
+    node = (node as Record<PropertyKey, unknown>)[key];
+  }
+  return node;
+}
+
+/**
+ * What a zod issue says, as words (a refine's own message is already one).
+ * `root` is the value that was parsed: a value of the wrong kind is "missing"
+ * when nothing is at its path.
+ */
+function issueWords(issue: z.ZodIssue, root: unknown): string {
   switch (issue.code) {
     case 'custom':
       return issue.message;
     case 'invalid_type':
-      return issue.received === 'undefined' ? 'is missing' : 'has a value of the wrong kind';
+      return valueAt(root, issue.path) === undefined
+        ? 'is missing'
+        : 'has a value of the wrong kind';
     case 'too_small': {
       const bound = issue.inclusive ? Number(issue.minimum) : Number(issue.minimum) + 1;
-      if (issue.type === 'array')
+      if (issue.origin === 'array')
         return issue.exact ? `needs exactly ${bound}` : `needs at least ${bound}`;
-      if (issue.type === 'string')
+      if (issue.origin === 'string')
         return bound <= 1 ? 'is empty' : `is shorter than ${bound} characters`;
       return `must be at least ${bound}`;
     }
     case 'too_big': {
       const bound = issue.inclusive ? Number(issue.maximum) : Number(issue.maximum) - 1;
-      if (issue.type === 'array')
+      if (issue.origin === 'array')
         return issue.exact ? `needs exactly ${bound}` : `has more than ${bound}`;
-      if (issue.type === 'string') return `is longer than ${bound} characters`;
+      if (issue.origin === 'string') return `is longer than ${bound} characters`;
       return `must be at most ${bound}`;
     }
     case 'not_multiple_of':
-      return `must be a multiple of ${String(issue.multipleOf)}`;
-    case 'invalid_enum_value':
+      return `must be a multiple of ${String(issue.divisor)}`;
+    case 'invalid_value': {
+      // A literal's one value, or an enum's values. zod reports an enum value
+      // that is absent or not a string here too, not as invalid_type: worded
+      // as invalid_type is.
+      if (issue.values.length === 1) return 'isn’t the allowed value';
+      const value = valueAt(root, issue.path);
+      if (value === undefined) return 'is missing';
+      if (typeof value !== 'string' && issue.values.every(v => typeof v === 'string')) {
+        return 'has a value of the wrong kind';
+      }
       return 'isn’t one of the allowed values';
-    case 'invalid_literal':
-      return 'isn’t the allowed value';
-    case 'invalid_union_discriminator':
-      return 'isn’t one of the allowed kinds';
+    }
+    case 'invalid_key':
+      // A record key that fails its own schema: that schema's words ("is
+      // empty", "is longer than 64 characters").
+      return issue.issues[0] ? issueWords(issue.issues[0], undefined) : 'isn’t valid';
     case 'invalid_union':
-      return 'doesn’t match any allowed form';
+      // A discriminated union names its discriminator when no option has the value.
+      return 'discriminator' in issue && issue.discriminator !== undefined
+        ? 'isn’t one of the allowed kinds'
+        : 'doesn’t match any allowed form';
     case 'unrecognized_keys':
       return issue.keys.length === 1
         ? 'has a setting that isn’t recognized'
         : `has ${issue.keys.length} settings that aren’t recognized`;
-    case 'invalid_string':
+    case 'invalid_format':
       // A regex's own message is one of ours (the rule id's).
-      return issue.validation === 'regex' ? issue.message : 'isn’t in the expected format';
+      return issue.format === 'regex' ? issue.message : 'isn’t in the expected format';
     default:
       return 'isn’t valid';
   }
@@ -809,11 +841,7 @@ function issueWords(issue: z.ZodIssue): string {
  * (read from `root`, the object the path is into), an option by its label,
  * a pin by its kind, a setting by its name.
  */
-function issueSubject(
-  path: readonly (string | number)[],
-  root: unknown,
-  labels: ProblemLabels
-): string {
+function issueSubject(path: readonly PropertyKey[], root: unknown, labels: ProblemLabels): string {
   const [head, second, third] = path;
   if (head === 'options' && typeof second === 'string') {
     return `Settings of ${optionList([second], labels)}`;
@@ -845,7 +873,7 @@ function issueSubject(
 }
 
 /** The setting inside the subject a path ends at ("smallest", "cost of each rank"), if any. */
-function issueDetail(path: readonly (string | number)[]): string | null {
+function issueDetail(path: readonly PropertyKey[]): string | null {
   const at = path.indexOf('params');
   if (at >= 0 && typeof path[at + 1] === 'string') {
     return PARAM_WORDS[path[at + 1] as keyof TeamSetRuleParams] ?? 'a setting';
@@ -865,7 +893,10 @@ function issueDetail(path: readonly (string | number)[]): string | null {
 /**
  * zod issues as problems: "Team size (largest): must be at most 50." —
  * `prefix` ('patch' or 'config') starts each path; `root` is the object the
- * paths are into, so a rule can be named by its question.
+ * paths are into, so a rule can be named by its question. The first
+ * MAX_SHOWN_ISSUES, each with what it repeats from the input cut
+ * (`boundIssue`: message, path segments, listed keys), then one problem about
+ * the setup saying how many more there were.
  */
 function issuesToProblems(
   issues: z.ZodIssue[],
@@ -874,17 +905,26 @@ function issuesToProblems(
   fields?: readonly FormField[]
 ): TeamSetConfigProblem[] {
   const labels = problemLabels(fields);
-  return issues.map(issue => {
+  const problems = issues.slice(0, MAX_SHOWN_ISSUES).map(issue => {
+    // Named and worded from the issue as zod gave it (a path is read into
+    // `root`); what is shown of the input, from the bounded one.
+    const shown = boundIssue(issue);
     // A refine's message already says what it is about.
     const detail = issue.code === 'custom' ? null : issueDetail(issue.path);
     const subject = issueSubject(issue.path, root, labels);
     // An unknown key is named in the path only.
-    const keys = issue.code === 'unrecognized_keys' ? [issue.keys.join(',')] : [];
+    const keys = shown.code === 'unrecognized_keys' ? [shown.keys.join(',')] : [];
+    const words = issueWords({ ...issue, message: shown.message } as z.ZodIssue, root);
     return {
-      path: [prefix, ...issue.path, ...keys].join('.'),
-      text: `${subject}${detail ? ` (${detail})` : ''}: ${issueWords(issue)}.`,
+      path: [prefix, ...shown.path, ...keys].map(String).join('.'),
+      text: `${subject}${detail ? ` (${detail})` : ''}: ${words}.`,
     };
   });
+  const more = issues.length - problems.length;
+  if (more > 0) {
+    problems.push({ path: '', text: `…and ${more} more problem${more === 1 ? '' : 's'}.` });
+  }
+  return problems;
 }
 
 /**

@@ -54,6 +54,7 @@ import {
 import { MCP_BODY_LIMIT_BYTES } from '../bodyLimit.ts';
 import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
+import { uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition, ToolResult } from '../mcp/registry.ts';
 import { renderAfterPageApply } from './pageRender.ts';
@@ -340,7 +341,7 @@ export const pageContentOutlineTool: ToolDefinition<PageContentOutlineArgs> = {
   roles: OWNER_TEACHER,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    page_id: z.string().uuid().describe('Page id'),
+    page_id: uuidString().describe('Page id'),
     at: z
       .enum(['main', 'preview'])
       .optional()
@@ -453,7 +454,7 @@ export const pageContentGetTool: ToolDefinition<PageContentGetArgs> = {
   roles: OWNER_TEACHER,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    page_id: z.string().uuid().describe('Page id'),
+    page_id: uuidString().describe('Page id'),
     block_ids: z
       .array(z.string().min(1))
       .min(1)
@@ -758,7 +759,7 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
   roles: OWNER_TEACHER,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    page_id: z.string().uuid().describe('Page id'),
+    page_id: uuidString().describe('Page id'),
     expected_sha: z
       .string()
       .min(1)
@@ -1210,7 +1211,7 @@ export const pagePreviewAcceptTool: ToolDefinition<PagePreviewAcceptArgs> = {
   roles: OWNER_TEACHER,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    page_id: z.string().uuid().describe('Page id'),
+    page_id: uuidString().describe('Page id'),
     resolutions: z
       .array(
         z
@@ -1384,7 +1385,7 @@ export const pagePreviewDiscardTool: ToolDefinition<PagePreviewArgs> = {
   roles: OWNER_TEACHER,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    page_id: z.string().uuid().describe('Page id'),
+    page_id: uuidString().describe('Page id'),
   },
   handler: async (args, ctx) => {
     const page = await loadPageWithRepoInClassroom(args.page_id, ctx);
@@ -1498,7 +1499,7 @@ export const pageAssetUploadTool: ToolDefinition<PageAssetUploadArgs> = {
   roles: OWNER_TEACHER,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    page_id: z.string().uuid().describe('Page id'),
+    page_id: uuidString().describe('Page id'),
     filename: z
       .string()
       .min(1)
@@ -1780,7 +1781,7 @@ export const pageCoverSetTool: ToolDefinition<PageCoverSetArgs> = {
   roles: OWNER_TEACHER,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    page_id: z.string().uuid().describe('Page id'),
+    page_id: uuidString().describe('Page id'),
     url: z
       .string()
       .min(1)

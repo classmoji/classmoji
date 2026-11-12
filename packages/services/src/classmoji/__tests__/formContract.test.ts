@@ -7,7 +7,7 @@
  * renderer and the submit path share.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   DEFINITION_VERSION,
   FIELD_TYPES,
@@ -1206,5 +1206,27 @@ describe('formContract — options_from', () => {
     expect(resolved[2]).toBe(fields[2]);
     expect(resolved[1].options).toEqual(fields[0].options);
     expect(unlinked.options).toEqual([]);
+  });
+});
+
+describe('a form check that throws', () => {
+  it('is refused, and logged by where and the error class only', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const input = new Proxy([], {
+      get() {
+        throw new TypeError('SENTINEL-FORM-7f3a');
+      },
+    });
+    try {
+      expect(() => parseFormDefinition(input)).toThrow(
+        'Invalid form definition: it could not be checked.'
+      );
+      expect(warn).toHaveBeenCalledTimes(1);
+      const line = warn.mock.calls[0]!.map(String).join(' ');
+      expect(line).toBe('[forms] form definition check threw: TypeError');
+      expect(line).not.toContain('SENTINEL');
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

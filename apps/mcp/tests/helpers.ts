@@ -342,9 +342,13 @@ export function expectForbidden(
   if (code) expect(outcome.payload.code, `${context}: expected code ${code}`).toBe(code);
 }
 
-/** MCP resource error codes (mirrors RESOURCE_ERROR_CODES in the registry). */
+/**
+ * MCP resource error codes (mirrors RESOURCE_ERROR_CODES in the registry). A
+ * resource that is not found is -32602, the code invalid params share, so
+ * the error's `data.kind` ('not_found') tells them apart.
+ */
 export const RESOURCE_FORBIDDEN = -32003;
-export const RESOURCE_NOT_FOUND = -32002;
+export const RESOURCE_NOT_FOUND = -32602;
 
 /** Poll until `probe` resolves truthy — for fire-and-forget side effects
  * (HelperService token minting is intentionally not awaited). */

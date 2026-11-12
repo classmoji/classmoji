@@ -68,6 +68,7 @@ import {
   MAX_ANSWERS_MIN,
 } from '@classmoji/utils/quiz-agent';
 import { z } from 'zod';
+import { isoDateTime, uuidString } from '@classmoji/utils/zod-formats';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
 import { assertProTier } from '../authz/proTier.ts';
@@ -275,7 +276,7 @@ const tokensPerHourSchema = z
     "Extension tokens per extension hour; null = the classroom's default_tokens_per_hour, 0 = no extensions"
   );
 
-const moduleIdSchema = z.string().uuid().describe('Module the quiz sits in (see list_modules)');
+const moduleIdSchema = uuidString().describe('Module the quiz sits in (see list_modules)');
 
 // Author settings, like question_count (QUIZ_AUTHOR_SETTING_ARGS). Ranges are
 // the quiz form's and the service's (@classmoji/utils/quiz-agent answerRules).
@@ -341,20 +342,13 @@ function excludedPathsArg(value: string[] | undefined): string[] | undefined {
   return result.value;
 }
 
-const dueDateSchema = z
-  .string()
-  .datetime({ offset: true })
-  .describe('Due date (ISO 8601, e.g. 2026-07-20T23:59:00-04:00); late after it');
+const DUE_DATE_TEXT = 'Due date (ISO 8601, e.g. 2026-07-20T23:59:00-04:00); late after it';
+const RELEASE_AT_TEXT = 'Opens (ISO 8601): students see it from then on, once published';
+const CLOSES_AT_TEXT = 'Closes (ISO 8601): no new attempt from then on; one under way may finish';
 
-const releaseAtSchema = z
-  .string()
-  .datetime({ offset: true })
-  .describe('Opens (ISO 8601): students see it from then on, once published');
-
-const closesAtSchema = z
-  .string()
-  .datetime({ offset: true })
-  .describe('Closes (ISO 8601): no new attempt from then on; one under way may finish');
+const dueDateSchema = isoDateTime().describe(DUE_DATE_TEXT);
+const releaseAtSchema = isoDateTime().describe(RELEASE_AT_TEXT);
+const closesAtSchema = isoDateTime().describe(CLOSES_AT_TEXT);
 
 interface QuizCreateArgs {
   classroom: string;
@@ -415,9 +409,7 @@ export const quizCreateTool: ToolDefinition<QuizCreateArgs> = {
       .max(20000)
       .optional()
       .describe('Extra instructions steering the AI’s persona/behavior during the quiz'),
-    repository_id: z
-      .string()
-      .uuid()
+    repository_id: uuidString()
       .optional()
       .describe('Repo (assignment container) this quiz is about — required for code context'),
     release_at: releaseAtSchema.optional(),
@@ -612,7 +604,7 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
   roles: QUIZ_STAFF,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    quiz_id: z.string().uuid().describe('Quiz id'),
+    quiz_id: uuidString().describe('Quiz id'),
     name: z.string().min(1).max(200).optional().describe('Quiz name'),
     rubric_prompt: z
       .string()
@@ -625,18 +617,17 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
       .max(20000)
       .optional()
       .describe('Extra instructions steering the AI’s persona/behavior during the quiz'),
-    repository_id: z
-      .string()
-      .uuid()
+    repository_id: uuidString()
       .nullable()
       .optional()
       .describe('Repo (assignment container) this quiz is about; null unlinks it'),
     module_id: moduleIdSchema.optional(),
     // Nullable here but not on quiz_create: an update has an existing value to
-    // clear.
-    release_at: releaseAtSchema.nullable().optional(),
-    due_date: dueDateSchema.nullable().optional(),
-    closes_at: closesAtSchema.nullable().optional(),
+    // clear. Described again after .nullable(), so the field itself carries
+    // the text, not only its date branch.
+    release_at: releaseAtSchema.nullable().describe(RELEASE_AT_TEXT).optional(),
+    due_date: dueDateSchema.nullable().describe(DUE_DATE_TEXT).optional(),
+    closes_at: closesAtSchema.nullable().describe(CLOSES_AT_TEXT).optional(),
     weight: weightSchema.optional(),
     tokens_per_hour: tokensPerHourSchema.optional(),
     published: z
@@ -830,7 +821,7 @@ export const quizPublishTool: ToolDefinition<QuizPublishArgs> = {
   roles: QUIZ_AUTHORS,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    quiz_id: z.string().uuid().describe('Quiz id'),
+    quiz_id: uuidString().describe('Quiz id'),
   },
   handler: async (args, ctx) => {
     await assertQuizSurfaceEnabled(ctx);
@@ -912,7 +903,7 @@ export const quizDeleteTool: ToolDefinition<QuizDeleteArgs> = {
   roles: QUIZ_AUTHORS,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    quiz_id: z.string().uuid().describe('Quiz id'),
+    quiz_id: uuidString().describe('Quiz id'),
     confirm: z
       .literal(true)
       .describe('Must be true — acknowledges that all student attempts are deleted with the quiz'),

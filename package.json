@@ -65,7 +65,6 @@
     "cleanup:github-teams": "dotenv -e .env -- node scripts/cleanup-github-teams.js"
   },
   "dependencies": {
-    "@infisical/sdk": "^5.0.2",
     "@trigger.dev/sdk": "4.8.3",
     "dayjs": "^1.11.13",
     "dotenv": "^16.4.5",

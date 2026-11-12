@@ -33,6 +33,12 @@
  * it name its own expected origin, which is the whole check inverted.
  */
 
+import {
+  UploadTooLargeError,
+  declaredBodyTooLarge,
+  readLimitedBody,
+} from '@classmoji/utils/upload-limit';
+
 /** Why a request was refused. Callers log this; users never see it. */
 export type OriginRejection = 'origin-mismatch' | 'cross-site-fetch';
 
@@ -97,9 +103,10 @@ export const MAX_SUBMISSION_BYTES = 300 * 1024;
  * Read a request body as text, refusing anything over the cap.
  *
  * `Content-Length` is checked first because it lets an oversized post be
- * rejected without reading it at all — but it is a client-supplied number, so
- * the actual decoded length is checked again afterwards. A body that lies about
- * its length is refused on the second check.
+ * rejected without reading it at all — but it is a client-supplied number, and
+ * absent from a body sent in chunks, so the bytes are also counted as they
+ * arrive (`readLimitedBody`): the read stops, and the stream is cancelled, once
+ * the count passes the cap.
  *
  * Returns `null` when the body is too large; the caller answers 413.
  */
@@ -107,10 +114,13 @@ export async function readCappedBody(
   request: Request,
   limit: number = MAX_SUBMISSION_BYTES
 ): Promise<string | null> {
-  const declared = Number(request.headers.get('content-length'));
-  if (Number.isFinite(declared) && declared > limit) return null;
+  if (declaredBodyTooLarge(request.headers, limit)) return null;
+  if (!request.body) return '';
 
-  const body = await request.text();
-  if (new TextEncoder().encode(body).length > limit) return null;
-  return body;
+  try {
+    return new TextDecoder().decode(await readLimitedBody(request.body, limit));
+  } catch (error: unknown) {
+    if (error instanceof UploadTooLargeError) return null;
+    throw error;
+  }
 }
