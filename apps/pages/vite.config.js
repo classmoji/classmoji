@@ -3,6 +3,15 @@ import { defaultClientConditions, defaultServerConditions, defineConfig } from '
 import tsconfigPaths from 'vite-tsconfig-paths';
 import tailwindcss from '@tailwindcss/vite';
 
+// The Sentry plugins a build keeps: the config `buildEnd` reads, hidden source
+// maps and Sentry's bundler plugin. The others add a tunnel route and a hook to
+// the server build for Sentry on the server, which no app here runs.
+const SENTRY_BUILD_PLUGINS = new Set([
+  'sentry-react-router-config-injector',
+  'sentry-react-router-update-source-map-setting',
+  'sentry-vite-plugin',
+]);
+
 export default async ({ command, mode }) => {
   // Source maps for Sentry (error stack traces), only when SENTRY_AUTH_TOKEN is
   // set (CI deploys). Without it nothing here runs and the build is unchanged.
@@ -11,28 +20,33 @@ export default async ({ command, mode }) => {
   const sentryAuthToken = process.env.SENTRY_AUTH_TOKEN?.trim();
   const uploadSourceMaps = command === 'build' && Boolean(sentryAuthToken);
   const sentryPlugins = uploadSourceMaps
-    ? await (
-        await import('@sentry/react-router')
-      ).sentryReactRouter(
-        {
-          org: 'dali-lab',
-          // One project for webapp, pages and slides; debug ids tell the bundles apart.
-          project: 'classmoji',
-          authToken: sentryAuthToken,
-          telemetry: false,
-          // A fixed label for the uploaded artifacts (debug ids do the
-          // matching). Nothing is injected into the bundles, so their content
-          // and file names do not change from build to build because of it.
-          release: {
-            name: 'classmoji-sourcemaps',
-            inject: false,
-            create: false,
-            finalize: false,
-            setCommits: false,
+    ? (
+        await (
+          await import('@sentry/react-router/vite')
+        ).sentryReactRouter(
+          {
+            org: 'dali-lab',
+            // One project for webapp, pages and slides; debug ids tell the bundles apart.
+            project: 'classmoji',
+            authToken: sentryAuthToken,
+            telemetry: false,
+            // A fixed label for the uploaded artifacts (debug ids do the
+            // matching). Nothing is injected into the bundles, so their content
+            // and file names do not change from build to build because of it.
+            release: {
+              name: 'classmoji-sourcemaps',
+              inject: false,
+              create: false,
+              finalize: false,
+              setCommits: false,
+            },
+            // Sentry runs in the browser only: no build-time instrumentation
+            // of server modules, which would also bundle them into the server build.
+            buildTimeInstrumentation: false,
           },
-        },
-        { command, mode }
-      )
+          { command, mode }
+        )
+      ).filter(plugin => SENTRY_BUILD_PLUGINS.has(plugin.name))
     : [];
 
   return defineConfig({
@@ -79,12 +93,7 @@ export default async ({ command, mode }) => {
         '@hocuspocus/provider',
       ],
       entries: ['./app/root.jsx'],
-      exclude: [
-        '@classmoji/database',
-        '@classmoji/services',
-        '@prisma/client',
-        'octokit',
-      ],
+      exclude: ['@classmoji/database', '@classmoji/services', '@prisma/client', 'octokit'],
     },
     plugins: [tailwindcss(), reactRouter(), tsconfigPaths(), ...sentryPlugins],
     server: {
