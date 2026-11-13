@@ -33,9 +33,10 @@ export default async ({ command, mode }) => {
             project: 'classmoji',
             authToken: sentryAuthToken,
             telemetry: false,
-            // A fixed label for the uploaded artifacts (debug ids do the
-            // matching). Nothing is injected into the bundles, so their content
-            // and file names do not change from build to build because of it.
+            // A fixed release for the uploaded artifacts (debug ids do the
+            // matching; `buildEnd` creates it whatever `create` says). Nothing
+            // is injected into the bundles, so their content and file names
+            // do not change from build to build because of it.
             release: {
               name: 'classmoji-sourcemaps',
               inject: false,

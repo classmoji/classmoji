@@ -82,7 +82,8 @@ export const initSentry = (
     // No server SDK continues a trace, so no sentry-trace/baggage headers.
     tracePropagationTargets: [],
     integrations: [reactRouterTracingIntegration()],
-    initialScope: { tags: { app } },
+    // Errors carry tags, streamed spans carry attributes: both name the app.
+    initialScope: { tags: { app }, attributes: { app } },
   });
   enabled = true;
   return { instrumentations: [createSentryClientInstrumentation({ captureErrors: false })] };
