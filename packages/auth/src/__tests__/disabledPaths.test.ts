@@ -555,9 +555,10 @@ describe('sign-in rate limits', () => {
   it('lets a class on one network start a Github or Gitlab sign-in together', () => {
     const rules = auth.options.rateLimit?.customRules ?? {};
     expect(rules['/sign-in/social']).toEqual({ window: 10, max: 100 });
+    expect(rules['/gitlab-instance/sign-in']).toEqual({ window: 10, max: 100 });
   });
 
-  it('keeps the password and code rules as they were', () => {
+  it('keeps the password, code and Gitlab setup rules as they were', () => {
     const rules = auth.options.rateLimit?.customRules ?? {};
     expect(rules['/sign-in/email']).toEqual({ window: 60, max: 5 });
     expect(rules['/sign-up/email']).toEqual({ window: 60, max: 3 });
@@ -565,6 +566,8 @@ describe('sign-in rate limits', () => {
     expect(rules['/email-otp/verify-email']).toEqual({ window: 60, max: 5 });
     expect(rules['/email-otp/reset-password']).toEqual({ window: 60, max: 5 });
     expect(rules['/email-otp/request-password-reset']).toEqual({ window: 60, max: 3 });
+    expect(rules['/gitlab-instance/setup']).toEqual({ window: 60 * 60, max: 5 });
+    expect(rules['/gitlab-instance/link']).toEqual({ window: 60, max: 10 });
   });
 
   it('refuses none of 30 social sign-ins from one address in 10 s, and the 6th password sign-in in a minute', async () => {

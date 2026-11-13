@@ -1809,14 +1809,14 @@ export const auth = betterAuth({
   // platform admin (the setup callback also caps pending ones).
   rateLimit: {
     customRules: {
-      // Github and gitlab.com sign-in. better-auth's default for every
-      // `/sign-in*` path is 3 per 10 s, and a class on one school network signs
-      // in together from one address. This path only starts a provider
-      // redirect, nothing to guess; still capped per address so one client
-      // can't mint unlimited OAuth state rows.
+      // Sign-in through Github, gitlab.com or an approved school Gitlab. A
+      // class on one school network signs in together from one address, which
+      // better-auth's default for `/sign-in*` (3 per 10 s) refuses. These
+      // paths only start a provider redirect, nothing to guess; still capped
+      // per address so one client can't mint unlimited OAuth state rows.
       '/sign-in/social': { window: 10, max: 100 },
+      '/gitlab-instance/sign-in': { window: 10, max: 100 },
       '/gitlab-instance/setup': { window: 60 * 60, max: 5 },
-      '/gitlab-instance/sign-in': { window: 60, max: 20 },
       '/gitlab-instance/link': { window: 60, max: 10 },
       '/sign-in/email': { window: 60, max: 5 },
       '/sign-up/email': { window: 60, max: 3 },
