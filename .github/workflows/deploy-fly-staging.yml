@@ -211,6 +211,14 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      # Before the release command migrates: a migration that breaks the
+      # transaction rule (packages/database/README.md) stops the deploy here.
+      # One Node script, no install.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Check migrations
+        run: node --experimental-strip-types packages/database/scripts/checkMigrations.ts
       - uses: ./.github/actions/setup-flyctl
         timeout-minutes: 15
       - name: Deploy webapp

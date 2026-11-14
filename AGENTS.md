@@ -34,7 +34,7 @@ Monorepo via npm workspaces + Turbo; Node 24+ required.
 
 - Install: `npm install`; Init: `npm run init`
 - Start DB (Docker): `npm run db:start` (postgres only)
-- **Prisma schema** lives in `packages/database/schema.prisma` (not the default location). Migrations are in `packages/database/migrations/`. **Never use `prisma db push`** — always create proper migrations. Workflow: edit schema → `npm run db:generate` (regenerate client) → create migration → `npm run db:deploy` (apply migrations).
+- **Prisma schema** lives in `packages/database/schema.prisma` (not the default location). Migrations are in `packages/database/migrations/`. **Never use `prisma db push`** — always create proper migrations. Workflow: edit schema → `npm run db:generate` (regenerate client) → create migration → `npm run db:deploy` (apply migrations). Every new `migration.sql` starts with `BEGIN;` and ends with `COMMIT;` (a lone statement Postgres refuses inside a transaction, like `CREATE INDEX CONCURRENTLY`, goes in its own migration whose first line is `-- classmoji:no-transaction: <reason>`); `npm run db:check-migrations` enforces it (on every PR touching a migration and before each deploy's release command; the old migrations are frozen in `packages/database/scripts/exemptMigrations.ts`), and `packages/database/README.md` says why, how to recover a failed one, and what to do when `migrate dev` refuses a local database.
 - Query DB: `psql "$DATABASE_URL" -c "SELECT ..."`
 - All apps (concurrent dev): `npm run dev` (check `.dev-context` for ports/database after starting)
 - **Dev logs**: `/tmp/classmoji-dev.log` (or `/tmp/classmoji-dev-<feature>.log` for devports)

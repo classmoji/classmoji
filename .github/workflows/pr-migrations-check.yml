@@ -1,0 +1,52 @@
+name: PR Migrations Check
+
+# Every migration not in packages/database/scripts/exemptMigrations.ts must
+# open and close its own transaction (packages/database/README.md says why).
+# The rule's own vitest test runs only locally (no tests run on pull requests),
+# so this checks it before merge. The deploy workflows run the same command
+# again before the webapp's release command migrates.
+#
+# Needs no install and no secrets: one Node script that imports only Node
+# built-ins. It checks the merge result (the default pull_request ref), so a
+# migration from a long-lived branch is judged against what will land.
+# Under pull_request this runs from the PR's own copy of the workflow and the
+# rules, so in a fork PR reviewers should look at any change to them.
+
+on:
+  pull_request:
+    branches:
+      - dev
+      - staging
+      - main
+    paths:
+      - '.github/workflows/pr-migrations-check.yml'
+      - 'packages/database/migrations/**'
+      - 'packages/database/scripts/migrationRules.ts'
+      - 'packages/database/scripts/exemptMigrations.ts'
+      - 'packages/database/scripts/checkMigrations.ts'
+
+permissions: {}
+
+concurrency:
+  group: pr-migrations-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check-migrations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Every new migration runs in its own transaction
+        run: node --experimental-strip-types packages/database/scripts/checkMigrations.ts

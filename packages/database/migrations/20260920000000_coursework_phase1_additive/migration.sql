@@ -19,6 +19,8 @@
 -- the transaction instead of landing.
 -- ============================================================================
 
+BEGIN;
+
 -- 0. Ledger (modelled as CourseworkMigrationReport in schema.prisma).
 CREATE TABLE "coursework_migration_report" (
   "id"           TEXT NOT NULL,
@@ -238,3 +240,5 @@ ALTER TABLE "assignments" ADD CONSTRAINT "assignments_quiz_id_fkey"
   FOREIGN KEY ("quiz_id") REFERENCES "quizzes"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "assignments" ADD CONSTRAINT "assignments_form_id_fkey"
   FOREIGN KEY ("form_id") REFERENCES "forms"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+COMMIT;
