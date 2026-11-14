@@ -30,7 +30,10 @@ const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const memory = createMemoryLimiter({ max: 5, windowMs: 60 * 60 * 1000 });
 
 const escapeHtml = (value: string) =>
-  value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+  value.replace(
+    /[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!
+  );
 
 const field = (form: FormData, key: string) => String(form.get(key) ?? '').trim();
 
@@ -123,7 +126,11 @@ export const POST: APIRoute = async ({ request, clientAddress }) => {
   }).catch(() => null);
 
   if (!response?.ok) {
-    console.error('[contact] Resend rejected the message:', response?.status, await response?.text());
+    console.error(
+      '[contact] Resend rejected the message:',
+      response?.status,
+      await response?.text()
+    );
     return reply(request, 502, {
       ok: false,
       error: `Could not send your message. Email ${TO} instead.`,

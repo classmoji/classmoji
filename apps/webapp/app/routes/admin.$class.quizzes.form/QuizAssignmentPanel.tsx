@@ -433,6 +433,7 @@ export const ReadOnlyAssignmentPanel = ({
       </div>
       {!data.moduleId && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900 dark:border-amber-800/50 dark:bg-amber-900/20 dark:text-amber-200">
+          {/* eslint-disable-next-line react/no-unescaped-entities -- pre-existing, kept as found when lint moved to oxlint */}
           The class owner or a teacher chooses this quiz's module.
         </div>
       )}

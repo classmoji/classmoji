@@ -58,20 +58,14 @@ test.describe('Grading Queue Tabs', () => {
   });
 
   test('Overview tab is active by default', async ({ authenticatedPage: page }) => {
-    await expect(page.getByTestId('grading-tab-overview')).toHaveAttribute(
-      'aria-selected',
-      'true'
-    );
+    await expect(page.getByTestId('grading-tab-overview')).toHaveAttribute('aria-selected', 'true');
   });
 
   // Each non-default tab: clicking it marks it active and the previous one inactive.
   for (const key of ['submitted', 'unsubmitted', 'ungraded', 'graded', 'overdue', 'all']) {
     test(`can switch to the ${key} tab`, async ({ authenticatedPage: page }) => {
       await page.getByTestId(`grading-tab-${key}`).click();
-      await expect(page.getByTestId(`grading-tab-${key}`)).toHaveAttribute(
-        'aria-selected',
-        'true'
-      );
+      await expect(page.getByTestId(`grading-tab-${key}`)).toHaveAttribute('aria-selected', 'true');
       await expect(page.getByTestId('grading-tab-overview')).toHaveAttribute(
         'aria-selected',
         'false'
@@ -180,10 +174,7 @@ test.describe('Grading Queue with a seeded ungraded submission', () => {
     authenticatedPage: page,
   }) => {
     const sub = seeded!;
-    await expect(page.getByTestId('grading-tab-overview')).toHaveAttribute(
-      'aria-selected',
-      'true'
-    );
+    await expect(page.getByTestId('grading-tab-overview')).toHaveAttribute('aria-selected', 'true');
 
     const table = page.locator('table');
     await expect(table).toBeVisible();

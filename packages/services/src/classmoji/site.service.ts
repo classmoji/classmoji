@@ -1100,14 +1100,12 @@ export async function listPublicModulesForViewer(
         ];
       }),
       // A quiz is never public: its name alone says what the work is.
-      ...openQuizzes(quizzes).map(
-        (a): SiteScheduleItem => ({
-          kind: 'placeholder',
-          id: a.id,
-          item_type: 'QUIZ',
-          due_at: a.student_deadline,
-        })
-      ),
+      ...openQuizzes(quizzes).map((a): SiteScheduleItem => ({
+        kind: 'placeholder',
+        id: a.id,
+        item_type: 'QUIZ',
+        due_at: a.student_deadline,
+      })),
     ],
   }));
 }

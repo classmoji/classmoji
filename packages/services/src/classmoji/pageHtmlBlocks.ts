@@ -25,7 +25,6 @@ type PageSchemaServer = {
 let loading: Promise<PageSchemaServer> | null = null;
 
 function loadPageSchemaServer(): Promise<PageSchemaServer> {
-  // eslint-disable-next-line import/no-unresolved -- a workspace package, see above
   loading ??= import('@classmoji/page-schema/server').then(
     module => module as unknown as PageSchemaServer,
     error => {

@@ -1414,6 +1414,7 @@ function cloneRepo(full: string, reposDir: string): string {
   return dest;
 }
 
+// eslint-disable-next-line no-unused-vars -- pre-existing, kept as found when lint moved to oxlint
 function pad(s: string | number, n: number) {
   return String(s).padEnd(n);
 }

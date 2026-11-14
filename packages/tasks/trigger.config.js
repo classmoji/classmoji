@@ -1,9 +1,6 @@
 import { defineConfig } from '@trigger.dev/sdk';
-// eslint-disable-next-line import/no-unresolved
 import { prismaExtension } from '@trigger.dev/build/extensions/prisma';
-// eslint-disable-next-line import/no-unresolved
 import { aptGet, ffmpeg, syncEnvVars } from '@trigger.dev/build/extensions/core';
-// eslint-disable-next-line import/no-unresolved
 import { pythonExtension } from '@trigger.dev/python/extension';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';

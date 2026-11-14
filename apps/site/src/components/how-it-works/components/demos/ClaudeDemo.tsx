@@ -178,7 +178,9 @@ function AssignmentPage() {
       key: 'grade',
       width: 96,
       render: () => (
-        <span className="whitespace-nowrap text-[10.5px] italic text-gray-400 dark:text-inkd-4">No grades yet</span>
+        <span className="whitespace-nowrap text-[10.5px] italic text-gray-400 dark:text-inkd-4">
+          No grades yet
+        </span>
       ),
     },
     {
@@ -453,7 +455,10 @@ export function ClaudeDemo() {
               <span className="h-2.5 w-2.5 rounded-full bg-[#DAD8D0] dark:bg-[#4A4944]" />
               <span className="h-2.5 w-2.5 rounded-full bg-[#DAD8D0] dark:bg-[#4A4944]" />
             </div>
-            <PanelLeftIcon className="ml-1 h-3.5 w-3.5 text-[#73726C] dark:text-[#9C9A92]" aria-hidden />
+            <PanelLeftIcon
+              className="ml-1 h-3.5 w-3.5 text-[#73726C] dark:text-[#9C9A92]"
+              aria-hidden
+            />
             <ArrowLeftIcon className="h-3 w-3 text-[#73726C] dark:text-[#9C9A92]" aria-hidden />
             <ArrowRightIcon className="h-3 w-3 text-[#B5B3AC] dark:text-[#5F5E59]" aria-hidden />
             <span className="ml-1 flex min-w-0 items-center gap-1 truncate text-[11.5px] font-medium">

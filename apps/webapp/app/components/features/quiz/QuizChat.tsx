@@ -763,8 +763,7 @@ const hintCostOf = (output: unknown): number | null => {
 export const openQuestionOf = (
   messages: readonly QuizUIMessage[]
 ): { question: number; used: number; finished: boolean; max: number | null } | null => {
-  let open: { question: number; used: number; finished: boolean; max: number | null } | null =
-    null;
+  let open: { question: number; used: number; finished: boolean; max: number | null } | null = null;
   let furthest = 0;
   let complete = false;
   for (const message of messages) {

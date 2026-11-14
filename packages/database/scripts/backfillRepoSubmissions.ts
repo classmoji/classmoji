@@ -52,13 +52,17 @@ async function main(): Promise<void> {
           updated += 1;
           console.log(`[backfill] ${row.id} (${row.git_repo.name}): submitted ${at.toISOString()}`);
         } else {
-          console.log(`[backfill] ${row.id} (${row.git_repo.name}): no student push before the deadline`);
+          console.log(
+            `[backfill] ${row.id} (${row.git_repo.name}): no student push before the deadline`
+          );
         }
       } else {
         console.log(`[backfill] ${row.id} (${row.git_repo.name}): would check the repo history`);
       }
     } catch (error) {
-      console.warn(`[backfill] ${row.id}: ${error instanceof Error ? error.message : String(error)}`);
+      console.warn(
+        `[backfill] ${row.id}: ${error instanceof Error ? error.message : String(error)}`
+      );
     }
   }
   console.log(

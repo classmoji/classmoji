@@ -49,12 +49,8 @@ const MyDayQueue = ({ queue }: MyDayQueueProps) => {
                   size={32}
                 />
                 <div className="min-w-0 flex-1">
-                  <div className="text-sm text-ink-0 truncate">
-                    {displayName}
-                  </div>
-                  <div className="text-xs text-ink-3 truncate">
-                    {row.assignmentTitle}
-                  </div>
+                  <div className="text-sm text-ink-0 truncate">{displayName}</div>
+                  <div className="text-xs text-ink-3 truncate">{row.assignmentTitle}</div>
                 </div>
                 <Tag color={sla.color} className="flex-shrink-0 tabular-nums">
                   {sla.label}

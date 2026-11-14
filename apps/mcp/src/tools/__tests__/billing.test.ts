@@ -26,9 +26,12 @@ const { hiddenFromClient, toolAnnotations } = await import('../../mcp/registry.t
 const { ASK_MOJI_CLIENT_ID } = await import('@classmoji/auth/mcp-token');
 
 const call = async (userId: string) => {
-  const res = await billingStatusTool.handler({} as never, {
-    viewer: { userId, scopes: new Set(['read']), clientId: 'client-1' },
-  } as never);
+  const res = await billingStatusTool.handler(
+    {} as never,
+    {
+      viewer: { userId, scopes: new Set(['read']), clientId: 'client-1' },
+    } as never
+  );
   return JSON.parse((res.content[0] as { text: string }).text);
 };
 
@@ -43,7 +46,12 @@ describe('billing_status', () => {
   });
 
   it('reads only the caller’s plan', async () => {
-    getStatus.mockResolvedValue({ tier: 'FREE', isComped: false, billing: null, proPriceCents: 2000 });
+    getStatus.mockResolvedValue({
+      tier: 'FREE',
+      isComped: false,
+      billing: null,
+      proPriceCents: 2000,
+    });
 
     await call('user-A');
     await call('user-B');
@@ -53,7 +61,12 @@ describe('billing_status', () => {
   });
 
   it('a Free user sees the Pro price, what Pro includes and where to upgrade', async () => {
-    getStatus.mockResolvedValue({ tier: 'FREE', isComped: false, billing: null, proPriceCents: 2000 });
+    getStatus.mockResolvedValue({
+      tier: 'FREE',
+      isComped: false,
+      billing: null,
+      proPriceCents: 2000,
+    });
 
     const result = await call('user-A');
 

@@ -2,7 +2,9 @@ import { Button } from 'antd';
 import { IconCheck } from '@tabler/icons-react';
 
 const formatPrice = (cents: number | null): string =>
-  cents === null ? '' : `$${Number.isInteger(cents / 100) ? cents / 100 : (cents / 100).toFixed(2)}`;
+  cents === null
+    ? ''
+    : `$${Number.isInteger(cents / 100) ? cents / 100 : (cents / 100).toFixed(2)}`;
 
 const Feature = ({ text, accent }: { text: string; accent?: boolean }) => (
   <li className="flex gap-2.5">

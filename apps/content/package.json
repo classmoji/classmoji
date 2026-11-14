@@ -7,8 +7,6 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "lint": "eslint .",
-    "lint:fix": "eslint . --fix",
     "cf:dev": "wrangler dev --env staging",
     "cf:dev:local": "wrangler dev --env dev",
     "cf:types": "wrangler types --env staging"

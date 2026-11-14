@@ -55,4 +55,5 @@ for (const { table, fields } of tables) {
     `${table}: ${rows.length} encrypted row(s); ${decryptable} ${apply ? 'decrypted' : 'decryptable'}, ${failed} would not decrypt`
   );
 }
+// eslint-disable-next-line no-process-exit -- pre-existing, kept as found when lint moved to oxlint
 process.exit(0);

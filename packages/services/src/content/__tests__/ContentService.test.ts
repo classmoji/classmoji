@@ -274,7 +274,9 @@ describe('put with branch', () => {
     const putCall = requestMock.mock.calls.find(
       ([route]) => route === 'PUT /repos/{owner}/{repo}/contents/{path}'
     );
+    // eslint-disable-next-line no-unsafe-optional-chaining -- pre-existing in a test; ESLint did not look through the `as` cast
     expect((putCall?.[1] as RequestParams).branch).toBe('preview/pages/p');
+    // eslint-disable-next-line no-unsafe-optional-chaining -- pre-existing in a test; ESLint did not look through the `as` cast
     expect((putCall?.[1] as RequestParams).sha).toBe('sha-branch');
 
     // Main's cache entry survives a branch write: this read is a cache hit
@@ -348,6 +350,7 @@ describe('put with branch', () => {
     const putCall = requestMock.mock.calls.find(
       ([route]) => route === 'PUT /repos/{owner}/{repo}/contents/{path}'
     );
+    // eslint-disable-next-line no-unsafe-optional-chaining -- pre-existing in a test; ESLint did not look through the `as` cast
     expect((putCall?.[1] as RequestParams).sha).toBe('sha-live');
   });
 
@@ -397,6 +400,7 @@ describe('put with branch', () => {
     const putCall = requestMock.mock.calls.find(
       ([route]) => route === 'PUT /repos/{owner}/{repo}/contents/{path}'
     );
+    // eslint-disable-next-line no-unsafe-optional-chaining -- pre-existing in a test; ESLint did not look through the `as` cast
     expect((putCall?.[1] as RequestParams).sha).toBe('sha-auto');
   });
 
@@ -560,6 +564,7 @@ describe('put createOnly', () => {
     // No getMeta probe ran, and the PUT carried no sha
     expect(contentsGetCalls().total).toBe(0);
     const putCall = requestMock.mock.calls.find(([route]) => String(route).startsWith('PUT '));
+    // eslint-disable-next-line no-unsafe-optional-chaining -- pre-existing in a test; ESLint did not look through the `as` cast
     expect((putCall?.[1] as RequestParams).sha).toBeUndefined();
   });
 

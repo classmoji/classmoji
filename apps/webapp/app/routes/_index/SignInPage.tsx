@@ -373,6 +373,7 @@ const SignInPage = ({
           <div className="absolute inset-0 bg-stone-900/25 dark:bg-neutral-950/75" />
         </div>
       )}
+      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- pre-existing, kept as found when lint moved to oxlint */}
       <main
         onClick={onOutsideClick}
         className="flex w-full flex-1 flex-col items-center justify-center py-10"

@@ -23,9 +23,7 @@ const classroom = {
 
 test.describe('assetResolveContext', () => {
   test('carries the classroom flag through to the resolver', () => {
-    expect(assetResolveContext(classroom, 'week')?.classroom.content_delivery_enabled).toBe(
-      true
-    );
+    expect(assetResolveContext(classroom, 'week')?.classroom.content_delivery_enabled).toBe(true);
   });
 
   test('a flag that is false, null or absent all read as off', () => {

@@ -107,13 +107,14 @@ export function useSlideStructure(
 
       // Find and remove the slide from its current location
       let movedSlide: SlideData | null = null;
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars -- pre-existing, kept as found when lint moved to oxlint
       let sourceStackIndex = -1;
 
       for (let i = 0; i < newStacks.length; i++) {
         const slideIndex = newStacks[i].slides.findIndex(s => s.id === slideId);
         if (slideIndex !== -1) {
           movedSlide = newStacks[i].slides.splice(slideIndex, 1)[0];
-          sourceStackIndex = i; // eslint-disable-line @typescript-eslint/no-unused-vars
+          sourceStackIndex = i;
           break;
         }
       }

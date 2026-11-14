@@ -195,9 +195,7 @@ export const setQuizAssignmentPublished = async (
   });
 
   const notified =
-    !wasPublished && assignment.is_published
-      ? await notifyQuizPublished(assignment, now)
-      : false;
+    !wasPublished && assignment.is_published ? await notifyQuizPublished(assignment, now) : false;
   const sourceMaterialAllDraft =
     assignment.is_published && assignment.quiz_id
       ? await quizSourceMaterialAllDraft(assignment.quiz_id)

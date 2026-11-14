@@ -70,6 +70,7 @@ describe('GitLabProvider teams', () => {
     await provider().addTeamToRepo('cs/c1', 'proj-team-rocket', 'cs/c1/teams/team-rocket', 'push');
     const share = fetchMock.mock.calls.find(([url]) => String(url).includes('/share'));
     expect(String(share?.[0])).toContain('projects/cs%2Fc1%2Fproj-team-rocket/share');
+    // eslint-disable-next-line no-unsafe-optional-chaining -- pre-existing in a test; ESLint did not look through the `as` cast
     expect(JSON.parse((share?.[1] as { body: string }).body)).toEqual({
       group_id: 12,
       group_access: 30,

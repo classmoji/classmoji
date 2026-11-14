@@ -270,8 +270,8 @@ export function NotificationBell({ initialItems, initialUnreadCount, membershipR
                         : n.type === 'FEEDBACK_REPLY'
                           ? 'Feedback · new reply | '
                           : n.classroom?.name
-                          ? `${n.classroom.name} | `
-                          : ''}
+                            ? `${n.classroom.name} | `
+                            : ''}
                       {formatRelative(n.created_at)}
                     </div>
                   </div>

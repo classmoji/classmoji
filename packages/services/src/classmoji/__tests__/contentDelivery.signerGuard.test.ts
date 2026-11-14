@@ -287,7 +287,7 @@ describe('the choke point', () => {
     // by accident and becomes a cast somebody has to write and a reviewer can
     // see. The wall that actually holds is the runtime `classroom_id` check
     // above, which a cast cannot satisfy without naming a classroom; the second
-    // wall is the `no-restricted-imports` rule in the shared eslint config,
+    // wall is the `no-restricted-imports` rule in the root `.oxlintrc.json`,
     // which stops a module skipping this function entirely by importing
     // `@classmoji/content-signing` and calling `signBlobUrl` itself.
     //

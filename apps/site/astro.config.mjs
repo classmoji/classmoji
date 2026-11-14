@@ -20,7 +20,7 @@ import { legacyHeadingIds } from './src/markdown/headingIds.mjs';
 //   build never resolves it. CLOUDFLARE_ENV picks the wrangler.jsonc
 //   environment at build time (dev, staging).
 const isCloudflare = process.env.BUILD_TARGET === 'cloudflare';
-const cloudflareEnv = isCloudflare ? process.env.CLOUDFLARE_ENV ?? '' : '';
+const cloudflareEnv = isCloudflare ? (process.env.CLOUDFLARE_ENV ?? '') : '';
 const cloudflareAdapter = isCloudflare ? (await import('@astrojs/cloudflare')).default : null;
 
 /**
@@ -52,7 +52,10 @@ function cloudflareSite() {
         const headersPath = new URL('./_headers', clientDir);
         const existing = await readFile(headersPath, 'utf8').catch(() => '');
         const rule = '/*\n  X-Robots-Tag: noindex\n';
-        await writeFile(headersPath, `${existing}${existing && !existing.endsWith('\n') ? '\n' : ''}${rule}`);
+        await writeFile(
+          headersPath,
+          `${existing}${existing && !existing.endsWith('\n') ? '\n' : ''}${rule}`
+        );
       },
     },
   };
@@ -220,10 +223,7 @@ export default defineConfig({
           href: 'https://github.com/classmoji/classmoji',
         },
       ],
-      customCss: [
-        './src/styles/docs-classic.css',
-        './src/styles/starlight.css',
-      ],
+      customCss: ['./src/styles/docs-classic.css', './src/styles/starlight.css'],
       // Code blocks as starlight-theme-black 0.6 set them up. Theme 0.7 picks
       // other code themes and frame colours; undefined hands those settings
       // back to Expressive Code's defaults, as 0.6 left them.
@@ -240,7 +240,7 @@ export default defineConfig({
             editorBackground: 'var(--code-background)',
             terminalBackground: 'var(--code-background)',
             copyIcon: createInlineSvgUrl(
-              '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"></rect><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path></svg>',
+              '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"></rect><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path></svg>'
             ),
             shadowColor: undefined,
             editorTabBarBackground: undefined,
@@ -272,7 +272,7 @@ export default defineConfig({
     // Not 4000: that is the local webhook fanout the Smee tunnels post to, and
     // a site dev server sitting on it swallows every Github push event.
     // Not under 1024 either, since those need root to bind.
-    port: 2000
+    port: 2000,
   },
   vite: {
     plugins: [tailwindcss()],
@@ -290,8 +290,12 @@ export default defineConfig({
         // its bindings from it only on Workers.
         ...(isCloudflare
           ? {}
-          : { 'cloudflare:workers': fileURLToPath(new URL('./src/cloudflare/workers-stub.ts', import.meta.url)) }),
+          : {
+              'cloudflare:workers': fileURLToPath(
+                new URL('./src/cloudflare/workers-stub.ts', import.meta.url)
+              ),
+            }),
       },
     },
-  }
+  },
 });

@@ -361,9 +361,7 @@ test.describe('the status endpoint is not a mailbox oracle', () => {
     try {
       const blind = await clean.request.get(deliveryPath);
       expect(await blind.json()).toEqual({ state: 'pending' });
-      const named = await clean.request.get(
-        `${deliveryPath}?email=${encodeURIComponent(email)}`
-      );
+      const named = await clean.request.get(`${deliveryPath}?email=${encodeURIComponent(email)}`);
       expect(await named.json()).toEqual({ state: 'pending' });
     } finally {
       await clean.close();

@@ -273,7 +273,8 @@ describe.skipIf(!RUN)('saveDeck live-GitHub integration', () => {
           path: deckPath(),
           skipCache: true,
         });
-        if (read?.sha !== result.sha) throw new Error(`deck.json sha ${read?.sha} != ${result.sha}`);
+        if (read?.sha !== result.sha)
+          throw new Error(`deck.json sha ${read?.sha} != ${result.sha}`);
         return read;
       }, 'deck.json visible');
       expect(deckFile.content).toBe(JSON.stringify(deck, null, 2) + '\n');

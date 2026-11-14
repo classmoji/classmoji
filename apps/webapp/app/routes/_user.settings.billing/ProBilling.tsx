@@ -138,7 +138,11 @@ const ProBilling = ({
           className="flex flex-wrap items-center justify-between gap-4 rounded-2xl bg-amber-50 dark:bg-amber-950/30 ring-1 ring-amber-200 dark:ring-amber-900 px-5 py-4"
         >
           <div className="flex gap-3 min-w-0">
-            <IconClock size={20} aria-hidden="true" className="mt-0.5 shrink-0 text-amber-700 dark:text-amber-400" />
+            <IconClock
+              size={20}
+              aria-hidden="true"
+              className="mt-0.5 shrink-0 text-amber-700 dark:text-amber-400"
+            />
             <div>
               <div className="font-semibold text-amber-900 dark:text-amber-200">
                 Pro ends on {date(billing.endsAt)}
@@ -161,7 +165,11 @@ const ProBilling = ({
           className="flex flex-wrap items-center justify-between gap-4 rounded-2xl bg-red-50 dark:bg-red-950/30 ring-1 ring-red-200 dark:ring-red-900 px-5 py-4"
         >
           <div className="flex gap-3 min-w-0">
-            <IconAlertTriangle size={20} aria-hidden="true" className="mt-0.5 shrink-0 text-red-700 dark:text-red-400" />
+            <IconAlertTriangle
+              size={20}
+              aria-hidden="true"
+              className="mt-0.5 shrink-0 text-red-700 dark:text-red-400"
+            />
             <div>
               <div className="font-semibold text-red-900 dark:text-red-200">Payment failed</div>
               <div className="text-sm text-red-800 dark:text-red-300">

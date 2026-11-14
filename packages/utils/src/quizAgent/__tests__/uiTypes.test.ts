@@ -17,7 +17,7 @@ describe('buttonActionFor', () => {
     expect(buttonActionFor(' Next ')).toBe('next');
   });
 
-  it('still takes the hint button\'s earlier text as the click (saved transcripts)', () => {
+  it("still takes the hint button's earlier text as the click (saved transcripts)", () => {
     expect(BUTTON_TEXT.try_again).toBe('Give me a hint');
     expect(buttonActionFor(LEGACY_TRY_AGAIN_TEXT)).toBe('try_again');
     expect(buttonActionFor(`  ${LEGACY_TRY_AGAIN_TEXT.toUpperCase()}\n`)).toBe('try_again');

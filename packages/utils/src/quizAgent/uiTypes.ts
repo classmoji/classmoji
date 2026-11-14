@@ -169,8 +169,7 @@ export const NEXT_STEP_LEAD_IN = {
   /** Try again and Next: the question is still open. */
   try_again_or_next: 'Answer again below, or try again with a hint.',
   /** Next only, after the student's last allowed answer, with another question to come. */
-  last_answer_next:
-    'That was your last answer for this question. Ready for the next question?',
+  last_answer_next: 'That was your last answer for this question. Ready for the next question?',
   /** Next only, after the last allowed answer on the last question. */
   last_answer_results: 'That was your last answer for this question. Ready to see your results?',
 } as const;

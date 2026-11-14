@@ -21,8 +21,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   const repositoryAssignmentId = params.id!;
 
   // Load the assignment so its OWN classroom id can authorize the refresh.
-  const repoAssignment =
-    await ClassmojiService.gitRepoAssignment.findById(repositoryAssignmentId);
+  const repoAssignment = await ClassmojiService.gitRepoAssignment.findById(repositoryAssignmentId);
 
   if (!repoAssignment) {
     return new Response('Repository assignment not found', {

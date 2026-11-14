@@ -60,9 +60,7 @@ const AssignmentHeatmap = ({ rows }: AssignmentHeatmapProps) => {
           </div>
 
           {rows.length === 0 ? (
-            <div className="text-sm text-ink-3 py-6 text-center">
-              No assignments yet.
-            </div>
+            <div className="text-sm text-ink-3 py-6 text-center">No assignments yet.</div>
           ) : (
             <div className="flex flex-col gap-1.5">
               {rows.map(r => (
@@ -70,10 +68,7 @@ const AssignmentHeatmap = ({ rows }: AssignmentHeatmapProps) => {
                   key={r.assignmentId}
                   className="grid grid-cols-[1.5fr_1fr_1fr_1fr] gap-2 items-center"
                 >
-                  <div
-                    className="text-sm text-ink-1 truncate"
-                    title={r.title}
-                  >
+                  <div className="text-sm text-ink-1 truncate" title={r.title}>
                     {r.title}
                   </div>
                   <Cell

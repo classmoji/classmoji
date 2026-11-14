@@ -42,7 +42,7 @@ export async function namedAction(
   input: Request | URL | URLSearchParams | FormData,
   actions: ActionsRecord
 ): Promise<any> {
-  let name = await getActionName(input);
+  const name = await getActionName(input);
   if (name && name in actions) {
     return actions[name]();
   }
@@ -57,7 +57,7 @@ async function getActionName(
   input: Request | URL | URLSearchParams | FormData
 ): Promise<string | null> {
   if (input instanceof Request) {
-    let actionName = findNameInURL(new URL(input.url).searchParams);
+    const actionName = findNameInURL(new URL(input.url).searchParams);
     if (actionName) return actionName;
     return findNameInFormData(await input.clone().formData());
   }
@@ -74,7 +74,7 @@ async function getActionName(
 }
 
 function findNameInURL(searchParams: URLSearchParams): string | null {
-  for (let key of searchParams.keys()) {
+  for (const key of searchParams.keys()) {
     if (key.startsWith('/')) return key.slice(1);
   }
   let actionName = searchParams.get('intent');
@@ -87,7 +87,7 @@ function findNameInURL(searchParams: URLSearchParams): string | null {
 }
 
 function findNameInFormData(formData: FormData): string | null {
-  for (let key of formData.keys()) {
+  for (const key of formData.keys()) {
     if (key.startsWith('/')) return key.slice(1);
   }
   let actionName = formData.get('intent');

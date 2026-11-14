@@ -17,27 +17,37 @@ describe('clientIp', () => {
     const clientAddress = vi.fn(() => '10.0.0.1');
     const ip = clientIp(
       'workerd',
-      headers({ 'cf-connecting-ip': '203.0.113.7', 'x-forwarded-for': '198.51.100.1', 'fly-client-ip': '198.51.100.2' }),
-      clientAddress,
+      headers({
+        'cf-connecting-ip': '203.0.113.7',
+        'x-forwarded-for': '198.51.100.1',
+        'fly-client-ip': '198.51.100.2',
+      }),
+      clientAddress
     );
     expect(ip).toBe('203.0.113.7');
     expect(clientAddress).not.toHaveBeenCalled();
   });
 
   it("puts workerd requests without cf-connecting-ip in the 'unknown' bucket, ignoring X-Forwarded-For", () => {
-    expect(clientIp('workerd', headers({ 'x-forwarded-for': '198.51.100.1' }), () => '10.0.0.1')).toBe('unknown');
+    expect(
+      clientIp('workerd', headers({ 'x-forwarded-for': '198.51.100.1' }), () => '10.0.0.1')
+    ).toBe('unknown');
   });
 
   it('reads fly-client-ip on Node, else the socket address', () => {
-    expect(clientIp('node', headers({ 'fly-client-ip': '203.0.113.8' }), () => '10.0.0.1')).toBe('203.0.113.8');
-    expect(clientIp('node', headers({ 'cf-connecting-ip': '203.0.113.9' }), () => '10.0.0.1')).toBe('10.0.0.1');
+    expect(clientIp('node', headers({ 'fly-client-ip': '203.0.113.8' }), () => '10.0.0.1')).toBe(
+      '203.0.113.8'
+    );
+    expect(clientIp('node', headers({ 'cf-connecting-ip': '203.0.113.9' }), () => '10.0.0.1')).toBe(
+      '10.0.0.1'
+    );
   });
 
   it("falls back to 'unknown' on Node when Astro has no address (its getter throws)", () => {
     expect(
       clientIp('node', headers({}), () => {
         throw new Error('clientAddress is not available');
-      }),
+      })
     ).toBe('unknown');
   });
 });
@@ -108,7 +118,15 @@ describe('overLimit', () => {
     const perIp = fakeBinding(0);
     const results = [];
     for (let i = 0; i < 6; i++) {
-      results.push(await overLimit({ runtime: 'node', key: 'k', memory, bindings: { CONTACT_RATE_LIMIT: perIp }, log: quiet }));
+      results.push(
+        await overLimit({
+          runtime: 'node',
+          key: 'k',
+          memory,
+          bindings: { CONTACT_RATE_LIMIT: perIp },
+          log: quiet,
+        })
+      );
     }
     expect(results).toEqual([false, false, false, false, false, true]);
     expect(perIp.keys).toEqual([]);
@@ -120,7 +138,16 @@ describe('overLimit', () => {
     const global = fakeBinding(10);
     const bindings = { CONTACT_RATE_LIMIT: perIp, CONTACT_RATE_LIMIT_GLOBAL: global };
     const results = [];
-    for (let i = 0; i < 4; i++) results.push(await overLimit({ runtime: 'workerd', key: '2001:db8:1:2::/64', memory, bindings, log: quiet }));
+    for (let i = 0; i < 4; i++)
+      results.push(
+        await overLimit({
+          runtime: 'workerd',
+          key: '2001:db8:1:2::/64',
+          memory,
+          bindings,
+          log: quiet,
+        })
+      );
     expect(results).toEqual([false, false, false, true]);
     expect(perIp.keys.every(k => k === '2001:db8:1:2::/64')).toBe(true);
     expect(global.keys).toEqual(['all', 'all', 'all']);
@@ -128,18 +155,34 @@ describe('overLimit', () => {
 
   it('on workerd refuses once the global binding is spent, whatever the address', async () => {
     const memory = createMemoryLimiter({ max: 5 });
-    const bindings = { CONTACT_RATE_LIMIT: fakeBinding(3), CONTACT_RATE_LIMIT_GLOBAL: fakeBinding(10) };
+    const bindings = {
+      CONTACT_RATE_LIMIT: fakeBinding(3),
+      CONTACT_RATE_LIMIT_GLOBAL: fakeBinding(10),
+    };
     const results = [];
-    for (let i = 0; i < 12; i++) results.push(await overLimit({ runtime: 'workerd', key: `198.51.100.${i}`, memory, bindings, log: quiet }));
+    for (let i = 0; i < 12; i++)
+      results.push(
+        await overLimit({
+          runtime: 'workerd',
+          key: `198.51.100.${i}`,
+          memory,
+          bindings,
+          log: quiet,
+        })
+      );
     expect(results.filter(Boolean)).toHaveLength(2);
     expect(results.slice(10)).toEqual([true, true]);
   });
 
   it('on workerd still applies the in-memory hourly limit', async () => {
     const memory = createMemoryLimiter({ max: 5 });
-    const bindings = { CONTACT_RATE_LIMIT: fakeBinding(100), CONTACT_RATE_LIMIT_GLOBAL: fakeBinding(100) };
+    const bindings = {
+      CONTACT_RATE_LIMIT: fakeBinding(100),
+      CONTACT_RATE_LIMIT_GLOBAL: fakeBinding(100),
+    };
     const results = [];
-    for (let i = 0; i < 6; i++) results.push(await overLimit({ runtime: 'workerd', key: 'k', memory, bindings, log: quiet }));
+    for (let i = 0; i < 6; i++)
+      results.push(await overLimit({ runtime: 'workerd', key: 'k', memory, bindings, log: quiet }));
     expect(results).toEqual([false, false, false, false, false, true]);
   });
 
@@ -147,10 +190,15 @@ describe('overLimit', () => {
     const memory = createMemoryLimiter({ max: 5 });
     const log = vi.fn();
     const results = [];
-    for (let i = 0; i < 6; i++) results.push(await overLimit({ runtime: 'workerd', key: 'k', memory, bindings: {}, log }));
+    for (let i = 0; i < 6; i++)
+      results.push(await overLimit({ runtime: 'workerd', key: 'k', memory, bindings: {}, log }));
     expect(results).toEqual([false, false, false, false, false, true]);
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('CONTACT_RATE_LIMIT binding is missing'));
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('CONTACT_RATE_LIMIT_GLOBAL binding is missing'));
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining('CONTACT_RATE_LIMIT binding is missing')
+    );
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining('CONTACT_RATE_LIMIT_GLOBAL binding is missing')
+    );
   });
 
   it('treats a binding that throws like a missing one', async () => {
@@ -159,9 +207,18 @@ describe('overLimit', () => {
     const broken: RateLimitBinding = { limit: () => Promise.reject(new Error('unavailable')) };
     const global = fakeBinding(10);
     expect(
-      await overLimit({ runtime: 'workerd', key: 'k', memory, bindings: { CONTACT_RATE_LIMIT: broken, CONTACT_RATE_LIMIT_GLOBAL: global }, log }),
+      await overLimit({
+        runtime: 'workerd',
+        key: 'k',
+        memory,
+        bindings: { CONTACT_RATE_LIMIT: broken, CONTACT_RATE_LIMIT_GLOBAL: global },
+        log,
+      })
     ).toBe(false);
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('CONTACT_RATE_LIMIT binding failed'), expect.any(Error));
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining('CONTACT_RATE_LIMIT binding failed'),
+      expect.any(Error)
+    );
     expect(global.keys).toEqual(['all']);
   });
 
@@ -170,14 +227,20 @@ describe('overLimit', () => {
     const perIp = fakeBinding(100);
     const bindings = { CONTACT_RATE_LIMIT: perIp, CONTACT_RATE_LIMIT_GLOBAL: fakeBinding(100) };
     await overLimit({ runtime: 'workerd', key: 'k', memory, bindings, log: quiet });
-    expect(await overLimit({ runtime: 'workerd', key: 'k', memory, bindings, log: quiet })).toBe(true);
+    expect(await overLimit({ runtime: 'workerd', key: 'k', memory, bindings, log: quiet })).toBe(
+      true
+    );
     expect(perIp.keys).toHaveLength(1);
   });
 });
 
 describe('readCappedBody', () => {
   const post = (body: BodyInit | null, extra: Record<string, string> = {}) =>
-    new Request('https://site.staging.classmoji.io/api/contact', { method: 'POST', body, headers: extra });
+    new Request('https://site.staging.classmoji.io/api/contact', {
+      method: 'POST',
+      body,
+      headers: extra,
+    });
 
   it('reads a body within the cap', async () => {
     const body = await readCappedBody(post('name=a&email=a%40b.co'));

@@ -120,7 +120,6 @@ export function NavGridStatic({
           // schedule is published at all) resolves it there.
           const href = siteOrigin ? `${siteOrigin}${NAV_GRID_SCHEDULE_PATH}` : '#';
           return (
-            // eslint-disable-next-line jsx-a11y/anchor-is-valid -- resolved downstream
             <a
               key={`schedule-${index}`}
               className="bn-nav-grid-item"

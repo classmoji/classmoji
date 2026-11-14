@@ -55,9 +55,7 @@ const FinalGradesControl = ({
       {canRelease && (
         <Tooltip
           title={
-            releaseBlocked
-              ? "Breakpoints changed here aren't saved. Reload to release."
-              : undefined
+            releaseBlocked ? "Breakpoints changed here aren't saved. Reload to release." : undefined
           }
         >
           {/* A disabled button fires no mouse events: the span carries the tooltip. */}

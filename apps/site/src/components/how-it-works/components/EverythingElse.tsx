@@ -83,7 +83,9 @@ export function EverythingElse() {
             <>
               <Icon className="h-5 w-5 text-accent dark:text-[#6BE39B]" aria-hidden />
               <p className="mt-4 text-[1rem] font-semibold text-ink-0 dark:text-inkd-0">{title}</p>
-              <p className="mt-1.5 text-[0.9375rem] leading-relaxed text-ink-3 dark:text-inkd-3">{description}</p>
+              <p className="mt-1.5 text-[0.9375rem] leading-relaxed text-ink-3 dark:text-inkd-3">
+                {description}
+              </p>
               {href && (
                 <span className="mt-4 inline-flex items-center gap-1 text-[0.875rem] font-medium text-accent dark:text-[#6BE39B]">
                   Learn more <span aria-hidden>→</span>

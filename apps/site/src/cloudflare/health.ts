@@ -11,7 +11,8 @@ interface VersionMetadata {
 }
 
 export const GET: APIRoute = () => {
-  const version = (env as { CF_VERSION_METADATA?: VersionMetadata }).CF_VERSION_METADATA?.id ?? 'unknown';
+  const version =
+    (env as { CF_VERSION_METADATA?: VersionMetadata }).CF_VERSION_METADATA?.id ?? 'unknown';
   return new Response('ok\n', {
     status: 200,
     headers: {

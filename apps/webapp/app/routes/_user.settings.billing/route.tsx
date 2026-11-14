@@ -32,7 +32,9 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     freeLines: status.features
       .filter(row => row.free !== false)
       .map(row => billingService.featureText(row.label, row.free)),
-    proLines: billingService.proFeatures().map(row => billingService.featureText(row.label, row.pro)),
+    proLines: billingService
+      .proFeatures()
+      .map(row => billingService.featureText(row.label, row.pro)),
   };
 };
 

@@ -14,7 +14,7 @@
  *   COLLAB_E2E=1 npx dotenv -e .env -- ./scripts/devport.sh run \
  *     npx playwright test -c tests/collab page-columns-undo
  */
-import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
+import { expect, test, type Browser, type Page } from '@playwright/test';
 import type { CollabActor } from '@classmoji/collab';
 
 import {

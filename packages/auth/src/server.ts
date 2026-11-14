@@ -6,8 +6,6 @@ import { admin, emailOTP, jwt } from 'better-auth/plugins';
 import { mcp } from '@better-auth/mcp';
 import { getOAuthProviderState, verifyOAuthQueryParams } from '@better-auth/oauth-provider';
 import { cimd } from '@better-auth/cimd';
-// eslint's resolver misses this subpath export; TypeScript resolves it.
-// eslint-disable-next-line import/no-unresolved
 import { fetchClientMetadataResource } from '@better-auth/cimd/node';
 import getPrisma from '@classmoji/database';
 import type { AskMojiAccess } from '@classmoji/services';
@@ -72,9 +70,7 @@ export {
 
 // The resource server's check of the access tokens this server signs
 // (apps/mcp/src/auth/jwtAccessToken.ts), against the keys `auth.api.getJwks`
-// reads in process. eslint's resolver misses this subpath export; TypeScript
-// resolves it.
-// eslint-disable-next-line import/no-unresolved
+// reads in process.
 export { verifyJwsAccessToken } from 'better-auth/oauth2';
 
 /** The session `lookupSessionForHook` returns: what the hooks below read of it. */

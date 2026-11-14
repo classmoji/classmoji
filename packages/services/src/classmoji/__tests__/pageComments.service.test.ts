@@ -11,7 +11,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ClassroomStatus, Role } from '@prisma/client';
 
-// eslint-disable-next-line import/no-unresolved -- workspace package (it depends on this one)
 import { canEnterClassroom, canMutateClassroom } from '@classmoji/auth/predicates';
 
 const db = vi.hoisted(() => ({ touched: vi.fn() }));

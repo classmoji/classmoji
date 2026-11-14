@@ -84,15 +84,15 @@ import {
   TeamSetConfigSchema,
   validateConfigAgainstForm,
   type TeamSetConfigInput,
-} from '@classmoji/services/team-set-config'; // eslint-disable-line import/no-unresolved
+} from '@classmoji/services/team-set-config';
 import {
   compileProblem,
   type TeamSetHard,
   type TeamSetProblem,
   type TeamSetSolveStages,
-} from '@classmoji/services/team-set-problem'; // eslint-disable-line import/no-unresolved
-import { runChecks } from '@classmoji/services/team-set-checks'; // eslint-disable-line import/no-unresolved
-import { scoreAssignment } from '@classmoji/services/team-set-score'; // eslint-disable-line import/no-unresolved
+} from '@classmoji/services/team-set-problem';
+import { runChecks } from '@classmoji/services/team-set-checks';
+import { scoreAssignment } from '@classmoji/services/team-set-score';
 
 // ─── Environment ────────────────────────────────────────────────────────────
 

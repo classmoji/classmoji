@@ -33,7 +33,9 @@ export function Stat({ label, children }: { label: string; children: React.React
   return (
     <div className="flex flex-col gap-0.5 rounded-xl bg-panel px-3 py-2 ring-1 ring-line dark:bg-panel-dark dark:ring-line-dark">
       <span className="text-[11px] font-medium text-ink-3 dark:text-inkd-3">{label}</span>
-      <span className="text-[16px] font-bold tabular-nums text-ink-1 dark:text-inkd-1">{children}</span>
+      <span className="text-[16px] font-bold tabular-nums text-ink-1 dark:text-inkd-1">
+        {children}
+      </span>
     </div>
   );
 }
@@ -54,7 +56,8 @@ export function AssignmentFacts({
         Repo · <span className="font-medium text-ink-1 dark:text-inkd-1">{mode}</span>
       </span>
       <span>
-        Repository <span className="font-medium text-[#21883d] dark:text-[#6BE39B]">{repository}</span>
+        Repository{' '}
+        <span className="font-medium text-[#21883d] dark:text-[#6BE39B]">{repository}</span>
       </span>
       <span>
         Due <span className="font-medium text-ink-1 dark:text-inkd-1">Fri Oct 9, 11:59 PM</span>
@@ -87,7 +90,9 @@ export function AssignmentToolbar() {
           <span
             key={f}
             className={`flex h-6 items-center whitespace-nowrap rounded-md px-2 text-[11px] font-medium ${
-              i === 0 ? 'bg-white text-ink-1 ring-1 ring-line dark:bg-panel-dark dark:text-inkd-1 dark:ring-line-dark' : 'text-ink-2 dark:text-inkd-2'
+              i === 0
+                ? 'bg-white text-ink-1 ring-1 ring-line dark:bg-panel-dark dark:text-inkd-1 dark:ring-line-dark'
+                : 'text-ink-2 dark:text-inkd-2'
             }`}
           >
             {f}

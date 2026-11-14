@@ -13,9 +13,8 @@ vi.mock('../../git/index.ts', () => ({ getGitProvider: vi.fn() }));
 vi.mock('../page.service.ts', () => ({ ensureContentRepo: vi.fn() }));
 vi.mock('../contentManifest.service.ts', () => ({ saveManifest: vi.fn() }));
 
-const { routeSlug, dedupe, slugSuffix, titleSuffix, remapFilePath, formatWarning } = await import(
-  '../contentImport.service.ts'
-);
+const { routeSlug, dedupe, slugSuffix, titleSuffix, remapFilePath, formatWarning } =
+  await import('../contentImport.service.ts');
 
 describe('routeSlug', () => {
   it('matches the page/slide content-path slug computation', () => {
@@ -87,9 +86,9 @@ describe('remapFilePath', () => {
   });
 
   it('preserves nested sub-paths (assets, images)', () => {
-    expect(
-      remapFilePath('pages/lab-1/assets/diagram.png', 'pages/lab-1', 'pages/intro')
-    ).toBe('pages/intro/assets/diagram.png');
+    expect(remapFilePath('pages/lab-1/assets/diagram.png', 'pages/lab-1', 'pages/intro')).toBe(
+      'pages/intro/assets/diagram.png'
+    );
     expect(remapFilePath('slides/deck/deck.json', 'slides/deck', 'slides/deck-2')).toBe(
       'slides/deck-2/deck.json'
     );

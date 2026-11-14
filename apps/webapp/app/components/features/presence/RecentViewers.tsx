@@ -86,9 +86,7 @@ const ViewerRow = ({ user, lastViewedAt }: { user: ViewerUser; lastViewedAt: str
       <div className="text-sm font-medium text-ink-0 truncate">
         {user.name || user.login || 'Unknown'}
       </div>
-      <div className="text-xs text-ink-3">
-        {formatRelativeTime(lastViewedAt)}
-      </div>
+      <div className="text-xs text-ink-3">{formatRelativeTime(lastViewedAt)}</div>
     </div>
   </div>
 );

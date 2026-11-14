@@ -102,7 +102,12 @@ test.describe('finding the responses surface', () => {
     // The affordance lives with the row's other verbs, not only in the count
     // column: it is inside the Actions cell, which is the last one.
     const row = page.getByRole('row').filter({ hasText: `/${FORM_SLUG}` });
-    await expect(row.locator('td').last().getByRole('link', { name: /Responses to/ })).toBeVisible();
+    await expect(
+      row
+        .locator('td')
+        .last()
+        .getByRole('link', { name: /Responses to/ })
+    ).toBeVisible();
 
     await action.click();
     await expect(page).toHaveURL(new RegExp(`${responsesPath}$`));

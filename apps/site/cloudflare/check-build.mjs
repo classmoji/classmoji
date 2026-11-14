@@ -24,7 +24,8 @@ if (!config) {
   fail(`${configPath} is missing (was this a BUILD_TARGET=cloudflare build?)`);
 } else {
   const name = environment === 'production' ? 'classmoji-site' : `classmoji-site-${environment}`;
-  if (config.name !== name) fail(`built for ${config.name}, not ${name} (CLOUDFLARE_ENV=${environment}?)`);
+  if (config.name !== name)
+    fail(`built for ${config.name}, not ${name} (CLOUDFLARE_ENV=${environment}?)`);
 
   const routes = JSON.stringify(config.routes ?? []);
   const host = { staging: 'site.staging.classmoji.io', production: 'classmoji.io' }[environment];
@@ -40,16 +41,21 @@ if (!config) {
   };
   for (const [binding, simple] of Object.entries(expectedLimits)) {
     if (JSON.stringify(limits[binding]) !== JSON.stringify(simple)) {
-      fail(`ratelimit ${binding} is ${JSON.stringify(limits[binding])}, expected ${JSON.stringify(simple)}`);
+      fail(
+        `ratelimit ${binding} is ${JSON.stringify(limits[binding])}, expected ${JSON.stringify(simple)}`
+      );
     }
   }
-  if (config.version_metadata?.binding !== 'CF_VERSION_METADATA') fail('no CF_VERSION_METADATA version_metadata binding');
+  if (config.version_metadata?.binding !== 'CF_VERSION_METADATA')
+    fail('no CF_VERSION_METADATA version_metadata binding');
   if (config.assets?.binding !== 'ASSETS') fail('no ASSETS binding (the adapter should inject it)');
   // `session: false` and `imageService: 'compile'` keep the adapter from
   // adding these; a KV namespace would be provisioned on the first deploy.
-  if (config.kv_namespaces?.length) fail(`unexpected kv_namespaces: ${config.kv_namespaces.map(k => k.binding).join(', ')}`);
+  if (config.kv_namespaces?.length)
+    fail(`unexpected kv_namespaces: ${config.kv_namespaces.map(k => k.binding).join(', ')}`);
   if (config.images) fail(`unexpected images binding: ${config.images.binding}`);
-  if (!(config.compatibility_flags ?? []).includes('nodejs_compat')) fail('nodejs_compat is not set');
+  if (!(config.compatibility_flags ?? []).includes('nodejs_compat'))
+    fail('nodejs_compat is not set');
 }
 
 // dist/client/_headers: the adapter's immutable rule for hashed assets, and
@@ -60,12 +66,15 @@ if (!/^\/_astro\/\*\s*\n\s+Cache-Control: public, max-age=31536000, immutable/m.
   fail(`${headersPath} has no immutable /_astro/* rule`);
 }
 const noindex = /^\/\*\s*\n\s+X-Robots-Tag: noindex\s*$/m.test(headers);
-if (environment === 'staging' && !noindex) fail(`${headersPath} has no "/*  X-Robots-Tag: noindex" rule`);
-if (environment !== 'staging' && noindex) fail(`${headersPath} has the staging noindex rule in a ${environment} build`);
+if (environment === 'staging' && !noindex)
+  fail(`${headersPath} has no "/*  X-Robots-Tag: noindex" rule`);
+if (environment !== 'staging' && noindex)
+  fail(`${headersPath} has the staging noindex rule in a ${environment} build`);
 
 // Nothing server-side among the public files.
 for (const name of ['wrangler.json', '.dev.vars', 'server']) {
-  if (existsSync(join(dir, 'dist/client', name))) fail(`dist/client/${name} would be served publicly`);
+  if (existsSync(join(dir, 'dist/client', name)))
+    fail(`dist/client/${name} would be served publicly`);
 }
 
 // The build reads GITHUB_TOKEN (the star count in the header); its value must
@@ -83,7 +92,8 @@ for (const secretName of ['GITHUB_TOKEN', 'GH_TOKEN']) {
   const value = process.env[secretName]?.trim();
   if (!value) continue;
   const leaked = files.filter(file => readFileSync(file).includes(value));
-  if (leaked.length) fail(`the ${secretName} value appears in ${leaked.length} built file(s), e.g. ${leaked[0]}`);
+  if (leaked.length)
+    fail(`the ${secretName} value appears in ${leaked.length} built file(s), e.g. ${leaked[0]}`);
 }
 
 if (problems.length) {
@@ -92,5 +102,5 @@ if (problems.length) {
 }
 console.log(
   `check-build: ${config.name} OK (${files.length} files; routes ${JSON.stringify(config.routes ?? [])}; ` +
-    `rate limits and version metadata bound; _headers ${environment === 'staging' ? 'with' : 'without'} noindex).`,
+    `rate limits and version metadata bound; _headers ${environment === 'staging' ? 'with' : 'without'} noindex).`
 );

@@ -4,6 +4,7 @@ interface ClassMarkProps {
   size?: number;
 }
 
+// eslint-disable-next-line no-unused-vars -- pre-existing, kept as found when lint moved to oxlint
 export function ClassMark({ hue, name, size = 28 }: ClassMarkProps) {
   const initials = (name.replace(/[^A-Z0-9]/gi, '').slice(0, 3) || '??').toUpperCase().slice(0, 2);
   return (

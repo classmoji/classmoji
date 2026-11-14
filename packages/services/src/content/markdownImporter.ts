@@ -1,5 +1,4 @@
 import { Marked, type Token } from 'marked';
-// eslint-disable-next-line import/namespace
 import * as prettier from 'prettier';
 
 /**
@@ -71,7 +70,6 @@ export async function formatCodeBlocks(markdown: string): Promise<string> {
   };
 
   const formatWithParser = async (code: string, parser: string): Promise<string> => {
-    // eslint-disable-next-line import/namespace
     const formatted = await prettier.format(code, {
       parser,
       semi: true,

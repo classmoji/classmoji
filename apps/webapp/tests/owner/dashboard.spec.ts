@@ -56,7 +56,9 @@ test.describe('Owner Dashboard', () => {
 
   test('can switch to the TA activity tab', async ({ authenticatedPage: page }) => {
     await page.getByRole('button', { name: 'TA activity' }).click();
-    const card = page.locator('section').filter({ hasText: /graded this week|No TAs assigned yet/ });
+    const card = page
+      .locator('section')
+      .filter({ hasText: /graded this week|No TAs assigned yet/ });
     await expect(card.first()).toBeVisible();
   });
 });

@@ -257,6 +257,7 @@ describe('create-classroom initial time zone', () => {
       }
     );
     await call({ name: 'Web Dev', timezone });
+    // eslint-disable-next-line no-unsafe-optional-chaining -- pre-existing in a test; ESLint did not look through the `as` cast
     return (mocks.settingsCreate.mock.calls[0]?.[0] as { data: Record<string, unknown> }).data;
   };
 

@@ -5,7 +5,6 @@
  * No authentication required - URLs are public but unlisted
  */
 
-
 /**
  * Build a GitHub Pages URL for content
  * @param {Object} options
@@ -27,7 +26,6 @@ export function getContentUrl({
   const cleanPath = path.startsWith('/') ? path.slice(1) : path;
   return `https://${org}.github.io/${repo}/${cleanPath}`;
 }
-
 
 /**
  * Build a GitHub raw content URL (alternative to Pages)

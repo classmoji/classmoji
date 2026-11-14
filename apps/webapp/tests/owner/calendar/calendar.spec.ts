@@ -36,8 +36,18 @@ test.describe('Calendar Display', () => {
   test('shows the current month and year', async ({ authenticatedPage: page }) => {
     const now = new Date();
     const monthNames = [
-      'January', 'February', 'March', 'April', 'May', 'June',
-      'July', 'August', 'September', 'October', 'November', 'December',
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December',
     ];
     const label = `${monthNames[now.getMonth()]} ${now.getFullYear()}`;
     await expect(page.getByRole('heading', { level: 2, name: new RegExp(label) })).toBeVisible();
