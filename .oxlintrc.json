@@ -26,12 +26,15 @@
 // - no-unused-expressions in cypress/** JS: the old config switched off only
 //   the core rule, so typescript-eslint's copy still ran there; here the one
 //   rule is off for cypress/**. No cypress directory exists.
-// - Files ignored by a .gitignore are never linted (oxlint always honours
-//   .gitignore files, nested ones included, even with --no-ignore). Git will
-//   not commit them without -f, but e.g. apps/webapp/.gitignore ignores any
-//   build/ or .cache/ directory at any depth.
-// - Implementation differences in rules carried over: import/no-duplicates no
-//   longer flags a type-only import beside a value import from one module;
+// - A whole-repo run skips files matched by a .gitignore (nested ones
+//   included, even with --no-ignore) or by an .eslintignore file; ESLint 9
+//   read neither. Git will not add a gitignored file without -f, but e.g.
+//   apps/webapp/.gitignore ignores any build/ or .cache/ directory at any
+//   depth. Do not add an .eslintignore: it would take files out of lint.
+// - A nested .oxlintrc.json would replace this config for its directory, so
+//   `npm run lint` passes --disable-nested-config. Keep this the only config.
+// - Implementation differences in rules carried over: import/no-duplicates
+//   differs in which type/value import pairs from one module it reports;
 //   node/no-sync also reports non-call references; import/no-named-as-default
 //   resolves workspace packages and so reports more; no-unsafe-optional-
 //   chaining looks through `as` casts; unicorn/no-process-exit (ESLint's
@@ -267,8 +270,8 @@
     "import/no-duplicates": "warn",
 
     // typescript-eslint, recommended. ESLint applied these to every file, .js
-    // included; oxlint runs the `typescript/*` ones on TypeScript files only
-    // (see the list at the top for ban-ts-comment).
+    // included; in oxlint ban-ts-comment runs on TypeScript files only (see
+    // the list at the top).
     "typescript/ban-ts-comment": "error",
     "no-array-constructor": "error",
     "typescript/no-duplicate-enum-values": "error",
