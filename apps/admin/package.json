@@ -35,7 +35,7 @@
     "react-router": "^7.18.5"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "1.65.0",
+    "@cloudflare/vite-plugin": "1.67.0",
     "@react-router/dev": "^7.18.5",
     "@react-router/fs-routes": "^7.18.5",
     "@tailwindcss/vite": "^4.1.18",
@@ -48,7 +48,7 @@
     "vite": "^6.4.5",
     "vite-tsconfig-paths": "^4.3.2",
     "vitest": "^4.1.5",
-    "wrangler": "4.152.0"
+    "wrangler": "4.156.1"
   },
   "engines": {
     "node": ">=24.0.0"

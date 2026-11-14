@@ -41,7 +41,7 @@
     "@mantine/hooks": "^8.3.11",
     "@react-router/express": "^7.18.5",
     "@react-router/node": "^7.18.5",
-    "@sentry/react-router": "^10.76.2",
+    "@sentry/react-router": "11.11.0",
     "@shikijs/core": "3.22.0",
     "@shikijs/engine-javascript": "3.22.0",
     "@shikijs/langs": "3.22.0",

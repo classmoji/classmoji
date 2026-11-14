@@ -6,7 +6,9 @@ export default {
   // it the build is unchanged.
   ...(process.env.SENTRY_AUTH_TOKEN?.trim() && {
     buildEnd: async args => {
-      const { sentryOnBuildEnd } = await import('@sentry/react-router');
+      // Sentry's upload CLI reports its own errors to Sentry unless told not to.
+      process.env.SENTRY_CLI_NO_TELEMETRY = '1';
+      const { sentryOnBuildEnd } = await import('@sentry/react-router/vite');
       await sentryOnBuildEnd(args);
     },
   }),
