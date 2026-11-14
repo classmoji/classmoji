@@ -131,7 +131,6 @@ describe('resourceDestination', () => {
       repoAssignmentsByAssignmentId: { 'a-1': { provider_issue_number: 7, git_repo: null } },
     };
     expect(resourceDestination(assignment, noRepoName).kind).toBe('internal');
-
   });
 
   it('defaults to the student prefix when a caller names no role', () => {
@@ -276,7 +275,12 @@ describe('resourcesForEvent', () => {
         },
       ],
     };
-    const star = { kind: 'assignment' as const, id: 'a-form', title: 'Exit ticket', is_draft: false };
+    const star = {
+      kind: 'assignment' as const,
+      id: 'a-form',
+      title: 'Exit ticket',
+      is_draft: false,
+    };
 
     expect(resourcesForEvent(withForm).find(r => r.id === 'a-form')?.assignmentType).toBe('FORM');
     expect(featuredResource(star, withForm).assignmentType).toBe('FORM');

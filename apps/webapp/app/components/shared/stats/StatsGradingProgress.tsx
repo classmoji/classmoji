@@ -39,15 +39,9 @@ const StatsGradingProgress = ({ gradingProgress, bare = false }: StatsGradingPro
 
   const body = (
     <>
-      {!bare && (
-        <h3 className="text-base font-semibold text-ink-0 mb-4">
-          Grading progress
-        </h3>
-      )}
+      {!bare && <h3 className="text-base font-semibold text-ink-0 mb-4">Grading progress</h3>}
       {rows.length === 0 ? (
-        <p className="text-sm text-ink-3">
-          No past-deadline assignments yet.
-        </p>
+        <p className="text-sm text-ink-3">No past-deadline assignments yet.</p>
       ) : (
         <>
           <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_auto] gap-4 text-xs font-semibold tracking-[0.08em] uppercase text-ink-4 pb-2 border-b border-line">
@@ -64,9 +58,7 @@ const StatsGradingProgress = ({ gradingProgress, bare = false }: StatsGradingPro
                   key={a.id ?? a.title}
                   className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_auto] gap-4 items-center py-2"
                 >
-                  <span className="text-sm text-ink-1 truncate">
-                    {a.title}
-                  </span>
+                  <span className="text-sm text-ink-1 truncate">{a.title}</span>
                   <div className="flex items-center gap-3">
                     <div className="flex-1 h-1.5 rounded-full bg-nav-hover overflow-hidden">
                       <div

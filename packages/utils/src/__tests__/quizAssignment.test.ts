@@ -152,8 +152,6 @@ describe('ownerOnlyAssignmentFields', () => {
   });
 
   it('gives a teacher nothing on an unknown type', () => {
-    expect(ownerOnlyAssignmentFields('OTHER', ['student_deadline'])).toEqual([
-      'student_deadline',
-    ]);
+    expect(ownerOnlyAssignmentFields('OTHER', ['student_deadline'])).toEqual(['student_deadline']);
   });
 });

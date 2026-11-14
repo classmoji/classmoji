@@ -166,7 +166,8 @@ export default function OrphanedImagesModal({
               clipRule="evenodd"
             />
           </svg>
-          This action cannot be undone. Deleted images will be permanently removed from the content repository.
+          This action cannot be undone. Deleted images will be permanently removed from the content
+          repository.
         </p>
       </div>
     </Modal>

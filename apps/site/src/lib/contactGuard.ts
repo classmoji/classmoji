@@ -27,7 +27,7 @@ export const MAX_BODY_BYTES = 64 * 1024;
 export function clientIp(
   runtime: Runtime,
   headers: Headers,
-  clientAddress: () => string | undefined,
+  clientAddress: () => string | undefined
 ): string {
   if (runtime === 'workerd') return headers.get('cf-connecting-ip')?.trim() || 'unknown';
   const fly = headers.get('fly-client-ip')?.trim();
@@ -45,7 +45,11 @@ export function clientIp(
  * rotate past the limit). IPv4-mapped IPv6 counts as the IPv4 address.
  */
 export function limiterKey(ip: string): string {
-  const address = ip.trim().toLowerCase().replace(/^\[|\]$/g, '').replace(/%.*$/, '');
+  const address = ip
+    .trim()
+    .toLowerCase()
+    .replace(/^\[|\]$/g, '')
+    .replace(/%.*$/, '');
   if (!address.includes(':')) return address || 'unknown';
 
   const groups = expandIpv6(address);
@@ -65,7 +69,8 @@ function expandIpv6(address: string): string[] | null {
   if (dotted) {
     const [a, b, c, d] = dotted.slice(1).map(Number);
     if ([a, b, c, d].some(n => n > 255)) return null;
-    text = text.slice(0, dotted.index) + `${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+    text =
+      text.slice(0, dotted.index) + `${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
   }
   const halves = text.split('::');
   if (halves.length > 2) return null;
@@ -84,7 +89,11 @@ function expandIpv6(address: string): string[] | null {
  * site runs on one), per isolate on Workers (where the bindings below add the
  * shared per-minute limits). Resets on deploy; it only has to stop casual floods.
  */
-export function createMemoryLimiter({ max = 5, windowMs = 60 * 60 * 1000, now = () => Date.now() } = {}) {
+export function createMemoryLimiter({
+  max = 5,
+  windowMs = 60 * 60 * 1000,
+  now = () => Date.now(),
+} = {}) {
   const recent = new Map<string, number[]>();
   return {
     /** Records the attempt and reports whether the key is over its limit. */
@@ -163,11 +172,12 @@ export async function overLimit({
 /** The body, if it fits in `max` bytes; 'too-large' otherwise. */
 export async function readCappedBody(
   request: Request,
-  max = MAX_BODY_BYTES,
+  max = MAX_BODY_BYTES
 ): Promise<Uint8Array<ArrayBuffer> | 'too-large'> {
   // A declared length over the cap is refused before anything is read.
   const declared = request.headers.get('content-length');
-  if (declared !== null && /^\d+$/.test(declared.trim()) && Number(declared) > max) return 'too-large';
+  if (declared !== null && /^\d+$/.test(declared.trim()) && Number(declared) > max)
+    return 'too-large';
 
   // The length can be missing (chunked) or wrong, so the read is capped too.
   const body = request.body;
@@ -195,6 +205,11 @@ export async function readCappedBody(
 }
 
 /** The form fields of a capped body (url-encoded or multipart), as `request.formData()` would read them. */
-export function parseForm(bytes: Uint8Array<ArrayBuffer>, contentType: string | null): Promise<FormData> {
-  return new Response(bytes, { headers: contentType ? { 'content-type': contentType } : {} }).formData();
+export function parseForm(
+  bytes: Uint8Array<ArrayBuffer>,
+  contentType: string | null
+): Promise<FormData> {
+  return new Response(bytes, {
+    headers: contentType ? { 'content-type': contentType } : {},
+  }).formData();
 }

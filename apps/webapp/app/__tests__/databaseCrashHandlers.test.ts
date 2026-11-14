@@ -48,7 +48,9 @@ describe('@classmoji/database crash-handler wiring', () => {
       handlers[event] = handler as (...args: unknown[]) => unknown;
       return process;
     }) as never);
-    exitSpy = vi.spyOn(process, 'exit').mockImplementation(((_code?: number) => undefined) as never);
+    exitSpy = vi
+      .spyOn(process, 'exit')
+      .mockImplementation(((_code?: number) => undefined) as never);
     vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.spyOn(console, 'log').mockImplementation(() => {});
   });

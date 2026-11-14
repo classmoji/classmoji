@@ -158,7 +158,6 @@ async function main() {
       } else {
         console.log('\n   ✨ No orphaned teams found!');
       }
-
     } catch (error) {
       console.error(`   ❌ Error fetching teams: ${error.message}`);
     }

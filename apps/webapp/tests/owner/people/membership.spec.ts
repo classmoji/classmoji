@@ -86,9 +86,7 @@ test.describe('Owner changes a teaching-team member role', () => {
     await expect(row).toBeVisible();
     await row.getByRole('radio', { name: 'Yes' }).check();
 
-    await expect
-      .poll(async () => readIsGrader(classroomId, userId), { timeout: 15000 })
-      .toBe(true);
+    await expect.poll(async () => readIsGrader(classroomId, userId), { timeout: 15000 }).toBe(true);
   });
 
   test("owner demotes a grader and the membership's is_grader flips to false in the DB", async ({

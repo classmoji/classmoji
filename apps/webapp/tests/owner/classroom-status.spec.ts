@@ -64,7 +64,9 @@ test.describe('Owner Classroom Status — Settings', () => {
     await page.goto(SETTINGS_PATH(testOrg));
     await waitForDataLoad(page);
 
-    const statusSection = page.locator('div', { has: page.getByRole('heading', { name: 'Class status' }) }).first();
+    const statusSection = page
+      .locator('div', { has: page.getByRole('heading', { name: 'Class status' }) })
+      .first();
     await expect(statusSection.getByText('Active', { exact: true })).toBeVisible();
     await expect(statusSection.getByText('Locked (read-only)', { exact: true })).toBeVisible();
     await expect(statusSection.getByText('Unpublished', { exact: true })).toBeVisible();

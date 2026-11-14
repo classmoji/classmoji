@@ -240,7 +240,9 @@ function Question({ n, code, text }: { n: number; code: typeof CODE1; text: stri
         <div className="rounded-lg border border-[#91caff] dark:border-sky-line-dark bg-[#e6f4ff] dark:bg-sky-bg-dark px-3 py-2.5">
           <div className="mb-2 flex items-center gap-1.5 border-b border-[#91caff] dark:border-sky-line-dark pb-1.5">
             <QuestionCircleOutlined style={{ fontSize: 15, color: '#1890ff' }} />
-            <span className="text-[12.5px] font-semibold text-[#0958d9] dark:text-sky-ink-dark">Question {n} of 2</span>
+            <span className="text-[12.5px] font-semibold text-[#0958d9] dark:text-sky-ink-dark">
+              Question {n} of 2
+            </span>
           </div>
           <div className="mb-1 flex items-center gap-1.5 text-[11px] text-[#4b5563] dark:text-inkd-2">
             <span className="font-[family-name:monospace]">{code.path}</span>
@@ -248,7 +250,9 @@ function Question({ n, code, text }: { n: number; code: typeof CODE1; text: stri
             <span>{code.lines.includes('–') ? `lines ${code.lines}` : `line ${code.lines}`}</span>
           </div>
           <Code lines={code.code} />
-          <p className="mb-0 mt-2 text-[12.5px] leading-[1.5] text-[#1f2937] dark:text-inkd-0">{text}</p>
+          <p className="mb-0 mt-2 text-[12.5px] leading-[1.5] text-[#1f2937] dark:text-inkd-0">
+            {text}
+          </p>
         </div>
       </div>
     </div>
@@ -323,7 +327,9 @@ function Results() {
             )}
           />
           <div className="min-w-0 flex-1">
-            <div className="text-[12.5px] font-semibold text-gray-900 dark:text-inkd-0">Summary</div>
+            <div className="text-[12.5px] font-semibold text-gray-900 dark:text-inkd-0">
+              Summary
+            </div>
             <p className="m-0 text-[12px] text-gray-700 dark:text-inkd-1">
               Strong on why the hash map makes solve() linear. Collisions need another look.
             </p>
@@ -331,7 +337,9 @@ function Results() {
               <CheckCircleOutlined style={{ color: '#52c41a', marginRight: 6 }} />
               Strengths
             </div>
-            <p className="m-0 text-[12px] text-gray-700 dark:text-inkd-1">Explains average O(1) lookups clearly.</p>
+            <p className="m-0 text-[12px] text-gray-700 dark:text-inkd-1">
+              Explains average O(1) lookups clearly.
+            </p>
           </div>
         </div>
       </Card>
@@ -363,7 +371,10 @@ export function QuizDemo() {
             className="absolute inset-y-0 right-0 flex w-[90%] flex-col bg-white dark:bg-panel-dark shadow-[-6px_0_16px_0_rgba(0,0,0,0.08),-3px_0_6px_-4px_rgba(0,0,0,0.12),-9px_0_28px_8px_rgba(0,0,0,0.05)]"
           >
             <header className="flex h-11 shrink-0 items-center gap-3 border-b border-[#f0f0f0] dark:border-line-dark bg-[#f9f9f9] dark:bg-[#1c2030] px-4">
-              <CloseOutlined style={{ fontSize: 13 }} className="text-[rgba(0,0,0,0.45)] dark:text-inkd-3" />
+              <CloseOutlined
+                style={{ fontSize: 13 }}
+                className="text-[rgba(0,0,0,0.45)] dark:text-inkd-3"
+              />
               <span className="text-[14px] font-semibold text-[rgba(0,0,0,0.88)] dark:text-inkd-0">
                 <span className="mr-1.5 text-[16px]">🧑‍💻</span>
                 {QUIZ}
@@ -417,7 +428,9 @@ export function QuizDemo() {
                           />
                         ))}
                       </span>
-                      <span className="text-[12px] text-[rgba(0,0,0,0.45)] dark:text-inkd-3">{s.thinking}</span>
+                      <span className="text-[12px] text-[rgba(0,0,0,0.45)] dark:text-inkd-3">
+                        {s.thinking}
+                      </span>
                     </div>
                   </div>
                 )}

@@ -64,7 +64,9 @@ export function FolderTabBar<K extends string>({
           >
             {tab.label}
             {typeof tab.count === 'number' && (
-              <span className={`ml-2 text-xs tabular-nums ${isActive ? 'text-ink-3' : 'text-ink-4'}`}>
+              <span
+                className={`ml-2 text-xs tabular-nums ${isActive ? 'text-ink-3' : 'text-ink-4'}`}
+              >
                 {tab.count}
               </span>
             )}

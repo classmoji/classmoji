@@ -9,7 +9,6 @@
 @import '@classmoji/ui-components/styles/fonts.css';
 @import '@classmoji/ui-components/styles/components.css';
 
-
 * {
   box-sizing: border-box;
 }
@@ -560,7 +559,6 @@ label {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
 
 /* Reveal panel animation */
 .reveal-enter {

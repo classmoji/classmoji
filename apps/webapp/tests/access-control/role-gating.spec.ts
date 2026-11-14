@@ -53,10 +53,9 @@ test.describe('Access Control: a student cannot reach owner-only routes', () => 
   test('a student reading the org subscription endpoint is denied (IDOR block, 403)', async ({
     authenticatedPage: page,
   }) => {
-    const res = await page.request.get(
-      `/api/get-org-subscription?orgLogin=${TEST_CLASSROOM}`,
-      { maxRedirects: 0 }
-    );
+    const res = await page.request.get(`/api/get-org-subscription?orgLogin=${TEST_CLASSROOM}`, {
+      maxRedirects: 0,
+    });
     expect(res.status()).toBe(403);
   });
 
@@ -112,10 +111,9 @@ test.describe('Access Control: an assistant cannot reach the /admin namespace', 
   test('an assistant reading the org subscription endpoint is denied (403)', async ({
     authenticatedPage: page,
   }) => {
-    const res = await page.request.get(
-      `/api/get-org-subscription?orgLogin=${TEST_CLASSROOM}`,
-      { maxRedirects: 0 }
-    );
+    const res = await page.request.get(`/api/get-org-subscription?orgLogin=${TEST_CLASSROOM}`, {
+      maxRedirects: 0,
+    });
     expect(res.status()).toBe(403);
   });
 

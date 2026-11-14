@@ -32,9 +32,7 @@ describe('gitUsername', () => {
 describe('gitAccountId', () => {
   it('never returns a placeholder id', () => {
     expect(gitAccountId({ accounts: [github] })).toBe('42');
-    expect(
-      gitAccountId({ accounts: [{ ...github, account_id: 'unresolved:u1' }] })
-    ).toBeNull();
+    expect(gitAccountId({ accounts: [{ ...github, account_id: 'unresolved:u1' }] })).toBeNull();
   });
 });
 

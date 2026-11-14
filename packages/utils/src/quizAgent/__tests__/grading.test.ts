@@ -56,7 +56,7 @@ describe('scoreAnswer', () => {
   });
 });
 
-describe('scoreAnswer and deriveResult with a quiz\'s own hint cost', () => {
+describe("scoreAnswer and deriveResult with a quiz's own hint cost", () => {
   it('takes 0, 15 or 50 points off per hint', () => {
     const after = (hints: number) => ({ level: 'correct' as const, hints_before: hints });
     expect(scoreAnswer(after(2), 0)).toBe(100);

@@ -10,7 +10,8 @@
 
 import { PrismaClient } from '@prisma/client';
 
-const DB_URL = process.env.DATABASE_URL || 'postgresql://classmoji:classmoji@localhost:5433/classmoji';
+const DB_URL =
+  process.env.DATABASE_URL || 'postgresql://classmoji:classmoji@localhost:5433/classmoji';
 const WEBAPP_URL = 'http://localhost:3000';
 const SLIDES_URL = 'http://localhost:6500';
 const USER_LOGIN = 'timofei7';
@@ -86,9 +87,15 @@ async function clearServerCache() {
   }).catch(() => {}); // slides may not have this endpoint
 }
 
-function pass(name) { console.log(`  \x1b[32m✓\x1b[0m ${name}`); }
-function fail(name, reason) { console.log(`  \x1b[31m✗\x1b[0m ${name}: ${reason}`); }
-function info(msg) { console.log(`  \x1b[90m${msg}\x1b[0m`); }
+function pass(name) {
+  console.log(`  \x1b[32m✓\x1b[0m ${name}`);
+}
+function fail(name, reason) {
+  console.log(`  \x1b[31m✗\x1b[0m ${name}: ${reason}`);
+}
+function info(msg) {
+  console.log(`  \x1b[90m${msg}\x1b[0m`);
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests
@@ -323,7 +330,10 @@ async function testSlidesContentProxy() {
 
   // Check if token was refreshed
   const after = await getAccount();
-  if (after.access_token !== before.access_token && new Date(after.access_token_expires_at) > new Date()) {
+  if (
+    after.access_token !== before.access_token &&
+    new Date(after.access_token_expires_at) > new Date()
+  ) {
     pass('Token was refreshed by slides service');
   }
 
@@ -378,12 +388,18 @@ async function main() {
 
   // Find test user
   const user = await prisma.user.findFirst({ where: { login: USER_LOGIN } });
-  if (!user) { console.error(`User ${USER_LOGIN} not found`); process.exit(1); }
+  if (!user) {
+    console.error(`User ${USER_LOGIN} not found`);
+    process.exit(1);
+  }
   userId = user.id;
 
   // Get account
   const account = await getAccount();
-  if (!account) { console.error('No GitHub account found'); process.exit(1); }
+  if (!account) {
+    console.error('No GitHub account found');
+    process.exit(1);
+  }
   accountId = account.id;
 
   // Save originals for restoration
@@ -396,7 +412,10 @@ async function main() {
     where: { user_id: userId },
     orderBy: { created_at: 'desc' },
   });
-  if (!session) { console.error('No active session found. Login first.'); process.exit(1); }
+  if (!session) {
+    console.error('No active session found. Login first.');
+    process.exit(1);
+  }
   sessionToken = session.token;
 
   info(`User: ${USER_LOGIN} (${userId})`);
@@ -407,13 +426,13 @@ async function main() {
     // Each test clears the server-side token cache via POST /api/auth/clear-cache
     // before running, so no server restart is needed between runs.
 
-    await testExpiredTokenRefresh();    // Scenario 1: basic refresh
-    await testConcurrentRefresh();       // Scenario 2: mutex
-    await testProactiveRefresh();        // Scenario 3: proactive refresh
-    await testDeadRefreshToken();        // Scenario 4: dead token
-    await testNullTokens();              // Scenario 5: null tokens
-    await testSlidesContentProxy();      // Scenario 6: slides service
-    await testClearRevokedToken();       // Scenario 7: epoch vs null
+    await testExpiredTokenRefresh(); // Scenario 1: basic refresh
+    await testConcurrentRefresh(); // Scenario 2: mutex
+    await testProactiveRefresh(); // Scenario 3: proactive refresh
+    await testDeadRefreshToken(); // Scenario 4: dead token
+    await testNullTokens(); // Scenario 5: null tokens
+    await testSlidesContentProxy(); // Scenario 6: slides service
+    await testClearRevokedToken(); // Scenario 7: epoch vs null
 
     console.log('\n═══════════════════════════════════════════════════════');
     console.log('  All scenarios tested. Check results above.');

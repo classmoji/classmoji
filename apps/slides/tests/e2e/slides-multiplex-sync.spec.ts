@@ -141,9 +141,7 @@ test.describe('Slides real-time multiplex sync', () => {
       // A syntactically valid but non-existent id: the server emits `join_error`
       // with reason `slide_not_found`, so joinRoom rejects immediately instead
       // of hanging the full timeout.
-      await expect(joinRoom(client, 'does-not-exist-slide-id')).rejects.toThrow(
-        /slide_not_found/i
-      );
+      await expect(joinRoom(client, 'does-not-exist-slide-id')).rejects.toThrow(/slide_not_found/i);
     } finally {
       closeSocket(client);
     }

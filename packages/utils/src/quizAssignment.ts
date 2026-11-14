@@ -91,7 +91,14 @@ export const mirroredQuizWeight = (weight: number): number => Math.round(weight)
  */
 export const TEACHER_ASSIGNMENT_FIELDS: Record<'REPO' | 'QUIZ' | 'FORM', readonly string[]> = {
   REPO: ['grades_released', 'student_deadline'],
-  QUIZ: ['student_deadline', 'weight', 'release_at', 'closes_at', 'tokens_per_hour', 'is_published'],
+  QUIZ: [
+    'student_deadline',
+    'weight',
+    'release_at',
+    'closes_at',
+    'tokens_per_hour',
+    'is_published',
+  ],
   FORM: ['grades_released', 'student_deadline'],
 };
 

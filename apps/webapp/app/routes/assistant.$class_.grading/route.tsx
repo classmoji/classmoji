@@ -12,8 +12,10 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     resourceType: 'GRADING_QUEUE',
     action: 'view_grading_queue',
   });
-  const assignedGraderItems =
-    await ClassmojiService.gitRepoAssignmentGrader.findAssignedByGrader(userId, classroom.id);
+  const assignedGraderItems = await ClassmojiService.gitRepoAssignmentGrader.findAssignedByGrader(
+    userId,
+    classroom.id
+  );
   const myRepositoryAssignments = assignedGraderItems.map(item => item.git_repo_assignment);
   const repositories = await ClassmojiService.repository.findByClassroomSlug(classSlug!);
 

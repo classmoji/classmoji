@@ -327,7 +327,10 @@ export type OfferNextStepOutput = z.infer<typeof OfferNextStepOutputSchema>;
  */
 export const offerNextStepModelOutput = (output: unknown) => {
   if (!output || typeof output !== 'object' || Array.isArray(output)) {
-    return { type: 'json' as const, value: output === undefined ? null : JSON.parse(JSON.stringify(output)) };
+    return {
+      type: 'json' as const,
+      value: output === undefined ? null : JSON.parse(JSON.stringify(output)),
+    };
   }
   const { hint_cost: _cost, ...rest } = output as Record<string, unknown>;
   return { type: 'json' as const, value: JSON.parse(JSON.stringify(rest)) };

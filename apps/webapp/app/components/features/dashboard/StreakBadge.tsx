@@ -15,20 +15,14 @@ const StreakBadge = ({ days, lastGradedAt }: StreakBadgeProps) => {
       {hasStreak ? (
         <div className="flex flex-col gap-1">
           <div className="flex items-baseline gap-2">
-            <span className="text-3xl font-semibold tabular-nums text-ink-0">
-              {days}
-            </span>
-            <span className="text-sm text-ink-3">
-              day{days === 1 ? '' : 's'}
-            </span>
+            <span className="text-3xl font-semibold tabular-nums text-ink-0">{days}</span>
+            <span className="text-sm text-ink-3">day{days === 1 ? '' : 's'}</span>
             <span aria-hidden className="text-xl">
               🔥
             </span>
           </div>
           {lastGradedAt && (
-            <div className="text-xs text-ink-3">
-              Last graded {dayjs(lastGradedAt).fromNow()}
-            </div>
+            <div className="text-xs text-ink-3">Last graded {dayjs(lastGradedAt).fromNow()}</div>
           )}
         </div>
       ) : (

@@ -28,9 +28,7 @@ const AtRiskStudents = ({ atRiskCount, students }: AtRiskStudentsProps) => {
         </Tag>
       </div>
       {students.length === 0 ? (
-        <div className="text-sm text-ink-3 py-6 text-center">
-          No at-risk students. Nice work!
-        </div>
+        <div className="text-sm text-ink-3 py-6 text-center">No at-risk students. Nice work!</div>
       ) : (
         <div className="flex flex-col gap-2 max-h-[360px] overflow-y-auto">
           {students.map(s => (
@@ -39,16 +37,18 @@ const AtRiskStudents = ({ atRiskCount, students }: AtRiskStudentsProps) => {
               className="flex items-center justify-between p-2 rounded-lg hover:bg-paper dark:hover:bg-gray-800 transition-colors"
             >
               <div className="flex items-center gap-3 min-w-0 flex-1">
-                <UserAvatar login={s.login} image={s.image} name={s.name} seed={s.userId} size={32} />
+                <UserAvatar
+                  login={s.login}
+                  image={s.image}
+                  name={s.name}
+                  seed={s.userId}
+                  size={32}
+                />
                 <div className="min-w-0">
                   <div className="text-sm text-ink-0 truncate">
                     {s.name || s.login || 'Unknown'}
                   </div>
-                  {s.login && (
-                    <div className="text-xs text-ink-3 truncate">
-                      @{s.login}
-                    </div>
-                  )}
+                  {s.login && <div className="text-xs text-ink-3 truncate">@{s.login}</div>}
                 </div>
               </div>
               <Tag className="border-0 bg-amber-bg dark:bg-yellow-900/30 text-amber-ink dark:text-yellow-300 font-medium">

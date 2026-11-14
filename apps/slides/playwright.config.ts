@@ -43,10 +43,7 @@ export default defineConfig({
   retries: 0,
 
   // Reporter configuration
-  reporter: [
-    ['list'],
-    ['html', { open: 'never' }],
-  ],
+  reporter: [['list'], ['html', { open: 'never' }]],
 
   // Timeout configuration
   timeout: 60_000, // 60 seconds per test

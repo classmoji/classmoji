@@ -56,11 +56,12 @@ test.describe('Access Control: an unauthenticated visitor cannot view protected 
     });
   }
 
-  test('the org subscription API rejects a request that carries no session', async ({ request }) => {
-    const res = await request.get(
-      `/api/get-org-subscription?orgLogin=${TEST_CLASSROOM}`,
-      { maxRedirects: 0 }
-    );
+  test('the org subscription API rejects a request that carries no session', async ({
+    request,
+  }) => {
+    const res = await request.get(`/api/get-org-subscription?orgLogin=${TEST_CLASSROOM}`, {
+      maxRedirects: 0,
+    });
     expect(
       [302, 303, 401, 403],
       'unauthenticated subscription read must redirect or be rejected, never 200 / 4xx-not-found / 5xx'

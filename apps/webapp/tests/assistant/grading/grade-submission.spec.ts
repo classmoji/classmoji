@@ -78,7 +78,7 @@ test.describe('Assistant grades a student submission', () => {
 
     await row.getByTestId('emoji-grade-trigger').click();
     const emojiButton = // The picker renders in a portal, outside the row.
-    page.getByTestId(`emoji-grade-option-${GRADE_SHORTCODE}`);
+      page.getByTestId(`emoji-grade-option-${GRADE_SHORTCODE}`);
     // Asserting the unselected starting state makes a real add (vs a no-op) provable.
     await expect(emojiButton).toHaveAttribute('data-selected', 'false');
     await emojiButton.click();
@@ -110,7 +110,7 @@ test.describe('Assistant grades a student submission', () => {
 
     await row.getByTestId('emoji-grade-trigger').click();
     const emojiButton = // The picker renders in a portal, outside the row.
-    page.getByTestId(`emoji-grade-option-${GRADE_SHORTCODE}`);
+      page.getByTestId(`emoji-grade-option-${GRADE_SHORTCODE}`);
     // The emoji must render SELECTED so the click is a genuine remove, not a no-op add.
     await expect(emojiButton).toHaveAttribute('data-selected', 'true');
     await emojiButton.click();
@@ -152,25 +152,22 @@ test.describe('Student cannot grade a submission (authorization)', () => {
 
     const studentCtx = await requestAs('student');
     try {
-      const response = await studentCtx.post(
-        `/api/gitRepoAssignment/${testOrg}?action=addGrade`,
-        {
-          headers: { 'Content-Type': 'application/json' },
-          data: {
-            repoName: `${sub.title}-repo`,
-            gitRepoAssignment: {
-              id: sub.gitRepoAssignmentId,
-              assignment_id: sub.assignmentId,
-              studentId: null,
-              teamId: null,
-            },
-            graderId: null,
-            grade: GRADE_SHORTCODE,
+      const response = await studentCtx.post(`/api/gitRepoAssignment/${testOrg}?action=addGrade`, {
+        headers: { 'Content-Type': 'application/json' },
+        data: {
+          repoName: `${sub.title}-repo`,
+          gitRepoAssignment: {
+            id: sub.gitRepoAssignmentId,
+            assignment_id: sub.assignmentId,
             studentId: null,
             teamId: null,
           },
-        }
-      );
+          graderId: null,
+          grade: GRADE_SHORTCODE,
+          studentId: null,
+          teamId: null,
+        },
+      });
 
       // addGrade only permits OWNER/TEACHER/ASSISTANT — a STUDENT is denied.
       expect(response.status()).toBe(403);

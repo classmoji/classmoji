@@ -1,11 +1,7 @@
 import { test, expect } from '../../fixtures/auth.fixture';
 import { waitForDataLoad } from '../../helpers/wait.helpers';
 import { TEST_CLASSROOM } from '../../helpers/env.helpers';
-import {
-  getTestPrisma,
-  getUserByLogin,
-  getClassroomBySlug,
-} from '../../helpers/prisma.helpers';
+import { getTestPrisma, getUserByLogin, getClassroomBySlug } from '../../helpers/prisma.helpers';
 
 /**
  * Pages Management Tests

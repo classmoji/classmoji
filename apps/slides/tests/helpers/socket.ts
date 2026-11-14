@@ -144,17 +144,11 @@ export function waitForEvent<T = unknown>(
  * the server suppresses a broadcast (e.g. a follower's `slidechanged`) or that
  * room state was evicted (no `currentstate` on a fresh join).
  */
-export function expectNoEvent(
-  socket: Socket,
-  event: string,
-  windowMs = 1_500
-): Promise<void> {
+export function expectNoEvent(socket: Socket, event: string, windowMs = 1_500): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const onEvent = (payload: unknown) => {
       clearTimeout(timer);
-      reject(
-        new Error(`Expected NO "${event}" but received: ${JSON.stringify(payload)}`)
-      );
+      reject(new Error(`Expected NO "${event}" but received: ${JSON.stringify(payload)}`));
     };
     const timer = setTimeout(() => {
       socket.off(event, onEvent);

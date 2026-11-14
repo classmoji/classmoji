@@ -660,7 +660,9 @@ export function PublishDemo() {
 
       {s.confirmOpen && (
         <div className="absolute inset-0 z-20 flex items-start justify-center bg-black/45 pt-[110px]">
-          <div className={`w-[340px] rounded-lg bg-white p-5 dark:bg-panel-hover-dark dark:ring-1 dark:ring-line-2-dark ${popoverShadow}`}>
+          <div
+            className={`w-[340px] rounded-lg bg-white p-5 dark:bg-panel-hover-dark dark:ring-1 dark:ring-line-2-dark ${popoverShadow}`}
+          >
             <div className="flex gap-3">
               <IconAlertCircleFilled size={20} className="shrink-0 text-[#faad14]" />
               <div>

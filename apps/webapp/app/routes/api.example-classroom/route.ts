@@ -30,7 +30,10 @@ export const action = async ({ request }: Route.ActionArgs) => {
   });
   const ownerLogin = displayUsername(user);
   if (!ownerLogin) {
-    return Response.json({ error: 'Account has no Github or Gitlab username yet.' }, { status: 400 });
+    return Response.json(
+      { error: 'Account has no Github or Gitlab username yet.' },
+      { status: 400 }
+    );
   }
 
   // Optional form field: the tour sends the browser's zone. Absent (an older

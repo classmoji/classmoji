@@ -26,11 +26,7 @@ interface SeedPageOpts {
   show_in_student_menu?: boolean;
 }
 
-async function seedPage(
-  classroomId: string,
-  createdBy: string,
-  opts: SeedPageOpts
-): Promise<void> {
+async function seedPage(classroomId: string, createdBy: string, opts: SeedPageOpts): Promise<void> {
   const prisma = getTestPrisma();
   await prisma.page.create({
     data: {
@@ -248,9 +244,7 @@ test.describe('Pages deletion persistence', () => {
     ]);
 
     const prisma = getTestPrisma();
-    await expect
-      .poll(async () => prisma.page.findUnique({ where: { id: pageId } }))
-      .toBeNull();
+    await expect.poll(async () => prisma.page.findUnique({ where: { id: pageId } })).toBeNull();
   });
 });
 

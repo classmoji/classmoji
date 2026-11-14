@@ -111,17 +111,13 @@ test.describe('REGRESSION: repository assignment unpublish still works after TS 
     // The confirm is an Ant Popconfirm (a popover, not a dialog). Scope the
     // confirm click to the visible popover so we don't re-click the row's own
     // "Unpublish" trigger (both match the accessible name).
-    const popover = page
-      .locator('.ant-popover')
-      .filter({ hasText: 'Unpublish repository' });
+    const popover = page.locator('.ant-popover').filter({ hasText: 'Unpublish repository' });
     await expect(popover).toBeVisible();
     await popover.getByRole('button', { name: 'Unpublish' }).click();
 
     await expect(row.getByText('Draft')).toBeVisible();
 
-    await expect
-      .poll(async () => getRepositoryPublishedState(seeded.repositoryId))
-      .toBe(false);
+    await expect.poll(async () => getRepositoryPublishedState(seeded.repositoryId)).toBe(false);
   });
 });
 
@@ -130,10 +126,9 @@ test.describe('REGRESSION: legacy modules URLs 301-redirect to repos after TS mi
     test(`a ${role} hitting /modules is 301-redirected to /repos preserving the tail and query`, async ({
       authenticatedPage: page,
     }) => {
-      const res = await page.request.get(
-        `/${role}/${TEST_CLASSROOM}/modules/some-title?foo=bar`,
-        { maxRedirects: 0 }
-      );
+      const res = await page.request.get(`/${role}/${TEST_CLASSROOM}/modules/some-title?foo=bar`, {
+        maxRedirects: 0,
+      });
       expect(res.status()).toBe(301);
       const location = res.headers()['location'];
       expect(location).toBe(`/${role}/${TEST_CLASSROOM}/repos/some-title?foo=bar`);

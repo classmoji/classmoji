@@ -42,12 +42,7 @@ export default async () => {
       // Server-only. Leaving these in triggers a mid-session dep
       // re-optimization whose reload can transiently fail to resolve
       // @prisma/client during an in-flight SSR request.
-      exclude: [
-        '@classmoji/database',
-        '@classmoji/services',
-        '@prisma/client',
-        'octokit',
-      ],
+      exclude: ['@classmoji/database', '@classmoji/services', '@prisma/client', 'octokit'],
     },
     plugins: [tailwindcss(), ...workerPlugins, reactRouter(), tsconfigPaths()],
     server: {

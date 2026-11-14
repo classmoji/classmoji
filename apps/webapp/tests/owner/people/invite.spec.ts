@@ -31,7 +31,6 @@ async function findInvite(email: string) {
 }
 
 test.describe('Owner invites a student to the classroom', () => {
-
   test('owner bulk-adds a new student and a classroom_invites row is created in the DB', async ({
     authenticatedPage: page,
     testOrg,
@@ -52,7 +51,9 @@ test.describe('Owner invites a student to the classroom', () => {
       await page.getByRole('button', { name: 'Parse students' }).click();
 
       await expect(page.getByText('Ready to add')).toBeVisible();
-      await expect(page.locator('.ant-modal').getByText(invite.email, { exact: true })).toBeVisible();
+      await expect(
+        page.locator('.ant-modal').getByText(invite.email, { exact: true })
+      ).toBeVisible();
 
       // The submit button carries a leading PlusOutlined icon, so the accessible
       // name is "plus Add 1 student" — match on the trailing visible text only.
@@ -84,7 +85,6 @@ test.describe('Owner revokes a pending student invite', () => {
     const prisma = getTestPrisma();
     const classroom = await getClassroomBySlug(TEST_CLASSROOM);
 
-
     await deleteInviteByEmail(invite.email);
     const created = await prisma.classroomInvite.create({
       data: {
@@ -115,9 +115,7 @@ test.describe('Owner revokes a pending student invite', () => {
         )
         .toBe(true);
     } finally {
-      await prisma.classroomInvite
-        .delete({ where: { id: created.id } })
-        .catch(() => undefined);
+      await prisma.classroomInvite.delete({ where: { id: created.id } }).catch(() => undefined);
     }
   });
 });

@@ -84,6 +84,8 @@ export const APP_ANTD_DARK_THEME: ThemeConfig = {
 export function AppAntd({ children }: { children: ReactNode }) {
   const isDark = useIsDark();
   return (
-    <ConfigProvider theme={isDark ? APP_ANTD_DARK_THEME : APP_ANTD_THEME}>{children}</ConfigProvider>
+    <ConfigProvider theme={isDark ? APP_ANTD_DARK_THEME : APP_ANTD_THEME}>
+      {children}
+    </ConfigProvider>
   );
 }

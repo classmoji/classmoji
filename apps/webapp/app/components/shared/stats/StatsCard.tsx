@@ -16,9 +16,7 @@ const StatsCard = ({ title, children, icon }: StatsCardProps) => {
           <div className="text-xs uppercase tracking-wide text-ink-3 font-semibold mb-2">
             {title}
           </div>
-          <div className="text-3xl font-bold text-ink-0 tabular-nums">
-            {children}
-          </div>
+          <div className="text-3xl font-bold text-ink-0 tabular-nums">{children}</div>
         </div>
 
         {icon && (

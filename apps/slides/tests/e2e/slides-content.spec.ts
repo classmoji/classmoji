@@ -180,7 +180,10 @@ test.describe('Slides Content & Styling', () => {
             return parseInt(style.fontWeight, 10) >= 600 || style.fontWeight === 'bold';
           });
         },
-        { timeout: 3000, message: 'bold formatting produced neither a semantic tag nor font-weight>=600' }
+        {
+          timeout: 3000,
+          message: 'bold formatting produced neither a semantic tag nor font-weight>=600',
+        }
       )
       .toBe(true);
   });
@@ -222,7 +225,10 @@ test.describe('Slides Content & Styling', () => {
             return window.getComputedStyle(text).fontStyle === 'italic';
           });
         },
-        { timeout: 3000, message: 'italic formatting produced neither a semantic tag nor font-style:italic' }
+        {
+          timeout: 3000,
+          message: 'italic formatting produced neither a semantic tag nor font-style:italic',
+        }
       )
       .toBe(true);
   });
@@ -260,7 +266,10 @@ test.describe('Slides Content & Styling', () => {
             return window.getComputedStyle(text).textDecoration.includes('underline');
           });
         },
-        { timeout: 3000, message: 'underline formatting produced neither a <u> tag nor underline decoration' }
+        {
+          timeout: 3000,
+          message: 'underline formatting produced neither a <u> tag nor underline decoration',
+        }
       )
       .toBe(true);
   });
@@ -303,7 +312,10 @@ test.describe('Slides Content & Styling', () => {
             return window.getComputedStyle(text).textDecoration.includes('line-through');
           });
         },
-        { timeout: 3000, message: 'strikethrough produced neither a semantic tag nor line-through decoration' }
+        {
+          timeout: 3000,
+          message: 'strikethrough produced neither a semantic tag nor line-through decoration',
+        }
       )
       .toBe(true);
   });

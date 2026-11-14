@@ -46,9 +46,7 @@ test.describe('REGRESSION: AI gating still works after TS migration', () => {
     if (quizId) await deleteQuizById(quizId);
   });
 
-  test('the quiz API follows the quiz runtime (Trigger)', async ({
-    authenticatedPage: page,
-  }) => {
+  test('the quiz API follows the quiz runtime (Trigger)', async ({ authenticatedPage: page }) => {
     const quizRuntimeOn = Boolean(
       process.env.TRIGGER_SECRET_KEY || process.env.TRIGGER_ACCESS_TOKEN
     );

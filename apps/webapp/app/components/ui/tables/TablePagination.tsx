@@ -93,10 +93,7 @@ const TablePagination = ({
         {getPageNumbers().map((page, idx) => {
           if (page === '...') {
             return (
-              <span
-                key={`ellipsis-${idx}`}
-                className="px-2 text-ink-4 dark:text-ink-4 text-sm"
-              >
+              <span key={`ellipsis-${idx}`} className="px-2 text-ink-4 dark:text-ink-4 text-sm">
                 ...
               </span>
             );

@@ -194,22 +194,18 @@ const INTENTS: Intent[] = [
     write: () => mocks.update,
     allowed: TEAM,
   },
-  ...ASSIGNMENT_FIELD_SAVES.map(
-    ([field, fields]): Intent => ({
-      name: `updateQuiz carrying ${field}`,
-      body: { ...CONTENT_SAVE, ...fields },
-      write: () => mocks.update,
-      allowed: AUTHORS,
-    })
-  ),
-  ...AUTHOR_SETTING_SAVES.map(
-    ([field, fields]): Intent => ({
-      name: `updateQuiz carrying ${field}`,
-      body: { ...CONTENT_SAVE, ...fields },
-      write: () => mocks.update,
-      allowed: AUTHORS,
-    })
-  ),
+  ...ASSIGNMENT_FIELD_SAVES.map(([field, fields]): Intent => ({
+    name: `updateQuiz carrying ${field}`,
+    body: { ...CONTENT_SAVE, ...fields },
+    write: () => mocks.update,
+    allowed: AUTHORS,
+  })),
+  ...AUTHOR_SETTING_SAVES.map(([field, fields]): Intent => ({
+    name: `updateQuiz carrying ${field}`,
+    body: { ...CONTENT_SAVE, ...fields },
+    write: () => mocks.update,
+    allowed: AUTHORS,
+  })),
   {
     name: 'updateQuiz carrying only an assignment field',
     body: { _action: 'updateQuiz', id: 'quiz-1', weight: 30 },

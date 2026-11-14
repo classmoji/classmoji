@@ -128,24 +128,22 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   return {
     classSlug,
     pagesUrl,
-    forms: forms.map(
-      (form): FormRow => ({
-        id: form.id,
-        title: form.title,
-        slug: form.slug,
-        access: form.access as FormAccess,
-        status: form.status as FormStatus,
-        published: Boolean(form.current_revision_id),
-        responses: form._count.responses,
-        responseCap: form.response_cap,
-        // Dates are serialized here rather than left to the transport: the
-        // client formats them and should not have to care which of Date and
-        // string arrived.
-        closesAt: form.closes_at ? form.closes_at.toISOString() : null,
-        updatedAt: form.updated_at.toISOString(),
-        publicUrl: publicUrlFor(form.slug),
-      })
-    ),
+    forms: forms.map((form): FormRow => ({
+      id: form.id,
+      title: form.title,
+      slug: form.slug,
+      access: form.access as FormAccess,
+      status: form.status as FormStatus,
+      published: Boolean(form.current_revision_id),
+      responses: form._count.responses,
+      responseCap: form.response_cap,
+      // Dates are serialized here rather than left to the transport: the
+      // client formats them and should not have to care which of Date and
+      // string arrived.
+      closesAt: form.closes_at ? form.closes_at.toISOString() : null,
+      updatedAt: form.updated_at.toISOString(),
+      publicUrl: publicUrlFor(form.slug),
+    })),
   };
 };
 

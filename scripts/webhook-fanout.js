@@ -59,7 +59,7 @@ function getActiveHookPorts() {
  * Forward a request to a target port
  */
 function forwardRequest(req, body, targetPort) {
-  return new Promise((resolve) => {
+  return new Promise(resolve => {
     const options = {
       hostname: 'localhost',
       port: targetPort,
@@ -71,7 +71,7 @@ function forwardRequest(req, body, targetPort) {
       },
     };
 
-    const proxyReq = http.request(options, (res) => {
+    const proxyReq = http.request(options, res => {
       // Consume response body to free up resources
       res.on('data', () => {});
       res.on('end', () => {
@@ -79,7 +79,7 @@ function forwardRequest(req, body, targetPort) {
       });
     });
 
-    proxyReq.on('error', (err) => {
+    proxyReq.on('error', err => {
       resolve({ port: targetPort, status: 'error', message: err.message });
     });
 
@@ -94,7 +94,7 @@ function forwardRequest(req, body, targetPort) {
 const server = http.createServer(async (req, res) => {
   const chunks = [];
 
-  req.on('data', (chunk) => chunks.push(chunk));
+  req.on('data', chunk => chunks.push(chunk));
 
   req.on('end', async () => {
     const body = Buffer.concat(chunks);
@@ -104,25 +104,23 @@ const server = http.createServer(async (req, res) => {
     console.log(`[${timestamp}] ${req.method} ${req.url} → ${ports.join(', ')}`);
 
     // Forward to all active hook-stations in parallel
-    const results = await Promise.all(
-      ports.map((port) => forwardRequest(req, body, port))
-    );
+    const results = await Promise.all(ports.map(port => forwardRequest(req, body, port)));
 
     // Log results
-    const summary = results
-      .map((r) => `${r.port}:${r.status}`)
-      .join(' ');
+    const summary = results.map(r => `${r.port}:${r.status}`).join(' ');
     console.log(`[${timestamp}] Results: ${summary}`);
 
     // Respond to the original request (Smee)
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
-      fanout: true,
-      forwarded_to: results,
-    }));
+    res.end(
+      JSON.stringify({
+        fanout: true,
+        forwarded_to: results,
+      })
+    );
   });
 
-  req.on('error', (err) => {
+  req.on('error', err => {
     console.error('Request error:', err.message);
     res.writeHead(500);
     res.end('Internal Server Error');

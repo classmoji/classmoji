@@ -83,7 +83,9 @@ export default function FeedbackLayout() {
                 className="flex items-center gap-2 rounded-lg px-2 py-1 no-underline hover:bg-panel-hover"
               >
                 <FeedbackAvatar name={viewer.name ?? ''} image={viewer.image} size={28} />
-                <span className="hidden text-[13px] font-medium text-ink-1 sm:inline">My classes</span>
+                <span className="hidden text-[13px] font-medium text-ink-1 sm:inline">
+                  My classes
+                </span>
               </Link>
             ) : (
               <Link

@@ -12,11 +12,7 @@
  */
 
 import { test, expect } from '@playwright/test';
-import {
-  diffBlockOps,
-  MAX_MOVES,
-  type BlockOp,
-} from '../../app/components/editor/blockOpsDiff.ts';
+import { diffBlockOps, MAX_MOVES, type BlockOp } from '../../app/components/editor/blockOpsDiff.ts';
 
 const block = (id: string, text: string, children: unknown[] = []) => ({
   id,
@@ -143,7 +139,12 @@ test.describe('diffBlockOps — move', () => {
   });
 
   test('mixed update+delete+move+insert replays to the exact target document', () => {
-    const baseline = [block('a', 'one'), block('b', 'two'), block('c', 'three'), block('d', 'four')];
+    const baseline = [
+      block('a', 'one'),
+      block('b', 'two'),
+      block('c', 'three'),
+      block('d', 'four'),
+    ];
     const current = [
       block('d', 'four'),
       block('a', 'one EDITED'),

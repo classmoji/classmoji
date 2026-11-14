@@ -15,9 +15,10 @@ describe('attemptAnswerRules', () => {
   const quiz = { hint_cost: 30, max_answers: 3 };
 
   it('reads an attempt pinned with the rules', () => {
-    expect(
-      attemptAnswerRules({ questionCount: 5, hintCost: 0, maxAnswers: 1 }, quiz)
-    ).toEqual({ hintCost: 0, maxAnswers: 1 });
+    expect(attemptAnswerRules({ questionCount: 5, hintCost: 0, maxAnswers: 1 }, quiz)).toEqual({
+      hintCost: 0,
+      maxAnswers: 1,
+    });
   });
 
   it('gives an attempt pinned before the rules existed the old cost and no limit', () => {
