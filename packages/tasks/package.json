@@ -28,7 +28,6 @@
     "@classmoji/database": "*",
     "@classmoji/page-schema": "*",
     "@classmoji/services": "*",
-    "@infisical/sdk": "^5.0.2",
     "@trigger.dev/build": "4.8.3",
     "@trigger.dev/python": "4.8.3",
     "@trigger.dev/react-hooks": "4.8.3",
