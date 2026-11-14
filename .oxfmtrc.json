@@ -55,11 +55,6 @@
     "**/fixtures/",
     // A verbatim copy of React Router's default entry that a test compares
     // byte for byte: never reformat it.
-    "packages/workers/src/entry-server.node.tsx",
-    // Does not parse, so it cannot be formatted: 2ef6c0f8 rewrote the "New
-    // repository from a module" test but left that test's old tail (lines
-    // 205-219) after the describe block closes at line 203. Remove from this
-    // list once the spec is repaired.
-    "apps/webapp/tests/owner/modules/module-builder.spec.ts"
+    "packages/workers/src/entry-server.node.tsx"
   ]
 }
