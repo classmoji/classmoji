@@ -25,6 +25,7 @@ import { ClassmojiService } from '@classmoji/services';
 import { slideService } from '@classmoji/services/slides';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
+import { jsonText } from '../mcp/jsonText.ts';
 import type { ToolContext, ToolResult } from '../mcp/registry.ts';
 import type { ClassroomContext } from '../authz/classroomContext.ts';
 
@@ -111,7 +112,7 @@ export function submissionIdSchema() {
 
 /** Compact success payload. */
 export function ok(payload: unknown): ToolResult {
-  return { content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }] };
+  return { content: [{ type: 'text', text: jsonText(payload) }] };
 }
 
 /**

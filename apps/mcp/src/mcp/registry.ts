@@ -53,6 +53,7 @@ import { assertMutationAllowed, canEnterClassroom, withinRoleCeiling } from '../
 import { ToolError, type ToolErrorKind } from './errors.ts';
 import { DEFAULT_RATE_LIMIT, tryConsume, type RateLimitConfig } from './rateLimit.ts';
 import { localizePayload, localizeToolResult, renderZone } from './localTimes.ts';
+import { jsonText } from './jsonText.ts';
 import { auditRead, type ReadAudit } from './audit.ts';
 import { toolInputSchema, type ToolInputSchema } from './toolInputSchema.ts';
 import { MAX_TOOL_INPUT_ELEMENTS, type HandlerTracker } from './inputLimits.ts';
@@ -526,7 +527,7 @@ function wrapResourceRead(def: ResourceDefinition, viewer: Viewer) {
           {
             uri: uri.toString(),
             mimeType: def.mimeType ?? 'application/json',
-            text: JSON.stringify(payload, null, 2),
+            text: jsonText(payload),
           },
         ],
       };

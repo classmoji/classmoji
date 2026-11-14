@@ -10,6 +10,7 @@
  */
 
 import { ClassmojiService } from '@classmoji/services';
+import { jsonText } from '../mcp/jsonText.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
 
 const isoDate = (unix: number | null): string | null =>
@@ -61,7 +62,7 @@ export const billingStatusTool: ToolDefinition<Record<string, never>> = {
     };
 
     return {
-      content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+      content: [{ type: 'text', text: jsonText(result) }],
     };
   },
 };
