@@ -61,7 +61,14 @@ describe('the token store is unreachable', () => {
         new Headers({ authorization: `Bearer ${token()}` })
       ).catch((error: unknown) => error);
       expect(failure).toBeInstanceOf(TokenStoreUnavailableError);
-      expect(((failure as Error).cause as Error).name).toBe('PrismaClientInitializationError');
+      // An unreachable server: Prisma 6 raises PrismaClientInitializationError,
+      // Prisma 7 on the pg adapter a known request error P1001.
+      const cause = (failure as Error).cause as Error & { code?: string };
+      expect(
+        cause.name === 'PrismaClientInitializationError' ||
+          (cause.name === 'PrismaClientKnownRequestError' && cause.code === 'P1001'),
+        `${cause.name} ${cause.code ?? ''}`
+      ).toBe(true);
     },
     30_000
   );

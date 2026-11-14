@@ -20,6 +20,7 @@
 
 import { addLocalTimes, formatNowContext, resolveTimeZone } from '@classmoji/utils';
 import type { ToolResult } from './registry.ts';
+import { jsonText } from './jsonText.ts';
 
 /**
  * The dates a reader actually QUOTES — deadlines, when something opens,
@@ -117,7 +118,7 @@ export function localizeToolResult(
       const localized = localizePayload(parsed, zone, now);
       if (localized === parsed) return block;
       // Same serialization as tools/shared.ts ok() and the resource read.
-      return { ...block, text: JSON.stringify(localized, null, 2) };
+      return { ...block, text: jsonText(localized) };
     }),
   };
 }

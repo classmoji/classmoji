@@ -1,5 +1,6 @@
 import getPrisma from '@classmoji/database';
 import { openToStudents, scheduledForStudents, titleToIdentifier } from '@classmoji/utils';
+import { uniqueViolationTarget } from './uniqueViolation.ts';
 import { ModuleItemType, type Prisma } from '@prisma/client';
 
 interface ModuleWriteInput {
@@ -669,10 +670,10 @@ export const reorderItems = async (
  * `meta.target`: it arrives as field names, the raw constraint name, or that
  * name inside a one-element array depending on driver and version.
  */
-const isModuleItemDuplicate = (error: unknown): boolean => {
+export const isModuleItemDuplicate = (error: unknown): boolean => {
   if (!error || typeof error !== 'object') return false;
   if ((error as { code?: unknown }).code !== 'P2002') return false;
-  const raw = (error as { meta?: { target?: unknown } }).meta?.target;
+  const raw = uniqueViolationTarget(error);
   const tokens = (Array.isArray(raw) ? raw : typeof raw === 'string' ? raw.split(',') : [])
     .map(token => String(token).trim().toLowerCase())
     .filter(Boolean);

@@ -38,8 +38,13 @@ export const IN_FLIGHT_STALE_MS = TURN_DEADLINE_MS + 60_000;
 /** The highest slide index `viewing.slide` may name (the server clamps to it). */
 export const MAX_SLIDE_INDEX = 999;
 
-/** Compact the model's history once a call's input passes this many tokens. */
-export const COMPACT_AT_INPUT_TOKENS = 80_000;
+/**
+ * Compact the model's history once a call's input passes this many tokens.
+ * Every allowed model has a 1M-token window, so this is about cost and speed
+ * per turn, not room. The ask-moji task reads `ASK_MOJI_COMPACT_AT_TOKENS`
+ * over it (`compactAtInputTokens` in the ai-agent's compaction.ts).
+ */
+export const COMPACT_AT_INPUT_TOKENS = 400_000;
 
 /** User turns kept verbatim after a compaction (older ones are summarized). */
 export const KEEP_RECENT_TURNS = 6;

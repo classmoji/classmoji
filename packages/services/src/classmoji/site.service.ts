@@ -8,6 +8,7 @@ import {
   isPlatformDomain,
   openToStudents,
 } from '@classmoji/utils';
+import { uniqueViolationTarget } from './uniqueViolation.ts';
 import { isItemPublished, isItemPubliclyVisible } from './module.service.ts';
 import * as entitlementService from './entitlement.service.ts';
 import { getProStateForClassroomId } from './subscription.service.ts';
@@ -193,10 +194,10 @@ export async function checkSubdomainAvailability(
 }
 
 /** Does this P2002 name the classroom_sites.subdomain unique index? */
-const isSubdomainConflict = (error: unknown): boolean => {
+export const isSubdomainConflict = (error: unknown): boolean => {
   if (!error || typeof error !== 'object') return false;
   if ((error as { code?: unknown }).code !== 'P2002') return false;
-  const target = (error as { meta?: { target?: unknown } }).meta?.target;
+  const target = uniqueViolationTarget(error);
   const tokens = (
     Array.isArray(target) ? target : typeof target === 'string' ? target.split(',') : []
   ).map(t => String(t).trim().toLowerCase());
@@ -445,10 +446,10 @@ async function releaseCert(domain: string | null | undefined): Promise<void> {
 }
 
 /** Does this P2002 name the classroom_sites.custom_domain unique index? */
-const isCustomDomainConflict = (error: unknown): boolean => {
+export const isCustomDomainConflict = (error: unknown): boolean => {
   if (!error || typeof error !== 'object') return false;
   if ((error as { code?: unknown }).code !== 'P2002') return false;
-  const target = (error as { meta?: { target?: unknown } }).meta?.target;
+  const target = uniqueViolationTarget(error);
   const tokens = (
     Array.isArray(target) ? target : typeof target === 'string' ? target.split(',') : []
   ).map(t => String(t).trim().toLowerCase());

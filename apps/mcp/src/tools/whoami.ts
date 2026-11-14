@@ -8,6 +8,7 @@
 
 import { ClassmojiService } from '@classmoji/services';
 import { gitUsername } from '@classmoji/utils';
+import { jsonText } from '../mcp/jsonText.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
 import { buildSuggestions } from '../suggestions.ts';
 import { summarizeMemberships } from '../memberships.ts';
@@ -40,7 +41,7 @@ export const whoamiTool: ToolDefinition<Record<string, never>> = {
     };
 
     return {
-      content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+      content: [{ type: 'text', text: jsonText(result) }],
     };
   },
 };

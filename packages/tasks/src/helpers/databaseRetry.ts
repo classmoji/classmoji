@@ -19,8 +19,21 @@
  */
 const TRANSIENT_DB_CODES = new Set(['P1001', 'P1002', 'P1008', 'P1017', 'P2024']);
 
+// `timeout exceeded when trying to connect` is node-postgres's pool timeout
+// (Prisma 7 has no pool of its own, so no P2024).
 const TRANSIENT_DB_MESSAGE =
-  /can't reach database server|server has closed the connection|connection (?:terminated|reset|refused)|timed out fetching a new connection/i;
+  /can't reach database server|server has closed the connection|connection (?:terminated|reset|refused)|timed out fetching a new connection|timeout exceeded when trying to connect/i;
+
+/**
+ * Prisma 7 on a driver adapter reports a dropped connection as P2010/P2039
+ * with the Postgres SQLSTATE in `meta.driverAdapterError.cause.originalCode`:
+ * class 08 (connection exception) and 57P01-57P03 (admin shutdown, crash
+ * shutdown, cannot connect now) mean the connection went, not the query.
+ */
+const TRANSIENT_SQLSTATE = /^(?:08[0-9A-Z]{3}|57P0[123])$/;
+const adapterSqlState = (error: unknown): unknown =>
+  (error as { meta?: { driverAdapterError?: { cause?: { originalCode?: unknown } } } })?.meta
+    ?.driverAdapterError?.cause?.originalCode;
 
 /**
  * Is this a transient database connection failure? Reads Prisma's `code`
@@ -40,6 +53,8 @@ export function isTransientDatabaseError(error: unknown, depth = 0): boolean {
   if (typeof e.code === 'string' && TRANSIENT_DB_CODES.has(e.code)) return true;
   if (typeof e.errorCode === 'string' && TRANSIENT_DB_CODES.has(e.errorCode)) return true;
   if (typeof e.message === 'string' && TRANSIENT_DB_MESSAGE.test(e.message)) return true;
+  const sqlState = adapterSqlState(error);
+  if (typeof sqlState === 'string' && TRANSIENT_SQLSTATE.test(sqlState)) return true;
   return isTransientDatabaseError(e.cause, depth + 1);
 }
 

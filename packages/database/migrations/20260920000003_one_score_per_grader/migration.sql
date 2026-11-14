@@ -5,6 +5,8 @@
 -- Keep each grader's newest score on each submission and drop the rest,
 -- recording what was dropped in the coursework ledger.
 
+BEGIN;
+
 CREATE TEMP TABLE stale_scores ON COMMIT DROP AS
 SELECT ag.id,
        ag.git_repo_assignment_id,
@@ -41,3 +43,5 @@ SELECT gen_random_uuid()::text,
 FROM stale_scores;
 
 DELETE FROM assignment_grades WHERE id IN (SELECT id FROM stale_scores);
+
+COMMIT;

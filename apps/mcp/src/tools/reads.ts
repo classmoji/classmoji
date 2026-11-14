@@ -14,8 +14,8 @@
  * in-handler guard — the leaderboard twin-guard, roster's OWNER-only field
  * split, the quizzes triple-gate, grades_released, PII-stripping — fires
  * identically. The tool then wraps the resource payload with `ok()`, which
- * serializes it with the same `JSON.stringify(payload, null, 2)` the resource
- * read uses. Resource and tool are therefore byte-identical by construction.
+ * serializes it with the same `jsonText()` (compact JSON) the resource read
+ * uses. Resource and tool are therefore byte-identical by construction.
  *
  * Four tools are NOT pure mirrors:
  *   - list_submissions   adds server-side filters over the grading-queue data
