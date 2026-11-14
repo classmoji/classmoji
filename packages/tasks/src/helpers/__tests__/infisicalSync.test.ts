@@ -313,6 +313,155 @@ describe('syncInfisicalEnvVars', () => {
     expect(logged(log)).toContain('no access token');
   });
 
+  it('every request refuses redirects and carries its own timeout signal', async () => {
+    let calls = 0;
+    const fetchImpl = mockFetch({
+      list: () => (++calls === 1 ? json(429, {}) : json(200, { secrets: [secret('A', 'a')] })),
+    });
+
+    await syncInfisicalEnvVars({
+      triggerEnvironment: 'prod',
+      env: ENV,
+      fetchImpl,
+      sleep: noSleep,
+      logger: logger(),
+    });
+
+    const inits = fetchImpl.mock.calls.map(([, init]) => init);
+    expect(inits).toHaveLength(3);
+    for (const init of inits) {
+      expect(init?.redirect).toBe('manual');
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+    }
+    // A fresh signal per attempt: a retry must not inherit a spent timeout.
+    expect(new Set(inits.map(init => init?.signal)).size).toBe(3);
+  });
+
+  it('a body that times out while being read says so', async () => {
+    const fetchImpl = mockFetch({
+      list: () =>
+        ({
+          ok: true,
+          status: 200,
+          json: async () => {
+            throw new DOMException(`aborted ${SECRET_VALUE}`, 'TimeoutError');
+          },
+        }) as unknown as Response,
+    });
+    const log = logger();
+
+    const result = await syncInfisicalEnvVars({
+      triggerEnvironment: 'prod',
+      env: ENV,
+      fetchImpl,
+      sleep: noSleep,
+      logger: log,
+    });
+
+    expect(result).toEqual({});
+    expect(logged(log)).toContain('timed out while reading the response');
+    expect(logged(log)).not.toContain(SECRET_VALUE);
+  });
+
+  it('a body that fails while being dropped still reports the status', async () => {
+    const fetchImpl = mockFetch({
+      list: () =>
+        ({
+          ok: false,
+          status: 403,
+          body: {
+            cancel: async () => {
+              throw new Error(`stream error ${SECRET_VALUE}`);
+            },
+          },
+        }) as unknown as Response,
+    });
+    const log = logger();
+
+    const result = await syncInfisicalEnvVars({
+      triggerEnvironment: 'prod',
+      env: ENV,
+      fetchImpl,
+      sleep: noSleep,
+      logger: log,
+    });
+
+    expect(result).toEqual({});
+    expect(logged(log)).toContain('HTTP 403');
+    expect(logged(log)).not.toContain(SECRET_VALUE);
+  });
+
+  it('a redirect on login fails at once, without a retry or a list request', async () => {
+    const fetchImpl = mockFetch({
+      login: () => new Response(null, { status: 308, headers: { Location: 'https://x.test/' } }),
+    });
+    const sleep = vi.fn(async (_ms: number) => {});
+    const log = logger();
+
+    const result = await syncInfisicalEnvVars({
+      triggerEnvironment: 'prod',
+      env: ENV,
+      fetchImpl,
+      sleep,
+      logger: log,
+    });
+
+    expect(result).toEqual({});
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+    expect(logged(log)).toContain('redirect, which is refused (HTTP 308)');
+  });
+
+  /** A response whose body throws when dropped. */
+  const failingBody = (status: number) =>
+    ({
+      ok: false,
+      status,
+      body: {
+        cancel: async () => {
+          throw new Error(`stream error ${SECRET_VALUE}`);
+        },
+      },
+    }) as unknown as Response;
+
+  it('a 429 whose body fails while being dropped is still retried', async () => {
+    let calls = 0;
+    const fetchImpl = mockFetch({
+      list: () => (++calls === 1 ? failingBody(429) : json(200, { secrets: [secret('A', 'a')] })),
+    });
+    const sleep = vi.fn(async (_ms: number) => {});
+    const log = logger();
+
+    const result = await syncInfisicalEnvVars({
+      triggerEnvironment: 'prod',
+      env: ENV,
+      fetchImpl,
+      sleep,
+      logger: log,
+    });
+
+    expect(result).toEqual([{ name: 'A', value: 'a' }]);
+    expect(sleep).toHaveBeenCalledTimes(1);
+    expect(logged(log)).not.toContain(SECRET_VALUE);
+  });
+
+  it('a failed login whose body fails while being dropped still reports the status', async () => {
+    const fetchImpl = mockFetch({ login: () => failingBody(401) });
+    const log = logger();
+
+    const result = await syncInfisicalEnvVars({
+      triggerEnvironment: 'prod',
+      env: ENV,
+      fetchImpl,
+      sleep: noSleep,
+      logger: log,
+    });
+
+    expect(result).toEqual({});
+    expect(logged(log)).toContain('HTTP 401');
+    expect(logged(log)).not.toContain(SECRET_VALUE);
+  });
+
   it('a list without a secrets array fails', async () => {
     const fetchImpl = mockFetch({ list: () => json(200, { imports: [] }) });
     const log = logger();
