@@ -8,6 +8,7 @@
     "requestContext.ts",
     "pgAdapter.ts",
     "scripts/**/*.ts",
+    "testing/**/*.ts",
     "__tests__/**/*.ts",
     "vitest.config.ts"
   ]

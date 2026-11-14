@@ -1,0 +1,294 @@
+{
+  "prisma": "7.10.1",
+  "p2002_user_email": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.user.create()` invocation:\n\n\nUnique constraint failed on the constraint: `users_email_key`",
+    "code": "P2002",
+    "meta": {
+      "driverAdapterError": {
+        "name": "DriverAdapterError",
+        "cause": {
+          "originalCode": "23505",
+          "originalMessage": "duplicate key value violates unique constraint \"users_email_key\"",
+          "kind": "UniqueConstraintViolation",
+          "constraint": {
+            "index": "users_email_key"
+          },
+          "table": "users"
+        }
+      },
+      "modelName": "User"
+    },
+    "clientVersion": "7.10.1"
+  },
+  "p2002_classroom_slug": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.classroom.create()` invocation:\n\n\nUnique constraint failed on the constraint: `classrooms_slug_key`",
+    "code": "P2002",
+    "meta": {
+      "driverAdapterError": {
+        "name": "DriverAdapterError",
+        "cause": {
+          "originalCode": "23505",
+          "originalMessage": "duplicate key value violates unique constraint \"classrooms_slug_key\"",
+          "kind": "UniqueConstraintViolation",
+          "constraint": {
+            "index": "classrooms_slug_key"
+          },
+          "table": "classrooms"
+        }
+      },
+      "modelName": "Classroom"
+    },
+    "clientVersion": "7.10.1"
+  },
+  "p2002_form_slug": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.form.create()` invocation:\n\n\nUnique constraint failed on the constraint: `forms_classroom_id_slug_key`",
+    "code": "P2002",
+    "meta": {
+      "driverAdapterError": {
+        "name": "DriverAdapterError",
+        "cause": {
+          "originalCode": "23505",
+          "originalMessage": "duplicate key value violates unique constraint \"forms_classroom_id_slug_key\"",
+          "kind": "UniqueConstraintViolation",
+          "constraint": {
+            "index": "forms_classroom_id_slug_key"
+          },
+          "table": "forms"
+        }
+      },
+      "modelName": "Form"
+    },
+    "clientVersion": "7.10.1"
+  },
+  "p2002_page_slug": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.page.create()` invocation:\n\n\nUnique constraint failed on the constraint: `pages_classroom_id_slug_key`",
+    "code": "P2002",
+    "meta": {
+      "driverAdapterError": {
+        "name": "DriverAdapterError",
+        "cause": {
+          "originalCode": "23505",
+          "originalMessage": "duplicate key value violates unique constraint \"pages_classroom_id_slug_key\"",
+          "kind": "UniqueConstraintViolation",
+          "constraint": {
+            "index": "pages_classroom_id_slug_key"
+          },
+          "table": "pages"
+        }
+      },
+      "modelName": "Page"
+    },
+    "clientVersion": "7.10.1"
+  },
+  "p2002_slide_slug": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.slide.create()` invocation:\n\n\nUnique constraint failed on the constraint: `slides_classroom_id_slug_key`",
+    "code": "P2002",
+    "meta": {
+      "driverAdapterError": {
+        "name": "DriverAdapterError",
+        "cause": {
+          "originalCode": "23505",
+          "originalMessage": "duplicate key value violates unique constraint \"slides_classroom_id_slug_key\"",
+          "kind": "UniqueConstraintViolation",
+          "constraint": {
+            "index": "slides_classroom_id_slug_key"
+          },
+          "table": "slides"
+        }
+      },
+      "modelName": "Slide"
+    },
+    "clientVersion": "7.10.1"
+  },
+  "p2002_module_item": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.moduleItem.create()` invocation:\n\n\nUnique constraint failed on the constraint: `module_items_module_id_form_id_key`",
+    "code": "P2002",
+    "meta": {
+      "driverAdapterError": {
+        "name": "DriverAdapterError",
+        "cause": {
+          "originalCode": "23505",
+          "originalMessage": "duplicate key value violates unique constraint \"module_items_module_id_form_id_key\"",
+          "kind": "UniqueConstraintViolation",
+          "constraint": {
+            "index": "module_items_module_id_form_id_key"
+          },
+          "table": "module_items"
+        }
+      },
+      "modelName": "ModuleItem"
+    },
+    "clientVersion": "7.10.1"
+  },
+  "p2002_site_subdomain": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.classroomSite.create()` invocation:\n\n\nUnique constraint failed on the constraint: `classroom_sites_subdomain_key`",
+    "code": "P2002",
+    "meta": {
+      "driverAdapterError": {
+        "name": "DriverAdapterError",
+        "cause": {
+          "originalCode": "23505",
+          "originalMessage": "duplicate key value violates unique constraint \"classroom_sites_subdomain_key\"",
+          "kind": "UniqueConstraintViolation",
+          "constraint": {
+            "index": "classroom_sites_subdomain_key"
+          },
+          "table": "classroom_sites"
+        }
+      },
+      "modelName": "ClassroomSite"
+    },
+    "clientVersion": "7.10.1"
+  },
+  "p2002_site_custom_domain": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.classroomSite.create()` invocation:\n\n\nUnique constraint failed on the constraint: `classroom_sites_custom_domain_key`",
+    "code": "P2002",
+    "meta": {
+      "driverAdapterError": {
+        "name": "DriverAdapterError",
+        "cause": {
+          "originalCode": "23505",
+          "originalMessage": "duplicate key value violates unique constraint \"classroom_sites_custom_domain_key\"",
+          "kind": "UniqueConstraintViolation",
+          "constraint": {
+            "index": "classroom_sites_custom_domain_key"
+          },
+          "table": "classroom_sites"
+        }
+      },
+      "modelName": "ClassroomSite"
+    },
+    "clientVersion": "7.10.1"
+  },
+  "p2003_fk": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.gitRepoAssignment.create()` invocation:\n\n\nForeign key constraint violated on the constraint: `git_repo_assignments_git_repo_id_fkey`",
+    "code": "P2003",
+    "meta": {
+      "modelName": "GitRepoAssignment",
+      "driverAdapterError": {
+        "name": "DriverAdapterError",
+        "cause": {
+          "originalCode": "23503",
+          "originalMessage": "insert or update on table \"git_repo_assignments\" violates foreign key constraint \"git_repo_assignments_git_repo_id_fkey\"",
+          "kind": "ForeignKeyConstraintViolation",
+          "constraint": {
+            "index": "git_repo_assignments_git_repo_id_fkey"
+          }
+        }
+      }
+    },
+    "clientVersion": "7.10.1"
+  },
+  "unreachable": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.user.count()` invocation:\n\n\nCan't reach database server at <host>:1",
+    "code": "P1001",
+    "meta": {
+      "modelName": "User",
+      "driverAdapterError": {
+        "name": "DriverAdapterError",
+        "cause": {
+          "kind": "DatabaseNotReachable",
+          "host": "<host>",
+          "port": 1
+        }
+      }
+    },
+    "clientVersion": "7.10.1"
+  },
+  "wrong_password": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.user.count()` invocation:\n\n\nAuthentication failed against the database server, the provided database credentials for `<user>` are not valid",
+    "code": "P1000",
+    "meta": {
+      "modelName": "User",
+      "driverAdapterError": {
+        "name": "DriverAdapterError",
+        "cause": {
+          "originalCode": "28P01",
+          "originalMessage": "password authentication failed for user \"<user>\"",
+          "kind": "AuthenticationFailed",
+          "user": "<user>"
+        }
+      }
+    },
+    "clientVersion": "7.10.1"
+  },
+  "missing_database": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.user.count()` invocation:\n\n\nDatabase `no_such_database` does not exist on the database server",
+    "code": "P1003",
+    "meta": {
+      "modelName": "User",
+      "driverAdapterError": {
+        "name": "DriverAdapterError",
+        "cause": {
+          "originalCode": "3D000",
+          "originalMessage": "database \"no_such_database\" does not exist",
+          "kind": "DatabaseDoesNotExist",
+          "db": "no_such_database"
+        }
+      }
+    },
+    "clientVersion": "7.10.1"
+  },
+  "pool_timeout": {
+    "name": "Error",
+    "message": "timeout exceeded when trying to connect",
+    "clientVersion": "7.10.1"
+  },
+  "killed_idle_model_query": {
+    "noError": true
+  },
+  "killed_idle_then_next_query": {
+    "noError": true
+  },
+  "killed_mid_raw_query": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.$queryRaw()` invocation:\n\n\nRaw query failed. Code: `57P01`. Message: `terminating connection due to administrator command`",
+    "code": "P2010",
+    "meta": {
+      "driverAdapterError": {
+        "name": "DriverAdapterError",
+        "cause": {
+          "originalCode": "57P01",
+          "originalMessage": "terminating connection due to administrator command",
+          "kind": "postgres",
+          "code": "57P01",
+          "severity": "FATAL",
+          "message": "terminating connection due to administrator command"
+        }
+      }
+    },
+    "clientVersion": "7.10.1"
+  },
+  "killed_idle_model_query_no_wait": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.user.count()` invocation:\n\n\nDatabase error. Code: `57P01`. Message: `terminating connection due to administrator command`",
+    "code": "P2039",
+    "meta": {
+      "modelName": "User",
+      "driverAdapterError": {
+        "name": "DriverAdapterError",
+        "cause": {
+          "originalCode": "57P01",
+          "originalMessage": "terminating connection due to administrator command",
+          "kind": "postgres",
+          "code": "57P01",
+          "severity": "FATAL",
+          "message": "terminating connection due to administrator command"
+        }
+      }
+    },
+    "clientVersion": "7.10.1"
+  }
+}

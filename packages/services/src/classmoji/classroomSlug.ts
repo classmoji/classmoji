@@ -18,6 +18,7 @@
  *
  * Pure: no Prisma import. The write is supplied by the caller.
  */
+import { uniqueViolationTarget } from './uniqueViolation.ts';
 
 /** Highest numeric fallback: `{slug}-2` … `{slug}-11`. */
 export const MAX_CLASSROOM_SLUG_SUFFIX = 11;
@@ -109,7 +110,7 @@ export function isClassroomSlugConflict(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   if ((error as { code?: unknown }).code !== 'P2002') return false;
 
-  const tokens = targetTokens((error as { meta?: { target?: unknown } }).meta?.target);
+  const tokens = targetTokens(uniqueViolationTarget(error));
   if (tokens.length === 0) return false;
   if (tokens.length === 1 && SLUG_INDEX_NAMES.has(tokens[0])) return true;
   return SLUG_FIELD_SETS.has([...tokens].sort().join(','));

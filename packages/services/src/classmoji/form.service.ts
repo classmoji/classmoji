@@ -1,5 +1,6 @@
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import { titleToIdentifier, withLogin } from '@classmoji/utils';
+import { uniqueViolationTarget } from './uniqueViolation.ts';
 import {
   DEFINITION_VERSION,
   FORM_DEFINITION_TOO_LARGE,
@@ -92,7 +93,7 @@ const targetTokens = (target: unknown): string[] => {
 export function isFormSlugConflict(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   if ((error as { code?: unknown }).code !== 'P2002') return false;
-  const tokens = targetTokens((error as { meta?: { target?: unknown } }).meta?.target);
+  const tokens = targetTokens(uniqueViolationTarget(error));
   if (tokens.length === 0) return false;
   if (tokens.length === 1 && tokens[0] === FORM_SLUG_INDEX_NAME) return true;
   return [...tokens].sort().join(',') === FORM_SLUG_FIELD_SET;

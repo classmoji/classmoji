@@ -1,5 +1,6 @@
 import getPrisma, { GIT_IDENTITY } from '@classmoji/database';
 import { titleToIdentifier, RESERVED_PAGE_SLUGS, withLogins } from '@classmoji/utils';
+import { uniqueViolationTarget } from './uniqueViolation.ts';
 import { ContentService } from '../content/ContentService.ts';
 import { getGitProvider } from '../git/index.ts';
 import type { GitLabProvider } from '../git/GitLabProvider.ts';
@@ -79,7 +80,7 @@ export function isPageSlugConflict(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   if ((error as { code?: unknown }).code !== 'P2002') return false;
 
-  const tokens = targetTokens((error as { meta?: { target?: unknown } }).meta?.target);
+  const tokens = targetTokens(uniqueViolationTarget(error));
   if (tokens.length === 0) return false;
   if (tokens.length === 1 && tokens[0] === PAGE_SLUG_INDEX_NAME) return true;
   return [...tokens].sort().join(',') === PAGE_SLUG_FIELD_SET;
