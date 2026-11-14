@@ -8,10 +8,8 @@ import { describe, expect, it } from 'vitest';
  * one zod: the root `node_modules/zod`, on zod 4. A full lockfile
  * regeneration can silently move that root slot back to zod 3 (a dependency
  * that wants zod 3 wins it) and nest zod 4 under each workspace, which still
- * passes every other test. Only `@infisical/sdk` (deploy-time secrets sync in
- * packages/tasks/trigger.config.js) keeps its own zod 3 copy.
+ * passes every other test.
  */
-const ALLOWED_OTHER_COPIES = new Set(['node_modules/@infisical/sdk/node_modules/zod']);
 
 type LockPackage = { version?: string };
 const lock = JSON.parse(
@@ -28,17 +26,15 @@ describe('one zod', () => {
     expect(lock.packages['node_modules/zod']?.version).toMatch(/^4\./);
   });
 
-  it('no other copy is installed, apart from the one @infisical/sdk keeps', () => {
+  it('no other copy is installed', () => {
     const others = zodEntries
-      .filter(([path]) => path !== 'node_modules/zod' && !ALLOWED_OTHER_COPIES.has(path))
+      .filter(([path]) => path !== 'node_modules/zod')
       .map(([path, entry]) => `${path} ${entry.version}`);
     expect(others).toEqual([]);
   });
 
   it('no zod 3 copy is reachable from a workspace', () => {
-    const zod3 = zodEntries
-      .filter(([path, entry]) => major(entry.version) < 4 && !ALLOWED_OTHER_COPIES.has(path))
-      .map(([path]) => path);
+    const zod3 = zodEntries.filter(([, entry]) => major(entry.version) < 4).map(([path]) => path);
     expect(zod3).toEqual([]);
   });
 
