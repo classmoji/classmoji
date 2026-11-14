@@ -24,6 +24,9 @@ import { SENTRY_CONFIG_ELEMENT_ID, parseSentryConfig } from '@classmoji/utils/se
 
 let enabled = false;
 
+/** Header and query keys Sentry 10 scrubbed by default (addresses and user names). */
+const SCRUBBED_KEYS = ['forwarded', '-ip', 'remote-', 'via', '-user'];
+
 /**
  * Every error is reported once, whichever of the router's onError, a route
  * ErrorBoundary or a React error boundary sees it first.
@@ -54,12 +57,30 @@ export const initSentry = (
   init({
     dsn: config.dsn,
     environment: config.environment,
-    sendDefaultPii: false,
+    // Sentry 11 collects cookies, headers, bodies and user details unless told
+    // not to. These are its old restrictive defaults (sendDefaultPii off): the
+    // only thing known about a person stays their internal user id.
+    dataCollection: {
+      userInfo: false,
+      cookies: false,
+      httpHeaders: {
+        request: { deny: SCRUBBED_KEYS },
+        response: { deny: SCRUBBED_KEYS },
+      },
+      httpBodies: [],
+      urlQueryParams: { deny: SCRUBBED_KEYS },
+      genAI: { inputs: false, outputs: false },
+      mcp: { inputs: false, outputs: false },
+      databaseQueryData: false,
+      queues: false,
+      graphQL: { document: false, variables: false },
+    },
     tracesSampleRate: 0.05,
     // No server SDK continues a trace, so no sentry-trace/baggage headers.
     tracePropagationTargets: [],
     integrations: [reactRouterTracingIntegration()],
-    initialScope: { tags: { app } },
+    // Errors carry tags, streamed spans carry attributes: both name the app.
+    initialScope: { tags: { app }, attributes: { app } },
   });
   enabled = true;
   return { instrumentations: [createSentryClientInstrumentation({ captureErrors: false })] };
