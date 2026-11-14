@@ -32,6 +32,8 @@
 -- run is undone from the ledger (`backup_quiz`, `quiz_assignment_created`).
 -- ============================================================================
 
+BEGIN;
+
 -- First, so no lock this file takes (the ALTER's included) waits unbounded on
 -- the previous build, which keeps serving while this runs. A lock that cannot
 -- be had within it fails the file, and the deploy, with nothing written.
@@ -318,3 +320,5 @@ SELECT gen_random_uuid()::text, 'quiz_assignments_summary', NULL, NULL, jsonb_bu
   'item_module_differs',    (SELECT count(*) FROM "coursework_migration_report" WHERE "kind" = 'quiz_item_module_differs'),
   'in_multiple_modules',    (SELECT count(DISTINCT "subject_id") FROM "coursework_migration_report" WHERE "kind" = 'quiz_in_multiple_modules'),
   'foreign_module_items',   (SELECT count(*) FROM "coursework_migration_report" WHERE "kind" = 'quiz_item_foreign_module'));
+
+COMMIT;

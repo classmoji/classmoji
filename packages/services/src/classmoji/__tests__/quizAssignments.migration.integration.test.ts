@@ -105,7 +105,16 @@ const backfillStatements = () => {
   const sql = readFileSync(MIGRATION, 'utf8');
   const marker = sql.indexOf('-- ==== BACKFILL ====');
   if (marker === -1) throw new Error('backfill marker not found in the migration');
-  return splitSql(sql.slice(marker));
+  // The file ends with its own transaction's COMMIT (BEGIN; ... COMMIT;): run
+  // inside this test's transaction it would commit that instead, and the
+  // rollback below would undo nothing. The backfill is everything before it.
+  const statements = splitSql(sql.slice(marker));
+  if (!/^COMMIT$/i.test(statements.at(-1) ?? '')) {
+    throw new Error(
+      'the migration no longer ends with COMMIT; (see migrationTransactions.test.ts)'
+    );
+  }
+  return statements.slice(0, -1);
 };
 
 class Rollback extends Error {}

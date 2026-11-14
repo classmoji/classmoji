@@ -18,7 +18,8 @@
     "./seed-fixtures": "./scripts/seed-fixtures.js",
     "./pg-adapter": "./pgAdapter.ts",
     "./worker-client": "./generated/worker/client.ts",
-    "./wait-until": "./requestContext.ts"
+    "./wait-until": "./requestContext.ts",
+    "./testing/prisma-errors": "./testing/prismaErrors.ts"
   },
   "dependencies": {
     "@classmoji/utils": "*",

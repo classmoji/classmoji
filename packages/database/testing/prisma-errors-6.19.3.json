@@ -1,0 +1,154 @@
+{
+  "prisma": "6.19.3",
+  "p2002_user_email": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.user.create()` invocation:\n\n\nUnique constraint failed on the fields: (`email`)",
+    "code": "P2002",
+    "meta": {
+      "modelName": "User",
+      "target": ["email"]
+    },
+    "clientVersion": "6.19.3"
+  },
+  "p2002_classroom_slug": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.classroom.create()` invocation:\n\n\nUnique constraint failed on the fields: (`slug`)",
+    "code": "P2002",
+    "meta": {
+      "modelName": "Classroom",
+      "target": ["slug"]
+    },
+    "clientVersion": "6.19.3"
+  },
+  "p2002_form_slug": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.form.create()` invocation:\n\n\nUnique constraint failed on the fields: (`classroom_id`,`slug`)",
+    "code": "P2002",
+    "meta": {
+      "modelName": "Form",
+      "target": ["classroom_id", "slug"]
+    },
+    "clientVersion": "6.19.3"
+  },
+  "p2002_page_slug": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.page.create()` invocation:\n\n\nUnique constraint failed on the fields: (`classroom_id`,`slug`)",
+    "code": "P2002",
+    "meta": {
+      "modelName": "Page",
+      "target": ["classroom_id", "slug"]
+    },
+    "clientVersion": "6.19.3"
+  },
+  "p2002_slide_slug": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.slide.create()` invocation:\n\n\nUnique constraint failed on the fields: (`classroom_id`,`slug`)",
+    "code": "P2002",
+    "meta": {
+      "modelName": "Slide",
+      "target": ["classroom_id", "slug"]
+    },
+    "clientVersion": "6.19.3"
+  },
+  "p2002_module_item": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.moduleItem.create()` invocation:\n\n\nUnique constraint failed on the fields: (`module_id`,`form_id`)",
+    "code": "P2002",
+    "meta": {
+      "modelName": "ModuleItem",
+      "target": ["module_id", "form_id"]
+    },
+    "clientVersion": "6.19.3"
+  },
+  "p2002_site_subdomain": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.classroomSite.create()` invocation:\n\n\nUnique constraint failed on the fields: (`subdomain`)",
+    "code": "P2002",
+    "meta": {
+      "modelName": "ClassroomSite",
+      "target": ["subdomain"]
+    },
+    "clientVersion": "6.19.3"
+  },
+  "p2002_site_custom_domain": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.classroomSite.create()` invocation:\n\n\nUnique constraint failed on the fields: (`custom_domain`)",
+    "code": "P2002",
+    "meta": {
+      "modelName": "ClassroomSite",
+      "target": ["custom_domain"]
+    },
+    "clientVersion": "6.19.3"
+  },
+  "p2003_fk": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.gitRepoAssignment.create()` invocation:\n\n\nForeign key constraint violated on the constraint: `git_repo_assignments_git_repo_id_fkey`",
+    "code": "P2003",
+    "meta": {
+      "modelName": "GitRepoAssignment",
+      "constraint": "git_repo_assignments_git_repo_id_fkey"
+    },
+    "clientVersion": "6.19.3"
+  },
+  "unreachable": {
+    "name": "PrismaClientInitializationError",
+    "message": "\nInvalid `prisma.user.count()` invocation:\n\n\nCan't reach database server at `<host>:1`\n\nPlease make sure your database server is running at `<host>:1`.",
+    "clientVersion": "6.19.3"
+  },
+  "wrong_password": {
+    "name": "PrismaClientInitializationError",
+    "message": "\nInvalid `prisma.user.count()` invocation:\n\n\nAuthentication failed against database server, the provided database credentials for `<user>` are not valid.\n\nPlease make sure to provide valid database credentials for the database server at the configured address.",
+    "clientVersion": "6.19.3"
+  },
+  "missing_database": {
+    "name": "PrismaClientInitializationError",
+    "message": "\nInvalid `prisma.user.count()` invocation:\n\n\nDatabase `no_such_database` does not exist",
+    "clientVersion": "6.19.3"
+  },
+  "pool_timeout": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.user.count()` invocation:\n\n\nTimed out fetching a new connection from the connection pool. More info: http://pris.ly/d/connection-pool (Current connection pool timeout: 1, connection limit: 1)",
+    "code": "P2024",
+    "meta": {
+      "modelName": "User",
+      "connection_limit": 1,
+      "timeout": 1
+    },
+    "clientVersion": "6.19.3"
+  },
+  "killed_idle_model_query": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.user.count()` invocation:\n\n\nServer has closed the connection.",
+    "code": "P1017",
+    "meta": {
+      "modelName": "User"
+    },
+    "clientVersion": "6.19.3"
+  },
+  "killed_idle_then_next_query": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.user.count()` invocation:\n\n\nServer has closed the connection.",
+    "code": "P1017",
+    "meta": {
+      "modelName": "User"
+    },
+    "clientVersion": "6.19.3"
+  },
+  "killed_idle_retry_0": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.$queryRaw()` invocation:\n\n\nServer has closed the connection.",
+    "code": "P1017",
+    "meta": null,
+    "clientVersion": "6.19.3"
+  },
+  "killed_mid_raw_query": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.$queryRaw()` invocation:\n\n\nRaw query failed. Code: `57P01`. Message: `FATAL: terminating connection due to administrator command`",
+    "code": "P2010",
+    "meta": {
+      "code": "57P01",
+      "message": "FATAL: terminating connection due to administrator command"
+    },
+    "clientVersion": "6.19.3"
+  }
+}

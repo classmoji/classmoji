@@ -8,6 +8,7 @@
  */
 
 import getPrisma from '@classmoji/database';
+import { uniqueViolationTarget } from '../classmoji/uniqueViolation.ts';
 import { ContentService } from '../content/ContentService.ts';
 import { removeContentAssetFolder } from '../classmoji/contentAssets.service.ts';
 import * as contentManifestService from '../classmoji/contentManifest.service.ts';
@@ -65,7 +66,7 @@ export function isSlideSlugConflict(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   if ((error as { code?: unknown }).code !== 'P2002') return false;
 
-  const raw = (error as { meta?: { target?: unknown } }).meta?.target;
+  const raw = uniqueViolationTarget(error);
   const tokens = (Array.isArray(raw) ? raw : typeof raw === 'string' ? raw.split(',') : [])
     .map(token => String(token).trim().toLowerCase())
     .filter(Boolean);
