@@ -871,6 +871,114 @@ describe.skipIf(!RUN)('ask moji chat service (integration)', () => {
     });
   });
 
+  describe('saveTurnNote', () => {
+    const NOTE = 'SERVER NOTICE for the message above\nNOW: Monday 9:00 AM';
+    const metadataOf = async (conversationId: string, uiMessageId: string) =>
+      ((
+        await prisma.aIConversationMessage.findUniqueOrThrow({
+          where: {
+            conversation_id_ui_message_id: {
+              conversation_id: conversationId,
+              ui_message_id: uiMessageId,
+            },
+          },
+          select: { metadata: true },
+        })
+      ).metadata as Record<string, unknown> | null) ?? {};
+
+    it('keeps the note on the user row for the model, never in the transcript, beside the settled marker', async () => {
+      const id = await start(userA, classX);
+      const q = userMessage('Q1');
+      await admit(id, q);
+      await askMoji.settleTurn({ conversationId: id, messageId: q.id, outcome: 'stopped' });
+      expect(await askMoji.saveTurnNote({ conversationId: id, messageId: q.id, note: NOTE })).toBe(
+        true
+      );
+      const metadata = await metadataOf(id, q.id);
+      expect(metadata.turn_note).toBe(NOTE);
+      expect(metadata.settled).toMatchObject({ outcome: 'stopped' });
+      expect(metadata.acting_role).toBe('STUDENT');
+
+      const [history] = await askMoji.loadModelHistory(id, { answeringMessageId: q.id });
+      expect((history.metadata as { turn_note?: string }).turn_note).toBe(NOTE);
+      expect(history.parts).toEqual([{ type: 'text', text: 'Q1' }]);
+
+      const transcript = await askMoji.loadTranscriptForViewer({
+        conversationId: id,
+        userId: userA,
+        classroomId: classX,
+      });
+      expect(JSON.stringify(transcript)).not.toContain('turn_note');
+      expect(JSON.stringify(transcript)).not.toContain('NOW: Monday');
+    });
+
+    it('overwrites the note of a re-run turn', async () => {
+      const id = await start(userA, classX);
+      const q = userMessage('Q1');
+      await admit(id, q);
+      await askMoji.saveTurnNote({ conversationId: id, messageId: q.id, note: 'first' });
+      await askMoji.saveTurnNote({ conversationId: id, messageId: q.id, note: 'second' });
+      expect((await metadataOf(id, q.id)).turn_note).toBe('second');
+    });
+
+    it('writes nothing across conversations, users or classrooms, nor on another row', async () => {
+      const mine = await start(userA, classX);
+      const theirs = await start(userB, classX);
+      const elsewhere = await start(userA, classY);
+      const q = userMessage('mine');
+      await admit(mine, q);
+      const t = userMessage('theirs');
+      await admit(theirs, t);
+      const e = userMessage('elsewhere');
+      await admit(elsewhere, e);
+      await askMoji.persistAssistantMessage({ conversationId: mine, message: reply('A', 'a:x') });
+
+      const save = (conversationId: string, messageId: string) =>
+        askMoji.saveTurnNote({ conversationId, messageId, note: NOTE });
+      expect(await save(mine, t.id)).toBe(false);
+      expect(await save(mine, e.id)).toBe(false);
+      expect(await save(theirs, q.id)).toBe(false);
+      expect(await save(mine, 'a:x')).toBe(false);
+      expect(await save('not-a-conversation', q.id)).toBe(false);
+      for (const [c, m] of [
+        [mine, q.id],
+        [theirs, t.id],
+        [elsewhere, e.id],
+        [mine, 'a:x'],
+      ]) {
+        expect((await metadataOf(c, m)).turn_note).toBeUndefined();
+      }
+    });
+
+    it('refuses a blank or over-long note, and a conversation that is not Ask Moji', async () => {
+      const id = await start(userA, classX);
+      const q = userMessage('Q1');
+      await admit(id, q);
+      const save = (note: string) =>
+        askMoji.saveTurnNote({ conversationId: id, messageId: q.id, note });
+      expect(await save('  ')).toBe(false);
+      expect(await save('x'.repeat(askMoji.TURN_NOTE_MAX_CHARS + 1))).toBe(false);
+      expect(await save('x'.repeat(askMoji.TURN_NOTE_MAX_CHARS))).toBe(true);
+
+      const quiz = await prisma.aIConversation.create({
+        data: { user_id: userA, classroom_id: classX, type: 'QUIZ', status: 'ACTIVE' },
+      });
+      await prisma.aIConversationMessage.create({
+        data: {
+          conversation_id: quiz.id,
+          role: 'USER',
+          content: 'q',
+          parts: [{ type: 'text', text: 'q' }],
+          format: 'ui_message_v1',
+          ui_message_id: 'quiz-msg',
+        },
+      });
+      expect(
+        await askMoji.saveTurnNote({ conversationId: quiz.id, messageId: 'quiz-msg', note: NOTE })
+      ).toBe(false);
+    });
+  });
+
   describe('reads and runtime state', () => {
     it('reads a transcript for its owner only', async () => {
       const id = await start(userA, classX);

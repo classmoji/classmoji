@@ -1104,6 +1104,41 @@ export const settleTurn = async (i: {
   return (await writeSettled(getPrisma(), i.conversationId, i.messageId, i.outcome)) > 0;
 };
 
+/** The longest turn note a user row keeps. */
+export const TURN_NOTE_MAX_CHARS = 4_000;
+
+/**
+ * Keep the note a turn sent the model after the user message it answers
+ * (`metadata.turn_note`, the task's text without its marker), so later turns
+ * send it again in the same place and the prompt cache keeps reading their
+ * history. Server-only: no projection passes it (`projectAskMojiMetadata`),
+ * and the model reads it only through the task. Overwrites: a re-run turn
+ * keeps its own note. One atomic `jsonb_set`, so a concurrent settled marker
+ * is never lost. False for a blank or over-long note, or anything but a user
+ * row of an Ask Moji conversation with a grant.
+ */
+export const saveTurnNote = async (i: {
+  conversationId: string;
+  messageId: string;
+  note: string;
+}): Promise<boolean> => {
+  if (!validId(i.conversationId) || !validMessageId(i.messageId)) return false;
+  if (typeof i.note !== 'string' || i.note.trim() === '') return false;
+  if (i.note.length > TURN_NOTE_MAX_CHARS) return false;
+  const row = await getPrisma().aIConversation.findUnique({
+    where: { id: i.conversationId },
+    select: { type: true, context: true },
+  });
+  if (!row || row.type !== TYPE || !readGrant(row.context)) return false;
+  const json = JSON.stringify(i.note);
+  const written = await getPrisma().$executeRaw`
+    UPDATE ai_conversation_messages
+    SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{turn_note}', ${json}::jsonb, true)
+    WHERE conversation_id = ${i.conversationId} AND ui_message_id = ${i.messageId}
+      AND role = 'USER' AND format = 'ui_message_v1'`;
+  return written > 0;
+};
+
 // ─── Model history ──────────────────────────────────────────────────────────
 
 /**
