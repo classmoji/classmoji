@@ -32,7 +32,9 @@
 //   apps/webapp/.gitignore ignores any build/ or .cache/ directory at any
 //   depth. Do not add an .eslintignore: it would take files out of lint.
 // - A nested .oxlintrc.json would replace this config for its directory, so
-//   `npm run lint` passes --disable-nested-config. Keep this the only config.
+//   `npm run lint` passes --disable-nested-config. Keep this the only config
+//   in this repository. apps/ai-agent (a submodule, ignored below) carries
+//   its own .oxlintrc.json, which a run without that flag would also apply.
 // - Implementation differences in rules carried over: import/no-duplicates
 //   differs in which type/value import pairs from one module it reports;
 //   node/no-sync also reports non-call references; import/no-named-as-default
@@ -66,7 +68,9 @@
   // every rule here, the content-signing restriction included.
   "ignorePatterns": [
     "**/node_modules/**",
-    // A separate private repository (git submodule); not linted from here.
+    // A separate private repository (git submodule) with its own
+    // .oxlintrc.json: `npm run lint -w apps/ai-agent`, or `npm run lint` in
+    // that directory.
     "apps/ai-agent/**",
     // Root-level outputs.
     "build/**",

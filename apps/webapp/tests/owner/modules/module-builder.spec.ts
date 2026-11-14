@@ -201,20 +201,3 @@ test.describe('Owner builds a module', () => {
     }
   });
 });
-
-    try {
-      await page.goto(MODULE_PATH(testOrg, 'qa-new-repo-module'));
-      await waitForDataLoad(page);
-
-      await page.getByRole('button', { name: 'New repository' }).click();
-      await expect(page).toHaveURL(new RegExp(`/repos/form\\?module=${mod.moduleId}`));
-
-      // The picker is locked to the module the form was opened from.
-      const modulePicker = page.getByRole('combobox', { name: 'Module' });
-      await expect(modulePicker).toBeDisabled();
-      await expect(page.getByText('qa-new-repo-module', { exact: true }).first()).toBeVisible();
-    } finally {
-      await deleteModuleById(mod.moduleId);
-    }
-  });
-});
