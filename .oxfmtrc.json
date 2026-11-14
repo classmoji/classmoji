@@ -28,7 +28,9 @@
     "!apps/webapp/**/*.css",
 
     "package-lock.json",
-    // A separate private repository (git submodule); not formatted from here.
+    // A separate private repository (git submodule) with its own
+    // .oxfmtrc.json: `npm run format -w apps/ai-agent`. The root scripts pass
+    // --disable-nested-config, without which that config would apply here.
     "apps/ai-agent/",
     "**/node_modules/",
     // Build outputs and caches, anchored at the repo root or a workspace root
