@@ -59,18 +59,22 @@ same rules.
 ### When a migration fails on deploy
 
 Prisma marks it failed, and every later `migrate deploy` stops on it until it
-is resolved. Run these from `packages/database`, with `DATABASE_URL` set to the
-database the deploy migrated (they act on that database).
+is resolved. Run the `prisma` commands from `packages/database`, with
+`DATABASE_URL` set to the database the deploy migrated (they act on that
+database).
 
 - **A wrapped migration** rolled back as a whole, so nothing of it is left. Its
   error may read only `current transaction is aborted, commands ignored until
   end of transaction block`, with no log in `_prisma_migrations`: Prisma's own
   bookkeeping ran inside the aborted transaction. That includes the
   `RAISE EXCEPTION` guards in the three wrapped migrations. To see the real
-  error, run the file against a copy of the database: `psql "$DATABASE_URL" -v
-  ON_ERROR_STOP=1 -f migrations/<name>/migration.sql` (the wrapper rolls it
-  back). Fix the file, then `npx prisma migrate resolve --rolled-back <name>`,
-  then deploy again.
+  error, run the file against a COPY of the database, never the one the deploy
+  migrated: `psql "$COPY_URL" -v ON_ERROR_STOP=1 -f
+  migrations/<name>/migration.sql`. If it fails there, the wrapper rolls it
+  back; if it succeeds, it commits (which is why it must be a copy: on the real
+  database Prisma would still record the migration as failed and run it again).
+  Fix the file, then `npx prisma migrate resolve --rolled-back <name>`, then
+  deploy again.
 - **An opted-out concurrent index** may have left an INVALID index. Drop it
   first, `DROP INDEX CONCURRENTLY IF EXISTS "things_owner_idx";`, then `npx
   prisma migrate resolve --rolled-back <name>`, then deploy again.

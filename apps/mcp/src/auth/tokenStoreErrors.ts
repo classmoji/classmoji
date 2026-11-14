@@ -59,7 +59,10 @@ const UNAVAILABLE_CODES = new Set([
 const MISSING_RELATION_OR_COLUMN =
   /\b(?:relation|column) "[^"]+"(?: of relation "[^"]+")? does not exist\b/i;
 
-/** Same patterns as packages/tasks/src/helpers/databaseRetry.ts `TRANSIENT_DB_MESSAGE`. */
+/**
+ * The connection-loss patterns of packages/tasks/src/helpers/databaseRetry.ts
+ * `TRANSIENT_DB_MESSAGE`. The pg pool timeout is matched separately below.
+ */
 const CONNECTION_LOST =
   /can't reach database server|server has closed the connection|connection (?:terminated|reset|refused)|timed out fetching a new connection/i;
 

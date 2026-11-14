@@ -235,7 +235,8 @@ export async function checkMigrationsDir(dir: string = MIGRATIONS_DIR): Promise<
   const exempt = new Set(EXEMPT_MIGRATIONS);
   const checked: MigrationsReport['checked'] = [];
   for (const name of names) {
-    if (exempt.has(name)) continue;
+    // An always-wrapped migration is checked even if someone lists it as exempt.
+    if (exempt.has(name) && !ALWAYS_WRAPPED.includes(name)) continue;
     const sql = await readFile(join(dir, name, 'migration.sql'), 'utf8');
     checked.push({
       name,

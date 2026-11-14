@@ -21,9 +21,7 @@ on:
     paths:
       - '.github/workflows/pr-migrations-check.yml'
       - 'packages/database/migrations/**'
-      - 'packages/database/scripts/migrationRules.ts'
-      - 'packages/database/scripts/exemptMigrations.ts'
-      - 'packages/database/scripts/checkMigrations.ts'
+      - 'packages/database/scripts/**'
 
 permissions: {}
 
