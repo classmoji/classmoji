@@ -59,8 +59,9 @@ const defaultSleep = ms => new Promise(resolve => setTimeout(resolve, ms));
  * the same key. Between imports the LAST one in the response's `imports` array
  * wins: the API returns them in position order and Infisical treats the
  * bottom-most import as the effective one (its CLI, which the other deploy
- * jobs use, walks the array from the end). The SDK this replaced kept the
- * first instead, which disagreed with Infisical's own tools.
+ * jobs use, walks the array from the end). The SDK call this replaced
+ * (`listSecrets`) returned imports without merging them, so before this module
+ * only the environment's own secrets were synced.
  *
  * @param {InfisicalSecret[]} secrets
  * @param {InfisicalImport[] | undefined} imports
@@ -93,6 +94,20 @@ function describe(error) {
 }
 
 /**
+ * Drops an unread response body. A body that fails while being dropped is
+ * ignored: the caller is already reporting the status.
+ *
+ * @param {Response} response
+ */
+async function discard(response) {
+  try {
+    await response.body?.cancel();
+  } catch {
+    // nothing to do
+  }
+}
+
+/**
  * fetch with a timeout, retrying a 429 or a network error.
  *
  * @param {typeof fetch} fetchImpl
@@ -106,14 +121,26 @@ async function fetchWithRetry(fetchImpl, url, init, sleep) {
     const delay = INITIAL_RETRY_DELAY_MS * 2 ** attempt;
     let response;
     try {
-      response = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+      response = await fetchImpl(url, {
+        ...init,
+        // Never follow a redirect: it would resend the login body (the
+        // client secret) to another origin and trust what that origin answers.
+        redirect: 'manual',
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
     } catch (error) {
       if (attempt >= MAX_RETRIES) throw new Error(`Infisical request failed: ${describe(error)}`);
       await sleep(delay);
       continue;
     }
+    if (response.status >= 300 && response.status < 400) {
+      await discard(response);
+      throw new Error(
+        `Infisical answered with a redirect, which is refused (HTTP ${response.status})`
+      );
+    }
     if (response.status !== 429 || attempt >= MAX_RETRIES) return response;
-    await response.body?.cancel();
+    await discard(response);
     await sleep(delay);
   }
 }
@@ -174,7 +201,7 @@ export async function fetchInfisicalSecrets({
     sleep
   );
   if (!login.ok) {
-    await login.body?.cancel();
+    await discard(login);
     throw new Error(`Infisical login failed: HTTP ${login.status}`);
   }
   const { accessToken } = (await readJson(login, 'Infisical login')) ?? {};
@@ -200,7 +227,7 @@ export async function fetchInfisicalSecrets({
     sleep
   );
   if (!list.ok) {
-    await list.body?.cancel();
+    await discard(list);
     throw new Error(`Infisical secrets list failed: HTTP ${list.status}`);
   }
   const body = await readJson(list, 'Infisical secrets list');
