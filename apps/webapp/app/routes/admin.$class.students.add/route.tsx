@@ -107,9 +107,7 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
     {
       title: 'Email',
       dataIndex: 'email',
-      render: (email: string) => (
-        <span className="text-ink-2">{email || '-'}</span>
-      ),
+      render: (email: string) => <span className="text-ink-2">{email || '-'}</span>,
     },
   ];
 
@@ -163,18 +161,10 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
       {/* Gmail-style header */}
       <div className="flex items-center justify-between gap-3 px-5 py-3 bg-stone-50 dark:bg-neutral-800/60 border-b border-line">
         <div className="flex items-center gap-2.5 min-w-0">
-          <IconUserPlus
-            size={18}
-            strokeWidth={1.75}
-            className="shrink-0 text-ink-3"
-          />
+          <IconUserPlus size={18} strokeWidth={1.75} className="shrink-0 text-ink-3" />
           <div className="min-w-0">
-            <div className="text-sm font-semibold text-ink-0 truncate">
-              Add students
-            </div>
-            <div className="text-xs text-ink-3 truncate">
-              Bulk add students to your class
-            </div>
+            <div className="text-sm font-semibold text-ink-0 truncate">Add students</div>
+            <div className="text-xs text-ink-3 truncate">Bulk add students to your class</div>
           </div>
         </div>
         <button

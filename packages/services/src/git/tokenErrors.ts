@@ -72,7 +72,10 @@ export function redactAccessTokens(text: string): string {
  * @param orgLogin - Organization the token was being minted for.
  * @param error - Whatever the provider threw.
  */
-export function describeTokenMintError(orgLogin: string | null | undefined, error: unknown): string {
+export function describeTokenMintError(
+  orgLogin: string | null | undefined,
+  error: unknown
+): string {
   const org = orgLogin || 'unknown org';
   const status = extractStatus(error);
   const rawDetail = error instanceof Error ? error.message : String(error ?? '');

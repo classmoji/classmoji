@@ -1,6 +1,4 @@
 import getPrisma from '@classmoji/database';
-// eslint's resolver misses this subpath export; TypeScript resolves it.
-// eslint-disable-next-line import/no-unresolved
 import { waitUntil } from '@classmoji/database/wait-until';
 
 /**

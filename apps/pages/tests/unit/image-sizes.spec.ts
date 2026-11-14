@@ -77,8 +77,9 @@ test.describe('responsiveImageAttrs', () => {
   test('is empty for every reference that should render one size', () => {
     // A gif, an svg, an external image, a non-image, and a classroom the layer
     // is switched off for all arrive here as a miss.
-    expect(responsiveImageAttrs({ [REF]: LADDER }, 'pages/lab-1/assets/loop.gif', IMAGE_SIZES))
-      .toEqual({});
+    expect(
+      responsiveImageAttrs({ [REF]: LADDER }, 'pages/lab-1/assets/loop.gif', IMAGE_SIZES)
+    ).toEqual({});
     expect(responsiveImageAttrs({}, REF, IMAGE_SIZES)).toEqual({});
     expect(responsiveImageAttrs(null, REF, IMAGE_SIZES)).toEqual({});
     expect(responsiveImageAttrs(undefined, REF, IMAGE_SIZES)).toEqual({});

@@ -123,9 +123,9 @@ test.describe('buildWideCsv — the Added by cell', () => {
     cells(buildWideCsv(fields, [response(patch)], NONE))[1][ADDED_BY];
 
   test('a resolved staff name is what the cell says', () => {
-    expect(
-      addedByCell({ added_by: 'user-grace', added_by_name: 'Grace Hopper' })
-    ).toBe('Grace Hopper');
+    expect(addedByCell({ added_by: 'user-grace', added_by_name: 'Grace Hopper' })).toBe(
+      'Grace Hopper'
+    );
   });
 
   test('an unresolved adder falls back to the id, not to a blank', () => {

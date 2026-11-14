@@ -78,7 +78,6 @@ describe('noteSeen on Cloudflare Workers', () => {
     try {
       const noteSeen = await load();
 
-      // eslint-disable-next-line import/no-unresolved -- subpath export; TypeScript resolves it
       const { workerScope } = await import('@classmoji/database/wait-until');
       const handed: Promise<unknown>[] = [];
       await workerScope(() => ({})).run('adapter', async () => noteSeen('u1', null), {
@@ -94,7 +93,6 @@ describe('noteSeen on Cloudflare Workers', () => {
 
   it('hands nothing anywhere off Workers', async () => {
     const noteSeen = await load();
-    // eslint-disable-next-line import/no-unresolved -- subpath export; TypeScript resolves it
     const { workerScope } = await import('@classmoji/database/wait-until');
     const handed: Promise<unknown>[] = [];
     await workerScope(() => ({})).run('adapter', async () => noteSeen('u2', null), {

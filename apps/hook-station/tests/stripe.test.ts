@@ -358,7 +358,11 @@ describe('stripe webhook route', () => {
 
       expect(res.statusCode).toBe(200);
       expect(subCreate).toHaveBeenCalledWith(
-        expect.objectContaining({ user_id: 'user-1', tier: 'PRO', stripe_subscription_id: 'sub_new' })
+        expect.objectContaining({
+          user_id: 'user-1',
+          tier: 'PRO',
+          stripe_subscription_id: 'sub_new',
+        })
       );
     });
 
@@ -643,7 +647,11 @@ describe('stripe webhook route', () => {
           object: flexSub(periodEnd, {
             cancel_at: periodEnd,
             canceled_at: canceledAt,
-            cancellation_details: { comment: null, feedback: null, reason: 'cancellation_requested' },
+            cancellation_details: {
+              comment: null,
+              feedback: null,
+              reason: 'cancellation_requested',
+            },
           }),
         },
       });

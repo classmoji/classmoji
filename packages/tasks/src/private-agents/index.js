@@ -10,5 +10,4 @@
  * tsconfig.json: neither the typed lint nor this project's typecheck reads
  * it; the ai-agent package typechecks and tests its own code.
  */
-// eslint-disable-next-line import/no-unresolved -- the submodule may be absent
 export * from '@classmoji/ai-agent/trigger';

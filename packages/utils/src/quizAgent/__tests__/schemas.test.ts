@@ -200,8 +200,7 @@ describe('the lead-in shown with the buttons', () => {
       next: 'Ready for the next question?',
       results: 'Ready to see your results?',
       try_again_or_next: 'Answer again below, or try again with a hint.',
-      last_answer_next:
-        'That was your last answer for this question. Ready for the next question?',
+      last_answer_next: 'That was your last answer for this question. Ready for the next question?',
       last_answer_results:
         'That was your last answer for this question. Ready to see your results?',
     });
@@ -285,12 +284,21 @@ describe('offerNextStepModelOutput (the model never reads the hint cost)', () =>
       })
     ).toEqual({
       type: 'json',
-      value: { actions: ['next'], lead_in: 'x', answers_used: 5, max_answers: 5, last_question: true },
+      value: {
+        actions: ['next'],
+        lead_in: 'x',
+        answers_used: 5,
+        max_answers: 5,
+        last_question: true,
+      },
     });
   });
 
   it("gives a saved part without the counts the SDK's own JSON, byte for byte", () => {
-    const saved = { actions: ['try_again', 'next'], lead_in: 'Would you like to try again or move on?' };
+    const saved = {
+      actions: ['try_again', 'next'],
+      lead_in: 'Would you like to try again or move on?',
+    };
     const out = offerNextStepModelOutput(saved);
     expect(out.type).toBe('json');
     expect(JSON.stringify(out.value)).toBe(JSON.stringify(saved));

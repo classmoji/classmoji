@@ -20,9 +20,7 @@ test.describe('REGRESSION: api.$operation get-org-subscription still works after
   test('owner reads org subscription JSON and a missing orgLogin returns 400', async ({
     authenticatedPage: page,
   }) => {
-    const ok = await page.request.get(
-      `/api/get-org-subscription?orgLogin=${TEST_CLASSROOM}`
-    );
+    const ok = await page.request.get(`/api/get-org-subscription?orgLogin=${TEST_CLASSROOM}`);
     expect(ok.status()).toBe(200);
     const body = await ok.json();
     expect(body).toBeTruthy();
@@ -36,9 +34,7 @@ test.describe('REGRESSION: api.$operation get-org-subscription still works after
 
   test('a non-owner (student, assistant) is denied the org subscription with 403 (RW-04 IDOR)', async () => {
     const student = await requestAs('student');
-    const studentRes = await student.get(
-      `/api/get-org-subscription?orgLogin=${TEST_CLASSROOM}`
-    );
+    const studentRes = await student.get(`/api/get-org-subscription?orgLogin=${TEST_CLASSROOM}`);
     expect(studentRes.status()).toBe(403);
     await student.dispose();
 
@@ -58,15 +54,11 @@ test.describe('REGRESSION: api.$operation get-user-by-id still works after TS mi
     const classroom = await getClassroomBySlug(TEST_CLASSROOM);
     const user = await getUserByLogin('prof-classmoji');
 
-    const noUser = await page.request.get(
-      `/api/get-user-by-id?orgLogin=${TEST_CLASSROOM}`
-    );
+    const noUser = await page.request.get(`/api/get-user-by-id?orgLogin=${TEST_CLASSROOM}`);
     expect(noUser.status()).toBe(400);
     expect((await noUser.json()).error).toMatch(/userId/i);
 
-    const noOrg = await page.request.get(
-      `/api/get-user-by-id?userId=${user.id}`
-    );
+    const noOrg = await page.request.get(`/api/get-user-by-id?userId=${user.id}`);
     expect(noOrg.status()).toBe(400);
     expect((await noOrg.json()).error).toMatch(/orgLogin/i);
 
@@ -127,10 +119,9 @@ test.describe('REGRESSION: api.gitRepoAssignment autograde authorization still w
 
   test('a student is denied the autograde endpoint with 403 (RW-07)', async () => {
     const student = await requestAs('student');
-    const res = await student.post(
-      `/api/gitRepoAssignment/${TEST_CLASSROOM}?action=autograde`,
-      { data: { workflowName: 'noop-regression-probe' } }
-    );
+    const res = await student.post(`/api/gitRepoAssignment/${TEST_CLASSROOM}?action=autograde`, {
+      data: { workflowName: 'noop-regression-probe' },
+    });
     expect(res.status()).toBe(403);
     await student.dispose();
   });

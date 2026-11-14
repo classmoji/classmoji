@@ -7,10 +7,7 @@ import { checkOrigin, readCappedBody } from '~/utils/originCheck.server.ts';
 import { FormCanvas, FormHeader, FormNotice } from '~/components/forms/FormCanvas.tsx';
 import FormRenderer, { clearDraftsForForm } from '~/components/forms/FormRenderer.tsx';
 import AnswerView from '~/components/forms/AnswerView.tsx';
-import {
-  EDIT_LINK_COOKIE_MAX_AGE_SECONDS,
-  formLinkCookie,
-} from '~/utils/formLinkCookie.server.ts';
+import { EDIT_LINK_COOKIE_MAX_AGE_SECONDS, formLinkCookie } from '~/utils/formLinkCookie.server.ts';
 import { themeFor, type CanvasTheme } from './publicForm.server.ts';
 
 /**
@@ -674,8 +671,8 @@ export default function FormVerify() {
           {/* Already recorded by the time this renders — the loader did it.
               So this states the outcome rather than asking for it. */}
           <div className="mb-2 text-sm text-gray-600 dark:text-gray-300">
-            You&rsquo;re in. This is what {loaded.form.title} has for you — change it any time
-            while the form is open, using the same link.
+            You&rsquo;re in. This is what {loaded.form.title} has for you — change it any time while
+            the form is open, using the same link.
           </div>
 
           <div className="mb-7 border-t border-gray-200 pt-5 dark:border-gray-700">

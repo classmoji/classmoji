@@ -9,15 +9,12 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "lint": "eslint .",
-    "lint:fix": "eslint . --fix"
+    "test": "vitest run"
   },
   "dependencies": {
     "@classmoji/services": "*"
   },
   "devDependencies": {
-    "eslint": "^9.39.4",
     "vitest": "^4.1.4"
   }
 }

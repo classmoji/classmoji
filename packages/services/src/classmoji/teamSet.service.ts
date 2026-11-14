@@ -124,7 +124,6 @@ import { TeamServiceError, isReservedSlug, predictTeamSlug } from './teamAdmin.s
 import { sleep } from './sleep.ts';
 import {
   TEAM_SET_JOB_FIELD_TYPES,
-  TeamSetConfigSchema,
   TeamSetConfigError,
   applyConfigPatchWithNotes,
   fieldOptions,

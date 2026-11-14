@@ -16,7 +16,8 @@ import { test, expect } from '@playwright/test';
 import { displayDeckContent, settleSaveRefresh } from '../../app/utils/deckViewContent.ts';
 
 /** The loader's copy: images resolved to signed delivery URLs. */
-const SIGNED = '<section><img src="https://content-staging.classmoji.io/c/abc/blob/sha1"></section>';
+const SIGNED =
+  '<section><img src="https://content-staging.classmoji.io/c/abc/blob/sha1"></section>';
 /** The editor's copy of the SAME deck: stored refs, and it must stay that way. */
 const STORED = '<section><img src="/content/cs98-org/cs98-content/slides/w1/hero.jpeg"></section>';
 

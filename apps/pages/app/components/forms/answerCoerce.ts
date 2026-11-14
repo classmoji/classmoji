@@ -36,6 +36,7 @@ export const isAnswerable = (field: FormField): boolean => specFor(field.type)?.
 /** Only the fields that carry an answer, in definition order. */
 export const answerableFields = (fields: FormField[]): FormField[] => fields.filter(isAnswerable);
 
+// eslint-disable-next-line no-unused-vars -- pre-existing, kept as found when lint moved to oxlint
 const optionsOf = (field: FormField): FormOption[] => (field.options as FormOption[]) ?? [];
 
 /**

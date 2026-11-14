@@ -25,7 +25,9 @@ export function FeatureRow({ feature, reversed, children }: FeatureRowProps) {
       <div
         className={`flex flex-col justify-end px-3 pb-6 sm:px-4 lg:col-span-3 lg:pb-14 ${reversed ? 'lg:order-1 lg:pl-8' : 'lg:pr-8'}`}
       >
-        <p className="text-[0.875rem] font-semibold text-accent dark:text-[#6BE39B]">{feature.kicker}</p>
+        <p className="text-[0.875rem] font-semibold text-accent dark:text-[#6BE39B]">
+          {feature.kicker}
+        </p>
         <h3 className="mt-3 text-pretty text-[1.5rem] leading-[1.3] tracking-tight">
           <span className="font-semibold text-ink-0 dark:text-inkd-0">{feature.title}</span>{' '}
           <span className="text-ink-3 dark:text-inkd-3">{feature.description}</span>

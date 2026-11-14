@@ -179,12 +179,14 @@ const call = (
 
 /** The repository configs as the clone saw them, and as the job row stored them. */
 const clonedConfigs = () => mocks.cloneModulesWithRelations.mock.calls[0]?.[1];
+/* eslint-disable no-unsafe-optional-chaining -- pre-existing in a test; ESLint did not look through the `as` cast */
 const storedSelections = () =>
   (
     mocks.importJobCreate.mock.calls[0]?.[0] as {
       data: { selections: { repositories: unknown; quizzes?: boolean } };
     }
   ).data.selections;
+/* eslint-enable no-unsafe-optional-chaining */
 const storedConfigs = () => storedSelections().repositories;
 
 beforeEach(() => {

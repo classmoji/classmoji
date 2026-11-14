@@ -69,7 +69,9 @@ class StripeService {
    */
   static async createBillingPortalSession(
     customerId: string,
-    flow?: { type: 'payment_method_update' } | { type: 'subscription_cancel'; subscriptionId: string }
+    flow?:
+      | { type: 'payment_method_update' }
+      | { type: 'subscription_cancel'; subscriptionId: string }
   ): Promise<Stripe.BillingPortal.Session> {
     const returnUrl = `${process.env.WEBAPP_URL}/settings/billing`;
     const flowData: Stripe.BillingPortal.SessionCreateParams.FlowData | undefined = !flow

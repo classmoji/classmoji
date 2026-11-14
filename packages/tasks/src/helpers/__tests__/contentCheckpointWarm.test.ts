@@ -6,10 +6,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 
-import { FRAGMENT, SCHEMA_VERSION } from '@classmoji/page-schema'; // eslint-disable-line import/no-unresolved
-// eslint-disable-next-line import/no-unresolved
+import { FRAGMENT, SCHEMA_VERSION } from '@classmoji/page-schema';
 import { yDocToPageContent } from '@classmoji/page-schema/server';
-import { DECK_SCHEMA_VERSION, yDocToDeck } from '@classmoji/collab'; // eslint-disable-line import/no-unresolved
+import { DECK_SCHEMA_VERSION, yDocToDeck } from '@classmoji/collab';
 
 import {
   warmCheckpointWorker,

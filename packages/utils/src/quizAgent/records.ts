@@ -101,7 +101,9 @@ export type QuizEvaluationRecordStudent = z.infer<typeof QuizEvaluationRecordStu
  * one (whose extra numbers only colour the question cards).
  */
 export type QuizEvaluationRecordView = QuizEvaluationRecordStudent &
-  Partial<Pick<QuizEvaluationRecordV2, 'partial_credit_percentage' | 'first_attempt_percentage'>> & {
+  Partial<
+    Pick<QuizEvaluationRecordV2, 'partial_credit_percentage' | 'first_attempt_percentage'>
+  > & {
     question_results: Array<
       StudentQuestionResult &
         Partial<

@@ -9,8 +9,6 @@
  */
 import type { ErrorInfo } from 'react';
 import { isRouteErrorResponse, type ClientInstrumentation } from 'react-router';
-// eslint's resolver reads the package's node build; these come from its browser build.
-/* eslint-disable import/named */
 import {
   captureException,
   captureReactException,
@@ -22,7 +20,6 @@ import {
   setUser,
   withScope,
 } from '@sentry/react-router';
-/* eslint-enable import/named */
 import { SENTRY_CONFIG_ELEMENT_ID, parseSentryConfig } from '@classmoji/utils/sentry';
 
 let enabled = false;

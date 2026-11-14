@@ -554,6 +554,7 @@ const STATUS_TAGS: Record<QuizListStatus, { color: string; text: string }> = {
 export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
   const { quizzes, canAuthor } = loaderData;
   const fetcher = useFetcher();
+  // eslint-disable-next-line no-unused-vars -- pre-existing, kept as found when lint moved to oxlint
   const { terms } = useGitWeb();
   const navigate = useNavigate();
   const { class: classSlug } = useParams();

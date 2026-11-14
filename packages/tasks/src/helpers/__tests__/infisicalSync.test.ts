@@ -88,6 +88,7 @@ describe('syncInfisicalEnvVars', () => {
       expandSecretReferences: 'true',
       viewSecretValue: 'true',
     });
+    // eslint-disable-next-line no-unsafe-optional-chaining -- pre-existing in a test; ESLint did not look through the `as` cast
     expect((listInit?.headers as Record<string, string>).Authorization).toBe(`Bearer ${TOKEN}`);
 
     expect(log.error).not.toHaveBeenCalled();

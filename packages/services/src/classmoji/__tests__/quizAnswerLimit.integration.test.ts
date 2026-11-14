@@ -25,9 +25,8 @@ const getPrisma = (await import('@classmoji/database')).default;
 const grading = await import('../quizGrading.service.ts');
 const chat = await import('../quizChat.service.ts');
 const quizService = await import('../quiz.service.ts');
-const { BUTTON_TEXT, CONTRACT_VERSION, LEGACY_TRY_AGAIN_TEXT } = await import(
-  '@classmoji/utils/quiz-agent'
-);
+const { BUTTON_TEXT, CONTRACT_VERSION, LEGACY_TRY_AGAIN_TEXT } =
+  await import('@classmoji/utils/quiz-agent');
 
 type Answer = {
   level: 'correct' | 'mostly_right' | 'partly_right' | 'minimal' | 'no_attempt';
@@ -270,7 +269,7 @@ describe.skipIf(!RUN)('quiz hint cost and answer limit (integration)', () => {
     const last = await say(attemptId, 'a2');
     const refused = await refusalOf(grading.offerNextStep(call(last), { actions: [...TRY] }));
     expect(refused?.code).toBe('answer_limit');
-    expect(refused?.message).toContain("last answer for question 1");
+    expect(refused?.message).toContain('last answer for question 1');
     expect(refused?.message).toContain('["next"]');
     expect(refused?.message).not.toMatch(/point|cost|score/i);
     expect(await offers(attemptId)).toHaveLength(1);
@@ -288,9 +287,9 @@ describe.skipIf(!RUN)('quiz hint cost and answer limit (integration)', () => {
     const attemptId = await started(quizId);
     // A limit of 1: Try again is never taken.
     const t1 = await say(attemptId, 'only answer');
-    expect(
-      (await refusalOf(grading.offerNextStep(call(t1), { actions: [...TRY] })))?.code
-    ).toBe('answer_limit');
+    expect((await refusalOf(grading.offerNextStep(call(t1), { actions: [...TRY] })))?.code).toBe(
+      'answer_limit'
+    );
     expect(await grading.offerNextStep(call(t1), { actions: [...NEXT] })).toMatchObject({
       answers_used: 1,
       max_answers: 1,
@@ -298,9 +297,9 @@ describe.skipIf(!RUN)('quiz hint cost and answer limit (integration)', () => {
 
     // A later message on the ended question: Next only, no new row.
     const later = await say(attemptId, 'but what about this?');
-    expect(
-      (await refusalOf(grading.offerNextStep(call(later), { actions: [...TRY] })))?.code
-    ).toBe('answer_limit');
+    expect((await refusalOf(grading.offerNextStep(call(later), { actions: [...TRY] })))?.code).toBe(
+      'answer_limit'
+    );
     expect(await grading.offerNextStep(call(later), { actions: [...NEXT] })).toEqual({
       answers_used: 1,
       max_answers: 1,
@@ -343,9 +342,9 @@ describe.skipIf(!RUN)('quiz hint cost and answer limit (integration)', () => {
       brief_feedback: 'Nailed it!',
     });
     // Question 1 has its result; question 2 is not out yet.
-    expect(
-      (await refusalOf(grading.offerNextStep(call(next), { actions: [...NEXT] })))?.code
-    ).toBe('out_of_order');
+    expect((await refusalOf(grading.offerNextStep(call(next), { actions: [...NEXT] })))?.code).toBe(
+      'out_of_order'
+    );
     await grading.presentQuestion(call(next), question(2));
     const t2 = await say(attemptId, 'b');
     expect(await grading.offerNextStep(call(t2), { actions: [...NEXT] })).toMatchObject({
@@ -379,9 +378,9 @@ describe.skipIf(!RUN)('quiz hint cost and answer limit (integration)', () => {
 
     // The next message is the last answer.
     const last = await say(attemptId, 'second answer');
-    expect(
-      (await refusalOf(grading.offerNextStep(call(last), { actions: [...TRY] })))?.code
-    ).toBe('answer_limit');
+    expect((await refusalOf(grading.offerNextStep(call(last), { actions: [...TRY] })))?.code).toBe(
+      'answer_limit'
+    );
   });
 
   it('never counts an offer in a hint turn', async () => {
@@ -389,9 +388,9 @@ describe.skipIf(!RUN)('quiz hint cost and answer limit (integration)', () => {
     const attemptId = await started(quizId);
     await grading.offerNextStep(call(await say(attemptId, 'a')), { actions: [...TRY] });
     const hint = await say(attemptId, BUTTON_TEXT.try_again);
-    expect(
-      (await refusalOf(grading.offerNextStep(call(hint), { actions: [...TRY] })))?.code
-    ).toBe('invalid_input');
+    expect((await refusalOf(grading.offerNextStep(call(hint), { actions: [...TRY] })))?.code).toBe(
+      'invalid_input'
+    );
     expect(await offers(attemptId)).toHaveLength(1);
   });
 

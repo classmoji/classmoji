@@ -11,8 +11,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 
-import { FRAGMENT, SCHEMA_VERSION, serializePageContent } from '@classmoji/page-schema'; // eslint-disable-line import/no-unresolved
-// eslint-disable-next-line import/no-unresolved
+import { FRAGMENT, SCHEMA_VERSION, serializePageContent } from '@classmoji/page-schema';
 import { blocksToYDoc, pageContentToYDoc, yDocToPageContent } from '@classmoji/page-schema/server';
 import { ClassmojiService } from '@classmoji/services';
 import {
@@ -21,13 +20,13 @@ import {
   DECK_SCHEMA_VERSION,
   deckToYDoc,
   yDocToDeck,
-} from '@classmoji/collab'; // eslint-disable-line import/no-unresolved
+} from '@classmoji/collab';
 import {
   generateDeckHtml,
   prepareDeckForSave,
   type DeckJson,
   type SlideContentTarget,
-} from '@classmoji/services/slides'; // eslint-disable-line import/no-unresolved
+} from '@classmoji/services/slides';
 
 import { checkPageRender, fragmentBlockIds, shortColumnLists } from '../checkpointGuards.ts';
 import {

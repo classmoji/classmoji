@@ -1028,11 +1028,19 @@ export function readGolden(name: GoldenName): GoldenFixture {
   return JSON.parse(readFileSync(goldenPath(name), 'utf8')) as GoldenFixture;
 }
 
-/** The fixture file's text: JSON formatted by the repo's Prettier config. */
-async function fixtureText(fixture: GoldenFixture, file: string): Promise<string> {
+/**
+ * The fixture file's text: JSON formatted with the repo's formatter options
+ * (`.oxfmtrc.json`), which `oxfmt --check` leaves unchanged.
+ */
+async function fixtureText(fixture: GoldenFixture): Promise<string> {
   const prettier = await import('prettier');
-  const options = (await prettier.resolveConfig(file)) ?? {};
-  return prettier.format(JSON.stringify(fixture), { ...options, parser: 'json' });
+  return prettier.format(JSON.stringify(fixture), {
+    parser: 'json',
+    printWidth: 100,
+    tabWidth: 2,
+    useTabs: false,
+    endOfLine: 'lf',
+  });
 }
 
 async function main(argv: string[]) {
@@ -1040,6 +1048,7 @@ async function main(argv: string[]) {
   const python = findPython();
   if (!python) {
     console.error('No python with OR-Tools; see packages/tasks/python/README.md.');
+    // eslint-disable-next-line no-process-exit -- pre-existing, kept as found when lint moved to oxlint
     process.exit(2);
   }
   let changed = 0;
@@ -1047,7 +1056,7 @@ async function main(argv: string[]) {
     const file = goldenPath(name);
     const previous = existsSync(file) ? readGolden(name) : undefined;
     const fixture = await buildGolden(name, python, previous);
-    const text = await fixtureText(fixture, file);
+    const text = await fixtureText(fixture);
     const same = existsSync(file) && readFileSync(file, 'utf8') === text;
     if (!same) changed++;
     console.log(
@@ -1059,6 +1068,7 @@ async function main(argv: string[]) {
   }
   if (changed && !write) {
     console.log('Run again with --write to rewrite the fixtures.');
+    // eslint-disable-next-line no-process-exit -- pre-existing, kept as found when lint moved to oxlint
     process.exit(1);
   }
 }
@@ -1066,6 +1076,7 @@ async function main(argv: string[]) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main(process.argv.slice(2)).catch(error => {
     console.error(error);
+    // eslint-disable-next-line no-process-exit -- pre-existing, kept as found when lint moved to oxlint
     process.exit(1);
   });
 }

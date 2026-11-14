@@ -43,9 +43,7 @@ const ThroughputSparkline = ({ data }: ThroughputSparklineProps) => {
   return (
     <Card className="h-full !rounded-2xl" data-testid="throughput-sparkline">
       <CardHeader>Throughput (7d)</CardHeader>
-      <div className="text-2xl font-semibold tabular-nums text-ink-0">
-        {total}
-      </div>
+      <div className="text-2xl font-semibold tabular-nums text-ink-0">{total}</div>
       <div style={{ height: 60 }} className="mt-1">
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={data} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>

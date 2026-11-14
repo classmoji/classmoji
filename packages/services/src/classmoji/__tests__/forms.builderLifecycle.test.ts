@@ -200,7 +200,9 @@ describe.skipIf(!RUN)('forms builder lifecycle (integration)', () => {
     // choice must not orphan the responses that picked it.
     const dropdownBefore = afterCreate.find(field => field.type === 'dropdown');
     const dropdownAfter = afterSave.find(field => field.type === 'dropdown');
+    // eslint-disable-next-line no-unsafe-optional-chaining -- pre-existing in a test; ESLint did not look through the `as` cast
     expect((dropdownAfter?.options as Array<{ id: string }>).map(o => o.id)).toEqual(
+      // eslint-disable-next-line no-unsafe-optional-chaining -- pre-existing in a test; ESLint did not look through the `as` cast
       (dropdownBefore?.options as Array<{ id: string }>).map(o => o.id)
     );
 

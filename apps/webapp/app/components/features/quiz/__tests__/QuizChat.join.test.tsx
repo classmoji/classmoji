@@ -443,6 +443,7 @@ describe('QuizChat opened on an opening admitted longer ago than a turn can run'
       },
     ];
     await act(async () =>
+      // eslint-disable-next-line no-unsafe-optional-chaining -- pre-existing in a test; ESLint did not look through the `as` cast
       (query('quiz-error')?.querySelector('button') as HTMLButtonElement).click()
     );
     await settle(60);

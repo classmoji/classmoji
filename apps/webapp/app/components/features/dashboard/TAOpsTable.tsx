@@ -26,14 +26,8 @@ const TAOpsTable = ({ rows }: TAOpsTableProps) => {
         <div className="flex items-center gap-2 min-w-0">
           <UserAvatar login={r.login} image={r.image} name={r.name} seed={r.taId} size={28} />
           <div className="min-w-0">
-            <div className="text-sm text-ink-0 truncate">
-              {r.name || r.login || 'Unknown'}
-            </div>
-            {r.login && (
-              <div className="text-xs text-ink-3 truncate">
-                @{r.login}
-              </div>
-            )}
+            <div className="text-sm text-ink-0 truncate">{r.name || r.login || 'Unknown'}</div>
+            {r.login && <div className="text-xs text-ink-3 truncate">@{r.login}</div>}
           </div>
         </div>
       ),

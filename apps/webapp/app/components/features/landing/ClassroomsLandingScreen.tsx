@@ -31,8 +31,11 @@ export function ClassroomsLandingScreen({
   onOpenClass,
   onTakeTour,
   tourAvailable,
+  // eslint-disable-next-line no-unused-vars -- pre-existing, kept as found when lint moved to oxlint
   notifications,
+  // eslint-disable-next-line no-unused-vars -- pre-existing, kept as found when lint moved to oxlint
   unreadCount,
+  // eslint-disable-next-line no-unused-vars -- pre-existing, kept as found when lint moved to oxlint
   membershipRoles,
   notice,
 }: Props) {

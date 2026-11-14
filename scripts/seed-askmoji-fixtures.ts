@@ -76,7 +76,8 @@ async function main() {
     where: { slug: CLASSROOM_SLUG },
     select: { id: true, name: true },
   });
-  if (!classroom) throw new Error(`No classroom with slug "${CLASSROOM_SLUG}" — run npm run db:seed first`);
+  if (!classroom)
+    throw new Error(`No classroom with slug "${CLASSROOM_SLUG}" — run npm run db:seed first`);
 
   const owner = await prisma.classroomMembership.findFirst({
     where: { classroom_id: classroom.id, role: 'OWNER' },

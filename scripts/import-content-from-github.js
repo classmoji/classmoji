@@ -41,7 +41,7 @@ function humanize(slug) {
   return slug
     .split(/[-_]/)
     .filter(Boolean)
-    .map((w) => w[0].toUpperCase() + w.slice(1))
+    .map(w => w[0].toUpperCase() + w.slice(1))
     .join(' ');
 }
 
@@ -83,7 +83,7 @@ async function main() {
   );
 
   // Pages
-  const pageDirs = (await ghList('pages')).filter((e) => e.type === 'dir');
+  const pageDirs = (await ghList('pages')).filter(e => e.type === 'dir');
   console.log(`\nFound ${pageDirs.length} page directories in repo`);
 
   let pageCreated = 0;
@@ -120,7 +120,7 @@ async function main() {
   }
 
   // Slides
-  const slideDirs = (await ghList('slides')).filter((e) => e.type === 'dir');
+  const slideDirs = (await ghList('slides')).filter(e => e.type === 'dir');
   console.log(`\nFound ${slideDirs.length} slide directories in repo`);
 
   let slideCreated = 0;
@@ -163,7 +163,7 @@ async function main() {
 
 main()
   .then(() => prisma.$disconnect().then(() => process.exit(0)))
-  .catch(async (err) => {
+  .catch(async err => {
     console.error(err);
     await prisma.$disconnect();
     process.exit(1);

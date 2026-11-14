@@ -8,8 +8,6 @@
     "pages:dev": "node --experimental-strip-types server.ts",
     "pages:build": "react-router build",
     "pages:start": "NODE_ENV=production node --experimental-strip-types server.ts",
-    "lint": "eslint .",
-    "lint:fix": "eslint . --fix",
     "test": "playwright test",
     "test:ui": "playwright test --ui",
     "test:headed": "playwright test --headed",

@@ -37,6 +37,7 @@ import { nonDeckHeaders } from './slideKind';
  * segment, `?` and `#` end the path, tab and newline are dropped. Stored files
  * are named in lowercase ASCII (`sanitizeFilename`), so none of them is needed.
  */
+// eslint-disable-next-line no-control-regex -- pre-existing, kept as found when lint moved to oxlint
 const UNSERVED_PATH_CHARACTERS = /[%\\?#\u0000-\u001f\u007f]/;
 
 /**

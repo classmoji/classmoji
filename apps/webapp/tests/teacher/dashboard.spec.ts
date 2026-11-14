@@ -65,9 +65,9 @@ test.describe('Teacher shell', () => {
     authenticatedPage: page,
     testOrg,
   }) => {
-    const hrefs = await page.locator('nav a[href]').evaluateAll(links =>
-      links.map(l => l.getAttribute('href') ?? '')
-    );
+    const hrefs = await page
+      .locator('nav a[href]')
+      .evaluateAll(links => links.map(l => l.getAttribute('href') ?? ''));
     const classLinks = hrefs.filter(h => h.includes(`/${testOrg}/`));
     expect(classLinks.length).toBeGreaterThan(0);
     for (const href of classLinks) {

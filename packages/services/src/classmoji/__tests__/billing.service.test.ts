@@ -46,7 +46,12 @@ describe('getStatus', () => {
 
     const status = await billing.getStatus('user-1');
 
-    expect(status).toMatchObject({ tier: 'FREE', isComped: false, billing: null, proPriceCents: 2000 });
+    expect(status).toMatchObject({
+      tier: 'FREE',
+      isComped: false,
+      billing: null,
+      proPriceCents: 2000,
+    });
     expect(findPrice).toHaveBeenCalledWith('price_current');
     expect(findSubscription).not.toHaveBeenCalled();
   });
@@ -74,22 +79,37 @@ describe('getStatus', () => {
   });
 
   it('a PRO row without a Stripe subscription is comped', async () => {
-    subscriptionFindFirst.mockResolvedValue({ tier: 'PRO', stripe_subscription_id: null, ends_at: null });
+    subscriptionFindFirst.mockResolvedValue({
+      tier: 'PRO',
+      stripe_subscription_id: null,
+      ends_at: null,
+    });
 
     const status = await billing.getStatus('user-1');
 
-    expect(status).toMatchObject({ tier: 'PRO', isComped: true, billing: null, proPriceCents: null });
+    expect(status).toMatchObject({
+      tier: 'PRO',
+      isComped: true,
+      billing: null,
+      proPriceCents: null,
+    });
     expect(findSubscription).not.toHaveBeenCalled();
   });
 
   it('a paid PRO row is summarized from Stripe', async () => {
-    subscriptionFindFirst.mockResolvedValue({ tier: 'PRO', stripe_subscription_id: 'sub_1', ends_at: null });
+    subscriptionFindFirst.mockResolvedValue({
+      tier: 'PRO',
+      stripe_subscription_id: 'sub_1',
+      ends_at: null,
+    });
     findSubscription.mockResolvedValue({
       status: 'active',
       cancel_at: null,
       cancel_at_period_end: false,
       items: { data: [{ price: { unit_amount: 2000 }, current_period_end: 1800000000 }] },
-      default_payment_method: { card: { brand: 'visa', last4: '4242', exp_month: 3, exp_year: 2030 } },
+      default_payment_method: {
+        card: { brand: 'visa', last4: '4242', exp_month: 3, exp_year: 2030 },
+      },
       customer: { email: 'tim@example.com', invoice_settings: {} },
     });
 
@@ -106,7 +126,11 @@ describe('getStatus', () => {
   });
 
   it('a Stripe failure leaves the details empty instead of failing the read', async () => {
-    subscriptionFindFirst.mockResolvedValue({ tier: 'PRO', stripe_subscription_id: 'sub_1', ends_at: null });
+    subscriptionFindFirst.mockResolvedValue({
+      tier: 'PRO',
+      stripe_subscription_id: 'sub_1',
+      ends_at: null,
+    });
     findSubscription.mockRejectedValue(new Error('stripe down'));
 
     const status = await billing.getStatus('user-1');
@@ -168,7 +192,9 @@ describe('summarizeSubscription', () => {
       customer: {
         email: null,
         invoice_settings: {
-          default_payment_method: { card: { brand: 'amex', last4: '0005', exp_month: 1, exp_year: 2031 } },
+          default_payment_method: {
+            card: { brand: 'amex', last4: '0005', exp_month: 1, exp_year: 2031 },
+          },
         },
       },
     } as never);

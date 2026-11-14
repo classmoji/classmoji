@@ -22,7 +22,7 @@ import { assertDeckSlide } from './slideSource.ts';
 import { canonicalizeDeckAssets } from './deckAssets.ts';
 import { canonicalizeDeckFrames } from './deckFrames.ts';
 import { appFrameHosts } from './frameRefs.ts';
-import { recordContentAssets, resolveContentBranch } from '../classmoji/contentAssets.service.ts';
+import { recordContentAssets } from '../classmoji/contentAssets.service.ts';
 import { enqueueDeckThumbnail } from '../classmoji/deckThumbnail.service.ts';
 import {
   canonicalizeMany,

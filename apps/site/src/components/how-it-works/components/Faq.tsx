@@ -85,7 +85,9 @@ export function Faq() {
                 aria-hidden
               />
             </summary>
-            <p className="-mt-1 pb-5 pr-10 text-[1rem] leading-relaxed text-ink-2 dark:text-inkd-2">{a}</p>
+            <p className="-mt-1 pb-5 pr-10 text-[1rem] leading-relaxed text-ink-2 dark:text-inkd-2">
+              {a}
+            </p>
           </details>
         ))}
       </div>

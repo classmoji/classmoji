@@ -421,7 +421,7 @@ function passClock(): number {
  *      classroom B, handed to a mint for classroom A, is refused there — and a
  *      cast cannot talk its way past it, because a forged row still has to name
  *      a classroom;
- *   3. a `no-restricted-imports` rule in the shared eslint config, which stops
+ *   3. a `no-restricted-imports` rule in the root `.oxlintrc.json`, which stops
  *      a module from skipping all of the above by importing
  *      `@classmoji/content-signing` and calling `signBlobUrl` itself. The
  *      allowlist is this file, `deckRenderToken.service.ts`, the Worker's

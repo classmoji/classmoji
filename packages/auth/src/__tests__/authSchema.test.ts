@@ -22,8 +22,6 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { Prisma } from '@prisma/client';
-// eslint's resolver misses these subpath exports; TypeScript resolves them.
-// eslint-disable-next-line import/no-unresolved
 import { getAuthTables } from 'better-auth/db';
 
 process.env.WEBAPP_URL = 'http://localhost:3000';

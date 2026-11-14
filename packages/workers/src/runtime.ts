@@ -8,8 +8,6 @@
  * as load context.
  */
 import { runWithPrisma } from '@classmoji/database';
-// eslint's resolver misses this subpath export; TypeScript resolves it.
-// eslint-disable-next-line import/no-unresolved
 import { PrismaPg } from '@classmoji/database/pg-adapter';
 
 /** The Hyperdrive binding's shape (`env.HYPERDRIVE`). */

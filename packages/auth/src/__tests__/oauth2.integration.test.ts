@@ -440,8 +440,6 @@ describe.skipIf(!DATABASE_URL)('the authorization server (real Postgres)', () =>
     >;
 
   async function verifyJwt(jwt: string, audience: string) {
-    // eslint's resolver misses this subpath export; TypeScript resolves it.
-    // eslint-disable-next-line import/no-unresolved
     const { verifyJwsAccessToken } = await import('better-auth/oauth2');
     return verifyJwsAccessToken(jwt, {
       jwksFetch: async () => {

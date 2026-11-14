@@ -5,8 +5,6 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { serializeSignedCookie } from 'better-call';
-// eslint's resolver misses this subpath export; TypeScript resolves it.
-// eslint-disable-next-line import/no-unresolved
 import { hashPassword } from 'better-auth/crypto';
 
 process.env.WEBAPP_URL = 'http://localhost:3000';

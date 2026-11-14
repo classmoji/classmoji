@@ -869,6 +869,7 @@ describe('block ops', () => {
         slides: [{ html: `<iframe src="${files}slides/intro-week/games/w/index.html"></iframe>` }],
       },
     ]);
+    // eslint-disable-next-line no-unsafe-optional-chaining -- pre-existing in a test; ESLint did not look through the `as` cast
     const [update, insert] = posts()[0]?.body?.ops as Array<Record<string, unknown>>;
     const html = String(update.html);
     expect(html).toContain('data-src="games/x/index.html"');

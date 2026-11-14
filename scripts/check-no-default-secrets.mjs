@@ -13,11 +13,7 @@ const LEAKED_LITERALS = new Set([
   '05de7c9de019904155976fa231442d586d3926d16b6e08a43c7e624bf9933982',
 ]);
 
-const REQUIRED_SECRETS = [
-  'BETTER_AUTH_SECRET',
-  'GITHUB_WEBHOOK_SECRET',
-  'CALENDAR_SECRET',
-];
+const REQUIRED_SECRETS = ['BETTER_AUTH_SECRET', 'GITHUB_WEBHOOK_SECRET', 'CALENDAR_SECRET'];
 
 let failed = false;
 
@@ -26,13 +22,13 @@ for (const name of REQUIRED_SECRETS) {
   if (!value) continue; // missing-secret handling is the app's responsibility
   if (value.startsWith(PLACEHOLDER_PREFIX)) {
     console.error(
-      `[check-no-default-secrets] ${name} is still set to a placeholder. Generate a real secret and update your .env.`,
+      `[check-no-default-secrets] ${name} is still set to a placeholder. Generate a real secret and update your .env.`
     );
     failed = true;
   }
   if (LEAKED_LITERALS.has(value)) {
     console.error(
-      `[check-no-default-secrets] ${name} matches a previously-leaked default. Rotate immediately.`,
+      `[check-no-default-secrets] ${name} matches a previously-leaked default. Rotate immediately.`
     );
     failed = true;
   }

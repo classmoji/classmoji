@@ -121,6 +121,7 @@ describe('watchSessionRuns', () => {
 
     expect(client.subscribeToRunsWithTag).toHaveBeenCalledTimes(2);
     expect(onError).not.toHaveBeenCalled();
+    // eslint-disable-next-line no-unsafe-optional-chaining -- pre-existing in a test; ESLint did not look through the `as` cast
     expect((onRuns.mock.calls.at(-1)?.[0] as Run[]).map(r => r.id)).toEqual(['a', 'b']);
     stop();
   });

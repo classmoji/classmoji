@@ -247,8 +247,9 @@ test.describe('Slides Theme Switching', () => {
     // reloadUntil absorbs GitHub's short read-after-write window on the
     // git-data save path (commit verified-correct; an immediate re-read can
     // serve the pre-save cached copy for a few seconds).
-    await reloadUntil(page, async () =>
-      ((await page.locator('.reveal').getAttribute('data-theme')) ?? '') === 'beige'
+    await reloadUntil(
+      page,
+      async () => ((await page.locator('.reveal').getAttribute('data-theme')) ?? '') === 'beige'
     );
 
     await expect(page.locator('.reveal')).toHaveAttribute('data-theme', 'beige');

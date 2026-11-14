@@ -1,10 +1,6 @@
 import { test, expect } from '../../fixtures/auth.fixture';
 import { waitForDataLoad, waitForModal } from '../../helpers/wait.helpers';
-import {
-  getTestPrisma,
-  getClassroomBySlug,
-  getUserByLogin,
-} from '../../helpers/prisma.helpers';
+import { getTestPrisma, getClassroomBySlug, getUserByLogin } from '../../helpers/prisma.helpers';
 import { TEST_CLASSROOM } from '../../helpers/env.helpers';
 
 /**
@@ -199,7 +195,6 @@ test.describe('Owner Classroom — delete', () => {
 });
 
 test.describe('Owner Classroom — dashboard data', () => {
-
   test('owner dashboard renders the student count that matches the database roster', async ({
     authenticatedPage: page,
     testOrg,
@@ -230,7 +225,6 @@ test.describe('Owner Classroom — dashboard data', () => {
 });
 
 test.describe('Owner Classroom — create', () => {
-
   test('create-classroom wizard renders the basic-info step for an authenticated owner', async ({
     authenticatedPage: page,
   }) => {

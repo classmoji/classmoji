@@ -19,8 +19,8 @@
  * the only caller triggers it by string id.
  */
 import { AbortTaskRunError, logger, task } from '@trigger.dev/sdk';
-import { COLLAB_SECRET_HEADER } from '@classmoji/collab'; // eslint-disable-line import/no-unresolved
-import { resolveCollabEnv } from '@classmoji/collab/env'; // eslint-disable-line import/no-unresolved
+import { COLLAB_SECRET_HEADER } from '@classmoji/collab';
+import { resolveCollabEnv } from '@classmoji/collab/env';
 
 export const COLLAB_EXTERNAL_TASK = 'collab-external';
 export const COLLAB_EXTERNAL_QUEUE = 'collab-external';

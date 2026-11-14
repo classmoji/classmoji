@@ -103,6 +103,7 @@ describe('an access token from the OAuth server', () => {
     expect(await whoami(access_token)).toBe(student);
 
     const list = await rpc(access_token, 'tools/list');
+    // eslint-disable-next-line no-unsafe-optional-chaining -- pre-existing in a test; ESLint did not look through the `as` cast
     const names = (list.result?.tools as Array<{ name: string }>).map(t => t.name);
     expect(names).toContain('whoami');
     expect(names).toContain('page_comment_create'); // a write tool: `write` was granted
@@ -335,6 +336,7 @@ describe('an Ask Moji token minted under View as', () => {
 
     expect(await whoami(accessToken)).toBe(ta);
     const list = await rpc(accessToken, 'tools/list');
+    // eslint-disable-next-line no-unsafe-optional-chaining -- pre-existing in a test; ESLint did not look through the `as` cast
     const names = (list.result?.tools as Array<{ name: string }>).map(t => t.name);
     expect(names).toContain('get_roster');
     expect(names).not.toContain('page_comment_create');

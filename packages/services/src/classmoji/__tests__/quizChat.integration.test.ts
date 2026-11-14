@@ -1247,12 +1247,14 @@ describe.skipIf(!RUN)('quiz chat + grading services (integration)', () => {
     const attemptId = await newAttempt();
     const turn = await begin(attemptId);
     await grading.presentQuestion(call(turn), question(1));
+    /* eslint-disable no-unsafe-optional-chaining -- pre-existing in a test; ESLint did not look through the `as` cast */
     const statusOf = async (id: string) =>
       (
         (await chat.loadCanonicalMessages(attemptId)).find(m => m.id === id)?.parts[1] as {
           text: string;
         }
       ).text;
+    /* eslint-enable no-unsafe-optional-chaining */
 
     // The answer, then a side question and an argument: no action on either.
     for (const text of ['It lines them up.', "Why won't you grade that?", 'That seems unfair.']) {

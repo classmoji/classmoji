@@ -60,8 +60,6 @@ describe('StripeService.constructWebhookEvent (real signature verification)', ()
   });
 
   it('throws for a malformed t=,v1= signature header', () => {
-    expect(() =>
-      StripeService.constructWebhookEvent(payload, 't=,v1=')
-    ).toThrow();
+    expect(() => StripeService.constructWebhookEvent(payload, 't=,v1=')).toThrow();
   });
 });

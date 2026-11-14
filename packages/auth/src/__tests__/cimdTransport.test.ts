@@ -17,8 +17,6 @@ import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { createServer, type Server } from 'node:net';
 import type { LookupAddress } from 'node:dns';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-// eslint's resolver misses this subpath export; TypeScript resolves it.
-// eslint-disable-next-line import/no-unresolved
 import { fetchClientMetadataResource } from '@better-auth/cimd/node';
 
 const dns = createRequire(import.meta.url)('node:dns') as typeof import('node:dns');

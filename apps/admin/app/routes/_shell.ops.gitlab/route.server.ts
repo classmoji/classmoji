@@ -48,29 +48,27 @@ export async function loadGitLabInstances({ request }: LoaderFunctionArgs) {
   const rows = await ClassmojiService.gitlabInstance.list();
   return {
     defaultHost: ClassmojiService.gitlabInstance.defaultHost(),
-    rows: rows.map(
-      (r): InstanceRow => ({
-        id: r.id,
-        host: r.host,
-        clientId: r.client_id,
-        disabled: Boolean(r.disabled_at),
-        pending: !r.approved_at,
-        createdAt: r.created_at.toISOString(),
-        requester: {
-          name: r.requester_name,
-          username: r.requester_username,
-          email: r.requester_email,
-          emailConfirmed: r.requester_email_confirmed,
-          isAdmin: r.requester_is_admin,
-          since: r.requester_since?.toISOString() ?? null,
-          note: r.request_note,
-          emailMatchesHost: emailMatchesHost(r.requester_email, r.host),
-        },
-        createdBy: r.created_by?.name ?? r.created_by?.email ?? null,
-        groups: r._count.git_organizations,
-        connections: r._count.connections,
-      })
-    ),
+    rows: rows.map((r): InstanceRow => ({
+      id: r.id,
+      host: r.host,
+      clientId: r.client_id,
+      disabled: Boolean(r.disabled_at),
+      pending: !r.approved_at,
+      createdAt: r.created_at.toISOString(),
+      requester: {
+        name: r.requester_name,
+        username: r.requester_username,
+        email: r.requester_email,
+        emailConfirmed: r.requester_email_confirmed,
+        isAdmin: r.requester_is_admin,
+        since: r.requester_since?.toISOString() ?? null,
+        note: r.request_note,
+        emailMatchesHost: emailMatchesHost(r.requester_email, r.host),
+      },
+      createdBy: r.created_by?.name ?? r.created_by?.email ?? null,
+      groups: r._count.git_organizations,
+      connections: r._count.connections,
+    })),
   };
 }
 

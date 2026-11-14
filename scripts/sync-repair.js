@@ -27,6 +27,7 @@ try {
     process.env.DATABASE_URL = dbUrlMatch[1];
     console.log(`📊 Using database from .dev-context: ${process.env.DATABASE_URL.split('@')[1]}\n`);
   }
+  // eslint-disable-next-line no-unused-vars -- pre-existing, kept as found when lint moved to oxlint
 } catch (e) {
   console.log('⚠️  No .dev-context found, using DATABASE_URL from environment\n');
 }
@@ -210,9 +211,13 @@ async function auditAndRepair(classroom, repository) {
     console.log('\n  🔀 ID mismatches:');
     for (const mismatch of issues.idMismatches) {
       if (mismatch.type === 'repo') {
-        console.log(`     - Repo ${mismatch.record.name}: DB=${mismatch.record.provider_id} → GitHub=${mismatch.githubId}`);
+        console.log(
+          `     - Repo ${mismatch.record.name}: DB=${mismatch.record.provider_id} → GitHub=${mismatch.githubId}`
+        );
       } else {
-        console.log(`     - Issue ${mismatch.repoName} #${mismatch.record.provider_issue_number}: DB=${mismatch.record.provider_id} → GitHub=${mismatch.githubId}`);
+        console.log(
+          `     - Issue ${mismatch.repoName} #${mismatch.record.provider_issue_number}: DB=${mismatch.record.provider_id} → GitHub=${mismatch.githubId}`
+        );
       }
     }
   }
@@ -224,7 +229,8 @@ async function auditAndRepair(classroom, repository) {
     }
   }
 
-  const repairableCount = issues.staleRepos.length + issues.staleIssues.length + issues.idMismatches.length;
+  const repairableCount =
+    issues.staleRepos.length + issues.staleIssues.length + issues.idMismatches.length;
 
   if (repairableCount === 0) {
     console.log('\n✅ No repairable issues found!');
@@ -264,7 +270,9 @@ async function auditAndRepair(classroom, repository) {
         data: { provider_id: mismatch.githubId },
       });
     } else {
-      console.log(`  Fixing issue ID: ${mismatch.repoName} #${mismatch.record.provider_issue_number} → ${mismatch.githubId}`);
+      console.log(
+        `  Fixing issue ID: ${mismatch.repoName} #${mismatch.record.provider_issue_number} → ${mismatch.githubId}`
+      );
       await prisma.gitRepoAssignment.update({
         where: { id: mismatch.record.id },
         data: { provider_id: mismatch.githubId },

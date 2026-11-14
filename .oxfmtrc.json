@@ -1,0 +1,65 @@
+// Oxfmt configuration (migrated from .prettierrc with `oxfmt --migrate=prettier`).
+//
+// Scope: JS/TS and JSON everywhere, CSS in apps/webapp only. Other types oxfmt
+// can format are left alone: YAML, TOML, HTML, MDX, JSONC such as
+// wrangler.jsonc, other CSS, and Markdown (oxfmt realigns tables and rewrites
+// emphasis in hand-written docs and agent instruction files such as AGENTS.md).
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "semi": true,
+  "singleQuote": true,
+  "tabWidth": 2,
+  "trailingComma": "es5",
+  "printWidth": 100,
+  "useTabs": false,
+  "bracketSpacing": true,
+  "arrowParens": "avoid",
+  "endOfLine": "lf",
+  "sortPackageJson": false,
+  "ignorePatterns": [
+    "*.yml",
+    "*.yaml",
+    "*.toml",
+    "*.html",
+    "*.md",
+    "*.mdx",
+    "*.jsonc",
+    "*.css",
+    "!apps/webapp/**/*.css",
+
+    "package-lock.json",
+    // A separate private repository (git submodule); not formatted from here.
+    "apps/ai-agent/",
+    "**/node_modules/",
+    // Build outputs and caches, anchored at the repo root or a workspace root
+    // so that a source directory named build/ or dist/ is still formatted.
+    "/build/",
+    "/dist/",
+    "/coverage/",
+    "/.turbo/",
+    "apps/*/build/",
+    "apps/*/dist/",
+    "apps/*/coverage/",
+    "apps/*/.turbo/",
+    "apps/*/.react-router/",
+    "apps/*/public/build/",
+    "apps/*/.wrangler/",
+    "packages/*/build/",
+    "packages/*/dist/",
+    "packages/*/coverage/",
+    "packages/*/.turbo/",
+    "packages/tasks/.trigger/",
+    "packages/database/generated/",
+    "packages/database/migrations/",
+    // Test fixtures are compared as data; keep them byte for byte.
+    "**/fixtures/",
+    // A verbatim copy of React Router's default entry that a test compares
+    // byte for byte: never reformat it.
+    "packages/workers/src/entry-server.node.tsx",
+    // Does not parse, so it cannot be formatted: 2ef6c0f8 rewrote the "New
+    // repository from a module" test but left that test's old tail (lines
+    // 205-219) after the describe block closes at line 203. Remove from this
+    // list once the spec is repaired.
+    "apps/webapp/tests/owner/modules/module-builder.spec.ts"
+  ]
+}

@@ -57,7 +57,9 @@ export function AppOperationPanel({
                 style={{ width: `${pct}%` }}
               />
             </div>
-            {current && <p className="m-0 truncate text-[12px] text-ink-3 dark:text-inkd-3">{current}</p>}
+            {current && (
+              <p className="m-0 truncate text-[12px] text-ink-3 dark:text-inkd-3">{current}</p>
+            )}
           </>
         )}
       </div>
