@@ -5,10 +5,10 @@ import { prismaExtension } from '@trigger.dev/build/extensions/prisma';
 import { aptGet, ffmpeg, syncEnvVars } from '@trigger.dev/build/extensions/core';
 // eslint-disable-next-line import/no-unresolved
 import { pythonExtension } from '@trigger.dev/python/extension';
-import { InfisicalSDK } from '@infisical/sdk';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { syncInfisicalEnvVars } from './src/helpers/infisicalSync.js';
 
 /**
  * Options for the Python build extension that carries the team-set solver
@@ -253,70 +253,9 @@ export default defineConfig({
       // For `db-backup` (pg_dump, pg_restore --list, psql).
       postgresClient(POSTGRES_CLIENT_MAJORS),
       pythonExtension(teamSetSolverPythonOptions()),
-      syncEnvVars(async ctx => {
-        // Skip sync if credentials not available (allows local dev without Infisical)
-        if (!process.env.INFISICAL_CLIENT_ID || !process.env.INFISICAL_CLIENT_SECRET) {
-          console.warn('[Infisical] Credentials not found, skipping secret sync.');
-          return {};
-        }
-
-        try {
-          // Initialize Infisical client
-          const client = new InfisicalSDK({
-            siteUrl: process.env.INFISICAL_HOST || 'https://app.infisical.com',
-          });
-
-          // Authenticate with Universal Auth
-          await client.auth().universalAuth.login({
-            clientId: process.env.INFISICAL_CLIENT_ID,
-            clientSecret: process.env.INFISICAL_CLIENT_SECRET,
-          });
-
-          // Map Trigger.dev environment to Infisical environment.
-          // Preview deploys (e.g. branch "dev") pull from Infisical's dev env.
-          // NOTE: never default to 'prod'. An unmapped environment (e.g. the
-          // local `dev` environment) must NOT pull production secrets — doing so
-          // injects the prod Neon DATABASE_URL into local dev workers, so local
-          // task runs write to production. Unknown env => sync nothing.
-          const envMap = { prod: 'prod', staging: 'sta', preview: 'dev', dev: 'dev' };
-          const infisicalEnv = envMap[ctx.environment];
-          if (!infisicalEnv) {
-            console.warn(
-              `[Infisical] No Infisical env mapped for Trigger.dev env "${ctx.environment}", skipping secret sync.`
-            );
-            return {};
-          }
-
-          console.log(
-            `[Infisical] Syncing secrets from environment: ${infisicalEnv} (Trigger.dev env: ${ctx.environment})`
-          );
-
-          // Fetch all secrets from Infisical
-          const { secrets } = await client.secrets().listSecrets({
-            environment: infisicalEnv,
-            projectId: process.env.INFISICAL_PROJECT_ID,
-            includeImports: true, // Include secret references if used
-          });
-
-          console.log(`[Infisical] Successfully fetched ${secrets.length} secrets`);
-
-          // Transform to Trigger.dev format
-          const mapped = secrets.map(secret => ({
-            name: secret.secretKey,
-            value: secret.secretValue,
-          }));
-
-          // Tasks use the pooled DATABASE_URL, the same one the web apps use.
-          // The direct endpoint is synced as DATABASE_URL_UNPOOLED like any other
-          // secret, for the few places that need session state (a session-level
-          // advisory lock, a session setting).
-          return mapped;
-        } catch (error) {
-          console.error('[Infisical] Failed to sync secrets:', error.message);
-          // Return empty object to allow deployment to continue with existing vars
-          return {};
-        }
-      }),
+      // Secrets from the Infisical environment matching the Trigger.dev one
+      // (src/helpers/infisicalSync.js). The extension drops every TRIGGER_* name.
+      syncEnvVars(ctx => syncInfisicalEnvVars({ triggerEnvironment: ctx.environment })),
     ],
   },
 });

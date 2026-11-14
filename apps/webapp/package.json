@@ -37,7 +37,6 @@
     "@fontsource-variable/mona-sans": "^5.2.8",
     "@fontsource/fredoka": "^5.2.10",
     "@hookform/resolvers": "^5.2.2",
-    "@lexical/react": "^0.31.0",
     "@mantine/hooks": "^7.6.0",
     "@octokit/rest": "^22.0.1",
     "@react-router/node": "^7.18.5",
