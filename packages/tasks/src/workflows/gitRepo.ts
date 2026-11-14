@@ -414,6 +414,7 @@ export const createRepositoryTask = task({
   // retries with backoff; anything else still fails once. Safe to repeat:
   // createRepository resumes a half-made repository.
   ...retryOnGitBlip,
+  // eslint-disable-next-line no-unused-vars -- pre-existing, kept as found when lint moved to oxlint
   run: async (payload: CreateRepositoryTaskPayload, { ctx }: RepositoryTaskContext) => {
     try {
       // NOTE: this branch rebuilds the standard payload field-by-field and so

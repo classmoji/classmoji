@@ -1,5 +1,5 @@
 import { createDecipheriv, createHash } from 'node:crypto';
-import { PrismaClient, Prisma } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
 import dayjs, { type Dayjs } from 'dayjs';
 import { createOneShotShutdown, DEFAULT_AVATAR_URL, isWorkerd } from '@classmoji/utils';
 import { workerScope as sharedWorkerScope } from './requestContext.ts';

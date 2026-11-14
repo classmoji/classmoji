@@ -43,9 +43,9 @@ import {
   type DeckJson,
   type DeckThemeUrls,
   type SlideContentTarget,
-} from '@classmoji/services/slides'; // eslint-disable-line import/no-unresolved
+} from '@classmoji/services/slides';
 
-import { resolveCollabEnv } from '@classmoji/collab/env'; // eslint-disable-line import/no-unresolved
+import { resolveCollabEnv } from '@classmoji/collab/env';
 
 import { commitFilesToRemote } from '../helpers/gitCheckpoint.ts';
 import {
@@ -76,8 +76,8 @@ type PageContentTarget = Parameters<typeof ClassmojiService.pageContent.prepareP
 
 async function loadPageRenderer(): Promise<PageRenderer> {
   const [schema, server] = await Promise.all([
-    import('@classmoji/page-schema'), // eslint-disable-line import/no-unresolved
-    import('@classmoji/page-schema/server'), // eslint-disable-line import/no-unresolved
+    import('@classmoji/page-schema'),
+    import('@classmoji/page-schema/server'),
   ]);
   return {
     fragment: schema.FRAGMENT,
@@ -96,7 +96,6 @@ async function loadPageRenderer(): Promise<PageRenderer> {
  */
 async function loadDeckRenderer(): Promise<DeckRenderer | null> {
   try {
-    // eslint-disable-next-line import/no-unresolved
     const mod = (await import('@classmoji/collab')) as Record<string, unknown>;
     const convert = mod.yDocToDeck;
     const schemaVersion = mod.DECK_SCHEMA_VERSION;

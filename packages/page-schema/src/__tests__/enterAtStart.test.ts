@@ -10,7 +10,6 @@
  * real keydowns, locally, under a locked section's guard, and through Yjs.
  */
 import { BlockNoteEditor } from '@blocknote/core';
-// eslint-disable-next-line import/no-unresolved -- a package `exports` subpath, which the lint resolver does not read
 import { withCollaboration } from '@blocknote/core/yjs';
 import { TextSelection } from 'prosemirror-state';
 import { afterEach, describe, expect, it } from 'vitest';

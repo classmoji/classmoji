@@ -31,10 +31,7 @@ import {
   sensitiveSessionMiddleware,
 } from 'better-auth/api';
 import { getOAuthProviderState } from '@better-auth/oauth-provider';
-// eslint's resolver misses these subpath exports; TypeScript resolves them.
-// eslint-disable-next-line import/no-unresolved
 import { setSessionCookie } from 'better-auth/cookies';
-/* eslint-disable import/no-unresolved */
 import {
   createAuthorizationURL,
   generateState,
@@ -42,7 +39,6 @@ import {
   parseState,
   setTokenUtil,
 } from 'better-auth/oauth2';
-/* eslint-enable import/no-unresolved */
 import type { BetterAuthPlugin } from 'better-auth';
 import * as z from 'zod';
 import getPrisma from '@classmoji/database';

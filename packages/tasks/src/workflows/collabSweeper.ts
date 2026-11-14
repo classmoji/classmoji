@@ -12,7 +12,7 @@
 
 import { logger, schedules, tasks } from '@trigger.dev/sdk';
 import getPrisma from '@classmoji/database';
-import { resolveCollabEnv } from '@classmoji/collab/env'; // eslint-disable-line import/no-unresolved
+import { resolveCollabEnv } from '@classmoji/collab/env';
 
 import {
   checkpointDelays,
@@ -67,8 +67,8 @@ async function closeDeleted(ref: SweepDocRef): Promise<boolean> {
 async function schemaVersions(): Promise<{ page: number; deck: number } | undefined> {
   try {
     const [{ SCHEMA_VERSION }, collab] = await Promise.all([
-      import('@classmoji/page-schema/constants'), // eslint-disable-line import/no-unresolved
-      import('@classmoji/collab'), // eslint-disable-line import/no-unresolved
+      import('@classmoji/page-schema/constants'),
+      import('@classmoji/collab'),
     ]);
     const deck = (collab as Record<string, unknown>).DECK_SCHEMA_VERSION;
     return typeof deck === 'number' ? { page: SCHEMA_VERSION, deck } : undefined;

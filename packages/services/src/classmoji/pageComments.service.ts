@@ -39,7 +39,7 @@ import {
   normalizeQuoteText,
   quoteOccurrenceIndex,
   redactLockedSections,
-} from '@classmoji/page-schema/sections'; // eslint-disable-line import/no-unresolved
+} from '@classmoji/page-schema/sections';
 import type { AuditLogAction, ClassroomStatus, Prisma, Role } from '@prisma/client';
 
 import {

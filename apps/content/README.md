@@ -328,7 +328,7 @@ and a forged host (replay tests) — build the canonical string with the package
 
 ```sh
 npm run typecheck -w apps/content
-npm run lint -w apps/content
+npx oxlint apps/content                # from the repo root
 npm run test -w apps/content          # vitest, node env, fake bindings — no miniflare
 ```
 

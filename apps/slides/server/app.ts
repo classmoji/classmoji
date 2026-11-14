@@ -1,4 +1,3 @@
-/* eslint-disable import/no-unresolved -- virtual modules resolved by Vite */
 import { createRequestHandler } from '@react-router/express';
 
 export const app = createRequestHandler({

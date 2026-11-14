@@ -27,6 +27,7 @@ try {
     process.env.DATABASE_URL = dbUrlMatch[1];
     console.log(`📊 Using database from .dev-context: ${process.env.DATABASE_URL.split('@')[1]}\n`);
   }
+  // eslint-disable-next-line no-unused-vars -- pre-existing, kept as found when lint moved to oxlint
 } catch (e) {
   console.log('⚠️  No .dev-context found, using DATABASE_URL from environment\n');
 }

@@ -35,9 +35,8 @@ import { retryOnDatabaseBlip } from '../helpers/databaseRetry.ts';
 import getPrisma from '@classmoji/database';
 import { ClassmojiService, describeTokenMintError, getGitProvider } from '@classmoji/services';
 /*
- * The zero-import progress module, via its package subpath export. The eslint
- * resolver here does not follow "exports" subpaths (the same reason
- * trigger.config.js disables this rule); tsc and the bundler both resolve it.
+ * The zero-import progress module, via its package subpath export; tsc and the
+ * bundler both resolve it.
  */
 import {
   applyPhaseUpdates,
@@ -53,7 +52,7 @@ import {
   type ImportPhaseUpdate,
   type ImportProgress,
   type ImportSummaryCounts,
-} from '@classmoji/services/import-progress'; // eslint-disable-line import/no-unresolved
+} from '@classmoji/services/import-progress';
 import {
   cloneContentRepo,
   type CloneSkipReason,

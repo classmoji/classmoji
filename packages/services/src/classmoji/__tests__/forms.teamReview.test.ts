@@ -612,6 +612,7 @@ describe.skipIf(!RUN)('forms team review', () => {
       const fields = formService.fieldsOf(revision.fields) as FormField[];
       const group = fields.find(field => field.type === 'repeat_group');
       expect(group?.id).toBe(GROUP);
+      // eslint-disable-next-line no-unsafe-optional-chaining -- pre-existing in a test; ESLint did not look through the `as` cast
       expect((group?.fields as FormField[])[0].id).toBe(RATING);
     });
   });

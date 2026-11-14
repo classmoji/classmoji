@@ -31,7 +31,6 @@ COPY packages/collab/package.json packages/collab/
 COPY packages/content/package.json packages/content/
 COPY packages/content-signing/package.json packages/content-signing/
 COPY packages/database/package.json packages/database/
-COPY packages/eslint-config/package.json packages/eslint-config/
 COPY packages/page-schema/package.json packages/page-schema/
 COPY packages/services/package.json packages/services/
 COPY packages/tasks/package.json packages/tasks/

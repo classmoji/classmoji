@@ -11,8 +11,6 @@
     "admin:build:cf": "BUILD_TARGET=cloudflare react-router build",
     "admin:start": "NODE_ENV=production node --experimental-strip-types server.ts",
     "admin:deploy:staging": "BUILD_TARGET=cloudflare CLOUDFLARE_ENV=staging react-router build && wrangler deploy -c build/server/wrangler.json",
-    "lint": "eslint .",
-    "lint:fix": "eslint . --fix",
     "test": "vitest run"
   },
   "dependencies": {

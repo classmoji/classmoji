@@ -1,4 +1,3 @@
-/* eslint-disable import/no-unresolved -- virtual module resolved by Vite */
 /**
  * apps/admin as a Cloudflare Worker (BUILD_TARGET=cloudflare builds only; on
  * Fly, server.ts serves the same React Router build with Express).

@@ -1349,6 +1349,7 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
 
       const mine = await responseService.findOwnResponse(formId, studentAId);
       expect(mine?.user_id).toBe(studentAId);
+      // eslint-disable-next-line no-unsafe-optional-chaining -- pre-existing in a test; ESLint did not look through the `as` cast
       expect((mine?.answers as Record<string, string>)[fieldId]).toBe('Answer from a');
       expect(mine).not.toHaveProperty('staff_status');
       expect(mine).not.toHaveProperty('staff_note');

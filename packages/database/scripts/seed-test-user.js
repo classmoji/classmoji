@@ -112,6 +112,7 @@ async function main() {
 main()
   .catch(e => {
     console.error('❌ seed-test-user failed:', e.message);
+    // eslint-disable-next-line no-process-exit -- pre-existing, kept as found when lint moved to oxlint
     process.exit(1);
   })
   .finally(() => prisma.$disconnect());

@@ -31,6 +31,7 @@ const TableActionButtons = ({
   return (
     <div className="flex gap-3 items-center whitespace-nowrap">
       {onView && (
+        // eslint-disable-next-line jsx-a11y/interactive-supports-focus -- pre-existing, kept as found when lint moved to oxlint
         <div
           onClick={onView}
           role="button"
@@ -44,6 +45,7 @@ const TableActionButtons = ({
       )}
 
       {onEdit && (
+        // eslint-disable-next-line jsx-a11y/interactive-supports-focus -- pre-existing, kept as found when lint moved to oxlint
         <div
           onClick={onEdit}
           role="button"
@@ -57,6 +59,7 @@ const TableActionButtons = ({
       )}
 
       {onAutograde && (
+        // eslint-disable-next-line jsx-a11y/interactive-supports-focus -- pre-existing, kept as found when lint moved to oxlint
         <div
           onClick={onAutograde}
           role="button"
@@ -73,6 +76,7 @@ const TableActionButtons = ({
 
       {onDelete &&
         (skipDeleteConfirm ? (
+          // eslint-disable-next-line jsx-a11y/interactive-supports-focus -- pre-existing, kept as found when lint moved to oxlint
           <div
             onClick={onDelete}
             role="button"

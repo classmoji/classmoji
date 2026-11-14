@@ -121,6 +121,7 @@ describe('redactLockedSections', () => {
       const block = findBlock(out, id);
       expect(block?.type).toBe('lockedSection');
       expect(block?.children).toEqual([]);
+      // eslint-disable-next-line no-unsafe-optional-chaining -- pre-existing in a test; ESLint did not look through the `as` cast
       expect(typeof (block?.props as { title?: unknown }).title).toBe('string');
     }
     expect(lockedSectionTitle(findBlock(out, 'L1'))).toBe('Solution');

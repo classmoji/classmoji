@@ -10,8 +10,6 @@
  * the hosts file), so nothing here touches the network.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-// eslint's resolver misses this subpath export; TypeScript resolves it.
-// eslint-disable-next-line import/no-unresolved
 import { fetchClientMetadataResource as nodeTransport } from '@better-auth/cimd/node';
 import { fetchClientMetadataResource as workerTransport } from '../cimdWorker.ts';
 

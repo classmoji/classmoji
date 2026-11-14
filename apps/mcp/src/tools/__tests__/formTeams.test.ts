@@ -612,6 +612,7 @@ describe('role tiers (through the registry)', () => {
     const client = await connect();
     const { tools } = await client.listTools();
     const run = tools.find(tool => tool.name === 'form_teams_run');
+    // eslint-disable-next-line no-unsafe-optional-chaining -- pre-existing in a test; ESLint did not look through the `as` cast
     const patch = (run?.inputSchema.properties as Record<string, Record<string, unknown>>).patch;
     expect(patch.type).toBe('object');
     expect(patch).not.toHaveProperty('properties');

@@ -239,7 +239,7 @@ export const createLinkTagRender = ({
   onToggleFeatured,
 }: LinkTagRenderOptions) =>
   // Named rather than anonymous: antd CALLS this to get an element, it does not
-  // mount it as a component, but it returns JSX and eslint cannot tell the
+  // mount it as a component, but it returns JSX and the linter cannot tell the
   // difference without a name to go on.
   function renderLinkTag({ value, disabled, closable, onClose }: CustomTagProps): ReactElement {
     const info = meta.get(value);

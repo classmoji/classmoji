@@ -23,12 +23,7 @@ import * as path from 'node:path';
 import * as zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import type { BrowserContext, Locator, Page, Request } from '@playwright/test';
-import {
-  assertWritableDatabase,
-  databaseHost,
-  isLocalDatabaseHost,
-  resolvedDatabaseUrl,
-} from './databaseGuard.ts';
+import { assertWritableDatabase } from './databaseGuard.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.join(__dirname, '../..');

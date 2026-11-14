@@ -1,0 +1,547 @@
+// Oxlint configuration for the whole monorepo (one root config, per-path overrides).
+//
+// It carries over the rules the old ESLint setup enforced (the shared config
+// package plus each workspace's own config), at the same severities. Oxlint's
+// default category is switched off so that only the rules listed here run.
+//
+// Differences from the old ESLint setup (oxlint 1.92.0), and what covers each:
+// - prettier/prettier: formatting is no longer part of `lint`; `npm run
+//   format:check` (oxfmt) covers it.
+// - import/no-unresolved: no oxlint rule; tsc checks imports.
+// - import/named: does not run on TypeScript importers (ESLint flagged a
+//   missing named export imported from a .ts file); tsc catches it. JS
+//   importers are still checked.
+// - react/no-deprecated: no oxlint rule; React's own types and dev warnings.
+// - react/jsx-uses-vars, react/jsx-uses-react: not needed; oxlint's
+//   no-unused-vars understands JSX.
+// - react/prop-types, react/react-in-jsx-scope: the old React config left them
+//   on for .js/.ts files in React workspaces (off only for .jsx/.tsx); no such
+//   file uses JSX or prop types, so they are not carried over.
+// - typescript/ban-ts-comment: does not run on .js/.jsx/.mjs/.cjs (ESLint
+//   banned `@ts-ignore` and `@ts-nocheck` there); TS files are unchanged.
+// - no-dupe-args, no-octal: no oxlint rule; both are syntax errors in modules
+//   and strict code, which the parser reports.
+// - jsx-a11y rules ignore lowercase DOM-style handlers (`onclick`);
+//   react/no-unknown-property still reports them as errors.
+// - no-unused-expressions in cypress/** JS: the old config switched off only
+//   the core rule, so typescript-eslint's copy still ran there; here the one
+//   rule is off for cypress/**. No cypress directory exists.
+// - Files ignored by a .gitignore are never linted (oxlint always honours
+//   .gitignore files, nested ones included, even with --no-ignore). Git will
+//   not commit them without -f, but e.g. apps/webapp/.gitignore ignores any
+//   build/ or .cache/ directory at any depth.
+// - Implementation differences in rules carried over: import/no-duplicates no
+//   longer flags a type-only import beside a value import from one module;
+//   node/no-sync also reports non-call references; import/no-named-as-default
+//   resolves workspace packages and so reports more; no-unsafe-optional-
+//   chaining looks through `as` casts; unicorn/no-process-exit (ESLint's
+//   no-process-exit) allows files with a hashbang.
+//
+// Paths in `files` and `ignorePatterns` resolve against this file (the repo
+// root), so per-workspace entries carry their workspace prefix.
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  // Every plugin is enabled here, not in overrides: with oxlint 1.92.0 a rule
+  // whose plugin is enabled inside an override cannot be switched off by a
+  // later override. Categories are off, so enabling a plugin adds no rules.
+  "plugins": ["eslint", "typescript", "import", "unicorn", "node", "react", "jsx-a11y"],
+  "categories": {
+    "correctness": "off"
+  },
+  "options": {
+    // ESLint 9 warned on unused disable directives by default; so does this.
+    "reportUnusedDisableDirectives": "warn"
+  },
+  "env": {
+    "browser": true,
+    "node": true,
+    "es2025": true
+  },
+  // Every entry is anchored to the workspace it came from, as the old
+  // per-workspace configs had them. Never ignore a directory NAME at any depth
+  // (`**/build/**`): a source folder named build/ or dist/ would then escape
+  // every rule here, the content-signing restriction included.
+  "ignorePatterns": [
+    "**/node_modules/**",
+    // A separate private repository (git submodule); not linted from here.
+    "apps/ai-agent/**",
+    // Root-level outputs.
+    "build/**",
+    "dist/**",
+    "coverage/**",
+    ".turbo/**",
+    // React Router apps: build outputs, caches, Playwright suites and server
+    // entry files.
+    "apps/admin/build/**",
+    "apps/admin/public/build/**",
+    "apps/admin/.cache/**",
+    "apps/admin/.react-router/**",
+    "apps/admin/playwright-report/**",
+    "apps/admin/test-results/**",
+    "apps/admin/tests/**",
+    "apps/admin/playwright.config.ts",
+    "apps/admin/server.ts",
+    "apps/admin/server/**",
+    "apps/admin/vite.config.js",
+    "apps/pages/build/**",
+    "apps/pages/public/build/**",
+    "apps/pages/.cache/**",
+    "apps/pages/.react-router/**",
+    "apps/pages/playwright-report/**",
+    "apps/pages/test-results/**",
+    "apps/pages/tests/**",
+    "apps/pages/playwright.config.ts",
+    "apps/pages/server.ts",
+    "apps/pages/server/**",
+    "apps/pages/vite.config.js",
+    "apps/slides/build/**",
+    "apps/slides/public/build/**",
+    "apps/slides/.cache/**",
+    "apps/slides/.react-router/**",
+    "apps/slides/playwright-report/**",
+    "apps/slides/test-results/**",
+    "apps/slides/tests/**",
+    "apps/slides/playwright.config.ts",
+    "apps/slides/server.ts",
+    "apps/slides/server/**",
+    "apps/slides/vite.config.js",
+    "apps/webapp/build/**",
+    "apps/webapp/public/build/**",
+    "apps/webapp/.cache/**",
+    "apps/webapp/.react-router/**",
+    "apps/webapp/playwright-report/**",
+    "apps/webapp/test-results/**",
+    "apps/webapp/tests/**",
+    "apps/webapp/vite.config.js",
+    // Node services.
+    "apps/collab/dist/**",
+    "apps/collab/build/**",
+    "apps/hook-station/dist/**",
+    "apps/hook-station/build/**",
+    "apps/mcp/dist/**",
+    "apps/mcp/build/**",
+    "apps/content/dist/**",
+    "apps/content/.wrangler/**",
+    "apps/content/worker-configuration.d.ts",
+    // Packages.
+    "packages/auth/test-token-refresh.mjs",
+    "packages/database/migrations/**",
+    "packages/database/prisma/generated/**",
+    "packages/database/generated/**",
+    "packages/tasks/src/scripts/**",
+    "packages/tasks/.trigger/**",
+    "packages/tasks/dist/**",
+    "packages/tasks/build/**",
+    // The local team-set solver venv; pip vendors JS into it.
+    "packages/tasks/python/.venv/**"
+  ],
+  "rules": {
+    // eslint:recommended (ESLint 9) — rules that apply to every file.
+    "for-direction": "error",
+    "no-async-promise-executor": "error",
+    "no-case-declarations": "error",
+    "no-compare-neg-zero": "error",
+    "no-cond-assign": ["error", "except-parens"],
+    "no-constant-binary-expression": "error",
+    "no-constant-condition": ["error", { "checkLoops": "allExceptWhileTrue" }],
+    "no-control-regex": "error",
+    "no-debugger": "error",
+    "no-delete-var": "error",
+    "no-dupe-else-if": "error",
+    "no-duplicate-case": "error",
+    "no-empty": ["error", { "allowEmptyCatch": false }],
+    "no-empty-character-class": "error",
+    "no-empty-pattern": ["error", { "allowObjectPatternsAsParameters": false }],
+    "no-empty-static-block": "error",
+    "no-ex-assign": "error",
+    "no-extra-boolean-cast": "error",
+    "no-fallthrough": [
+      "error",
+      { "allowEmptyCase": false, "reportUnusedFallthroughComment": false }
+    ],
+    "no-global-assign": "error",
+    "no-invalid-regexp": "error",
+    "no-irregular-whitespace": [
+      "error",
+      {
+        "skipComments": false,
+        "skipJSXText": false,
+        "skipRegExps": false,
+        "skipStrings": true,
+        "skipTemplates": false
+      }
+    ],
+    "no-loss-of-precision": "error",
+    "no-misleading-character-class": "error",
+    "no-nonoctal-decimal-escape": "error",
+    "no-prototype-builtins": "error",
+    "no-regex-spaces": "error",
+    "no-self-assign": ["error", { "props": true }],
+    "no-shadow-restricted-names": "error",
+    "no-sparse-arrays": "error",
+    "no-unsafe-finally": "error",
+    "no-unsafe-optional-chaining": ["error", { "disallowArithmeticOperators": false }],
+    "no-unused-labels": "error",
+    "no-unused-private-class-members": "error",
+    "no-useless-backreference": "error",
+    "no-useless-catch": "error",
+    "no-useless-escape": "error",
+    "require-yield": "error",
+    "use-isnan": ["error", { "enforceForIndexOf": false, "enforceForSwitchCase": true }],
+    "valid-typeof": ["error", { "requireStringLiterals": false }],
+
+    "no-console": ["warn", { "allow": ["warn", "error"] }],
+
+    // ── The content-delivery signing choke point, enforced by lint. ──────────
+    //
+    // A signed blob URL is the Cloudflare Worker's ONLY proof that a classroom is
+    // entitled to the bytes behind a sha: the Worker caches blobs by content
+    // (`blobs/{sha}` in R2, shared across classrooms) and cannot know which files
+    // a classroom owns. So a signature over a sha outside that classroom's asset
+    // map would let one classroom read another's cached private bytes — and it
+    // would verify, because the app made the claim.
+    //
+    // `contentDelivery.service.ts` is where that claim is checked. Every mint goes
+    // through its `mintSigned` gate, which requires a row read from the
+    // classroom's own map. A module that imports the signers directly bypasses the
+    // gate, so this makes reaching for them a lint error rather than a code review
+    // someone has to remember to do.
+    //
+    // What is restricted, and what is not:
+    //
+    // The rule names the MINTING exports rather than the package, because only
+    // those bypass the gate: `signBlobUrl`, `signSrcSet`, `signThemeBase`,
+    // `signFilesBase`, `signMediaUrl` and `signRenderToken` produce a signature,
+    // and `deriveKey` and `signCanonical` are the primitives they produce it with.
+    //
+    // Everything else in the package is grammar that both sides have to agree on —
+    // `mediaKey`, `isMediaVariant`, `contentTypeForMediaExt`, the canonical-string
+    // builders, the verifiers — and it is importable anywhere. A file-level
+    // exemption for a module that only wanted the key shape used to be the way
+    // those were reached, and it exempted that module from the signers too.
+    //
+    // The allowlist (the override below that turns this rule off) is therefore
+    // down to the three files that legitimately MINT, plus tests:
+    //   - `contentDelivery.service.ts` — the gate itself;
+    //   - `deckRenderToken.service.ts` — render tokens, a different signature over
+    //     a deck id rather than a sha, with no asset map to check against;
+    //   - `apps/content/src/verify.ts` — the Worker's VERIFY seam; it re-exports
+    //     the package and mints nothing, but `export *` carries the signer names
+    //     along with the rest (oxlint reports `export *` and namespace imports of
+    //     a module with restricted names, as ESLint did);
+    //   - tests, which have to reach the primitives to prove the gate's output.
+    //
+    // Globs are tail-matched (`**/classmoji/...`) so they hold wherever the
+    // services package lives. Dynamic `import()` is not checked (it was not
+    // under ESLint either).
+    "no-restricted-imports": [
+      "error",
+      {
+        "paths": [
+          {
+            "name": "@classmoji/content-signing",
+            "importNames": [
+              "signBlobUrl",
+              "signSrcSet",
+              "signThemeBase",
+              "signFilesBase",
+              "signMediaUrl",
+              "signRenderToken",
+              "signCanonical",
+              "deriveKey"
+            ],
+            "message": "Sign through ClassmojiService.contentDelivery instead. Every blob URL must be minted inside contentDelivery.service.ts, which requires proof the sha is in that classroom's asset map — importing the signers directly bypasses that check. The rest of the package (mediaKey, isMediaVariant, contentTypeForMediaExt, the canonical builders, the verifiers) is importable anywhere."
+          }
+        ]
+      }
+    ],
+
+    // eslint-plugin-import, recommended. (import/no-unresolved has no oxlint
+    // equivalent; tsc checks imports instead.)
+    "import/named": "error",
+    "import/namespace": "error",
+    "import/default": "error",
+    "import/export": "error",
+    "import/no-named-as-default": "warn",
+    "import/no-named-as-default-member": "warn",
+    "import/no-duplicates": "warn",
+
+    // typescript-eslint, recommended. ESLint applied these to every file, .js
+    // included; oxlint runs the `typescript/*` ones on TypeScript files only
+    // (see the list at the top for ban-ts-comment).
+    "typescript/ban-ts-comment": "error",
+    "no-array-constructor": "error",
+    "typescript/no-duplicate-enum-values": "error",
+    "typescript/no-empty-object-type": "error",
+    "typescript/no-explicit-any": "warn",
+    "typescript/no-extra-non-null-assertion": "error",
+    "typescript/no-misused-new": "error",
+    "typescript/no-namespace": "error",
+    "typescript/no-non-null-asserted-optional-chain": "error",
+    "typescript/no-require-imports": "error",
+    "typescript/no-this-alias": "error",
+    "typescript/no-unnecessary-type-constraint": "error",
+    "typescript/no-unsafe-declaration-merging": "error",
+    "typescript/no-unsafe-function-type": "error",
+    "no-unused-expressions": [
+      "error",
+      { "allowShortCircuit": false, "allowTaggedTemplates": false, "allowTernary": false }
+    ],
+    // ESLint's defaults, written out: with no options object oxlint ignores
+    // `^_` names, which ESLint never did. TS files get the `^_` patterns below.
+    "no-unused-vars": ["error", { "vars": "all", "args": "after-used", "caughtErrors": "all" }],
+    "typescript/no-wrapper-object-types": "error",
+    "typescript/prefer-as-const": "error",
+    "typescript/prefer-namespace-keyword": "error",
+    "typescript/triple-slash-reference": "error"
+  },
+  "overrides": [
+    {
+      // JavaScript only. typescript-eslint's eslint-recommended turned these
+      // off for TypeScript files, where the compiler checks them.
+      "files": ["**/*.{js,jsx,mjs,cjs}"],
+      "rules": {
+        "constructor-super": "error",
+        "getter-return": ["error", { "allowImplicit": false }],
+        "no-class-assign": "error",
+        "no-const-assign": "error",
+        "no-dupe-class-members": "error",
+        "no-dupe-keys": "error",
+        "no-func-assign": "error",
+        "no-import-assign": "error",
+        "no-new-native-nonconstructor": "error",
+        "no-obj-calls": "error",
+        "no-redeclare": ["error", { "builtinGlobals": true }],
+        "no-setter-return": "error",
+        "no-this-before-super": "error",
+        "no-undef": ["error", { "typeof": false }],
+        "no-unreachable": "error",
+        "no-unsafe-negation": ["error", { "enforceForOrderingRelations": false }],
+        "no-with": "error"
+      }
+    },
+    {
+      // TypeScript only (from the old shared TypeScript config).
+      "files": ["**/*.{ts,tsx}"],
+      "rules": {
+        "no-var": "error",
+        "prefer-const": ["error", { "destructuring": "any", "ignoreReadBeforeAssign": false }],
+        "prefer-rest-params": "error",
+        "prefer-spread": "error",
+        "no-unused-vars": [
+          "error",
+          {
+            "argsIgnorePattern": "^_",
+            "varsIgnorePattern": "^_",
+            "caughtErrorsIgnorePattern": "^_"
+          }
+        ],
+        "typescript/no-non-null-assertion": "warn",
+        "typescript/ban-ts-comment": [
+          "error",
+          {
+            "ts-expect-error": "allow-with-description",
+            "ts-ignore": false,
+            "ts-nocheck": false,
+            "ts-check": false
+          }
+        ]
+      }
+    },
+    {
+      // Node workspaces (the old shared Node config, applied to *.js and *.ts).
+      "files": [
+        "apps/{collab,content,hook-station,mcp}/**/*.{js,ts}",
+        "packages/{auth,collab,content-signing,content,database,page-schema,services,tasks,utils,workers}/**/*.{js,ts}"
+      ],
+      "rules": {
+        "unicorn/no-process-exit": "error",
+        "node/no-sync": "warn"
+      }
+    },
+    {
+      // React workspaces: react recommended, react-hooks, jsx-a11y recommended
+      // (from the old shared React config).
+      "files": ["apps/{admin,pages,slides,webapp}/**", "packages/{ui-components,workers}/**"],
+      "rules": {
+        "react/display-name": "error",
+        "react/jsx-key": "error",
+        "react/jsx-no-comment-textnodes": "error",
+        "react/jsx-no-duplicate-props": "error",
+        "react/jsx-no-target-blank": "error",
+        "react/jsx-no-undef": "error",
+        "react/no-children-prop": "error",
+        "react/no-danger-with-children": "error",
+        "react/no-direct-mutation-state": "error",
+        "react/no-find-dom-node": "error",
+        "react/no-is-mounted": "error",
+        "react/no-render-return-value": "error",
+        "react/no-string-refs": "error",
+        "react/no-unescaped-entities": "error",
+        "react/no-unknown-property": "error",
+        "react/require-render-return": "error",
+        "react/rules-of-hooks": "error",
+        "react/exhaustive-deps": "warn",
+
+        "jsx-a11y/alt-text": "error",
+        "jsx-a11y/anchor-has-content": "error",
+        "jsx-a11y/anchor-is-valid": "error",
+        "jsx-a11y/aria-activedescendant-has-tabindex": "error",
+        "jsx-a11y/aria-props": "error",
+        "jsx-a11y/aria-proptypes": "error",
+        "jsx-a11y/aria-role": "error",
+        "jsx-a11y/aria-unsupported-elements": "error",
+        "jsx-a11y/autocomplete-valid": "error",
+        "jsx-a11y/click-events-have-key-events": "error",
+        "jsx-a11y/heading-has-content": "error",
+        "jsx-a11y/html-has-lang": "error",
+        "jsx-a11y/iframe-has-title": "error",
+        "jsx-a11y/img-redundant-alt": "error",
+        "jsx-a11y/interactive-supports-focus": [
+          "error",
+          {
+            "tabbable": [
+              "button",
+              "checkbox",
+              "link",
+              "searchbox",
+              "spinbutton",
+              "switch",
+              "textbox"
+            ]
+          }
+        ],
+        "jsx-a11y/label-has-associated-control": "error",
+        "jsx-a11y/media-has-caption": "error",
+        "jsx-a11y/mouse-events-have-key-events": "error",
+        "jsx-a11y/no-access-key": "error",
+        "jsx-a11y/no-autofocus": "error",
+        "jsx-a11y/no-distracting-elements": "error",
+        "jsx-a11y/no-interactive-element-to-noninteractive-role": [
+          "error",
+          { "tr": ["none", "presentation"], "canvas": ["img"] }
+        ],
+        "jsx-a11y/no-noninteractive-element-interactions": [
+          "error",
+          {
+            "handlers": [
+              "onClick",
+              "onError",
+              "onLoad",
+              "onMouseDown",
+              "onMouseUp",
+              "onKeyPress",
+              "onKeyDown",
+              "onKeyUp"
+            ],
+            "alert": ["onKeyUp", "onKeyDown", "onKeyPress"],
+            "body": ["onError", "onLoad"],
+            "dialog": ["onKeyUp", "onKeyDown", "onKeyPress"],
+            "iframe": ["onError", "onLoad"],
+            "img": ["onError", "onLoad"]
+          }
+        ],
+        "jsx-a11y/no-noninteractive-element-to-interactive-role": [
+          "error",
+          {
+            "ul": ["listbox", "menu", "menubar", "radiogroup", "tablist", "tree", "treegrid"],
+            "ol": ["listbox", "menu", "menubar", "radiogroup", "tablist", "tree", "treegrid"],
+            "li": [
+              "menuitem",
+              "menuitemradio",
+              "menuitemcheckbox",
+              "option",
+              "row",
+              "tab",
+              "treeitem"
+            ],
+            "table": ["grid"],
+            "td": ["gridcell"],
+            "fieldset": ["radiogroup", "presentation"]
+          }
+        ],
+        "jsx-a11y/no-noninteractive-tabindex": [
+          "error",
+          { "tags": [], "roles": ["tabpanel"], "allowExpressionValues": true }
+        ],
+        "jsx-a11y/no-redundant-roles": "error",
+        "jsx-a11y/no-static-element-interactions": "error",
+        "jsx-a11y/role-has-required-aria-props": "error",
+        "jsx-a11y/role-supports-aria-props": "error",
+        "jsx-a11y/scope": "error",
+        "jsx-a11y/tabindex-no-positive": "error"
+      }
+    },
+    {
+      "files": ["apps/webapp/**"],
+      "rules": {
+        "import/namespace": "off",
+        "import/named": "off",
+        "jsx-a11y/click-events-have-key-events": "off",
+        "jsx-a11y/no-static-element-interactions": "off",
+        "jsx-a11y/label-has-associated-control": "off",
+        "jsx-a11y/no-autofocus": "off"
+      }
+    },
+    {
+      "files": ["apps/admin/**", "apps/slides/**"],
+      "rules": {
+        "jsx-a11y/click-events-have-key-events": "off",
+        "jsx-a11y/no-static-element-interactions": "off",
+        "jsx-a11y/no-autofocus": "off",
+        "jsx-a11y/label-has-associated-control": "off"
+      }
+    },
+    {
+      "files": ["apps/pages/**"],
+      "rules": {
+        "jsx-a11y/click-events-have-key-events": "off",
+        "jsx-a11y/no-static-element-interactions": "off",
+        "jsx-a11y/no-noninteractive-element-interactions": "off",
+        "jsx-a11y/no-autofocus": "off"
+      }
+    },
+    {
+      // Server logs are the observability story for these services
+      // (Workers logs for apps/content).
+      "files": ["apps/{collab,content,hook-station,mcp}/**", "packages/database/**"],
+      "rules": {
+        "no-console": "off"
+      }
+    },
+    {
+      "files": ["packages/tasks/**"],
+      "rules": {
+        "node/no-sync": "off"
+      }
+    },
+    {
+      // The other half of the content-signing choke point (see
+      // no-restricted-imports above): the files allowed to import the signers.
+      "files": [
+        "**/classmoji/contentDelivery.service.ts",
+        "**/classmoji/deckRenderToken.service.ts",
+        // The VERIFY seam: it re-exports the package so every Worker module
+        // verifies with exactly the code the apps signed with, and mints nothing.
+        "apps/content/src/verify.ts",
+        "**/__tests__/**/*.{js,jsx,ts,tsx}",
+        "**/tests/**/*.{js,jsx,ts,tsx}",
+        "**/*.test.{js,jsx,ts,tsx}",
+        "**/*.spec.{js,jsx,ts,tsx}"
+      ],
+      "rules": {
+        "no-restricted-imports": "off"
+      }
+    },
+    {
+      "files": ["**/cypress/**/*.{js,jsx}"],
+      "globals": {
+        "cy": "readonly",
+        "Cypress": "readonly"
+      },
+      "rules": {
+        "no-unused-expressions": "off"
+      }
+    }
+  ]
+}
