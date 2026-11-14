@@ -18,6 +18,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ToolError } from '../../mcp/errors.ts';
+import { jsonText } from '../../mcp/jsonText.ts';
 import type { ToolContext } from '../../mcp/registry.ts';
 
 const mocks = vi.hoisted(() => ({
@@ -245,7 +246,7 @@ describe('get_leaderboard', () => {
       { classroom: CLASSROOM },
       staffCtx('OWNER')
     );
-    expect(toolResult.content[0].text).toBe(JSON.stringify(resourcePayload, null, 2));
+    expect(toolResult.content[0].text).toBe(jsonText(resourcePayload));
     expect(parse(toolResult).count).toBe(1);
   });
 

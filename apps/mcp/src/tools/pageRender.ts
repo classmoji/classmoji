@@ -18,6 +18,7 @@ import { z } from 'zod';
 import { uuidString } from '@classmoji/utils/zod-formats';
 import { liveSha, liveStateFor } from '../collab/client.ts';
 import { ToolError } from '../mcp/errors.ts';
+import { jsonText } from '../mcp/jsonText.ts';
 import { tryConsume } from '../mcp/rateLimit.ts';
 import type { ToolContext, ToolDefinition, ToolResult } from '../mcp/registry.ts';
 import { RenderError } from '../render/browser.ts';
@@ -259,7 +260,7 @@ export async function pageRenderResult(
 
 function withImages(payload: Record<string, unknown>, images: string[]): ToolResult {
   return {
-    content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }, ...imageBlocks(images)],
+    content: [{ type: 'text', text: jsonText(payload) }, ...imageBlocks(images)],
   };
 }
 
