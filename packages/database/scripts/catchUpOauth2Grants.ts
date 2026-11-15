@@ -422,14 +422,29 @@ async function run(
     return JSON.stringify(out);
   };
   const before = await realCounts();
+  // Window clients whose client id another client row already holds: the one
+  // known way the clients statement fails. Read now, because a failed
+  // statement aborts the transaction, and Postgres's own message (which names
+  // the key) does not survive the pg driver adapter's error.
+  const takenClientIds = (
+    await rows<{ client_id: string }>(
+      `SELECT DISTINCT a."client_id" FROM pg_temp."oauth_applications" a
+       JOIN pg_temp."oauth2_clients" c ON c."client_id" = a."client_id" AND c."id" <> a."id"
+       ORDER BY 1`
+    )
+  ).map(row => row.client_id);
   const produced = {} as Result['produced'];
   for (const statement of statements) {
     try {
       produced[statement.target] = await tx.$executeRawUnsafe(statement.sql);
     } catch (error) {
+      const taken =
+        statement.target === 'oauth2_clients' && takenClientIds.length
+          ? ` Client ids already held by another client: ${takenClientIds.join(', ')}.`
+          : '';
       throw new Refusal(
         `the migration's statement for ${statement.target} failed on the window's rows ` +
-          `(a client id already held by another client is one cause): ${(error as Error).message}`
+          `(a client id already held by another client is one cause): ${(error as Error).message}${taken}`
       );
     }
   }
