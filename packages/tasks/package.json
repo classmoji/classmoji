@@ -39,6 +39,6 @@
     "endpointId": "classflow-ahnN"
   },
   "devDependencies": {
-    "vitest": "^4.1.4"
+    "vitest": "^5.1.0"
   }
 }

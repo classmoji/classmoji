@@ -19,8 +19,8 @@ export default defineConfig({
     environment: 'node',
     testTimeout: 120_000, // 2 minutes per test
     hookTimeout: 60_000, // server spawn + health poll
-    // vitest 4 equivalent of `threads: false`:
-    // forked processes, run strictly sequentially — tests share a server + DB.
+    // The old `threads: false`, in today's options: forked processes, run
+    // strictly sequentially — tests share a server + DB.
     pool: 'forks',
     fileParallelism: false,
     maxWorkers: 1,

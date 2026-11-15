@@ -24,6 +24,6 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "2.4.0",
-    "vitest": "^4.1.5"
+    "vitest": "^5.1.0"
   }
 }

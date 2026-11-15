@@ -188,13 +188,17 @@ describe('task settings', () => {
 
 describe('eligibility', () => {
   it.each([
-    [{ status: 'DELETED' }, 'not-ready'],
-    [{ kind: 'AUDIO' }, 'not-video'],
-    [{ optimise: false }, 'not-optimised'],
-    [{ processing: 'DONE' }, 'not-queued'],
-    [{ processing: 'NONE' }, 'not-queued'],
-    [{ classroom_id: '99999999-2222-4333-8444-555555555555' }, 'wrong-classroom'],
-  ])('skips a row with %o quietly', async (over, reason) => {
+    ['status DELETED', { status: 'DELETED' }, 'not-ready'],
+    ['kind AUDIO', { kind: 'AUDIO' }, 'not-video'],
+    ['optimise false', { optimise: false }, 'not-optimised'],
+    ['processing DONE', { processing: 'DONE' }, 'not-queued'],
+    ['processing NONE', { processing: 'NONE' }, 'not-queued'],
+    [
+      'another classroom_id',
+      { classroom_id: '99999999-2222-4333-8444-555555555555' },
+      'wrong-classroom',
+    ],
+  ])('skips a row with %s quietly', async (_label, over, reason) => {
     const { state, deps } = world(over as Partial<Row>);
     expect(await processVideo(PAYLOAD, deps)).toEqual({ status: 'skipped', reason });
     expect(deps.makeTmpDir).not.toHaveBeenCalled();

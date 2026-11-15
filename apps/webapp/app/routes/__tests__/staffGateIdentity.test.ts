@@ -19,7 +19,7 @@
  * prefix — narrowing the staff description without touching the student one.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   assertClassroomAccess: vi.fn(),
@@ -115,9 +115,36 @@ const runLoader = async (routePath: string, pathname: string) => {
   await Promise.resolve(loader(loaderArgs(pathname))).catch(() => {});
 };
 
-/** Options the gate was called with. */
-const teachingTeamOptions = () => mocks.requireClassroomTeachingTeam.mock.calls[0][2];
-const accessOptions = () => mocks.assertClassroomAccess.mock.calls[0][0];
+/**
+ * Options the gate was called with, by this test's loader and nothing else: a
+ * second call (a loader still running from an earlier test) fails the test
+ * instead of answering for it.
+ */
+const teachingTeamOptions = () => {
+  expect(mocks.requireClassroomTeachingTeam).toHaveBeenCalledTimes(1);
+  return mocks.requireClassroomTeachingTeam.mock.calls[0][2];
+};
+const accessOptions = () => {
+  expect(mocks.assertClassroomAccess).toHaveBeenCalledTimes(1);
+  return mocks.assertClassroomAccess.mock.calls[0][0];
+};
+
+// The first import of a route module transforms its whole tree, which under a
+// full parallel run can take longer than one test's timeout. Load them all up
+// front, with a budget of their own, so each test only runs its loader.
+beforeAll(async () => {
+  await Promise.all(
+    [
+      'assistant.$class_.dashboard',
+      'assistant.$class_.grading',
+      'assistant.$class_.regrade-requests',
+      'assistant.$class_.repos',
+      'teacher',
+      'admin.$class.pages.$pageId',
+      'student.$class.modules',
+    ].map(route => import(`../${route}/route.tsx`))
+  );
+}, 60_000);
 
 beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();

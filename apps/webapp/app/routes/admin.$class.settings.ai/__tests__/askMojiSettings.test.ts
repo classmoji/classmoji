@@ -221,9 +221,18 @@ describe('saveAskMojiInstructions', () => {
 
 describe('every AI settings save is audited', () => {
   it.each([
-    [{ _action: 'saveQuizSettings', quizzes_enabled: true }, ['quizzes_enabled']],
-    [{ _action: 'saveAskMojiSettings', syllabus_bot_enabled: false }, ['syllabus_bot_enabled']],
     [
+      'saveQuizSettings',
+      { _action: 'saveQuizSettings', quizzes_enabled: true },
+      ['quizzes_enabled'],
+    ],
+    [
+      'saveAskMojiSettings',
+      { _action: 'saveAskMojiSettings', syllabus_bot_enabled: false },
+      ['syllabus_bot_enabled'],
+    ],
+    [
+      'saveLLMSettings (key, model, effort)',
       {
         _action: 'saveLLMSettings',
         anthropic_api_key: 'sk-ant-new-secret',
@@ -232,14 +241,17 @@ describe('every AI settings save is audited', () => {
       },
       ['llm_model', 'syllabus_bot_effort', 'anthropic_api_key'],
     ],
-  ])('%o writes one row naming its fields, never folded into the last', async (body, fields) => {
-    await post(body);
-    const row = auditRow() as ReturnType<typeof auditRow> & { dedupe?: boolean };
-    expect(row.metadata).toEqual({ tool: AI_SETTINGS_AUDIT_TOOL, fields });
-    expect(row.dedupe).toBe(false);
-    expect(row.action).toBe('UPDATE');
-    expect(JSON.stringify(row)).not.toContain('sk-ant-new-secret');
-  });
+  ])(
+    '%s writes one row naming its fields, never folded into the last',
+    async (_label, body, fields) => {
+      await post(body);
+      const row = auditRow() as ReturnType<typeof auditRow> & { dedupe?: boolean };
+      expect(row.metadata).toEqual({ tool: AI_SETTINGS_AUDIT_TOOL, fields });
+      expect(row.dedupe).toBe(false);
+      expect(row.action).toBe('UPDATE');
+      expect(JSON.stringify(row)).not.toContain('sk-ant-new-secret');
+    }
+  );
 
   it('audits Clear all AI settings with every field it cleared', async () => {
     await post({ _action: 'clearLLMSettings' });
@@ -257,9 +269,10 @@ describe('every AI settings save is audited', () => {
   });
 
   it.each([
-    [{ _action: 'saveLLMSettings' }],
-    [{ _action: 'saveLLMSettings', anthropic_api_key: '   ' }],
+    ['saveLLMSettings with no fields', { _action: 'saveLLMSettings' }],
+    ['saveLLMSettings with a blank key', { _action: 'saveLLMSettings', anthropic_api_key: '   ' }],
     [
+      'saveLLMSettings with an empty key and fields it ignores',
       {
         _action: 'saveLLMSettings',
         anthropic_api_key: '',
@@ -267,7 +280,7 @@ describe('every AI settings save is audited', () => {
         llm_max_tokens: 9,
       },
     ],
-  ])('%o changes nothing, so it neither writes nor audits', async body => {
+  ])('%s changes nothing, so it neither writes nor audits', async (_label, body) => {
     const result = await post(body);
     expect(result.success).toBe('AI settings saved');
     expect(mocks.updateSettings).not.toHaveBeenCalled();

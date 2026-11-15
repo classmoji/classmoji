@@ -3,21 +3,17 @@
  *
  * The page check list item: BlockNote's, plus `personal` (no default), through
  * every conversion the server does, and through Enter in a real editor (a new
- * line of a student check list stays personal).
+ * line of a student check list stays personal). The server render is in
+ * checkListItem.server.test.ts (node environment).
  */
-import {
-  BlockNoteEditor,
-  BlockNoteSchema,
-  createCheckListItemBlockSpec,
-  defaultBlockSpecs,
-} from '@blocknote/core';
+import { BlockNoteEditor, createCheckListItemBlockSpec } from '@blocknote/core';
 import { TextSelection } from 'prosemirror-state';
 import { afterEach, describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 
 import { serializePageContent } from '../content.ts';
 import { createPageCheckListItemBlockSpec, createPageSchema } from '../schema.ts';
-import { getServerEditor, pageContentToYDoc, yDocToPageContent } from '../server.ts';
+import { pageContentToYDoc, yDocToPageContent } from '../server.ts';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Editor = BlockNoteEditor<any, any, any>;
@@ -73,25 +69,6 @@ describe('checkListItem.personal', () => {
   it('keeps `checked` (the author’s) next to `personal`', () => {
     const [on] = yjsTrip([item('on', 'a', { personal: true, checked: true })]);
     expect(on.props).toMatchObject({ checked: true, personal: true });
-  });
-
-  it('renders data-personal only when set, and BlockNote’s markup otherwise', async () => {
-    const page = getServerEditor();
-    const html = await page.blocksToFullHTML([
-      item('a', 'A', { personal: true }),
-      item('b', 'B', { checked: true }),
-    ] as never);
-    expect(html.match(/data-personal="true"/g)).toHaveLength(1);
-    expect(html).not.toContain('data-personal="false"');
-
-    // A document without the prop renders exactly as BlockNote's own block.
-    const plain = BlockNoteEditor.create({
-      schema: BlockNoteSchema.create({ blockSpecs: defaultBlockSpecs }),
-    });
-    const doc = [item('b', 'B', { checked: true }), item('c', 'C')];
-    expect(await page.blocksToFullHTML(doc as never)).toBe(plain.blocksToFullHTML(doc as never));
-    expect(await page.blocksToHTMLLossy(doc as never)).toBe(plain.blocksToHTMLLossy(doc as never));
-    plain._tiptapEditor.destroy();
   });
 
   it('keeps BlockNote’s shortcuts: one extension, its input rules and Mod-Shift-9', () => {
