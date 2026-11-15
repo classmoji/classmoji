@@ -58,7 +58,7 @@
  */
 
 import getPrisma from '@classmoji/database';
-import { PrismaClient } from '@prisma/client';
+import { createPgPrismaClient } from '@classmoji/database/pg-client';
 import { MDX_EXTRACT_VERSION } from '../content/extract/mdx.ts';
 import type { ExtractedMdx } from '../content/extract/mdx.ts';
 import {
@@ -589,12 +589,50 @@ interface DocsLock {
   release(): Promise<void>;
 }
 
+/**
+ * The URL the lock's session uses: the direct endpoint. DATABASE_URL stands in
+ * only when it is direct itself (locally the two are the same database). A
+ * pooled DATABASE_URL is refused, never used silently: through a transaction
+ * pooler the lock and its unlock land on whichever server connection is free,
+ * so the "lock" would serialize nothing.
+ */
+export function docsLockUrl(env: NodeJS.ProcessEnv = process.env): string {
+  const direct = env.DATABASE_URL_UNPOOLED;
+  if (direct) return direct;
+  const fallback = env.DATABASE_URL ?? '';
+  let pooled = false;
+  try {
+    // The host name and the query only: a password may contain anything.
+    const parsed = new URL(fallback);
+    pooled =
+      /-pooler\./i.test(parsed.hostname) ||
+      parsed.searchParams.getAll('pgbouncer').at(-1)?.toLowerCase() === 'true';
+  } catch {
+    // Not a URL: the connection reports that itself.
+  }
+  if (pooled) {
+    throw new Error(
+      '[docs-index] DATABASE_URL_UNPOOLED is required: DATABASE_URL points at a connection pooler, where the run lock (a session-level advisory lock) does not hold'
+    );
+  }
+  return fallback;
+}
+
+/** The lock session's query timeout, as collab's instance lock has (10 s). */
+export const DOCS_LOCK_QUERY_TIMEOUT_MS = 10_000;
+
 async function acquireDocsLock(): Promise<DocsLock | null> {
   // A session-level advisory lock needs a real session: the direct endpoint.
   // Read at construction, so a caller that redirected the environment is
-  // followed here too.
-  const session = new PrismaClient({
-    datasourceUrl: process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL,
+  // followed here too. ONE connection, kept while idle: the lock and its
+  // unlock run on the same session, and the lock survives the minutes of
+  // fetches between them. Its lock and unlock queries give up after
+  // DOCS_LOCK_QUERY_TIMEOUT_MS, so a connection that stopped answering cannot
+  // hold the run (and the queue) forever.
+  const session = createPgPrismaClient(docsLockUrl(), {
+    max: 1,
+    keepIdle: true,
+    queryTimeoutMillis: DOCS_LOCK_QUERY_TIMEOUT_MS,
   });
   try {
     const rows = await session.$queryRaw<Array<{ locked: boolean }>>`
