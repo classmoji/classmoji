@@ -37,12 +37,10 @@ export default async () => {
       // `~/*` from tsconfig.json's `paths`, resolved by Vite itself.
       tsconfigPaths: true,
     },
-    // Vite 6's default conditions, stated here: the React Router plugin reads
-    // them from the repo root's Vite 5, which has none, and server.ts's Vite 6
-    // would otherwise resolve with ["development"] only (no `browser`). See
-    // apps/pages/vite.config.js. Vite 5 builds ignore `environments`.
-    // On Workers the Cloudflare plugin sets the ssr conditions (`workerd`
-    // first); a `node` condition here would leak into the Worker.
+    // Vite's default resolve conditions, stated explicitly (see
+    // apps/pages/vite.config.js). On Workers the Cloudflare plugin sets the ssr
+    // conditions (`workerd` first); a `node` condition here would leak into
+    // the Worker.
     environments: {
       client: {
         resolve: { conditions: [...defaultClientConditions] },

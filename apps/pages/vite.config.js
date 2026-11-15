@@ -56,11 +56,9 @@ export default async ({ command, mode }) => {
       // BlockNote + Mantine have CSS imports that Vite must process during SSR
       noExternal: [/^@blocknote\//, /^@mantine\//],
     },
-    // Vite 6's default conditions, stated here. The React Router plugin reads
-    // them from the `vite` it resolves, the repo root's Vite 5, which has none,
-    // and Vite 6 treats the list it gets as a replacement: the client would
-    // lose `browser`, `@sentry/react-router` would not resolve, and no page
-    // would hydrate under server.ts. Vite merges these with the plugin's.
+    // Vite's default resolve conditions, stated explicitly so the client keeps
+    // `browser` (`@sentry/react-router` needs it). Vite merges these with the
+    // React Router plugin's.
     environments: {
       client: { resolve: { conditions: [...defaultClientConditions] } },
       ssr: { resolve: { conditions: [...defaultServerConditions] } },
