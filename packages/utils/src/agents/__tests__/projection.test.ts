@@ -2,10 +2,12 @@ import { readUIMessageStream, type UIMessage, type UIMessageChunk } from 'ai';
 import { describe, expect, it } from 'vitest';
 import { quizStaffVisibility, quizVisibility, type QuizUIMessage } from '../../quizAgent/index.ts';
 import {
+  TOOL_ERROR_TEXT,
   createChunkProjector,
   projectMessage,
   projectTranscript,
   toolVisibility,
+  type Registry,
 } from '../projection.ts';
 
 type Chunk = UIMessageChunk<any, any>;
@@ -78,8 +80,8 @@ const expectNoAnswer = (value: unknown) => {
   }
 };
 
-const project = (chunks: Chunk[]) => {
-  const p = createChunkProjector<Chunk>(quizVisibility);
+const project = (chunks: Chunk[], reg: Registry = quizVisibility) => {
+  const p = createChunkProjector<Chunk>(reg);
   return chunks.map(c => p(c)).filter((c): c is Chunk => c !== null);
 };
 
@@ -144,7 +146,52 @@ describe('createChunkProjector: every v7 chunk type', () => {
       { type: 'tool-output-error', toolCallId: 'c1', errorText: 'refused' },
       { type: 'tool-output-denied', toolCallId: 'c1' },
     ];
-    expect(project(chunks)).toEqual(chunks);
+    // Every chunk passes; a tool error's own text never does (TOOL_ERROR_TEXT).
+    expect(project(chunks)).toEqual(
+      chunks.map(c => (c.type === 'tool-output-error' ? { ...c, errorText: TOOL_ERROR_TEXT } : c))
+    );
+  });
+
+  it('never sends a viewer the text of a tool error, live or stored, staff included', () => {
+    const secret = 'AI_InvalidToolInputError: Invalid input for tool offer_next_step: SECRET';
+    for (const reg of [quizVisibility, quizStaffVisibility]) {
+      const live = project(
+        [
+          {
+            type: 'tool-input-error',
+            toolCallId: 'e1',
+            toolName: 'present_question',
+            input: {},
+            errorText: secret,
+          },
+          { type: 'tool-input-start', toolCallId: 'e2', toolName: 'offer_next_step' },
+          { type: 'tool-output-error', toolCallId: 'e2', errorText: secret },
+        ],
+        reg
+      );
+      expect(JSON.stringify(live)).not.toContain('SECRET');
+      expect(
+        live.filter(c => 'errorText' in c).map(c => (c as { errorText: string }).errorText)
+      ).toEqual([TOOL_ERROR_TEXT, TOOL_ERROR_TEXT]);
+      const stored = projectMessage(
+        {
+          id: 'a',
+          role: 'assistant',
+          parts: [
+            {
+              type: 'tool-offer_next_step',
+              toolCallId: 'e3',
+              state: 'output-error',
+              input: {},
+              errorText: secret,
+            },
+          ],
+        } as unknown as QuizUIMessage,
+        reg
+      )!;
+      expect(JSON.stringify(stored)).not.toContain('SECRET');
+      expect((stored.parts[0] as { errorText: string }).errorText).toBe(TOOL_ERROR_TEXT);
+    }
   });
 
   it.each([
@@ -200,7 +247,7 @@ describe('createChunkProjector: every v7 chunk type', () => {
       errorText: 'Invalid input',
       dynamic: true,
     };
-    expect(project([chunk])).toEqual([chunk]);
+    expect(project([chunk])).toEqual([{ ...chunk, errorText: TOOL_ERROR_TEXT }]);
   });
 
   it('re-validates a data-step and strips every field but kind, path and error', () => {
@@ -491,7 +538,7 @@ describe('hidden input keys: present_question code_quote', () => {
         toolCallId: 'c2',
         toolName: 'present_question',
         input: { question_number: 'two' },
-        errorText: 'Invalid input',
+        errorText: TOOL_ERROR_TEXT,
         dynamic: true,
       },
       {
@@ -499,7 +546,7 @@ describe('hidden input keys: present_question code_quote', () => {
         toolCallId: 'c3',
         toolName: 'present_question',
         input: undefined,
-        errorText: 'Invalid input',
+        errorText: TOOL_ERROR_TEXT,
       },
     ]);
     expectNoQuote(out);
@@ -550,7 +597,7 @@ describe('hidden input keys: present_question code_quote', () => {
         toolCallId: 'c2',
         state: 'output-error',
         input: { question_number: 'two' },
-        errorText: 'Invalid input',
+        errorText: TOOL_ERROR_TEXT,
       },
       {
         type: 'tool-present_question',
@@ -642,7 +689,7 @@ describe('hidden input keys: offer_next_step expected_answer', () => {
         toolCallId: 'o3',
         toolName: 'offer_next_step',
         input: { ...offerShown, actions: ['try_again'] },
-        errorText: 'Invalid input',
+        errorText: TOOL_ERROR_TEXT,
         dynamic: true,
       },
       {
@@ -650,7 +697,7 @@ describe('hidden input keys: offer_next_step expected_answer', () => {
         toolCallId: 'o4',
         toolName: 'offer_next_step',
         input: undefined,
-        errorText: 'Invalid input',
+        errorText: TOOL_ERROR_TEXT,
       },
     ]);
     expectNoAnswer(out);
@@ -702,7 +749,7 @@ describe('hidden input keys: offer_next_step expected_answer', () => {
         toolCallId: 'o2',
         state: 'output-error',
         input: { ...offerShown, actions: ['try_again'] },
-        errorText: 'Invalid input',
+        errorText: TOOL_ERROR_TEXT,
       },
       {
         type: 'tool-offer_next_step',
