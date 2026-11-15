@@ -7,7 +7,10 @@
  *      resource), and list_submissions' per-submission rows are IDENTICAL to the
  *      grading-queue resource's `all` rows (shared queueRow shaping).
  *   2. list_submissions filters (repository_id / assignment_id / grader_id /
- *      status) applied in-memory over the raw rows.
+ *      status) applied in-memory over the raw rows; pages by offset in one
+ *      fixed order (oldest first); rows name assignment_id / student_id and
+ *      the page's `assignments` / `students` maps hold exactly what it names,
+ *      with no avatar.
  *   3. list_teaching_team aggregation: staff only, one row per user with a
  *      `roles[]` array; STUDENT rows excluded.
  *
@@ -90,6 +93,7 @@ function seededSubmissions() {
     {
       id: 'gra-open',
       status: 'OPEN',
+      created_at: new Date('2026-01-01T00:00:00Z'),
       assignment: { id: 'a-1', title: 'HW1', grades_released: false },
       git_repo: {
         id: 'r-1',
@@ -104,6 +108,7 @@ function seededSubmissions() {
     {
       id: 'gra-closed',
       status: 'CLOSED',
+      created_at: new Date('2026-01-02T00:00:00Z'),
       assignment: { id: 'a-2', title: 'HW2', grades_released: true },
       git_repo: {
         id: 'r-2',
@@ -174,6 +179,89 @@ describe('list_submissions', () => {
     expect(payload.count).toBe(1);
     expect(payload.total_matched).toBe(2);
     expect(payload.truncated).toBe(true);
+    expect(payload.next_offset).toBe(1);
+  });
+
+  it('pages by offset, oldest first, whatever order the service returns', async () => {
+    const at = (d: number) => new Date(Date.UTC(2026, 0, d));
+    const row = (id: string, created: Date) => ({
+      id,
+      status: 'OPEN',
+      created_at: created,
+      assignment: { id: 'a-1', title: 'HW1' },
+      git_repo: { id: `r-${id}`, repository: null, student: null, team: null },
+      grades: [],
+      graders: [],
+    });
+    // Out of order, with a created_at tie broken by id.
+    mocks.findByClassroomId.mockResolvedValue([
+      row('d', at(4)),
+      row('b', at(2)),
+      row('c2', at(3)),
+      row('a', at(1)),
+      row('c1', at(3)),
+    ]);
+    const ids = async (offset?: number) => {
+      const p = parse(
+        await listSubmissionsTool.handler({ classroom: CLASSROOM, limit: 2, offset }, staffCtx())
+      );
+      return {
+        ids: p.submissions.map((s: { id: string }) => s.id),
+        next: p.next_offset,
+        truncated: p.truncated,
+        offset: p.offset,
+      };
+    };
+    expect(await ids()).toEqual({ ids: ['a', 'b'], next: 2, truncated: true, offset: 0 });
+    expect(await ids(2)).toEqual({ ids: ['c1', 'c2'], next: 4, truncated: true, offset: 2 });
+    expect(await ids(4)).toEqual({ ids: ['d'], next: null, truncated: false, offset: 4 });
+    expect(await ids(9)).toEqual({ ids: [], next: null, truncated: false, offset: 9 });
+  });
+
+  it('refuses a limit above 200 and a negative offset', () => {
+    const limit = listSubmissionsTool.inputSchema.limit as unknown as {
+      safeParse: (v: unknown) => { success: boolean };
+    };
+    const offset = listSubmissionsTool.inputSchema.offset as unknown as {
+      safeParse: (v: unknown) => { success: boolean };
+    };
+    expect(limit.safeParse(200).success).toBe(true);
+    expect(limit.safeParse(201).success).toBe(false);
+    expect(offset.safeParse(0).success).toBe(true);
+    expect(offset.safeParse(-1).success).toBe(false);
+  });
+
+  it('names assignment and student by id; the maps hold exactly what the page names', async () => {
+    const payload = parse(
+      await listSubmissionsTool.handler({ classroom: CLASSROOM, assignment_id: 'a-1' }, staffCtx())
+    );
+    const [row] = payload.submissions;
+    expect(row.assignment_id).toBe('a-1');
+    expect(row.student_id).toBe('stu-1');
+    // The details live in the maps, not on the row.
+    expect(row).not.toHaveProperty('assignment');
+    expect(row).not.toHaveProperty('student');
+    expect(row).not.toHaveProperty('repository_title');
+    expect(payload.assignments).toEqual({
+      'a-1': {
+        title: 'HW1',
+        submission_mode: 'ISSUE',
+        student_deadline: null,
+        grades_released: false,
+        repository_id: 'repo-1',
+        repository_title: 'Lab 1',
+      },
+    });
+    // No avatar, and nothing from the filtered-out row (a-2, its team).
+    expect(payload.students).toEqual({ 'stu-1': { name: 'Student One', login: 'stu1' } });
+
+    // A team submission names no student.
+    const team = parse(
+      await listSubmissionsTool.handler({ classroom: CLASSROOM, assignment_id: 'a-2' }, staffCtx())
+    );
+    expect(team.submissions[0].student_id).toBeNull();
+    expect(team.submissions[0].team).toEqual({ id: 'team-1', name: 'Team Alpha' });
+    expect(team.students).toEqual({});
   });
 
   it('reports extension hours and lateness measured from the extended deadline', async () => {
@@ -221,10 +309,35 @@ describe('list_submissions', () => {
       { org: 'test-org', slug: 'winter-2025' },
       staffCtx(),
       new URL('classmoji://x')
-    )) as { all: unknown[]; emoji_scale: unknown };
+    )) as {
+      all: unknown[];
+      emoji_scale: unknown;
+      assignments: unknown;
+      students: unknown;
+    };
     // Same queueRow shaping + same emoji-scale shaping, by construction.
     expect(tool.submissions).toEqual(resource.all);
     expect(tool.emoji_scale).toEqual(resource.emoji_scale);
+    // One page holding every row: the same maps too.
+    expect(tool.assignments).toEqual(resource.assignments);
+    expect(tool.students).toEqual(resource.students);
+  });
+
+  it('the grading-queue maps also cover rows only in assigned_to_me', async () => {
+    mocks.findByClassroomId.mockResolvedValue([]);
+    mocks.findAssignedByGrader.mockResolvedValue([{ git_repo_assignment: seededSubmissions()[0] }]);
+    const resource = (await gradingQueueResource.handler(
+      { org: 'test-org', slug: 'winter-2025' },
+      staffCtx(),
+      new URL('classmoji://x')
+    )) as {
+      assigned_to_me: Array<{ id: string }>;
+      assignments: Record<string, unknown>;
+      students: Record<string, unknown>;
+    };
+    expect(resource.assigned_to_me.map(r => r.id)).toEqual(['gra-open']);
+    expect(Object.keys(resource.assignments)).toEqual(['a-1']);
+    expect(Object.keys(resource.students)).toEqual(['stu-1']);
   });
 });
 

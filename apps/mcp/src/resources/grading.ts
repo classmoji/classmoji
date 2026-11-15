@@ -53,6 +53,10 @@ import {
  * Exported so the `list_submissions` tool (tools/reads.ts) renders the SAME
  * per-submission shape as the grading-queue resource — the two must never drift.
  *
+ * The assignment and the student are named by id only (`assignment_id`,
+ * `student_id`); their details come once per payload, in the maps `queueRefs`
+ * builds, so a class of hundreds does not repeat them on every row.
+ *
  * `extension_hours` is the net hours the student bought (never below 0), and
  * `is_late` follows the web's `is_late`: submitted after the deadline plus
  * those hours, or not submitted with that time passed; false under
@@ -73,23 +77,77 @@ export function queueRow(s: SubmissionLike, git: GitWebContext | null) {
     is_late_override: s.is_late_override ?? false,
     extension_hours: netExtensionHours(s.token_transactions),
     is_late: !s.is_late_override && isPastDeadlineIgnoringOverride(lateness),
-    assignment: s.assignment
-      ? {
-          id: s.assignment.id,
-          title: s.assignment.title,
-          submission_mode: s.assignment.submission_mode ?? 'ISSUE',
-          student_deadline: s.assignment.student_deadline ?? null,
-          grades_released: s.assignment.grades_released ?? false,
-        }
-      : null,
-    repository_title: s.git_repo?.repository?.title ?? null,
-    student: publicUser(s.git_repo?.student),
+    assignment_id: s.assignment?.id ?? null,
+    student_id: s.git_repo?.student?.id ?? null,
     team: s.git_repo?.team ? { id: s.git_repo.team.id, name: s.git_repo.team.name ?? null } : null,
     grades: gradeRefs(s.grades),
     graders: graderRefs(s.graders),
     issue_url: issueUrl(git, s),
     repo_url: repoUrl(git, s),
   };
+}
+
+/** What the queue and the submission detail say about a submission's assignment. */
+function assignmentSummary(a: NonNullable<SubmissionLike['assignment']>) {
+  return {
+    title: a.title,
+    submission_mode: a.submission_mode ?? 'ISSUE',
+    student_deadline: a.student_deadline ?? null,
+    grades_released: a.grades_released ?? false,
+  };
+}
+
+export interface QueueAssignmentRef extends ReturnType<typeof assignmentSummary> {
+  repository_id: string | null;
+  repository_title: string | null;
+}
+
+export interface QueueStudentRef {
+  name: string | null;
+  login: string | null;
+}
+
+/**
+ * The assignments and students the given rows name, keyed by id: what a
+ * `queueRow`'s `assignment_id` and `student_id` point to. Built from the rows
+ * being returned and nothing else, so a map never names anyone outside them.
+ * No avatar: the queue is read for grading, not displayed.
+ */
+export function queueRefs(
+  rows: SubmissionLike[],
+  provider: string
+): {
+  assignments: Record<string, QueueAssignmentRef>;
+  students: Record<string, QueueStudentRef>;
+} {
+  const assignments: Record<string, QueueAssignmentRef> = {};
+  const students: Record<string, QueueStudentRef> = {};
+  for (const s of rows) {
+    const a = s.assignment;
+    if (a && !(a.id in assignments)) {
+      assignments[a.id] = {
+        ...assignmentSummary(a),
+        repository_id: s.git_repo?.repository?.id ?? s.git_repo?.repository_id ?? null,
+        repository_title: s.git_repo?.repository?.title ?? null,
+      };
+    }
+    const student = publicUser(s.git_repo?.student, provider);
+    if (student && !(student.id in students)) {
+      students[student.id] = { name: student.name, login: student.login };
+    }
+  }
+  return { assignments, students };
+}
+
+/**
+ * The one order every read of the queue uses, so `list_submissions` pages by
+ * offset without skipping or repeating a row: oldest first (a submission made
+ * between two calls lands at the end), id breaking ties. The service query
+ * returns rows in no particular order.
+ */
+export function byCreation(a: SubmissionLike, b: SubmissionLike): number {
+  const at = (s: SubmissionLike) => (s.created_at ? new Date(s.created_at).getTime() : 0);
+  return at(a) - at(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 }
 
 export interface EmojiScaleRow {
@@ -106,7 +164,7 @@ export interface EmojiScaleRow {
  * Factored out of gradingQueueResource so the `list_submissions` tool builds on
  * exactly the same query + emoji-scale shaping (the tool then filters the raw
  * rows in-memory and maps them through `queueRow`). Returns RAW SubmissionLike
- * rows so callers can filter before shaping.
+ * rows, in `byCreation` order, so callers can filter before shaping.
  */
 export async function loadGradingQueueData(
   classroomId: string
@@ -126,7 +184,7 @@ export async function loadGradingQueueData(
       extra_tokens: m.extra_tokens,
       description: m.description,
     })),
-    all,
+    all: [...all].sort(byCreation),
   };
 }
 
@@ -165,7 +223,9 @@ export const gradingQueueResource: ResourceDefinition = {
   title: 'Grading queue',
   description:
     'All submissions (GitRepoAssignments) in the classroom plus the subset assigned to you as ' +
-    'grader, with grade emojis, grader assignments, and the classroom emoji scale. Each row ' +
+    'grader, with grade emojis, grader assignments, and the classroom emoji scale. Rows carry ' +
+    'assignment_id and student_id; `assignments` and `students` map those ids to titles, ' +
+    'deadlines and names, once each. Each row ' +
     'has extension_hours (hours bought with tokens, net of refunds) and is_late (past ' +
     'student_deadline plus extension_hours; false when is_late_override). is_late includes ' +
     'unsubmitted rows past that time, unlike the dashboard late count, which counts submitted ' +
@@ -188,13 +248,16 @@ export const gradingQueueResource: ResourceDefinition = {
       loadGradingQueueData(classroomId),
     ]);
 
+    const mine = assignedToMe
+      .map(g => g.git_repo_assignment)
+      .filter(Boolean)
+      .sort(byCreation);
     return {
       emoji_scale,
-      assigned_to_me: assignedToMe
-        .map(g => g.git_repo_assignment)
-        .filter(Boolean)
-        .map(s => queueRow(s, git)),
+      assigned_to_me: mine.map(s => queueRow(s, git)),
       all: all.map(s => queueRow(s, git)),
+      // Both lists are this classroom's; the maps cover every row of either.
+      ...queueRefs([...all, ...mine], orgProvider(ctx)),
     };
   },
 };
@@ -326,19 +389,23 @@ export const submissionResource: ResourceDefinition = {
     const provider = orgProvider(ctx);
     const openRequest = submission.regrade_requests?.[0] ?? null;
 
-    const row = queueRow(submission, git);
     return {
-      ...row,
-      // What the panel shows beside the title, and the late hours it shows
-      // once the work is in (they count to now before that).
-      assignment: row.assignment
+      ...queueRow(submission, git),
+      // One submission: its assignment, repository and student inline (the
+      // queue's maps are for many rows). What the panel shows beside the
+      // title, and the late hours it shows once the work is in (they count
+      // to now before that).
+      assignment: assignment
         ? {
-            ...row.assignment,
-            weight: assignment?.weight ?? null,
-            is_extra_credit: assignment?.is_extra_credit ?? false,
-            module_title: assignment?.module?.title ?? null,
+            id: assignment.id,
+            ...assignmentSummary(assignment),
+            weight: assignment.weight ?? null,
+            is_extra_credit: assignment.is_extra_credit ?? false,
+            module_title: assignment.module?.title ?? null,
           }
         : null,
+      repository_title: submission.git_repo?.repository?.title ?? null,
+      student: publicUser(submission.git_repo?.student, provider),
       num_late_hours: submission.closed_at
         ? submissionLateHours({
             closed_at: submission.closed_at,
