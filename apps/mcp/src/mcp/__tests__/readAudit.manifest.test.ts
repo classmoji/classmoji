@@ -43,6 +43,7 @@ const READS: Record<string, Kind> = {
   list_teaching_team: 'none', // the staff directory (the web staff list is not audited)
   grading_report: 'audited', // each TA's grading of students' work
   list_quizzes: 'none', // quiz configuration; class-wide counts and averages only
+  quiz_get: 'none', // one quiz's configuration and prompts; class-wide stats only
   list_quiz_attempts: 'handler', // every student's attempts on a quiz (QUIZ_DETAILS VIEW)
   get_quiz_attempt: 'handler', // one student's attempt and transcript (QUIZ_ATTEMPT VIEW)
   list_pages: 'none', // course content
@@ -88,6 +89,7 @@ const READS: Record<string, Kind> = {
   'regrade-requests': 'audited',
   'regrade-requests-mine': 'none',
   quizzes: 'none',
+  quiz: 'none',
   pages: 'none',
   modules: 'none',
   calendar: 'none',

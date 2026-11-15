@@ -77,7 +77,8 @@ vi.mock('@classmoji/services', async () => ({
   },
 }));
 
-const { calendarResource, calendarRangeResource, quizzesResource } = await import('../content.ts');
+const { calendarResource, calendarRangeResource, quizzesResource, quizResource } =
+  await import('../content.ts');
 
 const VARS = { org: 'twin-org', slug: 'winter-2025' };
 
@@ -239,6 +240,111 @@ describe('quizzes resource quiz runtime gate (no Trigger key, no quizzes)', () =
     );
     const notPro = await quizzesResource
       .handler(VARS, ownerCtx({ quizzes_enabled: true }), new URL('classmoji://x'))
+      .catch(e => e);
+    expect((notPro as ToolError).message).toBe('This feature requires a Pro subscription');
+    expect(findByClassroom).not.toHaveBeenCalled();
+  });
+});
+
+describe('staff quiz list without prompts; quiz_get with them', () => {
+  const ROWS = [
+    {
+      id: 'q1',
+      name: 'Quiz 1',
+      status: 'DRAFT',
+      weight: 2,
+      question_count: 3,
+      subject: 'React',
+      system_prompt: 'GUIDANCE '.repeat(500),
+      rubric_prompt: 'RUBRIC '.repeat(500),
+      excluded_paths: ['dist/'],
+      attemptsCount: 4,
+    },
+    {
+      id: 'q2',
+      name: 'Quiz 2',
+      status: 'PUBLISHED',
+      weight: 1,
+      question_count: 5,
+      rubric_prompt: 'R',
+    },
+  ];
+  const QUIZ_VARS = (quizId: string) => ({ ...VARS, quizId });
+
+  it('lists staff rows without either prompt, saying whether there is guidance', async () => {
+    findByClassroom.mockResolvedValue(ROWS);
+    const result = (await quizzesResource.handler(
+      VARS,
+      ownerCtx({ quizzes_enabled: true }),
+      new URL('classmoji://x')
+    )) as { quizzes: Array<Record<string, unknown>> };
+    const json = JSON.stringify(result);
+    expect(json).not.toContain('GUIDANCE');
+    expect(json).not.toContain('RUBRIC');
+    for (const row of result.quizzes) {
+      expect(row).not.toHaveProperty('system_prompt');
+      expect(row).not.toHaveProperty('rubric_prompt');
+    }
+    expect(result.quizzes.map(q => q.has_system_prompt)).toEqual([true, false]);
+    expect(result.quizzes[0]).toMatchObject({ subject: 'React', excluded_paths: ['dist/'] });
+  });
+
+  it("returns one quiz: the list's staff row plus both prompts", async () => {
+    findByClassroom.mockResolvedValue(ROWS);
+    const list = (await quizzesResource.handler(
+      VARS,
+      ownerCtx({ quizzes_enabled: true }),
+      new URL('classmoji://x')
+    )) as { quizzes: Array<Record<string, unknown>> };
+    const one = (await quizResource.handler(
+      QUIZ_VARS('q1'),
+      ownerCtx({ quizzes_enabled: true }),
+      new URL('classmoji://x')
+    )) as { quiz: Record<string, unknown> };
+    const { has_system_prompt: _flag, ...row } = list.quizzes[0];
+    expect(one.quiz).toEqual({
+      ...row,
+      system_prompt: ROWS[0].system_prompt,
+      rubric_prompt: ROWS[0].rubric_prompt,
+    });
+    // This classroom's quizzes only: the read is scoped to the authorized classroom.
+    expect(findByClassroom).toHaveBeenCalledWith('class-1', expect.anything());
+  });
+
+  it("answers not_found for a quiz that is not this classroom's", async () => {
+    findByClassroom.mockResolvedValue(ROWS);
+    const err = await quizResource
+      .handler(
+        QUIZ_VARS('quiz-of-another-class'),
+        ownerCtx({ quizzes_enabled: true }),
+        new URL('classmoji://x')
+      )
+      .catch(e => e);
+    expect(err).toBeInstanceOf(ToolError);
+    expect((err as ToolError).kind).toBe('not_found');
+  });
+
+  it('is for the teaching team only, behind the staff branch gates, before any quiz is read', async () => {
+    expect(quizResource.roles).toEqual(['OWNER', 'TEACHER', 'ASSISTANT']);
+
+    setTriggerKey(null);
+    const noRuntime = await quizResource
+      .handler(QUIZ_VARS('q1'), ownerCtx({ quizzes_enabled: true }), new URL('classmoji://x'))
+      .catch(e => e);
+    expect((noRuntime as ToolError).message).toBe('Quizzes are not available in this classroom');
+
+    const disabled = await quizResource
+      .handler(QUIZ_VARS('q1'), ownerCtx({ quizzes_enabled: false }), new URL('classmoji://x'))
+      .catch(e => e);
+    expect((disabled as ToolError).message).toBe(
+      'Quizzes are currently disabled for this classroom'
+    );
+
+    assertProTier.mockRejectedValue(
+      new Response('This feature requires a Pro subscription', { status: 403 })
+    );
+    const notPro = await quizResource
+      .handler(QUIZ_VARS('q1'), ownerCtx({ quizzes_enabled: true }), new URL('classmoji://x'))
       .catch(e => e);
     expect((notPro as ToolError).message).toBe('This feature requires a Pro subscription');
     expect(findByClassroom).not.toHaveBeenCalled();
