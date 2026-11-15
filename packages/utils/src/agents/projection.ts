@@ -223,9 +223,9 @@ type ToolPartInput = {
  */
 function projectToolPart<P extends AnyPart>(part: P, reg: Registry, toolName: string): P | null {
   if (toolVisibility(reg, toolName) !== 'shown') return null;
-  if (typeof (part as P & ToolPartInput).errorText === 'string') {
-    part = { ...part, errorText: TOOL_ERROR_TEXT };
-  }
+  // Any errorText, whatever its type, reaches a viewer only as TOOL_ERROR_TEXT
+  // (the SDK leaves the key undefined on a part that did not fail).
+  if ((part as P & ToolPartInput).errorText != null) part = { ...part, errorText: TOOL_ERROR_TEXT };
   const schema = outputSchema(reg, toolName);
   if (schema && (part as P & ToolPartInput).state === 'output-available') {
     const projected = projectOutput(schema, (part as P & ToolPartInput).output);
