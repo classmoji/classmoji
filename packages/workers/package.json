@@ -24,7 +24,7 @@
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "react-router": "^7.18.5",
-    "vite": "^6.4.5"
+    "vite": "^8.3.6"
   },
   "devDependencies": {
     "vitest": "^5.1.0"
