@@ -36,6 +36,7 @@ const serverOnlyUser = {
   acting_role: 'TEACHER',
   resolved_viewing: { kind: 'deck', id: 'd1' },
   settled: { outcome: 'final', at: '2026-10-18T00:00:00.000Z' },
+  turn_note: 'SERVER NOTICE for the message above\nNOW: Monday 9:00 AM',
 };
 
 const serverOnlyAssistant = {
