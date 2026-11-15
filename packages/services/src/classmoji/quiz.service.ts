@@ -772,6 +772,26 @@ export const findByClassroom = async (classroomId: string, membership: QuizMembe
 export const getQuizzesByOrganization = async (
   classroomId: string,
   membership: QuizMembership | null
+) => staffQuizRows(classroomId, membership);
+
+/**
+ * One quiz of a classroom as the staff list shows it (the same row, stats
+ * included), read on its own: the query is scoped to this quiz id AND this
+ * classroom, so it loads only that quiz's attempts, and an id from another
+ * classroom finds nothing. Null when the classroom has no such quiz. Same
+ * access rule as the list.
+ */
+export const findOneForStaff = async (
+  classroomId: string,
+  quizId: string,
+  membership: QuizMembership | null
+) => (await staffQuizRows(classroomId, membership, quizId))[0] ?? null;
+
+/** The staff list's rows (all of a classroom's quizzes, or the one `quizId`), after its access rule. */
+const staffQuizRows = async (
+  classroomId: string,
+  membership: QuizMembership | null,
+  quizId?: string
 ) => {
   if (!membership) {
     throw new QuizAccessError(
@@ -794,7 +814,7 @@ export const getQuizzesByOrganization = async (
   }
 
   const [quizzes, emojiScale] = await Promise.all([
-    getQuizzesWithAttempts(classroomId),
+    getQuizzesWithAttempts(classroomId, quizId),
     // What an adjusted attempt's emoji is worth.
     findScaleByClassroomId(classroomId),
   ]);
@@ -823,10 +843,10 @@ export const getQuizzesByOrganization = async (
   });
 };
 
-/** Every quiz of a classroom with its attempts, for the staff list. */
-const getQuizzesWithAttempts = (classroomId: string) =>
+/** Every quiz of a classroom (or only `quizId`, in that classroom) with its attempts, for staff. */
+const getQuizzesWithAttempts = (classroomId: string, quizId?: string) =>
   getPrisma().quiz.findMany({
-    where: { classroom_id: classroomId },
+    where: { classroom_id: classroomId, ...(quizId !== undefined ? { id: quizId } : {}) },
     include: {
       repository: true,
       // The quiz's assignment owns its module, schedule, weight and publish

@@ -42,6 +42,7 @@ import type { ToolContext } from '../../mcp/registry.ts';
 const findBySlug = vi.fn();
 const assertProTier = vi.fn();
 const findByClassroom = vi.fn();
+const findOneForStaff = vi.fn();
 const getQuizzesForStudent = vi.fn();
 const getClassroomCalendar = vi.fn();
 const quizzesVisibleOrThrow = vi.fn();
@@ -64,6 +65,7 @@ vi.mock('@classmoji/services', async () => ({
     classroom: { findBySlug: (...a: unknown[]) => findBySlug(...a) },
     quiz: {
       findByClassroom: (...a: unknown[]) => findByClassroom(...a),
+      findOneForStaff: (...a: unknown[]) => findOneForStaff(...a),
       getQuizzesForStudent: (...a: unknown[]) => getQuizzesForStudent(...a),
     },
     calendar: { getClassroomCalendar: (...a: unknown[]) => getClassroomCalendar(...a) },
@@ -130,6 +132,7 @@ beforeEach(() => {
   assertProTier.mockReset();
   assertProTier.mockResolvedValue(undefined);
   findByClassroom.mockReset();
+  findOneForStaff.mockReset();
   getQuizzesForStudent.mockReset();
   getClassroomCalendar.mockReset();
   quizzesVisibleOrThrow.mockReset();
@@ -289,13 +292,15 @@ describe('staff quiz list without prompts; quiz_get with them', () => {
     expect(result.quizzes[0]).toMatchObject({ subject: 'React', excluded_paths: ['dist/'] });
   });
 
-  it("returns one quiz: the list's staff row plus both prompts", async () => {
+  it("returns one quiz: the list's staff row plus both prompts, from a read of that quiz only", async () => {
     findByClassroom.mockResolvedValue(ROWS);
     const list = (await quizzesResource.handler(
       VARS,
       ownerCtx({ quizzes_enabled: true }),
       new URL('classmoji://x')
     )) as { quizzes: Array<Record<string, unknown>> };
+    findByClassroom.mockClear();
+    findOneForStaff.mockResolvedValue(ROWS[0]);
     const one = (await quizResource.handler(
       QUIZ_VARS('q1'),
       ownerCtx({ quizzes_enabled: true }),
@@ -307,12 +312,13 @@ describe('staff quiz list without prompts; quiz_get with them', () => {
       system_prompt: ROWS[0].system_prompt,
       rubric_prompt: ROWS[0].rubric_prompt,
     });
-    // This classroom's quizzes only: the read is scoped to the authorized classroom.
-    expect(findByClassroom).toHaveBeenCalledWith('class-1', expect.anything());
+    // One quiz, scoped to the authorized classroom; never the class-wide list read.
+    expect(findOneForStaff).toHaveBeenCalledWith('class-1', 'q1', expect.anything());
+    expect(findByClassroom).not.toHaveBeenCalled();
   });
 
   it("answers not_found for a quiz that is not this classroom's", async () => {
-    findByClassroom.mockResolvedValue(ROWS);
+    findOneForStaff.mockResolvedValue(null);
     const err = await quizResource
       .handler(
         QUIZ_VARS('quiz-of-another-class'),
@@ -347,6 +353,7 @@ describe('staff quiz list without prompts; quiz_get with them', () => {
       .handler(QUIZ_VARS('q1'), ownerCtx({ quizzes_enabled: true }), new URL('classmoji://x'))
       .catch(e => e);
     expect((notPro as ToolError).message).toBe('This feature requires a Pro subscription');
+    expect(findOneForStaff).not.toHaveBeenCalled();
     expect(findByClassroom).not.toHaveBeenCalled();
   });
 });

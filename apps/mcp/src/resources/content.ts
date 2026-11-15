@@ -785,10 +785,11 @@ export const QUIZ_DESCRIPTION =
 
 /**
  * One quiz for staff, with its prompts: the list's staff row (the same
- * placement, settings and class stats, from the same service read) plus
- * system_prompt and rubric_prompt. The same gates as the quizzes resource's
- * staff branch, in the same order. The quiz is found only among this
- * classroom's quizzes, so an id from another classroom is not found.
+ * placement, settings and class stats, built by the same service mapping)
+ * plus system_prompt and rubric_prompt. The same gates as the quizzes
+ * resource's staff branch, in the same order. The read is scoped to this quiz
+ * id and this classroom (`quiz.findOneForStaff`), so it loads only this
+ * quiz's attempts and an id from another classroom is not found.
  */
 export const quizResource: ResourceDefinition = {
   name: 'quiz',
@@ -806,11 +807,16 @@ export const quizResource: ResourceDefinition = {
     if (!ClassmojiService.entitlement.isQuizRuntimeConfigured()) {
       throw new ToolError('forbidden', 'Quizzes are not available in this classroom');
     }
-    const [quizzes, scale] = await Promise.all([
-      ClassmojiService.quiz.findByClassroom(classroomId, membership as never) as Promise<QuizRow[]>,
+    // This quiz only, scoped to the authorized classroom in the query: only its
+    // own attempts are loaded, and another classroom's id finds nothing.
+    const [quiz, scale] = await Promise.all([
+      ClassmojiService.quiz.findOneForStaff(
+        classroomId,
+        String(vars.quizId),
+        membership as never
+      ) as Promise<QuizRow | null>,
       loadQuizEmojiScale(classroomId),
     ]);
-    const quiz = quizzes.find(q => q.id === String(vars.quizId));
     if (!quiz) throw new ToolError('not_found', `Quiz '${vars.quizId}' not found`);
     return {
       quiz: {
