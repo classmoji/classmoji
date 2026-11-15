@@ -91,6 +91,12 @@ export type AskMojiUserRowMetadata = {
   acting_role?: AskMojiRole;
   resolved_viewing?: AskMojiViewingRef | null;
   settled?: AskMojiSettled;
+  /**
+   * The note the turn sent the model after this message (time, what was
+   * open), without its marker: server-only, never projected, read back only
+   * by the task (`askMojiChat.saveTurnNote`).
+   */
+  turn_note?: string;
 };
 
 /** An assistant row's stored metadata. */
