@@ -6,8 +6,8 @@
     "test": "vitest run",
     "db:deploy": "prisma migrate deploy",
     "db:generate": "prisma generate",
-    "db:reset": "prisma migrate reset --force",
-    "db:reset:noseed": "prisma migrate reset --force --skip-seed",
+    "db:reset": "prisma migrate reset --force && prisma db seed",
+    "db:reset:noseed": "prisma migrate reset --force",
     "db:seed": "node ./scripts/seed.js",
     "backfill:repo-analytics": "tsx scripts/backfillRepoAnalytics.ts",
     "db:console": "@prismatools/console@latest"
@@ -24,17 +24,14 @@
   },
   "dependencies": {
     "@classmoji/utils": "*",
-    "@prisma/adapter-pg": "6.19.3",
-    "@prisma/client": "^6.6.0",
+    "@prisma/adapter-pg": "7.10.1",
+    "@prisma/client": "7.10.1",
     "dayjs": "^1.11.13",
     "pg": "8.23.1"
   },
-  "prisma": {
-    "seed": "node ./scripts/seed.js"
-  },
   "devDependencies": {
     "@types/pg": "8.23.1",
-    "prisma": "^6.6.0",
+    "prisma": "7.10.1",
     "vitest": "^4.1.5"
   }
 }

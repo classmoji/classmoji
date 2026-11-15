@@ -163,7 +163,7 @@ const tokenResults = Object.fromEntries(
 export function createPrismaClient(adapter?: any): PrismaClient {
   const basePrisma = new PrismaClient({
     adapter: adapter ?? createPgAdapter(process.env.DATABASE_URL),
-  } as never);
+  });
 
   // Prisma's $extends type system doesn't fully support relation fields in `needs`
   // under strict mode. These computed fields work correctly at runtime.

@@ -15,9 +15,10 @@ generator workerClient {
   engineType   = "client"
 }
 
+// The connection URL is in prisma.config.ts (Prisma 7 refuses `url` here); the
+// client gets its connection from the pg driver adapter (pgClient.ts).
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 // ============================================================================

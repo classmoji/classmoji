@@ -366,5 +366,5 @@ export function createPgPrismaClient(
   url: string | undefined,
   client: PgClientOptions = {}
 ): PrismaClient {
-  return new PrismaClient({ adapter: createPgAdapter(url, client) } as never);
+  return new PrismaClient({ adapter: createPgAdapter(url, client) });
 }
