@@ -150,10 +150,10 @@ describe('the app-connection rule', () => {
 
 describe('registration rules', () => {
   it.each([
-    [{ backchannel_logout_uri: 'https://client.example/logout' }],
-    [{ backchannel_logout_session_required: true }],
-    [{ backchannel_logout_session_required: false }],
-  ])('refuse back-channel logout fields (%o)', fields => {
+    ['backchannel_logout_uri', { backchannel_logout_uri: 'https://client.example/logout' }],
+    ['backchannel_logout_session_required: true', { backchannel_logout_session_required: true }],
+    ['backchannel_logout_session_required: false', { backchannel_logout_session_required: false }],
+  ])('refuse back-channel logout fields (%s)', (_label, fields) => {
     expect(() =>
       refuseBackchannelLogout({
         path: '/oauth2/register',

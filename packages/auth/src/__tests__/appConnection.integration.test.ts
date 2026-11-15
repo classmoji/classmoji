@@ -617,9 +617,9 @@ describe.each([
   });
 
   it.each([
-    [{ backchannel_logout_uri: 'https://client.example/logout' }],
-    [{ backchannel_logout_session_required: true }],
-  ])('refuses back-channel logout (%o)', async fields => {
+    ['backchannel_logout_uri', { backchannel_logout_uri: 'https://client.example/logout' }],
+    ['backchannel_logout_session_required: true', { backchannel_logout_session_required: true }],
+  ])('refuses back-channel logout (%s)', async (_label, fields) => {
     const res = await register(fields);
     expect(res.status).toBe(400);
     expect(await res.json()).toMatchObject({

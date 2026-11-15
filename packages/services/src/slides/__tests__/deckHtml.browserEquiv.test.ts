@@ -40,10 +40,14 @@ describe('htmlEquivalentModuloBrowserSerialization — captured browser rewrites
 });
 
 describe('htmlEquivalentModuloBrowserSerialization — genuine differences still differ', () => {
-  it.each(TRUE_DIFFERENCE_CASES)('$name', ({ a, b }) => {
-    expect(equivalent(a, b)).toBe(false);
-    expect(equivalent(b, a)).toBe(false);
-  });
+  // A loop, not `it.each('$name')`: an interpolated value is cut at 40
+  // characters, and these names are the whole title.
+  for (const { name, a, b } of TRUE_DIFFERENCE_CASES) {
+    it(name, () => {
+      expect(equivalent(a, b)).toBe(false);
+      expect(equivalent(b, a)).toBe(false);
+    });
+  }
 });
 
 describe('htmlEquivalentModuloBrowserSerialization — style declaration semantics', () => {

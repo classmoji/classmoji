@@ -5,7 +5,8 @@
  * document never gains it; off, the block renders exactly as before; on, a
  * block of more than 15 lines is drawn clipped with a bar along its bottom.
  * Drives a real editor (the page schema) for the node view: the bar, the
- * editor's toggle, live line counts and the caret opening the block.
+ * editor's toggle, live line counts and the caret opening the block. The
+ * one-off server render is in collapsible.server.test.ts (node environment).
  */
 import { BlockNoteEditor, createCodeBlockSpec } from '@blocknote/core';
 import { codeBlockOptions } from '@blocknote/code-block';
@@ -25,7 +26,7 @@ import {
 } from '../codeCollapse.ts';
 import { serializePageContent } from '../content.ts';
 import { createPageSchema } from '../schema.ts';
-import { getServerEditor, pageContentToYDoc, yDocToPageContent } from '../server.ts';
+import { pageContentToYDoc, yDocToPageContent } from '../server.ts';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Editor = BlockNoteEditor<any, any, any>;
@@ -102,21 +103,6 @@ describe('codeBlock.collapsible', () => {
     expect(on.props.collapsible).toBe(true);
     expect('collapsible' in absent.props).toBe(false);
     expect(serializePageContent({ blocks: [absent] })).not.toContain('collapsible');
-  });
-
-  it('a one-off HTML render draws no bar: no surface shows it, its label must not travel', async () => {
-    const editor = getServerEditor();
-    const render = (block: unknown) => editor.blocksToFullHTML([block] as never);
-    const plain = await render(code('a', lines(40)));
-    expect(plain).not.toContain('bn-code-expand');
-    expect(plain).not.toContain('data-collapse');
-    expect(await render(code('a', lines(40), { collapsible: undefined }))).toBe(plain);
-
-    const long = await render(code('a', lines(40), { collapsible: true }));
-    expect(long).toContain('data-collapsible="true"');
-    expect(long).not.toContain('bn-code-expand');
-    expect(long).not.toContain('Show all');
-    expect(long).not.toContain('data-collapse=');
   });
 });
 
