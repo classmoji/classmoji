@@ -29,7 +29,12 @@
  * one when the server ends a session as it opens (a backend terminated during
  * startup); the adapter attaches its own listener only after the pool hands
  * the connection over, and an `'error'` with no listener ends the process.
- * The failure still reaches the query, as a rejected connect.
+ * The failure still reaches the query, as a rejected connect. And a failure
+ * while connecting (a refused, unroutable or dropped connection, a failed TLS
+ * handshake) is rethrown as `Connection failed while connecting`, the original
+ * as its `cause`: nothing was sent, which the error alone cannot show. An
+ * error the server sent (it carries a Postgres `severity`) and the connect
+ * timer's `timeout expired` keep their own shape.
  *
  * TLS: the factory decides it, unless the URL names certificate files
  * (`sslrootcert`, `sslcert`, `sslkey`), which pg reads and decides with.
@@ -92,10 +97,45 @@ export function clientWithConnectTimeout(connectTimeoutMillis: number): PgClient
       this.on('error', () => {});
     }
 
+    // A failure while connecting is tagged as such (`connectFailure`): nothing
+    // was sent, so it is safe to retry, which the error alone (a dropped
+    // socket reads the same as one dropped under a query) cannot show.
+    connect(): Promise<pg.Client>;
+    connect(callback: ((err: Error) => void) | ((err: null, c: pg.Client) => void)): void;
+    connect(
+      callback?: ((err: Error) => void) | ((err: null, c: pg.Client) => void)
+    ): Promise<pg.Client> | void {
+      if (typeof callback === 'function') {
+        // pg-pool's form: the callback is called once, by pg, with the wrapped error.
+        const done = callback as (err: Error | null, c?: pg.Client) => void;
+        super.connect(((err: Error | null, c?: pg.Client) =>
+          done(err ? (connectFailure(err) as Error) : null, c)) as (err: Error) => void);
+        return;
+      }
+      return super.connect().catch((err: unknown) => {
+        throw connectFailure(err);
+      });
+    }
   }
   return TimedClient;
 }
 
+/** The message of an error raised while a connection was being opened. */
+export const CONNECT_FAILURE_MESSAGE = 'Connection failed while connecting';
+
+/**
+ * `err` as a failure to connect: wrapped in an Error with CONNECT_FAILURE_MESSAGE
+ * and `cause: err`. Left as it is: an error the server sent (it carries a
+ * Postgres `severity`: authentication, no such database, 57P03), which the
+ * rules read by its code, and the client's own connect timer (`timeout
+ * expired`), which they already read as a connect failure.
+ */
+function connectFailure(err: unknown): unknown {
+  if (!(err instanceof Error)) return err;
+  if (typeof (err as { severity?: unknown }).severity === 'string') return err;
+  if (err.message === 'timeout expired') return err;
+  return new Error(CONNECT_FAILURE_MESSAGE, { cause: err });
+}
 
 /** The node-postgres pool options this module sets (a subset of pg's `PoolConfig`). */
 export interface PgPoolConfig {

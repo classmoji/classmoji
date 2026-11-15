@@ -3,11 +3,13 @@
  * no database.
  */
 import { createRequire } from 'node:module';
+import { createServer, type AddressInfo, type Socket } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import pg from 'pg';
 import { parse } from 'pg-connection-string';
 import {
+  CONNECT_FAILURE_MESSAGE,
   clientWithConnectTimeout,
   createPgAdapter,
   pgConfigFromUrl,
@@ -377,3 +379,105 @@ describe('pgPoolConfig', () => {
   });
 });
 
+describe('the Client tags a failure while connecting', () => {
+  /** A peer that answers the startup packet with `respond`, or never answers. */
+  async function peer(respond?: (socket: Socket) => void) {
+    const sockets: Socket[] = [];
+    const server = createServer(socket => {
+      sockets.push(socket);
+      socket.on('error', () => {});
+      if (respond) socket.once('data', () => respond(socket));
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', () => resolve()));
+    const url = `postgresql://u:p@127.0.0.1:${(server.address() as AddressInfo).port}/db`;
+    const close = () => {
+      for (const socket of sockets) socket.destroy();
+      return new Promise(resolve => server.close(resolve));
+    };
+    return { url, close };
+  }
+  /** A Postgres ErrorResponse: what a server sends to refuse a session. */
+  const errorResponse = (code: string, message: string) => {
+    const fields = Buffer.from(`SFATAL\0VFATAL\0C${code}\0M${message}\0\0`);
+    const length = Buffer.alloc(4);
+    length.writeInt32BE(fields.length + 4);
+    return Buffer.concat([Buffer.from('E'), length, fields]);
+  };
+  const clientFor = (url: string, connectTimeoutMillis = 2_000) => {
+    const Client = clientWithConnectTimeout(connectTimeoutMillis);
+    return new Client({ connectionString: url });
+  };
+
+  it.each([
+    ['closes (FIN)', (s: Socket) => s.end()],
+    ['resets (RST)', (s: Socket) => s.resetAndDestroy()],
+  ])(
+    'a peer that %s during startup: the promise form rejects with the tagged error',
+    async (_label, respond) => {
+      const { url, close } = await peer(respond);
+      try {
+        const failure = await clientFor(url)
+          .connect()
+          .catch((error: unknown) => error);
+        expect(failure).toBeInstanceOf(Error);
+        expect((failure as Error).message).toBe(CONNECT_FAILURE_MESSAGE);
+        expect((failure as Error).cause).toBeInstanceOf(Error);
+      } finally {
+        await close();
+      }
+    }
+  );
+
+  it("pg-pool's callback form: called once, with the tagged error, and no unhandled rejection", async () => {
+    const { url, close } = await peer(s => s.end());
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const calls: unknown[] = [];
+      await new Promise<void>(resolve => {
+        clientFor(url).connect((error: Error) => {
+          calls.push(error);
+          resolve();
+        });
+      });
+      await new Promise(resolve => setTimeout(resolve, 200));
+      expect(calls).toHaveLength(1);
+      expect((calls[0] as Error).message).toBe(CONNECT_FAILURE_MESSAGE);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+      await close();
+    }
+  });
+
+  it.each([
+    ['28P01', 'password authentication failed for user "u"'],
+    ['3D000', 'database "db" does not exist'],
+    ['57P03', 'the database system is starting up'],
+  ])('a server error with a severity (%s) is left as it is', async (code, message) => {
+    const { url, close } = await peer(s => s.end(errorResponse(code, message)));
+    try {
+      const failure = (await clientFor(url)
+        .connect()
+        .catch((error: unknown) => error)) as Error & { code?: string; severity?: string };
+      expect(failure.message).toBe(message);
+      expect(failure.code).toBe(code);
+      expect(failure.severity).toBe('FATAL');
+    } finally {
+      await close();
+    }
+  });
+
+  it("the client's own connect timer keeps its message (`timeout expired`)", async () => {
+    const { url, close } = await peer(); // never answers
+    try {
+      const failure = await clientFor(url, 300)
+        .connect()
+        .catch((error: unknown) => error);
+      expect((failure as Error).message).toBe('timeout expired');
+    } finally {
+      await close();
+    }
+  });
+});

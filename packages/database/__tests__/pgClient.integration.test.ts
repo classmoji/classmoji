@@ -254,7 +254,7 @@ describe('createPgPrismaClient: a connect that never answers', () => {
     }
   };
 
-  it('gives up after connect_timeout, not the longer pool wait', async () => {
+  it('gives up after connect_timeout, not the longer pool wait, with an error both rules recognise', async () => {
     const port = await blackhole();
     const { failure, elapsed } = await timed(
       `postgresql://u:p@127.0.0.1:${port}/db?connect_timeout=1&pool_timeout=10`
@@ -263,6 +263,8 @@ describe('createPgPrismaClient: a connect that never answers', () => {
     expect((failure as Error).message).toBe('timeout expired');
     expect(elapsed).toBeGreaterThanOrEqual(800);
     expect(elapsed).toBeLessThan(3_000);
+    expect(isTransientDatabaseError(failure), 'retry rule').toBe(true);
+    expect(isTokenStoreUnavailable(failure), 'MCP 503 rule').toBe(true);
   }, 15_000);
 
   it('with no parameters a connect gives up after 5 s (the default), not 10', async () => {
