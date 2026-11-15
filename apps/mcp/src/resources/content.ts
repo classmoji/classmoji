@@ -755,7 +755,7 @@ export const quizzesResource: ResourceDefinition = {
       quizzes: quizzes.map(q => ({
         ...base(q),
         ...staffQuizFields(q, scale),
-        has_system_prompt: Boolean(q.system_prompt),
+        has_system_prompt: Boolean(q.system_prompt?.trim()),
       })),
     };
   },
