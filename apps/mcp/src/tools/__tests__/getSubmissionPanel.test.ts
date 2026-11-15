@@ -11,6 +11,17 @@ import type { ToolContext } from '../../mcp/registry.ts';
 vi.mock('@classmoji/database', async () =>
   (await import('../../__tests__/prismaSchemaStub.ts')).databaseModuleMock()
 );
+// `@classmoji/auth/server` imports these services from their own subpaths:
+// each is the same member of the ClassmojiService fake below. Audit,
+// subscription and Gitlab instance stay real: services this test runs import
+// those files themselves, as they did before.
+const { fromServicesFake } = await vi.hoisted(
+  () => import('../../__tests__/support/servicesFake.ts')
+);
+vi.mock('@classmoji/services/auth-email', () => fromServicesFake('authEmail'));
+vi.mock('@classmoji/services/classroom', () => fromServicesFake('classroom'));
+vi.mock('@classmoji/services/classroom-membership', () => fromServicesFake('classroomMembership'));
+vi.mock('@classmoji/services/github-user-token', () => fromServicesFake('githubUserToken'));
 vi.mock('@classmoji/services', () => ({
   AssignGradersError: class extends Error {},
   HelperService: {},

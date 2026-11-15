@@ -1,4 +1,4 @@
-import { ClassmojiService } from '@classmoji/services';
+import * as gitlabInstanceService from '@classmoji/services/gitlab-instance';
 import { requirePlatformAdmin } from '~/utils/db.server';
 import type { ActionFunctionArgs, LoaderFunctionArgs } from 'react-router';
 
@@ -45,9 +45,9 @@ function emailMatchesHost(email: string | null, host: string): boolean {
 
 export async function loadGitLabInstances({ request }: LoaderFunctionArgs) {
   await requirePlatformAdmin(request);
-  const rows = await ClassmojiService.gitlabInstance.list();
+  const rows = await gitlabInstanceService.list();
   return {
-    defaultHost: ClassmojiService.gitlabInstance.defaultHost(),
+    defaultHost: gitlabInstanceService.defaultHost(),
     rows: rows.map((r): InstanceRow => ({
       id: r.id,
       host: r.host,
@@ -78,7 +78,7 @@ export async function gitLabInstancesAction({ request }: ActionFunctionArgs) {
   const intent = String(form.get('intent') ?? '');
   const instanceId = String(form.get('instanceId') ?? '');
   if (!instanceId) return { error: 'No instance named.' };
-  const svc = ClassmojiService.gitlabInstance;
+  const svc = gitlabInstanceService;
 
   try {
     if (intent === 'approve') {
