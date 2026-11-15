@@ -1,8 +1,8 @@
 // Dev-only: organize an imported classroom's repositories into a module, for the
 // import doc's "modules" screenshot. Idempotent.
-import { PrismaClient } from '@prisma/client';
+import { createPgPrismaClient } from '../pgClient.ts';
 
-const prisma = new PrismaClient();
+const prisma = createPgPrismaClient(process.env.DATABASE_URL);
 const SLUG = 'cs-106a-programming-methodology-fall-2025';
 
 async function main() {

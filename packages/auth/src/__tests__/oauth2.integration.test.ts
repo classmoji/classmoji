@@ -44,7 +44,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { PrismaClient } from '@prisma/client';
+import type { PrismaClient } from '@prisma/client';
+import { createPgPrismaClient } from '@classmoji/database/pg-client';
 import { serializeSignedCookie } from 'better-call';
 
 const DATABASE_URL = process.env.OAUTH_IT_DATABASE_URL;
@@ -214,7 +215,7 @@ describe.skipIf(!DATABASE_URL)('the oauth2 migration (real Postgres)', () => {
 
   beforeAll(async () => {
     assertThrowawayDatabase(DATABASE_URL!);
-    db = new PrismaClient({ datasourceUrl: DATABASE_URL });
+    db = createPgPrismaClient(DATABASE_URL!);
     await db.$executeRawUnsafe('DROP SCHEMA IF EXISTS public CASCADE');
     await db.$executeRawUnsafe('CREATE SCHEMA public');
 
@@ -537,7 +538,7 @@ describe.skipIf(!DATABASE_URL)('the authorization server (real Postgres)', () =>
   }
 
   beforeAll(async () => {
-    db = new PrismaClient({ datasourceUrl: DATABASE_URL });
+    db = createPgPrismaClient(DATABASE_URL!);
     server = await import('../server.ts');
     await db.session.create({
       data: {
@@ -1673,7 +1674,7 @@ describe.skipIf(!DATABASE_URL)('signing in to resume an app connection (real Pos
   const GITLAB = 'https://gitlab.example.edu';
 
   beforeAll(async () => {
-    db = new PrismaClient({ datasourceUrl: DATABASE_URL });
+    db = createPgPrismaClient(DATABASE_URL!);
     server = await import('../server.ts');
     const { ClassmojiService } = await import('@classmoji/services');
     gitlabInstance = ClassmojiService.gitlabInstance as unknown as typeof gitlabInstance;
@@ -1970,7 +1971,7 @@ describe.skipIf(!DATABASE_URL)(
     const BASE = 'http://localhost:3000/api/auth';
 
     beforeAll(async () => {
-      db = new PrismaClient({ datasourceUrl: DATABASE_URL });
+      db = createPgPrismaClient(DATABASE_URL!);
       server = await import('../server.ts');
     }, 120_000);
 

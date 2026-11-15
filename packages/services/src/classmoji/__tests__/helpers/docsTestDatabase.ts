@@ -35,7 +35,7 @@
 import { execFileSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PrismaClient } from '@prisma/client';
+import { createPgPrismaClient } from '@classmoji/database/pg-client';
 
 /** The deliberate opt-in. Without it, the docs DB suites do not run at all. */
 export const DOCS_DB_OPT_IN = 'DOCS_INDEX_INTEGRATION';
@@ -90,7 +90,7 @@ export async function createDocsTestDatabase(): Promise<DisposableDatabase> {
   if (sourceName === name)
     throw new Error('[docsTestDatabase] refusing to reuse the source database');
 
-  const admin = new PrismaClient({ datasourceUrl: adminUrl });
+  const admin = createPgPrismaClient(adminUrl);
   try {
     // `CREATE DATABASE` cannot run inside a transaction; `$executeRawUnsafe`
     // issues it directly. The name is built above and shape-checked, never
@@ -131,7 +131,7 @@ export async function createDocsTestDatabase(): Promise<DisposableDatabase> {
 }
 
 async function dropDatabase(adminUrl: string, name: string): Promise<void> {
-  const admin = new PrismaClient({ datasourceUrl: adminUrl });
+  const admin = createPgPrismaClient(adminUrl);
   try {
     // WITH (FORCE) terminates any connection the suite left open, so a leaked
     // client cannot leave a database behind on every run.

@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client';
+import { createPgPrismaClient } from '../pgClient.ts';
 import { upsertGithubUser } from './seed-fixtures.js';
 
 /**
@@ -14,7 +14,7 @@ import { upsertGithubUser } from './seed-fixtures.js';
  *
  * Run:  npx dotenv -e .env -- node packages/database/scripts/seed-test-user.js
  */
-const prisma = new PrismaClient();
+const prisma = createPgPrismaClient(process.env.DATABASE_URL);
 
 const TEST_CLASSROOM = process.env.TEST_CLASSROOM || 'classmoji-dev-winter-2025';
 

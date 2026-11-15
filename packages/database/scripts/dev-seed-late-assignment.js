@@ -1,9 +1,9 @@
 // Dev-only: add one late, OPEN assignment to the hello-world repo so the student
 // token-extension flow can be exercised. Deadline is 5h in the past, 5 tokens/hour.
 // Idempotent. Re-run `npm run db:seed` to reset base data.
-import { PrismaClient } from '@prisma/client';
+import { createPgPrismaClient } from '../pgClient.ts';
 
-const prisma = new PrismaClient();
+const prisma = createPgPrismaClient(process.env.DATABASE_URL);
 const SLUG = 'classmoji-dev-winter-2025';
 
 async function main() {

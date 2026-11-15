@@ -601,8 +601,8 @@ async function main(): Promise<number> {
   const fileChecksum = createHash('sha256').update(file).digest('hex');
   const statements = migrationStatements(file.toString('utf8'));
 
-  const { PrismaClient: Client } = await import('@prisma/client');
-  const prisma: PrismaClient = new Client({ datasourceUrl: url });
+  const { createPgPrismaClient } = await import('../pgClient.ts');
+  const prisma: PrismaClient = createPgPrismaClient(url);
   try {
     const result = await prisma.$transaction(
       async tx => {

@@ -47,11 +47,14 @@ afterEach(() => {
 });
 
 describe('on Node', () => {
-  it('builds one client at import, without an adapter, and installs the process handlers', async () => {
+  it('builds one client at import, on a pg adapter, and installs the process handlers', async () => {
     const db = await import('../index.ts');
     expect(db.IS_WORKERD).toBe(false);
     expect(fake.constructed).toHaveLength(1);
-    expect(fake.constructed[0].options).toBeUndefined();
+    // Prisma 7 has no engine of its own: the Node client runs on node-postgres.
+    expect(
+      (fake.constructed[0].options as { adapter?: { adapterName?: string } })?.adapter?.adapterName
+    ).toBe('@prisma/adapter-pg');
     const client = db.getPrisma() as unknown as { base: unknown; adapterName?: string };
     expect(client.base).toBe(fake.constructed[0]);
     expect(db.getPrisma()).toBe(client);

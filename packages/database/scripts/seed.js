@@ -1,7 +1,7 @@
-import { PrismaClient } from '@prisma/client';
+import { createPgPrismaClient } from '../pgClient.ts';
 import { seedTeamWithGroupRepo, seedForeignClassroom, upsertGithubUser } from './seed-fixtures.js';
 
-const prisma = new PrismaClient();
+const prisma = createPgPrismaClient(process.env.DATABASE_URL);
 
 async function main() {
   console.log('🌱 Seeding dev database...\n');

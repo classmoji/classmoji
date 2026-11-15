@@ -17,6 +17,7 @@
     "./gitIdentity": "./gitIdentity.ts",
     "./seed-fixtures": "./scripts/seed-fixtures.js",
     "./pg-adapter": "./pgAdapter.ts",
+    "./pg-client": "./pgClient.ts",
     "./worker-client": "./generated/worker/client.ts",
     "./wait-until": "./requestContext.ts",
     "./testing/prisma-errors": "./testing/prismaErrors.ts"
@@ -32,6 +33,7 @@
     "seed": "node ./scripts/seed.js"
   },
   "devDependencies": {
+    "@types/pg": "8.23.1",
     "prisma": "^6.6.0",
     "vitest": "^4.1.5"
   }
