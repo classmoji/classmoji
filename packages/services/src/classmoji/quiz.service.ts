@@ -785,7 +785,11 @@ export const findOneForStaff = async (
   classroomId: string,
   quizId: string,
   membership: QuizMembership | null
-) => (await staffQuizRows(classroomId, membership, quizId))[0] ?? null;
+) => {
+  // No id is no quiz: never the class-wide read with its newest row.
+  if (typeof quizId !== 'string' || quizId === '') return null;
+  return (await staffQuizRows(classroomId, membership, quizId))[0] ?? null;
+};
 
 /** The staff list's rows (all of a classroom's quizzes, or the one `quizId`), after its access rule. */
 const staffQuizRows = async (

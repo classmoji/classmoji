@@ -114,6 +114,11 @@ describe.skipIf(!RUN)('quiz.findOneForStaff (integration)', () => {
   it("finds nothing for another classroom's quiz, or an id that is no quiz", async () => {
     expect(await quizService.findOneForStaff(classX, quizInY, owner(classX))).toBeNull();
     expect(await quizService.findOneForStaff(classX, randomUUID(), owner(classX))).toBeNull();
+    // No id is no quiz, never the classroom's newest one.
+    expect(await quizService.findOneForStaff(classX, '', owner(classX))).toBeNull();
+    expect(
+      await quizService.findOneForStaff(classX, undefined as unknown as string, owner(classX))
+    ).toBeNull();
   });
 
   it("keeps the staff list's access rule", async () => {
