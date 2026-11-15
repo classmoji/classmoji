@@ -22,11 +22,18 @@
  * declared data part is re-validated and passes with its schema's fields only.
  * Reasoning, sources, files, custom parts and approvals never pass.
  *
+ * A shown tool's error passes as `TOOL_ERROR_TEXT` only, live and stored: the
+ * task stores the error the model read (it may quote the model's input or a
+ * refusal written for the model), and no viewer gets that text.
+ *
  * No server imports: loaders and the task run the same code.
  */
 import type { UIMessage, UIMessageChunk } from 'ai';
 
 export type ToolVisibility = 'shown' | 'label' | 'hidden';
+
+/** The only tool error text a viewer receives (the AI SDK's own masked text). */
+export const TOOL_ERROR_TEXT = 'An error occurred.';
 
 /** The part of a Zod schema the projection uses (object schemas strip unknown keys). */
 export type DataPartSchema = {
@@ -158,8 +165,10 @@ export function createChunkProjector<CHUNK extends UIMessageChunk<any, any> = UI
       const schema = outputSchema(reg, c.toolName);
       if (schema && !callOutputSchema.has(c.toolCallId)) callOutputSchema.set(c.toolCallId, schema);
       if (effective !== 'shown') return null;
-      if (keys.length === 0 || type === 'tool-input-start') return chunk;
-      return { ...c, input: withoutKeys(c.input, keys) } as unknown as CHUNK;
+      const masked =
+        type === 'tool-input-error' ? ({ ...chunk, errorText: TOOL_ERROR_TEXT } as CHUNK) : chunk;
+      if (keys.length === 0 || type === 'tool-input-start') return masked;
+      return { ...(masked as object), input: withoutKeys(c.input, keys) } as unknown as CHUNK;
     }
 
     if (ID_ONLY_TOOL_CHUNKS.has(type)) {
@@ -175,6 +184,7 @@ export function createChunkProjector<CHUNK extends UIMessageChunk<any, any> = UI
         if (!projected) return null;
         return { ...chunk, output: projected.output } as CHUNK;
       }
+      if (type === 'tool-output-error') return { ...chunk, errorText: TOOL_ERROR_TEXT } as CHUNK;
       return chunk;
     }
 
@@ -198,7 +208,13 @@ export function createChunkProjector<CHUNK extends UIMessageChunk<any, any> = UI
 
 type AnyPart = { type: string; toolName?: string; data?: unknown };
 
-type ToolPartInput = { state?: unknown; input?: unknown; rawInput?: unknown; output?: unknown };
+type ToolPartInput = {
+  state?: unknown;
+  input?: unknown;
+  rawInput?: unknown;
+  output?: unknown;
+  errorText?: unknown;
+};
 
 /**
  * A shown tool's stored part as the live stream built it: hidden input keys
@@ -207,6 +223,9 @@ type ToolPartInput = { state?: unknown; input?: unknown; rawInput?: unknown; out
  */
 function projectToolPart<P extends AnyPart>(part: P, reg: Registry, toolName: string): P | null {
   if (toolVisibility(reg, toolName) !== 'shown') return null;
+  if (typeof (part as P & ToolPartInput).errorText === 'string') {
+    part = { ...part, errorText: TOOL_ERROR_TEXT };
+  }
   const schema = outputSchema(reg, toolName);
   if (schema && (part as P & ToolPartInput).state === 'output-available') {
     const projected = projectOutput(schema, (part as P & ToolPartInput).output);
