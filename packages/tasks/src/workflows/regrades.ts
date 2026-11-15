@@ -81,8 +81,9 @@ interface UpdateRegradeRequestTaskPayload {
   impersonated_by?: string | null;
 }
 
-interface TaskPayloadWrapper<TPayload> {
+interface TaskPayloadWrapper<TPayload, TOutput = unknown> {
   payload: TPayload;
+  output?: TOutput;
 }
 
 export const requestRegradeTask = task({
@@ -102,7 +103,13 @@ export const requestRegradeTask = task({
     });
   },
 
-  onSuccess: async ({ payload }: TaskPayloadWrapper<RequestRegradeTaskPayload>) => {
+  onSuccess: async ({
+    payload,
+    output,
+  }: TaskPayloadWrapper<RequestRegradeTaskPayload, { created?: boolean }>) => {
+    // The submission already had an open request (a double submit or a
+    // retry): nothing new was filed, so the graders hear nothing new.
+    if (output?.created === false) return;
     const { classroom_id, gitRepoAssignment, previous_grade, student_comment, student_id } =
       payload;
 

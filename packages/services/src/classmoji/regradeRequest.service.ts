@@ -61,6 +61,15 @@ import {
   type QuizGradeActor,
 } from './quizGradeAdjust.service.ts';
 
+/**
+ * A submission's regrade request: at most ONE open (IN_REVIEW) request per
+ * submission. Under a per-submission advisory lock, an open request already
+ * there is returned as it is (`created: false`: no new row, no grader
+ * notification); otherwise one is created (`created: true`). Every surface
+ * reaches this through the `request_regrade` task (the web form and MCP
+ * regrade_create), so a double submit, a client retry after a slow run, or two
+ * tabs can no longer leave two open requests on one submission.
+ */
 export const create = async ({
   classroom_id,
   git_repo_assignment_id,
@@ -73,16 +82,25 @@ export const create = async ({
   student_id: string;
   student_comment?: string | null;
   previous_grade?: string[];
-}): Promise<RegradeRequest> => {
-  const request = await getPrisma().regradeRequest.create({
-    data: {
-      classroom_id,
-      git_repo_assignment_id,
-      student_id,
-      student_comment,
-      previous_grade,
-    },
+}): Promise<RegradeRequest & { created: boolean }> => {
+  const { request, created } = await getPrisma().$transaction(async tx => {
+    // Serialize every create for this submission, so the check below and the
+    // insert cannot interleave with another one (no schema change needed).
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended('regrade:' || ${git_repo_assignment_id}::text, 0))`;
+    const open = await findOpenByAssignmentId(git_repo_assignment_id, tx);
+    if (open) return { request: open, created: false };
+    const made = await tx.regradeRequest.create({
+      data: {
+        classroom_id,
+        git_repo_assignment_id,
+        student_id,
+        student_comment,
+        previous_grade,
+      },
+    });
+    return { request: made, created: true };
   });
+  if (!created) return { ...request, created };
 
   await notificationService.runSafely('regrade request notification', async () => {
     const graders = await getPrisma().gitRepoAssignmentGrader.findMany({
@@ -109,7 +127,7 @@ export const create = async ({
     }
   });
 
-  return request;
+  return { ...request, created };
 };
 
 export const findMany = async (query: Prisma.RegradeRequestWhereInput) => {

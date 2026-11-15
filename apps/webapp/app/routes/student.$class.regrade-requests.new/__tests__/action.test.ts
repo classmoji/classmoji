@@ -8,6 +8,7 @@ const triggerMock = vi.fn();
 const waitMock = vi.fn();
 const requireStudentAccessMock = vi.fn();
 const findByIdMock = vi.fn();
+const findOpenMock = vi.fn();
 
 vi.mock('@trigger.dev/sdk', () => ({
   tasks: { trigger: (...a: unknown[]) => triggerMock(...a) },
@@ -22,6 +23,7 @@ vi.mock('~/utils/helpers', () => ({
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     gitRepoAssignment: { findById: (...a: unknown[]) => findByIdMock(...a) },
+    regradeRequest: { findOpenByAssignmentId: (...a: unknown[]) => findOpenMock(...a) },
     helper: { findAllAssignmentsForStudent: vi.fn() },
   },
 }));
@@ -63,8 +65,34 @@ describe('regrade-requests.new action — request_regrade payload contract', () 
       membership: { role: 'STUDENT' },
     });
     findByIdMock.mockResolvedValue(submission());
+    findOpenMock.mockResolvedValue(null);
     triggerMock.mockResolvedValue({ id: 'run-1' });
     waitMock.mockResolvedValue({ status: 'COMPLETED' });
+  });
+
+  it('files nothing when the submission already has an open request', async () => {
+    findOpenMock.mockResolvedValue({ id: 'rr-open', status: 'IN_REVIEW' });
+    const result = await action(
+      actionArgs({ git_repo_assignment_id: 'gra-1', student_comment: 'again' })
+    );
+    expect(findOpenMock).toHaveBeenCalledWith('gra-1');
+    expect(triggerMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      action: 'REQUEST_REGRADE',
+      error: 'This submission already has an open regrade request.',
+    });
+  });
+
+  it('says so when another submit filed the open request first (created: false)', async () => {
+    waitMock.mockResolvedValue({ status: 'COMPLETED', output: { id: 'rr-raced', created: false } });
+    const result = await action(
+      actionArgs({ git_repo_assignment_id: 'gra-1', student_comment: 'twice' })
+    );
+    expect(triggerMock).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({
+      action: 'REQUEST_REGRADE',
+      error: 'This submission already has an open regrade request.',
+    });
   });
 
   it("sends the task's `gitRepoAssignment` key (not the stale repositoryAssignment)", async () => {

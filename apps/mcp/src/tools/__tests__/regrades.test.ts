@@ -139,6 +139,24 @@ describe('regrade_create idempotency (F1)', () => {
     expect(payload.created).toBe(true);
   });
 
+  it('reports the open request, not a new one, when another submit won the race', async () => {
+    // The check above saw nothing, but the service's lock found the request
+    // another call filed meanwhile: the run returns it with created: false.
+    mocks.findOpenByAssignmentId.mockResolvedValue(null);
+    mocks.trigger.mockResolvedValue({ id: 'run-2' });
+    mocks.retrieve.mockResolvedValue({
+      status: 'COMPLETED',
+      output: { id: 'rr-raced', status: 'IN_REVIEW', previous_grade: ['🎯'], created: false },
+    });
+
+    const payload = parse(await regradeCreateTool.handler(ARGS, CTX));
+
+    expect(payload.created).toBe(false);
+    expect(payload.regrade_request.id).toBe('rr-raced');
+    // Nothing was created by this call, so nothing is audited as created.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
   it('is a destructive, closed-world write: it opens a permanent record', () => {
     expect(toolAnnotations(regradeCreateTool as never)).toEqual({
       readOnlyHint: false,

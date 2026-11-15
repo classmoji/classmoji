@@ -20,6 +20,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  create: vi.fn(),
+  userFindById: vi.fn(),
   findMany: vi.fn(),
   resolveRepo: vi.fn(),
   classroomFindById: vi.fn(),
@@ -39,10 +41,12 @@ vi.mock('@classmoji/services', async () => ({
   ...(await vi.importActual<typeof import('@classmoji/services')>('@classmoji/services')),
   ClassmojiService: {
     regradeRequest: {
+      create: (...a: unknown[]) => mocks.create(...a),
       findMany: (...a: unknown[]) => mocks.findMany(...a),
       resolveRepo: (...a: unknown[]) => mocks.resolveRepo(...a),
     },
     classroom: { findById: (...a: unknown[]) => mocks.classroomFindById(...a) },
+    user: { findById: (...a: unknown[]) => mocks.userFindById(...a) },
     emojiMapping: {
       findScaleByClassroomId: (...a: unknown[]) => mocks.findScaleByClassroomId(...a),
     },
@@ -54,8 +58,12 @@ vi.mock('../email.ts', () => ({
   sendBatchEmailTask: { trigger: (...a: unknown[]) => mocks.sendBatch(...a) },
 }));
 
-const { quizRegradeResolvedTask, updateRegradeRequestTask, renderQuizRegradeResolvedEmail } =
-  await import('../regrades.ts');
+const {
+  quizRegradeResolvedTask,
+  updateRegradeRequestTask,
+  renderQuizRegradeResolvedEmail,
+  requestRegradeTask,
+} = await import('../regrades.ts');
 
 type Runnable<P> = { run: (payload: P) => Promise<unknown> };
 const quizTask = quizRegradeResolvedTask as unknown as Runnable<{ request_id: string }>;
@@ -179,6 +187,56 @@ describe('quiz_regrade_resolved', () => {
       'Your regrade request for Quiz 1 in your classroom has been reviewed.\n\nScore adjusted 60 → 90'
     );
     expect(template.variables.SUBJECT).toBe('[Classmoji] - Regrade request resolved');
+  });
+});
+
+describe('request_regrade', () => {
+  const requestTask = requestRegradeTask as unknown as Runnable<unknown> & {
+    onSuccess: (args: { payload: unknown; output?: unknown }) => Promise<void>;
+  };
+  const payload = {
+    classroom_id: 'class-1',
+    gitRepoAssignment: {
+      id: 'gra-1',
+      provider_issue_number: 3,
+      git_repo: { name: 'lab-ada' },
+      assignment: { title: 'Lab 1' },
+      graders: [{ grader: { email: 'ta@school.edu' } }],
+    },
+    student_id: 'stu-1',
+    student_comment: 'please',
+    previous_grade: ['eyes'],
+  };
+
+  it('files the request through the service and returns what it says, created flag included', async () => {
+    mocks.create.mockResolvedValue({ id: 'rr-9', status: 'IN_REVIEW', created: false });
+    await expect(requestTask.run(payload)).resolves.toEqual({
+      id: 'rr-9',
+      status: 'IN_REVIEW',
+      created: false,
+    });
+    expect(mocks.create).toHaveBeenCalledWith({
+      classroom_id: 'class-1',
+      git_repo_assignment_id: 'gra-1',
+      student_id: 'stu-1',
+      student_comment: 'please',
+      previous_grade: ['eyes'],
+    });
+  });
+
+  it('emails nobody when the submission already had an open request', async () => {
+    await requestTask.onSuccess({ payload, output: { id: 'rr-9', created: false } });
+    expect(mocks.classroomFindById).not.toHaveBeenCalled();
+    expect(mocks.sendBatch).not.toHaveBeenCalled();
+  });
+
+  it('goes on to email the graders for a new request', async () => {
+    // A classroom with no git organization stops before any email; the
+    // point is that a new request reaches the email path at all.
+    mocks.classroomFindById.mockResolvedValue({ id: 'class-1', git_organization: { login: null } });
+    mocks.userFindById.mockResolvedValue(null);
+    await requestTask.onSuccess({ payload, output: { id: 'rr-9', created: true } });
+    expect(mocks.classroomFindById).toHaveBeenCalledWith('class-1');
   });
 });
 
