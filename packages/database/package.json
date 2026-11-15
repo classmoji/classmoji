@@ -34,6 +34,6 @@
     "@prisma/prisma-schema-wasm": "8.1.0-1.d1b3f377ca835d73fd50954a5e22128b9ebdd6b8",
     "@types/pg": "8.23.1",
     "prisma": "7.10.1",
-    "vitest": "^4.1.5"
+    "vitest": "^5.1.0"
   }
 }
