@@ -1,6 +1,5 @@
 import { reactRouter } from '@react-router/dev/vite';
 import { defineConfig } from 'vite';
-import tsconfigPaths from 'vite-tsconfig-paths';
 import { envOnlyMacros } from 'vite-env-only';
 import devtoolsJson from 'vite-plugin-devtools-json';
 import tailwindcss from '@tailwindcss/vite';
@@ -58,6 +57,24 @@ export default async ({ command, mode }) => {
     // Load .env from monorepo root so Vite watches it for changes.
     // This triggers a dev server restart when the setup wizard writes GitHub credentials.
     envDir: '../../',
+    environments: {
+      client: {
+        build: {
+          rollupOptions: {
+            output: {
+              // Preserve function and class names for better stack traces, as
+              // `esbuild.keepNames` did before Vite 8 minified with Oxc. The
+              // minifier's option, not Rolldown's `output.keepNames`: that one
+              // writes class static blocks, which `build.target` cannot lower.
+              minify: {
+                compress: { keepNames: { function: true, class: true } },
+                mangle: { keepNames: true },
+              },
+            },
+          },
+        },
+      },
+    },
     ssr: {
       // In production builds, bundle what lives in apps/webapp/node_modules (packages
       // npm doesn't hoist to the root): the Dockerfile only copies root node_modules
@@ -92,6 +109,8 @@ export default async ({ command, mode }) => {
         '.prisma/client/index-browser': '../../node_modules/.prisma/client/index-browser.js',
       },
       dedupe: ['react', 'react-dom', 'react-router'],
+      // `~/*` from tsconfig.json's `paths`, resolved by Vite itself.
+      tsconfigPaths: true,
     },
     optimizeDeps: {
       include: ['react', 'react-dom', 'react-router', '@tiptap/extension-code-block-lowlight'],
@@ -108,14 +127,7 @@ export default async ({ command, mode }) => {
         'jsonwebtoken',
       ],
     },
-    plugins: [
-      devtoolsJson(),
-      tailwindcss(),
-      reactRouter(),
-      tsconfigPaths(),
-      envOnlyMacros(),
-      ...sentryPlugins,
-    ],
+    plugins: [devtoolsJson(), tailwindcss(), reactRouter(), envOnlyMacros(), ...sentryPlugins],
     server: {
       port: process.env.PORT ? Number(process.env.PORT) : 3000,
       host: '0.0.0.0',
@@ -131,6 +143,13 @@ export default async ({ command, mode }) => {
       },
     },
     build: {
+      // Vite 6's default target. Vite 8 raised its own default to Chrome/Edge
+      // 111, Firefox 114 and Safari 16.4; this keeps the browsers we supported.
+      target: ['es2020', 'edge88', 'firefox78', 'chrome87', 'safari14'],
+      // CSS keeps Vite 8's default target. Tailwind 4's CSS needs these
+      // browsers anyway; lowering it for the list above would rewrite the theme
+      // colours with fallbacks the Vite 6 build never had.
+      cssTarget: ['chrome111', 'edge111', 'firefox114', 'safari16.4', 'ios16.4'],
       // Only generate source maps for our own code, not node_modules
       sourcemap: uploadSourceMaps ? 'hidden' : process.env.NODE_ENV === 'production' ? false : true,
       chunkSizeWarningLimit: 1000, // Increase limit to 1MB to suppress chunk size warnings
@@ -154,9 +173,6 @@ export default async ({ command, mode }) => {
           },
         },
       },
-    },
-    esbuild: {
-      keepNames: true, // Preserve function names for better stack traces
     },
   });
 };

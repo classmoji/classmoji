@@ -1,6 +1,5 @@
 import { reactRouter } from '@react-router/dev/vite';
 import { defineConfig } from 'vite';
-import tsconfigPaths from 'vite-tsconfig-paths';
 import tailwindcss from '@tailwindcss/vite';
 
 // The Sentry plugins a build keeps: the config `buildEnd` reads, hidden source
@@ -63,6 +62,8 @@ export default async ({ command, mode }) => {
       // yjs too: two copies in one bundle break live editing ("Yjs was
       // already imported") — the bridge's doc and the provider's would differ.
       dedupe: ['react', 'react-dom', 'react-router', 'yjs'],
+      // `~/*` from tsconfig.json's `paths`, resolved by Vite itself.
+      tsconfigPaths: true,
     },
     optimizeDeps: {
       include: [
@@ -78,7 +79,7 @@ export default async ({ command, mode }) => {
       entries: ['./app/root.jsx'],
       exclude: ['@classmoji/database', '@classmoji/services', '@prisma/client', 'octokit'],
     },
-    plugins: [tailwindcss(), reactRouter(), tsconfigPaths(), ...sentryPlugins],
+    plugins: [tailwindcss(), reactRouter(), ...sentryPlugins],
     server: {
       port: process.env.PORT ? Number(process.env.PORT) : 6500,
       host: '0.0.0.0',
@@ -92,6 +93,13 @@ export default async ({ command, mode }) => {
       },
     },
     build: {
+      // Vite 6's default target. Vite 8 raised its own default to Chrome/Edge
+      // 111, Firefox 114 and Safari 16.4; this keeps the browsers we supported.
+      target: ['es2020', 'edge88', 'firefox78', 'chrome87', 'safari14'],
+      // CSS keeps Vite 8's default target. Tailwind 4's CSS needs these
+      // browsers anyway; lowering it for the list above would rewrite the theme
+      // colours with fallbacks the Vite 6 build never had.
+      cssTarget: ['chrome111', 'edge111', 'firefox114', 'safari16.4', 'ios16.4'],
       sourcemap: process.env.NODE_ENV === 'production' ? 'hidden' : true,
     },
   });
