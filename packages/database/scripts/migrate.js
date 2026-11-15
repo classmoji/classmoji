@@ -1,9 +1,9 @@
-import { PrismaClient } from '@prisma/client';
+import { createPgPrismaClient } from '../pgClient.ts';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
-const prisma = new PrismaClient();
+const prisma = createPgPrismaClient(process.env.DATABASE_URL);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);

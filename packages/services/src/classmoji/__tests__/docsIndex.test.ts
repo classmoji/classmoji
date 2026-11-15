@@ -78,24 +78,37 @@ vi.mock('@classmoji/database', () => ({
  * were opened and disconnected — which is how "the lock did not ride the pool"
  * is asserted rather than assumed.
  */
-const lockSessions: Array<{ disconnected: boolean; datasourceUrl?: string }> = [];
+const lockSessions: Array<{
+  disconnected: boolean;
+  datasourceUrl?: string;
+  max?: number;
+  keepIdle?: boolean;
+  queryTimeoutMillis?: number;
+}> = [];
 
-vi.mock('@prisma/client', () => ({
-  PrismaClient: class {
-    readonly handle: { disconnected: boolean; datasourceUrl?: string };
-    constructor(options?: { datasourceUrl?: string }) {
-      this.handle = { disconnected: false, datasourceUrl: options?.datasourceUrl };
-      lockSessions.push(this.handle);
-    }
-    $queryRaw(strings: TemplateStringsArray, ...params: unknown[]) {
-      const sql = record('queryRaw', strings, params);
-      if (sql.includes('pg_try_advisory_lock')) return Promise.resolve([{ locked: lockGranted }]);
-      return Promise.resolve([{ unlocked: true }]);
-    }
-    $disconnect() {
-      this.handle.disconnected = true;
-      return Promise.resolve();
-    }
+vi.mock('@classmoji/database/pg-client', () => ({
+  createPgPrismaClient: (
+    datasourceUrl: string | undefined,
+    {
+      max,
+      keepIdle,
+      queryTimeoutMillis,
+    }: { max?: number; keepIdle?: boolean; queryTimeoutMillis?: number } = {}
+  ) => {
+    const handle = { disconnected: false, datasourceUrl, max, keepIdle, queryTimeoutMillis };
+    lockSessions.push(handle);
+    return {
+      handle,
+      $queryRaw(strings: TemplateStringsArray, ...params: unknown[]) {
+        const sql = record('queryRaw', strings, params);
+        if (sql.includes('pg_try_advisory_lock')) return Promise.resolve([{ locked: lockGranted }]);
+        return Promise.resolve([{ unlocked: true }]);
+      },
+      $disconnect() {
+        handle.disconnected = true;
+        return Promise.resolve();
+      },
+    };
   },
 }));
 
@@ -116,6 +129,7 @@ const {
   DOCS_EXTRACT_VERSION,
   DOCS_INDEX_LOCK_KEY,
   DocsBodyError,
+  docsLockUrl,
   reconcileDocsIndex,
   sectionForPath,
   slugForPath,
@@ -615,12 +629,12 @@ describe('serialization', () => {
     expect(lockSessions[0].disconnected).toBe(true);
   });
 
-  it('opens the lock connection on the direct endpoint, falling back to DATABASE_URL', async () => {
+  it('opens the lock connection on the direct endpoint, falling back to a DIRECT DATABASE_URL', async () => {
     // Behind a transaction-mode pooler a session lock can be taken on one
     // backend and released on another, so the lock session uses
     // DATABASE_URL_UNPOOLED when it is set.
     lockGranted = false;
-    vi.stubEnv('DATABASE_URL', 'postgresql://pooled.example/db');
+    vi.stubEnv('DATABASE_URL', 'postgresql://db.example/app');
     try {
       vi.stubEnv('DATABASE_URL_UNPOOLED', 'postgresql://direct.example/db');
       await reconcileDocsIndex({ reader: stubReader() });
@@ -633,9 +647,72 @@ describe('serialization', () => {
     }
     expect(lockSessions.map(session => session.datasourceUrl)).toEqual([
       'postgresql://direct.example/db',
-      'postgresql://pooled.example/db',
-      'postgresql://pooled.example/db',
+      'postgresql://db.example/app',
+      'postgresql://db.example/app',
     ]);
+    // ONE connection each, kept while idle (pgClient's real-database test
+    // proves that is one session across a pause), whose queries give up after
+    // 10 s on a connection that stopped answering.
+    expect(
+      lockSessions.map(session => [session.max, session.keepIdle, session.queryTimeoutMillis])
+    ).toEqual([
+      [1, true, 10_000],
+      [1, true, 10_000],
+      [1, true, 10_000],
+    ]);
+  });
+
+  it("reports a pooled URL as a 'lock: ' error and does no work (the tasks turn that prefix into a red run)", async () => {
+    vi.stubEnv('DATABASE_URL', 'postgresql://u@ep-x-pooler.us-east-2.aws.neon.tech/db');
+    vi.stubEnv('DATABASE_URL_UNPOOLED', '');
+    const reader = stubReader();
+    const headSpy = vi.spyOn(reader, 'head');
+    try {
+      const report = await reconcileDocsIndex({ reader });
+      expect(report.error).toMatch(/^lock: .*DATABASE_URL_UNPOOLED is required/);
+      expect(report.halted).toBeUndefined();
+      expect(lockSessions).toHaveLength(0);
+      expect(headSpy).not.toHaveBeenCalled();
+      expect(inserts()).toHaveLength(0);
+      expect(sweeps()).toHaveLength(0);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('refuses to take the lock through a pooler instead of falling back to it', () => {
+    expect(() =>
+      docsLockUrl({ DATABASE_URL: 'postgresql://u@ep-x-pooler.us-east-2.aws.neon.tech/db' })
+    ).toThrow(/DATABASE_URL_UNPOOLED is required/);
+    expect(() =>
+      docsLockUrl({ DATABASE_URL: 'postgresql://u@db.example/app?pgbouncer=true' })
+    ).toThrow(/DATABASE_URL_UNPOOLED is required/);
+    expect(
+      docsLockUrl({
+        DATABASE_URL: 'postgresql://u@ep-x-pooler.us-east-2.aws.neon.tech/db',
+        DATABASE_URL_UNPOOLED: 'postgresql://u@ep-x.us-east-2.aws.neon.tech/db',
+      })
+    ).toBe('postgresql://u@ep-x.us-east-2.aws.neon.tech/db');
+  });
+
+  it('reads the host name and the query, never the password', () => {
+    // A password containing the pooler marker is a direct URL all the same.
+    expect(docsLockUrl({ DATABASE_URL: 'postgresql://u:a-pooler.b@db.example/app' })).toBe(
+      'postgresql://u:a-pooler.b@db.example/app'
+    );
+    // pgbouncer in any case, and its last value, as pg reads it.
+    for (const query of ['pgbouncer=TRUE', 'pgbouncer=True', 'pgbouncer=false&pgbouncer=true']) {
+      expect(
+        () => docsLockUrl({ DATABASE_URL: `postgresql://u@db.example/app?${query}` }),
+        query
+      ).toThrow(/DATABASE_URL_UNPOOLED is required/);
+    }
+    expect(docsLockUrl({ DATABASE_URL: 'postgresql://u@db.example/app?pgbouncer=false' })).toBe(
+      'postgresql://u@db.example/app?pgbouncer=false'
+    );
+    expect(() =>
+      docsLockUrl({ DATABASE_URL: 'postgresql://u@EP-X-POOLER.us-east-2.aws.neon.tech/db' })
+    ).toThrow(/DATABASE_URL_UNPOOLED is required/);
   });
 });
 

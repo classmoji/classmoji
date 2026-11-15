@@ -1027,14 +1027,28 @@ const isUniqueViolation = (error: unknown): boolean =>
   error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
 
 /** A database failure, as opposed to a git-provider one (Prisma codes are `P1234`). */
-const isDatabaseError = (error: unknown): boolean =>
+/**
+ * node-postgres's own connection failures under Prisma 7's pg adapter: plain
+ * `Error`s, by their whole message (the pool timeout, the pool's and the
+ * client's connect timeouts, a dropped socket, a query on a failed client).
+ */
+const PG_CONNECTION_FAILURE =
+  /^(?:timeout exceeded when trying to connect|Connection terminated due to connection timeout|timeout expired|Connection failed while connecting|Connection terminated unexpectedly|Client has encountered a connection error and is not queryable)$/;
+
+/** Is a failed team's error the database's (`db_error`) rather than the provider's? */
+export const isDatabaseError = (error: unknown): boolean =>
   error instanceof Prisma.PrismaClientKnownRequestError ||
   error instanceof Prisma.PrismaClientUnknownRequestError ||
   error instanceof Prisma.PrismaClientValidationError ||
   (typeof error === 'object' &&
     error !== null &&
-    typeof (error as { code?: unknown }).code === 'string' &&
-    /^P\d{4}$/.test((error as { code: string }).code));
+    // The adapter's own error, unwrapped (a transaction whose connection died).
+    ((error as { name?: unknown }).name === 'DriverAdapterError' ||
+      (typeof (error as { code?: unknown }).code === 'string' &&
+        /^P\d{4}$/.test((error as { code: string }).code)) ||
+      ((error as { name?: unknown }).name === 'Error' &&
+        typeof (error as { message?: unknown }).message === 'string' &&
+        PG_CONNECTION_FAILURE.test((error as { message: string }).message))));
 
 const readCreateState = (raw: unknown): CreateState | null =>
   (raw as CreateState | null | undefined) ?? null;

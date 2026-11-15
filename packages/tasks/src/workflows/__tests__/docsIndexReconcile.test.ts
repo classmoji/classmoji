@@ -207,3 +207,29 @@ describe('the backfill payload is validated before the run', () => {
     expect(backfill.id).toBe('docs-index-backfill');
   });
 });
+
+describe('a lock that could not be taken is a red run', () => {
+  const refused = {
+    ...REPORT,
+    indexed: 0,
+    error:
+      'lock: [docs-index] DATABASE_URL_UNPOOLED is required: DATABASE_URL points at a connection pooler',
+  };
+
+  it.each([
+    ['the schedule', () => scheduled.run()],
+    ['the backfill', () => backfill.run({})],
+  ])('%s throws, after logging the report', async (_label, run) => {
+    reconcileDocsIndex.mockResolvedValueOnce(refused);
+    await expect(run()).rejects.toThrow(/run lock could not be taken: .*DATABASE_URL_UNPOOLED/);
+    expect(loggerInfo).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ error: refused.error })
+    );
+  });
+
+  it('any other error in the report is returned, not thrown (a page failure is not a red run)', async () => {
+    reconcileDocsIndex.mockResolvedValueOnce({ ...REPORT, error: 'embedding provider said 500' });
+    await expect(scheduled.run()).resolves.toMatchObject({ error: 'embedding provider said 500' });
+  });
+});

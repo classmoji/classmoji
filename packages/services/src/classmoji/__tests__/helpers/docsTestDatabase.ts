@@ -35,7 +35,7 @@
 import { execFileSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PrismaClient } from '@prisma/client';
+import { createPgPrismaClient } from '@classmoji/database/pg-client';
 
 /** The deliberate opt-in. Without it, the docs DB suites do not run at all. */
 export const DOCS_DB_OPT_IN = 'DOCS_INDEX_INTEGRATION';
@@ -51,7 +51,9 @@ export interface DisposableDatabase {
 }
 
 const here = dirname(fileURLToPath(import.meta.url));
-const SCHEMA = resolve(here, '..', '..', '..', '..', '..', 'database', 'schema.prisma');
+// Prisma 7's CLI finds its schema, migrations and URL in this config file (it
+// has no `--schema`-only way to migrate); the URL comes from DATABASE_URL.
+const PRISMA_CONFIG = resolve(here, '..', '..', '..', '..', '..', 'database', 'prisma.config.ts');
 
 /** Identifiers are built here, never supplied — assert it anyway. */
 const SAFE_NAME = /^[a-z][a-z0-9_]{0,62}$/;
@@ -90,7 +92,7 @@ export async function createDocsTestDatabase(): Promise<DisposableDatabase> {
   if (sourceName === name)
     throw new Error('[docsTestDatabase] refusing to reuse the source database');
 
-  const admin = new PrismaClient({ datasourceUrl: adminUrl });
+  const admin = createPgPrismaClient(adminUrl);
   try {
     // `CREATE DATABASE` cannot run inside a transaction; `$executeRawUnsafe`
     // issues it directly. The name is built above and shape-checked, never
@@ -108,7 +110,7 @@ export async function createDocsTestDatabase(): Promise<DisposableDatabase> {
     // The migrations ARE the schema under test. `db push` would build the table
     // from `schema.prisma` and skip the migration this lane added, so a broken
     // migration would pass a suite that never ran it.
-    execFileSync('npx', ['prisma', 'migrate', 'deploy', '--schema', SCHEMA], {
+    execFileSync('npx', ['prisma', 'migrate', 'deploy', '--config', PRISMA_CONFIG], {
       env: { ...process.env, DATABASE_URL: databaseUrl },
       stdio: 'pipe',
     });
@@ -131,7 +133,7 @@ export async function createDocsTestDatabase(): Promise<DisposableDatabase> {
 }
 
 async function dropDatabase(adminUrl: string, name: string): Promise<void> {
-  const admin = new PrismaClient({ datasourceUrl: adminUrl });
+  const admin = createPgPrismaClient(adminUrl);
   try {
     // WITH (FORCE) terminates any connection the suite left open, so a leaked
     // client cannot leave a database behind on every run.

@@ -3,6 +3,7 @@ import { PrismaClient } from '@prisma/client';
 import dayjs, { type Dayjs } from 'dayjs';
 import { createOneShotShutdown, DEFAULT_AVATAR_URL, isWorkerd } from '@classmoji/utils';
 import { workerScope as sharedWorkerScope } from './requestContext.ts';
+import { createPgAdapter } from './pgClient.ts';
 import type { RequestScope, RequestScopeOptions } from './requestScope.ts';
 
 interface TokenTransaction {
@@ -153,17 +154,16 @@ const tokenResults = Object.fromEntries(
 );
 
 /**
- * A Prisma client with classmoji's extensions. On Node with no adapter (the
- * engine reads DATABASE_URL); on Workers with the request's driver adapter
+ * A Prisma client with classmoji's extensions. On Node on the pg driver
+ * adapter over DATABASE_URL, its pool and timeouts read from the URL
+ * (pgClient.ts); on Workers with the request's driver adapter
  * (`runWithPrisma`).
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function createPrismaClient(adapter?: any): PrismaClient {
-  const basePrisma = adapter
-    ? // The adapter option exists only on the Workers client's types.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      new (PrismaClient as any)({ adapter })
-    : new PrismaClient();
+  const basePrisma = new PrismaClient({
+    adapter: adapter ?? createPgAdapter(process.env.DATABASE_URL),
+  });
 
   // Prisma's $extends type system doesn't fully support relation fields in `needs`
   // under strict mode. These computed fields work correctly at runtime.

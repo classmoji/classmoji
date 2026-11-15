@@ -32,7 +32,9 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { PrismaClient } from '@prisma/client';
+import type { PrismaClient } from '@prisma/client';
+import { createPgPrismaClient } from '@classmoji/database/pg-client';
+import { withConfigArgs } from './helpers/prismaCliArgs.ts';
 
 const CX_URL = process.env.OAUTH_CATCHUP_IT_DATABASE_URL;
 // The auth instance (imported once the migration has run) uses this database.
@@ -98,7 +100,7 @@ function assertThrowawayDatabase(url: string): string {
 
 function prisma(args: string[], url: string): string {
   try {
-    return execFileSync(process.execPath, [PRISMA_CLI, ...args], {
+    return execFileSync(process.execPath, [PRISMA_CLI, ...withConfigArgs(args)], {
       env: { ...process.env, DATABASE_URL: url },
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -341,13 +343,13 @@ describe.skipIf(!CX_URL)('the CX-2 catch-up (real Postgres)', () => {
   beforeAll(async () => {
     const cxName = assertThrowawayDatabase(CX_URL!);
     const refName = assertThrowawayDatabase(REF_URL!);
-    cx = new PrismaClient({ datasourceUrl: CX_URL });
+    cx = createPgPrismaClient(CX_URL!);
     const exists = await cx.$queryRawUnsafe<unknown[]>(
       `SELECT 1 FROM pg_database WHERE datname = '${refName}'`
     );
     if (!exists.length) await cx.$executeRawUnsafe(`CREATE DATABASE "${refName}"`);
     expect(refName).not.toBe(cxName);
-    ref = new PrismaClient({ datasourceUrl: REF_URL });
+    ref = createPgPrismaClient(REF_URL!);
     for (const db of [cx, ref]) {
       await db.$executeRawUnsafe('DROP SCHEMA IF EXISTS public CASCADE');
       await db.$executeRawUnsafe('CREATE SCHEMA public');
@@ -1088,7 +1090,7 @@ describe.skipIf(!CX_URL)(
 
     beforeAll(async () => {
       assertThrowawayDatabase(CX_URL!);
-      cx = new PrismaClient({ datasourceUrl: CX_URL });
+      cx = createPgPrismaClient(CX_URL!);
       await cx.$executeRawUnsafe('DROP SCHEMA IF EXISTS public CASCADE');
       await cx.$executeRawUnsafe('CREATE SCHEMA public');
       work = mkdtempSync(join(tmpdir(), 'oauth2-catchup-resolve-it-'));

@@ -4,7 +4,12 @@ import { createAdapterRegistry } from './adapters/registry.ts';
 import { createServiceAuditSink } from './audit.ts';
 import { createTaskCheckpointTrigger } from './checkpoint.ts';
 import { loadConfig } from './config.ts';
-import { SingleInstanceError, createPgInstanceLock, holdSingleInstance } from './instanceLock.ts';
+import {
+  SingleInstanceError,
+  createPgInstanceLock,
+  holdSingleInstance,
+  instanceLockUrl,
+} from './instanceLock.ts';
 import { createCollabServer } from './server.ts';
 import { createSessionResolver } from './session.ts';
 import { PrismaCollabDocStore } from './store/prisma.ts';
@@ -16,7 +21,7 @@ const config = loadConfig();
 if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL must be set');
 let live: { destroy(): Promise<void> } | null = null;
 try {
-  await holdSingleInstance(createPgInstanceLock(process.env.DATABASE_URL), {
+  await holdSingleInstance(createPgInstanceLock(instanceLockUrl()), {
     onLost: reason => {
       console.error(`[collab] FATAL: ${reason}; exiting so only one instance serves`);
       // Flush what this process holds (destroy stores pending docs), then go.

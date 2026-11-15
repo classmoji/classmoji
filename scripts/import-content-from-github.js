@@ -13,13 +13,13 @@
  *      private repos or to avoid unauthenticated rate limits).
  */
 import 'dotenv/config';
-import { PrismaClient } from '@prisma/client';
+import { createPgPrismaClient } from '@classmoji/database/pg-client';
 
 const CLASSROOM_SLUG = 'classmoji-dev-winter-2025';
 const REPO_OWNER = 'classmoji-development';
 const REPO_NAME = 'content-classmoji-development-25w';
 
-const prisma = new PrismaClient();
+const prisma = createPgPrismaClient(process.env.DATABASE_URL);
 
 async function ghList(path) {
   const headers = {

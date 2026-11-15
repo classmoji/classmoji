@@ -8,7 +8,7 @@
  *        (loads DATABASE_URL from .env automatically)
  */
 
-import { PrismaClient } from '@prisma/client';
+import { createPgPrismaClient } from '@classmoji/database/pg-client';
 
 const DB_URL =
   process.env.DATABASE_URL || 'postgresql://classmoji:classmoji@localhost:5433/classmoji';
@@ -16,7 +16,7 @@ const WEBAPP_URL = 'http://localhost:3000';
 const SLIDES_URL = 'http://localhost:6500';
 const USER_LOGIN = 'timofei7';
 
-const prisma = new PrismaClient({ datasourceUrl: DB_URL });
+const prisma = createPgPrismaClient(DB_URL);
 
 let userId;
 let accountId;

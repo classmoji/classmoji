@@ -21,8 +21,10 @@
  * WHAT IT CHECKS
  * --------------
  * Every `select`, `include`, `where`, `orderBy` and `data` key of every query
- * is resolved against `Prisma.dmmf.datamodel.models` — the generated client's
- * own description of the schema, so it moves with each migration for free:
+ * is resolved against the full description of schema.prisma
+ * (`@classmoji/database/testing/schema-dmmf`, read from the schema itself by
+ * Prisma's schema engine, since Prisma 7's `Prisma.dmmf` keeps only names and
+ * types), so it moves with each migration for free:
  *   - unknown field   -> `Unknown field \`x\` for where statement on model \`Page\`.`
  *   - unknown model   -> `Unknown model \`prisma.repositoryAssignment\`.`
  *   - nested `select` on a scalar -> `\`Page.title\` is scalar and cannot take a nested select.`
@@ -53,20 +55,22 @@
  * lazily at first import of the mocked module.
  */
 
-import { Prisma } from '@prisma/client';
 import * as gitIdentity from '@classmoji/database/gitIdentity';
+import {
+  SCHEMA_MODELS,
+  type SchemaField,
+  type SchemaModel,
+} from '@classmoji/database/testing/schema-dmmf';
 
-type DmmfModel = Prisma.DMMF.Model;
-type DmmfField = Prisma.DMMF.Field;
+type DmmfModel = SchemaModel;
+type DmmfField = SchemaField;
 
 /** Model name as it appears on the client: `GitRepoAssignment` -> `gitRepoAssignment`. */
 const clientKey = (name: string): string => name[0].toLowerCase() + name.slice(1);
 
-const MODELS_BY_NAME = new Map<string, DmmfModel>(
-  Prisma.dmmf.datamodel.models.map(m => [m.name, m])
-);
+const MODELS_BY_NAME = new Map<string, DmmfModel>(SCHEMA_MODELS.map(m => [m.name, m]));
 const MODELS_BY_CLIENT_KEY = new Map<string, DmmfModel>(
-  Prisma.dmmf.datamodel.models.map(m => [clientKey(m.name), m])
+  SCHEMA_MODELS.map(m => [clientKey(m.name), m])
 );
 
 /**

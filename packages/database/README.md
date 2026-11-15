@@ -1,7 +1,68 @@
 # @classmoji/database
 
-The Prisma schema (`schema.prisma`), its migrations (`migrations/`) and the
-shared client (`index.ts`).
+The Prisma schema (`schema.prisma`), its migrations (`migrations/`), the
+shared client (`index.ts`) and the factory every other Node client is built
+with (`pgClient.ts`, exported as `@classmoji/database/pg-client`).
+
+## Prisma 7
+
+- **CLI.** `prisma.config.ts` names the schema, the migrations, the seed and the
+  URL (`DATABASE_URL`). Prisma finds it in the current directory only, so run
+  `npx prisma …` here, or pass `--config packages/database/prisma.config.ts`
+  from elsewhere. The CLI no longer reads `.env`; the root `npm run db:*`
+  scripts load it.
+- **Clients.** The client talks to Postgres through `@prisma/adapter-pg`
+  (node-postgres). `pgClient.ts` turns the URL's Prisma parameters into pool
+  options (see the table at its top):
+  - `connection_limit`: the pool size (default 10).
+  - `connect_timeout`: how long opening a connection may take (default 5 s).
+  - `pool_timeout`: how long a query waits for a free pooled connection
+    (default 10 s). The two are separate waits; `0` turns off only its own.
+    pg-pool also bounds a NEW connection by the pool wait, so a connect gives
+    up after the shorter of the two (with `connect_timeout=0`, after
+    `pool_timeout`, unless that is 0 too).
+  - `schema`: model queries use it (`public` is the default and changes
+    nothing); raw SQL keeps the session's search path.
+  - `sslmode`, `channel_binding`: see TLS below.
+
+  A repeated parameter takes its last value. Build a client with
+  `getPrisma()` or `createPgPrismaClient(url, options)`, never
+  `new PrismaClient()`.
+- **TLS (self-hosters, read this).** `sslmode=require` (and `prefer`, `allow`,
+  `verify-ca`) VERIFIES the server's certificate chain and host name, as
+  `verify-full` does. A provider whose certificate is signed by a private CA
+  needs `sslrootcert=<file>` in the URL, or `sslmode=no-verify` to skip
+  verification. With no `sslmode`, `ssl=` decides: `0`, `false` or empty is
+  off, `1` or `true` verified TLS, `no-verify` TLS without verification, and
+  any other value is refused at boot. A URL with no `sslmode`, no `ssl=` and
+  no certificate files (`sslrootcert` and the like) connects WITHOUT TLS.
+  `channel_binding=require` needs TLS and is refused without it.
+- **The direct endpoint.** Behind a connection pooler (Neon's `-pooler` host,
+  PgBouncer), set `DATABASE_URL_UNPOOLED` to the direct endpoint too. The
+  clients that hold a session use it: collab's instance lock, the docs-index
+  run lock, and the read-only session of the operator scripts (the Cloudinary
+  dry run, `packages/tasks/src/scripts/`; not a Trigger task). The read-only
+  session REQUIRES it and never falls back to `DATABASE_URL`, locally too; the
+  docs-index lock falls back only to a direct `DATABASE_URL` and refuses a
+  pooled one; collab rewrites a Neon `-pooler` host to the direct one and
+  refuses only `pgbouncer=true`.
+- **Time zone.** Raw `timestamptz` values are read correctly only in a UTC
+  session (Neon's default; `__tests__/clientApi.integration.test.ts` shows
+  the shift in a New York session). Model `DateTime` values Prisma reads and
+  writes are not affected (Prisma fills `@default(now())` itself on a model
+  create), but the database's own default (`DEFAULT CURRENT_TIMESTAMP` on
+  these `timestamp(3)` columns), which applies to a raw INSERT that leaves the
+  column out, is stored in the session's local time, so in a non-UTC session
+  it is shifted too.
+- **Schema description in tests.** The generated `Prisma.dmmf` keeps only field
+  names and types. `testing/schemaDmmf.ts` reads the full one from
+  `schema.prisma` with `@prisma/prisma-schema-wasm`, whose version ends in the
+  engines hash of the installed Prisma: bump it with Prisma
+  (`__tests__/schemaDmmf.test.ts` fails until you do). It is a dev dependency
+  that no runtime code imports, but the Docker images install every
+  dependency and the webapp's final image copies `node_modules`, so its 3.2 MB
+  ships in that image (not in any bundle, the Trigger worker or the Workers
+  build).
 
 ## Migrations
 
@@ -21,7 +82,7 @@ UPDATE ...;
 COMMIT;
 ```
 
-Prisma 6 sends a migration file to Postgres in one go, which runs it as one
+Prisma 6 sent a migration file to Postgres in one go, which ran it as one
 implicit transaction. Prisma 7's Migrate splits a file into statements and runs
 them one at a time (7.10.1 still sends a file containing a `$$`-quoted body as
 one query, but that is not documented and nothing here relies on it). Without

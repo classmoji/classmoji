@@ -22,7 +22,8 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { PrismaClient } from '@prisma/client';
+import type { PrismaClient } from '@prisma/client';
+import { createPgPrismaClient } from '@classmoji/database/pg-client';
 import { REHEARSAL_MARKER_USER_ID, assertRehearsalTarget } from './support/rehearsalTarget.ts';
 
 const URL_ = process.env.OAUTH_REHEARSAL_DATABASE_URL;
@@ -57,7 +58,7 @@ describe.skipIf(!URL_)('CX-2 rehearsal: refresh a caught-up token', () => {
       URL_,
       process.env.OAUTH_REHEARSAL_DATABASE_NAME,
       async () => {
-        const probe = new PrismaClient({ datasourceUrl: URL_ });
+        const probe = createPgPrismaClient(URL_!);
         try {
           return (await probe.user.count({ where: { id: REHEARSAL_MARKER_USER_ID } })) === 1;
         } finally {
@@ -68,7 +69,7 @@ describe.skipIf(!URL_)('CX-2 rehearsal: refresh a caught-up token', () => {
     console.log(`rehearsal database: ${target.host}/${target.database}`);
     // Only now: once loaded, the server module reads and writes DATABASE_URL.
     process.env.DATABASE_URL = URL_;
-    db = new PrismaClient({ datasourceUrl: URL_ });
+    db = createPgPrismaClient(URL_!);
     server = await import('../server.ts');
   }, 120_000);
 

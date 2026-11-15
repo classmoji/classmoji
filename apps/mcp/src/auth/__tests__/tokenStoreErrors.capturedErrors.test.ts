@@ -31,9 +31,50 @@ const PRISMA_7: Record<string, boolean> = {
   unreachable: true, // P1001
   wrong_password: true, // P1000
   missing_database: true, // P1003
+  unreachable_multi_address: true, // code ECONNREFUSED
+  connect_timeout_blackhole: true, // plain Error "Connection terminated due to connection timeout"
   pool_timeout: true, // node-postgres: plain Error "timeout exceeded when trying to connect"
+  pool_timeout_pg: true,
   killed_idle_model_query_no_wait: true, // P2039, SQLSTATE 57P01
   killed_mid_raw_query: true, // P2010, SQLSTATE 57P01
+  network_drop_mid_raw_query: true, // plain Error "Connection terminated unexpectedly"
+  network_drop_mid_model_query: true, // P1017
+  connect_timeout_own: true, // plain Error "timeout expired"
+  tx_backend_killed_not_queryable: true, // plain Error "… is not queryable"
+  tx_backend_killed_adapter_error: true, // top-level DriverAdapterError, 57P01 in cause
+  tx_refused_itx: true, // Node's AggregateError, code ECONNREFUSED, unwrapped
+  tx_refused_batch: true,
+  tx_blackhole_itx: true,
+  tx_blackhole_batch: true,
+  tx_pool_exhausted_itx: true,
+  tx_pool_exhausted_batch: true,
+  // Socket errnos, live or while connecting: a read is safe to repeat, so all 503s.
+  live_ehostunreach_model_write: true,
+  live_ehostunreach_itx_commit: true, // Node's Error, syscall read
+  live_enetunreach_model_write: true,
+  live_enetunreach_itx_commit: true,
+  live_econnrefused_model_write: true, // P1001
+  live_econnrefused_itx_commit: true, // DriverAdapterError, kind DatabaseNotReachable
+  live_etimedout_model_write: true, // P1008
+  live_etimedout_itx_commit: true, // DriverAdapterError, kind SocketTimeout
+  live_econnreset_model_write: true, // P1017
+  live_econnreset_itx_commit: true, // DriverAdapterError, kind ConnectionClosed
+  connect_ehostunreach_model: true,
+  connect_ehostunreach_itx: true,
+  connect_enetunreach_model: true,
+  connect_enetunreach_itx: true,
+  connect_econnrefused_model: true,
+  connect_econnrefused_itx: true,
+  connect_etimedout_model: true,
+  connect_etimedout_itx: true,
+  ...Object.fromEntries(
+    ['fin_startup', 'rst_startup', 'fin_sslrequest', 'rst_sslrequest'].flatMap(when =>
+      ['model', 'model_write', 'raw', 'itx', 'batch'].map(op => [
+        `connect_drop_${when}_${op}`,
+        true,
+      ])
+    )
+  ),
   p2002_user_email: false,
   p2002_classroom_slug: false,
   p2003_fk: false,
@@ -96,15 +137,40 @@ describe('isTokenStoreUnavailable: boundaries of the adapter rules', () => {
     expect(isTokenStoreUnavailable(withSqlState(s))).toBe(false);
   });
 
-  it("matches node-postgres's pool timeout message exactly, nothing near it", () => {
-    expect(isTokenStoreUnavailable(new Error('timeout exceeded when trying to connect'))).toBe(
-      true
-    );
+  it('an unwrapped DriverAdapterError is a 503 only for a connection SQLSTATE', () => {
+    const adapterError = (originalCode: string) => {
+      const error = structuredClone(PRISMA_7_ERRORS.tx_backend_killed_adapter_error) as {
+        cause: { originalCode: string; code: string };
+      };
+      error.cause.originalCode = originalCode;
+      error.cause.code = originalCode;
+      return error;
+    };
+    expect(isTokenStoreUnavailable(adapterError('57P01'))).toBe(true);
+    expect(isTokenStoreUnavailable(adapterError('08006'))).toBe(true);
+    expect(isTokenStoreUnavailable(adapterError('23505'))).toBe(false);
+    expect(isTokenStoreUnavailable(adapterError('42501'))).toBe(false);
+  });
+
+  it("matches node-postgres's own messages exactly, nothing near them", () => {
     for (const message of [
+      'timeout exceeded when trying to connect',
+      'Connection terminated due to connection timeout',
+      'Connection terminated unexpectedly',
+      'timeout expired',
+      'Client has encountered a connection error and is not queryable',
+    ]) {
+      expect(isTokenStoreUnavailable(new Error(message)), message).toBe(true);
+    }
+    for (const message of [
+      'token timeout expired',
+      'Client was closed and is not queryable',
       'Error: timeout exceeded when trying to connect',
       'Timeout exceeded when trying to connect',
       'timeout exceeded when trying to connect to the token store',
       'TIMEOUT EXCEEDED WHEN TRYING TO CONNECT',
+      'Connection terminated',
+      'connection terminated unexpectedly by the token check',
     ]) {
       expect(isTokenStoreUnavailable(new Error(message)), message).toBe(false);
     }

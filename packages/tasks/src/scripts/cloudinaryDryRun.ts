@@ -8,9 +8,15 @@
  * Safety, in order:
  *   - refuses to start without `CLASSMOJI_DRY_RUN_ACK=read-only`;
  *   - opens its OWN Prisma client on `DATABASE_URL_UNPOOLED` (the direct
- *     endpoint) with `connection_limit=1`, then sets the session read-only and
- *     checks `SHOW transaction_read_only` = on before any other query, and
- *     again before printing the plan;
+ *     endpoint) with exactly one connection whose every session starts
+ *     read-only (`openReadOnlySession`, helpers/readOnlyPrisma.ts: a session
+ *     the server ends is replaced by one that is read-only too), sets the
+ *     session read-only as well and checks `SHOW transaction_read_only` = on
+ *     before any other query, and again before printing the plan;
+ *   - exits non-zero on an error instead of hanging: the error is rethrown,
+ *     and the read-only client's pool lets Node exit while idle
+ *     (`allowExitOnIdle`); it also disconnects on every path (a `finally`),
+ *     which closes the session cleanly rather than at exit;
  *   - imports neither `@classmoji/database` nor `@classmoji/services` (their
  *     import creates a client from `DATABASE_URL`), and points `DATABASE_URL`
  *     at an unresolvable host so anything that tried would fail rather than
@@ -29,8 +35,6 @@
  * CLASSMOJI_DRY_RUN_ACK=read-only.
  */
 
-import { PrismaClient } from '@prisma/client';
-
 import { planMigration } from '../helpers/cloudinaryPlan.ts';
 import {
   cloudinaryCredentialsFromEnv,
@@ -40,9 +44,9 @@ import {
 } from '../helpers/cloudinaryReads.ts';
 import {
   assertReadOnly,
-  enforceReadOnlySession,
+  directEndpointUrl,
+  openReadOnlySession,
   requireReadOnlyAck,
-  singleConnectionUrl,
 } from '../helpers/readOnlyPrisma.ts';
 
 /** Where `DATABASE_URL` points during the run: nowhere. */
@@ -62,31 +66,35 @@ async function main(): Promise<void> {
   const limit = parseLimit(process.argv.slice(2));
   const cloudinary = cloudinaryCredentialsFromEnv(process.env);
   const github = gitHubAppCredentialsFromEnv(process.env);
-  const { url, host } = singleConnectionUrl(process.env.DATABASE_URL_UNPOOLED);
+  const { url, host } = directEndpointUrl(process.env.DATABASE_URL_UNPOOLED);
   process.env.DATABASE_URL = NO_GLOBAL_CLIENT;
 
-  const prisma = new PrismaClient({ datasourceUrl: url });
-  await enforceReadOnlySession(prisma);
-  console.error(`[cloudinary-dry-run] connected read-only to ${host}`);
+  const prisma = await openReadOnlySession(url);
+  try {
+    console.error(`[cloudinary-dry-run] connected read-only to ${host}`);
 
-  const deps = createLiveReadDeps({
-    prisma: prisma as unknown as ReadPrisma,
-    cloudinary,
-    github,
-    log: (message, detail) =>
-      console.error(`[cloudinary-dry-run] ${message}`, detail ? JSON.stringify(detail) : ''),
-  });
-  const plan = await planMigration(deps, limit === undefined ? {} : { limit });
+    const deps = createLiveReadDeps({
+      prisma: prisma as unknown as ReadPrisma,
+      cloudinary,
+      github,
+      log: (message, detail) =>
+        console.error(`[cloudinary-dry-run] ${message}`, detail ? JSON.stringify(detail) : ''),
+    });
+    const plan = await planMigration(deps, limit === undefined ? {} : { limit });
 
-  await assertReadOnly(prisma);
-  process.stdout.write(`${JSON.stringify(plan, null, 2)}\n`);
-  console.error(`[cloudinary-dry-run] totals ${JSON.stringify(plan.totals)}`);
-  console.error(
-    `[cloudinary-dry-run] planHash ${plan.planHash} — to execute THIS plan: ` +
-      `{ "dryRun": false, "confirm": "MIGRATE:${plan.planHash}"` +
-      `${limit === undefined ? '' : `, "limit": ${limit}`} }`
-  );
-  await prisma.$disconnect();
+    await assertReadOnly(prisma);
+    process.stdout.write(`${JSON.stringify(plan, null, 2)}\n`);
+    console.error(`[cloudinary-dry-run] totals ${JSON.stringify(plan.totals)}`);
+    console.error(
+      `[cloudinary-dry-run] planHash ${plan.planHash} — to execute THIS plan: ` +
+        `{ "dryRun": false, "confirm": "MIGRATE:${plan.planHash}"` +
+        `${limit === undefined ? '' : `, "limit": ${limit}`} }`
+    );
+  } finally {
+    // On every path, so the session is closed cleanly; the exit itself does not
+    // depend on it (the pool lets Node exit while idle).
+    await prisma.$disconnect();
+  }
 }
 
 main().catch(error => {

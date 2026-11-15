@@ -58,6 +58,19 @@ const RECONCILE_CRON = '10 6 * * *';
  */
 export const DOCS_INDEX_QUEUE = { name: 'docs-index', concurrencyLimit: 1 } as const;
 
+/**
+ * A run whose lock could not be taken (no direct endpoint configured behind a
+ * pooler, the database not answering) did nothing; the report says so in
+ * `error: 'lock: …'`. Thrown, so the run is red and someone looks, instead of
+ * a green run that indexed nothing night after night.
+ */
+export function failOnLockRefusal<R extends { error?: string | null }>(report: R): R {
+  if (typeof report.error === 'string' && report.error.startsWith('lock: ')) {
+    throw new Error(`[docs-index] the run lock could not be taken: ${report.error.slice(6)}`);
+  }
+  return report;
+}
+
 export const docsIndexReconcileTask = schedules.task({
   id: 'docs-index-reconcile',
   // Runs again on its schedule, and that next run is the retry.
@@ -69,7 +82,7 @@ export const docsIndexReconcileTask = schedules.task({
     // ONE line, with the whole report on it — the commit sha included, because
     // this indexes the latest `main`, which may be ahead of the deployed site.
     logger.info('Reconciled the docs index', { ...report });
-    return report;
+    return failOnLockRefusal(report);
   },
 });
 
@@ -166,6 +179,6 @@ export const docsIndexBackfillTask = schemaTask({
       ...(payload?.concurrency ? { concurrency: payload.concurrency } : {}),
     });
     logger.info('Backfilled the docs index', { ...report });
-    return report;
+    return failOnLockRefusal(report);
   },
 });

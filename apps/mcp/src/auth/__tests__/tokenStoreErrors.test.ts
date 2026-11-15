@@ -96,7 +96,9 @@ describe('isTokenStoreUnavailable', () => {
         new Prisma.PrismaClientValidationError('connection reset', { clientVersion })
       )
     ).toBe(false);
-    expect(isTokenStoreUnavailable(new Error('Connection terminated unexpectedly'))).toBe(false);
+    // node-postgres's exact plain messages are the only plain errors that count
+    // (tokenStoreErrors.capturedErrors.test.ts); a near one is not.
+    expect(isTokenStoreUnavailable(new Error('connection reset'))).toBe(false);
   });
 
   it('follows a cause, a few levels deep', () => {
