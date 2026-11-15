@@ -51,7 +51,9 @@ export interface DisposableDatabase {
 }
 
 const here = dirname(fileURLToPath(import.meta.url));
-const SCHEMA = resolve(here, '..', '..', '..', '..', '..', 'database', 'schema.prisma');
+// Prisma 7's CLI finds its schema, migrations and URL in this config file (it
+// has no `--schema`-only way to migrate); the URL comes from DATABASE_URL.
+const PRISMA_CONFIG = resolve(here, '..', '..', '..', '..', '..', 'database', 'prisma.config.ts');
 
 /** Identifiers are built here, never supplied — assert it anyway. */
 const SAFE_NAME = /^[a-z][a-z0-9_]{0,62}$/;
@@ -108,7 +110,7 @@ export async function createDocsTestDatabase(): Promise<DisposableDatabase> {
     // The migrations ARE the schema under test. `db push` would build the table
     // from `schema.prisma` and skip the migration this lane added, so a broken
     // migration would pass a suite that never ran it.
-    execFileSync('npx', ['prisma', 'migrate', 'deploy', '--schema', SCHEMA], {
+    execFileSync('npx', ['prisma', 'migrate', 'deploy', '--config', PRISMA_CONFIG], {
       env: { ...process.env, DATABASE_URL: databaseUrl },
       stdio: 'pipe',
     });

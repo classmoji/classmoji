@@ -34,6 +34,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { PrismaClient } from '@prisma/client';
 import { createPgPrismaClient } from '@classmoji/database/pg-client';
+import { withConfigArgs } from './helpers/prismaCliArgs.ts';
 
 const CX_URL = process.env.OAUTH_CATCHUP_IT_DATABASE_URL;
 // The auth instance (imported once the migration has run) uses this database.
@@ -99,7 +100,7 @@ function assertThrowawayDatabase(url: string): string {
 
 function prisma(args: string[], url: string): string {
   try {
-    return execFileSync(process.execPath, [PRISMA_CLI, ...args], {
+    return execFileSync(process.execPath, [PRISMA_CLI, ...withConfigArgs(args)], {
       env: { ...process.env, DATABASE_URL: url },
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],

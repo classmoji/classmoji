@@ -88,7 +88,8 @@ jobs:
         run: npm run db:generate
 
       - name: Apply migrations
-        run: npx prisma migrate deploy --schema packages/database/schema.prisma
+        # Prisma 7 reads the URL from prisma.config.ts, found from the cwd only.
+        run: npx prisma migrate deploy --config packages/database/prisma.config.ts
 
       - name: Seed database (fixtures + E2E test users)
         run: |

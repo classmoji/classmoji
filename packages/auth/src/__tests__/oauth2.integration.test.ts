@@ -47,6 +47,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { PrismaClient } from '@prisma/client';
 import { createPgPrismaClient } from '@classmoji/database/pg-client';
 import { serializeSignedCookie } from 'better-call';
+import { withConfigArgs } from './helpers/prismaCliArgs.ts';
 
 const DATABASE_URL = process.env.OAUTH_IT_DATABASE_URL;
 // The auth instance (imported once the migration has run) uses this database.
@@ -196,7 +197,7 @@ function migrationsCopy(dir: string, { through }: { through: 'before' | 'all' })
 /** Runs the Prisma CLI against the test database; returns its output, or throws with it. */
 function prisma(args: string[]): string {
   try {
-    return execFileSync(process.execPath, [PRISMA_CLI, ...args], {
+    return execFileSync(process.execPath, [PRISMA_CLI, ...withConfigArgs(args)], {
       env: { ...process.env, DATABASE_URL },
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -408,12 +409,15 @@ describe.skipIf(!DATABASE_URL)('the oauth2 migration (real Postgres)', () => {
   });
 
   it('leaves the database exactly as schema.prisma describes it', () => {
+    // Prisma 7: the database side comes from the config's datasource (the
+    // command's DATABASE_URL), the other side from the schema itself.
     const drift = prisma([
       'migrate',
       'diff',
-      '--from-url',
-      DATABASE_URL!,
-      '--to-schema-datamodel',
+      '--config',
+      join(DATABASE_DIR, 'prisma.config.ts'),
+      '--from-config-datasource',
+      '--to-schema',
       join(DATABASE_DIR, 'schema.prisma'),
       '--script',
     ]);
