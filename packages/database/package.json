@@ -20,7 +20,8 @@
     "./pg-client": "./pgClient.ts",
     "./worker-client": "./generated/worker/client.ts",
     "./wait-until": "./requestContext.ts",
-    "./testing/prisma-errors": "./testing/prismaErrors.ts"
+    "./testing/prisma-errors": "./testing/prismaErrors.ts",
+    "./testing/schema-dmmf": "./testing/schemaDmmf.ts"
   },
   "dependencies": {
     "@classmoji/utils": "*",
@@ -30,6 +31,7 @@
     "pg": "8.23.1"
   },
   "devDependencies": {
+    "@prisma/prisma-schema-wasm": "8.1.0-1.d1b3f377ca835d73fd50954a5e22128b9ebdd6b8",
     "@types/pg": "8.23.1",
     "prisma": "7.10.1",
     "vitest": "^4.1.5"

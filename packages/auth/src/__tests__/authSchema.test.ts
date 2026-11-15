@@ -1,10 +1,14 @@
 /**
  * The tables and columns better-auth writes, built from our real `auth`
- * options, against the generated Prisma client's data model.
+ * options, against the full description of schema.prisma
+ * (`@classmoji/database/testing/schema-dmmf`).
  *
  * better-auth 1.7.3+ runs this comparison itself at startup and refuses every
  * auth request when it finds a missing table or column (the Prisma adapter's
  * `findPrismaSchemaProblems`, which reads the client's `_runtimeDataModel`).
+ * On Prisma 7 that data model keeps only each field's name, kind and type, so
+ * better-auth's own check sees every column as nullable and without a default
+ * and never finds the third kind of problem below; this test is what does.
  * The other suites stand in a mock client with no data model, so the check
  * never runs there. This one hands the adapter the real `@classmoji/database`
  * client (no query is made) and repeats the comparison the same way:
@@ -21,8 +25,8 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { Prisma } from '@prisma/client';
 import { getAuthTables } from 'better-auth/db';
+import { SCHEMA_MODELS } from '@classmoji/database/testing/schema-dmmf';
 
 process.env.WEBAPP_URL = 'http://localhost:3000';
 process.env.BETTER_AUTH_SECRET = 'test-secret-that-is-at-least-32-chars!!';
@@ -59,13 +63,11 @@ function expectedSchema(): Map<string, Set<string>> {
   return expected;
 }
 
-function schemaFindings(): string[] {
-  const models = new Map(
-    Prisma.dmmf.datamodel.models.map(model => [clientProperty(model.name), model])
-  );
+function schemaFindings(models = SCHEMA_MODELS): string[] {
+  const byName = new Map(models.map(model => [clientProperty(model.name), model]));
   const findings: string[] = [];
   for (const [table, written] of expectedSchema()) {
-    const model = models.get(table);
+    const model = byName.get(table);
     if (!model) {
       findings.push(`missing table ${table}`);
       continue;
@@ -88,6 +90,29 @@ function schemaFindings(): string[] {
 describe('better-auth schema vs the generated Prisma client', () => {
   it('finds every table and column better-auth writes', () => {
     expect(schemaFindings()).toEqual([]);
+  });
+
+  // The description must say which columns are required, or the last rule
+  // passes for every column (as on Prisma 7's trimmed runtime data model).
+  it('reports a required column without a default that better-auth never writes', () => {
+    // A real required, default-less column of the description under test,
+    // copied under a name better-auth never writes. Its flags come from the
+    // description itself: one that drops them (as Prisma 7's runtime data
+    // model does) finds nothing here and fails.
+    const session = SCHEMA_MODELS.find(model => model.name === 'Session')!;
+    const required = session.fields.find(
+      field =>
+        field.kind === 'scalar' && field.isRequired && !field.hasDefaultValue && !field.isUpdatedAt
+    );
+    expect(required, 'the description says which Session columns are required').toBeDefined();
+    const models = SCHEMA_MODELS.map(model =>
+      model !== session
+        ? model
+        : { ...model, fields: [...model.fields, { ...required!, name: 'never_written' }] }
+    );
+    expect(schemaFindings(models)).toEqual([
+      'required column better-auth never writes: session.never_written',
+    ]);
   });
 
   it('compares the admin plugin fields under their mapped names', () => {
