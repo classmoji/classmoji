@@ -83,23 +83,28 @@ export const create = async ({
   student_comment?: string | null;
   previous_grade?: string[];
 }): Promise<RegradeRequest & { created: boolean }> => {
-  const { request, created } = await getPrisma().$transaction(async tx => {
-    // Serialize every create for this submission, so the check below and the
-    // insert cannot interleave with another one (no schema change needed).
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended('regrade:' || ${git_repo_assignment_id}::text, 0))`;
-    const open = await findOpenByAssignmentId(git_repo_assignment_id, tx);
-    if (open) return { request: open, created: false };
-    const made = await tx.regradeRequest.create({
-      data: {
-        classroom_id,
-        git_repo_assignment_id,
-        student_id,
-        student_comment,
-        previous_grade,
-      },
-    });
-    return { request: made, created: true };
-  });
+  const { request, created } = await getPrisma().$transaction(
+    async tx => {
+      // Serialize every create for this submission, so the check below and the
+      // insert cannot interleave with another one (no schema change needed).
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended('regrade:' || ${git_repo_assignment_id}::text, 0))`;
+      const open = await findOpenByAssignmentId(git_repo_assignment_id, tx);
+      if (open) return { request: open, created: false };
+      const made = await tx.regradeRequest.create({
+        data: {
+          classroom_id,
+          git_repo_assignment_id,
+          student_id,
+          student_comment,
+          previous_grade,
+        },
+      });
+      return { request: made, created: true };
+      // Read committed, pinned: the check must see a row committed while this
+      // transaction waited on the lock; a snapshot taken earlier would not.
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted }
+  );
   if (!created) return { ...request, created };
 
   await notificationService.runSafely('regrade request notification', async () => {

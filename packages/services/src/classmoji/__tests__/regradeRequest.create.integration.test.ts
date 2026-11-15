@@ -140,11 +140,11 @@ describe.skipIf(!RUN)(
       expect([one.created, two.created].sort()).toEqual([false, true]);
       expect(one.id).toBe(two.id);
       expect(await openRows(submissionA)).toHaveLength(1);
-      // At most one notification per grader: the losing submit notifies nobody.
+      // One notification per grader: the winner notifies, the loser nobody.
       const notices = await prisma.notification.findMany({
         where: { resource_type: 'regrade_request', resource_id: one.id },
       });
-      expect(notices.filter(n => n.user_id === graderId).length).toBeLessThanOrEqual(1);
+      expect(notices.filter(n => n.user_id === graderId)).toHaveLength(1);
     });
 
     it('returns the open request unchanged on a later submit', async () => {
