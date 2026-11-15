@@ -1611,11 +1611,12 @@ describe('resource tiers', () => {
     expect(Array.isArray(result.payload!.quizzes)).toBe(true);
 
     // And it is the STAFF projection, not the student one — the staff-only
-    // fields must be present in the row shape.
+    // fields must be present in the row shape (the prompts are in quiz_get).
     const rows = result.payload!.quizzes as Array<Record<string, unknown>>;
     for (const row of rows) {
-      expect(row).toHaveProperty('system_prompt');
-      expect(row).toHaveProperty('rubric_prompt');
+      expect(row).toHaveProperty('has_system_prompt');
+      expect(row).toHaveProperty('excluded_paths');
+      expect(row).not.toHaveProperty('system_prompt');
     }
   });
 });

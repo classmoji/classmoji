@@ -537,6 +537,37 @@ describe('S1 cross-classroom rejection per write family', () => {
 
 // ─── Read-side S1 (bonus): the submission resource scopes in the query ──────
 
+describe('S1 read-side: quiz_get and the quiz resource', () => {
+  it('a foreign quiz id is not_found as a random one is, and its prompts never come back', async () => {
+    const quiz = await prisma.quiz.create({
+      data: {
+        classroom_id: fx.foreign.id,
+        name: 'MCP-S1 Foreign Quiz Detail',
+        rubric_prompt: 'MCP-S1 FOREIGN RUBRIC',
+        system_prompt: 'MCP-S1 FOREIGN GUIDANCE',
+        status: 'PUBLISHED',
+      },
+    });
+    cleanup.add('foreign detail quiz', () => prisma.quiz.deleteMany({ where: { id: quiz.id } }));
+
+    for (const token of [owner, ta]) {
+      const foreign = await callTool(token, 'quiz_get', { classroom: DEV_REF, quiz_id: quiz.id });
+      expectScopedNotFound(foreign, 'quiz_get on a foreign quiz');
+      expect(JSON.stringify(foreign.payload)).not.toContain('MCP-S1 FOREIGN');
+      const random = await callTool(token, 'quiz_get', {
+        classroom: DEV_REF,
+        quiz_id: '00000000-0000-4000-8000-000000000000',
+      });
+      expectScopedNotFound(random, 'quiz_get on a random id');
+
+      const uri = await readResource(token, `classmoji://${DEV_REF}/quizzes/${quiz.id}`);
+      expect(uri.payload).toBeUndefined();
+      expect(uri.error?.code).toBe(RESOURCE_NOT_FOUND);
+      expect(JSON.stringify(uri)).not.toContain('MCP-S1 FOREIGN');
+    }
+  });
+});
+
 describe('S1 read-side: submission resource', () => {
   it('a foreign submission id resolves to resource not_found (-32602, kind not_found)', async () => {
     const outcome = await readResource(
