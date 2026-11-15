@@ -56,6 +56,14 @@ describe('cloudinaryDryRun import graph', () => {
 
   it('imports no package that opens its own database client or writes', () => {
     // node:crypto hashes the plan (planHash); it opens nothing.
-    expect(packages).toEqual(['@prisma/client', 'jsonwebtoken', 'node:crypto']);
+    // @classmoji/database/pg-client builds only the one-session client the
+    // script asks for (unlike `@classmoji/database`, which opens the shared
+    // client at import); @prisma/client is a type import there.
+    expect(packages).toEqual([
+      '@classmoji/database/pg-client',
+      '@prisma/client',
+      'jsonwebtoken',
+      'node:crypto',
+    ]);
   });
 });

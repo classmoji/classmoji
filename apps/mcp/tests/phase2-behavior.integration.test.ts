@@ -11,7 +11,8 @@
  *      (This replaced the same-slug "twin" ambiguity tests, whose fixture the
  *      database can no longer hold.)
  *   4. Quiz prompt stripping: system_prompt/rubric_prompt are visible to the
- *      quiz staff tier and stripped for students.
+ *      quiz staff tier through the quiz resource and quiz_get (the list
+ *      leaves them out for everyone), and never reach students.
  *
  * NOTE: HelperService awaits the token rows it writes for a new grade, so they
  * exist when grade_add returns. Token assertions still poll via waitUntil as a
@@ -422,16 +423,40 @@ describe('quiz prompt stripping', () => {
     });
     cleanup.add('behavior quiz', () => prisma.quiz.deleteMany({ where: { id: quiz.id } }));
 
-    // Staff tier: prompts present. fake-ta is an unambiguous single-role
-    // staff identity.
+    // Staff tier: the list leaves the prompts out (has_system_prompt says
+    // there is guidance); the quiz resource and quiz_get carry them. fake-ta
+    // is an unambiguous single-role staff identity.
     const staffView = await readResource(ta, `classmoji://${DEV_REF}/quizzes`);
     expect(staffView.error).toBeUndefined();
     const staffQuiz = (staffView.payload!.quizzes as Array<Record<string, unknown>>).find(
       q => q.id === quiz.id
     );
     expect(staffQuiz).toBeDefined();
-    expect(staffQuiz!.system_prompt).toBe(SECRET_SYSTEM);
-    expect(staffQuiz!.rubric_prompt).toBe(SECRET_RUBRIC);
+    expect(staffQuiz).not.toHaveProperty('system_prompt');
+    expect(staffQuiz).not.toHaveProperty('rubric_prompt');
+    expect(staffQuiz!.has_system_prompt).toBe(true);
+    expect(JSON.stringify(staffView.payload)).not.toContain('MCP-SECRET');
+
+    const detail = await readResource(ta, `classmoji://${DEV_REF}/quizzes/${quiz.id}`);
+    expect(detail.error).toBeUndefined();
+    const detailQuiz = detail.payload!.quiz as Record<string, unknown>;
+    expect(detailQuiz.system_prompt).toBe(SECRET_SYSTEM);
+    expect(detailQuiz.rubric_prompt).toBe(SECRET_RUBRIC);
+    const viaTool = await callTool(ta, 'quiz_get', { classroom: DEV_REF, quiz_id: quiz.id });
+    expect(viaTool.isError).toBe(false);
+    expect(viaTool.payload).toEqual(detail.payload);
+
+    // A student never reaches it, by tool or by URI.
+    const studentTool = await callTool(student1, 'quiz_get', {
+      classroom: DEV_REF,
+      quiz_id: quiz.id,
+    });
+    expect(studentTool.isError).toBe(true);
+    expect(studentTool.payload.code).toBe('INSUFFICIENT_ROLE');
+    expect(JSON.stringify(studentTool.payload)).not.toContain('MCP-SECRET');
+    const studentUri = await readResource(student1, `classmoji://${DEV_REF}/quizzes/${quiz.id}`);
+    expect(studentUri.error).toBeDefined();
+    expect(JSON.stringify(studentUri)).not.toContain('MCP-SECRET');
 
     // Student: the quiz is listed (PUBLISHED) but prompts are STRIPPED —
     // not nulled, absent — and the secrets never appear anywhere in the body.

@@ -37,7 +37,12 @@
  *                     published quizzes, closed ones included (as the web
  *                     list), with the
  *                     student route's field allowlist (no
- *                     system_prompt/rubric_prompt); staff get the admin one.
+ *                     system_prompt/rubric_prompt); staff get the admin one
+ *                     without the two prompts (has_system_prompt instead),
+ *                     so the list stays small.
+ *   quiz            — teaching team: one quiz's staff row plus
+ *                     system_prompt and rubric_prompt (quiz_get), behind the
+ *                     staff branch's gates, found only in this classroom.
  *                     `source_material` (the linked pages and decks, in
  *                     order) is drafts-included for staff and published-only
  *                     for students — the service decides that per list.
@@ -77,6 +82,7 @@ import {
 import {
   MEMBER,
   QUIZ_ROLES,
+  TEACHING_TEAM,
   classroomCtx,
   isStaff,
   quizPlacement,
@@ -629,7 +635,8 @@ async function studentQuizExtensions(ctx: ToolContext, quizzes: QuizRow[], scale
 /** The quizzes resource's description; list_quizzes (tools/reads.ts) carries the same text. */
 export const QUIZZES_DESCRIPTION =
   'AI-graded quizzes with their source material (linked pages and decks, in order). Staff ' +
-  '(OWNER/TEACHER/ASSISTANT) see all quizzes incl. drafts and prompts; students see ' +
+  '(OWNER/TEACHER/ASSISTANT) see all quizzes incl. drafts, with has_system_prompt; ' +
+  "a quiz's system_prompt and rubric_prompt are in quiz_get. Students see " +
   'published quizzes (closed ones too, as CLOSED), published material and their own attempt ' +
   'summary. For a student each quiz also has assignment_id (what extension_purchase takes), ' +
   'effective_tokens_per_hour (price of one extension hour; 0 = none), extension_hours ' +
@@ -643,6 +650,37 @@ export const QUIZZES_DESCRIPTION =
   "Grades are emoji on the classroom's scale (score-N badges on the " +
   'numeric scale), never numbers; staff get avg_emoji. Requires a Pro subscription, ' +
   'quizzes_enabled and a server with quizzes set up.';
+
+/** What every viewer of a quiz reads (students and staff, list and detail). */
+function quizBase(q: QuizRow, now: Date) {
+  return {
+    id: q.id,
+    name: q.name,
+    ...quizPlacement(q, now),
+    question_count: q.question_count,
+    max_attempts: q.max_attempts,
+    grading_strategy: q.grading_strategy,
+    include_code_context: q.include_code_context,
+    course_search_enabled: q.course_search_enabled ?? false,
+    // Students too, as on the web quiz list: the quiz may ask questions
+    // answered in a code sandbox.
+    code_sandbox_enabled: q.code_sandbox_enabled ?? false,
+    // Students too, as the quiz chat states them when an attempt starts:
+    // points off each answer after a hint, and answers per question. A
+    // started attempt keeps the values it pinned.
+    hint_cost: q.hint_cost ?? null,
+    max_answers: q.max_answers ?? null,
+    repository_id: q.repository_id ?? null,
+    // Field by field. The service already dropped drafts for the student list.
+    source_material: (q.source_material ?? []).map(doc => ({
+      kind: doc.kind,
+      id: doc.id,
+      title: doc.title,
+      is_draft: doc.is_draft,
+      order: doc.order,
+    })),
+  };
+}
 
 export const quizzesResource: ResourceDefinition = {
   name: 'quizzes',
@@ -665,33 +703,7 @@ export const quizzesResource: ResourceDefinition = {
     // close dates, weight) is read from its assignment, as of now; a quiz in
     // no module keeps its own (as on the web).
     const now = new Date();
-    const base = (q: QuizRow) => ({
-      id: q.id,
-      name: q.name,
-      ...quizPlacement(q, now),
-      question_count: q.question_count,
-      max_attempts: q.max_attempts,
-      grading_strategy: q.grading_strategy,
-      include_code_context: q.include_code_context,
-      course_search_enabled: q.course_search_enabled ?? false,
-      // Students too, as on the web quiz list: the quiz may ask questions
-      // answered in a code sandbox.
-      code_sandbox_enabled: q.code_sandbox_enabled ?? false,
-      // Students too, as the quiz chat states them when an attempt starts:
-      // points off each answer after a hint, and answers per question. A
-      // started attempt keeps the values it pinned.
-      hint_cost: q.hint_cost ?? null,
-      max_answers: q.max_answers ?? null,
-      repository_id: q.repository_id ?? null,
-      // Field by field. The service already dropped drafts for the student list.
-      source_material: (q.source_material ?? []).map(doc => ({
-        kind: doc.kind,
-        id: doc.id,
-        title: doc.title,
-        is_draft: doc.is_draft,
-        order: doc.order,
-      })),
-    });
+    const base = (q: QuizRow) => quizBase(q, now);
 
     if (role === 'STUDENT') {
       // A student sees quizzes where the classroom's pages show them: the same
@@ -736,21 +748,83 @@ export const quizzesResource: ResourceDefinition = {
       ClassmojiService.quiz.findByClassroom(classroomId, membership as never) as Promise<QuizRow[]>,
       loadQuizEmojiScale(classroomId),
     ]);
+    // Without the prompts: the whole list stays small enough to read in one
+    // go (a 9-quiz class passed 80k characters with them). quiz_get (the quiz
+    // resource below) has one quiz with its prompts.
     return {
       quizzes: quizzes.map(q => ({
         ...base(q),
-        subject: q.subject ?? null,
-        difficulty_level: q.difficulty_level ?? null,
-        system_prompt: q.system_prompt ?? null,
-        rubric_prompt: q.rubric_prompt ?? null,
-        // Staff only, like the prompts: quiz configuration.
-        excluded_paths: q.excluded_paths ?? [],
-        // Null = the classroom's default_tokens_per_hour.
-        tokens_per_hour: q.assignment?.tokens_per_hour ?? null,
-        attempts_count: q.attemptsCount ?? 0,
-        // The class average (effective scores) as the scale's nearest emoji.
-        avg_emoji: emojiFor(q.avgScore, scale),
+        ...staffQuizFields(q, scale),
+        has_system_prompt: Boolean(q.system_prompt?.trim()),
       })),
+    };
+  },
+};
+
+/** What staff read of a quiz besides `base`, prompts aside (the list and quiz_get both). */
+function staffQuizFields(q: QuizRow, scale: EmojiScale) {
+  return {
+    subject: q.subject ?? null,
+    difficulty_level: q.difficulty_level ?? null,
+    // Staff only, like the prompts: quiz configuration.
+    excluded_paths: q.excluded_paths ?? [],
+    // Null = the classroom's default_tokens_per_hour.
+    tokens_per_hour: q.assignment?.tokens_per_hour ?? null,
+    attempts_count: q.attemptsCount ?? 0,
+    // The class average (effective scores) as the scale's nearest emoji.
+    avg_emoji: emojiFor(q.avgScore, scale),
+  };
+}
+
+export const QUIZ_DESCRIPTION =
+  'One quiz with everything list_quizzes shows staff, plus its prompts: system_prompt (the ' +
+  "instructor's guidance to the quiz agent) and rubric_prompt (what the questions assess, " +
+  'which quiz_update changes). Staff (OWNER/TEACHER/ASSISTANT) only, drafts included. quiz_id ' +
+  'comes from list_quizzes. Requires a Pro subscription, quizzes_enabled and a server with ' +
+  'quizzes set up.';
+
+/**
+ * One quiz for staff, with its prompts: the list's staff row (the same
+ * placement, settings and class stats, built by the same service mapping)
+ * plus system_prompt and rubric_prompt. The same gates as the quizzes
+ * resource's staff branch, in the same order. The read is scoped to this quiz
+ * id and this classroom (`quiz.findOneForStaff`), so it loads only this
+ * quiz's attempts and an id from another classroom is not found.
+ */
+export const quizResource: ResourceDefinition = {
+  name: 'quiz',
+  uriTemplate: 'classmoji://{org}/{slug}/quizzes/{quizId}',
+  title: 'Quiz detail',
+  description: QUIZ_DESCRIPTION,
+  scope: 'read',
+  roles: TEACHING_TEAM,
+  handler: async (vars, ctx) => {
+    const { classroomId, membership } = classroomCtx(ctx);
+    await assertProTier(ctx);
+    if (sanitizedSettings(ctx).quizzes_enabled === false) {
+      throw new ToolError('forbidden', 'Quizzes are currently disabled for this classroom');
+    }
+    if (!ClassmojiService.entitlement.isQuizRuntimeConfigured()) {
+      throw new ToolError('forbidden', 'Quizzes are not available in this classroom');
+    }
+    // This quiz only, scoped to the authorized classroom in the query: only its
+    // own attempts are loaded, and another classroom's id finds nothing.
+    const [quiz, scale] = await Promise.all([
+      ClassmojiService.quiz.findOneForStaff(
+        classroomId,
+        String(vars.quizId),
+        membership as never
+      ) as Promise<QuizRow | null>,
+      loadQuizEmojiScale(classroomId),
+    ]);
+    if (!quiz) throw new ToolError('not_found', `Quiz '${vars.quizId}' not found`);
+    return {
+      quiz: {
+        ...quizBase(quiz, new Date()),
+        ...staffQuizFields(quiz, scale),
+        system_prompt: quiz.system_prompt ?? null,
+        rubric_prompt: quiz.rubric_prompt ?? null,
+      },
     };
   },
 };

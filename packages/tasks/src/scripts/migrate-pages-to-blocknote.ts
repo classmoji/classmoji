@@ -1,10 +1,10 @@
-import { PrismaClient } from '@prisma/client';
+import { createPgPrismaClient } from '@classmoji/database/pg-client';
 import { ContentService } from '@classmoji/content';
 import { ClassmojiService } from '@classmoji/services';
 import { htmlToPageBlocks } from '@classmoji/page-schema/server';
 
 async function migratePagesToBlockNote(): Promise<void> {
-  const prisma = new PrismaClient();
+  const prisma = createPgPrismaClient(process.env.DATABASE_URL ?? '');
 
   try {
     // First, check total page count

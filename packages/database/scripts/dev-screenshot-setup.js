@@ -3,10 +3,10 @@
 // whose token can be injected as the `classmoji.session_token` cookie, and a couple of
 // modules so the Modules pages have content. Idempotent. Safe to re-run; remove the
 // rows by re-running `npm run db:seed` (sessions) or deleting the dev-owner user.
-import { PrismaClient } from '@prisma/client';
+import { createPgPrismaClient } from '../pgClient.ts';
 import { upsertGithubUser } from './seed-fixtures.js';
 
-const prisma = new PrismaClient();
+const prisma = createPgPrismaClient(process.env.DATABASE_URL);
 const SLUG = 'classmoji-dev-winter-2025';
 
 async function main() {

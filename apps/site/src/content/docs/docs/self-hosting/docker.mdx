@@ -27,7 +27,7 @@ Postgres is the only database. For local work, `npm run db:start` brings up the 
 
 ### Migrations
 
-Each image generates the Prisma client at build time, but you still need to apply migrations to your database. Run `prisma migrate deploy` against `DATABASE_URL` before serving traffic. In the hosted setup, the webapp runs `migrate deploy` automatically as a release step on every deploy, so you don't have to do it by hand there.
+Each image generates the Prisma client at build time, but you still need to apply migrations to your database. Run `npx prisma migrate deploy` from `packages/database` (or from the repository root with `--config packages/database/prisma.config.ts`; the path is relative to where you run it), with `DATABASE_URL` set in the environment, before serving traffic. Prisma does not read a `.env` file itself. Use your provider's direct (non-pooled) connection string for migrations. In the hosted setup, the webapp runs `migrate deploy` automatically as a release step on every deploy, so you don't have to do it by hand there.
 
 **Upgrading to the coursework model (assignments in modules, push-mode submissions).** Four migrations carry existing data over: `20260920000000_coursework_phase1_additive`, `20260920000001_coursework_phase1_constraints`, `20260920000002_submission_modes`, and `20260920000003_one_score_per_grader`. They run with `prisma migrate deploy` like any other. Afterwards, run
 

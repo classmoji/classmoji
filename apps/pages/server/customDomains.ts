@@ -118,21 +118,11 @@ function createDefaultLoader(): () => Promise<Array<readonly [string, string]>> 
         const url = (process.env.DATABASE_URL || '').trim();
         if (!url) return null;
 
-        // A pool of two, not the default `num_cpus * 2 + 1`. One query every 45
-        // seconds does not need connections, and this process already has the
-        // app's own client alongside it.
-        let datasourceUrl = url;
-        try {
-          const parsed = new URL(url);
-          parsed.searchParams.set('connection_limit', '2');
-          datasourceUrl = parsed.toString();
-        } catch {
-          // Prisma accepts shapes `new URL` does not; hand it the original
-          // rather than refusing to route custom domains over a parse nit.
-        }
-
-        const { PrismaClient } = await import('@prisma/client');
-        return new PrismaClient({ datasourceUrl }) as unknown as RoutingClient;
+        // A pool of two, set in code: one query every 45 seconds does not
+        // need more connections, and this process already has the app's own
+        // client alongside it.
+        const { createPgPrismaClient } = await import('@classmoji/database/pg-client');
+        return createPgPrismaClient(url, { max: 2 }) as unknown as RoutingClient;
       })().catch(error => {
         console.error('[customDomains] could not initialize the routing database client', error);
         return null;

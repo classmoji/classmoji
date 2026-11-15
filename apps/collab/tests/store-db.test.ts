@@ -9,7 +9,8 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { PrismaClient } from '@prisma/client';
+import type { PrismaClient } from '@prisma/client';
+import { createPgPrismaClient } from '@classmoji/database/pg-client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { PrismaCollabDocStore, type CollabDocDb } from '../src/store/prisma.ts';
@@ -29,7 +30,7 @@ let reachable = false;
 
 beforeAll(async () => {
   if (!url) return;
-  prisma = new PrismaClient({ datasourceUrl: url });
+  prisma = createPgPrismaClient(url);
   try {
     await prisma.$queryRawUnsafe('SELECT 1 FROM "collab_docs" LIMIT 1');
     reachable = true;

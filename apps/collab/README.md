@@ -31,11 +31,16 @@ makes a room consistent lives in this process's memory:
   the merged "Save version" payloads.
 
 Enforced at runtime: before `listen()` the process takes a Postgres session
-advisory lock on a dedicated connection to the DIRECT host (Neon's
-`-pooler` host stripped, as the webapp's migrations do). A second process
-retries for 20 s, then exits 1 with `FATAL: another collab server holds the
-instance lock` — a second machine crash-loops visibly. The holder re-checks
-every 30 s and exits if another process took the lock.
+advisory lock on a dedicated connection to the DIRECT endpoint
+(`DATABASE_URL_UNPOOLED`, else `DATABASE_URL` with Neon's `-pooler` host
+stripped, as the webapp's migrations do; a URL with `pgbouncer=true` is
+refused, since a session lock does not hold through a transaction pooler). A
+second process retries for 20 s, then exits 1 with `FATAL: another collab
+server holds the instance lock` — a second machine crash-loops visibly. The
+holder re-checks every 30 s. When its database session was replaced (a
+network drop, a Neon compute restart), it takes the lock again on the new
+session and keeps serving, with a warning in the log; only if the lock is
+held by another session does it stop serving and exit 1.
 
 A restart is safe — `stopOnSignals` flushes pending stores on SIGTERM
 (raise the platform's kill timeout to cover it) and clients reconnect — but
@@ -100,6 +105,7 @@ is what lets collab read the staging session cookie.
 | Secret                                                                                                        | Why                                                                                                                                 |
 | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | `DATABASE_URL`                                                                                                | `collab_docs`, memberships, sessions                                                                                                |
+| `DATABASE_URL_UNPOOLED`                                                                                       | optional; the direct endpoint the instance lock connects to, preferred when set (needed if `DATABASE_URL` says `pgbouncer=true`)    |
 | `BETTER_AUTH_SECRET`, `COOKIE_PREFIX` (staging: `classmoji-staging`), `COOKIE_DOMAIN` (only if set elsewhere) | read the browser's session cookie exactly as the webapp does                                                                        |
 | `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY_BASE64`                                                                  | installation token to read content at a sha (outside-push merges, reseeds)                                                          |
 | `WEBAPP_URL`, `PAGES_URL`, `SLIDES_URL`                                                                       | origin allowlist (plus `COLLAB_ALLOWED_ORIGINS`); `WEBAPP_URL` is also required at startup in production (the auth server's issuer) |

@@ -189,25 +189,22 @@
     "clientVersion": "7.10.1"
   },
   "unreachable": {
-    "name": "PrismaClientKnownRequestError",
-    "message": "\nInvalid `prisma.user.count()` invocation:\n\n\nCan't reach database server at <host>:1",
-    "code": "P1001",
-    "meta": {
-      "modelName": "User",
-      "driverAdapterError": {
-        "name": "DriverAdapterError",
-        "cause": {
-          "kind": "DatabaseNotReachable",
-          "host": "<host>",
-          "port": 1
-        }
-      }
-    },
-    "clientVersion": "7.10.1"
+    "name": "Error",
+    "message": "Connection failed while connecting",
+    "clientVersion": "7.10.1",
+    "cause": {
+      "name": "Error",
+      "message": "connect ECONNREFUSED <host>:1",
+      "errno": -61,
+      "code": "ECONNREFUSED",
+      "syscall": "connect",
+      "address": "<host>",
+      "port": 1
+    }
   },
   "wrong_password": {
     "name": "PrismaClientKnownRequestError",
-    "message": "\nInvalid `prisma.user.count()` invocation:\n\n\nAuthentication failed against the database server, the provided database credentials for `<user>` are not valid",
+    "message": "\nInvalid `prisma.user.count()` invocation:\n\n\nAuthentication failed against the database server, the provided database credentials for `<password>` are not valid",
     "code": "P1000",
     "meta": {
       "modelName": "User",
@@ -215,9 +212,9 @@
         "name": "DriverAdapterError",
         "cause": {
           "originalCode": "28P01",
-          "originalMessage": "password authentication failed for user \"<user>\"",
+          "originalMessage": "password authentication failed for user \"<password>\"",
           "kind": "AuthenticationFailed",
-          "user": "<user>"
+          "user": "<password>"
         }
       }
     },
@@ -290,5 +287,538 @@
       }
     },
     "clientVersion": "7.10.1"
+  },
+  "unreachable_multi_address": {
+    "name": "Error",
+    "message": "Connection failed while connecting",
+    "clientVersion": "7.10.1",
+    "cause": {
+      "name": "AggregateError",
+      "message": "",
+      "code": "ECONNREFUSED"
+    }
+  },
+  "connect_timeout_blackhole": {
+    "name": "Error",
+    "message": "Connection terminated due to connection timeout",
+    "clientVersion": "7.10.1",
+    "cause": {
+      "name": "Error",
+      "message": "Connection failed while connecting",
+      "cause": {
+        "name": "Error",
+        "message": "Connection terminated unexpectedly"
+      }
+    }
+  },
+  "network_drop_mid_raw_query": {
+    "name": "Error",
+    "message": "Connection terminated unexpectedly",
+    "clientVersion": "7.10.1"
+  },
+  "network_drop_mid_model_query": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.user.findMany()` invocation:\n\n\nServer has closed the connection.",
+    "code": "P1017",
+    "meta": {
+      "modelName": "User",
+      "driverAdapterError": {
+        "name": "DriverAdapterError",
+        "cause": {
+          "kind": "ConnectionClosed"
+        }
+      }
+    },
+    "clientVersion": "7.10.1"
+  },
+  "network_drop_while_idle_then_query": {
+    "noError": true
+  },
+  "pool_timeout_pg": {
+    "name": "Error",
+    "message": "timeout exceeded when trying to connect",
+    "clientVersion": "7.10.1"
+  },
+  "connect_timeout_own": {
+    "name": "Error",
+    "message": "timeout expired",
+    "clientVersion": "7.10.1"
+  },
+  "tx_backend_killed_not_queryable": {
+    "name": "Error",
+    "message": "Client has encountered a connection error and is not queryable",
+    "clientVersion": "7.10.1"
+  },
+  "tx_backend_killed_adapter_error": {
+    "name": "DriverAdapterError",
+    "message": "terminating connection due to administrator command",
+    "cause": {
+      "message": "terminating connection due to administrator command",
+      "originalCode": "57P01",
+      "originalMessage": "terminating connection due to administrator command",
+      "kind": "postgres",
+      "code": "57P01",
+      "severity": "FATAL"
+    },
+    "clientVersion": "7.10.1"
+  },
+  "tx_refused_itx": {
+    "name": "Error",
+    "message": "Connection failed while connecting",
+    "cause": {
+      "name": "AggregateError",
+      "message": "",
+      "code": "ECONNREFUSED"
+    }
+  },
+  "tx_refused_batch": {
+    "name": "Error",
+    "message": "Connection failed while connecting",
+    "clientVersion": "7.10.1",
+    "cause": {
+      "name": "AggregateError",
+      "message": "",
+      "code": "ECONNREFUSED"
+    }
+  },
+  "tx_blackhole_itx": {
+    "name": "Error",
+    "message": "timeout expired"
+  },
+  "tx_blackhole_batch": {
+    "name": "Error",
+    "message": "timeout expired",
+    "clientVersion": "7.10.1"
+  },
+  "tx_pool_exhausted_itx": {
+    "name": "Error",
+    "message": "timeout exceeded when trying to connect"
+  },
+  "tx_pool_exhausted_batch": {
+    "name": "Error",
+    "message": "timeout exceeded when trying to connect",
+    "clientVersion": "7.10.1"
+  },
+  "live_ehostunreach_model_write": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.courseworkMigrationReport.create()` invocation:\n\n\nread EHOSTUNREACH",
+    "code": "EHOSTUNREACH",
+    "meta": {
+      "modelName": "CourseworkMigrationReport"
+    },
+    "clientVersion": "7.10.1",
+    "_committed": true
+  },
+  "live_ehostunreach_itx_commit": {
+    "name": "Error",
+    "message": "read EHOSTUNREACH",
+    "code": "EHOSTUNREACH",
+    "errno": -65,
+    "syscall": "read",
+    "_committed": true
+  },
+  "live_enetunreach_model_write": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.courseworkMigrationReport.create()` invocation:\n\n\nread ENETUNREACH",
+    "code": "ENETUNREACH",
+    "meta": {
+      "modelName": "CourseworkMigrationReport"
+    },
+    "clientVersion": "7.10.1",
+    "_committed": true
+  },
+  "live_enetunreach_itx_commit": {
+    "name": "Error",
+    "message": "read ENETUNREACH",
+    "code": "ENETUNREACH",
+    "errno": -51,
+    "syscall": "read",
+    "_committed": true
+  },
+  "live_econnrefused_model_write": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.courseworkMigrationReport.create()` invocation:\n\n\nCan't reach database server",
+    "code": "P1001",
+    "meta": {
+      "modelName": "CourseworkMigrationReport",
+      "driverAdapterError": {
+        "name": "DriverAdapterError",
+        "cause": {
+          "kind": "DatabaseNotReachable"
+        }
+      }
+    },
+    "clientVersion": "7.10.1",
+    "_committed": true
+  },
+  "live_econnrefused_itx_commit": {
+    "name": "DriverAdapterError",
+    "message": "DatabaseNotReachable",
+    "cause": {
+      "kind": "DatabaseNotReachable"
+    },
+    "_committed": true
+  },
+  "live_etimedout_model_write": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.courseworkMigrationReport.create()` invocation:\n\n\nOperation has timed out",
+    "code": "P1008",
+    "meta": {
+      "modelName": "CourseworkMigrationReport",
+      "driverAdapterError": {
+        "name": "DriverAdapterError",
+        "cause": {
+          "kind": "SocketTimeout"
+        }
+      }
+    },
+    "clientVersion": "7.10.1",
+    "_committed": true
+  },
+  "live_etimedout_itx_commit": {
+    "name": "DriverAdapterError",
+    "message": "SocketTimeout",
+    "cause": {
+      "kind": "SocketTimeout"
+    },
+    "_committed": true
+  },
+  "live_econnreset_model_write": {
+    "name": "PrismaClientKnownRequestError",
+    "message": "\nInvalid `prisma.courseworkMigrationReport.create()` invocation:\n\n\nServer has closed the connection.",
+    "code": "P1017",
+    "meta": {
+      "modelName": "CourseworkMigrationReport",
+      "driverAdapterError": {
+        "name": "DriverAdapterError",
+        "cause": {
+          "kind": "ConnectionClosed"
+        }
+      }
+    },
+    "clientVersion": "7.10.1",
+    "_committed": true
+  },
+  "live_econnreset_itx_commit": {
+    "name": "DriverAdapterError",
+    "message": "ConnectionClosed",
+    "cause": {
+      "kind": "ConnectionClosed"
+    },
+    "_committed": true
+  },
+  "connect_ehostunreach_model": {
+    "name": "Error",
+    "message": "Connection failed while connecting",
+    "clientVersion": "7.10.1",
+    "cause": {
+      "name": "Error",
+      "message": "connect EHOSTUNREACH",
+      "code": "EHOSTUNREACH",
+      "errno": -65,
+      "syscall": "connect",
+      "address": "127.0.0.1",
+      "port": 55447
+    }
+  },
+  "connect_ehostunreach_itx": {
+    "name": "Error",
+    "message": "Connection failed while connecting",
+    "cause": {
+      "name": "Error",
+      "message": "connect EHOSTUNREACH",
+      "code": "EHOSTUNREACH",
+      "errno": -65,
+      "syscall": "connect",
+      "address": "127.0.0.1",
+      "port": 55447
+    }
+  },
+  "connect_enetunreach_model": {
+    "name": "Error",
+    "message": "Connection failed while connecting",
+    "clientVersion": "7.10.1",
+    "cause": {
+      "name": "Error",
+      "message": "connect ENETUNREACH",
+      "code": "ENETUNREACH",
+      "errno": -51,
+      "syscall": "connect",
+      "address": "127.0.0.1",
+      "port": 55447
+    }
+  },
+  "connect_enetunreach_itx": {
+    "name": "Error",
+    "message": "Connection failed while connecting",
+    "cause": {
+      "name": "Error",
+      "message": "connect ENETUNREACH",
+      "code": "ENETUNREACH",
+      "errno": -51,
+      "syscall": "connect",
+      "address": "127.0.0.1",
+      "port": 55447
+    }
+  },
+  "connect_econnrefused_model": {
+    "name": "Error",
+    "message": "Connection failed while connecting",
+    "clientVersion": "7.10.1",
+    "cause": {
+      "name": "Error",
+      "message": "connect ECONNREFUSED",
+      "code": "ECONNREFUSED",
+      "errno": -61,
+      "syscall": "connect",
+      "address": "127.0.0.1",
+      "port": 55447
+    }
+  },
+  "connect_econnrefused_itx": {
+    "name": "Error",
+    "message": "Connection failed while connecting",
+    "cause": {
+      "name": "Error",
+      "message": "connect ECONNREFUSED",
+      "code": "ECONNREFUSED",
+      "errno": -61,
+      "syscall": "connect",
+      "address": "127.0.0.1",
+      "port": 55447
+    }
+  },
+  "connect_etimedout_model": {
+    "name": "Error",
+    "message": "Connection failed while connecting",
+    "clientVersion": "7.10.1",
+    "cause": {
+      "name": "Error",
+      "message": "connect ETIMEDOUT",
+      "code": "ETIMEDOUT",
+      "errno": -60,
+      "syscall": "connect",
+      "address": "127.0.0.1",
+      "port": 55447
+    }
+  },
+  "connect_etimedout_itx": {
+    "name": "Error",
+    "message": "Connection failed while connecting",
+    "cause": {
+      "name": "Error",
+      "message": "connect ETIMEDOUT",
+      "code": "ETIMEDOUT",
+      "errno": -60,
+      "syscall": "connect",
+      "address": "127.0.0.1",
+      "port": 55447
+    }
+  },
+  "connect_drop_fin_startup_model": {
+    "name": "Error",
+    "message": "Connection failed while connecting",
+    "clientVersion": "7.10.1",
+    "cause": {
+      "name": "Error",
+      "message": "Connection terminated unexpectedly"
+    }
+  },
+  "connect_drop_fin_startup_model_write": {
+    "name": "Error",
+    "message": "Connection failed while connecting",
+    "clientVersion": "7.10.1",
+    "cause": {
+      "name": "Error",
+      "message": "Connection terminated unexpectedly"
+    }
+  },
+  "connect_drop_fin_startup_raw": {
+    "name": "Error",
+    "message": "Connection failed while connecting",
+    "clientVersion": "7.10.1",
+    "cause": {
+      "name": "Error",
+      "message": "Connection terminated unexpectedly"
+    }
+  },
+  "connect_drop_fin_startup_itx": {
+    "name": "Error",
+    "message": "Connection failed while connecting",
+    "cause": {
+      "name": "Error",
+      "message": "Connection terminated unexpectedly"
+    }
+  },
+  "connect_drop_fin_startup_batch": {
+    "name": "Error",
+    "message": "Connection failed while connecting",
+    "clientVersion": "7.10.1",
+    "cause": {
+      "name": "Error",
+      "message": "Connection terminated unexpectedly"
+    }
+  },
+  "connect_drop_rst_startup_model": {
+    "name": "Error",
+    "message": "Connection failed while connecting",
+    "clientVersion": "7.10.1",
+    "cause": {
+      "name": "Error",
+      "message": "read ECONNRESET",
+      "errno": -54,
+      "code": "ECONNRESET",
+      "syscall": "read"
+    }
+  },
+  "connect_drop_rst_startup_model_write": {
+    "name": "Error",
+    "message": "Connection failed while connecting",
+    "clientVersion": "7.10.1",
+    "cause": {
+      "name": "Error",
+      "message": "read ECONNRESET",
+      "errno": -54,
+      "code": "ECONNRESET",
+      "syscall": "read"
+    }
+  },
+  "connect_drop_rst_startup_raw": {
+    "name": "Error",
+    "message": "Connection failed while connecting",
+    "clientVersion": "7.10.1",
+    "cause": {
+      "name": "Error",
+      "message": "read ECONNRESET",
+      "errno": -54,
+      "code": "ECONNRESET",
+      "syscall": "read"
+    }
+  },
+  "connect_drop_rst_startup_itx": {
+    "name": "Error",
+    "message": "Connection failed while connecting",
+    "cause": {
+      "name": "Error",
+      "message": "read ECONNRESET",
+      "errno": -54,
+      "code": "ECONNRESET",
+      "syscall": "read"
+    }
+  },
+  "connect_drop_rst_startup_batch": {
+    "name": "Error",
+    "message": "Connection failed while connecting",
+    "clientVersion": "7.10.1",
+    "cause": {
+      "name": "Error",
+      "message": "read ECONNRESET",
+      "errno": -54,
+      "code": "ECONNRESET",
+      "syscall": "read"
+    }
+  },
+  "connect_drop_fin_sslrequest_model": {
+    "name": "Error",
+    "message": "Connection failed while connecting",
+    "clientVersion": "7.10.1",
+    "cause": {
+      "name": "Error",
+      "message": "Connection terminated unexpectedly"
+    }
+  },
+  "connect_drop_fin_sslrequest_model_write": {
+    "name": "Error",
+    "message": "Connection failed while connecting",
+    "clientVersion": "7.10.1",
+    "cause": {
+      "name": "Error",
+      "message": "Connection terminated unexpectedly"
+    }
+  },
+  "connect_drop_fin_sslrequest_raw": {
+    "name": "Error",
+    "message": "Connection failed while connecting",
+    "clientVersion": "7.10.1",
+    "cause": {
+      "name": "Error",
+      "message": "Connection terminated unexpectedly"
+    }
+  },
+  "connect_drop_fin_sslrequest_itx": {
+    "name": "Error",
+    "message": "Connection failed while connecting",
+    "cause": {
+      "name": "Error",
+      "message": "Connection terminated unexpectedly"
+    }
+  },
+  "connect_drop_fin_sslrequest_batch": {
+    "name": "Error",
+    "message": "Connection failed while connecting",
+    "clientVersion": "7.10.1",
+    "cause": {
+      "name": "Error",
+      "message": "Connection terminated unexpectedly"
+    }
+  },
+  "connect_drop_rst_sslrequest_model": {
+    "name": "Error",
+    "message": "Connection failed while connecting",
+    "clientVersion": "7.10.1",
+    "cause": {
+      "name": "Error",
+      "message": "read ECONNRESET",
+      "errno": -54,
+      "code": "ECONNRESET",
+      "syscall": "read"
+    }
+  },
+  "connect_drop_rst_sslrequest_model_write": {
+    "name": "Error",
+    "message": "Connection failed while connecting",
+    "clientVersion": "7.10.1",
+    "cause": {
+      "name": "Error",
+      "message": "read ECONNRESET",
+      "errno": -54,
+      "code": "ECONNRESET",
+      "syscall": "read"
+    }
+  },
+  "connect_drop_rst_sslrequest_raw": {
+    "name": "Error",
+    "message": "Connection failed while connecting",
+    "clientVersion": "7.10.1",
+    "cause": {
+      "name": "Error",
+      "message": "read ECONNRESET",
+      "errno": -54,
+      "code": "ECONNRESET",
+      "syscall": "read"
+    }
+  },
+  "connect_drop_rst_sslrequest_itx": {
+    "name": "Error",
+    "message": "Connection failed while connecting",
+    "cause": {
+      "name": "Error",
+      "message": "read ECONNRESET",
+      "errno": -54,
+      "code": "ECONNRESET",
+      "syscall": "read"
+    }
+  },
+  "connect_drop_rst_sslrequest_batch": {
+    "name": "Error",
+    "message": "Connection failed while connecting",
+    "clientVersion": "7.10.1",
+    "cause": {
+      "name": "Error",
+      "message": "read ECONNRESET",
+      "errno": -54,
+      "code": "ECONNRESET",
+      "syscall": "read"
+    }
   }
 }

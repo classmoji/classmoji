@@ -62,11 +62,13 @@ import {
 } from '../resources/grading.ts';
 import {
   quizzesResource,
+  quizResource,
   pagesResource,
   modulesResource,
   calendarResource,
   calendarRangeResource,
   QUIZZES_DESCRIPTION,
+  QUIZ_DESCRIPTION,
 } from '../resources/content.ts';
 import { tokensResource } from '../resources/tokens.ts';
 
@@ -282,6 +284,17 @@ export const listQuizzesTool = mirrorResourceTool({
   name: 'list_quizzes',
   title: 'List quizzes',
   description: QUIZZES_DESCRIPTION,
+});
+
+export const getQuizTool = mirrorResourceTool({
+  resource: quizResource,
+  name: 'quiz_get',
+  title: 'Get quiz detail',
+  description: QUIZ_DESCRIPTION,
+  extraInput: {
+    quiz_id: uuidString().describe('Quiz id (see list_quizzes)'),
+  },
+  buildVars: args => ({ quizId: String(args.quiz_id) }),
 });
 
 export const listPagesTool = mirrorResourceTool({
@@ -643,6 +656,7 @@ export const readTools: ToolDefinition<never>[] = [
   listTeachingTeamTool,
   gradingReportTool,
   listQuizzesTool,
+  getQuizTool,
   listPagesTool,
   listModulesTool,
   listCalendarTool,

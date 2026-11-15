@@ -15,6 +15,7 @@ import {
   calendarResource,
   modulesResource,
   pagesResource,
+  quizResource,
   quizzesResource,
 } from './content.ts';
 import {
@@ -47,6 +48,7 @@ export function registerAllResources(): void {
   registerResourceDefinition(regradeQueueResource);
   registerResourceDefinition(regradeMineResource);
   registerResourceDefinition(quizzesResource);
+  registerResourceDefinition(quizResource);
   registerResourceDefinition(pagesResource);
   registerResourceDefinition(modulesResource);
   registerResourceDefinition(calendarResource);

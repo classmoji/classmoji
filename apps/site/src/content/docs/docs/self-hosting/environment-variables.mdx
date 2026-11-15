@@ -7,12 +7,19 @@ description: All environment variables required to run Classmoji
 
 | Name | Required | Default | Description |
 |------|----------|---------|-------------|
-| `DATABASE_URL` | Yes | | PostgreSQL connection string for the Classmoji database. We recommend [Neon](https://neon.com) for production. |
+| `DATABASE_URL` | Yes | | PostgreSQL connection string for the Classmoji database. We recommend [Neon](https://neon.com) for production. See [The database URL](#the-database-url) below for TLS and pool settings. |
+| `DATABASE_URL_UNPOOLED` | When `DATABASE_URL` is a pooler | | The DIRECT (non-pooled) connection string of the same database. Required when `DATABASE_URL` goes through a connection pooler (Neon's `-pooler` host, PgBouncer): the live-editing server's instance lock, the docs search index job and read-only maintenance scripts hold a database session. The read-only maintenance scripts always require it. Without it the docs search index job refuses a pooled URL; the live-editing server derives the direct host from a Neon `-pooler` URL and refuses a URL with `pgbouncer=true`. |
 | `BETTER_AUTH_SECRET` | Yes | | Secret used to sign auth sessions and tokens. Generate with `openssl rand -base64 32`. |
 | `WEBAPP_URL` | Yes | | Public base URL of the main web app (e.g. `http://localhost:3000`). |
 | `SLIDES_URL` | Yes | | Public base URL of the slides service. |
 | `PAGES_URL` | Yes | | Public base URL of the pages service. |
 | `ACTION_ORIGIN_HOSTS` | Behind a TLS proxy | the hosted service's host | A **build argument** of the webapp and slides images, not a runtime variable: the public host name the app is served from (the host in `WEBAPP_URL` or `SLIDES_URL`), exact names, comma-separated. Behind a proxy that terminates TLS, the app accepts form submissions only from these hosts. See [Building an image yourself](/docs/self-hosting/docker#building-an-image-yourself). |
+
+### The database URL
+
+- **TLS.** `sslmode=require` verifies the server's certificate chain and host name (it means what `verify-full` means). If your provider's certificate is signed by a private CA, add `sslrootcert=/path/to/ca.pem` to the URL, or use `sslmode=no-verify` to encrypt without verifying. A URL with no `sslmode`, no `ssl=` and no certificate files (`sslrootcert` and the like) connects without TLS. `channel_binding=require` needs TLS.
+- **Pool.** `connection_limit` sets the pool size per process (default 10), `connect_timeout` how many seconds opening a connection may take (default 5) and `pool_timeout` how many seconds a query waits for a free pooled connection (default 10). `0` turns that wait off. A new connection also gives up after `pool_timeout`, so the shorter of the two bounds a connect.
+- **Time zone.** Keep the database session in UTC (Neon's default): raw timestamps are read correctly only there.
 
 ### Github integration
 
