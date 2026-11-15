@@ -443,11 +443,12 @@ export const listSubmissionsTool: ToolDefinition<ListSubmissionsArgs> = {
   handler: async (args, ctx) => {
     const { classroomId } = requireClassroomCtx(ctx);
     const git = orgGit(ctx);
+    const provider = orgProvider(ctx);
     // Shared with the grading-queue resource: one query + emoji-scale shaping.
-    const { emoji_scale, all } = await loadGradingQueueData(classroomId);
+    const { emoji_scale, all } = await loadGradingQueueData(classroomId, provider);
 
     // The service method has no filter params (gitRepoAssignment.findByClassroomId
-    // takes only classroomId), so the filters are applied in-memory over the raw
+    // takes only the classroom and provider), so the filters are applied in-memory over the raw
     // rows before shaping. Each is derived from DB columns, never request data.
     let filtered: SubmissionLike[] = all;
     if (args.repository_id) {
@@ -467,8 +468,8 @@ export const listSubmissionsTool: ToolDefinition<ListSubmissionsArgs> = {
       args.limit ?? LIST_SUBMISSIONS_LIMIT_DEFAULT,
       LIST_SUBMISSIONS_LIMIT_MAX
     );
-    // Rows come in one fixed order (loadGradingQueueData), so pages by offset
-    // neither skip nor repeat a row.
+    // Rows come in one fixed order (loadGradingQueueData, `byCreation`), so
+    // pages by offset are exact while the matches stay the same.
     const offset = args.offset ?? 0;
     const page = filtered.slice(offset, offset + limit);
     const end = offset + page.length;
@@ -482,7 +483,7 @@ export const listSubmissionsTool: ToolDefinition<ListSubmissionsArgs> = {
       next_offset: truncated ? end : null,
       emoji_scale,
       // Only what this page names: a page never lists anyone not on it.
-      ...queueRefs(page, orgProvider(ctx)),
+      ...queueRefs(page, provider),
       submissions: page.map(s => queueRow(s, git)),
     });
   },

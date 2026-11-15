@@ -303,6 +303,27 @@ describe('list_submissions', () => {
     expect(payload.submissions[0]).not.toHaveProperty('token_transactions');
   });
 
+  it("asks for logins on the classroom's provider, in the tool and the resource", async () => {
+    const gitlab = staffCtx();
+    (
+      gitlab.classroom as unknown as { classroom: { git_organization: Record<string, unknown> } }
+    ).classroom.git_organization = { login: 'test-org', provider: 'GITLAB' };
+
+    await listSubmissionsTool.handler({ classroom: CLASSROOM }, gitlab);
+    expect(mocks.findByClassroomId).toHaveBeenLastCalledWith('class-1', 'GITLAB');
+
+    await gradingQueueResource.handler(
+      { org: 'test-org', slug: 'winter-2025' },
+      gitlab,
+      new URL('classmoji://x')
+    );
+    expect(mocks.findByClassroomId).toHaveBeenLastCalledWith('class-1', 'GITLAB');
+    expect(mocks.findAssignedByGrader).toHaveBeenLastCalledWith('staff-1', 'class-1', 'GITLAB');
+
+    await listSubmissionsTool.handler({ classroom: CLASSROOM }, staffCtx());
+    expect(mocks.findByClassroomId).toHaveBeenLastCalledWith('class-1', 'GITHUB');
+  });
+
   it('NO-DRIFT: per-submission rows are identical to the grading-queue resource', async () => {
     const tool = parse(await listSubmissionsTool.handler({ classroom: CLASSROOM }, staffCtx()));
     const resource = (await gradingQueueResource.handler(

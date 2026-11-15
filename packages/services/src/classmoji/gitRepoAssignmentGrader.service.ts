@@ -185,9 +185,15 @@ export const removeGraderFromAssignment = async (
  * Find all assignments for a grader in a classroom
  * @param {string} graderId - UUID of the grader User
  * @param {string} classroomId - UUID of the Classroom
+ * @param provider - the classroom's git provider, whose usernames become each
+ *   user's `login`; without it, Github first (the display username)
  * @returns {Promise<Object[]>}
  */
-export const findAssignedByGrader = async (graderId: string, classroomId: string) => {
+export const findAssignedByGrader = async (
+  graderId: string,
+  classroomId: string,
+  provider?: string | null
+) => {
   return withLogins(
     await getPrisma().gitRepoAssignmentGrader.findMany({
       where: {
@@ -228,7 +234,8 @@ export const findAssignedByGrader = async (graderId: string, classroomId: string
           },
         },
       },
-    })
+    }),
+    provider
   );
 };
 

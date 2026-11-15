@@ -234,6 +234,55 @@ describe('get_submission — what the submission panel shows', () => {
     ]);
   });
 
+  it("keeps the assignment, repository and student inline, the student by the classroom's provider", async () => {
+    setPrismaRows({
+      gitRepoAssignment: {
+        findFirst: () => ({
+          ...ROW,
+          git_repo: { ...ROW.git_repo, team: null, student: ROW.git_repo.team.memberships[0].user },
+        }),
+      },
+      autogradingResult: { findFirst: () => null },
+    });
+    const gitlabCtx = {
+      ...ctx,
+      classroom: {
+        ...(ctx as unknown as { classroom: Record<string, unknown> }).classroom,
+        classroom: {
+          slug: 'w26',
+          git_organization: { login: 'cs-group', provider: 'GITLAB' },
+          settings: {},
+        },
+      },
+    } as unknown as ToolContext;
+
+    const payload = parse(
+      await getSubmissionTool.handler(
+        { classroom: 'cs-group/w26', submission_id: 'sub-1' },
+        gitlabCtx
+      )
+    );
+
+    expect(payload.student).toEqual({ id: 'ada', name: 'Ada', login: 'ada-gl', avatar: null });
+    expect(payload.student_id).toBe('ada');
+    expect(payload.repository_title).toBe('Project');
+    expect(payload.assignment).toEqual({
+      id: 'a-1',
+      title: 'Project',
+      submission_mode: 'REPO',
+      student_deadline: DEADLINE.toISOString(),
+      grades_released: false,
+      weight: 15,
+      is_extra_credit: false,
+      module_title: 'Week 3',
+    });
+    // The student is read with their git accounts, and by public identity only.
+    const [read] = prismaCallsFor('gitRepoAssignment', 'findFirst');
+    const student = (read.args as { include: { git_repo: { include: { student: unknown } } } })
+      .include.git_repo.include.student as { select: Record<string, unknown> };
+    expect(Object.keys(student.select).sort()).toEqual(['accounts', 'id', 'image', 'name']);
+  });
+
   it('counts late hours from the submission time, net of extension hours', async () => {
     setPrismaRows({
       gitRepoAssignment: {

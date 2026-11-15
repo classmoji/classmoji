@@ -119,7 +119,9 @@ describe('list_submissions (teaching team)', () => {
   });
 
   it('pages by offset without repeating or skipping a row', async () => {
-    const whole = await callTool(ta, 'list_submissions', { classroom: DEV_REF });
+    const whole = await callTool(ta, 'list_submissions', { classroom: DEV_REF, limit: 200 });
+    // The comparison needs every row on one page.
+    expect(whole.payload.truncated).toBe(false);
     const all = (whole.payload.submissions as Array<{ id: string }>).map(s => s.id);
     expect(all.length).toBeGreaterThan(1);
     const paged: string[] = [];
@@ -260,7 +262,9 @@ describe('no-drift: tool payloads equal their resource payloads', () => {
   });
 
   it('list_submissions rows == grading-queue resource `all` rows (teaching team)', async () => {
-    const tool = await callTool(ta, 'list_submissions', { classroom: DEV_REF });
+    const tool = await callTool(ta, 'list_submissions', { classroom: DEV_REF, limit: 200 });
+    // Equal only when every row fits one page.
+    expect(tool.payload.truncated).toBe(false);
     const resource = await readResource(ta, `classmoji://${DEV_REF}/grading-queue`);
     expect(resource.error).toBeUndefined();
     // The per-submission shape (queueRow) and emoji_scale are shared code.

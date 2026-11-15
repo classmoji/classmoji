@@ -141,9 +141,11 @@ export function queueRefs(
 
 /**
  * The one order every read of the queue uses, so `list_submissions` pages by
- * offset without skipping or repeating a row: oldest first (a submission made
- * between two calls lands at the end), id breaking ties. The service query
- * returns rows in no particular order.
+ * offset over a fixed sequence: oldest first (a submission made between two
+ * calls lands at the end), id breaking ties. The service query returns rows in
+ * no particular order. Pages stay exact while the matches stay the same; a row
+ * that stops or starts matching mid-run (its status or graders change) shifts
+ * the later pages by one, which a changed `total_matched` shows.
  */
 export function byCreation(a: SubmissionLike, b: SubmissionLike): number {
   const at = (s: SubmissionLike) => (s.created_at ? new Date(s.created_at).getTime() : 0);
@@ -164,15 +166,18 @@ export interface EmojiScaleRow {
  * Factored out of gradingQueueResource so the `list_submissions` tool builds on
  * exactly the same query + emoji-scale shaping (the tool then filters the raw
  * rows in-memory and maps them through `queueRow`). Returns RAW SubmissionLike
- * rows, in `byCreation` order, so callers can filter before shaping.
+ * rows, in `byCreation` order, so callers can filter before shaping. Each
+ * user's `login` is their username on the classroom's provider.
  */
 export async function loadGradingQueueData(
-  classroomId: string
+  classroomId: string,
+  provider: string
 ): Promise<{ emoji_scale: EmojiScaleRow[]; all: SubmissionLike[] }> {
   const [all, emojiMappings] = await Promise.all([
-    ClassmojiService.gitRepoAssignment.findByClassroomId(classroomId) as unknown as Promise<
-      SubmissionLike[]
-    >,
+    ClassmojiService.gitRepoAssignment.findByClassroomId(
+      classroomId,
+      provider
+    ) as unknown as Promise<SubmissionLike[]>,
     // includeExtraTokens=true returns the full mapping rows (the default
     // shape is a bare emoji→grade record).
     ClassmojiService.emojiMapping.findByClassroomId(classroomId, true) as Promise<EmojiScaleRow[]>,
@@ -237,15 +242,17 @@ export const gradingQueueResource: ResourceDefinition = {
   handler: async (_vars, ctx) => {
     const { classroomId } = classroomCtx(ctx);
     const git = orgGit(ctx);
+    const provider = orgProvider(ctx);
     const [assignedToMe, { emoji_scale, all }] = await Promise.all([
       // Rows are GitRepoAssignmentGrader records wrapping the submission.
       ClassmojiService.gitRepoAssignmentGrader.findAssignedByGrader(
         ctx.viewer.userId,
-        classroomId
+        classroomId,
+        provider
       ) as unknown as Promise<Array<{ git_repo_assignment: SubmissionLike }>>,
       // Shared with the list_submissions tool (tools/reads.ts) — one query +
       // emoji-scale shaping so the two surfaces cannot drift.
-      loadGradingQueueData(classroomId),
+      loadGradingQueueData(classroomId, provider),
     ]);
 
     const mine = assignedToMe
@@ -257,7 +264,7 @@ export const gradingQueueResource: ResourceDefinition = {
       assigned_to_me: mine.map(s => queueRow(s, git)),
       all: all.map(s => queueRow(s, git)),
       // Both lists are this classroom's; the maps cover every row of either.
-      ...queueRefs([...all, ...mine], orgProvider(ctx)),
+      ...queueRefs([...all, ...mine], provider),
     };
   },
 };
@@ -295,7 +302,9 @@ export const submissionResource: ResourceDefinition = {
         assignment: { include: { module: { select: { title: true } } } },
         git_repo: {
           include: {
-            student: true,
+            // Public identity only, with the git accounts publicUser reads the
+            // classroom's username from.
+            student: { select: { id: true, name: true, image: true, ...GIT_IDENTITY } },
             // A team's members, by public identity only (publicUser below).
             team: {
               include: {
