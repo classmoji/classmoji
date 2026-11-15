@@ -292,10 +292,13 @@ jobs:
           apps/site/cloudflare/install.sh "$RUNNER_TEMP/site"
 
       # The contact route's guards (client address, rate limits, body cap).
-      # vitest is not a site dependency either; the version the root pins.
+      # vitest is not a site dependency either: the version the root lockfile
+      # resolves. vitest 5 needs vite as a peer and the site's .npmrc turns
+      # peer installs off, so they are back on for this run; npx installs its
+      # own vite, held to the .npmrc `before` date like everything else.
       - name: Test the site
         working-directory: ${{ runner.temp }}/site
-        run: npx --yes vitest@4.1.12 run
+        run: npx --yes --legacy-peer-deps=false vitest@5.1.0 run
 
       # The environment is chosen at BUILD time: the Cloudflare Vite plugin
       # flattens env.production into dist/server/wrangler.json, and every
