@@ -14,10 +14,19 @@ const CLOUDFLARE = process.env.BUILD_TARGET === 'cloudflare';
 // it is the client's only: the Cloudflare plugin sets the Worker's own target,
 // and Vite refuses a list that names two ES versions.
 const BROWSER_TARGET = ['es2020', 'edge88', 'firefox78', 'chrome87', 'safari14'];
-// CSS keeps Vite 8's default target for now (the target is still to be
-// decided). Lowering it for the list above adds fallbacks the Vite 6 build
-// never had, e.g. for every theme colour.
+// CSS is built for Vite 8's default browsers (CSS_TARGET), except that
+// media-query range syntax (`width >= 40rem`) is lowered to min-width and
+// max-width: Safari and iOS 15.4-16.3 render nearly all of this CSS but not range
+// syntax, and would lose every breakpoint. Older browsers (below Chrome/Edge
+// 111, Firefox 113, Safari 15.4) were already unsupported: the theme colours
+// are oklch() and the utilities sit in `@layer`. Vite's CSS minifier passes
+// `css.lightningcss` to Lightning CSS with those targets; without this it also
+// rewrites min-width queries (Tailwind's and those in node_modules CSS) into
+// range syntax. The value is Lightning CSS's
+// `Features.MediaIntervalSyntax | Features.MediaRangeSyntax` (64 | 128 in both
+// lightningcss copies installed, 1.31 and 1.33; no app depends on it directly).
 const CSS_TARGET = ['chrome111', 'edge111', 'firefox114', 'safari16.4', 'ios16.4'];
+const LOWER_MEDIA_RANGE_SYNTAX = 64 | 128;
 
 export default async () => {
   const workerPlugins = CLOUDFLARE
@@ -29,6 +38,7 @@ export default async () => {
     : [];
 
   return defineConfig({
+    css: { lightningcss: { include: LOWER_MEDIA_RANGE_SYNTAX } },
     resolve: {
       alias: {
         '.prisma/client/index-browser': '../../node_modules/.prisma/client/index-browser.js',
