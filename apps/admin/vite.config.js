@@ -14,9 +14,9 @@ const CLOUDFLARE = process.env.BUILD_TARGET === 'cloudflare';
 // it is the client's only: the Cloudflare plugin sets the Worker's own target,
 // and Vite refuses a list that names two ES versions.
 const BROWSER_TARGET = ['es2020', 'edge88', 'firefox78', 'chrome87', 'safari14'];
-// CSS keeps Vite 8's default target. Tailwind 4's CSS needs these browsers
-// anyway; lowering it for the list above would rewrite the theme colours with
-// fallbacks the Vite 6 build never had.
+// CSS keeps Vite 8's default target for now (the target is still to be
+// decided). Lowering it for the list above adds fallbacks the Vite 6 build
+// never had, e.g. for every theme colour.
 const CSS_TARGET = ['chrome111', 'edge111', 'firefox114', 'safari16.4', 'ios16.4'];
 
 export default async () => {

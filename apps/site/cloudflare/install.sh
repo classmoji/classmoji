@@ -7,8 +7,9 @@
 #
 # The Fly image (apps/site/Dockerfile) installs package.json alone. The
 # Cloudflare packages are NOT in package.json: there they would ship in the Fly
-# image's node_modules, and in the monorepo install they dedupe to the root's
-# copies, which resolve the root's vite 6 instead of the site's vite 8. So
+# image's node_modules, and in the monorepo install they would dedupe to the
+# root's copies (apps/admin's @cloudflare/vite-plugin and wrangler, at other
+# versions than the pins below). So
 # they go on top of the plain install with --no-save, and these pins are the
 # only place their versions live (CI's deploy-site-worker job calls this
 # script; build.sh calls it for local builds).
@@ -47,7 +48,7 @@ $NPM install --no-save --ignore-scripts --no-audit --no-fund "$ADAPTER" "$VITE_P
 $NPM ls wrangler @cloudflare/vite-plugin vite @astrojs/cloudflare astro workerd miniflare
 
 # One copy of each, and the vite plugin on the site's vite 8: a second
-# wrangler/workerd or the root's vite 6 is the failure this script exists to
+# wrangler/workerd or a vite other than 8 is the failure this script exists to
 # prevent, so stop here instead of building with it.
 node --input-type=module -e '
   import { readdirSync, readFileSync, existsSync } from "node:fs";

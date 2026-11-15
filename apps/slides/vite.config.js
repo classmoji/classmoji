@@ -96,9 +96,9 @@ export default async ({ command, mode }) => {
       // Vite 6's default target. Vite 8 raised its own default to Chrome/Edge
       // 111, Firefox 114 and Safari 16.4; this keeps the browsers we supported.
       target: ['es2020', 'edge88', 'firefox78', 'chrome87', 'safari14'],
-      // CSS keeps Vite 8's default target. Tailwind 4's CSS needs these
-      // browsers anyway; lowering it for the list above would rewrite the theme
-      // colours with fallbacks the Vite 6 build never had.
+      // CSS keeps Vite 8's default target for now (the target is still to be
+      // decided). Lowering it for the list above adds fallbacks the Vite 6
+      // build never had, e.g. for every theme colour.
       cssTarget: ['chrome111', 'edge111', 'firefox114', 'safari16.4', 'ios16.4'],
       sourcemap: process.env.NODE_ENV === 'production' ? 'hidden' : true,
     },
