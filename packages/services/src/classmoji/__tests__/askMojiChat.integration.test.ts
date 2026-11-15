@@ -908,8 +908,36 @@ describe.skipIf(!RUN)('ask moji chat service (integration)', () => {
         userId: userA,
         classroomId: classX,
       });
+      expect(transcript?.map(m => m.parts)).toEqual([[{ type: 'text', text: 'Q1' }]]);
       expect(JSON.stringify(transcript)).not.toContain('turn_note');
       expect(JSON.stringify(transcript)).not.toContain('NOW: Monday');
+    });
+
+    it('reads a stored tool call back with its keys in jsonb order (what the task sends ahead of time)', async () => {
+      // The task sends each turn's tool parts in this order (ai-agent
+      // shared/jsonbOrder.ts) so the next turn's request repeats it; this pins
+      // the order to what Prisma actually returns, not to psql.
+      const id = await start(userA, classX);
+      await admit(id, userMessage('Q1'));
+      await askMoji.persistAssistantMessage({
+        conversationId: id,
+        message: reply('A1', 'a:order', [
+          {
+            type: 'dynamic-tool',
+            toolName: 'content_get',
+            toolCallId: 't',
+            state: 'output-available',
+            input: { kind: 'page', id: 'p1', classroom: 'org/x', é: 1, zz: { bb: 1, a: 2 } },
+            output: 'text',
+          },
+        ]),
+      });
+      const history = await askMoji.loadModelHistory(id);
+      const tool = history[1].parts.find(p => p.type === 'dynamic-tool') as {
+        input: Record<string, unknown>;
+      };
+      expect(Object.keys(tool.input)).toEqual(['id', 'zz', 'é', 'kind', 'classroom']);
+      expect(Object.keys(tool.input.zz as object)).toEqual(['a', 'bb']);
     });
 
     it('overwrites the note of a re-run turn', async () => {
